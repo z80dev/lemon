@@ -33,7 +33,8 @@ defmodule CodingAgent.Session.Notifier do
     {:ok, stream, %{state | event_streams: event_streams}}
   end
 
-  @spec subscribe_direct(map(), pid(), pid(), keyword()) :: {(-> :ok), map()}
+  @spec subscribe_direct(map(), pid(), pid(), keyword()) ::
+          {(-> :ok) | {(-> :ok), LemonCore.Bus.Delivery.t()}, map()}
   def subscribe_direct(state, pid, session_pid, opts \\ []) do
     state = unsubscribe_direct(state, pid)
     monitor_ref = Process.monitor(pid)
@@ -42,6 +43,7 @@ defmodule CodingAgent.Session.Notifier do
       LemonCore.Bus.Delivery.new(pid,
         max_queue: Keyword.get(opts, :max_queue, 256),
         max_bytes: Keyword.get(opts, :max_bytes, 1_048_576),
+        tagged: Keyword.get(opts, :tagged, false),
         overflow_message:
           {:session_event, state.session_manager.header.id,
            {:stream_resync, %{reason: :overflow}}}
@@ -50,17 +52,18 @@ defmodule CodingAgent.Session.Notifier do
     new_listeners = [{pid, monitor_ref, delivery} | state.event_listeners]
 
     unsubscribe = fn ->
-      GenServer.cast(session_pid, {:unsubscribe, pid})
+      GenServer.cast(session_pid, {:unsubscribe, pid, monitor_ref})
     end
 
-    {unsubscribe, %{state | event_listeners: new_listeners}}
+    subscription = if delivery.tagged, do: {unsubscribe, delivery}, else: unsubscribe
+    {subscription, %{state | event_listeners: new_listeners}}
   end
 
-  @spec unsubscribe_direct(map(), pid()) :: map()
-  def unsubscribe_direct(state, pid) do
+  @spec unsubscribe_direct(map(), pid(), reference() | nil) :: map()
+  def unsubscribe_direct(state, pid, ref \\ nil) do
     new_listeners =
       Enum.reject(state.event_listeners, fn {listener_pid, monitor_ref, delivery} ->
-        if listener_pid == pid do
+        if listener_pid == pid and (is_nil(ref) or monitor_ref == ref) do
           LemonCore.Bus.Delivery.close(delivery)
           Process.demonitor(monitor_ref, [:flush])
           true
@@ -89,13 +92,23 @@ defmodule CodingAgent.Session.Notifier do
 
   @spec complete_event_streams(map(), term()) :: :ok
   def complete_event_streams(state, final_event) do
+    final_event = Map.get(state, :terminal_event) || final_event
     # A fenced observer still receives one compact terminal indication. The
     # canonical answer stays in the owner, never in a second unbounded queue.
     status =
       case final_event do
-        {:agent_end, _} -> :completed
-        {:error, _, _} -> :error
-        _ -> :canceled
+        {:agent_end, messages} ->
+          case Enum.find(Enum.reverse(messages), &match?(%{role: :assistant}, &1)) do
+            %{stop_reason: :aborted} -> :canceled
+            %{stop_reason: reason} when reason in [:error, :length] -> :error
+            _ -> :completed
+          end
+
+        {:error, _, _} ->
+          :error
+
+        _ ->
+          :canceled
       end
 
     Enum.each(state.event_listeners, fn {_pid, _ref, delivery} ->

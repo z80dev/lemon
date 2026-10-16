@@ -14,7 +14,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Live setup strips only actual provider qualification, honors declared/discovered
   full IDs in the effective provider scope and model overrides, and rejects known
   foreign provider/custom-provider selectors before HTTP.
-
+- Preserve failed and canceled native-turn terminals instead of reporting success
+  or reusing an earlier answer. Validator correction attempts use fresh delivery
+  generations so delayed events cannot consume retries or complete a later turn.
+- Serialize bounded Bus admission across concurrent publishers without treating
+  lock contention as overflow. Monitored admission workers bound pending requests,
+  release waiters on shutdown, and fence unavailable admission after a finite wait.
 - Approving a channel pairing code now updates the running Telegram/Discord
   adapter's allowlist, so the sender's next message is accepted without
   restarting the gateway or daemon. New `lemon pairing revoke <platform>

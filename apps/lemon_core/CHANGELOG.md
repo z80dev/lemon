@@ -25,6 +25,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   racing file replacement or rollback even when the launcher uses a different
   `HOME`. Backup CLI dispatch no longer bootstraps runtime credentials; refusal
   gives actionable stop/retry guidance.
+- Serialize bounded `Bus.Delivery` admission so concurrent publishers below
+  capacity do not spuriously trigger overflow recovery. Pending admission has
+  bounded reservations and a five-second wait; workers monitor their creator
+  and consumer and release blocked publishers when the handle closes.
 - `LemonCore.Backup` snapshots SQLite databases (identified by file header)
   with `VACUUM INTO` instead of a raw file copy, so a backup taken while a
   WAL-mode writer is active is internally consistent. Live `-wal`, `-shm`, and

@@ -175,7 +175,15 @@ defmodule CodingAgent.Tools.Task.RunnerTest do
     assert_receive {:session_event, ^session_id, {:agent_end, _}}, 5_000
     CodingAgent.Session.get_state(session)
     assert {:messages, messages} = Process.info(consumer, :messages)
-    assert {:session_terminal, session_id, :completed} in messages
+
+    assert Enum.any?(
+             messages,
+             &match?(
+               {:lemon_bus_delivery, _, {:session_terminal, ^session_id, :completed}},
+               &1
+             )
+           )
+
     assert length(messages) <= 258
 
     assert Enum.reduce(messages, 0, fn message, bytes ->
@@ -191,5 +199,133 @@ defmodule CodingAgent.Tools.Task.RunnerTest do
              content,
              &match?(%LemonAi.Types.TextContent{text: "canonical child answer"}, &1)
            )
+  end
+
+  for final_text <- ["valid", "invalid-final"] do
+    @final_text final_text
+    test "validator retries replace fenced subscriptions without expanding retries: #{final_text}" do
+      tmp_dir =
+        Path.join(System.tmp_dir!(), "task-validator-fence-#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(tmp_dir)
+      on_exit(fn -> File.rm_rf(tmp_dir) end)
+      parent = self()
+      responses = ["invalid-first", "invalid-second", @final_text]
+      counter = start_supervised!({Agent, fn -> responses end})
+
+      stream_fn = fn model, context, options ->
+        text =
+          Agent.get_and_update(counter, fn
+            [text | rest] -> {text, rest}
+            [] -> {"UNEXPECTED EXTRA RETRY", []}
+          end)
+
+        send(parent, {:provider_response, text})
+
+        Mocks.blocking_stream_fn(Mocks.assistant_message(text), parent, chunks: 1).(
+          model,
+          context,
+          options
+        )
+      end
+
+      on_update = fn result ->
+        unless Process.get(:validator_consumer_blocked) do
+          Process.put(:validator_consumer_blocked, true)
+          send(parent, {:validator_consumer_blocked, self(), result.details.session_id})
+
+          receive do
+            :release_consumer -> :ok
+          end
+        end
+
+        :ok
+      end
+
+      validator = fn text ->
+        Process.delete(:validator_consumer_blocked)
+        send(parent, {:validated, text})
+        if text == "valid", do: :ok, else: {:error, "expected valid"}
+      end
+
+      task =
+        Task.async(fn ->
+          Runner.start_session_with_prompt(
+            [
+              cwd: tmp_dir,
+              workspace_dir: tmp_dir,
+              register: true,
+              model: Mocks.mock_model(),
+              tools: [],
+              stream_fn: stream_fn
+            ],
+            "Produce valid output.",
+            "Validator pressure",
+            nil,
+            on_update,
+            nil,
+            validate_output: validator
+          )
+        end)
+
+      on_exit(fn -> send(task.pid, :release_consumer) end)
+
+      Enum.reduce(responses, nil, fn text, previous_delivery ->
+        assert_receive {:provider_response, ^text}, 5_000
+        assert_receive {:stream_blocked, producer}, 5_000
+        on_exit(fn -> send(producer, :release_stream) end)
+        assert_receive {:validator_consumer_blocked, consumer, session_id}, 5_000
+        assert consumer == task.pid
+        assert {:ok, session} = CodingAgent.lookup_session(session_id)
+
+        {^consumer, _monitor, delivery} =
+          Enum.find(CodingAgent.Session.get_state(session).event_listeners, fn {pid, _, _} ->
+            pid == consumer
+          end)
+
+        if previous_delivery do
+          refute delivery == previous_delivery
+          assert LemonCore.Bus.Delivery.closed?(previous_delivery)
+
+          # Old tagged and untagged traffic arriving after subscribe cannot end
+          # or contaminate the current attempt.
+          send(
+            consumer,
+            {:lemon_bus_delivery, previous_delivery.gate, {:session_terminal, session_id, :error}}
+          )
+
+          send(
+            consumer,
+            {:lemon_bus_delivery, previous_delivery.gate,
+             {:session_event, session_id, {:error, "stale generation", nil}}}
+          )
+
+          send(consumer, {:session_terminal, session_id, :error})
+          send(consumer, {:session_event, session_id, {:error, "untagged old generation", nil}})
+        end
+
+        progress = %LemonAgent.Types.AgentToolResult{
+          content: [%LemonAi.Types.TextContent{text: "bounded progress"}]
+        }
+
+        for _ <- 1..1000, do: send(session, {:task_progress, "noisy-child", progress})
+        CodingAgent.Session.get_state(session)
+        assert LemonCore.Bus.Delivery.closed?(delivery)
+
+        unsubscribe = CodingAgent.Session.subscribe(session)
+        send(producer, :release_stream)
+        assert_receive {:session_event, ^session_id, {:agent_end, _}}, 5_000
+        CodingAgent.Session.get_state(session)
+        unsubscribe.()
+        send(consumer, :release_consumer)
+        assert_receive {:validated, ^text}, 5_000
+        delivery
+      end)
+
+      assert %LemonAgent.Types.AgentToolResult{content: content} = Task.await(task, 5_000)
+      assert [%LemonAi.Types.TextContent{text: @final_text}] = content
+      assert Agent.get(counter, & &1) == []
+      refute_received {:provider_response, "UNEXPECTED EXTRA RETRY"}
+    end
   end
 end

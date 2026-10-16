@@ -32,7 +32,7 @@ defmodule LemonCore.Bus.DeliveryTest do
     assert List.last(messages) == {:owner_terminal, :completed}
   end
 
-  test "concurrent publishers fail closed without waiting, spawning fanout tasks, or reviving delivery" do
+  test "concurrent queue pressure stays bounded and never revives fenced delivery" do
     pid = frozen_consumer()
     delivery = Delivery.new(pid, max_queue: 8, max_bytes: 256)
     parent = self()
@@ -127,10 +127,14 @@ defmodule LemonCore.Bus.DeliveryTest do
     end
   end
 
-  test "dead consumers close admission and require no cleanup worker" do
+  test "dead consumers close admission and release the admission process" do
     {pid, ref} = spawn_monitor(fn -> :ok end)
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
     delivery = Delivery.new(pid)
+    admitter_ref = Process.monitor(delivery.admitter)
+    assert_receive {:DOWN, ^admitter_ref, :process, _admitter, reason}
+    assert reason in [:normal, :noproc]
+    assert Delivery.closed?(delivery)
     assert {:error, :closed} = Delivery.send(delivery, :event)
     assert Delivery.closed?(delivery)
   end
@@ -166,6 +170,158 @@ defmodule LemonCore.Bus.DeliveryTest do
     assert_raise ArgumentError, fn ->
       Delivery.new(self(), overflow_message: String.duplicate("x", 1024))
     end
+  end
+
+  test "pending admission capacity is bounded and real overflow releases every publisher" do
+    consumer = frozen_consumer()
+    delivery = Delivery.new(consumer, max_queue: 2)
+    true = :erlang.suspend_process(delivery.admitter)
+
+    publishers =
+      try do
+        publishers = for n <- 1..2, do: queued_publisher(delivery, {:pending, n})
+        assert {:message_queue_len, 2} = Process.info(delivery.admitter, :message_queue_len)
+        assert {:error, :overflow} = Delivery.send(delivery, :excess)
+        assert {:message_queue_len, 3} = Process.info(delivery.admitter, :message_queue_len)
+        assert :ok = Delivery.terminal(delivery, :terminal)
+        assert :ok = Delivery.terminal(delivery, :duplicate_terminal)
+        publishers
+      after
+        :erlang.resume_process(delivery.admitter)
+      end
+
+    for {pid, ref} <- publishers do
+      assert_receive {:published, ^pid, {:error, :closed}}
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+    end
+
+    assert drain(consumer) == [{:stream_resync, :overflow}, :terminal]
+  end
+
+  test "admission process death resyncs rather than silently losing a queued broadcast" do
+    consumer = frozen_consumer()
+    delivery = Delivery.new(consumer)
+    true = :erlang.suspend_process(delivery.admitter)
+    {publisher, ref} = queued_publisher(delivery, :pending)
+    Process.exit(delivery.admitter, :kill)
+    assert_receive {:published, ^publisher, {:error, :overflow}}
+    assert_receive {:DOWN, ^ref, :process, ^publisher, :normal}
+    assert Delivery.closed?(delivery)
+    assert drain(consumer) == [{:stream_resync, :overflow}]
+  end
+
+  test "an unavailable admission process has a finite wait and emits one recovery marker" do
+    consumer = frozen_consumer()
+    delivery = Delivery.new(consumer)
+    true = :erlang.suspend_process(delivery.admitter)
+
+    try do
+      {publisher, ref} = queued_publisher(delivery, :pending)
+      assert_receive {:published, ^publisher, {:error, :overflow}}, 6000
+      assert_receive {:DOWN, ^ref, :process, ^publisher, :normal}
+      assert Delivery.closed?(delivery)
+      assert {:error, :closed} = Delivery.send(delivery, :late)
+      assert drain(consumer) == [{:stream_resync, :overflow}]
+    after
+      :erlang.resume_process(delivery.admitter)
+    end
+  end
+
+  test "a consumer can publish to itself without waiting for its own receive loop" do
+    delivery = Delivery.new(self(), max_queue: 2)
+    assert :ok = Delivery.send(delivery, :first)
+    assert_receive :first
+    assert :ok = Delivery.send(delivery, :second)
+    assert_receive :second
+    ref = Process.monitor(delivery.admitter)
+    assert :ok = Delivery.close(delivery)
+    assert_receive {:DOWN, ^ref, :process, _pid, :normal}
+  end
+
+  test "a dead queued publisher releases capacity without blocking a live publisher" do
+    consumer = frozen_consumer()
+    delivery = Delivery.new(consumer, max_queue: 2)
+    true = :erlang.suspend_process(delivery.admitter)
+
+    {live, live_ref} =
+      try do
+        {dead, dead_ref} = queued_publisher(delivery, :dead)
+        Process.exit(dead, :kill)
+        assert_receive {:DOWN, ^dead_ref, :process, ^dead, :killed}
+        queued_publisher(delivery, :live)
+      after
+        :erlang.resume_process(delivery.admitter)
+      end
+
+    assert_receive {:published, ^live, :ok}
+    assert_receive {:DOWN, ^live_ref, :process, ^live, :normal}
+    assert :ok = Delivery.send(delivery, :next)
+    refute Delivery.closed?(delivery)
+    assert drain(consumer) == [:live, :next]
+  end
+
+  test "close releases queued publishers and preserves one terminal after accepted progress" do
+    consumer = frozen_consumer()
+    delivery = Delivery.new(consumer, max_queue: 2)
+    assert :ok = Delivery.send(delivery, :accepted)
+    true = :erlang.suspend_process(delivery.admitter)
+
+    {publisher, ref} =
+      try do
+        publisher = queued_publisher(delivery, :not_admitted)
+        assert :ok = Delivery.close(delivery)
+        assert :ok = Delivery.terminal(delivery, :terminal)
+        assert :ok = Delivery.terminal(delivery, :duplicate_terminal)
+        publisher
+      after
+        :erlang.resume_process(delivery.admitter)
+      end
+
+    assert_receive {:published, ^publisher, {:error, :closed}}
+    assert_receive {:DOWN, ^ref, :process, ^publisher, :normal}
+    assert drain(consumer) == [:accepted, :terminal]
+  end
+
+  test "creator death fences the handle and releases its admission process" do
+    consumer = frozen_consumer()
+    parent = self()
+
+    {owner, owner_ref} =
+      spawn_monitor(fn ->
+        send(parent, {:delivery, Delivery.new(consumer)})
+
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    assert_receive {:delivery, delivery}
+    ref = Process.monitor(delivery.admitter)
+    send(owner, :stop)
+    assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}
+    assert_receive {:DOWN, ^ref, :process, _pid, :normal}
+    assert Delivery.closed?(delivery)
+    assert {:error, :closed} = Delivery.send(delivery, :late)
+    assert drain(consumer) == []
+  end
+
+  defp queued_publisher(delivery, message) do
+    parent = self()
+
+    {pid, ref} =
+      spawn_monitor(fn ->
+        receive do
+          :publish -> send(parent, {:published, self(), Delivery.send(delivery, message)})
+        end
+      end)
+
+    on_exit(fn -> Process.exit(pid, :kill) end)
+    :erlang.trace(pid, true, [:send, {:tracer, parent}])
+    send(pid, :publish)
+    admitter = delivery.admitter
+    assert_receive {:trace, ^pid, :send, {:admit, ^pid, _ref, ^message}, ^admitter}
+    :erlang.trace(pid, false, [:send])
+    {pid, ref}
   end
 
   defp frozen_consumer do

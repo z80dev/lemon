@@ -42,7 +42,10 @@ defmodule CodingAgent.Session.NotifierBackpressureTest do
   test "cancel and failure terminal truth use the same compact bounded recovery path" do
     for {event, expected} <- [
           {{:canceled, :assistant_aborted}, :canceled},
-          {{:error, :provider_failed, nil}, :error}
+          {{:error, :provider_failed, nil}, :error},
+          {{:agent_end, [%LemonAi.Types.AssistantMessage{stop_reason: :error}]}, :error},
+          {{:agent_end, [%LemonAi.Types.AssistantMessage{stop_reason: :length}]}, :error},
+          {{:agent_end, [%LemonAi.Types.AssistantMessage{stop_reason: :aborted}]}, :canceled}
         ] do
       consumer = frozen_consumer()
       {_unsubscribe, state} = Notifier.subscribe_direct(state(), consumer, self(), max_queue: 1)

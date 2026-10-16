@@ -1,21 +1,30 @@
 defmodule LemonCore.Bus.Delivery do
   @moduledoc """
-  Nonblocking, node-local admission for transient event delivery.
+  Bounded, node-local admission for transient event delivery.
 
-  A handle is shared by every producer/topic targeting a consumer. Before sending,
-  admission checks the actual mailbox length and the encoded size of the message,
+  A handle is shared by every producer/topic targeting a consumer. A dedicated
+  admission process serializes mailbox checks and sends; simultaneous publishers
+  do not fence each other. Atomic reservations bound its pending requests to
+  `max_queue`, before any request enters its mailbox. Publishers wait at most five
+  seconds for admission, never for consumer acknowledgement; an unavailable
+  admission process fences delivery for recovery.
+
+  Admission checks the actual consumer mailbox length and encoded message size,
   including excess binary backing retained by sub-binaries. `max_bytes` is a
-  per-message limit, not an aggregate retained-byte quota. This
-  bounds admitted mailbox entries to `max_queue` plus one overflow notification;
-  unrelated messages and publishers bypassing this handle are not bounded here.
+  per-message limit, not an aggregate retained-byte quota. The consumer mailbox is
+  bounded to `max_queue` plus one overflow notification; the admission mailbox has
+  its own `max_queue` request bound. Unrelated messages and publishers bypassing
+  this handle are not bounded here.
 
-  Pressure (including concurrent admission contention) permanently fences the
-  handle and sends one small caller-supplied recovery notification. There is no
-  waiting, task, acknowledgement protocol, or retained event buffer. Recovery must
-  close the old handle, unsubscribe, and subscribe using a new handle after reading
-  authoritative state. Accepted events already in the mailbox remain ordered only
-  within their publisher; consumers must fence stale events during reconciliation.
-  Dead consumers require no cleanup process or global registration.
+  Capacity or byte pressure permanently fences the handle and sends one small
+  caller-supplied recovery notification. Recovery must close the old handle,
+  unsubscribe, and subscribe using a new handle after reading authoritative state.
+  Accepted events remain ordered within their publisher; consumers must fence
+  stale events during reconciliation. The admission process exits on fencing or
+  the death of either the handle creator or consumer.
+  A publisher killed between reserving capacity and enqueueing its request can
+  retain one reservation until the handle closes. This is bounded, fail-closed
+  capacity loss, not a lock: other publishers can still use the remaining slots.
 
   Use `tagged: true` for consumers that recover in the same process. Both events
   and recovery notifications become `{:lemon_bus_delivery, gate_ref, message}`;
@@ -28,7 +37,7 @@ defmodule LemonCore.Bus.Delivery do
   import Kernel, except: [send: 2]
 
   @enforce_keys [:pid, :gate, :max_queue, :max_bytes, :overflow_message]
-  defstruct [:pid, :gate, :max_queue, :max_bytes, :overflow_message, tagged: false]
+  defstruct [:pid, :gate, :admitter, :max_queue, :max_bytes, :overflow_message, tagged: false]
   @type t :: %__MODULE__{}
 
   def new(pid, opts \\ []) when is_pid(pid) and node(pid) == node() do
@@ -52,12 +61,16 @@ defmodule LemonCore.Bus.Delivery do
       raise ArgumentError, "overflow notification must fit within 1024 encoded bytes"
     end
 
-    delivery
+    owner = self()
+    admitter = spawn(fn -> run_admitter(delivery, owner) end)
+    %{delivery | admitter: admitter}
   end
 
   @doc "Permanently fences this handle without sending a recovery notification."
-  def close(%__MODULE__{gate: gate}) do
-    :atomics.put(gate, 2, 1)
+  def close(%__MODULE__{} = delivery) do
+    if :atomics.compare_exchange(delivery.gate, 2, 0, 1) == :ok,
+      do: Kernel.send(delivery.admitter, :close)
+
     :ok
   end
 
@@ -87,25 +100,79 @@ defmodule LemonCore.Bus.Delivery do
   def matches?(_delivery, _gate), do: false
 
   def send(%__MODULE__{} = delivery, message) do
+    message = envelope(delivery, message)
+
     cond do
-      :atomics.get(delivery.gate, 2) != 0 ->
+      closed?(delivery) ->
         {:error, :closed}
 
-      :atomics.compare_exchange(delivery.gate, 1, 0, 1) != :ok ->
+      not fits?(message, delivery.max_bytes) ->
         overflow(delivery)
 
       true ->
-        try do
-          admit(delivery, message)
-        after
-          :atomics.put(delivery.gate, 1, 0)
+        if :atomics.add_get(delivery.gate, 1, 1) <= delivery.max_queue do
+          request_admission(delivery, message)
+        else
+          :atomics.sub(delivery.gate, 1, 1)
+          overflow(delivery)
         end
     end
   end
 
-  defp admit(delivery, message) do
-    message = envelope(delivery, message)
+  defp request_admission(delivery, message) do
+    ref = :erlang.monitor(:process, delivery.admitter, [{:alias, :demonitor}])
+    Kernel.send(delivery.admitter, {:admit, self(), ref, message})
 
+    receive do
+      {^ref, result} ->
+        Process.demonitor(ref, [:flush])
+        result
+
+      {:DOWN, ^ref, :process, _pid, _reason} ->
+        if closed?(delivery), do: {:error, :closed}, else: overflow(delivery)
+    after
+      5000 ->
+        Process.demonitor(ref, [:flush])
+        overflow(delivery)
+    end
+  end
+
+  defp run_admitter(delivery, owner) do
+    owner_ref = Process.monitor(owner)
+    consumer_ref = Process.monitor(delivery.pid)
+    delivery = %{delivery | admitter: self()}
+
+    try do
+      admission_loop(delivery, owner_ref, consumer_ref)
+    after
+      :atomics.put(delivery.gate, 2, 1)
+    end
+  end
+
+  defp admission_loop(delivery, owner_ref, consumer_ref) do
+    unless closed?(delivery) do
+      receive do
+        {:admit, publisher, ref, message} ->
+          result =
+            if Process.alive?(publisher),
+              do: admit(delivery, message),
+              else: {:error, :closed}
+
+          :atomics.sub(delivery.gate, 1, 1)
+          Kernel.send(ref, {ref, result})
+          admission_loop(delivery, owner_ref, consumer_ref)
+
+        {:DOWN, ref, :process, _pid, _reason}
+        when ref == owner_ref or ref == consumer_ref ->
+          :ok
+
+        :close ->
+          :ok
+      end
+    end
+  end
+
+  defp admit(delivery, message) do
     case Process.info(delivery.pid, :message_queue_len) do
       nil ->
         close(delivery)
@@ -119,9 +186,6 @@ defmodule LemonCore.Bus.Delivery do
           size >= delivery.max_queue ->
             overflow(delivery)
 
-          not fits?(message, delivery.max_bytes) ->
-            overflow(delivery)
-
           true ->
             Kernel.send(delivery.pid, message)
             :ok
@@ -132,6 +196,7 @@ defmodule LemonCore.Bus.Delivery do
   defp overflow(delivery) do
     if :atomics.compare_exchange(delivery.gate, 2, 0, 1) == :ok do
       Kernel.send(delivery.pid, envelope(delivery, delivery.overflow_message))
+      Kernel.send(delivery.admitter, :close)
     end
 
     {:error, :overflow}

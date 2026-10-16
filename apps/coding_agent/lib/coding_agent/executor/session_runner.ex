@@ -358,7 +358,17 @@ defmodule CodingAgent.Executor.SessionRunner do
   def handle_info({:session_terminal, session_id, status}, %{session_id: session_id} = state) do
     # Transient delivery was fenced, but the owner persisted terminal truth before
     # this compact notification. Recover the canonical answer, not missed deltas.
-    messages = CodingAgent.Session.get_messages(state.session)
+    terminal_event = CodingAgent.Session.get_state(state.session).terminal_event
+
+    messages =
+      case terminal_event do
+        {:agent_end, terminal_messages} -> terminal_messages
+        _ -> CodingAgent.Session.get_messages(state.session)
+      end
+      |> Enum.reverse()
+      |> Enum.take_while(&(Map.get(&1, :role) != :user))
+      |> Enum.reverse()
+
     translator = state.translator
 
     translator = %{
@@ -368,9 +378,23 @@ defmodule CodingAgent.Executor.SessionRunner do
 
     event =
       case status do
-        :completed -> {:agent_end, messages}
-        :canceled -> {:canceled, :assistant_aborted}
-        :error -> {:error, :session_failed, %{messages: messages}}
+        :completed ->
+          {:agent_end, messages}
+
+        :canceled ->
+          {:canceled, :assistant_aborted}
+
+        :error ->
+          failed_message = Enum.find(Enum.reverse(messages), &match?(%{role: :assistant}, &1))
+          reason = (failed_message && Map.get(failed_message, :error_message)) || :session_failed
+          {:error, reason, %{messages: messages}}
+      end
+
+    event =
+      case terminal_event do
+        {:agent_end, _} -> event
+        nil -> event
+        terminal_event -> terminal_event
       end
 
     {:noreply, %{state | translator: RunTranslator.handle_event(translator, event)}}

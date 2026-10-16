@@ -36,6 +36,8 @@ application from the Lemon umbrella; the OTP application name and every
 
 ### Fixed
 
+- Rescued agent-loop failures persist their assistant error message and emit an
+  error terminal rather than a successful `agent_end`.
 - `LemonAgent.ModelRuntime.Credentials` returns the result of storing a
   refreshed OAuth secret instead of `:ok`, so a refused write (for example
   `{:error, :secrets_locked}` during a master-key rotation) fails the

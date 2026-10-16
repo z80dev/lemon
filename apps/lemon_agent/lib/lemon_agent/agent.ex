@@ -1148,9 +1148,11 @@ defmodule LemonAgent.Agent do
     :ok
   rescue
     error ->
-      # Send error event
-      error_event = build_error_event(error, config)
-      send(agent_pid, {:agent_event, error_event})
+      # Persist the failed turn before terminal delivery can be fenced.
+      error_text = Exception.message(error)
+      error_msg = build_error_message(error_text, config, :error)
+      send(agent_pid, {:agent_event, {:message_end, error_msg}})
+      send(agent_pid, {:agent_event, {:error, error_text, %{messages: [error_msg]}}})
       {:error, error}
   end
 
@@ -1187,11 +1189,6 @@ defmodule LemonAgent.Agent do
   end
 
   defp has_meaningful_content?(_), do: false
-
-  defp build_error_event(error, config) do
-    error_msg = build_error_message(Exception.message(error), config, :error)
-    {:agent_end, [error_msg]}
-  end
 
   defp build_error_message(error_text, %AgentLoopConfig{} = config, stop_reason) do
     model = config.model || %{}
