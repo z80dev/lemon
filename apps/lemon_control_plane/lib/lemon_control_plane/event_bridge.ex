@@ -381,7 +381,14 @@ defmodule LemonControlPlane.EventBridge do
     # payload built with `new/1` from a raw nested map keeps that map, so the nested reads go
     # through `get_field/2` — struct-and-map safe, and not `Access`.
     completed = payload.completed
-    model = normalize_event_string(meta[:model])
+    actual = get_field(completed, :meta) || %{}
+    actual_model = normalize_event_string(get_field(actual, :model))
+    provider = normalize_event_string(get_field(actual, :provider))
+
+    model =
+      if actual_model && provider,
+        do: "#{provider}:#{actual_model}",
+        else: actual_model || normalize_event_string(meta[:model])
 
     {"agent",
      %{

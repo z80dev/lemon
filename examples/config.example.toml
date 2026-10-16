@@ -119,6 +119,19 @@ thinking_level = "medium"
 # plan = "anthropic:claude-sonnet-5"
 # commit = "@smol"
 
+# Opt-in automatic model routing (disabled by default). First matching rule
+# wins; unmatched requests use the default model. Every selected model must
+# project under max_cost_usd per request (unknown pricing fails closed).
+# An explicit user model choice bypasses routing. See docs/config.md.
+# [model_routing]
+# enabled = true
+# max_cost_usd = 0.05
+#
+# [[model_routing.rules]]
+# model = "@smol"
+# contains = "typo"        # case-insensitive, latest user text
+# max_chars = 400          # min_chars/max_chars are inclusive
+
 [runtime]
 extension_paths = []
 

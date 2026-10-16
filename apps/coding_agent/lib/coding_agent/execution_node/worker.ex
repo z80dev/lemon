@@ -1209,6 +1209,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
             "prompt" => request.prompt,
             "images" => request.images || [],
             "model" => request.model,
+            "modelExplicit" => request.model_explicit,
             "cwd" => request.cwd,
             "toolPolicy" => request.tool_policy,
             "meta" => LemonCore.RunStore.execution_projection(request.meta || %{})
@@ -1801,6 +1802,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     |> Map.delete(:node)
     |> atomize_known_keys([
       :model,
+      :model_explicit,
       :thinking_level,
       :system_prompt,
       :agent_id,

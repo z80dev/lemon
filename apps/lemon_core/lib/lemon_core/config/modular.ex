@@ -70,6 +70,7 @@ defmodule LemonCore.Config.Modular do
     :automation,
     skills: %{write_approval: false},
     budgets: %{},
+    model_routing: %{},
     model_roles: %{}
   ]
 
@@ -82,6 +83,7 @@ defmodule LemonCore.Config.Modular do
           providers: Providers.t(),
           model_roles: %{optional(String.t()) => String.t()},
           budgets: map(),
+          model_routing: map(),
           secrets: Secrets.t(),
           features: Features.t(),
           memory: Memory.t(),
@@ -335,6 +337,7 @@ defmodule LemonCore.Config.Modular do
       providers: Providers.resolve(settings),
       model_roles: Map.get(settings, "model_roles", %{}),
       budgets: resolve_budgets(Map.get(settings, "budgets", %{})),
+      model_routing: Map.get(settings, "model_routing", %{}),
       secrets: Secrets.resolve(settings),
       features: Features.resolve(settings),
       memory: Memory.resolve(settings),

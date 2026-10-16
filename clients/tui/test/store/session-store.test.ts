@@ -6,6 +6,46 @@ beforeEach(() => {
 	resetBlockIds();
 });
 
+describe("SessionStore model activities", () => {
+	test("retains successive runs' model activities in one transcript with their original owners", () => {
+		const session = new SessionStore("s");
+		// RunTranslator scopes each run's first model occurrence by its run ID.
+		const first = {
+			id: "model_run-1_1",
+			kind: "model",
+			title: "Model: openai:gpt-4o-mini",
+			detail: { model: "gpt-4o-mini", provider: "openai" },
+		};
+		const second = {
+			id: "model_run-2_1",
+			kind: "model",
+			title: "Model: anthropic:claude-sonnet-4",
+			detail: { model: "claude-sonnet-4", provider: "anthropic" },
+		};
+
+		session.upsertTool(first, "completed", { runId: "run-1", ok: true });
+		session.finalizeRun("run-1", { ok: true });
+		session.upsertTool(second, "completed", { runId: "run-2", ok: true });
+		session.finalizeRun("run-2", { ok: true });
+		// Replayed activity updates must still target only their original card.
+		session.upsertTool(first, "completed", { runId: "run-1", ok: true });
+
+		const models = session.blocks.filter((block) => block.kind === "tool");
+		expect(models).toHaveLength(2);
+		expect(
+			models.map((block) => ({
+				actionId: block.actionId,
+				runId: block.runId,
+				title: block.title,
+				detail: block.detail,
+			})),
+		).toEqual([
+			{ actionId: first.id, runId: "run-1", title: first.title, detail: first.detail },
+			{ actionId: second.id, runId: "run-2", title: second.title, detail: second.detail },
+		]);
+	});
+});
+
 describe("SessionStore deltas", () => {
 	test("accumulates deltas into one assistant block", () => {
 		const session = new SessionStore("s");

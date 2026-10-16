@@ -68,6 +68,7 @@ defmodule CodingAgent.Session.Presentation do
 
     [cwd: cwd, register: true]
     |> maybe_add_opt(:model, Keyword.get(opts, :model))
+    |> maybe_add_opt(:model_explicit, boolean_or_nil(Keyword.get(opts, :model_explicit)))
     |> maybe_add_opt(:thinking_level, Keyword.get(opts, :thinking_level))
     |> maybe_add_opt(:system_prompt, Keyword.get(opts, :system_prompt))
     |> maybe_add_opt(:profile_instructions, Keyword.get(opts, :profile_instructions))
@@ -1261,6 +1262,12 @@ defmodule CodingAgent.Session.Presentation do
   def format_error({:assistant_error, reason}, state),
     do: "assistant error: #{format_error(reason, state)}"
 
+  def format_error(:model_routing_cost_cap, _state) do
+    "Automatic model routing blocked this request: its projected cost exceeds " <>
+      "model_routing.max_cost_usd, or its pricing/output limit is unknown. " <>
+      "Configure complete model prices, increase the cap, or explicitly select a model."
+  end
+
   def format_error(:circuit_open, state), do: format_circuit_open_error(state)
 
   def format_error(reason, _state) when is_binary(reason), do: reason
@@ -1298,6 +1305,9 @@ defmodule CodingAgent.Session.Presentation do
 
   def maybe_add_opt(opts, _key, nil), do: opts
   def maybe_add_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp boolean_or_nil(value) when is_boolean(value), do: value
+  defp boolean_or_nil(_), do: nil
 
   defp latest_task_current_action(details) when is_map(details) do
     direct = Map.get(details, :current_action) || Map.get(details, "current_action")

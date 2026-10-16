@@ -2,6 +2,41 @@ defmodule LemonAutomation.KanbanReviewTest do
   use ExUnit.Case, async: true
   alias LemonAutomation.KanbanReview
 
+  test "reviewer defaults route automatically while requested review models stay explicit" do
+    task = %{
+      assignee: "reviewer",
+      board_id: "board",
+      id: "task",
+      title: "Review",
+      description: ""
+    }
+
+    checkpoint = %{"cwd" => "/repo", "codingRunId" => "coding"}
+    snapshot = %{"tree" => "tree"}
+
+    for {persona_model, review_model, expected_model, explicit} <- [
+          {"@review", nil, "@review", false},
+          {"@review", "openai:gpt-4o", "openai:gpt-4o", false},
+          {nil, nil, "openai:gpt-4o-mini", true}
+        ] do
+      assert {:ok, params} =
+               KanbanReview.params(
+                 task,
+                 checkpoint,
+                 snapshot,
+                 %{review_model: review_model},
+                 "review",
+                 model: "openai:gpt-4o-mini",
+                 reviewer_resolver: fn _, _ ->
+                   {:ok, %{prompt: "Review", model: persona_model, tool_policy: %{}}}
+                 end
+               )
+
+      assert params.model == expected_model
+      assert params.model_explicit == explicit
+    end
+  end
+
   test "accepts only an explicit bounded JSON verdict" do
     assert {:ok, %{"approved" => true}} =
              KanbanReview.parse(~s({"approved":true,"findings":"No blockers"}))

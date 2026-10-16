@@ -5,6 +5,11 @@ defmodule LemonCore.RunRequest do
   This module centralizes normalization for run submission fields so different
   entry points (channels, control plane, automation) can submit consistently to
   the router orchestrator.
+
+  `model_explicit` records model-selection provenance independently of `model`.
+  When omitted (`nil`), a supplied model retains the normal explicit-request
+  semantics. Delegation sets it to `false` for automatic child defaults and
+  `true` for explicit selections, including inherited explicit intent.
   """
 
   alias LemonCore.MapHelpers
@@ -22,6 +27,7 @@ defmodule LemonCore.RunRequest do
           prompt: term(),
           queue_mode: queue_mode(),
           model: term(),
+          model_explicit: boolean() | nil,
           images: [map()],
           resume: ResumeToken.t() | nil,
           meta: map(),
@@ -37,6 +43,7 @@ defmodule LemonCore.RunRequest do
             prompt: nil,
             queue_mode: :collect,
             model: nil,
+            model_explicit: nil,
             images: [],
             resume: nil,
             meta: %{},
@@ -74,6 +81,7 @@ defmodule LemonCore.RunRequest do
       prompt: normalize_prompt(field(params, :prompt)),
       queue_mode: normalize_queue_mode(field(params, :queue_mode)),
       model: normalize_model(field(params, :model)),
+      model_explicit: normalize_model_explicit(field(params, :model_explicit)),
       images: normalize_images(field(params, :images)),
       resume: normalize_resume(field(params, :resume)),
       meta: normalize_meta(field(params, :meta)),
@@ -111,6 +119,10 @@ defmodule LemonCore.RunRequest do
   @spec normalize_model(term()) :: term()
   def normalize_model(model) when model in [nil, false], do: nil
   def normalize_model(model), do: model
+
+  @spec normalize_model_explicit(term()) :: boolean() | nil
+  def normalize_model_explicit(value) when is_boolean(value), do: value
+  def normalize_model_explicit(_), do: nil
 
   @spec normalize_images(term()) :: [map()]
   def normalize_images(images) when is_list(images) do

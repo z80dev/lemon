@@ -36,6 +36,7 @@ defmodule LemonControlPlane.Methods.NodeNativeFollowup do
           prompt: prompt,
           images: request["images"] || [],
           model: request["model"],
+          model_explicit: request["modelExplicit"],
           cwd: request["cwd"],
           tool_policy: policy,
           queue_mode: :collect,

@@ -495,7 +495,9 @@ defmodule CodingAgent.ExecutorTest do
     end
 
     @tag :tmp_dir
-    test "emits started, delta, tool action, and completed events", %{tmp_dir: tmp_dir} do
+    test "emits started, delta, model activity, tool action, and completed events", %{
+      tmp_dir: tmp_dir
+    } do
       tool_response =
         assistant_message_with_tool_calls([
           tool_call(
@@ -537,6 +539,35 @@ defmodule CodingAgent.ExecutorTest do
 
       assert Enum.any?(messages, &match?({:engine_delta, ^run_ref, "executor done"}, &1))
 
+      model_events =
+        Enum.filter(
+          messages,
+          &match?(
+            {:engine_event, ^run_ref, %{__event__: :action_event, action: %{kind: "model"}}},
+            &1
+          )
+        )
+
+      for {event, index} <- Enum.with_index(model_events, 1) do
+        assert {:engine_event, ^run_ref,
+                %{
+                  __event__: :action_event,
+                  engine: "lemon",
+                  phase: :completed,
+                  ok: true,
+                  action: %{
+                    id: id,
+                    kind: "model",
+                    title: "Model: mock_provider:mock-model-1",
+                    detail: %{provider: :mock_provider, model: "mock-model-1"}
+                  }
+                }} = event
+
+        assert id == "model_run-native-lemon_#{index}"
+      end
+
+      assert length(model_events) == 2
+
       assert {:engine_event, ^run_ref,
               %{
                 __event__: :action_event,
@@ -566,7 +597,12 @@ defmodule CodingAgent.ExecutorTest do
                Enum.find(
                  messages,
                  &match?(
-                   {:engine_event, ^run_ref, %{__event__: :action_event, phase: :completed}},
+                   {:engine_event, ^run_ref,
+                    %{
+                      __event__: :action_event,
+                      phase: :completed,
+                      action: %{id: "tool_call_executor"}
+                    }},
                    &1
                  )
                )

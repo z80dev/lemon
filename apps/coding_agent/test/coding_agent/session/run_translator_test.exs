@@ -49,14 +49,15 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     end
   end
 
-  defp translator do
+  defp translator(opts \\ []) do
     RunTranslator.new(
       emitter: TestEmitter,
       emitter_state: %{sink: self()},
       engine: "lemon",
       label: "test",
       session_id: "translator-cancel-regression",
-      cwd: "/tmp"
+      cwd: "/tmp",
+      run_id: Keyword.get(opts, :run_id)
     )
   end
 
@@ -68,6 +69,84 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     assert_receive {:action_event, %{phase: :started}}
     assert_receive {:action_event, %{phase: :completed, detail: detail}}
     detail
+  end
+
+  test "each actual model is visible and completion names the last model used" do
+    first = %LemonAi.Types.AssistantMessage{model: "gpt-4o-mini", provider: :openai}
+    second = %LemonAi.Types.AssistantMessage{model: "claude-sonnet-4", provider: :anthropic}
+
+    translator(run_id: "run-1")
+    |> RunTranslator.handle_event({:message_end, first})
+    |> RunTranslator.handle_event({:turn_end, first, []})
+    |> RunTranslator.handle_event({:message_end, second})
+    |> RunTranslator.handle_event({:turn_end, second, []})
+    |> RunTranslator.handle_event({:agent_end, []})
+
+    assert_receive {:action_event,
+                    %{id: "model_run-1_1", title: "Model: openai:gpt-4o-mini", phase: :completed}}
+
+    assert_receive {:action_event,
+                    %{
+                      id: "model_run-1_2",
+                      title: "Model: anthropic:claude-sonnet-4",
+                      phase: :completed
+                    }}
+
+    assert_receive {:completed, %{meta: %{model: "claude-sonnet-4", provider: :anthropic}}}
+  end
+
+  test "a fallback rejected before provider invocation is not model activity" do
+    first = %LemonAi.Types.AssistantMessage{model: "gpt-4o-mini", provider: :openai}
+
+    rejected = %LemonAi.Types.AssistantMessage{
+      model: "claude-sonnet-4",
+      provider: :anthropic,
+      stop_reason: :error,
+      error_details: %{provider_invoked: false}
+    }
+
+    translator(run_id: "run-1")
+    |> RunTranslator.handle_event({:message_end, first})
+    |> RunTranslator.handle_event({:message_end, rejected})
+    |> RunTranslator.handle_event({:agent_end, []})
+
+    assert_receive {:action_event, %{title: "Model: openai:gpt-4o-mini"}}
+    refute_receive {:action_event, %{kind: "model"}}
+    assert_receive {:completed, %{meta: %{model: "gpt-4o-mini", provider: :openai}}}
+  end
+
+  test "successive runs retain distinct model activity identities" do
+    message = %LemonAi.Types.AssistantMessage{model: "gpt-4o-mini", provider: :openai}
+
+    for run_id <- ["run-1", "run-2"] do
+      translator(run_id: run_id)
+      |> RunTranslator.handle_event({:message_end, message})
+      |> RunTranslator.handle_event({:agent_end, []})
+
+      assert_receive {:action_event, %{id: id, kind: "model"}}
+      assert id == "model_#{run_id}_1"
+      assert_receive {:completed, _}
+    end
+  end
+
+  test "translators without a run ID allocate their own stable model activity scope" do
+    first = %LemonAi.Types.AssistantMessage{model: "gpt-4o-mini", provider: :openai}
+    second = %LemonAi.Types.AssistantMessage{model: "claude-sonnet-4", provider: :anthropic}
+
+    scopes =
+      for _ <- 1..2 do
+        translator()
+        |> RunTranslator.handle_event({:message_end, first})
+        |> RunTranslator.handle_event({:message_end, second})
+
+        assert_receive {:action_event, %{id: first_id}}
+        assert_receive {:action_event, %{id: second_id}}
+        scope = String.trim_trailing(first_id, "_1")
+        assert second_id == scope <> "_2"
+        scope
+      end
+
+    assert length(Enum.uniq(scopes)) == 2
   end
 
   test "completion counts actual assistant turns and failed tools" do

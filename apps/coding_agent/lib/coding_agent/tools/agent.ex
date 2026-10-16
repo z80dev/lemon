@@ -662,6 +662,7 @@ defmodule CodingAgent.Tools.Agent do
             prompt: prompt,
             queue_mode: validated.queue_mode,
             model: validated.model || persona_model(persona),
+            model_explicit: not is_nil(validated.model) or Params.inherited_model_explicit(opts),
             cwd: validated.cwd || cwd,
             tool_policy: execution_context.tool_policy,
             execution_context: execution_context,

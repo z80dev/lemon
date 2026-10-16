@@ -25,6 +25,52 @@ defmodule CodingAgent.BackgroundRunTest do
     %{tmp_dir: tmp_dir}
   end
 
+  test "background and side-query children preserve inherited automatic provenance", %{
+    tmp_dir: tmp_dir
+  } do
+    parent =
+      start_supervised!(
+        {Session,
+         [
+           cwd: tmp_dir,
+           model: Mocks.mock_model(),
+           model_explicit: false,
+           tools: [],
+           initial_messages: transcript("question", "answer")
+         ]}
+      )
+
+    owner = self()
+
+    runner = fn opts, _prompt, _signal, _timeout ->
+      send(owner, {:child_model_provenance, opts[:model_explicit]})
+      {:ok, "done"}
+    end
+
+    assert {:ok, %{id: id}} =
+             BackgroundRun.start("background", parent_session: parent, runner: runner)
+
+    assert_receive {:child_model_provenance, false}, 2_000
+    assert {:ok, "done"} = await_result(id)
+    assert {:ok, "done"} = SideQuery.ask(parent, "side query", runner: runner)
+    assert_receive {:child_model_provenance, false}
+
+    assert {:ok, %{id: explicit_id}} =
+             BackgroundRun.start("explicit",
+               parent_session: parent,
+               model: Mocks.mock_model(),
+               runner: runner
+             )
+
+    assert_receive {:child_model_provenance, true}, 2_000
+    assert {:ok, "done"} = await_result(explicit_id)
+
+    assert {:ok, "done"} =
+             SideQuery.ask(parent, "explicit", model: Mocks.mock_model(), runner: runner)
+
+    assert_receive {:child_model_provenance, true}
+  end
+
   test "background writes retain parent approval namespace and remain gated", %{tmp_dir: tmp_dir} do
     parent =
       start_supervised!(

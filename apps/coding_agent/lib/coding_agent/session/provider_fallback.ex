@@ -488,6 +488,12 @@ defmodule CodingAgent.Session.ProviderFallback do
 
   defp push_last_error(output_stream, {:error, reason, model}) do
     details = error_details(reason)
+
+    details =
+      if reason == :model_routing_cost_cap,
+        do: Map.put(details, :provider_invoked, false),
+        else: details
+
     message = error_message(model, details.message)
     LemonAi.EventStream.error(output_stream, %{message | error_details: details})
   end

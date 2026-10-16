@@ -9,7 +9,7 @@ defmodule LemonRouter.RunProcess.RetryHandler do
 
   require Logger
 
-  alias LemonCore.{RunRequest, SessionKey}
+  alias LemonCore.{MapHelpers, RunRequest, SessionKey}
   alias LemonRouter.RunProcess.CompactionTrigger
 
   @zero_answer_retry_max_attempts 1
@@ -130,6 +130,8 @@ defmodule LemonRouter.RunProcess.RetryHandler do
             agent_id: SessionKey.agent_id(state.session_key || "") || "default",
             prompt: retry_prompt,
             queue_mode: state.queue_mode,
+            model: MapHelpers.get_key(meta, :model),
+            model_explicit: Map.get(meta, :model_explicit, Map.get(meta, "model_explicit")),
             cwd: request && request.cwd,
             tool_policy: request && request.tool_policy,
             meta: retry_meta

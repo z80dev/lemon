@@ -88,6 +88,7 @@ defmodule CodingAgent.SessionManager do
             # model_change type
             provider: String.t() | nil,
             model_id: String.t() | nil,
+            model_explicit: boolean() | nil,
             # compaction type
             summary: String.t() | nil,
             first_kept_entry_id: String.t() | nil,
@@ -121,6 +122,7 @@ defmodule CodingAgent.SessionManager do
       # model_change
       :provider,
       :model_id,
+      :model_explicit,
       # compaction
       :summary,
       :first_kept_entry_id,
@@ -170,6 +172,7 @@ defmodule CodingAgent.SessionManager do
         type: :model_change,
         provider: provider,
         model_id: model_id,
+        model_explicit: Keyword.get(opts, :explicit),
         id: Keyword.get(opts, :id),
         parent_id: Keyword.get(opts, :parent_id),
         timestamp: Keyword.get(opts, :timestamp, System.system_time(:millisecond))
@@ -798,7 +801,12 @@ defmodule CodingAgent.SessionManager do
     %{
       messages: messages,
       thinking_level: thinking_level,
-      model: model
+      model: model,
+      model_explicit:
+        Enum.reduce(branch, false, fn
+          %{type: :model_change, model_explicit: explicit}, _ -> explicit != false
+          _, explicit -> explicit
+        end)
     }
   end
 
@@ -926,6 +934,7 @@ defmodule CodingAgent.SessionManager do
       thinking_level: parse_thinking_level(map["thinkingLevel"]),
       provider: map["provider"],
       model_id: map["modelId"],
+      model_explicit: map["modelExplicit"],
       summary: map["summary"],
       first_kept_entry_id: map["firstKeptEntryId"],
       tokens_before: map["tokensBefore"],
@@ -1176,7 +1185,11 @@ defmodule CodingAgent.SessionManager do
           %{"thinkingLevel" => encode_thinking_level(entry.thinking_level)}
 
         :model_change ->
-          %{"provider" => entry.provider, "modelId" => entry.model_id}
+          %{
+            "provider" => entry.provider,
+            "modelId" => entry.model_id,
+            "modelExplicit" => entry.model_explicit
+          }
 
         :compaction ->
           %{

@@ -184,6 +184,37 @@ defmodule LemonRouter.NativeLineageTest do
              )
   end
 
+  test "continuation profile preparation preserves request model provenance", ctx do
+    {source, _root} = admit_root(ctx)
+
+    for explicit <- [nil, false, true] do
+      request = %{
+        fresh_request(ctx, "model-provenance-#{inspect(explicit)}")
+        | model: "@fast",
+          model_explicit: explicit
+      }
+
+      assert {:ok, prepared, _destination} = NativeLineage.prepare_request(source, request)
+      assert prepared.model == "@fast"
+      assert prepared.model_explicit == (explicit != false)
+    end
+  end
+
+  @tag :tmp_dir
+  test "model-less managed continuation retains automatic zero-cap enforcement", ctx do
+    {source, _root} = admit_root(ctx)
+
+    assert {:ok, _} =
+             ProfileStore.update(ctx.profile_id, %{"model" => "openai:gpt-4o"})
+
+    assert {:ok, prepared, _destination} =
+             NativeLineage.prepare_request(source, fresh_request(ctx, "automatic-model"))
+
+    assert prepared.model == "openai:gpt-4o"
+    assert prepared.model_explicit == false
+    assert_zero_cap(prepared, ctx.tmp_dir)
+  end
+
   test "unknown executing-host floor cannot admit F and runtime receipts only restrict authority",
        ctx do
     {unverified, root} = admit_root(ctx, register_floor: false)
@@ -1826,6 +1857,44 @@ defmodule LemonRouter.NativeLineageTest do
         do_eventually(fun, deadline)
       end
     end
+  end
+
+  defp assert_zero_cap(request, cwd) do
+    settings = %CodingAgent.SettingsManager{
+      default_model: %{provider: :openai, model_id: "gpt-4o", base_url: nil},
+      providers: %{"openai" => %{api_key: "test-key"}},
+      provider_routing: %{enabled: false},
+      retry_enabled: false,
+      compaction_enabled: false,
+      model_routing: %{enabled: true, max_cost_usd: 0, rules: []}
+    }
+
+    file = Path.join(cwd, "routing.jsonl")
+    cwd |> CodingAgent.SessionManager.new() |> CodingAgent.SessionManager.persist(file)
+    owner = self()
+
+    session =
+      start_supervised!(
+        {CodingAgent.Session,
+         cwd: cwd,
+         workspace_dir: cwd,
+         session_file: file,
+         settings_manager: settings,
+         model: request.model,
+         model_explicit: request.model_explicit,
+         system_prompt: "test",
+         tools: [],
+         register: false,
+         stream_fn: fn _, _, _ ->
+           send(owner, :unexpected_provider_call)
+           raise "zero-cap request reached provider"
+         end}
+      )
+
+    CodingAgent.Session.subscribe(session)
+    assert :ok = CodingAgent.Session.prompt(session, request.prompt)
+    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}}, 5_000
+    refute_received :unexpected_provider_call
   end
 
   defp restore_env(app, key, {:ok, value}), do: Application.put_env(app, key, value)

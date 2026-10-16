@@ -11,7 +11,8 @@ defmodule CodingAgent.Executor.Usage do
   @transport_token_keys @token_keys ++ Enum.map(@token_keys, &Atom.to_string/1)
 
   def occurrence(message) when is_map(message) do
-    if field(message, :role) in [:assistant, "assistant"] do
+    if field(message, :role) in [:assistant, "assistant"] and
+         field(field(message, :error_details) || %{}, :provider_invoked) != false do
       usage =
         case field(message, :usage) do
           usage when is_map(usage) -> usage

@@ -21,6 +21,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   so opt-in voice synthesis proceeds exactly once. Voice usage falls back to
   configured model-specific character pricing when speech APIs omit usage;
   unpriced requests retain their character count and explicitly unknown cost.
+- Profile defaults and model-less managed follow-ups remain subject to automatic
+  routing and its cost cap. Retry continuations retain model-selection provenance;
+  reviewer/judge defaults stay automatic, while explicit cron model pins and
+  legacy nullable explicit selections still win.
+- Automatic model routing keeps persona model/role and configured task-agent
+  defaults subject to routing rules and cost caps across native and router-backed
+  delegation, while preserving explicit child and inherited explicit selections.
 - Lemon Bot iPhone pairing verifies the advertised backend and workspace before
   connecting, shows device/code/expiry while waiting for desktop approval, and
   restores saved sessions read-only without replaying sends or approvals.

@@ -57,6 +57,7 @@ defmodule CodingAgent.Coordinator do
   @type subagent_spec :: %{
           required(:prompt) => String.t(),
           optional(:subagent) => String.t() | nil,
+          optional(:model) => String.t() | nil,
           optional(:description) => String.t() | nil
         }
 
@@ -71,6 +72,7 @@ defmodule CodingAgent.Coordinator do
   @type t :: %__MODULE__{
           cwd: String.t(),
           model: LemonAi.Types.Model.t(),
+          model_explicit: boolean(),
           thinking_level: LemonAgent.Types.thinking_level(),
           settings_manager: CodingAgent.SettingsManager.t() | nil,
           parent_session: String.t() | nil,
@@ -98,6 +100,7 @@ defmodule CodingAgent.Coordinator do
   defstruct [
     :cwd,
     :model,
+    :model_explicit,
     :thinking_level,
     :settings_manager,
     :parent_session,
@@ -236,6 +239,7 @@ defmodule CodingAgent.Coordinator do
     state = %__MODULE__{
       cwd: cwd,
       model: model,
+      model_explicit: Params.inherited_model_explicit(opts),
       thinking_level: Keyword.get(opts, :thinking_level, :off),
       settings_manager: Keyword.get(opts, :settings_manager),
       parent_session: Keyword.get(opts, :parent_session),
@@ -491,6 +495,7 @@ defmodule CodingAgent.Coordinator do
         params = %{
           "prompt" => spec.prompt,
           "agent" => spec[:subagent],
+          "model" => spec[:model],
           "description" => spec[:description] || "Subagent #{id}",
           "tool_policy" => spec[:tool_policy]
         }
@@ -615,6 +620,7 @@ defmodule CodingAgent.Coordinator do
       state.cwd,
       [
         model: state.model,
+        model_explicit: state.model_explicit,
         thinking_level: state.thinking_level,
         settings_manager: state.settings_manager,
         parent_session: state.parent_session

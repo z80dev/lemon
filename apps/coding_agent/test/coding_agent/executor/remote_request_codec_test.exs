@@ -95,6 +95,45 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
     assert meta["unrecognized"] == "data"
   end
 
+  @tag :tmp_dir
+  test "model provenance survives JSON encoding and destination normalization", %{tmp_dir: cwd} do
+    for explicit <- [nil, false, true],
+        meta <- [
+          %{model: "@fast", model_explicit: explicit},
+          %{"model" => "@fast", "model_explicit" => explicit}
+        ] do
+      request = %ExecutionRequest{
+        run_id: "placement",
+        session_key: "agent:placement:main",
+        prompt: "hello",
+        execution_context: context(),
+        meta: meta
+      }
+
+      assert {:ok, payload} = RemoteRequestCodec.encode(request)
+      assert payload["meta"]["model"] == "@fast"
+      assert payload["meta"]["model_explicit"] == explicit
+      decoded_meta = RemoteRequestCodec.normalize_meta(payload["meta"])
+      assert decoded_meta.model == "@fast"
+      assert decoded_meta.model_explicit == explicit
+
+      state = %CodingAgent.ExecutionNode.Worker{name: "worker", default_cwd: cwd}
+
+      assert {:ok, destination_request, _opts} =
+               CodingAgent.ExecutionNode.Worker.execution_request(payload, state, "placement")
+
+      assert destination_request.meta.model == "@fast"
+      assert destination_request.meta.model_explicit == explicit
+    end
+
+    refute Map.has_key?(RemoteRequestCodec.normalize_meta(%{}), :model_explicit)
+
+    assert RemoteRequestCodec.normalize_meta(%{
+             "model_explicit" => true,
+             model_explicit: false
+           }).model_explicit == false
+  end
+
   test "failed destination completion remains false after JSON decoding" do
     assert {:ok, %{ok: false, error: "denied"}} =
              RemoteRequestCodec.decode_result(%{

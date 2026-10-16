@@ -28,6 +28,9 @@ defmodule LemonAutomation.KanbanReview do
          cwd: checkpoint["cwd"],
          model:
            config.review_model || persona[:model] || role_model(persona[:role]) || opts[:model],
+         model_explicit:
+           is_nil(config.review_model) and is_nil(persona[:model]) and
+             is_nil(role_model(persona[:role])) and not is_nil(opts[:model]),
          tool_policy: policy,
          prompt: prompt(task, snapshot),
          meta: %{

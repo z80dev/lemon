@@ -1247,6 +1247,54 @@ defmodule LemonRouter.RunProcessTest do
   end
 
   describe "zero-answer assistant retries" do
+    for explicit <- [false, true, nil], keys <- [:atom, :string] do
+      @retry_explicit explicit
+      @retry_keys keys
+      test "retains #{@retry_keys} model provenance #{@retry_explicit} across retry" do
+        run_id = "run_#{System.unique_integer([:positive])}"
+        session_key = SessionKey.main("test-agent")
+        model_meta = %{model: "openai:gpt-4o", model_explicit: @retry_explicit}
+
+        model_meta =
+          if @retry_keys == :string,
+            do: Map.new(model_meta, fn {key, value} -> {Atom.to_string(key), value} end),
+            else: model_meta
+
+        job = %{make_test_request(run_id, model_meta) | prompt: "Do work"}
+        start_supervised!({__MODULE__.TestRunOrchestrator, [notify_pid: self()]})
+
+        assert {:ok, pid} =
+                 RunProcess.start_link(%{
+                   run_id: run_id,
+                   session_key: session_key,
+                   execution_request: job,
+                   submit_to_gateway?: false,
+                   run_orchestrator: __MODULE__.TestRunOrchestrator
+                 })
+
+        event =
+          LemonCore.Event.new(
+            :run_completed,
+            %{completed: %{ok: false, error: {:assistant_error, "HTTP 400: "}, answer: ""}},
+            %{run_id: run_id, session_key: session_key}
+          )
+
+        :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), event)
+        assert_receive {:test_run_orchestrator_submit, %RunRequest{} = retry, 1}, 1_000
+        assert retry.model == "openai:gpt-4o"
+        assert retry.model_explicit == @retry_explicit
+
+        assert %{model_explicit: explicit} =
+                 LemonRouter.ModelSelection.resolve(%{
+                   explicit_model: retry.model,
+                   model_explicit: retry.model_explicit
+                 })
+
+        assert explicit == (@retry_explicit != false)
+        assert eventually(fn -> not Process.alive?(pid) end)
+      end
+    end
+
     test "auto-retries once with retry context in prompt" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")

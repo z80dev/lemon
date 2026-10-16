@@ -418,6 +418,14 @@ defmodule LemonAgent.Types do
     @type resolve_stream_options_fn ::
             (LemonAi.Types.Model.t(), LemonAi.Types.Model.t(), LemonAi.Types.StreamOptions.t() ->
                LemonAi.Types.StreamOptions.t())
+    @type resolve_model_fn ::
+            (LemonAi.Types.Context.t(), LemonAi.Types.StreamOptions.t() ->
+               {:ok, LemonAi.Types.Model.t()} | {:error, term()})
+    @type check_model_cost_fn ::
+            (LemonAi.Types.Model.t(),
+             LemonAi.Types.Context.t(),
+             LemonAi.Types.StreamOptions.t() ->
+               :ok | {:error, term()})
     @type resolve_thinking_fn ::
             (LemonAi.Types.Model.t(), LemonAgent.Types.agent_message(), reference() | nil ->
                {:ok, LemonAi.Types.StreamOptions.thinking_level() | nil} | {:error, :aborted})
@@ -439,6 +447,8 @@ defmodule LemonAgent.Types do
             get_api_key: get_api_key_fn() | nil,
             get_model: get_model_fn() | nil,
             resolve_stream_options: resolve_stream_options_fn() | nil,
+            resolve_model: resolve_model_fn() | nil,
+            check_model_cost: check_model_cost_fn() | nil,
             resolve_thinking: resolve_thinking_fn() | nil,
             thinking_prompt: term() | nil,
             resolved_thinking: LemonAi.Types.StreamOptions.thinking_level() | nil,
@@ -468,6 +478,8 @@ defmodule LemonAgent.Types do
               get_api_key: nil,
               get_model: nil,
               resolve_stream_options: nil,
+              resolve_model: nil,
+              check_model_cost: nil,
               resolve_thinking: nil,
               thinking_prompt: nil,
               resolved_thinking: nil,

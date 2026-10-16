@@ -347,6 +347,11 @@ defmodule LemonCore.ProfileStore do
          images: Keyword.get(opts, :images, []),
          queue_mode: Keyword.get(opts, :queue_mode, :collect),
          model: Keyword.get(opts, :model) || profile["model"],
+         model_explicit:
+           if(Keyword.get(opts, :model),
+             do: Keyword.get(opts, :model_explicit) != false,
+             else: false
+           ),
          cwd: cwd,
          run_id: Keyword.get(opts, :run_id),
          resume: Keyword.get(opts, :resume),

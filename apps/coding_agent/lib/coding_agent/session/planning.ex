@@ -28,7 +28,7 @@ defmodule CodingAgent.Session.Planning do
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.SessionEntry
   alias CodingAgent.Tools.{Edit, Write, WriteArchive, WriteSqlite}
-  alias LemonAgent.ModelRuntime.SessionPins
+  alias LemonAgent.ModelRuntime.{ModelRouting, SessionPins}
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
 
@@ -88,7 +88,8 @@ defmodule CodingAgent.Session.Planning do
   Transitions a live session using the same model-role journal as stopped sessions.
 
   Resolve all models before mutation. The journal stores the previous execution
-  model and the selected model, so restart needs no runtime-only plan state.
+  model and preserves its automatic/explicit selection provenance through the
+  planning model, so restart needs no runtime-only plan state.
   """
   def transition_session(state, action, _opts) when action in [:enter, :exit] do
     with {:ok, model, manager} <-
@@ -175,8 +176,13 @@ defmodule CodingAgent.Session.Planning do
     {:ok, _status, session} = append(session, plan)
 
     if different_model?(current, model) do
+      explicit = SessionManager.build_session_context(session).model_explicit
+
       session =
-        SessionManager.append_entry(session, SessionEntry.model_change(model.provider, model.id))
+        SessionManager.append_entry(
+          session,
+          SessionEntry.model_change(model.provider, model.id, explicit: explicit)
+        )
 
       SessionPins.clear(session.header.id)
       session
@@ -187,7 +193,18 @@ defmodule CodingAgent.Session.Planning do
 
   defp change_model(state, model) do
     if different_model?(state.model, model) do
-      :ok = LemonAgent.Agent.set_model(state.agent, model)
+      context = SessionManager.build_session_context(state.session_manager)
+
+      model_routing =
+        unless context.model_explicit do
+          ModelRouting.prepare(
+            state.settings_manager.model_routing,
+            &ModelResolver.resolve_session_model(&1, state.settings_manager),
+            state.settings_manager.providers
+          )
+        end
+
+      :ok = LemonAgent.Agent.set_model(state.agent, model, model_routing: model_routing)
       %{state | model: model}
     else
       state

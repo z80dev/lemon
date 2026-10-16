@@ -702,6 +702,35 @@ defmodule LemonCore.ProfileStoreTest do
     assert {:error, :reserved_profile} = ProfileStore.delete("default", confirm: "default")
   end
 
+  test "profile defaults are automatic while invocation models preserve nullable provenance" do
+    profile = %{
+      "id" => "routing",
+      "model" => "openai:gpt-4o",
+      "canonicalSessionKey" => "agent:routing:main",
+      "paths" => %{"workspace" => "/profile/workspace"}
+    }
+
+    assert {:ok, default} = ProfileStore.chat_request(profile, "hello")
+    assert default.model == "openai:gpt-4o"
+    assert default.model_explicit == false
+
+    for explicit <- [nil, false, true] do
+      assert {:ok, request} =
+               ProfileStore.chat_request(profile, "hello",
+                 model: "openai:gpt-4o-mini",
+                 model_explicit: explicit
+               )
+
+      assert request.model == "openai:gpt-4o-mini"
+      assert request.model_explicit == (explicit != false)
+    end
+
+    assert {:ok, explicit} =
+             ProfileStore.chat_request(profile, "hello", model: "openai:gpt-4o-mini")
+
+    assert explicit.model_explicit == true
+  end
+
   test "canonical chat binds validated profile identity and node over caller metadata" do
     profile = %{
       "id" => "remote",

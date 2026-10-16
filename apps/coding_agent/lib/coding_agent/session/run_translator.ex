@@ -24,6 +24,7 @@ defmodule CodingAgent.Session.RunTranslator do
     :session_id,
     :cwd,
     :run_id,
+    :model_activity_scope,
     :resume_token,
     :delta_callback,
     :retry_action_id,
@@ -54,6 +55,10 @@ defmodule CodingAgent.Session.RunTranslator do
       session_id: Keyword.get(opts, :session_id),
       cwd: Keyword.fetch!(opts, :cwd),
       run_id: Keyword.get(opts, :run_id),
+      # Consumers key activities by ID across every run in a transcript.
+      model_activity_scope:
+        Keyword.get(opts, :run_id) ||
+          "translator_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}",
       delta_callback: Keyword.get(opts, :delta_callback),
       accumulated_text: "",
       pending_actions: %{},
@@ -473,8 +478,12 @@ defmodule CodingAgent.Session.RunTranslator do
 
   def handle_event(%__MODULE__{} = t, {:message_end, message}) do
     case Usage.occurrence(message) do
-      nil -> t
-      occurrence -> %{t | usage_occurrences: [occurrence | t.usage_occurrences]}
+      nil ->
+        t
+
+      occurrence ->
+        t = %{t | usage_occurrences: [occurrence | t.usage_occurrences]}
+        emit_turn_model(t, occurrence)
     end
   end
 
@@ -588,7 +597,8 @@ defmodule CodingAgent.Session.RunTranslator do
           ok: true,
           answer: answer,
           resume: t.resume_token,
-          usage: usage
+          usage: usage,
+          meta: actual_model_meta(t)
         })
 
       %{t | emitter_state: emitter_state, completed_emitted: true}
@@ -621,11 +631,12 @@ defmodule CodingAgent.Session.RunTranslator do
           resume: t.resume_token,
           usage: usage,
           meta:
-            Map.put(
-              if(t.budget_stop, do: %{budget: t.budget_stop}, else: %{}),
-              :cancelled,
-              not is_nil(t.cancel_reason)
-            )
+            t
+            |> actual_model_meta()
+            |> Map.put(:cancelled, not is_nil(t.cancel_reason))
+            |> then(fn meta ->
+              if t.budget_stop, do: Map.put(meta, :budget, t.budget_stop), else: meta
+            end)
         })
 
       %{t | emitter_state: emitter_state, completed_emitted: true}
@@ -653,6 +664,26 @@ defmodule CodingAgent.Session.RunTranslator do
       occurrences: Enum.reverse(t.usage_occurrences)
     })
   end
+
+  defp actual_model_meta(%{usage_occurrences: [occurrence | _]}) do
+    %{model: occurrence.model, provider: occurrence.provider}
+  end
+
+  defp actual_model_meta(_translator), do: %{}
+
+  defp emit_turn_model(t, %{model: model, provider: provider})
+       when is_binary(model) and model != "" and not is_nil(provider) do
+    emit_action_event(t, %{
+      id: "model_#{t.model_activity_scope}_#{length(t.usage_occurrences)}",
+      kind: "model",
+      title: "Model: #{provider}:#{model}",
+      phase: :completed,
+      ok: true,
+      detail: %{model: model, provider: provider}
+    })
+  end
+
+  defp emit_turn_model(t, _occurrence), do: t
 
   defp emit_action_event(%__MODULE__{} = t, fields) do
     fields =

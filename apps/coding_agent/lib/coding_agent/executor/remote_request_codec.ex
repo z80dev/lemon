@@ -14,7 +14,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
 
   @version 2
 
-  @execution_meta_keys ~w(model thinking_level system_prompt profile_id profile_instructions
+  @execution_meta_keys ~w(model model_explicit thinking_level system_prompt profile_id profile_instructions
                           mcp_servers invocation_mcp_servers invocation_context_key
                           native_lineage_handle native_lineage_run_id
                           agent_id async_followups resume_source acp_session_id

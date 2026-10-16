@@ -18,6 +18,7 @@ defmodule LemonCore.RunRequestTest do
       assert request.prompt == "hello"
       assert request.queue_mode == :collect
       assert request.model == nil
+      assert request.model_explicit == nil
       assert request.resume == nil
       assert request.meta == %{}
       assert request.cwd == nil
@@ -86,6 +87,27 @@ defmodule LemonCore.RunRequestTest do
       assert RunRequest.normalize(%{model: nil}).model == nil
       assert RunRequest.normalize(%{model: false}).model == nil
       assert RunRequest.normalize(%{"model" => "gpt-5"}).model == "gpt-5"
+    end
+
+    test "preserves optional model provenance through atom, string and struct normalization" do
+      for explicit <- [nil, false, true] do
+        for attrs <- [
+              %{model: "child-model", model_explicit: explicit},
+              %{"model" => "child-model", "model_explicit" => explicit},
+              %RunRequest{model: "child-model", model_explicit: explicit}
+            ] do
+          request = RunRequest.normalize(attrs)
+          assert request.model == "child-model"
+          assert request.model_explicit == explicit
+        end
+      end
+
+      assert RunRequest.new(%{model: "ordinary-request"}).model_explicit == nil
+
+      assert RunRequest.new(%{
+               "model_explicit" => true,
+               model_explicit: false
+             }).model_explicit == false
     end
 
     test "falls back to default agent_id when session_key is missing/invalid" do
