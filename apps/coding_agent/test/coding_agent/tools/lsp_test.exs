@@ -360,6 +360,32 @@ defmodule CodingAgent.Tools.LspTest do
              LemonLsp.ServerManager.stop_session(managed_session_id)
   end
 
+  test "workspace requests rebind a handed-off client before using it", ctx do
+    assert %AgentToolResult{} =
+             run(ctx, %{"action" => "hover", "file" => "src/main.c", "line" => 1})
+
+    assert [%{pid: pid}] = Client.list(ctx.session_id)
+    next_owner = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> send(next_owner, :stop) end)
+    next = %{ctx | opts: Keyword.put(ctx.opts, :session_pid, next_owner)}
+
+    # Raw requests and workspace symbol search both take the workspace path.
+    for {previous, params} <- [
+          {ctx.owner, %{"action" => "request", "query" => "fake/state"}},
+          {next_owner, %{"action" => "symbols", "query" => "value"}}
+        ] do
+      assert :ok = CodingAgent.ToolResources.handoff(ctx.session_id, previous)
+      assert :sys.get_state(pid).owner_pid == nil
+      assert %AgentToolResult{} = run(next, params)
+      assert :sys.get_state(pid).owner_pid == next_owner
+      assert [%{pid: ^pid}] = Client.list(ctx.session_id)
+    end
+
+    ref = Process.monitor(pid)
+    Process.exit(next_owner, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^pid, _}, 5_000
+  end
+
   test "two coding sessions share a process and authoritative document versions", ctx do
     other = second_session(ctx)
     first_pid = raw_result(ctx, "fake/pid")
@@ -709,6 +735,11 @@ defmodule CodingAgent.Tools.LspTest do
 
       def handle(%{"method" => "fake/renamed", "id" => id}, state) do
         reply(id, Map.get(state, :renamed, []))
+        state
+      end
+
+      def handle(%{"method" => "workspace/symbol", "id" => id}, state) do
+        reply(id, [])
         state
       end
 
