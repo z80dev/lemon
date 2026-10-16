@@ -1222,7 +1222,7 @@ lemon profile <command> [options]
 | `--confirm ID` | Exact profile deletion confirmation |
 | `--force` | Replace an existing export file |
 
-Lifecycle commands keep profiles under the canonical Lemon home. Exports are selected-file snapshots that never include sessions or memory. Selected files are not scrubbed, so review an export for inline secrets before sharing it.
+Lifecycle commands keep profiles under the canonical Lemon home. Exports are selected-file snapshots that never include sessions, memory, or artifacts. Selected files (profile `config.toml`, designated workspace Markdown, allowlisted skill text) and the profile name, description, and system prompt go through credential redaction before export, so inline credential values are not preserved. Redaction is not exhaustive; review an export before sharing it.
 
 #### `lemon backup`
 
@@ -1250,7 +1250,7 @@ lemon backup <contract|create|list|verify|restore> [options]
 | `--confirm TOKEN` | Exact verify token |
 | `--json` | Emit one JSON document |
 
-Restore verifies before mutation. By default a backup omits only the `cookie`, `env`, and `secrets_master_key` files and the `nodes/execution/` credential directory; `--include-credentials` adds them. `config.toml` and other included files are copied byte-for-byte and are not scrubbed, so inline API keys or tokens in them are preserved. Treat every backup as sensitive. Secret values and backed-up file contents are never printed.
+Restore verifies before mutation. The only credential-specific exclusions are the `cookie`, `env`, and `secrets_master_key` files and the `nodes/execution/` directory; `--include-credentials` adds them. Backups also skip generated/runtime roots, support bundles, pid/socket files, the backup lock, symlinks, and special files. SQLite databases are snapshotted transactionally; `config.toml` and other non-SQLite included files are copied byte-for-byte and are not scrubbed, so inline API keys or tokens in them are preserved. Treat every backup as sensitive. Secret values and backed-up file contents are never printed. See [Back up and restore](backups.md) for the full contract.
 
 Exit codes: 0 success; 1 verification or operational failure; 2 invalid command or options.
 

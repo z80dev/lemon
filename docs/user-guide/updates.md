@@ -228,7 +228,9 @@ removal is deleting what the installer created
 `~/.lemon` is separate from the program files, so you choose whether to keep it.
 
 1. **Optional: back up your state.** Config, sessions, and the store are
-   included by default; credentials only with `--include-credentials`
+   included by default; only the `cookie`, `env`, and `secrets_master_key`
+   files and `nodes/execution/` are excluded unless you pass `--include-credentials`.
+   `config.toml` and other files are copied as-is and may hold inline secrets
    ([Back up and restore](backups.md)). The default destination is
    `~/.lemon/backups/`, which is inside the Lemon home, so if you plan to
    [remove all data](#remove-all-data) write the bundle somewhere else with
@@ -275,8 +277,9 @@ master key (when file-backed), and `~/.lemon/backups/`. If you might want any
 of it back, first create a bundle outside `~/.lemon` with `--output` (see
 step 1 above), run `lemon backup verify` on it, and keep it on storage you
 control. A backup left in the default `~/.lemon/backups/` is deleted with the
-rest. Credentials are excluded unless you add `--include-credentials`; treat
-such a bundle as sensitive.
+rest. Only the `cookie`, `env`, `secrets_master_key` files and `nodes/execution/`
+are excluded unless you add `--include-credentials`; `config.toml` and other
+included files may contain inline API keys, so treat every bundle as sensitive.
 
 ```bash
 rm -rf ~/.lemon
