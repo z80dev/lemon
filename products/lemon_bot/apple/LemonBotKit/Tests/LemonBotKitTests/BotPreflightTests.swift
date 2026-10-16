@@ -105,4 +105,23 @@ final class BotPreflightTests: XCTestCase {
         do { _ = try await BotPreflightClient(session: TestHTTPProtocol.session()).preflight(origin: BotPreflightFixtures.origin, expectedInstanceID: "backend_1"); XCTFail("TLS failure must be refused") }
         catch { XCTAssertEqual(error as? BotPreflightError, .unavailable) }
     }
+    func testIdentityRevocationPreservesStatusWithoutExposingResponseBody() async throws {
+        for status in [401, 403] {
+            TestHTTPProtocol.handler = { request in
+                if request.url?.path == "/v1/setup" {
+                    return (200, ["Content-Type": "application/json"], try BotPreflightFixtures.descriptor())
+                }
+                return (status, ["Content-Type": "text/html"], Data("private server response must not escape".utf8))
+            }
+            do {
+                _ = try await BotPreflightClient(session: TestHTTPProtocol.session()).preflight(origin: BotPreflightFixtures.origin, expectedInstanceID: "backend_1", session: BotPreflightSession(token: "revoked-session", workspaceID: "workspace_1"))
+                XCTFail("Revoked identity must not be accepted")
+            } catch let error as BackendError {
+                XCTAssertEqual(error.status, status)
+                XCTAssertEqual(error.failure.code, status == 401 ? "unauthenticated" : "forbidden")
+                XCTAssertFalse(error.localizedDescription.contains("private server response"))
+                XCTAssertFalse(error.localizedDescription.contains("revoked-session"))
+            }
+        }
+    }
 }

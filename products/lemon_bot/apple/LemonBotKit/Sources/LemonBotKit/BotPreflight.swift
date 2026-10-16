@@ -169,6 +169,7 @@ public struct BotPreflightClient {
             return value
         } catch is CancellationError { throw CancellationError() }
         catch let error as BotPreflightError { throw error }
+        catch let error as BackendError { throw error }
         catch { throw BotPreflightError.unavailable }
     }
 }
@@ -205,6 +206,20 @@ private final class BotDescriptorReader: NSObject, URLSessionDataDelegate, @unch
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        if let http = response as? HTTPURLResponse, response.url == dataTask.originalRequest?.url,
+           dataTask.originalRequest?.value(forHTTPHeaderField: "Authorization") != nil,
+           http.statusCode == 401 || http.statusCode == 403 {
+            let forbidden = http.statusCode == 403
+            let failure = ErrorEnvelopeError(code: forbidden ? "forbidden" : "unauthenticated", message: "This product session is no longer authorized. Reconnect this device.", requestId: "identity", retrySafe: false)
+            completionHandler(.cancel); finish(.failure(BackendError(status: http.statusCode, failure: failure))); return
+        }
+        // A gateway outage is not evidence of a different service. Preserve the
+        // saved identity pin and retry the read-only fence before using its session.
+        if let http = response as? HTTPURLResponse,
+           response.url == dataTask.originalRequest?.url,
+           [502, 503, 504].contains(http.statusCode) {
+            completionHandler(.cancel); finish(.failure(BotPreflightError.unavailable)); return
+        }
         guard let http = response as? HTTPURLResponse, http.statusCode == 200,
               response.url == dataTask.originalRequest?.url,
               http.mimeType?.lowercased() == "application/json", response.expectedContentLength <= 16384 else {

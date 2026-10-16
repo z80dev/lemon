@@ -33,16 +33,9 @@ extension PairingLink: CustomStringConvertible, CustomDebugStringConvertible {
               let instance = items.first(where: { $0.name == "instance" })?.value,
               let workspace = items.first(where: { $0.name == "cluster" })?.value,
               let code = items.first(where: { $0.name == "code" })?.value,
-              boundedID(instance), boundedID(workspace), boundedSecret(code),
-              backend.utf8.count <= 2048, let url = URL(string: backend),
-              let endpoint = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              endpoint.path.isEmpty || endpoint.path == "/",
-              endpoint.user == nil, endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil,
-              let host = endpoint.host, !host.isEmpty, host.utf8.count <= 253,
-              !host.contains("%"), !host.contains("\\"), !backend.contains("\\"),
-              endpoint.port.map({ (1...65535).contains($0) }) ?? true else { throw PairingClientError.invalidLink }
-        _ = try HTTPTransport.normalizeBaseURL(url)
-        return PairingLink(backendUrl: try exactOrigin(url), instanceId: instance, workspaceId: workspace, pairCode: code)
+              boundedID(instance), boundedID(workspace), boundedSecret(code) else { throw PairingClientError.invalidLink }
+        _ = try BotPreflight.validateOrigin(backend, use: .sameMachine)
+        return PairingLink(backendUrl: backend, instanceId: instance, workspaceId: workspace, pairCode: code)
     }
     static func boundedID(_ value: String) -> Bool {
         !value.isEmpty && value.utf16.count <= 128 && value.unicodeScalars.allSatisfy { $0.value > 32 && $0 != "/" }
@@ -63,6 +56,7 @@ extension PairingLink: CustomStringConvertible, CustomDebugStringConvertible {
 public struct PendingPairingPreview: Hashable {
     public var clusterName: String
     public var origin: String
+    public var instanceID: String
     public var workspaceID: ID
     public var pairingID: ID?
     public var deviceName: String?
@@ -84,16 +78,24 @@ public struct PendingDevicePairing: Codable {
     var savedAtMs: TimestampMs
 }
 
+/// Completion is receipt observation, never approval. Unknown outcomes require an explicit check.
+public enum PhonePairingProgress {
+    public static func shouldObserve(state: String, expiresAtMs: TimestampMs?, now: Date = Date()) -> Bool {
+        state == "pending_approval" && expiresAtMs.map { $0.isFinite && $0 > now.timeIntervalSince1970 * 1000 } == true
+    }
+}
+
 extension LemonBotStore {
     func installPendingPairing(_ value: PendingDevicePairing) {
         pairingRecord = value
         pairingLink = value.link
-        pendingPairing = PendingPairingPreview(clusterName: value.claim?.clusterName ?? value.preview?.clusterName ?? "Check cluster before requesting connection", origin: value.link.origin, workspaceID: value.link.workspaceId, pairingID: value.claim?.pairingId, deviceName: value.deviceName, verificationCode: value.claim?.verificationCode, expiresAtMs: value.claim?.expiresAtMs ?? value.preview?.expiresAtMs)
+        pendingPairing = PendingPairingPreview(clusterName: value.claim?.clusterName ?? value.preview?.clusterName ?? "Check workspace before requesting connection", origin: value.link.origin, instanceID: value.link.instanceId, workspaceID: value.link.workspaceId, pairingID: value.claim?.pairingId, deviceName: value.deviceName, verificationCode: value.claim?.verificationCode, expiresAtMs: value.claim?.expiresAtMs ?? value.preview?.expiresAtMs)
         pairingState = value.state == "claiming" ? "claim_unknown" : value.state == "completing" ? "completion_unknown" : value.state
         pairingError = nil
     }
     public func preparePairing(_ rawLink: String) throws {
         let link = try PairingLink.parse(rawLink)
+        _ = try BotPreflight.validateOrigin(link.origin, use: Self.phoneOriginUse)
         if let record = pairingRecord {
             guard record.link == link else { throw PairingClientError.pendingConnection }
             return
@@ -106,19 +108,24 @@ extension LemonBotStore {
         guard var record = pairingRecord, record.claim == nil,
               ["preview", "preview_ready"].contains(pairingState), let url = record.link.backendURL else { throw PairingClientError.notReady }
         pairingState = "previewing"; pairingError = nil
+        let current = generation
         do {
+            try await verifyPhonePairing(record)
+            try assertGeneration(current)
             let result = try await pairingTransport(baseURL: url).previewPairing(PairingPreviewRequest(pairCode: record.link.pairCode, workspaceId: record.link.workspaceId))
             guard pairingRecord?.claimNonce == record.claimNonce,
                   let backend = URL(string: result.backendUrl), try PairingLink.exactOrigin(backend) == record.link.origin,
                   !result.clusterName.isEmpty, result.clusterName.utf8.count <= 240,
-                  result.expiresAtMs.isFinite, result.expiresAtMs > Date().timeIntervalSince1970 * 1000 else { throw PairingClientError.wrongCluster }
+                  result.expiresAtMs.isFinite else { throw PairingClientError.wrongCluster }
+            try assertGeneration(current)
+            guard result.expiresAtMs > Date().timeIntervalSince1970 * 1000 else { throw PairingClientError.expired }
             record.preview = result; record.state = "preview_ready"
             try keychain.savePendingPairing(record); installPendingPairing(record)
         } catch {
-            if pairingRecord?.claimNonce == record.claimNonce {
-                record.state = (error as? BackendError)?.failure.code == "expired" ? "expired" : "preview"
+            if generation == current, pairingRecord?.claimNonce == record.claimNonce {
+                record.state = pairingFailureState(error, unknown: "preview")
                 try keychain.savePendingPairing(record); installPendingPairing(record)
-                pairingError = record.state == "expired" ? PairingClientError.expired.localizedDescription : "The cluster could not be verified. Check its reachable HTTPS address and preview again; no connection was requested."
+                pairingError = safePairingError(error)
             }
             throw errorForPairing(error)
         }
@@ -132,6 +139,8 @@ extension LemonBotStore {
         guard var record = pairingRecord, record.claim == nil,
               ["preview_ready", "claim_unknown"].contains(pairingState), let preview = record.preview, let url = record.link.backendURL else { throw PairingClientError.notReady }
         guard !deviceName.isEmpty, deviceName.utf8.count <= 120, !appVersion.isEmpty, appVersion.utf8.count <= 64 else { throw PairingClientError.notReady }
+        try requirePairingExpiry(preview.expiresAtMs, record: &record)
+        let current = generation
         record.deviceName = record.deviceName ?? deviceName
         record.appVersion = record.appVersion ?? appVersion
         record.state = "claiming"
@@ -139,7 +148,11 @@ extension LemonBotStore {
         let originalNonce = record.claimNonce
         do {
             let client = try pairingTransport(baseURL: url)
+            try await verifyPhonePairing(record)
+            try assertGeneration(current)
+            try requirePairingExpiry(preview.expiresAtMs, record: &record)
             let result: PairingClaimResult = try await client.mutate("POST", "/pairings/claim", body: ["clientNonce": .string(record.claimNonce), "pairCode": .string(record.link.pairCode), "workspaceId": .string(record.link.workspaceId), "installationId": .string(record.installationID), "deviceName": .string(record.deviceName!), "appVersion": .string(record.appVersion!)])
+            try assertGeneration(current)
             guard pairingRecord?.claimNonce == originalNonce else { throw PairingClientError.pendingConnection }
             guard let backend = URL(string: result.backendUrl), try PairingLink.exactOrigin(backend) == record.link.origin,
                   PairingLink.boundedID(result.pairingId), PairingLink.boundedSecret(result.claimToken),
@@ -150,25 +163,40 @@ extension LemonBotStore {
             record.claim = result; record.state = "pending_approval"
             try keychain.savePendingPairing(record); installPendingPairing(record)
         } catch {
-            record.state = pairingFailureState(error, unknown: "claim_unknown")
-            do { try keychain.savePendingPairing(record); installPendingPairing(record) } catch { pairingState = "claim_unknown" }
-            pairingError = safePairingError(error)
+            if generation == current, pairingRecord?.claimNonce == originalNonce {
+                record.state = pairingFailureState(error, unknown: "claim_unknown")
+                do { try keychain.savePendingPairing(record); installPendingPairing(record) } catch { pairingState = "claim_unknown" }
+                pairingError = safePairingError(error)
+            }
             throw errorForPairing(error)
         }
+    }
+    /// One foreground observation. A caller must stop when the saved result is unknown or terminal.
+    public func observePhonePairing() async throws {
+        guard pairingState == "pending_approval", var record = pairingRecord, let claim = record.claim else { throw PairingClientError.notReady }
+        try requirePairingExpiry(claim.expiresAtMs, record: &record)
+        try await completePairing()
     }
     public func completePairing() async throws {
         guard var record = pairingRecord, let claim = record.claim, let url = record.link.backendURL,
               ["pending_approval", "completion_unknown"].contains(pairingState) else { throw PairingClientError.notReady }
+        try requirePairingExpiry(claim.expiresAtMs, record: &record)
+        let current = generation
         record.state = "completing"
         try keychain.savePendingPairing(record); installPendingPairing(record); pairingState = "completing"
         let originalNonce = record.claimNonce
         do {
             let client = try pairingTransport(baseURL: url)
+            try await verifyPhonePairing(record)
+            try assertGeneration(current)
+            try requirePairingExpiry(claim.expiresAtMs, record: &record)
             let result: PairingCompletion = try await client.mutate("POST", "/pairings/\(HTTPTransport.pathID(claim.pairingId))/complete", body: ["clientNonce": .string(record.completionNonce), "claimToken": .string(claim.claimToken)])
+            try assertGeneration(current)
             guard pairingRecord?.claimNonce == originalNonce else { throw PairingClientError.pendingConnection }
             switch result {
             case .pending(let progress):
-                guard progress.pairingId == claim.pairingId, progress.expiresAtMs == claim.expiresAtMs else { throw PairingClientError.wrongCluster }
+                guard progress.pairingId == claim.pairingId, progress.expiresAtMs == claim.expiresAtMs,
+                      ["pending", "denied", "expired"].contains(progress.status) else { throw PairingClientError.wrongCluster }
                 record.state = progress.status == "pending" ? "pending_approval" : progress.status
                 try keychain.savePendingPairing(record); installPendingPairing(record)
                 if progress.status == "denied" { throw PairingClientError.denied }
@@ -179,18 +207,25 @@ extension LemonBotStore {
                       connected.device.userId == auth.user.id, auth.session.deviceId == connected.device.id,
                       connected.device.platform == "ios", auth.session.expiresAtMs == nil,
                       !auth.token.isEmpty, auth.token.utf8.count <= 4096 else { throw PairingClientError.wrongCluster }
-                let saved = try saveAuthenticatedAccount(auth, baseURL: url, deviceID: connected.device.id, installationID: record.installationID)
+                _ = try await BotPreflightClient(session: httpSession).preflight(origin: record.link.origin, expectedInstanceID: record.link.instanceId, session: BotPreflightSession(token: auth.token, workspaceID: record.link.workspaceId), use: Self.phoneOriginUse)
+                try assertGeneration(current)
+                guard pairingRecord?.claimNonce == originalNonce else { throw PairingClientError.pendingConnection }
+                let saved = try saveAuthenticatedAccount(auth, baseURL: url, deviceID: connected.device.id, installationID: record.installationID, instanceID: record.link.instanceId)
                 try keychain.removePendingPairing()
-                pairingRecord = nil; pairingLink = nil; pendingPairing = nil; pairingState = "connected"; pairingError = nil
                 // A saved credential is durable even if the subsequent read-only sync loses connectivity.
                 do { try await restoreAccount(saved) }
                 catch {
-                    if connectionState == "reconnect_required" { throw error }
+                    if connectionState == "reconnect_required" {
+                        pairingRecord = nil; pairingLink = nil; pendingPairing = nil
+                        pairingState = "failed"; pairingError = error.localizedDescription
+                        throw error
+                    }
                     errorMessage = "The device credential is saved in Keychain, but initial synchronization failed: " + error.localizedDescription
                 }
+                pairingRecord = nil; pairingLink = nil; pendingPairing = nil; pairingState = "connected"; pairingError = nil
             }
         } catch {
-            if pairingRecord?.claimNonce == originalNonce {
+            if generation == current, pairingRecord?.claimNonce == originalNonce {
                 record.state = pairingFailureState(error, unknown: "completion_unknown")
                 do { try keychain.savePendingPairing(record); installPendingPairing(record) } catch { pairingState = "completion_unknown" }
                 pairingError = safePairingError(error)
@@ -281,9 +316,31 @@ extension LemonBotStore {
         if let value = defaults.string(forKey: key) { return value }
         let value = UUID().uuidString; defaults.set(value, forKey: key); return value
     }
+    static var phoneOriginUse: BotOriginUse {
+        #if os(iOS) && !targetEnvironment(simulator)
+        return .phone
+        #else
+        return .sameMachine
+        #endif
+    }
+    private func verifyPhonePairing(_ record: PendingDevicePairing) async throws {
+        _ = try await BotPreflightClient(session: httpSession).preflight(origin: record.link.origin, expectedInstanceID: record.link.instanceId, use: Self.phoneOriginUse)
+        try Task.checkCancellation()
+        guard pairingRecord?.claimNonce == record.claimNonce else { throw PairingClientError.pendingConnection }
+    }
+    private func requirePairingExpiry(_ expiry: TimestampMs, record: inout PendingDevicePairing) throws {
+        guard expiry.isFinite, expiry > Date().timeIntervalSince1970 * 1000 else {
+            record.state = "expired"
+            try keychain.savePendingPairing(record); installPendingPairing(record)
+            pairingError = PairingClientError.expired.localizedDescription
+            throw PairingClientError.expired
+        }
+    }
     private func pairingTransport(baseURL: URL) throws -> HTTPTransport { try HTTPTransport(baseURL: baseURL, session: httpSession) }
     private func pairingFailureState(_ error: Error, unknown: String) -> String {
+        if let preflight = error as? BotPreflightError { return preflight == .unavailable ? unknown : "failed" }
         if let safe = error as? PairingClientError {
+            if case .wrongCluster = safe { return "failed" }
             if case .denied = safe { return "denied" }
             if case .expired = safe { return "expired" }
         }
@@ -295,6 +352,7 @@ extension LemonBotStore {
         return unknown
     }
     private func errorForPairing(_ error: Error) -> Error {
+        if let safe = error as? BotPreflightError { return safe }
         if let safe = error as? PairingClientError { return safe }
         if let backend = error as? BackendError {
             if backend.failure.code == "expired" { return PairingClientError.expired }

@@ -17,16 +17,17 @@ public struct LemonBotRootView: View {
     @State private var search = false
     @State private var pairing = false
     @State private var settings = false
+    @State private var presentedAccountID: ID?
     @State private var filterFocusRequest = 0
     #if os(macOS)
     @Environment(\.openSettings) private var openSettingsScene
     #endif
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
-    public init(store: LemonBotStore) { self.store = store; platformSettings = nil; _inspector = State(initialValue: InspectorPresentation()) }
+    public init(store: LemonBotStore) { self.store = store; platformSettings = nil; _inspector = State(initialValue: InspectorPresentation()); _presentedAccountID = State(initialValue: store.account?.id) }
     public init<Platform: View>(store: LemonBotStore, @ViewBuilder platformSettings: () -> Platform) {
-        self.store = store; self.platformSettings = AnyView(platformSettings()); _inspector = State(initialValue: InspectorPresentation())
+        self.store = store; self.platformSettings = AnyView(platformSettings()); _inspector = State(initialValue: InspectorPresentation()); _presentedAccountID = State(initialValue: store.account?.id)
     }
-    init(store: LemonBotStore, inspector: InspectorPresentation) { self.store = store; platformSettings = nil; _inspector = State(initialValue: inspector) }
+    init(store: LemonBotStore, inspector: InspectorPresentation) { self.store = store; platformSettings = nil; _inspector = State(initialValue: inspector); _presentedAccountID = State(initialValue: store.account?.id) }
     private var reduceMotion: Bool { systemReduceMotion || store.prefersReducedMotion }
     private var selectedBot: Bot? { store.bot(for: store.conversations.first { $0.id == store.selectedConversationID }) }
     private var orderedBots: [Bot] {
@@ -36,10 +37,10 @@ public struct LemonBotRootView: View {
 
     public var body: some View {
         Group {
-            if store.account == nil { OnboardingView(store: store) }
+            if presentedAccountID == nil { OnboardingView(store: store) }
             else { workspace }
         }
-        .id(store.account?.id)
+        .id(presentedAccountID)
         .environment(\.lbReduceMotion, store.prefersReducedMotion)
         .tint(LB.accent)
         .sheet(isPresented: $newBot) { BotEditorView(store: store) }
@@ -58,7 +59,10 @@ public struct LemonBotRootView: View {
             if let platformSettings { LemonBotSettingsView(store: store) { platformSettings } } else { LemonBotSettingsView(store: store) }
         }
         #endif
-        .onChange(of: store.account?.id) { _, _ in newAccount = false; destination = .conversation; compactColumn = .sidebar }
+        .onChange(of: store.account?.id) { _, _ in updatePresentedAccount() }
+        #if os(iOS)
+        .onChange(of: store.pairingState) { _, _ in updatePresentedAccount() }
+        #endif
         .preferredColorScheme(store.user?.preferences.appearance == "dark" ? .dark : store.user?.preferences.appearance == "light" ? .light : nil)
         .onChange(of: store.selectedConversationID) { _, id in if id != nil { destination = .conversation; compactColumn = .detail } }
         .onChange(of: store.navigationTarget) { _, target in
@@ -70,6 +74,18 @@ public struct LemonBotRootView: View {
             else if target.botID != nil { destination = .linkedBot }
             compactColumn = .detail
         }
+    }
+
+    private func updatePresentedAccount() {
+        #if os(iOS)
+        // Installing the credential must not cancel the task still verifying/syncing it.
+        guard store.pairingState != "completing" else { return }
+        #endif
+        guard presentedAccountID != store.account?.id else { return }
+        presentedAccountID = store.account?.id
+        newAccount = false
+        destination = .conversation
+        compactColumn = .sidebar
     }
 
     private var workspace: some View {

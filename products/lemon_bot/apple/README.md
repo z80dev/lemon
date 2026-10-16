@@ -140,13 +140,16 @@ An opaque creation timeout without returned IDs stays fenced when the server exp
 
 1. Configure the already running backend's reachable HTTPS `publicUrl`. **Tailscale Serve** is the recommended option when your Mac and phone already have Tailscale reachability. The Mac guide explains installation/login, same tailnet, ACL, MagicDNS, TLS and backend prerequisites. The app never changes Serve or starts a backend: any operator-chosen setup outside the app must use an unused HTTPS listener/port, preserve existing routes, and never use Funnel. TLS must validate normally; a QR never permits a bypass. A physical phone's `127.0.0.1` is the phone, not the Mac.
 2. On macOS choose **Connect iPhone → Check connection readiness**. Review the exact advertised HTTPS Tailscale origin, instance and workspace verified against the existing authenticated backend, then choose **Create QR code**. The guide refuses loopback, wrong-service and mismatched identity rather than switching backends. See the [Mac guide](LemonBotMac/README.md#connect-iphone). Treat the QR, copied link and screenshots as temporary secrets; no desktop session or operator credential is encoded.
-3. On iPhone choose **Scan QR code** or paste the link and choose **Check pasted link**. Check the workspace name, server address and expiry before choosing **Request connection**. Checking does not use up the code.
+3. On iPhone choose **Scan QR code** or paste the link and choose **Check pasted link**. The phone runs the shared public preflight against the QR's expected backend instance before fetching the non-consuming workspace preview. Review the exact workspace name, origin, backend instance ID, workspace ID and original expiry before choosing **Request connection**. A wrong service, changed instance or invalid TLS fails closed; scanning and checking alone do not claim access.
 4. Compare the device name and six-digit verification code on both devices. On the Mac select **The exact device name and code match my iPhone**, then **Approve this iPhone**, or **Deny**. Approval does not mean the phone has finished connecting.
-5. The Mac observes request status while the window is active, without replaying approval, until completion or the original expiry. **Connected — iPhone completed pairing** means the backend reports the phone completed its session. On iPhone **Check my request** can finish/reconcile the same saved receipt. Its own device-bound session is saved in Keychain; no desktop password is needed.
+5. While the pairing screen is visible and the phone is active, it observes a confirmed pending request and finishes automatically after approval; no manual finish step is needed in the normal flow. Checks use the saved completion nonce, never claim or approve again, and stop at the saved original expiry. The phone verifies authenticated `/identity` with its own new session against the QR's instance and workspace before saving its credential and instance pin in Keychain. The Mac independently observes status while its window is active; **Connected — iPhone completed pairing** means the backend reports completion, not merely approval.
+6. The phone opens the same workspace after the initial read-only restore attempt. A saved credential is not proof of connectivity: **Connected to verified workspace** requires an online verified workspace; an offline/failed initial sync is shown as saved access without a live connection, and rejected access requires reconnect.
 
-If a response is lost, **Check previous QR code** on Mac and **Check my request** on iPhone check the saved request rather than creating a second one. The QR keeps its original five-minute expiry. After an explicit expired or denied result, discard the saved request and create a new QR as a separate action. A successfully installed session stays valid until revoked.
+Pending requests survive reopening. A confirmed `pending_approval` request can be observed again in the foreground within its original expiry. Unknown claim/completion or network outcomes stop automatic checks and are never resumed merely by reopening. Use **Check my request** explicitly to reconcile the same saved claim/completion receipt; **Check previous QR code** on Mac reconciles its issuance rather than creating another QR. The QR keeps its original five-minute expiry. After an explicit expired or denied result, discard the saved request and create a new QR as a separate action. A successfully installed session stays valid until revoked.
 
-Revoke the phone through **Settings → Account → Registered devices** or **Product sessions**. Device removal revokes its bound session; the phone shows explicit reconnect, not fake offline success. Camera, speech, share-sheet staging and selected files remain independent of pairing; no ambient capture or automatic send is introduced.
+Launch and foreground reconnect restore the phone's own Keychain account read-only. When an instance pin exists, public setup is checked before any saved token is sent, then authenticated identity must match the pinned instance and workspace before sync or socket authentication. A legacy unpinned iOS account can acquire a pin only after a verified authenticated baseline. An identity mismatch fails closed as reconnect-required, retains cached content and pending-mutation fences, and never replays sends or approvals. An unreachable backend retains the saved credential and presents offline/recovery state instead of claiming success.
+
+Revoke the phone through **Settings → Account → Registered devices** or **Product sessions**. Device removal revokes its bound session; the phone shows explicit reconnect, not fake offline success. Reconnect requires a separate explicit connection flow. Camera, speech, share-sheet staging and selected files remain independent of pairing; no ambient capture or automatic send is introduced.
 
 ### Shared native preflight API
 
@@ -170,12 +173,24 @@ without AppKit or UI dependencies:
   never response bodies or proof/session values.
 
 `StoredAccount.instanceID` is an optional Keychain-backed pin, absent in older
-saved accounts. Owner readiness pins it after successful verification. Consumers
-must compare any existing pin and workspace before accepting a new baseline;
-the descriptor reader alone cannot decide which configured account is trusted.
-Phone completion/reconnect must use its own session and the QR/saved expected IDs,
-not owner credentials. Mac-only readiness and bounded observation decisions live
-in `OwnerPairing.swift`; they never provision a network route.
+saved accounts. Owner readiness pins it after successful verification; phone
+completion pins the QR's expected instance only after verifying the new session's
+authenticated identity. Pinned restoration checks public setup before sending the
+saved token and checks identity/workspace before sync or socket authentication.
+Legacy unpinned iOS accounts may pin a verified authenticated baseline; existing
+unpinned Mac restore behavior is unchanged.
+
+`PhonePairingProgress.shouldObserve(state:expiresAtMs:now:)` is true only for
+`pending_approval` before a finite future expiry. `observePhonePairing()` performs
+one saved-nonce status/completion observation, never a claim or approval; expired
+pending state is reported locally without another completion request. Callers
+keep a foreground-screen task stable across transient `completing` state and stop
+on unknown/network outcomes. Explicit `completePairing()` reconciles an unknown
+completion; `requestPairing(deviceName:appVersion:)` retains explicit claim
+consent and same-nonce claim reconciliation. Phone APIs use only the phone's own
+session and QR/saved expected IDs, never owner credentials. Mac-only readiness
+and bounded observation decisions live in `OwnerPairing.swift`; no preflight or
+pairing API provisions a network route.
 
 ## Connection recovery
 

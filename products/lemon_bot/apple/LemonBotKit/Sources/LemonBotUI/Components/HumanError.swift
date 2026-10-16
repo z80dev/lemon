@@ -40,15 +40,18 @@ func humanErrorText(_ error: Error) -> String {
 func pairingStatusLabel(_ state: String) -> String {
     switch state {
     case "preview": return "Ready to check"
+    case "previewing": return "Checking the QR backend and workspace"
     case "preview_ready": return "Ready to request connection"
+    case "claiming": return "Requesting connection"
     case "pending_approval": return "Waiting for approval on your Mac"
     case "claim_unknown": return "Request not confirmed. Check your request before trying again."
     case "completion_unknown": return "Connection not confirmed. Check your request."
     case "completing": return "Finishing connection"
-    case "approved": return "Approved. Finish connecting on your iPhone."
+    case "approved": return "Approved — waiting for iPhone completion"
     case "connected": return "Connected"
     case "denied": return "Connection denied"
     case "expired": return "Request expired. Create a new QR code."
+    case "failed": return "Connection could not be verified"
     default: return "Not connected"
     }
 }
