@@ -54,4 +54,33 @@ defmodule CodingAgent.Eval.KernelTest do
     File.write!(path, ~s({"mime":"image/png","data":"eA=="}\n))
     assert {:error, _} = Output.read_displays(path)
   end
+
+  @tag :tmp_dir
+  test "a ready frame naming a foreign group leader is refused, not signalled", %{
+    tmp_dir: tmp_dir
+  } do
+    # A real process that leads its own group but is not the kernel's.
+    foreign = Port.open({:spawn_executable, System.find_executable("cat")}, [:binary])
+    {:os_pid, foreign_pid} = Port.info(foreign, :os_pid)
+    on_exit(fn -> System.cmd("kill", ["-9", Integer.to_string(foreign_pid)]) end)
+
+    runtime = Path.join(tmp_dir, "forging-runtime")
+
+    File.write!(runtime, """
+    #!/bin/sh
+    printf '\\036LEMONEVAL:%s:{"type":"ready","pid":#{foreign_pid}}\\n' "$LEMON_EVAL_TOKEN"
+    exec cat
+    """)
+
+    File.chmod!(runtime, 0o700)
+
+    {:ok, slot} =
+      Kernel.start_link(key: make_ref(), language: "js", cwd: tmp_dir, runtime: runtime)
+
+    assert {:error, message} = Kernel.run(slot, "1")
+    assert message =~ "could not prove the kernel's own process group"
+    assert Kernel.os_pid(slot) == nil
+    assert Port.info(foreign) != nil
+    assert match?({_, 0}, System.cmd("kill", ["-0", Integer.to_string(foreign_pid)]))
+  end
 end

@@ -92,6 +92,14 @@ If no runtime is found, the call fails with an error that names the missing
 binaries. Kernels inherit Lemon's environment and run with the user's
 permissions.
 
+On Unix, startup verifies the driver's reported kernel pid against its actual
+host parent, group and process birth identity. Missing `ps` or an unprovable
+identity refuses execution rather than claiming that arbitrary children can be
+stopped. Reset, abort, owner loss, idle disposal and crashes stop that owned
+kernel group, including children reparented after their launcher exits;
+signals never target an unrelated group named by a forged ready frame. A
+process that deliberately escapes into a separate group is not covered.
+
 ## Policy
 
 `eval` executes arbitrary code. It is classified with `bash`: it is serialized

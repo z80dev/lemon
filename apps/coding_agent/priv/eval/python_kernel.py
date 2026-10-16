@@ -173,7 +173,12 @@ def main():
 
     signal.signal(signal.SIGINT, interrupt_cell)
 
-    send({"type": "ready", "runtime": "python", "version": platform.python_version()})
+    send({
+        "type": "ready",
+        "runtime": "python",
+        "version": platform.python_version(),
+        "pid": os.getpid(),
+    })
 
     cell = 0
     while True:
