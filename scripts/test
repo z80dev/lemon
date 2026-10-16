@@ -106,6 +106,9 @@ ensure_repo_root() {
 
 setup_test_env() {
   export MIX_ENV="${MIX_ENV:-test}"
+  # Preserve installed SDK locations before any umbrella helper replaces HOME.
+  export MIX_HOME="${MIX_HOME-$HOME/.mix}"
+  export HEX_HOME="${HEX_HOME-$HOME/.hex}"
   scrub_live_credentials
   setup_tmp_env
 }

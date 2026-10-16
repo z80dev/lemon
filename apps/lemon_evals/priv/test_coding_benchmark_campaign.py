@@ -112,6 +112,12 @@ class Harness:
         return client_row(case, True, None, **spec)
 
 
+def terminate_fixture_runtime(process, **_kwargs):
+    """The local Python adapter admits no tracked native commands."""
+    paired.terminate_runtime_group(process)
+    return True
+
+
 class Fixture(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix='lemon-campaign-offline-')
@@ -120,6 +126,7 @@ class Fixture(unittest.TestCase):
         self.runtime = Path(self.directory.name) / 'fake_runtime.py'
         self.runtime.write_text(FAKE_RUNTIME)
         for patcher in (patch.object(paired, 'source_identity', return_value=dict(IDENTITY)),
+                        patch.object(paired, 'terminate', side_effect=terminate_fixture_runtime),
                         patch.dict(os.environ, {'OPENAI_CODEX_API_KEY': 'codex-offline-secret',
                                                 'ZAI_API_KEY': 'zai-offline-secret',
                                                 'OPENAI_API_KEY': 'unrelated-ambient-secret'})):
@@ -263,6 +270,270 @@ class PricingTests(unittest.TestCase):
 
 
 class CampaignRunTests(Fixture):
+    def assert_safety_stop(self, reason, patcher):
+        harness = Harness(lambda _trial_id: {'mode': 'fail'})
+        with patch.object(paired.tempfile, 'tempdir', self.directory.name), patcher:
+            self.assertEqual(self.run_campaign(harness), 1)
+        self.assertEqual(len(harness.calls), 1)
+        rows = self.trial_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['failure'], 'verifier_failed')
+        self.assertEqual(rows[0]['cost_usd'], 0.01)
+        self.assertEqual(rows[0]['uncached_input_tokens'], 100)
+        self.assertEqual(paired.teardown_failure(rows[0]), reason)
+        self.assertFalse(self.report()['complete'])
+        self.assertTrue(list(Path(self.directory.name).glob('lemon-paired-runtime-*')))
+        resumed = Harness()
+        with self.assertRaisesRegex(campaign.CampaignError, 'independent recovery'):
+            self.run_campaign(resumed, resume=True)
+        self.assertEqual(resumed.calls, [])
+
+    def test_cleanup_failure_records_paid_row_and_halts_campaign_and_resume(self):
+        def unverified(process, **kwargs):
+            terminate_fixture_runtime(process, **kwargs)
+            return False
+        self.assert_safety_stop(
+            'cleanup_unverified', patch.object(paired, 'terminate', side_effect=unverified))
+
+    def test_interrupt_with_failed_recovery_persists_paid_row_and_blocks_resume(self):
+        harness = Harness(lambda _trial_id: {'mode': 'fail'})
+
+        def unverified(process, **kwargs):
+            terminate_fixture_runtime(process, **kwargs)
+            return False
+        trial_file = paired.trial_file
+
+        def interrupt_metadata(state, root_fd, name, *args, **kwargs):
+            if name == 'runtime.json':
+                raise KeyboardInterrupt
+            return trial_file(state, root_fd, name, *args, **kwargs)
+
+        # Interrupt after run_case has returned its paid counters.
+        with patch.object(paired.tempfile, 'tempdir', self.directory.name), \
+                patch.object(paired, 'terminate', side_effect=unverified), \
+                patch.object(paired, 'trial_file', interrupt_metadata):
+            self.assertEqual(self.run_campaign(harness), 130)
+        rows = self.trial_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]['cleanup_complete'])
+        self.assertEqual(rows[0]['cost_usd'], 0.01)
+        self.assertEqual(rows[0]['uncached_input_tokens'], 100)
+        self.assertEqual(rows[0]['failure'], 'verifier_failed')
+        self.assertFalse(rows[0]['disposal_complete'])
+        self.assertTrue(list(Path(self.directory.name).glob('lemon-paired-runtime-*')))
+        resumed = Harness()
+        with self.assertRaisesRegex(campaign.CampaignError, 'independent recovery'):
+            self.run_campaign(resumed, resume=True)
+        self.assertEqual(resumed.calls, [])
+
+    def test_disposal_failure_records_paid_row_and_halts_campaign_and_resume(self):
+        self.assert_safety_stop(
+            'disposal_unverified', patch.object(paired, 'dispose_trial_state', side_effect=PermissionError('offline')))
+
+    def test_disposal_interrupt_persists_paid_row_and_blocks_resume(self):
+        harness = Harness(lambda _trial_id: {'mode': 'fail'})
+        with patch.object(paired.tempfile, 'tempdir', self.directory.name), \
+                patch.object(paired, 'dispose_trial_state', side_effect=KeyboardInterrupt):
+            self.assertEqual(self.run_campaign(harness), 130)
+        self.assertEqual(len(harness.calls), 1)
+        rows = self.trial_rows()
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertTrue(row['attempted'])
+        self.assertEqual(row['failure'], 'verifier_failed')
+        for key, value in counters().items():
+            self.assertEqual(row[key], value)
+        self.assertTrue(row['cleanup_complete'])
+        self.assertFalse(row['disposal_complete'])
+        self.assertEqual(paired.teardown_failure(row), 'disposal_unverified')
+        self.assertFalse(self.report()['complete'])
+        self.assertEqual(self.report()['progress']['recorded_trials'], 1)
+        self.assertTrue(list(Path(self.directory.name).glob('lemon-paired-runtime-*')))
+        resumed = Harness()
+        with self.assertRaisesRegex(campaign.CampaignError, 'independent recovery'):
+            self.run_campaign(resumed, resume=True)
+        self.assertEqual(resumed.calls, [])
+
+    def test_final_row_metadata_interrupt_persists_paid_row_and_blocks_resume(self):
+        harness = Harness(lambda _trial_id: {'mode': 'fail'})
+        digest = paired.digest
+        interrupted = []
+
+        def interrupt_configuration_digest(value):
+            if harness.calls and isinstance(value, str) and not interrupted:
+                interrupted.append(True)
+                raise KeyboardInterrupt
+            return digest(value)
+
+        with patch.object(paired, 'digest', side_effect=interrupt_configuration_digest):
+            self.assertEqual(self.run_campaign(harness), 130)
+        self.assertEqual(interrupted, [True])
+        self.assertEqual(len(harness.calls), 1)
+        rows = self.trial_rows()
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertTrue(row['attempted'])
+        self.assertTrue(row['finalization_failed'])
+        self.assertFalse(row['spend_complete'])
+        self.assertEqual(row['failure'], 'verifier_failed')
+        for key, value in counters().items():
+            self.assertEqual(row[key], value)
+        self.assertEqual(paired.teardown_failure(row), 'finalization_failed')
+        self.assertFalse(self.report()['complete'])
+        self.assertEqual(self.report()['progress']['recorded_trials'], 1)
+        resumed = Harness()
+        with self.assertRaisesRegex(campaign.CampaignError, 'independent recovery'):
+            self.run_campaign(resumed, resume=True)
+        self.assertEqual(resumed.calls, [])
+
+    def test_post_trial_interrupt_persists_paid_row_before_propagation(self):
+        for owner, name in ((pricing, 'equivalent_spend'), (paired, 'sanitize_row')):
+            with self.subTest(stage=name):
+                self.out = Path(self.directory.name) / name
+                original = getattr(owner, name)
+                calls = []
+
+                def interrupt_once(*args, **kwargs):
+                    calls.append(True)
+                    if len(calls) == 1:
+                        raise KeyboardInterrupt
+                    return original(*args, **kwargs)
+
+                harness = Harness(lambda _trial_id: {'mode': 'fail'})
+                with patch.object(owner, name, side_effect=interrupt_once):
+                    self.assertEqual(self.run_campaign(harness), 130)
+                self.assertEqual(len(harness.calls), 1)
+                rows = self.trial_rows()
+                self.assertEqual(len(rows), 1)
+                self.assertTrue(rows[0]['attempted'])
+                self.assertTrue(rows[0]['finalization_failed'])
+                self.assertEqual(rows[0]['failure'], 'verifier_failed')
+                self.assertEqual(rows[0]['cost_usd'], 0.01)
+                self.assertEqual(rows[0]['uncached_input_tokens'], 100)
+                self.assertEqual(self.report()['progress']['recorded_trials'], 1)
+                resumed = Harness()
+                with self.assertRaisesRegex(campaign.CampaignError, 'independent recovery'):
+                    self.run_campaign(resumed, resume=True)
+                self.assertEqual(resumed.calls, [])
+
+    def test_interrupted_append_reconciles_missing_partial_and_complete_row(self):
+        append_trial = campaign.append_trial
+        for stage in ('before', 'partial', 'complete'):
+            with self.subTest(stage=stage):
+                self.out = Path(self.directory.name) / stage
+                calls = []
+
+                def interrupt_once(path, row):
+                    calls.append(True)
+                    if len(calls) == 1:
+                        if stage == 'partial':
+                            with open(path, 'a') as handle:
+                                handle.write('{"trial_id":')
+                        elif stage == 'complete':
+                            append_trial(path, row)
+                        raise KeyboardInterrupt
+                    return append_trial(path, row)
+
+                harness = Harness(lambda _trial_id: {'mode': 'fail'})
+                with patch.object(campaign, 'append_trial', side_effect=interrupt_once):
+                    self.assertEqual(self.run_campaign(harness), 130)
+                self.assertEqual(len(harness.calls), 1)
+                rows = self.trial_rows()
+                self.assertEqual(len(rows), 1)
+                self.assertTrue(rows[0]['attempted'])
+                self.assertEqual(rows[0]['failure'], 'verifier_failed')
+                self.assertEqual(rows[0]['cost_usd'], 0.01)
+                self.assertEqual(rows[0]['uncached_input_tokens'], 100)
+                self.assertEqual(self.report()['progress']['recorded_trials'], 1)
+
+    def test_append_interrupt_takes_precedence_over_finalization_error(self):
+        harness = Harness(lambda _trial_id: {'mode': 'fail'})
+        append_trial = campaign.append_trial
+        calls = []
+
+        def interrupt_once(path, row):
+            calls.append(True)
+            if len(calls) == 1:
+                raise KeyboardInterrupt
+            return append_trial(path, row)
+
+        with patch.object(pricing, 'equivalent_spend', side_effect=ValueError('offline')), \
+                patch.object(campaign, 'append_trial', side_effect=interrupt_once):
+            self.assertEqual(self.run_campaign(harness), 130)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(harness.calls), 1)
+        rows = self.trial_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]['attempted'])
+        self.assertTrue(rows[0]['finalization_failed'])
+        self.assertFalse(rows[0]['spend_complete'])
+        self.assertEqual(rows[0]['failure'], 'verifier_failed')
+        for key, value in counters().items():
+            self.assertEqual(rows[0][key], value)
+        self.assertFalse(self.report()['complete'])
+        self.assertEqual(self.report()['progress']['recorded_trials'], 1)
+
+    def test_trial_interrupt_takes_precedence_over_persistence_error(self):
+        harness = Harness(lambda _trial_id: {'mode': 'fail'})
+        with patch.object(paired.tempfile, 'tempdir', self.directory.name), \
+                patch.object(paired, 'dispose_trial_state', side_effect=KeyboardInterrupt), \
+                patch.object(pricing, 'equivalent_spend', side_effect=ValueError('offline')):
+            self.assertEqual(self.run_campaign(harness), 130)
+        self.assertEqual(len(harness.calls), 1)
+        rows = self.trial_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]['attempted'])
+        self.assertTrue(rows[0]['finalization_failed'])
+        self.assertFalse(rows[0]['spend_complete'])
+        self.assertTrue(rows[0]['cleanup_complete'])
+        self.assertFalse(rows[0]['disposal_complete'])
+        self.assertEqual(rows[0]['failure'], 'verifier_failed')
+        for key, value in counters().items():
+            self.assertEqual(rows[0][key], value)
+        self.assertFalse(self.report()['complete'])
+        self.assertEqual(self.report()['progress']['recorded_trials'], 1)
+
+    def test_post_trial_base_exception_preserves_row_before_reraising(self):
+        harness = Harness(lambda _trial_id: {'mode': 'fail'})
+        with patch.object(pricing, 'equivalent_spend', side_effect=SystemExit(17)), \
+                self.assertRaises(SystemExit) as raised:
+            self.run_campaign(harness)
+        self.assertEqual(raised.exception.code, 17)
+        self.assertEqual(len(harness.calls), 1)
+        rows = self.trial_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]['attempted'])
+        self.assertTrue(rows[0]['finalization_failed'])
+        self.assertEqual(rows[0]['failure'], 'verifier_failed')
+        self.assertEqual(rows[0]['cost_usd'], 0.01)
+        self.assertEqual(rows[0]['uncached_input_tokens'], 100)
+        resumed = Harness()
+        with self.assertRaisesRegex(campaign.CampaignError, 'independent recovery'):
+            self.run_campaign(resumed, resume=True)
+        self.assertEqual(resumed.calls, [])
+
+    def test_report_interrupt_rebuilds_from_persisted_trial(self):
+        write_outputs = campaign.write_outputs
+        calls = []
+
+        def interrupt_once(*args, **kwargs):
+            calls.append(True)
+            if len(calls) == 1:
+                raise KeyboardInterrupt
+            return write_outputs(*args, **kwargs)
+
+        harness = Harness(lambda _trial_id: {'mode': 'fail'})
+        with patch.object(campaign, 'write_outputs', side_effect=interrupt_once):
+            self.assertEqual(self.run_campaign(harness), 130)
+        self.assertEqual(len(harness.calls), 1)
+        self.assertEqual(len(self.trial_rows()), 1)
+        self.assertEqual(self.report()['results'], self.trial_rows())
+        self.assertEqual(self.report()['progress']['recorded_trials'], 1)
+
+    def test_finalization_failure_records_paid_row_and_halts_campaign_and_resume(self):
+        self.assert_safety_stop(
+            'finalization_failed', patch.object(paired, 'collect_profile', side_effect=OSError('offline')))
+
     def script(self, trial_id):
         if trial_id.endswith('bug_fix:pair:0001:baseline') and trial_id.startswith('zai'):
             return {'mode': 'timeout'}
@@ -447,36 +718,19 @@ class CampaignRunTests(Fixture):
 
 
 class ResumeTests(Fixture):
-    def test_interrupted_campaign_resumes_without_rerunning_recorded_trials(self):
+    def test_interrupted_campaign_records_incomplete_attempt_and_refuses_resume(self):
         script = lambda trial_id: {'mode': 'timeout'} if trial_id == 'zai:bug_fix:pair:0001:baseline' else {}
-        reference = Harness(script)
-        self.assertEqual(self.run_campaign(reference), 0)
-        expected = {row['trial_id']: row for row in self.report()['results']}
-        (self.out / 'trials.jsonl').unlink()
-        (self.out / 'manifest.json').unlink()
 
         interrupted = Harness(script, interrupt_after=3)
         self.assertEqual(self.run_campaign(interrupted, resume=True), 130)
-        self.assertEqual(len(self.trial_rows()), 3)
+        self.assertEqual(len(self.trial_rows()), 4)
         self.assertFalse(self.report()['complete'])
-        self.assertEqual(self.report()['progress']['recorded_trials'], 3)
+        self.assertEqual(self.report()['progress']['recorded_trials'], 4)
 
         resumed = Harness(script)
-        self.assertEqual(self.run_campaign(resumed, resume=True), 0)
-        self.assertEqual(len(resumed.calls), 5)
-        self.assertFalse(set(resumed.calls) & set(interrupted.calls))
-        self.assertEqual(Counter(interrupted.calls + resumed.calls), Counter(reference.calls))
-        report = self.report()
-        self.assertTrue(report['complete'])
-        self.assertEqual(len(report['results']), 8)
-        self.assertEqual({row['trial_id'] for row in report['results']}, set(expected))
-        self.assertEqual(len(self.trial_rows()), 8)
-        # Recorded failures/timeouts are final outcomes and are never silently retried.
-        self.assertEqual(sum(row['failure'] == 'timeout' for row in report['results']), 1)
-
-        again = Harness(script)
-        self.assertEqual(self.run_campaign(again, resume=True), 0)
-        self.assertEqual(again.calls, [])
+        with self.assertRaisesRegex(campaign.CampaignError, 'independent recovery'):
+            self.run_campaign(resumed, resume=True)
+        self.assertEqual(resumed.calls, [])
 
     def test_torn_trailing_record_is_ignored_and_that_trial_reruns(self):
         harness = Harness()

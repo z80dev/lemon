@@ -10,6 +10,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Persist paired attempts interrupted during disposal, verification, pricing or
+  report finalization before exiting, retaining paid counters and prior failures
+  and refusing unsafe resume. Anchor recovery logs, both ledger opens and
+  post-attempt files to the original trial-root descriptor, including concurrent
+  root replacement during recovery. Pin Darwin directories before permission
+  repair and retain evidence when safe descriptor access is unavailable.
+
+- Paired coding trials verify both private process ledgers after bounded runtime
+  shutdown, without forwarding credentials to offline recovery. Unverified native
+  teardown, fixture disposal or finalization halts later trials while retaining
+  private evidence, paid counters and prior failures. SDK paths survive isolated
+  HOME resets; private TMPDIR captures share the fixture's evidence lifetime.
 - Apple Providers confirmations survive dialog dismissal, explicit device-login
   status checks remain available after expiry, and new sessions can safely retire
   unreachable login fences without replaying or claiming settlement of old work.

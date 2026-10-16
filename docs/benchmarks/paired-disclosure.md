@@ -109,8 +109,15 @@ are:
 ```bash
 python3 -m unittest discover -s apps/lemon_evals/priv \
   -p test_coding_benchmark_paired.py -v
-mix test apps/lemon_evals/test/lemon_evals/coding_benchmark_test.exs --seed 1
+python3 -m unittest discover -s apps/lemon_evals/priv \
+  -p test_paired_native_cleanup.py -v
+scripts/test path apps/lemon_evals/test/lemon_evals/coding_benchmark_test.exs --seed 1
+scripts/test path apps/lemon_evals/test/lemon_evals/paired_cleanup_test.exs --seed 1
 ```
+
+The native recovery gate uses precompiled test BEAMs, real tracked native commands
+and private FIFOs/DETS, including forced runtime exit and surviving descendants.
+It makes no provider calls. Run umbrella gates sequentially, not overlapping builds.
 
 The generated `plan` object has this shape; the omitted experiment content is
 supplied by the runner and must be retained exactly:
@@ -210,8 +217,9 @@ source, or compiled artifacts require a new plan, not a bypass.
 
 The runner stops subsequent live calls when measured spend plus the next
 per-attempt ceiling would exceed the total, an attempt exceeds its ceiling,
-required spend is missing or incomplete, or the whole-run deadline is reached. Local
-accounting cannot prevent an in-flight request exceeding an estimate; the hard
+required spend is missing or incomplete, teardown/disposal/finalization cannot be
+verified, or the whole-run deadline is reached. Local accounting cannot prevent
+an in-flight request exceeding an estimate; the hard
 external cap remains mandatory. Paid experiments stay outside ordinary CI and
 must never be automatically triggered by a code change.
 
@@ -228,8 +236,13 @@ token counters x public catalog list price, basis recorded, labelled
 "list-price equivalent, not billed") with cost per verified success undefined at
 zero successes. The exact command, options, resume semantics and spend formula
 are in the [evaluation app guide](https://github.com/z80dev/lemon/blob/main/apps/lemon_evals/README.md#resumable-multi-provider-disclosure-campaign-107).
-No campaign result is recorded by this change; the rollout decision stays
-pending its sanitized report.
+Cleanup, disposal or finalization failure stops the campaign after recording its
+paid row and prevents `--resume` from admitting more work into that campaign.
+Interrupted attempts also persist their teardown outcome and any already observed
+paid counters before returning exit status 130; incomplete finalization blocks resume.
+Retained private evidence must be resolved independently; do not bypass the stop
+by editing recorded rows. No campaign result is recorded by this change; the
+rollout decision stays pending its sanitized report.
 
 ## Pairing and isolation
 
@@ -245,11 +258,48 @@ existing required failed-tool observation for the recovery task. It runs through
 `LemonCore.Runtime.Boot.start!(:runtime_full)` and the production
 `lemon -p --output json` client, not a mocked session. It does not reuse the user's
 daemon. Runtime teardown occurs after each attempt.
-Shutdown permits up to five seconds of runtime/process-group termination grace
-after a deadline; that cleanup is not permission for additional paid calls.
-Teardown force-kills remaining attempt process-group children even when the
-runtime leader has already exited. Deadline-owned client/fixture/verifier
-commands likewise cannot leave same-group background children after completion.
+Shutdown permits five seconds of runtime/process-group TERM grace, followed by
+a bounded forced-exit wait and credential-free offline recovery (up to 35 seconds
+total cleanup allowance). This is not permission for additional paid calls.
+Killing the runtime group alone does **not** stop independently grouped native
+commands. After graceful or forced runtime exit, a no-start recovery VM visits
+both private process and native ledgers through `LemonEvals.PairedCleanup.recover/1`.
+Only existing birth-bound local process/member ownership proofs authorize
+signals; recovery does not boot a runtime, release capacity or scan sessions to
+infer ownership. Deadline-owned client/fixture/verifier commands likewise stop
+their same-group background children.
+
+Missing/unreadable ledgers or missing, lost, stale or unsupported workload
+witnesses fail closed as `cleanup_unverified`. A rejected, never-launched native
+command is not an admitted workload. The attempted row retains paid counters and
+its prior failure with `cleanup_complete: false`; the report stops later trials.
+The private `lemon-paired-runtime-*` directory under the runner's temporary
+directory survives, including fixtures, both ledgers, capture files and recovery
+logs. Shared reports contain no paths or witness contents. Treat retained state
+as sensitive; inspect locally and remove only after independently verifying
+termination, never inferring free capacity from root exit.
+
+Verified cleanup removes private state only after profiling finalization succeeds.
+Disposal repairs owned read-only directories through pinned descriptors, never
+follows fixture symlinks, and refuses replaced roots. Disposal or finalization
+failure independently marks the row failed and halts later trials without losing
+its paid counters or earlier failure. `disposal_complete` and
+`finalization_failed` record those separate facts.
+On Darwin, unreadable directories are pinned with search-only descriptors before
+permission repair. Directories without search permission fail closed and retain
+evidence rather than permitting pathname-based permission changes.
+Recovery validates the original pinned trial root before launching and opens
+`cleanup.log` relative to its descriptor. An exec-only bootstrap inherits that
+descriptor and uses `fchdir` before starting a precompiled, application-free BEAM.
+Both ledger names and DETS repair temporaries stay relative to that kernel-pinned
+working directory throughout recovery; replacing the trial pathname cannot redirect
+ledger access, signal authorization or log mutation. This also works on Darwin,
+where `/dev/fd/N/ledger` is not a traversable directory path. Post-attempt metadata,
+profiling and flush files also use descriptor-relative, no-follow regular-file access.
+Interruptions during disposal, verification, pricing or record/report finalization
+preserve the attempted row and observed paid counters; incomplete teardown or
+finalization remains a resume stop, even when a prior verifier failure is retained.
+
 Before any paid production-client invocation, the fresh runtime must resolve
 the expected disclosure profile from configuration. If the opt-in profile
 support from #106 is unavailable, this gate fails rather than silently running
@@ -258,12 +308,19 @@ confirm the selected variant before a trial can receive a passing outcome.
 
 A fresh private HOME, configuration cwd, store, operator token, secret master key,
 and runtime ports isolate every attempt. The subprocess environment forwards
-only minimal tool variables (`PATH`, `LANG`, `LC_ALL`, `TMPDIR`) and approved
-credential variables; ambient Lemon settings, provider state, proxy settings,
-and dotenv contents are not inherited. `LEMON_AGENT_PROFILES_CWD`,
-`LEMON_DOTENV_DIR`, `LEMON_STORE_PATH`, and the disclosure-profile environment
-variable point to the isolated trial state/settings. Keep secrets out of base
-TOML and do not configure external sensitive workspaces or stateful services.
+only minimal tool variables (`PATH`, `LANG`, `LC_ALL`), resolved SDK paths
+(`MIX_HOME`, `HEX_HOME`), and approved credential variables. SDK paths are fixed
+before replacing HOME: explicit values take precedence, otherwise the original
+home's `.mix` and `.hex` directories are used. Relative paths and `~` are resolved
+against the original cwd/home. Runtime boot and offline recovery use the same
+fixed paths; recovery receives no provider credentials. The canonical
+`scripts/test` driver preserves SDK locations before test helpers replace HOME.
+Ambient Lemon settings, provider state, proxies and dotenv are not inherited.
+`TMPDIR` is private so native capture files share the fixture's evidence lifetime.
+`LEMON_AGENT_PROFILES_CWD`, `LEMON_DOTENV_DIR`, `LEMON_STORE_PATH` and disclosure
+settings point to isolated state. `LEMON_EVAL_PROCESS_STORE` is bound before Boot
+and both ledgers are verified after Boot, before any paid call. Keep secrets out
+of base TOML; do not configure sensitive external workspaces or stateful services.
 
 The same explicit base TOML is used for every variant. The runner appends
 `[runtime.tools.disclosure]` with `enabled = true`, `catalog_tokens = 2000`,
