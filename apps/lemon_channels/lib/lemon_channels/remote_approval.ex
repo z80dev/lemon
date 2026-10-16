@@ -7,7 +7,7 @@ defmodule LemonChannels.RemoteApproval do
   click time and Core atomically compares it before consuming the decision.
   """
 
-  alias LemonChannels.{OutboundPayload, Outbox, Supervision}
+  alias LemonChannels.{ApprovalPromptTracker, OutboundPayload, Outbox, Supervision}
   alias LemonCore.Events.ApprovalPending
 
   def request(payload, channel, account, authorize, opts \\ []) do
@@ -28,23 +28,78 @@ defmodule LemonChannels.RemoteApproval do
 
   def resolve(data, channel, account, authorize, opts \\ []) do
     protect(fn ->
-      with {:ok, id, fingerprint, decision} <- parse(data),
-           {:ok, pending} <- fetch(id, opts),
-           true <- fingerprint == fingerprint(pending),
-           {:ok, target} <- target(pending, channel, account, opts),
-           true <- authorize.(target),
-           {:ok, %{decision: ^decision, outcome: outcome}} when outcome in [:approved, :denied] <-
-             Keyword.get(opts, :resolve, &LemonCore.ExecApprovals.resolve/3).(
-               id,
-               decision,
-               expected_pending: pending
-             ) do
-        {:ok, target, decision}
-      else
-        {:error, _} = error -> error
-        _ -> {:error, :rejected}
+      case parse(data) do
+        {:ok, id, fingerprint, decision} ->
+          case fetch(id, opts) do
+            {:ok, pending} ->
+              resolve_pending(
+                id,
+                fingerprint,
+                decision,
+                pending,
+                channel,
+                account,
+                authorize,
+                opts
+              )
+
+            {:error, :not_pending} ->
+              expired_target(id, channel, account, authorize, opts)
+
+            {:error, _} = error ->
+              error
+          end
+
+        {:error, _} = error ->
+          error
       end
     end)
+  end
+
+  defp resolve_pending(id, fingerprint, decision, pending, channel, account, authorize, opts) do
+    with true <- fingerprint == fingerprint(pending),
+         {:ok, target} <- target(pending, channel, account, opts),
+         true <- authorize.(target),
+         {:ok, %{decision: ^decision, outcome: outcome}} when outcome in [:approved, :denied] <-
+           Keyword.get(opts, :resolve, &LemonCore.ExecApprovals.resolve/3).(
+             id,
+             decision,
+             expected_pending: pending
+           ) do
+      {:ok, target, decision}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :rejected}
+    end
+  end
+
+  # A terminal record retained by Core for an approval whose owner ended. Never
+  # approves anything; it only yields the authorized target so the stale prompt
+  # can be edited.
+  defp expired_target(id, channel, account, authorize, opts) do
+    case Keyword.get(opts, :fetch_record, &LemonCore.ExecApprovalStore.fetch_record/1).(id) do
+      {:ok,
+       %{
+         resolution: %{
+           outcome: :expired,
+           decision: :expired,
+           approval_id: ^id,
+           run_id: run,
+           session_key: session
+         }
+       }}
+      when is_binary(run) and run != "" and is_binary(session) and session != "" ->
+        with {:ok, target} <- target(%{run_id: run, session_key: session}, channel, account, opts),
+             true <- authorize.(target) do
+          {:error, {:run_ended, target}}
+        else
+          {:error, _} = error -> error
+          _ -> {:error, :rejected}
+        end
+
+      _ ->
+        {:error, :not_pending}
+    end
   end
 
   @doc "Resolve a chat-scoped text selection through the exact button snapshot boundary."
@@ -81,10 +136,20 @@ defmodule LemonChannels.RemoteApproval do
 
         case matches do
           [{_, pending}] ->
-            resolve(callback(pending, decision), channel, account, authorize, opts)
+            case resolve(callback(pending, decision), channel, account, authorize, opts) do
+              {:error, {:run_ended, _}} -> {:error, :run_ended}
+              result -> result
+            end
 
           [] ->
-            {:error, :not_pending}
+            if valid_id?(selector) do
+              case expired_target(selector, channel, account, authorize, opts) do
+                {:error, {:run_ended, _}} -> {:error, :run_ended}
+                _ -> {:error, :not_pending}
+              end
+            else
+              {:error, :not_pending}
+            end
 
           many ->
             ids = Enum.map(many, fn {id, _} -> unique_prefix(id, candidates) end)
@@ -128,14 +193,51 @@ defmodule LemonChannels.RemoteApproval do
     payload =
       OutboundPayload.text(target.channel_id, target.account_id, target.peer, text,
         meta: meta,
-        idempotency_key: opts[:idempotency_key]
+        idempotency_key: opts[:idempotency_key],
+        notify_pid: opts[:notify_pid],
+        notify_ref: opts[:notify_ref]
       )
 
     queue(payload, opts)
   end
 
+  @doc """
+  Enqueue an approval prompt exactly like `enqueue/4`, registering it with
+  `LemonChannels.ApprovalPromptTracker` first so an owner-ended expiry can edit
+  the delivered message. `cleared_meta` is the platform edit meta that removes
+  the buttons. Tracking is best-effort and never changes the result.
+  """
+  def prompt(target, approval_id, text, meta, cleared_meta, opts \\ []) do
+    case ApprovalPromptTracker.track(approval_id, target, cleared_meta) do
+      {:ok, pid, ref} ->
+        opts =
+          opts
+          |> Keyword.put(:notify_pid, pid)
+          |> Keyword.put(:notify_ref, ref)
+
+        meta = Map.put(meta, :notify_tag, ApprovalPromptTracker.notify_tag())
+
+        case enqueue(target, text, meta, opts) do
+          :ok ->
+            :ok
+
+          error ->
+            ApprovalPromptTracker.forget(ref)
+            error
+        end
+
+      :error ->
+        enqueue(target, text, meta, opts)
+    end
+  end
+
   def edit(target, message_id, decision, meta, opts \\ []) do
-    text = if decision == :approve_once, do: "Approval: Approved (once)", else: "Approval: Denied"
+    text =
+      case decision do
+        :approve_once -> "Approval: Approved (once)"
+        :expired -> "Approval: Expired (the run ended)"
+        _ -> "Approval: Denied"
+      end
 
     payload =
       OutboundPayload.edit(

@@ -655,6 +655,33 @@ decision/scope metadata. Raw action payloads, prompts, and secrets are not
 stored in the timeline. Timeouts also broadcast `:approval_resolved` with
 `decision: :timeout` so operator clients can clear stale pending requests live.
 
+### Owner expiry
+
+A pending approval belongs to the run (`:run_id`) and native session
+(`:session_id`) that requested it. When that owner ends, nobody can use the
+answer, so the approval expires immediately: there is no grace window, and it
+applies to requests with `expires_in_ms: :infinity` too.
+
+```elixir
+{:ok, count} = LemonCore.ExecApprovals.expire_owner({:run, run_id})
+{:ok, count} = LemonCore.ExecApprovals.expire_owner({:session, session_id})
+```
+
+Each match atomically becomes a redacted `:expired` receipt (the same exact-record
+transition as resolve, cancel and timeout, so there is one winner), a live waiter
+receives `{:ok, :denied}`, no policy is installed and `:approval_resolved` is
+broadcast with `decision: :expired` (time-based expiry keeps `:timeout`). A later
+`resolve/3` returns `{:error, :expired}`; it cannot approve. An
+`:approval_expired` introspection event records id, tool and owner kind.
+
+`LemonCore.ExecApprovalExpiry` observes every successful Store run finalization,
+including runs without a session-history key, and monitors native session
+processes independently of `terminate/2`, including forced shutdown. Store hooks
+only cast asynchronously, avoiding recursive Store calls. Retained SQLite
+requests from an earlier daemon incarnation expire during recovery before they
+can be resolved. Restarting only the expiry worker preserves live owners and
+restores session monitors; it does not start a new daemon incarnation.
+
 ## Idempotency
 
 At-most-once deduplication backed by the Store with 24h TTL.

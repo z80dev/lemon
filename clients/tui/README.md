@@ -125,6 +125,10 @@ on reconnect and when opening or changing models. Older daemons without
   pending set; bounded partial reads retain omitted requests, while authorization
   revocation removes only the selected session's cached requests. Recovery never
   approves a tool automatically.
+  An approval whose run ends is expired by the daemon and shown in the
+  transcript as `approval expired … — the run ended` (never as granted);
+  answering it afterwards is refused as expired, and the TUI then drops the
+  request instead of restoring the panel.
   The offline owner/AppShell regression smoke is
   `sh scripts/smoke_recovery_approvals.sh` from the umbrella root after dependencies
   and central test artifacts are installed/compiled. It runs no ExUnit, compilation,

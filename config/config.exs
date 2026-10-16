@@ -161,8 +161,9 @@ config :lemon_core, LemonCore.Secrets,
 # Default to an in-memory store. Dev/prod override to disk-backed persistence.
 #
 # The store is a storage primitive and must not name its collaborators, so the
-# runtime wires them here: run history, memory ingest and the usage ledger attach
-# as finalize-run hooks, and run-history reads forward to the same provider.
+# runtime wires them here: run history, memory ingest, the usage ledger and exec
+# approval expiry attach as finalize-run hooks, and run-history reads forward to
+# the same provider.
 # Channels register their own cached tables at boot (see LemonChannels.Application).
 config :lemon_core, LemonCore.Store,
   backend: LemonCore.Store.EtsBackend,
@@ -170,7 +171,8 @@ config :lemon_core, LemonCore.Store,
   finalize_run_hooks: [
     {LemonCore.RunHistoryStore, :handle_finalize_run},
     {LemonMemory.Ingest, :handle_finalize_run},
-    {LemonCore.UsageLedger, :handle_finalize_run}
+    {LemonCore.UsageLedger, :handle_finalize_run},
+    {LemonCore.ExecApprovalExpiry, :handle_finalize_run}
   ],
   run_history_provider: LemonCore.RunHistoryStore
 

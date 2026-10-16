@@ -16,6 +16,17 @@ defmodule LemonCore.ExecApprovalStore do
   @node_policy_map_table :exec_approvals_policy_node_map
   @pending_table :exec_approvals_pending
 
+  @session_owners_table :exec_approval_session_owners
+
+  @doc false
+  def put_session_owner(id, owner), do: Store.put(@session_owners_table, id, owner)
+
+  @doc false
+  def fetch_session_owners, do: Store.fetch_all(@session_owners_table)
+
+  @doc false
+  def delete_session_owner(id), do: Store.delete(@session_owners_table, id)
+
   @spec get_global_policy(term(), term()) :: map() | nil
   def get_global_policy(tool, action_hash),
     do: Store.get(@global_policy_table, {tool, action_hash})

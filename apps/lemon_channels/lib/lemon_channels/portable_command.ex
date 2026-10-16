@@ -83,6 +83,9 @@ defmodule LemonChannels.PortableCommand do
       {:error, {:ambiguous, ids}} ->
         {:error, "Multiple pending approvals; use /#{name} <id>:\n" <> Enum.join(ids, "\n")}
 
+      {:error, :run_ended} ->
+        {:error, "That approval expired because its run ended; nothing was approved."}
+
       {:error, reason} when reason in [:not_pending, :expired] ->
         {:error,
          "No matching pending approval in this chat. It may have expired or already been resolved."}

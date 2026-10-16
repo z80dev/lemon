@@ -25,10 +25,12 @@ defmodule LemonChannels.Adapters.Discord.Approval do
         ])
       ]
 
-      RemoteApproval.enqueue(
+      RemoteApproval.prompt(
         target,
+        pending.id,
         "Approval requested: #{pending.tool}\nAction: #{RemoteApproval.action_text(pending.action)}",
         %{components: components},
+        %{components: []},
         Keyword.put(
           opts,
           :idempotency_key,
@@ -55,20 +57,26 @@ defmodule LemonChannels.Adapters.Discord.Approval do
 
     case result do
       {:ok, target, decision} ->
-        _ =
-          RemoteApproval.edit(
-            target,
-            get(get(interaction, :message), :id),
-            decision,
-            %{components: []},
-            opts
-          )
-
+        _ = edit_prompt(target, interaction, decision, opts)
         :ok
+
+      {:error, {:run_ended, target}} ->
+        _ = edit_prompt(target, interaction, :expired, opts)
+        {:error, :run_ended}
 
       {:error, _} = error ->
         error
     end
+  end
+
+  defp edit_prompt(target, interaction, decision, opts) do
+    RemoteApproval.edit(
+      target,
+      get(get(interaction, :message), :id),
+      decision,
+      %{components: []},
+      opts
+    )
   end
 
   def text_authorizer(state, interaction) do

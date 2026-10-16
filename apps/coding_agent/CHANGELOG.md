@@ -97,6 +97,11 @@
   a numbered read are refused. Disable with `[runtime.tools.edit]
   enforce_seen_lines = false`. The Git guard remains on by default
   (`[runtime.tools.bash] git_guard = false` disables it).
+- A native session that shuts down expires the approvals it still has pending
+  (`LemonCore.ExecApprovalExpiry.session_ended/1` from `terminate/2`), so an
+  orphaned approval is denied instead of staying answerable. An expired
+  approval's action reports `ok: false`, "expired because its run ended".
+
 - Normalize module aliases, implicit exception handling and direct function calls
   in recently changed coding-agent modules and tests without changing runtime behavior.
 
@@ -124,6 +129,12 @@
 - Sessions retain current-turn error/cancellation terminals until the next turn;
   fenced subscribers classify aborted, failed and length-limited answers truthfully.
   Tagged direct subscriptions fence stale unsubscribe closures by generation.
+- Native session death expires pending execution approvals even when the session
+  is forcibly killed, including approvals without run IDs or time limits. Late
+  answers cannot grant access after the owner dies.
+  Ownership survives expiry-worker restarts before the first approval, including
+  unregistered sessions and sessions using custom registries.
+
 - Patch hunks retry whitespace and typographic-punctuation normalization only
   after an exact miss, reject ambiguous matches, and preserve original context.
 

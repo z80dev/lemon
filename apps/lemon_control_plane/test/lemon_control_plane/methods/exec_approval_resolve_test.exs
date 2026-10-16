@@ -113,6 +113,42 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolveTest do
              Errors.to_payload(error)
   end
 
+  test "an ended run expires the approval: waiter denied, wire event, later resolve is expired",
+       %{id: id} do
+    {task, pending} = request(id, :infinity)
+    assert pending.expires_at_ms == nil
+
+    assert {:ok, 1} = ExecApprovals.expire_owner({:run, pending.run_id})
+    assert Task.await(task) == {:ok, :denied}
+
+    assert_receive %LemonCore.Event{
+                     type: :approval_resolved,
+                     payload: %{approval_id: ^id, decision: :expired} = payload
+                   },
+                   1_000
+
+    assert {"exec.approval.resolved", projected} =
+             LemonControlPlane.EventBridge.project(
+               LemonCore.Event.new(:approval_resolved, payload, %{})
+             )
+
+    assert projected["decision"] == "expired"
+    assert projected["approvalId"] == id
+    assert :ok = Schemas.validate_event("exec.approval.resolved", projected)
+
+    for decision <- ["approve_once", "approve_session", "approve_global", "deny"] do
+      assert {:error, error} = ExecApprovalResolve.handle(params(pending, decision), %{})
+
+      assert %{
+               "code" => "CONFLICT",
+               "message" => "Approval expired",
+               "details" => %{"approvalId" => ^id, "reason" => "expired"}
+             } = Errors.to_payload(error)
+    end
+
+    assert ExecApprovalStore.get_pending(id) == nil
+  end
+
   test "expired owner state and unknown IDs return distinct errors", %{id: id} do
     {task, pending} = request(id, 25)
     assert Task.await(task, 1_000) == {:error, :timeout}

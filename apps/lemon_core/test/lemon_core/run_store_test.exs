@@ -70,6 +70,60 @@ defmodule LemonCore.RunStoreTest do
            end)
   end
 
+  test "a sessionless finalization expires an infinite pending run approval without a grant" do
+    alias LemonCore.{ExecApprovals, ExecApprovalStore}
+
+    LemonCore.Bus.subscribe("exec_approvals")
+    token = System.unique_integer([:positive])
+    run_id = "run_sessionless_#{token}"
+    approval_id = "approval_sessionless_#{token}"
+    session_key = "agent:sessionless:#{token}"
+    agent_id = "sessionless_#{token}"
+    action = %{command: "sessionless-finalize-#{token}"}
+
+    task =
+      Task.async(fn ->
+        ExecApprovals.request(%{
+          approval_id: approval_id,
+          run_id: run_id,
+          session_key: session_key,
+          agent_id: agent_id,
+          tool: "bash",
+          action: action,
+          expires_in_ms: :infinity
+        })
+      end)
+
+    assert_receive %LemonCore.Event{
+                     type: :approval_requested,
+                     payload: %{approval_id: ^approval_id}
+                   },
+                   1_000
+
+    assert %{run_id: ^run_id, expires_at_ms: nil} =
+             ExecApprovalStore.get_pending(approval_id)
+
+    assert :ok = RunStore.finalize(run_id, %{completed: %{ok: false}})
+    assert {:ok, :denied} = Task.await(task, 2_000)
+    assert {:ok, nil} = ExecApprovalStore.fetch_pending(approval_id)
+
+    assert {:ok, %{resolution: %{outcome: :expired, decision: :expired, run_id: ^run_id}}} =
+             ExecApprovalStore.fetch_record(approval_id)
+
+    for decision <- [:approve_once, :approve_session, :approve_agent, :approve_global] do
+      assert {:error, :expired} = ExecApprovals.resolve(approval_id, decision)
+    end
+
+    action_hash =
+      :crypto.hash(:sha256, :erlang.term_to_binary(action))
+      |> Base.encode16(case: :lower)
+      |> String.slice(0, 16)
+
+    assert Store.get(:exec_approvals_policy, {"bash", action_hash}) == nil
+    assert Store.get(:exec_approvals_policy_session, {session_key, "bash", action_hash}) == nil
+    assert Store.get(:exec_approvals_policy_agent, {agent_id, "bash", action_hash}) == nil
+  end
+
   test "execution-only MCP credentials never persist in final summaries or event metadata" do
     run_id = "run_mcp_#{System.unique_integer([:positive])}"
     session_key = "agent:mcp:main"

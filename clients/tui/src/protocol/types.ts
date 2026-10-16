@@ -232,7 +232,20 @@ export interface ExecPendingApproval
  */
 export const PROPOSE_PLAN_TOOL = "propose_plan";
 
-export type ApprovalDecision = "once" | "session" | "global" | "deny" | string;
+/**
+ * `once` / `session` / `global` approve and `deny` refuses. The daemon also
+ * closes requests itself: `expired` (the owning run ended), `timeout` (the
+ * deadline passed) and `cancelled` (the owner withdrew it) — none is a grant.
+ */
+export type ApprovalDecision =
+	| "once"
+	| "session"
+	| "global"
+	| "deny"
+	| "expired"
+	| "timeout"
+	| "cancelled"
+	| string;
 
 export interface ApprovalResolvedEvent {
 	identity?: SessionSnapshotIdentity;

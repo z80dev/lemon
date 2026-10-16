@@ -1477,6 +1477,7 @@ defmodule LemonWeb.Chat.PaneLive do
   end
 
   defp resolved_elsewhere("timeout"), do: "An approval request expired."
+  defp resolved_elsewhere("expired"), do: "An approval request expired because its run ended."
   defp resolved_elsewhere("cancelled"), do: "An approval request was withdrawn."
   defp resolved_elsewhere(_), do: "An approval was answered elsewhere."
 

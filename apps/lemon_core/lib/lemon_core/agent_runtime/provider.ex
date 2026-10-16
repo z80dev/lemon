@@ -50,6 +50,9 @@ defmodule LemonCore.AgentRuntime.Provider do
   @doc "Compacts a live session. `{:error, :session_not_found}` when it is not running."
   @callback compact_session(session_key(), keyword()) :: :ok | {:error, term()}
 
+  @doc "Return a native session's owner PID without calling the session process."
+  @callback native_session_owner(String.t()) :: pid() | nil
+
   @doc "Loads persisted native session messages for replay."
   @callback session_history(session_key(), Path.t()) :: {:ok, [map()]} | {:error, term()}
 
@@ -203,6 +206,7 @@ defmodule LemonCore.AgentRuntime.Provider do
                       todo_progress: 1,
                       feature_progress: 1,
                       compact_session: 2,
+                      native_session_owner: 1,
                       session_history: 2,
                       session_todos: 2,
                       session_recovery_snapshot: 2,

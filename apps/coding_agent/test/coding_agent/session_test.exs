@@ -1901,6 +1901,9 @@ defmodule CodingAgent.SessionApprovalEventsTest do
 
   alias CodingAgent.Session
   alias LemonAgent.Test.Mocks
+  alias LemonCore.ExecApprovals
+  alias LemonCore.ExecApprovalStore
+  alias LemonCore.Testing.AsyncHelpers
 
   @moduletag :tmp_dir
 
@@ -1910,6 +1913,7 @@ defmodule CodingAgent.SessionApprovalEventsTest do
   end
 
   defp start_session(opts) do
+    {restart, opts} = Keyword.pop(opts, :restart, :permanent)
     cwd = Process.get({__MODULE__, :cwd})
 
     opts =
@@ -1926,7 +1930,7 @@ defmodule CodingAgent.SessionApprovalEventsTest do
         opts
       )
 
-    start_supervised!({Session, opts})
+    start_supervised!(Supervisor.child_spec({Session, opts}, id: make_ref(), restart: restart))
   end
 
   test "rebroadcasts matching approval bus events as session events" do
@@ -1978,6 +1982,64 @@ defmodule CodingAgent.SessionApprovalEventsTest do
     assert_receive {:session_event, ^session_id,
                     {:approval_resolved, _, :approve_session, ^pending}},
                    1_000
+  end
+
+  test "a terminating session expires the approvals it still has pending" do
+    unique = System.unique_integer([:positive])
+    session_id = "approval-expire-#{unique}"
+    session_key = "agent:test:approval-expire:#{unique}"
+    other_id = "approval-other-#{unique}"
+    approval_id = "approval_expire_#{unique}"
+
+    session =
+      start_session(
+        session_id: session_id,
+        session_key: session_key,
+        tool_policy: CodingAgent.ToolPolicy.from_profile(:full_access),
+        restart: :temporary
+      )
+
+    on_exit(fn ->
+      ExecApprovalStore.delete_pending(approval_id)
+      ExecApprovalStore.delete_pending(other_id)
+    end)
+
+    request = fn id, owner_session ->
+      Task.async(fn ->
+        ExecApprovals.request(%{
+          approval_id: id,
+          run_id: "run_#{id}",
+          session_id: owner_session,
+          session_key: session_key,
+          agent_id: "test",
+          tool: "bash",
+          action: %{command: "mix test"}
+        })
+      end)
+    end
+
+    owned = request.(approval_id, session_id)
+    foreign = request.(other_id, "another-session-#{unique}")
+
+    for id <- [approval_id, other_id] do
+      assert :ok =
+               AsyncHelpers.assert_eventually(
+                 fn -> ExecApprovalStore.get_pending(id) != nil end,
+                 timeout: 2_000
+               )
+    end
+
+    ref = Process.monitor(session)
+    GenServer.stop(session)
+    assert_receive {:DOWN, ^ref, :process, ^session, _}, 2_000
+
+    assert {:ok, :denied} = Task.await(owned, 2_000)
+    assert {:error, :expired} = ExecApprovals.resolve(approval_id, :approve_global)
+
+    # Another session's approval is untouched and still answerable.
+    assert %{id: ^other_id} = ExecApprovalStore.get_pending(other_id)
+    assert {:ok, %{outcome: :approved}} = ExecApprovals.resolve(other_id, :approve_once)
+    assert {:ok, :approved, :approve_once} = Task.await(foreign, 2_000)
   end
 
   test "ignores approval bus events for other sessions" do

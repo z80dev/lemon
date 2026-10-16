@@ -441,15 +441,9 @@ export class ApprovalRecordComponent implements Component {
 		}
 		const theme = getTheme();
 		const tool = this.#tool ?? "tool";
-		const denied = this.#decision === "deny";
 		const plan = this.#tool === PROPOSE_PLAN_TOOL;
-		const text = plan
-			? planRecordText(this.#approvalId, this.#decision)
-			: this.#decision
-				? `· approval ${denied ? "denied" : "granted"} for ${tool} (${humanDecision(this.#decision)})`
-				: `· approval requested for ${tool} (${this.#approvalId})`;
-		const slot = this.#decision ? (denied ? (plan ? "muted" : "error") : "success") : "warning";
-		const rows = [theme.fg(slot, truncateToWidth(` ${text}`, width))];
+		const { text, tone } = recordLine(this.#approvalId, tool, plan, this.#decision);
+		const rows = [theme.fg(tone, truncateToWidth(` · ${text}`, width))];
 		this.#cachedRows = rows;
 		this.#cachedWidth = width;
 		this.#cachedVersion = this.#version;
@@ -460,16 +454,13 @@ export class ApprovalRecordComponent implements Component {
 	describe(): NativeNode {
 		if (this.#native?.version === this.#version) return this.#native.node;
 		const tool = this.#tool ?? "tool";
-		const denied = this.#decision === "deny";
 		const plan = this.#tool === PROPOSE_PLAN_TOOL;
-		const line = plan
-			? planRecordText(this.#approvalId, this.#decision).replace(/^· (.)/, (_, first: string) =>
-					first.toUpperCase(),
-				)
-			: this.#decision
-				? `Approval ${denied ? "denied" : "granted"} for ${tool} (${humanDecision(this.#decision)})`
-				: `Approval requested for ${tool}`;
-		const tone = this.#decision ? (denied ? (plan ? "muted" : "error") : "success") : "warning";
+		const { text, tone } = recordLine(this.#approvalId, tool, plan, this.#decision);
+		// A pending request keeps its short native line; the id belongs to the plain rows.
+		const line =
+			this.#decision === undefined && !plan
+				? `Approval requested for ${tool}`
+				: text.replace(/^./, (first) => first.toUpperCase());
 		const described = node("text", {
 			spans: [span(line, tone)],
 			wrap: "word",
@@ -504,10 +495,46 @@ export function isApprovedDecision(decision: string | undefined): boolean {
 	);
 }
 
+type RecordTone = "success" | "error" | "warning" | "muted";
+
+/** The record's sentence (no leading bullet) and its tone for the current decision. */
+function recordLine(
+	approvalId: string,
+	tool: string,
+	plan: boolean,
+	decision: string | undefined,
+): { text: string; tone: RecordTone } {
+	if (plan) {
+		const text = planRecordText(approvalId, decision).replace(/^· /, "");
+		if (decision === undefined) return { text, tone: "warning" };
+		if (decision === "deny") return { text, tone: "muted" };
+		return { text, tone: isApprovedDecision(decision) ? "success" : "warning" };
+	}
+	if (decision === undefined) {
+		return { text: `approval requested for ${tool} (${approvalId})`, tone: "warning" };
+	}
+	if (isApprovedDecision(decision)) {
+		return { text: `approval granted for ${tool} (${humanDecision(decision)})`, tone: "success" };
+	}
+	switch (decision) {
+		case "deny":
+			return { text: `approval denied for ${tool} (deny)`, tone: "error" };
+		case "expired":
+			return { text: `approval expired for ${tool} — the run ended`, tone: "warning" };
+		case "timeout":
+			return { text: `approval timed out for ${tool}`, tone: "warning" };
+		case "cancelled":
+			return { text: `approval withdrawn for ${tool}`, tone: "warning" };
+		default:
+			return { text: `approval closed for ${tool} (${decision})`, tone: "warning" };
+	}
+}
+
 function planRecordText(approvalId: string, decision: string | undefined): string {
 	if (decision === undefined) return `· plan proposed — awaiting your decision (${approvalId})`;
 	if (decision === "deny") return "· plan sent back for refinement";
 	if (isApprovedDecision(decision)) return "· plan approved — executing";
+	if (decision === "expired") return "· plan proposal expired — the run ended";
 	return `· plan proposal closed (${decision})`;
 }
 

@@ -902,6 +902,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           :ok ->
             acknowledge_interaction(interaction)
 
+          {:error, :run_ended} ->
+            respond_ephemeral(
+              interaction,
+              "This approval expired because its run ended; nothing was approved."
+            )
+
           {:error, reason} when reason in [:not_pending, :expired, :already_resolved] ->
             respond_ephemeral(
               interaction,

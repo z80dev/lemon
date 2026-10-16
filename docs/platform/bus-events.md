@@ -248,11 +248,17 @@ transports, and `LemonControlPlane.EventBridge` (dynamic).
 | Event type | Publisher | Payload |
 |---|---|---|
 | `:approval_requested` | `LemonCore.ExecApprovals` | `Events.ApprovalRequested` (`approval_id`, `pending: Events.ApprovalPending`) |
-| `:approval_resolved` | `LemonCore.ExecApprovals` (decision, timeout, cancellation) | `Events.ApprovalResolved` (`approval_id`, `decision`, `pending`) |
+| `:approval_resolved` | `LemonCore.ExecApprovals` (decision, timeout, cancellation, owner-end expiry) | `Events.ApprovalResolved` (`approval_id`, `decision`, `pending`) |
+
+`decision: :expired` means the run or native session that owned the approval ended
+(`LemonCore.ExecApprovals.expire_owner/1`, driven by the `LemonCore.Store`
+finalize-run hook and `CodingAgent.Session.terminate/2` through
+`LemonCore.ExecApprovalExpiry`). It is immediate and grants nothing; `:timeout` stays
+the clock deadline. Channel prompts and TUI records are edited to say the run ended.
 
 Subscribers: `ExecApprovals` itself (the requester awaiting resolution),
 `CodingAgent.Session`, `CodingAgent.ExecutionNode.Worker`, the Discord and Telegram
-transports, control-plane `ACP`, `EventBridge`, and `LemonWeb` (`ShellLive`,
+transports, `LemonChannels.ApprovalPromptTracker`, control-plane `ACP`, `EventBridge`, and `LemonWeb` (`ShellLive`,
 `SkillsLive`, and `Chat.PaneLive` filtered to the pane's session).
 
 ### 2.4 `cron`
@@ -377,7 +383,7 @@ Bold fields are enforced.
 | | `run_phase_changed` → `RunPhaseChanged` | **run_id**, session_key, conversation_key, **phase**, previous_phase, **source**, at |
 | | `engine_action` → `EngineAction` | **action** (`Action`), engine, phase (`:started \| :updated \| :completed`, default `:updated`), ok, message, level |
 | `exec_approvals` | `approval_requested` → `ApprovalRequested` | **approval_id**, **pending** (`ApprovalPending`) |
-| | `approval_resolved` → `ApprovalResolved` | **approval_id**, **decision** (`:approve_once`, `:approve_session`, `:approve_agent`, `:approve_global`, `:deny`, `:timeout`, `:cancelled`), pending |
+| | `approval_resolved` → `ApprovalResolved` | **approval_id**, **decision** (`:approve_once`, `:approve_session`, `:approve_agent`, `:approve_global`, `:deny`, `:timeout`, `:cancelled`, `:expired`), pending |
 | `cron` | `cron_tick` → `CronTick` | **timestamp_ms** |
 | | `cron_run_started` → `CronRunStarted` | **cron_run_id**, router_run_id, **job_id**, job_name, agent_id, session_key, triggered_by, started_at_ms, run |
 | | `cron_run_completed` → `CronRunCompleted` | **cron_run_id**, router_run_id, **job_id**, agent_id, session_key, status, duration_ms, output, error, suppressed, run |

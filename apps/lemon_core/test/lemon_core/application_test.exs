@@ -55,12 +55,13 @@ defmodule LemonCore.ApplicationTest do
   end
 
   describe "supervisor children specification" do
-    test "supervisor has exactly 11 children" do
+    test "supervisor has exactly 12 children" do
       supervisor_pid = Process.whereis(LemonCore.Supervisor)
       children = Supervisor.which_children(supervisor_pid)
 
-      # Includes LemonCore.UsageLedger, which records finished-run usage.
-      assert length(children) == 11
+      # Includes LemonCore.UsageLedger, which records finished-run usage, and
+      # LemonCore.ExecApprovalExpiry, which expires approvals of ended owners.
+      assert length(children) == 12
     end
   end
 

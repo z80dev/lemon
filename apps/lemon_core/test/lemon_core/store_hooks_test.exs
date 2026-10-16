@@ -92,18 +92,38 @@ defmodule LemonCore.StoreHooksTest do
       assert Store.ping(store) == :ok
     end
 
-    test "runs without a session key do not fire hooks" do
+    test "runs without an indexable session key still fire hooks exactly once per finalization" do
       parent = self()
       hook = fn event -> send(parent, {:hook_fired, event}) end
 
       store =
         start_store(:store_hooks_no_session, backend: EtsBackend, finalize_run_hooks: [hook])
 
-      finalize(store, "run_orphan", %{agent_id: "nobody"})
-      refute_receive {:hook_fired, _}
+      for {run_id, summary} <- [
+            {"run_orphan", %{agent_id: "nobody"}},
+            {"run_blank", %{session_key: ""}},
+            {"run_invalid", %{session_key: :invalid}}
+          ] do
+        finalize(store, run_id, summary)
+        assert_receive {:hook_fired, %{run_id: ^run_id, summary: ^summary} = event}
+        assert event.session_key == Map.get(summary, :session_key)
+        refute_receive {:hook_fired, _}
+      end
 
-      finalize(store, "run_blank", %{session_key: ""})
-      refute_receive {:hook_fired, _}
+      assert Store.list(store, :sessions_index) == []
+    end
+
+    test "history hook ignores runs without an indexable session key" do
+      for session_key <- [nil, "", :invalid] do
+        assert :ok =
+                 LemonCore.RunHistoryStore.handle_finalize_run(:no_history_server, %{
+                   run_id: "sessionless",
+                   session_key: session_key,
+                   started_at: 1,
+                   record: %{events: []},
+                   summary: %{}
+                 })
+      end
     end
   end
 

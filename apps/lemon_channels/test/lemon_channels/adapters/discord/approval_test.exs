@@ -210,6 +210,59 @@ defmodule LemonChannels.Adapters.Discord.ApprovalTest do
     end
   end
 
+  test "click on an expired approval edits the prompt, clears buttons and approves nothing", c do
+    expire(c.pending)
+    opts = Keyword.put(c.opts, :resolve, fn _, _, _ -> flunk("must not resolve") end)
+
+    assert {:error, :run_ended} = Approval.handle(c.state, c.interaction, opts)
+
+    assert_receive {:queued,
+                    %OutboundPayload{
+                      kind: :edit,
+                      peer: peer,
+                      content: %{message_id: "999", text: "Approval: Expired (the run ended)"},
+                      meta: %{components: []}
+                    }}
+
+    assert peer == c.target.peer
+    refute_receive {:queued, _}
+  end
+
+  test "expired click from a foreign channel never edits; other terminal states stay not pending",
+       c do
+    expire(c.pending)
+
+    foreign = %{c.interaction | channel_id: "457"}
+    assert {:error, _} = Approval.handle(c.state, foreign, c.opts)
+    refute_receive {:queued, _}
+
+    :ok = ExecApprovalStore.delete_pending(c.pending.id)
+
+    :ok =
+      ExecApprovalStore.put_pending(c.pending.id, %{
+        resolution: %{approval_id: c.pending.id, outcome: :denied, decision: :deny}
+      })
+
+    assert {:error, :not_pending} = Approval.handle(c.state, c.interaction, c.opts)
+    refute_receive {:queued, _}
+  end
+
+  test "text command on an expired approval id reports the run ended", c do
+    expire(c.pending)
+
+    context = %{
+      surface: "discord",
+      account_id: "default",
+      approval_authorize: Approval.text_authorizer(c.state, Map.delete(c.interaction, :message)),
+      approval_opts: [list: fn -> {:ok, []} end]
+    }
+
+    assert {:error, message} =
+             LemonChannels.PortableCommand.handle("approve", c.pending.id, context)
+
+    assert message =~ "expired because its run ended"
+  end
+
   test "transport rejects a foreign component without claiming success", c do
     parent = self()
     previous = Application.get_env(:lemon_channels, :discord_interaction_responder)
@@ -242,5 +295,22 @@ defmodule LemonChannels.Adapters.Discord.ApprovalTest do
 
     assert {:ok, pending} = ExecApprovalStore.fetch_pending(c.pending.id)
     assert pending == c.pending
+  end
+
+  defp expire(pending) do
+    :ok = ExecApprovalStore.delete_pending(pending.id)
+
+    :ok =
+      ExecApprovalStore.put_pending(pending.id, %{
+        resolution: %{
+          approval_id: pending.id,
+          session_key: pending.session_key,
+          run_id: pending.run_id,
+          decision: :expired,
+          outcome: :expired,
+          resolved_at_ms: 1,
+          pending_hash: "x"
+        }
+      })
   end
 end

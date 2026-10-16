@@ -246,7 +246,7 @@ ownership changes only on explicit release or confirmed owner death.
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
 | `[:lemon, :approvals, :requested]` | `count: 1` | `approval_id`, `tool`, `run_id`, `session_id`, `session_key`, `agent_id` | [`exec_approvals.ex:101`](../apps/lemon_core/lib/lemon_core/exec_approvals.ex) |
-| `[:lemon, :approvals, :resolved]` | `count: 1` | `approval_id`, `decision`, `tool`, `run_id` | [`exec_approvals.ex:161`](../apps/lemon_core/lib/lemon_core/exec_approvals.ex) (user decision) and `:373` (`decision: :timeout`) |
+| `[:lemon, :approvals, :resolved]` | `count: 1` | `approval_id`, `decision`, `tool`, `run_id` | [`exec_approvals.ex:161`](../apps/lemon_core/lib/lemon_core/exec_approvals.ex) (user decision), `decision: :timeout` and `decision: :expired` (run or session ended, `expire_owner/1`) |
 
 ### Control plane fan-out — `[:lemon, :control_plane, ...]`
 

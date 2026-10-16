@@ -35,6 +35,7 @@ defmodule LemonChannels.Application do
       # Durable supervision notices use Outbox admission and delivery receipts
       LemonChannels.Supervision,
       LemonChannels.UserPromptSurface,
+      LemonChannels.ApprovalPromptTracker,
       LemonChannels.Pairing,
       # Adapter supervisor for channel adapters
       {DynamicSupervisor, strategy: :one_for_one, name: LemonChannels.AdapterSupervisor},

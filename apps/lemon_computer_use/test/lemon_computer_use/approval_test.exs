@@ -221,4 +221,86 @@ defmodule LemonComputerUse.ApprovalTest do
                "id"
              )
   end
+
+  describe "an owner that ends expires its untimed approval" do
+    alias LemonCore.{ExecApprovalExpiry, ExecApprovals, ExecApprovalStore, RunStore}
+    alias LemonCore.Testing.AsyncHelpers
+
+    setup do
+      n = System.unique_integer([:positive])
+      approval_id = "cu_approval_#{n}"
+      on_exit(fn -> ExecApprovalStore.delete_pending(approval_id) end)
+
+      %{
+        approval_id: approval_id,
+        ctx: %{
+          run_id: "cu_run_#{n}",
+          session_id: "cu_session_#{n}",
+          session_key: "agent:cu:main:#{n}",
+          agent_id: "cu"
+        }
+      }
+    end
+
+    defp ask_for_real(params, ctx, approval_id) do
+      task = Task.async(fn -> Approval.answer(params, ctx, approval_id) end)
+
+      assert :ok =
+               AsyncHelpers.assert_eventually(
+                 fn -> ExecApprovalStore.get_pending(approval_id) != nil end,
+                 timeout: 2_000
+               )
+
+      task
+    end
+
+    defp assert_refused(approval_id) do
+      for decision <- [:approve_once, :approve_session, :approve_agent, :approve_global] do
+        assert {:error, :expired} = ExecApprovals.resolve(approval_id, decision)
+      end
+
+      assert {:ok, nil} = ExecApprovalStore.fetch_pending(approval_id)
+    end
+
+    test "a run ending declines the app request and refuses a late answer", c do
+      task = ask_for_real(request(), c.ctx, c.approval_id)
+
+      pending = ExecApprovalStore.get_pending(c.approval_id)
+      assert pending.tool == "computer_use"
+      assert pending.expires_at_ms == nil
+
+      assert :ok =
+               RunStore.finalize(c.ctx.run_id, %{
+                 completed: %{ok: false, error: :aborted},
+                 prompt: "use calculator",
+                 session_key: c.ctx.session_key
+               })
+
+      assert %{action: "decline"} = Task.await(task, 2_000)
+      assert_refused(c.approval_id)
+    end
+
+    test "a session ending declines the website request and refuses a late answer", c do
+      task = ask_for_real(origin_request("https://example.com"), c.ctx, c.approval_id)
+
+      assert ExecApprovalStore.get_pending(c.approval_id).action == %{
+               "origin" => "https://example.com"
+             }
+
+      assert :ok = ExecApprovalExpiry.session_ended(c.ctx.session_id)
+
+      assert %{action: "decline"} = Task.await(task, 2_000)
+      assert_refused(c.approval_id)
+    end
+
+    test "another run's approval is unaffected", c do
+      task = ask_for_real(request(), c.ctx, c.approval_id)
+
+      assert {:ok, 0} = ExecApprovals.expire_owner({:run, c.ctx.run_id <> "_other"})
+      assert %{id: _} = ExecApprovalStore.get_pending(c.approval_id)
+
+      assert {:ok, %{outcome: :approved}} = ExecApprovals.resolve(c.approval_id, :approve_once)
+      assert %{action: "accept", content: %{}} = Task.await(task, 2_000)
+    end
+  end
 end
