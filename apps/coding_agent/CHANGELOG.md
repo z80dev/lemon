@@ -170,6 +170,10 @@
 
 ### Fixed
 
+- Interrupted LSP server-requested edits retain captured paths in `affected_paths`
+  and warn when a checkpoint's edit outcome is unknown, while preserving confirmed
+  `changed_files` and merging affected paths across batches.
+
 - Disclosure telemetry coverage isolates the initializing process and exercises
   a foreign initialization deterministically, preventing unrelated sessions from
   substituting their measurements in the once-per-initialize assertion.
