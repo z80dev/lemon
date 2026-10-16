@@ -148,6 +148,15 @@
   Ownership survives expiry-worker restarts before the first approval, including
   unregistered sessions and sessions using custom registries.
 
+- Session subscriptions start with a targeted selected-branch journal todo
+  snapshot, without emitting empty events for pristine branches or duplicate
+  events for unchanged plans. Unsupported or unreadable journal entries report
+  unavailable rather than an empty plan; recovery excludes task-child owners and
+  fails closed on ambiguity, unavailable registered-owner inspection, or
+  unreadable process receipts. Compaction still accepts directly registered
+  session owners, and context accounting retains its saved-state fallback when
+  a live session retires during the read.
+
 - Patch hunks retry whitespace and typographic-punctuation normalization only
   after an exact miss, reject ambiguous matches, and preserve original context.
 

@@ -91,14 +91,16 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
         {:tool_execution_start, "todo", "todo", %{action: "write", todos: todos}}
       )
 
-    {updates, _state} =
+    {updates, state} =
       SessionUpdates.map_event(
         state,
         {:tool_execution_end, "todo", "todo", %{content: [], details: %{todos: todos}}, false}
       )
 
-    assert [tool, plan] = Enum.map(updates, &update/1)
+    assert [tool] = Enum.map(updates, &update/1)
     assert tool["status"] == "completed"
+    {[notification], _state} = SessionUpdates.map_event(state, {:todos_changed, todos})
+    plan = update(notification)
 
     assert plan == %{
              "sessionUpdate" => "plan",
@@ -495,32 +497,21 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
       details: %{todos: [%{content: "Filtered", status: "pending"}], plan: %{entries: entries}}
     }
 
-    [_tool, notification] =
-      updates_for("session", {:tool_execution_end, "todo", "todo", result, false})
+    [tool] = updates_for("session", {:tool_execution_end, "todo", "todo", result, false})
+    assert update(tool)["sessionUpdate"] == "tool_call_update"
+    [notification] = updates_for("session", {:todos_changed, entries})
 
     assert update(notification)["entries"] == [
              %{"content" => "Urgent", "status" => "in_progress", "priority" => "high"},
              %{"content" => "Later", "status" => "pending", "priority" => "low"}
            ]
-
-    [_tool, notification] =
-      updates_for(
-        "session",
-        {:tool_execution_end, "todo", "todo", %{details: %{todos: entries}}, false}
-      )
-
-    assert hd(update(notification)["entries"])["priority"] == "high"
   end
 
   test "oversized plan entries obey the rendered collection budget" do
     entries =
       Enum.map(1..100, fn _ -> %{content: String.duplicate("x", 4_000), status: "pending"} end)
 
-    [_tool, notification] =
-      updates_for(
-        "session",
-        {:tool_execution_end, "todo", "todo", %{details: %{plan: %{entries: entries}}}, false}
-      )
+    [notification] = updates_for("session", {:todos_changed, entries})
 
     assert length(update(notification)["entries"]) < 100
     assert byte_size(Jason.encode!(update(notification)["entries"])) < 66_000

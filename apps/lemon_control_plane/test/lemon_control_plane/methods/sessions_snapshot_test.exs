@@ -1,3 +1,5 @@
+Code.require_file(Path.expand("../../../../lemon_agent/test/support/mocks.ex", __DIR__))
+
 defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
   use ExUnit.Case, async: false
 
@@ -100,11 +102,31 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
 
   test "fresh native owners recover before a finalized lifecycle index without borrowing another owner",
        c do
+    alias CodingAgent.Tools.Task.Params
+
     :ok = RunStore.delete_session_index(c.key)
     dir = Path.join(System.tmp_dir!(), "snapshot-fresh-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf!(dir) end)
     :ok = AgentRuntime.register(CodingAgent.ControlPlaneProvider)
+
+    # Force the historical direct-key lookup to encounter a delegated session.
+    # Task children share the routing key but own a distinct invocation/journal.
+    child_opts =
+      Params.build_session_opts(
+        dir,
+        [session_key: c.key, child_run_id: "child-#{c.id}"],
+        %{}
+      )
+      |> Keyword.put(:session_id, c.key)
+      |> Keyword.put(:tools, [])
+
+    child =
+      start_supervised!(
+        Supervisor.child_spec({CodingAgent.Session, child_opts}, id: :same_key_child)
+      )
+
+    child_owner = CodingAgent.Session.get_state(child).session_manager.header.id
 
     pid =
       start_supervised!(
@@ -126,10 +148,153 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
     assert result["identity"]["sessionId"] ==
              CodingAgent.Session.get_state(pid).session_manager.header.id
 
+    refute result["identity"]["sessionId"] == child_owner
+
     foreign = "agent:snapshot_foreign_#{System.unique_integer([:positive])}:main"
 
     assert {:error, {:not_found, _, _}} =
              SessionsSnapshot.handle(%{"sessionKey" => foreign, "cwd" => dir}, ctx())
+  end
+
+  @tag :tmp_dir
+  test "real task approval retains child invocation and is visible in its root snapshot", c do
+    alias CodingAgent.Session.Presentation
+    alias LemonAgent.Test.Mocks
+
+    :ok = AgentRuntime.register(CodingAgent.ControlPlaneProvider)
+    :ok = LemonCore.Bus.subscribe("exec_approvals")
+    on_exit(fn -> LemonCore.Bus.unsubscribe("exec_approvals") end)
+    File.write!(Path.join(c.tmp_dir, "child.txt"), "child-owned read")
+
+    stream =
+      Mocks.mock_stream_fn([
+        Mocks.assistant_message_with_tool_calls([
+          Mocks.tool_call("task", %{
+            "prompt" => "Read child.txt",
+            "description" => "approval child",
+            "tool_policy" => %{"allow" => ["read"], "require_approval" => ["read"]},
+            "async" => false,
+            "auto_followup" => false
+          })
+        ]),
+        Mocks.assistant_message_with_tool_calls([
+          Mocks.tool_call("read", %{"path" => "child.txt"})
+        ]),
+        Mocks.assistant_message("Child read completed"),
+        Mocks.assistant_message("Root completed")
+      ])
+
+    policy = CodingAgent.ToolPolicy.custom(allow: ["task", "read"], require_approval: ["read"])
+
+    opts =
+      Presentation.build_session_opts(
+        [tool_policy: policy, stream_fn: stream, model: Mocks.mock_model()],
+        c.tmp_dir,
+        c.id,
+        c.key,
+        LemonCore.SessionKey.agent_id(c.key)
+      )
+      |> Keyword.put(:settings_manager, %CodingAgent.SettingsManager{compaction_enabled: false})
+
+    on_exit(fn ->
+      CodingAgent.TaskStore.list(:all)
+      |> Enum.each(fn {id, task} ->
+        if task[:session_key] == c.key, do: CodingAgent.TaskStore.delete_task(id)
+      end)
+    end)
+
+    root = start_supervised!({CodingAgent.Session, opts})
+    root_owner = CodingAgent.Session.get_state(root).session_manager.header.id
+    unsubscribe = CodingAgent.Session.subscribe(root)
+    on_exit(fn -> if Process.alive?(root), do: unsubscribe.() end)
+    assert :ok = CodingAgent.Session.prompt(root, "Delegate the read")
+
+    assert_receive %LemonCore.Event{
+                     type: :approval_requested,
+                     payload: %{approval_id: approval_id, pending: pending}
+                   },
+                   5_000
+
+    assert pending.session_key == c.key
+    assert is_binary(pending.run_id)
+    refute pending.run_id == c.id
+    refute pending.session_id == root_owner
+
+    assert {:ok, result} = SessionsSnapshot.handle(params(c), ctx([:read, :approvals]))
+    assert result["identity"]["sessionId"] == root_owner
+    assert result["identity"]["runId"] == c.id
+
+    assert [%{"id" => ^approval_id, "runId" => child_run}] =
+             result["snapshot"]["approvals"]["items"]
+
+    assert child_run == pending.run_id
+
+    assert {:ok, %{approval_id: ^approval_id, outcome: :approved}} =
+             LemonCore.ExecApprovals.resolve(approval_id, :approve_once)
+
+    assert_receive {:session_event, ^root_owner, {:agent_end, messages}}, 5_000
+    answer = messages |> Enum.filter(&match?(%{role: :assistant}, &1)) |> List.last()
+    assert LemonAi.get_text(answer) == "Root completed"
+  end
+
+  @tag :tmp_dir
+  test "two live root owners are unavailable rather than choosing registration order", c do
+    alias CodingAgent.Session.Presentation
+
+    :ok = AgentRuntime.register(CodingAgent.ControlPlaneProvider)
+
+    for id <- [:first_root, :second_root] do
+      opts =
+        Presentation.build_session_opts(
+          [tools: []],
+          c.tmp_dir,
+          "#{c.id}-#{id}",
+          c.key,
+          LemonCore.SessionKey.agent_id(c.key)
+        )
+
+      start_supervised!(Supervisor.child_spec({CodingAgent.Session, opts}, id: id))
+    end
+
+    assert {:error, :unavailable} =
+             CodingAgent.ControlPlaneProvider.session_recovery_snapshot(c.key, c.tmp_dir)
+  end
+
+  test "approval recovery admits only active descendants of the selected native root", c do
+    records =
+      for {name, parent, owner, status} <- [
+            {"child", c.id, "native-owner", :running},
+            {"nested", "child-#{c.id}", "child-native", :running},
+            {"foreign", c.id, "foreign-native", :running},
+            {"unrelated", "older-root", "native-owner", :running},
+            {"finished", c.id, "native-owner", :completed}
+          ] do
+        run_id = "#{name}-#{c.id}"
+
+        task_id =
+          CodingAgent.TaskStore.new_task(%{
+            session_key: c.key,
+            parent_session_id: owner,
+            run_id: run_id,
+            parent_run_id: parent
+          })
+
+        :ok = CodingAgent.TaskStore.mark_running(task_id)
+        if status == :completed, do: CodingAgent.TaskStore.finish(task_id, "finished")
+        pending = %{approval(c, name) | run_id: run_id, session_id: "#{name}-native"}
+        :ok = ExecApprovalStore.put_pending(pending.id, pending)
+        task_id
+      end
+
+    on_exit(fn -> Enum.each(records, &CodingAgent.TaskStore.delete_task/1) end)
+    tasks = CodingAgent.TaskStore.list(:all) |> Enum.filter(fn {id, _} -> id in records end)
+    Agent.update(c.state, &%{&1 | tasks: tasks})
+    assert {:ok, result} = SessionsSnapshot.handle(params(c), ctx([:read, :approvals]))
+    assert Enum.map(result["snapshot"]["approvals"]["items"], & &1["id"]) == ["child", "nested"]
+
+    Agent.update(c.state, &%{&1 | tasks: :unavailable})
+    assert {:ok, unavailable} = SessionsSnapshot.handle(params(c), ctx([:read, :approvals]))
+    assert unavailable["snapshot"]["approvals"] == %{"status" => "unavailable"}
   end
 
   test "only read-authorized operators can collect native owner recovery", c do
@@ -909,6 +1074,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
     do: %{
       id: id,
       run_id: c.id,
+      session_id: "native-owner",
       session_key: c.key,
       agent_id: LemonCore.SessionKey.agent_id(c.key),
       tool: "bash",

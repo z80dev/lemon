@@ -37,12 +37,35 @@ defmodule CodingAgent.SessionRecoveryTest do
          ]}
       )
 
+    assert {:ok, [], todo_revision} = Session.todos(session)
+
+    assert {:ok, todos, _todo_revision} =
+             Session.write_todos(
+               session,
+               [
+                 %{
+                   "id" => "recovery-todo",
+                   "content" => "Recover journal todos",
+                   "status" => "pending",
+                   "priority" => "medium"
+                 }
+               ],
+               todo_revision
+             )
+
     before = Session.get_state(session)
     assert {:ok, snapshot} = Session.recovery_snapshot(session)
     assert snapshot.session_id == before.session_manager.header.id
     assert snapshot.branch_id == before.session_manager.leaf_id
     assert snapshot.entries == SessionManager.get_branch(before.session_manager)
     assert snapshot.streaming == false
+    assert {:ok, ^todos, _revision} = Session.todos(session)
+
+    assert Enum.any?(snapshot.entries, fn entry ->
+             entry.type == :custom and entry.custom_type == "lemon.todo" and
+               entry.data["todos"] == todos
+           end)
+
     refute Map.has_key?(snapshot, :system_prompt)
     refute Map.has_key?(snapshot, :model)
     refute Map.has_key?(snapshot, :agent)
@@ -80,37 +103,63 @@ defmodule CodingAgent.SessionRecoveryTest do
   test "process receipt reconciliation filters real store records by exact owner before projection" do
     owner = "snapshot-owner-#{System.unique_integer([:positive])}"
 
-    mine =
-      CodingAgent.ProcessStore.new_process(%{
-        owner: owner,
-        status: :lost,
-        command: "PRIVATE OWNED COMMAND",
-        env: %{"API_KEY" => "test-only-secret"}
-      })
-
-    foreign =
-      CodingAgent.ProcessStore.new_process(%{
-        owner: owner <> "-foreign",
-        status: :running,
-        command: "PRIVATE FOREIGN COMMAND"
-      })
+    mine = owner <> "-launch"
+    foreign = owner <> "-foreign-launch"
+    fingerprint = owner <> "-fingerprint"
 
     on_exit(fn ->
+      CodingAgent.ProcessStore.confirm_termination(mine, :workload_empty)
       CodingAgent.ProcessStore.delete(mine)
       CodingAgent.ProcessStore.delete(foreign)
     end)
 
-    if Code.ensure_loaded?(CodingAgent.ProcessManager) and
-         function_exported?(CodingAgent.ProcessManager, :receipt, 2) do
-      assert {:ok, [receipt]} = ControlPlaneProvider.session_process_receipts(owner)
-      assert receipt.identity == mine
-      assert receipt.status == :lost
-      assert receipt.classification == :outcome_unknown
-      refute Map.has_key?(receipt, :command)
-      refute Map.has_key?(receipt, :env)
-    else
-      # No dependency on the separate #103/#104 branch before integration.
-      assert ControlPlaneProvider.session_process_receipts(owner) == {:error, :unavailable}
-    end
+    assert :new =
+             CodingAgent.ProcessStore.register_launch(
+               mine,
+               owner,
+               fingerprint,
+               System.system_time(:millisecond) + 60_000,
+               self()
+             )
+
+    # Exercise the managed admission owner without starting an external workload.
+    assert :ok = CodingAgent.ProcessStore.claim_launch(mine, owner, fingerprint)
+
+    assert ^mine =
+             CodingAgent.ProcessStore.new_process(%{
+               id: mine,
+               owner: owner,
+               launch_fingerprint: fingerprint,
+               command: "PRIVATE OWNED COMMAND",
+               env: %{"API_KEY" => "test-only-secret"}
+             })
+
+    assert ^foreign =
+             CodingAgent.ProcessStore.new_process(%{
+               id: foreign,
+               owner: owner <> "-foreign",
+               status: :running,
+               command: "PRIVATE FOREIGN COMMAND"
+             })
+
+    assert {:ok, [receipt]} = ControlPlaneProvider.session_process_receipts(owner)
+    assert receipt.identity == mine
+    assert receipt.status == :lost
+    assert receipt.classification == :outcome_unknown
+    refute Map.has_key?(receipt, :command)
+    refute Map.has_key?(receipt, :env)
+  end
+
+  test "an unreadable lifecycle row makes process receipt recovery unavailable" do
+    owner = "snapshot-unreadable-owner-#{System.unique_integer([:positive])}"
+    id = owner <> "-launch"
+
+    # A damaged legacy row cannot supply receipt identity. Do not silently omit
+    # it or mistake an unreadable inventory for an empty process inventory.
+    CodingAgent.ProcessStore.list(:all)
+    on_exit(fn -> :ets.delete(:coding_agent_processes, id) end)
+    :ets.insert(:coding_agent_processes, {id, %{owner: owner, status: :lost}, []})
+
+    assert ControlPlaneProvider.session_process_receipts(owner) == {:error, :unavailable}
   end
 end

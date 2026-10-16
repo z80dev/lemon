@@ -15,6 +15,26 @@ defmodule CodingAgent.ControlPlaneProviderTest do
   alias CodingAgent.Tools.TodoWrite
   alias LemonAgent.Test.Mocks
 
+  defmodule DirectCompactSession do
+    use GenServer
+
+    def start_link({observer, key}) do
+      GenServer.start_link(__MODULE__, {observer, key})
+    end
+
+    @impl true
+    def init({observer, key}) do
+      {:ok, _} = Registry.register(CodingAgent.SessionRegistry, key, :test)
+      {:ok, observer}
+    end
+
+    @impl true
+    def handle_call({:compact, opts}, _from, observer) do
+      send(observer, {:direct_compact, opts})
+      {:reply, :ok, observer}
+    end
+  end
+
   defmodule BusyBackend do
     @behaviour LemonCore.Store.Backend
     def init(_), do: {:ok, %{}}
@@ -79,6 +99,18 @@ defmodule CodingAgent.ControlPlaneProviderTest do
                {:error, :session_not_found}
     end
 
+    test "compact_session accepts a direct registration without the native state protocol" do
+      key = "direct-compact-#{LemonCore.Id.uuid()}"
+      start_supervised!({DirectCompactSession, {self(), key}})
+      opts = [force: true, summary: "Preserve the decision"]
+
+      assert :ok = ControlPlaneProvider.compact_session(key, opts)
+      assert_received {:direct_compact, ^opts}
+
+      assert {:error, :session_not_found} =
+               ControlPlaneProvider.session_recovery_snapshot(key, nil)
+    end
+
     test "todo_progress reports unavailable for an unknown session" do
       assert ControlPlaneProvider.todo_progress("no-such-session-#{System.unique_integer()}") ==
                nil
@@ -134,6 +166,109 @@ defmodule CodingAgent.ControlPlaneProviderTest do
       end)
 
       %{cwd: cwd, source: source_key, destination: destination_key, session: session, path: path}
+    end
+
+    test "a task child sharing the direct routing key cannot replace the durable root", context do
+      alias CodingAgent.Tools.Task.Params
+
+      opts =
+        Params.build_session_opts(
+          context.cwd,
+          [session_key: context.source, child_run_id: "child-#{LemonCore.Id.uuid()}"],
+          %{}
+        )
+        |> Keyword.put(:session_id, context.source)
+        |> Keyword.put(:tools, [])
+
+      child = start_supervised!({CodingAgent.Session, opts})
+      child_owner = CodingAgent.Session.get_state(child).session_manager.header.id
+
+      assert {:ok, snapshot} =
+               ControlPlaneProvider.session_recovery_snapshot(context.source, context.cwd)
+
+      assert snapshot.session_id == context.session.header.id
+      refute snapshot.session_id == child_owner
+    end
+
+    for root_count <- [1, 2] do
+      @tag timeout: 20_000
+      test "recovery fails closed with an unresponsive owner among #{root_count} roots",
+           context do
+        roots =
+          for index <- 1..unquote(root_count) do
+            opts = [
+              cwd: context.cwd,
+              workspace_dir: Path.join(context.cwd, "workspace-#{index}"),
+              session_key: context.source,
+              register: true,
+              model: Mocks.mock_model(),
+              tools: []
+            ]
+
+            start_supervised!(Supervisor.child_spec({CodingAgent.Session, opts}, id: index))
+          end
+
+        blocked = hd(roots)
+        :ok = :sys.suspend(blocked)
+
+        try do
+          assert {:error, :unavailable} =
+                   ControlPlaneProvider.session_recovery_snapshot(context.source, context.cwd)
+        after
+          :ok = :sys.resume(blocked)
+        end
+      end
+    end
+
+    test "compaction rejects ambiguous roots instead of opening the durable owner", context do
+      for index <- 1..2 do
+        opts = [
+          cwd: context.cwd,
+          workspace_dir: Path.join(context.cwd, "workspace-#{index}"),
+          session_key: context.source,
+          register: true,
+          model: Mocks.mock_model(),
+          tools: []
+        ]
+
+        start_supervised!(Supervisor.child_spec({CodingAgent.Session, opts}, id: index))
+      end
+
+      assert {:error, :unavailable} =
+               ControlPlaneProvider.compact_session(context.source, cwd: context.cwd)
+
+      assert {:error, :unavailable} =
+               ControlPlaneProvider.session_recovery_snapshot(context.source, context.cwd)
+    end
+
+    @tag timeout: 20_000
+    test "compaction cannot bypass an unavailable native owner through a direct registration",
+         context do
+      start_supervised!({DirectCompactSession, {self(), context.source}})
+
+      root =
+        start_supervised!(
+          {CodingAgent.Session,
+           [
+             cwd: context.cwd,
+             workspace_dir: Path.join(context.cwd, "workspace"),
+             session_key: context.source,
+             register: true,
+             model: Mocks.mock_model(),
+             tools: []
+           ]}
+        )
+
+      :ok = :sys.suspend(root)
+
+      try do
+        assert {:error, :unavailable} =
+                 ControlPlaneProvider.compact_session(context.source, cwd: context.cwd)
+
+        refute_received {:direct_compact, _}
+      after
+        :ok = :sys.resume(root)
+      end
     end
 
     test "fork creates a distinct resume token and replays independent history", context do

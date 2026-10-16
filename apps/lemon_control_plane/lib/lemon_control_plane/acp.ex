@@ -822,9 +822,6 @@ defmodule LemonControlPlane.ACP do
         emit(session_id, %{"sessionUpdate" => "plan", "entries" => []}, opts)
 
       _ ->
-        # A failed read cannot retain a plan from a previously selected branch.
-        emit(session_id, %{"sessionUpdate" => "plan", "entries" => []}, opts)
-
         emit(
           session_id,
           %{
@@ -842,8 +839,7 @@ defmodule LemonControlPlane.ACP do
       {:ok, entries} ->
         state =
           LemonControlPlane.ACP.SessionUpdates.new(session_id,
-            cwd: session.cwd,
-            plan_from_tools: false
+            cwd: session.cwd
           )
 
         entries

@@ -167,7 +167,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
     messages = rows |> Enum.take(-limit) |> Enum.map(&snapshot_row/1)
     {messages, messages_cut} = fit(messages, 40_960, true)
     {actions, actions_cut} = actions |> Enum.map(&snapshot_row/1) |> fit(16_384, false)
-    approvals = approvals(key, run_id, ctx)
+    approvals = approvals(key, run_id, native.session_id, ctx)
     children = children(key, native.session_id)
     processes = processes(native.session_id)
     todos = todos(key, native.cwd)
@@ -435,18 +435,21 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
     end)
   end
 
-  defp approvals(key, run_id, %{auth: auth}) do
+  defp approvals(key, run_id, owner, %{auth: auth}) do
     if Authorize.authorize(auth, "exec.approvals.get", [:approvals]) == :ok do
       read(fn ->
         now = LemonCore.Clock.now_ms()
         {:ok, pending} = ExecApprovalStore.fetch_pending_list()
+        runs = approval_runs(key, run_id, owner)
 
         items =
           pending
           |> Enum.filter(fn {_id, p} ->
             expiry = field(p, :expires_at_ms)
 
-            field(p, :session_key) == key and field(p, :run_id) == run_id and
+            field(p, :session_key) == key and
+              MapSet.member?(runs, field(p, :run_id)) and
+              (field(p, :run_id) != run_id or field(p, :session_id) == owner) and
               (is_nil(expiry) or (is_integer(expiry) and expiry > now))
           end)
           |> Enum.sort_by(&elem(&1, 0))
@@ -465,6 +468,51 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
     else
       %{"status" => "forbidden"}
     end
+  end
+
+  defp approval_runs(key, run_id, owner) when is_binary(run_id) and run_id != "" do
+    case AgentRuntime.call(:list_tasks, [], :unavailable) do
+      tasks when is_list(tasks) ->
+        tasks =
+          Enum.filter(tasks, fn {_id, task} ->
+            field(task, :session_key) == key and is_binary(field(task, :run_id))
+          end)
+
+        lineage = task_lineage(tasks, MapSet.new([run_id]), run_id, owner)
+
+        Enum.reduce(tasks, MapSet.new([run_id]), fn {_id, task}, runs ->
+          id = field(task, :run_id)
+
+          if MapSet.member?(lineage, id) and field(task, :status) in [:queued, :running] do
+            MapSet.put(runs, id)
+          else
+            runs
+          end
+        end)
+
+      _ ->
+        raise "task lineage unavailable"
+    end
+  end
+
+  defp approval_runs(_key, _run_id, _owner), do: MapSet.new()
+
+  defp task_lineage(tasks, runs, root_run, owner) do
+    expanded =
+      Enum.reduce(tasks, runs, fn {_id, task}, acc ->
+        parent = field(task, :parent_run_id)
+
+        if MapSet.member?(runs, parent) and
+             (parent != root_run or field(task, :parent_session_id) == owner) do
+          MapSet.put(acc, field(task, :run_id))
+        else
+          acc
+        end
+      end)
+
+    if MapSet.equal?(expanded, runs),
+      do: runs,
+      else: task_lineage(tasks, expanded, root_run, owner)
   end
 
   defp children(key, owner) do
