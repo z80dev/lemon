@@ -70,12 +70,29 @@ jobs:
       wasm: ${{ github.event_name != 'pull_request' || steps.select.outputs.wasm == 'true' }}
 
     steps:
-      - name: Checkout with history
-        if: github.event_name == 'pull_request'
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           filter: blob:none
+
+      - name: Record tested checkout identity
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, subprocess
+          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          print("FACTORY_CI_IDENTITY=" + json.dumps({
+              "tested_sha": tested,
+              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
+              "base_sha": os.environ["PR_BASE_SHA"] or tested,
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+          }))
+          PY
 
       - name: Select affected apps and lanes
         if: github.event_name == 'pull_request'
@@ -110,11 +127,32 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
           filter: blob:none
+
+      - name: Record tested checkout identity
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, subprocess
+          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          print("FACTORY_CI_IDENTITY=" + json.dumps({
+              "tested_sha": tested,
+              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
+              "base_sha": os.environ["PR_BASE_SHA"] or tested,
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+          }))
+          PY
+
+      - name: Test CI checkout identity contract
+        run: python3 scripts/test_ci_checkout_identity.py
 
       - name: BEAM setup
         id: beam
@@ -152,8 +190,26 @@ jobs:
         partition: ${{ fromJSON(needs.changes.outputs.matrix) }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Record tested checkout identity
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, subprocess
+          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          print("FACTORY_CI_IDENTITY=" + json.dumps({
+              "tested_sha": tested,
+              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
+              "base_sha": os.environ["PR_BASE_SHA"] or tested,
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+          }))
+          PY
 
       - name: BEAM setup
         uses: ./.github/actions/beam-setup
@@ -179,8 +235,26 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Record tested checkout identity
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, subprocess
+          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          print("FACTORY_CI_IDENTITY=" + json.dumps({
+              "tested_sha": tested,
+              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
+              "base_sha": os.environ["PR_BASE_SHA"] or tested,
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+          }))
+          PY
 
       - name: BEAM setup
         id: beam
@@ -241,8 +315,26 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Record tested checkout identity
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, subprocess
+          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          print("FACTORY_CI_IDENTITY=" + json.dumps({
+              "tested_sha": tested,
+              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
+              "base_sha": os.environ["PR_BASE_SHA"] or tested,
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+          }))
+          PY
 
       - name: BEAM setup
         uses: ./.github/actions/beam-setup
@@ -274,8 +366,26 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Record tested checkout identity
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, subprocess
+          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          print("FACTORY_CI_IDENTITY=" + json.dumps({
+              "tested_sha": tested,
+              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
+              "base_sha": os.environ["PR_BASE_SHA"] or tested,
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+          }))
+          PY
 
       - name: BEAM setup
         id: beam
@@ -304,8 +414,26 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Record tested checkout identity
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, subprocess
+          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          print("FACTORY_CI_IDENTITY=" + json.dumps({
+              "tested_sha": tested,
+              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
+              "base_sha": os.environ["PR_BASE_SHA"] or tested,
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+          }))
+          PY
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -337,8 +465,26 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Record tested checkout identity
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, subprocess
+          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          print("FACTORY_CI_IDENTITY=" + json.dumps({
+              "tested_sha": tested,
+              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
+              "base_sha": os.environ["PR_BASE_SHA"] or tested,
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+          }))
+          PY
 
       - name: BEAM setup
         uses: ./.github/actions/beam-setup
@@ -379,11 +525,29 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Checkout PR head with full history
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Record tested checkout identity
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, subprocess
+          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          print("FACTORY_CI_IDENTITY=" + json.dumps({
+              "tested_sha": tested,
+              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
+              "base_sha": os.environ["PR_BASE_SHA"] or tested,
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+          }))
+          PY
 
       - name: Fetch base branch
         run: git fetch --no-tags origin "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
@@ -417,6 +581,28 @@ jobs:
       issues: write
 
     steps:
+      # The required summary check must attest even when optional lanes skip.
+      - uses: actions/checkout@v4
+
+      - name: Record tested checkout identity
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, subprocess
+          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          print("FACTORY_CI_IDENTITY=" + json.dumps({
+              "tested_sha": tested,
+              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
+              "base_sha": os.environ["PR_BASE_SHA"] or tested,
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+          }))
+          PY
+
       - name: Classify job results
         id: status
         env:
@@ -431,13 +617,6 @@ jobs:
             esac
           done
           echo "status=$status" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout report script
-        if: steps.status.outputs.status == 'failure' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: scripts/ci_failure_report
-          sparse-checkout-cone-mode: false
 
       - name: Summarize failures
         if: steps.status.outputs.status == 'failure' && contains(needs.*.result, 'failure')

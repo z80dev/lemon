@@ -10,6 +10,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- CI records isolated checkout identities before repository code runs, including
+  the required `CI result` summary, so factory integration can verify exact runs.
 - Lemon Bot iPhone pairing verifies the advertised backend and workspace before
   connecting, shows device/code/expiry while waiting for desktop approval, and
   restores saved sessions read-only without replaying sends or approvals.
