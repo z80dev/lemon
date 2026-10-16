@@ -168,7 +168,10 @@ defmodule LemonControlPlane.Methods.SystemLifecycleTest do
       sleep 0.05
       attempt=$((attempt + 1))
     done
-    printf '%s\\n' "$@" "$LEMON_CONTROL_PLANE_PORT" "$LEMON_WEB_PORT" "$LEMON_SIM_UI_PORT" > "$LB_OUTPUT_FILE"
+    # Publish atomically: a plain `>` redirect creates the file before printf writes it,
+    # so the test could observe an existing-but-empty output file.
+    printf '%s\\n' "$@" "$LEMON_CONTROL_PLANE_PORT" "$LEMON_WEB_PORT" "$LEMON_SIM_UI_PORT" > "$LB_OUTPUT_FILE.tmp"
+    mv "$LB_OUTPUT_FILE.tmp" "$LB_OUTPUT_FILE"
     echo launcher-output
     """)
 
