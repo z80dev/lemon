@@ -27,6 +27,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import compat
+from integrator import Integrator
 import omp_adapter
 import project as projects
 from store import ATTEMPT_LIVE, AdmissionRefused, FactoryError, Invalid, Ledger, RevisionConflict
@@ -40,7 +41,8 @@ GRACEFUL_EXIT_S = 20.0
 COORDINATOR_ACTOR = "coordinator"
 # Events produced by the coordinator itself or by the supervisor's own bookkeeping
 # never wake the coordinator; everything else in the ledger is potentially actionable.
-QUIET_EVENT_PREFIXES = ("runtime.", "attempt.reserved")
+# Integration progress is visible in the ledger; the transitions it causes (repairs, blocks) still wake.
+QUIET_EVENT_PREFIXES = ("runtime.", "attempt.reserved", "integration.")
 
 
 class Blocked(FactoryError):
@@ -175,6 +177,38 @@ def start(project: projects.Project, *, actor: str, wait: float) -> dict[str, An
     return {"ok": state["state"] in ("running", "paused"), "attached": False, "runtime": state}
 
 
+RESTART_BACKOFF_FAILURES = 3
+RESTART_BACKOFF_WINDOW_S = 3600
+
+
+def ensure(project: projects.Project, *, actor: str, wait: float) -> dict[str, Any]:
+    """Watchdog entry point: restart a factory that should be running but is not.
+
+    An operator `stop` (desired mode stopped) is always respected, and repeated
+    failures back off instead of paying for a startup turn every few minutes.
+    """
+    ledger = project.ledger()
+    state = health(project, ledger)
+    desired = state["desired_mode"]
+    if state["state"] != "stopped":
+        return {"ok": True, "action": "none", "runtime": state}
+    if desired in ("stopped", "draining"):
+        if desired == "draining":
+            ledger.request_mode("stopped", actor=actor)  # the drain finished when the supervisor exited
+        return {"ok": True, "action": "none: stopped by the operator", "runtime": state}
+    with ledger.read() as conn:
+        failures = conn.execute(
+            "SELECT COUNT(*) FROM events WHERE project_id = ? AND type = 'runtime.failed' AND created_at > ?",
+            (project.id, time.time() - RESTART_BACKOFF_WINDOW_S),
+        ).fetchone()[0]
+    if failures >= RESTART_BACKOFF_FAILURES:
+        return {"ok": False, "action": f"backing off: {failures} failures in the last hour", "runtime": state}
+    result = start(project, actor=actor, wait=wait)
+    if desired == "paused":
+        ledger.request_mode("paused", actor=actor)
+    return {**result, "action": "restarted"}
+
+
 def request_mode(project: projects.Project, mode: str, *, actor: str) -> dict[str, Any]:
     ledger = project.ledger()
     if health(project, ledger)["state"] == "stopped":
@@ -300,6 +334,9 @@ class Supervisor:
         self.wake_pending = False
         self.busy = threading.Event()
         self.policy: dict[str, Any] = {}
+        self.integrator: Integrator | None = None
+        self.last_integration = 0.0
+        self.last_refresh = time.time()
 
     # lifecycle ---------------------------------------------------------------------
 
@@ -353,6 +390,7 @@ class Supervisor:
     def _prepare(self) -> None:
         self._set("recovering", "runtime.recovering", phase="validating")
         self.policy = load_policy(self.project)
+        self.integrator = Integrator(self.project, self.ledger, self.policy)
         version = release_version()
         if version.startswith("unreleased:") and not self.policy.get("allow_unreleased", False):
             raise Blocked(f"supervisor is running from an unreleased tree ({version}); run `factory install`")
@@ -569,6 +607,8 @@ class Supervisor:
                     if events:
                         self._deliver(self._wake_message(events, last))
                     self.delivered_through = last
+                self._periodic()
+                runtime = self.ledger.runtime()
             now = time.time()
             if now - last_beat >= HEARTBEAT_S:
                 self.ledger.update_runtime(heartbeat_at=now, detail={**runtime["detail"], "retrying": self.retrying,
@@ -579,6 +619,44 @@ class Supervisor:
     def _quiescent(self) -> bool:
         state = self.client.request_raw("get_state")
         return bool(state.get("isSettled")) and not self.ledger.list_attempts(ATTEMPT_LIVE)
+
+    def _periodic(self) -> None:
+        """Slow loops: CI/merge integration and opportunistic base refresh. Paused/draining skip both."""
+        now = time.time()
+        if now - self.last_integration >= self.policy.get("integration_interval_s", 60):
+            self.last_integration = now
+            for action in self.integrator.tick():
+                print(f"{time.ctime()} integrate: {action}", flush=True)
+        if now - self.last_refresh >= self.policy.get("base_refresh_interval_s", 900):
+            self.last_refresh = now
+            self._refresh_base()
+
+    def _refresh_base(self) -> None:
+        """Move the coordinator checkout to the newest base while no worker could be cloning it."""
+        if self.busy.is_set():
+            return
+        source = self.project.primary_checkout
+        remote = self.project.base_ref.split("/", 1)[0]
+        try:
+            self._git("fetch", "--quiet", remote, cwd=source, timeout=120)
+        except (Blocked, subprocess.TimeoutExpired):
+            return
+        target = self._git("rev-parse", self.project.base_ref)
+        if target == self.base_sha:
+            return
+        self._set("running", refreshing=True)  # reserve_attempt refuses from here on
+        try:
+            if self.ledger.list_attempts(ATTEMPT_LIVE):
+                return
+            self._git("checkout", "--quiet", "--detach", self.project.base_ref)
+            self._setup_checkout(self.project.checkout_dir, source)
+            self.base_sha = self._git("rev-parse", "HEAD")
+            print(f"{time.ctime()} refreshed coordinator base to {self.base_sha[:12]}", flush=True)
+        except (Blocked, subprocess.SubprocessError) as exc:
+            print(f"{time.ctime()} base refresh failed, staying on {self.base_sha[:12]}: {exc}", flush=True)
+            self._git("checkout", "--quiet", "--detach", self.base_sha)
+        finally:
+            self._set("running", refreshing=False, base_sha=self.base_sha)
 
     # shutdown ----------------------------------------------------------------------
 

@@ -159,7 +159,7 @@ class AdmissionTest(unittest.TestCase):
         self.epoch = self.ledger.begin_epoch(1)
         self.ledger.request_mode("running", actor="test")
         self.ledger.update_runtime(mode="running")
-        (self.home.state_dir / "policy.json").write_text('{"implementation_slots": 1}')
+        (self.home.state_dir / "policy.json").write_text('{"implementation_slots": 1, "review_slots": 1}')
         self.home.cli("add", "dep")
         self.home.cli("add", "work")
         for tid in ("F-0001", "F-0002"):
@@ -209,6 +209,40 @@ class AdmissionTest(unittest.TestCase):
         replay = self.home.cli("reserve", "F-0001", "--expected-revision", str(first["attempt"]["task_revision"]),
                                "--epoch", str(self.epoch), "--request-key", "dispatch-1")[1]
         self.assertEqual(replay["attempt"]["id"], first["attempt"]["id"])
+
+    def test_review_needs_ready_and_keeps_the_task_ready(self) -> None:
+        code, payload = self.reserve("F-0001")
+        attempt = payload["attempt"]["id"]
+        self.home.cli("attempt", attempt, "--status", "succeeded", "--epoch", str(self.epoch), "--head-sha", "abc")
+        rev = self.ledger.get_task("F-0001")["revision"]
+        self.home.cli("transition", "F-0001", "ready", "--expected-revision", str(rev), "--reason", "handoff")
+        code, review = self.home.cli("reserve", "F-0001", "--expected-revision", str(rev + 1), "--stage", "review",
+                                     "--epoch", str(self.epoch), check=False)
+        self.assertEqual(code, 0, review)
+        self.assertEqual(self.ledger.get_task("F-0001")["status"], "ready")
+        code, payload = self.reserve("F-0002")  # implement capacity is counted separately from reviews
+        self.assertEqual(code, 0, payload)
+
+    def test_ready_backlog_and_daily_budget_stop_new_implementations(self) -> None:
+        policy = self.home.state_dir / "policy.json"
+        policy.write_text('{"implementation_slots": 5, "max_ready_backlog": 1, "max_attempts_per_day": 1}')
+        code, payload = self.reserve("F-0002")
+        self.assertEqual(code, 0, payload)
+        code, payload = self.reserve("F-0001")
+        self.assertIn("policy allows 1", payload["message"])  # daily budget
+        policy.write_text('{"implementation_slots": 5, "max_ready_backlog": 0}')
+        code, payload = self.reserve("F-0001")
+        self.assertIn("await review/integration", payload["message"])
+
+    def test_ensure_respects_operator_stop_and_backs_off_repeated_failures(self) -> None:
+        self.ledger.request_mode("stopped", actor="operator")
+        _, respected = self.home.cli("ensure")
+        self.assertEqual(respected["action"], "none: stopped by the operator")
+        self.ledger.request_mode("running", actor="operator")
+        for _ in range(3):
+            self.ledger.update_runtime(event="runtime.failed")
+        _, backing = self.home.cli("ensure", check=False)
+        self.assertIn("backing off", backing["action"])
 
     def test_checkpoint_is_monotonic_and_bounded_by_the_log(self) -> None:
         last = self.ledger.last_event_seq()

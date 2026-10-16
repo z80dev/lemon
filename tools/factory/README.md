@@ -71,6 +71,34 @@ from another machine, run that over SSH. Never share the SQLite file across host
   kills immediately and marks in-flight attempts `orphaned` with tasks `blocked`.
 - Closing a console never affects the coordinator; the supervisor is a separate session.
 
+## Pipeline
+
+```text
+inbox ─triage→ queued ─implement/repair worker→ ready ─reviewer→ verifying ─integrator→ awaiting_merge → landed_pending_confirmation → done
+                 ↑                                     │ changes requested         │ CI failure / conflict (bounded repairs)
+                 └─────────────────────────────────────┴───────────────────────────┘
+```
+
+- The coordinator reviews every READY task with OMP's read-only `reviewer` agent
+  (strict review schema); blocker/major findings send it back as a repair.
+- With policy `merge_policy: "auto-verified"` the supervisor's deterministic
+  integrator (`integrator.py`) takes `verifying` tasks: cherry-picks the retained
+  worker commit onto current `origin/main` (kept under `refs/factory/<task>/<attempt>`),
+  force-pushes the factory-owned `factory/<task>` branch, opens or updates the PR,
+  waits for the `CI` workflow run on that exact head, merges with
+  `--match-head-commit`, then waits for main's CI on the actual merge commit before
+  marking the task done. CI failures (log tail stored as untrusted data under
+  `artifacts/ci/`) and conflicts become repairs, up to `max_repair_attempts`, then
+  `blocked`. A red main after merge blocks the task and opens one urgent triage
+  task. No admin merges, reruns, or pushes to `main`. `manual` disables all of it.
+- Admission also enforces `max_ready_backlog` (tasks awaiting review/integration),
+  `max_attempts_per_day`, per-stage slots, and refuses while the supervisor moves
+  an idle coordinator checkout to the newest base (`base_refresh_interval_s`).
+- `factory ensure` restarts a factory that should be running (it respects an
+  operator `stop` and backs off after three failures in an hour).
+  `factory autostart` installs a launchd agent running `ensure` at login and every
+  five minutes from the installed `current` release; `--disable` removes it.
+
 ## Guarantees and limits
 
 - Single host, single user, cooperative trusted-owner threat model. Worktrees and
@@ -89,11 +117,11 @@ from another machine, run that over SSH. Never share the SQLite file across host
   their branches) and never touches other sessions' workspaces.
 - OMP's strict output schema coerces scalars; handoffs are validated against the
   actual branch diff, not trusted as evidence.
-- Integration, releases, CI policy, GitHub settings, and paid benchmarks stay
-  manual. READY is a retained handoff, not certification.
-- Not yet built (seeded as P04–P08): stable `factory/<task>/<attempt>` refs and
-  check-runner receipts, review records, parallel slots beyond one, CI observation,
-  issue import, and integration policy.
+- Releases, CI policy, GitHub settings, and paid benchmarks stay manual; workers and
+  the coordinator never push or open PRs.
+- Not yet built: check-runner receipts bound to source identity, inherited-failure
+  attribution beyond a triage task, GitHub issue import, and measured optimization
+  (remaining scope of seeded P04–P08).
 
 ## Tests
 

@@ -234,6 +234,21 @@ class SupervisorTest(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertIn("modified tracked or unignored files", payload["runtime"]["detail"]["message"])
 
+    def test_idle_coordinator_checkout_follows_new_main(self) -> None:
+        git(self.home.repo, "remote", "set-url", "origin", str(self.home.origin))
+        self.set_policy(base_refresh_interval_s=1)
+        first = self.start()["runtime"]["detail"]["base_sha"]
+        (self.home.repo / "next.txt").write_text("next\n")
+        git(self.home.repo, "add", "next.txt")
+        git(self.home.repo, "commit", "-q", "-m", "next")
+        git(self.home.repo, "push", "-q", "origin", "HEAD:main")
+        new = git(self.home.repo, "rev-parse", "HEAD")
+        wait_for(lambda: self.status()["runtime"]["detail"]["base_sha"] == new, timeout=60)
+        checkout = self.home.state_dir / "checkout"
+        self.assertEqual(git(checkout, "rev-parse", "HEAD"), new)
+        self.assertNotEqual(first, new)
+        self.assertFalse(self.status()["runtime"]["detail"]["refreshing"])
+
     def test_user_checkout_edits_are_never_touched(self) -> None:
         edit = self.home.repo / "README.md"
         edit.write_text("user's uncommitted edit\n")

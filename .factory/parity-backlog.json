@@ -1,0 +1,134 @@
+{
+  "source": {
+    "kind": "plan_section",
+    "document": "docs/parity-shipping-plan.md",
+    "revision": "2026-10-15 late, reconciled with GitHub on 2026-10-16",
+    "approved_sections": ["Unfinished at pause: not started, buildable", "Known residue", "Needs a user decision"]
+  },
+  "packets": [
+    {
+      "key": "backup-restore-safety",
+      "title": "Consistent SQLite backups that refuse to restore into a running daemon",
+      "priority": "high",
+      "request": "Backups of Lemon's SQLite state must be consistent (SQLite online backup, safe with WAL) and restore must refuse to run while a Lemon daemon is using the target state, with a clear error. Follow docs/user-guide/backups.md and the existing backup/restore implementation; verify the whole bundle before mutation as AGENTS.md requires.",
+      "acceptance": [
+        "A backup taken while the daemon writes is internally consistent (integrity check passes on the copy).",
+        "Restore refuses with an actionable error while a daemon is running against the target, and changes nothing.",
+        "Focused tests cover both behaviors; docs and changelog updated."
+      ]
+    },
+    {
+      "key": "live-allowlist-reload",
+      "title": "Live allowlist reload so approved pairing codes take effect without restart",
+      "priority": "normal",
+      "request": "When a pairing code is approved, the channel allowlist must take effect immediately without restarting the gateway or daemon.",
+      "acceptance": [
+        "Approving a pairing code lets that sender through on the next inbound message without a restart.",
+        "Revocation also takes effect live.",
+        "A focused test exercises approve-then-message without restart."
+      ]
+    },
+    {
+      "key": "tui-session-cost",
+      "title": "Cumulative session cost in the TUI status bar",
+      "priority": "normal",
+      "request": "Show the cumulative cost of the current session in the TUI status bar. Unknown cost must display as unknown, never as zero.",
+      "acceptance": [
+        "The status bar shows cumulative session cost that updates after each run.",
+        "Sessions with missing cost data show unknown, not $0.00.",
+        "TUI tests cover both cases."
+      ]
+    },
+    {
+      "key": "doctor-live-non-default",
+      "title": "`lemon doctor --live` for non-default providers",
+      "priority": "normal",
+      "request": "Extend `lemon doctor --live` so it can verify configured non-default providers, not only the default one, with bounded minimal requests.",
+      "acceptance": [
+        "doctor --live can check each configured provider (or a named one) and reports per-provider results.",
+        "Live checks remain opt-in and bounded; offline doctor is unchanged.",
+        "Tests cover provider selection without network access."
+      ]
+    },
+    {
+      "key": "telegram-bot-link",
+      "title": "Telegram t.me/<bot> link in gateway setup",
+      "priority": "low",
+      "request": "During gateway setup, after a Telegram bot token is validated, show the t.me/<bot_username> link so the user can open the bot directly.",
+      "acceptance": [
+        "Setup prints the t.me link derived from the validated bot username.",
+        "No link is shown when validation fails.",
+        "A focused test covers the output."
+      ]
+    },
+    {
+      "key": "pet-desktop-testability",
+      "title": "Make the desktop pet's real-desktop behaviour testable",
+      "priority": "low",
+      "request": "The Lemon Bot desktop pet's real-desktop behaviour (click-through, drag, click-to-open, live run events) is untested. Add tests for the behaviour that can be exercised without a GUI and record what still needs a manual pass.",
+      "acceptance": [
+        "Logic behind click-through, drag, click-to-open and live run events is covered by automated tests where possible.",
+        "Remaining GUI-only behaviour is listed with a manual verification checklist."
+      ]
+    },
+    {
+      "key": "flake-transport-cancel",
+      "title": "Investigate premerge failure in telegram transport_cancel_test.exs:838",
+      "priority": "high",
+      "request": "apps/lemon_channels/test/lemon_channels/adapters/telegram/transport_cancel_test.exs:838 was seen failing in some premerge runs and dismissed as a macOS/environment issue; the CI work (#378-#386) may have fixed it. Reproduce with repeated seeds, find the real cause, and fix the test or code. Do not delete assurance or replace behavior checks with mocks.",
+      "acceptance": [
+        "The failure is reproduced (or shown not to reproduce across at least 50 seeds) with the cause explained.",
+        "If real, the race or ordering bug is fixed and the test passes repeatedly."
+      ]
+    },
+    {
+      "key": "flake-system-lifecycle",
+      "title": "Investigate premerge failure in control plane system_lifecycle_test.exs:157",
+      "priority": "high",
+      "request": "apps/lemon_control_plane/test/lemon_control_plane/methods/system_lifecycle_test.exs:157 was seen failing in some premerge runs and dismissed as environmental. Commit 70856368f (timing regressions follow real lifecycle state) may have fixed it. Reproduce with repeated seeds, find the cause, and fix it without weakening the test.",
+      "acceptance": [
+        "The failure is reproduced (or shown not to reproduce across at least 50 seeds) with the cause explained.",
+        "If real, the cause is fixed and the test passes repeatedly."
+      ]
+    },
+    {"key": "decide-approval-expiry", "title": "Decision: orphaned-approval expiry", "priority": "normal", "status": "needs_input",
+     "request": "Orphaned approvals (approval requests whose run or session is gone) need an expiry policy.",
+     "reason": "Product decision needed: how long do orphaned approvals live, and what does the user see when one expires?"},
+    {"key": "decide-outbox-duplicates", "title": "Decision: outbox duplicate-delivery policy", "priority": "normal", "status": "needs_input",
+     "request": "The durable delivery outbox needs a duplicate-delivery policy for retries after an unknown outcome.",
+     "reason": "Product decision needed: prefer at-least-once delivery (possible duplicates) or at-most-once (possible loss) per channel?"},
+    {"key": "decide-eval-tool-bridge", "title": "Decision: eval tool bridge (needs security review)", "priority": "low", "status": "needs_input",
+     "request": "Expose Lemon tools to the eval runtime through a bridge.",
+     "reason": "Needs a security review and a decision on which tools may be bridged and under what policy."},
+    {"key": "decide-tui-history", "title": "Decision: TUI prompt-history persistence", "priority": "low", "status": "needs_input",
+     "request": "Persist TUI prompt history across sessions.",
+     "reason": "Privacy decision needed: persist by default, opt-in, or never; where is it stored and how is it cleared?"},
+    {"key": "decide-semantic-find", "title": "Decision: semantic `find` tool", "priority": "low", "status": "needs_input",
+     "request": "Add a semantic find tool that maps behavior descriptions to code locations.",
+     "reason": "Costs model calls per use: approve the spend model and default (on/off)?"},
+    {"key": "decide-persistent-shell", "title": "Decision: persistent shell state", "priority": "low", "status": "needs_input",
+     "request": "Keep shell state (cwd, env) between bash tool calls.",
+     "reason": "Decision needed on semantics and safety defaults for persistent shell state."},
+    {"key": "decide-git-guard-defaults", "title": "Decision: git guard and seen-line edit defaults", "priority": "low", "status": "needs_input",
+     "request": "Choose defaults for the git guard and seen-line edit protections.",
+     "reason": "Decision needed: which defaults (on/off, strictness) should ship?"},
+    {"key": "decide-mac-one-click", "title": "Decision: Mac one-click start when the backend is down", "priority": "low", "status": "needs_input",
+     "request": "Let the Mac app start the backend with one click when it is down.",
+     "reason": "Product decision needed on the UX and whether the app may launch the daemon itself."},
+    {"key": "decide-global-cron-pause", "title": "Decision: global cron pause", "priority": "low", "status": "needs_input",
+     "request": "Add a global pause for all cron jobs.",
+     "reason": "Decision needed: scope (all jobs vs per profile), persistence across restarts, and catch-up behavior on resume."},
+    {"key": "decide-auto-routing", "title": "Decision: automatic model routing", "priority": "low", "status": "needs_input",
+     "request": "Route requests to models automatically.",
+     "reason": "Product decision needed on routing policy, cost limits and user control."},
+    {"key": "decide-voice-replies", "title": "Decision: voice replies", "priority": "low", "status": "needs_input",
+     "request": "Reply with voice messages on channels that support them.",
+     "reason": "Product decision needed on when to reply with voice, providers and cost."},
+    {"key": "paid-107-experiment", "title": "#107 paired disclosure trials (paid)", "priority": "low", "status": "blocked",
+     "request": "Run repeated paired disclosure trials and record a default-rollout decision (issue #107).",
+     "reason": "Paid provider experiment: unauthorized. Needs separate approval of the exact bounded run and spend plan with an externally enforced provider cap."},
+    {"key": "preserved-worktree-corrections", "title": "Port preserved private corrections from local worktrees", "priority": "normal", "status": "blocked",
+     "request": "Remaining parity acceptance work lives as staged or uncommitted changes in local worktrees (fix-preset-native-discovery, fix-auth-store-truth, parity-resilience, verify-lifecycle-recovery-joint, fix-opus-native-termination, fix-opus-tool-receipts, fix-cli-verification-credentials, fix-paired-native-cleanup): cancellation and fresh resource ownership, host-local cancellation without sibling/run abort, root-owner snapshots with child approvals, validator delivery identity, fenced-loop failure terminals, Session-wire credential refusal, paired-runner cleanup.",
+     "reason": "That work is uncommitted local state the factory cannot see from origin/main. Commit each worktree's change to a pushed branch (or describe it) and split it into tasks; then unblock."}
+  ]
+}

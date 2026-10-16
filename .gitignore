@@ -99,6 +99,7 @@ tools/diagrams/output/
 !.factory/charter.md
 !.factory/policy.example.json
 !.factory/seed-work.json
+!.factory/parity-backlog.json
 .agents/
 .pi/
 skills-lock.json
