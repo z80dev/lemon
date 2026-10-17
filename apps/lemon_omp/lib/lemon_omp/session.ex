@@ -1001,33 +1001,45 @@ defmodule LemonOmp.Session do
   end
 
   defp stop_process(%{port: port, os_pid: os_pid}) do
+    # Closing stdin may end the root before its children. Keep the observed
+    # descendants so that root exit cannot skip their TERM/KILL escalation.
+    descendants = if is_integer(os_pid), do: descendant_pids(os_pid), else: []
+
     try do
       Port.close(port)
     rescue
       ArgumentError -> :ok
     end
 
-    if is_integer(os_pid) and wait_exit(os_pid, @exit_grace_ms) == :alive do
-      descendants = descendant_pids(os_pid)
-      signal(["-TERM" | Enum.map([os_pid | descendants], &to_string/1)])
+    if is_integer(os_pid) do
+      pids = [os_pid | descendants]
 
-      if wait_exit(os_pid, 1_000) == :alive do
-        signal([
-          "-KILL" | Enum.map([os_pid | descendant_pids(os_pid) ++ descendants], &to_string/1)
-        ])
+      if wait_exit(pids, System.monotonic_time(:millisecond) + @exit_grace_ms) == :alive do
+        pids = Enum.uniq(pids ++ descendant_pids(os_pid))
+        signal(["-TERM" | Enum.map(pids, &to_string/1)])
+
+        if wait_exit(pids, System.monotonic_time(:millisecond) + 1_000) == :alive do
+          pids = Enum.uniq(pids ++ descendant_pids(os_pid))
+          signal(["-KILL" | Enum.map(pids, &to_string/1)])
+        end
       end
     end
 
     :ok
   end
 
-  defp wait_exit(os_pid, budget) when budget <= 0,
-    do: if(alive?(os_pid), do: :alive, else: :gone)
+  # Count native observation and durable-launch overhead against the grace,
+  # rather than subtracting only the sleeps between potentially slow probes.
+  defp wait_exit(pids, deadline) do
+    if Enum.any?(pids, &alive?/1) do
+      remaining = deadline - System.monotonic_time(:millisecond)
 
-  defp wait_exit(os_pid, budget) do
-    if alive?(os_pid) do
-      Process.sleep(50)
-      wait_exit(os_pid, budget - 50)
+      if remaining > 0 do
+        Process.sleep(min(50, remaining))
+        wait_exit(pids, deadline)
+      else
+        :alive
+      end
     else
       :gone
     end
@@ -1035,15 +1047,21 @@ defmodule LemonOmp.Session do
 
   defp alive?(os_pid) do
     case System.find_executable("kill") do
-      nil -> false
-      kill -> match?({_, 0}, System.cmd(kill, ["-0", to_string(os_pid)], stderr_to_stdout: true))
+      nil ->
+        false
+
+      kill ->
+        match?(
+          {_, 0},
+          LemonCore.NativeProcess.cmd(kill, ["-0", to_string(os_pid)], stderr_to_stdout: true)
+        )
     end
   end
 
   defp signal(args) do
     case System.find_executable("kill") do
       nil -> :ok
-      kill -> System.cmd(kill, args, stderr_to_stdout: true)
+      kill -> LemonCore.NativeProcess.cmd(kill, args, stderr_to_stdout: true)
     end
 
     :ok
@@ -1055,7 +1073,7 @@ defmodule LemonOmp.Session do
         []
 
       pgrep ->
-        case System.cmd(pgrep, ["-P", to_string(parent)], stderr_to_stdout: true) do
+        case LemonCore.NativeProcess.cmd(pgrep, ["-P", to_string(parent)], stderr_to_stdout: true) do
           {output, 0} ->
             children =
               output

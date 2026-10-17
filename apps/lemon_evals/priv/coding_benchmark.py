@@ -5,6 +5,7 @@ from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -13,7 +14,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from coding_benchmark_tasks import additional_tasks
-from coding_benchmark_campaign import CampaignError, DEFAULT_PROVIDERS, DEFAULT_VARIANTS, run_campaign
+from coding_benchmark_campaign import CampaignError, DEFAULT_PROVIDERS, DEFAULT_VARIANTS, MAX_PROVIDER_WORK_SECONDS, run_campaign
 from coding_benchmark_paired import TrialInterrupted, number, run_paired
 
 
@@ -96,15 +97,48 @@ def parse_omp(output):
     assistants = [event['message'] for event in events if event.get('type') == 'message_end' and event.get('message', {}).get('role') == 'assistant']
     last = assistants[-1] if assistants else {}
     usage = [message.get('usage') or {} for message in assistants]
+
+    def total(key):
+        values = [number(value.get(key)) for value in usage]
+        return sum(values) if values and all(value is not None for value in values) else None
+
     answer = ''.join(part.get('text', '') for part in last.get('content', []) if part.get('type') == 'text')
     return {'ok': bool(assistants) and any(event.get('type') == 'agent_end' for event in events) and last.get('stopReason') not in ('error', 'aborted'),
             'answer': answer, 'model': last.get('model'),
-            'usage': {'totalTokens': sum(value.get('totalTokens', 0) for value in usage),
-                      'inputTokens': sum(value.get('input', 0) for value in usage),
-                      'outputTokens': sum(value.get('output', 0) for value in usage),
-                      'cacheReadTokens': sum(value.get('cacheRead', 0) for value in usage)},
+            'usage': {'totalTokens': total('totalTokens'), 'inputTokens': total('input'),
+                      'outputTokens': total('output'), 'cacheReadTokens': total('cacheRead'),
+                      'cacheWriteTokens': total('cacheWrite')},
             'metrics': {'turns': sum(event.get('type') == 'turn_end' for event in events),
                         'tool_errors': sum(event.get('type') == 'tool_execution_end' and event.get('isError') is True for event in events)}}
+
+
+def terminal_provider_failure(result):
+    """Classify only a terminal CLI error, never a retried 429 inside a successful trial.
+
+    The production agent.wait surface renders provider errors as strings. Accept structured
+    error envelopes too, but retain only a status code and code-authored category in reports.
+    """
+    if result.get('ok') is True:
+        return None, None
+    error = result.get('error')
+    status = None
+    if isinstance(error, dict):
+        for key in ('status', 'status_code', 'statusCode', 'http_status'):
+            value = error.get(key)
+            if type(value) is int and 100 <= value <= 599:
+                status = value
+                break
+        text = json.dumps(error, sort_keys=True).lower()
+    else:
+        text = error.lower() if isinstance(error, str) else ''
+    if status is None:
+        match = re.search(r'\b(401|402|403|429|5\d\d)\b', text)
+        status = int(match.group(1)) if match else None
+    if status in (402, 429) or re.search(r'quota|rate[_ -]?limit|resource[_ -]?exhausted|insufficient[_ -]?(?:credits|funds)', text):
+        return status, 'quota'
+    if status in (401, 403) or re.search(r'auth(?:entication|orization)?[_ -]?(?:failed|error)|unauthori[sz]ed|unauthenticated|forbidden|invalid[_ -]?(?:api[_ -]?key|token)|(?:token|credential)[_ -]?expired', text):
+        return status, 'auth'
+    return status, 'provider_failed' if status is not None else None
 
 
 def run_case(case, agent, executable, model, args):
@@ -132,6 +166,7 @@ def run_case(case, agent, executable, model, args):
             argv = [executable, '-p', prompt, '--mode', 'json', '--model', model, '--cwd', str(root), '--no-session', '--no-title', '--auto-approve', '--max-time', str(args.timeout)]
         verifier_passed = tests_passed = None
         interrupted = False
+        provider_status = provider_failure = None
         try:
             for fixture_argv in [['git','init','-q'], ['git','add','.'], ['git','-c','user.name=Lemon Benchmark','-c','user.email=benchmark@example.invalid','commit','-qm','fixture']]:
                 command(fixture_argv, root, check=True, env=environment, deadline=deadline)
@@ -144,13 +179,15 @@ def run_case(case, agent, executable, model, args):
             if not isinstance(result, dict):
                 result = {}
                 failure = 'invalid_cli_json'
+            provider_status, provider_failure = terminal_provider_failure(result)
             if not failure and (invocation.returncode != 0 or result.get('ok') is not True):
-                failure = 'agent_failed'
+                failure = {'quota': 'provider_quota', 'auth': 'provider_auth',
+                           'provider_failed': 'provider_failed'}.get(provider_failure, 'agent_failed')
             env = dict(environment if environment is not None else os.environ, BENCHMARK_ANSWER=result.get('answer') or '')
             verifier = command([sys.executable, '-c', case['verify']], root, env=env, timeout=30, deadline=deadline)
             verifier_passed = verifier.returncode == 0
             if not verifier_passed and not failure: failure = 'verifier_failed'
-            if case['name'] == 'read_and_answer' and command(['git','status','--porcelain'], root, env=environment, deadline=deadline).stdout:
+            if not failure and case['name'] == 'read_and_answer' and command(['git','status','--porcelain'], root, env=environment, deadline=deadline).stdout:
                 failure = 'unexpected_mutation'
             requires_tests = case['name'] in {'multi_file_refactor','feature_and_test','repo_search'} or any(Path(name).name.startswith('test') and name.endswith('.py') for name in case['files'])
             if requires_tests:
@@ -195,7 +232,8 @@ def run_case(case, agent, executable, model, args):
                 'discovery_failures': number(metrics.get('discovery_failures')),
                 'incorrect_tool_calls': number(metrics.get('incorrect_tool_calls')),
                 'tool_error_recoveries': number(metrics.get('tool_error_recoveries')),
-                'tool_errors': tool_errors, 'run_id': result.get('run_id')}
+                'tool_errors': tool_errors, 'run_id': result.get('run_id'),
+                'provider_status': provider_status, 'provider_failure': provider_failure}
         if interrupted:
             raise TrialInterrupted(row)
         return row
@@ -216,7 +254,8 @@ def main():
     parser.add_argument('--repetitions', type=int, default=4)
     parser.add_argument('--seed', type=int, default=107)
     parser.add_argument('--config', help='Dedicated base TOML, without disclosure overrides')
-    parser.add_argument('--run-timeout', type=int, default=7200)
+    parser.add_argument('--run-timeout', type=int, default=7200,
+                        help='Work deadline: paired total (default 7200s); campaign per provider (default/max 28800s)')
     parser.add_argument('--plan', help='Operator-approved bounded JSON plan')
     parser.add_argument('--approve-plan-digest', help='Explicit SHA256 approval of exact canonical plan')
     parser.add_argument('--live', action='store_true', help='Authorize live calls only with exact approved plan')
@@ -228,6 +267,7 @@ def main():
     parser.add_argument('--control-plane-port', type=int, help='Fixed isolated runtime control-plane port (default: a free port per trial)')
     parser.add_argument('--output-dir', help='Campaign directory for manifest, per-trial records and sanitized report')
     parser.add_argument('--resume', action='store_true', help='Continue (or start) a campaign in --output-dir')
+    parser.add_argument('--continue-after-stop', help='Explicitly acknowledge the exact durable campaign stop SHA256; requires --live --resume')
     args = parser.parse_args()
     args.profile_python_explicit = args.profile_python is not None
     args.profile_python = args.profile_python or sys.executable
@@ -242,13 +282,15 @@ def main():
         names = set(args.tasks.split(','))
         if not names <= {case['name'] for case in cases}: parser.error('unknown task selection')
         cases = [case for case in cases if case['name'] in names]
-    campaign_flags = {'--providers', '--variants', '--control-plane-port', '--output-dir', '--resume'}
+    campaign_flags = {'--providers', '--variants', '--control-plane-port', '--output-dir', '--resume', '--continue-after-stop'}
     given = {argument.split('=', 1)[0] for argument in sys.argv[1:]}
     if args.campaign:
-        if args.paired or args.compare_omp or args.plan or args.approve_plan_digest or args.output or given & {'--run-timeout', '--model', '--failure-dir'}:
-            parser.error('--campaign cannot be combined with --paired, --compare-omp, --plan, --approve-plan-digest, --output, --run-timeout, --failure-dir or --model (use --providers)')
+        if args.paired or args.compare_omp or args.plan or args.approve_plan_digest or args.output or given & {'--model', '--failure-dir'}:
+            parser.error('--campaign cannot be combined with --paired, --compare-omp, --plan, --approve-plan-digest, --output, --failure-dir or --model (use --providers)')
         if '--repetitions' not in given:
             args.repetitions = 3
+        if '--run-timeout' not in given:
+            args.run_timeout = MAX_PROVIDER_WORK_SECONDS
         try:
             return run_campaign(args, cases, run_case)
         except (CampaignError, ValueError, OSError, subprocess.SubprocessError) as error:

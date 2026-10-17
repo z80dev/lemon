@@ -46,13 +46,12 @@ defmodule LemonOmp.Tools.OmpTest do
       :ok
     end
 
-    test "unknown registration fences construction and the real delegate launch", ctx do
-      assert {:omp, Omp, :unknown} in LemonAgent.ToolRegistry.all()
+    test "managed registration fences delegate work only at the real launch", ctx do
+      assert {:omp, Omp, :managed} in LemonAgent.ToolRegistry.all()
 
       tool =
-        LemonAgent.ToolRegistry.build_tool(:unknown, fn ->
-          assert [{_, %{backend: :unsupported, capacity_held: true}, _}] =
-                   LemonCore.NativeProcess.snapshot()
+        LemonAgent.ToolRegistry.build_tool(:managed, fn ->
+          assert LemonCore.NativeProcess.snapshot() == []
 
           tool = Omp.tool(ctx.ws, session_key: ctx.key)
           execute = tool.execute
@@ -60,7 +59,7 @@ defmodule LemonOmp.Tools.OmpTest do
           %{
             tool
             | execute: fn id, params, signal, update ->
-                assert length(LemonCore.NativeProcess.snapshot()) == 2
+                assert LemonCore.NativeProcess.snapshot() == []
                 refute File.exists?(Path.join(ctx.ws, ".fake_omp.args"))
                 execute.(id, params, signal, update)
               end
@@ -74,19 +73,19 @@ defmodule LemonOmp.Tools.OmpTest do
       assert Enum.count(LemonCore.NativeProcess.snapshot(), fn
                {_, %{backend: :unsupported, capacity_held: true}, _} -> true
                _ -> false
-             end) >= 2
+             end) == 1
     end
 
     test "unavailable ledger refuses execution before delegate effects", ctx do
-      assert {:omp, Omp, :unknown} in LemonAgent.ToolRegistry.all()
+      assert {:omp, Omp, :managed} in LemonAgent.ToolRegistry.all()
 
       tool =
-        LemonAgent.ToolRegistry.build_tool(:unknown, fn ->
+        LemonAgent.ToolRegistry.build_tool(:managed, fn ->
           Omp.tool(ctx.ws, session_key: ctx.key)
         end)
 
       GenServer.stop(LemonCore.NativeProcess)
-      assert catch_exit(run(tool, %{"action" => "start", "prompt" => "must not launch"}))
+      assert run(tool, %{"action" => "start", "prompt" => "must not launch"}).is_error
       refute File.exists?(Path.join(ctx.ws, ".fake_omp.args"))
       refute File.exists?(Path.join(ctx.ws, ".fake_omp.pid"))
     end

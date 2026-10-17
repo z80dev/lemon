@@ -70,7 +70,7 @@ defmodule LemonOmp.Models do
       |> Enum.map(&{String.to_charlist(&1), false})
 
     port =
-      Port.open({:spawn_executable, String.to_charlist(executable)}, [
+      LemonCore.NativeProcess.open({:spawn_executable, String.to_charlist(executable)}, [
         :binary,
         :exit_status,
         :use_stdio,
@@ -84,7 +84,10 @@ defmodule LemonOmp.Models do
     after
       case Port.info(port, :os_pid) do
         {:os_pid, pid} ->
-          System.cmd("kill", ["-KILL", Integer.to_string(pid)], stderr_to_stdout: true)
+          LemonCore.NativeProcess.cmd("kill", ["-KILL", Integer.to_string(pid)],
+            stderr_to_stdout: true
+          )
+
           close_port(port)
 
         nil ->

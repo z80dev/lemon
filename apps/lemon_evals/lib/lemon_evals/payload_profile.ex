@@ -127,7 +127,7 @@ defmodule LemonEvals.PayloadProfile do
     script = Path.join(:code.priv_dir(:lemon_evals), "payload_profile.py")
 
     port =
-      Port.open({:spawn_executable, python}, [
+      LemonCore.NativeProcess.open({:spawn_executable, python}, [
         :binary,
         :use_stdio,
         :exit_status,
