@@ -16,9 +16,10 @@ defmodule Mix.Tasks.Lemon.Eval.Coding do
 
   `--campaign` runs the resumable multi-provider baseline/coding paired campaign
   (see the app README): --providers, --variants, --repetitions, --timeout,
-  --control-plane-port, --output-dir, --resume, plus --seed, --config, --tasks and
-  --profile-python. Without --live it only writes a plan; with --live it calls
-  the named providers using only their own credential variable.
+  --run-timeout (per provider, default/max 28800 seconds), --control-plane-port,
+  --output-dir, --resume, --continue-after-stop, plus --seed, --config, --tasks
+  and --profile-python. Without --live it only writes a plan; with --live it
+  calls the named providers using only their own credential variable.
 
       mix lemon.eval.coding --campaign --live --resume --output-dir /OPERATOR/PATH/campaign
   """
@@ -51,7 +52,8 @@ defmodule Mix.Tasks.Lemon.Eval.Coding do
           variants: :string,
           control_plane_port: :integer,
           output_dir: :string,
-          resume: :boolean
+          resume: :boolean,
+          continue_after_stop: :string
         ]
       )
 
@@ -86,7 +88,14 @@ defmodule Mix.Tasks.Lemon.Eval.Coding do
     :live,
     :profile_python
   ]
-  @campaign_only [:providers, :variants, :control_plane_port, :output_dir, :resume]
+  @campaign_only [
+    :providers,
+    :variants,
+    :control_plane_port,
+    :output_dir,
+    :resume,
+    :continue_after_stop
+  ]
   @campaign_excluded [
     :paired,
     :compare_omp,
@@ -95,7 +104,6 @@ defmodule Mix.Tasks.Lemon.Eval.Coding do
     :output,
     :model,
     :failure_dir,
-    :run_timeout,
     :plan,
     :approve_plan_digest
   ]
@@ -113,6 +121,18 @@ defmodule Mix.Tasks.Lemon.Eval.Coding do
       opts[:campaign] == true and opts[:output_dir] in [nil, ""] ->
         Mix.raise("--campaign requires --output-dir")
 
+      opts[:campaign] == true and Keyword.has_key?(opts, :run_timeout) and
+          (opts[:run_timeout] <= 0 or opts[:run_timeout] > 28_800) ->
+        Mix.raise("--run-timeout must be positive and at most 28800 seconds (8h) per provider")
+
+      opts[:campaign] == true and Keyword.has_key?(opts, :continue_after_stop) and
+          (opts[:live] != true or opts[:resume] != true) ->
+        Mix.raise("--continue-after-stop requires --campaign --live --resume")
+
+      opts[:campaign] == true and Keyword.has_key?(opts, :continue_after_stop) and
+          not Regex.match?(~r/\A[0-9a-f]{64}\z/, opts[:continue_after_stop]) ->
+        Mix.raise("--continue-after-stop must be a durable stop SHA256")
+
       opts[:campaign] == true ->
         :ok
 
@@ -127,7 +147,8 @@ defmodule Mix.Tasks.Lemon.Eval.Coding do
     end
   end
 
-  defp campaign_argv(opts, script, launcher, timeout) do
+  @doc false
+  def campaign_argv(opts, script, launcher, timeout) do
     argv = [script, "--campaign", "--lemon", launcher, "--timeout", Integer.to_string(timeout)]
     argv = if opts[:live], do: argv ++ ["--live"], else: argv
     argv = if opts[:resume], do: argv ++ ["--resume"], else: argv
@@ -139,6 +160,8 @@ defmodule Mix.Tasks.Lemon.Eval.Coding do
         {:variants, "--variants"},
         {:repetitions, "--repetitions"},
         {:seed, "--seed"},
+        {:run_timeout, "--run-timeout"},
+        {:continue_after_stop, "--continue-after-stop"},
         {:control_plane_port, "--control-plane-port"},
         {:tasks, "--tasks"},
         {:profile_python, "--profile-python"}

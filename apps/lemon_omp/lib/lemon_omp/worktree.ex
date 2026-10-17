@@ -220,7 +220,7 @@ defmodule LemonOmp.Worktree do
     task =
       Task.async(fn ->
         try do
-          System.cmd("git", ["-C", cwd | args],
+          LemonCore.NativeProcess.cmd("git", ["-C", cwd | args],
             stderr_to_stdout: true,
             env: [{"GIT_TERMINAL_PROMPT", "0"} | env]
           )

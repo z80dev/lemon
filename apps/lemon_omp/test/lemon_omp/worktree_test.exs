@@ -107,6 +107,14 @@ defmodule LemonOmp.WorktreeTest do
 
   test "invalid batch is rejected before any worktree exists", ctx do
     non_git = workspace!()
+    previous_ceiling = System.get_env("GIT_CEILING_DIRECTORIES")
+    System.put_env("GIT_CEILING_DIRECTORIES", Path.dirname(non_git))
+
+    on_exit(fn ->
+      if previous_ceiling,
+        do: System.put_env("GIT_CEILING_DIRECTORIES", previous_ceiling),
+        else: System.delete_env("GIT_CEILING_DIRECTORIES")
+    end)
 
     assert {:error, :not_a_git_repo} =
              LemonOmp.start(%{cwd: non_git, prompt: "ok", isolate: true})

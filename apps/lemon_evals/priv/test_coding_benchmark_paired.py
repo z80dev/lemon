@@ -218,6 +218,8 @@ auto_approve = true
             'LEMON_DOTENV_DIR': '/private/ordinary-dotenv',
             'LEMON_AGENT_PROFILES_CWD': '/private/ordinary-project',
             'LEMON_CONTROL_PLANE_PORT': '9999',
+            'LEMON_GATEWAY_HEALTH_PORT': '4042',
+            'LEMON_ROUTER_HEALTH_PORT': '4043',
             'LEMON_TOOL_DISCLOSURE_PROFILE': 'ambient-profile',
             'LEMON_CONTROL_PLANE_OPERATOR_TOKEN': 'ambient-operator-secret',
             'LEMON_SECRETS_MASTER_KEY': 'ambient-master-secret',
@@ -251,6 +253,8 @@ auto_approve = true
                 self.assertEqual(env['LEMON_CONTROL_PLANE_PORT'], str(4200 + index))
                 self.assertEqual(env['LEMON_WEB_PORT'], str(4300 + index))
                 self.assertEqual(env['LEMON_SIM_UI_PORT'], str(4400 + index))
+                self.assertEqual(env['LEMON_GATEWAY_HEALTH_PORT'], '0')
+                self.assertEqual(env['LEMON_ROUTER_HEALTH_PORT'], '0')
                 self.assertEqual(env['BENCHMARK_PROVIDER_API_KEY'], credentials['BENCHMARK_PROVIDER_API_KEY'])
                 for key in ['OPENAI_API_KEY', 'HTTPS_PROXY', 'BASH_ENV']:
                     self.assertNotIn(key, env)

@@ -16,7 +16,14 @@ export LEMON_CONTROL_PLANE_OPERATOR_TOKEN="$(openssl rand -hex 32)"
 ./bin/lemon start
 ```
 
-Connect to the configured `/ws` endpoint (default local port 4040), and send:
+Connect to the configured `/ws` endpoint (default local port 4040).
+
+The HTTP/WebSocket listener accepts an OTP `:ip` setting, for example
+`config :lemon_control_plane, ip: {127, 0, 0, 1}` before application startup.
+Its default remains `:any`. Disposable paired benchmark runtimes explicitly use
+loopback; this does not change an already-running service.
+
+Send:
 
 ```json
 {

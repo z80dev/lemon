@@ -31,7 +31,9 @@ defmodule LemonOmp.Application do
   defp register_tools do
     if Code.ensure_loaded?(LemonAgent.ToolRegistry) do
       Enum.each(@tools, fn {name, module} ->
-        LemonAgent.ToolRegistry.register(name, module)
+        # Construction is schema-only; every local launch uses NativeProcess.
+        # Session still fences the independently owned work of a running delegate.
+        LemonAgent.ToolRegistry.register(name, module, native_process_ownership: :managed)
       end)
     end
 

@@ -86,6 +86,7 @@ def isolated_environment(root, config, variant, credentials, ports):
                 'LEMON_EVAL_PROCESS_STORE': str(root / 'processes.dets'),
                 'TMPDIR': str(root / 'tmp'),
                 'LEMON_CONTROL_PLANE_PORT': str(ports[0]), 'LEMON_WEB_PORT': str(ports[1]),
+                'LEMON_GATEWAY_HEALTH_PORT': '0', 'LEMON_ROUTER_HEALTH_PORT': '0',
                 'LEMON_SIM_UI_PORT': str(ports[2]), 'LEMON_CONTROL_PLANE_OPERATOR_TOKEN': secrets.token_hex(32),
                 'LEMON_TOOL_DISCLOSURE_PROFILE': 'legacy' if variant == 'baseline' else 'coding',
                 'LEMON_SECRETS_MASTER_KEY': secrets.token_hex(32), 'MIX_ENV': 'dev'})
@@ -539,12 +540,19 @@ def sanitize_row(row):
     failures = {'timeout', 'run_deadline', 'spend_limit', 'missing_spend', 'runtime_failed',
                 'invalid_cli_json', 'agent_failed', 'verifier_failed', 'unexpected_mutation',
                 'tests_failed', 'invocation_failed', 'recovery_not_observed', 'disclosure_not_observed',
-                'cleanup_unverified', 'disposal_unverified', 'finalization_failed'}
+                'cleanup_unverified', 'disposal_unverified', 'finalization_failed',
+                'provider_quota', 'provider_auth', 'provider_failed'}
     clean['failure'] = row.get('failure') if row.get('failure') in failures else None
     for key in ('repetition', 'order', 'turns', 'tokens', 'uncached_input_tokens', 'cached_input_tokens',
                 'cache_write_tokens', 'output_tokens', 'tool_errors', 'cost_usd', 'wall_seconds',
                 'discovery_failures', 'incorrect_tool_calls', 'tool_error_recoveries'):
         clean[key] = number(row.get(key))
+    if 'provider_status' in row:
+        status = row.get('provider_status')
+        clean['provider_status'] = status if type(status) is int and 100 <= status <= 599 else None
+    if 'provider_failure' in row:
+        clean['provider_failure'] = (row.get('provider_failure')
+                                     if row.get('provider_failure') in ('quota', 'auth', 'provider_failed') else None)
     # Campaign-only fields; absent from the single-provider paired lane's rows.
     if isinstance(row.get('provider'), str) and re.fullmatch(r'[a-z0-9-]{1,40}', row['provider']):
         clean['provider'] = row['provider']
@@ -609,12 +617,17 @@ def source_identity(root):
 RUNTIME_EXPRESSION = (
     'File.cd!(System.fetch_env!("LEMON_AGENT_PROFILES_CWD")); '
     'LemonEvals.PairedCleanup.configure!(); '
+    'Application.put_env(:lemon_control_plane, :ip, {127, 0, 0, 1}); '
+    'for {app, variable} <- [{:lemon_gateway, "LEMON_GATEWAY_HEALTH_PORT"}, '
+    '{:lemon_router, "LEMON_ROUTER_HEALTH_PORT"}] do '
+    'Application.put_env(app, :health_ip, :loopback); '
+    'Application.put_env(app, :health_port, String.to_integer(System.fetch_env!(variable))) end; '
     'LemonCore.Runtime.Boot.start!(:runtime_full); '
     'LemonEvals.PairedCleanup.verify!(); '
     'unless Process.whereis(LemonControlPlane.Supervisor), '
     'do: raise("paired runtime did not acquire its own listener"); '
     'expected = System.fetch_env!("LEMON_TOOL_DISCLOSURE_PROFILE"); '
-    'unless LemonCore.Config.load().tools.disclosure[:profile] == expected, '
+    'unless LemonCore.Config.load().agent.tools.disclosure[:profile] == expected, '
     'do: raise("paired disclosure profile unavailable"); '
     'LemonEvals.PayloadProfile.install!(System.fetch_env!("LEMON_EVAL_PROFILE"), '
     'python: System.fetch_env!("LEMON_EVAL_PYTHON"), paired: true); '

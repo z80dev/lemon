@@ -111,6 +111,8 @@ python3 -m unittest discover -s apps/lemon_evals/priv \
   -p test_coding_benchmark_paired.py -v
 python3 -m unittest discover -s apps/lemon_evals/priv \
   -p test_paired_native_cleanup.py -v
+python3 -m unittest discover -s apps/lemon_evals/priv \
+  -p test_paired_compiled_runtime.py -v
 scripts/test path apps/lemon_evals/test/lemon_evals/coding_benchmark_test.exs --seed 1
 scripts/test path apps/lemon_evals/test/lemon_evals/paired_cleanup_test.exs --seed 1
 ```
@@ -118,6 +120,16 @@ scripts/test path apps/lemon_evals/test/lemon_evals/paired_cleanup_test.exs --se
 The native recovery gate uses precompiled test BEAMs, real tracked native commands
 and private FIFOs/DETS, including forced runtime exit and surviving descendants.
 It makes no provider calls. Run umbrella gates sequentially, not overlapping builds.
+
+The compiled-runtime gate additionally requires a development build and
+`LEMON_EVAL_OFFLINE_PROFILE_PYTHON` selecting Python with `tiktoken`, plus
+`LEMON_EVAL_OFFLINE_TOKENIZER_CACHE` selecting already-cached encoder data.
+It refuses missing cache data and prohibits profiler sockets, rather than
+downloading a tokenizer. Both profiles boot the real `runtime_full`, assert the
+current configuration schema, inspect actual loopback listeners with occupied
+health defaults, invoke the source CLI with an in-memory fixture transport, run
+the external verifier, and require verified native teardown and disposal.
+Synthetic fixture counters are test data, not paid benchmark evidence.
 
 The generated `plan` object has this shape; the omitted experiment content is
 supplied by the runner and must be retained exactly:
@@ -305,6 +317,8 @@ the expected disclosure profile from configuration. If the opt-in profile
 support from #106 is unavailable, this gate fails rather than silently running
 the legacy catalog under a coding label. Observed `applied_profiles` must also
 confirm the selected variant before a trial can receive a passing outcome.
+The configuration assertion reads `LemonCore.Config.load().agent.tools.disclosure`;
+it does not relax the observed-profile check.
 
 A fresh private HOME, configuration cwd, store, operator token, secret master key,
 and runtime ports isolate every attempt. The subprocess environment forwards
@@ -321,6 +335,33 @@ Ambient Lemon settings, provider state, proxies and dotenv are not inherited.
 settings point to isolated state. `LEMON_EVAL_PROCESS_STORE` is bound before Boot
 and both ledgers are verified after Boot, before any paid call. Keep secrets out
 of base TOML; do not configure sensitive external workspaces or stateful services.
+
+Gateway/router health ports are explicitly `0` (OS-selected ephemeral ports).
+Their listeners and the control-plane listener bind to loopback; runtime endpoint
+port application also binds Web/Sim listeners to loopback. No ambient listener,
+port, service, profile or credential is changed.
+
+The audited omp constructor builds only its schema and callback. Its local
+catalog/version, worktree and shutdown-helper launches now use `NativeProcess`,
+so registration/construction is managed without changing tool availability.
+Actual delegate startup still records `unsupported!` before launching its RPC
+process: independently owned delegate workloads cannot be certified from that
+process group. Unknown third-party loading, construction and callbacks retain
+their fail-closed fences.
+
+The pre-repair credential-free boot path was `runtime_full` → control-plane
+dependency `lemon_omp` → `LemonOmp.Application.register_tools/0` →
+`ToolRegistry.register/3` → unknown `loadable?/2` → `unsupported!/0`, before loading
+the omp tool module. A credential-free replay of the original registration
+captured that `loadable?/2` caller and the single unsupported intent. This is not
+a contemporaneous call-stack witness for the retained historical diagnostic:
+that ledger records no caller or workload PID/birth identity, and a software
+repair cannot reconstruct one.
+**Historical cleanup remains unverified and blocked.** Retain its root and
+ledgers unchanged. The remaining operator decision is how to establish
+independent ownership/termination evidence or quarantine the uncertain workload
+boundary before authorizing further native campaign work; never declare that
+record terminated or clear it because a newly isolated boot now passes.
 
 The same explicit base TOML is used for every variant. The runner appends
 `[runtime.tools.disclosure]` with `enabled = true`, `catalog_tokens = 2000`,

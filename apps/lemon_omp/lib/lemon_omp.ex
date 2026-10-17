@@ -753,7 +753,10 @@ defmodule LemonOmp do
   defp probe_version(executable) do
     task =
       Task.async(fn ->
-        System.cmd(executable, ["--version"], stderr_to_stdout: true, env: [{"NO_COLOR", "1"}])
+        LemonCore.NativeProcess.cmd(executable, ["--version"],
+          stderr_to_stdout: true,
+          env: [{"NO_COLOR", "1"}]
+        )
       end)
 
     case Task.yield(task, 5_000) || Task.shutdown(task, :brutal_kill) do
