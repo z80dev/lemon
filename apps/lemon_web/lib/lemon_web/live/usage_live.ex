@@ -91,11 +91,14 @@ defmodule LemonWeb.UsageLive do
       providers: result |> list("providers") |> Enum.flat_map(&row(&1, ["provider"])),
       models: result |> list("models") |> Enum.flat_map(&row(&1, ["provider", "model"])),
       sessions: result |> list("sessions") |> Enum.flat_map(&row(&1, ["sessionKey"])),
-      sessions_omitted: integer(result["sessionsOmitted"]),
+      sessions_omitted: integer(result["sessionsOmitted"]) || 0,
       days:
         Enum.map(Date.range(start, today), fn date ->
           key = Date.to_iso8601(date)
-          day = daily[key] || %{}
+
+          day =
+            daily[key] ||
+              %{"cost" => 0.0, "requests" => 0, "inputTokens" => 0, "outputTokens" => 0}
 
           %{
             date: date,
@@ -149,12 +152,12 @@ defmodule LemonWeb.UsageLive do
           else: "unknown"
         ),
       runs: integer(status["runs"]),
-      tokens: integer(tokens["input"]) + integer(tokens["output"]),
+      tokens: add_known(integer(tokens["input"]), integer(tokens["output"])),
       cost: number(status["cost"]),
       limits: [
-        {"Runs", integer(status["runs"]), quotas["runsLimit"], &Integer.to_string/1},
-        {"Tokens", integer(tokens["input"]) + integer(tokens["output"]), quotas["tokensLimit"],
-         &compact_number/1},
+        {"Runs", integer(status["runs"]), quotas["runsLimit"], &compact_number/1},
+        {"Tokens", add_known(integer(tokens["input"]), integer(tokens["output"])),
+         quotas["tokensLimit"], &compact_number/1},
         {"Cost", number(status["cost"]), quotas["costLimit"], &usd/1}
       ]
     }
@@ -167,10 +170,15 @@ defmodule LemonWeb.UsageLive do
   defp safe_label(_value), do: nil
 
   defp number(value) when is_number(value) and value >= 0, do: value * 1.0
-  defp number(_value), do: 0.0
+  defp number(_value), do: nil
 
   defp integer(value) when is_integer(value) and value >= 0, do: value
-  defp integer(_value), do: 0
+  defp integer(_value), do: nil
+
+  defp add_known(left, right) when is_number(left) and is_number(right), do: left + right
+  defp add_known(_left, _right), do: nil
+
+  defp sum_known(values), do: Enum.reduce(values, 0, &add_known/2)
 
   # ── Render ──────────────────────────────────────────────────────────────
 
@@ -272,7 +280,9 @@ defmodule LemonWeb.UsageLive do
   attr(:dense, :boolean, default: false)
 
   defp bar_chart(assigns) do
-    max = assigns.bars |> Enum.map(& &1.value) |> Enum.max(fn -> 0 end)
+    max =
+      assigns.bars |> Enum.map(& &1.value) |> Enum.filter(&is_number/1) |> Enum.max(fn -> 0 end)
+
     assigns = assign(assigns, max: max)
 
     ~H"""
@@ -286,7 +296,7 @@ defmodule LemonWeb.UsageLive do
           <div
             class={[
               "w-full rounded-t-sm transition-[height] duration-300",
-              if(bar.value > 0, do: "bg-accent group-hover:bg-ring", else: "bg-surface-2")
+              if(is_number(bar.value) and bar.value > 0, do: "bg-accent group-hover:bg-ring", else: "bg-surface-2")
             ]}
             style={"height: #{bar_height(bar.value, @max)}%"}
             title={"#{bar.label}: #{bar.display}"}
@@ -316,7 +326,7 @@ defmodule LemonWeb.UsageLive do
   attr(:metric, :string, required: true)
 
   defp share_list(assigns) do
-    total = assigns.rows |> Enum.map(&metric_value(&1, assigns.metric)) |> Enum.sum()
+    total = assigns.rows |> Enum.map(&metric_value(&1, assigns.metric)) |> sum_known()
     assigns = assign(assigns, total: total)
 
     ~H"""
@@ -327,7 +337,7 @@ defmodule LemonWeb.UsageLive do
           <span class="min-w-0 truncate font-medium text-fg" title={row.label}>{row.label}</span>
           <span class="shrink-0 tabular-nums text-muted">{metric_display(row, @metric)}</span>
         </div>
-        <.meter value={metric_value(row, @metric)} max={@total} label={"#{row.label} share"} />
+        <.meter :if={is_number(metric_value(row, @metric)) and is_number(@total)} value={metric_value(row, @metric)} max={@total} label={"#{row.label} share"} />
       </li>
     </ul>
     """
@@ -358,7 +368,7 @@ defmodule LemonWeb.UsageLive do
       <:col :let={row} label="Output" class="hidden text-right tabular-nums sm:table-cell">{compact_number(row.output)}</:col>
       <:col :let={row} label="Spend" class="text-right tabular-nums">{usd(row.cost)}</:col>
       <:col :let={row} label="Share" class="hidden w-32 md:table-cell">
-        <.meter value={share_value(row, @total)} max={share_total(@total)} label="Share of period" />
+        <.meter :if={is_number(share_value(row, @total)) and is_number(share_total(@total))} value={share_value(row, @total)} max={share_total(@total)} label="Share of period" />
       </:col>
     </.table>
     """
@@ -387,7 +397,7 @@ defmodule LemonWeb.UsageLive do
             <span class="text-muted">{label}</span>
             <span class="tabular-nums text-fg">{format.(value)} / {format.(limit)}</span>
           </div>
-          <.meter value={value} max={limit} auto_tone label={"#{label} quota"} />
+          <.meter :if={is_number(value)} value={value} max={limit} auto_tone label={"#{label} quota"} />
         </div>
         <p :if={@quota.status == "unlimited"} class="text-xs text-subtle">
           No run, token or cost quota is configured for this runtime.
@@ -400,7 +410,7 @@ defmodule LemonWeb.UsageLive do
   # ── Helpers ─────────────────────────────────────────────────────────────
 
   defp chart_metric(metric, _usage) when metric in ~w(cost tokens), do: metric
-  defp chart_metric(_metric, %{cost: cost}) when cost > 0, do: "cost"
+  defp chart_metric(_metric, %{cost: cost}) when is_number(cost) and cost > 0, do: "cost"
   defp chart_metric(_metric, _usage), do: "tokens"
 
   defp range_path(range, nil), do: ~p"/usage?#{[range: range]}"
@@ -414,7 +424,7 @@ defmodule LemonWeb.UsageLive do
   defp metric_label(_metric), do: "tokens"
 
   defp day_bar(day, metric) do
-    value = if metric == "cost", do: day.cost, else: day.input + day.output
+    value = if metric == "cost", do: day.cost, else: add_known(day.input, day.output)
 
     %{
       value: value,
@@ -423,11 +433,13 @@ defmodule LemonWeb.UsageLive do
       display:
         if(metric == "cost",
           do: "#{usd(day.cost)} · #{day.requests} runs",
-          else: "#{compact_number(day.input + day.output)} tokens · #{day.requests} runs"
+          else:
+            "#{compact_number(add_known(day.input, day.output))} tokens · #{day.requests} runs"
         )
     }
   end
 
+  defp bar_height(value, _max) when not is_number(value), do: 2
   defp bar_height(_value, max) when max <= 0, do: 2
   defp bar_height(value, _max) when value <= 0, do: 2
   defp bar_height(value, max), do: max(Float.round(value * 100 / max, 1), 3)
@@ -438,18 +450,18 @@ defmodule LemonWeb.UsageLive do
   defp provider_rows(providers), do: Enum.map(providers, &Map.put(&1, :label, &1.provider))
 
   defp metric_value(row, "cost"), do: row.cost
-  defp metric_value(row, _metric), do: row.input + row.output
+  defp metric_value(row, _metric), do: add_known(row.input, row.output)
 
   defp metric_display(row, "cost"), do: "#{usd(row.cost)} · #{row.requests} runs"
 
   defp metric_display(row, _metric),
-    do: "#{compact_number(row.input + row.output)} tok · #{row.requests} runs"
+    do: "#{compact_number(add_known(row.input, row.output))} tok · #{row.requests} runs"
 
-  defp share_value(row, %{cost: cost}) when cost > 0, do: row.cost
-  defp share_value(row, _total), do: row.input + row.output
+  defp share_value(row, %{cost: cost}) when is_number(cost) and cost > 0, do: row.cost
+  defp share_value(row, _total), do: add_known(row.input, row.output)
 
-  defp share_total(%{cost: cost}) when cost > 0, do: cost
-  defp share_total(total), do: total.input + total.output
+  defp share_total(%{cost: cost}) when is_number(cost) and cost > 0, do: cost
+  defp share_total(total), do: add_known(total.input, total.output)
 
   defp quota_tone("over_limit"), do: "danger"
   defp quota_tone("within_limits"), do: "success"

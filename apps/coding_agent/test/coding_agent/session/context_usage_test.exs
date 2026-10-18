@@ -392,5 +392,74 @@ defmodule CodingAgent.Session.ContextUsageTest do
       {manager, _ledger} = BudgetLedger.initialize(manager)
       assert ContextUsage.session_usage(manager).tokens == 2_700
     end
+
+    test "nullable branch counters stay unknown independently of numeric budget totals", %{
+      tmp_dir: tmp_dir
+    } do
+      manager =
+        SessionManager.new(tmp_dir)
+        |> SessionManager.append_message(%{
+          "role" => "assistant",
+          "usage" => %{"input" => 20, "output" => 3, "cache_read" => 0, "cache_write" => 0}
+        })
+        |> SessionManager.append_message(%{
+          "role" => "assistant",
+          "usage" => %{"input" => nil, "output" => 2, "cache_read" => nil, "cache_write" => 0}
+        })
+        |> SessionManager.append_message(%{
+          "role" => "assistant",
+          "usage" => %{"input" => 10, "output" => 1, "cache_read" => 0, "cache_write" => 0}
+        })
+
+      assert ContextUsage.session_usage(manager, %{tokens: 36, cost_usd: 0.5}) == %{
+               tokens: 36,
+               cost_usd: 0.5,
+               input: nil,
+               output: 6,
+               cache_read: nil,
+               cache_write: 0,
+               assistant_messages: 3
+             }
+    end
+
+    test "nullable cumulative ledger metrics remain unknown in session projections", %{
+      tmp_dir: tmp_dir
+    } do
+      manager =
+        SessionManager.new(tmp_dir)
+        |> BudgetLedger.append(%{tokens: nil, cost_usd: nil})
+
+      usage = ContextUsage.session_usage(manager)
+      assert usage.tokens == nil
+      assert usage.cost_usd == nil
+      assert usage.input == 0
+      assert usage.output == 0
+
+      known_tokens = ContextUsage.session_usage(manager, %{tokens: 130, cost_usd: nil})
+      assert known_tokens.tokens == 130
+      assert known_tokens.cost_usd == nil
+    end
+
+    test "missing assistant usage is unknown while an empty branch has zero counters", %{
+      tmp_dir: tmp_dir
+    } do
+      manager = SessionManager.new(tmp_dir)
+      empty = ContextUsage.session_usage(manager, %{tokens: 0, cost_usd: 0.0})
+      assert empty.input == 0
+      assert empty.output == 0
+      assert empty.assistant_messages == 0
+
+      manager =
+        SessionManager.append_message(manager, %{"role" => "assistant", "usage" => nil})
+
+      usage = ContextUsage.session_usage(manager, %{tokens: 0, cost_usd: 0.0})
+      assert is_nil(usage.input)
+      assert is_nil(usage.output)
+      assert is_nil(usage.cache_read)
+      assert is_nil(usage.cache_write)
+      assert usage.assistant_messages == 1
+      assert usage.tokens == 0
+      assert usage.cost_usd == 0.0
+    end
   end
 end

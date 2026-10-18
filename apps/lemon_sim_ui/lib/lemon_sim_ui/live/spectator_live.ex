@@ -580,11 +580,11 @@ defmodule LemonSimUi.SpectatorLive do
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-right">
           <div>
             <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Input</div>
-            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_integer(usage_value(@totals, :input_tokens) || 0)}</div>
+            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_integer(usage_value(@totals, :input_tokens))}</div>
           </div>
           <div>
             <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Output</div>
-            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_integer(usage_value(@totals, :output_tokens) || 0)}</div>
+            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_integer(usage_value(@totals, :output_tokens))}</div>
           </div>
           <div>
             <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Decisions</div>
@@ -614,8 +614,8 @@ defmodule LemonSimUi.SpectatorLive do
               <tr>
                 <td class="py-2 pr-4 font-bold text-white">{actor_id}</td>
                 <td class="py-2 pr-4 font-mono text-slate-400">{usage_value(actor_usage, :model_id) || "unknown"}</td>
-                <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_integer(usage_value(actor_usage, :input_tokens) || 0)}</td>
-                <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_integer(usage_value(actor_usage, :output_tokens) || 0)}</td>
+                <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_integer(usage_value(actor_usage, :input_tokens))}</td>
+                <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_integer(usage_value(actor_usage, :output_tokens))}</td>
                 <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_integer(ArtifactReader.total_tokens(actor_usage))}</td>
                 <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_cost(usage_value(actor_usage, :cost_usd))}</td>
               </tr>

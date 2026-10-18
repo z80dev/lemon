@@ -5,7 +5,8 @@ defmodule CodingAgent.Session.BudgetLedger do
   Snapshots include reported interrupted/retried requests, not just visible
   assistant messages. Legacy files derive their initial spend from all stored
   assistant messages. Forks and clear inherit the ledger; rewinds and compaction
-  never subtract from it.
+  never subtract from it. Unknown counters and costs remain unknown in later
+  snapshots, even when a stale numeric update arrives.
   """
 
   alias CodingAgent.SessionManager
@@ -85,8 +86,8 @@ defmodule CodingAgent.Session.BudgetLedger do
     previous = Budget.normalize_usage(Map.get(state, :budget_usage))
 
     usage = %{
-      tokens: max(previous.tokens, usage.tokens),
-      cost_usd: max(previous.cost_usd, usage.cost_usd)
+      tokens: maximum(previous.tokens, usage.tokens),
+      cost_usd: maximum(previous.cost_usd, usage.cost_usd)
     }
 
     if usage == Map.get(state, :budget_usage) do
@@ -97,4 +98,9 @@ defmodule CodingAgent.Session.BudgetLedger do
       |> Map.put(:session_manager, append(state.session_manager, usage))
     end
   end
+
+  defp maximum(previous, current) when is_number(previous) and is_number(current),
+    do: max(previous, current)
+
+  defp maximum(_previous, _current), do: nil
 end

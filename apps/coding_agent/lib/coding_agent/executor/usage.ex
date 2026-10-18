@@ -5,10 +5,10 @@ defmodule CodingAgent.Executor.Usage do
   Default zero costs for uncatalogued models do not attest known pricing.
   """
 
-  @token_keys ~w(input output cache_read cache_write total_tokens input_tokens
+  @token_keys ~w(input output cache_read cache_write cache_write_long total_tokens input_tokens
     output_tokens prompt_tokens completion_tokens cache_read_input_tokens
     cached_input_tokens cache_creation_input_tokens cache_write_input_tokens)a
-  @transport_token_keys @token_keys ++ Enum.map(@token_keys, &Atom.to_string/1)
+  @cost_keys [:input, :output, :cache_read, :cache_write, :total]
 
   def occurrence(message) when is_map(message) do
     if field(message, :role) in [:assistant, "assistant"] and
@@ -16,27 +16,51 @@ defmodule CodingAgent.Executor.Usage do
       usage =
         case field(message, :usage) do
           usage when is_map(usage) -> usage
-          _ -> %{input: 0, output: 0, total_tokens: 0}
+          _ -> %{}
         end
 
       cost = field(usage, :cost)
       total = if is_map(cost), do: field(cost, :total), else: cost
 
+      counters_known =
+        Enum.all?([:input, :output, :total_tokens], &is_number(field(usage, &1)))
+
       known =
-        case field(usage, :price_known) do
-          true ->
-            is_number(total) and total >= 0
+        counters_known and
+          case field(usage, :price_known) do
+            true ->
+              is_number(total) and total >= 0
 
-          false ->
-            false
+            false ->
+              false
 
-          _ ->
-            is_number(total) and total >= 0 and
-              (total > 0 or catalogued?(field(message, :provider), field(message, :model)))
+            _ ->
+              is_number(total) and total >= 0 and
+                (total > 0 or catalogued?(field(message, :provider), field(message, :model)))
+          end
+
+      usage =
+        Enum.reduce(@token_keys, %{}, fn key, counters ->
+          if Map.has_key?(usage, key) or Map.has_key?(usage, Atom.to_string(key)),
+            do: Map.put(counters, key, field(usage, key)),
+            else: counters
+        end)
+        |> then(fn counters ->
+          Map.merge(
+            Map.new([:input, :output, :cache_read, :cache_write, :total_tokens], &{&1, nil}),
+            counters
+          )
+        end)
+
+      projected_cost =
+        if is_map(cost) do
+          Map.new(@cost_keys, &{&1, field(cost, &1)})
+          |> Map.put(:total, if(known, do: total))
+        else
+          if known, do: %{total: total}
         end
 
-      usage = Map.take(plain(usage), @transport_token_keys)
-      usage = Map.merge(usage, %{cost: if(known, do: total, else: nil), price_known: known})
+      usage = Map.merge(usage, %{cost: projected_cost, price_known: known})
       at = field(message, :timestamp)
 
       %{
@@ -58,7 +82,5 @@ defmodule CodingAgent.Executor.Usage do
   end
 
   defp catalogued?(_, _), do: false
-  defp plain(%{__struct__: _} = value), do: Map.from_struct(value)
-  defp plain(value), do: value
   defp field(map, key) when is_map(map), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
 end

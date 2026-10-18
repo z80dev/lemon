@@ -486,12 +486,38 @@ describe("the status bar", () => {
 			answer: "done",
 			durationMs: 10,
 			model: "claude-sonnet-4",
-			usage: { inputTokens: 40_000, outputTokens: 500, cacheReadTokens: 8_000 },
+			usage: {
+				inputTokens: 40_000,
+				outputTokens: 500,
+				cacheReadTokens: 8_000,
+				cacheWriteTokens: 0,
+			},
 		});
 		await waitFor(() => stripAnsi(app.statusBar.render(120)[0]).includes("48k/200k"), {
 			what: "the context gauge",
 		});
 		expect(stripAnsi(app.statusBar.render(120)[0])).toContain("24%");
+	});
+
+	test("partial run usage never invents a context gauge from missing cache counters", async () => {
+		const { app, server } = await bootApp();
+		await app.submit("/model claude-sonnet-4");
+		server.pushEvent("agent", {
+			type: "completed",
+			runId: "run-partial-usage",
+			sessionKey: "tui-test",
+			ok: true,
+			answer: "partial usage",
+			durationMs: 10,
+			model: "claude-sonnet-4",
+			usage: { inputTokens: 40_000, outputTokens: 500, cacheReadTokens: 8_000 },
+		});
+		await waitFor(() => app.store.focused.usage?.inputTokens === 40_000, {
+			what: "partial run usage",
+		});
+		const line = stripAnsi(app.statusBar.render(120)[0]);
+		expect(line).not.toContain("48k/200k");
+		expect(line).not.toContain("24%");
 	});
 
 	test("names the model a run reported, over the one set locally", async () => {

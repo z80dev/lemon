@@ -1071,64 +1071,80 @@ defmodule CodingAgent.Session.Presentation do
   end
 
   def build_usage(messages) do
-    messages
-    |> Enum.reduce(%{}, fn msg, acc ->
-      case Map.get(msg, :usage) do
-        nil -> acc
-        usage -> merge_usage(acc, usage)
-      end
-    end)
-    |> case do
-      empty when map_size(empty) == 0 -> nil
-      usage -> Map.put(usage, :context_tokens, latest_context_tokens(messages))
+    usages =
+      Enum.flat_map(messages, fn message ->
+        if Map.has_key?(message, :usage) or Map.get(message, :role) in [:assistant, "assistant"],
+          do: [Map.get(message, :usage)],
+          else: []
+      end)
+
+    case usages do
+      [] ->
+        nil
+
+      [first | rest] ->
+        Enum.reduce(rest, merge_usage(%{}, first), &merge_usage(&2, &1))
+        |> Map.put(:context_tokens, latest_context_tokens(messages))
     end
   end
 
   defp latest_context_tokens(messages) do
     messages
     |> Enum.reverse()
-    |> Enum.find_value(0, fn message ->
-      case Map.get(message, :usage) do
-        %{input: input, output: output, cache_read: cache_read, cache_write: cache_write}
-        when is_number(input) and is_number(output) and is_number(cache_read) and
-               is_number(cache_write) ->
-          input + output + cache_read + cache_write
-
-        _ ->
-          nil
-      end
+    |> Enum.find(fn message ->
+      Map.has_key?(message, :usage) or Map.get(message, :role) in [:assistant, "assistant"]
     end)
-  end
+    |> case do
+      %{usage: usage} when is_map(usage) ->
+        Map.get(usage, :total_tokens) ||
+          sum_known(Enum.map([:input, :output, :cache_read, :cache_write], &Map.get(usage, &1)))
 
-  def merge_usage(acc, usage) do
-    merged =
-      Map.merge(acc, usage, fn _k, v1, v2 ->
-        if is_number(v1) and is_number(v2), do: v1 + v2, else: v2
-      end)
-
-    previous_cost = Map.get(acc, :cost) || Map.get(acc, "cost")
-    current_cost = Map.get(usage, :cost) || Map.get(usage, "cost")
-
-    if is_map(previous_cost) or is_map(current_cost) do
-      merged |> Map.delete("cost") |> Map.put(:cost, merge_cost(previous_cost, current_cost))
-    else
-      merged
+      _ ->
+        nil
     end
   end
 
-  defp merge_cost(previous, current) do
-    Enum.reduce(
-      [:input, :output, :cache_read, :cache_write, :cache_write_long, :total],
-      %{},
-      fn key, cost ->
-        first = cost_component(previous, key)
-        second = cost_component(current, key)
+  def merge_usage(acc, usage) do
+    usage = if is_struct(usage), do: Map.from_struct(usage), else: usage || %{}
 
-        if is_nil(first) and is_nil(second),
-          do: cost,
-          else: Map.put(cost, key, (first || 0) + (second || 0))
+    usage =
+      if Enum.all?([:input, :output, :total_tokens], &is_number(Map.get(usage, &1))) do
+        usage
+      else
+        cost = Map.get(usage, :cost)
+        cost = if is_map(cost), do: Map.put(cost, :total, nil), else: nil
+        Map.put(usage, :cost, cost)
       end
-    )
+
+    first? = map_size(acc) == 0
+
+    merged =
+      Enum.reduce(
+        [:input, :output, :cache_read, :cache_write, :cache_write_long, :total_tokens],
+        Map.merge(acc, usage),
+        fn key, merged ->
+          value = Map.get(usage, key)
+          Map.put(merged, key, if(first?, do: value, else: sum_known([Map.get(acc, key), value])))
+        end
+      )
+
+    cost =
+      if first?,
+        do: Map.get(usage, :cost),
+        else: merge_cost(Map.get(acc, :cost), Map.get(usage, :cost))
+
+    cost = if is_number(cost), do: %{total: cost}, else: cost
+    Map.put(merged, :cost, cost)
+  end
+
+  defp merge_cost(previous, current) do
+    Map.new([:input, :output, :cache_read, :cache_write, :cache_write_long, :total], fn key ->
+      {key, sum_known([cost_component(previous, key), cost_component(current, key)])}
+    end)
+  end
+
+  defp sum_known(values) do
+    if Enum.all?(values, &is_number/1), do: Enum.sum(values), else: nil
   end
 
   defp cost_component(cost, key) when is_map(cost) do
@@ -1137,6 +1153,8 @@ defmodule CodingAgent.Session.Presentation do
       _ -> nil
     end
   end
+
+  defp cost_component(cost, :total) when is_number(cost), do: cost
 
   defp cost_component(_cost, _key), do: nil
 
@@ -1483,9 +1501,11 @@ defmodule CodingAgent.Session.Presentation do
   defp current_provider(_state), do: nil
 
   defp build_trace_stream_options(base, run_id, session_key, agent_id) do
-    base =
+    %StreamOptions{} =
+      base =
       case base do
         %StreamOptions{} = opts -> opts
+        opts when is_map(opts) -> struct(StreamOptions, opts)
         _ -> %StreamOptions{}
       end
 
@@ -1496,12 +1516,9 @@ defmodule CodingAgent.Session.Presentation do
       |> maybe_put_trace_header("x-lemon-agent-id", agent_id)
 
     merged_headers = Map.merge(base.headers || %{}, trace_headers)
+    caller_headers = Map.merge(base.caller_headers || base.headers || %{}, trace_headers)
 
-    if map_size(merged_headers) == 0 do
-      nil
-    else
-      %StreamOptions{base | headers: merged_headers}
-    end
+    %StreamOptions{base | headers: merged_headers, caller_headers: caller_headers}
   end
 
   defp maybe_put_trace_header(headers, _key, nil), do: headers

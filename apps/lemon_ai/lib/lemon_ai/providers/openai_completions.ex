@@ -97,12 +97,23 @@ defmodule LemonAi.Providers.OpenAICompletions do
       url = build_url(model, resolved_provider_opts)
       headers = build_headers(model, context, api_key, opts)
       params = build_params(model, context, opts)
+      metadata = %{provider: model.provider, model: model.id, session_id: opts.session_id}
+      if is_function(opts.on_payload, 2), do: opts.on_payload.(params, metadata)
 
       EventStream.push_async(stream, {:start, output})
 
       output =
         stream
-        |> stream_request_with_retries(output, url, headers, params, RetryHelper.policy(opts), 0)
+        |> stream_request_with_retries(
+          output,
+          url,
+          headers,
+          params,
+          RetryHelper.policy(opts),
+          0,
+          opts,
+          metadata
+        )
         |> with_cost(model)
 
       if output.stop_reason in [:error, :aborted] do
@@ -130,12 +141,12 @@ defmodule LemonAi.Providers.OpenAICompletions do
       provider: model.provider,
       model: model.id,
       usage: %Usage{
-        input: 0,
-        output: 0,
-        cache_read: 0,
-        cache_write: 0,
-        total_tokens: 0,
-        cost: %Cost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0, total: 0.0}
+        input: nil,
+        output: nil,
+        cache_read: nil,
+        cache_write: nil,
+        total_tokens: nil,
+        cost: %Cost{input: nil, output: nil, cache_read: nil, cache_write: nil, total: nil}
       },
       stop_reason: :stop,
       timestamp: System.system_time(:millisecond)
@@ -903,7 +914,17 @@ defmodule LemonAi.Providers.OpenAICompletions do
   # HTTP Streaming
   # ============================================================================
 
-  defp stream_request_with_retries(stream, initial_output, url, headers, params, policy, attempt) do
+  defp stream_request_with_retries(
+         stream,
+         initial_output,
+         url,
+         headers,
+         params,
+         policy,
+         attempt,
+         opts,
+         metadata
+       ) do
     retry = fn ->
       stream_request_with_retries(
         stream,
@@ -912,7 +933,9 @@ defmodule LemonAi.Providers.OpenAICompletions do
         headers,
         params,
         policy,
-        attempt + 1
+        attempt + 1,
+        opts,
+        metadata
       )
     end
 
@@ -920,7 +943,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
       {:ok, response} ->
         cond do
           response.status in 200..299 ->
-            {output, committed} = process_sse_stream(stream, initial_output, response)
+            {output, committed, raw_usage} = process_sse_stream(stream, initial_output, response)
 
             retry_delay =
               if RetryHelper.retry_allowed?(attempt, policy) and not committed and
@@ -932,6 +955,9 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
             case retry_delay do
               :give_up ->
+                if is_map(raw_usage) and is_function(opts.on_usage, 2),
+                  do: opts.on_usage.(raw_usage, metadata)
+
                 output
 
               delay_ms ->
@@ -1030,6 +1056,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
       current_block: nil,
       buffer: "",
       committed?: false,
+      raw_usage: nil,
       tool_call_blocks: %{}
     }
 
@@ -1040,7 +1067,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
       |> finalize_current_block(stream)
       |> finalize_tool_call_blocks(stream)
 
-    {state.output, state.committed?}
+    {state.output, state.committed?, state.raw_usage}
   end
 
   defp materialize_response_body(%Req.Response{body: %Req.Response.Async{}} = response) do
@@ -1190,28 +1217,33 @@ defmodule LemonAi.Providers.OpenAICompletions do
   end
 
   defp process_usage(state, %{"usage" => usage}) when is_map(usage) do
-    cached_tokens = get_in(usage, ["prompt_tokens_details", "cached_tokens"]) || 0
-    reasoning_tokens = get_in(usage, ["completion_tokens_details", "reasoning_tokens"]) || 0
-    prompt_tokens = usage["prompt_tokens"] || 0
-    completion_tokens = usage["completion_tokens"] || 0
+    cached_tokens = token_count(get_in(usage, ["prompt_tokens_details", "cached_tokens"]))
+    written_tokens = token_count(get_in(usage, ["prompt_tokens_details", "cache_write_tokens"]))
+    prompt_tokens = token_count(usage["prompt_tokens"])
+    completion_tokens = token_count(usage["completion_tokens"])
 
-    # OpenAI includes cached tokens in prompt_tokens, so subtract (clamp to zero)
-    input = max(prompt_tokens - cached_tokens, 0)
-    output = completion_tokens + reasoning_tokens
+    # Both OpenAI and ZAI include cache hits in prompt_tokens. Reasoning is
+    # already part of completion_tokens, not additional output.
+    input =
+      if is_integer(prompt_tokens) and is_integer(cached_tokens) and is_integer(written_tokens),
+        do: max(prompt_tokens - cached_tokens - written_tokens, 0)
 
     new_usage = %Usage{
       input: input,
-      output: output,
+      output: completion_tokens,
       cache_read: cached_tokens,
-      cache_write: 0,
-      total_tokens: input + output + cached_tokens,
-      cost: %Cost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0, total: 0.0}
+      cache_write: written_tokens,
+      total_tokens: token_count(usage["total_tokens"]),
+      cost: %Cost{input: nil, output: nil, cache_read: nil, cache_write: nil, total: nil}
     }
 
-    %{state | output: %{state.output | usage: new_usage}}
+    %{state | output: %{state.output | usage: new_usage}, raw_usage: usage}
   end
 
   defp process_usage(state, _data), do: state
+
+  defp token_count(value) when is_integer(value) and value >= 0, do: value
+  defp token_count(_value), do: nil
 
   defp process_choice(stream, state, %{"choices" => [choice | _]}) do
     state =

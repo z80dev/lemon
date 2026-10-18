@@ -85,6 +85,28 @@ describe("parseSessionsContext", () => {
 		expect(parseSessionsContext(raw).usage?.costUsd).toBeUndefined();
 	});
 
+	test("retains partial provider usage without inventing zero components", () => {
+		const raw = reportedContextFixture("s1");
+		raw.usage = {
+			tokens: 130,
+			input: null,
+			output: 30,
+			cacheRead: 20,
+			cacheWrite: null,
+			costUsd: null,
+			assistantMessages: 1,
+		};
+		expect(parseSessionsContext(raw).usage).toEqual({
+			tokens: 130,
+			input: undefined,
+			output: 30,
+			cacheRead: 20,
+			cacheWrite: undefined,
+			costUsd: undefined,
+			assistantMessages: 1,
+		});
+	});
+
 	test("drops unknown category ids but keeps their tokens as an honest remainder", () => {
 		const raw = reportedContextFixture("s1");
 		const known = asArray(raw.categories).map((entry) => {

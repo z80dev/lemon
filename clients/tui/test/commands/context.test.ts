@@ -27,6 +27,24 @@ test("/context fetches the focused session with the TUI cwd and opens the panel"
 	expect(h.host.notices).toHaveLength(1);
 });
 
+test("/context renders partial provider usage as unknown, not zero", async () => {
+	const h = await boot();
+	const receipt = reportedContextFixture("tui-ctx");
+	receipt.usage = {
+		tokens: 130,
+		input: null,
+		output: 30,
+		cacheRead: 20,
+		cacheWrite: null,
+		costUsd: null,
+		assistantMessages: 1,
+	};
+	h.server.serveSessionContext({ "tui-ctx": receipt });
+	await h.run("/context");
+	expect(h.host.text).toContain("tokens unknown in / 30 out / unknown cache");
+	expect(h.host.text).toContain("cost unknown");
+});
+
 test("a successful measurement feeds the status-bar gauge", async () => {
 	const h = await boot();
 	h.server.serveSessionContext({ "tui-ctx": reportedContextFixture("tui-ctx") });

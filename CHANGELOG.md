@@ -10,6 +10,20 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Preserve missing provider usage and cost as null through native session history,
+  run-ledger occurrences and CLI JSON, including successful multi-turn tasks.
+  Aggregate only complete per-counter observations, retain cache breakdowns without
+  counting reasoning twice, and keep request observers attached to native trace
+  options instead of replacing map-valued callbacks.
+  Preserve long-cache subsets and component prices across occurrence aggregation,
+  and keep semantic-search usage details aligned with the canonical nullable ledger.
+  Prompt diagnostics, simulation artifacts, context projections and usage dashboards
+  retain unknown counters safely. Count each provider attempt independently of
+  transcript history so failed retries and empty continuations remain spent without
+  exposing budget estimates as provider telemetry.
+  Keep legacy usage callers without occurrence metadata safe and preserve known
+  token totals and context gauges across existing control-plane and terminal clients.
+
 - Persist paired attempts interrupted during disposal, verification, pricing or
   report finalization before exiting, retaining paid counters and prior failures
   and refusing unsafe resume. Anchor recovery logs, both ledger opens and

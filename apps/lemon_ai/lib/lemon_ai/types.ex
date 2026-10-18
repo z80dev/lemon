@@ -137,11 +137,11 @@ defmodule LemonAi.Types do
   defmodule Cost do
     @moduledoc "Cost breakdown in dollars"
     @type t :: %__MODULE__{
-            input: float(),
-            output: float(),
-            cache_read: float(),
-            cache_write: float(),
-            total: float()
+            input: float() | nil,
+            output: float() | nil,
+            cache_read: float() | nil,
+            cache_write: float() | nil,
+            total: float() | nil
           }
     defstruct input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0, total: 0.0
   end
@@ -150,15 +150,17 @@ defmodule LemonAi.Types do
     @moduledoc """
     Token usage and cost for a response. `cache_write_long` is the hourly
     Anthropic cache-write subset of `cache_write`, not an additional token count.
+    Counters and costs may be nil when the provider did not report them; nil is
+    unknown, never a measured zero. Input excludes cache-read/write tokens.
     """
     @type t :: %__MODULE__{
-            input: non_neg_integer(),
-            output: non_neg_integer(),
-            cache_read: non_neg_integer(),
-            cache_write: non_neg_integer(),
-            cache_write_long: non_neg_integer(),
-            total_tokens: non_neg_integer(),
-            cost: Cost.t()
+            input: non_neg_integer() | nil,
+            output: non_neg_integer() | nil,
+            cache_read: non_neg_integer() | nil,
+            cache_write: non_neg_integer() | nil,
+            cache_write_long: non_neg_integer() | nil,
+            total_tokens: non_neg_integer() | nil,
+            cost: Cost.t() | nil
           }
     defstruct input: 0,
               output: 0,
@@ -322,10 +324,10 @@ defmodule LemonAi.Types do
     @moduledoc """
     Options for streaming requests.
 
-    `on_payload` is an opt-in Codex request observer, called with the finalized
-    JSON-safe body and provider/model/session metadata before HTTP submission.
-    `on_usage` observes terminal Codex usage before normalization. Both callbacks
-    run in the provider worker; their return values are ignored and observer
+    `on_payload` is an opt-in Codex or OpenAI-compatible request observer, called
+    with the finalized JSON-safe body and provider/model/session metadata before
+    HTTP submission. `on_usage` observes terminal raw usage before normalization.
+    Both callbacks run in the provider worker; their return values are ignored and observer
     errors fail the stream. Bodies can contain private conversation content;
     observers must keep them in memory and persist only safe measurements.
 

@@ -1,5 +1,12 @@
 defmodule CodingAgent.Session.RunTranslator do
-  @moduledoc false
+  @moduledoc """
+  Translates native session events into execution events.
+
+  Provider usage is accumulated only from `{:provider_usage, message}` terminal
+  attempt observations. Transcript messages may omit failed/empty attempts or
+  repeat messages and are never accounting input. Budget ledgers enforce limits
+  independently and must not fill unknown provider counters or costs.
+  """
 
   alias CodingAgent.Executor.Usage
   alias CodingAgent.Session.Presentation
@@ -413,28 +420,20 @@ defmodule CodingAgent.Session.RunTranslator do
   end
 
   def handle_event(%__MODULE__{} = t, {:agent_end, messages}) do
-    t =
-      if t.usage_occurrences == [] do
-        occurrences =
-          Enum.flat_map(messages, fn message ->
-            case Usage.occurrence(message) do
-              nil -> []
-              occurrence -> [occurrence]
-            end
-          end)
-
-        %{t | usage_occurrences: Enum.reverse(occurrences)}
-      else
-        t
-      end
-
     if t.cancel_reason do
       emit_completed_error(t, Presentation.cancel_error_message(t.cancel_reason), %{
         messages: messages
       })
     else
       answer = Presentation.extract_answer(messages, t.accumulated_text)
-      usage = messages |> Presentation.build_usage() |> with_budget_usage(t) |> with_metrics(t)
+
+      usage =
+        t.usage_occurrences
+        |> Enum.reverse()
+        |> Presentation.build_usage()
+        |> with_budget_usage(t)
+        |> with_metrics(t)
+
       emit_completed_ok(t, answer, usage)
     end
   end
@@ -476,7 +475,7 @@ defmodule CodingAgent.Session.RunTranslator do
   def handle_event(%__MODULE__{} = t, {:turn_end, _msg, _results}), do: %{t | turns: t.turns + 1}
   def handle_event(%__MODULE__{} = t, {:message_start, _msg}), do: t
 
-  def handle_event(%__MODULE__{} = t, {:message_end, message}) do
+  def handle_event(%__MODULE__{} = t, {:provider_usage, message}) do
     case Usage.occurrence(message) do
       nil ->
         t
@@ -605,21 +604,15 @@ defmodule CodingAgent.Session.RunTranslator do
     end
   end
 
-  defp emit_completed_error(%__MODULE__{} = t, error_msg, partial_state \\ nil) do
+  defp emit_completed_error(%__MODULE__{} = t, error_msg, _partial_state \\ nil) do
     if t.completed_emitted do
       t
     else
       usage =
-        case t.budget_usage do
-          nil ->
-            Presentation.build_failure_usage(t.emitter_state, partial_state)
-
-          _ ->
-            t.usage_occurrences
-            |> Enum.reverse()
-            |> Presentation.build_usage()
-            |> with_budget_usage(t)
-        end
+        t.usage_occurrences
+        |> Enum.reverse()
+        |> Presentation.build_usage()
+        |> with_budget_usage(t)
         |> with_metrics(t)
 
       emitter_state =
@@ -643,22 +636,43 @@ defmodule CodingAgent.Session.RunTranslator do
     end
   end
 
-  defp with_budget_usage(usage, %{budget_usage: %{run_usage: run_usage}}) do
+  defp with_budget_usage(usage, %{budget_usage: %{run_usage: _run_usage}}) do
+    # Enforcement totals are separate from provider telemetry and may be unknown.
+    # They cannot attest provider counters or fill their missing data.
     usage = usage || %{}
-    cost = Map.put(Map.get(usage, :cost) || %{}, :total, run_usage.cost_usd)
+    cost = Map.get(usage, :cost)
+    total_cost = if is_map(cost), do: Map.get(cost, :total), else: cost
 
     Map.merge(usage, %{
-      total_tokens: run_usage.tokens,
-      tokens: run_usage.tokens,
-      cost_usd: run_usage.cost_usd,
-      cost: cost
+      tokens: Map.get(usage, :total_tokens),
+      cost_usd: total_cost
     })
   end
 
   defp with_budget_usage(usage, _translator), do: usage
 
   defp with_metrics(usage, t) do
-    Map.merge(usage || %{}, %{
+    unknown_usage = %{
+      input: nil,
+      output: nil,
+      cache_read: nil,
+      cache_write: nil,
+      cache_write_long: nil,
+      total_tokens: nil,
+      context_tokens: nil,
+      cost: %{
+        input: nil,
+        output: nil,
+        cache_read: nil,
+        cache_write: nil,
+        cache_write_long: nil,
+        total: nil
+      }
+    }
+
+    usage = Map.merge(unknown_usage, usage || %{})
+
+    Map.merge(usage, %{
       turns: t.turns,
       tool_errors: t.tool_errors,
       occurrences: Enum.reverse(t.usage_occurrences)

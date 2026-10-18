@@ -142,12 +142,12 @@ defmodule LemonAgent.Proxy do
       provider: model.provider,
       model: model.id,
       usage: %Usage{
-        input: 0,
-        output: 0,
-        cache_read: 0,
-        cache_write: 0,
-        total_tokens: 0,
-        cost: %Cost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0, total: 0.0}
+        input: nil,
+        output: nil,
+        cache_read: nil,
+        cache_write: nil,
+        total_tokens: nil,
+        cost: nil
       },
       timestamp: System.system_time(:millisecond)
     }
@@ -573,24 +573,28 @@ defmodule LemonAgent.Proxy do
   defp decode_stop_reason("error"), do: :error
   defp decode_stop_reason(_), do: :stop
 
-  defp decode_usage(nil), do: %Usage{}
+  defp decode_usage(nil), do: nil
 
   defp decode_usage(usage_data) when is_map(usage_data) do
-    cost_data = Map.get(usage_data, "cost", %{})
-
     %Usage{
-      input: Map.get(usage_data, "input", 0),
-      output: Map.get(usage_data, "output", 0),
-      cache_read: Map.get(usage_data, "cacheRead", 0),
-      cache_write: Map.get(usage_data, "cacheWrite", 0),
-      total_tokens: Map.get(usage_data, "totalTokens", 0),
-      cost: %Cost{
-        input: Map.get(cost_data, "input", 0.0),
-        output: Map.get(cost_data, "output", 0.0),
-        cache_read: Map.get(cost_data, "cacheRead", 0.0),
-        cache_write: Map.get(cost_data, "cacheWrite", 0.0),
-        total: Map.get(cost_data, "total", 0.0)
-      }
+      input: Map.get(usage_data, "input"),
+      output: Map.get(usage_data, "output"),
+      cache_read: Map.get(usage_data, "cacheRead"),
+      cache_write: Map.get(usage_data, "cacheWrite"),
+      total_tokens: Map.get(usage_data, "totalTokens"),
+      cost: decode_cost(Map.get(usage_data, "cost"))
+    }
+  end
+
+  defp decode_cost(nil), do: nil
+
+  defp decode_cost(cost) when is_map(cost) do
+    %Cost{
+      input: Map.get(cost, "input"),
+      output: Map.get(cost, "output"),
+      cache_read: Map.get(cost, "cacheRead"),
+      cache_write: Map.get(cost, "cacheWrite"),
+      total: Map.get(cost, "total")
     }
   end
 
@@ -704,13 +708,19 @@ defmodule LemonAgent.Proxy do
       cacheRead: usage.cache_read,
       cacheWrite: usage.cache_write,
       totalTokens: usage.total_tokens,
-      cost: %{
-        input: usage.cost.input,
-        output: usage.cost.output,
-        cacheRead: usage.cost.cache_read,
-        cacheWrite: usage.cost.cache_write,
-        total: usage.cost.total
-      }
+      cost: encode_cost(usage.cost)
+    }
+  end
+
+  defp encode_cost(nil), do: nil
+
+  defp encode_cost(cost) do
+    %{
+      input: cost.input,
+      output: cost.output,
+      cacheRead: cost.cache_read,
+      cacheWrite: cost.cache_write,
+      total: cost.total
     }
   end
 

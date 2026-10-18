@@ -1055,17 +1055,26 @@ defmodule CodingAgent.ExecutorTest do
     end
 
     @tag :tmp_dir
-    test "cancel completion carries usage from messages already seen", %{tmp_dir: tmp_dir} do
+    test "cancel completion retains known observations without inventing interrupted usage", %{
+      tmp_dir: tmp_dir
+    } do
       tool_response =
         assistant_message_with_tool_calls([
           tool_call("missing_tool_for_cancel_usage", %{}, id: "call_cancel_usage")
         ])
 
+      owner = self()
+      stream_fn = mock_stream_fn([tool_response, :slow])
+
       request =
         request(tmp_dir,
           prompt: "start then cancel",
           run_id: "run-native-cancel-usage",
-          stream_fn: mock_stream_fn([tool_response, :slow])
+          stream_fn: fn model, context, options ->
+            result = stream_fn.(model, context, options)
+            send(owner, :provider_attempt_started)
+            result
+          end
         )
 
       {:ok, run_ref, ctx} =
@@ -1081,6 +1090,11 @@ defmodule CodingAgent.ExecutorTest do
                       }},
                      2_000
 
+      # Cancel an invoked second attempt, not the gap before invocation. Its
+      # unreported usage must not disappear from the aggregate.
+      assert_receive :provider_attempt_started, 2_000
+      assert_receive :provider_attempt_started, 2_000
+
       assert Executor.cancel(ctx) == :ok
 
       assert_receive {:engine_event, ^run_ref,
@@ -1092,9 +1106,17 @@ defmodule CodingAgent.ExecutorTest do
                       }},
                      2_000
 
-      assert usage.input == 1
-      assert usage.output == 1
-      assert usage.total_tokens == 2
+      assert is_nil(usage.input)
+      assert is_nil(usage.output)
+      assert is_nil(usage.total_tokens)
+
+      assert [known, interrupted] = usage.occurrences
+      assert known.usage.input == 1
+      assert known.usage.output == 1
+      assert known.usage.total_tokens == 2
+      assert is_nil(interrupted.usage.input)
+      assert is_nil(interrupted.usage.output)
+      assert is_nil(interrupted.usage.total_tokens)
     end
 
     @tag :tmp_dir

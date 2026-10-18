@@ -339,6 +339,51 @@ defmodule CodingAgent.Tools.SemanticFindTest do
       assert usage.input_tokens == 300
     end
 
+    test "missing usage retains the call without inventing counters or a scalar cost", %{
+      tmp_dir: dir
+    } do
+      project(dir)
+      owner = self()
+
+      unknown = %Usage{
+        input: nil,
+        output: nil,
+        cache_read: nil,
+        cache_write: nil,
+        total_tokens: nil,
+        cost: nil
+      }
+
+      complete = fn _, _, _ -> {:ok, %{message(answer([])) | usage: unknown}} end
+
+      assert %AgentToolResult{details: %{usage: usage} = details} =
+               run(dir, %{"query" => "retry failed upload"},
+                 settings_manager: settings(),
+                 semantic_find_complete: complete,
+                 semantic_find_usage_record: fn entry ->
+                   send(owner, {:unknown_entry, entry})
+                   :ok
+                 end
+               )
+
+      assert_receive {:unknown_entry, entry}
+      assert is_tuple(entry.occurrence)
+      assert entry.input == nil
+      assert entry.output == nil
+      assert entry.total_tokens == nil
+      assert entry.cost == nil
+      assert details.token_cap_exceeded == nil
+
+      assert usage == %{
+               input_tokens: nil,
+               output_tokens: nil,
+               total_tokens: nil,
+               cost_usd: nil,
+               price_known: false,
+               recorded: true
+             }
+    end
+
     test "appears in the canonical usage ledger with its known cost", %{tmp_dir: dir} do
       project(dir)
       store = :"semantic_find_usage_store_#{System.unique_integer([:positive])}"

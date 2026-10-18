@@ -899,7 +899,7 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
             "usage" => %{
               "prompt_tokens" => 1,
               "completion_tokens" => 0,
-              "prompt_tokens_details" => %{"cached_tokens" => 5}
+              "prompt_tokens_details" => %{"cached_tokens" => 5, "cache_write_tokens" => 0}
             }
           },
           :done
@@ -933,7 +933,7 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
             "usage" => %{
               "prompt_tokens" => 1_500_000,
               "completion_tokens" => 200_000,
-              "prompt_tokens_details" => %{"cached_tokens" => 500_000}
+              "prompt_tokens_details" => %{"cached_tokens" => 500_000, "cache_write_tokens" => 0}
             }
           },
           :done

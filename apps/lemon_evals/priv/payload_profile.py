@@ -2,6 +2,7 @@
 """In-memory request measurement; output contains counts/hashes, never payload text."""
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -28,7 +29,8 @@ def numeric(value):
 
 
 def number(value):
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+    return value if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                     and math.isfinite(value) and value >= 0) else None
 
 
 def strip_opaque(value):
@@ -53,6 +55,7 @@ def strip_opaque(value):
 
 
 def category(item):
+    if item.get('role') == 'tool': return 'tool_output'
     kind = item.get('type', 'message')
     if kind == 'function_call_output': return 'tool_output'
     if kind == 'function_call': return 'tool_arguments'
@@ -78,6 +81,15 @@ def instructions_sections(text):
 
 
 def measure(body, previous):
+    # Chat Completions uses messages rather than Responses instructions/input.
+    # Measure that actual visible JSON too; estimates never supply usage counters.
+    if 'messages' in body:
+        messages = body.get('messages') or []
+        body = {**body,
+                'instructions': '\n'.join(encoded(item) for item in messages
+                                          if item.get('role') in ('system', 'developer')),
+                'input': [item for item in messages
+                          if item.get('role') not in ('system', 'developer')]}
     instructions = body.get('instructions') or ''
     if not isinstance(instructions, str): instructions = encoded(instructions)
     tools = body.get('tools') or []
@@ -106,7 +118,8 @@ def measure(body, previous):
         if bucket == 'tool_arguments': row['tool'] = clean.get('name', 'unknown')
         if bucket == 'tool_output': row['tool'] = calls.get(clean.get('call_id'), 'unknown')
         items.append(row)
-    tool_rows = [{'name': tool.get('name', 'unknown'), 'bytes': len(encoded(tool).encode('utf-8')), 'tokens_estimate': count(encoded(tool))} for tool in tools]
+    tool_rows = [{'name': tool.get('name') or (tool.get('function') or {}).get('name', 'unknown'),
+                  'bytes': len(encoded(tool).encode('utf-8')), 'tokens_estimate': count(encoded(tool))} for tool in tools]
     output = {'tokenizer': 'o200k_base', 'estimates': estimates,
               'repeated_estimates': {'instructions': count(common), 'tool_schemas': count(tools_text) if previous.get('tools_hash') == digest(tools_text) else 0, 'input': repeated},
               'instructions_bytes': len(instructions.encode('utf-8')), 'instruction_sections': instructions_sections(instructions),
@@ -119,13 +132,27 @@ def measure(body, previous):
 
 
 def sanitize_usage(usage):
+    """Project provider counters, not tokenizer estimates, to disjoint buckets.
+
+    Chat prompt/completion totals include cached/reasoning tokens respectively.
+    Missing optional details remain unknown, including cache writes; a missing
+    cache counter is not evidence of zero writes or a zero-cache request.
+    """
+    chat = any(key in usage for key in ('prompt_tokens', 'completion_tokens',
+                                        'prompt_tokens_details', 'completion_tokens_details'))
+    input_key, output_key = ('prompt_tokens', 'completion_tokens') if chat else ('input_tokens', 'output_tokens')
+    input_details = usage.get('prompt_tokens_details' if chat else 'input_tokens_details') or {}
+    output_details = usage.get('completion_tokens_details' if chat else 'output_tokens_details') or {}
+    prompt, output = number(usage.get(input_key)), number(usage.get(output_key))
+    cached, write = number(input_details.get('cached_tokens')), number(input_details.get('cache_write_tokens'))
+    uncached = (prompt - cached - write
+                if None not in (prompt, cached, write) and cached + write <= prompt else None)
     attribution = usage.get('attribution') or {}
     fields = attribution.get('request_fields') or {}
     items = attribution.get('items') or {}
-    return {'input_tokens': number(usage.get('input_tokens')), 'output_tokens': number(usage.get('output_tokens')), 'total_tokens': number(usage.get('total_tokens')),
-            'cache_read_tokens': number((usage.get('input_tokens_details') or {}).get('cached_tokens')),
-            'cache_write_tokens': number((usage.get('input_tokens_details') or {}).get('cache_write_tokens')),
-            'reasoning_output_tokens': number((usage.get('output_tokens_details') or {}).get('reasoning_tokens')),
+    return {'input_tokens': uncached, 'output_tokens': output, 'total_tokens': number(usage.get('total_tokens')),
+            'cache_read_tokens': cached, 'cache_write_tokens': write,
+            'reasoning_output_tokens': number(output_details.get('reasoning_tokens')),
             'request_fields': {key: numeric(value) for key, value in fields.items() if key in ('instructions', 'tools', 'input') and isinstance(value, dict)},
             'item_usage': [{'id_hash': digest(key), **numeric(value)} for key, value in items.items() if isinstance(value, dict)]}
 

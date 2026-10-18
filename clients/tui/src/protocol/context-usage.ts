@@ -155,7 +155,9 @@ function sessionUsage(raw: unknown): ContextSessionUsage | undefined {
 	const tokens = count(pickNumber(raw, "tokens"));
 	const input = count(pickNumber(raw, "input"));
 	const output = count(pickNumber(raw, "output"));
-	if (tokens === undefined || input === undefined || output === undefined) return undefined;
+	const assistantMessages = count(pickNumber(raw, "assistantMessages"));
+	if ([tokens, input, output, assistantMessages].every((value) => value === undefined))
+		return undefined;
 	// A missing or invalid cost stays unknown here; callers must not read it as zero.
 	const costUsd = pickNumber(raw, "costUsd");
 	return {
@@ -163,9 +165,9 @@ function sessionUsage(raw: unknown): ContextSessionUsage | undefined {
 		costUsd: costUsd !== undefined && costUsd >= 0 ? costUsd : undefined,
 		input,
 		output,
-		cacheRead: count(pickNumber(raw, "cacheRead")) ?? 0,
-		cacheWrite: count(pickNumber(raw, "cacheWrite")) ?? 0,
-		assistantMessages: count(pickNumber(raw, "assistantMessages")) ?? 0,
+		cacheRead: count(pickNumber(raw, "cacheRead")),
+		cacheWrite: count(pickNumber(raw, "cacheWrite")),
+		assistantMessages: assistantMessages ?? 0,
 	};
 }
 

@@ -1,0 +1,8 @@
+data: {"id":"offline-zai-fixture","model":"glm-5.3","choices":[{"delta":{"reasoning_content":"Fixture reasoning."},"finish_reason":null}],"usage":null}
+
+data: {"id":"offline-zai-fixture","model":"glm-5.3","choices":[{"delta":{"content":"Offline fixture."},"finish_reason":"stop"}]}
+
+data: {"id":"offline-zai-fixture","model":"glm-5.3","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":30,"total_tokens":130,"prompt_tokens_details":{"cached_tokens":20}}}
+
+data: [DONE]
+

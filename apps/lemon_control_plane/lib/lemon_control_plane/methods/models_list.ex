@@ -110,7 +110,7 @@ defmodule LemonControlPlane.Methods.ModelsList do
       "cacheWritePerMillion" => price(get_field(cost, :cache_write))
     }
 
-    if Enum.any?(Map.values(prices), &(is_number(&1) and &1 > 0)), do: prices
+    if Enum.any?(Map.values(prices), &is_number/1), do: prices
   end
 
   defp pricing(_cost), do: nil

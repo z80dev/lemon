@@ -39,13 +39,19 @@ defmodule LemonControlPlane.Methods.UsageCostDetailsTest do
           input_tokens: 1_000,
           output_tokens: 200,
           cache_read_input_tokens: 500,
+          cache_creation_input_tokens: 0,
           cost: %{total: 0.25}
         })
       )
 
     :ok =
       UsageLedger.record(
-        finalize("run-b", "agent:web:two", "anthropic:claude-x", %{input: 300, output: 50})
+        finalize("run-b", "agent:web:two", "anthropic:claude-x", %{
+          input: 300,
+          output: 50,
+          cache_read: 0,
+          cache_write: 0
+        })
       )
 
     # A retried finalization of the same run is not counted twice.
@@ -90,6 +96,42 @@ defmodule LemonControlPlane.Methods.UsageCostDetailsTest do
     assert {:ok, status} = UsageStatus.handle(%{}, %{})
     assert status["runs"] == 2
     assert status["tokens"] == %{"input" => 1_800, "output" => 250}
+  end
+
+  test "a cost-only historical charge reaches cost and status without fabricating canonical tokens",
+       ctx do
+    run_id = "cost-only-#{LemonCore.Id.uuid()}"
+    entry = finalize(run_id, "agent:web:cost-only", "unattributed", %{cost: 0.125})
+    native = UsageLedger.occurrence_record(entry)
+    on_exit(fn -> LemonCore.Store.delete(:usage_occurrences, native.id) end)
+
+    assert :ok = UsageLedger.record(entry)
+    assert :ok = UsageLedger.record(entry)
+
+    assert {:ok, result} =
+             UsageCost.handle(%{"startDate" => ctx.today, "endDate" => ctx.today}, %{})
+
+    assert result["totalCost"] == 0.125
+    assert result["knownCostSubtotal"] == 0.125
+    assert result["totalRequests"] == 1
+    assert result["breakdown"] == %{"unknown" => 0.125}
+
+    assert {:ok, status} = UsageStatus.handle(%{}, %{})
+    assert status["cost"] == 0.125
+    assert status["runs"] == 1
+
+    assert {:ok, %{records: [record], incomplete: true}} =
+             UsageStore.records(%{
+               "runId" => run_id,
+               "fromMs" => 0,
+               "toMs" => System.system_time(:millisecond) + 1
+             })
+
+    assert record.cost_usd == 0.125
+    assert record.price_known
+    assert record.input_tokens == nil
+    assert record.output_tokens == nil
+    assert record.total_tokens == nil
   end
 
   test "a run without usage is ignored and the summary restarts each day" do

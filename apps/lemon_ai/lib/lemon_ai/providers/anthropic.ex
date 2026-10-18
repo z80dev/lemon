@@ -22,6 +22,9 @@ defmodule LemonAi.Providers.Anthropic do
     `LemonAi.Providers.RetryHelper.policy/0`, honoring `retry-after` and
     `anthropic-ratelimit-*-reset`; the final error carries `retry_after_ms`
 
+  Usage updates retain counters omitted by later events. Explicitly unknown (`nil`)
+  counters remain unknown in derived totals and costs until reported numerically.
+
   ## Configuration
 
   The API key can be provided via:
@@ -1567,20 +1570,23 @@ defmodule LemonAi.Providers.Anthropic do
   defp update_usage(output, usage_data, model, cache_creation) do
     usage = output.usage
 
-    input = usage_data["input_tokens"] || usage.input
-    output_tokens = usage_data["output_tokens"] || usage.output
-    cache_read = usage_data["cache_read_input_tokens"] || usage.cache_read
+    input = Map.get(usage_data, "input_tokens", usage.input)
+    output_tokens = Map.get(usage_data, "output_tokens", usage.output)
+    cache_read = Map.get(usage_data, "cache_read_input_tokens", usage.cache_read)
 
     cache_write =
-      usage_data["cache_creation_input_tokens"] ||
-        if(is_map(usage_data["cache_creation"]),
-          do:
-            (cache_creation["ephemeral_5m_input_tokens"] || 0) +
-              (cache_creation["ephemeral_1h_input_tokens"] || 0),
-          else: usage.cache_write
-        )
+      Map.get_lazy(usage_data, "cache_creation_input_tokens", fn ->
+        if is_map(usage_data["cache_creation"]) do
+          sum_usage_counts([
+            Map.get(cache_creation, "ephemeral_5m_input_tokens", 0),
+            Map.get(cache_creation, "ephemeral_1h_input_tokens", 0)
+          ])
+        else
+          usage.cache_write
+        end
+      end)
 
-    total_tokens = input + output_tokens + cache_read + cache_write
+    total_tokens = sum_usage_counts([input, output_tokens, cache_read, cache_write])
 
     updated_usage = %{
       usage
@@ -1588,7 +1594,7 @@ defmodule LemonAi.Providers.Anthropic do
         output: output_tokens,
         cache_read: cache_read,
         cache_write: cache_write,
-        cache_write_long: cache_creation["ephemeral_1h_input_tokens"] || 0,
+        cache_write_long: Map.get(cache_creation, "ephemeral_1h_input_tokens", 0),
         total_tokens: total_tokens
     }
 
@@ -1596,6 +1602,10 @@ defmodule LemonAi.Providers.Anthropic do
     cost = LemonAi.calculate_cost(model, updated_usage)
 
     %{output | usage: %{updated_usage | cost: cost}}
+  end
+
+  defp sum_usage_counts(counts) do
+    if Enum.all?(counts, &is_number/1), do: Enum.sum(counts)
   end
 
   # ============================================================================

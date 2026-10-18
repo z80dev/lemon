@@ -5,6 +5,11 @@ defmodule CodingAgent.BudgetTracker do
   Tracks resource usage per run and enforces budget limits.
   Integrates with RunGraph to track parent/child budget inheritance.
 
+  Budget counters preserve unknown provider usage as `nil`, independently for
+  tokens and dollars. A configured cap fails closed when its metric is unknown;
+  later known reports cannot erase that incompleteness. Caller-supplied numeric
+  estimates remain distinct from nullable provider telemetry.
+
   ## Features
 
   - Token usage tracking (input, output, cache)
@@ -32,8 +37,8 @@ defmodule CodingAgent.BudgetTracker do
           max_tokens: non_neg_integer() | nil,
           max_cost: float() | nil,
           max_children: non_neg_integer() | nil,
-          used_tokens: non_neg_integer(),
-          used_cost: float(),
+          used_tokens: non_neg_integer() | nil,
+          used_cost: float() | nil,
           active_children: non_neg_integer(),
           active_child_ids: [String.t()],
           completed_child_ids: [String.t()],
@@ -41,8 +46,8 @@ defmodule CodingAgent.BudgetTracker do
         }
 
   @type usage :: %{
-          tokens: non_neg_integer(),
-          cost: float()
+          tokens: non_neg_integer() | nil,
+          cost: float() | nil
         }
 
   # ============================================================================
@@ -130,8 +135,8 @@ defmodule CodingAgent.BudgetTracker do
     update_budget(run_id, fn budget ->
       %{
         budget
-        | used_tokens: budget.used_tokens + tokens,
-          used_cost: budget.used_cost + cost
+        | used_tokens: add(budget.used_tokens, tokens),
+          used_cost: add(budget.used_cost, cost)
       }
     end)
   end
@@ -139,7 +144,10 @@ defmodule CodingAgent.BudgetTracker do
   @doc """
   Record usage from an AI response.
 
-  Extracts token usage from the response and records it.
+  Records the reported total, or the sum of complete input/output/cache counters
+  when no total is reported. Hourly cache writes are a subset, not extra tokens.
+  Cost may be a numeric amount or a nested cost breakdown with a numeric `total`.
+  Missing counters or dollar totals remain unknown, without changing telemetry.
   """
   @spec record_response_usage(String.t(), map()) :: :ok | {:error, term()}
   def record_response_usage(run_id, response) do
@@ -290,8 +298,8 @@ defmodule CodingAgent.BudgetTracker do
                  %{tokens: child_tokens, cost: child_cost} ->
                    %{
                      budget
-                     | used_tokens: budget.used_tokens + child_tokens,
-                       used_cost: budget.used_cost + child_cost
+                     | used_tokens: add(budget.used_tokens, child_tokens),
+                       used_cost: add(budget.used_cost, child_cost)
                    }
 
                  _ ->
@@ -361,14 +369,15 @@ defmodule CodingAgent.BudgetTracker do
 
   defp check_limits(budget) do
     token_check =
-      if budget.max_tokens && budget.used_tokens > budget.max_tokens do
+      if budget.max_tokens &&
+           (is_nil(budget.used_tokens) or budget.used_tokens > budget.max_tokens) do
         {:error, :token_limit_exceeded, %{limit: budget.max_tokens, used: budget.used_tokens}}
       else
         :ok
       end
 
     cost_check =
-      if budget.max_cost && budget.used_cost > budget.max_cost do
+      if budget.max_cost && (is_nil(budget.used_cost) or budget.used_cost > budget.max_cost) do
         {:error, :cost_limit_exceeded, %{limit: budget.max_cost, used: budget.used_cost}}
       else
         :ok
@@ -394,26 +403,39 @@ defmodule CodingAgent.BudgetTracker do
   end
 
   defp extract_usage(response) do
-    usage = Map.get(response, :usage) || Map.get(response, "usage", %{})
+    usage = field(response, :usage)
 
     tokens =
-      case usage do
-        %{total_tokens: t} when is_integer(t) -> t
-        %{"total_tokens" => t} when is_integer(t) -> t
-        %{input: i, output: o} when is_integer(i) and is_integer(o) -> i + o
-        %{"input" => i, "output" => o} when is_integer(i) and is_integer(o) -> i + o
-        _ -> 0
+      case field(usage, :total_tokens) do
+        total when is_integer(total) and total > 0 ->
+          total
+
+        _ ->
+          Enum.reduce([:input, :output, :cache_read, :cache_write], 0, fn key, total ->
+            case field(usage, key) do
+              count when is_integer(count) and count >= 0 -> add(total, count)
+              _ -> nil
+            end
+          end)
       end
 
     cost =
-      case usage do
-        %{cost: c} when is_number(c) -> c
-        %{"cost" => c} when is_number(c) -> c
-        _ -> 0.0
+      case field(usage, :cost) do
+        amount when is_number(amount) -> amount
+        %{} = breakdown -> field(breakdown, :total)
+        _ -> nil
       end
 
-    %{tokens: tokens, cost: cost}
+    %{tokens: tokens, cost: if(is_number(cost) and cost >= 0, do: cost)}
   end
+
+  defp field(map, key) when is_map(map),
+    do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
+
+  defp field(_map, _key), do: nil
+
+  defp add(first, second) when is_number(first) and is_number(second), do: first + second
+  defp add(_first, _second), do: nil
 
   defp min_opt(nil, nil), do: nil
   defp min_opt(a, nil), do: a

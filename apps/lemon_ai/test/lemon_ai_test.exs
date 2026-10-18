@@ -209,6 +209,38 @@ defmodule AiTest do
       # 100 * 3.75 / 1_000_000 = 0.000375
       assert_in_delta cost.cache_write, 0.000375, 0.0001
     end
+
+    test "partial input preserves uncertainty about long-context prices" do
+      model = %Model{
+        cost: %LemonAi.Types.ModelCost{
+          input: 1,
+          output: 2,
+          cache_read: 0.1,
+          cache_write: 0,
+          long_context: %{
+            input_threshold: 200_000,
+            input: 2,
+            output: 4,
+            cache_read: 0.1,
+            cache_write: 0
+          }
+        }
+      }
+
+      usage = %Usage{input: 250_000, output: 100, cache_read: nil, cache_write: 0}
+      proven_long = LemonAi.calculate_cost(model, usage)
+      assert proven_long.input == 0.5
+      assert proven_long.output == 0.0004
+      assert proven_long.total == nil
+
+      uncertain =
+        LemonAi.calculate_cost(model, %{usage | input: 100_000, cache_read: 10, cache_write: nil})
+
+      assert uncertain.input == nil
+      assert uncertain.output == nil
+      assert uncertain.cache_read == 0.000001
+      assert uncertain.total == nil
+    end
   end
 
   describe "stream options normalization" do

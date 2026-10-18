@@ -263,8 +263,9 @@ then `/tmp/profile-venv/bin/pip install tiktoken`). Installation uses the transi
 `CodingAgent.Executor.configure_stream_options/1` hook; it does not replace the
 gateway executor. Clear the hook with `CodingAgent.Executor.configure_stream_options(nil)`
 when ending profiling. The native coding session and provider configuration remain
-unchanged. Optional Codex callbacks observe final request bodies and raw terminal
-usage in memory. Only counts, declared tool names,
+unchanged. Optional Codex and OpenAI-compatible callbacks observe final request
+bodies and raw terminal usage in memory, including usage-only chunks with empty
+choices. Only counts, declared tool names,
 and hashes are written to an owner-only JSONL file; raw prompts, arguments, tool
 outputs, encrypted replay values, headers, and credentials are never retained.
 Profile work is asynchronous and opt-in; the ordinary runtime has no observer.
@@ -284,6 +285,81 @@ input and cache attribution where available. Visible text/JSON measurements use
 Encrypted replay is counted only in bytes. Repeated context is a subset of those
 measurements, not an extra category to add to the total. The report rejects
 missing terminal usage measurements rather than manufacturing a complete profile.
+
+The profiler understands both Responses `instructions`/`input` and Chat
+Completions `messages`/nested function schemas. Provider counters are separate
+from tokenizer estimates: prompt tokens include cache reads/writes, while
+completion tokens already include reasoning. The normalized buckets are
+disjoint uncached input, cache read, cache write and output; reasoning is a
+reported subset of output, not extra tokens. Absent/partial counters remain
+`null`, even for a zero-priced category. In particular, ZAI's documented cache
+schema can report cache reads without a cache-write counter; that does not
+attest zero writes or complete spend. Catalog estimates are not subscription
+charges.
+
+The bundled `zai.json` entry for `glm-5.3` has a zero cache-write **price**, not
+an applicability declaration. ZAI's [public pricing](https://docs.z.ai/guides/overview/pricing)
+separately lists cached-input storage as “Limited-time Free”; its
+[cache schema](https://docs.z.ai/guides/capabilities/cache) documents cache reads
+but does not establish a separately reported write counter. Neither a zero
+tariff nor a missing field proves that a dimension is not applicable. If real
+responses omit writes, the remaining operator decision is whether to declare
+cache-write tokens **not applicable specifically for `zai` / `glm-5.3`** in
+versioned provider/model catalog metadata. Only such an explicit declaration,
+not a global default-zero or an automatic stop acknowledgement, could justify
+requiring fewer spend dimensions. Missing input or output must remain fatal.
+
+Parent-run completeness requires matching request/terminal observations for
+every completed parent turn, one native session, and all five provider counters.
+Unrelated child/ancillary run observations cannot supply the parent's usage.
+Missing usage continues to halt admission; never resume the real stopped
+campaign merely because an offline replay passes.
+
+#### Offline GLM usage regression
+
+`test_payload_profile.py` and the provider SSE fixtures are explicitly synthetic
+offline replays. The complete OpenAI-compatible fixture declares 100 prompt
+tokens (70 uncached + 20 cache read + 10 cache write), 30 completion tokens
+(including 12 reasoning), and 130 total. It does **not** claim that a real ZAI
+response supplies the optional cache-write extension. The separate faithful ZAI
+fixture omits that counter and remains incomplete.
+
+The native gate runs the actual ZAI provider against an in-memory Req Plug,
+through the native coding runtime, production CLI, external verifier, real
+fixture tests, profiler and paired row. Both disclosure variants complete four
+turns: 280 uncached + 80 cache read + 40 cache write + 120 output = 520 total.
+Its missing-usage case still passes the fixture task in four turns but retains
+null counters and proves a durable admission stop with no implicit resume.
+The sanitized observed-path JSON is a fixture copy, not the genuine operator row.
+
+Run in a disposable tree containing the repaired paired-runtime harness as well
+as this telemetry change; the telemetry commit does not include harness
+startup/cleanup repairs. Record both component SHAs and the combined tree SHA.
+Use a preinstalled tiktoken interpreter and **already cached** `o200k_base` data:
+
+```bash
+# Paths are operator-selected read-only prerequisites; do not fetch tokenizer data.
+export LEMON_EVAL_OFFLINE_PROFILE_PYTHON=/PATH/TO/OFFLINE/VENV/bin/python
+export LEMON_EVAL_OFFLINE_TOKENIZER_CACHE=/PATH/TO/CACHED/TOKENIZER
+PYTHONDONTWRITEBYTECODE=1 TIKTOKEN_CACHE_DIR="$LEMON_EVAL_OFFLINE_TOKENIZER_CACHE" \
+  "$LEMON_EVAL_OFFLINE_PROFILE_PYTHON" -m unittest discover \
+  -s apps/lemon_evals/priv -p 'test_payload_profile.py' -v
+# After focused test-build checks and a compiled dev build of that exact tree:
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s apps/lemon_evals/priv -p 'test_glm_usage_runtime.py' -v
+```
+
+Missing prerequisites fail this gate rather than skipping it. The native gate
+copies tokenizer cache data into private state and prohibits profiler sockets;
+it does not access credentials or contact a provider. Optional
+`LEMON_EVAL_OFFLINE_EVIDENCE` writes sanitized, explicitly fixture-labelled CLI,
+request, usage, paired-row and durable-stop evidence to a test-owned path.
+
+Provider usage observations are per terminal request attempt, independently of
+transcript insertion. Offline native-session regressions cover failed retries and
+empty-response continuations whose usage must remain spent without retaining those
+responses as conversation history. Prompt diagnostics and simulation collectors
+also accept nullable counters: incomplete aggregates and cost remain unknown.
 
 
 

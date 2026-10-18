@@ -92,4 +92,61 @@ defmodule LemonCore.UsageDiagnosticsTest do
 
     assert result.status == "over_limit"
   end
+
+  test "preserves explicit unknown aggregates and cannot clear their configured quotas" do
+    result =
+      UsageDiagnostics.status(
+        summary: %{
+          total_cost: nil,
+          total_requests: 2,
+          total_tokens: %{"input" => nil, "output" => 5},
+          breakdown: %{"test" => nil},
+          requests: %{"test" => 2},
+          tokens: %{"test" => %{"input" => nil, "output" => 5}}
+        },
+        today: %{total_cost: nil, requests: %{"test" => 2}},
+        quotas: %{runs_limit: 10, tokens_limit: 100, cost_limit: 1.0}
+      )
+
+    assert result.status == "unknown"
+    assert is_nil(result.total_cost)
+    assert result.total_tokens == %{input: nil, output: 5, total: nil}
+    assert result.today.cost == nil
+    assert [%{cost: nil, input_tokens: nil, output_tokens: 5}] = result.providers
+  end
+
+  test "unknown whole token maps are not empty measured maps" do
+    result =
+      UsageDiagnostics.status(
+        summary: %{
+          total_tokens: nil,
+          requests: %{"test" => 1},
+          tokens: %{"test" => nil}
+        },
+        today: %{},
+        quotas: %{runs_limit: nil, tokens_limit: 10, cost_limit: nil}
+      )
+
+    assert result.status == "unknown"
+    assert result.total_tokens == %{input: nil, output: nil, total: nil}
+    assert [%{input_tokens: nil, output_tokens: nil}] = result.providers
+  end
+
+  test "empty aggregate remains zero and a known exceeded quota outranks unknown quotas" do
+    quotas = %{runs_limit: 1, tokens_limit: 10, cost_limit: 1.0}
+    empty = UsageDiagnostics.status(summary: %{}, today: %{}, quotas: quotas)
+    assert empty.status == "within_limits"
+    assert empty.total_cost == 0.0
+    assert empty.total_tokens == %{input: 0, output: 0, total: 0}
+
+    over =
+      UsageDiagnostics.status(
+        summary: %{total_requests: 2, total_cost: nil, total_tokens: nil},
+        today: %{},
+        quotas: quotas
+      )
+
+    assert over.status == "over_limit"
+    assert is_nil(over.total_cost)
+  end
 end

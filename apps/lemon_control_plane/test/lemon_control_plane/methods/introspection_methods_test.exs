@@ -538,6 +538,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       assert detail["summary"]["cleanup"]["redactsSensitiveRunInternals"] == true
 
       [run] = detail["runs"]
+      assert run["tokens"] == %{"input" => 1, "output" => 2, "total" => 3, "costUsd" => nil}
       refute Map.has_key?(run, "promptFull")
       refute Map.has_key?(run, "answerFull")
       refute inspect(detail) =~ prompt_secret

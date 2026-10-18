@@ -348,9 +348,12 @@ export class SessionStore {
 		if (!usage) return undefined;
 		const context = positive(usage.contextTokens);
 		if (context !== undefined) return context;
-		const input = positive(usage.inputTokens);
+		const input = nonNegative(usage.inputTokens);
 		if (input === undefined) return undefined;
-		return input + (positive(usage.cacheReadTokens) ?? 0) + (positive(usage.cacheWriteTokens) ?? 0);
+		const cacheRead = nonNegative(usage.cacheReadTokens);
+		const cacheWrite = nonNegative(usage.cacheWriteTokens);
+		if (cacheRead === undefined || cacheWrite === undefined) return undefined;
+		return input + cacheRead + cacheWrite;
 	}
 
 	// -- writes --------------------------------------------------------------
@@ -681,4 +684,8 @@ function blankToUndefined(value: string | null | undefined): string | undefined 
 
 function positive(value: number | null | undefined): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function nonNegative(value: number | null | undefined): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }

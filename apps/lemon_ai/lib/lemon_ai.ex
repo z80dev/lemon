@@ -189,31 +189,64 @@ defmodule LemonAi do
   """
   @spec calculate_cost(Model.t(), LemonAi.Types.Usage.t()) :: LemonAi.Types.Cost.t()
   def calculate_cost(%Model{cost: model_cost}, %LemonAi.Types.Usage{} = usage) do
-    input_tokens = usage.input + usage.cache_read + usage.cache_write
+    input_counts = [usage.input, usage.cache_read, usage.cache_write]
+
+    known_input =
+      Enum.reduce(input_counts, 0, fn count, sum ->
+        if is_number(count), do: sum + count, else: sum
+      end)
 
     model_cost =
       case Map.get(model_cost, :long_context) do
-        %{input_threshold: threshold} = long_context when input_tokens > threshold -> long_context
-        _ -> model_cost
+        %{input_threshold: threshold} = long_context ->
+          cond do
+            known_input > threshold ->
+              long_context
+
+            Enum.all?(input_counts, &is_number/1) ->
+              model_cost
+
+            true ->
+              # Unknown input can cross the tier boundary. Only prices identical
+              # in both tiers remain established until usage is complete.
+              Map.new([:input, :output, :cache_read, :cache_write], fn key ->
+                price = Map.get(model_cost, key)
+                {key, if(price == Map.get(long_context, key), do: price)}
+              end)
+          end
+
+        _ ->
+          model_cost
       end
 
     # Cost is per million tokens
-    input_cost = usage.input * model_cost.input / 1_000_000
-    output_cost = usage.output * model_cost.output / 1_000_000
-    cache_read_cost = usage.cache_read * model_cost.cache_read / 1_000_000
+    input_cost = token_cost(usage.input, model_cost.input)
+    output_cost = token_cost(usage.output, model_cost.output)
+    cache_read_cost = token_cost(usage.cache_read, model_cost.cache_read)
 
     cache_write_cost =
-      (usage.cache_write + min(usage.cache_write_long, usage.cache_write) * 0.6) *
-        model_cost.cache_write / 1_000_000
+      if is_number(usage.cache_write) and is_number(usage.cache_write_long) do
+        token_cost(
+          usage.cache_write + min(usage.cache_write_long, usage.cache_write) * 0.6,
+          model_cost.cache_write
+        )
+      end
+
+    costs = [input_cost, output_cost, cache_read_cost, cache_write_cost]
 
     %LemonAi.Types.Cost{
       input: input_cost,
       output: output_cost,
       cache_read: cache_read_cost,
       cache_write: cache_write_cost,
-      total: input_cost + output_cost + cache_read_cost + cache_write_cost
+      total: if(Enum.all?(costs, &is_number/1), do: Enum.sum(costs))
     }
   end
+
+  defp token_cost(tokens, price) when is_number(tokens) and is_number(price),
+    do: tokens * price / 1_000_000
+
+  defp token_cost(_tokens, _price), do: nil
 
   # ============================================================================
   # Private Helpers

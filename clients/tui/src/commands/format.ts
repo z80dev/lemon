@@ -103,18 +103,24 @@ export function humanCost(value: number | undefined): string | undefined {
 
 /** One line of `sessions.context` usage: `tokens in/out/cache · cost $x (estimate)`. */
 export function sessionUsageLine(usage: {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
+	input: number | undefined;
+	output: number | undefined;
+	cacheRead: number | undefined;
+	cacheWrite: number | undefined;
 	costUsd: number | undefined;
 }): string {
-	const cache = usage.cacheRead + usage.cacheWrite;
+	const cache =
+		usage.cacheRead !== undefined && usage.cacheWrite !== undefined
+			? usage.cacheRead + usage.cacheWrite
+			: undefined;
 	const cacheDetail =
+		usage.cacheRead !== undefined &&
+		usage.cacheWrite !== undefined &&
+		cache !== undefined &&
 		cache > 0
 			? ` (${humanNumber(usage.cacheRead)} read, ${humanNumber(usage.cacheWrite)} write)`
 			: "";
-	return `tokens ${humanNumber(usage.input)} in / ${humanNumber(usage.output)} out / ${humanNumber(cache)} cache${cacheDetail} · cost ${humanCost(usage.costUsd) ?? "unknown"} (estimate)`;
+	return `tokens ${usage.input === undefined ? "unknown" : humanNumber(usage.input)} in / ${usage.output === undefined ? "unknown" : humanNumber(usage.output)} out / ${cache === undefined ? "unknown" : humanNumber(cache)} cache${cacheDetail} · cost ${humanCost(usage.costUsd) ?? "unknown"} (estimate)`;
 }
 
 /** `label: value` lines, skipping every entry whose value is absent. */

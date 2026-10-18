@@ -88,4 +88,93 @@ defmodule LemonAgent.BudgetScopeTest do
 
     assert own_cost == 0.0
   end
+
+  test "unknown descendant dollars survive repeated and stale completion reports" do
+    for {key, expected_scope} <- [
+          {:max_run_cost_usd, :run},
+          {:max_session_cost_usd, :session}
+        ] do
+      parent = scope(%{key => 1.0})
+      attachment = BudgetScope.attachment(parent)
+      child = scope(%{}, parent: attachment, id: :partial_child)
+      usage = %{tokens: 130, cost_usd: nil}
+
+      :ok =
+        BudgetScope.update(child, %{
+          Budget.new(%{}, nil)
+          | run_usage: usage,
+            session_usage: usage
+        })
+
+      for report <- [usage, usage, %{tokens: 100, cost_usd: 0.1}] do
+        assert :ok = BudgetScope.report(attachment, :partial_child, report)
+
+        assert %{
+                 scope: ^expected_scope,
+                 metric: :cost_usd,
+                 used: nil,
+                 session_usage: %{tokens: 130, cost_usd: nil}
+               } = BudgetScope.check(parent)
+
+        assert %{metric: :cost_usd, used: nil} = BudgetScope.check(child)
+      end
+    end
+  end
+
+  test "unknown descendant tokens fail closed without losing known dollar spend" do
+    parent = scope(%{max_run_tokens: 10_000})
+    attachment = BudgetScope.attachment(parent)
+    assert :ok = BudgetScope.report(attachment, :child, %{tokens: 10, cost_usd: 0.1})
+    assert :ok = BudgetScope.report(attachment, :child, %{tokens: nil, cost_usd: 0.2})
+    assert :ok = BudgetScope.report(attachment, :child, %{tokens: 20, cost_usd: 0.3})
+
+    assert %{metric: :tokens, used: nil, session_usage: %{cost_usd: cost}} =
+             BudgetScope.check(parent)
+
+    assert_in_delta cost, 0.3, 0.000001
+  end
+
+  test "unknown descendant spend persists across runs but late reports do not poison a new run" do
+    parent = scope(%{max_run_cost_usd: 1.0, max_session_cost_usd: 2.0})
+    previous_run = BudgetScope.attachment(parent)
+    usage = %{tokens: 130, cost_usd: nil}
+    assert :ok = BudgetScope.report(previous_run, :child, usage)
+    assert %{scope: :run, used: nil} = BudgetScope.check(parent)
+    assert :ok = BudgetScope.begin_run(parent)
+    assert :ok = BudgetScope.report(previous_run, :child, usage)
+
+    assert %{scope: :session, used: nil, run_usage: %{tokens: 0, cost_usd: +0.0}} =
+             BudgetScope.check(parent)
+  end
+
+  test "unknown projections fail closed at ancestor caps without recording usage" do
+    parent = scope(%{max_session_cost_usd: 1.0})
+    child = scope(%{}, parent: BudgetScope.attachment(parent))
+
+    assert %{scope: :session, used: +0.0, metric: :cost_usd} =
+             BudgetScope.check(child, %{tokens: 10, cost_usd: nil})
+
+    refute BudgetScope.check(parent)
+    refute BudgetScope.check(child)
+
+    uncapped = scope(%{})
+
+    assert :ok =
+             BudgetScope.report(BudgetScope.attachment(uncapped), :child, %{
+               tokens: nil,
+               cost_usd: nil
+             })
+
+    refute BudgetScope.check(uncapped, %{tokens: nil, cost_usd: nil})
+  end
+
+  test "restored unknown descendant totals enforce session caps" do
+    parent =
+      scope(%{max_session_cost_usd: 1.0},
+        child_usage: %{"tokens" => 130, "cost_usd" => nil}
+      )
+
+    assert %{scope: :session, used: nil, run_usage: %{cost_usd: +0.0}} =
+             BudgetScope.check(parent)
+  end
 end

@@ -13,6 +13,9 @@ defmodule LemonCore.Usage.CLI do
     * `--since/--until YYYY-MM-DD` - Inclusive UTC date boundaries.
     * `--by day|provider|model|session` - Breakdown (default provider).
     * `--json` - Emit redacted JSON, including completeness and omissions.
+
+  Unknown token counts and costs render as `unknown` in text and `null` in JSON;
+  numeric budget estimates are not substituted for provider measurements.
   """
 
   alias LemonCore.UsageDiagnostics
@@ -111,7 +114,7 @@ defmodule LemonCore.Usage.CLI do
           else: format_money(row["cost"])
 
       LemonCore.CLI.info(
-        "  #{name}: requests=#{row["requests"]} cost=#{cost} input_tokens=#{row["inputTokens"]} output_tokens=#{row["outputTokens"]}"
+        "  #{name}: requests=#{display_number(row["requests"])} cost=#{cost} input_tokens=#{display_number(row["inputTokens"])} output_tokens=#{display_number(row["outputTokens"])}"
       )
     end)
   end
@@ -135,14 +138,14 @@ defmodule LemonCore.Usage.CLI do
     LemonCore.CLI.info("Lemon Usage")
     LemonCore.CLI.info("Status: #{Map.get(status, :status, "unknown")}")
     LemonCore.CLI.info("Period: #{Map.get(status, :period, "current")}")
-    LemonCore.CLI.info("Requests: #{Map.get(status, :total_requests, 0)}")
+    LemonCore.CLI.info("Requests: #{display_number(Map.get(status, :total_requests, 0))}")
     LemonCore.CLI.info("Cost: #{format_money(Map.get(status, :total_cost, 0.0))}")
-    LemonCore.CLI.info("Tokens input: #{Map.get(tokens, :input, 0)}")
-    LemonCore.CLI.info("Tokens output: #{Map.get(tokens, :output, 0)}")
-    LemonCore.CLI.info("Tokens total: #{Map.get(tokens, :total, 0)}")
+    LemonCore.CLI.info("Tokens input: #{display_number(Map.get(tokens, :input, 0))}")
+    LemonCore.CLI.info("Tokens output: #{display_number(Map.get(tokens, :output, 0))}")
+    LemonCore.CLI.info("Tokens total: #{display_number(Map.get(tokens, :total, 0))}")
 
     LemonCore.CLI.info(
-      "Today: #{Map.get(today, :date, "unknown")} requests=#{Map.get(today, :requests, 0)} cost=#{format_money(Map.get(today, :cost, 0.0))}"
+      "Today: #{Map.get(today, :date, "unknown")} requests=#{display_number(Map.get(today, :requests, 0))} cost=#{format_money(Map.get(today, :cost, 0.0))}"
     )
 
     LemonCore.CLI.info("Includes prompts: #{truthy?(cleanup[:includes_prompts])}")
@@ -170,7 +173,7 @@ defmodule LemonCore.Usage.CLI do
 
     Enum.each(providers, fn provider ->
       LemonCore.CLI.info(
-        "  #{provider.provider}: requests=#{provider.requests} cost=#{format_money(provider.cost)} input_tokens=#{provider.input_tokens} output_tokens=#{provider.output_tokens}"
+        "  #{provider.provider}: requests=#{display_number(provider.requests)} cost=#{format_money(provider.cost)} input_tokens=#{display_number(provider.input_tokens)} output_tokens=#{display_number(provider.output_tokens)}"
       )
     end)
   end
@@ -181,7 +184,10 @@ defmodule LemonCore.Usage.CLI do
   defp format_money(value) when is_number(value),
     do: :erlang.float_to_binary(value * 1.0, decimals: 4)
 
-  defp format_money(_), do: "0.0000"
+  defp format_money(_), do: "unknown"
+
+  defp display_number(value) when is_number(value), do: to_string(value)
+  defp display_number(_), do: "unknown"
 
   defp truthy?(value), do: if(value, do: "true", else: "false")
 end

@@ -1,0 +1,36 @@
+{
+  "fixture": true,
+  "provenance": "Sanitized offline regression copy of the F-0112 operator-described shape; not the genuine trial row or measured usage.",
+  "row": {
+    "trial_id": "zai:bug_fix:pair:0001:coding",
+    "pair_id": "zai:bug_fix:pair:0001",
+    "provider": "zai",
+    "task": "bug_fix",
+    "variant": "coding",
+    "repetition": 1,
+    "attempted": true,
+    "passed": true,
+    "failure": null,
+    "verifier_passed": true,
+    "tests_passed": true,
+    "turns": 4,
+    "wall_seconds": 28.1056,
+    "tokens": null,
+    "uncached_input_tokens": null,
+    "cached_input_tokens": null,
+    "cache_write_tokens": null,
+    "output_tokens": null,
+    "cost_usd": null,
+    "spend_complete": false,
+    "cleanup_complete": true,
+    "disposal_complete": true,
+    "finalization_failed": false,
+    "schema_diagnostics": {
+      "applied_profiles": ["coding"],
+      "flush_complete": true,
+      "requests_observed": 0,
+      "completed_usage_requests": 0,
+      "parent_usage_complete": false
+    }
+  }
+}

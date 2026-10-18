@@ -825,6 +825,14 @@ defmodule CodingAgent.MessagesTest do
       usage = %Usage{input: 100, output: 50, cache_read: 25, cache_write: 10}
       assert Usage.total_tokens(usage) == 185
     end
+
+    test "unknown components stay unknown" do
+      for key <- [:input, :output, :cache_read, :cache_write] do
+        usage = struct(Usage, %{key => nil})
+        assert Usage.total_tokens(usage) == nil
+        assert Messages.total_tokens(usage) == nil
+      end
+    end
   end
 
   describe "get_text/1 edge cases" do
@@ -1015,7 +1023,7 @@ defmodule CodingAgent.MessagesTest do
       }
 
       [result] = Messages.to_llm([msg])
-      assert %LemonAi.Types.Cost{} = result.usage.cost
+      assert result.usage.cost == nil
     end
 
     test "plain map with role: :user and missing timestamp" do

@@ -37,6 +37,17 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- Run/session usage budgets fail closed when capped token totals or accumulated
+  or projected dollar spend are unknown. Partial provider reports retain their
+  nullable telemetry; unknown enforcement totals survive later reports, native
+  descendant aggregation, and persisted session restoration instead of becoming
+  zero-cost authorization.
+- Emit one provider-usage observation per completed attempt, including failed
+  retries and empty-response continuations omitted from transcript history;
+  native run accounting no longer drops their reported spend.
+- Proxy streams preserve nullable usage and costs when replaying restored
+  assistant history, rather than crashing request encoding or treating absent
+  response counters as measured zero. Offline loopback fixtures cover both sides.
 - `Agent.follow_up/3` acknowledges enqueue synchronously, so callers can order
   delivery before releasing active tools. Acceptance does not start an idle
   agent or continue a completed, failed or cancelled run automatically; normal

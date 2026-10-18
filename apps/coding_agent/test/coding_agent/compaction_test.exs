@@ -135,7 +135,13 @@ defmodule CodingAgent.CompactionTest do
       suffix = %Messages.UserMessage{content: "12345678", timestamp: 11}
       empty_suffix = %Messages.UserMessage{content: "", timestamp: 11}
       failed = %{measured | stop_reason: :error, timestamp: 12}
-      newer = %{measured | usage: %{input: 200, output: 10}, timestamp: 13}
+
+      newer = %{
+        measured
+        | usage: %{input: 200, output: 10, cache_read: 0, cache_write: 0},
+          timestamp: 13
+      }
+
       tools = [%{name: "large tool", description: String.duplicate("d", 4000)}]
 
       for {messages, expected} <- [
@@ -156,7 +162,7 @@ defmodule CodingAgent.CompactionTest do
       measured = %{
         "role" => "assistant",
         "content" => "12345678",
-        "usage" => %{"input" => 100, "output" => 20},
+        "usage" => %{"input" => 100, "output" => 20, "cache_read" => 0, "cache_write" => 0},
         "timestamp" => 10,
         "stop_reason" => "stop"
       }
@@ -171,6 +177,14 @@ defmodule CodingAgent.CompactionTest do
         assert Compaction.estimate_request_context_tokens([measured], "12345678", [], cutoff) ==
                  4
       end
+
+      partial = %{
+        measured
+        | "usage" => %{"input" => nil, "output" => 30, "cache_read" => 20, "cache_write" => nil}
+      }
+
+      assert Compaction.request_context_usage([partial], "12345678") ==
+               %{tokens: 4, source: "estimate"}
 
       for {usage, reason} <- [
             {%{"input" => 100}, "error"},
@@ -1284,15 +1298,15 @@ defmodule CodingAgent.CompactionTest do
       assert Compaction.total_tokens(usage) == 165
     end
 
-    test "sums input and output when cache fields missing" do
+    test "preserves unknown cache components" do
       usage = %{input: 100, output: 50}
-      assert Compaction.total_tokens(usage) == 150
+      assert Compaction.total_tokens(usage) == nil
     end
 
-    test "returns 0 for invalid usage format" do
-      assert Compaction.total_tokens(%{}) == 0
-      assert Compaction.total_tokens(nil) == 0
-      assert Compaction.total_tokens("invalid") == 0
+    test "returns nil for unknown usage" do
+      assert Compaction.total_tokens(%{}) == nil
+      assert Compaction.total_tokens(nil) == nil
+      assert Compaction.total_tokens("invalid") == nil
     end
 
     test "handles Usage struct" do
@@ -2802,7 +2816,7 @@ defmodule CodingAgent.CompactionTest do
     test "handles map with only some fields present" do
       # Only input and cache_read, missing output and cache_write
       usage = %{input: 100, cache_read: 50}
-      assert Compaction.total_tokens(usage) == 0
+      assert Compaction.total_tokens(usage) == nil
     end
 
     test "handles negative token values" do
@@ -2819,18 +2833,18 @@ defmodule CodingAgent.CompactionTest do
     test "handles float values (should not match integer patterns)" do
       usage = %{total_tokens: 100.5}
       # Float doesn't match integer guard
-      assert Compaction.total_tokens(usage) == 0
+      assert Compaction.total_tokens(usage) == nil
     end
 
     test "handles string token values" do
       usage = %{total_tokens: "100"}
       # String doesn't match integer guard
-      assert Compaction.total_tokens(usage) == 0
+      assert Compaction.total_tokens(usage) == nil
     end
 
     test "handles atom values" do
       usage = %{total_tokens: :infinity}
-      assert Compaction.total_tokens(usage) == 0
+      assert Compaction.total_tokens(usage) == nil
     end
   end
 

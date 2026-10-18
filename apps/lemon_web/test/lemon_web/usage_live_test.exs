@@ -10,6 +10,16 @@ defmodule LemonWeb.UsageLiveTest do
   alias LemonControlPlane.Methods.Registry
   alias LemonCore.{UsageLedger, UsageStore}
 
+  defmodule UnknownRunsStatus do
+    @behaviour LemonControlPlane.Method
+    def name, do: "usage.status"
+    def scopes, do: [:read]
+
+    def handle(_, _) do
+      {:ok, %{"runs" => nil, "quotas" => %{"runsLimit" => 10}}}
+    end
+  end
+
   setup :configure_operator_token
 
   setup do
@@ -58,12 +68,16 @@ defmodule LemonWeb.UsageLiveTest do
     record("run-1", "agent:usage:alpha", "openai:gpt-5", %{
       input_tokens: 12_000,
       output_tokens: 3_000,
+      cache_read: 0,
+      cache_write: 0,
       cost: %{total: 1.5}
     })
 
     record("run-2", "agent:usage:beta", "anthropic:claude-x", %{
       input: 500,
       output: 100,
+      cache_read: 0,
+      cache_write: 0,
       cost: 0.25
     })
 
@@ -86,6 +100,59 @@ defmodule LemonWeb.UsageLiveTest do
     html = render_patch(view, "/usage?range=30d&metric=tokens")
     assert html =~ "Daily tokens"
     assert html =~ "16k tokens"
+  end
+
+  test "unknown usage remains visibly unknown in totals, charts and tables", %{conn: conn} do
+    today = Date.utc_today() |> Date.to_iso8601()
+
+    UsageStore.put_record(today, %{
+      date: today,
+      total_cost: nil,
+      unknown_cost_records: 1,
+      breakdown: %{"openai" => nil},
+      requests: %{"openai" => 1},
+      tokens: %{"openai" => %{input: nil, output: 2}},
+      models: %{
+        "openai:gpt-5" => %{
+          provider: "openai",
+          model: "gpt-5",
+          cost: nil,
+          requests: 1,
+          input: nil,
+          output: 2
+        }
+      },
+      sessions: %{}
+    })
+
+    {:ok, view, html} = live(conn, "/usage?range=7d&metric=cost")
+    assert html =~ "—"
+    assert has_element?(view, "#usage-models", "gpt-5")
+    assert has_element?(view, "#usage-daily-chart", "—")
+    refute has_element?(view, "#usage-models [role=meter]")
+
+    html = render_patch(view, "/usage?range=7d&metric=tokens")
+    assert html =~ "— tokens"
+    refute has_element?(view, "#usage-providers [role=meter]")
+  end
+
+  test "unknown run quota usage renders without crashing", %{conn: conn} do
+    record("unknown-runs", "agent:usage:unknown", "openai:gpt-5", %{
+      input_tokens: 1,
+      output_tokens: 1,
+      cost: %{total: 0.01}
+    })
+
+    :ok = Registry.unregister("usage.status")
+    :ok = Registry.register(UnknownRunsStatus)
+
+    on_exit(fn ->
+      Registry.unregister("usage.status")
+      Registry.register(LemonControlPlane.Methods.UsageStatus)
+    end)
+
+    {:ok, view, _html} = live(conn, "/usage")
+    assert has_element?(view, "#usage-quota", "—")
   end
 
   test "an unavailable usage method is reported, not shown as empty", %{conn: conn} do

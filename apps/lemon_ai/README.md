@@ -318,6 +318,40 @@ catalog's long-context rate when **all** input tokens (including cache) cross it
 threshold. Prefer the returned `message.usage.cost` when a service tier was used,
 since recalculating base model prices alone does not retain the response's tier.
 
+OpenAI-compatible streams expose finalized request bodies through `on_payload`
+and terminal raw Chat Completions usage through `on_usage`, with the configured
+provider, model and session ID. Usage-only chunks with `choices: []` are supported.
+Observers run in the provider worker; exceptions fail the stream. Bodies contain
+private conversation content and must not be logged or persisted.
+
+Missing counters remain `nil`, including absent cache details. Chat prompt counts
+include cache reads/writes, so uncached input is only known when both cache
+breakdowns are reported. Completion counts already include reasoning; reasoning
+is never added a second time. Total tokens are retained from the provider rather
+than inferred. Unknown cost components and incomplete total costs remain `nil`,
+even at a catalog price of zero. These are nominal catalog costs, not evidence of
+subscription charges.
+
+Offline regression fixtures live in `test/fixtures/openai_completions/`.
+`zai_usage_only.sse` follows the
+[ZAI Chat Completion schema](https://docs.z.ai/api-reference/llm/chat-completion):
+prompt 100, cached 20, completion 30, total 130, with cache-write absent.
+Consequently uncached input and cache-write remain unknown.
+`compatible_complete.sse` deliberately exercises the documented OpenAI-compatible
+[usage schema](https://github.com/openai/openai-python/blob/main/src/openai/types/completion_usage.py):
+prompt 100, cache-read 20, cache-write 10, completion 30 (including reasoning 12),
+total 130; normalized disjoint counters are 70/20/10/30.
+It does **not** assert that ZAI emits cache-write or reasoning detail fields.
+Both files are synthetic offline fixtures, never captured operator usage.
+
+Replay through the actual provider by setting `Req.default_options(plug: ...)`
+to an in-memory Plug transport, supplying an explicit dummy `api_key`, and calling
+`OpenAICompletions.stream/3`. Restore the previous Req defaults afterwards.
+The provider tests use the existing shared `Req.Test` convention; native runtime
+replay can use a Plug function without changing the provider or route.
+The catalog's `:zai` / `glm-5.3` route remains
+`https://api.z.ai/api/coding/paas/v4/chat/completions`.
+
 
 ### Automatic retries
 

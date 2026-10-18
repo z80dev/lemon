@@ -19,6 +19,11 @@
   errors after a read-only task mutates its fixture; complete usage cannot admit
   another trial without explicit stop-bound continuation.
 
+- Observe and normalize ZAI/OpenAI-compatible request and terminal usage in the
+  payload profiler, bind completeness to the native parent run, and retain
+  unknown counters as null. Offline SSE/native CLI regressions cover both
+  disclosure variants and the passed-four-turn/missing-usage admission stop;
+  fixture usage is never presented as a real campaign measurement.
 - Paired-attempt cleanup can recover the private process store and native launch
   ledger offline without booting a runtime. Recovery uses shared birth-bound
   local group proofs, durably records newly observed members before signalling,
