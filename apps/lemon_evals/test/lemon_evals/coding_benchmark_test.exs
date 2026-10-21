@@ -115,7 +115,6 @@ defmodule LemonEvals.CodingBenchmarkTest do
            :combined},
           {["--campaign", "--model", "zai:glm-5.3", "--output-dir", "/tmp/never"], :combined},
           {["--campaign", "--failure-dir", "/tmp/f", "--output-dir", "/tmp/never"], :combined},
-          {["--campaign", "--run-timeout", "5", "--output-dir", "/tmp/never"], :combined},
           {["--campaign", "--plan", "p.json", "--output-dir", "/tmp/never"], :combined}
         ] do
       error =
@@ -126,6 +125,89 @@ defmodule LemonEvals.CodingBenchmarkTest do
         text -> assert error.message == text
       end
     end
+  end
+
+  test "campaign work deadlines and durable stop continuations are validated before launch" do
+    for seconds <- ["0", "-1", "28801"] do
+      assert_raise Mix.Error,
+                   "--run-timeout must be positive and at most 28800 seconds (8h) per provider",
+                   fn ->
+                     Coding.run([
+                       "--campaign",
+                       "--output-dir",
+                       "/tmp/never",
+                       "--run-timeout",
+                       seconds
+                     ])
+                   end
+    end
+
+    for flags <- [[], ["--live"], ["--resume"]] do
+      assert_raise Mix.Error, "--continue-after-stop requires --campaign --live --resume", fn ->
+        Coding.run(
+          [
+            "--campaign",
+            "--output-dir",
+            "/tmp/never",
+            "--continue-after-stop",
+            String.duplicate("a", 64)
+          ] ++
+            flags
+        )
+      end
+    end
+
+    assert_raise Mix.Error, "--continue-after-stop must be a durable stop SHA256", fn ->
+      Coding.run([
+        "--campaign",
+        "--live",
+        "--resume",
+        "--output-dir",
+        "/tmp/never",
+        "--continue-after-stop",
+        "invalid"
+      ])
+    end
+
+    assert_raise Mix.Error, "Campaign options require --campaign", fn ->
+      Coding.run(["--continue-after-stop", String.duplicate("a", 64)])
+    end
+  end
+
+  test "campaign work deadline and exact continuation are forwarded without launching a provider" do
+    directory = Path.join(System.tmp_dir!(), "lemon-campaign-options")
+    stop_id = String.duplicate("a", 64)
+
+    assert Coding.campaign_argv(
+             [
+               providers: "zai:glm-5.3",
+               run_timeout: 60,
+               output_dir: directory,
+               live: true,
+               resume: true,
+               continue_after_stop: stop_id
+             ],
+             "coding_benchmark.py",
+             "bin/lemon",
+             660
+           ) == [
+             "coding_benchmark.py",
+             "--campaign",
+             "--lemon",
+             "bin/lemon",
+             "--timeout",
+             "660",
+             "--live",
+             "--resume",
+             "--output-dir",
+             Path.expand(directory),
+             "--providers",
+             "zai:glm-5.3",
+             "--run-timeout",
+             "60",
+             "--continue-after-stop",
+             stop_id
+           ]
   end
 
   test "repeated multi-provider campaign satisfies offline ID, isolation, resume and spend contracts" do

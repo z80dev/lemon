@@ -10,4 +10,10 @@
 
 ### Changed
 
-- Preserve unknown native-process ownership for the omp tool, durably fencing its constructor and execution until the delegate's native launch boundary is instrumented.
+- Mark the omp tool's audited schema construction as managed after routing
+  catalog, version, git worktree and shutdown-helper launches through the native
+  process ledger. Actual delegate startup still records unsupported ownership
+  before launch: the RPC process group cannot attest independently owned work.
+- Preserve the pre-disconnect descendant inventory during shutdown and measure
+  escalation grace against elapsed monotonic time, including native tracking
+  overhead, so root exit cannot skip orphan cleanup or delay KILL escalation.

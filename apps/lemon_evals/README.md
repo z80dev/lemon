@@ -127,48 +127,73 @@ to spend on. Only `OPENAI_CODEX_API_KEY` (for `openai-codex`) and `ZAI_API_KEY`
 (for `zai`) are forwarded, each only to its own provider's trials; no other
 ambient credential or Lemon setting reaches a trial.
 
-The 144-trial campaign (12 tasks x 2 variants x 3 paired repeats x 2 providers,
-660-second per-trial timeout) is this single command, run from the umbrella root:
+The manually authorized #107 leg is **GLM-only**; the Codex comparison remains
+deferred. The following is an operator-edited invocation, not factory permission
+to run it (factory paid benchmarks remain forbidden). It schedules 72 trials
+(12 tasks x 2 variants x 3 paired repeats), from the umbrella root:
 
 ```bash
 # Operator-provided credentials and paths (outside the checkout); not recorded here.
-export OPENAI_CODEX_API_KEY=...   # ChatGPT/Codex token for openai-codex
-export ZAI_API_KEY=...            # for zai
-mix lemon.eval.coding --campaign --live --resume \
-  --providers openai-codex:gpt-6.1-sol,zai:glm-5.3 \
+export ZAI_API_KEY=...
+mix lemon.eval.coding --campaign --live \
+  --providers zai:glm-5.3 \
   --variants baseline,coding --repetitions 3 --seed 107 --timeout 660 \
-  --control-plane-port 4290 \
+  --run-timeout 28800 \
   --profile-python /OPERATOR/PATH/profile-venv/bin/python \
   --output-dir /OPERATOR/PATH/disclosure-campaign
 ```
 
-Omit `--live` first to inspect the plan. Options: `--providers` (default as
-above), `--variants` (default `baseline,coding`), `--repetitions` (campaign
-default 3), `--seed` (default 107), `--timeout` (per trial, default 660, covering
-runtime boot, fixture work, the client and verification), `--control-plane-port`
-(the isolated runtime's fixed port; default is a free port per trial; the
-campaign aborts, recording nothing, if it is already in use), `--output-dir`
-(required; must be outside the source checkout), `--tasks` (subset, for a smoke
-run), `--config` (optional base TOML that omits `runtime.tools.disclosure`; no
-secrets), `--profile-python` (Python 3.11+ with `tiktoken`; default is the runner's
-interpreter). A live run requires a compiled development build of this exact
-checkout (`mix compile`) and the source launcher `bin/lemon`. `--paired`,
-`--compare-omp`, `--model`, `--output`, `--failure-dir`, `--run-timeout`, `--plan`
-and `--approve-plan-digest` cannot be combined with `--campaign`.
+Omit `--live` first to inspect the plan. Options: `--providers` (default remains
+both providers; explicitly select `zai:glm-5.3` for the GLM-only leg), `--variants`
+(default `baseline,coding`), `--repetitions` (campaign default 3), `--seed`
+(default 107), `--timeout` (per trial, default 660, covering runtime boot, fixture
+work, the client and verification), `--run-timeout` (per-provider work window,
+default and maximum 28800 seconds; positive shorter windows are allowed),
+`--control-plane-port` (optional fixed isolated control-plane port; default is a
+free port per trial; an occupied port admits no new trial), `--output-dir`
+(required; outside the source checkout), `--tasks` (subset), `--config` (optional
+base TOML without `runtime.tools.disclosure` or secrets), and `--profile-python`
+(Python 3.11+ with `tiktoken`; default is the runner's interpreter). A live run
+requires a compiled development build of this exact checkout (`mix compile`)
+and its source launcher `bin/lemon`. `--paired`, `--compare-omp`, `--model`,
+`--output`, `--failure-dir`, `--plan` and `--approve-plan-digest` cannot be combined
+with `--campaign`.
 
 Stable IDs are `PROVIDER:TASK:pair:NNNN` for a pair and `PAIR:VARIANT` for a trial;
 each provider has its own seeded schedule whose within-pair order alternates
 (AB/BA) for counterbalancing. `--output-dir` holds `manifest.json` (experiment
-identity), an append-only `trials.jsonl` (one sanitized, fsynced row per finished
-trial), and `report.json` / `report.md`, rewritten after every trial. Interrupt at
-any time (Ctrl-C) and re-run the **same command**: `--resume` skips recorded
-trials, reruns only the interrupted one, and refuses a directory created by a
-different revision, working-tree digest, option set or fixture. A directory that
-already holds a campaign is refused without `--resume`. Failed, timed-out and
-unverified trials are final recorded outcomes and are not retried; start a new
-directory to rerun them. Exit status is 0 when every scheduled trial is recorded
-(trial failures are data, not command failure), 130 on interruption, and nonzero
-when incomplete or misconfigured.
+identity), append-only `trials.jsonl` (one sanitized, fsynced row per finished
+trial), `campaign-state.json` (durable admissions, provider deadlines, stop
+history and explicit acknowledgements), and `report.json` / `report.md`.
+`--resume` skips recorded trials and refuses changed source/build/configuration,
+options or fixtures; it never repeats an uncertain admitted trial.
+
+A terminal quota/429, auth/provider/runtime failure, timeout or missing usage
+counter stops the entire campaign before another trial is admitted. Retries
+inside one admitted trial are different: a recovered in-trial 429 followed by a
+successful terminal result is not a new trial or an automatic admission stop.
+Task-verifier/test failures with complete counters remain recorded outcomes,
+but quality checks (including read-only fixture mutation) never replace an earlier
+terminal CLI failure. Reported counters from earlier turns do not prove success.
+All attempted rows and their observed paid counters remain in the log.
+
+`--resume` alone never continues a stopped campaign. After independently resolving
+an overridable stop, use the same experiment options with
+`--live --resume --continue-after-stop STOP_SHA256`, naming the exact unresolved
+stop ID in the report/state. This durably acknowledges the stop without erasing
+its history or retrying its recorded trial. Cleanup/disposal/finalization
+uncertainty, unreconciled admissions, missing admission evidence and exhausted
+provider deadlines cannot be overridden by that flag. Torn evidence is retained,
+not truncated or automatically retried; resolve it independently.
+
+Each provider's work window starts at its first admitted trial. Its persisted
+absolute deadline includes interrupted/idle time and cannot be reset by resume
+or continuation. Each trial receives the earlier work/per-trial deadline.
+Process shutdown and ledger recovery have separate bounded cleanup grace
+(up to 40 seconds); filesystem evidence validation/disposal is not unsafely
+aborted for a work deadline. Exit status is 0 only for a complete campaign with
+no unresolved stop, 130 on interruption, and nonzero for stopped/incomplete work
+or misconfiguration.
 
 The report lists, per provider and variant, the verified success rate (the
 independent verifier and observed disclosure profile must pass), timeouts, mean

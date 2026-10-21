@@ -5,11 +5,13 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from collections import Counter, defaultdict
 from types import SimpleNamespace
@@ -55,10 +57,23 @@ def free_port():
     return paired.runtime_ports()[0]
 
 
+def fake_source_root(directory):
+    """Keep fake source and outputs as siblings even when TMPDIR is inside the real checkout."""
+    root = Path(directory) / 'source'
+    catalogs = root / pricing.CATALOG_DIRECTORY
+    catalogs.mkdir(parents=True)
+    for name in {spec['catalog'] for spec in pricing.PROVIDERS.values()}:
+        shutil.copyfile(ROOT / pricing.CATALOG_DIRECTORY / name, catalogs / name)
+    (root / 'bin').mkdir()
+    shutil.copyfile(ROOT / 'bin' / 'lemon', root / 'bin' / 'lemon')
+    return root.resolve()
+
+
 def namespace(out, **overrides):
     values = dict(lemon=str(ROOT / 'bin' / 'lemon'), compare_omp=False, providers=campaign.DEFAULT_PROVIDERS,
-                  variants='baseline,coding', repetitions=1, seed=107, timeout=20, config=None,
-                  control_plane_port=None, output_dir=str(out), resume=False, live=True,
+                  variants='baseline,coding', repetitions=1, seed=107, timeout=20,
+                  run_timeout=campaign.MAX_PROVIDER_WORK_SECONDS, config=None,
+                  control_plane_port=None, output_dir=str(out), resume=False, live=True, continue_after_stop=None,
                   profile_python=sys.executable, profile_python_explicit=False, failure_dir=None, tasks=None)
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -109,7 +124,76 @@ class Harness:
             return {**paired.failed_row({'task': case['name']}, 'timeout'), 'agent': 'lemon'}
         if mode == 'fail':
             return client_row(case, False, 'verifier_failed', **spec)
+        if mode == 'error':
+            return client_row(case, False, spec.pop('failure'), **spec)
         return client_row(case, True, None, **spec)
+
+
+
+class FakeTransport:
+    """Local terminal-CLI transport; status sequences model retries within one admission."""
+
+    def __init__(self, responses):
+        self.responses = iter(responses)
+        self.calls, self.statuses = [], []
+
+    def __call__(self, case, agent, executable, model, args):
+        self.calls.append(args.trial_id)
+        response = next(self.responses)
+
+        def invoke(argv, _cwd, **_kwargs):
+            if argv[:3] == ['git', 'status', '--porcelain']:
+                return subprocess.CompletedProcess(argv, 0, response.get('git_status', ''), '')
+            if argv[0] != executable:
+                return subprocess.CompletedProcess(argv, 0, '', '')
+            if response.get('timeout'):
+                if _kwargs.get('deadline') is None:
+                    raise AssertionError('admitted client commands must inherit the bounded work deadline')
+                raise subprocess.TimeoutExpired(argv, 0)
+            statuses = response.get('statuses', [200])
+            self.statuses.extend(statuses)
+            status = statuses[-1]
+            result = {
+                'ok': status == 200, 'answer': SECRET, 'run_id': 'private-run-id',
+                'usage': {'inputTokens': 100, 'cacheReadTokens': 900, 'cacheWriteTokens': 0,
+                          'outputTokens': 50, 'totalTokens': 1050, 'costUsd': 0.01},
+                'metrics': {'turns': 3, 'tool_errors': 0}}
+            if status != 200:
+                result['error'] = response.get('error', f'provider HTTP {status}: {SECRET}')
+            result.update(response.get('result', {}))
+            return subprocess.CompletedProcess(argv, 0 if result['ok'] else 1, json.dumps(result), '')
+
+        with patch.object(benchmark, 'command', side_effect=invoke):
+            return benchmark.run_case(case, agent, executable, model, args)
+
+
+class MissingCounterTests(unittest.TestCase):
+    def test_omp_empty_or_partial_usage_never_becomes_zero(self):
+        empty = benchmark.parse_omp('')
+        self.assertTrue(all(value is None for value in empty['usage'].values()))
+        events = [
+            {'type': 'message_end', 'message': {'role': 'assistant', 'usage': {
+                'input': 0, 'cacheRead': 0, 'cacheWrite': 0, 'output': 0, 'totalTokens': 0}}},
+            {'type': 'message_end', 'message': {'role': 'assistant', 'usage': {'input': 0}}}]
+        parsed = benchmark.parse_omp('\n'.join(json.dumps(event) for event in events))
+        self.assertEqual(parsed['usage']['inputTokens'], 0)
+        for key in ('cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'totalTokens'):
+            self.assertIsNone(parsed['usage'][key])
+
+
+class Clock:
+    def __init__(self):
+        self.wall, self.mono = time.time(), time.monotonic()
+
+    def time(self):
+        return self.wall
+
+    def monotonic(self):
+        return self.mono
+
+    def advance(self, seconds):
+        self.wall += seconds
+        self.mono += seconds
 
 
 def terminate_fixture_runtime(process, **_kwargs):
@@ -123,6 +207,7 @@ class Fixture(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory(prefix='lemon-campaign-offline-')
         self.addCleanup(self.directory.cleanup)
         self.out = Path(self.directory.name) / 'campaign'
+        self.root = fake_source_root(self.directory.name)
         self.runtime = Path(self.directory.name) / 'fake_runtime.py'
         self.runtime.write_text(FAKE_RUNTIME)
         for patcher in (patch.object(paired, 'source_identity', return_value=dict(IDENTITY)),
@@ -135,7 +220,8 @@ class Fixture(unittest.TestCase):
 
     def run_campaign(self, harness, **overrides):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            return campaign.run_campaign(namespace(self.out, **overrides), cases(), harness, root=ROOT,
+            options = {'lemon': str(self.root / 'bin' / 'lemon'), **overrides}
+            return campaign.run_campaign(namespace(self.out, **options), cases(), harness, root=self.root,
                                          runtime_argv=[sys.executable, str(self.runtime)])
 
     def report(self):
@@ -143,6 +229,12 @@ class Fixture(unittest.TestCase):
 
     def trial_rows(self):
         return [json.loads(line) for line in (self.out / 'trials.jsonl').read_text().splitlines()]
+
+    def state(self):
+        return json.loads((self.out / 'campaign-state.json').read_text())
+
+    def stop(self):
+        return campaign.unresolved_stop(self.state())
 
 
 class ScheduleTests(unittest.TestCase):
@@ -428,7 +520,7 @@ class CampaignRunTests(Fixture):
                     if len(calls) == 1:
                         if stage == 'partial':
                             with open(path, 'a') as handle:
-                                handle.write('{"trial_id":')
+                                handle.write(json.dumps(row, allow_nan=False, sort_keys=True)[:25])
                         elif stage == 'complete':
                             append_trial(path, row)
                         raise KeyboardInterrupt
@@ -535,15 +627,11 @@ class CampaignRunTests(Fixture):
             'finalization_failed', patch.object(paired, 'collect_profile', side_effect=OSError('offline')))
 
     def script(self, trial_id):
-        if trial_id.endswith('bug_fix:pair:0001:baseline') and trial_id.startswith('zai'):
-            return {'mode': 'timeout'}
         if trial_id.startswith('openai-codex:read_and_answer') and trial_id.endswith(':coding'):
             return {'mode': 'fail'}
-        if trial_id.startswith('zai:read_and_answer') and trial_id.endswith(':baseline'):
-            return counters(uncached=None)
         return {}
 
-    def test_full_campaign_retains_failures_and_nulls_with_equivalent_spend_and_basis(self):
+    def test_full_campaign_retains_quality_failures_with_complete_usage_and_pricing_basis(self):
         harness = Harness(self.script)
         self.assertEqual(self.run_campaign(harness), 0)
         report = self.report()
@@ -553,58 +641,26 @@ class CampaignRunTests(Fixture):
         self.assertEqual(set(rows), set(harness.calls))
         for row in rows.values():
             self.assertTrue(row['attempted'])
-            self.assertIn(row['provider'], ('openai-codex', 'zai'))
             self.assertTrue(row['pair_id'].startswith(f'{row["provider"]}:{row["task"]}:pair:'))
-        timeout = rows['zai:bug_fix:pair:0001:baseline']
-        self.assertEqual((timeout['passed'], timeout['failure']), (False, 'timeout'))
-        for key in ('turns', 'tokens', 'uncached_input_tokens', 'cached_input_tokens', 'output_tokens'):
-            self.assertIsNone(timeout[key])
-        self.assertIsNone(timeout['equivalent_spend_usd'])
-        self.assertEqual(timeout['equivalent_spend_status'], 'missing_counters')
+            self.assertEqual(row['equivalent_spend_status'], 'priced')
         failed = rows['openai-codex:read_and_answer:pair:0001:coding']
         self.assertEqual((failed['passed'], failed['failure']), (False, 'verifier_failed'))
-        self.assertEqual(failed['equivalent_spend_status'], 'priced')
-        missing = rows['zai:read_and_answer:pair:0001:baseline']
-        self.assertIsNone(missing['uncached_input_tokens'])
-        self.assertIsNone(missing['tokens'])
-        self.assertEqual(missing['cached_input_tokens'], 900)
-        self.assertIsNone(missing['equivalent_spend_usd'])
-
-        prices = {name: report['equivalent_spend_basis']['pricing'][name]['prices'] for name in ('openai-codex', 'zai')}
-        expected = (100 * prices['openai-codex']['input'] + 900 * prices['openai-codex']['cache_read']
-                    + 50 * prices['openai-codex']['output']) / 1_000_000
-        passed_codex = rows['openai-codex:bug_fix:pair:0001:baseline']
-        self.assertAlmostEqual(passed_codex['equivalent_spend_usd'], expected, places=9)
-
-        for provider in ('openai-codex', 'zai'):
+        prices = report['equivalent_spend_basis']['pricing']['openai-codex']['prices']
+        expected = (100 * prices['input'] + 900 * prices['cache_read'] + 50 * prices['output']) / 1_000_000
+        self.assertAlmostEqual(rows['openai-codex:bug_fix:pair:0001:baseline']['equivalent_spend_usd'], expected, places=9)
+        for provider, catalog in (('openai-codex', 'open_ai'), ('zai', 'zai')):
             basis = report['equivalent_spend_basis']['pricing'][provider]
             self.assertEqual(basis['label'], 'list-price equivalent, not billed')
             self.assertRegex(basis['catalog_sha256'], r'^[0-9a-f]{64}$')
-        self.assertEqual(report['equivalent_spend_basis']['pricing']['openai-codex']['catalog_file'],
-                         'apps/lemon_ai/priv/models/open_ai.json')
-        self.assertEqual(report['equivalent_spend_basis']['pricing']['zai']['catalog_file'],
-                         'apps/lemon_ai/priv/models/zai.json')
-        self.assertIn('list-price equivalent, not billed', report['cost_basis'])
-
+            self.assertEqual(basis['catalog_file'], f'apps/lemon_ai/priv/models/{catalog}.json')
+            data = report['providers'][provider]
+            self.assertEqual(data['comparisons']['coding']['paired_trials'], 2)
+            self.assertEqual(len(data['paired_differences']), 2)
         codex = report['providers']['openai-codex']['variants']
         self.assertEqual((codex['baseline']['successes'], codex['baseline']['attempts']), (2, 2))
         self.assertEqual((codex['coding']['successes'], codex['coding']['attempts']), (1, 2))
-        self.assertEqual(codex['coding']['success_rate'], 0.5)
-        self.assertEqual(codex['baseline']['equivalent_spend']['per_verified_success_status'], 'complete')
-        self.assertAlmostEqual(codex['baseline']['equivalent_spend']['per_verified_success_usd'], expected, places=9)
         self.assertAlmostEqual(codex['coding']['equivalent_spend']['total_usd'], 2 * expected, places=9)
-        glm = report['providers']['zai']['variants']
-        self.assertEqual((glm['baseline']['successes'], glm['baseline']['timeouts']), (1, 1))
-        self.assertIsNone(glm['baseline']['equivalent_spend']['total_usd'])
-        self.assertEqual(glm['baseline']['equivalent_spend']['per_verified_success_status'], 'incomplete_missing_counters')
-        self.assertIsNone(glm['baseline']['token_usage']['uncached_input_tokens']['sum'])
-        self.assertEqual(glm['baseline']['token_usage']['uncached_input_tokens']['trials_missing'], 2)
-        self.assertEqual(glm['baseline']['token_usage']['output_tokens']['observed_sum'], 50)
-        self.assertEqual(glm['coding']['equivalent_spend']['per_verified_success_status'], 'complete')
-        for data in report['providers'].values():
-            comparison = data['comparisons']['coding']
-            self.assertEqual(comparison['paired_trials'], 2)
-            self.assertEqual(len(data['paired_differences']), 2)
+        self.assertIn('Subscription charges are not measured', report['cost_basis'])
 
     def test_zero_successes_leave_cost_per_success_undefined_in_report_and_markdown(self):
         harness = Harness(lambda trial_id: {'mode': 'fail'})
@@ -712,9 +768,262 @@ class CampaignRunTests(Fixture):
 
     def test_output_directory_inside_the_source_checkout_is_refused(self):
         with self.assertRaises(campaign.CampaignError):
-            campaign.run_campaign(namespace(ROOT / 'campaign-output'), cases(), Harness(), root=ROOT,
+            campaign.run_campaign(namespace(self.root / 'campaign-output', lemon=str(self.root / 'bin' / 'lemon')),
+                                  cases(), Harness(), root=self.root,
                                   runtime_argv=[sys.executable, str(self.runtime)])
-        self.assertFalse((ROOT / 'campaign-output').exists())
+        self.assertFalse((self.root / 'campaign-output').exists())
+
+
+class AdmissionTests(Fixture):
+    def test_terminal_provider_quota_auth_and_errors_stop_before_another_admission(self):
+        for status, error, reason in [
+                (429, f'HTTP 429 quota exhausted {SECRET}', 'provider_quota'),
+                (401, {'status': 401, 'message': SECRET}, 'provider_auth'),
+                (403, 'HTTP 403 authentication failed', 'provider_auth'),
+                (402, 'HTTP 402 insufficient credits', 'provider_quota'),
+                (503, {'status_code': 503, 'message': SECRET}, 'provider_failed')]:
+            with self.subTest(status=status):
+                self.out = Path(self.directory.name) / str(status)
+                transport = FakeTransport([{'statuses': [status], 'error': error}])
+                self.assertEqual(self.run_campaign(transport), 1)
+                self.assertEqual(len(transport.calls), 1)
+                row, = self.trial_rows()
+                self.assertEqual(row['failure'], reason)
+                self.assertEqual(row['provider_status'], status)
+                for key in campaign.TOKEN_KEYS:
+                    self.assertEqual(row[key], counters()[key])
+                self.assertEqual(row['cost_usd'], 0.01)
+                self.assertTrue(row['cleanup_complete'])
+                self.assertTrue(row['disposal_complete'])
+                stop = self.stop()
+                self.assertEqual(stop['reason'], reason)
+                self.assertEqual(stop['trial_id'], row['trial_id'])
+                self.assertTrue(stop['recoverable'])
+                original = (self.out / 'trials.jsonl').read_bytes()
+                refused = Harness()
+                with self.assertRaisesRegex(campaign.CampaignError, '--continue-after-stop'):
+                    self.run_campaign(refused, resume=True)
+                with self.assertRaises(campaign.CampaignError):
+                    self.run_campaign(refused, resume=True, continue_after_stop='0' * 64)
+                self.assertEqual(refused.calls, [])
+                self.assertEqual((self.out / 'trials.jsonl').read_bytes(), original)
+                resumed = Harness()
+                self.assertEqual(self.run_campaign(resumed, resume=True, continue_after_stop=stop['stop_id']), 0)
+                self.assertEqual(len(resumed.calls), 7)
+                self.assertNotIn(row['trial_id'], resumed.calls)
+                self.assertTrue((self.out / 'trials.jsonl').read_bytes().startswith(original))
+                self.assertIsNone(self.stop())
+                self.assertIn(stop['stop_id'], self.state()['continuations'])
+                self.assertIn(stop, self.state()['stops'])
+                self.assertNotIn(SECRET, (self.out / 'campaign-state.json').read_text())
+
+    def test_terminal_transport_failure_with_mutation_stops_until_explicit_continuation(self):
+        selected_cases = patch(__name__ + '.cases', return_value=[cases()[1]])
+        selected_cases.start()
+        self.addCleanup(selected_cases.stop)
+        transport = FakeTransport([{
+            'git_status': ' M f.txt\n',
+            'result': {'ok': False, 'error': 'Stream ended unexpectedly: :closed'}}])
+        self.assertEqual(self.run_campaign(transport, tasks='read_and_answer'), 1)
+        self.assertEqual(len(transport.calls), 1)
+        row, = self.trial_rows()
+        self.assertEqual(row['task'], 'read_and_answer')
+        self.assertEqual(row['failure'], 'agent_failed')
+        self.assertIsNone(row['provider_status'])
+        self.assertIsNone(row['provider_failure'])
+        for key, value in counters().items():
+            self.assertEqual(row[key], value)
+        self.assertTrue(row['cleanup_complete'])
+        self.assertTrue(row['disposal_complete'])
+        stop = self.stop()
+        self.assertEqual(stop['reason'], 'agent_failed')
+        self.assertEqual(stop['trial_id'], row['trial_id'])
+        self.assertTrue(stop['recoverable'])
+        original = (self.out / 'trials.jsonl').read_bytes()
+        refused = Harness()
+        with self.assertRaisesRegex(campaign.CampaignError, '--continue-after-stop'):
+            self.run_campaign(refused, tasks='read_and_answer', resume=True)
+        with self.assertRaises(campaign.CampaignError):
+            self.run_campaign(refused, tasks='read_and_answer', resume=True,
+                              continue_after_stop='0' * 64)
+        self.assertEqual(refused.calls, [])
+        self.assertEqual((self.out / 'trials.jsonl').read_bytes(), original)
+        resumed = Harness()
+        self.assertEqual(self.run_campaign(resumed, tasks='read_and_answer', resume=True,
+                                           continue_after_stop=stop['stop_id']), 0)
+        self.assertEqual(len(resumed.calls), 3)
+        self.assertNotIn(row['trial_id'], resumed.calls)
+        self.assertTrue((self.out / 'trials.jsonl').read_bytes().startswith(original))
+        self.assertIsNone(self.stop())
+        self.assertIn(stop, self.state()['stops'])
+        self.assertIn(stop['stop_id'], self.state()['continuations'])
+
+    def test_provider_429_retries_inside_one_successful_trial_are_not_new_admissions(self):
+        transport = FakeTransport([{'statuses': [429, 429, 200], 'result': {'error': 'Retried HTTP 429'}}]
+                                  + [{} for _ in range(7)])
+        self.assertEqual(self.run_campaign(transport), 0)
+        self.assertEqual(len(transport.calls), 8)
+        self.assertEqual(transport.statuses[:3], [429, 429, 200])
+        self.assertEqual(len(set(transport.calls)), 8)
+        self.assertEqual(len(self.trial_rows()), 8)
+        self.assertEqual(self.state()['stops'], [])
+        self.assertTrue(all(row['passed'] for row in self.trial_rows()))
+
+    def test_client_deadline_failure_still_verifies_teardown_and_records_unknown_usage(self):
+        transport = FakeTransport([{'timeout': True}])
+        self.assertEqual(self.run_campaign(transport, run_timeout=60), 1)
+        self.assertEqual(len(transport.calls), 1)
+        row, = self.trial_rows()
+        self.assertEqual(row['failure'], 'timeout')
+        self.assertTrue(row['cleanup_complete'])
+        self.assertTrue(row['disposal_complete'])
+        self.assertTrue(all(row[key] is None for key in campaign.TOKEN_KEYS))
+        self.assertEqual(self.stop()['reason'], 'timeout')
+
+    def test_unknown_usage_stops_preserving_every_reported_counter_and_null(self):
+        for missing in campaign.TOKEN_KEYS:
+            with self.subTest(counter=missing):
+                self.out = Path(self.directory.name) / missing
+                measurements = counters()
+                measurements[missing] = None
+                harness = Harness(lambda _trial_id: measurements)
+                self.assertEqual(self.run_campaign(harness), 1)
+                self.assertEqual(len(harness.calls), 1)
+                row, = self.trial_rows()
+                for key, value in measurements.items():
+                    self.assertEqual(row[key], value)
+                self.assertEqual(self.stop()['reason'], 'missing_usage')
+                summary = self.report()['providers'][row['provider']]['variants'][row['variant']]
+                self.assertIsNone(summary['token_usage'][missing]['sum'])
+                self.assertIsNone(summary['token_usage'][missing]['observed_sum'])
+                self.assertEqual(summary['token_usage'][missing]['trials_missing'], 1)
+                if missing != 'tokens':
+                    self.assertIsNone(row['equivalent_spend_usd'])
+                    self.assertIsNone(summary['equivalent_spend']['total_usd'])
+                with self.assertRaisesRegex(campaign.CampaignError, '--continue-after-stop'):
+                    self.run_campaign(Harness(), resume=True)
+
+    def test_runtime_timeout_and_unknown_agent_failures_stop_with_exact_paid_rows(self):
+        for failure in ('runtime_failed', 'timeout', 'invalid_cli_json', 'invocation_failed', 'agent_failed',
+                        'disclosure_not_observed'):
+            with self.subTest(failure=failure):
+                self.out = Path(self.directory.name) / failure
+                harness = Harness(lambda _trial_id: {'mode': 'error', 'failure': failure})
+                self.assertEqual(self.run_campaign(harness), 1)
+                self.assertEqual(len(harness.calls), 1)
+                row, = self.trial_rows()
+                self.assertEqual(row['failure'], failure)
+                self.assertEqual(self.stop()['reason'], failure)
+                for key, value in counters().items():
+                    self.assertEqual(row[key], value)
+
+    def test_real_local_runtime_start_failure_stops_without_inventing_usage(self):
+        self.runtime.write_text('raise SystemExit(3)\n')
+        harness = Harness()
+        self.assertEqual(self.run_campaign(harness), 1)
+        self.assertEqual(harness.calls, [])
+        row, = self.trial_rows()
+        self.assertEqual(row['failure'], 'runtime_failed')
+        self.assertTrue(row['cleanup_complete'])
+        self.assertTrue(row['disposal_complete'])
+        self.assertTrue(all(row[key] is None for key in campaign.TOKEN_KEYS))
+        self.assertEqual(self.stop()['reason'], 'runtime_failed')
+
+    def test_eight_hour_work_deadline_hands_teardown_back_before_stopping_admission(self):
+        clock, execute = Clock(), paired.execute_trial
+        started, deadlines = clock.monotonic(), []
+
+        def expires(*args, **kwargs):
+            deadlines.append(kwargs['run_deadline'])
+            row = execute(*args, **kwargs)
+            self.assertTrue(row['cleanup_complete'])
+            self.assertTrue(row['disposal_complete'])
+            clock.advance(campaign.MAX_PROVIDER_WORK_SECONDS)
+            return row
+
+        harness = Harness()
+        with patch.object(campaign, 'time', clock), patch.object(paired, 'execute_trial', side_effect=expires):
+            self.assertEqual(self.run_campaign(harness), 1)
+        self.assertEqual(deadlines, [started + 28_800])
+        self.assertEqual(len(harness.calls), 1)
+        row, = self.trial_rows()
+        self.assertTrue(row['passed'], 'deadline admission stop must not rewrite the exact trial outcome')
+        self.assertEqual(row['cost_usd'], 0.01)
+        self.assertEqual(self.stop()['reason'], 'run_deadline')
+        self.assertFalse(self.stop()['recoverable'])
+        self.assertEqual(self.report()['admission']['process_cleanup_grace_seconds'], 40)
+        with self.assertRaisesRegex(campaign.CampaignError, 'continuation cannot override'):
+            self.run_campaign(Harness(), resume=True, continue_after_stop=self.stop()['stop_id'])
+
+    def test_each_provider_gets_one_window_and_all_its_trials_share_one_deadline(self):
+        clock, execute, deadlines = Clock(), paired.execute_trial, []
+
+        def elapsed(*args, **kwargs):
+            deadlines.append((args[1]['provider'], kwargs['run_deadline']))
+            row = execute(*args, **kwargs)
+            clock.advance(1)
+            return row
+
+        with patch.object(campaign, 'time', clock), patch.object(paired, 'execute_trial', side_effect=elapsed):
+            self.assertEqual(self.run_campaign(Harness(), run_timeout=60), 0)
+        self.assertEqual(len({value for provider, value in deadlines if provider == 'openai-codex'}), 1)
+        self.assertEqual(len({value for provider, value in deadlines if provider == 'zai'}), 1)
+        self.assertEqual(deadlines[4][1] - deadlines[0][1], 4)
+        self.assertEqual(len(self.state()['provider_deadlines']), 2)
+
+    def test_resume_and_explicit_quota_continuation_do_not_reset_the_provider_deadline(self):
+        clock = Clock()
+        with patch.object(campaign, 'time', clock):
+            self.assertEqual(self.run_campaign(FakeTransport([{'statuses': [429]}])), 1)
+            stop = self.stop()
+            deadlines = self.state()['provider_deadlines']
+            clock.advance(28_801)
+            resumed = Harness()
+            self.assertEqual(self.run_campaign(resumed, resume=True, continue_after_stop=stop['stop_id']), 1)
+        self.assertEqual(resumed.calls, [])
+        self.assertEqual(self.state()['provider_deadlines'], deadlines)
+        self.assertEqual(self.stop()['reason'], 'run_deadline')
+        self.assertEqual(len(self.trial_rows()), 1)
+
+    def test_unsafe_cleanup_cannot_be_acknowledged_into_permission(self):
+        def unverified(process, **kwargs):
+            terminate_fixture_runtime(process, **kwargs)
+            return False
+
+        with patch.object(paired.tempfile, 'tempdir', self.directory.name), \
+                patch.object(paired, 'terminate', side_effect=unverified):
+            self.assertEqual(self.run_campaign(Harness()), 1)
+        self.assertFalse(self.stop()['recoverable'])
+        refused = Harness()
+        with self.assertRaisesRegex(campaign.CampaignError, 'independent recovery'):
+            self.run_campaign(refused, resume=True, continue_after_stop=self.stop()['stop_id'])
+        self.assertEqual(refused.calls, [])
+
+    def test_unknown_cleanup_flags_are_not_recoverable_by_acknowledgement(self):
+        row = {**client_row(cases()[0]), 'cleanup_complete': None, 'disposal_complete': None}
+        self.assertEqual(campaign.admission_stop(row), 'cleanup_unverified')
+        state = campaign.read_state(self.out / 'campaign-state.json', 'e' * 64)
+        self.out.mkdir()
+        stop = campaign.record_stop(self.out / 'campaign-state.json', state, 'cleanup_unverified',
+                                    'zai', None, [], recoverable=True)
+        self.assertFalse(stop['recoverable'])
+
+    def test_missing_stop_state_and_unrecorded_admissions_fail_closed(self):
+        self.assertEqual(self.run_campaign(FakeTransport([{'statuses': [429]}])), 1)
+        (self.out / 'campaign-state.json').unlink()
+        refused = Harness()
+        with self.assertRaisesRegex(campaign.CampaignError, 'independent recovery'):
+            self.run_campaign(refused, resume=True)
+        self.assertEqual(refused.calls, [])
+        self.assertEqual(self.stop()['reason'], 'admission_unreconciled')
+        state = self.state()
+        state['stops'], state['continuations'] = [], []
+        state['active_trial_id'] = 'openai-codex:read_and_answer:pair:0001:baseline'
+        campaign.durable_state(self.out / 'campaign-state.json', state)
+        with self.assertRaisesRegex(campaign.CampaignError, 'independent recovery'):
+            self.run_campaign(refused, resume=True)
+        self.assertEqual(refused.calls, [])
+        self.assertEqual(self.stop()['reason'], 'admission_unreconciled')
 
 
 class ResumeTests(Fixture):
@@ -732,22 +1041,30 @@ class ResumeTests(Fixture):
             self.run_campaign(resumed, resume=True)
         self.assertEqual(resumed.calls, [])
 
-    def test_torn_trailing_record_is_ignored_and_that_trial_reruns(self):
-        harness = Harness()
-        self.assertEqual(self.run_campaign(harness, resume=True), 0)
-        lines = (self.out / 'trials.jsonl').read_text().splitlines()
-        (self.out / 'trials.jsonl').write_text('\n'.join(lines[:-1]) + '\n' + lines[-1][:25])
-        torn_id = json.loads(lines[-1])['trial_id']
-        rerun = Harness(lambda entry_id: {'mode': 'timeout'} if entry_id == torn_id else {})
-        self.assertEqual(self.run_campaign(rerun, resume=True), 0)
-        self.assertEqual(rerun.calls, [torn_id])
-        records = [json.loads(line) for line in (self.out / 'trials.jsonl').read_text().splitlines()]
-        self.assertEqual(len(records), len(lines))
-        self.assertEqual(records[-1]['trial_id'], torn_id)
-        self.assertEqual(records[-1]['failure'], 'timeout')
-        again = Harness()
-        self.assertEqual(self.run_campaign(again, resume=True), 0)
-        self.assertEqual(again.calls, [])
+    def test_torn_trailing_evidence_is_retained_and_never_rerun(self):
+        self.assertEqual(self.run_campaign(Harness(), resume=True), 0)
+        path = self.out / 'trials.jsonl'
+        lines = path.read_text().splitlines()
+        path.write_text('\n'.join(lines[:-1]) + '\n' + lines[-1][:25])
+        original = path.read_bytes()
+        refused = Harness()
+        with self.assertRaisesRegex(campaign.CampaignError, 'incomplete trial evidence'):
+            self.run_campaign(refused, resume=True)
+        self.assertEqual(refused.calls, [])
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_unknown_duplicate_and_unattempted_rows_are_retained_and_refused(self):
+        original = {'trial_id': 'known', 'attempted': True}
+        for rows in ([original, original], [{'trial_id': 'foreign', 'attempted': True}],
+                     [{'trial_id': 'known', 'attempted': False}], [None]):
+            with self.subTest(rows=rows):
+                path = self.out / 'invalid-trials.jsonl'
+                path.parent.mkdir(parents=True, exist_ok=True)
+                evidence = ''.join(json.dumps(row) + '\n' for row in rows).encode()
+                path.write_bytes(evidence)
+                with self.assertRaisesRegex(campaign.CampaignError, 'invalid or duplicate'):
+                    campaign.read_trials(path, {'known'})
+                self.assertEqual(path.read_bytes(), evidence)
 
     def test_malformed_interior_record_is_rejected(self):
         self.assertEqual(self.run_campaign(Harness(), resume=True), 0)
@@ -768,6 +1085,8 @@ class ResumeTests(Fixture):
             self.run_campaign(harness, resume=True, repetitions=2)
         with self.assertRaises(campaign.CampaignError):
             self.run_campaign(harness, resume=True, timeout=21)
+        with self.assertRaises(campaign.CampaignError):
+            self.run_campaign(harness, resume=True, run_timeout=60)
         self.assertEqual(harness.calls, [])
         with patch.object(paired, 'source_identity', return_value={**IDENTITY, 'revision': 'f' * 40}), \
                 self.assertRaises(campaign.CampaignError):
@@ -778,8 +1097,22 @@ class ResumeTests(Fixture):
 class CommandLineTests(unittest.TestCase):
     def invoke(self, *arguments):
         with tempfile.TemporaryDirectory() as directory:
+            root = fake_source_root(directory)
+            bootstrap = textwrap.dedent('''\
+                import functools, json, sys
+                from pathlib import Path
+                priv, source, identity = sys.argv[1:4]
+                sys.path.insert(0, priv)
+                import coding_benchmark as benchmark
+                import coding_benchmark_campaign as campaign
+                campaign.paired.source_identity = lambda _root: json.loads(identity)
+                benchmark.run_campaign = functools.partial(campaign.run_campaign, root=Path(source))
+                sys.argv = [benchmark.__file__, *sys.argv[4:]]
+                raise SystemExit(benchmark.main())
+            ''')
             result = subprocess.run(
-                [sys.executable, benchmark.__file__, '--lemon', str(ROOT / 'bin' / 'lemon'),
+                [sys.executable, '-c', bootstrap, str(Path(benchmark.__file__).resolve().parent),
+                 str(root), json.dumps(IDENTITY), '--lemon', str(root / 'bin' / 'lemon'),
                  *[argument.replace('<dir>', directory) for argument in arguments]],
                 stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120,
                 env={'PATH': os.environ.get('PATH', os.defpath)})
@@ -793,6 +1126,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(len(plan['scheduled_trials']), 144)
         self.assertEqual(plan['experiment']['repetitions'], 3)
         self.assertEqual(plan['experiment']['timeout'], 660)
+        self.assertEqual(plan['experiment']['run_timeout'], 28_800)
         self.assertEqual(plan['experiment']['variants'], ['baseline', 'coding'])
         self.assertEqual([item['provider'] + ':' + item['model'] for item in plan['experiment']['providers']],
                          ['openai-codex:gpt-6.1-sol', 'zai:glm-5.3'])
@@ -800,12 +1134,22 @@ class CommandLineTests(unittest.TestCase):
         self.assertNotIn('<dir>', json.dumps(plan))
         self.assertIn('--output-dir <output-dir>', plan['commands']['campaign'])
 
+    def test_campaign_accepts_a_shorter_bounded_provider_work_deadline(self):
+        result, plan = self.invoke('--campaign', '--run-timeout', '60', '--output-dir', '<dir>/campaign')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(plan['experiment']['run_timeout'], 60)
+        self.assertIn('--run-timeout 60', plan['commands']['campaign'])
+
     def test_campaign_and_paid_lane_options_cannot_be_mixed(self):
         for arguments in [
             ['--campaign', '--paired', '--output-dir', '<dir>/campaign'],
             ['--campaign', '--output', '<dir>/out.json', '--output-dir', '<dir>/campaign'],
             ['--campaign', '--model', 'zai:glm-5.3', '--output-dir', '<dir>/campaign'],
-            ['--campaign', '--run-timeout', '10', '--output-dir', '<dir>/campaign'],
+            ['--campaign', '--run-timeout', '0', '--output-dir', '<dir>/campaign'],
+            ['--campaign', '--run-timeout', '28801', '--output-dir', '<dir>/campaign'],
+            ['--campaign', '--output-dir', '<dir>/campaign', '--continue-after-stop', '0' * 64],
+            ['--campaign', '--live', '--resume', '--output-dir', '<dir>/campaign', '--continue-after-stop', 'invalid'],
+            ['--output', '<dir>/out.json', '--continue-after-stop', '0' * 64],
             ['--campaign', '--plan', 'p.json', '--output-dir', '<dir>/campaign'],
             ['--campaign', '--failure-dir', '<dir>/f', '--output-dir', '<dir>/campaign'],
             ['--output', '<dir>/out.json', '--providers', 'zai:glm-5.3'],

@@ -27,6 +27,9 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Fixed
 
+- Honor the configured HTTP/WebSocket listener IP so isolated benchmark runtimes
+  can bind to loopback without changing the default or existing services.
+
 - Generic node invocation cannot bypass provider-management administration scopes.
   Provider-management exceptions and node transport diagnostics omit raw request
   values; uncertain mutation failures explicitly prohibit automatic retry.

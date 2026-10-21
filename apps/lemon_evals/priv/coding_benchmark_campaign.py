@@ -9,9 +9,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import sys
+import time
 
 import coding_benchmark_paired as paired
 import coding_benchmark_pricing as pricing
@@ -21,6 +23,13 @@ DEFAULT_VARIANTS = 'baseline,coding'
 VARIANTS = ('baseline', 'coding')
 TOKEN_KEYS = ('tokens', 'uncached_input_tokens', 'cached_input_tokens', 'cache_write_tokens', 'output_tokens')
 SCHEMA_VERSION = 1
+MAX_PROVIDER_WORK_SECONDS = 8 * 60 * 60
+PROCESS_CLEANUP_GRACE_SECONDS = 40
+STOP_REASONS = {
+    'provider_quota', 'provider_auth', 'provider_failed', 'agent_failed', 'runtime_failed',
+    'invalid_cli_json', 'invocation_failed', 'disclosure_not_observed', 'timeout', 'run_deadline',
+    'missing_usage', 'cleanup_unverified', 'disposal_unverified', 'finalization_failed',
+    'interrupted', 'admission_unreconciled'}
 
 
 class CampaignError(ValueError):
@@ -69,7 +78,7 @@ def sanitized_command(args, providers, variants):
         parts.append('--live')
     parts += ['--providers', ','.join(f'{provider}:{model}' for provider, model in providers),
               '--variants', ','.join(variants), '--repetitions', str(args.repetitions),
-              '--seed', str(args.seed), '--timeout', str(args.timeout)]
+              '--seed', str(args.seed), '--timeout', str(args.timeout), '--run-timeout', str(args.run_timeout)]
     if getattr(args, 'tasks', None):
         parts += ['--tasks', args.tasks]
     if getattr(args, 'control_plane_port', None):
@@ -81,6 +90,8 @@ def sanitized_command(args, providers, variants):
         parts += ['--profile-python', '<profile-python>']
     if args.resume:
         parts.append('--resume')
+    if getattr(args, 'continue_after_stop', None):
+        parts += ['--continue-after-stop', args.continue_after_stop]
     return ' '.join(parts)
 
 
@@ -94,11 +105,11 @@ def port_available(port):
     return True
 
 
-def read_trials(path, scheduled_ids):
-    """Recorded attempted trials.
+def read_trials(path, scheduled_ids, repair_row=None):
+    """Read durable attempted rows without discarding uncertain paid evidence.
 
-    A torn final line from an interrupted write is durably truncated so later appends start on a
-    clean line; a malformed interior record is an error rather than silently skipped.
+    Only the current row's owner may complete its torn append from the exact in-memory row.
+    A later invocation must retain an incomplete tail and fail closed, never rerun it.
     """
     rows, seen = [], set()
     if not Path(path).exists():
@@ -117,20 +128,21 @@ def read_trials(path, scheduled_ids):
             parsed.append(json.loads(tail))
             repair = b'\n'
         except ValueError:
-            repair = None
-        with open(path, 'r+b') as handle:
-            if repair is None:
-                handle.truncate(len(data) - len(tail))
-            else:
-                handle.seek(0, os.SEEK_END)
-                handle.write(repair)
+            encoded = json.dumps(repair_row, allow_nan=False, sort_keys=True).encode() if repair_row else b''
+            if not encoded.startswith(tail):
+                raise CampaignError('incomplete trial evidence; refusing to truncate or repeat uncertain work') from None
+            parsed.append(repair_row)
+            repair = encoded[len(tail):] + b'\n'
+        with open(path, 'ab') as handle:
+            handle.write(repair)
             handle.flush()
             os.fsync(handle.fileno())
     for row in parsed:
-        if (isinstance(row, dict) and row.get('trial_id') in scheduled_ids
-                and row.get('attempted') is True and row['trial_id'] not in seen):
-            seen.add(row['trial_id'])
-            rows.append(row)
+        if (not isinstance(row, dict) or row.get('trial_id') not in scheduled_ids
+                or row.get('attempted') is not True or row['trial_id'] in seen):
+            raise CampaignError('invalid or duplicate attempted trial evidence; refusing to omit or repeat paid work')
+        seen.add(row['trial_id'])
+        rows.append(row)
     return rows
 
 
@@ -163,7 +175,7 @@ def persist_trial(path, row, provider, basis, scheduled_ids):
     except BaseException as failure:
         if error is None or isinstance(failure, KeyboardInterrupt):
             error = failure
-        recorded = read_trials(path, scheduled_ids)
+        recorded = read_trials(path, scheduled_ids, repair_row=row)
         if not any(saved['trial_id'] == row['trial_id'] for saved in recorded):
             append_trial(path, row)
         else:
@@ -172,6 +184,89 @@ def persist_trial(path, row, provider, basis, scheduled_ids):
                 handle.flush()
                 os.fsync(handle.fileno())
     return row, error
+
+
+def durable_state(path, state):
+    """Replace the admission/stop marker durably before admitting any more paid work."""
+    temporary = path.with_suffix('.tmp')
+    with open(temporary, 'w') as handle:
+        json.dump(state, handle, allow_nan=False, sort_keys=True)
+        handle.write('\n')
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(path)
+    descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def read_state(path, experiment_id):
+    if not path.exists():
+        return {'schema_version': 1, 'experiment_id': experiment_id, 'provider_deadlines': {},
+                'active_trial_id': None, 'stops': [], 'continuations': []}
+    try:
+        state = json.loads(path.read_text())
+        if (state['schema_version'] != 1 or state['experiment_id'] != experiment_id
+                or not isinstance(state['provider_deadlines'], dict)
+                or not isinstance(state['stops'], list) or not isinstance(state['continuations'], list)):
+            raise ValueError
+        active = state['active_trial_id']
+        if active is not None and (not isinstance(active, str) or not re.fullmatch(r'[A-Za-z0-9_:-]{1,180}', active)):
+            raise ValueError
+        for provider, deadline in state['provider_deadlines'].items():
+            if provider not in pricing.PROVIDERS or paired.number(deadline) is None:
+                raise ValueError
+        for stop in state['stops']:
+            if (stop['reason'] not in STOP_REASONS or type(stop['recoverable']) is not bool
+                    or stop['stop_id'] != paired.digest({key: value for key, value in stop.items() if key != 'stop_id'})):
+                raise ValueError
+        if any(value not in {stop['stop_id'] for stop in state['stops']} for value in state['continuations']):
+            raise ValueError
+        return state
+    except (ValueError, KeyError, TypeError):
+        raise CampaignError('invalid campaign admission/stop marker; refusing to admit work') from None
+
+
+def admission_stop(row):
+    """Only task-quality failures with known usage may admit another trial.
+
+    Provider retries belong to the already-admitted trial. A terminal 429/auth/provider error,
+    runtime failure or unknown usage never becomes permission to try another scheduled trial.
+    """
+    unsafe = paired.teardown_failure(row)
+    if unsafe:
+        return unsafe
+    if any(row.get(key) is not True for key in ('cleanup_complete', 'disposal_complete')):
+        return 'cleanup_unverified'
+    provider_failure = row.get('provider_failure')
+    if provider_failure in ('quota', 'auth', 'provider_failed'):
+        return {'quota': 'provider_quota', 'auth': 'provider_auth', 'provider_failed': 'provider_failed'}[provider_failure]
+    if row.get('failure') in STOP_REASONS:
+        return row['failure']
+    if row.get('passed') is not True and row.get('failure') not in {
+            'verifier_failed', 'tests_failed', 'unexpected_mutation', 'recovery_not_observed'}:
+        return 'agent_failed'
+    if any(paired.number(row.get(key)) is None for key in TOKEN_KEYS):
+        return 'missing_usage'
+    return None
+
+
+def record_stop(path, state, reason, provider, trial_id, rows, recoverable=True):
+    recoverable = recoverable and reason not in {
+        'cleanup_unverified', 'disposal_unverified', 'finalization_failed', 'admission_unreconciled', 'run_deadline'}
+    stop = {'reason': reason, 'provider': provider, 'trial_id': trial_id, 'recorded_trials': len(rows),
+            'recoverable': recoverable, 'recorded_at_unix': time.time()}
+    stop['stop_id'] = paired.digest(stop)
+    state['stops'].append(stop)
+    state['active_trial_id'] = None
+    durable_state(path, state)
+    return stop
+
+
+def unresolved_stop(state):
+    return next((stop for stop in state['stops'] if stop['stop_id'] not in state['continuations']), None)
 
 
 def counter_summary(rows, key, convert=paired.number):
@@ -219,7 +314,8 @@ def paired_differences(rows):
     return result
 
 
-def build_report(experiment, experiment_id, command, providers, variants, scheduled, rows, bases, seed, complete):
+def build_report(experiment, experiment_id, command, providers, variants, scheduled, rows, bases, seed, complete,
+                 state=None):
     provider_reports = {}
     for provider, model in providers:
         provider_rows = [row for row in rows if row['provider'] == provider]
@@ -237,6 +333,10 @@ def build_report(experiment, experiment_id, command, providers, variants, schedu
         'schema_version': SCHEMA_VERSION, 'suite': 'disclosure_campaign', 'experiment_id': experiment_id,
         'experiment': experiment, 'complete': complete,
         'progress': {'scheduled_trials': len(scheduled), 'recorded_trials': len(rows)},
+        'admission': {'stop': unresolved_stop(state) if state else None,
+                      'provider_deadlines_unix': dict(state['provider_deadlines']) if state else {},
+                      'work_timeout_seconds_per_provider': experiment['run_timeout'],
+                      'process_cleanup_grace_seconds': PROCESS_CLEANUP_GRACE_SECONDS},
         'commands': {
             'campaign': command,
             'runtime': 'mix run --no-start --no-halt --no-compile --no-deps-check -e <RUNTIME_EXPRESSION>',
@@ -247,7 +347,7 @@ def build_report(experiment, experiment_id, command, providers, variants, schedu
                     'permissions': 'approval-policy allow'},
         'equivalent_spend_basis': {'label': pricing.LABEL, 'pricing': bases},
         'cost_basis': 'Equivalent spend = recorded token counters x public catalog list price; ' + pricing.LABEL
-                      + '. Runtime-reported costUsd is a separate catalog estimate, not an invoice.',
+                      + '. Subscription charges are not measured. Runtime-reported costUsd is a separate catalog estimate, not an invoice.',
         'uncontrolled': ['provider cache/queue/load', 'provider pricing/route drift', 'OS scheduling'],
         'interpretation': 'exploratory; task-cluster uncertainty only; no default promotion implied',
         'providers': provider_reports,
@@ -262,6 +362,10 @@ def render_markdown(report):
              f'Trials recorded: {report["progress"]["recorded_trials"]} / {report["progress"]["scheduled_trials"]}'
              f' ({"complete" if report["complete"] else "INCOMPLETE"})', '',
              f'**Equivalent spend is a {pricing.LABEL}**: recorded token counters x public catalog list price.', '']
+    stop = report['admission']['stop']
+    if stop:
+        lines += [f'**Admission stopped: {stop["reason"]}** (provider `{stop["provider"]}`, '
+                  f'stop `{stop["stop_id"]}`). No further trials are admitted automatically.', '']
 
     def cell(value, digits=None):
         if value is None:
@@ -311,7 +415,9 @@ def build_experiment(args, cases, providers, variants, configurations, identity,
         'providers': [{'provider': provider, 'model': model, 'catalog_sha256': bases[provider]['catalog_sha256']}
                       for provider, model in providers],
         'tasks': [case['name'] for case in cases], 'variants': variants, 'repetitions': args.repetitions,
-        'seed': args.seed, 'timeout': args.timeout, 'revision': identity['revision'], 'dirty': identity['dirty'],
+        'seed': args.seed, 'timeout': args.timeout, 'run_timeout': args.run_timeout,
+        'process_cleanup_grace_seconds': PROCESS_CLEANUP_GRACE_SECONDS,
+        'revision': identity['revision'], 'dirty': identity['dirty'],
         'source_digest': identity['source_digest'], 'compiled_build_digest': identity['compiled_build_digest'],
         'config_digests': {variant: paired.digest(text) for variant, text in configurations.items()},
         'fixture_digests': {case['name']: paired.digest(case) for case in cases},
@@ -328,6 +434,14 @@ def run_campaign(args, cases, run_case, root=None, runtime_argv=None):
     providers, variants = parse_providers(args.providers), parse_variants(args.variants)
     if args.repetitions < 1 or args.timeout <= 0:
         raise CampaignError('positive --repetitions and --timeout required')
+    if not 0 < args.run_timeout <= MAX_PROVIDER_WORK_SECONDS:
+        raise CampaignError('--run-timeout must be positive and at most 28800 seconds (8h) per provider')
+    continuation = getattr(args, 'continue_after_stop', None)
+    if continuation is not None:
+        if not args.live or not args.resume:
+            raise CampaignError('--continue-after-stop requires --campaign --live --resume')
+        if not re.fullmatch(r'[0-9a-f]{64}', continuation):
+            raise CampaignError('--continue-after-stop must be a durable stop SHA256')
     port = getattr(args, 'control_plane_port', None)
     if port is not None and not 1024 <= port <= 65535:
         raise CampaignError('--control-plane-port must be an unprivileged TCP port')
@@ -374,60 +488,139 @@ def run_campaign(args, cases, run_case, root=None, runtime_argv=None):
     else:
         paired.write_report(manifest, {'schema_version': SCHEMA_VERSION, 'suite': 'disclosure_campaign_manifest',
                                        'experiment_id': experiment_id, 'experiment': experiment})
-    rows = read_trials(trials, {entry['trial_id'] for entry in scheduled})
     scheduled_ids = {entry['trial_id'] for entry in scheduled}
+    rows = read_trials(trials, scheduled_ids)
     done = {row['trial_id'] for row in rows}
-    # A prior unsafe teardown is terminal even when the original trial failure
-    # was different. Resume must not silently skip it and admit more paid work.
+    state_path = out / 'campaign-state.json'
+    missing_state = not state_path.exists()
+    state = read_state(state_path, experiment_id)
+
+    def checkpoint():
+        write_outputs(out, build_report(
+            experiment, experiment_id, command, providers, variants, scheduled, rows, bases,
+            args.seed, len(rows) == len(scheduled) and unresolved_stop(state) is None, state))
+
+    if missing_state and rows:
+        record_stop(state_path, state, 'admission_unreconciled', rows[-1]['provider'],
+                    rows[-1]['trial_id'], rows, recoverable=False)
+    active = state['active_trial_id']
+    if active:
+        saved = next((row for row in rows if row['trial_id'] == active), None)
+        reason = admission_stop(saved) if saved else 'admission_unreconciled'
+        record_stop(state_path, state, reason or 'interrupted', active.split(':', 1)[0], active, rows,
+                    recoverable=saved is not None and paired.teardown_failure(saved) is None)
+    # Reconstruct a missing stop from the rows, never infer permission from the absence of a marker.
+    for row in rows:
+        reason = admission_stop(row)
+        if reason and not any(stop['trial_id'] == row['trial_id'] for stop in state['stops']):
+            record_stop(state_path, state, reason, row['provider'], row['trial_id'], rows,
+                        recoverable=paired.teardown_failure(row) is None)
     if any(paired.teardown_failure(row) for row in rows):
+        checkpoint()
         raise CampaignError('campaign stopped on unverified cleanup, disposal or finalization; retained evidence requires independent recovery')
+    stop = unresolved_stop(state)
+    if stop:
+        checkpoint()
+        if not stop['recoverable']:
+            raise CampaignError(f'campaign stop {stop["stop_id"]} ({stop["reason"]}) requires independent recovery or a new directory; continuation cannot override it')
+        if continuation != stop['stop_id']:
+            raise CampaignError(f'campaign stopped: {stop["reason"]}; after resolving it, explicitly pass --resume --continue-after-stop {stop["stop_id"]}')
+        state['continuations'].append(stop['stop_id'])
+        durable_state(state_path, state)
+        if unresolved_stop(state):
+            raise CampaignError('another durable campaign stop remains unresolved; inspect campaign-state.json')
+    elif continuation:
+        raise CampaignError('--continue-after-stop does not match an unresolved durable stop')
     cases_by_name = {case['name']: case for case in cases}
     models = dict(providers)
+    # Persist the initial state too: deleting the marker later must not silently reset a work window.
+    durable_state(state_path, state)
     if done:
         print(f'Resuming: {len(done)} of {len(scheduled)} trials already recorded.', flush=True)
+    work_deadlines = {}
     try:
         for entry in scheduled:
             if entry['trial_id'] in done:
                 continue
+            provider = entry['provider']
             if port is not None and not port_available(port):
                 raise CampaignError('--control-plane-port is already in use; re-run with --resume once it is free')
             ports = paired.runtime_ports()
             if port is not None:
                 ports[0] = port
+            if provider not in work_deadlines:
+                now = time.time()
+                if provider not in state['provider_deadlines']:
+                    state['provider_deadlines'][provider] = now + args.run_timeout
+                remaining = min(args.run_timeout, state['provider_deadlines'][provider] - now)
+                work_deadlines[provider] = time.monotonic() + max(0, remaining)
+            work_deadline = work_deadlines[provider]
+            if time.monotonic() >= work_deadline:
+                record_stop(state_path, state, 'run_deadline', provider, None, rows, recoverable=False)
+                checkpoint()
+                return 1
+            # Durable admission precedes execution. A crash without a row is uncertain work, not a retry.
+            state['active_trial_id'] = entry['trial_id']
+            durable_state(state_path, state)
             interrupted = False
             row = None
             persistence_error = None
             try:
                 try:
                     row = paired.execute_trial(root, entry, cases_by_name[entry['task']], configurations[entry['variant']],
-                                               models[entry['provider']], credentials[entry['provider']], ports, args, run_case,
-                                               experiment['fixture_digests'][entry['task']], runtime_argv=runtime_argv)
+                                               models[provider], credentials[provider], ports, args, run_case,
+                                               experiment['fixture_digests'][entry['task']],
+                                               run_deadline=work_deadline, runtime_argv=runtime_argv)
                 except paired.TrialInterrupted as error:
                     row = error.row
                     interrupted = True
             finally:
                 # Once execute_trial hands back a row, no intervening exception may discard it.
                 if row is not None:
-                    row, persistence_error = persist_trial(trials, row, entry['provider'], bases[entry['provider']],
-                                                           scheduled_ids)
+                    row, persistence_error = persist_trial(trials, row, provider, bases[provider], scheduled_ids)
             rows.append(row)
+            reason = admission_stop(row)
+            if not reason and time.monotonic() >= work_deadline:
+                reason = 'run_deadline'
+            if not reason and (interrupted or isinstance(persistence_error, KeyboardInterrupt)):
+                reason = 'interrupted'
+            if reason:
+                record_stop(state_path, state, reason, provider, entry['trial_id'], rows,
+                            recoverable=paired.teardown_failure(row) is None and reason != 'run_deadline')
+            else:
+                state['active_trial_id'] = None
+                durable_state(state_path, state)
             outcome = 'PASS' if row['passed'] else 'FAIL (' + str(row['failure']) + ')'
             print(f'[{len(rows)}/{len(scheduled)}] {entry["trial_id"]}: {outcome}', flush=True)
-            write_outputs(out, build_report(experiment, experiment_id, command, providers, variants, scheduled, rows, bases,
-                                            args.seed, len(rows) == len(scheduled)))
+            checkpoint()
             if interrupted:
                 raise KeyboardInterrupt
             if persistence_error is not None:
                 raise persistence_error
-            if paired.teardown_failure(row):
+            if reason:
+                print(f'Admission stopped: {reason}; see campaign-state.json.', file=sys.stderr, flush=True)
                 return 1
     except KeyboardInterrupt:
-        # An interrupt can arrive after the append but before the in-memory list/report update.
+        # Reconcile an interrupt at any point after append; do not lose or repeat the paid row.
         rows = read_trials(trials, scheduled_ids)
-        write_outputs(out, build_report(experiment, experiment_id, command, providers, variants, scheduled, rows, bases,
-                                        args.seed, len(rows) == len(scheduled)))
-        print('Interrupted; re-run the same command with --resume to continue.', file=sys.stderr, flush=True)
+        if unresolved_stop(state) is None:
+            active = state['active_trial_id']
+            saved = next((row for row in rows if row['trial_id'] == active), None)
+            reason = (admission_stop(saved) or 'interrupted') if saved else (
+                'admission_unreconciled' if active else 'interrupted')
+            record_stop(state_path, state, reason, active.split(':', 1)[0] if active else None, active, rows,
+                        recoverable=not active or (saved is not None and paired.teardown_failure(saved) is None))
+        checkpoint()
+        print('Interrupted; inspect the durable stop before explicit continuation.', file=sys.stderr, flush=True)
         return 130
-    write_outputs(out, build_report(experiment, experiment_id, command, providers, variants, scheduled, rows, bases,
-                                    args.seed, len(rows) == len(scheduled)))
+    except CampaignError:
+        raise  # Port preflight failure admits no work and needs no recovery.
+    except BaseException:
+        rows = read_trials(trials, scheduled_ids)
+        if unresolved_stop(state) is None:
+            active = state['active_trial_id']
+            record_stop(state_path, state, 'finalization_failed',
+                        active.split(':', 1)[0] if active else None, active, rows, recoverable=False)
+        raise
+    checkpoint()
     return 0 if len(rows) == len(scheduled) else 1

@@ -3,6 +3,7 @@ defmodule LemonOmp.ModelsTest do
   import LemonOmp.TestSupport
 
   setup do
+    use_fake_omp()
     dir = tmp_dir!()
     executable = Path.join(dir, "omp")
     File.cp!(fake_omp(), executable)
