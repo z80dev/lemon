@@ -56,28 +56,30 @@ defmodule LemonMemory.Doctor.Checks.MemoryTest do
     assert check.remediation =~ "LEMON_FEATURE_SESSION_SEARCH=off"
   end
 
-  test "does not infer external runtime memory failure from an absent CLI-local process" do
-    [check] =
-      Memory.run(
-        features: %Features{session_search: :"default-on"},
-        exqlite_loaded: true,
-        store_module: StubMemoryStore,
-        external_runtime?: true
-      )
+  for runtime <- [:external, :absent] do
+    test "does not infer runtime memory failure from an absent CLI-local process (#{runtime})" do
+      [check] =
+        Memory.run(
+          features: %Features{session_search: :"default-on"},
+          exqlite_loaded: true,
+          store_module: StubMemoryStore,
+          runtime: unquote(runtime)
+        )
 
-    assert check.status == :skip
-    assert check.remediation == nil
-  end
+      assert check.status == :skip
+      assert check.remediation == nil
+    end
 
-  test "an external runtime does not conceal a missing exqlite NIF" do
-    [check] =
-      Memory.run(
-        features: %Features{session_search: :"default-on"},
-        external_runtime?: true,
-        exqlite_loaded: false
-      )
+    test "#{runtime} runtime scope does not conceal a missing exqlite NIF" do
+      [check] =
+        Memory.run(
+          features: %Features{session_search: :"default-on"},
+          runtime: unquote(runtime),
+          exqlite_loaded: false
+        )
 
-    assert check.status == :warn
+      assert check.status == :warn
+    end
   end
 
   test "passes with document count, db size, and ingest recency when the store is up" do

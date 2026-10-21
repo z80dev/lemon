@@ -8,7 +8,26 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Runtime releases bundle the local browser driver, so a packaged install uses
+  the managed local browser with only Node.js 24+ and Chrome/Chromium. Building
+  `lemon_runtime_min` or `lemon_runtime_full` now requires `npm`.
+
+### Changed
+
+- The local browser driver resolves from `LEMON_BROWSER_DRIVER_PATH`, then the
+  release-bundled driver, then a source checkout under `LEMON_PATH`; the current
+  working directory is no longer searched.
+
+### Fixed
+
+- `lemon doctor` from a release install no longer warns that `LEMON_PATH`
+  points at the build machine when `LEMON_PATH` is unset. Without a running
+  runtime, the memory-store and cron-pause checks now skip with a hint to start
+  Lemon instead of warning that runs are not recorded or held back.
+- Local browser diagnostics name the missing prerequisite (Node.js, driver,
+  outdated driver build, or Chrome) instead of one generic install message.
 
 ---
 

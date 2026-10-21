@@ -46,7 +46,7 @@ defmodule LemonControlPlane.Methods.DoctorRun do
     report_fun =
       Application.get_env(:lemon_control_plane, :doctor_report_fun, &LemonCore.Doctor.report/1)
 
-    report = report_fun.(external_runtime?: false)
+    report = report_fun.(runtime: :local)
     checks = Enum.take(report.checks, @max_checks)
 
     {:ok,

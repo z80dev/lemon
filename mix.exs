@@ -97,7 +97,7 @@ defmodule Lemon.MixProject do
           lemon_control_plane: :permanent
         ],
         include_executables_for: [:unix],
-        steps: [:assemble, &stamp_build/1, :tar]
+        steps: [:assemble, &bundle_browser_driver/1, &stamp_build/1, :tar]
       ],
       lemon_runtime_full: [
         applications: [
@@ -124,7 +124,7 @@ defmodule Lemon.MixProject do
           lemon_sim_ui: :permanent
         ],
         include_executables_for: [:unix],
-        steps: [:assemble, &stamp_build/1, :tar]
+        steps: [:assemble, &bundle_browser_driver/1, &stamp_build/1, :tar]
       ],
       sim_broadcast_platform: [
         applications: [
@@ -155,5 +155,40 @@ defmodule Lemon.MixProject do
 
     File.write!(Path.join(release.version_path, "lemon-build.json"), Jason.encode!(metadata))
     release
+  end
+
+  # Runtime releases ship the local browser driver so a packaged install needs
+  # only Node.js and Chrome, never a source checkout. The driver is rebuilt from
+  # the lockfile on every release (a stale dist/ must not ship), and only its
+  # production dependencies are staged under lemon_browser's priv/driver, where
+  # LemonBrowser.LocalServer resolves it.
+  defp bundle_browser_driver(release) do
+    client = Path.expand("clients/lemon-browser-node", __DIR__)
+    vsn = release.applications |> Map.fetch!(:lemon_browser) |> Keyword.fetch!(:vsn)
+    target = Path.join([release.path, "lib", "lemon_browser-#{vsn}", "priv", "driver"])
+
+    npm!(client, ["ci", "--no-audit", "--no-fund"])
+    npm!(client, ["run", "build"])
+
+    File.rm_rf!(target)
+    File.mkdir_p!(target)
+    File.cp_r!(Path.join(client, "dist"), target)
+
+    for file <- ~w(package.json package-lock.json) do
+      File.cp!(Path.join(client, file), Path.join(target, file))
+    end
+
+    npm!(target, ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"])
+    release
+  end
+
+  defp npm!(dir, args) do
+    npm =
+      System.find_executable("npm") || Mix.raise("npm is required to bundle the browser driver")
+
+    case System.cmd(npm, args, cd: dir, into: IO.stream(), stderr_to_stdout: true) do
+      {_, 0} -> :ok
+      {_, status} -> Mix.raise("npm #{Enum.join(args, " ")} failed in #{dir} (exit #{status})")
+    end
   end
 end

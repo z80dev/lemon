@@ -14,7 +14,7 @@ defmodule LemonCore.Doctor.Checks.Runtime do
     [
       Check.pass("runtime.build", LemonCore.Update.Version.describe()),
       check_control_port(env),
-      check_lemon_root(env)
+      check_lemon_root(System.get_env("LEMON_PATH"))
     ]
   end
 
@@ -47,22 +47,21 @@ defmodule LemonCore.Doctor.Checks.Runtime do
     end
   end
 
-  defp check_lemon_root(env) do
-    root = env.lemon_root
+  # Only an explicit LEMON_PATH is checked. Without it, Env.lemon_root/0 falls
+  # back to a compile-time path, which in a release names the build machine.
+  defp check_lemon_root(root) when root in [nil, ""] do
+    Check.skip("runtime.lemon_root", "LEMON_PATH is not set.")
+  end
 
-    cond do
-      is_nil(root) ->
-        Check.skip("runtime.lemon_root", "LEMON_PATH not set; root resolved from source layout.")
-
-      File.dir?(root) ->
-        Check.pass("runtime.lemon_root", "Lemon root directory exists: #{root}")
-
-      true ->
-        Check.warn(
-          "runtime.lemon_root",
-          "LEMON_PATH points to a non-existent directory: #{root}",
-          "Fix LEMON_PATH or unset it to use the source-relative default."
-        )
+  defp check_lemon_root(root) do
+    if File.dir?(root) do
+      Check.pass("runtime.lemon_root", "Lemon root directory exists: #{root}")
+    else
+      Check.warn(
+        "runtime.lemon_root",
+        "LEMON_PATH points to a non-existent directory: #{root}",
+        "Fix LEMON_PATH or unset it."
+      )
     end
   end
 end

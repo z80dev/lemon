@@ -49,7 +49,7 @@ defmodule LemonControlPlane.Methods.DoctorRunTest do
     end)
 
     assert {:ok, result} = DoctorRun.handle(%{}, %{})
-    assert_receive {:doctor_opts, [external_runtime?: false]}
+    assert_receive {:doctor_opts, [runtime: :local]}
 
     assert result["overall"] == "fail"
     assert result["counts"] == %{"pass" => 71, "warn" => 1, "fail" => 1, "skip" => 1}

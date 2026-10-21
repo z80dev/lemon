@@ -4,8 +4,9 @@
 # This is a denylist: anything not excluded here is sent to the daemon. What the
 # prod build needs and must therefore survive: mix.exs, mix.lock, config/, every
 # app under apps/ (Mix compiles all umbrella children, not just the ones named in
-# a release), rel/ (release overlays), the committed priv/static assets, and
-# apps/lemon_sim_ui/assets (npm sources for the sim UI build).
+# a release), rel/ (release overlays), the committed priv/static assets,
+# apps/lemon_sim_ui/assets (npm sources for the sim UI build), and
+# clients/lemon-browser-node (the browser driver runtime releases bundle).
 
 # VCS, CI metadata and agent scratch dirs
 .git
@@ -56,3 +57,11 @@ native
 scripts
 showcase
 tools
+
+# Re-included: `mix release` builds the browser driver it bundles into
+# lemon_browser's priv. Its install and build output are regenerated.
+!clients/tsconfig.base.json
+!clients/lemon-browser-node
+clients/lemon-browser-node/node_modules
+clients/lemon-browser-node/dist
+clients/lemon-browser-node/coverage

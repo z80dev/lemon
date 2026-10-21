@@ -16,7 +16,9 @@ defmodule LemonCore.BrowserProvider do
   defaults are configured under `:lemon_core, :browser_provider_probe` and
   `:browser_provider_lcu_probe`; the optional browser module is referenced only
   at runtime. `:timeout_ms` bounds each probe (default 5 seconds). Probe details,
-  exceptions, paths, URLs, and returned reason strings are never exposed.
+  exceptions, paths, URLs, and returned reason strings are never exposed; the
+  local probe may return one of a fixed set of reason atoms, each mapped to a
+  fixed message naming the missing prerequisite.
   """
 
   alias LemonCore.BrowserProvider.LCUProbe
@@ -25,7 +27,7 @@ defmodule LemonCore.BrowserProvider do
   @auto ~w(lcu relay local)
   @timeout_ms 5_000
   @invalid "Invalid browser provider; set runtime.tools.browser.provider to a supported provider."
-  @none "No browser provider is available; connect the LCU extension or relay, or install the local browser driver."
+  @none "No browser provider is available; connect the LCU extension or relay, or set up the local browser."
   @timeout "Browser provider check timed out; check the selected provider or choose another provider."
   @probe_failed "Browser provider availability could not be checked; check its configuration and runtime installation."
 
@@ -47,7 +49,7 @@ defmodule LemonCore.BrowserProvider do
     "relay" =>
       "Browser relay is not configured or connected; configure the relay and connect its browser extension.",
     "local" =>
-      "Local browser executable or driver is unavailable; install Chrome/Chromium and run npm --prefix clients/lemon-browser-node install && npm --prefix clients/lemon-browser-node run build.",
+      "Local browser is unavailable; install Chrome/Chromium and Node.js 24 or later, then reinstall Lemon if its browser driver is missing.",
     "cdp" => "CDP browser is unavailable; configure a reachable CDP endpoint.",
     "browserbase" => "Browserbase is unavailable; configure its credentials and browser driver.",
     "browser_use" => "Browser Use is unavailable; configure its credentials and browser driver.",
@@ -57,6 +59,19 @@ defmodule LemonCore.BrowserProvider do
     "controller" => "Browser controller is unavailable; configure and connect the controller.",
     "hybrid" =>
       "Hybrid browser is unavailable; configure available local and public browser routes."
+  }
+
+  # Bundled releases ship the driver in lemon_browser's priv directory; source
+  # checkouts build clients/lemon-browser-node.
+  @local_unavailability %{
+    node_missing:
+      "Local browser needs Node.js 24 or later on PATH; install Node.js, then run `lemon doctor` again.",
+    driver_missing:
+      "The local browser driver is not installed; reinstall Lemon, set LEMON_BROWSER_DRIVER_PATH, or in a source checkout run npm --prefix clients/lemon-browser-node install && npm --prefix clients/lemon-browser-node run build.",
+    driver_incompatible:
+      "The local browser driver could not be loaded and is likely outdated or incomplete; reinstall Lemon, or in a source checkout run npm --prefix clients/lemon-browser-node install && npm --prefix clients/lemon-browser-node run build.",
+    browser_missing:
+      "Chrome or Chromium was not found; install it or set LEMON_BROWSER_EXECUTABLE."
   }
 
   @type resolution :: %{
@@ -148,6 +163,7 @@ defmodule LemonCore.BrowserProvider do
       {:lcu_reason, true, reason} -> {true, reason}
       {:lcu_reason, false, reason} -> {false, reason}
       :unavailable -> {false, Map.fetch!(@unavailability, provider)}
+      {:unavailable, reason} -> {false, unavailability(provider, reason)}
       :timeout -> {false, @timeout}
       _ -> {false, @probe_failed}
     end
@@ -195,8 +211,14 @@ defmodule LemonCore.BrowserProvider do
   end
 
   defp classify({:ok, _}), do: :available
+  defp classify({:error, reason}) when is_atom(reason), do: {:unavailable, reason}
   defp classify({:error, _}), do: :unavailable
   defp classify(_), do: :failed
+
+  defp unavailability("local", reason) when is_map_key(@local_unavailability, reason),
+    do: Map.fetch!(@local_unavailability, reason)
+
+  defp unavailability(provider, _reason), do: Map.fetch!(@unavailability, provider)
 
   defp bounded(fun, timeout) do
     caller = self()

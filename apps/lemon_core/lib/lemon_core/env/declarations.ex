@@ -637,7 +637,8 @@ defmodule LemonCore.Env.Declarations do
       aliases: [],
       type: :string,
       default: nil,
-      doc: "Override for the `PATH` used when locating CLI subprocess executables.",
+      doc:
+        "Lemon source checkout root, set by the source launchers; locates source-only assets such as the browser driver build.",
       secret?: false,
       required?: false,
       area: :runtime,

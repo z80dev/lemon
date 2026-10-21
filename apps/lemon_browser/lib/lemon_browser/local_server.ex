@@ -5,11 +5,15 @@ defmodule LemonBrowser.LocalServer do
   This is meant to provide "local browser mode" without requiring a paired node
   connection over the control plane.
 
-  The helper is `clients/lemon-browser-node/dist/local-driver.js` and speaks a
+  The helper is `local-driver.js` from `clients/lemon-browser-node` and speaks a
   line-delimited JSON protocol over stdin/stdout:
 
     request:  {"id": "...", "method": "browser.navigate", "args": {...}, "timeoutMs": 30000}
     response: {"id": "...", "ok": true, "result": {...}}
+
+  The driver resolves from `LEMON_BROWSER_DRIVER_PATH`, then the copy runtime
+  releases bundle under this app's `priv/driver`, then a source checkout's
+  `clients/lemon-browser-node/dist` under `LemonCore.Runtime.Env.lemon_root/0`.
   """
 
   use GenServer
@@ -326,16 +330,31 @@ defmodule LemonBrowser.LocalServer do
         {:error, "LEMON_BROWSER_DRIVER_PATH does not exist: #{expanded}"}
       end
     else
-      root = File.cwd!()
-      candidate = Path.expand("clients/lemon-browser-node/dist/local-driver.js", root)
+      candidates = [bundled_driver_path(), source_driver_path()]
 
-      if File.exists?(candidate) do
-        {:ok, candidate}
-      else
-        {:error,
-         "Local browser driver not built. Run: cd clients/lemon-browser-node && npm install && npm run build"}
+      case Enum.find(candidates, &File.exists?/1) do
+        nil ->
+          {:error,
+           "Local browser driver not found. Reinstall Lemon, set LEMON_BROWSER_DRIVER_PATH, " <>
+             "or in a source checkout run: npm --prefix clients/lemon-browser-node install && " <>
+             "npm --prefix clients/lemon-browser-node run build"}
+
+        path ->
+          {:ok, path}
       end
     end
+  end
+
+  # Runtime releases stage the built driver and its production dependencies here.
+  defp bundled_driver_path do
+    Path.join([to_string(:code.priv_dir(:lemon_browser)), "driver", "local-driver.js"])
+  end
+
+  defp source_driver_path do
+    Path.join(
+      LemonCore.Runtime.Env.lemon_root(),
+      "clients/lemon-browser-node/dist/local-driver.js"
+    )
   end
 
   defp to_string_safe(nil), do: ""

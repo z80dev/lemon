@@ -6,7 +6,7 @@ defmodule LemonAutomation.Doctor.Checks.Cron do
 
   @spec run(keyword()) :: [Check.t()]
   def run(opts \\ []) do
-    failure_check(opts) ++ pause_check()
+    failure_check(opts) ++ pause_check(Keyword.get(opts, :runtime, :local))
   end
 
   defp failure_check(opts) do
@@ -28,8 +28,17 @@ defmodule LemonAutomation.Doctor.Checks.Cron do
   end
 
   # A pause is deliberate, but forgetting it silently stops every reminder and
-  # heartbeat, so it is always surfaced.
-  defp pause_check do
+  # heartbeat, so it is always surfaced. A standalone CLI has no CronManager of
+  # its own; there an absent manager says nothing about the runtime's.
+  defp pause_check(runtime) when runtime in [:external, :absent] do
+    if GenServer.whereis(CronManager) do
+      pause_check(:local)
+    else
+      [Check.outside_runtime("automation.cron_paused", "the cron pause state", runtime)]
+    end
+  end
+
+  defp pause_check(:local) do
     case pause_status() do
       {:ok, %{restoration_pending: true}} ->
         [

@@ -71,6 +71,37 @@ defmodule LemonAutomation.CronManagerUnavailableTest do
     end
   end
 
+  describe "doctor pause check when CronManager is unavailable" do
+    setup do
+      unregister_cron_manager!()
+
+      on_exit(fn ->
+        re_register_cron_manager()
+      end)
+
+      :ok
+    end
+
+    test "a standalone CLI skips instead of reporting held-back runs" do
+      for runtime <- [:absent, :external] do
+        check = pause_check(runtime: runtime)
+        assert check.status == :skip
+      end
+    end
+
+    test "inside the runtime an unreadable pause state still warns" do
+      check = pause_check(runtime: :local)
+      assert check.status == :warn
+      assert check.message =~ "could not be read"
+    end
+  end
+
+  defp pause_check(opts) do
+    opts
+    |> LemonAutomation.Doctor.Checks.Cron.run()
+    |> Enum.find(&(&1.name == "automation.cron_paused"))
+  end
+
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
