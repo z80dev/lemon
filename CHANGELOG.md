@@ -8,7 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- `lemon --help`, `lemon help <command>`, and launcher-command `--help` from a
+  `lemon_runtime_full` release no longer crash with a missing
+  `LEMON_WEB_SECRET_KEY_BASE`; help skips runtime configuration like
+  `lemon --version` does.
 
 ---
 
