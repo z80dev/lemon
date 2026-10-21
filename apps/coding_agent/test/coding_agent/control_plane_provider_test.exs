@@ -391,39 +391,69 @@ defmodule CodingAgent.ControlPlaneProviderTest do
       assert Enum.any?(CodingAgent.SessionManager.get_branch(session), &(&1.type == :compaction))
     end
 
-    test "durable context usage carries the session usage ledger and branch token sums",
-         context do
-      assistant = %LemonAi.Types.AssistantMessage{
-        role: :assistant,
-        content: [%LemonAi.Types.TextContent{text: "Counted."}],
-        stop_reason: :stop,
-        timestamp: 1,
-        usage: %LemonAi.Types.Usage{
-          input: 700,
-          output: 80,
-          cache_read: 300,
-          cache_write: 20,
-          total_tokens: 1_100,
-          cost: %LemonAi.Types.Cost{total: 0.0375}
+    for history <- [:known, :missing_usage] do
+      test "durable context usage preserves #{history} branch accounting", context do
+        assistant = %LemonAi.Types.AssistantMessage{
+          role: :assistant,
+          content: [%LemonAi.Types.TextContent{text: "Counted."}],
+          stop_reason: :stop,
+          timestamp: 1,
+          usage: %LemonAi.Types.Usage{
+            input: 700,
+            output: 80,
+            cache_read: 300,
+            cache_write: 20,
+            total_tokens: 1_100,
+            cost: %LemonAi.Types.Cost{total: 0.0375}
+          }
         }
-      }
 
-      session =
-        context.session
-        |> CodingAgent.SessionManager.append_message(
-          MessageSerialization.serialize_message(assistant)
-        )
+        session =
+          if unquote(history) == :known do
+            # Use the same durable identity with a complete history. Merely
+            # switching branches would still include unknown cumulative spend.
+            session = CodingAgent.SessionManager.new(context.cwd)
 
-      :ok = CodingAgent.SessionManager.save_to_file(context.path, session)
+            %{session | header: context.session.header}
+            |> CodingAgent.SessionManager.append_entry(
+              SessionEntry.model_change("openai-codex", "gpt-6.1-sol")
+            )
+          else
+            context.session
+          end
 
-      assert {:ok, report} =
-               ControlPlaneProvider.session_context_usage(context.source, context.cwd)
+        session =
+          CodingAgent.SessionManager.append_message(
+            session,
+            MessageSerialization.serialize_message(assistant)
+          )
 
-      assert report.live == false
-      assert report.usage.input == 700
-      assert report.usage.assistant_messages == 2
-      assert report.usage.tokens == 1_100
-      assert report.usage.cost_usd == 0.0375
+        :ok = CodingAgent.SessionManager.save_to_file(context.path, session)
+
+        assert {:ok, report} =
+                 ControlPlaneProvider.session_context_usage(context.source, context.cwd)
+
+        assert report.live == false
+
+        if unquote(history) == :known do
+          assert report.usage.input == 700
+          assert report.usage.output == 80
+          assert report.usage.cache_read == 300
+          assert report.usage.cache_write == 20
+          assert report.usage.assistant_messages == 1
+          assert report.usage.tokens == 1_100
+          assert report.usage.cost_usd == 0.0375
+        else
+          # Missing history is not a zero-cost, zero-token provider call.
+          assert is_nil(report.usage.input)
+          assert is_nil(report.usage.output)
+          assert is_nil(report.usage.cache_read)
+          assert is_nil(report.usage.cache_write)
+          assert report.usage.assistant_messages == 2
+          assert is_nil(report.usage.tokens)
+          assert is_nil(report.usage.cost_usd)
+        end
+      end
     end
   end
 end

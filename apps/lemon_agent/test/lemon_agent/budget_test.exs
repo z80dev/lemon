@@ -29,7 +29,40 @@ defmodule LemonAgent.BudgetTest do
     }
 
     assert Budget.project(model, context, %LemonAi.Types.StreamOptions{}) ==
-             %{tokens: 17, cost_usd: 0.0}
+             %{tokens: 17, cost_usd: nil}
+  end
+
+  test "unknown projected pricing fails closed without changing nullable provider telemetry" do
+    model = %{Mocks.mock_model() | cost: %LemonAi.Types.ModelCost{input: nil, output: 10}}
+
+    usage = %Usage{
+      input: nil,
+      output: nil,
+      cache_read: nil,
+      cache_write: nil,
+      total_tokens: nil,
+      cost: %Cost{total: nil}
+    }
+
+    context = %LemonAi.Types.Context{messages: [%{usage: usage}]}
+    projection = Budget.project(model, context, %LemonAi.Types.StreamOptions{max_tokens: 50})
+    assert is_integer(projection.tokens)
+    assert projection.tokens >= 50
+    assert projection.cost_usd == nil
+
+    for key <- [:max_run_cost_usd, :max_session_cost_usd] do
+      assert %{metric: :cost_usd, used: +0.0, message: message} =
+               Budget.check(Budget.new(%{key => 1}, nil), projection)
+
+      assert message =~ "cannot be verified"
+    end
+
+    refute Budget.check(Budget.new(%{max_run_tokens: projection.tokens + 1}, nil), projection)
+    refute Budget.check(Budget.new(%{}, nil), projection)
+    assert Budget.unpriced_warning(%{max_run_cost_usd: 1}, model) =~ "no known catalog price"
+    assert Budget.usage_from_message(%{usage: usage}) == %{tokens: nil, cost_usd: nil}
+    assert is_nil(usage.input)
+    assert is_nil(usage.cost.total)
   end
 
   test "projections enforce both scopes without charging estimated usage" do
@@ -66,11 +99,10 @@ defmodule LemonAgent.BudgetTest do
     refute Enum.any?(events, &match?({:provider_retry, _}, &1))
   end
 
-  test "under-budget first requests and unpriced models still call the provider" do
+  test "under-budget first requests and explicitly free models still call the provider" do
     for {cost, cap} <- [
           {%LemonAi.Types.ModelCost{input: 1, output: 10}, 1},
-          {%LemonAi.Types.ModelCost{}, 0.000001},
-          {nil, 0.000001}
+          {%LemonAi.Types.ModelCost{}, 0.000001}
         ] do
       model = %{Mocks.mock_model() | cost: cost}
       message = Mocks.assistant_message("answer", usage: %Usage{})
@@ -80,14 +112,18 @@ defmodule LemonAgent.BudgetTest do
     end
   end
 
-  test "unknown pricing warns only for dollar caps, without refusing free models" do
+  test "unpriced dollar-capped requests are blocked while known free prices need no warning" do
     model = Mocks.mock_model()
 
-    assert Budget.unpriced_warning(%{max_run_cost_usd: 1}, %{
-             model
-             | cost: %LemonAi.Types.ModelCost{}
-           }) =~
-             "Dollar caps cannot bound unpriced usage"
+    for key <- [:max_run_cost_usd, :max_session_cost_usd],
+        cost <- [nil, %LemonAi.Types.ModelCost{input: nil}] do
+      events = run(%{key => 1}, responses([], self()), model: %{model | cost: cost})
+      assert {:budget_exceeded, %{metric: :cost_usd, message: message}} = budget_stop(events)
+      assert message =~ "cannot be verified"
+      refute_received {:model_call, _}
+    end
+
+    refute Budget.unpriced_warning(%{max_run_cost_usd: 1}, model)
 
     refute Budget.unpriced_warning(%{max_run_tokens: 10}, model)
 
@@ -118,13 +154,13 @@ defmodule LemonAgent.BudgetTest do
              %{tokens: 8, cost_usd: 2}
 
     assert Budget.normalize_usage(%{tokens: -1, cost_usd: -0.5}) ==
-             %{tokens: 0, cost_usd: 0.0}
+             %{tokens: nil, cost_usd: nil}
 
     assert Budget.add_usage(%{tokens: 3, cost_usd: 1}, %{tokens: 5, cost_usd: 0.25}) ==
              %{tokens: 8, cost_usd: 1.25}
 
     assert Budget.usage_from_message(%{"usage" => %{"input" => 4, "cost" => %{"total" => 2}}}) ==
-             %{tokens: 4, cost_usd: 2}
+             %{tokens: nil, cost_usd: 2}
   end
 
   test "all four zero caps forbid any provider request" do
@@ -225,6 +261,7 @@ defmodule LemonAgent.BudgetTest do
     updates = for {:usage_budget_updated, update} <- events, do: update
     assert Enum.map(updates, & &1.run_usage.tokens) == [0, 6]
     assert List.last(updates).session_usage == %{tokens: 6, cost_usd: 0.2}
+    assert for({:provider_usage, observation} <- events, do: observation) == [message]
     assert match?({:agent_end, _}, List.last(events))
   end
 
@@ -248,6 +285,8 @@ defmodule LemonAgent.BudgetTest do
     assert Enum.map(updates, & &1.run_usage.tokens) == [0, 3, 7]
     assert_in_delta List.last(updates).session_usage.cost_usd, 0.3, 0.000001
     assert {:agent_end, [_prompt, ^success]} = List.last(events)
+    assert for({:provider_usage, observation} <- events, do: observation) == [failure, success]
+    refute Enum.any?(events, &match?({:message_end, %{stop_reason: :error}}, &1))
   end
 
   test "committed output blocks replay while its reported usage stays spent" do
@@ -303,7 +342,7 @@ defmodule LemonAgent.BudgetTest do
     assert List.last(transcript).is_error
   end
 
-  test "failed requests without usage do not invent spending" do
+  test "invoked failed requests without usage leave capped spend unknown and stop retries" do
     parent = self()
 
     stream_fn = fn _, _, _ ->
@@ -311,11 +350,24 @@ defmodule LemonAgent.BudgetTest do
       {:error, :timeout}
     end
 
-    events = run(%{max_run_tokens: 10_000}, stream_fn, max_retries: 0)
+    events = run(%{max_run_tokens: 10_000}, stream_fn)
     updates = for {:usage_budget_updated, update} <- events, do: update
-    assert Enum.all?(updates, &(&1.run_usage == %{tokens: 0, cost_usd: 0.0}))
-    refute budget_stop(events)
-    assert match?({:error, :timeout, _}, List.last(events))
+
+    assert Enum.map(updates, & &1.run_usage) == [
+             %{tokens: 0, cost_usd: 0.0},
+             %{tokens: nil, cost_usd: nil}
+           ]
+
+    assert_received :model_call
+    refute_received :model_call
+
+    assert [{:provider_usage, observation}] =
+             Enum.filter(events, &match?({:provider_usage, _}, &1))
+
+    assert observation.usage == nil
+    assert {:budget_exceeded, %{metric: :tokens, used: nil}} = budget_stop(events)
+    refute Enum.any?(events, &match?({:provider_retry, _}, &1))
+    assert match?({:error, {:budget_exceeded, _}, _}, List.last(events))
   end
 
   test "a reported direct assistant failure retains spending and stops retries" do
@@ -409,6 +461,7 @@ defmodule LemonAgent.BudgetTest do
     message = Mocks.assistant_message("answer", usage: usage(6, 0.2))
     events = run(%{}, responses([message], parent))
     refute Enum.any?(events, &match?({:usage_budget_updated, _}, &1))
+    assert for({:provider_usage, observation} <- events, do: observation) == [message]
     assert {:agent_end, [_prompt, ^message]} = List.last(events)
   end
 
@@ -450,6 +503,166 @@ defmodule LemonAgent.BudgetTest do
     assert_received {:model_call, []}
     assert_received {:model_call, []}
     refute_received {:model_call, _}
+  end
+
+  test "unknown accumulated metrics survive normalization and subsequent known reports" do
+    for unknown <- [
+          %{tokens: nil, cost_usd: 0.25},
+          %{tokens: 130, cost_usd: nil},
+          %{tokens: nil, cost_usd: nil}
+        ] do
+      assert Budget.normalize_usage(unknown) == unknown
+
+      assert Budget.normalize_usage(Map.new(unknown, fn {k, v} -> {Atom.to_string(k), v} end)) ==
+               unknown
+
+      summed = Budget.add_usage(unknown, %{tokens: 1, cost_usd: 0.1})
+
+      for {key, metric} <- [
+            {:max_run_tokens, :tokens},
+            {:max_session_tokens, :tokens},
+            {:max_run_cost_usd, :cost_usd},
+            {:max_session_cost_usd, :cost_usd}
+          ] do
+        budget = %{Budget.new(%{key => 10_000}, summed) | run_usage: summed}
+
+        if is_nil(unknown[metric]) do
+          assert summed[metric] == nil
+          assert %{metric: ^metric, used: nil} = Budget.check(budget)
+        else
+          refute Budget.check(budget)
+        end
+      end
+
+      refute Budget.check(%{Budget.new(%{}, summed) | run_usage: summed})
+    end
+  end
+
+  test "nullable token reports fail closed unless an independent total is known" do
+    partial = %Usage{
+      input: nil,
+      output: 30,
+      cache_read: 20,
+      cache_write: nil,
+      total_tokens: nil,
+      cost: %Cost{total: 0.25}
+    }
+
+    assert Budget.usage_from_message(%{usage: partial}) == %{tokens: nil, cost_usd: 0.25}
+
+    assert Budget.usage_from_message(%{usage: %{partial | total_tokens: 130}}) ==
+             %{tokens: 130, cost_usd: 0.25}
+
+    assert Budget.usage_from_message(%{role: :assistant, usage: nil}) ==
+             %{tokens: nil, cost_usd: nil}
+
+    assert Budget.usage_from_message(%{role: "assistant"}) == %{tokens: nil, cost_usd: nil}
+
+    assert Budget.usage_from_message(%{role: "user", content: "not billable"}) ==
+             %{tokens: 0, cost_usd: 0.0}
+  end
+
+  test "unknown projected output fails closed under token caps without affecting uncapped requests" do
+    model = %{priced_model() | max_tokens: nil}
+    projection = Budget.project(model, %LemonAi.Types.Context{}, %LemonAi.Types.StreamOptions{})
+    assert projection.tokens == nil
+
+    for key <- [:max_run_tokens, :max_session_tokens] do
+      assert %{metric: :tokens, used: 0, message: message} =
+               Budget.check(Budget.new(%{key => 10_000}, nil), projection)
+
+      assert message =~ "cannot be verified"
+      refute message =~ "Increase budgets"
+    end
+
+    refute Budget.check(Budget.new(%{}, nil), projection)
+  end
+
+  test "repeated faithful ZAI partial reports cannot authorize another dollar-capped request" do
+    # Matches the faithful ZAI usage-only provider fixture: the total is reported,
+    # but missing cache writes leave input and total dollar cost unknown.
+    partial = %Usage{
+      input: nil,
+      output: 30,
+      cache_read: 20,
+      cache_write: nil,
+      total_tokens: 130,
+      cost: %Cost{input: nil, output: 0.00006, cache_read: 0.000002, cache_write: nil, total: nil}
+    }
+
+    call = Mocks.tool_call("echo", %{"text" => "must not run"})
+    message = Mocks.assistant_message_with_tool_calls([call], usage: partial)
+
+    for {key, scope} <- [{:max_run_cost_usd, :run}, {:max_session_cost_usd, :session}] do
+      budget = Budget.new(%{key => 1}, nil)
+      once = Budget.record_message(budget, message)
+      twice = Budget.record_message(once, message)
+      assert once.run_usage == %{tokens: 130, cost_usd: nil}
+      assert twice.run_usage == %{tokens: 260, cost_usd: nil}
+      assert %{scope: ^scope, metric: :cost_usd, used: nil} = Budget.check(twice)
+
+      events =
+        run(%{key => 1}, responses([message, message], self()),
+          model: priced_model(),
+          tools: [Mocks.echo_tool()]
+        )
+
+      assert_received {:model_call, []}
+      refute_received {:model_call, _}
+
+      assert {:budget_exceeded, %{scope: ^scope, metric: :cost_usd, used: nil}} =
+               budget_stop(events)
+
+      refute Enum.any?(events, &match?({:tool_execution_start, _, _, _}, &1))
+      assert for({:provider_usage, observation} <- events, do: observation) == [message]
+      assert {:error, {:budget_exceeded, _}, %{new_messages: transcript}} = List.last(events)
+      assert :ok == TranscriptValidator.validate(transcript)
+    end
+
+    agent =
+      start_supervised!(
+        {LemonAgent.Agent,
+         initial_state: %{model: priced_model()},
+         budget_limits: %{max_session_cost_usd: 1},
+         stream_fn: responses([Mocks.assistant_message("answer", usage: partial)], self())}
+      )
+
+    for prompt <- ["first", "second", "third"] do
+      assert :ok = LemonAgent.Agent.prompt(agent, prompt)
+      assert :ok = LemonAgent.Agent.wait_for_idle(agent, timeout: 5_000)
+      assert :ok = LemonAgent.Agent.replace_messages(agent, [])
+    end
+
+    assert LemonAgent.Agent.get_state(agent).budget_usage == %{tokens: 130, cost_usd: nil}
+    assert_received {:model_call, []}
+    refute_received {:model_call, _}
+    assert partial.input == nil
+    assert partial.cost.total == nil
+  end
+
+  test "unknown dollars do not stop token-only or uncapped repeated provider calls" do
+    partial = %Usage{total_tokens: 130, cost: %Cost{total: nil}}
+
+    first =
+      Mocks.assistant_message_with_tool_calls(
+        [Mocks.tool_call("echo", %{"text" => "continue"})],
+        usage: partial
+      )
+
+    last = Mocks.assistant_message("answer", usage: partial)
+
+    for limits <- [%{}, %{max_run_tokens: 10_000}] do
+      events = run(limits, responses([first, last], self()), tools: [Mocks.echo_tool()])
+      assert_received {:model_call, []}
+      assert_received {:model_call, [^first]}
+      refute_received {:model_call, _}
+      refute budget_stop(events)
+      assert match?({:agent_end, _}, List.last(events))
+    end
+  end
+
+  defp priced_model do
+    %{Mocks.mock_model() | cost: %LemonAi.Types.ModelCost{input: 1, output: 1}}
   end
 
   defp usage(tokens, cost), do: %Usage{total_tokens: tokens, cost: %Cost{total: cost}}

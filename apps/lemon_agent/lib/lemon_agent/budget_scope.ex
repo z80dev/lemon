@@ -81,8 +81,8 @@ defmodule LemonAgent.BudgetScope do
     previous = Map.get(state.children, id, Budget.normalize_usage(nil))
 
     delta = %{
-      tokens: max(usage.tokens - previous.tokens, 0),
-      cost_usd: max(usage.cost_usd - previous.cost_usd, 0.0)
+      tokens: delta(usage.tokens, previous.tokens),
+      cost_usd: delta(usage.cost_usd, previous.cost_usd)
     }
 
     latest = Budget.add_usage(previous, delta)
@@ -116,4 +116,9 @@ defmodule LemonAgent.BudgetScope do
     do: {:stop, :normal, state}
 
   defp propagate(state), do: report(state.parent, state.id, inclusive(state).session_usage)
+
+  defp delta(current, previous) when is_number(current) and is_number(previous),
+    do: max(current - previous, 0)
+
+  defp delta(_current, _previous), do: nil
 end

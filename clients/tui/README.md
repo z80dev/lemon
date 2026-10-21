@@ -256,6 +256,8 @@ on reconnect and when opening or changing models. Older daemons without
   Unknown cost is omitted, never estimated. A focused session with stored history
   but no run usage yet is measured once through `sessions.context`, and `/context`
   refreshes the gauge with the daemon's measurement; a later run's usage supersedes it.
+  Partial provider counters stay unknown in `/context` usage summaries; a missing
+  cache component is not treated as zero or used as a context measurement.
 - `/context` (or `/ctx`) opens a scrollable breakdown of the focused session's
   context window: a 100-cell usage grid colored per category with free space dimmed,
   per-category tokens and share of the window (system prompt, tools, skills, context

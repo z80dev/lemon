@@ -187,6 +187,10 @@
 
 ### Fixed
 
+- Native session ledgers, descendant scopes, and explicit run-tree budgets retain
+  unknown token and dollar totals instead of charging zero. Relevant caps block
+  further model requests and child launches; repeated reports, stale snapshots,
+  session restoration, and usage projections cannot erase the incompleteness.
 - Clearing terminal background processes tolerates sessions that exit concurrently,
   including canceled queued launches. Cleanup resolves the session once, preserves
   failures against a still-live session, and logs unexpected concurrent exits

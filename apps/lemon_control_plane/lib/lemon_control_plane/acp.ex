@@ -1822,11 +1822,11 @@ defmodule LemonControlPlane.ACP do
 
   defp prompt_usage(usage) when is_map(usage) do
     %{
-      "inputTokens" => map_get(usage, :input) || 0,
-      "outputTokens" => map_get(usage, :output) || 0,
-      "totalTokens" => map_get(usage, :total_tokens) || 0,
-      "cachedReadTokens" => map_get(usage, :cache_read) || 0,
-      "cachedWriteTokens" => map_get(usage, :cache_write) || 0
+      "inputTokens" => map_get(usage, :input),
+      "outputTokens" => map_get(usage, :output),
+      "totalTokens" => map_get(usage, :total_tokens),
+      "cachedReadTokens" => map_get(usage, :cache_read),
+      "cachedWriteTokens" => map_get(usage, :cache_write)
     }
   end
 

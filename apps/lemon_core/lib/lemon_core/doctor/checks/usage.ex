@@ -33,6 +33,14 @@ defmodule LemonCore.Doctor.Checks.Usage do
     )
   end
 
+  defp usage_check(%{status: "unknown"} = diagnostics) do
+    Check.warn(
+      "usage.status",
+      "Usage quota status is unknown: #{usage_summary(diagnostics)}.",
+      "Provider measurements are incomplete; unknown usage is not measured zero."
+    )
+  end
+
   defp usage_check(diagnostics) do
     Check.pass(
       "usage.status",
@@ -44,8 +52,8 @@ defmodule LemonCore.Doctor.Checks.Usage do
     tokens = diagnostics.total_tokens
 
     [
-      "#{diagnostics.total_requests} request(s)",
-      "#{tokens.total} token(s)",
+      "#{display_number(diagnostics.total_requests)} request(s)",
+      "#{display_number(tokens.total)} token(s)",
       "#{format_cost(diagnostics.total_cost)} cost",
       "#{diagnostics.provider_count} provider(s)",
       "status #{diagnostics.status}"
@@ -56,5 +64,8 @@ defmodule LemonCore.Doctor.Checks.Usage do
   defp format_cost(cost) when is_number(cost),
     do: "$" <> :erlang.float_to_binary(cost * 1.0, decimals: 4)
 
-  defp format_cost(_cost), do: "$0.0000"
+  defp format_cost(_cost), do: "unknown"
+
+  defp display_number(value) when is_number(value), do: to_string(value)
+  defp display_number(_value), do: "unknown"
 end

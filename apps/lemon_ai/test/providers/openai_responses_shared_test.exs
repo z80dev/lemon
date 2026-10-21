@@ -581,6 +581,62 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedTest do
     assert_in_delta priority.cost.total, 20.0, 0.0001
   end
 
+  test "service tier pricing preserves unknown components and totals" do
+    usage = %Usage{
+      input: nil,
+      output: 100,
+      cost: %Cost{input: nil, output: 4.0, cache_read: 0.0, cache_write: nil, total: nil}
+    }
+
+    for {tier, multiplier} <- [{"flex", 0.5}, {"priority", 2.0}, {"custom", 3.0}] do
+      result =
+        OpenAIResponsesShared.apply_service_tier_pricing(
+          usage,
+          tier,
+          %{"flex" => 0.5, "priority" => 2.0, "custom" => 3.0}
+        )
+
+      assert result.input == nil
+      assert result.output == 100
+      assert is_nil(result.cost.input)
+      assert result.cost.output == 4.0 * multiplier
+      assert result.cost.cache_read == 0.0
+      assert is_nil(result.cost.cache_write)
+      assert is_nil(result.cost.total)
+    end
+  end
+
+  test "service tier pricing does not reconstruct an unknown total from known components" do
+    usage = %Usage{cost: %Cost{input: 2.0, output: 4.0, total: nil}}
+    result = OpenAIResponsesShared.apply_service_tier_pricing(usage, "priority")
+
+    assert result.cost.input == 4.0
+    assert result.cost.output == 8.0
+    assert is_nil(result.cost.total)
+  end
+
+  test "service tier pricing preserves an absent cost breakdown" do
+    usage = %Usage{input: nil, cost: nil}
+
+    for tier <- ["flex", "priority", "auto", nil] do
+      assert OpenAIResponsesShared.apply_service_tier_pricing(usage, tier) == usage
+    end
+  end
+
+  test "calculated partial costs survive service tier pricing" do
+    model = %Model{cost: %ModelCost{input: 10.0, output: 20.0}}
+    usage = %Usage{input: nil, output: 100}
+
+    result =
+      model
+      |> OpenAIResponsesShared.calculate_cost(usage)
+      |> OpenAIResponsesShared.apply_service_tier_pricing("flex")
+
+    assert is_nil(result.cost.input)
+    assert_in_delta result.cost.output, 0.001, 0.0000001
+    assert is_nil(result.cost.total)
+  end
+
   test "process_stream maps failed status to error stop_reason" do
     {:ok, stream} = EventStream.start_link()
 

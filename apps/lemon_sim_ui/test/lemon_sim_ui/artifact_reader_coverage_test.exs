@@ -69,6 +69,21 @@ defmodule LemonSimUi.ArtifactReaderCoverageTest do
     assert ArtifactReader.read_usage(tmp_dir) == nil
   end
 
+  test "unknown usage stays unknown in totals and presentation" do
+    known = %{input_tokens: 10, output_tokens: 5, cache_read_tokens: 0, cache_write_tokens: 0}
+    assert ArtifactReader.total_tokens(known) == 15
+
+    for key <- Map.keys(known) do
+      assert ArtifactReader.total_tokens(Map.put(known, key, nil)) == nil
+      assert ArtifactReader.total_tokens(Map.delete(known, key)) == nil
+    end
+
+    assert ArtifactReader.total_tokens(nil) == nil
+    assert ArtifactReader.format_integer(nil) == "—"
+    assert ArtifactReader.format_integer(0) == "0"
+    assert ArtifactReader.format_cost(nil) == "—"
+  end
+
   defp suite(created_at, preset, competitors) do
     %{
       "schema_version" => "lemon_sim.suite.v1",

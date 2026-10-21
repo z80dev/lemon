@@ -1,0 +1,6 @@
+data: {"id":"offline-compatible-fixture","model":"glm-5.3","choices":[{"delta":{"content":"Offline fixture."},"finish_reason":null}],"usage":null}
+
+data: {"id":"offline-compatible-fixture","model":"glm-5.3","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":30,"total_tokens":130,"prompt_tokens_details":{"cached_tokens":20,"cache_write_tokens":10},"completion_tokens_details":{"reasoning_tokens":12}}}
+
+data: [DONE]
+

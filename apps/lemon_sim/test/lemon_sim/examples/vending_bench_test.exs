@@ -1594,6 +1594,115 @@ defmodule LemonSim.Examples.VendingBenchTest do
     File.rm_rf!(artifact_dir)
   end
 
+  test "persisted nullable usage writes truthful VendingBench artifacts and reports" do
+    artifact_dir =
+      Path.join(System.tmp_dir!(), "vb_nullable_usage_#{System.unique_integer([:positive])}")
+
+    on_exit(fn -> File.rm_rf!(artifact_dir) end)
+    state = VendingBench.initial_state(sim_id: "vb_nullable_usage", max_days: 1, seed: 1)
+    {:ok, collector} = LemonSim.LLM.Usage.start_link(state.sim_id)
+
+    model = %{fake_model("priced") | cost: %LemonAi.Types.ModelCost{input: 1.0, output: 2.0}}
+
+    LemonSim.LLM.Usage.record_response(collector, "operator", model, %LemonAi.Types.Usage{
+      input: nil,
+      output: 0,
+      cache_read: 0,
+      cache_write: nil
+    })
+
+    persisted =
+      collector
+      |> LemonSim.LLM.Usage.artifact(state.sim_id)
+      |> LemonSim.LLM.Usage.encode_artifact()
+      |> Jason.decode!()
+
+    assert {:ok, paths} =
+             VendingBench.Artifacts.write_run_artifacts(state, [], [],
+               artifact_dir: artifact_dir,
+               deterministic_artifacts?: true,
+               usage: persisted
+             )
+
+    usage = paths.usage |> File.read!() |> Jason.decode!()
+    assert usage == persisted
+    refute usage["cost_known?"]
+    assert usage["totals"]["input_tokens"] == nil
+    assert usage["totals"]["output_tokens"] == 0
+    assert usage["actors"]["operator"]["cache_write_tokens"] == nil
+    report = File.read!(paths.report)
+    assert report =~ "- Input tokens: unknown"
+    assert report =~ "- Output tokens: 0"
+    assert report =~ "- Cache read tokens: 0"
+    assert report =~ "- Cache write tokens: unknown"
+    assert report =~ "- Cost USD: unknown"
+  end
+
+  test "live arena propagates nullable usage across agents and persisted reports" do
+    artifact_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "vb_arena_nullable_usage_#{System.unique_integer([:positive])}"
+      )
+
+    on_exit(fn -> File.rm_rf!(artifact_dir) end)
+
+    complete_with_usage = fn usage ->
+      fn _model, _context, _stream_opts ->
+        message = assistant_tool_message([tool_call("wait_for_next_day", %{})])
+        {:ok, %{message | usage: usage}}
+      end
+    end
+
+    model = %{fake_model("priced") | cost: %LemonAi.Types.ModelCost{input: 1.0, output: 2.0}}
+
+    partial = %LemonAi.Types.Usage{input: nil, output: 7, cache_read: 20, cache_write: nil}
+    known = %LemonAi.Types.Usage{input: 10, output: 5}
+
+    agent_opts =
+      Enum.map([partial, known], fn usage ->
+        usage
+        |> complete_with_usage.()
+        |> live_agent_opts()
+        |> Keyword.put(:model, model)
+      end)
+
+    assert {:ok, result} =
+             VendingBench.Arena.LiveRunner.run(
+               sim_id: "vb_arena_nullable_usage",
+               max_days: 1,
+               seed: 1,
+               arena_agents: 2,
+               persist?: false,
+               deterministic_artifacts?: true,
+               artifact_dir: artifact_dir,
+               arena_day_budget_ms: 1_000,
+               arena_agent_opts: agent_opts
+             )
+
+    refute result.usage.cost_known?
+    assert result.usage.totals.input_tokens == nil
+    assert result.usage.totals.output_tokens == 12
+    assert result.usage.totals.cache_read_tokens == 20
+    assert result.usage.totals.cache_write_tokens == nil
+    assert result.usage.totals.decisions == 2
+    assert result.usage.totals.cost_usd == nil
+    assert result.usage.actors["alex:operator"].input_tokens == nil
+    assert result.usage.actors["blair:operator"].input_tokens == 10
+
+    usage = artifact_dir |> Path.join("usage.json") |> File.read!() |> Jason.decode!()
+    refute usage["cost_known?"]
+    assert usage["totals"]["input_tokens"] == nil
+    assert usage["totals"]["output_tokens"] == 12
+    assert usage["agents"]["alex"]["totals"]["cache_write_tokens"] == nil
+    assert usage["agents"]["blair"]["totals"]["input_tokens"] == 10
+    report = File.read!(Path.join([artifact_dir, "agents", "alex", "report.md"]))
+    assert report =~ "- Input tokens: unknown"
+    assert report =~ "- Output tokens: 7"
+    assert report =~ "- Cache write tokens: unknown"
+    assert report =~ "- Cost USD: unknown"
+  end
+
   test "live arena runs agents in day barriers and recomputes pressure" do
     {:ok, barrier_log} = Agent.start_link(fn -> [] end)
 

@@ -156,6 +156,21 @@ defmodule LemonCore.Doctor.ChecksTest do
       assert usage.message =~ "over a configured quota"
       assert usage.remediation =~ "`usage.status`"
     end
+
+    test "warns rather than treating unknown measurements as a cleared quota" do
+      [usage] =
+        Usage.run(
+          summary: %{total_requests: 1, total_cost: nil, total_tokens: nil},
+          today: %{},
+          quotas: %{runs_limit: 10, tokens_limit: 100, cost_limit: 1.0}
+        )
+
+      assert usage.status == :warn
+      assert usage.message =~ "quota status is unknown"
+      assert usage.message =~ "unknown token(s)"
+      assert usage.message =~ "unknown cost"
+      refute usage.message =~ "$0.0000"
+    end
   end
 
   describe "NodeTools.run/1" do

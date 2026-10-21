@@ -28,6 +28,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- OpenAI-compatible streaming now emits request and terminal raw usage observers,
+  including usage-only chunks. Missing counters/costs remain unknown; cache
+  breakdowns are disjoint and reasoning is not double-counted. Added explicit
+  offline ZAI/OpenAI-compatible SSE regression fixtures and route assertions.
+
 - Normalize provider dependency aliases and test alias ordering for strict Credo;
   provider behavior is unchanged.
 
@@ -44,6 +49,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   2.1.296, detected once per `PATH` instead of on every request.
 
 ### Fixed
+
+- Prompt diagnostics preserve nullable usage counters and only report inclusive
+  input when all input/cache components are known, without failing successful
+  completions or native agent turns.
 
 - Codex device authorization honors the full provider interval before its first
   poll, bounds grants to 15 minutes and poll intervals to 60 seconds, and

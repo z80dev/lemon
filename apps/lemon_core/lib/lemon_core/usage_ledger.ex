@@ -66,8 +66,11 @@ defmodule LemonCore.UsageLedger do
   @doc """
   Records one usage occurrence synchronously (callers outside the Store hook).
   `entry` carries native `:run_id`, `:occurrence`, `:session_key`, `:agent_id`,
-  `:at_ms`, provider/model, token counts, optional `:input_characters`, and
-  nullable `:cost`/`:price_known`.
+  `:at_ms`, provider/model, nullable token counts, optional `:input_characters`,
+  and nullable `:cost`/`:price_known`. Canonical occurrences retain unknown counters;
+  a reported positive cost does not require complete token counters. Known zero
+  requires complete counters and explicit `:price_known`; daily projections remain
+  known-only subtotals.
   """
   @spec record(GenServer.server(), map()) :: :ok | {:error, term()}
   def record(server \\ __MODULE__, entry) when is_map(entry),
@@ -109,8 +112,8 @@ defmodule LemonCore.UsageLedger do
   end
 
   @doc """
-  Builds a usage entry from a finalized run summary, or `nil` when the run
-  reported no usage at all.
+  Builds a usage entry from a finalized run summary. Explicit provider occurrences
+  are retained even with no counters; historical summaries without usage return `nil`.
   """
   @spec entry(term(), term(), map()) :: map() | nil
   def entry(run_id, session_key, summary) when is_map(summary) do
@@ -121,13 +124,29 @@ defmodule LemonCore.UsageLedger do
     input = first_integer(usage, @input_keys)
     output = first_integer(usage, @output_keys)
 
-    cache =
-      (first_integer(usage, @cache_read_keys) || 0) +
-        (first_integer(usage, @cache_write_keys) || 0)
+    cache_read = first_integer(usage, @cache_read_keys)
+    cache_write = first_integer(usage, @cache_write_keys)
+    reported_total = first_integer(usage, [:total_tokens])
+
+    inclusive_input =
+      cond do
+        cache_inclusive?(usage) ->
+          input
+
+        is_integer(reported_total) and is_integer(output) and reported_total >= output ->
+          reported_total - output
+
+        is_nil(input) ->
+          nil
+
+        true ->
+          sum_known([input, cache_read, cache_write])
+      end
 
     cost = cost(usage)
 
-    if Enum.all?([input, output, cost], &is_nil/1) do
+    if Enum.all?([input, output, reported_total, cost], &is_nil/1) and
+         is_nil(field(summary, :occurrence)) do
       nil
     else
       {provider, model} = provider_model(meta)
@@ -137,13 +156,14 @@ defmodule LemonCore.UsageLedger do
         session_key: identity(session_key || field(summary, :session_key)),
         provider: provider,
         model: model,
-        input: (input || 0) + if(cache_inclusive?(usage), do: 0, else: cache),
-        output: output || 0,
+        input: inclusive_input,
+        output: output,
+        uncached_input: if(cache_inclusive?(usage), do: nil, else: input),
+        cache_read: cache_read,
+        cache_write: cache_write,
         cost: cost,
         price_known: not is_nil(cost),
-        total_tokens:
-          first_integer(usage, [:total_tokens]) ||
-            (input || 0) + (output || 0) + if(cache_inclusive?(usage), do: 0, else: cache),
+        total_tokens: reported_total || sum_known([inclusive_input, output]),
         agent_id:
           identity(
             field(meta, :agent_id) ||
@@ -180,7 +200,13 @@ defmodule LemonCore.UsageLedger do
     case UsageStore.put_occurrence(store, record) do
       :ok ->
         # Aggregates remain known-cost subtotals; canonical records retain nil.
-        projection = %{entry | cost: entry.cost || 0.0}
+        projection = %{
+          entry
+          | cost: entry.cost || 0.0,
+            input: entry.input || 0,
+            output: entry.output || 0
+        }
+
         now_ms = System.system_time(:millisecond)
         at_ms = Map.get(entry, :at_ms) || now_ms
 
@@ -232,7 +258,10 @@ defmodule LemonCore.UsageLedger do
       model: entry.model,
       input_tokens: entry.input,
       output_tokens: entry.output,
-      total_tokens: Map.get(entry, :total_tokens, entry.input + entry.output),
+      total_tokens: Map.get(entry, :total_tokens, sum_known([entry.input, entry.output])),
+      uncached_input_tokens: Map.get(entry, :uncached_input),
+      cache_read_tokens: Map.get(entry, :cache_read),
+      cache_write_tokens: Map.get(entry, :cache_write),
       input_characters: Map.get(entry, :input_characters),
       cost_usd: entry.cost,
       price_known: Map.get(entry, :price_known, not is_nil(entry.cost))
@@ -366,9 +395,18 @@ defmodule LemonCore.UsageLedger do
 
     case field(usage, :price_known) do
       false -> nil
-      true -> value
-      _ -> if(is_number(value) and value > 0, do: value, else: nil)
+      _ when is_number(value) and value > 0 -> value
+      true -> if counters_known?(usage), do: value
+      _ -> nil
     end
+  end
+
+  defp counters_known?(usage) do
+    not is_nil(first_integer(usage, @input_keys)) and
+      not is_nil(first_integer(usage, @output_keys)) and
+      (not is_nil(first_integer(usage, [:total_tokens])) or cache_inclusive?(usage) or
+         (not is_nil(first_integer(usage, @cache_read_keys)) and
+            not is_nil(first_integer(usage, @cache_write_keys))))
   end
 
   defp timestamp(value) when is_integer(value) and value > 0, do: value
@@ -407,6 +445,10 @@ defmodule LemonCore.UsageLedger do
   end
 
   defp field(_map, _key), do: nil
+
+  defp sum_known(values) do
+    if Enum.all?(values, &is_integer/1), do: Enum.sum(values), else: nil
+  end
 
   defp to_float(value) when is_number(value) and value >= 0, do: value * 1.0
   defp to_float(_), do: nil

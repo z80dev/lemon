@@ -68,19 +68,20 @@ defmodule CodingAgent.Messages do
   defmodule Usage do
     @moduledoc "Token usage and cost tracking for a response"
     @type t :: %__MODULE__{
-            input: non_neg_integer(),
-            output: non_neg_integer(),
-            cache_read: non_neg_integer(),
-            cache_write: non_neg_integer(),
-            total_tokens: non_neg_integer(),
+            input: non_neg_integer() | nil,
+            output: non_neg_integer() | nil,
+            cache_read: non_neg_integer() | nil,
+            cache_write: non_neg_integer() | nil,
+            total_tokens: non_neg_integer() | nil,
             cost: float() | nil
           }
     defstruct input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0, cost: nil
 
-    @doc "Calculate total tokens from usage"
-    @spec total_tokens(t()) :: non_neg_integer()
+    @doc "Calculate total tokens only when every component is known"
+    @spec total_tokens(t()) :: non_neg_integer() | nil
     def total_tokens(%__MODULE__{} = usage) do
-      usage.input + usage.output + usage.cache_read + usage.cache_write
+      counts = [usage.input, usage.output, usage.cache_read, usage.cache_write]
+      if Enum.all?(counts, &is_integer/1), do: Enum.sum(counts)
     end
   end
 
@@ -355,7 +356,7 @@ defmodule CodingAgent.Messages do
 
   This is a convenience function that delegates to `Usage.total_tokens/1`.
   """
-  @spec total_tokens(Usage.t()) :: non_neg_integer()
+  @spec total_tokens(Usage.t()) :: non_neg_integer() | nil
   def total_tokens(%Usage{} = usage), do: Usage.total_tokens(usage)
 
   # ============================================================================
@@ -645,7 +646,7 @@ defmodule CodingAgent.Messages do
     }
   end
 
-  defp convert_cost(nil), do: %LemonAi.Types.Cost{}
+  defp convert_cost(nil), do: nil
   defp convert_cost(cost) when is_float(cost), do: %LemonAi.Types.Cost{total: cost}
 
   defp normalize_trust(:untrusted), do: :untrusted

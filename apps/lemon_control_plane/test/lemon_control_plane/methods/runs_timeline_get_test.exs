@@ -216,7 +216,14 @@ defmodule LemonControlPlane.Methods.RunsTimelineGetTest do
               at_ms: ctx.at_ms + 50,
               provider: "local",
               model: "fixture",
-              usage: %{input: 3, output: 2, cost: 0.0, price_known: true}
+              usage: %{
+                input: 3,
+                output: 2,
+                cache_read: 0,
+                cache_write: 0,
+                cost: 0.0,
+                price_known: true
+              }
             }
           ]
         }
@@ -244,7 +251,7 @@ defmodule LemonControlPlane.Methods.RunsTimelineGetTest do
               at_ms: ctx.at_ms + 50,
               provider: "local",
               model: "fixture",
-              usage: %{input: 2, output: 1, cost: 0.0}
+              usage: %{input: 2, output: 1, cache_read: 0, cache_write: 0, cost: 0.0}
             }
           ]
         }

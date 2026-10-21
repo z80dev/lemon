@@ -148,23 +148,26 @@ defmodule LemonControlPlane.Methods.SessionsContext do
 
   defp auto_compaction(_budget, _window), do: nil
 
-  # Numeric session spend only. Absent for runtimes that report no usage block.
+  # Provider telemetry remains null when unreported; category estimates above are separate.
   defp usage(%{} = usage) do
     %{
-      "tokens" => non_negative(Map.get(usage, :tokens)),
+      "tokens" => reported_count(Map.get(usage, :tokens)),
       "costUsd" => cost(Map.get(usage, :cost_usd)),
-      "input" => non_negative(Map.get(usage, :input)),
-      "output" => non_negative(Map.get(usage, :output)),
-      "cacheRead" => non_negative(Map.get(usage, :cache_read)),
-      "cacheWrite" => non_negative(Map.get(usage, :cache_write)),
-      "assistantMessages" => non_negative(Map.get(usage, :assistant_messages))
+      "input" => reported_count(Map.get(usage, :input)),
+      "output" => reported_count(Map.get(usage, :output)),
+      "cacheRead" => reported_count(Map.get(usage, :cache_read)),
+      "cacheWrite" => reported_count(Map.get(usage, :cache_write)),
+      "assistantMessages" => reported_count(Map.get(usage, :assistant_messages))
     }
   end
 
   defp usage(_usage), do: nil
 
   defp cost(value) when is_number(value) and value >= 0, do: value / 1
-  defp cost(_), do: 0.0
+  defp cost(_), do: nil
+
+  defp reported_count(value) when is_integer(value) and value >= 0, do: value
+  defp reported_count(_), do: nil
 
   defp enum(value, allowed, default),
     do: if(value in allowed, do: Atom.to_string(value), else: default)

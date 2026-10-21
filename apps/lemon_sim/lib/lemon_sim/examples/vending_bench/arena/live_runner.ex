@@ -655,14 +655,18 @@ defmodule LemonSim.Examples.VendingBench.Arena.LiveRunner do
 
   defp merge_usage_totals(totals, acc) do
     %{
-      input_tokens: acc.input_tokens + totals.input_tokens,
-      output_tokens: acc.output_tokens + totals.output_tokens,
-      cache_read_tokens: acc.cache_read_tokens + totals.cache_read_tokens,
-      cache_write_tokens: acc.cache_write_tokens + totals.cache_write_tokens,
+      input_tokens: merge_count(acc.input_tokens, totals.input_tokens),
+      output_tokens: merge_count(acc.output_tokens, totals.output_tokens),
+      cache_read_tokens: merge_count(acc.cache_read_tokens, totals.cache_read_tokens),
+      cache_write_tokens: merge_count(acc.cache_write_tokens, totals.cache_write_tokens),
       decisions: acc.decisions + totals.decisions,
       cost_usd: merge_cost(acc.cost_usd, totals.cost_usd)
     }
   end
+
+  defp merge_count(nil, _count), do: nil
+  defp merge_count(_acc, nil), do: nil
+  defp merge_count(acc, count), do: acc + count
 
   defp merge_cost(nil, _cost), do: nil
   defp merge_cost(_acc, nil), do: nil

@@ -162,7 +162,7 @@ defmodule CodingAgent.Session.MessageSerialization do
 
   defp serialize_cost(cost) do
     Map.new([:input, :output, :cache_read, :cache_write, :total], fn key ->
-      {Atom.to_string(key), usage_value(cost, key, 0.0)}
+      {Atom.to_string(key), usage_value(cost, key, nil)}
     end)
   end
 
@@ -293,23 +293,25 @@ defmodule CodingAgent.Session.MessageSerialization do
 
   def deserialize_usage(usage) when is_map(usage) do
     %LemonAi.Types.Usage{
-      input: usage_value(usage, :input, 0),
-      output: usage_value(usage, :output, 0),
-      cache_read: usage_value(usage, :cache_read, 0),
-      cache_write: usage_value(usage, :cache_write, 0),
-      cache_write_long: usage_value(usage, :cache_write_long, 0),
-      total_tokens: usage_value(usage, :total_tokens, 0),
-      cost: deserialize_cost(usage_value(usage, :cost, %{}))
+      input: usage_value(usage, :input, nil),
+      output: usage_value(usage, :output, nil),
+      cache_read: usage_value(usage, :cache_read, nil),
+      cache_write: usage_value(usage, :cache_write, nil),
+      cache_write_long: usage_value(usage, :cache_write_long, nil),
+      total_tokens: usage_value(usage, :total_tokens, nil),
+      cost: deserialize_cost(usage_value(usage, :cost, nil))
     }
   end
 
+  defp deserialize_cost(nil), do: nil
+
   defp deserialize_cost(cost) do
     %LemonAi.Types.Cost{
-      input: usage_value(cost, :input, 0.0),
-      output: usage_value(cost, :output, 0.0),
-      cache_read: usage_value(cost, :cache_read, 0.0),
-      cache_write: usage_value(cost, :cache_write, 0.0),
-      total: usage_value(cost, :total, 0.0)
+      input: usage_value(cost, :input, nil),
+      output: usage_value(cost, :output, nil),
+      cache_read: usage_value(cost, :cache_read, nil),
+      cache_write: usage_value(cost, :cache_write, nil),
+      total: usage_value(cost, :total, nil)
     }
   end
 

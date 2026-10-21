@@ -822,20 +822,20 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
 
   defp usage_updates(usage, context_window) do
     if is_map(usage) and map_size(usage) > 0 do
-      total =
-        get(usage, :totalTokens) || get(usage, :total_tokens) ||
-          number(get(usage, :input)) + number(get(usage, :output)) +
-            number(get(usage, :cache_read)) + number(get(usage, :cache_write))
+      normalized = LemonControlPlane.UsageTokens.normalize(usage) || %{}
+      total = normalized["totalTokens"]
 
       size = get(usage, :contextWindow) || get(usage, :context_window) || context_window
       meta = %{"_meta" => %{"lemon" => %{"usage" => bounded(usage)}}}
 
-      if is_number(size) and size > 0 do
+      used = get(usage, :context_tokens) || get(usage, :contextTokens)
+
+      if is_number(size) and size > 0 and is_number(used) do
         [
           Map.merge(meta, %{
             "sessionUpdate" => "usage_update",
             "size" => size,
-            "used" => get(usage, :context_tokens) || total
+            "used" => used
           })
           |> maybe_put("cost", usage_cost(usage))
         ]
@@ -853,32 +853,43 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   end
 
   defp usage_cost(usage) do
-    amount = get(get(usage, :cost), :total)
-    if is_number(amount) and amount > 0, do: %{"amount" => amount, "currency" => "USD"}
+    normalized = LemonControlPlane.UsageTokens.normalize(usage) || %{}
+    amount = normalized["costUsd"]
+    if is_number(amount) and amount >= 0, do: %{"amount" => amount, "currency" => "USD"}
   end
 
   defp aggregate_usage(messages) do
-    Enum.reduce(messages, %{}, fn message, acc ->
-      case get(message, :usage) do
-        usage when is_map(usage) ->
-          totals =
-            Enum.reduce([:input, :output, :cache_read, :cache_write, :total_tokens], acc, fn key,
-                                                                                             totals ->
-              Map.put(totals, key, number(get(acc, key)) + number(get(usage, key)))
-            end)
+    usages =
+      messages
+      |> Enum.filter(&assistant?/1)
+      |> Enum.map(&(get(&1, :usage) || %{}))
 
-          context_tokens =
-            Enum.reduce([:input, :output, :cache_read, :cache_write], 0, fn key, total ->
-              total + number(get(usage, key))
-            end)
+    case usages do
+      [] ->
+        %{}
 
-          cost = number(get(get(acc, :cost), :total)) + number(get(get(usage, :cost), :total))
-          totals |> Map.put(:context_tokens, context_tokens) |> Map.put(:cost, %{total: cost})
+      _ ->
+        totals =
+          Map.new([:input, :output, :cache_read, :cache_write, :total_tokens], fn key ->
+            {key, usages |> Enum.map(&get(&1, key)) |> sum_known()}
+          end)
 
-        _ ->
-          acc
-      end
-    end)
+        latest = List.last(usages)
+
+        context_tokens =
+          get(latest, :context_tokens) ||
+            sum_known(Enum.map([:input, :output, :cache_read, :cache_write], &get(latest, &1)))
+
+        cost =
+          usages
+          |> Enum.map(fn usage ->
+            normalized = LemonControlPlane.UsageTokens.normalize(usage) || %{}
+            normalized["costUsd"]
+          end)
+          |> sum_known()
+
+        totals |> Map.put(:context_tokens, context_tokens) |> Map.put(:cost, %{total: cost})
+    end
   end
 
   defp chunks(state, kind, text, extra \\ %{})
@@ -932,8 +943,11 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
   defp optional_preview(text) when is_binary(text), do: preview(text)
   defp optional_preview(_text), do: nil
-  defp number(value) when is_number(value), do: value
-  defp number(_value), do: 0
+
+  defp sum_known(values) do
+    if Enum.all?(values, &is_number/1), do: Enum.sum(values), else: nil
+  end
+
   defp list(value) when is_list(value), do: value
   defp list(_value), do: []
   defp scalar_string(value) when is_binary(value), do: value

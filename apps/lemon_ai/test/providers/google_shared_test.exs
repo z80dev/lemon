@@ -921,5 +921,19 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
       assert result.cost.output == 0.0
       assert result.cost.total == 0.0
     end
+
+    test "preserves explicitly unknown counters and partial cost components", %{model: model} do
+      usage = %{input: nil, output: 500, cache_read: 0, cache_write: nil}
+      result = GoogleShared.calculate_cost(model, usage)
+
+      assert result.input == nil
+      assert result.output == 500
+      assert result.cache_write == nil
+      assert is_nil(result.cost.input)
+      assert result.cost.output == 0.001
+      assert result.cost.cache_read == 0.0
+      assert is_nil(result.cost.cache_write)
+      assert is_nil(result.cost.total)
+    end
   end
 end

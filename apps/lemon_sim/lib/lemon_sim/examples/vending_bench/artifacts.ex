@@ -308,10 +308,10 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
     ## Usage
 
     - Decisions: #{totals.decisions}
-    - Input tokens: #{totals.input_tokens}
-    - Output tokens: #{totals.output_tokens}
-    - Cache read tokens: #{totals.cache_read_tokens}
-    - Cache write tokens: #{totals.cache_write_tokens}
+    - Input tokens: #{format_count(totals.input_tokens)}
+    - Output tokens: #{format_count(totals.output_tokens)}
+    - Cache read tokens: #{format_count(totals.cache_read_tokens)}
+    - Cache write tokens: #{format_count(totals.cache_write_tokens)}
     - Cost USD: #{format_cost(totals.cost_usd)}
 
     ## Metrics
@@ -366,7 +366,7 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
   defp usage_artifact(state, opts) do
     case Keyword.get(opts, :usage) do
       nil -> Usage.artifact(Keyword.get(opts, :usage_collector), state.sim_id)
-      usage -> usage
+      usage -> Usage.artifact(usage, state.sim_id)
     end
   end
 
@@ -469,6 +469,9 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
     do: :erlang.float_to_binary(price / 1, decimals: 2)
 
   defp format_price(price), do: to_string(price)
+
+  defp format_count(nil), do: "unknown"
+  defp format_count(count), do: Integer.to_string(count)
 
   defp format_cost(nil), do: "unknown"
   defp format_cost(cost) when is_float(cost), do: :erlang.float_to_binary(cost, decimals: 6)

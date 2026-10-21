@@ -405,7 +405,8 @@ defmodule CodingAgent.Tools.SemanticFind do
             scan_truncated: ctx.truncated?,
             model: label,
             token_cap: ctx.config.max_tokens,
-            token_cap_exceeded: usage.total_tokens > ctx.config.max_tokens,
+            token_cap_exceeded:
+              if(is_integer(usage.total_tokens), do: usage.total_tokens > ctx.config.max_tokens),
             model_called: true,
             usage: usage
           }
@@ -479,19 +480,15 @@ defmodule CodingAgent.Tools.SemanticFind do
   # `details.usage`. Ledger failure never fails the search; `recorded` says so.
   defp record_usage(message, ctx, opts) do
     occurrence = Usage.occurrence(message)
-    usage = occurrence.usage
-
-    input = token(usage, :input) + token(usage, :cache_read) + token(usage, :cache_write)
-    output = token(usage, :output)
-    total = max(token(usage, :total_tokens), input + output)
+    {entry, recorded} = persist(occurrence, ctx, opts)
 
     %{
-      input_tokens: input,
-      output_tokens: output,
-      total_tokens: total,
-      cost_usd: usage.cost,
-      price_known: usage.price_known,
-      recorded: persist(occurrence, ctx, opts)
+      input_tokens: if(entry, do: entry.input),
+      output_tokens: if(entry, do: entry.output),
+      total_tokens: if(entry, do: entry.total_tokens),
+      cost_usd: if(entry, do: entry.cost),
+      price_known: not is_nil(entry) and entry.price_known,
+      recorded: recorded
     }
   end
 
@@ -522,8 +519,8 @@ defmodule CodingAgent.Tools.SemanticFind do
     recorder = Keyword.get(opts, :semantic_find_usage_record, &record_entry/1)
 
     case UsageLedger.entry(run_id, session_key, summary) do
-      nil -> false
-      entry -> recorder.(entry) == :ok
+      nil -> {nil, false}
+      entry -> {entry, recorder.(entry) == :ok}
     end
   end
 
@@ -531,13 +528,6 @@ defmodule CodingAgent.Tools.SemanticFind do
     UsageLedger.record(entry)
   catch
     :exit, _ -> {:error, :usage_ledger_unavailable}
-  end
-
-  defp token(usage, key) do
-    case Map.get(usage, key, Map.get(usage, Atom.to_string(key))) do
-      value when is_integer(value) and value >= 0 -> value
-      _ -> 0
-    end
   end
 
   defp field(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))

@@ -14,6 +14,21 @@ defmodule CodingAgent.SessionAgentLoopTest do
 
   @moduletag :tmp_dir
 
+  defmodule UsageEmitter do
+    @behaviour CodingAgent.Session.RunTranslator.Emitter
+    @impl true
+    def emit_started(state, _fields), do: state
+    @impl true
+    def emit_action_event(state, _fields), do: state
+    @impl true
+    def emit_delta(state, _text, _meta), do: state
+    @impl true
+    def emit_completed(%{sink: sink} = state, fields) do
+      send(sink, {:completed, fields})
+      state
+    end
+  end
+
   defp mock_model do
     %Model{
       id: "mock-model-1",
@@ -255,6 +270,67 @@ defmodule CodingAgent.SessionAgentLoopTest do
       await_agent_end(session)
 
       assert Session.get_state(session).system_prompt == initial_prompt
+    end
+  end
+
+  for path <- [:failed_retry, :empty_continuation] do
+    @tag :tmp_dir
+    test "session forwards all #{path} attempt usage exactly once to the translator", %{
+      tmp_dir: tmp_dir
+    } do
+      first =
+        case unquote(path) do
+          :failed_retry ->
+            assistant([], :error, "Service temporarily unavailable (HTTP 503)")
+
+          :empty_continuation ->
+            assistant([], :stop)
+        end
+
+      first = %{first | usage: %Usage{total_tokens: 3, cost: %LemonAi.Types.Cost{total: 0.1}}}
+      success = assistant([%TextContent{text: "recovered"}], :stop)
+      success = %{success | usage: %Usage{total_tokens: 4, cost: %LemonAi.Types.Cost{total: 0.2}}}
+      session = start_session(tmp_dir, stream_fn: scripted_stream_fn([first, success]))
+      session_id = Session.get_state(session).session_manager.header.id
+      :ok = Session.prompt(session, "hello")
+
+      translator =
+        CodingAgent.Session.RunTranslator.new(
+          emitter: UsageEmitter,
+          emitter_state: %{sink: self()},
+          engine: "lemon",
+          label: "attempt-usage-test",
+          session_id: session_id,
+          cwd: tmp_dir
+        )
+
+      {_translator, events} = translate_session_events(session_id, translator, [])
+      observations = for {:provider_usage, message} <- events, do: message
+      assert Enum.map(observations, & &1.usage.total_tokens) == [3, 4]
+      assert_receive {:completed, %{ok: true, usage: usage}}, 5_000
+      assert usage.total_tokens == 7
+      assert_in_delta usage.cost.total, 0.3, 0.000001
+      assert length(usage.occurrences) == 2
+
+      if unquote(path) == :failed_retry do
+        refute Enum.any?(events, &match?({:message_end, %{stop_reason: :error}}, &1))
+        assert {:agent_end, messages} = List.last(events)
+        assert Enum.filter(messages, &match?(%AssistantMessage{}, &1)) == [success]
+      end
+
+      wait_idle(session)
+    end
+  end
+
+  defp translate_session_events(session_id, translator, events) do
+    assert_receive {:session_event, ^session_id, event}, 5_000
+    translator = CodingAgent.Session.RunTranslator.handle_event(translator, event)
+    events = [event | events]
+
+    case event do
+      {:agent_end, _messages} -> {translator, Enum.reverse(events)}
+      {:stream_resync, details} -> flunk("Session subscription overflowed: #{inspect(details)}")
+      _ -> translate_session_events(session_id, translator, events)
     end
   end
 

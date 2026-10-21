@@ -15,16 +15,22 @@ defmodule LemonAgent.Budget do
   `new/2` and the previous session totals; never derive a reset from a cleared or
   compacted transcript. `record_message/2` records one terminal provider report;
   callers must not record both its final event and its message-end event.
+
+  Enforcement totals retain unknown counters and dollar amounts as `nil`, separate
+  from provider telemetry. Unknown accumulated or projected usage fails closed
+  only when the corresponding metric is capped. Known zero prices remain valid;
+  absent pricing never authorizes a dollar-capped request. Unknown totals remain
+  unknown across subsequent reports and session restoration.
   """
 
-  @type usage :: %{tokens: non_neg_integer(), cost_usd: non_neg_integer() | float()}
+  @type usage :: %{tokens: non_neg_integer() | nil, cost_usd: non_neg_integer() | float() | nil}
   @type t :: %{limits: map(), run_usage: usage(), session_usage: usage()}
   @type details :: %{
           reason: :budget_exceeded,
           scope: :run | :session,
           metric: :tokens | :cost_usd,
           limit: number(),
-          used: number(),
+          used: number() | nil,
           run_usage: usage(),
           session_usage: usage(),
           message: String.t()
@@ -73,18 +79,21 @@ defmodule LemonAgent.Budget do
         total = token_count(field(usage, :total_tokens))
 
         tokens =
-          if total > 0 do
+          if is_integer(total) and total > 0 do
             total
           else
-            token_count(field(usage, :input)) + token_count(field(usage, :output)) +
-              token_count(field(usage, :cache_read)) + token_count(field(usage, :cache_write))
+            Enum.reduce([:input, :output, :cache_read, :cache_write], 0, fn key, sum ->
+              add(sum, token_count(field(usage, key)))
+            end)
           end
 
         cost = field(usage, :cost)
-        %{tokens: tokens, cost_usd: if(is_map(cost), do: amount(field(cost, :total)), else: 0.0)}
+        %{tokens: tokens, cost_usd: if(is_map(cost), do: amount(field(cost, :total)))}
 
       _ ->
-        @zero
+        if field(message, :role) in [:assistant, "assistant"],
+          do: %{tokens: nil, cost_usd: nil},
+          else: @zero
     end
   end
 
@@ -94,7 +103,7 @@ defmodule LemonAgent.Budget do
   def add_usage(first, second) do
     first = normalize_usage(first)
     second = normalize_usage(second)
-    %{tokens: first.tokens + second.tokens, cost_usd: first.cost_usd + second.cost_usd}
+    %{tokens: add(first.tokens, second.tokens), cost_usd: add(first.cost_usd, second.cost_usd)}
   end
 
   @spec record_message(t(), term()) :: t()
@@ -118,9 +127,12 @@ defmodule LemonAgent.Budget do
 
     if cost_capped and
          (is_nil(cost) or
-            Enum.all?([:input, :output, :cache_read, :cache_write], &(Map.get(cost, &1, 0) == 0))) do
-      "Usage budget warning: the active model has no known catalog price. " <>
-        "Dollar caps cannot bound unpriced usage; configure model pricing or token caps."
+            Enum.any?(
+              [:input, :output, :cache_read, :cache_write],
+              &(not is_number(Map.get(cost, &1)))
+            )) do
+      "Usage budget warning: the active model has no known catalog price for some usage. " <>
+        "Dollar-capped requests are blocked until model pricing is configured."
     end
   end
 
@@ -132,10 +144,11 @@ defmodule LemonAgent.Budget do
 
         if is_map(usage) do
           count =
-            token_count(field(usage, :input)) + token_count(field(usage, :cache_read)) +
-              token_count(field(usage, :cache_write))
+            Enum.reduce([:input, :cache_read, :cache_write], 0, fn key, sum ->
+              add(sum, token_count(field(usage, key)))
+            end)
 
-          if count > 0, do: count, else: previous
+          if is_integer(count) and count > 0, do: count, else: previous
         else
           previous
         end
@@ -146,12 +159,14 @@ defmodule LemonAgent.Budget do
 
     dollars =
       if is_map(cost) do
-        LemonAi.calculate_cost(model, %LemonAi.Types.Usage{input: input, output: output}).total
+        amount(
+          LemonAi.calculate_cost(model, %LemonAi.Types.Usage{input: input, output: output}).total
+        )
       else
-        0.0
+        nil
       end
 
-    %{tokens: input + output, cost_usd: dollars}
+    %{tokens: add(input, output), cost_usd: dollars}
   end
 
   defp characters(value) when is_binary(value), do: String.length(value)
@@ -175,6 +190,8 @@ defmodule LemonAgent.Budget do
   def check(nil, _projected), do: nil
 
   def check(state, projected) do
+    projected = normalize_usage(projected)
+
     Enum.find_value(@caps, fn {key, scope, metric} ->
       limit = Map.get(state.limits, key)
       usage = if scope == :run, do: state.run_usage, else: state.session_usage
@@ -182,7 +199,9 @@ defmodule LemonAgent.Budget do
 
       projection = Map.fetch!(projected, metric)
 
-      if is_number(limit) and (used >= limit or used + projection > limit) do
+      unknown = is_nil(used) or is_nil(projection)
+
+      if is_number(limit) and (unknown or used >= limit or used + projection > limit) do
         unit = if metric == :tokens, do: "tokens", else: "USD (catalog-estimated)"
 
         %{
@@ -194,12 +213,23 @@ defmodule LemonAgent.Budget do
           run_usage: state.run_usage,
           session_usage: state.session_usage,
           message:
-            "The #{scope} usage budget is exhausted: #{used} of #{limit} #{unit}. " <>
-              if(used < limit,
-                do: "The next request is projected to exceed it (#{projection} #{unit}). ",
-                else: ""
-              ) <>
-              "No further model requests or tools will run. Increase budgets.#{key} to continue."
+            if(unknown,
+              do:
+                "The #{scope} usage budget cannot be verified: accumulated or projected #{unit} is unknown. ",
+              else:
+                "The #{scope} usage budget is exhausted: #{used} of #{limit} #{unit}. " <>
+                  if(used < limit,
+                    do: "The next request is projected to exceed it (#{projection} #{unit}). ",
+                    else: ""
+                  )
+            ) <>
+              if(unknown,
+                do:
+                  "No further model requests or tools will run. Supply complete usage and pricing " <>
+                    "or remove budgets.#{key} to continue.",
+                else:
+                  "No further model requests or tools will run. Increase budgets.#{key} to continue."
+              )
         }
       end
     end)
@@ -207,7 +237,10 @@ defmodule LemonAgent.Budget do
 
   defp field(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
   defp token_count(value) when is_integer(value) and value >= 0, do: value
-  defp token_count(_value), do: 0
+  defp token_count(_value), do: nil
   defp amount(value) when is_number(value) and value >= 0, do: value
-  defp amount(_value), do: 0.0
+  defp amount(_value), do: nil
+
+  defp add(first, second) when is_number(first) and is_number(second), do: first + second
+  defp add(_first, _second), do: nil
 end

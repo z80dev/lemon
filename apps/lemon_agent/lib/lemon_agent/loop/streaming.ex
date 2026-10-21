@@ -13,11 +13,9 @@ defmodule LemonAgent.Loop.Streaming do
   alias LemonAi.Types.{
     AssistantMessage,
     Context,
-    Cost,
     TextContent,
     Tool,
-    ToolCall,
-    Usage
+    ToolCall
   }
 
   @max_retry_after_ms 120_000
@@ -285,7 +283,15 @@ defmodule LemonAgent.Loop.Streaming do
         finish_retry(stream, attempt, false, true)
 
         {message, context} =
-          finalize_canceled_message(nil, context, false, stream, config, reason)
+          finalize_canceled_message(
+            build_error_message(config, :error, nil)
+            |> Map.put(:error_details, %{provider_invoked: false}),
+            context,
+            false,
+            stream,
+            config,
+            reason
+          )
 
         {:ok, message, context}
     end
@@ -402,7 +408,7 @@ defmodule LemonAgent.Loop.Streaming do
           options = %{config.stream_options | api_key: api_key}
 
           # Call the stream function (support {:ok, stream} or direct stream pid)
-          case request_with_budget(config, llm_context, options, stream_function) do
+          case request_with_budget(config, llm_context, options, stream_function, stream) do
             {:ok, response_stream} ->
               process_stream_events(
                 context,
@@ -415,8 +421,6 @@ defmodule LemonAgent.Loop.Streaming do
               )
 
             {:error, reason} ->
-              Loop.record_budget_usage(config, reason, stream)
-
               case reason do
                 %AssistantMessage{} = message ->
                   {:failed, %{message | stop_reason: :error}, context, false,
@@ -457,7 +461,7 @@ defmodule LemonAgent.Loop.Streaming do
     end
   end
 
-  defp request_with_budget(config, context, options, stream_fn) do
+  defp request_with_budget(config, context, options, stream_fn, stream) do
     with :ok <- check_model_cost(config, context, options) do
       projected =
         if config.budget,
@@ -465,8 +469,20 @@ defmodule LemonAgent.Loop.Streaming do
           else: %{tokens: 0, cost_usd: 0.0}
 
       case Loop.budget_check(config, projected) do
-        nil -> stream_fn.(config.model, context, options)
-        details -> {:error, {:budget_exceeded, details}}
+        nil ->
+          result = stream_fn.(config.model, context, options)
+
+          case result do
+            {:ok, response_stream} when is_pid(response_stream) -> :ok
+            response_stream when is_pid(response_stream) -> :ok
+            {:error, reason} -> Loop.record_budget_usage(config, reason, stream)
+            _ -> Loop.record_budget_usage(config, nil, stream)
+          end
+
+          result
+
+        details ->
+          {:error, {:budget_exceeded, details}}
       end
     end
   end
@@ -581,6 +597,7 @@ defmodule LemonAgent.Loop.Streaming do
         result
 
       _ ->
+        Loop.record_budget_usage(config, nil, stream)
         {:error, :no_response}
     end
   end
@@ -979,14 +996,7 @@ defmodule LemonAgent.Loop.Streaming do
       api: Map.get(model, :api),
       provider: Map.get(model, :provider),
       model: Map.get(model, :id, ""),
-      usage: %Usage{
-        input: 0,
-        output: 0,
-        cache_read: 0,
-        cache_write: 0,
-        total_tokens: 0,
-        cost: %Cost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0, total: 0.0}
-      },
+      usage: nil,
       stop_reason: stop_reason,
       error_message: error_text,
       timestamp: System.system_time(:millisecond)

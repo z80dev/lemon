@@ -135,6 +135,14 @@ transcript files. Poker writes a scorecard bundle with `manifest.json`,
 `scorecard.json`, and `usage.json`. Werewolf does not write a bundle; its
 `--artifact-dir` holds a JSONL transcript.
 
+Usage counters and cost components are nullable: an unreported measurement stays
+`null` in `usage.json`, including after a run resumes. Aggregates stay unknown if
+any response or included run is unknown; known output or cache counts are still
+retained independently. Catalog pricing alone does not make a partially measured
+response's cost known. CLI summaries, VendingBench reports, and suite leaderboards
+display these missing measurements as `unknown`, never as measured zeros. A
+keyless offline run with no model calls still has zero usage and zero cost.
+
 Use:
 
 ```bash

@@ -38,6 +38,9 @@ defmodule LemonControlPlane.Methods.UsageRecords do
       "inputTokens" => record.input_tokens,
       "outputTokens" => record.output_tokens,
       "totalTokens" => record.total_tokens,
+      "uncachedInputTokens" => Map.get(record, :uncached_input_tokens),
+      "cacheReadTokens" => Map.get(record, :cache_read_tokens),
+      "cacheWriteTokens" => Map.get(record, :cache_write_tokens),
       "costUsd" => record.cost_usd,
       "priceKnown" => record.price_known
     }

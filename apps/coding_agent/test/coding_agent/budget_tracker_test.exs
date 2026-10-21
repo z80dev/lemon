@@ -305,5 +305,115 @@ defmodule CodingAgent.BudgetTrackerTest do
       assert usage.tokens == 100
       assert usage.cost == 0.5
     end
+
+    test "records nested Usage cost without losing cache tokens" do
+      run_id = RunGraph.new_run(%{type: :test})
+      BudgetTracker.store_budget(run_id, BudgetTracker.create_budget(max_cost: 0.5))
+
+      usage = %LemonAi.Types.Usage{
+        input: 10,
+        output: 5,
+        cache_read: 7,
+        cache_write: 3,
+        cache_write_long: 2,
+        total_tokens: nil,
+        cost: %LemonAi.Types.Cost{total: 0.75}
+      }
+
+      assert :ok = BudgetTracker.record_response_usage(run_id, %{usage: usage})
+      assert BudgetTracker.get_usage(run_id) == %{tokens: 25, cost: 0.75}
+
+      assert {:error, :budget_exceeded, %{type: :cost_limit_exceeded}} =
+               BudgetTracker.check_budget(run_id)
+
+      assert is_nil(usage.total_tokens)
+      assert usage.cost.total == 0.75
+    end
+
+    test "accepts nested string-key costs and honors reported totals" do
+      run_id = RunGraph.new_run(%{type: :test})
+      BudgetTracker.store_budget(run_id, BudgetTracker.create_budget([]))
+
+      response = %{
+        "usage" => %{
+          "total_tokens" => 40,
+          "input" => 10,
+          "output" => 5,
+          "cost" => %{"total" => 0.25}
+        }
+      }
+
+      assert :ok = BudgetTracker.record_response_usage(run_id, response)
+      assert BudgetTracker.get_usage(run_id) == %{tokens: 40, cost: 0.25}
+    end
+
+    test "nullable response usage stays unknown after subsequent reports with no cap" do
+      run_id = RunGraph.new_run(%{type: :test})
+      BudgetTracker.store_budget(run_id, BudgetTracker.create_budget([]))
+      assert :ok = BudgetTracker.record_usage(run_id, tokens: 10, cost: 0.5)
+
+      for usage <- [
+            nil,
+            %LemonAi.Types.Usage{
+              input: nil,
+              output: nil,
+              cache_read: nil,
+              cache_write: nil,
+              cache_write_long: nil,
+              total_tokens: nil,
+              cost: %LemonAi.Types.Cost{total: nil}
+            },
+            %{"total_tokens" => nil, "cost" => nil}
+          ] do
+        assert :ok = BudgetTracker.record_response_usage(run_id, %{usage: usage})
+        assert BudgetTracker.get_usage(run_id) == %{tokens: nil, cost: nil}
+        assert {:ok, _remaining} = BudgetTracker.check_budget(run_id)
+      end
+
+      assert :ok =
+               BudgetTracker.record_response_usage(run_id, %{
+                 usage: %{input: nil, output: 3, cache_read: 2, cache_write: nil, cost: nil}
+               })
+
+      assert BudgetTracker.get_usage(run_id) == %{tokens: nil, cost: nil}
+
+      assert :ok = BudgetTracker.record_usage(run_id, tokens: 100, cost: 0.25)
+      assert BudgetTracker.get_usage(run_id) == %{tokens: nil, cost: nil}
+    end
+
+    test "incomplete tokens fail closed under a token cap without losing known dollars" do
+      run_id = RunGraph.new_run(%{type: :test})
+      BudgetTracker.store_budget(run_id, BudgetTracker.create_budget(max_tokens: 10_000))
+
+      assert :ok =
+               BudgetTracker.record_response_usage(run_id, %{
+                 usage: %{input: nil, output: 3, cache_read: 2, cache_write: nil, cost: 0.25}
+               })
+
+      assert BudgetTracker.get_usage(run_id) == %{tokens: nil, cost: 0.25}
+
+      assert {:error, :budget_exceeded, %{type: :token_limit_exceeded, used: nil}} =
+               BudgetTracker.check_budget(run_id)
+    end
+
+    test "unknown child spend aggregates once and fails closed under parent dollar caps" do
+      parent = RunGraph.new_run(%{type: :parent})
+      child = RunGraph.new_run(%{type: :child})
+      BudgetTracker.store_budget(parent, BudgetTracker.create_budget(max_cost: 1.0))
+      assert :ok = BudgetTracker.child_started(parent, child)
+
+      assert :ok =
+               BudgetTracker.record_response_usage(child, %{
+                 usage: %{total_tokens: 130, cost: %{total: nil}}
+               })
+
+      for _ <- 1..2 do
+        assert :ok = BudgetTracker.child_completed(parent, child)
+        assert BudgetTracker.get_usage(parent) == %{tokens: 130, cost: nil}
+
+        assert {:error, :budget_exceeded, %{type: :cost_limit_exceeded, used: nil}} =
+                 BudgetTracker.check_budget(parent)
+      end
+    end
   end
 end

@@ -83,6 +83,22 @@ correlated `chat.abort` acknowledgement has arrived; the terminal event can
 legitimately arrive first. Failure and budget-stop completions remain
 `cancelled: false` unless a cancellation producer explicitly marked them.
 
+Provider token and cost telemetry preserves unreported values as JSON `null`,
+including partial session totals and ACP completion usage. Reported zero remains
+zero; partial counters are not presented as complete sums. Quota summaries report
+`unknown` when a configured limit cannot be evaluated (unless another known
+counter already exceeds its limit). Context-category estimates are labelled
+separately and do not attest provider usage.
+
+Cache-inclusive derived totals require every component, including explicit zero
+cache counts; an omitted cache count stays unknown. An explicitly reported
+positive cost is retained even when token counters are unavailable, unless
+`price_known: false` marks it unknown. A canonical ledger's known zero cost
+requires complete counters and explicit known-price provenance; a nominal zero
+on partial usage does not attest a free request. Legacy `usage.cost`/`usage.status`
+daily projections remain known-value subtotals, not complete provider-usage or
+spend-enforcement authority; canonical `usage.records` retains the null counters.
+
 Slow/approval-gated handlers run asynchronously so events and approval resolution
 can continue while their correlated request remains pending.
 

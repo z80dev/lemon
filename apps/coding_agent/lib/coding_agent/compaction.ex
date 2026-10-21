@@ -460,12 +460,10 @@ defmodule CodingAgent.Compaction do
   @doc """
   Calculate total tokens from usage.
 
-  Handles different usage formats:
-  - Map with `:total_tokens` key
-  - Map with `:input`, `:output`, `:cache_read`, `:cache_write` keys
-  - Any other value returns 0
+  Returns a reported total, or sums all four components when known. Missing
+  counters remain unknown; context estimation uses its separate heuristic.
   """
-  @spec total_tokens(map() | any()) :: non_neg_integer()
+  @spec total_tokens(map() | any()) :: non_neg_integer() | nil
   def total_tokens(%{total_tokens: total}) when is_integer(total), do: total
 
   def total_tokens(%{input: i, output: o, cache_read: cr, cache_write: cw})
@@ -473,12 +471,7 @@ defmodule CodingAgent.Compaction do
     i + o + cr + cw
   end
 
-  def total_tokens(%{input: i, output: o})
-      when is_integer(i) and is_integer(o) do
-    i + o
-  end
-
-  def total_tokens(_), do: 0
+  def total_tokens(_), do: nil
 
   @doc """
   Estimate tokens for a message.
@@ -625,7 +618,7 @@ defmodule CodingAgent.Compaction do
          stop_reason not in [:error, "error", :aborted, "aborted"] and is_map(usage) do
       counts =
         Enum.map([:input, :output, :cache_read, :cache_write], fn key ->
-          Map.get(usage, key) || Map.get(usage, Atom.to_string(key), 0)
+          Map.get(usage, key, Map.get(usage, Atom.to_string(key)))
         end)
 
       if Enum.all?(counts, &(is_integer(&1) and &1 >= 0)) do

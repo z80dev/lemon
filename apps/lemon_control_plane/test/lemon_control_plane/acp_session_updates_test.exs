@@ -301,8 +301,12 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
 
   test "latest request context gauge is distinct from cumulative usage" do
     messages = [
-      %AssistantMessage{usage: %Usage{input: 10, output: 5, total_tokens: 15}},
-      %AssistantMessage{usage: %Usage{input: 20, output: 3, cache_read: 7, total_tokens: 30}}
+      %AssistantMessage{
+        usage: %Usage{input: 10, output: 5, cache_read: 0, cache_write: 0, total_tokens: 15}
+      },
+      %AssistantMessage{
+        usage: %Usage{input: 20, output: 3, cache_read: 7, cache_write: 0, total_tokens: 30}
+      }
     ]
 
     usage = CodingAgent.Session.Presentation.build_usage(messages)
@@ -317,6 +321,60 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
 
     assert update(hd(updates))["sessionUpdate"] == "usage_update"
     assert update(hd(updates))["used"] == 30
+  end
+
+  test "partial usage never becomes a zero or a context-window measurement" do
+    messages = [
+      %AssistantMessage{
+        usage: %Usage{input: 10, output: 5, cache_read: 0, cache_write: 0, total_tokens: 15}
+      },
+      %AssistantMessage{usage: %Usage{input: nil, output: 3, total_tokens: nil}}
+    ]
+
+    {updates, _} =
+      SessionUpdates.map_event(
+        SessionUpdates.new("session", context_window: 200_000),
+        {:agent_end, messages}
+      )
+
+    [notification] = updates
+    projected = update(notification)
+    assert projected["sessionUpdate"] == "session_info_update"
+    assert projected["token_count"] == %{"totalTokens" => nil}
+    assert projected["_meta"]["lemon"]["usage"]["input"] == nil
+    assert projected["_meta"]["lemon"]["usage"]["output"] == 8
+    assert projected["_meta"]["lemon"]["usage"]["cost"]["total"] == nil
+  end
+
+  test "missing assistant usage poisons totals in either order" do
+    known = %AssistantMessage{usage: %Usage{input: 1, output: 2, total_tokens: 3}}
+    missing = %{role: :assistant, content: [], usage: nil}
+
+    for messages <- [[known, missing], [missing, known]] do
+      {updates, _} =
+        SessionUpdates.map_event(SessionUpdates.new("session"), {:agent_end, messages})
+
+      [notification] = updates
+      assert update(notification)["token_count"] == %{"totalTokens" => nil}
+    end
+  end
+
+  test "reported zero context and cost remain zero" do
+    [notification] =
+      updates_for("session", %{
+        type: :usage,
+        payload: %{
+          contextWindow: 200_000,
+          context_tokens: 0,
+          input: 0,
+          output: 0,
+          total_tokens: 0,
+          cost: %{total: 0}
+        }
+      })
+
+    assert update(notification)["used"] == 0
+    assert update(notification)["cost"] == %{"amount" => 0, "currency" => "USD"}
   end
 
   test "native images and deletion diffs use valid ACP content fields" do
@@ -465,9 +523,15 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
     merged =
       CodingAgent.Session.Presentation.merge_usage(
         %{
-          "cost" => %{"input" => 0.1, "output" => 0.2, "total" => 0.3, "cache_write_long" => 0.04}
+          input: 10,
+          output: 20,
+          total_tokens: 30,
+          cost: %{input: 0.1, output: 0.2, total: 0.3, cache_write_long: 0.04}
         },
         %{
+          input: 30,
+          output: 40,
+          total_tokens: 70,
           cost: %LemonAi.Types.Cost{
             input: 0.3,
             output: 0.4,
@@ -481,9 +545,9 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
     assert_in_delta merged.cost.input, 0.4, 0.000001
     assert_in_delta merged.cost.output, 0.6, 0.000001
     assert_in_delta merged.cost.total, 1.0, 0.000001
-    assert merged.cost.cache_read == 0.2
-    assert merged.cost.cache_write == 0.1
-    assert merged.cost.cache_write_long == 0.04
+    assert merged.cost.cache_read == nil
+    assert merged.cost.cache_write == nil
+    assert merged.cost.cache_write_long == nil
     refute Map.has_key?(merged, "cost")
   end
 

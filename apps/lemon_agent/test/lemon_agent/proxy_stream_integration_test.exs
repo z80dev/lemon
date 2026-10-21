@@ -119,6 +119,68 @@ defmodule LemonAgent.ProxyStreamIntegrationTest do
   end
 
   describe "stream_proxy/3" do
+    test "nullable history costs encode safely and partial replies remain unknown" do
+      for usage <- [
+            nil,
+            %LemonAi.Types.Usage{input: 1, output: 1, total_tokens: 2, cost: nil},
+            %LemonAi.Types.Usage{
+              input: nil,
+              output: 1,
+              total_tokens: nil,
+              cost: %LemonAi.Types.Cost{input: nil, output: 0.1, total: nil}
+            }
+          ] do
+        chunks = [
+          sse_event(%{
+            "type" => "done",
+            "reason" => "stop",
+            "usage" => %{"output" => 3, "cost" => nil}
+          })
+        ]
+
+        port = start_sse_server(chunks, capture_request: true)
+
+        history = %AssistantMessage{
+          api: :openai_completions,
+          provider: :zai,
+          model: "glm-5.3",
+          content: [],
+          usage: usage
+        }
+
+        stream =
+          Proxy.stream_proxy(
+            Mocks.mock_model(),
+            LemonAi.Types.Context.new(messages: [history]),
+            %ProxyStreamOptions{
+              auth_token: "offline-fixture",
+              proxy_url: "http://127.0.0.1:#{port}"
+            }
+          )
+
+        assert {:ok, message} = EventStream.result(stream, @receive_timeout)
+        assert message.usage.output == 3
+        assert message.usage.input == nil
+        assert message.usage.total_tokens == nil
+        assert message.usage.cost == nil
+        assert_receive {:sse_server_request, request}, @receive_timeout
+        [_headers, json] = String.split(request, "\r\n\r\n", parts: 2)
+        [encoded] = Jason.decode!(json)["context"]["messages"]
+
+        if is_nil(usage) do
+          assert encoded["usage"] == nil
+        else
+          assert encoded["usage"]["input"] == usage.input
+
+          if is_nil(usage.cost),
+            do: assert(encoded["usage"]["cost"] == nil),
+            else: assert(encoded["usage"]["cost"]["total"] == nil)
+        end
+
+        assert_receive :sse_server_done, @receive_timeout
+      end
+    end
+
     test "reconstructs text content from SSE stream" do
       text_delta_line =
         sse_event(%{"type" => "text_delta", "contentIndex" => 0, "delta" => "Hello"})

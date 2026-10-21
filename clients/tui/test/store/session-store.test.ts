@@ -529,8 +529,19 @@ describe("SessionStore context tokens", () => {
 
 	test("excludes output, which is not part of the context that was sent", () => {
 		const session = new SessionStore("s");
-		session.applyUsage({ inputTokens: 1_000, outputTokens: 4_000 });
+		session.applyUsage({
+			inputTokens: 1_000,
+			outputTokens: 4_000,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
 		expect(session.contextTokens).toBe(1_000);
+	});
+
+	test("unknown cache components cannot produce a context measurement", () => {
+		const session = new SessionStore("s");
+		session.applyUsage({ inputTokens: 70, cacheReadTokens: 20, cacheWriteTokens: null });
+		expect(session.contextTokens).toBeUndefined();
 	});
 
 	test("refuses to treat a cumulative run total as a context size", () => {

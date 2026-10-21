@@ -12,14 +12,22 @@ defmodule LemonControlPlane.UsageTokens do
   `LemonRouter.RunProcess.CompactionTrigger.usage_input_tokens/1`. Cumulative
   `total_tokens` is never substituted for current context.
   Conversely, a cumulative total fallback includes reported cache counts and
-  output; it does not reuse an explicit latest-turn context measurement.
+  output; it does not reuse an explicit latest-turn context measurement. Derived
+  sums require every component; an unreported component is never treated as zero.
+  Explicit positive costs are independent of token completeness; an explicit
+  `price_known: false` still suppresses an unavailable price.
   """
 
-  @input_keys [:input_tokens, :input, :prompt_tokens]
-  @output_keys [:output_tokens, :output, :completion_tokens]
-  @cache_read_keys [:cached_input_tokens, :cache_read_input_tokens, :cache_read]
-  @cache_write_keys [:cache_creation_input_tokens, :cache_write_input_tokens, :cache_write]
-  @total_keys [:total_tokens, :total, :tokens]
+  @input_keys [:input_tokens, :input, :prompt_tokens, :inputTokens]
+  @output_keys [:output_tokens, :output, :completion_tokens, :outputTokens]
+  @cache_read_keys [:cached_input_tokens, :cache_read_input_tokens, :cache_read, :cacheReadTokens]
+  @cache_write_keys [
+    :cache_creation_input_tokens,
+    :cache_write_input_tokens,
+    :cache_write,
+    :cacheWriteTokens
+  ]
+  @total_keys [:total_tokens, :total, :tokens, :totalTokens]
 
   @doc """
   `nil` when the map carries no usable numbers at all, so callers can omit the key rather
@@ -38,7 +46,16 @@ defmodule LemonControlPlane.UsageTokens do
       if is_nil(total) or is_nil(reported_context),
         do: context_tokens(usage, input, cache_read, cache_write)
 
-    cost = cost_usd(usage)
+    normalized_total = total || sum_or_nil([cumulative_input, output])
+
+    reported_cost = cost_usd(usage)
+
+    cost =
+      if fetch(usage, :price_known) != false and
+           ((is_number(reported_cost) and reported_cost > 0) or
+              Enum.all?([input, output, normalized_total], &is_integer/1)),
+         do: reported_cost,
+         else: nil
 
     context = reported_context || cumulative_input
 
@@ -47,7 +64,7 @@ defmodule LemonControlPlane.UsageTokens do
       "outputTokens" => output,
       "cacheReadTokens" => cache_read,
       "cacheWriteTokens" => cache_write,
-      "totalTokens" => total || sum_or_nil([cumulative_input, output]),
+      "totalTokens" => normalized_total,
       "contextTokens" => context,
       "costUsd" => cost,
       "turns" => first_integer(usage, [:turns]),
@@ -64,14 +81,9 @@ defmodule LemonControlPlane.UsageTokens do
   # `:prompt_tokens` is already cache-inclusive in the APIs that report it, so only the
   # `:input`/`:input_tokens` spellings get the cache added on top.
   defp context_tokens(usage, input, cache_read, cache_write) do
-    cached = (cache_read || 0) + (cache_write || 0)
-
-    cond do
-      is_integer(input) and cache_inclusive?(usage) -> input
-      is_integer(input) -> input + cached
-      cached > 0 -> cached
-      true -> nil
-    end
+    if cache_inclusive?(usage),
+      do: input,
+      else: sum_or_nil([input, cache_read, cache_write])
   end
 
   defp cache_inclusive?(usage) do
@@ -84,10 +96,7 @@ defmodule LemonControlPlane.UsageTokens do
   end
 
   defp sum_or_nil(values) do
-    case Enum.filter(values, &is_integer/1) do
-      [] -> nil
-      present -> Enum.sum(present)
-    end
+    if Enum.all?(values, &is_integer/1), do: Enum.sum(values), else: nil
   end
 
   defp cost_usd(usage) do

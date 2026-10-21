@@ -29,6 +29,10 @@ All notable changes to `lemon_control_plane` are documented here.
 
 - Honor the configured HTTP/WebSocket listener IP so isolated benchmark runtimes
   can bind to loopback without changing the default or existing services.
+- Preserve explicitly reported positive usage costs independently of unavailable
+  token counters, including historical cost-only records and completed agent
+  events. Explicit unknown prices still win, and partial cache counters remain
+  null rather than becoming zero or complete run totals.
 
 - Generic node invocation cannot bypass provider-management administration scopes.
   Provider-management exceptions and node transport diagnostics omit raw request

@@ -262,6 +262,39 @@ defmodule LemonSim.Bench.SuiteTest do
     assert length(suite.failures) == 1
   end
 
+  test "nullable usage propagates across seeds and renders unknown leaderboard totals" do
+    spec = %{
+      "scenario" => "poker",
+      "preset" => nil,
+      "seeds" => [1, 2],
+      "competitors" => [%{"id" => "partial"}]
+    }
+
+    unknown = %{"input_tokens" => nil, "cache_write_tokens" => nil, "cost_usd" => nil}
+
+    for runs <- [
+          [
+            verified_run(0, "poker", "partial", 1, 10, unknown),
+            verified_run(1, "poker", "partial", 2, 20, %{})
+          ],
+          [
+            verified_run(0, "poker", "partial", 1, 10, %{}),
+            verified_run(1, "poker", "partial", 2, 20, unknown)
+          ]
+        ] do
+      assert {:ok, suite} = Suite.build_suite(spec, runs)
+      assert [ranking] = suite.rankings
+      totals = ranking["usage_totals"]
+      assert totals["input_tokens"] == nil
+      assert totals["output_tokens"] == 4
+      assert totals["cache_read_tokens"] == 6
+      assert totals["cache_write_tokens"] == nil
+      assert totals["decisions"] == 2
+      assert totals["cost_usd"] == nil
+      assert Suite.render_leaderboard(suite) =~ "| unknown | unknown |"
+    end
+  end
+
   test "ranking stats use primary metric values across included seeds" do
     spec = %{
       "scenario" => "poker",
@@ -435,7 +468,7 @@ defmodule LemonSim.Bench.SuiteTest do
     assert {:ok, read_suite} = Suite.read_suite(suite_dir)
     refute get_in(read_suite, ["rankings", Access.at(0), "stats"])
     assert {:ok, leaderboard} = Suite.write_leaderboard(suite_dir)
-    assert leaderboard =~ "| 1 | legacy | 5.0 (n=1) | 1: 5.0 | 0 | unknown |"
+    assert leaderboard =~ "| 1 | legacy | 5.0 (n=1) | 1: 5.0 | unknown | unknown |"
   end
 
   test "mix lemon.sim.leaderboard round-trips a suite directory" do

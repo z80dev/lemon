@@ -425,6 +425,23 @@ class AggregationTests(unittest.TestCase):
 
 
 class RedactionAndDryPlanTests(unittest.TestCase):
+    def test_operator_described_passed_four_turn_fixture_keeps_unknown_usage(self):
+        path = Path(__file__).resolve().parents[1] / 'test/fixtures/glm_passed_four_turns_missing_usage.json'
+        original = path.read_bytes()
+        fixture = json.loads(original)
+        self.assertTrue(fixture['fixture'])
+        row = paired.sanitize_row(fixture['row'])
+        self.assertTrue(row['passed'])
+        self.assertTrue(row['verifier_passed'])
+        self.assertTrue(row['tests_passed'])
+        self.assertEqual(row['turns'], 4)
+        for key in ('tokens', 'uncached_input_tokens', 'cached_input_tokens',
+                    'cache_write_tokens', 'output_tokens', 'cost_usd'):
+            self.assertIsNone(row[key])
+        self.assertFalse(row['spend_complete'])
+        self.assertFalse(row['schema_diagnostics']['parent_usage_complete'])
+        self.assertEqual(path.read_bytes(), original)
+
     def test_profile_diagnostics_allow_only_counts_and_valid_catalog_digests(self):
         secret = 'private-profile-output-and-credential'
         records = [
@@ -492,7 +509,8 @@ class RedactionAndDryPlanTests(unittest.TestCase):
         base = {'run_id': 'private-run', 'session_id': 'private-session', 'request_index': 1}
         payload = dict(base, event='payload')
         usage = dict(base, event='usage', provider_usage={
-            'input_tokens': 20, 'output_tokens': 3, 'cache_read_tokens': 7})
+            'input_tokens': 20, 'output_tokens': 3, 'cache_read_tokens': 7,
+            'cache_write_tokens': 0, 'total_tokens': 30})
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'profile.jsonl'
 
@@ -504,12 +522,19 @@ class RedactionAndDryPlanTests(unittest.TestCase):
                 return diagnostics['parent_usage_complete']
 
             self.assertTrue(complete([payload, usage]))
+            # A sibling/child run's observations cannot either supply missing
+            # parent usage or contaminate otherwise complete parent evidence.
+            self.assertTrue(complete([
+                payload, usage, dict(payload, run_id='child-run'),
+                dict(usage, run_id='child-run')]))
             for records, turns in [
                 ([], 0), ([], 1), ([payload], 1),
                 ([payload, dict(usage, request_index=2)], 1),
                 ([payload, usage, usage], 1),
                 ([payload, usage], 2),
                 ([payload, dict(usage, provider_usage={})], 1),
+                ([payload, dict(usage, provider_usage={
+                    **usage['provider_usage'], 'cache_write_tokens': None})], 1),
                 ([payload, dict(usage, run_id='different-run')], 1),
                 ([payload, usage, dict(payload, session_id='nested-session'),
                   dict(usage, session_id='nested-session')], 2),
@@ -1352,7 +1377,8 @@ class TrialDisposalConsumerTests(unittest.TestCase):
                 events = [
                     dict(key, event='payload'),
                     dict(key, event='usage', provider_usage={
-                        'input_tokens': 11, 'output_tokens': 3, 'cache_read_tokens': 7}),
+                        'input_tokens': 11, 'output_tokens': 3, 'cache_read_tokens': 7,
+                        'cache_write_tokens': 0, 'total_tokens': 21}),
                     {'event': 'disclosure_applied', 'profile': profile,
                      'diagnostic_events_version': 1},
                 ]

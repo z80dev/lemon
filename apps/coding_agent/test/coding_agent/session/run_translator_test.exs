@@ -76,9 +76,9 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     second = %LemonAi.Types.AssistantMessage{model: "claude-sonnet-4", provider: :anthropic}
 
     translator(run_id: "run-1")
-    |> RunTranslator.handle_event({:message_end, first})
+    |> RunTranslator.handle_event({:provider_usage, first})
     |> RunTranslator.handle_event({:turn_end, first, []})
-    |> RunTranslator.handle_event({:message_end, second})
+    |> RunTranslator.handle_event({:provider_usage, second})
     |> RunTranslator.handle_event({:turn_end, second, []})
     |> RunTranslator.handle_event({:agent_end, []})
 
@@ -106,8 +106,8 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     }
 
     translator(run_id: "run-1")
-    |> RunTranslator.handle_event({:message_end, first})
-    |> RunTranslator.handle_event({:message_end, rejected})
+    |> RunTranslator.handle_event({:provider_usage, first})
+    |> RunTranslator.handle_event({:provider_usage, rejected})
     |> RunTranslator.handle_event({:agent_end, []})
 
     assert_receive {:action_event, %{title: "Model: openai:gpt-4o-mini"}}
@@ -120,7 +120,7 @@ defmodule CodingAgent.Session.RunTranslatorTest do
 
     for run_id <- ["run-1", "run-2"] do
       translator(run_id: run_id)
-      |> RunTranslator.handle_event({:message_end, message})
+      |> RunTranslator.handle_event({:provider_usage, message})
       |> RunTranslator.handle_event({:agent_end, []})
 
       assert_receive {:action_event, %{id: id, kind: "model"}}
@@ -136,8 +136,8 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     scopes =
       for _ <- 1..2 do
         translator()
-        |> RunTranslator.handle_event({:message_end, first})
-        |> RunTranslator.handle_event({:message_end, second})
+        |> RunTranslator.handle_event({:provider_usage, first})
+        |> RunTranslator.handle_event({:provider_usage, second})
 
         assert_receive {:action_event, %{id: first_id}}
         assert_receive {:action_event, %{id: second_id}}
@@ -147,6 +147,35 @@ defmodule CodingAgent.Session.RunTranslatorTest do
       end
 
     assert length(Enum.uniq(scopes)) == 2
+  end
+
+  test "transcript repetitions and budget estimates never become attempt observations" do
+    message = %LemonAi.Types.AssistantMessage{
+      model: "gpt-4o-mini",
+      provider: :openai,
+      usage: %LemonAi.Types.Usage{
+        input: 3,
+        output: nil,
+        total_tokens: nil,
+        cost: %LemonAi.Types.Cost{total: nil}
+      }
+    }
+
+    translator()
+    |> RunTranslator.handle_event({:provider_usage, message})
+    |> RunTranslator.handle_event({:message_end, message})
+    |> RunTranslator.handle_event({:message_end, message})
+    |> RunTranslator.handle_event(
+      {:usage_budget_updated, %{run_usage: %{tokens: 999, cost_usd: 123.0}}}
+    )
+    |> RunTranslator.handle_event({:agent_end, [message, message]})
+
+    assert_receive {:completed, %{usage: usage}}
+    assert length(usage.occurrences) == 1
+    assert usage.input == 3
+    assert usage.output == nil
+    assert usage.total_tokens == nil
+    assert usage.cost.total == nil
   end
 
   test "completion counts actual assistant turns and failed tools" do
@@ -162,7 +191,7 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     assert_receive {:completed, %{usage: %{turns: 2, tool_errors: 1}}}
   end
 
-  test "budget failures preserve structured limits and reported run spend in JSON-safe completion" do
+  test "budget failures preserve limits without projecting estimates as provider usage" do
     details = %{
       reason: :budget_exceeded,
       scope: :session,
@@ -186,8 +215,8 @@ defmodule CodingAgent.Session.RunTranslatorTest do
                       completed}
 
     assert error == details.message
-    assert usage.total_tokens == 30
-    assert usage.cost.total == 0.25
+    assert usage.total_tokens == nil
+    assert usage.cost.total == nil
     json = completed |> Jason.encode!() |> Jason.decode!()
     assert json["meta"]["budget"]["reason"] == "budget_exceeded"
     assert json["meta"]["budget"]["used"] == 120
@@ -215,8 +244,8 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     )
 
     assert_receive {:completed, %{usage: usage, meta: %{budget: ^details}}}
-    assert usage.total_tokens == 10
-    assert usage.cost.total == 0.25
+    assert usage.total_tokens == nil
+    assert usage.cost.total == nil
   end
 
   test "cancellation retains observed token breakdown when budget updates precede completion" do
@@ -234,8 +263,8 @@ defmodule CodingAgent.Session.RunTranslatorTest do
 
     # Exercise both queued-budget orders without relying on provider scheduling.
     for events <- [
-          [{:message_end, first}, budget, {:message_end, aborted}],
-          [{:message_end, first}, {:message_end, aborted}, budget]
+          [{:provider_usage, first}, budget, {:provider_usage, aborted}],
+          [{:provider_usage, first}, {:provider_usage, aborted}, budget]
         ] do
       t = Enum.reduce(events, translator(), &RunTranslator.handle_event(&2, &1))
       RunTranslator.handle_event(t, {:canceled, :user_requested})
@@ -246,7 +275,7 @@ defmodule CodingAgent.Session.RunTranslatorTest do
       assert usage.cache_read == 4
       assert usage.cache_write == 1
       assert usage.total_tokens == 10
-      assert usage.cost.total == 0.25
+      assert usage.cost.total == nil
       assert length(usage.occurrences) == 2
     end
   end
