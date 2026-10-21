@@ -1,6 +1,6 @@
 {
   "name": "lemon-browser-node",
-  "version": "2026.10.16",
+  "version": "2026.10.17",
   "private": true,
   "description": "Browser node for Lemon (managed Chrome profile via CDP + Playwright)",
   "type": "module",

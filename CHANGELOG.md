@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.10.17]
+
 ### Added
 
 - Runtime releases bundle the local browser driver, so a packaged install uses
