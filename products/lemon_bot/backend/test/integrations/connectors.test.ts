@@ -28,27 +28,37 @@ type Server = z.infer<typeof serverSchema>;
 const profileSchema = z.object({ id: z.string(), name: z.string(), description: z.string(), systemPrompt: z.string(), toolPolicy: z.record(z.string(), z.json()), mcpServers: z.array(serverSchema) }).strict();
 type Profile = z.infer<typeof profileSchema>;
 
-// Public execution-name records for the fixed product endpoint, using
-// LemonSkills.McpSource.execution_name's ETF identity and 31-byte slug prefix.
+// Authenticated native mcp.execution_names capture for lemon-bot at
+// https://product.example/mcp; aliases are opaque response data, never recomputed.
 const productToolNames = ['message_bot', 'handoff', 'create_draft', 'ask_user', 'request_approval', 'request_human_step', 'request_secret', 'send_voice_memo', 'share_file', 'create_routine', 'update_routine', 'save_skill', 'list_bots', 'post_to_group', 'remember', 'create_bot', 'update_preferences', 'create_reminder'] as const;
-function executionName(server: Pick<Server, 'name' | 'url'>, name: string): string {
-  const binary = (value: string): Buffer => {
-    const bytes = Buffer.from(value);
-    const header = Buffer.alloc(5);
-    header[0] = 109; header.writeUInt32BE(bytes.length, 1);
-    return Buffer.concat([header, bytes]);
-  };
-  const endpoint = new URL(server.url);
-  const identity = Buffer.concat([Buffer.from([131, 104, 3]), binary(server.name), binary(endpoint.href), Buffer.from([104, 2, 100, 0, 4]), Buffer.from('tool'), binary(name)]);
-  const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-  const prefix = `mcp_${slug(server.name.split('/').at(-1)!)}_${slug(name)}`.slice(0, 31);
-  return `${prefix}_${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`;
-}
 const productExecutionProjection = {
   server: { name: 'lemon-bot' },
-  tools: productToolNames.map(name => ({ name, executionName: executionName({ name: 'lemon-bot', url: `${PUBLIC_URL}/mcp` }, name) })),
+  tools: [
+    { name: 'message_bot', executionName: 'mcp_lemon_bot_message_bot_e27f8366c893fc7d4ace784f51ce12a1' },
+    { name: 'handoff', executionName: 'mcp_lemon_bot_handoff_9f74e5f82ed019f6a9084a1daa468386' },
+    { name: 'create_draft', executionName: 'mcp_lemon_bot_create_draft_6e65809e9170b8c9b3cb0da09b714275' },
+    { name: 'ask_user', executionName: 'mcp_lemon_bot_ask_user_10d4fd7a91be9332225ab7a9f47f9f2f' },
+    { name: 'request_approval', executionName: 'mcp_lemon_bot_request_approval_ca54a9645adf9ba042f0e53146a13ee0' },
+    { name: 'request_human_step', executionName: 'mcp_lemon_bot_request_human_ste_688cee41cf6bff126499b440c3a8624c' },
+    { name: 'request_secret', executionName: 'mcp_lemon_bot_request_secret_c5d5dd62ffb1c7cd4ebdaf58ee1da740' },
+    { name: 'send_voice_memo', executionName: 'mcp_lemon_bot_send_voice_memo_94b772ea7c8f891201c61ad1c1a26482' },
+    { name: 'share_file', executionName: 'mcp_lemon_bot_share_file_768d74587235feb2e85ef683d4558c37' },
+    { name: 'create_routine', executionName: 'mcp_lemon_bot_create_routine_480cfac22f6df0d89908d166b1e80b6f' },
+    { name: 'update_routine', executionName: 'mcp_lemon_bot_update_routine_9243c6d1a2783406bed605d7ddf21a9d' },
+    { name: 'save_skill', executionName: 'mcp_lemon_bot_save_skill_ce8a3dbeea117002d1ccc85b12353fb5' },
+    { name: 'list_bots', executionName: 'mcp_lemon_bot_list_bots_151a36bf63151717e5c7dcf2f76752f2' },
+    { name: 'post_to_group', executionName: 'mcp_lemon_bot_post_to_group_f9eeb76c647b0739da6629d63799e809' },
+    { name: 'remember', executionName: 'mcp_lemon_bot_remember_88ac13cb8401ab72fbc6e5caeaedf539' },
+    { name: 'create_bot', executionName: 'mcp_lemon_bot_create_bot_4a92e9bba45de6978e230abb443d9321' },
+    { name: 'update_preferences', executionName: 'mcp_lemon_bot_update_preference_f55d35c688fc2ca9a6d77f7bb3c75d94' },
+    { name: 'create_reminder', executionName: 'mcp_lemon_bot_create_reminder_d1a7af45016ffbce56b89af97037eae8' },
+  ],
   count: productToolNames.length,
 };
+const destinationToolRecords = [
+  { name: 'read_items', executionName: 'mcp_records_read_items', description: 'Read records', inputSchema: { type: 'object' }, readOnly: true },
+  { name: 'write_item', executionName: 'mcp_records_write_item', description: 'Change a record', inputSchema: { type: 'object' }, readOnly: false },
+];
 
 
 /** Stateful destination records: measured presence, stored profiles and destination-only secret resolution. */
@@ -139,7 +149,7 @@ class DestinationPeer implements LemonService {
           if (/\$\{LEMON_SECRET:[^}]*$/.test(header)) throw new ApiError('upstream_unavailable', 'Destination reference malformed.');
         }
         if (this.failure === 'discovery') throw new ApiError('upstream_unavailable', 'Destination MCP discovery failed.');
-        result = { connected: true, server: { name: input.server.name, status: 'connected' }, tools: [{ name: 'read_items', executionName: executionName(input.server, 'read_items'), description: 'Read records', inputSchema: { type: 'object' }, readOnly: true }, { name: 'write_item', executionName: executionName(input.server, 'write_item'), description: 'Change a record', inputSchema: { type: 'object' }, readOnly: false }], count: 2, truncated: false }; break;
+        result = { connected: true, server: { name: input.server.name, status: 'connected' }, tools: structuredClone(destinationToolRecords), count: destinationToolRecords.length, truncated: false }; break;
       }
       case 'profiles.update': {
         const patch = profileSchema.partial().required({ id: true }).parse(params);
@@ -325,8 +335,7 @@ describe('destination connector configuration', () => {
     expect(config[0]?.headers).toEqual({});
     expect(f.peer.profiles.get(f.bot.profileId)?.every(server => Object.keys(server.headers).length === 0)).toBe(true);
     const current = await f.peer.call<{ profile: Profile & { mcpConfigFingerprint: string } }>('profiles.get', { id: f.bot.profileId });
-    const server = serverSchema.parse(discovery.params.server);
-    expect(current.profile.toolPolicy.allow).toEqual(expect.arrayContaining(['read_skill', 'webfetch', 'websearch', 'task', 'agent_message', 'wait', 'parent_question', executionName(server, 'read_items'), executionName(server, 'write_item')]));
+    expect(current.profile.toolPolicy.allow).toEqual(expect.arrayContaining(['read_skill', 'webfetch', 'websearch', 'task', 'agent_message', 'wait', 'parent_question', ...destinationToolRecords.map(tool => tool.executionName)]));
     for (const disallowed of ['read', 'write', 'bash', 'browser_evaluate', 'recall']) expect(current.profile.toolPolicy.allow).not.toContain(disallowed);
     expect(current.profile.toolPolicy.deny).toEqual(expect.arrayContaining(['read', 'write', 'bash', 'browser_evaluate', 'recall']));
     expect(current.profile.mcpConfigFingerprint).toBe(connectorConfigurationFingerprint([baseBotMcpTemplate(f.services), ...config]));

@@ -104,6 +104,9 @@ controller connection PID and generation, and native follow-up/floor callbacks
 are excluded from execution JSON in all atom/snake/camel forms. The destination derives actual source
 identities from its immutable native session options; body metadata cannot
 select or attest a source profile/session.
+Controller admission-row root binding maps (including nested profile/policy/
+destination hashes) are likewise excluded; the owning admission store checks
+them, never body-selected worker authority.
 
 Profile MCP aliases are stable public-identity hashes, exposed by discovery as
 `executionName`. Credential rotation and DNS pinning do not change policy names.

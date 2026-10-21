@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Controller-only native root admission binding maps are excluded from remote
+  execution metadata under every atom/string/camel alias, preserving their
+  admission-store ownership.
 - Preserve missing provider usage and cost as null through native session history,
   run-ledger occurrences and CLI JSON, including successful multi-turn tasks.
   Aggregate only complete per-counter observations, retain cache breakdowns without

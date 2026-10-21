@@ -234,6 +234,21 @@ defmodule CodingAgent.Executor.RemotePrivateMetaTest do
     end
   end
 
+  test "controller admission root bindings cannot become worker-side authority" do
+    keys = [:native_root_binding, "native_root_binding", :nativeRootBinding, "nativeRootBinding"]
+
+    for value <- [
+          false,
+          nil,
+          %{"targetNodeId" => "model-selected", "targetPolicyHash" => "untrusted-hash"},
+          "untrusted-binding"
+        ] do
+      meta = Map.new(keys, &{&1, value}) |> Map.put(:model, "ordinary-model")
+      assert {:ok, payload} = encode(meta)
+      assert payload["meta"] == %{"model" => "ordinary-model"}
+    end
+  end
+
   test "proof callbacks and structs remain non-serializable execution data" do
     assert {:error, {:invalid_request_payload, _}} =
              encode(%{invocation_proof: %{run_id: fn -> :private end}})
