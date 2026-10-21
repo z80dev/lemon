@@ -260,6 +260,39 @@ assert_full_profile_static_files() {
   fi
 }
 
+# Runtime profiles bundle the local browser driver with its production
+# dependencies. Loading it through the release's own inspection helper proves
+# the exports and playwright-core resolve; it never launches a browser.
+assert_bundled_browser_driver() {
+  local profile="$1"
+  local extract_dir="$2"
+  local priv
+
+  priv="$(compgen -G "$extract_dir/lib/lemon_browser-*/priv" | head -n 1)"
+  if [ -z "$priv" ] || [ ! -f "$priv/driver/local-driver.js" ] ||
+    [ ! -f "$priv/driver/node_modules/playwright-core/package.json" ]; then
+    echo "$profile: missing bundled browser driver under lemon_browser priv/driver" >&2
+    exit 1
+  fi
+
+  if ! command -v node > /dev/null 2>&1; then
+    echo "$profile: node not on PATH; skipped loading the bundled browser driver"
+    return
+  fi
+
+  local result
+  result="$(printf '{"driverPath":"%s","endpoint":"","port":9,"launchesBrowser":true,"attachOnly":false}\n' \
+    "$priv/driver/local-driver.js" | node "$priv/node_browser_inspect.mjs")"
+
+  case "$result" in
+    *'"supported"'*) ;;
+    *)
+      echo "$profile: bundled browser driver failed to load: $result" >&2
+      exit 1
+      ;;
+  esac
+}
+
 assert_no_asset_warmup_failure() {
   local profile="$1"
   local extract_dir="$2"
@@ -582,6 +615,12 @@ boot_one_profile() {
     echo "$profile: release bin missing or not executable: $release_bin" >&2
     exit 1
   fi
+
+  case "$profile" in
+    lemon_runtime_min | lemon_runtime_full)
+      assert_bundled_browser_driver "$profile" "$extract_dir"
+      ;;
+  esac
 
   if [ "$profile" = "lemon_runtime_full" ]; then
     assert_full_profile_static_files "$profile" "$extract_dir"

@@ -10,6 +10,8 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 - Apply new backdoor/exfiltration screening only to new text and patched results,
   so retained installation facts remain readable, editable and deletable.
+- The memory doctor check reads `runtime:` instead of `external_runtime?` and
+  skips, rather than warns, when a standalone CLI runs with no runtime at all.
 
 ### Added
 

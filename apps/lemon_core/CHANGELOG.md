@@ -36,6 +36,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- Doctor callers pass `runtime: :local | :external | :absent`; checks of
+  runtime-owned processes return `LemonCore.Doctor.Check.outside_runtime/3`
+  when the standalone CLI cannot observe them.
 - `LemonCore.ProcessGroup` shares birth-bound local workload proofs across native
   consumers, rejecting malformed or lost ownership and retaining absolute,
   fixed-argv signalling. Opt-in `LemonCore.NativeProcess` evaluation tracking
@@ -100,6 +103,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `runtime.lemon_root` skips when `LEMON_PATH` is unset instead of warning about
+  a compile-time path that in releases names the build machine.
+- `LemonCore.BrowserProvider` maps the local probe's fixed reason atoms to fixed
+  messages naming Node.js, the driver, an outdated driver build, or Chrome.
 - Profile chat defaults retain automatic model-selection provenance, including
   managed follow-ups, so configured routing rules and cost caps cannot be bypassed
   by materializing the profile model. Invocation model overrides remain explicit.

@@ -357,7 +357,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_ENV` | string | _(none)_ |  | `lemon_core` | Deployment environment label (used for Sentry environment tagging). |
 | `LEMON_GATEWAY_NODE_COOKIE`<br>_(alias: `LEMON_GATEWAY_COOKIE`)_ | string | _(none)_ | yes | `lemon_core` | Distributed Erlang cookie for the gateway node. |
 | `LEMON_GATEWAY_NODE_NAME` | string | `lemon` |  | `lemon_core` | Distributed Erlang node name for the gateway. |
-| `LEMON_PATH` | string | _(none)_ |  | `lemon_core` | Override for the `PATH` used when locating CLI subprocess executables. |
+| `LEMON_PATH` | string | _(none)_ |  | `lemon_core` | Lemon source checkout root, set by the source launchers; locates source-only assets such as the browser driver build. |
 | `LEMON_RELEASE_CHANNEL` | string | _(none)_ |  | `lemon_core` | Release channel label (stable/beta/etc), falls back to inferring from RELEASE_VSN. |
 | `LEMON_RUNTIME_PROFILE` | string | _(none)_ |  | `lemon_core` | Named runtime profile selecting a bundle of feature defaults. |
 | `LEMON_TEST_ALLOW_LIVE_CREDENTIALS` | boolean | `false` |  | `lemon_core` | Test-only opt-in to allow hermetic tests to use real provider credentials. |

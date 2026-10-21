@@ -25,6 +25,8 @@ on:
       - ".github/workflows/release.yml"
       - "rel/overlays/bin/lemon"
       - "clients/tui/**"
+      - "clients/lemon-browser-node/**"
+      - "apps/lemon_browser/priv/**"
       - "scripts/verify_release_artifacts"
       - "scripts/verify_release_runtime_boot"
       - "install.sh"
@@ -78,13 +80,15 @@ jobs:
           otp-version: "28.5"
           elixir-version: "1.19.5"
 
+      # Runtime releases build and bundle clients/lemon-browser-node.
       - name: Setup Node
-        if: matrix.profile != 'lemon_runtime_min'
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
-          cache-dependency-path: apps/lemon_sim_ui/assets/package-lock.json
+          cache-dependency-path: |
+            apps/lemon_sim_ui/assets/package-lock.json
+            clients/lemon-browser-node/package-lock.json
 
       - name: Cache Mix deps and build
         uses: actions/cache@v4
@@ -271,6 +275,13 @@ jobs:
         with:
           otp-version: "28.5"
           elixir-version: "1.19.5"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: clients/lemon-browser-node/package-lock.json
 
       - name: Cache Mix deps and build
         uses: actions/cache@v4

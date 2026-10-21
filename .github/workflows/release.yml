@@ -306,14 +306,16 @@ jobs:
           elixir-version: ${{ env.ELIXIR_VERSION }}
 
       # Both lemon_runtime_full and sim_broadcast_platform bundle lemon_sim_ui,
-      # so both need its npm-built, digested assets.
+      # so both need its npm-built, digested assets. Both runtime profiles also
+      # build and bundle clients/lemon-browser-node during `mix release`.
       - name: Setup Node
-        if: matrix.profile != 'lemon_runtime_min'
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
-          cache-dependency-path: apps/lemon_sim_ui/assets/package-lock.json
+          cache-dependency-path: |
+            apps/lemon_sim_ui/assets/package-lock.json
+            clients/lemon-browser-node/package-lock.json
 
       - name: Cache Mix deps and build
         uses: actions/cache@v4

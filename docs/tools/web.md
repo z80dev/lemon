@@ -114,12 +114,11 @@ The default `auto` selection checks connected LCU, the authenticated Lemon MV3
 relay, then managed local Chrome. LCU exposes Chrome through `cua_js`; other
 providers use the backend-neutral `LemonBrowser` facade. Explicit providers fail
 closed and never switch browser identity or profile. The local/CDP driver needs
-the browser node client built:
+Node.js 24 or later; release installs bundle it, and a source checkout builds it:
 
 ```bash
-cd clients/lemon-browser-node
-npm install
-npm run build
+npm --prefix clients/lemon-browser-node install
+npm --prefix clients/lemon-browser-node run build
 ```
 
 Additional built-ins cover Browserbase (`browserbase`), Browser Use Cloud
@@ -375,8 +374,8 @@ Guarded fetches stream at most `runtime.tools.web.fetch.max_body_bytes` bytes
 (default 5 MiB) per response, including redirect hops. Oversized bodies halt
 early with `body_too_large`; this is terminal and does not trigger extraction fallback.
 
-- `Local browser driver not built`: run `npm install && npm run build` in
-  `clients/lemon-browser-node`.
+- `Local browser driver not found`: reinstall Lemon, or in a source checkout run
+  `npm install && npm run build` in `clients/lemon-browser-node`.
 - `Could not find Chrome/Chromium executable`: install Chrome/Chromium or set
   `LEMON_CHROME_EXECUTABLE`.
 

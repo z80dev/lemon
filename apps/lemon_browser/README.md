@@ -109,16 +109,18 @@ response: {"id": "...", "ok": true, "result": {...}}
 ```
 
 **The driver is not shipped in this package.** It is resolved from
-`LEMON_BROWSER_DRIVER_PATH`, and otherwise from
-`clients/lemon-browser-node/dist/local-driver.js` relative to the current
-working directory, which is the Lemon monorepo's layout. Outside that monorepo,
-point `LEMON_BROWSER_DRIVER_PATH` at a driver implementing the protocol above.
+`LEMON_BROWSER_DRIVER_PATH`, then from `priv/driver/local-driver.js` (Lemon's
+runtime releases stage the built driver and its production dependencies there),
+then from `clients/lemon-browser-node/dist/local-driver.js` under
+`LemonCore.Runtime.Env.lemon_root/0`, the Lemon monorepo's layout. The working
+directory is not searched. Outside the monorepo, point
+`LEMON_BROWSER_DRIVER_PATH` at a driver implementing the protocol above.
 
 Absence degrades rather than crashes. The port is opened lazily on the first
 request, so an application that never drives a browser never spawns anything.
 If `node` is missing, or the driver path does not resolve, `request/3` answers
 `{:error, "node executable not found on PATH"}` or
-`{:error, "Local browser driver not built..."}`, the error is remembered in
+`{:error, "Local browser driver not found..."}`, the error is remembered in
 `status/0`, and the supervision tree stays up. If a running helper exits, only
 the requests in flight fail; the next request starts a fresh one.
 

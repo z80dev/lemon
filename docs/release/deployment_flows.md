@@ -165,6 +165,14 @@ mode `:load`. The library has no application callback and starts no processes;
 this entry makes its client modules available to `LemonSkills.McpSource` while
 the consuming application remains responsible for supervising each connection.
 
+Both runtime profiles also bundle the local browser driver. A release step runs
+`npm ci` and `npm run build` in `clients/lemon-browser-node`, then stages `dist/`
+with production-only dependencies under `lib/lemon_browser-*/priv/driver`, so
+building either runtime requires Node.js 24 and `npm`. Installed users need only
+Node.js and Chrome/Chromium for the managed local browser.
+`scripts/verify_release_runtime_boot` fails a runtime tarball whose bundled
+driver is missing or does not load.
+
 The full profile bundles both web surfaces. `lemon_sim_ui` has an esbuild/
 tailwind pipeline, so it needs `sim_ui.assets.deploy`; `lemon_web` commits its
 built `app.css` (Tailwind source in `apps/lemon_web/assets`, rebuilt by
@@ -330,7 +338,7 @@ anonymous `/rooms/:id/watch` request.
 | `LEMON_WEB_PORT` | `4080` | Web UI HTTP port |
 | `LEMON_SIM_UI_PORT` | `4090` | Sim UI HTTP port |
 | `LEMON_SECRETS_MASTER_KEY` | *(keychain/file)* | Override secrets master key. On local Linux source runs, `bin/lemon` will normalize this from `~/.lemon/secrets_master_key` when that file exists. |
-| `LEMON_PATH` | *(source-relative)* | Override Lemon root directory |
+| `LEMON_PATH` | *(unset in releases)* | Lemon source checkout root; the source launchers set it |
 
 ### Verify health
 

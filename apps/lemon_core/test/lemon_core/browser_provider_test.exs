@@ -237,4 +237,19 @@ defmodule LemonCore.BrowserProviderTest do
     assert result.provider == nil
     refute result.checks["local"].available
   end
+
+  test "known local reasons name the prerequisite; other reasons stay generic" do
+    reason = fn probe_result ->
+      BrowserProvider.resolve(config: %{provider: "local"}, probe: fn "local" -> probe_result end).reason
+    end
+
+    assert reason.({:error, :node_missing}) =~ "Node.js 24"
+    assert reason.({:error, :driver_missing}) =~ "driver is not installed"
+    assert reason.({:error, :driver_incompatible}) =~ "outdated"
+    assert reason.({:error, :browser_missing}) =~ "LEMON_BROWSER_EXECUTABLE"
+
+    generic = reason.({:error, :unavailable})
+    assert generic == reason.({:error, "/private/path token=secret"})
+    refute generic =~ "private"
+  end
 end

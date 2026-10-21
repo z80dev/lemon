@@ -38,15 +38,25 @@ defmodule LemonBrowser.ProviderProbe do
        "Lemon MV3 relay could not be checked; check its port, token and connected extension."}
   end
 
-  def available?(provider) when provider in ["local", "cdp"] do
-    with :ok <- endpoint_configured(provider),
-         {:ok, config} <- LocalServer.configuration(driver_options(provider)),
+  # Local failures are fixed atoms, never helper output, so BrowserProvider can
+  # name the missing prerequisite without exposing paths or probe details.
+  def available?("local") do
+    with :ok <- node_available(),
+         {:ok, config} <- local_configuration(),
          {:ok, %{"available" => true}} <- inspect_browser(config) do
-      {:ok,
-       if(provider == "local",
-         do: "Managed local Chrome and its CDP driver are available.",
-         else: "The configured CDP browser is reachable."
-       )}
+      {:ok, "Managed local Chrome and its CDP driver are available."}
+    else
+      {:ok, %{"reason" => "browser_executable_not_installed"}} -> {:error, :browser_missing}
+      {:ok, %{}} -> {:error, :unavailable}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def available?("cdp") do
+    with :ok <- endpoint_configured("cdp"),
+         {:ok, config} <- LocalServer.configuration(driver_options("cdp")),
+         {:ok, %{"available" => true}} <- inspect_browser(config) do
+      {:ok, "The configured CDP browser is reachable."}
     else
       {:error, :endpoint_missing} ->
         {:error,
@@ -54,12 +64,7 @@ defmodule LemonBrowser.ProviderProbe do
 
       _ ->
         {:error,
-         if(provider == "local",
-           do:
-             "Managed local Chrome is unavailable; install Chrome/Chromium and build clients/lemon-browser-node (npm install && npm run build).",
-           else:
-             "The configured CDP browser is unavailable; check LEMON_BROWSER_CDP_ENDPOINT and build clients/lemon-browser-node."
-         )}
+         "The configured CDP browser is unavailable; check LEMON_BROWSER_CDP_ENDPOINT and the browser driver installation."}
     end
   end
 
@@ -70,7 +75,8 @@ defmodule LemonBrowser.ProviderProbe do
       {:ok, "The hosted browser credentials and CDP driver are available."}
     else
       _ ->
-        {:error, "Configure the hosted browser credentials and build clients/lemon-browser-node."}
+        {:error,
+         "Configure the hosted browser credentials and check the browser driver installation."}
     end
   end
 
@@ -101,9 +107,25 @@ defmodule LemonBrowser.ProviderProbe do
              max_output_bytes: 65_536
            ),
          {:ok, result} <- Jason.decode(output) do
-      {:ok, result}
+      case result do
+        %{"error" => "driver_incompatible"} -> {:error, :driver_incompatible}
+        %{"error" => _} -> {:error, :inspection_unavailable}
+        result -> {:ok, result}
+      end
     else
       _ -> {:error, :inspection_unavailable}
+    end
+  end
+
+  defp node_available do
+    if System.find_executable("node"), do: :ok, else: {:error, :node_missing}
+  end
+
+  # Node is checked first, so a configuration failure means the driver is absent.
+  defp local_configuration do
+    case LocalServer.configuration(driver_options("local")) do
+      {:ok, config} -> {:ok, config}
+      {:error, _} -> {:error, :driver_missing}
     end
   end
 
@@ -123,8 +145,6 @@ defmodule LemonBrowser.ProviderProbe do
     do: [cdp_endpoint: Env.get(:lemon_browser_cdp_endpoint) || "", attach_only: true]
 
   defp driver_available?, do: LocalServer.configuration()
-
-  defp endpoint_configured("local"), do: :ok
 
   defp endpoint_configured("cdp") do
     case Env.get(:lemon_browser_cdp_endpoint) do

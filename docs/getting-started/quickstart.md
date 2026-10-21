@@ -4,8 +4,10 @@ Install Lemon, connect a model, make one small repository change, and keep the
 same session for larger work. You need an interactive terminal on macOS (Apple
 Silicon) or Linux (x86_64 or ARM64), `curl`, `tar`, `python3`, and an account
 with a model provider. The prebuilt release bundles its own Erlang/Elixir
-runtime and the terminal client, so you do not install either. Model requests
-use your provider's account.
+runtime, the terminal client and the browser-automation driver, so you do not
+install any of them. Browser tools additionally need Node.js 24 or later and
+Chrome/Chromium; `lemon doctor` reports what is missing. Model requests use
+your provider's account.
 
 Other platforms or a container: see [Install](../install.md).
 

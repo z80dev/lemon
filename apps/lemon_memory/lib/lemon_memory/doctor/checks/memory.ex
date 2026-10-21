@@ -10,9 +10,9 @@ defmodule LemonMemory.Doctor.Checks.Memory do
   feature is active but the store is unavailable, since agents still run fine
   with memory disabled.
 
-  A standalone CLI may pass `external_runtime?: true` after probing a separate
-  healthy runtime. If its local memory process is absent, this check reports
-  remote memory health as unverified (`:skip`), not as stopped recording.
+  A standalone CLI passes `runtime: :external` or `runtime: :absent` (see
+  `LemonCore.Doctor`). There an absent memory process is the CLI's own state,
+  not the runtime's, so the check skips instead of reporting stopped recording.
   NIF failures remain warnings.
 
   Registered with the `LemonCore.Doctor` framework via
@@ -51,12 +51,10 @@ defmodule LemonMemory.Doctor.Checks.Memory do
   end
 
   defp session_search_check(state, true, {:unavailable, reason}, opts) do
-    if reason == :store_not_running and Keyword.get(opts, :external_runtime?, false) do
-      Check.skip(
-        "memory.session_search",
-        "session_search is #{state}; a separate Lemon runtime is healthy, " <>
-          "but its memory health cannot be checked from this CLI process."
-      )
+    runtime = Keyword.get(opts, :runtime, :local)
+
+    if reason == :store_not_running and runtime != :local do
+      Check.outside_runtime("memory.session_search", "the memory store", runtime)
     else
       Check.warn(
         "memory.session_search",

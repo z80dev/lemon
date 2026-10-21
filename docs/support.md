@@ -259,9 +259,10 @@ interfaces.
 
 For web-tool bugs, include the prompt, tool name, target URL when shareable,
 interface, runtime mode, and whether the issue is plain text fetch/search or
-browser behavior. For browser bugs, include whether `clients/lemon-browser-node`
-was built, the Chrome/Chromium executable used, and any screenshot artifact path
-under `.lemon/browser-artifacts/`.
+browser behavior. For browser bugs, include the `browser.provider` line from
+`lemon doctor`, whether Lemon runs from a release or a source checkout, the
+Chrome/Chromium executable used, and any screenshot artifact path under
+`.lemon/browser-artifacts/`.
 
 ## Automation and Cron
 
