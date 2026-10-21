@@ -828,6 +828,26 @@ jobs:
           pattern: release-*
           merge-multiple: true
 
+      # download-artifact can report success after an interrupted large blob
+      # download, leaving a truncated tarball whose checksum the manifest would
+      # then attest. Refuse to publish anything that is not a complete archive.
+      - name: Verify downloaded archives are complete
+        working-directory: release-artifacts
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archives=(*.tar.gz)
+          if [ "${#archives[@]}" -eq 0 ]; then
+            echo "::error::no release archives were downloaded"
+            exit 1
+          fi
+          for archive in "${archives[@]}"; do
+            if ! gzip -t "$archive"; then
+              echo "::error::$archive is truncated or corrupt after artifact download; re-run failed jobs"
+              exit 1
+            fi
+          done
+
       - name: Stage version-scoped installation scripts
         run: |
           cp install.sh release-artifacts/install.sh

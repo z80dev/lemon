@@ -8,7 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- Release publication refuses truncated or corrupt archives from an interrupted
+  artifact download instead of publishing them with a matching manifest
+  checksum. 2026.10.15 shipped truncated macOS arm64 and Linux x86_64 TUI
+  archives, which made the installer fail during extraction.
 
 ---
 
