@@ -70,17 +70,20 @@ jq -r 'select(.type=="message" and .message.role == "assistant") | .message.cont
 ### Get total cost for a session
 
 ```bash
-jq -s '[.[] | select(.type=="message") | .message.usage.cost.total // 0] | add' <session>.jsonl
+jq -s '[.[] | select(.type=="message" and .message.role=="assistant") | .message.usage.cost.total] | if all(.[]; type=="number") then add // 0 else null end' <session>.jsonl
 ```
+
+Missing assistant usage or prices make the total `null`, not zero. User/tool
+messages do not represent provider charges.
 
 ### Daily cost summary
 
 ```bash
 for f in ~/.lemon/agent/sessions/*/*.jsonl; do
   day="$(date -r "$(( $(jq -r 'select(.type=="session") | .timestamp' "$f") / 1000 ))" '+%F' 2>/dev/null || continue)"
-  cost=$(jq -s '[.[] | select(.type=="message") | .message.usage.cost.total // 0] | add' "$f")
-  echo "$day $cost"
-done | awk '{a[$1]+=$2} END {for(d in a) print d, "$"a[d]}' | sort -r
+  cost=$(jq -s '[.[] | select(.type=="message" and .message.role=="assistant") | .message.usage.cost.total] | if all(.[]; type=="number") then add // 0 else null end' "$f")
+  jq -cn --arg day "$day" --argjson cost "$cost" '{day: $day, cost: $cost}'
+done | jq -s 'group_by(.day) | map({day: .[0].day, cost: (map(.cost) | if all(.[]; type=="number") then add else null end)}) | sort_by(.day) | reverse'
 ```
 
 ### Count messages and tokens in a session

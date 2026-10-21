@@ -182,7 +182,9 @@ defmodule LemonCli.PrintCommand do
             payload["type"] == "completed" ->
               case Client.call(conn, "agent.wait", %{"runId" => run_id, "timeoutMs" => 1000}) do
                 {:ok, result} ->
-                  Map.merge(Map.take(payload, ["usage", "model", "durationMs"]), result)
+                  # agent.wait retains the internal usage detail shape. The
+                  # completed event is the canonical, normalized wire projection.
+                  Map.merge(result, Map.take(payload, ["usage", "model", "durationMs"]))
 
                 _ ->
                   Map.merge(Map.take(payload, ["usage", "model", "durationMs"]), %{

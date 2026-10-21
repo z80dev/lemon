@@ -165,7 +165,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
         "schema" => "lemon_sim.usage.v1",
         "sim_id" => sim_id,
         "totals" => %{
-          "input_tokens" => 1_200,
+          "input_tokens" => nil,
           "output_tokens" => 345,
           "cache_read_tokens" => 10,
           "cache_write_tokens" => 5,
@@ -175,7 +175,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
         "actors" => %{
           "operator" => %{
             "model_id" => "openai:gpt-test",
-            "input_tokens" => 1_000,
+            "input_tokens" => nil,
             "output_tokens" => 300,
             "cache_read_tokens" => 10,
             "cache_write_tokens" => 5,
@@ -201,8 +201,8 @@ defmodule LemonSimUi.SpectatorLiveTest do
     html = render(view)
 
     assert html =~ "Usage"
-    assert html =~ "1,560 tokens"
-    assert html =~ "1,200"
+    assert html =~ "— tokens"
+    refute html =~ "1,560 tokens"
     assert html =~ "345"
     assert html =~ "operator"
     assert html =~ "openai:gpt-test"

@@ -23,6 +23,7 @@ defmodule LemonControlPlane.Methods.ModelsListTest do
       provider: :"openai-codex",
       id: "fixture-account-model",
       name: "Available account model",
+      cost: nil,
       context_window: 64_000,
       max_tokens: 4_096,
       reasoning: true,
@@ -80,6 +81,24 @@ defmodule LemonControlPlane.Methods.ModelsListTest do
              "outputPerMillion" => 10.0,
              "cacheReadPerMillion" => 1.25,
              "cacheWritePerMillion" => 0.0
+           }
+  end
+
+  test "retains catalog zero prices without inventing unreported cache prices" do
+    fixture = %LemonAi.Types.Model{
+      provider: :fixture,
+      id: "free",
+      cost: %LemonAi.Types.ModelCost{input: 0.0, output: 0.0, cache_read: nil, cache_write: nil}
+    }
+
+    Application.put_env(:lemon_control_plane, :model_catalog, fn _opts -> [fixture] end)
+    assert {:ok, %{"models" => [model]}} = ModelsList.handle(%{}, %{})
+
+    assert model["pricing"] == %{
+             "inputPerMillion" => 0.0,
+             "outputPerMillion" => 0.0,
+             "cacheReadPerMillion" => nil,
+             "cacheWritePerMillion" => nil
            }
   end
 end

@@ -2,6 +2,7 @@ defmodule LemonSim.LLM.Usage do
   @moduledoc false
 
   alias LemonAi.Types.{Model, ModelCost, Usage}
+  alias LemonCore.MapHelpers
   alias LemonSim.LLM.Projectors.Toolkit
 
   @schema "lemon_sim.usage.v1"
@@ -33,7 +34,24 @@ defmodule LemonSim.LLM.Usage do
     do: record_response(collector, actor_id, model, usage, 0)
 
   def record_response(nil, _actor_id, _model, _usage, _latency_ms), do: :ok
-  def record_response(_collector, _actor_id, _model, nil, _latency_ms), do: :ok
+
+  def record_response(collector, actor_id, model, nil, latency_ms) do
+    record_response(
+      collector,
+      actor_id,
+      model,
+      %Usage{
+        input: nil,
+        output: nil,
+        cache_read: nil,
+        cache_write: nil,
+        cache_write_long: nil,
+        total_tokens: nil,
+        cost: nil
+      },
+      latency_ms
+    )
+  end
 
   def record_response(collector, actor_id, %Model{} = model, %Usage{} = usage, latency_ms)
       when is_pid(collector) do
@@ -88,20 +106,20 @@ defmodule LemonSim.LLM.Usage do
 
   defp add_response(state, actor_id, model, usage, latency_ms) do
     actor_id = normalize_actor_id(actor_id)
-    pricing_known? = pricing_known?(model)
-    cost = if pricing_known?, do: LemonAi.calculate_cost(model, usage).total
+    cost = if pricing_known?(model), do: LemonAi.calculate_cost(model, usage).total
+    cost_known? = is_number(cost)
 
     state
-    |> update_in([:totals], &add_usage(&1, usage, cost, pricing_known?, latency_ms))
+    |> update_in([:totals], &add_usage(&1, usage, cost, latency_ms))
     |> update_in([:actors], fn actors ->
       Map.update(
         actors,
         actor_id,
-        add_usage(new_actor(model), usage, cost, pricing_known?, latency_ms),
-        &add_usage(&1, usage, cost, pricing_known?, latency_ms)
+        add_usage(new_actor(model), usage, cost, latency_ms),
+        &add_usage(&1, usage, cost, latency_ms)
       )
     end)
-    |> update_cost_known(pricing_known?)
+    |> update_cost_known(cost_known?)
   end
 
   defp add_decision(state, actor_id, model) do
@@ -136,24 +154,19 @@ defmodule LemonSim.LLM.Usage do
     |> update_cost_known(false)
   end
 
-  defp add_usage(acc, %Usage{} = usage, cost, pricing_known?, latency_ms) do
+  defp add_usage(acc, %Usage{} = usage, cost, latency_ms) do
     acc
-    |> Map.update!(:input_tokens, &(&1 + usage.input))
-    |> Map.update!(:output_tokens, &(&1 + usage.output))
-    |> Map.update!(:cache_read_tokens, &(&1 + usage.cache_read))
-    |> Map.update!(:cache_write_tokens, &(&1 + usage.cache_write))
+    |> Map.update!(:input_tokens, &add_known(&1, usage.input))
+    |> Map.update!(:output_tokens, &add_known(&1, usage.output))
+    |> Map.update!(:cache_read_tokens, &add_known(&1, usage.cache_read))
+    |> Map.update!(:cache_write_tokens, &add_known(&1, usage.cache_write))
     |> Map.update!(:latency_ms, &(&1 + max(latency_ms, 0)))
-    |> add_cost(cost, pricing_known?)
+    |> Map.update!(:cost_usd, &add_known(&1, cost))
   end
 
-  defp add_cost(acc, cost, true) when is_number(cost) do
-    Map.update!(acc, :cost_usd, fn
-      nil -> nil
-      value -> value + cost
-    end)
-  end
-
-  defp add_cost(acc, _cost, false), do: %{acc | cost_usd: nil}
+  defp add_known(nil, _value), do: nil
+  defp add_known(_value, nil), do: nil
+  defp add_known(left, right), do: left + right
 
   defp update_cost_known(state, true), do: state
   defp update_cost_known(state, false), do: %{state | cost_known?: false}
@@ -183,54 +196,46 @@ defmodule LemonSim.LLM.Usage do
     }
   end
 
-  defp to_artifact(%{schema: @schema, cost_known?: _cost_known?} = state) do
+  defp to_artifact(%{schema: @schema} = artifact), do: normalize_artifact(artifact)
+  defp to_artifact(%{"schema" => @schema} = artifact), do: normalize_artifact(artifact)
+
+  defp normalize_artifact(artifact) do
+    totals = normalize_totals(MapHelpers.get_key(artifact, :totals))
+
+    actors =
+      artifact
+      |> MapHelpers.get_key(:actors)
+      |> Enum.sort_by(fn {actor_id, _usage} -> actor_id end)
+      |> Map.new(fn {actor_id, usage} -> {actor_id, finalize_actor(normalize_actor(usage))} end)
+
+    cost_known? =
+      Map.get(artifact, :cost_known?, Map.get(artifact, "cost_known?", true)) != false and
+        is_number(totals.cost_usd) and
+        Enum.all?(actors, fn {_actor_id, usage} -> is_number(usage.cost_usd) end)
+
     %{
       schema: @schema,
-      sim_id: state.sim_id,
-      cost_known?: state.cost_known?,
-      totals: finalize_totals(state.totals, state.cost_known?),
-      actors:
-        state.actors
-        |> Enum.sort_by(fn {actor_id, _usage} -> actor_id end)
-        |> Map.new(fn {actor_id, usage} -> {actor_id, finalize_actor(usage)} end)
-    }
-  end
-
-  defp to_artifact(%{schema: @schema, totals: _totals, actors: _actors} = artifact), do: artifact
-
-  defp to_artifact(%{"schema" => @schema, "totals" => totals, "actors" => actors} = artifact) do
-    %{
-      schema: @schema,
-      sim_id: artifact["sim_id"],
-      cost_known?: Map.get(artifact, "cost_known?", true),
-      totals: normalize_totals(totals),
-      actors: Map.new(actors, fn {actor_id, usage} -> {actor_id, normalize_actor(usage)} end)
+      sim_id: MapHelpers.get_key(artifact, :sim_id),
+      cost_known?: cost_known?,
+      totals: finalize_totals(totals, cost_known?),
+      actors: actors
     }
   end
 
   defp normalize_totals(totals) do
     %{
-      input_tokens: totals["input_tokens"] || 0,
-      output_tokens: totals["output_tokens"] || 0,
-      cache_read_tokens: totals["cache_read_tokens"] || 0,
-      cache_write_tokens: totals["cache_write_tokens"] || 0,
-      decisions: totals["decisions"] || 0,
-      latency_ms: totals["latency_ms"] || 0,
-      cost_usd: totals["cost_usd"]
+      input_tokens: MapHelpers.get_key(totals, :input_tokens),
+      output_tokens: MapHelpers.get_key(totals, :output_tokens),
+      cache_read_tokens: MapHelpers.get_key(totals, :cache_read_tokens),
+      cache_write_tokens: MapHelpers.get_key(totals, :cache_write_tokens),
+      decisions: MapHelpers.get_key(totals, :decisions) || 0,
+      latency_ms: MapHelpers.get_key(totals, :latency_ms) || 0,
+      cost_usd: MapHelpers.get_key(totals, :cost_usd)
     }
   end
 
   defp normalize_actor(actor) do
-    %{
-      model_id: actor["model_id"],
-      decisions: actor["decisions"] || 0,
-      input_tokens: actor["input_tokens"] || 0,
-      output_tokens: actor["output_tokens"] || 0,
-      cache_read_tokens: actor["cache_read_tokens"] || 0,
-      cache_write_tokens: actor["cache_write_tokens"] || 0,
-      latency_ms: actor["latency_ms"] || 0,
-      cost_usd: actor["cost_usd"]
-    }
+    Map.merge(normalize_totals(actor), %{model_id: MapHelpers.get_key(actor, :model_id)})
   end
 
   defp finalize_totals(totals, true), do: finalize_cost(totals)
@@ -238,10 +243,12 @@ defmodule LemonSim.LLM.Usage do
   defp finalize_actor(actor), do: finalize_cost(actor)
 
   defp finalize_cost(%{cost_usd: nil} = usage), do: usage
-  defp finalize_cost(%{cost_usd: cost} = usage), do: %{usage | cost_usd: Float.round(cost, 6)}
+  defp finalize_cost(%{cost_usd: cost} = usage), do: %{usage | cost_usd: Float.round(cost / 1, 6)}
 
   defp pricing_known?(%Model{cost: %ModelCost{} = cost}) do
-    Enum.any?([cost.input, cost.output, cost.cache_read, cost.cache_write], &(&1 > 0))
+    Enum.any?([cost.input, cost.output, cost.cache_read, cost.cache_write], fn price ->
+      is_number(price) and price > 0
+    end)
   end
 
   defp pricing_known?(_model), do: false
@@ -251,6 +258,8 @@ defmodule LemonSim.LLM.Usage do
   defp normalize_actor_id(nil), do: "operator"
   defp normalize_actor_id(actor_id) when is_atom(actor_id), do: Atom.to_string(actor_id)
   defp normalize_actor_id(actor_id), do: to_string(actor_id)
+
+  defp format_tokens(nil), do: "unknown"
 
   defp format_tokens(value) when value >= 1_000_000 do
     "#{Float.round(value / 1_000_000, 1)}m"

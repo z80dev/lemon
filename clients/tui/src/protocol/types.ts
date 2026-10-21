@@ -779,17 +779,13 @@ export interface ContextAutoCompaction {
  * branch; the input/output/cache counts sum assistant messages on the active branch.
  */
 export interface ContextSessionUsage {
-	tokens: number;
-	/**
-	 * Catalog-estimated cost in USD, not a bill; undefined when the receipt
-	 * carried none. The daemon's ledger reports a run with no cost as zero, so
-	 * even a present `0` cannot prove the spend is known.
-	 */
+	tokens: number | undefined;
+	/** Catalog-estimated cost, not a bill; unknown when not reported. */
 	costUsd: number | undefined;
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
+	input: number | undefined;
+	output: number | undefined;
+	cacheRead: number | undefined;
+	cacheWrite: number | undefined;
 	assistantMessages: number;
 }
 

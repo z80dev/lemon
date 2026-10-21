@@ -1337,7 +1337,7 @@ defmodule LemonAgent.ProxyErrorTest do
       assert_receive :sse_server_done, @receive_timeout
     end
 
-    test "handles partial usage data with defaults" do
+    test "partial usage retains unknown counters rather than default zeros" do
       usage = %{
         "input" => 100,
         "output" => 50
@@ -1363,9 +1363,10 @@ defmodule LemonAgent.ProxyErrorTest do
       {:ok, %AssistantMessage{} = message} = EventStream.result(stream, @receive_timeout)
       assert message.usage.input == 100
       assert message.usage.output == 50
-      assert message.usage.cache_read == 0
-      assert message.usage.cache_write == 0
-      assert message.usage.total_tokens == 0
+      assert message.usage.cache_read == nil
+      assert message.usage.cache_write == nil
+      assert message.usage.total_tokens == nil
+      assert message.usage.cost == nil
 
       assert_receive :sse_server_done, @receive_timeout
     end
@@ -1389,8 +1390,10 @@ defmodule LemonAgent.ProxyErrorTest do
         )
 
       {:ok, %AssistantMessage{} = message} = EventStream.result(stream, @receive_timeout)
-      assert message.usage.input == 0
-      assert message.usage.output == 0
+      assert message.usage.input == nil
+      assert message.usage.output == nil
+      assert message.usage.total_tokens == nil
+      assert message.usage.cost == nil
 
       assert_receive :sse_server_done, @receive_timeout
     end

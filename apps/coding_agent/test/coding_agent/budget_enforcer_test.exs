@@ -53,6 +53,106 @@ defmodule CodingAgent.BudgetEnforcerTest do
 
       assert :ok = BudgetEnforcer.on_api_response(run_id, response)
     end
+
+    test "nullable Usage blocks capped spend without being replaced by numeric estimates" do
+      run_id = RunGraph.new_run(%{type: :test})
+      BudgetTracker.store_budget(run_id, BudgetTracker.create_budget(max_cost: 1.0))
+
+      usage = %LemonAi.Types.Usage{
+        input: nil,
+        output: nil,
+        total_tokens: nil,
+        cost: nil
+      }
+
+      assert :ok = BudgetEnforcer.on_api_response(run_id, %{usage: usage})
+      assert BudgetTracker.get_usage(run_id) == %{tokens: nil, cost: nil}
+
+      assert {:error, :budget_exceeded, %{type: :cost_limit_would_exceed, used: nil}} =
+               BudgetEnforcer.check_api_call(run_id, estimated_cost: 0.75)
+
+      assert :ok =
+               BudgetEnforcer.on_api_response(run_id, %{
+                 usage: %{total_tokens: nil, cost: %{total: 0.5}}
+               })
+
+      assert {:error, :budget_exceeded, %{type: :cost_limit_would_exceed}} =
+               BudgetEnforcer.check_api_call(run_id, estimated_cost: 0.75)
+
+      assert BudgetTracker.get_usage(run_id) == %{tokens: nil, cost: nil}
+      assert %{cost: %{used: nil, percentage: nil}} = BudgetEnforcer.budget_summary(run_id)
+
+      assert {:error, message} =
+               BudgetEnforcer.handle_budget_exceeded(run_id, %{
+                 type: :cost_limit_exceeded,
+                 used: nil,
+                 limit: 1.0
+               })
+
+      assert message =~ "cannot be verified"
+      assert is_nil(usage.input)
+      assert is_nil(usage.cost)
+    end
+
+    test "completion records string-key nested costs" do
+      run_id = RunGraph.new_run(%{type: :test})
+      BudgetTracker.store_budget(run_id, BudgetTracker.create_budget([]))
+
+      assert :ok =
+               BudgetEnforcer.on_run_complete(run_id, %{
+                 "usage" => %{"total_tokens" => 5, "cost" => %{"total" => 0.25}}
+               })
+
+      assert BudgetTracker.get_usage(run_id) == %{tokens: 5, cost: 0.25}
+    end
+
+    test "partial ZAI totals retain known tokens while dollar caps block later calls and spawns" do
+      run_id = RunGraph.new_run(%{type: :test})
+      BudgetTracker.store_budget(run_id, BudgetTracker.create_budget(max_cost: 1.0))
+
+      usage = %LemonAi.Types.Usage{
+        input: nil,
+        output: 30,
+        cache_read: 20,
+        cache_write: nil,
+        total_tokens: 130,
+        cost: %LemonAi.Types.Cost{total: nil}
+      }
+
+      for count <- 1..2 do
+        assert :ok = BudgetEnforcer.on_api_response(run_id, %{usage: usage})
+        assert BudgetTracker.get_usage(run_id) == %{tokens: 130 * count, cost: nil}
+
+        assert {:error, :budget_exceeded, %{used: nil}} =
+                 BudgetEnforcer.check_api_call(run_id, estimated_cost: 0.0)
+
+        assert {:error, :budget_exceeded, %{used: nil}} =
+                 BudgetEnforcer.check_subagent_spawn(run_id)
+      end
+    end
+
+    test "unknown estimates fail closed only for their configured metric" do
+      run_id = RunGraph.new_run(%{type: :test})
+      BudgetTracker.store_budget(run_id, BudgetTracker.create_budget(max_tokens: 10_000))
+
+      assert {:error, :budget_exceeded, %{type: :token_limit_would_exceed}} =
+               BudgetEnforcer.check_api_call(run_id, estimated_tokens: nil)
+
+      assert :ok = BudgetEnforcer.check_api_call(run_id, estimated_cost: nil)
+
+      BudgetTracker.store_budget(run_id, BudgetTracker.create_budget(max_cost: 1.0))
+
+      assert {:error, :budget_exceeded, %{type: :cost_limit_would_exceed}} =
+               BudgetEnforcer.check_api_call(run_id, estimated_cost: nil)
+
+      assert :ok = BudgetEnforcer.check_api_call(run_id, estimated_tokens: nil)
+
+      BudgetTracker.store_budget(run_id, BudgetTracker.create_budget([]))
+      assert :ok = BudgetEnforcer.on_api_response(run_id, %{usage: nil})
+
+      assert :ok =
+               BudgetEnforcer.check_api_call(run_id, estimated_tokens: nil, estimated_cost: nil)
+    end
   end
 
   # ============================================================================

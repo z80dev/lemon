@@ -69,6 +69,10 @@ defmodule CodingAgent.BudgetEnforcer do
 
   - `:estimated_tokens` - Estimated tokens for this call (default: 4000)
   - `:estimated_cost` - Caller-supplied estimated cost (default: 0.0)
+
+  Caller-supplied estimates remain separate from nullable provider telemetry.
+  A configured cap fails closed if accumulated usage or its requested estimate
+  is unknown; omitting a cap leaves the corresponding metric unrestricted.
   """
   @spec check_api_call(String.t(), keyword()) :: enforcement_result()
   def check_api_call(run_id, opts \\ []) do
@@ -81,7 +85,7 @@ defmodule CodingAgent.BudgetEnforcer do
 
       budget ->
         cond do
-          budget.max_tokens && budget.used_tokens + estimated_tokens > budget.max_tokens ->
+          exceeds?(budget.used_tokens, estimated_tokens, budget.max_tokens) ->
             {:error, :budget_exceeded,
              %{
                type: :token_limit_would_exceed,
@@ -90,7 +94,7 @@ defmodule CodingAgent.BudgetEnforcer do
                estimated: estimated_tokens
              }}
 
-          budget.max_cost && budget.used_cost + estimated_cost > budget.max_cost ->
+          exceeds?(budget.used_cost, estimated_cost, budget.max_cost) ->
             {:error, :budget_exceeded,
              %{
                type: :cost_limit_would_exceed,
@@ -160,8 +164,8 @@ defmodule CodingAgent.BudgetEnforcer do
   @spec on_run_complete(String.t(), map()) :: :ok
   def on_run_complete(run_id, result) do
     # Record final usage from result
-    if usage = Map.get(result, :usage) do
-      BudgetTracker.record_response_usage(run_id, %{usage: usage})
+    if Map.get(result, :usage) || Map.get(result, "usage") do
+      BudgetTracker.record_response_usage(run_id, result)
     end
 
     # Notify parent if this is a child run
@@ -272,14 +276,15 @@ defmodule CodingAgent.BudgetEnforcer do
 
       budget ->
         token_pct =
-          if budget.max_tokens do
+          if is_number(budget.used_tokens) and is_number(budget.max_tokens) and
+               budget.max_tokens > 0 do
             Float.round(budget.used_tokens / budget.max_tokens * 100, 1)
           else
             nil
           end
 
         cost_pct =
-          if budget.max_cost do
+          if is_number(budget.used_cost) and is_number(budget.max_cost) and budget.max_cost > 0 do
             Float.round(budget.used_cost / budget.max_cost * 100, 1)
           else
             nil
@@ -308,6 +313,13 @@ defmodule CodingAgent.BudgetEnforcer do
   # ============================================================================
   # Private Functions
   # ============================================================================
+
+  defp exceeds?(_used, _estimated, nil), do: false
+
+  defp exceeds?(used, estimated, limit) when is_number(used) and is_number(estimated),
+    do: used + estimated > limit
+
+  defp exceeds?(_used, _estimated, _limit), do: true
 
   defp create_budget_for_run(run_id, opts) do
     # Application test overrides precede canonical configured tree defaults.
@@ -353,6 +365,12 @@ defmodule CodingAgent.BudgetEnforcer do
       details.message
     else
       case Map.get(details, :type) do
+        :token_limit_exceeded when is_nil(details.used) ->
+          "Token budget cannot be verified: accumulated token usage is unknown"
+
+        :cost_limit_exceeded when is_nil(details.used) ->
+          "Cost budget cannot be verified: accumulated dollar spend is unknown"
+
         :token_limit_exceeded ->
           "Token budget exceeded: #{details.used}/#{details.limit} tokens used"
 

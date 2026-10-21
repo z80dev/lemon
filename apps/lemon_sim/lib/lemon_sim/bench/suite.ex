@@ -509,7 +509,7 @@ defmodule LemonSim.Bench.Suite do
 
     base =
       Map.new(@usage_keys, fn key ->
-        {key, Enum.reduce(totals, 0, fn usage, acc -> acc + (get_key(usage, key) || 0) end)}
+        {key, Enum.reduce(totals, 0, fn usage, acc -> add_known(acc, get_key(usage, key)) end)}
       end)
 
     cost =
@@ -517,7 +517,7 @@ defmodule LemonSim.Bench.Suite do
         nil
       else
         totals
-        |> Enum.reduce(0.0, fn usage, acc -> acc + (get_key(usage, "cost_usd") || 0.0) end)
+        |> Enum.reduce(0.0, fn usage, acc -> acc + get_key(usage, "cost_usd") end)
         |> Float.round(6)
       end
 
@@ -618,9 +618,13 @@ defmodule LemonSim.Bench.Suite do
   defp total_tokens(usage) do
     Enum.reduce(~w(input_tokens output_tokens cache_read_tokens cache_write_tokens), 0, fn key,
                                                                                            acc ->
-      acc + (get_key(usage, key) || 0)
+      add_known(acc, get_key(usage, key))
     end)
   end
+
+  defp add_known(nil, _value), do: nil
+  defp add_known(_value, nil), do: nil
+  defp add_known(left, right), do: left + right
 
   defp format_values(values) do
     values
@@ -669,6 +673,7 @@ defmodule LemonSim.Bench.Suite do
 
   defp format_number(value), do: to_string(value)
 
+  defp format_integer(nil), do: "unknown"
   defp format_integer(value) when is_integer(value), do: Integer.to_string(value)
   defp format_integer(value), do: to_string(value)
 

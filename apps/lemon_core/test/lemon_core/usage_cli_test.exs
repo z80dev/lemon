@@ -100,4 +100,73 @@ defmodule LemonCore.Usage.CLITest do
     assert json["totalRequests"] == 1
     assert [%{"model" => "model-1"}] = json["models"]
   end
+
+  test "report preserves unknown counters and cost across every projection" do
+    record = UsageStore.get_record("2001-02-01")
+    unknown = %{cost: nil, requests: 1, input: nil, output: 4}
+
+    UsageStore.put_record("2001-02-01", %{
+      record
+      | total_cost: nil,
+        breakdown: %{"test" => nil},
+        tokens: %{"test" => %{input: nil, output: 4}},
+        models: %{"test:model-1" => Map.merge(unknown, %{provider: "test", model: "model-1"})},
+        sessions: %{"session-1" => unknown}
+    })
+
+    assert {:ok, report} =
+             LemonCore.UsageReport.query(%{
+               "startDate" => "2001-02-01",
+               "endDate" => "2001-02-02"
+             })
+
+    assert is_nil(report["totalCost"])
+    assert is_nil(report["totalTokens"][:input])
+    assert report["totalTokens"][:output] == 6
+    assert [%{"cost" => nil, "inputTokens" => nil}] = report["providers"]
+    assert Enum.any?(report["models"], &is_nil(&1["inputTokens"]))
+    assert Enum.any?(report["sessions"], &is_nil(&1["cost"]))
+    assert Enum.any?(report["dailyUsage"], &is_nil(&1["inputTokens"]))
+
+    for by <- ["day", "provider", "model", "session"] do
+      output =
+        capture_io(fn ->
+          CLI.run(["--since", "2001-02-01", "--until", "2001-02-01", "--by", by])
+        end)
+
+      assert output =~ "Known cost subtotal: unknown USD"
+      assert output =~ "input_tokens=unknown output_tokens=4"
+      refute output =~ "cost=0.0000"
+    end
+  end
+
+  test "current diagnostics text and JSON preserve explicit unknown values" do
+    previous = UsageStore.get_summary(:current)
+
+    on_exit(fn ->
+      if previous,
+        do: UsageStore.put_summary(:current, previous),
+        else: LemonCore.Store.delete(:usage_data, :current)
+    end)
+
+    UsageStore.put_summary(:current, %{
+      total_cost: nil,
+      total_requests: 1,
+      total_tokens: %{input: nil, output: 0},
+      breakdown: %{"test" => nil},
+      requests: %{"test" => 1},
+      tokens: %{"test" => %{input: nil, output: 0}}
+    })
+
+    output = capture_io(fn -> CLI.run([]) end)
+    assert output =~ "Cost: unknown"
+    assert output =~ "Tokens input: unknown"
+    assert output =~ "Tokens output: 0"
+    assert output =~ "Tokens total: unknown"
+    assert output =~ "cost=unknown input_tokens=unknown output_tokens=0"
+
+    json = capture_io(fn -> CLI.run(["--json"]) end) |> Jason.decode!()
+    assert is_nil(json["total_cost"])
+    assert json["total_tokens"] == %{"input" => nil, "output" => 0, "total" => nil}
+  end
 end

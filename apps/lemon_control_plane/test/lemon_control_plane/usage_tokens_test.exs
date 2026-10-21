@@ -71,7 +71,7 @@ defmodule LemonControlPlane.UsageTokensTest do
                "inputTokens" => 90,
                "outputTokens" => 10,
                "totalTokens" => 100,
-               "contextTokens" => 90,
+               "contextTokens" => nil,
                "costUsd" => 0.0042
              } = UsageTokens.normalize(usage)
     end
@@ -91,19 +91,79 @@ defmodule LemonControlPlane.UsageTokensTest do
       assert normalized["contextTokens"] == 5_000
     end
 
-    test "falls back to cache reads alone when no input count was reported" do
-      assert %{"contextTokens" => 2_048} =
+    test "cache reads alone do not attest the missing input or output counters" do
+      assert %{"contextTokens" => nil, "totalTokens" => nil, "cacheReadTokens" => 2_048} =
                UsageTokens.normalize(%{cache_read_input_tokens: 2_048})
     end
 
     test "accepts string keys and numeric strings" do
-      assert %{"inputTokens" => 7, "outputTokens" => 3, "totalTokens" => 10} =
+      assert %{"inputTokens" => 7, "outputTokens" => 3, "totalTokens" => nil} =
                UsageTokens.normalize(%{"input_tokens" => "7", "output_tokens" => "3"})
     end
 
     test "keeps a reported total over the computed one" do
       assert %{"totalTokens" => 999} =
                UsageTokens.normalize(%{input: 1, output: 1, total_tokens: 999})
+    end
+
+    test "missing components remain null even with turns and nominal zero cost" do
+      normalized =
+        UsageTokens.normalize(%{
+          input: nil,
+          output: 30,
+          cache_read: 20,
+          cache_write: nil,
+          total_tokens: 130,
+          cost: %{total: nil},
+          turns: 4
+        })
+
+      assert normalized["inputTokens"] == nil
+      assert normalized["cacheWriteTokens"] == nil
+      assert normalized["outputTokens"] == 30
+      assert normalized["totalTokens"] == 130
+      assert normalized["costUsd"] == nil
+      assert normalized["turns"] == 4
+    end
+
+    test "zero cache counts permit complete sums while missing counts stay unknown" do
+      assert %{"totalTokens" => 3, "contextTokens" => 1} =
+               UsageTokens.normalize(%{input: 1, output: 2, cache_read: 0, cache_write: 0})
+
+      assert %{"totalTokens" => nil, "contextTokens" => nil} =
+               UsageTokens.normalize(%{input: 1, output: 2, cache_read: nil, cache_write: 0})
+    end
+
+    test "positive reported cost remains known when token counters are unavailable" do
+      for usage <- [%{cost: 0.25}, %{"cost" => %{"total" => 0.25}}] do
+        normalized = UsageTokens.normalize(usage)
+
+        assert normalized["costUsd"] == 0.25
+        assert normalized["inputTokens"] == nil
+        assert normalized["outputTokens"] == nil
+        assert normalized["totalTokens"] == nil
+        assert normalized["contextTokens"] == nil
+      end
+    end
+
+    test "partial tokens do not erase a positive cost or attest a nominal zero" do
+      usage = %{input: 12, output: 3, cache_read: 20, cache_write: nil, cost: 0.25}
+      normalized = UsageTokens.normalize(usage)
+
+      assert normalized["inputTokens"] == 12
+      assert normalized["outputTokens"] == 3
+      assert normalized["cacheWriteTokens"] == nil
+      assert normalized["contextTokens"] == nil
+      assert normalized["totalTokens"] == nil
+      assert normalized["costUsd"] == 0.25
+
+      assert UsageTokens.normalize(Map.put(usage, :price_known, false))["costUsd"] == nil
+      assert UsageTokens.normalize(Map.put(usage, :cost, 0.0))["costUsd"] == nil
+    end
+
+    test "normalizing a wire projection retains partial counters" do
+      assert %{"totalTokens" => nil, "inputTokens" => nil, "outputTokens" => 2} =
+               UsageTokens.normalize(%{"inputTokens" => nil, "outputTokens" => 2})
     end
   end
 end

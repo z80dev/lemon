@@ -110,6 +110,101 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
     assert_in_delta result.usage.cost.cache_write, 0.00001, 0.0000001
   end
 
+  test "unknown usage counters survive later updates without becoming zero" do
+    for {wire_key, field, cost_field} <- [
+          {"input_tokens", :input, :input},
+          {"output_tokens", :output, :output},
+          {"cache_read_input_tokens", :cache_read, :cache_read},
+          {"cache_creation_input_tokens", :cache_write, :cache_write}
+        ] do
+      usage =
+        %{
+          "input_tokens" => 100,
+          "output_tokens" => 50,
+          "cache_read_input_tokens" => 10,
+          "cache_creation_input_tokens" => 5
+        }
+        |> Map.put(wire_key, nil)
+
+      body =
+        sse_event("message_start", %{"message" => %{"usage" => usage}}) <>
+          sse_event("message_delta", %{"delta" => %{"stop_reason" => "end_turn"}, "usage" => %{}}) <>
+          sse_event("message_stop", %{})
+
+      Req.Test.stub(__MODULE__, &Plug.Conn.send_resp(&1, 200, body))
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+      assert {:ok, result} = EventStream.result(stream, 1000)
+
+      assert is_nil(Map.fetch!(result.usage, field))
+      assert is_nil(result.usage.total_tokens)
+      assert is_nil(Map.fetch!(result.usage.cost, cost_field))
+      assert is_nil(result.usage.cost.total)
+    end
+  end
+
+  test "numeric usage updates resolve unknown counters, including measured zero" do
+    body =
+      sse_event("message_start", %{
+        "message" => %{
+          "usage" => %{
+            "input_tokens" => nil,
+            "output_tokens" => 50,
+            "cache_read_input_tokens" => 10,
+            "cache_creation_input_tokens" => 5
+          }
+        }
+      }) <>
+        sse_event("message_delta", %{
+          "delta" => %{"stop_reason" => "end_turn"},
+          "usage" => %{"input_tokens" => 0}
+        }) <>
+        sse_event("message_stop", %{})
+
+    Req.Test.stub(__MODULE__, &Plug.Conn.send_resp(&1, 200, body))
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+    {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+    assert {:ok, result} = EventStream.result(stream, 1000)
+
+    assert result.usage.input == 0
+    assert result.usage.total_tokens == 65
+    assert result.usage.cost.input == 0.0
+    assert_in_delta result.usage.cost.total, 0.00102, 0.0000001
+  end
+
+  test "unknown cache duration counts do not produce known cache costs" do
+    for total <- [nil, 5] do
+      usage = %{
+        "input_tokens" => 100,
+        "output_tokens" => 50,
+        "cache_read_input_tokens" => 10,
+        "cache_creation" => %{
+          "ephemeral_5m_input_tokens" => 5,
+          "ephemeral_1h_input_tokens" => nil
+        }
+      }
+
+      usage =
+        if is_nil(total), do: usage, else: Map.put(usage, "cache_creation_input_tokens", total)
+
+      body =
+        sse_event("message_start", %{"message" => %{"usage" => usage}}) <>
+          sse_event("message_delta", %{"delta" => %{"stop_reason" => "end_turn"}, "usage" => %{}}) <>
+          sse_event("message_stop", %{})
+
+      Req.Test.stub(__MODULE__, &Plug.Conn.send_resp(&1, 200, body))
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+      assert {:ok, result} = EventStream.result(stream, 1000)
+
+      assert result.usage.cache_write == total
+      assert is_nil(result.usage.cache_write_long)
+      assert result.usage.total_tokens == if(is_nil(total), do: nil, else: 165)
+      assert is_nil(result.usage.cost.cache_write)
+      assert is_nil(result.usage.cost.total)
+    end
+  end
+
   test "request body snapshot includes system, tools, and thinking config" do
     test_pid = self()
 

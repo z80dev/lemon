@@ -40,6 +40,12 @@ defmodule LemonAgent.Loop do
       ... (more turns if tool calls or steering)
       {:agent_end, new_messages}
 
+  Provider accounting uses `{:provider_usage, message}`, emitted exactly once at
+  each provider attempt's terminal observation, even when retries or empty-response
+  continuations omit that attempt from the transcript. Its counters and costs may
+  be nil. Message lifecycle events are not usage observations, and budget events
+  are enforcement ledgers that may contain estimates, not provider telemetry.
+
   ## Abort Handling
 
   The `signal` parameter is a reference that can be used for abort handling.
@@ -806,9 +812,35 @@ defmodule LemonAgent.Loop do
   end
 
   @doc false
-  def record_budget_usage(%AgentLoopConfig{budget: nil}, _message, _stream), do: :ok
-
   def record_budget_usage(config, message, stream) do
+    case message do
+      %LemonAi.Types.AssistantMessage{error_details: %{provider_invoked: false}} ->
+        :ok
+
+      %LemonAi.Types.AssistantMessage{} ->
+        EventStream.push(stream, {:provider_usage, message})
+        record_budget_ledger(config, message, stream)
+
+      {:budget_exceeded, _details} ->
+        :ok
+
+      _ ->
+        model = config.model || %{}
+
+        observation = %LemonAi.Types.AssistantMessage{
+          model: Map.get(model, :id),
+          provider: Map.get(model, :provider),
+          usage: nil
+        }
+
+        EventStream.push(stream, {:provider_usage, observation})
+        record_budget_ledger(config, observation, stream)
+    end
+  end
+
+  defp record_budget_ledger(%AgentLoopConfig{budget: nil}, _message, _stream), do: :ok
+
+  defp record_budget_ledger(config, message, stream) do
     budget = Budget.record_message(Process.get(@usage_budget_pd_key, config.budget), message)
     Process.put(@usage_budget_pd_key, budget)
     scope = Map.get(budget.limits, :scope)

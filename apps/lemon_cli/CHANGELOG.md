@@ -77,6 +77,9 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Fixed
 
+- Preserve normalized completed-event usage in print JSON instead of overwriting
+  it with `agent.wait`'s internal usage detail. Offline native replay verifies
+  exact counters for both disclosure variants and null counters when absent.
 - Share canonical provider ids and runtime aliases with
   `LemonAgent.ModelRuntime.ProviderNames`, including `gemini_cli`. Preserve
   onboarding-only inputs such as `zhipu`, `kimi-k2`, `chatgpt` and `gemini-api`

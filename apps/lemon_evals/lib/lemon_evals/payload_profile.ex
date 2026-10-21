@@ -1,6 +1,6 @@
 defmodule LemonEvals.PayloadProfile do
   @moduledoc """
-  Opt-in, in-memory Codex request/usage profiler for a dedicated live-eval daemon.
+  Opt-in, in-memory provider request/usage profiler for a dedicated eval daemon.
 
   Install after boot with `install!/2`. The offline Python worker requires
   tiktoken and writes only counts, tool names, and hashes to an owner-only JSONL

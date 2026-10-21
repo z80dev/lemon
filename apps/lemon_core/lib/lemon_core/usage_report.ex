@@ -13,6 +13,9 @@ defmodule LemonCore.UsageReport do
   `sessionsOmitted` counts the rest) and `dailyUsage` (per-day cost, requests
   and tokens, oldest first).
 
+  Explicit unknown token counters or costs remain `nil` in every projection
+  and make sums containing them unknown. Empty periods still report zero.
+
   ## Usage Data Format
 
   Usage records are stored in the `:usage_records` store with keys like
@@ -115,10 +118,10 @@ defmodule LemonCore.UsageReport do
   end
 
   defp total_token_count(tokens) when is_map(tokens) do
-    (get_field(tokens, :input) || 0) + (get_field(tokens, :output) || 0)
+    add_known(get_field(tokens, :input), get_field(tokens, :output))
   end
 
-  defp total_token_count(_), do: 0
+  defp total_token_count(_), do: nil
 
   defp parse_date_range(nil, nil) do
     # Default to last 30 days
@@ -191,19 +194,19 @@ defmodule LemonCore.UsageReport do
       }
 
       Enum.reduce(records, initial, fn record, acc ->
-        record_cost = get_field(record, :total_cost) || 0.0
+        record_cost = number(get_field(record, :total_cost))
         record_breakdown = get_field(record, :breakdown) || %{}
         record_requests = get_field(record, :requests) || %{}
         record_tokens = get_field(record, :tokens) || %{}
         record_date = get_field(record, :date)
 
         # Sum up totals
-        total = acc.total + record_cost
+        total = add_known(acc.total, record_cost)
 
         # Merge breakdowns
         breakdown =
           Enum.reduce(record_breakdown, acc.breakdown, fn {provider, cost}, b ->
-            Map.update(b, provider, cost, &(&1 + cost))
+            Map.update(b, provider, cost, &add_known(&1, cost))
           end)
 
         # Sum requests
@@ -213,8 +216,8 @@ defmodule LemonCore.UsageReport do
         total_tokens =
           Enum.reduce(record_tokens, acc.total_tokens, fn {_provider, tokens}, t ->
             %{
-              input: t.input + (get_field(tokens, :input) || 0),
-              output: t.output + (get_field(tokens, :output) || 0)
+              input: add_known(t.input, integer(get_field(tokens, :input))),
+              output: add_known(t.output, integer(get_field(tokens, :output)))
             }
           end)
 
@@ -270,7 +273,7 @@ defmodule LemonCore.UsageReport do
 
           add_usage(acc, to_string(provider), %{
             cost: number(Map.get(breakdown, provider)),
-            requests: integer(Map.get(requests, provider)),
+            requests: integer(Map.get(requests, provider)) || 0,
             input: integer(get_field(provider_tokens, :input)),
             output: integer(get_field(provider_tokens, :output))
           })
@@ -312,12 +315,12 @@ defmodule LemonCore.UsageReport do
               Map.put(
                 merged,
                 :last_at_ms,
-                max(merged[:last_at_ms] || 0, integer(get_field(usage, :last_at_ms)))
+                max(merged[:last_at_ms] || 0, integer(get_field(usage, :last_at_ms)) || 0)
               )
             end)
           end)
 
-        {acc, omitted + integer(get_field(record, :sessions_omitted))}
+        {acc, omitted + (integer(get_field(record, :sessions_omitted)) || 0)}
       end)
 
     all_sessions =
@@ -344,12 +347,12 @@ defmodule LemonCore.UsageReport do
                   tokens
                   |> Map.values()
                   |> Enum.map(&integer(get_field(&1, :input)))
-                  |> Enum.sum(),
+                  |> sum_known(),
                 "outputTokens" =>
                   tokens
                   |> Map.values()
                   |> Enum.map(&integer(get_field(&1, :output)))
-                  |> Enum.sum()
+                  |> sum_known()
               }
             ]
 
@@ -372,10 +375,10 @@ defmodule LemonCore.UsageReport do
     Map.update(acc, key, usage, fn current ->
       %{
         current
-        | cost: current.cost + usage.cost,
+        | cost: add_known(current.cost, usage.cost),
           requests: current.requests + usage.requests,
-          input: current.input + usage.input,
-          output: current.output + usage.output
+          input: add_known(current.input, usage.input),
+          output: add_known(current.output, usage.output)
       }
     end)
   end
@@ -383,13 +386,13 @@ defmodule LemonCore.UsageReport do
   defp usage_counts(usage) when is_map(usage) do
     %{
       cost: number(get_field(usage, :cost)),
-      requests: integer(get_field(usage, :requests)),
+      requests: integer(get_field(usage, :requests)) || 0,
       input: integer(get_field(usage, :input)),
       output: integer(get_field(usage, :output))
     }
   end
 
-  defp usage_counts(_usage), do: %{cost: 0.0, requests: 0, input: 0, output: 0}
+  defp usage_counts(_usage), do: %{cost: nil, requests: 0, input: nil, output: nil}
 
   defp usage_json(usage) do
     %{
@@ -402,16 +405,25 @@ defmodule LemonCore.UsageReport do
 
   defp top(rows, limit) do
     rows =
-      Enum.sort_by(rows, &{&1["cost"], &1["inputTokens"] + &1["outputTokens"]}, :desc)
+      Enum.sort_by(
+        rows,
+        &{&1["cost"] || -1, add_known(&1["inputTokens"], &1["outputTokens"]) || -1},
+        :desc
+      )
 
     if limit == :infinity, do: rows, else: Enum.take(rows, limit)
   end
 
   defp number(value) when is_number(value), do: value * 1.0
-  defp number(_value), do: 0.0
+  defp number(_value), do: nil
 
   defp integer(value) when is_integer(value) and value >= 0, do: value
-  defp integer(_value), do: 0
+  defp integer(_value), do: nil
+
+  defp add_known(left, right) when is_number(left) and is_number(right), do: left + right
+  defp add_known(_left, _right), do: nil
+
+  defp sum_known(values), do: Enum.reduce(values, 0, &add_known/2)
 
   defp sum_map_values(map) do
     map

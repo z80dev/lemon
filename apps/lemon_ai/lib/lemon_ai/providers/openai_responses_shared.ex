@@ -1327,6 +1327,8 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
 
   @doc """
   Apply service tier pricing to usage.
+
+  Unknown costs remain unknown, including an absent cost breakdown or total.
   """
   @spec apply_service_tier_pricing(Usage.t(), String.t() | nil) :: Usage.t()
   @spec apply_service_tier_pricing(Usage.t(), String.t() | nil, map()) :: Usage.t()
@@ -1337,7 +1339,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
       ) do
     multiplier = service_tier_cost_multiplier(service_tier, tier_cost)
 
-    if multiplier == 1.0 do
+    if multiplier == 1.0 or is_nil(usage.cost) do
       usage
     else
       cost = usage.cost
@@ -1345,13 +1347,16 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
       %{
         usage
         | cost: %Cost{
-            input: cost.input * multiplier,
-            output: cost.output * multiplier,
-            cache_read: cost.cache_read * multiplier,
-            cache_write: cost.cache_write * multiplier,
-            total: (cost.input + cost.output + cost.cache_read + cost.cache_write) * multiplier
+            input: scale_cost(cost.input, multiplier),
+            output: scale_cost(cost.output, multiplier),
+            cache_read: scale_cost(cost.cache_read, multiplier),
+            cache_write: scale_cost(cost.cache_write, multiplier),
+            total: scale_cost(cost.total, multiplier)
           }
       }
     end
   end
+
+  defp scale_cost(nil, _multiplier), do: nil
+  defp scale_cost(cost, multiplier), do: cost * multiplier
 end

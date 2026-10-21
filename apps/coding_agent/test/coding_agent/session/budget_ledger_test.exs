@@ -145,8 +145,19 @@ defmodule CodingAgent.Session.BudgetLedgerTest do
     refute_receive :provider_called
   end
 
-  test "unpriced dollar-capped model warns visibly but still runs", %{tmp_dir: dir} do
-    session = start_session(dir, %{max_run_cost_usd: 1.0})
+  test "unpriced dollar-capped model warns visibly and blocks requests", %{tmp_dir: dir} do
+    model = %Model{
+      id: "budget-test",
+      name: "Budget test",
+      api: :mock,
+      provider: :mock_provider,
+      base_url: "https://example.invalid",
+      cost: nil,
+      context_window: 128_000,
+      max_tokens: 1024
+    }
+
+    session = start_session(dir, %{max_run_cost_usd: 1.0}, model: model)
     events = prompt(session)
 
     assert Enum.any?(events, fn
@@ -157,7 +168,8 @@ defmodule CodingAgent.Session.BudgetLedgerTest do
                false
            end)
 
-    assert_receive :provider_called
+    assert budget_stop?(events, :run, 0.0)
+    refute_receive :provider_called
   end
 
   test "zero configured cap blocks requests and explicit session limits override settings", %{
@@ -283,6 +295,88 @@ defmodule CodingAgent.Session.BudgetLedgerTest do
     assert state.budget_usage.tokens == 100_000
     session = start_session(dir, %{max_session_tokens: 100_000}, session_file: manager.file_path)
     assert budget_stop?(prompt(session), :session, 100_000)
+    refute_receive :provider_called
+  end
+
+  test "unknown own and descendant snapshots remain unknown after durable restoration", %{
+    tmp_dir: dir
+  } do
+    manager =
+      SessionManager.new(dir) |> SessionManager.persist(Path.join(dir, "unknown.jsonl"))
+
+    initial = %{tokens: 130, cost_usd: 0.1}
+    state = %{session_manager: manager, budget_usage: initial}
+
+    state = BudgetLedger.update(state, %{session_usage: %{tokens: nil, cost_usd: nil}})
+    state = BudgetLedger.update(state, %{session_usage: %{tokens: 260, cost_usd: 0.2}})
+    assert state.budget_usage == %{tokens: nil, cost_usd: nil}
+
+    manager =
+      BudgetLedger.append_children(state.session_manager, %{tokens: 130, cost_usd: nil})
+
+    assert {:ok, restored} = SessionManager.load_from_file(manager.file_path)
+    assert BudgetLedger.restore(restored) == %{tokens: nil, cost_usd: nil}
+    assert BudgetLedger.restore_children(restored) == %{tokens: 130, cost_usd: nil}
+
+    for limits <- [%{max_session_tokens: 10_000}, %{max_session_cost_usd: 1}] do
+      budget = LemonAgent.Budget.new(limits, BudgetLedger.restore(restored))
+      assert %{used: nil} = LemonAgent.Budget.check(budget)
+    end
+  end
+
+  test "faithful ZAI partial spend blocks repeated prompts and resumed session requests", %{
+    tmp_dir: dir
+  } do
+    parent = self()
+
+    partial = %{
+      message()
+      | provider: :zai,
+        model: "glm-5.3",
+        usage: %Usage{
+          input: nil,
+          output: 30,
+          cache_read: 20,
+          cache_write: nil,
+          total_tokens: 130,
+          cost: %Cost{
+            input: nil,
+            output: 0.00006,
+            cache_read: 0.000002,
+            cache_write: nil,
+            total: nil
+          }
+        }
+    }
+
+    stream_fn = fn _, _, _ ->
+      send(parent, :partial_provider_called)
+      {:ok, stream} = LemonAi.EventStream.start_link()
+      LemonAi.EventStream.push(stream, {:start, partial})
+      LemonAi.EventStream.push(stream, {:done, :stop, partial})
+      LemonAi.EventStream.complete(stream, partial)
+      {:ok, stream}
+    end
+
+    limits = %{max_session_cost_usd: 1.0}
+    session = start_session(dir, limits, stream_fn: stream_fn)
+    prompt(session)
+    assert_receive :partial_provider_called
+    assert Session.get_state(session).budget_usage == %{tokens: 130, cost_usd: nil}
+
+    for _ <- 1..2 do
+      assert budget_stop?(prompt(session), :session, nil)
+      refute_receive :partial_provider_called
+    end
+
+    state = Session.get_state(session)
+    assert {:ok, restored} = SessionManager.load_from_file(state.session_file)
+    assert BudgetLedger.restore(restored) == %{tokens: 130, cost_usd: nil}
+    GenServer.stop(session)
+
+    resumed = start_session(dir, limits, session_file: state.session_file, stream_fn: stream_fn)
+    assert budget_stop?(prompt(resumed), :session, nil)
+    refute_receive :partial_provider_called
     refute_receive :provider_called
   end
 end

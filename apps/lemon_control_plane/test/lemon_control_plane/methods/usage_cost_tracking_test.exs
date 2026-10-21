@@ -88,7 +88,9 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
           provider: "claude",
           cost: 0.05,
           input_tokens: 500,
-          output_tokens: 200
+          output_tokens: 200,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0
         })
 
       :ok =
@@ -96,7 +98,9 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
           provider: "openai",
           cost: 0.03,
           input_tokens: 300,
-          output_tokens: 100
+          output_tokens: 100,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0
         })
 
       # Get the cost report
@@ -114,7 +118,9 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
           "provider" => "claude",
           "cost" => 0.10,
           "input_tokens" => 1000,
-          "output_tokens" => 500
+          "output_tokens" => 500,
+          "cache_read_input_tokens" => 0,
+          "cache_creation_input_tokens" => 0
         })
 
       # Verify it was recorded
@@ -137,7 +143,9 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
             provider: "claude",
             cost: 0.01,
             input_tokens: 100,
-            output_tokens: 50
+            output_tokens: 50,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0
           })
       end
 
@@ -154,7 +162,9 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
           provider: "claude",
           cost: 0.05,
           input_tokens: 500,
-          output_tokens: 200
+          output_tokens: 200,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0
         })
 
       # Get today's date key

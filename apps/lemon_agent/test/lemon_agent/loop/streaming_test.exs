@@ -499,9 +499,12 @@ defmodule LemonAgent.Loop.StreamingTest do
     refute_received :request_attempt
     EventStream.complete(stream, [])
 
-    assert {:provider_retry_end, %{attempt: 1, success: false, canceled: true}} in Enum.to_list(
-             EventStream.events(stream)
-           )
+    events = Enum.to_list(EventStream.events(stream))
+    assert {:provider_retry_end, %{attempt: 1, success: false, canceled: true}} in events
+    assert Enum.count(events, &match?({:provider_usage, _}, &1)) == 1
+
+    assert {:message_end, %{error_details: %{provider_invoked: false}}} =
+             Enum.find(events, &match?({:message_end, _}, &1))
   end
 
   test "parsed limits and raw HTTP retry-after headers recover, but quota exhaustion does not" do

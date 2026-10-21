@@ -62,6 +62,22 @@ defmodule LemonRouter.RunProcess.CompactionTriggerTest do
     assert PendingCompactionStore.get(session_key) == nil
   end
 
+  test "canonical nullable usage requires every inclusive input component" do
+    known = %{input: 70, output: 30, cache_read: 20, cache_write: 10}
+    assert CompactionTrigger.usage_input_tokens(known) == 100
+    assert CompactionTrigger.usage_input_tokens(%{input: 0, cache_read: 0, cache_write: 0}) == 0
+
+    for key <- [:input, :cache_read, :cache_write] do
+      assert CompactionTrigger.usage_input_tokens(Map.put(known, key, nil)) == nil
+    end
+
+    assert CompactionTrigger.usage_input_tokens(%{
+             "input" => nil,
+             "cache_read" => 20,
+             "cache_write" => nil
+           }) == nil
+  end
+
   defp state(session_key, model) do
     run_id = "run_#{System.unique_integer([:positive])}"
 

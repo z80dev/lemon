@@ -51,7 +51,7 @@ defmodule LemonSimUi.ArtifactReader do
   end
 
   def format_integer(value) when is_number(value), do: value |> round() |> format_integer()
-  def format_integer(_value), do: "0"
+  def format_integer(_value), do: "—"
 
   def format_number(value) when is_integer(value), do: format_integer(value)
 
@@ -63,13 +63,16 @@ defmodule LemonSimUi.ArtifactReader do
   def format_number(value), do: to_string(value)
 
   def total_tokens(usage) when is_map(usage) do
-    Enum.reduce(~w(input_tokens output_tokens cache_read_tokens cache_write_tokens), 0, fn key,
-                                                                                           acc ->
-      acc + (get_key(usage, key) || 0)
-    end)
+    counts =
+      Enum.map(
+        ~w(input_tokens output_tokens cache_read_tokens cache_write_tokens),
+        &get_key(usage, &1)
+      )
+
+    if Enum.all?(counts, &is_integer/1), do: Enum.sum(counts)
   end
 
-  def total_tokens(_usage), do: 0
+  def total_tokens(_usage), do: nil
 
   defp suite_roots do
     case Application.get_env(:lemon_sim_ui, :suite_roots, @default_suite_roots) do

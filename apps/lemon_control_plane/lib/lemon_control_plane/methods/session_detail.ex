@@ -116,14 +116,9 @@ defmodule LemonControlPlane.Methods.SessionDetail do
       |> Enum.filter(&(is_integer(&1) and &1 >= 0))
 
     token_totals =
-      Enum.reduce(runs, %{"input" => 0, "output" => 0, "total" => 0}, fn run, acc ->
-        tokens = run["tokens"] || %{}
-
-        %{
-          "input" => acc["input"] + integer_or_zero(tokens["input"]),
-          "output" => acc["output"] + integer_or_zero(tokens["output"]),
-          "total" => acc["total"] + integer_or_zero(tokens["total"])
-        }
+      Map.new(["input", "output", "total"], fn key ->
+        values = Enum.map(runs, &get_in(&1, ["tokens", key]))
+        {key, if(Enum.all?(values, &is_integer/1), do: Enum.sum(values), else: nil)}
       end)
 
     %{
@@ -293,7 +288,7 @@ defmodule LemonControlPlane.Methods.SessionDetail do
       "durationMs" => nil,
       "toolCallCount" => 0,
       "toolCalls" => [],
-      "tokens" => %{"input" => 0, "output" => 0, "total" => 0, "costUsd" => 0.0},
+      "tokens" => format_usage(nil),
       "eventCount" => 0,
       "eventDigest" => [],
       "summaryRaw" => %{},
@@ -317,9 +312,6 @@ defmodule LemonControlPlane.Methods.SessionDetail do
 
   defp average_or_nil([]), do: nil
   defp average_or_nil(values), do: div(Enum.sum(values), length(values))
-
-  defp integer_or_zero(value) when is_integer(value), do: value
-  defp integer_or_zero(_), do: 0
 
   defp present?(nil), do: false
   defp present?(""), do: false
@@ -396,36 +388,28 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   defp get_error(completed) when is_map(completed), do: get_map(completed, :error)
   defp get_error(_), do: nil
 
-  defp format_usage(nil), do: %{"input" => 0, "output" => 0, "total" => 0, "costUsd" => 0.0}
+  defp format_usage(nil), do: %{"input" => nil, "output" => nil, "total" => nil, "costUsd" => nil}
 
   defp format_usage(completed) when is_map(completed) do
     usage = get_map(completed, :usage)
 
     if is_map(usage) do
       %{
-        "input" => get_map(usage, :input, 0),
-        "output" => get_map(usage, :output, 0),
-        "total" => get_map(usage, :total_tokens, 0),
+        "input" => get_map(usage, :input),
+        "output" => get_map(usage, :output),
+        "total" => get_map(usage, :total_tokens),
         "costUsd" => get_cost_total(usage)
       }
     else
-      %{"input" => 0, "output" => 0, "total" => 0, "costUsd" => 0.0}
+      format_usage(nil)
     end
   end
 
-  defp format_usage(_), do: %{"input" => 0, "output" => 0, "total" => 0, "costUsd" => 0.0}
+  defp format_usage(_), do: format_usage(nil)
 
   defp get_cost_total(usage) do
-    case get_map(usage, :cost) do
-      nil ->
-        0.0
-
-      cost when is_map(cost) ->
-        get_map(cost, :total, 0.0) || 0.0
-
-      _ ->
-        0.0
-    end
+    normalized = LemonControlPlane.UsageTokens.normalize(usage) || %{}
+    normalized["costUsd"]
   end
 
   defp count_tool_calls(events) when is_list(events) do

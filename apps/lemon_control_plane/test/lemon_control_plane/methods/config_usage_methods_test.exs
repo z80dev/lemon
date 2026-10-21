@@ -154,7 +154,9 @@ defmodule LemonControlPlane.Methods.ConfigUsageMethodsTest do
           provider: "usage_status_test",
           cost: 0.02,
           input_tokens: 12,
-          output_tokens: 3
+          output_tokens: 3,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0
         })
 
       {:ok, result} = UsageStatus.handle(%{}, @ctx)

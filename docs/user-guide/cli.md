@@ -55,6 +55,18 @@ records or an unknown start time also produce null fields; mixed models/provider
 have a null model/provider, and any unpriced occurrence makes the run's cost null
 and `priceKnown` false.
 
+Each token total is null if any included request lacks that counter; known
+requests are not presented as a complete subtotal when another request is missing
+usage. The ledger's `inputTokens` is cache-inclusive, while `uncachedInputTokens`,
+`cacheReadTokens`, and `cacheWriteTokens` preserve the disjoint provider counters
+when known. An explicit provider total minus output can attest inclusive input
+without attesting its cache breakdown. Native print/event `inputTokens` retains
+the uncached count with separate cache fields. Output includes reasoning tokens
+when the provider includes them in completion usage; reasoning is not added again.
+Print JSON preserves this normalized completed-event projection when retrieving
+the final answer through `agent.wait`; internal snake-case usage details never
+overwrite the client-facing counters.
+
 Use `/runs <runId>` for the same per-run timeline as `lemon runs show <runId>`;
 `/runs` and `/runs <count>` retain the active/recent list. Run IDs are nonnumeric;
 a numeric argument continues to select a list count.
@@ -614,6 +626,10 @@ report zero run usage without calling the provider.
 Costs are catalog estimates, not invoices. Final-only provider accounting means
 an in-flight response can exceed a positive cap before Lemon stops; unreported
 usage cannot be reconstructed. This is not a hard billing cap.
+Missing or partial provider counters remain JSON null through session persistence,
+run aggregation and print output, including a successful multi-turn task. Budget
+subtotals do not fill those gaps or turn an unknown price into measured zero.
+Catalog prices are nominal estimates, not subscription charges.
 Counters cover the prompt agent loop and its reported retries. Compaction and
 project-memory maintenance model calls are not counted; subagent sessions have
 their own counters rather than spending the parent's allowance.

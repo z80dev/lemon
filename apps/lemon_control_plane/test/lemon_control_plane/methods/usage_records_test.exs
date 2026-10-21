@@ -61,4 +61,75 @@ defmodule LemonControlPlane.Methods.UsageRecordsTest do
     assert {:error, _} =
              UsageRecords.handle(%{"fromMs" => 0, "toMs" => 10, "cursor" => "invalid"}, %{})
   end
+
+  test "run JSON sums complete requests but never substitutes zero for missing counters" do
+    complete = %{
+      input: 70,
+      output: 30,
+      cache_read: 20,
+      cache_write: 10,
+      total_tokens: 130,
+      cost: 0.2,
+      price_known: true
+    }
+
+    partial = %{
+      input: nil,
+      output: 30,
+      cache_read: 20,
+      cache_write: nil,
+      total_tokens: 130,
+      cost: nil,
+      price_known: false
+    }
+
+    sparse = %{input: 12, output: 3, cost: 0.25}
+
+    for {usages, expected_tokens, expected_cost} <- [
+          {[complete, complete], %{"input" => 200, "output" => 60, "total" => 260}, 0.4},
+          {[complete, nil], %{"input" => nil, "output" => nil, "total" => nil}, nil},
+          {[nil, complete], %{"input" => nil, "output" => nil, "total" => nil}, nil},
+          {[complete, partial], %{"input" => 200, "output" => 60, "total" => 260}, nil},
+          {[complete, sparse], %{"input" => nil, "output" => 33, "total" => nil}, 0.45},
+          {[sparse, nil], %{"input" => nil, "output" => nil, "total" => nil}, nil}
+        ] do
+      run = "usage-aggregation-#{LemonCore.Id.uuid()}"
+      at = System.system_time(:millisecond)
+
+      occurrences =
+        Enum.map(usages, fn usage ->
+          %{provider: :zai, model: "glm-5.3", at_ms: at, usage: usage, run_id: "not-the-parent"}
+        end)
+
+      entries =
+        UsageLedger.entries(run, "agent:bot:main", %{
+          completed: %{usage: %{occurrences: occurrences}},
+          meta: %{agent_id: "bot"}
+        })
+
+      for entry <- entries do
+        native = UsageLedger.occurrence_record(entry)
+        assert :ok = UsageStore.put_occurrence(native)
+        on_exit(fn -> LemonCore.Store.delete(:usage_occurrences, native.id) end)
+      end
+
+      assert {:ok, [row]} =
+               LemonControlPlane.Methods.RunUsage.attach([
+                 %{"runId" => run, "startedAtMs" => at, "completedAtMs" => at}
+               ])
+
+      assert row["tokens"] == expected_tokens
+      assert row["costUsd"] == expected_cost
+      assert row["priceKnown"] == not is_nil(expected_cost)
+      assert row["provider"] == "zai"
+      assert row["model"] == "glm-5.3"
+
+      assert {:ok, result} =
+               UsageRecords.handle(%{"fromMs" => at, "toMs" => at + 1, "runId" => run}, %{})
+
+      assert length(result["records"]) == 2
+      assert Enum.all?(result["records"], &(&1["runId"] == run))
+      refute inspect(result) =~ "not-the-parent"
+    end
+  end
 end

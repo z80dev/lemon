@@ -90,9 +90,16 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
 
   @spec usage_input_tokens(map() | term()) :: non_neg_integer() | nil
   def usage_input_tokens(usage) when is_map(usage) do
-    {primary_key, primary_tokens} = find_primary_token_count(usage)
-    cached_tokens = sum_cached_tokens(usage)
-    compute_total_input_tokens(primary_key, primary_tokens, cached_tokens)
+    if Enum.any?([:cache_read, :cache_write], fn key ->
+         Map.has_key?(usage, key) or Map.has_key?(usage, Atom.to_string(key))
+       end) do
+      counts = Enum.map([:input, :cache_read, :cache_write], &fetch(usage, &1))
+      if Enum.all?(counts, &(is_integer(&1) and &1 >= 0)), do: Enum.sum(counts)
+    else
+      {primary_key, primary_tokens} = find_primary_token_count(usage)
+      cached_tokens = sum_cached_tokens(usage)
+      compute_total_input_tokens(primary_key, primary_tokens, cached_tokens)
+    end
   end
 
   def usage_input_tokens(_), do: nil

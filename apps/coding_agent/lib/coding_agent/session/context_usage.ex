@@ -332,10 +332,11 @@ defmodule CodingAgent.Session.ContextUsage do
   end
 
   @doc """
-  Cumulative session spend plus token breakdown. `tokens`/`cost_usd` come from
-  the persisted `BudgetLedger` (every branch, interrupted requests included);
-  input/output/cache counts sum the provider usage of assistant messages on the
-  active branch. All values are numeric.
+  Cumulative budget spend plus provider token breakdown. `tokens`/`cost_usd`
+  come from the persisted `BudgetLedger` (every branch, interrupted requests
+  included); an incomplete cumulative metric remains unknown (`nil`).
+  Input/output/cache counts sum provider usage on the active branch; a missing
+  counter makes that counter's branch total unknown (`nil`), not zero.
   """
   @spec session_usage(term(), map() | nil) :: map()
   def session_usage(session_manager, ledger \\ nil) do
@@ -354,10 +355,7 @@ defmodule CodingAgent.Session.ContextUsage do
 
     ledger = if is_map(ledger), do: ledger, else: ledger_usage(session_manager)
 
-    Map.merge(totals, %{
-      tokens: count(Map.get(ledger, :tokens)),
-      cost_usd: amount(Map.get(ledger, :cost_usd))
-    })
+    Map.merge(totals, LemonAgent.Budget.normalize_usage(ledger))
   end
 
   defp empty_usage,
@@ -376,13 +374,19 @@ defmodule CodingAgent.Session.ContextUsage do
 
     %{
       acc
-      | input: acc.input + count(field(usage, :input)),
-        output: acc.output + count(field(usage, :output)),
-        cache_read: acc.cache_read + count(field(usage, :cache_read)),
-        cache_write: acc.cache_write + count(field(usage, :cache_write)),
+      | input: add_counter(acc.input, field(usage, :input)),
+        output: add_counter(acc.output, field(usage, :output)),
+        cache_read: add_counter(acc.cache_read, field(usage, :cache_read)),
+        cache_write: add_counter(acc.cache_write, field(usage, :cache_write)),
         assistant_messages: acc.assistant_messages + 1
     }
   end
+
+  defp add_counter(total, value)
+       when is_integer(total) and is_integer(value) and value >= 0,
+       do: total + value
+
+  defp add_counter(_total, _value), do: nil
 
   defp branch_entries(%CodingAgent.SessionManager.Session{} = session),
     do: CodingAgent.SessionManager.get_branch(session)
@@ -392,13 +396,9 @@ defmodule CodingAgent.Session.ContextUsage do
   defp ledger_usage(%CodingAgent.SessionManager.Session{} = session),
     do: CodingAgent.Session.BudgetLedger.restore(session)
 
-  defp ledger_usage(_), do: %{}
+  defp ledger_usage(_), do: LemonAgent.Budget.normalize_usage(nil)
 
   defp field(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
-  defp count(value) when is_integer(value) and value >= 0, do: value
-  defp count(_), do: 0
-  defp amount(value) when is_number(value) and value >= 0, do: value / 1
-  defp amount(_), do: 0.0
 
   defp sum_by_category(items) do
     Enum.reduce(items, %{}, fn %{category: category, tokens: tokens}, acc ->

@@ -456,8 +456,12 @@ def collect_profile(path, run_id=None, turns=None, *, root_fd=None):
                     rows.append(value)
             except ValueError:
                 continue
-    payloads = [row for row in rows if row.get('event') == 'payload']
-    usages = [row.get('provider_usage') or {} for row in rows if row.get('event') == 'usage']
+    # Ancillary/nested sessions do not attest the CLI's parent-run usage. Keep
+    # them out of its completeness proof rather than attributing them by timing.
+    provider_rows = [row for row in rows
+                     if run_id is None or row.get('run_id') == run_id]
+    payloads = [row for row in provider_rows if row.get('event') == 'payload']
+    usages = [row.get('provider_usage') or {} for row in provider_rows if row.get('event') == 'usage']
     hashes = sorted({row['tools_catalog_digest'] for row in payloads
                      if re.fullmatch(r'[0-9a-f]{64}', str(row.get('tools_catalog_digest', '')))})
     schema_values = [number(row.get('estimates', {}).get('tool_schemas')) for row in payloads]
@@ -492,7 +496,7 @@ def collect_profile(path, run_id=None, turns=None, *, root_fd=None):
             keys.append((row['run_id'], row['session_id'], row['request_index']))
         return keys
 
-    usage_rows = [row for row in rows if row.get('event') == 'usage']
+    usage_rows = [row for row in provider_rows if row.get('event') == 'usage']
     payload_keys, usage_keys = request_keys(payloads), request_keys(usage_rows)
     parent_usage_complete = (
         type(turns) is int and turns > 0 and len(payloads) == turns
@@ -502,7 +506,8 @@ def collect_profile(path, run_id=None, turns=None, *, root_fd=None):
         and set(payload_keys) == set(usage_keys)
         and len({key[1] for key in payload_keys}) == 1
         and all(all(number(usage.get(key)) is not None
-                    for key in ('input_tokens', 'output_tokens', 'cache_read_tokens'))
+                    for key in ('input_tokens', 'output_tokens', 'cache_read_tokens',
+                                'cache_write_tokens', 'total_tokens'))
                 for usage in usages))
     return {'catalog_digests': hashes, 'requests_observed': len(payloads),
             'schema_tokens_estimate_sum': sum(schema_values) if schema_values and all(value is not None for value in schema_values) else None,

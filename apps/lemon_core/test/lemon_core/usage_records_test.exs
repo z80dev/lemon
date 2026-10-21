@@ -61,6 +61,49 @@ defmodule LemonCore.UsageRecordsTest do
     assert Enum.any?(page.records, &(is_nil(&1.cost_usd) and not &1.price_known))
   end
 
+  test "cost-only usage records once without turning unknown tokens into measured zeros", ctx do
+    charge = entry("cost-only", "agent:bot:main", 1000, %{cost: %{total: 0.25}})
+
+    assert :ok = UsageLedger.record(ctx.ledger, charge)
+    assert :ok = UsageLedger.record(ctx.ledger, charge)
+
+    assert {:ok, %{records: [record]}} =
+             query(ctx.store, %{"fromMs" => 1000, "toMs" => 1001, "runId" => "cost-only"})
+
+    assert record.cost_usd == 0.25
+    assert record.price_known
+    assert record.input_tokens == nil
+    assert record.output_tokens == nil
+    assert record.total_tokens == nil
+
+    unknown =
+      entry("unknown-price", "agent:bot:main", 1001, %{
+        input: nil,
+        output: 3,
+        cache_read: nil,
+        cache_write: nil,
+        cost: 0.5,
+        price_known: false
+      })
+
+    assert :ok = UsageLedger.record(ctx.ledger, unknown)
+
+    assert {:ok, %{records: [record], incomplete: true}} =
+             query(ctx.store, %{"fromMs" => 1001, "toMs" => 1002})
+
+    assert record.cost_usd == nil
+    refute record.price_known
+    assert record.input_tokens == nil
+    assert record.output_tokens == 3
+    assert record.total_tokens == nil
+
+    daily = UsageStore.get_record(ctx.store, "1970-01-01")
+    assert daily.total_cost == 0.25
+    assert daily.requests == %{"openai" => 2}
+    assert daily.tokens == %{"openai" => %{input: 0, output: 3}}
+    assert daily.unknown_cost_records == 1
+  end
+
   test "all sessions paginate beyond top twenty with exact half-open cursor boundaries", ctx do
     for i <- 0..26 do
       assert :ok =
@@ -121,7 +164,12 @@ defmodule LemonCore.UsageRecordsTest do
       assert :ok =
                UsageLedger.record(
                  ctx.ledger,
-                 entry(run, "agent:bot:main", 1500, %{input: 1, output: 1, cost: 0.1})
+                 entry(run, "agent:bot:main", 1500, %{
+                   input: 1,
+                   output: 1,
+                   total_tokens: 2,
+                   cost: 0.1
+                 })
                )
     end
 
@@ -132,9 +180,17 @@ defmodule LemonCore.UsageRecordsTest do
 
   test "known actual zero differs from unknown and durable dedupe survives ledger restart", ctx do
     known =
-      entry("zero", "agent:bot:main", 2000, %{input: 1, output: 0, cost: 0.0, price_known: true})
+      entry("zero", "agent:bot:main", 2000, %{
+        input: 1,
+        output: 0,
+        total_tokens: 1,
+        cost: 0.0,
+        price_known: true
+      })
 
-    unknown = entry("unknown", "agent:bot:main", 2001, %{input: 1, output: 0, cost: 0.0})
+    unknown =
+      entry("unknown", "agent:bot:main", 2001, %{input: 1, output: 0, total_tokens: 1, cost: 0.0})
+
     assert :ok = UsageLedger.record(ctx.ledger, known)
     assert :ok = UsageLedger.record(ctx.ledger, unknown)
     stop_supervised!(UsageLedger)
@@ -170,7 +226,15 @@ defmodule LemonCore.UsageRecordsTest do
     ledger_spec = Supervisor.child_spec({UsageLedger, name: ledger, store: store}, id: ledger)
     start_supervised!(store_spec)
     start_supervised!(ledger_spec)
-    usage = entry("persisted", "agent:bot:main", 2500, %{input: 1, output: 1, cost: 0.5})
+
+    usage =
+      entry("persisted", "agent:bot:main", 2500, %{
+        input: 1,
+        output: 1,
+        total_tokens: 2,
+        cost: 0.5
+      })
+
     assert :ok = UsageLedger.record(ledger, usage)
     stop_supervised!(ledger)
     stop_supervised!(store)
@@ -191,7 +255,7 @@ defmodule LemonCore.UsageRecordsTest do
           at_ms: at,
           provider: "openai",
           model: "gpt-5",
-          usage: %{input: 4, output: 1, cost: 0.25, price_known: true}
+          usage: %{input: 4, output: 1, total_tokens: 5, cost: 0.25, price_known: true}
         }
       end)
 

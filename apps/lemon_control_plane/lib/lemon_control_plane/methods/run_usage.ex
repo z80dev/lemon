@@ -47,15 +47,20 @@ defmodule LemonControlPlane.Methods.RunUsage do
 
     %{
       "tokens" => %{
-        "input" => Enum.sum(Enum.map(records, & &1.input_tokens)),
-        "output" => Enum.sum(Enum.map(records, & &1.output_tokens)),
-        "total" => Enum.sum(Enum.map(records, & &1.total_tokens))
+        "input" => sum_known(records, :input_tokens),
+        "output" => sum_known(records, :output_tokens),
+        "total" => sum_known(records, :total_tokens)
       },
       "costUsd" => if(priced?, do: Enum.sum(Enum.map(records, & &1.cost_usd)), else: nil),
       "priceKnown" => priced?,
       "model" => single_value(records, :model),
       "provider" => single_value(records, :provider)
     }
+  end
+
+  defp sum_known(records, key) do
+    values = Enum.map(records, &Map.get(&1, key))
+    if Enum.all?(values, &is_integer/1), do: Enum.sum(values), else: nil
   end
 
   defp single_value(records, key) do

@@ -68,6 +68,8 @@ defmodule LemonAi.PromptDiagnostics do
   This records a single introspection event (`:ai_llm_call`) containing:
   - request sizing (bytes + hashes)
   - response usage (tokens, including cache read/write when available)
+  Unknown usage components remain `nil`; inclusive input is only available when
+  uncached input, cache reads, and cache writes are all known.
   """
   @spec record_llm_call(Model.t(), Context.t(), StreamOptions.t(), AssistantMessage.t()) :: :ok
   def record_llm_call(
@@ -148,9 +150,15 @@ defmodule LemonAi.PromptDiagnostics do
       cache_read_tokens: usage.cache_read,
       cache_write_tokens: usage.cache_write,
       total_tokens: usage.total_tokens,
-      total_input_tokens: usage.input + usage.cache_read + usage.cache_write
+      total_input_tokens: total_input_tokens(usage)
     }
   end
+
+  defp total_input_tokens(%{input: input, cache_read: read, cache_write: write})
+       when is_number(input) and is_number(read) and is_number(write),
+       do: input + read + write
+
+  defp total_input_tokens(_usage), do: nil
 
   defp record_introspection(data, %StreamOptions{} = opts) do
     headers = opts.headers || %{}

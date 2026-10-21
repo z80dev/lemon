@@ -240,7 +240,7 @@ defmodule LemonControlPlane.Methods.RunsRecentListTest do
         at_ms: ctx.at_ms - 50,
         provider: "one",
         model: "first",
-        usage: %{input: 2, output: 3, cost: 0.125}
+        usage: %{input: 2, output: 3, cache_read: 0, cache_write: 0, cost: 0.125}
       }
     ])
 
@@ -286,9 +286,14 @@ defmodule LemonControlPlane.Methods.RunsRecentListTest do
         at_ms: ctx.at_ms - 50,
         provider: "one",
         model: "first",
-        usage: %{input: 2, output: 3, cost: 0.0}
+        usage: %{input: 2, output: 3, cache_read: 0, cache_write: 0, cost: 0.0}
       },
-      %{at_ms: ctx.at_ms - 10, provider: "two", model: "second", usage: %{input: 5, output: 7}}
+      %{
+        at_ms: ctx.at_ms - 10,
+        provider: "two",
+        model: "second",
+        usage: %{input: 5, output: 7, cache_read: 0, cache_write: 0}
+      }
     ])
 
     assert {:ok, %{"runs" => [row]}} = recent(ctx)
@@ -297,6 +302,31 @@ defmodule LemonControlPlane.Methods.RunsRecentListTest do
     assert row["costUsd"] == nil
     assert row["model"] == nil
     assert row["provider"] == nil
+  end
+
+  test "partial cache reporting leaves run token totals null without erasing a known charge",
+       ctx do
+    id = event(ctx, :run_completed, %{ok: true, duration_ms: 100})
+
+    put_occurrences(ctx, id, [
+      %{
+        at_ms: ctx.at_ms - 50,
+        provider: "one",
+        model: "first",
+        usage: %{input: 2, output: 3, cache_read: 0, cache_write: 0, cost: 0.125}
+      },
+      %{
+        at_ms: ctx.at_ms - 10,
+        provider: "one",
+        model: "first",
+        usage: %{input: 5, output: 7, cache_read: 10, cache_write: nil, cost: 0.25}
+      }
+    ])
+
+    assert {:ok, %{"runs" => [row]}} = recent(ctx)
+    assert row["tokens"] == %{"input" => nil, "output" => 10, "total" => nil}
+    assert row["costUsd"] == 0.375
+    assert row["priceKnown"]
   end
 
   test "overflowing the bounded usage window never presents partial totals", ctx do

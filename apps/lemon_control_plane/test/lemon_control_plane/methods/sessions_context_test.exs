@@ -139,7 +139,12 @@ defmodule LemonControlPlane.Methods.SessionsContextTest do
     Process.put(:context_result, {:ok, report(%{usage: bad})})
     assert {:ok, bounded} = SessionsContext.handle(@params, %{})
 
-    assert %{"tokens" => 0, "costUsd" => +0.0, "input" => 0, "output" => 0} = bounded["usage"]
+    assert %{"tokens" => nil, "costUsd" => nil, "input" => nil, "output" => nil} =
+             bounded["usage"]
+
+    Process.put(:context_result, {:ok, report(%{usage: %{tokens: 0, cost_usd: 0, output: 0}})})
+    assert {:ok, zero} = SessionsContext.handle(@params, %{})
+    assert %{"tokens" => 0, "costUsd" => 0.0, "input" => nil, "output" => 0} = zero["usage"]
   end
 
   test "an unattributed overhead row is labelled and still sums to the total" do

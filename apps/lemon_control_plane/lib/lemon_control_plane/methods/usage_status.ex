@@ -51,8 +51,8 @@ defmodule LemonControlPlane.Methods.UsageStatus do
 
   defp format_tokens(tokens) do
     %{
-      "input" => Map.get(tokens, :input, 0),
-      "output" => Map.get(tokens, :output, 0)
+      "input" => Map.get(tokens, :input),
+      "output" => Map.get(tokens, :output)
     }
   end
 
@@ -75,7 +75,12 @@ defmodule LemonControlPlane.Methods.UsageStatus do
   end
 
   defp summary(runs, tokens, cost, quotas) do
-    total_tokens = Map.get(tokens, "input", 0) + Map.get(tokens, "output", 0)
+    total_tokens =
+      case {tokens["input"], tokens["output"]} do
+        {input, output} when is_number(input) and is_number(output) -> input + output
+        _ -> nil
+      end
+
     runs_limit = quotas["runsLimit"]
     tokens_limit = quotas["tokensLimit"]
     cost_limit = quotas["costLimit"]
@@ -99,17 +104,20 @@ defmodule LemonControlPlane.Methods.UsageStatus do
   end
 
   defp limit_check(_value, limit) when not is_number(limit), do: :unconfigured
+  defp limit_check(value, _limit) when not is_number(value), do: :unknown
   defp limit_check(value, limit) when value > limit, do: :over
   defp limit_check(_value, _limit), do: :within
 
   defp limit_status(checks) do
     cond do
       :over in checks -> "over_limit"
+      :unknown in checks -> "unknown"
       :within in checks -> "within_limits"
       true -> "unlimited"
     end
   end
 
   defp remaining(_value, limit) when not is_number(limit), do: nil
+  defp remaining(value, _limit) when not is_number(value), do: nil
   defp remaining(value, limit), do: max(limit - value, 0)
 end

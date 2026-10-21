@@ -89,6 +89,7 @@ defmodule LemonCore.UsageRecords do
     do:
       Map.get(record, :incomplete, false) or
         not record.price_known or is_nil(record.cost_usd) or is_nil(record.at_ms) or
+        is_nil(record.input_tokens) or is_nil(record.output_tokens) or is_nil(record.total_tokens) or
         is_nil(record.session_key) or is_nil(record.agent_id) or
         record.model == "unknown" or record.provider == "unknown"
 
