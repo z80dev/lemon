@@ -453,6 +453,14 @@ run_cli() {
   exec "$RELEASE_BIN" eval "$CLI_EXPR" "$@"
 }
 
+# Build identity, help, and backup must work before setup: skip the config
+# provider so runtime.exs cannot demand secrets or endpoint settings that do
+# not exist yet.
+run_cli_unconfigured() {
+  export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-} -elixir config_provider_init nil"
+  run_cli "$@"
+}
+
 # Starts the background runtime unless a healthy one already answers, records
 # pid + release root (so stop/restart survive a version flip), and waits for
 # the control plane.
@@ -668,12 +676,7 @@ case "$COMMAND" in
 esac
 
 case "$COMMAND" in
-  --version|version)
-    # Build identity must work before setup, even when runtime configuration
-    # requires secrets or endpoint settings that do not exist yet.
-    export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-} -elixir config_provider_init nil"
-    run_cli "$@"
-    ;;
+  --version|version) run_cli_unconfigured "$@" ;;
   __update-daemon)
     if [ -z "${RELEASE_COOKIE:-}" ] && [ -f "$LEMON_HOME_DIR/cookie" ]; then
       IFS= read -r RELEASE_COOKIE < "$LEMON_HOME_DIR/cookie"
@@ -686,9 +689,9 @@ case "$COMMAND" in
     esac
     exit $?
     ;;
-  ""|-h|--help|help) run_cli "$@" ;;
+  ""|-h|--help|help) run_cli_unconfigured "$@" ;;
   tui|web|start|daemon|stop|restart|status|remote|eval|rpc)
-    case "${2:-}" in -h|--help) run_cli help "$COMMAND" ;; esac
+    case "${2:-}" in -h|--help) run_cli_unconfigured help "$COMMAND" ;; esac
     ;;
 esac
 case "$COMMAND" in
@@ -698,10 +701,9 @@ esac
 load_environment
 case "$COMMAND" in
   backup)
-    # Backup is a filesystem operation, not a runtime boot. Avoid production
-    # endpoint secret validation without generating or persisting any secrets.
-    export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-} -elixir config_provider_init nil"
-    run_cli "$@"
+    # Backup is a filesystem operation, not a runtime boot; it must not
+    # generate or persist any secrets.
+    run_cli_unconfigured "$@"
     ;;
   start|daemon|tui|web|restart|acp) ;;
   *) setup_environment ;;
@@ -710,7 +712,7 @@ esac
 case "$COMMAND" in
   acp)
     shift
-    case "${1:-}" in -h|--help) run_cli acp --help ;; esac
+    case "${1:-}" in -h|--help) run_cli_unconfigured acp --help ;; esac
     if ! control_plane_healthy; then start_daemon >&2; fi
     prepare_runtime_credential || exit 1
     setup_environment
