@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Controller-only native root admission binding maps are excluded from remote
+  execution metadata under every atom/string/camel alias, preserving their
+  admission-store ownership.
 - Persist paired attempts interrupted during disposal, verification, pricing or
   report finalization before exiting, retaining paid counters and prior failures
   and refusing unsafe resume. Anchor recovery logs, both ledger opens and

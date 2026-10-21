@@ -2,7 +2,7 @@ defmodule LemonControlPlane.Methods.McpExecutionNames do
   @moduledoc """
   Pure native execution-name projection for public profile HTTP server identity.
 
-  This read requires neither a profile nor an execution node. It uses the owning
+  This inline read requires neither a profile nor an execution node. It uses the owning
   MCP alias implementation without opening a client, resolving DNS, or reading
   secrets. Authentication configuration is deliberately not accepted.
   """
@@ -19,7 +19,7 @@ defmodule LemonControlPlane.Methods.McpExecutionNames do
   def scopes, do: [:read]
 
   @impl true
-  def dispatch_mode, do: :sync
+  def dispatch_mode, do: :inline
 
   @impl true
   def handle(params, %{auth: %{role: :operator} = auth}) when is_map(params) do
