@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.10.19]
+
 ### Fixed
 
 - `lemon stop`, `lemon restart`, and `lemon update apply` recognize a managed
