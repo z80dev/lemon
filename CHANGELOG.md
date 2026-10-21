@@ -8,7 +8,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- `lemon stop`, `lemon restart`, and `lemon update apply` recognize a managed
+  daemon started on the default control-plane port without
+  `LEMON_CONTROL_PLANE_PORT`, instead of refusing it as foreign. Launchers from
+  2026.10.18 and earlier still refuse such a daemon; stop it with
+  `kill <pid>` (pid from `lemon status`) before `lemon update apply`.
 
 ---
 
