@@ -4,6 +4,36 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
   alias LemonAi.Types.{AssistantMessage, Cost, Model, ModelCost, TextContent, Usage}
   alias CodingAgent.{Session, SettingsManager}
   alias LemonCore.{Secrets, Store}
+  alias LemonAgent.ModelRuntime.CredentialHealth
+
+  # Loopback provider endpoint for the public-session wire cases: records every
+  # request (method, path, headers, body) to the test process.
+  defmodule WireEndpoint do
+    @moduledoc false
+    @behaviour Plug
+
+    def init(opts), do: opts
+
+    def call(conn, opts) do
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+
+      send(
+        opts[:test_pid],
+        {:wire, conn.method, conn.request_path, Map.new(conn.req_headers), body}
+      )
+
+      # Any request reaching this listener has already failed the test; a
+      # non-retryable auth rejection keeps the session's terminal bounded.
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(
+        401,
+        Jason.encode!(%{
+          "error" => %{"type" => "authentication_error", "message" => "wire trap"}
+        })
+      )
+    end
+  end
 
   setup do
     clear_secrets_table()
@@ -663,6 +693,107 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     GenServer.stop(session)
   end
 
+  # Public Session wire: no stream_fn, so ProviderFallback drives the real
+  # OpenAICodexResponses backend against a loopback listener. Without an
+  # auth_source, Credentials refuses the provider; the backend's own ambient
+  # fallback (OPENAI_CODEX_API_KEY, then CHATGPT_TOKEN) must not replace that
+  # refusal. Every planted value is a well-formed ChatGPT JWT, so a leak would
+  # reach the listener instead of failing token parsing first.
+  test "openai-codex requires auth_source on the public session wire" do
+    base_url = wire_endpoint(:"openai-codex")
+    plain_key = codex_jwt("acct-configured-plain-key", "codex-from-plain")
+    env_trap = codex_jwt("acct-ambient-codex-env-trap", "codex-env-trap-signature")
+    chatgpt_trap = codex_jwt("acct-ambient-chatgpt-trap", "chatgpt-token-trap-signature")
+
+    System.put_env("OPENAI_CODEX_API_KEY", env_trap)
+    System.put_env("CHATGPT_TOKEN", chatgpt_trap)
+
+    settings =
+      wire_settings(%{
+        "openai-codex" => %{api_key: plain_key, base_url: base_url}
+      })
+
+    session =
+      start_wire_session(settings, wire_model(:"openai-codex", :openai_codex_responses, base_url))
+
+    assert :ok = Session.prompt(session, "hello")
+    assert_receive {:session_event, _, {:error, reason, _partial}}, 1_000
+
+    assert_refused_before_wire(session, reason, [
+      plain_key,
+      "codex-from-plain",
+      "acct-configured-plain-key",
+      env_trap,
+      "codex-env-trap-signature",
+      "acct-ambient-codex-env-trap",
+      chatgpt_trap,
+      "chatgpt-token-trap-signature",
+      "acct-ambient-chatgpt-trap"
+    ])
+  end
+
+  # Public Session wire through the real Anthropic backend. An OAuth payload
+  # stored under api_key_secret (no auth_source) is not a raw API key, and only
+  # an explicit auth_source = "oauth" may use ambient Claude credentials
+  # (CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_TOKEN, ~/.claude/.credentials.json).
+  # ANTHROPIC_API_KEY stays unset: in this mode it is the legitimate env-first
+  # credential, not a trap.
+  test "anthropic oauth payload secret is rejected for provider api-key resolution on the public session wire" do
+    base_url = wire_endpoint(:anthropic)
+    now = System.system_time(:millisecond)
+    access_token = "sk-ant-oat01-configured-payload-access-token"
+    refresh_token = "sk-ant-ort01-configured-payload-refresh-token"
+
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "anthropic_oauth",
+        "refresh_token" => refresh_token,
+        "access_token" => access_token,
+        "expires_at_ms" => now + 3_600_000,
+        "created_at_ms" => now,
+        "updated_at_ms" => now
+      })
+
+    assert {:ok, _} = Secrets.set("llm_anthropic_api_key", oauth_secret)
+
+    System.put_env("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-ambient-claude-code-env-trap")
+    System.put_env("ANTHROPIC_TOKEN", "sk-ant-oat01-ambient-anthropic-token-trap")
+
+    credentials_path = Path.join([System.get_env("HOME"), ".claude", ".credentials.json"])
+    File.mkdir_p!(Path.dirname(credentials_path))
+
+    File.write!(
+      credentials_path,
+      Jason.encode!(%{
+        "claudeAiOauth" => %{
+          "accessToken" => "sk-ant-oat01-ambient-credentials-file-trap",
+          "refreshToken" => "ambient-credentials-file-refresh-trap",
+          "expiresAt" => now + 3_600_000
+        }
+      })
+    )
+
+    settings =
+      wire_settings(%{
+        "anthropic" => %{api_key_secret: "llm_anthropic_api_key", base_url: base_url}
+      })
+
+    session = start_wire_session(settings, wire_model(:anthropic, :anthropic_messages, base_url))
+
+    assert :ok = Session.prompt(session, "hello")
+    assert_receive {:session_event, _, {:error, reason, _partial}}, 1_000
+
+    assert_refused_before_wire(session, reason, [
+      oauth_secret,
+      access_token,
+      refresh_token,
+      "sk-ant-oat01-ambient-claude-code-env-trap",
+      "sk-ant-oat01-ambient-anthropic-token-trap",
+      "sk-ant-oat01-ambient-credentials-file-trap",
+      "ambient-credentials-file-refresh-trap"
+    ])
+  end
+
   defp settings(providers) do
     %SettingsManager{
       default_thinking_level: :medium,
@@ -681,6 +812,83 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
       )
 
     session
+  end
+
+  defp wire_settings(providers) do
+    %{settings(providers) | compaction_enabled: false, retry_enabled: false}
+  end
+
+  defp start_wire_session(settings_manager, model) do
+    session =
+      start_supervised!(
+        {Session,
+         cwd: Process.get(:session_cwd),
+         model: model,
+         settings_manager: settings_manager,
+         tools: [],
+         system_prompt: "Reply briefly."}
+      )
+
+    Session.subscribe(session)
+    session
+  end
+
+  defp wire_model(provider, api, base_url) do
+    %{mock_model(provider) | api: api, base_url: base_url}
+  end
+
+  # Real HTTP to a loopback listener. Shared breaker and credential-health state
+  # is reset so an earlier failure cannot refuse the request this test observes.
+  defp wire_endpoint(provider) do
+    saved_req = Req.default_options()
+    Req.default_options(Keyword.drop(saved_req, [:plug, :adapter, :base_url]))
+    LemonAi.CircuitBreaker.reset(provider)
+    CredentialHealth.reset()
+
+    on_exit(fn ->
+      Req.default_options(saved_req)
+      LemonAi.CircuitBreaker.reset(provider)
+      CredentialHealth.reset()
+    end)
+
+    server =
+      start_supervised!(
+        {Bandit,
+         plug: {WireEndpoint, test_pid: self()}, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
+      )
+
+    {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(server)
+    "http://127.0.0.1:#{port}"
+  end
+
+  defp codex_jwt(account_id, signature) do
+    encode = &Base.url_encode64(Jason.encode!(&1), padding: false)
+    claims = %{"https://api.openai.com/auth" => %{"chatgpt_account_id" => account_id}}
+    Enum.join([encode.(%{"alg" => "none", "typ" => "JWT"}), encode.(claims), signature], ".")
+  end
+
+  # Called after the session's terminal error: a request the backend sent was
+  # recorded by the listener before its response produced that terminal.
+  defp assert_refused_before_wire(session, reason, secrets) do
+    requests = received_wire_requests([])
+
+    observed =
+      inspect({reason, requests, Session.get_messages(session)},
+        limit: :infinity,
+        printable_limit: :infinity
+      )
+
+    assert Enum.filter(secrets, &String.contains?(observed, &1)) == []
+    assert requests == []
+  end
+
+  defp received_wire_requests(acc) do
+    receive do
+      {:wire, _method, _path, _headers, _body} = request ->
+        received_wire_requests([request | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
   end
 
   defp stream_fn(test_pid) do
