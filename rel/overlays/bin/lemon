@@ -582,7 +582,11 @@ update_daemon_snapshot() {
     printf 'stopped\n'
     return 0
   fi
-  actual="$(release_command "$recorded" rpc 'IO.puts("#{System.pid()}:#{Application.get_env(:lemon_control_plane, :port)}")' 2>/dev/null)" || {
+  # runtime.exs sets the port only from LEMON_CONTROL_PLANE_PORT; a daemon
+  # started without it serves LemonControlPlane's default, 4040 (as $PORT does).
+  local port_expr='Application.get_env(:lemon_control_plane, :port, 4040)'
+  [ "$PROFILE" != sim_broadcast_platform ] || port_expr='""'
+  actual="$(release_command "$recorded" rpc "IO.puts(\"#{System.pid()}:#{$port_expr}\")" 2>/dev/null)" || {
     error "cannot authenticate the recorded daemon; no process was signalled"
     return 1
   }
