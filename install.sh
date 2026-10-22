@@ -291,16 +291,17 @@ if [ -n "$PIN" ] && [ "$CHANNEL_EXPLICIT" != "1" ]; then
 fi
 
 fetch() {
-  # fetch <url> <destination>
-  # --resolve-version fetches only the manifest: errors, but no progress meter.
-  quiet=""
-  if [ "$RESOLVE_VERSION" = "1" ]; then
-    quiet="-sS"
+  # fetch <url> <destination> [progress]
+  # Only release artifacts show curl's one-line progress bar, and only on a
+  # terminal; everything else is silent apart from errors.
+  curl_output="-sS"
+  if [ "${3:-}" = "progress" ] && [ -t 2 ]; then
+    curl_output="--progress-bar"
   fi
   if [ "$INSECURE_BASE" = "1" ]; then
-    curl ${quiet:+"$quiet"} -fL --retry 3 --connect-timeout 10 -o "$2" "$1"
+    curl "$curl_output" -fL --retry 3 --connect-timeout 10 -o "$2" "$1"
   else
-    curl ${quiet:+"$quiet"} -fL --proto '=https' --retry 3 --connect-timeout 10 -o "$2" "$1"
+    curl "$curl_output" -fL --proto '=https' --retry 3 --connect-timeout 10 -o "$2" "$1"
   fi
 }
 
@@ -657,6 +658,9 @@ ensure_links() {
   fi
 }
 
+# path_hint records, rather than prints, the PATH advice so the installer can
+# end with it after setup.
+PATH_NOTE=""
 path_hint() {
   case ":${PATH:-}:" in
     *":$BIN_DIR:"*) return 0 ;;
@@ -683,31 +687,18 @@ path_hint() {
   esac
 
   if [ "$MODIFY_PATH" = "1" ] && [ -n "$rc_file" ]; then
-    if [ -f "$rc_file" ] && grep -Fqx "$path_line" "$rc_file"; then
-      info "PATH entry already present in $rc_file"
-    else
+    if [ ! -f "$rc_file" ] || ! grep -Fqx "$path_line" "$rc_file"; then
       mkdir -p "$(dirname "$rc_file")"
       {
         printf '\n# added by the lemon installer\n'
         printf '%s\n' "$path_line"
       } >>"$rc_file"
-      info "Added $BIN_DIR to PATH in $rc_file."
     fi
-    info "New shells will find lemon. For this shell, run:"
-    info ""
-    info "    $path_line"
-    info ""
+    PATH_NOTE="New shells will find lemon. To use it in this shell, run: $path_line"
     return 0
   fi
 
-  info ""
-  info "$BIN_DIR is not on your PATH. Add it with:"
-  info ""
-  info "    $path_line"
-  info ""
-  if [ -n "$rc_file" ]; then
-    info "Re-run without --no-modify-path to append that line to $rc_file automatically."
-  fi
+  PATH_NOTE="$BIN_DIR is not on your PATH. Add it with: $path_line"
 }
 
 free_port() {
@@ -808,7 +799,6 @@ setup_handoff() {
     info "    $BIN_DIR/lemon setup"
   elif (exec </dev/tty) 2>/dev/null; then
     info ""
-    info "Starting interactive setup..."
     if ! "$BIN_DIR/lemon" setup </dev/tty; then
       die "Lemon setup did not complete. The runtime remains installed at $TARGET_DIR. Re-run: $BIN_DIR/lemon setup"
     fi
@@ -818,11 +808,21 @@ setup_handoff() {
   fi
 }
 
-# ----------------------------------------------------------------- install ---
+finish() {
+  info ""
+  if [ "$PROFILE" = "lemon_bot" ]; then
+    info "Run lemon-bot to start the standalone backend."
+  elif [ -x "$CURRENT_LINK/tui/bin/lemon-tui" ]; then
+    info "Run lemon to start."
+  else
+    info "Run lemon --help to see available commands."
+  fi
+  if [ -n "$PATH_NOTE" ]; then
+    info "$PATH_NOTE"
+  fi
+}
 
-if [ "$RESOLVE_VERSION" != "1" ]; then
-  info "Installing Lemon ($PROFILE, $PLATFORM, $CHANNEL_LABEL)"
-fi
+# ----------------------------------------------------------------- install ---
 
 manifest_file="$TMP_DIR/manifest.json"
 if ! fetch "$MANIFEST_URL" "$manifest_file"; then
@@ -879,6 +879,19 @@ elif [ "$WANT_TUI" = "1" ]; then
   warn "this release has no TUI artifact for $PLATFORM; installing runtime only"
 fi
 
+# Only non-default channels and profiles are worth naming in progress output.
+INSTALL_LABEL="Lemon $VERSION"
+install_qualifiers=""
+if [ "$RESOLVED_CHANNEL" != "stable" ]; then
+  install_qualifiers="$RESOLVED_CHANNEL"
+fi
+if [ "$PROFILE" != "lemon_runtime_full" ]; then
+  install_qualifiers="${install_qualifiers:+$install_qualifiers, }$PROFILE"
+fi
+if [ -n "$install_qualifiers" ]; then
+  INSTALL_LABEL="$INSTALL_LABEL ($install_qualifiers)"
+fi
+
 TARGET_DIR="$VERSIONS_DIR/$VERSION"
 INSTALL_KEY="$VERSION"
 if [ "$PROFILE" = "lemon_bot" ]; then
@@ -899,11 +912,11 @@ if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ]; then
   else
     ensure_links "$INSTALL_KEY"
   fi
-  info "Lemon $VERSION ($RESOLVED_CHANNEL) is already installed at $TARGET_DIR."
   if [ -n "$TUI_FILE" ] && [ ! -x "$TARGET_DIR/tui/bin/lemon-tui" ]; then
-    info "This install has no terminal UI, but $VERSION publishes one."
+    info "$INSTALL_LABEL is already installed without the terminal UI, but $VERSION publishes one. Re-run with --force to reinstall it."
+  else
+    info "$INSTALL_LABEL is already installed. Re-run with --force to reinstall it."
   fi
-  info "Re-run with --force to reinstall it."
 
   if [ "$VERIFY" = "1" ]; then
     verify_boot
@@ -911,6 +924,7 @@ if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ]; then
 
   path_hint
   setup_handoff
+  finish
   exit 0
 fi
 
@@ -918,8 +932,8 @@ tarball="$TMP_DIR/$ARTIFACT_FILE"
 CLEANUP_TARBALL="$tarball"
 rm -f "$tarball"
 
-info "Downloading $ARTIFACT_FILE ($ARTIFACT_SIZE bytes) ..."
-if ! fetch "$DOWNLOAD_BASE/$ARTIFACT_FILE" "$tarball"; then
+info "Installing $INSTALL_LABEL ..."
+if ! fetch "$DOWNLOAD_BASE/$ARTIFACT_FILE" "$tarball" progress; then
   rm -f "$tarball"
   die "could not download $DOWNLOAD_BASE/$ARTIFACT_FILE"
 fi
@@ -936,7 +950,6 @@ if [ "$actual_sha" != "$ARTIFACT_SHA" ]; then
   actual   $actual_sha
   Nothing was installed."
 fi
-info "ok sha256 $actual_sha"
 
 # Both tarballs are downloaded and verified before either is extracted: a bad
 # TUI download must not leave a half-installed version behind.
@@ -946,8 +959,7 @@ if [ -n "$TUI_FILE" ]; then
   CLEANUP_TUI_TARBALL="$tui_tarball"
   rm -f "$tui_tarball"
 
-  info "Downloading $TUI_FILE ($TUI_SIZE bytes) ..."
-  if ! fetch "$DOWNLOAD_BASE/$TUI_FILE" "$tui_tarball"; then
+  if ! fetch "$DOWNLOAD_BASE/$TUI_FILE" "$tui_tarball" progress; then
     rm -f "$tarball" "$tui_tarball"
     die "could not download $DOWNLOAD_BASE/$TUI_FILE
   Nothing was installed. Set LEMON_NO_TUI=1 to install the runtime only."
@@ -961,7 +973,6 @@ if [ -n "$TUI_FILE" ]; then
   actual   $actual_sha
   Nothing was installed."
   fi
-  info "ok sha256 $actual_sha"
 fi
 
 partial_dir="$TARGET_DIR.partial"
@@ -1059,15 +1070,10 @@ if [ -n "$previous_dir" ]; then
   CLEANUP_PREVIOUS=""
 fi
 
-info ""
-info "Installed Lemon $VERSION ($RESOLVED_CHANNEL, $PROFILE) to $TARGET_DIR"
-info "  launcher: $BIN_DIR/$LAUNCHER -> $LAUNCHER_TARGET"
-if [ -n "$TUI_FILE" ]; then
-  info "  tui:      $TARGET_DIR/tui/bin/lemon-tui"
-fi
+info "Installed $INSTALL_LABEL"
 if [ "$PROFILE" = "lemon_bot" ]; then
-  info "  state:    $HOME/.lemon/lemon_bot"
-elif ! "$BIN_DIR/lemon" version; then
+  info "  state: $HOME/.lemon/lemon_bot"
+elif ! "$BIN_DIR/lemon" version >/dev/null 2>&1; then
   warn "'$BIN_DIR/lemon version' did not succeed. Run it directly to see why."
 fi
 
@@ -1077,24 +1083,4 @@ fi
 
 path_hint
 setup_handoff
-
-
-info ""
-info "Next steps:"
-if [ "$PROFILE" = "lemon_bot" ]; then
-  info "    lemon-bot          # start the standalone backend"
-  info "Docs: $DOCS_URL"
-  exit 0
-fi
-if [ -n "$TUI_FILE" ]; then
-  info "    lemon              # launch the terminal UI (starts the daemon for you)"
-fi
-if [ "$PROFILE" = "lemon_runtime_full" ]; then
-  info "    lemon web          # launch the local browser UI (starts the daemon for you)"
-fi
-info "    lemon --help       # available commands"
-info "    lemon daemon       # start the runtime in the background"
-info "    lemon status       # check it is healthy"
-info "    lemon update       # install the next release"
-info ""
-info "Docs: $DOCS_URL"
+finish

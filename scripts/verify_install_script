@@ -942,7 +942,7 @@ if run_install "$work_dir/install-bot-1.log" "$channel_home" "$base_url" \
     [ ! -e "$channel_home/.lemon/versions/9999.6.0/tui" ] &&
     [ ! -e "$channel_home/.local/bin/lemon-bot" ] &&
     [ "$(grep -c lemon_tui "$work_dir/http.log" || true)" = "$tui_requests_before" ] &&
-    grep -q "Installed Lemon 9999.6.0 (preview, lemon_runtime_full)" "$work_dir/install-bot-1.log"; then
+    grep -qx "Installed Lemon 9999.6.0 (preview)" "$work_dir/install-bot-1.log"; then
     ok "pinned preview release installs the bot-capable runtime without TUI or backend, ignoring ambient lemon_bot"
   else
     fail "pinned --require-bot install selected the wrong artifacts"

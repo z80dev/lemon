@@ -437,11 +437,11 @@ without an Authorization header when no credential resolves. `--skip-verify`
 still avoids the live request, and focused `lemon model` onboarding remains
 offline by default.
 
-After a usable provider, setup offers an opt-in daily brief (default off). It
-writes `[automation] daily_brief = "HH:MM"` (server-local time) to the global
-config; the runtime reconciles the brief job at its next boot. Non-interactive
-runs skip the question unless `--daily-brief HH:MM` is passed. An existing
-`daily_brief` is only reported, never replaced.
+Setup asks only for what first run needs: no runtime profile or Hermes import
+questions (`lemon migrate hermes` stays available). The installer chooses the
+profile. `LemonCli.Setup.Ports` asks about a port only when another program
+holds a default one, and saves the choice to `~/.lemon/ports.env`; both
+launchers load that file into unset port variables and export the result.
 
 The derived state lives in `LemonCore.Setup.Readiness`, so the setup wizard,
 first-run TUI gate, and Web UI agree on exactly what is missing. The browser is

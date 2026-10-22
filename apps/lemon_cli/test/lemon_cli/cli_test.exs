@@ -679,7 +679,7 @@ defmodule LemonCli.CLITest do
       output = capture_io(fn -> assert CLI.run(["setup", "--if-required"]) == 0 end)
 
       refute output =~ "Setup is required"
-      refute output =~ "Welcome to Lemon setup!"
+      refute output =~ "Welcome to Lemon!"
     end
   end
 

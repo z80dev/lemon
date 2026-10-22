@@ -291,21 +291,6 @@ describe("heartbeat (cron-backed)", () => {
 		expect(harness.host.last?.level).toBe("warning");
 		expect(harness.server.requestsFor("cron.remove")).toHaveLength(0);
 	});
-
-	test("the config-owned daily brief is never treated as the /heartbeat job", async () => {
-		const dailyBrief = {
-			...heartbeatJob,
-			id: "cron_daily_brief",
-			name: "Daily brief",
-			meta: { heartbeat: true, daily_brief: true, agent_id: "default" },
-		};
-		harness.server.respondWith("cron.list", { jobs: [dailyBrief] });
-
-		await harness.run("/heartbeat clear");
-
-		expect(harness.host.last?.level).toBe("warning");
-		expect(harness.server.requestsFor("cron.remove")).toHaveLength(0);
-	});
 });
 
 describe("diagnostics", () => {

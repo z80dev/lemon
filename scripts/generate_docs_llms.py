@@ -38,7 +38,7 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("user-guide/memory.md", "Durable local memory and recall behavior."),
             (
                 "user-guide/reminders-and-heartbeats.md",
-                "Telegram reminders, scheduled-result delivery, heartbeats, and the daily brief.",
+                "Telegram reminders, scheduled-result delivery, and heartbeats.",
             ),
             ("user-guide/skills.md", "Discover, install, audit, and use skills."),
             ("user-guide/adaptive.md", "Opt-in learning, synthesis, and rollout controls."),

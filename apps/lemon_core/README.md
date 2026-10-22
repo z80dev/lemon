@@ -91,7 +91,7 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.Config.Tools` | Web tools and WASM config sub-module |
 | `LemonCore.Config.TUI` | Terminal UI theme and debug sub-module |
 | `LemonCore.Config.Logging` | Log file and rotation sub-module |
-| `LemonCore.Config.Automation` | `[automation]` sub-module (opt-in `daily_brief` HH:MM time) |
+| `LemonCore.Config.Automation` | `[automation]` cron catch-up/retention and `[cron]` failure-alert sub-module |
 | `LemonCore.Config.Validator` | Validation for both legacy and modular config structs |
 | `LemonCore.Config.ValidationError` | Raised by `Config.Modular.load!/1` on invalid config |
 | `LemonCore.Contract` | Validates configuration-injected modules for loadability and required behaviour callbacks |

@@ -27,7 +27,7 @@ LemonSim & benchmarks. Source modules and tests define implementation APIs.
   [file slash commands](user-guide/slash-commands.md),
   [reviewed source learning](user-guide/learn-from-sources.md)
   and [bounded context references](user-guide/context-references.md)
-- [Reminders, heartbeats and daily brief](user-guide/reminders-and-heartbeats.md)
+- [Reminders and heartbeats](user-guide/reminders-and-heartbeats.md)
 - [Attaching a bot machine](user-guide/attaching-a-bot-machine.md) and
   [execution-node files, secrets and processes](user-guide/node-files-and-secrets.md)
 - [Backups](user-guide/backups.md) and [Hermes migration](user-guide/migrate-from-hermes.md)

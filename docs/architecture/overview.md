@@ -121,8 +121,7 @@ and products. See [platform status](../platform-split.md).
   secret-bearing ingest is withheld, not merely redacted and stored. See
   [memory](../user-guide/memory.md).
 - Heartbeats are ordinary cron jobs distinguished by metadata; completed exact
-  `HEARTBEAT_OK` output is suppressed but remains in history. Daily brief uses the
-  same scheduler, not another heartbeat timer/store.
+  `HEARTBEAT_OK` output is suppressed but remains in history.
 - Skills contribute stable bounded metadata; full content is explicitly loaded.
   Installation/learning uses audit and exact-confirmation boundaries. See
   [skills](../skills.md) and [source learning](../user-guide/learn-from-sources.md).
