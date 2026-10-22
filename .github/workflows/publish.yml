@@ -66,6 +66,10 @@ jobs:
         with:
           otp-version: "28.5"
           elixir-version: "1.19.5"
+          # setup-beam never retries a mirror; jsDelivr proxies builds.hex.pm.
+          hexpm-mirrors: |
+            https://builds.hex.pm
+            https://cdn.jsdelivr.net/hex
 
       - name: Parse package and version
         id: parse
@@ -118,6 +122,10 @@ jobs:
         with:
           otp-version: "28.5"
           elixir-version: "1.19.5"
+          # setup-beam never retries a mirror; jsDelivr proxies builds.hex.pm.
+          hexpm-mirrors: |
+            https://builds.hex.pm
+            https://cdn.jsdelivr.net/hex
 
       - name: Publish package and docs
         env:

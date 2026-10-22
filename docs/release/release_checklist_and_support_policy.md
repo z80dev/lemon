@@ -12,7 +12,7 @@ The initial stable 1.0 release artifact support target is:
 | Area | Supported for 1.0 | Notes |
 | --- | --- | --- |
 | Release artifacts | `linux-x86_64`, `linux-arm64`, `darwin-arm64` tarballs | Built by `.github/workflows/release.yml` on pinned `ubuntu-24.04`, `ubuntu-24.04-arm`, and `macos-15` runners; Linux artifacts carry a glibc 2.39 baseline |
-| Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, `lemon_tui`, and the standalone `lemon_bot` backend on all platforms; `sim_broadcast_platform` on Linux | 14 tarballs total. All BEAM runtime artifacts must boot from extracted tarballs; the three `lemon_tui` artifacts are Bun binaries verified on native runners; each `lemon_bot` artifact is a compiled Bun backend boot-verified on its native runner; the sim profile also verifies local assets, access control, and persistent spectator state |
+| Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, `lemon_tui`, and the standalone `lemon_bot` backend on all platforms | 12 tarballs total. All BEAM runtime artifacts must boot from extracted tarballs; the three `lemon_tui` artifacts are Bun binaries verified on native runners; each `lemon_bot` artifact is a compiled Bun backend boot-verified on its native runner. `sim_broadcast_platform` is not published; it is built from source or `apps/lemon_sim_ui/Dockerfile` for sim deploys |
 | Source install | Linux and macOS, best effort | Requires Elixir 1.19.5+ and Erlang/OTP 28.5+ |
 | Windows and macOS `x86_64` | Not supported for 1.0 | Use WSL, the container image, or source-level experimentation |
 | Install script | Supported with scope | `install.sh` on the `stable` channel for the three platform tags; `preview`/`nightly` require a pinned `LEMON_VERSION` |
@@ -75,31 +75,21 @@ steps.
       load `LemonMCP.Client`, report `LemonSkills.McpSource.mcp_enabled?/0`, keep
       `:lemon_mcp` loaded but not started, expose no application callback, and
       contain no `LemonMCP.Application` module.
-- [ ] Build local Sim UI assets and `sim_broadcast_platform` with
-      `MIX_ENV=prod mix sim_ui.assets.deploy` and
-      `MIX_ENV=prod mix release sim_broadcast_platform --overwrite`.
 - [ ] Build and package the `clients/tui` Bun binary for
       `linux-x86_64`, `linux-arm64`, and `darwin-arm64` as the `lemon_tui`
       artifacts.
-- [ ] Verify SHA-256 for all 14 tarballs and include all 14 in `manifest.json`.
+- [ ] Verify SHA-256 for all 12 tarballs and include all 12 in `manifest.json`.
 - [ ] Run `scripts/verify_release_artifacts {artifact-directory}` against the
       assembled artifact directory. The verifier must see the full profile x
-      platform matrix: the BEAM runtime tarballs, the three `lemon_tui`
-      tarballs and the three `lemon_bot` tarballs (14 total).
+      platform matrix: the min/full runtime tarballs, the three `lemon_tui`
+      tarballs and the three `lemon_bot` tarballs (12 total).
 - [ ] Run `scripts/verify_release_runtime_boot {artifact-directory}` against
       the assembled artifact directory (`--platform TAG` to pick another
       platform; default is the host's). The verifier boots every BEAM tarball
       and each `lemon_bot` tarball for that platform and skips the `lemon_tui`
       pseudo-profile. Min/full check
-      `/healthz` and generate support bundles through release `eval`; the sim profile checks `/readyz`, digested assets, admin
-      denial, a persisted Werewolf spectator fixture, and restart recovery;
+      `/healthz` and generate support bundles through release `eval`;
       `lemon_bot` checks the packaged web build and `/v1/setup`.
-      When hosted rooms are enabled, also run
-      `npm --prefix apps/lemon_sim_ui/assets run smoke:hosted-werewolf` against
-      the candidate with five isolated sessions, then restart against the same
-      volume and verify host/player reconnect. Production hosted proof requires
-      HTTPS, a 32-byte creation token, private/no-store responses, and protected
-      metrics with no credentials or raw provider errors.
 - [ ] Run product smoke against the release candidate
       (`scripts/product_smoke_local --release`, or dispatch
       `product-smoke.yml`).
@@ -217,7 +207,7 @@ strictly-increasing version. The workflow then:
    native runner, and builds and smoke-tests the multi-arch container
 5. verifies the assembled manifest and artifacts
 6. publishes the GitHub Release, `manifest.json`, `install.sh`, `join-node.sh`,
-   and all 14 tarballs
+   and all 12 tarballs
 7. promotes the selected container channel; stable also promotes `latest`
 
 Release runs are serialized. A failed preparation creates neither a commit nor
@@ -237,7 +227,6 @@ The expected assets are:
 
 - three `lemon_runtime_min` tarballs
 - three `lemon_runtime_full` tarballs
-- two Linux `sim_broadcast_platform` tarballs
 - three `lemon_tui` tarballs
 - three `lemon_bot` tarballs
 - `manifest.json` schema 2

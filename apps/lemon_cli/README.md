@@ -6,8 +6,9 @@ launcher and turns dispatch results into exit codes. Its non-halting `run/1`
 and Mix-free runtime command handlers are shared by both installation paths.
 
 The runtime CLI is included in `lemon_runtime_min` and `lemon_runtime_full`
-artifacts. The `sim_broadcast_platform` artifact intentionally does not bundle
-`lemon_cli`; it supports only its release-specific `doctor --bundle` path.
+artifacts. The source-built `sim_broadcast_platform` release intentionally does
+not bundle `lemon_cli`; it supports only its release-specific `doctor --bundle`
+path.
 
 At application startup, `lemon_cli` registers its destination-local provider
 management service with `LemonCore.ProviderManagement`. Both controller and named

@@ -195,7 +195,7 @@ defmodule LemonControlPlane.Methods.SystemLifecycleTest do
       ]
     }
 
-    beam_path = Driver |> :code.which() |> List.to_string() |> Path.dirname()
+    beam_path = Application.app_dir(:lemon_control_plane, "ebin")
 
     code =
       " :ok = LemonControlPlane.Lifecycle.Driver.restart(#{inspect(command)}); System.stop(0)"

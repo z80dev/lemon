@@ -155,7 +155,8 @@ MIX_ENV=prod mix sim_ui.assets.deploy
 MIX_ENV=prod mix do --app lemon_web phx.digest
 MIX_ENV=prod mix release lemon_runtime_full
 
-# Public sim broadcast site (dashboard + spectator UI)
+# Public sim broadcast site (dashboard + spectator UI); source/container only,
+# not a published release artifact
 MIX_ENV=prod mix sim_ui.assets.deploy
 MIX_ENV=prod mix release sim_broadcast_platform
 ```
@@ -363,7 +364,7 @@ endpoint during release boot before the eval expression is executed.
 |---|---|---|
 | `lemon_runtime_min` | gateway, CLI, router, channels, control-plane; MCP client library loaded on demand | Headless / API-only server |
 | `lemon_runtime_full` | + automation, skills, web, sim-ui; MCP client library loaded on demand | Full local runtime with UI |
-| `sim_broadcast_platform` | lemon_core, lemon_sim, lemon_sim_ui | Public sim broadcast deployment |
+| `sim_broadcast_platform` | lemon_core, lemon_sim, lemon_sim_ui | Public sim broadcast deployment; built from source or `apps/lemon_sim_ui/Dockerfile`, never published as a release artifact |
 | `lemon_tui` | `tui/bin/lemon-tui` | Bun-compiled client pseudo-profile, not a BEAM release |
 | `lemon_bot` | `bot/bin/lemon-bot`, packaged web build | Standalone Bun-compiled backend; not a BEAM release (see `docs/release/versioning_and_channels.md`) |
 
@@ -421,8 +422,7 @@ stopped by the TUI launcher.
 
 ## CI smoke-test flow
 
-The `release-smoke.yml` workflow exercises both release-runtime and Sim UI
-container flows end-to-end:
+The `release-smoke.yml` workflow exercises the release-runtime flow end-to-end:
 
 1. Build `lemon_runtime_min` with `MIX_ENV=prod mix release`.
 2. Launch the release as a daemon.
@@ -431,15 +431,12 @@ container flows end-to-end:
 5. Stop the release.
 6. On failure, upload logs from `_build/prod/rel/<profile>/tmp/log/` as GitHub Actions artifacts.
 
-Its `sim-container-smoke` job builds the production Dockerfile with commit
-identity, verifies UID `10001`, `/healthz`, `/readyz`, admin denial, digested
-gzip assets and immutable caching, seeds persisted Werewolf state, and performs
-a graceful stop/restart against the same mounted volume. It also boots a second
-production container with hosted mode, HTTPS URL configuration, and a creation
-invite, then verifies secure/no-store cookies and paused-room recovery after a
-restart. The hosted browser lane (`npm run smoke:hosted-werewolf`) is not part
-of CI; run it manually against a candidate when hosted rooms are enabled (see
-the release checklist).
+No workflow builds or smoke-tests the Sim UI container. Before a sim deploy,
+build `apps/lemon_sim_ui/Dockerfile` and check it by hand: `/healthz`,
+`/readyz`, admin denial, digested assets, Werewolf persistence across a
+restart (`npm run smoke:werewolf` drives the browser checks), and, when hosted
+rooms are enabled, `npm run smoke:hosted-werewolf` against the candidate with
+five isolated sessions plus a restart against the same volume.
 
 ---
 

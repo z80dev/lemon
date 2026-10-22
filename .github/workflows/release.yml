@@ -173,8 +173,8 @@ jobs:
   # Reuse a green CI push run of the source commit (or of its last code commit,
   # past release-metadata-only cuts), waiting for one still in progress. Only
   # when none exists run ci.yml itself: the same sharded, parallel jobs a push
-  # to main runs (fast x4, quality/eval, install, clients, dialyzer, sim-bench,
-  # wasm), so release gates and main's gates cannot drift apart. Tag pushes and
+  # to main runs (fast x4, quality/eval, install, clients, dialyzer, wasm), so
+  # release gates and main's gates cannot drift apart. Tag pushes and
   # tag-ref dispatches gate their existing source commit too.
   preflight-coverage:
     name: Find CI coverage
@@ -262,18 +262,12 @@ jobs:
           - os: ubuntu-24.04
             platform: linux-x86_64
             profile: lemon_runtime_full
-          - os: ubuntu-24.04
-            platform: linux-x86_64
-            profile: sim_broadcast_platform
           - os: ubuntu-24.04-arm
             platform: linux-arm64
             profile: lemon_runtime_min
           - os: ubuntu-24.04-arm
             platform: linux-arm64
             profile: lemon_runtime_full
-          - os: ubuntu-24.04-arm
-            platform: linux-arm64
-            profile: sim_broadcast_platform
           - os: macos-15
             platform: darwin-arm64
             profile: lemon_runtime_min
@@ -304,10 +298,14 @@ jobs:
         with:
           otp-version: ${{ env.OTP_VERSION }}
           elixir-version: ${{ env.ELIXIR_VERSION }}
+          # setup-beam never retries a mirror; jsDelivr proxies builds.hex.pm.
+          hexpm-mirrors: |
+            https://builds.hex.pm
+            https://cdn.jsdelivr.net/hex
 
-      # Both lemon_runtime_full and sim_broadcast_platform bundle lemon_sim_ui,
-      # so both need its npm-built, digested assets. Both runtime profiles also
-      # build and bundle clients/lemon-browser-node during `mix release`.
+      # lemon_runtime_full bundles lemon_sim_ui, so it needs its npm-built,
+      # digested assets. Both runtime profiles also build and bundle
+      # clients/lemon-browser-node during `mix release`.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -332,7 +330,7 @@ jobs:
         run: mix deps.get --only prod
 
       - name: Build Sim UI assets
-        if: matrix.profile != 'lemon_runtime_min'
+        if: matrix.profile == 'lemon_runtime_full'
         run: mix sim_ui.assets.deploy
 
       # lemon_web ships its static assets checked into priv/static with no
@@ -349,7 +347,7 @@ jobs:
           test -f apps/lemon_web/priv/static/cache_manifest.json
 
       - name: Assert Sim UI digest manifest
-        if: matrix.profile != 'lemon_runtime_min'
+        if: matrix.profile == 'lemon_runtime_full'
         run: test -f apps/lemon_sim_ui/priv/static/cache_manifest.json
 
       - name: Compile (prod)
@@ -392,7 +390,8 @@ jobs:
         run: |
           scripts/verify_release_runtime_boot \
             --single "${{ steps.package.outputs.artifact_name }}" \
-            --profile "${{ matrix.profile }}"
+            --profile "${{ matrix.profile }}" \
+            --expected-commit "${{ needs.validate.outputs.release_sha }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -879,7 +878,7 @@ jobs:
           name_re = re.compile(
             r'^lemon-' + re.escape(version) + r'-' + re.escape(channel) + r'-'
             r'(linux-x86_64|linux-arm64|darwin-arm64)-'
-            r'(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_tui|lemon_bot)\.tar\.gz$'
+            r'(lemon_runtime_min|lemon_runtime_full|lemon_tui|lemon_bot)\.tar\.gz$'
           )
 
           artifacts = []
@@ -940,11 +939,6 @@ jobs:
 
       - name: Verify assembled release artifacts
         run: scripts/verify_release_artifacts release-artifacts
-
-      # Full re-verify (checksums + boot) for one platform here; each artifact
-      # already boot-verified on its own native runner in the build job above.
-      - name: Boot and verify Linux x86_64 release artifacts
-        run: scripts/verify_release_runtime_boot --platform linux-x86_64 release-artifacts
 
       - name: Extract changelog section
         id: changelog

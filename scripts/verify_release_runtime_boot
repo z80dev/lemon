@@ -4,24 +4,26 @@ set -euo pipefail
 usage() {
   cat >&2 <<'EOF'
 usage: scripts/verify_release_runtime_boot [--platform <tag>] <artifact-directory>
-       scripts/verify_release_runtime_boot --single <tarball> --profile <profile>
+       scripts/verify_release_runtime_boot --single <tarball> --profile <profile> [--expected-commit <sha>]
 
 Verifies Lemon release artifacts beyond checksums:
   - validates manifest and artifact checksums (manifest mode)
   - extracts release profile(s) into clean temp dirs
   - evaluates MCP library composition in packaged min/full releases
+  - checks the min/full embedded build commit against the manifest commit
+    (manifest mode) or --expected-commit (single mode)
   - starts each release daemon without Mix (min/full through the packaged
     `lemon daemon` launcher, which records the pidfile and waits for health)
-  - checks control-plane /healthz or sim broadcast /readyz
+  - checks control-plane /healthz
   - checks `lemon status`, the unified `lemon --help` registry, `lemon version`,
-    and the read-only `lemon migrate hermes audit --json` (non-sim profiles)
+    and the read-only `lemon migrate hermes audit --json`
   - exercises Mix-free models/media/usage JSON, notification dry-run, policy,
     and skill commands in the packaged CLI
   - checks Web /healthz for lemon_runtime_full
   - checks `lemon web --no-open` reports the healthy packaged Web URL
   - checks lemon_runtime_full asset-digest artifacts and daemon log
-  - stops the daemon (`lemon stop` for non-sim profiles)
-  - generates a release-runtime support bundle with release eval (non-sim profiles)
+  - stops the daemon with `lemon stop`
+  - generates a release-runtime support bundle with release eval
   - boots standalone lemon_bot with a clean HOME/private token, validates its
     executable and setup version, and fetches the complete packaged web build
 
@@ -38,6 +40,7 @@ MODE="manifest"
 ARTIFACT_DIR=""
 SINGLE_TARBALL=""
 SINGLE_PROFILE=""
+SINGLE_EXPECTED_COMMIT=""
 PLATFORM_FILTER=""
 
 while [ "$#" -gt 0 ]; do
@@ -51,6 +54,11 @@ while [ "$#" -gt 0 ]; do
     --profile)
       [ "$#" -ge 2 ] || usage
       SINGLE_PROFILE="$2"
+      shift 2
+      ;;
+    --expected-commit)
+      [ "$#" -ge 2 ] || usage
+      SINGLE_EXPECTED_COMMIT="$2"
       shift 2
       ;;
     --platform)
@@ -76,9 +84,9 @@ done
 
 if [ "$MODE" = "single" ]; then
   case "$SINGLE_PROFILE" in
-    lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_bot) ;;
+    lemon_runtime_min|lemon_runtime_full|lemon_bot) ;;
     *)
-      echo "error: --single requires --profile <lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_bot>" >&2
+      echo "error: --single requires --profile <lemon_runtime_min|lemon_runtime_full|lemon_bot>" >&2
       exit 2
       ;;
   esac
@@ -93,6 +101,11 @@ if [ "$MODE" = "single" ]; then
     exit 2
   fi
 else
+  if [ -n "$SINGLE_EXPECTED_COMMIT" ]; then
+    echo "error: --expected-commit is single-mode only; manifest mode uses the manifest commit" >&2
+    exit 2
+  fi
+
   [ -n "$ARTIFACT_DIR" ] || usage
 
   if [ ! -d "$ARTIFACT_DIR" ]; then
@@ -128,8 +141,7 @@ detect_platform() {
 # terminal client. The standalone backend uses its own real HTTP boot path.
 expected_profile_count() {
   case "$1" in
-    linux-x86_64|linux-arm64) echo 4 ;;
-    darwin-arm64) echo 3 ;;
+    linux-x86_64|linux-arm64|darwin-arm64) echo 3 ;;
     *) echo 0 ;;
   esac
 }
@@ -166,7 +178,7 @@ for artifact in manifest["artifacts"]:
     filename = artifact["file"]
     match = re.search(
         r"-(linux-x86_64|linux-arm64|darwin-arm64)-"
-        r"(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_bot)\.tar\.gz$",
+        r"(lemon_runtime_min|lemon_runtime_full|lemon_bot)\.tar\.gz$",
         filename,
     )
     if not match:
@@ -582,8 +594,8 @@ with log_path.open("xb") as log:
 print(f"ok lemon_bot {version}: native executable, clean setup, web assets and authenticated native image decode")
 PY
 }
-# Boots one release tarball end to end. `expected_commit` may be empty
-# (single mode has no manifest to compare an embedded commit against).
+# Boots one release tarball end to end. An empty `expected_commit` skips the
+# embedded-commit check (single mode without --expected-commit).
 boot_one_profile() {
   local profile="$1"
   local tarball_path="$2"
@@ -642,15 +654,6 @@ boot_one_profile() {
     "LEMON_GATEWAY_NODE_COOKIE=runtime-boot-cookie-$profile"
     "PHX_SERVER=true"
   )
-
-  if [ "$profile" = "sim_broadcast_platform" ]; then
-    env_vars+=(
-      "LEMON_SIM_UI_HOST=localhost"
-      "LEMON_SIM_UI_SECRET_KEY_BASE=runtime_boot_sim_secret_key_base_runtime_boot_sim_secret_key_base_runtime"
-      "LEMON_SIM_UI_ACCESS_TOKEN=runtime-boot-sim-access-token-32-bytes-minimum"
-      "LEMON_ARENA_LEAGUE_ROOT=$profile_dir/leagues"
-    )
-  fi
   CLEANUP_RELEASE="$release_bin"
   CLEANUP_ENV=("${env_vars[@]}")
 
@@ -712,109 +715,51 @@ boot_one_profile() {
     fi
   fi
 
-  if [ "$profile" = "sim_broadcast_platform" ]; then
-    run_release daemon
-  else
-    run_launcher daemon
+  run_launcher daemon
+  wait_for_health "http://127.0.0.1:$control_port/healthz" "$profile control-plane"
+  run_launcher status
+
+  local help_output command
+  help_output="$(run_launcher --help)"
+  for command in tui web start run daemon stop restart status remote eval rpc setup model \
+    gateway doctor config secrets channels providers blueprints profile backup context \
+    sessions learn update completion migrate node version send media models policy skill usage; do
+    if ! printf '%s\n' "$help_output" | grep -Eq "^  $command( |$)"; then
+      echo "$profile: packaged 'lemon --help' did not list $command" >&2
+      exit 1
+    fi
+  done
+
+  # Help and version must work before setup and must not create secrets: a
+  # fresh HOME has no persisted web secret for lemon_runtime_full's runtime.exs.
+  local fresh_home="$profile_dir/fresh-home" args
+  mkdir -p "$fresh_home"
+  for args in "--help" "help doctor" "daemon --help" "acp --help" "--version"; do
+    # shellcheck disable=SC2086 # word-split the argument list
+    if ! run_with_env env -u LEMON_WEB_SECRET_KEY_BASE "HOME=$fresh_home" \
+      "$extract_dir/bin/lemon" $args > /dev/null; then
+      echo "$profile: packaged 'lemon $args' failed before setup" >&2
+      exit 1
+    fi
+  done
+  if [ -e "$fresh_home/.lemon/env" ]; then
+    echo "$profile: help or version persisted $fresh_home/.lemon/env" >&2
+    exit 1
   fi
 
-  if [ "$profile" = "sim_broadcast_platform" ]; then
-    wait_for_health "http://127.0.0.1:$sim_port/readyz" "$profile sim-ui"
-    # grep without -q reads all input: -q exits on the first match, and the
-    # resulting EPIPE makes curl fail (exit 23) under pipefail.
-    curl -fsS "http://127.0.0.1:$sim_port/" | grep '/assets/app-' >/dev/null
+  if [ -z "$(run_launcher version)" ]; then
+    echo "$profile: packaged 'lemon version' printed nothing" >&2
+    exit 1
+  fi
 
-    # Unauthenticated operator surfaces: the browser route bounces to the
-    # admin login form (RequireAccessToken on_failure: redirect), while the
-    # JSON API rejects outright with 401.
-    admin_headers=$(curl -sS -o /dev/null -D - "http://127.0.0.1:$sim_port/admin")
-    admin_status=$(printf '%s' "$admin_headers" | head -1 | awk '{print $2}')
-    case "$admin_status" in
-      30[123578]) ;;
-      *)
-        echo "$profile: unauthenticated /admin returned $admin_status, expected a redirect to the login form" >&2
-        exit 1
-        ;;
-    esac
-    if ! printf '%s' "$admin_headers" | grep -qi '^location:.*/admin/login'; then
-      echo "$profile: unauthenticated /admin did not redirect to /admin/login" >&2
-      exit 1
-    fi
-    api_status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$sim_port/api/admin/metrics")
-    if [ "$api_status" != "401" ]; then
-      echo "$profile: unauthenticated /api/admin/metrics returned $api_status, expected 401" >&2
-      exit 1
-    fi
-
-    run_release rpc \
-      'state = LemonSim.Examples.Werewolf.initial_state(sim_id: "artifact_werewolf", player_count: 5, seed: 7); state = LemonSim.Kernel.State.put_world(state, %{phase: "game_over", status: "game_over", winner: "villagers"}); LemonSim.Kernel.Store.put_state(state)'
-    curl -fsS "http://127.0.0.1:$sim_port/watch/artifact_werewolf" | grep 'VILLAGERS WIN' >/dev/null
-
-    run_release stop
-    # `stop` returns as soon as the shutdown rpc is accepted, but the node
-    # needs a moment to exit and release its epmd name registration; starting
-    # the next daemon before that kills it with "name … seems to be in use".
-    for _ in $(seq 1 30); do
-      if ! run_release pid >/dev/null 2>&1; then
-        break
-      fi
-      sleep 1
-    done
-    if run_release pid >/dev/null 2>&1; then
-      echo "$profile: node did not exit within 30s of stop" >&2
-      exit 1
-    fi
-    run_release daemon
-    wait_for_health "http://127.0.0.1:$sim_port/readyz" "$profile restarted sim-ui"
-    curl -fsS "http://127.0.0.1:$sim_port/watch/artifact_werewolf" | grep 'VILLAGERS WIN' >/dev/null
-    run_release stop
-
-    echo "ok $profile booted, enforced auth, served assets, and preserved spectator state"
-  else
-    wait_for_health "http://127.0.0.1:$control_port/healthz" "$profile control-plane"
-    run_launcher status
-
-    local help_output command
-    help_output="$(run_launcher --help)"
-    for command in tui web start run daemon stop restart status remote eval rpc setup model \
-      gateway doctor config secrets channels providers blueprints profile backup context \
-      sessions learn update completion migrate node version send media models policy skill usage; do
-      if ! printf '%s\n' "$help_output" | grep -Eq "^  $command( |$)"; then
-        echo "$profile: packaged 'lemon --help' did not list $command" >&2
-        exit 1
-      fi
-    done
-
-    # Help and version must work before setup and must not create secrets: a
-    # fresh HOME has no persisted web secret for lemon_runtime_full's runtime.exs.
-    local fresh_home="$profile_dir/fresh-home" args
-    mkdir -p "$fresh_home"
-    for args in "--help" "help doctor" "daemon --help" "acp --help" "--version"; do
-      # shellcheck disable=SC2086 # word-split the argument list
-      if ! run_with_env env -u LEMON_WEB_SECRET_KEY_BASE "HOME=$fresh_home" \
-        "$extract_dir/bin/lemon" $args > /dev/null; then
-        echo "$profile: packaged 'lemon $args' failed before setup" >&2
-        exit 1
-      fi
-    done
-    if [ -e "$fresh_home/.lemon/env" ]; then
-      echo "$profile: help or version persisted $fresh_home/.lemon/env" >&2
-      exit 1
-    fi
-
-    if [ -z "$(run_launcher version)" ]; then
-      echo "$profile: packaged 'lemon version' printed nothing" >&2
-      exit 1
-    fi
-
-    run_launcher models --provider anthropic --limit 1 --json > "$profile_dir/models.json"
-    run_launcher usage --json > "$profile_dir/usage.json"
-    run_launcher media --project-dir "$profile_dir" --limit 1 --json > "$profile_dir/media.json"
-    run_launcher send --dry-run --to telegram:123 --json "release dispatch probe" \
-      > "$profile_dir/send.json"
-    run_launcher policy list
-    run_launcher skill list
-    python3 - "$profile_dir" <<'PY'
+  run_launcher models --provider anthropic --limit 1 --json > "$profile_dir/models.json"
+  run_launcher usage --json > "$profile_dir/usage.json"
+  run_launcher media --project-dir "$profile_dir" --limit 1 --json > "$profile_dir/media.json"
+  run_launcher send --dry-run --to telegram:123 --json "release dispatch probe" \
+    > "$profile_dir/send.json"
+  run_launcher policy list
+  run_launcher skill list
+  python3 - "$profile_dir" <<'PY'
 import json
 import pathlib
 import sys
@@ -835,10 +780,10 @@ assert sent["target"] == "123"
 assert sent["content_bytes"] == len("release dispatch probe")
 PY
 
-    mkdir -p "$profile_dir/hermes"
-    run_launcher migrate hermes audit --json --source "$profile_dir/hermes" \
-      --target "$home_dir/.lemon" > "$profile_dir/hermes-audit.json"
-    python3 - "$profile" "$profile_dir/hermes-audit.json" <<'PY'
+  mkdir -p "$profile_dir/hermes"
+  run_launcher migrate hermes audit --json --source "$profile_dir/hermes" \
+    --target "$home_dir/.lemon" > "$profile_dir/hermes-audit.json"
+  python3 - "$profile" "$profile_dir/hermes-audit.json" <<'PY'
 import json
 import sys
 
@@ -851,54 +796,53 @@ if "summary" not in report or not isinstance(report.get("items"), list):
     sys.exit(1)
 PY
 
-    if [ "$profile" = "lemon_runtime_full" ]; then
-      wait_for_health "http://127.0.0.1:$web_port/healthz" "$profile web"
+  if [ "$profile" = "lemon_runtime_full" ]; then
+    wait_for_health "http://127.0.0.1:$web_port/healthz" "$profile web"
 
-      launcher_output="$(run_launcher web --no-open 2>&1)"
-      if ! printf '%s\n' "$launcher_output" | grep -q "Lemon Web: http://127.0.0.1:$web_port/"; then
-        echo "$profile: packaged 'lemon web --no-open' did not report the healthy Web URL" >&2
-        printf '%s\n' "$launcher_output" >&2
-        exit 1
-      fi
-
-      assert_no_asset_warmup_failure "$profile" "$extract_dir"
-    fi
-
-    run_launcher stop
-    if run_launcher status; then
-      echo "$profile: status succeeded after stop" >&2
+    launcher_output="$(run_launcher web --no-open 2>&1)"
+    if ! printf '%s\n' "$launcher_output" | grep -q "Lemon Web: http://127.0.0.1:$web_port/"; then
+      echo "$profile: packaged 'lemon web --no-open' did not report the healthy Web URL" >&2
+      printf '%s\n' "$launcher_output" >&2
       exit 1
     fi
 
-    # Foreground start must be observable and stoppable from another launcher.
-    run_launcher start > "$profile_dir/foreground.log" 2>&1 &
-    local foreground_pid=$!
-    wait_for_health "http://127.0.0.1:$control_port/healthz" "$profile foreground control-plane"
-    run_launcher status
-    run_launcher stop
-    wait "$foreground_pid" || true
-    if run_launcher status; then
-      echo "$profile: status succeeded after foreground stop" >&2
-      exit 1
-    fi
-    run_release eval "LemonCore.Doctor.CLI.bundle!(bundle_path: \"$bundle_path\")"
-
-    if [ ! -f "$bundle_path" ]; then
-      echo "$profile: support bundle was not created at $bundle_path" >&2
-      exit 1
-    fi
-
-    verify_support_bundle "$profile" "$bundle_path"
-
-    echo "ok $profile booted, health checked, and generated support bundle"
+    assert_no_asset_warmup_failure "$profile" "$extract_dir"
   fi
+
+  run_launcher stop
+  if run_launcher status; then
+    echo "$profile: status succeeded after stop" >&2
+    exit 1
+  fi
+
+  # Foreground start must be observable and stoppable from another launcher.
+  run_launcher start > "$profile_dir/foreground.log" 2>&1 &
+  local foreground_pid=$!
+  wait_for_health "http://127.0.0.1:$control_port/healthz" "$profile foreground control-plane"
+  run_launcher status
+  run_launcher stop
+  wait "$foreground_pid" || true
+  if run_launcher status; then
+    echo "$profile: status succeeded after foreground stop" >&2
+    exit 1
+  fi
+  run_release eval "LemonCore.Doctor.CLI.bundle!(bundle_path: \"$bundle_path\")"
+
+  if [ ! -f "$bundle_path" ]; then
+    echo "$profile: support bundle was not created at $bundle_path" >&2
+    exit 1
+  fi
+
+  verify_support_bundle "$profile" "$bundle_path"
+
+  echo "ok $profile booted, health checked, and generated support bundle"
 }
 
 if [ "$MODE" = "single" ]; then
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/lemon-release-boot.XXXXXX")"
   trap 'cleanup_work_dir "$work_dir"' EXIT
 
-  boot_one_profile "$SINGLE_PROFILE" "$SINGLE_TARBALL" "$work_dir" ""
+  boot_one_profile "$SINGLE_PROFILE" "$SINGLE_TARBALL" "$work_dir" "$SINGLE_EXPECTED_COMMIT"
 
   echo "verified release runtime boot for 1 profile (single mode: $SINGLE_PROFILE)"
   exit 0

@@ -26,6 +26,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: product-smoke-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   MIX_ENV: prod
   LEMON_SECRETS_MASTER_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
@@ -69,6 +73,10 @@ jobs:
         with:
           otp-version: "28.5"
           elixir-version: "1.19.5"
+          # setup-beam never retries a mirror; jsDelivr proxies builds.hex.pm.
+          hexpm-mirrors: |
+            https://builds.hex.pm
+            https://cdn.jsdelivr.net/hex
 
       # Runtime releases build and bundle clients/lemon-browser-node.
       - name: Setup Node

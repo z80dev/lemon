@@ -42,7 +42,7 @@ gh workflow run release.yml --ref main -f channel=stable -f draft=false
 The workflow serializes release cuts and performs the complete operation:
 
 1. The full `ci.yml` gate set (fast x4, quality, deterministic eval, install,
-   clients, Dialyzer gate, sim bench, WASM) gates the dispatch's exact source
+   clients, Dialyzer gate, WASM) gates the dispatch's exact source
    commit **before** any version/changelog mutation, release commit, tag or
    push. A green `ci.yml` push run of that commit is reused through
    `scripts/ci_verified_commit`, which also waits up to 30 minutes for one that
@@ -57,8 +57,8 @@ The workflow serializes release cuts and performs the complete operation:
    versions with existing tags are rejected without changing files.
 3. GitHub Actions commits that cut to `main`, creates an annotated CalVer tag,
    and checks out the prepared tag (not the source commit) for every build.
-4. Native runners build and verify all 14 tarballs (the existing 11 runtime/TUI
-   artifacts plus three standalone `lemon_bot` backends). Container builds are
+4. Native runners build and verify all 12 tarballs (nine runtime/TUI artifacts
+   plus three standalone `lemon_bot` backends). Container builds are
    smoke-tested and merged under the version-specific tag.
 5. The workflow verifies the assembled manifest and artifacts, publishes the
    GitHub Release, then promotes the selected mutable container channel tag.
@@ -114,14 +114,14 @@ Current release automation produces:
   `mix release`, one per profile and platform.
 - A `manifest.json` describing every artifact in the release.
 
-The original matrix remains `lemon_runtime_min` and `lemon_runtime_full` on all
-three platform tags, `sim_broadcast_platform` on the two Linux tags, and
-`lemon_tui` on all three tags: 11 artifacts. `lemon_tui` contains
+The runtime matrix is `lemon_runtime_min`, `lemon_runtime_full` and
+`lemon_tui` on all three platform tags: nine artifacts. `lemon_tui` contains
 `tui/bin/lemon-tui`, not a BEAM release. The standalone `lemon_bot` profile adds
-one tarball on each platform, for **14 tarballs total**. It contains
+one tarball on each platform, for **12 tarballs total**. It contains
 `bot/bin/lemon-bot`, the complete built browser client in `bot/web`, and the
 host-native Sharp addon and libvips dependencies under `bot/node_modules`.
-It requires neither BEAM, the TUI, nor an installed Bun/Node runtime.
+It requires neither BEAM, the TUI, nor an installed Bun/Node runtime. The
+`sim_broadcast_platform` release is not published.
 
 The release workflow calls the single canonical builder on each native host:
 

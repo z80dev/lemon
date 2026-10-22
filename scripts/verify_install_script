@@ -31,7 +31,7 @@ Checks:
     and an unsupported platform are all refused
   - an exact pin accepts the channel its manifest publishes unless LEMON_CHANNEL
     is set explicitly, in which case a contradiction is refused
-  - --require-bot installs only the full or min runtime (never backend, sim, or
+  - --require-bot installs only the full or min runtime (never backend or
     TUI), refuses other profiles before any download, and refuses a staged or
     already-installed runtime whose capability gate or exact version fails,
     leaving the live install and no residue
@@ -40,7 +40,7 @@ Checks:
     preserved, and a --bundle path containing literal Elixir interpolation
     syntax survives verbatim
   - first-run setup is invoked once through an allocated fixture terminal,
-    while --skip-setup, the sim profile, and an unavailable terminal do not
+    while --skip-setup and an unavailable terminal do not
     invoke it; unavailable terminals print the exact absolute setup command
   - the fixture TUI gates an incomplete installation through setup once, then
     does not repeat setup once its config and credential source are ready
@@ -456,7 +456,6 @@ tarball_v5="$(build_fixture_tarball 9999.5.0)"
 tui_v1="$(build_fixture_tui_tarball 9999.1.0)"
 tui_v2="$(build_fixture_tui_tarball 9999.2.0)"
 tui_v5="$(build_fixture_tui_tarball 9999.5.0)"
-sim_v1="$(build_fixture_tarball 9999.1.0 sim_broadcast_platform)"
 
 forged_sha="$(python3 -c 'print("f" * 64)')"
 
@@ -467,8 +466,6 @@ forged_sha="$(python3 -c 'print("f" * 64)')"
 publish "$serve_root/releases/latest/download" 9999.1.0 "$tarball_v1" "" "$tui_v1"
 publish "$serve_root/releases/download/v9999.1.0" 9999.1.0 "$tarball_v1" "" "$tui_v1"
 publish "$serve_root/releases/download/v9999.2.0" 9999.2.0 "$tarball_v2" "" "$tui_v2"
-publish "$serve_root/sim/releases/latest/download" 9999.1.0 "$sim_v1" "" "" "" \
-  sim_broadcast_platform
 
 # A parallel tree whose manifest advertises a checksum the tarball does not have.
 publish "$serve_root/corrupt/releases/latest/download" 9999.3.0 "$tarball_v3" "$forged_sha"
@@ -692,37 +689,6 @@ if run_install "$work_dir/install-no-tty.log" "$no_tty_home" "$base_url"; then
 else
   fail "a non-TTY install exited non-zero"
   cat "$work_dir/install-no-tty.log" >&2
-fi
-
-# The sim profile never has an interactive setup journey, even when a terminal
-# is available. Its published runtime is Linux-only, so macOS verifies the
-# actionable platform refusal and that setup was never entered.
-sim_home="$work_dir/home-sim"
-mkdir -p "$sim_home"
-
-if [ "$PLATFORM_OS" = "linux" ]; then
-  if run_install_with_tty "$work_dir/install-sim.log" "$sim_home" "$base_url/sim" LEMON_PROFILE=sim; then
-    if [ "$(setup_count "$sim_home")" = "0" ] &&
-      ! grep -Fq "$sim_home/.lemon/bin/lemon setup" "$work_dir/install-sim.log"; then
-      ok "the sim profile skips setup even with an interactive terminal"
-    else
-      fail "the sim profile attempted or advertised setup"
-      cat "$work_dir/install-sim.log" >&2
-    fi
-  else
-    fail "the sim profile install exited non-zero"
-    cat "$work_dir/install-sim.log" >&2
-  fi
-else
-  if run_install_with_tty "$work_dir/install-sim.log" "$sim_home" "$base_url/sim" LEMON_PROFILE=sim; then
-    fail "the sim profile installed on an unsupported macOS host"
-  elif [ "$(setup_count "$sim_home")" = "0" ] &&
-    grep -Fq "built for Linux only" "$work_dir/install-sim.log"; then
-    ok "the sim profile refuses macOS without entering setup"
-  else
-    fail "the sim profile macOS refusal was not actionable or entered setup"
-    cat "$work_dir/install-sim.log" >&2
-  fi
 fi
 
 # --------------------------------------------------------------- assertions -
@@ -983,11 +949,10 @@ profile_home="$work_dir/home-require-profile"
 mkdir -p "$profile_home"
 requests_before="$(http_requests)"
 profile_ok=1
-for profile_case in env-bot flag-bot flag-sim; do
+for profile_case in env-bot flag-bot; do
   case "$profile_case" in
     env-bot) profile_envs=(LEMON_PROFILE=lemon_bot); profile_args=(--require-bot) ;;
     flag-bot) profile_envs=(LEMON_PROFILE=full); profile_args=(--profile lemon_bot --require-bot) ;;
-    flag-sim) profile_envs=(LEMON_PROFILE=full); profile_args=(--profile sim --require-bot) ;;
   esac
   # Consumer-visible contract: rejected, with no request or state change. The
   # refusal wording and which guard fires first are not part of it.
@@ -998,7 +963,7 @@ for profile_case in env-bot flag-bot flag-sim; do
   fi
 done
 if [ "$profile_ok" = 1 ] && [ ! -e "$profile_home/.lemon" ] && [ "$(http_requests)" = "$requests_before" ]; then
-  ok "--require-bot refuses backend and sim profiles before any download or state change"
+  ok "--require-bot refuses the backend profile before any download or state change"
 else
   fail "--require-bot accepted or partially acted on a non-worker profile"
 fi

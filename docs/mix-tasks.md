@@ -250,5 +250,5 @@ browser, not a video). Net: 15 tasks removed with no loss of capability.
 switch sets and example entrypoints: `werewolf` supports per-seat models,
 `vending_bench` has benchmark presets, and `tic_tac_toe` exposes kernel-level
 offline strategies. A shared dispatcher would not remove those differences.
-VendingBench is also called directly by `scripts/ci_sim_bench.sh` and
+VendingBench is also called directly by `scripts/sim_bench.sh` and
 `scripts/generate_sim_demo_bundles.sh`.

@@ -8,7 +8,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Removed
+
+- Releases no longer publish `sim_broadcast_platform` tarballs, and
+  `install.sh` no longer accepts `--profile sim`. Build that release from
+  source or with `apps/lemon_sim_ui/Dockerfile`. A GitHub release now contains
+  12 tarballs.
+- CI no longer tests LemonSim. Pull requests, `main`, release preflight and
+  nightly coverage skip the `lemon_sim` and `lemon_sim_ui` suites. The
+  `sim-bench` job and the release-smoke Sim UI container job are gone. Run
+  LemonSim checks locally with `scripts/test changed` and
+  `scripts/sim_bench.sh`, which replaces `scripts/ci_sim_bench.sh`.
 
 ---
 
