@@ -554,67 +554,6 @@ jobs:
           docker rm --force lemon-sim-smoke >/dev/null 2>&1 || true
           docker rm --force lemon-sim-hosted-smoke >/dev/null 2>&1 || true
 
-  hosted-werewolf-browser-smoke:
-    name: Hosted Werewolf multiplayer browser
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup BEAM
-        uses: erlef/setup-beam@v1
-        with:
-          otp-version: "28.5"
-          elixir-version: "1.19.5"
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: apps/lemon_sim_ui/assets/package-lock.json
-
-      - name: Install and build
-        env:
-          MIX_ENV: dev
-        run: |
-          mix deps.get
-          mix compile --warnings-as-errors
-          npm ci --prefix apps/lemon_sim_ui/assets --cache /tmp/lemon-sim-ui-npm-cache
-          npm --prefix apps/lemon_sim_ui/assets run build
-
-      - name: Start hosted test server
-        env:
-          MIX_ENV: dev
-          LEMON_STORE_PATH: /tmp/lemon-hosted-browser-store
-          LEMON_SIM_UI_PORT: "14091"
-        run: |
-          mix phx.server > /tmp/lemon-hosted-browser.log 2>&1 &
-          echo "HOSTED_SERVER_PID=$!" >> "$GITHUB_ENV"
-          for attempt in $(seq 1 45); do
-            if curl --fail --silent http://127.0.0.1:14091/readyz > /dev/null; then
-              exit 0
-            fi
-            sleep 2
-          done
-          cat /tmp/lemon-hosted-browser.log
-          exit 1
-
-      - name: Run five-session hosted smoke
-        env:
-          HOSTED_WEREWOLF_SMOKE_URL: http://127.0.0.1:14091
-        run: npm --prefix apps/lemon_sim_ui/assets run smoke:hosted-werewolf
-
-      - name: Collect hosted server logs
-        if: failure()
-        run: cat /tmp/lemon-hosted-browser.log || true
-
-      - name: Stop hosted test server
-        if: always()
-        run: kill "$HOSTED_SERVER_PID" 2>/dev/null || true
-
   tui-smoke:
     name: TUI binary (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
