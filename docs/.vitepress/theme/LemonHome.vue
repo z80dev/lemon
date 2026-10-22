@@ -277,8 +277,6 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
 .stage { position: relative; height: 560px; }
 .sun { position: absolute; inset: 70px 30px 60px 60px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, color-mix(in srgb, var(--lemon-brand) 70%, transparent), color-mix(in srgb, var(--lemon-brand) 18%, transparent) 62%, transparent 72%); filter: blur(2px); animation: breathe 7s ease-in-out infinite; }
 .orbit { position: absolute; inset: 40px 0 30px 30px; border-radius: 50%; border: 1.5px dashed color-mix(in srgb, var(--vp-c-text-1) 16%, transparent); animation: spin 80s linear infinite; }
-:global(.dark) .sun { background: radial-gradient(circle at 40% 35%, rgb(233 212 116 / .34), rgb(233 212 116 / .08) 62%, transparent 72%); }
-:global(.dark) .hero h1 .move em::after { background: rgb(233 212 116 / .42); }
 .mascot { position: absolute; left: 50%; top: 52%; translate: -50% -50%; animation: pop .9s .1s cubic-bezier(.34, 1.56, .64, 1) both; }
 .mascot :deep(.lemon-face) { position: relative; z-index: 1; animation: bob 4.8s ease-in-out infinite; filter: drop-shadow(0 18px 24px rgb(80 70 10 / .18)); }
 .mascot-shadow { position: absolute; left: 18%; right: 18%; bottom: -26px; height: 22px; border-radius: 50%; background: rgb(30 35 20 / .14); filter: blur(6px); animation: shadow 4.8s ease-in-out infinite; }
@@ -435,4 +433,29 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
   .hero h1 .move em::after { transform: rotate(-1.6deg); }
   .worker.crashes .dead, .restart { display: none; }
 }
+</style>
+
+<style>
+/*
+ * Dark mode: lemon is an accent on near-black, never a backdrop behind light
+ * text. Unscoped because Vue's scoped :global() drops descendant selectors.
+ */
+.dark .lemon-home { --lemon-text: #EED985; --dark-card: #191A17; }
+.dark .lemon-home .hero h1 .move em, .dark .lemon-home h2 em { color: var(--lemon-text); }
+.dark .lemon-home .hero h1 .move em::after { bottom: -.13em; height: .2em; border-radius: 0; opacity: .75; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 10'%3E%3Cpath d='M0 5 Q10 0 20 5 T40 5' fill='none' stroke='%23E9D474' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E") left center / auto 100% repeat-x; }
+.dark .lemon-home .pill:hover { background: rgb(233 212 116 / .12); color: var(--lemon-text) !important; }
+.dark .lemon-home .install, .dark .lemon-home .beam, .dark .lemon-home .terminal { background: var(--dark-card); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .07); }
+.dark .lemon-home .sun { background: radial-gradient(circle at 42% 38%, rgb(233 212 116 / .2), rgb(233 212 116 / .05) 55%, transparent 68%); filter: blur(8px); }
+.dark .lemon-home .orbit { border-color: rgb(255 255 255 / .1); }
+.dark .lemon-home .mascot .lemon-face { filter: drop-shadow(0 18px 30px rgb(0 0 0 / .45)); }
+.dark .lemon-home .mascot-shadow { background: rgb(0 0 0 / .5); }
+.dark .lemon-home .bubble, .dark .lemon-home .helper { box-shadow: inset 0 0 0 1px rgb(255 255 255 / .06), 0 12px 30px -14px rgb(0 0 0 / .7); }
+.dark .lemon-home .bubble.user { box-shadow: 0 12px 30px -14px rgb(0 0 0 / .7); }
+.dark .lemon-home .feature, .dark .lemon-home .path { background: linear-gradient(160deg, color-mix(in srgb, var(--tone) 12%, var(--dark-card)), var(--dark-card) 62%); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 16%, transparent); }
+.dark .lemon-home .feature:hover, .dark .lemon-home .path:hover { background: linear-gradient(160deg, color-mix(in srgb, var(--tone) 20%, var(--dark-card)), var(--dark-card) 72%); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 34%, transparent); }
+.dark .lemon-home .feature-link { color: color-mix(in srgb, var(--tone) 80%, #fff); }
+.dark .lemon-home .path .kicker { color: color-mix(in srgb, var(--tone) 65%, var(--vp-c-text-2)); }
+.dark .lemon-home .phone { background: color-mix(in srgb, var(--tone-blue) 9%, var(--dark-card)); box-shadow: inset 0 0 0 1px rgb(160 196 234 / .14); }
+.dark .lemon-home .browser { background: var(--dark-card); }
+.dark .lemon-home .closing { background: radial-gradient(80% 70% at 50% 0%, rgb(233 212 116 / .13), transparent 72%), var(--dark-card); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .06); }
 </style>
