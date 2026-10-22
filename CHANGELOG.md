@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.10.23]
+
 ### Changed
 
 - Lemon Bot's Mac app now connects in one click with no email, password or
