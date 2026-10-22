@@ -11,9 +11,16 @@ export default {
   base: "/",
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: "/brand/lemon-mark.svg" }],
-    ["meta", { name: "theme-color", content: "#f6f5ed" }],
+    ["meta", { name: "theme-color", content: "#f8f8f4", media: "(prefers-color-scheme: light)" }],
+    ["meta", { name: "theme-color", content: "#121311", media: "(prefers-color-scheme: dark)" }],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:site_name", content: "Lemon" }],
+    ["meta", { property: "og:image", content: "https://lemon.food/brand/lemon-og.png" }],
+    ["meta", { property: "og:image:width", content: "1200" }],
+    ["meta", { property: "og:image:height", content: "630" }],
+    ["meta", { property: "og:image:alt", content: "Lemon: a crew of smiling lemon mascots under the line “Your agents. Your machine. Your move.”" }],
+    ["meta", { name: "twitter:card", content: "summary_large_image" }],
+    ["meta", { name: "twitter:image", content: "https://lemon.food/brand/lemon-og.png" }],
   ],
   themeConfig: {
     logo: "/brand/lemon-mark.svg",

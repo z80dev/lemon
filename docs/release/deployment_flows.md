@@ -455,7 +455,11 @@ five isolated sessions plus a restart against the same volume.
 
 The public website and documentation share the VitePress project in `docs/`.
 Markdown remains the source of truth; `docs/.vitepress/theme/` supplies the
-homepage and shared visual theme. Brand SVG assets live in `docs/public/brand/`.
+homepage and shared visual theme. `LemonFace.vue` draws the mascot with the
+Lemon Bot geometry and palette; reuse it rather than adding mascot images.
+Brand assets (favicon mark, README banner, social card) live in
+`docs/public/brand/`. Fonts are self-hosted through `@fontsource-variable`
+packages, so the site makes no third-party font requests.
 Relative Markdown links into the repository source are rewritten to GitHub by
 `docs/.vitepress/source-links.mjs`; `npm test --prefix docs` checks this behavior.
 This static site deploys independently of Lemon runtime releases.

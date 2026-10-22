@@ -8,7 +8,22 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Changed
+
+- Redesigned the <https://lemon.food/> website and README banner around the
+  Lemon Bot mascot and palette: a new illustrated homepage, Fraunces and
+  Instrument Sans typography, restyled documentation pages in light and dark
+  mode, a mascot favicon, a social preview image, and a 404 page.
+- Lemon Bot's Mac app now connects in one click with no email, password or
+  setup code. **This Mac** starts Lemon Bot if it isn't running and signs in
+  as its owner, creating the owner on a fresh install; **Another machine**
+  does the same for any host you can `ssh` into and keeps a loopback tunnel
+  open. Proof is the backend's new private `~/.lemon/lemon_bot/local-access.key`
+  (`POST /v1/auth/local`). The looping **Find Lemon Bot** / sign-in sheets and
+  duplicate `localhost` entries are gone, **Start Lemon Bot** starts the backend
+  directly instead of copying a Terminal command, and an expired session
+  reconnects on its own. The Mac app is no longer sandboxed so it can run
+  `ssh` and `lemon-bot` as you; password and SSO sign-in remain one link away.
 
 ---
 
