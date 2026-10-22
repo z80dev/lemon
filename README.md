@@ -8,10 +8,10 @@
 Pair with it in your terminal, hand it work from your phone, and let it keep going while you sleep,
 all on a runtime you own.
 
-[Docs](https://z80dev.github.io/lemon/) · [Quickstart](docs/getting-started/quickstart.md) · [Releases](https://github.com/z80dev/lemon/releases) · [Changelog](CHANGELOG.md)
+[Docs](https://lemon.food/) · [Quickstart](docs/getting-started/quickstart.md) · [Releases](https://github.com/z80dev/lemon/releases) · [Changelog](CHANGELOG.md)
 
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-58A6FF?style=flat&colorA=222222" alt="MIT license"></a>
-<a href="https://z80dev.github.io/lemon/"><img src="https://img.shields.io/badge/docs-z80dev.github.io%2Flemon-FFD700?style=flat&colorA=222222" alt="Documentation"></a>
+<a href="https://lemon.food/"><img src="https://img.shields.io/badge/docs-lemon.food-FFD700?style=flat&colorA=222222" alt="Documentation"></a>
 <img src="https://img.shields.io/badge/Elixir%2FOTP-4B275F?style=flat&colorA=222222&logo=elixir&logoColor=white" alt="Elixir/OTP">
 
 </div>

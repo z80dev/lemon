@@ -479,21 +479,26 @@ use GitHub Actions, docs changes pushed to `main` deploy automatically. To redep
 gh workflow run docs-site.yml --ref main -f deploy=true
 ```
 
-The default production URL is `https://z80dev.github.io/lemon/`. Verify the
-homepage, quickstart, search, mobile navigation, and brand assets after deployment.
-To roll back a presentation change, revert its commit on `main` and let the same
-workflow publish the previous site. No runtime release or restart is required.
+The production URL is `https://lemon.food/`, served at the domain root (VitePress
+`base: "/"`). Verify the homepage, quickstart, search, mobile navigation, and
+brand assets after deployment. To roll back a presentation change, revert its
+commit on `main` and let the same workflow publish the previous site. No runtime
+release or restart is required.
 
-### Connect a custom domain
+### Custom domain
 
-A domain is optional. Once registered, configure it in the repository's Pages
-settings and add the DNS records GitHub specifies. Verify domain ownership and
-wait for HTTPS to become available before advertising the address. Follow
-[GitHub's custom-domain guide](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site).
+`lemon.food` is registered at Porkbun, which hosts its DNS. The repository's
+Pages settings carry the custom domain with HTTPS enforced. DNS records follow
+[GitHub's custom-domain guide](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site):
 
-For a domain served at its root, change the VitePress `base` from `/lemon/` to `/`.
-Update the favicon and social-image URLs in `docs/.vitepress/config.js`, `SITE`
-in `scripts/generate_docs_llms.py`, and public website links in the README and
-docs. Regenerate the machine-readable docs, rebuild, and verify the new HTTPS
-origin and deep links. Keep every homepage link base-aware with VitePress
-`withBase` so both project-path and custom-domain deployments work.
+|Name|Type|Content|
+|---|---|---|
+|`lemon.food`|`A`|`185.199.108.153`, `185.199.109.153`, `185.199.110.153`, `185.199.111.153`|
+|`lemon.food`|`AAAA`|`2606:50c0:8000::153`, `2606:50c0:8001::153`, `2606:50c0:8002::153`, `2606:50c0:8003::153`|
+|`www.lemon.food`|`CNAME`|`z80dev.github.io`|
+
+Do not add wildcard records; GitHub warns they allow subdomain takeover.
+
+Changing the domain means updating those records, the Pages custom domain,
+`SITE` in `scripts/generate_docs_llms.py`, and public website links in the
+README and docs. Keep homepage links base-aware with VitePress `withBase`.
