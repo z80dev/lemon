@@ -437,9 +437,9 @@ gzip assets and immutable caching, seeds persisted Werewolf state, and performs
 a graceful stop/restart against the same mounted volume. It also boots a second
 production container with hosted mode, HTTPS URL configuration, and a creation
 invite, then verifies secure/no-store cookies and paused-room recovery after a
-restart. The hosted browser lane (`npm run smoke:hosted-werewolf`) separately
-exercises five isolated sessions, secret non-leakage, timeout, pause/resume,
-reconnect, completion, export, rematch, and the supported responsive viewports.
+restart. The hosted browser lane (`npm run smoke:hosted-werewolf`) is not part
+of CI; run it manually against a candidate when hosted rooms are enabled (see
+the release checklist).
 
 ---
 
