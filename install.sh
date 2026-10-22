@@ -61,7 +61,7 @@ Usage:
   sh install.sh --resolve-version
 
 Options:
-  --profile NAME  Select full, min, sim, or lemon_bot (backend only, no BEAM/TUI).
+  --profile NAME  Select full, min, or lemon_bot (backend only, no BEAM/TUI).
   --force         Reinstall even if the target version is already present.
   --verify        Boot on ephemeral ports, then stop. Native: poll /healthz.
                   Backend: check /v1/setup and web before promotion.
@@ -74,7 +74,7 @@ Options:
                   installing. Run \$HOME/.lemon/bin/lemon setup later to
                   configure Lemon.
   --require-bot   Install only a bot-capable native runtime (full or min; never the
-                  lemon_bot backend, sim, or the TUI). The staged runtime must pass
+                  lemon_bot backend or the TUI). The staged runtime must pass
                   \`lemon node capabilities --json --require-bot\` and report the
                   manifest version before anything is promoted.
   --resolve-version
@@ -94,12 +94,12 @@ Environment:
                               pinned release manifest publishes.
   LEMON_CHANNEL               Release channel. Default: stable for unpinned
                               installs. An explicit value must match the manifest.
-  LEMON_PROFILE               full | min | sim | lemon_bot, or a full profile name
-                              (lemon_runtime_full, lemon_runtime_min,
-                              sim_broadcast_platform). Default: lemon_runtime_full.
+  LEMON_PROFILE               full | min | lemon_bot, or a full profile name
+                              (lemon_runtime_full, lemon_runtime_min).
+                              Default: lemon_runtime_full.
   LEMON_NO_TUI                Set to 1 to install the runtime only, skipping the
                               terminal UI (\`lemon-tui\`). Roughly halves the
-                              download. The sim profile never ships a TUI.
+                              download.
   LEMON_INSTALL_IGNORE_GLIBC  Set to 1 to silence the Linux glibc baseline check.
   LEMON_INSTALL_BASE_URL      Override the GitHub release base URL (test seam).
 
@@ -240,20 +240,15 @@ check_glibc
 case "$PROFILE_INPUT" in
   full|lemon_runtime_full) PROFILE="lemon_runtime_full" ;;
   min|lemon_runtime_min) PROFILE="lemon_runtime_min" ;;
-  sim|sim_broadcast_platform) PROFILE="sim_broadcast_platform" ;;
   lemon_bot) PROFILE="lemon_bot" ;;
   *)
     die "unknown LEMON_PROFILE '$PROFILE_INPUT'.
-  Use full, min, sim, lemon_bot, or a full runtime profile name."
+  Use full, min, lemon_bot, or a full runtime profile name."
     ;;
 esac
 
 if [ "$REQUIRE_BOT" = "1" ] && [ "$PROFILE" != "lemon_runtime_full" ] && [ "$PROFILE" != "lemon_runtime_min" ]; then
   die "--require-bot needs a bot-capable native runtime (full or min); the $PROFILE profile cannot host a Lemon Bot worker."
-fi
-
-if [ "$PROFILE" = "sim_broadcast_platform" ] && [ "$PLATFORM_OS" != "linux" ]; then
-  die "the sim_broadcast_platform profile is built for Linux only; $PLATFORM has no such artifact."
 fi
 
 # --------------------------------------------------------------- manifest ----
@@ -790,8 +785,6 @@ setup_handoff() {
   if [ "$PROFILE" = "lemon_bot" ]; then
     info "Start lemon-bot with LEMON_BOT_CONTROL_URL and LEMON_BOT_OPERATOR_TOKEN configured."
     info "Backend state: $HOME/.lemon/lemon_bot (override with LEMON_BOT_DATA_DIR)."
-  elif [ "$PROFILE" = "sim_broadcast_platform" ]; then
-    info "Setup is not available for the sim profile."
   elif [ "$SKIP_SETUP" = "1" ]; then
     info "Setup skipped. Run this when you are ready to configure Lemon:"
     info "    $BIN_DIR/lemon setup"
@@ -843,10 +836,9 @@ fi
 
 # The TUI is a second, optional artifact in the same manifest: a separate
 # per-platform tarball that unpacks into tui/ next to the runtime's bin/.
-# The sim profile has no terminal UI, LEMON_NO_TUI=1 opts out, and a bot worker
-# host (--require-bot) is headless.
+# LEMON_NO_TUI=1 opts out, and a bot worker host (--require-bot) is headless.
 WANT_TUI=1
-if [ "$PROFILE" = "lemon_bot" ] || [ "$PROFILE" = "sim_broadcast_platform" ] || [ "${LEMON_NO_TUI:-0}" = "1" ] || [ "$REQUIRE_BOT" = "1" ]; then
+if [ "$PROFILE" = "lemon_bot" ] || [ "${LEMON_NO_TUI:-0}" = "1" ] || [ "$REQUIRE_BOT" = "1" ]; then
   WANT_TUI=0
 fi
 

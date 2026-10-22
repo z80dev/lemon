@@ -495,7 +495,7 @@ run_premerge() {
   fi
   premerge_step changed run_changed --base "$base" --narrow
   echo "Not covered: downstream tests that don't name a changed module (PR CI runs those apps whole),"
-  echo "the full suite (main after merge), dialyzer/install/sim-bench (CI)."
+  echo "the full suite (main after merge), dialyzer/install (CI), LemonSim benchmarks (scripts/sim_bench.sh; not in CI)."
 }
 
 # Under the factory, umbrella lanes that compile or run BEAM tests are gated by

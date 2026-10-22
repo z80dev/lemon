@@ -8,7 +8,6 @@ name: CI
 #   check        scripts/test quality + scripts/test eval-fast (always)
 #   test (1..4)  scripts/test fast split with ExUnit --partitions 4
 #   dialyzer     full advisory run + allowlist gate (scripts/dialyzer_gate.sh)
-#   sim-bench    offline sim suites and byte-determinism gates
 #   install      scripts/verify_source_install + scripts/verify_install_script
 #   clients      scripts/test clients (TUI + lemon-browser-node)
 #   wasm-runtime cargo tests + WASM integration test
@@ -56,6 +55,8 @@ jobs:
   # conservative: config, mix.exs/lock, scripts, workflows, release/installer
   # files or any unknown path select the full suite. Every other event (main
   # pushes, release preflight, nightly, manual dispatch) always runs everything.
+  # LemonSim (lemon_sim, lemon_sim_ui) is excluded on every event: CI never runs
+  # its suites or benchmarks, so a PR touching only LemonSim runs no BEAM tests.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -63,7 +64,7 @@ jobs:
       code: ${{ github.event_name != 'pull_request' || steps.select.outputs.scope != 'none' }}
       scope: ${{ github.event_name != 'pull_request' && 'full' || steps.select.outputs.scope }}
       apps: ${{ steps.select.outputs.apps }}
-      test_paths: ${{ github.event_name != 'pull_request' && '' || steps.select.outputs.test_paths }}
+      test_paths: ${{ steps.select.outputs.test_paths }}
       partitions: ${{ github.event_name != 'pull_request' && '4' || steps.shards.outputs.partitions }}
       matrix: ${{ github.event_name != 'pull_request' && '[1,2,3,4]' || steps.shards.outputs.matrix }}
       clients: ${{ github.event_name != 'pull_request' || steps.select.outputs.clients == 'true' }}
@@ -95,9 +96,17 @@ jobs:
           PY
 
       - name: Select affected apps and lanes
-        if: github.event_name == 'pull_request'
         id: select
-        run: scripts/changed_tests --base "origin/${GITHUB_BASE_REF}" --format github
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            scope=(--base "origin/${GITHUB_BASE_REF}")
+          else
+            scope=(--all)
+          fi
+          scripts/changed_tests "${scope[@]}" \
+            --exclude-app lemon_sim --exclude-app lemon_sim_ui --format github
 
       # Small selections run on one shard; the suite's long pole (coding_agent,
       # ~4-5 min of ExUnit across shards) and broad selections keep four.
@@ -217,8 +226,8 @@ jobs:
           family: test
           bun: "true"
 
-      # TEST_PATHS is empty for a full run; otherwise the selected app test
-      # directories (word-split on purpose).
+      # TEST_PATHS: the selected app test directories, never LemonSim's
+      # (word-split on purpose).
       - name: scripts/test fast (partition ${{ matrix.partition }}/${{ needs.changes.outputs.partitions }})
         env:
           MIX_TEST_PARTITION: ${{ matrix.partition }}
@@ -282,10 +291,13 @@ jobs:
       # The full umbrella keeps a documented backlog, so this run is advisory;
       # the gate below is what blocks. `--format github`/`short` crash on
       # OTP 28.5's `:exact_compare` tag, so use Erlang's own formatter.
+      # --ignore-exit-status is required: with `list_unused_filters: true` a
+      # stale .dialyzer_ignore.exs entry otherwise makes dialyxir discard the
+      # whole warning list (see scripts/dialyzer_gate.sh).
       - name: Run Dialyzer (full, advisory)
         run: |
           set -o pipefail
-          mix dialyzer --format dialyzer 2>&1 | tee dialyzer.out || true
+          mix dialyzer --format dialyzer --ignore-exit-status 2>&1 | tee dialyzer.out || true
 
       - name: Green gate — allowlisted packages must stay Dialyzer-clean
         run: scripts/dialyzer_gate.sh dialyzer.out
@@ -305,57 +317,6 @@ jobs:
             deps
             _build
           key: ${{ steps.beam.outputs.cache-key }}
-
-  # Only lemon_sim's suites; a change reaches them through lemon_sim itself or
-  # one of its umbrella dependencies (both select lemon_sim).
-  sim-bench:
-    needs: changes
-    if: needs.changes.outputs.scope == 'full' || contains(format(' {0} ', needs.changes.outputs.apps), ' lemon_sim ')
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Record tested checkout identity
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          python3 -I - <<'PY'
-          import json, os, subprocess
-          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-          print("FACTORY_CI_IDENTITY=" + json.dumps({
-              "tested_sha": tested,
-              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
-              "base_sha": os.environ["PR_BASE_SHA"] or tested,
-              "run_id": int(os.environ["GITHUB_RUN_ID"]),
-              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-          }))
-          PY
-
-      - name: BEAM setup
-        uses: ./.github/actions/beam-setup
-        with:
-          family: dev
-
-      - name: Compile
-        run: mix compile --warnings-as-errors
-
-      - name: Run simulation bench lane
-        run: scripts/ci_sim_bench.sh
-
-      - name: Upload simulation bench artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: sim-bench
-          path: |
-            ${{ runner.temp }}/sim-bench-ci/suites
-            ${{ runner.temp }}/sim-bench-ci/scores
-            ${{ runner.temp }}/sim-bench-ci/ratings/ratings.md
-            ${{ runner.temp }}/sim-bench-ci/ratings/ratings.json
 
   # The supported source-checkout and installer flows. These used to run only
   # in the release preflight, where stale checks surfaced at release time.
@@ -492,17 +453,24 @@ jobs:
           family: test
 
       - name: Setup Rust
+        id: rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Cargo registry and native runtime target dir
+      # _build/lemon-wasm-runtime holds the release runtime that
+      # CodingAgent.Wasm.Builder builds for the integration test; cold, that
+      # wasmtime build is most of this job. A hit never re-saves, so the key
+      # includes rustc: a new stable would otherwise rebuild everything forever.
+      - name: Cache Cargo registry and native runtime target dirs
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             native/lemon-wasm-runtime/target
-          key: ${{ runner.os }}-cargo-wasm-runtime-${{ hashFiles('native/lemon-wasm-runtime/Cargo.lock') }}
+            _build/lemon-wasm-runtime
+          key: ${{ runner.os }}-cargo-wasm-runtime-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('native/lemon-wasm-runtime/Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-cargo-wasm-runtime-${{ steps.rust.outputs.cachekey }}-
             ${{ runner.os }}-cargo-wasm-runtime-
 
       - name: Install WASM target
@@ -510,6 +478,11 @@ jobs:
 
       - name: Run WASM runtime tests
         run: cargo test --manifest-path native/lemon-wasm-runtime/Cargo.toml
+
+      # Builder reuses any existing runtime binary, so rebuild the restored one
+      # from this checkout (same command as Builder.manual_build_command/0).
+      - name: Build release WASM runtime
+        run: CARGO_TARGET_DIR=_build/lemon-wasm-runtime cargo build --release --manifest-path native/lemon-wasm-runtime/Cargo.toml
 
       # The coding_agent test_helper isolates HOME, so pin the rustup/cargo
       # toolchain homes installed by dtolnay/rust-toolchain explicitly.
@@ -572,7 +545,7 @@ jobs:
   result:
     name: CI result
     if: always()
-    needs: [changes, check, test, dialyzer, sim-bench, install, clients, wasm-runtime, history]
+    needs: [changes, check, test, dialyzer, install, clients, wasm-runtime, history]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

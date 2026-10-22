@@ -113,16 +113,22 @@ Version headings must consistently include or omit dates within each file.
 
 Diff checks do not replace the full suite on main after merge, nightly coverage
 and repeated regression/eval runs, or release assembly/boot/package checks.
-Dialyzer, install verification, sim-bench, and the dedicated WASM lane remain CI
+Dialyzer, install verification, and the dedicated WASM lane remain CI
 responsibilities. No live provider calls are needed for `premerge` or `changed`.
+
+CI does not test LemonSim. The `test` job and nightly coverage exclude the
+`lemon_sim` and `lemon_sim_ui` suites (`scripts/changed_tests --exclude-app`),
+and no workflow runs the simulation benchmarks. Before merging a LemonSim
+change, run `scripts/test changed` (it still selects both apps) and, for
+benchmark or determinism changes, `scripts/sim_bench.sh`.
 
 
 ## CI mapping
 
 | Workflow | Trigger | What it runs |
 | --- | --- | --- |
-| `ci.yml` | every PR and push to `main`; called by `release.yml` and `nightly.yml`; dispatch | `changes` → `scripts/changed_tests` (PRs only); `check` → `scripts/test quality` + `eval-fast` (PRs: `quality --base origin/<base>`, which formats and credo-checks only changed files unless the diff is full scope; Credo's cross-file checks are authoritative on `main`'s full run); `test (n/N)` → `scripts/test fast --partitions N [selected app test dirs]`; `dialyzer` (advisory full run plus the `scripts/dialyzer_gate.sh` allowlist gate); `sim-bench` (`scripts/ci_sim_bench.sh`); `install` → `scripts/verify_source_install` + `scripts/verify_install_script`; `clients` → `scripts/test clients`; `wasm-runtime`; `history` (PRs only); `CI result` (the one status to require; summarizes failures) |
-| `nightly.yml` | daily + dispatch | the full `ci.yml`; `scripts/test coverage`; the prompt/skill/overflow regression files with `--repeat-until-failure 5`; `scripts/test eval-fast` with 20 iterations; the `nightly-red` issue |
+| `ci.yml` | every PR and push to `main`; called by `release.yml` and `nightly.yml`; dispatch | `changes` → `scripts/changed_tests` (PRs: `--base origin/<base>`; other events: `--all`; always without LemonSim); `check` → `scripts/test quality` + `eval-fast` (PRs: `quality --base origin/<base>`, which formats and credo-checks only changed files unless the diff is full scope; Credo's cross-file checks are authoritative on `main`'s full run); `test (n/N)` → `scripts/test fast --partitions N [selected app test dirs]`; `dialyzer` (advisory full run plus the `scripts/dialyzer_gate.sh` allowlist gate); `install` → `scripts/verify_source_install` + `scripts/verify_install_script`; `clients` → `scripts/test clients`; `wasm-runtime`; `history` (PRs only); `CI result` (the one status to require; summarizes failures) |
+| `nightly.yml` | daily + dispatch | the full `ci.yml`; `scripts/test coverage` over every app except LemonSim; the prompt/skill/overflow regression files with `--repeat-until-failure 5`; `scripts/test eval-fast` with 20 iterations; the `nightly-red` issue |
 | `product-smoke.yml` | PRs touching `apps/**`, weekly, dispatch | Boots a `lemon_runtime_full` release against a local deterministic provider |
 | `release-smoke.yml` | release paths, weekly, dispatch | Release assembly and boot matrix |
 | `osv-scanner.yml` | lockfile changes, weekly | The only dependency-vulnerability scan (Mix, npm, Bun lockfiles) |
@@ -136,13 +142,13 @@ In `ci.yml`, pull requests run only what their diff can affect, chosen by
 `scripts/changed_tests --base origin/<base>` (see above): the `test` job runs the
 selected apps' test directories (one shard for small selections, four when
 `coding_agent` or more than six apps are selected, or for full scope); no
-selected app skips `test`, `dialyzer` and `install`; `sim-bench` runs when
-`lemon_sim` is selected; `clients` and `wasm-runtime` follow their lanes. `check`
-always runs. Every other event (pushes to `main`, release preflight, nightly,
-dispatch) runs every job, which is what lets a release reuse a main commit's
-green run. Cross-app effects that only appear in the shared umbrella BEAM (an app
-registering into another's runtime registry) are therefore caught by `main`'s
-full run, not by the pull request.
+selected app skips `test`, `dialyzer` and `install` (a diff touching only
+LemonSim selects no app); `clients` and `wasm-runtime` follow their lanes.
+`check` always runs. Every other event (pushes to `main`, release preflight,
+nightly, dispatch) runs every job over every app except LemonSim, which is what
+lets a release reuse a main commit's green run. Cross-app effects that only
+appear in the shared umbrella BEAM (an app registering into another's runtime
+registry) are therefore caught by `main`'s full run, not by the pull request.
 
 Every executing CI job records its actual Git HEAD, PR head/base (or pushed
 checkout), run ID and attempt immediately after the canonical unnamed checkout,
@@ -279,6 +285,13 @@ Own database fixtures with `start_supervised!` so shutdown finishes before direc
 cleanup; checking `Process.alive?` before stopping a test-linked process is a race.
 Atom-safety tests check that each generated untrusted token still fails
 `String.to_existing_atom/1`, rather than attributing VM-wide atom growth to one call.
+
+Tests that stop or kill an application-supervised process run a replacement under
+the test supervisor (for example `LemonAutomation.TestCronManager.isolate!/0`);
+repeated restarts otherwise exhaust the application supervisor's default intensity
+and stop the app for every later test. Restore application/system environment in
+its own `on_exit` callback, registered before cleanup that calls a service, so a
+`:noproc` cleanup failure cannot leak test configuration into other apps.
 
 Aggregation/property and per-delta cost tests should use the semantic dispatcher
 seam rather than synchronously rendering every accumulated snapshot through an

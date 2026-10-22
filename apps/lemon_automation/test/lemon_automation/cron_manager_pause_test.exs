@@ -1,7 +1,7 @@
 defmodule LemonAutomation.CronManagerPauseTest do
   use ExUnit.Case, async: false
 
-  alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore}
+  alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore, TestCronManager}
   alias LemonAutomation.Doctor.Checks.Cron, as: CronCheck
   alias LemonAutomation.Tools.Cron, as: CronTool
 
@@ -56,6 +56,8 @@ defmodule LemonAutomation.CronManagerPauseTest do
   end
 
   test "the pause survives a daemon restart and leaves stored schedules untouched", %{id: id} do
+    TestCronManager.isolate!()
+
     # Inside catch-up grace, so an unpaused restart would claim this slot once.
     due = LemonCore.Clock.now_ms() - 1_800_000
     store_job(id, next_run_at_ms: due)

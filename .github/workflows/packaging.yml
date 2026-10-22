@@ -17,6 +17,10 @@ name: Packaging
 #
 # Runs on pull requests that touch the packages, the generator or these
 # scripts, and nightly to catch drift from new upstream Hex releases.
+#
+# No deps/_build cache, deliberately: both scripts compile in fresh mktemp
+# projects, so the checkout's deps and _build are never used, and caching the
+# scratch projects would defeat the cold-consumer check. Hex fetches take ~3s.
 
 on:
   pull_request:
@@ -74,6 +78,10 @@ jobs:
         with:
           otp-version: ${{ matrix.otp }}
           elixir-version: ${{ matrix.elixir }}
+          # setup-beam never retries a mirror; jsDelivr proxies builds.hex.pm.
+          hexpm-mirrors: |
+            https://builds.hex.pm
+            https://cdn.jsdelivr.net/hex
 
       - name: scripts/verify_packages
         run: scripts/verify_packages
@@ -92,6 +100,10 @@ jobs:
         with:
           otp-version: "28.5"
           elixir-version: "1.19.5"
+          # setup-beam never retries a mirror; jsDelivr proxies builds.hex.pm.
+          hexpm-mirrors: |
+            https://builds.hex.pm
+            https://cdn.jsdelivr.net/hex
 
       - name: scripts/verify_generator
         run: scripts/verify_generator

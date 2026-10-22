@@ -90,6 +90,22 @@ class SelectorTest(unittest.TestCase):
         self.put("apps/lemon_sim/lib/sample.ex")
         self.assertEqual(self.selection()["apps"], ["lemon_sim", "lemon_sim_ui"])
 
+    def test_excluded_apps_leave_selection_and_can_empty_it(self):
+        exclude = ("lemon_sim", "lemon_sim_ui")
+        self.put("apps/lemon_sim/lib/sample.ex")
+        result = self.selection(exclude=exclude)
+        self.assertEqual((result["scope"], result["apps"], result["test_paths"]), ("none", [], []))
+        self.put("apps/lemon_core/lib/sample.ex")
+        result = self.selection(exclude=exclude)
+        self.assertEqual(len(result["apps"]), 7)
+        self.assertFalse(set(exclude) & set(result["apps"]))
+
+    def test_all_selects_every_app_without_a_diff(self):
+        result = self.selection(base="no-such-ref", all_apps=True, exclude=("lemon_sim_ui",))
+        self.assertEqual(result["scope"], "full")
+        self.assertEqual(len(result["test_paths"]), 8)
+        self.assertNotIn("apps/lemon_sim_ui/test", result["test_paths"])
+
     def test_core_includes_transitive_and_test_only_dependencies(self):
         self.put("apps/lemon_core/lib/sample.ex")
         self.assertEqual(len(self.selection()["apps"]), 9)

@@ -19,11 +19,11 @@ Want the shortest route to a working chat? Follow the
 The release workflow builds and boot-verifies these artifacts on native
 runners (`.github/workflows/release.yml`):
 
-| Platform | `full` (default) | `min` | `sim` | Terminal UI | `lemon_bot` backend |
-| --- | --- | --- | --- | --- | --- |
-| macOS Apple Silicon (`darwin-arm64`) | yes | yes | no | yes | yes |
-| Linux x86_64 (`linux-x86_64`) | yes | yes | yes | yes | yes |
-| Linux ARM64 (`linux-arm64`) | yes | yes | yes | yes | yes |
+| Platform | `full` (default) | `min` | Terminal UI | `lemon_bot` backend |
+| --- | --- | --- | --- | --- |
+| macOS Apple Silicon (`darwin-arm64`) | yes | yes | yes | yes |
+| Linux x86_64 (`linux-x86_64`) | yes | yes | yes | yes |
+| Linux ARM64 (`linux-arm64`) | yes | yes | yes | yes |
 
 Linux builds target glibc 2.39 or newer. macOS Intel and native Windows have no
 release artifacts: use WSL, the [container image](#container-image), or a
@@ -85,12 +85,12 @@ starting an unconfigured daemon. Details are in [Set up Lemon](user-guide/setup.
 
 | Flag | Effect |
 | --- | --- |
-| `--profile NAME` | Select `full`, `min`, `sim`, or `lemon_bot`. Same as `LEMON_PROFILE`. |
+| `--profile NAME` | Select `full`, `min`, or `lemon_bot`. Same as `LEMON_PROFILE`. |
 | `--force` | Reinstall a version that is already present. |
 | `--verify` | Boot the installed runtime on ephemeral ports in a throwaway `HOME` and poll `/healthz` before finishing. |
 | `--no-modify-path` | Do not edit your shell rc file; print the PATH line instead. |
 | `--skip-setup` | Install without starting the setup wizard. |
-| `--require-bot` | Worker hosts: install only the `full` or `min` runtime (never `lemon_bot`, `sim`, or the TUI) and refuse to promote it unless `lemon node capabilities --json --require-bot --expected-version <manifest version>` passes on the staged tree. |
+| `--require-bot` | Worker hosts: install only the `full` or `min` runtime (never `lemon_bot` or the TUI) and refuse to promote it unless `lemon node capabilities --json --require-bot --expected-version <manifest version>` passes on the staged tree. |
 | `--resolve-version` | Print the version this run would install, then exit. |
 | `--help` | Show usage. |
 
@@ -104,7 +104,7 @@ curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -
 | --- | --- | --- |
 | `LEMON_VERSION` | *(latest stable)* | Pin an exact version. Required for `preview` and `nightly`. A pin alone accepts whichever channel its manifest publishes. |
 | `LEMON_CHANNEL` | `stable` | Release channel. When set explicitly it must match the manifest, even with a pin. |
-| `LEMON_PROFILE` | `lemon_runtime_full` | `full`, `min`, `sim`, `lemon_bot`, or a full profile name. |
+| `LEMON_PROFILE` | `lemon_runtime_full` | `full`, `min`, `lemon_bot`, or a full profile name. |
 | `LEMON_NO_TUI` | *(unset)* | `1` installs the runtime only, skipping the terminal UI download. |
 | `LEMON_INSTALL_IGNORE_GLIBC` | *(unset)* | `1` silences the Linux glibc 2.39 baseline warning. |
 | `LEMON_INSTALL_BASE_URL` | `https://github.com/z80dev/lemon` | Release host override, for mirrors and tests. Plain `http://` is accepted with a warning. |
@@ -129,7 +129,6 @@ model and manifest schema.
 | --- | --- | --- |
 | `full` (`lemon_runtime_full`) | Runtime, local Web UI, simulation dashboard assets, TUI | Default. `lemon web` needs this profile. |
 | `min` (`lemon_runtime_min`) | Runtime and TUI | No Web UI. |
-| `sim` (`sim_broadcast_platform`) | LemonSim broadcast platform | Linux only, no TUI, no setup wizard. |
 | `lemon_bot` | Standalone [Lemon Bot](../products/lemon_bot/README.md) backend | Installs under `~/.lemon/lemon_bot` and links `~/.local/bin/lemon-bot`; state stays in `~/.lemon/lemon_bot`. |
 
 ### Install layout
@@ -384,7 +383,7 @@ default `~/.lemon/backups/`; write any backup you want to keep outside
 | `checksum mismatch` or `size mismatch` | Nothing was installed. Retry; if it repeats, report the version. |
 | glibc warning on Linux | Releases target glibc 2.39+. Use the container or a source install, or set `LEMON_INSTALL_IGNORE_GLIBC=1` if you accept the risk. |
 | `No interactive terminal` from `lemon` | Bare `lemon` needs a TTY. Use `lemon -p "PROMPT"`, `lemon daemon`, or `lemon --help`. |
-| `TUI not installed` | The release is sim-only or was installed with `LEMON_NO_TUI=1`. Reinstall with `--force` without that variable. |
+| `TUI not installed` | The release was installed with `LEMON_NO_TUI=1`. Reinstall with `--force` without that variable. |
 | `Web UI is available only in the lemon_runtime_full profile` | Reinstall with `LEMON_PROFILE=full`. |
 | Setup was interrupted | Run `lemon setup`; it keeps completed steps and offers pending ones. |
 | Anything else | `lemon doctor`, then `lemon logs`. See [Support](support.md) for redacted bundles. |

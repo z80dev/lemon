@@ -4,6 +4,10 @@ name: Release Smoke Tests
 # then verifies they start and pass doctor checks before teardown. Runs on PRs
 # touching release-related files and weekly.
 
+concurrency:
+  group: release-smoke-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -16,8 +20,6 @@ on:
       - "apps/lemon_core/lib/mix/tasks/lemon.doctor.ex"
       - "apps/lemon_mcp/**"
       - "apps/lemon_skills/lib/lemon_skills/mcp_source.ex"
-      - "apps/lemon_sim/lib/lemon_sim/examples/werewolf/**"
-      - "apps/lemon_sim_ui/**"
       - "config/prod.exs"
       - "config/runtime.exs"
       - ".dockerignore"
@@ -79,6 +81,10 @@ jobs:
         with:
           otp-version: "28.5"
           elixir-version: "1.19.5"
+          # setup-beam never retries a mirror; jsDelivr proxies builds.hex.pm.
+          hexpm-mirrors: |
+            https://builds.hex.pm
+            https://cdn.jsdelivr.net/hex
 
       # Runtime releases build and bundle clients/lemon-browser-node.
       - name: Setup Node
@@ -275,6 +281,10 @@ jobs:
         with:
           otp-version: "28.5"
           elixir-version: "1.19.5"
+          # setup-beam never retries a mirror; jsDelivr proxies builds.hex.pm.
+          hexpm-mirrors: |
+            https://builds.hex.pm
+            https://cdn.jsdelivr.net/hex
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -372,188 +382,6 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  sim-container-smoke:
-    name: Sim broadcast container
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: apps/lemon_sim_ui/assets/package-lock.json
-
-      - name: Build production image
-        run: |
-          docker build \
-            --build-arg "LEMON_GIT_SHA=$GITHUB_SHA" \
-            --file apps/lemon_sim_ui/Dockerfile \
-            --tag lemon-sim-broadcast:smoke \
-            .
-
-      - name: Start container
-        run: |
-          mkdir -p /tmp/lemon-sim-smoke-data
-          docker run --detach \
-            --name lemon-sim-smoke \
-            --publish 14090:4090 \
-            --env LEMON_SIM_UI_HOST=localhost \
-            --env LEMON_SIM_UI_PORT=4090 \
-            --env LEMON_SIM_UI_URL_SCHEME=http \
-            --env LEMON_SIM_UI_URL_PORT=14090 \
-            --env LEMON_SIM_UI_SECRET_KEY_BASE=runtime_smoke_secret_key_base_runtime_smoke_secret_key_base_runtime_smoke \
-            --env LEMON_SIM_UI_ACCESS_TOKEN=runtime-smoke-access-token-32-bytes-minimum \
-            --volume /tmp/lemon-sim-smoke-data:/app/data \
-            lemon-sim-broadcast:smoke
-
-      - name: Verify health, identity, auth, and assets
-        run: |
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent --show-error http://127.0.0.1:14090/readyz > /tmp/ready.json; then
-              break
-            fi
-            sleep 2
-          done
-
-          curl --fail --silent --show-error http://127.0.0.1:14090/healthz | grep -Fx ok
-          grep -F "\"commit\":\"$GITHUB_SHA\"" /tmp/ready.json
-          test "$(docker exec lemon-sim-smoke awk '/^Uid:/{print $2}' /proc/1/status)" = "10001"
-
-          curl --fail --silent --show-error http://127.0.0.1:14090/ > /tmp/lobby.html
-          curl --silent --show-error --dump-header /tmp/admin-headers.txt \
-            --output /dev/null http://127.0.0.1:14090/admin
-          grep -Eiq '^HTTP/[0-9.]+ 303' /tmp/admin-headers.txt
-          grep -Eiq '^location: /admin/login' /tmp/admin-headers.txt
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:14090/api/admin/metrics)" = "401"
-
-          # Preserve ?vsn=d so Plug.Static applies its immutable cache policy.
-          asset_url=$(grep -oE '/assets/app-[a-f0-9]+\.css\?vsn=[^"]+' /tmp/lobby.html | head -1)
-          test -n "$asset_url"
-          curl --silent --show-error --head \
-            --header 'Accept-Encoding: gzip' \
-            "http://127.0.0.1:14090$asset_url" > /tmp/asset-headers.txt
-          grep -i '^content-encoding: gzip' /tmp/asset-headers.txt
-          grep -i '^cache-control: public, max-age=31536000, immutable' /tmp/asset-headers.txt
-
-      - name: Seed persisted Werewolf fixture
-        run: |
-          docker exec lemon-sim-smoke \
-            /app/bin/sim_broadcast_platform rpc \
-            'state = LemonSim.Examples.Werewolf.initial_state(sim_id: "ci_werewolf", player_count: 5, seed: 7); state = LemonSim.Kernel.State.put_world(state, %{phase: "game_over", status: "game_over", winner: "villagers"}); LemonSim.Kernel.Store.put_state(state)'
-          curl --fail --silent --show-error http://127.0.0.1:14090/watch/ci_werewolf | grep -F 'VILLAGERS WIN'
-
-      - name: Verify responsive LiveView browser updates
-        run: |
-          npm ci --prefix apps/lemon_sim_ui/assets --cache /tmp/lemon-sim-ui-npm-cache
-
-          docker exec lemon-sim-smoke \
-            /app/bin/sim_broadcast_platform rpc \
-            'state = LemonSim.Examples.Werewolf.initial_state(sim_id: "ci_werewolf_browser", player_count: 5, seed: 11); state = LemonSim.Kernel.State.put_world(state, %{phase: "night", status: "in_progress", active_actor_id: "player_1"}); LemonSim.Kernel.Store.put_state(state)'
-
-          ready_file=/tmp/werewolf-browser-ready
-          rm -f "$ready_file"
-          CHROME_BIN="$(command -v google-chrome || command -v chromium)" \
-          WEREWOLF_SMOKE_URL=http://localhost:14090/watch/ci_werewolf_browser \
-          WEREWOLF_SMOKE_READY_FILE="$ready_file" \
-          WEREWOLF_SMOKE_INITIAL_PHASE=Nightfall \
-          WEREWOLF_SMOKE_UPDATED_PHASE='Town Square' \
-            npm --prefix apps/lemon_sim_ui/assets run smoke:werewolf &
-          browser_pid=$!
-
-          for attempt in $(seq 1 30); do
-            test -f "$ready_file" && break
-            sleep 1
-          done
-          test -f "$ready_file"
-
-          docker exec lemon-sim-smoke \
-            /app/bin/sim_broadcast_platform rpc \
-            'state = LemonSim.Kernel.Store.get_state("ci_werewolf_browser"); world = state.world |> Map.put(:phase, "day_discussion") |> Map.put(:active_actor_id, "player_2"); state = %{state | world: world, version: state.version + 1}; :ok = LemonSim.Kernel.Store.put_state(state); LemonSim.Kernel.Bus.broadcast_world_update("ci_werewolf_browser", %{state: state})'
-
-          wait "$browser_pid"
-
-      - name: Verify graceful restart and persistence
-        run: |
-          docker stop --timeout 30 lemon-sim-smoke
-          docker run --rm \
-            --entrypoint chown \
-            --volume /tmp/lemon-sim-smoke-data:/app/data \
-            lemon-sim-broadcast:smoke \
-            --recursive 0:0 /app/data
-          docker start lemon-sim-smoke
-
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent --show-error http://127.0.0.1:14090/readyz > /dev/null; then
-              break
-            fi
-            sleep 2
-          done
-
-          curl --fail --silent --show-error http://127.0.0.1:14090/watch/ci_werewolf | grep -F 'VILLAGERS WIN'
-
-      - name: Verify production hosted mode and room recovery
-        run: |
-          mkdir -p /tmp/lemon-hosted-smoke-data
-          docker run --detach \
-            --name lemon-sim-hosted-smoke \
-            --publish 14092:4090 \
-            --env LEMON_SIM_UI_HOST=hosted.example.test \
-            --env LEMON_SIM_UI_PORT=4090 \
-            --env LEMON_SIM_UI_URL_SCHEME=https \
-            --env LEMON_SIM_UI_URL_PORT=443 \
-            --env LEMON_SIM_UI_SECRET_KEY_BASE=hosted_runtime_smoke_secret_key_base_hosted_runtime_smoke_secret_key_base \
-            --env LEMON_SIM_UI_ACCESS_TOKEN=hosted-runtime-smoke-access-token-minimum \
-            --env LEMON_WEREWOLF_HOSTED_ENABLED=true \
-            --env LEMON_WEREWOLF_HOST_CREATE_TOKEN=hosted-runtime-smoke-create-token-minimum \
-            --volume /tmp/lemon-hosted-smoke-data:/app/data \
-            lemon-sim-broadcast:smoke
-
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent --show-error http://127.0.0.1:14092/readyz > /dev/null; then
-              break
-            fi
-            sleep 2
-          done
-
-          curl --silent --show-error --dump-header /tmp/hosted-headers.txt \
-            --output /dev/null http://127.0.0.1:14092/play
-          grep -i '^cache-control: private, no-store' /tmp/hosted-headers.txt
-          grep -i '^set-cookie: .*; secure;' /tmp/hosted-headers.txt
-
-          docker exec lemon-sim-hosted-smoke \
-            /app/bin/sim_broadcast_platform rpc \
-            'alias LemonSimUi.HostedGame; {:ok, created} = HostedGame.create_room(%{player_count: 5, ai_seats: 0, visibility: "private", rules_preset: "classic", turn_timeout_seconds: 30}); {:ok, host} = HostedGame.host_view(created.room_id, created.host_token); Enum.each(host.seats, fn seat -> {:ok, _claim} = HostedGame.claim_seat(created.join_code, seat.id, "CI " <> seat.id) end); :ok = HostedGame.control(created.room_id, created.host_token, "start"); :ok = HostedGame.control(created.room_id, created.host_token, "pause")'
-
-          docker restart lemon-sim-hosted-smoke
-
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent --show-error http://127.0.0.1:14092/readyz > /dev/null; then
-              break
-            fi
-            sleep 2
-          done
-
-          docker exec lemon-sim-hosted-smoke \
-            /app/bin/sim_broadcast_platform rpc \
-            'alias LemonCore.Store; alias LemonSimUi.HostedGame; alias LemonSimUi.HostedGame.Room; rooms = Store.list(HostedGame.room_table()); true = Enum.any?(rooms, fn {_id, value} -> room = Room.normalize(value); match?(%Room{status: "paused", match_number: 1, command_seq: 0}, room) and is_integer(room.paused_remaining_ms) end)'
-
-      - name: Collect container logs
-        if: failure()
-        run: |
-          docker logs lemon-sim-smoke || true
-          docker logs lemon-sim-hosted-smoke || true
-
-      - name: Stop container
-        if: always()
-        run: |
-          docker rm --force lemon-sim-smoke >/dev/null 2>&1 || true
-          docker rm --force lemon-sim-hosted-smoke >/dev/null 2>&1 || true
-
   tui-smoke:
     name: TUI binary (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -610,17 +438,13 @@ jobs:
           echo "lemon-tui --version -> $REPORTED"
           test -n "$REPORTED"
 
+  # macOS only: ci.yml's install job already runs scripts/verify_install_script
+  # on Linux for every PR touching the installer (full scope), every main push,
+  # and nightly.
   install-script:
-    name: Install script (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Install script (macos-15)
+    runs-on: macos-15
     timeout-minutes: 15
-
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-24.04
-          - macos-15
 
     # The installer must be exercised with the environment a real user has,
     # not this workflow's MIX_ENV/LEMON_* smoke settings; the verifier runs
@@ -632,7 +456,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Both runner images ship python3; setup-python makes the installer's
+      # The runner image ships python3; setup-python makes the installer's
       # manifest-parsing prerequisite explicit, matching docs/install.md.
       - name: Setup Python
         uses: actions/setup-python@v5

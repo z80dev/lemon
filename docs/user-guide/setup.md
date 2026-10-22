@@ -197,8 +197,7 @@ wizard even with a TTY, use:
 curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --skip-setup
 ```
 
-The `sim` profile does not offer a provider setup wizard. For a non-interactive
-provider setup, use explicit values:
+For a non-interactive provider setup, use explicit values:
 
 ```bash
 lemon setup --non-interactive
