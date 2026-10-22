@@ -284,10 +284,8 @@ fi
 # An exact pin identifies the release; its manifest is the authority for that
 # release's channel. Only an explicit LEMON_CHANNEL is enforced against it.
 EXPECT_CHANNEL="$CHANNEL"
-CHANNEL_LABEL="channel $CHANNEL"
 if [ -n "$PIN" ] && [ "$CHANNEL_EXPLICIT" != "1" ]; then
   EXPECT_CHANNEL=""
-  CHANNEL_LABEL="pinned $PIN"
 fi
 
 fetch() {
@@ -870,11 +868,9 @@ RESOLVED_CHANNEL="$(printf '%s\n' "$artifact_line" | cut -f5)"
 
 TUI_FILE=""
 TUI_SHA=""
-TUI_SIZE=""
 if [ -n "$tui_line" ]; then
   TUI_FILE="$(printf '%s\n' "$tui_line" | cut -f1)"
   TUI_SHA="$(printf '%s\n' "$tui_line" | cut -f2)"
-  TUI_SIZE="$(printf '%s\n' "$tui_line" | cut -f3)"
 elif [ "$WANT_TUI" = "1" ]; then
   warn "this release has no TUI artifact for $PLATFORM; installing runtime only"
 fi
