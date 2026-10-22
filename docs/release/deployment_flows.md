@@ -497,6 +497,8 @@ Pages settings carry the custom domain with HTTPS enforced. DNS records follow
 |`lemon.food`|`AAAA`|`2606:50c0:8000::153`, `2606:50c0:8001::153`, `2606:50c0:8002::153`, `2606:50c0:8003::153`|
 |`www.lemon.food`|`CNAME`|`z80dev.github.io`|
 
+Do not add wildcard records; GitHub warns they allow subdomain takeover.
+
 Changing the domain means updating those records, the Pages custom domain,
 `SITE` in `scripts/generate_docs_llms.py`, and public website links in the
 README and docs. Keep homepage links base-aware with VitePress `withBase`.
