@@ -16,6 +16,10 @@ No unreleased changes yet.
 
 ### Changed
 
+- Redesigned the <https://lemon.food/> website and README banner around the
+  Lemon Bot mascot and palette: a new illustrated homepage, Fraunces and
+  Instrument Sans typography, restyled documentation pages in light and dark
+  mode, a mascot favicon, a social preview image, and a 404 page.
 - Lemon Bot's Mac app now connects in one click with no email, password or
   setup code. **This Mac** starts Lemon Bot if it isn't running and signs in
   as its owner, creating the owner on a fresh install; **Another machine**
