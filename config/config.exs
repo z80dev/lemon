@@ -59,6 +59,13 @@ config :lemon_gateway, :executor, CodingAgent.Executor
 
 config :lemon_router, :engine_runtime, LemonGateway.Runtime
 
+# `lemon-bot` on this machine serves http://127.0.0.1:4100 by default. Trust that one
+# literal-loopback product origin for native follow-up and cron admission callbacks so
+# the same-machine Bot needs no extra configuration. Setting
+# LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS / LEMON_CRON_ADMISSION_ALLOWED_ORIGINS replaces it.
+config :lemon_router, :native_followup_allowed_origins, ["http://127.0.0.1:4100"]
+config :lemon_automation, :cron_admission_allowed_origins, ["http://127.0.0.1:4100"]
+
 # Support bundles include workspace (goal/kanban) diagnostics when the agent
 # runtime is present. lemon_core must not reference agent_core directly.
 config :lemon_core, :workspace_diagnostics,

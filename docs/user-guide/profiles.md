@@ -308,9 +308,11 @@ with exactly `profileId`, `url` and `token`. Success is
 `{"profileId": "...", "configured": true}`. The encrypted token and private URL
 are not returned by profile get/list/roster or history. Configure exact permitted
 origins through `LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS`, or
-`:lemon_router, :native_followup_allowed_origins`. HTTPS is required except
-explicitly allowlisted HTTP on literal loopback IPs; userinfo, query strings,
-fragments, redirects and automatic retries are not allowed.
+`:lemon_router, :native_followup_allowed_origins`. By default only the
+same-machine Lemon Bot origin `http://127.0.0.1:4100` is permitted (cron
+admission has the same default); setting either list replaces it. HTTPS is
+required except explicitly allowlisted HTTP on literal loopback IPs; userinfo,
+query strings, fragments, redirects and automatic retries are not allowed.
 
 The existing **current target profile's `mcpServers`** is the operator-authored
 identity/origin/tool ceiling. For managed contexts, register credential-free

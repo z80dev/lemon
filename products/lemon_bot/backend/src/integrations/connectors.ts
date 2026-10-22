@@ -213,7 +213,7 @@ export function createConnectorServices(services: BackendServices) {
     if (connector.state !== 'disconnected' && connector.state !== 'blocked' && connector.state !== 'failed') assertActiveAccount(services, connector.ownerUserId);
     publish(connector);
     const bot = services.store.require<P.Bot>('bots', connector.botId);
-    const expected = connectorConfigurationFingerprint([baseBotMcpTemplate(services), ...await connectorTemplates(bot.id)]);
+    const expected = connectorConfigurationFingerprint([baseBotMcpTemplate(services, services.store.require<P.Machine>('machines', bot.machineId)), ...await connectorTemplates(bot.id)]);
     saveDetails(connector.id, { ...details(connector.id), provisionState: 'pending', desiredState: connector.state, desiredFingerprint: expected, provisionActorUserId: actor.userId });
     return expected;
   }
