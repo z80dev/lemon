@@ -396,7 +396,7 @@ defmodule LemonCli.Setup.Wizard do
           if non_interactive? or forced do
             true
           else
-            prompt_yes_no?("Onboard an AI provider now?", true, io)
+            prompt_yes?("Onboard an AI provider now?", io)
           end
 
         if answer do
@@ -473,9 +473,8 @@ defmodule LemonCli.Setup.Wizard do
         suggestion
 
       suggestion &&
-          prompt_yes_no?(
+          prompt_yes?(
             "Port #{port} for the #{label} is already in use. Use #{suggestion} instead?",
-            true,
             io
           ) ->
         suggestion
@@ -521,7 +520,7 @@ defmodule LemonCli.Setup.Wizard do
   defp step_offer_launch(io, state, result, non_interactive?, opts) do
     if interactive?(io, non_interactive?) and Keyword.get(opts, :launch, true) and
          Verification.pending_steps(state) == [] and match?({:ok, %{live: :ok}}, result) and
-         prompt_yes_no?("Open Lemon now?", true, io) do
+         prompt_yes?("Open Lemon now?", io) do
       launcher = Keyword.get(opts, :launcher, &launch_tui/0)
 
       case launcher.() do
@@ -747,8 +746,8 @@ defmodule LemonCli.Setup.Wizard do
   # IO helpers
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp prompt_yes_no?(message, default, io) do
-    suffix = if default, do: " [Y/n]: ", else: " [y/N]: "
+  defp prompt_yes?(message, io) do
+    suffix = " [Y/n]: "
 
     answer =
       io.prompt.(message <> suffix)
@@ -756,12 +755,12 @@ defmodule LemonCli.Setup.Wizard do
       |> String.downcase()
 
     case answer do
-      "" -> default
+      "" -> true
       "y" -> true
       "yes" -> true
       "n" -> false
       "no" -> false
-      _ -> prompt_yes_no?(message, default, io)
+      _ -> prompt_yes?(message, io)
     end
   end
 
