@@ -8,7 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- An execution-node worker on the same machine as Lemon could still report a
+  Bot's profile memory as unavailable, so deleting the Bot or forgetting its
+  memory failed. Workers now load every module at startup, as the main runtime
+  does, so memory written by either process reads back everywhere.
 
 ---
 
