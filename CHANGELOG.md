@@ -16,6 +16,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   node and keeping its worker running with a LaunchAgent (macOS) or systemd user
   service (Linux) — then shows **Create a Bot**, with the machine preselected.
   An already-enrolled machine just gets its worker restarted under supervision.
+- Creating a Bot on the machine Lemon Bot runs on no longer fails with "This
+  server needs a secure address your machine can reach". Lemon Bot proves the
+  machine is its own host and lets that Bot reach it over loopback, and Lemon
+  now trusts the same-machine Lemon Bot origin (`http://127.0.0.1:4100`) for
+  admission callbacks by default. Other machines still need an HTTPS address.
+- Execution-node workers load their modules up front, so profile memory written
+  by an earlier run (or by Lemon on the same machine) is no longer reported as
+  unavailable. This blocked deleting Bots and forgetting their memory.
+- Deleting a Bot whose profile has several saved preferences no longer fails
+  with "not found".
 
 ---
 

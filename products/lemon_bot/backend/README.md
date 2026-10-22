@@ -60,6 +60,8 @@ bun run start
 
 The public origin must be reachable from execution hosts for the bot MCP endpoint. Use reachable HTTPS, normally Tailscale Serve, for managed Bot provisioning and phone connections. A loopback public URL supports same-machine API/Simulator development but is not evidence that an enrolled worker shares the backend's network namespace. Supply the configured public origin through the proxy; arbitrary browser origins are rejected. Authenticated product clients connect to `/v1` and `/v1/realtime`, never directly to the controller.
 
+With the default loopback origin (`http://127.0.0.1:4100`), Bots can still run on the machine Lemon Bot itself runs on. Before using a machine, the backend has its worker write a random value into this backend's private `DATA_DIR/tmp` and reads it back; only a worker that passes (same host, same OS user) gets a loopback MCP endpoint, approved as its private origin. Bots on any other machine need the reachable HTTPS origin above. Lemon's controller trusts admission callbacks from `http://127.0.0.1:4100` by default, so this needs no configuration.
+
 Operator `approvedPrivateMcpOrigins` explicitly approves private first-party origins. Literal-loopback HTTP is permitted only for the configured first-party origin. Bot provisioning still requires a reachable address and verified machine placement. See the [provider guide](../providers.md) for the validated operator configuration.
 
 | Environment | Requirement / default |

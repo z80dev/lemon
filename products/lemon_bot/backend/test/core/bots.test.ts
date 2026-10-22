@@ -41,6 +41,9 @@ function fixture() {
   let hostRevision = 0;
   let reject: ((method: string, params: Record<string, unknown>) => void) | null = null;
   let nativePresence: { active: number; queued: number; unknown: number; idle: boolean; complete: boolean } | null = { active: 0, queued: 0, unknown: 0, idle: true, complete: true };
+  // Workspace preference entries: like the real store, ids end in the file revision that every deletion bumps.
+  const preferences = { entries: [] as string[], revision: 1 };
+  const preferenceId = (entry: string) => `pref_user_${entry}.${preferences.revision}`;
   const methods = ['profiles.create', 'profiles.update', 'profiles.get', 'profiles.sync', 'profiles.sync.status', 'profiles.delete', 'mcp.execution_names', 'profile.followup.admission.set', 'runs.followup.lineage.get', 'runs.active.list', 'memory.transfer', 'memory.transfer.status', 'memory.list', 'memory.delete', 'memory.add', 'nodes.list', 'node.capabilities.get', 'node.secrets.set', 'node.secrets.receipt', 'node.secrets.delete', 'node.host.info', 'node.profile.paths', 'node.fs.stat', 'node.fs.write', 'node.fs.delete', 'cron.pause', 'cron.resume', 'cron.add', 'cron.remove', 'sessions.delete'];
   f.services.lemon = {
     connected: true, methods,
@@ -89,8 +92,12 @@ function fixture() {
       else if (method === 'memory.transfer') {
         const identity = { profileId: params.profileId, nodeId: params.nodeId, mutationId: params.mutationId, sourceNodeId: 'node-source', snapshotDigest: 'b'.repeat(64) };
         value = params.action === 'preview' ? { ...identity, destinationDigest: 'c'.repeat(64), confirmationToken: 'memory-confirmation-test', sourceCounts: { documents: 2, preferences: 2 }, destinationCounts: { documents: 3, preferences: 1 }, overwrite: true } : { ...identity, copied: true };
-      } else if (method === 'memory.list') value = { items: [], nextCursor: null };
-      else if (method === 'memory.delete') value = { id: params.id, deleted: true };
+      } else if (method === 'memory.list') value = { items: preferences.entries.map(entry => ({ id: preferenceId(entry), updatedAtMs: 1 })), nextCursor: null };
+      else if (method === 'memory.delete') {
+        const index = preferences.entries.findIndex(entry => preferenceId(entry) === params.id);
+        if (index < 0) throw new ApiError('not_found', 'Memory item changed; read it again before deleting.');
+        preferences.entries.splice(index, 1); preferences.revision++; value = { id: params.id, deleted: true };
+      }
       else if (method === 'cron.pause') value = { id: params.id, paused: true, enabled: false, nextRunAtMs: null };
       else if (method === 'cron.resume') value = { id: params.id, resumed: true, enabled: true, nextRunAtMs: f.services.now() + 3600000 };
       else if (method === 'cron.remove') value = { id: params.id, removed: true };
@@ -152,7 +159,7 @@ function fixture() {
     f.store.setMetadata(`nativeFollowupIssuer:${digest}`, saved.id);
     return saved;
   }
-  return { ...f, calls, request, machine, bot, fail: (value: typeof reject) => { reject = value; }, presence: (value: typeof nativePresence) => { nativePresence = value; } };
+  return { ...f, calls, request, machine, bot, preferences, fail: (value: typeof reject) => { reject = value; }, presence: (value: typeof nativePresence) => { nativePresence = value; } };
 }
 const nonce = (suffix: string) => `bot_test_nonce_${suffix}`;
 function confirmed(confirmation: P.Confirmation, extra: Record<string, unknown> = {}) { return { clientNonce: nonce('confirm'), revision: confirmation.revision, confirmationToken: confirmation.confirmationToken, confirmName: confirmation.confirmName, ...extra }; }
@@ -393,6 +400,22 @@ describe('authoritative native idle lifecycle boundary', () => {
     await expect(f.request('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('legacy_empty'), action: 'delete' })).rejects.toMatchObject({ code: 'capability_unavailable' });
     expect(f.store.require<P.Bot>('bots', bot.id)).toEqual(bot);
     expect(f.calls.some(call => call.method === 'memory.list' || call.method === 'profiles.delete')).toBe(false);
+  });
+  test('forgetting memory removes every previewed preference even though each deletion renames the rest', async () => {
+    const f = fixture(), bot = f.bot();
+    f.preferences.entries.push('name', 'timezone', 'pronouns');
+    const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('preferences_preview'), action: 'reset', resetScopes: ['memory'] });
+    await f.request('POST', `/v1/bots/${bot.id}/reset`, confirmed(preview, { clientNonce: nonce('preferences_reset'), resetScopes: ['memory'] }));
+    expect(f.preferences.entries).toEqual([]);
+    expect(f.calls.filter(call => call.method === 'memory.delete')).toHaveLength(3);
+  });
+  test('a preference added after the preview stops memory deletion and is kept', async () => {
+    const f = fixture(), bot = f.bot();
+    f.preferences.entries.push('name');
+    const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('late_preview'), action: 'reset', resetScopes: ['memory'] });
+    f.preferences.entries.push('added-later');
+    await expect(f.request('POST', `/v1/bots/${bot.id}/reset`, confirmed(preview, { clientNonce: nonce('late_reset'), resetScopes: ['memory'] }))).rejects.toThrow(ApiError);
+    expect(f.preferences.entries).toEqual(['name', 'added-later']);
   });
   test('queued and unattributed uncertain native work block even when active-page is empty', async () => {
     for (const [queued, unknown, code] of [[1, 0, 'conflict'], [0, 1, 'outcome_unknown']] as const) {

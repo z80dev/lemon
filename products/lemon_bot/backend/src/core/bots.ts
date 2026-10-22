@@ -1,4 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { mkdir, readFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RequestContext, Route } from './services';
 import { ApiError, fail } from './errors';
@@ -126,21 +128,53 @@ function checkReferences(s: BackendServices, p: Principal, references: string[])
 export function baseBotMcpConfig(s: BackendServices, bot: P.Bot): McpDefinition {
   const mcp = s.store.metadata<BotMcp>(`botMcp:${bot.id}`);
   if (!mcp) fail('conflict', 'Bot MCP provisioning has not completed.');
-  return { ...baseBotMcpTemplate(s), headers: { Authorization: `Bearer \${LEMON_SECRET:${mcp.secretName}}` } };
+  return { ...baseBotMcpTemplate(s, s.store.require<P.Machine>('machines', bot.machineId)), headers: { Authorization: `Bearer \${LEMON_SECRET:${mcp.secretName}}` } };
 }
 /** Public registry ceiling, never an owner/account credential or host-secret reference. */
-export function baseBotMcpTemplate(s: BackendServices): McpDefinition {
-  const url = botEndpoint(s);
+export function baseBotMcpTemplate(s: BackendServices, machine: P.Machine): McpDefinition {
+  const url = botEndpoint(s, machine);
   const approved = s.config.operator.approvedPrivateMcpOrigins ?? [];
-  return { name: 'lemon-bot', url: url.href, headers: {}, enabledTools: [...productBotTools], allowedOrigins: [url.origin], approvedPrivateOrigins: approved.includes(url.origin) ? [url.origin] : [] };
+  // A proven same-host loopback endpoint is itself the explicitly approved private destination.
+  const isPrivate = approved.includes(url.origin) || loopbackEndpoint(url);
+  return { name: 'lemon-bot', url: url.href, headers: {}, enabledTools: [...productBotTools], allowedOrigins: [url.origin], approvedPrivateOrigins: isPrivate ? [url.origin] : [] };
 }
-function botEndpoint(s: BackendServices): URL {
+/** Literal-loopback HTTP: the only non-HTTPS form native MCP and admission callbacks accept. */
+function loopbackEndpoint(url: URL): boolean {
+  return url.protocol === 'http:' && (url.hostname === '127.0.0.1' || url.hostname === '[::1]') && !url.username && !url.password;
+}
+/**
+ * Workers reach the product over its public origin. Off-host workers need reachable HTTPS; a loopback origin
+ * serves only workers proven to share this backend's host (see `proveSameHost`), so its bearer never leaves it.
+ */
+function botEndpoint(s: BackendServices, machine?: P.Machine): URL {
   const url = new URL('/mcp', s.config.publicUrl);
-  if (url.protocol !== 'https:' || url.username || url.password || url.hostname === 'localhost' || url.hostname.endsWith('.localhost') || /^127\./.test(url.hostname) || url.hostname === '[::1]' || url.hostname === '0.0.0.0') {
-    process.stderr.write('LEMON_BOT_PUBLIC_URL must be a worker-reachable non-loopback HTTPS origin for scoped MCP provisioning.\n');
-    fail('capability_unavailable', 'This server needs a secure address your machine can reach before Bot setup can finish. Ask the operator to configure it.');
-  }
-  return url;
+  const loopbackName = url.hostname === 'localhost' || url.hostname.endsWith('.localhost') || /^127\./.test(url.hostname) || url.hostname === '[::1]' || url.hostname === '0.0.0.0';
+  if (url.protocol === 'https:' && !url.username && !url.password && !loopbackName) return url;
+  if (machine && loopbackEndpoint(url) && sameHost(s, machine)) return url;
+  process.stderr.write('LEMON_BOT_PUBLIC_URL must be a worker-reachable non-loopback HTTPS origin for Bots on other machines.\n');
+  if (machine && loopbackEndpoint(url)) fail('capability_unavailable', `Lemon Bot is only reachable on its own computer, so Bots can run there but not on ${machine.name}. Give Lemon Bot a secure address that ${machine.name} can reach, or choose the machine Lemon Bot runs on.`);
+  fail('capability_unavailable', 'This server needs a secure address your machine can reach before Bot setup can finish. Ask the operator to configure it.');
+}
+function sameHost(s: BackendServices, machine: P.Machine): boolean {
+  return machine.nodeId !== null && s.store.metadata<string>(`machineSameHost:${machine.id}`) === machine.nodeId;
+}
+/**
+ * Proves a worker shares this backend's host (and OS user) by having it write a random value into this
+ * backend's private data directory, then reading it back locally. Cached per durable node identity.
+ */
+export async function proveSameHost(s: BackendServices, machine: P.Machine): Promise<void> {
+  if (!machine.nodeId || !loopbackEndpoint(new URL('/mcp', s.config.publicUrl)) || sameHost(s, machine)) return;
+  const directory = join(s.config.dataDir, 'tmp');
+  const path = join(directory, `placement-${randomBytes(12).toString('hex')}`);
+  const proof = randomBytes(32).toString('hex');
+  let proven = false;
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await s.lemon.call('node.fs.write', { nodeId: machine.nodeId, path, dataBase64: Buffer.from(proof).toString('base64'), offset: 0, truncate: true, mkdirs: false, expectedModifiedAtMs: 0 }, { mutation: true, resourceIds: [machine.id] });
+    proven = (await readFile(path, 'utf8')) === proof;
+  } catch { /* An off-host or other-user worker cannot write here; that is the answer, not an error. */ }
+  finally { await rm(path, { force: true }); }
+  if (proven) s.store.setMetadata(`machineSameHost:${machine.id}`, machine.nodeId);
 }
 async function botProfileMcpTemplates(s: BackendServices, botId: string): Promise<McpDefinition[]> {
   const hook = s.integrations.connectorTemplates;
@@ -152,7 +186,7 @@ async function botProfileMcpTemplates(s: BackendServices, botId: string): Promis
     if (names.has(server.name)) fail('conflict', 'Profile MCP template identities must be unique and cannot replace lemon-bot.');
     names.add(server.name);
   }
-  return [baseBotMcpTemplate(s), ...connectors];
+  return [baseBotMcpTemplate(s, s.store.require<P.Machine>('machines', s.store.require<P.Bot>('bots', botId).machineId)), ...connectors];
 }
 /** Rebuild the credential-free public profile ceiling; invocation-only credentials are never persisted here. */
 export async function syncBotProfile(s: BackendServices, p: Principal, botId: string): Promise<void> {
@@ -183,7 +217,7 @@ async function syncSnapshot(s: BackendServices, bot: P.Bot, machine: P.Machine, 
 }
 async function issueMcp(s: BackendServices, bot: P.Bot, machine: P.Machine): Promise<void> {
   requireMethods(s, ['node.secrets.set', 'node.secrets.receipt']);
-  botEndpoint(s);
+  botEndpoint(s, machine);
   const token = randomBytes(32).toString('base64url');
   const mcp: BotMcp = { secretName: `lb_mcp_${createHash('sha256').update(bot.id).digest('hex').slice(0, 24)}_${randomBytes(8).toString('hex')}`, encryptedToken: s.encrypt(token), digest: s.mutations.digest(token) };
   const pending: PendingBotMcp = { ...mcp, nodeId: principal(machine.nodeId), operationId: s.id('secret') };
@@ -213,7 +247,7 @@ async function fenced<T>(s: BackendServices, c: RequestContext, botId: string, a
 async function createBot(s: BackendServices, c: RequestContext, input: P.BotCreate): Promise<P.Bot> {
   const p = user(c), machine = online(s, p, input.machineId);
   requireMethods(s, ['profiles.create', 'profiles.sync', 'node.secrets.set', 'node.secrets.receipt', 'profile.followup.admission.set', 'runs.followup.lineage.get']);
-  botEndpoint(s);
+  await proveSameHost(s, machine); botEndpoint(s, machine);
   if (input.templateId) { const template = readTemplate(s, p, input.templateId); if (template.provenance.thirdParty) fail('policy_denied', 'Import third-party templates with explicit terms acceptance.'); return importContent(s, c, input, template.content); }
   checkSkills(s, p, input.skillIds ?? []); checkAvatar(s, p, input.avatar ?? defaultAvatar);
   const bot: P.Bot = s.resource('bot', { ownerUserId: p.userId, machineId: machine.id, profileId: '', name: input.name, title: input.title ?? '', job: input.job ?? '', instructions: input.instructions ?? '', avatar: input.avatar ?? { ...defaultAvatar }, voice: input.voice ?? { ...defaultVoice }, language: input.language ?? null, skillIds: input.skillIds ?? [], referenceAttachmentIds: [] as string[], mainConversationId: s.id('conversation'), sidebar: { ...defaultSidebar }, activity: 'offline' as const, activeRunIds: [] as string[] });
@@ -430,13 +464,18 @@ async function resetBot(s: BackendServices, c: RequestContext, bot: P.Bot, input
     }
     for (const item of candidates.filter(candidate => candidate.collection !== 'connectors')) { await destroyCandidate(s, p, bot, item, remove); removedIds.push(item.value.id); }
     if (scopes.includes('memory')) {
-      const selected = new Set((s.store.metadata<RuntimeMemoryCandidate[]>(`botMemoryPreview:${p.userId}:${bot.id}`) ?? []).map(memory => memory.id));
-      const remaining = await runtimeMemoryCandidates(s, bot);
-      if (remaining.some(memory => !selected.has(memory.id))) fail('outcome_unknown', 'Runtime memory changed during deletion; unpreviewed records were retained.', false, { resourceIds: [bot.id] });
-      for (const memory of remaining) {
+      // Workspace preference ids end in their file's revision, so deleting one entry renames its siblings.
+      // Compare stable entry identities against the preview and re-list before every deletion.
+      const identity = (id: string) => id.startsWith('pref_') ? id.split('.', 1)[0]! : id;
+      const selected = new Set((s.store.metadata<RuntimeMemoryCandidate[]>(`botMemoryPreview:${p.userId}:${bot.id}`) ?? []).map(memory => identity(memory.id)));
+      let remaining = await runtimeMemoryCandidates(s, bot);
+      for (let budget = remaining.length; remaining.length; budget--) {
+        if (budget < 0 || remaining.some(memory => !selected.has(identity(memory.id)))) fail('outcome_unknown', 'Runtime memory changed during deletion; unpreviewed records were retained.', false, { resourceIds: [bot.id] });
+        const memory = remaining[0]!;
         const receipt = await s.lemon.call<{ id: string; deleted: boolean }>('memory.delete', { profileId: bot.profileId, id: memory.id, confirm: memory.id }, { mutation: true, resourceIds: [bot.id] });
         if (!receipt.deleted || receipt.id !== memory.id) fail('outcome_unknown', 'Scoped runtime memory deletion was not acknowledged.', false, { resourceIds: [bot.id] });
         removedIds.push(memory.id);
+        remaining = await runtimeMemoryCandidates(s, bot);
       }
     }
     let changed = bot;
@@ -616,6 +655,7 @@ function ownSection(s: BackendServices, p: Principal, sectionId: string): P.Sect
 async function moveBot(s: BackendServices, c: RequestContext): Promise<P.Bot> {
   const p = user(c), input = parse(confirm.extend({ machineId: id }), c.body), bot = visible(s, p, pathId(c), true); idle(s, bot);
   const destination = online(s, p, input.machineId); if (destination.id === bot.machineId) fail('conflict', 'Bot is already on this machine.');
+  await proveSameHost(s, destination); botEndpoint(s, destination);
   await nativeIdle(s, bot);
   requireMethods(s, ['profiles.sync', 'profiles.update', 'node.secrets.set', 'node.secrets.receipt', 'memory.transfer']);
   const hasConnectors = s.store.list<P.Connector>('connectors', connector => connector.botId === bot.id).length > 0;
@@ -642,7 +682,7 @@ async function moveBot(s: BackendServices, c: RequestContext): Promise<P.Bot> {
     await provisionBotSkills(s, p, bot, destination.id);
     await issueMcp(s, bot, destination);
     await syncSnapshot(s, bot, destination);
-    const result = await s.lemon.call<{ profile: { id: string; node: string } }>('profiles.update', { id: bot.profileId, node: destination.nodeName, mcpServers: [baseBotMcpTemplate(s)] }, { mutation: true, resourceIds: [bot.id] });
+    const result = await s.lemon.call<{ profile: { id: string; node: string } }>('profiles.update', { id: bot.profileId, node: destination.nodeName, mcpServers: [baseBotMcpTemplate(s, destination)] }, { mutation: true, resourceIds: [bot.id] });
     if (result.profile?.node !== destination.nodeName || result.profile.id !== bot.profileId) fail('outcome_unknown', 'Placement update has not been acknowledged.', false, { resourceIds: [bot.id] });
     const changed = s.update(bot, { machineId: destination.id });
     s.store.put('bots', changed);
