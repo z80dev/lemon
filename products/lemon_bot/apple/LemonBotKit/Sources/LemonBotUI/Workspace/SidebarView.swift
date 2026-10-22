@@ -259,13 +259,65 @@ struct SidebarView: View {
         }.buttonStyle(.plain).sidebarRow()
     }
 
+    /// First-run card: create a Bot once a machine is online; on Mac, set up the machine you connected to
+    /// (this Mac or your SSH host) automatically; otherwise attach one by hand.
     private var setupRow: some View {
         SoftCard(fill: LB.raised) {
-            Text("Set up your first Bot").font(LBFont.rowTitle).foregroundStyle(LB.ink)
-            Text("Attach one of your machines, wait until it's online, then create a Bot on it.").font(LBFont.meta).foregroundStyle(LB.muted)
-            Button("Attach a machine") { openSettings(.machines) }.buttonStyle(.lemonPrimary)
-        }.padding(.horizontal, 4).padding(.vertical, 8)
+            if let machine = store.machines.first(where: { $0.status == "online" }) {
+                Text("Create your first Bot").font(LBFont.rowTitle).foregroundStyle(LB.ink)
+                Text("\(machine.name) is ready. Give your Bot a name and a job.").font(LBFont.meta).foregroundStyle(LB.muted)
+                Button("Create a Bot") { newBot() }.buttonStyle(.lemonPrimary)
+            } else {
+                #if os(macOS)
+                if let route = store.hostRoute, ["owner", "admin"].contains(store.member?.role ?? "") { hostSetupContent(route) } else { attachContent }
+                #else
+                attachContent
+                #endif
+            }
+        }
+        .padding(.horizontal, 4).padding(.vertical, 8)
+        #if os(macOS)
+        .task(id: "\(store.account?.id ?? "")|\(store.connectionState)|\(store.machines.count)") {
+            if store.shouldSetUpHost { await store.setUpHostMachine() }
+        }
+        #endif
     }
+
+    @ViewBuilder private var attachContent: some View {
+        Text("Set up your first Bot").font(LBFont.rowTitle).foregroundStyle(LB.ink)
+        Text("Attach one of your machines, wait until it's online, then create a Bot on it.").font(LBFont.meta).foregroundStyle(LB.muted)
+        Button("Attach a machine") { openSettings(.machines) }.buttonStyle(.lemonPrimary)
+    }
+
+    #if os(macOS)
+    @ViewBuilder private func hostSetupContent(_ route: MachineRoute) -> some View {
+        let name = route.machineLabel
+        switch store.hostSetup {
+        case .running(let step):
+            Text("Getting \(name) ready").font(LBFont.rowTitle).foregroundStyle(LB.ink)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(step).font(LBFont.meta).foregroundStyle(LB.muted).fixedSize(horizontal: false, vertical: true)
+            }
+        case .failed(let message, let detail):
+            Text("Couldn’t set up \(name)").font(LBFont.rowTitle).foregroundStyle(LB.ink)
+            Text(message).font(LBFont.meta).foregroundStyle(LB.danger).fixedSize(horizontal: false, vertical: true)
+            if let detail {
+                DisclosureGroup("Details") { Text(detail).font(LBFont.code).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+                    .font(LBFont.meta).foregroundStyle(LB.muted)
+            }
+            HStack {
+                Button("Try again") { Task { await store.setUpHostMachine() } }.buttonStyle(.lemonPrimary)
+                Button("Attach another way") { openSettings(.machines) }.buttonStyle(.pill(.quiet, compact: true))
+            }
+        case .idle, .done:
+            Text("Run Bots on \(name)").font(LBFont.rowTitle).foregroundStyle(LB.ink)
+            Text("Bots work on \(name) as you, with your files, tools and logins.").font(LBFont.meta).foregroundStyle(LB.muted)
+            Button("Set up \(name)") { Task { await store.setUpHostMachine() } }.buttonStyle(.lemonPrimary)
+                .disabled(store.connectionState != "online")
+        }
+    }
+    #endif
 
     // MARK: Bots
 

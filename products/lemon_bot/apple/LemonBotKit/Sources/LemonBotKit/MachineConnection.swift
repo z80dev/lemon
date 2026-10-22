@@ -202,6 +202,27 @@ enum CommandRunner {
     static func summary(_ text: String) -> String {
         text.split(whereSeparator: \.isNewline).suffix(4).joined(separator: "\n")
     }
+
+    /// Runs a POSIX script on the route's machine: `/bin/sh -s` here, `ssh -T host sh -s` there.
+    /// The script (and anything embedded in it) travels on stdin, never in arguments or the environment.
+    static func script(_ script: String, on route: MachineRoute, arguments: [String] = [], timeout: TimeInterval) async throws -> String {
+        switch route {
+        case .thisMac:
+            return try await run("/bin/sh", ["-s", "--"] + arguments, input: script, timeout: timeout).stdout
+        case .ssh(let host, _):
+            let output = try await run("/usr/bin/ssh", ssh(host, ["-T"]) + ["sh", "-s", "--"] + arguments, input: script, timeout: timeout)
+            // 255 is ssh's own failure; anything else came from the remote script or shell.
+            if output.status == 255 || !output.stdout.contains("status=") {
+                throw MachineConnectionError.sshFailed(host: host, detail: summary(output.stderr))
+            }
+            return output.stdout
+        }
+    }
+}
+
+extension MachineRoute {
+    /// How messages name this machine: "this Mac" or the SSH destination.
+    public var machineLabel: String { if case .ssh(let host, _) = self { return host }; return "this Mac" }
 }
 
 extension MachineBootstrap {
@@ -209,20 +230,12 @@ extension MachineBootstrap {
     public static let checkoutDefaultsKey = "lemonCheckoutPath"
 
     static func ensure(_ route: MachineRoute) async throws -> Ready {
-        switch route {
-        case .thisMac:
-            let home = FileManager.default.homeDirectoryForCurrentUser.path
+        var arguments: [String] = []
+        if route == .thisMac {
             let checkout = UserDefaults.standard.string(forKey: checkoutDefaultsKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let output = try await CommandRunner.run("/bin/sh", ["-s", "--", checkout.flatMap { $0.hasPrefix("/") ? $0 : nil } ?? home + "/lemon"], input: script, timeout: 90)
-            return try parse(output.stdout, machine: "this Mac")
-        case .ssh(let host, _):
-            let output = try await CommandRunner.run("/usr/bin/ssh", CommandRunner.ssh(host, ["-T"]) + ["sh", "-s"], input: script, timeout: 100)
-            // 255 is ssh's own failure; anything else came from the remote script or shell.
-            if output.status == 255 || !output.stdout.contains("status=") {
-                throw MachineConnectionError.sshFailed(host: host, detail: CommandRunner.summary(output.stderr))
-            }
-            return try parse(output.stdout, machine: host)
+            arguments = [checkout.flatMap { $0.hasPrefix("/") ? $0 : nil } ?? FileManager.default.homeDirectoryForCurrentUser.path + "/lemon"]
         }
+        return try parse(await CommandRunner.script(script, on: route, arguments: arguments, timeout: 100), machine: route.machineLabel)
     }
 }
 

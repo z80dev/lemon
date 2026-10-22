@@ -8,7 +8,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- After connecting the Lemon Bot Mac app to **This Mac** or an SSH host, the
+  sidebar no longer stops at **Attach a machine** with a manual join command. It
+  makes that machine a Bot machine by itself — enrolling it as a Lemon execution
+  node and keeping its worker running with a LaunchAgent (macOS) or systemd user
+  service (Linux) — then shows **Create a Bot**, with the machine preselected.
+  An already-enrolled machine just gets its worker restarted under supervision.
 
 ---
 

@@ -64,6 +64,8 @@ import Observation
     public internal(set) var pairings: [Pairing] = []
     public internal(set) var pairingURL: String?
     public internal(set) var ownerPairingPreflight: BotPreflightResult?
+    /// Making the connected machine run Bots (macOS); reset with each account.
+    public internal(set) var hostSetup: HostSetupState = .idle
 
     @ObservationIgnored let keychain: any AccountCredentialStore
     @ObservationIgnored let persistence: ClientPersistence
@@ -364,7 +366,7 @@ import Observation
     }
     private func clearLiveState() {
         providerSettings.reset()
-        connectionState = "disconnected"
+        connectionState = "disconnected"; hostSetup = .idle
         connectionIssue = nil; instanceStatus = nil; nextRetryAt = nil; lastConnectionAttemptAt = nil
         user = nil; workspace = nil; member = nil; capabilities = nil; bots = []; machines = []; conversations = []; sections = []; notifications = []; runs = []
         entries = [:]; drafts = [:]; terminalFrames = [:]; terminalGaps = [:]; terminalExits = [:]; terminalExitFrames = [:]; terminalSequences = [:]; terminalSubscriptions = []
