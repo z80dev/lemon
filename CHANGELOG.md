@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.10.24]
+
 ### Fixed
 
 - After connecting the Lemon Bot Mac app to **This Mac** or an SSH host, the
