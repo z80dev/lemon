@@ -129,7 +129,7 @@ model and manifest schema.
 | --- | --- | --- |
 | `full` (`lemon_runtime_full`) | Runtime, local Web UI, simulation dashboard assets, TUI | Default. `lemon web` needs this profile. |
 | `min` (`lemon_runtime_min`) | Runtime and TUI | No Web UI. |
-| `lemon_bot` | Standalone [Lemon Bot](../products/lemon_bot/README.md) backend | Installs under `~/.lemon/lemon_bot` and links `~/.local/bin/lemon-bot`; state stays in `~/.lemon/lemon_bot`. |
+| `lemon_bot` | Standalone [Lemon Bot](../products/lemon_bot/README.md) backend | Installs under `~/.lemon/lemon_bot` and links `~/.local/bin/lemon-bot`; state stays in `~/.lemon/lemon_bot`. Run `lemon-bot`: it serves `http://127.0.0.1:4100` and asks whether to use the Lemon on this machine (offering to start it) or another machine's. Install `full` or `min` too to run Lemon on the same machine. |
 
 ### Install layout
 

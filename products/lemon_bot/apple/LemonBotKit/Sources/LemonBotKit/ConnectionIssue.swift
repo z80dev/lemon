@@ -126,7 +126,7 @@ extension LemonBotStore {
     }
     /// Public, credential-free probes; each origin has an independent two-second deadline.
     public func discoverBackends() async -> [DiscoveredBackend] {
-        let candidates = accounts.map(\.baseURL) + [URL(string: "http://127.0.0.1:4080")!, URL(string: "http://localhost:4080")!]
+        let candidates = accounts.map(\.baseURL) + [URL(string: "http://127.0.0.1:4100")!, URL(string: "http://localhost:4100")!]
         var seen: Set<String> = []
         let urls = candidates.compactMap { try? HTTPTransport.normalizeBaseURL($0) }.filter { seen.insert($0.absoluteString).inserted }
         let session = httpSession

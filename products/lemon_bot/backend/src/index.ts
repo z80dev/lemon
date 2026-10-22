@@ -1,9 +1,13 @@
 import { join } from 'node:path';
 import { chmod } from 'node:fs/promises';
+import { closeSync, openSync, writeSync } from 'node:fs';
 import type { Server } from 'bun';
 import type { BackendConfiguration, BackendServices } from './core/services';
 import type { Policies } from '../../contracts/protocol';
-import { loadConfiguration, createPrivateCodec, validateRuntimeLauncher } from './core/config';
+import { loadConfiguration, createPrivateCodec, validateRuntimeLauncher, isLoopback, type ControllerSource } from './core/config';
+import { issueOwnerSetupProof } from './core/setup';
+import { terminal } from './cli/connect';
+import { prepareController } from './cli/lemon-runtime';
 import { Store } from './core/store';
 import { installHelpers } from './core/helpers';
 import { installSecretResolver } from './core/secrets';
@@ -131,12 +135,43 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   };
 }
 
-export async function runBackend():Promise<void> {
-  let configuration:{config:BackendConfiguration;key:Uint8Array};
+/** First interactive start prints the one-use owner setup code on the controlling terminal only, never to stdout/stderr logs. */
+function offerOwnerSetup(services:BackendServices):void {
+  // Caller checks that the workspace is unconfigured.
+  const origin=services.config.publicUrl;
+  if(!isLoopback(new URL(origin).hostname)){process.stdout.write('Owner setup: run lemon-bot setup in a terminal on this machine.\n');return;}
+  let fd:number;
+  try{fd=openSync('/dev/tty','w');}catch{process.stdout.write('Owner setup: run lemon-bot setup --same-machine in a terminal on this machine.\n');return;}
+  try{
+    const proof=issueOwnerSetupProof(services);
+    writeSync(fd,`\nFinish setting up Lemon Bot at ${origin}\nOne-use owner setup code (sensitive; do not share): ${proof.code}\nIt expires at ${new Date(proof.expiresAtMs).toLocaleTimeString()}; for a new one, run lemon-bot setup --same-machine.\n\n`);
+  }finally{closeSync(fd);}
+}
+/** Best effort: the URL carries no credential, and a missing opener only skips the convenience. */
+function openInBrowser(url:string):void {
+  const opener=process.platform==='darwin'?'open':process.platform==='linux'?'xdg-open':null;
+  if(!opener)return;
+  try{Bun.spawn([opener,url],{stdin:'ignore',stdout:'ignore',stderr:'ignore'}).unref();}catch{/* No opener installed. */}
+}
+export async function runBackend(options:{chooseLemon?:boolean;openBrowser?:boolean}={}):Promise<void> {
+  let configuration:{config:BackendConfiguration;key:Uint8Array;controllerSource:ControllerSource};
   try {configuration=await loadConfiguration();}
   catch(error) {process.stderr.write(`${error instanceof Error?error.message:'Backend configuration could not be loaded.'}\n`);process.exit(1);}
-  const {config,key}=configuration;const backend=await createBackend(config,key);const server=backend.start();
+  const {config,key,controllerSource}=configuration;
+  const io=terminal();
+  if(io.interactive){
+    try{await prepareController({terminal:io,environment:process.env,config,codec:createPrivateCodec(key),source:controllerSource,choose:options.chooseLemon===true});}
+    catch(error){process.stderr.write(`${error instanceof Error?error.message:'Choosing a Lemon failed.'}\n`);process.exit(1);}
+  } else if(options.chooseLemon){process.stderr.write('lemon-bot --choose-lemon needs an interactive terminal.\n');process.exit(2);}
+  const backend=await createBackend(config,key);const server=backend.start();
   process.stdout.write(`Lemon Bot listening at ${config.publicUrl} (${server.hostname}:${server.port}).\n`);
+  const {lemon}=backend.services;
+  lemon.onConnected(()=>{process.stdout.write(`Connected to Lemon at ${config.controlUrl}.\n`);});
+  setTimeout(()=>{if(!lemon.connected)process.stdout.write(`Waiting for Lemon at ${config.controlUrl}: ${lemon.controller.lastError?.message??'still connecting.'}\n`);},5000).unref();
+  if(io.interactive&&backend.services.store.metadata('workspaceId')===null){
+    offerOwnerSetup(backend.services);
+    if(options.openBrowser!==false)openInBrowser(config.publicUrl);
+  }
   const shutdown=()=>{void backend.stop().then(()=>process.exit(0)).catch(()=>process.exit(1));};
   process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
 }

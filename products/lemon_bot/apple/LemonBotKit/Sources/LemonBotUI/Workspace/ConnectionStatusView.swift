@@ -176,8 +176,9 @@ struct LocalLemonStartHelp: View {
     var body: some View {
         DisclosureGroup("Start it on this Mac") {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Open Terminal in your Lemon checkout. Start Lemon, then start Lemon Bot in another tab with your existing backend environment configured. This app will detect it when it comes online.").font(LBFont.meta)
-                command("lemon start")
+                Text("Run Lemon Bot in Terminal. It asks which Lemon to use and offers to start the one on this Mac. This app will detect it when it comes online.").font(LBFont.meta)
+                command("lemon-bot")
+                Text("From a Lemon checkout instead:").font(LBFont.meta)
                 command(backendCommand)
                 HStack {
                     Button("Open Terminal") {

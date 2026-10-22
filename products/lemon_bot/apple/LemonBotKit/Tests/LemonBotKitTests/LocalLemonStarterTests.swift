@@ -53,7 +53,30 @@ final class LocalLemonStarterTests: XCTestCase {
         XCTAssertTrue(script.contains("'/usr/local/bin/lemon' '/Users/me/my lemon'\\''s repo/bin/lemon'"))
         XCTAssertTrue(script.contains("'/Users/me/.bun/bin/bun'"))
         XCTAssertTrue(script.contains("\"$lemon\" start"))
-        XCTAssertTrue(script.contains("run --cwd 'products/lemon_bot/backend' start"))
+        XCTAssertTrue(script.contains("run --cwd 'products/lemon_bot/backend' start --no-open"))
+        XCTAssertTrue(script.contains("pick '/Users/me/.local/bin/lemon-bot'"))
+    }
+
+    func testInstalledLemonBotIsPreferredOverCheckout() throws {
+        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build/lemon-bot-test-\(UUID().uuidString)")
+        let home = root.appendingPathComponent("home")
+        let bot = home.appendingPathComponent(".local/bin/lemon-bot")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: bot.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // A stand-in launcher that reports its arguments instead of starting a backend.
+        try "#!/bin/sh\nprintf 'lemon-bot %s' \"$*\"\n".write(to: bot, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bot.path)
+        let command = try LemonStartCommand.command(checkout: root.appendingPathComponent("missing-checkout").path, home: home.path)
+        let process = Process(); let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", command]
+        process.standardOutput = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "lemon-bot --no-open")
     }
 
     func testCommandRejectsRelativeAndControlCharacterPaths() {

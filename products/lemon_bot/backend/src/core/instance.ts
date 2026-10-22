@@ -1,8 +1,7 @@
-import { dirname, basename } from 'node:path';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Route } from './services';
 import type { ConnectedLemonService } from '../runtime/lemon';
-import { isLoopback } from './config';
+import { isLoopback, launcherProcess } from './config';
 import { fail } from './errors';
 import { z, parse, mutation } from './validation';
 import { productVersion } from './version';
@@ -62,8 +61,7 @@ export function createInstanceRoutes(services:BackendServices,startedAtMs:number
     let timeout:NodeJS.Timeout|undefined;
     try {
       const launcher=services.config.runtimeLauncher!;
-      const env=Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('LEMON_BOT_')));
-      const child=Bun.spawn([launcher,current.action==='start'?'daemon':current.action],{cwd:basename(dirname(launcher))==='bin'?dirname(dirname(launcher)):env.HOME??dirname(launcher),env,stdin:'ignore',stdout:'pipe',stderr:'pipe'});
+      const child=Bun.spawn([launcher,current.action==='start'?'daemon':current.action],{...launcherProcess(launcher),stdin:'ignore',stdout:'pipe',stderr:'pipe'});
       let timedOut=false;
       const readers=[child.stdout.getReader(),child.stderr.getReader()];
       timeout=setTimeout(()=>{timedOut=true;child.kill('SIGKILL');for(const reader of readers)void reader.cancel().catch(()=>{});},300000);

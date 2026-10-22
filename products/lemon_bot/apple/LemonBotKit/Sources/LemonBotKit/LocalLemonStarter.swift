@@ -8,6 +8,8 @@ public enum LemonStartCommand {
     public static let lemonCandidates = ["/.lemon/bin/lemon", "/.local/bin/lemon", "/bin/lemon"]
     public static let systemLemonCandidates = ["/opt/homebrew/bin/lemon", "/usr/local/bin/lemon"]
     public static let bunCandidates = ["/.bun/bin/bun", "/opt/homebrew/bin/bun", "/usr/local/bin/bun"]
+    /// The `--profile lemon_bot` installer's launcher; preferred over a source checkout.
+    public static let lemonBotCandidate = "/.local/bin/lemon-bot"
     public static let backendDirectory = "products/lemon_bot/backend"
 
     public enum BuildError: Error, Equatable, Sendable {
@@ -24,6 +26,8 @@ public enum LemonStartCommand {
     }
 
     /// `checkout` is the Lemon checkout that contains `products/lemon_bot/backend`; `home` the real user home.
+    /// An installed `lemon-bot` wins: it finds or starts the Lemon on this Mac itself. The checkout is the fallback.
+    /// The app is already the GUI, so neither path opens a browser.
     public static func command(checkout: String, home: String) throws -> String {
         guard isSafeAbsolutePath(checkout), isSafeAbsolutePath(home) else { throw BuildError.invalidCheckout }
         let lemonPaths = (lemonCandidates.map { home + $0 } + systemLemonCandidates + [checkout + "/bin/lemon"]).map(shellQuote).joined(separator: " ")
@@ -32,11 +36,12 @@ public enum LemonStartCommand {
         (
         # Starts Lemon and Lemon Bot as the current Terminal user.
         pick() { for c in "$@"; do [ -x "$c" ] && { printf '%s\\n' "$c"; return 0; }; done; return 1; }
-        lemon=$(pick \(lemonPaths)) || { echo "Couldn't find the lemon command."; exit 1; }
+        if bot=$(pick \(shellQuote(home + lemonBotCandidate))); then exec "$bot" --no-open; fi
+        lemon=$(pick \(lemonPaths)) || { echo "Couldn't find lemon-bot or the lemon command."; exit 1; }
         bun=$(pick \(bunPaths)) || { echo "Couldn't find bun."; exit 1; }
         cd \(shellQuote(checkout)) || { echo "Couldn't open the Lemon checkout."; exit 1; }
         "$lemon" start &
-        exec "$bun" run --cwd \(shellQuote(backendDirectory)) start
+        exec "$bun" run --cwd \(shellQuote(backendDirectory)) start --no-open
         )
 
         """

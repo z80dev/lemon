@@ -20,6 +20,26 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   LemonSim checks locally with `scripts/test changed` and
   `scripts/sim_bench.sh`, which replaces `scripts/ci_sim_bench.sh`.
 
+### Changed
+
+- `lemon-bot` now works with no configuration on the same machine as Lemon.
+  It serves `http://127.0.0.1:4100` (moved from 4080, which Lemon Web uses),
+  keeps state in `~/.lemon/lemon_bot`, and finds and signs in to the local
+  Lemon through the launchers' port settings and managed operator credential.
+  On first start in a terminal it asks whether to use the Lemon on this
+  machine, offering to start it if stopped, or another machine's controller
+  address and operator token, verifies the connection and saves the choice
+  (`lemon-bot --choose-lemon` asks again). A new workspace's one-use owner
+  setup code is shown in that terminal and the web app opens in the browser
+  (`--no-open` skips it). If Lemon is down, Lemon Bot keeps waiting and
+  connects when it starts; owners can also choose **Start** in the app.
+  Explicit `LEMON_BOT_*` environment settings still take precedence.
+- The Lemon Bot Mac app's **Start Lemon** command prefers an installed
+  `~/.local/bin/lemon-bot` over a source checkout, and its local discovery and
+  onboarding default use port 4100.
+- `install.sh --profile lemon_bot` says how to run `lemon-bot` and how to
+  install Lemon itself when it is missing.
+
 ---
 
 ## [2026.10.21]

@@ -10,33 +10,53 @@ Linux arm64 and macOS arm64. Follow the [versioned release installation
 guide](../../../docs/release/versioning_and_channels.md). The bundle contains
 `bot/bin/lemon-bot`, the complete external `bot/web` app, and its native image
 dependencies; running it requires no installed Bun, Node, Elixir or source checkout.
-Configure the same private environment below, then run `lemon-bot` rather than
-`bun run start`. `lemon-bot --version` reports the exact release CalVer and
-`lemon-bot --help` describes startup; neither initializes private product state.
+Then run `lemon-bot` rather than `bun run start`. `lemon-bot --version` reports the
+exact release CalVer and `lemon-bot --help` describes startup; neither initializes
+private product state.
+
+With no environment, `lemon-bot` serves `http://127.0.0.1:4100` with private state
+in `~/.lemon/lemon_bot`. On first start in a terminal it asks which Lemon to use:
+
+1. **This machine.** The controller is found the way the Lemon launchers find it
+   (`LEMON_CONTROL_PLANE_PORT`, then `~/.lemon/ports.env`, then 4040) and authenticated
+   with the launcher-managed `~/.lemon/run/control-plane-<port>.token`. If Lemon is
+   installed but stopped, `lemon-bot` offers to start it (running `lemon setup
+   --if-required` and `lemon daemon`). The credential is re-read before each
+   connection attempt, so a backend left waiting connects as soon as Lemon starts.
+2. **Another machine.** Enter its `wss://…/ws` controller address and its operator
+   token (hidden input; on that machine it is in `~/.lemon/run/control-plane-<port>.token`).
+   The connection is verified before saving.
+
+The choice is saved in `DATA_DIR/controller.json` (mode 0600; a remote token is
+encrypted with the product master key). Later starts reuse it and, for this machine,
+still offer to start a stopped Lemon. `lemon-bot --choose-lemon` asks again. Without
+a terminal (a service manager) no question is asked: the saved choice, or else the
+local Lemon, is used, and owners can choose **Start** in the app when the installed
+`~/.lemon/bin/lemon` launcher exists. Explicit `LEMON_BOT_CONTROL_URL` or
+`LEMON_BOT_OPERATOR_TOKEN` always override the saved choice. A same-machine
+credential is never sent to a controller on another host.
 
 Keep `LEMON_BOT_DATA_DIR`, private operator configuration and server credential
 sources outside the versioned installation. Installing the backend does not
 install or replace the controller/worker: those use canonical full/min runtime
 profiles, and newly invited workers install the matching published Lemon release.
-An empty backend never prints setup credentials in startup logs. Use the explicit
-local [owner setup command](#provider-free-owner-setup) below. Never put the
-controller operator credential in a browser, generated join command, archive or log.
+An empty backend never prints setup credentials in startup logs. When started in a
+terminal, it shows the one-use owner setup code on the controlling terminal only;
+otherwise use the explicit local [owner setup command](#provider-free-owner-setup).
+Never put the controller operator credential in a browser, generated join command,
+archive or log.
 
 ### Source development
 
 
-Use Bun 1.4 or newer. Start the existing authenticated Lemon controller; model/provider credentials on execution hosts are needed for Bot work, not owner setup or management. From this directory:
+Use Bun 1.4 or newer. Model/provider credentials on execution hosts are needed for Bot work, not owner setup or management. From this directory:
 
 ```sh
 bun install
-export LEMON_BOT_CONTROL_URL='ws://127.0.0.1:4040/ws'
-export LEMON_BOT_OPERATOR_TOKEN='<existing Lemon operator token>'
-export LEMON_BOT_PUBLIC_URL='http://127.0.0.1:4080'
-export LEMON_BOT_DATA_DIR="$HOME/.lemon/lemon_bot"
 bun run start
 ```
 
-`bun run dev` enables Bun watch mode. Source execution loads `../web/dist`; build the web product separately with `bun --cwd ../web run build`. Packaged execution loads `bot/web` beside its executable independently of the working directory. `LEMON_BOT_WEB_ROOT` explicitly overrides either layout. Missing web assets produce an explicit installation response without disabling the API. Startup logs never contain a setup code; request one explicitly from the local operator terminal as described below.
+`bun run start` follows the same startup as `lemon-bot`, including the Lemon choice. `bun run dev` enables Bun watch mode. Source execution loads `../web/dist`; build the web product separately with `bun --cwd ../web run build`. Packaged execution loads `bot/web` beside its executable independently of the working directory. `LEMON_BOT_WEB_ROOT` explicitly overrides either layout. Missing web assets produce an explicit installation response without disabling the API. Startup logs never contain a setup code.
 
 The public origin must be reachable from execution hosts for the bot MCP endpoint. Use reachable HTTPS, normally Tailscale Serve, for managed Bot provisioning and phone connections. A loopback public URL supports same-machine API/Simulator development but is not evidence that an enrolled worker shares the backend's network namespace. Supply the configured public origin through the proxy; arbitrary browser origins are rejected. Authenticated product clients connect to `/v1` and `/v1/realtime`, never directly to the controller.
 
@@ -44,16 +64,16 @@ Operator `approvedPrivateMcpOrigins` explicitly approves private first-party ori
 
 | Environment | Requirement / default |
 | --- | --- |
-| `LEMON_BOT_CONTROL_URL` | Required exact credential-free controller `/ws` URL. |
-| `LEMON_BOT_OPERATOR_TOKEN` | Required existing controller operator credential, server-only. |
-| `LEMON_BOT_PUBLIC_URL` | Required product origin; HTTPS off loopback. |
-| `LEMON_BOT_DATA_DIR` | Required private persistent directory. |
-| `LEMON_BOT_HOST`, `LEMON_BOT_PORT` | `127.0.0.1`, `4080`; listener binding. |
+| `LEMON_BOT_CONTROL_URL` | Exact credential-free controller `/ws` URL; overrides the saved choice. Default: this machine's Lemon, `ws://127.0.0.1:<port>/ws`. |
+| `LEMON_BOT_OPERATOR_TOKEN` | Controller operator credential, server-only; overrides the saved choice. Required for a controller on another machine. Default for this machine: `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`, then the launcher-managed token file. |
+| `LEMON_BOT_PUBLIC_URL` | Product origin; HTTPS off loopback. Default `http://127.0.0.1:<port>`; required when `LEMON_BOT_HOST` is not loopback. |
+| `LEMON_BOT_DATA_DIR` | Private persistent directory. Default `~/.lemon/lemon_bot`. |
+| `LEMON_BOT_HOST`, `LEMON_BOT_PORT` | `127.0.0.1`, `4100`; listener binding. |
 | `LEMON_BOT_ENCRYPTION_KEY` | Optional base64 32-byte durable key; otherwise generated private `master.key`. |
 | `LEMON_BOT_CONFIG_FILE` | Optional operator JSON file; otherwise DATA_DIR/config.json. Missing file uses the validated empty provider configuration. |
 | `LEMON_BOT_TRUSTED_OVERLAY` | Default false. Set exactly `true` only when off-loopback HTTP/WS is protected by an operator-trusted encrypted overlay. Not a general TLS bypass. |
 | `LEMON_BOT_WEB_ROOT` | Optional explicit web assets directory; otherwise source `web/dist` or packaged `bot/web`. |
-| `LEMON_BOT_RUNTIME_LAUNCHER` | Optional absolute path to an existing executable Lemon launcher (`<checkout>/bin/lemon` or installed `lemon`); invalid paths fail startup. Enables owner-only start/stop/restart only for a loopback controller. |
+| `LEMON_BOT_RUNTIME_LAUNCHER` | Optional absolute path to an existing executable Lemon launcher (`<checkout>/bin/lemon` or installed `lemon`); invalid paths fail startup. Enables owner-only start/stop/restart only for a loopback controller. Defaults to an installed `~/.lemon/bin/lemon` when the controller is this machine's discovered Lemon. |
 
 Workspace Owners and Admins can inspect the attached instance with `GET /v1/instance` and reconnect its controller link with `POST /v1/instance/reconnect`. The response includes release/build metadata, provider credential presence and channel health, never secret values. Optional malformed upstream sections stay null rather than failing the status read. Owners alone can invoke listed `runtime.actions`: a local launcher enables start/stop/restart, while a connected local or remote controller can advertise restart/stop through its lifecycle RPCs. `runtime.via` identifies the selected route; launcher takes precedence on loopback. Stop/restart require `confirm:true`; POSTs require `clientNonce`. A 202 response is an operation receipt: poll instance status for completion. Controller Restart succeeds on a new link connection timestamp, Stop on disconnection, and either fails after 300 seconds without that observation. Launcher commands run without a shell, with all `LEMON_BOT_*` environment variables stripped, a five-minute deadline, and a 4096-byte output tail. Runtime operations are in-memory and disappear on backend restart.
 
@@ -61,7 +81,7 @@ Provider, identity, push, image, network/egress and host-management configuratio
 
 ## Provider-free owner setup
 
-Start the backend separately with its private environment configured. No model
+Start the backend separately (an interactive `lemon-bot` start already shows the code). No model
 provider login, API key or default model is needed to claim the initial owner,
 register phone/browser devices, sign in or inspect the management API. Missing
 providers affect execution readiness, not backend reachability. This command
@@ -77,8 +97,9 @@ bun src/cli.ts setup
 lemon-bot setup --print-origin
 ```
 
-Both forms require `LEMON_BOT_DATA_DIR` and exact `LEMON_BOT_PUBLIC_URL` from the
-running instance. Proof issuance also requires its existing private `master.key`
+Both forms use the running instance's data directory and public origin: the same
+defaults as `lemon-bot` or its `LEMON_BOT_DATA_DIR`/`LEMON_BOT_PUBLIC_URL`/`LEMON_BOT_PORT`
+overrides. Proof issuance also requires its existing private `master.key`
 or original `LEMON_BOT_ENCRYPTION_KEY`; discovery alone does not read the key.
 Neither form requires controller/operator credentials in its environment.
 

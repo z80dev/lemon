@@ -1,6 +1,7 @@
 import type { BackendConfiguration, LemonService } from '../core/services';
 import type { ErrorCode, JSONObject } from '../../../contracts/protocol';
 import { ApiError } from '../core/errors';
+import { readManagedToken } from '../core/config';
 import { z } from '../core/validation';
 
 export interface ControlSocket {
@@ -75,9 +76,10 @@ function upstreamFailure(code: string, details: Record<string, unknown> | undefi
 }
 
 /** One authenticated connection. Nothing in pending requests is ever resent. */
-export function createLemonService(config: Pick<BackendConfiguration, 'controlUrl' | 'operatorToken' | 'trustedOverlay'>, options: LemonOptions = {}): ConnectedLemonService {
+export function createLemonService(config: Pick<BackendConfiguration, 'controlUrl' | 'operatorToken' | 'operatorTokenFile' | 'trustedOverlay'>, options: LemonOptions = {}): ConnectedLemonService {
   const url = new URL(config.controlUrl);
-  if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || !config.operatorToken || (url.protocol !== 'wss:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && !config.trustedOverlay)) throw new ApiError('invalid_request', 'Configure a secure controller URL and operator token.');
+  if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || !(config.operatorToken || config.operatorTokenFile) || (url.protocol !== 'wss:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && !config.trustedOverlay)) throw new ApiError('invalid_request', 'Configure a secure controller URL and operator token.');
+  const rejectedMessage = config.operatorTokenFile ? 'The controller rejected this machine’s Lemon operator credential. Restart Lemon, then reconnect.' : 'The controller rejected the operator token.';
   const events = new Set<(event: string, payload: unknown) => void>();
   const connected = new Set<() => void>();
   const disconnected = new Set<() => void>();
@@ -154,6 +156,17 @@ export function createLemonService(config: Pick<BackendConfiguration, 'controlUr
   function connect() {
     if (!running || socket) return;
     service.controller.state = attempt ? 'reconnecting' : 'connecting'; service.controller.nextRetryAtMs = null;
+    if (config.operatorTokenFile) {
+      // The launcher creates this credential when Lemon starts; keep waiting for it instead of failing permanently.
+      const managed = readManagedToken(config.operatorTokenFile);
+      if ('problem' in managed) {
+        if (managed.problem === 'missing') linkError('controller_not_started', 'Lemon is not running on this machine yet. Start Lemon to connect.');
+        else linkError('controller_credential_unsafe', 'This machine’s Lemon operator credential is not a private 0600 file owned by this user. Restart Lemon to repair it.');
+        scheduleReconnect(); return;
+      }
+      config.operatorToken = managed.token;
+      if (service.controller.lastError?.code === 'controller_not_started' || service.controller.lastError?.code === 'controller_credential_unsafe') service.controller.lastError = null;
+    }
     let current: ControlSocket;
     try { current = (options.socket ?? nativeSocket)(config.controlUrl); } catch {
       // Use the same backoff even for constructor-level network errors.
@@ -178,7 +191,7 @@ export function createLemonService(config: Pick<BackendConfiguration, 'controlUr
         if (!result.success) { protocolFailure(current); return; }
         const frame = result.data;
         if (frame.type === 'hello-ok') {
-          if (frame.auth.role !== 'operator' || !handshakeId) { running = false; linkError('controller_rejected', 'The controller rejected the operator token. Check LEMON_BOT_OPERATOR_TOKEN.'); service.controller.state = 'rejected'; loseConnection(); current.close(); return; }
+          if (frame.auth.role !== 'operator' || !handshakeId) { running = false; linkError('controller_rejected', rejectedMessage); service.controller.state = 'rejected'; loseConnection(); current.close(); return; }
           if (service.connected) { protocolFailure(current); return; }
           clearTimeout(handshake); handshake = undefined;
           maxPayload = frame.policy?.maxPayload ?? 16_777_216;
@@ -190,7 +203,7 @@ export function createLemonService(config: Pick<BackendConfiguration, 'controlUr
             // Invalid server credential needs operator repair, not a retry storm.
             if (frame.error?.code === 'UNAUTHORIZED' || frame.error?.code === 'FORBIDDEN') {
               running = false; service.controller.state = 'rejected';
-              linkError('controller_rejected', 'The controller rejected the operator token. Check LEMON_BOT_OPERATOR_TOKEN.');
+              linkError('controller_rejected', rejectedMessage);
             } else linkError('controller_protocol_violation', 'The controller returned an invalid connection response.');
             loseConnection(); current.close(); return;
           }

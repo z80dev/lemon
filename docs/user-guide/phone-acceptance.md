@@ -14,7 +14,7 @@ bun products/lemon_bot/scripts/phone_preflight.ts
 # Once the intended existing service's metadata location is known:
 bun products/lemon_bot/scripts/phone_preflight.ts \
   --data-dir /absolute/private/product-data-directory \
-  --local-origin http://127.0.0.1:4080 \
+  --local-origin http://127.0.0.1:4100 \
   --origin https://YOUR-MACHINE.YOUR-TAILNET.ts.net:UNUSED-OR-EXISTING-BOT-PORT
 bun test products/lemon_bot/scripts/phone_preflight.test.ts
 ```
@@ -43,8 +43,9 @@ exact origin, trusted TLS, no redirects, JSON product/version/capability descrip
 bounded responses and instance match. A phone candidate must be HTTPS `.ts.net`
 and its advertised `publicUrl` must equal the candidate. HTML 200, Phoenix JSON
 404, control-plane health and an open port are insufficient. In particular,
-**8448 forwarding to 4080 is not evidence of Bot**: 4080 may belong to Phoenix
-Web. Inspect the classification and listener process, not the port convention.
+**8448 forwarding to 4080 is not evidence of Bot**: Lemon Bot listens on 4100 by
+default and 4080 is normally Phoenix Web. Inspect the classification and listener
+process, not the port convention.
 
 The public setup endpoint deliberately does not expose workspace identity. The
 read-only database baseline identifies the canonical stored workspace but cannot

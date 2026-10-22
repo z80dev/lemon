@@ -49,21 +49,17 @@ included in `providers[].lastError`.
 
 Requirements: a running authenticated Lemon controller with the required profile, placement, node-I/O, memory and live-stream RPCs; Bun 1.4+; Node 24 for Vite tooling. Owner setup and the management API work with zero model-provider credentials or default model. Bot execution later requires a supported controller default model and destination-local provider authentication; `lemon setup` configures those locally. Native builds use Xcode 26.3 and XcodeGen 2.46; signing and provisioning are required for installed Apple devices.
 
-1. Start/reuse **the existing swarm**, following the repository [CLI guide](../../docs/user-guide/cli.md). Its configured `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` is the credential used below; do not generate a second unrelated product operator token. Default loopback control URL is `ws://127.0.0.1:4040/ws`. Configure WSS/reverse proxy for non-loopback.
-2. Set backend environment in your service manager/private environment file, never commit it:
+1. Start/reuse **the existing swarm**, following the repository [CLI guide](../../docs/user-guide/cli.md), or let `lemon-bot` start it. Do not generate a second unrelated product operator token.
+2. Start the backend:
 
 ```bash
-export LEMON_BOT_CONTROL_URL='ws://127.0.0.1:4040/ws'
-export LEMON_BOT_OPERATOR_TOKEN='<existing controller operator token>'
-export LEMON_BOT_PUBLIC_URL='http://127.0.0.1:4080'
-export LEMON_BOT_DATA_DIR="$HOME/.lemon/lemon_bot"
-export LEMON_BOT_HOST='127.0.0.1'
-export LEMON_BOT_PORT='4080'
 bun --cwd products/lemon_bot/backend install
 bun run --cwd products/lemon_bot/backend start
 ```
 
-`LEMON_BOT_PUBLIC_URL` is the externally reachable product origin, **not** control-plane URL. Registered bot MCP URLs, webhook URLs, OAuth callbacks and attachment downloads derive from it. Every execution node must reach it (loopback public URL cannot serve a remote node). Production uses HTTPS and matching WSS, trusted proxy origin/header validation and private data directory ownership. Backend `start` serves production built web when present; `dev` runs backend watch mode. Startup logs never contain setup credentials: on an empty DB, run the explicit local [`lemon-bot setup`](backend/README.md#provider-free-owner-setup) command (`bun src/cli.ts setup` from the backend source directory). It prints a verified tailnet HTTPS origin separately from a sensitive five-minute single-use proof shown only on the controlling terminal. Open that origin on phone/Web and use the existing owner setup form before any LLM sign-in. Normal accounts use local login/invite or configured OIDC; anonymous setup exposes only the minimal product/setup/pairing fingerprint, never workspace/account identity or setup credentials.
+With no environment it serves `http://127.0.0.1:4100`, keeps private state in `~/.lemon/lemon_bot`, and on first start in a terminal asks whether to use the Lemon on this machine (found through the launchers' port and managed `~/.lemon/run/control-plane-<port>.token`, and started on request when stopped) or another machine's `wss://…/ws` controller and operator token. The choice is saved; `--choose-lemon` asks again. A service manager sets the [backend environment](#backend-configuration) instead; explicit `LEMON_BOT_CONTROL_URL`/`LEMON_BOT_OPERATOR_TOKEN` override the saved choice. See the [backend README](backend/README.md#standalone-installation).
+
+`LEMON_BOT_PUBLIC_URL` is the externally reachable product origin, **not** control-plane URL. Registered bot MCP URLs, webhook URLs, OAuth callbacks and attachment downloads derive from it. Every execution node must reach it (loopback public URL cannot serve a remote node). Production uses HTTPS and matching WSS, trusted proxy origin/header validation and private data directory ownership. Backend `start` serves production built web when present; `dev` runs backend watch mode. Startup logs never contain setup credentials: an interactive start on an empty DB shows the one-use owner setup code on the controlling terminal only; otherwise run the explicit local [`lemon-bot setup`](backend/README.md#provider-free-owner-setup) command (`bun src/cli.ts setup` from the backend source directory). It prints a verified tailnet HTTPS origin separately from a sensitive five-minute single-use proof shown only on the controlling terminal. Open that origin on phone/Web and use the existing owner setup form before any LLM sign-in. Normal accounts use local login/invite or configured OIDC; anonymous setup exposes only the minimal product/setup/pairing fingerprint, never workspace/account identity or setup credentials.
 
 3. Web development and production assets:
 
@@ -74,7 +70,7 @@ bun run --cwd products/lemon_bot/web dev
 bun run --cwd products/lemon_bot/web build
 ```
 
-The web dev server runs at `http://127.0.0.1:4081`. Its `/v1` (including realtime WebSocket), `/hooks` and `/mcp` requests proxy to `http://127.0.0.1:4080`; set `LEMON_BOT_DEV_BACKEND` in the web development environment to use another backend origin. The Vite dev socket is separate from product realtime. Web never connects directly to Lemon `/ws`.
+The web dev server runs at `http://127.0.0.1:4081`. Its `/v1` (including realtime WebSocket), `/hooks` and `/mcp` requests proxy to `http://127.0.0.1:4100`; set `LEMON_BOT_DEV_BACKEND` in the web development environment to use another backend origin. The Vite dev socket is separate from product realtime. Web never connects directly to Lemon `/ws`.
 
 4. Native apps: generate `apple/project.yml` with XcodeGen, open `apple/LemonBot.xcodeproj`, choose LemonBotMac or LemonBotiOS, and configure signing/App Group/APNs for installed devices. macOS uses the product backend URL; iPhone uses the QR/paste-link flow below to persistently attach to that desktop cluster. `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` is the reference toolchain. Share extension exchanges only explicit user-selected content through App Group, never operator authority. Credentials use Keychain. Task `lemonbot://` links contain resource IDs only; short-lived pairing QR is a separate secret-bearing account-security flow.
 
@@ -90,16 +86,16 @@ This phone is a client of the same desktop owner and cluster, not a new shared T
 
 ### Backend configuration
 
-Required variables fail startup on omission/invalid configuration (no fake demo fallback). Backend private SQLite DB, attachment blobs, nonce receipts and encryption key reside under DATA_DIR; protect and back them up consistently. Restore validates metadata/blob checksums before changing live state. Generated encryption master key is private 0600; alternatively supply a durable operator-provided key. A changed/missing key with existing encrypted records fails closed, not a new empty credential store.
+Invalid configuration fails startup (no fake demo fallback). Backend private SQLite DB, attachment blobs, nonce receipts and encryption key reside under DATA_DIR; protect and back them up consistently. Restore validates metadata/blob checksums before changing live state. Generated encryption master key is private 0600; alternatively supply a durable operator-provided key. A changed/missing key with existing encrypted records fails closed, not a new empty credential store.
 
 | Variable | Required/default | Purpose |
 |---|---|---|
-| `LEMON_BOT_CONTROL_URL` | Required | Exact controller `/ws` endpoint; off-loopback WSS unless trusted encrypted overlay explicitly configured |
-| `LEMON_BOT_OPERATOR_TOKEN` | Required | Existing daemon operator token, server-only |
-| `LEMON_BOT_PUBLIC_URL` | Required | Reachable HTTPS product origin, HTTP loopback for development |
-| `LEMON_BOT_DATA_DIR` | Required | Private persistent SQLite/blobs/keys/config root |
-| `LEMON_BOT_RUNTIME_LAUNCHER` | Optional | Absolute existing executable Lemon launcher; enables owner-only start/stop/restart for a loopback controller and takes precedence over controller RPCs. Invalid paths fail backend startup. Remote restart/stop instead require the connected controller's advertised lifecycle methods and permissions. |
-| `LEMON_BOT_HOST` / `LEMON_BOT_PORT` | `127.0.0.1` / `4080` | Bun listener binding; expose only behind trusted TLS boundary |
+| `LEMON_BOT_CONTROL_URL` | This machine's Lemon, or the saved choice | Exact controller `/ws` endpoint; off-loopback WSS unless trusted encrypted overlay explicitly configured. Overrides the saved choice |
+| `LEMON_BOT_OPERATOR_TOKEN` | Launcher-managed token for this machine; required for another machine | Existing daemon operator token, server-only. Overrides the saved choice |
+| `LEMON_BOT_PUBLIC_URL` | `http://127.0.0.1:<port>`; required for a non-loopback host | Reachable HTTPS product origin, HTTP loopback for development |
+| `LEMON_BOT_DATA_DIR` | `~/.lemon/lemon_bot` | Private persistent SQLite/blobs/keys/config root |
+| `LEMON_BOT_RUNTIME_LAUNCHER` | Installed `~/.lemon/bin/lemon` for this machine's Lemon | Absolute existing executable Lemon launcher; enables owner-only start/stop/restart for a loopback controller and takes precedence over controller RPCs. Invalid paths fail backend startup. Remote restart/stop instead require the connected controller's advertised lifecycle methods and permissions. |
+| `LEMON_BOT_HOST` / `LEMON_BOT_PORT` | `127.0.0.1` / `4100` | Bun listener binding; expose only behind trusted TLS boundary |
 | `LEMON_BOT_ENCRYPTION_KEY` | Optional, otherwise private generated key | Stable 32-byte base64 master key for product session/integration credentials; never returned to client |
 | `LEMON_BOT_CONFIG_FILE` | Optional, otherwise DATA_DIR/config.json | Private operator provider, redirect, origin and host-management configuration |
 | `LEMON_BOT_TRUSTED_OVERLAY` | `false` | Set exactly `true` only for off-loopback HTTP/WS protected by an operator-trusted encrypted overlay |
