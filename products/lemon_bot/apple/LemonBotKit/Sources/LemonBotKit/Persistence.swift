@@ -16,11 +16,15 @@ public struct StoredAccount: Codable, Hashable, Identifiable {
     public var installationID: String?
     /// Pinned only after an authenticated identity check; absent in accounts saved before preflight.
     public var instanceID: String?
-    public init(id: String, baseURL: URL, email: String, displayName: String, token: String, userID: String, workspaceID: String, deviceID: ID? = nil, sessionID: ID? = nil, sessionExpiresAtMs: TimestampMs? = nil, installationID: String? = nil, instanceID: String? = nil) {
+    /// Set when this Mac signed in with the machine's private local-access key; reconnecting repeats that, never a password.
+    public var route: MachineRoute?
+    public init(id: String, baseURL: URL, email: String, displayName: String, token: String, userID: String, workspaceID: String, deviceID: ID? = nil, sessionID: ID? = nil, sessionExpiresAtMs: TimestampMs? = nil, installationID: String? = nil, instanceID: String? = nil, route: MachineRoute? = nil) {
         self.id = id; self.baseURL = baseURL; self.email = email; self.displayName = displayName; self.token = token; self.userID = userID; self.workspaceID = workspaceID
         self.deviceID = deviceID; self.sessionID = sessionID; self.sessionExpiresAtMs = sessionExpiresAtMs; self.installationID = installationID
-        self.instanceID = instanceID
+        self.instanceID = instanceID; self.route = route
     }
+    /// Where this account lives, for account lists and menus.
+    public var location: String { route?.title ?? baseURL.host ?? baseURL.absoluteString }
 }
 
 /// Session credentials have one secure production implementation. Injection keeps

@@ -79,6 +79,21 @@ Workspace Owners and Admins can inspect the attached instance with `GET /v1/inst
 
 Provider, identity, push, image, network/egress and host-management configuration belongs to the integration team's [provider guide](../providers.md) and the canonical operator configuration. Missing credentials affect only dependent operations and report a precise prerequisite. Bot tokens and product sessions are different principals; neither exposes the Lemon operator token. Configured backend secret references resolve only explicit private environment/file sources. Destination MCP header `${LEMON_SECRET:NAME}` values resolve only on the execution machine.
 
+## Same-machine and SSH access
+
+Every start keeps a private `DATA_DIR/local-access.key` (64 hex characters, mode 0600,
+owned by this user; a missing or unsafe file is replaced). Whoever can read it can
+already read `master.key` and the database, so it grants nothing that host access
+does not. `POST /v1/auth/local` with `Authorization: Bearer <key>` and an optional
+`{"displayName": "…"}` body returns an ordinary 30-day `AuthResult` for the workspace
+owner. On an empty instance it first creates that owner (`<os-user>@lemon.local`, no
+password) and a workspace named after the host, and discards any pending setup code.
+The key is re-read per request: rewrite the file to rotate it. The Mac app uses this
+to connect in one click, reading the key directly on the same machine or with
+`ssh <host>` plus a loopback tunnel for another one; see
+[Connect the Mac app](../apple/README.md#connect-the-mac-app). Password and SSO
+accounts, invitations and the setup code below are unchanged.
+
 ## Provider-free owner setup
 
 Start the backend separately (an interactive `lemon-bot` start already shows the code). No model
