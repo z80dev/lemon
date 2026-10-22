@@ -1,4 +1,4 @@
-# Reminders, heartbeats, and the daily brief
+# Reminders and heartbeats
 
 Lemon can reach out to you instead of waiting to be asked. Scheduled proactive
 features are ordinary cron jobs run by the agent:
@@ -7,7 +7,6 @@ features are ordinary cron jobs run by the agent:
   `/remind`, or by asking the agent.
 - **Heartbeats** — a recurring check-in where the agent works through a
   checklist and only messages you when something needs attention.
-- **Daily brief** — an opt-in morning heartbeat, configured by `lemon setup`.
 
 Scheduled work needs Lemon running. On restart, an enabled job catches up once
 if its stored slot is within half the gap to its next occurrence, clamped to
@@ -100,7 +99,7 @@ for pairing details.
 
 ## Pausing all cron jobs
 
-One switch holds back every cron job — reminders, heartbeats, the daily brief,
+One switch holds back every cron job — reminders, heartbeats,
 scheduled coding jobs, and blueprint jobs — across all profiles, without
 editing the jobs themselves:
 
@@ -243,6 +242,12 @@ Failures are never suppressed, and output such as `Build says [SILENT]` is
 delivered normally. This does not apply to operator shell-command output.
 Heartbeats also keep their existing exact `HEARTBEAT_OK` convention.
 
+A morning brief is one such job. Ask the agent for something like: "every day
+at 7:30 local time, send me a short brief — today's scheduled jobs, anything due
+from memory, and open follow-ups — or reply `[SILENT]` if there is nothing worth
+saying." In Telegram, `/remind every day 7:30 <the same request>` creates the
+equivalent job for that chat.
+
 ### Timezones and daylight-saving changes
 
 The schedule's fields match the chosen zone's calendar and wall clock. For
@@ -263,8 +268,8 @@ to another time. A repeated fall-back timestamp resolves to its first instant;
 if that instant is already past, validation rejects it. Saved one-shot
 timestamps are absolute instants, so changing their timezone does not move them.
 
-Telegram `/remind`, heartbeats, and the daily brief keep using server-local
-time unless their underlying job is explicitly changed.
+Telegram `/remind` and heartbeats keep using server-local time unless their
+underlying job is explicitly changed.
 
 ### Product routine admission
 
@@ -412,40 +417,10 @@ Set a heartbeat from the TUI (`/hb` is an alias):
 `/heartbeat` with no argument shows `status`; `stop` and `off` are aliases of
 `clear`. Setting a heartbeat again updates the agent's existing heartbeat job.
 It runs in the server's local time and is delivered to your paired owner chat.
-`/heartbeat` never edits or removes the daily brief, which is owned by
-`[automation] daily_brief`.
 
 Intervals must be cron-exact: minutes that divide 60 (`1m` … `30m`), hours that
 divide 24 (`1h`, `2h`, `3h`, `4h`, `6h`, `8h`, `12h`), or `1d` (daily at 09:00).
 Values such as `90m` or `5h` are rejected, and the minimum is `1m`.
-
----
-
-## Daily brief
-
-The daily brief is a heartbeat that runs once a day in the default agent's main
-session. The agent follows `HEARTBEAT.md` if present, then sends a few bullets:
-today's reminders and scheduled jobs, anything due from memory, and open
-follow-ups. On a day with nothing worth saying it replies `HEARTBEAT_OK`, so
-you get no message.
-
-`lemon setup` offers it (default: off) and asks for a time. For scripted
-installs:
-
-```bash
-lemon setup --non-interactive --daily-brief 07:30
-```
-
-Either way the choice is written to your config:
-
-```toml
-[automation]
-daily_brief = "08:00"   # HH:MM, 24-hour, server-local time
-```
-
-The brief is reconciled when Lemon boots, so a change takes effect at the next
-start (`lemon restart`). To turn it off, remove the `daily_brief` key and
-restart; the job is removed. See [Configuration](../config.md#automation).
 
 ---
 

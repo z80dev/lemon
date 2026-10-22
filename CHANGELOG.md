@@ -8,7 +8,26 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Changed
+
+- First-run install and setup are quieter. The installer prints one line
+  before and after the download (with a compact progress bar on a terminal)
+  and ends with a single next step; it no longer prints checksums, paths or a
+  command list. Setup no longer asks about the runtime profile or a Hermes
+  import (`lemon migrate hermes` is unchanged), and skips status and file
+  chatter on a first run. Installs default to the full runtime
+  (`install.sh --profile min` for the minimal one).
+- Setup asks about ports only when a default one is taken by another program,
+  suggesting the next free port. The choice is saved to `~/.lemon/ports.env`,
+  which the launchers load into unset port variables; `lemon setup runtime`
+  now saves there too instead of printing `export` lines.
+
+### Removed
+
+- The built-in daily brief (`[automation] daily_brief`, `lemon setup
+  --daily-brief`). Schedule a brief as an ordinary cron job instead, e.g. ask
+  the agent for a daily 7:30 brief that replies `[SILENT]` when there is nothing
+  to say, or use `/remind every day 7:30 ...` in Telegram.
 
 ---
 

@@ -179,6 +179,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   removes newly created trees when the recorded root was absent. Defaults:
   10 MiB/file, 50 MiB aggregate, 10,000 entries, depth 128 per capture.
 
+### Removed
+
+- `LemonCore.Config.Automation` no longer has `daily_brief` or `parse_time/1`;
+  `[automation] daily_brief` is no longer recognized.
+
 ## [0.2.0] - 2026-10-13
 
 First release as a standalone package. `lemon_core` used to be the umbrella's

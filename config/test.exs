@@ -121,10 +121,6 @@ config :lemon_automation, :skill_curator, enabled: false
 # from generating drafts (and touching the memory store) during unrelated suites.
 config :lemon_automation, :synthesis_runner, enabled: false
 
-# The daily brief job is reconciled from the developer's config.toml at boot;
-# `LemonAutomation.HeartbeatTest` exercises the sync explicitly instead.
-config :lemon_automation, daily_brief_sync: false
-
 # The omp delegate must never launch a developer's real `omp` or read their
 # `~/.omp`. `:executable` falls back to PATH when unset, so pin it to a path
 # that cannot exist; suites that need a binary point it at

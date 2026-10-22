@@ -3,31 +3,6 @@ defmodule LemonAutomation.HeartbeatTest do
 
   alias LemonAutomation.{CronJob, CronRun, Heartbeat}
 
-  defmodule FakeCron do
-    @moduledoc false
-    use Agent
-
-    def start_link(jobs), do: Agent.start_link(fn -> jobs end, name: __MODULE__)
-    def list, do: Agent.get(__MODULE__, & &1)
-
-    def add_new(params) do
-      job = CronJob.new(params)
-      Agent.update(__MODULE__, &[job | &1])
-      {:ok, job}
-    end
-
-    def update(id, patch) do
-      Agent.get_and_update(__MODULE__, fn jobs ->
-        jobs = Enum.map(jobs, &if(&1.id == id, do: CronJob.update(&1, patch), else: &1))
-        {{:ok, Enum.find(jobs, &(&1.id == id))}, jobs}
-      end)
-    end
-
-    def remove(id) do
-      Agent.update(__MODULE__, fn jobs -> Enum.reject(jobs, &(&1.id == id)) end)
-    end
-  end
-
   describe "apply_policy/2" do
     test "suppresses an all-clear heartbeat and delivers everything else" do
       heartbeat = job(meta: %{"heartbeat" => true})
@@ -73,38 +48,6 @@ defmodule LemonAutomation.HeartbeatTest do
                  job(command: "echo", prompt: nil),
                  run(:completed, "[SILENT]")
                )
-    end
-  end
-
-  describe "sync_daily_brief/2" do
-    setup do
-      start_supervised!({FakeCron, []})
-      :ok
-    end
-
-    test "creates, reschedules, and removes the daily brief heartbeat" do
-      assert :ok = Heartbeat.sync_daily_brief("07:45", cron_manager: FakeCron)
-
-      assert [%CronJob{} = job] = FakeCron.list()
-      assert job.id == Heartbeat.daily_brief_id()
-      assert job.schedule == "45 7 * * *"
-      assert job.timezone == "local"
-      assert job.session_key == "agent:default:main"
-      assert Heartbeat.heartbeat?(job)
-
-      assert :ok = Heartbeat.sync_daily_brief("07:45", cron_manager: FakeCron)
-      assert [^job] = FakeCron.list()
-
-      assert :ok = Heartbeat.sync_daily_brief("9:05", cron_manager: FakeCron)
-      assert [%CronJob{schedule: "5 9 * * *", enabled: true}] = FakeCron.list()
-
-      assert :ok = Heartbeat.sync_daily_brief(nil, cron_manager: FakeCron)
-      assert [] = FakeCron.list()
-    end
-
-    test "an invalid time leaves existing jobs untouched" do
-      assert {:error, :invalid_time} = Heartbeat.sync_daily_brief("8am", cron_manager: FakeCron)
-      assert [] = FakeCron.list()
     end
   end
 

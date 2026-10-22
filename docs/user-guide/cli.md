@@ -177,7 +177,10 @@ relevant lifecycle command, not as bare launcher flags.
 All three ports must be integers from 1 through 65535. Environment defaults are
 `LEMON_CONTROL_PLANE_PORT=4040`, `LEMON_WEB_PORT=4080`, and
 `LEMON_SIM_UI_PORT=4090`; source `status` and `stop` also accept the port flags.
-Select the same control port and HOME for every lifecycle command.
+The launcher fills unset port variables from `~/.lemon/ports.env`, which
+`lemon setup` writes when a default port is taken and `lemon setup runtime`
+writes on request. Select the same control port and HOME for every lifecycle
+command.
 
 `status` exits 0 only when Lemon's control-plane health check succeeds, including
 foreground starts. Its first line includes the selected Lemon home; subsequent
@@ -419,16 +422,15 @@ use explicit non-interactive commands:
 
 ```bash
 lemon setup --non-interactive --provider openai --token "$OPENAI_API_KEY" \
-  --model gpt-5 --set-default --daily-brief 07:30
+  --model gpt-5 --set-default
 lemon setup provider --non-interactive --provider openai --token "$OPENAI_API_KEY" \
   --model gpt-5 --set-default
 lemon doctor
 ```
 
 Onboarding's `--model` takes a bare model id, not `provider:model`.
-`--daily-brief HH:MM` is opt-in and requires a Telegram chat paired with
-`lemon gateway setup telegram`. `lemon setup runtime` re-prompts for invalid
-interactive profiles or ports and rejects invalid flags; valid ports are 1–65535.
+`lemon setup runtime` re-prompts for invalid interactive profiles or ports and
+rejects invalid flags; valid ports are 1–65535.
 See [setup and onboarding](setup.md) for the full workflow.
 
 ## ChatGPT authentication and Codex CLI login import
@@ -1022,7 +1024,6 @@ lemon setup [provider|runtime|gateway|doctor] [options]
 | `--non-interactive, -n` | Skip prompts |
 | `--config-path PATH` | Config file to read or write |
 | `--skip-verify` | Defer live provider verification |
-| `--daily-brief HH:MM` | Daily brief time (non-interactive) |
 | `--set-default` | Set the provider and model as defaults |
 | `--provider NAME` | Provider to sign in to (openai-codex for ChatGPT) |
 | `--token TOKEN` | Credential for non-interactive provider setup |

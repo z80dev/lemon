@@ -33,8 +33,7 @@ defmodule LemonAutomation do
 
   A heartbeat is a cron job with `meta.heartbeat: true`. A reply of exactly
   `HEARTBEAT_OK` is suppressed (kept in run history, not delivered); anything
-  else is delivered. `[automation] daily_brief = "HH:MM"` keeps an opt-in
-  daily-brief heartbeat in sync. See `LemonAutomation.Heartbeat`.
+  else is delivered. See `LemonAutomation.Heartbeat`.
 
   ## Wake
 

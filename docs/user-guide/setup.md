@@ -41,10 +41,14 @@ re-checks the saved state, performs pending work, and re-verifies an existing pr
 3. onboards a provider, auth credential, and default provider/model;
 4. checks the resulting configuration and credential, including a live provider
    check when supported;
-5. offers an opt-in daily brief (default: off);
-6. offers optional runtime-profile configuration; and
-7. shows a first prompt and success check, then offers to open Lemon in an
+5. checks the ports the runtime will use and, only if one is taken by another
+   program, offers a free one (see [Runtime profile and ports](#runtime-profile-and-ports));
+   and
+6. shows a first prompt and success check, then offers to open Lemon in an
    interactive terminal after a passing live check.
+
+Setup does not ask about the runtime profile or import Hermes data. The
+installer installs the full runtime (`--profile min` selects the minimal one).
 
 Pasted API keys are read with terminal echo disabled; echo is restored after the
 read, including on errors or closed input. Without an interactive terminal, setup
@@ -97,18 +101,10 @@ refreshes on config and secret change events. See the [browser guide](web.md).
 
 ### Coming from Hermes
 
-At the start of interactive setup, an existing `$HERMES_HOME` (or `~/.hermes`
-when unset) triggers a read-only compatibility audit. Setup shows counts of
-skills, memory files, and compatible provider configuration files, then asks
-whether to import. **No is the default**; declining does not import anything.
-Accepting uses the existing `user-data` importer and backs up the Lemon home
-first. Conflicts refuse the import without overwriting; review and resolve
-them with `lemon migrate hermes` if needed.
-
-Setup does not import credentials. Secret migration requires the importer's
-explicit `--migrate-secrets` flag. Non-interactive setup silently skips Hermes
-detection and import. See [Migrate from Hermes](migrate-from-hermes.md) for the
-read-only preview, overwrite policy, and secret-import options.
+Setup does not import Hermes data. Run `lemon migrate hermes` after setup to
+preview and import an existing `$HERMES_HOME` (or `~/.hermes`). See
+[Migrate from Hermes](migrate-from-hermes.md) for the read-only preview,
+overwrite policy, and secret-import options.
 
 ### Provider, auth, and model
 
@@ -138,8 +134,8 @@ lemon setup provider --skip-verify
 ```
 
 The full wizard always selects a default provider/model; `setup provider`
-accepts `--set-default` to request this explicitly. Both `--set-default` and
-`--daily-brief HH:MM` appear in `lemon setup --help`.
+accepts `--set-default` to request this explicitly; it appears in
+`lemon setup --help`.
 
 If a provider verification fails, setup remains incomplete. Correct the
 credential or model and rerun `lemon setup provider`; do not expect a failed
@@ -226,31 +222,25 @@ Pass a bare model id such as `claude-sonnet-4-20250514`, not
 `anthropic:claude-sonnet-4-20250514`, to onboarding's `--model`. Runtime model
 overrides elsewhere use the `provider:model` form.
 
-### Daily brief
-
-After the provider step, setup asks whether you want a short daily brief on
-your phone each morning (default: no), explains that this needs a paired
-Telegram chat (`lemon gateway setup telegram`), and asks for a time (`HH:MM`,
-24-hour, this machine's local time; default `08:00`). The answer is written as
-`daily_brief` under `[automation]` in your config and takes effect the next time
-Lemon starts. If a brief is already configured, setup only reports its time.
-
-The non-interactive setup skips the question unless you pass the time:
-
-```bash
-lemon setup --non-interactive --daily-brief 07:30
-```
-
-The brief is delivered to your paired chat, so pair Telegram (see below). To
-change or remove it, edit `[automation] daily_brief` and restart Lemon. See
-[Reminders, heartbeats, and the daily brief](reminders-and-heartbeats.md).
-
 ### Runtime profile and ports
 
-`lemon setup runtime` offers `runtime_min` and `runtime_full` and prints the
-environment settings to apply. Invalid interactive profile or port input is
-explained and asked again; an invalid flag is an error, not a fallback.
-Ports must be integers from 1 to 65535.
+The installer picks the profile: full by default, minimal with
+`sh install.sh --profile min`. Setup never asks about ports unless one is
+taken. The full runtime uses 4040 (control plane) and 4080 (web UI); the
+minimal runtime uses only 4040. If another program already listens on one of
+them, setup offers the next free port (`Use 4041 instead? [Y/n]`). Declining
+lets you enter a port; non-interactive setup takes the suggestion
+automatically. Ports held by an already running Lemon are left alone.
+
+The choice is saved to `~/.lemon/ports.env`. The `lemon` launcher loads that
+file into any of `LEMON_CONTROL_PLANE_PORT`, `LEMON_WEB_PORT` and
+`LEMON_SIM_UI_PORT` that are unset, so the daemon, TUI, `lemon web` and CLI
+commands all use it. A port exported in your shell still wins.
+
+To change ports later, run `lemon setup runtime`, which saves them to the same
+file. Invalid interactive profile or port input is explained and asked again;
+an invalid flag is an error, not a fallback. Ports must be integers from 1 to
+65535.
 
 ```bash
 lemon setup runtime --non-interactive --profile runtime_min \
@@ -315,9 +305,9 @@ assistant home (`~/.lemon/agent/workspace`), not your home directory, unless
 `gateway.default_cwd` is set.
 
 The first paired Telegram chat is also your owner chat: reminders, heartbeats,
-the daily brief, and other scheduled results created outside a chat are sent
-there. In a paired chat, `/remind <when> <what>` sets a reminder. See
-[Reminders, heartbeats, and the daily brief](reminders-and-heartbeats.md).
+and other scheduled results created outside a chat are sent there. In a paired
+chat, `/remind <when> <what>` sets a reminder. See
+[Reminders and heartbeats](reminders-and-heartbeats.md).
 
 ### Images in Telegram and Discord
 

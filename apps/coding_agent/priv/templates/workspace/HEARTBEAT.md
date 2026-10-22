@@ -1,12 +1,11 @@
 ---
-summary: "Checklist for the scheduled heartbeat / daily-brief cron job"
+summary: "Checklist for the scheduled heartbeat cron job"
 ---
 
 # HEARTBEAT.md - Check-in Checklist
 
-A heartbeat is a scheduled cron job (for example every 30 minutes, or a daily
-brief) that runs in your main session. When it fires, read this checklist and
-work through it.
+A heartbeat is a scheduled cron job (for example every 30 minutes) that runs in
+your main session. When it fires, read this checklist and work through it.
 
 ## Reply rules
 

@@ -36,7 +36,7 @@ defmodule LemonCore.Config.Modular do
   - `LemonCore.Config.TUI` - Terminal UI theme and debug
   - `LemonCore.Config.Providers` - LLM provider configurations
   - `LemonCore.Config.Memory` - Memory behaviour (`[memory]`)
-  - `LemonCore.Config.Automation` - Opt-in proactive automation (daily brief)
+  - `LemonCore.Config.Automation` - Cron scheduler settings (`[automation]`, `[cron]`)
 
   See `LemonCore.Config` for the legacy configuration interface.
   """

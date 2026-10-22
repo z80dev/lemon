@@ -53,6 +53,10 @@ The installer:
 6. runs `lemon version`, then starts `lemon setup` (on `/dev/tty`, so the pipe
    through `sh` does not block it) for the `full` and `min` profiles.
 
+Output stays short: one line before the download, a progress bar on a
+terminal, one line once installed, then setup and a final hint. Checksum
+failures and other errors are still reported in full.
+
 If the install is interrupted, the installer removes its partial downloads and
 staging directory and restores the previous version, if any. Installing never
 touches `config.toml`, secrets, or the store.
@@ -179,7 +183,8 @@ add `--skip-verify` to defer it. See [Set up Lemon](user-guide/setup.md#automate
 Run the runtime as a background service with `lemon daemon`, check it with
 `lemon status`, and stop it with `lemon stop`. A packaged install reads
 `LEMON_CONTROL_PLANE_PORT` (default 4040), `LEMON_WEB_PORT` (4080) and
-`LEMON_SIM_UI_PORT` (4090).
+`LEMON_SIM_UI_PORT` (4090); ports chosen by `lemon setup` are saved to
+`~/.lemon/ports.env` and fill in whichever of those are unset.
 
 ## Optional Telegram or Discord
 

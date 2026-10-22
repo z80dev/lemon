@@ -35,7 +35,7 @@ defmodule LemonCore.Doctor.Checks.Runtime do
             "runtime.control_port",
             "Port #{port} is occupied, but no healthy Lemon control-plane answered.",
             "Inspect the process using this port. Stop the unhealthy runtime with `lemon stop` " <>
-              "or select a free LEMON_CONTROL_PLANE_PORT; do not start another daemon on this port."
+              "or choose another port with `lemon setup runtime --control-port PORT`; do not start another daemon on this port."
           )
 
         {:error, _} ->

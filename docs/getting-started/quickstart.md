@@ -30,10 +30,10 @@ LiteLLM) and API-key login are also supported; see
 [Set up Lemon](../user-guide/setup.md). Accept the offered default model, or pick
 another one your account can use.
 
-Skip the optional daily brief and runtime configuration for now. Setup is safe to
-rerun: a usable provider is kept, not logged in again. If a Hermes home is found,
-setup first shows a read-only audit and offers a no-by-default import without
-secrets. Do not paste credentials into chat or a repository.
+Setup is safe to rerun: a usable provider is kept, not logged in again. It only
+asks about ports if one is already taken, and suggests a free one. Do not paste
+credentials into chat or a repository. Coming from Hermes? Run
+`lemon migrate hermes` after setup.
 
 Setup prints **Setup complete** only after a passing live credential check. If
 you installed with `--skip-setup`, had no terminal when installing, or stopped

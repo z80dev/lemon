@@ -36,9 +36,27 @@ STATE_DIR="$LEMON_HOME_DIR/run"
 export LEMON_PATH="$LEMON_ROOT"
 export LEMON_CLI_LAUNCHER=source LEMON_LAUNCHER="$SCRIPT_DIR/lemon" LEMON_NODE_LAUNCH_CWD="$LAUNCH_CWD"
 
+# Ports chosen by `lemon setup` (~/.lemon/ports.env) fill in unset port
+# variables; an explicit environment value wins.
+load_port_settings() {
+  local key value
+  [ -f "$1" ] || return 0
+  while IFS='=' read -r key value || [ -n "$key" ]; do
+    case "$key" in
+      LEMON_CONTROL_PLANE_PORT | LEMON_WEB_PORT | LEMON_SIM_UI_PORT)
+        if [[ "$value" =~ ^[0-9]{1,5}$ && -z "${!key:-}" ]]; then
+          export "$key=$value"
+        fi
+        ;;
+    esac
+  done <"$1"
+}
+load_port_settings "$LEMON_HOME_DIR/ports.env"
+
 PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
 WEB_PORT="${LEMON_WEB_PORT:-4080}"
 SIM_PORT="${LEMON_SIM_UI_PORT:-4090}"
+export LEMON_CONTROL_PLANE_PORT="$PORT" LEMON_WEB_PORT="$WEB_PORT" LEMON_SIM_UI_PORT="$SIM_PORT"
 NODE_MODE=""
 NODE_NAME="${LEMON_GATEWAY_NODE_NAME:-lemon}"
 NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-lemon_gateway_dev_cookie}}"
@@ -512,7 +530,7 @@ start_runtime() {
     exit 1
   fi
   if control_port_in_use; then
-    error "port $PORT is occupied but does not answer Lemon health checks; free it or use --port <port>"
+    error "port $PORT is occupied but does not answer Lemon health checks; free it, use --port <port>, or save another port with 'lemon setup runtime --control-port PORT'"
     exit 1
   fi
   # Never displace a live runtime's ownership record, even if it is unhealthy.
