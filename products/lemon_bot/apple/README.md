@@ -158,6 +158,22 @@ backend's client-redirect allowlist. Its confidential IdP credential stays
 server-side; native flow uses PKCE. iPhone onboarding prioritizes connecting to
 your already signed-in desktop, not enterprise setup or invitations.
 
+Bots need a machine: a Lemon execution node. When nothing is online yet, the
+sidebar's first-run card sets up the machine you connected to on its own and then
+offers **Create a Bot** (the editor preselects the only online machine). For an
+owner or admin it reads the host name, creates the machine (`POST /v1/machines`)
+or reissues a repair invite for an existing one with the same node name, and runs
+`HostEnrollment.script` there — locally or over the same `ssh`. The script picks a
+bot-capable `lemon` matching the invite's pinned version (installing it the way
+`join-node.sh` does when missing), enrolls once with `node join
+--invite-code-stdin` (the one-use code travels inside the script on stdin), then
+hands the worker to a `org.lemon.node.<name>` LaunchAgent on macOS or a
+`lemon-node-<name>.service` systemd user unit on Linux, with your login shell's
+`PATH` and a log in `~/.lemon/logs/node-<name>.log`. Success is reported only once
+the backend sees the machine online. A machine that is already enrolled just gets
+its worker restarted under that supervisor. Failures stay on the card with
+**Try again** and **Attach another way** (the manual join command).
+
 To check the flow by hand: with Lemon Bot stopped, choose **This Mac** and confirm
 it starts and opens the workspace with no form; quit and relaunch and confirm the
 account restores. With a host you can `ssh` into, connect, kill the `ssh -N`
