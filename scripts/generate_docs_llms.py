@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
 PUBLIC = DOCS / "public"
-SITE = "https://z80dev.github.io/lemon"
+SITE = "https://lemon.food"
 
 SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     (

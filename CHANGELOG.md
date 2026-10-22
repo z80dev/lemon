@@ -8,6 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Changed
+
+- The documentation website moved to <https://lemon.food/>, served at the
+  domain root instead of the `/lemon/` project path.
+
 ### Removed
 
 - Releases no longer publish `sim_broadcast_platform` tarballs, and

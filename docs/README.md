@@ -131,7 +131,7 @@ assets, then runs the shared Markdown link-check entrypoint against the original
 checkout so repository-relative links resolve. `npm --prefix docs run link-check`
 uses that same recursive entrypoint, including root-level docs pages. CI uses
 the same npm build/link commands. Links to repository files are rewritten for
-the website; site navigation must work under the `/lemon/` base path.
+the website; the site is served at the root of `https://lemon.food/`.
 
 Update the canonical page for a changed behavior, not four prose copies. Keep
 contributor guides operational, API detail in moduledocs, and workflows here.

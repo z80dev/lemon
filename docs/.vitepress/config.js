@@ -8,9 +8,9 @@ import { repositoryLinks } from './source-links.mjs'
 export default {
   title: "Lemon",
   description: "Your agents. Your machine. Your move. Lemon is a local-first AI assistant and agent platform built on Elixir/OTP.",
-  base: "/lemon/",
+  base: "/",
   head: [
-    ["link", { rel: "icon", type: "image/svg+xml", href: "/lemon/brand/lemon-mark.svg" }],
+    ["link", { rel: "icon", type: "image/svg+xml", href: "/brand/lemon-mark.svg" }],
     ["meta", { name: "theme-color", content: "#f6f5ed" }],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:site_name", content: "Lemon" }],

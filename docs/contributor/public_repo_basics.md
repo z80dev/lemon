@@ -85,8 +85,8 @@ CODEOWNERS rules.
 - Update the canonical documentation for changed behavior and the relevant
   changelog for user-visible changes; do not copy the change into root/app
   guides unless an operational invariant changed. Build the site with
-  `npm --prefix docs run build`; `scripts/verify_docs_site` checks links under
-  the `/lemon/` base path.
+  `npm --prefix docs run build`; `scripts/verify_docs_site` checks the built
+  site's internal links.
 
 ## Commit style
 
