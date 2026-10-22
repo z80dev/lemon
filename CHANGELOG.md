@@ -12,21 +12,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - The documentation website moved to <https://lemon.food/>, served at the
   domain root instead of the `/lemon/` project path.
-
-### Removed
-
-- Releases no longer publish `sim_broadcast_platform` tarballs, and
-  `install.sh` no longer accepts `--profile sim`. Build that release from
-  source or with `apps/lemon_sim_ui/Dockerfile`. A GitHub release now contains
-  12 tarballs.
-- CI no longer tests LemonSim. Pull requests, `main`, release preflight and
-  nightly coverage skip the `lemon_sim` and `lemon_sim_ui` suites. The
-  `sim-bench` job and the release-smoke Sim UI container job are gone. Run
-  LemonSim checks locally with `scripts/test changed` and
-  `scripts/sim_bench.sh`, which replaces `scripts/ci_sim_bench.sh`.
-
-### Changed
-
 - `lemon-bot` now works with no configuration on the same machine as Lemon.
   It serves `http://127.0.0.1:4100` (moved from 4080, which Lemon Web uses),
   keeps state in `~/.lemon/lemon_bot`, and finds and signs in to the local
@@ -44,6 +29,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   onboarding default use port 4100.
 - `install.sh --profile lemon_bot` says how to run `lemon-bot` and how to
   install Lemon itself when it is missing.
+
+### Removed
+
+- Releases no longer publish `sim_broadcast_platform` tarballs, and
+  `install.sh` no longer accepts `--profile sim`. Build that release from
+  source or with `apps/lemon_sim_ui/Dockerfile`. A GitHub release now contains
+  12 tarballs.
+- CI no longer tests LemonSim. Pull requests, `main`, release preflight and
+  nightly coverage skip the `lemon_sim` and `lemon_sim_ui` suites. The
+  `sim-bench` job and the release-smoke Sim UI container job are gone. Run
+  LemonSim checks locally with `scripts/test changed` and
+  `scripts/sim_bench.sh`, which replaces `scripts/ci_sim_bench.sh`.
 
 ---
 
