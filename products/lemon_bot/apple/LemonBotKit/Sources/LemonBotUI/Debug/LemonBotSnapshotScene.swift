@@ -11,6 +11,7 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
     case appsAndChannels, groupEditor, botLifecycle
     case composerFiles, composerPolish
     case sidebarOffline
+    case connect
 
     /// `sidebar-conversation`, used for output file names.
     public var slug: String {
@@ -22,7 +23,7 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
         case .sidebarOffline: return .backendDown
         case .inspectorActivity, .composerActiveRun: return .activeRun
         case .failedRun: return .failedRun
-        case .settings, .actionRecovery, .newBotNoMachine, .inboxEmpty, .appsAndChannels, .groupEditor, .botLifecycle, .composerFiles, .composerPolish: return .chiefOfStaff
+        case .settings, .actionRecovery, .newBotNoMachine, .inboxEmpty, .appsAndChannels, .groupEditor, .botLifecycle, .composerFiles, .composerPolish, .connect: return .chiefOfStaff
         case .emptyState: return .noSelection
         case .backendDown: return .backendDown
         case .controllerDown: return .controllerDown
@@ -35,6 +36,7 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
     public var windowSize: CGSize {
         if self == .instancePane || self == .instanceRunning { return CGSize(width: 1100, height: 1700) }
         if self == .composerPolish { return CGSize(width: 760, height: 840) }
+        if self == .connect { return CGSize(width: 640, height: 820) }
         return self == .settings ? CGSize(width: 900, height: 620) : CGSize(width: 1320, height: 840)
     }
 
@@ -61,6 +63,8 @@ public enum LemonBotSnapshotScene: String, CaseIterable {
         case .botLifecycle:
             if let bot = store.bots.first { return AnyView(BotLifecycleView(store: store, bot: bot)) }
             return AnyView(EmptySelectionView())
+        case .connect:
+            return AnyView(OnboardingView(store: store))
         case .newBotNoMachine:
             store.machines = []
             return AnyView(BotEditorView(store: store))

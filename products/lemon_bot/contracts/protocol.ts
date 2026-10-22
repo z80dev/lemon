@@ -36,6 +36,8 @@ export interface SetupStatus extends BackendDescriptor { setupRequired: boolean 
 export interface BackendIdentity extends BackendDescriptor { workspaceId: ID }
 export interface SetupRequest extends Mutation { setupCode: string; email: string; password: string; displayName: string; workspaceName: string }
 export interface LoginRequest extends Mutation { email: string; password: string; deviceId?: ID }
+/** Sent with `Authorization: Bearer <DATA_DIR/local-access.key>`; signs in as (or creates) the workspace owner. */
+export interface LocalAccessRequest { displayName?: string }
 export interface AcceptInviteRequest extends Mutation { inviteToken: string; email: string; password: string; displayName: string }
 export interface ReauthRequest { password: string }
 export interface ReauthResult { reauthToken: string; expiresAtMs: TimestampMs }
@@ -646,6 +648,7 @@ export interface RestEndpoints {
   'GET /identity': Endpoint<undefined, BackendIdentity>;
   'POST /setup': Endpoint<SetupRequest, AuthResult>;
   'POST /auth/login': Endpoint<LoginRequest, AuthResult>;
+  'POST /auth/local': Endpoint<LocalAccessRequest, AuthResult>;
   'POST /auth/invites/accept': Endpoint<AcceptInviteRequest, AuthResult>;
   'POST /auth/reauth': Endpoint<ReauthRequest, ReauthResult>;
   'GET /auth/sessions': Endpoint<undefined, Page<AuthSession>, PageQuery>;

@@ -69,13 +69,6 @@ public struct ConnectionIssue: Equatable, Sendable {
     }
 }
 
-public struct DiscoveredBackend: Identifiable, Equatable, Sendable {
-    public var id: String { baseURL.absoluteString }
-    public let baseURL: URL
-    public let version: String
-    public let setupRequired: Bool
-}
-
 extension LemonBotStore {
     public var canViewInstance: Bool { member?.role == "owner" || member?.role == "admin" }
     public var canControlInstance: Bool { member?.role == "owner" && instanceStatus?.runtime.actions.isEmpty == false }
@@ -123,26 +116,5 @@ extension LemonBotStore {
         }
         try assertGeneration(current)
         try await retryNow()
-    }
-    /// Public, credential-free probes; each origin has an independent two-second deadline.
-    public func discoverBackends() async -> [DiscoveredBackend] {
-        let candidates = accounts.map(\.baseURL) + [URL(string: "http://127.0.0.1:4100")!, URL(string: "http://localhost:4100")!]
-        var seen: Set<String> = []
-        let urls = candidates.compactMap { try? HTTPTransport.normalizeBaseURL($0) }.filter { seen.insert($0.absoluteString).inserted }
-        let session = httpSession
-        return await withTaskGroup(of: DiscoveredBackend?.self) { group in
-            for url in urls {
-                group.addTask {
-                    do {
-                        let client = try HTTPTransport(baseURL: url, session: session)
-                        let setup: SetupStatus = try await client.read("/setup", timeout: 2)
-                        return DiscoveredBackend(baseURL: url, version: setup.version, setupRequired: setup.setupRequired)
-                    } catch { return nil }
-                }
-            }
-            var found: [DiscoveredBackend] = []
-            for await result in group { if let result { found.append(result) } }
-            return found.sorted { $0.id < $1.id }
-        }
     }
 }

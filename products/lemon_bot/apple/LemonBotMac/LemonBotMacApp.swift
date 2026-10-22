@@ -187,7 +187,7 @@ private struct MacMenuBarView: View {
         if controller.store.accounts.count > 1 {
             Menu("Switch account") {
                 ForEach(controller.store.accounts, id: \.id) { account in
-                    Button("\(account.displayName) — \(account.baseURL.host ?? "")") {
+                    Button("\(account.displayName) — \(account.location)") {
                         Task { do { try await controller.store.restoreAccount(account) } catch { if controller.store.connectionIssue == nil { controller.errorMessage = error.localizedDescription } } }
                     }.disabled(account.id == controller.store.account?.id)
                 }
@@ -227,7 +227,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationC
         NSApp.setActivationPolicy(.regular)
         NSUpdateDynamicServices()
     }
-    func applicationWillTerminate(_ notification: Foundation.Notification) { pet?.stop(); platform?.cancelCapture(); platform?.stopPlayback() }
+    func applicationWillTerminate(_ notification: Foundation.Notification) { pet?.stop(); platform?.cancelCapture(); platform?.stopPlayback(); SSHTunnels.shared.close() }
     func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         Task { await platform?.registerPush(deviceToken) }
     }
