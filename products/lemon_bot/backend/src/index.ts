@@ -6,6 +6,7 @@ import type { BackendConfiguration, BackendServices } from './core/services';
 import type { Policies } from '../../contracts/protocol';
 import { loadConfiguration, createPrivateCodec, validateRuntimeLauncher, isLoopback, type ControllerSource } from './core/config';
 import { issueOwnerSetupProof } from './core/setup';
+import { ensureLocalAccessKey } from './core/local-access';
 import { terminal } from './cli/connect';
 import { prepareController } from './cli/lemon-runtime';
 import { Store } from './core/store';
@@ -49,6 +50,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   await validateRuntimeLauncher(config.runtimeLauncher);
   const store=new Store(join(config.dataDir,'product.sqlite'));
   await chmod(join(config.dataDir,'product.sqlite'),0o600);
+  await ensureLocalAccessKey(config.dataDir);
   const codec=createPrivateCodec(key);
   const sentinel=store.metadata<string>('encryptionKeyCheck');
   if(sentinel){if(codec.decrypt(sentinel)!=='lemon_bot_private_key_v1'){store.close();throw new Error('Product encryption key does not match existing private state.');}}

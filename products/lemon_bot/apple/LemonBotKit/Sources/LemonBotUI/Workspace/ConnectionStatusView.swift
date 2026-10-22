@@ -1,14 +1,11 @@
 import SwiftUI
 import LemonBotKit
-#if os(macOS)
-import AppKit
-#endif
 
 /// The same explanation and recovery actions in the workspace, sidebar popover and phone sheet.
 public struct ConnectionStatusView: View {
     let store: LemonBotStore
     @State private var action = UIActionState()
-    @State private var chooseBackend = false
+    @State private var connectElsewhere = false
     @State private var signIn = false
     @State private var pairing = false
     @State private var restart = false
@@ -41,9 +38,9 @@ public struct ConnectionStatusView: View {
                 if issue.layer == .controllerDown { controllerActions }
                 if store.canViewInstance, issue.layer != .signedOutOrRevoked { Button("View instance details") { instanceDetails = true }.buttonStyle(.borderless) }
                 #if os(macOS)
-                if issue.layer == .backendUnreachable, let url = URL(string: issue.origin), ConnectionIssue.isLoopback(url) {
-                    StartLemonButton(url: url, accountID: store.account?.id) { try? await store.retryNow() }
-                    LocalLemonStartHelp()
+                if issue.layer == .backendUnreachable, let account = store.account, account.route != nil || ConnectionIssue.isLoopback(account.baseURL) {
+                    Button("Start Lemon Bot on \(account.route?.title ?? "this Mac")") { Task { await action.perform { try await store.startBackend() } } }
+                        .buttonStyle(.lemonPrimary).disabled(action.inFlight)
                 }
                 #endif
                 if let operation = store.instanceStatus?.runtime.operation { RuntimeOperationView(operation: operation) }
@@ -64,7 +61,7 @@ public struct ConnectionStatusView: View {
         .padding(16).frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: LBMetric.rowRadius).fill(LB.raised))
         .overlay(RoundedRectangle(cornerRadius: LBMetric.rowRadius).strokeBorder(LB.warning.opacity(0.3)))
-        .sheet(isPresented: $chooseBackend) { ChooseLemonBotView(store: store) }
+        .sheet(isPresented: $connectElsewhere) { OnboardingView(store: store) }
         .sheet(isPresented: $signIn) { OnboardingView(store: store, initialURL: store.account?.baseURL) }
         .sheet(isPresented: $pairing) {
             NavigationStack {
@@ -99,17 +96,30 @@ public struct ConnectionStatusView: View {
                 catch { action.error = error.localizedDescription; do { try await Task.sleep(for: .seconds(10)) } catch { return } }
             }
         }
+        #if os(macOS)
+        // A machine-key account never needs a password: re-sign in with the machine once, automatically.
+        .task(id: store.connectionState) {
+            guard store.connectionState == "reconnect_required", let route = store.account?.route else { return }
+            await action.perform { try await store.connect(to: route) }
+        }
+        #endif
     }
     @ViewBuilder private var recoveryButtons: some View {
         if store.connectionState == "reconnect_required" {
+            #if os(macOS)
+            if let route = store.account?.route {
+                Button("Reconnect") { Task { await action.perform { try await store.connect(to: route) } } }.buttonStyle(.lemonPrimary).disabled(action.inFlight)
+            } else {
+                Button("Sign in again") { signIn = true }.buttonStyle(.lemonPrimary)
+            }
+            #else
             Button("Sign in again") { signIn = true }.buttonStyle(.lemonPrimary)
-            #if os(iOS)
             Button("Reconnect this device") { pairing = true }.buttonStyle(.pill(.secondary))
             #endif
         } else {
             Button("Try again") { Task { await action.perform { try await store.retryNow() } } }.buttonStyle(.lemonPrimary).disabled(action.inFlight)
         }
-        Button("Choose another Lemon Bot…") { chooseBackend = true }.buttonStyle(.pill(.secondary))
+        Button("Connect somewhere else…") { connectElsewhere = true }.buttonStyle(.pill(.secondary))
     }
     @ViewBuilder private var controllerActions: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -169,130 +179,3 @@ func runtimeOperationLabel(_ action: RuntimeAction, state: RuntimeOperation.Stat
     case (.restart, .failed): return "Lemon couldn’t restart"
     }
 }
-
- #if os(macOS)
-struct LocalLemonStartHelp: View {
-    private let backendCommand = "bun run --cwd products/lemon_bot/backend start"
-    var body: some View {
-        DisclosureGroup("Start it on this Mac") {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Run Lemon Bot in Terminal. It asks which Lemon to use and offers to start the one on this Mac. This app will detect it when it comes online.").font(LBFont.meta)
-                command("lemon-bot")
-                Text("From a Lemon checkout instead:").font(LBFont.meta)
-                command(backendCommand)
-                HStack {
-                    Button("Open Terminal") {
-                        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") { NSWorkspace.shared.openApplication(at: url, configuration: .init()) }
-                    }.buttonStyle(.pill(.secondary, compact: true))
-                    Link("Setup instructions", destination: URL(string: "https://github.com/z80dev/lemon/blob/main/products/lemon_bot/README.md#running-an-integrated-checkout")!)
-                }
-            }.padding(.top, 8)
-        }.font(LBFont.meta)
-    }
-    private func command(_ value: String) -> some View {
-        HStack { Text(value).font(LBFont.code).textSelection(.enabled); Spacer(minLength: 8); Button("Copy") { copyText(value) }.buttonStyle(.pill(.secondary, compact: true)) }
-    }
-}
-#endif
-
-#if os(macOS)
-/// Explicit clipboard hand-off to Terminal, followed by bounded health polling.
-struct StartLemonButton: View {
-    let url: URL
-    let accountID: String?
-    let onHealthy: @MainActor () async -> Void
-    @State private var state: LemonStartState = .idle
-    @State private var pollingTask: Task<Void, Never>?
-    @State private var attemptID: UUID?
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Button("Start Lemon") { start() }.buttonStyle(.lemonPrimary).disabled(state.isBusy)
-                if state.isBusy { ProgressView().controlSize(.small) }
-                if let message { Text(message).font(LBFont.meta).foregroundStyle(LB.muted) }
-            }
-            if case .failed(let reason) = state { Text(reason).font(LBFont.meta).foregroundStyle(LB.danger).textSelection(.enabled) }
-        }
-        .onDisappear { cancel() }
-        .onChange(of: accountID) { _, _ in cancel() }
-        .onChange(of: url) { _, _ in cancel() }
-    }
-    private var message: String? {
-        switch state {
-        case .openingTerminal: return "Copying command and opening Terminal…"
-        case .waitingForHealth: return "Command copied. Paste into Terminal and press Return. Waiting for Lemon Bot…"
-        case .started: return "Lemon Bot is running."
-        case .idle, .failed: return nil
-        }
-    }
-    private func start() {
-        let url = url
-        let home = getpwuid(getuid()).map { String(cString: $0.pointee.pw_dir) } ?? NSHomeDirectory()
-        let id = UUID()
-        attemptID = id
-        state = .openingTerminal
-        pollingTask = Task {
-            let starter = LocalLemonStarter(handoff: TerminalWorkspaceHandoff(), isHealthy: {
-                guard let client = try? HTTPTransport(baseURL: url) else { return false }
-                defer { client.session.invalidateAndCancel() }
-                return (try? await client.read("/setup", timeout: 2, as: SetupStatus.self)) != nil
-            }, homeDirectory: home)
-            let final = await starter.start { next in
-                Task { @MainActor in
-                    guard attemptID == id, state.isBusy else { return }
-                    if next.isBusy { state = next }
-                }
-            }
-            guard !Task.isCancelled, attemptID == id else { return }
-            state = final
-            if final == .started { await onHealthy() }
-            if attemptID == id { pollingTask = nil }
-        }
-    }
-    private func cancel() {
-        pollingTask?.cancel()
-        pollingTask = nil
-        attemptID = nil
-        state = .idle
-    }
-}
-#endif
-
-struct ChooseLemonBotView: View {
-    let store: LemonBotStore
-    @Environment(\.dismiss) private var dismiss
-    @State private var discovered: [DiscoveredBackend] = []
-    @State private var discovering = false
-    @State private var address: URL?
-    @State private var onboarding = false
-    @State private var action = UIActionState()
-    var body: some View {
-        NavigationStack {
-            List {
-                Section("Saved accounts") {
-                    ForEach(store.accounts) { account in
-                        Button { Task { await action.perform { try await store.restoreAccount(account); dismiss() } } } label: {
-                            VStack(alignment: .leading) { Text(account.email); Text(ConnectionIssue.origin(for: account.baseURL)).font(LBFont.meta).foregroundStyle(LB.muted) }
-                        }
-                    }
-                }
-                Section("Reachable Lemon Bots") {
-                    if discovering { ProgressView("Looking for Lemon Bot…") }
-                    ForEach(discovered) { backend in
-                        Button { address = backend.baseURL; onboarding = true } label: {
-                            VStack(alignment: .leading) { Text(ConnectionIssue.origin(for: backend.baseURL)); Text("Version \(backend.version) · \(backend.setupRequired ? "Needs setup" : "Ready to sign in")").font(LBFont.meta) }
-                        }
-                    }
-                    if !discovering && discovered.isEmpty { Text("No services found at your saved addresses or localhost.").foregroundStyle(LB.muted) }
-                    Button("Look again") { Task { await discover() } }.disabled(discovering)
-                }
-                Button("Enter address…") { address = nil; onboarding = true }
-                ActionErrorView(message: action.error)
-            }.navigationTitle("Choose Lemon Bot").toolbar { Button("Close") { dismiss() } }
-        }.frame(minWidth: 320, minHeight: 400)
-            .task { await discover() }
-            .sheet(isPresented: $onboarding) { OnboardingView(store: store, initialURL: address) }
-    }
-    private func discover() async { discovering = true; discovered = await store.discoverBackends(); discovering = false }
-}
-

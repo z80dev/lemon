@@ -118,7 +118,7 @@ xcrun simctl launch booted org.lemonbot.ios
 
 Select **LemonBotMac** or **LemonBotiOS** in Xcode for interactive Run. `LemonBotShare` is a separate embedded iOS extension, not a second account client. Choose a concrete simulator in Xcode or boot an available simulator before `simctl install`; the generic build destination does not boot one.
 
-`CODE_SIGNING_ALLOWED=NO` is compilation-only, not a supported macOS login/Keychain smoke build. The macOS Debug target is configured for ad-hoc signing with the unchanged `org.lemonbot.mac` identity, a sandbox-only local entitlement file and an empty `APS_ENVIRONMENT`; it deliberately excludes the profile-requiring APNs entitlement and unused Mac App Group. Notifications in that configuration are local, not remote APNs. The integration owner must still build and exercise the resulting app: signing configuration is not proof of successful login or Keychain persistence. Keep the same installed bundle for save/quit/relaunch checks. Ad-hoc signatures do not provide a persistent signer across code-changing rebuilds: macOS may require normal Keychain authorization again. For persistent signer trust across rebuilds, use the same development signing identity/team (`CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY='Apple Development' DEVELOPMENT_TEAM=<team>`). Do not delete credentials or relax their access controls to bypass authorization errors.
+`CODE_SIGNING_ALLOWED=NO` is compilation-only, not a supported macOS login/Keychain smoke build. The macOS Debug target is configured for ad-hoc signing with the unchanged `org.lemonbot.mac` identity, a local entitlement file (microphone and Speech only) and an empty `APS_ENVIRONMENT`; it deliberately excludes the profile-requiring APNs entitlement and unused Mac App Group. Notifications in that configuration are local, not remote APNs. The integration owner must still build and exercise the resulting app: signing configuration is not proof of successful login or Keychain persistence. Keep the same installed bundle for save/quit/relaunch checks. Ad-hoc signatures do not provide a persistent signer across code-changing rebuilds: macOS may require normal Keychain authorization again. For persistent signer trust across rebuilds, use the same development signing identity/team (`CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY='Apple Development' DEVELOPMENT_TEAM=<team>`). Do not delete credentials or relax their access controls to bypass authorization errors.
 
 Unsigned builds also do not grant App Group access. To exercise the real app/share container on a simulator, choose its concrete destination and build with `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual`, then install that signed bundle. Physical devices still require your registered identifiers, entitlements and signing team.
 
@@ -126,7 +126,43 @@ Both applications package the shared `Assets.xcassets/AppIcon.appiconset`, with 
 
 The checked-in specification uses `org.lemonbot.mac`, `org.lemonbot.ios`, `org.lemonbot.ios.share` and the iOS app/share App Group `group.org.lemonbot.shared`; the Mac app does not consume that group. For physical iOS devices/distribution, register your own identifiers and matching App Group, update the project settings and entitlements together, enable Push Notifications on the iOS app identifier, and set your signing team in Xcode or pass `DEVELOPMENT_TEAM=<team>`. Mac Release retains its existing provisioned APNs entitlement and requires the corresponding signing profile/team; local Mac Debug omits it. APNs also requires the backend's configured key, team, topic and environment; an unsigned simulator build is not evidence of APNs delivery. Device OS permission and backend capability are separate.
 
-Enter the product origin (for local development `http://127.0.0.1:4100`, not Lemon `/ws`) in desktop onboarding. Bootstrap with the operator's one-use setup code only on an empty deployment; otherwise use local sign-in or a configured OIDC provider. OIDC native completion requires `lemonbot://auth/complete` in the backend's client-redirect allowlist. Its confidential IdP credential stays server-side; native flow uses PKCE. iPhone onboarding prioritizes connecting to your already signed-in desktop, not enterprise setup or invitations.
+### Connect the Mac app
+
+The Mac app is not sandboxed: it is a Developer ID app that runs as you, reads your
+files and runs `ssh` the way Terminal does. Being that OS user, or being able to
+`ssh` into a machine, is the credential. First launch shows two choices:
+
+- **This Mac → Connect.** The app runs a small POSIX script (`MachineBootstrap.script`)
+  that checks `http://127.0.0.1:4100/v1/setup`, starts an installed `lemon-bot --no-open`
+  detached if it isn't running (falling back to `bun run … start` in the
+  `lemonCheckoutPath` checkout, default `~/lemon`), and prints the backend's private
+  `~/.lemon/lemon_bot/local-access.key`. The app sends that key once to
+  `POST /v1/auth/local`, which signs in as the workspace owner — creating the owner
+  and workspace on a fresh install — and saves the account with `route = .thisMac`.
+- **Another machine → `me@studio` → Connect.** The same script runs through
+  `ssh -T <host> sh -s` with `BatchMode=yes` (keys or agent only, no password prompt)
+  and `StrictHostKeyChecking=accept-new`. The app then keeps
+  `ssh -N -L 127.0.0.1:<port>:127.0.0.1:4100 <host>` open, where `<port>` is a stable
+  value in 41000–41999 derived from the host, so the saved account's base URL never
+  changes. The tunnel restarts with backoff while that account is active and closes
+  on account switch, sign-out and quit. The remote machine needs only `lemon-bot`
+  installed; nothing listens off loopback.
+
+Neither path asks for an email, password or setup code. A machine-key session
+expires like any product session; on `reconnect_required` the app signs in with
+the machine again automatically. **Sign in with an email and password instead**
+opens the account form: enter a product origin, bootstrap an empty deployment with
+the operator's one-use setup code, or use local sign-in or a configured OIDC
+provider. OIDC native completion requires `lemonbot://auth/complete` in the
+backend's client-redirect allowlist. Its confidential IdP credential stays
+server-side; native flow uses PKCE. iPhone onboarding prioritizes connecting to
+your already signed-in desktop, not enterprise setup or invitations.
+
+To check the flow by hand: with Lemon Bot stopped, choose **This Mac** and confirm
+it starts and opens the workspace with no form; quit and relaunch and confirm the
+account restores. With a host you can `ssh` into, connect, kill the `ssh -N`
+process and confirm the workspace reconnects. A host without key access shows the
+ssh error under **Details**; one without Lemon Bot shows the install command.
 
 Accounts and device-bound product credentials use native Keychain, keyed by exact backend/account. On macOS, all account and pending-pairing reads, updates, inserts and removals explicitly select the standard local login Keychain with synchronization disabled. Its encrypted, code-signing-ACL-protected items do not sync through iCloud; this is not a hardware-bound or backup-nonportable storage guarantee. On iOS, the same items retain `AfterFirstUnlockThisDeviceOnly` accessibility and synchronization is explicitly disabled. Backend device/session binding and revocation remain independent of the local storage implementation. The last account and selected Bot/conversation restore on launch. Account switching keeps workspace state separate; sign-out revokes the session and removes that account's local cache. Ordinary sessions keep bounded expiry; paired `AuthSession.expiresAtMs: null` means **until revoked**, not expired or a client-generated refresh token. Offline restoration retains the saved cluster, credential, drafts and last-known selection; reconnection performs reads/realtime subscriptions, never replays ordinary mutations. Authoritative revocation shows **Reconnect to your desktop** and disables old authority.
 
@@ -203,12 +239,11 @@ shows the target account/address, last error details with Copy, and the live
 retry countdown. **Try again** bypasses the current backoff. Cached conversations
 and unsent drafts remain available.
 
-**Choose another Lemon Bot…** lists saved accounts and performs credential-free,
-two-second public setup probes at saved origins and the two local development
-addresses. Discovery is not a LAN scan or automatic sign-in. A discovered origin
-opens prefilled onboarding; **Enter address…** accepts another secure address.
-Physical iPhones start with an empty address and a tailnet HTTPS placeholder,
-not the phone's own loopback address. Simulator keeps the development default.
+**Connect somewhere else…** opens the same connect screen as first launch, with
+recent accounts one click away; there is no address discovery or nested sign-in
+sheet. Physical iPhones start with an empty address and a tailnet HTTPS
+placeholder, not the phone's own loopback address. Simulator keeps the development
+default.
 
 When the backend is reachable, owners can use only the Start/Restart actions it
 advertises. Launcher controls run on the Lemon Bot service host; remote controller
@@ -218,64 +253,12 @@ reconnect a rejected or stopped Lemon link. Restart requires confirmation.
 Running operations are observed by read-only polling and expose the backend's
 bounded output, never an automatic mutation replay.
 
-The Mac app remains sandboxed: when the backend itself is unreachable at a
-loopback address, **Start Lemon** copies a prepared command and opens Terminal.
-**Paste it into Terminal and press Return** to run Lemon Bot as your current user.
-Nothing executes until you paste and submit it. The button is also available
-after a failed setup/sign-in check on first launch or while signed out; a
-successful health probe resumes setup/sign-in discovery, without requiring an
-authenticated account.
-
-The command prefers the installed `~/.local/bin/lemon-bot` (from the
-`--profile lemon_bot` installer), run with `--no-open` because the app is the
-GUI. That backend asks in Terminal which Lemon to use and offers to start the
-one on this Mac; the one-use owner setup code is shown there too. Without it,
-the command falls back to a Lemon checkout: it searches `~/.lemon/bin/lemon`
-(the native installer launcher), `~/.local/bin/lemon`, `~/bin/lemon`, then
-Homebrew/local installed launchers, before falling back to `<checkout>/bin/lemon`,
-runs `lemon start`, and starts the checkout's backend. Discovery uses explicit
-paths, not shell aliases or `PATH`. Bun is searched in `~/.bun/bin`, Homebrew
-and `/usr/local/bin`. The checkout defaults to `~/lemon`. For another location:
-
-```sh
-defaults write org.lemonbot.mac lemonCheckoutPath -string "/absolute/path/to/lemon"
-```
-
-The checkout must contain `products/lemon_bot/backend` with its dependencies
-installed. The app never reads an operator token,
-creates scripts, changes entitlements, installs launchd jobs, escalates privileges
-or starts services without a click. **Start it on this Mac** retains the separate
-manual commands and setup link. These local commands and Terminal actions are
-not shown on iPhone.
-
-Success is shown only after the public setup health probe passes. After Terminal
-opens, the hand-off makes at most 60 probes, with a two-second request timeout and
-one-second intervals between probes (up to 120 seconds of request budgets plus
-59 seconds of waits, excluding Terminal opening and system scheduling). This is
-not a 60-second overall deadline. Exhaustion shows a bounded, redacted reason;
-inspect Terminal for command failures. Leaving the view, changing backend or
-switching accounts cancels the hand-off polling, not commands already submitted
-in Terminal. Normal background reconnect/discovery is independent.
-
-### Manual Terminal hand-off checklist
-
-- With a saved account and its loopback backend down, confirm **Start Lemon**
-  appears. Click once: Terminal opens and the command is on the clipboard, but
-  no service starts until you paste and press Return. Confirm both Lemon and
-  Lemon Bot start as the current user and success appears only after health.
-- Repeat on first launch with no saved account, and while signed out: check the
-  local server address, click **Start Lemon**, paste and run. Confirm the app
-  discovers owner setup or available sign-in methods without authenticated
-  store refresh. Test both an uninitialized and an already configured backend.
-- Test installed launchers and a source-only `<checkout>/bin/lemon`, including a
-  checkout path containing spaces and an apostrophe. Inspect the pasted command
-  before submitting it; no generated executable script should be created.
-- Leave the command unsubmitted or use a checkout without Bun/backend dependencies:
-  confirm no false success, eventual bounded/redacted failure, and retry works.
-- Leave the panel or change accounts/backend during polling. Confirm the old
-  attempt cannot update the new view or trigger its discovery/reconnect.
-- Confirm a remote origin never offers local start, iPhone shows no local
-  command/Terminal actions, and App Sandbox remains enabled.
+On Mac, when a machine-key account's Lemon Bot (or any loopback account's) is
+unreachable, **Start Lemon Bot on This Mac / <host>** runs the same bootstrap
+script locally or over SSH, reopens the tunnel if needed and retries, keeping the
+saved session. A reconnect-required machine-key account shows **Reconnect** and
+tries it once automatically. Accounts that signed in with a password keep
+**Sign in again**. None of these local or SSH actions exist on iPhone.
 
 ## Lemon instance
 
