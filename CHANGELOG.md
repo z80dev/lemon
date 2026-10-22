@@ -22,6 +22,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   which the launchers load into unset port variables; `lemon setup runtime`
   now saves there too instead of printing `export` lines.
 
+### Fixed
+
+- The TUI no longer warns `could not recover …: NOT_FOUND` when it starts or
+  `/new` opens a session that has not run a prompt yet. The warning still
+  appears if the daemon reports a session missing while the TUI has a run or
+  transcript for it.
+
 ### Removed
 
 - The built-in daily brief (`[automation] daily_brief`, `lemon setup
