@@ -37,7 +37,7 @@ public struct OnboardingView: View {
         #if os(iOS) && !targetEnvironment(simulator)
         _backend = State(initialValue: initialURL.map(ConnectionIssue.origin(for:)) ?? "")
         #else
-        _backend = State(initialValue: initialURL.map(ConnectionIssue.origin(for:)) ?? "http://127.0.0.1:4080")
+        _backend = State(initialValue: initialURL.map(ConnectionIssue.origin(for:)) ?? "http://127.0.0.1:4100")
         #endif
     }
     public var body: some View {

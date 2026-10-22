@@ -106,7 +106,8 @@ Environment:
 Native installs into \$HOME/.lemon/versions. Backend installs into
 \$HOME/.lemon/lemon_bot/versions with an independent current pointer and
 \$HOME/.local/bin/lemon-bot launcher. Backend state is \$HOME/.lemon/lemon_bot,
-outside the versioned tree; LEMON_BOT_DATA_DIR can override it at runtime.
+outside the versioned tree. On first start in a terminal, lemon-bot asks whether
+to use the Lemon on this machine (starting it if needed) or another machine's.
 Backend version verification needs no Bun, Node, or source checkout.
 Docs: $DOCS_URL
 EOF
@@ -783,8 +784,10 @@ verify_bot_runtime() (
 )
 setup_handoff() {
   if [ "$PROFILE" = "lemon_bot" ]; then
-    info "Start lemon-bot with LEMON_BOT_CONTROL_URL and LEMON_BOT_OPERATOR_TOKEN configured."
-    info "Backend state: $HOME/.lemon/lemon_bot (override with LEMON_BOT_DATA_DIR)."
+    if [ ! -x "$HOME/.lemon/bin/lemon" ]; then
+      info "Lemon itself is not installed here. To run Lemon on this machine too, install it with:"
+      info "    curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh"
+    fi
   elif [ "$SKIP_SETUP" = "1" ]; then
     info "Setup skipped. Run this when you are ready to configure Lemon:"
     info "    $BIN_DIR/lemon setup"
@@ -802,7 +805,7 @@ setup_handoff() {
 finish() {
   info ""
   if [ "$PROFILE" = "lemon_bot" ]; then
-    info "Run lemon-bot to start the standalone backend."
+    info "Run lemon-bot to start. It connects to Lemon on this machine (offering to start it) or another machine you choose."
   elif [ -x "$CURRENT_LINK/tui/bin/lemon-tui" ]; then
     info "Run lemon to start."
   else

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "start": "bun src/index.ts", "dev": "bun --watch src/index.ts", "test": "bun test", "typecheck": "tsc --noEmit" },
+  "scripts": { "start": "bun src/cli.ts", "dev": "bun --watch src/cli.ts", "test": "bun test", "typecheck": "tsc --noEmit" },
   "dependencies": { "zod": "^4.3.6", "file-type": "^21.3.0", "fflate": "^0.8.2", "sharp": "^0.34.5", "pdf-lib": "^1.17.1", "fast-xml-parser": "^5.3.6" },
   "devDependencies": { "@types/bun": "^1.3.14", "typescript": "^5.9.3" }
 }

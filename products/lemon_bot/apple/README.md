@@ -126,7 +126,7 @@ Both applications package the shared `Assets.xcassets/AppIcon.appiconset`, with 
 
 The checked-in specification uses `org.lemonbot.mac`, `org.lemonbot.ios`, `org.lemonbot.ios.share` and the iOS app/share App Group `group.org.lemonbot.shared`; the Mac app does not consume that group. For physical iOS devices/distribution, register your own identifiers and matching App Group, update the project settings and entitlements together, enable Push Notifications on the iOS app identifier, and set your signing team in Xcode or pass `DEVELOPMENT_TEAM=<team>`. Mac Release retains its existing provisioned APNs entitlement and requires the corresponding signing profile/team; local Mac Debug omits it. APNs also requires the backend's configured key, team, topic and environment; an unsigned simulator build is not evidence of APNs delivery. Device OS permission and backend capability are separate.
 
-Enter the product origin (for local development `http://127.0.0.1:4080`, not Lemon `/ws`) in desktop onboarding. Bootstrap with the operator's one-use setup code only on an empty deployment; otherwise use local sign-in or a configured OIDC provider. OIDC native completion requires `lemonbot://auth/complete` in the backend's client-redirect allowlist. Its confidential IdP credential stays server-side; native flow uses PKCE. iPhone onboarding prioritizes connecting to your already signed-in desktop, not enterprise setup or invitations.
+Enter the product origin (for local development `http://127.0.0.1:4100`, not Lemon `/ws`) in desktop onboarding. Bootstrap with the operator's one-use setup code only on an empty deployment; otherwise use local sign-in or a configured OIDC provider. OIDC native completion requires `lemonbot://auth/complete` in the backend's client-redirect allowlist. Its confidential IdP credential stays server-side; native flow uses PKCE. iPhone onboarding prioritizes connecting to your already signed-in desktop, not enterprise setup or invitations.
 
 Accounts and device-bound product credentials use native Keychain, keyed by exact backend/account. On macOS, all account and pending-pairing reads, updates, inserts and removals explicitly select the standard local login Keychain with synchronization disabled. Its encrypted, code-signing-ACL-protected items do not sync through iCloud; this is not a hardware-bound or backup-nonportable storage guarantee. On iOS, the same items retain `AfterFirstUnlockThisDeviceOnly` accessibility and synchronization is explicitly disabled. Backend device/session binding and revocation remain independent of the local storage implementation. The last account and selected Bot/conversation restore on launch. Account switching keeps workspace state separate; sign-out revokes the session and removes that account's local cache. Ordinary sessions keep bounded expiry; paired `AuthSession.expiresAtMs: null` means **until revoked**, not expired or a client-generated refresh token. Offline restoration retains the saved cluster, credential, drafts and last-known selection; reconnection performs reads/realtime subscriptions, never replays ordinary mutations. Authoritative revocation shows **Reconnect to your desktop** and disables old authority.
 
@@ -220,24 +220,29 @@ bounded output, never an automatic mutation replay.
 
 The Mac app remains sandboxed: when the backend itself is unreachable at a
 loopback address, **Start Lemon** copies a prepared command and opens Terminal.
-**Paste it into Terminal and press Return** to run `lemon start` and the Lemon Bot
-backend as your current user. Nothing executes until you paste and submit it.
-The button is also available after a failed setup/sign-in check on first launch
-or while signed out; a successful health probe resumes setup/sign-in discovery,
-without requiring an authenticated account.
+**Paste it into Terminal and press Return** to run Lemon Bot as your current user.
+Nothing executes until you paste and submit it. The button is also available
+after a failed setup/sign-in check on first launch or while signed out; a
+successful health probe resumes setup/sign-in discovery, without requiring an
+authenticated account.
 
-The command searches `~/.lemon/bin/lemon` (the native installer launcher),
-`~/.local/bin/lemon`, `~/bin/lemon`, then Homebrew/local installed launchers,
-before falling back to `<checkout>/bin/lemon`. Discovery uses explicit paths,
-not shell aliases or `PATH`. Bun is searched in `~/.bun/bin`, Homebrew
+The command prefers the installed `~/.local/bin/lemon-bot` (from the
+`--profile lemon_bot` installer), run with `--no-open` because the app is the
+GUI. That backend asks in Terminal which Lemon to use and offers to start the
+one on this Mac; the one-use owner setup code is shown there too. Without it,
+the command falls back to a Lemon checkout: it searches `~/.lemon/bin/lemon`
+(the native installer launcher), `~/.local/bin/lemon`, `~/bin/lemon`, then
+Homebrew/local installed launchers, before falling back to `<checkout>/bin/lemon`,
+runs `lemon start`, and starts the checkout's backend. Discovery uses explicit
+paths, not shell aliases or `PATH`. Bun is searched in `~/.bun/bin`, Homebrew
 and `/usr/local/bin`. The checkout defaults to `~/lemon`. For another location:
 
 ```sh
 defaults write org.lemonbot.mac lemonCheckoutPath -string "/absolute/path/to/lemon"
 ```
 
-The checkout must contain `products/lemon_bot/backend`, with its existing backend
-environment and dependencies configured. The app never reads an operator token,
+The checkout must contain `products/lemon_bot/backend` with its dependencies
+installed. The app never reads an operator token,
 creates scripts, changes entitlements, installs launchd jobs, escalates privileges
 or starts services without a click. **Start it on this Mac** retains the separate
 manual commands and setup link. These local commands and Terminal actions are

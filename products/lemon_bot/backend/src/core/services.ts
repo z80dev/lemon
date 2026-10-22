@@ -116,7 +116,10 @@ export interface IntegrationServices {
   observeAccountTeardown?(operationId: string): Promise<P.ProviderCleanupResult[]>;
 }
 export interface BackendConfiguration {
-  publicUrl: string; controlUrl: string; operatorToken: string; dataDir: string; host: string; port: number;
+  publicUrl: string; controlUrl: string; dataDir: string; host: string; port: number;
+  /** Current controller credential. With `operatorTokenFile` set, the controller link refreshes it from that launcher-managed file before every connection attempt. */
+  operatorToken: string;
+  operatorTokenFile?: string;
   /** Absolute external web assets directory; omitted callers use the runtime layout. */
   webRoot?: string;
   runtimeLauncher?: string;

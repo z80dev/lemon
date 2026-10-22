@@ -1,4 +1,7 @@
 import { describe, expect, test, vi } from 'bun:test';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createLemonService, type ControlSocket } from '../../src/runtime/lemon';
 import { ApiError } from '../../src/core/errors';
 interface RequestFrame { type: string; id: string; method: string; params: Record<string, unknown> }
@@ -23,7 +26,7 @@ describe('long-lived operator connection', () => {
       sockets[0]!.handlers!.open();
       sockets[0]!.deliver({ type: 'res', id: sockets[0]!.sent[0]!.id, ok: false, error: { code: 'FORBIDDEN', message: config.operatorToken } });
       expect(service.controller.state).toBe('rejected'); expect(service.controller.nextRetryAtMs).toBeNull();
-      expect(service.controller.lastError).toMatchObject({ code: 'controller_rejected', message: 'The controller rejected the operator token. Check LEMON_BOT_OPERATOR_TOKEN.' });
+      expect(service.controller.lastError).toMatchObject({ code: 'controller_rejected', message: 'The controller rejected the operator token.' });
       expect(JSON.stringify(service.controller)).not.toContain(config.operatorToken);
       service.reconnect(); expect(sockets).toHaveLength(2); sockets[1]!.handshake();
       expect(service.controller.state).toBe('connected'); expect(service.controller.connectedAtMs).toBeNumber(); expect(service.controller.lastError).toBeNull();
@@ -199,5 +202,31 @@ describe('long-lived operator connection', () => {
   });
   test('off-loopback plaintext controller is rejected before socket construction', () => {
     expect(() => createLemonService({ ...config, controlUrl: 'ws://remote.example/ws' })).toThrow(ApiError);
+  });
+  test('waits for the launcher-managed credential and sends the current file token on each attempt', () => {
+    vi.useFakeTimers();
+    const directory = mkdtempSync(join(tmpdir(), 'lemon-bot-managed-token-'));
+    const file = join(directory, 'control-plane-4040.token');
+    const sockets: Socket[] = [];
+    const local = { controlUrl: 'ws://127.0.0.1:4040/ws', operatorToken: '', operatorTokenFile: file, trustedOverlay: false };
+    const service = createLemonService(local, { socket: () => { const socket = new Socket(); sockets.push(socket); return socket; }, reconnectMinMs: 1, reconnectMaxMs: 1, random: () => 1 });
+    try {
+      service.start();
+      expect(sockets).toHaveLength(0); expect(service.controller.state).toBe('reconnecting');
+      expect(service.controller.lastError?.code).toBe('controller_not_started');
+      writeFileSync(file, `${'a'.repeat(64)}\n`); chmodSync(file, 0o644);
+      vi.advanceTimersByTime(2);
+      expect(sockets).toHaveLength(0); expect(service.controller.lastError?.code).toBe('controller_credential_unsafe');
+      chmodSync(file, 0o600);
+      vi.advanceTimersByTime(2);
+      expect(sockets).toHaveLength(1); sockets[0]!.handshake();
+      expect(sockets[0]!.sent[0]!.params.auth).toEqual({ token: 'a'.repeat(64) });
+      expect(service.controller.state).toBe('connected'); expect(service.controller.lastError).toBeNull();
+      // A restarted Lemon may have replaced the credential; reconnect re-reads it rather than reusing the old one.
+      writeFileSync(file, `${'b'.repeat(64)}\n`);
+      service.reconnect(); sockets[1]!.handlers!.open();
+      expect(sockets[1]!.sent[0]!.params.auth).toEqual({ token: 'b'.repeat(64) });
+      expect(local.operatorToken).toBe('b'.repeat(64));
+    } finally { service.close(); vi.useRealTimers(); rmSync(directory, { recursive: true, force: true }); }
   });
 });
