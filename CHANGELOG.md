@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.10.21]
+
 ### Fixed
 
 - The TUI no longer warns `could not recover …: NOT_FOUND` when it starts or
