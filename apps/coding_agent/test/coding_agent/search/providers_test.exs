@@ -7,6 +7,7 @@ defmodule CodingAgent.Search.ProvidersTest do
     Exa,
     Jina,
     Kagi,
+    Keenable,
     Perplexity,
     Searxng,
     Tavily
@@ -266,6 +267,43 @@ defmodule CodingAgent.Search.ProvidersTest do
 
       assert hd(payload["results"])["description"] =~ "Agent harness"
       refute inspect(payload) =~ "tvly-secret"
+    end
+
+    test "Keenable posts an x-api-key query and maps description then snippet" do
+      http_post = fn "https://api.keenable.ai/v1/search", opts ->
+        assert {"x-api-key", "kn-secret"} in opts[:headers]
+        assert {"x-keenable-title", "Lemon"} in opts[:headers]
+        assert opts[:json] == %{"query" => "lemon agents", "max_results" => 3}
+
+        {:ok,
+         %Req.Response{
+           status: 200,
+           body: %{
+             "results" => [
+               %{"url" => "https://a.example", "title" => "A", "description" => "desc"},
+               %{"url" => "https://b.example", "title" => "B", "snippet" => "snip"},
+               %{"title" => "missing url"}
+             ]
+           }
+         }}
+      end
+
+      assert {:ok, payload} =
+               Keenable.search(@request, %{
+                 api_key: "kn-secret",
+                 timeout_ms: 100,
+                 http_post: http_post
+               })
+
+      assert Enum.map(payload["results"], & &1["url"]) == [
+               "https://a.example",
+               "https://b.example"
+             ]
+      assert Enum.map(payload["results"], & &1["description"]) == ["desc", "snip"]
+      refute inspect(payload) =~ "kn-secret"
+
+      assert {:error, %{"error" => "missing_keenable_api_key"}} =
+               Keenable.available?(:search, %{api_key: ""})
     end
 
     test "Kagi reads V1 result buckets in order and caps the count" do
