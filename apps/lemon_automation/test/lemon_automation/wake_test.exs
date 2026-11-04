@@ -1,11 +1,7 @@
 defmodule LemonAutomation.WakeTest do
   use ExUnit.Case, async: false
 
-  alias LemonAutomation.{CronJob, CronRun, CronStore, Wake}
-  alias LemonCore.Store
-
-  @jobs_table :cron_jobs
-  @runs_table :cron_runs
+  alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore, Wake}
 
   defmodule TestSubmitter do
     @moduledoc false
@@ -20,12 +16,12 @@ defmodule LemonAutomation.WakeTest do
     ensure_store_started()
     ensure_cron_manager_started()
 
-    clear_table(@jobs_table)
-    clear_table(@runs_table)
+    token = System.unique_integer([:positive, :monotonic])
 
     on_exit(fn -> restore_env(:cron_run_submitter, previous_submitter) end)
+    on_exit(fn -> cleanup_fixtures(token) end)
 
-    {:ok, token: System.unique_integer([:positive, :monotonic])}
+    {:ok, token: token}
   end
 
   describe "trigger/2" do
@@ -66,8 +62,9 @@ defmodule LemonAutomation.WakeTest do
       assert persisted_run.triggered_by == :wake
       assert persisted_run.meta.wake_context == context
 
-      # Wait for async wake task to complete so it doesn't leak into later suites.
+      # Wait for the async wake task and its manager ownership to be released.
       assert %CronRun{status: :completed, output: "wake completed"} = await_terminal_run(run.id)
+      _ = :sys.get_state(CronManager)
     end
   end
 
@@ -156,9 +153,25 @@ defmodule LemonAutomation.WakeTest do
     end
   end
 
-  defp clear_table(table) do
-    Enum.each(Store.list(table), fn {key, _value} ->
-      :ok = Store.delete(table, key)
+  defp cleanup_fixtures(token) do
+    prefix = "wake_job_#{token}_"
+    managed_jobs = if Process.whereis(CronManager), do: CronManager.list(), else: []
+
+    job_ids =
+      (managed_jobs ++ CronStore.list_jobs())
+      |> Enum.map(& &1.id)
+      |> Enum.filter(&String.starts_with?(&1, prefix))
+      |> Enum.uniq()
+
+    Enum.each(job_ids, fn job_id ->
+      if Process.whereis(CronManager), do: CronManager.remove(job_id)
+      _ = CronStore.delete_job(job_id)
+
+      for run <- CronStore.list_runs(job_id, limit: 10_000), do: CronStore.delete_run(run.id)
+
+      for event <- CronStore.list_audit_events(job_id: job_id, limit: 10_000) do
+        CronStore.delete_audit_event(event.id)
+      end
     end)
   end
 

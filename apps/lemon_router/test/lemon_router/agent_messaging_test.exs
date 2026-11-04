@@ -545,6 +545,36 @@ defmodule LemonRouter.AgentMessagingTest do
     assert {:ok, %{status: :accepted, response: nil}} = AgentMessaging.get(scope, source.id, id)
   end
 
+  test "filtered discovery fails closed on an unrelated malformed session and recovers after removal",
+       %{suffix: suffix} do
+    query = "discovery-#{suffix}"
+
+    source =
+      seed_native(
+        "agent:default:main:sub:#{query}",
+        System.tmp_dir!(),
+        "query-model",
+        query
+      )
+
+    id = "session://" <> source.session_key
+    malformed_key = "agent:malformed_#{suffix}:main"
+    on_exit(fn -> Store.delete(:sessions_index, malformed_key) end)
+
+    # A low-level Store/cache fixture may use arbitrary maps. If it leaks into
+    # the shared session index, filtering must not hide the corrupt owner row.
+    assert :ok =
+             Store.put(:sessions_index, malformed_key, %{
+               agent_id: "malformed_#{suffix}",
+               updated_at_ms: System.system_time(:millisecond)
+             })
+
+    assert {:error, :unavailable} = AgentMessaging.list("operator", query: query, limit: 200)
+    assert :ok = Store.delete(:sessions_index, malformed_key)
+    assert {:ok, entries} = AgentMessaging.list("operator", query: query, limit: 200)
+    assert Enum.any?(entries, &(&1.id == id))
+  end
+
   test "an unavailable native owner query is unknown, never an invented idle status", %{
     suffix: suffix
   } do
