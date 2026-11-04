@@ -147,6 +147,7 @@ defmodule LemonOmp.Session do
       ready_timer: nil,
       idle_timer: nil,
       publish_timer: nil,
+      settle_timer: nil,
       last_publish: 0,
       close_reason: nil,
       malformed: 0,
@@ -272,14 +273,22 @@ defmodule LemonOmp.Session do
     end
   end
 
-  def handle_info(:idle_timeout, %{projection: %{status: :idle}} = state),
-    do: {:stop, :normal, %{state | close_reason: :idle_timeout}}
+  def handle_info(
+        {:timeout, ref, :idle_timeout},
+        %{idle_timer: ref, projection: %{status: :idle}} = state
+      ),
+      do: {:stop, :normal, %{state | close_reason: :idle_timeout}}
 
-  def handle_info(:idle_timeout, state), do: {:noreply, %{state | idle_timer: nil}}
+  def handle_info({:timeout, _ref, :idle_timeout}, state), do: {:noreply, state}
 
   # omp normally reports a turn's verdict right after `agent_end`; if it never
   # does, settle anyway so the session cannot stay "running" forever.
-  def handle_info({:settle_fallback, turns}, %{projection: projection} = state) do
+  def handle_info(
+        {:timeout, ref, {:settle_fallback, turns}},
+        %{settle_timer: ref, projection: projection} = state
+      ) do
+    state = %{state | settle_timer: nil}
+
     if projection.status == :running and projection.settling and projection.turns == turns do
       {:noreply, handle_frame(state, {:event, "session_settled", %{}})}
     else
@@ -287,11 +296,16 @@ defmodule LemonOmp.Session do
     end
   end
 
-  def handle_info(:publish, state) do
+  def handle_info({:timeout, _ref, {:settle_fallback, _turns}}, state),
+    do: {:noreply, state}
+
+  def handle_info({:timeout, ref, :publish}, %{publish_timer: ref} = state) do
     state = %{state | publish_timer: nil}
     publish(state, "updated")
     {:noreply, %{state | last_publish: now_ms()}}
   end
+
+  def handle_info({:timeout, _ref, :publish}, state), do: {:noreply, state}
 
   def handle_info({:approval_result, dialog_id, approval_id, result}, state) do
     case state.approvals[dialog_id] do
@@ -457,6 +471,14 @@ defmodule LemonOmp.Session do
     state = update_projection(state, &Projection.apply_event(&1, type, frame))
     after_status = state.projection.status
 
+    state =
+      if not state.projection.settling and state.settle_timer do
+        Process.cancel_timer(state.settle_timer)
+        %{state | settle_timer: nil}
+      else
+        state
+      end
+
     cond do
       before.status == :running and after_status == :idle ->
         state
@@ -468,13 +490,16 @@ defmodule LemonOmp.Session do
         state |> cancel_idle() |> publish_now("updated")
 
       state.projection.settling and not before.settling ->
-        Process.send_after(
-          self(),
-          {:settle_fallback, state.projection.turns},
-          @settle_fallback_ms
-        )
+        if state.settle_timer, do: Process.cancel_timer(state.settle_timer)
 
-        publish_now(state, "updated")
+        timer =
+          :erlang.start_timer(
+            @settle_fallback_ms,
+            self(),
+            {:settle_fallback, state.projection.turns}
+          )
+
+        publish_now(%{state | settle_timer: timer}, "updated")
 
       type in ["tool_execution_start", "tool_execution_end", "subagent_lifecycle", "message_end"] ->
         publish_now(state, "updated")
@@ -873,7 +898,7 @@ defmodule LemonOmp.Session do
 
     case Config.idle_timeout_ms() do
       0 -> state
-      ms -> %{state | idle_timer: Process.send_after(self(), :idle_timeout, ms)}
+      ms -> %{state | idle_timer: :erlang.start_timer(ms, self(), :idle_timeout)}
     end
   end
 
@@ -892,7 +917,7 @@ defmodule LemonOmp.Session do
 
   defp schedule_publish(%{publish_timer: nil} = state) do
     wait = max(@publish_interval_ms - (now_ms() - state.last_publish), 0)
-    %{state | publish_timer: Process.send_after(self(), :publish, wait)}
+    %{state | publish_timer: :erlang.start_timer(wait, self(), :publish)}
   end
 
   defp schedule_publish(state), do: state

@@ -665,6 +665,95 @@ defmodule LemonSimUi.HostedGameTest do
     refute inspect(snapshot.recent) =~ "secret provider response"
   end
 
+  test "stale AI retries preserve the current retry and only its delivery starts AI" do
+    test_pid = self()
+
+    Application.put_env(:lemon_sim_ui, :hosted_ai_opts,
+      model: fake_model(),
+      stream_options: %{},
+      complete_fn: fn _model, _context, _opts ->
+        send(test_pid, {:retry_ai_started, self()})
+
+        receive do
+          :finish -> {:error, :test_finished}
+        end
+      end
+    )
+
+    room = create_room(%{player_count: 5, ai_seats: 0, turn_timeout_seconds: 300})
+    claim_all(room, "Retry")
+    assert :ok = HostedGame.control(room.room_id, room.host_token, "start")
+    pid = room_pid(room.room_id)
+    before = :sys.get_state(pid)
+    actor = before.room.game_state.world.active_actor_id
+
+    payload =
+      {:retry_ai, room.room_id, before.room.match_number, before.room.game_state.version, actor}
+
+    old = :erlang.start_timer(60_000, pid, payload)
+    Process.cancel_timer(old)
+    current = :erlang.start_timer(60_000, pid, payload)
+
+    :sys.replace_state(pid, fn state ->
+      seat = %{state.room.seats[actor] | kind: "ai"}
+
+      %{
+        state
+        | ai_retry_ref: current,
+          room: %{state.room | seats: Map.put(state.room.seats, actor, seat)}
+      }
+    end)
+
+    send(pid, {:timeout, old, payload})
+    state = :sys.get_state(pid)
+    assert state.ai_retry_ref == current
+    assert state.ai_pending == nil
+    refute_received {:retry_ai_started, _}
+    assert HostedGame.raw_room(room.room_id).command_seq == before.room.command_seq
+
+    send(pid, {:timeout, current, payload})
+    assert_receive {:retry_ai_started, task_pid}, 5_000
+    state = :sys.get_state(pid)
+    assert state.ai_retry_ref == nil
+    assert state.ai_pending.pid == task_pid
+    monitor = Process.monitor(task_pid)
+    assert :ok = HostedGame.control(room.room_id, room.host_token, "stop")
+    assert_receive {:DOWN, ^monitor, :process, ^task_pid, _}, 5_000
+    Process.cancel_timer(current)
+  end
+
+  test "stale terminal retries cannot persist or acknowledge newer pending state" do
+    room = create_room(%{player_count: 5})
+    pid = room_pid(room.room_id)
+    persisted = HostedGame.raw_room(room.room_id)
+    pending = %{persisted | status: "stopped", terminal_reason: "runtime_failure"}
+    old = :erlang.start_timer(60_000, pid, {:persist_terminal, 1})
+    Process.cancel_timer(old)
+    current = :erlang.start_timer(60_000, pid, {:persist_terminal, 1})
+
+    :sys.replace_state(pid, fn state ->
+      %{state | room: pending, pending_terminal_room: pending, terminal_retry_ref: current}
+    end)
+
+    send(pid, {:timeout, old, {:persist_terminal, 1}})
+    state = :sys.get_state(pid)
+    assert state.terminal_retry_ref == current
+    assert state.pending_terminal_room == pending
+    assert HostedGame.raw_room(room.room_id) == persisted
+    assert {:error, :persistence_pending} =
+             HostedGame.control(room.room_id, room.host_token, "rematch")
+
+    send(pid, {:timeout, current, {:persist_terminal, 1}})
+    state = :sys.get_state(pid)
+    assert state.terminal_retry_ref == nil
+    assert state.pending_terminal_room == nil
+    assert HostedGame.raw_room(room.room_id) == pending
+    assert {:ok, host} = HostedGame.host_view(room.room_id, room.host_token)
+    assert host.status == "stopped"
+    refute host.persistence_pending
+    Process.cancel_timer(current)
+  end
+
   defp create_room(attrs) do
     assert {:ok, room} = HostedGame.create_room(attrs)
     on_exit(fn -> cleanup_room(room.room_id, room.join_code) end)

@@ -106,6 +106,75 @@ defmodule LemonOmp.SessionLifecycleTest do
            end)
   end
 
+  test "an old idle deadline cannot close a later idle epoch", ctx do
+    put_app_env(:idle_timeout_ms, 60_000)
+    wire = start!(workspace!(), "first turn", ctx)
+    id = wire["id"]
+    assert {:ok, _, :settled} = LemonOmp.wait(id, 5_000, ctx.scope)
+    pid = session_pid(id)
+    first = :sys.get_state(pid).idle_timer
+    assert is_reference(first)
+
+    put_app_env(:idle_timeout_ms, 2_000)
+    assert {:ok, _} = LemonOmp.send_message(id, "second turn", :steer, ctx.scope)
+    assert {:ok, _, :settled} = LemonOmp.wait(id, 5_000, ctx.scope)
+    current = :sys.get_state(pid).idle_timer
+    assert is_reference(current)
+    refute current == first
+    deadline = Process.read_timer(current)
+
+    send(pid, {:timeout, first, :idle_timeout})
+    assert :sys.get_state(pid).idle_timer == current
+    assert {:ok, %{"status" => "idle"}} = LemonOmp.get(id, ctx.scope)
+    remaining = Process.read_timer(current)
+    assert is_integer(remaining)
+    assert remaining <= deadline
+    assert remaining > 0
+
+    monitor = Process.monitor(pid)
+    # Let the actual current timer deliver its timeout; no synthetic current message.
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 5_000
+    assert {:ok, %{"status" => "closed", "exit" => %{"reason" => "idle_timeout"}}} =
+             LemonOmp.get(id, ctx.scope)
+  end
+
+  test "superseded publication and settling messages preserve current timers", ctx do
+    wire = start!(workspace!(), "HOLD", ctx)
+    pid = session_pid(wire["id"])
+    state = :sys.get_state(pid)
+    old_publish = make_ref()
+    old_settle = make_ref()
+    current_publish = :erlang.start_timer(60_000, pid, :publish)
+
+    current_settle =
+      :erlang.start_timer(60_000, pid, {:settle_fallback, state.projection.turns})
+
+    :sys.replace_state(pid, fn state ->
+      if state.publish_timer, do: Process.cancel_timer(state.publish_timer)
+      if state.settle_timer, do: Process.cancel_timer(state.settle_timer)
+
+      %{
+        state
+        | publish_timer: current_publish,
+          settle_timer: current_settle,
+          projection: %{state.projection | settling: true}
+      }
+    end)
+
+    send(pid, {:timeout, old_publish, :publish})
+    send(pid, {:timeout, old_settle, {:settle_fallback, state.projection.turns}})
+    current = :sys.get_state(pid)
+    assert current.publish_timer == current_publish
+    assert current.settle_timer == current_settle
+    assert current.projection.status == :running
+
+    send(pid, {:timeout, current_settle, {:settle_fallback, state.projection.turns}})
+    assert :sys.get_state(pid).projection.status == :idle
+    assert {:ok, %{"status" => "idle"}} = LemonOmp.get(wire["id"], ctx.scope)
+    Process.cancel_timer(current_settle)
+    Process.cancel_timer(current_publish)
+  end
+
   describe "a turn" do
     test "start returns a running snapshot, publishes on the bus and settles with results", ctx do
       LemonCore.Bus.subscribe(LemonOmp.bus_topic())
