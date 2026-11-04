@@ -15,6 +15,10 @@ defmodule CodingAgent.Session do
   idle prompt also cancels any background auto-compaction snapshot before
   dispatch, so stale compaction cannot delay or mutate the new turn.
 
+  Each admitted prompt owns a fresh reference until dispatch. Deferred and
+  compaction-resume messages must match that reference; abort, reset and agent
+  exit invalidate it without letting stale messages consume a newer prompt.
+
   ## Usage
 
       {:ok, session} = CodingAgent.Session.start_link(
@@ -127,7 +131,7 @@ defmodule CodingAgent.Session do
     :task_allowed_agents,
     :context_frozen,
     :is_streaming,
-    :pending_prompt_timer_ref,
+    :pending_prompt,
     :event_listeners,
     :event_streams,
     :abort_signal,
@@ -200,7 +204,7 @@ defmodule CodingAgent.Session do
           task_allowed_agents: :all | [String.t()] | nil,
           context_frozen: boolean(),
           is_streaming: boolean(),
-          pending_prompt_timer_ref: reference() | nil,
+          pending_prompt: State.pending_prompt() | nil,
           event_listeners: [{pid(), reference(), LemonCore.Bus.Delivery.t()}],
           event_streams: %{
             reference() => %{pid: pid(), stream: pid(), delivery: LemonCore.Bus.Delivery.t()}
@@ -939,14 +943,7 @@ defmodule CodingAgent.Session do
       # This also gives the session a chance to receive near-immediate `follow_up/2` and
       # `steer/2` messages before the agent loop does its end-of-turn queue checks in
       # very fast (mocked) runs.
-      timer_ref =
-        Process.send_after(
-          self(),
-          {:do_prompt, user_message, state.system_prompt},
-          @prompt_defer_ms
-        )
-
-      {:reply, :ok, State.begin_prompt(state, timer_ref)}
+      {:reply, :ok, State.begin_prompt(state, user_message, @prompt_defer_ms)}
     end
   end
 
@@ -977,10 +974,7 @@ defmodule CodingAgent.Session do
           {:reply, :ok, %{state | follow_up_queue: queue}}
       end
     else
-      timer_ref =
-        Process.send_after(self(), {:do_prompt, outgoing, state.system_prompt}, @prompt_defer_ms)
-
-      {:reply, :ok, State.begin_prompt(state, timer_ref)}
+      {:reply, :ok, State.begin_prompt(state, outgoing, @prompt_defer_ms)}
     end
   end
 
@@ -1000,10 +994,8 @@ defmodule CodingAgent.Session do
       queue = :queue.in(message, state.follow_up_queue)
       {:reply, :ok, %{state | follow_up_queue: queue}}
     else
-      timer_ref =
-        Process.send_after(self(), {:do_prompt, outgoing, state.system_prompt}, @prompt_defer_ms)
-
-      {:reply, :ok, State.begin_prompt(state, timer_ref)}
+      state = CompactionLifecycle.cancel_for_new_prompt(state)
+      {:reply, :ok, State.begin_prompt(state, outgoing, @prompt_defer_ms)}
     end
   end
 
@@ -1437,7 +1429,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_cast(:abort, state) do
-    had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
+    had_pending_prompt = not is_nil(state.pending_prompt)
 
     state =
       state
@@ -1573,6 +1565,7 @@ defmodule CodingAgent.Session do
       state
       |> Map.put(:is_streaming, false)
       |> cancel_pending_prompt()
+      |> CompactionLifecycle.cancel_for_new_prompt()
       |> CompactionManager.clear_overflow_recovery_state()
       |> Map.put(:steering_queue, :queue.new())
       |> Map.put(:follow_up_queue, :queue.new())
@@ -1675,45 +1668,22 @@ defmodule CodingAgent.Session do
     {:noreply, state}
   end
 
-  def handle_info({:do_prompt, message, system_prompt}, state) do
-    if state.pending_prompt_timer_ref do
-      {:noreply, CompactionLifecycle.before_prompt(state, message, system_prompt)}
-    else
-      {:noreply, state}
-    end
+  def handle_info(
+        {:do_prompt, prompt_ref, message, system_prompt},
+        %{pending_prompt: %{ref: prompt_ref}} = state
+      ) do
+    {:noreply, CompactionLifecycle.before_prompt(state, prompt_ref, message, system_prompt)}
   end
 
   def handle_info(
-        {:dispatch_prompt, %LemonAi.Types.UserMessage{} = user_message, system_prompt},
-        state
-      ) do
-    if state.pending_prompt_timer_ref do
-      :ok = LemonAgent.Agent.set_system_prompt(state.agent, system_prompt)
-      # Send to agent (user message will be persisted on :message_end event)
-      _ = LemonAgent.Agent.prompt(state.agent, user_message)
-      {:noreply, %{state | pending_prompt_timer_ref: nil, system_prompt: system_prompt}}
-    else
-      # Prompt was canceled (e.g. via abort/reset) before deferred dispatch.
-      {:noreply, state}
-    end
-  end
-
-  def handle_info({:dispatch_prompt, %CustomMessage{} = message, system_prompt}, state) do
-    if state.pending_prompt_timer_ref do
-      :ok = LemonAgent.Agent.set_system_prompt(state.agent, system_prompt)
-      _ = LemonAgent.Agent.prompt(state.agent, message)
-      {:noreply, %{state | pending_prompt_timer_ref: nil, system_prompt: system_prompt}}
-    else
-      {:noreply, state}
-    end
-  end
-
-  def handle_info({:do_prompt, %LemonAi.Types.UserMessage{} = user_message}, state) do
-    handle_info({:do_prompt, user_message, state.system_prompt}, state)
-  end
-
-  def handle_info({:do_prompt, %CustomMessage{} = message}, state) do
-    handle_info({:do_prompt, message, state.system_prompt}, state)
+        {:dispatch_prompt, prompt_ref, message, system_prompt},
+        %{pending_prompt: %{ref: prompt_ref}} = state
+      )
+      when is_struct(message, LemonAi.Types.UserMessage) or is_struct(message, CustomMessage) do
+    :ok = LemonAgent.Agent.set_system_prompt(state.agent, system_prompt)
+    # User messages are persisted on :message_end; custom followups were persisted on admission.
+    _ = LemonAgent.Agent.prompt(state.agent, message)
+    {:noreply, %{state | pending_prompt: nil, system_prompt: system_prompt}}
   end
 
   def handle_info(_msg, state) do

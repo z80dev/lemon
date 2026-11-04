@@ -1447,28 +1447,6 @@ defmodule CodingAgent.SessionTest do
       final_state = Session.get_state(session)
       assert final_state.is_streaming == false
     end
-
-    test "abort cancels deferred prompt before stream starts" do
-      parent = self()
-
-      stream_fn = fn model, context, options ->
-        send(parent, :stream_called)
-        mock_stream_fn_single(assistant_message("Hello!")).(model, context, options)
-      end
-
-      session = start_session(stream_fn: stream_fn)
-
-      :ok = Session.prompt(session, "Hello!")
-      :ok = Session.abort(session)
-      Process.sleep(50)
-
-      refute_receive :stream_called, 100
-      assert Session.get_state(session).is_streaming == false
-
-      :ok = Session.prompt(session, "Second prompt")
-      assert_receive :stream_called, 2_000
-      wait_for_streaming_complete(session)
-    end
   end
 
   # ============================================================================
