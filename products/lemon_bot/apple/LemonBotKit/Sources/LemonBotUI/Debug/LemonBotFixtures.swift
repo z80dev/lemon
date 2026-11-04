@@ -83,7 +83,7 @@ public enum LemonBotFixtures {
         store.pinFixtureOnline()
         switch scenario {
         case .backendDown:
-            store.account?.baseURL = URL(string: "http://127.0.0.1:4080")!
+            store.account?.baseURL = URL(string: "http://127.0.0.1:4100")!
             store.pinFixtureConnectionFailure(URLError(.cannotConnectToHost), nextRetry: Date().addingTimeInterval(12))
         case .controllerDown:
             if let status = try? JSONDecoder().decode(InstanceStatus.self, from: JSONSerialization.data(withJSONObject: world.instance(controllerDown: true))) { store.pinFixtureControllerDown(status) }

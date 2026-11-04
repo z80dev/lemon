@@ -1,3 +1,4 @@
+import { hostname, userInfo } from 'node:os';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RequestContext, Route } from './services';
 import { ApiError, fail } from './errors';
@@ -10,6 +11,7 @@ import { hasProductAccess } from '../enterprise/policy';
 import { prepareProviderTeardown } from '../enterprise/teardown';
 import { backendDescriptor } from './identity';
 import { beginOwnerSetupClaim, consumeOwnerSetupProof } from './setup';
+import { requireLocalAccess } from './local-access';
 
 const name = z.string().trim().min(1).max(120);
 const email = z.string().trim().toLowerCase().pipe(z.email().max(254));
@@ -25,6 +27,7 @@ const push = z.discriminatedUnion('kind', [
 const setupSchema = mutation.extend({ setupCode: z.string().min(16).max(512), email, password, displayName: name, workspaceName: name });
 const loginSchema = mutation.extend({ email, password, deviceId: id.optional() });
 const acceptSchema = mutation.extend({ inviteToken: z.string().min(16).max(512), email, password, displayName: name });
+const localAccessSchema = z.object({ displayName: name.optional() }).strict();
 const userSchema = update.extend({ displayName: name.optional(), email: email.optional(), avatarAttachmentId: id.nullable().optional(), preferences: preferences.optional(), notifications: notifications.optional() });
 const workspaceSchema = update.extend({ name: name.optional(), timezone: timezone.optional(), enabled: z.boolean().optional(), ownerUserId: id.optional() });
 const memberSchema = update.extend({ role: z.enum(['owner', 'admin', 'member']).optional(), enabled: z.boolean().optional() });
@@ -290,6 +293,24 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
       const body = parse(loginSchema, context.body); rateLimit(body.email);
       const user = await localAccount(body.email, body.password);
       return services.auth.session(user.id, body.deviceId);
+    } },
+    // Possession of DATA_DIR/local-access.key is same-OS-user (or SSH) proof: sign in as the workspace owner,
+    // creating that owner on an empty instance. No password exists for an owner created here.
+    { method: 'POST', path: '/v1/auth/local', auth: 'public', mutation: false, status: 200, handler: async context => {
+      requireLocalAccess(services.config.dataDir, context.request);
+      const body = parse(localAccessSchema, context.body);
+      const ownerUserId = store.transaction(() => {
+        if (store.metadata<string>('workspaceId') !== null) return workspace().ownerUserId;
+        const account = userInfo().username;
+        const user = makeUser(`${account.toLowerCase().replace(/[^a-z0-9_+-]/g, '') || 'owner'}@lemon.local`, body.displayName ?? account);
+        const member = services.resource('member', { userId: user.id, email: user.email, displayName: user.displayName, role: 'owner' as const, enabled: true });
+        const created = services.resource('workspace', { name: hostname().replace(/\.local$/, '').slice(0, 120) || 'Lemon Bot', ownerUserId: user.id, enabled: true, timezone: 'UTC' });
+        store.put('users', user); store.put('members', member); store.put('workspaces', created);
+        store.setMetadata('workspaceId', created.id);
+        for (const key of ['setupCode', 'setupCodeDigest', 'setupCodeState']) store.setMetadata(key, null);
+        return user.id;
+      });
+      return services.auth.session(ownerUserId);
     } },
     { method: 'POST', path: '/v1/auth/invites/accept', auth: 'public', status: 200, handler: async context => {
       const body = parse(acceptSchema, context.body); rateLimit(body.email);

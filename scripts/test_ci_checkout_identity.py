@@ -126,7 +126,7 @@ class IdentityTest(unittest.TestCase):
                                 required_checks=required or list(logs))
 
     def test_every_job_produces_trusted_actual_identity(self):
-        self.assertEqual(set(JOBS), {"changes", "check", "test", "dialyzer", "sim-bench", "install",
+        self.assertEqual(set(JOBS), {"changes", "check", "test", "dialyzer", "install",
                                     "clients", "wasm-runtime", "history", "result"})
         for job in JOBS:
             lanes = ["test (1/1)", *[f"test ({i}/4)" for i in range(1, 5)]] if job == "test" else [

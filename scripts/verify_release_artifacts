@@ -10,7 +10,7 @@ Verifies a manifest.json (schema 2) and the release tarballs it describes:
   - per-artifact fields (file, profile, platform, os, arch, sha256, size, glibc_min)
   - filename matches lemon-<version>-<channel>-<platform>-<profile>.tar.gz
   - file exists on disk with the recorded size and SHA-256
-  - the 14-artifact profile x platform matrix is present (or, with
+  - the 12-artifact profile x platform matrix is present (or, with
     --platform, only that platform's profiles)
   - lemon_tui is required on every platform but is not a BEAM release
 
@@ -72,22 +72,17 @@ artifact_dir = os.environ["ARTIFACT_DIR"]
 platform_filter = os.environ["PLATFORM_FILTER"] or None
 manifest_path = os.path.join(artifact_dir, "manifest.json")
 
-# The original min/full/TUI matrix plus the standalone backend on all three
-# platforms; sim_broadcast_platform remains Linux-only. Runtime boot counts
-# are mirrored in scripts/verify_release_runtime_boot (excluding only the TUI).
-PROFILES = ("lemon_runtime_min", "lemon_runtime_full", "sim_broadcast_platform", "lemon_tui", "lemon_bot")
+# The min/full/TUI matrix plus the standalone backend on all three platforms.
+# Runtime boot counts are mirrored in scripts/verify_release_runtime_boot
+# (excluding only the TUI).
+PROFILES = ("lemon_runtime_min", "lemon_runtime_full", "lemon_tui", "lemon_bot")
 PLATFORMS = ("linux-x86_64", "linux-arm64", "darwin-arm64")
 PLATFORM_OS_ARCH = {
     "linux-x86_64": ("linux", "x86_64", "2.39"),
     "linux-arm64": ("linux", "arm64", "2.39"),
     "darwin-arm64": ("darwin", "arm64", None),
 }
-EXPECTED = {
-    (profile, platform)
-    for profile in PROFILES
-    for platform in PLATFORMS
-    if not (profile == "sim_broadcast_platform" and platform == "darwin-arm64")
-}
+EXPECTED = {(profile, platform) for profile in PROFILES for platform in PLATFORMS}
 
 if platform_filter is not None and platform_filter not in PLATFORMS:
     print(f"error --platform must be one of {', '.join(PLATFORMS)}: {platform_filter!r}", file=sys.stderr)
@@ -164,7 +159,7 @@ for artifact in artifacts:
     filename_match = re.fullmatch(
         rf"lemon-{re.escape(version or '')}-{re.escape(channel or '')}-"
         rf"(linux-x86_64|linux-arm64|darwin-arm64)-"
-        rf"(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_tui|lemon_bot)\.tar\.gz",
+        rf"(lemon_runtime_min|lemon_runtime_full|lemon_tui|lemon_bot)\.tar\.gz",
         filename,
     )
     if not filename_match:

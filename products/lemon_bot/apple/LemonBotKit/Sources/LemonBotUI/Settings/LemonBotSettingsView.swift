@@ -342,7 +342,7 @@ private struct AccountPane: View {
                             HStack {
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(account.displayName).font(LBFont.body).foregroundStyle(LB.ink)
-                                    Text("\(account.email) · \(account.baseURL.host ?? account.baseURL.absoluteString)").font(LBFont.meta).foregroundStyle(LB.muted)
+                                    Text(account.route == nil ? "\(account.email) · \(account.location)" : account.location).font(LBFont.meta).foregroundStyle(LB.muted)
                                 }
                                 Spacer()
                                 if current { Image(systemName: "checkmark").foregroundStyle(LB.accent).accessibilityLabel("Current account") }
@@ -353,7 +353,7 @@ private struct AccountPane: View {
             }
             Section {
                 SettingsIndexRow(title: "Profile, password and sessions", subtitle: "Name, email, password, signed-in sessions and account deletion.", symbol: "person.text.rectangle") { AccountSettingsView(store: store) }
-                Button { addAccount = true } label: { Label("Add another account or backend", systemImage: "plus.circle") }
+                Button { addAccount = true } label: { Label("Connect another machine or account", systemImage: "plus.circle") }
                 Button { Task { await action.perform { try await store.refresh() } } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                     .disabled(action.busy || store.account == nil)
             }

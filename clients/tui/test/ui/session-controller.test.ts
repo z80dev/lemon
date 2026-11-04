@@ -858,6 +858,17 @@ describe("SessionController owner recovery", () => {
 		expect(app.client.queued).toHaveLength(0);
 	});
 
+	test("an owner NOT_FOUND is silent only while the client holds nothing to recover", async () => {
+		const { app, server } = await bootApp("tui-a", true);
+		server.failWith("sessions.snapshot", "NOT_FOUND", "Session not found");
+		await app.sessions.create("fresh");
+		expect(chatText(app)).not.toContain("could not recover");
+		app.events.noteRunStarted("run-fresh");
+		await app.sessions.resync();
+		expect(chatText(app)).toContain("could not recover fresh: NOT_FOUND");
+		expect(app.store.focused.busy).toBe(true);
+	});
+
 	test("overflow and reconnect use the same authority with no mutation replay", async () => {
 		const { app, server } = await bootApp("tui-a", true);
 		const result = recoverySnapshot("tui-a", "run-a");

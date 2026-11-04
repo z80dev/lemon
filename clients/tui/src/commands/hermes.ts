@@ -514,11 +514,7 @@ function parseHeartbeatSet(
 	};
 }
 
-/**
- * The agent's heartbeat job, found by its `meta.heartbeat` flag. The daily
- * brief is also a heartbeat but is owned by `[automation] daily_brief`, so
- * `/heartbeat` never edits or removes it.
- */
+/** The agent's heartbeat job, found by its `meta.heartbeat` flag. */
 async function findHeartbeatJob(
 	ctx: CommandContext,
 	agentId: string,
@@ -528,7 +524,6 @@ async function findHeartbeatJob(
 	return asArray(result.jobs).find(
 		(job) =>
 			pick(job, "meta.heartbeat") === true &&
-			pick(job, "meta.daily_brief") !== true &&
 			pickString(job, "meta.agent_id", "meta.agentId", "agentId") === agentId,
 	);
 }

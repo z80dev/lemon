@@ -3,7 +3,7 @@ import { openSync, closeSync, writeSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { preflightBotOrigin, validateBotOrigin } from '../../contracts/preflight';
-import { createPrivateCodec } from './core/config';
+import { createPrivateCodec, localSettings } from './core/config';
 import { createMutationDigest } from './core/mutations';
 import { Store } from './core/store';
 import { issueOwnerSetupProof } from './core/setup';
@@ -20,9 +20,8 @@ export interface SetupCliDependencies {
 }
 
 async function readLocal(): Promise<LocalSetup> {
-  const dataDir = process.env.LEMON_BOT_DATA_DIR;
-  const origin = process.env.LEMON_BOT_PUBLIC_URL;
-  if (!dataDir || !origin) throw new Error();
+  const { dataDir, publicUrl } = localSettings();
+  const origin = publicUrl.origin;
   // Read-only opening must fail for a missing database; never mint an identity here.
   const db = new Database(join(dataDir, 'product.sqlite'), { readonly: true, strict: true });
   try {

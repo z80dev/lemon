@@ -19,6 +19,183 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ---
 
+## [2026.10.25]
+
+### Fixed
+
+- An execution-node worker on the same machine as Lemon could still report a
+  Bot's profile memory as unavailable, so deleting the Bot or forgetting its
+  memory failed. Workers now load every module at startup, as the main runtime
+  does, so memory written by either process reads back everywhere.
+
+---
+
+## [2026.10.24]
+
+### Fixed
+
+- After connecting the Lemon Bot Mac app to **This Mac** or an SSH host, the
+  sidebar no longer stops at **Attach a machine** with a manual join command. It
+  makes that machine a Bot machine by itself — enrolling it as a Lemon execution
+  node and keeping its worker running with a LaunchAgent (macOS) or systemd user
+  service (Linux) — then shows **Create a Bot**, with the machine preselected.
+  An already-enrolled machine just gets its worker restarted under supervision.
+- Creating a Bot on the machine Lemon Bot runs on no longer fails with "This
+  server needs a secure address your machine can reach". Lemon Bot proves the
+  machine is its own host and lets that Bot reach it over loopback, and Lemon
+  now trusts the same-machine Lemon Bot origin (`http://127.0.0.1:4100`) for
+  admission callbacks by default. Other machines still need an HTTPS address.
+- Execution-node workers load their modules up front, so profile memory written
+  by an earlier run (or by Lemon on the same machine) is no longer reported as
+  unavailable. This blocked deleting Bots and forgetting their memory.
+- Deleting a Bot whose profile has several saved preferences no longer fails
+  with "not found".
+
+---
+
+## [2026.10.23]
+
+### Changed
+
+- Redesigned the <https://lemon.food/> website and README banner around the
+  Lemon Bot mascot and palette: a new illustrated homepage, Fraunces and
+  Instrument Sans typography, restyled documentation pages in light and dark
+  mode, a mascot favicon, a social preview image, and a 404 page.
+- Lemon Bot's Mac app now connects in one click with no email, password or
+  setup code. **This Mac** starts Lemon Bot if it isn't running and signs in
+  as its owner, creating the owner on a fresh install; **Another machine**
+  does the same for any host you can `ssh` into and keeps a loopback tunnel
+  open. Proof is the backend's new private `~/.lemon/lemon_bot/local-access.key`
+  (`POST /v1/auth/local`). The looping **Find Lemon Bot** / sign-in sheets and
+  duplicate `localhost` entries are gone, **Start Lemon Bot** starts the backend
+  directly instead of copying a Terminal command, and an expired session
+  reconnects on its own. The Mac app is no longer sandboxed so it can run
+  `ssh` and `lemon-bot` as you; password and SSO sign-in remain one link away.
+
+---
+
+## [2026.10.22]
+
+### Changed
+
+- The documentation website moved to <https://lemon.food/>, served at the
+  domain root instead of the `/lemon/` project path.
+- `lemon-bot` now works with no configuration on the same machine as Lemon.
+  It serves `http://127.0.0.1:4100` (moved from 4080, which Lemon Web uses),
+  keeps state in `~/.lemon/lemon_bot`, and finds and signs in to the local
+  Lemon through the launchers' port settings and managed operator credential.
+  On first start in a terminal it asks whether to use the Lemon on this
+  machine, offering to start it if stopped, or another machine's controller
+  address and operator token, verifies the connection and saves the choice
+  (`lemon-bot --choose-lemon` asks again). A new workspace's one-use owner
+  setup code is shown in that terminal and the web app opens in the browser
+  (`--no-open` skips it). If Lemon is down, Lemon Bot keeps waiting and
+  connects when it starts; owners can also choose **Start** in the app.
+  Explicit `LEMON_BOT_*` environment settings still take precedence.
+- The Lemon Bot Mac app's **Start Lemon** command prefers an installed
+  `~/.local/bin/lemon-bot` over a source checkout, and its local discovery and
+  onboarding default use port 4100.
+- `install.sh --profile lemon_bot` says how to run `lemon-bot` and how to
+  install Lemon itself when it is missing.
+
+### Removed
+
+- Releases no longer publish `sim_broadcast_platform` tarballs, and
+  `install.sh` no longer accepts `--profile sim`. Build that release from
+  source or with `apps/lemon_sim_ui/Dockerfile`. A GitHub release now contains
+  12 tarballs.
+- CI no longer tests LemonSim. Pull requests, `main`, release preflight and
+  nightly coverage skip the `lemon_sim` and `lemon_sim_ui` suites. The
+  `sim-bench` job and the release-smoke Sim UI container job are gone. Run
+  LemonSim checks locally with `scripts/test changed` and
+  `scripts/sim_bench.sh`, which replaces `scripts/ci_sim_bench.sh`.
+
+---
+
+## [2026.10.21]
+
+### Fixed
+
+- The TUI no longer warns `could not recover …: NOT_FOUND` when it starts or
+  `/new` opens a session that has not run a prompt yet. The warning still
+  appears if the daemon reports a session missing while the TUI has a run or
+  transcript for it.
+
+---
+
+## [2026.10.20]
+
+### Changed
+
+- First-run install and setup are quieter. The installer prints one line
+  before and after the download (with a compact progress bar on a terminal)
+  and ends with a single next step; it no longer prints checksums, paths or a
+  command list. Setup no longer asks about the runtime profile or a Hermes
+  import (`lemon migrate hermes` is unchanged), and skips status and file
+  chatter on a first run. Installs default to the full runtime
+  (`install.sh --profile min` for the minimal one).
+- Setup asks about ports only when a default one is taken by another program,
+  suggesting the next free port. The choice is saved to `~/.lemon/ports.env`,
+  which the launchers load into unset port variables; `lemon setup runtime`
+  now saves there too instead of printing `export` lines.
+
+### Removed
+
+- The built-in daily brief (`[automation] daily_brief`, `lemon setup
+  --daily-brief`). Schedule a brief as an ordinary cron job instead, e.g. ask
+  the agent for a daily 7:30 brief that replies `[SILENT]` when there is nothing
+  to say, or use `/remind every day 7:30 ...` in Telegram.
+
+---
+
+## [2026.10.19]
+
+### Fixed
+
+- `lemon stop`, `lemon restart`, and `lemon update apply` recognize a managed
+  daemon started on the default control-plane port without
+  `LEMON_CONTROL_PLANE_PORT`, instead of refusing it as foreign. Launchers from
+  2026.10.18 and earlier still refuse such a daemon; stop it with
+  `kill <pid>` (pid from `lemon status`) before `lemon update apply`.
+
+---
+
+## [2026.10.18]
+
+### Fixed
+
+- `lemon --help`, `lemon help <command>`, and launcher-command `--help` from a
+  `lemon_runtime_full` release no longer crash with a missing
+  `LEMON_WEB_SECRET_KEY_BASE`; help skips runtime configuration like
+  `lemon --version` does.
+
+---
+
+## [2026.10.17]
+
+### Added
+
+- Runtime releases bundle the local browser driver, so a packaged install uses
+  the managed local browser with only Node.js 24+ and Chrome/Chromium. Building
+  `lemon_runtime_min` or `lemon_runtime_full` now requires `npm`.
+
+### Changed
+
+- The local browser driver resolves from `LEMON_BROWSER_DRIVER_PATH`, then the
+  release-bundled driver, then a source checkout under `LEMON_PATH`; the current
+  working directory is no longer searched.
+
+### Fixed
+
+- `lemon doctor` from a release install no longer warns that `LEMON_PATH`
+  points at the build machine when `LEMON_PATH` is unset. Without a running
+  runtime, the memory-store and cron-pause checks now skip with a hint to start
+  Lemon instead of warning that runs are not recorded or held back.
+- Local browser diagnostics name the missing prerequisite (Node.js, driver,
+  outdated driver build, or Chrome) instead of one generic install message.
+
+---
+
 ## [2026.10.16]
 
 ### Fixed

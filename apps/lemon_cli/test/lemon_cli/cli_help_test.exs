@@ -12,7 +12,7 @@ defmodule LemonCli.CLIHelpTest do
 
   # {argv, expected usage substring, sentinel that proves the command body ran}
   @help_cases [
-    {["setup", "--help"], "Usage: lemon setup", "Welcome to Lemon setup!"},
+    {["setup", "--help"], "Usage: lemon setup", "Welcome to Lemon!"},
     {["model", "--help"], "Usage: lemon model", "Lemon Provider Onboarding"},
     {["gateway", "setup", "--help"], "Usage: lemon gateway setup",
      "Available gateway transports:"},

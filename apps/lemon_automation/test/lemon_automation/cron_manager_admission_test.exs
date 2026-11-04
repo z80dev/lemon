@@ -109,16 +109,9 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     :persistent_term.put({Admission, :result}, :ok)
     :persistent_term.put({Submitter, :mode}, :tattle)
 
+    # Registered first so it runs last (on_exit is LIFO) and still runs even if
+    # the CronManager cleanup below raises (e.g. :noproc).
     on_exit(fn ->
-      for job <- CronManager.list(), String.starts_with?(job.name || "", prefix) do
-        _ = CronManager.remove(job.id)
-        for run <- CronStore.list_runs(job.id, limit: 200), do: CronStore.delete_run(run.id)
-
-        for event <- CronStore.list_audit_events(job_id: job.id, limit: 200) do
-          CronStore.delete_audit_event(event.id)
-        end
-      end
-
       for {key, value} <- previous_env, do: restore_env(:lemon_automation, key, value)
       restore_env(:lemon_core, :paths, previous_paths)
 
@@ -131,6 +124,17 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
       :persistent_term.erase({Admission, :test_pid})
       :persistent_term.erase({Admission, :result})
       :persistent_term.erase({Submitter, :mode})
+    end)
+
+    on_exit(fn ->
+      for job <- CronManager.list(), String.starts_with?(job.name || "", prefix) do
+        _ = CronManager.remove(job.id)
+        for run <- CronStore.list_runs(job.id, limit: 200), do: CronStore.delete_run(run.id)
+
+        for event <- CronStore.list_audit_events(job_id: job.id, limit: 200) do
+          CronStore.delete_audit_event(event.id)
+        end
+      end
     end)
 
     assert {:ok, profile} =

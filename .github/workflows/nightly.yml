@@ -5,7 +5,7 @@ name: Nightly
 #   - ci: every ci.yml job (workflow_call), catching time-, date- or
 #     environment-dependent breakage on days without merges
 #   - coverage: scripts/test coverage (ExUnit excluding integration with
-#     --cover, enforcing each app's test_coverage threshold)
+#     --cover, enforcing each app's test_coverage threshold), without LemonSim
 #   - determinism: repeats prompt/skill/overflow regression files to catch
 #     non-deterministic output, then runs the eval harness for 20 iterations
 #   - report: keeps the `nightly-red` issue open while a nightly job fails
@@ -45,8 +45,17 @@ jobs:
           family: test
           bun: "true"
 
+      - name: Select non-LemonSim apps
+        id: select
+        run: scripts/changed_tests --all --exclude-app lemon_sim --exclude-app lemon_sim_ui --format github
+
+      # TEST_PATHS is word-split on purpose.
       - name: scripts/test coverage
-        run: scripts/test coverage
+        env:
+          TEST_PATHS: ${{ steps.select.outputs.test_paths }}
+        run: |
+          # shellcheck disable=SC2086
+          scripts/test coverage $TEST_PATHS
 
   determinism:
     runs-on: ubuntu-latest

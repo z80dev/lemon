@@ -27,7 +27,7 @@ LemonSim & benchmarks. Source modules and tests define implementation APIs.
   [file slash commands](user-guide/slash-commands.md),
   [reviewed source learning](user-guide/learn-from-sources.md)
   and [bounded context references](user-guide/context-references.md)
-- [Reminders, heartbeats and daily brief](user-guide/reminders-and-heartbeats.md)
+- [Reminders and heartbeats](user-guide/reminders-and-heartbeats.md)
 - [Attaching a bot machine](user-guide/attaching-a-bot-machine.md) and
   [execution-node files, secrets and processes](user-guide/node-files-and-secrets.md)
 - [Backups](user-guide/backups.md) and [Hermes migration](user-guide/migrate-from-hermes.md)
@@ -131,7 +131,7 @@ assets, then runs the shared Markdown link-check entrypoint against the original
 checkout so repository-relative links resolve. `npm --prefix docs run link-check`
 uses that same recursive entrypoint, including root-level docs pages. CI uses
 the same npm build/link commands. Links to repository files are rewritten for
-the website; site navigation must work under the `/lemon/` base path.
+the website; the site is served at the root of `https://lemon.food/`.
 
 Update the canonical page for a changed behavior, not four prose copies. Keep
 contributor guides operational, API detail in moduledocs, and workflows here.

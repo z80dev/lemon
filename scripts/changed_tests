@@ -139,12 +139,12 @@ def referencing_tests(root, app, modules):
     return sorted(matches)
 
 
-def select(root, base="origin/main", focused=False, narrow=False):
-    files, base_reason = changed_files(root, base)
+def select(root, base="origin/main", focused=False, narrow=False, all_apps=False, exclude=()):
+    files, base_reason = ([], None) if all_apps else changed_files(root, base)
     graph = umbrella_graph(root)
     touched, readers = set(), set()
-    reasons = [base_reason] if base_reason else []
-    full = bool(base_reason)
+    reasons = ["--all: every app (full scope)"] if all_apps else [base_reason] if base_reason else []
+    full = all_apps or bool(base_reason)
     lanes = {"clients": False, "wasm": False, "docs": False}
     for path in files:
         parts = PurePosixPath(path).parts
@@ -174,7 +174,10 @@ def select(root, base="origin/main", focused=False, narrow=False):
             reasons.append(f"{path}: no explicit narrow rule (full scope)")
     affected = set(graph) if full else reverse_dependencies(graph, touched) | readers
     lanes["clients"] |= full
-    apps = sorted(affected)
+    excluded = sorted(affected & set(exclude))
+    if excluded:
+        reasons.append(f"excluded by --exclude-app: {' '.join(excluded)}")
+    apps = sorted(affected - set(exclude))
     test_paths = [f"apps/{app}/test" for app in apps]
 
     # --narrow (local premerge only): touched apps and data readers run whole;
@@ -209,7 +212,9 @@ def select(root, base="origin/main", focused=False, narrow=False):
         "lanes": lanes,
         "reasons": reasons,
         "changed_files": files,
-        "focused_test_files": focused_tests(root, files) if focused else [],
+        "focused_test_files": [
+            path for path in focused_tests(root, files) if PurePosixPath(path).parts[1] not in exclude
+        ] if focused else [],
     }
 
 
@@ -246,6 +251,11 @@ def github(selection):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="origin/main")
+    parser.add_argument("--all", action="store_true", help="select every app without diffing (full scope)")
+    parser.add_argument(
+        "--exclude-app", action="append", default=[], metavar="APP",
+        help="drop APP from the selected apps and test paths (repeatable)",
+    )
     parser.add_argument("--format", choices=("human", "github", "json"), default="human")
     parser.add_argument("--focused", action="store_true")
     parser.add_argument(
@@ -255,7 +265,7 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     try:
-        selection = select(root, args.base, args.focused, args.narrow)
+        selection = select(root, args.base, args.focused, args.narrow, args.all, args.exclude_app)
         if args.format == "json":
             print(json.dumps(selection))
         else:

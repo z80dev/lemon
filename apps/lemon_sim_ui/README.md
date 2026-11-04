@@ -168,10 +168,10 @@ OTP release. The deployed UI does not load Tailwind, fonts, Phoenix, or
 LiveView from third-party CDNs.
 Dependency advisories for `assets/package-lock.json` are reported by the OSV
 Scanner workflow.
-The release smoke lane runs `npm run smoke:werewolf` against the production
-container with system Chrome. It verifies a connected LiveView WebSocket, a
-server-driven DOM patch, keyboard entry, mobile content order, and horizontal
-overflow at 320, 390, and 1440 pixels.
+`npm run smoke:werewolf` drives a production container with system Chrome; CI
+does not run it, so run it manually before a sim deploy. It verifies a
+connected LiveView WebSocket, a server-driven DOM patch, keyboard entry, mobile
+content order, and horizontal overflow at 320, 390, and 1440 pixels.
 `npm run smoke:hosted-werewolf` runs the hosted multiplayer lane against
 `HOSTED_WEREWOLF_SMOKE_URL`: five isolated browser sessions, role sealing,
 pack-chat non-leakage, a real timeout, pause/resume, reload reconnect, full

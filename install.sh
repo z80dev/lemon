@@ -61,7 +61,7 @@ Usage:
   sh install.sh --resolve-version
 
 Options:
-  --profile NAME  Select full, min, sim, or lemon_bot (backend only, no BEAM/TUI).
+  --profile NAME  Select full, min, or lemon_bot (backend only, no BEAM/TUI).
   --force         Reinstall even if the target version is already present.
   --verify        Boot on ephemeral ports, then stop. Native: poll /healthz.
                   Backend: check /v1/setup and web before promotion.
@@ -74,7 +74,7 @@ Options:
                   installing. Run \$HOME/.lemon/bin/lemon setup later to
                   configure Lemon.
   --require-bot   Install only a bot-capable native runtime (full or min; never the
-                  lemon_bot backend, sim, or the TUI). The staged runtime must pass
+                  lemon_bot backend or the TUI). The staged runtime must pass
                   \`lemon node capabilities --json --require-bot\` and report the
                   manifest version before anything is promoted.
   --resolve-version
@@ -94,19 +94,20 @@ Environment:
                               pinned release manifest publishes.
   LEMON_CHANNEL               Release channel. Default: stable for unpinned
                               installs. An explicit value must match the manifest.
-  LEMON_PROFILE               full | min | sim | lemon_bot, or a full profile name
-                              (lemon_runtime_full, lemon_runtime_min,
-                              sim_broadcast_platform). Default: lemon_runtime_full.
+  LEMON_PROFILE               full | min | lemon_bot, or a full profile name
+                              (lemon_runtime_full, lemon_runtime_min).
+                              Default: lemon_runtime_full.
   LEMON_NO_TUI                Set to 1 to install the runtime only, skipping the
                               terminal UI (\`lemon-tui\`). Roughly halves the
-                              download. The sim profile never ships a TUI.
+                              download.
   LEMON_INSTALL_IGNORE_GLIBC  Set to 1 to silence the Linux glibc baseline check.
   LEMON_INSTALL_BASE_URL      Override the GitHub release base URL (test seam).
 
 Native installs into \$HOME/.lemon/versions. Backend installs into
 \$HOME/.lemon/lemon_bot/versions with an independent current pointer and
 \$HOME/.local/bin/lemon-bot launcher. Backend state is \$HOME/.lemon/lemon_bot,
-outside the versioned tree; LEMON_BOT_DATA_DIR can override it at runtime.
+outside the versioned tree. On first start in a terminal, lemon-bot asks whether
+to use the Lemon on this machine (starting it if needed) or another machine's.
 Backend version verification needs no Bun, Node, or source checkout.
 Docs: $DOCS_URL
 EOF
@@ -240,20 +241,15 @@ check_glibc
 case "$PROFILE_INPUT" in
   full|lemon_runtime_full) PROFILE="lemon_runtime_full" ;;
   min|lemon_runtime_min) PROFILE="lemon_runtime_min" ;;
-  sim|sim_broadcast_platform) PROFILE="sim_broadcast_platform" ;;
   lemon_bot) PROFILE="lemon_bot" ;;
   *)
     die "unknown LEMON_PROFILE '$PROFILE_INPUT'.
-  Use full, min, sim, lemon_bot, or a full runtime profile name."
+  Use full, min, lemon_bot, or a full runtime profile name."
     ;;
 esac
 
 if [ "$REQUIRE_BOT" = "1" ] && [ "$PROFILE" != "lemon_runtime_full" ] && [ "$PROFILE" != "lemon_runtime_min" ]; then
   die "--require-bot needs a bot-capable native runtime (full or min); the $PROFILE profile cannot host a Lemon Bot worker."
-fi
-
-if [ "$PROFILE" = "sim_broadcast_platform" ] && [ "$PLATFORM_OS" != "linux" ]; then
-  die "the sim_broadcast_platform profile is built for Linux only; $PLATFORM has no such artifact."
 fi
 
 # --------------------------------------------------------------- manifest ----
@@ -284,23 +280,22 @@ fi
 # An exact pin identifies the release; its manifest is the authority for that
 # release's channel. Only an explicit LEMON_CHANNEL is enforced against it.
 EXPECT_CHANNEL="$CHANNEL"
-CHANNEL_LABEL="channel $CHANNEL"
 if [ -n "$PIN" ] && [ "$CHANNEL_EXPLICIT" != "1" ]; then
   EXPECT_CHANNEL=""
-  CHANNEL_LABEL="pinned $PIN"
 fi
 
 fetch() {
-  # fetch <url> <destination>
-  # --resolve-version fetches only the manifest: errors, but no progress meter.
-  quiet=""
-  if [ "$RESOLVE_VERSION" = "1" ]; then
-    quiet="-sS"
+  # fetch <url> <destination> [progress]
+  # Only release artifacts show curl's one-line progress bar, and only on a
+  # terminal; everything else is silent apart from errors.
+  curl_output="-sS"
+  if [ "${3:-}" = "progress" ] && [ -t 2 ]; then
+    curl_output="--progress-bar"
   fi
   if [ "$INSECURE_BASE" = "1" ]; then
-    curl ${quiet:+"$quiet"} -fL --retry 3 --connect-timeout 10 -o "$2" "$1"
+    curl "$curl_output" -fL --retry 3 --connect-timeout 10 -o "$2" "$1"
   else
-    curl ${quiet:+"$quiet"} -fL --proto '=https' --retry 3 --connect-timeout 10 -o "$2" "$1"
+    curl "$curl_output" -fL --proto '=https' --retry 3 --connect-timeout 10 -o "$2" "$1"
   fi
 }
 
@@ -657,6 +652,9 @@ ensure_links() {
   fi
 }
 
+# path_hint records, rather than prints, the PATH advice so the installer can
+# end with it after setup.
+PATH_NOTE=""
 path_hint() {
   case ":${PATH:-}:" in
     *":$BIN_DIR:"*) return 0 ;;
@@ -683,31 +681,18 @@ path_hint() {
   esac
 
   if [ "$MODIFY_PATH" = "1" ] && [ -n "$rc_file" ]; then
-    if [ -f "$rc_file" ] && grep -Fqx "$path_line" "$rc_file"; then
-      info "PATH entry already present in $rc_file"
-    else
+    if [ ! -f "$rc_file" ] || ! grep -Fqx "$path_line" "$rc_file"; then
       mkdir -p "$(dirname "$rc_file")"
       {
         printf '\n# added by the lemon installer\n'
         printf '%s\n' "$path_line"
       } >>"$rc_file"
-      info "Added $BIN_DIR to PATH in $rc_file."
     fi
-    info "New shells will find lemon. For this shell, run:"
-    info ""
-    info "    $path_line"
-    info ""
+    PATH_NOTE="New shells will find lemon. To use it in this shell, run: $path_line"
     return 0
   fi
 
-  info ""
-  info "$BIN_DIR is not on your PATH. Add it with:"
-  info ""
-  info "    $path_line"
-  info ""
-  if [ -n "$rc_file" ]; then
-    info "Re-run without --no-modify-path to append that line to $rc_file automatically."
-  fi
+  PATH_NOTE="$BIN_DIR is not on your PATH. Add it with: $path_line"
 }
 
 free_port() {
@@ -799,16 +784,15 @@ verify_bot_runtime() (
 )
 setup_handoff() {
   if [ "$PROFILE" = "lemon_bot" ]; then
-    info "Start lemon-bot with LEMON_BOT_CONTROL_URL and LEMON_BOT_OPERATOR_TOKEN configured."
-    info "Backend state: $HOME/.lemon/lemon_bot (override with LEMON_BOT_DATA_DIR)."
-  elif [ "$PROFILE" = "sim_broadcast_platform" ]; then
-    info "Setup is not available for the sim profile."
+    if [ ! -x "$HOME/.lemon/bin/lemon" ]; then
+      info "Lemon itself is not installed here. To run Lemon on this machine too, install it with:"
+      info "    curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh"
+    fi
   elif [ "$SKIP_SETUP" = "1" ]; then
     info "Setup skipped. Run this when you are ready to configure Lemon:"
     info "    $BIN_DIR/lemon setup"
   elif (exec </dev/tty) 2>/dev/null; then
     info ""
-    info "Starting interactive setup..."
     if ! "$BIN_DIR/lemon" setup </dev/tty; then
       die "Lemon setup did not complete. The runtime remains installed at $TARGET_DIR. Re-run: $BIN_DIR/lemon setup"
     fi
@@ -818,11 +802,21 @@ setup_handoff() {
   fi
 }
 
-# ----------------------------------------------------------------- install ---
+finish() {
+  info ""
+  if [ "$PROFILE" = "lemon_bot" ]; then
+    info "Run lemon-bot to start. It connects to Lemon on this machine (offering to start it) or another machine you choose."
+  elif [ -x "$CURRENT_LINK/tui/bin/lemon-tui" ]; then
+    info "Run lemon to start."
+  else
+    info "Run lemon --help to see available commands."
+  fi
+  if [ -n "$PATH_NOTE" ]; then
+    info "$PATH_NOTE"
+  fi
+}
 
-if [ "$RESOLVE_VERSION" != "1" ]; then
-  info "Installing Lemon ($PROFILE, $PLATFORM, $CHANNEL_LABEL)"
-fi
+# ----------------------------------------------------------------- install ---
 
 manifest_file="$TMP_DIR/manifest.json"
 if ! fetch "$MANIFEST_URL" "$manifest_file"; then
@@ -845,10 +839,9 @@ fi
 
 # The TUI is a second, optional artifact in the same manifest: a separate
 # per-platform tarball that unpacks into tui/ next to the runtime's bin/.
-# The sim profile has no terminal UI, LEMON_NO_TUI=1 opts out, and a bot worker
-# host (--require-bot) is headless.
+# LEMON_NO_TUI=1 opts out, and a bot worker host (--require-bot) is headless.
 WANT_TUI=1
-if [ "$PROFILE" = "lemon_bot" ] || [ "$PROFILE" = "sim_broadcast_platform" ] || [ "${LEMON_NO_TUI:-0}" = "1" ] || [ "$REQUIRE_BOT" = "1" ]; then
+if [ "$PROFILE" = "lemon_bot" ] || [ "${LEMON_NO_TUI:-0}" = "1" ] || [ "$REQUIRE_BOT" = "1" ]; then
   WANT_TUI=0
 fi
 
@@ -870,13 +863,24 @@ RESOLVED_CHANNEL="$(printf '%s\n' "$artifact_line" | cut -f5)"
 
 TUI_FILE=""
 TUI_SHA=""
-TUI_SIZE=""
 if [ -n "$tui_line" ]; then
   TUI_FILE="$(printf '%s\n' "$tui_line" | cut -f1)"
   TUI_SHA="$(printf '%s\n' "$tui_line" | cut -f2)"
-  TUI_SIZE="$(printf '%s\n' "$tui_line" | cut -f3)"
 elif [ "$WANT_TUI" = "1" ]; then
   warn "this release has no TUI artifact for $PLATFORM; installing runtime only"
+fi
+
+# Only non-default channels and profiles are worth naming in progress output.
+INSTALL_LABEL="Lemon $VERSION"
+install_qualifiers=""
+if [ "$RESOLVED_CHANNEL" != "stable" ]; then
+  install_qualifiers="$RESOLVED_CHANNEL"
+fi
+if [ "$PROFILE" != "lemon_runtime_full" ]; then
+  install_qualifiers="${install_qualifiers:+$install_qualifiers, }$PROFILE"
+fi
+if [ -n "$install_qualifiers" ]; then
+  INSTALL_LABEL="$INSTALL_LABEL ($install_qualifiers)"
 fi
 
 TARGET_DIR="$VERSIONS_DIR/$VERSION"
@@ -899,11 +903,11 @@ if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ]; then
   else
     ensure_links "$INSTALL_KEY"
   fi
-  info "Lemon $VERSION ($RESOLVED_CHANNEL) is already installed at $TARGET_DIR."
   if [ -n "$TUI_FILE" ] && [ ! -x "$TARGET_DIR/tui/bin/lemon-tui" ]; then
-    info "This install has no terminal UI, but $VERSION publishes one."
+    info "$INSTALL_LABEL is already installed without the terminal UI, but $VERSION publishes one. Re-run with --force to reinstall it."
+  else
+    info "$INSTALL_LABEL is already installed. Re-run with --force to reinstall it."
   fi
-  info "Re-run with --force to reinstall it."
 
   if [ "$VERIFY" = "1" ]; then
     verify_boot
@@ -911,6 +915,7 @@ if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ]; then
 
   path_hint
   setup_handoff
+  finish
   exit 0
 fi
 
@@ -918,8 +923,8 @@ tarball="$TMP_DIR/$ARTIFACT_FILE"
 CLEANUP_TARBALL="$tarball"
 rm -f "$tarball"
 
-info "Downloading $ARTIFACT_FILE ($ARTIFACT_SIZE bytes) ..."
-if ! fetch "$DOWNLOAD_BASE/$ARTIFACT_FILE" "$tarball"; then
+info "Installing $INSTALL_LABEL ..."
+if ! fetch "$DOWNLOAD_BASE/$ARTIFACT_FILE" "$tarball" progress; then
   rm -f "$tarball"
   die "could not download $DOWNLOAD_BASE/$ARTIFACT_FILE"
 fi
@@ -936,7 +941,6 @@ if [ "$actual_sha" != "$ARTIFACT_SHA" ]; then
   actual   $actual_sha
   Nothing was installed."
 fi
-info "ok sha256 $actual_sha"
 
 # Both tarballs are downloaded and verified before either is extracted: a bad
 # TUI download must not leave a half-installed version behind.
@@ -946,8 +950,7 @@ if [ -n "$TUI_FILE" ]; then
   CLEANUP_TUI_TARBALL="$tui_tarball"
   rm -f "$tui_tarball"
 
-  info "Downloading $TUI_FILE ($TUI_SIZE bytes) ..."
-  if ! fetch "$DOWNLOAD_BASE/$TUI_FILE" "$tui_tarball"; then
+  if ! fetch "$DOWNLOAD_BASE/$TUI_FILE" "$tui_tarball" progress; then
     rm -f "$tarball" "$tui_tarball"
     die "could not download $DOWNLOAD_BASE/$TUI_FILE
   Nothing was installed. Set LEMON_NO_TUI=1 to install the runtime only."
@@ -961,7 +964,6 @@ if [ -n "$TUI_FILE" ]; then
   actual   $actual_sha
   Nothing was installed."
   fi
-  info "ok sha256 $actual_sha"
 fi
 
 partial_dir="$TARGET_DIR.partial"
@@ -1059,15 +1061,10 @@ if [ -n "$previous_dir" ]; then
   CLEANUP_PREVIOUS=""
 fi
 
-info ""
-info "Installed Lemon $VERSION ($RESOLVED_CHANNEL, $PROFILE) to $TARGET_DIR"
-info "  launcher: $BIN_DIR/$LAUNCHER -> $LAUNCHER_TARGET"
-if [ -n "$TUI_FILE" ]; then
-  info "  tui:      $TARGET_DIR/tui/bin/lemon-tui"
-fi
+info "Installed $INSTALL_LABEL"
 if [ "$PROFILE" = "lemon_bot" ]; then
-  info "  state:    $HOME/.lemon/lemon_bot"
-elif ! "$BIN_DIR/lemon" version; then
+  info "  state: $HOME/.lemon/lemon_bot"
+elif ! "$BIN_DIR/lemon" version >/dev/null 2>&1; then
   warn "'$BIN_DIR/lemon version' did not succeed. Run it directly to see why."
 fi
 
@@ -1077,24 +1074,4 @@ fi
 
 path_hint
 setup_handoff
-
-
-info ""
-info "Next steps:"
-if [ "$PROFILE" = "lemon_bot" ]; then
-  info "    lemon-bot          # start the standalone backend"
-  info "Docs: $DOCS_URL"
-  exit 0
-fi
-if [ -n "$TUI_FILE" ]; then
-  info "    lemon              # launch the terminal UI (starts the daemon for you)"
-fi
-if [ "$PROFILE" = "lemon_runtime_full" ]; then
-  info "    lemon web          # launch the local browser UI (starts the daemon for you)"
-fi
-info "    lemon --help       # available commands"
-info "    lemon daemon       # start the runtime in the background"
-info "    lemon status       # check it is healthy"
-info "    lemon update       # install the next release"
-info ""
-info "Docs: $DOCS_URL"
+finish

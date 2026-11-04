@@ -120,10 +120,6 @@ file = "~/.lemon/log/lemon.log"
 # Optional: handler level for the file (defaults to "debug").
 level = "debug"
 
-[automation]
-# Optional: opt-in daily brief at this server-local time (HH:MM, 24-hour).
-# daily_brief = "08:00"
-
 [gateway]
 max_concurrent_runs = 2
 auto_resume = false
@@ -2288,7 +2284,7 @@ programmatically with `CodingAgent.Session.start_link(tool_disclosure: [profile:
 - `tui`: terminal UI settings.
 - `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
 - `logging`: optional file logging configuration.
-- `automation`: opt-in proactive automation (`daily_brief`).
+- `automation`: cron catch-up and run-history retention.
 - `cron`: cron failure-alert cooldown settings.
 - `memory`: per-turn automatic recall and `remember` write approval; `skills`: `write_approval` for `skill_manage` ([Memory](#memory)).
 - `budgets`: cumulative usage budgets ([Cumulative usage budgets](#cumulative-usage-budgets)).
@@ -2298,26 +2294,14 @@ programmatically with `CodingAgent.Session.start_link(tool_disclosure: [profile:
 
 ## Automation
 
-`[automation]` holds proactive automation settings:
+`[automation]` holds cron scheduler settings:
 
 ```toml
 [automation]
-daily_brief = "08:00"   # HH:MM, 24-hour, server-local wall-clock time
 catch_up_missed = true
 run_retention_per_job = 100
 ```
 
-- `daily_brief` (default: unset) — when set, Lemon keeps one heartbeat cron job,
-  `cron_daily_brief`, running every day at that time in the server's local
-  timezone (DST-aware) for the default agent's main session
-  (`agent:default:main`). The agent sends a short brief to your paired owner
-  chat, or replies `HEARTBEAT_OK` and sends nothing.
-- The job is reconciled when Lemon boots: a new or changed time takes effect at
-  the next start, and removing the key removes the job.
-- `lemon setup` offers to write this key (default: off); `lemon setup
-  --daily-brief HH:MM` writes it non-interactively.
-- A value that is not a `HH:MM` 24-hour time fails config validation
-  (`automation.daily_brief: must be a HH:MM 24-hour time`).
 - `catch_up_missed` (default: `true`) — restart runs one missed slot when it is
   within half the schedule's next-occurrence gap, clamped to 2 minutes–2 hours.
   Older slots are audited as skipped; expired one-shots are retired. Set `false`
@@ -2326,7 +2310,7 @@ run_retention_per_job = 100
   runs retained per job by hourly cleanup. Active attempts and undispatched
   retries are exempt. This also applies to history of removed jobs.
 
-See [Reminders, heartbeats, and the daily brief](user-guide/reminders-and-heartbeats.md).
+See [Reminders and heartbeats](user-guide/reminders-and-heartbeats.md).
 
 ### Cron failure alerts
 

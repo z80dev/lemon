@@ -210,7 +210,7 @@ defmodule LemonCli.LauncherLifecycleTest do
     for command <- ~w(start daemon) do
       assert {output, 1} = launch(ctx.release, [command], env)
       assert output =~ "port #{port} is occupied but does not answer Lemon health checks"
-      assert output =~ "LEMON_CONTROL_PLANE_PORT"
+      assert output =~ "lemon setup runtime --control-port PORT"
       refute output =~ "unexpected release"
     end
   end

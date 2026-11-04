@@ -13,12 +13,11 @@ defmodule LemonCli.Setup.Wizard do
   (flag-driven, CI-friendly) operation through the shared `io_callbacks` map.
   """
 
-  alias LemonCli.HermesMigration
   alias LemonCli.Onboarding.PromptUI
   alias LemonCli.Onboarding.Runner
-  alias LemonCli.Setup.{Gateway, Provider, Scaffold, Verification}
-  alias LemonCore.Config.{Automation, Modular, TomlPatch}
-  alias LemonCore.Runtime.{Env, Profile}
+  alias LemonCli.Setup.{Gateway, Ports, Provider, Scaffold, Verification}
+  alias LemonCore.Config.Modular
+  alias LemonCore.Runtime.{Env, Health, Profile}
   alias LemonCore.Secrets
   alias LemonCore.Secrets.MasterKey
   alias LemonCore.Setup.Readiness
@@ -55,7 +54,6 @@ defmodule LemonCli.Setup.Wizard do
           config_path: :string,
           provider: :string,
           skip_verify: :boolean,
-          daily_brief: :string,
           set_default: :boolean,
           token: :string,
           auth: :string,
@@ -119,10 +117,13 @@ defmodule LemonCli.Setup.Wizard do
      An explicit `:provider` forces reconfiguration.
   5. Verify the resulting provider/model/credential (offline checks always;
      live check unless `:skip_verify`).
-  6. Offer an opt-in daily brief (default off; `--daily-brief HH:MM` in
-     non-interactive mode).
-  7. Offer to configure the runtime profile (optional).
-  8. Print a summary that only claims completion after a passing live check.
+  6. Check the ports the runtime will bind. A port held by another program is
+     replaced by the next free one after a `[Y/n]` confirmation (automatically
+     in non-interactive mode) and saved to `~/.lemon/ports.env`. Ports owned
+     by an already running Lemon are left alone.
+  7. Print a summary that only claims completion after a passing live check.
+
+  The runtime profile is not part of first-run setup: the installer chooses it.
 
   ## Options
 
@@ -131,10 +132,9 @@ defmodule LemonCli.Setup.Wizard do
     * `:provider` - force provider onboarding even when one is usable
     * `:skip_verify` - skip the post-onboarding live provider check
     * `:verifier` - injectable live-check function (testing; no network)
-    * `:daily_brief` - `HH:MM` server-local time for the opt-in daily brief
-    * `:hermes_home` - override the detected Hermes home
-    * `:home` - override the home used for Hermes discovery (testing)
     * `:launcher` - injectable zero-arity TUI launcher (testing)
+    * `:port_free?`, `:lemon_running?`, `:ports_path` - injectable port probes
+      and port file (testing)
     * `:launch` - offer to open Lemon (default: true; false for the launcher's setup gate)
   """
   @spec run_full([String.t()], io_callbacks(), keyword()) :: :ok | {:error, term()}
@@ -145,7 +145,6 @@ defmodule LemonCli.Setup.Wizard do
     Runner.ensure_required_apps!()
 
     print_banner(io)
-    step_offer_hermes(config_path, io, non_interactive?, opts)
     print_status(io, Verification.setup_state(config_path: config_path))
 
     result =
@@ -154,10 +153,7 @@ defmodule LemonCli.Setup.Wizard do
         ensure_provider(config_path, io, non_interactive?, opts)
       end
 
-    if result == :ok or match?({:ok, _}, result) do
-      step_offer_daily_brief(config_path, io, non_interactive?, opts)
-      step_offer_runtime(io, non_interactive?)
-    end
+    ensure_ports(io, non_interactive?, opts)
 
     state = Verification.setup_state(config_path: config_path)
 
@@ -180,13 +176,13 @@ defmodule LemonCli.Setup.Wizard do
   Runs the runtime configuration wizard.
 
   Lets the user choose a runtime profile (`runtime_min` or `runtime_full`)
-  and optionally set custom port values. Prints the env-var snippet to apply
-  them, rather than writing to config.toml (ports are best set in the shell
-  or a .env file).
+  and optionally set custom port values, then saves the ports to
+  `~/.lemon/ports.env` (see `LemonCli.Setup.Ports`), which the launchers load.
 
   ## Options
 
-    * `:non_interactive` - skip interactive prompts, print defaults (default: false)
+    * `:non_interactive` - skip interactive prompts, keep current ports (default: false)
+    * `:ports_path` - override the persisted port file (testing)
   """
   @spec run_runtime([String.t()], io_callbacks(), keyword()) :: :ok | {:error, term()}
   def run_runtime(args, io, opts \\ []) do
@@ -218,7 +214,7 @@ defmodule LemonCli.Setup.Wizard do
 
       with {:ok, profile_name} <- resolve_profile(cli_opts, io, non_interactive?),
            {:ok, ports} <- resolve_ports(cli_opts, Env.resolve(), io, non_interactive?) do
-        print_runtime_summary(profile_name, ports, io)
+        print_runtime_summary(profile_name, ports, io, opts)
         :ok
       end
     end
@@ -230,12 +226,18 @@ defmodule LemonCli.Setup.Wizard do
 
   defp print_banner(io) do
     io.info.("")
-    io.info.("Welcome to Lemon setup!")
-    io.info.("This wizard will walk you through first-time configuration.")
+    io.info.("Welcome to Lemon!")
     io.info.("")
   end
 
+  # A first run has nothing to report; a rerun shows what is already done.
   defp print_status(io, state) do
+    if Verification.pending_steps(state) != [:config, :secrets, :provider] do
+      print_step_status(io, state)
+    end
+  end
+
+  defp print_step_status(io, state) do
     io.info.("Setup status:")
 
     io.info.("  #{step_marker(state.config.complete)} config    #{state.config.path}")
@@ -285,15 +287,11 @@ defmodule LemonCli.Setup.Wizard do
     expanded = Path.expand(config_path)
 
     if File.exists?(expanded) do
-      io.info.("Config: #{expanded} (already exists)")
       migrate_deprecated_config(expanded, io)
       :ok
     else
-      io.info.("Creating minimal config at #{expanded} ...")
-
       case Scaffold.write_unless_exists(expanded, Scaffold.generate()) do
-        {:ok, path} ->
-          io.info.("Created: #{path}")
+        {:ok, _path} ->
           :ok
 
         {:exists, _path} ->
@@ -341,16 +339,12 @@ defmodule LemonCli.Setup.Wizard do
     if Secrets.status().configured do
       :ok
     else
-      io.info.("")
-      io.info.("Secrets master key not found — initializing one now.")
-
       case MasterKey.init() do
         {:ok, %{source: :file, key_file: path}} ->
-          io.info.("Secrets master key written to #{path} (0600)")
+          io.info.("Created a secrets key at #{path} (0600).")
           :ok
 
-        {:ok, %{source: source}} ->
-          io.info.("Secrets master key initialized in #{source}")
+        {:ok, _keychain} ->
           :ok
 
         {:error, :keychain_unavailable} ->
@@ -402,7 +396,7 @@ defmodule LemonCli.Setup.Wizard do
           if non_interactive? or forced do
             true
           else
-            prompt_yes_no?("Onboard an AI provider now?", true, io)
+            prompt_yes?("Onboard an AI provider now?", io)
           end
 
         if answer do
@@ -432,138 +426,89 @@ defmodule LemonCli.Setup.Wizard do
     |> Keyword.put(:live_verify, true)
   end
 
-  # The daily brief is one heartbeat cron job that `LemonAutomation.Heartbeat`
-  # reconciles from `[automation] daily_brief` when the runtime boots, so setup
-  # only has to record the choice - the runtime does not need to be running.
-  defp step_offer_daily_brief(config_path, io, non_interactive?, opts) do
-    path = Path.expand(config_path)
-    content = read_config_content(path)
+  # A runtime already answering on the control port owns its ports, so only a
+  # stopped runtime's ports are checked. A port another program holds is
+  # replaced by the next free one and saved for the launchers.
+  defp ensure_ports(io, non_interactive?, opts) do
+    env = Env.resolve()
+    running? = Keyword.get(opts, :lemon_running?, &Health.running?(&1, timeout_ms: 500))
 
-    case existing_daily_brief(content) do
-      time when is_binary(time) ->
-        io.info.("")
-        io.info.("Daily brief: scheduled at #{time} (edit [automation] daily_brief to change).")
+    unless running?.(env.control_port) do
+      free? = Keyword.get(opts, :port_free?, &Ports.free?/1)
+      current = %{control: env.control_port, web: env.web_port, sim: env.sim_port}
 
-      nil ->
-        case requested_daily_brief(io, non_interactive?, Keyword.get(opts, :daily_brief)) do
-          {:ok, time} -> write_daily_brief(path, content, time, io)
-          :skip -> :ok
-        end
+      chosen =
+        Enum.reduce(Ports.required(Profile.default_name()), current, fn key, ports ->
+          port = ports[key]
+          reserved = ports |> Map.delete(key) |> Map.values()
+
+          if port not in reserved and free?.(port) do
+            ports
+          else
+            replacement = replacement_port(key, port, reserved, free?, io, non_interactive?)
+            Map.put(ports, key, replacement)
+          end
+        end)
+
+      if chosen != current, do: save_ports(chosen, io, opts)
     end
+
+    :ok
   end
 
-  defp requested_daily_brief(io, _non_interactive?, flag) when is_binary(flag) do
-    case normalize_brief_time(flag) do
-      {:ok, time} ->
-        {:ok, time}
+  defp replacement_port(key, port, reserved, free?, io, non_interactive?) do
+    label = Ports.label(key)
+    suggestion = Ports.suggest(port, reserved, free?)
 
-      :error ->
+    cond do
+      non_interactive? and is_nil(suggestion) ->
         io.error.(
-          "Ignoring the invalid daily brief time. Run `lemon setup --daily-brief HH:MM` with a 24-hour time."
+          "Port #{port} for the #{label} is in use and no nearby port is free. Run `lemon setup runtime` to choose one."
         )
 
-        :skip
+        port
+
+      non_interactive? ->
+        io.info.("Port #{port} for the #{label} is in use; Lemon will use #{suggestion}.")
+        suggestion
+
+      suggestion &&
+          prompt_yes?(
+            "Port #{port} for the #{label} is already in use. Use #{suggestion} instead?",
+            io
+          ) ->
+        suggestion
+
+      true ->
+        prompt_free_port(label, reserved, free?, io)
     end
   end
 
-  defp requested_daily_brief(_io, true, nil), do: :skip
-
-  defp requested_daily_brief(io, false, nil) do
-    io.info.("")
-
-    if prompt_yes_no?(
-         "Get a short daily brief on your phone each morning? " <>
-           "(Needs a paired Telegram chat: `lemon gateway setup telegram`.)",
-         false,
-         io
-       ) do
-      prompt_brief_time(io)
-    else
-      io.info.("Skipped. Add `daily_brief = \"08:00\"` under [automation] to enable it later.")
-      :skip
-    end
-  end
-
-  defp prompt_brief_time(io) do
-    case normalize_input(io.prompt.("Daily brief time (HH:MM, this machine's time) [08:00]: ")) do
-      "" ->
-        {:ok, "08:00"}
-
-      raw ->
-        case normalize_brief_time(raw) do
-          {:ok, time} ->
-            {:ok, time}
-
-          :error ->
-            io.error.("Expected a 24-hour time such as 07:30.")
-            prompt_brief_time(io)
+  defp prompt_free_port(label, reserved, free?, io) do
+    case Integer.parse(normalize_input(io.prompt.("Port for the #{label}: "))) do
+      {port, ""} when port > 0 and port <= 65_535 ->
+        if port not in reserved and free?.(port) do
+          port
+        else
+          io.error.("Port #{port} is also in use. Choose another port.")
+          prompt_free_port(label, reserved, free?, io)
         end
+
+      _ ->
+        io.error.("Enter a port from 1 to 65535.")
+        prompt_free_port(label, reserved, free?, io)
     end
   end
 
-  defp normalize_brief_time(raw) do
-    case Automation.parse_time(raw) do
-      {:ok, {hour, minute}} ->
-        {:ok, "#{pad2(hour)}:#{pad2(minute)}"}
+  defp save_ports(ports, io, opts) do
+    case Ports.save(ports, opts) do
+      {:ok, path} ->
+        io.info.("Saved ports to #{path}.")
 
-      :error ->
-        :error
-    end
-  end
-
-  defp pad2(value), do: value |> Integer.to_string() |> String.pad_leading(2, "0")
-
-  defp write_daily_brief(path, content, time, io) do
-    patched = TomlPatch.upsert_string(content, "automation", "daily_brief", time)
-
-    with :ok <- File.mkdir_p(Path.dirname(path)),
-         :ok <- File.write(path, patched) do
-      io.info.("Daily brief scheduled for #{time} every day (written to #{path}).")
-      io.info.("It starts when Lemon (re)starts and is sent to your paired Telegram chat;")
-      io.info.("run `lemon gateway setup telegram` if you have not paired one yet.")
-      :ok
-    else
       {:error, _reason} ->
         io.error.(
-          "Could not save the daily brief. Check config permissions, then run `lemon setup`."
+          "Could not save the port settings. Check permissions on ~/.lemon, then run `lemon setup runtime`."
         )
-
-        :ok
-    end
-  end
-
-  defp read_config_content(path) do
-    case File.read(path) do
-      {:ok, content} -> content
-      {:error, _reason} -> ""
-    end
-  end
-
-  defp existing_daily_brief(content) do
-    with {:ok, decoded} <- Toml.decode(content),
-         %{"automation" => %{"daily_brief" => time}} when is_binary(time) <- decoded,
-         {:ok, _} <- Automation.parse_time(time) do
-      String.trim(time)
-    else
-      _ -> nil
-    end
-  end
-
-  defp step_offer_runtime(io, non_interactive?) do
-    io.info.("")
-
-    if non_interactive? do
-      io.info.(
-        "Skipping runtime configuration (non-interactive). Run `lemon setup runtime` to configure."
-      )
-    else
-      answer = prompt_yes_no?("Configure runtime profile now?", false, io)
-
-      if answer do
-        run_runtime([], io, non_interactive: false)
-      else
-        io.info.("Skipped. Run `lemon setup runtime` when ready.")
-      end
     end
   end
 
@@ -572,78 +517,10 @@ defmodule LemonCli.Setup.Wizard do
       Map.get(io, :interactive?, &PromptUI.terminal?/0).()
   end
 
-  defp step_offer_hermes(config_path, io, non_interactive?, opts) do
-    if interactive?(io, non_interactive?) do
-      source =
-        opts[:hermes_home] || System.get_env("HERMES_HOME") ||
-          Path.join(Keyword.get(opts, :home, System.user_home!()), ".hermes")
-
-      if File.dir?(Path.expand(source)) do
-        migration_opts = [
-          source: source,
-          target: Path.dirname(Path.expand(config_path)),
-          config_path: config_path,
-          preset: "user-data",
-          migrate_secrets: false,
-          overwrite: false
-        ]
-
-        audit = HermesMigration.audit(migration_opts)
-        skills = Enum.find(audit["items"], &(&1["kind"] == "skills"))
-        skill_count = get_in(skills, ["details", "skill_count"]) || 0
-
-        memory_count =
-          Enum.count(
-            audit["items"],
-            &(&1["kind"] in ["memory", "user_profile"] and
-                &1["status"] == "compatible")
-          )
-
-        config_count =
-          Enum.count(audit["items"], &(&1["kind"] == "config" and &1["status"] == "compatible"))
-
-        io.info.(
-          "Found Hermes home: #{skill_count} skills, #{memory_count} memory files, #{config_count} provider config."
-        )
-
-        io.info.(
-          "Import uses the user-data preset without secrets; use `lemon migrate hermes --migrate-secrets` to explicitly import credentials."
-        )
-
-        if prompt_yes_no?("Import Hermes data now?", false, io) do
-          import_hermes(migration_opts, io)
-        end
-      end
-    end
-  end
-
-  defp import_hermes(opts, io) do
-    preview = HermesMigration.preview(opts)
-
-    if HermesMigration.has_conflicts?(preview) do
-      io.error.(
-        "Hermes import has conflicts; nothing was imported. Resolve them or use `lemon migrate hermes --overwrite`."
-      )
-    else
-      case HermesMigration.create_backup(preview["target"]) do
-        result when result == :none or elem(result, 0) == :ok ->
-          report = HermesMigration.apply(opts)
-          summary = report["summary"]
-
-          io.info.(
-            "Hermes import: #{summary["migrated"]} migrated, #{summary["archived"]} archived, #{summary["error"]} errors. Report: #{report["output_dir"]}"
-          )
-
-        {:error, _reason} ->
-          io.error.("Could not back up the Lemon home; nothing was imported.")
-      end
-    end
-  end
-
   defp step_offer_launch(io, state, result, non_interactive?, opts) do
     if interactive?(io, non_interactive?) and Keyword.get(opts, :launch, true) and
          Verification.pending_steps(state) == [] and match?({:ok, %{live: :ok}}, result) and
-         prompt_yes_no?("Open Lemon now?", true, io) do
+         prompt_yes?("Open Lemon now?", io) do
       launcher = Keyword.get(opts, :launcher, &launch_tui/0)
 
       case launcher.() do
@@ -842,7 +719,7 @@ defmodule LemonCli.Setup.Wizard do
 
   defp valid_port?(port), do: is_integer(port) and port > 0 and port <= 65_535
 
-  defp print_runtime_summary(profile_name, ports, io) do
+  defp print_runtime_summary(profile_name, ports, io, opts) do
     profile = Profile.get(profile_name)
 
     io.info.("")
@@ -854,10 +731,7 @@ defmodule LemonCli.Setup.Wizard do
     io.info.("  web           : #{ports.web}")
     io.info.("  sim-ui        : #{ports.sim}")
     io.info.("")
-    io.info.("To persist these settings, add to your shell profile or .env file:")
-    io.info.("  export LEMON_CONTROL_PLANE_PORT=#{ports.control}")
-    io.info.("  export LEMON_WEB_PORT=#{ports.web}")
-    io.info.("  export LEMON_SIM_UI_PORT=#{ports.sim}")
+    save_ports(ports, io, opts)
     io.info.("")
     io.info.("To launch this profile:")
     io.info.("  MIX_ENV=prod mix release #{release_name(profile_name)}")
@@ -872,8 +746,8 @@ defmodule LemonCli.Setup.Wizard do
   # IO helpers
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp prompt_yes_no?(message, default, io) do
-    suffix = if default, do: " [Y/n]: ", else: " [y/N]: "
+  defp prompt_yes?(message, io) do
+    suffix = " [Y/n]: "
 
     answer =
       io.prompt.(message <> suffix)
@@ -881,12 +755,12 @@ defmodule LemonCli.Setup.Wizard do
       |> String.downcase()
 
     case answer do
-      "" -> default
+      "" -> true
       "y" -> true
       "yes" -> true
       "n" -> false
       "no" -> false
-      _ -> prompt_yes_no?(message, default, io)
+      _ -> prompt_yes?(message, io)
     end
   end
 

@@ -29,11 +29,14 @@ RUN mix local.hex --force && mix local.rebar --force
 
 # The whole umbrella is copied, not just the apps named in the release: Mix
 # compiles every child under apps/, and rel/overlays supplies the `bin/lemon`
-# launcher shim that lands in the assembled release.
+# launcher shim that lands in the assembled release. `mix release` also builds
+# clients/lemon-browser-node and bundles its driver into lemon_browser's priv.
 COPY mix.exs mix.lock ./
 COPY config config
 COPY rel rel
 COPY apps apps
+COPY clients/tsconfig.base.json clients/tsconfig.base.json
+COPY clients/lemon-browser-node clients/lemon-browser-node
 
 RUN mix deps.get --only prod
 

@@ -21,8 +21,6 @@ When automation is unavailable, curation skips automatic archival and reports wh
 LemonAutomation.Supervisor
   |-- Task.Supervisor (LemonAutomation.TaskSupervisor)
   |-- CronManager     (GenServer - scheduling engine, heartbeat policy, delivery)
-  |-- Task :daily_brief_sync (one-shot - reconciles [automation] daily_brief; skipped when
-  |                           config :lemon_automation, daily_brief_sync: false)
   |-- GoalContinuationManager (GenServer - supervised one-shot goal continuation)
   |-- GoalLoopManager (GenServer - preview goal judge loop tick)
   |-- KanbanDispatcher (GenServer - durable board task leasing)
@@ -254,11 +252,7 @@ terminalization `CronManager` calls `Heartbeat.apply_policy/2`: a completed run
 whose output trims to exactly `"HEARTBEAT_OK"` is marked suppressed, kept in run
 history, emits `:heartbeat_suppressed`, and is not delivered; any other outcome
 emits `:heartbeat_alert` and is delivered. Heartbeat schedules are cron
-schedules, so intervals must be cron-exact. The module also owns the opt-in
-daily brief: `[automation] daily_brief = "HH:MM"` is reconciled at boot
-(`sync_daily_brief/0`) into the heartbeat job `cron_daily_brief`
-(`timezone: "local"`, agent `default`, session `agent:default:main`); a changed
-time updates the job and removing the key removes it.
+schedules, so intervals must be cron-exact.
 
 **CronDelivery** (`LemonAutomation.CronDelivery`) chooses where a delivered
 run result is sent, in order: `deliver_to: "none"` (nowhere); an explicit
@@ -358,7 +352,7 @@ and the harmless disabled example under
 | `LemonAutomation.Tools.Cron` | `lib/lemon_automation/tools/cron.ex` | The agent `cron` tool (status/list/add/update/pause/resume/pause_all/resume_all/abort/remove/run/runs); registered with `LemonAgent.ToolRegistry` by `LemonAutomation.Application`, so sessions are offered it through the platform tool registry; non-Lemon session ids (e.g. TUI `tui-…`) fall back to `agent:<id>:main` |
 | `LemonAutomation.CronCommandRunner` | `lib/lemon_automation/cron_command_runner.ex` | Supervised no-agent local shell command runner for operator-created command cron jobs |
 | `LemonCore.Doctor.CronDiagnostics` | `apps/lemon_core/lib/lemon_core/doctor/cron_diagnostics.ex` | Core-owned redacted support-bundle diagnostics for cron jobs and runs |
-| `LemonAutomation.Heartbeat` | `lib/lemon_automation/heartbeat.ex` | Heartbeat policy (`meta.heartbeat` jobs; `HEARTBEAT_OK` suppression) applied during CronManager terminalization, plus daily-brief reconciliation from `[automation] daily_brief` |
+| `LemonAutomation.Heartbeat` | `lib/lemon_automation/heartbeat.ex` | Heartbeat policy (`meta.heartbeat` jobs; `HEARTBEAT_OK` suppression) applied during CronManager terminalization |
 | `LemonAutomation.CronDelivery` | `lib/lemon_automation/cron_delivery.ex` | Resolves the shared automation target grammar; `RunNotifications` binds invocations and hands terminal facts to channels |
 | `LemonAutomation.GoalContinuation` | `lib/lemon_automation/goal_continuation.ex` | Builds and submits one persistent-goal continuation run through LemonRouter |
 | `LemonAutomation.GoalContinuationManager` | `lib/lemon_automation/goal_continuation_manager.ex` | Supervised task entrypoint for one-shot goal continuation |
@@ -388,7 +382,6 @@ LemonAutomation behavior is controlled through cron job fields plus a small appl
 - **Goal judge runner**: dev/prod default to `LemonAutomation.GoalJudge.RouterRunner`; set `LEMON_GOAL_JUDGE_MODEL` or pass `judge_model` from the control plane/TUI to choose a specific judge model
 - **Goal loop scheduler**: automatic per-goal scheduling persists across restarts; `:goal_loop_scheduler_interval_ms` defaults to 30,000 and `:goal_loop_scan_limit` defaults to 50.
 - **Skill curator**: `config :lemon_automation, :skill_curator, enabled: true, agent_id: "default", interval_hours: 168, min_idle_hours: 2, tool_policy: %{allow: ["read_skill", "skill_manage", "remember", "recall"]}`
-- **Daily brief sync**: `[automation] daily_brief = "HH:MM"` (see `LemonCore.Config.Automation`) is reconciled into the `cron_daily_brief` heartbeat job by a one-shot boot task; `config :lemon_automation, daily_brief_sync: false` disables the task (set in `config/test.exs`)
 
 ## Usage
 
@@ -586,9 +579,6 @@ cron-exact (`every 30m`, `every 2h`, `daily at 8am`, ...).
 
 LemonAutomation.Heartbeat.heartbeat?(job)                    # => true
 LemonAutomation.Heartbeat.healthy_response?("  HEARTBEAT_OK\n") # => true
-
-# Reconcile the daily brief with a HH:MM time (nil removes it)
-LemonAutomation.Heartbeat.sync_daily_brief("08:00")
 ```
 
 The TUI `/heartbeat every <interval> <prompt>` command creates or updates this
@@ -773,7 +763,7 @@ mix test --cover apps/lemon_automation
 | `cron_manager_forwarding_test.exs` | Summary forwarding to main/channel_peer sessions and channel outbox delivery; default delivery to the paired owner chat (including non-Lemon session ids), explicit `deliver_to` and `"none"`, heartbeat suppression vs. delivery, and one-shot delivery then removal |
 | `cron_delivery_test.exs` | `deliver_to` validation and target resolution (explicit, originating chat, Telegram/Discord owner chat, unpaired) |
 | `events_test.exs` | Event emission for all event types |
-| `heartbeat_test.exs` | `apply_policy/2` suppression/alert behavior and daily-brief create/reschedule/remove/invalid-time reconciliation |
+| `heartbeat_test.exs` | `apply_policy/2` suppression/alert behavior and exact `[SILENT]` handling |
 | `run_completion_waiter_test.exs` | Bus-based completion waiting, output truncation |
 | `run_submitter_test.exs` | Router submission, session key forking, error handling, memory file writes |
 | `goal_loop_test.exs` | Goal loop verdicts, bounded loops, auto scheduling, router judge proof, authoritative run tracking, and hard-stop abort/no-next-tick semantics |

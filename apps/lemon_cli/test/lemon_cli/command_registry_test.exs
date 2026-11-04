@@ -52,7 +52,6 @@ defmodule LemonCli.CommandRegistryTest do
 
   test "setup help includes accepted flags and the diagnostics alias" do
     help = CommandRegistry.help("setup")
-    assert help =~ "--daily-brief HH:MM"
     assert help =~ "--set-default"
     assert help =~ "alias for doctor"
   end

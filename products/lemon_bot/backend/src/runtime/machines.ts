@@ -127,7 +127,7 @@ export function createMachineRoutes(services: BackendServices): Route[] {
       const parsed = inviteSchema.safeParse(raw);
       if (!parsed.success) fail('outcome_unknown', 'The enrollment may have been issued but its receipt is invalid.', false, { resourceIds: [value.id, invitation.id] });
       const result = parsed.data;
-      if (result.joinCommand.includes(services.config.operatorToken)) fail('outcome_unknown', 'The enrollment receipt contained forbidden controller authority.', false, { resourceIds: [value.id, invitation.id] });
+      if (services.config.operatorToken && result.joinCommand.includes(services.config.operatorToken)) fail('outcome_unknown', 'The enrollment receipt contained forbidden controller authority.', false, { resourceIds: [value.id, invitation.id] });
       services.store.setMetadata(`machineInviteUpstream:${invitation.id}`, result.inviteId);
       const issued = services.update(invitation, { inviteCode: result.inviteCode, joinCommand: result.joinCommand, expiresAtMs: result.expiresAtMs, enrollment: 'waiting_for_join' });
       services.store.put('machineInvites', issued); services.events.emit('machine_invite.upserted', issued, { userIds: [value.ownerUserId] });

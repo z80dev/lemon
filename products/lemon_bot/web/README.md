@@ -11,7 +11,7 @@ bun --cwd products/lemon_bot/web install
 bun run --cwd products/lemon_bot/web dev
 ```
 
-Development listens on `http://127.0.0.1:4081`. Vite proxies `/v1` (including realtime), `/hooks` and `/mcp` to `http://127.0.0.1:4080`. Override the development target with `LEMON_BOT_DEV_BACKEND`. A saved owner account can select a trusted HTTPS backend; that deployment must allow this frontend origin for REST and WebSocket connections. Never enter the Lemon control-plane URL or operator token.
+Development listens on `http://127.0.0.1:4081`. Vite proxies `/v1` (including realtime), `/hooks` and `/mcp` to `http://127.0.0.1:4100`. Override the development target with `LEMON_BOT_DEV_BACKEND`. A saved owner account can select a trusted HTTPS backend; that deployment must allow this frontend origin for REST and WebSocket connections. Never enter the Lemon control-plane URL or operator token.
 
 Production assets are emitted to `web/dist`; the backend serves them outside `/v1`. Use HTTPS except for loopback development. If using a configured OIDC provider, register the exact frontend redirect URLs used by account sign-in and account linking. PKCE verifiers remain in the current browser tab. Swarm credentials remain server-side.
 

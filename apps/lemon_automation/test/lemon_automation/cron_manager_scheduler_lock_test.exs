@@ -1,7 +1,7 @@
 defmodule LemonAutomation.CronManagerSchedulerLockTest do
   use ExUnit.Case, async: false
 
-  alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore}
+  alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore, TestCronManager}
   alias LemonCore.{Bus, Event}
 
   defmodule LockSubmitter do
@@ -179,6 +179,8 @@ defmodule LemonAutomation.CronManagerSchedulerLockTest do
   test "manager restart reloads persisted active runs without duplicate scheduled submit", %{
     job: job
   } do
+    TestCronManager.isolate!()
+
     %CronJob{} = job
 
     due_job = %{
@@ -215,6 +217,8 @@ defmodule LemonAutomation.CronManagerSchedulerLockTest do
   end
 
   test "manager restart retains stale router runs until durable completion", %{job: job} do
+    TestCronManager.isolate!()
+
     %CronJob{} = job
 
     stale_job = %{

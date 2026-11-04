@@ -64,6 +64,8 @@ import Observation
     public internal(set) var pairings: [Pairing] = []
     public internal(set) var pairingURL: String?
     public internal(set) var ownerPairingPreflight: BotPreflightResult?
+    /// Making the connected machine run Bots (macOS); reset with each account.
+    public internal(set) var hostSetup: HostSetupState = .idle
 
     @ObservationIgnored let keychain: any AccountCredentialStore
     @ObservationIgnored let persistence: ClientPersistence
@@ -151,10 +153,10 @@ import Observation
         let saved = try saveAuthenticatedAccount(auth, baseURL: client.baseURL, deviceID: auth.session.deviceId, installationID: nil)
         try await restoreAccount(saved)
     }
-    func saveAuthenticatedAccount(_ auth: AuthResult, baseURL: URL, deviceID: ID?, installationID: String?, instanceID: String? = nil) throws -> StoredAccount {
+    func saveAuthenticatedAccount(_ auth: AuthResult, baseURL: URL, deviceID: ID?, installationID: String?, instanceID: String? = nil, route: MachineRoute? = nil) throws -> StoredAccount {
         let normalized = try HTTPTransport.normalizeBaseURL(baseURL)
         let id = ClientPersistence.digest(normalized.absoluteString + "|" + auth.user.id + "|" + auth.workspace.id)
-        let saved = StoredAccount(id: id, baseURL: normalized, email: auth.user.email, displayName: auth.user.displayName, token: auth.token, userID: auth.user.id, workspaceID: auth.workspace.id, deviceID: deviceID, sessionID: auth.session.id, sessionExpiresAtMs: auth.session.expiresAtMs, installationID: installationID, instanceID: instanceID ?? accounts.first(where: { $0.id == id })?.instanceID)
+        let saved = StoredAccount(id: id, baseURL: normalized, email: auth.user.email, displayName: auth.user.displayName, token: auth.token, userID: auth.user.id, workspaceID: auth.workspace.id, deviceID: deviceID, sessionID: auth.session.id, sessionExpiresAtMs: auth.session.expiresAtMs, installationID: installationID, instanceID: instanceID ?? accounts.first(where: { $0.id == id })?.instanceID, route: route)
         try keychain.save(saved)
         accounts = try keychain.load()
         try persistence.saveLastAccountID(saved.id)
@@ -192,6 +194,10 @@ import Observation
         let selection = try persistence.loadSelection(accountID: saved.id)
         if let id = selection?.conversationID, conversations.contains(where: { $0.id == id }) { selectedConversationID = id }
         else { selectedConversationID = bots.first(where: { $0.id == (selection?.botID ?? localSettings?.selectedBotId) })?.mainConversationId }
+        #if os(macOS)
+        // An SSH account's base URL is a local tunnel; open it (or close another account's) first.
+        await SSHTunnels.shared.activate(saved.route)
+        #endif
         do {
             try await refresh()
             if let id = selectedConversationID, conversations.contains(where: { $0.id == id }) { try await openConversation(id) }
@@ -210,6 +216,9 @@ import Observation
         catch { failure = error }
         if account?.id == signedOut.id {
             stopSocket(); generation = UUID(); clearLiveState(); account = nil; transport = nil
+            #if os(macOS)
+            SSHTunnels.shared.close()
+            #endif
         }
         do { try keychain.remove(signedOut.id) } catch { failure = failure ?? error }
         do { try persistence.clear(accountID: signedOut.id) } catch { failure = failure ?? error }
@@ -357,7 +366,7 @@ import Observation
     }
     private func clearLiveState() {
         providerSettings.reset()
-        connectionState = "disconnected"
+        connectionState = "disconnected"; hostSetup = .idle
         connectionIssue = nil; instanceStatus = nil; nextRetryAt = nil; lastConnectionAttemptAt = nil
         user = nil; workspace = nil; member = nil; capabilities = nil; bots = []; machines = []; conversations = []; sections = []; notifications = []; runs = []
         entries = [:]; drafts = [:]; terminalFrames = [:]; terminalGaps = [:]; terminalExits = [:]; terminalExitFrames = [:]; terminalSequences = [:]; terminalSubscriptions = []

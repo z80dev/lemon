@@ -41,7 +41,9 @@ struct BotEditorView: View {
         _title = State(initialValue: bot?.title ?? "")
         _job = State(initialValue: bot?.job ?? "")
         _instructions = State(initialValue: bot?.instructions ?? "")
-        _machineID = State(initialValue: bot?.machineId ?? "")
+        // One online machine is the obvious choice; more than one stays an explicit pick.
+        let online = store.machines.filter { $0.status == "online" }
+        _machineID = State(initialValue: bot?.machineId ?? (online.count == 1 ? online[0].id : ""))
         _shape = State(initialValue: bot?.avatar.shape ?? "round")
         _color = State(initialValue: bot?.avatar.color ?? "yellow")
         _avatarID = State(initialValue: bot?.avatar.attachmentId)

@@ -40,6 +40,11 @@ error() {
   echo -e "${RED}[lemon-tui]${NC} $1" >&2
 }
 
+# Ports chosen by `lemon setup` (~/.lemon/ports.env) apply unless the
+# environment sets the control port explicitly.
+if [ -z "${LEMON_CONTROL_PLANE_PORT:-}" ] && [ -f "$HOME/.lemon/ports.env" ]; then
+  LEMON_CONTROL_PLANE_PORT="$(sed -n 's/^LEMON_CONTROL_PLANE_PORT=\([0-9]\{1,5\}\)$/\1/p' "$HOME/.lemon/ports.env")"
+fi
 PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
 if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
   error "Invalid LEMON_CONTROL_PLANE_PORT value: $PORT"

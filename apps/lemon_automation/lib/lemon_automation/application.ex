@@ -8,16 +8,13 @@ defmodule LemonAutomation.Application do
     children =
       [
         {Task.Supervisor, name: LemonAutomation.TaskSupervisor},
-        LemonAutomation.CronManager
-      ] ++
-        daily_brief_sync() ++
-        [
-          LemonAutomation.GoalContinuationManager,
-          LemonAutomation.GoalLoopManager,
-          LemonAutomation.KanbanDispatcher,
-          LemonAutomation.SkillCuratorManager,
-          LemonAutomation.SynthesisRunnerManager
-        ]
+        LemonAutomation.CronManager,
+        LemonAutomation.GoalContinuationManager,
+        LemonAutomation.GoalLoopManager,
+        LemonAutomation.KanbanDispatcher,
+        LemonAutomation.SkillCuratorManager,
+        LemonAutomation.SynthesisRunnerManager
+      ]
 
     opts = [strategy: :one_for_one, name: LemonAutomation.Supervisor]
 
@@ -36,19 +33,5 @@ defmodule LemonAutomation.Application do
     LemonAgent.ToolRegistry.register(:cron, LemonAutomation.Tools.Cron,
       native_process_ownership: :managed
     )
-  end
-
-  # Reconcile the opt-in `[automation] daily_brief` job once CronManager is up.
-  defp daily_brief_sync do
-    if Application.get_env(:lemon_automation, :daily_brief_sync, true) do
-      [
-        Supervisor.child_spec(
-          {Task, &LemonAutomation.Heartbeat.sync_daily_brief/0},
-          id: :daily_brief_sync
-        )
-      ]
-    else
-      []
-    end
   end
 end

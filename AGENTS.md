@@ -169,8 +169,8 @@ migrate inbound links when consolidating a page.
 The VitePress site lives in `docs/`. `npm --prefix docs run build` generates
 ignored `docs/public/llms.txt` and `llms-full.txt` from current Markdown before
 building. Do not commit generated indexes. `scripts/verify_docs_site` builds in
-an isolated copy and checks links; Python 3 and Node are required. Site links
-must work under the `/lemon/` base path. See [docs hub](docs/README.md).
+an isolated copy and checks links; Python 3 and Node are required. The site is
+served at the root of `https://lemon.food/`. See [docs hub](docs/README.md).
 
 Product releases use the serialized `release.yml` workflow and CalVer; package
 releases use independent semver. Only five packages are in the publish set;

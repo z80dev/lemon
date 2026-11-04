@@ -494,6 +494,16 @@ export class SessionController {
 				) {
 					this.#replaceApprovals(session.key, []);
 				}
+				// A key minted here has no owner until its first `chat.send`. When the
+				// client also holds no run or transcript, both sides agree it is empty.
+				if (
+					ControlPlaneError.is(error, "NOT_FOUND") &&
+					!session.snapshotIdentity &&
+					!session.busy &&
+					!session.activeRunId &&
+					session.blocks.every((block) => block.kind === "notice")
+				)
+					return;
 				this.#notice(
 					`could not recover ${session.key}: ${describeError(error)}`,
 					"warning",

@@ -5,7 +5,7 @@ defmodule LemonBrowser.ProviderTest do
 
   setup do
     names =
-      ~w(LEMON_BROWSER_DRIVER_PATH LEMON_BROWSER_EXECUTABLE LEMON_BROWSER_CDP_ENDPOINT LEMON_BROWSER_ATTACH_ONLY LEMON_BROWSER_RELAY_TOKEN LEMON_BROWSER_RELAY_PORT)
+      ~w(LEMON_BROWSER_DRIVER_PATH LEMON_BROWSER_EXECUTABLE LEMON_BROWSER_CDP_ENDPOINT LEMON_BROWSER_ATTACH_ONLY LEMON_BROWSER_RELAY_TOKEN LEMON_BROWSER_RELAY_PORT LEMON_PATH)
 
     previous = Map.new(names, &{&1, System.get_env(&1)})
     Enum.each(names, &System.delete_env/1)
@@ -51,6 +51,38 @@ defmodule LemonBrowser.ProviderTest do
     assert {:ok, config} = LocalServer.configuration(ProviderProbe.driver_options("local"))
     assert config["endpoint"] == ""
     assert config["launchesBrowser"]
+  end
+
+  @tag :tmp_dir
+  test "local unavailability names the missing prerequisite", %{tmp_dir: root} do
+    # No override, no bundled driver in test builds, and an empty source root.
+    System.put_env("LEMON_PATH", root)
+    assert {:error, :driver_missing} = ProviderProbe.available?("local")
+
+    driver = Path.join(root, "local-driver.js")
+    File.write!(driver, "throw new Error('driver must not execute');")
+    File.write!(Path.join(root, "package.json"), ~s({"type":"module"}))
+    System.put_env("LEMON_BROWSER_DRIVER_PATH", driver)
+
+    # A build that predates the inspection exports.
+    File.write!(Path.join(root, "index.js"), "export const ChromeSession = class {};\n")
+    assert {:error, :driver_incompatible} = ProviderProbe.available?("local")
+
+    File.write!(
+      Path.join(root, "index.js"),
+      "export function defaultChromeExecutable() { return #{Jason.encode!(Path.join(root, "absent-chrome"))}; }\nexport function cdpDiscoveryUrl(endpoint) { return new URL('/json/version', endpoint); }\n"
+    )
+
+    assert {:error, :browser_missing} = ProviderProbe.available?("local")
+
+    path = System.get_env("PATH")
+    System.put_env("PATH", root)
+
+    try do
+      assert {:error, :node_missing} = ProviderProbe.available?("local")
+    after
+      System.put_env("PATH", path)
+    end
   end
 
   @tag :tmp_dir

@@ -43,13 +43,10 @@ detect_platform() {
 }
 
 # Platform profiles mirror scripts/verify_release_artifacts: min/full/TUI and
-# the standalone backend on every platform; sim remains Linux-only.
+# the standalone backend on every platform.
 platform_profiles() {
   case "$1" in
-    linux-x86_64|linux-arm64)
-      echo "lemon_runtime_min lemon_runtime_full sim_broadcast_platform lemon_tui lemon_bot"
-      ;;
-    darwin-arm64)
+    linux-x86_64|linux-arm64|darwin-arm64)
       echo "lemon_runtime_min lemon_runtime_full lemon_tui lemon_bot"
       ;;
     *)

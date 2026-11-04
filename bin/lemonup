@@ -39,6 +39,11 @@ BIN_DIR="$LEMON_HOME_DIR/bin"
 VERSIONS_DIR="$LEMON_HOME_DIR/versions"
 LAUNCHER="$BIN_DIR/lemon"
 RELEASE_LINK="../versions/current/bin/lemon"
+# Ports chosen by `lemon setup` (~/.lemon/ports.env) apply unless the
+# environment sets the control port explicitly.
+if [ -z "${LEMON_CONTROL_PLANE_PORT:-}" ] && [ -f "$LEMON_HOME_DIR/ports.env" ]; then
+  LEMON_CONTROL_PLANE_PORT="$(sed -n 's/^LEMON_CONTROL_PLANE_PORT=\([0-9]\{1,5\}\)$/\1/p' "$LEMON_HOME_DIR/ports.env")"
+fi
 PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
 [[ "$PORT" =~ ^[0-9]+$ ]] || die "invalid LEMON_CONTROL_PLANE_PORT: $PORT"
 

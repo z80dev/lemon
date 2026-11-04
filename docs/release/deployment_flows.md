@@ -155,7 +155,8 @@ MIX_ENV=prod mix sim_ui.assets.deploy
 MIX_ENV=prod mix do --app lemon_web phx.digest
 MIX_ENV=prod mix release lemon_runtime_full
 
-# Public sim broadcast site (dashboard + spectator UI)
+# Public sim broadcast site (dashboard + spectator UI); source/container only,
+# not a published release artifact
 MIX_ENV=prod mix sim_ui.assets.deploy
 MIX_ENV=prod mix release sim_broadcast_platform
 ```
@@ -164,6 +165,14 @@ Both full and minimal runtime compositions assemble `lemon_mcp` with release
 mode `:load`. The library has no application callback and starts no processes;
 this entry makes its client modules available to `LemonSkills.McpSource` while
 the consuming application remains responsible for supervising each connection.
+
+Both runtime profiles also bundle the local browser driver. A release step runs
+`npm ci` and `npm run build` in `clients/lemon-browser-node`, then stages `dist/`
+with production-only dependencies under `lib/lemon_browser-*/priv/driver`, so
+building either runtime requires Node.js 24 and `npm`. Installed users need only
+Node.js and Chrome/Chromium for the managed local browser.
+`scripts/verify_release_runtime_boot` fails a runtime tarball whose bundled
+driver is missing or does not load.
 
 The full profile bundles both web surfaces. `lemon_sim_ui` has an esbuild/
 tailwind pipeline, so it needs `sim_ui.assets.deploy`; `lemon_web` commits its
@@ -330,7 +339,7 @@ anonymous `/rooms/:id/watch` request.
 | `LEMON_WEB_PORT` | `4080` | Web UI HTTP port |
 | `LEMON_SIM_UI_PORT` | `4090` | Sim UI HTTP port |
 | `LEMON_SECRETS_MASTER_KEY` | *(keychain/file)* | Override secrets master key. On local Linux source runs, `bin/lemon` will normalize this from `~/.lemon/secrets_master_key` when that file exists. |
-| `LEMON_PATH` | *(source-relative)* | Override Lemon root directory |
+| `LEMON_PATH` | *(unset in releases)* | Lemon source checkout root; the source launchers set it |
 
 ### Verify health
 
@@ -355,7 +364,7 @@ endpoint during release boot before the eval expression is executed.
 |---|---|---|
 | `lemon_runtime_min` | gateway, CLI, router, channels, control-plane; MCP client library loaded on demand | Headless / API-only server |
 | `lemon_runtime_full` | + automation, skills, web, sim-ui; MCP client library loaded on demand | Full local runtime with UI |
-| `sim_broadcast_platform` | lemon_core, lemon_sim, lemon_sim_ui | Public sim broadcast deployment |
+| `sim_broadcast_platform` | lemon_core, lemon_sim, lemon_sim_ui | Public sim broadcast deployment; built from source or `apps/lemon_sim_ui/Dockerfile`, never published as a release artifact |
 | `lemon_tui` | `tui/bin/lemon-tui` | Bun-compiled client pseudo-profile, not a BEAM release |
 | `lemon_bot` | `bot/bin/lemon-bot`, packaged web build | Standalone Bun-compiled backend; not a BEAM release (see `docs/release/versioning_and_channels.md`) |
 
@@ -413,8 +422,7 @@ stopped by the TUI launcher.
 
 ## CI smoke-test flow
 
-The `release-smoke.yml` workflow exercises both release-runtime and Sim UI
-container flows end-to-end:
+The `release-smoke.yml` workflow exercises the release-runtime flow end-to-end:
 
 1. Build `lemon_runtime_min` with `MIX_ENV=prod mix release`.
 2. Launch the release as a daemon.
@@ -423,15 +431,12 @@ container flows end-to-end:
 5. Stop the release.
 6. On failure, upload logs from `_build/prod/rel/<profile>/tmp/log/` as GitHub Actions artifacts.
 
-Its `sim-container-smoke` job builds the production Dockerfile with commit
-identity, verifies UID `10001`, `/healthz`, `/readyz`, admin denial, digested
-gzip assets and immutable caching, seeds persisted Werewolf state, and performs
-a graceful stop/restart against the same mounted volume. It also boots a second
-production container with hosted mode, HTTPS URL configuration, and a creation
-invite, then verifies secure/no-store cookies and paused-room recovery after a
-restart. The hosted browser lane (`npm run smoke:hosted-werewolf`) separately
-exercises five isolated sessions, secret non-leakage, timeout, pause/resume,
-reconnect, completion, export, rematch, and the supported responsive viewports.
+No workflow builds or smoke-tests the Sim UI container. Before a sim deploy,
+build `apps/lemon_sim_ui/Dockerfile` and check it by hand: `/healthz`,
+`/readyz`, admin denial, digested assets, Werewolf persistence across a
+restart (`npm run smoke:werewolf` drives the browser checks), and, when hosted
+rooms are enabled, `npm run smoke:hosted-werewolf` against the candidate with
+five isolated sessions plus a restart against the same volume.
 
 ---
 
@@ -450,7 +455,11 @@ reconnect, completion, export, rematch, and the supported responsive viewports.
 
 The public website and documentation share the VitePress project in `docs/`.
 Markdown remains the source of truth; `docs/.vitepress/theme/` supplies the
-homepage and shared visual theme. Brand SVG assets live in `docs/public/brand/`.
+homepage and shared visual theme. `LemonFace.vue` draws the mascot with the
+Lemon Bot geometry and palette; reuse it rather than adding mascot images.
+Brand assets (favicon mark, README banner, social card) live in
+`docs/public/brand/`. Fonts are self-hosted through `@fontsource-variable`
+packages, so the site makes no third-party font requests.
 Relative Markdown links into the repository source are rewritten to GitHub by
 `docs/.vitepress/source-links.mjs`; `npm test --prefix docs` checks this behavior.
 This static site deploys independently of Lemon runtime releases.
@@ -474,21 +483,26 @@ use GitHub Actions, docs changes pushed to `main` deploy automatically. To redep
 gh workflow run docs-site.yml --ref main -f deploy=true
 ```
 
-The default production URL is `https://z80dev.github.io/lemon/`. Verify the
-homepage, quickstart, search, mobile navigation, and brand assets after deployment.
-To roll back a presentation change, revert its commit on `main` and let the same
-workflow publish the previous site. No runtime release or restart is required.
+The production URL is `https://lemon.food/`, served at the domain root (VitePress
+`base: "/"`). Verify the homepage, quickstart, search, mobile navigation, and
+brand assets after deployment. To roll back a presentation change, revert its
+commit on `main` and let the same workflow publish the previous site. No runtime
+release or restart is required.
 
-### Connect a custom domain
+### Custom domain
 
-A domain is optional. Once registered, configure it in the repository's Pages
-settings and add the DNS records GitHub specifies. Verify domain ownership and
-wait for HTTPS to become available before advertising the address. Follow
-[GitHub's custom-domain guide](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site).
+`lemon.food` is registered at Porkbun, which hosts its DNS. The repository's
+Pages settings carry the custom domain with HTTPS enforced. DNS records follow
+[GitHub's custom-domain guide](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site):
 
-For a domain served at its root, change the VitePress `base` from `/lemon/` to `/`.
-Update the favicon and social-image URLs in `docs/.vitepress/config.js`, `SITE`
-in `scripts/generate_docs_llms.py`, and public website links in the README and
-docs. Regenerate the machine-readable docs, rebuild, and verify the new HTTPS
-origin and deep links. Keep every homepage link base-aware with VitePress
-`withBase` so both project-path and custom-domain deployments work.
+|Name|Type|Content|
+|---|---|---|
+|`lemon.food`|`A`|`185.199.108.153`, `185.199.109.153`, `185.199.110.153`, `185.199.111.153`|
+|`lemon.food`|`AAAA`|`2606:50c0:8000::153`, `2606:50c0:8001::153`, `2606:50c0:8002::153`, `2606:50c0:8003::153`|
+|`www.lemon.food`|`CNAME`|`z80dev.github.io`|
+
+Do not add wildcard records; GitHub warns they allow subdomain takeover.
+
+Changing the domain means updating those records, the Pages custom domain,
+`SITE` in `scripts/generate_docs_llms.py`, and public website links in the
+README and docs. Keep homepage links base-aware with VitePress `withBase`.

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { version } from './package.json';
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
-  const target = env.LEMON_BOT_DEV_BACKEND || 'http://127.0.0.1:4080';
+  const target = env.LEMON_BOT_DEV_BACKEND || 'http://127.0.0.1:4100';
   return {
     plugins: [react()],
     define: { __APP_VERSION__: JSON.stringify(version) },

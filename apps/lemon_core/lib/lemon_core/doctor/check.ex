@@ -51,6 +51,29 @@ defmodule LemonCore.Doctor.Check do
     %__MODULE__{name: name, status: :skip, message: message}
   end
 
+  @doc """
+  Builds the skip for a check whose subject lives in the runtime process.
+
+  `runtime` is the `:runtime` option `LemonCore.Doctor.report/1` passes to
+  check modules: `:external` when a standalone CLI found a separate healthy
+  runtime, `:absent` when no runtime answered.
+  """
+  @spec outside_runtime(String.t(), String.t(), :external | :absent) :: t()
+  def outside_runtime(name, subject, :external) do
+    skip(
+      name,
+      "A separate Lemon runtime is healthy; #{subject} cannot be checked from this CLI process."
+    )
+  end
+
+  def outside_runtime(name, subject, :absent) do
+    skip(
+      name,
+      "No Lemon runtime is running, so #{subject} was not checked. " <>
+        "Start Lemon with `lemon` or `lemon start`, then run `lemon doctor` again."
+    )
+  end
+
   @doc "Returns the ANSI color atom for a status."
   @spec color(status()) :: atom()
   def color(:pass), do: :green

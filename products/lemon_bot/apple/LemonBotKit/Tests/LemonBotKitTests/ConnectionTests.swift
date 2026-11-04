@@ -173,18 +173,4 @@ private final class ConnectionCredentials: AccountCredentialStore {
         value.member?.role = "member"
         XCTAssertFalse(value.canViewInstance); XCTAssertFalse(value.canControlInstance)
     }
-    func testDiscoveryUsesOnlyPublicSetupWithShortTimeoutAndDeduplicatesOrigins() async throws {
-        let value = try store()
-        value.accounts = [value.account!, value.account!]
-        TestHTTPProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/setup"); XCTAssertEqual(request.httpMethod, "GET")
-            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization")); XCTAssertEqual(request.timeoutInterval, 2)
-            if request.url?.host == "localhost" { throw URLError(.timedOut) }
-            return (200, [:], Data(#"{"setupRequired":false,"version":"0.1.0","apiVersion":1}"#.utf8))
-        }
-        let found = await value.discoverBackends()
-        XCTAssertEqual(found.count, 2)
-        XCTAssertEqual(Set(found.map { $0.baseURL.host! }), ["product.example", "127.0.0.1"])
-        XCTAssertTrue(found.allSatisfy { $0.version == "0.1.0" && !$0.setupRequired })
-    }
 }

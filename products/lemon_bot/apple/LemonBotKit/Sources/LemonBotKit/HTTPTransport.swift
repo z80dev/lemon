@@ -75,6 +75,16 @@ public struct HTTPTransport {
         try validate(data, response)
         return try JSONDecoder().decode(PairingPreviewResult.self, from: data)
     }
+    /// `POST /auth/local`, authorized by this transport's token: the machine's private local-access key.
+    /// No mutation nonce: an unanswered attempt leaves at most an unused session, so repeating it is safe.
+    public func localAccess(displayName: String) async throws -> AuthResult {
+        var request = try request("POST", "/auth/local")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["displayName": String(displayName.prefix(120))])
+        let (data, response) = try await session.data(for: request)
+        try validate(data, response)
+        return try JSONDecoder().decode(AuthResult.self, from: data)
+    }
     /// One attempt only. Caller retains the nonce and reconciles an uncertain outcome instead of resubmitting.
     public func mutate<T: Decodable>(_ method: String, _ path: String, body: JSONObject, as: T.Type = T.self) async throws -> T {
         guard ["POST", "PATCH", "PUT", "DELETE"].contains(method) else { throw ClientError.invalidPath }

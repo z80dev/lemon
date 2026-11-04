@@ -1,7 +1,7 @@
 defmodule LemonAutomation.CronManagerMonitorTest do
   use ExUnit.Case, async: false
 
-  alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore}
+  alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore, TestCronManager}
   alias LemonCore.{Bus, Event}
 
   defmodule MonitorSubmitter do
@@ -119,6 +119,8 @@ defmodule LemonAutomation.CronManagerMonitorTest do
   end
 
   test "suppression state survives a CronManager restart", %{job: job} do
+    TestCronManager.isolate!()
+
     first_run_id = dispatch(job, 1)
     assert_receive {:cron_submit, _job_id, ^first_run_id, :schedule}, 5_000
     assert await(fn -> completed?(first_run_id) end)

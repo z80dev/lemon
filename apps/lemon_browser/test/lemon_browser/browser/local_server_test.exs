@@ -111,9 +111,13 @@ defmodule LemonBrowser.LocalServerTest do
       end)
     end
 
-    test "returns not built error when cwd has no driver", %{server: server} do
+    @tag :tmp_dir
+    test "returns not found error when no bundled or source driver exists", %{
+      server: server,
+      tmp_dir: root
+    } do
       with_driver_env(nil, fn ->
-        with_cwd(System.tmp_dir!(), fn ->
+        with_env("LEMON_PATH", root, fn ->
           assert {:error, message} =
                    LocalServer.request(
                      server,
@@ -122,7 +126,20 @@ defmodule LemonBrowser.LocalServerTest do
                      1_000
                    )
 
-          assert message =~ "Local browser driver not built"
+          assert message =~ "Local browser driver not found"
+        end)
+      end)
+    end
+
+    @tag :tmp_dir
+    test "resolves a source checkout's driver from LEMON_PATH, not the cwd", %{tmp_dir: root} do
+      driver = Path.join(root, "clients/lemon-browser-node/dist/local-driver.js")
+      File.mkdir_p!(Path.dirname(driver))
+      File.write!(driver, "process.exit(0);")
+
+      with_driver_env(nil, fn ->
+        with_env("LEMON_PATH", root, fn ->
+          assert {:ok, %{"driverPath" => ^driver}} = LocalServer.configuration()
         end)
       end)
     end
@@ -216,17 +233,6 @@ defmodule LemonBrowser.LocalServerTest do
       end)
     after
       File.rm_rf!(dir)
-    end
-  end
-
-  defp with_cwd(path, fun) when is_binary(path) and is_function(fun, 0) do
-    original = File.cwd!()
-    File.cd!(path)
-
-    try do
-      fun.()
-    after
-      File.cd!(original)
     end
   end
 end

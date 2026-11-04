@@ -4,8 +4,10 @@ Install Lemon, connect a model, make one small repository change, and keep the
 same session for larger work. You need an interactive terminal on macOS (Apple
 Silicon) or Linux (x86_64 or ARM64), `curl`, `tar`, `python3`, and an account
 with a model provider. The prebuilt release bundles its own Erlang/Elixir
-runtime and the terminal client, so you do not install either. Model requests
-use your provider's account.
+runtime, the terminal client and the browser-automation driver, so you do not
+install any of them. Browser tools additionally need Node.js 24 or later and
+Chrome/Chromium; `lemon doctor` reports what is missing. Model requests use
+your provider's account.
 
 Other platforms or a container: see [Install](../install.md).
 
@@ -28,10 +30,10 @@ LiteLLM) and API-key login are also supported; see
 [Set up Lemon](../user-guide/setup.md). Accept the offered default model, or pick
 another one your account can use.
 
-Skip the optional daily brief and runtime configuration for now. Setup is safe to
-rerun: a usable provider is kept, not logged in again. If a Hermes home is found,
-setup first shows a read-only audit and offers a no-by-default import without
-secrets. Do not paste credentials into chat or a repository.
+Setup is safe to rerun: a usable provider is kept, not logged in again. It only
+asks about ports if one is already taken, and suggests a free one. Do not paste
+credentials into chat or a repository. Coming from Hermes? Run
+`lemon migrate hermes` after setup.
 
 Setup prints **Setup complete** only after a passing live credential check. If
 you installed with `--skip-setup`, had no terminal when installing, or stopped

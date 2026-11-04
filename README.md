@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/public/brand/lemon-banner.svg" alt="Lemon — Your agents. Your machine. Your move." width="100%">
+<img src="docs/public/brand/lemon-banner.svg" alt="Lemon — Your agents. Your machine. Your move. The smiling lemon mascot with its crew of pastel lemon helpers." width="100%">
 
 # Lemon 🍋
 
@@ -8,11 +8,11 @@
 Pair with it in your terminal, hand it work from your phone, and let it keep going while you sleep,
 all on a runtime you own.
 
-[Docs](https://z80dev.github.io/lemon/) · [Quickstart](docs/getting-started/quickstart.md) · [Releases](https://github.com/z80dev/lemon/releases) · [Changelog](CHANGELOG.md)
+[Docs](https://lemon.food/) · [Quickstart](docs/getting-started/quickstart.md) · [Releases](https://github.com/z80dev/lemon/releases) · [Changelog](CHANGELOG.md)
 
-<a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-58A6FF?style=flat&colorA=222222" alt="MIT license"></a>
-<a href="https://z80dev.github.io/lemon/"><img src="https://img.shields.io/badge/docs-z80dev.github.io%2Flemon-FFD700?style=flat&colorA=222222" alt="Documentation"></a>
-<img src="https://img.shields.io/badge/Elixir%2FOTP-4B275F?style=flat&colorA=222222&logo=elixir&logoColor=white" alt="Elixir/OTP">
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-A3CA98?style=flat&colorA=2B312A" alt="MIT license"></a>
+<a href="https://lemon.food/"><img src="https://img.shields.io/badge/docs-lemon.food-E9D474?style=flat&colorA=2B312A" alt="Documentation"></a>
+<img src="https://img.shields.io/badge/Elixir%2FOTP-BDB2E3?style=flat&colorA=2B312A&logo=elixir&logoColor=white" alt="Elixir/OTP">
 
 </div>
 

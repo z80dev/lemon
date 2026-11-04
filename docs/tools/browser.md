@@ -76,13 +76,15 @@ Lemon never performs these changes for you.
 
 ## Enabling and configuration
 
-The managed `local` provider needs the Node driver built once:
+The managed `local` provider needs Node.js 24 or later and Chrome/Chromium.
+Release installs bundle the Node driver. A source checkout builds it once:
 
 ```bash
-cd clients/lemon-browser-node
-npm install
-npm run build
+npm --prefix clients/lemon-browser-node install
+npm --prefix clients/lemon-browser-node run build
 ```
+
+`lemon doctor` reports which prerequisite is missing under `browser.provider`.
 
 Environment variables read by `lemon_browser` (from
 `apps/lemon_browser/lib/lemon_browser/env.ex`):
@@ -91,7 +93,7 @@ Environment variables read by `lemon_browser` (from
 | --- | --- | --- |
 | `LEMON_BROWSER_PROVIDER` | `auto` | Unified provider selection; see [Choosing a browser provider](#choosing-a-browser-provider). |
 | `LEMON_BROWSER_BACKEND` | `local` | Backend id: `local`, `controller`, `hybrid`, `browserbase`, `browser_use`, `firecrawl`, or `camofox`. |
-| `LEMON_BROWSER_DRIVER_PATH` | unset | Path to the driver program. Otherwise `clients/lemon-browser-node/dist/local-driver.js` is used relative to the working directory. |
+| `LEMON_BROWSER_DRIVER_PATH` | unset | Path to the driver program. Otherwise the driver bundled in a release (`lemon_browser` `priv/driver`) is used, then `clients/lemon-browser-node/dist/local-driver.js` under the source checkout (`LEMON_PATH`). The working directory is not searched. |
 | `LEMON_BROWSER_CDP_ENDPOINT` | unset | CDP websocket endpoint to attach to instead of launching a browser. |
 | `LEMON_BROWSER_ATTACH_ONLY` | `false` | Attach only; never launch a browser. |
 | `LEMON_BROWSER_CDP_PORT` | `18800` | Local CDP port for a managed browser. Only positive integers are accepted. |
@@ -117,7 +119,7 @@ the environment variables take precedence. Leave both unset to retain the
 Lemon-owned profile. Stop the local browser before changing either setting:
 an active driver refuses identity changes rather than reusing another profile.
 
-Driver resolution failures are reported as `Local browser driver not built`
+Driver resolution failures are reported as `Local browser driver not found`
 or `node executable not found on PATH` and remembered in driver status; the
 supervision tree stays up.
 
@@ -237,8 +239,11 @@ Notes:
 
 ## Troubleshooting
 
-- `Local browser driver not built`: run `npm install && npm run build` in
-  `clients/lemon-browser-node`, or set `LEMON_BROWSER_DRIVER_PATH`.
+- `Local browser driver not found`: reinstall Lemon (releases bundle the
+  driver), set `LEMON_BROWSER_DRIVER_PATH`, or in a source checkout run
+  `npm install && npm run build` in `clients/lemon-browser-node`.
+- `The local browser driver could not be loaded` (doctor): the build predates
+  the installed Lemon; reinstall, or rebuild `clients/lemon-browser-node`.
 - `node executable not found on PATH`: install Node.js 24 LTS or later.
 - `Could not find Chrome/Chromium executable`: install Chrome/Chromium or set
   `LEMON_BROWSER_EXECUTABLE`.

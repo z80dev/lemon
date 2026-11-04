@@ -57,6 +57,18 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Changed
 
+- `lemon setup` no longer asks about the runtime profile or a Hermes import,
+  and a first run no longer prints the step status or config/secret file
+  messages. It checks the control-plane (and, for the full runtime, web) port;
+  when another program holds one, it offers the next free port with a `[Y/n]`
+  prompt (automatic with `--non-interactive`) and saves it to
+  `~/.lemon/ports.env` via `LemonCli.Setup.Ports`. `lemon setup runtime` saves
+  ports to that file instead of printing `export` lines. Both launchers,
+  `lemonup` and `bin/lemon-tui` load it into unset port variables, and the
+  launchers export the resolved ports to child processes.
+
+- Removed `lemon setup --daily-brief`; schedule a brief as an ordinary cron job.
+
 - Terminal onboarding, logout and provider-management writes share per-config
   serialization and compensated encrypted-secret/config persistence. Config is
   bounded, TOML-validated and atomically replaced with private permissions in the

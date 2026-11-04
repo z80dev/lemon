@@ -8,7 +8,7 @@ description: Lemon is an open-source, local-first AI assistant platform. Work ac
 
 <LemonHome />
 
-<div class="home-docs-index">
+<div class="home-docs-index vp-doc">
 
 ## What is Lemon?
 

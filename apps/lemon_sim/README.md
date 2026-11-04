@@ -40,9 +40,9 @@ There are four scenarios in this app:
   assignment; it is the second league/arena scenario (ranked mode on final
   chip stacks). It needs provider credentials to run.
 - `VendingBench` is the operator/physical-worker vending business benchmark,
-  with deterministic CI, paper, V2, offline Arena, and live multi-agent Arena
-  modes. It is the only scenario with keyless suites and a CI byte-determinism
-  gate.
+  with deterministic CI-preset, paper, V2, offline Arena, and live multi-agent
+  Arena modes. It is the only scenario with keyless suites and a
+  byte-determinism gate.
 
 ## Run
 
@@ -155,9 +155,10 @@ mix lemon.sim.score path/to/run
 [`test/lemon_sim/determinism_test.exs`](test/lemon_sim/determinism_test.exs)
 runs the offline VendingBench strategy (a scripted decider, no LLM) twice with
 one seed and asserts both the in-memory final world state and every artifact's
-sha256 in `hashes.json` are identical. It is fast (~0.2s) and fully offline, so
-it belongs in the CI lane, and `scripts/ci_sim_bench.sh` repeats the check on
-the CLI with a double-run `diff -r`. The `deterministic_artifacts?: true` option
+sha256 in `hashes.json` are identical. It is fast (~0.2s) and fully offline, and
+`scripts/sim_bench.sh` repeats the check on the CLI with a double-run
+`diff -r`. CI runs neither LemonSim's tests nor its benchmarks; run them locally
+before merging a LemonSim change. The `deterministic_artifacts?: true` option
 pins the two knobs that are nondeterministic by design (a unique run id and the
 wall-clock timestamp).
 
@@ -205,16 +206,16 @@ Suite run adapters are currently available for `vending_bench` and
 `vending_bench_arena`. Other registered scorecards can be recompute-verified
 from artifact bundles but do not yet have suite runners.
 
-The keyless CI smoke lane is:
+The keyless local benchmark lane is:
 
 ```bash
-scripts/ci_sim_bench.sh
+scripts/sim_bench.sh
 ```
 
-It runs deterministic offline suites for VendingBench and VendingBench Arena
-under `$RUNNER_TEMP` or `tmp/`, verifies and scores every produced run bundle,
-writes cross-suite ratings, and checks VendingBench byte-reproducible artifact
-output with a double-run `diff -r` gate.
+It runs deterministic offline suites for VendingBench, VendingBench Arena,
+Werewolf and Poker under `tmp/sim-bench` (override with `SIM_BENCH_WORK_DIR`),
+verifies and scores every produced run bundle, writes cross-suite ratings, and
+checks byte-reproducible artifact output with double-run `diff -r` gates.
 
 That writes `/tmp/vending-suite/suite.json`, one verified bundle per
 competitor/seed under `/tmp/vending-suite/runs/`, and

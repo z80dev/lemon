@@ -4,8 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-BASE_TEMP="${RUNNER_TEMP:-$ROOT/tmp}"
-WORK_DIR="${SIM_BENCH_WORK_DIR:-$BASE_TEMP/sim-bench-ci}"
+WORK_DIR="${SIM_BENCH_WORK_DIR:-$ROOT/tmp/sim-bench}"
 SUITE_ROOT="$WORK_DIR/suites"
 RATINGS_DIR="$WORK_DIR/ratings"
 SCORES_DIR="$WORK_DIR/scores"

@@ -139,7 +139,6 @@ defmodule LemonCli.CommandRegistry do
         option("--non-interactive, -n", ["--non-interactive", "-n"], "Skip prompts"),
         option("--config-path PATH", ["--config-path"], "Config file to read or write"),
         option("--skip-verify", ["--skip-verify"], "Defer live provider verification"),
-        option("--daily-brief HH:MM", ["--daily-brief"], "Daily brief time (non-interactive)"),
         option("--set-default", ["--set-default"], "Set the provider and model as defaults"),
         option(
           "--provider NAME",

@@ -68,7 +68,7 @@ async function main(): Promise<number> {
   if (serve.code === -1 && process.platform === 'darwin') serve = await command(['/Applications/Tailscale.app/Contents/MacOS/Tailscale', 'serve', 'status', '--json']);
   let routes: ServeRoute[] = [];
   try { if (serve.code === 0) routes = serveRoutes(JSON.parse(serve.text)); } catch { /* No raw output. */ }
-  report.serve = { exitCode: serve.code, routes, note: 'Read-only tailscale serve status; route metadata is not product verification. Port 4080 may be Phoenix Web.' };
+  report.serve = { exitCode: serve.code, routes, note: 'Read-only tailscale serve status; route metadata is not product verification. Lemon Bot defaults to port 4100; port 4080 is normally Lemon Web (Phoenix).' };
   const listener = await command(['lsof', '-nP', '-iTCP', '-sTCP:LISTEN', '-Fpcn']);
   // Only process names/PIDs for relevant ports, never argv/environment.
   const listeners: { pid: number; command: string; port: number }[] = [];
@@ -77,7 +77,7 @@ async function main(): Promise<number> {
     if (/^p\d+$/.test(line)) pid = Number(line.slice(1));
     if (/^c[a-zA-Z0-9_.-]+$/.test(line)) name = line.slice(1);
     const match = line.match(/^n.*:(\d+)$/);
-    if (match && (['bun', 'lemon-bot', 'lemon_bot'].includes(name) || ['4080', '8448'].includes(match[1]))) listeners.push({ pid, command: name, port: Number(match[1]) });
+    if (match && (['bun', 'lemon-bot', 'lemon_bot'].includes(name) || ['4100', '4080', '8448'].includes(match[1]))) listeners.push({ pid, command: name, port: Number(match[1]) });
   }
   report.listeners = { exitCode: listener.code, listeners };
   const xcode = await command(['xcodebuild', '-version']);
@@ -86,7 +86,7 @@ async function main(): Promise<number> {
   const metal = await command(['xcrun', '--find', 'metal']);
   const signing = await command(['security', 'find-identity', '-v', '-p', 'codesigning']);
   report.build = { xcode: xcode.text.match(/Xcode [0-9.]+/)?.[0] ?? 'unavailable', xcodegen: gen.text.match(/[0-9]+\.[0-9]+\.[0-9]+/)?.[0] ?? 'unavailable', deviceSdk: sdk.code === 0 ? sdk.text.trim().match(/^[0-9.]+$/)?.[0] ?? 'unknown' : 'unavailable', metalAvailable: metal.code === 0, signingIdentities: Number(signing.text.match(/(\d+) valid identities found/)?.[1] ?? -1), signingNote: 'Metadata only; no private keys, profiles, devices or installation inspected. Team/profile/entitlement match remains operator-owned.' };
-  report.local = await checkOrigin(options['--local-origin'] ?? 'http://127.0.0.1:4080', instanceId ?? 'untrusted-discovery-no-baseline', instanceId ? workspaceId !== null : true, 'same-machine');
+  report.local = await checkOrigin(options['--local-origin'] ?? 'http://127.0.0.1:4100', instanceId ?? 'untrusted-discovery-no-baseline', instanceId ? workspaceId !== null : true, 'same-machine');
   const discoveredServices = [];
   for (const port of new Set(listeners.filter(listener => ['bun', 'lemon-bot', 'lemon_bot'].includes(listener.command)).map(listener => listener.port))) {
     const result = await checkOrigin(`http://127.0.0.1:${port}`, instanceId ?? 'untrusted-discovery-no-baseline', instanceId ? workspaceId !== null : true, 'same-machine');

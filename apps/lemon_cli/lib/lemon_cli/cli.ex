@@ -398,16 +398,16 @@ defmodule LemonCli.CLI do
       true ->
         ensure_apps_started!([:lemon_core])
 
-        external_runtime? =
-          Health.running?(Env.resolve().control_port,
-            timeout_ms: 500
-          )
+        runtime =
+          if Health.running?(Env.resolve().control_port, timeout_ms: 500),
+            do: :external,
+            else: :absent
 
         report =
           opts
           |> Keyword.take([:project_dir, :live])
           |> put_live_provider(opts[:provider])
-          |> Keyword.put(:external_runtime?, external_runtime?)
+          |> Keyword.put(:runtime, runtime)
           |> Doctor.report()
 
         if opts[:json] do

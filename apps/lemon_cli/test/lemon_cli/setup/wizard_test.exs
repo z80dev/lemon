@@ -18,6 +18,8 @@ defmodule LemonCli.Setup.WizardTest do
     }
   end
 
+  @port_vars ["LEMON_CONTROL_PLANE_PORT", "LEMON_WEB_PORT", "LEMON_SIM_UI_PORT"]
+
   setup do
     tmp_dir =
       Path.join(System.tmp_dir!(), "lemon_setup_wizard_#{System.unique_integer([:positive])}")
@@ -39,6 +41,10 @@ defmodule LemonCli.Setup.WizardTest do
     Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env, :file])
     clear_secrets_table()
 
+    # Probes in the full wizard must not depend on what this machine listens on.
+    original_ports = Map.new(@port_vars, &{&1, System.get_env(&1)})
+    Enum.each(@port_vars, &System.put_env(&1, Integer.to_string(unused_port())))
+
     on_exit(fn ->
       if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
 
@@ -49,6 +55,11 @@ defmodule LemonCli.Setup.WizardTest do
       if original_secrets_config,
         do: Application.put_env(:lemon_core, LemonCore.Secrets, original_secrets_config),
         else: Application.delete_env(:lemon_core, LemonCore.Secrets)
+
+      Enum.each(original_ports, fn
+        {var, nil} -> System.delete_env(var)
+        {var, value} -> System.put_env(var, value)
+      end)
 
       clear_secrets_table()
       File.rm_rf!(tmp_dir)
@@ -90,20 +101,97 @@ defmodule LemonCli.Setup.WizardTest do
         events = drain_events([])
         assert error_event?(events, &String.contains?(&1, "1 to 65535"))
         assert prompt_events(events) == []
-        refute info_event?(events, &String.contains?(&1, "To persist"))
+        refute File.exists?(Path.join(System.get_env("HOME"), ".lemon/ports.env"))
       end
     end
 
-    test "interactive invalid profiles and ports re-prompt" do
+    test "interactive invalid profiles and ports re-prompt", %{home: home} do
       io = recording_io(["0", "typo", "999", "runtime_min", "abc", "0", "65536", "5050", "", ""])
       assert :ok = Wizard.run_runtime([], io)
       events = drain_events([])
       assert error_event?(events, &String.contains?(&1, "Invalid profile"))
       assert error_event?(events, &String.contains?(&1, "Invalid port"))
       assert info_event?(events, &String.contains?(&1, "Runtime profile: runtime_min"))
-      assert info_event?(events, &String.contains?(&1, "LEMON_CONTROL_PLANE_PORT=5050"))
+      assert File.read!(Path.join(home, ".lemon/ports.env")) =~ "LEMON_CONTROL_PLANE_PORT=5050\n"
+      assert System.get_env("LEMON_CONTROL_PLANE_PORT") == "5050"
       assert Enum.count(prompt_events(events), &String.contains?(&1, "Choose profile")) == 4
       assert Enum.count(prompt_events(events), &String.contains?(&1, "control-plane port")) == 4
+    end
+  end
+
+  describe "run_full/3 — ports" do
+    setup %{config_path: path} do
+      configure_ready_provider(path)
+      System.put_env("LEMON_CONTROL_PLANE_PORT", "4040")
+      System.put_env("LEMON_WEB_PORT", "4080")
+
+      {:ok,
+       opts: [
+         config_path: path,
+         verifier: fn _ -> {:ok, %{}} end,
+         lemon_running?: fn _ -> false end
+       ]}
+    end
+
+    test "an occupied port is replaced by the confirmed suggestion and saved", ctx do
+      opts = [port_free?: &(&1 not in [4040, 4041]), launch: false] ++ ctx.opts
+      assert :ok = Wizard.run_full([], recording_io([""]), opts)
+
+      events = drain_events([])
+
+      assert "Port 4040 for the control plane is already in use. Use 4042 instead? [Y/n]: " in prompt_events(
+               events
+             )
+
+      assert File.read!(Path.join(ctx.home, ".lemon/ports.env")) ==
+               "LEMON_CONTROL_PLANE_PORT=4042\nLEMON_WEB_PORT=4080\nLEMON_SIM_UI_PORT=" <>
+                 "#{System.get_env("LEMON_SIM_UI_PORT")}\n"
+
+      assert System.get_env("LEMON_CONTROL_PLANE_PORT") == "4042"
+    end
+
+    test "declining the suggestion asks until a free port is entered", ctx do
+      opts = [port_free?: &(&1 not in [4080, 5000]), launch: false] ++ ctx.opts
+      assert :ok = Wizard.run_full([], recording_io(["n", "4040", "5000", "x", "5001"]), opts)
+
+      events = drain_events([])
+      assert error_event?(events, &(&1 == "Port 4040 is also in use. Choose another port."))
+      assert error_event?(events, &(&1 == "Port 5000 is also in use. Choose another port."))
+      assert error_event?(events, &(&1 == "Enter a port from 1 to 65535."))
+      assert System.get_env("LEMON_WEB_PORT") == "5001"
+      assert System.get_env("LEMON_CONTROL_PLANE_PORT") == "4040"
+    end
+
+    test "non-interactive setup picks the suggestion without asking", ctx do
+      opts = [port_free?: &(&1 != 4080), non_interactive: true] ++ ctx.opts
+      assert :ok = Wizard.run_full([], recording_io(), opts)
+
+      events = drain_events([])
+      assert prompt_events(events) == []
+
+      assert info_event?(
+               events,
+               &(&1 == "Port 4080 for the web UI is in use; Lemon will use 4081.")
+             )
+
+      assert System.get_env("LEMON_WEB_PORT") == "4081"
+    end
+
+    test "free ports, or ports owned by a running Lemon, are left alone", ctx do
+      for opts <- [
+            [port_free?: fn _ -> true end],
+            [lemon_running?: fn 4040 -> true end, port_free?: fn _ -> flunk("probed") end]
+          ] do
+        assert :ok =
+                 Wizard.run_full(
+                   [],
+                   recording_io(),
+                   Keyword.merge(ctx.opts, [non_interactive: true] ++ opts)
+                 )
+
+        refute File.exists?(Path.join(ctx.home, ".lemon/ports.env"))
+        assert System.get_env("LEMON_CONTROL_PLANE_PORT") == "4040"
+      end
     end
   end
 
@@ -121,7 +209,7 @@ defmodule LemonCli.Setup.WizardTest do
     end
 
     test "declining provider onboarding is unfinished, not failed", %{config_path: path} do
-      io = recording_io(["n", "n", "n"])
+      io = recording_io(["n"])
       assert {:error, :setup_incomplete} = Wizard.run_full([], io, config_path: path)
       events = drain_events([])
       assert info_event?(events, &String.contains?(&1, "Setup unfinished — pending steps"))
@@ -154,7 +242,8 @@ defmodule LemonCli.Setup.WizardTest do
 
       events = drain_events([])
 
-      assert info_event?(events, &String.contains?(squish(&1), "[pending] provider"))
+      # A first run has no step status to report.
+      refute info_event?(events, &String.contains?(&1, "Setup status"))
       assert info_event?(events, &String.contains?(&1, "lemon setup provider"))
       assert info_event?(events, &String.contains?(&1, "Setup unfinished"))
 
@@ -191,8 +280,6 @@ defmodule LemonCli.Setup.WizardTest do
       assert info_event?(events, &String.contains?(squish(&1), "[done] secrets"))
       assert info_event?(events, &String.contains?(squish(&1), "[pending] provider"))
       assert info_event?(events, &String.contains?(&1, "Setup unfinished"))
-      refute info_event?(events, &String.contains?(&1, "initializing one now"))
-      refute info_event?(events, &String.contains?(&1, "Creating minimal config"))
     end
   end
 
@@ -305,8 +392,7 @@ defmodule LemonCli.Setup.WizardTest do
         api_key_secret = "wizard_openai_key"
       """)
 
-      # Scripted answers: decline the optional daily brief and runtime configuration.
-      io = recording_io(["n", "n"])
+      io = recording_io()
 
       assert Wizard.run_full([], io, config_path: config_path, verifier: fn _ -> {:ok, %{}} end) ==
                :ok
@@ -319,15 +405,8 @@ defmodule LemonCli.Setup.WizardTest do
       assert info_event?(events, &String.contains?(&1, "Provider already configured"))
       assert info_event?(events, &String.contains?(&1, "Setup complete"))
 
-      # Provider onboarding is never asked for again; runtime stays optional.
-      assert Enum.any?(prompt_events(events), &String.contains?(&1, "Configure runtime profile"))
-      assert Enum.any?(prompt_events(events), &String.contains?(&1, "daily brief"))
-      refute File.read!(config_path) =~ "[automation]"
-
-      assert Enum.all?(
-               prompt_events(events),
-               &(not String.contains?(&1, "Onboard an AI provider"))
-             )
+      # Provider onboarding, runtime profile, and ports are never asked.
+      assert prompt_events(events) == []
 
       assert info_event?(events, &String.contains?(&1, "Verifying provider"))
       assert info_event?(events, &String.contains?(&1, "lemon doctor"))
@@ -366,12 +445,11 @@ defmodule LemonCli.Setup.WizardTest do
       configure_ready_provider(path)
 
       for answer <- ["", "yes", "n"] do
-        io = Map.put(recording_io(["n", "n", answer]), :interactive?, fn -> true end)
+        io = Map.put(recording_io([answer]), :interactive?, fn -> true end)
 
         assert :ok =
                  Wizard.run_full([], io,
                    config_path: path,
-                   hermes_home: path <> ".absent",
                    verifier: fn _ -> {:ok, %{}} end,
                    launcher: fn ->
                      send(self(), :launched)
@@ -396,7 +474,7 @@ defmodule LemonCli.Setup.WizardTest do
             [non_interactive: true, tty: true],
             [verifier: fn _ -> {:error, :unauthorized} end, tty: true]
           ] do
-        io = recording_io(["n", "n"])
+        io = recording_io()
         io = if opts[:tty], do: Map.put(io, :interactive?, fn -> true end), else: io
 
         Wizard.run_full(
@@ -405,7 +483,6 @@ defmodule LemonCli.Setup.WizardTest do
           Keyword.merge(
             [
               config_path: path,
-              hermes_home: path <> ".absent",
               verifier: fn _ -> {:ok, %{}} end,
               launcher: fn -> flunk("launcher must not run") end
             ],
@@ -419,12 +496,11 @@ defmodule LemonCli.Setup.WizardTest do
 
     test "launcher failure keeps a manual try-it-now path", %{config_path: path} do
       configure_ready_provider(path)
-      io = Map.put(recording_io(["n", "n", "y"]), :interactive?, fn -> true end)
+      io = Map.put(recording_io(["y"]), :interactive?, fn -> true end)
 
       assert :ok =
                Wizard.run_full([], io,
                  config_path: path,
-                 hermes_home: path <> ".absent",
                  verifier: fn _ -> {:ok, %{}} end,
                  launcher: fn -> {:error, :unavailable} end
                )
@@ -469,209 +545,6 @@ defmodule LemonCli.Setup.WizardTest do
         assert info_event?(events, &String.contains?(&1, "not live-verified"))
         refute info_event?(events, &String.contains?(&1, "Setup complete"))
       end
-    end
-  end
-
-  describe "run_full/3 — Hermes detection" do
-    test "discovers HERMES_HOME or the default home directory", ctx do
-      original = System.get_env("HERMES_HOME")
-
-      on_exit(fn ->
-        if original,
-          do: System.put_env("HERMES_HOME", original),
-          else: System.delete_env("HERMES_HOME")
-      end)
-
-      source = hermes_fixture(ctx.tmp_dir)
-      System.put_env("HERMES_HOME", source)
-
-      for mode <- [:environment, :default] do
-        if mode == :default do
-          System.delete_env("HERMES_HOME")
-          File.rename!(source, Path.join(ctx.home, ".hermes"))
-        end
-
-        io = Map.put(recording_io(["n", "n", "n", "n"]), :interactive?, fn -> true end)
-
-        assert {:error, :setup_incomplete} =
-                 Wizard.run_full([], io, config_path: ctx.config_path, home: ctx.home)
-
-        assert info_event?(drain_events([]), &String.contains?(&1, "Found Hermes home: 1 skills"))
-      end
-    end
-
-    test "audit summary and declining import leave Hermes data unimported", ctx do
-      source = hermes_fixture(ctx.tmp_dir)
-      io = Map.put(recording_io(["", "n", "n", "n"]), :interactive?, fn -> true end)
-
-      assert {:error, :setup_incomplete} =
-               Wizard.run_full([], io, config_path: ctx.config_path, hermes_home: source)
-
-      events = drain_events([])
-
-      assert info_event?(
-               events,
-               &(&1 == "Found Hermes home: 1 skills, 2 memory files, 1 provider config.")
-             )
-
-      assert "Import Hermes data now? [y/N]: " in prompt_events(events)
-      refute File.exists?(Path.join(ctx.tmp_dir, "agent"))
-      refute File.exists?(Path.join(ctx.tmp_dir, "migration"))
-      assert File.read!(Path.join(source, "memories/MEMORY.md")) == "Use focused tests.\n"
-    end
-
-    test "confirmed import reuses the importer without secrets and before config scaffolding",
-         ctx do
-      source = hermes_fixture(ctx.tmp_dir)
-      io = Map.put(recording_io(["yes", "n", "n", "n"]), :interactive?, fn -> true end)
-      path = Path.join(ctx.tmp_dir, "custom.toml")
-
-      assert {:error, :setup_incomplete} =
-               Wizard.run_full([], io, config_path: path, hermes_home: source)
-
-      assert File.read!(Path.join(ctx.tmp_dir, "agent/workspace/MEMORY.md")) =~
-               "Use focused tests."
-
-      assert File.exists?(Path.join(ctx.tmp_dir, "agent/skill/demo/SKILL.md"))
-      assert Toml.decode_file!(path)["defaults"]["model"] == "openai:gpt-5"
-      refute File.exists?(ctx.config_path)
-      refute File.read!(path) =~ "hermes-secret"
-      assert {:error, :not_found} = Secrets.get("OPENAI_API_KEY")
-      reports = Path.wildcard(Path.join(ctx.tmp_dir, "migration/hermes/*/report.json"))
-      assert [report] = reports
-      assert Jason.decode!(File.read!(report))["migrate_secrets"] == false
-      assert info_event?(drain_events([]), &String.contains?(&1, "Hermes import:"))
-    end
-
-    test "conflicts refuse the entire import without overwriting", ctx do
-      source = hermes_fixture(ctx.tmp_dir)
-      destination = Path.join(ctx.tmp_dir, "agent/skill/demo")
-      File.mkdir_p!(destination)
-      File.write!(Path.join(destination, "SKILL.md"), "Keep existing skill.\n")
-      io = Map.put(recording_io(["y", "n", "n", "n"]), :interactive?, fn -> true end)
-
-      assert {:error, :setup_incomplete} =
-               Wizard.run_full([], io, config_path: ctx.config_path, hermes_home: source)
-
-      assert File.read!(Path.join(destination, "SKILL.md")) == "Keep existing skill.\n"
-      refute File.exists?(Path.join(ctx.tmp_dir, "agent/workspace/MEMORY.md"))
-      refute File.exists?(Path.join(ctx.tmp_dir, "migration"))
-      assert error_event?(drain_events([]), &String.contains?(&1, "nothing was imported"))
-    end
-
-    test "non-interactive skips detection and launch even with Hermes present", ctx do
-      source = hermes_fixture(ctx.tmp_dir)
-      configure_ready_provider(ctx.config_path)
-      io = Map.put(recording_io(), :interactive?, fn -> flunk("TTY checked in headless mode") end)
-
-      assert :ok =
-               Wizard.run_full([], io,
-                 non_interactive: true,
-                 config_path: ctx.config_path,
-                 hermes_home: source,
-                 verifier: fn _ -> {:ok, %{}} end,
-                 launcher: fn -> flunk("headless launch") end
-               )
-
-      events = drain_events([])
-      assert prompt_events(events) == []
-      refute info_event?(events, &String.contains?(&1, "Hermes"))
-      refute File.exists?(Path.join(ctx.tmp_dir, "migration"))
-    end
-
-    test "absent Hermes home is silent", ctx do
-      io = Map.put(recording_io(["n", "n", "n"]), :interactive?, fn -> true end)
-
-      assert {:error, :setup_incomplete} =
-               Wizard.run_full([], io,
-                 config_path: ctx.config_path,
-                 hermes_home: Path.join(ctx.tmp_dir, "absent")
-               )
-
-      events = drain_events([])
-      refute info_event?(events, &String.contains?(&1, "Hermes"))
-      refute Enum.any?(prompt_events(events), &String.contains?(&1, "Hermes"))
-    end
-
-    test "existing provider values are not silently replaced by Hermes", ctx do
-      source = hermes_fixture(ctx.tmp_dir)
-      configure_ready_provider(ctx.config_path)
-      before = File.read!(ctx.config_path)
-      io = Map.put(recording_io(["y", "n", "n", "n"]), :interactive?, fn -> true end)
-
-      assert :ok =
-               Wizard.run_full([], io,
-                 config_path: ctx.config_path,
-                 hermes_home: source,
-                 verifier: fn _ -> {:ok, %{}} end
-               )
-
-      assert File.read!(ctx.config_path) == before
-      refute File.exists?(Path.join(ctx.tmp_dir, "agent"))
-      assert error_event?(drain_events([]), &String.contains?(&1, "nothing was imported"))
-    end
-  end
-
-  describe "run_full/3 — daily brief" do
-    test "opting in records the brief time; rerunning does not ask again", %{
-      config_path: config_path
-    } do
-      set_master_key_env()
-      assert {:ok, _metadata} = Secrets.set("wizard_openai_key", "sk-wizard-brief")
-
-      File.write!(config_path, """
-      [defaults]
-        provider = "openai"
-        model = "openai:gpt-5"
-
-      [providers.openai]
-        api_key_secret = "wizard_openai_key"
-      """)
-
-      # yes to the brief, an invalid time, then 7:30; decline runtime configuration.
-      io = recording_io(["y", "7am", "7:30", "n"])
-
-      assert Wizard.run_full([], io, config_path: config_path, verifier: fn _ -> {:ok, %{}} end) ==
-               :ok
-
-      assert %{"automation" => %{"daily_brief" => "07:30"}} =
-               config_path |> File.read!() |> Toml.decode!()
-
-      events = drain_events([])
-      assert error_event?(events, &String.contains?(&1, "24-hour time"))
-
-      assert Enum.any?(
-               prompt_events(events),
-               &String.contains?(&1, "lemon gateway setup telegram")
-             )
-
-      assert info_event?(events, &String.contains?(&1, "Daily brief scheduled for 07:30"))
-
-      assert Wizard.run_full([], recording_io(["n"]),
-               config_path: config_path,
-               verifier: fn _ -> {:ok, %{}} end
-             ) == :ok
-
-      events = drain_events([])
-      refute Enum.any?(prompt_events(events), &String.contains?(&1, "daily brief"))
-      assert info_event?(events, &String.contains?(&1, "Daily brief: scheduled at 07:30"))
-    end
-
-    test "non-interactive setup stays off unless --daily-brief is given", %{
-      config_path: config_path
-    } do
-      assert Wizard.run(["--non-interactive", "--config-path", config_path], recording_io()) ==
-               {:error, :setup_incomplete}
-
-      refute File.read!(config_path) =~ "daily_brief"
-
-      assert Wizard.run(
-               ["--non-interactive", "--config-path", config_path, "--daily-brief", "6:45"],
-               recording_io()
-             ) == {:error, :setup_incomplete}
-
-      assert %{"automation" => %{"daily_brief" => "06:45"}} =
-               config_path |> File.read!() |> Toml.decode!()
     end
   end
 
@@ -810,25 +683,6 @@ defmodule LemonCli.Setup.WizardTest do
   # Helpers
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp hermes_fixture(root) do
-    source = Path.join(root, "hermes")
-    File.mkdir_p!(Path.join(source, "skills/demo"))
-    File.mkdir_p!(Path.join(source, "memories"))
-    File.write!(Path.join(source, "skills/demo/SKILL.md"), "# Demo\n\nA local skill.\n")
-    File.write!(Path.join(source, "memories/MEMORY.md"), "Use focused tests.\n")
-    File.write!(Path.join(source, "memories/USER.md"), "Prefers concise replies.\n")
-    File.write!(Path.join(source, ".env"), "OPENAI_API_KEY=hermes-secret\n")
-
-    File.write!(Path.join(source, "config.yaml"), """
-    model: openai:gpt-5
-    providers:
-      openai:
-        base_url: https://api.openai.test/v1
-    """)
-
-    source
-  end
-
   defp configure_ready_provider(path) do
     set_master_key_env()
     assert {:ok, _} = Secrets.set("wizard_existing", "sk-wizard-existing")
@@ -910,6 +764,13 @@ defmodule LemonCli.Setup.WizardTest do
 
   defp file_mode(path) do
     path |> File.stat!() |> Map.get(:mode) |> Bitwise.band(0o777)
+  end
+
+  defp unused_port do
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, port} = :inet.port(socket)
+    :gen_tcp.close(socket)
+    port
   end
 
   defp clear_secrets_table do

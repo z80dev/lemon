@@ -18,6 +18,14 @@ defmodule LemonCore.Doctor do
   Modules may also export `live_checks/1`, returning `{name, zero_arity_fun}`
   jobs. These run only with `live: true`, concurrently under a shared deadline.
   Jobs must return a Check and must never generate completions or send messages.
+
+  ## Runtime scope
+
+  Callers pass `runtime:` to say where the checks run. `:local` (the default)
+  means this VM is the runtime, so absent runtime processes are real failures.
+  A standalone CLI passes `:external` when it found a separate healthy runtime
+  and `:absent` when none answered; checks of runtime-owned processes then
+  return `LemonCore.Doctor.Check.outside_runtime/3` instead of a warning.
   """
   alias LemonCore.Doctor.Checks.{
     Browser,

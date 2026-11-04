@@ -76,9 +76,22 @@ async function httpReachable(endpoint, discoveryUrl) {
   finally { clearTimeout(timer); }
 }
 
+class DriverIncompatible extends Error {}
+
+// An index.js beside the driver that cannot load or lacks these exports is an
+// outdated or incomplete build; report that distinctly from a missing Chrome.
+// A driver directory that does not exist stays a generic inspection failure.
+async function loadDriver(driverPath) {
+  if (!fs.existsSync(path.dirname(driverPath))) throw new Error();
+  try {
+    const mod = await import(pathToFileURL(path.join(path.dirname(driverPath), 'index.js')).href);
+    if (typeof mod.defaultChromeExecutable === 'function' && typeof mod.cdpDiscoveryUrl === 'function') return mod;
+  } catch { /* unloadable */ }
+  throw new DriverIncompatible();
+}
+
 async function inspect(config) {
-  const modulePath = path.join(path.dirname(config.driverPath), 'index.js');
-  const { defaultChromeExecutable, cdpDiscoveryUrl } = await import(pathToFileURL(modulePath).href);
+  const { defaultChromeExecutable, cdpDiscoveryUrl } = await loadDriver(config.driverPath);
   const executable = process.env.LEMON_BROWSER_EXECUTABLE?.trim() || defaultChromeExecutable();
   let installed = false;
   if (executable) {
@@ -102,8 +115,8 @@ input.once('line', async (line) => {
   try {
     if (Buffer.byteLength(line) > 65536) throw new Error();
     result = await inspect(JSON.parse(line));
-  } catch {
-    result = { error: 'inspection_unavailable' };
+  } catch (error) {
+    result = { error: error instanceof DriverIncompatible ? 'driver_incompatible' : 'inspection_unavailable' };
   }
   process.stdout.write(JSON.stringify(result) + '\n', () => process.exit(0));
 });

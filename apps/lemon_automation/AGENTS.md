@@ -54,17 +54,13 @@ stores, not a second agent engine. See [README](README.md) and
 - `CronMemory` is job-local markdown, bounded on injection and compacted as it
   grows. Do not create a separate general-purpose memory service here.
 
-## Heartbeats and daily brief
+## Heartbeats
 
 Heartbeats are ordinary cron jobs with `meta.heartbeat == true` (atom or string
 key), not a separate process, timer or store. `Heartbeat.apply_policy/2` runs
 synchronously after monitor/preflight policy: only completed output trimming to
 exactly `HEARTBEAT_OK` is suppressed. Failures, timeouts and other output alert
 and deliver. Suppressed runs remain in history.
-
-`[automation] daily_brief = "HH:MM"` reconciles `cron_daily_brief` at boot using
-local time and the default main session. Removal removes the job; invalid time
-leaves existing jobs untouched. `daily_brief_sync: false` keeps tests isolated.
 
 ## Goals and kanban
 

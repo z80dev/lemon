@@ -96,6 +96,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
          {:ok, opts} <- read_invite(opts),
          {:ok, execution_capabilities} <- execution_capabilities(opts),
          {:ok, _started} <- Application.ensure_all_started(:coding_agent),
+         :ok <- load_all_modules(),
          {:ok, worker} <-
            Worker.start_link(
              node_name: opts[:name],
@@ -153,6 +154,21 @@ defmodule CodingAgent.ExecutionNode.CLI do
     else
       :ok
     end
+  end
+
+  # `lemon node join` runs through release eval, which loads code on demand. Stored terms
+  # (memory documents, cached records) are decoded with `binary_to_term(_, [:safe])`, which
+  # refuses atoms no loaded module has introduced yet, so a worker reported readable data
+  # as corrupt. Records written by another runtime (a controller sharing this host's store)
+  # carry atoms from apps this worker never starts, so load every available module, exactly
+  # as an embedded release does at boot.
+  defp load_all_modules do
+    _ =
+      Code.ensure_all_loaded(
+        for {name, _path, false} <- :code.all_available(), do: List.to_atom(name)
+      )
+
+    :ok
   end
 
   defp validate(opts) do

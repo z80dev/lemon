@@ -142,22 +142,24 @@ defmodule LemonCore.RedactTest do
     end
   end
 
-  @tag timeout: 15_000
+  # Cover instrumentation slows Redact by several times; keep the deadline as a
+  # guard against quadratic behavior without failing under `mix test --cover`.
+  @tag timeout: 40_000
   test "long queries and non-query assignments remain bounded" do
     pairs = String.duplicate("a=b&", 100_000)
 
     for input <- ["gateway?" <> pairs <> "token=hidden", pairs] do
       task = Task.async(fn -> Redact.text(input) end)
-      output = Task.await(task, 5_000)
+      output = Task.await(task, 15_000)
       assert output == String.replace(input, "token=hidden", "token=[REDACTED]")
     end
   end
 
-  @tag timeout: 15_000
+  @tag timeout: 20_000
   test "repeated sensitive query pairs remain bounded" do
     task = Task.async(fn -> Redact.text("gateway?" <> String.duplicate("token=a&", 100_000)) end)
 
-    assert Task.await(task, 5_000) ==
+    assert Task.await(task, 15_000) ==
              "gateway?" <> String.duplicate("token=[REDACTED]&", 100_000)
   end
 
