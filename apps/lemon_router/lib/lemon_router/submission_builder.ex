@@ -82,14 +82,14 @@ defmodule LemonRouter.SubmissionBuilder do
              tool_policy,
              LemonCore.Store,
              run_id
+           ),
+         {prompt, pending_compaction_marker}
+         when is_binary(prompt) or is_nil(prompt) <-
+           PendingCompaction.prepare(prompt, session_key, origin,
+             meta: meta,
+             tool_policy: tool_policy,
+             run_id: run_id
            ) do
-      {prompt, pending_compaction_marker} =
-        PendingCompaction.prepare(prompt, session_key, origin,
-          meta: meta,
-          tool_policy: tool_policy,
-          run_id: run_id
-        )
-
       prompt =
         if MapHelpers.get_key(meta, :voice_transcribed) do
           "(voice transcribed) " <> (prompt || "")

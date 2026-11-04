@@ -191,6 +191,23 @@ defmodule LemonRouter.RunOrchestratorTest do
     def sync(state), do: {:ok, state}
   end
 
+  defmodule CompactionDeleteFailingBackend do
+    def delete(_state, :pending_compaction, _key), do: {:error, :write_failed}
+
+    for {function, arity} <- [delete: 3, get: 3, put: 4, put_new: 4, list: 2, sync: 1] do
+      args = Macro.generate_arguments(arity - 1, __MODULE__)
+
+      def unquote(function)({backend, inner}, unquote_splicing(args)) do
+        case apply(backend, unquote(function), [inner, unquote_splicing(args)]) do
+          {:ok, value, next} -> {:ok, value, {backend, next}}
+          {:ok, next} -> {:ok, {backend, next}}
+          {:exists, next} -> {:exists, {backend, next}}
+          {:error, _} = error -> error
+        end
+      end
+    end
+  end
+
   setup do
     ensure_pubsub()
 
@@ -1571,7 +1588,8 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert PendingCompactionStore.get(session_key) == marker
     end
 
-    test "accepted channel submission consumes its pending compaction marker" do
+    for cleanup_fails? <- [false, true] do
+      test "accepted channel submission remains accepted with cleanup failure #{cleanup_fails?}" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
 
       {:ok, orchestrator_pid} =
@@ -1599,8 +1617,26 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       PendingCompactionStore.put(session_key, marker)
 
+      if unquote(cleanup_fails?) do
+        :sys.replace_state(LemonCore.Store, fn state ->
+          %{
+            state
+            | backend: CompactionDeleteFailingBackend,
+              backend_state: {state.backend, state.backend_state}
+          }
+        end)
+      end
+
       on_exit(fn ->
         if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+
+        if unquote(cleanup_fails?) do
+          :sys.replace_state(LemonCore.Store, fn state ->
+            {backend, backend_state} = state.backend_state
+            %{state | backend: backend, backend_state: backend_state}
+          end)
+        end
+
         LemonCore.RunHistoryStore.delete_session(session_key)
         PendingCompactionStore.delete(session_key)
       end)
@@ -1618,7 +1654,9 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       assert_receive {:captured_job, execution_request}
       assert execution_request.prompt =~ "prior question"
-      assert PendingCompactionStore.get(session_key) == nil
+      expected_marker = if unquote(cleanup_fails?), do: marker, else: nil
+      assert PendingCompactionStore.get(session_key) == expected_marker
+    end
     end
   end
 

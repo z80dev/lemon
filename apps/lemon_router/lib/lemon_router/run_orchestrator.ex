@@ -415,10 +415,18 @@ defmodule LemonRouter.RunOrchestrator do
             execution_request = submission.execution_request
             meta = submission.meta || %{}
 
-            PendingCompaction.consume(
-              submission.session_key,
-              submission.pending_compaction_marker
-            )
+            # Admission already succeeded. Cleanup failure must never turn this
+            # acknowledgement into a rejection that could authorize resubmission.
+            case PendingCompaction.consume(
+                   submission.session_key,
+                   submission.pending_compaction_marker
+                 ) do
+              :ok ->
+                :ok
+
+              {:error, _reason} ->
+                Logger.warning("Pending compaction cleanup failed after run acceptance")
+            end
 
             Introspection.record(
               :orchestration_resolved,

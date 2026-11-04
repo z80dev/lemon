@@ -3,7 +3,9 @@ defmodule LemonRouter.PendingCompaction do
   Prepares and transactionally consumes router pending-compaction markers.
 
   Fresh markers are only deleted after the corresponding run submission is
-  accepted. Stale markers and markers without any history are cleared.
+  accepted. Stale markers and markers without any history are cleared only if
+  their exact inspected snapshot still exists. Storage errors are returned;
+  replacement markers are preserved without failing preparation or consumption.
   History is filtered to the owning execution context; markers with only
   inaccessible history remain available to their original owners.
 
@@ -25,7 +27,7 @@ defmodule LemonRouter.PendingCompaction do
   @type marker :: map()
 
   @spec prepare(String.t() | nil, binary(), atom(), keyword()) ::
-          {String.t() | nil, marker() | nil}
+          {String.t() | nil, marker() | nil} | {:error, term()}
   def prepare(prompt, session_key, origin, opts \\ [])
 
   def prepare(prompt, session_key, :channel, opts) when is_binary(session_key) do
@@ -40,18 +42,19 @@ defmodule LemonRouter.PendingCompaction do
   @doc """
   Deletes `marker` only when it is still the marker stored for `session_key`.
 
-  The equality check avoids consuming a newer overflow marker that may have
-  replaced the one used to prepare this submission.
+  Atomic comparison avoids consuming a newer overflow marker that may have
+  replaced the one used to prepare this submission. A mismatch is benign;
+  storage failures are returned to the caller.
   """
-  @spec consume(binary(), marker() | nil) :: :ok
+  @spec consume(binary(), marker() | nil) :: :ok | {:error, term()}
   def consume(_session_key, nil), do: :ok
 
   def consume(session_key, marker) when is_binary(session_key) and is_map(marker) do
-    if PendingCompactionStore.get(session_key) == marker do
-      _ = PendingCompactionStore.delete(session_key)
+    case PendingCompactionStore.compare_and_delete(session_key, marker) do
+      :ok -> :ok
+      {:error, :mismatch} -> :ok
+      {:error, _} = error -> error
     end
-
-    :ok
   end
 
   @spec build_prompt(String.t(), String.t()) :: String.t()
@@ -115,8 +118,11 @@ defmodule LemonRouter.PendingCompaction do
 
       if transcript == "" do
         # Other contexts can still use this marker; do not consume their history.
-        if history == [], do: PendingCompactionStore.delete(session_key)
-        {prompt, nil}
+        if history == [] do
+          clear_marker(prompt, session_key, marker)
+        else
+          {prompt, nil}
+        end
       else
         Logger.warning(
           "Router prepared pending compaction session_key=#{inspect(session_key)} " <>
@@ -126,9 +132,14 @@ defmodule LemonRouter.PendingCompaction do
         {build_prompt(transcript, prompt || ""), marker}
       end
     else
-      _ = PendingCompactionStore.delete(session_key)
-      Logger.debug("Router cleared stale pending compaction session_key=#{inspect(session_key)}")
-      {prompt, nil}
+      clear_marker(prompt, session_key, marker)
+    end
+  end
+
+  defp clear_marker(prompt, session_key, marker) do
+    case consume(session_key, marker) do
+      :ok -> {prompt, nil}
+      {:error, _} = error -> error
     end
   end
 
