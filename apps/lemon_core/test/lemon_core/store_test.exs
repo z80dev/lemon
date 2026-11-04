@@ -438,7 +438,11 @@ defmodule LemonCore.StoreTest do
       assert {key, entry} in Store.list(:sessions_index)
 
       original_state = swap_store_backend(BusyBackend, %{})
-      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      on_exit(fn ->
+        :sys.replace_state(Store, fn _ -> original_state end)
+        assert :ok = Store.delete(:sessions_index, key)
+      end)
 
       assert Store.get(:sessions_index, key) == entry
       assert {key, entry} in Store.list(:sessions_index)
