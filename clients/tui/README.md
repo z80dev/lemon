@@ -411,7 +411,10 @@ and control plane authoritative:
 | `/stop` | Alias for `/abort`; partial output remains visible and is marked interrupted. |
 | `/status`, `/usage` | Show control-plane health/runtime and usage/quota summaries. |
 | `/think`, `/reasoning`, Shift+Tab | Pick a thinking level without losing the current draft; an explicit level still applies directly. |
-| `/agents`, `/tasks` | Show the Lemon agent directory and active/recent subagent tasks. |
+| `/agents [query]` | Discover addressable agents in your authorized scope, including handles, stable IDs, and availability. |
+| `/agent-name <handle>\|--clear` | Set or clear the focused conversation's handle without changing its title or stable ID. |
+| `/tell <@handle\|stable-id> <message>`, `/tell --status <message-id>` | Send from the focused conversation to an existing agent, or read the original sender's receipt without resending. |
+| `/tasks [count]` | Show active and recent family subagent tasks. |
 | `/compact [focus instructions…]`, `/compress [focus instructions…]` | Manually compact the current session through `sessions.compact`, with optional instructions about what context to preserve. |
 | `/context`, `/ctx` | Show the focused session's context-window breakdown from `sessions.context`: usage grid, per-category tokens, free space, compaction headroom and largest contributors. Esc closes. |
 | `/plan [request…]` | Toggle plan mode for the focused session: the agent plans read-only, then asks for approval before executing. With a request, enter plan mode (if needed) and send it as the planning prompt. |
@@ -459,6 +462,134 @@ another directory, and older untagged local TUI keys whose journal directory
 cannot be established, are refused rather than rebound to fresh native history.
 Other explicit keys and resumed legacy `tui-…` keys remain unchanged; a missing
 durable native history mapping is a refusal, not permission to start over.
+
+### Address an existing agent
+
+In Bob's conversation, give it a handle:
+
+```text
+/name Release research
+/agent-name bob
+```
+
+Switch to Alice's conversation, then discover and contact Bob:
+
+```text
+/agents bob
+/tell @bob What did you conclude about the release?
+```
+
+The message goes to Bob's **existing conversation and context**. It does not spawn
+a new persona or select the most recent session. A busy recipient queues the
+message rather than steering unrelated work. Bob's visible answer returns to
+Alice's originating conversation as a provenance-labelled peer follow-up, not as
+a new human instruction. You can also ask the assistant “ask @bob about the
+release”; its `agent_message` tool uses the same addressed flow.
+
+Handles are case-insensitive ASCII, stored lower-case: a letter followed by up to
+63 letters, digits, `_` or `-`. `/agent-name @Bob` and `/agent-name bob` name the
+same handle. A collision is refused without dropping the previous binding.
+`/agent-name --clear` releases the handle, not the conversation. Renaming Bob to
+`robert` releases `@bob`; existing references to Bob's stable ID still work:
+
+```text
+/tell session://<canonical-session-key-from-/agents> Continue our discussion.
+```
+
+Copy the complete stable ID from `/agents`; do not guess a session key. Native
+addresses start with `session://`; product Bots use `bot://<instance>/<bot-id>`.
+Deleting a conversation removes its addressability. A missing or offline target
+is not replaced by another conversation.
+
+These names serve different purposes:
+
+| Form | Meaning |
+| --- | --- |
+| `/name <title>` | Human-readable session title for search and resume; not a messaging handle. |
+| `/agent-name bob`, then `/tell @bob …` | Durable handle for this exact existing conversation. |
+| A configured persona used by `task` | Instructions for a new child agent, not Bob's saved context. |
+| Bare task names or `agent://…` in `agent_message` | Existing family task addresses; family isolation still applies. |
+| `@path` file completion | File references in the editor; unchanged, not an agent picker. |
+
+The roster is content-free: it shows identity and availability, not another
+conversation's transcript. Local TUI identities share the operator namespace.
+Bot interoperability is opt-in: the backend operator must set private
+`namedAgentOperatorUserId` to the enabled current canonical workspace owner's
+account. Only that account's owned Bots can bridge into the operator namespace;
+product UI, role labels and ownership transfers cannot grant or transfer this
+link. Without the pin, all Bot accounts remain private. Other product members,
+including admins, cannot discover operator sessions.
+Names are unique within a scope, not globally. A handle is a routing convenience,
+not permission to access another user's Bot or machine.
+
+An **accepted** receipt means admitted or queued, not answered. **Completed**
+includes the visible response; **failed** reports terminal failure.
+**Outcome unknown** means the mutation may have taken effect: retain its message
+ID and reconcile with `/tell --status <message-id>` from the original sender's
+conversation rather than resend with a new ID. Identical pending/unknown `/tell`
+submissions, including overlapping submissions, keep one fixed message ID and
+are not resent. The native tool's `action=status` checks that same sender-scoped
+receipt. `action=list` with `scope:"named"` lists addressable peers;
+`action=rename` changes only the current identity's handle. Automatic replies
+do not trigger a response-to-response messaging loop.
+
+These commands require advertised daemon support and a live authenticated
+connection. No offline send or rename is queued. A fresh focused session is
+persisted with `sessions.create` before naming or sending; this does not itself
+send a model prompt. Refusals and missing capabilities are not success notices.
+
+#### On-demand offline smoke
+
+Prerequisites: Bun, the locked product backend dependencies, and the integrated
+umbrella dependencies compiled in `MIX_ENV=test`. The launcher does not install
+or compile anything. Run from the repository root:
+
+```sh
+sh scripts/smoke_named_agents.sh
+```
+
+This is a separate, on-demand smoke, not a default test or CI job. It starts from
+an environment allowlist, uses private temporary HOME/config/state, a generated
+operator token, authenticated loopback WebSockets on an ephemeral port, real
+native sessions/router delivery, and scripted inference instead of provider
+calls. Product HTTP fetches to non-loopback hosts fail closed. Assertions cover:
+
+- Native A→existing B context and visible reply, an actual `agent_message` tool
+  loop, replay without duplicate delivery, and handle rename with a stable address.
+- Targeted external Bot request/reply, sender isolation and offline disconnect.
+- Actual product addressed REST handlers, authentication, owner ACL, nonce
+  journal, peer provenance, opt-in operator pin and private admin/member scopes.
+- Native↔product messages through the real addressed service and real native
+  execution. The fixture replaces unchanged managed executor admission and node
+  inventory reconciliation; production run/transcript projection remains in use.
+
+The report explicitly says `managedProof: false`: this is not a proof of managed
+node TLS/MCP invocation, Bot provisioning, live providers/platforms, physical
+Apple clients, or interactive TUI behavior. Only a successful run's final report
+is passing evidence; the script's presence does not claim it has been run.
+
+For **manual** TUI/Web checks after the assertions:
+
+```sh
+LEMON_NAMED_SMOKE_KEEP_ALIVE=1 sh scripts/smoke_named_agents.sh
+```
+
+This retains the isolated controller and starts the fixture product REST/realtime
+server on another ephemeral loopback port. Its `uiFixture: ready` message prints
+only the path to a mode-0600 `ui-fixture.json`, never credentials. That private
+file contains the backend URL, generated owner login/session, controller token
+file reference, existing conversation IDs and shutdown PID. If the production
+Web bundle has been built in `products/lemon_bot/web`, the ordinary backend asset
+handler serves it; no substitute UI is included. Open that backend URL and sign
+in using the private fixture credentials. Connect the real TUI using
+`LEMON_WS_URL`, `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` and `--session` with the
+fixture's controller and Alice key.
+
+This remains a scripted fixture, not a general chat provider: `@robert` accepts
+`SMOKE_BOB_QUERY_TWO` from Alice; `@product-carol` accepts `SMOKE_PRODUCT_QUERY`.
+Unrecognized inference prompts fail instead of contacting a provider. Send
+SIGTERM to the PID in the private state file when finished; the launcher removes
+temporary state. Manual UI observations are separate evidence from smoke output.
 
 ### Startup session flags
 

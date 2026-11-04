@@ -23,6 +23,7 @@ import { createMachineRoutes, refreshMachines } from './runtime/machines';
 import { getTerminalService, type TerminalService } from './runtime/terminals';
 import { createBotRoutes, createBotService, syncBotProfile } from './core/bots';
 import { createConversationRoutes } from './core/conversations';
+import { createAddressedAgentRoutes, createAddressedAgentService } from './core/agent-addressing';
 import { createMcpRoutes } from './core/mcp';
 import { createGateRoutes, createGateService } from './core/gates';
 import { createResourceRoutes } from './core/resources';
@@ -81,9 +82,10 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   const bots=createBotService(services);
   const accounts=createAccountService(services);
   const pairings=createPairingService(services);
+  const addressedAgents=createAddressedAgentService(services);services.addressedAgents=addressedAgents;
   router.register([
     ...createAccountRoutes(services,hooks),...createSyncRoutes(services),...createInstanceRoutes(services,startedAtMs),...createProviderRoutes(services),...createMachineRoutes(services),
-    ...createBotRoutes(services),...createConversationRoutes(services),...createMcpRoutes(services),
+    ...createBotRoutes(services),...createAddressedAgentRoutes(services),...createConversationRoutes(services),...createMcpRoutes(services),
     ...createGateRoutes(services),...createResourceRoutes(services),...createAttachmentRoutes(services),
     ...createVoiceRoutes(services),...createExperienceRoutes(services),...createIntegrationRoutes(services),
     ...createRuntimeAdmissionRoutes(services),...createPairingRoutes(services)
@@ -93,7 +95,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   const reconcile=async()=>{
     if(reconciling)return;reconciling=true;
     try{
-      const tasks=[async()=>{if(lemon.connected){await refreshMachines(services);await runtime.reconcile();await bots.reconcile();}},async()=>{await accounts.reconcile();},async()=>{await pairings.sweep();},async()=>{await services.integrations.reconcile?.();}];
+      const tasks=[async()=>{if(lemon.connected){await refreshMachines(services);await runtime.reconcile();await bots.reconcile();}},async()=>{if(lemon.connected){await addressedAgents.registerAll();await addressedAgents.reconcile();}},async()=>{await accounts.reconcile();},async()=>{await pairings.sweep();},async()=>{await services.integrations.reconcile?.();}];
       const results=await Promise.allSettled(tasks.map(task=>task()));
       for(const result of results)if(result.status==='rejected')services.audit(null,'runtime.reconcile','controller','failed');
       experiences.reconcile();
@@ -127,7 +129,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
         },websocket:realtime.websocket});
       lemon.start();return server;
     },
-    async stop(){if(stopped)return;stopped=true;clearInterval(reconcileTimer);clearInterval(retentionTimer);removeConnected();pairings.close();experiences.close();realtime.close();voice.close();gates.close();attachments.close();await services.integrations.dispose?.();runtime.close();terminals.dispose();lemon.close();if(server)await server.stop(true);store.close();}
+    async stop(){if(stopped)return;stopped=true;clearInterval(reconcileTimer);clearInterval(retentionTimer);removeConnected();pairings.close();experiences.close();addressedAgents.close();realtime.close();voice.close();gates.close();attachments.close();await services.integrations.dispose?.();runtime.close();terminals.dispose();lemon.close();if(server)await server.stop(true);store.close();}
   };
 }
 

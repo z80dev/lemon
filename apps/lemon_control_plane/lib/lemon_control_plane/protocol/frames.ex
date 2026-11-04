@@ -255,7 +255,7 @@ defmodule LemonControlPlane.Protocol.Frames do
   @doc """
   Returns a list of supported event names.
 
-  These must be kept in sync with the events mapped in EventBridge.
+  Includes EventBridge events and connection-targeted transport events.
   """
   @spec supported_events() :: [String.t()]
   def supported_events do
@@ -263,6 +263,9 @@ defmodule LemonControlPlane.Protocol.Frames do
       # Run/Agent events
       "agent",
       "chat",
+      # Exact-connection named-agent transport (never global EventBridge traffic)
+      "agent.message.request",
+      "agent.message.result",
       # Durable goal events
       "goal",
       # Presence

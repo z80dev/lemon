@@ -8,7 +8,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Address existing conversations with durable agent handles and stable addresses:
+  `/agent-name`, `/agents`, and `/tell` in the TUI, plus separate Lemon Bot handles,
+  discovery, and addressed messaging. Renaming a handle preserves the conversation
+  and stable ID; titles, personas, file references, and family task addresses remain
+  separate. Replies return to the originating conversation, with explicit accepted,
+  completed, failed, or outcome-unknown receipts and owner-scoped Bot visibility.
 
 ---
 

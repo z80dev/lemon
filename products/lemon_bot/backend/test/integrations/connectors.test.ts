@@ -28,14 +28,17 @@ type Server = z.infer<typeof serverSchema>;
 const profileSchema = z.object({ id: z.string(), name: z.string(), description: z.string(), systemPrompt: z.string(), toolPolicy: z.record(z.string(), z.json()), mcpServers: z.array(serverSchema) }).strict();
 type Profile = z.infer<typeof profileSchema>;
 
-// Authenticated native mcp.execution_names capture for lemon-bot at
-// https://product.example/mcp; aliases are opaque response data, never recomputed.
-const productToolNames = ['message_bot', 'handoff', 'create_draft', 'ask_user', 'request_approval', 'request_human_step', 'request_secret', 'send_voice_memo', 'share_file', 'create_routine', 'update_routine', 'save_skill', 'list_bots', 'post_to_group', 'remember', 'create_bot', 'update_preferences', 'create_reminder'] as const;
+// Existing native aliases are retained from the authenticated capture for https://product.example/mcp;
+// addressed tool aliases are deterministic fixture values and remain opaque response data.
+const productToolNames = ['message_bot', 'handoff', 'list_agents', 'rename_agent', 'message_agent', 'create_draft', 'ask_user', 'request_approval', 'request_human_step', 'request_secret', 'send_voice_memo', 'share_file', 'create_routine', 'update_routine', 'save_skill', 'list_bots', 'post_to_group', 'remember', 'create_bot', 'update_preferences', 'create_reminder'] as const;
 const productExecutionProjection = {
   server: { name: 'lemon-bot' },
   tools: [
     { name: 'message_bot', executionName: 'mcp_lemon_bot_message_bot_e27f8366c893fc7d4ace784f51ce12a1' },
     { name: 'handoff', executionName: 'mcp_lemon_bot_handoff_9f74e5f82ed019f6a9084a1daa468386' },
+    { name: 'list_agents', executionName: 'mcp_lemon_bot_list_agents_fixture' },
+    { name: 'rename_agent', executionName: 'mcp_lemon_bot_rename_agent_fixture' },
+    { name: 'message_agent', executionName: 'mcp_lemon_bot_message_agent_fixture' },
     { name: 'create_draft', executionName: 'mcp_lemon_bot_create_draft_6e65809e9170b8c9b3cb0da09b714275' },
     { name: 'ask_user', executionName: 'mcp_lemon_bot_ask_user_10d4fd7a91be9332225ab7a9f47f9f2f' },
     { name: 'request_approval', executionName: 'mcp_lemon_bot_request_approval_ca54a9645adf9ba042f0e53146a13ee0' },
@@ -263,6 +266,12 @@ async function fixture() {
     notify: unexpectedBoundary('helpers.notify before installation'),
     invoke: unexpectedBoundary('router.invoke before installation'),
     syncBotProfile: (actor, botId) => syncBotProfile(services, actor, botId),
+    addressedAgents: {
+      identity: unexpectedBoundary('addressedAgents.identity'), rename: unexpectedBoundary('addressedAgents.rename'), list: unexpectedBoundary('addressedAgents.list'),
+      send: unexpectedBoundary('addressedAgents.send'), status: unexpectedBoundary('addressedAgents.status'), command: unexpectedBoundary('addressedAgents.command'),
+      authorizeReplay: unexpectedBoundary('addressedAgents.authorizeReplay'), registerBot: unexpectedBoundary('addressedAgents.registerBot'), unregisterBot: unexpectedBoundary('addressedAgents.unregisterBot'),
+      registerAll: unexpectedBoundary('addressedAgents.registerAll'), reconcile: unexpectedBoundary('addressedAgents.reconcile'), close: unexpectedBoundary('addressedAgents.close'),
+    },
   };
   installHelpers(services);
   services.id = (prefix = 'id') => `${prefix}_${String(++serial).padStart(24, '0')}`;

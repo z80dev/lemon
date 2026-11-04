@@ -10,10 +10,13 @@ import type { ConnectedLemonService } from '../../src/runtime/lemon';
 import { productBotTools } from '../../src/core/bots';
 import type { MachineRuntimeFeatures } from '../../src/runtime/machines';
 
-// Captured from the authenticated owning mcp.execution_names RPC for https://product.example/mcp.
+// Existing aliases come from the authenticated mcp.execution_names capture; addressed tool aliases are deterministic fixture values.
 const nativeProductTools: { name: keyof P.MCPToolInputs; executionName: string }[] = [
   { name: 'message_bot', executionName: 'mcp_lemon_bot_message_bot_e27f8366c893fc7d4ace784f51ce12a1' },
   { name: 'handoff', executionName: 'mcp_lemon_bot_handoff_9f74e5f82ed019f6a9084a1daa468386' },
+  { name: 'list_agents', executionName: 'mcp_lemon_bot_list_agents_fixture' },
+  { name: 'rename_agent', executionName: 'mcp_lemon_bot_rename_agent_fixture' },
+  { name: 'message_agent', executionName: 'mcp_lemon_bot_message_agent_fixture' },
   { name: 'create_draft', executionName: 'mcp_lemon_bot_create_draft_6e65809e9170b8c9b3cb0da09b714275' },
   { name: 'ask_user', executionName: 'mcp_lemon_bot_ask_user_10d4fd7a91be9332225ab7a9f47f9f2f' },
   { name: 'request_approval', executionName: 'mcp_lemon_bot_request_approval_ca54a9645adf9ba042f0e53146a13ee0' },

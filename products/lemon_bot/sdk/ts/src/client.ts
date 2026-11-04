@@ -71,7 +71,7 @@ function rangeHeader(range: ByteRange): string {
 function knownIds(value: unknown): string[] {
   if (!value || typeof value !== 'object') return [];
   const record = value as Record<string, unknown>;
-  const ids = ['id', 'runId', 'targetRunId'].flatMap(key => typeof record[key] === 'string' ? [record[key] as string] : []);
+  const ids = ['id', 'runId', 'targetRunId', 'messageId', 'sourceId', 'targetId'].flatMap(key => typeof record[key] === 'string' ? [record[key] as string] : []);
   for (const key of ['runs', 'entries', 'items', 'results', 'delivery']) {
     const values = record[key];
     if (Array.isArray(values)) for (const item of values) ids.push(...knownIds(item));
@@ -104,6 +104,23 @@ export class LemonBotClient {
   reconnectController() { return this.call('POST /instance/reconnect', { body: { clientNonce: nonce() } }); }
   runtimeAction(action: RuntimeAction, confirm = false) {
     return this.call('POST /instance/runtime/:action', { params: { action }, body: { clientNonce: nonce(), confirm } });
+  }
+
+  agentIdentity(botId: string) {
+    return this.call('GET /bots/:id/agent-identity', { params: { id: botId } });
+  }
+  renameAgent(botId: string, name: string | null, clientNonce: string) {
+    return this.call('PATCH /bots/:id/agent-identity', { params: { id: botId }, body: { name, clientNonce } });
+  }
+  agents(botId: string, query?: RestQuery<'GET /bots/:id/agents'>) {
+    return this.call('GET /bots/:id/agents', { params: { id: botId }, query });
+  }
+  messageAgent(botId: string, body: RestRequest<'POST /bots/:id/agent-messages'>) {
+    return this.call('POST /bots/:id/agent-messages', { params: { id: botId }, body });
+  }
+  /** Read the fixed message ID (the original client nonce); never resubmit an unknown send. */
+  agentMessage(botId: string, messageId: string) {
+    return this.call('GET /bots/:id/agent-messages/:messageId', { params: { id: botId, messageId } });
   }
 
   async call<K extends RestKey>(key: K, ...args: CallArguments<NoInfer<K>>): Promise<RestResponse<K>> {

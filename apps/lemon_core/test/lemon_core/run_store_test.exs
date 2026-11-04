@@ -43,6 +43,40 @@ defmodule LemonCore.RunStoreTest do
     name
   end
 
+  test "fresh session incarnations are unique despite equal timestamps and survive updates" do
+    suffix = System.unique_integer([:positive])
+    first = "agent:incarnation_first_#{suffix}:main"
+    second = "agent:incarnation_second_#{suffix}:main"
+
+    on_exit(fn ->
+      RunStore.delete_session(first)
+      RunStore.delete_session(second)
+    end)
+
+    assert :ok = RunStore.create_session_index(first, "incarnation_first_#{suffix}", :tui)
+    assert :ok = RunStore.create_session_index(second, "incarnation_second_#{suffix}", :tui)
+    assert {:ok, first_index} = RunStore.ensure_session_incarnation(first)
+    assert {:ok, second_index} = RunStore.ensure_session_incarnation(second)
+    assert {:ok, bytes} = Base.url_decode64(first_index.incarnation, padding: false)
+    assert byte_size(bytes) == 16
+    refute first_index.incarnation == second_index.incarnation
+
+    assert :ok =
+             Store.compare_and_swap(:sessions_index, second, second_index, %{
+               second_index
+               | created_at_ms: first_index.created_at_ms
+             })
+
+    assert :ok = RunStore.finalize("incarnation-update-#{suffix}", %{session_key: first})
+    assert {:ok, updated} = RunStore.ensure_session_incarnation(first)
+    assert updated.incarnation == first_index.incarnation
+    assert updated.run_count == 1
+    assert :ok = RunStore.delete_session_index(first)
+    assert :ok = RunStore.create_session_index(first, "incarnation_first_#{suffix}", :tui)
+    assert {:ok, recreated} = RunStore.ensure_session_incarnation(first)
+    refute recreated.incarnation == first_index.incarnation
+  end
+
   test "appends, fetches, finalizes, and lists run history through the typed wrapper" do
     session_key = "agent:test:main:#{System.unique_integer([:positive])}"
     run_id = "run_#{System.unique_integer([:positive])}"
@@ -174,12 +208,16 @@ defmodule LemonCore.RunStoreTest do
 
     assert :ok = RunStore.finalize(store, run_id, summary)
     assert %{run_count: 1} = Store.get(store, :sessions_index, session_key)
+    assert %{incarnation: incarnation} = Store.get(store, :sessions_index, session_key)
+    assert {:ok, bytes} = Base.url_decode64(incarnation, padding: false)
+    assert byte_size(bytes) == 16
     assert_receive {:finalized, ^run_id}
 
     # Record and index writes are idempotent. Hooks deliberately use
     # at-least-once delivery, so an explicit retry invokes them again.
     assert :ok = RunStore.finalize(store, run_id, summary)
     assert %{run_count: 1} = Store.get(store, :sessions_index, session_key)
+    assert %{incarnation: ^incarnation} = Store.get(store, :sessions_index, session_key)
     assert_receive {:finalized, ^run_id}
 
     assert [{^session_key, public_entry}] = RunStore.list_sessions(store)

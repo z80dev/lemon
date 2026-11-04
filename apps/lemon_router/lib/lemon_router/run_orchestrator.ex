@@ -439,7 +439,10 @@ defmodule LemonRouter.RunOrchestrator do
               "lemon"
             )
 
-            {:ok, run_id}
+            case LemonRouter.AgentMessagingSessions.capture_admission(execution_request) do
+              :ok -> {:ok, run_id}
+              {:error, _} -> {:error, :outcome_unknown}
+            end
 
           {:error, reason} ->
             LemonCore.EventBridge.unsubscribe_run(run_id)

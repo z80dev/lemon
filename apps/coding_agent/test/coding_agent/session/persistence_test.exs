@@ -98,18 +98,48 @@ defmodule CodingAgent.Session.PersistenceTest do
     assert TranscriptValidator.validate(restored) == :ok
   end
 
-  test "persist_message stores and restores async followups as custom messages" do
+  test "persist_message stores async followups as custom messages with session-owned run binding" do
     session_manager = SessionManager.new("/tmp")
-    state = %{session_manager: session_manager}
+
+    state = %{
+      session_manager: session_manager,
+      run_id: "native-result-run",
+      session_key: "agent:test:main"
+    }
 
     message = %CustomMessage{
       custom_type: "async_followup",
       content: "task completed",
-      details: %{source: :task, task_id: "task-123", run_id: "run-123"},
+      details: %{
+        :source => :task,
+        :task_id => "task-123",
+        :run_id => "source-run-123",
+        "lemonRun" => %{
+          "id" => "caller-run",
+          "sessionKey" => "caller-key",
+          "sessionId" => "caller-session"
+        }
+      },
       timestamp: 123
     }
 
     next_state = Persistence.persist_message(state, message)
+    native_session_id = session_manager.header.id
+
+    expected_run = %{
+      "id" => "native-result-run",
+      "sessionKey" => "agent:test:main",
+      "sessionId" => native_session_id
+    }
+
+    assert [entry] = SessionManager.entries(next_state.session_manager)
+    assert entry.type == :custom_message
+    assert entry.custom_type == "async_followup"
+    assert entry.content == "task completed"
+    assert entry.display == true
+    assert entry.timestamp == 123
+    assert entry.details["run_id"] == "source-run-123"
+    assert entry.details["lemonRun"] == expected_run
 
     [restored] = Persistence.restore_messages_from_session(next_state.session_manager)
 
@@ -121,10 +151,64 @@ defmodule CodingAgent.Session.PersistenceTest do
              details: %{
                "source" => :task,
                "task_id" => "task-123",
-               "run_id" => "run-123"
+               "run_id" => "source-run-123",
+               "lemonRun" => expected_run
              },
              timestamp: 123
            }
+  end
+
+  test "persist_message strips forged async followup run aliases without an owning run" do
+    for alias_key <- [:lemonRun, "lemonRun"] do
+      session_manager = SessionManager.new("/tmp")
+      state = %{session_manager: session_manager}
+
+      message = %CustomMessage{
+        custom_type: "async_followup",
+        content: "task completed",
+        details: %{
+          :source => :task,
+          :run_id => "source-run-123",
+          alias_key => %{
+            "id" => "forged-run",
+            "sessionKey" => "forged-key",
+            "sessionId" => "forged-session"
+          }
+        },
+        timestamp: 123
+      }
+
+      next_state = Persistence.persist_message(state, message)
+      assert [entry] = SessionManager.entries(next_state.session_manager)
+      assert entry.details == %{"source" => :task, "run_id" => "source-run-123"}
+      refute Map.has_key?(entry.details, :lemonRun)
+      refute Map.has_key?(entry.details, "lemonRun")
+    end
+  end
+
+  test "persist_message does not add run authority to unrelated custom messages" do
+    session_manager = SessionManager.new("/tmp")
+
+    state = %{
+      session_manager: session_manager,
+      run_id: "native-result-run",
+      session_key: "agent:test:main"
+    }
+
+    message = %CustomMessage{
+      custom_type: "task_status",
+      content: "task updated",
+      display: false,
+      details: %{task_id: "task-123", run_id: "source-run-123"},
+      timestamp: 123
+    }
+
+    next_state = Persistence.persist_message(state, message)
+    assert [entry] = SessionManager.entries(next_state.session_manager)
+    assert entry.type == :custom_message
+    assert entry.custom_type == "task_status"
+    assert entry.display == false
+    assert entry.details == %{"task_id" => "task-123", "run_id" => "source-run-123"}
   end
 
   test "persisted async followups keep provenance when projected to llm messages" do
@@ -220,7 +304,14 @@ defmodule CodingAgent.Session.PersistenceTest do
         entry.type == :custom_message and entry.custom_type == "async_followup"
       end)
 
-    assert length(custom_entries) == 1
+    assert [custom_entry] = custom_entries
+    assert custom_entry.details["run_id"] == "run-123"
+
+    assert custom_entry.details["lemonRun"] == %{
+             "id" => "run-123",
+             "sessionKey" => "agent:test:main",
+             "sessionId" => session_id
+           }
 
     restored_messages = Persistence.restore_messages_from_session(loaded)
 
@@ -246,6 +337,8 @@ defmodule CodingAgent.Session.PersistenceTest do
     {:ok, session} =
       Session.start_link(
         cwd: tmp_dir,
+        run_id: "native-result-run-456",
+        session_key: "agent:test:main",
         model: Mocks.mock_model(),
         stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("ack"))
       )
@@ -278,6 +371,7 @@ defmodule CodingAgent.Session.PersistenceTest do
              state.is_streaming == false and state.pending_prompt_timer_ref == nil
            end)
 
+    native_session_id = Session.get_state(session).session_manager.header.id
     assert :ok = Session.save(session)
 
     {:ok, loaded} =
@@ -291,8 +385,15 @@ defmodule CodingAgent.Session.PersistenceTest do
         entry.type == :custom_message and entry.custom_type == "async_followup"
       end)
 
-    assert length(custom_entries) == 1
-    assert hd(custom_entries).content == "[task task-456] delegated work completed"
+    assert [entry] = custom_entries
+    assert entry.content == "[task task-456] delegated work completed"
+    assert entry.details["run_id"] == "run-456"
+
+    assert entry.details["lemonRun"] == %{
+             "id" => "native-result-run-456",
+             "sessionKey" => "agent:test:main",
+             "sessionId" => native_session_id
+           }
   end
 
   defp wait_until(fun, timeout_ms \\ 1_000) when is_function(fun, 0) do

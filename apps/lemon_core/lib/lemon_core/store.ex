@@ -1356,6 +1356,7 @@ defmodule LemonCore.Store do
     {:ok,
      %{
        session_key: session_key,
+       incarnation: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false),
        agent_id: agent_id,
        origin: origin,
        created_at_ms: timestamp,

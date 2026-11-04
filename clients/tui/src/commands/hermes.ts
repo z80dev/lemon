@@ -43,33 +43,6 @@ export const commandsCommand: SlashCommand = {
 	},
 };
 
-export const agentsCommand: SlashCommand = {
-	name: "agents",
-	summary: "list agents known to Lemon",
-	group: "runs",
-	methods: [METHOD.agentsList],
-	async run(ctx) {
-		const result = await ctx.methods.agentsList();
-		const agents = asArray(result.agents);
-		if (agents.length === 0) {
-			ctx.ui.notice("no agents");
-			return;
-		}
-		const lines = [`agents — ${agents.length}`];
-		for (const agent of agents) {
-			const id = pickString(agent, "agentId", "id", "name") ?? "?";
-			const name = pickString(agent, "name");
-			const sessions = pickNumber(agent, "sessionCount") ?? 0;
-			const active = pickNumber(agent, "activeSessionCount") ?? 0;
-			const description = oneLine(pickString(agent, "description") ?? "", 72);
-			lines.push(
-				`  ${name && name !== id ? `${name} (${id})` : id} · ${active} active · ${sessions} session(s)${description ? ` — ${description}` : ""}`,
-			);
-		}
-		ctx.ui.noticeBlock(lines);
-	},
-};
-
 export const tasksCommand: SlashCommand = {
 	name: "tasks",
 	summary: "list active and recent subagent tasks",

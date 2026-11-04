@@ -11,9 +11,15 @@
  * Names are verbatim from `LemonControlPlane.Methods.*.name/0`.
  */
 
+import {
+	type AgentMessageSend,
+	parseAgentList,
+	parseAgentReceipt,
+	parseAgentRename,
+} from "./agent-addressing.ts";
 import type { ControlPlaneClient, RequestOptions } from "./client.ts";
 import { parseSessionsContext } from "./context-usage.ts";
-import { MethodUnavailableError } from "./errors.ts";
+import { MethodUnavailableError, NotConnectedError } from "./errors.ts";
 import {
 	type OmpCancelResult,
 	type OmpConfigureParams,
@@ -114,6 +120,10 @@ export interface SetupStatusResult {
 }
 
 export const METHOD = {
+	agentIdentityList: "agent.identity.list",
+	agentIdentityRename: "agent.identity.rename",
+	agentMessageSend: "agent.message.send",
+	agentMessageGet: "agent.message.get",
 	chatSend: "chat.send",
 	chatAbort: "chat.abort",
 	chatHistory: "chat.history",
@@ -151,7 +161,6 @@ export const METHOD = {
 	sessionsLabel: "sessions.label",
 	sessionDetail: "session.detail",
 	commandsCatalog: "commands.catalog",
-	agentsList: "agents.list",
 	backgroundStart: "background.start",
 	backgroundList: "background.list",
 	backgroundStatus: "background.status",
@@ -256,6 +265,42 @@ export class ControlPlaneMethods {
 			return Promise.reject(new MethodUnavailableError(method));
 		}
 		return this.#client.request<T>(method, params, options);
+	}
+
+	// Named-agent operations never enter the transport's offline queue.
+	#agentCall(method: MethodName, params: unknown, options?: RequestOptions): Promise<unknown> {
+		if (!this.#client.online) return Promise.reject(new NotConnectedError(method));
+		return this.#call(method, params, { ...options, queueIfOffline: false });
+	}
+
+	async agentIdentityList(
+		params: { query?: string; limit?: number } = {},
+		options?: RequestOptions,
+	) {
+		return parseAgentList(await this.#agentCall(METHOD.agentIdentityList, params, options));
+	}
+
+	async agentIdentityRename(params: { id: string; name: string | null }, options?: RequestOptions) {
+		return parseAgentRename(
+			await this.#agentCall(METHOD.agentIdentityRename, params, options),
+			params.id,
+			params.name,
+		);
+	}
+
+	async agentMessageSend(params: AgentMessageSend, options?: RequestOptions) {
+		return parseAgentReceipt(await this.#agentCall(METHOD.agentMessageSend, params, options), {
+			messageId: params.messageId,
+			sourceId: params.sourceId,
+			targetId: params.target,
+		});
+	}
+
+	async agentMessageGet(params: { sourceId: string; messageId: string }, options?: RequestOptions) {
+		return parseAgentReceipt(
+			await this.#agentCall(METHOD.agentMessageGet, params, options),
+			params,
+		);
 	}
 
 	// -- chat ---------------------------------------------------------------
@@ -552,20 +597,13 @@ export class ControlPlaneMethods {
 		return this.#call<ModelsListResult>(METHOD.modelsList, params, options);
 	}
 
-	// -- command and agent discovery ----------------------------------------
+	// -- command discovery --------------------------------------------------
 
 	commandsCatalog(
 		params?: Record<string, unknown>,
 		options?: RequestOptions,
 	): Promise<Record<string, unknown>> {
 		return this.#call<Record<string, unknown>>(METHOD.commandsCatalog, params, options);
-	}
-
-	agentsList(
-		params?: Record<string, unknown>,
-		options?: RequestOptions,
-	): Promise<Record<string, unknown>> {
-		return this.#call<Record<string, unknown>>(METHOD.agentsList, params, options);
 	}
 
 	backgroundStart(

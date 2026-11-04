@@ -239,6 +239,16 @@ defmodule CodingAgent.SystemPrompt do
     {~w(task),
      "Use `task` for substantial independent subtasks with clear scope and acceptance criteria. " <>
        "Keep small or tightly dependent work inline; integrate delegated results and verify the combined change once."},
+    {~w(agent_message),
+     "When asked to ask or tell an existing agent such as @bob, use `agent_message` with that explicit " <>
+       "address, not `task` to spawn a persona. Explicit session:// and bot:// addresses also target existing " <>
+       "conversations. Bare task names and agent:// addresses remain family-only; @file context references " <>
+       "are unchanged. Use action=list with scope=named to discover authorized existing agents, " <>
+       "action=rename with name (null clears) for your current handle, and action=status with message_id " <>
+       "to reconcile a receipt. Acceptance is not an answer; replies arrive asynchronously. Never retry " <>
+       "or fall back after an unknown send outcome. Managed Lemon Bot invocations use product MCP " <>
+       "for named messaging, while scoped task-family messaging remains available. Native children " <>
+       "retain only family authority."},
     {[],
      "Keep working until the requested behavior is complete, not merely investigated or patched. " <>
        "If truly blocked, finish reachable work and state the exact missing prerequisite."},

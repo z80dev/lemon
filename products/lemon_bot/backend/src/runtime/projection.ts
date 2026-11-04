@@ -1,6 +1,7 @@
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal } from '../core/services';
 import { fail } from '../core/errors';
+import { botAgentProjection } from '../core/agent-addressing';
 
 /** Team bot configuration is shared; private active invocation IDs are not. */
 export function emitBotRuntimeProjection(services: BackendServices, bot: P.Bot): void {
@@ -11,6 +12,6 @@ export function emitBotRuntimeProjection(services: BackendServices, bot: P.Bot):
     if (!services.auth.canRead(viewer, 'bots', bot)) continue;
     const activeRunIds = bot.activeRunIds.filter(runId => { const run = services.store.get<P.Run>('runs', runId); return run !== null && services.auth.canRead(viewer, 'runs', run); });
     const projection = services.auth.bot(viewer, bot.id);
-    services.events.emit('bot.upserted', { ...projection, activeRunIds, activity: bot.activity }, { userIds: [viewer.userId], botId: bot.id });
+    services.events.emit('bot.upserted', { ...projection, activeRunIds, activity: bot.activity, ...botAgentProjection(services, bot) }, { userIds: [viewer.userId], botId: bot.id });
   }
 }

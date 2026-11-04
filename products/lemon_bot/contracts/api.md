@@ -204,6 +204,11 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 | `POST /bots` | `BotCreate` | `Bot` | `undefined` | Member + Machine | machine_offline, upstream_unavailable, policy_denied, conflict |
 | `GET /bots/:id` | `undefined` | `Bot` | `undefined` | Member | machine_offline, upstream_unavailable, policy_denied, conflict |
 | `PATCH /bots/:id` | `BotUpdate` | `Bot` | `undefined` | Bot owner | machine_offline, upstream_unavailable, policy_denied, conflict |
+| `GET /bots/:id/agent-identity` | `undefined` | `{agent: AgentIdentity}` | `undefined` | Bot owner | capability_unavailable, upstream_unavailable |
+| `PATCH /bots/:id/agent-identity` | `AgentIdentityUpdate` | `{agent: AgentIdentity}` | `undefined` | Bot owner | conflict, outcome_unknown, capability_unavailable, upstream_unavailable |
+| `GET /bots/:id/agents` | `undefined` | `{agents: AgentIdentity[]}` | `{query?: string; limit?: number}` | Bot owner | capability_unavailable, upstream_unavailable |
+| `POST /bots/:id/agent-messages` | `AgentMessageSend` | `AgentMessageReceipt` (202) | `undefined` | Bot owner | conflict, outcome_unknown, machine_offline, capability_unavailable, upstream_unavailable |
+| `GET /bots/:id/agent-messages/:messageId` | `undefined` | `AgentMessageReceipt` | `undefined` | Bot owner + exact originating Bot | capability_unavailable, upstream_unavailable |
 | `POST /bots/:id/duplicate` | `BotDuplicate` | `Bot` | `undefined` | Bot owner | machine_offline, upstream_unavailable, policy_denied, conflict |
 | `POST /bots/:id/preview` | `PreviewRequest` | `Confirmation` | `undefined` | Bot owner | machine_offline, upstream_unavailable, policy_denied, conflict |
 | `DELETE /bots/:id` | `Confirm` | `Deleted` | `undefined` | Bot owner | machine_offline, upstream_unavailable, policy_denied, conflict |
@@ -453,8 +458,97 @@ All MCP results are MCPCallResult<T>, structuredContent exact result type; text 
 
 Tool approval **is not the execution**: request_approval returns permission for exact proposed action, bot must still execute through permitted native tool and report actual success/failure. Explicit draft Send/human step/secret input/native tool permission remain independent gates. Consequential categories required ask_first override tool request. Bot->bot receipts wake specialist asynchronously and include visible source/target entry; do not wait recursively for target completion. Handoff respects requested replyConversationId only if both Bots and reply conversation owned by unchanged actual initiating user; otherwise deny. Attachments sent directly are authorized descriptors and copied into target destination, not raw source paths.
 
+### Addressed agents: existing context, separate handle
+
+An agent handle names an **existing** conversation. It is not the Bot's display
+`name`, its persona/profile, a new task, a native family task address (`agent://`),
+or an editor file mention. `Bot.agentHandle` is optional and nullable;
+`Bot.agentAddress` is an optional stable address for older stored resources.
+Bot addresses are `bot://<backend-instance-id>/<bot-id>` and remain unchanged when
+the handle or display name changes. Native conversations use `session://…`;
+the product projection does not expose raw native daemon session keys or private
+scope/metadata. Use returned addresses, never infer them from display labels.
+
+`AgentIdentityUpdate` is `{clientNonce,name:string|null}`. `null` clears only the
+handle. Names accept optional `@`, normalize to lower-case ASCII, and match
+`[a-z][a-z0-9_-]{0,63}`. Case-only rename is idempotent; a collision leaves the old
+binding intact. Old handles stop resolving after rename/clear; stable addresses
+still target the same conversation. Removing a Bot or revoking its owner's
+authority makes its address unavailable, not an alias to a replacement.
+
+In Web, open the current chat's **Details** or **Edit identity** for the separate
+**Agent handle** controls. Details also offers **Reachable agents and messages**.
+Native macOS/iOS **Edit identity** separates the handle from the display name;
+chat Details exposes the handle, stable address and command help. In Bot chat,
+use `/agent-name bob`, `/agent-name --clear`, `/agents [query]`, or
+`/tell @bob <message>`. The TUI has the same three commands, while its `/name`
+still changes only the session title. Discovery is a bounded content-free roster,
+not transcript access; unavailable reads must not become an empty roster.
+
+The backend derives scope from current authority, never model or client input:
+
+- The private operator configuration must explicitly pin
+  `namedAgentOperatorUserId` to the account permitted to bridge into `operator`.
+  It is unset by default: without it, all product users have private Bot-only
+  scopes. An operator sets this in the backend's private configuration file
+  (`LEMON_BOT_CONFIG_FILE`, default `DATA_DIR/config.json`), not through product UI.
+  That account must still be the enabled current `workspace.ownerUserId`, and
+  only its owned Bots can bridge to local TUI conversations. A member's `owner`
+  role, initial setup, or an ownership transfer alone cannot grant operator
+  custody. Transfer disables the existing link; it never retargets the pin.
+- Other users, including admins, see only their private owner-scoped Bot
+  namespace. Neither workspace role nor a familiar handle grants access to
+  another human's Bot, transcript, machine, or operator sessions.
+- Owner, machine, policy, verified invocation and no-handoff restrictions are
+  rechecked at dispatch and return. Channel invocations retain their audience
+  restrictions; a private main-context answer is not sent to an unapproved room.
+
+`AgentMessageSend` is `{clientNonce,target,text,conversationId?}`; the REST route
+binds the source Bot and authorizes the optional originating conversation
+(default: that Bot's main conversation). `MessageAgentInput` for MCP is only
+`{clientNonce,target,text}`: its originating conversation comes from verified
+invocation proof, not a model field. The target is an explicit `@handle` or stable
+address. The destination is the existing main Bot conversation,
+not a new isolated task. `message_bot` and `handoff` remain the APIs for separate
+jobs. MCP addressed calls bind source and reply audience to the verified active
+invocation, never to model-supplied authority. Native `agent_message` is not a
+way for managed product runs to borrow the operator namespace.
+
+Receipts carry `messageId`, `sourceId`, `targetId`, `status`, nullable `runId` and
+nullable `response`. **accepted** means admitted/queued, not answered;
+**completed** carries the visible answer; **failed** is terminal failure;
+**outcome_unknown** retains an ambiguous mutation. Retain the same nonce/message
+ID and read status; do not create a new message to retry an unknown outcome.
+Changed intent under the same ID conflicts. Self-send and missing/offline targets
+are refused without fallback. Busy targets queue instead of steering other work.
+Replies carry peer provenance, are not new human instructions, and return to the
+exact originating conversation without automatic response-to-response loops.
+
+The backend's authenticated operator WebSocket binds external identities and
+receives targeted `agent.message.request` / `agent.message.result` events.
+Requests submit through ordinary product runtime/ACL and retain the fixed
+message-to-product-run mapping before effects. Actual completion, not admission,
+supplies the response. Another connection cannot complete that target's receipt.
+Disconnect preserves identity but makes the transport offline; reconnect rebinds
+identity, never replays pending/unknown messages. Private message bodies are not
+broadcast as global named-agent events.
+
+The on-demand `sh scripts/smoke_named_agents.sh` uses private local state,
+authenticated loopback WebSockets and scripted inference. It exercises native
+existing-context routing and external transport, plus the real product REST
+addressed service, authentication, owner ACL, nonce journal, peer provenance and
+two-way messaging. Its product fixture executor forwards to actual native
+sessions; it does **not** exercise unchanged managed-node TLS/MCP invocation
+proof, provisioning, live providers/platforms, or physical Apple clients.
+It is not part of default tests/CI, and its presence is not passing evidence.
+See the [TUI smoke instructions](../../../clients/tui/README.md#on-demand-offline-smoke)
+for prerequisites and the opt-in private fixture server for manual UI checks.
+
 | Tool name | Input type | structuredContent result | Blocking | Behavior |
 |---|---|---|---|---|
+| `list_agents` | `AgentListQuery` | `{ agents: AgentIdentity[] }` | No | Bounded content-free roster in the authenticated owner's scope; optional query/limit. |
+| `rename_agent` | `AgentIdentityUpdate` | `{ agent: AgentIdentity }` | Yes; registry acknowledgment | Rename/clear only the authenticated source Bot's handle. |
+| `message_agent` | `MessageAgentInput` | `AgentMessageReceipt` | No; admission receipt | Message an existing handle/stable address from the verified invocation room; actual answer arrives asynchronously. Status is read through REST, not a separate MCP tool. |
 | `message_bot` | `MessageBotInput` | `MessageBotResult` | No; atomic receiver receipt | Wake allowed target; visible handoff and source context; returns receipt, not target completion. |
 | `handoff` | `HandoffInput` | `MessageBotResult` | No; atomic receiver receipt | As message_bot with explicit task ownership; target response routed to verified originating conversation. |
 | `create_draft` | `DraftToolInput` | `Draft` | No | Create editable card only. Never transmit externally. |
@@ -890,6 +984,62 @@ The following JSON Schema 2020-12 dictionary supplies **every input** plus share
         "color",
         "attachmentId"
       ],
+      "additionalProperties": false
+    },
+    "list_agents": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      },
+      "additionalProperties": false
+    },
+    "rename_agent": {
+      "type": "object",
+      "properties": {
+        "clientNonce": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "name": {
+          "type": ["string", "null"],
+          "maxLength": 65,
+          "pattern": "^@?[A-Za-z][A-Za-z0-9_-]{0,63}$"
+        }
+      },
+      "required": ["clientNonce", "name"],
+      "additionalProperties": false
+    },
+    "message_agent": {
+      "type": "object",
+      "properties": {
+        "clientNonce": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32768
+        }
+      },
+      "required": ["clientNonce", "target", "text"],
       "additionalProperties": false
     },
     "message_bot": {

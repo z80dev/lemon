@@ -2681,6 +2681,8 @@ public struct Bot: Codable, Hashable, Identifiable {
     public var `machineId`: ID
     public var `profileId`: String
     public var `name`: String
+    public var agentHandle: String? = nil
+    public var agentAddress: String? = nil
     public var `title`: String
     public var `job`: String
     public var `instructions`: String
@@ -2715,7 +2717,7 @@ public struct Bot: Codable, Hashable, Identifiable {
         self.`activity` = activity
         self.`activeRunIds` = activeRunIds
     }
-    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `ownerUserId`, `machineId`, `profileId`, `name`, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `skillIds`, `referenceAttachmentIds`, `mainConversationId`, `sidebar`, `activity`, `activeRunIds` }
+    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `ownerUserId`, `machineId`, `profileId`, `name`, agentHandle, agentAddress, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `skillIds`, `referenceAttachmentIds`, `mainConversationId`, `sidebar`, `activity`, `activeRunIds` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`id` = try c.decode(ID.self, forKey: .`id`)
@@ -2726,6 +2728,8 @@ public struct Bot: Codable, Hashable, Identifiable {
         self.`machineId` = try c.decode(ID.self, forKey: .`machineId`)
         self.`profileId` = try c.decode(String.self, forKey: .`profileId`)
         self.`name` = try c.decode(String.self, forKey: .`name`)
+        self.agentHandle = try c.decodeIfPresent(String.self, forKey: .agentHandle)
+        self.agentAddress = try c.decodeIfPresent(String.self, forKey: .agentAddress)
         self.`title` = try c.decode(String.self, forKey: .`title`)
         self.`job` = try c.decode(String.self, forKey: .`job`)
         self.`instructions` = try c.decode(String.self, forKey: .`instructions`)
@@ -2749,6 +2753,8 @@ public struct Bot: Codable, Hashable, Identifiable {
         try c.encode(`machineId`, forKey: .`machineId`)
         try c.encode(`profileId`, forKey: .`profileId`)
         try c.encode(`name`, forKey: .`name`)
+        try c.encodeIfPresent(agentHandle, forKey: .agentHandle)
+        try c.encodeIfPresent(agentAddress, forKey: .agentAddress)
         try c.encode(`title`, forKey: .`title`)
         try c.encode(`job`, forKey: .`job`)
         try c.encode(`instructions`, forKey: .`instructions`)

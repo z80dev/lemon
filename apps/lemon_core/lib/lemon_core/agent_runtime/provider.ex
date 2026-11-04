@@ -67,6 +67,22 @@ defmodule LemonCore.AgentRuntime.Provider do
   @callback session_recovery_snapshot(session_key(), Path.t() | nil) ::
               {:ok, map()} | {:error, term()}
 
+  @doc """
+  Recover trusted native continuation context when no admitted-command snapshot
+  is available. Accepts only a session identity, never a caller-selected path.
+
+  Success includes the original, absolute existing `:cwd` and explicit
+  `:task_child` boolean. Optional fields are `:resume` (`LemonCore.ResumeToken`),
+  `:tool_policy`, `:profile_id` and runtime-only `:meta`. Managed product contexts
+  and delegated children are forbidden; missing, ambiguous or corrupt authority
+  returns `:context_unavailable`. Fork parentage alone does not imply a child.
+  Live ordinary MCP configuration may be returned for continuation, but must not
+  be persisted or exposed on the public wire. Persisted proofs and credentials
+  must never be recovered through this callback.
+  """
+  @callback session_addressing_context(session_key()) ::
+              {:ok, map()} | {:error, :context_unavailable | :forbidden}
+
   @doc "Read redacted process receipts for an exact native session owner."
   @callback session_process_receipts(String.t()) :: {:ok, [map()]} | {:error, term()}
 
@@ -210,6 +226,7 @@ defmodule LemonCore.AgentRuntime.Provider do
                       session_history: 2,
                       session_todos: 2,
                       session_recovery_snapshot: 2,
+                      session_addressing_context: 1,
                       session_process_receipts: 1,
                       session_fork: 3,
                       session_fork: 4,

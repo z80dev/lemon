@@ -63,6 +63,9 @@ struct BotInspectorView: View {
                                 InspectorActivityTab(store: store, bot: bot, overview: overview, runs: runs, open: { destination = $0 })
                             case .details:
                                 InspectorDetailsTab(store: store, bot: bot, overview: overview, skills: skills, manages: manages, open: { destination = $0 })
+                                if let handle = bot.agentHandle { Text(verbatim: "Agent handle: @" + handle).font(LBFont.meta) }
+                                if let address = bot.agentAddress { Text(verbatim: address).font(LBFont.meta).textSelection(.enabled) }
+                                Text("Set or clear a handle in Edit identity. In this Bot’s chat: /agents lists reachable agents; /tell @bob your message asks an existing agent. Acceptance is not a completed answer.").font(LBFont.meta).foregroundStyle(LB.muted)
                             case .library:
                                 InspectorLibraryTab(store: store, bot: bot, routines: routines, open: { destination = $0 })
                             }

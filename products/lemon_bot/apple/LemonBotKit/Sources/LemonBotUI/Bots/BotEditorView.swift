@@ -74,6 +74,7 @@ struct BotEditorView: View {
                         Text("Bots on one OS user are not isolated. Use separate hosts/users for hard isolation.").font(LBFont.meta)
                     }
                 }
+                if let bot { AgentHandleView(store: store, bot: bot) }
                 SwiftUI.Section("Avatar") {
                     Picker("Character shape", selection: $shape) { Text("Round").tag("round"); Text("Square").tag("square"); Text("Star").tag("star") }
                     Picker("Character color", selection: $color) { ForEach(["yellow", "blue", "green", "purple", "orange", "red"], id: \.self) { value in Text(value.capitalized).tag(value) } }
