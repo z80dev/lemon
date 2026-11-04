@@ -80,7 +80,7 @@ defmodule LemonControlPlane.Methods.NamedAgents do
       {"scope", {:text, 256}, false},
       {"sourceId", {:text, 1024}, true},
       {"target", {:text, 1024}, true},
-      {"text", {:text, 32768}, true},
+      {"text", {:text, 32_768}, true},
       {"messageId", {:text, 256}, true}
     ]
 
@@ -96,7 +96,7 @@ defmodule LemonControlPlane.Methods.NamedAgents do
       {"messageId", {:text, 256}, true},
       {"status", :status, true},
       {"runId", {:text, 256}, false},
-      {"response", {:optional_text, 32768}, false},
+      {"response", {:optional_text, 32_768}, false},
       {"error", :error, false}
     ]
 
@@ -334,6 +334,7 @@ defmodule LemonControlPlane.Methods.NamedAgents do
 end
 
 defmodule LemonControlPlane.Methods.AgentIdentityList do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
   def name, do: "agent.identity.list"
   def scopes, do: [:read]
@@ -343,6 +344,7 @@ defmodule LemonControlPlane.Methods.AgentIdentityList do
 end
 
 defmodule LemonControlPlane.Methods.AgentIdentityRename do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
   def name, do: "agent.identity.rename"
   def scopes, do: [:write]
@@ -352,6 +354,7 @@ defmodule LemonControlPlane.Methods.AgentIdentityRename do
 end
 
 defmodule LemonControlPlane.Methods.AgentIdentityRegister do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
   def name, do: "agent.identity.register"
   def scopes, do: [:admin]
@@ -361,6 +364,7 @@ defmodule LemonControlPlane.Methods.AgentIdentityRegister do
 end
 
 defmodule LemonControlPlane.Methods.AgentIdentityUnregister do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
   def name, do: "agent.identity.unregister"
   def scopes, do: [:admin]
@@ -370,6 +374,7 @@ defmodule LemonControlPlane.Methods.AgentIdentityUnregister do
 end
 
 defmodule LemonControlPlane.Methods.AgentMessageSend do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
   def name, do: "agent.message.send"
   def scopes, do: [:write]
@@ -379,6 +384,7 @@ defmodule LemonControlPlane.Methods.AgentMessageSend do
 end
 
 defmodule LemonControlPlane.Methods.AgentMessageGet do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
   def name, do: "agent.message.get"
   def scopes, do: [:read]
@@ -388,6 +394,7 @@ defmodule LemonControlPlane.Methods.AgentMessageGet do
 end
 
 defmodule LemonControlPlane.Methods.AgentMessageComplete do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
   def name, do: "agent.message.complete"
   def scopes, do: [:admin]

@@ -175,11 +175,12 @@ describe('addressed Bot agents', () => {
     expect(control.sendCount).toBe(2);
     expect(fixture.submissions.filter(item => item.message.clientNonce === 'agent_nonce_00000002')).toHaveLength(0);
 
-    fixture.store.put('agentMessages', { ...fixture.store.list<TestMessageRecord>('agentMessages')[0]!, targetId: '@target', status: 'outcome_unknown' });
+    const pending = fixture.store.list<TestMessageRecord>('agentMessages', record => record.messageId === nonce)[0]!;
+    fixture.store.put('agentMessages', { ...pending, targetId: '@target', status: 'outcome_unknown' });
     const targetId = `bot://${fixture.store.metadata<string>('instanceId')}/target`;
     await control.completeFrom(nonce, 'completed', 'Done');
     await until(() => fixture.submissions.some(item => item.message.clientNonce.startsWith('agent_result_')));
-    const record = fixture.store.list<TestMessageRecord>('agentMessages')[0]!;
+    const record = fixture.store.require<TestMessageRecord>('agentMessages', pending.id);
     expect(record.targetId).toBe(targetId);
     expect(record.status).toBe('completed');
     expect(control.sendCount).toBe(2);

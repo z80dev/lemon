@@ -64,7 +64,7 @@ defmodule LemonControlPlane.Methods.NamedAgentsTest do
     base = %{"sourceId" => "bot://x/a", "target" => "@bob", "text" => "hello", "messageId" => "m"}
 
     for params <- [
-          Map.put(base, "text", String.duplicate("x", 32769)),
+          Map.put(base, "text", String.duplicate("x", 32_769)),
           Map.put(base, "messageId", ""),
           Map.put(base, "sourceId", nil),
           Map.put(base, "conn_pid", "forged")
@@ -77,7 +77,7 @@ defmodule LemonControlPlane.Methods.NamedAgentsTest do
                %{
                  "messageId" => "m",
                  "status" => "completed",
-                 "response" => String.duplicate("x", 32769)
+                 "response" => String.duplicate("x", 32_769)
                },
                context()
              )
