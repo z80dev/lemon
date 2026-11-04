@@ -494,13 +494,17 @@ work, or create another session store.
 
 Fresh managed native runs register their existing live owner before execution,
 so recovery does not require a lifecycle index created by the first finalized
-run. Managed user entries carry owner-written `lemonRun` provenance in the
-existing native journal: logical run ID, logical session key and native UUID.
-Terminal association follows the selected user entry's exact owned binding,
-not the order in which start events reach storage. Declared malformed or
-foreign bindings remain unknown; legacy untagged journals retain conservative
-prompt/time matching. This metadata does not enter provider input or create
-another ownership store.
+run. Managed user entries and `async_followup` custom entries carry owner-written
+`lemonRun` provenance in the existing native journal: logical run ID, logical
+session key and native UUID (`details.lemonRun` on custom entries). Terminal
+association follows the selected input's exact owned binding, not the order in
+which start events reach storage. A peer result's `details.run_id` identifies the
+peer execution, never the receiving turn. Declared malformed or foreign bindings
+and unbound async inputs remain unknown; only legacy untagged human inputs retain
+conservative prompt/time matching. A matching live native owner can identify its
+active async turn before summary publication; retained recovery requires matching
+stored ownership. This metadata does not enter provider input or create another
+ownership store.
 
 Requests accept:
 
@@ -551,8 +555,10 @@ A live attempt identifies the native execution instance; a retained attempt
 uses its fixed run ID when that association is known. The selected native
 branch, not simply the newest session run or an idle live session's retained
 invocation ID, determines completion. Ambiguous prompt/start-interval association
-remains unknown. Answer-so-far belongs only to the current selected user turn;
-before that turn produces text, it is empty rather than the previous answer.
+remains unknown. Answer-so-far belongs only to the current selected input turn,
+whether human or asynchronous; before it produces text, it is empty rather than
+the previous answer. Earlier turns' tools and messages are not reassigned to the
+current run.
 
 The server compares two complete owner-read collections. If they differ, it
 returns `status: "retry", reason: "snapshot_raced"` with no snapshot. Optional

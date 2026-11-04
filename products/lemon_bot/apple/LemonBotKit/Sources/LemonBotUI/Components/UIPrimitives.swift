@@ -143,6 +143,7 @@ struct BotIdentityAnchor: View {
             BotBadgedAvatar(store: store, bot: bot, size: 36, presence: AvatarPresence(activity: bot.activity, online: store.isOnline), ring: LB.canvas)
             VStack(alignment: .leading, spacing: 1) {
                 Text(bot.name).font(LBFont.rowTitle).foregroundStyle(LB.ink)
+                if let handle = bot.agentHandle { Text(verbatim: "@" + handle).font(LBFont.meta).foregroundStyle(LB.muted) }
                 Text(store.machine(for: bot)?.name ?? "Unknown machine").font(LBFont.meta).foregroundStyle(LB.muted)
             }
             Spacer(minLength: 8)

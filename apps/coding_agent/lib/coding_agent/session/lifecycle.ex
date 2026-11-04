@@ -220,6 +220,7 @@ defmodule CodingAgent.Session.Lifecycle do
         (approval_context || %{})[:shared_memory_grant] == true
       )
       |> Keyword.merge(private_native_opts(approval_context))
+      |> Keyword.put(:native_managed_context, Params.named_messaging_managed?(opts))
       |> Keyword.put(:wasm_tools, wasm_boot.wasm_tools)
       |> Keyword.put(:wasm_status, wasm_boot.wasm_status)
 
@@ -595,6 +596,10 @@ defmodule CodingAgent.Session.Lifecycle do
         tool_disclosure: state.tool_disclosure
       ]
       |> Keyword.merge(private_native_opts(state.approval_context))
+      |> Keyword.put(
+        :native_managed_context,
+        Params.named_messaging_managed?(state.tool_opts)
+      )
 
     lifecycle =
       ExtensionLifecycle.reload(

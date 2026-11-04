@@ -1,6 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import type * as P from '../../../contracts/protocol';
 import type { InvocationMcpServer } from '../runtime/runs';
+import type { AddressedAgentService } from './agent-addressing';
 
 export interface HttpClient { (input: RequestInfo | URL, init?: RequestInit): Promise<Response> }
 export type Entity = P.Resource & Record<string, unknown>;
@@ -127,7 +128,7 @@ export interface BackendConfiguration {
 }
 export interface BackendServices {
   config: BackendConfiguration; store: EntityStore; events: EventService; auth: AccessService; mutations: MutationService;
-  lemon: LemonService; runtime: RuntimeService; attachments: AttachmentService; gates: GateService; integrations: IntegrationServices;
+  lemon: LemonService; runtime: RuntimeService; addressedAgents: AddressedAgentService; attachments: AttachmentService; gates: GateService; integrations: IntegrationServices;
   http?: HttpClient;
   id(prefix?: string): string;
   now(): number;

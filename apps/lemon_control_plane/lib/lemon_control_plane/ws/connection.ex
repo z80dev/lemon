@@ -162,6 +162,16 @@ defmodule LemonControlPlane.WS.Connection do
   def handle_info({:event, _, _, _}, %{resync_required: true} = state), do: {:ok, state}
   def handle_info({:event, _, _}, %{resync_required: true} = state), do: {:ok, state}
 
+  def handle_info(
+        {:named_agent_event, event_name, payload},
+        %{connected: true, auth: %{role: :operator}, resync_required: false} = state
+      )
+      when event_name in ["agent.message.request", "agent.message.result"] and is_map(payload) do
+    push_event(event_name, payload, increment_event_seq(state))
+  end
+
+  def handle_info({:named_agent_event, _, _}, state), do: {:ok, state}
+
   def handle_info({:node_event, event_name, payload}, state) do
     push_event(event_name, payload, increment_event_seq(state))
   end

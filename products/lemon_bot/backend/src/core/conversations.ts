@@ -417,7 +417,11 @@ export function createConversationRoutes(services: BackendServices): Route[] {
       const input = parse(z.object({ ...pageFields, beforeSeq: z.coerce.number().int().positive().optional(), afterSeq: z.coerce.number().int().nonnegative().optional() }).strict(), queryObject(context.query));
       return services.page(context, visibleEntries(services, principal(context.user), room(context).id).filter(entry => (!input.beforeSeq || entry.seq < input.beforeSeq) && (input.afterSeq === undefined || entry.seq > input.afterSeq)), { ascending: true, key: entry => String(entry.seq).padStart(16, '0') });
     }),
-    route('POST', '/conversations/:id/messages', context => sendMessage(services, principal(context.user), room(context).id, parse(messageSchema, context.body), context), 202),
+    route('POST', '/conversations/:id/messages', async context => {
+      const input = parse(messageSchema, context.body), actor = principal(context.user);
+      const command = await services.addressedAgents?.command(actor, context.params.id!, input, context);
+      return command ?? sendMessage(services, actor, context.params.id!, input, context);
+    }, 202),
     route('GET', '/conversations/:id/messages/receipts/:nonce', context => readMessageReceipt(services, principal(context.user), context.params.id!, parse(mutation.shape.clientNonce, context.params.nonce))),
     route('GET', '/entries/:id', context => authorizedEntry(services, principal(context.user), context.params.id!)),
     route('POST', '/entries/:id/feedback', context => {

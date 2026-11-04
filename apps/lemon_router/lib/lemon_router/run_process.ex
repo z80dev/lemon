@@ -201,12 +201,18 @@ defmodule LemonRouter.RunProcess do
         provenance: :direct
       )
 
-      # Submit to gateway
-      if submit_to_gateway? do
-        send(self(), :submit_to_gateway)
-      end
+      # Persist the real native owner before it can invoke addressed tools.
+      case LemonRouter.AgentMessagingSessions.capture(execution_request) do
+        :ok ->
+          if submit_to_gateway? do
+            send(self(), :submit_to_gateway)
+          end
 
-      {:ok, maybe_schedule_gateway_submit_deadline(state)}
+          {:ok, maybe_schedule_gateway_submit_deadline(state)}
+
+        {:error, _} ->
+          {:stop, :agent_session_context_unavailable}
+      end
     else
       _ -> {:stop, {:invalid_execution_request, run_id}}
     end

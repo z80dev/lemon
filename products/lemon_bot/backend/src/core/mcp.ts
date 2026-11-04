@@ -30,6 +30,9 @@ const botMessage = contextSchema.extend({ targetBotId: id, text, attachmentIds: 
 const schemas: { [K in keyof P.MCPToolInputs]: z.ZodType<P.MCPToolInputs[K]> } = {
   message_bot: botMessage,
   handoff: botMessage.extend({ task: boundedText(4096, 1) }),
+  list_agents: z.object({ query: boundedText(256).optional(), limit: z.number().int().min(1).max(200).optional() }).strict(),
+  rename_agent: mutation.extend({ name: z.string().min(1).max(65).regex(/^@?[A-Za-z][A-Za-z0-9_-]{0,63}$/).nullable() }),
+  message_agent: mutation.extend({ target: z.string().min(1).max(1024).regex(/^[^\u0000-\u0020]+$/), text: boundedText(32768, 1).refine(value => Buffer.byteLength(value, 'utf8') <= 32768) }),
   create_draft: contextSchema.extend({ content: draftContent }),
   ask_user: contextSchema.extend({ title: boundedText(512, 1), fields, ...deadline }),
   request_approval: contextSchema.extend({ category: z.enum(['shell', 'files', 'external_message', 'calendar', 'publish', 'purchase', 'permissions', 'connector', 'handoff']), title: boundedText(512, 1), description: boundedText(8192, 1), target: boundedText(1024, 1), inputs: jsonObject, ...deadline }),
@@ -48,7 +51,7 @@ const schemas: { [K in keyof P.MCPToolInputs]: z.ZodType<P.MCPToolInputs[K]> } =
   create_reminder: contextSchema.extend({ text: boundedText(4096, 1), dueAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), timezone: boundedText(128, 1) }),
 };
 const descriptions: Record<keyof P.MCPToolInputs, string> = {
-  message_bot: 'Send an asynchronous job to another bot owned by the actual initiating user.', handoff: 'Delegate to an owned bot and return results to the original authorized conversation.', create_draft: 'Prepare an editable private draft; does not send it.', ask_user: 'Ask non-secret structured questions and wait for explicit answers.', request_approval: 'Request permission for one exact proposal; does not execute it.', request_human_step: 'Ask the owner to complete a step on the assigned machine.', request_secret: 'Request write-only destination secret storage; never returns its value.', send_voice_memo: 'Generate a real voice memo using configured speech.', share_file: 'Import an authorized destination-local file and share it.', create_routine: 'Persist a routine owned by the initiating user.', update_routine: 'Update an owned routine with revision fencing.', save_skill: 'Write an owned skill to the caller bot machine.', list_bots: 'List bots owned by the actual initiating user.', post_to_group: 'Post to an owned bot group; only explicit mentions wake peers.', remember: 'Store a fact or preference in the owned bot’s assigned profile memory.', create_bot: 'Create an owned helper only after explicit human approval.', update_preferences: 'Change durable preferences from explicit authorized user intent.', create_reminder: 'Persist a reminder owned by the initiating user.',
+  message_bot: 'Send an asynchronous job to another bot owned by the actual initiating user.', handoff: 'Delegate to an owned bot and return results to the original authorized conversation.', list_agents: 'Discover addressed agents in the authenticated owner scope; acceptance never implies a completed answer.', rename_agent: 'Set or clear the authenticated Bot handle without changing its display name.', message_agent: 'Message an existing @handle or stable agent address from this exact invocation conversation; its reply arrives asynchronously.', create_draft: 'Prepare an editable private draft; does not send it.', ask_user: 'Ask non-secret structured questions and wait for explicit answers.', request_approval: 'Request permission for one exact proposal; does not execute it.', request_human_step: 'Ask the owner to complete a step on the assigned machine.', request_secret: 'Request write-only destination secret storage; never returns its value.', send_voice_memo: 'Generate a real voice memo using configured speech.', share_file: 'Import an authorized destination-local file and share it.', create_routine: 'Persist a routine owned by the initiating user.', update_routine: 'Update an owned routine with revision fencing.', save_skill: 'Write an owned skill to the caller bot machine.', list_bots: 'List bots owned by the actual initiating user.', post_to_group: 'Post to an owned bot group; only explicit mentions wake peers.', remember: 'Store a fact or preference in the owned bot’s assigned profile memory.', create_bot: 'Create an owned helper only after explicit human approval.', update_preferences: 'Change durable preferences from explicit authorized user intent.', create_reminder: 'Persist a reminder owned by the initiating user.',
 };
 
 export interface ToolInvocation { principal: Principal; bot: P.Bot; run: P.Run; conversation: P.Conversation }
@@ -138,6 +141,13 @@ function toolHandlers(services: BackendServices): ToolHandlers {
   return {
     message_bot: (input, invocation, context) => specialist(services, input, invocation, context),
     handoff: (input, invocation, context) => specialist(services, input, invocation, context),
+    list_agents: (input, invocation) => services.addressedAgents.list(invocation.principal, invocation.bot.id, input),
+    rename_agent: (input, invocation) => services.addressedAgents.rename(invocation.principal, invocation.bot.id, input.name),
+    message_agent: (input, invocation) => services.addressedAgents.send(invocation.principal, invocation.bot.id, input, {
+      conversationId: invocation.conversation.id,
+      parentRunId: invocation.run.id,
+      returnConversationId: services.store.metadata<string>(`runReturnConversation:${invocation.run.id}`) ?? undefined,
+    }),
     create_draft: async (input, invocation) => {
       validateAttachments(services, invocation.principal, invocation.conversation, input.content.attachmentIds);
       return createDraft(services, invocation.principal, { ...input, botId: invocation.bot.id, runId: invocation.run.id, targetUserId: invocation.principal.userId, conversationId: invocation.conversation.id });
@@ -253,6 +263,11 @@ function toolHandlers(services: BackendServices): ToolHandlers {
 const rpcSchema = z.object({ jsonrpc: z.literal('2.0'), id: z.union([z.string().max(128), z.number().finite(), z.null()]).optional(), method: z.string().min(1).max(128), params: z.unknown().optional() }).strict();
 const callSchema = z.object({ name: z.enum(Object.keys(schemas) as [keyof P.MCPToolInputs, ...(keyof P.MCPToolInputs)[]]), arguments: z.unknown() }).strict();
 const noParams = z.object({}).strict();
+const addressedToolDefinitions: P.JSONObject = {
+  list_agents: { type: 'object', properties: { query: { type: 'string', maxLength: 256 }, limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false },
+  rename_agent: { type: 'object', properties: { clientNonce: { type: 'string', minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }, name: { type: ['string', 'null'], maxLength: 65, pattern: '^@?[A-Za-z][A-Za-z0-9_-]{0,63}$' } }, required: ['clientNonce', 'name'], additionalProperties: false },
+  message_agent: { type: 'object', properties: { clientNonce: { type: 'string', minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }, target: { type: 'string', minLength: 1, maxLength: 1024 }, text: { type: 'string', minLength: 1, maxLength: 32768 } }, required: ['clientNonce', 'target', 'text'], additionalProperties: false },
+};
 
 export function createMcpRoutes(services: BackendServices): Route[] {
   const handlers = toolHandlers(services);
@@ -261,11 +276,16 @@ export function createMcpRoutes(services: BackendServices): Route[] {
     const input = parse(schemas[name], raw);
     const token = principal(context.user);
     if (token.kind !== 'bot' || !token.botId) fail('unauthenticated', 'Bot tools require a bot bearer token.');
-    if (name === 'list_bots') {
-      const listInput = input as P.BotListInput;
-      const actor = resolveToolInvocation(services, token, context.request).principal;
+    if (name === 'list_bots' || name === 'list_agents') {
+      const listInput = input as P.BotListInput | P.AgentListQuery;
+      const invocation = resolveToolInvocation(services, token, context.request);
+      if (name === 'list_agents') {
+        const result = await services.addressedAgents.list(invocation.principal, invocation.bot.id, listInput);
+        return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result as P.MCPToolResults[K] };
+      }
+      const actor = invocation.principal;
       const query = new URLSearchParams();
-      if (listInput.query !== undefined) query.set('query', listInput.query); if (listInput.limit !== undefined) query.set('limit', String(listInput.limit)); if (listInput.cursor !== undefined) query.set('cursor', listInput.cursor);
+      if (listInput.query !== undefined) query.set('query', listInput.query); if (listInput.limit !== undefined) query.set('limit', String(listInput.limit)); if ('cursor' in listInput && listInput.cursor !== undefined) query.set('cursor', listInput.cursor);
       const result = await services.invoke<P.Page<P.Bot>>(actor, 'GET', `/v1/bots${query.size ? '?' + query : ''}`);
       return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result as P.MCPToolResults[K] };
     }
@@ -325,7 +345,7 @@ export function createMcpRoutes(services: BackendServices): Route[] {
       if (message.method === 'ping') { parse(noParams, message.params ?? {}); return Response.json(respond({})); }
       if (message.method === 'tools/list') {
         parse(noParams, message.params ?? {});
-        const tools: P.MCPToolSchema[] = (Object.keys(schemas) as (keyof P.MCPToolInputs)[]).map(name => ({ name, description: descriptions[name], inputSchema: { $schema: 'https://json-schema.org/draft/2020-12/schema', $ref: `#/$defs/${name}`, $defs: toolDefinitions } }));
+        const tools: P.MCPToolSchema[] = (Object.keys(schemas) as (keyof P.MCPToolInputs)[]).map(name => ({ name, description: descriptions[name], inputSchema: { $schema: 'https://json-schema.org/draft/2020-12/schema', $ref: `#/$defs/${name}`, $defs: { ...toolDefinitions, ...addressedToolDefinitions } } }));
         return Response.json(respond({ tools }));
       }
       if (message.method !== 'tools/call') return invalid(-32601, 'Method not found.');

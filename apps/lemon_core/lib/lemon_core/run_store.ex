@@ -23,6 +23,49 @@ defmodule LemonCore.RunStore do
   @doc "Fetch one durable session index without confusing owner failure with absence."
   def fetch_session_index(session_key), do: Store.fetch(:sessions_index, session_key)
 
+  @doc """
+  Fetch the exact native session incarnation, backfilling legacy indexes by CAS.
+
+  The opaque token is durable and independent of wall-clock timestamps. A
+  missing index is never created by this operation; a concurrent delete or
+  update makes the backfill retry against the latest strictly fetched row.
+  """
+  @spec ensure_session_incarnation(binary()) :: {:ok, map()} | {:error, atom()}
+  def ensure_session_incarnation(session_key), do: ensure_session_incarnation(session_key, 64)
+
+  defp ensure_session_incarnation(_session_key, 0), do: {:error, :session_busy}
+
+  defp ensure_session_incarnation(session_key, attempts) do
+    case fetch_session_index(session_key) do
+      {:ok, %{session_key: ^session_key} = index} ->
+        case Map.fetch(index, :incarnation) do
+          {:ok, token} when is_binary(token) and byte_size(token) == 22 ->
+            {:ok, index}
+
+          :error ->
+            updated = Map.put(index, :incarnation, new_session_incarnation())
+
+            case Store.compare_and_swap(:sessions_index, session_key, index, updated) do
+              :ok -> {:ok, updated}
+              {:error, :mismatch} -> ensure_session_incarnation(session_key, attempts - 1)
+              {:error, _} -> {:error, :store_unavailable}
+            end
+
+          _invalid ->
+            {:error, :invalid_session}
+        end
+
+      {:ok, nil} ->
+        {:error, :not_found}
+
+      {:ok, _invalid} ->
+        {:error, :invalid_session}
+
+      {:error, _} ->
+        {:error, :store_unavailable}
+    end
+  end
+
   @spec append_event(term(), term()) :: :ok | {:error, term()}
   def append_event(run_id, event), do: Store.append_run_event(run_id, execution_projection(event))
 
@@ -57,6 +100,7 @@ defmodule LemonCore.RunStore do
 
     Store.put_new(:sessions_index, session_key, %{
       session_key: session_key,
+      incarnation: new_session_incarnation(),
       agent_id: agent_id,
       origin: origin,
       created_at_ms: now,
@@ -89,6 +133,9 @@ defmodule LemonCore.RunStore do
     delete_session_index(session_key)
     delete_history(session_key)
   end
+
+  defp new_session_incarnation,
+    do: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
 
   @doc "Remove execution-only MCP configuration before persistence or management projection."
   @spec execution_projection(term()) :: term()

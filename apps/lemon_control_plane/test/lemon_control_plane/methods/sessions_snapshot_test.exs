@@ -932,6 +932,290 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
   end
 
   @tag :tmp_dir
+  test "bound async inputs select their own committed answers and selected journal branch", c do
+    alias CodingAgent.SessionManager
+    alias CodingAgent.SessionManager.SessionEntry
+
+    first_id = "named_result_first_#{c.id}"
+    second_id = "named_result_second_#{c.id}"
+    root = human_journal(c.tmp_dir, c.key, c.id)
+    root_leaf = root.leaf_id
+    root_user = hd(SessionManager.get_branch(root)).id
+    finalize(c, %{ok: true, answer: "HUMAN ANSWER"})
+
+    first =
+      root
+      |> SessionManager.append_entry(
+        SessionEntry.custom_message(
+          "async_followup",
+          "<untrusted_peer_result>Done</untrusted_peer_result>",
+          display: true,
+          details: async_details(first_id, c.key, root.header.id, c.id)
+        )
+      )
+      |> SessionManager.append_message(%{role: :assistant, content: "FIRST ASYNC ANSWER"})
+
+    first_answer = first.leaf_id
+
+    # Neither another custom-message kind nor execution provenance can select a run.
+    first =
+      first
+      |> SessionManager.append_entry(
+        SessionEntry.custom_message("notice", "Informational only",
+          details: async_details(second_id, c.key, root.header.id, c.id)
+        )
+      )
+      |> SessionManager.append_entry(
+        SessionEntry.custom("lemon.execution_context", %{"runId" => second_id})
+      )
+
+    second =
+      first
+      |> SessionManager.append_entry(
+        SessionEntry.custom_message(
+          "async_followup",
+          "<untrusted_peer_result>Done</untrusted_peer_result>",
+          display: true,
+          details: async_details(second_id, c.key, root.header.id, c.id)
+        )
+      )
+      |> SessionManager.append_message(%{role: :assistant, content: "SECOND ASYNC ANSWER"})
+
+    for {id, answer} <- [{first_id, "FIRST ASYNC ANSWER"}, {second_id, "SECOND ASYNC ANSWER"}] do
+      :ok =
+        RunStore.finalize(id, %{
+          session_key: c.key,
+          prompt: "Run tool",
+          completed: %{ok: true, answer: answer}
+        })
+    end
+
+    path = SessionManager.session_file_path(c.tmp_dir, root.header.id)
+    :ok = SessionManager.save_to_file(path, second)
+
+    :ok =
+      LemonCore.ChatStateStore.put(c.key, %LemonCore.ChatState{
+        last_engine: "lemon",
+        last_resume_token: root.header.id
+      })
+
+    :ok = AgentRuntime.register(CodingAgent.ControlPlaneProvider)
+
+    on_exit(fn ->
+      LemonCore.ChatStateStore.delete(c.key)
+      Store.delete(:runs, first_id)
+      Store.delete(:runs, second_id)
+      File.rm_rf!(CodingAgent.Config.sessions_dir(c.tmp_dir))
+    end)
+
+    target = Map.put(params(c), "cwd", c.tmp_dir)
+    assert {:ok, latest} = SessionsSnapshot.handle(target, ctx())
+    assert latest["identity"]["runId"] == second_id
+    assert latest["snapshot"]["phase"] == "completed"
+    assert latest["snapshot"]["answer"]["canonical"]
+    assert latest["snapshot"]["answer"]["text"] == "SECOND ASYNC ANSWER"
+    rows = Map.new(latest["snapshot"]["messages"], &{&1["id"], &1})
+    assert rows[second.leaf_id]["runId"] == second_id
+    refute rows[root_user]["runId"] == second_id
+    refute rows[root_leaf]["runId"] == second_id
+    refute rows[first_answer]["runId"] == second_id
+
+    assert [%{"toolCallId" => "human-call", "phase" => "unknown"} = old_action] =
+             latest["snapshot"]["actions"]
+
+    refute old_action["runId"] == second_id
+
+    selected = SessionManager.set_leaf_id(%{second | file_path: path}, first.leaf_id)
+    proof = %{"identity" => latest["identity"], "runId" => second_id}
+
+    assert {:ok, older} =
+             SessionsSnapshot.handle(Map.put(target, "continuationFrom", proof), ctx())
+
+    assert older["identity"]["runId"] == first_id
+    assert older["snapshot"]["answer"]["text"] == "FIRST ASYNC ANSWER"
+    refute older["continuation"]
+    refute Enum.any?(older["snapshot"]["messages"], &(&1["id"] == second.leaf_id))
+    SessionManager.set_leaf_id(selected, root_leaf)
+    assert {:ok, human} = SessionsSnapshot.handle(target, ctx())
+    assert human["identity"]["runId"] == c.id
+    assert human["snapshot"]["answer"]["text"] == "HUMAN ANSWER"
+  end
+
+  @tag :tmp_dir
+  test "invalid async boundaries stay unknown without borrowing a human completion or tools", c do
+    alias CodingAgent.SessionManager
+    alias CodingAgent.SessionManager.SessionEntry
+
+    async_id = "named_result_#{c.id}"
+    foreign_id = "foreign_#{c.id}"
+    foreign_key = "agent:snapshot_foreign_#{c.id}:main"
+    root = human_journal(c.tmp_dir, c.key, c.id)
+    valid = async_details(async_id, c.key, root.header.id, c.id)
+    finalize(c, %{ok: true, answer: "HUMAN ANSWER"})
+
+    for {id, key} <- [{async_id, c.key}, {foreign_id, foreign_key}] do
+      :ok =
+        RunStore.finalize(id, %{
+          session_key: key,
+          prompt: "Run tool",
+          completed: %{ok: true, answer: "MUST NOT BORROW"}
+        })
+    end
+
+    on_exit(fn ->
+      Store.delete(:runs, async_id)
+      Store.delete(:runs, foreign_id)
+      RunStore.delete_session_index(foreign_key)
+      RunStore.delete_history(foreign_key)
+    end)
+
+    invalid = [
+      {"missing", Map.delete(valid, "lemonRun")},
+      {"nil", Map.put(valid, "lemonRun", nil)},
+      {"empty id", put_in(valid, ["lemonRun", "id"], "")},
+      {"wrong key", put_in(valid, ["lemonRun", "sessionKey"], foreign_key)},
+      {"wrong native owner", put_in(valid, ["lemonRun", "sessionId"], "foreign-native")},
+      {"wrong summary owner", put_in(valid, ["lemonRun", "id"], foreign_id)}
+    ]
+
+    for {reason, details} <- invalid, live <- [false, true] do
+      journal =
+        SessionManager.append_entry(
+          root,
+          SessionEntry.custom_message(
+            "async_followup",
+            "<untrusted_peer_result>Done</untrusted_peer_result>",
+            display: true,
+            details: details
+          )
+        )
+
+      hinted_id =
+        case details["lemonRun"] do
+          %{"id" => id} when is_binary(id) and id != "" -> id
+          _ -> c.id
+        end
+
+      native =
+        %{
+          c.native
+          | session_id: root.header.id,
+            run_id: if(live, do: hinted_id),
+            live: live,
+            streaming: live,
+            branch_id: journal.leaf_id,
+            entries: SessionManager.get_branch(journal)
+        }
+        |> Map.put(:attempt, "obsolete-live-attempt")
+
+      Agent.update(c.state, &Map.put(&1, :native_result, {:ok, native}))
+      assert {:ok, result} = SessionsSnapshot.handle(params(c), ctx())
+      assert result["identity"]["runId"] == nil, reason
+      assert result["identity"]["attempt"] == nil, reason
+      assert result["consistency"]["runStatus"] == "unknown", reason
+      assert result["snapshot"]["phase"] == "unknown", reason
+      refute result["snapshot"]["terminal"], reason
+      assert result["snapshot"]["answer"]["text"] == "", reason
+      refute result["snapshot"]["answer"]["canonical"], reason
+
+      assert [%{"toolCallId" => "human-call", "phase" => "unknown"} = action] =
+               result["snapshot"]["actions"]
+
+      refute action["runId"] == hinted_id, reason
+    end
+  end
+
+  @tag :tmp_dir
+  test "a valid live async input owns only its rows before summary publication and through commit",
+       c do
+    alias CodingAgent.SessionManager
+    alias CodingAgent.SessionManager.SessionEntry
+
+    async_id = "named_result_live_#{c.id}"
+    root = human_journal(c.tmp_dir, c.key, c.id)
+    finalize(c, %{ok: true, answer: "HUMAN ANSWER"})
+
+    active =
+      root
+      |> SessionManager.append_entry(
+        SessionEntry.custom_message(
+          "async_followup",
+          "<untrusted_peer_result>Done</untrusted_peer_result>",
+          display: true,
+          details: async_details(async_id, c.key, root.header.id, c.id)
+        )
+      )
+      |> SessionManager.append_message(%{
+        role: :assistant,
+        content: [
+          %{type: :tool_call, id: "async-call", name: "bash", arguments: %{command: "pwd"}}
+        ]
+      })
+
+    native = %{
+      c.native
+      | session_id: root.header.id,
+        run_id: async_id,
+        branch_id: active.leaf_id,
+        entries: SessionManager.get_branch(active)
+    }
+
+    on_exit(fn -> Store.delete(:runs, async_id) end)
+    Agent.update(c.state, &Map.put(&1, :native_result, {:ok, native}))
+    assert {:ok, nil} = RunStore.fetch(async_id)
+    assert {:ok, before} = SessionsSnapshot.handle(params(c), ctx())
+    assert before["identity"]["runId"] == async_id
+    assert before["snapshot"]["phase"] == "running"
+    assert before["snapshot"]["answer"]["text"] == ""
+    refute before["snapshot"]["answer"]["canonical"]
+    actions = Map.new(before["snapshot"]["actions"], &{&1["toolCallId"], &1})
+    assert actions["async-call"]["phase"] == "started"
+    assert actions["async-call"]["runId"] == async_id
+    assert actions["human-call"]["phase"] == "unknown"
+    refute actions["human-call"]["runId"] == async_id
+
+    retained =
+      native
+      |> Map.merge(%{run_id: nil, live: false, streaming: false})
+      |> Map.delete(:attempt)
+
+    Agent.update(c.state, &Map.put(&1, :native_result, {:ok, retained}))
+    assert {:ok, without_live_owner} = SessionsSnapshot.handle(params(c), ctx())
+    assert without_live_owner["identity"]["runId"] == nil
+    assert without_live_owner["consistency"]["runStatus"] == "unknown"
+    assert without_live_owner["snapshot"]["phase"] == "unknown"
+    refute without_live_owner["snapshot"]["answer"]["canonical"]
+    Agent.update(c.state, &Map.put(&1, :native_result, {:ok, native}))
+
+    :ok =
+      RunStore.append_event(async_id, %{
+        phase: :started,
+        action: %{id: "tool_async-call", kind: :tool, detail: %{tool_call_id: "async-call"}}
+      })
+
+    assert {:ok, running} = SessionsSnapshot.handle(params(c), ctx())
+    assert running["identity"]["runId"] == async_id
+    assert running["consistency"]["runStatus"] == "ok"
+    assert running["snapshot"]["phase"] == "running"
+
+    :ok =
+      RunStore.finalize(async_id, %{
+        session_key: c.key,
+        prompt: "Run tool",
+        completed: %{ok: true, answer: "COMMITTED ASYNC ANSWER"}
+      })
+
+    # Native streaming can lag synchronous commit; the selected binding still
+    # recovers this peer result, never the preceding human's terminal summary.
+    assert {:ok, terminal} = SessionsSnapshot.handle(params(c), ctx())
+    assert terminal["identity"]["runId"] == async_id
+    assert terminal["snapshot"]["phase"] == "completed"
+    assert terminal["snapshot"]["answer"]["text"] == "COMMITTED ASYNC ANSWER"
+    assert terminal["snapshot"]["answer"]["canonical"]
+    refute Enum.any?(terminal["snapshot"]["actions"], &(&1["phase"] == "started"))
+  end
+
+  @tag :tmp_dir
   test "offline journal rewind is the authority, and a foreign native header is denied",
        %{tmp_dir: cwd} = c do
     alias CodingAgent.SessionManager
@@ -1031,6 +1315,40 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
 
     :ok = SessionManager.save_to_file(path, foreign)
     assert {:error, {:unavailable, _, nil}} = SessionsSnapshot.handle(target, ctx())
+  end
+
+  defp human_journal(cwd, key, run_id) do
+    session = CodingAgent.SessionManager.new(cwd)
+
+    session
+    |> CodingAgent.SessionManager.append_message(%{
+      "role" => "user",
+      "content" => "Run tool",
+      "timestamp" => 1_800_000_000_000,
+      "lemonRun" => %{"id" => run_id, "sessionKey" => key, "sessionId" => session.header.id}
+    })
+    |> CodingAgent.SessionManager.append_message(%{
+      role: :assistant,
+      content: [
+        %{type: :text, text: "HUMAN ANSWER"},
+        %{type: :tool_call, id: "human-call", name: "bash", arguments: %{command: "pwd"}}
+      ]
+    })
+  end
+
+  defp async_details(run_id, key, native_id, target_run_id) do
+    %{
+      "run_id" => target_run_id,
+      "async_followups" => [
+        %{
+          "source" => "named_agent",
+          "agent_id" => "peer",
+          "session_key" => key,
+          "run_id" => target_run_id
+        }
+      ],
+      "lemonRun" => %{"id" => run_id, "sessionKey" => key, "sessionId" => native_id}
+    }
   end
 
   defp native(id) do

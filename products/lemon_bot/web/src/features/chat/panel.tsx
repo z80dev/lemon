@@ -7,6 +7,7 @@ import { BotAvatar, ErrorNotice, LemonFace, useAction, useQuery } from '../../ui
 import { compactDuration, currentStep, humanize, liveRunStatuses, relativeTime, toolIcon } from '../../live';
 import { ConversationDetails } from './details';
 import { TypingDots } from './index';
+import { AgentControls } from '../bots/agents';
 
 export type PanelTab = 'activity' | 'details' | 'library';
 const outcomeLabel: Record<string, string> = { succeeded: 'Finished', failed: 'Couldn’t finish', cancelled: 'Stopped', outcome_unknown: 'Unconfirmed' };
@@ -49,6 +50,7 @@ export function BotPanel({ id, conversation, changed, runs, entries, tab, setTab
     <div className="panel-hero">
       {bot ? <BotAvatar bot={bot} size={72} presence={online}/> : <LemonFace size={72}/>}
       <h2>{name}</h2>
+      {bot?.agentHandle && <p>@{bot.agentHandle}</p>}
       {bot && (bot.title ? <p className="muted">{bot.title}</p> : <button className="add-label" onClick={() => navigate({ screen: 'bot.edit', id: bot.id, botId: bot.id })}>Add a label</button>)}
       {bot && <div className="status-chips"><span className="chip"><span className={`status-dot ${status}`} aria-hidden="true"/>{statusLabel[status]}</span>{machine && <span className="chip"><span className={`status-dot ${machine.status === 'online' ? 'idle' : 'offline'}`} aria-hidden="true"/>{machine.name}</span>}</div>}
     </div>
@@ -87,6 +89,7 @@ export function BotPanel({ id, conversation, changed, runs, entries, tab, setTab
       </>}
       {tab === 'details' && <>
         {bot && <>
+          <AgentControls bot={bot} conversationId={conversation.id} />
           <section className="panel-section"><h3>Persona</h3>
             <Row icon={Pencil} title="Instructions" meta={bot.instructions ? <span className="clamp-2">{bot.instructions}</span> : 'None yet'} onClick={() => navigate({ screen: 'bot.edit', id: bot.id, botId: bot.id })}/>
             <Row icon={Sparkles} title="Skills" meta={`${bot.skillIds.length} enabled`} onClick={() => navigate({ screen: 'skills', botId: bot.id })}/>

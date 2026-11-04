@@ -11,6 +11,14 @@ See the [TUI guide](../../clients/tui/README.md) for keyboard shortcuts and clie
 
 Regenerate from the repository root with `bun clients/tui/scripts/generate-commands-doc.ts`.
 
+## agent-addressing
+
+| Command | Aliases | Arguments | Description |
+| --- | --- | --- | --- |
+| /agent-name | — | &lt;handle&gt; &#124; --clear | set or clear this agent's address handle (not its title) |
+| /agents | — | [query] | discover existing addressable agents and their stable IDs |
+| /tell | — | &lt;@handle&#124;stable-id&gt; &lt;message&gt; &#124; --status &lt;message-id&gt; | message an existing agent or inspect a message receipt |
+
 ## approvals
 
 | Command | Aliases | Arguments | Description |
@@ -82,7 +90,6 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | /heartbeat | /hb | [every &lt;interval&gt; &lt;prompt&gt; &#124; status &#124; pause &#124; resume &#124; clear] | schedule this agent's recurring check-in; results reach your paired Telegram chat and HEARTBEAT_OK replies are suppressed |
 | /bg | — | &lt;prompt&gt; &#124; start &lt;prompt&gt; &#124; list [status] &#124; status &lt;id&gt; &#124; result &lt;id&gt; &#124; cancel &lt;id&gt; | start and manage background tasks |
 | /btw | — | &lt;question&gt; | ask a quick side question without changing the main turn |
-| /agents | — | — | list agents known to Lemon |
 | /tasks | — | [count] | list active and recent subagent tasks |
 
 ## model

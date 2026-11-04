@@ -16,6 +16,7 @@ export interface ChatFixture {
   admissions: { principal: Principal; botId: string }[];
   addBot(botId: string, ownerUserId?: string): P.Bot;
   requestContext(method: string, path: string, body: unknown, actor?: Principal, params?: Record<string, string>): RequestContext;
+  emit(event: string, payload: unknown): void;
 }
 export function chatFixture(): ChatFixture {
   const store = new Store(':memory:');
@@ -23,11 +24,12 @@ export function chatFixture(): ChatFixture {
   const admissions: { principal: Principal; botId: string }[] = [];
   const unreachable = (): never => { throw new Error('Unexpected dependency call in isolated boundary test.'); };
   // The fixture supplies only tested boundaries; all unrelated services fail loudly.
-  const services = { store, config: { publicUrl: 'http://localhost:4080' }, encrypt: (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url'), decrypt: <T>(value: string): T => JSON.parse(Buffer.from(value, 'base64url').toString()) as T } as unknown as BackendServices;
+  const services = { store, config: { publicUrl: 'http://localhost:4080', operator: {} }, encrypt: (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url'), decrypt: <T>(value: string): T => JSON.parse(Buffer.from(value, 'base64url').toString()) as T } as unknown as BackendServices;
   installHelpers(services);
   services.mutations = createMutationService(services, new Uint8Array(32).fill(7));
   services.events = createEventService(services);
   services.store.setMetadata('workspaceId', 'workspace');
+  store.put('workspaces', { ...services.resource('workspace', { name: 'Workspace', ownerUserId: 'alice', enabled: true, timezone: 'UTC' }), id: 'workspace' });
   services.auth = {
     authenticate: async () => unreachable(),
     user: userId => store.require<P.User>('users', userId),
@@ -91,5 +93,5 @@ export function chatFixture(): ChatFixture {
     const request = new Request(new URL(path, services.config.publicUrl), { method, ...(method === 'GET' ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
     return { request, params, body, query: new URL(request.url).searchParams, user: actor, services, requestId: services.id('request'), route: { method, path: new URL(request.url).pathname, auth: 'member', handler: unreachable }, nonceResourceIds: [] };
   }
-  return { services, store, addBot, requestContext, submissions, admissions };
+  return { services, store, addBot, requestContext, submissions, admissions, emit(event, payload) { for (const listener of eventListeners) listener(event, payload); } };
 }

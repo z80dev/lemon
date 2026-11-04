@@ -214,6 +214,37 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "route" => :map
       }
     },
+    "agent.identity.list" => %{
+      optional: %{"scope" => :string, "limit" => :integer, "query" => :string}
+    },
+    "agent.identity.rename" => %{
+      required: %{"id" => :string},
+      optional: %{"scope" => :string, "name" => :string}
+    },
+    "agent.identity.register" => %{
+      required: %{"scope" => :string, "id" => :string, "metadata" => :map},
+      optional: %{"name" => :string, "label" => :string}
+    },
+    "agent.identity.unregister" => %{
+      required: %{"scope" => :string, "id" => :string}
+    },
+    "agent.message.send" => %{
+      required: %{
+        "sourceId" => :string,
+        "target" => :string,
+        "text" => :string,
+        "messageId" => :string
+      },
+      optional: %{"scope" => :string}
+    },
+    "agent.message.get" => %{
+      required: %{"sourceId" => :string, "messageId" => :string},
+      optional: %{"scope" => :string}
+    },
+    "agent.message.complete" => %{
+      required: %{"messageId" => :string, "status" => :string},
+      optional: %{"runId" => :string, "response" => :string, "error" => :string}
+    },
     "goal.set" => %{
       required: %{
         "sessionKey" => :string,

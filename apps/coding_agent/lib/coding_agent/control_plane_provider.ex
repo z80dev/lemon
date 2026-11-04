@@ -15,6 +15,7 @@ defmodule CodingAgent.ControlPlaneProvider do
 
   @behaviour LemonCore.AgentRuntime.Provider
 
+  alias CodingAgent.Session.AddressingContext
   alias CodingAgent.Session.ContextUsage
   alias CodingAgent.Session.ModelResolver
   alias CodingAgent.Session.Ownership
@@ -67,6 +68,22 @@ defmodule CodingAgent.ControlPlaneProvider do
         live_todos(pid)
     end
   end
+
+  @doc """
+  Recover an existing ordinary session's original addressing context without
+  starting it, entering its workspace, or accepting a caller-selected path.
+  Registry-backed root state is authoritative; stopped sessions require an
+  exact native ChatState token and a unique journal in the configured root.
+  """
+  def session_addressing_context(session_key) when is_binary(session_key) do
+    AddressingContext.resolve(session_key, registered_sessions(session_key))
+  rescue
+    _ -> {:error, :context_unavailable}
+  catch
+    :exit, _ -> {:error, :context_unavailable}
+  end
+
+  def session_addressing_context(_), do: {:error, :context_unavailable}
 
   @doc "Look up a native owner without calling a potentially busy session."
   def native_session_owner(session_id) when is_binary(session_id) do

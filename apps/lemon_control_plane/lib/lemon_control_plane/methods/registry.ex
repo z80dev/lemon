@@ -39,6 +39,13 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.Agent,
     LemonControlPlane.Methods.AgentWait,
     LemonControlPlane.Methods.AgentDirectoryList,
+    LemonControlPlane.Methods.AgentIdentityList,
+    LemonControlPlane.Methods.AgentIdentityRename,
+    LemonControlPlane.Methods.AgentIdentityRegister,
+    LemonControlPlane.Methods.AgentIdentityUnregister,
+    LemonControlPlane.Methods.AgentMessageSend,
+    LemonControlPlane.Methods.AgentMessageGet,
+    LemonControlPlane.Methods.AgentMessageComplete,
     # Goals
     LemonControlPlane.Methods.GoalSet,
     LemonControlPlane.Methods.GoalStatus,

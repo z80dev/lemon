@@ -49,7 +49,7 @@ defmodule LemonRouter.RunPresence do
         )
         |> Enum.sort_by(&(&1.started_at_ms || 0), :desc)
 
-      {:ok, %{runs: runs, presence: presence}}
+      {:ok, %{runs: runs, presence: presence, entries: scoped}}
     else
       false -> {:error, :query_failed}
       {:error, reason} when reason in [:unavailable, :query_failed] -> {:error, reason}

@@ -26,7 +26,7 @@ defmodule LemonRouter.RunStarter do
 
     spec = {submission.run_process_module, run_opts}
 
-    case start_child(submission.run_supervisor, spec) do
+    case start_validated_child(submission.run_supervisor, spec, submission.execution_request) do
       {:ok, pid} ->
         {:ok, pid}
 
@@ -44,6 +44,15 @@ defmodule LemonRouter.RunStarter do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp start_validated_child(supervisor, spec, command) do
+    if Map.get(command.meta || %{}, :named_agent_require_resume) == true and
+         is_nil(command.resume) do
+      {:error, :context_unavailable}
+    else
+      start_child(supervisor, spec)
     end
   end
 

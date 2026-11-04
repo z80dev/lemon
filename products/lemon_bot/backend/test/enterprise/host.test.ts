@@ -245,6 +245,12 @@ async function fixture(reviewedSetups: ReviewedSetup[] = []): Promise<Fixture> {
     decrypt: () => unexpected('decryption before codec'),
     invoke: () => unexpected('internal invocation'),
     syncBotProfile: () => unexpected('profile synchronization'),
+    addressedAgents: {
+      identity: () => unexpected('addressed agent identity'), rename: () => unexpected('addressed agent rename'), list: () => unexpected('addressed agent list'),
+      send: () => unexpected('addressed agent send'), status: () => unexpected('addressed agent status'), command: () => unexpected('addressed agent command'),
+      authorizeReplay: () => unexpected('addressed agent replay'), registerBot: () => unexpected('addressed agent registration'), unregisterBot: () => unexpected('addressed agent unregistration'),
+      registerAll: () => unexpected('addressed agent registrations'), reconcile: () => unexpected('addressed agent reconciliation'), close: () => unexpected('addressed agent close'),
+    },
   };
   installHelpers(services);
   services.now = () => 1800000000000;
