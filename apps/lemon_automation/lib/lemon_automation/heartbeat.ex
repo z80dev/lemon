@@ -34,16 +34,15 @@ defmodule LemonAutomation.Heartbeat do
   def healthy_response?(_response), do: false
 
   @doc """
-  Delivery policy for a terminal run. Completed prompt jobs may reply with
+  Pure delivery policy for a terminal run. Completed prompt jobs may reply with
   exactly `[SILENT]` (trimmed) to suppress delivery. Heartbeats additionally
-  recognize `HEARTBEAT_OK`. Failures are never suppressed here.
+  recognize `HEARTBEAT_OK`. Call `emit_result/2` only after terminal persistence.
   """
   @spec apply_policy(CronJob.t() | nil, CronRun.t()) :: {CronRun.t(), boolean()}
   def apply_policy(%CronJob{} = job, %CronRun{} = run) do
     cond do
       silent_prompt?(job, run) ->
         run = CronRun.suppress(run)
-        if heartbeat?(job), do: Events.emit_heartbeat_suppressed(run, job)
         {run, false}
 
       not heartbeat?(job) ->
@@ -51,16 +50,27 @@ defmodule LemonAutomation.Heartbeat do
 
       run.status == :completed and healthy_response?(run.output) ->
         run = CronRun.suppress(run)
-        Events.emit_heartbeat_suppressed(run, job)
         {run, false}
 
       true ->
-        Events.emit_heartbeat_alert(run, job, run.output)
         {run, true}
     end
   end
 
   def apply_policy(_job, %CronRun{} = run), do: {run, true}
+
+  @doc "Emit the heartbeat event after its terminal run has been durably confirmed."
+  @spec emit_result(CronJob.t() | nil, CronRun.t()) :: :ok
+  def emit_result(job, run) do
+    if heartbeat?(job) do
+      if silent_prompt?(job, run) or
+           (run.status == :completed and healthy_response?(run.output)),
+         do: Events.emit_heartbeat_suppressed(run, job),
+         else: Events.emit_heartbeat_alert(run, job, run.output)
+    end
+
+    :ok
+  end
 
   defp silent_prompt?(job, %CronRun{status: :completed, output: output})
        when is_binary(output),

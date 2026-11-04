@@ -22,7 +22,7 @@ defmodule CodingAgent.CoordinatorTest do
     }
   end
 
-  defp coordinator_opts(tmp_dir, overrides \\ []) do
+  defp coordinator_opts(tmp_dir, overrides) do
     Keyword.merge([cwd: tmp_dir, model: mock_model(), default_timeout: 5_000], overrides)
   end
 
@@ -409,6 +409,57 @@ defmodule CodingAgent.CoordinatorTest do
       refute_receive {:session_prompted, ^pid, _}
       assert Coordinator.list_active(coordinator) == []
     end
+
+    test "a bounded timeout reply retains ownership through late admission and cleanup", %{
+      tmp_dir: tmp_dir
+    } do
+      coordinator = start_controlled_coordinator(tmp_dir, gate_start: true, gate_cleanup: true)
+      call = run_async(coordinator, [%{prompt: "Admission after reply"}])
+      assert_receive {:session_starting, pid, _session_id}, 1_000
+      session_ref = track_session(pid)
+      %{active_subagents: active} = :sys.get_state(coordinator)
+      [{id, subagent}] = Map.to_list(active)
+      worker = subagent.worker_pid
+      guardian = subagent.guardian_pid
+      worker_ref = Process.monitor(worker)
+      guardian_ref = Process.monitor(guardian)
+      batch_ref = subagent.batch
+
+      send(coordinator, {:batch_timeout, batch_ref})
+      assert [^id] = Coordinator.list_active(coordinator)
+      refute_receive {:results, ^call, _}, 0
+      # Exercise the bounded-reply deadline without waiting on wall-clock time.
+      send(coordinator, {:cleanup_timeout, batch_ref})
+
+      assert_receive {:results, ^call,
+                      [%{id: ^id, status: :timeout, error: :timeout, session_id: nil}]},
+                     1_000
+
+      assert Process.alive?(pid)
+      assert Process.alive?(worker)
+      assert Process.alive?(guardian)
+      assert [^id] = Coordinator.list_active(coordinator)
+      assert :ok = Coordinator.abort_all(coordinator)
+      send(coordinator, {:batch_timeout, batch_ref})
+      send(coordinator, {:cleanup_timeout, batch_ref})
+
+      send(pid, :release_start)
+      assert_receive {:session_cleanup_started, ^pid}, 1_000
+      assert_receive {:session_aborted, ^pid}, 1_000
+      assert [^id] = Coordinator.list_active(coordinator)
+      refute_receive {:session_prompted, ^pid, _}, 0
+      refute_receive {:results, ^call, _}, 0
+
+      send(pid, :release_cleanup)
+      assert_receive {:DOWN, ^session_ref, :process, ^pid, :shutdown}, 1_000
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :normal}, 1_000
+      assert_receive {:DOWN, ^guardian_ref, :process, ^guardian, :normal}, 1_000
+      # Replaying the observed deaths also synchronizes the ownership release.
+      send(coordinator, {:DOWN, subagent.monitor_ref, :process, worker, :normal})
+      send(coordinator, {:DOWN, subagent.guardian_ref, :process, guardian, :normal})
+      assert Coordinator.list_active(coordinator) == []
+      refute_receive {:results, ^call, _}, 0
+    end
   end
 
   describe "abort_all/1" do
@@ -481,6 +532,41 @@ defmodule CodingAgent.CoordinatorTest do
       assert Coordinator.list_active(coordinator) == []
     end
 
+    test "cancellation wins over a completion queued during a blocked prompt handshake", %{
+      tmp_dir: tmp_dir
+    } do
+      coordinator = start_controlled_coordinator(tmp_dir, gate_prompt: true, gate_cleanup: true)
+      call = run_async(coordinator, [%{prompt: "Cancel racing completion"}])
+      {pid, ref, session_id, worker} = started_session("Cancel racing completion")
+      [id] = Coordinator.list_active(coordinator)
+      message = %AssistantMessage{content: [%TextContent{text: "too late"}]}
+
+      # The worker cannot handle this terminal event until prompt admission returns.
+      send(worker, {:session_event, session_id, {:agent_end, [message]}})
+      assert :ok = Coordinator.abort_all(coordinator)
+      assert :ok = Coordinator.abort_all(coordinator)
+      send(pid, :release_prompt)
+      assert_receive {:session_cleanup_started, ^pid}, 1_000
+      assert [^id] = Coordinator.list_active(coordinator)
+      refute_receive {:results, ^call, _}, 0
+      send(pid, :release_cleanup)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+
+      assert_receive {:results, ^call,
+                      [
+                        %{
+                          id: ^id,
+                          status: :aborted,
+                          error: :aborted,
+                          result: nil,
+                          session_id: ^session_id
+                        }
+                      ]},
+                     1_000
+
+      assert Coordinator.list_active(coordinator) == []
+    end
+
     test "handles the asynchronous cancellation message", %{tmp_dir: tmp_dir} do
       coordinator = start_controlled_coordinator(tmp_dir)
       call = run_async(coordinator, [%{prompt: "Async abort"}])
@@ -512,17 +598,19 @@ defmodule CodingAgent.CoordinatorTest do
         _ -> elem(event, 0)
       end
 
+    @tag lifecycle_event: event, lifecycle_cancellation: cancellation
     test "#{event_name} remains terminal when #{cancellation} arrives during cleanup", %{
-      tmp_dir: tmp_dir
+      tmp_dir: tmp_dir,
+      lifecycle_event: event,
+      lifecycle_cancellation: cancellation
     } do
       coordinator = start_controlled_coordinator(tmp_dir, gate_cleanup: true)
       call = run_async(coordinator, [%{prompt: "Terminal before cleanup"}])
       {pid, ref, session_id, _worker} = started_session("Terminal before cleanup")
-      event = unquote(Macro.escape(event))
       send(pid, event)
       assert_receive {:session_cleanup_started, ^pid}, 1_000
 
-      case unquote(cancellation) do
+      case cancellation do
         :abort ->
           assert :ok = Coordinator.abort_all(coordinator)
 
@@ -623,6 +711,63 @@ defmodule CodingAgent.CoordinatorTest do
                      1_000
 
       assert Coordinator.list_active(coordinator) == []
+    end
+
+    test "a known result survives worker death, duplicate results and cancellation during cleanup",
+         %{tmp_dir: tmp_dir} do
+      coordinator = start_controlled_coordinator(tmp_dir, gate_cleanup: true)
+      call = run_async(coordinator, [%{prompt: "Result before worker death"}])
+      {pid, ref, session_id, worker} = started_session("Result before worker death")
+      send(pid, {:complete, "first answer"})
+      assert_receive {:session_cleanup_started, ^pid}, 1_000
+      %{active_subagents: active} = :sys.get_state(coordinator)
+      [{id, subagent}] = Map.to_list(active)
+      worker_ref = Process.monitor(worker)
+      guardian = subagent.guardian_pid
+      guardian_ref = Process.monitor(guardian)
+      Process.exit(worker, :kill)
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, 1_000
+      send(coordinator, {:DOWN, subagent.monitor_ref, :process, worker, :killed})
+
+      conflicting = %{
+        id: id,
+        status: :error,
+        result: nil,
+        error: :late_failure,
+        session_id: session_id
+      }
+
+      assert :ok = GenServer.call(coordinator, {:subagent_result, id, conflicting})
+      send(coordinator, {:subagent_result, id, conflicting})
+      assert :ok = Coordinator.abort_all(coordinator)
+      assert [^id] = Coordinator.list_active(coordinator)
+      assert Process.alive?(pid)
+      assert Process.alive?(guardian)
+      refute_receive {:results, ^call, _}, 0
+
+      send(pid, :release_cleanup)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+      assert_receive {:DOWN, ^guardian_ref, :process, ^guardian, :normal}, 1_000
+
+      assert_receive {:results, ^call,
+                      [
+                        %{
+                          id: ^id,
+                          status: :completed,
+                          result: "first answer",
+                          error: nil,
+                          session_id: ^session_id
+                        }
+                      ]},
+                     1_000
+
+      send(coordinator, {:DOWN, subagent.monitor_ref, :process, worker, :killed})
+      send(coordinator, {:DOWN, subagent.guardian_ref, :process, guardian, :normal})
+      send(coordinator, {:subagent_result, id, conflicting})
+      send(coordinator, {:cleanup_timeout, subagent.batch})
+      assert :ok = Coordinator.abort_all(coordinator)
+      assert Coordinator.list_active(coordinator) == []
+      refute_receive {:results, ^call, _}, 0
     end
 
     test "worker death during supervised admission retains ownership of the late child", %{

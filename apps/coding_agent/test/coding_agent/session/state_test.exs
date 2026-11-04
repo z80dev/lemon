@@ -71,12 +71,13 @@ defmodule CodingAgent.Session.StateTest do
            } = message
   end
 
-  test "begin_prompt resets overflow recovery bookkeeping" do
-    timer_ref = make_ref()
+  test "begin_prompt replaces pending ownership and resets overflow recovery bookkeeping" do
+    message = State.build_prompt_message("current prompt")
 
     state = %{
       is_streaming: false,
-      pending_prompt_timer_ref: nil,
+      pending_prompt: nil,
+      system_prompt: "system",
       turn_index: 4,
       overflow_recovery: %OverflowRecovery.State{
         in_progress: true,
@@ -88,19 +89,30 @@ defmodule CodingAgent.Session.StateTest do
       }
     }
 
-    next_state = State.begin_prompt(state, timer_ref)
+    first_state = State.begin_prompt(state, message, 60_000)
+    %{ref: first_ref, timer_ref: first_timer} = first_state.pending_prompt
+    on_exit(fn -> Process.cancel_timer(first_timer) end)
 
+    next_state = State.begin_prompt(first_state, message, 0)
+    %{ref: next_ref} = next_state.pending_prompt
+
+    refute first_ref == next_ref
+    assert Process.read_timer(first_timer) == false
+    assert_receive {:do_prompt, ^next_ref, ^message, "system"}
     assert next_state.is_streaming
-    assert next_state.pending_prompt_timer_ref == timer_ref
-    assert next_state.turn_index == 5
+    assert next_state.turn_index == 6
     assert next_state.overflow_recovery == %OverflowRecovery.State{}
+
+    canceled = State.cancel_pending_prompt(next_state)
+    assert canceled.pending_prompt == nil
+    refute canceled.is_streaming
   end
 
   test "reset_runtime invalidates all compaction task tracking" do
     state = %{
       session_manager: :old_manager,
       is_streaming: true,
-      pending_prompt_timer_ref: make_ref(),
+      pending_prompt: %{ref: make_ref(), timer_ref: make_ref()},
       turn_index: 4,
       started_at: 12,
       session_file: "/tmp/session.jsonl",
@@ -129,6 +141,7 @@ defmodule CodingAgent.Session.StateTest do
     next_state = State.reset_runtime(state, :new_manager, 99)
 
     assert next_state.session_manager == :new_manager
+    assert next_state.pending_prompt == nil
     assert next_state.auto_compaction == %CompactionLifecycle.State{}
     assert next_state.overflow_recovery == %OverflowRecovery.State{}
   end

@@ -213,7 +213,7 @@ defmodule LemonAutomation.CronStore do
   @doc """
   Store or update a cron run.
   """
-  @spec put_run(CronRun.t()) :: :ok
+  @spec put_run(CronRun.t()) :: :ok | {:error, term()}
   def put_run(%CronRun{} = run) do
     LemonCore.Store.put(@runs_table, run.id, CronRun.to_map(run))
   end
@@ -336,10 +336,20 @@ defmodule LemonAutomation.CronStore do
     end
   end
 
+  @doc "Read a run without treating unavailable storage as an absent run."
+  @spec fetch_run(binary()) :: {:ok, CronRun.t() | nil} | {:error, :store_unavailable}
+  def fetch_run(run_id) do
+    case LemonCore.Store.fetch(@runs_table, run_id) do
+      {:ok, nil} -> {:ok, nil}
+      {:ok, map} -> {:ok, CronRun.from_map(map)}
+      {:error, _} = error -> error
+    end
+  end
+
   @doc """
   Delete a cron run by ID.
   """
-  @spec delete_run(binary()) :: :ok
+  @spec delete_run(binary()) :: :ok | {:error, term()}
   def delete_run(run_id) do
     LemonCore.Store.delete(@runs_table, run_id)
   end
@@ -526,7 +536,7 @@ defmodule LemonAutomation.CronStore do
   Monitor state lives in the durable cron store (not the prompt-facing cron
   memory file), so output suppression survives restarts.
   """
-  @spec put_monitor_state(binary(), map()) :: :ok
+  @spec put_monitor_state(binary(), map()) :: :ok | {:error, term()}
   def put_monitor_state(job_id, state) when is_binary(job_id) and is_map(state) do
     LemonCore.Store.put(@monitor_table, job_id, normalize_monitor_state(state))
   end
@@ -546,7 +556,7 @@ defmodule LemonAutomation.CronStore do
   @doc """
   Delete the monitor-mode fingerprint state for a job.
   """
-  @spec delete_monitor_state(binary()) :: :ok
+  @spec delete_monitor_state(binary()) :: :ok | {:error, term()}
   def delete_monitor_state(job_id) when is_binary(job_id) do
     LemonCore.Store.delete(@monitor_table, job_id)
   end
@@ -562,7 +572,7 @@ defmodule LemonAutomation.CronStore do
   fingerprint and a failure fingerprint must never occupy the same slot, or a
   recovery run would be compared against a failure hash.
   """
-  @spec put_preflight_notice_state(binary(), map()) :: :ok
+  @spec put_preflight_notice_state(binary(), map()) :: :ok | {:error, term()}
   def put_preflight_notice_state(job_id, state) when is_binary(job_id) and is_map(state) do
     LemonCore.Store.put(@preflight_notice_table, job_id, normalize_preflight_notice_state(state))
   end
@@ -582,7 +592,7 @@ defmodule LemonAutomation.CronStore do
   @doc """
   Delete the preflight-failure notice fingerprint for a job.
   """
-  @spec delete_preflight_notice_state(binary()) :: :ok
+  @spec delete_preflight_notice_state(binary()) :: :ok | {:error, term()}
   def delete_preflight_notice_state(job_id) when is_binary(job_id) do
     LemonCore.Store.delete(@preflight_notice_table, job_id)
   end

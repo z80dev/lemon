@@ -191,6 +191,23 @@ defmodule LemonRouter.RunOrchestratorTest do
     def sync(state), do: {:ok, state}
   end
 
+  defmodule CompactionDeleteFailingBackend do
+    def delete(_state, :pending_compaction, _key), do: {:error, :write_failed}
+
+    for {function, arity} <- [delete: 3, get: 3, put: 4, put_new: 4, list: 2, sync: 1] do
+      args = Macro.generate_arguments(arity - 1, __MODULE__)
+
+      def unquote(function)({backend, inner}, unquote_splicing(args)) do
+        case apply(backend, unquote(function), [inner, unquote_splicing(args)]) do
+          {:ok, value, next} -> {:ok, value, {backend, next}}
+          {:ok, next} -> {:ok, {backend, next}}
+          {:exists, next} -> {:exists, {backend, next}}
+          {:error, _} = error -> error
+        end
+      end
+    end
+  end
+
   setup do
     ensure_pubsub()
 
@@ -1571,54 +1588,80 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert PendingCompactionStore.get(session_key) == marker
     end
 
-    test "accepted channel submission consumes its pending compaction marker" do
-      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+    for cleanup_fails? <- [false, true] do
+      test "accepted channel submission remains accepted with cleanup failure #{cleanup_fails?}" do
+        run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
 
-      {:ok, orchestrator_pid} =
-        GenServer.start_link(
-          RunOrchestrator,
-          run_supervisor: run_supervisor,
-          run_process_module: CapturingRunProcess,
-          run_process_opts: %{notify_pid: self()}
+        {:ok, orchestrator_pid} =
+          GenServer.start_link(
+            RunOrchestrator,
+            run_supervisor: run_supervisor,
+            run_process_module: CapturingRunProcess,
+            run_process_opts: %{notify_pid: self()}
+          )
+
+        session_key = "agent:compaction-ok:test:#{System.unique_integer([:positive])}"
+
+        on_exit(fn ->
+          LemonCore.RunHistoryStore.delete_session(session_key)
+          PendingCompactionStore.delete(session_key)
+        end)
+
+        on_exit(fn ->
+          if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+        end)
+
+        marker = %{
+          reason: "near_limit",
+          session_key: session_key,
+          set_at_ms: System.system_time(:millisecond)
+        }
+
+        LemonCore.RunHistoryStore.put(
+          session_key,
+          System.system_time(:millisecond),
+          "run-before-success",
+          %{summary: %{prompt: "prior question", answer: "prior answer"}}
         )
 
-      session_key = "agent:compaction-ok:test:#{System.unique_integer([:positive])}"
+        PendingCompactionStore.put(session_key, marker)
 
-      marker = %{
-        reason: "near_limit",
-        session_key: session_key,
-        set_at_ms: System.system_time(:millisecond)
-      }
+        if unquote(cleanup_fails?) do
+          on_exit(fn ->
+            :sys.replace_state(LemonCore.Store, fn
+              %{backend: CompactionDeleteFailingBackend, backend_state: {backend, inner}} = state ->
+                %{state | backend: backend, backend_state: inner}
 
-      LemonCore.RunHistoryStore.put(
-        session_key,
-        System.system_time(:millisecond),
-        "run-before-success",
-        %{summary: %{prompt: "prior question", answer: "prior answer"}}
-      )
+              state ->
+                state
+            end)
+          end)
 
-      PendingCompactionStore.put(session_key, marker)
+          :sys.replace_state(LemonCore.Store, fn state ->
+            %{
+              state
+              | backend: CompactionDeleteFailingBackend,
+                backend_state: {state.backend, state.backend_state}
+            }
+          end)
+        end
 
-      on_exit(fn ->
-        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
-        LemonCore.RunHistoryStore.delete_session(session_key)
-        PendingCompactionStore.delete(session_key)
-      end)
+        assert {:ok, _run_id} =
+                 RunOrchestrator.submit(
+                   orchestrator_pid,
+                   request(%{
+                     origin: :channel,
+                     session_key: session_key,
+                     agent_id: "test",
+                     prompt: "continue"
+                   })
+                 )
 
-      assert {:ok, _run_id} =
-               RunOrchestrator.submit(
-                 orchestrator_pid,
-                 request(%{
-                   origin: :channel,
-                   session_key: session_key,
-                   agent_id: "test",
-                   prompt: "continue"
-                 })
-               )
-
-      assert_receive {:captured_job, execution_request}
-      assert execution_request.prompt =~ "prior question"
-      assert PendingCompactionStore.get(session_key) == nil
+        assert_receive {:captured_job, execution_request}
+        assert execution_request.prompt =~ "prior question"
+        expected_marker = if unquote(cleanup_fails?), do: marker, else: nil
+        assert PendingCompactionStore.get(session_key) == expected_marker
+      end
     end
   end
 

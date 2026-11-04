@@ -8,6 +8,10 @@ defmodule CodingAgent.Session.CompactionLifecycle do
   before the prompt is deferred. This keeps prompt latency independent of the
   stale worker and prevents its late result from mutating the new turn.
 
+  A deferred prompt retains its admission reference through compaction and
+  resume. Cancellation invalidates that reference, so an already queued resume
+  cannot dispatch an old prompt or consume a newer prompt's ownership.
+
   Its slot in the session state is one field, `auto_compaction`, holding a
   `CodingAgent.Session.CompactionLifecycle.State`.
   """
@@ -27,7 +31,7 @@ defmodule CodingAgent.Session.CompactionLifecycle do
             task_pid: pid() | nil,
             task_monitor_ref: reference() | nil,
             task_timeout_ref: reference() | nil,
-            pending_prompt: tuple() | nil
+            pending_prompt: {reference(), struct(), String.t()} | nil
           }
 
     defstruct in_progress: false,
@@ -59,7 +63,7 @@ defmodule CodingAgent.Session.CompactionLifecycle do
   def cancel_for_new_prompt(%{auto_compaction: %State{in_progress: false}} = state), do: state
 
   def cancel_for_new_prompt(state) do
-    state = if state.pending_prompt_timer_ref, do: resume_pending_prompt(state), else: state
+    state = resume_pending_prompt(state)
 
     state
     |> CompactionManager.maybe_kill_background_task(
@@ -70,11 +74,11 @@ defmodule CodingAgent.Session.CompactionLifecycle do
   end
 
   @doc false
-  def before_prompt(state, message, system_prompt) do
-    state = maybe_trigger(state, self(), {message, system_prompt})
+  def before_prompt(state, prompt_ref, message, system_prompt) do
+    state = maybe_trigger(state, self(), {prompt_ref, message, system_prompt})
 
     if not state.auto_compaction.in_progress do
-      send(self(), {:dispatch_prompt, message, system_prompt})
+      send(self(), {:dispatch_prompt, prompt_ref, message, system_prompt})
     end
 
     state
@@ -82,9 +86,12 @@ defmodule CodingAgent.Session.CompactionLifecycle do
 
   @doc false
   def resume_pending_prompt(state) do
-    case state.auto_compaction.pending_prompt do
-      {message, system_prompt} -> send(self(), {:dispatch_prompt, message, system_prompt})
-      nil -> :ok
+    case {state.pending_prompt, state.auto_compaction.pending_prompt} do
+      {%{ref: prompt_ref}, {prompt_ref, message, system_prompt}} ->
+        send(self(), {:dispatch_prompt, prompt_ref, message, system_prompt})
+
+      _ ->
+        :ok
     end
 
     state
@@ -106,7 +113,7 @@ defmodule CodingAgent.Session.CompactionLifecycle do
     context_messages =
       (agent_state.messages || []) ++
         case pending_prompt do
-          {message, _system_prompt} -> [message]
+          {_prompt_ref, message, _system_prompt} -> [message]
           nil -> []
         end
 

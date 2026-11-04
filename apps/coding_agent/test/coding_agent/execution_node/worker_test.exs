@@ -313,7 +313,11 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     args = %{"version" => 1, "prompt" => "long run", "cwd" => nil, "meta" => %{}}
     invoke(worker, socket, "invoke-cancel", "node-1", args)
 
-    assert_receive {:executor_started, _request, _opts, ^worker, _run_ref, context}
+    assert_receive {:executor_started, _request, _opts, ^worker, run_ref, context}
+    runner = context.runner_pid
+    on_exit(fn -> Process.exit(runner, :kill) end)
+    send(worker, {:engine_delta, run_ref, "in flight"})
+    assert_receive {:socket_request, ^socket, "node.invoke.event", _params, event_tag, 30_000}
 
     send(worker, {
       :execution_node_socket,
@@ -322,6 +326,28 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     })
 
     assert_receive {:executor_cancelled, ^context}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:event, "node.invoke.cancel", %{"invokeId" => "invoke-cancel", "nodeId" => "node-1"}}
+    })
+
+    send(worker, {:engine_event, run_ref, %{__event__: :completed}})
+    send(worker, {:engine_delta, run_ref, "after cancellation"})
+
+    send(
+      worker,
+      {:execution_node_socket, socket,
+       {:response, event_tag, {:ok, %{"received" => true, "seq" => 1}}}}
+    )
+
+    state = :sys.get_state(worker)
+    assert state.invocations == %{}
+    assert state.run_refs == %{}
+    refute_receive {:executor_cancelled, _}, 0
+    refute_receive {:socket_request, ^socket, "node.invoke.result", _, _, _}, 0
+    refute_receive {:socket_request, ^socket, "node.invoke.event", _, _, _}, 0
     Process.exit(context.runner_pid, :kill)
     GenServer.stop(worker)
   end
@@ -1039,6 +1065,186 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
              )
 
     assert request.cwd == nested
+  end
+
+  for ok <- [true, false] do
+    @tag :tmp_dir
+    test "the first completion (ok=#{ok}) drains only pre-terminal events", %{tmp_dir: tmp_dir} do
+      {:ok, worker} = start_worker(tmp_dir, token: "node-token")
+      assert_receive {:socket_started, socket, _opts}
+
+      send(
+        worker,
+        {:execution_node_socket, socket, {:connected, %{"auth" => %{"clientId" => "node-1"}}}}
+      )
+
+      args = %{"runId" => "sealed-run", "prompt" => "stream", "meta" => %{}}
+      invoke(worker, socket, "sealed", "node-1", args)
+      assert_receive {:executor_started, _request, _opts, ^worker, run_ref, context}
+      runner = context.runner_pid
+      runner_ref = Process.monitor(runner)
+      on_exit(fn -> Process.exit(runner, :kill) end)
+      monitor_ref = :sys.get_state(worker).invocations["sealed"].monitor_ref
+
+      send(worker, {:engine_delta, run_ref, "accepted "})
+      send(worker, {:engine_delta, run_ref, "output"})
+
+      assert_receive {:socket_request, ^socket, "node.invoke.event",
+                      %{"invokeId" => "sealed", "seq" => 1, "event" => %{"text" => "accepted "}},
+                      first_tag, 30_000}
+
+      completed = %{
+        __event__: :completed,
+        ok: unquote(ok),
+        answer: "",
+        error: if(unquote(ok), do: nil, else: "provider_failed"),
+        usage: %{input_tokens: 4},
+        meta: %{provider: "first"},
+        resume: nil
+      }
+
+      send(worker, {:engine_event, run_ref, completed})
+      send(worker, {:engine_event, run_ref, %{completed | ok: not completed.ok, answer: "late"}})
+      send(worker, {:engine_delta, run_ref, "must not append"})
+      send(worker, {:engine_event, run_ref, %{__event__: :started, title: "must not forward"}})
+      # This barrier establishes execution completion before the real runner DOWN.
+      assert Map.has_key?(:sys.get_state(worker).invocations, "sealed")
+      Process.exit(runner, :kill)
+      assert_receive {:DOWN, ^runner_ref, :process, ^runner, :killed}
+      send(worker, {:DOWN, monitor_ref, :process, runner, :killed})
+
+      # An ACK for an unsent event cannot discharge the current event.
+      send(
+        worker,
+        {:execution_node_socket, socket,
+         {:response, {:invoke_event, "sealed", 2}, {:ok, %{"received" => true, "seq" => 2}}}}
+      )
+
+      :sys.get_state(worker)
+      refute_receive {:socket_request, ^socket, "node.invoke.result", _, _, _}, 0
+      refute_receive {:socket_request, ^socket, "node.invoke.event", _, _, _}, 0
+
+      send(
+        worker,
+        {:execution_node_socket, socket,
+         {:response, first_tag, {:ok, %{"received" => true, "seq" => 1}}}}
+      )
+
+      assert_receive {:socket_request, ^socket, "node.invoke.event",
+                      %{"invokeId" => "sealed", "seq" => 2, "event" => %{"text" => "output"}},
+                      second_tag, 30_000}
+
+      send(worker, {:execution_node_socket, socket, {:response, first_tag, {:error, :timeout}}})
+      :sys.get_state(worker)
+      refute_receive {:socket_request, ^socket, "node.invoke.result", _, _, _}, 0
+
+      send(
+        worker,
+        {:execution_node_socket, socket,
+         {:response, second_tag, {:ok, %{"received" => true, "seq" => 2}}}}
+      )
+
+      assert_receive {:socket_request, ^socket, "node.invoke.result",
+                      %{"invokeId" => "sealed", "result" => %{"completed" => result}},
+                      {:invoke_result, "sealed"}, 30_000}
+
+      assert result == %{
+               "ok" => completed.ok,
+               "answer" => "accepted output",
+               "error" => completed.error,
+               "usage" => %{"input_tokens" => 4},
+               "meta" => %{"provider" => "first"},
+               "resume" => nil
+             }
+
+      send(worker, {:engine_event, run_ref, completed})
+      send(worker, {:engine_delta, run_ref, "after disposal"})
+      send(worker, {:engine_event, run_ref, %{__event__: :started, title: "after disposal"}})
+      send(worker, {:DOWN, monitor_ref, :process, runner, :killed})
+      send(worker, {:execution_node_socket, socket, {:response, second_tag, {:error, :timeout}}})
+
+      send(
+        worker,
+        {:execution_node_socket, socket,
+         {:event, "node.invoke.cancel", %{"nodeId" => "node-1", "invokeId" => "sealed"}}}
+      )
+
+      state = :sys.get_state(worker)
+      assert state.invocations == %{}
+      assert state.run_refs == %{}
+      refute_receive {:socket_request, ^socket, "node.invoke.result", _, _, _}, 0
+      refute_receive {:socket_request, ^socket, "node.invoke.event", _, _, _}, 0
+      refute_receive {:executor_cancelled, _}, 0
+
+      # Re-admission of the same run proves its ownership index was released.
+      invoke(worker, socket, "replacement", "node-1", args)
+      assert_receive {:executor_started, _request, _opts, ^worker, _new_ref, replacement}
+      replacement_runner = replacement.runner_pid
+      on_exit(fn -> Process.exit(replacement_runner, :kill) end)
+
+      for _ <- 1..2 do
+        send(
+          worker,
+          {:execution_node_socket, socket,
+           {:event, "node.invoke.cancel", %{"nodeId" => "node-1", "invokeId" => "replacement"}}}
+        )
+      end
+
+      :sys.get_state(worker)
+      assert_receive {:executor_cancelled, ^replacement}
+      refute_receive {:executor_cancelled, _}, 0
+      GenServer.stop(worker)
+    end
+  end
+
+  @tag :tmp_dir
+  test "runner death before ACK disposes once and ignores late completion", %{tmp_dir: tmp_dir} do
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token")
+    assert_receive {:socket_started, socket, _opts}
+
+    send(
+      worker,
+      {:execution_node_socket, socket, {:connected, %{"auth" => %{"clientId" => "node-1"}}}}
+    )
+
+    invoke(worker, socket, "runner-down", "node-1", %{"prompt" => "stream", "meta" => %{}})
+    assert_receive {:executor_started, _request, _opts, ^worker, run_ref, context}
+    runner = context.runner_pid
+    runner_ref = Process.monitor(runner)
+    on_exit(fn -> Process.exit(runner, :kill) end)
+    monitor_ref = :sys.get_state(worker).invocations["runner-down"].monitor_ref
+    send(worker, {:engine_delta, run_ref, "in flight"})
+    assert_receive {:socket_request, ^socket, "node.invoke.event", _params, tag, 30_000}
+    Process.exit(runner, :kill)
+    assert_receive {:DOWN, ^runner_ref, :process, ^runner, :killed}
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "runner-down", "error" => error},
+                    {:invoke_result, "runner-down"}, 30_000}
+
+    assert error == CodingAgent.ExecutionNode.Codec.json_safe({:runner_down, :killed})
+    send(worker, {:DOWN, monitor_ref, :process, runner, :killed})
+    send(worker, {:engine_event, run_ref, %{__event__: :completed}})
+    send(worker, {:engine_delta, run_ref, "after death"})
+
+    send(
+      worker,
+      {:execution_node_socket, socket, {:response, tag, {:ok, %{"received" => true, "seq" => 1}}}}
+    )
+
+    send(
+      worker,
+      {:execution_node_socket, socket,
+       {:event, "node.invoke.cancel", %{"nodeId" => "node-1", "invokeId" => "runner-down"}}}
+    )
+
+    state = :sys.get_state(worker)
+    assert state.invocations == %{}
+    assert state.run_refs == %{}
+    refute_receive {:socket_request, ^socket, "node.invoke.result", _, _, _}, 0
+    refute_receive {:socket_request, ^socket, "node.invoke.event", _, _, _}, 0
+    refute_receive {:executor_cancelled, _}, 0
+    GenServer.stop(worker)
   end
 
   @tag :tmp_dir

@@ -102,45 +102,47 @@ defmodule LemonAutomation.CronMonitor do
   @doc """
   Apply monitor policy to a finished run.
 
-  Returns the (possibly suppressed) run and whether the summary should be
-  forwarded to the originating session.
+  Returns the (possibly suppressed) run, whether its summary should be forwarded,
+  and a deferred fingerprint/audit update. Invoke that update only after the
+  terminal run has been durably confirmed.
   """
-  @spec apply_policy(CronJob.t() | nil, CronRun.t()) :: {CronRun.t(), boolean()}
+  @spec apply_policy(CronJob.t() | nil, CronRun.t()) ::
+          {CronRun.t(), boolean(), (-> term())}
   def apply_policy(job, %CronRun{} = run) do
     if monitor?(job) and run.status == :completed do
       evaluate(job, run)
     else
-      {run, true}
+      {run, true, fn -> :ok end}
     end
   rescue
     error ->
       Logger.warning("[CronMonitor] Monitor policy failed open: #{Exception.message(error)}")
-      {run, true}
+      {run, true, fn -> :ok end}
   catch
     :exit, reason ->
       Logger.warning("[CronMonitor] Monitor policy failed open: #{inspect(reason)}")
-      {run, true}
+      {run, true, fn -> :ok end}
   end
 
   @doc """
   Apply the preflight-failure notice policy to a finished run.
 
-  Returns the (possibly suppressed) run and whether the summary should be
-  forwarded. Applies to every job, monitor or not; runs that are not preflight
-  failures pass through and clear any recorded failure fingerprint.
+  Returns the run, forwarding decision, and a deferred fingerprint/audit update.
+  Applies to every job; runs that are not preflight failures defer clearing the
+  recorded failure fingerprint until terminal persistence succeeds.
   """
-  @spec apply_preflight_policy(CronJob.t() | nil, CronRun.t()) :: {CronRun.t(), boolean()}
+  @spec apply_preflight_policy(CronJob.t() | nil, CronRun.t()) ::
+          {CronRun.t(), boolean(), (-> term())}
   def apply_preflight_policy(job, %CronRun{} = run) do
     case {job, preflight_failure(run)} do
       {%CronJob{} = job, nil} ->
-        CronStore.delete_preflight_notice_state(job.id)
-        {run, true}
+        {run, true, fn -> CronStore.delete_preflight_notice_state(job.id) end}
 
       {%CronJob{} = job, failure} ->
         evaluate_preflight(job, run, failure)
 
       _ ->
-        {run, true}
+        {run, true, fn -> :ok end}
     end
   rescue
     error ->
@@ -148,11 +150,11 @@ defmodule LemonAutomation.CronMonitor do
         "[CronMonitor] Preflight notice policy failed open: #{Exception.message(error)}"
       )
 
-      {run, true}
+      {run, true, fn -> :ok end}
   catch
     :exit, reason ->
       Logger.warning("[CronMonitor] Preflight notice policy failed open: #{inspect(reason)}")
-      {run, true}
+      {run, true, fn -> :ok end}
   end
 
   # ============================================================================
@@ -211,39 +213,43 @@ defmodule LemonAutomation.CronMonitor do
         notifications: previous.notifications + 1
       })
     else
-      CronStore.put_preflight_notice_state(job.id, %{
-        class: class,
-        detail_hash: digest,
-        first_seen_at_ms: previous.first_seen_at_ms || now,
-        last_notified_at_ms: last_notified,
-        occurrences: occurrences,
-        notifications: previous.notifications
-      })
+      update = fn ->
+        CronStore.put_preflight_notice_state(job.id, %{
+          class: class,
+          detail_hash: digest,
+          first_seen_at_ms: previous.first_seen_at_ms || now,
+          last_notified_at_ms: last_notified,
+          occurrences: occurrences,
+          notifications: previous.notifications
+        })
 
-      CronStore.record_audit(:preflight_notice_suppressed, %{
-        job_id: job.id,
-        run_id: run.id,
-        source: :cron_monitor,
-        status: run.status,
-        triggered_by: run.triggered_by,
-        reason: "#{class} unchanged (#{occurrences} runs)"
-      })
+        CronStore.record_audit(:preflight_notice_suppressed, %{
+          job_id: job.id,
+          run_id: run.id,
+          source: :cron_monitor,
+          status: run.status,
+          triggered_by: run.triggered_by,
+          reason: "#{class} unchanged (#{occurrences} runs)"
+        })
+      end
 
-      {CronRun.suppress(run), false}
+      {CronRun.suppress(run), false, update}
     end
   end
 
   defp notify_preflight(%CronJob{} = job, %CronRun{} = run, class, digest, now, fields) do
-    CronStore.put_preflight_notice_state(job.id, %{
-      class: class,
-      detail_hash: digest,
-      first_seen_at_ms: fields.first_seen_at_ms,
-      last_notified_at_ms: now,
-      occurrences: fields.occurrences,
-      notifications: fields.notifications
-    })
+    update = fn ->
+      CronStore.put_preflight_notice_state(job.id, %{
+        class: class,
+        detail_hash: digest,
+        first_seen_at_ms: fields.first_seen_at_ms,
+        last_notified_at_ms: now,
+        occurrences: fields.occurrences,
+        notifications: fields.notifications
+      })
+    end
 
-    {run, true}
+    {run, true, update}
   end
 
   # Widening reminder cadence: the first repeat reminder after an hour, every
@@ -279,7 +285,7 @@ defmodule LemonAutomation.CronMonitor do
 
       previous.last_hash == digest ->
         # Manual run over unchanged output: deliver, but do not re-audit.
-        {run, true}
+        {run, true, fn -> :ok end}
 
       true ->
         changed(job, run, digest)
@@ -289,78 +295,82 @@ defmodule LemonAutomation.CronMonitor do
   defp baseline(%CronJob{} = job, %CronRun{} = run, digest, manual?) do
     now = LemonCore.Clock.now_ms()
 
-    CronStore.put_monitor_state(job.id, %{
-      last_hash: digest,
-      last_run_id: run.id,
-      last_changed_at_ms: now,
-      updated_at_ms: now,
-      runs_since_change: 0
-    })
+    update = fn ->
+      CronStore.put_monitor_state(job.id, %{
+        last_hash: digest,
+        last_run_id: run.id,
+        last_changed_at_ms: now,
+        updated_at_ms: now,
+        runs_since_change: 0
+      })
 
-    CronStore.record_audit(:monitor_baseline_recorded, %{
-      job_id: job.id,
-      run_id: run.id,
-      router_run_id: run.run_id,
-      source: :cron_monitor,
-      status: run.status,
-      triggered_by: run.triggered_by,
-      reason: "baseline #{hash_prefix(digest)}"
-    })
-
-    if manual? or job.monitor_notify_first_run do
-      {run, true}
-    else
-      {CronRun.suppress(run), false}
+      CronStore.record_audit(:monitor_baseline_recorded, %{
+        job_id: job.id,
+        run_id: run.id,
+        router_run_id: run.run_id,
+        source: :cron_monitor,
+        status: run.status,
+        triggered_by: run.triggered_by,
+        reason: "baseline #{hash_prefix(digest)}"
+      })
     end
+
+    if manual? or job.monitor_notify_first_run,
+      do: {run, true, update},
+      else: {CronRun.suppress(run), false, update}
   end
 
   defp unchanged(%CronJob{} = job, %CronRun{} = run, previous) do
     now = LemonCore.Clock.now_ms()
     runs_since_change = (previous.runs_since_change || 0) + 1
 
-    CronStore.put_monitor_state(job.id, %{
-      last_hash: previous.last_hash,
-      last_run_id: run.id,
-      last_changed_at_ms: previous.last_changed_at_ms,
-      updated_at_ms: now,
-      runs_since_change: runs_since_change
-    })
+    update = fn ->
+      CronStore.put_monitor_state(job.id, %{
+        last_hash: previous.last_hash,
+        last_run_id: run.id,
+        last_changed_at_ms: previous.last_changed_at_ms,
+        updated_at_ms: now,
+        runs_since_change: runs_since_change
+      })
 
-    CronStore.record_audit(:monitor_output_unchanged, %{
-      job_id: job.id,
-      run_id: run.id,
-      router_run_id: run.run_id,
-      source: :cron_monitor,
-      status: run.status,
-      triggered_by: run.triggered_by,
-      reason: "unchanged #{hash_prefix(previous.last_hash)} (#{runs_since_change} runs)"
-    })
+      CronStore.record_audit(:monitor_output_unchanged, %{
+        job_id: job.id,
+        run_id: run.id,
+        router_run_id: run.run_id,
+        source: :cron_monitor,
+        status: run.status,
+        triggered_by: run.triggered_by,
+        reason: "unchanged #{hash_prefix(previous.last_hash)} (#{runs_since_change} runs)"
+      })
+    end
 
-    {CronRun.suppress(run), false}
+    {CronRun.suppress(run), false, update}
   end
 
   defp changed(%CronJob{} = job, %CronRun{} = run, digest) do
     now = LemonCore.Clock.now_ms()
 
-    CronStore.put_monitor_state(job.id, %{
-      last_hash: digest,
-      last_run_id: run.id,
-      last_changed_at_ms: now,
-      updated_at_ms: now,
-      runs_since_change: 0
-    })
+    update = fn ->
+      CronStore.put_monitor_state(job.id, %{
+        last_hash: digest,
+        last_run_id: run.id,
+        last_changed_at_ms: now,
+        updated_at_ms: now,
+        runs_since_change: 0
+      })
 
-    CronStore.record_audit(:monitor_output_changed, %{
-      job_id: job.id,
-      run_id: run.id,
-      router_run_id: run.run_id,
-      source: :cron_monitor,
-      status: run.status,
-      triggered_by: run.triggered_by,
-      reason: "changed to #{hash_prefix(digest)}"
-    })
+      CronStore.record_audit(:monitor_output_changed, %{
+        job_id: job.id,
+        run_id: run.id,
+        router_run_id: run.run_id,
+        source: :cron_monitor,
+        status: run.status,
+        triggered_by: run.triggered_by,
+        reason: "changed to #{hash_prefix(digest)}"
+      })
+    end
 
-    {run, true}
+    {run, true, update}
   end
 
   defp hash_prefix(digest) when is_binary(digest) and byte_size(digest) >= 12,

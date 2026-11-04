@@ -373,21 +373,13 @@ defmodule LemonGateway.RunTest do
     assert_receive {:engine_started, _}, 2_000
     :ok = LemonGateway.Scheduler.submit_execution(waiting)
 
-    assert is_pid(
-             wait_for(
-               fn ->
-                 case LemonGateway.ThreadRegistry.whereis(waiting.conversation_key) do
-                   pid when is_pid(pid) ->
-                     if :sys.get_state(pid).slot_pending, do: pid
-
-                   _ ->
-                     nil
-                 end
-               end,
-               2_000,
-               10
-             )
-           )
+    # Submission calls the worker synchronously; the second scheduler barrier
+    # consumes the slot request sent by that worker before it acknowledged enqueue.
+    :sys.get_state(LemonGateway.Scheduler)
+    worker = LemonGateway.ThreadRegistry.whereis(waiting.conversation_key)
+    assert is_pid(worker)
+    scheduler = :sys.get_state(LemonGateway.Scheduler)
+    assert Enum.any?(:queue.to_list(scheduler.waitq), &(&1.worker == worker))
 
     assert :ok = LemonGateway.Runtime.cancel_by_run_id(waiting.run_id, :user_requested)
 

@@ -513,7 +513,7 @@ defmodule CodingAgent.Session.Lifecycle do
       task_allowed_agents: Keyword.get(opts, :task_allowed_agents),
       context_frozen: not is_nil(context_snapshot),
       is_streaming: false,
-      pending_prompt_timer_ref: nil,
+      pending_prompt: nil,
       event_listeners: [],
       event_streams: %{},
       abort_signal: nil,
@@ -642,7 +642,7 @@ defmodule CodingAgent.Session.Lifecycle do
           {:ok, Session.t()} | {:error, :busy, Session.t()}
   def reset(state, reset_abort_wait_ms) when is_integer(reset_abort_wait_ms) do
     was_streaming = state.is_streaming
-    had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
+    had_pending_prompt = not is_nil(state.pending_prompt)
     state = State.cancel_pending_prompt(state)
 
     case wait_for_reset_abort(state, was_streaming, had_pending_prompt, reset_abort_wait_ms) do

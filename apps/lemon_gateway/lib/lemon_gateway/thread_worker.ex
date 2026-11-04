@@ -7,6 +7,11 @@ defmodule LemonGateway.ThreadWorker do
   Run-start attempts are counted across slot grants. A request that cannot be
   started after the bounded attempt budget receives one synthetic terminal
   completion and is removed so later requests cannot be starved.
+
+  A pending slot request owns its token and timestamp together; an active run
+  owns its PID, execution request, slot and monitor together. A completion is
+  evidence that `Run` already released its slot. A matching monitor DOWN only
+  releases fallback ownership; it does not imply a known execution result.
   """
 
   use GenServer
@@ -55,13 +60,8 @@ defmodule LemonGateway.ThreadWorker do
     {:ok,
      Map.merge(state, %{
        requests: :queue.new(),
-       current_run: nil,
-       current_request: nil,
-       current_slot_ref: nil,
-       run_mon_ref: nil,
-       slot_pending: false,
-       slot_requested_at: nil,
-       slot_request_token: nil,
+       active_run: nil,
+       slot_request: nil,
        start_attempts: %{}
      })}
   end
@@ -81,16 +81,21 @@ defmodule LemonGateway.ThreadWorker do
 
     state =
       Enum.reduce(cancelled, state, fn request, acc ->
-        terminalize_request(acc, request, reason, :cancelled)
+        acc
+        |> terminalize_request(request, reason, :cancelled)
+        |> Map.update!(:start_attempts, &Map.delete(&1, request.run_id))
       end)
 
-    if match?(%ExecutionRequest{run_id: ^run_id}, state.current_request) do
-      LemonGateway.Scheduler.cancel(state.current_run, reason)
+    case state.active_run do
+      %{pid: pid, request: %ExecutionRequest{run_id: ^run_id}} ->
+        LemonGateway.Scheduler.cancel(pid, reason)
+
+      _ ->
+        :ok
     end
 
-    if state.current_run == nil and :queue.is_empty(state.requests) do
-      if state.slot_pending, do: safe_cancel_slot_request(state.slot_request_token)
-      {:stop, :normal, clear_slot_request(state)}
+    if state.active_run == nil and :queue.is_empty(state.requests) do
+      {:stop, :normal, cancel_slot_request(state)}
     else
       {:noreply, state}
     end
@@ -102,110 +107,103 @@ defmodule LemonGateway.ThreadWorker do
   end
 
   @impl true
-  def handle_info({:slot_granted, slot_ref, token}, state) do
-    if state.slot_pending and state.slot_request_token == token do
-      handle_slot_granted(slot_ref, state)
-    else
-      safe_release_slot(slot_ref)
-      {:noreply, state}
-    end
-  end
-
-  def handle_info({:slot_granted, slot_ref}, state) do
+  def handle_info(
+        {:slot_granted, slot_ref, token},
+        %{slot_request: %{token: token}} = state
+      ) do
     handle_slot_granted(slot_ref, state)
   end
 
-  def handle_info({:run_complete, run_pid, _completed_event}, state) do
-    state =
-      if run_pid == state.current_run do
-        if is_reference(state.run_mon_ref) do
-          Process.demonitor(state.run_mon_ref, [:flush])
-        end
-
-        %{state | current_run: nil, current_request: nil, current_slot_ref: nil, run_mon_ref: nil}
-      else
-        state
-      end
-
-    state = maybe_request_slot(state)
-
-    if state.current_run == nil and :queue.is_empty(state.requests) do
-      {:stop, :normal, state}
-    else
-      {:noreply, state}
-    end
+  def handle_info({:slot_granted, slot_ref, _token}, state) do
+    release_stale_grant(slot_ref, state)
+    {:noreply, state}
   end
 
-  def handle_info({:DOWN, mon_ref, :process, pid, reason}, state) do
-    if state.current_run == pid and state.run_mon_ref == mon_ref do
-      if state.current_slot_ref do
-        safe_release_slot(state.current_slot_ref)
-      end
+  def handle_info({:slot_granted, slot_ref}, state) do
+    # Production requests are tokenized; an uncorrelated grant cannot launch work.
+    release_stale_grant(slot_ref, state)
+    {:noreply, state}
+  end
 
-      Logger.warning(
-        "ThreadWorker observed run down thread_key=#{inspect(state.thread_key)} run_pid=#{inspect(pid)} reason=#{inspect(reason)}"
-      )
+  def handle_info(
+        {:run_complete, run_pid, _completed_event},
+        %{active_run: %{pid: run_pid}} = state
+      ) do
+    # Run releases its slot before sending this acknowledgement.
+    state |> clear_active_run() |> continue_or_stop()
+  end
 
-      state =
-        %{state | current_run: nil, current_request: nil, current_slot_ref: nil, run_mon_ref: nil}
-        |> maybe_request_slot()
+  def handle_info({:run_complete, _run_pid, _completed_event}, state) do
+    {:noreply, state}
+  end
 
-      if state.current_run == nil and :queue.is_empty(state.requests) do
-        {:stop, :normal, state}
-      else
-        {:noreply, state}
-      end
-    else
-      {:noreply, state}
-    end
+  def handle_info(
+        {:DOWN, mon_ref, :process, pid, reason},
+        %{active_run: %{pid: pid, mon_ref: mon_ref, slot_ref: slot_ref}} = state
+      ) do
+    safe_release_slot(slot_ref)
+
+    Logger.warning(
+      "ThreadWorker observed run down thread_key=#{inspect(state.thread_key)} run_pid=#{inspect(pid)} reason=#{inspect(reason)}"
+    )
+
+    state |> clear_active_run() |> continue_or_stop()
+  end
+
+  def handle_info({:DOWN, _mon_ref, :process, _pid, _reason}, state) do
+    {:noreply, state}
   end
 
   def handle_info(:slot_timeout_check, state) do
     state =
-      if state.slot_pending and state.slot_requested_at != nil do
-        elapsed = System.monotonic_time(:millisecond) - state.slot_requested_at
+      case state.slot_request do
+        %{requested_at: requested_at} ->
+          elapsed = System.monotonic_time(:millisecond) - requested_at
 
-        if elapsed > @slot_request_timeout_ms do
-          Logger.warning(
-            "ThreadWorker: slot request timed out after #{div(elapsed, 1000)}s, retrying"
-          )
+          if elapsed > @slot_request_timeout_ms do
+            Logger.warning(
+              "ThreadWorker: slot request timed out after #{div(elapsed, 1000)}s, retrying"
+            )
 
-          safe_cancel_slot_request(state.slot_request_token)
-          state = clear_slot_request(state)
-          maybe_request_slot(state)
-        else
+            state |> cancel_slot_request() |> maybe_request_slot()
+          else
+            state
+          end
+
+        nil ->
           state
-        end
-      else
-        state
       end
 
     schedule_slot_timeout_check()
     {:noreply, state}
   end
 
-  def handle_info({:slot_request_rejected, token, reason}, state) do
-    if state.slot_pending and state.slot_request_token == token do
-      {{:value, request}, rest} = :queue.out(state.requests)
+  def handle_info(
+        {:slot_request_rejected, token, reason},
+        %{slot_request: %{token: token}} = state
+      ) do
+    {{:value, request}, rest} = :queue.out(state.requests)
 
-      state =
-        state
-        |> clear_slot_request()
-        |> Map.put(:requests, rest)
-        |> terminalize_request(request, reason, :run_start)
-
-      continue_or_stop(state)
-    else
-      {:noreply, state}
-    end
+    state
+    |> clear_slot_request()
+    |> Map.put(:requests, rest)
+    |> terminalize_request(request, reason, :run_start)
+    |> continue_or_stop()
   end
 
-  def handle_info({:slot_request_expired, token}, state) do
-    if state.slot_pending and state.slot_request_token == token do
-      {:noreply, state |> clear_slot_request() |> maybe_request_slot()}
-    else
-      {:noreply, state}
-    end
+  def handle_info({:slot_request_rejected, _token, _reason}, state) do
+    {:noreply, state}
+  end
+
+  def handle_info(
+        {:slot_request_expired, token},
+        %{slot_request: %{token: token}} = state
+      ) do
+    {:noreply, state |> clear_slot_request() |> maybe_request_slot()}
+  end
+
+  def handle_info({:slot_request_expired, _token}, state) do
+    {:noreply, state}
   end
 
   def handle_info(msg, state) do
@@ -215,8 +213,8 @@ defmodule LemonGateway.ThreadWorker do
 
   defp handle_slot_granted(slot_ref, state) do
     cond do
-      state.current_run != nil ->
-        safe_release_slot(slot_ref)
+      state.active_run != nil ->
+        release_stale_grant(slot_ref, state)
         {:noreply, clear_slot_request(state)}
 
       :queue.is_empty(state.requests) ->
@@ -236,13 +234,13 @@ defmodule LemonGateway.ThreadWorker do
                  %{
                    state
                    | requests: rest,
-                     current_run: run_pid,
-                     current_request: request,
-                     current_slot_ref: slot_ref,
-                     run_mon_ref: mon_ref,
-                     slot_pending: false,
-                     slot_requested_at: nil,
-                     slot_request_token: nil,
+                     active_run: %{
+                       pid: run_pid,
+                       request: request,
+                       slot_ref: slot_ref,
+                       mon_ref: mon_ref
+                     },
+                     slot_request: nil,
                      start_attempts: Map.delete(state.start_attempts, request.run_id)
                  }}
 
@@ -284,7 +282,7 @@ defmodule LemonGateway.ThreadWorker do
 
   @impl true
   def terminate(_reason, state) do
-    if state.slot_pending, do: safe_cancel_slot_request(state.slot_request_token)
+    cancel_slot_request(state)
 
     Introspection.record(
       :thread_terminated,
@@ -304,7 +302,8 @@ defmodule LemonGateway.ThreadWorker do
   end
 
   defp maybe_request_slot(state) do
-    if state.current_run == nil and not state.slot_pending and not :queue.is_empty(state.requests) do
+    if state.active_run == nil and state.slot_request == nil and
+         not :queue.is_empty(state.requests) do
       token = make_ref()
 
       try do
@@ -312,18 +311,16 @@ defmodule LemonGateway.ThreadWorker do
 
         %{
           state
-          | slot_pending: true,
-            slot_requested_at: System.monotonic_time(:millisecond),
-            slot_request_token: token
+          | slot_request: %{token: token, requested_at: System.monotonic_time(:millisecond)}
         }
       catch
         :exit, {:noproc, _} ->
           Logger.error("ThreadWorker: scheduler not available for slot request")
-          %{state | slot_pending: false, slot_requested_at: nil}
+          state
 
         :exit, reason ->
           Logger.error("ThreadWorker: scheduler request_slot exited: #{inspect(reason)}")
-          %{state | slot_pending: false, slot_requested_at: nil}
+          state
       end
     else
       state
@@ -332,7 +329,10 @@ defmodule LemonGateway.ThreadWorker do
 
   defp enqueue_request(state, request) do
     cond do
-      match?(%ExecutionRequest{run_id: id} when id == request.run_id, state.current_request) or
+      match?(
+        %{request: %ExecutionRequest{run_id: id}} when id == request.run_id,
+        state.active_run
+      ) or
         Enum.any?(:queue.to_list(state.requests), &(&1.run_id == request.run_id)) or
           already_terminal?(request.run_id) ->
         state
@@ -368,6 +368,14 @@ defmodule LemonGateway.ThreadWorker do
     end
   end
 
+  defp release_stale_grant(slot_ref, %{active_run: %{slot_ref: slot_ref}}), do: :ok
+  defp release_stale_grant(slot_ref, _state), do: safe_release_slot(slot_ref)
+
+  defp clear_active_run(%{active_run: %{mon_ref: mon_ref}} = state) do
+    Process.demonitor(mon_ref, [:flush])
+    %{state | active_run: nil}
+  end
+
   defp safe_release_slot(slot_ref) do
     try do
       LemonGateway.Scheduler.release_slot(slot_ref)
@@ -382,7 +390,12 @@ defmodule LemonGateway.ThreadWorker do
     end
   end
 
-  defp safe_cancel_slot_request(nil), do: :ok
+  defp cancel_slot_request(%{slot_request: nil} = state), do: state
+
+  defp cancel_slot_request(%{slot_request: %{token: token}} = state) do
+    safe_cancel_slot_request(token)
+    clear_slot_request(state)
+  end
 
   defp safe_cancel_slot_request(token) do
     LemonGateway.Scheduler.cancel_slot_request(self(), token)
@@ -417,7 +430,7 @@ defmodule LemonGateway.ThreadWorker do
   end
 
   defp clear_slot_request(state) do
-    %{state | slot_pending: false, slot_requested_at: nil, slot_request_token: nil}
+    %{state | slot_request: nil}
   end
 
   defp put_start_attempt(state, run_id, attempt) do
@@ -501,7 +514,7 @@ defmodule LemonGateway.ThreadWorker do
   defp continue_or_stop(state) do
     state = maybe_request_slot(state)
 
-    if state.current_run == nil and :queue.is_empty(state.requests) do
+    if state.active_run == nil and :queue.is_empty(state.requests) do
       {:stop, :normal, state}
     else
       {:noreply, state}

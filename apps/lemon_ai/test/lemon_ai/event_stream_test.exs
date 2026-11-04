@@ -505,7 +505,7 @@ defmodule LemonAi.EventStreamOverflowTest do
       assert {:ok, _} = result
     end
 
-    test "attaching already-dead task is handled gracefully" do
+    test "attaching an already-dead task preserves its crash result over late success" do
       {:ok, stream} = EventStream.start_link()
 
       {:ok, task_pid} = Task.start(fn -> :done end)
@@ -513,13 +513,12 @@ defmodule LemonAi.EventStreamOverflowTest do
       task_ref = Process.monitor(task_pid)
       assert_receive {:DOWN, ^task_ref, :process, _, _}, 5_000
 
-      # Attaching dead task should not crash the stream
       EventStream.attach_task(stream, task_pid)
+      result = EventStream.result(stream, 1_000)
+      assert {:error, %AssistantMessage{stop_reason: :error}} = result
 
-      # Stream should still work
-      assert Process.alive?(stream)
       EventStream.complete(stream, make_message())
-      {:ok, _} = EventStream.result(stream, 100)
+      assert EventStream.result(stream, 100) == result
     end
 
     test "stream still works without any attached task" do
@@ -1000,17 +999,148 @@ defmodule LemonAi.EventStreamOverflowTest do
       assert {:error, :canceled} = result
     end
 
-    test "completing already completed stream preserves first result" do
+    test "the first terminal result wins for every complete and error ordering" do
+      for first_kind <- [:complete, :error], late_kind <- [:complete, :error] do
+        {:ok, stream} = EventStream.start_link(max_queue: 1)
+        first = %{make_message() | error_details: %{type: :test}}
+        late = %{first | content: [%TextContent{text: "late"}]}
+        status = if first_kind == :complete, do: :ok, else: :error
+        event_kind = if first_kind == :complete, do: :done, else: :error
+        {:ok, subscription} = EventStream.subscribe_result(stream)
+
+        assert :ok = EventStream.push(stream, {:start, first})
+        apply(EventStream, first_kind, [stream, first])
+        apply(EventStream, late_kind, [stream, late])
+
+        assert {^status, ^first} = EventStream.result(stream)
+        assert_receive {:event_stream_result, ^subscription, {^status, ^first}}
+        refute_receive {:event_stream_result, ^subscription, _}, 0
+        assert [{^event_kind, :stop, ^first}] = Enum.to_list(EventStream.events(stream))
+        assert %{queue_size: 0, dropped: 1} = EventStream.stats(stream)
+        assert [] = Enum.to_list(EventStream.events(stream))
+
+        {:ok, late_subscription} = EventStream.subscribe_result(stream)
+        assert_receive {:event_stream_result, ^late_subscription, {^status, ^first}}
+        EventStream.cancel(stream)
+      end
+    end
+
+    test "sync pushes report closed and async pushes are discarded after either terminal result" do
+      for kind <- [:complete, :error] do
+        {:ok, stream} = EventStream.start_link(max_queue: 1)
+        message = %{make_message() | error_details: %{type: :test}}
+        apply(EventStream, kind, [stream, message])
+
+        assert {:error, :closed} = EventStream.push(stream, {:start, message})
+        assert :ok = EventStream.push_async(stream, {:start, message})
+        assert %{queue_size: 1, dropped: 0} = EventStream.stats(stream)
+        assert [_terminal] = Enum.to_list(EventStream.events(stream))
+        assert [] = Enum.to_list(EventStream.events(stream))
+        EventStream.cancel(stream)
+      end
+    end
+
+    test "queued timeouts cannot dispose a completed or errored stream" do
+      for kind <- [:complete, :error] do
+        {:ok, stream} = EventStream.start_link(timeout: 60_000)
+        message = %{make_message() | error_details: %{type: :test}}
+        status = if kind == :complete, do: :ok, else: :error
+        apply(EventStream, kind, [stream, message])
+        send(stream, :stream_timeout)
+
+        assert {^status, ^message} = EventStream.result(stream)
+        assert [_terminal] = Enum.to_list(EventStream.events(stream))
+        assert {^status, ^message} = EventStream.result(stream)
+
+        monitor = Process.monitor(stream)
+        EventStream.cancel(stream)
+        assert_receive {:DOWN, ^monitor, :process, ^stream, :normal}
+        assert {:error, :canceled} = EventStream.push(stream, {:start, message})
+      end
+    end
+
+    test "terminalization wakes queued take and result callers exactly once" do
       {:ok, stream} = EventStream.start_link()
+      message = make_message()
+      take_one = make_ref()
+      take_two = make_ref()
+      result_ref = make_ref()
 
-      EventStream.complete(stream, make_message(content: [%TextContent{text: "first"}]))
+      # Register calls from one sender so completion cannot overtake any waiter.
+      send(stream, {:"$gen_call", {self(), take_one}, :take})
+      send(stream, {:"$gen_call", {self(), take_two}, :take})
+      send(stream, {:"$gen_call", {self(), result_ref}, :result})
+      EventStream.complete(stream, message)
+      EventStream.error(stream, make_message(stop_reason: :error))
+      assert {:ok, ^message} = EventStream.result(stream)
 
-      # Get the result from the first completion
-      {:ok, result} = EventStream.result(stream, 100)
-      assert [%TextContent{text: "first"}] = result.content
+      assert_receive {^take_one, {:event, {:done, :stop, ^message}}}
+      assert_receive {^take_two, :done}
+      assert_receive {^result_ref, {:ok, ^message}}
+      refute_receive {^take_one, _}, 0
+      refute_receive {^take_two, _}, 0
+      refute_receive {^result_ref, _}, 0
+      assert [] = Enum.to_list(EventStream.events(stream))
+    end
 
-      # Second complete is a cast, so it may still modify state
-      # But result should already be set from first complete
+    test "producer death after completion preserves the terminal result" do
+      {:ok, stream} = EventStream.start_link()
+      producer = spawn(fn -> receive do: (:stop -> :ok) end)
+      EventStream.attach_task(stream, producer)
+      message = make_message()
+      EventStream.complete(stream, message)
+      assert {:ok, ^message} = EventStream.result(stream)
+
+      Process.exit(producer, :kill)
+      assert wait_until(fn -> :sys.get_state(stream).task_pid == nil end)
+      send(stream, :stream_timeout)
+      assert {:ok, ^message} = EventStream.result(stream)
+      assert [{:done, :stop, ^message}] = Enum.to_list(EventStream.events(stream))
+    end
+
+    test "producer death terminalization cancels its timeout and cannot be overwritten" do
+      {:ok, stream} = EventStream.start_link(timeout: 60_000)
+      producer = spawn(fn -> receive do: (:stop -> :ok) end)
+      EventStream.attach_task(stream, producer)
+      {:ok, subscription} = EventStream.subscribe_result(stream)
+      send(producer, :stop)
+
+      assert_receive {:event_stream_result, ^subscription, {:error, message}}
+      EventStream.complete(stream, make_message())
+      send(stream, :stream_timeout)
+      assert {:error, ^message} = EventStream.result(stream)
+      assert [{:error, :error, ^message}] = Enum.to_list(EventStream.events(stream))
+    end
+
+    test "late attachment stops new work without replacing the owned producer" do
+      {:ok, stream} = EventStream.start_link()
+      producer = spawn(fn -> receive do: (:stop -> :ok) end)
+      producer_ref = Process.monitor(producer)
+      EventStream.attach_task(stream, producer)
+      EventStream.complete(stream, make_message())
+      EventStream.attach_task(stream, producer)
+      assert {:ok, _} = EventStream.result(stream)
+      assert Process.alive?(producer)
+
+      late_producer = spawn(fn -> receive do: (:stop -> :ok) end)
+      late_ref = Process.monitor(late_producer)
+      EventStream.attach_task(stream, late_producer)
+      assert_receive {:DOWN, ^late_ref, :process, ^late_producer, :killed}
+      assert {:ok, _} = EventStream.result(stream)
+
+      EventStream.cancel(stream)
+      assert_receive {:DOWN, ^producer_ref, :process, ^producer, _}
+    end
+
+    test "raw terminal event followed by completion retains the provider protocol" do
+      {:ok, stream} = EventStream.start_link()
+      message = make_message()
+      assert :ok = EventStream.push(stream, {:done, :stop, message})
+      EventStream.complete(stream, message)
+      EventStream.complete(stream, make_message(content: [%TextContent{text: "late"}]))
+
+      assert [{:done, :stop, ^message}] = Enum.to_list(EventStream.events(stream))
+      assert {:ok, ^message} = EventStream.result(stream)
     end
 
     test "stats available after stream completion" do

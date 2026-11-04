@@ -7,7 +7,6 @@ defmodule CodingAgent.Session.PersistenceTest do
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Session
   alias CodingAgent.Session.Persistence
-  alias CodingAgent.Session.State
   alias CodingAgent.SessionManager
   alias CodingAgent.Executor
   alias LemonGateway.ExecutionRequest
@@ -243,11 +242,16 @@ defmodule CodingAgent.Session.PersistenceTest do
 
   @tag :tmp_dir
   test "async followup message_end dedupes persisted custom_message entries", %{tmp_dir: tmp_dir} do
-    {:ok, session} =
-      Session.start_link(
-        cwd: tmp_dir,
-        model: Mocks.mock_model(),
-        stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("ack"))
+    session =
+      start_supervised!(
+        {Session,
+         cwd: tmp_dir,
+         workspace_dir: Path.join(tmp_dir, "workspace"),
+         model: Mocks.mock_model(),
+         tools: [],
+         extension_inventory: {[], []},
+         mcp_tools: [],
+         stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("ack"))}
       )
 
     attrs = %{
@@ -258,25 +262,9 @@ defmodule CodingAgent.Session.PersistenceTest do
       timestamp: 456
     }
 
-    message = State.build_async_followup_message(attrs)
-
+    Session.subscribe(session)
     assert :ok = Session.handle_async_followup(session, attrs)
-
-    pending_prompt_timer_ref = Session.get_state(session).pending_prompt_timer_ref
-    assert is_reference(pending_prompt_timer_ref)
-    Process.cancel_timer(pending_prompt_timer_ref)
-
-    :sys.replace_state(session, fn state ->
-      %{state | pending_prompt_timer_ref: nil}
-    end)
-
-    send(session, {:agent_event, {:message_end, message}})
-    send(session, {:agent_event, {:agent_end, [message]}})
-
-    assert wait_until(fn ->
-             state = Session.get_state(session)
-             state.is_streaming == false and state.pending_prompt_timer_ref == nil
-           end)
+    assert_receive {:session_event, _, {:agent_end, _}}, 2_000
 
     assert :ok = Session.save(session)
 
@@ -295,7 +283,7 @@ defmodule CodingAgent.Session.PersistenceTest do
     assert hd(custom_entries).content == "[task task-456] delegated work completed"
   end
 
-  defp wait_until(fun, timeout_ms \\ 1_000) when is_function(fun, 0) do
+  defp wait_until(fun, timeout_ms) when is_function(fun, 0) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_until(fun, deadline)
   end

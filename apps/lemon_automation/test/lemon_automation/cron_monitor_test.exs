@@ -70,13 +70,13 @@ defmodule LemonAutomation.CronMonitorTest do
   describe "apply_policy/2" do
     test "nil job delivers", %{job_id: job_id} do
       run = completed_run(job_id, "same")
-      assert {^run, true} = CronMonitor.apply_policy(nil, run)
+      assert {^run, true} = apply_and_commit(nil, run)
     end
 
     test "non-monitor job delivers and records no state", %{job_id: job_id} do
       run = completed_run(job_id, "same")
 
-      assert {^run, true} = CronMonitor.apply_policy(job(job_id, monitor: false), run)
+      assert {^run, true} = apply_and_commit(job(job_id, monitor: false), run)
       assert CronStore.get_monitor_state(job_id) == nil
     end
 
@@ -86,7 +86,7 @@ defmodule LemonAutomation.CronMonitorTest do
       job = job(job_id, monitor: true, monitor_notify_first_run: true)
       run = completed_run(job_id, "hello")
 
-      assert {result_run, true} = CronMonitor.apply_policy(job, run)
+      assert {result_run, true} = apply_and_commit(job, run)
       refute result_run.suppressed
 
       state = CronStore.get_monitor_state(job_id)
@@ -101,7 +101,7 @@ defmodule LemonAutomation.CronMonitorTest do
       job = job(job_id, monitor: true, monitor_notify_first_run: false)
       run = completed_run(job_id, "hello")
 
-      assert {result_run, false} = CronMonitor.apply_policy(job, run)
+      assert {result_run, false} = apply_and_commit(job, run)
       assert result_run.suppressed == true
       assert CronStore.get_monitor_state(job_id).last_hash == CronMonitor.hash("hello")
     end
@@ -109,10 +109,10 @@ defmodule LemonAutomation.CronMonitorTest do
     test "unchanged scheduled run is suppressed and bumps runs_since_change", %{job_id: job_id} do
       job = job(job_id, monitor: true)
 
-      assert {_run, true} = CronMonitor.apply_policy(job, completed_run(job_id, "hello"))
+      assert {_run, true} = apply_and_commit(job, completed_run(job_id, "hello"))
 
       second = completed_run(job_id, "hello\n")
-      assert {result_run, false} = CronMonitor.apply_policy(job, second)
+      assert {result_run, false} = apply_and_commit(job, second)
       assert result_run.suppressed == true
 
       state = CronStore.get_monitor_state(job_id)
@@ -120,7 +120,7 @@ defmodule LemonAutomation.CronMonitorTest do
       assert state.last_run_id == second.id
 
       third = completed_run(job_id, "hello")
-      assert {_run, false} = CronMonitor.apply_policy(job, third)
+      assert {_run, false} = apply_and_commit(job, third)
       assert CronStore.get_monitor_state(job_id).runs_since_change == 2
 
       assert "monitor_output_unchanged" in audit_actions(job_id)
@@ -129,11 +129,11 @@ defmodule LemonAutomation.CronMonitorTest do
     test "changed run delivers, resets the counter and audits the change", %{job_id: job_id} do
       job = job(job_id, monitor: true)
 
-      assert {_run, true} = CronMonitor.apply_policy(job, completed_run(job_id, "hello"))
-      assert {_run, false} = CronMonitor.apply_policy(job, completed_run(job_id, "hello"))
+      assert {_run, true} = apply_and_commit(job, completed_run(job_id, "hello"))
+      assert {_run, false} = apply_and_commit(job, completed_run(job_id, "hello"))
 
       changed = completed_run(job_id, "goodbye")
-      assert {result_run, true} = CronMonitor.apply_policy(job, changed)
+      assert {result_run, true} = apply_and_commit(job, changed)
       refute result_run.suppressed
 
       state = CronStore.get_monitor_state(job_id)
@@ -147,48 +147,48 @@ defmodule LemonAutomation.CronMonitorTest do
     test "failed and timeout runs always deliver and leave state untouched", %{job_id: job_id} do
       job = job(job_id, monitor: true)
 
-      assert {_run, true} = CronMonitor.apply_policy(job, completed_run(job_id, "hello"))
+      assert {_run, true} = apply_and_commit(job, completed_run(job_id, "hello"))
       baseline = CronStore.get_monitor_state(job_id)
 
       failed = %{completed_run(job_id, nil) | status: :failed, error: "boom"}
-      assert {^failed, true} = CronMonitor.apply_policy(job, failed)
+      assert {^failed, true} = apply_and_commit(job, failed)
 
       timed_out = %{completed_run(job_id, nil) | status: :timeout}
-      assert {^timed_out, true} = CronMonitor.apply_policy(job, timed_out)
+      assert {^timed_out, true} = apply_and_commit(job, timed_out)
 
       aborted = %{completed_run(job_id, nil) | status: :aborted}
-      assert {^aborted, true} = CronMonitor.apply_policy(job, aborted)
+      assert {^aborted, true} = apply_and_commit(job, aborted)
 
       assert CronStore.get_monitor_state(job_id) == baseline
 
       # Recovery to the pre-failure output is still suppressed.
-      assert {recovered, false} = CronMonitor.apply_policy(job, completed_run(job_id, "hello"))
+      assert {recovered, false} = apply_and_commit(job, completed_run(job_id, "hello"))
       assert recovered.suppressed == true
     end
 
     test "manual and wake runs deliver even when unchanged", %{job_id: job_id} do
       job = job(job_id, monitor: true)
 
-      assert {_run, true} = CronMonitor.apply_policy(job, completed_run(job_id, "hello"))
+      assert {_run, true} = apply_and_commit(job, completed_run(job_id, "hello"))
       before = CronStore.get_monitor_state(job_id)
 
       manual = %{completed_run(job_id, "hello") | triggered_by: :manual}
-      assert {result_run, true} = CronMonitor.apply_policy(job, manual)
+      assert {result_run, true} = apply_and_commit(job, manual)
       refute result_run.suppressed
       # unchanged manual runs do not re-audit or mutate state
       assert CronStore.get_monitor_state(job_id) == before
 
       wake = %{completed_run(job_id, "hello") | triggered_by: :wake}
-      assert {_run, true} = CronMonitor.apply_policy(job, wake)
+      assert {_run, true} = apply_and_commit(job, wake)
     end
 
     test "manual run with changed output delivers and updates state", %{job_id: job_id} do
       job = job(job_id, monitor: true)
 
-      assert {_run, true} = CronMonitor.apply_policy(job, completed_run(job_id, "hello"))
+      assert {_run, true} = apply_and_commit(job, completed_run(job_id, "hello"))
 
       manual = %{completed_run(job_id, "different") | triggered_by: :manual}
-      assert {_run, true} = CronMonitor.apply_policy(job, manual)
+      assert {_run, true} = apply_and_commit(job, manual)
 
       assert CronStore.get_monitor_state(job_id).last_hash == CronMonitor.hash("different")
     end
@@ -197,7 +197,7 @@ defmodule LemonAutomation.CronMonitorTest do
       job = job(job_id, monitor: true, monitor_notify_first_run: false)
       manual = %{completed_run(job_id, "hello") | triggered_by: :manual}
 
-      assert {result_run, true} = CronMonitor.apply_policy(job, manual)
+      assert {result_run, true} = apply_and_commit(job, manual)
       refute result_run.suppressed
     end
 
@@ -206,8 +206,14 @@ defmodule LemonAutomation.CronMonitorTest do
       job = %{job(job_id, monitor: true) | id: :not_a_binary}
       run = completed_run(job_id, "hello")
 
-      assert {^run, true} = CronMonitor.apply_policy(job, run)
+      assert {^run, true} = apply_and_commit(job, run)
     end
+  end
+
+  defp apply_and_commit(job, run) do
+    {run, deliver?, update} = CronMonitor.apply_policy(job, run)
+    update.()
+    {run, deliver?}
   end
 
   defp job(job_id, attrs) do

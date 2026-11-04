@@ -9,6 +9,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
   local session, preventing recursive remote routing.
   Incoming execution capabilities are intersected with the destination-local
   `:execution_capabilities` ceiling before a session starts.
+
+  The first native completion seals execution output. The invocation remains owned
+  until its previously queued events are acknowledged; late engine events cannot
+  replace that outcome or extend the drain.
   """
 
   use GenServer
@@ -396,12 +400,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   def handle_info({:engine_delta, run_ref, text}, state) when is_binary(text) do
-    case Map.get(state.run_refs, run_ref) do
+    case running_invocation(state, run_ref) do
       nil ->
         {:noreply, state}
 
-      invoke_id ->
-        invocation = Map.fetch!(state.invocations, invoke_id)
+      {invoke_id, invocation} ->
         next_bytes = invocation.delta_bytes + byte_size(text)
         next_count = invocation.delta_count + 1
 
@@ -433,12 +436,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   def handle_info({:engine_event, run_ref, %{__event__: :completed} = completed}, state) do
-    case Map.get(state.run_refs, run_ref) do
+    case running_invocation(state, run_ref) do
       nil ->
         {:noreply, state}
 
-      invoke_id ->
-        invocation = Map.fetch!(state.invocations, invoke_id)
+      {invoke_id, invocation} ->
         if invocation.monitor_ref, do: Process.demonitor(invocation.monitor_ref, [:flush])
         invocation = %{invocation | completed: completed, monitor_ref: nil}
         state = put_invocation(state, invoke_id, invocation)
@@ -447,11 +449,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   def handle_info({:engine_event, run_ref, event}, state) do
-    case Map.get(state.run_refs, run_ref) do
+    case running_invocation(state, run_ref) do
       nil ->
         {:noreply, state}
 
-      invoke_id ->
+      {invoke_id, _invocation} ->
         {:noreply, forward_event(state, invoke_id, RemoteEventCodec.encode_engine(event))}
     end
   end
@@ -2016,6 +2018,15 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
       %{current | shells: %{}, process_tasks: %{}}
     end)
+  end
+
+  defp running_invocation(state, run_ref) do
+    invoke_id = Map.get(state.run_refs, run_ref)
+
+    case Map.get(state.invocations, invoke_id) do
+      %{completed: nil} = invocation -> {invoke_id, invocation}
+      _ -> nil
+    end
   end
 
   defp invocation_for_run(state, run_id) when is_binary(run_id) do

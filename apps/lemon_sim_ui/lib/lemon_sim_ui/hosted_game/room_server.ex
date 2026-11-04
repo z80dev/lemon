@@ -475,7 +475,10 @@ defmodule LemonSimUi.HostedGame.RoomServer do
     end
   end
 
-  def handle_info({:retry_ai, room_id, match_number, version, actor_id}, state) do
+  def handle_info(
+        {:timeout, ref, {:retry_ai, room_id, match_number, version, actor_id}},
+        %{ai_retry_ref: ref} = state
+      ) do
     room = state.room
     state = %{state | ai_retry_ref: nil}
 
@@ -488,7 +491,13 @@ defmodule LemonSimUi.HostedGame.RoomServer do
     end
   end
 
-  def handle_info({:persist_terminal, attempt}, state) do
+  def handle_info({:timeout, _ref, {:retry_ai, _, _, _, _}}, state),
+    do: {:noreply, state}
+
+  def handle_info(
+        {:timeout, ref, {:persist_terminal, attempt}},
+        %{terminal_retry_ref: ref} = state
+      ) do
     case state.pending_terminal_room do
       %Room{} = room ->
         case persist(room) do
@@ -499,7 +508,7 @@ defmodule LemonSimUi.HostedGame.RoomServer do
 
           {:error, _reason} ->
             delay = min(30_000, trunc(500 * :math.pow(2, min(attempt, 6))))
-            ref = Process.send_after(self(), {:persist_terminal, attempt + 1}, delay)
+            ref = :erlang.start_timer(delay, self(), {:persist_terminal, attempt + 1})
             {:noreply, %{state | terminal_retry_ref: ref}}
         end
 
@@ -507,6 +516,9 @@ defmodule LemonSimUi.HostedGame.RoomServer do
         {:noreply, %{state | terminal_retry_ref: nil}}
     end
   end
+
+  def handle_info({:timeout, _ref, {:persist_terminal, _attempt}}, state),
+    do: {:noreply, state}
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
     cond do
@@ -982,10 +994,10 @@ defmodule LemonSimUi.HostedGame.RoomServer do
 
       {:error, :max_children} ->
         retry_ref =
-          Process.send_after(
+          :erlang.start_timer(
+            250,
             self(),
-            {:retry_ai, room.id, match_number, version, actor_id},
-            250
+            {:retry_ai, room.id, match_number, version, actor_id}
           )
 
         %{state | ai_retry_ref: retry_ref}
@@ -1621,7 +1633,8 @@ defmodule LemonSimUi.HostedGame.RoomServer do
 
       {:error, _persist_reason} ->
         HostedGame.terminalization_pending(room.id)
-        ref = Process.send_after(self(), {:persist_terminal, 1}, 500)
+        if state.terminal_retry_ref, do: Process.cancel_timer(state.terminal_retry_ref)
+        ref = :erlang.start_timer(500, self(), {:persist_terminal, 1})
 
         state
         |> cancel_timer()

@@ -95,12 +95,14 @@ defmodule CodingAgent.Session.State do
     default_context_guardrail_opts(cwd, session_id)
   end
 
-  @spec cancel_pending_prompt(map()) :: map()
-  def cancel_pending_prompt(%{pending_prompt_timer_ref: nil} = state), do: state
+  @type pending_prompt :: %{ref: reference(), timer_ref: reference()}
 
-  def cancel_pending_prompt(%{pending_prompt_timer_ref: timer_ref} = state) do
+  @spec cancel_pending_prompt(map()) :: map()
+  def cancel_pending_prompt(%{pending_prompt: nil} = state), do: state
+
+  def cancel_pending_prompt(%{pending_prompt: %{timer_ref: timer_ref}} = state) do
     _ = Process.cancel_timer(timer_ref)
-    %{state | pending_prompt_timer_ref: nil, is_streaming: false}
+    %{state | pending_prompt: nil, is_streaming: false}
   end
 
   @spec build_prompt_message(String.t(), keyword()) :: UserMessage.t()
@@ -185,12 +187,22 @@ defmodule CodingAgent.Session.State do
     }
   end
 
-  @spec begin_prompt(map(), reference()) :: map()
-  def begin_prompt(state, timer_ref) do
+  @spec begin_prompt(map(), UserMessage.t() | CustomMessage.t(), non_neg_integer()) :: map()
+  def begin_prompt(state, message, defer_ms) do
+    state = cancel_pending_prompt(state)
+    prompt_ref = make_ref()
+
+    timer_ref =
+      Process.send_after(
+        self(),
+        {:do_prompt, prompt_ref, message, state.system_prompt},
+        defer_ms
+      )
+
     %{
       state
       | is_streaming: true,
-        pending_prompt_timer_ref: timer_ref,
+        pending_prompt: %{ref: prompt_ref, timer_ref: timer_ref},
         turn_index: state.turn_index + 1,
         overflow_recovery: %{
           state.overflow_recovery
@@ -210,7 +222,7 @@ defmodule CodingAgent.Session.State do
       state
       | session_manager: session_manager,
         is_streaming: false,
-        pending_prompt_timer_ref: nil,
+        pending_prompt: nil,
         turn_index: 0,
         started_at: started_at_ms,
         session_file: nil,
