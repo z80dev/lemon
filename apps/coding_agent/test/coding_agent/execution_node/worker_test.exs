@@ -1229,8 +1229,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
 
     send(
       worker,
-      {:execution_node_socket, socket,
-       {:response, tag, {:ok, %{"received" => true, "seq" => 1}}}}
+      {:execution_node_socket, socket, {:response, tag, {:ok, %{"received" => true, "seq" => 1}}}}
     )
 
     send(

@@ -42,11 +42,17 @@ defmodule CodingAgent.Session.PromptLifecycleTest do
   for cancellation <- [:abort, :reset],
       producer <- [:prompt, :async_followup, :parent_question],
       stage <- [:scheduled, :dispatch, :compaction_resume] do
+    @tag lifecycle_cancellation: cancellation,
+         lifecycle_producer: producer,
+         lifecycle_stage: stage
     test "#{cancellation} rejects stale #{stage} from #{producer} without consuming the next prompt",
-         %{session: session, calls: calls} do
-      cancellation = unquote(cancellation)
-      producer = unquote(producer)
-      stage = unquote(stage)
+         %{
+           session: session,
+           calls: calls,
+           lifecycle_cancellation: cancellation,
+           lifecycle_producer: producer,
+           lifecycle_stage: stage
+         } do
       old_id = Session.get_state(session).session_manager.header.id
       old_prompt = hold_prompt(session, producer, "prompt-A")
       {delayed, task} = hold_stage(session, old_prompt, stage)
@@ -106,14 +112,16 @@ defmodule CodingAgent.Session.PromptLifecycleTest do
   end
 
   for completion <- [:result, :timeout, :down] do
+    @tag lifecycle_completion: completion
     test "the current prompt resumes once after compaction #{completion}", %{
       session: session,
-      calls: calls
+      calls: calls,
+      lifecycle_completion: completion
     } do
       prompt = hold_prompt(session, :prompt, "prompt-B")
       {dispatch, task} = hold_stage(session, prompt, :compaction_resume)
 
-      case unquote(completion) do
+      case completion do
         :result ->
           send(session, {:auto_compaction_result, task.compaction.signature, {:error, :failed}})
           Session.get_state(session)
@@ -196,12 +204,14 @@ defmodule CodingAgent.Session.PromptLifecycleTest do
 
     assert_receive {:admission_ready, ^barrier}, 2_000
 
-    assert :ok =
-             case producer do
-               :prompt -> Session.prompt(session, text)
-               :async_followup -> Session.handle_async_followup(session, text)
-               :parent_question -> Session.deliver_parent_question(session, text)
-             end
+    result =
+      case producer do
+        :prompt -> Session.prompt(session, text)
+        :async_followup -> Session.handle_async_followup(session, text)
+        :parent_question -> Session.deliver_parent_question(session, text)
+      end
+
+    assert :ok = result
 
     Task.await(holder)
     assert_receive {:held_prompt, ^barrier, prompt}, 2_000
@@ -245,7 +255,9 @@ defmodule CodingAgent.Session.PromptLifecycleTest do
     state =
       :sys.replace_state(session, fn state ->
         task_monitor = Process.monitor(worker)
-        timeout = Process.send_after(self(), {:auto_compaction_task_timeout, task_monitor}, 60_000)
+
+        timeout =
+          Process.send_after(self(), {:auto_compaction_task_timeout, task_monitor}, 60_000)
 
         state = %{
           state
@@ -271,6 +283,7 @@ defmodule CodingAgent.Session.PromptLifecycleTest do
       end)
 
     assert_receive {:held_dispatch, dispatch}
+
     {dispatch,
      %{session: session, worker: worker, monitor: monitor, compaction: state.auto_compaction}}
   end

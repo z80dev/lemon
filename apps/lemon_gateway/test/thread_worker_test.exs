@@ -210,6 +210,7 @@ defmodule LemonGateway.ThreadWorkerTest do
 
     assert failed_run_id == failed.run_id
     assert_completed_request(succeeding)
+
     assert %{summary: %{completed: %{ok: false, error: %{attempts: 3}}}} =
              LemonCore.RunStore.get(failed.run_id)
 
@@ -252,12 +253,18 @@ defmodule LemonGateway.ThreadWorkerTest do
     # separately owned slot. Untokenized grants cannot select another request.
     {:noreply, state} = ThreadWorker.handle_info(grant, state)
     {:noreply, state} = ThreadWorker.handle_info({:slot_granted, new_slot}, state)
+
     {:noreply, state} =
       ThreadWorker.handle_info({:slot_granted, old_slot, old_token}, state)
 
     assert_owned_slot(new_slot)
-    {:noreply, state} = ThreadWorker.handle_cast({:cancel_queued, first.run_id, :cancel_one}, state)
-    {:noreply, state} = ThreadWorker.handle_cast({:cancel_queued, first.run_id, :cancel_two}, state)
+
+    {:noreply, state} =
+      ThreadWorker.handle_cast({:cancel_queued, first.run_id, :cancel_one}, state)
+
+    {:noreply, state} =
+      ThreadWorker.handle_cast({:cancel_queued, first.run_id, :cancel_two}, state)
+
     assert_receive {:owned_run_cancelled, ^first_pid, :cancel_one}, 1_000
     assert_receive {:owned_run_cancelled, ^first_pid, :cancel_two}, 1_000
     assert_owned_slot(new_slot)
@@ -284,11 +291,15 @@ defmodule LemonGateway.ThreadWorkerTest do
     {state, second_pid, second_slot} = grant_owned_run(state, second)
 
     {:noreply, state} = ThreadWorker.handle_info({:run_complete, first_pid, %{ok: true}}, state)
+
     {:noreply, state} =
       ThreadWorker.handle_info({:DOWN, first_monitor, :process, first_pid, :normal}, state)
 
     {:noreply, state} =
-      ThreadWorker.handle_info({:DOWN, state.active_run.mon_ref, :process, first_pid, :normal}, state)
+      ThreadWorker.handle_info(
+        {:DOWN, state.active_run.mon_ref, :process, first_pid, :normal},
+        state
+      )
 
     {:noreply, state} =
       ThreadWorker.handle_info({:DOWN, make_ref(), :process, second_pid, :normal}, state)
@@ -317,6 +328,7 @@ defmodule LemonGateway.ThreadWorkerTest do
 
     {state, second_pid, second_slot} = grant_owned_run(state, second)
     {:noreply, state} = ThreadWorker.handle_info({:run_complete, first_pid, %{ok: true}}, state)
+
     {:noreply, state} =
       ThreadWorker.handle_info({:DOWN, first_monitor, :process, first_pid, :killed}, state)
 
@@ -345,7 +357,8 @@ defmodule LemonGateway.ThreadWorkerTest do
       ThreadWorker.handle_cast({:cancel_queued, cancelled.run_id, :user_requested}, state)
 
     assert_receive {:lemon_gateway_run_completed, ^cancelled,
-                    %{ok: false, error: :user_requested, meta: %{cancelled: true}}}, 1_000
+                    %{ok: false, error: :user_requested, meta: %{cancelled: true}}},
+                   1_000
 
     assert %{summary: %{completed: %{meta: %{cancelled: true}}}} =
              LemonCore.RunStore.get(cancelled.run_id)
@@ -384,6 +397,7 @@ defmodule LemonGateway.ThreadWorkerTest do
     assert_receive {:lemon_gateway_run_completed, ^cancelled, %{ok: false}}, 1_000
     assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 1_000
     assert_pool_empty()
+
     assert %{summary: %{completed: %{meta: %{cancelled: true}}}} =
              LemonCore.RunStore.get(cancelled.run_id)
 

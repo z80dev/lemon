@@ -505,7 +505,7 @@ defmodule LemonAi.EventStreamOverflowTest do
       assert {:ok, _} = result
     end
 
-    test "attaching already-dead task is handled gracefully" do
+    test "attaching an already-dead task preserves its crash result over late success" do
       {:ok, stream} = EventStream.start_link()
 
       {:ok, task_pid} = Task.start(fn -> :done end)
@@ -513,13 +513,12 @@ defmodule LemonAi.EventStreamOverflowTest do
       task_ref = Process.monitor(task_pid)
       assert_receive {:DOWN, ^task_ref, :process, _, _}, 5_000
 
-      # Attaching dead task should not crash the stream
       EventStream.attach_task(stream, task_pid)
+      result = EventStream.result(stream, 1_000)
+      assert {:error, %AssistantMessage{stop_reason: :error}} = result
 
-      # Stream should still work
-      assert Process.alive?(stream)
       EventStream.complete(stream, make_message())
-      {:ok, _} = EventStream.result(stream, 100)
+      assert EventStream.result(stream, 100) == result
     end
 
     test "stream still works without any attached task" do

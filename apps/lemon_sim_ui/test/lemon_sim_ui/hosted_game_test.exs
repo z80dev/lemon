@@ -740,6 +740,7 @@ defmodule LemonSimUi.HostedGameTest do
     assert state.terminal_retry_ref == current
     assert state.pending_terminal_room == pending
     assert HostedGame.raw_room(room.room_id) == persisted
+
     assert {:error, :persistence_pending} =
              HostedGame.control(room.room_id, room.host_token, "rematch")
 

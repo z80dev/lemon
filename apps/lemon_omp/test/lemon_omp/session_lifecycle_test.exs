@@ -134,12 +134,16 @@ defmodule LemonOmp.SessionLifecycleTest do
     monitor = Process.monitor(pid)
     # Let the actual current timer deliver its timeout; no synthetic current message.
     assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 5_000
+
     assert {:ok, %{"status" => "closed", "exit" => %{"reason" => "idle_timeout"}}} =
              LemonOmp.get(id, ctx.scope)
   end
 
   test "superseded publication and settling messages preserve current timers", ctx do
     wire = start!(workspace!(), "HOLD", ctx)
+    # Prompt admission precedes the fixture's turn-start frames. Wait for the
+    # last frame before replacing timers, or it can legitimately unset settling.
+    await_wire(wire["id"], &(&1["activeTools"] != []))
     pid = session_pid(wire["id"])
     state = :sys.get_state(pid)
     old_publish = make_ref()
@@ -170,6 +174,8 @@ defmodule LemonOmp.SessionLifecycleTest do
 
     send(pid, {:timeout, current_settle, {:settle_fallback, state.projection.turns}})
     assert :sys.get_state(pid).projection.status == :idle
+    send(pid, {:timeout, current_publish, :publish})
+    :sys.get_state(pid)
     assert {:ok, %{"status" => "idle"}} = LemonOmp.get(wire["id"], ctx.scope)
     Process.cancel_timer(current_settle)
     Process.cancel_timer(current_publish)

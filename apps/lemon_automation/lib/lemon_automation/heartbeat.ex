@@ -65,8 +65,8 @@ defmodule LemonAutomation.Heartbeat do
     if heartbeat?(job) do
       if silent_prompt?(job, run) or
            (run.status == :completed and healthy_response?(run.output)),
-        do: Events.emit_heartbeat_suppressed(run, job),
-        else: Events.emit_heartbeat_alert(run, job, run.output)
+         do: Events.emit_heartbeat_suppressed(run, job),
+         else: Events.emit_heartbeat_alert(run, job, run.output)
     end
 
     :ok

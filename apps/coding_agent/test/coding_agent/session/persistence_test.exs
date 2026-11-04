@@ -283,7 +283,7 @@ defmodule CodingAgent.Session.PersistenceTest do
     assert hd(custom_entries).content == "[task task-456] delegated work completed"
   end
 
-  defp wait_until(fun, timeout_ms \\ 1_000) when is_function(fun, 0) do
+  defp wait_until(fun, timeout_ms) when is_function(fun, 0) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_until(fun, deadline)
   end

@@ -93,6 +93,11 @@ Non-blocking lifecycle observers can call
 subscriber and later sends `{:event_stream_result, reference, result}`. This
 guarantees that a subsequent cancellation cannot overtake result registration.
 
+Once `EventStream.complete/2` or `error/2` resolves a stream, its result is
+immutable: later terminal calls, deltas, and queued stream timeouts cannot replace
+it. Synchronous pushes return `{:error, :closed}` after completion; asynchronous
+late pushes are ignored. Explicit cancellation disposes the retained stream.
+
 `LemonAi.complete/3` collects the stream privately and retries classified transient
 completion errors, including resolved error messages, up to **three total attempts**.
 Its attempt budget replaces nested provider HTTP retries rather than multiplying

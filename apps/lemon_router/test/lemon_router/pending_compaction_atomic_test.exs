@@ -32,9 +32,16 @@ defmodule LemonRouter.PendingCompactionAtomicTest do
     end)
 
     :sys.replace_state(LemonCore.Store, fn state ->
-      %{state | backend: MarkerBackend, backend_state: %{
-        key: key, marker: marker, replace: opts[:replace], fail: opts[:fail] || false
-      }}
+      %{
+        state
+        | backend: MarkerBackend,
+          backend_state: %{
+            key: key,
+            marker: marker,
+            replace: opts[:replace],
+            fail: opts[:fail] || false
+          }
+      }
     end)
 
     key

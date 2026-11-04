@@ -1188,7 +1188,7 @@ defmodule LemonAutomation.CronManager do
         Enum.reduce_while(runs, {:ok, state}, fn run, {:ok, state} ->
           cond do
             Map.has_key?(state.pending_run_results, run.id) and
-                run.triggered_by in [:schedule, :retry] and
+              run.triggered_by in [:schedule, :retry] and
                 meta_value(run.meta, :submission_started) != true ->
               {:halt, {:error, state}}
 
@@ -1879,7 +1879,8 @@ defmodule LemonAutomation.CronManager do
   rescue
     _ -> Logger.warning("[CronManager] Monitor update unavailable after terminal persistence")
   catch
-    :exit, _ -> Logger.warning("[CronManager] Monitor update unavailable after terminal persistence")
+    :exit, _ ->
+      Logger.warning("[CronManager] Monitor update unavailable after terminal persistence")
   end
 
   defp update_job_outcome(nil, _run, state), do: {nil, state}

@@ -302,7 +302,8 @@ defmodule LemonGateway.ThreadWorker do
   end
 
   defp maybe_request_slot(state) do
-    if state.active_run == nil and state.slot_request == nil and not :queue.is_empty(state.requests) do
+    if state.active_run == nil and state.slot_request == nil and
+         not :queue.is_empty(state.requests) do
       token = make_ref()
 
       try do
@@ -328,7 +329,10 @@ defmodule LemonGateway.ThreadWorker do
 
   defp enqueue_request(state, request) do
     cond do
-      match?(%{request: %ExecutionRequest{run_id: id}} when id == request.run_id, state.active_run) or
+      match?(
+        %{request: %ExecutionRequest{run_id: id}} when id == request.run_id,
+        state.active_run
+      ) or
         Enum.any?(:queue.to_list(state.requests), &(&1.run_id == request.run_id)) or
           already_terminal?(request.run_id) ->
         state

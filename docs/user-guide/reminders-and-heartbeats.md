@@ -382,6 +382,16 @@ Manual runs are single-shot. A timeout or lost acknowledgement is not proof of
 failure: Lemon retains the fixed run ID and reconciles completion rather than
 launching a duplicate coding session.
 
+If the final cron-run write fails or its acknowledgement is uncertain, Lemon
+retains the computed result and keeps that run's ownership while later ticks
+reconcile the same run ID. Completion notifications, monitor and heartbeat
+updates, memory writes, and retries wait for a confirmed persisted result.
+An unreadable store is not treated as an absent or failed run.
+
+This pending-result buffer is in memory. Restart recovery still relies on
+persisted run state; it is not an exactly-once guarantee for post-completion
+effects across crashes.
+
 These jobs edit the target directory directly; they do not create or merge Git
 worktrees automatically. Point `cwd` at a dedicated worktree when other agents
 or people are editing the same repository.

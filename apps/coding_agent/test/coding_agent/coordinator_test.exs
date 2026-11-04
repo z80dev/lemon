@@ -22,7 +22,7 @@ defmodule CodingAgent.CoordinatorTest do
     }
   end
 
-  defp coordinator_opts(tmp_dir, overrides \\ []) do
+  defp coordinator_opts(tmp_dir, overrides) do
     Keyword.merge([cwd: tmp_dir, model: mock_model(), default_timeout: 5_000], overrides)
   end
 
@@ -598,17 +598,19 @@ defmodule CodingAgent.CoordinatorTest do
         _ -> elem(event, 0)
       end
 
+    @tag lifecycle_event: event, lifecycle_cancellation: cancellation
     test "#{event_name} remains terminal when #{cancellation} arrives during cleanup", %{
-      tmp_dir: tmp_dir
+      tmp_dir: tmp_dir,
+      lifecycle_event: event,
+      lifecycle_cancellation: cancellation
     } do
       coordinator = start_controlled_coordinator(tmp_dir, gate_cleanup: true)
       call = run_async(coordinator, [%{prompt: "Terminal before cleanup"}])
       {pid, ref, session_id, _worker} = started_session("Terminal before cleanup")
-      event = unquote(Macro.escape(event))
       send(pid, event)
       assert_receive {:session_cleanup_started, ^pid}, 1_000
 
-      case unquote(cancellation) do
+      case cancellation do
         :abort ->
           assert :ok = Coordinator.abort_all(coordinator)
 

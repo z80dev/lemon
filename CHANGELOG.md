@@ -8,7 +8,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- Preserve the first terminal stream and remote-invocation result while owned
+  resources finish cleanup; late events no longer overwrite the outcome.
+- Carry prompt identities through deferred dispatch and compaction so an aborted
+  or reset prompt cannot revive or consume a newer prompt.
+- Ignore superseded OMP lifecycle timers and hosted-game retry timers instead of
+  closing or advancing a newer operation.
+- Group gateway slot-request and active-run ownership so stale grants,
+  completions, and process exits cannot release a newer run's slot.
+- Consume pending compaction markers atomically without deleting replacements;
+  storage failures remain explicit without revoking an already-accepted run.
+- Retain cron completion results until persistence is confirmed before emitting
+  notifications, updating monitor or heartbeat state, writing memory, or
+  launching retries.
 
 ---
 

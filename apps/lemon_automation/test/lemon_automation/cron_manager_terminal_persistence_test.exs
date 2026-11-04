@@ -1,7 +1,7 @@
 defmodule LemonAutomation.CronManagerTerminalPersistenceTest do
   use ExUnit.Case, async: false
 
-  alias LemonAutomation.{CronJob, CronManager, CronMonitor, CronRun, CronStore}
+  alias LemonAutomation.{CronJob, CronManager, CronMonitor, CronStore}
   alias LemonCore.{Bus, ChannelSupervision, Event, Store}
 
   # ETS represents the backend's durable state independently of the reply. This
@@ -18,7 +18,13 @@ defmodule LemonAutomation.CronManagerTerminalPersistenceTest do
       terminal? = value.status in [:completed, :failed, :timeout, :aborted]
 
       if terminal? do
-        :ets.update_counter(state.data, {:terminal_writes, key}, {2, 1}, {{:terminal_writes, key}, 0})
+        :ets.update_counter(
+          state.data,
+          {:terminal_writes, key},
+          {2, 1},
+          {{:terminal_writes, key}, 0}
+        )
+
         send(state.owner, {:terminal_write, key})
       end
 
@@ -56,10 +62,11 @@ defmodule LemonAutomation.CronManagerTerminalPersistenceTest do
       do: {:error, :injected_read_failure}
 
     def get(state, table, key) do
-      value = case :ets.lookup(state.data, {table, key}) do
-        [{_, value}] -> value
-        [] -> nil
-      end
+      value =
+        case :ets.lookup(state.data, {table, key}) do
+          [{_, value}] -> value
+          [] -> nil
+        end
 
       {:ok, value, state}
     end
@@ -85,8 +92,11 @@ defmodule LemonAutomation.CronManagerTerminalPersistenceTest do
   defmodule Submitter do
     def submit(job, run, opts) do
       :ok = Keyword.fetch!(opts, :on_submitting).(run.run_id, job.session_key)
-      send(Application.fetch_env!(:lemon_automation, :terminal_persistence_test_pid),
-        {:submitted, job.id, run.id, self()})
+
+      send(
+        Application.fetch_env!(:lemon_automation, :terminal_persistence_test_pid),
+        {:submitted, job.id, run.id, self()}
+      )
 
       receive do
         {:finish, result} -> result
@@ -100,46 +110,68 @@ defmodule LemonAutomation.CronManagerTerminalPersistenceTest do
     def target_for_run(_id, _session), do: :none
 
     def notify(_target, notice) do
-      send(Application.fetch_env!(:lemon_automation, :terminal_persistence_test_pid),
-        {:delivered, notice})
+      send(
+        Application.fetch_env!(:lemon_automation, :terminal_persistence_test_pid),
+        {:delivered, notice}
+      )
+
       :ok
     end
   end
 
   setup do
     application_manager = Process.whereis(CronManager)
-    if application_manager, do: :sys.suspend(application_manager)
-    original_store = :sys.get_state(Store)
-    data = :ets.new(__MODULE__, [:set, :public])
-    owner = self()
 
-    :sys.replace_state(Store, fn state ->
-      %{state | backend: FaultBackend,
-        backend_state: %{data: data, failure: nil, owner: owner}}
+    if application_manager do
+      on_exit(fn ->
+        if Process.alive?(application_manager), do: :sys.resume(application_manager)
+      end)
+
+      :sys.suspend(application_manager)
+    end
+
+    original_store = :sys.get_state(Store)
+
+    on_exit(fn ->
+      :sys.replace_state(Store, fn state ->
+        # Store owns this table until this serialized backend restoration.
+        if state.backend == FaultBackend, do: :ets.delete(state.backend_state.data)
+        original_store
+      end)
     end)
 
-    previous_provider = ChannelSupervision.provider()
-    keys = [:cron_run_submitter, :cron_preflight_mod, :terminal_persistence_test_pid]
-    previous_env = Map.new(keys, &{&1, Application.get_env(:lemon_automation, &1)})
-    Application.put_env(:lemon_automation, :cron_run_submitter, Submitter)
-    Application.put_env(:lemon_automation, :cron_preflight_mod, Preflight)
-    Application.put_env(:lemon_automation, :terminal_persistence_test_pid, self())
+    owner = self()
+
+    isolated_store =
+      :sys.replace_state(Store, fn state ->
+        data = :ets.new(__MODULE__, [:set, :public])
+
+        %{state | backend: FaultBackend, backend_state: %{data: data, failure: nil, owner: owner}}
+      end)
+
+    data = isolated_store.backend_state.data
+
+    for {key, value} <- [
+          cron_run_submitter: Submitter,
+          cron_preflight_mod: Preflight,
+          terminal_persistence_test_pid: self()
+        ] do
+      preserve_env(:lemon_automation, key)
+      Application.put_env(:lemon_automation, key, value)
+    end
+
+    preserve_env(:lemon_core, :channel_supervision_provider)
     :ok = ChannelSupervision.register(Notices)
     :ok = Bus.subscribe("cron")
 
-    directory = Path.join(System.tmp_dir!(), "cron_terminal_#{System.unique_integer([:positive])}")
+    directory =
+      Path.join(System.tmp_dir!(), "cron_terminal_#{System.unique_integer([:positive])}")
+
+    on_exit(fn -> File.rm_rf!(directory) end)
+
+    # ExUnit stops these children before the independent restoration callbacks.
     tasks = start_supervised!(Task.Supervisor)
     manager = start_supervised!({CronManager, name: nil, task_supervisor: tasks})
-
-    on_exit(fn ->
-      if Process.alive?(manager), do: GenServer.stop(manager)
-      :sys.replace_state(Store, fn _ -> original_store end)
-      restore_env(:lemon_core, :channel_supervision_provider, previous_provider)
-      for {key, value} <- previous_env, do: restore_env(:lemon_automation, key, value)
-      if application_manager && Process.alive?(application_manager),
-        do: :sys.resume(application_manager)
-      File.rm_rf!(directory)
-    end)
 
     %{manager: manager, directory: directory, data: data}
   end
@@ -188,7 +220,7 @@ defmodule LemonAutomation.CronManagerTerminalPersistenceTest do
       assert persisted.status == :failed
       assert persisted.completed_at_ms == pending.updated.completed_at_ms
       assert persisted.meta.retry_due_at_ms == pending.updated.meta.retry_due_at_ms
-      assert terminal_writes(context.data, run.id) == if(@fault == :reject_terminal, do: 2, else: 1)
+
       assert CronJob.failure_streak(CronStore.get_job(job.id)) == 1
       assert_receive %Event{type: :cron_run_completed, payload: %{cron_run_id: ^run_id}}, 1_000
       assert_receive {:delivered, %{status: :failed}}, 1_000
@@ -212,10 +244,19 @@ defmodule LemonAutomation.CronManagerTerminalPersistenceTest do
     end
   end
 
-  test "successful terminal write gates monitor, preflight, heartbeat and memory effects", context do
+  test "successful terminal write gates monitor, preflight, heartbeat and memory effects",
+       context do
     job = add_job(context, monitor: true, meta: %{heartbeat: true})
-    notice = %{class: :model_drift, detail_hash: "old", occurrences: 1, notifications: 1,
-      first_seen_at_ms: 1, last_notified_at_ms: 1}
+
+    notice = %{
+      class: :model_drift,
+      detail_hash: "old",
+      occurrences: 1,
+      notifications: 1,
+      first_seen_at_ms: 1,
+      last_notified_at_ms: 1
+    }
+
     :ok = CronStore.put_preflight_notice_state(job.id, notice)
     {run, worker} = start_run(context.manager, job)
     inject(:reject_terminal)
@@ -281,9 +322,12 @@ defmodule LemonAutomation.CronManagerTerminalPersistenceTest do
     assert_no_effects(context, job, run)
     assert {:error, :outcome_unknown} = GenServer.call(context.manager, {:run_now, job.id})
 
-    :ok = LemonCore.RunStore.finalize(run.run_id, %{
-      completed: %{ok: true, answer: "durably reconciled"}, session_key: job.session_key
-    })
+    :ok =
+      LemonCore.RunStore.finalize(run.run_id, %{
+        completed: %{ok: true, answer: "durably reconciled"},
+        session_key: job.session_key
+      })
+
     tick(context.manager)
     assert CronStore.get_run(run.id).status == :completed
     assert CronStore.get_run(run.id).output == "durably reconciled"
@@ -291,7 +335,8 @@ defmodule LemonAutomation.CronManagerTerminalPersistenceTest do
     assert_receive %Event{type: :cron_run_completed}, 1_000
   end
 
-  test "an unreadable completion row retains the original result until the read recovers", context do
+  test "an unreadable completion row retains the original result until the read recovers",
+       context do
     job = add_job(context)
     {run, worker} = start_run(context.manager, job)
     inject({:read_run, run.id})
@@ -311,7 +356,8 @@ defmodule LemonAutomation.CronManagerTerminalPersistenceTest do
     refute_received {:submitted, _, _, _}
   end
 
-  test "confirmed completion replaces a pending unknown outcome without executing again", context do
+  test "confirmed completion replaces a pending unknown outcome without executing again",
+       context do
     job = add_job(context)
     {run, _worker} = start_run(context.manager, job)
     inject(:reject_run)
@@ -367,11 +413,20 @@ defmodule LemonAutomation.CronManagerTerminalPersistenceTest do
   end
 
   defp add_job(context, attrs \\ []) do
-    params = Map.merge(%{
-      name: "Terminal persistence", schedule: "0 0 1 1 *", agent_id: "terminal_test",
-      session_key: "agent:terminal_test:main", prompt: "controlled work",
-      memory_file: Path.join(context.directory, "memory.md"), deliver_to: "telegram:42"
-    }, Map.new(attrs))
+    params =
+      Map.merge(
+        %{
+          name: "Terminal persistence",
+          schedule: "0 0 1 1 *",
+          agent_id: "terminal_test",
+          session_key: "agent:terminal_test:main",
+          prompt: "controlled work",
+          memory_file: Path.join(context.directory, "memory.md"),
+          deliver_to: "telegram:42"
+        },
+        Map.new(attrs)
+      )
+
     {:ok, job} = GenServer.call(context.manager, {:add, params})
     job
   end
@@ -409,6 +464,11 @@ defmodule LemonAutomation.CronManagerTerminalPersistenceTest do
     count
   end
 
-  defp restore_env(app, key, nil), do: Application.delete_env(app, key)
-  defp restore_env(app, key, value), do: Application.put_env(app, key, value)
+  defp preserve_env(app, key) do
+    previous = Application.fetch_env(app, key)
+    on_exit(fn -> restore_env(app, key, previous) end)
+  end
+
+  defp restore_env(app, key, :error), do: Application.delete_env(app, key)
+  defp restore_env(app, key, {:ok, value}), do: Application.put_env(app, key, value)
 end

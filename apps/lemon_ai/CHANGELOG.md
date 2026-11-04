@@ -50,6 +50,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `EventStream` keeps its first terminal result despite late completions, errors,
+  producer exits, or queued timeouts. Synchronous pushes after completion return
+  `{:error, :closed}`; asynchronous late pushes are ignored. Retained results and
+  resource cleanup remain independent.
+
 - Prompt diagnostics preserve nullable usage counters and only report inclusive
   input when all input/cache components are known, without failing successful
   completions or native agent turns.
