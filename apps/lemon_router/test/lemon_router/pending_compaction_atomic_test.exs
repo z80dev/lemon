@@ -25,13 +25,18 @@ defmodule LemonRouter.PendingCompactionAtomicTest do
     key = "atomic-compaction-#{System.unique_integer([:positive])}"
     original = :sys.get_state(LemonCore.Store)
 
+    on_exit(fn ->
+      :sys.replace_state(LemonCore.Store, fn state ->
+        %{state | backend: original.backend, backend_state: original.backend_state}
+      end)
+    end)
+
     :sys.replace_state(LemonCore.Store, fn state ->
       %{state | backend: MarkerBackend, backend_state: %{
         key: key, marker: marker, replace: opts[:replace], fail: opts[:fail] || false
       }}
     end)
 
-    on_exit(fn -> :sys.replace_state(LemonCore.Store, fn _ -> original end) end)
     key
   end
 

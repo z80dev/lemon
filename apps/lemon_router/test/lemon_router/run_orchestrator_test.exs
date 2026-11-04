@@ -1602,6 +1602,15 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       session_key = "agent:compaction-ok:test:#{System.unique_integer([:positive])}"
 
+      on_exit(fn ->
+        LemonCore.RunHistoryStore.delete_session(session_key)
+        PendingCompactionStore.delete(session_key)
+      end)
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+
       marker = %{
         reason: "near_limit",
         session_key: session_key,
@@ -1618,6 +1627,16 @@ defmodule LemonRouter.RunOrchestratorTest do
       PendingCompactionStore.put(session_key, marker)
 
       if unquote(cleanup_fails?) do
+        on_exit(fn ->
+          :sys.replace_state(LemonCore.Store, fn
+            %{backend: CompactionDeleteFailingBackend, backend_state: {backend, inner}} = state ->
+              %{state | backend: backend, backend_state: inner}
+
+            state ->
+              state
+          end)
+        end)
+
         :sys.replace_state(LemonCore.Store, fn state ->
           %{
             state
@@ -1626,20 +1645,6 @@ defmodule LemonRouter.RunOrchestratorTest do
           }
         end)
       end
-
-      on_exit(fn ->
-        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
-
-        if unquote(cleanup_fails?) do
-          :sys.replace_state(LemonCore.Store, fn state ->
-            {backend, backend_state} = state.backend_state
-            %{state | backend: backend, backend_state: backend_state}
-          end)
-        end
-
-        LemonCore.RunHistoryStore.delete_session(session_key)
-        PendingCompactionStore.delete(session_key)
-      end)
 
       assert {:ok, _run_id} =
                RunOrchestrator.submit(
