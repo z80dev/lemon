@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Removed
+
+- Removed software-factory project registration, test-runner lease routing, and
+  factory-only CI checkout attestations and contract fixtures.
 
 ---
 

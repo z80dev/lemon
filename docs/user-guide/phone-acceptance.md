@@ -88,8 +88,7 @@ alone proves none of these bindings. Mac Debug ad-hoc signing is distinct from
 provisioned Release/notarized distribution. Use metadata only in preparation;
 never read private keys, print device identifiers or enroll devices here.
 
-When the toolchain is available, run compilation only through
-`FACTORY_HEAVY_RUNNER` according to its help. Copy the Apple source into a unique
+When the toolchain is available, copy the Apple source into a unique
 ignored directory **inside the assigned workspace**, generate the project there,
 and give each unsigned build its own DerivedData. Use the documented Mac and
 generic iOS destinations with `CODE_SIGNING_ALLOWED=NO` and
