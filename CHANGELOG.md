@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.11.1]
+
 ### Changed
 
 - Refresh `lemon_ai` model catalogs for current models, including GPT-6.1 Terra,
