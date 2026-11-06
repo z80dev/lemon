@@ -65,7 +65,7 @@ defmodule LemonAi.Providers.AzureOpenAIResponses do
   # Providers that use OpenAI-style tool call IDs
   @tool_call_providers MapSet.new([
                          :openai,
-                         :"openai-codex",
+                         :openai_codex,
                          :opencode,
                          :"azure-openai-responses"
                        ])

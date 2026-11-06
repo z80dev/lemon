@@ -27,7 +27,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
       model = %Model{
         id: "gpt-6-sol",
         api: :openai_codex_responses,
-        provider: :"openai-codex",
+        provider: :openai_codex,
         reasoning: true
       }
 
@@ -65,7 +65,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   @controlled_headers ["version" | @affinity_headers]
 
   # Providers that use OpenAI-style tool call IDs
-  @tool_call_providers MapSet.new([:openai, :"openai-codex", :opencode])
+  @tool_call_providers MapSet.new([:openai, :openai_codex, :opencode])
 
   @codex_response_statuses MapSet.new([
                              "completed",
@@ -85,7 +85,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   def api_id, do: :openai_codex_responses
 
   @impl true
-  def provider_id, do: :"openai-codex"
+  def provider_id, do: :openai_codex
 
   @impl true
   def get_env_api_key do
@@ -116,7 +116,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
       if is_function(opts.on_payload, 2) do
         opts.on_payload.(body, %{
-          provider: :"openai-codex",
+          provider: :openai_codex,
           model: model.id,
           session_id: opts.session_id
         })
@@ -480,7 +480,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
   defp observe_usage(events, model, opts) do
     if is_function(opts.on_usage, 2) do
-      metadata = %{provider: :"openai-codex", model: model.id, session_id: opts.session_id}
+      metadata = %{provider: :openai_codex, model: model.id, session_id: opts.session_id}
 
       Stream.transform(events, false, fn
         %{"type" => type, "response" => %{"usage" => usage}} = event, false

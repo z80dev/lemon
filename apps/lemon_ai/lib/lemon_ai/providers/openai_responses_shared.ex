@@ -575,7 +575,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
     do: {block, id_map}
 
   defp normalize_tool_call_id(id, provider)
-       when provider in [:openai, :"openai-codex", :opencode] do
+       when provider in [:openai, :openai_codex, :opencode] do
     if not String.contains?(id, "|") do
       id
     else

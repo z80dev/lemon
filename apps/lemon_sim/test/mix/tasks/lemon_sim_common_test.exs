@@ -51,8 +51,8 @@ defmodule Mix.Tasks.Lemon.Sim.CommonTest do
     assert Common.resolve_provider("gemini") == :google_gemini_cli
     assert Common.resolve_provider("gemini-cli") == :google_gemini_cli
     assert Common.resolve_provider("gemini_cli") == :google_gemini_cli
-    assert Common.resolve_provider("openai_codex") == :"openai-codex"
-    assert Common.resolve_provider(" OpenAI-Codex ") == :"openai-codex"
+    assert Common.resolve_provider("openai_codex") == :openai_codex
+    assert Common.resolve_provider(" OpenAI-Codex ") == :openai_codex
     assert Common.resolve_provider("google-vertex") == :google_vertex
   end
 

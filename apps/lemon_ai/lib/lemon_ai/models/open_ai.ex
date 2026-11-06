@@ -59,7 +59,7 @@ defmodule LemonAi.Models.OpenAI do
                      id: id,
                      name: name,
                      api: :openai_codex_responses,
-                     provider: :"openai-codex",
+                     provider: :openai_codex,
                      base_url: "https://chatgpt.com",
                      reasoning: true,
                      adaptive_thinking: false,

@@ -55,10 +55,10 @@ defmodule LemonSim.LLM.GameHelpers.ConfigTest do
   end
 
   test "codex provider aliases canonicalize to openai-codex" do
-    assert Config.provider_name(:"openai-codex") == "openai-codex"
+    assert Config.provider_name(:openai_codex) == "openai-codex"
     assert Config.provider_name("openai_codex") == "openai-codex"
-    assert Config.normalize_provider("openai-codex") == :"openai-codex"
-    assert Config.normalize_provider("openai_codex") == :"openai-codex"
+    assert Config.normalize_provider("openai-codex") == :openai_codex
+    assert Config.normalize_provider("openai_codex") == :openai_codex
   end
 
   test "unknown provider input is rejected without interning a BEAM atom" do
@@ -150,7 +150,7 @@ defmodule LemonSim.LLM.GameHelpers.ConfigTest do
         })
     }
 
-    assert Config.resolve_provider_api_key!(:"openai-codex", config, "werewolf") ==
+    assert Config.resolve_provider_api_key!(:openai_codex, config, "werewolf") ==
              "codex-oauth-token"
   end
 
@@ -187,7 +187,7 @@ defmodule LemonSim.LLM.GameHelpers.ConfigTest do
         })
     }
 
-    assert Config.resolve_provider_api_key!(:"openai-codex", config, "werewolf") == access_token
+    assert Config.resolve_provider_api_key!(:openai_codex, config, "werewolf") == access_token
   end
 
   test "openai-codex resolves configured api_key_secret from Lemon secrets" do
@@ -206,7 +206,7 @@ defmodule LemonSim.LLM.GameHelpers.ConfigTest do
         })
     }
 
-    assert Config.resolve_provider_api_key!(:"openai-codex", config, "werewolf") ==
+    assert Config.resolve_provider_api_key!(:openai_codex, config, "werewolf") ==
              "codex-api-key-secret"
   end
 end

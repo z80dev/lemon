@@ -55,7 +55,7 @@ defmodule LemonAi.Models do
   @models %{
     :anthropic => LemonAi.Models.Anthropic.models(),
     :openai => LemonAi.Models.OpenAI.models(),
-    :"openai-codex" => @openai_codex_models,
+    :openai_codex => @openai_codex_models,
     :amazon_bedrock => LemonAi.Models.AmazonBedrock.models(),
     :google => LemonAi.Models.Google.models(),
     :google_antigravity => LemonAi.Models.Google.antigravity_models(),
@@ -88,7 +88,7 @@ defmodule LemonAi.Models do
   @providers [
     :anthropic,
     :openai,
-    :"openai-codex",
+    :openai_codex,
     :amazon_bedrock,
     :google,
     :google_antigravity,
@@ -336,7 +336,7 @@ defmodule LemonAi.Models do
         end
 
       Enum.flat_map(models, fn
-        %Model{provider: :"openai-codex", id: id} ->
+        %Model{provider: :openai_codex, id: id} ->
           case Map.get(discovered, id) do
             nil -> []
             model -> [model]

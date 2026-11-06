@@ -51,7 +51,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
   import LemonAi.Providers.AssistantMessageHelper
 
   # Providers that use OpenAI-style tool call IDs
-  @tool_call_providers MapSet.new([:openai, :"openai-codex", :opencode])
+  @tool_call_providers MapSet.new([:openai, :openai_codex, :opencode])
 
   # ============================================================================
   # Provider Behaviour

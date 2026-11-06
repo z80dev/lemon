@@ -28,6 +28,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- Rename the public Codex provider atom from `:"openai-codex"` to
+  `:openai_codex` in model lookups, discovery and provider callbacks.
+  **Migration required:** update consumers using the old atom; serialized
+  provider identities now use `"openai_codex"`. The
+  `:openai_codex_responses` API and Lemon's configuration spelling are unchanged.
 - Refresh supported provider and gateway catalogs with current text-generation
   models, including GPT-6.1 Terra and Gemini 4 Argon, updated token limits,
   vision/reasoning capabilities and provider-specific prices. Add explicit

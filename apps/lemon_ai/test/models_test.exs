@@ -32,30 +32,30 @@ defmodule LemonAi.ModelsLegacyTest do
       assert model.input == [:text, :image]
     end
 
-    test "returns openai-codex model by id (Codex subscription provider)" do
-      model = Models.get_model(:"openai-codex", "gpt-6-sol")
+    test "returns openai_codex model by id (Codex subscription provider)" do
+      model = Models.get_model(:openai_codex, "gpt-6-sol")
 
       assert %Model{} = model
       assert model.id == "gpt-6-sol"
       assert model.api == :openai_codex_responses
-      assert model.provider == :"openai-codex"
+      assert model.provider == :openai_codex
       assert model.base_url == "https://chatgpt.com"
       assert %ModelCost{} = model.cost
       assert model.cost.input == 2
     end
 
-    test "returns oauth-only openai-codex model ids" do
+    test "returns oauth-only openai_codex model ids" do
       for id <- ["gpt-6-astra", "gpt-6.1-sol"] do
-        model = Models.get_model(:"openai-codex", id)
+        model = Models.get_model(:openai_codex, id)
 
         assert %Model{} = model
         assert model.api == :openai_codex_responses
-        assert model.provider == :"openai-codex"
+        assert model.provider == :openai_codex
         assert model.base_url == "https://chatgpt.com"
       end
 
       for retired <- ["gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5"] do
-        assert Models.get_model(:"openai-codex", retired) == nil
+        assert Models.get_model(:openai_codex, retired) == nil
       end
     end
 
@@ -142,12 +142,12 @@ defmodule LemonAi.ModelsLegacyTest do
       assert Enum.all?(models, &match?(%Model{provider: :openai}, &1))
     end
 
-    test "returns all openai-codex models" do
-      models = Models.get_models(:"openai-codex")
+    test "returns all openai_codex models" do
+      models = Models.get_models(:openai_codex)
 
       assert is_list(models)
       assert models != []
-      assert Enum.all?(models, &match?(%Model{provider: :"openai-codex"}, &1))
+      assert Enum.all?(models, &match?(%Model{provider: :openai_codex}, &1))
       assert Enum.any?(models, &(&1.id == "gpt-6.1-sol"))
       assert Enum.any?(models, &(&1.id == "gpt-6-astra"))
       refute Enum.any?(models, &(&1.id == "codex-mini-latest"))
@@ -191,7 +191,7 @@ defmodule LemonAi.ModelsLegacyTest do
       assert is_list(providers)
       assert :anthropic in providers
       assert :openai in providers
-      assert :"openai-codex" in providers
+      assert :openai_codex in providers
       assert :google in providers
       assert :kimi_coding in providers
       assert :opencode in providers
@@ -209,7 +209,7 @@ defmodule LemonAi.ModelsLegacyTest do
       providers = models |> Enum.map(& &1.provider) |> Enum.uniq()
       assert :anthropic in providers
       assert :openai in providers
-      assert :"openai-codex" in providers
+      assert :openai_codex in providers
       assert :google in providers
       assert :kimi_coding in providers
     end

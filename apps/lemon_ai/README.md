@@ -165,7 +165,7 @@ The migration replaced 25 provider-module literal catalogs with 26 JSON resource
 `priv/models/`, loaded at compile time by `LemonAi.Models.Catalog`. The counts differ
 because Google uses `google.json` plus `google_antigravity_extras.json`. The
 `:google_antigravity` registry is derived from entries tagged for that provider plus the
-extras file; `:"openai-codex"` uses an explicit ChatGPT OAuth catalog rather than
+extras file; `:openai_codex` uses an explicit ChatGPT OAuth catalog rather than
 exposing API-key-only models under the subscription endpoint. The files are compiler
 external resources, so edits recompile their provider modules. Invalid JSON and malformed entries
 fail compilation with catalog and model-key context, including invalid field types,
@@ -281,12 +281,17 @@ context beta. Provider conversion preserves full history; preflight compaction i
 the caller's responsibility rather than silent wire truncation.
 
 
-The 27 registered provider IDs: `:anthropic`, `:openai`, `:"openai-codex"`,
+The 27 registered provider IDs: `:anthropic`, `:openai`, `:openai_codex`,
 `:amazon_bedrock`, `:google`, `:google_antigravity`, `:kimi`, `:kimi_coding`,
 `:opencode`, `:opencode_go`, `:xai`, `:mistral`, `:cerebras`, `:deepseek`, `:qwen`,
 `:minimax`, `:zai`, `:azure_openai_responses`, `:github_copilot`, `:google_gemini_cli`,
 `:google_vertex`, `:groq`, `:huggingface`, `:minimax_cn`, `:fireworks`, `:openrouter`,
 `:vercel_ai_gateway`.
+
+Starting with `lemon_ai` 0.2.1, the Codex provider atom is `:openai_codex`
+(formerly `:"openai-codex"`). Use the new atom in model lookups, provider
+callbacks and persisted Elixir model structs. The wire-protocol API remains
+`:openai_codex_responses`; Lemon's `openai-codex` configuration spelling is unchanged.
 
 ## What you get beyond raw HTTP
 

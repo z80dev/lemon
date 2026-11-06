@@ -197,7 +197,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
         }
       })
 
-    session = start_session(self(), settings, mock_model(:"openai-codex"))
+    session = start_session(self(), settings, mock_model(:openai_codex))
     assert :ok = Session.prompt(session, "hello")
 
     assert_receive {:stream_api_key, "codex-access-token"}, 1_000
@@ -221,7 +221,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
         "openai-codex" => %{auth_source: "api_key", api_key: "codex-from-plain"}
       })
 
-    session = start_session(self(), settings, mock_model(:"openai-codex"))
+    session = start_session(self(), settings, mock_model(:openai_codex))
     assert :ok = Session.prompt(session, "hello")
 
     assert_receive {:stream_api_key, "codex-from-env"}, 1_000
@@ -237,7 +237,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
         "openai-codex" => %{api_key: "codex-from-plain"}
       })
 
-    session = start_session(self(), settings, mock_model(:"openai-codex"))
+    session = start_session(self(), settings, mock_model(:openai_codex))
     assert :ok = Session.prompt(session, "hello")
 
     assert_receive {:stream_api_key, ""}, 1_000
@@ -618,7 +618,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
         "openai-codex" => %{auth_source: "oauth", api_key_secret: "llm_openai_codex_api_key"}
       })
 
-    session = start_session(self(), settings, mock_model(:"openai-codex"))
+    session = start_session(self(), settings, mock_model(:openai_codex))
     assert :ok = Session.prompt(session, "hello")
 
     assert_receive {:stream_api_key, "codex-access-token"}, 1_000
@@ -644,7 +644,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
         "openai_codex" => %{auth_source: "oauth", api_key_secret: "llm_openai_codex_api_key"}
       })
 
-    session = start_session(self(), settings, mock_model(:"openai-codex"))
+    session = start_session(self(), settings, mock_model(:openai_codex))
     assert :ok = Session.prompt(session, "hello")
 
     assert_receive {:stream_api_key, "codex-access-token"}, 1_000
@@ -671,7 +671,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
         "openai-codex" => %{auth_source: "api_key", api_key_secret: "llm_openai_codex_api_key"}
       })
 
-    session = start_session(self(), settings, mock_model(:"openai-codex"))
+    session = start_session(self(), settings, mock_model(:openai_codex))
     assert :ok = Session.prompt(session, "hello")
 
     assert_receive {:stream_api_key, "codex-from-env"}, 1_000
@@ -686,7 +686,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
         "openai_codex" => %{auth_source: "api_key"}
       })
 
-    session = start_session(self(), settings, mock_model(:"openai-codex"))
+    session = start_session(self(), settings, mock_model(:openai_codex))
     assert :ok = Session.prompt(session, "hello")
 
     assert_receive {:stream_api_key, "codex-from-env"}, 1_000
@@ -700,7 +700,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
   # refusal. Every planted value is a well-formed ChatGPT JWT, so a leak would
   # reach the listener instead of failing token parsing first.
   test "openai-codex requires auth_source on the public session wire" do
-    base_url = wire_endpoint(:"openai-codex")
+    base_url = wire_endpoint(:openai_codex)
     plain_key = codex_jwt("acct-configured-plain-key", "codex-from-plain")
     env_trap = codex_jwt("acct-ambient-codex-env-trap", "codex-env-trap-signature")
     chatgpt_trap = codex_jwt("acct-ambient-chatgpt-trap", "chatgpt-token-trap-signature")
@@ -714,7 +714,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
       })
 
     session =
-      start_wire_session(settings, wire_model(:"openai-codex", :openai_codex_responses, base_url))
+      start_wire_session(settings, wire_model(:openai_codex, :openai_codex_responses, base_url))
 
     assert :ok = Session.prompt(session, "hello")
     assert_receive {:session_event, _, {:error, reason, _partial}}, 1_000

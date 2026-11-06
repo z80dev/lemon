@@ -511,7 +511,7 @@ defmodule CodingAgent.Tools.SemanticFindRequestBoundaryTest do
           Jason.encode!(%{"https://api.openai.com/auth" => %{"chatgpt_account_id" => "offline"}})
         ) <> ".signature"
 
-    model = Models.get_model(:"openai-codex", "gpt-6-luna")
+    model = Models.get_model(:openai_codex, "gpt-6-luna")
 
     assert {:ok, stream} =
              OpenAICodexResponses.stream(model, context, %StreamOptions{

@@ -235,7 +235,7 @@ defmodule CodingAgent.SessionTest do
       session = start_session(model: "openai-codex:gpt-5.3-codex")
       state = Session.get_state(session)
 
-      assert state.model.provider == :"openai-codex"
+      assert state.model.provider == :openai_codex
       assert state.model.id == "gpt-5.3-codex"
     end
 

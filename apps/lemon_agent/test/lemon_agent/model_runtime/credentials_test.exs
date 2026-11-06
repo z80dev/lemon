@@ -109,7 +109,7 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
     }
 
     assert LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key(
-             :"openai-codex",
+             :openai_codex,
              providers
            ) ==
              "codex-access-token"
@@ -133,20 +133,20 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
     }
 
     assert LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key(
-             :"openai-codex",
+             :openai_codex,
              providers
            ) ==
              "codex-from-env"
   end
 
   test "openai codex missing or invalid auth_source returns empty string sentinel" do
-    assert LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key(:"openai-codex", %{
+    assert LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key(:openai_codex, %{
              "openai-codex" => %{}
            }) ==
              ""
 
     assert LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key(
-             :"openai-codex",
+             :openai_codex,
              %{"openai-codex" => %{auth_source: "wrong"}}
            ) == ""
   end
@@ -802,7 +802,7 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           assert Credentials.resolve_provider_api_key(
-                   :"openai-codex",
+                   :openai_codex,
                    %{"openai-codex" => %{auth_source: "oauth"}}
                  ) == ""
         end)

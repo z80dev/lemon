@@ -53,14 +53,14 @@ defmodule CodingAgent.Session.ModelAvailabilityTest do
 
   test "picker offers only account-supported Codex IDs", %{settings: settings} do
     models = ModelCatalog.available_models(config: settings)
-    codex = Enum.filter(models, &(&1.provider == :"openai-codex"))
+    codex = Enum.filter(models, &(&1.provider == :openai_codex))
     assert Enum.map(codex, & &1.id) == ["gpt-6.1-sol"]
     refute Enum.any?(codex, &(&1.id == "gpt-6-luna"))
   end
 
   test "session, task and compaction roles fail before a provider request with an actionable account error",
        %{settings: settings} do
-    parent = LemonAi.Models.get_model(:"openai-codex", "gpt-6.1-sol")
+    parent = LemonAi.Models.get_model(:openai_codex, "gpt-6.1-sol")
 
     for resolve <- [
           fn -> ModelResolver.resolve_session_model("@smol", settings) end,

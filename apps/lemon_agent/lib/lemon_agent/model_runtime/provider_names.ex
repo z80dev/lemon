@@ -28,7 +28,7 @@ defmodule LemonAgent.ModelRuntime.ProviderNames do
     },
     "openai_codex" => %{
       config_name: "openai-codex",
-      atom_name: :"openai-codex",
+      atom_name: :openai_codex,
       env_vars: ["OPENAI_CODEX_API_KEY", "CHATGPT_TOKEN"],
       default_secret_name: "llm_openai_codex_api_key",
       aliases: ["codex", "openai_codex"]

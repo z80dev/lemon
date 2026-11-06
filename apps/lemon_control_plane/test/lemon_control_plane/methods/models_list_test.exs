@@ -20,7 +20,7 @@ defmodule LemonControlPlane.Methods.ModelsListTest do
     parent = self()
 
     fixture = %LemonAi.Types.Model{
-      provider: :"openai-codex",
+      provider: :openai_codex,
       id: "fixture-account-model",
       name: "Available account model",
       cost: nil,
@@ -45,7 +45,7 @@ defmodule LemonControlPlane.Methods.ModelsListTest do
 
     assert_receive {:catalog_options, [discover_openai: false, force_refresh: true]}
     assert model["id"] == fixture.id
-    assert model["provider"] == "openai-codex"
+    assert model["provider"] == "openai_codex"
     assert model["contextWindow"] == fixture.context_window
     assert model["maxOutput"] == fixture.max_tokens
     assert model["supportsThinking"]
@@ -53,7 +53,7 @@ defmodule LemonControlPlane.Methods.ModelsListTest do
     assert model["supportsStreaming"]
     assert model["pricing"] == nil
     assert summary["total"] == 1
-    assert summary["providers"] == ["openai-codex"]
+    assert summary["providers"] == ["openai_codex"]
     assert summary["visionModelCount"] == 1
     assert summary["thinkingModelCount"] == 1
   end
