@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Load the certificate provider before Telegram and Discord setup construct their
+  first HTTPS request, preserving TLS verification on cold CLI invocations.
+
 - Telegram and Discord gateway setup now start the core secrets store in cold
   source and packaged CLI invocations instead of crashing with `store_unavailable`.
 
