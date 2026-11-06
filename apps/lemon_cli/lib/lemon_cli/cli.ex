@@ -332,6 +332,9 @@ defmodule LemonCli.CLI do
   end
 
   defp run_gateway(args) do
+    # Release eval and source --no-start invocations have no secrets store yet.
+    ensure_apps_started!([:lemon_core])
+
     # The launcher contract is `gateway setup <transport>`; the bare
     # `gateway <transport>` form forwards identically.
     forwarded =

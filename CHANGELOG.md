@@ -8,6 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Telegram and Discord gateway setup now start the core secrets store in cold
+  source and packaged CLI invocations instead of crashing with `store_unavailable`.
+
 ### Removed
 
 - Removed software-factory project registration, test-runner lease routing, and
