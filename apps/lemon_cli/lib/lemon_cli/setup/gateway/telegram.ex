@@ -434,7 +434,7 @@ defmodule LemonCli.Setup.Gateway.Telegram do
   end
 
   defp maybe_put_cacerts(ssl_opts) do
-    if function_exported?(:public_key, :cacerts_get, 0) do
+    if Code.ensure_loaded?(:public_key) and function_exported?(:public_key, :cacerts_get, 0) do
       case apply(:public_key, :cacerts_get, []) do
         cacerts when is_list(cacerts) and cacerts != [] ->
           Keyword.put(ssl_opts, :cacerts, cacerts)

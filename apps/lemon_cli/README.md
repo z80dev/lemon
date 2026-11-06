@@ -88,6 +88,9 @@ user-visible rules:
 - `--help`, `-h`, or `help` prints the relevant command usage and exits `0`
   without starting a wizard, provider flow, or gateway adapter.
 
+Gateway setup starts the core services needed to access encrypted secrets, even
+when no Lemon daemon is running. It does not start the router or gateway runtime.
+
 ## Packaged and source commands
 
 Use the same command nouns in an installed release and a source checkout.
