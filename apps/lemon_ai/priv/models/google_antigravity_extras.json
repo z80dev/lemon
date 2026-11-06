@@ -304,7 +304,10 @@
       "cache_write": 0
     },
     "context_window": 1048576,
-    "max_tokens": 65536
+    "max_tokens": 65536,
+    "reasoning_efforts": [
+      "high"
+    ]
   },
   "gemini-3.8-flash-low": {
     "id": "gemini-3.8-flash-low",
@@ -324,7 +327,10 @@
       "cache_write": 0
     },
     "context_window": 1048576,
-    "max_tokens": 65536
+    "max_tokens": 65536,
+    "reasoning_efforts": [
+      "low"
+    ]
   },
   "gemini-3.8-flash-medium": {
     "id": "gemini-3.8-flash-medium",
@@ -344,7 +350,10 @@
       "cache_write": 0
     },
     "context_window": 1048576,
-    "max_tokens": 65536
+    "max_tokens": 65536,
+    "reasoning_efforts": [
+      "medium"
+    ]
   },
   "gemini-4-argon-high": {
     "id": "gemini-4-argon-high",
@@ -364,7 +373,10 @@
       "cache_write": 0
     },
     "context_window": 1048576,
-    "max_tokens": 65536
+    "max_tokens": 65536,
+    "reasoning_efforts": [
+      "high"
+    ]
   },
   "gemini-4-argon-low": {
     "id": "gemini-4-argon-low",
@@ -384,7 +396,10 @@
       "cache_write": 0
     },
     "context_window": 1048576,
-    "max_tokens": 65536
+    "max_tokens": 65536,
+    "reasoning_efforts": [
+      "low"
+    ]
   },
   "gemini-4-argon-medium": {
     "id": "gemini-4-argon-medium",
@@ -404,7 +419,10 @@
       "cache_write": 0
     },
     "context_window": 1048576,
-    "max_tokens": 65536
+    "max_tokens": 65536,
+    "reasoning_efforts": [
+      "medium"
+    ]
   },
   "gemini-pro-agent": {
     "id": "gemini-pro-agent",

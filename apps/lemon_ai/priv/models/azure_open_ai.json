@@ -111,7 +111,7 @@
     "cost": {
       "input": 0.1,
       "output": 0.4,
-      "cache_read": 0.03,
+      "cache_read": 0.025,
       "cache_write": 0.0
     },
     "context_window": 1047576,
@@ -211,7 +211,7 @@
     "cost": {
       "input": 0.15,
       "output": 0.6,
-      "cache_read": 0.08,
+      "cache_read": 0.075,
       "cache_write": 0.0
     },
     "context_window": 128000,
@@ -361,7 +361,7 @@
       "cache_write": 0.0
     },
     "context_window": 400000,
-    "max_tokens": 272000
+    "max_tokens": 128000
   },
   "gpt-5.1": {
     "id": "gpt-5.1",
@@ -371,6 +371,7 @@
     "base_url": "null",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high"
@@ -382,7 +383,7 @@
     "cost": {
       "input": 1.25,
       "output": 10.0,
-      "cache_read": 0.13,
+      "cache_read": 0.125,
       "cache_write": 0.0
     },
     "context_window": 400000,
@@ -467,6 +468,7 @@
     "base_url": "null",
     "reasoning": true,
     "reasoning_efforts": [
+      "low",
       "medium",
       "high"
     ],
@@ -491,6 +493,7 @@
     "base_url": "null",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
@@ -614,6 +617,7 @@
     "base_url": "null",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
@@ -666,6 +670,7 @@
     "base_url": "null",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
@@ -679,9 +684,16 @@
       "input": 2.5,
       "output": 15.0,
       "cache_read": 0.25,
-      "cache_write": 0.0
+      "cache_write": 0.0,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 5,
+        "output": 22.5,
+        "cache_read": 0.5,
+        "cache_write": 0
+      }
     },
-    "context_window": 272000,
+    "context_window": 1050000,
     "max_tokens": 128000
   },
   "gpt-5.4-mini": {
@@ -692,6 +704,7 @@
     "base_url": "null",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
@@ -718,6 +731,7 @@
     "base_url": "null",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
@@ -756,7 +770,14 @@
       "input": 30.0,
       "output": 180.0,
       "cache_read": 0.0,
-      "cache_write": 0.0
+      "cache_write": 0.0,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 60,
+        "output": 270,
+        "cache_read": 0,
+        "cache_write": 0
+      }
     },
     "context_window": 1050000,
     "max_tokens": 128000
@@ -769,6 +790,7 @@
     "base_url": "null",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
@@ -782,7 +804,14 @@
       "input": 5.0,
       "output": 30.0,
       "cache_read": 0.5,
-      "cache_write": 0.0
+      "cache_write": 0.0,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 10,
+        "output": 45,
+        "cache_read": 1,
+        "cache_write": 0
+      }
     },
     "context_window": 1050000,
     "max_tokens": 128000
@@ -795,10 +824,12 @@
     "base_url": "null",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "input": [
       "text",
@@ -808,10 +839,20 @@
       "input": 0.2,
       "output": 1.2,
       "cache_read": 0.02,
-      "cache_write": 0.25
+      "cache_write": 0.25,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 0.4,
+        "output": 1.8,
+        "cache_read": 0.04,
+        "cache_write": 0.5
+      }
     },
     "context_window": 1050000,
-    "max_tokens": 128000
+    "max_tokens": 128000,
+    "compat": {
+      "openai_temperature_requires_none": true
+    }
   },
   "gpt-5.6-sol": {
     "id": "gpt-5.6-sol",
@@ -821,10 +862,12 @@
     "base_url": "null",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "input": [
       "text",
@@ -833,11 +876,21 @@
     "cost": {
       "input": 4.0,
       "output": 20.0,
-      "cache_read": 0.5,
-      "cache_write": 6.25
+      "cache_read": 0.4,
+      "cache_write": 5,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 8,
+        "output": 30,
+        "cache_read": 0.8,
+        "cache_write": 10
+      }
     },
     "context_window": 1050000,
-    "max_tokens": 128000
+    "max_tokens": 128000,
+    "compat": {
+      "openai_temperature_requires_none": true
+    }
   },
   "gpt-5.6-terra": {
     "id": "gpt-5.6-terra",
@@ -847,10 +900,12 @@
     "base_url": "null",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "input": [
       "text",
@@ -860,10 +915,20 @@
       "input": 2.0,
       "output": 12.0,
       "cache_read": 0.2,
-      "cache_write": 2.5
+      "cache_write": 2.5,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 4,
+        "output": 18,
+        "cache_read": 0.4,
+        "cache_write": 5
+      }
     },
     "context_window": 1050000,
-    "max_tokens": 128000
+    "max_tokens": 128000,
+    "compat": {
+      "openai_temperature_requires_none": true
+    }
   },
   "gpt-6-astra": {
     "id": "gpt-6-astra",
@@ -876,7 +941,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "input": [
       "text",
@@ -886,10 +952,20 @@
       "input": 10.0,
       "output": 50.0,
       "cache_read": 1.0,
-      "cache_write": 12.5
+      "cache_write": 12.5,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 20,
+        "output": 75,
+        "cache_read": 2,
+        "cache_write": 25
+      }
     },
     "context_window": 1050000,
-    "max_tokens": 128000
+    "max_tokens": 128000,
+    "compat": {
+      "openai_temperature_requires_none": true
+    }
   },
   "gpt-6-luna": {
     "id": "gpt-6-luna",
@@ -899,10 +975,12 @@
     "base_url": "null",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "input": [
       "text",
@@ -912,10 +990,20 @@
       "input": 0.1,
       "output": 0.5,
       "cache_read": 0.01,
-      "cache_write": 0.125
+      "cache_write": 0.125,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 0.2,
+        "output": 0.75,
+        "cache_read": 0.02,
+        "cache_write": 0.25
+      }
     },
     "context_window": 1050000,
-    "max_tokens": 128000
+    "max_tokens": 128000,
+    "compat": {
+      "openai_temperature_requires_none": true
+    }
   },
   "gpt-6-sol": {
     "id": "gpt-6-sol",
@@ -925,10 +1013,12 @@
     "base_url": "null",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "input": [
       "text",
@@ -938,10 +1028,20 @@
       "input": 2.0,
       "output": 10.0,
       "cache_read": 0.2,
-      "cache_write": 2.5
+      "cache_write": 2.5,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 4,
+        "output": 15,
+        "cache_read": 0.4,
+        "cache_write": 5
+      }
     },
     "context_window": 1050000,
-    "max_tokens": 128000
+    "max_tokens": 128000,
+    "compat": {
+      "openai_temperature_requires_none": true
+    }
   },
   "gpt-6.1-sol": {
     "id": "gpt-6.1-sol",
@@ -954,7 +1054,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "input": [
       "text",
@@ -964,10 +1065,58 @@
       "input": 2.0,
       "output": 10.0,
       "cache_read": 0.1,
-      "cache_write": 2.5
+      "cache_write": 2.5,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 4,
+        "output": 15,
+        "cache_read": 0.2,
+        "cache_write": 5
+      }
     },
     "context_window": 1050000,
-    "max_tokens": 128000
+    "max_tokens": 128000,
+    "compat": {
+      "openai_temperature_requires_none": true
+    }
+  },
+  "gpt-6.1-terra": {
+    "id": "gpt-6.1-terra",
+    "name": "GPT-6.1 Terra",
+    "api": "azure_openai_responses",
+    "provider": "azure_openai_responses",
+    "base_url": "null",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1,
+      "output": 5,
+      "cache_read": 0.05,
+      "cache_write": 1.25,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 2,
+        "output": 7.5,
+        "cache_read": 0.1,
+        "cache_write": 2.5
+      }
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000,
+    "compat": {
+      "openai_temperature_requires_none": true
+    }
   },
   "gpt-chat-latest": {
     "id": "gpt-chat-latest",
@@ -977,11 +1126,7 @@
     "base_url": "null",
     "reasoning": true,
     "reasoning_efforts": [
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh"
+      "medium"
     ],
     "input": [
       "text",
@@ -1149,7 +1294,7 @@
     "cost": {
       "input": 1.1,
       "output": 4.4,
-      "cache_read": 0.28,
+      "cache_read": 0.275,
       "cache_write": 0.0
     },
     "context_window": 200000,

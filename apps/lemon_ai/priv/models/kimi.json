@@ -21,11 +21,11 @@
   },
   "kimi-for-coding": {
     "id": "kimi-for-coding",
-    "name": "Kimi for Coding",
+    "name": "Kimi K2.8 Preview",
     "api": "anthropic_messages",
     "provider": "kimi",
     "base_url": "https://api.kimi.com/coding",
-    "reasoning": false,
+    "reasoning": true,
     "input": [
       "text",
       "image"
@@ -36,8 +36,16 @@
       "cache_read": 0.0,
       "cache_write": 0.0
     },
-    "context_window": 256000,
-    "max_tokens": 64000
+    "context_window": 1048576,
+    "max_tokens": 32768,
+    "reasoning_efforts": [
+      "low",
+      "high",
+      "max"
+    ],
+    "compat": {
+      "anthropic_effort_only": true
+    }
   },
   "kimi-k2-thinking": {
     "id": "kimi-k2-thinking",
@@ -91,12 +99,6 @@
     "provider": "kimi",
     "base_url": "https://api.kimi.com/coding",
     "reasoning": true,
-    "reasoning_efforts": [
-      "minimal",
-      "low",
-      "medium",
-      "high"
-    ],
     "input": [
       "text",
       "image"
@@ -117,12 +119,6 @@
     "provider": "kimi",
     "base_url": "https://api.kimi.com/coding",
     "reasoning": true,
-    "reasoning_efforts": [
-      "minimal",
-      "low",
-      "medium",
-      "high"
-    ],
     "input": [
       "text",
       "image"
@@ -155,5 +151,157 @@
     },
     "context_window": 1048576,
     "max_tokens": 131072
+  },
+  "k3.1-pro-highspeed": {
+    "id": "k3.1-pro-highspeed",
+    "name": "Kimi K3.1 Pro Highspeed",
+    "api": "anthropic_messages",
+    "provider": "kimi",
+    "base_url": "https://api.kimi.com/coding",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 131072,
+    "reasoning_efforts": [
+      "low",
+      "high",
+      "max"
+    ],
+    "headers": {
+      "User-Agent": "KimiCLI/1.0",
+      "X-Msh-Platform": "kimi_cli"
+    },
+    "compat": {
+      "anthropic_effort_only": true
+    }
+  },
+  "k3": {
+    "id": "k3",
+    "name": "Kimi K3",
+    "api": "anthropic_messages",
+    "provider": "kimi",
+    "base_url": "https://api.kimi.com/coding",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 131072,
+    "reasoning_efforts": [
+      "low",
+      "high",
+      "max"
+    ],
+    "headers": {
+      "User-Agent": "KimiCLI/1.0",
+      "X-Msh-Platform": "kimi_cli"
+    },
+    "compat": {
+      "anthropic_effort_only": true
+    }
+  },
+  "k3.1-pro": {
+    "id": "k3.1-pro",
+    "name": "Kimi K3.1 Pro",
+    "api": "anthropic_messages",
+    "provider": "kimi",
+    "base_url": "https://api.kimi.com/coding",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 131072,
+    "reasoning_efforts": [
+      "low",
+      "high",
+      "max"
+    ],
+    "headers": {
+      "User-Agent": "KimiCLI/1.0",
+      "X-Msh-Platform": "kimi_cli"
+    },
+    "compat": {
+      "anthropic_effort_only": true
+    }
+  },
+  "k3-256k": {
+    "id": "k3-256k",
+    "name": "Kimi K3-256K",
+    "api": "anthropic_messages",
+    "provider": "kimi",
+    "base_url": "https://api.kimi.com/coding",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 262144,
+    "max_tokens": 131072,
+    "reasoning_efforts": [
+      "low",
+      "high",
+      "max"
+    ],
+    "headers": {
+      "User-Agent": "KimiCLI/1.0",
+      "X-Msh-Platform": "kimi_cli"
+    },
+    "compat": {
+      "anthropic_effort_only": true
+    }
+  },
+  "kimi-for-coding-highspeed": {
+    "id": "kimi-for-coding-highspeed",
+    "name": "Kimi For Coding HighSpeed",
+    "api": "anthropic_messages",
+    "provider": "kimi",
+    "base_url": "https://api.kimi.com/coding",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 262144,
+    "max_tokens": 32768,
+    "headers": {
+      "User-Agent": "KimiCLI/1.0",
+      "X-Msh-Platform": "kimi_cli"
+    }
   }
 }

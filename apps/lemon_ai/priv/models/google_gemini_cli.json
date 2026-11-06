@@ -166,6 +166,7 @@
     "adaptive_thinking": false,
     "reasoning_efforts": [
       "low",
+      "medium",
       "high"
     ]
   }

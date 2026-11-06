@@ -189,8 +189,8 @@ from arbitrary catalog strings.
 Vision and reasoning are additionally gated **per model** by the model's `input` and
 `reasoning` fields — a wire module supporting vision doesn't make a text-only model
 accept images. The thinking request shape is driven by explicit capability flags on
-each catalog entry: `adaptive_thinking` (Anthropic `thinking: adaptive` plus
-`output_config.effort`, required from Claude Opus 4.7 on) and `reasoning_efforts` (the
+each catalog entry: `adaptive_thinking` (Anthropic-style `thinking: adaptive`,
+plus `output_config.effort` when efforts are declared) and `reasoning_efforts` (the
 Lemon levels a model accepts; other levels clamp to the nearest declared one via
 `LemonAi.Models.reasoning_effort_for/2`). Query the specific model:
 
@@ -199,6 +199,27 @@ LemonAi.Models.supports_vision?(model)
 LemonAi.Models.supports_reasoning?(model)
 LemonAi.Models.supports_xhigh(model)
 ```
+
+### Provider request controls
+
+Modern OpenAI Responses models accept sampling temperature only at effective
+effort `:none`. `PI_CACHE_RETENTION=long` requests 12-hour retention through
+`prompt_cache_options.ttl` on current models; older models retain their 24-hour
+`prompt_cache_retention` format. Set
+`thinking_budgets: %{service_tier: "ultrafast"}` to request that tier on a
+supporting model. Returned `usage.cost` accounts for the actual response tier,
+mixed cache-write lifetimes and long-context prices; `"fast"` responses use
+the model's Priority rates.
+
+Google models with declared reasoning levels use `thinkingLevel`, including
+Gemini 4 Argon, which rejects `thinkingBudget`. Legacy budget-based models
+still accept budget overrides. Vertex's global location uses
+`aiplatform.googleapis.com`.
+
+Bedrock uses the catalog's AWS region unless the caller supplies an explicit
+region override, and signs for that same region. Adaptive Claude models use
+Converse's adaptive-thinking fields. Nova 2 high-effort reasoning omits its
+incompatible temperature and output-token cap.
 
 ### Codex and Anthropic request controls
 
@@ -426,16 +447,46 @@ message instead of a raw blob, whatever provider you hit.
 ## Model lookup
 
 ```elixir
-LemonAi.Models.get_model(:anthropic, "claude-haiku-4-5")  # provider + id
-LemonAi.Models.find_by_id("gpt-4o")                         # search all providers by id
+LemonAi.Models.get_model(:openai, "gpt-6.1-terra")            # provider + id
+LemonAi.Models.find_by_id("gemini-4-argon")                   # search all providers by id
 LemonAi.Models.get_models(:openai)                          # all models for a provider
 LemonAi.Models.get_providers()                              # all known provider atoms
 ```
-The bundled current families include GPT-5.6 and GPT-6 API models, ChatGPT Codex
-GPT-5.6 Luna, Sol and Terra / GPT-6 Astra, Luna and Sol / GPT-6.1 Sol, Claude 5 and
-5.5 families, and Gemini 3.1 Pro through Gemini 3.8 Flash. Limits and per-million-token
-prices track the local omp catalog; unsupported realtime/audio/image-generation
-protocols are not advertised through the text coding APIs.
+The bundled catalogs include GPT-6.1 Terra and Sol, Claude 5.5, Gemini 4 Argon,
+and current DeepSeek, Kimi, MiniMax, Qwen, GLM and gateway offerings. Catalogs are
+compile-time metadata snapshots, not guarantees that an account or region can
+access a model. Unsupported realtime/audio/image-generation protocols are not
+advertised through the text coding APIs.
+
+Metadata is checked against [models.dev](https://models.dev/), then provider
+documentation for protocol-specific capabilities and billing:
+[OpenAI](https://developers.openai.com/api/docs/models/gpt-6.1-terra),
+[Google](https://aistudio.google.com/docs/models/gemini-4-argon),
+[DeepSeek](https://api-docs.deepseek.com/guides/thinking_mode), and
+[Qwen](https://www.alibabacloud.com/help/en/model-studio/deep-thinking).
+The current refresh also compares model inventories with the pinned remote
+[oh-my-pi catalog](https://github.com/can1357/oh-my-pi/blob/660a31dc33aa93449eb4f569c8cef87033b9f646/packages/catalog/src/models.json)
+and [OpenCode catalog](https://github.com/anomalyco/opencode/blob/2658ec02c848ce7e5bd618ee2e18256c5c0992db/packages/core/src/models-dev/snapshot.txt).
+Additional entries include `chat-latest`, Robotics ER 2 Preview, Qwen 3.8
+variants, GLM-5.3 Highspeed and current Vercel gateway models. Comparisons keep
+provider endpoints separate and exclude retired-only entries, client-only free
+models, generated batch/mode aliases and unsupported media protocols.
+Gateway prices and endpoints follow the gateway, not the underlying vendor.
+The cost schema supports one long-context threshold; new entries requiring
+multiple thresholds are not added with incomplete prices. DeepSeek's
+time-dependent direct and OpenCode Go prices use nominal peak rates. Gemini 4 Argon's
+introductory prices apply through November 30, 2026; its published standard
+rates are higher afterward.
+Robotics ER 2 Preview's catalog rates likewise reflect its current introductory
+pricing; the upstream catalog schedules higher text-token rates from January 1, 2027.
+
+Low-level `StreamOptions.reasoning` accepts `:none` and `:max` in addition to
+the existing levels. Declared model capabilities clamp unsupported requests.
+`:none` disables thinking only where the model's API supports disabling it;
+`nil` leaves provider defaults unchanged. DeepSeek's thinking toggle and Qwen's
+`enable_thinking` use their native request formats rather than OpenAI's effort
+field. OpenCode Go requests identify Lemon and retain a stable conversation
+session header.
 Existing integration exclusions remain in effect even when the reference catalog
 still lists an old preview: Vertex's `gemini-3-flash-preview`, `gemini-3-pro-preview`
 and `gemini-3.1-pro-preview` are not advertised by Lemon.
@@ -488,7 +539,7 @@ All defined in `LemonAi.Types`:
   base_url: String.t(),
   reasoning: boolean(),
   adaptive_thinking: boolean(),  # Anthropic adaptive thinking + effort
-  reasoning_efforts: [:minimal | :low | :medium | :high | :xhigh],  # [] = undeclared
+  reasoning_efforts: [:none | :minimal | :low | :medium | :high | :xhigh | :max],  # [] = undeclared
   input: [:text | :image],
   cost: %LemonAi.Types.ModelCost{input: float(), output: float()},
   context_window: non_neg_integer(),
@@ -502,7 +553,7 @@ All defined in `LemonAi.Types`:
   max_tokens: non_neg_integer() | nil,
   api_key: String.t() | nil,
   headers: map(),
-  reasoning: :minimal | :low | :medium | :high | :xhigh | nil,
+  reasoning: :none | :minimal | :low | :medium | :high | :xhigh | :max | nil,
   stream_timeout: timeout(),        # default 300_000ms
   tool_choice: atom() | String.t() | nil
   # ...plus Vertex/OAuth fields: project, location, access_token, service_account_json

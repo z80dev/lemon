@@ -289,6 +289,39 @@ defmodule LemonAi.Providers.GoogleVertexTest do
       EventStream.result(stream, 1000)
     end
 
+    test "routes Argon through the global endpoint with declared thinking levels" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:argon_request, conn.host, conn.request_path, Jason.decode!(raw)})
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
+      end)
+
+      model = LemonAi.Models.get_model(:google_vertex, "gemini-4-argon")
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      opts = default_opts(location: "global", reasoning: :max)
+
+      {:ok, stream} = GoogleVertex.stream(model, context, opts)
+
+      assert_receive {:argon_request, "aiplatform.googleapis.com", path, body}, 1000
+
+      assert path ==
+               "/v1/projects/test-project/locations/global/publishers/google/models/gemini-4-argon:streamGenerateContent"
+
+      assert body["generationConfig"]["thinkingConfig"] == %{
+               "includeThoughts" => true,
+               "thinkingLevel" => "HIGH"
+             }
+
+      assert {:ok, _result} = EventStream.result(stream, 1000)
+    end
+
     test "includes alt=sse query parameter" do
       test_pid = self()
 

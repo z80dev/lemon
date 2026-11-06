@@ -1,4 +1,35 @@
 {
+  "claude-fable-5": {
+    "id": "claude-fable-5",
+    "name": "Claude Fable 5",
+    "api": "anthropic_messages",
+    "provider": "github_copilot",
+    "base_url": "https://api.individual.githubcopilot.com",
+    "reasoning": true,
+    "adaptive_thinking": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "compat": {
+      "anthropic_thinking_display": true
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 10,
+      "output": 50,
+      "cache_read": 1,
+      "cache_write": 12.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
   "claude-fable-5.1": {
     "id": "claude-fable-5.1",
     "name": "Claude Fable 5.1",
@@ -11,7 +42,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "compat": {
       "anthropic_thinking_display": true
@@ -21,10 +53,10 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 10,
+      "output": 50,
+      "cache_read": 0.25,
+      "cache_write": 12.5
     },
     "context_window": 1000000,
     "max_tokens": 128000
@@ -41,13 +73,13 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 1,
+      "output": 5,
+      "cache_read": 0.1,
+      "cache_write": 1.25
     },
-    "context_window": 128000,
-    "max_tokens": 32000
+    "context_window": 200000,
+    "max_tokens": 64000
   },
   "claude-haiku-5.5": {
     "id": "claude-haiku-5.5",
@@ -61,7 +93,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "compat": {
       "anthropic_thinking_display": true
@@ -71,10 +104,17 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 0.1,
+      "output": 0.5,
+      "cache_read": 0.01,
+      "cache_write": 0.125,
+      "long_context": {
+        "input_threshold": 100000,
+        "input": 0.5,
+        "output": 2.5,
+        "cache_read": 0.05,
+        "cache_write": 0.625
+      }
     },
     "context_window": 1000000,
     "max_tokens": 128000
@@ -126,6 +166,68 @@
     "context_window": 128000,
     "max_tokens": 64000
   },
+  "claude-opus-4.8": {
+    "id": "claude-opus-4.8",
+    "name": "Claude Opus 4.8",
+    "api": "anthropic_messages",
+    "provider": "github_copilot",
+    "base_url": "https://api.individual.githubcopilot.com",
+    "reasoning": true,
+    "adaptive_thinking": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "compat": {
+      "anthropic_thinking_display": true
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 5,
+      "output": 25,
+      "cache_read": 0.5,
+      "cache_write": 6.25
+    },
+    "context_window": 200000,
+    "max_tokens": 64000
+  },
+  "claude-opus-5": {
+    "id": "claude-opus-5",
+    "name": "Claude Opus 5",
+    "api": "anthropic_messages",
+    "provider": "github_copilot",
+    "base_url": "https://api.individual.githubcopilot.com",
+    "reasoning": true,
+    "adaptive_thinking": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "compat": {
+      "anthropic_thinking_display": true
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 5,
+      "output": 25,
+      "cache_read": 0.5,
+      "cache_write": 6.25
+    },
+    "context_window": 1000000,
+    "max_tokens": 64000
+  },
   "claude-opus-5.5": {
     "id": "claude-opus-5.5",
     "name": "Claude Opus 5.5",
@@ -138,7 +240,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "compat": {
       "anthropic_thinking_display": true
@@ -148,10 +251,10 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 4,
+      "output": 20,
+      "cache_read": 0.2,
+      "cache_write": 5
     },
     "context_window": 1000000,
     "max_tokens": 128000
@@ -208,20 +311,51 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "max"
     ],
     "input": [
       "text",
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 3,
+      "output": 15,
+      "cache_read": 0.3,
+      "cache_write": 3.75
     },
-    "context_window": 128000,
+    "context_window": 200000,
     "max_tokens": 32000
+  },
+  "claude-sonnet-5": {
+    "id": "claude-sonnet-5",
+    "name": "Claude Sonnet 5",
+    "api": "anthropic_messages",
+    "provider": "github_copilot",
+    "base_url": "https://api.individual.githubcopilot.com",
+    "reasoning": true,
+    "adaptive_thinking": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "compat": {
+      "anthropic_thinking_display": true
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.2,
+      "cache_write": 2.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
   },
   "claude-sonnet-5.5": {
     "id": "claude-sonnet-5.5",
@@ -235,7 +369,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "compat": {
       "anthropic_thinking_display": true
@@ -245,10 +380,10 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 2.5
     },
     "context_window": 1000000,
     "max_tokens": 128000
@@ -345,13 +480,43 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
+      "input": 0.75,
+      "output": 3.75,
+      "cache_read": 0.075,
       "cache_write": 0.0
     },
     "context_window": 1000000,
-    "max_tokens": 64000
+    "max_tokens": 64000,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "gemini-4-argon": {
+    "id": "gemini-4-argon",
+    "name": "Gemini 4 Argon",
+    "api": "openai_completions",
+    "provider": "github_copilot",
+    "base_url": "https://api.individual.githubcopilot.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 0
+    },
+    "context_window": 1048576,
+    "max_tokens": 65536,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ]
   },
   "gpt-4.1": {
     "id": "gpt-4.1",
@@ -427,7 +592,6 @@
     "base_url": "https://api.individual.githubcopilot.com",
     "reasoning": true,
     "reasoning_efforts": [
-      "minimal",
       "low",
       "medium",
       "high"
@@ -437,12 +601,12 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
+      "input": 0.25,
+      "output": 2,
+      "cache_read": 0.025,
       "cache_write": 0.0
     },
-    "context_window": 128000,
+    "context_window": 264000,
     "max_tokens": 64000
   },
   "gpt-5.1": {
@@ -615,9 +779,9 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
+      "input": 1.75,
+      "output": 14,
+      "cache_read": 0.175,
       "cache_write": 0.0
     },
     "context_window": 400000,
@@ -637,6 +801,7 @@
     "base_url": "https://api.individual.githubcopilot.com",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
@@ -647,12 +812,19 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 2.5,
+      "output": 15,
+      "cache_read": 0.25,
+      "cache_write": 0.0,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 5,
+        "output": 22.5,
+        "cache_read": 0.5,
+        "cache_write": 0
+      }
     },
-    "context_window": 400000,
+    "context_window": 1050000,
     "max_tokens": 128000,
     "headers": {
       "Copilot-Integration-Id": "vscode-chat",
@@ -669,6 +841,7 @@
     "base_url": "https://api.githubcopilot.com",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
@@ -679,12 +852,12 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
+      "input": 0.75,
+      "output": 4.5,
+      "cache_read": 0.075,
       "cache_write": 0.0
     },
-    "context_window": 272000,
+    "context_window": 400000,
     "max_tokens": 128000,
     "headers": {
       "Copilot-Integration-Id": "vscode-chat",
@@ -701,6 +874,7 @@
     "base_url": "https://api.githubcopilot.com",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
@@ -711,9 +885,9 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
+      "input": 0.2,
+      "output": 1.25,
+      "cache_read": 0.02,
       "cache_write": 0.0
     },
     "context_window": 400000,
@@ -733,6 +907,7 @@
     "base_url": "https://api.githubcopilot.com",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
@@ -743,10 +918,17 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 5,
+      "output": 30,
+      "cache_read": 0.5,
+      "cache_write": 0.0,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 10,
+        "output": 45,
+        "cache_read": 1,
+        "cache_write": 0
+      }
     },
     "context_window": 1050000,
     "max_tokens": 128000,
@@ -765,20 +947,29 @@
     "base_url": "https://api.githubcopilot.com",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "input": [
       "text",
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 0.2,
+      "output": 1.2,
+      "cache_read": 0.02,
+      "cache_write": 0.25,
+      "long_context": {
+        "input_threshold": 200000,
+        "input": 0.4,
+        "output": 1.8,
+        "cache_read": 0.04,
+        "cache_write": 0.5
+      }
     },
     "context_window": 1050000,
     "max_tokens": 128000,
@@ -787,6 +978,9 @@
       "Editor-Plugin-Version": "copilot-chat/0.35.0",
       "Editor-Version": "vscode/1.107.0",
       "User-Agent": "GitHubCopilotChat/0.35.0"
+    },
+    "compat": {
+      "openai_temperature_requires_none": true
     }
   },
   "gpt-5.6-sol": {
@@ -797,20 +991,29 @@
     "base_url": "https://api.githubcopilot.com",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "input": [
       "text",
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 4,
+      "output": 20,
+      "cache_read": 0.4,
+      "cache_write": 5,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 8,
+        "output": 30,
+        "cache_read": 0.8,
+        "cache_write": 10
+      }
     },
     "context_window": 1050000,
     "max_tokens": 128000,
@@ -819,6 +1022,9 @@
       "Editor-Plugin-Version": "copilot-chat/0.35.0",
       "Editor-Version": "vscode/1.107.0",
       "User-Agent": "GitHubCopilotChat/0.35.0"
+    },
+    "compat": {
+      "openai_temperature_requires_none": true
     }
   },
   "gpt-5.6-terra": {
@@ -829,20 +1035,29 @@
     "base_url": "https://api.githubcopilot.com",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "input": [
       "text",
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 2,
+      "output": 12,
+      "cache_read": 0.2,
+      "cache_write": 2.5,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 4,
+        "output": 18,
+        "cache_read": 0.4,
+        "cache_write": 5
+      }
     },
     "context_window": 1050000,
     "max_tokens": 128000,
@@ -851,6 +1066,9 @@
       "Editor-Plugin-Version": "copilot-chat/0.35.0",
       "Editor-Version": "vscode/1.107.0",
       "User-Agent": "GitHubCopilotChat/0.35.0"
+    },
+    "compat": {
+      "openai_temperature_requires_none": true
     }
   },
   "gpt-6-astra": {
@@ -864,25 +1082,36 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "input": [
       "text",
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 10,
+      "output": 50,
+      "cache_read": 1,
+      "cache_write": 12.5,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 20,
+        "output": 75,
+        "cache_read": 2,
+        "cache_write": 25
+      }
     },
-    "context_window": 272000,
+    "context_window": 1050000,
     "max_tokens": 128000,
     "headers": {
       "Copilot-Integration-Id": "vscode-chat",
       "Editor-Plugin-Version": "copilot-chat/0.35.0",
       "Editor-Version": "vscode/1.107.0",
       "User-Agent": "GitHubCopilotChat/0.35.0"
+    },
+    "compat": {
+      "openai_temperature_requires_none": true
     }
   },
   "gpt-6-luna": {
@@ -893,20 +1122,29 @@
     "base_url": "https://api.githubcopilot.com",
     "reasoning": true,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "input": [
       "text",
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 0.1,
+      "output": 0.5,
+      "cache_read": 0.01,
+      "cache_write": 0.125,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 0.2,
+        "output": 0.75,
+        "cache_read": 0.02,
+        "cache_write": 0.25
+      }
     },
     "context_window": 1050000,
     "max_tokens": 128000,
@@ -915,6 +1153,53 @@
       "Editor-Plugin-Version": "copilot-chat/0.35.0",
       "Editor-Version": "vscode/1.107.0",
       "User-Agent": "GitHubCopilotChat/0.35.0"
+    },
+    "compat": {
+      "openai_temperature_requires_none": true
+    }
+  },
+  "gpt-6-sol": {
+    "id": "gpt-6-sol",
+    "name": "GPT-6 Sol",
+    "api": "openai_responses",
+    "provider": "github_copilot",
+    "base_url": "https://api.githubcopilot.com",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.2,
+      "cache_write": 2.5,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 4,
+        "output": 15,
+        "cache_read": 0.4,
+        "cache_write": 5
+      }
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000,
+    "headers": {
+      "Copilot-Integration-Id": "vscode-chat",
+      "Editor-Plugin-Version": "copilot-chat/0.35.0",
+      "Editor-Version": "vscode/1.107.0",
+      "User-Agent": "GitHubCopilotChat/0.35.0"
+    },
+    "compat": {
+      "openai_temperature_requires_none": true
     }
   },
   "gpt-6.1-sol": {
@@ -928,6 +1213,131 @@
       "low",
       "medium",
       "high",
+      "xhigh",
+      "max"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 2.5,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 4,
+        "output": 15,
+        "cache_read": 0.2,
+        "cache_write": 5
+      }
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000,
+    "headers": {
+      "Copilot-Integration-Id": "vscode-chat",
+      "Editor-Plugin-Version": "copilot-chat/0.35.0",
+      "Editor-Version": "vscode/1.107.0",
+      "User-Agent": "GitHubCopilotChat/0.35.0"
+    },
+    "compat": {
+      "openai_temperature_requires_none": true
+    }
+  },
+  "gpt-6.1-terra": {
+    "id": "gpt-6.1-terra",
+    "name": "GPT-6.1 Terra",
+    "api": "openai_responses",
+    "provider": "github_copilot",
+    "base_url": "https://api.githubcopilot.com",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1,
+      "output": 5,
+      "cache_read": 0.05,
+      "cache_write": 1.25,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 2,
+        "output": 7.5,
+        "cache_read": 0.1,
+        "cache_write": 2.5
+      }
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000,
+    "headers": {
+      "Copilot-Integration-Id": "vscode-chat",
+      "Editor-Plugin-Version": "copilot-chat/0.35.0",
+      "Editor-Version": "vscode/1.107.0",
+      "User-Agent": "GitHubCopilotChat/0.35.0"
+    },
+    "compat": {
+      "openai_temperature_requires_none": true
+    }
+  },
+  "grok-4.5": {
+    "id": "grok-4.5",
+    "name": "Grok 4.5",
+    "api": "openai_responses",
+    "provider": "github_copilot",
+    "base_url": "https://api.githubcopilot.com",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 6,
+      "cache_read": 0.5,
+      "cache_write": 0,
+      "long_context": {
+        "input_threshold": 200000,
+        "input": 4,
+        "output": 12,
+        "cache_read": 1,
+        "cache_write": 0
+      }
+    },
+    "context_window": 500000,
+    "max_tokens": 128000,
+    "headers": {
+      "Copilot-Integration-Id": "vscode-chat",
+      "Editor-Plugin-Version": "copilot-chat/0.35.0",
+      "Editor-Version": "vscode/1.107.0",
+      "User-Agent": "GitHubCopilotChat/0.35.0"
+    }
+  },
+  "grok-4.6": {
+    "id": "grok-4.6",
+    "name": "Grok 4.6",
+    "api": "openai_responses",
+    "provider": "github_copilot",
+    "base_url": "https://api.githubcopilot.com",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
       "xhigh"
     ],
     "input": [
@@ -935,12 +1345,19 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 2,
+      "output": 6,
+      "cache_read": 0.5,
+      "cache_write": 0,
+      "long_context": {
+        "input_threshold": 200000,
+        "input": 4,
+        "output": 12,
+        "cache_read": 1,
+        "cache_write": 0
+      }
     },
-    "context_window": 1050000,
+    "context_window": 500000,
     "max_tokens": 128000,
     "headers": {
       "Copilot-Integration-Id": "vscode-chat",
@@ -957,7 +1374,6 @@
     "base_url": "https://api.githubcopilot.com",
     "reasoning": true,
     "reasoning_efforts": [
-      "minimal",
       "low",
       "medium",
       "high",
@@ -968,10 +1384,17 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 2,
+      "output": 6,
+      "cache_read": 0.5,
+      "cache_write": 0.0,
+      "long_context": {
+        "input_threshold": 200000,
+        "input": 4,
+        "output": 12,
+        "cache_read": 1,
+        "cache_write": 0
+      }
     },
     "context_window": 500000,
     "max_tokens": 128000,
@@ -1013,9 +1436,9 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
+      "input": 3,
+      "output": 15,
+      "cache_read": 0.3,
       "cache_write": 0.0
     },
     "context_window": 1048576,
@@ -1040,9 +1463,9 @@
       "image"
     ],
     "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
+      "input": 0.2,
+      "output": 1.2,
+      "cache_read": 0.02,
       "cache_write": 0.0
     },
     "context_window": 256000,

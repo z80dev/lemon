@@ -972,7 +972,8 @@ defmodule LemonAi.Providers.Anthropic do
     low: "low",
     medium: "medium",
     high: "high",
-    xhigh: "max"
+    xhigh: "xhigh",
+    max: "max"
   }
   @manual_thinking_min_output_tokens 4096
 
@@ -1014,7 +1015,8 @@ defmodule LemonAi.Providers.Anthropic do
       end
 
     beta_features =
-      if model.reasoning and model.adaptive_thinking and not is_nil(opts.reasoning) do
+      if model.reasoning and model.adaptive_thinking and model.reasoning_efforts != [] and
+           opts.reasoning not in [nil, :none] do
         beta_features ++ ["effort-2025-11-24"]
       else
         beta_features
@@ -1122,16 +1124,24 @@ defmodule LemonAi.Providers.Anthropic do
       end
 
     body = maybe_apply_tool_choice(body, opts.tool_choice, oauth_request?)
+    compat = model.compat || %{}
 
     # Thinking request shape is driven by the model's capability flags:
     # adaptive-thinking models take effort levels, older models a manual budget.
     body =
       cond do
-        !model.reasoning or !opts.reasoning ->
+        !model.reasoning or opts.reasoning in [nil, :none] ->
           body
 
+        Map.get(compat, :anthropic_effort_only) || Map.get(compat, "anthropic_effort_only") ->
+          effort = LemonAi.Models.reasoning_effort_for(model, opts.reasoning)
+
+          body
+          |> Map.delete("temperature")
+          |> Map.put("output_config", %{"effort" => Atom.to_string(effort)})
+
         get_in(body, ["tool_choice", "type"]) in ["any", "tool"] ->
-          if model.adaptive_thinking do
+          if model.adaptive_thinking and model.reasoning_efforts != [] do
             body
             |> Map.delete("temperature")
             |> Map.put("output_config", %{"effort" => "low"})
@@ -1141,7 +1151,6 @@ defmodule LemonAi.Providers.Anthropic do
 
         model.adaptive_thinking ->
           effort = LemonAi.Models.reasoning_effort_for(model, opts.reasoning)
-          compat = model.compat || %{}
 
           thinking =
             if Map.get(compat, :anthropic_thinking_display) ||
@@ -1151,12 +1160,18 @@ defmodule LemonAi.Providers.Anthropic do
               %{"type" => "adaptive"}
             end
 
-          body
-          |> Map.delete("temperature")
-          |> Map.put("thinking", thinking)
-          |> Map.put("output_config", %{
-            "effort" => Map.get(@adaptive_thinking_effort_map, effort, "medium")
-          })
+          body =
+            body
+            |> Map.delete("temperature")
+            |> Map.put("thinking", thinking)
+
+          if model.reasoning_efforts == [] do
+            body
+          else
+            Map.put(body, "output_config", %{
+              "effort" => Map.get(@adaptive_thinking_effort_map, effort, "medium")
+            })
+          end
 
         true ->
           thinking_budget = get_thinking_budget(opts.reasoning, opts.thinking_budgets)
@@ -1733,7 +1748,8 @@ defmodule LemonAi.Providers.Anthropic do
     }
 
     budgets = Map.merge(default_budgets, budgets || %{})
-    Map.get(budgets, reasoning_level, 10_000)
+    level = if reasoning_level == :max, do: :xhigh, else: reasoning_level
+    Map.get(budgets, level, 10_000)
   end
 
   defp parse_partial_json(""), do: %{}

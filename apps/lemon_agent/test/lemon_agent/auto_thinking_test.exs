@@ -5,7 +5,6 @@ defmodule LemonAgent.AutoThinkingTest do
   alias LemonAgent.Agent, as: RuntimeAgent
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig}
-  alias LemonAi.Models
 
   alias LemonAi.Types.{
     AssistantMessage,
@@ -45,10 +44,7 @@ defmodule LemonAgent.AutoThinkingTest do
           {active_model([:low, :high]), "medium", :low},
           {active_model([:high]), "low", :high},
           {active_model([:minimal]), "high", :minimal},
-          {Models.get_model(:openai, "gpt-5.1"), "xhigh", :high},
-          {Models.get_model(:openai, "gpt-5.5"), "xhigh", :xhigh},
-          {Models.get_model(:anthropic, "claude-sonnet-4-6"), "xhigh", :high},
-          {Models.get_model(:anthropic, "claude-opus-4-6"), "xhigh", :xhigh}
+          {active_model([:low, :high, :max]), "xhigh", :high}
         ]
 
     for {model, label, expected} <- cases do

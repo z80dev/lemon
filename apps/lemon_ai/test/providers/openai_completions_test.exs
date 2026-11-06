@@ -12,6 +12,7 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
     Model,
     StreamOptions,
     TextContent,
+    ThinkingContent,
     ToolCall,
     ToolResultMessage,
     UserMessage
@@ -40,6 +41,68 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
     end)
     |> Enum.join("\n")
     |> Kernel.<>("\n")
+  end
+
+  test "DeepSeek tool continuation retains unsigned reasoning blocks" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      body = Jason.decode!(raw)
+      assistant = Enum.find(body["messages"], &(&1["role"] == "assistant"))
+
+      if assistant["reasoning_content"] == "Inspect the input.\nUse the lookup tool." do
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([
+            %{
+              "choices" => [
+                %{"delta" => %{"content" => "Lookup complete."}, "finish_reason" => "stop"}
+              ]
+            },
+            :done
+          ])
+        )
+      else
+        Plug.Conn.send_resp(conn, 400, ~s({"error":{"message":"Missing reasoning_content"}}))
+      end
+    end)
+
+    model = %Model{
+      id: "thinking-model",
+      provider: :deepseek,
+      api: :openai_completions,
+      base_url: "https://example.test/v1",
+      reasoning: true,
+      reasoning_efforts: [:low, :high, :max],
+      compat: %{thinking_format: "deepseek"}
+    }
+
+    context =
+      Context.new(
+        messages: [
+          %AssistantMessage{
+            content: [
+              %ThinkingContent{thinking: "Inspect the input."},
+              %ThinkingContent{thinking: "Use the lookup tool."},
+              %ToolCall{id: "lookup-1", name: "lookup", arguments: %{}}
+            ]
+          },
+          %ToolResultMessage{
+            tool_call_id: "lookup-1",
+            tool_name: "lookup",
+            content: [%TextContent{text: "found"}]
+          }
+        ]
+      )
+
+    {:ok, stream} =
+      OpenAICompletions.stream(model, context, %StreamOptions{
+        api_key: "test-key",
+        reasoning: :max
+      })
+
+    assert {:ok, message} = EventStream.result(stream, 1000)
+    assert LemonAi.get_text(message) == "Lookup complete."
   end
 
   test "uses OPENCODE_API_KEY for opencode provider when api_key option is missing" do

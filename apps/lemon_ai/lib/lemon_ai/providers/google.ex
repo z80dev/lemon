@@ -228,29 +228,7 @@ defmodule LemonAi.Providers.Google do
         config
       end
 
-    # Handle thinking/reasoning config
-    config =
-      if model.reasoning and thinking_enabled?(opts) do
-        thinking_config = %{"includeThoughts" => true}
-
-        thinking_config =
-          cond do
-            thinking_level = get_thinking_level(opts) ->
-              Map.put(thinking_config, "thinkingLevel", thinking_level)
-
-            thinking_budget = get_thinking_budget(opts) ->
-              Map.put(thinking_config, "thinkingBudget", thinking_budget)
-
-            true ->
-              thinking_config
-          end
-
-        Map.put(config, "thinkingConfig", thinking_config)
-      else
-        config
-      end
-
-    config
+    GoogleShared.put_thinking_config(config, model, opts)
   end
 
   defp opts_has_tool_choice?(%StreamOptions{} = opts) do
@@ -259,20 +237,6 @@ defmodule LemonAi.Providers.Google do
 
   defp get_tool_choice(%StreamOptions{} = opts) do
     Map.get(opts, :tool_choice, :auto)
-  end
-
-  defp thinking_enabled?(%StreamOptions{reasoning: level})
-       when level in [:minimal, :low, :medium, :high], do: true
-
-  defp thinking_enabled?(_), do: false
-
-  defp get_thinking_level(%StreamOptions{reasoning: _level, thinking_budgets: budgets}) do
-    # Check if budgets has a level key
-    Map.get(budgets, :level)
-  end
-
-  defp get_thinking_budget(%StreamOptions{reasoning: level, thinking_budgets: budgets}) do
-    Map.get(budgets, :budget_tokens) || Map.get(budgets, level)
   end
 
   defp make_streaming_request(url, headers, body) do

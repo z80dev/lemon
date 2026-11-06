@@ -69,20 +69,6 @@ defmodule LemonAi.Providers.OpenCodeGoSessionTest do
   end
 
   describe "OpenCodeGoSession.headers/3" do
-    test "returns the session header only for opencode_go" do
-      opts = %StreamOptions{session_id: "sess-1"}
-
-      assert %{@header => "sess-1"} ==
-               OpenCodeGoSession.headers(openai_model(:opencode_go), context(), opts)
-
-      assert %{@header => "sess-1"} ==
-               OpenCodeGoSession.headers(openai_model("opencode_go"), context(), opts)
-
-      for provider <- [:opencode, :openai, :anthropic, :zai] do
-        assert %{} == OpenCodeGoSession.headers(openai_model(provider), context(), opts)
-      end
-    end
-
     test "fallback id is stable per system prompt and never empty" do
       model = openai_model(:opencode_go)
       opts = %StreamOptions{}

@@ -8,7 +8,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Changed
+
+- Refresh `lemon_ai` model catalogs for current models, including GPT-6.1 Terra,
+  Gemini 4 Argon, Kimi K3.1 Pro, MiniMax M3.1 Flash and newer gateway offerings,
+  with updated pricing, token limits and capability metadata.
+
+### Fixed
+
+- The terminal integration check waits for the rendered answer as well as
+  completion signals, avoiding a race that could fail the client release gate.
 
 ---
 

@@ -277,11 +277,11 @@ defmodule LemonAi.Types do
         natively, in ascending order. An empty list means undeclared: levels
         pass through unchanged. See `LemonAi.Models.reasoning_effort_for/2`.
 
-    `service_tier_cost` maps `"flex"` / `"priority"` to billing multipliers;
+    `service_tier_cost` maps `"flex"` / `"priority"` / `"ultrafast"` to billing multipliers;
     absent entries retain base prices for that surface.
     """
     @type input_type :: :text | :image
-    @type reasoning_level :: :minimal | :low | :medium | :high | :xhigh
+    @type reasoning_level :: :none | :minimal | :low | :medium | :high | :xhigh | :max
     @type t :: %__MODULE__{
             id: String.t(),
             name: String.t(),
@@ -346,7 +346,7 @@ defmodule LemonAi.Types do
     options are rebuilt for another model. Derived provider/model headers must
     not become caller overrides on the next request.
     """
-    @type thinking_level :: :minimal | :low | :medium | :high | :xhigh
+    @type thinking_level :: LemonAi.Types.Model.reasoning_level()
     @type t :: %__MODULE__{
             temperature: float() | nil,
             max_tokens: non_neg_integer() | nil,

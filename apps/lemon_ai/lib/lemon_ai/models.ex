@@ -392,8 +392,8 @@ defmodule LemonAi.Models do
   Check if a model supports the xhigh reasoning level.
 
   Driven by the model's `reasoning_efforts` capability flag (see
-  `LemonAi.Types.Model`). On Anthropic adaptive-thinking models `:xhigh` maps
-  to effort `"max"`.
+  `LemonAi.Types.Model`). `:xhigh` and `:max` are distinct capabilities; a
+  model declaring only `:max` does not implicitly accept `:xhigh`.
 
   ## Examples
 
@@ -416,7 +416,7 @@ defmodule LemonAi.Models do
   @spec supports_xhigh?(Model.t()) :: boolean()
   def supports_xhigh?(model), do: supports_xhigh(model)
 
-  @reasoning_levels [:minimal, :low, :medium, :high, :xhigh]
+  @reasoning_levels [:none, :minimal, :low, :medium, :high, :xhigh, :max]
 
   @doc """
   Resolve the reasoning level to send for `model`.
@@ -472,7 +472,7 @@ defmodule LemonAi.Models do
   @doc """
   Adjust max tokens to accommodate a thinking budget for a given reasoning level.
 
-  Computes the thinking token budget for the requested level (clamping xhigh
+  Computes the thinking token budget for the requested level (clamping xhigh/max
   to high), then increases `base_max_tokens` by that amount without exceeding
   `model_max_tokens`. If the resulting max is smaller than the budget, the
   budget is reduced to leave at least 1024 output tokens.
@@ -483,7 +483,7 @@ defmodule LemonAi.Models do
 
     - `base_max_tokens` - The base output token limit before thinking
     - `model_max_tokens` - The model's hard maximum token limit
-    - `reasoning_level` - One of `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`
+    - `reasoning_level` - One of `:none`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`
     - `custom_budgets` - Optional map overriding default budgets per level
 
   ## Returns
@@ -527,8 +527,8 @@ defmodule LemonAi.Models do
   end
 
   @doc """
-  Clamp a reasoning level, mapping `:xhigh` to `:high` for providers that
-  don't support it.
+  Clamp a reasoning level, mapping `:xhigh` and `:max` to `:high` for budget-based
+  providers and `:none` to no thinking budget.
 
   ## Examples
 
@@ -543,7 +543,7 @@ defmodule LemonAi.Models do
   """
   @spec clamp_reasoning(atom() | nil) :: atom() | nil
   def clamp_reasoning(nil), do: nil
-  def clamp_reasoning(:xhigh), do: :high
+  def clamp_reasoning(level) when level in [:xhigh, :max], do: :high
   def clamp_reasoning(level) when level in [:minimal, :low, :medium, :high], do: level
   def clamp_reasoning(_), do: nil
 

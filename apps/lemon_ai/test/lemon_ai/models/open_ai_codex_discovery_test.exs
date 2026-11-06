@@ -47,6 +47,27 @@ defmodule LemonAi.Models.OpenAICodexDiscoveryTest do
     refute encoded_keys =~ "example.invalid"
   end
 
+  test "direct API catalog additions do not become ChatGPT OAuth models" do
+    assert %LemonAi.Types.Model{} = Models.get_model(:openai, "gpt-6.1-terra")
+    assert is_nil(Models.get_model(:"openai-codex", "gpt-6.1-terra"))
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      Req.Test.json(conn, %{
+        "models" => [
+          %{"slug" => "gpt-6.1-terra", "supported_in_api" => true},
+          %{"slug" => "gpt-6.1-sol", "supported_in_api" => true}
+        ]
+      })
+    end)
+
+    opts = options(token("api-catalog-account"))
+    assert {:ok, [%{id: "gpt-6.1-sol"}]} = Discovery.discover(opts)
+
+    unadvertised = Models.get_model(:"openai-codex", "gpt-6-astra")
+    assert {:error, message} = Discovery.ensure_available(unadvertised, opts)
+    assert message =~ "not available for this ChatGPT account"
+  end
+
   test "different accounts and endpoints never share availability" do
     Req.Test.stub(__MODULE__, fn conn ->
       id =

@@ -247,6 +247,33 @@ defmodule LemonAi.Providers.GoogleStreamingTest do
     assert {:ok, _result} = EventStream.result(stream, 1000)
   end
 
+  test "Argon sends supported thinking levels to the Gemini API endpoint" do
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:argon_request, conn.host, conn.request_path, Jason.decode!(raw)})
+      Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+    end)
+
+    model = LemonAi.Models.get_model(:google, "gemini-4-argon")
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+    opts = %StreamOptions{reasoning: :minimal, thinking_budgets: %{budget_tokens: 8192}}
+
+    {:ok, stream} = Google.stream(model, context, opts)
+
+    assert_receive {:argon_request, "generativelanguage.googleapis.com",
+                    "/v1beta/models/gemini-4-argon:streamGenerateContent", body},
+                   1000
+
+    assert body["generationConfig"]["thinkingConfig"] == %{
+             "includeThoughts" => true,
+             "thinkingLevel" => "LOW"
+           }
+
+    assert {:ok, _result} = EventStream.result(stream, 1000)
+  end
+
   test "fails fast when no Google API key is configured" do
     prev_google = System.get_env("GOOGLE_GENERATIVE_AI_API_KEY")
     prev_google_alt = System.get_env("GOOGLE_API_KEY")

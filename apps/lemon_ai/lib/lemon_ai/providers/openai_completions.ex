@@ -409,8 +409,27 @@ defmodule LemonAi.Providers.OpenAICompletions do
   defp maybe_add_reasoning(params, %{reasoning: false}, _opts, _compat), do: params
   defp maybe_add_reasoning(params, _model, %{reasoning: nil}, _compat), do: params
 
+  defp maybe_add_reasoning(params, _model, %{reasoning: reasoning}, %{thinking_format: "qwen"}) do
+    Map.put(params, "enable_thinking", reasoning not in [false, :none])
+  end
+
+  defp maybe_add_reasoning(params, model, %{reasoning: reasoning}, %{
+         thinking_format: "deepseek"
+       }) do
+    if reasoning in [false, :none] do
+      Map.put(params, "thinking", %{"type" => "disabled"})
+    else
+      requested = if reasoning == :medium, do: :high, else: reasoning
+      effort = LemonAi.Models.reasoning_effort_for(model, requested)
+
+      params
+      |> Map.put("thinking", %{"type" => "enabled"})
+      |> Map.put("reasoning_effort", to_string(effort))
+    end
+  end
+
   defp maybe_add_reasoning(params, _model, %{reasoning: reasoning}, %{thinking_format: "zai"}) do
-    type = if reasoning == false, do: "disabled", else: "enabled"
+    type = if reasoning in [false, :none], do: "disabled", else: "enabled"
     Map.put(params, "thinking", %{"type" => type})
   end
 
@@ -634,6 +653,14 @@ defmodule LemonAi.Providers.OpenAICompletions do
     current_content = assistant_msg["content"]
     new_content = merge_thinking_with_content(current_content, thinking_text)
     Map.put(assistant_msg, "content", new_content)
+  end
+
+  defp add_thinking_content(assistant_msg, thinking_blocks, %{thinking_format: "deepseek"}) do
+    Map.put(
+      assistant_msg,
+      "reasoning_content",
+      Enum.map_join(thinking_blocks, "\n", & &1.thinking)
+    )
   end
 
   defp add_thinking_content(assistant_msg, thinking_blocks, _compat) do

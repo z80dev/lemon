@@ -37,7 +37,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
   # Types
   # ============================================================================
 
-  @type reasoning_effort :: :minimal | :low | :medium | :high | :xhigh | :none
+  @type reasoning_effort :: :minimal | :low | :medium | :high | :xhigh | :max | :none
   @type reasoning_summary :: :auto | :detailed | :concise | :off | :on | nil
 
   @type stream_options :: %{
@@ -1077,8 +1077,18 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
           get_in(usage, ["input_tokens_details", "cached_tokens"]) ||
             usage["prompt_cache_hit_tokens"] || 0
 
+        cache_write_tokens =
+          get_in(usage, ["input_tokens_details", "cache_write_tokens"]) || 0
+
+        long_cache_write_tokens =
+          get_in(usage, [
+            "input_tokens_details",
+            "cache_write_tokens_details",
+            "ttl_12h_tokens"
+          ]) || 0
+
         raw_input_tokens = usage["input_tokens"] || 0
-        input_tokens = max(raw_input_tokens - cached_tokens, 0)
+        input_tokens = max(raw_input_tokens - cached_tokens - cache_write_tokens, 0)
         output_tokens = usage["output_tokens"] || 0
         total_tokens = usage["total_tokens"] || raw_input_tokens + output_tokens
 
@@ -1086,13 +1096,18 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
           input: input_tokens,
           output: output_tokens,
           cache_read: cached_tokens,
-          cache_write: 0,
+          cache_write: cache_write_tokens,
           total_tokens: total_tokens,
           cost: %Cost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0, total: 0.0}
         }
 
         # Calculate cost based on model pricing
         usage_struct = calculate_cost(state.model, usage_struct)
+
+        # Twelve-hour writes cost twice the catalog's default 30-minute rate.
+        # Scale after cost calculation so long-context prices are preserved.
+        usage_struct =
+          apply_long_cache_write_pricing(usage_struct, long_cache_write_tokens)
 
         # Apply service tier pricing if provided
         usage_struct =
@@ -1252,6 +1267,15 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
     %{usage | cost: LemonAi.calculate_cost(model, usage)}
   end
 
+  @doc false
+  def temperature_for(model, opts) do
+    requires_none = Map.get(model.compat || %{}, :openai_temperature_requires_none, false)
+
+    if requires_none and LemonAi.Models.reasoning_effort_for(model, opts.reasoning) != :none,
+      do: nil,
+      else: opts.temperature
+  end
+
   # ============================================================================
   # JSON Parsing
   # ============================================================================
@@ -1322,8 +1346,11 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
   """
   @spec service_tier_cost_multiplier(String.t() | nil) :: float()
   @spec service_tier_cost_multiplier(String.t() | nil, map()) :: number()
-  def service_tier_cost_multiplier(tier, tier_cost \\ %{"flex" => 0.5, "priority" => 2.0}),
-    do: Map.get(tier_cost, tier, 1.0)
+  def service_tier_cost_multiplier(tier, tier_cost \\ %{"flex" => 0.5, "priority" => 2.0}) do
+    # Fast is the renamed Priority tier; older responses still return "priority".
+    tier = if tier == "fast", do: "priority", else: tier
+    Map.get(tier_cost, tier, 1.0)
+  end
 
   @doc """
   Apply service tier pricing to usage.
@@ -1356,6 +1383,18 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
       }
     end
   end
+
+  defp apply_long_cache_write_pricing(
+         %Usage{cache_write: writes, cost: %Cost{cache_write: write_cost, total: total} = cost} =
+           usage,
+         long_writes
+       )
+       when writes > 0 and long_writes > 0 and is_number(write_cost) and is_number(total) do
+    extra = write_cost * min(long_writes, writes) / writes
+    %{usage | cost: %{cost | cache_write: write_cost + extra, total: total + extra}}
+  end
+
+  defp apply_long_cache_write_pricing(usage, _long_writes), do: usage
 
   defp scale_cost(nil, _multiplier), do: nil
   defp scale_cost(cost, multiplier), do: cost * multiplier

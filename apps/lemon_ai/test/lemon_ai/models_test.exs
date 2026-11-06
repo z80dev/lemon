@@ -207,47 +207,6 @@ defmodule LemonAi.ModelsTest do
   end
 
   # ============================================================================
-  # supports_xhigh/1 and supports_xhigh?/1
-  # ============================================================================
-
-  describe "supports_xhigh/1" do
-    test "returns true for gpt-5.2 model" do
-      model = Models.get_model(:openai, "gpt-5.2")
-      assert Models.supports_xhigh(model) == true
-    end
-
-    test "returns true for claude-opus-4-6 model" do
-      model = Models.get_model(:anthropic, "claude-opus-4-6")
-      assert Models.supports_xhigh(model) == true
-    end
-
-    test "returns false for claude-sonnet-4 model" do
-      model = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      assert Models.supports_xhigh(model) == false
-    end
-
-    test "returns false for gpt-4o model" do
-      model = Models.get_model(:openai, "gpt-4o")
-      assert Models.supports_xhigh(model) == false
-    end
-
-    test "returns false for gpt-5 (non 5.2/5.3)" do
-      model = Models.get_model(:openai, "gpt-5")
-      assert Models.supports_xhigh(model) == false
-    end
-  end
-
-  describe "supports_xhigh?/1" do
-    test "is an alias for supports_xhigh/1" do
-      model = Models.get_model(:openai, "gpt-5.2")
-      assert Models.supports_xhigh?(model) == Models.supports_xhigh(model)
-
-      model2 = Models.get_model(:openai, "gpt-4o")
-      assert Models.supports_xhigh?(model2) == Models.supports_xhigh(model2)
-    end
-  end
-
-  # ============================================================================
   # find_by_id/1
   # ============================================================================
 

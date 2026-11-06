@@ -20,7 +20,7 @@
   },
   "deepseek-flash": {
     "id": "deepseek-flash",
-    "name": "DeepSeek V4.1 Flash",
+    "name": "DeepSeek V4.1 Flash 1017",
     "api": "openai_completions",
     "provider": "deepseek",
     "base_url": "https://api.deepseek.com/v1",
@@ -35,13 +35,16 @@
       "cache_read": 0.006,
       "cache_write": 0.0
     },
-    "context_window": 1000000,
-    "max_tokens": 384000,
+    "context_window": 1048576,
+    "max_tokens": 393216,
     "reasoning_efforts": [
       "low",
       "high",
-      "xhigh"
-    ]
+      "max"
+    ],
+    "compat": {
+      "thinking_format": "deepseek"
+    }
   },
   "deepseek-r1": {
     "id": "deepseek-r1",
@@ -83,7 +86,7 @@
   },
   "deepseek-v4-flash": {
     "id": "deepseek-v4-flash",
-    "name": "DeepSeek V4 Flash",
+    "name": "DeepSeek V4.1 Flash 1017 (V4 Flash Alias)",
     "api": "openai_completions",
     "provider": "deepseek",
     "base_url": "https://api.deepseek.com/v1",
@@ -98,17 +101,20 @@
       "cache_read": 0.006,
       "cache_write": 0.0
     },
-    "context_window": 1000000,
+    "context_window": 1048576,
     "max_tokens": 393216,
     "reasoning_efforts": [
       "low",
       "high",
-      "xhigh"
-    ]
+      "max"
+    ],
+    "compat": {
+      "thinking_format": "deepseek"
+    }
   },
   "deepseek-v4-pro": {
     "id": "deepseek-v4-pro",
-    "name": "DeepSeek V4 Pro",
+    "name": "DeepSeek V4 Pro 0813",
     "api": "openai_completions",
     "provider": "deepseek",
     "base_url": "https://api.deepseek.com/v1",
@@ -117,17 +123,48 @@
       "text"
     ],
     "cost": {
+      "input": 1.32,
+      "output": 3.96,
+      "cache_read": 0.044,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 393216,
+    "reasoning_efforts": [
+      "low",
+      "high",
+      "max"
+    ],
+    "compat": {
+      "thinking_format": "deepseek"
+    }
+  },
+  "deepseek-v4-flash-vision-exp": {
+    "id": "deepseek-v4-flash-vision-exp",
+    "name": "DeepSeek V4.1 Flash 1017 (Vision Exp Alias)",
+    "api": "openai_completions",
+    "provider": "deepseek",
+    "base_url": "https://api.deepseek.com/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
       "input": 0.3,
       "output": 1.2,
       "cache_read": 0.006,
       "cache_write": 0.0
     },
-    "context_window": 1000000,
+    "context_window": 1048576,
     "max_tokens": 393216,
     "reasoning_efforts": [
       "low",
       "high",
-      "xhigh"
-    ]
+      "max"
+    ],
+    "compat": {
+      "thinking_format": "deepseek"
+    }
   }
 }

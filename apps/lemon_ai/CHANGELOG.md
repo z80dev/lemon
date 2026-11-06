@@ -28,6 +28,17 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- Refresh supported provider and gateway catalogs with current text-generation
+  models, including GPT-6.1 Terra and Gemini 4 Argon, updated token limits,
+  vision/reasoning capabilities and provider-specific prices. Add explicit
+  `:none` / `:max` reasoning efforts and `ultrafast` service-tier metadata.
+- Compare model inventories with current remote oh-my-pi and OpenCode snapshots;
+  add Chat Latest, Robotics ER 2 Preview, three Qwen 3.8 variants, GLM-5.3
+  Highspeed and seven compatible Vercel gateway entries without adding new
+  provider protocols.
+- OpenCode catalogs use the current `/inference/` API routes; Go requests identify
+  Lemon alongside their stable conversation-session header.
+
 - OpenAI-compatible streaming now emits request and terminal raw usage observers,
   including usage-only chunks. Missing counters/costs remain unknown; cache
   breakdowns are disjoint and reasoning is not double-counted. Added explicit
@@ -49,6 +60,16 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   2.1.296, detected once per `PATH` instead of on every request.
 
 ### Fixed
+
+- DeepSeek uses its native thinking toggle and retains reasoning content across
+  tool continuations; Qwen hybrid models use `enable_thinking` instead of an
+  unsupported generic reasoning-effort field.
+- OpenAI Responses pricing uses the model's actual service tier and mixed cache
+  lifetimes; modern models use the current cache-retention request format and
+  omit incompatible sampling temperature.
+- Google level-based models receive `thinkingLevel`, not rejected budgets;
+  Vertex global requests use the correct hostname. Bedrock uses catalog regions
+  for routing/signing and supports adaptive Claude and Nova 2 reasoning.
 
 - Prompt diagnostics preserve nullable usage counters and only report inclusive
   input when all input/cache components are known, without failing successful

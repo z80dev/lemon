@@ -179,6 +179,109 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedTest do
     EventStream.cancel(stream, :test_cleanup)
   end
 
+  test "accounts for mixed cache-write lifetimes before long-context and service-tier pricing" do
+    {:ok, stream} = EventStream.start_link()
+
+    model = %Model{
+      id: "cache-write-model",
+      api: :openai_responses,
+      provider: :openai,
+      cost: %ModelCost{
+        input: 1.0,
+        output: 5.0,
+        cache_read: 0.05,
+        cache_write: 1.25,
+        long_context: %{
+          input_threshold: 10_000,
+          input: 2.0,
+          output: 7.5,
+          cache_read: 0.1,
+          cache_write: 2.5
+        }
+      }
+    }
+
+    events = [
+      %{
+        "type" => "response.completed",
+        "response" => %{
+          "status" => "completed",
+          "service_tier" => "ultrafast",
+          "usage" => %{
+            "input_tokens" => 12_000,
+            "output_tokens" => 100,
+            "input_tokens_details" => %{
+              "cached_tokens" => 4_000,
+              "cache_write_tokens" => 7_000,
+              "cache_write_tokens_details" => %{
+                "ttl_30m_tokens" => 3_000,
+                "ttl_12h_tokens" => 4_000
+              }
+            }
+          }
+        }
+      }
+    ]
+
+    output = %AssistantMessage{content: [], usage: %Usage{cost: %Cost{}}}
+
+    opts = %{
+      apply_service_tier_pricing: fn usage, tier ->
+        OpenAIResponsesShared.apply_service_tier_pricing(usage, tier, %{"ultrafast" => 6.0})
+      end
+    }
+
+    assert {:ok, final} =
+             OpenAIResponsesShared.process_stream(events, output, stream, model, opts)
+
+    assert final.usage.input == 1_000
+    assert final.usage.cache_read == 4_000
+    assert final.usage.cache_write == 7_000
+    assert final.usage.total_tokens == 12_100
+    assert_in_delta final.usage.cost.input, 0.012, 0.000001
+    assert_in_delta final.usage.cost.cache_read, 0.0024, 0.000001
+    assert_in_delta final.usage.cost.cache_write, 0.165, 0.000001
+    assert_in_delta final.usage.cost.output, 0.0045, 0.000001
+    assert_in_delta final.usage.cost.total, 0.1839, 0.000001
+
+    EventStream.cancel(stream, :test_cleanup)
+  end
+
+  test "cache-write totals without lifetime details use the standard write rate" do
+    {:ok, stream} = EventStream.start_link()
+    model = %Model{cost: %ModelCost{input: 1.0, cache_write: 1.25}}
+    output = %AssistantMessage{content: [], usage: %Usage{cost: %Cost{}}}
+
+    events = [
+      %{
+        "type" => "response.completed",
+        "response" => %{
+          "status" => "completed",
+          "usage" => %{
+            "input_tokens" => 1_000,
+            "input_tokens_details" => %{"cache_write_tokens" => 1_000}
+          }
+        }
+      }
+    ]
+
+    assert {:ok, final} = OpenAIResponsesShared.process_stream(events, output, stream, model)
+    assert final.usage.input == 0
+    assert final.usage.cache_write == 1_000
+    assert_in_delta final.usage.cost.cache_write, 0.00125, 0.000001
+    EventStream.cancel(stream, :test_cleanup)
+  end
+
+  test "fast service-tier responses use the model's priority price" do
+    assert OpenAIResponsesShared.service_tier_cost_multiplier(
+             "fast",
+             %{"priority" => 2.5}
+           ) == 2.5
+
+    assert OpenAIResponsesShared.service_tier_cost_multiplier("fast") == 2.0
+    assert OpenAIResponsesShared.service_tier_cost_multiplier("default") == 1.0
+  end
+
   test "sanitize_surrogates handles invalid utf-8 safely" do
     invalid = <<0xC3, 0x28, 0xFF>>
 

@@ -71,7 +71,7 @@ defmodule LemonAi.Providers.Bedrock do
 
     resolved_headers = Map.get(resolved, :headers, %{})
 
-    region = get_region(opts, resolved_headers)
+    region = get_region(model, opts, resolved_headers)
     credentials = get_credentials(opts, resolved_headers)
 
     case credentials do
@@ -161,11 +161,21 @@ defmodule LemonAi.Providers.Bedrock do
   # AWS Configuration
   # ============================================================================
 
-  defp get_region(opts, resolved_headers) do
+  defp get_region(model, opts, resolved_headers) do
     Map.get(opts.headers, "aws_region") ||
       Map.get(resolved_headers, "aws_region") ||
+      catalog_region(model.base_url) ||
       "us-east-1"
   end
+
+  defp catalog_region(base_url) when is_binary(base_url) do
+    case Regex.run(~r/^https:\/\/bedrock-runtime\.([a-z0-9-]+)\.amazonaws\.com\/?$/, base_url) do
+      [_, region] -> region
+      _ -> nil
+    end
+  end
+
+  defp catalog_region(_), do: nil
 
   defp provider_options(%StreamOptions{provider_options: options}, key) when is_map(options) do
     Map.get(options, key) || Map.get(options, Atom.to_string(key)) || %{}
@@ -216,7 +226,7 @@ defmodule LemonAi.Providers.Bedrock do
     body = %{
       "modelId" => model.id,
       "messages" => convert_messages(context, model),
-      "inferenceConfig" => build_inference_config(opts)
+      "inferenceConfig" => build_inference_config(model, opts)
     }
 
     body =
@@ -243,16 +253,22 @@ defmodule LemonAi.Providers.Bedrock do
     body
   end
 
-  defp build_inference_config(opts) do
+  defp build_inference_config(model, opts) do
+    reasoning? = model.reasoning and opts.reasoning not in [nil, :none]
+
+    nova_high? =
+      reasoning? and bedrock_reasoning_config?(model) and
+        LemonAi.Models.reasoning_effort_for(model, opts.reasoning) == :high
+
     config = %{}
 
     config =
-      if opts.max_tokens,
+      if opts.max_tokens && not nova_high?,
         do: Map.put(config, "maxTokens", opts.max_tokens),
         else: config
 
     config =
-      if opts.temperature,
+      if opts.temperature && not nova_high? && not (reasoning? and model.adaptive_thinking),
         do: Map.put(config, "temperature", opts.temperature),
         else: config
 
@@ -357,8 +373,8 @@ defmodule LemonAi.Providers.Bedrock do
   end
 
   defp convert_assistant_block(%ThinkingContent{} = block, model) do
-    # Skip empty thinking blocks
-    if String.trim(block.thinking) == "" do
+    # Omitted thinking still carries a signature that must survive replay.
+    if String.trim(block.thinking) == "" and block.thinking_signature in [nil, ""] do
       nil
     else
       # Only Anthropic models support the signature field
@@ -484,8 +500,38 @@ defmodule LemonAi.Providers.Bedrock do
   defp convert_tool_config(_, _), do: nil
 
   defp build_additional_model_request_fields(model, opts) do
-    if opts.reasoning && model.reasoning do
-      if String.contains?(String.downcase(model.id), "anthropic.claude") do
+    cond do
+      opts.reasoning in [nil, :none] or not model.reasoning ->
+        nil
+
+      model.adaptive_thinking ->
+        effort = LemonAi.Models.reasoning_effort_for(model, opts.reasoning)
+        compat = model.compat || %{}
+
+        thinking =
+          if Map.get(compat, :anthropic_thinking_display) ||
+               Map.get(compat, "anthropic_thinking_display") do
+            %{"type" => "adaptive", "display" => "summarized"}
+          else
+            %{"type" => "adaptive"}
+          end
+
+        %{
+          "thinking" => thinking,
+          "output_config" => %{"effort" => Atom.to_string(effort)}
+        }
+
+      bedrock_reasoning_config?(model) ->
+        effort = LemonAi.Models.reasoning_effort_for(model, opts.reasoning)
+
+        %{
+          "reasoningConfig" => %{
+            "type" => "enabled",
+            "maxReasoningEffort" => Atom.to_string(effort)
+          }
+        }
+
+      String.contains?(String.downcase(model.id), "anthropic.claude") ->
         default_budgets = %{
           minimal: 1024,
           low: 2048,
@@ -494,8 +540,8 @@ defmodule LemonAi.Providers.Bedrock do
           xhigh: 16_384
         }
 
-        level = if opts.reasoning == :xhigh, do: :high, else: opts.reasoning
-        budget = Map.get(opts.thinking_budgets, level) || Map.get(default_budgets, opts.reasoning)
+        level = if opts.reasoning in [:xhigh, :max], do: :high, else: opts.reasoning
+        budget = Map.get(opts.thinking_budgets || %{}, level) || Map.get(default_budgets, level)
 
         result = %{
           "thinking" => %{
@@ -510,12 +556,15 @@ defmodule LemonAi.Providers.Bedrock do
         else
           result
         end
-      else
+
+      true ->
         nil
-      end
-    else
-      nil
     end
+  end
+
+  defp bedrock_reasoning_config?(model) do
+    compat = model.compat || %{}
+    Map.get(compat, :bedrock_reasoning_config, Map.get(compat, "bedrock_reasoning_config", false))
   end
 
   defp create_image_block(mime_type, data) do

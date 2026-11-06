@@ -74,8 +74,15 @@ defmodule LemonAi.Providers.AzureOpenAIResponsesTest do
   defp sse_body(events) do
     events
     |> Enum.map(fn
-      :done -> "data: [DONE]"
-      event -> "data: " <> Jason.encode!(event)
+      :done ->
+        "data: " <>
+          Jason.encode!(%{
+            "type" => "response.completed",
+            "response" => %{"status" => "completed"}
+          })
+
+      event ->
+        "data: " <> Jason.encode!(event)
     end)
     |> Enum.join("\n\n")
     |> Kernel.<>("\n\n")
@@ -108,6 +115,39 @@ defmodule LemonAi.Providers.AzureOpenAIResponsesTest do
 
     test "get_env_api_key returns nil when not set" do
       assert AzureOpenAIResponses.get_env_api_key() == nil
+    end
+  end
+
+  test "modern Azure reasoning preserves max and omits incompatible temperature" do
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:request_body, Jason.decode!(raw)})
+      Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+    end)
+
+    model =
+      base_model(%{
+        id: "gpt-6.1-terra",
+        reasoning: true,
+        reasoning_efforts: [:none, :low, :medium, :high, :xhigh, :max],
+        compat: %{openai_temperature_requires_none: true}
+      })
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    for effort <- [:max, :none] do
+      opts = %StreamOptions{api_key: "test-key", reasoning: effort, temperature: 0.4}
+      assert {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
+      assert_receive {:request_body, body}, 1000
+      assert body["reasoning"]["effort"] == Atom.to_string(effort)
+
+      if effort == :none,
+        do: assert(body["temperature"] == 0.4),
+        else: refute(Map.has_key?(body, "temperature"))
+
+      assert {:ok, _} = EventStream.result(stream, 1000)
     end
   end
 

@@ -100,6 +100,98 @@ defmodule LemonAi.Providers.OpenAIResponsesTest do
     assert {:ok, _} = EventStream.result(stream, 1000)
   end
 
+  test "modern reasoning efforts preserve max and only allow temperature with none" do
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:request_body, Jason.decode!(raw)})
+      Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+    end)
+
+    model = LemonAi.Models.get_model(:openai, "gpt-6.1-terra")
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    for effort <- [:max, :none, nil] do
+      opts = %StreamOptions{api_key: "test-key", reasoning: effort, temperature: 0.4}
+      assert {:ok, stream} = OpenAIResponses.stream(model, context, opts)
+      assert_receive {:request_body, body}, 1000
+
+      if effort do
+        assert body["reasoning"]["effort"] == Atom.to_string(effort)
+      end
+
+      if effort == :none,
+        do: assert(body["temperature"] == 0.4),
+        else: refute(Map.has_key?(body, "temperature"))
+
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+  end
+
+  test "abstract long cache retention selects the model's supported wire format" do
+    previous = System.get_env("PI_CACHE_RETENTION")
+    System.put_env("PI_CACHE_RETENTION", "long")
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("PI_CACHE_RETENTION", previous),
+        else: System.delete_env("PI_CACHE_RETENTION")
+    end)
+
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:request_body, Jason.decode!(raw)})
+      Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+    end)
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    for id <- ["gpt-6.1-terra", "gpt-5.4"] do
+      model = LemonAi.Models.get_model(:openai, id)
+
+      assert {:ok, stream} =
+               OpenAIResponses.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+      assert_receive {:request_body, body}, 1000
+
+      if id == "gpt-6.1-terra" do
+        assert body["prompt_cache_options"] == %{"ttl" => "12h"}
+        refute Map.has_key?(body, "prompt_cache_retention")
+      else
+        assert body["prompt_cache_retention"] == "24h"
+        refute Map.has_key?(body, "prompt_cache_options")
+      end
+
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+  end
+
+  test "uses model-specific service-tier pricing for the actual response tier" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      event = %{
+        "type" => "response.completed",
+        "response" => %{
+          "status" => "completed",
+          "service_tier" => "ultrafast",
+          "usage" => %{"input_tokens" => 0, "output_tokens" => 1_000_000}
+        }
+      }
+
+      Plug.Conn.send_resp(conn, 200, sse_body([event]))
+    end)
+
+    model = LemonAi.Models.get_model(:openai, "gpt-6.1-sol")
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+    opts = %StreamOptions{api_key: "test-key", thinking_budgets: %{service_tier: "priority"}}
+    assert {:ok, stream} = OpenAIResponses.stream(model, context, opts)
+    assert {:ok, response} = EventStream.result(stream, 1000)
+    assert_in_delta response.usage.cost.output, 60.0, 0.000001
+    assert_in_delta response.usage.cost.total, 60.0, 0.000001
+  end
+
   test "adds copilot headers for :github_copilot" do
     test_pid = self()
 

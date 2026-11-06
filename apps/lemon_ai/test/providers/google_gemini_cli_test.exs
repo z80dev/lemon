@@ -377,6 +377,31 @@ defmodule LemonAi.Providers.GoogleGeminiCliTest do
       assert body["request"]["generationConfig"]["thinkingConfig"]["includeThoughts"] == true
       assert body["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 16_384
     end
+
+    test "uses the Gemini CLI model's declared medium thinking level" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_body, Jason.decode!(raw)})
+        Plug.Conn.send_resp(conn, 400, "test")
+      end)
+
+      model = LemonAi.Models.get_model(:google_gemini_cli, "gemini-3.1-pro-preview")
+      opts = %StreamOptions{api_key: default_api_key(), reasoning: :medium}
+
+      {:ok, stream} = GoogleGeminiCli.stream(model, default_context(), opts)
+
+      assert_receive {:request_body, body}, 1000
+      assert body["model"] == "gemini-3.1-pro-preview"
+
+      assert body["request"]["generationConfig"]["thinkingConfig"] == %{
+               "includeThoughts" => true,
+               "thinkingLevel" => "MEDIUM"
+             }
+
+      assert {:error, _result} = EventStream.result(stream, 1000)
+    end
   end
 
   # ============================================================================

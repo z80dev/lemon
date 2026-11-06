@@ -114,7 +114,16 @@ defmodule LemonAi.Providers.OpenAIResponses do
                  model,
                  %{
                    service_tier: parse_service_tier(opts),
-                   apply_service_tier_pricing: &OpenAIResponsesShared.apply_service_tier_pricing/2
+                   apply_service_tier_pricing: fn usage, tier ->
+                     OpenAIResponsesShared.apply_service_tier_pricing(
+                       usage,
+                       tier,
+                       Map.merge(
+                         %{"flex" => 0.5, "priority" => 2.0},
+                         model.service_tier_cost || %{}
+                       )
+                     )
+                   end
                  }
                ) do
             {:ok, final_output} ->
@@ -237,11 +246,13 @@ defmodule LemonAi.Providers.OpenAIResponses do
     # Add optional parameters
     params = maybe_add_param(params, "prompt_cache_key", opts.session_id)
 
-    params =
-      maybe_add_param(params, "prompt_cache_retention", get_cache_retention(model.base_url))
+    params = add_cache_retention(params, model)
 
     params = maybe_add_param(params, "max_output_tokens", opts.max_tokens)
-    params = maybe_add_param(params, "temperature", opts.temperature)
+
+    params =
+      maybe_add_param(params, "temperature", OpenAIResponsesShared.temperature_for(model, opts))
+
     params = maybe_add_service_tier(params, opts)
 
     # Add tools if present
@@ -379,13 +390,16 @@ defmodule LemonAi.Providers.OpenAIResponses do
     Map.get(opts.thinking_budgets || %{}, :service_tier)
   end
 
-  defp get_cache_retention(base_url) do
-    retention = System.get_env("PI_CACHE_RETENTION")
-
-    if retention == "long" && String.contains?(base_url, "api.openai.com") do
-      "24h"
+  defp add_cache_retention(params, model) do
+    if System.get_env("PI_CACHE_RETENTION") == "long" &&
+         String.contains?(model.base_url, "api.openai.com") do
+      if Map.get(model.compat || %{}, :openai_prompt_cache_options, false) do
+        Map.put(params, "prompt_cache_options", %{"ttl" => "12h"})
+      else
+        Map.put(params, "prompt_cache_retention", "24h")
+      end
     else
-      nil
+      params
     end
   end
 

@@ -234,6 +234,7 @@
     "adaptive_thinking": false,
     "reasoning_efforts": [
       "low",
+      "medium",
       "high"
     ]
   },
@@ -365,7 +366,32 @@
     "max_tokens": 65536,
     "adaptive_thinking": false,
     "reasoning_efforts": [
-      "minimal",
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "gemini-4-argon": {
+    "id": "gemini-4-argon",
+    "name": "Gemini 4 Argon",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "api": "google_vertex",
+    "provider": "google_vertex",
+    "base_url": "https://{location}-aiplatform.googleapis.com",
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 0
+    },
+    "context_window": 1048576,
+    "max_tokens": 65536,
+    "adaptive_thinking": false,
+    "reasoning_efforts": [
       "low",
       "medium",
       "high"

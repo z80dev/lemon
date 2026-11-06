@@ -313,9 +313,14 @@ test("real TUI PTY emits turn/approval signals and restores keyboard, title and 
 			answer: "",
 			durationMs: 10,
 		});
+		// Completion status is emitted before the scheduled transcript render.
+		// Wait for the answer's terminal frame as well as its lifecycle signals.
 		await until(
 			() =>
-				output.includes("\x1b]133;D;0\x07") && output.includes("\x1b]7501;state=done:app=lemon"),
+				output.includes("\x1b]133;D;0\x07") &&
+				output.includes("\x1b]7501;state=done:app=lemon") &&
+				output.includes("/src/main.ts#L12\x07") &&
+				output.includes("\x1b]8;;https://example.com\x07"),
 		);
 		expect(output).toContain("\x1b]133;A\x07");
 		expect(output).toContain("\x1b]133;B\x07");

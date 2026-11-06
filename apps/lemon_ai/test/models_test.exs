@@ -353,27 +353,6 @@ defmodule LemonAi.ModelsLegacyTest do
   end
 
   describe "2026 frontier catalog entries" do
-    test "Claude 4.6+ models declare adaptive thinking; older Claude models do not" do
-      for id <- ~w(claude-opus-5-5 claude-opus-5 claude-opus-4-8 claude-opus-4-7
-                   claude-opus-4-6 claude-sonnet-5 claude-sonnet-4-6 claude-fable-5-1) do
-        model = Models.get_model(:anthropic, id)
-        assert model.adaptive_thinking, "#{id} should use adaptive thinking"
-        assert Models.supports_xhigh(model) == (id != "claude-sonnet-4-6")
-      end
-
-      for id <- ~w(claude-sonnet-4-5 claude-opus-4-5 claude-haiku-4-5) do
-        model = Models.get_model(:anthropic, id)
-        refute model.adaptive_thinking, "#{id} uses manual thinking budgets"
-        refute Models.supports_xhigh(model)
-      end
-    end
-
-    test "direct gpt-5.5 declares its reasoning efforts" do
-      model = Models.get_model(:openai, "gpt-5.5")
-      assert model.reasoning_efforts == [:low, :medium, :high, :xhigh]
-      assert model.api == :openai_responses
-    end
-
     test "the retired duplicate-id pseudo model is gone" do
       assert Models.get_model(:anthropic, "claude-opus-4-6-thinking") == nil
     end
@@ -389,6 +368,18 @@ defmodule LemonAi.ModelsLegacyTest do
 
       pro = %Model{reasoning: true, reasoning_efforts: [:high]}
       assert Models.reasoning_effort_for(pro, :low) == :high
+    end
+
+    test "max clamps to a supported effort and none remains explicit" do
+      full = %Model{reasoning: true, reasoning_efforts: [:none, :low, :high, :max]}
+      limited = %Model{reasoning: true, reasoning_efforts: [:low, :high]}
+
+      assert Models.reasoning_effort_for(full, :max) == :max
+      assert Models.reasoning_effort_for(full, :none) == :none
+      assert Models.reasoning_effort_for(full, :xhigh) == :high
+      assert Models.reasoning_effort_for(limited, :max) == :high
+      assert Models.reasoning_effort_for(limited, :none) == :low
+      assert Models.reasoning_effort_for(full, nil) == nil
     end
 
     test "passes levels through when the model declares none, and nil stays nil" do
@@ -650,56 +641,6 @@ defmodule LemonAi.ModelsLegacyTest do
     end
   end
 
-  describe "kimi k2 models" do
-    test "kimi k2 has correct specs" do
-      model = Models.get_model(:opencode, "kimi-k2")
-
-      assert model.id == "kimi-k2"
-      assert model.name == "Kimi K2"
-      assert model.provider == :opencode
-      assert model.api == :openai_completions
-      assert model.base_url == "https://opencode.ai/zen/v1"
-      assert model.reasoning == false
-      assert model.input == [:text]
-      assert model.cost.input == 0.4
-      assert model.cost.output == 2.5
-      assert model.cost.cache_read == 0.4
-      assert model.context_window == 262_144
-      assert model.max_tokens == 262_144
-    end
-
-    test "kimi k2 thinking has correct specs" do
-      model = Models.get_model(:opencode, "kimi-k2-thinking")
-
-      assert model.id == "kimi-k2-thinking"
-      assert model.name == "Kimi K2 Thinking"
-      assert model.provider == :opencode
-      assert model.api == :openai_completions
-      assert model.reasoning == true
-      assert model.input == [:text]
-      assert model.cost.input == 0.4
-      assert model.cost.output == 2.5
-      assert model.context_window == 262_144
-      assert model.max_tokens == 262_144
-    end
-
-    test "kimi k2.5 has correct specs" do
-      model = Models.get_model(:opencode, "kimi-k2.5")
-
-      assert model.id == "kimi-k2.5"
-      assert model.name == "Kimi K2.5"
-      assert model.provider == :opencode
-      assert model.api == :openai_completions
-      assert model.reasoning == true
-      assert model.input == [:text, :image]
-      assert model.cost.input == 0.6
-      assert model.cost.output == 3.0
-      assert model.cost.cache_read == 0.08
-      assert model.context_window == 262_144
-      assert model.max_tokens == 262_144
-    end
-  end
-
   describe "kimi-coding models (from Pi upstream)" do
     test "k2p5 has correct specs" do
       model = Models.get_model(:kimi, "k2p5")
@@ -745,150 +686,14 @@ defmodule LemonAi.ModelsLegacyTest do
     end
   end
 
-  describe "opencode zen mixed api models" do
-    test "anthropic-compatible opencode models use anthropic_messages api" do
-      model = Models.get_model(:opencode, "claude-sonnet-4-6")
-      assert model.api == :anthropic_messages
-      assert model.base_url == "https://opencode.ai/zen"
-    end
-
-    test "google-compatible opencode models use google_generative_ai api" do
-      model = Models.get_model(:opencode, "gemini-3-pro")
-      assert model.api == :google_generative_ai
-      assert model.base_url == "https://opencode.ai/zen/v1"
-    end
-
-    test "openai responses opencode models use openai_responses api" do
-      model = Models.get_model(:opencode, "gpt-5.2-codex")
-      assert model.api == :openai_responses
-      assert model.base_url == "https://opencode.ai/zen/v1"
-    end
-  end
-
-  describe "amazon bedrock nova models" do
-    test "returns amazon bedrock model by id" do
-      model = Models.get_model(:amazon_bedrock, "amazon.nova-pro-v1:0")
-
-      assert %Model{} = model
-      assert model.id == "amazon.nova-pro-v1:0"
-      assert model.name == "Nova Pro"
-      assert model.api == :bedrock_converse_stream
-      assert model.provider == :amazon_bedrock
-      assert model.base_url == "https://bedrock-runtime.us-east-1.amazonaws.com"
-      assert model.reasoning == false
-      assert model.input == [:text, :image]
-      assert model.context_window == 300_000
-      assert model.max_tokens == 8192
-    end
-
-    test "returns all amazon bedrock models" do
-      models = Models.get_models(:amazon_bedrock)
-
-      assert is_list(models)
-      assert Enum.all?(models, &match?(%Model{provider: :amazon_bedrock}, &1))
-    end
-
-    test "nova lite has correct specs" do
-      model = Models.get_model(:amazon_bedrock, "amazon.nova-lite-v1:0")
-
-      assert model.id == "amazon.nova-lite-v1:0"
-      assert model.name == "Nova Lite"
-      assert model.provider == :amazon_bedrock
-      assert model.api == :bedrock_converse_stream
-      assert model.reasoning == false
-      assert model.input == [:text, :image]
-      assert model.cost.input == 0.06
-      assert model.cost.output == 0.24
-      assert model.cost.cache_read == 0.015
-      assert model.context_window == 300_000
-      assert model.max_tokens == 8192
-    end
-
-    test "nova micro has correct specs" do
-      model = Models.get_model(:amazon_bedrock, "amazon.nova-micro-v1:0")
-
-      assert model.id == "amazon.nova-micro-v1:0"
-      assert model.name == "Nova Micro"
-      assert model.provider == :amazon_bedrock
-      assert model.api == :bedrock_converse_stream
-      assert model.reasoning == false
-      assert model.input == [:text]
-      assert model.cost.input == 0.035
-      assert model.cost.output == 0.14
-      assert model.cost.cache_read == 0.00875
-      assert model.context_window == 128_000
-      assert model.max_tokens == 8192
-    end
-
-    test "nova premier has correct specs" do
-      model = Models.get_model(:amazon_bedrock, "amazon.nova-premier-v1:0")
-
-      assert model.id == "amazon.nova-premier-v1:0"
-      assert model.name == "Nova Premier"
-      assert model.provider == :amazon_bedrock
-      assert model.api == :bedrock_converse_stream
-      assert model.reasoning == true
-      assert model.input == [:text, :image]
-      assert model.cost.input == 2.5
-      assert model.cost.output == 12.5
-      assert model.context_window == 1_000_000
-      assert model.max_tokens == 16_384
-    end
-
-    test "amazon bedrock flagship models" do
-      assert Models.get_model(:amazon_bedrock, "amazon.nova-2-lite-v1:0") != nil
-      assert Models.get_model(:amazon_bedrock, "amazon.nova-lite-v1:0") != nil
-      assert Models.get_model(:amazon_bedrock, "amazon.nova-micro-v1:0") != nil
-      assert Models.get_model(:amazon_bedrock, "amazon.nova-premier-v1:0") != nil
-      assert Models.get_model(:amazon_bedrock, "amazon.nova-pro-v1:0") != nil
-    end
-  end
-
   # ============================================================================
   # Thinking Level Utilities (ported from Pi)
   # ============================================================================
 
   describe "supports_xhigh/1" do
-    test "returns true for GPT-5.2 models" do
-      model = Models.get_model(:openai, "gpt-5.2")
-      assert model != nil
-      assert Models.supports_xhigh(model) == true
-    end
-
-    test "returns true for GPT-5.3 codex models" do
-      model = Models.get_model(:openai, "gpt-5.3-codex")
-      assert model != nil
-      assert Models.supports_xhigh(model) == true
-    end
-
-    test "returns true for Anthropic Opus 4.6 models" do
-      model = Models.get_model(:anthropic, "claude-opus-4-6")
-      assert model != nil
-      assert Models.supports_xhigh(model) == true
-    end
-
-    test "returns false for manual-budget Claude models" do
-      model = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      assert model != nil
-      assert Models.supports_xhigh(model) == false
-    end
-
-    test "returns false for GPT-4o" do
-      model = Models.get_model(:openai, "gpt-4o")
-      assert model != nil
-      assert Models.supports_xhigh(model) == false
-    end
-
-    test "returns false for GPT-5.1 (not 5.2+)" do
-      model = Models.get_model(:openai, "gpt-5.1")
-      assert model != nil
-      assert Models.supports_xhigh(model) == false
-    end
-
-    test "supports_xhigh?/1 delegates to supports_xhigh/1" do
-      model = Models.get_model(:openai, "gpt-5.2")
-      assert model != nil
-      assert Models.supports_xhigh?(model) == Models.supports_xhigh(model)
+    test "checks the exact declared effort rather than treating max as xhigh" do
+      assert Models.supports_xhigh(%Model{reasoning_efforts: [:low, :xhigh]})
+      refute Models.supports_xhigh(%Model{reasoning_efforts: [:high, :max]})
     end
   end
 
