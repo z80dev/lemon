@@ -6,6 +6,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [0.2.1] - 2026-11-05
+
 ### Added
 
 - `LemonAi.Auth.AnthropicOAuth` implements Claude Pro/Max sign-in natively:
