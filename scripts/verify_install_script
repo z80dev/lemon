@@ -47,9 +47,10 @@ Checks:
   - lemon_bot installs independently of the native runtime, validates archive
     layout and manifest identity/size/digest, and rejects failed or incorrect
     binary version probes before changing the live backend pointer
-  - the combined bot preset stages and verifies both artifacts before promotion;
-    backend download, verification, rename, and pointer failures preserve both
-    live pointers and restore replaced same-version trees
+  - the combined bot preset includes the TUI by default (LEMON_NO_TUI=1 opts out),
+    hands off to lemon setup --use browser, and stages and verifies both products
+    before promotion; backend download, verification, rename, and pointer failures
+    preserve both live pointers and restore replaced same-version trees
 EOF
   exit 2
 }
@@ -246,7 +247,8 @@ case "${1:-}" in
     if [ -f "$run_dir/lemon.pid" ]; then echo running; else echo stopped; fi
     ;;
   setup)
-    printf 'setup\n' >> "$home_dir/setup-invocations"
+    [ "$#" = 1 ] || [ "$*" = "setup --use browser" ] || exit 2
+    printf '%s\n' "$*" >> "$home_dir/setup-invocations"
     cat > "$fixture_config" <<'CONFIG'
 [defaults]
 provider = "fixture"
@@ -941,8 +943,10 @@ explicit_home="$work_dir/home-channel-explicit"
 mkdir -p "$explicit_home"
 if run_install "$work_dir/install-bot-3.log" "$explicit_home" "$base_url" \
   LEMON_VERSION=9999.6.0 LEMON_CHANNEL=preview -- --require-bot &&
-  [ -x "$explicit_home/.lemon/versions/9999.6.0/bin/lemon" ]; then
-  ok "an explicit channel matching the pinned manifest installs"
+  [ -x "$explicit_home/.lemon/versions/9999.6.0/bin/lemon" ] &&
+  [ ! -e "$explicit_home/.lemon/versions/9999.6.0/tui" ] &&
+  [ ! -e "$explicit_home/.local/bin/lemon-bot" ]; then
+  ok "--require-bot alone installs the matching pinned runtime without TUI or backend"
 else
   fail "explicit matching preview channel did not install"
   cat "$work_dir/install-bot-3.log" >&2
@@ -1580,6 +1584,13 @@ SERVER
         runtime_name = f"lemon-{version}-stable-{platform}-lemon_runtime_full.tar.gz"
         runtime = (
             '#!/bin/sh\n'
+            'if [ "${1:-}" = setup ]; then\n'
+            '  [ "$*" = "setup --use browser" ] || exit 2\n'
+            '  mkdir -p "$HOME/.lemon"\n'
+            '  printf "%s\\n" "$*" >> "$HOME/.lemon/setup-invocations"\n'
+            '  [ "${LEMON_FIXTURE_SETUP_FAIL:-0}" != 1 ] || exit 1\n'
+            '  exit 0\n'
+            'fi\n'
             'if [ "$1" = node ]; then\n'
             '  [ "$2 $3 $4 $5 $6" = "capabilities --json --require-bot --expected-version '
             + version + '" ] || exit 1\n'
@@ -1597,6 +1608,18 @@ SERVER
             "os": os_name, "arch": arch, "size": len(data),
             "sha256": hashlib.sha256(data).hexdigest(),
         })
+        tui_name = f"lemon-{version}-stable-{platform}-lemon_tui.tar.gz"
+        tui = f'#!/bin/sh\nprintf "lemon-tui {version}\\n"\n'.encode()
+        with tarfile.open(dest / tui_name, "w:gz") as archive:
+            entry = tarfile.TarInfo("tui/bin/lemon-tui")
+            entry.size, entry.mode = len(tui), 0o755
+            archive.addfile(entry, io.BytesIO(tui))
+        data = (dest / tui_name).read_bytes()
+        manifest["artifacts"].append({
+            "file": tui_name, "profile": "lemon_tui", "platform": platform,
+            "os": os_name, "arch": arch, "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        })
         (dest / "manifest.json").write_text(json.dumps(manifest))
         return url
 
@@ -1605,12 +1628,32 @@ SERVER
     combined = publish_combined("combined")
     result = install(combined, "--profile", "bot")
     require(result.returncode == 0, f"combined preset installs: {result.stdout.decode()}")
+    runtime_tree = home / f".lemon/versions/{version}"
     require(os.readlink(home / ".lemon/versions/current") == version and
             os.readlink(root / "current") == f"versions/{version}-stable-{platform}" and
-            not (home / f".lemon/versions/{version}/tui").exists(),
-            "combined preset installs same-version runtime and backend without TUI")
-    require(result.stdout.decode().splitlines().count(f"Run: {launcher}") == 1 and
-            "Next:" not in result.stdout.decode(), "combined preset prints exactly one absolute next step")
+            os.access(runtime_tree / "tui/bin/lemon-tui", os.X_OK),
+            "combined preset installs same-version runtime, backend, and executable TUI by default")
+    next_step = f'Next: "{home}/.lemon/bin/lemon" setup --use browser'
+    require(result.stdout.decode().splitlines().count(next_step) == 1 and
+            "Run:" not in result.stdout.decode() and not (home / ".lemon/setup-invocations").exists(),
+            "--skip-setup combined preset prints exactly one absolute browser setup next step")
+    sentinel = runtime_tree / "reuse-sentinel"
+    sentinel.write_text("keep installed TUI")
+    require(install(combined, "--profile", "bot").returncode == 0 and sentinel.exists(),
+            "combined preset reuses an installed runtime with its TUI")
+    no_tui_home = work / "home-combined-no-tui"
+    no_tui_env = {"HOME": str(no_tui_home), "LEMON_NO_TUI": "1"}
+    result = install(combined, "--profile", "bot", extra_env=no_tui_env)
+    no_tui_tree = no_tui_home / f".lemon/versions/{version}"
+    require(result.returncode == 0 and (no_tui_tree / "bin/lemon").exists() and
+            (no_tui_home / ".local/bin/lemon-bot").exists() and not (no_tui_tree / "tui").exists(),
+            "LEMON_NO_TUI=1 combined preset installs runtime and backend without TUI")
+    (no_tui_tree / "reuse-sentinel").write_text("keep runtime without TUI")
+    result = install(combined, "--profile", "bot", extra_env={"HOME": str(no_tui_home)})
+    require(result.returncode == 0 and (no_tui_tree / "reuse-sentinel").exists() and
+            not (no_tui_tree / "tui").exists() and
+            "already installed without the terminal UI" in result.stdout.decode(),
+            "combined preset missing a wanted TUI reuses the runtime and suggests --force")
     require(install(combined, "--profile", "bot", "--resolve-version").stdout.decode().strip().endswith(version),
             "combined preset supports version resolution")
     old_runtime = os.readlink(home / ".lemon/versions/current")
@@ -1705,6 +1748,59 @@ then
   ok "backend installer behavioral and security cases"
 else
   fail "backend installer behavioral or security cases"
+fi
+
+# The committed combined preset uses the same setup handoff as full/min, with
+# Browser preselected. These installs exercise real terminal availability.
+combined_tty_home="$work_dir/home-combined-tty"
+mkdir -p "$combined_tty_home"
+if run_install_with_tty "$work_dir/install-combined-tty.log" "$combined_tty_home" "$base_url/combined" \
+  -- --profile bot --no-modify-path &&
+  [ "$(setup_count "$combined_tty_home")" = "1" ] &&
+  grep -Fqx "setup --use browser" "$combined_tty_home/.lemon/setup-invocations"; then
+  ok "interactive combined preset invokes absolute lemon setup --use browser once"
+else
+  fail "interactive combined preset did not hand off to browser setup"
+  cat "$work_dir/install-combined-tty.log" >&2
+fi
+
+if run_install_with_tty "$work_dir/install-combined-setup-failure.log" "$combined_tty_home" "$base_url/combined" \
+  LEMON_FIXTURE_SETUP_FAIL=1 -- --profile bot --no-modify-path; then
+  fail "combined preset ignored a failed setup handoff"
+elif [ -x "$combined_tty_home/.lemon/versions/current/bin/lemon" ] &&
+  [ -x "$combined_tty_home/.lemon/lemon_bot/current/bot/bin/lemon-bot" ] &&
+  grep -Fq "Re-run: $combined_tty_home/.lemon/bin/lemon setup --use browser" \
+    "$work_dir/install-combined-setup-failure.log"; then
+  ok "failed combined setup preserves the committed install and prints the browser retry command"
+else
+  fail "failed combined setup lost the install or correct retry command"
+  cat "$work_dir/install-combined-setup-failure.log" >&2
+fi
+
+combined_skip_home="$work_dir/home-combined-skip-setup"
+mkdir -p "$combined_skip_home"
+if run_install_with_tty "$work_dir/install-combined-skip-setup.log" "$combined_skip_home" "$base_url/combined" \
+  -- --profile bot --skip-setup --no-modify-path &&
+  [ "$(setup_count "$combined_skip_home")" = "0" ] &&
+  grep -Fq "Next: \"$combined_skip_home/.lemon/bin/lemon\" setup --use browser" \
+    "$work_dir/install-combined-skip-setup.log"; then
+  ok "--skip-setup combined preset leaves setup uninvoked and prints the browser next step on a TTY"
+else
+  fail "--skip-setup combined preset did not preserve the browser next step on a TTY"
+  cat "$work_dir/install-combined-skip-setup.log" >&2
+fi
+
+combined_no_tty_home="$work_dir/home-combined-no-tty"
+mkdir -p "$combined_no_tty_home"
+if run_install "$work_dir/install-combined-no-tty.log" "$combined_no_tty_home" "$base_url/combined" \
+  -- --profile bot --no-modify-path &&
+  [ "$(setup_count "$combined_no_tty_home")" = "0" ] &&
+  grep -Fqx "Next: \"$combined_no_tty_home/.lemon/bin/lemon\" setup --use browser" \
+    "$work_dir/install-combined-no-tty.log"; then
+  ok "non-TTY combined preset prints the exact browser setup next step without invoking setup"
+else
+  fail "non-TTY combined preset did not preserve the browser setup handoff"
+  cat "$work_dir/install-combined-no-tty.log" >&2
 fi
 
 echo

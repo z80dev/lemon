@@ -61,7 +61,9 @@ Usage:
   sh install.sh --resolve-version
 
 Options:
-  --profile NAME  Select full, min, bot (runtime + backend), or lemon_bot (backend only).
+  --profile NAME  Select full, min, bot (runtime + Lemon Bot backend + TUI),
+                  or lemon_bot (backend only). The bot preset finishes with
+                  \`lemon setup --use browser\`.
   --force         Reinstall even if the target version is already present.
   --verify        Boot on ephemeral ports, then stop. Native: poll /healthz.
                   Backend: check /v1/setup and web before promotion.
@@ -73,8 +75,9 @@ Options:
   --skip-setup    Do not start the interactive provider setup wizard after
                   installing. Run \$HOME/.lemon/bin/lemon setup later to
                   configure Lemon.
-  --require-bot   Install only a bot-capable native runtime (full or min; never the
-                  lemon_bot backend or the TUI). The staged runtime must pass
+  --require-bot   Without the bot preset, install only a bot-capable native runtime
+                  (full or min; never the lemon_bot backend or the TUI).
+                  The staged runtime must pass
                   \`lemon node capabilities --json --require-bot\` and report the
                   manifest version before anything is promoted.
   --resolve-version
@@ -855,8 +858,12 @@ setup_handoff() {
     info "Setup skipped."
   elif (exec </dev/tty) 2>/dev/null; then
     info ""
-    if ! "$BIN_DIR/lemon" setup </dev/tty; then
-      die "Lemon setup did not complete. The runtime remains installed at $TARGET_DIR. Re-run: $BIN_DIR/lemon setup"
+    set -- setup
+    if [ "$BOT_PRESET" = "1" ]; then
+      set -- "$@" --use browser
+    fi
+    if ! "$BIN_DIR/lemon" "$@" </dev/tty; then
+      die "Lemon setup did not complete. The runtime remains installed at $TARGET_DIR. Re-run: $BIN_DIR/lemon $*"
     fi
     SETUP_DONE=1
   else
@@ -872,7 +879,11 @@ finish() {
   if [ "$PROFILE" = "lemon_bot" ]; then
     info "Next: \"$BIN_DIR/lemon-bot\""
   elif [ "$SETUP_DONE" = "0" ]; then
-    info "Next: \"$BIN_DIR/lemon\" setup"
+    if [ "$BOT_PRESET" = "1" ]; then
+      info "Next: \"$BIN_DIR/lemon\" setup --use browser"
+    else
+      info "Next: \"$BIN_DIR/lemon\" setup"
+    fi
   elif [ -x "$CURRENT_LINK/tui/bin/lemon-tui" ]; then
     info "Next: \"$BIN_DIR/lemon\""
   else
@@ -887,13 +898,12 @@ artifact_line="$(select_artifact "$manifest_file" "$PROFILE")" || exit 1
 
 # The TUI is a second, optional artifact in the same manifest: a separate
 # per-platform tarball that unpacks into tui/ next to the runtime's bin/.
-# LEMON_NO_TUI=1 opts out, and a bot worker host (--require-bot) is headless.
+# LEMON_NO_TUI=1 opts out. A bot worker host (--require-bot without the
+# combined bot preset) is headless, while the combined preset includes the TUI.
 WANT_TUI=1
-if [ "$PROFILE" = "lemon_bot" ] || [ "${LEMON_NO_TUI:-0}" = "1" ] || [ "$REQUIRE_BOT" = "1" ]; then
+if [ "$PROFILE" = "lemon_bot" ] || [ "${LEMON_NO_TUI:-0}" = "1" ] ||
+  { [ "$REQUIRE_BOT" = "1" ] && [ "$BOT_PRESET" != "1" ]; }; then
   WANT_TUI=0
-fi
-if [ "$BOT_PRESET" = "1" ] && [ "$PROFILE" != "lemon_bot" ] && [ "${LEMON_NO_TUI:-1}" = "0" ]; then
-  WANT_TUI=1
 fi
 
 tui_line=""
@@ -946,9 +956,6 @@ REUSE_PROFILE=1
 if [ "$BOT_PRESET" = "1" ] && [ "$PROFILE" != "lemon_bot" ]; then
   if [ ! -f "$TARGET_DIR/.installer-profile" ] ||
     [ "$(cat "$TARGET_DIR/.installer-profile")" != "$PROFILE" ]; then
-    REUSE_PROFILE=0
-  fi
-  if [ "$WANT_TUI" = "0" ] && [ -d "$TARGET_DIR/tui" ]; then
     REUSE_PROFILE=0
   fi
 fi
@@ -1232,15 +1239,11 @@ else
 fi
 rm -f "$manifest_file"
 if [ "$BOT_PRESET" = "1" ]; then
-  if [ "$SKIP_SETUP" != "1" ] && (exec </dev/tty) 2>/dev/null; then
-    # Hand over the real terminal device: macOS kqueue cannot poll the /dev/tty
-    # alias, so the backend's raw-mode prompt would never receive input.
-    terminal_device=/dev/$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')
-    [ -c "$terminal_device" ] || terminal_device=/dev/tty
-    exec "$HOME/.local/bin/lemon-bot" <"$terminal_device"
-  fi
-  info "Run: $HOME/.local/bin/lemon-bot"
-else
-  setup_handoff
-  finish
+  PROFILE=lemon_runtime_full
+  configure_layout
+  TARGET_DIR="$VERSIONS_DIR/$VERSION"
+  PATH_NOTE=""
+  path_hint
 fi
+setup_handoff
+finish
