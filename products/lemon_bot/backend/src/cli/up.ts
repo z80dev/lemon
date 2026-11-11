@@ -171,7 +171,10 @@ export async function runUpCli(args: string[], dependencies: UpDependencies = de
     const local = isLoopback(new URL(config.controlUrl).hostname);
     if (local && d.terminal.interactive) {
       emit('setup', 'running');
-      const setup = await d.spawn(launcher, ['setup', '--if-required'], { attached: true, diagnostics: json });
+      // A missing model never blocks the Bot path: the browser offers "Connect a model".
+      // Runtimes older than the flag reject it as a usage error (64); rerun them without it.
+      let setup = await d.spawn(launcher, ['setup', '--if-required', '--model-optional'], { attached: true, diagnostics: json });
+      if (setup.exitCode === 64) setup = await d.spawn(launcher, ['setup', '--if-required'], { attached: true, diagnostics: json });
       if (setup.exitCode !== 0) { emit('setup', 'failed', 'setup_required'); return finish('setup_required'); }
       emit('setup', 'ok');
     } else emit('setup', 'skipped', local ? 'non_interactive' : 'remote_controller');
