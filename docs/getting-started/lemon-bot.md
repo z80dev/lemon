@@ -23,21 +23,18 @@ from the coding dashboard opened by `lemon web`.
 
 ## A. Mac app
 
-**Distribution status:** the DMG build/sign/notarize pipeline exists, but without
-Developer ID and notary credentials it produces only an **unsigned CI preview**,
-not a notarized GitHub Release download. Use [path B](#b-terminal-and-browser)
-for a published Terminal installation today, or the
+**Build from source today:** no signed DMG is published yet. Follow the
 [Apple source-build guide](https://github.com/z80dev/lemon/blob/main/products/lemon_bot/apple/README.md#generate-build-and-launch)
-for development (Xcode 27.2 also works). Do not treat an unsigned preview as a
-signed production release.
+to build and launch the app. For a published Terminal installation instead, use
+[path B](#b-terminal-and-browser).
 
-With a packaged app available:
-
-1. Move **Lemon Bot.app** to `/Applications` or `~/Applications`, then open it.
-2. Choose **Set up Lemon Bot on this Mac**. The app installs missing, pinned
-   runtime/backend components, starts user services, signs in using this Mac's
-   private local key, and connects this Mac as an execution machine. There is no
-   owner form or invite-code copy/paste for this local path.
+1. Install the runtime/backend using [path B](#b-terminal-and-browser) if they
+   are not already installed, then open your source-built **Lemon Bot** app.
+2. In **This Mac**, choose **Connect**. It starts Lemon Bot if needed and signs
+   you in with this Mac's private local key: no owner form or setup-code
+   copy/paste. A packaged app with pinned installation assets can instead show
+   **Set up Lemon Bot on this Mac** when components are missing; this is not a
+   signed download available today.
 3. Choose **Create a Bot**. In its model step, connect a model on the selected
    Mac, or explicitly skip for now. A skipped model leaves a reminder: the Bot
    cannot reply until you connect one. See [Model readiness](#model-readiness).
@@ -49,6 +46,9 @@ With a packaged app available:
 Setup does not request blanket macOS privacy permissions. A later protected-file
 or desktop-control task may need permission on the execution Mac; use the app's
 Permissions controls when that task needs it.
+
+Ad-hoc-signed development builds can ask for Keychain access again after each
+rebuild. Signed releases won't have this rebuild-specific prompt.
 
 ## B. Terminal and browser
 
@@ -69,21 +69,32 @@ off to `lemon-bot`; if it only prints a next step, run that absolute path:
 "$HOME/.local/bin/lemon-bot"
 ```
 
-This is `lemon-bot` even if the current shell has not picked up the new PATH.
-It checks the runtime, offers model setup (or **Skip — set it up in the browser**),
-installs controller/backend/worker user services, creates the local owner and
-enrolls this computer. It then opens your browser already signed in and exits;
-you do not keep a backend terminal open when services are available.
+Follow the terminal prompts:
 
-The browser shows **Create your first Bot**. Choose **Create a Bot**, finish or
-skip the selected machine's model step, keep **Standard** access, review the
-shared-account consent and create it. The only online machine is preselected.
+1. At **Which Lemon should Lemon Bot use?**, choose **This machine**.
+2. In **Connect a model**, use the detected Codex CLI login if offered (confirm
+   copying it into Lemon), choose a provider, or choose
+   **Skip — set it up in the browser**.
+3. Pick a model. Lemon performs a live, non-generating readiness check; it does
+   not send a chat message.
+4. Setup installs controller/backend/worker user services, creates the owner
+   without a form, and enrolls this computer as a supervised worker. On macOS,
+   persistence is **login**, not boot.
+
+The browser opens already signed in. On a Mac the notice is **Unlocked by your
+Mac login**. At **Create your first Bot**, choose **Create a Bot** and enter a
+name; the only online machine is preselected. Keep **Standard** access
+(Terminal + Files; asks before commands), or choose **Chat only** to leave tools
+off. If you skipped model setup, connect it here before expecting a reply.
 Then try [Your first tool task](#your-first-tool-task).
 
-The local-owner notice explains that this workspace is unlocked by your OS
-login. Adding an email/password in **Settings → Account** is optional for this
-local flow; add one if you want password sign-in from another device. Never copy
-the local-access key or controller operator token into a browser.
+You do not keep the setup terminal open. If interrupted, resume with
+`lemon-bot up`; to reopen an existing workspace signed in, use `lemon-bot open`.
+Adding an email/password in **Settings → Account** is optional for this local
+flow. Never copy the local-access key or controller operator token into a browser.
+
+All default listeners bind `127.0.0.1`: controller **4040**, node-only gateway
+**4044**, coding web dashboard **4080**, and Lemon Bot **4100**.
 
 ### Headless or SSH server
 
@@ -208,11 +219,12 @@ What's this computer's hostname and OS version? Use a terminal command, without 
 supported. Machine limits and workspace policy still apply. It does not grant
 blanket permission to run commands without review.
 
-Read the concrete command in the approval card, then choose **Allow once**.
-Where policy permits, **Allow Terminal for this chat** remembers Terminal approval
-for that conversation; it is not permission for every Bot or future chat. Resolved
-cards show the decision instead of leaving active Allow/Deny buttons. A reply
-containing the command's output is the success check—not just an online badge.
+Read the concrete command in the approval card, then choose **Allow once**,
+**Allow Terminal for this chat**, or **Deny**. The chat allowance remembers
+Terminal approval for this conversation, not every Bot or future chat. Use
+**Stop allowing** on its chip to revoke it. Resolved cards show the decision
+instead of active buttons. A reply containing the command's output is the
+success check—not just an online badge.
 
 For offline or reauthorization states, use **Machines → Reconnect**; the Mac
 app's host-repair controls can recover its own host. For update and removal,

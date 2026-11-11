@@ -170,9 +170,9 @@ cards and permissions and Lemon owns the coding session. See the
 `lemon gateway setup telegram` or `lemon gateway setup discord`. See
 [Set up Lemon](../user-guide/setup.md#optional-telegram-or-discord).
 
-**Lemon Bot:** use the native Mac app or its separate browser product. The DMG
-pipeline exists, but only unsigned CI previews are available until release
-signing credentials are configured. Follow [Lemon Bot in 3 minutes](lemon-bot.md).
+**Lemon Bot:** install the browser product with the one-command Bot preset, or
+build the native Mac app from source. No signed DMG is published yet.
+Follow [Lemon Bot in 3 minutes](lemon-bot.md) for either path.
 
 ## 4. Grow the workflow, not the setup ceremony
 

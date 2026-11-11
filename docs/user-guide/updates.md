@@ -339,7 +339,14 @@ Execute by repeating the same flags with the digest from the preview:
 
 ```bash
 lemon uninstall --confirm <digest>
-lemon uninstall --purge --confirm <digest>   # also deletes ~/.lemon and secrets
+```
+
+To delete data and secrets too, obtain a separate purge preview and use **its**
+digest; the non-purge digest cannot authorize this:
+
+```bash
+lemon uninstall --purge
+lemon uninstall --purge --confirm <purge-digest>
 ```
 
 Add `--json` to either form for a machine-readable preview or result. For
@@ -411,7 +418,8 @@ To stop supervising Lemon without removing the program, remove the units and
 keep everything else:
 
 ```bash
-lemon service uninstall controller backend worker
+lemon service uninstall controller backend
+lemon service uninstall worker --name NAME
 ```
 
 This boots out / disables each unit, deletes the plist or unit file, reloads the

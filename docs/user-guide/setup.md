@@ -281,9 +281,11 @@ overrides elsewhere use the `provider:model` form.
 
 The installer picks the profile: full by default, minimal with
 `sh install.sh --profile min`. Setup never asks about ports unless one is
-taken. The full runtime uses 4040 (control plane) and 4080 (web UI); the
-minimal runtime uses only 4040. If another program already listens on one of
-them, setup offers the next free port (`Use 4041 instead? [Y/n]`). Declining
+taken. Default listeners bind `127.0.0.1`: 4040 (control plane), 4044
+(node-only gateway), 4080 (full runtime web UI), and 4100 (separately installed
+Lemon Bot backend). The minimal runtime has no web UI. If another program
+already listens on a setup-managed port, setup offers the next free port
+(`Use 4041 instead? [Y/n]`). Declining
 lets you enter a port; non-interactive setup takes the suggestion
 automatically. Ports held by an already running Lemon are left alone.
 
