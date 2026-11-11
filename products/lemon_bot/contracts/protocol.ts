@@ -160,20 +160,20 @@ export interface AgentMessageReceipt { messageId: ID; sourceId: ID; targetId: ID
 export interface AgentMessageSend extends Mutation { target: string; text: string; conversationId?: ID }
 export interface MessageAgentInput extends Mutation { target: string; text: string }
 export interface Bot extends Resource { ownerUserId: ID; machineId: ID; profileId: string; name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; language: string | null; skillIds: ID[]; referenceAttachmentIds: ID[]; mainConversationId: ID; sidebar: SidebarState; activity: BotPresence['status']; activeRunIds: ID[]; agentHandle?: string | null; agentAddress?: ID }
-export interface BotCreate extends Mutation { name: string; machineId: ID; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; skillIds?: ID[]; templateId?: ID }
+export interface BotCreate extends Mutation { name: string; machineId: ID; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; skillIds?: ID[]; templateId?: ID; access?: 'standard' | 'none' }
 export interface BotUpdate extends Update { name?: string; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; skillIds?: ID[]; referenceAttachmentIds?: ID[] }
-export interface BotDuplicate extends Mutation { name: string; machineId: ID; includeSkills: boolean; includeRoutines: boolean }
+export interface BotDuplicate extends Mutation { name: string; machineId: ID; includeSkills: boolean; includeRoutines: boolean; access?: 'standard' | 'none' }
 export interface BotMove extends Confirm { machineId: ID }
 export interface SidebarUpdate extends Update { pinned?: boolean; hidden?: boolean; sectionId?: ID | null; rank?: number; unread?: boolean; notificationsEnabled?: boolean }
 export interface AvatarGenerate extends Mutation { prompt: string }
 export interface Section extends Resource { userId: ID; name: string; rank: number; collapsed: boolean }
 export interface SectionCreate extends Mutation { name: string; rank?: number }
 export interface SectionUpdate extends Update { name?: string; rank?: number; collapsed?: boolean }
-export interface TemplateContent { name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; skills: { name: string; description: string; markdown: string }[]; routines: RoutineSpec[]; connectorNames: string[] }
+export interface TemplateContent { name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; skills: { name: string; description: string; markdown: string }[]; routines: RoutineSpec[]; connectorNames: string[]; suggestedAccess?: 'standard' | 'none' }
 export interface BotTemplate extends Resource { ownerUserId: ID; audience: 'workspace' | 'public'; sourceBotId: ID | null; content: TemplateContent; provenance: { publisher: string; sourceUrl: string | null; termsUrl: string | null; thirdParty: boolean }; shareUrl: string }
 export interface TemplateCreate extends Mutation { botId: ID; audience: BotTemplate['audience']; reviewed: true }
 export interface TemplateUpdate extends Update { audience?: BotTemplate['audience']; content?: TemplateContent; reviewed: true }
-export interface TemplateImport extends Mutation { name: string; machineId: ID; acceptedTerms: boolean }
+export interface TemplateImport extends Mutation { name: string; machineId: ID; acceptedTerms: boolean; access?: 'standard' | 'none' }
 export type ConversationKind = 'dm' | 'task' | 'group' | 'channel';
 /** One human owner only. Groups contain 2–6 Bots all owned by ownerUserId, never other humans. */
 export interface Conversation extends Resource { kind: ConversationKind; name: string; botIds: ID[]; ownerUserId: ID; parentConversationId: ID | null; leadBotId: ID | null; channelBindingId: ID | null; lastEntryId: ID | null; unreadCount: number; lastReadSeq: number; activity: { botId: ID; phase: 'reading' | 'working' | 'typing' }[] }

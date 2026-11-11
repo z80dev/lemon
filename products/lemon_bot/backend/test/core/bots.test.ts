@@ -5,6 +5,7 @@ import type { BackendServices, Principal, Route } from '../../src/core/services'
 import { ApiError } from '../../src/core/errors';
 import { createBotRoutes, baseBotMcpConfig, syncBotProfile, createBotService, syncBotPolicyFloor, productBotTools, assertWorkspaceRestrictionManagement } from '../../src/core/bots';
 import { createConversationRoutes } from '../../src/core/conversations';
+import { effectiveBotGrants } from '../../src/core/experiences';
 import { createResourceRoutes } from '../../src/core/resources';
 import { authFixture, routeContext } from './auth.test';
 
@@ -35,7 +36,7 @@ const projectedProductTools = [
   { name: 'update_preferences', executionName: 'mcp_lemon_bot_update_preference_f55d35c688fc2ca9a6d77f7bb3c75d94' },
   { name: 'create_reminder', executionName: 'mcp_lemon_bot_create_reminder_d1a7af45016ffbce56b89af97037eae8' },
 ];
-function fixture() {
+function fixture(items: P.MachineCapabilities['items'] = []) {
   const f = authFixture();
   f.services.config.publicUrl = fixturePublicUrl;
   const calls: Call[] = [];
@@ -80,7 +81,7 @@ function fixture() {
       else if (method === 'runs.active.list') value = { runs: [], filters: { profileId: params.profileId, limit: params.limit }, ...(nativePresence ? { presence: nativePresence } : {}) };
       else if (method === 'node.profile.paths') value = { nodeId: params.nodeId, profileId: params.profileId, workspacePath: `/worker/profiles/${params.profileId}/workspace`, skillsPath: `/worker/profiles/${params.profileId}/workspace/.lemon/skill` };
       else if (method === 'nodes.list') value = { nodes: f.store.list<P.Machine>('machines', machine => !params.nodeId || machine.nodeId === params.nodeId).map(machine => ({ id: machine.nodeId, status: machine.status, capabilities: ['node.capabilities.get'] })), summary: { presenceAvailable: true, truncated: false } };
-      else if (method === 'node.capabilities.get') value = { nodeId: params.nodeId, os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [] };
+      else if (method === 'node.capabilities.get') value = { nodeId: params.nodeId, os: 'linux', measuredAtMs: f.services.now(), stale: false, items };
       else if (method === 'node.host.info') value = { defaultCwd: '/home/lemon' };
       else if (method === 'node.fs.stat') {
         const file = hostFiles.get(`${params.nodeId}:${params.path}`);
@@ -209,6 +210,92 @@ describe('bot authority and viewer state', () => {
     await expect(f.request('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce('raw_credential'), revision: bot.revision, headers: { Authorization: 'not-permitted' } })).rejects.toMatchObject({ code: 'invalid_request' });
     expect(f.calls).toHaveLength(0); expect(f.store.require<P.Bot>('bots', bot.id).name).toBe(bot.name);
   });
+});
+
+function standardCapabilities(): P.MachineCapabilities['items'] {
+  return [
+    { id: 'terminal', name: 'Terminal', category: 'shell', tools: ['bash', 'bash_output', 'kill_process'] },
+    { id: 'files', name: 'Files', category: 'files', tools: ['read', 'write', 'edit'] },
+    { id: 'browser', name: 'Browser', category: 'browser', tools: ['browser_snapshot', 'browser_click'] },
+  ].map(item => ({ ...item, supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', reason: 'measured', measuredAtMs: 1700000000000, stale: false })) as P.MachineCapabilities['items'];
+}
+const standardRequested = { terminal: 'read_interact', files: 'read_interact', browser: 'read_only' };
+function requestedLevels(f: Pick<BackendServices, 'store'>, botId?: string) {
+  return Object.fromEntries(f.store.list<P.BotGrant>('botGrants', grant => !botId || grant.botId === botId).map(grant => [grant.capabilityId, grant.requestedLevel]));
+}
+describe('creation access consent and first-run policy', () => {
+  test('Standard persists requested grants before the first policy projection and profile synchronization', async () => {
+    const f = fixture(standardCapabilities());
+    let policyProjected = false;
+    f.fail(method => {
+      if (method === 'mcp.execution_names' || method === 'profiles.create' || method === 'profiles.sync') {
+        expect(requestedLevels(f)).toEqual(standardRequested);
+        policyProjected = true;
+      }
+    });
+    const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce('standard'), name: 'Lemon', machineId: 'machine', access: 'standard' });
+    expect(policyProjected).toBe(true);
+    const policy = f.calls.find(call => call.method === 'profiles.create')!.params.toolPolicy as { allow: string[]; deny: string[]; require_approval: string[] };
+    expect(policy.allow).toContain('bash'); expect(policy.require_approval).toContain('bash');
+    expect(policy.allow).toContain('write'); expect(policy.allow).toContain('browser_snapshot'); expect(policy.deny).toContain('browser_click');
+    for (const grant of f.store.list<P.BotGrant>('botGrants', grant => grant.botId === bot.id)) {
+      expect(grant.id).toBe(`grant_${f.services.mutations.digest({ botId: bot.id, machineId: bot.machineId, capabilityId: grant.capabilityId }).slice(0, 48)}`);
+      expect(grant.effectiveLevel).toBe('off');
+    }
+  });
+  test('Standard keeps machine and workspace ceilings without reducing requested consent', async () => {
+    for (const denied of [false, true]) {
+      const items = standardCapabilities();
+      items[1]!.configuredLevel = 'read_only'; items[2]!.osGrant = 'denied';
+      const f = fixture(items), effective = f.services.integrations.effectivePolicy;
+      if (denied) f.services.integrations.effectivePolicy = async (actor, botId) => ({ ...await effective(actor, botId), localExecutionCeiling: 'deny' });
+      const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce(`capped_${denied}`), name: 'Capped', machineId: 'machine', access: 'standard' });
+      const grants = await effectiveBotGrants(f.services, f.alice, bot);
+      expect(requestedLevels(f, bot.id)).toEqual(standardRequested);
+      expect(Object.fromEntries(grants.map(grant => [grant.capabilityId, grant.effectiveLevel]))).toEqual({ terminal: denied ? 'off' : 'read_interact', files: denied ? 'off' : 'read_only', browser: 'off' });
+      const policy = f.calls.find(call => call.method === 'profiles.create')!.params.toolPolicy as { allow: string[]; deny: string[] };
+      expect(policy.deny).toContain('write'); expect(policy.deny).toContain('browser_snapshot');
+      expect(policy.allow.includes('bash')).toBe(!denied);
+    }
+  });
+  test('unknown and unsupported capabilities are skipped without failing creation', async () => {
+    const items = standardCapabilities();
+    items[0]!.supported = false; items.push({ ...items[1]!, id: 'unrecognized-files' });
+    const f = fixture(items);
+    const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce('unsupported'), name: 'Portable', machineId: 'machine', access: 'standard' });
+    expect(requestedLevels(f, bot.id)).toEqual({ terminal: 'off', files: 'read_interact', browser: 'read_only', 'unrecognized-files': 'off' });
+  });
+  for (const access of [undefined, 'none'] as const) {
+    test(`${access ?? 'omitted'} access keeps all grants off`, async () => {
+      const f = fixture(standardCapabilities());
+      const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce(`off_${access}`), name: 'Chat only', machineId: 'machine', ...(access ? { access } : {}) });
+      expect(requestedLevels(f, bot.id)).toEqual({ terminal: 'off', files: 'off', browser: 'off' });
+      const policy = f.calls.find(call => call.method === 'profiles.create')!.params.toolPolicy as { deny: string[] };
+      expect(policy.deny).toContain('bash');
+    });
+  }
+  for (const mode of ['json', 'duplicate', 'template', 'templateId'] as const) {
+    for (const access of ['standard', 'none', undefined] as const) {
+      test(`${mode} creation honors ${access ?? 'omitted'} access rather than template suggestions`, async () => {
+        const f = fixture(standardCapabilities()), source = f.bot();
+        const content = await f.request<P.TemplateContent>('GET', `/v1/bots/${source.id}/export`, undefined);
+        content.suggestedAccess = access === 'standard' ? 'none' : 'standard';
+        const template: P.BotTemplate = f.services.resource('template', { ownerUserId: 'alice', audience: 'workspace', sourceBotId: source.id, content, provenance: { publisher: 'Alice', sourceUrl: null, termsUrl: null, thirdParty: false }, shareUrl: `${fixturePublicUrl}/template` });
+        f.store.put('templates', template);
+        const input = { clientNonce: nonce(`copy_${mode}_${access}`), name: 'Copy', machineId: 'destination', ...(access ? { access } : {}) };
+        const bot = mode === 'json'
+          ? await f.request<P.Bot>('POST', '/v1/bots/import', { ...input, content, acceptedTerms: true })
+          : mode === 'duplicate'
+            ? await f.request<P.Bot>('POST', `/v1/bots/${source.id}/duplicate`, { ...input, includeSkills: false, includeRoutines: false })
+            : mode === 'template'
+              ? await f.request<P.Bot>('POST', `/v1/templates/${template.id}/import`, { ...input, acceptedTerms: true })
+              : await f.request<P.Bot>('POST', '/v1/bots', { ...input, templateId: template.id });
+        expect(requestedLevels(f, bot.id)).toEqual(access === 'standard' ? standardRequested : { terminal: 'off', files: 'off', browser: 'off' });
+        const policy = f.calls.find(call => call.method === 'profiles.create')!.params.toolPolicy as { allow: string[] };
+        expect(policy.allow.includes('bash')).toBe(access === 'standard');
+      });
+    }
+  }
 });
 
 describe('acknowledged bot provisioning and placement', () => {

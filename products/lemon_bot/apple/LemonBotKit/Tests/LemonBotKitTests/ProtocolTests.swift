@@ -2,6 +2,31 @@ import XCTest
 @testable import LemonBotKit
 
 final class ProtocolTests: XCTestCase {
+    func testCreationAccessPreservesExplicitConsentAndLegacyOmission() throws {
+        for access in [nil, "standard", "none"] as [String?] {
+            let create = BotCreate(clientNonce: "creation_nonce_1234", name: "Lemon", machineId: "machine", access: access)
+            let duplicate = BotDuplicate(clientNonce: "duplicate_nonce_1234", name: "Copy", machineId: "machine", includeSkills: false, includeRoutines: false, access: access)
+            let templateImport = TemplateImport(clientNonce: "template_nonce_1234", name: "Imported", machineId: "machine", acceptedTerms: true, access: access)
+            XCTAssertEqual(try JSONDecoder().decode(BotCreate.self, from: JSONEncoder().encode(create)).access, access)
+            XCTAssertEqual(try JSONDecoder().decode(BotDuplicate.self, from: JSONEncoder().encode(duplicate)).access, access)
+            XCTAssertEqual(try JSONDecoder().decode(TemplateImport.self, from: JSONEncoder().encode(templateImport)).access, access)
+            for data in [try JSONEncoder().encode(create), try JSONEncoder().encode(duplicate), try JSONEncoder().encode(templateImport)] {
+                let wire = try JSONDecoder().decode(JSONObject.self, from: data)
+                XCTAssertEqual(wire["access"], access.map(JSONValue.string))
+            }
+        }
+        let legacy = Data(#"{"clientNonce":"creation_nonce_1234","name":"Lemon","machineId":"machine"}"#.utf8)
+        XCTAssertNil(try JSONDecoder().decode(BotCreate.self, from: legacy).access)
+        XCTAssertThrowsError(try JSONDecoder().decode(BotCreate.self, from: Data(#"{"clientNonce":"creation_nonce_1234","name":"Lemon","machineId":"machine","access":"unrestricted"}"#.utf8)))
+    }
+    func testTemplateSuggestedAccessIsOptionalDeclarativeContent() throws {
+        var content = TemplateContent(name: "Lemon", title: "", job: "", instructions: "", avatar: Avatar(kind: "character", shape: "round", color: "yellow"), voice: VoiceSettings(voiceId: "default", speed: 1), skills: [], routines: [], connectorNames: [])
+        XCTAssertNil(try JSONDecoder().decode(TemplateContent.self, from: JSONEncoder().encode(content)).suggestedAccess)
+        content.suggestedAccess = "standard"
+        XCTAssertEqual(try JSONDecoder().decode(TemplateContent.self, from: JSONEncoder().encode(content)).suggestedAccess, "standard")
+        let wire = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(content))
+        XCTAssertNil(wire["access"])
+    }
     func testEveryDeclaredCardRoundTripsWithExactDiscriminator() throws {
         let cards = try JSONDecoder().decode([Card].self, from: WireFixtures.cards)
         let reencoded = try JSONEncoder().encode(cards)

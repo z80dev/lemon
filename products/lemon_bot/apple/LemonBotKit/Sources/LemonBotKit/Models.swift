@@ -2782,7 +2782,8 @@ public struct BotCreate: Codable, Hashable {
     public var `language`: String??
     public var `skillIds`: [ID]?
     public var `templateId`: ID?
-    public init(clientNonce: String, name: String, machineId: ID, title: String? = nil, job: String? = nil, instructions: String? = nil, avatar: Avatar? = nil, voice: VoiceSettings? = nil, language: String?? = nil, skillIds: [ID]? = nil, templateId: ID? = nil) {
+    public var `access`: String?
+    public init(clientNonce: String, name: String, machineId: ID, title: String? = nil, job: String? = nil, instructions: String? = nil, avatar: Avatar? = nil, voice: VoiceSettings? = nil, language: String?? = nil, skillIds: [ID]? = nil, templateId: ID? = nil, access: String? = nil) {
         self.`clientNonce` = clientNonce
         self.`name` = name
         self.`machineId` = machineId
@@ -2794,8 +2795,9 @@ public struct BotCreate: Codable, Hashable {
         self.`language` = language
         self.`skillIds` = skillIds
         self.`templateId` = templateId
+        self.`access` = access
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `machineId`, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `skillIds`, `templateId` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `machineId`, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `skillIds`, `templateId`, `access` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
@@ -2809,6 +2811,8 @@ public struct BotCreate: Codable, Hashable {
         self.`language` = c.contains(.`language`) ? .some(try c.decodeIfPresent(String.self, forKey: .`language`)) : nil
         self.`skillIds` = try c.decodeOptional([ID].self, forKey: .`skillIds`)
         self.`templateId` = try c.decodeOptional(ID.self, forKey: .`templateId`)
+        self.`access` = try c.decodeOptional(String.self, forKey: .`access`)
+        if let access, !["standard", "none"].contains(access) { throw DecodingError.dataCorruptedError(forKey: .`access`, in: c, debugDescription: "Invalid BotCreate.access") }
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -2823,6 +2827,7 @@ public struct BotCreate: Codable, Hashable {
         if let value = `language` { try c.encode(value, forKey: .`language`) }
         try c.encodeIfPresent(`skillIds`, forKey: .`skillIds`)
         try c.encodeIfPresent(`templateId`, forKey: .`templateId`)
+        try c.encodeIfPresent(`access`, forKey: .`access`)
     }
 }
 
@@ -2888,14 +2893,16 @@ public struct BotDuplicate: Codable, Hashable {
     public var `machineId`: ID
     public var `includeSkills`: Bool
     public var `includeRoutines`: Bool
-    public init(clientNonce: String, name: String, machineId: ID, includeSkills: Bool, includeRoutines: Bool) {
+    public var `access`: String?
+    public init(clientNonce: String, name: String, machineId: ID, includeSkills: Bool, includeRoutines: Bool, access: String? = nil) {
         self.`clientNonce` = clientNonce
         self.`name` = name
         self.`machineId` = machineId
         self.`includeSkills` = includeSkills
         self.`includeRoutines` = includeRoutines
+        self.`access` = access
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `machineId`, `includeSkills`, `includeRoutines` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `machineId`, `includeSkills`, `includeRoutines`, `access` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
@@ -2903,6 +2910,8 @@ public struct BotDuplicate: Codable, Hashable {
         self.`machineId` = try c.decode(ID.self, forKey: .`machineId`)
         self.`includeSkills` = try c.decode(Bool.self, forKey: .`includeSkills`)
         self.`includeRoutines` = try c.decode(Bool.self, forKey: .`includeRoutines`)
+        self.`access` = try c.decodeOptional(String.self, forKey: .`access`)
+        if let access, !["standard", "none"].contains(access) { throw DecodingError.dataCorruptedError(forKey: .`access`, in: c, debugDescription: "Invalid BotDuplicate.access") }
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -2911,6 +2920,7 @@ public struct BotDuplicate: Codable, Hashable {
         try c.encode(`machineId`, forKey: .`machineId`)
         try c.encode(`includeSkills`, forKey: .`includeSkills`)
         try c.encode(`includeRoutines`, forKey: .`includeRoutines`)
+        try c.encodeIfPresent(`access`, forKey: .`access`)
     }
 }
 
@@ -3121,7 +3131,8 @@ public struct TemplateContent: Codable, Hashable {
     public var `skills`: [TemplateContentSkills]
     public var `routines`: [RoutineSpec]
     public var `connectorNames`: [String]
-    public init(name: String, title: String, job: String, instructions: String, avatar: Avatar, voice: VoiceSettings, skills: [TemplateContentSkills], routines: [RoutineSpec], connectorNames: [String]) {
+    public var `suggestedAccess`: String?
+    public init(name: String, title: String, job: String, instructions: String, avatar: Avatar, voice: VoiceSettings, skills: [TemplateContentSkills], routines: [RoutineSpec], connectorNames: [String], suggestedAccess: String? = nil) {
         self.`name` = name
         self.`title` = title
         self.`job` = job
@@ -3131,8 +3142,9 @@ public struct TemplateContent: Codable, Hashable {
         self.`skills` = skills
         self.`routines` = routines
         self.`connectorNames` = connectorNames
+        self.`suggestedAccess` = suggestedAccess
     }
-    enum CodingKeys: String, CodingKey { case `name`, `title`, `job`, `instructions`, `avatar`, `voice`, `skills`, `routines`, `connectorNames` }
+    enum CodingKeys: String, CodingKey { case `name`, `title`, `job`, `instructions`, `avatar`, `voice`, `skills`, `routines`, `connectorNames`, `suggestedAccess` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`name` = try c.decode(String.self, forKey: .`name`)
@@ -3144,6 +3156,8 @@ public struct TemplateContent: Codable, Hashable {
         self.`skills` = try c.decode([TemplateContentSkills].self, forKey: .`skills`)
         self.`routines` = try c.decode([RoutineSpec].self, forKey: .`routines`)
         self.`connectorNames` = try c.decode([String].self, forKey: .`connectorNames`)
+        self.`suggestedAccess` = try c.decodeOptional(String.self, forKey: .`suggestedAccess`)
+        if let suggestedAccess, !["standard", "none"].contains(suggestedAccess) { throw DecodingError.dataCorruptedError(forKey: .`suggestedAccess`, in: c, debugDescription: "Invalid TemplateContent.suggestedAccess") }
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -3156,6 +3170,7 @@ public struct TemplateContent: Codable, Hashable {
         try c.encode(`skills`, forKey: .`skills`)
         try c.encode(`routines`, forKey: .`routines`)
         try c.encode(`connectorNames`, forKey: .`connectorNames`)
+        try c.encodeIfPresent(`suggestedAccess`, forKey: .`suggestedAccess`)
     }
 }
 
@@ -3279,19 +3294,23 @@ public struct TemplateImport: Codable, Hashable {
     public var `name`: String
     public var `machineId`: ID
     public var `acceptedTerms`: Bool
-    public init(clientNonce: String, name: String, machineId: ID, acceptedTerms: Bool) {
+    public var `access`: String?
+    public init(clientNonce: String, name: String, machineId: ID, acceptedTerms: Bool, access: String? = nil) {
         self.`clientNonce` = clientNonce
         self.`name` = name
         self.`machineId` = machineId
         self.`acceptedTerms` = acceptedTerms
+        self.`access` = access
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `machineId`, `acceptedTerms` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `machineId`, `acceptedTerms`, `access` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
         self.`name` = try c.decode(String.self, forKey: .`name`)
         self.`machineId` = try c.decode(ID.self, forKey: .`machineId`)
         self.`acceptedTerms` = try c.decode(Bool.self, forKey: .`acceptedTerms`)
+        self.`access` = try c.decodeOptional(String.self, forKey: .`access`)
+        if let access, !["standard", "none"].contains(access) { throw DecodingError.dataCorruptedError(forKey: .`access`, in: c, debugDescription: "Invalid TemplateImport.access") }
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -3299,6 +3318,7 @@ public struct TemplateImport: Codable, Hashable {
         try c.encode(`name`, forKey: .`name`)
         try c.encode(`machineId`, forKey: .`machineId`)
         try c.encode(`acceptedTerms`, forKey: .`acceptedTerms`)
+        try c.encodeIfPresent(`access`, forKey: .`access`)
     }
 }
 

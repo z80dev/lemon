@@ -110,6 +110,28 @@ export async function machineCapabilities(s: BackendServices, user: Principal, m
   s.store.put('machineCapabilities', { ...result, id: machineId });
   return result;
 }
+function requestedGrant(s: BackendServices, bot: P.Bot, capabilityId: string, requestedLevel: P.AccessLevel): P.BotGrant {
+  return { ...s.resource('grant', { botId: bot.id, machineId: bot.machineId, capabilityId, requestedLevel, effectiveLevel: 'off' as const, reasons: [] as string[] }), id: `grant_${s.mutations.digest({ botId: bot.id, machineId: bot.machineId, capabilityId }).slice(0, 48)}` };
+}
+/** Creation consent sets requested access only; ordinary machine and policy ceilings still apply. */
+export async function initializeBotAccess(s: BackendServices, user: Principal, bot: P.Bot, access: P.BotCreate['access']): Promise<P.MachineCapabilities | undefined> {
+  assertBotOwner(user, bot);
+  if (access !== 'standard') return;
+  const measured = await machineCapabilities(s, user, bot.machineId, bot);
+  const standard: Record<string, { category: P.MachineCapabilities['items'][number]['category']; level: P.AccessLevel }> = {
+    terminal: { category: 'shell', level: 'read_interact' },
+    files: { category: 'files', level: 'read_interact' },
+    browser: { category: 'browser', level: 'read_only' },
+  };
+  s.store.transaction(() => {
+    for (const capability of measured.items) {
+      const preset = standard[capability.id];
+      if (!preset || !capability.supported || capability.category !== preset.category) continue;
+      s.store.put('botGrants', requestedGrant(s, bot, capability.id, preset.level));
+    }
+  });
+  return measured;
+}
 export async function effectiveBotGrants(s: BackendServices, user: Principal, bot: P.Bot, capabilities?: P.MachineCapabilities): Promise<P.BotGrant[]> {
   assertBotOwner(user, bot);
   const measured = capabilities ?? await machineCapabilities(s, user, bot.machineId, bot);
@@ -141,7 +163,7 @@ function projectEffectiveBotGrants(s: BackendServices, user: Principal, bot: P.B
   return inventory.map(cap => {
     let stored = persisted.find(value => value.capabilityId === cap.id);
     if (!stored) {
-      stored = { ...s.resource('grant', { botId: bot.id, machineId: bot.machineId, capabilityId: cap.id, requestedLevel: 'off' as const, effectiveLevel: 'off' as const, reasons: [] as string[] }), id: `grant_${s.mutations.digest({ botId: bot.id, machineId: bot.machineId, capabilityId: cap.id }).slice(0, 48)}` };
+      stored = requestedGrant(s, bot, cap.id, 'off');
       s.store.put('botGrants', stored);
     }
     const requestedLevel = stored?.requestedLevel ?? 'off';
