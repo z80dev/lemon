@@ -6,7 +6,7 @@ defmodule LemonCore.LoopbackListenerTest do
   @v4 {127, 0, 0, 1}
   @v6 {0, 0, 0, 0, 0, 0, 0, 1}
   @server {@v4, 4044}
-  @client {@v4, 55000}
+  @client {@v4, 55_000}
 
   @tag :tmp_dir
   test "Linux listener checks match exact address, family and port", %{tmp_dir: root} do
@@ -30,7 +30,7 @@ defmodule LemonCore.LoopbackListenerTest do
     write_proc(root, [
       row(@server, @client, 1000),
       row(@server, @client, 1001, "01"),
-      row(@server, {@v4, 55001}, 1000, "01"),
+      row(@server, {@v4, 55_001}, 1000, "01"),
       row(@client, @server, 1000, "01")
     ])
 
@@ -48,10 +48,10 @@ defmodule LemonCore.LoopbackListenerTest do
   test "Linux IPv6 established tuple is exact", %{tmp_dir: root} do
     opts = [os_type: {:unix, :linux}, uid: 1000, proc_root: root]
     server = {@v6, 4044}
-    client = {@v6, 55000}
+    client = {@v6, 55_000}
     write_proc(root, [], [row(server, client, 1000, "01")])
     assert :owned = LoopbackListener.connection_owned_by_self?(client, server, opts)
-    assert :absent = LoopbackListener.connection_owned_by_self?({@v6, 55001}, server, opts)
+    assert :absent = LoopbackListener.connection_owned_by_self?({@v6, 55_001}, server, opts)
   end
 
   @tag :tmp_dir

@@ -368,9 +368,8 @@ defmodule CodingAgent.WorkspaceReads do
   end
 
   defp regular_target_exempt?(path, cwd, root, opts) do
-    with {:ok, target} <- resolve_real(path, cwd, opts) do
-      strictly_inside?(target, root) and single_linked_file?(target)
-    else
+    case resolve_real(path, cwd, opts) do
+      {:ok, target} -> strictly_inside?(target, root) and single_linked_file?(target)
       _ -> false
     end
   end
@@ -379,9 +378,8 @@ defmodule CodingAgent.WorkspaceReads do
     do: match?({:ok, %File.Stat{type: :regular, links: 1}}, File.stat(target))
 
   defp listed_target_exempt?(path, cwd, root) do
-    with {:ok, target} <- resolve_real(path, cwd, []) do
-      File.dir?(target) and inside_or_equal?(target, root)
-    else
+    case resolve_real(path, cwd, []) do
+      {:ok, target} -> File.dir?(target) and inside_or_equal?(target, root)
       _ -> false
     end
   end
