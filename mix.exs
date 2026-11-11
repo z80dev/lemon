@@ -286,7 +286,8 @@ defmodule Lemon.MixProject do
     for link <- symlinks(target), do: File.rm!(link)
 
     case symlinks(target) do
-      [] -> release
+      # Mix's :tar step only packages standard release paths and registered overlays.
+      [] -> %{release | overlays: Enum.uniq(["python" | release.overlays])}
       links -> Mix.raise("bundled python still contains symlinks:\n#{Enum.join(links, "\n")}")
     end
   end

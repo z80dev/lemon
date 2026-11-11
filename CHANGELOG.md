@@ -10,6 +10,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Include bundled Python in the actual darwin runtime tarballs, not just the
+  assembly directory, and reject archives missing its interpreter or licenses.
 - Add a shell-only supervised reverse SSH tunnel for second-machine node gateway
   and Lemon Bot access, with private status, credential-free SSH environments,
   stale same-user sshd cleanup and terminal host-key/auth/forwarding failures.
