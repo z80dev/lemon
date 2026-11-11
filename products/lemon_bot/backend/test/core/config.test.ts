@@ -19,7 +19,7 @@ test('with no settings the backend attaches to the Lemon runtime on this machine
   const { config, controllerSource } = await loadConfiguration({ HOME });
   expect(controllerSource).toBe('default');
   expect(config).toMatchObject({
-    dataDir: join(HOME, '.lemon', 'lemon_bot'), host: '127.0.0.1', port: 4100, publicUrl: 'http://127.0.0.1:4100',
+    dataDir: join(HOME, '.lemon', 'lemon_bot'), host: '127.0.0.1', port: 4100, publicUrl: 'http://127.0.0.1:4100', loopbackOrigin: 'http://127.0.0.1:4100',
     controlUrl: 'ws://127.0.0.1:4040/ws', operatorToken: '', operatorTokenFile: join(HOME, '.lemon', 'run', 'control-plane-4040.token'),
     runtimeLauncher: launcher,
   });
@@ -58,6 +58,14 @@ test('a saved remote choice is used, keeps its token encrypted, and yields to ex
 test('a non-loopback listener needs an explicit public origin', () => {
   expect(() => localSettings({ HOME: '/unused', LEMON_BOT_HOST: '0.0.0.0' })).toThrow('LEMON_BOT_PUBLIC_URL is required');
   expect(localSettings({ HOME: '/unused', LEMON_BOT_HOST: '0.0.0.0', LEMON_BOT_PUBLIC_URL: 'https://desktop.example' }).publicUrl.origin).toBe('https://desktop.example');
+});
+
+test('remote public URLs retain the exact loopback listener origin but DNS listeners do not', async () => {
+  const HOME = await home();
+  expect((await loadConfiguration({ HOME, LEMON_BOT_PUBLIC_URL: 'https://desktop.example' })).config.loopbackOrigin).toBe('http://127.0.0.1:4100');
+  expect((await loadConfiguration({ HOME, LEMON_BOT_HOST: '::1', LEMON_BOT_PUBLIC_URL: 'https://desktop.example' })).config.loopbackOrigin).toBe('http://[::1]:4100');
+  expect((await loadConfiguration({ HOME, LEMON_BOT_HOST: 'localhost' })).config.loopbackOrigin).toBeNull();
+  expect((await loadConfiguration({ HOME, LEMON_BOT_HOST: '0.0.0.0', LEMON_BOT_PUBLIC_URL: 'https://desktop.example' })).config.loopbackOrigin).toBeNull();
 });
 
 test('the managed credential must be a private 0600 file with a launcher-format token', async () => {

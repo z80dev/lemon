@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import type * as P from '../../../contracts/protocol';
 import { createBackend, type BackendInstance } from '../../src/index';
 import { loadConfiguration } from '../../src/core/config';
-import { opaqueToken } from '../../src/core/auth';
+import { opaqueToken, localConfirmedUntil } from '../../src/core/auth';
 import { issueOwnerSetupProof } from '../../src/core/setup';
 import { localAccessPath } from '../../src/core/local-access';
 
@@ -58,6 +58,7 @@ describe('same-machine local access', () => {
     expect(owner.workspace.ownerUserId).toBe(owner.user.id);
     expect(owner.session.expiresAtMs).not.toBeNull();
     expect(f.backend.services.store.get('credentials', owner.user.id)).toBeNull();
+    expect(localConfirmedUntil(f.backend.services.store, owner.session.id, f.backend.services.now())).toBeGreaterThan(f.backend.services.now() + 599_000);
     expect(f.backend.services.store.metadata('setupCode')).toBeNull();
     expect((await f.identity(owner.token)).status).toBe(200);
     const setup = await f.backend.router.fetch(new Request(`${f.backend.services.config.publicUrl}/v1/setup`));

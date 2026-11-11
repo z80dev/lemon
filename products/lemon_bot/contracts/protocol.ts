@@ -38,8 +38,21 @@ export interface SetupRequest extends Mutation { setupCode: string; email: strin
 export interface LoginRequest extends Mutation { email: string; password: string; deviceId?: ID }
 /** Sent with `Authorization: Bearer <DATA_DIR/local-access.key>`; signs in as (or creates) the workspace owner. */
 export interface LocalAccessRequest { displayName?: string }
+/** One-use local sign-in ticket from `lemon-bot open`, taken from the `#lemonbot-signin=` URL fragment. */
+export interface LocalTicketRedeem { ticket: string }
+/** Own sign-in methods. `localOwner` is non-null only for the current workspace owner (the local key signs in as that owner). */
+export interface SignInMethods {
+  password: boolean;
+  email: string;
+  emailIsPlaceholder: boolean;
+  localOwner: { platform: 'macos' | 'linux' | 'other'; hostName: string; osUser: string } | null;
+  /** This session may add a first password or reauthenticate locally until then; null when not locally confirmed or stale. */
+  localConfirmedUntilMs: TimestampMs | null;
+}
+/** First password for an account that has none (e.g. the passwordless local owner). */
+export interface PasswordCreate extends Mutation { email: string; password: string }
 export interface AcceptInviteRequest extends Mutation { inviteToken: string; email: string; password: string; displayName: string }
-export interface ReauthRequest { password: string }
+export type ReauthRequest = { password: string } | { local: true };
 export interface ReauthResult { reauthToken: string; expiresAtMs: TimestampMs }
 export interface UserUpdate extends Update { displayName?: string; email?: string; avatarAttachmentId?: ID | null; preferences?: Preferences; notifications?: NotificationPreferences }
 export interface PasswordUpdate extends Mutation { currentPassword: string; newPassword: string }
@@ -676,14 +689,17 @@ export interface RestEndpoints {
   'POST /setup': Endpoint<SetupRequest, AuthResult>;
   'POST /auth/login': Endpoint<LoginRequest, AuthResult>;
   'POST /auth/local': Endpoint<LocalAccessRequest, AuthResult>;
+  'POST /auth/local/redeem': Endpoint<LocalTicketRedeem, AuthResult>;
   'POST /auth/invites/accept': Endpoint<AcceptInviteRequest, AuthResult>;
   'POST /auth/reauth': Endpoint<ReauthRequest, ReauthResult>;
   'GET /auth/sessions': Endpoint<undefined, Page<AuthSession>, PageQuery>;
   'DELETE /auth/sessions/:id': Endpoint<Mutation, Deleted>;
   'POST /auth/logout': Endpoint<Mutation, Empty>;
   'GET /me': Endpoint<undefined, User>;
+  'GET /me/sign-in': Endpoint<undefined, SignInMethods>;
   'PATCH /me': Endpoint<UserUpdate, User>;
   'PUT /me/password': Endpoint<PasswordUpdate, Empty>;
+  'POST /me/password': Endpoint<PasswordCreate, User>;
   'POST /me/preview': Endpoint<PreviewRequest, Confirmation>;
   'DELETE /me': Endpoint<AccountDelete, Deleted>;
   'GET /workspace': Endpoint<undefined, Workspace>;

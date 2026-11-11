@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { chmod } from 'node:fs/promises';
+import { chmod, mkdir } from 'node:fs/promises';
 import { closeSync, openSync, writeSync } from 'node:fs';
 import type { Server } from 'bun';
 import type { BackendConfiguration, BackendServices } from './core/services';
@@ -7,6 +7,7 @@ import type { Policies } from '../../contracts/protocol';
 import { loadConfiguration, createPrivateCodec, validateRuntimeLauncher, isLoopback, type ControllerSource } from './core/config';
 import { issueOwnerSetupProof } from './core/setup';
 import { ensureLocalAccessKey } from './core/local-access';
+import { handoffDirectory, sweepLocalSignIn } from './core/local-signin';
 import { terminal } from './cli/connect';
 import { prepareController } from './cli/lemon-runtime';
 import { Store } from './core/store';
@@ -52,6 +53,8 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   const store=new Store(join(config.dataDir,'product.sqlite'));
   await chmod(join(config.dataDir,'product.sqlite'),0o600);
   await ensureLocalAccessKey(config.dataDir);
+  await mkdir(handoffDirectory(config.dataDir),{recursive:true,mode:0o700});
+  await chmod(handoffDirectory(config.dataDir),0o700);
   const codec=createPrivateCodec(key);
   const sentinel=store.metadata<string>('encryptionKeyCheck');
   if(sentinel){if(codec.decrypt(sentinel)!=='lemon_bot_private_key_v1'){store.close();throw new Error('Product encryption key does not match existing private state.');}}
@@ -109,14 +112,14 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   };
   const removeConnected=lemon.onConnected(()=>{void reconcile();});
   const reconcileTimer=setInterval(()=>{void reconcile();},30000);
-  const retentionTimer=setInterval(()=>store.transaction(()=>{
+  const retentionTimer=setInterval(()=>{store.transaction(()=>{
     const now=services.now();store.db.query('DELETE FROM events WHERE timestamp_ms<?').run(now-7*86400000);
     store.db.query('DELETE FROM nonces WHERE created_at_ms<? AND state IN (\'complete\',\'failed\')').run(now-30*86400000);
     store.db.query('DELETE FROM confirmations WHERE expires_at_ms<?').run(now);
     store.db.query('DELETE FROM entities WHERE collection=\'pageCursors\' AND json_extract(value,\'$.expiresAtMs\')<=?').run(now);
     const auditRetentionDays=store.metadata<Policies>('policies')?.auditRetentionDays??90;
     store.db.query('DELETE FROM entities WHERE collection=\'auditRecords\' AND json_extract(value,\'$.createdAtMs\')<?').run(now-auditRetentionDays*86400000);
-  }),60000);
+  });void sweepLocalSignIn({store,now:services.now,digest:services.mutations.digest,dataDir:config.dataDir});},60000);
   reconcileTimer.unref();retentionTimer.unref();
   let server:Server<RealtimeData>|null=null;let stopped=false;
   return {

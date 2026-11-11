@@ -7,6 +7,7 @@
 - Creation/import/duplicate contracts accept explicit Standard or Chat-only `access`; templates can suggest access without granting it. Omitted access remains all-off.
 
 - Add target-local `ModelReadiness`/`DetectedLogin` models and typed check/import endpoints for controller and machines. Checks are non-generating; Codex login imports require explicit copy consent and retain nonce reconciliation.
+- Add typed local ticket redemption, own sign-in-method discovery, first-password creation and `{local:true}` reauthentication through the existing generic REST client.
 - Export the shared read-only Bot origin preflight and product/workspace identity validators. Strict pairing links now require an `instance` fingerprint alongside `backend`, `cluster` and `code`; three-key links are rejected.
 - Add shared typed `ProviderDeviceLoginRequest`, `ProviderDeviceLoginStatus` and safe `ProviderDeviceLogin` contracts plus canonical controller/named-machine start, poll and cancel REST keys. Start's fixed nonce is the login ID; polling and cancellation use that route ID with separate fixed nonces and reconcile fresh target state. No credential/token fields are exposed.
 - Instance status now includes build, channel details, provider credential health and explicit runtime actions/via; the shared wire fixture covers controller lifecycle and all credential states.
