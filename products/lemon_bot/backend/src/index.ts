@@ -10,6 +10,7 @@ import { ensureLocalAccessKey } from './core/local-access';
 import { handoffDirectory, sweepLocalSignIn } from './core/local-signin';
 import { terminal } from './cli/connect';
 import { prepareController } from './cli/lemon-runtime';
+import { deliverLocalSignIn, signInDeliveryDefaults, type SignInDeliveryDependencies } from './cli/open';
 import { Store } from './core/store';
 import { installHelpers } from './core/helpers';
 import { installSecretResolver } from './core/secrets';
@@ -160,6 +161,25 @@ function openInBrowser(url:string):void {
   if(!opener)return;
   try{Bun.spawn([opener,url],{stdin:'ignore',stdout:'ignore',stderr:'ignore'}).unref();}catch{/* No opener installed. */}
 }
+/** Only an interactive, unconfigured start offers owner proof. */
+export async function firstStartSignIn(
+  services: BackendServices,
+  io: { interactive: boolean; write(value: string): void },
+  options: { openBrowser?: boolean },
+  deps: SignInDeliveryDependencies = signInDeliveryDefaults,
+  legacy = { offer: offerOwnerSetup, open: openInBrowser },
+): Promise<void> {
+  if (!io.interactive || services.store.metadata('workspaceId') !== null) return;
+  const origin = services.config.loopbackOrigin;
+  if (!origin) {
+    legacy.offer(services);
+    if (options.openBrowser !== false) legacy.open(services.config.publicUrl);
+  } else if (options.openBrowser === false) {
+    io.write('Sign in from this computer: lemon-bot open (over SSH: lemon-bot open --headless)\n');
+  } else {
+    await deliverLocalSignIn({ store: services.store, now: services.now, digest: services.mutations.digest, dataDir: services.config.dataDir }, origin, { noWait: true }, deps);
+  }
+}
 export async function runBackend(options:{chooseLemon?:boolean;openBrowser?:boolean}={}):Promise<void> {
   let configuration:{config:BackendConfiguration;key:Uint8Array;controllerSource:ControllerSource};
   try {configuration=await loadConfiguration();}
@@ -175,9 +195,11 @@ export async function runBackend(options:{chooseLemon?:boolean;openBrowser?:bool
   const {lemon}=backend.services;
   lemon.onConnected(()=>{process.stdout.write(`Connected to Lemon at ${config.controlUrl}.\n`);});
   setTimeout(()=>{if(!lemon.connected)process.stdout.write(`Waiting for Lemon at ${config.controlUrl}: ${lemon.controller.lastError?.message??'still connecting.'}\n`);},5000).unref();
-  if(io.interactive&&backend.services.store.metadata('workspaceId')===null){
-    offerOwnerSetup(backend.services);
-    if(options.openBrowser!==false)openInBrowser(config.publicUrl);
+  await firstStartSignIn(backend.services, io, options);
+  const workspaceId = backend.services.store.metadata<string>('workspaceId');
+  const workspace = workspaceId ? backend.services.store.get<{ id: string; ownerUserId: string }>('workspaces', workspaceId) : null;
+  if (!isLoopback(new URL(config.publicUrl).hostname) && workspace && !backend.services.store.get('credentials', workspace.ownerUserId)) {
+    process.stdout.write(`Owner has no password yet: browsers on other computers can't sign in at ${config.publicUrl}. On this computer run lemon-bot open, then Settings → Account → Add email and password.\n`);
   }
   const shutdown=()=>{void backend.stop().then(()=>process.exit(0)).catch(()=>process.exit(1));};
   process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
