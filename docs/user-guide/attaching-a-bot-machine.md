@@ -5,6 +5,52 @@ existing controller; it is not a new controller, virtual machine, or desktop
 sandbox. You keep normal SSH, terminal, and filesystem access. Bots assigned to
 the same machine share its OS account, files, and browser logins.
 
+## Add a machine over SSH
+
+For a loopback-only controller, the backend on the controller host can maintain
+a reverse SSH link to the destination using your own SSH account and keys.
+Passwordless `ssh me@studio` must work from **the controller host**, which is not
+necessarily the Mac or browser you are using. A changed host key is never accepted
+automatically; verify the destination identity and update your known-hosts entry
+before reconnecting. New hosts use SSH's trust-on-first-use policy.
+
+The link forwards only the authenticated node gateway (normally 4044) and, when
+needed, the Lemon Bot backend (normally 4100), never the main control-plane port
+4040. Destination listeners bind `127.0.0.1`. The destination product port must be
+free; unrelated listeners are never stopped. A stale same-user sshd session that
+holds a requested forwarding port is terminated before opening the new link.
+Use a trusted OS account: other users with access to that account can read its
+worker credentials.
+
+For manual tunnel administration on the controller host:
+
+```bash
+lemon service install tunnel --name studio --ssh me@studio \
+  --node-port 4044 --gateway-port 4044 --product-port 4100 --backend-port 4100 \
+  --wait 15 --json
+lemon service status tunnel --name studio --json
+lemon service repair tunnel --name studio --json
+lemon service uninstall tunnel --name studio --json
+```
+
+This only establishes the transport; enrollment must use an invitation bound to
+`ws://127.0.0.1:4044/ws` on the destination. Choose another `--node-port` if needed;
+keep that exact URL for subsequent worker connections.
+
+The supervisor restarts network failures and dropped SSH sessions. Authentication
+failures, changed host keys and refused remote forwarding stop retries and appear
+as `ssh_auth_failed`, `host_key_changed` or `forward_refused`; fix the cause, then
+repair the tunnel service. Keys available only through an interactive SSH agent
+may need loading again after login. The service passes only an allowlisted
+environment to SSH, never Lemon tokens.
+
+`lemon tunnel run` is the shell-only foreground implementation used by the service.
+It writes private, atomically replaced state to
+`~/.lemon/run/service/tunnel-<name>.json`. It reports online after SSH survives five
+seconds; network errors exit 75 for the supervisor to restart, while terminal
+failures exit 0. The link works only while the controller host is awake and its
+tunnel service is running.
+
 ## Prepare the controller
 
 Keep the controller operator token on the controller or trusted application

@@ -31,6 +31,9 @@ while [ -L "$SCRIPT_PATH" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+case "${1:-}" in
+  tunnel) shift; exec "$LEMON_ROOT/rel/overlays/libexec/lemon-tunnel" "$@" ;;
+esac
 TUI_DIR="$LEMON_ROOT/clients/tui"
 LEMON_HOME_DIR="$HOME/.lemon"
 STATE_DIR="$LEMON_HOME_DIR/run"

@@ -1,0 +1,169 @@
+#!/bin/sh
+# Supervised reverse SSH transport. No runtime VM or credentials are needed.
+set -eu
+LC_ALL=C
+export LC_ALL
+umask 077
+
+usage() {
+  echo 'Usage: lemon tunnel run --name NAME --ssh DEST --node-port P --gateway-port G [--product-port Q --backend-port B]'
+}
+fail() { echo "lemon tunnel: $*" >&2; exit 2; }
+case "${1:-}" in
+  -h|--help|help) usage; exit 0 ;;
+  run) shift ;;
+  *) usage >&2; exit 2 ;;
+esac
+name= dest= node_port= gateway_port= product_port= backend_port=
+while [ "$#" -gt 0 ]; do
+  [ "$#" -ge 2 ] || fail "missing value for $1"
+  case "$1" in
+    --name) name=$2 ;;
+    --ssh) dest=$2 ;;
+    --node-port) node_port=$2 ;;
+    --gateway-port) gateway_port=$2 ;;
+    --product-port) product_port=$2 ;;
+    --backend-port) backend_port=$2 ;;
+    *) fail "unknown option $1" ;;
+  esac
+  shift 2
+done
+case "$name" in ''|[!A-Za-z0-9]*|*[!A-Za-z0-9_.-]*) fail 'invalid name' ;; esac
+[ "${#name}" -le 64 ] || fail 'invalid name'
+case "$dest" in ''|-*|@*|*@|*[!A-Za-z0-9._@:\[\]%-]*) fail 'invalid SSH destination' ;; esac
+[ "${#dest}" -le 255 ] || fail 'invalid SSH destination'
+port() {
+  case "$1" in ''|*[!0-9]*) fail 'ports must be integers from 1 to 65535' ;; esac
+  [ "${#1}" -le 5 ] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ] || fail 'ports must be integers from 1 to 65535'
+  # Canonical decimal avoids shell arithmetic interpreting a leading zero as octal.
+  printf '%s\n' "$1" | awk '{printf "%d", $0}'
+}
+node_port=$(port "$node_port")
+gateway_port=$(port "$gateway_port")
+if [ -n "$product_port$backend_port" ]; then
+  product_port=$(port "$product_port")
+  backend_port=$(port "$backend_port")
+  [ "$node_port" != "$product_port" ] || fail 'forwarded ports must be different'
+fi
+[ -n "${HOME:-}" ] || fail 'HOME is required'
+ssh_bin=$(command -v ssh) || { echo 'lemon tunnel: ssh is unavailable' >&2; exit 75; }
+state_dir=$HOME/.lemon/run/service
+mkdir -p "$state_dir"
+status_file=$state_dir/tunnel-$name.json
+work=$(mktemp -d "$state_dir/.tunnel-$name.XXXXXX")
+ssh_pid=
+cleanup() {
+  if [ -n "$ssh_pid" ]; then
+    kill "$ssh_pid" 2>/dev/null || :
+    wait "$ssh_pid" 2>/dev/null || :
+  fi
+  rm -rf "$work"
+}
+trap cleanup EXIT
+trap 'exit 0' HUP INT TERM
+status() {
+  detail=null
+  [ -z "$2" ] || detail="\"$2\""
+  printf '{"schema":1,"state":"%s","detail":%s,"sinceMs":%s000}\n' "$1" "$detail" "$(date +%s)" > "$work/status"
+  chmod 600 "$work/status"
+  mv -f "$work/status" "$status_file"
+}
+ssh_run() {
+  # Do not inherit LEMON_* (including tokens), even when SendEnv is configured.
+  set -- "$ssh_bin" -T -o BatchMode=yes -o ConnectTimeout=10 \
+    -o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+    -o ControlMaster=no -o ControlPath=none -o ForwardAgent=no \
+    -o ForwardX11=no -o PermitLocalCommand=no "$@"
+  if [ -n "${SSH_AUTH_SOCK:-}" ]; then set -- SSH_AUTH_SOCK="$SSH_AUTH_SOCK" "$@"; fi
+  if [ -n "${LOGNAME:-}" ]; then set -- LOGNAME="$LOGNAME" "$@"; fi
+  if [ -n "${USER:-}" ]; then set -- USER="$USER" "$@"; fi
+  exec env -i HOME="$HOME" PATH="$PATH" LC_ALL=C "$@"
+}
+classify() {
+  if grep -Eq 'REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed' "$work/stderr"; then
+    status failed host_key_changed; exit 0
+  elif grep -q 'Permission denied' "$work/stderr"; then
+    status failed ssh_auth_failed; exit 0
+  elif grep -q 'remote_port_in_use' "$work/stdout"; then
+    status reconnecting remote_port_in_use; exit 75
+  elif grep -Eiq 'remote port forwarding failed|administratively prohibited' "$work/stderr"; then
+    status failed forward_refused; exit 0
+  elif grep -Eiq 'Could not resolve|Connection refused|timed out|No route to host|Network is unreachable' "$work/stderr"; then
+    status reconnecting host_unreachable; exit 75
+  fi
+  status reconnecting ''
+  exit 75
+}
+status reconnecting ''
+# Only validated decimal ports enter this script's arguments. The optional proc
+# root is a remote fixture hook; it is never inherited by the local ssh process.
+reap_status=0
+(ssh_run -- "$dest" sh -s -- "$node_port" "$product_port") > "$work/stdout" 2> "$work/stderr" <<'REMOTE' || reap_status=$?
+set -eu
+uid=$(id -u)
+proc=${LEMON_TUNNEL_PROC_ROOT:-/proc}
+pids=
+busy() { echo remote_port_in_use; exit 75; }
+check_pid() {
+  pid=$1
+  owner=$(ps -p "$pid" -o uid=) || busy
+  [ "$(printf '%s' "$owner" | tr -d ' ')" = "$uid" ] || busy
+  comm=$(ps -p "$pid" -o comm=) || busy
+  case "$comm" in sshd|sshd:*|*/sshd|*/sshd:*|sshd-session|sshd-session:*) ;; *) busy ;; esac
+  case " $pids " in *" $pid "*) ;; *) pids="$pids $pid" ;; esac
+}
+for port in "$@"; do
+  [ -n "$port" ] || continue
+  if [ -r "$proc/net/tcp" ]; then
+    hex=$(printf '%04X' "$port")
+    rows=$(awk -v port="$hex" '$4 == "0A" {split($2,a,":"); if (a[2] == port && (a[1] == "0100007F" || a[1] == "00000000" || a[1] == "00000000000000000000000001000000" || a[1] == "00000000000000000000000000000000")) print $8 ":" $10}' "$proc/net/tcp")
+    if [ -r "$proc/net/tcp6" ]; then
+      rows="$rows $(awk -v port="$hex" '$4 == "0A" {split($2,a,":"); if (a[2] == port && (a[1] == "00000000000000000000000001000000" || a[1] == "00000000000000000000000000000000")) print $8 ":" $10}' "$proc/net/tcp6")"
+    fi
+    for row in $rows; do
+      [ "${row%:*}" = "$uid" ] || busy
+      inode=${row#*:}
+      found=0
+      for fd in "$proc"/[0-9]*/fd/*; do
+        [ "$(readlink "$fd" 2>/dev/null || :)" = "socket:[$inode]" ] || continue
+        pid=${fd#"$proc"/}; pid=${pid%%/*}
+        check_pid "$pid"
+        found=1
+      done
+      [ "$found" = 1 ] || busy
+    done
+  elif command -v lsof >/dev/null 2>&1; then
+    listeners=$(lsof -nP -a -u "$uid" -iTCP@127.0.0.1:"$port" -sTCP:LISTEN -t 2>/dev/null) || listeners=
+    for pid in $listeners; do check_pid "$pid"; done
+  else
+    busy
+  fi
+done
+# Validate every listener before signalling anything, never kill a foreign or
+# unrelated process merely because it occupies one of the requested ports.
+for pid in $pids; do
+  check_pid "$pid"
+  kill "$pid" || busy
+done
+# Give sshd time to close the listener before ExitOnForwardFailure is evaluated.
+[ -z "$pids" ] || sleep 1
+printf 'reaped\n'
+REMOTE
+[ "$reap_status" -eq 0 ] || classify
+grep -qx reaped "$work/stdout" || { status reconnecting remote_port_in_use; exit 75; }
+set -- -N -R "127.0.0.1:$node_port:127.0.0.1:$gateway_port"
+if [ -n "$product_port" ]; then
+  set -- "$@" -R "127.0.0.1:$product_port:127.0.0.1:$backend_port"
+fi
+(ssh_run "$@" -- "$dest") > "$work/stdout" 2> "$work/stderr" &
+ssh_pid=$!
+elapsed=0
+while [ "$elapsed" -lt 5 ] && kill -0 "$ssh_pid" 2>/dev/null; do
+  sleep 1
+  elapsed=$((elapsed + 1))
+done
+if kill -0 "$ssh_pid" 2>/dev/null; then status online ''; fi
+wait "$ssh_pid" || :
+ssh_pid=
+classify
