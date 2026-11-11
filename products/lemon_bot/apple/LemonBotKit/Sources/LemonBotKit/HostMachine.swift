@@ -120,7 +120,7 @@ public enum HostEnrollment {
     touch "$log"
     say_log() { tail -n 8 "$log" 2>/dev/null | sed 's/^/log=/'; }
     size() { n=$(wc -c <"$log" 2>/dev/null | tr -d ' '); echo "${n:-0}"; }
-    online_since() { i=0; while [ $i -lt 60 ]; do tail -c +$(($1 + 1)) "$log" 2>/dev/null | grep -q "Execution node online" && return 0; i=$((i + 1)); sleep 1; done; return 1; }
+    online_since() { i=0; while [ $i -lt 60 ]; do out=$(tail -c +$(($1 + 1)) "$log" 2>/dev/null); printf '%s\n' "$out" | grep -q "Execution node online" && return 0; printf '%s\n' "$out" | grep -q "^Execution node needs_" && return 1; i=$((i + 1)); sleep 1; done; return 1; }
     systemd_user() { [ "$(uname -s)" != Darwin ] && command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; }
     stop_worker() {
       if [ "$(uname -s)" = Darwin ]; then launchctl bootout "gui/$uid/$label" >/dev/null 2>&1

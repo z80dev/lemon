@@ -475,3 +475,9 @@ import Observation
         upsert(&list, value, id: { $0.id }, revision: { $0.revision }); list.sort { $0.seq < $1.seq }; entries[value.conversationId] = list
     }
 }
+
+extension Machine {
+    public var needsReconnect: Bool {
+        status == "offline" && (credential == "expired" || credential == "revoked")
+    }
+}

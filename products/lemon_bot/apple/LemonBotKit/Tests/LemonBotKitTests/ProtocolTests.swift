@@ -116,6 +116,106 @@ final class ProtocolTests: XCTestCase {
         let encoded = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(connection))
         XCTAssertEqual(encoded["externalAccountId"], .null); XCTAssertEqual(encoded["username"], .null)
     }
+    func testMachineDecodesWithAndWithoutCredentialAndCalculatesNeedsReconnect() throws {
+        let oldJson = Data(#"""
+        {
+            "id": "machine_old",
+            "revision": 1,
+            "createdAtMs": 1000,
+            "updatedAtMs": 2000,
+            "nodeId": "node_1",
+            "nodeName": "chico",
+            "name": "Chico",
+            "ownerUserId": "user_1",
+            "accessUserIds": [],
+            "status": "offline",
+            "lastSeenAtMs": 2500,
+            "labels": {},
+            "botIds": []
+        }
+        """#.utf8)
+        let oldMachine = try JSONDecoder().decode(Machine.self, from: oldJson)
+        XCTAssertNil(oldMachine.credential)
+        XCTAssertFalse(oldMachine.needsReconnect)
+
+        for (status, credential, expectedReconnect) in [
+            ("offline", "expired", true),
+            ("offline", "revoked", true),
+            ("offline", "active", false),
+            ("offline", "unknown", false),
+            ("online", "expired", false),
+            ("online", "active", false),
+            ("pending", "expired", false),
+            ("revoked", "expired", false),
+        ] {
+            let json = Data("""
+            {
+                "id": "machine_new",
+                "revision": 1,
+                "createdAtMs": 1000,
+                "updatedAtMs": 2000,
+                "nodeId": "node_1",
+                "nodeName": "chico",
+                "name": "Chico",
+                "ownerUserId": "user_1",
+                "accessUserIds": [],
+                "status": "\(status)",
+                "lastSeenAtMs": 2500,
+                "labels": {},
+                "botIds": [],
+                "credential": "\(credential)"
+            }
+            """.utf8)
+            let machine = try JSONDecoder().decode(Machine.self, from: json)
+            XCTAssertEqual(machine.credential, credential)
+            XCTAssertEqual(machine.needsReconnect, expectedReconnect, "Failed for status=\(status), credential=\(credential)")
+        }
+
+        let invalidJson = Data(#"""
+        {
+            "id": "machine_bad",
+            "revision": 1,
+            "createdAtMs": 1000,
+            "updatedAtMs": 2000,
+            "nodeId": null,
+            "nodeName": "chico",
+            "name": "Chico",
+            "ownerUserId": "user_1",
+            "accessUserIds": [],
+            "status": "offline",
+            "lastSeenAtMs": null,
+            "labels": {},
+            "botIds": [],
+            "credential": "invalid_credential_value"
+        }
+        """#.utf8)
+        XCTAssertThrowsError(try JSONDecoder().decode(Machine.self, from: invalidJson))
+
+        let machineWithCred = Machine(
+            id: "m1", revision: 1, createdAtMs: 1000, updatedAtMs: 2000,
+            nodeId: "n1", nodeName: "chico", name: "Chico",
+            ownerUserId: "u1", accessUserIds: [], status: "offline",
+            labels: [:], botIds: [], credential: "expired"
+        )
+        XCTAssertTrue(machineWithCred.needsReconnect)
+        let encodedWithCred = try JSONEncoder().encode(machineWithCred)
+        let roundTrippedWithCred = try JSONDecoder().decode(Machine.self, from: encodedWithCred)
+        XCTAssertEqual(roundTrippedWithCred.credential, "expired")
+        XCTAssertTrue(roundTrippedWithCred.needsReconnect)
+
+        let machineWithoutCred = Machine(
+            id: "m2", revision: 1, createdAtMs: 1000, updatedAtMs: 2000,
+            nodeId: "n1", nodeName: "chico", name: "Chico",
+            ownerUserId: "u1", accessUserIds: [], status: "offline",
+            labels: [:], botIds: []
+        )
+        XCTAssertNil(machineWithoutCred.credential)
+        XCTAssertFalse(machineWithoutCred.needsReconnect)
+        let encodedWithoutCred = try JSONEncoder().encode(machineWithoutCred)
+        let roundTrippedWithoutCred = try JSONDecoder().decode(Machine.self, from: encodedWithoutCred)
+        XCTAssertNil(roundTrippedWithoutCred.credential)
+        XCTAssertFalse(roundTrippedWithoutCred.needsReconnect)
+    }
 }
 
 extension ProtocolTests {

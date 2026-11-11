@@ -584,7 +584,7 @@ struct HostOfflineBanner: View {
     var body: some View {
         if let machine {
             SoftCard(fill: LB.raised) {
-                Text("\(machine.name) is offline").font(LBFont.rowTitle).foregroundStyle(LB.ink)
+                Text(machine.needsReconnect ? "\(machine.name) needs reconnecting" : "\(machine.name) is offline").font(LBFont.rowTitle).foregroundStyle(LB.ink)
                 if store.hostRoute != nil && machine.nodeName == store.hostMachineNodeName && ["owner", "admin"].contains(store.member?.role ?? "") {
                     switch store.hostSetup {
                     case .running(let step):
@@ -597,7 +597,7 @@ struct HostOfflineBanner: View {
                         Button("Try again") { Task { await store.setUpHostMachine() } }.buttonStyle(.lemonPrimary)
                             .disabled(!store.isOnline)
                     case .idle, .done:
-                        Button("Start it") { Task { await store.setUpHostMachine() } }.buttonStyle(.lemonPrimary)
+                        Button(machine.needsReconnect ? "Reconnect" : "Start it") { Task { await store.setUpHostMachine() } }.buttonStyle(.lemonPrimary)
                             .disabled(!store.isOnline)
                     }
                 } else {
