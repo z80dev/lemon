@@ -74,14 +74,19 @@ The backend authenticates to the control plane's `/ws` as an operator and needs
 
 Direct remote workers also need a reachable HTTPS `LEMON_BOT_PUBLIC_URL` for
 MCP and attachments. Route that product origin to the backend (normally
-`127.0.0.1:4100`), independently of the node gateway. The SSH-assisted loopback
-path instead forwards the product port through its managed tunnel. A reachable
-node gateway alone does not make Bot tools usable.
+`127.0.0.1:4100`), independently of the node gateway, and allow it on the
+controller: follow [Give Lemon Bot an HTTPS address](../getting-started/lemon-bot.md#give-lemon-bot-an-https-address).
+The SSH-assisted loopback path instead forwards the product port through its
+managed tunnel. A reachable node gateway alone does not make Bot tools usable.
 
-Set the controller's advertised endpoint before issuing invites:
+Set the controller's advertised endpoint before issuing invites. The controller
+service does not see variables exported in your shell; on a packaged install, add
+the setting to `~/.lemon/env` (read by the `lemon` launcher and its controller
+service) and restart:
 
 ```bash
-export LEMON_CONTROL_PLANE_PUBLIC_WS_URL='wss://controller.example/ws'
+echo "export LEMON_CONTROL_PLANE_PUBLIC_WS_URL='wss://controller.example/ws'" >> "$HOME/.lemon/env"
+lemon restart
 ```
 
 This setting generates join commands; it does not configure TLS or expose a

@@ -11,6 +11,7 @@ reproducible report if the problem remains.
 | A machine is unavailable | Distinguish [offline, reconnecting, and parked workers](#machine-offline-or-needs-reconnecting) |
 | The first chat cannot start | Connect a model in the browser or run `lemon setup model`; see [model setup](user-guide/setup.md) |
 | The Bot says it has no tools | Check [Bot access and approvals](#the-bot-says-it-has-no-tools) |
+| Creating a Bot fails after you set an HTTPS address (`LEMON_BOT_PUBLIC_URL`) | Allow that exact origin on the controller; see [Give Lemon Bot an HTTPS address](getting-started/lemon-bot.md#give-lemon-bot-an-https-address) |
 | Installation failed | Check [installation troubleshooting](install.md#troubleshooting) |
 | A runtime or tool behaves unexpectedly | Run `lemon doctor --verbose` and keep the relevant error |
 | You need a diagnostic bundle | Run `lemon doctor --bundle`, then review the zip before sharing |

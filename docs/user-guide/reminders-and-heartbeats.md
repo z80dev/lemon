@@ -279,7 +279,12 @@ wake, or retry dispatch. This lets a product enforce the creator's current
 account status, workspace governance, bot availability, and spending policy
 without creating another scheduler or trusting browser credentials.
 
-First allow the backend's exact origin when starting Lemon:
+By default only the same-machine Lemon Bot origin `http://127.0.0.1:4100` is
+allowed. For any other backend origin, allow its exact origin in the
+environment that starts Lemon; setting the variable replaces the default. A
+controller run as a service does not see your shell, so on a packaged install
+add the line to `~/.lemon/env` and run `lemon restart` (see
+[Give Lemon Bot an HTTPS address](../getting-started/lemon-bot.md#give-lemon-bot-an-https-address)):
 
 ```bash
 export LEMON_CRON_ADMISSION_ALLOWED_ORIGINS=https://bot.example.com

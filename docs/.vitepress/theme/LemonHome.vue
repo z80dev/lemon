@@ -65,7 +65,7 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
         <p class="lede">Meet Lemon — a local-first AI assistant that brings your models, tools, and conversations together, and keeps useful context close.</p>
 
         <template v-for="install in installs" :key="install.command">
-          <p class="footnote">{{ install.label }}</p>
+          <p class="footnote install-label">{{ install.label }}</p>
           <div class="install">
             <span class="prompt" aria-hidden="true">$</span>
             <code>{{ install.command }}</code>
@@ -262,10 +262,12 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
 .hero h1 .move em::after { content: ''; position: absolute; z-index: -1; left: -.04em; right: -.02em; bottom: .06em; height: .34em; border-radius: 999px; background: var(--lemon-brand); transform: rotate(-1.6deg) scaleX(0); transform-origin: left; animation: swipe .7s .55s cubic-bezier(.22, 1, .36, 1) forwards; }
 .lede { font-size: 19px; line-height: 1.6; color: var(--vp-c-text-2); max-width: 500px; margin: 0; animation: rise .8s .24s cubic-bezier(.22, 1, .36, 1) both; }
 
-.install { display: flex; align-items: center; gap: 10px; margin-top: 30px; max-width: 540px; padding: 7px 7px 7px 16px; border-radius: 16px; background: var(--lemon-ink-panel); color: #ECEDE6; box-shadow: 0 1px 0 rgb(255 255 255 / .06) inset, 0 18px 40px -24px rgb(20 26 16 / .6); animation: rise .8s .32s cubic-bezier(.22, 1, .36, 1) both; }
-.install .prompt { color: var(--lemon-brand); font-family: var(--vp-font-family-mono); font-weight: 700; }
-.install code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; scrollbar-width: none; font-family: var(--vp-font-family-mono); font-size: 13px; color: #ECEDE6; background: none; padding: 6px 0; }
-.install code::-webkit-scrollbar { display: none; }
+.install { display: flex; align-items: flex-start; gap: 10px; margin-top: 30px; max-width: 540px; padding: 7px 7px 7px 16px; border-radius: 16px; background: var(--lemon-ink-panel); color: #ECEDE6; box-shadow: 0 1px 0 rgb(255 255 255 / .06) inset, 0 18px 40px -24px rgb(20 26 16 / .6); animation: rise .8s .32s cubic-bezier(.22, 1, .36, 1) both; }
+.install .prompt { padding-top: 8px; font-size: 13px; line-height: 1.55; color: var(--lemon-brand); font-family: var(--vp-font-family-mono); font-weight: 700; }
+/* Wrap rather than clip: both commands share a long prefix, so a clipped line hides the flags that tell them apart. */
+.install code { flex: 1; min-width: 0; align-self: center; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--vp-font-family-mono); font-size: 13px; line-height: 1.55; color: #ECEDE6; background: none; padding: 6px 0; }
+.footnote.install-label { margin-top: 26px; font-weight: 600; color: var(--vp-c-text-2); animation-delay: .32s; }
+.install-label + .install { margin-top: 8px; }
 .copy { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 8px 12px 8px 9px; border-radius: 11px; background: rgb(255 255 255 / .08); color: #ECEDE6; font-size: 13px; font-weight: 600; transition: background .2s, transform .15s; }
 .copy:hover { background: rgb(255 255 255 / .16); }
 .copy:active { transform: scale(.96); }
@@ -349,7 +351,7 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
 .worker.crashes .alive { animation: alive 7s ease-in-out infinite; }
 .worker.crashes .dead { animation: dead 7s ease-in-out infinite; }
 .restart { position: absolute; top: -34px; padding: 3px 9px; border-radius: 999px; background: var(--lemon-brand); color: var(--lemon-ink); font-family: var(--vp-font-family-mono); font-size: 11px; font-style: normal; font-weight: 600; white-space: nowrap; opacity: 0; animation: toast 7s ease-in-out infinite; }
-.tree-caption { margin: 30px 0 0; font-family: var(--vp-font-family-mono); font-size: 12px; letter-spacing: .08em; color: #70756B; }
+.tree-caption { margin: 30px 0 0; font-family: var(--vp-font-family-mono); font-size: 12px; letter-spacing: .08em; color: #959A8E; }
 
 /* Doors */
 .doors { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; }
