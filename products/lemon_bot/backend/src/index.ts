@@ -10,6 +10,7 @@ import { ensureLocalAccessKey } from './core/local-access';
 import { handoffDirectory, sweepLocalSignIn } from './core/local-signin';
 import { terminal } from './cli/connect';
 import { prepareController } from './cli/lemon-runtime';
+import { recordBackendPid } from './cli/backend-pid';
 import { deliverLocalSignIn, signInDeliveryDefaults, type SignInDeliveryDependencies } from './cli/open';
 import { Store } from './core/store';
 import { installHelpers } from './core/helpers';
@@ -125,6 +126,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   });void sweepLocalSignIn({store,now:services.now,digest:services.mutations.digest,dataDir:config.dataDir});},60000);
   reconcileTimer.unref();retentionTimer.unref();
   let server:Server<RealtimeData>|null=null;let stopped=false;
+  let removePid: (() => void) | undefined;
   return {
     services,router,realtime,
     start(){
@@ -139,9 +141,11 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
           }
           return await router.fetch(request);
         },websocket:realtime.websocket});
+      try { removePid=recordBackendPid(config.dataDir,server.port!,services.store.metadata<string>('instanceId')!); }
+      catch(error){void server.stop(true);server=null;throw error;}
       lemon.start();return server;
     },
-    async stop(){if(stopped)return;stopped=true;clearInterval(reconcileTimer);clearInterval(retentionTimer);removeConnected();pairings.close();experiences.close();addressedAgents.close();realtime.close();voice.close();gates.close();attachments.close();await services.integrations.dispose?.();runtime.close();terminals.dispose();lemon.close();if(server)await server.stop(true);store.close();}
+    async stop(){if(stopped)return;stopped=true;clearInterval(reconcileTimer);clearInterval(retentionTimer);removeConnected();pairings.close();experiences.close();addressedAgents.close();realtime.close();voice.close();gates.close();attachments.close();await services.integrations.dispose?.();runtime.close();terminals.dispose();lemon.close();if(server)await server.stop(true);removePid?.();store.close();}
   };
 }
 
@@ -193,6 +197,8 @@ export async function runBackend(options:{chooseLemon?:boolean;openBrowser?:bool
     catch(error){process.stderr.write(`${error instanceof Error?error.message:'Choosing a Lemon failed.'}\n`);process.exit(1);}
   } else if(options.chooseLemon){process.stderr.write('lemon-bot --choose-lemon needs an interactive terminal.\n');process.exit(2);}
   const backend=await createBackend(config,key);const server=backend.start();
+  const shutdown=()=>{void backend.stop().then(()=>process.exit(0)).catch(()=>process.exit(1));};
+  process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
   process.stdout.write(`Lemon Bot listening at ${config.publicUrl} (${server.hostname}:${server.port}).\n`);
   const {lemon}=backend.services;
   lemon.onConnected(()=>{process.stdout.write(`Connected to Lemon at ${config.controlUrl}.\n`);});
@@ -203,8 +209,6 @@ export async function runBackend(options:{chooseLemon?:boolean;openBrowser?:bool
   if (!isLoopback(new URL(config.publicUrl).hostname) && workspace && !backend.services.store.get('credentials', workspace.ownerUserId)) {
     process.stdout.write(`Owner has no password yet: browsers on other computers can't sign in at ${config.publicUrl}. On this computer run lemon-bot open, then Settings → Account → Add email and password.\n`);
   }
-  const shutdown=()=>{void backend.stop().then(()=>process.exit(0)).catch(()=>process.exit(1));};
-  process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
 }
 
 if(import.meta.main)await runBackend();
