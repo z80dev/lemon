@@ -620,7 +620,7 @@ public enum RuntimeInstaller {
     public static func install(
         _ plan: Plan,
         session: URLSession? = nil,
-        progress: @Sendable (RuntimeInstallStep) -> Void
+        progress: @escaping @Sendable (RuntimeInstallStep) -> Void
     ) async throws {
         if plan.action == .ready { return }
         try Task.checkCancellation()
