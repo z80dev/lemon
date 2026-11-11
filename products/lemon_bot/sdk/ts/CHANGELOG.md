@@ -4,6 +4,8 @@
 
 ### Added
 
+- Add just-in-time `request_access`, access-request cards, queued grant `pendingLevel`, per-Bot-folder capability and folder-read governance contracts.
+
 - Creation/import/duplicate contracts accept explicit Standard or Chat-only `access`; templates can suggest access without granting it. Omitted access remains all-off.
 
 - Add target-local `ModelReadiness`/`DetectedLogin` models and typed check/import endpoints for controller and machines. Checks are non-generating; Codex login imports require explicit copy consent and retain nonce reconciliation.
