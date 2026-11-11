@@ -576,6 +576,14 @@ defmodule LemonCli.Setup.ProviderManagementTest do
   end
 
   test "check returns shape and runs network check outside config lock", ctx do
+    # A live check only runs for a configured provider; the inline key resolves
+    # offline, so the verifier stays the only seam the check waits on.
+    write(ctx.config_path, """
+    [providers.openai-codex]
+    auth_source = "api_key"
+    api_key = "synthetic-codex-key"
+    """)
+
     caller = self()
 
     verifier = fn _input, _opts ->

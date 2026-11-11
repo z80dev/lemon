@@ -529,7 +529,7 @@ defmodule LemonCli.Setup.WizardTest do
         |> Enum.drop_while(&(not String.starts_with?(&1, "Setup complete.")))
 
       assert summary == [
-               "Setup complete. Model: openai / gpt-5 (verified with OpenAI; no message was sent).",
+               "Setup complete. Model: openai / openai:gpt-5 (verified with OpenAI; no message was sent).",
                "Success check: a reply arrives and `lemon doctor` shows no FAIL.",
                "Run `lemon` in your repository and try this first prompt:",
                "  Read the repository instructions. Find how to run the tests. Add the test command to README if missing, run the focused tests, and show the diff.",
@@ -711,7 +711,7 @@ defmodule LemonCli.Setup.WizardTest do
       assert info_event?(
                events,
                &(&1 ==
-                   "Setup complete. Model: openai / gpt-5 (saved; live check skipped by --skip-verify).")
+                   "Setup complete. Model: openai / openai:gpt-5 (saved; live check skipped by --skip-verify).")
              )
     end
   end
@@ -904,11 +904,11 @@ defmodule LemonCli.Setup.WizardTest do
       assert info_event?(
                events,
                &(&1 ==
-                   "Setup complete. Model: openai / gpt-5 (saved; Lemon checks it on your first message).")
+                   "Setup complete. Model: openai / openai:gpt-5 (saved; Lemon checks it on your first message).")
              )
 
       refute info_event?(events, &String.contains?(&1, "--skip-verify"))
-      assert_received :launched
+      assert :launched in events
     end
 
     test "an unreachable provider is saved with its reason and still offers launch", %{
@@ -932,11 +932,11 @@ defmodule LemonCli.Setup.WizardTest do
       assert info_event?(
                events,
                &(&1 ==
-                   "Setup complete. Model: openai / gpt-5 (saved; Lemon checks it on your first message).")
+                   "Setup complete. Model: openai / openai:gpt-5 (saved; Lemon checks it on your first message).")
              )
 
       assert info_event?(events, &String.contains?(&1, "Provider unreachable"))
-      assert_received :launched
+      assert :launched in events
     end
 
     test "a rejected credential never claims completion", %{config_path: path} do
@@ -991,7 +991,7 @@ defmodule LemonCli.Setup.WizardTest do
                Wizard.run([], io,
                  config_path: path,
                  verifier: fn _ -> {:ok, %{}} end,
-                 codex_discover: fn _opts -> {:ok, ["gpt-5.1-codex", "gpt-5.1-codex-mini"]} end,
+                 codex_discover: fn _opts -> {:ok, ["gpt-6.1-sol", "gpt-6-sol"]} end,
                  launch: false
                )
 
@@ -1011,6 +1011,17 @@ defmodule LemonCli.Setup.WizardTest do
                @boundary_budget_ms
 
       assert info_event?(events, &String.contains?(&1, "Verifying provider configuration"))
+
+      # The discovered model is a real catalog id, so the live check resolves it
+      # and this run proves the verified path, not a skipped one.
+      assert info_event?(
+               events,
+               &(&1 ==
+                   "Setup complete. Model: openai-codex / openai-codex:gpt-6.1-sol " <>
+                     "(verified with OpenAI Codex; no message was sent).")
+             )
+
+      refute info_event?(events, &String.contains?(&1, "live check not available"))
 
       # Any remaining wait is announced: it follows a progress line.
       timeline
@@ -1066,7 +1077,7 @@ defmodule LemonCli.Setup.WizardTest do
 
   # Records monotonic timestamps for every user-visible event (including the
   # moment a prompt is answered), so a test can prove no step blocks silently.
-  defp timed_io(prompts \\ []) do
+  defp timed_io(prompts) do
     pid = self()
     prompt_agent = start_agent(prompts)
 
@@ -1156,6 +1167,7 @@ defmodule LemonCli.Setup.WizardTest do
   defp info_event?(events, predicate) do
     Enum.any?(events, fn
       {:info, message} -> predicate.(message)
+      {:timed, _at, :info, message} -> predicate.(message)
       _other -> false
     end)
   end
