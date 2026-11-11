@@ -38,6 +38,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   expose local worker state with `lemon node status --name NAME --json`.
 - Stop the Lemon Bot transcript (Mac and iPhone) from pinning a CPU core in an
   endless SwiftUI layout loop while a conversation is open.
+- Execution-node sessions now renew while connected and expire after seven days
+  without contact. Rejected or missing credentials park the worker until repair
+  saves new credentials, while controller outages retry without restart loops.
 
 - Load the certificate provider before Telegram and Discord setup construct their
   first HTTPS request, preserving TLS verification on cold CLI invocations.

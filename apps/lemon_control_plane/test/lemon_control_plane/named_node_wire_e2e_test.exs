@@ -1,9 +1,9 @@
 defmodule LemonControlPlane.NamedNodeWireE2ETest do
   use ExUnit.Case, async: false
 
-  alias CodingAgent.ExecutionNode.Worker
+  alias CodingAgent.ExecutionNode.{Socket, Worker}
   alias LemonControlPlane.Auth.TokenStore
-  alias LemonControlPlane.Methods.ConnectChallenge
+  alias LemonControlPlane.Methods.{ConnectChallenge, NodePairInvite}
   alias LemonControlPlane.NodeStore
   alias LemonCore.ExecutionContext
   alias LemonGateway.ExecutionRequest
@@ -266,7 +266,8 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
                notify_pid: self(),
                executor_module: NamedNodeWireExecutor,
                execution_capabilities: ["read"],
-               socket_opts: [reconnect_delay_ms: 10]
+               socket_opts: [reconnect_delay_ms: 10],
+               status_writer: fn _, _ -> :ok end
              ]
            ]},
         restart: :temporary
@@ -619,7 +620,8 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
                token: token,
                notify_pid: self(),
                executor_module: NativeNamedNodeWireExecutor,
-               socket_opts: [reconnect_delay_ms: 10]
+               socket_opts: [reconnect_delay_ms: 10],
+               status_writer: fn _, _ -> :ok end
              ]
            ]},
         restart: :temporary
@@ -698,6 +700,354 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert {:error, :terminal} = CodingAgent.Executor.steer(source_context, "too late")
   end
 
+  @tag :tmp_dir
+  test "sliding node session touch on connect extends token to 7 days, and expired token fails with session_expired over wire",
+       %{tmp_dir: tmp_dir} do
+    suffix = System.unique_integer([:positive])
+    node_id = "sliding-wire-node-#{suffix}"
+    node_name = "Sliding Wire Node #{suffix}"
+    token = "sliding-wire-token-#{suffix}"
+
+    put_node(node_id, node_name)
+
+    assert {:ok, initial_info} =
+             TokenStore.replace_node_session(token, %{"type" => "node", "nodeId" => node_id},
+               ttl_ms: 2 * 24 * 60 * 60 * 1000
+             )
+
+    on_exit(fn ->
+      LemonCore.Store.delete(:session_tokens, token)
+      LemonCore.Store.delete(:session_token_heads, {"node", node_id})
+      LemonCore.Store.delete(:nodes_by_name, node_name)
+      LemonCore.Store.delete(:nodes_registry, node_id)
+    end)
+
+    bandit_id = {:sliding_wire_bandit, suffix}
+
+    bandit =
+      start_supervised!(
+        Supervisor.child_spec(
+          {Bandit,
+           plug: LemonControlPlane.HTTP.Router, ip: {127, 0, 0, 1}, port: 0, startup_log: false},
+          id: bandit_id,
+          restart: :temporary
+        )
+      )
+
+    assert {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(bandit)
+    url = "ws://127.0.0.1:#{port}/ws"
+
+    worker_id = {:sliding_wire_worker, suffix}
+
+    worker =
+      start_supervised!(%{
+        id: worker_id,
+        start:
+          {Worker, :start_link,
+           [
+             [
+               node_name: node_name,
+               controller: url,
+               cwd: tmp_dir,
+               token: token,
+               notify_pid: self(),
+               executor_module: NamedNodeWireExecutor,
+               execution_capabilities: ["read"],
+               socket_opts: [reconnect_delay_ms: 10],
+               status_writer: fn _, _ -> :ok end
+             ]
+           ]},
+        restart: :temporary
+      })
+
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, ^node_id}}, 3_000
+
+    now = System.system_time(:millisecond)
+    touched_info = LemonCore.Store.get(:session_tokens, token)
+    assert touched_info.expires_at_ms > initial_info.expires_at_ms
+    assert touched_info.expires_at_ms >= now + 6 * 24 * 60 * 60 * 1000
+
+    _ = stop_supervised(worker_id)
+    assert_eventually(fn -> not LemonCore.NodeRegistry.online?(node_name) end)
+
+    LemonCore.Store.put(:session_tokens, token, %{
+      touched_info
+      | expires_at_ms: now - 1_000
+    })
+
+    expired_socket =
+      start_wire_socket(suffix, :expired,
+        url: url,
+        connect_params: %{
+          "role" => "node",
+          "auth" => %{"token" => token}
+        }
+      )
+
+    assert_receive {:execution_node_socket, ^expired_socket, {:authentication_error, error}}, 3_000
+    assert error["code"] == "UNAUTHORIZED"
+    assert error["message"] =~ "Token has expired"
+    assert error["details"] == %{"reason" => "session_expired"}
+  end
+
+  @tag :tmp_dir
+  test "nodes.revoke closes active connection and reconnect fails with session_invalid while nodes.list reports revoked",
+       %{tmp_dir: tmp_dir} do
+    suffix = System.unique_integer([:positive])
+    node_id = "revoke-wire-node-#{suffix}"
+    node_name = "Revoke Wire Node #{suffix}"
+    token = "revoke-wire-token-#{suffix}"
+
+    put_node(node_id, node_name)
+
+    assert {:ok, _} =
+             TokenStore.replace_node_session(token, %{"type" => "node", "nodeId" => node_id},
+               ttl_ms: 24 * 60 * 60 * 1000
+             )
+
+    on_exit(fn ->
+      LemonCore.Store.delete(:session_tokens, token)
+      LemonCore.Store.delete(:session_token_heads, {"node", node_id})
+      LemonCore.Store.delete(:nodes_by_name, node_name)
+      LemonCore.Store.delete(:nodes_registry, node_id)
+    end)
+
+    bandit_id = {:revoke_wire_bandit, suffix}
+
+    bandit =
+      start_supervised!(
+        Supervisor.child_spec(
+          {Bandit,
+           plug: LemonControlPlane.HTTP.Router, ip: {127, 0, 0, 1}, port: 0, startup_log: false},
+          id: bandit_id,
+          restart: :temporary
+        )
+      )
+
+    assert {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(bandit)
+    url = "ws://127.0.0.1:#{port}/ws"
+
+    worker_id = {:revoke_wire_worker, suffix}
+
+    worker =
+      start_supervised!(%{
+        id: worker_id,
+        start:
+          {Worker, :start_link,
+           [
+             [
+               node_name: node_name,
+               controller: url,
+               cwd: tmp_dir,
+               token: token,
+               notify_pid: self(),
+               executor_module: NamedNodeWireExecutor,
+               execution_capabilities: ["read"],
+               socket_opts: [reconnect_delay_ms: 10],
+               status_writer: fn _, _ -> :ok end
+             ]
+           ]},
+        restart: :temporary
+      })
+
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, ^node_id}}, 3_000
+
+    assert {:ok, %{pid: conn_pid}} = LemonCore.NodeRegistry.resolve(node_name)
+    conn_ref = Process.monitor(conn_pid)
+
+    operator_ctx = %{
+      auth: LemonControlPlane.Auth.Authorize.default_operator(),
+      conn_id: "revoke-wire-operator-#{suffix}",
+      conn_pid: self()
+    }
+
+    assert {:ok, %{"revoked" => true}} =
+             LemonControlPlane.Methods.Registry.dispatch(
+               "nodes.revoke",
+               %{"nodeId" => node_id, "confirmName" => node_name},
+               operator_ctx
+             )
+
+    assert_receive {:DOWN, ^conn_ref, :process, ^conn_pid, _}, 3_000
+    refute LemonCore.NodeRegistry.online?(node_name)
+
+    _ = stop_supervised(worker_id)
+
+    reconnect_socket =
+      start_wire_socket(suffix, :revoked_reconnect,
+        url: url,
+        connect_params: %{
+          "role" => "node",
+          "auth" => %{"token" => token}
+        }
+      )
+
+    assert_receive {:execution_node_socket, ^reconnect_socket, {:authentication_error, error}}, 3_000
+    assert error["code"] == "UNAUTHORIZED"
+    assert error["message"] =~ "Invalid token"
+    assert error["details"] == %{"reason" => "session_invalid"}
+
+    assert {:ok, %{"nodes" => nodes}} =
+             LemonControlPlane.Methods.Registry.dispatch("nodes.list", %{}, operator_ctx)
+
+    node_entry = Enum.find(nodes, &(&1["id"] == node_id))
+    assert node_entry["session"] == "revoked"
+  end
+
+  @tag :tmp_dir
+  test "an expired session parks a live worker and a repair enrollment resumes it on the same node id",
+       %{tmp_dir: tmp_dir} do
+    suffix = System.unique_integer([:positive])
+    node_name = "Repair Wire Node #{suffix}"
+
+    bandit =
+      start_supervised!(
+        Supervisor.child_spec(
+          {Bandit,
+           plug: LemonControlPlane.HTTP.Router, ip: {127, 0, 0, 1}, port: 0, startup_log: false},
+          id: {:repair_wire_bandit, suffix},
+          restart: :temporary
+        )
+      )
+
+    assert {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(bandit)
+    url = "ws://127.0.0.1:#{port}/ws"
+
+    previous_ws_url = Application.fetch_env(:lemon_control_plane, :public_ws_url)
+    Application.put_env(:lemon_control_plane, :public_ws_url, url)
+
+    on_exit(fn ->
+      case previous_ws_url do
+        {:ok, value} -> Application.put_env(:lemon_control_plane, :public_ws_url, value)
+        :error -> Application.delete_env(:lemon_control_plane, :public_ws_url)
+      end
+    end)
+
+    operator_ctx = %{
+      auth: %{role: :operator, scopes: [:pairing, :read]},
+      conn_id: "repair-wire-operator-#{suffix}"
+    }
+
+    assert {:ok, invite} = NodePairInvite.handle(%{"nodeName" => node_name}, operator_ctx)
+
+    worker_id = {:repair_wire_worker, suffix}
+
+    worker =
+      start_supervised!(%{
+        id: worker_id,
+        start:
+          {Worker, :start_link,
+           [
+             [
+               node_name: node_name,
+               controller: url,
+               cwd: tmp_dir,
+               invite_code: invite["inviteCode"],
+               token_store_opts: [root: tmp_dir],
+               notify_pid: self(),
+               executor_module: NamedNodeWireExecutor,
+               execution_capabilities: ["read"],
+               socket_opts: [reconnect_delay_ms: 10],
+               status_writer: fn _, _ -> :ok end,
+               # The automatic 5 s watch and 15 min re-probe are exercised by the
+               # worker unit suite; here both wake-ups are driven explicitly so
+               # the repair enrollment and the resume never overlap.
+               watch_interval_ms: 600_000,
+               probe_interval_ms: 600_000
+             ]
+           ]},
+        restart: :temporary
+      })
+
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, node_id}}, 10_000
+
+    on_exit(fn ->
+      TokenStore.revoke_identity("node", node_id)
+      LemonCore.Store.delete(:session_token_heads, {"node", node_id})
+      NodeStore.release_node_name(node_name, node_id)
+      LemonCore.Store.delete(:nodes_registry, node_id)
+    end)
+
+    # Expire the current head credential exactly as seven days without contact
+    # would, then drop the live socket so the worker reconnects with it.
+    head = LemonCore.Store.get(:session_token_heads, {"node", node_id})
+    expired_token = head.token
+    info = LemonCore.Store.get(:session_tokens, expired_token)
+
+    assert :ok =
+             LemonCore.Store.put(:session_tokens, expired_token, %{
+               info
+               | expires_at_ms: System.system_time(:millisecond) - 1_000
+             })
+
+    assert {:ok, %{pid: connection_pid}} = LemonCore.NodeRegistry.resolve(node_name)
+    Process.exit(connection_pid, :kill)
+
+    assert_receive {:execution_node_worker, ^worker,
+                    {:status, :needs_reauthorization, "session_expired"}},
+                   10_000
+
+    assert Process.alive?(worker)
+
+    assert GenServer.call(worker, :get_link_state) ==
+             {:parked, :needs_reauthorization, "session_expired"}
+
+    assert_eventually(fn -> not LemonCore.NodeRegistry.online?(node_name) end)
+
+    # The owner-authorized repair invite keeps the durable identity and rotates
+    # the credential; a second enrollment run saves it to the shared root.
+    assert {:ok, repair} =
+             NodePairInvite.handle(
+               %{"nodeId" => node_id, "nodeName" => node_name},
+               operator_ctx
+             )
+
+    repair_worker_id = {:repair_wire_repair_worker, suffix}
+
+    repair_worker =
+      start_supervised!(%{
+        id: repair_worker_id,
+        start:
+          {Worker, :start_link,
+           [
+             [
+               node_name: node_name,
+               controller: url,
+               cwd: tmp_dir,
+               invite_code: repair["inviteCode"],
+               token_store_opts: [root: tmp_dir],
+               notify_pid: self(),
+               executor_module: NamedNodeWireExecutor,
+               execution_capabilities: ["read"],
+               socket_opts: [reconnect_delay_ms: 10],
+               status_writer: fn _, _ -> :ok end
+             ]
+           ]},
+        restart: :temporary
+      })
+
+    assert_receive {:execution_node_worker, ^repair_worker, {:status, :online, ^node_id}}, 10_000
+    assert :ok = stop_supervised(repair_worker_id)
+    assert_eventually(fn -> not LemonCore.NodeRegistry.online?(node_name) end)
+
+    assert {:ok, repaired} =
+             CodingAgent.ExecutionNode.TokenStore.load(node_name, root: tmp_dir, controller: url)
+
+    assert repaired["nodeId"] == node_id
+    refute repaired["token"] == expired_token
+
+    # The parked worker resumes from the saved credential without a restart.
+    send(worker, :credential_watch)
+
+    assert_receive {:execution_node_worker, ^worker, {:status, :starting}}, 5_000
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, ^node_id}}, 10_000
+    assert {:ok, %{id: ^node_id, name: ^node_name}} = LemonCore.NodeRegistry.resolve(node_name)
+    assert TokenStore.node_session_state(node_id) == :active
+
+    _ = stop_supervised(worker_id)
+    assert_eventually(fn -> not LemonCore.NodeRegistry.online?(node_name) end)
+  end
+
   defp put_node(node_id, name) do
     NodeStore.put_node(node_id, %{
       id: node_id,
@@ -735,5 +1085,23 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     context
     |> inspect(limit: :infinity, printable_limit: :infinity)
     |> String.contains?(text)
+  end
+
+  defp start_wire_socket(suffix, label, opts) do
+    start_supervised!(%{
+      id: {:wire_test_socket, suffix, label},
+      start:
+        {Socket, :start_link,
+         [
+           [
+             owner: self(),
+             url: Keyword.fetch!(opts, :url),
+             connect_params: Keyword.fetch!(opts, :connect_params),
+             reconnect_delay_ms: 10,
+             ping_interval_ms: 0
+           ]
+         ]},
+      restart: :temporary
+    })
   end
 end

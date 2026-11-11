@@ -440,4 +440,222 @@ defmodule LemonControlPlane.WS.ConnectionTest do
       assert new_state == state
     end
   end
+
+  describe "connect error classification and auth reasons" do
+    test "expired token returns UNAUTHORIZED with session_expired reason" do
+      token = "ws-expired-token-#{System.unique_integer([:positive])}"
+
+      LemonCore.Store.put(:session_tokens, token, %{
+        token: token,
+        identity: %{"type" => "node", "nodeId" => "expired-node-id"},
+        issued_at_ms: System.system_time(:millisecond) - 60_000,
+        expires_at_ms: System.system_time(:millisecond) - 1_000
+      })
+
+      on_exit(fn ->
+        LemonCore.Store.delete(:session_tokens, token)
+      end)
+
+      assert {:ok, state} = Connection.init([])
+
+      frame =
+        Jason.encode!(%{
+          "type" => "req",
+          "id" => "expired-connect",
+          "method" => "connect",
+          "params" => %{"auth" => %{"token" => token}}
+        })
+
+      assert {:push, {:text, response_text}, _state} =
+               Connection.handle_in({frame, [opcode: :text]}, state)
+
+      response = Jason.decode!(response_text)
+      assert response["type"] == "res"
+      assert response["id"] == "expired-connect"
+      assert response["ok"] == false
+      assert response["error"]["code"] == "UNAUTHORIZED"
+      assert response["error"]["message"] =~ "Token has expired"
+      assert response["error"]["details"] == %{"reason" => "session_expired"}
+    end
+
+    test "invalid token returns UNAUTHORIZED with session_invalid reason" do
+      assert {:ok, state} = Connection.init([])
+
+      frame =
+        Jason.encode!(%{
+          "type" => "req",
+          "id" => "invalid-connect",
+          "method" => "connect",
+          "params" => %{"auth" => %{"token" => "completely-invalid-token"}}
+        })
+
+      assert {:push, {:text, response_text}, _state} =
+               Connection.handle_in({frame, [opcode: :text]}, state)
+
+      response = Jason.decode!(response_text)
+      assert response["type"] == "res"
+      assert response["id"] == "invalid-connect"
+      assert response["ok"] == false
+      assert response["error"]["code"] == "UNAUTHORIZED"
+      assert response["error"]["message"] =~ "Invalid token"
+      assert response["error"]["details"] == %{"reason" => "session_invalid"}
+    end
+
+    test "paired node not found returns UNAUTHORIZED with node_not_found reason" do
+      node_id = "missing-node-#{System.unique_integer([:positive])}"
+      token = "missing-node-token-#{System.unique_integer([:positive])}"
+
+      assert {:ok, _} =
+               LemonControlPlane.Auth.TokenStore.store(token, %{
+                 "type" => "node",
+                 "nodeId" => node_id
+               })
+
+      on_exit(fn ->
+        LemonCore.Store.delete(:session_tokens, token)
+      end)
+
+      assert {:ok, state} = Connection.init([])
+
+      frame =
+        Jason.encode!(%{
+          "type" => "req",
+          "id" => "not-found-connect",
+          "method" => "connect",
+          "params" => %{"auth" => %{"token" => token}}
+        })
+
+      assert {:push, {:text, response_text}, _state} =
+               Connection.handle_in({frame, [opcode: :text]}, state)
+
+      response = Jason.decode!(response_text)
+      assert response["type"] == "res"
+      assert response["id"] == "not-found-connect"
+      assert response["ok"] == false
+      assert response["error"]["code"] == "UNAUTHORIZED"
+      assert response["error"]["message"] == "Paired node was not found"
+      assert response["error"]["details"] == %{"reason" => "node_not_found"}
+    end
+
+    test "node name conflict returns CONFLICT with node_name_conflict reason" do
+      suffix = Integer.to_string(System.unique_integer([:positive]))
+      node_id1 = "conflict-node-1-" <> suffix
+      node_id2 = "conflict-node-2-" <> suffix
+      name = "Conflict Node " <> suffix
+      token1 = "conflict-token-1-" <> suffix
+      token2 = "conflict-token-2-" <> suffix
+
+      # First node is registered and active
+      LemonControlPlane.NodeStore.put_node(node_id1, %{
+        id: node_id1,
+        name: name,
+        type: "coding_agent",
+        status: :offline
+      })
+
+      LemonControlPlane.NodeStore.put_node(node_id2, %{
+        id: node_id2,
+        name: name,
+        type: "coding_agent",
+        status: :offline
+      })
+
+      # Reserve name for node_id1
+      LemonControlPlane.NodeStore.reserve_node_name(name, node_id1)
+
+      assert {:ok, _} =
+               LemonControlPlane.Auth.TokenStore.store(token2, %{
+                 "type" => "node",
+                 "nodeId" => node_id2
+               })
+
+      on_exit(fn ->
+        LemonCore.Store.delete(:session_tokens, token1)
+        LemonCore.Store.delete(:session_tokens, token2)
+        LemonControlPlane.NodeStore.release_node_name(name, node_id1)
+        LemonCore.Store.delete(:nodes_registry, node_id1)
+        LemonCore.Store.delete(:nodes_registry, node_id2)
+      end)
+
+      assert {:ok, state} = Connection.init([])
+
+      frame =
+        Jason.encode!(%{
+          "type" => "req",
+          "id" => "conflict-connect",
+          "method" => "connect",
+          "params" => %{"auth" => %{"token" => token2}}
+        })
+
+      assert {:push, {:text, response_text}, _state} =
+               Connection.handle_in({frame, [opcode: :text]}, state)
+
+      response = Jason.decode!(response_text)
+      assert response["type"] == "res"
+      assert response["id"] == "conflict-connect"
+      assert response["ok"] == false
+      assert response["error"]["code"] == "CONFLICT"
+      assert response["error"]["message"] == "Node name is already in use"
+      assert response["error"]["details"] == %{"reason" => "node_name_conflict"}
+    end
+
+    test "node connect touches session and schedules hourly touch timer" do
+      suffix = Integer.to_string(System.unique_integer([:positive]))
+      node_id = "touch-ws-" <> suffix
+      name = "Touch WS " <> suffix
+      token = "touch-ws-token-" <> suffix
+
+      LemonControlPlane.NodeStore.put_node(node_id, %{
+        id: node_id,
+        name: name,
+        type: "coding_agent",
+        status: :offline
+      })
+
+      assert {:ok, info} =
+               LemonControlPlane.Auth.TokenStore.replace_node_session(token, %{
+                 "type" => "node",
+                 "nodeId" => node_id
+               }, ttl_ms: 24 * 60 * 60 * 1000)
+
+      node_pid = self()
+
+      on_exit(fn ->
+        LemonCore.NodeRegistry.unregister(node_id, node_pid)
+        LemonCore.Store.delete(:session_tokens, token)
+        LemonCore.Store.delete(:session_token_heads, {"node", node_id})
+        LemonControlPlane.NodeStore.release_node_name(name, node_id)
+        LemonCore.Store.delete(:nodes_registry, node_id)
+      end)
+
+      assert {:ok, state} = Connection.init([])
+
+      frame =
+        Jason.encode!(%{
+          "type" => "req",
+          "id" => "touch-connect",
+          "method" => "connect",
+          "params" => %{"auth" => %{"token" => token}}
+        })
+
+      assert {:push, {:text, hello}, connected_state} =
+               Connection.handle_in({frame, [opcode: :text]}, state)
+
+      assert Jason.decode!(hello)["type"] == "hello-ok"
+      assert is_reference(connected_state.node_session_touch_timer_ref)
+
+      # Token expiry should have been touched to 7 days
+      updated_info = LemonCore.Store.get(:session_tokens, token)
+      assert updated_info.expires_at_ms > info.expires_at_ms
+
+      # Test handling :node_session_touch message
+      assert {:ok, touched_state} =
+               Connection.handle_info(:node_session_touch, connected_state)
+
+      assert is_reference(touched_state.node_session_touch_timer_ref)
+
+      # Test terminate cancels timer
+      assert :ok = Connection.terminate(:normal, touched_state)
+    end
+  end
 end

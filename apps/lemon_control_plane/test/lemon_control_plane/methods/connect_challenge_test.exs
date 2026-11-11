@@ -365,7 +365,7 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
     end
 
     test "Authorize.from_params rejects invalid token" do
-      {:error, {:unauthorized, _}} =
+      {:error, {:unauthorized, _, _}} =
         Authorize.from_params(%{
           "auth" => %{"token" => "invalid-token-12345"}
         })

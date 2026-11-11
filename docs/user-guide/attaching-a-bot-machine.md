@@ -378,9 +378,27 @@ lemon node join --name studio-mac --controller wss://controller.example/ws \
 ```
 
 Credential files are mode 0600 in a mode 0700 directory, keyed by durable node ID
-and bound to the exact controller URL. Node sessions last seven days. Renewal
-uses the existing operator-authorized `--pair` flow with the locally stored
-recovery credential, retaining the same durable node identity and metadata:
+and bound to the exact controller URL. Node sessions expire after seven days
+**without contact**: the controller renews them on connect and hourly while
+connected, without rotating credentials or interrupting work.
+
+A rejected stored credential parks the running worker in `needs_reauthorization`
+instead of restarting it; a missing credential parks it in `needs_enrollment`.
+No work runs while parked. Check local state without contacting the controller:
+
+```bash
+lemon node status --name studio-mac --json
+```
+
+Use **Machines → Reconnect** in Lemon Bot to issue an owner-authorized repair
+invite (described below), then run its join command on the destination machine.
+The parked worker detects saved replacement credentials within about five
+seconds and resumes with the same durable identity. Network and controller-store
+outages retry automatically with backoff capped at sixty seconds; they do not
+require re-enrollment. Name conflicts retry every minute.
+
+The controller owner can also use the operator-authorized `--pair` flow with
+the locally stored recovery credential, retaining the same identity and metadata:
 
 ```bash
 LEMON_NODE_OPERATOR_TOKEN='CONTROLLER_OPERATOR_TOKEN' lemon node join \

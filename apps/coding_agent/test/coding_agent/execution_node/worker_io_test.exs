@@ -31,6 +31,7 @@ defmodule CodingAgent.ExecutionNode.WorkerIOTest do
       start_supervised!(
         {Worker,
          node_name: "io-worker",
+         status_writer: fn _, _ -> :ok end,
          controller: "ws://localhost:4040/ws",
          token: "test-token",
          cwd: root,

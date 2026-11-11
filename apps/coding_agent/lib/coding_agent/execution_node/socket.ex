@@ -13,7 +13,7 @@ defmodule CodingAgent.ExecutionNode.Socket do
 
   require Logger
 
-  alias CodingAgent.ExecutionNode.Codec
+  alias CodingAgent.ExecutionNode.{Codec, ConnectFailure}
 
   defstruct [
     :owner,
@@ -25,6 +25,7 @@ defmodule CodingAgent.ExecutionNode.Socket do
     :ping_token,
     :max_payload_bytes,
     pending: %{},
+    connect_failures: 0,
     stopping: false
   ]
 
@@ -34,6 +35,7 @@ defmodule CodingAgent.ExecutionNode.Socket do
           | {:event, String.t(), map()}
           | {:response, term(), {:ok, term()} | {:error, term()}}
           | {:authentication_error, term()}
+          | {:connect_retry, term()}
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -100,6 +102,7 @@ defmodule CodingAgent.ExecutionNode.Socket do
          %{
            state
            | connect_id: nil,
+             connect_failures: 0,
              max_payload_bytes: advertised_payload_limit(hello, state)
          }}
 
@@ -108,8 +111,18 @@ defmodule CodingAgent.ExecutionNode.Socket do
         {:ok, state}
 
       {:ok, {:response, id, {:error, error}}} when id == state.connect_id ->
-        notify(state, {:authentication_error, error})
-        {:close, {1008, "authentication failed"}, %{state | stopping: true}}
+        case ConnectFailure.classify(error) do
+          :transient ->
+            code = if is_map(error), do: Map.get(error, "code"), else: nil
+            notify(state, {:connect_retry, code})
+
+            {:close, {1013, "try again later"},
+             %{state | stopping: false, connect_failures: state.connect_failures + 1}}
+
+          _ ->
+            notify(state, {:authentication_error, error})
+            {:close, {1008, "authentication failed"}, %{state | stopping: true}}
+        end
 
       {:ok, {:response, id, result}} ->
         {pending, rest} = Map.pop(state.pending, id)
@@ -204,11 +217,20 @@ defmodule CodingAgent.ExecutionNode.Socket do
     fail_pending(state, :disconnected)
     notify(state, {:disconnected, reason})
 
-    delay = min(state.reconnect_delay_ms * max(attempt, 1), 5_000)
+    delay = reconnect_delay(state, attempt)
     if delay > 0, do: Process.sleep(delay)
 
     {:reconnect, %{state | pending: %{}, connect_id: nil, ping_token: nil}}
   end
+
+  @doc false
+  def reconnect_delay(%{connect_failures: failures}, _attempt) when failures > 0 do
+    base = min(1_000 * Integer.pow(2, min(failures - 1, 6)), 60_000)
+    min(round(base * (0.8 + :rand.uniform() * 0.4)), 60_000)
+  end
+
+  def reconnect_delay(state, attempt),
+    do: min(state.reconnect_delay_ms * max(attempt, 1), 5_000)
 
   @impl WebSockex
   def terminate(reason, state) do
