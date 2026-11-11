@@ -38,6 +38,11 @@ defmodule LemonControlPlane.A2A.RouterTest do
   end
 
   setup do
+    previous_loopback =
+      Application.get_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator)
+
+    Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, true)
+    on_exit(fn -> restore_env(:allow_unauthenticated_loopback_operator, previous_loopback) end)
     previous_config = Application.get_env(:lemon_control_plane, :a2a_config)
     previous_bridge = Application.get_env(:lemon_core, :router_bridge)
     :persistent_term.put({RunStub, :owner}, self())
@@ -71,6 +76,17 @@ defmodule LemonControlPlane.A2A.RouterTest do
     end)
 
     :ok
+  end
+
+  test "tokenless local peers require the explicit compatibility flag" do
+    Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, false)
+    assert {:error, :unauthorized} = LemonControlPlane.A2A.Auth.authenticate(conn(:post, "/"))
+
+    Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, true)
+    assert {:ok, "local"} = LemonControlPlane.A2A.Auth.authenticate(conn(:post, "/"))
+
+    remote = %{conn(:post, "/") | remote_ip: {192, 168, 1, 9}}
+    assert {:error, :unauthorized} = LemonControlPlane.A2A.Auth.authenticate(remote)
   end
 
   test "publishes an A2A v1.0 Agent Card" do

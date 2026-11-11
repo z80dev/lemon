@@ -13,6 +13,23 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Build Mac DMGs in release CI with a signed runtime-manifest pin, credential
   gating, notarization and verified receipts. Unconfigured builds remain
   unpublished preview artifacts; stable signed releases include a fixed DMG alias.
+### Changed
+
+- **Breaking security change:** control-plane, web and simulation listeners now
+  bind `127.0.0.1` by default, as do launcher epmd/distribution defaults. Existing
+  LAN clients must opt into `*_BIND_IP`, configure operator authentication, and
+  restart. Non-loopback main traffic is restricted to `/ws` and `/healthz`;
+  remote OpenAI/ACP APIs require explicit opt-in and dedicated tokens.
+- OpenAI/ACP require bearer authentication by default (falling back to the
+  operator token); tokenless local OpenAI/ACP/A2A requires the explicit loopback
+  compatibility flag. Containers explicitly bind inside their namespace and
+  require an operator token.
+
+### Added
+
+- Node-only gateway on loopback port `4044` for secure node tunnels/proxies:
+  node/enrollment `/ws` and `/healthz` only, never operator or tokenless access.
+  Setup reserves the gateway port and doctor reports exposed listeners.
 
 ### Fixed
 

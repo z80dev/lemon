@@ -184,7 +184,7 @@ defmodule LemonSimUi.Env do
       aliases: [],
       type: :string,
       default: "127.0.0.1",
-      doc: "Bind IP address for the LemonSimUi dev endpoint.",
+      doc: "Bind IP address for the LemonSimUi endpoint in development and releases.",
       secret?: false,
       required?: false,
       area: :endpoints,

@@ -17,6 +17,12 @@ defmodule LemonControlPlane.HTTP.RouterTest do
   }
 
   setup do
+    # These API behavior fixtures explicitly use the legacy local-only mode.
+    previous_loopback =
+      Application.fetch_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator)
+
+    Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, true)
+    on_exit(fn -> restore_env(:allow_unauthenticated_loopback_operator, previous_loopback) end)
     previous = Application.get_env(:lemon_control_plane, :openai_compat_submitter)
     previous_waiter = Application.get_env(:lemon_control_plane, :openai_compat_waiter)
     previous_run_getter = Application.get_env(:lemon_control_plane, :openai_compat_run_getter)

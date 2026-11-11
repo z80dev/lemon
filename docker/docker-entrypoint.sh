@@ -4,9 +4,12 @@
 # Two jobs, in order:
 #   1. As root: make the /data volume usable by the unprivileged `lemon` user,
 #      then drop privileges and re-run this script as that user.
-#   2. As lemon: supply the secrets config/runtime.exs demands of the
-#      lemon_runtime_full release, persisting generated ones on the volume so a
-#      restart does not invalidate every signed cookie.
+#   2. As lemon: bind the HTTP listeners to 0.0.0.0 (the container's ports are
+#      published with `-p`), require the operator token that non-loopback
+#      exposure depends on, and supply the secrets config/runtime.exs demands
+#      of the lemon_runtime_full release, persisting generated ones on the
+#      volume so a restart does not invalidate every signed cookie. The
+#      operator token is never persisted: it is supplied per start.
 set -eu
 
 DATA_DIR="${LEMON_DATA_DIR:-/data}"
@@ -68,6 +71,26 @@ require_or_generate() {
   echo "lemon: WARNING: it is stored in $ENV_FILE and only survives as long as" >&2
   echo "lemon: WARNING: the /data volume does. Set it explicitly in production." >&2
 }
+
+# Explicitly bind listeners to 0.0.0.0 so published container ports (-p) are reachable.
+export LEMON_CONTROL_PLANE_BIND_IP="${LEMON_CONTROL_PLANE_BIND_IP:-0.0.0.0}"
+export LEMON_CONTROL_PLANE_NODE_BIND_IP="${LEMON_CONTROL_PLANE_NODE_BIND_IP:-0.0.0.0}"
+export LEMON_WEB_BIND_IP="${LEMON_WEB_BIND_IP:-0.0.0.0}"
+export LEMON_SIM_UI_BIND_IP="${LEMON_SIM_UI_BIND_IP:-0.0.0.0}"
+
+# Erlang distribution and epmd keep the release's loopback defaults from
+# releases/<vsn>/env.sh (rel/env.sh.eex); nothing to set here.
+
+# The container binds control plane listeners to 0.0.0.0 so published ports (-p)
+# can reach them. Non-loopback control plane exposure requires an explicit operator token.
+# Operators must pass it per boot; operator tokens are not persisted across container restarts.
+if [ -z "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" ]; then
+  echo "lemon: LEMON_CONTROL_PLANE_OPERATOR_TOKEN is required when running the container." >&2
+  echo "lemon: The container binds the control plane to 0.0.0.0 for published ports (-p)," >&2
+  echo "lemon: which requires an operator token for authentication." >&2
+  echo "lemon: Pass -e LEMON_CONTROL_PLANE_OPERATOR_TOKEN=<token> (generate with 'openssl rand -hex 32')." >&2
+  exit 1
+fi
 
 # config/runtime.exs calls System.fetch_env! for this one when RELEASE_NAME is
 # lemon_runtime_full, so an unset value is a hard boot failure, not a warning.

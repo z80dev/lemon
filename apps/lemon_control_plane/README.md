@@ -18,10 +18,20 @@ export LEMON_CONTROL_PLANE_OPERATOR_TOKEN="$(openssl rand -hex 32)"
 
 Connect to the configured `/ws` endpoint (default local port 4040).
 
-The HTTP/WebSocket listener accepts an OTP `:ip` setting, for example
-`config :lemon_control_plane, ip: {127, 0, 0, 1}` before application startup.
-Its default remains `:any`. Disposable paired benchmark runtimes explicitly use
-loopback; this does not change an already-running service.
+Listeners default to `127.0.0.1`: control plane **4040**, node gateway **4044**,
+and LemonWeb **4080**. Use `LEMON_CONTROL_PLANE_BIND_IP` to opt into a different
+main bind; a non-loopback main bind requires an operator token, rejects tokenless
+compatibility, and serves only `GET /ws` and `GET /healthz` to remote peers.
+OpenAI/ACP HTTP APIs require bearer authentication even locally (their dedicated
+token, or the operator token when unset). Remote HTTP additionally requires
+`LEMON_CONTROL_PLANE_REMOTE_HTTP=openai,acp` and each enabled API's dedicated token.
+
+Expose **4044**, not 4040, for remote execution nodes. This gateway serves only
+`/ws` (node/enrollment credentials; never operators or tokenless access) and
+`/healthz`. Configure `LEMON_CONTROL_PLANE_NODE_BIND_IP` / `_NODE_PORT`; port `0`
+disables it. An occupied gateway port leaves the controller running but makes
+gateway availability false. Put TLS or an encrypted overlay in front of any
+non-loopback listener. Bind changes require a restart.
 
 Send:
 

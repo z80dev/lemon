@@ -177,6 +177,50 @@ defmodule LemonCli.Setup.WizardTest do
       assert System.get_env("LEMON_WEB_PORT") == "4081"
     end
 
+    test "an occupied node gateway port 4044 is detected, replaced, and saved", ctx do
+      opts = [port_free?: &(&1 != 4044), launch: false] ++ ctx.opts
+      assert :ok = Wizard.run_full([], recording_io([""]), opts)
+
+      events = drain_events([])
+
+      assert "Port 4044 for the node gateway is already in use. Use 4045 instead? [Y/n]: " in prompt_events(
+               events
+             )
+
+      env_file = File.read!(Path.join(ctx.home, ".lemon/ports.env"))
+      assert env_file =~ "LEMON_CONTROL_PLANE_NODE_PORT=4045\n"
+      assert System.get_env("LEMON_CONTROL_PLANE_NODE_PORT") == "4045"
+    end
+
+    test "non-interactive setup replaces occupied node gateway port 4044 and persists it", ctx do
+      opts = [port_free?: &(&1 != 4044), non_interactive: true] ++ ctx.opts
+      assert :ok = Wizard.run_full([], recording_io(), opts)
+
+      events = drain_events([])
+      assert prompt_events(events) == []
+
+      assert info_event?(
+               events,
+               &(&1 == "Port 4044 for the node gateway is in use; Lemon will use 4045.")
+             )
+
+      env_file = File.read!(Path.join(ctx.home, ".lemon/ports.env"))
+      assert env_file =~ "LEMON_CONTROL_PLANE_NODE_PORT=4045\n"
+      assert System.get_env("LEMON_CONTROL_PLANE_NODE_PORT") == "4045"
+    end
+
+    test "a node gateway disabled with LEMON_CONTROL_PLANE_NODE_PORT=0 is never reserved", ctx do
+      System.put_env("LEMON_CONTROL_PLANE_NODE_PORT", "0")
+      on_exit(fn -> System.delete_env("LEMON_CONTROL_PLANE_NODE_PORT") end)
+
+      opts = [port_free?: &(&1 != 4044), non_interactive: true] ++ ctx.opts
+      assert :ok = Wizard.run_full([], recording_io(), opts)
+
+      events = drain_events([])
+      refute info_event?(events, &String.contains?(&1, "node gateway"))
+      assert System.get_env("LEMON_CONTROL_PLANE_NODE_PORT") == "0"
+    end
+
     test "free ports, or ports owned by a running Lemon, are left alone", ctx do
       for opts <- [
             [port_free?: fn _ -> true end],

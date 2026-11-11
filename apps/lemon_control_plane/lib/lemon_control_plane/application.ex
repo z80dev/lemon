@@ -5,6 +5,12 @@ defmodule LemonControlPlane.Application do
 
   @impl true
   def start(_type, _args) do
+    with :ok <- LemonControlPlane.ListenerPolicy.validate() do
+      start_supervisor()
+    end
+  end
+
+  defp start_supervisor do
     # Allow :lemon_router to call LemonCore.EventBridge without depending on
     # :lemon_control_plane at compile time.
     :ok = LemonCore.EventBridge.configure(LemonControlPlane.EventBridge)
@@ -29,7 +35,12 @@ defmodule LemonControlPlane.Application do
         # Durable A2A runs outlive an individual HTTP request or SSE client.
         {Task.Supervisor, name: LemonControlPlane.A2A.TaskSupervisor},
         # HTTP/WebSocket server
-        server_child_spec()
+        server_child_spec(),
+        {LemonControlPlane.NodeGateway,
+         Application.get_env(:lemon_control_plane, :node_gateway,
+           port: default_node_port(),
+           ip: {127, 0, 0, 1}
+         )}
       ] ++ a2a_children()
 
     opts = [strategy: :one_for_one, name: LemonControlPlane.Supervisor]
@@ -38,7 +49,7 @@ defmodule LemonControlPlane.Application do
 
   defp server_child_spec do
     port = Application.get_env(:lemon_control_plane, :port, default_port())
-    ip = Application.get_env(:lemon_control_plane, :ip, :any)
+    ip = Application.get_env(:lemon_control_plane, :ip, {127, 0, 0, 1})
 
     {Bandit, plug: LemonControlPlane.HTTP.Router, ip: ip, port: port, scheme: :http}
   end
@@ -61,6 +72,10 @@ defmodule LemonControlPlane.Application do
     else
       []
     end
+  end
+
+  defp default_node_port do
+    if Code.ensure_loaded?(Mix) and Mix.env() == :test, do: 0, else: 4044
   end
 
   defp default_port do

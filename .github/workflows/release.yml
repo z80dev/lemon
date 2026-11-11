@@ -680,6 +680,7 @@ jobs:
             -e LEMON_SECRETS_MASTER_KEY=container-smoke-dummy-key-32char \
             -e LEMON_WEB_SECRET_KEY_BASE=container_smoke_secret_key_base_container_smoke_secret_key_base_x \
             -e LEMON_GATEWAY_NODE_COOKIE=container-smoke-cookie \
+            -e LEMON_CONTROL_PLANE_OPERATOR_TOKEN=container-smoke-operator-token-32char \
             "$IMAGE_REF"
 
           wait_for() {
