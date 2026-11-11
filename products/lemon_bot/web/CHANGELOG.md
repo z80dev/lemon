@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Web and Mac starter tasks now inspect system summaries, installed tools and running processes instead of personal folders, avoiding protected-folder scans during first use.
+
 - Bot setup defaults to explicit Standard access, preselects the sole online owned computer, and keeps optional customization collapsed. Import and duplicate confirm their own access choice; empty chats offer one-click starter tasks.
 
 - Connecting a computer needs only its friendly name, with optional settings under Advanced. Loopback controllers require an explicit same-computer choice before issuing an invite; verified online enrollment offers Create a Bot on that machine.

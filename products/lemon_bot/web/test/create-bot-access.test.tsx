@@ -219,7 +219,7 @@ test(`Empty starter task uses composer delivery and ${uncertain ? 'retains uncer
       reactions: [],
       kind: 'message',
       role: 'user',
-      text: "What's this Mac's hostname and macOS version?",
+      text: 'Submitted starter task',
       streaming: false,
       attachmentIds: [],
     }],
@@ -232,8 +232,9 @@ test(`Empty starter task uses composer delivery and ${uncertain ? 'retains uncer
 
   expect(container.querySelectorAll('.chat-starter-button')).toHaveLength(3);
 
-  const starterBtn = [...container.querySelectorAll('.chat-starter-button')].find(b => b.textContent?.includes('hostname'));
-  expect(starterBtn).toBeDefined();
+  const starterBtn = container.querySelector<HTMLButtonElement>('.chat-starter-button')!;
+  const selectedTask = starterBtn.textContent;
+  expect(selectedTask?.length).toBeGreaterThan(0);
 
   await act(async () => {
     starterBtn?.click();
@@ -242,7 +243,7 @@ test(`Empty starter task uses composer delivery and ${uncertain ? 'retains uncer
   const sendCall = calls.find(call => call.endpoint === 'POST /conversations/:id/messages');
   expect(sendCall).toBeDefined();
   const sendBody = extractBody(sendCall?.options);
-  expect(sendBody.text).toBe("What's this Mac's hostname and macOS version?");
+  expect(sendBody.text).toBe(selectedTask);
   if (uncertain) {
     await act(async () => { starterBtn?.click(); });
     expect(calls.filter(call => call.endpoint === 'POST /conversations/:id/messages')).toHaveLength(1);

@@ -272,11 +272,22 @@ public struct ConversationView: View {
     private var hostnameTask: String {
         let os = hostInfo?.os.lowercased() ?? ""
         if os.contains("mac") || os.contains("darwin") {
-            return "What's this Mac's hostname and macOS version?"
+            return "What's this Mac's hostname, macOS version and free disk space? Use df -h /, not a folder scan."
         } else if os.contains("linux") {
-            return "What's this machine's hostname and Linux distribution?"
+            return "What's this Linux machine's hostname, OS version and free disk space? Use df -h /, not a folder scan."
         } else {
-            return "What's this machine's hostname and OS version?"
+            return "What's this computer's hostname, OS version and free disk space? Use system summaries, not folder scans."
+        }
+    }
+
+    private var installedToolsTask: String {
+        let os = hostInfo?.os.lowercased() ?? ""
+        if os.contains("mac") || os.contains("darwin") {
+            return "Which apps and command-line tools are installed here? Check /Applications and package-manager inventories, not personal folders."
+        } else if os.contains("linux") {
+            return "Which command-line tools and packages are installed here? Use PATH and package-manager inventories, not personal folders."
+        } else {
+            return "Which apps and command-line tools are installed here? Use system application and package-manager inventories, not personal folders."
         }
     }
 
@@ -318,8 +329,8 @@ public struct ConversationView: View {
                 Text("Message \(title)").font(LBFont.rowSubtitle).foregroundStyle(LB.muted)
                 VStack(spacing: 8) {
                     starterButton(task: hostnameTask, icon: "terminal")
-                    starterButton(task: "What's taking up space in Downloads?", icon: "arrow.down.circle")
-                    starterButton(task: "List the projects in my home folder.", icon: "folder")
+                    starterButton(task: installedToolsTask, icon: "app.badge")
+                    starterButton(task: "Summarize what's running right now using a process snapshot, without reading personal files.", icon: "chart.bar")
                 }
                 .frame(maxWidth: 380)
                 .padding(.top, 4)
