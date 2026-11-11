@@ -19,6 +19,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Isolate named workers' DETS state from the controller, guard against concurrent
   VM writers, back up and rebuild the controller's legacy DETS files once, and
   expose local worker state with `lemon node status --name NAME --json`.
+- Stop the Lemon Bot transcript (Mac and iPhone) from pinning a CPU core in an
+  endless SwiftUI layout loop while a conversation is open.
+
 - Load the certificate provider before Telegram and Discord setup construct their
   first HTTPS request, preserving TLS verification on cold CLI invocations.
 

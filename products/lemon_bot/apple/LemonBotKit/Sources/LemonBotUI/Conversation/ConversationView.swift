@@ -188,7 +188,6 @@ public struct ConversationView: View {
                 .frame(maxWidth: .infinity)
                 .animation(settled && !reduceMotion ? LBMotion.spring : nil, value: rows.map(\.id) + [typing ? "typing" : ""])
             }
-            .defaultScrollAnchor(.bottom)
             #if os(iOS)
             .scrollDismissesKeyboard(.interactively)
             .onGeometryChange(for: CGFloat.self) { $0.size.height - $0.safeAreaInsets.top - $0.safeAreaInsets.bottom } action: { _ in
@@ -218,7 +217,11 @@ public struct ConversationView: View {
                 }
             }
             .onChange(of: pinTick) { _, _ in
-                Task { @MainActor in await Task.yield(); proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+                Task { @MainActor in
+                    await Task.yield()
+                    guard jumpID == nil else { return }
+                    proxy.scrollTo(Self.bottomID, anchor: .bottom)
+                }
             }
             .onChange(of: store.navigationTarget?.entryID) { _, _ in Task { await loadTargetEntry() } }
             .task(id: flashID) {
@@ -245,8 +248,10 @@ public struct ConversationView: View {
     private func follow(_ proxy: ScrollViewProxy, animated: Bool, force: Bool) {
         let following = force || atBottom || Date().timeIntervalSince(leftBottomAt) < 0.2
         guard following else { if settled { hasNewBelow = true }; return }
+        let pendingJump = jumpTick
         Task { @MainActor in
             await Task.yield()
+            guard jumpTick == pendingJump else { return }
             if animated && settled && !reduceMotion { withAnimation(LBMotion.spring) { proxy.scrollTo(Self.bottomID, anchor: .bottom) } }
             else { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
         }
@@ -478,6 +483,9 @@ public struct ConversationView: View {
     private func open() async {
         settled = false; atBottom = true; hasNewBelow = false; renderedReadSeq = 0; readTarget = 0; loadedRuns = []; runsError = nil
         if let conversation, conversation.unreadCount > 0 { unreadFromSeq = conversation.lastReadSeq + 1 } else { unreadFromSeq = nil }
+        // Explicit pins avoid bottom-anchor feedback as the lazy stack refines its measured height.
+        // Pin cached content before loading, including the reconnect-required early return.
+        if jumpID == nil { pinTick += 1 }
         // The shared connection panel owns revoked-device recovery; retain the cached transcript.
         guard store.connectionState != "reconnect_required" else { settled = true; return }
         let runsTask = Task { await loadRuns() }
