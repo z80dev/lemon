@@ -1,0 +1,7 @@
+{
+  "id": "sys_invoice_migration",
+  "language": "sql",
+  "category": "migration",
+  "difficulty": "hard",
+  "prompt": "Repair the SQLite invoice schema migration in migrate.sql and migrations/*.sql. Run it from the repository root with sqlite3 DATABASE < migrate.sql. The complete schema and behavioral contract is in README.md. Preserve every invoice, invoice line, and payment, including IDs and all values except the documented state/currency normalization; preserve unrelated tables. Replace the permissive legacy schema with the documented constraints and restrictive foreign keys. The migration must be atomic on invalid legacy data, set user_version to 2 only on success, finish with foreign_keys enabled in its own connection, and be safe to run repeatedly, including after additional version-2 writes. Keep the migration SQLite 3.40 CLI-compatible and offline. Visible tests: python3 -m unittest discover -s tests -v."
+}

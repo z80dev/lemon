@@ -1,0 +1,7 @@
+{
+  "id": "sys_rotate_logs",
+  "language": "bash",
+  "category": "bug_fix",
+  "difficulty": "easy",
+  "prompt": "Repair rotate.sh, the local log rotation utility. Invoke it as bash rotate.sh DIRECTORY KEEP. KEEP must be a decimal integer 1..50 without leading zeroes; wrong arguments, an invalid KEEP, or a nonexistent/non-directory DIRECTORY must exit 2 before changing anything (diagnostic on stderr, no stdout). Success exits 0 with no stdout. For every immediate regular, non-symlink file whose basename ends exactly in .log, delete its .KEEP archive, shift existing .1 through .(KEEP-1) archives upward in descending order (gaps are allowed), rename the active file to .1, and create an empty active file with the original permission bits. Ignore subdirectories, symlinks, and non-.log files. Repeated rotations must work, including an empty directory, KEEP=1, spaces, tabs, newlines, glob characters, and leading dashes in names or directory paths. Existing numbered archives, if any, are regular files, and all filesystem operations are permitted. Do not rotate files recursively. Preserve archive contents exactly. The script must retain strict bash error handling. Update the README if needed; run python3 -m unittest discover -s tests."
+}
