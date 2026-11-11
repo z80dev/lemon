@@ -283,7 +283,6 @@ defmodule Lemon.MixProject do
     File.chmod!(python3, 0o755)
 
     retain_python_licenses(target, series)
-
     for link <- symlinks(target), do: File.rm!(link)
 
     case symlinks(target) do
@@ -310,7 +309,6 @@ defmodule Lemon.MixProject do
     File.cp!(cpython, Path.join(notices, "CPYTHON-LICENSE.txt"))
     File.cp!(builder, Path.join(notices, "PYTHON-BUILD-STANDALONE-LICENSE.txt"))
   end
-
   defp symlinks(dir) do
     find = System.find_executable("find") || Mix.raise("find is required to bundle python")
 

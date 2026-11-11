@@ -36,6 +36,32 @@ final class GrantPresentationTests: XCTestCase {
         var limited = grant; limited.effectiveLevel = "off"
         XCTAssertNotEqual(GrantPresentation.status(limited, capability), ready)
     }
+    func testMacPermissionReasonsExplainWorkerSetup() {
+        let expected = [
+            "macos_grant_measured": "macOS permission checked.",
+            "macos_grant_denied": "macOS hasn't allowed this — open Permissions on that Mac.",
+            "macos_grant_probe_unavailable": "macOS permissions can't be checked until this Mac uses Lemon Bot Worker — open Permissions on that Mac."
+        ]
+        for (reason, message) in expected {
+            var desktop = capability
+            desktop.id = "accessibility"
+            desktop.category = "os_app"
+            desktop.reason = reason
+            desktop.configuredLevel = reason == "macos_grant_measured" ? "read_interact" : "off"
+            desktop.osGrant = reason == "macos_grant_measured" ? "granted" : reason == "macos_grant_denied" ? "denied" : "unknown"
+            desktop.stale = reason == "macos_grant_probe_unavailable"
+            var permission = grant
+            permission.capabilityId = desktop.id
+            permission.reasons = [reason]
+            permission.effectiveLevel = desktop.configuredLevel
+            XCTAssertEqual(GrantPresentation.status(permission, desktop), message)
+            XCTAssertEqual(permission.reasons, [reason])
+            permission.reasons.append("Local execution is deny; workspace ceiling is deny.")
+            XCTAssertTrue(GrantPresentation.status(permission, desktop).contains("workspace policy"))
+            permission.reasons.append("Tool-policy cutover has not been acknowledged.")
+            XCTAssertTrue(GrantPresentation.status(permission, desktop).contains("not yet confirmed"))
+        }
+    }
     func testUnknownCodesStayInRawEvidence() {
         var unknown = grant; unknown.reasons = ["future_machine_code"]; unknown.effectiveLevel = "off"
         XCTAssertFalse(GrantPresentation.status(unknown, nil).contains("future_machine_code"))

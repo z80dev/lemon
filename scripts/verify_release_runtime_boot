@@ -334,7 +334,6 @@ assert_bundled_python() {
       exit 1
     fi
   done
-
   if ! env -i PATH=/usr/bin:/bin "$python_bin" \
     -c 'import pty,fcntl,os; os.pread' > /dev/null 2>&1; then
     echo "$profile: bundled interpreter cannot import the worker helper modules" >&2

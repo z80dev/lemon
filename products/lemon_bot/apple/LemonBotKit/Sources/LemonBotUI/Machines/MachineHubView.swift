@@ -158,6 +158,13 @@ public struct MachineDetailView: View {
                 if let capabilities {
                     Section("Capabilities and actual OS grants") {
                         Text("\(capabilities.os) · \(capabilities.stale ? "Stale" : "Measured") · \(hubDate(capabilities.measuredAtMs))")
+                        #if os(macOS)
+                        if WorkerHost.canManage(nodeName: machine.nodeName, localNodeName: WorkerHost.workerUnit()?.nodeName, role: store.member?.role) {
+                            NavigationLink("macOS permissions") {
+                                MacPermissionsView(store: store, machineID: machineID, nodeName: machine.nodeName, runtimeVersion: host?.lemonVersion)
+                            }
+                        }
+                        #endif
                         ForEach(capabilities.items, id: \.id) { capability in
                             VStack(alignment: .leading) {
                                 Text(capability.name).font(.headline)

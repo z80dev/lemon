@@ -22,6 +22,7 @@ including the backup and rollback guidance **before installing a connector**.
 - On macOS, the Accessibility and Screen Recording permissions the runtime asks
   for on first use. `~/.local/share/lcu/current/bin/lcu doctor` checks the
   installation, permissions and home-folder length.
+  These computer-use permissions belong to the ChatGPT helper, not Lemon Bot Worker.
 
 ## Enable it
 
