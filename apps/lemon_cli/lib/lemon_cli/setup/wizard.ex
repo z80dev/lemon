@@ -321,7 +321,7 @@ defmodule LemonCli.Setup.Wizard do
 
   # `verified` and `saved` both count as ready: the credential resolves, and
   # Lemon re-checks a `saved` provider on the first message.
-  defp ready_state?(state), do: state in [:verified, :saved, "verified", "saved"]
+  defp ready_state?(state), do: state in [:verified, :saved]
 
   # ──────────────────────────────────────────────────────────────────────────
   # Full wizard steps

@@ -83,6 +83,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Source and packaged launchers use portable GNU/BSD permission probes and
+  consistently abbreviate controller log paths with `~` in status output.
+- CLI setup and service handling honor their typed readiness and error contracts
+  under Elixir 1.20 / OTP 29 without unreachable fallback clauses.
 - Named workers refuse credential-bearing loopback connections unless the listener
   belongs to their OS user, including tunneled MCP requests. Deliberate cross-user
   deployments can opt out with `LEMON_NODE_TRUST_LOOPBACK_LISTENER=1`.

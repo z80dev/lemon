@@ -274,9 +274,6 @@ defmodule LemonCli.Setup.ModelReadiness do
 
       :credential_not_usable ->
         %{base | state: :action_required, reason: :credential_missing}
-
-      _ ->
-        %{base | state: :action_required, reason: base.reason || :credential_missing}
     end
   end
 
@@ -410,7 +407,7 @@ defmodule LemonCli.Setup.ModelReadiness do
     preferred =
       case Providers.find(ProviderNames.config_name(provider_id) || provider_id) do
         nil -> []
-        spec -> spec.preferred_models || []
+        spec -> spec.preferred_models
       end
 
     Enum.find(preferred, &(&1 in candidates)) || List.first(candidates)

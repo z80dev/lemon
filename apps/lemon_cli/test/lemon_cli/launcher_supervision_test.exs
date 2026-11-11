@@ -146,6 +146,7 @@ defmodule LemonCli.LauncherSupervisionTest do
     for root <- [ctx.source, ctx.release] do
       assert {output, 1} = launch(root, ["status"], env)
       assert output =~ "supervised by systemd (#{unit})"
+      assert output =~ "log: ~/.lemon/logs/controller.log"
       refute output =~ "not supervised"
     end
   end
@@ -519,8 +520,9 @@ defmodule LemonCli.LauncherSupervisionTest do
 
     executable(Path.join(ctx.tools, "elixir"), """
     printf '%s\\n' "$LEMON_UNINSTALL_MANIFEST" > "#{probe}"
-    stat -f '%Lp' "$LEMON_UNINSTALL_MANIFEST" >> "#{probe}" 2>/dev/null ||
-      stat -c '%a' "$LEMON_UNINSTALL_MANIFEST" >> "#{probe}" 2>/dev/null
+    mode="$(stat -c '%a' "$LEMON_UNINSTALL_MANIFEST" 2>/dev/null)" ||
+      mode="$(stat -f '%Lp' "$LEMON_UNINSTALL_MANIFEST" 2>/dev/null)"
+    printf '%s\\n' "$mode" >> "#{probe}"
     exit 0
     """)
 
