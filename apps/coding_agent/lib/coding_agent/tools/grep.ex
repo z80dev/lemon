@@ -541,6 +541,9 @@ defmodule CodingAgent.Tools.Grep do
         %{result | details: details}
       end
     end
+  rescue
+    SystemLimitError ->
+      {:error, "Search pattern exceeded its match budget; simplify the pattern"}
   end
 
   defp compile_matcher(pattern, case_sensitive, true) do

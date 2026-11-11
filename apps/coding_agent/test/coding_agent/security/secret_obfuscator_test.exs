@@ -22,6 +22,26 @@ defmodule CodingAgent.Security.SecretObfuscatorTest do
     SecretObfuscator.build([cwd: ctx.cwd, agent_dir: ctx.agent_dir, env: env] ++ opts)
   end
 
+  test "expensive configured regex withholds all emitted leaves rather than skipping screening",
+       ctx do
+    File.write!(Path.join(ctx.agent_dir, "secrets.yml"), """
+    - type: regex
+      content: "(a+)+$"
+      mode: replace
+    """)
+
+    obfuscator = build(ctx, %{"API_KEY" => "known-secret-value"})
+    adversarial = String.duplicate("a", 100) <> "!"
+    assert SecretObfuscator.obfuscate(obfuscator, adversarial) == "[REDACTED]"
+
+    for messages <- split_batches("known-secret-value", adversarial) do
+      assert {:ok, result} = SecretObfuscator.transform(messages, obfuscator)
+      refute inspect(result) =~ adversarial
+      refute inspect(result) =~ "known-secret-value"
+      assert inspect(result) =~ "[REDACTED]"
+    end
+  end
+
   defp split_batches(first, second) do
     [
       [%{role: :user, content: first}, %{role: :tool_result, content: second}],

@@ -11,6 +11,21 @@ defmodule CodingAgent.Tools.Bash.InterceptorTest do
     available_tools: ~w(read grep find ls edit)
   ]
 
+  test "expensive custom rules fail closed" do
+    opts = [
+      available_tools: ["read"],
+      bash_config: %{
+        interceptor: %{
+          enabled: true,
+          rules: [%{"pattern" => "(a+)+$", "tool" => "read", "message" => "Use read"}]
+        }
+      }
+    ]
+
+    assert {:blocked, message} = Interceptor.check(String.duplicate("a", 100) <> "!", opts)
+    assert message =~ "match budget"
+  end
+
   for {command, tool} <- [
         {"cat file", "read"},
         {"head file", "read"},

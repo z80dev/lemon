@@ -3,6 +3,22 @@ defmodule CodingAgent.Tools.Task.StructuredOutputTest do
 
   alias CodingAgent.Tools.Task.StructuredOutput
 
+  test "expensive schema patterns reject the response without raising" do
+    pattern = %{"type" => "string", "pattern" => "(a+)+$"}
+
+    for schema <- [
+          pattern,
+          %{"not" => pattern},
+          %{"anyOf" => [pattern, true]},
+          %{"oneOf" => [pattern, true]}
+        ] do
+      assert {:error, message} =
+               StructuredOutput.decode(Jason.encode!(String.duplicate("a", 100) <> "!"), schema)
+
+      assert message =~ "pattern exceeded its match budget"
+    end
+  end
+
   describe "validate_schema/1" do
     test "accepts disabled, boolean, empty, and annotated schemas" do
       for schema <- [nil, true, false, %{}] do

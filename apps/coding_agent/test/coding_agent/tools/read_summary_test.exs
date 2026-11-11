@@ -6,6 +6,17 @@ defmodule CodingAgent.Tools.ReadSummaryTest do
 
   @moduletag :tmp_dir
 
+  test "very long near-method lines remain readable", %{tmp_dir: root} do
+    path = Path.join(root, "large.ts")
+
+    content =
+      "  f(" <>
+        String.duplicate("):value", 10_000) <> "\n" <> String.duplicate("// filler\n", 300)
+
+    File.write!(path, content)
+    assert %LemonAgent.Types.AgentToolResult{} = read(root, path)
+  end
+
   test "bare large code reads keep declarations and mark exact omitted ranges", %{tmp_dir: root} do
     path = Path.join(root, "large.ex")
     content = elixir_file(320)

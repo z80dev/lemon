@@ -252,6 +252,12 @@ defmodule LemonChannels.Adapters.Email.OutboundTest do
   end
 
   describe "deliver/1 — payloads that never reach the network" do
+    test "oversized near-address inputs reject before regex matching" do
+      address = "a@" <> String.duplicate("b.", 100_000)
+      payload = payload(peer: %{kind: :dm, id: address, thread_id: nil})
+      assert {:error, :missing_recipient} = Outbound.deliver(payload)
+    end
+
     test "refuses a kind email has no way to express" do
       for kind <- [:edit, :delete, :reaction, :voice] do
         assert {:error, {:unsupported_kind, ^kind}} = Outbound.deliver(payload(kind: kind))

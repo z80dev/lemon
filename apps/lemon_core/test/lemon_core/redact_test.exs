@@ -8,6 +8,23 @@ defmodule LemonCore.RedactTest do
     defstruct [:api_key, :metadata]
   end
 
+  test "unscannable text is withheld completely in every redaction mode" do
+    input = String.duplicate("a", 1_000_000) <> " token=must-not-leak"
+
+    for opts <- [[], [strict: true], [drop_keys: true], [strict: true, drop_keys: true]] do
+      assert Redact.text(input, opts) == "[REDACTED]"
+      assert Redact.text(input, Keyword.put(opts, :count, true)) == {"[REDACTED]", 1}
+    end
+
+    assert Redact.map(%{message: [input]}) == %{message: ["[REDACTED]"]}
+    assert Redact.text("[REDACTED]", count: true) == {"[REDACTED]", 0}
+  end
+
+  test "long whitespace before a comment remains unchanged in strict mode" do
+    input = String.duplicate(" ", 60_000) <> "#=value"
+    assert Redact.text(input, strict: true, count: true) == {input, 0}
+  end
+
   test "URL query pairs redact independently in every position" do
     for {query, expected} <- [
           {"mode=ready", "mode=ready"},

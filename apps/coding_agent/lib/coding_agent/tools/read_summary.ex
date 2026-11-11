@@ -44,6 +44,8 @@ defmodule CodingAgent.Tools.ReadSummary do
     else
       :not_applicable
     end
+  rescue
+    SystemLimitError -> :not_applicable
   end
 
   defp eligible?(path, size),
@@ -115,7 +117,11 @@ defmodule CodingAgent.Tools.ReadSummary do
         braces = max(0, state.braces + count(code, "{") - count(code, "}"))
         parens = max(0, state.parens + count(code, "(") - count(code, ")"))
         declaration? = Regex.match?(@declaration, text) or String.starts_with?(text, "@")
-        shallow_method? = state.braces <= 1 and indent <= 4 and Regex.match?(@method, text)
+
+        shallow_method? =
+          state.braces <= 1 and indent <= 4 and byte_size(text) <= 4_096 and
+            Regex.match?(@method, text)
+
         top_level? = indent == 0 and (state.braces == 0 or braces == 0)
         continuation? = state.header and state.parens > 0
 

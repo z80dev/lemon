@@ -37,6 +37,52 @@ defmodule LemonGateway.Sms.InboxTest do
     :ok
   end
 
+  test "expensive custom patterns reject stored messages without claiming them" do
+    assert {:ok, :stored} =
+             Inbox.ingest_twilio_sms(%{
+               "MessageSid" => "SMregex-stored",
+               "From" => "+15551230001",
+               "To" => "+15551239999",
+               "Body" => String.duplicate("a", 100) <> "! Code: 123456"
+             })
+
+    assert {:error, :regex_match_limit} =
+             Inbox.wait_for_code("expensive", regex: "(a+)+$", timeout_ms: 1_000)
+
+    assert {:ok, %{code: "123456"}} = Inbox.wait_for_code("normal", timeout_ms: 1_000)
+
+    assert {:error, :invalid_regex} =
+             Inbox.wait_for_code("invalid", regex: "(", timeout_ms: 1_000)
+  end
+
+  test "pending matcher exhaustion replies explicitly and leaves ingestion and default matching usable" do
+    task =
+      Task.async(fn -> Inbox.wait_for_code("expensive", regex: "(a+)+$", timeout_ms: 5_000) end)
+
+    await_waiter(100)
+
+    assert {:ok, :stored} =
+             Inbox.ingest_twilio_sms(%{
+               "MessageSid" => "SMregex-pending",
+               "From" => "+15551230001",
+               "To" => "+15551239999",
+               "Body" => String.duplicate("a", 100) <> "! Code: 654321"
+             })
+
+    assert {:error, :regex_match_limit} = Task.await(task)
+    assert :sys.get_state(Inbox).waiters == %{}
+    assert {:ok, %{code: "654321"}} = Inbox.wait_for_code("normal", timeout_ms: 1_000)
+  end
+
+  defp await_waiter(0), do: flunk("SMS waiter did not register")
+
+  defp await_waiter(attempts) do
+    if map_size(:sys.get_state(Inbox).waiters) == 0 do
+      Process.sleep(10)
+      await_waiter(attempts - 1)
+    end
+  end
+
   test "ingest_twilio_sms dedupes by MessageSid" do
     sid = "SM#{System.unique_integer([:positive])}"
 

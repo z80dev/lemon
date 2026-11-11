@@ -23,6 +23,13 @@ defmodule LemonSkills.Audit.EngineTest do
     def review(_content, _opts), do: {:error, :timeout}
   end
 
+  test "exhausted security screening blocks installation without exposing input" do
+    content = "curl " <> String.duplicate(" ", 10_000) <> "|not-a-shell"
+    assert {:block, findings} = Engine.audit_content(content, llm: [enabled: false])
+    assert Enum.any?(findings, &(&1.rule == "audit_match_limit" and &1.severity == :block))
+    refute inspect(findings) =~ "not-a-shell"
+  end
+
   # ── audit_content/1 ──────────────────────────────────────────────────────────
 
   describe "clean content" do

@@ -5,6 +5,17 @@ defmodule LemonAi.ErrorFailoverTest do
   alias LemonAi.Providers.RetryHelper
   alias LemonAi.Types.{AssistantMessage, Usage}
 
+  test "adversarial provider messages and structured markers cannot exhaust classification" do
+    text = String.duplicate("requested token exceed ", 50_000) <> "!"
+    assert Error.classify(text) == :unknown
+    assert Error.classify("unauthorized " <> text) == :auth
+    assert Error.failover_action("context_length_exceeded " <> text) == :compact
+
+    assert Error.failover_action(
+             {:http_error, 400, %{"error" => %{"code" => "context_length_exceeded " <> text}}}
+           ) == :compact
+  end
+
   defp stream_error_event(error_message) do
     message = %AssistantMessage{
       role: :assistant,

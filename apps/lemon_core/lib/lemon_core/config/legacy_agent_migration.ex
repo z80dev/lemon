@@ -211,7 +211,7 @@ defmodule LemonCore.Config.LegacyAgentMigration do
   end
 
   defp split_key_value(line) do
-    case Regex.run(~r/^((?:"(?:[^"\\]|\\.)*"|'[^']*'|[^=])+?)\s*=\s*(.+)$/, line,
+    case Regex.run(~r/^((?:"(?:[^"\\]|\\.)*+"|'[^']*+'|[^='"])++)\s*=\s*(.+)$/, line,
            capture: :all_but_first
          ) do
       [key, value] -> [key, value]

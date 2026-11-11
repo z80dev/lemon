@@ -3,7 +3,7 @@ defmodule LemonWeb.ManagementText do
 
   # Management labels and history are not the private chat transcript. Omit
   # slash-bearing tokens rather than guessing which repository paths are public.
-  @path_token ~r{[^\s<>"'`]*[\\/][^\s<>"'`]*}u
+  @path_token ~r{(?<![^\s<>"'`])[^\s<>"'`\\/]*[\\/][^\s<>"'`]*}u
   @max_depth 8
   @max_items 200
 
@@ -19,6 +19,8 @@ defmodule LemonWeb.ManagementText do
     else
       "[Invalid text]"
     end
+  rescue
+    SystemLimitError -> "[REDACTED]"
   end
 
   def text(_value, _opts), do: "[Hidden]"

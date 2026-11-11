@@ -5,6 +5,9 @@ defmodule LemonGateway.Sms.Inbox do
   Ingests Twilio SMS webhook payloads, extracts verification codes (4-8 digit
   sequences), and supports filtering, claiming, and waiting for incoming codes.
   Expired messages are periodically cleaned up based on a configurable TTL.
+  Custom code patterns compile once per waiter and use a bounded match budget.
+  Exhaustion replies `{:error, :regex_match_limit}` without claiming the message
+  or silently substituting the default code matcher.
   """
 
   use GenServer
@@ -122,11 +125,15 @@ defmodule LemonGateway.Sms.Inbox do
   def handle_call({:wait_for_code, session_key, opts}, from, state) do
     session_key = normalize_session_key(session_key)
     opts = normalize_wait_opts(opts)
+    opts = Keyword.put(opts, :regex, compile_code_regex(opts[:regex]))
 
     case find_matching_code_message(opts) do
       {:ok, %{code: code, message: msg}} ->
         {msg, state} = maybe_claim_and_persist(msg, session_key, opts, state)
         {:reply, {:ok, %{code: code, message: msg}}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
 
       :miss ->
         waiter_id = LemonCore.Id.run_id()
@@ -148,6 +155,7 @@ defmodule LemonGateway.Sms.Inbox do
         {:noreply, %{state | waiters: Map.put(state.waiters, waiter_id, waiter)}}
     end
   rescue
+    Regex.CompileError -> {:reply, {:error, :invalid_regex}, state}
     e -> {:reply, {:error, {:exception, Exception.message(e)}}, state}
   end
 
@@ -307,6 +315,7 @@ defmodule LemonGateway.Sms.Inbox do
     end)
     |> case do
       :miss -> :miss
+      {:error, _} = error -> error
       %{code: _c, message: _m} = hit -> {:ok, hit}
       _ -> :miss
     end
@@ -337,32 +346,35 @@ defmodule LemonGateway.Sms.Inbox do
         body = msg["body"] || ""
         code = extract_code(body, regex)
 
-        if is_binary(code) and code != "" do
-          %{code: code, message: msg}
-        else
-          false
+        case code do
+          {:error, _} = error -> error
+          code when is_binary(code) and code != "" -> %{code: code, message: msg}
+          _ -> false
         end
     end
   end
+
+  defp compile_code_regex(regex) when is_binary(regex), do: Regex.compile!(regex)
+  defp compile_code_regex(_), do: nil
 
   defp extract_code(body, nil) do
     List.first(extract_default_codes(body))
   end
 
-  defp extract_code(body, regex) when is_binary(regex) do
-    case Regex.compile(regex) do
-      {:ok, re} ->
-        case Regex.run(re, body, capture: :first) do
-          [match | _] -> match
-          _ -> nil
-        end
-
-      _ ->
-        List.first(extract_default_codes(body))
+  defp extract_code(body, %Regex{} = regex) do
+    case :re.run(body, Regex.re_pattern(regex), [
+           {:capture, :first, :binary},
+           {:match_limit, 50_000},
+           {:match_limit_recursion, 5_000},
+           :report_errors
+         ]) do
+      {:match, [match | _]} -> match
+      :nomatch -> nil
+      {:error, _} -> {:error, :regex_match_limit}
     end
+  rescue
+    SystemLimitError -> {:error, :regex_match_limit}
   end
-
-  defp extract_code(body, _regex), do: List.first(extract_default_codes(body))
 
   defp maybe_claim_and_persist(%{} = msg, session_key, opts, state) do
     if opts[:claim] == true do
@@ -384,38 +396,32 @@ defmodule LemonGateway.Sms.Inbox do
   end
 
   defp fulfill_waiters(msg, state) do
-    # Fulfill at most one waiter per message.
-    waiter =
-      state.waiters
-      |> Map.values()
-      |> Enum.find(fn w -> match_code(msg, w.opts) end)
+    # Failed patterns are retired and cannot prevent another waiter receiving this SMS.
+    Enum.reduce_while(Map.values(state.waiters), state, fn waiter, state ->
+      case match_code(msg, waiter.opts) do
+        false ->
+          {:cont, state}
 
-    if is_nil(waiter) do
-      state
-    else
-      %{code: code} = match_code(msg, waiter.opts)
+        {:error, _} = error ->
+          GenServer.reply(waiter.from, error)
+          {:cont, remove_waiter(state, waiter)}
 
-      _ = cancel_timer(waiter.timer_ref)
-      _ = Process.demonitor(waiter.mon_ref, [:flush])
+        %{code: code} ->
+          {claimed, state} =
+            maybe_claim_and_persist(msg, waiter.session_key, waiter.opts, state)
 
-      msg =
-        if waiter.opts[:claim] == true do
-          updated =
-            msg
-            |> Map.put("claimed_by", waiter.session_key)
-            |> Map.put("claimed_at_ms", now_ms())
-
-          :ok = InboxStore.put(msg["message_sid"], updated)
-          updated
-        else
-          msg
-        end
-
-      GenServer.reply(waiter.from, {:ok, %{code: code, message: msg}})
-      %{state | waiters: Map.delete(state.waiters, waiter.id)}
-    end
+          GenServer.reply(waiter.from, {:ok, %{code: code, message: claimed}})
+          {:halt, remove_waiter(state, waiter)}
+      end
+    end)
   rescue
     _ -> state
+  end
+
+  defp remove_waiter(state, waiter) do
+    _ = cancel_timer(waiter.timer_ref)
+    _ = Process.demonitor(waiter.mon_ref, [:flush])
+    %{state | waiters: Map.delete(state.waiters, waiter.id)}
   end
 
   defp cleanup_expired_messages do

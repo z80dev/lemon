@@ -227,7 +227,7 @@ defmodule LemonCore.TerminalBackendPolicy do
   end
 
   defp validate_cpu(value) do
-    if Regex.match?(~r/^([1-9][0-9]*|0\.[0-9]*[1-9][0-9]*|[1-9][0-9]*\.[0-9]+)$/, value) do
+    if Regex.match?(~r/^(?:[1-9][0-9]*(?:\.[0-9]+)?|0\.0*[1-9][0-9]*)$/, value) do
       :ok
     else
       {:error, {:invalid_docker_resource_limit, "cpus"}}

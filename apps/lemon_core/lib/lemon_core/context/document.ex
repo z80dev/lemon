@@ -6,6 +6,8 @@ defmodule LemonCore.Context.Document do
   classified from their entries, validated before any member is inflated, and
   extracted in memory only after traversal, entry-count, expanded-size, and
   compression-ratio checks pass.
+  Regex match-budget exhaustion returns `{:error, :document_match_limit}` without
+  exposing a partial extraction.
   """
 
   @default_max_input_bytes 8_000_000
@@ -60,6 +62,8 @@ defmodule LemonCore.Context.Document do
          }}
       end
     end
+  rescue
+    SystemLimitError -> {:error, :document_match_limit}
   end
 
   @doc "Classify a supported document from its bytes."
