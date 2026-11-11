@@ -42,9 +42,19 @@ export function approvalToolGroup(tool: string | null | undefined): P.ApprovalTo
   return null;
 }
 
-function runOrigin(services: BackendServices, runId: string | null | undefined): string {
+export function runOrigin(services: BackendServices, runId: string | null | undefined): string {
   if (!runId) return 'other';
-  return services.store.metadata<string>(`runApprovalOrigin:${runId}`) ?? 'other';
+  const origin = services.store.metadata<string>(`runApprovalOrigin:${runId}`) ?? 'other';
+  const seen = new Set<string>([runId]);
+  let parent = services.store.metadata<string>(`runParent:${runId}`);
+  while (parent) {
+    if (seen.has(parent)) return 'other';
+    seen.add(parent);
+    const inherited = services.store.metadata<string>(`runApprovalOrigin:${parent}`) ?? 'other';
+    if (!['owner_chat', 'routine', 'native_followup'].includes(inherited)) return inherited;
+    parent = services.store.metadata<string>(`runParent:${parent}`);
+  }
+  return origin;
 }
 
 function runContextKey(services: BackendServices, upstreamRunId: string | null | undefined): string | null {
@@ -224,7 +234,8 @@ export function findConcurrentPendingApprovals(
 ): P.Approval[] {
   return services.store.list<P.Approval>('approvals', approval => {
     if (approval.id === options.excludeApprovalId) return false;
-    if (approval.conversationId !== options.conversationId || approval.botId !== options.botId) return false;
+    const run = approval.runId ? services.store.get<P.Run>('runs', approval.runId) : null;
+    if (run?.conversationId !== options.conversationId || approval.botId !== options.botId) return false;
     if (approval.source !== 'lemon_exec' || approval.gate.state !== 'pending') return false;
     const ctx = services.store.metadata<{ toolGroup: P.ApprovalToolGroup; contextKey: string; origin: string }>(
       `approvalAllowanceContext:${approval.id}`
@@ -277,7 +288,8 @@ export async function matchApprovalAllowance(
           if (!effective.productAccess || (effective.localExecutionCeiling as string) === 'deny' || !effective.rememberedApprovals?.bot?.includes(category)) {
             endApprovalAllowances(services, null, { botId: bot.id, scope: 'bot' }, 'policy_changed');
           } else {
-            return allowance;
+            const current = services.store.get<P.ApprovalAllowance>('approvalAllowances', allowance.id);
+            return current?.state === 'active' && current.revision === allowance.revision ? current : null;
           }
         } catch {
           return null;
@@ -324,7 +336,8 @@ export async function matchApprovalAllowance(
         return null;
       }
 
-      return allowance;
+      const current = services.store.get<P.ApprovalAllowance>('approvalAllowances', allowance.id);
+      return current?.state === 'active' && current.revision === allowance.revision ? current : null;
     }
   }
 

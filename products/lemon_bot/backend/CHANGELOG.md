@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- External-trigger provenance remains untrusted across native continuations.
+  Concurrent remembered approvals recheck revocation, policy and pending state,
+  persist decisions before dispatch, and reconcile uncertain outcomes.
+- Private approval cards bind remembered chat access to the originating group,
+  not the owner's DM. Multiple capability approvals for one request share a
+  single durable continuation.
+
 ### Added
 
 - Backend-driven SSH attachment provides private asynchronous progress, durable

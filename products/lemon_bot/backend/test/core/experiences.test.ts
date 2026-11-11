@@ -856,6 +856,20 @@ function accessFixture() {
 }
 
 describe('just-in-time grant application and continuation', () => {
+  test('separate capability approvals for one request share one durable continuation', async () => {
+    const f = accessFixture();
+    try {
+      await f.queue();
+      const second = { ...f.approval, id: 'browser-approval', inputs: { ...f.approval.inputs, capability: 'browser' } };
+      f.store.put('approvals', second);
+      f.store.transaction(() => queueGrantChanges(f.services, f.bot, { browser: 'read_only' }, second.id));
+      await f.access.reconcileAll();
+      await f.access.reconcileAll();
+      expect(f.submitted).toBe(1);
+      expect(f.store.list<AccessRequestRecord>('accessRequests').map(value => value.state)).toEqual(['continued', 'continued']);
+      expect(f.store.list<P.TranscriptEntry>('entries', entry => entry.kind === 'message' && entry.actor.kind === 'system')).toHaveLength(1);
+    } finally { f.close(); }
+  });
   test('requestability clamps levels, bundles Files, and refuses stale, denied, already-on or queued access', async () => {
     const f = accessFixture();
     try {

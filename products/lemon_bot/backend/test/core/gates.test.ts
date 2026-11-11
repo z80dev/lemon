@@ -446,6 +446,57 @@ describe('remembered approvals (groups 1-5)', () => {
     f.store.setMetadata(`runtimeInvocation:${upstreamRunId}`, { invocationContextKey: 'ctx_key_1', invocationMcpServers: [], invocationToolPolicy: [], memoryContextKey: 'mem_1', invocationProof: { runId: upstreamRunId, serverName: 'srv', serverUrl: 'url', headerName: 'hdr', secretName: 'sec' } });
   }
 
+  test('concurrent approvals recheck revocation, policy and pending state before dispatch', async () => {
+    for (const change of ['stop', 'policy', 'cancel', 'unknown'] as const) {
+      const f = fixture();
+      setupValidRun(f);
+      const apps: P.Approval[] = [];
+      for (let i = 0; i < 3; i++) apps.push(await f.gates.create<P.Approval>(owner, 'approval', { ...common, runId: 'run_1', source: 'lemon_exec', upstream: { approvalId: `queued_${i}`, runId: 'upstream_run', sessionKey: 'session_1', tool: 'bash' }, category: 'shell', title: 'Execute', description: 'Run bash', target: 'exec', inputs: {} }));
+      f.rpc(async (_method, params) => {
+        if (params.approvalId === 'queued_1') {
+          expect(f.store.require<P.Approval>('approvals', apps[1]!.id).gate.state).toBe('submitted');
+          expect(f.store.metadata(`approvalDecision:${apps[1]!.id}`)).toMatchObject({ decision: 'approve_once' });
+          if (change === 'stop' || change === 'unknown') {
+            const allowance = f.store.list<P.ApprovalAllowance>('approvalAllowances')[0]!;
+            f.store.put('approvalAllowances', f.services.update(allowance, { state: 'ended' as const }));
+          }
+          if (change === 'policy') {
+            const policy = await f.services.integrations.effectivePolicy(owner, 'bot_1');
+            f.services.integrations.effectivePolicy = async () => ({ ...policy, localExecutionCeiling: 'deny' });
+          }
+          if (change === 'cancel') {
+            const last = f.store.require<P.Approval>('approvals', apps[2]!.id);
+            f.store.put('approvals', { ...last, gate: { ...last.gate, state: 'cancelled' } });
+          }
+          if (change === 'unknown') throw new ApiError('outcome_unknown', 'Lost reply', false);
+        }
+        return { resolved: true, approvalId: params.approvalId, sessionKey: params.expectedSessionKey, runId: params.expectedRunId, decision: params.decision, approved: true, outcome: 'approved' };
+      });
+      await f.gates.resolve(owner, 'approvals', apps[0]!.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' });
+      expect(f.calls).toHaveLength(2);
+      expect(f.store.require<P.Approval>('approvals', apps[2]!.id).gate.state).toBe(change === 'cancel' ? 'cancelled' : 'pending');
+      if (change === 'unknown') {
+        expect(f.store.require<P.Approval>('approvals', apps[1]!.id).gate.state).toBe('outcome_unknown');
+        expect(acknowledgeExecutionApproval(f.services, { approvalId: 'queued_1', runId: 'upstream_run', sessionKey: 'session_1', decision: 'approve_once' })).toBe(true);
+        expect(f.store.require<P.Approval>('approvals', apps[1]!.id).gate.state).toBe('approved');
+      }
+    }
+  });
+
+  test('private cards retain the originating group allowance scope', async () => {
+    const f = fixture();
+    setupValidRun(f);
+    const room = f.store.require<P.Conversation>('conversations', 'room_1');
+    f.store.put('conversations', { ...room, kind: 'group' });
+    const apps: P.Approval[] = [];
+    for (let i = 0; i < 2; i++) apps.push(await f.gates.create<P.Approval>(owner, 'approval', { ...common, runId: 'run_1', source: 'lemon_exec', upstream: { approvalId: `private_${i}`, runId: 'upstream_run', sessionKey: 'session_1', tool: 'bash' }, category: 'shell', title: 'Execute', description: 'Run bash', target: 'exec', inputs: {} }));
+    expect(apps[0]!.conversationId).not.toBe(room.id);
+    f.rpc(async (_method, params) => ({ resolved: true, approvalId: params.approvalId, sessionKey: params.expectedSessionKey, runId: params.expectedRunId, decision: params.decision, approved: true, outcome: 'approved' }));
+    await f.gates.resolve(owner, 'approvals', apps[0]!.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' });
+    expect(f.store.list<P.ApprovalAllowance>('approvalAllowances')[0]!.conversationId).toBe(room.id);
+    expect(f.store.require<P.Approval>('approvals', apps[1]!.id).gate.state).toBe('approved');
+    expect(f.calls).toHaveLength(2);
+  });
   test('group 1: happy path approve_chat on eligible lemon_exec bash approval', async () => {
     const f = fixture();
     setupValidRun(f);

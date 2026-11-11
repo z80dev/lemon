@@ -122,6 +122,14 @@ export function createAccessService(s: BackendServices): JitAccessService {
     });
   }
   async function continueRequest(owner: Principal, bot: P.Bot, record: AccessRequestRecord): Promise<void> {
+    const groupKey = `accessContinuation:${record.botId}:${record.runId}:${record.sourceEntryId ?? ''}`;
+    const shared = s.store.metadata<{ nonce: string; continuation?: AccessRequestRecord['continuation']; continued?: boolean }>(groupKey)
+      ?? { nonce: `access_${createHash('sha256').update(groupKey).digest('hex').slice(0, 40)}` };
+    if (shared.continued) {
+      s.store.put('accessRequests', s.update(record, { state: 'continued' }));
+      return;
+    }
+    if (shared.continuation) record = { ...record, continuation: shared.continuation };
     const approval = s.store.get<P.Approval>('approvals', record.id);
     const label = labels[approval?.inputs.capability as P.AccessCapability] ?? 'Access';
     const room = s.store.get<P.Conversation>('conversations', record.conversationId);
@@ -130,7 +138,7 @@ export function createAccessService(s: BackendServices): JitAccessService {
     const newerHuman = s.store.list<P.TranscriptEntry>('entries', entry => entry.conversationId === record.conversationId && entry.kind === 'message' && entry.actor.kind === 'user' && entry.timestampMs >= record.createdAtMs && entry.id !== source?.id && !s.store.metadata(`externalEntry:${entry.id}`)).length > 0;
     const canContinue = !!room && room.ownerUserId === owner.userId && room.botIds.includes(bot.id) && !!run && ['succeeded', 'failed'].includes(run.status) && !!source && source.kind === 'message' && source.actor.kind === 'user' && source.actor.id === owner.userId && source.conversationId === room.id && !s.store.metadata(`externalEntry:${source.id}`) && !newerHuman;
     if (record.continuation?.dispatch && !canContinue) {
-      const nonce = `access_${createHash('sha256').update(record.id).digest('hex').slice(0, 40)}`;
+      const nonce = shared.nonce;
       if (!s.store.metadata(`messageReceipt:${owner.kind}:${owner.id}:${record.conversationId}:${nonce}`)) {
         notice(owner, record, `${label} is now on for ${bot.name}. Send your request again when you're ready.`, 'not_continued');
         return;
@@ -144,11 +152,14 @@ export function createAccessService(s: BackendServices): JitAccessService {
       const quoted = Buffer.byteLength(original) <= budget ? original : new TextDecoder().decode(Buffer.from(original).subarray(0, budget - 4), { stream: true }) + '\n…';
       record = s.update(record, { continuation: { dispatch: canContinue, text: canContinue ? prefix + quoted : noticeText } });
       s.store.put('accessRequests', record);
+      shared.continuation = record.continuation;
+      s.store.setMetadata(groupKey, shared);
     }
     if (!record.continuation!.dispatch) { notice(owner, record, record.continuation!.text, 'not_continued'); return; }
     // A persisted send receipt is the only retry path: sendMessage never redispatches a nonce.
-    const clientNonce = `access_${createHash('sha256').update(record.id).digest('hex').slice(0, 40)}`;
+    const clientNonce = shared.nonce;
     await sendMessage(s, owner, record.conversationId, { clientNonce, text: record.continuation!.text, mentions: [bot.id] }, undefined, undefined, { sourceEntryId: record.sourceEntryId!, actor: { kind: 'system', id: null, displayName: 'System' } });
+    s.store.setMetadata(groupKey, { ...shared, continued: true });
     const current = s.store.get<AccessRequestRecord>('accessRequests', record.id);
     if (current) s.store.put('accessRequests', s.update(current, { state: 'continued' }));
   }
