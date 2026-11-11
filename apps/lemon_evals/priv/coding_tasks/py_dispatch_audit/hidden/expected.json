@@ -1,0 +1,135 @@
+{
+  "shipments": [
+    {
+      "shipment_id": "S101",
+      "billed": true,
+      "billable_kg": 2,
+      "gross_cents": 370,
+      "discount_cents": 37,
+      "net_cents": 333
+    },
+    {
+      "shipment_id": "S102",
+      "billed": true,
+      "billable_kg": 12,
+      "gross_cents": 1930,
+      "discount_cents": 193,
+      "net_cents": 1737
+    },
+    {
+      "shipment_id": "S103",
+      "billed": true,
+      "billable_kg": 2,
+      "gross_cents": 280,
+      "discount_cents": 0,
+      "net_cents": 280
+    },
+    {
+      "shipment_id": "S104",
+      "billed": true,
+      "billable_kg": 7,
+      "gross_cents": 1320,
+      "discount_cents": 0,
+      "net_cents": 1320
+    },
+    {
+      "shipment_id": "S105",
+      "billed": false,
+      "billable_kg": 0,
+      "gross_cents": 0,
+      "discount_cents": 0,
+      "net_cents": 0
+    },
+    {
+      "shipment_id": "S106",
+      "billed": false,
+      "billable_kg": 0,
+      "gross_cents": 0,
+      "discount_cents": 0,
+      "net_cents": 0
+    },
+    {
+      "shipment_id": "S107",
+      "billed": true,
+      "billable_kg": 1,
+      "gross_cents": 290,
+      "discount_cents": 43,
+      "net_cents": 247
+    },
+    {
+      "shipment_id": "S108",
+      "billed": true,
+      "billable_kg": 1,
+      "gross_cents": 480,
+      "discount_cents": 72,
+      "net_cents": 408
+    }
+  ],
+  "accounts": [
+    {
+      "account": "alder",
+      "billed": 2,
+      "skipped": 1,
+      "billable_kg": 14,
+      "gross_cents": 2300,
+      "discount_cents": 230,
+      "net_cents": 2070
+    },
+    {
+      "account": "birch",
+      "billed": 2,
+      "skipped": 0,
+      "billable_kg": 9,
+      "gross_cents": 1600,
+      "discount_cents": 0,
+      "net_cents": 1600
+    },
+    {
+      "account": "cedar",
+      "billed": 2,
+      "skipped": 1,
+      "billable_kg": 2,
+      "gross_cents": 770,
+      "discount_cents": 115,
+      "net_cents": 655
+    }
+  ],
+  "totals": {
+    "billed": 6,
+    "skipped": 2,
+    "billable_kg": 25,
+    "gross_cents": 4670,
+    "discount_cents": 345,
+    "net_cents": 4325
+  },
+  "facts": {
+    "weight_rule": {
+      "symbol": "dispatch.weights.billable_kg",
+      "divisor": 5000,
+      "rounding": "ceiling",
+      "combination": "maximum"
+    },
+    "skip_rule": {
+      "symbol": "dispatch.billing.quote",
+      "statuses": [
+        "cancelled",
+        "held"
+      ],
+      "before_weight_and_rate": true
+    },
+    "discount_rule": {
+      "symbol": "dispatch.billing.quote",
+      "basis": "base_plus_weight_plus_fragile",
+      "rounding": "floor",
+      "applied": "per_shipment"
+    },
+    "account_order": {
+      "symbol": "dispatch.report.summarize",
+      "rule": "account_ascending"
+    },
+    "fragile_rule": {
+      "symbol": "dispatch.rates.FRAGILE_CENTS",
+      "cents": 90
+    }
+  }
+}
