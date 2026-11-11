@@ -282,12 +282,33 @@ defmodule Lemon.MixProject do
     File.cp!(versioned, python3)
     File.chmod!(python3, 0o755)
 
+    retain_python_licenses(target, series)
+
     for link <- symlinks(target), do: File.rm!(link)
 
     case symlinks(target) do
       [] -> release
       links -> Mix.raise("bundled python still contains symlinks:\n#{Enum.join(links, "\n")}")
     end
+  end
+
+  # Redistributing CPython requires the PSF license text, and the pinned build
+  # comes from astral-sh/python-build-standalone (MPL-2.0). Both notices are
+  # collected under python/licenses/ so they survive any future pruning.
+  defp retain_python_licenses(target, series) do
+    cpython = Path.join([target, "lib", series, "LICENSE.txt"])
+
+    unless File.regular?(cpython) do
+      Mix.raise("pinned python is missing lib/#{series}/LICENSE.txt")
+    end
+
+    builder =
+      Path.expand("rel/python_licenses/python-build-standalone-LICENSE.txt", __DIR__)
+
+    notices = Path.join(target, "licenses")
+    File.mkdir_p!(notices)
+    File.cp!(cpython, Path.join(notices, "CPYTHON-LICENSE.txt"))
+    File.cp!(builder, Path.join(notices, "PYTHON-BUILD-STANDALONE-LICENSE.txt"))
   end
 
   defp symlinks(dir) do

@@ -327,6 +327,14 @@ assert_bundled_python() {
     exit 1
   fi
 
+  local notice
+  for notice in CPYTHON-LICENSE.txt PYTHON-BUILD-STANDALONE-LICENSE.txt; do
+    if [ ! -s "$extract_dir/python/licenses/$notice" ]; then
+      echo "$profile: bundled python is missing python/licenses/$notice" >&2
+      exit 1
+    fi
+  done
+
   if ! env -i PATH=/usr/bin:/bin "$python_bin" \
     -c 'import pty,fcntl,os; os.pread' > /dev/null 2>&1; then
     echo "$profile: bundled interpreter cannot import the worker helper modules" >&2
