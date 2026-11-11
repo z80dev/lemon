@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Surface "needs reconnecting" state and warning copy on expired or revoked machines across machine list, machine detail and chat inspector, and issue repair invites via POST.
 - Connecting a computer needs only its friendly name, with optional settings under Advanced. Loopback controllers require an explicit same-computer choice before issuing an invite; verified online enrollment offers Create a Bot on that machine.
 - Web and Mac grants use measured names, grouped Off / View only / Full controls, actionable status, and one Why disclosure; saved grants update from the server response.
 - Reply chips show the original author and a short message preview; Send has a keyboard-focus tooltip.
