@@ -4,8 +4,8 @@
 external-content tools:
 
 - `websearch`: query registered providers. Bundled providers are Brave
-  (default), Exa, Perplexity Sonar, Tavily, Kagi, Jina, keyless DuckDuckGo,
-  and user-hosted SearXNG.
+  (default), Exa, Perplexity Sonar, Tavily, Kagi, Jina, Keenable, keyless
+  DuckDuckGo, and user-hosted SearXNG.
 - `webfetch`: extract readable content through registered providers. Guarded
   direct extraction is the default and optionally falls back to Firecrawl.
   Direct extraction converts PDF responses to `=== Page N ===` text with the
