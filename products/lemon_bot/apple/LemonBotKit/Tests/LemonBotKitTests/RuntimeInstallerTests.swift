@@ -725,6 +725,294 @@ final class RuntimeInstallerTests: XCTestCase {
         XCTAssertEqual(nextPlan.action, .ready)
     }
 
+    // MARK: - 10. Unsafe archive member names
+
+    func testArchiveAbsoluteMemberPathIsRefused() async throws {
+        let tarball = try makeRawRuntimeTarball(member: .absolute)
+        let published = try publishRuntimeOnly(tarball: tarball)
+
+        do {
+            try await RuntimeInstaller.install(published.plan, session: MockURLProtocol.session()) { _ in }
+            XCTFail("Expected unsafeArchive for an absolute archive path")
+        } catch let error as RuntimeInstallError {
+            guard case .unsafeArchive(let file, let detail) = error else { return XCTFail("Unexpected error: \(error)") }
+            XCTAssertEqual(file, tarball.lastPathComponent)
+            XCTAssertTrue(detail.contains("absolute"), detail)
+        }
+        assertNothingInstalled()
+    }
+
+    func testArchiveParentTraversalMemberIsRefused() async throws {
+        let tarball = try makeRawRuntimeTarball(member: .parentTraversal)
+        let published = try publishRuntimeOnly(tarball: tarball)
+
+        do {
+            try await RuntimeInstaller.install(published.plan, session: MockURLProtocol.session()) { _ in }
+            XCTFail("Expected unsafeArchive for a '..' archive path")
+        } catch let error as RuntimeInstallError {
+            guard case .unsafeArchive(let file, let detail) = error else { return XCTFail("Unexpected error: \(error)") }
+            XCTAssertEqual(file, tarball.lastPathComponent)
+            XCTAssertTrue(detail.contains("escapes"), detail)
+        }
+        assertNothingInstalled()
+    }
+
+    // MARK: - 11. Cancellation
+
+    func testCancellationLeavesNoStagingAndNoPointers() async throws {
+        // The staged runtime's capability probe sleeps, so the cancellation lands after the
+        // archive was extracted into `.partial` and before anything is promoted.
+        let (runtimeTarball, runtimeSize, runtimeSha) = try makeFakeRuntimeTarball(
+            baseDir: tempDir, version: "2026.11.1", capabilitiesDelaySeconds: 3
+        )
+        let manifestData = manifestJSON(artifacts: [
+            artifactEntry(file: runtimeTarball.lastPathComponent, sha: runtimeSha, size: runtimeSize, profile: "lemon_runtime_full")
+        ])
+        let base = "https://github.com/z80dev/lemon"
+        MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/manifest.json"] = (200, [:], manifestData)
+        MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/\(runtimeTarball.lastPathComponent)"] = (200, [:], try Data(contentsOf: runtimeTarball))
+
+        let pin = ReleasePin(version: "2026.11.1", channel: "stable", manifestSHA256: digest(manifestData), baseURL: URL(string: base)!)
+        let plan = try RuntimeInstaller.plan(layout: layout, pin: pin)
+
+        let task = Task {
+            try await RuntimeInstaller.install(plan, session: MockURLProtocol.session()) { _ in }
+        }
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        task.cancel()
+
+        do {
+            try await task.value
+            XCTFail("Expected the cancelled install to throw")
+        } catch is CancellationError {
+            // expected
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+
+        assertNothingInstalled()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: layout.runtimeTmpDir.appendingPathComponent(runtimeTarball.lastPathComponent).path))
+    }
+
+    // MARK: - 12. Quarantine removal
+
+    func testPromotionRemovesTheQuarantineAttribute() async throws {
+        let (runtimeTarball, runtimeSize, runtimeSha) = try makeFakeRuntimeTarball(baseDir: tempDir, version: "2026.11.1")
+        let fm = FileManager.default
+
+        // An already-staged, verifiable target directory: the installer reuses it and still has
+        // to clear the quarantine bit before the launcher links go live.
+        let target = layout.runtimeVersionDir(for: "2026.11.1")
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+        try extract(tarball: runtimeTarball, into: target)
+        try setQuarantine(on: target)
+        XCTAssertTrue(try hasQuarantine(target))
+
+        let manifestData = manifestJSON(artifacts: [
+            artifactEntry(file: runtimeTarball.lastPathComponent, sha: runtimeSha, size: runtimeSize, profile: "lemon_runtime_full")
+        ])
+        let base = "https://github.com/z80dev/lemon"
+        MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/manifest.json"] = (200, [:], manifestData)
+        MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/\(runtimeTarball.lastPathComponent)"] = (200, [:], try Data(contentsOf: runtimeTarball))
+
+        let plan = RuntimeInstaller.Plan(
+            action: .installRuntime(version: "2026.11.1", channel: "stable", digestEnforced: true),
+            layout: layout,
+            baseURL: URL(string: base)!,
+            manifestSHA256: digest(manifestData)
+        )
+        try await RuntimeInstaller.install(plan, session: MockURLProtocol.session()) { _ in }
+
+        XCTAssertFalse(try hasQuarantine(target))
+        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: layout.runtimeCurrentLink.path), "2026.11.1")
+        XCTAssertFalse(fm.fileExists(atPath: target.path + ".partial"))
+    }
+
+    // MARK: - 13. Late failure rolls the whole install back
+
+    func testFailureAfterTheFirstFlipRollsEverythingBack() async throws {
+        let (runtimeTarball, runtimeSize, runtimeSha) = try makeFakeRuntimeTarball(baseDir: tempDir, version: "2026.11.1")
+        let (backendTarball, backendSize, backendSha) = try makeFakeBackendTarball(baseDir: tempDir, version: "2026.11.1")
+        let backendFile = "lemon-2026.11.1-stable-darwin-arm64-lemon_bot.tar.gz"
+
+        let manifestData = manifestJSON(artifacts: [
+            artifactEntry(file: runtimeTarball.lastPathComponent, sha: runtimeSha, size: runtimeSize, profile: "lemon_runtime_full"),
+            artifactEntry(file: backendFile, sha: backendSha, size: backendSize, profile: "lemon_bot")
+        ])
+        let base = "https://github.com/z80dev/lemon"
+        MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/manifest.json"] = (200, [:], manifestData)
+        MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/\(runtimeTarball.lastPathComponent)"] = (200, [:], try Data(contentsOf: runtimeTarball))
+        MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/\(backendFile)"] = (200, [:], try Data(contentsOf: backendTarball))
+
+        // ~/.local is a regular file, so the backend launcher link cannot be created. That
+        // failure happens after the runtime has already been promoted and linked.
+        let fm = FileManager.default
+        try "not a directory".write(to: tempDir.appendingPathComponent(".local"), atomically: true, encoding: .utf8)
+
+        let pin = ReleasePin(version: "2026.11.1", channel: "stable", manifestSHA256: digest(manifestData), baseURL: URL(string: base)!)
+        let plan = try RuntimeInstaller.plan(layout: layout, pin: pin)
+
+        do {
+            try await RuntimeInstaller.install(plan, session: MockURLProtocol.session()) { _ in }
+            XCTFail("Expected the install to fail on the backend launcher link")
+        } catch let error as RuntimeInstallError {
+            guard case .filesystem = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+
+        // Nothing from either half survives: no version directories, no links, no lock.
+        assertNothingInstalled()
+        let backendKey = layout.backendKey(version: "2026.11.1", channel: "stable", platform: "darwin-arm64")
+        XCTAssertFalse(fm.fileExists(atPath: layout.backendVersionDir(key: backendKey).path))
+        XCTAssertFalse(fm.fileExists(atPath: layout.backendVersionDir(key: backendKey).path + ".partial"))
+        XCTAssertNil(try? fm.destinationOfSymbolicLink(atPath: layout.backendCurrentLink.path))
+        XCTAssertNil(try? fm.destinationOfSymbolicLink(atPath: layout.runtimeLemonLink.path))
+    }
+
+    // MARK: - 14. A plan that went stale before the lock is refused
+
+    func testPlanThatWentStaleUnderTheLockIsRefused() async throws {
+        let (runtimeTarball, runtimeSize, runtimeSha) = try makeFakeRuntimeTarball(baseDir: tempDir, version: "2026.11.1")
+        let manifestData = manifestJSON(artifacts: [
+            artifactEntry(file: runtimeTarball.lastPathComponent, sha: runtimeSha, size: runtimeSize, profile: "lemon_runtime_full")
+        ])
+        let base = "https://github.com/z80dev/lemon"
+        MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/manifest.json"] = (200, [:], manifestData)
+        MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/\(runtimeTarball.lastPathComponent)"] = (200, [:], try Data(contentsOf: runtimeTarball))
+
+        let pin = ReleasePin(version: "2026.11.1", channel: "stable", manifestSHA256: digest(manifestData), baseURL: URL(string: base)!)
+        let plan = RuntimeInstaller.Plan(
+            action: .installRuntime(version: "2026.11.1", channel: "stable", digestEnforced: true),
+            layout: layout,
+            baseURL: pin.baseURL,
+            manifestSHA256: pin.manifestSHA256
+        )
+
+        // Another installer finished the runtime between planning and the lock.
+        let fm = FileManager.default
+        try fm.createDirectory(at: layout.runtimeVersionsDir, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: layout.runtimeCurrentLink.path, withDestinationPath: "2026.10.25")
+
+        do {
+            try await RuntimeInstaller.install(plan, session: MockURLProtocol.session()) { _ in }
+            XCTFail("Expected planStale")
+        } catch let error as RuntimeInstallError {
+            XCTAssertEqual(error, .planStale)
+        }
+
+        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: layout.runtimeCurrentLink.path), "2026.10.25")
+        XCTAssertFalse(fm.fileExists(atPath: layout.runtimeVersionDir(for: "2026.11.1").path))
+        XCTAssertFalse(fm.fileExists(atPath: layout.lockFile.path))
+        XCTAssertTrue(MockURLProtocol.requests.isEmpty, "a stale plan must not fetch anything")
+    }
+
+    // MARK: - Shared assertions and fixtures
+
+    private func assertNothingInstalled(file: StaticString = #filePath, line: UInt = #line) {
+        let fm = FileManager.default
+        let target = layout.runtimeVersionDir(for: "2026.11.1")
+        XCTAssertFalse(fm.fileExists(atPath: target.path), "runtime target survived", file: file, line: line)
+        XCTAssertFalse(fm.fileExists(atPath: target.path + ".partial"), "staging survived", file: file, line: line)
+        XCTAssertNil(try? fm.destinationOfSymbolicLink(atPath: layout.runtimeCurrentLink.path), "runtime pointer changed", file: file, line: line)
+        XCTAssertFalse(fm.fileExists(atPath: layout.lockFile.path), "lock survived", file: file, line: line)
+    }
+
+    private func digest(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func artifactEntry(file: String, sha: String, size: Int64, profile: String) -> String {
+        """
+        {"file": "\(file)", "sha256": "\(sha)", "size": \(size), "platform": "darwin-arm64",
+         "profile": "\(profile)", "os": "darwin", "arch": "arm64"}
+        """
+    }
+
+    private func manifestJSON(version: String = "2026.11.1", channel: String = "stable", artifacts: [String]) -> Data {
+        Data("""
+        {"schema": 2, "version": "\(version)", "channel": "\(channel)", "artifacts": [\(artifacts.joined(separator: ","))]}
+        """.utf8)
+    }
+
+    private struct PublishedRuntime {
+        let plan: RuntimeInstaller.Plan
+    }
+
+    /// Publishes one runtime artifact (possibly a hostile archive) and plans a runtime install.
+    private func publishRuntimeOnly(tarball: URL) throws -> PublishedRuntime {
+        let data = try Data(contentsOf: tarball)
+        let manifestData = manifestJSON(artifacts: [
+            artifactEntry(file: tarball.lastPathComponent, sha: digest(data), size: Int64(data.count), profile: "lemon_runtime_full")
+        ])
+        let base = "https://github.com/z80dev/lemon"
+        MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/manifest.json"] = (200, [:], manifestData)
+        MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/\(tarball.lastPathComponent)"] = (200, [:], data)
+
+        return PublishedRuntime(plan: RuntimeInstaller.Plan(
+            action: .installRuntime(version: "2026.11.1", channel: "stable", digestEnforced: true),
+            layout: layout,
+            baseURL: URL(string: base)!,
+            manifestSHA256: digest(manifestData)
+        ))
+    }
+
+    private enum RawMember { case absolute, parentTraversal }
+
+    /// Builds a tarball whose member name is absolute or contains `..`, which only `tar -P`
+    /// will store and which the installer must refuse before extracting anything.
+    private func makeRawRuntimeTarball(member: RawMember) throws -> URL {
+        let fm = FileManager.default
+        let work = tempDir.appendingPathComponent("raw_\(UUID().uuidString)")
+        let inner = work.appendingPathComponent("inner")
+        try fm.createDirectory(at: inner, withIntermediateDirectories: true)
+        let payload = work.appendingPathComponent("payload.txt")
+        try "payload".write(to: payload, atomically: true, encoding: .utf8)
+
+        let tarball = work.appendingPathComponent("lemon-2026.11.1-darwin-arm64-lemon_runtime_full.tar.gz")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+        switch member {
+        case .absolute:
+            process.arguments = ["-czPf", tarball.path, payload.path]
+        case .parentTraversal:
+            process.currentDirectoryURL = inner
+            process.arguments = ["-czPf", tarball.path, "../payload.txt"]
+        }
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw NSError(domain: "TarError", code: Int(process.terminationStatus)) }
+        return tarball
+    }
+
+    private func extract(tarball: URL, into directory: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+        process.arguments = ["-xzf", tarball.path, "-C", directory.path]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw NSError(domain: "TarError", code: Int(process.terminationStatus)) }
+    }
+
+    private func setQuarantine(on url: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        process.arguments = ["-w", "com.apple.quarantine", "0081;00000000;LemonBotKitTests;", url.path]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw NSError(domain: "XattrError", code: Int(process.terminationStatus)) }
+    }
+
+    private func hasQuarantine(_ url: URL) throws -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        process.arguments = ["-p", "com.apple.quarantine", url.path]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    }
+
     // MARK: - Helper Tarball Creation
 
     private func makeTarball(stagingDir: URL, tarballName: String, relativePaths: [String]? = nil) throws -> (url: URL, size: Int64, sha256: String) {
@@ -757,7 +1045,8 @@ final class RuntimeInstallerTests: XCTestCase {
         version: String,
         failCapabilities: Bool = false,
         includeSymlink: Bool = false,
-        includeBotDir: Bool = false
+        includeBotDir: Bool = false,
+        capabilitiesDelaySeconds: Int = 0
     ) throws -> (url: URL, size: Int64, sha256: String) {
         let staging = baseDir.appendingPathComponent("runtime_staging_\(UUID().uuidString)")
         let fm = FileManager.default
@@ -766,6 +1055,9 @@ final class RuntimeInstallerTests: XCTestCase {
         let lemonScript = """
         #!/bin/sh
         if [ "$1" = "node" ] && [ "$2" = "capabilities" ]; then
+            if [ \(capabilitiesDelaySeconds) -gt 0 ]; then
+                sleep \(capabilitiesDelaySeconds)
+            fi
             if [ "\(failCapabilities ? "1" : "0")" = "1" ]; then
                 echo "error: capability probe failed" >&2
                 exit 1

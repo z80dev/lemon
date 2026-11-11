@@ -349,6 +349,7 @@ public enum RuntimeInstallStep: Equatable, Sendable {
 /// Errors raised by the native installer.
 public enum RuntimeInstallError: LocalizedError, Equatable {
     case locked
+    case planStale
     case manifestUnavailable(detail: String)
     case manifestMismatch
     case manifestMissingDigest
@@ -363,6 +364,8 @@ public enum RuntimeInstallError: LocalizedError, Equatable {
         switch self {
         case .locked:
             return "Another Lemon update or install is currently in progress."
+        case .planStale:
+            return "Lemon's installed components changed while this install was starting."
         case .manifestUnavailable(let detail):
             return "Could not retrieve release manifest: \(detail)"
         case .manifestMismatch:
@@ -453,17 +456,16 @@ public enum RuntimeInstaller {
         }
     }
 
-    /// Evaluates current symlink pointers and returns the required installation plan.
-    ///
-    /// - Parameters:
-    ///   - layout: The filesystem installation layout.
-    ///   - pin: The release pin to target.
-    /// - Throws: `RuntimeInstallError.manifestMissingDigest` if a native new install is planned
-    ///   without a signed manifest digest in the pin.
-    public static func plan(layout: InstallLayout, pin: ReleasePin) throws -> Plan {
+    /// Installed component pointers, read from the two `current` symlinks.
+    struct Pointers: Equatable {
+        let runtimeVersion: String?
+        let backendVersion: String?
+        let backendChannel: String?
+    }
+
+    static func pointers(layout: InstallLayout) -> Pointers {
         let fileManager = FileManager.default
 
-        // 1. Detect runtime current
         var runtimeVersion: String? = nil
         if let dest = try? fileManager.destinationOfSymbolicLink(atPath: layout.runtimeCurrentLink.path) {
             let name = URL(fileURLWithPath: dest).lastPathComponent
@@ -472,7 +474,6 @@ public enum RuntimeInstaller {
             }
         }
 
-        // 2. Detect backend current
         var backendVersion: String? = nil
         var backendChannel: String? = nil
         if let dest = try? fileManager.destinationOfSymbolicLink(atPath: layout.backendCurrentLink.path) {
@@ -492,8 +493,20 @@ public enum RuntimeInstaller {
             }
         }
 
-        // 3. Evaluate plan table (§3.B)
-        switch (runtimeVersion, backendVersion) {
+        return Pointers(runtimeVersion: runtimeVersion, backendVersion: backendVersion, backendChannel: backendChannel)
+    }
+
+    /// Evaluates current symlink pointers and returns the required installation plan.
+    ///
+    /// - Parameters:
+    ///   - layout: The filesystem installation layout.
+    ///   - pin: The release pin to target.
+    /// - Throws: `RuntimeInstallError.manifestMissingDigest` if a native new install is planned
+    ///   without a signed manifest digest in the pin.
+    public static func plan(layout: InstallLayout, pin: ReleasePin) throws -> Plan {
+        let state = pointers(layout: layout)
+
+        switch (state.runtimeVersion, state.backendVersion) {
         case (.some, .some):
             // Row 5: both present -> ready
             return Plan(
@@ -515,8 +528,8 @@ public enum RuntimeInstaller {
                 manifestSHA256: pin.manifestSHA256
             )
 
-        case (.some(let rV), .none):
-            if rV == pin.version {
+        case (.some(let runtime), .none):
+            if runtime == pin.version {
                 // Row 2: =V | none -> install backend V (digest-enforced)
                 guard pin.manifestSHA256 != nil else {
                     throw RuntimeInstallError.manifestMissingDigest
@@ -527,18 +540,17 @@ public enum RuntimeInstaller {
                     baseURL: pin.baseURL,
                     manifestSHA256: pin.manifestSHA256
                 )
-            } else {
-                // Row 4a: W | none -> install backend at W (HTTPS + sha only)
-                return Plan(
-                    action: .installBackend(version: rV, channel: pin.channel, digestEnforced: false),
-                    layout: layout,
-                    baseURL: pin.baseURL,
-                    manifestSHA256: nil
-                )
             }
+            // Row 4a: W | none -> install the missing backend at W (HTTPS + sha only)
+            return Plan(
+                action: .installBackend(version: runtime, channel: pin.channel, digestEnforced: false),
+                layout: layout,
+                baseURL: pin.baseURL,
+                manifestSHA256: nil
+            )
 
-        case (.none, .some(let bV)):
-            if bV == pin.version {
+        case (.none, .some(let backend)):
+            if backend == pin.version {
                 // Row 3: none | =V -> install runtime V (digest-enforced)
                 guard pin.manifestSHA256 != nil else {
                     throw RuntimeInstallError.manifestMissingDigest
@@ -549,16 +561,14 @@ public enum RuntimeInstaller {
                     baseURL: pin.baseURL,
                     manifestSHA256: pin.manifestSHA256
                 )
-            } else {
-                // Row 4b: none | W -> install runtime at W (HTTPS + sha only)
-                let channel = backendChannel ?? pin.channel
-                return Plan(
-                    action: .installRuntime(version: bV, channel: channel, digestEnforced: false),
-                    layout: layout,
-                    baseURL: pin.baseURL,
-                    manifestSHA256: nil
-                )
             }
+            // Row 4b: none | W -> install the missing runtime at W (HTTPS + sha only)
+            return Plan(
+                action: .installRuntime(version: backend, channel: state.backendChannel ?? pin.channel, digestEnforced: false),
+                layout: layout,
+                baseURL: pin.baseURL,
+                manifestSHA256: nil
+            )
         }
     }
 
@@ -571,645 +581,920 @@ public enum RuntimeInstaller {
     }
 
 #if os(macOS)
+
+    /// One component the plan installs.
+    private struct Component {
+        let profile: String
+        let artifact: RuntimeManifest.Artifact
+        let tarball: URL
+        let partialDir: URL
+        let targetDir: URL
+        let link: URL
+        let linkTarget: String
+        let launcherLink: URL
+        let launcherTarget: String
+
+        var isRuntime: Bool { profile == "lemon_runtime_full" }
+    }
+
+    /// Everything that has to be undone when a later step fails.
+    private struct Journal {
+        /// Directories moved aside before a promotion, newest first.
+        var movedAside: [(previous: URL, original: URL)] = []
+        /// Directories this install promoted into place (and therefore owns).
+        var promoted: [URL] = []
+        /// Links this install changed, with the target they pointed at before (nil = absent).
+        var links: [(link: URL, previousTarget: String?)] = []
+        /// Directories this install created, deepest last.
+        var directories: [URL] = []
+    }
+
     /// Executes the installation plan.
     ///
     /// - Parameters:
     ///   - plan: The installation plan to execute.
-    ///   - session: Optional custom URLSession (for testing). When nil, an ephemeral session
-    ///     with HTTPS-only redirection is used.
+    ///   - session: Optional session whose configuration is reused (tests inject a stub protocol).
     ///   - progress: Callback reporting download, verification, and installation steps.
+    /// - Throws: `CancellationError` when the surrounding task is cancelled, otherwise
+    ///   `RuntimeInstallError`. Either way no pointer is left changed and no staging survives.
     public static func install(
         _ plan: Plan,
         session: URLSession? = nil,
         progress: @Sendable (RuntimeInstallStep) -> Void
     ) async throws {
-        if plan.action == .ready {
-            return
-        }
+        if plan.action == .ready { return }
+        try Task.checkCancellation()
 
         let fileManager = FileManager.default
+        let layout = plan.layout
 
-        // Step 1: Take ~/.lemon/updates/.operation.lock
-        let updatesDir = plan.layout.updatesDir
+        // Step 1: take ~/.lemon/updates/.operation.lock. A foreign lock is never removed.
         do {
-            try fileManager.createDirectory(at: updatesDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try fileManager.createDirectory(at: layout.updatesDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         } catch {
             throw RuntimeInstallError.filesystem(detail: "Could not create updates directory: \(error.localizedDescription)")
         }
 
-        let lockPath = plan.layout.lockFile.path
-        let fd = open(lockPath, O_CREAT | O_EXCL | O_WRONLY, 0o600)
-        if fd < 0 {
-            if errno == EEXIST {
-                throw RuntimeInstallError.locked
-            } else {
-                throw RuntimeInstallError.filesystem(detail: "Could not acquire update lock: errno \(errno)")
-            }
+        let lockPath = layout.lockFile.path
+        let lockDescriptor = open(lockPath, O_CREAT | O_EXCL | O_WRONLY, 0o600)
+        if lockDescriptor < 0 {
+            if errno == EEXIST { throw RuntimeInstallError.locked }
+            throw RuntimeInstallError.filesystem(detail: "Could not acquire update lock: errno \(errno)")
         }
-
-        let lockPayload = "lemon-update-lock-v1\n"
-        _ = lockPayload.withCString { ptr in
-            write(fd, ptr, strlen(ptr))
-        }
-        close(fd)
-
+        let payload = Array("lemon-update-lock-v1\n".utf8)
+        _ = payload.withUnsafeBufferPointer { write(lockDescriptor, $0.baseAddress, $0.count) }
+        close(lockDescriptor)
         defer { unlink(lockPath) }
 
-        // Determine plan parameters
+        // The plan was computed before the lock existed. Re-read the pointers now: another
+        // installer may have finished a component in between, and this installer never flips
+        // an existing `current` to a different version.
         let version: String
         let channel: String
-        let needRuntime: Bool
-        let needBackend: Bool
+        var needRuntime = false
+        var needBackend = false
         let digestEnforced: Bool
 
         switch plan.action {
         case .ready:
             return
-        case .installBoth(let v, let c, let de):
-            version = v; channel = c; needRuntime = true; needBackend = true; digestEnforced = de
-        case .installRuntime(let v, let c, let de):
-            version = v; channel = c; needRuntime = true; needBackend = false; digestEnforced = de
-        case .installBackend(let v, let c, let de):
-            version = v; channel = c; needRuntime = false; needBackend = true; digestEnforced = de
+        case .installBoth(let planVersion, let planChannel, let enforced):
+            version = planVersion; channel = planChannel; digestEnforced = enforced
+            needRuntime = true; needBackend = true
+        case .installRuntime(let planVersion, let planChannel, let enforced):
+            version = planVersion; channel = planChannel; digestEnforced = enforced
+            needRuntime = true
+        case .installBackend(let planVersion, let planChannel, let enforced):
+            version = planVersion; channel = planChannel; digestEnforced = enforced
+            needBackend = true
         }
+
+        let state = pointers(layout: layout)
+        if needRuntime && state.runtimeVersion != nil { throw RuntimeInstallError.planStale }
+        if needBackend && state.backendVersion != nil { throw RuntimeInstallError.planStale }
 
         if digestEnforced && plan.manifestSHA256 == nil {
             throw RuntimeInstallError.manifestMissingDigest
         }
 
-        // Step 2: Fetch manifest
-        let manifestURL = plan.baseURL.appendingPathComponent("releases/download/v\(version)/manifest.json")
-        let sessionToUse: URLSession
-        if let customSession = session {
-            sessionToUse = customSession
-        } else {
-            let config = URLSessionConfiguration.ephemeral
-            sessionToUse = URLSession(configuration: config, delegate: HTTPSOnlyDelegate(), delegateQueue: nil)
-        }
+        let configuration = (session?.configuration).map { copyConfiguration($0) } ?? URLSessionConfiguration.ephemeral
 
-        let data: Data
-        let response: URLResponse
+        // Step 2: fetch the manifest, bounded to 1 MiB and hashed while it streams.
+        let manifestURL = plan.baseURL.appendingPathComponent("releases/download/v\(version)/manifest.json")
+        let manifestResult: Fetch.Result
         do {
-            (data, response) = try await sessionToUse.data(from: manifestURL)
+            manifestResult = try await Fetch.perform(
+                configuration: configuration,
+                url: manifestURL,
+                destination: nil,
+                maximumBytes: 1_048_576,
+                overflow: .manifestUnavailable(detail: "the release manifest is larger than 1 MiB"),
+                progress: nil
+            )
+        } catch let error as RuntimeInstallError {
+            throw error
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
+            if Task.isCancelled { throw CancellationError() }
             throw RuntimeInstallError.manifestUnavailable(detail: error.localizedDescription)
         }
+        try Task.checkCancellation()
 
-        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-            throw RuntimeInstallError.manifestUnavailable(detail: "HTTP \(http.statusCode)")
+        guard manifestResult.statusCode == 200 else {
+            throw RuntimeInstallError.manifestUnavailable(detail: "HTTP \(manifestResult.statusCode)")
         }
-
-        guard data.count <= 1_048_576 else {
-            throw RuntimeInstallError.manifestUnavailable(detail: "Manifest exceeds 1 MiB limit")
+        guard let manifestData = manifestResult.data else {
+            throw RuntimeInstallError.manifestUnavailable(detail: "empty manifest response")
         }
-
-        if digestEnforced {
-            guard let expected = plan.manifestSHA256 else {
-                throw RuntimeInstallError.manifestMissingDigest
-            }
-            let computed = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-            guard computed.lowercased() == expected.lowercased() else {
-                throw RuntimeInstallError.manifestMismatch
-            }
+        if digestEnforced, let expected = plan.manifestSHA256, manifestResult.sha256 != expected.lowercased() {
+            throw RuntimeInstallError.manifestMismatch
         }
 
         let manifest: RuntimeManifest
         do {
-            manifest = try JSONDecoder().decode(RuntimeManifest.self, from: data)
+            manifest = try JSONDecoder().decode(RuntimeManifest.self, from: manifestData)
         } catch {
-            throw RuntimeInstallError.manifestUnavailable(detail: "JSON decode error: \(error.localizedDescription)")
+            throw RuntimeInstallError.manifestUnavailable(detail: "release manifest is not readable JSON")
         }
 
-        // Step 3: Select artifacts
+        // Step 3: resolve the artifacts and staging paths.
         let platform = "darwin-arm64"
-        struct ArtifactTarget {
-            let profile: String
-            let artifact: RuntimeManifest.Artifact
-            let tmpTarball: URL
-            let partialDir: URL
-            let finalDir: URL
-        }
-
-        var targets: [ArtifactTarget] = []
+        let backendKey = layout.backendKey(version: version, channel: channel, platform: platform)
+        var components: [Component] = []
 
         if needRuntime {
-            let art = try manifest.select(profile: "lemon_runtime_full", platform: platform, version: version, channel: channel)
-            let tmp = plan.layout.runtimeTmpDir.appendingPathComponent(art.file)
-            let finalDir = plan.layout.runtimeVersionDir(for: version)
-            let partial = URL(fileURLWithPath: finalDir.path + ".partial")
-            targets.append(ArtifactTarget(profile: "lemon_runtime_full", artifact: art, tmpTarball: tmp, partialDir: partial, finalDir: finalDir))
+            let artifact = try manifest.select(profile: "lemon_runtime_full", platform: platform, version: version, channel: channel)
+            let targetDir = layout.runtimeVersionDir(for: version)
+            components.append(Component(
+                profile: "lemon_runtime_full",
+                artifact: artifact,
+                tarball: layout.runtimeTmpDir.appendingPathComponent(artifact.file),
+                partialDir: URL(fileURLWithPath: targetDir.path + ".partial"),
+                targetDir: targetDir,
+                link: layout.runtimeCurrentLink,
+                linkTarget: layout.runtimeCurrentTarget(version: version),
+                launcherLink: layout.runtimeLemonLink,
+                launcherTarget: layout.runtimeLemonTarget
+            ))
         }
 
         if needBackend {
-            let art = try manifest.select(profile: "lemon_bot", platform: platform, version: version, channel: channel)
-            let tmp = plan.layout.backendTmpDir.appendingPathComponent(art.file)
-            let key = plan.layout.backendKey(version: version, channel: channel, platform: platform)
-            let finalDir = plan.layout.backendVersionDir(key: key)
-            let partial = URL(fileURLWithPath: finalDir.path + ".partial")
-            targets.append(ArtifactTarget(profile: "lemon_bot", artifact: art, tmpTarball: tmp, partialDir: partial, finalDir: finalDir))
+            let artifact = try manifest.select(profile: "lemon_bot", platform: platform, version: version, channel: channel)
+            let targetDir = layout.backendVersionDir(key: backendKey)
+            components.append(Component(
+                profile: "lemon_bot",
+                artifact: artifact,
+                tarball: layout.backendTmpDir.appendingPathComponent(artifact.file),
+                partialDir: URL(fileURLWithPath: targetDir.path + ".partial"),
+                targetDir: targetDir,
+                link: layout.backendCurrentLink,
+                linkTarget: layout.backendCurrentTarget(key: backendKey),
+                launcherLink: layout.backendLemonBotLink,
+                launcherTarget: layout.backendLemonBotTarget
+            ))
         }
 
-        // Ensure temporary directories exist
-        try? fileManager.createDirectory(at: plan.layout.runtimeTmpDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try? fileManager.createDirectory(at: plan.layout.backendTmpDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-
-        let totalBytes = targets.reduce(Int64(0)) { $0 + $1.artifact.size }
-        progress(.download(received: 0, total: totalBytes))
-
-        var downloadedFiles: [URL] = []
-        var stagedPartials: [URL] = []
-        var movedPrevious: [(previous: URL, original: URL)] = []
+        var journal = Journal()
+        var downloads: [URL] = []
+        var partials: [URL] = []
+        var committed = false
 
         defer {
-            // Clean up downloads and partials if an error occurred before completion
-            for file in downloadedFiles {
-                try? fileManager.removeItem(at: file)
-            }
-            for partial in stagedPartials {
-                try? fileManager.removeItem(at: partial)
-            }
+            for file in downloads { try? fileManager.removeItem(at: file) }
+            for partial in partials { try? fileManager.removeItem(at: partial) }
+            if !committed { rollback(journal) }
         }
 
-        // Download all artifacts and verify integrity before extraction
-        var currentReceived: Int64 = 0
-        for item in targets {
-            let downloadURL = plan.baseURL.appendingPathComponent("releases/download/v\(version)/\(item.artifact.file)")
-
-            let (artifactData, artResponse): (Data, URLResponse)
-            do {
-                (artifactData, artResponse) = try await sessionToUse.data(from: downloadURL)
-            } catch {
-                throw RuntimeInstallError.downloadFailed(file: item.artifact.file, detail: error.localizedDescription)
-            }
-
-            if let http = artResponse as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                throw RuntimeInstallError.downloadFailed(file: item.artifact.file, detail: "HTTP \(http.statusCode)")
-            }
-
-            guard Int64(artifactData.count) == item.artifact.size else {
-                throw RuntimeInstallError.checksumMismatch(file: item.artifact.file)
-            }
-
-            let computedSHA = SHA256.hash(data: artifactData).map { String(format: "%02x", $0) }.joined()
-            guard computedSHA.lowercased() == item.artifact.sha256.lowercased() else {
-                throw RuntimeInstallError.checksumMismatch(file: item.artifact.file)
-            }
-
-            do {
-                try artifactData.write(to: item.tmpTarball, options: .atomic)
-            } catch {
-                throw RuntimeInstallError.filesystem(detail: "Failed to write \(item.tmpTarball.lastPathComponent): \(error.localizedDescription)")
-            }
-
-            downloadedFiles.append(item.tmpTarball)
-            currentReceived += Int64(artifactData.count)
-            progress(.download(received: currentReceived, total: totalBytes))
+        for component in components {
+            let directory = component.isRuntime ? layout.runtimeTmpDir : layout.backendTmpDir
+            try createDirectory(directory, permissions: 0o700, journal: &journal)
         }
 
-        // Step 4: Validate tar archive paths before extraction
+        // Step 4: download every artifact, streaming to disk with a streaming digest, before
+        // anything is extracted (install.sh:945-967).
+        let totalBytes = components.reduce(Int64(0)) { $0 + $1.artifact.size }
+        progress(.download(received: 0, total: totalBytes))
+
+        var completedBytes: Int64 = 0
+        for component in components {
+            try Task.checkCancellation()
+            let artifact = component.artifact
+            let downloadURL = plan.baseURL.appendingPathComponent("releases/download/v\(version)/\(artifact.file)")
+            try? fileManager.removeItem(at: component.tarball)
+
+            let base = completedBytes
+            let result: Fetch.Result
+            do {
+                result = try await Fetch.perform(
+                    configuration: configuration,
+                    url: downloadURL,
+                    destination: component.tarball,
+                    maximumBytes: artifact.size,
+                    overflow: .checksumMismatch(file: artifact.file),
+                    progress: { received in progress(.download(received: base + received, total: totalBytes)) }
+                )
+            } catch let error as RuntimeInstallError {
+                downloads.append(component.tarball)
+                throw error
+            } catch is CancellationError {
+                downloads.append(component.tarball)
+                throw CancellationError()
+            } catch {
+                downloads.append(component.tarball)
+                if Task.isCancelled { throw CancellationError() }
+                throw RuntimeInstallError.downloadFailed(file: artifact.file, detail: error.localizedDescription)
+            }
+
+            downloads.append(component.tarball)
+            guard (200...299).contains(result.statusCode) else {
+                throw RuntimeInstallError.downloadFailed(file: artifact.file, detail: "HTTP \(result.statusCode)")
+            }
+            guard result.byteCount == artifact.size, result.sha256 == artifact.sha256.lowercased() else {
+                throw RuntimeInstallError.checksumMismatch(file: artifact.file)
+            }
+
+            completedBytes += result.byteCount
+            progress(.download(received: completedBytes, total: totalBytes))
+        }
+
+        // Step 5: archive screening, extraction, tree walk and staged verification.
         progress(.verify)
-        for item in targets {
-            try validateArchiveMembers(tarball: item.tmpTarball, isRuntime: item.profile == "lemon_runtime_full")
+        for component in components {
+            try Task.checkCancellation()
+            try validateArchiveMembers(tarball: component.tarball, file: component.artifact.file, isRuntime: component.isRuntime)
 
-            // Clean any existing .partial
-            try? fileManager.removeItem(at: item.partialDir)
-            try fileManager.createDirectory(at: item.partialDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
-            stagedPartials.append(item.partialDir)
-
-            // Extract with /usr/bin/tar
-            let tarProcess = Process()
-            tarProcess.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-            tarProcess.arguments = ["-xzf", item.tmpTarball.path, "-C", item.partialDir.path, "--no-same-owner"]
-            let errPipe = Pipe()
-            tarProcess.standardError = errPipe
+            try? fileManager.removeItem(at: component.partialDir)
             do {
-                try tarProcess.run()
-                tarProcess.waitUntilExit()
+                try fileManager.createDirectory(at: component.partialDir, withIntermediateDirectories: true)
             } catch {
-                throw RuntimeInstallError.unsafeArchive(file: item.artifact.file, detail: "tar execution failed: \(error.localizedDescription)")
+                throw RuntimeInstallError.filesystem(detail: "Could not create staging directory: \(error.localizedDescription)")
             }
-            guard tarProcess.terminationStatus == 0 else {
-                throw RuntimeInstallError.unsafeArchive(file: item.artifact.file, detail: "Extraction failed with exit code \(tarProcess.terminationStatus)")
+            partials.append(component.partialDir)
+
+            let extraction = try runProcess(
+                executable: URL(fileURLWithPath: "/usr/bin/tar"),
+                arguments: ["-xzf", component.tarball.path, "-C", component.partialDir.path, "--no-same-owner"],
+                environment: ["PATH": "/usr/bin:/bin"],
+                currentDirectory: nil,
+                timeout: 600,
+                component: component.artifact.file
+            )
+            guard extraction.status == 0 else {
+                throw RuntimeInstallError.unsafeArchive(
+                    file: component.artifact.file,
+                    detail: "extraction failed with status \(extraction.status)"
+                )
             }
 
-            // Remove downloaded tarball now that extraction succeeded
-            try? fileManager.removeItem(at: item.tmpTarball)
-            downloadedFiles.removeAll { $0 == item.tmpTarball }
+            try? fileManager.removeItem(at: component.tarball)
+            downloads.removeAll { $0 == component.tarball }
 
-            // Step 5: Walk tree with lstat
-            if item.profile == "lemon_runtime_full" {
-                try walkRuntimeTree(root: item.partialDir, file: item.artifact.file)
+            try Task.checkCancellation()
+            if component.isRuntime {
+                try walkRuntimeTree(root: component.partialDir, file: component.artifact.file)
+                try verifyStagedRuntime(root: component.partialDir, version: version)
             } else {
-                try walkBackendTree(root: item.partialDir, file: item.artifact.file)
-            }
-
-            // Step 6: Verify component functionality in staged .partial
-            if item.profile == "lemon_runtime_full" {
-                try verifyStagedRuntime(root: item.partialDir, version: version)
-            } else {
-                try verifyStagedBackend(root: item.partialDir, version: version)
+                try walkBackendTree(root: component.partialDir, file: component.artifact.file)
+                try verifyStagedBackend(root: component.partialDir, version: version)
             }
         }
 
-        // Step 7: Promotion
+        // Step 6: promote, then flip. Every mutation from here on is journalled, so a failure
+        // in the second half restores the first half instead of leaving a half-installed Lemon.
+        try Task.checkCancellation()
         progress(.install)
-        for item in targets {
-            let targetDir = item.finalDir
-            if fileManager.fileExists(atPath: targetDir.path) {
-                // If existing directory passes verification, reuse it
-                let isExistingValid: Bool
-                if item.profile == "lemon_runtime_full" {
-                    isExistingValid = (try? verifyStagedRuntime(root: targetDir, version: version)) != nil
-                } else {
-                    isExistingValid = (try? verifyStagedBackend(root: targetDir, version: version)) != nil
-                }
 
-                if isExistingValid {
-                    // Reuse existing directory, discard .partial
-                    try? fileManager.removeItem(at: item.partialDir)
-                    stagedPartials.removeAll { $0 == item.partialDir }
+        for component in components {
+            try Task.checkCancellation()
+            if fileManager.fileExists(atPath: component.targetDir.path) {
+                let reusable: Bool
+                if component.isRuntime {
+                    reusable = (try? verifyStagedRuntime(root: component.targetDir, version: version)) != nil
+                } else {
+                    reusable = (try? verifyStagedBackend(root: component.targetDir, version: version)) != nil
+                }
+                if reusable {
+                    try? fileManager.removeItem(at: component.partialDir)
+                    partials.removeAll { $0 == component.partialDir }
                     continue
                 }
 
-                // Move existing target directory aside to .previous.<pid>
-                let prev = URL(fileURLWithPath: targetDir.path + ".previous.\(ProcessInfo.processInfo.processIdentifier)")
-                try? fileManager.removeItem(at: prev)
+                let aside = URL(fileURLWithPath: component.targetDir.path + ".previous.\(ProcessInfo.processInfo.processIdentifier)")
+                try? fileManager.removeItem(at: aside)
                 do {
-                    try fileManager.moveItem(at: targetDir, to: prev)
-                    movedPrevious.append((previous: prev, original: targetDir))
+                    try fileManager.moveItem(at: component.targetDir, to: aside)
                 } catch {
-                    throw RuntimeInstallError.filesystem(detail: "Could not move existing \(targetDir.lastPathComponent) aside: \(error.localizedDescription)")
+                    throw RuntimeInstallError.filesystem(detail: "Could not move \(component.targetDir.lastPathComponent) aside: \(error.localizedDescription)")
                 }
+                journal.movedAside.append((previous: aside, original: component.targetDir))
             }
 
-            // Move .partial to targetDir
             do {
-                try fileManager.moveItem(at: item.partialDir, to: targetDir)
-                stagedPartials.removeAll { $0 == item.partialDir }
+                try fileManager.createDirectory(at: component.targetDir.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fileManager.moveItem(at: component.partialDir, to: component.targetDir)
             } catch {
-                // Attempt rollback of previous directory
-                if let idx = movedPrevious.firstIndex(where: { $0.original == targetDir }) {
-                    let record = movedPrevious.remove(at: idx)
-                    try? fileManager.moveItem(at: record.previous, to: targetDir)
-                }
-                throw RuntimeInstallError.filesystem(detail: "Could not promote staged directory to \(targetDir.lastPathComponent): \(error.localizedDescription)")
+                throw RuntimeInstallError.filesystem(detail: "Could not promote \(component.targetDir.lastPathComponent): \(error.localizedDescription)")
             }
+            partials.removeAll { $0 == component.partialDir }
+            journal.promoted.append(component.targetDir)
         }
 
-        // Step 8 & 9: Flip symlinks and remove quarantine
-        if needRuntime {
-            let versionsDir = plan.layout.runtimeVersionsDir
-            try fileManager.createDirectory(at: versionsDir, withIntermediateDirectories: true)
-            try atomicSymlink(target: plan.layout.runtimeCurrentTarget(version: version), link: plan.layout.runtimeCurrentLink)
+        for component in components {
+            try Task.checkCancellation()
+            try createDirectory(component.link.deletingLastPathComponent(), permissions: nil, journal: &journal)
+            try atomicSymlink(target: component.linkTarget, link: component.link, journal: &journal)
+            try createDirectory(component.launcherLink.deletingLastPathComponent(), permissions: nil, journal: &journal)
+            try atomicSymlink(target: component.launcherTarget, link: component.launcherLink, journal: &journal)
 
-            let binDir = plan.layout.runtimeBinDir
-            try fileManager.createDirectory(at: binDir, withIntermediateDirectories: true)
-            try atomicSymlink(target: plan.layout.runtimeLemonTarget, link: plan.layout.runtimeLemonLink)
+            if component.isRuntime {
+                try createDirectory(layout.runtimeRunDir, permissions: 0o700, journal: &journal)
+                try createDirectory(layout.runtimeStoreDir, permissions: 0o700, journal: &journal)
+                try createDirectory(layout.runtimeTmpDir, permissions: 0o700, journal: &journal)
+            }
 
-            try? fileManager.createDirectory(at: plan.layout.runtimeRunDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try? fileManager.createDirectory(at: plan.layout.runtimeStoreDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try? fileManager.createDirectory(at: plan.layout.runtimeTmpDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-
-            removeQuarantine(at: plan.layout.runtimeVersionDir(for: version))
+            removeQuarantine(at: component.targetDir)
         }
 
-        if needBackend {
-            let backendKey = plan.layout.backendKey(version: version, channel: channel, platform: platform)
-            let versionsDir = plan.layout.backendVersionsDir
-            try fileManager.createDirectory(at: versionsDir, withIntermediateDirectories: true)
-            try atomicSymlink(target: plan.layout.backendCurrentTarget(key: backendKey), link: plan.layout.backendCurrentLink)
-
-            let localBin = plan.layout.backendLocalBinDir
-            try fileManager.createDirectory(at: localBin, withIntermediateDirectories: true)
-            try atomicSymlink(target: plan.layout.backendLemonBotTarget, link: plan.layout.backendLemonBotLink)
-
-            removeQuarantine(at: plan.layout.backendVersionDir(key: backendKey))
-        }
-
-        // Clean up any moved .previous directories now that promotion committed
-        for record in movedPrevious {
+        committed = true
+        for record in journal.movedAside {
             try? fileManager.removeItem(at: record.previous)
         }
     }
 
-    // MARK: - Internal Verification Helpers
+    // MARK: - Rollback
 
-    private static func validateArchiveMembers(tarball: URL, isRuntime: Bool) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        process.arguments = ["-tzf", tarball.path]
-        let outPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = Pipe()
+    private static func rollback(_ journal: Journal) {
+        let fileManager = FileManager.default
 
+        for record in journal.links.reversed() {
+            if let previous = record.previousTarget {
+                var ignored = Journal()
+                try? atomicSymlink(target: previous, link: record.link, journal: &ignored)
+            } else {
+                unlink(record.link.path)
+            }
+        }
+
+        for directory in journal.promoted.reversed() {
+            try? fileManager.removeItem(at: directory)
+        }
+
+        for record in journal.movedAside.reversed() {
+            try? fileManager.removeItem(at: record.original)
+            try? fileManager.moveItem(at: record.previous, to: record.original)
+        }
+
+        for directory in journal.directories.reversed() {
+            if let contents = try? fileManager.contentsOfDirectory(atPath: directory.path), contents.isEmpty {
+                try? fileManager.removeItem(at: directory)
+            }
+        }
+    }
+
+    private static func createDirectory(_ url: URL, permissions: Int?, journal: inout Journal) throws {
+        let fileManager = FileManager.default
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) {
+            if isDirectory.boolValue { return }
+            throw RuntimeInstallError.filesystem(detail: "\(url.lastPathComponent) exists and is not a directory")
+        }
+
+        var attributes: [FileAttributeKey: Any] = [:]
+        if let permissions = permissions { attributes[.posixPermissions] = permissions }
         do {
-            try process.run()
+            try fileManager.createDirectory(at: url, withIntermediateDirectories: true, attributes: attributes)
         } catch {
-            throw RuntimeInstallError.unsafeArchive(file: tarball.lastPathComponent, detail: "Listing tarball failed: \(error.localizedDescription)")
+            throw RuntimeInstallError.filesystem(detail: "Could not create \(url.lastPathComponent): \(error.localizedDescription)")
+        }
+        journal.directories.append(url)
+    }
+
+    private static func atomicSymlink(target: String, link: URL, journal: inout Journal) throws {
+        let parent = link.deletingLastPathComponent()
+        let previous = readLinkTarget(link)
+        let staging = parent.appendingPathComponent(".tmp.\(ProcessInfo.processInfo.processIdentifier).\(UUID().uuidString)")
+        unlink(staging.path)
+
+        if symlink(target, staging.path) != 0 {
+            throw RuntimeInstallError.filesystem(detail: "symlink failed for \(link.lastPathComponent): errno \(errno)")
+        }
+        if rename(staging.path, link.path) != 0 {
+            let failure = errno
+            unlink(staging.path)
+            throw RuntimeInstallError.filesystem(detail: "rename failed for \(link.lastPathComponent): errno \(failure)")
+        }
+        journal.links.append((link: link, previousTarget: previous))
+    }
+
+    private static func readLinkTarget(_ url: URL) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let length = readlink(url.path, &buffer, buffer.count - 1)
+        guard length > 0 else { return nil }
+        buffer[length] = 0
+        return String(cString: buffer)
+    }
+
+    // MARK: - Archive screening
+
+    private static func validateArchiveMembers(tarball: URL, file: String, isRuntime: Bool) throws {
+        let listing = try runProcess(
+            executable: URL(fileURLWithPath: "/usr/bin/tar"),
+            arguments: ["-tzf", tarball.path],
+            environment: ["PATH": "/usr/bin:/bin"],
+            currentDirectory: nil,
+            timeout: 300,
+            component: file
+        )
+        guard listing.status == 0 else {
+            throw RuntimeInstallError.unsafeArchive(file: file, detail: "could not list the archive (status \(listing.status))")
+        }
+        guard let output = String(data: listing.standardOutput, encoding: .utf8) else {
+            throw RuntimeInstallError.unsafeArchive(file: file, detail: "archive listing is not valid UTF-8")
         }
 
-        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else {
-            throw RuntimeInstallError.unsafeArchive(file: tarball.lastPathComponent, detail: "Listing tarball failed with status \(process.terminationStatus)")
-        }
-
-        guard let output = String(data: data, encoding: .utf8) else {
-            throw RuntimeInstallError.unsafeArchive(file: tarball.lastPathComponent, detail: "Tarball listing contains invalid UTF-8")
-        }
-
-        let lines = output.components(separatedBy: "\n")
-        for rawLine in lines {
-            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { continue }
-
-            if trimmed.hasPrefix("/") {
-                throw RuntimeInstallError.unsafeArchive(file: tarball.lastPathComponent, detail: "Absolute path in archive: \(trimmed)")
+        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            let entry = String(rawLine)
+            if entry.hasPrefix("/") {
+                throw RuntimeInstallError.unsafeArchive(file: file, detail: "absolute archive path: \(entry)")
             }
 
-            var name = trimmed
-            while name.hasPrefix("./") {
-                name.removeFirst(2)
-            }
-            name = name.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            guard !name.isEmpty, name != "." else { continue }
+            var name = entry
+            while name.hasPrefix("./") { name.removeFirst(2) }
+            while name.hasSuffix("/") { name.removeLast() }
+            if name.isEmpty || name == "." { continue }
 
             let parts = name.components(separatedBy: "/")
-            if parts.contains("..") {
-                throw RuntimeInstallError.unsafeArchive(file: tarball.lastPathComponent, detail: "Archive member contains '..': \(trimmed)")
+            if parts.contains("..") || parts.contains("") {
+                throw RuntimeInstallError.unsafeArchive(file: file, detail: "archive path escapes its root: \(entry)")
             }
 
             if isRuntime {
                 if parts[0] == "bot" {
-                    throw RuntimeInstallError.unsafeArchive(file: tarball.lastPathComponent, detail: "Runtime archive contains unexpected bot/ entry: \(trimmed)")
+                    throw RuntimeInstallError.unsafeArchive(file: file, detail: "runtime archive contains an unexpected bot/ entry: \(entry)")
                 }
-            } else {
-                if parts[0] != "bot" {
-                    throw RuntimeInstallError.unsafeArchive(file: tarball.lastPathComponent, detail: "Backend archive contains unexpected non-bot/ entry: \(trimmed)")
-                }
+            } else if parts[0] != "bot" {
+                throw RuntimeInstallError.unsafeArchive(file: file, detail: "backend archive contains an unexpected top level: \(entry)")
             }
         }
     }
 
     private static func walkRuntimeTree(root: URL, file: String) throws {
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey],
-            options: []
-        ) else {
-            throw RuntimeInstallError.unsafeArchive(file: file, detail: "Cannot enumerate runtime tree")
+        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else {
+            throw RuntimeInstallError.unsafeArchive(file: file, detail: "could not enumerate the staged runtime")
         }
 
-        var entryCount = 0
-        var totalBytes: Int64 = 0
-
-        for case let fileURL as URL in enumerator {
-            entryCount += 1
-            if entryCount > 200_000 {
-                throw RuntimeInstallError.unsafeArchive(file: file, detail: "Runtime exceeds 200,000 entries")
+        var entries = 0
+        var bytes: Int64 = 0
+        for case let url as URL in enumerator {
+            entries += 1
+            if entries > 200_000 {
+                throw RuntimeInstallError.unsafeArchive(file: file, detail: "runtime exceeds 200000 entries")
             }
 
-            var statBuf = stat()
-            guard lstat(fileURL.path, &statBuf) == 0 else {
-                throw RuntimeInstallError.unsafeArchive(file: file, detail: "Cannot lstat \(fileURL.lastPathComponent)")
+            var info = stat()
+            guard lstat(url.path, &info) == 0 else {
+                throw RuntimeInstallError.unsafeArchive(file: file, detail: "could not inspect \(url.lastPathComponent)")
             }
-
-            let mode = statBuf.st_mode
-            if (mode & S_IFMT) == S_IFLNK {
-                throw RuntimeInstallError.unsafeArchive(file: file, detail: "Runtime contains forbidden symlink: \(fileURL.lastPathComponent)")
+            let kind = info.st_mode & S_IFMT
+            if kind == S_IFLNK {
+                throw RuntimeInstallError.unsafeArchive(file: file, detail: "runtime contains a symlink: \(url.lastPathComponent)")
             }
-            if (mode & S_IFMT) != S_IFREG && (mode & S_IFMT) != S_IFDIR {
-                throw RuntimeInstallError.unsafeArchive(file: file, detail: "Runtime contains non-regular entry: \(fileURL.lastPathComponent)")
+            guard kind == S_IFREG || kind == S_IFDIR else {
+                throw RuntimeInstallError.unsafeArchive(file: file, detail: "runtime contains a special file: \(url.lastPathComponent)")
             }
-            if (mode & S_IFMT) == S_IFREG {
-                totalBytes += Int64(statBuf.st_size)
-                if totalBytes > 4_294_967_296 {
-                    throw RuntimeInstallError.unsafeArchive(file: file, detail: "Runtime exceeds 4 GiB size limit")
+            if kind == S_IFREG {
+                bytes += Int64(info.st_size)
+                if bytes > 4_294_967_296 {
+                    throw RuntimeInstallError.unsafeArchive(file: file, detail: "runtime exceeds 4 GiB")
                 }
             }
         }
     }
 
     private static func walkBackendTree(root: URL, file: String) throws {
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey],
-            options: []
-        ) else {
-            throw RuntimeInstallError.unsafeArchive(file: file, detail: "Cannot enumerate backend tree")
+        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else {
+            throw RuntimeInstallError.unsafeArchive(file: file, detail: "could not enumerate the staged backend")
         }
 
         let botRoot = root.appendingPathComponent("bot", isDirectory: true).standardizedFileURL.path
-
-        for case let fileURL as URL in enumerator {
-            var statBuf = stat()
-            guard lstat(fileURL.path, &statBuf) == 0 else {
-                throw RuntimeInstallError.unsafeArchive(file: file, detail: "Cannot lstat \(fileURL.lastPathComponent)")
+        for case let url as URL in enumerator {
+            var info = stat()
+            guard lstat(url.path, &info) == 0 else {
+                throw RuntimeInstallError.unsafeArchive(file: file, detail: "could not inspect \(url.lastPathComponent)")
             }
-
-            let mode = statBuf.st_mode
-            if (mode & S_IFMT) == S_IFLNK {
-                var linkBuf = [CChar](repeating: 0, count: Int(PATH_MAX))
-                let len = readlink(fileURL.path, &linkBuf, linkBuf.count - 1)
-                guard len > 0 else {
-                    throw RuntimeInstallError.unsafeArchive(file: file, detail: "Cannot readlink \(fileURL.lastPathComponent)")
+            let kind = info.st_mode & S_IFMT
+            if kind == S_IFLNK {
+                guard let target = readLinkTarget(url) else {
+                    throw RuntimeInstallError.unsafeArchive(file: file, detail: "could not read the symlink \(url.lastPathComponent)")
                 }
-                linkBuf[len] = 0
-                let targetStr = String(cString: linkBuf)
-                if targetStr.hasPrefix("/") {
-                    throw RuntimeInstallError.unsafeArchive(file: file, detail: "Absolute symlink in backend: \(targetStr)")
+                if target.hasPrefix("/") {
+                    throw RuntimeInstallError.unsafeArchive(file: file, detail: "backend contains an absolute symlink: \(target)")
                 }
-                let parent = fileURL.deletingLastPathComponent().standardizedFileURL
-                let resolved = parent.appendingPathComponent(targetStr).standardizedFileURL.path
-                guard resolved.hasPrefix(botRoot) else {
-                    throw RuntimeInstallError.unsafeArchive(file: file, detail: "Backend symlink escapes bot directory: \(targetStr)")
+                let resolved = url.deletingLastPathComponent().appendingPathComponent(target).standardizedFileURL.path
+                guard resolved == botRoot || resolved.hasPrefix(botRoot + "/") else {
+                    throw RuntimeInstallError.unsafeArchive(file: file, detail: "backend symlink escapes bot directory: \(target)")
                 }
-            } else if (mode & S_IFMT) != S_IFREG && (mode & S_IFMT) != S_IFDIR {
-                throw RuntimeInstallError.unsafeArchive(file: file, detail: "Backend contains non-regular entry: \(fileURL.lastPathComponent)")
+            } else if kind != S_IFREG && kind != S_IFDIR {
+                throw RuntimeInstallError.unsafeArchive(file: file, detail: "backend contains a special file: \(url.lastPathComponent)")
             }
         }
 
-        let binaryURL = root.appendingPathComponent("bot/bin/lemon-bot")
-        var binStat = stat()
-        guard lstat(binaryURL.path, &binStat) == 0 else {
-            throw RuntimeInstallError.unsafeArchive(file: file, detail: "Backend is missing bot/bin/lemon-bot")
+        var binary = stat()
+        guard lstat(root.appendingPathComponent("bot/bin/lemon-bot").path, &binary) == 0 else {
+            throw RuntimeInstallError.unsafeArchive(file: file, detail: "backend has no bot/bin/lemon-bot")
         }
-        guard (binStat.st_mode & S_IFMT) == S_IFREG else {
+        guard (binary.st_mode & S_IFMT) == S_IFREG else {
             throw RuntimeInstallError.unsafeArchive(file: file, detail: "bot/bin/lemon-bot must be a regular file")
         }
     }
 
-    private static func verifyStagedRuntime(root: URL, version: String) throws {
-        let fm = FileManager.default
-        let lemonBin = root.appendingPathComponent("bin/lemon")
-        guard fm.isExecutableFile(atPath: lemonBin.path) else {
-            throw RuntimeInstallError.verificationFailed(component: "runtime", detail: "Missing executable bin/lemon")
+    // MARK: - Staged verification
+
+    @discardableResult
+    private static func verifyStagedRuntime(root: URL, version: String) throws -> Bool {
+        let fileManager = FileManager.default
+        let launcher = root.appendingPathComponent("bin/lemon")
+        guard fileManager.isExecutableFile(atPath: launcher.path) else {
+            throw RuntimeInstallError.verificationFailed(component: "runtime", detail: "no executable bin/lemon")
         }
 
-        let checkHome = fm.temporaryDirectory.appendingPathComponent("lemon_check_\(UUID().uuidString)")
-        try fm.createDirectory(at: checkHome, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: checkHome) }
+        let home = fileManager.temporaryDirectory.appendingPathComponent("lemon-runtime-check-\(UUID().uuidString)")
+        try fileManager.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: home) }
 
-        var env = ProcessInfo.processInfo.environment
-        env["HOME"] = checkHome.path
-        env["LEMON_STORE_PATH"] = checkHome.appendingPathComponent(".lemon/store").path
-        env["LEMON_AGENT_DIR"] = checkHome.appendingPathComponent(".lemon/agent").path
-        env["LEMON_DOTENV_DIR"] = checkHome.path
-        env["RELEASE_TMP"] = checkHome.appendingPathComponent("runtime").path
-        env.removeValue(forKey: "RELEASE_ROOT")
-        env.removeValue(forKey: "RELEASE_VSN")
-        env.removeValue(forKey: "RELEASE_NAME")
-        env.removeValue(forKey: "RELEASE_PROG")
-        env.removeValue(forKey: "RELEASE_COMMAND")
-        env.removeValue(forKey: "RELEASE_MODE")
+        var environment = ProcessInfo.processInfo.environment
+        for key in ["RELEASE_ROOT", "RELEASE_VSN", "RELEASE_NAME", "RELEASE_PROG", "RELEASE_COMMAND", "RELEASE_MODE"] {
+            environment.removeValue(forKey: key)
+        }
+        environment["HOME"] = home.path
+        environment["LEMON_STORE_PATH"] = home.appendingPathComponent(".lemon/store").path
+        environment["LEMON_AGENT_DIR"] = home.appendingPathComponent(".lemon/agent").path
+        environment["LEMON_DOTENV_DIR"] = home.path
+        environment["RELEASE_TMP"] = home.appendingPathComponent("runtime").path
 
-        let (status, _, errData) = try executeProcess(
-            executable: lemonBin,
+        let result = try runProcess(
+            executable: launcher,
             arguments: ["node", "capabilities", "--json", "--require-bot", "--expected-version", version],
-            environment: env,
-            currentDirectory: checkHome,
-            timeout: 120
+            environment: environment,
+            currentDirectory: home,
+            timeout: 120,
+            component: "runtime"
         )
-
-        guard status == 0 else {
-            let errString = String(data: errData, encoding: .utf8) ?? ""
-            throw RuntimeInstallError.verificationFailed(component: "runtime", detail: "node capabilities check failed (status \(status)): \(errString)")
+        guard result.status == 0 else {
+            let detail = String(data: result.standardError.prefix(2048), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw RuntimeInstallError.verificationFailed(
+                component: "runtime",
+                detail: "node capabilities --require-bot failed (status \(result.status))\(detail.isEmpty ? "" : ": \(detail)")"
+            )
         }
+        return true
     }
 
-    private static func verifyStagedBackend(root: URL, version: String) throws {
-        let fm = FileManager.default
-        let botBin = root.appendingPathComponent("bot/bin/lemon-bot")
-        guard fm.isExecutableFile(atPath: botBin.path) else {
-            throw RuntimeInstallError.verificationFailed(component: "backend", detail: "Missing executable bot/bin/lemon-bot")
+    @discardableResult
+    private static func verifyStagedBackend(root: URL, version: String) throws -> Bool {
+        let fileManager = FileManager.default
+        let binary = root.appendingPathComponent("bot/bin/lemon-bot")
+        guard fileManager.isExecutableFile(atPath: binary.path) else {
+            throw RuntimeInstallError.verificationFailed(component: "backend", detail: "no executable bot/bin/lemon-bot")
         }
 
-        let webDir = root.appendingPathComponent("bot/web")
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: webDir.path, isDirectory: &isDir), isDir.boolValue else {
-            throw RuntimeInstallError.verificationFailed(component: "backend", detail: "Missing bot/web directory")
-        }
-        let webItems = (try? fm.contentsOfDirectory(atPath: webDir.path)) ?? []
-        guard !webItems.isEmpty else {
-            throw RuntimeInstallError.verificationFailed(component: "backend", detail: "bot/web directory is empty")
+        let web = root.appendingPathComponent("bot/web")
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: web.path, isDirectory: &isDirectory), isDirectory.boolValue,
+              let contents = try? fileManager.contentsOfDirectory(atPath: web.path), !contents.isEmpty else {
+            throw RuntimeInstallError.verificationFailed(component: "backend", detail: "no web assets")
         }
 
-        let sharpRoot = root.appendingPathComponent("bot/node_modules/@img/sharp-darwin-arm64")
-        let sharpVipsRoot = root.appendingPathComponent("bot/node_modules/@img/sharp-libvips-darwin-arm64")
-        guard fm.fileExists(atPath: sharpRoot.appendingPathComponent("package.json").path),
-              fm.fileExists(atPath: sharpVipsRoot.appendingPathComponent("package.json").path),
-              fm.fileExists(atPath: sharpRoot.appendingPathComponent("lib/sharp-darwin-arm64.node").path) else {
-            throw RuntimeInstallError.verificationFailed(component: "backend", detail: "Missing host-native image addon or dependencies")
+        let native = root.appendingPathComponent("bot/node_modules/@img/sharp-darwin-arm64")
+        let libvips = root.appendingPathComponent("bot/node_modules/@img/sharp-libvips-darwin-arm64")
+        guard fileManager.fileExists(atPath: native.appendingPathComponent("package.json").path),
+              fileManager.fileExists(atPath: libvips.appendingPathComponent("package.json").path),
+              fileManager.fileExists(atPath: native.appendingPathComponent("lib/sharp-darwin-arm64.node").path) else {
+            throw RuntimeInstallError.verificationFailed(component: "backend", detail: "no host-native image runtime")
         }
 
-        let checkHome = fm.temporaryDirectory.appendingPathComponent("lemon_bot_check_\(UUID().uuidString)")
-        try fm.createDirectory(at: checkHome, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: checkHome) }
+        let home = fileManager.temporaryDirectory.appendingPathComponent("lemon-backend-check-\(UUID().uuidString)")
+        try fileManager.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: home) }
 
-        let env = ["HOME": checkHome.path, "PATH": "/usr/bin:/bin"]
-        let (status, outData, _) = try executeProcess(
-            executable: botBin,
+        let result = try runProcess(
+            executable: binary,
             arguments: ["--version"],
-            environment: env,
-            currentDirectory: checkHome,
-            timeout: 15
+            environment: ["HOME": home.path, "PATH": "/usr/bin:/bin"],
+            currentDirectory: home,
+            timeout: 15,
+            component: "backend"
         )
-
-        guard status == 0 else {
-            throw RuntimeInstallError.verificationFailed(component: "backend", detail: "lemon-bot --version returned status \(status)")
+        guard result.status == 0,
+              String(data: result.standardOutput, encoding: .utf8) == "lemon-bot \(version)\n" else {
+            throw RuntimeInstallError.verificationFailed(component: "backend", detail: "--version did not report \(version)")
         }
-
-        let outString = String(data: outData, encoding: .utf8) ?? ""
-        let expected = "lemon-bot \(version)\n"
-        guard outString == expected else {
-            throw RuntimeInstallError.verificationFailed(component: "backend", detail: "lemon-bot --version reported '\(outString)'; expected '\(expected)'")
-        }
+        return true
     }
 
-    private static func executeProcess(
+    private static func removeQuarantine(at url: URL) {
+        _ = try? runProcess(
+            executable: URL(fileURLWithPath: "/usr/bin/xattr"),
+            arguments: ["-dr", "com.apple.quarantine", url.path],
+            environment: ["PATH": "/usr/bin:/bin"],
+            currentDirectory: nil,
+            timeout: 60,
+            component: "quarantine"
+        )
+    }
+
+    // MARK: - Process execution
+
+    private struct ProcessResult {
+        let status: Int32
+        let standardOutput: Data
+        let standardError: Data
+    }
+
+    /// Runs a child process, draining both pipes concurrently so a chatty child can never fill a
+    /// pipe buffer and deadlock the wait, and bounding how much output is retained.
+    private static func runProcess(
         executable: URL,
         arguments: [String],
         environment: [String: String],
-        currentDirectory: URL? = nil,
-        timeout: TimeInterval
-    ) throws -> (status: Int32, stdout: Data, stderr: Data) {
+        currentDirectory: URL?,
+        timeout: TimeInterval,
+        component: String,
+        maximumOutputBytes: Int = 16 * 1024 * 1024
+    ) throws -> ProcessResult {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
         process.environment = environment
-        if let dir = currentDirectory {
-            process.currentDirectoryURL = dir
-        }
+        if let currentDirectory = currentDirectory { process.currentDirectoryURL = currentDirectory }
 
         let outPipe = Pipe()
         let errPipe = Pipe()
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = outPipe
         process.standardError = errPipe
+
+        let sink = OutputSink(limit: maximumOutputBytes)
+        let group = DispatchGroup()
+        group.enter(); group.enter()
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                handle.readabilityHandler = nil
+                group.leave()
+            } else {
+                sink.appendOutput(chunk)
+            }
+        }
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                handle.readabilityHandler = nil
+                group.leave()
+            } else {
+                sink.appendError(chunk)
+            }
+        }
+
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
 
         do {
             try process.run()
         } catch {
-            throw RuntimeInstallError.verificationFailed(component: executable.lastPathComponent, detail: "Could not execute: \(error.localizedDescription)")
+            outPipe.fileHandleForReading.readabilityHandler = nil
+            errPipe.fileHandleForReading.readabilityHandler = nil
+            throw RuntimeInstallError.verificationFailed(component: component, detail: "could not run \(executable.lastPathComponent)")
         }
 
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-
-        if process.isRunning {
+        var timedOut = false
+        if exited.wait(timeout: .now() + timeout) == .timedOut {
+            timedOut = true
             process.terminate()
-            Thread.sleep(forTimeInterval: 0.1)
-            if process.isRunning {
+            if exited.wait(timeout: .now() + 5) == .timedOut {
                 kill(process.processIdentifier, SIGKILL)
+                _ = exited.wait(timeout: .now() + 5)
             }
-            throw RuntimeInstallError.verificationFailed(component: executable.lastPathComponent, detail: "Execution timed out after \(timeout)s")
         }
+        _ = group.wait(timeout: .now() + 10)
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
+        try? outPipe.fileHandleForReading.close()
+        try? errPipe.fileHandleForReading.close()
 
-        let stdoutData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = errPipe.fileHandleForReading.readDataToEndOfFile()
-        return (process.terminationStatus, stdoutData, stderrData)
+        if timedOut {
+            throw RuntimeInstallError.verificationFailed(component: component, detail: "timed out after \(Int(timeout))s")
+        }
+        return ProcessResult(status: process.terminationStatus, standardOutput: sink.output, standardError: sink.error)
     }
 
-    private static func atomicSymlink(target: String, link: URL) throws {
-        let parentDir = link.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
-        let tmpLink = parentDir.appendingPathComponent(".tmp.\(ProcessInfo.processInfo.processIdentifier).\(UUID().uuidString)")
-        unlink(tmpLink.path)
+    private final class OutputSink: @unchecked Sendable {
+        private let lock = NSLock()
+        private let limit: Int
+        private var outputBuffer = Data()
+        private var errorBuffer = Data()
 
-        if symlink(target, tmpLink.path) != 0 {
-            throw RuntimeInstallError.filesystem(detail: "symlink failed for \(tmpLink.lastPathComponent): errno \(errno)")
+        init(limit: Int) { self.limit = limit }
+
+        func appendOutput(_ chunk: Data) {
+            lock.lock(); defer { lock.unlock() }
+            if outputBuffer.count < limit { outputBuffer.append(chunk) }
         }
-        if rename(tmpLink.path, link.path) != 0 {
-            unlink(tmpLink.path)
-            throw RuntimeInstallError.filesystem(detail: "rename failed for symlink \(link.lastPathComponent): errno \(errno)")
+
+        func appendError(_ chunk: Data) {
+            lock.lock(); defer { lock.unlock() }
+            if errorBuffer.count < limit { errorBuffer.append(chunk) }
+        }
+
+        var output: Data {
+            lock.lock(); defer { lock.unlock() }
+            return outputBuffer
+        }
+
+        var error: Data {
+            lock.lock(); defer { lock.unlock() }
+            return errorBuffer
         }
     }
 
-    private static func removeQuarantine(at url: URL) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-        process.arguments = ["-dr", "com.apple.quarantine", url.path]
-        try? process.run()
-        process.waitUntilExit()
+    // MARK: - Bounded streaming fetch
+
+    private static func copyConfiguration(_ configuration: URLSessionConfiguration) -> URLSessionConfiguration {
+        let copy = URLSessionConfiguration.ephemeral
+        copy.protocolClasses = configuration.protocolClasses
+        copy.timeoutIntervalForRequest = configuration.timeoutIntervalForRequest
+        copy.timeoutIntervalForResource = configuration.timeoutIntervalForResource
+        return copy
     }
 
-    private final class HTTPSOnlyDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-        func urlSession(
-            _ session: URLSession,
-            task: URLSessionTask,
-            willPerformHTTPRedirection response: HTTPURLResponse,
-            newRequest request: URLRequest,
-            completionHandler: @escaping (URLRequest?) -> Void
-        ) {
-            guard let url = request.url, url.scheme == "https" else {
-                completionHandler(nil)
-                return
+    /// Streams an HTTPS response to memory (manifest) or to a file (artifacts), hashing as it
+    /// goes and refusing to buffer or write more than `maximumBytes`.
+    enum Fetch {
+        struct Result {
+            let statusCode: Int
+            let data: Data?
+            let sha256: String
+            let byteCount: Int64
+        }
+
+        static func perform(
+            configuration: URLSessionConfiguration,
+            url: URL,
+            destination: URL?,
+            maximumBytes: Int64,
+            overflow: RuntimeInstallError,
+            progress: (@Sendable (Int64) -> Void)?
+        ) async throws -> Result {
+            let collector = try Collector(destination: destination, maximumBytes: maximumBytes, overflow: overflow, progress: progress)
+            let session = URLSession(configuration: configuration, delegate: collector, delegateQueue: nil)
+            defer { session.finishTasksAndInvalidate() }
+
+            var request = URLRequest(url: url)
+            request.httpShouldHandleCookies = false
+            let task = session.dataTask(with: request)
+
+            return try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    collector.start(continuation: continuation)
+                    task.resume()
+                }
+            } onCancel: {
+                task.cancel()
             }
-            completionHandler(request)
+        }
+
+        final class Collector: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+            private let lock = NSLock()
+            private let maximumBytes: Int64
+            private let overflow: RuntimeInstallError
+            private let destination: URL?
+            private let progress: (@Sendable (Int64) -> Void)?
+            private var handle: FileHandle?
+            private var hasher = SHA256()
+            private var buffer: Data?
+            private var received: Int64 = 0
+            private var statusCode = 0
+            private var failure: Error?
+            private var continuation: CheckedContinuation<Result, Error>?
+            private var finished = false
+
+            init(
+                destination: URL?,
+                maximumBytes: Int64,
+                overflow: RuntimeInstallError,
+                progress: (@Sendable (Int64) -> Void)?
+            ) throws {
+                self.destination = destination
+                self.maximumBytes = maximumBytes
+                self.overflow = overflow
+                self.progress = progress
+                if let destination = destination {
+                    let manager = FileManager.default
+                    try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    guard manager.createFile(atPath: destination.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+                        throw RuntimeInstallError.filesystem(detail: "could not create \(destination.lastPathComponent)")
+                    }
+                    self.handle = try FileHandle(forWritingTo: destination)
+                } else {
+                    self.buffer = Data()
+                }
+            }
+
+            func start(continuation: CheckedContinuation<Result, Error>) {
+                lock.lock()
+                self.continuation = continuation
+                lock.unlock()
+            }
+
+            private func finish(_ outcome: Swift.Result<Result, Error>) {
+                lock.lock()
+                guard !finished, let continuation = continuation else { lock.unlock(); return }
+                finished = true
+                self.continuation = nil
+                try? handle?.close()
+                handle = nil
+                lock.unlock()
+                continuation.resume(with: outcome)
+            }
+
+            func urlSession(
+                _ session: URLSession,
+                dataTask: URLSessionDataTask,
+                didReceive response: URLResponse,
+                completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+            ) {
+                if let http = response as? HTTPURLResponse {
+                    lock.lock(); statusCode = http.statusCode; lock.unlock()
+                }
+                completionHandler(.allow)
+            }
+
+            func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+                lock.lock()
+                if finished { lock.unlock(); return }
+                if received + Int64(data.count) > maximumBytes {
+                    failure = overflow
+                    lock.unlock()
+                    dataTask.cancel()
+                    return
+                }
+                received += Int64(data.count)
+                hasher.update(data: data)
+                if buffer != nil {
+                    buffer?.append(data)
+                } else {
+                    do {
+                        try handle?.write(contentsOf: data)
+                    } catch {
+                        failure = RuntimeInstallError.filesystem(detail: "could not write the download")
+                        lock.unlock()
+                        dataTask.cancel()
+                        return
+                    }
+                }
+                let total = received
+                lock.unlock()
+                progress?(total)
+            }
+
+            func urlSession(
+                _ session: URLSession,
+                task: URLSessionTask,
+                willPerformHTTPRedirection response: HTTPURLResponse,
+                newRequest request: URLRequest,
+                completionHandler: @escaping (URLRequest?) -> Void
+            ) {
+                guard request.url?.scheme == "https" else {
+                    lock.lock()
+                    failure = RuntimeInstallError.manifestUnavailable(detail: "refused a non-https redirect")
+                    lock.unlock()
+                    completionHandler(nil)
+                    return
+                }
+                completionHandler(request)
+            }
+
+            func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+                lock.lock()
+                let recorded = failure
+                let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+                let result = Result(statusCode: statusCode, data: buffer, sha256: digest, byteCount: received)
+                lock.unlock()
+
+                if let recorded = recorded {
+                    finish(.failure(recorded))
+                } else if let error = error {
+                    if (error as? URLError)?.code == .cancelled {
+                        finish(.failure(CancellationError()))
+                    } else {
+                        finish(.failure(error))
+                    }
+                } else {
+                    finish(.success(result))
+                }
+            }
         }
     }
 #endif
