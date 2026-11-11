@@ -2,10 +2,10 @@ import Foundation
 import Observation
 
 @MainActor @Observable public final class LemonBotStore {
-    static let liveRunStatuses: Set<String> = ["reserved", "queued", "running", "awaiting_input"]
     static let terminalRunStatuses: Set<String> = ["succeeded", "failed", "cancelled"]
     public internal(set) var grantsVersion: [ID: Int] = [:]
     @ObservationIgnored var reconcilingRunBots: Set<ID> = []
+    @ObservationIgnored var pendingRunEntryReconciliations: [ID: Run] = [:]
     public var account: StoredAccount? {
         didSet {
             if oldValue?.id != account?.id || oldValue?.token != account?.token { providerSettings.reset() }
@@ -109,32 +109,56 @@ import Observation
     }
 
     func scheduleRunReconciliation(botID: ID) {
-        let stale = runs.filter { $0.botId == botID && Self.liveRunStatuses.contains($0.status) }
-        guard !stale.isEmpty, reconcilingRunBots.insert(botID).inserted else { return }
+        // Presentation's live statuses deliberately exclude uncertain outcomes; reads must not.
+        let stale = runs.filter { $0.botId == botID && !Self.terminalRunStatuses.contains($0.status) }
+        for run in runs where run.botId == botID && Self.terminalRunStatuses.contains(run.status) {
+            if (entries[run.conversationId] ?? []).contains(where: { $0.runId == run.id && $0.streaming }) {
+                pendingRunEntryReconciliations[run.id] = run
+            }
+        }
+        guard !stale.isEmpty || pendingRunEntryReconciliations.values.contains(where: { $0.botId == botID }) else { return }
+        guard reconcilingRunBots.insert(botID).inserted else { return }
         let current = generation
         Task { [weak self] in
-            guard let self else { return }
+            guard let self, generation == current else { return }
             defer { if generation == current { reconcilingRunBots.remove(botID) } }
             for run in stale {
                 do {
                     let authoritative: Run = try await read("/runs/\(HTTPTransport.pathID(run.id))")
                     try assertGeneration(current)
                     guard authoritative.id == run.id, authoritative.botId == botID, authoritative.conversationId == run.conversationId else { throw ClientError.invalidFrame }
+                    // A revoked conversation removes both its runs and loaded transcript while this read waits.
+                    guard runs.contains(where: { $0.id == run.id }) || entries[run.conversationId] != nil else { continue }
                     upsert(&runs, authoritative, id: { $0.id }, revision: { $0.revision })
                     if Self.terminalRunStatuses.contains(authoritative.status) {
-                        let streaming = (entries[run.conversationId] ?? []).filter { $0.runId == run.id && $0.streaming }
-                        for entry in streaming {
-                            let final: TranscriptEntry = try await read("/entries/\(HTTPTransport.pathID(entry.id))")
-                            try assertGeneration(current)
-                            guard final.id == entry.id, final.runId == run.id, final.conversationId == run.conversationId else { throw ClientError.invalidFrame }
-                            upsertEntry(final)
-                        }
+                        pendingRunEntryReconciliations[run.id] = authoritative
                     }
                 } catch {
                     // A subsequent idle presence retries failed authorized reads.
                     guard generation == current else { return }
                 }
             }
+            // Keep reply recovery independent of the run becoming terminal (or leaving sync's active runs).
+            let pending = pendingRunEntryReconciliations.values.filter { $0.botId == botID }
+            for run in pending {
+                let streaming = (entries[run.conversationId] ?? []).filter { $0.runId == run.id && $0.streaming }
+                for entry in streaming {
+                    do {
+                        guard pendingRunEntryReconciliations[run.id] != nil else { break }
+                        let final: TranscriptEntry = try await read("/entries/\(HTTPTransport.pathID(entry.id))")
+                        try assertGeneration(current)
+                        guard pendingRunEntryReconciliations[run.id] != nil else { break }
+                        guard final.id == entry.id, final.runId == run.id, final.conversationId == run.conversationId else { throw ClientError.invalidFrame }
+                        upsertEntry(final)
+                    } catch {
+                        guard generation == current else { return }
+                    }
+                }
+                if !(entries[run.conversationId] ?? []).contains(where: { $0.runId == run.id && $0.streaming }) {
+                    pendingRunEntryReconciliations[run.id] = nil
+                }
+            }
+            guard generation == current else { return }
             try? persistCache()
         }
     }
@@ -424,7 +448,7 @@ import Observation
         pairings = []; pairingURL = nil; pairingQRID = nil
         ownerPairingPreflight = nil
         typingByConversation = [:]
-        grantsVersion = [:]; reconcilingRunBots = []
+        grantsVersion = [:]; reconcilingRunBots = []; pendingRunEntryReconciliations = [:]
     }
     func persistCache() throws {
         guard let account, var value = snapshot else { return }

@@ -3,7 +3,7 @@ import { LemonBotClient, nonce, type Bot, type Conversation, type Device, type I
 import { AuthScreen, savedAccounts, type WebSession } from './auth';
 import { ArrowDown, ChevronRight, GitBranch, History, Inbox, LayoutGrid, ListFilter, Menu, MoreHorizontal, Plus, Search, SquarePen } from 'lucide-react';
 import { AccountAvatar, BotAvatar, ConfirmDialog, EmptyState, ErrorNotice, LemonFace, LemonMark, Loading, useAction } from './ui';
-import { currentStep, previewText, staleLiveRuns } from './live';
+import { currentStep, previewText, staleLiveRuns, stoppableRunStatuses } from './live';
 import { SettingsRoute, isSettingsScreen } from './settings-shell';
 import { BotsScreen, ConversationScreen, FileViewer, ModelStatusLine, SettingsScreen } from './route-components';
 import { VoiceOverlay } from './features/chat/voice-loader';
@@ -58,11 +58,14 @@ function initialRoute(): Route {
   return { screen: query.get('screen') || 'home', id: query.get('id') || undefined, botId: query.get('botId') || undefined, tab: query.get('tab') || undefined, entryId: query.get('entryId') || undefined, conversationId: query.get('conversationId') || undefined, taskConversationId: query.get('taskConversationId') || undefined, machineId: query.get('machineId') || undefined };
 }
 function upsert<T extends Resource>(items: T[], resource: T) { const previous = items.find(item => item.id === resource.id); if (previous && previous.revision >= resource.revision) return items; return previous ? items.map(item => item.id === resource.id ? resource : item) : [...items, resource]; }
-function applyRun(snapshot: Snapshot, run: Run): Snapshot {
-  const active = ['reserved', 'queued', 'running', 'awaiting_input', 'outcome_unknown'].includes(run.status);
-  return { ...snapshot, activeRuns: active ? upsert(snapshot.activeRuns, run) : snapshot.activeRuns.filter(value => value.id !== run.id) };
+function applyRun(snapshot: Snapshot, run: Run, knownRuns: Map<string, Run>): Snapshot {
+  const previous = knownRuns.get(run.id);
+  if (previous && previous.revision >= run.revision) return snapshot;
+  // Keep terminal revisions even after removing the run from the active projection.
+  knownRuns.set(run.id, run);
+  return { ...snapshot, activeRuns: stoppableRunStatuses[run.status] ? upsert(snapshot.activeRuns, run) : snapshot.activeRuns.filter(value => value.id !== run.id) };
 }
-function applySnapshotEvent(snapshot: Snapshot, event: RealtimeEvent): Snapshot {
+function applySnapshotEvent(snapshot: Snapshot, event: RealtimeEvent, knownRuns: Map<string, Run>): Snapshot {
   switch (event.event) {
     case 'user.updated': return event.payload.revision > snapshot.user.revision ? { ...snapshot, user: event.payload } : snapshot;
     case 'workspace.updated': return event.payload.revision > snapshot.workspace.revision ? { ...snapshot, workspace: event.payload } : snapshot;
@@ -78,7 +81,7 @@ function applySnapshotEvent(snapshot: Snapshot, event: RealtimeEvent): Snapshot 
     case 'section.deleted': return { ...snapshot, sections: snapshot.sections.filter(section => section.id !== event.payload.id) };
     case 'notification.upserted': return { ...snapshot, notifications: upsert(snapshot.notifications, event.payload) };
     case 'notification.deleted': return { ...snapshot, notifications: snapshot.notifications.filter(item => item.id !== event.payload.id) };
-    case 'run.upserted': return applyRun(snapshot, event.payload);
+    case 'run.upserted': return applyRun(snapshot, event.payload, knownRuns);
     default: return snapshot;
   }
 }
@@ -113,6 +116,7 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reas
   const [lastAttemptAt, setLastAttemptAt] = useState(Date.now());
   const bootFailures = useRef(0);
   const reconcilingRunBots = useRef(new Set<string>());
+  const knownRuns = useRef(new Map<string, Run>());
   const [runtimeRunning, setRuntimeRunning] = useState(false);
   const [phone, setPhone] = useState(() => matchMedia('(max-width: 760px)').matches);
   useEffect(() => { const media = matchMedia('(max-width: 760px)'); const change = () => setPhone(media.matches); media.addEventListener('change', change); return () => media.removeEventListener('change', change); }, []);
@@ -138,7 +142,16 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reas
     if (value.hasMore.conversations) { let cursor: string | undefined; do { const page = await client.call('GET /conversations', { query: { limit: 200, cursor } }); for (const item of page.items) value.conversations = upsert(value.conversations, item); cursor = page.nextCursor || undefined; } while (cursor); }
     if (value.hasMore.notifications) { let cursor: string | undefined; do { const page = await client.call('GET /notifications', { query: { limit: 200, cursor } }); for (const item of page.items) value.notifications = upsert(value.notifications, item); cursor = page.nextCursor || undefined; } while (cursor); }
     if (value.sections.length >= 200) { let cursor: string | undefined; do { const page = await client.call('GET /sections', { query: { limit: 200, cursor } }); for (const item of page.items) value.sections = upsert(value.sections, item); cursor = page.nextCursor || undefined; } while (cursor); }
-    if (isCurrent()) update(value); return value;
+    if (isCurrent()) {
+      value.activeRuns = value.activeRuns.map(run => {
+        const previous = knownRuns.current.get(run.id);
+        if (previous && previous.revision >= run.revision) return previous;
+        knownRuns.current.set(run.id, run);
+        return run;
+      }).filter(run => stoppableRunStatuses[run.status]);
+      update(value);
+    }
+    return value;
   };
   const refresh = async () => { try { await sync(); window.dispatchEvent(new Event('lemon:refresh')); } catch (failure) { if (sessionEnded(failure)) onLogout('Your session ended. Sign in again.'); throw failure; } };
   const retry = () => { realtime?.close(); setRealtime(null); setBootRetryAt(null); setConnection('connecting'); setAttempt(value => value + 1); };
@@ -158,7 +171,7 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reas
         } catch (failure) { if (!disposed) reportError(failure); }
         socket = client.realtime({ deviceId: registration?.id, cursor: value.cursor, onEvent: event => {
           if (disposed) return;
-          if (snapshotRef.current) update(applySnapshotEvent(snapshotRef.current, event));
+          if (snapshotRef.current) update(applySnapshotEvent(snapshotRef.current, event, knownRuns.current));
           if (event.event === 'conversation.deleted') forgetConversation(event.payload.id);
           const bot = event.event === 'bot.presence'
             ? { id: event.payload.botId, activity: event.payload.status }
@@ -170,11 +183,14 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reas
               reconcilingRunBots.current.add(bot.id);
               void Promise.all(stale.map(run => client.call('GET /runs/:id', { params: { id: run.id } }))).then(runs => {
                 if (disposed) return;
+                const accepted: Run[] = [];
                 for (const run of runs) {
                   const snapshot = snapshotRef.current;
-                  if (snapshot) update(applyRun(snapshot, run));
+                  if (!snapshot) continue;
+                  const next = applyRun(snapshot, run, knownRuns.current);
+                  if (next !== snapshot) { update(next); accepted.push(run); }
                 }
-                window.dispatchEvent(new CustomEvent('lemonbot:runs-reconciled', { detail: runs }));
+                if (accepted.length) window.dispatchEvent(new CustomEvent('lemonbot:runs-reconciled', { detail: accepted }));
               }).catch(() => undefined).finally(() => reconcilingRunBots.current.delete(bot.id));
             }
           }

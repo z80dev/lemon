@@ -73,6 +73,7 @@
 
 ### Fixed
 
+- Reconciliation re-reads each candidate after earlier receipt waits, preserving runs that completed while the pass was suspended.
 - `lemon-bot up --worker-wrapper` now migrates existing online workers to the requested signed helper, while leaving matching units unchanged and preserving credentials.
 - Fixed replies leaving Bots stuck on “Thinking” or “Writing a reply”: realtime events retain sequence order through status fan-out, and terminal runs close remaining streaming messages.
 - Fixed a reconciliation race that could duplicate the final assistant reply or briefly mark an in-flight submission as uncertain.
