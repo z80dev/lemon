@@ -85,6 +85,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Profile memory transfers enforce the complete source snapshot's JSON size budget
+  before scanning document credentials, rejecting oversized snapshots consistently
+  instead of reporting memory unavailable when Elixir 1.20.5 raises a regex match limit.
 - Named workers refuse credential-bearing loopback connections unless the listener
   belongs to their OS user, including tunneled MCP requests. Deliberate cross-user
   deployments can opt out with `LEMON_NODE_TRUST_LOOPBACK_LISTENER=1`.
