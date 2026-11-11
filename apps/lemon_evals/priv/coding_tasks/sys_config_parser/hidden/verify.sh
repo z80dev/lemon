@@ -4,7 +4,9 @@ cd /work
 make test
 build=$(mktemp -d)
 trap 'rm -rf "$build"' EXIT
-gcc -std=c99 -Wall -Wextra -Werror -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -I/work /verify/test_config.c config.c -o "$build/test_config"
+make -s print-lib > "$build/sources"
+mapfile -t lib_sources < "$build/sources"
+gcc -std=c99 -Wall -Wextra -Werror -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -I/work /verify/test_config.c "${lib_sources[@]}" -o "$build/test_config"
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 "$build/test_config"
 make all
 python3 - <<'PY'

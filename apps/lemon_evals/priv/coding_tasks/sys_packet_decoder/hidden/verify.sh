@@ -4,7 +4,9 @@ cd /work
 make test
 build=$(mktemp -d)
 trap 'rm -rf "$build"' EXIT
-gcc -std=c99 -Wall -Wextra -Werror -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -I/work /verify/test_packet.c packet.c stream.c -o "$build/test_packet"
+make -s print-lib > "$build/sources"
+mapfile -t lib_sources < "$build/sources"
+gcc -std=c99 -Wall -Wextra -Werror -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -I/work /verify/test_packet.c "${lib_sources[@]}" -o "$build/test_packet"
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 "$build/test_packet"
 make all
 python3 - <<'PY'
