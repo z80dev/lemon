@@ -55,6 +55,8 @@ targets:
           CODE_SIGN_IDENTITY: "-"
           CODE_SIGN_ENTITLEMENTS: LemonBotMac/LemonBotMacDebug.entitlements
           APS_ENVIRONMENT: ""
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: $(LEMON_MAC_APP_PROFILE)
   LemonBotiOS:
     type: application
     platform: iOS

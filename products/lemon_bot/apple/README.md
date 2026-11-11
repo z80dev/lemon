@@ -11,10 +11,10 @@ Desktop permissions remain inspection-only; these controls never prompt for TCC.
 
 ## End-user release packaging
 
-End users open the notarized DMG, drag **Lemon Bot** to **Applications**, and launch
-it normally. They do not need Xcode, Metal, XcodeGen, Bun, Node or a source checkout.
-The arm64 Mac package requires macOS 14+. iPhone distribution is through App Store
-Connect/TestFlight, not a simulator bundle renamed to an IPA.
+When Developer ID credentials are configured, CI publishes a notarized arm64 DMG
+for macOS 14+: drag **Lemon Bot** to **Applications** and launch normally.
+Without credentials CI produces only an unpublished local preview workflow artifact,
+not an end-user installer. iPhone distribution uses App Store Connect/TestFlight.
 
 The release builder requires macOS, Python 3, Xcode 26.3 selected through
 `DEVELOPER_DIR`, XcodeGen 2.46+, the Xcode Metal Toolchain, and access to Swift
@@ -23,7 +23,8 @@ Run from this directory; output must be outside this source directory:
 
 ```sh
 python3 release.py macos --version 2026.10.14 --build 1 \
-  --channel preview --output /tmp/lemon-bot-apple-release
+  --channel preview --output /tmp/lemon-bot-apple-release \
+  --runtime-manifest /tmp/release-artifacts/manifest.json
 python3 release.py ios --version 2026.10.14 --build 1 \
   --channel preview --output /tmp/lemon-bot-apple-release
 # Explicitly authorizes the actual App Store Connect upload:
@@ -63,19 +64,27 @@ IPA with Xcode, and `ios-upload` submits it through Apple's `altool` API-key pat
 Upload acceptance is not processing success, TestFlight availability, beta review
 approval or App Store publication. Check those external receipts in App Store Connect.
 
-Missing credentials fail closed; the currently reported zero signing identities
-and only `HEX_API_KEY` repository secret cannot produce normal Apple distribution.
-No release mode silently falls back to unsigned/ad-hoc output. For the integration
-owner's packaging smoke only, explicitly run:
+CI uses macos-26, Xcode 26.3 and checksum-pinned XcodeGen 2.46.0. Configure
+repository variables `APPLE_TEAM_ID`, `APPLE_DEVELOPER_ID_APPLICATION`,
+`APPLE_MAC_PROVISIONING_PROFILE_SPECIFIER`; secrets
+`APPLE_DEVELOPER_ID_P12_BASE64`, `APPLE_DEVELOPER_ID_P12_PASSWORD`,
+`APPLE_MAC_PROVISIONING_PROFILE_BASE64`, `APPLE_ASC_KEY_ID`,
+`APPLE_ASC_ISSUER_ID`, `APPLE_ASC_KEY_P8_BASE64`.
+No configured inputs produces an `apple-local-preview-darwin-arm64` workflow
+artifact retained for 14 days only. Partial configuration fails listing missing
+names; configured signing/notarization failure blocks publication. CI imports
+credentials into a temporary keychain and removes them even on failure.
+For local packaging smoke only, explicitly run:
 
 ```sh
 python3 release.py macos-preview --version 2026.10.14 --build 1 \
   --channel preview --output /tmp/lemon-bot-apple-local-preview
 ```
 
-This separately named `local-preview` Debug ad-hoc DMG/ZIP is **not notarized**
-and not a normal end-user release. It preserves the local Debug Keychain identity
-constraints documented below. Never publish it as a signed installer.
+This separately named `local-preview` Debug ad-hoc DMG/ZIP is **unsigned for
+distribution and not notarized**. On macOS 15+, first open requires System
+Settings → Privacy & Security → **Open Anyway**. Ad-hoc rebuilds lose Keychain
+items and TCC grants. These artifacts are never attached to GitHub Releases.
 
 The builder emits artifacts and a JSON receipt only after all requested steps
 succeed; it does not publish a release or create another workflow. Receipt fields:
@@ -86,9 +95,18 @@ succeed; it does not publish a release or create another workflow. Receipt field
 (`darwin-arm64`, `ios`), lowercase `sha256`, integer `sizeBytes`.
 Mac names are `lemon-bot-<CalVer>-<channel>-darwin-arm64-notarized.{dmg,zip}`;
 preview replaces `notarized` with `local-preview`. iOS is
-`lemon-bot-<CalVer>-<channel>-ios-app-store.ipa`. Canonical release integration
-owns mapping these additional installer records into schema-2 manifests and
-publication; local-preview records must not become normal installer entries.
+`lemon-bot-<CalVer>-<channel>-ios-app-store.ipa`. The Mac receipt also includes
+`runtimeManifestSha256` (null without a manifest). Signed Mac builds require
+`--runtime-manifest`; preview builds may supply it. The exact schema-2 manifest's
+digest is embedded in the Mac app as `LemonBotRuntimeManifestSHA256`, alongside
+`LemonBotRuntimeBaseURL` (default `https://github.com/z80dev/lemon`), establishing
+the runtime download pin. `--runtime-base-url` accepts only an HTTPS base without
+query, fragment or trailing slash. iOS builds reject runtime manifests.
+CI verifies the receipt and manifest digest before attaching only the notarized
+DMG and receipt; stable also publishes `Lemon-Bot-darwin-arm64.dmg`.
+Local notary credentials may use `APPLE_NOTARY_KEYCHAIN` to select their keychain.
+The signed Mac receipt lists the publishable DMG only; the generated app ZIP is
+an intermediate/local output and is not attached to the GitHub Release.
 
 ## Generate, build and launch
 
