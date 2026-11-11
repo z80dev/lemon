@@ -19,6 +19,8 @@ defmodule LemonMCP.HTTP.OriginPolicy do
   regardless of DNS answer order. The transport must use this address without
   resolving again, preserve the origin's Host/TLS identity and disable redirects.
   A pin is internal process data, never authority accepted from a server config.
+  Named-node workers additionally require an approved literal-loopback listener
+  to belong to their uid when `:lemon_core, :require_owned_loopback` is enabled.
 
   `nil` policy returns `{:ok, nil}` without changing legacy operator networking.
   Errors contain only classified atoms, never URLs, hosts or resolver reasons.
@@ -38,6 +40,7 @@ defmodule LemonMCP.HTTP.OriginPolicy do
           | :invalid_dns_answer
           | :too_many_dns_addresses
           | :destination_not_public
+          | :private_origin_not_owned
 
   @type pin :: %{
           url: String.t(),
@@ -65,7 +68,8 @@ defmodule LemonMCP.HTTP.OriginPolicy do
          {:ok, allowed, approved} <- policy_origins(policy),
          :ok <- require_allowed(destination.origin, allowed),
          {:ok, addresses} <- resolve(destination.dns_host, opts),
-         :ok <- validate_addresses(addresses, destination.origin in approved) do
+         :ok <- validate_addresses(addresses, destination.origin in approved),
+         :ok <- require_owned_loopback(destination, approved, opts) do
       {:ok,
        %{
          url: url,
@@ -82,6 +86,20 @@ defmodule LemonMCP.HTTP.OriginPolicy do
   @spec canonical_origin(term()) :: {:ok, String.t()} | {:error, :invalid_url}
   def canonical_origin(url) do
     with {:ok, destination} <- parse_destination(url), do: {:ok, destination.origin}
+  end
+
+  defp require_owned_loopback(destination, approved, opts) do
+    if Application.get_env(:lemon_core, :require_owned_loopback, false) == true and
+         destination.origin in approved and
+         LemonCore.LoopbackListener.literal_loopback?(destination.dns_host) do
+      check = Keyword.get(opts, :listener_owner, &LemonCore.LoopbackListener.owned_by_self?/1)
+
+      if check.(destination.port) == :owned,
+        do: :ok,
+        else: {:error, :private_origin_not_owned}
+    else
+      :ok
+    end
   end
 
   defp parse_destination(url)
