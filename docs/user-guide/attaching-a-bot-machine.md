@@ -30,6 +30,11 @@ free; unrelated listeners are never stopped. A stale same-user sshd session that
 holds a requested forwarding port is terminated before opening the new link.
 Use a trusted OS account: other users with access to that account can read its
 worker credentials.
+The forwarded product origin must be HTTP on literal `127.0.0.1`; IPv6 loopback
+and `localhost` product origins are rejected before SSH setup starts. Configure
+`LEMON_BOT_PUBLIC_URL=http://127.0.0.1:4100` (with your backend port).
+**Try again** retains the setup's SSH destination and machine identity, including
+setups that use a direct controller link rather than a tunnel.
 
 For manual tunnel administration on the controller host:
 
@@ -122,10 +127,14 @@ through `lemon service` by default and exits after it is online.
 ### Loopback credential ownership
 
 Named workers check that a literal-loopback controller or approved private MCP
-listener belongs to their own OS user before sending credentials. Linux checks
-`/proc/net/tcp` and `tcp6`; macOS uses `lsof`. Missing ownership evidence fails
-closed, so another local account cannot harvest credentials by occupying a
-stopped tunnel's port. Reconnecting uses the normal worker backoff.
+peer belongs to their own OS user before sending credentials. Listener preflight
+matches the exact destination address, family and port. Before each WebSocket
+authentication frame and every new MCP HTTP request, the established connection's
+reverse local/remote address-and-port tuple must identify a same-user peer.
+Replacing the listener after connection establishment cannot authorize that peer.
+Linux checks the established socket's kernel uid in `/proc/net/tcp` or `tcp6`;
+macOS uses uid-filtered `lsof` established-connection records. Missing ownership
+evidence fails closed. Reconnecting uses the normal worker backoff.
 
 If you deliberately run the controller or tunnel as a different OS user, set
 `LEMON_NODE_TRUST_LOOPBACK_LISTENER=1` in the worker's service environment to opt

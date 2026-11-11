@@ -20,7 +20,7 @@ defmodule LemonMCP.HTTP.OriginPolicyLoopbackTest do
         ownership <- [:foreign, :absent, :unverifiable] do
       assert {:error, :private_origin_not_owned} =
                OriginPolicy.pin(origin <> "/mcp?invocation=secret", approved(origin),
-                 listener_owner: fn 4100 -> ownership end
+                 listener_owner: fn {_address, 4100} -> ownership end
                )
     end
   end
@@ -30,14 +30,16 @@ defmodule LemonMCP.HTTP.OriginPolicyLoopbackTest do
     url = origin <> "/mcp"
 
     assert {:ok, %{url: ^url, origin: ^origin, port: 4100, address: {127, 0, 0, 1}}} =
-             OriginPolicy.pin(url, approved(origin), listener_owner: fn 4100 -> :owned end)
+             OriginPolicy.pin(url, approved(origin),
+               listener_owner: fn {{127, 0, 0, 1}, 4100} -> :owned end
+             )
   end
 
   test "ownership is checked per pin, including default ports" do
     parent = self()
 
-    check = fn port ->
-      send(parent, {:checked, port})
+    check = fn {address, port} ->
+      send(parent, {:checked, address, port})
       :owned
     end
 
@@ -47,7 +49,7 @@ defmodule LemonMCP.HTTP.OriginPolicyLoopbackTest do
                  listener_owner: check
                )
 
-      assert_receive {:checked, 80}
+      assert_receive {:checked, {127, 0, 0, 1}, 80}
     end
 
     assert {:ok, %{port: 443}} =
@@ -55,7 +57,7 @@ defmodule LemonMCP.HTTP.OriginPolicyLoopbackTest do
                listener_owner: check
              )
 
-    assert_receive {:checked, 443}
+    assert_receive {:checked, {0, 0, 0, 0, 0, 0, 0, 1}, 443}
   end
 
   test "ownership never bypasses origin allowlists or private approval" do

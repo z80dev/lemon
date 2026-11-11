@@ -33,7 +33,7 @@ defmodule CodingAgent.ExecutionNode.SocketLoopbackTest do
     end
   end
 
-  test "owned IPv4 and IPv6 listeners may receive the connect frame" do
+  test "owned IPv4 and IPv6 peers may receive the connect frame" do
     for host <- ["127.0.0.1", "[::1]", "[::ffff:127.0.0.1]"] do
       state = state("ws://#{host}:4044/ws", fn 4044 -> :owned end)
 
@@ -44,7 +44,7 @@ defmodule CodingAgent.ExecutionNode.SocketLoopbackTest do
     end
   end
 
-  test "checks the listener again on every handshake" do
+  test "checks the established peer again on every handshake" do
     parent = self()
 
     check = fn _ ->
@@ -75,6 +75,16 @@ defmodule CodingAgent.ExecutionNode.SocketLoopbackTest do
     Application.put_env(:lemon_core, :require_owned_loopback, false)
     state = state("ws://127.0.0.1:4044/ws", fn _ -> flunk("guard is disabled") end)
     assert {:reply, _, _} = Socket.handle_info({:execution_node_send_connect, "connect"}, state)
+  end
+
+  test "an owned replacement listener cannot authorize an unknown established connection" do
+    state = state("ws://127.0.0.1:4044/ws", fn _ -> flunk("no established socket") end)
+
+    assert {:close, _} =
+             Socket.handle_info({:execution_node_send_connect, "connect"}, %{
+               state
+               | connection: nil
+             })
   end
 
   test "a real WebSocket listener receives no connect frame when ownership is refused" do
@@ -109,7 +119,12 @@ defmodule CodingAgent.ExecutionNode.SocketLoopbackTest do
         owner: self(),
         url: "ws://127.0.0.1:#{port}/ws",
         connect_params: %{"auth" => %{"token" => "private-node-token"}},
-        listener_owner: fn ^port -> :foreign end,
+        peer_owner: fn connected_socket, :tcp ->
+          assert {:ok, {{127, 0, 0, 1}, ^port}} = :inet.peername(connected_socket)
+          assert {:ok, {{127, 0, 0, 1}, client_port}} = :inet.sockname(connected_socket)
+          assert client_port != port
+          :foreign
+        end,
         reconnect_delay_ms: 5_000,
         ping_interval_ms: 0
       )
@@ -133,7 +148,8 @@ defmodule CodingAgent.ExecutionNode.SocketLoopbackTest do
       url: url,
       connect_id: "connect",
       connect_params: %{"auth" => %{"token" => "private-node-token"}},
-      listener_owner: check,
+      peer_owner: fn socket, :tcp -> check.(socket) end,
+      connection: %{socket: 4044, transport: :tcp},
       reconnect_delay_ms: 0,
       ping_interval_ms: 0
     }

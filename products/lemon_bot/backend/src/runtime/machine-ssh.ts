@@ -197,7 +197,10 @@ export function createMachineSshSetup(services: BackendServices, hooks: MachineS
       if (!preview || !['loopback_only', 'routable'].includes(preview.reachability) || !machineSshPreview(services, preview).ssh.available) throw new SetupFailure('controller_unavailable');
       const tunneled = preview.reachability === 'loopback_only';
       const publicUrl = new URL(services.config.publicUrl);
-      const productPort = tunneled && loopback(publicUrl.href) ? Number(publicUrl.port || (publicUrl.protocol === 'https:' ? 443 : 80)) : null;
+      const productLoopback = publicUrl.hostname === 'localhost' || publicUrl.hostname.endsWith('.localhost') || /^127\./.test(publicUrl.hostname) || publicUrl.hostname === '[::1]' || publicUrl.hostname === '0.0.0.0';
+      // The tunnel binds and forwards only literal IPv4 loopback, not localhost or IPv6.
+      if (tunneled && productLoopback && (publicUrl.protocol !== 'http:' || publicUrl.hostname !== '127.0.0.1' || publicUrl.username || publicUrl.password)) throw new SetupFailure('not_bot_ready', 'SSH product forwarding requires an HTTP origin on 127.0.0.1.');
+      const productPort = tunneled && productLoopback ? Number(publicUrl.port || '80') : null;
       let machine = request.machineId ? services.store.require<P.Machine>('machines', request.machineId) : services.store.list<P.Machine>('machines', value => value.status !== 'revoked' && value.link?.kind === 'ssh_tunnel' && value.link.sshDestination === setup.sshDestination)[0];
       if (machine && machine.ownerUserId !== actor.userId && !['owner', 'admin'].includes(actor.role)) fail('forbidden', 'Only a machine manager can repair it.');
       if (machine?.status === 'revoked') fail('conflict', 'A detached machine cannot be repaired.');

@@ -1,37 +1,33 @@
 defmodule LemonCore.LoopbackListener do
   @moduledoc """
-  Checks whether a loopback TCP listener belongs to the current OS user.
+  Inspects loopback TCP ownership, failing closed when evidence is unavailable.
 
-  Linux inspects listening sockets in `/proc/net/tcp{,6}`. macOS and BSD use
-  `lsof` restricted to the current uid, then probe for a foreign listener when
-  no owned socket is found. Unsupported or inaccessible inspection fails closed.
-  Wildcard listeners are included because they can also receive loopback traffic.
-  Ownership is checked afresh; only the process uid is cached.
+  Listener checks match the destination address, family and port (including that
+  family's wildcard bind). They are preflight only. Credential senders must use
+  `peer_owned_by_self?/2` on the established socket: its reverse four-tuple
+  identifies the peer, not a replacement listener on the same port. Linux uses
+  the kernel socket uid in `/proc/net/tcp{,6}`; macOS/BSD use uid-filtered `lsof`
+  records with exact endpoints. Only the current process uid is cached.
   """
 
   @type ownership :: :owned | :foreign | :absent | :unverifiable
   @uid_key {__MODULE__, :uid}
 
-  @spec owned_by_self?(integer()) :: ownership()
-  def owned_by_self?(port), do: owned_by_self?(port, [])
+  @spec owned_by_self?({:inet.ip_address(), :inet.port_number()}, keyword()) :: ownership()
+  def owned_by_self?(destination, opts \\ []) do
+    inspect_owner(destination, nil, opts)
+  end
 
-  @doc false
-  def owned_by_self?(port, opts) when is_integer(port) and port in 1..65_535 do
-    case uid(opts) do
-      {:ok, uid} ->
-        case Keyword.get(opts, :os_type, :os.type()) do
-          {:unix, :linux} ->
-            linux(port, uid, Keyword.get(opts, :proc_root, "/proc"))
+  @doc "Checks the server side of an established TCP/TLS socket, never its listener."
+  @spec peer_owned_by_self?(term(), :tcp | :ssl, keyword()) :: ownership()
+  def peer_owned_by_self?(socket, transport, opts \\ []) do
+    module = if transport == :ssl, do: :ssl, else: :inet
 
-          {:unix, os} when os in [:darwin, :freebsd, :openbsd, :netbsd, :dragonfly] ->
-            lsof(port, uid, opts)
-
-          _ ->
-            :unverifiable
-        end
-
-      _ ->
-        :unverifiable
+    with {:ok, local} <- module.sockname(socket),
+         {:ok, remote} <- module.peername(socket) do
+      connection_owned_by_self?(local, remote, opts)
+    else
+      _ -> :unverifiable
     end
   rescue
     _ -> :unverifiable
@@ -39,7 +35,35 @@ defmodule LemonCore.LoopbackListener do
     _, _ -> :unverifiable
   end
 
-  def owned_by_self?(_, _), do: :unverifiable
+  @doc false
+  def connection_owned_by_self?(local, remote, opts \\ []) do
+    inspect_owner(remote, local, opts)
+  end
+
+  defp inspect_owner({address, port} = destination, peer, opts)
+       when is_tuple(address) and is_integer(port) and port in 1..65_535 do
+    with true <- literal_loopback?(address |> :inet.ntoa() |> to_string()),
+         {:ok, uid} <- uid(opts) do
+      case Keyword.get(opts, :os_type, :os.type()) do
+        {:unix, :linux} ->
+          linux(destination, peer, uid, opts)
+
+        {:unix, os} when os in [:darwin, :freebsd, :openbsd, :netbsd, :dragonfly] ->
+          lsof(destination, peer, uid, opts)
+
+        _ ->
+          :unverifiable
+      end
+    else
+      _ -> :unverifiable
+    end
+  rescue
+    _ -> :unverifiable
+  catch
+    _, _ -> :unverifiable
+  end
+
+  defp inspect_owner(_, _, _), do: :unverifiable
 
   @doc "Returns true only for a literal loopback IP host, without resolving DNS."
   @spec literal_loopback?(term()) :: boolean()
@@ -80,11 +104,14 @@ defmodule LemonCore.LoopbackListener do
     end
   end
 
-  defp linux(port, uid, root) do
-    with {:ok, v4} <- proc_listeners(Path.join(root, "net/tcp"), port),
-         {:ok, v6} <- proc_listeners(Path.join(root, "net/tcp6"), port, true) do
-      owners = v4 ++ v6
+  defp linux({address, _} = destination, peer, uid, opts) do
+    file = if tuple_size(address) == 4, do: "tcp", else: "tcp6"
+    path = Path.join([Keyword.get(opts, :proc_root, "/proc"), "net", file])
 
+    with {:ok, data} <- File.read(path),
+         [header | rows] <- String.split(data, "\n", trim: true),
+         true <- String.contains?(header, "local_address") and String.contains?(header, "uid"),
+         {:ok, owners} <- proc_owners(rows, destination, peer) do
       cond do
         Enum.any?(owners, &(&1 != uid)) -> :foreign
         owners != [] -> :owned
@@ -95,103 +122,130 @@ defmodule LemonCore.LoopbackListener do
     end
   end
 
-  defp proc_listeners(path, port, optional? \\ false) do
-    case File.read(path) do
-      {:ok, data} -> parse_proc(data, port)
-      {:error, :enoent} when optional? -> {:ok, []}
-      _ -> {:error, :unreadable}
+  defp proc_owners(rows, destination, peer) do
+    Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, owners} ->
+      with [_slot, local, remote, state, _queue, _timer, _retransmit, uid, _timeout, inode | _] <-
+             String.split(row),
+           {:ok, local} <- proc_endpoint(local),
+           {:ok, remote} <- proc_endpoint(remote),
+           true <- tuple_size(elem(local, 0)) == tuple_size(elem(destination, 0)),
+           true <- tuple_size(elem(remote, 0)) == tuple_size(elem(destination, 0)),
+           true <- Regex.match?(~r/\A[0-9A-F]{2}\z/, state),
+           {owner, ""} when owner >= 0 <- Integer.parse(uid),
+           {inode, ""} when inode >= 0 <- Integer.parse(inode) do
+        matches =
+          if is_nil(peer),
+            do: state == "0A" and listener_matches?(local, destination),
+            else: state == "01" and local == destination and remote == peer and inode > 0
+
+        {:cont, {:ok, if(matches, do: [owner | owners], else: owners)}}
+      else
+        _ -> {:halt, {:error, :invalid_proc}}
+      end
+    end)
+  end
+
+  defp proc_endpoint(encoded) do
+    with [address, port] <- String.split(encoded, ":"),
+         {port, ""} when port in 0..65_535 <- Integer.parse(port, 16),
+         {:ok, bytes} <- Base.decode16(address, case: :mixed),
+         true <- byte_size(bytes) in [4, 16] do
+      network =
+        for <<word::native-unsigned-integer-size(32) <- bytes>>, into: <<>>, do: <<word::32>>
+
+      case network do
+        <<a, b, c, d>> ->
+          {:ok, {{a, b, c, d}, port}}
+
+        <<a::16, b::16, c::16, d::16, e::16, f::16, g::16, h::16>> ->
+          {:ok, {{a, b, c, d, e, f, g, h}, port}}
+
+        _ ->
+          :error
+      end
+    else
+      _ -> :error
     end
   end
 
-  defp parse_proc(data, port) do
-    case String.split(data, "\n", trim: true) do
-      [header | rows] ->
-        if String.contains?(header, "local_address") and String.contains?(header, "uid") do
-          Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, owners} ->
-            case String.split(row) do
-              [_slot, local, _remote, state, _queue, _timer, _retransmit, uid | _] ->
-                with [address, hex_port] <- String.split(local, ":"),
-                     {local_port, ""} <- Integer.parse(hex_port, 16),
-                     {owner, ""} when owner >= 0 <- Integer.parse(uid),
-                     {:ok, bytes} <- Base.decode16(address, case: :mixed),
-                     true <- byte_size(bytes) in [4, 16] do
-                  if state == "0A" and local_port == port and loopback_or_wildcard?(bytes) do
-                    {:cont, {:ok, [owner | owners]}}
-                  else
-                    {:cont, {:ok, owners}}
-                  end
-                else
-                  _ -> {:halt, {:error, :invalid_proc}}
-                end
-
-              _ ->
-                {:halt, {:error, :invalid_proc}}
-            end
-          end)
-        else
-          {:error, :invalid_proc}
-        end
-
-      _ ->
-        {:error, :invalid_proc}
-    end
+  defp listener_matches?({bind, port}, {address, port}) do
+    bind == address or
+      (tuple_size(bind) == tuple_size(address) and
+         bind |> Tuple.to_list() |> Enum.all?(&(&1 == 0)))
   end
 
-  defp loopback_or_wildcard?(bytes) do
-    address =
-      for <<word::native-unsigned-integer-size(32) <- bytes>>, into: <<>>, do: <<word::32>>
+  defp listener_matches?(_, _), do: false
 
-    case address do
-      <<127, _, _, _>> -> true
-      <<0::32>> -> true
-      <<0::128>> -> true
-      <<0::120, 1>> -> true
-      <<0::80, 0xFFFF::16, 127, _, _, _>> -> true
-      _ -> false
-    end
-  end
-
-  defp lsof(port, uid, opts) do
+  defp lsof({address, port} = destination, peer, uid, opts) do
     command = Keyword.get(opts, :command, &System.cmd/3)
-    args = ["-nP", "-a", "-u", Integer.to_string(uid), "-iTCP:#{port}", "-sTCP:LISTEN", "-t"]
+    family = if tuple_size(address) == 4, do: "4", else: "6"
+    host = address |> :inet.ntoa() |> to_string()
+    host = if family == "6", do: "[#{host}]", else: host
+    state = if is_nil(peer), do: "LISTEN", else: "ESTABLISHED"
+
+    args = [
+      "-nP",
+      "-a",
+      "-u",
+      Integer.to_string(uid),
+      "-i#{family}TCP@#{host}:#{port}",
+      "-sTCP:#{state}",
+      "-Fftn"
+    ]
 
     case command.("/usr/sbin/lsof", args, stderr_to_stdout: false) do
       {output, 0} ->
-        pids = String.split(output)
+        # Validate the whole field stream, not just an owned-looking substring.
+        valid? =
+          Regex.match?(
+            ~r/\A(?:p[0-9]+\n(?:f[0-9]+\ntIPv[46]\nn[^\r\n]+\n)+)+\z/,
+            output
+          )
 
-        if pids != [] and Enum.all?(pids, &Regex.match?(~r/\A[0-9]+\z/, &1)),
+        records = Regex.scan(~r/\nf[0-9]+\ntIPv([46])\nn([^\r\n]+)/, output)
+
+        if valid? and Enum.any?(records, &lsof_matches?(&1, family, destination, peer)),
           do: :owned,
           else: :unverifiable
 
+      {"", 1} when is_nil(peer) ->
+        Keyword.get(opts, :probe, &probe/1).(destination)
+
       {"", 1} ->
-        probe = Keyword.get(opts, :probe, &probe/1)
-        probe.(port)
+        :foreign
 
       _ ->
         :unverifiable
     end
   end
 
-  defp probe(port) do
-    results =
-      for address <- [{127, 0, 0, 1}, {0, 0, 0, 0, 0, 0, 0, 1}] do
-        case :gen_tcp.connect(address, port, [:binary, active: false], 250) do
-          {:ok, socket} ->
-            :gen_tcp.close(socket)
-            :foreign
+  defp lsof_matches?([_, record_family, name], family, destination, peer) do
+    expected = endpoint_name(destination)
 
-          {:error, reason} when reason in [:econnrefused, :eafnosupport, :eprotonosupport] ->
-            :absent
+    record_family == family and
+      if is_nil(peer),
+        do: name == expected or name == "*:#{elem(destination, 1)}",
+        else: name == expected <> "->" <> endpoint_name(peer)
+  end
 
-          _ ->
-            :unverifiable
-        end
-      end
+  defp endpoint_name({address, port}) do
+    host = address |> :inet.ntoa() |> to_string()
+    if tuple_size(address) == 8, do: "[#{host}]:#{port}", else: "#{host}:#{port}"
+  end
 
-    cond do
-      :foreign in results -> :foreign
-      :unverifiable in results -> :unverifiable
-      true -> :absent
+  defp probe({address, port}) do
+    family = if tuple_size(address) == 8, do: :inet6, else: :inet
+
+    case :gen_tcp.connect(address, port, [family, :binary, active: false], 250) do
+      {:ok, socket} ->
+        :gen_tcp.close(socket)
+        :foreign
+
+      {:error, reason} when reason in [:econnrefused, :eafnosupport, :eprotonosupport] ->
+        :absent
+
+      _ ->
+        :unverifiable
     end
   end
 end

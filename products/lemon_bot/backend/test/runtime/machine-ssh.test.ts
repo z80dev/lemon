@@ -153,6 +153,39 @@ describe('SSH machine setup state machine', () => {
     finally { h.f.store.close(); }
   });
 
+  test.each(['http://[::1]:4100', 'http://[0:0:0:0:0:0:0:1]:4100', 'https://[::1]:4100', 'http://localhost:4100', 'https://bot.localhost:4100', 'http://127.0.0.2:4100', 'http://0.0.0.0:4100', 'https://127.0.0.1:4100'])('rejects unsupported loopback product origin %s before setup side effects', async publicUrl => {
+    const h = harness(); h.f.services.config.publicUrl = publicUrl;
+    const machines = h.f.store.list<P.Machine>('machines');
+    const hooksCalled: string[] = [];
+    h.hooks.refreshMachines = async () => { hooksCalled.push('refresh'); };
+    h.hooks.ensureMachineRuntimeReady = async () => { hooksCalled.push('ready'); };
+    try {
+      const { result } = await start(h);
+      expect(result).toMatchObject({ state: 'failed', step: 'checking_ssh', machineId: null, failure: { code: 'not_bot_ready', detail: 'SSH product forwarding requires an HTTP origin on 127.0.0.1.' } });
+      expect(h.commands).toHaveLength(0);
+      expect(h.issues).toHaveLength(0);
+      expect(h.revoked).toHaveLength(0);
+      expect(hooksCalled).toEqual([]);
+      expect(h.f.store.list('machines')).toEqual(machines);
+      expect(h.f.store.list('machineInvites')).toHaveLength(0);
+      expect(h.f.calls.map(call => call.method)).toEqual(['node.pair.preview']);
+    } finally { h.f.store.close(); }
+  });
+
+  test('rejects an IPv6 product origin on reconnect without changing the existing tunnel', async () => {
+    const h = harness(); h.f.services.config.publicUrl = 'http://[::1]:4100';
+    const machine = { ...h.f.machine, link: { kind: 'ssh_tunnel', sshDestination: 'me@studio', nodePort: 4044, productPort: 4100, tunnel: { state: 'online', detail: null, checkedAtMs: 1 } } } satisfies P.Machine;
+    h.f.store.put('machines', machine);
+    try {
+      const { result } = await start(h, 'repair-ipv6', machine.id);
+      expect(result).toMatchObject({ state: 'failed', step: 'checking_ssh', machineId: machine.id, failure: { code: 'not_bot_ready' } });
+      expect(h.f.store.require<P.Machine>('machines', machine.id)).toEqual(machine);
+      expect(h.commands).toHaveLength(0);
+      expect(h.issues).toHaveLength(0);
+      expect(h.revoked).toHaveLength(0);
+    } finally { h.f.store.close(); }
+  });
+
   const failures: { name: string; code: P.MachineSetupFailure; configure(h: Harness): void }[] = [
     { name: 'unreachable SSH', code: 'ssh_unreachable', configure(h) { h.probe = { exitCode: 255, stdout: '', stderr: 'ssh: connect: No route to host' }; } },
     { name: 'SSH authentication', code: 'ssh_auth_failed', configure(h) { h.probe = { exitCode: 255, stdout: '', stderr: 'Permission denied (publickey).' }; } },
