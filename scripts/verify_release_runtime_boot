@@ -800,7 +800,9 @@ boot_one_profile() {
   for command in tui web start run daemon stop restart status remote eval rpc setup model \
     gateway doctor config secrets channels providers blueprints profile backup context \
     sessions learn update completion migrate node version send media models policy skill usage; do
-    if ! printf '%s\n' "$help_output" | grep -Eq "^  $command( |$)"; then
+    # A here-string, not a pipe: under pipefail, grep -q exiting at the first
+    # match can SIGPIPE the writer and fail a check that matched.
+    if ! grep -Eq "^  $command( |$)" <<<"$help_output"; then
       echo "$profile: packaged 'lemon --help' did not list $command" >&2
       exit 1
     fi
@@ -876,7 +878,7 @@ PY
     wait_for_health "http://127.0.0.1:$web_port/healthz" "$profile web"
 
     launcher_output="$(run_launcher web --no-open 2>&1)"
-    if ! printf '%s\n' "$launcher_output" | grep -q "Lemon Web: http://127.0.0.1:$web_port/"; then
+    if ! grep -q "Lemon Web: http://127.0.0.1:$web_port/" <<<"$launcher_output"; then
       echo "$profile: packaged 'lemon web --no-open' did not report the healthy Web URL" >&2
       printf '%s\n' "$launcher_output" >&2
       exit 1
