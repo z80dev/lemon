@@ -106,7 +106,7 @@ export function ensureLocalOwner(services: BackendServices, displayName?: string
 const proxyHeaders = ['Forwarded', 'X-Forwarded-For', 'X-Forwarded-Host', 'X-Forwarded-Proto', 'X-Real-IP', 'Tailscale-User-Login'];
 export function createLocalSignInRoutes(services: BackendServices): Route[] {
   const { store } = services;
-  const deps: LocalTicketDeps = { store, now: services.now, digest: services.mutations.digest, dataDir: services.config.dataDir, instanceId: backendDescriptor(services).instanceId };
+  const ticketDeps = (instanceId: string): LocalTicketDeps => ({ store, now: services.now, digest: services.mutations.digest, dataDir: services.config.dataDir, instanceId });
   function failure(error: unknown): never {
     const limited = store.transaction(() => {
       const now = services.now();
@@ -157,7 +157,7 @@ export function createLocalSignInRoutes(services: BackendServices): Route[] {
           return { row, result };
         });
       } catch (error) { return failure(error); }
-      unlinkHandoff(deps, redeemed.row.handoffFile);
+      unlinkHandoff(ticketDeps(redeemed.row.instanceId), redeemed.row.handoffFile);
       return await redeemed.result;
     } },
   ];
