@@ -128,6 +128,7 @@ export interface ProviderDeviceLogin {
 export interface Machine extends Resource { nodeId: ID | null; nodeName: string; name: string; ownerUserId: ID; accessUserIds: ID[]; status: 'pending' | 'online' | 'offline' | 'revoked'; lastSeenAtMs: TimestampMs | null; labels: Record<string, string>; botIds: ID[] }
 export interface HostInfo { hostname: string; os: string; osVersion: string; arch: string; cpuCount: number; memTotalBytes: number; memFreeBytes: number; diskTotalBytes: number; diskFreeBytes: number; uptimeSec: number; lemonVersion: string; defaultCwd: string; user: string; measuredAtMs: TimestampMs }
 export interface MachineInvite extends Resource { machineId: ID; inviteCode: string; joinCommand: string; expiresAtMs: TimestampMs; status: 'pending' | 'joined' | 'expired' | 'revoked'; enrollment: 'invited' | 'waiting_for_join' | 'connecting' | 'verifying' | 'online' | 'expired' | 'failed' | 'revoked'; lastError: string | null }
+export interface MachineEnrollmentPreview { reachability: 'loopback_only' | 'routable' }
 export interface MachineAttach extends Mutation { name: string; nodeName: string; labels?: Record<string, string>; expiresInMs?: number }
 export interface MachineAttachResult { machine: Machine; invite: MachineInvite }
 export interface MachineUpdate extends Update { name?: string; accessUserIds?: ID[]; labels?: Record<string, string> }
@@ -707,6 +708,7 @@ export interface RestEndpoints {
   'POST /machines/:id/providers/:providerId/device-login/:loginId/cancel': Endpoint<ProviderDeviceLoginRequest, ProviderDeviceLogin>;
   'GET /sync': Endpoint<undefined, Snapshot>;
   'GET /machines': Endpoint<undefined, Page<Machine>, PageQuery>;
+  'GET /machines/enrollment-preview': Endpoint<undefined, MachineEnrollmentPreview>;
   'POST /machines': Endpoint<MachineAttach, MachineAttachResult>;
   'GET /machines/:id': Endpoint<undefined, Machine>;
   'PATCH /machines/:id': Endpoint<MachineUpdate, Machine>;

@@ -120,7 +120,8 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
       String.trim(text) != "" and not String.match?(text, ~r/[\x00-\x1f\x7f]/)
   end
 
-  defp controller_url do
+  @doc false
+  def controller_url do
     url =
       Application.get_env(:lemon_control_plane, :public_ws_url) ||
         System.get_env("LEMON_CONTROL_PLANE_PUBLIC_WS_URL") ||

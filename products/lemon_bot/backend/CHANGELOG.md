@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added credential-free enrollment reachability preview using the controller's actual advertised invite endpoint, before any invitation is issued.
 - Bots can run on the machine Lemon Bot itself runs on without an HTTPS address. With a loopback public origin, the backend first proves a machine's worker shares its host (the worker writes a random value into the private data directory and the backend reads it back), then gives that Bot a loopback MCP endpoint approved as its private origin. Other machines still need a reachable HTTPS origin, with a clearer message saying so.
 - Deleting a Bot, or forgetting its memory, no longer fails with `not_found` once its profile has more than one workspace preference: every deletion renames the remaining entries' file-revision ids, so the backend re-lists between deletions and matches previewed entries by their stable identity.
 - `POST /v1/auth/local` signs in as the workspace owner with the private `DATA_DIR/local-access.key` (0600, created on start, re-read per request) as a bearer instead of a password, and on an empty instance first creates a passwordless owner and host-named workspace, discarding any pending setup code. The Mac app uses it to connect on the same machine or over SSH.

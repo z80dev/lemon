@@ -8,6 +8,7 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     NodePairApprove,
     NodePairInvite,
     NodePairInviteRevoke,
+    NodePairPreview,
     NodePairRequest,
     NodesList
   }
@@ -82,6 +83,41 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     end)
 
     %{name: prefix}
+  end
+
+  test "preview classifies the exact advertised URL without issuing credentials", %{name: name} do
+    before = LemonCore.Store.list(:node_pair_invites) |> Enum.sort()
+
+    for {url, reachability} <- [
+          {"ws://127.0.0.1:4040/ws", "loopback_only"},
+          {"ws://localhost:4040/ws", "loopback_only"},
+          {"wss://[::1]/ws", "loopback_only"},
+          {"wss://controller.example/ws", "routable"}
+        ] do
+      Application.put_env(:lemon_control_plane, :public_ws_url, url)
+      assert {:ok, ^url} = NodePairInvite.controller_url()
+      assert {:ok, %{"reachability" => ^reachability}} = NodePairPreview.handle(%{}, @ctx)
+    end
+
+    assert Enum.sort(LemonCore.Store.list(:node_pair_invites)) == before
+
+    Application.put_env(:lemon_control_plane, :public_ws_url, "ws://remote.example/ws")
+    assert {:error, preview_error} = NodePairPreview.handle(%{}, @ctx)
+    assert {:error, ^preview_error} = NodePairInvite.handle(%{"nodeName" => name}, @ctx)
+    assert Enum.sort(LemonCore.Store.list(:node_pair_invites)) == before
+  end
+
+  test "preview requires operator pairing authority" do
+    for auth <- [
+          %{},
+          %{role: :operator, scopes: [:read]},
+          %{role: :node, scopes: [:invoke, :event]},
+          %{role: :enrollment, scopes: [:enroll]}
+        ] do
+      assert {:error, _} = NodePairPreview.handle(%{}, %{auth: auth})
+    end
+
+    assert NodePairPreview.scopes() == NodePairInvite.scopes()
   end
 
   test "auto-approves the bound name and delivers real challenge/recovery credentials", %{
