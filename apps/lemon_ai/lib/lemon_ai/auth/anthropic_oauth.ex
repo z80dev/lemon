@@ -158,8 +158,8 @@ defmodule LemonAi.Auth.AnthropicOAuth do
           %{code: nil, state: nil}
 
         String.contains?(value, "://") ->
-          case URI.parse(value) do
-            %URI{query: query} when is_binary(query) and query != "" ->
+          case LemonAi.Auth.OAuthFlow.parse_authorization_uri(value) do
+            {:ok, %URI{query: query}} when is_binary(query) and query != "" ->
               params = URI.decode_query(query)
               %{code: params["code"], state: params["state"]}
 
