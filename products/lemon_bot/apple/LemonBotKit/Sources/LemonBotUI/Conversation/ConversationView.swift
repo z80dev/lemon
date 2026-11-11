@@ -302,7 +302,10 @@ public struct ConversationView: View {
     // MARK: Chrome
 
     private func headerPill(floating: Bool) -> some View {
-        ConversationHeaderPill(store: store, bots: headerBots, title: title, working: isWorking, floating: floating) { inspector.toggle() }
+        VStack(spacing: 4) {
+            ConversationHeaderPill(store: store, bots: headerBots, title: title, working: isWorking, floating: floating) { inspector.toggle() }
+            ChatApprovalAllowancesView(store: store, conversationID: conversationID, bot: bot)
+        }
     }
 
     @ViewBuilder private func chrome(matches: [ID], current: ID?) -> some View {

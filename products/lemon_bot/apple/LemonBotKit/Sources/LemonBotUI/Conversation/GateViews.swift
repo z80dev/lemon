@@ -51,6 +51,8 @@ struct ApprovalReviewView: View {
     init(store: LemonBotStore, approval: Approval) { self.store = store; self.approval = approval }
     @State private var action = UIActionState()
     @State private var resolved: Approval?
+    @State private var botWide = false
+    @State private var rememberedPolicy: EffectivePolicy?
     private var current: Approval { (resolved?.revision ?? 0) > approval.revision ? resolved! : approval }
     var body: some View {
         let proposal = current
@@ -85,17 +87,40 @@ struct ApprovalReviewView: View {
                 if proposal.gate.state == "pending" && !expired {
                     HStack(spacing: 8) {
                         Button("Allow once") { Task { await resolve("approve_once") } }.buttonStyle(.cardPrimary)
+                        if let option = proposal.chatOption {
+                            Button(option.label) { Task { await resolve("approve_chat") } }.buttonStyle(.pill(.secondary))
+                        }
+                        if proposal.chatOption != nil,
+                           let bot = store.bots.first(where: { $0.id == proposal.botId }),
+                           bot.ownerUserId == store.user?.id,
+                           rememberedPolicy?.rememberedApprovals?.bot.isEmpty == false {
+                            Menu {
+                                Button("Always allow for this Bot…") { botWide = true }
+                            } label: { Image(systemName: "ellipsis") }
+                        }
                         Button("Deny", role: .destructive) { Task { await resolve("deny") } }.buttonStyle(.pill(.secondary))
                     }.disabled(action.busy || !gateAllowsAction(store, proposal.gate) || Double(proposal.scope.expiresAtMs) <= Date().timeIntervalSince1970 * 1000)
                 } else {
                     let state = expired ? "expired" : proposal.gate.state
                     let who = proposal.gate.resolvedByUserId == store.user?.id ? "you" : proposal.gate.resolvedByUserId == nil ? "policy" : "another person"
-                    let result = state == "approved" ? "Allowed once by \(who)" : state == "denied" ? "Denied by \(who)" : humanizedStatus(state)
+                    let result = state == "approved" ? "\(proposal.resolvedScope == "chat" ? "Allowed for this chat" : "Allowed once") by \(who)" : state == "denied" ? "Denied by \(who)" : humanizedStatus(state)
                     let time = proposal.gate.resolvedAtMs.map { " · " + timestamp(Double($0)).formatted(date: .omitted, time: .shortened) } ?? ""
                     Text(result + (state == "expired" ? "" : time)).font(LBFont.rowSubtitle)
                 }
             }
             ActionErrorView(message: action.error)
+        }
+        .task(id: approval.botId) {
+            do { rememberedPolicy = try await store.read("/policies/effective", query: ["botId": approval.botId]) }
+            catch { action.error = error.localizedDescription }
+        }
+        .sheet(isPresented: $botWide) {
+            if let bot = store.bots.first(where: { $0.id == approval.botId }) {
+                BotApprovalsView(store: store, bot: bot, previewOnOpen: true, afterConfirm: {
+                    await resolve("approve_once")
+                    botWide = false
+                }).padding()
+            }
         }
     }
     private func resolve(_ decision: String) async {
