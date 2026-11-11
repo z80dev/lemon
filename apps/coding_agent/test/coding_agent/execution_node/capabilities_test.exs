@@ -363,12 +363,14 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTccProbeTest do
       assert full_disk["tools"] == []
       assert full_disk["stale"] == (grant == "unknown")
 
-      assert full_disk["reason"] ==
-               case grant do
-                 "granted" -> "macos_grant_measured"
-                 "denied" -> "macos_grant_denied"
-                 "unknown" -> "macos_grant_probe_unavailable"
-               end
+      expected_reason =
+        case grant do
+          "granted" -> "macos_grant_measured"
+          "denied" -> "macos_grant_denied"
+          "unknown" -> "macos_grant_probe_unavailable"
+        end
+
+      assert full_disk["reason"] == expected_reason
 
       refute items["accessibility"]["supported"]
       assert items["accessibility"]["configuredLevel"] == "off"
