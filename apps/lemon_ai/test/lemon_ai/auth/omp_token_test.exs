@@ -36,7 +36,7 @@ defmodule LemonAi.Auth.OmpTokenTest do
     end
   end
 
-  test "executes argv without a shell, closes stdin and caches fresh JWTs", %{
+  test "executes argv without a shell, closes stdin and shares fresh JWTs across processes", %{
     path: path,
     dir: dir
   } do
@@ -51,8 +51,22 @@ defmodule LemonAi.Auth.OmpTokenTest do
     """)
 
     assert {:ok, ^token} = OmpToken.resolve(path)
-    assert {:ok, ^token} = OmpToken.resolve(path)
+    assert {:ok, ^token} = Task.async(fn -> OmpToken.resolve(path) end) |> Task.await()
     assert File.read!(count) == "x"
+  end
+
+  test "selects the last JWT line despite stderr warnings and trailing notices", %{path: path} do
+    earlier = jwt(1800)
+    token = jwt(3600)
+
+    script(path, """
+    printf '%s\\n' '#{earlier}'
+    printf 'warning: account metadata unavailable\\n' >&2
+    printf '%s\\n' '#{token}'
+    printf '\\nnotice: token retrieval complete\\n' >&2
+    """)
+
+    assert {:ok, ^token} = OmpToken.resolve(path)
   end
 
   test "expired JWTs are rejected and refetched instead of cached", %{path: path} do
@@ -79,7 +93,10 @@ defmodule LemonAi.Auth.OmpTokenTest do
     script(path, "printf '%s' '#{token}'")
     assert {:ok, ^token} = OmpToken.resolve(path)
     script(path, "test \"$3\" = --force-refresh || exit 8; exit 2")
-    assert {:error, :omp_exit_nonzero} = OmpToken.resolve(path, force_refresh: true)
+
+    assert {:error, :omp_exit_nonzero} =
+             Task.async(fn -> OmpToken.resolve(path, force_refresh: true) end) |> Task.await()
+
     script(path, "printf 'not-a-token'")
     assert {:error, :omp_invalid_token} = OmpToken.resolve(path)
   end

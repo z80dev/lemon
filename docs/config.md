@@ -1898,9 +1898,12 @@ or inspect omp's credential files. The selected source is authoritative:
 omp fails. Fix the omp login or executable rather than adding a fallback key.
 
 This is an **access-token-only** integration. Lemon uses the returned JWT for
-the request but does not persist it or copy omp's refresh tokens or OAuth
-payloads into Lemon secrets. omp retains ownership of login and refresh; Lemon
-does not refresh the access token itself. Missing/unusable executables, command
+the request and caches it only in the BEAM node's memory, shared across request
+processes until two minutes before JWT expiry. It does not persist access tokens
+or copy omp's refresh tokens or OAuth payloads into Lemon secrets. omp retains
+ownership of login and refresh; Lemon does not refresh the access token itself.
+The last JWT line in bounded command output is used, allowing harmless stderr
+notices without accepting non-JWT credentials. Missing/unusable executables, command
 failures, timeouts, or invalid token output produce safe, actionable errors,
 never raw subprocess stdout/stderr or token contents.
 

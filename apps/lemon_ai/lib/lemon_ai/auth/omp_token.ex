@@ -1,8 +1,8 @@
 defmodule LemonAi.Auth.OmpToken do
   @moduledoc """
   Access-only bridge to omp's Kimi Code login. omp owns refresh and its leases;
-  Lemon never reads or stores omp's refresh credentials. Tokens are cached only
-  in the calling process, until two minutes before their JWT expiry.
+  Lemon never reads or stores omp's refresh credentials. Access tokens are cached
+  only in this BEAM node's memory, until two minutes before their JWT expiry.
 
   Execution is argv-only, with closed stdin, a 20-second deadline and a 64 KiB
   combined-output limit. Only stable, credential-free errors leave the adapter.
@@ -39,20 +39,22 @@ defmodule LemonAi.Auth.OmpToken do
         Enum.map(~w(HOME XDG_CONFIG_HOME PI_CODING_AGENT_DIR OMP_PROFILE), &System.get_env/1)
 
       key = {__MODULE__, executable, scope}
-      cached = Process.get(key)
+      cached = :persistent_term.get(key, nil)
 
       if not Keyword.get(opts, :force_refresh, false) and fresh?(cached, now) do
         {token, _exp} = cached
         {:ok, token}
       else
-        Process.delete(key)
+        :persistent_term.erase(key)
 
         args =
           ["token", "kimi-code"] ++ if(opts[:force_refresh], do: ["--force-refresh"], else: [])
 
         with {:ok, output} <- run(executable, args),
              {:ok, token, exp} <- parse(output, System.system_time(:second)) do
-          if exp > System.system_time(:second) + @skew_s, do: Process.put(key, {token, exp})
+          if exp > System.system_time(:second) + @skew_s,
+            do: :persistent_term.put(key, {token, exp})
+
           {:ok, token}
         end
       end
@@ -97,9 +99,18 @@ defmodule LemonAi.Auth.OmpToken do
   defp fresh?(_, _), do: false
 
   defp parse(output, now) do
-    token = String.trim(output)
+    token =
+      if String.valid?(output) do
+        output
+        |> String.split("\n")
+        |> Enum.reverse()
+        |> Enum.find_value(fn line ->
+          candidate = String.trim(line)
+          if KimiCodeOAuth.oauth_token?(candidate), do: candidate
+        end)
+      end
 
-    if String.valid?(token) and KimiCodeOAuth.oauth_token?(token) do
+    if token do
       case OAuthFlow.jwt_claims(token) do
         %{"exp" => exp} when is_integer(exp) and exp > now -> {:ok, token, exp}
         _ -> {:error, :omp_expired_token}
