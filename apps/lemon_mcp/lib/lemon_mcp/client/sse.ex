@@ -5,7 +5,8 @@ defmodule LemonMCP.Client.SSE do
   This transport is kept for compatibility with older MCP servers. It opens the
   server-sent event stream, waits for the server `endpoint` event, sends
   JSON-RPC messages to that endpoint, and reads JSON-RPC responses from SSE
-  `message` events.
+  `message` events. The stream uses Mint so the initial event is delivered even
+  when HTTP headers and the first chunk arrive in the same TCP packet.
   """
 
   use GenServer
@@ -77,6 +78,8 @@ defmodule LemonMCP.Client.SSE do
       state: :initializing,
       config: config,
       stream_request_id: nil,
+      stream_conn: nil,
+      stream_socket: nil,
       post_url: nil,
       sse_buffer: "",
       sse_event: new_event(),
@@ -85,8 +88,15 @@ defmodule LemonMCP.Client.SSE do
     }
 
     with :ok <- ensure_http_apps(),
-         {:ok, state} <- open_stream(state),
-         {:ok, state} <- await_endpoint(state),
+         {:ok, state} <- open_stream(state) do
+      initialize_stream(state)
+    else
+      {:error, reason} -> {:stop, reason}
+    end
+  end
+
+  defp initialize_stream(state) do
+    with {:ok, state} <- await_endpoint(state),
          {:ok, state} <- initialize(state),
          {:ok, state} <- send_initialized_notification(state) do
       {:ok, %{state | state: :ready}}
@@ -242,46 +252,67 @@ defmodule LemonMCP.Client.SSE do
   end
 
   @impl true
-  def handle_info({:http, {request_id, :stream_start, _headers}}, state)
-      when request_id == state.stream_request_id do
-    {:noreply, state}
+  def handle_info({protocol, socket, _data} = message, %{stream_socket: socket} = state)
+      when protocol in [:tcp, :ssl, :tcp_error, :ssl_error] do
+    handle_stream_message(message, state)
   end
 
-  @impl true
-  def handle_info({:http, {request_id, :stream, chunk}}, state)
-      when request_id == state.stream_request_id do
-    {_events, state} = parse_sse_chunk(state, to_string(chunk))
-    {:noreply, state}
-  end
-
-  @impl true
-  def handle_info({:http, {request_id, :stream_end, _headers}}, state)
-      when request_id == state.stream_request_id do
-    {:stop, :normal, %{state | state: :disconnected, stream_request_id: nil}}
-  end
-
-  @impl true
-  def handle_info({:http, {request_id, {:error, _reason}}}, state)
-      when request_id == state.stream_request_id do
-    {:stop, :normal, %{state | state: :disconnected, stream_request_id: nil}}
+  def handle_info({protocol, socket} = message, %{stream_socket: socket} = state)
+      when protocol in [:tcp_closed, :ssl_closed] do
+    handle_stream_message(message, state)
   end
 
   def handle_info({:mcp_stream_closed, request_id}, %{stream_request_id: request_id} = state) do
     {:stop, :normal, %{state | state: :disconnected, stream_request_id: nil}}
   end
 
-  defp open_stream(state) do
-    headers = [{~c"accept", ~c"text/event-stream"} | http_headers(state.config.headers)]
-    request = {to_charlist(state.config.url), headers}
-    timeout = state.config.timeout_ms
-    http_opts = [timeout: timeout, connect_timeout: timeout]
+  @impl true
+  def terminate(_reason, state), do: close_stream(state)
 
-    case :httpc.request(:get, request, http_opts,
-           sync: false,
-           stream: :self,
-           body_format: :binary
-         ) do
-      {:ok, request_id} -> {:ok, %{state | stream_request_id: request_id}}
+  defp handle_stream_message(message, state) do
+    case stream_events(message, state) do
+      {:ok, _events, state} -> {:noreply, state}
+      {:error, _reason, state} -> {:stop, :normal, %{state | state: :disconnected}}
+    end
+  end
+
+  defp open_stream(state) do
+    uri = URI.parse(state.config.url)
+    scheme = if uri.scheme == "https", do: :https, else: :http
+    timeout = state.config.timeout_ms
+
+    headers =
+      [
+        {"accept", "text/event-stream"}
+        | Enum.map(state.config.headers, fn {key, value} -> {to_string(key), to_string(value)} end)
+      ]
+
+    path = if uri.path in [nil, ""], do: "/", else: uri.path
+    path = if uri.query, do: path <> "?" <> uri.query, else: path
+
+    # httpc can retain the first chunk until another TCP packet arrives. An SSE
+    # server waits for our initialize POST after sending endpoint, so that stalls
+    # both sides indefinitely. Mint emits decoded data from the initial packet.
+    with {:ok, conn} <-
+           Mint.HTTP.connect(scheme, uri.host, uri.port,
+             protocols: [:http1],
+             transport_opts: [timeout: timeout]
+           ) do
+      case Mint.HTTP.request(conn, "GET", path, headers, nil) do
+        {:ok, conn, request_id} ->
+          {:ok,
+           %{
+             state
+             | stream_conn: conn,
+               stream_socket: Mint.HTTP.get_socket(conn),
+               stream_request_id: request_id
+           }}
+
+        {:error, conn, reason} ->
+          Mint.HTTP.close(conn)
+          {:error, {:sse_stream_failed, reason}}
+      end
+    else
       {:error, reason} -> {:error, {:sse_stream_failed, reason}}
     end
   end
@@ -374,31 +405,67 @@ defmodule LemonMCP.Client.SSE do
     timeout = max(deadline - System.monotonic_time(:millisecond), 0)
 
     receive do
-      {:http, {request_id, :stream_start, _headers}} when request_id == state.stream_request_id ->
-        receive_sse_until(state, deadline, matcher)
+      {protocol, socket, _data} = message
+      when protocol in [:tcp, :ssl, :tcp_error, :ssl_error] and socket == state.stream_socket ->
+        receive_stream_message(message, state, deadline, matcher)
 
-      {:http, {request_id, :stream, chunk}} when request_id == state.stream_request_id ->
-        {events, state} = parse_sse_chunk(state, to_string(chunk))
-        match_events(events, state, deadline, matcher)
+      {protocol, socket} = message
+      when protocol in [:tcp_closed, :ssl_closed] and socket == state.stream_socket ->
+        receive_stream_message(message, state, deadline, matcher)
 
-      {:http, {request_id, :stream_end, _headers}} when request_id == state.stream_request_id ->
-        send(self(), {:mcp_stream_closed, request_id})
+      {:mcp_stream_closed, request_id} when request_id == state.stream_request_id ->
         {:error, :sse_stream_closed, %{state | state: :disconnected}}
-
-      {:http, {request_id, {:error, reason}}} when request_id == state.stream_request_id ->
-        send(self(), {:mcp_stream_closed, request_id})
-        {:error, {:sse_stream_failed, reason}, %{state | state: :disconnected}}
-
-      {:http, {request_id, result}} when request_id == state.stream_request_id ->
-        {:error, {:unexpected_sse_message, result}, state}
-
-      _other ->
-        receive_sse_until(state, deadline, matcher)
     after
       timeout ->
         {:error, :timeout, state}
     end
   end
+
+  defp receive_stream_message(message, state, deadline, matcher) do
+    case stream_events(message, state) do
+      {:ok, events, state} -> match_events(events, state, deadline, matcher)
+      {:error, reason, state} -> {:error, reason, state}
+    end
+  end
+
+  defp stream_events(message, state) do
+    case Mint.HTTP.stream(state.stream_conn, message) do
+      {:ok, conn, responses} ->
+        collect_stream_events(responses, %{state | stream_conn: conn}, [])
+
+      {:error, conn, reason, _responses} ->
+        send(self(), {:mcp_stream_closed, state.stream_request_id})
+        {:error, {:sse_stream_failed, reason}, %{state | stream_conn: conn}}
+    end
+  end
+
+  defp collect_stream_events([], state, events), do: {:ok, Enum.reverse(events), state}
+
+  defp collect_stream_events(
+         [{:data, ref, data} | rest],
+         %{stream_request_id: ref} = state,
+         events
+       ) do
+    {new_events, state} = parse_sse_chunk(state, data)
+    collect_stream_events(rest, state, Enum.reverse(new_events, events))
+  end
+
+  defp collect_stream_events(
+         [{:status, ref, status} | _],
+         %{stream_request_id: ref} = state,
+         _events
+       )
+       when status != 200 do
+    {:error, {:sse_stream_failed, {:http_status, status}}, state}
+  end
+
+  defp collect_stream_events([{:done, ref} | rest], %{stream_request_id: ref} = state, events) do
+    send(self(), {:mcp_stream_closed, ref})
+    collect_stream_events(rest, state, events)
+  end
+
+  defp collect_stream_events([_response | rest], state, events),
+    do: collect_stream_events(rest, state, events)
 
   defp match_events([], state, deadline, matcher), do: receive_sse_until(state, deadline, matcher)
 
@@ -425,12 +492,10 @@ defmodule LemonMCP.Client.SSE do
     combined = state.sse_buffer <> chunk
     lines = String.split(combined, "\n")
 
-    {complete_lines, buffer} =
-      if String.ends_with?(combined, "\n") do
-        {lines, ""}
-      else
-        {Enum.drop(lines, -1), List.last(lines) || ""}
-      end
+    # The final split element is an unfinished line, including "" after a
+    # trailing newline. Only an actual empty line dispatches an SSE event.
+    complete_lines = Enum.drop(lines, -1)
+    buffer = List.last(lines) || ""
 
     {events, event} =
       Enum.reduce(complete_lines, {[], state.sse_event}, fn line, {events, event} ->
@@ -527,11 +592,8 @@ defmodule LemonMCP.Client.SSE do
 
   defp deadline(timeout_ms), do: System.monotonic_time(:millisecond) + timeout_ms
 
-  defp close_stream(%{stream_request_id: request_id}) when not is_nil(request_id) do
-    if function_exported?(:httpc, :cancel_request, 1) do
-      :httpc.cancel_request(request_id)
-    end
-
+  defp close_stream(%{stream_conn: conn}) when not is_nil(conn) do
+    Mint.HTTP.close(conn)
     :ok
   end
 

@@ -9,3 +9,4 @@
 ### Fixed
 
 - Reject out-of-range HTTP destination ports that Elixir 1.20's URI parser discards instead of authorizing the default origin.
+- Deliver legacy SSE endpoint events immediately even when the HTTP headers and first chunk arrive together, avoiding an intermittent handshake deadlock in OTP's `httpc` streaming. Preserve SSE fields split across chunks and restore the legacy SSE tests to the gating suite.
