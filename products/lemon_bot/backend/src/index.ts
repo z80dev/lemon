@@ -126,7 +126,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
     store.db.query('DELETE FROM entities WHERE collection=\'pageCursors\' AND json_extract(value,\'$.expiresAtMs\')<=?').run(now);
     const auditRetentionDays=store.metadata<Policies>('policies')?.auditRetentionDays??90;
     store.db.query('DELETE FROM entities WHERE collection=\'auditRecords\' AND json_extract(value,\'$.createdAtMs\')<?').run(now-auditRetentionDays*86400000);
-  });void sweepLocalSignIn({store,now:services.now,digest:services.mutations.digest,dataDir:config.dataDir});},60000);
+  });const instanceId=store.metadata<string>('instanceId');if(instanceId)void sweepLocalSignIn({store,now:services.now,digest:services.mutations.digest,dataDir:config.dataDir,instanceId});},60000);
   reconcileTimer.unref();retentionTimer.unref();
   let server:Server<RealtimeData>|null=null;let stopped=false;
   let removePid: (() => void) | undefined;
@@ -186,7 +186,9 @@ export async function firstStartSignIn(
   } else if (options.openBrowser === false) {
     io.write('Sign in from this computer: lemon-bot open (over SSH: lemon-bot open --headless)\n');
   } else {
-    await deliverLocalSignIn({ store: services.store, now: services.now, digest: services.mutations.digest, dataDir: services.config.dataDir }, origin, { noWait: true }, deps);
+    const instanceId = services.store.metadata<string>('instanceId');
+    if (!instanceId) throw new Error('Missing local backend identity.');
+    await deliverLocalSignIn({ store: services.store, now: services.now, digest: services.mutations.digest, dataDir: services.config.dataDir, instanceId }, origin, { noWait: true }, deps);
   }
 }
 export async function runBackend(options:{chooseLemon?:boolean;openBrowser?:boolean}={}):Promise<void> {

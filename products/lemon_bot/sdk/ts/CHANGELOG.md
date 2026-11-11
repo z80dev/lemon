@@ -14,8 +14,9 @@
 - Target-local `ModelReadiness`/`DetectedLogin` models and typed controller/machine
   check/import endpoints support non-generating checks and explicit Codex login
   copy consent with nonce reconciliation.
-- Typed local-ticket redemption, own sign-in-method discovery, first-password
-  creation and `{local:true}` reauthentication use the existing generic REST client.
+- Typed local-listener challenge proof, ticket redemption, own sign-in-method
+  discovery, first-password creation and `{local:true}` reauthentication use the
+  existing generic REST client.
 - Export optional `Machine.credential` and `MachineCredential` so clients distinguish expired/revoked sessions from ordinary offline machines.
 - Add remembered approval contracts: per-chat tool-group decisions, revocable allowances and realtime events, owner-only bot-wide preview/confirm, Bot review modes and workspace governance.
 - Export the shared read-only Bot origin preflight and product/workspace identity validators. Strict pairing links now require an `instance` fingerprint alongside `backend`, `cluster` and `code`; three-key links are rejected.

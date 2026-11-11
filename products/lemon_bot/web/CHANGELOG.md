@@ -22,6 +22,9 @@
 - Load feature screens on demand instead of bundling all routes into the initial client chunk.
 
 ### Fixed
+- After first-password creation replaces a local placeholder address, the profile
+  editor adopts the saved email so a later preferences change cannot restore the
+  placeholder.
 
 - First-run home copy recognizes online computers instead of asking to connect
   one again. Mac sidebar previews retry after initial sync goes online. Both clients

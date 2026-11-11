@@ -3,7 +3,7 @@ import { act, StrictMode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createRoot, type Root } from 'react-dom/client';
 import { Window } from 'happy-dom';
-import { LemonBotClient, type SignInMethods } from '@lemon-bot/sdk';
+import { LemonBotClient, type SignInMethods, type User } from '@lemon-bot/sdk';
 import * as app from '../src/app';
 import * as ui from '../src/ui';
 
@@ -23,7 +23,7 @@ mock.module('../src/ui', () => ({ ...originalUi, useQuery: (key: string) => ({ d
 // These screens must load after the context/query mocks replace their module boundaries.
 const { AuthScreen } = await import('../src/auth');
 const { takeSignInTicket, ticketErrorNotice, TicketSignIn, UnlockedNotice, unlockNoticeKey } = await import('../src/local-signin');
-const { AccountSettings, AddPasswordForm } = await import('../src/features/settings/account');
+const { AccountSettings, AccountEditor, AddPasswordForm } = await import('../src/features/settings/account');
 const { PairingScreen } = await import('../src/features/pairing');
 let browser: Window;
 let root: Root | undefined;
@@ -115,6 +115,23 @@ test('password users see the change form, not Add, and real emails prefill the A
   expect(account.textContent).toContain('Set for alex@example.com.'); expect(account.textContent).toContain('Current password'); expect(account.textContent).not.toContain('Add email and password');
   const form = parsed(renderToStaticMarkup(<AddPasswordForm methods={value} disabled={false} onSave={async () => true}/>));
   expect(form.querySelector('input[type=email]')?.getAttribute('value')).toBe('alex@example.com');
+});
+test('profile editor adopts the real email after first-password creation before a later save', async () => {
+  const user: User = {
+    id: 'owner', revision: 1, createdAtMs: 1, updatedAtMs: 1,
+    email: 'alex@lemon.local', displayName: 'Alex', avatarAttachmentId: null,
+    preferences: { appearance: 'system', language: null, timezone: 'UTC', botColors: true, threadsBesideChat: false, voice: { voiceId: 'default', speed: 1, language: null }, celebrationsEnabled: false },
+    notifications: { enabled: true, sound: true, previews: true, completed: true, needsInput: true },
+  };
+  const save = mock(async () => true);
+  const props = { onSave: save, onUpload: async () => undefined, disabled: false };
+  const node = await mount(<AccountEditor user={user} {...props}/>);
+  expect((node.querySelector('input[type=email]') as HTMLInputElement).value).toBe('alex@lemon.local');
+  await act(async () => { root!.render(<AccountEditor user={{ ...user, revision: 2, email: 'alex@example.com' }} {...props}/>); });
+  expect((node.querySelector('input[type=email]') as HTMLInputElement).value).toBe('alex@example.com');
+  await act(async () => { (node.querySelector('form') as HTMLFormElement).requestSubmit(); });
+  expect(save).toHaveBeenCalledTimes(1);
+  expect(save.mock.calls[0]?.[0]).toMatchObject({ displayName: 'Alex', email: 'alex@example.com' });
 });
 
 test('Linux account and unlock copy use the host name rather than Mac', () => {
