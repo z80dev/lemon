@@ -10,6 +10,7 @@ public struct ProvidersSettingsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var defaultProvider = ""
     @State private var defaultModel = ""
+    @State private var showImportConsent = false
     private var state: ProviderSettingsState { store.providerSettings }
     private var pollKey: String {
         "\(store.account?.id ?? "")|\(state.machineID ?? "controller")|\(state.deviceLogin?.loginId ?? "")|\(state.deviceUnknown)|\(state.visible)|\(state.active)"
@@ -21,12 +22,13 @@ public struct ProvidersSettingsView: View {
             if store.member?.role == "owner" {
                 targetSection
                 if let management = state.management {
+                    readinessSection(management)
                     Section("Current default") {
                         LabeledContent("Provider", value: management.default.providerId ?? "Not selected")
                         LabeledContent("Model", value: management.default.modelId ?? "Not selected")
                         Text("Effective on this target, including project and environment precedence. Credential actions never change it.")
                     }
-                    ForEach(management.providers) { provider in providerSection(provider) }
+                    ForEach(management.providers) { provider in providerSection(provider, management: management) }
                     defaultSection(management)
                 }
                 if let login = state.deviceLogin { deviceSection(login) }
@@ -105,6 +107,14 @@ public struct ProvidersSettingsView: View {
             }
             Button("Cancel", role: .cancel) { state.cancelConfirmation() }
         } message: { Text(confirmationText) }
+        .confirmationDialog("Import Codex CLI login", isPresented: $showImportConsent, titleVisibility: .visible) {
+            Button("Import login") {
+                Task { await store.importCodexLogin(providerID: "openai_codex") }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Copy your Codex CLI ChatGPT login on \(state.management?.target.hostname ?? "this machine") into Lemon. Lemon keeps and refreshes its own copy; your ~/.codex/auth.json is not changed. If either app later asks you to sign in again, sign in there — or use Sign in with ChatGPT to give Lemon its own login.")
+        }
     }
     private var targetSection: some View {
         Section("Execution target") {
@@ -128,8 +138,11 @@ public struct ProvidersSettingsView: View {
             Text("Review this exact backend, workspace and target before every write. Selecting a target never copies credentials.").font(LBFont.meta)
         }
     }
-    private func providerSection(_ provider: ManagedProvider) -> some View {
+    private func providerSection(_ provider: ManagedProvider, management: ProviderManagement) -> some View {
         Section(provider.displayName) {
+            if management.readiness?.providerId == provider.id, let readinessState = management.readiness?.state {
+                LabeledContent("Readiness", value: readinessStateLabel(readinessState))
+            }
             LabeledContent("Status", value: provider.status.label)
             LabeledContent("Configured", value: provider.configured ? "Yes" : "No")
             LabeledContent("Provider ID", value: provider.id)
@@ -169,6 +182,14 @@ public struct ProvidersSettingsView: View {
             }
             if provider.methods == [.unsupported] { Text("This provider has no supported phone-completable sign-in method.") }
             Button("Disconnect", role: .destructive) { store.requestProviderDisconnect(provider.id) }.disabled(!store.canWriteProviders || !provider.configured)
+            Button("Check this provider now") {
+                Task { await store.checkProviders(providerID: provider.id) }
+            }.disabled(state.busy || !store.canWriteProviders)
+            if provider.id == "openai_codex", management.detected.contains(where: { $0.source == .codexCLI && $0.providerId == provider.id }) {
+                Button("Import Codex CLI login") {
+                    showImportConsent = true
+                }.disabled(!store.canWriteProviders)
+            }
         }
     }
     private func defaultSection(_ management: ProviderManagement) -> some View {
@@ -181,6 +202,75 @@ public struct ProvidersSettingsView: View {
             Button("Change default") { store.requestProviderDefault(providerID: defaultProvider, modelID: defaultModel) }
                 .disabled(!store.canWriteProviders || defaultProvider.isEmpty || defaultModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             Text("Separate confirmed action. Changes only the global target default; never rewrites Bots or profiles. Overrides may leave the effective Current default unchanged.").font(LBFont.meta)
+        }
+    }
+    private func readinessSection(_ management: ProviderManagement) -> some View {
+        Section("Model readiness") {
+            if let readiness = management.readiness {
+                HStack {
+                    Text("Readiness state")
+                    Spacer()
+                    Text(readinessStateLabel(readiness.state))
+                        .font(LBFont.chip)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(readinessStateColor(readiness.state).opacity(0.15), in: Capsule())
+                        .foregroundStyle(readinessStateColor(readiness.state))
+                }
+                if let providerId = readiness.providerId {
+                    LabeledContent("Default provider", value: providerId)
+                }
+                if let modelId = readiness.modelId {
+                    LabeledContent("Default model", value: modelId)
+                }
+                if let check = readiness.check {
+                    LabeledContent("Check method", value: check == .codexDiscovery ? "Codex discovery" : "Models endpoint")
+                }
+                if let reason = readiness.reason {
+                    LabeledContent("Status detail", value: reasonDescription(reason))
+                        .foregroundStyle(LB.warning)
+                }
+                if let checkedAtMs = readiness.checkedAtMs {
+                    Text("Last checked: \(Date(timeIntervalSince1970: Double(checkedAtMs) / 1000).formatted())")
+                        .font(LBFont.meta).foregroundStyle(LB.muted)
+                }
+            } else {
+                Text("Model status unavailable on this target.")
+                    .font(LBFont.meta).foregroundStyle(LB.muted)
+            }
+            Button("Check now") {
+                Task { await store.checkProviders() }
+            }
+            .disabled(state.busy || !store.canWriteProviders)
+            Text("A check is a non-generating request to the provider; no message is sent. It may refresh this target's OAuth token.")
+                .font(LBFont.meta).foregroundStyle(LB.muted)
+        }
+    }
+    private func readinessStateLabel(_ state: ModelReadiness.State) -> String {
+        switch state {
+        case .verified: return "Verified"
+        case .saved: return "Saved"
+        case .actionRequired: return "Action required"
+        case .notConfigured: return "Not configured"
+        }
+    }
+    private func readinessStateColor(_ state: ModelReadiness.State) -> Color {
+        switch state {
+        case .verified: return LB.success
+        case .saved: return LB.ink
+        case .actionRequired, .notConfigured: return LB.warning
+        }
+    }
+    private func reasonDescription(_ reason: ModelReadiness.Reason) -> String {
+        switch reason {
+        case .credentialMissing: return "Credential missing"
+        case .credentialExpired: return "Credential expired"
+        case .credentialRejected: return "Credential rejected"
+        case .modelUnavailable: return "Model unavailable"
+        case .providerUnreachable: return "Provider unreachable"
+        case .checkUnavailable: return "Check unavailable"
+        case .checkFailed: return "Check failed"
+        case .noDefault: return "No default configured"
+        case .modelProviderMismatch: return "Model/provider mismatch"
         }
     }
     private func deviceSection(_ login: ProviderDeviceLogin) -> some View {

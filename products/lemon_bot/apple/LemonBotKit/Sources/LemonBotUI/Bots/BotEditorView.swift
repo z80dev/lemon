@@ -35,6 +35,7 @@ struct BotEditorView: View {
     @State private var generatedPrompt = ""
     @State private var currentRevision: Int
     @State private var action = UIActionState()
+    @State private var modelReadyOrSkipped: Bool
     init(store: LemonBotStore, bot: Bot? = nil) {
         self.store = store; self.bot = bot
         _name = State(initialValue: bot?.name ?? "")
@@ -55,6 +56,8 @@ struct BotEditorView: View {
         _references = State(initialValue: bot?.referenceAttachmentIds ?? [])
         _currentRevision = State(initialValue: bot?.revision ?? 1)
         _access = State(initialValue: "standard")
+        let initialMachineID = bot?.machineId ?? (online.count == 1 ? online[0].id : "")
+        _modelReadyOrSkipped = State(initialValue: bot != nil || ModelReadinessSkipStore.isSkipped(workspaceID: store.workspace?.id, machineID: initialMachineID))
     }
     var body: some View {
         NavigationStack {
@@ -81,6 +84,11 @@ struct BotEditorView: View {
                             ? "Standard gives this Bot access to Terminal and Files (and Browser if supported). It asks before running commands."
                             : "Chat only gives this Bot conversation without local file, tool or shell access.")
                             .font(LBFont.meta).foregroundStyle(LB.muted)
+                    }
+                }
+                if bot == nil, !machineID.isEmpty {
+                    ModelReadinessView(store: store, machineID: machineID) { ready in
+                        modelReadyOrSkipped = ready
                     }
                 }
                 if let bot { AgentHandleView(store: store, bot: bot) }
@@ -132,10 +140,11 @@ struct BotEditorView: View {
                         : "\(botName) works on \(machineName) in chat-only mode without file, tool or shell access.")
                         .font(LBFont.meta).foregroundStyle(LB.muted)
                 }
-                Button(bot == nil ? "Create Bot" : "Save changes") { Task { await save() } }.disabled(action.busy || name.isEmpty || store.connectionState != "online" || (bot == nil && machineID.isEmpty))
+                Button(bot == nil ? "Create Bot" : "Save changes") { Task { await save() } }.disabled(action.busy || name.isEmpty || store.connectionState != "online" || (bot == nil && (machineID.isEmpty || !modelReadyOrSkipped)))
                 if store.connectionState != "online" { Text("Reconnect to save changes.").font(LBFont.meta).foregroundStyle(LB.muted) }
                 else if name.isEmpty { Text("Add a name to save.").font(LBFont.meta).foregroundStyle(LB.muted) }
                 else if bot == nil && machineID.isEmpty { Text("Choose an online machine to create this Bot.").font(LBFont.meta).foregroundStyle(LB.muted) }
+                else if bot == nil && !modelReadyOrSkipped { Text("Connect a model or skip to create this Bot.").font(LBFont.meta).foregroundStyle(LB.muted) }
             }.formStyle(.grouped).navigationTitle(bot == nil ? "New Bot" : "Edit \(bot!.name)")
                 .toolbar { Button("Cancel") { dismiss() } }
                 .fileImporter(isPresented: $avatarPicker, allowedContentTypes: [.image]) { result in
@@ -143,6 +152,10 @@ struct BotEditorView: View {
                 }
                 .fileImporter(isPresented: $referencePicker, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
                     switch result { case .success(let urls): Task { await uploadReferences(urls) }; case .failure(let error): action.error = String(describing: error) }
+                }
+                // A new machine is a new readiness question; never carry the previous target's answer.
+                .onChange(of: machineID) { _, value in
+                    modelReadyOrSkipped = bot != nil || ModelReadinessSkipStore.isSkipped(workspaceID: store.workspace?.id, machineID: value)
                 }
         }.frame(minWidth: 340, minHeight: 560)
     }

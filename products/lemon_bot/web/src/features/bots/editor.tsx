@@ -4,6 +4,7 @@ import { useApp, type Route } from '../../app';
 import { ErrorNotice, Field, PageHeader, useAction, useQuery } from '../../ui';
 import { collect, IntentNotice, MachineChoice, AccessChoice, Selection, useIntent, useMachines, useObjectUrl } from './shared';
 import { AgentControls } from './agents';
+import { ModelReadinessPanel } from './model-readiness';
 
 const defaultAvatar: Avatar = { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null };
 const defaultVoice: VoiceSettings = { voiceId: 'default', speed: 1, language: null };
@@ -68,6 +69,7 @@ export function CreateBot({ route }: { route?: Route } = {}) {
     skillIds: [],
     access: 'standard',
   });
+  const [modelReady, setModelReady] = useState(false);
 
   useEffect(() => {
     if (!draft.machineId) {
@@ -176,6 +178,12 @@ export function CreateBot({ route }: { route?: Route } = {}) {
           onChange={machineId => update({ machineId })}
           showConsent={false}
         />
+        {draft.machineId && (
+          <ModelReadinessPanel
+            machineId={draft.machineId}
+            onReadyChange={setModelReady}
+          />
+        )}
 
         <AccessChoice
           value={draft.access ?? 'standard'}
@@ -226,7 +234,7 @@ export function CreateBot({ route }: { route?: Route } = {}) {
         </p>
         <button
           className="primary"
-          disabled={intent.disabled || !draft.machineId || !draft.name.trim()}
+          disabled={intent.disabled || !draft.machineId || !draft.name.trim() || !modelReady}
         >
           Create Bot
         </button>

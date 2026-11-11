@@ -5,6 +5,10 @@
 ### Changed
 
 - Web and Mac starter tasks now inspect system summaries, installed tools and running processes instead of personal folders, avoiding protected-folder scans during first use.
+- Create Bot checks model readiness on the selected machine, offers consented
+  detected-login import before device sign-in or API-key entry, and supports Skip
+  with a conversation reminder. Providers settings expose live readiness,
+  explicit checks and Codex CLI import without silently copying credentials.
 
 - Bot setup defaults to explicit Standard access, preselects the sole online owned computer, and keeps optional customization collapsed. Import and duplicate confirm their own access choice; empty chats offer one-click starter tasks.
 

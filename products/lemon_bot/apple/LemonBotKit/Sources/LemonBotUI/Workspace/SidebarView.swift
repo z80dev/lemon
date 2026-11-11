@@ -272,6 +272,7 @@ struct SidebarView: View {
             if let machine = store.machines.first(where: { $0.status == "online" }) {
                 Text("Create your first Bot").font(LBFont.rowTitle).foregroundStyle(LB.ink)
                 Text("\(machine.name) is ready. Give your Bot a name and a job.").font(LBFont.meta).foregroundStyle(LB.muted)
+                readinessLine(for: machine)
                 Button("Create a Bot") { newBot() }.buttonStyle(.lemonPrimary)
             } else {
                 #if os(macOS)
@@ -282,6 +283,25 @@ struct SidebarView: View {
             }
         }
         .padding(.horizontal, 4).padding(.vertical, 8)
+    }
+    /// First-run readiness for the sole online machine. It never replaces a provider target the
+    /// owner already loaded elsewhere, and an unreadable readiness simply shows nothing.
+    @ViewBuilder private func readinessLine(for machine: Machine) -> some View {
+        let readiness = store.providerSettings.machineID == machine.id ? store.providerSettings.management?.readiness : nil
+        Group {
+            if let readiness {
+                switch readiness.state {
+                case .verified: Text("Model: Verified").font(LBFont.meta).foregroundStyle(LB.success)
+                case .saved: Text("Model: Saved").font(LBFont.meta).foregroundStyle(LB.muted)
+                case .actionRequired, .notConfigured: Text("Model: Not connected").font(LBFont.meta).foregroundStyle(LB.warning)
+                }
+            }
+        }
+        .task(id: machine.id) {
+            guard store.canManageProviders, store.providerSettings.machineID != machine.id,
+                  store.providerSettings.management == nil, store.providerPendingIntents.isEmpty else { return }
+            await store.selectProviderTarget(machineID: machine.id)
+        }
     }
 
     @ViewBuilder private var attachContent: some View {

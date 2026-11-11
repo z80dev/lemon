@@ -21,7 +21,7 @@ export const app = {
   online: true,
   device: { id: 'device_test' },
   snapshot: { user: { id: 'owner' }, member: { role: 'owner' }, workspace: { id: 'workspace_test', ownerUserId: 'owner' }, bots: [bot], machines: [machine], capabilities: { imageGeneration: false } },
-  client: { call: async (endpoint: string, options: unknown) => {
+  client: { baseUrl: 'https://bot.test', call: async (endpoint: string, options: unknown) => {
     calls.push({ endpoint, options });
     if (!responses.has(endpoint)) throw new Error(`Unexpected test endpoint: ${endpoint}`);
     const response = responses.get(endpoint);

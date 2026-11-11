@@ -19,7 +19,7 @@ Production assets are emitted to `web/dist`; the backend serves them outside `/v
 
 1. On the same computer run `lemon-bot open` (no password). Otherwise sign in, or use the one-time setup code from `lemon-bot setup` on the server.
 2. **Connect a computer** using its **server-issued**, one-use join command. Run it on the destination and wait for verified online status. Configure the computer's actual provider authentication and supervise its worker. Copying a command does not prove enrollment.
-3. Create a named Bot with a focused job on that host, or review a template to create a separate owned copy. Co-resident Bots share the OS user's files, browser sessions and CLI credentials; personas are not host isolation.
+3. Create a named Bot with a focused job on that host, or review a template to create a separate owned copy. **Connect a model on that machine** checks its credentials without sending a message. A detected Codex CLI login is copied only with your explicit consent; device-code sign-in and API-key entry are alternatives. **Verified** and **Saved** both allow creation; **Skip for now** allows creation with a reminder that replies need a model. Co-resident Bots share the OS user's files, browser sessions and CLI credentials; personas are not host isolation.
 4. Open its chat and give it a concrete task. Text, references, real files and explicit voice input use placed conversations. Stop requests cancel a real run; only its terminal cancelled state proves it stopped, and prior external effects are not undone.
 
 There is no Team Bot publishing, manager assignment, live other-user Bot access, cross-human room membership, Team memory/skills or shared connector authority. Workspace/Public templates contain reviewed declarative content and always create a separate owned Bot, never access to the publisher's live Bot or credentials.
@@ -139,10 +139,12 @@ uncertain command receipt blocks further commands rather than sending it again.
 **Settings → Instance** shows Lemon's version, release channel and short commit,
 per-channel connection state and last error. The owner-only **Settings → Providers** section
 manages credentials on the controller or a selected owned execution machine:
-add/replace a write-only API key, Codex device sign-in, confirmed local disconnect,
-and a separate confirmed default provider/model change. Provider readiness and
-last resolver validation remain distinct from credential storage and provider
-failure history. See the shared [Providers workflow and browser limitations](../providers.md#providers-settings-on-web-iphone-and-mac).
+add/replace a write-only API key, Codex device sign-in, consented Codex CLI login
+import, confirmed local disconnect, and a separate confirmed default provider/model
+change. **Check now** performs a non-generating readiness check (which may refresh
+the target's OAuth token). **Saved** means Lemon checks it on your first message,
+not that a live check passed. Resolver validation remains separate from live
+readiness. See the shared [Providers workflow and browser limitations](../providers.md#providers-settings-on-web-iphone-and-mac).
 
 Across chat, settings, computers and connected services, **Check status** observes
 an unconfirmed change; it never sends that change again. Ordinary failed reads use
