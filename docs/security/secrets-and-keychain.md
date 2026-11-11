@@ -97,6 +97,11 @@ Additional nuance:
   minimal child environments, `100..30000` ms timeouts, `1..1048576` byte
   output bounds, and an optional bounded process-local cache that defaults off.
 - If keychain prompts are denied (`User interaction is not allowed`), Lemon can still operate via env fallback when configured.
+- Development Mac builds are ad-hoc signed and can prompt for Keychain access
+  again after each rebuild. This is distinct from the worker's
+  [macOS privacy permissions](agent-safety-contract.md#macos-permissions).
+  Signed releases retain a stable signing identity and avoid that rebuild
+  re-prompt; no signed DMG is published yet.
 
 ## Conditional Credential Saves
 
