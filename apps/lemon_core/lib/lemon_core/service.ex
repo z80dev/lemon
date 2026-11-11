@@ -31,8 +31,8 @@ defmodule LemonCore.Service do
     with :ok <- inventory_available(selected, blocked, opts) do
       running_inventory(selected, opts)
     end
-  rescue
-    _ -> {:error, :service_state_unavailable}
+  catch
+    :service_inventory_unavailable -> {:error, :service_state_unavailable}
   end
 
   defp running_inventory(selected, opts) do
@@ -61,7 +61,7 @@ defmodule LemonCore.Service do
           end
 
         _ ->
-          raise "service inventory unavailable"
+          throw(:service_inventory_unavailable)
       end
     end)
   end
@@ -114,8 +114,9 @@ defmodule LemonCore.Service do
          :ok <- validate_name(opts),
          :ok <- if(manager == "none", do: inventory_available(manager, blocked, opts), else: :ok),
          :ok <- validate_invite(roles, opts) do
-      if operation in [:install, :repair] and opts[:enable_linger] and manager == "systemd",
-        do: Systemd.enable_linger(opts)
+      if operation in [:install, :repair] and opts[:enable_linger] == true and
+           manager == "systemd",
+         do: Systemd.enable_linger(opts)
 
       if operation in [:install, :repair] and manager == "none",
         do:
@@ -194,8 +195,8 @@ defmodule LemonCore.Service do
          units: results
        }}
     end
-  rescue
-    _ -> {:error, :service_state_unavailable}
+  catch
+    :service_inventory_unavailable -> {:error, :service_state_unavailable}
   end
 
   defp validate_roles(operation, []) when operation in [:install, :uninstall],
@@ -318,7 +319,7 @@ defmodule LemonCore.Service do
         []
 
       {:error, _} ->
-        raise "service inventory unavailable"
+        throw(:service_inventory_unavailable)
     end
   end
 
@@ -610,8 +611,8 @@ defmodule LemonCore.Service do
     end
   end
 
-  defp base(spec),
-    do: %{
+  defp base(spec) do
+    unit = %{
       role: spec.role,
       name: spec.name,
       label: spec.label,
@@ -623,6 +624,19 @@ defmodule LemonCore.Service do
       log: spec.log,
       detail: nil
     }
+
+    if spec.role == "worker" do
+      wrapper =
+        case spec.argv do
+          [wrapper, "--" | _] -> wrapper
+          _ -> nil
+        end
+
+      Map.put(unit, :execWrapper, wrapper)
+    else
+      unit
+    end
+  end
 
   defp fingerprint(body), do: :crypto.hash(:sha256, body) |> Base.encode16(case: :lower)
 

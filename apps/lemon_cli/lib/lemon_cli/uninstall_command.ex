@@ -13,15 +13,15 @@ defmodule LemonCli.UninstallCommand do
   @exit_error 1
   @exit_usage 2
 
-  @spec run([String.t()]) :: 0 | 1 | 2
-  def run(args) do
+  @spec run([String.t()], keyword()) :: 0 | 1 | 2
+  def run(args, dependencies \\ []) do
     case parse_args(args) do
       {:help, _} ->
         print_help()
         @exit_ok
 
       {:ok, opts} ->
-        dispatch(opts)
+        dispatch(Keyword.merge(dependencies, opts))
 
       {:error, :usage} ->
         print_usage(:stderr)

@@ -164,6 +164,19 @@ defmodule LemonCore.ServiceTest do
              Service.install(["worker"], changed)
   end
 
+  test "worker status exposes the persisted execution wrapper for setup repair", %{opts: opts} do
+    assert {:ok, %{units: [%{execWrapper: nil}]}} = Service.install(["worker"], opts)
+    wrapper = Path.join(opts[:home], "Lemon Bot.app/Contents/MacOS/worker-helper")
+    File.mkdir_p!(Path.dirname(wrapper))
+    File.write!(wrapper, "#!/bin/sh\nexec \"$@\"\n")
+    File.chmod!(wrapper, 0o755)
+
+    assert {:ok, %{units: [%{execWrapper: ^wrapper, state: "online"}]}} =
+             Service.repair(["worker"], Keyword.put(opts, :exec_wrapper, wrapper))
+
+    assert {:ok, %{units: [%{execWrapper: ^wrapper}]}} = Service.status(["worker"], opts)
+  end
+
   test "legacy worker labels are adopted in place", %{opts: opts} do
     {:ok, spec} = Role.build("worker", "launchd", opts)
     File.mkdir_p!(Path.dirname(spec.path))

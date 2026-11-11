@@ -420,7 +420,12 @@ defmodule LemonCli.LauncherSupervisionTest do
   test "the source stop hook accepts only its own snapshot token", ctx do
     state = Path.join(ctx.home, ".lemon/run")
     File.mkdir_p!(state)
-    born = System.cmd("ps", ["-p", System.pid(), "-o", "lstart="]) |> elem(0) |> String.trim()
+
+    born =
+      System.cmd("ps", ["-p", System.pid(), "-o", "lstart="])
+      |> elem(0)
+      |> String.trim_trailing("\n")
+
     File.write!(Path.join(state, "lemon-#{ctx.port}.pid"), System.pid() <> "\n" <> born <> "\n")
     File.write!(Path.join(state, "lemon-#{ctx.port}.root"), ctx.source <> "\n")
 

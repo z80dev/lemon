@@ -759,6 +759,8 @@ defmodule LemonCore.UninstallTest do
       assert {:ok, _} =
                Uninstall.execute(Keyword.put(absent, :confirm, preview.confirmation_digest))
 
+      File.write!(ctx.manifest, "")
+
       failing =
         opts(ctx,
           os: :darwin,

@@ -734,8 +734,12 @@ through `status` and `uninstall`; an inventory containing manual units reports
 The schema-1 document is:
 
 ```json
-{"schema":1,"manager":"launchd","persistence":"login","linger":null,"units":[{"role":"worker","name":"chico","label":"org.lemon.node.chico","installed":true,"loaded":true,"state":"online","pid":7748,"version":null,"log":"/Users/me/.lemon/logs/node-chico.log","detail":null}]}
+{"schema":1,"manager":"launchd","persistence":"login","linger":null,"units":[{"role":"worker","name":"chico","label":"org.lemon.node.chico","installed":true,"loaded":true,"state":"online","pid":7748,"version":null,"log":"/Users/me/.lemon/logs/node-chico.log","detail":null,"execWrapper":null}]}
 ```
+
+Worker units expose their configured absolute `execWrapper` path, or `null` when
+unwrapped. Local setup consumers can compare it before repairing a worker's
+signed helper identity; this field is not part of remote management projections.
 
 `manager` is `launchd|systemd|none`; `persistence` is `login|boot|session|none`.
 `linger` is a boolean on systemd and otherwise null. Unit `state` is

@@ -19,34 +19,16 @@ defmodule LemonCli.UninstallCommandTest do
     export PATH="$HOME/.lemon/bin:$PATH"
     """)
 
-    # The command reads HOME and the launcher kind from the environment; pin
-    # both so the preview describes this temporary layout, not the developer's.
-    previous =
-      Map.new(~w(HOME LEMON_CLI_LAUNCHER LEMON_LAUNCHER LEMON_UNINSTALL_MANIFEST), fn key ->
-        {key, System.get_env(key)}
-      end)
-
-    System.put_env("HOME", home)
-    System.put_env("LEMON_CLI_LAUNCHER", "release")
-    System.delete_env("LEMON_LAUNCHER")
-    System.delete_env("LEMON_UNINSTALL_MANIFEST")
-
-    on_exit(fn ->
-      Enum.each(previous, fn
-        {key, nil} -> System.delete_env(key)
-        {key, value} -> System.put_env(key, value)
-      end)
-    end)
-
-    {:ok, home: home}
+    opts = [home: home, cli_launcher: :release, env: %{}, os: :linux]
+    {:ok, home: home, opts: opts}
   end
 
-  defp run(args) do
+  defp run(args, opts \\ []) do
     result = %{code: nil}
 
     output =
       capture_io(fn ->
-        send(self(), {:code, UninstallCommand.run(args)})
+        send(self(), {:code, UninstallCommand.run(args, opts)})
       end)
 
     receive do
@@ -66,8 +48,8 @@ defmodule LemonCli.UninstallCommandTest do
     assert output =~ "--confirm DIGEST"
   end
 
-  test "the default run previews and prints a confirmation digest", %{home: home} do
-    {output, %{code: 0}} = run([])
+  test "the default run previews and prints a confirmation digest", %{home: home, opts: opts} do
+    {output, %{code: 0}} = run([], opts)
 
     assert output =~ "Lemon uninstall preview"
     assert output =~ Path.join([home, ".lemon", "versions"])
@@ -81,9 +63,9 @@ defmodule LemonCli.UninstallCommandTest do
     assert File.read!(Path.join(home, ".zshrc")) =~ "added by the lemon installer"
   end
 
-  test "--purge preview names the data directory and a different digest" do
-    {plain, %{code: 0}} = run([])
-    {purge, %{code: 0}} = run(["--purge"])
+  test "--purge preview names the data directory and a different digest", %{opts: opts} do
+    {plain, %{code: 0}} = run([], opts)
+    {purge, %{code: 0}} = run(["--purge"], opts)
 
     assert purge =~ "Purge data (~/.lemon): yes"
     assert purge =~ "lemon uninstall --purge --confirm"
@@ -93,8 +75,8 @@ defmodule LemonCli.UninstallCommandTest do
     refute plain_digest == purge_digest
   end
 
-  test "--json preview emits the candidate set and digest", %{home: home} do
-    {output, %{code: 0}} = run(["--json"])
+  test "--json preview emits the candidate set and digest", %{home: home, opts: opts} do
+    {output, %{code: 0}} = run(["--json"], opts)
     payload = Jason.decode!(output)
 
     assert payload["ok"] == true
@@ -107,13 +89,13 @@ defmodule LemonCli.UninstallCommandTest do
     assert [%{"file" => _, "line" => _}] = payload["rc_lines"]
   end
 
-  test "a wrong digest fails with exit 1 and changes nothing", %{home: home} do
+  test "a wrong digest fails with exit 1 and changes nothing", %{home: home, opts: opts} do
     output =
       capture_io(:stderr, fn ->
         assert capture_io(fn ->
                  send(
                    self(),
-                   {:code, UninstallCommand.run(["--confirm", String.duplicate("a", 64)])}
+                   {:code, UninstallCommand.run(["--confirm", String.duplicate("a", 64)], opts)}
                  )
                end) == ""
       end)
@@ -124,11 +106,11 @@ defmodule LemonCli.UninstallCommandTest do
     assert File.read!(Path.join(home, ".zshrc")) =~ "added by the lemon installer"
   end
 
-  test "a wrong digest in JSON mode reports the expected digest" do
+  test "a wrong digest in JSON mode reports the expected digest", %{opts: opts} do
     output =
       capture_io(:stderr, fn ->
         capture_io(fn ->
-          send(self(), {:code, UninstallCommand.run(["--json", "--confirm", "nope"])})
+          send(self(), {:code, UninstallCommand.run(["--json", "--confirm", "nope"], opts)})
         end)
       end)
 
