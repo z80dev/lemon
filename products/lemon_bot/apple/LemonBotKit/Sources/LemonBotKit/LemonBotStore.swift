@@ -5,6 +5,10 @@ import Observation
     public var account: StoredAccount? {
         didSet {
             if oldValue?.id != account?.id || oldValue?.token != account?.token { providerSettings.reset() }
+            if oldValue?.id != account?.id {
+                hostMachineNodeName = nil
+                lastHostSetupTrigger = nil
+            }
         }
     }
     public var accounts: [StoredAccount] = []
@@ -66,6 +70,8 @@ import Observation
     public internal(set) var ownerPairingPreflight: BotPreflightResult?
     /// Making the connected machine run Bots (macOS); reset with each account.
     public internal(set) var hostSetup: HostSetupState = .idle
+    @ObservationIgnored var lastHostSetupTrigger: String?
+    public internal(set) var hostMachineNodeName: String?
 
     @ObservationIgnored let keychain: any AccountCredentialStore
     @ObservationIgnored let persistence: ClientPersistence

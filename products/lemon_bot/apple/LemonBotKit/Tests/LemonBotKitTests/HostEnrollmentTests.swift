@@ -4,6 +4,13 @@ import XCTest
 final class HostEnrollmentTests: XCTestCase {
     private let release = "curl -fsSL --proto '=https' --proto-redir '=https' 'https://github.com/z80dev/lemon/releases/download/v2026.10.22/join-node.sh' | bash -s -- '--name' 'chico' '--controller' 'ws://127.0.0.1:4040/ws' '--version' '2026.10.22' '--base-url' 'https://github.com/z80dev/lemon'"
 
+    func testAutomaticRepairNeverRetriesRunningOrFailedAttempts() {
+        XCTAssertTrue(HostSetupState.idle.allowsAutomaticAttempt)
+        XCTAssertTrue(HostSetupState.done.allowsAutomaticAttempt)
+        XCTAssertFalse(HostSetupState.running("Starting").allowsAutomaticAttempt)
+        XCTAssertFalse(HostSetupState.failed(message: "Unavailable", detail: nil).allowsAutomaticAttempt)
+    }
+
     func testReleaseAndSourceJoinCommandsYieldTheirTargets() throws {
         XCTAssertEqual(try HostEnrollment.target(fromJoinCommand: release),
                        .init(name: "chico", controller: "ws://127.0.0.1:4040/ws", source: nil, version: "2026.10.22", baseURL: "https://github.com/z80dev/lemon"))
