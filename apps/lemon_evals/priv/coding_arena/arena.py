@@ -28,6 +28,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -223,6 +225,64 @@ def trial_token(secret, trial_id):
     return f'{header}.{payload}.{signature}'
 
 
+def attempt_rate_limited(args, attempt):
+    """True when the proxy saw an upstream 429 for this attempt (subscription quota or rate limit)."""
+    if not args.proxy_log or not Path(args.proxy_log).exists():
+        return False
+    needle = json.dumps(attempt)
+    with open(args.proxy_log) as handle:
+        return any(needle in line and '"status":429' in line for line in handle)
+
+
+class QuotaGate:
+    """Holds new trials while the provider quota is exhausted.
+
+    A trial that fails after an upstream 429 closes the gate. One worker then probes the proxy with
+    a tiny request every `interval` seconds and reopens the gate on success, so a 5-hour quota
+    window that runs out mid-campaign pauses the run instead of failing every remaining trial.
+    """
+
+    def __init__(self, args, interval=300):
+        self.args, self.interval = args, interval
+        self.open = threading.Event()
+        self.open.set()
+        self.lock = threading.Lock()
+        self.probing = False
+
+    def close(self):
+        self.open.clear()
+
+    def wait(self):
+        while not self.open.is_set():
+            with self.lock:
+                probe, self.probing = not self.probing, True
+            if not probe:
+                self.open.wait(self.interval)
+                continue
+            try:
+                while not self.probe():
+                    print(f'quota exhausted; next probe in {self.interval}s', flush=True)
+                    time.sleep(self.interval)
+                print('quota available; resuming', flush=True)
+                self.open.set()
+            finally:
+                with self.lock:
+                    self.probing = False
+
+    def probe(self):
+        token = trial_token(self.args.proxy_secret, f'quota-probe#{secrets.token_hex(4)}')
+        body = json.dumps({'model': self.args.model, 'max_tokens': 8,
+                           'messages': [{'role': 'user', 'content': 'Reply with OK.'}]}).encode()
+        request = urllib.request.Request(f'http://127.0.0.1:{self.args.proxy_port}/coding/v1/messages', data=body,
+                                         headers={'content-type': 'application/json', 'x-api-key': token,
+                                                  'anthropic-version': '2023-06-01'})
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return response.status == 200
+        except OSError:  # HTTPError (429), connection errors and timeouts all mean "not yet"
+            return False
+
+
 def proxy_base(args):
     return f'http://host.docker.internal:{args.proxy_port}'
 
@@ -359,7 +419,9 @@ def git_diff_stats(container):
             'deletions': numbers.get('deletion', 0)}
 
 
-def run_trial(trial, task, args, out):
+def run_trial(trial, task, args, out, gate=None):
+    if gate:
+        gate.wait()
     agent = trial['agent']
     prepare, argv_for, parse = AGENTS[agent]
     trial_dir = out / 'trials' / trial['id']
@@ -406,6 +468,13 @@ def run_trial(trial, task, args, out):
             row['failure'] = ('timeout' if timed_out else
                               'agent_error' if not result.get('ok') and not row['files_changed'] and not answer else
                               'verifier_failed')
+            # A quota or rate-limit 429 makes the trial unscorable; record it for --retry-infrastructure.
+            if attempt_rate_limited(args, attempt):
+                row['scored_failure'] = row['failure']
+                row['failure'] = 'infrastructure'
+                row['infrastructure_error'] = 'upstream 429 (provider quota or rate limit)'
+                if gate:
+                    gate.close()
     except Exception as error:  # noqa: BLE001 - infrastructure failures are recorded, not fatal
         row['failure'] = 'infrastructure'
         row['infrastructure_error'] = redact(str(error), token)[-2000:]
@@ -446,8 +515,9 @@ def cmd_run(args):
     pending = [trial for trial in plan_trials(tasks, agents, args.repetitions, args.seed) if trial['id'] not in done]
     print(f'{len(pending)} trials pending ({len(done)} already recorded)', flush=True)
     lock = threading.Lock()
+    gate = QuotaGate(args)
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-        futures = [pool.submit(run_trial, trial, by_id[trial['task']], args, out) for trial in pending]
+        futures = [pool.submit(run_trial, trial, by_id[trial['task']], args, out, gate) for trial in pending]
         for index, future in enumerate(as_completed(futures), 1):
             row = future.result()
             with lock, results_path.open('a') as handle:
