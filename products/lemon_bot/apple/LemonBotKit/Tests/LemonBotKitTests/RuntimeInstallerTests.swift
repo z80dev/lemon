@@ -765,12 +765,16 @@ final class RuntimeInstallerTests: XCTestCase {
         let (runtimeTarball, runtimeSize, runtimeSha) = try makeFakeRuntimeTarball(
             baseDir: tempDir, version: "2026.11.1", capabilitiesDelaySeconds: 3
         )
+        let (backendTarball, backendSize, backendSha) = try makeFakeBackendTarball(baseDir: tempDir, version: "2026.11.1")
+        let backendFile = "lemon-2026.11.1-stable-darwin-arm64-lemon_bot.tar.gz"
         let manifestData = manifestJSON(artifacts: [
-            artifactEntry(file: runtimeTarball.lastPathComponent, sha: runtimeSha, size: runtimeSize, profile: "lemon_runtime_full")
+            artifactEntry(file: runtimeTarball.lastPathComponent, sha: runtimeSha, size: runtimeSize, profile: "lemon_runtime_full"),
+            artifactEntry(file: backendFile, sha: backendSha, size: backendSize, profile: "lemon_bot")
         ])
         let base = "https://github.com/z80dev/lemon"
         MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/manifest.json"] = (200, [:], manifestData)
         MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/\(runtimeTarball.lastPathComponent)"] = (200, [:], try Data(contentsOf: runtimeTarball))
+        MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/\(backendFile)"] = (200, [:], try Data(contentsOf: backendTarball))
 
         let pin = ReleasePin(version: "2026.11.1", channel: "stable", manifestSHA256: digest(manifestData), baseURL: URL(string: base)!)
         let plan = try RuntimeInstaller.plan(layout: layout, pin: pin)
