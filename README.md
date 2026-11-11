@@ -73,21 +73,51 @@ import with `lemon migrate hermes --dry-run`, then read the
 curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --profile bot
 ```
 
-**What happens:** the installer adds the runtime and Bot backend, then
-`lemon-bot` connects a model, installs user services, creates the local owner,
-enrolls this computer as a supervised worker, and opens the browser signed in.
+**What happens:** the installer verifies the runtime and Bot backend, then hands
+off to `lemon-bot`. It connects a model (it can copy an existing Codex CLI login
+with your consent and runs a live check that sends no chat message), installs
+user services, creates the local owner without a form, enrolls this computer as
+a supervised worker, and opens the browser signed in. If the installer only
+prints a next step, run `"$HOME/.local/bin/lemon-bot"`. Resume an interrupted
+setup with `lemon-bot up`, and reopen the workspace signed in with
+`lemon-bot open`. Over SSH it prints a one-use sign-in link and an `ssh -L`
+tunnel command instead of launching a browser.
 
 In the browser, choose **Create a Bot**, give it a name, keep the preselected
 machine, and choose **Standard** for Terminal and Files with command approvals.
-Pick a starter task, or ask it for this computer's hostname and OS version and
-approve the displayed command once. Follow
-[Lemon Bot in 3 minutes](docs/getting-started/lemon-bot.md) for SSH/headless
-setup, access choices, and additional machines.
+Pick a starter task, or ask it for this computer's hostname and OS version. The
+approval card shows the exact command: choose **Allow once**, **Allow Terminal
+for this chat**, or **Deny**. Long commands must be expanded in full before
+either Allow choice is enabled. Add more computers from **Connect a computer**
+(one generated join command) or, in the Mac app, **Machines → Add a machine**
+over SSH. Follow [Lemon Bot in 3 minutes](docs/getting-started/lemon-bot.md) for
+headless setup, access choices, and additional machines.
+
+Services keep running after you close the terminal. On macOS they start at
+login, not boot; on Linux they survive logout and reboot only with systemd
+linger enabled. Check them with `lemon service status`.
 
 **Mac app status:** build the app
 [from source](products/lemon_bot/apple/README.md#generate-build-and-launch)
-today. A signed and notarized DMG is pending signing credentials and is not yet
-published.
+today. In **This Mac**, **Connect** signs you in with the local key, with no form
+or setup code. A signed and notarized DMG is pending signing credentials and is
+not yet published.
+
+### Update or uninstall
+
+```bash
+lemon update check                        # see what is available
+lemon update plan                         # print the plan and its digest
+lemon update apply --confirm <digest>     # apply exactly that plan; rollback with lemon update rollback
+lemon uninstall                           # preview removal (add --purge to delete data too)
+lemon uninstall --confirm <digest>        # remove exactly what the preview listed
+```
+
+Existing installs: read the
+[November 2026 upgrade notes](docs/release/upgrade-2026-11.md) first. Listeners
+now bind loopback by default, so LAN clients that relied on wildcard binds must
+opt in again. See [updates](docs/user-guide/updates.md) and
+[install](docs/install.md) for details.
 
 ## What you can do with it
 
@@ -187,10 +217,11 @@ which was built for exactly that:
 design and its costs.
 
 **It treats you as the operator.** Destructive actions show a preview before
-confirmation. Credentials live in an encrypted store backed by Keychain. Tool
-output and skills are handled as data, never as instructions. `lemon doctor`
-diagnoses problems, and you also get verified backups and update plans with
-rollback. Read the [safety model](docs/security/safety.md).
+confirmation. Credentials live in an encrypted store whose master key is held
+in the macOS Keychain (on Linux, an environment variable or a private key
+file). Tool output and skills are handled as data, never as instructions.
+`lemon doctor` diagnoses problems, and you also get verified backups and update
+plans with rollback. Read the [safety model](docs/security/safety.md).
 
 **It's yours.** MIT licensed and self-hosted. Lemon is local-first but not
 local-only: your configured providers receive the data their requests need.
@@ -199,10 +230,15 @@ local-only: your configured providers receive the data their requests need.
 
 Lemon binds its listeners to `127.0.0.1` by default: the controller on `4040`,
 the node-only gateway on `4044`, the web UI on `4080`, the optional simulation
-UI on `4090`, and Lemon Bot on `4100`. To connect from another machine, keep
-them on loopback and use an SSH forward, or put the required authenticated
-endpoint behind TLS or a verified encrypted overlay. Remote workers need the
-node-only `4044` gateway, not the operator listener. Follow the
+UI on `4090`, Lemon Bot on `4100`, and the optional A2A endpoint on `9901`.
+Erlang distribution and epmd also stay on loopback. Lemon Bot's local owner
+sign-in requires proof from the same OS user on the same machine; network or
+tailnet reachability alone never grants sign-in.
+
+To connect from another machine, keep listeners on loopback and use an SSH
+forward, or put the required authenticated endpoint behind TLS or a verified
+encrypted overlay. Remote workers need the node-only `4044` gateway, never the
+operator listener on `4040`. Follow the
 [listener security guidance](docs/security/threat-model.md#listener-exposure)
 before enabling remote access.
 
@@ -220,6 +256,10 @@ lemon omp start "…"   # delegate a task to omp
 lemon mcp list        # inspect MCP servers
 lemon backup create   # create a verified backup
 lemon status          # runtime status; also: lemon stop, lemon restart
+lemon service status  # background services for controller, Bot backend, workers
+lemon update check    # check for a release; then plan / apply / rollback
+lemon uninstall       # preview removal, then --confirm the digest
+lemon-bot up          # resume Lemon Bot setup; lemon-bot open reopens it signed in
 ```
 
 Full reference: [CLI guide](docs/user-guide/cli.md), [TUI](clients/tui/README.md),
@@ -262,8 +302,10 @@ mix compile
 ./bin/lemon
 ```
 
-Run `scripts/test fast` and `scripts/test quality` from the root. See
-[testing](docs/testing.md), [architecture](docs/architecture/overview.md),
+Run `scripts/test fast` and `scripts/test quality` from the root. To work on
+Lemon Bot (backend, web, SDK, and Apple apps), follow
+[running an integrated checkout](products/lemon_bot/README.md#running-an-integrated-checkout).
+See [testing](docs/testing.md), [architecture](docs/architecture/overview.md),
 [contributing](CONTRIBUTING.md), the [agent guide](AGENTS.md), and
 [security](SECURITY.md).
 
