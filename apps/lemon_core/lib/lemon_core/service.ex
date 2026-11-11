@@ -289,7 +289,7 @@ defmodule LemonCore.Service do
     directory =
       case manager do
         "launchd" -> Path.join(Role.home(opts), "Library/LaunchAgents")
-        "systemd" -> Path.join(Role.home(opts), ".config/systemd/user")
+        "systemd" -> Role.systemd_unit_dir(opts)
         "none" -> Role.run_dir(opts)
       end
 

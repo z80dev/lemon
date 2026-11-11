@@ -12,6 +12,19 @@ defmodule LemonCore.Service.Role do
   def home(opts), do: Keyword.get(opts, :home, System.user_home!())
   def run_dir(opts), do: Path.join([home(opts), ".lemon", "run", "service"])
 
+  def systemd_unit_dir(opts) do
+    default = Path.join([home(opts), ".config", "systemd", "user"])
+    env = Keyword.get(opts, :env, System.get_env())
+
+    case Map.get(env, "XDG_CONFIG_HOME") do
+      path when is_binary(path) ->
+        if Path.type(path) == :absolute, do: Path.join(path, "systemd/user"), else: default
+
+      _ ->
+        default
+    end
+  end
+
   def launcher(opts) do
     stable = Path.join([home(opts), ".lemon", "bin", "lemon"])
     env = Keyword.get_lazy(opts, :env, &System.get_env/0)
@@ -36,7 +49,7 @@ defmodule LemonCore.Service.Role do
     value = Keyword.get(opts, :port) || Map.get(env, key) || saved_port(key, opts)
 
     case Integer.parse(to_string(value || fallback)) do
-      {port, ""} when port in 1..65535 -> port
+      {port, ""} when port in 1..65_535 -> port
       _ -> fallback
     end
   end
@@ -94,7 +107,7 @@ defmodule LemonCore.Service.Role do
     do: Path.join([home(opts), "Library", "LaunchAgents", label <> ".plist"])
 
   def unit_path(label, "systemd", opts),
-    do: Path.join([home(opts), ".config", "systemd", "user", label])
+    do: Path.join(systemd_unit_dir(opts), label)
 
   def unit_path(label, "none", opts), do: Path.join(run_dir(opts), label <> ".json")
 
@@ -249,7 +262,7 @@ defmodule LemonCore.Service.Role do
 
     valid_ports =
       Enum.all?([:node_port, :gateway_port, :product_port, :backend_port], fn key ->
-        is_nil(opts[key]) or (is_integer(opts[key]) and opts[key] in 1..65535)
+        is_nil(opts[key]) or (is_integer(opts[key]) and opts[key] in 1..65_535)
       end)
 
     destination = opts[:ssh]

@@ -134,6 +134,8 @@ defmodule LemonComputerUse.ApprovalTest do
     for bad <- [
           "https://example.com/",
           "https://example.com:443",
+          "https://example.com:65536",
+          "http://[::1]:65536",
           "https://user@example.com",
           "https://example.com/path",
           "file:///etc/passwd",

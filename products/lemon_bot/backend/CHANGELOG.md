@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- External-trigger provenance remains untrusted across native continuations.
+  Concurrent remembered approvals recheck revocation, policy and pending state,
+  persist decisions before dispatch, and reconcile uncertain outcomes.
+- Private approval cards bind remembered chat access to the originating group,
+  not the owner's DM. Multiple capability approvals for one request share a
+  single durable continuation.
+
 ### Added
 
 - Backend-driven SSH attachment provides private asynchronous progress, durable
@@ -31,12 +40,15 @@
   through one-use, exact-loopback-bound tickets, failure-only throttling and a
   five-ticket cap. Private HTML handoff files last 60 seconds; headless/SSH links
   last five minutes and appear only on the controlling terminal, never argv or
-  stdout/stderr. The CLI verifies instance/version, waits for redemption and
-  cleans up on redemption, expiry or interruption; `--no-wait` delegates file
+  stdout/stderr. Before any ticket or handoff is created, the CLI proves the
+  loopback listener owns the private DATA_DIR master key with a fresh HMAC
+  challenge; tickets are bound to that verified instance. It waits for redemption
+  and cleans up on redemption, expiry or interruption; `--no-wait` delegates file
   cleanup to the backend. Existing `lemon-bot setup` remains available.
   Local-key/ticket sessions can add a first email/password or reauthenticate
-  locally for ten minutes; `GET /me/sign-in` reports available methods without
-  private session metadata.
+  locally for ten minutes; the final password write revalidates session authority,
+  local freshness and SSO policy after hashing. `GET /me/sign-in` reports available
+  methods without private session metadata.
 - Project controller node-session credentials onto machines and emit credential transitions, distinguishing reconnect-required expiry/revocation from ordinary outages.
 - Remember Terminal and File approvals for an owner chat, with live revocable allowances; workspace admins can additionally enable owner-confirmed bot-wide approval mode. Permission, policy, membership and placement changes invalidate remembered decisions; external triggers always ask.
 - Added credential-free enrollment reachability preview using the controller's actual advertised invite endpoint, before any invitation is issued.

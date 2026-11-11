@@ -46,6 +46,82 @@ not use approval prompts as a substitute for removing a tool from a restricted
 profile. A supported approval authorizes that invocation; it is not an
 exactly-once guarantee for external effects or a process-crash recovery policy.
 
+### Lemon Bot remembered approvals
+
+**Standard** access enables Terminal and Files but asks before commands. **Chat
+only** does not grant those capabilities. An access request changes what a Bot
+may use; approving it does not approve the command that follows.
+
+On an eligible approval card, **Allow once** approves that invocation.
+**Allow Terminal for this chat** (or the corresponding file-reading or
+file-change option) remembers a **tool group**, not the exact command shown:
+
+| Scope | Applies to | How to end it |
+| --- | --- | --- |
+| Per-chat | The owner's chat, Bot and current execution context only | Use **Stop allowing**, or change the applicable access/review policy |
+| Bot-wide | Eligible owner chats, routines and native follow-ups for that Bot | Return its approval review setting to per-chat/every-time, or revoke the allowance |
+
+Bot-wide approval requires an explicit preview/confirmation in Bot settings;
+an approval card cannot silently create it. It is broader than “this chat.”
+Allowance use is audited and rechecks current policy and placement bindings.
+Changed permissions, placement or governance can invalidate an allowance;
+it never creates access that the Bot, machine or owner lacks.
+
+Workspace governance sets `rememberedApprovals`:
+
+- `off`: no remembered approvals.
+- `chat` (default): eligible per-chat allowances only.
+- `chat_and_bot`: also permits explicitly confirmed Bot-wide allowances.
+
+Only native Terminal (`bash`, `bash_output`, `kill_process`), file changes
+(`write`, `edit`, `patch`, `ast_grep`, `checkpoint`) and file reading
+(`read`, `ls`, `find`, `grep`) groups are eligible, subject to effective policy.
+Required or personal ask-first rules can remove eligibility.
+
+Never eligible: product access/permission requests, external-message sends,
+purchases, connector changes, other tools outside those groups, or approvals
+marked as requiring a human. External-channel runs cannot use these allowances.
+Routines and native follow-ups cannot borrow per-chat allowances; only an
+eligible Bot-wide allowance can cover them. Remembering Terminal is powerful:
+it is not a sandbox or a guarantee about what a shell command will do.
+
+### Bot folder reads and the egress fence
+
+Each Bot has a destination-local folder, separate from its workspace metadata.
+With effective Files read access and an enabled folder-read exemption, native
+`read`, `ls` and `grep` may read that folder without individual review.
+`folderReadsNeedReview`, explicit Files review rules and a restrictive effective
+policy can disable the exemption.
+
+The runtime derives the canonical folder from the Bot profile; an arbitrary cwd
+does not qualify. Targets must stay inside it after symlink resolution; internal
+URLs and hard-linked `read` targets do not qualify. `grep` needs non-following
+ripgrep support. `find`, writes, shell commands and reads outside the folder are
+not exempt.
+
+Before an exempt read succeeds, Lemon durably fences that session:
+`webfetch` and `websearch` require approval for the rest of the session.
+The fence survives session restore and is inherited by task/subagent children.
+If it cannot be persisted, the read needs review instead. This is a targeted
+tool-level egress control, **not** an operating-system network sandbox or a
+promise that approved shell commands cannot send data.
+
+### macOS permissions
+
+On app-managed local workers, macOS privacy permissions (TCC) are attributed to
+the embedded **Lemon Bot Worker** helper. Open the local machine's **Permissions**
+pane to inspect grants, explicitly request Screen Recording or Accessibility,
+or open System Settings for Full Disk Access and Files & Folders. Status probes
+do not prompt. Desktop/Documents/Downloads may prompt on first access.
+
+Older unwrapped workers attribute grants to the runtime's `erlexec`, which can
+lose that identity on update; **Use Lemon Bot Worker** switches the managed
+worker to the helper. The helper is **not a sandbox**: every Bot and subprocess
+running through that worker can use its OS grants. Grant only what you intend,
+and revoke it in System Settings → Privacy & Security. Product access and human
+approvals still apply independently. Desktop-control tools may also need their
+own installed dependencies, such as Peekaboo.
+
 ## Durable Memory
 
 The run-history search index stores summaries rather than complete transcripts.
@@ -124,4 +200,4 @@ When adding or changing an agent capability:
 The September review covers dispatch and approval failure semantics; it is not
 an exhaustive security audit of every tool, skill source, or storage backend.
 
-*Last reviewed: 2026-09-07*
+*Last reviewed: 2026-11-11*

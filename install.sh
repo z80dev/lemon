@@ -443,8 +443,12 @@ try:
     os.remove(staging)
 except FileNotFoundError:
     pass
-os.symlink(target, staging)
-os.replace(staging, link)' "$1" "$2"
+try:
+    os.symlink(target, staging)
+    os.replace(staging, link)
+finally:
+    if os.path.lexists(staging):
+        os.remove(staging)' "$1" "$2"
 }
 
 validate_bot_archive() {
@@ -615,6 +619,35 @@ CLEANUP_TUI_TARBALL=""
 CLEANUP_PARTIAL=""
 CLEANUP_PREVIOUS=""
 CLEANUP_TARGET=""
+INSTALL_PHASE=install
+BOT_TRANSACTION=0
+RUNTIME_PARTIAL=""
+BACKEND_PARTIAL=""
+RUNTIME_TARGET=""
+BACKEND_TARGET=""
+RUNTIME_PREVIOUS=""
+BACKEND_PREVIOUS=""
+RUNTIME_POINTER_CHANGED=0
+BACKEND_POINTER_CHANGED=0
+
+rollback_profile() {
+  # Restore replaced trees as well as pointers: --force can replace the tree
+  # to which the original current pointer already refers.
+  if [ -n "$5" ] && [ -d "$5" ]; then
+    rm -rf "$4"
+    mv "$5" "$4"
+  elif [ -n "$4" ] && [ -z "$5" ]; then
+    rm -rf "$4"
+  fi
+  if [ "$6" != "1" ]; then
+    return
+  fi
+  if [ "$2" = "1" ]; then
+    atomic_symlink "$3" "$1"
+  elif [ -L "$1" ]; then
+    rm -f "$1"
+  fi
+}
 
 cleanup() {
   if [ -n "${manifest_file:-}" ]; then
@@ -622,6 +655,18 @@ cleanup() {
   fi
   if [ "$INSTALL_COMMITTED" = "1" ]; then
     return 0
+  fi
+  if [ "$BOT_TRANSACTION" = "1" ]; then
+    rollback_profile "$HOME/.lemon/versions/current" "$RUNTIME_HAD_CURRENT" \
+      "$RUNTIME_OLD_CURRENT" "$RUNTIME_TARGET" "$RUNTIME_PREVIOUS" "$RUNTIME_POINTER_CHANGED"
+    rollback_profile "$HOME/.lemon/lemon_bot/current" "$BACKEND_HAD_CURRENT" \
+      "$BACKEND_OLD_CURRENT" "$BACKEND_TARGET" "$BACKEND_PREVIOUS" "$BACKEND_POINTER_CHANGED"
+    if [ -n "$RUNTIME_PARTIAL" ]; then
+      rm -rf "$RUNTIME_PARTIAL"
+    fi
+    if [ -n "$BACKEND_PARTIAL" ]; then
+      rm -rf "$BACKEND_PARTIAL"
+    fi
   fi
 
   if [ -n "$CLEANUP_TARBALL" ]; then
@@ -636,7 +681,7 @@ cleanup() {
     rm -rf "$CLEANUP_PARTIAL"
   fi
 
-  if [ -n "$CLEANUP_PREVIOUS" ] && [ -d "$CLEANUP_PREVIOUS" ]; then
+  if [ "$BOT_TRANSACTION" != "1" ] && [ -n "$CLEANUP_PREVIOUS" ] && [ -d "$CLEANUP_PREVIOUS" ]; then
     if [ -n "$CLEANUP_TARGET" ] && [ ! -d "$CLEANUP_TARGET" ]; then
       mv "$CLEANUP_PREVIOUS" "$CLEANUP_TARGET" || true
     else
@@ -653,6 +698,13 @@ trap 'cleanup; exit 143' TERM
 
 ensure_links() {
   # ensure_links <version>
+  if [ "$BOT_TRANSACTION" = "1" ]; then
+    if [ "$PROFILE" = "lemon_bot" ]; then
+      BACKEND_POINTER_CHANGED=1
+    else
+      RUNTIME_POINTER_CHANGED=1
+    fi
+  fi
   atomic_symlink "$1" "$CURRENT_LINK"
 
   if [ ! -L "$BIN_DIR/$LAUNCHER" ] || [ "$(readlink "$BIN_DIR/$LAUNCHER")" != "$LAUNCHER_TARGET" ]; then
@@ -715,6 +767,7 @@ verify_boot() (
   if [ "$PROFILE" = "lemon_bot" ]; then
     return
   fi
+  verify_launcher="${1:-$BIN_DIR/lemon}"
   control_port="$(free_port)"
   web_port="$(free_port)"
   sim_port="$(free_port)"
@@ -728,7 +781,7 @@ verify_boot() (
   export LEMON_AGENT_DIR="$verify_home/.lemon/agent" LEMON_DOTENV_DIR="$verify_home"
   export RELEASE_TMP="$verify_home/runtime" RELEASE_NODE="$verify_node"
   export LEMON_CONTROL_PLANE_PORT="$control_port"
-  trap '"$BIN_DIR/lemon" stop >/dev/null 2>&1 || true; rm -rf "$verify_home"' EXIT
+  trap '"$verify_launcher" stop >/dev/null 2>&1 || true; rm -rf "$verify_home"' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
   cd "$verify_home"
@@ -741,7 +794,7 @@ verify_boot() (
     LEMON_GATEWAY_HEALTH_PORT="$gateway_health_port" \
     LEMON_ROUTER_HEALTH_PORT="$router_health_port" \
     RELEASE_NODE="$verify_node" \
-    "$BIN_DIR/lemon" daemon; then
+    "$verify_launcher" daemon; then
     die "the installed runtime failed to start. Files are in $VERSIONS_DIR."
   fi
 
@@ -900,12 +953,20 @@ if [ "$BOT_PRESET" = "1" ] && [ "$PROFILE" != "lemon_bot" ]; then
   fi
 fi
 if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ] && [ "$REUSE_PROFILE" = "1" ]; then
-  if [ "$REQUIRE_BOT" = "1" ] && ! verify_bot_runtime "$TARGET_DIR"; then
-    die "the installed Lemon $VERSION at $TARGET_DIR does not report the required bot worker APIs.
+  if [ "$INSTALL_PHASE" != "promote" ]; then
+    if [ "$REQUIRE_BOT" = "1" ] && ! verify_bot_runtime "$TARGET_DIR"; then
+      die "the installed Lemon $VERSION at $TARGET_DIR does not report the required bot worker APIs.
   Re-run with --force to reinstall it from the release."
+    fi
+    if [ "$PROFILE" = "lemon_bot" ]; then
+      verify_bot "$TARGET_DIR"
+    fi
   fi
-  if [ "$PROFILE" = "lemon_bot" ]; then
-    verify_bot "$TARGET_DIR"
+  if [ "$INSTALL_PHASE" = "stage" ]; then
+    if [ "$VERIFY" = "1" ]; then
+      verify_boot "$TARGET_DIR/bin/lemon"
+    fi
+    return
   fi
   if [ "$PROFILE" = "lemon_bot" ]; then
     ensure_links "versions/$INSTALL_KEY"
@@ -918,7 +979,7 @@ if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ] && [ "$REUSE_PROFILE" = "1" ]; th
     info "$INSTALL_LABEL is already installed. Re-run with --force to reinstall it."
   fi
 
-  if [ "$VERIFY" = "1" ]; then
+  if [ "$VERIFY" = "1" ] && [ "$INSTALL_PHASE" != "promote" ]; then
     verify_boot
   fi
 
@@ -926,6 +987,7 @@ if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ] && [ "$REUSE_PROFILE" = "1" ]; th
   return
 fi
 
+if [ "$INSTALL_PHASE" != "promote" ]; then
 tarball="$TMP_DIR/$ARTIFACT_FILE"
 CLEANUP_TARBALL="$tarball"
 rm -f "$tarball"
@@ -1021,14 +1083,41 @@ if [ "$REQUIRE_BOT" = "1" ] && ! verify_bot_runtime "$partial_dir"; then
   die "Lemon $VERSION does not report the required bot worker APIs; refusing to install it.
   The previously installed runtime, if any, was left untouched."
 fi
+if [ "$INSTALL_PHASE" = "stage" ] && [ "$VERIFY" = "1" ]; then
+  verify_boot "$partial_dir/bin/lemon"
+fi
 
 printf '%s\n' "$PROFILE" >"$partial_dir/.installer-profile"
+fi
+
+if [ "$INSTALL_PHASE" = "stage" ]; then
+  if [ "$PROFILE" = "lemon_bot" ]; then
+    BACKEND_PARTIAL="$partial_dir"
+  else
+    RUNTIME_PARTIAL="$partial_dir"
+  fi
+  return
+fi
+partial_dir="$TARGET_DIR.partial"
 
 # A directory swap is two renames, and POSIX offers no way to make that one
 # step. The old copy is therefore moved aside rather than deleted, restored if
 # the second rename fails, and only discarded once versions/current has been
 # flipped onto the new one.
 previous_dir=""
+if [ "$BOT_TRANSACTION" = "1" ]; then
+  if [ "$PROFILE" = "lemon_bot" ]; then
+    BACKEND_TARGET="$TARGET_DIR"
+    if [ -d "$TARGET_DIR" ]; then
+      BACKEND_PREVIOUS="$TARGET_DIR.previous.$$"
+    fi
+  else
+    RUNTIME_TARGET="$TARGET_DIR"
+    if [ -d "$TARGET_DIR" ]; then
+      RUNTIME_PREVIOUS="$TARGET_DIR.previous.$$"
+    fi
+  fi
+fi
 
 if [ -d "$TARGET_DIR" ]; then
   previous_dir="$TARGET_DIR.previous.$$"
@@ -1061,13 +1150,14 @@ else
   ensure_links "$INSTALL_KEY"
 fi
 
-# Past this point the install is live: versions/current resolves to the new
-# tree, so the leftovers below are garbage rather than a rollback path.
-INSTALL_COMMITTED=1
-
-if [ -n "$previous_dir" ]; then
-  rm -rf "$previous_dir"
-  CLEANUP_PREVIOUS=""
+# The combined preset commits only after both profiles have been promoted.
+# Until then, retain both replaced trees and both original pointer targets.
+if [ "$BOT_TRANSACTION" != "1" ]; then
+  INSTALL_COMMITTED=1
+  if [ -n "$previous_dir" ]; then
+    rm -rf "$previous_dir"
+    CLEANUP_PREVIOUS=""
+  fi
 fi
 
 info "Installed $INSTALL_LABEL"
@@ -1077,7 +1167,7 @@ elif ! "$BIN_DIR/lemon" version >/dev/null 2>&1; then
   warn "'$BIN_DIR/lemon version' did not succeed. Run it directly to see why."
 fi
 
-if [ "$VERIFY" = "1" ]; then
+if [ "$VERIFY" = "1" ] && [ "$INSTALL_PHASE" != "promote" ]; then
   verify_boot
 fi
 
@@ -1099,15 +1189,45 @@ if [ "$RESOLVE_VERSION" = "1" ]; then
   exit 0
 fi
 if [ "$BOT_PRESET" = "1" ]; then
-  # Resolve both artifacts from this one manifest before changing either pointer.
+  # Stage and verify both artifacts before changing either live tree or pointer.
   select_artifact "$manifest_file" lemon_bot >/dev/null || exit 1
-fi
-install_profile
-if [ "$BOT_PRESET" = "1" ]; then
+  RUNTIME_HAD_CURRENT=0
+  BACKEND_HAD_CURRENT=0
+  RUNTIME_OLD_CURRENT=""
+  BACKEND_OLD_CURRENT=""
+  if [ -L "$HOME/.lemon/versions/current" ]; then
+    RUNTIME_OLD_CURRENT="$(readlink "$HOME/.lemon/versions/current")"
+    RUNTIME_HAD_CURRENT=1
+  fi
+  if [ -L "$HOME/.lemon/lemon_bot/current" ]; then
+    BACKEND_OLD_CURRENT="$(readlink "$HOME/.lemon/lemon_bot/current")"
+    BACKEND_HAD_CURRENT=1
+  fi
+  BOT_TRANSACTION=1
+  INSTALL_PHASE=stage
+  install_profile
   PROFILE=lemon_bot
   REQUIRE_BOT=0
-  INSTALL_COMMITTED=0
   configure_layout
+  install_profile
+
+  INSTALL_PHASE=promote
+  PROFILE=lemon_runtime_full
+  REQUIRE_BOT=1
+  configure_layout
+  install_profile
+  PROFILE=lemon_bot
+  REQUIRE_BOT=0
+  configure_layout
+  install_profile
+  INSTALL_COMMITTED=1
+  if [ -n "$RUNTIME_PREVIOUS" ]; then
+    rm -rf "$RUNTIME_PREVIOUS"
+  fi
+  if [ -n "$BACKEND_PREVIOUS" ]; then
+    rm -rf "$BACKEND_PREVIOUS"
+  fi
+else
   install_profile
 fi
 rm -f "$manifest_file"

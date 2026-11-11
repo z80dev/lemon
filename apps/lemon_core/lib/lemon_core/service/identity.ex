@@ -77,6 +77,17 @@ defmodule LemonCore.Service.Identity do
   end
 
   def listeners(port, opts) do
+    if Keyword.get(opts, :os, :os.type()) in [:linux, {:unix, :linux}] do
+      case linux_listeners(port, opts) do
+        :unavailable -> lsof_listeners(port, opts)
+        listeners -> listeners
+      end
+    else
+      lsof_listeners(port, opts)
+    end
+  end
+
+  defp lsof_listeners(port, opts) do
     case Command.run("lsof", ["-nP", "-iTCP:#{port}", "-sTCP:LISTEN", "-Fp"], opts) do
       {output, status} when status in [0, 1] ->
         Regex.scan(~r/^p(\d+)$/m, output)
@@ -85,6 +96,97 @@ defmodule LemonCore.Service.Identity do
 
       _ ->
         :unknown
+    end
+  end
+
+  defp linux_listeners(port, opts) do
+    proc_root = Keyword.get(opts, :proc_root, "/proc")
+
+    with {:ok, inodes} <- listener_inodes(proc_root, port),
+         {:ok, pids} <- listener_pids(proc_root, inodes) do
+      pids
+    else
+      {:error, :socket_owner_unverified} -> :unknown
+      _ -> :unavailable
+    end
+  end
+
+  defp listener_inodes(proc_root, port) do
+    hex_port =
+      port
+      |> Integer.to_string(16)
+      |> String.upcase()
+      |> String.pad_leading(4, "0")
+
+    with {:ok, ipv4} <- File.read(Path.join([proc_root, "net", "tcp"])),
+         {:ok, ipv6} <- optional_file(Path.join([proc_root, "net", "tcp6"])) do
+      inodes =
+        (String.split(ipv4, "\n") ++ String.split(ipv6, "\n"))
+        |> Enum.reduce(MapSet.new(), fn line, acc ->
+          case String.split(line) do
+            [_, local, _, "0A", _, _, _, _, _, inode | _] ->
+              if String.ends_with?(local, ":" <> hex_port),
+                do: MapSet.put(acc, inode),
+                else: acc
+
+            _ ->
+              acc
+          end
+        end)
+
+      {:ok, inodes}
+    end
+  end
+
+  defp optional_file(path) do
+    case File.read(path) do
+      {:ok, body} -> {:ok, body}
+      {:error, :enoent} -> {:ok, ""}
+      error -> error
+    end
+  end
+
+  defp listener_pids(proc_root, inodes) do
+    if MapSet.size(inodes) == 0 do
+      {:ok, []}
+    else
+      with {:ok, entries} <- File.ls(proc_root) do
+        {found, pids} =
+          Enum.reduce(entries, {MapSet.new(), MapSet.new()}, fn entry, acc ->
+            case Integer.parse(entry) do
+              {pid, ""} when pid > 0 -> pid_listeners(proc_root, entry, pid, inodes, acc)
+              _ -> acc
+            end
+          end)
+
+        if MapSet.equal?(found, inodes),
+          do: {:ok, pids |> MapSet.to_list() |> Enum.sort()},
+          else: {:error, :socket_owner_unverified}
+      end
+    end
+  end
+
+  defp pid_listeners(proc_root, entry, pid, inodes, {found, pids}) do
+    directory = Path.join([proc_root, entry, "fd"])
+
+    case File.ls(directory) do
+      {:ok, descriptors} ->
+        Enum.reduce(descriptors, {found, pids}, fn descriptor, {seen, owners} = acc ->
+          case File.read_link(Path.join(directory, descriptor)) do
+            {:ok, "socket:[" <> rest} ->
+              inode = String.trim_trailing(rest, "]")
+
+              if MapSet.member?(inodes, inode),
+                do: {MapSet.put(seen, inode), MapSet.put(owners, pid)},
+                else: acc
+
+            _ ->
+              acc
+          end
+        end)
+
+      _ ->
+        {found, pids}
     end
   end
 

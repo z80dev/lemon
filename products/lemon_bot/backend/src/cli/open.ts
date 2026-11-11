@@ -1,9 +1,11 @@
+import { timingSafeEqual } from 'node:crypto';
 import { closeSync, openSync, unlinkSync, writeSync } from 'node:fs';
 import { hostname, userInfo } from 'node:os';
+import { opaqueToken } from '../core/auth';
 import { localSettings, loopbackOrigin } from '../core/config';
 import { createMutationDigest } from '../core/mutations';
 import { productVersion } from '../core/version';
-import { issueLocalSignInTicket, localSignInTicketState, revokeLocalSignInTicket, sweepLocalSignIn, type LocalTicketDeps } from '../core/local-signin';
+import { issueLocalSignInTicket, localBackendChallengeProof, localSignInTicketState, revokeLocalSignInTicket, sweepLocalSignIn, type LocalTicketDeps } from '../core/local-signin';
 import { openPrivateStore, readInstanceId, type PrivateLocalStore } from './local-store';
 import { browserOpener, detectHeadless, headlessInstructions, openPath, writeHandoffFile } from './handoff';
 
@@ -92,24 +94,34 @@ export async function deliverLocalSignIn(tickets: LocalTicketDeps, origin: strin
   }
 }
 
-export async function probeLocalBackend(origin: string): Promise<unknown> {
-  const response = await fetch(`${origin}/v1/setup`, { redirect: 'manual', signal: AbortSignal.timeout(5000) });
+export async function probeLocalBackend(origin: string, nonce: string): Promise<unknown> {
+  const response = await fetch(`${origin}/v1/auth/local/challenge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nonce }),
+    redirect: 'manual',
+    signal: AbortSignal.timeout(5000),
+  });
   if (!response.ok || !response.body) throw new Error('Unavailable');
   const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
   try {
     while (true) {
       const { done, value } = await reader.read(); if (done) break;
-      size += value.byteLength; if (size > 16 * 1024) throw new Error('Oversized descriptor'); chunks.push(value);
+      size += value.byteLength; if (size > 16 * 1024) throw new Error('Oversized challenge'); chunks.push(value);
     }
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } finally { await reader.cancel(); }
 }
 export interface OpenCliDependencies extends SignInDeliveryDependencies {
   readLocal(dataDir: string): Promise<{ instanceId: string }>;
-  probe(origin: string): Promise<unknown>;
+  probe(origin: string, nonce: string): Promise<unknown>;
   openPrivateStore: typeof openPrivateStore;
 }
 const defaults: OpenCliDependencies = { ...signInDeliveryDefaults, async readLocal(dataDir) { return readInstanceId(dataDir); }, probe: probeLocalBackend, openPrivateStore };
+function proofMatches(actual: unknown, expected: string): boolean {
+  if (typeof actual !== 'string' || !/^[0-9a-f]{64}$/.test(actual)) return false;
+  return timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex'));
+}
 export async function runOpenCli(args: string[], deps: OpenCliDependencies = defaults): Promise<number> {
   if (args.some(arg => arg !== '--headless' && arg !== '--no-wait') || new Set(args).size !== args.length) { deps.stderr('Unsupported open argument. Use lemon-bot --help.\n'); return 2; }
   let privateStore: PrivateLocalStore | undefined;
@@ -120,17 +132,24 @@ export async function runOpenCli(args: string[], deps: OpenCliDependencies = def
     let local: { instanceId: string };
     try { local = await deps.readLocal(settings.dataDir); }
     catch { deps.stderr("Lemon Bot hasn't started on this computer yet. Start it with: lemon-bot\n"); return 1; }
-    let descriptor: unknown;
-    try { descriptor = await deps.probe(origin); }
+    privateStore = await deps.openPrivateStore(settings.dataDir, local.instanceId, deps.env);
+    const digest = createMutationDigest(privateStore.key);
+    const nonce = opaqueToken();
+    let challenge: unknown;
+    try { challenge = await deps.probe(origin, nonce); }
     catch { deps.stderr(`Lemon Bot isn't running at ${origin}.\n`); return 1; }
-    const setup = descriptor as { product?: unknown; instanceId?: unknown; version?: unknown } | null;
-    if (!setup || setup.product !== 'lemon_bot' || setup.instanceId !== local.instanceId) { deps.stderr(`A different Lemon Bot is answering at ${origin}.\n`); return 1; }
-    if (setup.version !== productVersion) {
-      const version = typeof setup.version === 'string' && /^[0-9A-Za-z.+_-]{1,64}$/.test(setup.version) ? setup.version : 'unknown';
+    const answer = challenge as { product?: unknown; instanceId?: unknown; version?: unknown; proof?: unknown } | null;
+    const identity = answer && answer.product === 'lemon_bot' && typeof answer.instanceId === 'string' && typeof answer.version === 'string'
+      ? { product: 'lemon_bot' as const, instanceId: answer.instanceId, version: answer.version }
+      : null;
+    if (!identity || identity.instanceId !== local.instanceId || !proofMatches(answer?.proof, localBackendChallengeProof(digest, nonce, identity))) {
+      deps.stderr(`A different Lemon Bot is answering at ${origin}.\n`); return 1;
+    }
+    if (identity.version !== productVersion) {
+      const version = /^[0-9A-Za-z.+_-]{1,64}$/.test(identity.version) ? identity.version : 'unknown';
       deps.stderr(`Lemon Bot ${version} is running; restart it to use lemon-bot open (this is ${productVersion}).\n`); return 1;
     }
-    privateStore = await deps.openPrivateStore(settings.dataDir, local.instanceId, deps.env);
-    return await deliverLocalSignIn({ store: privateStore.store, digest: createMutationDigest(privateStore.key), now: deps.now, dataDir: settings.dataDir }, origin, { headless: args.includes('--headless'), noWait: args.includes('--no-wait') }, deps);
+    return await deliverLocalSignIn({ store: privateStore.store, digest, now: deps.now, dataDir: settings.dataDir, instanceId: local.instanceId }, origin, { headless: args.includes('--headless'), noWait: args.includes('--no-wait') }, deps);
   } catch { deps.stderr('Local sign-in unavailable. Check the local instance configuration and private storage.\n'); return 1; }
   finally { try { privateStore?.store.close(); } catch { /* No private storage errors in logs. */ } }
 }

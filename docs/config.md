@@ -66,6 +66,47 @@ Launchers default epmd and Erlang distribution to loopback. Explicit long-name
 `ERL_EPMD_ADDRESS` can be set explicitly. Run `lemon doctor` to inspect listener
 binds. A pre-upgrade epmd may still listen on all interfaces: with Lemon stopped,
 run `epmd -kill` or restart the computer.
+The dedicated source control-plane and gateway launchers use the same defaults.
+Source launchers generate or reuse `~/.lemon/cookie` (mode `0600`) unless a cookie
+is explicitly supplied through `--cookie`, `LEMON_GATEWAY_NODE_COOKIE`, or
+`LEMON_GATEWAY_COOKIE`. Both primary launchers load the saved
+`LEMON_CONTROL_PLANE_NODE_PORT` from `ports.env`, including `0` (disabled);
+an explicit environment value takes precedence.
+
+These listener settings are environment/application configuration, not new
+`config.toml` tables. The [generated environment registry](config-registry.md)
+lists declared types, defaults, aliases and owning applications. Regenerate it
+from a source checkout with
+`mix run --no-start scripts/generate_config_registry.exs`; this does not start
+applications or resolve credentials.
+
+### Worker and invitation environment
+
+Worker CLI inputs are destination-local and do not belong in `config.toml`:
+
+| Variable | Purpose |
+| --- | --- |
+| `LEMON_NODE_TRUST_LOOPBACK_LISTENER` | Default unset: require a loopback controller/tunnel listener owned by this user before sending credentials. Set exactly `1` only to explicitly trust a listener under another UID. |
+| `LEMON_NODE_ALLOW_INSECURE_CONTROLLER` | Explicit override for non-loopback `ws://`; use only with a verified encrypted/authenticated overlay or development. Prefer `wss://`. |
+| `LEMON_NODE_CAPABILITIES` | Destination-local tool ceiling: `all` or comma-separated tool names; `--capabilities` takes precedence. |
+| `LEMON_NODE_LAUNCH_CWD` | Launch directory used when `node join --cwd` is absent; otherwise falls back to the process directory. |
+| `LEMON_NODE_OPERATOR_TOKEN` | Pairing authority for operator-authorized enrollment; never distribute it to Bot/browser clients. |
+| `LEMON_NODE_TOKEN` | Explicit existing node session token; normally let the worker use its private stored credential instead. |
+| `LEMON_GATEWAY_HEALTH_PORT`, `LEMON_ROUTER_HEALTH_PORT` | Managed worker/enrollment processes set both to `0` to avoid competing with controller health listeners. |
+
+`node join` isolates DETS state under
+`~/.lemon/nodes/state/<sha256-of-trimmed-name>/`; configuration, skills, sessions
+and SQLite credentials remain shared. `LEMON_AGENT_DIR` and `LEMON_STORE_PATH`
+are not worker-isolation switches. See [worker status and recovery](user-guide/cli.md#inspect-a-named-worker).
+
+On the **controller**, `LEMON_CONTROL_PLANE_PUBLIC_WS_URL` selects the reachable
+secure WebSocket URL embedded in invitations (`ws://` is allowed only on
+loopback). Route workers to the node-only gateway, not an exposed operator API.
+`LEMON_NODE_SOURCE_CHECKOUT` selects an absolute destination-local checkout for
+generated join recipes. `LEMON_NODE_INSTALL_VERSION` and
+`LEMON_NODE_INSTALL_BASE_URL` select an exact supported artifact version and
+HTTPS installation base; runtime feature checks still apply. These variables
+configure invitation generation, not destination provider credentials.
 
 
 ## Example
@@ -576,9 +617,10 @@ Each record is keyed by a hash of the durable node ID and includes the exact
 controller URL, so reuse fails closed for a different controller. The token
 store requires that exact URL even for direct durable-ID lookup and returns no
 recovery material for a missing or mismatched controller. Later starts
-omit `--pair`. Re-run with `--pair` after session expiry to keep the same
-identity and controller-side name while rotating the session and revoking older
-tokens and live sockets. Concurrent challenge exchange can mint only one
+omit `--pair`. Valid node activity extends the seven-day session window;
+an inactive worker may still expire. Recovery rotates the session and revokes
+older tokens and live sockets while retaining the durable identity.
+Concurrent challenge exchange can mint only one
 credential, and result settlement is accepted only from the connection and
 session generation that received the invocation. Controller renames do not
 change the local key. Compatible legacy records

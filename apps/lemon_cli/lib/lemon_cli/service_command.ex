@@ -70,10 +70,11 @@ defmodule LemonCli.ServiceCommand do
     else
       case parse_args(args) do
         {:ok, subcommand, roles, opts} ->
-          with {:ok, resolved_opts} <- resolve_options(subcommand, roles, opts, overrides) do
-            ensure_started()
-            execute(subcommand, roles, resolved_opts)
-          else
+          case resolve_options(subcommand, roles, opts, overrides) do
+            {:ok, resolved_opts} ->
+              {:ok, _apps} = ensure_started()
+              execute(subcommand, roles, resolved_opts)
+
             {:error, message} ->
               usage_error(message)
           end
@@ -346,8 +347,6 @@ defmodule LemonCli.ServiceCommand do
   end
 
   defp format_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp format_reason(reason) when is_binary(reason), do: reason
-  defp format_reason(_), do: "service_failed"
 
   defp usage_error(message) do
     IO.puts(:stderr, "Error: #{message}")

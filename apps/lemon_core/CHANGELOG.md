@@ -125,6 +125,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- Linux user services honor an absolute `XDG_CONFIG_HOME` for systemd unit
+  installation and discovery, quote log destinations containing spaces or
+  specifiers, and inspect `/proc` listeners without requiring `lsof`. Socket
+  owners that cannot be proven still fail closed.
+
 - Service install preserves recorded PATH and locale across callers instead of
   restarting running controller/backend units for ambient shell differences.
 - Worker enrollment uses the unit's isolated health-port environment and

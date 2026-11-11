@@ -196,6 +196,8 @@ explicit stop, rather than starting another daemon. Stop verifies the process
 start identity in the pid record before sending a signal, so stale/reused PIDs
 cannot terminate an unrelated process. Select the same
 `LEMON_CONTROL_PLANE_PORT` for start, stop, restart, and status.
+Supervised controller status displays its role log as
+`~/.lemon/logs/controller.log` on both macOS and Linux.
 
 ## Safe managed-release updates
 

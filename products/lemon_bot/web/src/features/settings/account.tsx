@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { LemonBotError, nonce, type User, type Preferences, type Confirmation, type Device, type AuthSession, type ReauthResult, type SignInMethods } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
 import { useQuery, Field, ErrorNotice, Loading, ConfirmDialog, formatTime } from '../../ui';
@@ -79,12 +79,13 @@ export function AccountSettings() {
   </div>;
 }
 
-function AccountEditor({ user, onSave, onUpload, disabled }: { user: User; onSave: (body: { displayName: string; email: string; avatarAttachmentId: string | null; preferences: Preferences }) => Promise<boolean>; onUpload: (file: File) => Promise<string | undefined>; disabled: boolean }) {
+export function AccountEditor({ user, onSave, onUpload, disabled }: { user: User; onSave: (body: { displayName: string; email: string; avatarAttachmentId: string | null; preferences: Preferences }) => Promise<boolean>; onUpload: (file: File) => Promise<string | undefined>; disabled: boolean }) {
   const [displayName, setDisplayName] = useState(user.displayName);
   const [email, setEmail] = useState(user.email);
   const [avatar, setAvatar] = useState(user.avatarAttachmentId);
   const [preferences, setPreferences] = useState(user.preferences);
   const [saved, setSaved] = useState(false);
+  useEffect(() => { setEmail(user.email); }, [user.email]);
   return <form className="panel stack" onChange={() => setSaved(false)} onSubmit={e => { e.preventDefault(); void onSave({ displayName, email, avatarAttachmentId: avatar, preferences }).then(ok => setSaved(ok)); }}><h2>Profile & preferences</h2><AccountAvatar attachmentId={avatar} /><fieldset disabled={disabled} className="stack"><div className="grid"><Field label="Display name"><input required maxLength={120} value={displayName} onChange={e => setDisplayName(e.target.value)} /></Field><Field label="Email"><input type="email" required value={email} onChange={e => setEmail(e.target.value)} /></Field></div><Field label="Avatar image" hint="PNG, JPEG or WebP. Uploaded image is associated only when you save."><input type="file" accept="image/png,image/jpeg,image/webp" onChange={e => { const file = e.target.files?.[0]; if (file) void onUpload(file).then(id => { if (id) setAvatar(id); }); }} /></Field>{avatar && <div className="row"><span className="small">Avatar attachment {avatar}</span><button type="button" onClick={() => setAvatar(null)}>Remove avatar</button></div>}<div className="grid"><Field label="Appearance"><select value={preferences.appearance} onChange={e => setPreferences({ ...preferences, appearance: e.target.value as Preferences['appearance'] })}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></Field><Field label="Language (BCP-47)" hint="Blank uses automatic language selection."><input value={preferences.language ?? ''} onChange={e => setPreferences({ ...preferences, language: e.target.value || null })} /></Field><Field label="Timezone (IANA)"><input required value={preferences.timezone} onChange={e => setPreferences({ ...preferences, timezone: e.target.value })} /></Field></div><Toggle label="Bot colors" checked={preferences.botColors} onChange={botColors => setPreferences({ ...preferences, botColors })} /><Toggle label="Threads beside chat" checked={preferences.threadsBesideChat} onChange={threadsBesideChat => setPreferences({ ...preferences, threadsBesideChat })} /><Toggle label="Milestone celebrations" checked={preferences.celebrationsEnabled} onChange={celebrationsEnabled => setPreferences({ ...preferences, celebrationsEnabled })} /><button className="primary" type="submit">Save profile & preferences</button></fieldset>{saved && <p role="status" className="muted">Profile and preferences saved.</p>}</form>;
 }
 

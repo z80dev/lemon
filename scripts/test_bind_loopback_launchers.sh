@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Focused tests for S0 loopback distribution defaults and container entrypoint.
-# Unverified in subagent; to be run by main agent.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -295,5 +294,82 @@ fi
 grep -Fq "EXPOSE 4040 4044 4080 4090" "$ROOT/docker/Dockerfile.runtime"
 
 grep -Fq "LEMON_CONTROL_PLANE_OPERATOR_TOKEN=" "$ROOT/.github/workflows/release.yml"
+
+# Exercise actual launcher code, not a copied implementation.
+python3 - "$ROOT" "$TEST_DIR" <<'PY'
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+
+root, temp = map(Path, sys.argv[1:])
+for launcher in ("bin/lemon", "rel/overlays/bin/lemon"):
+    source = (root / launcher).read_text()
+    function = re.search(r"(?ms)^load_port_settings\(\) \{.*?^\}", source)[0]
+    ports = temp / "ports.env"
+    for saved in ("4045", "0"):
+        ports.write_text(f"LEMON_CONTROL_PLANE_NODE_PORT={saved}\nUNRELATED=bad\n")
+        for explicit in (None, "4500", "0"):
+            env = dict(os.environ)
+            env.pop("LEMON_CONTROL_PLANE_NODE_PORT", None)
+            env.pop("UNRELATED", None)
+            if explicit is not None:
+                env["LEMON_CONTROL_PLANE_NODE_PORT"] = explicit
+            result = subprocess.check_output(
+                ["bash", "-c", function + '\nload_port_settings "$1"\nprintf "%s:%s" "$LEMON_CONTROL_PLANE_NODE_PORT" "${UNRELATED:-}"',
+                 "test", str(ports)], env=env, text=True)
+            assert result == f"{explicit if explicit is not None else saved}:", result
+
+fake = temp / "legacy-bin"
+fake.mkdir()
+(fake / "mix").write_text("#!/bin/sh\nexit 0\n")
+(fake / "elixir").write_text("""#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["CAPTURE"], "w") as f:
+    json.dump({"args": sys.argv[1:], "epmd": os.getenv("ERL_EPMD_ADDRESS"),
+               "opts": os.getenv("ELIXIR_ERL_OPTIONS", "")}, f)
+""")
+for path in fake.iterdir():
+    path.chmod(0o755)
+home = temp / "legacy-home"
+home.mkdir()
+env = {key: value for key, value in os.environ.items()
+       if key not in ("ELIXIR_ERL_OPTIONS", "ERL_EPMD_ADDRESS",
+                      "LEMON_GATEWAY_NODE_COOKIE", "LEMON_GATEWAY_COOKIE",
+                      "LEMON_GATEWAY_NODE_NAME")}
+env.update(HOME=str(home), PATH=f"{fake}:{os.environ['PATH']}",
+           CAPTURE=str(temp / "capture.json"), LEMON_SECRETS_MASTER_KEY="test")
+def launch(name, args=(), overrides=None):
+    subprocess.run(["bash", str(root / "bin" / name), *args],
+                   env=dict(env, **(overrides or {})), check=True,
+                   stdout=subprocess.DEVNULL)
+    return json.loads(Path(env["CAPTURE"]).read_text())
+cookies = []
+for name in ("lemon-control-plane", "lemon-gateway"):
+    result = launch(name)
+    assert result["epmd"] == "127.0.0.1", result
+    assert "inet_dist_use_interface {127,0,0,1}" in result["opts"], result
+    cookie = result["args"][result["args"].index("--cookie") + 1]
+    assert re.fullmatch("[0-9a-f]{64}", cookie)
+    cookies.append(cookie)
+    assert stat.S_IMODE((home / ".lemon/cookie").stat().st_mode) == 0o600
+    result = launch(name, ["--name", "test@host", "--cookie", "explicit"])
+    assert result["epmd"] == "127.0.0.1" and not result["opts"], result
+    assert result["args"][3] == "explicit", result
+    result = launch(name, overrides={"ERL_EPMD_ADDRESS": "0.0.0.0",
+        "ELIXIR_ERL_OPTIONS": "-kernel inet_dist_use_interface {10,0,0,1}",
+        "LEMON_GATEWAY_NODE_COOKIE": "environment"})
+    assert result["epmd"] == "0.0.0.0" and "{10,0,0,1}" in result["opts"], result
+    assert result["args"][3] == "environment", result
+assert cookies[0] == cookies[1] == (home / ".lemon/cookie").read_text().strip()
+isolated = temp / "override-home"
+result = launch("lemon-control-plane", ["--home", str(isolated)])
+assert (isolated / ".lemon/cookie").is_file()
+assert result["args"][3] != cookies[0]
+print("[test] Saved node ports and retained launcher distribution defaults OK")
+PY
 
 echo "[test] All launcher and container checks passed successfully."

@@ -809,8 +809,8 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   end
 
   defp parse_authorization_url(value) do
-    case URI.parse(value) do
-      %URI{query: query} when is_binary(query) and query != "" ->
+    case LemonAi.Auth.OAuthFlow.parse_authorization_uri(value) do
+      {:ok, %URI{query: query}} when is_binary(query) and query != "" ->
         params = URI.decode_query(query)
         %{code: params["code"], state: params["state"]}
 

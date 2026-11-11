@@ -32,8 +32,9 @@ attached controller or `GET /v1/machines/:id/providers` for an enrolled executio
 machine they actually own. Administrative host access or a shared machine ACL
 does not authorize configuring another person's provider account. These endpoints
 work before a model provider is configured; they do not expose coding sessions.
-Use the same private Tailscale HTTPS product origin as the normal Bot app, not
-a relay, Funnel, controller URL in the browser, or phone-local callback.
+Use the configured product origin: loopback for same-machine use, or reachable
+private HTTPS for remote clients and phones. Never use the controller URL in the
+browser or a phone-local callback.
 
 The response separates the exact target (`id`, durable `nodeId` where applicable,
 and `hostname`) from the current default provider/model. Select and display that
@@ -437,4 +438,4 @@ Web Push requires VAPID public/private key and contact subject (`LEMON_BOT_VAPID
 
 ## Central integration checks
 
-This assignment intentionally runs no build/test/lint/format or live provider checks. After all slices integrate, the orchestrator should run backend TypeScript checks and `bun test` from `products/lemon_bot/backend`, then actual configured OAuth/SCIM/provider/native-process/notification smoke checks with private disposable credentials. Provider absence is an explicit deployment prerequisite, not evidence an operation was exercised.
+Run backend TypeScript checks and `bun test` from `products/lemon_bot/backend`, then exercise configured OAuth/SCIM/provider/native-process/notification flows with private disposable credentials. Provider absence is an explicit deployment prerequisite, not evidence an operation was exercised.

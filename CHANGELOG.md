@@ -20,10 +20,22 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Source launchers now reuse a private random per-install distribution cookie;
+  dedicated control-plane and gateway launchers also default distribution and
+  epmd to loopback. Both primary launchers honor the saved node-gateway port,
+  including `0` to disable it, without overriding explicit environment settings.
+- Harden Lemon Bot installation: reject chained archive symlink escapes and
+  cycles, preserve release pins in Terminal commands, invalidate setup plans
+  when either component pointer changes, and stage both combined-preset
+  components before promotion with rollback on failure.
+
 - Managed controllers route start/restart through their service manager.
   Deliberate stops stay down; updates restart only previously running units,
   stop workers before restarting the controller, and update an installed Lemon
   Bot backend in lockstep with the runtime.
+- Reject invalid destination ports before URI normalization or default-port
+  fallback in MCP origin authorization, context/web fetches and redirects,
+  webhook callbacks, and node enrollment URLs on Elixir 1.20.
 - Add a shell-only supervised reverse SSH tunnel for second-machine node gateway
   and Lemon Bot access, with private status, credential-free SSH environments,
   stale same-user sshd cleanup and terminal host-key/auth/forwarding failures.
@@ -66,8 +78,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   notarization and verified receipts. Unconfigured builds remain unpublished
   preview artifacts; stable signed releases include a fixed DMG alias.
 
-### Changed
-
 - Source toolchain, CI and release builds now use Elixir 1.20.5 and Erlang/OTP 29.1.2 (was Elixir 1.19.5 / OTP 28.5); source checkouts must upgrade before building.
 - **Breaking security change:** control-plane, web and simulation listeners now
   bind `127.0.0.1` by default, as do launcher epmd/distribution defaults. Existing
@@ -90,6 +100,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Profile memory transfers enforce the complete source snapshot's JSON size budget
+  before scanning document credentials, rejecting oversized snapshots consistently
+  instead of reporting memory unavailable when Elixir 1.20.5 raises a regex match limit.
+- Source and packaged launchers use portable GNU/BSD permission probes and
+  consistently abbreviate controller log paths with `~` in status output.
+- CLI setup and service handling honor their typed readiness and error contracts
+  under Elixir 1.20 / OTP 29 without unreachable fallback clauses.
 - Named workers refuse credential-bearing loopback connections unless the listener
   belongs to their OS user, including tunneled MCP requests. Deliberate cross-user
   deployments can opt out with `LEMON_NODE_TRUST_LOOPBACK_LISTENER=1`.

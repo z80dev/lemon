@@ -20,24 +20,34 @@ Telegram or Discord. LemonSim adds deterministic, replay-verified simulation
 worlds for evaluating agents. Lemon is pre-1.0; see
 [capabilities and boundaries](compare.md) for what is supported today.
 
-## Install
+## Start with Lemon Bot
 
-Prebuilt releases target macOS Apple Silicon, Linux x86_64, and Linux ARM64.
-The installer needs `curl`, `tar`, and `python3`, installs under `~/.lemon`,
-and opens the setup wizard to configure a provider:
+[Set up Lemon Bot](getting-started/lemon-bot.md) to create a Bot in your browser,
+connect a model, and try a task on your own machine. Standard access asks before
+commands run; Chat only leaves local tools off.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --profile bot
+```
+
+The installer sets up the runtime and Bot backend, then hands off to guided
+setup. See the [Lemon Bot guide](getting-started/lemon-bot.md) for prerequisites,
+Mac app availability, and private access over SSH.
+
+Prefer the terminal? Use the [terminal quickstart](getting-started/quickstart.md):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
 $HOME/.lemon/bin/lemon
 ```
 
-Source checkouts, non-interactive installs, channels, and updates are covered in
-[Install](install.md); the [Quickstart](getting-started/quickstart.md) walks
-through a first provider-backed chat.
+For source checkouts and installation options, see [Install](install.md).
+Existing users: read the [November 2026 upgrade notes](release/upgrade-2026-11.md)
+before updating, especially if you connect from another machine.
 
 ## Find your way around
 
-- **[Getting started](getting-started/quickstart.md)**: [Quickstart](getting-started/quickstart.md), [install](install.md), [provider setup](user-guide/setup.md), [demo](demo.md), [updates](user-guide/updates.md), [support](support.md)
+- **[Getting started](getting-started/lemon-bot.md)**: [Lemon Bot](getting-started/lemon-bot.md), [terminal quickstart](getting-started/quickstart.md), [install](install.md), [provider setup and services](user-guide/setup.md), [demo](demo.md), [updates and uninstall](user-guide/updates.md), [support](support.md)
 - **[User guides](user-guide/web.md)**: [Browser](user-guide/web.md), [profiles](user-guide/profiles.md), [memory](user-guide/memory.md), [skills](user-guide/skills.md), [reminders](user-guide/reminders-and-heartbeats.md), [backups](user-guide/backups.md), [built-in tools](tools/files-and-search.md), [safety](security/safety.md)
 - **[Configuration & CLI reference](config.md)**: [Configuration](config.md), [registry](config-registry.md), [CLI & sessions](user-guide/cli.md), [TUI slash commands](user-guide/tui-commands.md), [control-plane methods](reference/control-plane.md), [skill manifest](reference/skill-manifest-v2.md)
 - **[Integrations & channels](getting-started/add-a-channel.md)**: [Channels](getting-started/add-a-channel.md), [gateway](platform/lemon_gateway.md), [OpenAI-compatible API](tools/openai-compatible-api.md), [ACP](tools/acp.md), [MCP and extensions](extensions.md), [omp](user-guide/omp.md), [A2A peers](user-guide/a2a-peers.md)

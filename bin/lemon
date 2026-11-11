@@ -47,7 +47,7 @@ load_port_settings() {
   [ -f "$1" ] || return 0
   while IFS='=' read -r key value || [ -n "$key" ]; do
     case "$key" in
-      LEMON_CONTROL_PLANE_PORT | LEMON_WEB_PORT | LEMON_SIM_UI_PORT)
+      LEMON_CONTROL_PLANE_PORT | LEMON_CONTROL_PLANE_NODE_PORT | LEMON_WEB_PORT | LEMON_SIM_UI_PORT)
         if [[ "$value" =~ ^[0-9]{1,5}$ && -z "${!key:-}" ]]; then
           export "$key=$value"
         fi
@@ -89,7 +89,7 @@ SIM_PORT="${LEMON_SIM_UI_PORT:-4090}"
 export LEMON_CONTROL_PLANE_PORT="$PORT" LEMON_WEB_PORT="$WEB_PORT" LEMON_SIM_UI_PORT="$SIM_PORT"
 NODE_MODE=""
 NODE_NAME="${LEMON_GATEWAY_NODE_NAME:-lemon}"
-NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-lemon_gateway_dev_cookie}}"
+NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-}}"
 DISTRIBUTED=1
 DEBUG=""
 
@@ -407,7 +407,7 @@ load_managed_token() {
     error "refusing unsafe managed control-plane credential: $file"
     return 2
   fi
-  mode="$(stat -f '%Lp' "$file" 2>/dev/null)" || mode="$(stat -c '%a' "$file" 2>/dev/null)" || mode=""
+  mode="$(stat -c '%a' "$file" 2>/dev/null)" || mode="$(stat -f '%Lp' "$file" 2>/dev/null)" || mode=""
   if [ "$mode" != "600" ]; then
     error "managed control-plane credential must have mode 600: $file"
     return 2
@@ -582,6 +582,15 @@ start_runtime() {
   fi
   rm -f "$PIDFILE"
   if [ "$DISTRIBUTED" = "1" ]; then
+    if [ -z "$NODE_COOKIE" ]; then
+      (
+        umask 077
+        mkdir -p "$LEMON_HOME_DIR"
+        [ -s "$LEMON_HOME_DIR/cookie" ] || openssl rand -hex 32 > "$LEMON_HOME_DIR/cookie"
+        chmod 600 "$LEMON_HOME_DIR/cookie"
+      ) || exit 1
+      NODE_COOKIE="$(cat "$LEMON_HOME_DIR/cookie")"
+    fi
     [ -n "$NODE_COOKIE" ] || { error "distributed mode requires a non-empty --cookie"; exit 2; }
     if [ -z "$NODE_MODE" ]; then
       if [[ "$NODE_NAME" == *@* ]]; then NODE_MODE="name"; else NODE_MODE="sname"; fi
@@ -687,6 +696,13 @@ lemon_program() {
   return 1
 }
 
+systemd_user_dir() {
+  case "${XDG_CONFIG_HOME:-}" in
+    /*) printf '%s/systemd/user\n' "$XDG_CONFIG_HOME" ;;
+    *) printf '%s/.config/systemd/user\n' "$HOME" ;;
+  esac
+}
+
 controller_unit() {
   local label unit plist unit_path uid first
   if [ "$PORT" = "4040" ]; then
@@ -711,7 +727,7 @@ controller_unit() {
   fi
 
   # systemd (Linux): the managed header or a Lemon ExecStart program.
-  unit_path="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$unit"
+  unit_path="$(systemd_user_dir)/$unit"
   if [ -f "$unit_path" ] && [ ! -L "$unit_path" ]; then
     first=""
     IFS= read -r first < "$unit_path" || true
@@ -739,7 +755,7 @@ status_context() {
     mgr="${cunit%% *}"
     label="${cunit#* }"
     log_file="$(controller_log)"
-    printf '  supervised by %s (%s); log: %s\n' "$mgr" "$label" "${log_file/#$HOME/~}"
+    printf '  supervised by %s (%s); log: %s\n' "$mgr" "$label" "~${log_file#"$HOME"}"
   else
     printf "  not supervised: run 'lemon service install controller'\n"
   fi

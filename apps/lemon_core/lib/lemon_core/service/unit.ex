@@ -60,8 +60,8 @@ defmodule LemonCore.Service.Unit do
     RestartPreventExitStatus=2
     RestartSec=5
     TimeoutStopSec=30
-    StandardOutput=append:#{spec.log}
-    StandardError=append:#{spec.log}
+    StandardOutput=#{quote_systemd("append:" <> spec.log, false)}
+    StandardError=#{quote_systemd("append:" <> spec.log, false)}
     [Install]
     WantedBy=default.target
     """

@@ -12,7 +12,8 @@ defmodule LemonMCP.HTTP.OriginPolicy do
   Both lists must be unique, and approved origins must also be allowed. Pins
   retain the original URL, but `host` is the canonical ASCII DNS/IP hostname.
   Raw authority spelling is checked from URL bytes; URI's deprecated opaque
-  authority field is neither inspected nor rewritten.
+  authority field is neither inspected nor rewritten. A discarded invalid port
+  is rejected, never replaced with the scheme's default port.
 
   Every A and AAAA answer must be public unless that exact allowed origin is
   explicitly approved for private networking. The selected address is stable
@@ -125,7 +126,7 @@ defmodule LemonMCP.HTTP.OriginPolicy do
                 byte_size(host) <= @max_host_bytes <- uri.host,
          authority <- raw_authority(url, uri.scheme),
          true <- valid_authority?(authority),
-         port when is_integer(port) and port in 1..65_535 <- uri.port || default_port(scheme),
+         port when is_integer(port) and port in 1..65_535 <- uri.port,
          {:ok, dns_host} <- canonical_host(host) do
       origin_host = if String.contains?(dns_host, ":"), do: "[#{dns_host}]", else: dns_host
       suffix = if port == default_port(scheme), do: "", else: ":#{port}"

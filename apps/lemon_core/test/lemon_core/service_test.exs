@@ -107,6 +107,19 @@ defmodule LemonCore.ServiceTest do
     assert {"none", _, nil} = Service.manager(Keyword.put(opts, :manual, true))
   end
 
+  test "systemd discovery follows XDG_CONFIG_HOME", %{opts: opts} do
+    config_home = Path.join(opts[:home], "xdg config")
+
+    linux =
+      opts
+      |> Keyword.put(:os, :linux)
+      |> Keyword.put(:env, %{"XDG_CONFIG_HOME" => config_home})
+
+    assert {:ok, spec} = Role.build("worker", "systemd", linux)
+    assert :ok = Unit.write(spec, "systemd")
+    assert Service.discover("systemd", linux) == [{"worker", [name: "studio"]}]
+  end
+
   test "unreachable native managers cannot hide installed units", %{opts: opts, state: state} do
     linux = Keyword.put(opts, :os, :linux)
     {:ok, spec} = Role.build("worker", "systemd", linux)

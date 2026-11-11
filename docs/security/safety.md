@@ -1,6 +1,6 @@
 # Lemon Safety
 
-Last reviewed: 2026-05-11
+Last reviewed: 2026-11-11
 
 Lemon is a local-first AI agent runtime. It can read files, run tools, call model
 providers, store memory, load skills, and operate through chat interfaces. Those
@@ -24,6 +24,14 @@ Lemon's safety model is based on five layers:
    provider keys, tokens, passwords, private prompts, memory contents, and tool
    outputs.
 
+For Lemon Bot, start with **Standard** access (Terminal + Files, asking before
+commands), or **Chat only** when no machine tools are needed. Review the command
+on each approval card. **Allow once** is narrowest; **Allow Terminal for this
+chat** remembers the whole Terminal tool group until revoked or invalidated.
+Use **Stop allowing** to end it. See the
+[remembered-approval contract](agent-safety-contract.md#lemon-bot-remembered-approvals)
+for Bot-wide scope and governance.
+
 ## What Users Should Expect
 
 Lemon can be configured to:
@@ -44,9 +52,15 @@ skill or MCP content as untrusted until policy and operator review allow action.
 
 For normal use:
 
-- Store provider keys with `mix lemon.secrets.set`.
-- Keep `require_approval = ["bash", "write", "edit"]` or a stricter equivalent
-  for assistant profiles that work in real repositories.
+- Store provider keys in the encrypted secret store; see
+  [Secrets and Keychain](secrets-and-keychain.md).
+- Keep command and file-change approvals enabled unless you deliberately trust
+  broader execution.
+- Keep listeners on loopback. For another execution machine, expose only the
+  node gateway, not the operator controller; see
+  [listener exposure](threat-model.md#listener-exposure).
+- Treat passwordless local sign-in as trust in your OS account, not anonymous
+  access. Keep private sign-in links and the backend's local access key private.
 - Bind sessions to the intended project directory instead of broad home
   directories.
 - Enable only the channel adapters you actually use.
@@ -69,21 +83,10 @@ Use extra caution before allowing the agent to:
 
 ## Support Bundles
 
-Generate a support bundle from a source checkout:
-
-```bash
-mix lemon.doctor --bundle
-```
-
-Generate a support bundle from a release artifact:
-
-```bash
-./bin/lemon_runtime_full eval 'LemonCore.Doctor.CLI.bundle!()'
-```
-
-Support bundles are redacted by design, but review them before attaching them to
-issues. If a bundle contains sensitive data, do not share it publicly; open a
-minimal issue with reproduction steps instead.
+Use the [support guide](../support.md) to collect diagnostics. Support bundles
+are redacted by design, but review them before attaching them to issues. If a
+bundle contains sensitive data, do not share it publicly; provide minimal
+reproduction details instead.
 
 ## Security Issues
 
@@ -91,11 +94,10 @@ Report vulnerabilities using `SECURITY.md`, not a public issue. Include the
 minimum reproduction details needed to investigate. Do not include live secrets,
 private keys, OAuth tokens, session cookies, production data, or private prompts.
 
-## Launch Status
+## Further Reading
 
-The deeper engineering safety contract lives in
-[Agent Safety Contract](agent-safety-contract.md). The 1.0 readiness plan now
-tracks deterministic prompt-injection coverage for web fetch output, inbound
-email prompts, skill prompt rendering, and generic untrusted extension-style
-tool results. Broader adversarial variant depth remains a post-1.0 hardening
-stream.
+The [Agent Safety Contract](agent-safety-contract.md) covers Bot folder read
+exemptions, their egress fence, remembered approvals and macOS permissions.
+The [Threat Model](threat-model.md) explains local ownership, network exposure
+and the limits of these controls. Prompt-injection defenses are mitigation,
+not a guarantee that model-selected actions are safe.

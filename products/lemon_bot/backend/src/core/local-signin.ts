@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import type * as P from '../../../contracts/protocol';
 import { opaqueToken } from './auth';
 import { fail } from './errors';
+import { backendDescriptor } from './identity';
 import { requireLocalAccess } from './local-access';
 import type { BackendServices, EntityStore, Route } from './services';
 import { parse, z } from './validation';
@@ -14,10 +15,13 @@ export const localTicketLifetimeMs = { browser: 60_000, terminal: 300_000 } as c
 export const maxOutstandingLocalTickets = 5;
 export const handoffDirectory = (dataDir: string) => join(dataDir, 'handoff');
 export type LocalTicketChannel = keyof typeof localTicketLifetimeMs;
-export interface LocalTicketRow { id: string; digest: string; channel: LocalTicketChannel; origin: string; displayName: string | null; handoffFile: string | null; createdAtMs: number; expiresAtMs: number; redeemedAtMs: number | null }
-export interface LocalTicketDeps { store: EntityStore; now(): number; digest(value: unknown): string; dataDir: string }
+export interface LocalTicketRow { id: string; digest: string; channel: LocalTicketChannel; origin: string; instanceId: string; displayName: string | null; handoffFile: string | null; createdAtMs: number; expiresAtMs: number; redeemedAtMs: number | null }
+export interface LocalTicketDeps { store: EntityStore; now(): number; digest(value: unknown): string; dataDir: string; instanceId: string }
 export interface LocalTicketIssued { id: string; url: string; expiresAtMs: number; handoffFile: string | null }
 const handoffName = /^open-lst_[A-Za-z0-9_-]+\.html$/;
+export function localBackendChallengeProof(digest: (value: unknown) => string, nonce: string, identity: { product: 'lemon_bot'; instanceId: string; version: string }): string {
+  return digest({ scope: 'lemon_bot.local_backend_challenge.v1', nonce, ...identity });
+}
 
 /** Never traverse a symlinked handoff directory or unlink an arbitrary persisted path. */
 function unlinkHandoff(deps: LocalTicketDeps, path: string | null): void {
@@ -58,6 +62,7 @@ function sweep(deps: LocalTicketDeps): void {
 export function issueLocalSignInTicket(deps: LocalTicketDeps, input: { origin: string; channel: LocalTicketChannel; displayName?: string; withHandoffFile: boolean }): LocalTicketIssued {
   const origin = new URL(input.origin);
   if (origin.origin !== input.origin || origin.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(origin.hostname)) fail('capability_unavailable', 'Sign-in links work only when Lemon Bot listens on 127.0.0.1.');
+  if (deps.store.metadata<string>('instanceId') !== deps.instanceId) fail('forbidden', 'The Bot backend identity changed; run lemon-bot open again.');
   sweep(deps);
   return deps.store.transaction(() => {
     const now = deps.now();
@@ -66,7 +71,7 @@ export function issueLocalSignInTicket(deps: LocalTicketDeps, input: { origin: s
     const ticket = opaqueToken();
     const handoffFile = input.withHandoffFile ? join(handoffDirectory(deps.dataDir), `open-${id}.html`) : null;
     const expiresAtMs = now + localTicketLifetimeMs[input.channel];
-    deps.store.put<LocalTicketRow>('signInTickets', { id, digest: deps.digest(ticket), channel: input.channel, origin: input.origin, displayName: input.displayName ?? null, handoffFile, createdAtMs: now, expiresAtMs, redeemedAtMs: null });
+    deps.store.put<LocalTicketRow>('signInTickets', { id, digest: deps.digest(ticket), channel: input.channel, origin: input.origin, instanceId: deps.instanceId, displayName: input.displayName ?? null, handoffFile, createdAtMs: now, expiresAtMs, redeemedAtMs: null });
     return { id, url: `${input.origin}/#${localSignInFragment}=${ticket}`, expiresAtMs, handoffFile };
   });
 }
@@ -101,7 +106,7 @@ export function ensureLocalOwner(services: BackendServices, displayName?: string
 const proxyHeaders = ['Forwarded', 'X-Forwarded-For', 'X-Forwarded-Host', 'X-Forwarded-Proto', 'X-Real-IP', 'Tailscale-User-Login'];
 export function createLocalSignInRoutes(services: BackendServices): Route[] {
   const { store } = services;
-  const deps: LocalTicketDeps = { store, now: services.now, digest: services.mutations.digest, dataDir: services.config.dataDir };
+  const deps: LocalTicketDeps = { store, now: services.now, digest: services.mutations.digest, dataDir: services.config.dataDir, instanceId: backendDescriptor(services).instanceId };
   function failure(error: unknown): never {
     const limited = store.transaction(() => {
       const now = services.now();
@@ -114,6 +119,17 @@ export function createLocalSignInRoutes(services: BackendServices): Route[] {
     throw error;
   }
   return [
+    { method: 'POST', path: '/v1/auth/local/challenge', auth: 'public', mutation: false, status: 200, handler: context => {
+      if (context.query.size) fail('invalid_request', 'This endpoint does not accept query parameters.');
+      const origin = services.config.loopbackOrigin;
+      if (!origin) fail('capability_unavailable', 'Local listener proof works only when Lemon Bot listens on 127.0.0.1.');
+      const headers = context.request.headers;
+      if (proxyHeaders.some(name => headers.has(name)) || headers.get('Host') !== new URL(origin).host) fail('forbidden', 'Local listener proof is available only on the direct loopback listener.');
+      const { nonce } = parse(z.object({ nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict(), context.body);
+      const descriptor = backendDescriptor(services);
+      const identity = { product: descriptor.product, instanceId: descriptor.instanceId, version: descriptor.version };
+      return { ...identity, proof: localBackendChallengeProof(services.mutations.digest, nonce, identity) } satisfies P.LocalBackendChallenge;
+    } },
     { method: 'POST', path: '/v1/auth/local', auth: 'public', mutation: false, status: 200, handler: context => {
       if (context.query.size) fail('invalid_request', 'This endpoint does not accept query parameters.');
       requireLocalAccess(services.config.dataDir, context.request);
@@ -134,7 +150,7 @@ export function createLocalSignInRoutes(services: BackendServices): Route[] {
           const row = store.list<LocalTicketRow>('signInTickets', row => row.digest === digest)[0];
           if (!row || row.redeemedAtMs !== null) fail('unauthenticated', "This sign-in link was already used or isn't valid.");
           if (row.expiresAtMs <= services.now()) fail('expired', 'This sign-in link expired. Run lemon-bot open for a new one.');
-          if (row.origin !== origin) fail('forbidden', 'Open the sign-in link on the computer running Lemon Bot, or through its SSH tunnel.');
+          if (row.origin !== origin || row.instanceId !== backendDescriptor(services).instanceId) fail('forbidden', 'Open the sign-in link on the computer running Lemon Bot, or through its SSH tunnel.');
           store.put('signInTickets', { ...row, redeemedAtMs: services.now() });
           const result = services.auth.session(ensureLocalOwner(services, row.displayName), null, { localConfirmed: true });
           services.audit(null, 'auth.local_ticket.redeem', row.id, 'succeeded');

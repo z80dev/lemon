@@ -142,6 +142,9 @@ For a complete Bot installation:
 curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --profile bot
 ```
 
+The combined preset stages and verifies both components before promoting either.
+If installation fails, both previous component pointers are restored.
+
 After both artifacts install, a terminal hands off to `lemon-bot`, which owns
 setup and service enrollment. Without a terminal, or with `--skip-setup`, the
 installer prints one `Run: <absolute path>/lemon-bot` next step. It does not run
@@ -307,6 +310,11 @@ When one component is already at another version, its missing counterpart is
 installed at that version using HTTPS and the release manifest's artifact hashes.
 Use `lemon update` for upgrades. Terminal installation with `install.sh` still
 requires `python3` (Apple's Command Line Tools on macOS).
+The app's Terminal command preserves its pinned version, channel, and download
+base URL. Native setup rechecks both component pointers under the install lock
+and refuses a plan if either changed. Backend archive links are checked through
+their full chains before extraction and again against the staged tree; cycles
+and paths escaping `bot/` are rejected.
 
 Without signing credentials CI creates an unsigned local-preview workflow
 artifact only, not a downloadable GitHub Release DMG. For source builds see the
@@ -427,6 +435,7 @@ See [Uninstall](user-guide/updates.md#uninstall) for the exact commands.
 | Symptom | What to do |
 | --- | --- |
 | `lemon: command not found` | Open a new terminal, or `export PATH="$HOME/.lemon/bin:$PATH"`. Use `$HOME/.lemon/bin/lemon` directly to check the install. |
+| `lemon-bot: command not found` | Open a new terminal, or use `$HOME/.local/bin/lemon-bot`. The combined `--profile bot` installer supplies both launchers. |
 | `python3 is required to read the release manifest` | Install `python3` (`xcode-select --install` on macOS), or use a source install. |
 | `no prebuilt Lemon release for <os> <arch>` | Use WSL, the container image, or a source install. |
 | `channel 'preview' needs an explicit version` | Set `LEMON_VERSION` to the exact preview or nightly version. |
@@ -435,5 +444,10 @@ See [Uninstall](user-guide/updates.md#uninstall) for the exact commands.
 | `No interactive terminal` from `lemon` | Bare `lemon` needs a TTY. Use `lemon -p "PROMPT"`, `lemon daemon`, or `lemon --help`. |
 | `TUI not installed` | The release was installed with `LEMON_NO_TUI=1`. Reinstall with `--force` without that variable. |
 | `Web UI is available only in the lemon_runtime_full profile` | Reinstall with `LEMON_PROFILE=full`. |
-| Setup was interrupted | Run `lemon setup`; it keeps completed steps and offers pending ones. |
-| Anything else | `lemon doctor`, then `lemon logs`. See [Support](support.md) for redacted bundles. |
+| Bot setup was interrupted or stopped at a step | Match the step/detail in [Lemon Bot setup troubleshooting](support.md#lemon-bot-setup-stopped), fix the cause, then resume with `lemon-bot up`. |
+| Terminal/runtime setup was interrupted | Run `lemon setup` to finish configuration; use `lemon setup model` for model connection. |
+| A port is already in use (4040, 4042, 4044, 4080, or 4100) | Identify the existing listener before stopping anything. See [port conflicts](support.md#port-already-in-use). |
+| Services stop after logout or reboot | Check `lemon service status --json` and its `persistence` field. See [macOS login and Linux linger](support.md#stops-after-logout-or-reboot). |
+| A machine is Offline or Needs reconnecting | Check its named worker rather than reinstalling. See [machine recovery](support.md#machine-offline-or-needs-reconnecting). |
+| You need to start over | Preview removal first; keep data unless you explicitly intend to purge it. See [resetting an installation](support.md#reset-a-broken-installation). |
+| Anything else | Run `lemon doctor`; inspect the affected [service log](support.md#logs) or `lemon logs` for the runtime. Review [support bundles](support.md#before-opening-a-bug) before sharing. |

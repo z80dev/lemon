@@ -1007,6 +1007,18 @@ defmodule LemonGateway.WebhookTransportTest do
              )
   end
 
+  test "callback URLs reject discarded ports even when private hosts are approved" do
+    for port <- ["65536", "99999", "100000", "00065536"],
+        allow_private <- [false, true] do
+      assert {:error, :invalid_callback_url} =
+               Webhook.validate_callback_url_for_test(
+                 "https://example.test:#{port}/callback",
+                 allow_private,
+                 dns_resolver: fn _ -> flunk("invalid callback port reached DNS") end
+               )
+    end
+  end
+
   test "request metadata redacts query secrets" do
     conn = Test.conn(:post, "/webhooks/demo?token=topsecret&foo=bar&api_key=abc123", "")
     metadata = Webhook.request_metadata_for_test(conn)

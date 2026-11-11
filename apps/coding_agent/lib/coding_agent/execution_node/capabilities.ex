@@ -298,9 +298,8 @@ defmodule CodingAgent.ExecutionNode.Capabilities do
     ]
 
   defp permissions(probe) do
-    with {:ok, status} when is_map(status) <- probe.tcc_status() do
-      {:ok, permission_records(status)}
-    else
+    case probe.tcc_status() do
+      {:ok, status} when is_map(status) -> {:ok, permission_records(status)}
       _ -> {:error, :probe_unavailable}
     end
   end

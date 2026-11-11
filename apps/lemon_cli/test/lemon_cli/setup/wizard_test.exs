@@ -1041,6 +1041,48 @@ defmodule LemonCli.Setup.WizardTest do
     end
   end
 
+  describe "run_model/3 — readiness exit result" do
+    for {state, check_result, expected} <- [
+          {:verified, {:ok, %{}}, :ok},
+          {:saved, {:error, :unreachable}, :ok},
+          {:action_required, {:error, :unauthorized}, {:error, :not_ready}}
+        ] do
+      test "JSON mode returns #{inspect(expected)} for #{state} readiness", %{config_path: path} do
+        configure_ready_provider(path)
+
+        output =
+          ExUnit.CaptureIO.capture_io(fn ->
+            assert unquote(Macro.escape(expected)) ==
+                     Wizard.run_model(["--json"], silent_io(),
+                       config_path: path,
+                       cwd: Path.dirname(path),
+                       verifier: fn _ -> unquote(Macro.escape(check_result)) end
+                     )
+          end)
+
+        assert %{"state" => unquote(Atom.to_string(state))} = Jason.decode!(output)
+      end
+    end
+
+    test "offline JSON mode accepts saved atom readiness without a live check", %{
+      config_path: path
+    } do
+      configure_ready_provider(path)
+
+      output =
+        ExUnit.CaptureIO.capture_io(fn ->
+          assert :ok =
+                   Wizard.run_model(["--json", "--offline"], silent_io(),
+                     config_path: path,
+                     cwd: Path.dirname(path),
+                     verifier: fn _ -> flunk("offline readiness must not make a live check") end
+                   )
+        end)
+
+      assert %{"state" => "saved"} = Jason.decode!(output)
+    end
+  end
+
   # ──────────────────────────────────────────────────────────────────────────
   # Helpers
   # ──────────────────────────────────────────────────────────────────────────

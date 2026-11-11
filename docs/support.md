@@ -7,8 +7,11 @@ reproducible report if the problem remains.
 
 | What happened | What to try |
 | --- | --- |
-| Installation failed | Check your platform and prerequisites in [Install Lemon](install.md) |
-| The first chat cannot start | Run `lemon config validate`, `lemon secrets status`, then `lemon setup provider` |
+| Lemon Bot setup stopped | Find the failed step in [resumable setup](#lemon-bot-setup-stopped) |
+| A machine is unavailable | Distinguish [offline, reconnecting, and parked workers](#machine-offline-or-needs-reconnecting) |
+| The first chat cannot start | Connect a model in the browser or run `lemon setup model`; see [model setup](user-guide/setup.md) |
+| The Bot says it has no tools | Check [Bot access and approvals](#the-bot-says-it-has-no-tools) |
+| Installation failed | Check [installation troubleshooting](install.md#troubleshooting) |
 | A runtime or tool behaves unexpectedly | Run `lemon doctor --verbose` and keep the relevant error |
 | You need a diagnostic bundle | Run `lemon doctor --bundle`, then review the zip before sharing |
 | You found a vulnerability | Follow [security reporting](#security-reports) privately |
@@ -17,6 +20,209 @@ For a source checkout, use `./bin/lemon` in place of `lemon`. A successful
 configuration check does not guarantee a provider request will succeed; the
 [first-conversation quickstart](getting-started/quickstart.md) walks through a
 complete turn.
+
+## Lemon Bot setup stopped
+
+`lemon-bot up` resumes setup; it is not a factory reset. First read the failed
+step and its detail, inspect service status, and fix that cause. Then run
+`lemon-bot up` again. For the normal installation flow, see
+[Lemon Bot in 3 minutes](getting-started/lemon-bot.md).
+
+`lemon-bot up --json --no-open` emits newline-delimited step records
+(`step`, `state`, `detail`) followed by a result (`status`, `manager`,
+`persistence`, `machineId`, `port`). **It still changes the installation**;
+use the read-only status commands below for diagnosis.
+
+| Failed step / detail | Cause and next action |
+| --- | --- |
+| `runtime` / `runtime_missing` | The configured runtime launcher is not executable. Run the version-pinned `--profile bot` installer command printed by setup; the backend-only profile is not a complete local installation. |
+| `runtime` / `version_mismatch` | Runtime and Bot versions differ, or `lemon version` failed. Install/update both to the version printed by setup; see [updates](user-guide/updates.md). JSON mode stops with `needs_attention`; interactive setup warns but may continue. |
+| `controller_choice` / `terminal_required` | Controller selection needs a terminal. Run `lemon-bot` from an interactive terminal, including over SSH. |
+| `setup` / `setup_required` | Runtime setup exited unsuccessfully. Run `lemon setup` interactively, resolve its reported problem, then resume. Skipping model connection is allowed on the Bot path; connect it later in the browser. |
+| `units` / `service_failed` | Controller or backend did not become ready. Read `lemon service status --json` and the relevant [log](#logs); use the detail table below. |
+| `linger` / `linger_unavailable` | Linux persistence repair failed. Follow [login and boot persistence](#stops-after-logout-or-reboot), then resume. |
+| `owner` / `service_failed` | Local owner sign-in could not complete. Check backend readiness and its log. Run as the same OS account that owns the installation; do not delete its data or create a replacement owner as a workaround. |
+| `machine` or `worker` / `enroll_failed` | Machine creation, reconnect, enrollment, or the online check failed. Inspect the machine in the browser and the named worker's status; distinguish a rejected invite from an unknown outcome below. |
+| `worker` / `service_failed` | Worker repair failed, including a requested wrapper change. Inspect its service detail and wrapper path before resuming. |
+| Final `needs_attention` | Check earlier steps for a version mismatch or missing terminal. If setup otherwise finished, only browser opening may have failed: run `lemon-bot open`, or `lemon-bot open --headless` over SSH. |
+
+Skipped steps are not necessarily failures: `setup` can be skipped for
+`non_interactive` or `remote_controller`; `machine`/`worker` can be skipped for
+`no_worker` or `remote_controller`; `worker` can report `already_online`.
+`worker: running (repair)` means setup is trying to reuse an existing machine.
+Declining Linux linger leaves persistence at `session`.
+
+### Service and enrollment details
+
+The bootstrap result is a summary. The service command can report a more
+specific `units[].detail`, and `enroll_start_failed` also has `units[].reason`.
+Keep the failed command's output: a later status query describes the current
+service, not necessarily the earlier enrollment failure.
+
+| Detail | Cause and fix |
+| --- | --- |
+| `port_in_use_foreign` | A listener cannot be proven to belong to this installation. Identify it using [port troubleshooting](#port-already-in-use); stop it through its own manager, not by blindly killing the port owner. |
+| `unhealthy_recorded_runtime` | A recorded controller is not healthy enough to adopt. Inspect `controller.log`, resolve its startup error, and stop the old instance through its original launcher/manager before repair. |
+| `daemon_ownership_unverified` | Lemon cannot prove the old process identity. Check the OS account, installation, and running process; do not delete PID records to force adoption. |
+| `unit_foreign` | The existing service unit is not recognized as Lemon-owned. Inspect it in the OS service manager and resolve the conflicting unit with its owner; Lemon will not overwrite it. |
+| `gui_session_required` | macOS has no usable GUI launchd session for this user. Log in to the Mac desktop as that user and run setup there. |
+| `restore_in_progress` | A restore blocks controller takeover. Finish or resolve that restore before service repair; do not remove its lock to bypass it. |
+| `exec_wrapper_missing` | The worker's configured executable wrapper is missing or not executable. Restore/reinstall the Mac app that supplies it and reconnect through the app. |
+| `timeout` | The service did not reach readiness within the wait period. Read its state and log before retrying; a PID alone is not readiness. |
+| `node_authentication_failed` | Worker authentication was refused. Inspect the node's recorded reason and use the machine's Reconnect flow rather than repeatedly restarting it. |
+| `invite_rejected` | The controller rejected the enrollment invite. Check the machine and invite state, then issue a fresh reconnect invite for the intended machine. Do not reuse an expired, revoked, or consumed code. |
+| `enroll_start_failed` / `launcher_unavailable` | The enrollment launcher could not execute (exit 126/127). Repair the runtime installation/executable path, then resume enrollment. |
+| `enroll_start_failed` / `address_in_use` | Enrollment's local runtime could not bind a port. Resolve the listener conflict below before retrying. |
+| `enroll_start_failed` / `runtime_start_failed` | The local enrollment runtime failed before connecting. Inspect the reported startup error and fix the runtime installation/configuration first. |
+| `enrollment_outcome_unknown` | Enrollment may already have consumed the invite. Inspect the machine and invitation in the browser first. If online, repair supervision; if joined but offline, use Reconnect for a fresh repair invite. Do not replay the old code or assume nothing happened. |
+
+For an existing stopped or unsupervised Lemon-owned service, use
+`lemon service repair` after addressing the cause. Repair without roles checks
+installed units; it does not create an absent installation. Use
+`lemon-bot up` to complete missing Bot setup. If the machine's enrollment
+outcome remains unresolved, keep its identity and report the problem rather
+than creating duplicates.
+
+## Read service and worker status
+
+Run these on the machine where the affected services run. Replace `NAME` with
+the machine's **node name**, shown in Machines, not its display name:
+
+```bash
+lemon service status --json
+lemon service status worker --name NAME --json
+lemon node status --name NAME --json
+```
+
+- Service JSON has `schema: 1`, `manager`, `persistence`, `linger`, and `units`.
+  For each unit, read `role`, `name`, `installed`, `loaded`, `pid`, `state`,
+  `detail`, and `log`. A worker also reports `execWrapper`.
+- Controller/backend readiness is `ready`; worker readiness is `online`.
+  `loaded: true` or a non-null PID alone does not mean ready.
+  `unsupervised` means the observed process does not match the manager's
+  expected identity. `not_installed`, `stopped`, `starting`, `failed`,
+  `blocked`, `foreign`, and `unknown` need different fixes; read `detail`.
+  Nonzero exit status can still accompany useful JSON.
+- Node JSON is the **last recorded local state**, with `version: 1`,
+  `localName`, `state`, `reason`, `nodeId`, `changedAtMs`, and `osPid`.
+  It does not probe the controller or prove that the PID is still alive.
+  Compare it with service status and the machine's current browser state.
+  “No worker status recorded for this name” means no valid local record was
+  found, not that a remote machine is offline.
+
+## Machine offline or Needs reconnecting
+
+**Offline** with an active credential usually means the machine is asleep,
+disconnected, or its worker/controller/tunnel is stopped. Bring the machine
+online, inspect service status, and repair stopped services. A worker in
+`reconnecting` retries transport failures; issuing a new credential is not the
+first fix for a network outage.
+
+**Needs reconnecting** means the machine credential is expired or revoked.
+The browser distinguishes “sign-in expired after 7 days offline” from “access
+was revoked.” Open **Machines**, select the machine, choose **Reconnect**, and
+follow its new instructions on that machine. See
+[attaching and reconnecting machines](user-guide/attaching-a-bot-machine.md).
+For the same-machine Bot installation, `lemon-bot up` can repair and reconnect
+its existing local machine.
+
+A **parked worker** is deliberately waiting, not necessarily crashed:
+
+| Node `state` / `reason` | Next action |
+| --- | --- |
+| `needs_reauthorization` / `session_expired`, `session_invalid`, `credential_rejected`, or `node_not_found` | Reconnect the intended machine using a fresh owner-authorized invite. |
+| `needs_enrollment` / `credential_missing` or `credential_unreadable` | Enroll/reconnect from that machine; do not copy another worker's credentials or state directory. |
+| `needs_enrollment` / `controller_mismatch` | Verify that the join instructions target the intended controller. Credentials are bound to that controller URL. |
+| `conflict` / `node_name_conflict`, or `needs_reauthorization` / `node_identity_mismatch` | Check for a second worker using that identity/name or a mismatched controller identity. Resolve that conflict before reconnecting; do not overwrite credentials to make it disappear. |
+
+Parking stops normal reconnect churn and watches for credential changes.
+Restarting repeatedly does not renew a rejected credential.
+
+## Port already in use
+
+The local defaults bind to loopback, not your LAN address:
+
+| Port | Listener |
+| --- | --- |
+| 4040 | Controller/operator control plane |
+| 4042 | Gateway health server, when enabled; not the worker join endpoint |
+| 4044 | Node-only gateway for workers |
+| 4080 | Lemon Web |
+| 4100 | Lemon Bot browser/backend |
+
+Inspect the process listening on the reported port using your OS's process or
+network tools. Common causes are a foreground development runtime left open,
+an old daemon, or a different user's installation. Stop the conflicting
+instance through its own launcher/service manager. Do not run a second
+controller or disable ownership checks to work around the error.
+
+Check `~/.lemon/ports.env` and environment overrides if your ports differ from
+these defaults; see [configuration](config.md). A loopback-only listener being
+unreachable from another host is **not** a port collision. Use the
+[headless SSH flow](getting-started/lemon-bot.md#headless-or-ssh-server) for the
+browser and the [machine connection guide](user-guide/attaching-a-bot-machine.md)
+for workers. Do not expose port 4040 publicly to fix worker connectivity.
+
+## Stops after logout or reboot
+
+- **macOS / `launchd`, `persistence: login`:** these are per-user LaunchAgents.
+  They start when that user logs in, not before login at boot. An SSH-only
+  session does not substitute for the required desktop session.
+- **Linux / `systemd`, `persistence: session`:** the user manager depends on
+  the login session. Run `lemon service repair --enable-linger`. If permission
+  is denied, follow the printed `sudo loginctl enable-linger USER` instruction
+  with your actual username. Recheck status for `linger: true` and
+  `persistence: boot`; a successful repair alone is not proof linger changed.
+- **`manager: none`, `persistence: none`:** manual background processes do not
+  survive reboot/logout as managed services. Run `lemon service repair` after
+  restarting, or use a host with a supported user service manager.
+
+## The Bot says it has no tools
+
+**Chat only** intentionally grants no local tools, files, or shell. For a new
+Bot, choose **Standard** to request Terminal and Files with command approvals.
+For an existing Bot, open **Settings → Bot access** and enable the needed
+grant: Terminal requires **Full**; Files offers **View only** or **Full**.
+Inspect the effective access and **Why**, not only the requested setting.
+Machine capabilities, workspace policy, and OS permissions can narrow it.
+An access change may wait for the current task to finish; use **Refresh access**
+afterward. A just-in-time access request still needs your explicit approval.
+
+For protected macOS resources, open the app's **Permissions** pane on the
+assigned Mac. Changing Bot grants cannot grant macOS privacy permissions.
+Terminal access runs as the host account; a Bot's own folder is not an OS sandbox.
+
+### The approval chip
+
+The command card offers **Allow once**, **Allow Terminal for this chat**, or
+**Deny** when that action is eligible. A remembered approval appears as a chip
+with **Stop allowing**. Use it to require approval for future actions again;
+it does not cancel a command already running. Bot-wide approval behavior is
+under **Settings → Approvals**. Remembered approvals do not grant missing
+tools or override required policy.
+
+## Repeated Keychain prompts on a development Mac build
+
+Ad-hoc-signed development builds can prompt for Keychain access again after
+each rebuild because the executable identity changes. This is distinct from
+model login expiry and macOS file/privacy permissions. Properly signed releases
+avoid this rebuild-specific prompt; no signed DMG is published yet. Do not
+delete **Lemon Secrets** or weaken Keychain access controls to silence it.
+
+## Reset a broken installation
+
+Try service repair and reconnect first. To reinstall program files while
+keeping your data, run `lemon uninstall` to **preview**, review the exact
+services and paths, then execute `lemon uninstall --confirm DIGEST` with that
+preview's digest. Reinstall using the [Bot installer](getting-started/lemon-bot.md).
+
+For a deliberately fresh start, back up outside `~/.lemon`, preview with
+`lemon uninstall --purge`, and only then execute
+`lemon uninstall --purge --confirm DIGEST` with the purge preview's digest.
+**Purge removes local data and the stored secrets master key**, not just broken
+program files. If the preview changed, review a new preview rather than reusing
+the old digest. See the canonical [uninstall guide](user-guide/updates.md#uninstall)
+for scope and safeguards.
 
 ## Report a problem
 
@@ -467,6 +673,19 @@ code and does not include raw source paths, file contents, manifest contents,
 distribution URLs, plugin names, provider names, or load-error messages.
 
 ## Logs
+
+For `lemon service` installations, start with the unit's `log` field from
+`lemon service status --json`. Default stdout/stderr locations are:
+
+| Role | Log |
+| --- | --- |
+| Controller | `~/.lemon/logs/controller.log` |
+| Lemon Bot backend | `~/.lemon/logs/backend.log` |
+| Named worker | `~/.lemon/logs/node-<name>.log` |
+
+`lemon logs` is a runtime/launcher log view, not a combined view of every service.
+Do not post entire service logs without reviewing them for credentials,
+invitation codes, one-use sign-in links, prompts, and tool output.
 
 By default, source-dev runs write logs to stdout/stderr. Increase verbosity with:
 

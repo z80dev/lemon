@@ -8,7 +8,7 @@ import { loadConfiguration, loopbackOrigin } from '../../src/core/config';
 import { opaqueToken } from '../../src/core/auth';
 import { localAccessPath } from '../../src/core/local-access';
 import { issueOwnerSetupProof } from '../../src/core/setup';
-import { issueLocalSignInTicket, localSignInTicketState, revokeLocalSignInTicket, sweepLocalSignIn, type LocalTicketDeps, type LocalTicketRow, type LocalTicketChannel, type LocalTicketIssued } from '../../src/core/local-signin';
+import { issueLocalSignInTicket, localBackendChallengeProof, localSignInTicketState, revokeLocalSignInTicket, sweepLocalSignIn, type LocalTicketDeps, type LocalTicketRow, type LocalTicketChannel, type LocalTicketIssued } from '../../src/core/local-signin';
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanups.splice(0)) await close(); });
@@ -20,7 +20,7 @@ async function fixture(environment: Record<string, string> = {}) {
   const backend = await createBackend(config, key);
   cleanups.push(async () => { await backend.stop(); await rm(directory, { recursive: true, force: true }); });
   let now = Date.now(); backend.services.now = () => now;
-  const deps: LocalTicketDeps = { store: backend.services.store, now: () => now, digest: backend.services.mutations.digest, dataDir: directory };
+  const deps: LocalTicketDeps = { store: backend.services.store, now: () => now, digest: backend.services.mutations.digest, dataDir: directory, instanceId: backend.services.store.metadata<string>('instanceId')! };
   const request = (path: string, body?: unknown, token?: string, headers: Record<string, string> = {}, method = body === undefined ? 'GET' : 'POST') => backend.router.fetch(new Request(`${origin}/v1${path}`, { method, headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
   const issue = (channel: LocalTicketChannel = 'browser', withHandoffFile = false) => issueLocalSignInTicket(deps, { origin, channel, withHandoffFile });
   const ticket = (issued: LocalTicketIssued) => issued.url.split('=')[1]!;
@@ -33,6 +33,20 @@ async function fixture(environment: Record<string, string> = {}) {
 async function error(response: Response, status: number, code: P.ErrorCode) { expect(response.status).toBe(status); expect((await response.json()).error.code).toBe(code); }
 
 describe('local sign-in tickets', () => {
+  test('answers fresh listener challenges only with the private instance key', async () => {
+    const f = await fixture();
+    const nonce = opaqueToken();
+    const response = await f.request('/auth/local/challenge', { nonce }, undefined, { Host: '127.0.0.1:4100' });
+    expect(response.status).toBe(200);
+    const answer = await response.json() as P.LocalBackendChallenge;
+    const identity = { product: answer.product, instanceId: answer.instanceId, version: answer.version };
+    expect(answer.instanceId).toBe(f.deps.instanceId);
+    expect(answer.proof).toBe(localBackendChallengeProof(f.deps.digest, nonce, identity));
+    expect(answer.proof).not.toBe(localBackendChallengeProof(() => '0'.repeat(64), nonce, identity));
+    const freshNonce = opaqueToken();
+    const fresh = await (await f.request('/auth/local/challenge', { nonce: freshNonce }, undefined, { Host: '127.0.0.1:4100' })).json() as P.LocalBackendChallenge;
+    expect(fresh.proof).not.toBe(answer.proof);
+  });
   test('creates a passwordless owner once, consumes the setup proof and exposes no ticket in audit or cookie', async () => {
     const f = await fixture(); issueOwnerSetupProof(f.backend.services);
     const issued = f.issue();
@@ -82,6 +96,8 @@ describe('local sign-in tickets', () => {
     await error(await remote.request('/auth/local/redeem', { ticket: opaqueToken() }, undefined, { Host: '127.0.0.1:4100' }), 503, 'capability_unavailable');
     const f = await fixture(); const issued = f.issue(); const row = f.deps.store.require<LocalTicketRow>('signInTickets', issued.id);
     f.deps.store.put('signInTickets', { ...row, origin: 'http://127.0.0.1:9999' });
+    await error(await f.redeem(issued), 403, 'forbidden'); expect(localSignInTicketState(f.deps, issued.id)).toBe('pending');
+    f.deps.store.put('signInTickets', { ...row, instanceId: '00000000-0000-4000-8000-000000000000' });
     await error(await f.redeem(issued), 403, 'forbidden'); expect(localSignInTicketState(f.deps, issued.id)).toBe('pending');
   });
 
