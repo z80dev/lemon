@@ -28,8 +28,8 @@ runs:
     - name: Setup BEAM
       uses: erlef/setup-beam@v1
       with:
-        otp-version: "28.5"
-        elixir-version: "1.19.5"
+        otp-version: "29.1.2"
+        elixir-version: "1.20.5"
         # setup-beam never retries a mirror; jsDelivr proxies builds.hex.pm.
         hexpm-mirrors: |
           https://builds.hex.pm
@@ -39,7 +39,7 @@ runs:
       id: key
       shell: bash
       run: |
-        prefix="${RUNNER_OS}-mix-${{ inputs.family }}-otp28.5-elixir1.19.5-${{ hashFiles('mix.lock') }}"
+        prefix="${RUNNER_OS}-mix-${{ inputs.family }}-otp29.1.2-elixir1.20.5-${{ hashFiles('mix.lock') }}"
         echo "prefix=${prefix}-" >> "$GITHUB_OUTPUT"
         echo "key=${prefix}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
@@ -55,7 +55,7 @@ runs:
         key: ${{ steps.key.outputs.key }}
         restore-keys: |
           ${{ steps.key.outputs.prefix }}
-          ${{ runner.os }}-mix-${{ inputs.family }}-otp28.5-elixir1.19.5-
+          ${{ runner.os }}-mix-${{ inputs.family }}-otp29.1.2-elixir1.20.5-
 
     - name: Install inotify-tools
       uses: awalsh128/cache-apt-pkgs-action@v1

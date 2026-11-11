@@ -15,7 +15,7 @@ If you only read one section, read [Your first contribution](#your-first-contrib
 
 ## Prerequisites
 
-- **Elixir 1.19.5+ / OTP 28.5+.** The source toolchain is pinned in
+- **Elixir 1.20.5+ / OTP 29.1.2+.** The source toolchain is pinned in
   `.tool-versions`, as in CI. Package release prerequisites are documented
   separately in the [package release instructions](docs/release/hex-packages.md).
 - **A version manager** (`asdf` or `mise`) can install the pinned toolchain.
@@ -28,7 +28,7 @@ If you only read one section, read [Your first contribution](#your-first-contrib
 ```bash
 git clone https://github.com/z80dev/lemon.git
 cd lemon
-asdf install   # or `mise install` — toolchain is pinned in .tool-versions (Elixir 1.19.5 / OTP 28.5, same as CI)
+asdf install   # or `mise install` — toolchain is pinned in .tool-versions (Elixir 1.20.5 / OTP 29.1.2, same as CI)
 mix deps.get && mix compile
 mix lemon.doctor
 ```

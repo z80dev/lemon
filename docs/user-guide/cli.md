@@ -467,7 +467,7 @@ Source top-level and command help read the shared registry directly with Elixir,
 without Mix compilation, runtime startup, or credential creation. Packaged
 top-level help and launcher-command help also skip runtime configuration, so
 they work before `lemon setup` without the web secret. Other source
-commands require Elixir 1.19.5+, Erlang/OTP 28.5+, and Mix; lifecycle health checks
+commands require Elixir 1.20.5+, Erlang/OTP 29.1.2+, and Mix; lifecycle health checks
 require curl. Missing prerequisites produce an installation hint rather than a
 misleading stopped-runtime result.
 Commands that document `--json` emit JSON on success. Redacted operational

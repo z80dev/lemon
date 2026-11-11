@@ -100,13 +100,13 @@ require_command elixir
 require_command mix
 
 elixir -e '
-required = Version.parse!("1.19.5")
+required = Version.parse!("1.20.5")
 current = Version.parse!(System.version())
 if Version.compare(current, required) == :lt do
-  IO.puts(:stderr, "error Elixir #{System.version()} is below required 1.19.5")
+  IO.puts(:stderr, "error Elixir #{System.version()} is below required 1.20.5")
   System.halt(1)
 end
-IO.puts("ok Elixir #{System.version()} >= 1.19.5")
+IO.puts("ok Elixir #{System.version()} >= 1.20.5")
 '
 
 elixir -e '

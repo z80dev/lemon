@@ -211,7 +211,7 @@ See [LemonSim](apps/lemon_sim/README.md) and the
 
 ## Develop from source
 
-Requires Erlang/OTP 28.5+, Elixir 1.19.5+, and Bun 1.3.14+ (TUI). Node.js 24+ is
+Requires Erlang/OTP 29.1.2+, Elixir 1.20.5+, and Bun 1.3.14+ (TUI). Node.js 24+ is
 used for docs and the browser client.
 
 ```bash

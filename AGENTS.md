@@ -22,7 +22,7 @@ native coding sessions through `coding_agent` → `lemon_agent` → `lemon_ai`.
 
 ## Build and check
 
-Source development uses OTP 28.5+, Elixir 1.19.5+, Bun 1.3.14+ for the TUI, and
+Source development uses OTP 29.1.2+, Elixir 1.20.5+, Bun 1.3.14+ for the TUI, and
 Node.js 24 LTS+ for the documentation and browser client.
 
 ```bash

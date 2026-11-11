@@ -199,9 +199,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: _build/dialyzer
-          key: ${{ runner.os }}-plt-otp28.5-elixir1.19.5-${{ hashFiles('mix.lock') }}
+          key: ${{ runner.os }}-plt-otp29.1.2-elixir1.20.5-${{ hashFiles('mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-plt-otp28.5-elixir1.19.5-
+            ${{ runner.os }}-plt-otp29.1.2-elixir1.20.5-
 
       - name: Compile
         run: mix compile
@@ -228,7 +228,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: _build/dialyzer
-          key: ${{ runner.os }}-plt-otp28.5-elixir1.19.5-${{ hashFiles('mix.lock') }}
+          key: ${{ runner.os }}-plt-otp29.1.2-elixir1.20.5-${{ hashFiles('mix.lock') }}
 
       - name: Save deps and _build
         if: github.event_name == 'push' && steps.beam.outputs.cache-hit != 'true'

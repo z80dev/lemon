@@ -13,7 +13,7 @@ The initial stable 1.0 release artifact support target is:
 | --- | --- | --- |
 | Release artifacts | `linux-x86_64`, `linux-arm64`, `darwin-arm64` tarballs | Built by `.github/workflows/release.yml` on pinned `ubuntu-24.04`, `ubuntu-24.04-arm`, and `macos-15` runners; Linux artifacts carry a glibc 2.39 baseline |
 | Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, `lemon_tui`, and the standalone `lemon_bot` backend on all platforms | 12 tarballs total. All BEAM runtime artifacts must boot from extracted tarballs; the three `lemon_tui` artifacts are Bun binaries verified on native runners; each `lemon_bot` artifact is a compiled Bun backend boot-verified on its native runner. `sim_broadcast_platform` is not published; it is built from source or `apps/lemon_sim_ui/Dockerfile` for sim deploys |
-| Source install | Linux and macOS, best effort | Requires Elixir 1.19.5+ and Erlang/OTP 28.5+ |
+| Source install | Linux and macOS, best effort | Requires Elixir 1.20.5+ and Erlang/OTP 29.1.2+ |
 | Windows and macOS `x86_64` | Not supported for 1.0 | Use WSL, the container image, or source-level experimentation |
 | Install script | Supported with scope | `install.sh` on the `stable` channel for the three platform tags; `preview`/`nightly` require a pinned `LEMON_VERSION` |
 | Update | Supported with scope | `lemon update` stages runtime plus TUI artifacts atomically for full/min installs, flips the `versions/current` symlink, and restarts an already-running verified managed daemon on the selected release (a stopped install stays stopped); `lemon update rollback --receipt ID --confirm DIGEST` does the same for the retained prior release. No hot upgrades, no background auto-update |

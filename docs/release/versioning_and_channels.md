@@ -194,8 +194,8 @@ also checks that the filename agrees with those fields:
   "channel": "stable",
   "commit": "0123456789abcdef0123456789abcdef01234567",
   "built_at": "2026-08-16T00:00:00Z",
-  "otp": "28.5",
-  "elixir": "1.19.5",
+  "otp": "29.1.2",
+  "elixir": "1.20.5",
   "artifacts": [
     {
       "file": "lemon-2026.08.0-stable-linux-x86_64-lemon_runtime_full.tar.gz",

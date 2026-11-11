@@ -53,8 +53,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  OTP_VERSION: "28.5"
-  ELIXIR_VERSION: "1.19.5"
+  OTP_VERSION: "29.1.2"
+  ELIXIR_VERSION: "1.20.5"
 
 jobs:
   # ── Prepare a manual release commit and tag ──────────────────────────────────
@@ -291,7 +291,7 @@ jobs:
       # setup step covers every runner in the matrix. If a future OTP/Elixir
       # bump ever drops macOS precompiled support, the fallback is installing
       # via `mise install` against this repo's .tool-versions (already pinned
-      # to the same 28.5 / 1.19.5-otp-28), not Homebrew (its formulae track
+      # to the same 29.1.2 / 1.20.5-otp-29), not Homebrew (its formulae track
       # different, unpinned versions).
       - name: Setup BEAM
         uses: erlef/setup-beam@v1
