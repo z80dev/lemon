@@ -69,6 +69,7 @@ defmodule LemonCore.Service.TakeoverTest do
 
     opts = [
       home: home,
+      os: {:unix, :darwin},
       uid: "501",
       command_runner: runner,
       http_get: fn _ -> {:ok, %{"product" => "lemon_bot", "instanceId" => "ours"}} end
@@ -101,6 +102,7 @@ defmodule LemonCore.Service.TakeoverTest do
 
       opts = [
         home: home,
+        os: {:unix, :darwin},
         uid: "501",
         command_runner: runner,
         http_get: fn _ -> {:ok, %{"product" => "lemon_bot", "instanceId" => "ours"}} end
