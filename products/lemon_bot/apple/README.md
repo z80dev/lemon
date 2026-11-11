@@ -137,6 +137,20 @@ The Mac app is not sandboxed: it is a Developer ID app that runs as you, reads y
 files and runs `ssh` the way Terminal does. Being that OS user, or being able to
 `ssh` into a machine, is the credential. First launch shows two choices:
 
+On a clean Apple Silicon Mac, a release-pinned app offers **Set up Lemon Bot on
+this Mac**. Move the app into `/Applications` or `~/Applications` first; setup
+is disabled in App Translocation or another location so the worker helper's
+path stays stable. No developer tools are needed: the app verifies its pinned
+manifest digest, downloads and verifies the runtime (with bundled CPython) and
+backend, checks their staged executables, and installs only missing components
+under the updater lock. It does not change an already installed version.
+If only one component is present at another version, the missing half uses that
+version's HTTPS manifest and artifact checksums, rather than the app's digest.
+Progress and failures remain visible, with **Try again** and a release-pinned
+Terminal alternative; the Terminal installer still needs Python/Apple's Command
+Line Tools. After installation the app connects through `lemon-bot up --json
+--no-open --no-worker`.
+
 - **This Mac → Connect.** The app runs a small POSIX script (`MachineBootstrap.script`)
   that checks `http://127.0.0.1:4100/v1/setup`, starts an installed `lemon-bot --no-open`
   detached if it isn't running (falling back to `bun run … start` in the

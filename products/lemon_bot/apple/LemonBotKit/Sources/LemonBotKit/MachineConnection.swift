@@ -81,7 +81,7 @@ public enum MachineBootstrap {
         public let started: Bool
     }
 
-    public static let installCommand = "curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --profile lemon_bot"
+    public static var installCommand: String { ReleasePin.current?.installCommand() ?? ReleasePin.fallbackInstallCommand }
 
     /// Prints `port=`, `key=` and `status=ready`, or `status=not_installed|outdated|start_failed` (with `log=` lines).
     public static let script = #"""

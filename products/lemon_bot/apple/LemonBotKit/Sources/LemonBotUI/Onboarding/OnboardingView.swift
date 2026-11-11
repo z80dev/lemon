@@ -52,6 +52,19 @@ private struct MachineConnectView: View {
     @State private var step: LemonBotStore.ConnectStep?
     @State private var failure: (target: ConnectTarget, error: Error)?
     @State private var reopening: ID?
+    @State private var installStep: RuntimeInstallStep?
+
+    private var setupPin: ReleasePin? {
+        guard let pin = ReleasePin.current, pin.manifestSHA256 != nil else { return nil }
+        return pin
+    }
+
+    private var stableAppLocation: Bool {
+        let path = Bundle.main.bundleURL.resolvingSymlinksInPath().path
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return !path.contains("/AppTranslocation/")
+            && (path.hasPrefix("/Applications/") || path.hasPrefix(home + "/Applications/"))
+    }
 
     private enum LocalState: Equatable { case checking, running, stopped, missing }
 
@@ -93,12 +106,30 @@ private struct MachineConnectView: View {
                 case .checking: status(nil, "Looking for Lemon Bot…")
                 case .running: status(LB.success, "Lemon Bot is running")
                 case .stopped: status(LB.warning, "Not running yet — connecting starts it")
-                case .missing: InstallHint(machine: "this Mac")
+                case .missing:
+                    if let pin = setupPin {
+                        Text("Lemon Bot isn't set up on this Mac yet. Setting it up downloads Lemon \(pin.version) (about 75 MB) from GitHub, checks it against this app's signature, and runs it as you.")
+                            .font(LBFont.rowSubtitle).foregroundStyle(LB.muted)
+                    } else { InstallHint(machine: "this Mac") }
                 }
             }
         } action: {
-            Button(busy == .thisMac ? "Connecting…" : "Connect") { connect(.thisMac) }
-                .buttonStyle(.lemonPrimary).disabled(busy != nil)
+            if local == .missing, setupPin != nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    Button(failure?.target == .thisMac ? "Try again" : "Set up Lemon Bot on this Mac") { setUpThisMac() }
+                        .buttonStyle(.lemonPrimary).disabled(busy != nil || !stableAppLocation)
+                    if !stableAppLocation {
+                        Text("Move Lemon Bot to your Applications folder first").font(LBFont.meta).foregroundStyle(LB.muted)
+                    }
+                    DisclosureGroup("Install with Terminal instead") {
+                        InstallHint(machine: "this Mac")
+                        Text("Needs Apple's Command Line Tools").font(LBFont.meta).foregroundStyle(LB.muted)
+                    }
+                }
+            } else {
+                Button(busy == .thisMac ? "Connecting…" : "Connect") { connect(.thisMac) }
+                    .buttonStyle(.lemonPrimary).disabled(busy != nil)
+            }
         }
     }
 
@@ -162,6 +193,13 @@ private struct MachineConnectView: View {
     }
 
     private var stepText: String {
+        if let installStep {
+            switch installStep {
+            case let .download(received, total): return "Download: \(received) of \(total) bytes → Verify → Install → Start"
+            case .verify: return "Download ✓ → Verify → Install → Start"
+            case .install: return "Download ✓ → Verify ✓ → Install → Start"
+            }
+        }
         switch (busy, step) {
         case (.remote, .preparing?): return "Connecting over SSH and starting Lemon Bot if needed…"
         case (_, .preparing?): return "Starting Lemon Bot if needed…"
@@ -187,6 +225,27 @@ private struct MachineConnectView: View {
     }
 
     // MARK: Actions
+
+    private func setUpThisMac() {
+        guard busy == nil, stableAppLocation, let pin = setupPin else { return }
+        busy = .thisMac; failure = nil; step = nil
+        Task {
+            defer { busy = nil; installStep = nil; step = nil }
+            do {
+                let plan = try RuntimeInstaller.plan(layout: InstallLayout(home: FileManager.default.homeDirectoryForCurrentUser), pin: pin)
+                try await RuntimeInstaller.install(plan) { value in
+                    Task { @MainActor in installStep = value }
+                }
+                installStep = nil
+                local = .stopped
+                try await store.connect(to: .thisMac) { step = $0 }
+                dismiss()
+            } catch is CancellationError {
+            } catch {
+                failure = (.thisMac, error)
+            }
+        }
+    }
 
     private func connectRemote() {
         guard let value = MachineRoute.sshHost(host) else { failure = (.remote, MachineConnectionError.invalidHost); return }
@@ -225,6 +284,11 @@ private struct MachineConnectView: View {
 
     private func checkThisMac() async {
         local = .checking
+        if setupPin != nil,
+           !FileManager.default.isExecutableFile(atPath: FileManager.default.homeDirectoryForCurrentUser.path + "/.lemon/versions/current/bin/lemon") {
+            local = .missing
+            return
+        }
         if let client = try? HTTPTransport(baseURL: URL(string: "http://127.0.0.1:4100")!) {
             defer { client.session.invalidateAndCancel() }
             if (try? await client.read("/setup", timeout: 2, as: SetupStatus.self)) != nil { local = .running; return }
@@ -272,7 +336,7 @@ private struct FailureView: View {
     let machine: String
     private var parts: (message: String, detail: String?) {
         let split = humanErrorText(error).components(separatedBy: "\nDetails: ")
-        return (split[0], (error as? MachineConnectionError)?.detail ?? (split.count > 1 ? split.dropFirst().joined(separator: "\n") : nil))
+        return (split[0], (error as? MachineConnectionError)?.detail ?? (split.count > 1 ? split.dropFirst().joined(separator: "\n") : (error is RuntimeInstallError ? error.localizedDescription : nil)))
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -294,9 +358,9 @@ private struct InstallHint: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Install Lemon Bot on \(machine), then connect:").font(LBFont.rowSubtitle).foregroundStyle(LB.muted)
             HStack(spacing: 8) {
-                Text(MachineBootstrap.installCommand).font(LBFont.code).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                Text(ReleasePin.current?.installCommand() ?? ReleasePin.fallbackInstallCommand).font(LBFont.code).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                 Spacer(minLength: 4)
-                Button("Copy") { copyText(MachineBootstrap.installCommand) }.buttonStyle(.pill(.secondary, compact: true))
+                Button("Copy") { copyText(ReleasePin.current?.installCommand() ?? ReleasePin.fallbackInstallCommand) }.buttonStyle(.pill(.secondary, compact: true))
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(LB.codeInset))

@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- Release-pinned Mac app setup verifies and installs missing runtime/backend
+  components without developer tools; darwin runtimes bundle checksum-pinned
+  CPython and avoid Apple's Python shim when Command Line Tools are absent.
+
 ### Fixed
 
 - Load the certificate provider before Telegram and Discord setup construct their
