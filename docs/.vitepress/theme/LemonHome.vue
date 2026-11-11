@@ -3,17 +3,21 @@ import { ref } from 'vue'
 import { withBase } from 'vitepress'
 import LemonFace from './LemonFace.vue'
 
-const install = 'curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh'
-const copied = ref(false)
+const installer = 'curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh'
+const installs = [
+  { label: 'Lemon Bot · browser setup', command: `${installer} -s -- --profile bot` },
+  { label: 'Lemon · terminal setup', command: installer },
+]
+const copied = ref('')
 let copiedTimer
-async function copyInstall() {
+async function copyInstall(command) {
   try {
-    await navigator.clipboard.writeText(install)
-    copied.value = true
+    await navigator.clipboard.writeText(command)
+    copied.value = command
     clearTimeout(copiedTimer)
-    copiedTimer = setTimeout(() => { copied.value = false }, 1800)
+    copiedTimer = setTimeout(() => { copied.value = '' }, 1800)
   } catch {
-    copied.value = false
+    copied.value = ''
   }
 }
 
@@ -35,7 +39,7 @@ const workers = [
 ]
 
 const paths = [
-  { color: 'yellow', mood: 'happy', leaf: true, tag: 'Use Lemon', title: 'Your first real conversation.', text: 'Install, connect a provider, start a chat, and come back to the same session tomorrow.', link: '/getting-started/quickstart', label: 'Follow the quickstart' },
+  { color: 'yellow', mood: 'happy', leaf: true, tag: 'Use Lemon Bot', title: 'Your first useful Bot.', text: 'Install, connect a model, and create a Bot in your browser. Review commands before they run.', link: '/getting-started/lemon-bot', label: 'Set up Lemon Bot' },
   { color: 'green', mood: 'joy', tag: 'Build with Lemon', title: 'Make it your own.', text: 'Explore the agent stack, write reusable skills, and build on the control plane.', link: '/getting-started/build-your-first-agent', label: 'Build your first agent' },
   { color: 'red', mood: 'derp', tag: 'Explore LemonSim', title: 'Put agents to the test.', text: 'Run deterministic, event-sourced simulation worlds with replay verification.', link: '/benchmarks/quickstart', label: 'Enter the arena' },
 ]
@@ -60,19 +64,22 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
         </h1>
         <p class="lede">Meet Lemon — a local-first AI assistant that brings your models, tools, and conversations together, and keeps useful context close.</p>
 
-        <div class="install">
-          <span class="prompt" aria-hidden="true">$</span>
-          <code>{{ install }}</code>
-          <button type="button" class="copy" :class="{ done: copied }" @click="copyInstall">
-            <LemonFace :size="18" :mood="copied ? 'joy' : 'happy'" />
-            <span>{{ copied ? 'Copied!' : 'Copy' }}</span>
-          </button>
-          <span class="sr-only" aria-live="polite">{{ copied ? 'Install command copied' : '' }}</span>
-        </div>
+        <template v-for="install in installs" :key="install.command">
+          <p class="footnote">{{ install.label }}</p>
+          <div class="install">
+            <span class="prompt" aria-hidden="true">$</span>
+            <code>{{ install.command }}</code>
+            <button type="button" class="copy" :class="{ done: copied === install.command }" :aria-label="`Copy ${install.label} command`" @click="copyInstall(install.command)">
+              <LemonFace :size="18" :mood="copied === install.command ? 'joy' : 'happy'" />
+              <span>{{ copied === install.command ? 'Copied!' : 'Copy' }}</span>
+            </button>
+            <span class="sr-only" aria-live="polite">{{ copied === install.command ? `${install.label} command copied` : '' }}</span>
+          </div>
+        </template>
 
         <div class="actions">
-          <a class="btn primary" :href="withBase('/getting-started/quickstart')">Get started <span aria-hidden="true">→</span></a>
-          <a class="btn ghost" href="https://github.com/z80dev/lemon">Star on GitHub <span aria-hidden="true">↗</span></a>
+          <a class="btn primary" :href="withBase('/getting-started/lemon-bot')">Set up Lemon Bot <span aria-hidden="true">→</span></a>
+          <a class="btn ghost" :href="withBase('/getting-started/quickstart')">Terminal quickstart <span aria-hidden="true">→</span></a>
         </div>
         <p class="footnote">Self-hosted · macOS &amp; Linux · Built on Elixir / OTP</p>
       </div>
