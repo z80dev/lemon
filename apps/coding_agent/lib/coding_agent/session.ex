@@ -937,34 +937,13 @@ defmodule CodingAgent.Session do
   # this process is the only journal writer, so the durable fence entry is
   # appended here. The reply is `:ok` only once the fence is durable.
   def handle_call(:record_workspace_read_fence, _from, state) do
-    entry_type = WorkspaceReads.fence_entry_type()
+    # Fence ancestors before exposing any unreviewed bytes, including streamed
+    # task output and async completions. An unavailable ancestor denies exemption.
+    parent = state.session_manager.header.parent_session
 
-    cond do
-      SessionManager.latest_custom_entry(state.session_manager, entry_type) ->
-        {:reply, WorkspaceReads.set_fenced(state.session_manager.header.id), state}
-
-      not is_binary(state.session_file) ->
-        {:reply, {:error, :journal_write_failed}, state}
-
-      true ->
-        entry =
-          SessionEntry.custom(entry_type, %{
-            "fenced" => true,
-            "timestamp" => System.system_time(:millisecond)
-          })
-
-        session_manager = SessionManager.append_entry(state.session_manager, entry)
-
-        try do
-          SessionManager.persist(session_manager, state.session_file)
-        rescue
-          File.Error ->
-            {:reply, {:error, :journal_write_failed}, state}
-        else
-          persisted ->
-            reply = WorkspaceReads.set_fenced(persisted.header.id)
-            {:reply, reply, %{state | session_manager: persisted}}
-        end
+    case if(is_nil(parent), do: :ok, else: WorkspaceReads.fence!(parent)) do
+      :ok -> persist_workspace_read_fence(state)
+      {:error, _} = error -> {:reply, error, state}
     end
   end
 
@@ -1817,6 +1796,38 @@ defmodule CodingAgent.Session do
   # ============================================================================
   # Private Functions
   # ============================================================================
+  defp persist_workspace_read_fence(state) do
+    entry_type = WorkspaceReads.fence_entry_type()
+
+    cond do
+      SessionManager.latest_custom_entry(state.session_manager, entry_type) ->
+        {:reply, WorkspaceReads.set_fenced(state.session_manager.header.id), state}
+
+      not is_binary(state.session_file) ->
+        {:reply, {:error, :journal_write_failed}, state}
+
+      true ->
+        entry =
+          SessionEntry.custom(entry_type, %{
+            "fenced" => true,
+            "timestamp" => System.system_time(:millisecond)
+          })
+
+        session_manager = SessionManager.append_entry(state.session_manager, entry)
+
+        try do
+          SessionManager.persist(session_manager, state.session_file)
+        rescue
+          File.Error ->
+            {:reply, {:error, :journal_write_failed}, state}
+        else
+          persisted ->
+            reply = WorkspaceReads.set_fenced(persisted.header.id)
+            {:reply, reply, %{state | session_manager: persisted}}
+        end
+    end
+  end
+
   defp handle_session_down(ref, pid, _reason, state) do
     cond do
       state.auto_compaction.task_monitor_ref == ref ->

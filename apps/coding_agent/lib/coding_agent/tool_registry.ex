@@ -233,6 +233,7 @@ defmodule CodingAgent.ToolRegistry do
           |> Map.new()
       end
       |> Map.put_new(:cwd, cwd)
+      |> Map.put(:workspace_dir, Keyword.get(opts, :workspace_dir))
 
     resolved_tools
     |> filter_tools(disabled, enabled_only)
@@ -1070,6 +1071,11 @@ defmodule CodingAgent.ToolRegistry do
       original_execute = tool.execute
 
       execute = fn tool_call_id, params, signal, on_update ->
+        params =
+          if source == :builtin,
+            do: WorkspaceReads.resolve_params(name, params, approval_context),
+            else: params
+
         tier = if source == :builtin, do: ToolPolicy.tier(name, params), else: :exec
 
         policy_required =
@@ -1084,7 +1090,7 @@ defmodule CodingAgent.ToolRegistry do
             name in ["webfetch", "websearch"] and WorkspaceReads.fenced?(approval_context) ->
               true
 
-            name in ["read", "ls", "grep"] and policy_required ->
+            source == :builtin and name in ["read", "ls", "grep"] and policy_required ->
               not (WorkspaceReads.exempt?(tool_policy, name, params, approval_context) and
                      WorkspaceReads.fence!(approval_context) == :ok)
 

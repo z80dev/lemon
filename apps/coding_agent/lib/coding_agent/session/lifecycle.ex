@@ -848,7 +848,11 @@ defmodule CodingAgent.Session.Lifecycle do
     persisted? = not is_nil(SessionManager.latest_custom_entry(session_manager, @fence_entry))
     inherited? = Keyword.get(opts, :workspace_read_fenced) == true
 
-    WorkspaceReads.register_session(session_id, persisted? or inherited?)
+    WorkspaceReads.register_session(
+      session_id,
+      persisted? or inherited?,
+      session_manager.header.parent_session
+    )
 
     if inherited? and not persisted? do
       SessionManager.append_entry(

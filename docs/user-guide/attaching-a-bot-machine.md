@@ -433,11 +433,15 @@ The Bot folder is not an OS sandbox. Its project config is not loaded: runtime
 configuration still comes from the worker's default cwd.
 
 With the durable `workspace_read_exempt` policy enabled, safe `read`, `ls` and
-non-following `grep` calls within that folder need no approval. Symlink escapes,
-hard-linked reads and `find` never qualify. The first unreviewed read permanently
-fences that session's `webfetch` and `websearch` behind approval, including after
-restore and in later child tasks. Workspace folder-review policy can disable
-the exemption; a run request alone cannot enable it.
+explicit-file `grep` calls within that folder need no approval. Content reads
+must be single-linked regular files; recursive grep searches, symlink escapes,
+unresolvable paths and `find` require approval. Memory aliases resolve to their
+actual workspace targets before approval, not to same-named Bot-folder files.
+Before an unreviewed read, the session and every ancestor are durably fenced:
+`webfetch` and `websearch` require approval, including after restore and in
+existing or later child tasks. If an ancestor cannot be fenced, the read needs
+approval instead. Workspace folder-review policy can disable the exemption;
+a run request alone cannot enable it.
 
 
 ## Files, secrets, and terminal access
