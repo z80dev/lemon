@@ -130,6 +130,7 @@ public struct ConversationView: View {
                 .safeAreaInset(edge: .bottom, spacing: 0) { bottomStack.background(LB.canvas) }
             #else
             VStack(spacing: 0) {
+                HostOfflineBanner(store: store, bot: bot, belowHeader: true)
                 transcript(rows, entries: entries, typing: showTyping, highlight: findOpen && !find.isEmpty ? current : flashID)
                 bottomStack
             }

@@ -6,6 +6,13 @@ public enum HostSetupState: Equatable, Sendable {
     case running(String)
     case failed(message: String, detail: String?)
     case done
+
+    public var allowsAutomaticAttempt: Bool {
+        switch self {
+        case .idle, .done: return true
+        case .running, .failed: return false
+        }
+    }
 }
 
 /// Turns the machine a Mac connected to (this Mac or an SSH host) into a Bot machine: a Lemon
@@ -110,6 +117,7 @@ public enum HostEnrollment {
     unit_file="$HOME/.config/systemd/user/$unit"
     logs="$HOME/.lemon/logs"; log="$logs/node-$name.log"
     mkdir -p "$logs"
+    touch "$log"
     say_log() { tail -n 8 "$log" 2>/dev/null | sed 's/^/log=/'; }
     size() { n=$(wc -c <"$log" 2>/dev/null | tr -d ' '); echo "${n:-0}"; }
     online_since() { i=0; while [ $i -lt 60 ]; do tail -c +$(($1 + 1)) "$log" 2>/dev/null | grep -q "Execution node online" && return 0; i=$((i + 1)); sleep 1; done; return 1; }
@@ -118,7 +126,6 @@ public enum HostEnrollment {
       if [ "$(uname -s)" = Darwin ]; then launchctl bootout "gui/$uid/$label" >/dev/null 2>&1
       elif systemd_user; then systemctl --user stop "$unit" >/dev/null 2>&1
       fi
-      pkill -f "node join --name $name --controller" >/dev/null 2>&1
       sleep 1
     }
     compatible() {
@@ -259,21 +266,50 @@ extension LemonBotStore {
         return ConnectionIssue.isLoopback(account.baseURL) ? .thisMac : nil
     }
 
-    /// True when nothing can run Bots yet and this Mac can fix that without asking.
+    /// Automatic attempts are keyed by account, connection and machine availability, not Bot count.
+    public var hostSetupTrigger: String {
+        ([account?.id ?? "", connectionState, member?.role ?? ""] + machines.map { "\($0.id):\($0.status)" }.sorted()).joined(separator: "|")
+    }
+
     public var shouldSetUpHost: Bool {
         hostRoute != nil && ["owner", "admin"].contains(member?.role ?? "") && connectionState == "online"
-            && !machines.contains { $0.status == "online" } && hostSetup == .idle
+            && (machines.isEmpty || machines.contains { $0.nodeName == hostMachineNodeName && $0.status == "offline" })
+            && hostSetup.allowsAutomaticAttempt
+    }
+
+    public func automaticallySetUpHostMachine() async {
+        let trigger = hostSetupTrigger
+        guard lastHostSetupTrigger != trigger, hostSetup.allowsAutomaticAttempt,
+              let route = hostRoute, connectionState == "online",
+              ["owner", "admin"].contains(member?.role ?? "") else { return }
+        lastHostSetupTrigger = trigger
+        if hostMachineNodeName == nil {
+            let current = generation
+            do {
+                let identity = HostEnrollment.identity(try await CommandRunner.script(HostEnrollment.identifyScript, on: route, timeout: 30))
+                try assertGeneration(current)
+                hostMachineNodeName = identity.nodeName
+            } catch {
+                guard generation == current else { return }
+                hostSetup = .failed(message: error.localizedDescription, detail: nil)
+                return
+            }
+        }
+        if shouldSetUpHost { await setUpHostMachine() }
+        // Enrollment itself changes the machine set. Do not treat that as another attempt.
+        lastHostSetupTrigger = hostSetupTrigger
     }
 
     /// One click: enroll the connected machine as a Lemon execution node and keep its worker running.
     /// Reuses a machine of the same name: restarting its worker, or repairing it with a fresh invite.
     public func setUpHostMachine() async {
         if case .running = hostSetup { return }
-        guard let route = hostRoute else { return }
+        guard let route = hostRoute, ["owner", "admin"].contains(member?.role ?? ""), connectionState == "online" else { return }
         let label = route.machineLabel
         do {
             hostSetup = .running("Checking \(label)…")
             let (nodeName, displayName) = HostEnrollment.identity(try await CommandRunner.script(HostEnrollment.identifyScript, on: route, timeout: 30))
+            hostMachineNodeName = nodeName
             let current: Page<Machine> = try await read("/machines")
             machines = current.items
             let machine: Machine
