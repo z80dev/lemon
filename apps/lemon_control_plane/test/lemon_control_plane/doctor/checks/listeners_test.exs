@@ -1,7 +1,10 @@
 defmodule LemonControlPlane.Doctor.Checks.ListenersTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonControlPlane.Doctor.Checks.Listeners
+
+  defmodule EndpointFixture do
+  end
 
   # Every listener is supplied explicitly so the suite never inspects a real
   # socket, a real epmd or this VM's distribution settings.
@@ -30,6 +33,45 @@ defmodule LemonControlPlane.Doctor.Checks.ListenersTest do
   end
 
   describe "configured HTTP listeners" do
+    test "optional endpoint binds resolve through the runtime registry" do
+      previous_registry = Application.fetch_env(:lemon_core, :runtime_endpoints)
+      previous_endpoint = Application.fetch_env(:lemon_control_plane, EndpointFixture)
+
+      on_exit(fn ->
+        for {app, key, previous} <- [
+              {:lemon_core, :runtime_endpoints, previous_registry},
+              {:lemon_control_plane, EndpointFixture, previous_endpoint}
+            ] do
+          case previous do
+            {:ok, value} -> Application.put_env(app, key, value)
+            :error -> Application.delete_env(app, key)
+          end
+        end
+      end)
+
+      for {field, omitted, name, port} <- [
+            {:web_port, [:web_configured, :web_ip, :web_port], "listeners.web", 4500},
+            {:sim_port, [:sim_ui_configured, :sim_ui_ip, :sim_ui_port], "listeners.sim_ui", 4501}
+          ] do
+        Application.put_env(:lemon_core, :runtime_endpoints, [
+          {field, :lemon_control_plane, EndpointFixture}
+        ])
+
+        Application.put_env(:lemon_control_plane, EndpointFixture,
+          http: [ip: {0, 0, 0, 0}, port: port]
+        )
+
+        result =
+          @loopback
+          |> Keyword.drop(omitted)
+          |> Listeners.run()
+          |> Enum.find(&(&1.name == name))
+
+        assert result.status == :warn
+        assert result.message =~ "configured to bind 0.0.0.0:#{port}"
+      end
+    end
+
     test "a loopback release default passes every listener" do
       checks = Listeners.run(@loopback)
 

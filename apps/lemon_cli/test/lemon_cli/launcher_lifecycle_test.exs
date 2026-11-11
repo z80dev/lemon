@@ -34,7 +34,8 @@ defmodule LemonCli.LauncherLifecycleTest do
 
     overrides =
       ~w(LEMON_CONTROL_PLANE_OPERATOR_TOKEN LEMON_RUNTIME_PID_FILE LEMON_RUNTIME_LOG_FILE
-      LEMON_CONTROL_PLANE_PORT LEMON_WEB_PORT LEMON_SIM_UI_PORT RELEASE_TMP RELEASE_COOKIE)
+      LEMON_CONTROL_PLANE_PORT LEMON_WEB_PORT LEMON_SIM_UI_PORT RELEASE_TMP RELEASE_COOKIE
+      RELEASE_DISTRIBUTION NODE_MODE)
 
     env =
       Enum.map(overrides, &{&1, nil}) ++
@@ -68,7 +69,9 @@ defmodule LemonCli.LauncherLifecycleTest do
 
     for root <- [ctx.source, ctx.release] do
       assert {output, 0} = launch(root, ["logs", "--follow"], env)
-      assert output =~ "-elixir ansi_enabled false +Bd"
+      assert output =~ "-elixir ansi_enabled false"
+      assert output =~ "-kernel inet_dist_use_interface {127,0,0,1}"
+      assert Regex.match?(~r/(?:^|\s)\+Bd(?:\s|$)/, output)
       refute output =~ "unexpected runtime start"
     end
 

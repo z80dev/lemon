@@ -87,13 +87,14 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
   end
 
   defp check_web(opts) do
+    {endpoint_available?, endpoint_opts} = endpoint_config(:web_port)
+
     configured? =
-      Keyword.get(opts, :web_configured, Code.ensure_loaded?(LemonWeb.Endpoint))
+      Keyword.get(opts, :web_configured, endpoint_available?)
 
     if not configured? do
       Check.skip("listeners.web", "Web UI is not configured.")
     else
-      endpoint_opts = Application.get_env(:lemon_web, LemonWeb.Endpoint, [])
       http_opts = Keyword.get(endpoint_opts, :http, [])
 
       ip =
@@ -113,13 +114,14 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
   end
 
   defp check_sim_ui(opts) do
+    {endpoint_available?, endpoint_opts} = endpoint_config(:sim_port)
+
     configured? =
-      Keyword.get(opts, :sim_ui_configured, Code.ensure_loaded?(LemonSimUi.Endpoint))
+      Keyword.get(opts, :sim_ui_configured, endpoint_available?)
 
     if not configured? do
       Check.skip("listeners.sim_ui", "Sim UI is not configured.")
     else
-      endpoint_opts = Application.get_env(:lemon_sim_ui, LemonSimUi.Endpoint, [])
       http_opts = Keyword.get(endpoint_opts, :http, [])
 
       ip =
@@ -135,6 +137,18 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
           @default_sim_port
 
       evaluate_listener("listeners.sim_ui", "Sim UI", ip, port, opts)
+    end
+  end
+
+  defp endpoint_config(port_field) do
+    case Enum.find(LemonCore.Runtime.Env.runtime_endpoints(), fn {field, _app, _module} ->
+           field == port_field
+         end) do
+      {_field, app, endpoint} ->
+        {Code.ensure_loaded?(endpoint), Application.get_env(app, endpoint, [])}
+
+      nil ->
+        {false, []}
     end
   end
 
