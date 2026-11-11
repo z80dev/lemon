@@ -66,6 +66,12 @@ Launchers default epmd and Erlang distribution to loopback. Explicit long-name
 `ERL_EPMD_ADDRESS` can be set explicitly. Run `lemon doctor` to inspect listener
 binds. A pre-upgrade epmd may still listen on all interfaces: with Lemon stopped,
 run `epmd -kill` or restart the computer.
+The dedicated source control-plane and gateway launchers use the same defaults.
+Source launchers generate or reuse `~/.lemon/cookie` (mode `0600`) unless a cookie
+is explicitly supplied through `--cookie`, `LEMON_GATEWAY_NODE_COOKIE`, or
+`LEMON_GATEWAY_COOKIE`. Both primary launchers load the saved
+`LEMON_CONTROL_PLANE_NODE_PORT` from `ports.env`, including `0` (disabled);
+an explicit environment value takes precedence.
 
 
 ## Example
