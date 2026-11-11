@@ -2,20 +2,19 @@ defmodule LemonCore.Setup.Readiness do
   @moduledoc """
   Derives the local first-run readiness state shared by every Lemon client.
 
-  Readiness is deliberately read-only. It inspects the resolved global config,
-  the secrets backend, and the configured default provider/model without
-  starting a runtime or making a network request. The setup wizard, TUI, Web
-  UI, and launchers can therefore agree on whether a prompt can run and on the
-  exact recovery steps when it cannot.
+  Readiness inspects the resolved global config, secrets backend and configured
+  default provider/model without starting a runtime or making a model request.
+  Externally managed omp credentials are checked through the registered provider
+  management service; omp may refresh its own access token.
 
   This module reports three stable steps:
 
     * `:config` - the global config file exists
-    * `:secrets` - a secrets master key is configured
+    * `:secrets` - a secrets master key is configured, or omp needs no local secret
     * `:provider` - a matching default provider/model has a usable credential
 
   Provider live verification remains the responsibility of `lemon setup` and
-  `lemon doctor`; readiness never sends credentials over the network.
+  `lemon doctor`; readiness never sends a model request.
   """
 
   alias LemonCore.Config.{LegacyAgentMigration, Modular, Providers}
@@ -59,14 +58,16 @@ defmodule LemonCore.Setup.Readiness do
     expanded = Path.expand(config_path)
     settings = expanded |> read_settings() |> LegacyAgentMigration.migrate_settings()
     secrets_status = Secrets.status()
+    provider = derive_provider(settings)
+    omp? = omp_default?(settings)
 
     %{
       config: %{complete: File.exists?(expanded), path: expanded},
       secrets: %{
-        complete: secrets_status.configured == true,
-        source: secrets_status.source
+        complete: omp? or secrets_status.configured == true,
+        source: if(omp?, do: :not_required, else: secrets_status.source)
       },
-      provider: derive_provider(settings)
+      provider: provider
     }
   end
 
@@ -149,12 +150,41 @@ defmodule LemonCore.Setup.Readiness do
     inline_key = normalize_optional_string(provider_cfg["api_key"])
 
     cond do
-      keyless_provider?(provider, provider_cfg) -> {true, nil}
-      inline_key != nil -> {true, nil}
-      ProviderDiagnostics.ambient_configured?(provider) -> {true, nil}
-      Enum.any?(refs, &secret_usable?/1) -> {true, nil}
-      true -> {false, :credential_not_usable}
+      omp_provider?(provider, provider_cfg) ->
+        {LemonCore.ProviderManagement.credential_ready?(provider, provider_cfg),
+         :credential_not_usable}
+
+      keyless_provider?(provider, provider_cfg) ->
+        {true, nil}
+
+      inline_key != nil ->
+        {true, nil}
+
+      ProviderDiagnostics.ambient_configured?(provider) ->
+        {true, nil}
+
+      Enum.any?(refs, &secret_usable?/1) ->
+        {true, nil}
+
+      true ->
+        {false, :credential_not_usable}
     end
+  end
+
+  defp omp_default?(settings) do
+    provider = get_in(settings, ["defaults", "provider"])
+
+    settings
+    |> Map.get("providers", %{})
+    |> Enum.any?(fn {name, cfg} ->
+      normalize_provider_name(name) == normalize_provider_name(provider || "") and
+        omp_provider?(name, cfg)
+    end)
+  end
+
+  defp omp_provider?(provider, cfg) do
+    normalize_provider_name(provider) in ["kimi-coding", "kimi-for-coding"] and
+      (Map.get(cfg, :auth_source) || Map.get(cfg, "auth_source")) == "omp"
   end
 
   # A referenced credential is usable when the encrypted store can decrypt it,

@@ -8,9 +8,10 @@ defmodule LemonCli.Doctor.Providers do
   each as its own `providers.live.<id>` result. The selection arrives as
   `:live_provider`.
 
-  Every probe is the same bounded, non-generating `GET {base_url}/models`
-  request (five-second timeout, shared overall deadline); no completion is ever
-  requested. A selection of `all` is capped at eight providers, and the surplus
+  Model probes use a bounded, non-generating `GET {base_url}/models`
+  request (five-second timeout, shared overall deadline); omp authentication
+  instead checks only credential resolution through `omp token kimi-code`.
+  No completion is requested. A selection of `all` is capped at eight providers; the surplus
   is reported as one skipped result rather than probed. Results carry fixed
   failure text only: credentials, URLs and transport errors never reach them.
 
@@ -211,7 +212,36 @@ defmodule LemonCli.Doctor.Providers do
   defp check(opts, entry) do
     name = name_for(entry)
     config = load_config(opts)
+    provider = if entry, do: elem(entry, 0), else: agent_default_provider(config)
+    kimi? = identity(provider) == "kimi_coding"
 
+    provider_cfg =
+      if kimi?,
+        do: ProviderNames.provider_config(providers_map(config), provider) || %{},
+        else: %{}
+
+    auth_source = Map.get(provider_cfg, :auth_source) || Map.get(provider_cfg, "auth_source")
+
+    if kimi? and auth_source == "omp" do
+      if LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(
+           provider,
+           providers_map(config)
+         ) do
+        Check.pass(name, label(entry) <> " can reuse omp's Kimi Code login.")
+      else
+        Check.skip(
+          name,
+          "Skipped (omp could not provide a usable Kimi Code token; check omp_path, run `omp` and `/login kimi-code`)."
+        )
+      end
+    else
+      model_check(opts, entry, name, config)
+    end
+  rescue
+    _ -> Check.fail(name_for(entry), "Provider live check could not complete.")
+  end
+
+  defp model_check(opts, entry, name, config) do
     input_fn = Keyword.get(opts, :provider_live_input, &Verification.live_input/1)
 
     verifier =

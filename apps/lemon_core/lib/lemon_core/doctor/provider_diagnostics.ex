@@ -14,6 +14,7 @@ defmodule LemonCore.Doctor.ProviderDiagnostics do
     google_gemini_cli
     google_vertex
     kimi
+    kimi-coding
     minimax
     openai
     openai-codex
@@ -120,9 +121,12 @@ defmodule LemonCore.Doctor.ProviderDiagnostics do
       known: provider in @known_providers or config_name in @known_providers,
       configured: map_size(provider_config) > 0,
       credential_ready:
-        ambient_configured or
-          Enum.any?(secret_references, & &1.present) or
-          Enum.any?(inline_credentials, & &1.configured),
+        if(safe_auth_source(provider_config) == "omp",
+          do: LemonCore.ProviderManagement.credential_ready?(provider, provider_config),
+          else:
+            ambient_configured or Enum.any?(secret_references, & &1.present) or
+              Enum.any?(inline_credentials, & &1.configured)
+        ),
       auth_source: safe_auth_source(provider_config),
       inline_credentials: inline_credentials,
       endpoint_shape: endpoint_shape,
@@ -243,16 +247,28 @@ defmodule LemonCore.Doctor.ProviderDiagnostics do
     normalized = normalize_provider(provider)
 
     cond do
-      Map.has_key?(providers, normalized) -> normalized
-      normalized == "openai_codex" and Map.has_key?(providers, "openai-codex") -> "openai-codex"
-      normalized == "openai-codex" and Map.has_key?(providers, "openai_codex") -> "openai_codex"
-      true -> normalized
+      Map.has_key?(providers, normalized) ->
+        normalized
+
+      normalized in ["kimi-coding", "kimi-for-coding"] ->
+        Enum.find(Map.keys(providers), normalized, fn name ->
+          normalize_provider(name) in ["kimi-coding", "kimi-for-coding"]
+        end)
+
+      normalized == "openai_codex" and Map.has_key?(providers, "openai-codex") ->
+        "openai-codex"
+
+      normalized == "openai-codex" and Map.has_key?(providers, "openai_codex") ->
+        "openai_codex"
+
+      true ->
+        normalized
     end
   end
 
   defp safe_auth_source(provider_config) do
     case map_value(provider_config, :auth_source) do
-      value when value in ["api_key", "oauth"] -> value
+      value when value in ["api_key", "oauth", "omp"] -> value
       _ -> nil
     end
   end

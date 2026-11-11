@@ -6,6 +6,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Added
+
+- `LemonAi.Auth.OmpToken` retrieves Kimi Code access JWTs through a bounded,
+  argv-only omp invocation with process-local expiry caching and forced refresh.
+  Refresh credentials remain owned by omp.
+
 ### Fixed
 
 - Validate OAuth callback ports in the original authority before URI normalization,

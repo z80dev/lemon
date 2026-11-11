@@ -56,6 +56,13 @@ defmodule LemonCli.Setup.ProviderManagement do
   @max_key_bytes 16_384
   @credential_keys ~w(api_key api_key_env api_key_secret oauth_secret auth_source auth)
 
+  @doc false
+  def credential_ready?(provider, provider_cfg) do
+    LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(provider, %{
+      provider => provider_cfg
+    })
+  end
+
   def list(opts \\ []) do
     with {:ok, target} <- target(opts) do
       locked(path(opts), fn -> listing(target, opts) end)

@@ -2,7 +2,7 @@ defmodule LemonCli.Onboarding.Provider do
   @moduledoc false
 
   # `:device` is a headless device-code sign-in offered beside a browser `:oauth` flow.
-  @type auth_mode :: :oauth | :device | :api_key | :codex_cli
+  @type auth_mode :: :oauth | :device | :api_key | :codex_cli | :omp
 
   @enforce_keys [
     :id,

@@ -32,8 +32,8 @@ defmodule LemonCli.Setup.Provider do
 
   Onboarding pre-checks:
   1. Required apps (`:lemon_core`, `:lemon_ai`) are started.
-  2. Secrets must be initialized — if not, prints guidance and returns
-     `{:error, :secrets_not_configured}`.
+  2. Secrets must be initialized for modes that store credentials. An omp login
+     is reused externally and does not require encrypted Lemon secrets.
   3. Bootstraps the global config scaffold when none exists yet.
 
   Then resolves the provider (explicit `--provider`/positional argument or
@@ -87,13 +87,17 @@ defmodule LemonCli.Setup.Provider do
     skip_verify? = skip_verify? or Keyword.get(opts, :skip_verify, false)
     live_verify? = Keyword.get(opts, :live_verify, false)
 
-    with :ok <- ensure_secrets_ready(io),
+    with :ok <- ensure_provider_secrets_ready(rest, io),
          :ok <- maybe_bootstrap_config(io),
-         :ok <- onboard(rest, io, opts) do
+         {:ok, provider} <- onboard(rest, io, opts) do
       verify_config(
         extract_config_path(rest),
         io,
-        Keyword.put(opts, :skip_verify, skip_verify? or not live_verify?)
+        Keyword.put(
+          opts,
+          :skip_verify,
+          skip_verify? or not live_verify? or omp_auth?(provider.id, extract_config_path(rest))
+        )
       )
     end
   end
@@ -144,7 +148,7 @@ defmodule LemonCli.Setup.Provider do
         Keyword.put(Keyword.take(opts, [:discovery, :token, :codex_discover]), :io, io)
       )
 
-      :ok
+      {:ok, provider}
     end)
   end
 
@@ -160,7 +164,9 @@ defmodule LemonCli.Setup.Provider do
     if provider_state.provider && provider_state.model do
       io.info.("")
       io.info.("Verifying provider configuration...")
-      skip_verify? = Keyword.get(opts, :skip_verify, false)
+
+      skip_verify? =
+        Keyword.get(opts, :skip_verify, false) or omp_auth?(provider_state.provider, config_path)
 
       unless skip_verify? do
         provider_label =
@@ -217,7 +223,7 @@ defmodule LemonCli.Setup.Provider do
       end
     else
       io.info.("")
-      io.info.("Credentials stored, but no default provider/model was set.")
+      io.info.("Provider configured, but no default provider/model was set.")
       io.info.("Run `lemon setup provider --set-default` to make this provider the default.")
       {:ok, nil}
     end
@@ -243,6 +249,23 @@ defmodule LemonCli.Setup.Provider do
   # ──────────────────────────────────────────────────────────────────────────
   # Pre-checks
   # ──────────────────────────────────────────────────────────────────────────
+
+  defp omp_auth?(provider, config_path) do
+    provider in ["kimi_coding", "kimi-coding"] and
+      get_in(read_config(Path.expand(config_path)), ["providers", provider, "auth_source"]) ==
+        "omp"
+  end
+
+  defp ensure_provider_secrets_ready(args, io) do
+    {name, _rest} = extract_provider_arg(args)
+    spec = name && Providers.find(name)
+
+    # The picker and Kimi Code resolve the auth mode inside Runner; only modes
+    # that actually persist a secret require the encrypted store there.
+    if is_nil(name) or (spec && :omp in spec.auth_modes),
+      do: :ok,
+      else: ensure_secrets_ready(io)
+  end
 
   defp ensure_secrets_ready(io) do
     status = Secrets.status()

@@ -251,7 +251,7 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
 
   defp safe_auth_source(provider_cfg) do
     case provider_config_value(provider_cfg, :auth_source) do
-      value when value in ["api_key", "oauth"] -> value
+      value when value in ["api_key", "oauth", "omp"] -> value
       _ -> nil
     end
   end

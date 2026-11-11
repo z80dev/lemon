@@ -87,20 +87,36 @@ defmodule LemonCore.Doctor.Checks.Providers do
           entry.ambient.provider_env_configured
       end)
 
-    if Readiness.keyless_provider?(provider, provider_config) or
-         provider_has_credential?(provider_config) or ambient? do
-      Check.pass(
-        "providers.credentials",
-        "Default provider credential is usable (offline check)."
-      )
+    if (Map.get(provider_config, :auth_source) || Map.get(provider_config, "auth_source")) ==
+         "omp" do
+      if provider_ready?(status, provider) do
+        Check.pass(
+          "providers.credentials",
+          "omp (reuses omp's Kimi Code login): credentials usable."
+        )
+      else
+        Check.fail(
+          "providers.credentials",
+          "omp could not provide a usable Kimi Code token.",
+          "Check providers.kimi_coding.omp_path; run `omp` and `/login kimi-code`."
+        )
+      end
     else
-      Check.fail(
-        "providers.credentials",
-        "Default provider credential is missing or cannot be decrypted.",
-        "Run `lemon setup provider --set-default`; for ChatGPT sign-in use " <>
-          "`lemon setup --provider openai-codex`. Restore the original secrets master key " <>
-          "if existing encrypted credentials cannot be read."
-      )
+      if Readiness.keyless_provider?(provider, provider_config) or
+           provider_has_credential?(provider_config) or ambient? do
+        Check.pass(
+          "providers.credentials",
+          "Default provider credential is usable (offline check)."
+        )
+      else
+        Check.fail(
+          "providers.credentials",
+          "Default provider credential is missing or cannot be decrypted.",
+          "Run `lemon setup provider --set-default`; for ChatGPT sign-in use " <>
+            "`lemon setup --provider openai-codex`. Restore the original secrets master key " <>
+            "if existing encrypted credentials cannot be read."
+        )
+      end
     end
   end
 

@@ -1148,8 +1148,8 @@ defmodule LemonCore.Config.Validator do
 
     errors
     |> validate_provider_secret_refs(name, config, "providers")
-    |> validate_openai_codex_auth_source(name, config, "providers")
-    |> validate_anthropic_auth_source(name, config, "providers")
+    |> validate_provider_auth_source(name, config, "providers")
+    |> validate_provider_omp_path(name, config, "providers")
     |> validate_custom_provider(name, config, "providers")
   end
 
@@ -1330,64 +1330,71 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-  defp validate_openai_codex_auth_source(errors, name, config, path_prefix) do
-    if to_string(name) == "openai-codex" do
-      case Map.get(config, :auth_source, Map.get(config, "auth_source")) do
-        nil ->
-          [
-            ~s(#{path_prefix}.openai-codex.auth_source: required; set auth_source = "oauth" or "api_key")
-            | errors
-          ]
+  defp validate_provider_auth_source(errors, name, config, path_prefix) do
+    provider = name |> to_string() |> String.trim() |> String.downcase()
+    path = "#{path_prefix}.#{name}.auth_source"
 
-        source when is_binary(source) ->
-          normalized = source |> String.trim() |> String.downcase()
+    choices =
+      case provider do
+        "openai-codex" ->
+          ["oauth", "api_key"]
 
-          if normalized in ["oauth", "api_key"] do
-            errors
-          else
-            [
-              "#{path_prefix}.openai-codex.auth_source: invalid value (expected oauth | api_key)"
-              | errors
-            ]
-          end
+        "anthropic" ->
+          ["oauth", "api_key"]
 
-        other ->
-          [
-            "#{path_prefix}.openai-codex.auth_source: must be a string (got #{describe_type(other)})"
-            | errors
-          ]
+        kimi when kimi in ["kimi_coding", "kimi-coding", "kimi-for-coding"] ->
+          ["oauth", "api_key", "omp"]
+
+        _ ->
+          nil
       end
-    else
-      errors
+
+    case Map.get(config, :auth_source, Map.get(config, "auth_source")) do
+      nil when provider == "openai-codex" ->
+        [~s(#{path}: required; set auth_source = "oauth" or "api_key") | errors]
+
+      nil ->
+        errors
+
+      source when is_binary(source) ->
+        normalized = source |> String.trim() |> String.downcase()
+
+        cond do
+          is_list(choices) and normalized not in choices ->
+            ["#{path}: invalid value (expected #{Enum.join(choices, " | ")})" | errors]
+
+          is_nil(choices) and normalized == "omp" ->
+            ["#{path}: omp is only supported for kimi_coding" | errors]
+
+          true ->
+            errors
+        end
+
+      other when is_list(choices) ->
+        ["#{path}: must be a string (got #{describe_type(other)})" | errors]
+
+      _other ->
+        errors
     end
   end
 
-  defp validate_anthropic_auth_source(errors, name, config, path_prefix) do
-    if to_string(name) == "anthropic" do
-      case Map.get(config, :auth_source, Map.get(config, "auth_source")) do
-        nil ->
+  defp validate_provider_omp_path(errors, name, config, path_prefix) do
+    path = "#{path_prefix}.#{name}.omp_path"
+
+    case Map.get(config, :omp_path, Map.get(config, "omp_path")) do
+      nil ->
+        errors
+
+      value when is_binary(value) ->
+        if String.valid?(value) and not String.contains?(value, <<0>>) and
+             Path.type(value) == :absolute and not String.ends_with?(value, "/") do
           errors
+        else
+          ["#{path}: must be an absolute executable path" | errors]
+        end
 
-        source when is_binary(source) ->
-          normalized = source |> String.trim() |> String.downcase()
-
-          if normalized in ["api_key", "oauth"] do
-            errors
-          else
-            [
-              "#{path_prefix}.anthropic.auth_source: invalid value (expected oauth | api_key)"
-              | errors
-            ]
-          end
-
-        other ->
-          [
-            "#{path_prefix}.anthropic.auth_source: must be a string (got #{describe_type(other)})"
-            | errors
-          ]
-      end
-    else
-      errors
+      other ->
+        ["#{path}: must be a string (got #{describe_type(other)})" | errors]
     end
   end
 

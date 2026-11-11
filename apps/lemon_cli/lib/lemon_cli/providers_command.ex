@@ -241,10 +241,18 @@ defmodule LemonCli.ProvidersCommand do
       IO.puts(
         "#{provider["provider"]}: configured=#{provider["configured"] == true} " <>
           "credential_ready=#{provider["credentialReady"] == true}; " <>
+          render_auth_source(get_in(provider, ["config", "authSource"])) <>
           render_circuit(provider["circuit"])
       )
     end)
   end
+
+  defp render_auth_source("omp"), do: "auth_source=omp (reuses omp's Kimi Code login); "
+
+  defp render_auth_source(source) when source in ["oauth", "api_key"],
+    do: "auth_source=#{source}; "
+
+  defp render_auth_source(_), do: ""
 
   defp render_circuit(%{"state" => "open"} = circuit) do
     seconds = ceil(circuit["timeUntilRecoveryMs"] / 1000)

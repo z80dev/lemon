@@ -36,6 +36,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- Provider config accepts `auth_source = "omp"` for Kimi Code and its runtime
+  aliases only. Optional `omp_path` values must be absolute executable paths;
+  validation is syntactic and does not require a local installation.
+
 - `LemonCore.ToolPolicy` supports sparse tri-state `workspace_read_exempt`
   (`true | false | nil`, omitted from serialized maps when nil). Parsing,
   normalization, restriction and intersection treat `nil` as neutral and `false`

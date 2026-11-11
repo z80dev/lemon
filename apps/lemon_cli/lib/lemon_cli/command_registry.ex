@@ -148,7 +148,7 @@ defmodule LemonCli.CommandRegistry do
         ),
         option("--token TOKEN", ["--token"], "Credential for non-interactive provider setup"),
         option(
-          "--auth oauth|device|api_key|codex-cli",
+          "--auth oauth|device|api_key|codex-cli|omp",
           ["--auth"],
           "Authentication mode (import is opt-in)"
         ),
@@ -185,7 +185,7 @@ defmodule LemonCli.CommandRegistry do
         option("--provider NAME", ["--provider"], "Provider id"),
         option("--token TOKEN", ["--token"], "Provider credential"),
         option(
-          "--auth oauth|device|api_key|codex-cli",
+          "--auth oauth|device|api_key|codex-cli|omp",
           ["--auth"],
           "Authentication mode (import is opt-in)"
         ),
@@ -197,7 +197,7 @@ defmodule LemonCli.CommandRegistry do
         option(
           "--non-interactive",
           ["--non-interactive"],
-          "Require --token, --auth device or --auth codex-cli"
+          "Require --token, --auth device, --auth codex-cli, or --auth omp"
         ),
         option("--secret-name NAME", ["--secret-name"], "Secret to store, inspect, or log out"),
         option("--model MODEL", ["--model"], "Default model with --set-default"),
@@ -207,7 +207,7 @@ defmodule LemonCli.CommandRegistry do
         option("--logout", ["--logout"], "Delete the stored OAuth login and its config")
       ],
       details: [
-        "Without a provider, Lemon displays an interactive picker. Credentials are stored in the encrypted secrets store and referenced from config.toml.",
+        "Without a provider, Lemon displays an interactive picker. Credentials are stored in the encrypted secrets store and referenced from config.toml; Kimi Code --auth omp reuses omp's login without copying credentials.",
         "`lemon model anthropic` signs in with a Claude Pro/Max subscription in the browser; `--status` and `--logout` need a provider.",
         "`lemon model openai-codex --auth device` signs in to ChatGPT with a device code (no local callback); `openrouter`, `xai`, `kimi_coding` and `zai` also offer subscription sign-in."
       ]

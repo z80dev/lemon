@@ -8,6 +8,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `kimi_coding` can select `auth_source = "omp"` to reuse omp's subscription
+  login instead of environment or inline API keys, including forced refresh
+  after credential rejection and redacted readiness status.
 - Opt-in automatic model routing via `[model_routing]` (ordered rules with
   `contains`/`min_chars`/`max_chars`, per-request catalog-projected
   `max_cost_usd` cap that fails closed on unknown pricing, including configured

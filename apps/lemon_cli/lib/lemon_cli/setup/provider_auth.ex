@@ -1,7 +1,7 @@
 defmodule LemonCli.Setup.ProviderAuth do
   @moduledoc """
   `lemon model PROVIDER --status` and `--logout` for providers that sign in
-  with OAuth.
+  with OAuth or reuse an external omp login.
 
   Status reports the configured auth source, the stored login (account,
   access-token expiry, estimated re-login date) and whether the provider's
@@ -14,7 +14,9 @@ defmodule LemonCli.Setup.ProviderAuth do
   applies again. For sign-ins that mint a durable API key (OpenRouter, Z.AI)
   status reports whether that key is stored and logout deletes it. Logout does
   not revoke the grant or key at the provider and leaves external logins
-  (Claude Code, Codex CLI) and environment tokens alone.
+  (Claude Code, Codex CLI, omp) and environment tokens alone. For omp,
+  status resolves through the native credential owner and logout only removes
+  Lemon's `auth_source` and `omp_path` settings, never omp's login.
 
   Status and logout fail closed when the encrypted login cannot be read.
   Only confirmed absence permits removing stale sign-in settings; storage,
@@ -38,6 +40,32 @@ defmodule LemonCli.Setup.ProviderAuth do
     config = read_config(config_path)
     provider_cfg = get_in(config, ["providers", spec.id]) || %{}
     auth_source = normalize(provider_cfg["auth_source"])
+
+    if spec.id == "kimi_coding" and auth_source == "omp" do
+      io.info.("#{spec.display_name} authentication")
+      io.info.("  Config: #{Path.expand(config_path)}")
+      io.info.("  Auth source: #{auth_source_label(auth_source)}")
+      io.info.("  Stored login: managed by omp; no token stored in Lemon")
+
+      api_key_env_lines(spec, auth_source)
+      |> Enum.each(&io.info.("  " <> &1))
+
+      ready? = Credentials.provider_has_credentials?(spec.id, Map.get(config, "providers", %{}))
+      io.info.("  Credentials usable: #{if ready?, do: "yes", else: "no"}")
+
+      unless ready?,
+        do:
+          io.info.(
+            "  Check providers.kimi_coding.omp_path; run `omp` and `/login kimi-code`, then retry."
+          )
+
+      :ok
+    else
+      stored_status(spec, config_path, config, provider_cfg, auth_source, io, opts)
+    end
+  end
+
+  defp stored_status(spec, config_path, config, provider_cfg, auth_source, io, opts) do
     secret_name = normalize(opts[:secret_name]) || oauth_secret_name(spec, provider_cfg)
 
     case stored_login(spec, secret_name) do
@@ -73,6 +101,35 @@ defmodule LemonCli.Setup.ProviderAuth do
     expanded = Path.expand(config_path)
     content = read_config_content(expanded)
     provider_cfg = get_in(decode!(content, expanded), ["providers", spec.id]) || %{}
+
+    if spec.id == "kimi_coding" and normalize(provider_cfg["auth_source"]) == "omp" do
+      case ProviderManagement.persist(expanded, [], fn content ->
+             current = get_in(decode!(content, expanded), ["providers", spec.id]) || %{}
+
+             if normalize(current["auth_source"]) == "omp" do
+               content
+               |> TomlPatch.delete_key(spec.provider_table, "auth_source")
+               |> TomlPatch.delete_key(spec.provider_table, "omp_path")
+             else
+               content
+             end
+           end) do
+        :ok ->
+          io.info.(
+            "Removed Lemon's omp authentication settings. omp's Kimi Code login is unchanged."
+          )
+
+          :ok
+
+        {:error, _} ->
+          auth_failure({:error, :login_delete_failed}, io)
+      end
+    else
+      logout_stored(spec, expanded, provider_cfg, io, opts)
+    end
+  end
+
+  defp logout_stored(spec, expanded, provider_cfg, io, opts) do
     configured_secret = oauth_secret_name(spec, provider_cfg)
     secret_name = normalize(opts[:secret_name]) || configured_secret
 
@@ -262,13 +319,14 @@ defmodule LemonCli.Setup.ProviderAuth do
     |> ProviderNames.env_vars()
     |> Enum.filter(&present?(System.get_env(&1)))
     |> Enum.map(fn env_var ->
-      if auth_source == "oauth",
-        do: "#{env_var}: set, ignored while auth_source = \"oauth\"",
+      if auth_source in ["oauth", "omp"],
+        do: "#{env_var}: set, ignored while auth_source = \"#{auth_source}\"",
         else: "#{env_var}: set, used for API-key authentication"
     end)
   end
 
   defp auth_source_label("oauth"), do: "oauth (subscription login)"
+  defp auth_source_label("omp"), do: "omp (reuses omp's Kimi Code login)"
   defp auth_source_label("api_key"), do: "api_key"
   defp auth_source_label(nil), do: "not set (API key)"
   defp auth_source_label(other), do: "#{other} (invalid)"
@@ -306,6 +364,8 @@ defmodule LemonCli.Setup.ProviderAuth do
   resolved. Fresh non-Google payloads run the real resolver on an immutable
   token-only snapshot (refresh removed); Google project discovery is deliberately
   not invoked. A resolver timestamp is emitted only when that local check ran.
+  External omp authentication is reported as configured without executing omp;
+  use `lemon model kimi_coding --status` for resolver readiness.
   """
   def static_status(provider_id, provider_cfg, secrets \\ Secrets) do
     if ProviderNames.keyless?(provider_id) do
@@ -325,6 +385,9 @@ defmodule LemonCli.Setup.ProviderAuth do
         end
 
       cond do
+        provider_id == "kimi_coding" and normalize(provider_cfg["auth_source"]) == "omp" ->
+          observation("configured", true, nil)
+
         provider_id in ["google_vertex", "amazon_bedrock", "bedrock_converse_stream"] ->
           observation(
             if(provider_cfg == %{}, do: "needs_login", else: "configured"),

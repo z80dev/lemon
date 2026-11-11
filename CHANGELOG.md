@@ -8,6 +8,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- Kimi Code can reuse an omp-managed login with `auth_source = "omp"` or
+  `lemon model --provider kimi-code --auth omp`. Lemon resolves access tokens
+  through `omp token kimi-code` without copying refresh credentials, storing
+  tokens, or falling back to ambient API keys.
+
 ### Fixed
 
 - Packaged `lemon daemon` (and `stop`, `rpc`, `remote`) failed with "daemon

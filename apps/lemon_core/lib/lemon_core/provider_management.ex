@@ -46,6 +46,20 @@ defmodule LemonCore.ProviderManagement do
   @doc "Returns the registered implementation, or nil on runtimes without setup support."
   def service, do: Application.get_env(:lemon_core, @setting)
 
+  @doc "Checks externally managed credential readiness without returning credentials."
+  def credential_ready?(provider, provider_config) do
+    implementation = service()
+
+    is_atom(implementation) and not is_nil(implementation) and
+      Code.ensure_loaded?(implementation) and
+      function_exported?(implementation, :credential_ready?, 2) and
+      apply(implementation, :credential_ready?, [provider, provider_config]) == true
+  rescue
+    _ -> false
+  catch
+    _, _ -> false
+  end
+
   def target(node_id \\ nil) do
     with {:ok, id} <- target_id(node_id),
          {:ok, hostname} <- :inet.gethostname() do

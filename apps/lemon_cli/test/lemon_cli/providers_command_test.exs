@@ -61,6 +61,41 @@ defmodule LemonCli.ProvidersCommandTest do
     refute output =~ "OPENAI_API_KEY"
   end
 
+  test "status renders omp authority and token readiness without credentials", ctx do
+    token =
+      "eyJhbGciOiJIUzI1NiJ9." <>
+        Base.url_encode64(Jason.encode!(%{"exp" => System.system_time(:second) + 3600}),
+          padding: false
+        ) <> ".signature"
+
+    omp = Path.join(ctx.project, "omp")
+    File.write!(omp, "#!/bin/sh\nprintf '%s' '#{token}'\n")
+    File.chmod!(omp, 0o700)
+
+    File.write!(ctx.project_config, """
+    [providers.kimi_coding]
+    auth_source = "omp"
+    omp_path = #{Jason.encode!(omp)}
+    """)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "providers",
+                 "status",
+                 "--provider",
+                 "kimi_coding",
+                 "--project-dir",
+                 ctx.project
+               ]) == 0
+      end)
+
+    assert output =~ "credential_ready=true"
+    assert output =~ "auth_source=omp (reuses omp's Kimi Code login)"
+    refute output =~ token
+    refute output =~ omp
+  end
+
   test "status renders circuit recovery and failures", ctx do
     provider = "cli_circuit_#{System.unique_integer([:positive])}"
 

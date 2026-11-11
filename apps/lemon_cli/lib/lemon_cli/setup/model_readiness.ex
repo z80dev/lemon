@@ -15,12 +15,12 @@ defmodule LemonCli.Setup.ModelReadiness do
     * `:not_configured` - no default provider/model and no usable credential
 
   `:verified` and `:saved` both count as ready; surfaces show which one. Only
-  `check/1` reaches the network, and only through a non-generating request that
-  sends no message. `status/1` and `detect/1` are offline and never read
-  credential values.
+  `check/1` verifies non-omp providers through a non-generating request that sends
+  no message. omp readiness runs only `omp token kimi-code`; omp may refresh its
+  own login. Static credential projections never expose credential values.
   """
 
-  alias LemonAgent.ModelRuntime.ProviderNames
+  alias LemonAgent.ModelRuntime.{Credentials, ProviderNames}
   alias LemonAi.Auth.OpenAICodexOAuth
   alias LemonAi.Models
   alias LemonCli.Onboarding.Providers
@@ -119,8 +119,8 @@ defmodule LemonCli.Setup.ModelReadiness do
   Runs one bounded non-generating check (≤10 s) and maps it to a readiness state.
 
   Codex providers use authenticated model discovery; other providers use their
-  models endpoint. Resolving an OAuth credential may refresh it, exactly as a
-  model call would.
+  models endpoint. omp authentication only resolves its Kimi Code token through
+  Credentials, without a model request. OAuth resolution may refresh a token.
 
   ## Options
 
@@ -134,10 +134,31 @@ defmodule LemonCli.Setup.ModelReadiness do
   def check(opts \\ []) do
     opts = bind_setup_state(opts)
 
-    case Verification.live_input(opts) do
-      {:ok, input} -> live_readiness(input, opts)
-      {:skip, reason} -> offline_readiness(reason, opts)
-      {:error, reason} -> offline_readiness(reason, opts)
+    setup = Keyword.fetch!(opts, :setup_state)
+    provider = canonical(Keyword.get(opts, :provider) || setup.provider.provider)
+    provider_cfg = if provider == "kimi_coding", do: provider_table(provider, opts), else: %{}
+
+    if provider == "kimi_coding" and provider_cfg["auth_source"] == "omp" do
+      base = status(opts)
+
+      if base.state == :saved do
+        ready? = Credentials.provider_has_credentials?(provider, %{provider => provider_cfg})
+
+        %{
+          base
+          | state: if(ready?, do: :saved, else: :action_required),
+            reason: if(ready?, do: :check_unavailable, else: :credential_missing),
+            checked_at_ms: System.system_time(:millisecond)
+        }
+      else
+        base
+      end
+    else
+      case Verification.live_input(opts) do
+        {:ok, input} -> live_readiness(input, opts)
+        {:skip, reason} -> offline_readiness(reason, opts)
+        {:error, reason} -> offline_readiness(reason, opts)
+      end
     end
   end
 

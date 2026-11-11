@@ -1621,16 +1621,16 @@ new provider configuration before it reports setup complete. Setup always runs
 offline checks and normally runs a live provider check. Use
 `lemon setup --skip-verify` only to defer that live check when offline.
 
-The focused `lemon model` command onboards one provider. It requires a usable
-encrypted secrets store; use `lemon setup` when a fresh machine still needs the
-config/secrets bootstrap and readiness verification.
+The focused `lemon model` command onboards one provider. Sign-ins that store
+credentials require a usable encrypted secrets store; use `lemon setup` when a
+fresh machine still needs config/secrets bootstrap and readiness verification.
 
 Provider onboarding flows:
 - Let you choose a provider when none is passed
 - Use an interactive arrow-key TUI for provider/auth/model selection when a TTY is available
 - Run provider OAuth flow by default when supported, or prompt for an API key/token otherwise
 - Capture localhost OAuth callbacks automatically when the provider redirect URI is local
-- Store credentials in encrypted secrets with provider metadata
+- Store credentials in encrypted secrets with provider metadata, except externally managed `--auth omp`
 - Write the relevant `providers.<provider>` config keys
 - Support `--set-default`, `--model`, and `--config-path`
 
@@ -1841,7 +1841,7 @@ Other subscription and browser sign-ins offered by `lemon model <provider>`:
 | --- | --- | --- |
 | `openrouter` | Browser PKCE sign-in (callback on `http://localhost:54549/callback`, or paste the redirect URL); a pasted `sk-or-` key is checked and accepted | A durable OpenRouter API key in `providers.openrouter.api_key_secret` |
 | `xai` | SuperGrok / X Premium+ device code (`--auth oauth`); API key remains the default | Refreshable login in `providers.xai.api_key_secret`, `auth_source = "oauth"` |
-| `kimi_coding` (`kimi-code`) | Kimi Code device code (default) | Refreshable login in `providers.kimi_coding.api_key_secret`, `auth_source = "oauth"` |
+| `kimi_coding` (`kimi-code`) | Kimi Code device code (default), API key, or existing omp login (`--auth omp`) | Refreshable login in `providers.kimi_coding.api_key_secret`, `auth_source = "oauth"`; omp mode stores only `auth_source = "omp"` and an optional executable path, never credentials |
 | `zai` | GLM Coding Plan sign-in (`--auth oauth`): paste the full final `zcode://zai-auth/callback?...` redirect (or `code#state`, not a bare code); Lemon finds or creates an API key named `lemon` | A durable Z.AI API key in `providers.zai.api_key_secret` |
 
 Refreshable logins renew shortly before expiry and when a provider rejects the
@@ -1861,6 +1861,54 @@ from a stale reader, and expired or explicitly rejected tokens are never
 returned as successful authentication after a failed refresh. Endpoint/HTTP
 overrides exposed by library APIs are trusted caller options intended for
 testing and controlled integrations, not untrusted remote input.
+
+### Kimi Code authentication through omp
+
+To reuse a Kimi Code login managed by omp, sign in to Kimi Code with omp first,
+then select the external source explicitly:
+
+```bash
+lemon model --provider kimi-code --auth omp
+# Source checkout:
+./bin/lemon model --provider kimi-code --auth omp
+# Contributor alternative:
+mix lemon.onboard kimi-code --auth omp
+```
+
+The canonical configuration is:
+
+```toml
+[providers.kimi_coding]
+auth_source = "omp"
+# Optional absolute executable path (not a shell command or a ~-relative path):
+# omp_path = "/opt/bin/omp"
+```
+
+Without `omp_path`, Lemon searches for `omp` on `PATH`, then tries
+`~/.bun/bin/omp`. An explicit path is authoritative: Lemon does not silently
+switch executables if it is unusable. Config validation checks only path syntax;
+the executable need not exist on the machine validating the config. Runtime
+resolution checks that the selected path is executable.
+
+Both credential resolution and readiness obtain an access token by running
+`omp token kimi-code`, without a shell. Readiness does not launch a login flow
+or inspect omp's credential files. The selected source is authoritative:
+`KIMI_API_KEY`, `MOONSHOT_API_KEY`, inline `api_key`, `api_key_env`, and stored
+`api_key_secret` / `oauth_secret` credentials do not override it, including when
+omp fails. Fix the omp login or executable rather than adding a fallback key.
+
+This is an **access-token-only** integration. Lemon uses the returned JWT for
+the request but does not persist it or copy omp's refresh tokens or OAuth
+payloads into Lemon secrets. omp retains ownership of login and refresh; Lemon
+does not refresh the access token itself. Missing/unusable executables, command
+failures, timeouts, or invalid token output produce safe, actionable errors,
+never raw subprocess stdout/stderr or token contents.
+
+`auth_source = "omp"` is supported only by `kimi_coding` and its runtime aliases
+`kimi-coding` and `kimi-for-coding`. `kimi-code` is an onboarding alias, not a
+provider-table name. Existing `auth_source = "oauth"` and `"api_key"` modes
+remain available; OAuth remains the default onboarding mode.
+
 
 Antigravity OAuth client credentials resolve from Lemon secrets first:
 - `google_antigravity_oauth_client_id`

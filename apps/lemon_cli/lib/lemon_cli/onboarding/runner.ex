@@ -1,6 +1,8 @@
 defmodule LemonCli.Onboarding.Runner do
   @moduledoc false
 
+  alias LemonAgent.ModelRuntime.Credentials
+  alias LemonAi.Auth.OmpToken
   alias LemonAgent.ModelRuntime.CustomProviders
   alias LemonAgent.ModelRuntime.ModelCatalog
   alias LemonAi.Models.Discovery
@@ -90,9 +92,9 @@ defmodule LemonCli.Onboarding.Runner do
     # Device-code sign-in needs no input: it prints a code and polls.
     if cli_opts[:non_interactive] == true and
          is_nil(normalize_optional_string(cli_opts[:token])) and
-         explicit_auth not in [:codex_cli, :device] and not spec.local do
+         explicit_auth not in [:codex_cli, :device, :omp] and not spec.local do
       fail!(
-        "Non-interactive provider setup requires --token, --auth device (ChatGPT) or explicit --auth codex-cli. For ChatGPT browser sign-in, run `lemon setup --provider openai-codex` interactively."
+        "Non-interactive provider setup requires --token, --auth device (ChatGPT), --auth codex-cli, or --auth omp (Kimi Code). For ChatGPT browser sign-in, run `lemon setup --provider openai-codex` interactively."
       )
     end
 
@@ -108,11 +110,12 @@ defmodule LemonCli.Onboarding.Runner do
         io
       end
 
-    ensure_secrets_ready!()
     onboard(cli_opts, spec, io, opts)
   end
 
   defp onboard(cli_opts, %Provider{local: true} = spec, io, opts) do
+    ensure_secrets_ready!()
+
     if spec.custom and cli_opts[:non_interactive],
       do: fail!("Custom endpoint setup requires an interactive terminal.")
 
@@ -156,6 +159,53 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp onboard(cli_opts, spec, io, opts) do
     auth_mode = resolve_auth_mode!(cli_opts, spec, io)
+
+    if auth_mode == :omp do
+      onboard_omp(cli_opts, spec, io, opts)
+    else
+      ensure_secrets_ready!()
+      onboard_stored(cli_opts, spec, auth_mode, io, opts)
+    end
+  end
+
+  defp onboard_omp(cli_opts, spec, io, opts) do
+    config_path = cli_opts[:config_path] || Config.global_path()
+    config = config_path |> read_existing_config!() |> Toml.decode!()
+    provider_cfg = get_in(config, ["providers", spec.id]) || %{}
+
+    omp_path =
+      case OmpToken.discover(provider_cfg["omp_path"]) do
+        {:ok, path} -> path
+        {:error, reason} -> fail!(OmpToken.error_message(reason))
+      end
+
+    unless Credentials.provider_has_credentials?(spec.id, %{
+             spec.id => %{"auth_source" => "omp", "omp_path" => omp_path}
+           }) do
+      fail!(
+        "omp could not provide a usable Kimi Code token. Run `omp` and `/login kimi-code`, then retry `lemon model kimi_coding --auth omp`."
+      )
+    end
+
+    model =
+      if resolve_set_default?(cli_opts[:set_default], spec, io),
+        do: choose_default_model!(cli_opts[:model], spec, io, :omp, opts)
+
+    persist!(config_path, [], fn content ->
+      content
+      |> update_provider_auth_config(spec, :omp, omp_path)
+      |> maybe_set_defaults(model, spec)
+    end)
+
+    io.info.("#{spec.display_name} onboarding complete.")
+    io.info.("Config: #{config_path}")
+    io.info.("Authentication: #{auth_mode_output_label(:omp)}")
+    io.info.("Lemon reuses omp's Kimi Code login; no token is stored in Lemon.")
+    if model, do: io.info.("Default model: #{spec.id}:#{model}")
+    :ok
+  end
+
+  defp onboard_stored(cli_opts, spec, auth_mode, io, opts) do
     {secret_value, secret_provider} = resolve_secret_payload!(cli_opts, spec, auth_mode, io)
 
     secret_name =
@@ -254,7 +304,7 @@ defmodule LemonCli.Onboarding.Runner do
       if value = normalize_optional_string(opts[:auth]), do: parse_auth_mode!(value, spec)
 
     cond do
-      token && explicit_auth in [:oauth, :device, :codex_cli] ->
+      token && explicit_auth in [:oauth, :device, :codex_cli, :omp] ->
         fail!("Cannot combine --token with --auth #{auth_mode_output_label(explicit_auth)}.")
 
       token ->
@@ -300,6 +350,9 @@ defmodule LemonCli.Onboarding.Runner do
 
         "codex_cli" ->
           :codex_cli
+
+        "omp" ->
+          :omp
 
         _other ->
           fail!("Unknown authentication mode for #{spec.id}. #{auth_mode_hint(spec)}")
@@ -785,6 +838,9 @@ defmodule LemonCli.Onboarding.Runner do
 
   # A Codex ChatGPT login lists exactly what the account offers; other providers
   # use the bundled catalog (or a preset endpoint probed with the pasted key).
+  defp available_model_ids(%Provider{} = spec, :omp, _io, _opts),
+    do: static_catalog_model_ids(spec, nil, false)
+
   defp available_model_ids(%Provider{} = spec, secret_or_key, io, opts) do
     oauth_payload = decode_oauth_payload(secret_or_key)
     api_key = if oauth_payload, do: nil, else: secret_or_key
@@ -837,7 +893,7 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp decode_oauth_payload(_), do: nil
 
-  defp static_catalog_model_ids(%Provider{} = spec, api_key) do
+  defp static_catalog_model_ids(%Provider{} = spec, api_key, discover? \\ true) do
     models_module = Module.concat([:"Elixir.LemonAi", :Models])
 
     with true <- Code.ensure_loaded?(models_module),
@@ -847,7 +903,7 @@ defmodule LemonCli.Onboarding.Runner do
            provider_atom_for_models(models_module, spec.id) do
       models_module.get_models(provider)
       |> case do
-        [] -> discovered_models(spec, api_key)
+        [] when discover? -> discovered_models(spec, api_key)
         models -> models
       end
       |> Enum.map(&%{provider: to_string(&1.provider), id: &1.id, name: &1.name})
@@ -909,7 +965,8 @@ defmodule LemonCli.Onboarding.Runner do
         "auth",
         "auth_source",
         "oauth_secret",
-        "api_key_secret"
+        "api_key_secret",
+        "omp_path"
         | Map.values(spec.secret_config_key_by_mode)
       ]
       |> Enum.uniq()
@@ -931,6 +988,8 @@ defmodule LemonCli.Onboarding.Runner do
         content
     end
   end
+
+  defp secret_config_key(%Provider{}, :omp), do: "omp_path"
 
   defp secret_config_key(%Provider{} = spec, auth_mode) do
     Map.get(spec.secret_config_key_by_mode, auth_mode, "api_key_secret")
@@ -1184,7 +1243,11 @@ defmodule LemonCli.Onboarding.Runner do
   defp auth_mode_choice_label(%Provider{}, :codex_cli),
     do: "Import existing Codex CLI ChatGPT login (read-only copy)"
 
+  defp auth_mode_choice_label(%Provider{}, :omp),
+    do: "Reuse omp's Kimi Code login (no token stored in Lemon)"
+
   defp auth_mode_output_label(:codex_cli), do: "codex-cli (OAuth copy)"
+  defp auth_mode_output_label(:omp), do: "omp (reuses omp's Kimi Code login)"
   defp auth_mode_output_label(:oauth), do: "oauth"
   defp auth_mode_output_label(:device), do: "device"
   defp auth_mode_output_label(:api_key), do: "api_key"
