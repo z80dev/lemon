@@ -767,8 +767,6 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
       const next = s.update(grant, { requestedLevel: body.requestedLevel });
       context.nonceResourceIds.push(bot.id, next.id);
       s.store.transaction(() => { const current = s.store.get<P.BotGrant>('botGrants', grant.id); if (current) s.mutations.checkRevision(current, body.revision); s.store.put('botGrants', next); s.store.setMetadata(`botPolicySync:${bot.id}`, { state: 'pending', grantId: next.id, revision: next.revision }); });
-      const effective = projectEffectiveBotGrants(s, user, bot, measured, await s.integrations.effectivePolicy(user, bot.id), true).find(value => value.id === next.id)!;
-      s.store.put('botGrants', effective);
       try {
         if (connector) await s.integrations.connectorProvisioning!(user, bot.id);
         else await s.syncBotProfile(user, bot.id);
@@ -777,7 +775,10 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
         fail('outcome_unknown', 'Requested grants were saved but native policy enforcement is unconfirmed.', false, { resourceIds: [bot.id, next.id] });
       }
       s.store.setMetadata(`botPolicySync:${bot.id}`, { state: 'acknowledged', grantId: next.id, revision: next.revision });
-      s.events.emit('grant.upserted', effective, { userIds: [user.userId] });
+      const fresh = await machineCapabilities(s, user, bot.machineId, bot).catch(() => measured);
+      const effective = projectEffectiveBotGrants(s, user, bot, fresh, await s.integrations.effectivePolicy(user, bot.id), false).find(value => value.id === next.id) ?? fail('not_found', 'Grant does not exist.');
+      s.store.put('botGrants', effective);
+      s.events.emit('grant.upserted', effective, { userIds: [user.userId], botId: bot.id });
       return effective;
     }),
     route('GET', '/activity', activityRead), route('GET', '/bots/:id/activity', activityRead),

@@ -3,7 +3,7 @@ import { Store } from '../../src/core/store';
 import { createMutationService } from '../../src/core/mutations';
 import { createEventService } from '../../src/core/events';
 import type * as P from '../../../contracts/protocol';
-import type { BackendServices, Principal, RequestContext, WorkspaceToolRestrictions } from '../../src/core/services';
+import type { BackendServices, EventAudience, Principal, RequestContext, WorkspaceToolRestrictions } from '../../src/core/services';
 import { ApiError, fail } from '../../src/core/errors';
 import { botPresence, createExperienceRoutes, createExperienceService, desiredBotGrants, effectiveBotGrants, nativeBotToolPolicy, reviewedCandidates, workspaceNativeToolRestrictions } from '../../src/core/experiences';
 import { productBotTools } from '../../src/core/bots';
@@ -373,6 +373,81 @@ describe('native grant enforcement boundaries', () => {
       }
     } finally { f.close(); }
   });
+  for (const scenario of ['capability_changed', 'node_offline', 'policy_changed', 'refresh_failed', 'sync_failed'] as const) {
+    test(`grant PATCH projects after acknowledgment with concurrent reads: ${scenario}`, async () => {
+      const f = fixture();
+      const { promise: syncGate, resolve: releaseSync } = Promise.withResolvers<void>();
+      const { promise: syncStarted, resolve: beginSync } = Promise.withResolvers<void>();
+      let patch: Promise<P.BotGrant> | undefined;
+      try {
+        const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [{ id: 'files', name: 'Files', category: 'files', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['read', 'write'], reason: 'Before cutover', measuredAtMs: f.services.now(), stale: false }] };
+        const policy = await f.services.integrations.effectivePolicy(user, f.bot.id);
+        const calls: { method: string; state: string | null }[] = [];
+        const published: { payload: P.BotGrant; audience: EventAudience; state: string | null }[] = [];
+        let syncing = false, acknowledged = false, refreshFailed = false;
+        const syncState = () => f.store.metadata<{ state: string }>('botPolicySync:bot')?.state ?? null;
+        f.services.events = createEventService(f.services);
+        f.services.events.subscribe((event, audience) => {
+          if (event.event === 'grant.upserted') published.push({ payload: event.payload, audience, state: syncState() });
+        });
+        f.services.lemon.methods = ['nodes.list', 'node.capabilities.get', 'profiles.update'];
+        f.services.lemon.call = async <T>(method: string): Promise<T> => {
+          calls.push({ method, state: syncState() });
+          if (method === 'profiles.update') {
+            syncing = true;
+            beginSync();
+            await syncGate;
+            if (scenario === 'sync_failed') throw new ApiError('outcome_unknown', 'Cutover acknowledgment lost', false);
+            acknowledged = true;
+            return {} as T;
+          }
+          if (method === 'nodes.list') return { nodes: [{ id: 'node', status: scenario === 'node_offline' && syncing ? 'offline' : 'online', capabilities: ['node.capabilities.get'] }], summary: { presenceAvailable: true, truncated: false } } as T;
+          if (method === 'node.capabilities.get') {
+            if (scenario === 'refresh_failed' && acknowledged && !refreshFailed) {
+              refreshFailed = true;
+              throw new ApiError('upstream_unavailable', 'Measurement temporarily unavailable');
+            }
+            const { machineId: _machineId, ...data } = measured;
+            return { ...data, nodeId: 'node', items: data.items.map(item => scenario === 'capability_changed' && acknowledged ? { ...item, configuredLevel: 'read_only', reason: 'Measured after cutover' } : item) } as T;
+          }
+          throw new Error(`Unexpected RPC: ${method}`);
+        };
+        f.services.syncBotProfile = async () => { await f.services.lemon.call('profiles.update'); };
+        f.services.integrations.effectivePolicy = async () => scenario === 'policy_changed' && acknowledged ? { ...policy, localExecutionCeiling: 'deny', explanations: ['Workspace policy changed during cutover.'] } : policy;
+        const grant = (await f.request<P.Page<P.BotGrant>>('GET', '/bots/:id/grants')).items[0]!;
+        patch = f.request<P.BotGrant>('PATCH', '/bots/:id/grants/:grantId', { clientNonce: nonce, revision: grant.revision, requestedLevel: 'read_interact' }, { id: f.bot.id, grantId: grant.id });
+        await syncStarted;
+        const pending = (await f.request<P.Page<P.BotGrant>>('GET', '/bots/:id/grants')).items[0]!;
+        expect(syncState()).toBe('pending');
+        expect(pending.requestedLevel).toBe('read_interact');
+        expect(pending.effectiveLevel).toBe('off');
+        expect(pending.reasons).toContain('Tool-policy cutover has not been acknowledged.');
+        expect(published).toHaveLength(0);
+        releaseSync();
+        if (scenario === 'sync_failed') {
+          await expect(patch).rejects.toMatchObject({ code: 'outcome_unknown', retrySafe: false });
+          expect(syncState()).toBe('outcome_unknown');
+          expect(f.store.require<P.BotGrant>('botGrants', grant.id).requestedLevel).toBe('read_interact');
+          expect(published).toHaveLength(0);
+          return;
+        }
+        const changed = await patch;
+        const cutoverCalls = [...calls];
+        const subsequent = (await f.request<P.Page<P.BotGrant>>('GET', '/bots/:id/grants')).items[0]!;
+        expect(changed).toEqual(subsequent);
+        expect(f.store.require<P.BotGrant>('botGrants', changed.id)).toEqual(changed);
+        expect(changed.revision).toBe(grant.revision + 1);
+        expect(changed.reasons).not.toContain('Tool-policy cutover has not been acknowledged.');
+        expect(changed.effectiveLevel).toBe(scenario === 'capability_changed' ? 'read_only' : scenario === 'refresh_failed' ? 'read_interact' : 'off');
+        expect(published).toEqual([{ payload: changed, audience: { userIds: [user.userId], botId: f.bot.id }, state: 'acknowledged' }]);
+        expect(cutoverCalls.some(call => call.method === 'nodes.list' && call.state === 'acknowledged')).toBe(true);
+        if (scenario !== 'node_offline') expect(cutoverCalls.some(call => call.method === 'node.capabilities.get' && call.state === 'acknowledged')).toBe(true);
+        if (scenario === 'capability_changed') expect(changed.reasons).toContain('Measured after cutover');
+        if (scenario === 'policy_changed') expect(changed.reasons).toContain('Workspace policy changed during cutover.');
+        if (scenario === 'refresh_failed') expect(refreshFailed).toBe(true);
+      } finally { releaseSync(); await patch?.catch(() => undefined); f.close(); }
+    });
+  }
   test('one native policy uses and refreshes the actual owners execution ceiling', async () => {
     const f = fixture();
     try {
