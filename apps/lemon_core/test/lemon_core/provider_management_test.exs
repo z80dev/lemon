@@ -94,14 +94,14 @@ defmodule LemonCore.ProviderManagementTest do
     def device_complete(_, _), do: {:error, :forbidden}
   end
 
-  defmodule OfflineLoginErrorMock do
-    def import_login("openai_codex", "codex_cli", opts) do
-      case opts[:error] do
-        :login_not_found -> {:error, :login_not_found}
-        :login_unusable -> {:error, :login_unusable}
-        other -> {:error, other}
-      end
-    end
+  # The boundary forwards only destination-local options, never test knobs, so
+  # each login error is a distinct offline implementation.
+  defmodule OfflineLoginNotFoundMock do
+    def import_login("openai_codex", "codex_cli", _opts), do: {:error, :login_not_found}
+  end
+
+  defmodule OfflineLoginUnusableMock do
+    def import_login("openai_codex", "codex_cli", _opts), do: {:error, :login_unusable}
   end
 
   test "registered implementations serve both controller and named destination calls" do
@@ -565,7 +565,6 @@ defmodule LemonCore.ProviderManagementTest do
   end
 
   test "import login errors pass through preserved error atoms" do
-    opts = [node_id: "node-err", service: OfflineLoginErrorMock]
     assert {:ok, err_target} = ProviderManagement.target("node-err")
 
     params = %{
@@ -575,17 +574,15 @@ defmodule LemonCore.ProviderManagementTest do
     }
 
     assert {:error, :login_not_found} =
-             ProviderManagement.execute(
-               "import",
-               params,
-               Keyword.put(opts, :error, :login_not_found)
+             ProviderManagement.execute("import", params,
+               node_id: "node-err",
+               service: OfflineLoginNotFoundMock
              )
 
     assert {:error, :login_unusable} =
-             ProviderManagement.execute(
-               "import",
-               params,
-               Keyword.put(opts, :error, :login_unusable)
+             ProviderManagement.execute("import", params,
+               node_id: "node-err",
+               service: OfflineLoginUnusableMock
              )
   end
 

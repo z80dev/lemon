@@ -152,9 +152,13 @@ defmodule LemonCli.Setup.Wizard do
     unless non_interactive?, do: Runner.ensure_interactive!(io)
     io.info.("Starting Lemon setup…")
     Runner.ensure_required_apps!()
+    # Derived under the progress line above: probing config and secrets can
+    # block on a slow keychain, and that wait must never look like a freeze
+    # behind an already-painted banner.
+    initial_state = Verification.setup_state(config_path: config_path)
 
     print_banner(io)
-    print_status(io, Verification.setup_state(config_path: config_path))
+    print_status(io, initial_state)
 
     result =
       with :ok <- ensure_config(config_path, io),
