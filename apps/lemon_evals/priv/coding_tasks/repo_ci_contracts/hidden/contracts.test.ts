@@ -71,7 +71,7 @@ test('stock lifecycle, idempotent cancellation, snapshots and deterministic audi
   assert.deepEqual(api.createApp().handle({method:'GET',path:'/v1/report'},api.createContext()),{status:200,body:{skus:0,onHand:0,reserved:0,available:0,activeReservations:0}});
 });
 test('unexpected failures use the stable internal-error response',()=>{
-  const {app,ctx}=setup();
-  app.services.stock.add=()=>{throw new Error('private detail');};
+  const app=api.createApp();
+  const ctx=api.createContext('staff',()=>{throw new Error('private detail');});
   error(app.handle({method:'POST',path:'/v1/stock',body:{sku:'x',quantity:1}},ctx),500,'internal','internal error');
 });
