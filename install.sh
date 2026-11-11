@@ -1113,7 +1113,11 @@ fi
 rm -f "$manifest_file"
 if [ "$BOT_PRESET" = "1" ]; then
   if [ "$SKIP_SETUP" != "1" ] && (exec </dev/tty) 2>/dev/null; then
-    exec "$HOME/.local/bin/lemon-bot" </dev/tty
+    # Hand over the real terminal device: macOS kqueue cannot poll the /dev/tty
+    # alias, so the backend's raw-mode prompt would never receive input.
+    terminal_device=/dev/$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')
+    [ -c "$terminal_device" ] || terminal_device=/dev/tty
+    exec "$HOME/.local/bin/lemon-bot" <"$terminal_device"
   fi
   info "Run: $HOME/.local/bin/lemon-bot"
 else
