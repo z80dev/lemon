@@ -14,35 +14,38 @@ Then run `lemon-bot` rather than `bun run start`. `lemon-bot --version` reports 
 exact release CalVer and `lemon-bot --help` describes startup; neither initializes
 private product state.
 
-With no environment, `lemon-bot` serves `http://127.0.0.1:4100` with private state
-in `~/.lemon/lemon_bot`. On first start in a terminal it asks which Lemon to use:
+In a terminal, plain `lemon-bot` runs `lemon-bot up`: it sets up background
+services, signs in as the local owner, enrolls this machine as a Bot worker,
+opens the browser through `lemon-bot open`, and exits. The combined installer
+`--profile bot` supplies the matching controller, worker and backend. The
+backend-only `--profile lemon_bot` remains available for manual/remote use.
+The backend serves `http://127.0.0.1:4100` with private state in `~/.lemon/lemon_bot`.
+First terminal setup asks which Lemon to use:
 
-1. **This machine.** The controller is found the way the Lemon launchers find it
-   (`LEMON_CONTROL_PLANE_PORT`, then `~/.lemon/ports.env`, then 4040) and authenticated
-   with the launcher-managed `~/.lemon/run/control-plane-<port>.token`. If Lemon is
-   installed but stopped, `lemon-bot` offers to start it (running `lemon setup
-   --if-required` and `lemon daemon`). The credential is re-read before each
-   connection attempt, so a backend left waiting connects as soon as Lemon starts.
+1. **This machine.** The controller is found through `LEMON_CONTROL_PLANE_PORT`,
+   then `~/.lemon/ports.env`, then 4040, and uses the launcher-managed
+   `~/.lemon/run/control-plane-<port>.token`. Interactive setup finishes with
+   `lemon setup --if-required` before the units start.
 2. **Another machine.** Enter its `wss://…/ws` controller address and its operator
    token (hidden input; on that machine it is in `~/.lemon/run/control-plane-<port>.token`).
    The connection is verified before saving.
 
-The choice is saved in `DATA_DIR/controller.json` (mode 0600; a remote token is
-encrypted with the product master key). Later starts reuse it and, for this machine,
-still offer to start a stopped Lemon. `lemon-bot --choose-lemon` asks again. Without
-a terminal (a service manager) no question is asked: the saved choice, or else the
-local Lemon, is used, and owners can choose **Start** in the app when the installed
-`~/.lemon/bin/lemon` launcher exists. Explicit `LEMON_BOT_CONTROL_URL` or
-`LEMON_BOT_OPERATOR_TOKEN` always override the saved choice. A same-machine
-credential is never sent to a controller on another host.
+The choice is saved in `DATA_DIR/controller.json` (0600; a remote token is
+encrypted with the product master key). `lemon-bot --choose-lemon` asks again,
+then continues with `up`. Explicit `LEMON_BOT_CONTROL_URL` or
+`LEMON_BOT_OPERATOR_TOKEN` override it. A same-machine credential is never sent
+to a controller on another host. Remote-controller setup installs the backend
+only; worker enrollment remains an explicit scoped invite on its actual host.
+
+`lemon-bot --no-open`, service mode, and a plain non-terminal invocation remain
+foreground servers. `up --no-open` instead sets up services without opening a
+browser. `up --no-worker` leaves worker setup for later.
 
 Keep `LEMON_BOT_DATA_DIR`, private operator configuration and server credential
-sources outside the versioned installation. Installing the backend does not
-install or replace the controller/worker: those use canonical full/min runtime
-profiles, and newly invited workers install the matching published Lemon release.
-An empty backend never prints setup credentials in startup logs. When started in a
-terminal, it shows the one-use owner setup code on the controlling terminal only;
-otherwise use the explicit local [owner setup command](#provider-free-owner-setup).
+sources outside the versioned installation. `up` delegates supervision and safe
+legacy-process adoption to `lemon service`; it never writes units or signals
+processes itself. Runtime-missing errors give the exact-version `--profile bot`
+installer command. An empty backend never prints setup credentials in logs.
 Never put the controller operator credential in a browser, generated join command,
 archive or log.
 
@@ -178,6 +181,48 @@ Co-resident Bots share the OS user's files/browser/CLI identities: product autho
 ## Persistence and lifecycle
 
 `product.sqlite` uses WAL and holds product entities, encrypted receipts/private metadata, auth token digests, revision/confirmation fences and a monotonically increasing persisted event sequence. Attachments are immutable checksum-checked private blobs under DATA_DIR/attachments; tickets are short-lived and recheck current access. Keep database, WAL, attachment blobs and master key together in operator backups. Losing/changing a key with existing encrypted state fails closed; do not replace the key to recover an empty-looking deployment.
+
+### Resumable background setup
+
+```sh
+lemon-bot up [--json] [--no-open] [--no-worker] [--name NODE_NAME] [--worker-wrapper PATH]
+```
+
+`up` reuses an online machine, repairs its existing worker first, or requests a
+name-bound reconnect invite. New-name conflicts try suffixes `-2` through `-4`.
+The one-use code goes only to `lemon service install worker --invite-code-stdin`
+through stdin; it never enters argv, environment, diagnostics or progress. An
+uncertain enrollment is reconciled once from that invite's authoritative state,
+never resent. Only a confirmed joined invite permits one fresh bound reconnect.
+The temporary local-owner session is revoked in `finally`, including failures.
+
+The final browser handoff invokes `lemon-bot open` with the inherited terminal
+(over SSH: `open --headless`). It is omitted without a terminal or with `--no-open`.
+Linux session-only persistence prompts before requesting linger; Lemon never
+invokes sudo. Manager/persistence values come from `lemon service`, not guesses.
+
+`--json` writes NDJSON to stdout: step events with
+`type:"step"`, `step:"runtime|controller_choice|setup|units|linger|owner|machine|worker"`,
+`state:"running|ok|skipped|failed"` and a stable `detail` or null, followed by
+exactly one result:
+
+```json
+{"type":"result","status":"ready","port":4100,"machineId":"machine_id","manager":"launchd","persistence":"login"}
+```
+
+Result statuses are `ready`, `runtime_missing`, `setup_required`, `service_failed`,
+`enroll_failed` or `needs_attention`; only `ready` exits 0. A runtime mismatch
+warns in human mode and blocks JSON automation with `needs_attention`.
+`runtime_missing` also includes the pinned, non-secret `installCommand`.
+Diagnostics and prompts go to stderr. Secrets are never progress fields.
+
+After listen the backend records
+`DATA_DIR/run/lemon-bot-<port>.json` (0600) with `pid`, `startedAt` (the process's
+`ps -o lstart=` identity), `port`, `instanceId` and `version`. Clean shutdown
+removes only its own unchanged record. Lifecycle takeover uses this identity
+together with the public setup fingerprint; a PID alone is not ownership.
+
+Source service installs use the executable `bin/lemon-bot-source` shim.
 
 Mutations reserve their nonce and fixed IDs before external work. Identical concurrent intents share their exact receipt, different bodies conflict, and replay rechecks current resource ACL and authentication authority. Public local-auth replay revalidates current credentials. Pending/uncertain effects survive restart as fenced state; the service reconciles only owning read-only receipts/history, never automatically replays a mutation. A user-visible accepted run is not a completed task, cancellation requested is not terminal cancellation, approval is not execution, and explicit draft Send is separate from permission gates.
 

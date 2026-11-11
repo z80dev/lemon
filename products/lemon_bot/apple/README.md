@@ -137,21 +137,18 @@ The Mac app is not sandboxed: it is a Developer ID app that runs as you, reads y
 files and runs `ssh` the way Terminal does. Being that OS user, or being able to
 `ssh` into a machine, is the credential. First launch shows two choices:
 
-- **This Mac → Connect.** The app runs a small POSIX script (`MachineBootstrap.script`)
-  that checks `http://127.0.0.1:4100/v1/setup`, starts an installed `lemon-bot --no-open`
-  detached if it isn't running (falling back to `bun run … start` in the
-  `lemonCheckoutPath` checkout, default `~/lemon`), and prints the backend's private
-  `~/.lemon/lemon_bot/local-access.key`. The app sends that key once to
-  `POST /v1/auth/local`, which signs in as the workspace owner — creating the owner
-  and workspace on a fresh install — and saves the account with `route = .thisMac`.
-- **Another machine → `me@studio` → Connect.** The same script runs through
-  `ssh -T <host> sh -s` with `BatchMode=yes` (keys or agent only, no password prompt)
-  and `StrictHostKeyChecking=accept-new`. The app then keeps
-  `ssh -N -L 127.0.0.1:<port>:127.0.0.1:4100 <host>` open, where `<port>` is a stable
-  value in 41000–41999 derived from the host, so the saved account's base URL never
-  changes. The tunnel restarts with backoff while that account is active and closes
-  on account switch, sign-out and quit. The remote machine needs only `lemon-bot`
-  installed; nothing listens off loopback.
+- **This Mac → Connect.** The app locates the stable `lemon-bot` executable (or
+  the source checkout's `backend/bin/lemon-bot-source` shim) and runs
+  `lemon-bot up --json --no-open --no-worker`. The runtime owns service setup and
+  adoption; the app never starts a detached backend itself. After readiness it
+  reads the private `local-access.key`, signs in with `POST /v1/auth/local`, and
+  saves the account with `route = .thisMac`.
+- **Another machine → `me@studio` → Connect.** The same bootstrap runs through
+  `ssh -T <host> sh -s` with `BatchMode=yes` and
+  `StrictHostKeyChecking=accept-new`. The app keeps a loopback-only
+  `ssh -N -L` tunnel on a stable local port in 41000–41999. It restarts with
+  backoff while the account is active and closes on account switch/sign-out/quit.
+  The remote host needs the matching Bot preset; nothing listens off loopback.
 
 Neither path asks for an email, password or setup code. A machine-key session
 expires like any product session; on `reconnect_required` the app signs in with
@@ -163,27 +160,21 @@ backend's client-redirect allowlist. Its confidential IdP credential stays
 server-side; native flow uses PKCE. iPhone onboarding prioritizes connecting to
 your already signed-in desktop, not enterprise setup or invitations.
 
-Bots need a machine: a Lemon execution node. The workspace sets up an empty
-deployment or repairs an offline connected host independently of Bot count. With
-no Bots, the first-run card then offers **Create a Bot** (the editor preselects the only online machine). For an
-owner or admin it reads the host name, creates the machine (`POST /v1/machines`)
-or reissues a repair invite for an existing one with the same node name, and runs
-`HostEnrollment.script` there — locally or over the same `ssh`. The script picks a
-bot-capable `lemon` matching the invite's pinned version (installing it the way
-`join-node.sh` does when missing), enrolls once with `node join
---invite-code-stdin` (the one-use code travels inside the script on stdin), then
-hands the worker to a `org.lemon.node.<name>` LaunchAgent on macOS or a
-`lemon-node-<name>.service` systemd user unit on Linux, with your login shell's
-`PATH` and a log in `~/.lemon/logs/node-<name>.log`. Success is reported only once
-the backend sees the machine online. A machine that is already enrolled just gets
-its worker restarted under that supervisor. Offline machines remain visible in a
-banner in the Bot list and conversation with **Start it**, progress, and failures
-with **Details** and **Try again**. Failed attempts are never retried automatically.
-Only owners/admins on This Mac or SSH connections get the start action; other
-connections and Bots assigned to another host explain that the machine’s owner
-must start the worker. Repair stops only the named launchd/systemd unit, never
-processes matched by command text. Previously unsupervised workers must be stopped
-manually before repair; the app does not guess their process ownership.
+Bots need a machine: a Lemon execution node. **Set up / Start it / Repair** runs
+`lemon-bot up --json --no-open` on the connected route, locally or over the same
+SSH connection. NDJSON steps become native progress messages; the final result
+identifies the machine, which the app confirms online through the backend.
+The CLI alone owns local sign-in, machine reuse/create/reconnect, one-use invite
+handling and OS supervision. No invite, unit-writing shell, process-name kill,
+or detached-process startup remains in the app.
+
+For This Mac only, a signed Worker helper in a stably installed app may be passed
+as `--worker-wrapper`; the local helper path is never sent over SSH.
+Offline machines stay visible with **Start it**, **Details** and **Try again**.
+Failed attempts are never retried automatically. Only owners/admins on This Mac
+or SSH routes get this action; other connections explain that the machine's
+owner must start the worker. Runtime/service failures keep their typed result,
+and SSH transport failures remain distinct.
 
 To check the flow by hand: with Lemon Bot stopped, choose **This Mac** and confirm
 it starts and opens the workspace with no form; quit and relaunch and confirm the

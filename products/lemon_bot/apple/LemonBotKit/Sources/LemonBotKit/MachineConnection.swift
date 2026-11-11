@@ -78,43 +78,38 @@ public enum MachineBootstrap {
     public struct Ready: Equatable, Sendable {
         public let port: Int
         public let key: String
-        public let started: Bool
     }
 
-    public static let installCommand = "curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --profile lemon_bot"
+    public static var installCommand: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "LemonBotReleaseVersion") as? String ?? "2026.11.1"
+        return "curl -fsSL https://github.com/z80dev/lemon/releases/download/v\(version)/install.sh | sh -s -- --profile bot"
+    }
 
-    /// Prints `port=`, `key=` and `status=ready`, or `status=not_installed|outdated|start_failed` (with `log=` lines).
-    public static let script = #"""
+    /// The source shim is an executable too: every caller delegates the same lifecycle command.
+    static let locateScript = #"""
     set -u
+    pick() { for c in "$@"; do [ -n "$c" ] && [ -x "$c" ] && { printf '%s\n' "$c"; return 0; }; done; return 1; }
+    bot=$(pick "$HOME/.local/bin/lemon-bot" "$HOME/.lemon/lemon_bot/current/bot/bin/lemon-bot" "$HOME/.lemon/bin/lemon-bot" "$(command -v lemon-bot 2>/dev/null)" "${1:-}/products/lemon_bot/backend/bin/lemon-bot-source") || bot=
+    """#
+
+    /// Passes through CLI NDJSON, then emits the machine-key transport's existing ready lines.
+    public static let script = locateScript + "\n" + #"""
+    [ -n "$bot" ] || { echo status=not_installed; exit 0; }
+    umask 077
+    progress=$(mktemp) || exit 1
+    errors=$(mktemp) || { rm -f "$progress"; exit 1; }
+    trap 'rm -f "$progress" "$errors"' EXIT HUP INT TERM
+    "$bot" up --json --no-open --no-worker >"$progress" 2>"$errors"
+    cat "$progress"
+    if ! grep -Eq '"type"[[:space:]]*:[[:space:]]*"result".*"status"[[:space:]]*:[[:space:]]*"ready"' "$progress"; then
+      if grep -Eq '"status"[[:space:]]*:[[:space:]]*"runtime_missing"' "$progress"; then echo status=not_installed
+      elif grep -Eq '"status"[[:space:]]*:[[:space:]]*"needs_attention"' "$progress"; then echo status=outdated
+      else echo status=start_failed; tail -n 8 "$errors" | sed 's/^/log=/'
+      fi
+      exit 0
+    fi
     data="${LEMON_BOT_DATA_DIR:-$HOME/.lemon/lemon_bot}"
     port="${LEMON_BOT_PORT:-4100}"
-    up() {
-      if command -v curl >/dev/null 2>&1; then curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$port/v1/setup" 2>/dev/null
-      elif command -v wget >/dev/null 2>&1; then wget -q -T 2 -O /dev/null "http://127.0.0.1:$port/v1/setup" 2>/dev/null
-      else pgrep -f lemon-bot >/dev/null 2>&1
-      fi
-    }
-    pick() { for c in "$@"; do [ -n "$c" ] && [ -x "$c" ] && { printf '%s\n' "$c"; return 0; }; done; return 1; }
-    if ! up; then
-      if bot=$(pick "$HOME/.lemon/lemon_bot/current/bot/bin/lemon-bot" "$HOME/.local/bin/lemon-bot" "$HOME/.lemon/bin/lemon-bot" "$(command -v lemon-bot 2>/dev/null)"); then
-        set -- "$bot" --no-open
-      elif [ -n "${1:-}" ] && [ -f "$1/products/lemon_bot/backend/src/cli.ts" ] && bun=$(pick "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun "$(command -v bun 2>/dev/null)"); then
-        set -- "$bun" run --cwd "$1/products/lemon_bot/backend" start --no-open
-      else
-        echo status=not_installed; exit 0
-      fi
-      mkdir -p "$data" && chmod 700 "$data"
-      if command -v setsid >/dev/null 2>&1; then setsid nohup "$@" </dev/null >>"$data/lemon-bot.log" 2>&1 &
-      else nohup "$@" </dev/null >>"$data/lemon-bot.log" 2>&1 &
-      fi
-      tries=0
-      until up; do
-        tries=$((tries + 1))
-        if [ "$tries" -ge 60 ]; then echo status=start_failed; tail -n 8 "$data/lemon-bot.log" 2>/dev/null | sed 's/^/log=/'; exit 0; fi
-        sleep 1
-      done
-      echo started=1
-    fi
     key=$(head -n 1 "$data/local-access.key" 2>/dev/null) || key=
     [ -n "$key" ] || { echo status=outdated; exit 0; }
     echo "port=$port"
@@ -134,7 +129,7 @@ public enum MachineBootstrap {
         case "ready":
             guard let port = values["port"].flatMap(Int.init), (1...65_535).contains(port),
                   let key = values["key"], key.count == 64, key.allSatisfy(\.isHexDigit) else { throw MachineConnectionError.outdated(machine: machine) }
-            return Ready(port: port, key: key.lowercased(), started: values["started"] == "1")
+            return Ready(port: port, key: key.lowercased())
         case "not_installed": throw MachineConnectionError.notInstalled(machine: machine)
         case "outdated": throw MachineConnectionError.outdated(machine: machine)
         case "start_failed": throw MachineConnectionError.startFailed(machine: machine, log: log.joined(separator: "\n"))
@@ -161,8 +156,8 @@ enum CommandRunner {
         return values
     }
 
-    static func run(_ executable: String, _ arguments: [String], input: String, timeout: TimeInterval) async throws -> CommandOutput {
-        try await Task.detached(priority: .userInitiated) { try runBlocking(executable, arguments, input: input, timeout: timeout) }.value
+    static func run(_ executable: String, _ arguments: [String], input: String, timeout: TimeInterval, progress: (@Sendable (String) -> Void)? = nil) async throws -> CommandOutput {
+        try await Task.detached(priority: .userInitiated) { try runBlocking(executable, arguments, input: input, timeout: timeout, progress: progress) }.value
     }
 
     private final class Collected: @unchecked Sendable {
@@ -172,7 +167,7 @@ enum CommandRunner {
         func text(_ index: Int) -> String { lock.withLock { String(decoding: values[index] ?? Data(), as: UTF8.self) } }
     }
 
-    private static func runBlocking(_ executable: String, _ arguments: [String], input: String, timeout: TimeInterval) throws -> CommandOutput {
+    private static func runBlocking(_ executable: String, _ arguments: [String], input: String, timeout: TimeInterval, progress: (@Sendable (String) -> Void)?) throws -> CommandOutput {
         let process = Process(), stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -183,7 +178,23 @@ enum CommandRunner {
         try? stdin.fileHandleForWriting.close()
         let reading = DispatchGroup(), collected = Collected()
         for (index, pipe) in [stdout, stderr].enumerated() {
-            DispatchQueue.global().async(group: reading) { collected.set(index, pipe.fileHandleForReading.readDataToEndOfFile()) }
+            DispatchQueue.global().async(group: reading) {
+                var data = Data(), pending = Data()
+                while true {
+                    let chunk = pipe.fileHandleForReading.availableData
+                    if chunk.isEmpty { break }
+                    data.append(chunk)
+                    if index == 0, let progress {
+                        pending.append(chunk)
+                        while let end = pending.firstIndex(of: 10) {
+                            progress(String(decoding: pending[..<end], as: UTF8.self))
+                            pending.removeSubrange(...end)
+                        }
+                    }
+                }
+                if index == 0, !pending.isEmpty { progress?(String(decoding: pending, as: UTF8.self)) }
+                collected.set(index, data)
+            }
         }
         let deadline = DispatchWorkItem { if process.isRunning { process.terminate() } }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: deadline)
@@ -205,14 +216,14 @@ enum CommandRunner {
 
     /// Runs a POSIX script on the route's machine: `/bin/sh -s` here, `ssh -T host sh -s` there.
     /// The script (and anything embedded in it) travels on stdin, never in arguments or the environment.
-    static func script(_ script: String, on route: MachineRoute, arguments: [String] = [], timeout: TimeInterval) async throws -> String {
+    static func script(_ script: String, on route: MachineRoute, arguments: [String] = [], timeout: TimeInterval, progress: (@Sendable (String) -> Void)? = nil) async throws -> String {
         switch route {
         case .thisMac:
-            return try await run("/bin/sh", ["-s", "--"] + arguments, input: script, timeout: timeout).stdout
+            return try await run("/bin/sh", ["-s", "--"] + arguments, input: script, timeout: timeout, progress: progress).stdout
         case .ssh(let host, _):
-            let output = try await run("/usr/bin/ssh", ssh(host, ["-T"]) + ["sh", "-s", "--"] + arguments, input: script, timeout: timeout)
+            let output = try await run("/usr/bin/ssh", ssh(host, ["-T"]) + ["sh", "-s", "--"] + arguments, input: script, timeout: timeout, progress: progress)
             // 255 is ssh's own failure; anything else came from the remote script or shell.
-            if output.status == 255 || !output.stdout.contains("status=") {
+            if output.status == 255 || (!output.stdout.contains("status=") && !output.stdout.contains("\"type\":\"result\"")) {
                 throw MachineConnectionError.sshFailed(host: host, detail: summary(output.stderr))
             }
             return output.stdout
@@ -235,7 +246,7 @@ extension MachineBootstrap {
             let checkout = UserDefaults.standard.string(forKey: checkoutDefaultsKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
             arguments = [checkout.flatMap { $0.hasPrefix("/") ? $0 : nil } ?? FileManager.default.homeDirectoryForCurrentUser.path + "/lemon"]
         }
-        return try parse(await CommandRunner.script(script, on: route, arguments: arguments, timeout: 100), machine: route.machineLabel)
+        return try parse(await CommandRunner.script(script, on: route, arguments: arguments, timeout: 240), machine: route.machineLabel)
     }
 }
 

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added resumable `lemon-bot up` background setup with secret-free NDJSON progress, local-owner sign-in, safe worker repair/enrollment, one-use stdin handoff, and browser sign-in through `lemon-bot open`. Plain terminal startup now sets up services and exits; non-terminal, service and `--no-open` invocations remain foreground servers.
+- Added private backend PID/start-time/instance records after listen, removed on clean shutdown, for verified lifecycle adoption.
 - Added credential-free enrollment reachability preview using the controller's actual advertised invite endpoint, before any invitation is issued.
 - Bots can run on the machine Lemon Bot itself runs on without an HTTPS address. With a loopback public origin, the backend first proves a machine's worker shares its host (the worker writes a random value into the private data directory and the backend reads it back), then gives that Bot a loopback MCP endpoint approved as its private origin. Other machines still need a reachable HTTPS origin, with a clearer message saying so.
 - Deleting a Bot, or forgetting its memory, no longer fails with `not_found` once its profile has more than one workspace preference: every deletion renames the remaining entries' file-revision ids, so the backend re-lists between deletions and matches previewed entries by their stable identity.

@@ -9,6 +9,7 @@ import { issueOwnerSetupProof } from './core/setup';
 import { ensureLocalAccessKey } from './core/local-access';
 import { terminal } from './cli/connect';
 import { prepareController } from './cli/lemon-runtime';
+import { recordBackendPid } from './cli/backend-pid';
 import { Store } from './core/store';
 import { installHelpers } from './core/helpers';
 import { installSecretResolver } from './core/secrets';
@@ -119,6 +120,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   }),60000);
   reconcileTimer.unref();retentionTimer.unref();
   let server:Server<RealtimeData>|null=null;let stopped=false;
+  let removePid: (() => void) | undefined;
   return {
     services,router,realtime,
     start(){
@@ -133,9 +135,11 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
           }
           return await router.fetch(request);
         },websocket:realtime.websocket});
+      try { removePid=recordBackendPid(config.dataDir,server.port!,services.store.metadata<string>('instanceId')!); }
+      catch(error){void server.stop(true);server=null;throw error;}
       lemon.start();return server;
     },
-    async stop(){if(stopped)return;stopped=true;clearInterval(reconcileTimer);clearInterval(retentionTimer);removeConnected();pairings.close();experiences.close();addressedAgents.close();realtime.close();voice.close();gates.close();attachments.close();await services.integrations.dispose?.();runtime.close();terminals.dispose();lemon.close();if(server)await server.stop(true);store.close();}
+    async stop(){if(stopped)return;stopped=true;clearInterval(reconcileTimer);clearInterval(retentionTimer);removeConnected();pairings.close();experiences.close();addressedAgents.close();realtime.close();voice.close();gates.close();attachments.close();await services.integrations.dispose?.();runtime.close();terminals.dispose();lemon.close();if(server)await server.stop(true);removePid?.();store.close();}
   };
 }
 
