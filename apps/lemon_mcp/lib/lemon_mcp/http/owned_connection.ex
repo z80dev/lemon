@@ -43,10 +43,19 @@ defmodule LemonMCP.HTTP.OwnedConnection do
     path = if uri.query, do: path <> "?" <> uri.query, else: path
     headers = Enum.map(headers, fn {key, value} -> {to_string(key), to_string(value)} end)
 
+    # The body's type is authoritative, as with :httpc. A second content-type
+    # header joins into "application/json, application/json", which strict
+    # servers (Lemon Bot among them) reject as unsupported media.
     {headers, data} =
       case body do
-        nil -> {headers, nil}
-        {type, data} -> {[{"content-type", to_string(type)} | headers], data}
+        nil ->
+          {headers, nil}
+
+        {type, data} ->
+          headers =
+            Enum.reject(headers, fn {key, _} -> String.downcase(key) == "content-type" end)
+
+          {[{"content-type", to_string(type)} | headers], data}
       end
 
     deadline = System.monotonic_time(:millisecond) + timeout

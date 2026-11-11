@@ -10,18 +10,25 @@ defmodule LemonMCP.HTTPPinningTest.Fixture do
     record(conn, request["method"])
     config = Agent.get(conn.assigns.store, & &1)
 
-    if config.oauth and get_req_header(conn, "authorization") != ["Bearer fixture-token"] do
-      conn
-      |> put_resp_header(
-        "www-authenticate",
-        ~s|Bearer resource_metadata="#{config.metadata_url}"|
-      )
-      |> send_resp(401, "authorization required")
-    else
-      case LemonMCP.TestSupport.FixtureServer.response_for(request, "Pinned Fixture") do
-        nil -> send_resp(conn, 202, "")
-        response -> json(conn, response)
-      end
+    cond do
+      # Like Lemon Bot's product router: a repeated header joins into
+      # "application/json, application/json", which is not JSON.
+      get_req_header(conn, "content-type") != ["application/json"] ->
+        send_resp(conn, 415, "exactly one JSON content type is required")
+
+      config.oauth and get_req_header(conn, "authorization") != ["Bearer fixture-token"] ->
+        conn
+        |> put_resp_header(
+          "www-authenticate",
+          ~s|Bearer resource_metadata="#{config.metadata_url}"|
+        )
+        |> send_resp(401, "authorization required")
+
+      true ->
+        case LemonMCP.TestSupport.FixtureServer.response_for(request, "Pinned Fixture") do
+          nil -> send_resp(conn, 202, "")
+          response -> json(conn, response)
+        end
     end
   end
 

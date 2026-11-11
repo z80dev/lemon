@@ -12,6 +12,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - The Lemon Bot iPhone app compiles again: a macOS-only home-directory
   initializer in `LemonBotKit` is no longer built for iOS.
+- Lemon Bot replies again. Since 2026.11.3, every Bot run failed before
+  reaching the model ("The runtime reported that this run failed"): MCP
+  requests to a local or private Lemon Bot address carried two
+  `content-type` headers, which Lemon Bot rejected.
 
 ---
 
