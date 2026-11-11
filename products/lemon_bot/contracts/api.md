@@ -162,6 +162,8 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 | `POST /instance/reconnect` | `Mutation` | `InstanceStatus` | `undefined` | Owner/Admin | — |
 | `POST /instance/runtime/:action` | `RuntimeActionRequest` | `RuntimeOperation` (202) | `undefined` | Owner | capability_unavailable, confirmation_required, conflict |
 | `GET /instance/providers` | `undefined` | `ProviderManagement` | `undefined` | Owner | upstream_unavailable, capability_unavailable |
+| `POST /instance/providers/check` | `ProviderCheckRequest` | `ProviderCheckResult` | `undefined` | Owner | conflict, upstream_unavailable, capability_unavailable |
+| `POST /instance/providers/:providerId/import` | `ProviderImportRequest` | `ProviderManagement` | `undefined` | Owner | nonce_conflict, conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
 | `PUT /instance/providers/:providerId/api-key` | `ProviderApiKeySet` | `ProviderManagement` | `undefined` | Owner | conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
 | `POST /instance/providers/:providerId/disconnect` | `ProviderTargetRequest` | `ProviderManagement` | `undefined` | Owner | conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
 | `POST /instance/providers/default` | `ProviderDefaultSet` | `ProviderManagement` | `undefined` | Owner | conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
@@ -169,6 +171,8 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 | `POST /instance/providers/:providerId/device-login/:loginId/poll` | `ProviderDeviceLoginRequest` | `ProviderDeviceLogin` | `undefined` | Owner + initiating product session | nonce_conflict, conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
 | `POST /instance/providers/:providerId/device-login/:loginId/cancel` | `ProviderDeviceLoginRequest` | `ProviderDeviceLogin` | `undefined` | Owner + initiating product session | nonce_conflict, conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
 | `GET /machines/:id/providers` | `undefined` | `ProviderManagement` | `undefined` | Owner + actual machine owner | machine_offline, upstream_unavailable, capability_unavailable |
+| `POST /machines/:id/providers/check` | `ProviderCheckRequest` | `ProviderCheckResult` | `undefined` | Owner + actual machine owner | conflict, machine_offline, upstream_unavailable, capability_unavailable |
+| `POST /machines/:id/providers/:providerId/import` | `ProviderImportRequest` | `ProviderManagement` | `undefined` | Owner + actual machine owner | nonce_conflict, conflict, outcome_unknown, machine_offline, upstream_unavailable, capability_unavailable |
 | `PUT /machines/:id/providers/:providerId/api-key` | `ProviderApiKeySet` | `ProviderManagement` | `undefined` | Owner + actual machine owner | conflict, outcome_unknown, machine_offline, upstream_unavailable, capability_unavailable |
 | `POST /machines/:id/providers/:providerId/disconnect` | `ProviderTargetRequest` | `ProviderManagement` | `undefined` | Owner + actual machine owner | conflict, outcome_unknown, machine_offline, upstream_unavailable, capability_unavailable |
 | `POST /machines/:id/providers/default` | `ProviderDefaultSet` | `ProviderManagement` | `undefined` | Owner + actual machine owner | conflict, outcome_unknown, machine_offline, upstream_unavailable, capability_unavailable |
@@ -2179,3 +2183,20 @@ Paired AuthSession.expiresAtMs is **null until revoked**, always explicit JSON n
 - `mobile.pairing` on iOS: AVCapture QR scanner with OS camera permission or Paste link fallback; strict parse, actual non-consuming name/origin preview, explicit Request, matching code and waiting desktop approval, pending/denied/expired/network/error/request-ID states; fixed-nonce complete/reconcile, no fabricated Connected.
 - After connected: store own token in Keychain, retain cluster/account/selected owned Bot/conversation and last safe cursor. Reopen restores saved connection, then verifies authority and syncs actual owner resources; no pairing or session mint loop. Offline keeps configuration/drafts and does not replay work mutations. Revoked/disabled session shows explicit Reconnect; do not erase cluster silently or impersonate another user. Foreground pending completion may poll with the same nonce until deadline; interrupted/lost response uses that same receipt, never a new nonce.
 - `settings.account` Devices/Sessions shows paired phone as until-revoked, plus explicit disconnect/sign-out/revoke controls and consequences. Workspace transfer/identity/admin controls remain separate metadata operations, never transfer any live Bot or pairing's human owner.
+
+### Model readiness
+
+Provider management includes `readiness` and `detected`. Older targets without
+`providers.management.check` return `null` and `[]`; check/import return
+`capability_unavailable`. Readiness states are `verified`, `saved`,
+`action_required`, and `not_configured`. Both verified and saved count as ready,
+but saved does not claim a successful live check. Static `lastValidation` is separate.
+The explicit check is non-generating (no message is sent), may refresh the target's
+OAuth token, and is safe to retry. Its body contains `clientNonce`, exact `targetId`,
+and optional `providerId`; the result contains `management` and `readiness`.
+Login import requires `source: "codex_cli"` and `consent: "copy_login"` with the
+target and nonce, and only accepts provider `openai_codex` detected on that target.
+No path is accepted. Lemon copies and refreshes its own encrypted login, never
+changes `~/.codex/auth.json` or the default model, and never returns tokens.
+Either app may subsequently require sign-in; device-code sign-in gives Lemon its
+own login instead. An uncertain import must be reconciled, not automatically retried.
