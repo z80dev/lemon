@@ -100,6 +100,36 @@ describe('owned placed runtime', () => {
     } finally { runtime.close(); f.store.close(); }
   });
 
+  test('reconciliation does not resurrect a reserved candidate completed during an earlier receipt read', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const { promise: waiting, resolve: entered } = Promise.withResolvers<void>();
+    const { promise: receipt, resolve: release } = Promise.withResolvers<unknown>();
+    try {
+      const first = (await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'snapshot_first_status_001', text: 'first' })).run;
+      const second = (await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'snapshot_second_status_001', text: 'second' })).run;
+      f.store.put('runs', { ...second, status: 'reserved' });
+      const firstBound = f.store.metadata<RuntimeMapping>(`runtimeRun:${first.id}`)!;
+      const secondBound = f.store.metadata<RuntimeMapping>(`runtimeRun:${second.id}`)!;
+      const original = f.rpc;
+      f.rpc = async (method, params) => {
+        if (method === 'runs.receipt.get' && params.runId === first.id) { entered(); return receipt; }
+        if (method === 'agent.wait' && params.runId === second.id) return { runId: second.id, ok: true, cancelled: false, answer: 'done' };
+        return original(method, params);
+      };
+      const statuses: string[] = [];
+      f.services.events.subscribe(event => { if (event.event === 'run.upserted' && event.payload.id === second.id) statuses.push(event.payload.status); });
+      const reconcile = runtime.reconcile(); await waiting;
+      await runtime.project('agent', { type: 'completed', runId: second.id, sessionKey: secondBound.sessionKey });
+      const completed = f.store.require<P.Run>('runs', second.id);
+      expect(completed.status).toBe('succeeded');
+      release({ receipt: { runId: first.id, sessionKey: firstBound.sessionKey, state: 'accepted', effectiveMode: 'new_run', targetRunId: first.id } });
+      await reconcile;
+      expect(f.store.require<P.Run>('runs', second.id)).toEqual(completed);
+      expect(statuses).toEqual(['succeeded']);
+      expect(f.calls.filter(call => call.method === 'runs.receipt.get' && call.params.runId === second.id)).toHaveLength(0);
+    } finally { release(null); runtime.close(); f.store.close(); }
+  });
+
   test('completion reuses an unmapped streaming reply and closes every stray without deletion', async () => {
     const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
     try {

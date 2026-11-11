@@ -26,9 +26,13 @@ subsequent web fetches and searches require approval. Writes, Terminal and Brows
 keep their existing approval rules.
 
 Live reply indicators and the desktop pet ignore streaming messages from finished
-runs. Idle/offline Bot updates re-read locally active runs and their replies to
-recover missed completion events. Bot access refreshes when grants, its machine,
-or workspace policy changes.
+runs. Idle/offline Bot updates re-read all locally nonterminal runs, including
+unknown outcomes, without presenting uncertain work as actively running. Final
+reply reads retry independently on later idle/offline updates if a run finishes
+but its reply cannot be fetched, even after that run leaves the active-run list.
+Recovery state is isolated to the account and cleared on sign-out or lost
+conversation access. Bot access refreshes when grants, its machine, or workspace
+policy changes.
 
 Create Bot checks model readiness on the selected execution machine, not the
 controller. **Verified** and **Saved** both allow creation; Saved is not a passed

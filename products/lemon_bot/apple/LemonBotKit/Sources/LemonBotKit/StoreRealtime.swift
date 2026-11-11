@@ -194,6 +194,7 @@ extension LemonBotStore {
     func clearConversationAccess(_ id: ID) {
         conversations.removeAll { $0.id == id }; entries[id] = nil; drafts[id] = nil
         runs.removeAll { $0.conversationId == id }; typingByConversation[id] = nil
+        pendingRunEntryReconciliations = pendingRunEntryReconciliations.filter { $0.value.conversationId != id }
         if selectedConversationID == id { selectedConversationID = nil }
         if visibleConversationID == id { visibleConversationID = nil }
         if let account {

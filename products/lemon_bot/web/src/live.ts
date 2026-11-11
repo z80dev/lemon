@@ -16,10 +16,10 @@ export function isStreaming(entry: TranscriptEntry, runs: Pick<Run, 'id' | 'stat
   return entry.kind === 'message' && entry.streaming && !(entry.runId && runs.some(run => run.id === entry.runId && terminalRunStatuses[run.status]));
 }
 
-/** Live runs that conflict with an idle server projection and need a targeted re-read. */
+/** Nonterminal runs that conflict with an idle server projection and need a targeted re-read. */
 export function staleLiveRuns(bot: Pick<Bot, 'id' | 'activity'>, runs: Run[]): Run[] {
   if (bot.activity !== 'idle' && bot.activity !== 'offline') return [];
-  return runs.filter(run => run.botId === bot.id && liveRunStatuses[run.status]);
+  return runs.filter(run => run.botId === bot.id && !terminalRunStatuses[run.status]);
 }
 
 /** The current human-readable step for live work in a conversation, or undefined when idle. */

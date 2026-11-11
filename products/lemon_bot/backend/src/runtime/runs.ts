@@ -637,8 +637,11 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
           const result = upstream(z.object({ runs: z.array(z.object({ id, routerRunId: id.nullable(), jobId: id, status: z.string(), sessionKey: z.string().nullable(), startedAtMs: z.number().int().nullable() }).passthrough()) }).passthrough(), await services.lemon.call('cron.runs', { id: routine.cronJobId!, limit: 20, includeOutput: true, includeMeta: false }));
           for (const record of result.runs) await projectCron({ type: record.status === 'running' ? 'started' : 'completed', runId: record.routerRunId, cronRunId: record.id, jobId: record.jobId, sessionKey: record.sessionKey, startedAtMs: record.startedAtMs, status: record.status });
         }
-        for (const run of services.store.list<P.Run>('runs', value => !terminalStatuses.includes(value.status) || services.store.metadata<boolean>(`runtimeTerminalProjectionPending:${value.id}`) === true)) {
-          if (submitting.has(run.id)) continue;
+        for (const candidate of services.store.list<P.Run>('runs', value => !terminalStatuses.includes(value.status) || services.store.metadata<boolean>(`runtimeTerminalProjectionPending:${value.id}`) === true)) {
+          if (submitting.has(candidate.id)) continue;
+          // Earlier receipt reads yield to completion projection for later candidates.
+          const run = services.store.require<P.Run>('runs', candidate.id);
+          if (terminalStatuses.includes(run.status) && services.store.metadata<boolean>(`runtimeTerminalProjectionPending:${run.id}`) !== true) continue;
           const bound = mapping(run.id); if (!bound) continue;
           try { actor(run.id); } catch { services.store.setMetadata(`runtimeReconciliation:${run.id}`, { pending: true, code: 'forbidden', measuredAtMs: services.now() }); continue; }
           if (run.status === 'reserved') emitRun(services.update(run, { status: 'outcome_unknown', error: errorEnvelope(new ApiError('outcome_unknown', 'A reserved submission needs reconciliation after interruption.', false, { resourceIds: [run.id], runId: run.id }), services.id('req')).error }));

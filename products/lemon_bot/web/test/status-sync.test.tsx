@@ -37,6 +37,8 @@ const finished: Run = { ...running, revision: 2, updatedAtMs: 2, status: 'succee
 const streaming: TranscriptEntry = { ...resource, id: 'entry_test', conversationId: conversation.id, seq: 1, timestampMs: 1, actor: { kind: 'bot', id: bot.id, displayName: bot.name }, clientNonce: null, batchId: null, replyToEntryId: null, runId: running.id, targetedUserId: null, reactions: [], kind: 'message', role: 'assistant', text: 'Done', streaming: true, attachmentIds: [] };
 const finalEntry: TranscriptEntry = { ...streaming, revision: 2, updatedAtMs: 2, streaming: false };
 let transcriptEntries: TranscriptEntry[] = [streaming];
+let initialRun: Run = running;
+let readRun: () => Run | Promise<Run> = () => finished;
 let homeMachines: Machine[] | undefined;
 let sidebarTail: TranscriptEntry | undefined;
 const entryQueries: unknown[] = [];
@@ -47,7 +49,7 @@ function snapshot(): Snapshot {
     workspace: { ...resource, id: 'workspace_test', name: 'Workspace', ownerUserId: 'user_test', enabled: true, timezone: 'UTC' },
     member: { ...resource, id: 'member_test', userId: 'user_test', displayName: 'Owner', email: 'owner@example.test', role: 'owner', enabled: true },
     capabilities: { controlConnected: true, methods: [], stt: false, tts: false, imageGeneration: false, apns: false, webPush: false, vapidPublicKey: null, attachmentMaxBytes: 1024, videoMaxBytes: 1024, maxAttachments: 6, minClientVersions: { web: '1.0.0', macos: '1.0.0', ios: '1.0.0' } },
-    bots: homeMachines ? [] : [sidebarTail ? { ...bot, activity: 'idle', activeRunIds: [] } : bot], machines: homeMachines ?? [machine], conversations: homeMachines ? [] : [conversation], sections: [], notifications: [], activeRuns: homeMachines || sidebarTail ? [] : [running],
+    bots: homeMachines ? [] : [sidebarTail ? { ...bot, activity: 'idle', activeRunIds: [] } : bot], machines: homeMachines ?? [machine], conversations: homeMachines ? [] : [conversation], sections: [], notifications: [], activeRuns: homeMachines || sidebarTail ? [] : [initialRun],
     hasMore: { bots: false, machines: false, conversations: false, notifications: false },
   };
 }
@@ -57,12 +59,17 @@ let root: Root;
 let realtimeOptions: RealtimeOptions | undefined;
 const subscribers = new Set<(frame: RealtimeServerFrame) => void | Promise<void>>();
 const calls: string[] = [];
+const reconciledRuns: Run[][] = [];
+const recordReconciledRuns = (event: Event) => reconciledRuns.push((event as CustomEvent<Run[]>).detail);
 
 beforeEach(() => {
   calls.length = 0;
   subscribers.clear();
   realtimeOptions = undefined;
   conversation.kind = 'dm'; transcriptEntries = [streaming];
+  initialRun = running; readRun = () => finished;
+  reconciledRuns.length = 0;
+  window.addEventListener('lemonbot:runs-reconciled', recordReconciledRuns);
   homeMachines = undefined;
   sidebarTail = undefined; entryQueries.length = 0; conversation.lastEntryId = null;
   sessionStorage.clear();
@@ -80,8 +87,8 @@ beforeEach(() => {
       case 'POST /devices': return { ...resource, id: 'device_test', userId: 'user_test', installationId: 'install_test', platform: 'web', name: 'Browser', appVersion: '1.0.0', pushEnabled: false, lastSeenAtMs: 1 };
       case 'GET /conversations/:id': return conversation;
       case 'GET /conversations/:id/entries': entryQueries.push(options?.query); return { items: transcriptEntries, nextCursor: null };
-      case 'GET /runs': return { items: [running], nextCursor: null };
-      case 'GET /runs/:id': return finished;
+      case 'GET /runs': return { items: [initialRun], nextCursor: null };
+      case 'GET /runs/:id': return readRun();
       case 'GET /entries/:id': return sidebarTail ?? finalEntry;
       case 'GET /machines/:id/host': return { hostname: 'studio', os: 'macOS', osVersion: '26', arch: 'arm64', cpuCount: 8, memTotalBytes: 1, memFreeBytes: 1, diskTotalBytes: 1, diskFreeBytes: 1, uptimeSec: 1, lemonVersion: '1', defaultCwd: '/tmp', user: 'owner', measuredAtMs: 1 };
       case 'GET /conversations/:id/composer': return { conversationId: conversation.id, text: '', attachmentIds: [], replyToEntryId: null, updatedAtMs: 1, revision: 1 };
@@ -108,6 +115,7 @@ afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
   } finally {
+    window.removeEventListener('lemonbot:runs-reconciled', recordReconciledRuns);
     mock.restore();
   }
 });
@@ -138,6 +146,66 @@ test('idle presence reconciles a withheld terminal run and its streaming entry w
   expect(calls.filter(endpoint => endpoint === 'GET /entries/:id')).toHaveLength(1);
   expect(container.querySelector('.chat-working')).toBeNull();
 });
+
+for (const [name, latest, delayed, remainsActive] of [
+  ['older running result after completion', { ...finished, revision: 3 }, { ...running, revision: 2 }, false],
+  ['older terminal result after newer running state', { ...running, revision: 3 }, finished, true],
+  ['duplicate terminal result after completion', finished, finished, false],
+] as const) {
+  test(`run reconciliation rejects ${name} without forwarding it`, async () => {
+    const pending = Promise.withResolvers<Run>();
+    readRun = () => pending.promise;
+    await act(async () => root.render(<App />));
+    await waitFor(() => !!container.querySelector('.chat-caret') && !!container.querySelector('.roster .live-step'));
+
+    const presence: RealtimeEvent = { type: 'event', seq: '2', event: 'bot.presence', timestampMs: 2, payload: { botId: bot.id, status: 'idle', machineId: machine.id, machineLabel: machine.name, machineStatus: 'online', currentRunId: null, taskConversationId: null, summary: 'Idle', evidenceEntryId: null, measuredAtMs: 2, stale: false } };
+    await act(async () => {
+      await realtimeOptions!.onEvent(presence);
+      for (const subscriber of subscribers) await subscriber(presence);
+    });
+    expect(calls.filter(endpoint => endpoint === 'GET /runs/:id')).toHaveLength(1);
+
+    const event: RealtimeEvent = { type: 'event', seq: '3', event: 'run.upserted', timestampMs: 3, payload: latest };
+    await act(async () => {
+      await realtimeOptions!.onEvent(event);
+      for (const subscriber of subscribers) await subscriber(event);
+    });
+    await waitFor(() => !!container.querySelector('.roster .live-step') === remainsActive && !!container.querySelector('.chat-working') === remainsActive);
+    await act(async () => { pending.resolve(delayed); await pending.promise; });
+
+    expect(reconciledRuns).toEqual([]);
+    expect(!!container.querySelector('.roster .live-step')).toBe(remainsActive);
+    expect(!!container.querySelector('.chat-working')).toBe(remainsActive);
+    expect(!!container.querySelector('.chat-caret')).toBe(remainsActive);
+    if (remainsActive) expect(calls.filter(endpoint => endpoint === 'GET /entries/:id')).toHaveLength(0);
+    else {
+      // A later full sync also cannot discard the terminal revision tombstone.
+      await act(async () => { await realtimeOptions!.onReset!(); });
+      expect(container.querySelector('.roster .live-step')).toBeNull();
+      expect(container.querySelector('.chat-working')).toBeNull();
+    }
+  });
+}
+
+for (const activity of ['idle', 'offline'] as const) {
+  test(`${activity} presence reconciles outcome_unknown without presenting it as live work`, async () => {
+    initialRun = { ...running, status: 'outcome_unknown' };
+    await act(async () => root.render(<App />));
+    await waitFor(() => !!container.querySelector('.chat-caret') && subscribers.size > 0);
+    expect(container.querySelector('.roster .live-step')).toBeNull();
+    expect(container.querySelector('.chat-working')).toBeNull();
+
+    const presence: RealtimeEvent = { type: 'event', seq: '2', event: 'bot.presence', timestampMs: 2, payload: { botId: bot.id, status: activity, machineId: machine.id, machineLabel: machine.name, machineStatus: 'online', currentRunId: null, taskConversationId: null, summary: 'Idle', evidenceEntryId: null, measuredAtMs: 2, stale: false } };
+    await act(async () => {
+      await realtimeOptions!.onEvent(presence);
+      for (const subscriber of subscribers) await subscriber(presence);
+    });
+    await waitFor(() => !container.querySelector('.chat-caret'));
+    expect(calls.filter(endpoint => endpoint === 'GET /runs/:id')).toHaveLength(1);
+    expect(reconciledRuns).toEqual([[finished]]);
+    expect(container.querySelector('.chat-working')).toBeNull();
+  });
+}
 
 test('shared rooms mask access-request content and never fetch its private approval', async () => {
   const approval: Approval = {

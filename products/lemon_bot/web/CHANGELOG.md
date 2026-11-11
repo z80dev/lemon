@@ -29,8 +29,10 @@
   caching that result against the conversation's last-entry ID.
 
 - Finished runs no longer leave “Writing a reply” or a caret behind when completion
-  arrives late; idle Bots reconcile stale run/message state. Grant changes cannot
-  be replaced by older in-flight refreshes.
+  arrives late; idle or offline Bots reconcile every nonterminal run, including
+  unknown outcomes. Terminal run revisions survive removal from active work, so
+  delayed status reads cannot resurrect work or forward superseded results.
+  Grant changes cannot be replaced by older in-flight refreshes.
 
 - Device registration, About and update requirements use the build's package version and complete semantic-version precedence instead of hardcoded version checks.
 

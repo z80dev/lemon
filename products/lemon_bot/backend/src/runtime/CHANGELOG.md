@@ -1,5 +1,9 @@
 # Runtime changes
 
+## 2026-11-11
+- Re-read reconciliation candidates after earlier receipt waits so a completed run cannot be restored to an uncertain reserved-submission state.
+- Web and Apple idle reconciliation includes uncertain outcomes; delayed web reads cannot restore completed runs, and Apple retries final-entry reads independently after run completion.
+
 ## 2026-11-10
 - Preserve realtime sequence order through reply/status fan-out and close terminal-run streaming messages (including legacy rows), so completed replies no longer leave Bots stuck on “Thinking” or “Writing a reply”.
 - Reconciliation retains streaming entry identities and delta progress and skips locally in-flight submissions, preventing duplicate final replies and false uncertain-submission states without deleting transcript history.

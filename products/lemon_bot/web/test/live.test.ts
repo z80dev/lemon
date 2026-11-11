@@ -18,6 +18,7 @@ test('currentStep only treats streaming entries from a live run as Writing a rep
   const finished = run('finished', 'succeeded');
   expect(currentStep([live, finished], [message(finished.id)], conversation)?.title).toBe('Thinking');
   expect(currentStep([live, finished], [message(live.id)], conversation)?.title).toBe('Writing a reply');
+  expect(currentStep([run('unknown', 'outcome_unknown')], [], conversation)).toBeUndefined();
 });
 
 test('isStreaming hides the caret only when the entry run is known terminal', () => {
@@ -30,16 +31,19 @@ test('isStreaming hides the caret only when the entry run is known terminal', ()
   expect(isStreaming(message('run', false), [run('run', 'running')])).toBe(false);
 });
 
-test('staleLiveRuns selects this Bot live runs only while the server says idle or offline', () => {
+test('staleLiveRuns selects all this Bot nonterminal runs without changing live presentation', () => {
   const running = run('running', 'running');
   const queued = run('queued', 'queued');
+  const reserved = run('reserved', 'reserved');
+  const awaitingInput = run('awaiting', 'awaiting_input');
+  const unknown = run('unknown', 'outcome_unknown');
   const terminal = run('terminal', 'succeeded');
   const other = run('other', 'running', 'other-bot');
-  const runs = [running, queued, terminal, other];
+  const runs = [running, queued, reserved, awaitingInput, unknown, terminal, run('failed', 'failed'), run('cancelled', 'cancelled'), other];
   const bot = { id: 'bot', activity: 'idle' as Bot['activity'] };
 
-  expect(staleLiveRuns(bot, runs)).toEqual([running, queued]);
-  expect(staleLiveRuns({ ...bot, activity: 'offline' }, runs)).toEqual([running, queued]);
+  expect(staleLiveRuns(bot, runs)).toEqual([running, queued, reserved, awaitingInput, unknown]);
+  expect(staleLiveRuns({ ...bot, activity: 'offline' }, runs)).toEqual([running, queued, reserved, awaitingInput, unknown]);
   expect(staleLiveRuns({ ...bot, activity: 'working' }, runs)).toEqual([]);
   expect(staleLiveRuns({ ...bot, activity: 'needs_input' }, runs)).toEqual([]);
 });
