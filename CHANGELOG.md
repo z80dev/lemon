@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.11.3]
+
 ### Fixed
 
 - Packaged `lemon daemon` (and `stop`, `rpc`, `remote`) failed with "daemon
