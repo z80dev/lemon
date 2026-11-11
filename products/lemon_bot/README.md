@@ -45,6 +45,14 @@ that history. It is in-memory diagnostic history, cleared when Lemon restarts,
 not a live provider probe. Raw provider messages, paths and credentials are never
 included in `providers[].lastError`.
 
+## Install a release
+
+Use `install.sh --profile bot` for the full runtime (without the TUI by default)
+and backend at the same version. The installer verifies runtime Bot capabilities
+and hands off to `lemon-bot` in a terminal; `--skip-setup` or a headless install
+prints its absolute path instead. `--profile lemon_bot` remains backend-only for
+remote controllers or manual supervision. See [installation](../../docs/install.md).
+
 ## Running an integrated checkout
 
 Requirements: a running authenticated Lemon controller with the required profile, placement, node-I/O, memory and live-stream RPCs; Bun 1.4+; Node 24 for Vite tooling. Owner setup and the management API work with zero model-provider credentials or default model. Bot execution later requires a supported controller default model and destination-local provider authentication; `lemon setup` configures those locally. Native builds use Xcode 26.3 and XcodeGen 2.46; signing and provisioning are required for installed Apple devices.

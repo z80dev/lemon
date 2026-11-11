@@ -674,11 +674,11 @@ fi
 # prints the one exact command a user can run later.
 no_tty_home="$work_dir/home-no-tty"
 mkdir -p "$no_tty_home"
-no_tty_setup_line="    $no_tty_home/.lemon/bin/lemon setup"
+no_tty_setup_line="Next: \"$no_tty_home/.lemon/bin/lemon\" setup"
 
 if run_install "$work_dir/install-no-tty.log" "$no_tty_home" "$base_url"; then
   if [ "$(setup_count "$no_tty_home")" = "0" ] &&
-    grep -Fqx "No interactive terminal is available. Run this when you are ready to configure Lemon:" \
+    grep -Fqx "No interactive terminal is available; configure Lemon with the next step below." \
       "$work_dir/install-no-tty.log" &&
     grep -Fqx "$no_tty_setup_line" "$work_dir/install-no-tty.log"; then
     ok "a non-TTY install succeeds and prints the exact setup next step"
@@ -1110,10 +1110,10 @@ path_home="$work_dir/home-path"
 mkdir -p "$path_home"
 
 if run_install "$work_dir/install-11.log" "$path_home" "$base_url" SHELL=/bin/zsh -- --no-modify-path; then
-  if [ ! -e "$path_home/.zshrc" ] && grep -q 'export PATH=' "$work_dir/install-11.log"; then
-    ok "--no-modify-path prints the PATH line without touching the shell rc file"
+  if [ ! -e "$path_home/.zshrc" ] && grep -Fq "$path_home/.lemon/bin is not on your PATH" "$work_dir/install-11.log"; then
+    ok "--no-modify-path prints absolute-path guidance without touching the shell rc file"
   else
-    fail "install.sh edited the rc file despite --no-modify-path, or printed no PATH line"
+    fail "install.sh edited the rc file despite --no-modify-path, or printed no absolute-path guidance"
     cat "$work_dir/install-11.log" >&2
   fi
 else
@@ -1138,8 +1138,8 @@ fish_home="$work_dir/home-fish"
 mkdir -p "$fish_home"
 
 if run_install "$work_dir/install-14.log" "$fish_home" "$base_url" SHELL=/usr/bin/fish; then
-  if grep -q "fish_add_path $fish_home/.lemon/bin" "$work_dir/install-14.log"; then
-    ok "fish shells are given fish_add_path guidance"
+  if grep -q "fish_add_path $fish_home/.lemon/bin" "$fish_home/.config/fish/config.fish"; then
+    ok "fish shells receive fish_add_path in their config"
   else
     fail "fish PATH guidance did not use fish syntax"
     cat "$work_dir/install-14.log" >&2
@@ -1568,6 +1568,51 @@ SERVER
             (root / live).is_dir() and state.read_text() == "retain me" and
             os.readlink(home / ".lemon/versions/current") == native_current,
             "backend update retains previous version, state, and independent native current")
+    # Combined preset resolves both artifacts from a single manifest.
+    version = "9999.10.0"
+    filename = f"lemon-{version}-stable-{platform}-lemon_bot.tar.gz"
+    combined = publish_case("combined")
+    dest = serve / "combined/releases/latest/download"
+    runtime_name = f"lemon-{version}-stable-{platform}-lemon_runtime_full.tar.gz"
+    runtime = (
+        '#!/bin/sh\n'
+        'if [ "$1" = node ]; then\n'
+        '  [ "$2 $3 $4 $5 $6" = "capabilities --json --require-bot --expected-version '
+        + version + '" ] || exit 1\n'
+        'fi\n'
+        f'printf "{version}\\n"\n'
+    ).encode()
+    with tarfile.open(dest / runtime_name, "w:gz") as archive:
+        entry = tarfile.TarInfo("bin/lemon")
+        entry.size, entry.mode = len(runtime), 0o755
+        archive.addfile(entry, io.BytesIO(runtime))
+    manifest = json.loads((dest / "manifest.json").read_text())
+    data = (dest / runtime_name).read_bytes()
+    manifest["artifacts"].append({
+        "file": runtime_name, "profile": "lemon_runtime_full", "platform": platform,
+        "os": os_name, "arch": arch, "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    })
+    (dest / "manifest.json").write_text(json.dumps(manifest))
+    result = install(combined, "--profile", "bot")
+    require(result.returncode == 0, f"combined preset installs: {result.stdout.decode()}")
+    require(os.readlink(home / ".lemon/versions/current") == version and
+            os.readlink(root / "current") == f"versions/{version}-stable-{platform}" and
+            not (home / f".lemon/versions/{version}/tui").exists(),
+            "combined preset installs same-version runtime and backend without TUI")
+    require(result.stdout.decode().splitlines().count(f"Run: {launcher}") == 1 and
+            "Next:" not in result.stdout.decode(), "combined preset prints exactly one absolute next step")
+    require(install(combined, "--profile", "bot", "--resolve-version").stdout.decode().strip().endswith(version),
+            "combined preset supports version resolution")
+    old_runtime = os.readlink(home / ".lemon/versions/current")
+    old_backend = os.readlink(root / "current")
+    # A regressed installed runtime is checked before either pointer changes.
+    (home / f".lemon/versions/{version}/bin/lemon").write_text("#!/bin/sh\nexit 1\n")
+    result = install(combined, "--profile", "bot")
+    require(result.returncode != 0 and
+            os.readlink(home / ".lemon/versions/current") == old_runtime and
+            os.readlink(root / "current") == old_backend,
+            "failed combined capability gate preserves both pointers")
 except (AssertionError, OSError, subprocess.TimeoutExpired) as error:
     print(f"error backend installer: {error}", file=sys.stderr)
     raise SystemExit(1)

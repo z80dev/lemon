@@ -61,7 +61,7 @@ Usage:
   sh install.sh --resolve-version
 
 Options:
-  --profile NAME  Select full, min, or lemon_bot (backend only, no BEAM/TUI).
+  --profile NAME  Select full, min, bot (runtime + backend), or lemon_bot (backend only).
   --force         Reinstall even if the target version is already present.
   --verify        Boot on ephemeral ports, then stop. Native: poll /healthz.
                   Backend: check /v1/setup and web before promotion.
@@ -94,7 +94,7 @@ Environment:
                               pinned release manifest publishes.
   LEMON_CHANNEL               Release channel. Default: stable for unpinned
                               installs. An explicit value must match the manifest.
-  LEMON_PROFILE               full | min | lemon_bot, or a full profile name
+  LEMON_PROFILE               full | min | bot | lemon_bot, or a full profile name
                               (lemon_runtime_full, lemon_runtime_min).
                               Default: lemon_runtime_full.
   LEMON_NO_TUI                Set to 1 to install the runtime only, skipping the
@@ -238,13 +238,15 @@ check_glibc
 
 # ----------------------------------------------------------------- profile ---
 
+BOT_PRESET=0
 case "$PROFILE_INPUT" in
   full|lemon_runtime_full) PROFILE="lemon_runtime_full" ;;
   min|lemon_runtime_min) PROFILE="lemon_runtime_min" ;;
+  bot) PROFILE="lemon_runtime_full"; BOT_PRESET=1; REQUIRE_BOT=1 ;;
   lemon_bot) PROFILE="lemon_bot" ;;
   *)
     die "unknown LEMON_PROFILE '$PROFILE_INPUT'.
-  Use full, min, lemon_bot, or a full runtime profile name."
+  Use full, min, bot, lemon_bot, or a full runtime profile name."
     ;;
 esac
 
@@ -573,6 +575,7 @@ PY
 
 # ------------------------------------------------------------------ layout ---
 
+configure_layout() {
 LEMON_ROOT="$HOME/.lemon"
 VERSIONS_DIR="$LEMON_ROOT/versions"
 BIN_DIR="$LEMON_ROOT/bin"
@@ -594,6 +597,8 @@ mkdir -p "$VERSIONS_DIR" "$BIN_DIR" "$TMP_DIR"
 if [ "$PROFILE" != "lemon_bot" ]; then
   mkdir -p "$LEMON_ROOT/run" "$LEMON_ROOT/store"
 fi
+}
+configure_layout
 
 # ----------------------------------------------------------------- cleanup ---
 #
@@ -612,6 +617,9 @@ CLEANUP_PREVIOUS=""
 CLEANUP_TARGET=""
 
 cleanup() {
+  if [ -n "${manifest_file:-}" ]; then
+    rm -f "$manifest_file"
+  fi
   if [ "$INSTALL_COMMITTED" = "1" ]; then
     return 0
   fi
@@ -785,6 +793,10 @@ verify_bot_runtime() (
 SETUP_DONE=0
 setup_handoff() {
   if [ "$PROFILE" = "lemon_bot" ]; then
+    if [ ! -x "$HOME/.lemon/bin/lemon" ]; then
+      info "Backend-only manual install; no local runtime lifecycle command is installed."
+      info "Install the combined preset: curl -fsSL $BASE_URL/releases/download/v$VERSION/install.sh | sh -s -- --profile bot"
+    fi
     info "Lemon Bot can connect to a local or remote Lemon controller."
   elif [ "$SKIP_SETUP" = "1" ]; then
     info "Setup skipped."
@@ -817,24 +829,8 @@ finish() {
 
 # ----------------------------------------------------------------- install ---
 
-manifest_file="$TMP_DIR/manifest.json"
-if ! fetch "$MANIFEST_URL" "$manifest_file"; then
-  rm -f "$manifest_file"
-  die "could not download the release manifest: $MANIFEST_URL
-  Check the version/channel, or install from source: $DOCS_URL"
-fi
-
-artifact_line=""
-if ! artifact_line="$(select_artifact "$manifest_file" "$PROFILE")"; then
-  rm -f "$manifest_file"
-  exit 1
-fi
-
-if [ "$RESOLVE_VERSION" = "1" ]; then
-  rm -f "$manifest_file"
-  printf '%s\n' "$artifact_line" | cut -f4
-  exit 0
-fi
+install_profile() {
+artifact_line="$(select_artifact "$manifest_file" "$PROFILE")" || exit 1
 
 # The TUI is a second, optional artifact in the same manifest: a separate
 # per-platform tarball that unpacks into tui/ next to the runtime's bin/.
@@ -842,6 +838,9 @@ fi
 WANT_TUI=1
 if [ "$PROFILE" = "lemon_bot" ] || [ "${LEMON_NO_TUI:-0}" = "1" ] || [ "$REQUIRE_BOT" = "1" ]; then
   WANT_TUI=0
+fi
+if [ "$BOT_PRESET" = "1" ] && [ "$PROFILE" != "lemon_bot" ] && [ "${LEMON_NO_TUI:-1}" = "0" ]; then
+  WANT_TUI=1
 fi
 
 tui_line=""
@@ -852,7 +851,6 @@ if [ "$WANT_TUI" = "1" ]; then
   fi
 fi
 
-rm -f "$manifest_file"
 
 ARTIFACT_FILE="$(printf '%s\n' "$artifact_line" | cut -f1)"
 ARTIFACT_SHA="$(printf '%s\n' "$artifact_line" | cut -f2)"
@@ -889,7 +887,19 @@ if [ "$PROFILE" = "lemon_bot" ]; then
   TARGET_DIR="$VERSIONS_DIR/$INSTALL_KEY"
 fi
 
-if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ]; then
+# Runtime versions share a directory across profiles. Never mistake an older
+# min install for the combined preset's full runtime.
+REUSE_PROFILE=1
+if [ "$BOT_PRESET" = "1" ] && [ "$PROFILE" != "lemon_bot" ]; then
+  if [ ! -f "$TARGET_DIR/.installer-profile" ] ||
+    [ "$(cat "$TARGET_DIR/.installer-profile")" != "$PROFILE" ]; then
+    REUSE_PROFILE=0
+  fi
+  if [ "$WANT_TUI" = "0" ] && [ -d "$TARGET_DIR/tui" ]; then
+    REUSE_PROFILE=0
+  fi
+fi
+if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ] && [ "$REUSE_PROFILE" = "1" ]; then
   if [ "$REQUIRE_BOT" = "1" ] && ! verify_bot_runtime "$TARGET_DIR"; then
     die "the installed Lemon $VERSION at $TARGET_DIR does not report the required bot worker APIs.
   Re-run with --force to reinstall it from the release."
@@ -913,9 +923,7 @@ if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ]; then
   fi
 
   path_hint
-  setup_handoff
-  finish
-  exit 0
+  return
 fi
 
 tarball="$TMP_DIR/$ARTIFACT_FILE"
@@ -1014,6 +1022,8 @@ if [ "$REQUIRE_BOT" = "1" ] && ! verify_bot_runtime "$partial_dir"; then
   The previously installed runtime, if any, was left untouched."
 fi
 
+printf '%s\n' "$PROFILE" >"$partial_dir/.installer-profile"
+
 # A directory swap is two renames, and POSIX offers no way to make that one
 # step. The old copy is therefore moved aside rather than deleted, restored if
 # the second rename fails, and only discarded once versions/current has been
@@ -1072,5 +1082,41 @@ if [ "$VERIFY" = "1" ]; then
 fi
 
 path_hint
-setup_handoff
-finish
+}
+
+manifest_file="$TMP_DIR/manifest.json"
+if ! fetch "$MANIFEST_URL" "$manifest_file"; then
+  rm -f "$manifest_file"
+  die "could not download the release manifest: $MANIFEST_URL"
+fi
+if [ "$RESOLVE_VERSION" = "1" ]; then
+  artifact_line="$(select_artifact "$manifest_file" "$PROFILE")" || exit 1
+  if [ "$BOT_PRESET" = "1" ]; then
+    select_artifact "$manifest_file" lemon_bot >/dev/null || exit 1
+  fi
+  printf '%s\n' "$artifact_line" | cut -f4
+  rm -f "$manifest_file"
+  exit 0
+fi
+if [ "$BOT_PRESET" = "1" ]; then
+  # Resolve both artifacts from this one manifest before changing either pointer.
+  select_artifact "$manifest_file" lemon_bot >/dev/null || exit 1
+fi
+install_profile
+if [ "$BOT_PRESET" = "1" ]; then
+  PROFILE=lemon_bot
+  REQUIRE_BOT=0
+  INSTALL_COMMITTED=0
+  configure_layout
+  install_profile
+fi
+rm -f "$manifest_file"
+if [ "$BOT_PRESET" = "1" ]; then
+  if [ "$SKIP_SETUP" != "1" ] && (exec </dev/tty) 2>/dev/null; then
+    exec "$HOME/.local/bin/lemon-bot" </dev/tty
+  fi
+  info "Run: $HOME/.local/bin/lemon-bot"
+else
+  setup_handoff
+  finish
+fi

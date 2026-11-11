@@ -8,6 +8,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- Combined `--profile bot` installer preset: bot-verified full runtime without
+  the TUI and the same-version backend, with a single Lemon Bot setup hand-off.
+- Worker join commands install services by default, report actual persistence,
+  and support headless stdin/file-descriptor enrollment. `--foreground` opts out;
+  backend-only `--profile lemon_bot` remains available for manual deployments.
+
 ### Fixed
 
 - Load the certificate provider before Telegram and Discord setup construct their
