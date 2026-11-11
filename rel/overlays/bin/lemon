@@ -607,10 +607,12 @@ run_cli() {
 # terminal device: macOS kqueue cannot poll the /dev/tty alias the installer
 # passes as stdin.
 run_setup() {
-  local handoff status=0 step device
+  local handoff status=0 steps step device
   [ "$PROFILE" != "sim_broadcast_platform" ] || sim_command "$@"
   handoff="$(mktemp "${TMPDIR:-/tmp}/lemon-setup.XXXXXX")" || exit 1
   LEMON_SETUP_HANDOFF="$handoff" "$RELEASE_BIN" eval "$CLI_EXPR" "$@" || status=$?
+  steps="$(cat "$handoff")"
+  rm -f "$handoff"
   device="/dev/$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')"
   [ -c "$device" ] || device=/dev/stdin
   while IFS= read -r step <&3; do
@@ -622,14 +624,10 @@ run_setup() {
         fi
         ;;
       tui)
-        if [ "$status" -eq 0 ]; then
-          rm -f "$handoff"
-          exec "$LEMON_ROOT/bin/lemon" tui <"$device" 3<&-
-        fi
+        [ "$status" -ne 0 ] || exec "$LEMON_ROOT/bin/lemon" tui <"$device" 3<&-
         ;;
     esac
-  done 3<"$handoff"
-  rm -f "$handoff"
+  done 3<<<"$steps"
   exit "$status"
 }
 
