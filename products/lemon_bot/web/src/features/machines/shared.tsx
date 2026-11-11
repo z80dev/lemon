@@ -4,6 +4,10 @@ import type { Machine, Page } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
 import { RecoveryNotice, useAction, useQuery } from '../../ui';
 
+export function machineNeedsReconnect(machine: Pick<Machine, 'status' | 'credential'> | null | undefined): boolean {
+  return machine?.status === 'offline' && (machine.credential === 'expired' || machine.credential === 'revoked');
+}
+
 export function usePages<T>(key: string, load: (cursor?: string) => Promise<Page<T>>, identity: (item: T) => string) {
   const query = useQuery(key, () => load());
   const more = useAction();

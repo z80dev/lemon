@@ -16,7 +16,7 @@ const pageQuery = z.object({ cursor: z.string().optional(), limit: z.coerce.numb
 const statSchema = z.object({ path, type: z.enum(['regular', 'directory', 'symlink']), size: integer, mtimeMs: integer, mode: integer, mime: z.string().nullable(), readable: z.boolean(), writable: z.boolean() }).passthrough();
 type RemoteStat = z.infer<typeof statSchema>;
 const hostSchema = z.object({ hostname: z.string(), os: z.string(), osVersion: z.string(), arch: z.string(), cpuCount: integer.positive(), memTotalBytes: integer, memFreeBytes: integer, diskTotalBytes: integer, diskFreeBytes: integer, uptimeSec: z.number().nonnegative(), lemonVersion: z.string(), defaultCwd: path, user: z.string() }).passthrough();
-const nodesSchema = z.object({ nodes: z.array(z.object({ id, name: z.string().nullable(), purpose: z.string().nullable(), enrollmentInviteId: id.nullable(), status: z.enum(['online', 'offline', 'unknown']), lastSeenMs: integer.nullable(), pairedAtMs: integer.nullable(), capabilities: z.array(z.string()) }).passthrough()), summary: z.object({ presenceAvailable: z.boolean(), truncated: z.boolean() }).passthrough() }).passthrough();
+const nodesSchema = z.object({ nodes: z.array(z.object({ id, name: z.string().nullable(), purpose: z.string().nullable(), enrollmentInviteId: id.nullable(), status: z.enum(['online', 'offline', 'unknown']), session: z.enum(['active', 'expired', 'revoked', 'none', 'unknown']).optional(), lastSeenMs: integer.nullable(), pairedAtMs: integer.nullable(), capabilities: z.array(z.string()) }).passthrough()), summary: z.object({ presenceAvailable: z.boolean(), truncated: z.boolean() }).passthrough() }).passthrough();
 const inviteSchema = z.object({ inviteId: id, inviteCode: z.string().min(1), joinCommand: z.string().min(1), expiresAtMs: integer }).passthrough();
 const chunkSchema = z.object({ path, offset: integer, dataBase64: z.string(), size: integer, mime: z.string(), eof: z.boolean() }).passthrough();
 interface FilePreviewBinding { machineId: string; path: string; principalId: string; targetId: string; revision: number; snapshot: string; upstreamToken: string; expiresAtMs: number; name: string }
@@ -63,8 +63,9 @@ export async function refreshMachines(services: BackendServices): Promise<void> 
     }
     if (node) services.store.setMetadata(`nodeSnapshot:${machine.id}`, node);
     const lastSeenAtMs = node?.lastSeenMs ?? machine.lastSeenAtMs;
-    if (status !== machine.status || (node && node.id !== machine.nodeId) || lastSeenAtMs !== machine.lastSeenAtMs) {
-      const next = services.update(machine, { status, nodeId: node?.id ?? machine.nodeId, lastSeenAtMs });
+    const credential: P.MachineCredential = node ? node.session === 'active' || node.session === 'expired' || node.session === 'revoked' ? node.session : 'unknown' : machine.credential ?? 'unknown';
+    if (status !== machine.status || credential !== machine.credential || (node && node.id !== machine.nodeId) || lastSeenAtMs !== machine.lastSeenAtMs) {
+      const next = services.update(machine, { status, credential, nodeId: node?.id ?? machine.nodeId, lastSeenAtMs });
       services.store.put('machines', next); services.events.emit('machine.upserted', next, { machineId: next.id });
       for (const bot of services.store.list<P.Bot>('bots', value => value.machineId === next.id)) {
         const activity = status !== 'online' ? 'offline' : bot.activeRunIds.length ? 'working' : 'idle';
@@ -159,7 +160,7 @@ export function createMachineRoutes(services: BackendServices): Route[] {
     if (services.store.list<P.Machine>('machines', value => value.nodeName === body.nodeName).length) fail('conflict', 'This durable node name is already attached.');
     const nodes = remote(nodesSchema, await services.lemon.call('nodes.list', { name: body.nodeName }));
     if (nodes.nodes.some(value => value.name === body.nodeName)) fail('conflict', 'An existing node cannot be attached without host enrollment.');
-    const value: P.Machine = services.resource('machine', { nodeId: null, nodeName: body.nodeName, name: body.name, ownerUserId: user(context).userId, accessUserIds: [], status: 'pending', lastSeenAtMs: null, labels: body.labels ?? {}, botIds: [] });
+    const value: P.Machine = services.resource('machine', { nodeId: null, nodeName: body.nodeName, name: body.name, ownerUserId: user(context).userId, accessUserIds: [], status: 'pending', credential: 'unknown', lastSeenAtMs: null, labels: body.labels ?? {}, botIds: [] });
     services.store.put('machines', value); context.nonceResourceIds.push(value.id);
     services.events.emit('machine.upserted', value, { machineId: value.id });
     return { machine: value, invite: await issue(context, value, body.expiresInMs) } satisfies P.MachineAttachResult;

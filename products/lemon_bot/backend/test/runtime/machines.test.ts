@@ -6,6 +6,40 @@ import { fixture, compatibleFeatures } from './fixture';
 const stat = { path: '/home/worker/result.txt', type: 'regular', size: 3, mtimeMs: 101, mode: 0o600, mime: 'text/plain', readable: false, writable: true };
 
 describe('privileged destination machine boundary', () => {
+  test('projects controller session states and emits each credential transition only once', async () => {
+    const f = fixture();
+    const emitted: P.Machine[] = [];
+    const emit = f.services.events.emit.bind(f.services.events);
+    f.services.events.emit = ((event, payload, audience) => {
+      if (event === 'machine.upserted') emitted.push(payload as P.Machine);
+      return emit(event, payload, audience);
+    }) as typeof f.services.events.emit;
+    let session: string | undefined;
+    let present = true;
+    f.rpc = async method => {
+      expect(method).toBe('nodes.list');
+      return { nodes: present ? [{ id: f.machine.nodeId, name: f.machine.nodeName, purpose: 'lemon_bot', enrollmentInviteId: null, status: 'offline', lastSeenMs: f.machine.lastSeenAtMs, pairedAtMs: 1, capabilities: [], ...(session === undefined ? {} : { session }) }] : [], summary: { presenceAvailable: true, truncated: false } };
+    };
+    const routes = createMachineRoutes(f.services);
+    const list = routes.find(route => route.method === 'GET' && route.path === '/v1/machines')!;
+    try {
+      for (const [value, expected] of [[undefined, 'unknown'], ['active', 'active'], ['expired', 'expired'], ['revoked', 'revoked'], ['none', 'unknown'], ['unknown', 'unknown']] as const) {
+        session = value;
+        const before = emitted.length;
+        const previous = f.store.require<P.Machine>('machines', f.machine.id).credential;
+        const result = await list.handler(f.context(list, undefined)) as P.Page<P.Machine>;
+        expect(result.items.find(machine => machine.id === f.machine.id)).toMatchObject({ status: 'offline', credential: expected });
+        expect(emitted.length - before).toBe(previous === expected ? 0 : 1);
+        const count = emitted.length;
+        await refreshMachines(f.services);
+        expect(emitted).toHaveLength(count);
+      }
+      session = 'expired'; await refreshMachines(f.services);
+      present = false; await refreshMachines(f.services);
+      expect(f.store.require<P.Machine>('machines', f.machine.id).credential).toBe('expired');
+    } finally { getTerminalService(f.services).dispose(); f.store.close(); }
+  });
+
   test('enrollment preview projects authoritative loopback and wss reachability without issuing an invite or exposing secrets', async () => {
     const f = fixture(); const routes = createMachineRoutes(f.services);
     const route = routes.find(route => route.path === '/v1/machines/enrollment-preview')!;

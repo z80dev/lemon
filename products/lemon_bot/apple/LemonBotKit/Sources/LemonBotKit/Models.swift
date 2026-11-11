@@ -1876,7 +1876,8 @@ public struct Machine: Codable, Hashable, Identifiable {
     public var `lastSeenAtMs`: TimestampMs?
     public var `labels`: [String: String]
     public var `botIds`: [ID]
-    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, nodeId: ID? = nil, nodeName: String, name: String, ownerUserId: ID, accessUserIds: [ID], status: String, lastSeenAtMs: TimestampMs? = nil, labels: [String: String], botIds: [ID]) {
+    public var `credential`: String?
+    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, nodeId: ID? = nil, nodeName: String, name: String, ownerUserId: ID, accessUserIds: [ID], status: String, lastSeenAtMs: TimestampMs? = nil, labels: [String: String], botIds: [ID], credential: String? = nil) {
         self.`id` = id
         self.`revision` = revision
         self.`createdAtMs` = createdAtMs
@@ -1890,8 +1891,9 @@ public struct Machine: Codable, Hashable, Identifiable {
         self.`lastSeenAtMs` = lastSeenAtMs
         self.`labels` = labels
         self.`botIds` = botIds
+        self.`credential` = credential
     }
-    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `nodeId`, `nodeName`, `name`, `ownerUserId`, `accessUserIds`, `status`, `lastSeenAtMs`, `labels`, `botIds` }
+    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `nodeId`, `nodeName`, `name`, `ownerUserId`, `accessUserIds`, `status`, `lastSeenAtMs`, `labels`, `botIds`, `credential` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`id` = try c.decode(ID.self, forKey: .`id`)
@@ -1908,6 +1910,12 @@ public struct Machine: Codable, Hashable, Identifiable {
         self.`lastSeenAtMs` = try c.decode(TimestampMs?.self, forKey: .`lastSeenAtMs`)
         self.`labels` = try c.decode([String: String].self, forKey: .`labels`)
         self.`botIds` = try c.decode([ID].self, forKey: .`botIds`)
+        self.`credential` = try c.decodeOptional(String.self, forKey: .`credential`)
+        if let credential = self.`credential` {
+            guard ["active", "expired", "revoked", "unknown"].contains(credential) else {
+                throw DecodingError.dataCorruptedError(forKey: .`credential`, in: c, debugDescription: "Invalid Machine.credential")
+            }
+        }
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -1924,6 +1932,7 @@ public struct Machine: Codable, Hashable, Identifiable {
         try c.encode(`lastSeenAtMs`, forKey: .`lastSeenAtMs`)
         try c.encode(`labels`, forKey: .`labels`)
         try c.encode(`botIds`, forKey: .`botIds`)
+        try c.encodeIfPresent(`credential`, forKey: .`credential`)
     }
 }
 
