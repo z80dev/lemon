@@ -58,10 +58,19 @@ defmodule LemonCli.CLI do
   Starts only the core services needed to read encrypted credentials; a cold
   source-wrapper invocation has not started the secrets store yet.
   """
-  @spec setup_required?() :: boolean()
-  def setup_required? do
-    ensure_apps_started!([:lemon_core])
-    not Readiness.ready?(Readiness.status())
+  @spec setup_required?(keyword()) :: boolean()
+  def setup_required?(opts \\ []) do
+    MasterKey.scoped(fn ->
+      ensure_apps_started!([:lemon_core])
+      status = Readiness.status()
+
+      if Keyword.get(opts, :model_optional, false) do
+        pending = Readiness.pending_steps(status)
+        :config in pending or :secrets in pending
+      else
+        not Readiness.ready?(status)
+      end
+    end)
   end
 
   @doc """
@@ -306,24 +315,33 @@ defmodule LemonCli.CLI do
   # needed, runs the wizard and re-checks, so a configured install pays for a
   # single boot and an unconfigured daemon is never started.
   defp run_setup_if_required(args) do
-    if setup_required?() do
-      IO.puts("Setup is required before Lemon can start; launching `lemon setup`.")
-      wizard_status = run_wizard(args, launch: false)
+    MasterKey.scoped(fn ->
+      model_optional? = "--model-optional" in args
+      args = List.delete(args, "--model-optional")
+      opts = if model_optional?, do: [model_optional: true], else: []
 
-      if setup_required?() do
-        IO.puts(:stderr, "Setup is incomplete. Run `lemon setup` to finish configuration.")
-        if wizard_status == @exit_ok, do: @exit_error, else: wizard_status
+      if setup_required?(opts) do
+        IO.puts("Setup is required before Lemon can start; launching `lemon setup`.")
+        wizard_opts = [launch: false] ++ if(model_optional?, do: [model_optional: true], else: [])
+        wizard_status = run_wizard(args, wizard_opts)
+
+        if setup_required?(opts) do
+          IO.puts(:stderr, "Setup is incomplete. Run `lemon setup` to finish configuration.")
+          if wizard_status == @exit_ok, do: @exit_error, else: wizard_status
+        else
+          @exit_ok
+        end
       else
         @exit_ok
       end
-    else
-      @exit_ok
-    end
+    end)
   end
 
   defp run_wizard(args, opts \\ []) do
     case Wizard.run(args, Runner.default_io(), Keyword.put(opts, :usage_command, "lemon setup")) do
       :ok -> @exit_ok
+      {:error, :usage} -> 64
+      {:error, :not_ready} -> @exit_error
       {:error, reason} -> exit_code_for(reason)
     end
   end
@@ -354,6 +372,10 @@ defmodule LemonCli.CLI do
       {:error, reason} -> exit_code_for(reason)
     end
   end
+
+  # `setup model` usage errors use the shell convention exit 64, so the
+  # `lemon-bot` terminal can feature-detect an older runtime.
+  defp exit_code_for(:usage), do: 64
 
   defp exit_code_for(reason)
        when reason in [:unknown_subcommand, :unknown_transport, :invalid_arguments],

@@ -25,6 +25,12 @@ All notable changes to `lemon_control_plane` are documented here.
   encrypted secret store and provider configuration through CLI onboarding
   persistence; local disconnect is not provider-side revocation.
 
+- Admin-scoped controller and named-node provider readiness checks (`providers.management.check`
+  and `node.providers.management.check`) with bounded non-generating model discovery,
+  consent-bound Codex CLI login import (`providers.management.import` and
+  `node.providers.management.import`) with conflict mapping for missing/unusable logins,
+  and optional readiness projection on `providers.management.list`.
+
 ### Fixed
 
 - Honor the configured HTTP/WebSocket listener IP so isolated benchmark runtimes

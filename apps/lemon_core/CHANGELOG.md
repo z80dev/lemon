@@ -60,6 +60,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   remain bounded status/code fields and the exact OpenAI verification URL, never
   challenges, private OAuth state or tokens.
 
+- Provider management operations expanded with `check` and `import`. Validation
+  enforces exact target identities, strict `openai_codex` and `codex_cli` parameters,
+  path rejection on import requests, and optional `readiness` parameter on `list`.
+
 - Optional destination-local provider management boundary with bounded write-only
   credential requests and a durable controller target identity. Provider setup
   remains runtime-optional; core does not depend on the CLI application.

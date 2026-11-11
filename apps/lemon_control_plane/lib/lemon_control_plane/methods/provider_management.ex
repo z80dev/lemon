@@ -28,6 +28,18 @@ defmodule LemonControlPlane.Methods.ProviderManagementSupport do
            ] ->
         {:error, Errors.invalid_request("Invalid provider management request")}
 
+      {:error, reason} when reason in [:login_not_found, :login_unusable] ->
+        {:error,
+         Errors.error(
+           :conflict,
+           "Codex CLI login is not available on this machine",
+           %{
+             "reason" => Atom.to_string(reason),
+             "retrySafe" => true,
+             "mutationMayHaveApplied" => false
+           }
+         )}
+
       {:error, :target_mismatch} ->
         {:error, Errors.error(:conflict, "Provider target does not match this machine")}
 
@@ -59,7 +71,7 @@ defmodule LemonControlPlane.Methods.ProviderManagementSupport do
 
   defp project(_, result, _), do: {:ok, result}
 
-  defp unavailable("list"),
+  defp unavailable(operation) when operation in ["list", "check"],
     do: {:error, Errors.error(:unavailable, "Provider management unavailable")}
 
   defp unavailable(_),
@@ -122,6 +134,8 @@ for {module, operation, node?} <- [
       {LemonControlPlane.Methods.ProvidersManagementApiKeySet, "api_key.set", false},
       {LemonControlPlane.Methods.ProvidersManagementDisconnect, "disconnect", false},
       {LemonControlPlane.Methods.ProvidersManagementDefaultSet, "default.set", false},
+      {LemonControlPlane.Methods.ProvidersManagementCheck, "check", false},
+      {LemonControlPlane.Methods.ProvidersManagementImport, "import", false},
       {LemonControlPlane.Methods.ProvidersManagementDeviceStart, "device.start", false},
       {LemonControlPlane.Methods.ProvidersManagementDevicePoll, "device.poll", false},
       {LemonControlPlane.Methods.ProvidersManagementDeviceChallenge, "device.challenge", false},
@@ -131,6 +145,8 @@ for {module, operation, node?} <- [
       {LemonControlPlane.Methods.NodeProvidersManagementApiKeySet, "api_key.set", true},
       {LemonControlPlane.Methods.NodeProvidersManagementDisconnect, "disconnect", true},
       {LemonControlPlane.Methods.NodeProvidersManagementDefaultSet, "default.set", true},
+      {LemonControlPlane.Methods.NodeProvidersManagementCheck, "check", true},
+      {LemonControlPlane.Methods.NodeProvidersManagementImport, "import", true},
       {LemonControlPlane.Methods.NodeProvidersManagementDeviceStart, "device.start", true},
       {LemonControlPlane.Methods.NodeProvidersManagementDevicePoll, "device.poll", true},
       {LemonControlPlane.Methods.NodeProvidersManagementDeviceChallenge, "device.challenge",

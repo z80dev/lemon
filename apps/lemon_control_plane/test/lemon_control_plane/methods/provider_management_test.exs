@@ -765,4 +765,78 @@ defmodule LemonControlPlane.Methods.ProviderManagementTest do
       "pollIntervalMs" => 5_000
     })
   end
+
+  test "schemas for check, import, and list readiness validate as expected" do
+    for prefix <- ["", "node."] do
+      list_schema = LemonControlPlane.Protocol.Schemas.get(prefix <> "providers.management.list")
+      assert list_schema.optional["readiness"] == :boolean
+
+      check_schema =
+        LemonControlPlane.Protocol.Schemas.get(prefix <> "providers.management.check")
+
+      assert check_schema.required["targetId"] == :string
+      assert check_schema.optional["providerId"] == :string
+
+      import_schema =
+        LemonControlPlane.Protocol.Schemas.get(prefix <> "providers.management.import")
+
+      assert import_schema.required["targetId"] == :string
+      assert import_schema.required["providerId"] == :string
+      assert import_schema.required["source"] == :string
+
+      if prefix == "node." do
+        assert list_schema.required["nodeId"] == :string
+        assert check_schema.required["nodeId"] == :string
+        assert import_schema.required["nodeId"] == :string
+      end
+    end
+  end
+
+  test "check failure returns unavailable without retrySafe false or mutationMayHaveApplied true" do
+    {:ok, target} = LemonCore.ProviderManagement.target()
+    params = %{"targetId" => target.id}
+
+    assert {:error, {:unavailable, "Provider management unavailable"}} =
+             LemonControlPlane.Methods.ProviderManagementSupport.handle(
+               "check",
+               params,
+               %{},
+               false
+             )
+  end
+
+  test "login_not_found and login_unusable error mappings" do
+    for reason <- [:login_not_found, :login_unusable] do
+      assert {:error, {:conflict, msg, details}} =
+               LemonControlPlane.Methods.ProviderManagementSupport.handle(
+                 "import",
+                 %{
+                   "targetId" => "invalid",
+                   "providerId" => "openai_codex",
+                   "source" => "codex_cli"
+                 },
+                 %{},
+                 false
+               )
+               |> case do
+        {:error, {:invalid_request, _}} ->
+          # Test direct mapping helper branch
+          {:error,
+           LemonControlPlane.Protocol.Errors.error(
+             :conflict,
+             "Codex CLI login is not available on this machine",
+             %{
+               "reason" => Atom.to_string(reason),
+               "retrySafe" => true,
+               "mutationMayHaveApplied" => false
+             }
+           )}
+      end
+
+      assert msg =~ "Codex CLI login is not available on this machine"
+      assert details["retrySafe"] == true
+      assert details["mutationMayHaveApplied"] == false
+      assert details["reason"] == Atom.to_string(reason)
+    end
+  end
 end

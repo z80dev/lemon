@@ -1059,7 +1059,9 @@ post-response privacy check.
 
 | Method | Scope | Request | Success payload |
 | --- | --- | --- | --- |
-| `providers.management.list` | admin | `{}` | Redacted provider listing for the controller |
+| `providers.management.list` | admin | `{readiness?}` | Redacted provider listing for the controller |
+| `providers.management.check` | admin | `{targetId,providerId?}` | Bounded non-generating readiness check and controller listing |
+| `providers.management.import` | admin | `{targetId,providerId,source}` | Explicit Codex CLI ChatGPT login import and controller listing |
 | `providers.management.api_key.set` | admin | `{targetId,providerId,value}` | Updated redacted listing |
 | `providers.management.disconnect` | admin | `{targetId,providerId}` | Updated redacted listing |
 | `providers.management.default.set` | admin | `{targetId,providerId,modelId}` | Updated redacted listing |
@@ -1068,7 +1070,9 @@ post-response privacy check.
 | `providers.management.device.challenge` | admin (internal) | `{targetId,providerId,loginId,ownerId,sessionId}` | Public device login state plus nullable `challengeNonce` |
 | `providers.management.device.cancel` | admin | `{targetId,providerId,loginId,ownerId,sessionId}` | Public device login state |
 | `providers.management.device.complete` | admin (internal) | `{targetId,providerId,loginId,ownerId,sessionId,completionId,challengeNonce,commit}` | Public device login state |
-| `node.providers.management.list` | admin | `{nodeId}` | Redacted provider listing for the destination |
+| `node.providers.management.list` | admin | `{nodeId,readiness?}` | Redacted provider listing for the destination |
+| `node.providers.management.check` | admin | `{nodeId,targetId,providerId?}` | Bounded non-generating readiness check and destination listing |
+| `node.providers.management.import` | admin | `{nodeId,targetId,providerId,source}` | Explicit Codex CLI ChatGPT login import and destination listing |
 | `node.providers.management.api_key.set` | admin | `{nodeId,targetId,providerId,value}` | Updated destination listing |
 | `node.providers.management.disconnect` | admin | `{nodeId,targetId,providerId}` | Updated destination listing |
 | `node.providers.management.default.set` | admin | `{nodeId,targetId,providerId,modelId}` | Updated destination listing |

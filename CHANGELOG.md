@@ -10,6 +10,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Setup caches Keychain lookups only for the command lifetime, reports model
+  readiness truthfully, and checks Codex account model access without generating
+  a message. `lemon setup model` and opt-in provider-management readiness/check/
+  import methods support explicit connection and destination-local login consent.
+
 - Load the certificate provider before Telegram and Discord setup construct their
   first HTTPS request, preserving TLS verification on cold CLI invocations.
 

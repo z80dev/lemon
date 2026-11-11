@@ -16,6 +16,7 @@ defmodule Mix.Tasks.Lemon.Setup do
 
       mix lemon.setup             — full interactive wizard
       mix lemon.setup provider    — configure an AI provider (wraps lemon.onboard)
+      mix lemon.setup model       — connect a model, or report readiness with --json
       mix lemon.setup runtime     — configure runtime profile and port bindings
       mix lemon.setup gateway     — configure gateway adapters
       mix lemon.setup doctor      — validate config and report health
@@ -32,6 +33,15 @@ defmodule Mix.Tasks.Lemon.Setup do
       mix lemon.setup provider --provider copilot
 
   All flags accepted by `mix lemon.onboard` work here.
+
+  ## Model subcommand
+
+      mix lemon.setup model
+      mix lemon.setup model --json
+      mix lemon.setup model --json --offline
+
+  The interactive form runs the Connect-a-model step alone; `--json` prints one
+  readiness document plus the detected logins and never prompts.
 
   ## Runtime subcommand
 

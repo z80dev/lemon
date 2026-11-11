@@ -6,6 +6,21 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Changed
 
+- Setup replaces "Onboard an AI provider now?" with a **Connect a model** step
+  that lists the logins already present on this machine first (a Codex CLI
+  ChatGPT login, a provider key exported in the shell) and acts only on an
+  explicit choice, with the consent stated in the choice itself.
+- Setup summaries report the saved model truthfully: `verified` names the
+  non-generating check, `saved` says Lemon checks it on the first message (with
+  the reason when the provider was unreachable or the check failed), and a
+  deferred check no longer claims that `--skip-verify` was given. Both ready
+  states offer **Open Lemon now?**.
+- An unreachable provider or a check that fails for a non-authentication reason
+  now leaves setup complete with a saved model instead of failing verification.
+- Setup prints a progress line before every step that can block (application
+  start and the non-generating provider check), and resolves the secrets master
+  key once per command (`lemon setup`, `lemon setup model`, `lemon model`,
+  `setup --if-required`), so a slow keychain costs one read instead of 24.
 - Setup shows provider/import progress, truthfully distinguishes unavailable live
   checks from deferred checks, and offers launch after saving an unchecked provider.
 - One-shot CLI boot logs omit info messages while preserving warnings and errors.
@@ -14,6 +29,12 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Added
 
+- `lemon setup model [--json] [--offline] [--provider NAME]`: the Connect-a-model
+  step on its own. `--json` prints one readiness document plus the detected
+  logins and never prompts; exit `0` when the model is verified or saved, `1`
+  when it needs action, `64` for usage errors.
+- `lemon setup --if-required --model-optional` finishes once config and secrets
+  are complete, so the Bot path can start the daemon and connect a model later.
 - Supervised, target-local Codex device-login start/poll/cancel with exact
   target/provider/login/owner/session binding and an eight-field public status.
   Only the fixed OpenAI verification URL and public user code leave the target;
@@ -47,6 +68,10 @@ All notable changes to `lemon_cli` are documented here.
   The CLI application registers this optional implementation at runtime for
   controller and named worker startup; core-only consumers fail closed when
   setup support is absent.
+- `LemonCli.Setup.ProviderManagement` check and import operations: non-generating
+  model readiness checks outside the config lock (`check/2`), explicit Codex CLI
+  ChatGPT login import (`import_login/3`) preserving existing configuration defaults,
+  and optional readiness/detected listings on `list/1`.
 - Provider metadata covers the canonical runtime catalog, including unsupported
   provisioning methods. Phone-compatible device-code metadata reflects the real
   Codex, GitHub Copilot, Kimi Code and xAI device grants; browser-callback OAuth

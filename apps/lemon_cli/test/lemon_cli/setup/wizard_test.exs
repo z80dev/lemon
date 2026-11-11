@@ -1,9 +1,57 @@
+defmodule LemonCli.Setup.WizardTest.CountingKeychain do
+  @moduledoc false
+  # A keychain-named key provider that counts reads and can make each read
+  # slow, so a wizard run can be measured without touching the real Keychain.
+  @behaviour LemonCore.Secrets.KeyProvider
+
+  @impl true
+  def name, do: :keychain
+
+  @impl true
+  def available?(_opts), do: true
+
+  @impl true
+  def on_invalid, do: :continue
+
+  @impl true
+  def fetch(_opts) do
+    %{key: key, delay: delay} =
+      Agent.get_and_update(__MODULE__, fn state ->
+        {state, %{state | count: state.count + 1}}
+      end)
+
+    if delay > 0, do: Process.sleep(delay)
+    if key, do: {:ok, key}, else: {:error, :missing}
+  end
+
+  @impl true
+  def put(encoded, _opts) do
+    Agent.update(__MODULE__, &%{&1 | key: encoded})
+    :ok
+  end
+
+  def start do
+    case Agent.start_link(fn -> %{key: nil, delay: 0, count: 0} end, name: __MODULE__) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> {:ok, pid}
+    end
+  end
+
+  def put_key(encoded, opts), do: put(encoded, opts)
+
+  @doc "Starts counting from zero and applies a per-read delay in milliseconds."
+  def reset(delay), do: Agent.update(__MODULE__, &%{&1 | delay: delay, count: 0})
+
+  def count, do: Agent.get(__MODULE__, & &1.count)
+end
+
 defmodule LemonCli.Setup.WizardTest do
   # async: false because we manipulate Application env, HOME, and the secrets store
   use ExUnit.Case, async: false
 
   alias LemonCli.Onboarding.Runner
   alias LemonCli.Setup.Wizard
+  alias LemonCli.Setup.WizardTest.CountingKeychain
   alias LemonCore.Config.Modular
   alias LemonCore.Secrets
   alias LemonCore.Setup.Readiness
@@ -429,10 +477,10 @@ defmodule LemonCli.Setup.WizardTest do
           {:info, message} -> [message]
           _ -> []
         end)
-        |> Enum.drop_while(&(&1 != "Setup complete."))
+        |> Enum.drop_while(&(not String.starts_with?(&1, "Setup complete.")))
 
       assert summary == [
-               "Setup complete.",
+               "Setup complete. Model: openai / gpt-5 (verified with OpenAI; no message was sent).",
                "Success check: a reply arrives and `lemon doctor` shows no FAIL.",
                "Run `lemon` in your repository and try this first prompt:",
                "  Read the repository instructions. Find how to run the tests. Add the test command to README if missing, run the focused tests, and show the diff.",
@@ -610,8 +658,12 @@ defmodule LemonCli.Setup.WizardTest do
       assert Readiness.ready?(Readiness.status(config_path: path))
 
       events = drain_events([])
-      assert info_event?(events, &String.contains?(&1, "not live-verified"))
-      refute info_event?(events, &String.contains?(&1, "Setup complete"))
+
+      assert info_event?(
+               events,
+               &(&1 ==
+                   "Setup complete. Model: openai / gpt-5 (saved; live check skipped by --skip-verify).")
+             )
     end
   end
 
@@ -692,6 +744,238 @@ defmodule LemonCli.Setup.WizardTest do
     end
   end
 
+  describe "run_full/3 — Connect a model step" do
+    test "offers a detected Codex CLI login first and never imports it without a choice", %{
+      config_path: path,
+      home: home
+    } do
+      write_codex_cli_login(home)
+      set_master_key_env()
+
+      io = recording_io(["s"])
+      assert {:error, :setup_incomplete} = Wizard.run_full([], io, config_path: path)
+
+      events = drain_events([])
+      options = Enum.filter(info_messages(events), &String.match?(&1, ~r/^  \d+\. /))
+
+      assert [first | _] = options
+      assert first =~ "1. Copy your Codex CLI ChatGPT login into Lemon"
+      assert List.last(options) =~ "Skip — finish later with `lemon setup model`"
+
+      # The login is only read when a choice says so.
+      settings = if File.exists?(path), do: Toml.decode_file!(path), else: %{}
+      refute get_in(settings, ["providers", "openai-codex"])
+      refute info_event?(events, &String.contains?(&1, "Importing your Codex CLI login"))
+    end
+
+    test "a detected shell key is offered as an explicit save, not used silently", %{
+      config_path: path
+    } do
+      previous = System.get_env("ANTHROPIC_API_KEY")
+      System.put_env("ANTHROPIC_API_KEY", "sk-ant-shell")
+
+      on_exit(fn ->
+        if previous,
+          do: System.put_env("ANTHROPIC_API_KEY", previous),
+          else: System.delete_env("ANTHROPIC_API_KEY")
+      end)
+
+      set_master_key_env()
+      io = recording_io(["s"])
+      assert {:error, :setup_incomplete} = Wizard.run_full([], io, config_path: path)
+
+      events = drain_events([])
+
+      assert info_event?(
+               events,
+               &String.contains?(
+                 &1,
+                 "Save ANTHROPIC_API_KEY from this shell into Lemon's encrypted store"
+               )
+             )
+
+      settings = if File.exists?(path), do: Toml.decode_file!(path), else: %{}
+      refute get_in(settings, ["defaults", "provider"])
+    end
+
+    test "end of input in the model step fails instead of choosing", %{config_path: path} do
+      set_master_key_env()
+      io = %{recording_io() | prompt: fn _ -> :eof end}
+
+      assert_raise Mix.Error, ~r/No interactive terminal/, fn ->
+        Wizard.run_full([], io, config_path: path)
+      end
+    end
+
+    test "--model-optional Skip completes setup with the provider step pending", %{
+      config_path: path
+    } do
+      set_master_key_env()
+      io = recording_io(["s"])
+
+      assert :ok = Wizard.run_full([], io, config_path: path, model_optional: true)
+
+      state = Readiness.status(config_path: path)
+      assert Readiness.pending_steps(state) == [:provider]
+
+      events = drain_events([])
+      assert info_event?(events, &String.contains?(&1, "Skip — set it up in the browser"))
+      assert info_event?(events, &String.contains?(&1, "Setup complete. Model setup deferred"))
+    end
+
+    test "without --model-optional a Skip leaves setup unfinished", %{config_path: path} do
+      set_master_key_env()
+      io = recording_io(["s"])
+
+      assert {:error, :setup_incomplete} = Wizard.run_full([], io, config_path: path)
+
+      events = drain_events([])
+      assert info_event?(events, &String.contains?(&1, "Setup unfinished — pending steps"))
+      assert info_event?(events, &String.contains?(&1, "provider: run `lemon setup model`"))
+    end
+  end
+
+  describe "run_full/3 — truthful summaries" do
+    test "a provider without a quick live check is saved, not mislabelled", %{config_path: path} do
+      configure_ready_provider(path)
+      io = Map.put(recording_io([""]), :interactive?, fn -> true end)
+
+      assert :ok =
+               Wizard.run_full([], io,
+                 config_path: path,
+                 verifier: fn _ -> {:skip, {:unsupported_api, :oauth}} end,
+                 launcher: fn ->
+                   send(self(), :launched)
+                   :ok
+                 end
+               )
+
+      events = drain_events([])
+
+      assert info_event?(
+               events,
+               &(&1 ==
+                   "Setup complete. Model: openai / gpt-5 (saved; Lemon checks it on your first message).")
+             )
+
+      refute info_event?(events, &String.contains?(&1, "--skip-verify"))
+      assert_received :launched
+    end
+
+    test "an unreachable provider is saved with its reason and still offers launch", %{
+      config_path: path
+    } do
+      configure_ready_provider(path)
+      io = Map.put(recording_io([""]), :interactive?, fn -> true end)
+
+      assert :ok =
+               Wizard.run_full([], io,
+                 config_path: path,
+                 verifier: fn _ -> {:error, :unreachable} end,
+                 launcher: fn ->
+                   send(self(), :launched)
+                   :ok
+                 end
+               )
+
+      events = drain_events([])
+
+      assert info_event?(
+               events,
+               &(&1 ==
+                   "Setup complete. Model: openai / gpt-5 (saved; Lemon checks it on your first message).")
+             )
+
+      assert info_event?(events, &String.contains?(&1, "Provider unreachable"))
+      assert_received :launched
+    end
+
+    test "a rejected credential never claims completion", %{config_path: path} do
+      configure_ready_provider(path)
+      io = recording_io()
+
+      assert {:error, :verification_failed} =
+               Wizard.run_full([], io,
+                 config_path: path,
+                 non_interactive: true,
+                 verifier: fn _ -> {:error, :unauthorized} end
+               )
+
+      events = drain_events([])
+      assert info_event?(events, &String.contains?(&1, "Setup did not complete"))
+      refute info_event?(events, &String.contains?(&1, "Setup complete."))
+    end
+  end
+
+  describe "run_full/3 — progress and keychain cost" do
+    setup do
+      previous = Application.get_env(:lemon_core, LemonCore.Secrets)
+      {:ok, _agent} = CountingKeychain.start()
+
+      Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [CountingKeychain])
+      System.delete_env("LEMON_SECRETS_MASTER_KEY")
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:lemon_core, LemonCore.Secrets, previous),
+          else: Application.delete_env(:lemon_core, LemonCore.Secrets)
+      end)
+
+      :ok
+    end
+
+    @keychain_delay_ms 5_000
+    @boundary_budget_ms 1_000
+
+    test "a 5s keychain costs at most two reads and leaves no reported gap above 1s", %{
+      config_path: path,
+      home: home
+    } do
+      CountingKeychain.put_key(Base.encode64(:crypto.strong_rand_bytes(32)), [])
+      write_codex_cli_login(home)
+      CountingKeychain.reset(@keychain_delay_ms)
+
+      # Scripted answers: the detected Codex login, then the offered default model.
+      io = timed_io(["1", ""])
+
+      assert :ok =
+               Wizard.run([], io,
+                 config_path: path,
+                 verifier: fn _ -> {:ok, %{}} end,
+                 codex_discover: fn _opts -> {:ok, ["gpt-5.1-codex", "gpt-5.1-codex-mini"]} end,
+                 launch: false
+               )
+
+      assert CountingKeychain.count() <= 2
+
+      events = drain_events([])
+      timeline = timed_timeline(events)
+      [{_, :info, first_message} | _] = timeline
+      assert first_message == "Starting Lemon setup…"
+
+      # Obs 1's two reported pauses: the answered Connect-a-model choice to the
+      # next visible line, and the import summary to "Verifying…".
+      assert boundary_ms(timeline, {:prompt, "Select [default: 1, q to cancel]: "}) <=
+               @boundary_budget_ms
+
+      assert boundary_ms(timeline, {:info, "OpenAI Codex onboarding complete."}) <=
+               @boundary_budget_ms
+
+      assert info_event?(events, &String.contains?(&1, "Verifying provider configuration"))
+
+      # Any remaining wait is announced: it follows a progress line.
+      timeline
+      |> Enum.chunk_every(2, 1, :discard)
+      |> Enum.each(fn [{before_at, kind, before_message}, {after_at, _kind, after_message}] ->
+        if after_at - before_at >= @keychain_delay_ms do
+          assert kind == :info and progress_line?(before_message),
+                 "silent #{after_at - before_at}ms gap between " <>
+                   "#{inspect(before_message)} and #{inspect(after_message)}"
+        end
+      end)
+    end
+  end
+
   # ──────────────────────────────────────────────────────────────────────────
   # Helpers
   # ──────────────────────────────────────────────────────────────────────────
@@ -729,6 +1013,95 @@ defmodule LemonCli.Setup.WizardTest do
         ""
       end
     }
+  end
+
+  # Records monotonic timestamps for every user-visible event (including the
+  # moment a prompt is answered), so a test can prove no step blocks silently.
+  defp timed_io(prompts \\ []) do
+    pid = self()
+    prompt_agent = start_agent(prompts)
+
+    stamp = fn kind, message ->
+      send(pid, {:timed, System.monotonic_time(:millisecond), kind, message})
+    end
+
+    %{
+      info: fn message -> stamp.(:info, message) end,
+      error: fn message -> stamp.(:error, message) end,
+      prompt: fn message ->
+        answer = pop_response(prompt_agent)
+        # Stamped after the answer: the clock starts when the user replies.
+        stamp.(:prompt, message)
+        answer
+      end,
+      secret: fn _message -> "" end
+    }
+  end
+
+  defp timed_timeline(events) do
+    Enum.flat_map(events, fn
+      {:timed, at, kind, message} -> [{at, kind, message}]
+      _other -> []
+    end)
+  end
+
+  # Milliseconds between the named event and the next visible line.
+  defp boundary_ms(timeline, {kind, message}) do
+    index =
+      Enum.find_index(timeline, fn {_at, event_kind, event_message} ->
+        event_kind == kind and event_message == message
+      end)
+
+    assert is_integer(index), "event #{inspect(message)} never happened"
+
+    {at, _kind, _message} = Enum.at(timeline, index)
+    next = Enum.at(timeline, index + 1)
+    assert next, "no line followed #{inspect(message)}"
+    {next_at, _next_kind, _next_message} = next
+
+    next_at - at
+  end
+
+  defp progress_line?(message) do
+    String.starts_with?(message, "Starting Lemon setup") or
+      String.starts_with?(message, "Checking ") or
+      String.starts_with?(message, "Verifying provider configuration") or
+      String.starts_with?(message, "Importing your Codex CLI login") or
+      String.starts_with?(message, "Saving ")
+  end
+
+  defp info_messages(events) do
+    Enum.flat_map(events, fn
+      {:info, message} -> [message]
+      _other -> []
+    end)
+  end
+
+  defp write_codex_cli_login(home) do
+    claims = %{
+      "exp" => System.system_time(:second) + 3_600,
+      "https://api.openai.com/auth" => %{"chatgpt_account_id" => "wizard-account"}
+    }
+
+    token = "header." <> Base.url_encode64(Jason.encode!(claims), padding: false) <> ".signature"
+
+    auth_path = Path.join([home, ".codex", "auth.json"])
+    File.mkdir_p!(Path.dirname(auth_path))
+
+    File.write!(
+      auth_path,
+      Jason.encode!(%{
+        "auth_mode" => "chatgpt",
+        "tokens" => %{
+          "access_token" => token,
+          "refresh_token" => "wizard-refresh",
+          "account_id" => "wizard-account",
+          "id_token" => token
+        }
+      })
+    )
+
+    auth_path
   end
 
   defp info_event?(events, predicate) do

@@ -269,8 +269,10 @@ only for a genuinely new identity/name.
 The worker prints `Execution node online (NODE_ID)` and stays in the foreground.
 Keep it running, or supervise this foreground command with your OS service
 manager. Configure model-provider credentials **on the destination** with
-`lemon setup` or `lemon model --provider ...`; the noninteractive installer does
-not copy credentials from the controller or run provider setup.
+`lemon setup model` (or inspect readiness with `lemon setup model --json`); the
+noninteractive installer does not copy credentials from the controller or run
+provider setup. A detected Codex CLI login is copied only with your consent;
+each execution machine keeps its own model credentials.
 
 ## Working directory and host-access roots
 
