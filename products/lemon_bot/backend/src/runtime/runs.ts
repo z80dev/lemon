@@ -11,6 +11,28 @@ import { emitBotRuntimeProjection } from './projection';
 import { safeSummary, scrub } from '../integrations/common';
 import { nativeBotToolPolicy } from '../core/experiences';
 
+/** Build display text only from the same allowlisted, redacted proposal shown in Details. */
+export function executionApprovalPresentation(tool: string | null | undefined, inputs: P.JSONObject) {
+  const name = safeSummary(tool ?? 'Runtime tool', 128);
+  const files = ['write', 'edit', 'patch', 'read', 'ls', 'find', 'grep'].includes(name);
+  const terminal = ['bash', 'shell', 'exec', 'terminal'].includes(name);
+  const browser = name === 'browser' || name.startsWith('browser.');
+  const displayName = terminal ? 'Terminal' : files ? 'Files' : browser ? 'Browser' : name;
+  const text = (key: string) => typeof inputs[key] === 'string' ? inputs[key] as string : '';
+  let headline = displayName;
+  if (terminal) headline = text('command') || displayName;
+  else if (files) headline = `${name} ${text('path') || text('destination')}`.trim();
+  else if (browser) {
+    // URL paths, queries and userinfo remain omitted by the existing proposal redaction.
+    let host = '';
+    try { host = new URL(text('url')).host; } catch { /* No safe URL available. */ }
+    headline = `${text('operation') || text('method') || 'Open'} ${host}`.trim();
+    if (!host) headline = displayName;
+  }
+  const singleLine = safeSummary(headline, 4096).replace(/[\s\u0000-\u001f\u007f]+/g, ' ').trim();
+  return { title: singleLine.length > 160 ? singleLine.slice(0, 159) + '…' : singleLine, target: displayName };
+}
+
 export interface RuntimeMapping {
   upstreamRunId: string;
   executionRunId: string;
@@ -375,7 +397,8 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
         await services.lemon.call('exec.approval.resolve', { approvalId: request.approvalId, expectedRunId: request.runId, expectedSessionKey: request.sessionKey, decision: 'deny' }, { mutation: true, resourceIds: [owned.run.id] });
         services.entry(principal, owned.run.conversationId, { kind: 'notice', severity: 'warning', text: 'A runtime action was refused because its concrete proposal could not be displayed safely for review.', requestId: null, runId: owned.run.id, actor: { kind: 'system', id: null, displayName: 'System' } }); return;
       }
-      const created = await services.gates.create<P.Approval>(principal, 'approval', { botId: owned.run.botId, conversationId: owned.run.conversationId, runId: owned.run.id, source: 'lemon_exec', category: request.tool && ['write', 'edit', 'patch', 'read', 'ls', 'find', 'grep'].includes(request.tool) ? 'files' : 'shell', title: 'Approve runtime action', description: 'Review the concrete destination action. Credential-bearing and non-review fields are omitted; permission is bound to this unchanged proposal only.', target: safeSummary(request.tool ?? 'runtime tool', 128), inputs, expiresInMs, clientNonce: `runtime_${services.mutations.digest(request.approvalId).slice(0, 48)}`, upstream: { approvalId: request.approvalId, runId: request.runId, sessionKey: request.sessionKey, nodeId: request.nodeId ?? owned.bound.nodeId, invokeId: request.invokeId ?? null } });
+      const presentation = executionApprovalPresentation(request.tool, inputs);
+      const created = await services.gates.create<P.Approval>(principal, 'approval', { botId: owned.run.botId, conversationId: owned.run.conversationId, runId: owned.run.id, source: 'lemon_exec', category: request.tool && ['write', 'edit', 'patch', 'read', 'ls', 'find', 'grep'].includes(request.tool) ? 'files' : 'shell', ...presentation, description: 'Review the concrete destination action. Credential-bearing and non-review fields are omitted; permission is bound to this unchanged proposal only.', inputs, expiresInMs, clientNonce: `runtime_${services.mutations.digest(request.approvalId).slice(0, 48)}`, upstream: { approvalId: request.approvalId, runId: request.runId, sessionKey: request.sessionKey, nodeId: request.nodeId ?? owned.bound.nodeId, invokeId: request.invokeId ?? null } });
       services.store.setMetadata(`remoteApproval:${request.approvalId}`, created.id); emitRun(services.update(owned.run, { status: 'awaiting_input' })); return;
     }
     if (event !== 'agent' && event !== 'chat') return;
