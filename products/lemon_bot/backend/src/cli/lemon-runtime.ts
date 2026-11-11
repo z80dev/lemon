@@ -12,6 +12,8 @@ export interface ControllerPreparation {
   source: ControllerSource;
   /** `--choose-lemon`: show the choice even when one is saved. */
   choose: boolean;
+  /** `up --this-machine`: with no saved or environment choice, record this machine's Lemon without asking. */
+  thisMachine?: boolean;
   fetch?: typeof fetch;
   /** Checks a remote controller and returns a problem, or null once it accepts the token; test seam. */
   verify?: (controlUrl: string, operatorToken: string, trustedOverlay: boolean) => Promise<string | null>;
@@ -80,6 +82,12 @@ export async function prepareController(input: ControllerPreparation): Promise<v
     return;
   }
   const local = await controllerSettings(environment, { mode: 'local' });
+  if (input.thisMachine && !saved && !input.choose) {
+    await saveControllerChoice(config.dataDir, codec, { mode: 'local' });
+    Object.assign(config, local);
+    io.write(`Using Lemon on this machine (${config.controlUrl}).`);
+    return;
+  }
   const running = await localLemonRunning(local.controlUrl, fetcher);
   io.write(`Which Lemon should Lemon Bot use?\n  1) This machine (${running ? 'running' : local.runtimeLauncher ? 'installed, not running' : 'not installed'})\n  2) Another machine (needs its controller address and operator token)`);
   const fallback = saved?.mode === 'remote' ? '2' : '1';

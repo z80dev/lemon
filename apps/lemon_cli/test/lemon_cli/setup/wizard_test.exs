@@ -542,7 +542,8 @@ defmodule LemonCli.Setup.WizardTest do
       configure_ready_provider(path)
 
       for answer <- ["", "yes", "n"] do
-        io = Map.put(recording_io([answer]), :interactive?, fn -> true end)
+        # The first answer declines the Telegram/Discord question.
+        io = Map.put(recording_io(["", answer]), :interactive?, fn -> true end)
 
         assert :ok =
                  Wizard.run_full([], io,
@@ -593,7 +594,7 @@ defmodule LemonCli.Setup.WizardTest do
 
     test "launcher failure keeps a manual try-it-now path", %{config_path: path} do
       configure_ready_provider(path)
-      io = Map.put(recording_io(["y"]), :interactive?, fn -> true end)
+      io = Map.put(recording_io(["n", "y"]), :interactive?, fn -> true end)
 
       assert :ok =
                Wizard.run_full([], io,
@@ -655,6 +656,215 @@ defmodule LemonCli.Setup.WizardTest do
                )
 
       assert_received :launched
+    end
+  end
+
+  describe "run_full/3 — how Lemon is used" do
+    # Every component seam fails loudly unless a test opts into it.
+    defp component_opts(path, overrides) do
+      Keyword.merge(
+        [
+          config_path: path,
+          verifier: fn _ -> {:ok, %{}} end,
+          packaged?: true,
+          bot_installed?: false,
+          install_bot: fn _ -> flunk("Lemon Bot must not be installed") end,
+          bot_runner: fn _, _, _ -> flunk("lemon-bot must not run") end,
+          install_service: fn -> flunk("no service must be installed") end,
+          gateway_setup: fn _ -> flunk("gateway setup must not run") end,
+          launcher: fn -> flunk("the TUI must not open") end
+        ],
+        overrides
+      )
+    end
+
+    defp tty(io), do: Map.put(io, :interactive?, fn -> true end)
+
+    defp installed_bot do
+      fn [] ->
+        send(self(), :bot_installed)
+        {:ok, %{version: "2026.11.4", launcher: "/home/u/.local/bin/lemon-bot", installed: true}}
+      end
+    end
+
+    defp bot_runner do
+      fn launcher, args, interactive? ->
+        send(self(), {:bot_up, launcher, args, interactive?})
+        :ok
+      end
+    end
+
+    test "Browser installs Lemon Bot, hands off to lemon-bot up, and never opens the TUI", %{
+      config_path: path
+    } do
+      configure_ready_provider(path)
+      io = tty(recording_io(["2", ""]))
+
+      assert :ok =
+               Wizard.run_full(
+                 [],
+                 io,
+                 component_opts(path, install_bot: installed_bot(), bot_runner: bot_runner())
+               )
+
+      assert_received :bot_installed
+
+      assert_received {:bot_up, "/home/u/.local/bin/lemon-bot", ["up", "--this-machine"], true}
+
+      prompts = prompt_events(drain_events([]))
+      assert "Connect Telegram or Discord now? [y/N]: " in prompts
+      refute Enum.any?(prompts, &String.contains?(&1, "Open Lemon"))
+      refute Enum.any?(prompts, &String.contains?(&1, "background"))
+    end
+
+    test "Both sets up Lemon Bot and still offers the TUI", %{config_path: path} do
+      configure_ready_provider(path)
+      io = tty(recording_io(["3", "", ""]))
+
+      assert :ok =
+               Wizard.run_full(
+                 [],
+                 io,
+                 component_opts(path,
+                   install_bot: installed_bot(),
+                   bot_runner: bot_runner(),
+                   launcher: fn ->
+                     send(self(), :launched)
+                     :ok
+                   end
+                 )
+               )
+
+      assert_received {:bot_up, _launcher, ["up", "--this-machine"], true}
+      assert_received :launched
+    end
+
+    test "Terminal offers background services, defaulting to no", %{config_path: path} do
+      configure_ready_provider(path)
+
+      for {answer, installed?} <- [{"", false}, {"y", true}] do
+        io = tty(recording_io(["1", answer, "", "n"]))
+
+        assert :ok =
+                 Wizard.run_full(
+                   [],
+                   io,
+                   component_opts(path,
+                     install_service: fn ->
+                       send(self(), :service_installed)
+                       0
+                     end
+                   )
+                 )
+
+        if installed?,
+          do: assert_received(:service_installed),
+          else: refute_received(:service_installed)
+
+        assert "Keep Lemon running in the background? It starts when you log in. [y/N]: " in prompt_events(
+                 drain_events([])
+               )
+      end
+    end
+
+    test "--use browser needs no prompts and keeps lemon-bot off the browser", %{
+      config_path: path
+    } do
+      configure_ready_provider(path)
+
+      assert :ok =
+               Wizard.run_full(
+                 [],
+                 recording_io(),
+                 component_opts(path,
+                   non_interactive: true,
+                   use: "browser",
+                   install_bot: installed_bot(),
+                   bot_runner: bot_runner()
+                 )
+               )
+
+      assert_received {:bot_up, _launcher, ["up", "--this-machine", "--no-open"], false}
+      assert prompt_events(drain_events([])) == []
+    end
+
+    test "a failed Lemon Bot install fails explicit --use but falls back to the TUI otherwise", %{
+      config_path: path
+    } do
+      configure_ready_provider(path)
+      failing = fn _ -> {:error, :missing_bot_artifact} end
+
+      assert {:error, {:bot_install_failed, :missing_bot_artifact}} =
+               Wizard.run_full(
+                 [],
+                 recording_io(),
+                 component_opts(path, non_interactive: true, use: "browser", install_bot: failing)
+               )
+
+      assert error_event?(drain_events([]), &String.contains?(&1, "no Lemon Bot for this platform"))
+
+      assert :ok =
+               Wizard.run_full(
+                 [],
+                 tty(recording_io(["2", "", ""])),
+                 component_opts(path,
+                   install_bot: failing,
+                   launcher: fn ->
+                     send(self(), :launched)
+                     :ok
+                   end
+                 )
+               )
+
+      assert_received :launched
+      assert info_event?(drain_events([]), &String.contains?(&1, "lemon setup --use browser"))
+    end
+
+    test "an unfinished lemon-bot up fails only an explicit request", %{config_path: path} do
+      configure_ready_provider(path)
+
+      assert {:error, {:bot_setup_failed, {:exit_status, 1}}} =
+               Wizard.run_full(
+                 [],
+                 recording_io(),
+                 component_opts(path,
+                   non_interactive: true,
+                   use: "both",
+                   install_bot: installed_bot(),
+                   bot_runner: fn _, _, _ -> {:error, {:exit_status, 1}} end
+                 )
+               )
+
+      assert error_event?(drain_events([]), &String.contains?(&1, "lemon-bot up"))
+    end
+
+    test "the question is skipped for the launcher gate, source checkouts and an installed Bot",
+         %{config_path: path} do
+      configure_ready_provider(path)
+
+      for overrides <- [[launch: false], [packaged?: false], [bot_installed?: true]] do
+        io = tty(recording_io(["", "n"]))
+        Wizard.run_full([], io, component_opts(path, overrides))
+        prompts = prompt_events(drain_events([]))
+        refute Enum.any?(prompts, &String.starts_with?(&1, "Select"))
+        refute Enum.any?(prompts, &String.contains?(&1, "background"))
+      end
+    end
+
+    test "invalid or source-checkout Bot requests fail before installing anything", %{
+      config_path: path
+    } do
+      configure_ready_provider(path)
+
+      assert {:error, :invalid_arguments} =
+               Wizard.run_full([], recording_io(), component_opts(path, use: "phone"))
+
+      assert {:error, :bot_requires_packaged_install} =
+               Wizard.run_full(
+                 [],
+                 recording_io(),
+                 component_opts(path, non_interactive: true, use: "browser", packaged?: false)
+               )
     end
   end
 

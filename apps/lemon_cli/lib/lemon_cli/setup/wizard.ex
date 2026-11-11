@@ -14,13 +14,14 @@ defmodule LemonCli.Setup.Wizard do
   """
 
   alias LemonCli.Onboarding.{PromptUI, Providers, Runner}
+  alias LemonCli.ServiceCommand
   alias LemonCli.Setup.{Gateway, ModelReadiness, Ports, Provider, Scaffold, Verification}
   alias LemonCore.Config.Modular
   alias LemonCore.Runtime.{Env, Health, Profile}
   alias LemonCore.Secrets
   alias LemonCore.Secrets.MasterKey
   alias LemonCore.Setup.Readiness
-  alias LemonCore.Update.ConfigMigrator
+  alias LemonCore.Update.{ConfigMigrator, ManagedInstall, Remote}
 
   @type io_callbacks :: %{
           required(:info) => (String.t() -> any()),
@@ -59,7 +60,9 @@ defmodule LemonCli.Setup.Wizard do
             auth: :string,
             codex_auth_path: :string,
             model: :string,
-            model_optional: :boolean
+            model_optional: :boolean,
+            use: :string,
+            background: :boolean
           ],
           aliases: [n: :non_interactive]
         )
@@ -130,6 +133,11 @@ defmodule LemonCli.Setup.Wizard do
      in non-interactive mode) and saved to `~/.lemon/ports.env`. Ports owned
      by an already running Lemon are left alone.
   7. Print completion after a passing live check or a saved provider without a live check.
+  8. Ask how Lemon will be used — terminal, Lemon Bot in the browser, or both —
+     on a packaged install (`--use` pre-answers it). Browser installs the
+     Lemon Bot backend for the running version and hands off to
+     `lemon-bot up --this-machine`; terminal-only offers background services.
+  9. Offer Telegram/Discord setup, then offer to open the terminal UI.
 
   The runtime profile is not part of first-run setup: the installer chooses it.
 
@@ -139,14 +147,30 @@ defmodule LemonCli.Setup.Wizard do
     * `:config_path` - override config path
     * `:provider` - force provider onboarding even when one is usable
     * `:skip_verify` - skip the post-onboarding live provider check
+    * `:use` - `"terminal"`, `"browser"` or `"both"`; pre-answers step 8
+    * `:background` - pre-answers the background-service question
     * `:verifier` - injectable live-check function (testing; no network)
     * `:launcher` - injectable zero-arity TUI launcher (testing)
     * `:port_free?`, `:lemon_running?`, `:ports_path` - injectable port probes
       and port file (testing)
-    * `:launch` - offer to open Lemon (default: true; false for the launcher's setup gate)
+    * `:packaged?`, `:bot_installed?`, `:install_bot`, `:bot_runner`,
+      `:install_service`, `:gateway_setup` - injectable component steps (testing)
+    * `:launch` - offer to open Lemon and ask steps 8–9 (default: true; false
+      for the launcher's setup gate and `lemon-bot up`)
   """
   @spec run_full([String.t()], io_callbacks(), keyword()) :: :ok | {:error, term()}
   def run_full(_args, io, opts \\ []) do
+    case parse_usage(Keyword.get(opts, :use)) do
+      {:ok, usage} ->
+        run_full_wizard(io, opts, usage)
+
+      :error ->
+        io.error.("--use must be terminal, browser, or both.")
+        {:error, :invalid_arguments}
+    end
+  end
+
+  defp run_full_wizard(io, opts, explicit_usage) do
     non_interactive? = Keyword.get(opts, :non_interactive, false)
     config_path = Keyword.get(opts, :config_path) || Modular.global_path()
     unless non_interactive?, do: Runner.ensure_interactive!(io)
@@ -182,7 +206,17 @@ defmodule LemonCli.Setup.Wizard do
         else: result
 
     print_summary(io, state, result, opts)
-    step_offer_launch(io, state, result, non_interactive?, opts)
+
+    {usage, result} =
+      if result == :ok or match?({:ok, _}, result),
+        do: step_components(io, explicit_usage, non_interactive?, opts, result),
+        else: {nil, result}
+
+    if usage != nil and (result == :ok or match?({:ok, _}, result)),
+      do: step_gateway(io, non_interactive?, opts)
+
+    if usage != :browser,
+      do: step_offer_launch(io, state, result, non_interactive?, opts)
 
     case result do
       {:ok, _verification} -> :ok
@@ -648,12 +682,10 @@ defmodule LemonCli.Setup.Wizard do
       ]
   end
 
-  defp select_connect_model(options, io) do
-    case select_value(io, %{
-           title: "Connect a model",
-           options: options,
-           default_index: 0
-         }) do
+  defp select_connect_model(options, io), do: select_option(io, "Connect a model", options)
+
+  defp select_option(io, title, options) do
+    case select_value(io, %{title: title, options: options, default_index: 0}) do
       {:ok, value} ->
         {:ok, value}
 
@@ -662,7 +694,7 @@ defmodule LemonCli.Setup.Wizard do
 
       :fallback ->
         io.info.("")
-        io.info.("Connect a model")
+        io.info.(title)
         io.info.("")
 
         options
@@ -906,6 +938,216 @@ defmodule LemonCli.Setup.Wizard do
     end
   rescue
     _error in ErlangError -> {:error, :launch_failed}
+  end
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # How Lemon is used: terminal, Lemon Bot in the browser, or both
+  # ──────────────────────────────────────────────────────────────────────────
+
+  @usages %{"terminal" => :terminal, "browser" => :browser, "both" => :both}
+
+  defp parse_usage(nil), do: {:ok, nil}
+
+  defp parse_usage(value) when is_binary(value),
+    do: Map.fetch(@usages, value |> String.trim() |> String.downcase())
+
+  defp parse_usage(_value), do: :error
+
+  # Returns the effective usage (nil when the step does not apply, e.g. the
+  # launcher's setup gate) and the setup result. A component failure fails
+  # setup only when that component was requested explicitly (`--use`,
+  # `--background`); otherwise Lemon stays usable in the terminal.
+  defp step_components(io, explicit, non_interactive?, opts, result) do
+    interactive? = interactive?(io, non_interactive?)
+    packaged? = Keyword.get_lazy(opts, :packaged?, &packaged_install?/0)
+
+    usage =
+      cond do
+        explicit != nil -> explicit
+        not Keyword.get(opts, :launch, true) -> nil
+        not packaged? -> :terminal
+        Keyword.get_lazy(opts, :bot_installed?, &ManagedInstall.managed_bot?/0) -> :bot_installed
+        interactive? -> select_usage(io)
+        true -> :terminal
+      end
+
+    {outcome, fatal?} =
+      case usage do
+        bot when bot in [:browser, :both] and not packaged? ->
+          io.error.("Lemon Bot installs into a Lemon from the installer, not a source checkout.")
+          io.info.("To run Lemon Bot from source, see products/lemon_bot/README.md.")
+          {{:error, :bot_requires_packaged_install}, true}
+
+        bot when bot in [:browser, :both] ->
+          {setup_bot(io, interactive?, opts), explicit != nil}
+
+        :bot_installed ->
+          io.info.("")
+
+          io.info.(
+            "Lemon Bot is installed: `lemon-bot open` opens it; `lemon-bot up` repairs its services."
+          )
+
+          {:ok, false}
+
+        :terminal ->
+          {step_background(io, interactive?, packaged?, opts), Keyword.has_key?(opts, :background)}
+
+        nil ->
+          {:ok, false}
+      end
+
+    case {outcome, fatal?} do
+      {:ok, _} -> {usage, result}
+      {{:error, reason}, true} -> {usage, {:error, reason}}
+      # Bot setup failed but the terminal works: offer the TUI instead.
+      {{:error, _reason}, false} -> {:both, result}
+    end
+  end
+
+  defp packaged_install?, do: match?({:ok, _version}, ManagedInstall.current())
+
+  defp select_usage(io) do
+    options = [
+      %{label: "Terminal — chat and code with `lemon` in this terminal", value: :terminal},
+      %{label: "Browser — Lemon Bot, signed in on this computer", value: :browser},
+      %{label: "Both", value: :both}
+    ]
+
+    case select_option(io, "How will you use Lemon?", options) do
+      {:ok, usage} -> usage
+      :cancel -> :terminal
+    end
+  end
+
+  defp setup_bot(io, interactive?, opts) do
+    install = Keyword.get(opts, :install_bot, &Remote.install_bot/1)
+    io.info.("")
+    io.info.("Installing Lemon Bot…")
+
+    case install.([]) do
+      {:ok, %{version: version, launcher: launcher}} ->
+        io.info.("Lemon Bot #{version} is installed.")
+        run_bot_up(io, launcher, interactive?, opts)
+
+      {:error, reason} ->
+        io.error.("Could not install Lemon Bot: #{bot_install_error(reason)}.")
+        io.info.("Lemon still works in the terminal. Retry with `lemon setup --use browser`.")
+        {:error, {:bot_install_failed, reason}}
+    end
+  end
+
+  # `lemon-bot up` runs `lemon setup --if-required --model-optional`, a no-op
+  # once this wizard connected a model, then installs services, signs in the
+  # local owner, enrolls this machine and opens the browser.
+  defp run_bot_up(io, launcher, interactive?, opts) do
+    args = ["up", "--this-machine" | if(interactive?, do: [], else: ["--no-open"])]
+    runner = Keyword.get(opts, :bot_runner, &run_component/3)
+
+    case runner.(launcher, args, interactive?) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        io.error.("Lemon Bot setup did not finish. Resume it with `lemon-bot up`.")
+        {:error, {:bot_setup_failed, reason}}
+    end
+  end
+
+  # Interactive children get the real terminal device: macOS kqueue cannot poll
+  # the /dev/tty alias, so raw-mode prompts would never see input. Inherited
+  # RELEASE_* selection is stripped so nested launchers boot their own release.
+  defp run_component(executable, args, true = _interactive?) do
+    script =
+      ~S{t=/dev/$(ps -o tty= -p $$ 2>/dev/null | tr -d ' '); [ -c "$t" ] || t=/dev/tty; exec "$@" <"$t" >"$t" 2>&1}
+
+    System.cmd("/bin/sh", ["-c", script, "lemon-setup", executable | args],
+      env: ManagedInstall.command_env()
+    )
+    |> exit_result()
+  rescue
+    _error in ErlangError -> {:error, :launch_failed}
+  end
+
+  defp run_component(executable, args, false) do
+    System.cmd(executable, args,
+      env: ManagedInstall.command_env(),
+      stderr_to_stdout: true,
+      into: IO.stream(:stdio, :line)
+    )
+    |> exit_result()
+  rescue
+    _error in ErlangError -> {:error, :launch_failed}
+  end
+
+  defp exit_result({_output, 0}), do: :ok
+  defp exit_result({_output, status}), do: {:error, {:exit_status, status}}
+
+  defp bot_install_error(:missing_bot_artifact),
+    do: "this release has no Lemon Bot for this platform"
+
+  defp bot_install_error(reason)
+       when reason in [
+              :unsupported_layout,
+              :stale_running_release,
+              :running_version_mismatch,
+              :missing_current_pointer
+            ],
+       do: "this Lemon was not installed by the installer, or an update is unfinished"
+
+  defp bot_install_error({:bot_launcher_conflict, path}),
+    do: "#{path} exists and is not a Lemon Bot link; move it aside"
+
+  defp bot_install_error({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
+  defp bot_install_error(kind) when is_atom(kind), do: Atom.to_string(kind)
+  defp bot_install_error(_reason), do: "download or verification failed"
+
+  defp step_background(io, interactive?, packaged?, opts) do
+    wanted? =
+      case Keyword.fetch(opts, :background) do
+        {:ok, wanted} ->
+          wanted
+
+        :error ->
+          packaged? and interactive? and
+            prompt_yes?(
+              "Keep Lemon running in the background? It starts when you log in.",
+              io,
+              false
+            )
+      end
+
+    install =
+      Keyword.get(opts, :install_service, fn ->
+        ServiceCommand.run(["install", "controller", "--wait", "120"])
+      end)
+
+    cond do
+      not wanted? ->
+        :ok
+
+      install.() == 0 ->
+        :ok
+
+      true ->
+        io.error.(
+          "Lemon could not be set up to run in the background. Retry with `lemon service install controller`."
+        )
+
+        {:error, :service_install_failed}
+    end
+  end
+
+  defp step_gateway(io, non_interactive?, opts) do
+    if interactive?(io, non_interactive?) and
+         prompt_yes?("Connect Telegram or Discord now?", io, false) do
+      setup = Keyword.get(opts, :gateway_setup, &Gateway.run([], &1))
+
+      case setup.(io) do
+        :ok -> :ok
+        {:error, _reason} -> io.info.("Finish later with `lemon gateway setup`.")
+      end
+    end
   end
 
   defp print_summary(io, state, result, opts) do
@@ -1176,8 +1418,8 @@ defmodule LemonCli.Setup.Wizard do
   # IO helpers
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp prompt_yes?(message, io) do
-    suffix = " [Y/n]: "
+  defp prompt_yes?(message, io, default \\ true) do
+    suffix = if default, do: " [Y/n]: ", else: " [y/N]: "
 
     answer =
       io.prompt.(message <> suffix)
@@ -1185,12 +1427,12 @@ defmodule LemonCli.Setup.Wizard do
       |> String.downcase()
 
     case answer do
-      "" -> true
+      "" -> default
       "y" -> true
       "yes" -> true
       "n" -> false
       "no" -> false
-      _ -> prompt_yes?(message, io)
+      _ -> prompt_yes?(message, io, default)
     end
   end
 

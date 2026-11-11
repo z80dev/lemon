@@ -124,7 +124,7 @@ export async function runUpCli(args: string[], dependencies: UpDependencies = de
     flags.add(arg);
     if (arg === '--name') name = args[++i];
     else if (arg === '--worker-wrapper') wrapper = args[++i];
-    else if (!['--json', '--no-open', '--no-worker'].includes(arg)) { d.stderr('Unsupported up argument. Use lemon-bot --help.\n'); return 2; }
+    else if (!['--json', '--no-open', '--no-worker', '--this-machine'].includes(arg)) { d.stderr('Unsupported up argument. Use lemon-bot --help.\n'); return 2; }
     if (arg === '--name' && (!name || !nodePattern.test(name)) || arg === '--worker-wrapper' && (!wrapper || !isAbsolute(wrapper))) { d.stderr('Invalid up name or worker wrapper.\n'); return 2; }
   }
   const json = flags.has('--json');
@@ -167,7 +167,7 @@ export async function runUpCli(args: string[], dependencies: UpDependencies = de
     if (d.terminal.interactive) {
       // Choice prompts go to stderr, keeping NDJSON stdout machine-readable.
       const io = { ...d.terminal, write: (text: string) => d.stderr(`${text}\n`) };
-      await d.prepareController({ terminal: io, environment: d.environment, config, codec: createPrivateCodec(key), source: controllerSource, choose: options.chooseLemon === true, fetch: d.fetch });
+      await d.prepareController({ terminal: io, environment: d.environment, config, codec: createPrivateCodec(key), source: controllerSource, choose: options.chooseLemon === true, thisMachine: flags.has('--this-machine'), fetch: d.fetch });
     } else if (options.chooseLemon) { emit('controller_choice', 'failed', 'terminal_required'); return finish('needs_attention'); }
     emit('controller_choice', 'ok');
     const controllerChanged = previousController.url !== config.controlUrl || previousController.token !== config.operatorToken || previousController.tokenFile !== config.operatorTokenFile;

@@ -159,6 +159,16 @@ defmodule LemonCli.CommandRegistry do
         ),
         option("--model MODEL", ["--model"], "Model to make the default after onboarding"),
         option(
+          "--use terminal|browser|both",
+          ["--use"],
+          "How you will use Lemon; browser installs Lemon Bot"
+        ),
+        option(
+          "--background, --no-background",
+          ["--background", "--no-background"],
+          "Run Lemon as a login service (terminal use)"
+        ),
+        option(
           "--if-required",
           ["--if-required"],
           "Exit immediately unless setup is still required"

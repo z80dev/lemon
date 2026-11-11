@@ -20,11 +20,11 @@ async function harness() {
     read: async label => { state.output.push(label); const answer = state.answers.shift(); if (answer === undefined) throw new Error(`unexpected prompt: ${label}`); return answer; },
   };
   const load = () => loadConfiguration(environment);
-  async function prepare(answers: string[], choose = false): Promise<ControllerPreparation> {
+  async function prepare(answers: string[], choose = false, thisMachine = false): Promise<ControllerPreparation> {
     state.answers = answers; state.output = []; state.launches = [];
     const { config, key, controllerSource } = await load();
     const input: ControllerPreparation = {
-      terminal, environment, config, codec: createPrivateCodec(key), source: controllerSource, choose,
+      terminal, environment, config, codec: createPrivateCodec(key), source: controllerSource, choose, thisMachine,
       fetch: (async () => Response.json({ ok: state.healthy })) as unknown as typeof fetch,
       verify: async (url, token) => { state.verified.push(`${url} ${token}`); return null; },
     };
@@ -70,4 +70,18 @@ test('another machine is verified, saved and used without the local launcher; --
   expect(h.state.output.join('\n')).toContain('Choose 1 or 2 [2]');
   expect(local.config).toMatchObject({ controlUrl: 'ws://127.0.0.1:4040/ws', operatorToken: '', runtimeLauncher: h.launcher });
   expect((await h.load()).config.controlUrl).toBe('ws://127.0.0.1:4040/ws');
+});
+
+test('--this-machine records the local choice without asking, but never overrides a saved remote one', async () => {
+  const h = await harness();
+  const local = await h.prepare([], false, true);
+  expect(h.state.output.join('\n')).not.toContain('Which Lemon should Lemon Bot use?');
+  expect(local.config).toMatchObject({ controlUrl: 'ws://127.0.0.1:4040/ws', runtimeLauncher: h.launcher });
+  expect((await h.load()).controllerSource).toBe('saved');
+
+  h.state.healthy = true;
+  await h.prepare(['2', 'wss://desktop.example/ws', 'remote-operator-token'], true);
+  const kept = await h.prepare([], false, true);
+  expect(kept.config.controlUrl).toBe('wss://desktop.example/ws');
+  expect(h.state.output.join('\n')).toContain('Using Lemon at wss://desktop.example/ws.');
 });

@@ -12,7 +12,7 @@ if (args.length === 1 && args[0] === '--version') {
 } else if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
   process.stdout.write(`Lemon Bot ${version}
 Usage: lemon-bot [--choose-lemon] [--no-open] | --version | --help
-       lemon-bot up [--json] [--no-open] [--no-worker] [--name NAME] [--worker-wrapper PATH]
+       lemon-bot up [--json] [--no-open] [--no-worker] [--this-machine] [--name NAME] [--worker-wrapper PATH]
        lemon-bot open [--headless] [--no-wait]
        lemon-bot setup [--print-origin] [--same-machine]
        lemon-bot connect iphone --backend ORIGIN [--origin HTTPS_ORIGIN]
@@ -21,6 +21,8 @@ In a terminal, plain lemon-bot sets up background services, enrolls this machine
 opens the web app already signed in (see open), and exits. --choose-lemon asks
 which controller to use again. The saved controller choice is encrypted privately.
 up is resumable; --json emits NDJSON step events and one result, never credentials.
+--this-machine uses this machine's Lemon without asking when no choice is saved
+(lemon setup passes it after you choose Browser).
 --no-worker leaves worker enrollment to a later up. --no-open skips browser sign-in.
 Without a terminal, with --no-open, or in service mode, plain lemon-bot serves
 the authenticated backend in the foreground at http://127.0.0.1:4100.
