@@ -39,7 +39,8 @@ LANGUAGES = {'python', 'javascript', 'typescript', 'go', 'rust', 'bash', 'c', 's
 CATEGORIES = {'bug_fix', 'feature', 'refactor', 'debugging', 'performance', 'concurrency',
               'read_only', 'test_writing', 'migration', 'cli', 'data', 'parsing', 'api_design'}
 DIFFICULTIES = {'easy', 'medium', 'hard'}
-DEFAULT_TIMEOUT = 900
+# Matches `lemon -p`'s fixed 600s client deadline so both agents get the same budget.
+DEFAULT_TIMEOUT = 600
 VERIFY_TIMEOUT = 300
 PROMPT_SUFFIX = ('\n\nWork only inside the current repository. Do not install packages or use the network; '
                  'the standard library and the preinstalled toolchains are sufficient.')
@@ -237,8 +238,9 @@ base_url = "{proxy_base(args)}/coding"
     return env
 
 
-def lemon_argv(prompt, args):
-    return ['lemon', '-p', prompt, '--output', 'json', '--model', f'kimi_coding:{args.model}',
+def lemon_argv(prompt, args, timeout):
+    # `lemon -p` has no time option; its client gives up after a fixed 600s drain deadline.
+    return ['lemon', '-p', prompt, '--output', 'stream-json', '--model', f'kimi_coding:{args.model}',
             '--cwd', '/work', '--approval-policy', 'allow']
 
 
@@ -259,45 +261,66 @@ def prepare_omp(container, args, token):
     return {'KIMI_API_KEY': token, 'HOME': '/home/agent'}
 
 
-def omp_argv(prompt, args):
+def omp_argv(prompt, args, timeout):
     model = f'kimi-code/{args.omp_model or args.model}'
     return ['omp', '-p', prompt, '--mode', 'json', '--model', model, '--thinking', args.thinking,
-            '--cwd', '/work', '--no-session', '--no-title', '--auto-approve', '--max-time', str(args.timeout)]
+            '--cwd', '/work', '--no-session', '--no-title', '--auto-approve', '--max-time', str(timeout)]
 
 
-def parse_omp(output):
+def json_lines(output):
     events = []
     for line in output.splitlines():
         try:
-            events.append(json.loads(line))
+            event = json.loads(line)
         except ValueError:
-            continue
+            continue  # launcher/runtime log noise
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def parse_omp(output):
+    events = json_lines(output)
     assistants = [event['message'] for event in events
                   if event.get('type') == 'message_end' and event.get('message', {}).get('role') == 'assistant']
     last = assistants[-1] if assistants else {}
     usage = [message.get('usage') or {} for message in assistants]
     total = lambda key: sum(value.get(key) or 0 for value in usage) if usage else None
     answer = ''.join(part.get('text', '') for part in last.get('content', []) if part.get('type') == 'text')
-    tool_calls = sum(event.get('type') == 'tool_execution_end' for event in events)
+    finished = [event for event in events if event.get('type') == 'tool_execution_end']
+    tools = {}
+    for event in finished:
+        tools[event.get('toolName')] = tools.get(event.get('toolName'), 0) + 1
     return {'ok': bool(assistants) and any(event.get('type') == 'agent_end' for event in events)
                   and last.get('stopReason') not in ('error', 'aborted'),
             'answer': answer, 'model': last.get('model'), 'error': last.get('errorMessage'),
             'usage': {'totalTokens': total('totalTokens'), 'inputTokens': total('input'),
                       'outputTokens': total('output'), 'cacheReadTokens': total('cacheRead')},
             'metrics': {'turns': sum(event.get('type') == 'turn_end' for event in events),
-                        'tool_calls': tool_calls,
-                        'tool_errors': sum(event.get('type') == 'tool_execution_end' and event.get('isError') is True
-                                           for event in events)}}
+                        'tool_calls': len(finished), 'tools': tools,
+                        'tool_errors': sum(event.get('isError') is True for event in finished)}}
 
 
 def parse_lemon(output):
-    try:
-        result = json.loads(output)
-    except ValueError:
-        # Tolerate launcher noise before the JSON document.
-        start = output.find('{')
-        result = json.loads(output[start:]) if start >= 0 else {}
-    return result if isinstance(result, dict) else {}
+    events = json_lines(output)
+    result = next((event for event in reversed(events) if event.get('type') == 'result'), {})
+    finished = [event['payload']['action'] for event in events
+                if event.get('event') == 'agent' and isinstance(event.get('payload'), dict)
+                and event['payload'].get('type') == 'tool_use' and event['payload'].get('phase') == 'completed'
+                and isinstance(event['payload'].get('action'), dict)
+                and (event['payload']['action'].get('detail') or {}).get('tool_call_id')]
+    tools = {}
+    for action in finished:
+        name = action['detail'].get('name')
+        tools[name] = tools.get(name, 0) + 1
+    result['metrics'] = {'tool_calls': len(finished), 'tools': tools,
+                         'tool_errors': sum(event['payload'].get('ok') is False for event in events
+                                            if event.get('event') == 'agent' and isinstance(event.get('payload'), dict)
+                                            and event['payload'].get('type') == 'tool_use'
+                                            and event['payload'].get('phase') == 'completed'
+                                            and ((event['payload'].get('action') or {}).get('detail') or {}).get('tool_call_id')),
+                         'turns': (result.get('usage') or {}).get('turns')}
+    return result
 
 
 # `lemon-coding` is Lemon with the opt-in `coding` tool-disclosure profile (see docs/config.md).
@@ -338,20 +361,21 @@ def run_trial(trial, task, args, out):
         container = Container(IMAGES[agent], f'arena-{trial["id"]}', args.cpus, args.memory)
         init_repo(container, task)
         env = prepare(container, args, token)
-        timeout = task.get('timeout_s', args.timeout)
+        timeout = min(task.get('timeout_s', args.timeout), args.timeout)
         prompt = task['prompt'].strip() + PROMPT_SUFFIX
         agent_started = time.monotonic()
-        invocation = container.exec(argv_for(prompt, args), env=env, timeout=timeout)
+        invocation = container.exec(argv_for(prompt, args, timeout), env=env, timeout=timeout + 30)
         row['wall_seconds'] = round(time.monotonic() - agent_started, 1)
         row['exit_code'] = invocation.returncode
         (trial_dir / 'agent.stdout').write_text(redact(invocation.stdout, token))
         (trial_dir / 'agent.stderr').write_text(redact(invocation.stderr, token))
-        timed_out = invocation.returncode in (124, 137)
+        timed_out = invocation.returncode in (124, 137) or row['wall_seconds'] >= timeout - 2
         result = parse(invocation.stdout) if invocation.stdout.strip() else {}
         usage = result.get('usage') if isinstance(result.get('usage'), dict) else {}
         metrics = result.get('metrics') if isinstance(result.get('metrics'), dict) else {}
         row.update({'agent_ok': result.get('ok') is True, 'turns': metrics.get('turns', usage.get('turns')),
-                    'tool_calls': metrics.get('tool_calls'), 'tool_errors': metrics.get('tool_errors', usage.get('tool_errors')),
+                    'tool_calls': metrics.get('tool_calls'), 'tools': metrics.get('tools'),
+                    'tool_errors': metrics.get('tool_errors', usage.get('tool_errors')),
                     'tokens': usage.get('totalTokens'), 'input_tokens': usage.get('inputTokens'),
                     'output_tokens': usage.get('outputTokens'), 'cached_tokens': usage.get('cacheReadTokens'),
                     'reported_model': result.get('model')})
@@ -521,6 +545,11 @@ def cmd_report(args):
             if row['failure']:
                 efficiency[agent]['failures'][row['failure']] = efficiency[agent]['failures'].get(row['failure'], 0) + 1
         efficiency[agent]['wire_models'] = sorted({model for row in mine for model in row.get('wire_models', [])})
+        mix = {}
+        for row in mine:
+            for name, count in (row.get('tools') or {}).items():
+                mix[name] = mix.get(name, 0) + count
+        efficiency[agent]['tool_mix'] = dict(sorted(mix.items(), key=lambda item: -item[1]))
     breakdowns = {dimension: {value: summary([row for row in scored if row[dimension] == value])
                               for value in sorted({row[dimension] for row in scored})}
                   for dimension in ('category', 'language', 'difficulty')}
@@ -579,6 +608,9 @@ def render_markdown(report, agents):
     lines += ['', '## Failure modes', '']
     for agent in agents:
         lines.append(f"- {agent}: {report['efficiency'][agent]['failures'] or 'none'}; wire models {report['efficiency'][agent]['wire_models']}")
+    lines += ['', '## Tool calls (all trials)', '']
+    for agent in agents:
+        lines.append(f"- {agent}: {report['efficiency'][agent]['tool_mix']}")
     for dimension, groups in report['breakdowns'].items():
         lines += ['', f'## By {dimension}', '', '| ' + dimension + ' | ' + ' | '.join(agents) + ' |',
                   '| --- |' + ' ---: |' * len(agents)]
