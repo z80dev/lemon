@@ -1822,6 +1822,14 @@ Approval.scope is ReviewScope: scope badge once/run/site/connector, target Bot+m
 
 Remembered approvals are recorded, revocable backend resources. `chatOption` offers one group: Terminal (`bash`, `bash_output`, `kill_process`), File changes (`write`, `edit`, `patch`, `ast_grep`, `checkpoint`) or File reading (`read`, `ls`, `find`, `grep`). Chat allowances bind to the exact invocation context and interactive owner-chat origin; routines, native follow-ups and external triggers cannot borrow them. Grant, policy, governance, membership, placement or review-mode changes end allowances; Stop allowing affects future actions, not already-running commands. Product approvals, force-human requests, unknown/non-group tools and strict required or personal ask-first rules are never eligible. Governance defaults to `chat`; `off` disables remembering and `chat_and_bot` additionally permits owner-only preview/confirm bot-wide exemptions. Bot-wide allowances cover owner chats, routines and native follow-ups, never email, Slack, X or webhook triggers. `requireReview` permits an explicit recorded chat decision; bot-wide exemption separately requires admin-enabled governance. The runtime still requests each action and receives only `approve_once` or `deny`.
 
+Private approval cards retain the originating run's conversation for allowance
+binding and concurrent-card matching, even when displayed in the owner's DM.
+Each concurrent dispatch rechecks the active allowance, current policy and pending
+gate, recording its decision before the RPC; uncertain outcomes use the normal
+approval reconciliation lifecycle. External or unknown root/parent provenance
+remains ineligible across native continuations. Multiple approved capability
+requests from one originating run/source share one durable continuation nonce.
+
 Identity tab edits name/title/avatar/voice/language via bot update; Job tab edits Job/instructions/style/boundaries, effective hard policy separately; Memory tab handles owned profile facts. Every Job/voice/language change (manual or natural language) creates PreferenceChange with before/after/source/reason/user/machine and resulting Bot revision. Natural-language “be more concise” uses MCP update_preferences **only** with actual authorized user sourceEntryId (external/email/tool text cannot attest intent). One preference scope per create (job+instructions together, OR voice, OR language); revision is Bot revision. Undo request carries PreferenceChange revision and current botRevision, rejects if changed fields no longer match recorded after or another change intervened; restores before through profiles.update/scoped settings, increments Bot/change revisions, state undone. No SOUL.md duplicate store, no cross-bot personalization. Memory corrections are inspectable Memory resources, not unsafe unrestricted systemPrompt mutation.
 
 ### Destructive scopes and guided memory import

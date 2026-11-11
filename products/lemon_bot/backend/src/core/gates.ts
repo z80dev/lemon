@@ -2,7 +2,7 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, GateService, Principal, RequestContext, Route } from './services';
 import { ApiError, fail } from './errors';
 import { z, parse, id, nonce, update, boundedText, principal, queryObject } from './validation';
-import { chatOptionFor, grantChatAllowance, findConcurrentPendingApprovals } from './approval-allowances';
+import { chatOptionFor, grantChatAllowance, findConcurrentPendingApprovals, matchApprovalAllowance } from './approval-allowances';
 import type { PreparedAccessChanges } from './access';
 
 const MAX_WAIT = 600_000;
@@ -549,16 +549,17 @@ export function createGateService(services: BackendServices): GateService & { sw
       if (name === 'approvals' && finalState === 'approved' && input.decision === 'approve_chat') {
         const approval = resolved as P.Approval;
         const storedContext = services.store.metadata<{ toolGroup: P.ApprovalToolGroup; contextKey: string; origin: string }>(`approvalAllowanceContext:${approval.id}`);
-        if (storedContext) {
-          await grantChatAllowance(services, actor, {
+        const originRun = approval.runId ? services.store.get<P.Run>('runs', approval.runId) : null;
+        if (storedContext && originRun) {
+          const allowance = await grantChatAllowance(services, actor, {
             botId: approval.botId,
-            conversationId: approval.conversationId,
+            conversationId: originRun.conversationId,
             toolGroup: storedContext.toolGroup,
             contextKey: storedContext.contextKey,
             sourceApprovalId: approval.id,
           });
           const concurrent = findConcurrentPendingApprovals(services, {
-            conversationId: approval.conversationId,
+            conversationId: originRun.conversationId,
             botId: approval.botId,
             toolGroup: storedContext.toolGroup,
             contextKey: storedContext.contextKey,
@@ -566,7 +567,21 @@ export function createGateService(services: BackendServices): GateService & { sw
           });
           for (const other of concurrent) {
             const otherUpstream = services.store.get<ApprovalSource>('approvalSources', other.id);
-            if (otherUpstream && services.lemon.connected) {
+            const run = other.runId ? services.store.get<P.Run>('runs', other.runId) : null;
+            if (otherUpstream && run && services.lemon.connected && !services.store.metadata(`approvalForceHuman:${other.id}`)) {
+              const matched = await matchApprovalAllowance(services, actor, run, { upstreamRunId: otherUpstream.runId }, otherUpstream.tool ?? '');
+              if (matched?.id !== allowance.id) continue;
+              const dispatched = services.store.transaction(() => {
+                const item = services.store.require<P.Approval>('approvals', other.id);
+                const liveAllowance = services.store.get<P.ApprovalAllowance>('approvalAllowances', allowance.id);
+                if (item.gate.state !== 'pending' || item.gate.expiresAtMs <= services.now() || liveAllowance?.state !== 'active') return false;
+                pending(services, actor, 'approvals', item, item.revision);
+                services.store.setMetadata(`approvalDecision:${item.id}`, { decision: 'approve_once', productDecision: 'approve_chat', userId: actor.userId, workspaceId: actor.workspaceId });
+                transition(services, 'approvals', item, 'submitted', actor.userId);
+                return true;
+              });
+              if (!dispatched) continue;
+              let otherFinal: P.ResolutionState;
               try {
                 const ack = await services.lemon.call<unknown>('exec.approval.resolve', {
                   approvalId: otherUpstream.approvalId,
@@ -575,19 +590,17 @@ export function createGateService(services: BackendServices): GateService & { sw
                   expectedRunId: otherUpstream.runId,
                 }, { mutation: true, resourceIds: [other.id] });
                 const result = z.object({ resolved: z.literal(true), approvalId: z.string(), decision: z.string(), sessionKey: z.string(), runId: z.string(), approved: z.boolean(), outcome: z.enum(['approved', 'denied']) }).passthrough().safeParse(ack);
-                const otherFinal = result.success && result.data.approvalId === otherUpstream.approvalId && result.data.decision === 'approve_once' && result.data.approved === true ? 'approved' : 'outcome_unknown';
-                services.store.transaction(() => {
-                  const item = services.store.require<P.Approval>('approvals', other.id);
-                  if (item.gate.state === 'pending' || item.gate.state === 'submitted') {
-                    services.store.setMetadata(`approvalDecision:${item.id}`, { decision: 'approve_once', productDecision: 'approve_chat', userId: actor.userId, workspaceId: actor.workspaceId });
-                    const changes: Partial<P.Approval> = otherFinal === 'approved' ? { resolvedScope: 'chat' } : {};
-                    const resItem = transition(services, 'approvals', item, otherFinal, actor.userId, changes);
-                    wake('approvals', resItem);
-                  }
-                });
-              } catch {
-                // Ignore failure on concurrent resolution
+                otherFinal = result.success && result.data.approvalId === otherUpstream.approvalId && result.data.sessionKey === otherUpstream.sessionKey && result.data.runId === otherUpstream.runId && result.data.decision === 'approve_once' && result.data.approved && result.data.outcome === 'approved' ? 'approved' : 'outcome_unknown';
+              } catch (error) {
+                otherFinal = error instanceof ApiError && error.retrySafe && error.code !== 'outcome_unknown' ? 'failed' : 'outcome_unknown';
               }
+              services.store.transaction(() => {
+                const item = services.store.require<P.Approval>('approvals', other.id);
+                if (item.gate.state === 'submitted') {
+                  const changes: Partial<P.Approval> = otherFinal === 'approved' ? { resolvedScope: 'chat' } : {};
+                  wake('approvals', transition(services, 'approvals', item, otherFinal, actor.userId, changes));
+                }
+              });
             }
           }
         }

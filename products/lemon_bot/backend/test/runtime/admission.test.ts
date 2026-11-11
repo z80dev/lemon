@@ -25,6 +25,20 @@ async function setup() {
 }
 
 describe('authenticated fresh native follow-up admission', () => {
+  test('external provenance survives multiple native continuations', async () => {
+    const s = await setup();
+    try {
+      s.f.store.setMetadata(`runApprovalOrigin:${s.started.run.id}`, 'external');
+      let candidate = { ...s.lineage };
+      const rpc = s.f.rpc;
+      s.f.rpc = async (method, params) => method === 'runs.followup.lineage.get' ? candidate : rpc(method, params);
+      for (let i = 0; i < 3; i++) {
+        expect(await s.route.handler(s.context({ runId: candidate.runId }))).toMatchObject({ allow: true });
+        expect(s.f.store.metadata(`runApprovalOrigin:${candidate.runId}`)).toBe('external');
+        candidate = { ...candidate, parentRunId: candidate.runId, runId: `external_followup_${i}` };
+      }
+    } finally { s.dispose(); }
+  });
   test('same-owner helper admission keeps the original human while provisioning fresh target credentials and F proof', async () => {
     const s = await setup();
     try {

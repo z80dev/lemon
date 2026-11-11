@@ -782,6 +782,7 @@ describe('grant, record use, concurrent approvals and eager end', () => {
 
   test('findConcurrentPendingApprovals finds matching lemon_exec pending cards in conversation', () => {
     const { services, store, owner, bot, room } = fixture();
+    store.put<P.Run>('runs', { ...services.resource('run', {}), id: 'run_1', conversationId: room.id, botId: bot.id, initiatorUserId: owner.userId, clientNonce: 'concurrent_run_nonce', status: 'running', error: null, startedAtMs: 1000, completedAtMs: null, routineRunId: null });
 
     const gate1: P.Gate = { id: 'gate_1', revision: 1, state: 'pending', targetUserId: owner.userId, expiresAtMs: 200000, resolvedAtMs: null, resolvedByUserId: null };
     const app1: P.Approval = services.resource('approval', {
