@@ -177,6 +177,17 @@ struct BotGrantRow: View {
         VStack(alignment: .leading) {
             Text(current.capabilityId).font(.headline)
             Text("Requested: \(current.requestedLevel) · effective: \(current.effectiveLevel)").font(LBFont.meta)
+            if let pending = GrantPresentation.pendingMessage(current) {
+                HStack {
+                    Text(pending).font(LBFont.meta)
+                    Button("Stop task") { Task { await action.perform {
+                        let presence: BotPresence = try await store.read("/bots/\(hubID(current.botId))/presence")
+                        guard let runID = presence.currentRunId else { return }
+                        let receipt: Run = try await store.mutate("POST", resourcePath("runs", runID, "/cancel"), body: ["reason": .string("Explicit user Stop")])
+                        if let index = store.runs.firstIndex(where: { $0.id == receipt.id }) { store.runs[index] = receipt }
+                    } } }.disabled(!manages || action.busy || store.connectionState != "online")
+                }
+            }
             ForEach(current.reasons, id: \.self) { reason in Text(reason).font(LBFont.meta) }
             if manages {
                 Menu("Request Bot access level") {

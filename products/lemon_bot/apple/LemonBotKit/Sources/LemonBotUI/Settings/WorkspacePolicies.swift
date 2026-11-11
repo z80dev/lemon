@@ -51,6 +51,7 @@ struct PolicySettingsView: View {
     @State private var machine = ""
     @State private var governance: Governance?
     @State private var rememberedApprovals = "chat"
+    @State private var folderReadsNeedReview = false
     var body: some View {
         Form {
             AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
@@ -59,6 +60,7 @@ struct PolicySettingsView: View {
                 Button("Inspect effective policy") { Task { await control.perform { effective = try await store.read("/policies/effective", query: bot.isEmpty ? [:] : ["botId": bot], as: EffectivePolicy.self) } } }
                 if let effective {
                     Text("Product access: \(effective.productAccess ? "allowed" : "denied") · local \(effective.localExecutionCeiling) · sudo \(effective.allowSudo ? "allowed" : "denied") · egress \(effective.allowEgress ? "allowed" : "denied")")
+                    Text("Bot folder reads: \(effective.workspaceReads == "allow" ? "without review" : "review required")")
                     ForEach(effective.explanations, id: \.self) { Text($0) }
                     ForEach(effective.rules) { Text("\($0.category): \($0.mode) · \($0.required ? "locked required" : "personal/group") · \($0.description)") }
                 }
@@ -72,6 +74,15 @@ struct PolicySettingsView: View {
                 AdminAction(title: "Save remembered approvals", store: store, control: control) {
                     guard let governance else { return }
                     _ = try await store.mutate("PATCH", "/governance", body: ["revision": .number(Double(governance.revision)), "rememberedApprovals": .string(rememberedApprovals)], as: Governance.self)
+                    try await load()
+                }
+            }.disabled(governance == nil || (store.member?.role != "admin" && store.member?.role != "owner"))
+            Section("Bot folder reads") {
+                Toggle("Require review for reads in a Bot’s folder", isOn: $folderReadsNeedReview)
+                Text("When off, eligible reads in the Bot’s folder do not ask. After an unreviewed read, web fetches and searches need approval. Writes, Terminal and Browser keep their existing approvals.")
+                AdminAction(title: "Save folder read policy", store: store, control: control) {
+                    guard let governance else { return }
+                    _ = try await store.mutate("PATCH", "/governance", body: ["revision": .number(Double(governance.revision)), "folderReadsNeedReview": .bool(folderReadsNeedReview)], as: Governance.self)
                     try await load()
                 }
             }.disabled(governance == nil || (store.member?.role != "admin" && store.member?.role != "owner"))
@@ -120,6 +131,7 @@ struct PolicySettingsView: View {
         if store.member?.role == "admin" || store.member?.role == "owner" {
             governance = try await store.read("/governance")
             rememberedApprovals = governance?.rememberedApprovals ?? "chat"
+            folderReadsNeedReview = governance?.folderReadsNeedReview ?? false
         }
         approvals = try await adminReadAll(store, "/approvals", query: ["state": "pending"], as: Approval.self)
     }

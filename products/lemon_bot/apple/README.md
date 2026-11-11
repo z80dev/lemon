@@ -9,6 +9,15 @@ as web: measured capability names, Off / View only / Full, warnings only when
 effective access differs, and one Why disclosure for raw reasons and policy.
 Desktop permissions remain inspection-only; these controls never prompt for TCC.
 
+Bots can ask for Terminal, Files or Browser with a private access card: **Allow
+for this Bot** queues access for after the current task, then the backend continues
+the original request automatically; **Not now** leaves access unchanged. Grant
+controls stay editable during tasks and show queued changes with **Stop task**.
+Workspace owners and admins can require review for reads in a Bot’s folder under
+Policies. On supported machines, eligible folder reads otherwise skip review;
+subsequent web fetches and searches require approval. Writes, Terminal and Browser
+keep their existing approval rules.
+
 Live reply indicators and the desktop pet ignore streaming messages from finished
 runs. Idle/offline Bot updates re-read locally active runs and their replies to
 recover missed completion events. Bot access refreshes when grants, its machine,

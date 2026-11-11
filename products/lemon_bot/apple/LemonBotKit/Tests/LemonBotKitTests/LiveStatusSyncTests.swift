@@ -68,10 +68,14 @@ import XCTest
         bot.id = "bot"
         value.bots = [bot, other]
         let machine = Machine(id: bot.machineId, revision: 1, createdAtMs: 1, updatedAtMs: 1, nodeName: "mac", name: "Mac", ownerUserId: "owner", accessUserIds: [], status: "online", labels: [:], botIds: [bot.id])
-        let grant = BotGrant(id: "grant", revision: 1, createdAtMs: 1, updatedAtMs: 1, botId: bot.id, machineId: bot.machineId, capabilityId: "terminal", requestedLevel: "off", effectiveLevel: "off", reasons: [])
+        var grant = BotGrant(id: "grant", revision: 1, createdAtMs: 1, updatedAtMs: 1, botId: bot.id, machineId: bot.machineId, capabilityId: "terminal", requestedLevel: "off", effectiveLevel: "off", pendingLevel: nil, reasons: [])
         try await value.apply(RealtimeEvent(seq: "1", payload: .grantUpserted(grant), timestampMs: 1))
         XCTAssertEqual(value.grantsVersion, ["bot": 1])
-        try await value.apply(RealtimeEvent(seq: "2", payload: .machineUpserted(machine), timestampMs: 1))
+        grant.revision = 2
+        grant.pendingLevel = "read_interact"
+        try await value.apply(RealtimeEvent(seq: "2", payload: .grantUpserted(grant), timestampMs: 2))
         XCTAssertEqual(value.grantsVersion, ["bot": 2])
+        try await value.apply(RealtimeEvent(seq: "3", payload: .machineUpserted(machine), timestampMs: 3))
+        XCTAssertEqual(value.grantsVersion, ["bot": 3])
     }
 }

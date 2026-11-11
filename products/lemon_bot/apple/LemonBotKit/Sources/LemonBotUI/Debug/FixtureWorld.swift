@@ -359,7 +359,7 @@ final class FixtureWorld: @unchecked Sendable {
             let machineJSON = machineByID[botJSON["machineId"] as! String]!
             let grants: [FixtureJSON] = [("files", "read_interact"), ("shell", "read_only"), ("browser", "read_interact")].enumerated().map { index, pair in
                 ["id": "grant_\(id.suffix(8))_\(index)", "revision": 1, "createdAtMs": created, "updatedAtMs": created, "botId": id, "machineId": botJSON["machineId"] as! String, "capabilityId": pair.0,
-                 "requestedLevel": pair.1, "effectiveLevel": pair.1, "reasons": [String]()] as FixtureJSON
+                 "requestedLevel": pair.1, "effectiveLevel": pair.1, "pendingLevel": NSNull(), "reasons": [String]()] as FixtureJSON
             }
             let presence: FixtureJSON = ["botId": id, "status": botJSON["activity"] as! String, "machineId": botJSON["machineId"] as! String, "machineLabel": machineJSON["name"] as! String,
                 "machineStatus": machineJSON["status"] as! String, "currentRunId": (botJSON["activeRunIds"] as! [String]).first ?? NSNull(), "taskConversationId": NSNull(),
