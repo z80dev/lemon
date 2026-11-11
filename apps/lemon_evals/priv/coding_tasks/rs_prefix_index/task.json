@@ -3,5 +3,5 @@
   "language": "rust",
   "category": "performance",
   "difficulty": "hard",
-  "prompt": "Replace the naive scoped path-prefix scan with a scalable mutable routing index. Preserve the complete normalization, tenant/global specificity, Deny, replacement, and deletion semantics in README.md. Meet its deterministic public nodes_visited bound for every query, including after update/delete churn. Keep APIs and the dependency-free offline package; add regression tests and document the indexing strategy."
+  "prompt": "Replace the naive scoped path-prefix scan with a scalable mutable routing index. Preserve the complete normalization, tenant/global specificity, Deny, replacement, and deletion semantics in README.md. Meet its deterministic public nodes_visited bounds for every query, including after update/delete churn, and its independently timed 15,000-query workload on a 200,000-rule index (10 seconds for lookups on two CPUs, excluding construction). Successful matches must report at least one visit; do not falsify work metrics. Keep APIs and the dependency-free offline package; add regression tests and document the indexing strategy."
 }

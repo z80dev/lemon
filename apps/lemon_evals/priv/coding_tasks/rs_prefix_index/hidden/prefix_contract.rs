@@ -7,6 +7,9 @@ fn check(index: &Index, tenant: u64, path: &str, expected: Option<(S, &str, A)>)
     assert_eq!(result.matched, expected.map(|(scope, prefix, action)| RuleMatch { scope, prefix: prefix.into(), action }));
     let depth = path.split('/').filter(|s| !s.is_empty() && *s != ".").count();
     assert!(result.nodes_visited <= 2 * (depth + 2), "{} visits for {path}", result.nodes_visited);
+    if result.matched.is_some() {
+        assert!(result.nodes_visited >= 1, "a successful match must inspect stored routing data");
+    }
     assert_eq!(result, index.lookup(tenant, path).unwrap(), "queries must be stable");
 }
 
@@ -160,5 +163,33 @@ fn deterministic_updates_match_a_simple_model() {
         assert_eq!(answer.matched, expected(&model, tenant, &query));
         let depth = query.split('/').filter(|s| !s.is_empty()).count();
         assert!(answer.nodes_visited <= 2 * (depth + 2));
+    }
+}
+
+#[test]
+fn lookup_workload_is_independent_of_total_rules() {
+    const RULES: usize = 200_000;
+    const QUERIES: usize = 15_000;
+    let mut index = Index::new();
+    for item in 0..RULES {
+        index.set(S::Global, &format!("/items/k{item}/detail"), route("destination")).unwrap();
+    }
+    let start = std::time::Instant::now();
+    let budget = std::time::Duration::from_secs(10);
+    for query in 0..QUERIES {
+        let item = query * 7919 % RULES;
+        let prefix = format!("/items/k{item}/detail");
+        let path = format!("{prefix}/tail");
+        let result = index.lookup(77, &path).unwrap();
+        assert_eq!(result.matched, Some(RuleMatch {
+            scope: S::Global,
+            prefix,
+            action: route("destination"),
+        }));
+        // This independent wall-clock guard still catches a full scan when its
+        // self-reported metric is replaced by a plausible constant or formula.
+        assert!(start.elapsed() < budget,
+            "15,000 lookups in 200,000 rules must finish within 10 seconds; completed {}",
+            query + 1);
     }
 }
