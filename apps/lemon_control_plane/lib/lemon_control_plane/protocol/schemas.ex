@@ -908,7 +908,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "purpose" => :string,
         "labels" => :map,
         "expiresInMs" => :integer,
-        "nodeId" => :string
+        "nodeId" => :string,
+        "tunnelPort" => :integer
       }
     },
     "node.pair.invite.revoke" => %{required: %{"inviteId" => :string}},

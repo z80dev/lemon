@@ -3,6 +3,7 @@ import type { BackendServices, EventAudience, EventService, Principal } from './
 import type { RealtimeEvent, ResourceEventPayloads } from '../../../contracts/protocol';
 import { fail } from './errors';
 import { Store } from './store';
+import { machineProjection } from '../runtime/projection';
 const audienceSchema=z.object({userIds:z.array(z.string()).optional(),conversationId:z.string().optional(),botId:z.string().optional(),machineId:z.string().optional(),admin:z.boolean().optional(),public:z.boolean().optional(),desktopOnly:z.boolean().optional()}).strict();
 const collections:Record<string,string>={user:'users',workspace:'workspaces',member:'members',invite:'invites',device:'devices',pairing:'pairings',machine:'machines',machine_invite:'machineInvites',bot:'bots',section:'sections',template:'templates',conversation:'conversations',composer:'composerDrafts',entry:'entries',run:'runs',attachment:'attachments',approval:'approvals',question:'questions',human_step:'humanSteps',secret_request:'secretRequests',draft:'drafts',skill:'skills',routine:'routines',routine_run:'routineRuns',memory:'memories',notification:'notifications',connector:'connectors',connector_auth:'connectorAuths',channel:'channelBindings',voice:'voiceSessions',grant:'botGrants',activity:'activity',reminder:'reminders',preference_change:'preferenceChanges',milestone:'milestones',directory_group:'directoryGroups',group_policy:'groupPolicies',network_policy:'networkPolicies',policy_application:'policyApplications',egress:'egressRoutes',setup_manifest:'setupManifests',setup_run:'setupRuns',host_operation:'hostOperations',spend_limit:'spendLimits',export:'exports',channel_setup:'channelSetups',email_account:'emailAccounts',x_connection:'xConnections'};
 export function createEventService(services:BackendServices):EventService {
@@ -60,6 +61,7 @@ export function createEventService(services:BackendServices):EventService {
   return {
     emit<K extends keyof ResourceEventPayloads>(event:K,payload:ResourceEventPayloads[K],audience:EventAudience={}):RealtimeEvent {
       audienceSchema.parse(audience);
+      if(event==='machine.upserted')payload=machineProjection(services,null,payload as ResourceEventPayloads['machine.upserted']) as ResourceEventPayloads[K];
       const timestampMs=services.now();
       const receipt=db.query('INSERT INTO events(event,payload,audience,timestamp_ms) VALUES(?,?,?,?) RETURNING CAST(seq AS TEXT) AS seq').get(event,JSON.stringify(payload),JSON.stringify(audience),timestampMs) as {seq:string}|null;
       if(!receipt)fail('internal_error','The event transaction did not return its persisted sequence.',false);
@@ -87,6 +89,7 @@ export function createEventService(services:BackendServices):EventService {
         const audience=audienceSchema.parse(JSON.parse(row.audience));
         // Persisted events are written only through the typed emit boundary above.
         const event={type:'event',seq:row.seq,event:row.event,payload:JSON.parse(row.payload),timestampMs:row.timestamp_ms} as RealtimeEvent;
+        if(event.event==='machine.upserted')event.payload=machineProjection(services,null,event.payload);
         if(!visible(principal,event,audience))continue;
         if(conversationIds.length&&audience.conversationId&&!conversationIds.includes(audience.conversationId))continue;
         if(conversationIds.length&&event.event.startsWith('entry.')&&typeof event.payload==='object'&&event.payload!==null&&'conversationId' in event.payload&&typeof event.payload.conversationId==='string'&&!conversationIds.includes(event.payload.conversationId))continue;

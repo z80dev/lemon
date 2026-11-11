@@ -158,10 +158,17 @@ export interface ProviderDeviceLogin {
   userCode: string | null; expiresAtMs: TimestampMs | null; pollIntervalMs: number | null;
 }
 export type MachineCredential = 'active' | 'expired' | 'revoked' | 'unknown';
-export interface Machine extends Resource { nodeId: ID | null; nodeName: string; name: string; ownerUserId: ID; accessUserIds: ID[]; status: 'pending' | 'online' | 'offline' | 'revoked'; credential?: MachineCredential; lastSeenAtMs: TimestampMs | null; labels: Record<string, string>; botIds: ID[] }
+export interface Machine extends Resource { nodeId: ID | null; nodeName: string; name: string; ownerUserId: ID; accessUserIds: ID[]; status: 'pending' | 'online' | 'offline' | 'revoked'; credential?: MachineCredential; lastSeenAtMs: TimestampMs | null; labels: Record<string, string>; botIds: ID[]; link?: MachineLink }
 export interface HostInfo { hostname: string; os: string; osVersion: string; arch: string; cpuCount: number; memTotalBytes: number; memFreeBytes: number; diskTotalBytes: number; diskFreeBytes: number; uptimeSec: number; lemonVersion: string; defaultCwd: string; user: string; measuredAtMs: TimestampMs }
 export interface MachineInvite extends Resource { machineId: ID; inviteCode: string; joinCommand: string; expiresAtMs: TimestampMs; status: 'pending' | 'joined' | 'expired' | 'revoked'; enrollment: 'invited' | 'waiting_for_join' | 'connecting' | 'verifying' | 'online' | 'expired' | 'failed' | 'revoked'; lastError: string | null }
-export interface MachineEnrollmentPreview { reachability: 'loopback_only' | 'routable' }
+export type MachineLinkState = 'online' | 'reconnecting' | 'failed' | 'stopped' | 'unknown';
+export type MachineLinkDetail = 'ssh_auth_failed' | 'host_key_changed' | 'host_unreachable' | 'forward_refused' | 'remote_port_in_use';
+export type MachineLink = { kind: 'direct' } | { kind: 'ssh_tunnel'; sshDestination: string | null; nodePort: number; productPort: number | null; tunnel: { state: MachineLinkState; detail: MachineLinkDetail | null; checkedAtMs: TimestampMs | null } };
+export interface MachineEnrollmentPreview { reachability: 'loopback_only' | 'routable'; ssh?: { available: boolean; reason: 'controller_remote' | 'node_gateway_unavailable' | 'launcher_unavailable' | null } }
+export type MachineSetupStep = 'checking_ssh' | 'opening_tunnel' | 'issuing_invite' | 'installing' | 'verifying' | 'online';
+export type MachineSetupFailure = 'ssh_unreachable' | 'ssh_auth_failed' | 'ssh_host_key_changed' | 'unsupported_host' | 'port_in_use' | 'forward_refused' | 'runtime_install_failed' | 'enroll_failed' | 'enroll_outcome_unknown' | 'service_failed' | 'not_bot_ready' | 'controller_unavailable' | 'interrupted';
+export interface MachineSshSetupRequest extends Mutation { sshDestination: string; name?: string; machineId?: ID }
+export interface MachineSetup extends Resource { machineId: ID | null; sshDestination: string; step: MachineSetupStep; state: 'running' | 'succeeded' | 'failed'; failure: { code: MachineSetupFailure; message: string; detail: string | null } | null; persistence: 'login' | 'boot' | 'session' | 'none' | null; finishedAtMs: TimestampMs | null }
 export interface MachineAttach extends Mutation { name: string; nodeName: string; labels?: Record<string, string>; expiresInMs?: number }
 export interface MachineAttachResult { machine: Machine; invite: MachineInvite }
 export interface MachineUpdate extends Update { name?: string; accessUserIds?: ID[]; labels?: Record<string, string> }
@@ -388,6 +395,7 @@ export interface Snapshot { cursor: Cursor; user: User; workspace: Workspace; me
 export type ResourceEventPayloads = {
   'user.updated': User; 'workspace.updated': Workspace; 'member.upserted': Member; 'member.deleted': Deleted; 'invite.upserted': MemberInvite; 'device.upserted': Device; 'device.deleted': Deleted;
   'machine.upserted': Machine; 'machine.deleted': Deleted; 'machine_invite.upserted': MachineInvite;
+  'machine_setup.upserted': MachineSetup;
   'bot.upserted': Bot; 'bot.deleted': Deleted; 'section.upserted': Section; 'section.deleted': Deleted; 'template.upserted': BotTemplate; 'template.deleted': Deleted;
   'conversation.upserted': Conversation; 'conversation.deleted': Deleted; 'conversation.read': { conversationId: ID; userId: ID; throughSeq: number; unread: boolean }; 'composer.updated': ComposerDraft;
   'entry.upserted': TranscriptEntry; 'entry.deleted': { id: ID; conversationId: ID }; 'entry.delta': { conversationId: ID; entryId: ID; runId: ID; offset: number; text: string }; 'run.upserted': Run;
@@ -768,6 +776,8 @@ export interface RestEndpoints {
   'GET /machines': Endpoint<undefined, Page<Machine>, PageQuery>;
   'GET /machines/enrollment-preview': Endpoint<undefined, MachineEnrollmentPreview>;
   'POST /machines': Endpoint<MachineAttach, MachineAttachResult>;
+  'POST /machines/ssh': Endpoint<MachineSshSetupRequest, MachineSetup>;
+  'GET /machine-setups/:id': Endpoint<undefined, MachineSetup>;
   'GET /machines/:id': Endpoint<undefined, Machine>;
   'PATCH /machines/:id': Endpoint<MachineUpdate, Machine>;
   'POST /machines/:id/reconnect': Endpoint<MachineReconnect, MachineInvite>;

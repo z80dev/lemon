@@ -104,6 +104,19 @@ The page observes enrollment live and, once verified online, offers
 must still be configured on the destination. The join script installs the worker
 through `lemon service` by default and exits after it is online.
 
+### Loopback credential ownership
+
+Named workers check that a literal-loopback controller or approved private MCP
+listener belongs to their own OS user before sending credentials. Linux checks
+`/proc/net/tcp` and `tcp6`; macOS uses `lsof`. Missing ownership evidence fails
+closed, so another local account cannot harvest credentials by occupying a
+stopped tunnel's port. Reconnecting uses the normal worker backoff.
+
+If you deliberately run the controller or tunnel as a different OS user, set
+`LEMON_NODE_TRUST_LOOPBACK_LISTENER=1` in the worker's service environment to opt
+out. This trusts all literal-loopback listeners and should not be enabled on a
+shared host with untrusted local accounts.
+
 ### Select a compatible destination runtime
 
 Configure runtime selection **on the controller before issuing an invitation**.

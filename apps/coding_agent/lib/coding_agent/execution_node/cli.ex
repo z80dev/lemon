@@ -136,6 +136,12 @@ defmodule CodingAgent.ExecutionNode.CLI do
              :coding_agent
            ),
          :ok <- load_all_modules(),
+         :ok <-
+           Application.put_env(
+             :lemon_core,
+             :require_owned_loopback,
+             System.get_env("LEMON_NODE_TRUST_LOOPBACK_LISTENER") != "1"
+           ),
          {:ok, worker} <-
            Worker.start_link(
              node_name: opts[:name],
@@ -416,6 +422,9 @@ defmodule CodingAgent.ExecutionNode.CLI do
     controllers require wss:// by default. The insecure override is acceptable
     only when another verified transport layer, such as Tailscale, encrypts and
     authenticates the complete path.
+    Loopback listeners must belong to this user before credentials are sent.
+    Set LEMON_NODE_TRUST_LOOPBACK_LISTENER=1 only when you deliberately trust a
+    controller or tunnel running under another uid on this machine.
     File RPC paths and shell working directories use --allowed-root (home by default).
     Explicit roots extend the home default; repeat the flag to permit multiple roots.
     LEMON_NODE_CAPABILITIES provides the same destination-local ceiling as --capabilities.
@@ -450,6 +459,10 @@ defmodule CodingAgent.ExecutionNode.CLI do
 
   defp format_reason(:insecure_controller_url) do
     "non-loopback ws:// controllers are blocked; use wss:// or explicitly pass --allow-insecure-controller only for development or a verified encrypted overlay"
+  end
+
+  defp format_reason(:loopback_listener_not_owned) do
+    "the loopback listener is not owned by this user; restart the controller or SSH tunnel under this account, or explicitly trust another uid with LEMON_NODE_TRUST_LOOPBACK_LISTENER=1"
   end
 
   defp format_reason(reason) do

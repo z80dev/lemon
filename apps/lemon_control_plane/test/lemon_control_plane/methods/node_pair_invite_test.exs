@@ -13,12 +13,14 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     NodesList
   }
 
-  alias LemonControlPlane.NodeStore
+  alias LemonControlPlane.{NodeGateway, NodeStore}
+  alias LemonControlPlane.Protocol.Schemas
   alias CodingAgent.ExecutionNode.{Socket, Worker}
 
   @ctx %{auth: %{role: :operator, scopes: [:pairing, :read]}, conn_id: "invite-operator"}
   @moduletag :tmp_dir
   @runtime_keys [:node_source_checkout, :node_install_version, :node_install_base_url]
+  @gateway_status_key {NodeGateway, :status}
   @runtime_env [
     "LEMON_NODE_SOURCE_CHECKOUT",
     "LEMON_NODE_INSTALL_VERSION",
@@ -87,6 +89,7 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
 
   test "preview classifies the exact advertised URL without issuing credentials", %{name: name} do
     before = LemonCore.Store.list(:node_pair_invites) |> Enum.sort()
+    put_gateway_status(%{pid: self(), port: 4052, address: "not-projected"})
 
     for {url, reachability} <- [
           {"ws://127.0.0.1:4040/ws", "loopback_only"},
@@ -96,7 +99,12 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
         ] do
       Application.put_env(:lemon_control_plane, :public_ws_url, url)
       assert {:ok, ^url} = NodePairInvite.controller_url()
-      assert {:ok, %{"reachability" => ^reachability}} = NodePairPreview.handle(%{}, @ctx)
+      assert {:ok, preview} = NodePairPreview.handle(%{}, @ctx)
+
+      assert preview == %{
+               "reachability" => reachability,
+               "nodeGateway" => %{"available" => true, "port" => 4052}
+             }
     end
 
     assert Enum.sort(LemonCore.Store.list(:node_pair_invites)) == before
@@ -104,6 +112,102 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     Application.put_env(:lemon_control_plane, :public_ws_url, "ws://remote.example/ws")
     assert {:error, preview_error} = NodePairPreview.handle(%{}, @ctx)
     assert {:error, ^preview_error} = NodePairInvite.handle(%{"nodeName" => name}, @ctx)
+    assert Enum.sort(LemonCore.Store.list(:node_pair_invites)) == before
+  end
+
+  test "preview reports a disabled or missing gateway without exposing its configured port" do
+    put_gateway_status(nil)
+
+    for status <- [nil, %{available: false, port: 4052}] do
+      :persistent_term.put(@gateway_status_key, status)
+
+      assert {:ok, preview} = NodePairPreview.handle(%{}, @ctx)
+
+      assert preview == %{
+               "reachability" => "routable",
+               "nodeGateway" => %{"available" => false, "port" => nil}
+             }
+    end
+  end
+
+  test "tunnel invites use the exact destination URL and bypass the advertised controller", %{
+    name: name
+  } do
+    put_gateway_status(%{pid: self(), port: 4044})
+    Application.put_env(:lemon_control_plane, :public_ws_url, "ws://insecure.example/ws")
+
+    for port <- [1, 4052, 65_535] do
+      issued = invite(name, %{"tunnelPort" => port})
+
+      assert issued["joinCommand"] =~ "'--controller' 'ws://127.0.0.1:#{port}/ws'"
+      assert issued["joinCommand"] =~ "destination source"
+      refute issued["joinCommand"] =~ "insecure.example"
+      refute issued["joinCommand"] =~ issued["inviteCode"]
+      refute issued["joinCommand"] =~ "invite-test-operator"
+      assert enrollment_auth(issued).role == :enrollment
+    end
+  end
+
+  test "tunnel invites fail before issuing credentials when the gateway is unavailable", %{
+    name: name
+  } do
+    put_gateway_status(nil)
+    before = LemonCore.Store.list(:node_pair_invites) |> Enum.sort()
+
+    assert {:error, {:unavailable, "Node gateway is unavailable"}} =
+             NodePairInvite.handle(%{"nodeName" => name, "tunnelPort" => 4052}, @ctx)
+
+    assert Enum.sort(LemonCore.Store.list(:node_pair_invites)) == before
+
+    # Direct enrollment remains independent of the optional gateway.
+    assert enrollment_auth(invite(name)).role == :enrollment
+  end
+
+  test "tunnel ports are bounded integers and rejected before issuing credentials", %{name: name} do
+    put_gateway_status(%{pid: self(), port: 4044})
+    before = LemonCore.Store.list(:node_pair_invites) |> Enum.sort()
+
+    assert Schemas.get("node.pair.invite").optional["tunnelPort"] == :integer
+    assert :ok = Schemas.validate("node.pair.invite", %{"nodeName" => name})
+
+    assert :ok =
+             Schemas.validate("node.pair.invite", %{"nodeName" => name, "tunnelPort" => 4052})
+
+    for port <- [nil, false, "4052", 4052.0, [], %{}, -1, 0, 65_536] do
+      params = %{"nodeName" => name, "tunnelPort" => port}
+
+      assert {:error, {:invalid_request, "Invalid tunnelPort"}} =
+               NodePairInvite.handle(params, @ctx)
+
+      unless is_nil(port) or is_integer(port) do
+        assert {:error, _} = Schemas.validate("node.pair.invite", params)
+      end
+    end
+
+    assert Enum.sort(LemonCore.Store.list(:node_pair_invites)) == before
+  end
+
+  test "tunnel invites require pairing authority before consulting gateway availability", %{
+    name: name
+  } do
+    put_gateway_status(nil)
+    before = LemonCore.Store.list(:node_pair_invites) |> Enum.sort()
+
+    for auth <- [
+          %{},
+          %{role: :operator, scopes: [:read]},
+          %{role: :node, scopes: [:invoke, :event]},
+          %{role: :enrollment, scopes: [:enroll]}
+        ] do
+      assert {:error, error} =
+               NodePairInvite.handle(
+                 %{"nodeName" => name, "tunnelPort" => 4052},
+                 %{auth: auth}
+               )
+
+      refute error == {:unavailable, "Node gateway is unavailable"}
+    end
+
     assert Enum.sort(LemonCore.Store.list(:node_pair_invites)) == before
   end
 
@@ -239,7 +343,9 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
                  "role" => "operator",
                  "scopes" => ["operator.admin", "operator.pairing"],
                  "auth" => %{"inviteCode" => invite["inviteCode"]}
-               }, local?: false)
+               },
+               local?: false
+             )
 
     assert auth.role == :enrollment
 
@@ -495,6 +601,39 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
       issued = invite(name)
       assert enrollment_auth(issued).role == :enrollment
     end
+  end
+
+  test "tunnel destinations never inherit the controller checkout and require remote runtime pins",
+       %{name: name} do
+    put_gateway_status(%{pid: self(), port: 4044})
+    Application.put_env(:lemon_control_plane, :public_ws_url, "ws://127.0.0.1:4040/ws")
+    Application.delete_env(:lemon_control_plane, :node_source_checkout)
+    params = %{"nodeName" => name, "tunnelPort" => 4052}
+    before = LemonCore.Store.list(:node_pair_invites) |> Enum.sort()
+
+    error =
+      "Configure a destination source checkout or an explicit node install version and HTTPS base URL"
+
+    assert {:error, {:invalid_request, ^error}} = NodePairInvite.handle(params, @ctx)
+    Application.put_env(:lemon_control_plane, :node_install_version, "2099.01.7-private")
+    assert {:error, {:invalid_request, ^error}} = NodePairInvite.handle(params, @ctx)
+    assert Enum.sort(LemonCore.Store.list(:node_pair_invites)) == before
+
+    Application.put_env(
+      :lemon_control_plane,
+      :node_install_base_url,
+      "https://releases.example/lemon"
+    )
+
+    issued = invite(name, %{"tunnelPort" => 4052})
+    assert issued["joinCommand"] =~ "'--controller' 'ws://127.0.0.1:4052/ws'"
+
+    assert issued["joinCommand"] =~
+             "https://releases.example/lemon/releases/download/v2099.01.7-private/join-node.sh"
+
+    assert issued["joinCommand"] =~ "'--version' '2099.01.7-private'"
+    refute issued["joinCommand"] =~ "--source"
+    refute issued["joinCommand"] =~ Path.expand("../../../../..", __DIR__)
   end
 
   test "remote invites require a destination source or complete explicit release prerequisites",
@@ -960,6 +1099,18 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     for filters <- [%{"name" => ""}, %{"name" => 123}, %{"nodeId" => ""}, %{"nodeId" => 123}] do
       assert {:error, {:invalid_request, _}} = NodesList.handle(filters, @ctx)
     end
+  end
+
+  defp put_gateway_status(status) do
+    old = :persistent_term.get(@gateway_status_key, nil)
+
+    on_exit(fn ->
+      if is_nil(old),
+        do: :persistent_term.erase(@gateway_status_key),
+        else: :persistent_term.put(@gateway_status_key, old)
+    end)
+
+    :persistent_term.put(@gateway_status_key, status)
   end
 
   defp invite(name, extra \\ %{}) do

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, Route } from '../../src/core/services';
 import { ApiError } from '../../src/core/errors';
-import { createBotRoutes, baseBotMcpConfig, syncBotProfile, createBotService, syncBotPolicyFloor, productBotTools, assertWorkspaceRestrictionManagement } from '../../src/core/bots';
+import { createBotRoutes, baseBotMcpConfig, baseBotMcpTemplate, syncBotProfile, createBotService, syncBotPolicyFloor, productBotTools, assertWorkspaceRestrictionManagement } from '../../src/core/bots';
 import { createConversationRoutes } from '../../src/core/conversations';
 import { effectiveBotGrants } from '../../src/core/experiences';
 import { createResourceRoutes } from '../../src/core/resources';
@@ -145,7 +145,7 @@ function fixture(items: P.MachineCapabilities['items'] = []) {
   }
   function machine(machineId: string, nodeId: string, shared = false): P.Machine {
     const labels: Record<string, string> = shared ? { 'lemon_bot.shared_context': 'true' } : {};
-    const row: P.Machine = { ...f.services.resource('machine', { nodeId, nodeName: nodeId, name: machineId, ownerUserId: 'alice', accessUserIds: ['admin'], status: 'online' as const, lastSeenAtMs: f.services.now(), labels, botIds: [] }), id: machineId };
+    const row: P.Machine = { ...f.services.resource('machine', { nodeId, nodeName: nodeId, name: machineId, ownerUserId: 'alice', accessUserIds: ['admin'], status: 'online' as const, lastSeenAtMs: f.services.now(), labels, botIds: [], link: { kind: 'direct' as const } }), id: machineId };
     return f.store.put('machines', row);
   }
   machine('machine', 'node-source'); machine('destination', 'node-destination', true);
@@ -170,6 +170,27 @@ const nonce = (suffix: string) => `bot_test_nonce_${suffix}`;
 function confirmed(confirmation: P.Confirmation, extra: Record<string, unknown> = {}) { return { clientNonce: nonce('confirm'), revision: confirmation.revision, confirmationToken: confirmation.confirmationToken, confirmName: confirmation.confirmName, ...extra }; }
 
 describe('bot authority and viewer state', () => {
+  test('loopback MCP accepts only proven same-host workers or an exact SSH product port',()=>{
+    const f=fixture();f.services.config.publicUrl='http://127.0.0.1:4100';
+    const direct=f.store.require<P.Machine>('machines','machine');
+    const tunnel:P.Machine={...direct,link:{kind:'ssh_tunnel',sshDestination:'me@worker',nodePort:4044,productPort:4100,tunnel:{state:'online',detail:null,checkedAtMs:1}}};
+    try {
+      expect(()=>baseBotMcpTemplate(f.services,direct)).toThrow();
+      const accepted=baseBotMcpTemplate(f.services,tunnel);
+      expect(accepted).toMatchObject({url:'http://127.0.0.1:4100/mcp',headers:{},allowedOrigins:['http://127.0.0.1:4100'],approvedPrivateOrigins:['http://127.0.0.1:4100']});
+      if(tunnel.link?.kind!=='ssh_tunnel')throw new Error('Expected SSH tunnel fixture.');
+      const link=tunnel.link;
+      for(const productPort of [null,4101]){
+        expect(()=>baseBotMcpTemplate(f.services,{...tunnel,link:{...link,productPort}})).toThrow();
+      }
+      f.store.setMetadata(`machineSameHost:${direct.id}`,direct.nodeId);
+      expect(baseBotMcpTemplate(f.services,direct).url).toBe(accepted.url);
+      f.services.config.publicUrl='http://localhost:4100';
+      expect(()=>baseBotMcpTemplate(f.services,tunnel)).toThrow();
+      f.services.config.publicUrl='https://product.example';
+      expect(baseBotMcpTemplate(f.services,direct)).toMatchObject({url:'https://product.example/mcp',approvedPrivateOrigins:[]});
+    } finally {f.store.close();}
+  });
   test('workspace roles never read another member personal bot', async () => {
     const f = fixture(), bot = f.bot();
     for (const actor of [f.owner, f.admin]) await expect(f.request('GET', `/v1/bots/${bot.id}`, undefined, actor)).rejects.toMatchObject({ code: 'not_found' });

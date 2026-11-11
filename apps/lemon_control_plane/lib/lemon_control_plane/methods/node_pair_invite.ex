@@ -1,9 +1,14 @@
 defmodule LemonControlPlane.Methods.NodePairInvite do
-  @moduledoc "Issues a short-lived, single-use invitation for a new node or generation-bound repair."
+  @moduledoc """
+  Issues a short-lived, single-use invitation for a new node or generation-bound
+  repair. `tunnelPort` selects a destination-local reverse tunnel through an
+  available node gateway; its runtime source must be configured for that remote
+  destination, never inferred from the controller's checkout.
+  """
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Auth.Authorize
-  alias LemonControlPlane.NodeStore
+  alias LemonControlPlane.{NodeGateway, NodeStore}
   alias LemonControlPlane.Protocol.Errors
   require Logger
 
@@ -32,8 +37,8 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
          true <- valid_text?(purpose, 64),
          true <- valid_labels?(labels),
          true <- is_integer(ttl) and ttl in 1..86_400_000,
-         {:ok, controller} <- controller_url(),
-         {:ok, runtime} <- runtime_source(controller),
+         {:ok, controller} <- invite_controller_url(params),
+         {:ok, runtime} <- runtime_source(controller, Map.has_key?(params, "tunnelPort")),
          {:ok, script_url} <- join_script_url(runtime),
          {:ok, binding, node} <- binding(params["nodeId"], String.trim(node_name)),
          purpose = metadata(params, "purpose", node, :purpose, String.trim(purpose)),
@@ -120,6 +125,23 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
       String.trim(text) != "" and not String.match?(text, ~r/[\x00-\x1f\x7f]/)
   end
 
+  defp invite_controller_url(params) do
+    case Map.fetch(params, "tunnelPort") do
+      :error ->
+        controller_url()
+
+      {:ok, port} when is_integer(port) and port in 1..65_535 ->
+        if NodeGateway.status().available do
+          {:ok, "ws://127.0.0.1:#{port}/ws"}
+        else
+          {:error, Errors.unavailable("Node gateway is unavailable")}
+        end
+
+      {:ok, _} ->
+        {:error, Errors.invalid_request("Invalid tunnelPort")}
+    end
+  end
+
   @doc false
   def controller_url do
     url =
@@ -142,7 +164,7 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
     end
   end
 
-  defp runtime_source(controller) do
+  defp runtime_source(controller, tunneled?) do
     source_root = source_root()
     source = configured(:node_source_checkout, ["LEMON_NODE_SOURCE_CHECKOUT"])
 
@@ -166,7 +188,7 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
            Errors.invalid_request("Configure an absolute destination node source checkout")}
         end
 
-      source_checkout_available?(source_root) and
+      not tunneled? and source_checkout_available?(source_root) and
           URI.parse(controller).host in ["localhost", "127.0.0.1", "::1"] ->
         {:ok, {:source, source_root, version}}
 

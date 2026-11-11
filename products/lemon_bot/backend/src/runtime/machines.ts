@@ -3,9 +3,10 @@ import type { BackendServices, Principal, RequestContext, Route } from '../core/
 import { ApiError, fail } from '../core/errors';
 import { z, parse, principal, id, mutation, update, confirm, boundedText, queryObject } from '../core/validation';
 import { decodeChunk, getTerminalService } from './terminals';
-import { emitBotRuntimeProjection } from './projection';
+import { emitBotRuntimeProjection, machineProjection } from './projection';
 import { machineCapabilities, effectiveBotGrants } from '../core/experiences';
 import { quiesceMachineInvocations } from './runs';
+import { createMachineSshSetup, machineSshPreview, refreshMachineTunnelStatus, uninstallMachineTunnel } from './machine-ssh';
 
 const text = boundedText(120, 1);
 const path = z.string().min(1).max(4096).refine(value => !/[\u0000-\u001f]/.test(value));
@@ -93,6 +94,12 @@ export async function getHostInfo(services: BackendServices, user: Principal, ma
 
 export function createMachineRoutes(services: BackendServices): Route[] {
   const terminal = getTerminalService(services);
+  const sshSetup = createMachineSshSetup(services, {
+    issue: (context, value, options) => issue(context, value, undefined, options),
+    revokeInvite,
+    refreshMachines: () => refreshMachines(services),
+    ensureMachineRuntimeReady: value => ensureMachineRuntimeReady(services, value, true),
+  });
   const routes: Route[] = [];
   function add(method: string, suffix: string, handler: Route['handler'], status = 200, auth: Route['auth'] = 'member') {
     routes.push({ method, path: `/v1${suffix}`, auth, status, handler, authorizeReplay(context) {
@@ -118,13 +125,13 @@ export function createMachineRoutes(services: BackendServices): Route[] {
     if (actor.kind !== 'user' || (value.ownerUserId !== actor.userId && !['admin', 'owner'].includes(actor.role))) fail('forbidden', 'Only the machine owner or an authorized administrator may manage enrollment and access.');
   }
   async function stat(value: P.Machine, name: string) { return remote(statSchema, await services.lemon.call('node.fs.stat', { nodeId: value.nodeId!, path: name })); }
-  async function issue(context: RequestContext, value: P.Machine, expiresInMs: number | undefined): Promise<P.MachineInvite> {
+  async function issue(context: RequestContext, value: P.Machine, expiresInMs: number | undefined, options: { tunnelPort?: number } = {}): Promise<P.MachineInvite> {
     manager(user(context), value);
     const invitation: P.MachineInvite = services.resource('machine_invite', { machineId: value.id, inviteCode: '', joinCommand: '', expiresAtMs: services.now() + (expiresInMs ?? 900_000), status: 'pending', enrollment: 'invited', lastError: null });
     context.nonceResourceIds.push(value.id, invitation.id);
     services.store.put('machineInvites', invitation);
     try {
-      const raw = await services.lemon.call('node.pair.invite', { nodeName: value.nodeName, purpose: 'lemon_bot', labels: value.labels, ...(value.nodeId ? { nodeId: value.nodeId } : {}), ...(expiresInMs !== undefined ? { expiresInMs } : {}) }, { mutation: true, resourceIds: [value.id, invitation.id] });
+      const raw = await services.lemon.call('node.pair.invite', { nodeName: value.nodeName, purpose: 'lemon_bot', labels: value.labels, ...(value.nodeId ? { nodeId: value.nodeId } : {}), ...(expiresInMs !== undefined ? { expiresInMs } : {}), ...(options.tunnelPort !== undefined ? { tunnelPort: options.tunnelPort } : {}) }, { mutation: true, resourceIds: [value.id, invitation.id] });
       const parsed = inviteSchema.safeParse(raw);
       if (!parsed.success) fail('outcome_unknown', 'The enrollment may have been issued but its receipt is invalid.', false, { resourceIds: [value.id, invitation.id] });
       const result = parsed.data;
@@ -148,30 +155,50 @@ export function createMachineRoutes(services: BackendServices): Route[] {
     await services.lemon.call('node.pair.invite.revoke', { inviteId: upstream }, { mutation: true, resourceIds: [invitation.id] });
     const revoked = services.update(invitation, { status: 'revoked', enrollment: 'revoked', inviteCode: '', joinCommand: '' }); services.store.put('machineInvites', revoked); services.events.emit('machine_invite.upserted', revoked, { userIds: [value.ownerUserId] });
   }
-  add('GET', '/machines', async context => { parse(pageQuery, queryObject(context.query)); await refreshMachines(services); return services.page(context, services.store.list<P.Machine>('machines', value => value.status !== 'revoked' && services.auth.canRead(user(context), 'machines', value))); });
+  add('GET', '/machines', async context => {
+    parse(pageQuery, queryObject(context.query));
+    await refreshMachines(services);
+    await refreshMachineTunnelStatus(services);
+    return services.page(context, services.store.list<P.Machine>('machines', value => value.status !== 'revoked' && services.auth.canRead(user(context), 'machines', value)).map(value => machineProjection(services, user(context), value)));
+  });
   add('GET', '/machines/enrollment-preview', async context => {
     parse(z.object({}).strict(), queryObject(context.query));
     if (!services.lemon.connected) fail('upstream_unavailable', 'The controller is not connected.');
-    return remote(z.object({ reachability: z.enum(['loopback_only', 'routable']) }), await services.lemon.call('node.pair.preview')) satisfies P.MachineEnrollmentPreview;
+    const preview = remote(z.object({ reachability: z.enum(['loopback_only', 'routable']), nodeGateway: z.object({ available: z.boolean(), port: z.number().int().min(1).max(65535).nullable() }).optional() }), await services.lemon.call('node.pair.preview'));
+    return machineSshPreview(services, preview);
   }, 200, 'admin');
+  // Setup owns its durable nonce journal so a replay returns current progress, not a stale running receipt.
+  routes.push({ method: 'POST', path: '/v1/machines/ssh', auth: 'admin', status: 202, mutation: false, handler: context => {
+    const body = parse(mutation.extend({ sshDestination: boundedText(256, 1), name: text.optional(), machineId: id.optional() }), context.body);
+    return sshSetup.start(context, body);
+  } });
+  add('GET', '/machine-setups/:id', context => {
+    parse(z.object({}).strict(), queryObject(context.query));
+    return sshSetup.get(user(context), parse(id, context.params.id));
+  });
   add('POST', '/machines', async context => {
     const body = parse(mutation.extend({ name: text, nodeName: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/), labels: labels.optional(), expiresInMs: ttl }), context.body);
     await refreshMachines(services);
     if (services.store.list<P.Machine>('machines', value => value.nodeName === body.nodeName).length) fail('conflict', 'This durable node name is already attached.');
     const nodes = remote(nodesSchema, await services.lemon.call('nodes.list', { name: body.nodeName }));
     if (nodes.nodes.some(value => value.name === body.nodeName)) fail('conflict', 'An existing node cannot be attached without host enrollment.');
-    const value: P.Machine = services.resource('machine', { nodeId: null, nodeName: body.nodeName, name: body.name, ownerUserId: user(context).userId, accessUserIds: [], status: 'pending', credential: 'unknown', lastSeenAtMs: null, labels: body.labels ?? {}, botIds: [] });
+    const value: P.Machine = services.resource('machine', { nodeId: null, nodeName: body.nodeName, name: body.name, ownerUserId: user(context).userId, accessUserIds: [], status: 'pending', credential: 'unknown', lastSeenAtMs: null, labels: body.labels ?? {}, botIds: [], link: { kind: 'direct' } });
     services.store.put('machines', value); context.nonceResourceIds.push(value.id);
     services.events.emit('machine.upserted', value, { machineId: value.id });
     return { machine: value, invite: await issue(context, value, body.expiresInMs) } satisfies P.MachineAttachResult;
   }, 201, 'admin');
-  add('GET', '/machines/:id', async context => { machine(context); await refreshMachines(services); return machine(context); });
+  add('GET', '/machines/:id', async context => {
+    machine(context);
+    await refreshMachines(services);
+    await refreshMachineTunnelStatus(services);
+    return machineProjection(services, user(context), machine(context));
+  });
   add('PATCH', '/machines/:id', context => {
     const body = parse(update.extend({ name: text.optional(), accessUserIds: z.array(id).max(200).optional(), labels: labels.optional() }), context.body);
     const value = machine(context, true); manager(user(context), value); services.mutations.checkRevision(value, body.revision);
     if (body.accessUserIds) for (const userId of body.accessUserIds) { const member = services.auth.member(userId); if (!member.enabled) fail('invalid_request', 'Machine access requires an enabled member.'); }
     const changes: Partial<P.Machine> = {}; if (body.name !== undefined) changes.name = body.name; if (body.labels !== undefined) changes.labels = body.labels; if (body.accessUserIds !== undefined) changes.accessUserIds = [...new Set(body.accessUserIds)];
-    const next = services.update(value, changes); services.store.put('machines', next); services.events.emit('machine.upserted', next, { machineId: value.id }); return next;
+    const next = services.update(value, { ...changes, link: value.link ?? { kind: 'direct' } }); services.store.put('machines', next); services.events.emit('machine.upserted', next, { machineId: value.id }); return machineProjection(services, user(context), next);
   });
   add('POST', '/machines/:id/reconnect', async context => {
     const body = parse(mutation.extend({ expiresInMs: ttl }), context.body); const value = machine(context, true); manager(user(context), value);
@@ -202,6 +229,7 @@ export function createMachineRoutes(services: BackendServices): Route[] {
     if (stopped.status !== 'cancelled') fail('outcome_unknown', 'The machine’s executing invocations have not reached an acknowledged terminal state.', false, { resourceIds: [value.id, ...stopped.runIds] });
     await terminal.closeMachine(value.id);
     if (value.nodeId) await services.lemon.call('nodes.revoke', { nodeId: value.nodeId, confirmName: value.nodeName }, { mutation: true, resourceIds: [value.id] });
+    await uninstallMachineTunnel(services, user(context), value);
     for (const invitation of services.store.list<P.MachineInvite>('machineInvites', item => item.machineId === value.id && item.status === 'pending')) await revokeInvite(user(context), invitation);
     const revoked = services.update(value, { status: 'revoked' }); services.store.put('machines', revoked); services.events.emit('machine.deleted', { id: value.id, deleted: true }, { machineId: value.id });
     for (const botId of binding.botIds) { const bot = services.store.require<P.Bot>('bots', botId); const offline = services.update(bot, { activity: 'offline' }); services.store.put('bots', offline); emitBotRuntimeProjection(services, offline); }
