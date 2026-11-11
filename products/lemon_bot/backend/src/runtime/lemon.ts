@@ -62,9 +62,16 @@ function upstreamFailure(code: string, details: Record<string, unknown> | undefi
   if (unknown && mutation) return new ApiError('outcome_unknown', 'The runtime may have applied this operation. Reconcile its reserved resources; do not resubmit.', false, safeDetails);
   if (verifiedNoEffect) return new ApiError('upstream_unavailable', 'Destination process admission capacity is unavailable.', false, safeDetails);
   let mapped: ErrorCode;
+  let message = 'The runtime rejected or could not complete this operation.';
   if (reason === 'not_found' || reason === 'shell_not_found') mapped = 'not_found';
-  else if (reason === 'permission_denied' || reason === 'path_not_allowed') mapped = 'forbidden';
-  else if (reason === 'already_exists' || reason === 'directory_not_empty') mapped = 'conflict';
+  else if (reason === 'path_not_allowed') {
+    // Destination-local file policy, not the caller's product permission: the owner can choose another path.
+    mapped = 'invalid_request';
+    message = 'This path is outside the folders this computer lets Lemon open: its home folder plus any folder added there with `lemon node join --allowed-root`. Choose a path inside one of them.';
+  } else if (reason === 'permission_denied') {
+    mapped = 'forbidden';
+    message = 'The computer’s account that runs Lemon is not allowed to access this path.';
+  } else if (reason === 'already_exists' || reason === 'directory_not_empty') mapped = 'conflict';
   else if (reason === 'revision_conflict') mapped = 'revision_conflict';
   else if (reason === 'invalid_confirmation_token' || reason === 'stale_preview') mapped = 'confirmation_required';
   else if (reason === 'confirmation_expired') mapped = 'expired';
@@ -72,7 +79,7 @@ function upstreamFailure(code: string, details: Record<string, unknown> | undefi
   else if (reason === 'content_too_large' || reason === 'preview_too_large') mapped = 'too_large';
   else mapped = upstreamCodes[code] ?? 'upstream_unavailable';
   // Remote messages/details can contain paths, prompts, credentials or exception terms.
-  return new ApiError(mapped, 'The runtime rejected or could not complete this operation.', details?.retrySafe !== false && (mutation ? !unknown : true), safeDetails);
+  return new ApiError(mapped, message, details?.retrySafe !== false && (mutation ? !unknown : true), safeDetails);
 }
 
 /** One authenticated connection. Nothing in pending requests is ever resent. */

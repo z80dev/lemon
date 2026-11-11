@@ -151,29 +151,33 @@ defmodule LemonRouter.RunOrchestrator do
     submit_with_receipt(server, RunRequest.new(request))
   end
 
-  @doc "Read a fixed-ID admission receipt without dispatching work."
+  @doc """
+  Read a fixed-ID admission receipt without dispatching work.
+
+  A run ID fenced by an abort tombstone before it crossed dispatch reports
+  `state: :aborted`: it never executed and can never execute.
+  """
   def run_receipt(run_id) when is_binary(run_id) and run_id != "" do
     case LemonRouter.RunReceiptStore.fetch(run_id) do
       {:ok, %{} = receipt} ->
         {:ok, receipt}
 
       {:ok, nil} ->
-        case Store.fetch(@run_admission_table, run_id) do
-          {:ok, %{}} ->
-            {:ok,
-             %{
-               run_id: run_id,
-               session_key: nil,
-               state: :outcome_unknown,
-               effective_mode: nil,
-               target_run_id: nil
-             }}
+        # Read the permanent tombstone before the admission; see aborted_before_dispatch?/2.
+        with {:ok, tombstone} <- Store.fetch(@abort_tombstone_table, run_id),
+             {:ok, admission} <- Store.fetch(@run_admission_table, run_id) do
+          cond do
+            aborted_before_dispatch?(admission, tombstone) ->
+              {:ok, unresolved_receipt(run_id, admission_session_key(admission), :aborted)}
 
-          {:ok, nil} ->
-            {:error, :not_found}
+            is_map(admission) ->
+              {:ok, unresolved_receipt(run_id, nil, :outcome_unknown)}
 
-          _ ->
-            {:error, :unavailable}
+            true ->
+              {:error, :not_found}
+          end
+        else
+          _ -> {:error, :unavailable}
         end
 
       _ ->
@@ -182,6 +186,41 @@ defmodule LemonRouter.RunOrchestrator do
   catch
     :exit, _ -> {:error, :unavailable}
   end
+
+  @doc """
+  Whether an abort tombstone fenced a run ID before dispatch.
+
+  Tombstones are permanent and refuse every later submission of their run ID,
+  and dispatch first moves a claim to `submitting`. An admission still claimed
+  (or absent) when read after its tombstone therefore never executed and never
+  will. Callers must read the tombstone first or bracket both reads with an
+  unchanged admission snapshot.
+  """
+  @spec aborted_before_dispatch?(map() | nil, map() | nil) :: boolean()
+  def aborted_before_dispatch?(admission, tombstone) do
+    is_map(tombstone) and
+      (is_nil(admission) or
+         (is_map(admission) and MapHelpers.get_key(admission, :state) == "claimed"))
+  end
+
+  defp unresolved_receipt(run_id, session_key, state) do
+    %{
+      run_id: run_id,
+      session_key: session_key,
+      state: state,
+      effective_mode: nil,
+      target_run_id: nil
+    }
+  end
+
+  defp admission_session_key(%{} = admission) do
+    case MapHelpers.get_key(admission, :scope) do
+      %{} = scope -> MapHelpers.get_key(scope, :session_key)
+      _ -> nil
+    end
+  end
+
+  defp admission_session_key(_admission), do: nil
 
   @doc false
   @spec register_abort(binary(), term()) :: :ok

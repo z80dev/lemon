@@ -85,11 +85,13 @@ function online(s: BackendServices, p: Principal, machineId: string): P.Machine 
   if (s.store.metadata<{ botReady: boolean }>(`nodeRuntimeFeatures:${machine.id}`)?.botReady === false) fail('capability_unavailable', 'The destination worker must support the advertised product bot runtime features.');
   return machine;
 }
-function idle(s: BackendServices, bot: P.Bot): void {
+function idle(s: BackendServices, bot: P.Bot, deleting = false): void {
   if (bot.activeRunIds.length || s.store.list<P.Run>('runs', run => run.botId === bot.id && !terminal[run.status]).length) fail('conflict', 'Bot has active or uncertain work; reconcile it before changing placement or deleting data.');
   if (s.store.list<P.Draft>('drafts', draft => draft.botId === bot.id && (draft.state === 'sending' || draft.state === 'outcome_unknown')).length) fail('conflict', 'Reconcile outward draft delivery before changing placement or deleting data.');
   const fence = s.store.metadata<Fence>(`botLifecycle:${bot.id}`);
-  if (fence) fail(fence.status === 'outcome_unknown' ? 'outcome_unknown' : 'conflict', 'A prior bot lifecycle operation requires reconciliation.', false, { resourceIds: fence.resourceIds });
+  // A create/import that never finished, or a delete stopped by a definite failure: deleting (again) is its recovery.
+  const deletable = !!fence && (((fence.action === 'create' || fence.action === 'import') && fence.status !== 'running') || (fence.action === 'delete' && fence.status === 'failed'));
+  if (fence && !(deleting && deletable)) fail(fence.status === 'outcome_unknown' ? 'outcome_unknown' : 'conflict', 'A prior bot lifecycle operation requires reconciliation.', false, { resourceIds: fence.resourceIds });
 }
 /** Owning presence counts include queued/uncertain work before paging; a legacy empty list is never idle proof. */
 async function nativeIdle(s: BackendServices, bot: P.Bot): Promise<void> {
@@ -157,7 +159,8 @@ function botEndpoint(s: BackendServices, machine?: P.Machine): URL {
   if (url.protocol === 'https:' && !url.username && !url.password && !loopbackName) return url;
   if (machine && loopbackEndpoint(url) && (machine.link?.kind === 'ssh_tunnel' ? url.hostname === '127.0.0.1' && machine.link.productPort === Number(url.port || '80') : sameHost(s, machine))) return url;
   process.stderr.write('LEMON_BOT_PUBLIC_URL must be a worker-reachable non-loopback HTTPS origin for Bots on other machines.\n');
-  if (machine && loopbackEndpoint(url)) fail('capability_unavailable', `Lemon Bot is only reachable on its own computer, so Bots can run there but not on ${machine.name}. Give Lemon Bot a secure address that ${machine.name} can reach, or choose the machine Lemon Bot runs on.`);
+  // The owner resolves this by choosing the machine Lemon Bot runs on, so it is a request choice, not a missing server feature.
+  if (machine && loopbackEndpoint(url)) fail('invalid_request', `Lemon Bot is only reachable on its own computer, so Bots can run there but not on ${machine.name}. Give Lemon Bot a secure address that ${machine.name} can reach, or choose the machine Lemon Bot runs on.`);
   fail('capability_unavailable', 'This server needs a secure address your machine can reach before Bot setup can finish. Ask the operator to configure it.');
 }
 function sameHost(s: BackendServices, machine: P.Machine): boolean {
@@ -254,11 +257,14 @@ async function issueMcp(s: BackendServices, bot: P.Bot, machine: P.Machine): Pro
   s.store.put('botTokens', { id: bot.id, botId: bot.id, tokenDigest: mcp.digest, revoked: false });
   s.store.setMetadata(`botMcpPending:${bot.id}`, null);
 }
+/** Lifecycle operations executing in this process; a persisted `running` fence outside it was interrupted. */
+const activeLifecycles = new Set<string>();
 async function fenced<T>(s: BackendServices, c: RequestContext, botId: string, action: string, operation: () => Promise<T>): Promise<T> {
   const userId = user(c).userId;
   owner(s.store.require<P.Bot>('bots', botId), user(c));
   c.nonceResourceIds.push(botId);
   const intent: Fence = { id: s.id('lifecycle'), action, userId, revision: s.store.require<P.Bot>('bots', botId).revision, status: 'running', resourceIds: [botId] };
+  activeLifecycles.add(intent.id);
   s.store.setMetadata(`botLifecycle:${botId}`, intent);
   try { const value = await operation(); s.store.setMetadata(`botLifecycle:${botId}`, null); return value; }
   catch (error) {
@@ -266,7 +272,7 @@ async function fenced<T>(s: BackendServices, c: RequestContext, botId: string, a
     s.store.setMetadata(`botLifecycle:${botId}`, { ...intent, status: unknown ? 'outcome_unknown' : 'failed' } satisfies Fence);
     if (unknown) fail('outcome_unknown', 'Bot lifecycle operation requires reconciliation; do not replay it.', false, { resourceIds: [botId] });
     throw error;
-  }
+  } finally { activeLifecycles.delete(intent.id); }
 }
 async function createBot(s: BackendServices, c: RequestContext, input: P.BotCreate): Promise<P.Bot> {
   const p = user(c), machine = online(s, p, input.machineId);
@@ -393,6 +399,11 @@ function botVoiceSessions(s: BackendServices, p: Principal, bot: P.Bot, scopes: 
   return s.store.list<P.VoiceSession>('voiceSessions', session => rooms.has(session.conversationId)).sort((a, b) => a.id.localeCompare(b.id));
 }
 interface RuntimeMemoryCandidate { id: string; updatedAtMs: number }
+/** Only the controller's own profile read proves that a create which never reached `profiles.create` left no profile. */
+async function profileAbsent(s: BackendServices, bot: P.Bot): Promise<boolean> {
+  try { await s.lemon.call('profiles.get', { id: bot.profileId }, { mutation: false }); return false; }
+  catch (error) { if (error instanceof ApiError && error.code === 'not_found') return true; throw error; }
+}
 async function runtimeMemoryCandidates(s: BackendServices, bot: P.Bot): Promise<RuntimeMemoryCandidate[]> {
   requireMethods(s, ['memory.list', 'memory.delete']);
   const candidates: RuntimeMemoryCandidate[] = [];
@@ -400,7 +411,9 @@ async function runtimeMemoryCandidates(s: BackendServices, bot: P.Bot): Promise<
   const seen = new Set<string>();
   const cursors = new Set<string>();
   do {
-    const result: P.Page<RuntimeMemoryCandidate> = await s.lemon.call<P.Page<RuntimeMemoryCandidate>>('memory.list', { profileId: bot.profileId, limit: 50, ...(cursor ? { cursor } : {}) });
+    let result: P.Page<RuntimeMemoryCandidate>;
+    try { result = await s.lemon.call<P.Page<RuntimeMemoryCandidate>>('memory.list', { profileId: bot.profileId, limit: 50, ...(cursor ? { cursor } : {}) }); }
+    catch (error) { if (cursor === null && error instanceof ApiError && error.code === 'not_found' && await profileAbsent(s, bot)) return []; throw error; }
     for (const item of result.items) {
       if (!item.id || !Number.isSafeInteger(item.updatedAtMs) || seen.has(item.id)) fail('upstream_unavailable', 'Scoped memory listing is inconsistent.');
       seen.add(item.id);
@@ -459,7 +472,7 @@ async function destroyCandidate(s: BackendServices, p: Principal, bot: P.Bot, it
   await s.invoke(p, 'DELETE', resourcePath, { clientNonce: s.id('nonce'), confirmationToken: confirmation.confirmationToken, revision: confirmation.revision, confirmName: confirmation.confirmName }, { botLifecycle: { botId: bot.id, userId: p.userId, action: lifecycle.action } });
 }
 async function resetBot(s: BackendServices, c: RequestContext, bot: P.Bot, input: P.BotReset, remove = false): Promise<P.BotResetResult> {
-  const p = user(c); idle(s, bot);
+  const p = user(c); idle(s, bot, remove);
   await nativeIdle(s, bot);
   const scopes = remove ? allScopes : input.resetScopes;
   if (scopes.includes('memory')) {
@@ -534,7 +547,9 @@ async function resetBot(s: BackendServices, c: RequestContext, bot: P.Bot, input
         s.events.emit('conversation.upserted', updated, { conversationId: room.id });
         appendLifecycleEvent(s, updated, { type: 'bot_removed', botId: bot.id });
       }
-      const deletion = await s.lemon.call<{ deleted: { id: string } }>('profiles.delete', { id: bot.profileId, confirm: bot.profileId }, { mutation: true, resourceIds: [bot.id] });
+      // A create that failed before `profiles.create` left no profile; only the controller's read proves that.
+      const deletion = await s.lemon.call<{ deleted: { id: string } }>('profiles.delete', { id: bot.profileId, confirm: bot.profileId }, { mutation: true, resourceIds: [bot.id] })
+        .catch(async (error: unknown) => { if (error instanceof ApiError && error.code === 'not_found' && await profileAbsent(s, bot)) return { deleted: { id: bot.profileId } }; throw error; });
       if (deletion.deleted?.id !== bot.profileId) fail('outcome_unknown', 'Profile deletion was not acknowledged.', false, { resourceIds: [bot.id] });
       s.store.put('botTokens', { id: bot.id, botId: bot.id, tokenDigest: '', revoked: true });
       const bindings = s.store.metadata<{ nodeId: string; secretName: string }[]>(`botMcpBindings:${bot.id}`) ?? [];
@@ -621,7 +636,7 @@ export function createBotRoutes(s: BackendServices): Route[] {
     return importContent(s, c, { clientNonce: input.clientNonce, name: input.name, machineId: input.machineId, language: source.language, access: input.access }, value, disabled);
   });
   add('POST', '/bots/:id/preview', 200, async c => {
-    const p = user(c), input = parse(preview, c.body), bot = input.action === 'delete' ? deletionAccess(s, p, pathId(c)) : visible(s, p, pathId(c), true); idle(s, bot);
+    const p = user(c), input = parse(preview, c.body), bot = input.action === 'delete' ? deletionAccess(s, p, pathId(c)) : visible(s, p, pathId(c), true); idle(s, bot, input.action === 'delete');
     if (input.action === 'reset') { owner(bot, p); online(s, p, bot.machineId); if (!input.resetScopes || input.targetMachineId) fail('invalid_request', 'Reset requires exactly selected reset scopes.'); }
     if (input.action === 'move' && (!input.targetMachineId || input.resetScopes)) fail('invalid_request', 'Move preview requires a destination and no reset scopes.');
     if (input.action === 'delete' && (input.targetMachineId || input.resetScopes)) fail('invalid_request', 'Delete preview cannot select other operations.');
@@ -817,7 +832,12 @@ export function createBotService(s: BackendServices): { reconcile(): Promise<voi
       reconciling = true;
       try {
         for (const bot of s.store.list<P.Bot>('bots')) {
-          const fence = s.store.metadata<Fence>(`botLifecycle:${bot.id}`);
+          let fence = s.store.metadata<Fence>(`botLifecycle:${bot.id}`);
+          if (fence?.status === 'running' && !activeLifecycles.has(fence.id)) {
+            // The process that ran this operation is gone; its effects are uncertain, never still in progress.
+            fence = { ...fence, status: 'outcome_unknown' };
+            s.store.setMetadata(`botLifecycle:${bot.id}`, fence);
+          }
           const preference = s.store.metadata<{ state: string; revision: number }>(`preferenceSync:${bot.id}`);
           const policy = s.store.metadata<{ state: string; revision: number; grantId: string }>(`botPolicySync:${bot.id}`);
           if (!fence && (!preference || preference.state === 'acknowledged') && (!policy || policy.state === 'acknowledged')) continue;
@@ -858,6 +878,16 @@ export function createBotService(s: BackendServices): { reconcile(): Promise<voi
               if (fence?.action === 'update' && fence.id === desired.lifecycleId && (bot.revision === desired.beforeBot.revision || bot.revision === desired.botRevision)) {
                 saveBot(s, desired.bot);
                 s.store.setMetadata(`botLifecycle:${bot.id}`, null);
+              }
+              // Every create effect is now authoritatively acknowledged: the Bot is ready without replaying any step.
+              const current = s.store.require<P.Bot>('bots', bot.id);
+              const room = s.store.get<P.Conversation>('conversations', current.mainConversationId);
+              if (fence?.action === 'create' && fence.status !== 'running' && fence.id === desired.lifecycleId && room?.kind === 'dm' && room.botIds.includes(bot.id) && s.store.metadata(`botMcp:${bot.id}`)) {
+                saveBot(s, s.update(current, { activity: 'idle' }));
+                updateMachineBots(s, current.machineId, bot.id, true);
+                s.store.setMetadata(`botLifecycle:${bot.id}`, null);
+                await s.addressedAgents?.registerBot(bot.id);
+                s.audit(null, 'bot.create', bot.id, 'succeeded');
               }
             }
             let transferStatus: string | null = null;

@@ -1,7 +1,7 @@
 defmodule LemonRouter.RunPresence do
   @moduledoc false
 
-  alias LemonCore.{MapHelpers, RunStore}
+  alias LemonCore.{MapHelpers, RunStore, Store}
   alias LemonRouter.{RunOrchestrator, SessionCoordinator}
 
   @scope_keys [:profile_id, :agent_id, :session_key]
@@ -91,14 +91,32 @@ defmodule LemonRouter.RunPresence do
   end
 
   defp terminal?(id, admission, receipt) do
-    if admission[:terminal] == true or receipt[:terminal] == true do
-      {:ok, true}
-    else
-      case RunStore.fetch(id) do
-        {:ok, nil} -> {:ok, false}
-        {:ok, record} when is_map(record) -> {:ok, is_map(MapHelpers.get_key(record, :summary))}
-        _ -> {:error, :query_failed}
-      end
+    cond do
+      admission[:terminal] == true or receipt[:terminal] == true ->
+        {:ok, true}
+
+      # The bracketing snapshots prove the claim did not move while the tombstone was read.
+      receipt == %{} and MapHelpers.get_key(admission, :state) == "claimed" ->
+        case Store.fetch(RunOrchestrator.abort_tombstone_table(), id) do
+          {:ok, tombstone} ->
+            if RunOrchestrator.aborted_before_dispatch?(admission, tombstone),
+              do: {:ok, true},
+              else: run_terminal?(id)
+
+          _ ->
+            {:error, :query_failed}
+        end
+
+      true ->
+        run_terminal?(id)
+    end
+  end
+
+  defp run_terminal?(id) do
+    case RunStore.fetch(id) do
+      {:ok, nil} -> {:ok, false}
+      {:ok, record} when is_map(record) -> {:ok, is_map(MapHelpers.get_key(record, :summary))}
+      _ -> {:error, :query_failed}
     end
   end
 

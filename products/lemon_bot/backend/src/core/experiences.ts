@@ -356,9 +356,10 @@ function activityValues(s: BackendServices, user: Principal): P.ActivityItem[] {
     if (roomId && !room) return;
     const machine = s.store.get<P.Machine>('machines', machineId ?? bot.machineId);
     if (!machine) return;
-    results.push({ id: `activity_${s.mutations.digest({ kind: fields.kind, resourceId: resource.id, botId }).slice(0, 48)}`, revision: resource.revision, createdAtMs: resource.createdAtMs, updatedAtMs: resource.updatedAtMs, botId, machineId: machine.id, machineLabel: machine.name, conversationId: room?.id ?? null, taskConversationId: room?.kind === 'task' ? room.id : null, ...fields, occurredAtMs: at });
+    // Rows from several Bots share one timeline, so each title names its Bot.
+    results.push({ id: `activity_${s.mutations.digest({ kind: fields.kind, resourceId: resource.id, botId }).slice(0, 48)}`, revision: resource.revision, createdAtMs: resource.createdAtMs, updatedAtMs: resource.updatedAtMs, botId, machineId: machine.id, machineLabel: machine.name, conversationId: room?.id ?? null, taskConversationId: room?.kind === 'task' ? room.id : null, ...fields, title: `${bot.name}: ${fields.title}`, occurredAtMs: at });
   };
-  for (const run of s.store.list<P.Run>('runs')) add(run, run.botId, run.conversationId, { kind: 'run', status: run.status === 'running' ? 'working' : run.status === 'awaiting_input' || run.status === 'queued' || run.status === 'reserved' ? 'pending' : run.status, title: 'Bot run', summary: `Execution ${run.status.replaceAll('_', ' ')}.`, runId: run.id, entryId: null, approvalId: null });
+  for (const run of s.store.list<P.Run>('runs')) add(run, run.botId, run.conversationId, { kind: 'run', status: run.status === 'running' ? 'working' : run.status === 'awaiting_input' || run.status === 'queued' || run.status === 'reserved' ? 'pending' : run.status, title: 'Run', summary: `Execution ${run.status.replaceAll('_', ' ')}.`, runId: run.id, entryId: null, approvalId: null });
   for (const entry of s.store.list<P.TranscriptEntry>('entries')) {
     if (entry.kind !== 'tool_call' || !entry.runId || !entryVisible(s, user, entry)) continue;
     const run = s.store.get<P.Run>('runs', entry.runId);
