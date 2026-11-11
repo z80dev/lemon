@@ -10,6 +10,7 @@ defmodule LemonMCP.Client.SSE do
   """
 
   use GenServer
+  require Logger
 
   alias LemonMCP.Protocol
 
@@ -266,13 +267,21 @@ defmodule LemonMCP.Client.SSE do
     {:stop, :normal, %{state | state: :disconnected, stream_request_id: nil}}
   end
 
+  def handle_info(_message, state) do
+    Logger.debug("Ignoring unexpected MCP SSE client message")
+    {:noreply, state}
+  end
+
   @impl true
   def terminate(_reason, state), do: close_stream(state)
 
   defp handle_stream_message(message, state) do
     case stream_events(message, state) do
-      {:ok, _events, state} -> {:noreply, state}
-      {:error, _reason, state} -> {:stop, :normal, %{state | state: :disconnected}}
+      {:ok, _events, state} ->
+        {:noreply, state}
+
+      {:error, _reason, state} ->
+        {:stop, :normal, %{state | state: :disconnected, stream_request_id: nil}}
     end
   end
 
@@ -293,27 +302,28 @@ defmodule LemonMCP.Client.SSE do
     # httpc can retain the first chunk until another TCP packet arrives. An SSE
     # server waits for our initialize POST after sending endpoint, so that stalls
     # both sides indefinitely. Mint emits decoded data from the initial packet.
-    with {:ok, conn} <-
-           Mint.HTTP.connect(scheme, uri.host, uri.port,
-             protocols: [:http1],
-             transport_opts: [timeout: timeout]
-           ) do
-      case Mint.HTTP.request(conn, "GET", path, headers, nil) do
-        {:ok, conn, request_id} ->
-          {:ok,
-           %{
-             state
-             | stream_conn: conn,
-               stream_socket: Mint.HTTP.get_socket(conn),
-               stream_request_id: request_id
-           }}
+    case Mint.HTTP.connect(scheme, uri.host, uri.port,
+           protocols: [:http1],
+           transport_opts: [timeout: timeout]
+         ) do
+      {:ok, conn} ->
+        case Mint.HTTP.request(conn, "GET", path, headers, nil) do
+          {:ok, conn, request_id} ->
+            {:ok,
+             %{
+               state
+               | stream_conn: conn,
+                 stream_socket: Mint.HTTP.get_socket(conn),
+                 stream_request_id: request_id
+             }}
 
-        {:error, conn, reason} ->
-          Mint.HTTP.close(conn)
-          {:error, {:sse_stream_failed, reason}}
-      end
-    else
-      {:error, reason} -> {:error, {:sse_stream_failed, reason}}
+          {:error, conn, reason} ->
+            {:ok, _conn} = Mint.HTTP.close(conn)
+            {:error, {:sse_stream_failed, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, {:sse_stream_failed, reason}}
     end
   end
 
@@ -593,7 +603,7 @@ defmodule LemonMCP.Client.SSE do
   defp deadline(timeout_ms), do: System.monotonic_time(:millisecond) + timeout_ms
 
   defp close_stream(%{stream_conn: conn}) when not is_nil(conn) do
-    Mint.HTTP.close(conn)
+    {:ok, _conn} = Mint.HTTP.close(conn)
     :ok
   end
 
