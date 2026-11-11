@@ -234,7 +234,11 @@ base_url = "{proxy_base(args)}/coding"
         env['LEMON_TOOL_DISCLOSURE_PROFILE'] = disclosure_profile
     started = container.exec(['lemon', 'daemon'], env=env, timeout=240)
     if started.returncode != 0:
-        raise RuntimeError('lemon daemon failed to start: ' + (started.stdout + started.stderr)[-1500:])
+        # The launcher waits only 60s for health; a loaded host can boot the BEAM slower than that.
+        waited = container.exec(['bash', '-c', 'for i in $(seq 1 90); do curl -fsS localhost:4040/healthz '
+                                 '| grep -q \'"ok":true\' && exit 0; sleep 2; done; exit 1'], timeout=200)
+        if waited.returncode != 0:
+            raise RuntimeError('lemon daemon failed to start: ' + (started.stdout + started.stderr)[-1500:])
     return env
 
 
