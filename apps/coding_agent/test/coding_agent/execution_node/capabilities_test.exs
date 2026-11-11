@@ -4,6 +4,7 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
 
   defmodule Probe do
     def executable(_), do: "/installed"
+    def python, do: "/installed/python3"
     def shell_available?, do: true
     def root_access(_), do: {:ok, true, true}
     def browser_status, do: {:ok, %{available: true, running: true}}
@@ -29,6 +30,7 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
 
   defmodule UnknownProbe do
     defdelegate executable(name), to: Probe
+    defdelegate python(), to: Probe
     defdelegate shell_available?(), to: Probe
     defdelegate root_access(opts), to: Probe
     defdelegate browser_status(), to: Probe
@@ -42,6 +44,7 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
     def executable("peekaboo"), do: nil
     def executable("xdotool"), do: nil
     defdelegate executable(name), to: Probe
+    defdelegate python(), to: Probe
     defdelegate shell_available?(), to: Probe
     defdelegate root_access(opts), to: Probe
     def browser_status, do: {:error, :not_installed}
@@ -53,6 +56,7 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
 
   defmodule InvalidStatusProbe do
     defdelegate executable(name), to: Probe
+    defdelegate python(), to: Probe
     defdelegate shell_available?(), to: Probe
     defdelegate root_access(opts), to: Probe
     defdelegate browser_status(), to: Probe
@@ -65,6 +69,7 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
 
   defmodule DiagnosticsProbe do
     defdelegate executable(name), to: Probe
+    defdelegate python(), to: Probe
     defdelegate shell_available?(), to: Probe
     defdelegate root_access(opts), to: Probe
     defdelegate browser_status(), to: Probe
@@ -76,6 +81,7 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
 
   defmodule NoShellDiagnosticsProbe do
     defdelegate executable(name), to: DiagnosticsProbe
+    defdelegate python(), to: DiagnosticsProbe
     def shell_available?, do: false
     defdelegate root_access(opts), to: DiagnosticsProbe
     defdelegate browser_status(), to: DiagnosticsProbe
@@ -87,6 +93,7 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
 
   defmodule ComputerUseProbe do
     defdelegate executable(name), to: Probe
+    defdelegate python(), to: Probe
     defdelegate shell_available?(), to: Probe
     defdelegate root_access(opts), to: Probe
     defdelegate browser_status(), to: Probe
@@ -94,6 +101,32 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
     defdelegate command(name, args), to: Probe
     defdelegate tcc_status(), to: Probe
     def tool_names(_, _), do: {:ok, ~w(read bash cua_js cua_js_reset)}
+  end
+
+  defmodule NoPythonProbe do
+    defdelegate executable(name), to: Probe
+    def python, do: nil
+    defdelegate shell_available?(), to: Probe
+    def root_access(_), do: raise("Files must not probe roots without an interpreter")
+    defdelegate browser_status(), to: Probe
+    defdelegate mcp_available?(), to: Probe
+    defdelegate command(name, args), to: Probe
+    defdelegate tool_names(cwd, opts), to: Probe
+  end
+
+  test "files and terminal are unsupported when no interpreter resolves" do
+    assert {:ok, snapshot} =
+             Capabilities.get(platform: {:unix, :darwin}, capability_probe: NoPythonProbe)
+
+    by_id = Map.new(snapshot["items"], &{&1["id"], &1})
+
+    refute by_id["files"]["supported"]
+    assert by_id["files"]["reason"] == "python3_not_installed"
+    assert by_id["files"]["tools"] == []
+    refute by_id["terminal"]["supported"]
+    assert by_id["terminal"]["configuredLevel"] == "off"
+    assert by_id["terminal"]["reason"] == "shell_or_python3_not_installed"
+    assert by_id["terminal"]["tools"] == []
   end
 
   test "computer use is measured from the destination's registered tools" do

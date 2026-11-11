@@ -43,10 +43,10 @@ defmodule CodingAgent.ExecutionNode.Capabilities do
 
   defp files(probe, catalog, opts) do
     tools = select(catalog, ~w(read grep find ls write edit patch))
-    executable = probe.executable("python3")
-    access = if is_binary(executable), do: probe.root_access(opts), else: {:error, :not_installed}
+    python = probe.python()
+    access = if is_binary(python), do: probe.root_access(opts), else: {:error, :not_installed}
 
-    case {executable, access} do
+    case {python, access} do
       {nil, _} ->
         item("files", "Files", "files", false, "off", "unknown", [], "python3_not_installed")
 
@@ -84,7 +84,7 @@ defmodule CodingAgent.ExecutionNode.Capabilities do
 
   defp shell(probe, catalog) do
     tools = select(catalog, ~w(bash bash_output kill_process process_input lsp_diagnostics))
-    supported = is_binary(probe.executable("python3")) and probe.shell_available?()
+    supported = is_binary(probe.python()) and probe.shell_available?()
     level = if supported and "bash" in tools, do: "read_interact", else: "off"
 
     item(
@@ -360,8 +360,17 @@ end
 
 defmodule CodingAgent.ExecutionNode.Capabilities.Probe do
   @moduledoc false
-  alias CodingAgent.ExecutionNode.{HostCommand, HostIO}
+  alias CodingAgent.ExecutionNode.{HostCommand, HostIO, Python}
+
   def executable(name), do: System.find_executable(name)
+
+  def python do
+    case Python.executable() do
+      {:ok, path} -> path
+      {:error, :not_installed} -> nil
+    end
+  end
+
   def command(name, args), do: HostCommand.run(name, args)
 
   def tcc_status do
