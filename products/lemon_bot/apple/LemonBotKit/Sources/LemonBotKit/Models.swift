@@ -1134,19 +1134,74 @@ public struct AcceptInviteRequest: Codable, Hashable {
     }
 }
 
-public struct ReauthRequest: Codable, Hashable {
-    public var `password`: String
-    public init(password: String) {
-        self.`password` = password
+public struct LocalTicketRedeem: Codable, Hashable {
+    public var ticket: String
+    public init(ticket: String) { self.ticket = ticket }
+}
+
+public struct PasswordCreate: Codable, Hashable {
+    public var clientNonce: String
+    public var email: String
+    public var password: String
+    public init(clientNonce: String, email: String, password: String) {
+        self.clientNonce = clientNonce; self.email = email; self.password = password
     }
-    enum CodingKeys: String, CodingKey { case `password` }
+}
+
+public struct SignInMethods: Codable, Hashable {
+    public struct LocalOwner: Codable, Hashable {
+        public enum Platform: String, Codable, Hashable { case macos, linux, other }
+        public var platform: Platform
+        public var hostName: String
+        public var osUser: String
+        public init(platform: Platform, hostName: String, osUser: String) {
+            self.platform = platform; self.hostName = hostName; self.osUser = osUser
+        }
+    }
+    public var password: Bool
+    public var email: String
+    public var emailIsPlaceholder: Bool
+    public var localOwner: LocalOwner?
+    public var localConfirmedUntilMs: TimestampMs?
+    public init(password: Bool, email: String, emailIsPlaceholder: Bool, localOwner: LocalOwner?, localConfirmedUntilMs: TimestampMs?) {
+        self.password = password; self.email = email; self.emailIsPlaceholder = emailIsPlaceholder
+        self.localOwner = localOwner; self.localConfirmedUntilMs = localConfirmedUntilMs
+    }
+    enum CodingKeys: String, CodingKey { case password, email, emailIsPlaceholder, localOwner, localConfirmedUntilMs }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`password` = try c.decode(String.self, forKey: .`password`)
+        password = try c.decode(Bool.self, forKey: .password)
+        email = try c.decode(String.self, forKey: .email)
+        emailIsPlaceholder = try c.decode(Bool.self, forKey: .emailIsPlaceholder)
+        localOwner = try c.decode(LocalOwner?.self, forKey: .localOwner)
+        localConfirmedUntilMs = try c.decode(TimestampMs?.self, forKey: .localConfirmedUntilMs)
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`password`, forKey: .`password`)
+        try c.encode(password, forKey: .password)
+        try c.encode(email, forKey: .email)
+        try c.encode(emailIsPlaceholder, forKey: .emailIsPlaceholder)
+        try c.encode(localOwner, forKey: .localOwner)
+        try c.encode(localConfirmedUntilMs, forKey: .localConfirmedUntilMs)
+    }
+}
+
+public struct ReauthRequest: Codable, Hashable {
+    public var password: String?
+    public var local: Bool?
+    public init(password: String) { self.password = password; self.local = nil }
+    private init(local: Bool) { self.password = nil; self.local = local }
+    public static let local = ReauthRequest(local: true)
+    enum CodingKeys: String, CodingKey { case password, local }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.password = try c.decodeOptional(String.self, forKey: .password)
+        self.local = try c.decodeOptional(Bool.self, forKey: .local)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(password, forKey: .password)
+        try c.encodeIfPresent(local, forKey: .local)
     }
 }
 

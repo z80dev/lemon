@@ -49,7 +49,18 @@ One product deployment has one workspace and one attached Lemon swarm. No anonym
 
 `POST /auth/local` is same-OS-user proof instead of a password: `Authorization: Bearer <DATA_DIR/local-access.key>` (a private 0600 file the backend keeps; re-read per request) with an optional `LocalAccessRequest.displayName`. It signs in as the workspace owner with an ordinary bounded session, and on an empty instance first creates that passwordless owner (`<os-user>@lemon.local`) and a host-named workspace, discarding any pending setup proof. It carries no `clientNonce`: a lost response leaves at most an unused session, so the client simply repeats it. Native Mac clients read the key locally or over SSH; it is never shown, logged or sent to a browser.
 
-AuthResult.token is a cryptographically random opaque bearer; authentication table stores only digest (bounded encrypted one-time credential receipts are separate). Normal login session lifetime is 30 days; device-paired expiry is explicit null until revoked (§12), no refresh-token plane. Normal expired session requires new login; paired reopen restores its existing own Keychain token without minting again. Multiple local backend/account pairs are supported, sign-out clears that account cache and revokes current session. DELETE /auth/sessions/:id revokes owned session; password change revokes others. POST /auth/reauth returns single-use own five-minute token for account deletion.
+Browser same-machine proof uses `lemon-bot open`: the one-use secret is delivered privately in `#lemonbot-signin=…` and redeemed with `POST /auth/local/redeem`. Browser tickets last 60 seconds, terminal/headless tickets five minutes, with at most five outstanding. Only an exact numeric loopback listener accepts redemption; the ticket's loopback Origin and Host must match (missing Origin requires `Sec-Fetch-Site: same-origin`), and proxy headers are refused. Failure-only throttling never blocks a valid ticket. The exact loopback listener origin is trusted as a frontend origin even when the public URL is remote. Local-key and ticket sessions are locally confirmed for ten minutes, allowing a first `POST /me/password` and `{local:true}` reauthentication. `GET /me/sign-in` reports own sign-in methods and the remaining local-confirmation window.
+
+| Sign-in situation | Password policy |
+|---|---|
+| This computer's browser (`lemon-bot open`), Mac app, or headless server over `ssh -L` | No password: authenticated OS-user access is local proof. |
+| iPhone pairing | No password; the owner approves a separate device session. |
+| Another computer's browser at the published origin, without an SSH tunnel | Email/password or a linked SSO identity is required. |
+| Account deletion or OIDC link/unlink | Password or locally confirmed reauthentication within ten minutes. |
+
+Adding an email and password is optional; it is needed only for remote browser access, not local access or phone pairing. Existing-password changes still require the current password; adding the first password requires fresh local confirmation and does not revoke other sessions.
+
+AuthResult.token is a cryptographically random opaque bearer; authentication table stores only digest (bounded encrypted one-time credential receipts are separate). Normal login session lifetime is 30 days; device-paired expiry is explicit null until revoked (§12), no refresh-token plane. Normal expired session requires new login; paired reopen restores its existing own Keychain token without minting again. Multiple local backend/account pairs are supported, sign-out clears that account cache and revokes current session. DELETE /auth/sessions/:id revokes owned session; password change revokes others. POST /auth/reauth returns single-use own five-minute token for account deletion with `{password}` or, within ten minutes of a local sign-in, `{local:true}`.
 
 Role labels in table:
 
@@ -134,14 +145,17 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 | `POST /setup` | `SetupRequest` | `AuthResult` | `undefined` | Public | conflict, expired |
 | `POST /auth/login` | `LoginRequest` | `AuthResult` | `undefined` | Public | conflict, expired |
 | `POST /auth/local` | `LocalAccessRequest` | `AuthResult` | `undefined` | Local-access key | unauthenticated |
+| `POST /auth/local/redeem` | `LocalTicketRedeem` | `AuthResult` | `undefined` | Public (one-use local ticket, loopback origin) | unauthenticated, expired, forbidden, capability_unavailable |
 | `POST /auth/invites/accept` | `AcceptInviteRequest` | `AuthResult` | `undefined` | Public | conflict, expired |
-| `POST /auth/reauth` | `ReauthRequest` | `ReauthResult` | `undefined` | Own | expired |
+| `POST /auth/reauth` | `ReauthRequest` | `ReauthResult` | `undefined` | Own | expired, unauthenticated |
 | `GET /auth/sessions` | `undefined` | `Page<AuthSession>` | `PageQuery` | Own | expired |
 | `DELETE /auth/sessions/:id` | `Mutation` | `Deleted` | `undefined` | Own | expired |
 | `POST /auth/logout` | `Mutation` | `Empty` | `undefined` | Own | expired |
 | `GET /me` | `undefined` | `User` | `undefined` | Own | expired |
+| `GET /me/sign-in` | `undefined` | `SignInMethods` | `undefined` | Own | expired |
 | `PATCH /me` | `UserUpdate` | `User` | `undefined` | Own | expired |
 | `PUT /me/password` | `PasswordUpdate` | `Empty` | `undefined` | Own | expired |
+| `POST /me/password` | `PasswordCreate` | `User` | `undefined` | Own (no password yet; locally confirmed ≤10 min) | conflict, expired, policy_denied |
 | `POST /me/preview` | `PreviewRequest` | `Confirmation` | `undefined` | Own | expired |
 | `DELETE /me` | `AccountDelete` | `Deleted` | `undefined` | Own | expired |
 | `GET /workspace` | `undefined` | `Workspace` | `undefined` | Member | — |
