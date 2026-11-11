@@ -12,6 +12,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - Include bundled Python in the actual darwin runtime tarballs, not just the
   assembly directory, and reject archives missing its interpreter or licenses.
+- `lemon service install|status|repair|uninstall` manages controller, Lemon Bot
+  backend and named worker services with launchd/systemd, identity-verified
+  takeover, application readiness, truthful persistence and a manual fallback.
+- `lemon uninstall` previews the exact units, programs and shell changes and
+  requires a fresh confirmation digest; data is preserved unless `--purge`.
+
+### Changed
+
+- Managed controllers route start/restart through their service manager.
+  Deliberate stops stay down; updates restart only previously running units,
+  stop workers before restarting the controller, and update an installed Lemon
+  Bot backend in lockstep with the runtime.
 - Add a shell-only supervised reverse SSH tunnel for second-machine node gateway
   and Lemon Bot access, with private status, credential-free SSH environments,
   stale same-user sshd cleanup and terminal host-key/auth/forwarding failures.

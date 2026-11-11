@@ -163,7 +163,7 @@ defmodule LemonCli.CLI do
           print_command_usage(entry)
           @exit_ok
 
-        CommandRegistry.lifecycle?(command) ->
+        command != "uninstall" and CommandRegistry.lifecycle?(command) ->
           IO.puts(:stderr, "`lemon #{command}` is handled by the lemon launcher script.")
           @exit_usage
 
@@ -241,6 +241,8 @@ defmodule LemonCli.CLI do
   defp run_command("completion", args), do: LemonCli.CompletionCommand.run(args)
   defp run_command("migrate", args), do: LemonCli.MigrateCommand.run(args)
   defp run_command("node", args), do: run_node(args)
+  defp run_command("service", args), do: LemonCli.ServiceCommand.run(args)
+  defp run_command("uninstall", args), do: LemonCli.UninstallCommand.run(args)
 
   defp run_command("version", ["--verbose"]) do
     IO.puts(LemonCore.Update.Version.describe())
@@ -283,6 +285,11 @@ defmodule LemonCli.CLI do
       case node_cli.run(forwarded) do
         :ok ->
           @exit_ok
+
+        {:error, reason}
+        when reason in [:enrollment_outcome_unknown, "enrollment_outcome_unknown"] ->
+          IO.puts(:stderr, "lemon node #{command}: enrollment_outcome_unknown")
+          @exit_error
 
         {:error, message} ->
           IO.puts(:stderr, "lemon node #{command}: #{message}")

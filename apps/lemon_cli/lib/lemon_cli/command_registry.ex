@@ -15,13 +15,13 @@ defmodule LemonCli.CommandRegistry.Metadata do
     end
   end
 
-  defmacro lifecycle(name, usage, summary, launchers, details \\ []) do
+  defmacro lifecycle(name, usage, summary, launchers, details \\ [], options \\ []) do
     quote do
       %{
         name: unquote(name),
         summary: unquote(summary),
         usage: unquote(usage),
-        options: [],
+        options: unquote(options),
         subcommands: [],
         details: unquote(details),
         launchers: unquote(launchers)
@@ -738,6 +738,65 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
+      name: "service",
+      summary: "Manage background system service units for Lemon roles",
+      usage:
+        "lemon service install ROLE... [options]\nlemon service status [ROLE...] [options]\nlemon service repair [ROLE...] [options]\nlemon service uninstall ROLE... [options]",
+      subcommands: [
+        %{name: "install", summary: "Install and start background service units"},
+        %{name: "status", summary: "Inspect status of managed service units"},
+        %{name: "repair", summary: "Repair, recreate, or adopt service units"},
+        %{name: "uninstall", summary: "Stop and remove background service units"}
+      ],
+      options: [
+        option("--name NAME", ["--name"], "Unique execution node name (required for worker)"),
+        option("--controller URL", ["--controller"], "Controller control-plane WebSocket"),
+        option("--cwd PATH", ["--cwd"], "Default local working directory"),
+        option(
+          "--allowed-root PATH",
+          ["--allowed-root"],
+          "Allowed host file/shell root (repeatable)"
+        ),
+        option(
+          "--invite-code-stdin",
+          ["--invite-code-stdin"],
+          "Read one bounded enrollment or repair code from stdin"
+        ),
+        option(
+          "--exec-wrapper PATH",
+          ["--exec-wrapper"],
+          "Signed helper wrapper path inside an .app bundle (macOS)"
+        ),
+        option("--bot PATH", ["--bot"], "Executable path for the backend service"),
+        option("--ssh DEST", ["--ssh"], "SSH destination for the tunnel role"),
+        option("--node-port PORT", ["--node-port"], "Remote node gateway forward port"),
+        option("--gateway-port PORT", ["--gateway-port"], "Local node gateway port"),
+        option("--product-port PORT", ["--product-port"], "Remote product forward port"),
+        option("--backend-port PORT", ["--backend-port"], "Local product backend port"),
+        option(
+          "--wait SECS",
+          ["--wait"],
+          "Seconds to wait for units to reach ready (0 skips waiting)"
+        ),
+        option(
+          "--manual",
+          ["--manual"],
+          "Run units as unmanaged background processes"
+        ),
+        option(
+          "--enable-linger",
+          ["--enable-linger"],
+          "Enable systemd user linger for persistence after logout"
+        ),
+        option("--json", ["--json"], "Emit one sanitized schema 1 JSON document")
+      ],
+      details: [
+        "Roles include controller, backend, worker, and tunnel. Install and uninstall require at least one role.",
+        "Status and repair without roles inspect or reconcile all installed Lemon service units.",
+        "Output emits schema 1 JSON on stdout with --json; all progress and diagnostics go to stderr."
+      ]
+    },
+    %{
       name: "version",
       summary: "Print the Lemon version (--version includes build identity)",
       usage: "lemon version [--verbose]",
@@ -891,7 +950,30 @@ defmodule LemonCli.CommandRegistry do
     ]),
     lifecycle("remote", "lemon remote", "Attach a remote IEx shell to the runtime", [:release]),
     lifecycle("eval", "lemon eval EXPR", "Evaluate EXPR in a fresh release VM", [:release]),
-    lifecycle("rpc", "lemon rpc EXPR", "Evaluate EXPR on the running runtime", [:release])
+    lifecycle("rpc", "lemon rpc EXPR", "Evaluate EXPR on the running runtime", [:release]),
+    lifecycle(
+      "uninstall",
+      "lemon uninstall [--purge] [--confirm DIGEST] [--json]",
+      "Remove Lemon service units, paths, and environment changes",
+      @both_launchers,
+      [
+        "--purge also removes ~/.lemon and the secret store keychain item.",
+        "A preview runs first and prints an exact confirmation digest. Execution requires --confirm DIGEST."
+      ],
+      [
+        option(
+          "--purge",
+          ["--purge"],
+          "Remove ~/.lemon and stored secrets in addition to program files and units"
+        ),
+        option(
+          "--confirm DIGEST",
+          ["--confirm"],
+          "Exact confirmation digest from a fresh preview"
+        ),
+        option("--json", ["--json"], "Emit preview or result as JSON")
+      ]
+    )
   ]
 
   @spec commands() :: [map()]

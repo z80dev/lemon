@@ -127,6 +127,7 @@ defmodule LemonCore.Update.ReceiptStore do
       "channel",
       "checkpoint_id",
       "created_at_ms",
+      "from_bot_version",
       "from_version",
       "launcher_sha256",
       "manifest_commit",
@@ -136,6 +137,7 @@ defmodule LemonCore.Update.ReceiptStore do
       "rollback_digest",
       "rolled_back_receipt_id",
       "status",
+      "to_bot_version",
       "to_version"
     ])
     |> Map.put("schema", @schema)

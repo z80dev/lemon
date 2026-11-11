@@ -345,6 +345,20 @@ By default the script calls `lemon service install worker --invite-code-stdin
 online. It reports persistence: login, boot, session (logged-in only), or none.
 An unavailable lifecycle command fails clearly, without a foreground fallback.
 Add `--foreground` (`--no-service` is an alias) to keep the worker in the terminal.
+Inspect or repair a worker with:
+
+```bash
+lemon service status worker --name studio-mac --json
+lemon service repair worker --name studio-mac
+```
+
+To enroll directly through the lifecycle command, pipe the code once to
+`lemon service install worker --name NAME --controller URL --cwd "$HOME"
+--invite-code-stdin`. It runs a private `node join --enroll-only` exchange, then
+starts the persistent worker without the code. The one-shot exits after saving
+the credential and reaching online; an uncertain enrollment is never retried.
+Readiness uses `worker-status.json` and the manager's PID, not log scraping.
+
 Configure model-provider credentials **on the destination** with
 `lemon setup model` (or inspect readiness with `lemon setup model --json`); the
 noninteractive installer does not copy credentials from the controller or run

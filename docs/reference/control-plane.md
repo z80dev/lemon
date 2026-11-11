@@ -208,8 +208,14 @@ and external VM-args configuration through their existing environment/release
 launcher. Manually changed in-VM distribution settings that are absent from that
 release environment are not reconstructed. Custom launchers receive only
 `restart` and inherited environment; they must preserve any private options
-themselves. RPC cannot restart an offline runtime or promise survival across
-host/service-manager termination of the entire process group.
+themselves.
+
+When Lemon is supervised by `launchd` or `systemd` (installed via `lemon service install controller`),
+the launcher's `restart` hands off directly to the service manager (`launchctl kickstart -k` on macOS,
+`systemctl --user --no-block restart` on Linux) after verifying the authenticated snapshot token and
+confirming the target release root. Supervised restart eliminates stop/start races and avoids
+process-group termination issues. For unsupervised runtimes, RPC stop followed by background daemon
+boot remains the default path; RPC cannot restart an offline runtime.
 
 `system.stop` always remains available and calls graceful `System.stop(0)`;
 it does not require a launcher. Stopping a remotely controlled runtime cannot

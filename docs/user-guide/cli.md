@@ -178,6 +178,7 @@ The registry defines their help and completion; the launcher executes them:
 | `start` | Yes | Yes | Run the runtime in the foreground. |
 | `daemon` | Yes | Yes | Start the runtime in the background and wait for health. |
 | `stop`, `restart`, `status` | Yes | Yes | Manage an owned foreground/background runtime, or probe local runtime health. |
+| `uninstall [--purge]` | Yes (units only) | Yes | Uninstall Lemon service units, files, and configuration. |
 | `remote`, `eval EXPR`, `rpc EXPR` | No | Yes | Use release VM remote/eval/RPC tools. |
 
 Source runtime options go after `start`, `daemon`, or `restart`:
@@ -680,6 +681,97 @@ it accepts no path and restores no config, credentials, sessions, or stores.
 Source checkouts expose check/history but fail packaged plan/apply/rollback
 closed. See [Safely update and roll back Lemon](updates.md) for the complete
 safety contract and current publisher-signing/network-cap residuals.
+
+## Service lifecycle
+
+`lemon service` supervises Lemon components through the platform's native service manager
+(launchd on macOS, systemd user services on Linux) or unmanaged background processes (`--manual`).
+
+Supported roles:
+- `controller`: The primary Lemon runtime daemon.
+- `backend`: The Lemon Bot web backend (`lemon-bot`).
+- `worker`: A named execution node connected to a controller.
+- `tunnel`: Reserved per-machine SSH-link supervision (`--name`, `--ssh`,
+  `--node-port`, `--gateway-port`, optional `--product-port`/`--backend-port`).
+
+```bash
+# Install and start controller and backend services
+lemon service install controller backend
+
+# Install a worker node reading an enrollment invite from stdin
+printf "%s\n" "$INVITE_CODE" | lemon service install worker --name chico --controller wss://controller.example/ws --invite-code-stdin
+
+# Inspect service status
+lemon service status --json
+
+# Reconcile or adopt running processes
+lemon service repair
+
+# Stop and remove worker unit
+lemon service uninstall worker --name chico
+```
+
+With `--json`, commands emit a single schema 1 JSON document containing manager, persistence,
+linger state, and unit status. Success exits 0 when all units reach ready/online state within `--wait`,
+1 for operational failures or not-ready units, and 2 for usage errors.
+
+`status` and `repair` without roles enumerate installed units. Workers require
+`--name NAME`; first install also requires the exact `--controller URL`. Their
+`--cwd` defaults to `$HOME`; `--allowed-root PATH` is repeatable.
+`--exec-wrapper PATH` selects an executable inside a macOS app bundle, persists
+it in the unit, and uses the same path for permission probes. Repair refuses a
+missing wrapper rather than silently changing the worker's signed identity.
+`--bot PATH` defaults to `~/.local/bin/lemon-bot`. Backend units reject inherited
+`LEMON_BOT_OPERATOR_TOKEN` and `LEMON_BOT_ENCRYPTION_KEY`; secrets never enter units.
+
+Readiness waits default to 120 seconds for the controller, 60 for other roles;
+`--wait 0` skips waiting. A controller takeover with running workers must still
+wait for controller health before resuming them. `--enable-linger` requests
+Linux boot persistence without invoking sudo. Manual units remain discoverable
+through `status` and `uninstall`; an inventory containing manual units reports
+`manager:"none", persistence:"none"` rather than promising persistence for all.
+
+The schema-1 document is:
+
+```json
+{"schema":1,"manager":"launchd","persistence":"login","linger":null,"units":[{"role":"worker","name":"chico","label":"org.lemon.node.chico","installed":true,"loaded":true,"state":"online","pid":7748,"version":null,"log":"/Users/me/.lemon/logs/node-chico.log","detail":null,"execWrapper":null}]}
+```
+
+Worker units expose their configured absolute `execWrapper` path, or `null` when
+unwrapped. Local setup consumers can compare it before repairing a worker's
+signed helper identity; this field is not part of remote management projections.
+
+`manager` is `launchd|systemd|none`; `persistence` is `login|boot|session|none`.
+`linger` is a boolean on systemd and otherwise null. Unit `state` is
+`ready|online|starting|reconnecting|needs_reauthorization|needs_enrollment|conflict|stopped|failed|blocked|unsupervised|foreign|unknown|not_installed`.
+`detail` contains a stable reason code or null, never raw command output.
+`pid` and `version` may be null. Mutations also include
+`action: created|updated|unchanged|adopted|started|removed`. The only filesystem
+path in a unit projection is its log; credentials, invite codes and argv are
+never projected. Worker `online` must refer to the manager's actual PID, so a
+stale status left by `node join --enroll-only` cannot claim readiness.
+
+Uninstalling a worker unit does not revoke its machine credential: remove the
+machine in Lemon Bot separately to revoke access.
+
+## Complete uninstall
+
+Packaged releases provide a safe, preview-confirmed uninstaller that stops and removes
+all service units, program installations, and shell configuration additions:
+
+```bash
+# Generate a fresh preview and confirmation digest
+lemon uninstall
+
+# Execute removal using the exact digest from preview
+lemon uninstall --confirm <exact-preview-digest>
+
+# Purge ~/.lemon and Keychain secrets in addition to program files
+lemon uninstall --purge
+lemon uninstall --purge --confirm <digest-from-purge-preview>
+```
+
+Source checkouts support removing service units only. Program paths in checkouts remain untouched.
 
 ## External secret sources
 
@@ -1698,6 +1790,52 @@ lemon node capabilities [--json] [--require-bot] [--expected-version VERSION]
 | `--cwd PATH` | Default local working directory |
 | `--allowed-root PATH` | Allowed host file/shell root (repeatable) |
 
+
+#### `lemon service`
+
+Manage background system service units for Lemon roles.
+
+```text
+lemon service install ROLE... [options]
+lemon service status [ROLE...] [options]
+lemon service repair [ROLE...] [options]
+lemon service uninstall ROLE... [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `install` | Install and start background service units |
+| `status` | Inspect status of managed service units |
+| `repair` | Repair, recreate, or adopt service units |
+| `uninstall` | Stop and remove background service units |
+
+| Option | Purpose |
+| --- | --- |
+| `--name NAME` | Worker execution node name (required for worker) |
+| `--controller URL` | Controller control-plane WebSocket URL |
+| `--cwd PATH` | Default working directory for worker units |
+| `--allowed-root PATH` | Allowed file/shell root for worker units (repeatable) |
+| `--invite-code-stdin` | Read one 43-character enrollment code from stdin |
+| `--exec-wrapper PATH` | Signed helper wrapper path inside an .app bundle (macOS) |
+| `--bot PATH` | Executable path for the backend service (lemon-bot) |
+| `--wait SECS` | Seconds to wait for units to reach ready (default 120s controller, 60s backend/worker) |
+| `--manual` | Run units as unmanaged background processes |
+| `--enable-linger` | Enable systemd user linger for persistence after logout (Linux) |
+| `--json` | Emit one sanitized schema 1 JSON document |
+
+#### `lemon uninstall`
+
+Remove Lemon service units, paths, and environment changes.
+
+```text
+lemon uninstall [--purge] [--confirm DIGEST] [--json]
+```
+
+| Option | Purpose |
+| --- | --- |
+| `--purge` | Remove ~/.lemon and stored secrets in addition to program files and units |
+| `--confirm DIGEST` | Exact confirmation digest from a fresh preview |
+| `--json` | Emit preview or result as JSON |
 #### `lemon version`
 
 Print the Lemon version (--version includes build identity).

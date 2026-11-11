@@ -134,8 +134,10 @@ only readiness, stable provenance, counts, byte counts, and error kinds.
 | Browse a profile's learning timeline | `lemon learning --profile research` | `./bin/lemon learning --profile research` |
 | Migrate Hermes data | `lemon migrate hermes audit` | `./bin/lemon migrate hermes audit` |
 | Join a named execution node | `lemon node join ...` | `./bin/lemon node join ...` |
+| Manage background service units | `lemon service install\|status\|repair\|uninstall` | `./bin/lemon service install\|status\|repair\|uninstall` |
 | Print version | `lemon version` | `./bin/lemon version` |
 | Safely update a managed release | `lemon update plan|apply|history|rollback` | `./bin/lemon update check|history` (binary mutation fails closed) |
+| Uninstall Lemon services and paths | `lemon uninstall [--purge]` | `./bin/lemon uninstall` (units only) |
 | Generate shell completion | `lemon completion zsh` | `./bin/lemon completion zsh` |
 | Send channel notifications | `lemon send --to telegram:123 "hello"` | `./bin/lemon send --to telegram:123 "hello"` |
 | Inspect media, models, policies, skills, and usage | `lemon media`, `models`, `policy`, `skill`, `usage` | `./bin/lemon media`, `models`, `policy`, `skill`, `usage` |
@@ -167,8 +169,11 @@ their existing Mix tasks are thin source-development adapters.
 
 Lifecycle commands are registry entries too (for help and completion), but the
 launcher shell executes them: `tui`, `web`, `start`, `daemon`, `stop`,
-`restart`, and `status` work in both launchers; `remote`, `eval`, and `rpc` are
-release-only. Reaching a lifecycle command inside `LemonCli.CLI` is a usage
+`restart`, `status`, and `uninstall` work in both launchers; `remote`, `eval`, and
+`rpc` are release-only. Source uninstall removes units only. Uninstall is the
+exception to launcher-only dispatch: its CLI handler writes a private deletion
+manifest, and the launcher removes programs only after that VM exits.
+Reaching another launcher-only lifecycle command inside `LemonCli.CLI` is a usage
 error. Both launchers export `LEMON_CLI_LAUNCHER` (`source` or `release`) for
 availability filtering and `LEMON_LAUNCHER` (their own path) so
 `LemonCli.LocalRuntime` can run `$LEMON_LAUNCHER daemon` when a command needs

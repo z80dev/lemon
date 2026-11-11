@@ -7,6 +7,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
     name: :string,
     controller: :string,
     pair: :boolean,
+    enroll_only: :boolean,
     operator_token: :string,
     invite_code_stdin: :boolean,
     token: :string,
@@ -26,6 +27,11 @@ defmodule CodingAgent.ExecutionNode.CLI do
     case run(argv) do
       :ok ->
         :ok
+
+      {:error, reason}
+      when reason in [:enrollment_outcome_unknown, "enrollment_outcome_unknown"] ->
+        IO.puts(:stderr, "lemon node join: enrollment_outcome_unknown")
+        System.halt(1)
 
       {:error, message} ->
         IO.puts(:stderr, "lemon node join: #{message}")
@@ -165,7 +171,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
              token_store_opts: Keyword.get(deps, :token_store_opts, [])
            ) do
       monitor = Process.monitor(worker)
-      await_worker(worker, monitor)
+      await_worker(worker, monitor, opts)
     else
       true ->
         IO.puts(help())
@@ -228,6 +234,9 @@ defmodule CodingAgent.ExecutionNode.CLI do
       blank?(opts[:controller]) ->
         {:error, "--controller is required"}
 
+      opts[:enroll_only] && opts[:invite_code_stdin] != true ->
+        {:error, "--enroll-only requires --invite-code-stdin"}
+
       opts[:invite_code_stdin] &&
           Enum.any?(
             [:node_id, :repair, :operator_token, :token],
@@ -278,16 +287,22 @@ defmodule CodingAgent.ExecutionNode.CLI do
     end
   end
 
-  defp await_worker(worker, monitor) do
+  @doc false
+  def await_worker(worker, monitor, opts \\ []) do
     receive do
       {:execution_node_worker, ^worker, {:status, :online, node_id}} ->
         suffix = if is_binary(node_id), do: " (#{node_id})", else: ""
         IO.puts("Execution node online#{suffix}")
-        await_worker(worker, monitor)
+
+        if opts[:enroll_only] do
+          stop_enrollment_worker(worker, monitor)
+        else
+          await_worker(worker, monitor, opts)
+        end
 
       {:execution_node_worker, ^worker, {:status, status}} ->
         IO.puts("Execution node #{status}")
-        await_worker(worker, monitor)
+        await_worker(worker, monitor, opts)
 
       {:execution_node_worker, ^worker, {:status, kind, reason}}
       when kind in [:needs_reauthorization, :needs_enrollment, :conflict] ->
@@ -304,20 +319,43 @@ defmodule CodingAgent.ExecutionNode.CLI do
           end
 
         IO.puts("Execution node #{kind} (#{reason}): #{remedy}")
-        await_worker(worker, monitor)
+
+        if opts[:enroll_only] do
+          case stop_enrollment_worker(worker, monitor) do
+            :ok -> {:error, :enrollment_outcome_unknown}
+            error -> error
+          end
+        else
+          await_worker(worker, monitor, opts)
+        end
 
       {:execution_node_worker, ^worker, {:status, status, _detail}} ->
         IO.puts("Execution node #{status}")
-        await_worker(worker, monitor)
+        await_worker(worker, monitor, opts)
 
       {:DOWN, ^monitor, :process, ^worker, :normal} ->
-        :ok
+        if opts[:enroll_only], do: {:error, :enrollment_outcome_unknown}, else: :ok
 
       {:DOWN, ^monitor, :process, ^worker, reason} ->
         {:error, format_reason(reason)}
 
       {:EXIT, ^worker, _reason} ->
-        await_worker(worker, monitor)
+        await_worker(worker, monitor, opts)
+    end
+  end
+
+  defp stop_enrollment_worker(worker, monitor) do
+    try do
+      GenServer.stop(worker, :normal, 5_000)
+
+      receive do
+        {:DOWN, ^monitor, :process, ^worker, :normal} -> :ok
+        {:DOWN, ^monitor, :process, ^worker, _reason} -> {:error, "worker_shutdown_failed"}
+      after
+        5_000 -> {:error, "worker_shutdown_failed"}
+      end
+    catch
+      :exit, _ -> {:error, "worker_shutdown_failed"}
     end
   end
 
@@ -395,6 +433,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
       --pair                    Pair and store a controller-issued node token
       --operator-token TOKEN    Operator token used only during pairing
       --invite-code-stdin       Read one bounded enrollment code from stdin (implies --pair)
+      --enroll-only             Exit with code 0 after enrollment succeeds (requires --invite-code-stdin)
       --token TOKEN             Existing node session token (overrides stored token)
       --node-id ID              Load or repair a credential by durable controller node ID
       --repair                  Operator-authorized repair for a legacy record without a recovery token
@@ -433,9 +472,8 @@ defmodule CodingAgent.ExecutionNode.CLI do
 
   defp blank?(value), do: not is_binary(value) or String.trim(value) == ""
 
-  defp format_reason({:pairing_failed, :outcome_unknown}) do
-    "enrollment outcome is unknown; do not retry this code; ask the owner to reconcile the durable node and issue a repair invitation if needed"
-  end
+  defp format_reason({:pairing_failed, :outcome_unknown}), do: :enrollment_outcome_unknown
+  defp format_reason({{:pairing_failed, :outcome_unknown}, _}), do: :enrollment_outcome_unknown
 
   defp format_reason(:operator_token_required) do
     "the controller requires an operator token for pairing; set LEMON_NODE_OPERATOR_TOKEN or pass --operator-token"

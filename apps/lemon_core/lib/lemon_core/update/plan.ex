@@ -4,9 +4,10 @@ defmodule LemonCore.Update.Plan do
 
   The plan is intentionally data-only. It binds the managed installation's
   current pointer and running version to the raw schema-2 manifest hash,
-  release commit, selected target/profile/platform, and exact runtime/TUI
-  artifact integrity fields. No function in this module reads or writes disk,
-  performs network requests, or executes release code.
+  release commit, selected target/profile/platform, and the exact integrity
+  fields of every selected artifact: the runtime, the optional TUI, and the
+  optional Lemon Bot backend co-artifact. No function in this module reads or
+  writes disk, performs network requests, or executes release code.
   """
 
   @default_artifact_max_bytes 2_147_483_648
@@ -14,6 +15,8 @@ defmodule LemonCore.Update.Plan do
   @sha256_pattern ~r/\A[0-9a-f]{64}\z/
   @safe_version_pattern ~r/\A[0-9A-Za-z][0-9A-Za-z._~-]{0,63}\z/
   @safe_identifier_pattern ~r/\A[0-9A-Za-z][0-9A-Za-z._-]{0,63}\z/
+  @tui_profile "lemon_tui"
+  @bot_profile "lemon_bot"
 
   @spec build(map(), keyword()) :: {:ok, map()} | {:error, term()}
   def build(info, opts) when is_map(info) and is_list(opts) do
@@ -23,6 +26,9 @@ defmodule LemonCore.Update.Plan do
     platform = Keyword.fetch!(opts, :platform)
     now_ms = Keyword.fetch!(opts, :now_ms)
     ttl_ms = Keyword.get(opts, :ttl_ms, @default_ttl_ms)
+    current_bot = Keyword.get(opts, :current_bot)
+    tui_artifact = Map.get(info, :tui_artifact)
+    bot_artifact = Map.get(info, :bot_artifact)
 
     with :ok <- validate_version(info.latest),
          :ok <- validate_identifier(info.channel, :invalid_channel),
@@ -31,7 +37,9 @@ defmodule LemonCore.Update.Plan do
          :ok <- validate_commit(info.manifest_commit),
          :ok <- validate_sha256(info.manifest_sha256, :invalid_manifest_checksum),
          :ok <- validate_artifact(info.artifact, profile, platform, opts),
-         :ok <- validate_optional_tui(info.tui_artifact, platform, opts) do
+         :ok <- validate_optional(tui_artifact, @tui_profile, platform, opts),
+         :ok <- validate_optional(bot_artifact, @bot_profile, platform, opts),
+         :ok <- validate_current_bot(current_bot) do
       epoch = div(now_ms, ttl_ms)
 
       plan = %{
@@ -47,7 +55,9 @@ defmodule LemonCore.Update.Plan do
         manifest_commit: info.manifest_commit,
         manifest_sha256: info.manifest_sha256,
         artifact: artifact_summary(info.artifact),
-        tui_artifact: artifact_summary(info.tui_artifact),
+        tui_artifact: artifact_summary(tui_artifact),
+        bot_artifact: artifact_summary(bot_artifact),
+        current_bot: current_bot,
         plan_epoch: epoch,
         expires_at_ms: (epoch + 1) * ttl_ms
       }
@@ -62,8 +72,10 @@ defmodule LemonCore.Update.Plan do
     |> Map.take([
       :action,
       :artifact,
+      :bot_artifact,
       :channel,
       :current,
+      :current_bot,
       :expires_at_ms,
       :latest,
       :manifest_commit,
@@ -124,10 +136,21 @@ defmodule LemonCore.Update.Plan do
       else: {:error, :invalid_manifest_commit}
   end
 
-  defp validate_optional_tui(nil, _platform, _opts), do: :ok
+  defp validate_optional(nil, _profile, _platform, _opts), do: :ok
 
-  defp validate_optional_tui(artifact, platform, opts),
-    do: validate_artifact(artifact, "lemon_tui", platform, opts)
+  defp validate_optional(artifact, profile, platform, opts),
+    do: validate_artifact(artifact, profile, platform, opts)
+
+  # The backend pointer this machine runs now is part of what the digest
+  # authorizes: moving it between plan and apply must make the digest stale.
+  defp validate_current_bot(nil), do: :ok
+
+  defp validate_current_bot(key) do
+    if is_binary(key) and Path.basename(key) == key and
+         Regex.match?(~r/\A[0-9A-Za-z][0-9A-Za-z._-]{0,127}\z/, key),
+       do: :ok,
+       else: {:error, :invalid_bot_target}
+  end
 
   defp validate_artifact(nil, _profile, _platform, _opts), do: {:error, :no_matching_artifact}
 
