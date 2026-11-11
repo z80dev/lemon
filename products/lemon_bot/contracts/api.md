@@ -142,6 +142,7 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 | Method and path (under /v1) | Request | Response | Query | Required role / ACL | Additional errors |
 |---|---|---|---|---|---|
 | `GET /setup` | `undefined` | `SetupStatus` | `undefined` | Public | conflict, expired |
+| `GET /identity` | `undefined` | `BackendIdentity` | `undefined` | Authenticated product session | unauthenticated, forbidden |
 | `POST /setup` | `SetupRequest` | `AuthResult` | `undefined` | Public | conflict, expired |
 | `POST /auth/login` | `LoginRequest` | `AuthResult` | `undefined` | Public | conflict, expired |
 | `POST /auth/local` | `LocalAccessRequest` | `AuthResult` | `undefined` | Local-access key | unauthenticated |
@@ -1722,7 +1723,7 @@ Screen IDs are shared navigation destinations, **not extra REST paths**. Current
 | bot.settings | Owned Details/Media/assigned Machine, routines/memory/reference files, notify toggle, connectors/skills and actual effective native permissions | bots/sidebar, routines, memory, connectors, attachments |
 | group.create | 2–6 owned Bot picker only, lead/name/details/edit; one human owner, no humans/member-transfer/leave UI; preserve draft on uncertain create; Delete preview | conversations create/update/preview/delete, owned bots |
 | machines | Online/offline/pending/revoked inventory, last seen, attached machine bot count, attach button, consent/access ownership | machines list |
-| machine.attach | Named machine, one-use copy join command/code, expiry/reissue/cancel, provider/cwd/service instructions, waiting→online, repair same identity | machines POST/reconnect/invites + machine.upserted |
+| machine.attach | Add a machine over SSH, reviewed setup/progress and waiting→online; advanced scoped one-use join command/code with expiry/reissue/cancel; repair same identity. Same-machine bootstrap enrolls a supervised worker without a manual join command. | machines POST/reconnect/invites, machine-setups + machine.upserted |
 | machine.detail | Host-info cpu/memory/disk/version/user/cwd/time; bots on host; shared-access warning; files/terminal/secrets tabs; access-user edit; reconnect/detach preview/exact-name | machines/host, bots?machineId, machine files/secrets, terminals |
 | machine.files | Breadcrumb/list/hidden, stat/preview/download/upload/new folder/rename/move/delete preview; size/type/error/truncation, host path scope explicit | node file product endpoints, files/import, attachments |
 | machine.terminal | Full-access confirmation, cwd/size, VT-compatible PTY view/input/resize, disconnect grace/gap/exit/close; no fake web terminal | terminals + WS terminal frames |

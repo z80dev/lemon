@@ -21,6 +21,16 @@ Follow [Lemon Bot getting started](../../../docs/getting-started/lemon-bot.md) f
 
 Owner sign-in and management work before model authentication. **Verified** and **Saved** both allow Bot creation, but Saved is not a successful live check. Co-resident Bots share the OS user's files, browser sessions and CLI credentials; personas are not host isolation.
 
+Create a Bot with a name and the preselected machine. **Standard** grants
+Terminal and Files (and Browser where supported), while still asking before
+commands; **Chat only** omits local tool access. Approval cards show the command
+and offer **Allow once**, an eligible **Allow Terminal for this chat**, or **Deny**.
+Remembered chat/Bot permissions can be revoked with **Stop allowing**; they do
+not bypass workspace policy. A Bot can separately request missing access through
+an owner-only card, applied after its current task before continuing the request.
+See the [access and approval contract](../contracts/api.md#7-backend-mcp-bot-tools)
+and [getting-started guide](../../../docs/getting-started/lemon-bot.md) for scope.
+
 With no Bots, the home card offers creation when a computer is already online;
 otherwise it explains connecting a computer first.
 

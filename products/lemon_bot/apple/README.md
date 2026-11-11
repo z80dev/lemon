@@ -49,7 +49,7 @@ End-user installation and sign-in live in [Lemon Bot getting started](../../../d
 The Mac app needs no developer tools or preinstalled Python: its runtime bundles
 CPython. The Terminal installer still requires a working `python3`.
 
-Contributor packaging supports Xcode 27.2 and 27.4; Xcode 27.2 is not excluded.
+Contributor packaging requires Xcode 26.3+ (27.2 verified).
 The release builder requires macOS, Python 3, XcodeGen 2.46+, the Xcode Metal
 Toolchain and access to Swift package dependencies. Select the installed Xcode
 with `DEVELOPER_DIR`; these are build-machine requirements, not app prerequisites.
@@ -117,8 +117,10 @@ python3 release.py macos-preview --version 2026.10.14 --build 1 \
 
 This separately named `local-preview` Debug ad-hoc DMG/ZIP is **unsigned for
 distribution and not notarized**. On macOS 15+, first open requires System
-Settings → Privacy & Security → **Open Anyway**. Ad-hoc rebuilds lose Keychain
-items and TCC grants. These artifacts are never attached to GitHub Releases.
+Settings → Privacy & Security → **Open Anyway**. Ad-hoc development builds can
+re-prompt for Keychain access after each rebuild; this is not expected for signed
+releases with a stable signing identity. TCC grants may also need renewal.
+These artifacts are never attached to GitHub Releases; no signed DMG is published yet.
 
 The builder emits artifacts and a JSON receipt only after all requested steps
 succeed; it does not publish a release or create another workflow. Receipt fields:
@@ -144,12 +146,14 @@ an intermediate/local output and is not attached to the GitHub Release.
 
 ## Generate, build and launch
 
-Development supports Xcode 27.2 and 27.4, XcodeGen 2.46+, the iOS simulator runtime, the Xcode Metal Toolchain used by SwiftTerm, and access to the SwiftTerm package dependency. Run these commands from this `apple` directory:
+Development requires Xcode 26.3+ (27.2 verified), XcodeGen 2.46+, the iOS simulator runtime, the Xcode Metal Toolchain used by SwiftTerm, and access to the SwiftTerm package dependency. Run these commands from this `apple` directory:
 
 ```sh
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-# Once per Xcode installation, if the Metal component is missing:
-# xcodebuild -downloadComponent MetalToolchain
+# Once per Xcode installation, accept the license if builds request it:
+sudo xcodebuild -license accept
+# Install the Metal component used by SwiftTerm:
+xcodebuild -downloadComponent MetalToolchain
 xcodegen generate --spec project.yml
 open LemonBot.xcodeproj
 
@@ -186,6 +190,11 @@ The checked-in specification uses `org.lemonbot.mac`, `org.lemonbot.ios`, `org.l
 ### Connect the Mac app
 
 Use [Lemon Bot getting started](../../../docs/getting-started/lemon-bot.md) for the Mac app's first-run, owner sign-in and permission workflow; use [attaching a bot machine](../../../docs/user-guide/attaching-a-bot-machine.md) for additional hosts. The app runs as your OS user without App Sandbox isolation. Local account access or SSH access is the authority, not a public URL or tailnet membership.
+
+Choose **This Mac → Connect** for local setup. To add an execution host to the
+current workspace, use **Machines → Add a machine** over SSH; this is different
+from connecting the app to another backend. Review OS access in this Mac's
+**macOS permissions** pane, separately from each Bot's access grants.
 
 Contributor integration details:
 

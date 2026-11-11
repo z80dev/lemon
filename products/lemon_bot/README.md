@@ -51,9 +51,11 @@ included in `providers[].lastError`.
 
 Start with the [Lemon Bot getting-started guide](../../docs/getting-started/lemon-bot.md): the Mac app, the Terminal Bot installer, or attaching a second machine. The Mac app installs a runtime with bundled Python and needs no developer tools; the Terminal installer still requires a working `python3`. The DMG pipeline currently produces unsigned, unnotarized preview artifacts only; end-user distribution awaits Developer ID and notarization credentials.
 
+For an installed runtime, `lemon-bot up` resumes background setup and local worker enrollment; `lemon-bot open` reopens the browser signed in. Over SSH, use `lemon-bot open --headless` for the tunnel command and one-use, five-minute link. Same-machine setup does not require copying a join command or keeping a foreground worker terminal open.
+
 ## Running an integrated checkout
 
-Requirements: an authenticated Lemon controller with the required profile, placement, node-I/O, memory and live-stream RPCs; Bun 1.4+; Node 24 for Vite tooling. Owner sign-in and management do not require model-provider credentials or a default model. Bot replies require a model and destination-local provider authentication; see [model setup](../../docs/user-guide/setup.md). Native development supports Xcode 27.2 and 27.4 with XcodeGen 2.46+; installed Apple devices require signing and provisioning.
+Requirements: an authenticated Lemon controller with the required profile, placement, node-I/O, memory and live-stream RPCs; Bun 1.4+; Node 24 for Vite tooling. Owner sign-in and management do not require model-provider credentials or a default model. Bot replies require a model and destination-local provider authentication; see [model setup](../../docs/user-guide/setup.md). Native development requires Xcode 26.3+ (27.2 verified) and XcodeGen 2.46+; see the [Apple build guide](apple/README.md#generate-build-and-launch).
 
 1. Start/reuse the existing controller following the [CLI guide](../../docs/user-guide/cli.md). Keep its operator token on the backend; do not create an unrelated product token.
 2. Start the backend:
