@@ -38,6 +38,8 @@ const streaming: TranscriptEntry = { ...resource, id: 'entry_test', conversation
 const finalEntry: TranscriptEntry = { ...streaming, revision: 2, updatedAtMs: 2, streaming: false };
 let transcriptEntries: TranscriptEntry[] = [streaming];
 let homeMachines: Machine[] | undefined;
+let sidebarTail: TranscriptEntry | undefined;
+const entryQueries: unknown[] = [];
 function snapshot(): Snapshot {
   return {
     cursor: '1',
@@ -45,7 +47,7 @@ function snapshot(): Snapshot {
     workspace: { ...resource, id: 'workspace_test', name: 'Workspace', ownerUserId: 'user_test', enabled: true, timezone: 'UTC' },
     member: { ...resource, id: 'member_test', userId: 'user_test', displayName: 'Owner', email: 'owner@example.test', role: 'owner', enabled: true },
     capabilities: { controlConnected: true, methods: [], stt: false, tts: false, imageGeneration: false, apns: false, webPush: false, vapidPublicKey: null, attachmentMaxBytes: 1024, videoMaxBytes: 1024, maxAttachments: 6, minClientVersions: { web: '1.0.0', macos: '1.0.0', ios: '1.0.0' } },
-    bots: homeMachines ? [] : [bot], machines: homeMachines ?? [machine], conversations: homeMachines ? [] : [conversation], sections: [], notifications: [], activeRuns: homeMachines ? [] : [running],
+    bots: homeMachines ? [] : [sidebarTail ? { ...bot, activity: 'idle', activeRunIds: [] } : bot], machines: homeMachines ?? [machine], conversations: homeMachines ? [] : [conversation], sections: [], notifications: [], activeRuns: homeMachines || sidebarTail ? [] : [running],
     hasMore: { bots: false, machines: false, conversations: false, notifications: false },
   };
 }
@@ -62,6 +64,7 @@ beforeEach(() => {
   realtimeOptions = undefined;
   conversation.kind = 'dm'; transcriptEntries = [streaming];
   homeMachines = undefined;
+  sidebarTail = undefined; entryQueries.length = 0; conversation.lastEntryId = null;
   sessionStorage.clear();
   localStorage.clear();
   location.hash = 'screen=conversation&id=conversation_test&botId=bot_test';
@@ -70,16 +73,16 @@ beforeEach(() => {
   document.body.append(container);
   root = createRoot(container);
 
-  spyOn(LemonBotClient.prototype, 'call').mockImplementation((async endpoint => {
+  spyOn(LemonBotClient.prototype, 'call').mockImplementation((async (endpoint: string, options?: { query?: unknown }) => {
     calls.push(endpoint);
     switch (endpoint) {
       case 'GET /sync': return snapshot();
       case 'POST /devices': return { ...resource, id: 'device_test', userId: 'user_test', installationId: 'install_test', platform: 'web', name: 'Browser', appVersion: '1.0.0', pushEnabled: false, lastSeenAtMs: 1 };
       case 'GET /conversations/:id': return conversation;
-      case 'GET /conversations/:id/entries': return { items: transcriptEntries, nextCursor: null };
+      case 'GET /conversations/:id/entries': entryQueries.push(options?.query); return { items: transcriptEntries, nextCursor: null };
       case 'GET /runs': return { items: [running], nextCursor: null };
       case 'GET /runs/:id': return finished;
-      case 'GET /entries/:id': return finalEntry;
+      case 'GET /entries/:id': return sidebarTail ?? finalEntry;
       case 'GET /machines/:id/host': return { hostname: 'studio', os: 'macOS', osVersion: '26', arch: 'arm64', cpuCount: 8, memTotalBytes: 1, memFreeBytes: 1, diskTotalBytes: 1, diskFreeBytes: 1, uptimeSec: 1, lemonVersion: '1', defaultCwd: '/tmp', user: 'owner', measuredAtMs: 1 };
       case 'GET /conversations/:id/composer': return { conversationId: conversation.id, text: '', attachmentIds: [], replyToEntryId: null, updatedAtMs: 1, revision: 1 };
       case 'GET /conversations/:id/approval-allowances': return { items: [], nextCursor: null };
@@ -175,3 +178,25 @@ for (const [variant, machines, canCreate] of [
     if (canCreate) expect(home.querySelector('p')?.textContent).not.toMatch(/connect one/i);
   });
 }
+
+test('initial sidebar preview skips trailing tool calls and caches against the summary last-entry ID', async () => {
+  sidebarTail = { ...finalEntry, id: 'tool_completed', seq: 100, kind: 'tool_call', tool: 'terminal', title: 'Tool completed', status: 'completed', detail: null };
+  conversation.lastEntryId = sidebarTail.id;
+  transcriptEntries = [
+    { ...finalEntry, id: 'old_reply', seq: 81, text: 'Older reply' },
+    { ...finalEntry, id: 'latest_reply', seq: 98, text: '**Latest reply**' },
+    { ...sidebarTail, id: 'tool_started', seq: 99, status: 'started' },
+  ];
+  location.hash = 'screen=home';
+  await act(async () => root.render(<App />));
+  await waitFor(() => !!container.querySelector('.roster')?.textContent?.includes('Latest reply'));
+  expect(entryQueries).toEqual([{ beforeSeq: 100, afterSeq: 79, limit: 20 }]);
+  expect(calls.filter(endpoint => endpoint === 'GET /entries/:id')).toHaveLength(1);
+  expect(container.querySelector('.roster')?.textContent).not.toContain('Older reply');
+  // A different summary changes the hook key but must not reload this tail.
+  await act(async () => {
+    await realtimeOptions!.onEvent({ type: 'event', seq: '2', event: 'conversation.updated', timestampMs: 2, payload: { ...conversation, id: 'other_room', lastEntryId: null, kind: 'group' } });
+  });
+  expect(calls.filter(endpoint => endpoint === 'GET /entries/:id')).toHaveLength(1);
+  expect(entryQueries).toHaveLength(1);
+});

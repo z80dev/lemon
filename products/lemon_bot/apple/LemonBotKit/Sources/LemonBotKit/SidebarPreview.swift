@@ -45,14 +45,24 @@ extension LemonBotStore {
         return "\(account?.id ?? ""):\(connectionState == "online")|\(summaries)"
     }
 
-    /// Use the snapshot's last-entry ID, just like web, without opening the chat.
+    /// Use the snapshot's last-entry ID without opening the chat. Tool events can
+    /// follow a reply, so inspect the preceding sequence window when needed.
     public func sidebarPreview(in room: Conversation) async throws -> SidebarPreview? {
         guard let lastID = room.lastEntryId else { return nil }
-        if let cached = entries[room.id]?.last(where: { $0.id == lastID }) {
-            return SidebarPreview(entry: cached)
+        let cached = entries[room.id]?.last(where: { $0.id == lastID })
+        guard connectionState == "online" else {
+            guard cached != nil else { return nil }
+            return entries[room.id]?.reversed().lazy.compactMap { SidebarPreview(entry: $0) }.first
         }
-        guard connectionState == "online" else { return nil }
-        let entry: TranscriptEntry = try await read("/entries/\(HTTPTransport.pathID(lastID))")
-        return SidebarPreview(entry: entry)
+        let entry: TranscriptEntry
+        if let cached { entry = cached }
+        else { entry = try await read("/entries/\(HTTPTransport.pathID(lastID))") }
+        if let preview = SidebarPreview(entry: entry) { return preview }
+        // The endpoint sorts ascending: beforeSeq alone would return the oldest
+        // page. Bound both ends to get the 20 sequences immediately before it.
+        let page: Page<TranscriptEntry> = try await read("/conversations/\(HTTPTransport.pathID(room.id))/entries", query: [
+            "beforeSeq": String(entry.seq), "afterSeq": String(max(0, entry.seq - 21)), "limit": "20"
+        ])
+        return page.items.reversed().lazy.compactMap { SidebarPreview(entry: $0) }.first
     }
 }

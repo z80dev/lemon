@@ -24,6 +24,10 @@ Owner sign-in and management work before model authentication. **Verified** and 
 With no Bots, the home card offers creation when a computer is already online;
 otherwise it explains connecting a computer first.
 
+Sidebar previews use each conversation's last-entry ID. When it points at a tool
+event, the sidebar checks the preceding 20 transcript sequences for the latest
+previewable entry and caches the result until the last-entry ID changes.
+
 There is no Team Bot publishing, manager assignment, live other-user Bot access, cross-human room membership, Team memory/skills or shared connector authority. Workspace/Public templates contain reviewed declarative content and always create a separate owned Bot, never access to the publisher's live Bot or credentials.
 
 ## Connect iPhone from a desktop browser

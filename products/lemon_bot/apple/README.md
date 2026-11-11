@@ -4,6 +4,10 @@ Native SwiftUI clients for the independent Lemon Bot product backend. macOS and 
 
 Sidebar previews use the conversation's last-entry ID from sync, fetching that entry once online without opening the chat. Loaded previews remain available offline; uncached rows say “Messages load when you're online.” Section headings expose expanded/collapsed state to VoiceOver, explain offline availability, and pinned Bots announce selection. On Mac, record global shortcuts in Settings rather than typing shortcut syntax; Previous/Next Bot are listed in the Conversation menu (⌘[/⌘]).
 
+When the last entry is a tool event, previews inspect the preceding 20 transcript
+sequences for the newest previewable entry. The sidebar caches the result against
+the conversation's last-entry ID, not the earlier reply's ID.
+
 Machine Bot access uses the same [grouped grants controls](../web/README.md#assistant-destinations)
 as web: measured capability names, Off / View only / Full, warnings only when
 effective access differs, and one Why disclosure for raw reasons and policy.

@@ -24,8 +24,9 @@
 ### Fixed
 
 - First-run home copy recognizes online computers instead of asking to connect
-  one again. Mac sidebar previews retry after initial sync goes online and load
-  the last entry without requiring the conversation to be opened.
+  one again. Mac sidebar previews retry after initial sync goes online. Both clients
+  look behind trailing tool events for the latest reply without opening the chat,
+  caching that result against the conversation's last-entry ID.
 
 - Finished runs no longer leave “Writing a reply” or a caret behind when completion
   arrives late; idle Bots reconcile stale run/message state. Grant changes cannot

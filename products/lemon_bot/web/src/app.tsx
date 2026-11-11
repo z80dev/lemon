@@ -283,7 +283,7 @@ function Home() {
   if (snapshot.bots.length === 0) return <div className="home"><EmptyState title="Create your first Bot" action={<div className="row"><button className="primary" onClick={() => navigate({ screen: onlineMachines.length ? 'bot.create' : 'machine.attach' })}>{onlineMachines.length ? 'Create a Bot' : 'Connect a computer'}</button><button onClick={() => navigate({ screen: 'templates' })}>Explore templates</button></div>}><p>{onlineMachines.length ? `${sole ? `${sole.name} is` : 'Your computers are'} online. Give your first Bot a name and a job.` : 'Bots run on a computer you connect to Lemon Bot, even when this app is closed. Connect one, wait for it to show online, then give your first Bot a name and a job.'}</p>{sole && <Suspense fallback={null}><ModelStatusLine machineId={sole.id}/></Suspense>}</EmptyState></div>;
   return <div className="home"><EmptyState title="Message a Bot"><p>Pick a Bot to continue where you left off. Bots keep working on their computers while this app is closed.</p></EmptyState></div>;
 }
-interface Preview { entryId: string; text: string }
+interface Preview { entryId: string; text?: string }
 /** Last-message previews keyed by conversation, refreshed when a conversation's lastEntryId changes. */
 function usePreviews(conversations: Conversation[]) {
   const { client, online } = useApp();
@@ -296,7 +296,16 @@ function usePreviews(conversations: Conversation[]) {
       for (const room of conversations) {
         const lastId = room.lastEntryId;
         if (!lastId || previews[room.id]?.entryId === lastId) continue;
-        try { const entry = await client.call('GET /entries/:id', { params: { id: lastId } }); const text = previewText(entry); if (!cancelled && text) setPreviews(current => ({ ...current, [room.id]: { entryId: lastId, text } })); } catch { /* A missing preview falls back to the Bot's job. */ }
+        try {
+          const entry = await client.call('GET /entries/:id', { params: { id: lastId } });
+          let text = previewText(entry);
+          if (!text) {
+            // Entries are ascending: beforeSeq alone selects the oldest page.
+            const page = await client.call('GET /conversations/:id/entries', { params: { id: room.id }, query: { beforeSeq: entry.seq, afterSeq: Math.max(0, entry.seq - 21), limit: 20 } });
+            for (let index = page.items.length - 1; index >= 0 && !text; index--) text = previewText(page.items[index]!);
+          }
+          if (!cancelled) setPreviews(current => ({ ...current, [room.id]: { entryId: lastId, text } }));
+        } catch { /* A missing preview falls back to the Bot's job. */ }
       }
     })();
     return () => { cancelled = true; };

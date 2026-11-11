@@ -26,7 +26,7 @@ struct SidebarView: View {
     @State private var showHidden = false
     @State private var unreadOnly = false
     @State private var visibleRows: Set<ID> = []
-    @State private var previews: [ID: SidebarPreview] = [:]
+    @State private var previews: [ID: (lastEntryID: ID, text: String?)] = [:]
     @State private var action = UIActionState()
     @State private var showConnection = false
     @FocusState private var filterFocused: Bool
@@ -550,8 +550,11 @@ struct SidebarView: View {
 
     private func loadPreviews() async {
         for room in store.conversations where ["dm", "task", "group"].contains(room.kind) {
-            guard let lastID = room.lastEntryId, previews[room.id]?.entryID != lastID else { continue }
-            if let preview = try? await store.sidebarPreview(in: room) { previews[room.id] = preview }
+            guard let lastID = room.lastEntryId, previews[room.id]?.lastEntryID != lastID else { continue }
+            do {
+                let preview = try await store.sidebarPreview(in: room)
+                if preview != nil || store.isOnline { previews[room.id] = (lastID, preview?.text) }
+            } catch { /* A later summary change or reconnect retries failed reads. */ }
         }
     }
     private func sidebar(_ bot: Bot, _ fields: JSONObject) async {
