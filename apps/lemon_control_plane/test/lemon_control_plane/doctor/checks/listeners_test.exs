@@ -6,6 +6,7 @@ defmodule LemonControlPlane.Doctor.Checks.ListenersTest do
   # Every listener is supplied explicitly so the suite never inspects a real
   # socket, a real epmd or this VM's distribution settings.
   @loopback [
+    observed_binds: %{},
     control_plane_ip: {127, 0, 0, 1},
     control_plane_port: 4040,
     node_gateway_ip: {127, 0, 0, 1},
@@ -54,6 +55,17 @@ defmodule LemonControlPlane.Doctor.Checks.ListenersTest do
 
       assert check([], "listeners.web").message =~ "127.0.0.1:4080"
       assert check([], "listeners.sim_ui").message =~ "127.0.0.1:4090"
+    end
+
+    test "an exposed running listener overrides new loopback configuration" do
+      exposed = check([observed_binds: %{4040 => :wildcard}], "listeners.control_plane")
+      assert exposed.status == :warn
+      assert exposed.message =~ "listener is bound to *:4040"
+      assert exposed.remediation =~ "restart Lemon"
+
+      lan = check([observed_binds: %{4080 => {:non_loopback, "192.168.1.9"}}], "listeners.web")
+      assert lan.status == :warn
+      assert lan.message =~ "192.168.1.9:4080"
     end
 
     test "a non-loopback bind is reported as configured, never as proven exposure" do

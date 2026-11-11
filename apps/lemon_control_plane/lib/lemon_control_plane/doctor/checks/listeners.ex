@@ -2,11 +2,11 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
   @moduledoc """
   Doctor diagnostics for Lemon's network listener binds.
 
-  The HTTP listeners are reported from configuration, because that is what the
-  runtime binds: `listeners.control_plane`, `listeners.node_gateway`,
-  `listeners.web`, `listeners.sim_ui` and `listeners.a2a`. Any non-loopback
-  bind warns; a bind alone cannot prove whether TLS or an encrypted overlay
-  fronts it, so the warning asks the operator to ensure one does.
+  HTTP listeners are inspected with `lsof` or `/proc/net/tcp{,6}` where available:
+  `listeners.control_plane`, `listeners.node_gateway`, `listeners.web`,
+  `listeners.sim_ui` and `listeners.a2a`. Otherwise their configured bind is
+  reported explicitly as configured. Non-loopback binds warn; a bind alone
+  cannot prove whether TLS or an encrypted overlay fronts it.
 
   `listeners.epmd` is observed, not configured: epmd outlives the BEAM, so a
   stale instance from before the loopback upgrade can still hold `*:4369`. The
@@ -61,7 +61,7 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
         parse_port_env("LEMON_CONTROL_PLANE_PORT") ||
         @default_control_port
 
-    evaluate_listener("listeners.control_plane", "Control plane", ip, port)
+    evaluate_listener("listeners.control_plane", "Control plane", ip, port, opts)
   end
 
   defp check_node_gateway(opts) do
@@ -82,7 +82,7 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
     if port == 0 do
       Check.pass("listeners.node_gateway", "Node gateway is disabled (port 0).")
     else
-      evaluate_listener("listeners.node_gateway", "Node gateway", ip, port)
+      evaluate_listener("listeners.node_gateway", "Node gateway", ip, port, opts)
     end
   end
 
@@ -108,7 +108,7 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
           parse_port_env("LEMON_WEB_PORT") ||
           @default_web_port
 
-      evaluate_listener("listeners.web", "Web UI", ip, port)
+      evaluate_listener("listeners.web", "Web UI", ip, port, opts)
     end
   end
 
@@ -134,7 +134,7 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
           parse_port_env("LEMON_SIM_UI_PORT") ||
           @default_sim_port
 
-      evaluate_listener("listeners.sim_ui", "Sim UI", ip, port)
+      evaluate_listener("listeners.sim_ui", "Sim UI", ip, port, opts)
     end
   end
 
@@ -158,7 +158,7 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
           {opts[:a2a_ip] || @default_loopback, opts[:a2a_port] || @default_a2a_port}
         end
 
-      evaluate_listener("listeners.a2a", "A2A listener", ip, port)
+      evaluate_listener("listeners.a2a", "A2A listener", ip, port, opts)
     end
   end
 
@@ -229,18 +229,50 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
   # Helpers
   # ---------------------------------------------------------------------------
 
-  defp evaluate_listener(check_name, label, ip, port) do
+  defp evaluate_listener(check_name, label, ip, port, opts) do
     formatted_ip = format_ip(ip)
 
-    if loopback_ip?(ip) do
-      Check.pass(check_name, "#{label} is configured to bind loopback (#{formatted_ip}:#{port}).")
-    else
-      Check.warn(
-        check_name,
-        "#{label} is configured to bind #{formatted_ip}:#{port}; ensure TLS or an encrypted overlay protects this bind.",
-        "Bind to loopback (127.0.0.1) or place TLS or an encrypted overlay (such as Tailscale) in front."
-      )
+    observed =
+      case Keyword.fetch(opts, :observed_binds) do
+        {:ok, binds} -> Map.get(binds, port, :unknown)
+        :error -> probe_listener(port)
+      end
+
+    case observed do
+      :wildcard ->
+        exposed_listener(check_name, label, "*", port)
+
+      {:non_loopback, address} ->
+        exposed_listener(check_name, label, address, port)
+
+      :loopback ->
+        Check.pass(
+          check_name,
+          "#{label} listener is bound to loopback on port #{port} (configured #{formatted_ip})."
+        )
+
+      _ ->
+        if loopback_ip?(ip) do
+          Check.pass(
+            check_name,
+            "#{label} is configured to bind loopback (#{formatted_ip}:#{port})."
+          )
+        else
+          Check.warn(
+            check_name,
+            "#{label} is configured to bind #{formatted_ip}:#{port}; ensure TLS or an encrypted overlay protects this bind.",
+            "Bind to loopback (127.0.0.1) or place TLS or an encrypted overlay (such as Tailscale) in front."
+          )
+        end
     end
+  end
+
+  defp exposed_listener(check_name, label, address, port) do
+    Check.warn(
+      check_name,
+      "#{label} listener is bound to #{address}:#{port}; ensure TLS or an encrypted overlay protects this bind.",
+      "Use a loopback bind and restart Lemon, or protect this listener with TLS or an encrypted overlay."
+    )
   end
 
   # epmd runs outside the BEAM, so its bind is observed, never inferred from
@@ -248,24 +280,24 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
   defp probe_epmd do
     # A refused loopback connection cannot rule out an epmd bound only to a LAN
     # address. Inspect listening sockets first; unavailable inspection is unknown.
-    classify_epmd_listener()
+    probe_listener(4369)
   rescue
     _ -> :unknown
   end
 
-  defp classify_epmd_listener do
+  defp probe_listener(port) do
     cond do
-      lsof = System.find_executable("lsof") -> classify_epmd_lsof(lsof)
-      File.exists?("/proc/net/tcp") -> classify_epmd_proc()
+      lsof = System.find_executable("lsof") -> classify_listener_lsof(lsof, port)
+      File.exists?("/proc/net/tcp") -> classify_listener_proc(port)
       true -> :unknown
     end
   end
 
-  defp classify_epmd_lsof(lsof) do
-    case System.cmd(lsof, ["-nP", "-iTCP:4369", "-sTCP:LISTEN"], stderr_to_stdout: true) do
+  defp classify_listener_lsof(lsof, port) do
+    case System.cmd(lsof, ["-nP", "-a", "-iTCP:#{port}", "-sTCP:LISTEN"], stderr_to_stdout: true) do
       {output, 0} ->
         addresses =
-          ~r/(?:^|\s)(\*|\[[0-9a-fA-F:.]+\]|\d+\.\d+\.\d+\.\d+):4369\b/
+          ~r/(?:^|\s)(\*|\[[0-9a-fA-F:.]+\]|\d+\.\d+\.\d+\.\d+):\d+\b/
           |> Regex.scan(output)
           |> Enum.map(fn [_match, address] -> address end)
 
@@ -280,7 +312,9 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
     _ -> :unknown
   end
 
-  defp classify_epmd_proc do
+  defp classify_listener_proc(port) do
+    hex_port = port |> Integer.to_string(16) |> String.upcase() |> String.pad_leading(4, "0")
+
     rows =
       ["/proc/net/tcp", "/proc/net/tcp6"]
       |> Enum.flat_map(fn file ->
@@ -293,7 +327,7 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
         case String.split(line, ~r/\s+/, trim: true) do
           [_slot, local, _remote, "0A" | _rest] ->
             case String.split(local, ":") do
-              [hex_address, "1111"] -> [hex_address]
+              [hex_address, ^hex_port] -> [hex_address]
               _ -> []
             end
 
