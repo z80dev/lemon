@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Darwin runtime archive contents must be checked, not just manifest hashes."""
+"""Release archives must have complete contents and confined symlink graphs."""
 import hashlib
 import io
 import json
@@ -17,8 +17,9 @@ PYTHON_FILES = (
 )
 
 
-class DarwinPythonArchiveTests(unittest.TestCase):
-    def verify(self, profile_to_change=None, missing=(), link=None, empty=None, executable=True):
+class ReleaseArchiveTests(unittest.TestCase):
+    def verify(self, profile_to_change=None, missing=(), link=None, empty=None, executable=True,
+               backend_links=()):
         with tempfile.TemporaryDirectory(prefix="lemon-artifact-test-") as temporary:
             directory = Path(temporary)
             manifest = dict(schema=2, version="2026.11.1", channel="stable", commit="abcdef123",
@@ -54,6 +55,12 @@ class DarwinPythonArchiveTests(unittest.TestCase):
                             entry.linkname = "python3.13"
                             entry.size = 0
                         archive.addfile(entry, io.BytesIO(content))
+                    if profile == "lemon_bot":
+                        for name, target in backend_links:
+                            entry = tarfile.TarInfo(name)
+                            entry.type = tarfile.SYMTYPE
+                            entry.linkname = target
+                            archive.addfile(entry)
                 data = path.read_bytes()
                 manifest["artifacts"].append(dict(file=filename, profile=profile, platform="darwin-arm64",
                                                    os="darwin", arch="arm64", size=len(data),
@@ -93,6 +100,58 @@ class DarwinPythonArchiveTests(unittest.TestCase):
                     result = self.verify("lemon_runtime_min", **options)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(f"missing nonempty regular {notice}", result.stderr)
+
+    def test_backend_rejects_escape_after_repeated_symlink_expansion(self):
+        links = (
+            ("bot/d/a", "../x"),
+            ("bot/x/a", "."),
+            ("bot/leak", "d/a/a/a/a/../../../../../config.toml"),
+        )
+        for ordering in (links, tuple(reversed(links))):
+            with self.subTest(links=ordering):
+                result = self.verify(backend_links=ordering)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unconfined archive symlink", result.stderr)
+
+    def test_backend_rejects_symlink_cycles(self):
+        for links in (
+            (("bot/self", "self"),),
+            (("bot/first", "second"), ("bot/second", "first")),
+            (("bot/recursive", "recursive/child"),),
+        ):
+            with self.subTest(links=links):
+                result = self.verify(backend_links=links)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("cyclic archive symlink", result.stderr)
+
+    def test_backend_allows_confined_chains_and_repeated_link_expansion(self):
+        result = self.verify(backend_links=(
+            ("bot/d/a", "../x"),
+            ("bot/x/a", "."),
+            ("bot/safe", "d/a/a/a/a/../web/index.html"),
+            ("bot/root", "."),
+            ("bot/alias", "safe"),
+        ))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_backend_rejects_absolute_and_parent_symlink_escapes(self):
+        for target in ("/etc/passwd", "../config.toml", "web/../../config.toml"):
+            with self.subTest(target=target):
+                result = self.verify(backend_links=(("bot/leak", target),))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unconfined archive symlink", result.stderr)
+
+    def test_backend_rejects_entries_that_mutate_the_symlink_graph(self):
+        for links, error in (
+            ((("bot/alias", "web"), ("bot/alias/child", "assets")),
+             "archive entry traverses a symlink"),
+            ((("bot/alias", "web"), ("./bot/alias", "bin")),
+             "duplicate archive entry"),
+        ):
+            with self.subTest(links=links):
+                result = self.verify(backend_links=links)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(error, result.stderr)
 
 
 if __name__ == "__main__":

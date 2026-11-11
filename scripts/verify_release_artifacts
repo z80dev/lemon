@@ -67,6 +67,7 @@ import os
 import re
 import sys
 import tarfile
+import tempfile
 from pathlib import PurePosixPath
 
 artifact_dir = os.environ["ARTIFACT_DIR"]
@@ -84,6 +85,42 @@ PLATFORM_OS_ARCH = {
     "darwin-arm64": ("darwin", "arm64", None),
 }
 EXPECTED = {(profile, platform) for profile in PROFILES for platform in PLATFORMS}
+
+
+def resolve_archive_path(path, names):
+    """Resolve links before '..', using the complete archive rather than the host."""
+    resolved = []
+    pending = list(reversed(path.parts))
+    active = set()
+    while pending:
+        part = pending.pop()
+        if isinstance(part, tuple):
+            active.remove(part[0])
+            continue
+        if part == "..":
+            if len(resolved) <= 1:
+                raise ValueError("unconfined archive symlink")
+            resolved.pop()
+            continue
+        resolved.append(part)
+        if resolved[0] != "bot":
+            raise ValueError("unconfined archive symlink")
+        name = "/".join(resolved)
+        member = names.get(name)
+        if member is not None and member.issym():
+            if name in active:
+                raise ValueError("cyclic archive symlink")
+            target = PurePosixPath(member.linkname)
+            if target.is_absolute():
+                raise ValueError("unconfined archive symlink")
+            resolved.pop()
+            active.add(name)
+            pending.append((name,))
+            pending.extend(reversed(target.parts))
+    if not resolved or resolved[0] != "bot":
+        raise ValueError("unconfined archive symlink")
+    return resolved
+
 
 if platform_filter is not None and platform_filter not in PLATFORMS:
     print(f"error --platform must be one of {', '.join(PLATFORMS)}: {platform_filter!r}", file=sys.stderr)
@@ -256,7 +293,7 @@ for artifact in artifacts:
         try:
             with tarfile.open(artifact_path) as archive:
                 members = archive.getmembers()
-                names = {member.name.removeprefix("./"): member for member in members}
+                names = {str(PurePosixPath(member.name)): member for member in members}
                 binary = names.get("bot/bin/lemon-bot")
                 if binary is None or not binary.isfile() or not binary.mode & 0o111:
                     errors.append(f"{filename}: missing executable bot/bin/lemon-bot")
@@ -278,24 +315,42 @@ for artifact in artifacts:
                     for name in names
                 ):
                     errors.append(f"{filename}: missing host-native Sharp/libvips dependencies")
+                if len(names) != len(members):
+                    raise ValueError("duplicate archive entry")
                 for member in members:
                     path = PurePosixPath(member.name)
                     parts = path.parts
-                    if path.is_absolute() or ".." in parts or (parts and parts[0] != "bot"):
-                        errors.append(f"{filename}: unconfined archive entry")
-                        break
+                    if path.is_absolute() or ".." in parts or not parts or parts[0] != "bot":
+                        raise ValueError("unconfined archive entry")
                     if member.isdev() or member.isfifo() or member.islnk():
-                        errors.append(f"{filename}: unsupported special archive entry")
-                        break
+                        raise ValueError("unsupported special archive entry")
                     if any(part in {".git", ".env", ".lemon"} or part.startswith(".env.") for part in parts):
-                        errors.append(f"{filename}: archive contains checkout or private state")
-                        break
-                    if member.issym():
-                        target = PurePosixPath(member.linkname)
-                        normalized = os.path.normpath(str(path.parent / target))
-                        if target.is_absolute() or not normalized.startswith("bot/"):
-                            errors.append(f"{filename}: unconfined archive symlink")
-                            break
+                        raise ValueError("archive contains checkout or private state")
+                    # Entries below a link would mutate the graph during extraction.
+                    if any(
+                        names[str(parent)].issym()
+                        for parent in path.parents
+                        if str(parent) in names
+                    ):
+                        raise ValueError("archive entry traverses a symlink")
+                for member in members:
+                    resolve_archive_path(PurePosixPath(member.name), names)
+
+                # Check actual filesystem resolution too, after graph validation
+                # makes extraction safe even on Python without tar data filters.
+                with tempfile.TemporaryDirectory(prefix="lemon-artifact-verify-") as temporary:
+                    if hasattr(tarfile, "fully_trusted_filter"):
+                        archive.extractall(path=temporary, filter="fully_trusted")
+                    else:
+                        archive.extractall(path=temporary)
+                    root = os.path.join(os.path.realpath(temporary), "bot")
+                    for directory, directories, files in os.walk(root, followlinks=False):
+                        for name in ["."] + directories + files:
+                            resolved = os.path.realpath(os.path.join(directory, name))
+                            if os.path.commonpath((root, resolved)) != root:
+                                raise ValueError("unconfined extracted archive entry")
+        except ValueError as error:
+            errors.append(f"{filename}: {error}")
         except (OSError, tarfile.TarError) as error:
             errors.append(f"{filename}: unreadable backend archive: {error}")
 

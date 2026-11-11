@@ -92,7 +92,11 @@ public struct ReleasePin: Equatable, Sendable {
 
     /// Pinned install hint command for Terminal.
     public func installCommand() -> String {
-        "curl -fsSL \(baseURL.absoluteString)/releases/download/v\(version)/install.sh | sh -s -- --profile bot"
+        func quote(_ value: String) -> String {
+            "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+        }
+        let url = "\(baseURL.absoluteString)/releases/download/v\(version)/install.sh"
+        return "curl -fsSL \(quote(url)) | LEMON_VERSION=\(quote(version)) LEMON_CHANNEL=\(quote(channel)) LEMON_INSTALL_BASE_URL=\(quote(baseURL.absoluteString)) sh -s -- --profile bot"
     }
 
     /// Fallback unpinned install hint command when no pin is embedded.
@@ -405,6 +409,14 @@ public enum RuntimeInstaller {
         public let layout: InstallLayout
         public let baseURL: URL
         public let manifestSHA256: String?
+        private let runtimePointer: String?
+        private let backendPointer: String?
+
+        fileprivate func matchesPointers() -> Bool {
+            let fm = FileManager.default
+            return runtimePointer == (try? fm.destinationOfSymbolicLink(atPath: layout.runtimeCurrentLink.path))
+                && backendPointer == (try? fm.destinationOfSymbolicLink(atPath: layout.backendCurrentLink.path))
+        }
 
         public init(
             action: Action,
@@ -412,10 +424,18 @@ public enum RuntimeInstaller {
             baseURL: URL,
             manifestSHA256: String?
         ) {
+            self.init(action: action, layout: layout, baseURL: baseURL,
+                      manifestSHA256: manifestSHA256, snapshot: RuntimeInstaller.pointers(layout: layout))
+        }
+
+        fileprivate init(action: Action, layout: InstallLayout, baseURL: URL,
+                         manifestSHA256: String?, snapshot: Pointers) {
             self.action = action
             self.layout = layout
             self.baseURL = baseURL
             self.manifestSHA256 = manifestSHA256
+            runtimePointer = snapshot.runtimePointer
+            backendPointer = snapshot.backendPointer
         }
 
         public var isReady: Bool {
@@ -461,13 +481,17 @@ public enum RuntimeInstaller {
         let runtimeVersion: String?
         let backendVersion: String?
         let backendChannel: String?
+        let runtimePointer: String?
+        let backendPointer: String?
     }
 
     static func pointers(layout: InstallLayout) -> Pointers {
         let fileManager = FileManager.default
+        let runtimePointer = try? fileManager.destinationOfSymbolicLink(atPath: layout.runtimeCurrentLink.path)
+        let backendPointer = try? fileManager.destinationOfSymbolicLink(atPath: layout.backendCurrentLink.path)
 
         var runtimeVersion: String? = nil
-        if let dest = try? fileManager.destinationOfSymbolicLink(atPath: layout.runtimeCurrentLink.path) {
+        if let dest = runtimePointer {
             let name = URL(fileURLWithPath: dest).lastPathComponent
             if !name.isEmpty && name != "current" {
                 runtimeVersion = name
@@ -476,7 +500,7 @@ public enum RuntimeInstaller {
 
         var backendVersion: String? = nil
         var backendChannel: String? = nil
-        if let dest = try? fileManager.destinationOfSymbolicLink(atPath: layout.backendCurrentLink.path) {
+        if let dest = backendPointer {
             let key = URL(fileURLWithPath: dest).lastPathComponent
             if key.hasSuffix("-darwin-arm64") {
                 let remainder = key.dropLast("-darwin-arm64".count)
@@ -493,7 +517,8 @@ public enum RuntimeInstaller {
             }
         }
 
-        return Pointers(runtimeVersion: runtimeVersion, backendVersion: backendVersion, backendChannel: backendChannel)
+        return Pointers(runtimeVersion: runtimeVersion, backendVersion: backendVersion,
+                        backendChannel: backendChannel, runtimePointer: runtimePointer, backendPointer: backendPointer)
     }
 
     /// Evaluates current symlink pointers and returns the required installation plan.
@@ -513,7 +538,7 @@ public enum RuntimeInstaller {
                 action: .ready,
                 layout: layout,
                 baseURL: pin.baseURL,
-                manifestSHA256: pin.manifestSHA256
+                manifestSHA256: pin.manifestSHA256, snapshot: state
             )
 
         case (.none, .none):
@@ -525,7 +550,7 @@ public enum RuntimeInstaller {
                 action: .installBoth(version: pin.version, channel: pin.channel, digestEnforced: true),
                 layout: layout,
                 baseURL: pin.baseURL,
-                manifestSHA256: pin.manifestSHA256
+                manifestSHA256: pin.manifestSHA256, snapshot: state
             )
 
         case (.some(let runtime), .none):
@@ -538,7 +563,7 @@ public enum RuntimeInstaller {
                     action: .installBackend(version: pin.version, channel: pin.channel, digestEnforced: true),
                     layout: layout,
                     baseURL: pin.baseURL,
-                    manifestSHA256: pin.manifestSHA256
+                    manifestSHA256: pin.manifestSHA256, snapshot: state
                 )
             }
             // Row 4a: W | none -> install the missing backend at W (HTTPS + sha only)
@@ -546,7 +571,7 @@ public enum RuntimeInstaller {
                 action: .installBackend(version: runtime, channel: pin.channel, digestEnforced: false),
                 layout: layout,
                 baseURL: pin.baseURL,
-                manifestSHA256: nil
+                manifestSHA256: nil, snapshot: state
             )
 
         case (.none, .some(let backend)):
@@ -559,7 +584,7 @@ public enum RuntimeInstaller {
                     action: .installRuntime(version: pin.version, channel: pin.channel, digestEnforced: true),
                     layout: layout,
                     baseURL: pin.baseURL,
-                    manifestSHA256: pin.manifestSHA256
+                    manifestSHA256: pin.manifestSHA256, snapshot: state
                 )
             }
             // Row 4b: none | W -> install the missing runtime at W (HTTPS + sha only)
@@ -567,7 +592,7 @@ public enum RuntimeInstaller {
                 action: .installRuntime(version: backend, channel: state.backendChannel ?? pin.channel, digestEnforced: false),
                 layout: layout,
                 baseURL: pin.baseURL,
-                manifestSHA256: nil
+                manifestSHA256: nil, snapshot: state
             )
         }
     }
@@ -670,6 +695,7 @@ public enum RuntimeInstaller {
         }
 
         let state = pointers(layout: layout)
+        guard plan.matchesPointers() else { throw RuntimeInstallError.planStale }
         if needRuntime && state.runtimeVersion != nil { throw RuntimeInstallError.planStale }
         if needBackend && state.backendVersion != nil { throw RuntimeInstallError.planStale }
 
@@ -1009,8 +1035,9 @@ public enum RuntimeInstaller {
         guard listing.status == 0 else {
             throw RuntimeInstallError.unsafeArchive(file: file, detail: "could not list the archive (status \(listing.status))")
         }
-        guard let output = String(data: listing.standardOutput, encoding: .utf8) else {
-            throw RuntimeInstallError.unsafeArchive(file: file, detail: "archive listing is not valid UTF-8")
+        guard listing.standardOutput.count < 16 * 1024 * 1024,
+              let output = String(data: listing.standardOutput, encoding: .utf8) else {
+            throw RuntimeInstallError.unsafeArchive(file: file, detail: "archive listing is too large or not valid UTF-8")
         }
 
         for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -1037,6 +1064,85 @@ public enum RuntimeInstaller {
                 throw RuntimeInstallError.unsafeArchive(file: file, detail: "backend archive contains an unexpected top level: \(entry)")
             }
         }
+
+        if !isRuntime {
+            let verbose = try runProcess(
+                executable: URL(fileURLWithPath: "/usr/bin/tar"),
+                arguments: ["-tvzf", tarball.path],
+                environment: ["PATH": "/usr/bin:/bin", "LC_ALL": "C"],
+                currentDirectory: nil, timeout: 300, component: file
+            )
+            guard verbose.status == 0,
+                  verbose.standardOutput.count < 16 * 1024 * 1024,
+                  let details = String(data: verbose.standardOutput, encoding: .utf8) else {
+                throw RuntimeInstallError.unsafeArchive(file: file, detail: "could not inspect archive links")
+            }
+            let names = output.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+            let rows = details.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+            guard names.count == rows.count else {
+                throw RuntimeInstallError.unsafeArchive(file: file, detail: "ambiguous archive listing")
+            }
+            var links: [String: String] = [:]
+            var members = Set<String>()
+            for (name, row) in zip(names, rows) {
+                let normalized = name.split(separator: "/").filter { $0 != "." }.joined(separator: "/")
+                guard members.insert(normalized).inserted else {
+                    throw RuntimeInstallError.unsafeArchive(file: file, detail: "duplicate archive member")
+                }
+                if row.first == "l" {
+                    let marker = " \(name) -> "
+                    guard let range = row.range(of: marker),
+                          row.range(of: marker, range: range.upperBound..<row.endIndex) == nil else {
+                        throw RuntimeInstallError.unsafeArchive(file: file, detail: "ambiguous archive symlink")
+                    }
+                    links[normalized] = String(row[range.upperBound...])
+                } else if row.first != "-" && row.first != "d" {
+                    throw RuntimeInstallError.unsafeArchive(file: file, detail: "backend contains a special file")
+                }
+            }
+            for member in members {
+                var ancestors = member.components(separatedBy: "/")
+                ancestors.removeLast()
+                while !ancestors.isEmpty {
+                    guard links[ancestors.joined(separator: "/")] == nil else {
+                        throw RuntimeInstallError.unsafeArchive(file: file, detail: "archive entry traverses a symlink")
+                    }
+                    ancestors.removeLast()
+                }
+                try resolveBackendPath(member, links: links, file: file)
+            }
+        }
+    }
+
+    /// Expand links before processing subsequent `..` components, as the kernel does.
+    private static func resolveBackendPath(_ path: String, links: [String: String], file: String) throws {
+        func resolve(_ parts: [String], base: [String], active: Set<String>) throws -> [String] {
+            var result = base
+            for part in parts {
+                if part.isEmpty || part == "." { continue }
+                if part == ".." {
+                    guard result.count > 1 else {
+                        throw RuntimeInstallError.unsafeArchive(file: file, detail: "backend symlink escapes bot directory")
+                    }
+                    result.removeLast()
+                    continue
+                }
+                result.append(part)
+                guard result.first == "bot" else {
+                    throw RuntimeInstallError.unsafeArchive(file: file, detail: "backend symlink escapes bot directory")
+                }
+                let key = result.joined(separator: "/")
+                if let target = links[key] {
+                    guard !target.hasPrefix("/"), !active.contains(key), active.count < 256 else {
+                        throw RuntimeInstallError.unsafeArchive(file: file, detail: "backend symlink cycle or absolute target")
+                    }
+                    result.removeLast()
+                    result = try resolve(target.components(separatedBy: "/"), base: result, active: active.union([key]))
+                }
+            }
+            return result
+        }
+        _ = try resolve(path.components(separatedBy: "/"), base: [], active: [])
     }
 
     private static func walkRuntimeTree(root: URL, file: String) throws {
@@ -1077,7 +1183,7 @@ public enum RuntimeInstaller {
             throw RuntimeInstallError.unsafeArchive(file: file, detail: "could not enumerate the staged backend")
         }
 
-        let botRoot = root.appendingPathComponent("bot", isDirectory: true).standardizedFileURL.path
+        var links: [String: String] = [:]
         for case let url as URL in enumerator {
             var info = stat()
             guard lstat(url.path, &info) == 0 else {
@@ -1091,13 +1197,15 @@ public enum RuntimeInstaller {
                 if target.hasPrefix("/") {
                     throw RuntimeInstallError.unsafeArchive(file: file, detail: "backend contains an absolute symlink: \(target)")
                 }
-                let resolved = url.deletingLastPathComponent().appendingPathComponent(target).standardizedFileURL.path
-                guard resolved == botRoot || resolved.hasPrefix(botRoot + "/") else {
-                    throw RuntimeInstallError.unsafeArchive(file: file, detail: "backend symlink escapes bot directory: \(target)")
-                }
+                let relative = String(url.path.dropFirst(root.path.count + 1))
+                links[relative] = target
             } else if kind != S_IFREG && kind != S_IFDIR {
                 throw RuntimeInstallError.unsafeArchive(file: file, detail: "backend contains a special file: \(url.lastPathComponent)")
             }
+        }
+        // Rebuild the graph from the extracted tree rather than trusting the tar listing.
+        for link in links.keys {
+            try resolveBackendPath(link, links: links, file: file)
         }
 
         var binary = stat()

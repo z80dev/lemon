@@ -24,6 +24,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   dedicated control-plane and gateway launchers also default distribution and
   epmd to loopback. Both primary launchers honor the saved node-gateway port,
   including `0` to disable it, without overriding explicit environment settings.
+- Harden Lemon Bot installation: reject chained archive symlink escapes and
+  cycles, preserve release pins in Terminal commands, invalidate setup plans
+  when either component pointer changes, and stage both combined-preset
+  components before promotion with rollback on failure.
 
 - Managed controllers route start/restart through their service manager.
   Deliberate stops stay down; updates restart only previously running units,

@@ -132,13 +132,20 @@ final class RuntimeInstallerTests: XCTestCase {
         XCTAssertEqual(pin?.manifestSHA256, sha)
         XCTAssertEqual(pin?.baseURL, URL(string: "https://github.com/custom/lemon")!)
         XCTAssertEqual(pin?.manifestURL.absoluteString, "https://github.com/custom/lemon/releases/download/v2026.11.1/manifest.json")
-        XCTAssertEqual(pin?.installCommand(), "curl -fsSL https://github.com/custom/lemon/releases/download/v2026.11.1/install.sh | sh -s -- --profile bot")
+        XCTAssertEqual(pin?.installCommand(), "curl -fsSL 'https://github.com/custom/lemon/releases/download/v2026.11.1/install.sh' | LEMON_VERSION='2026.11.1' LEMON_CHANNEL='preview' LEMON_INSTALL_BASE_URL='https://github.com/custom/lemon' sh -s -- --profile bot")
         XCTAssertTrue(pin?.isDigestEnforced ?? false)
 
         // Fallback command
         XCTAssertEqual(ReleasePin.fallbackInstallCommand, "curl -fsSL https://github.com/z80dev/lemon/releases/latest/download/install.sh | sh -s -- --profile bot")
         XCTAssertEqual(ReleasePin.installCommand(for: nil), ReleasePin.fallbackInstallCommand)
         XCTAssertEqual(ReleasePin.installCommand(for: pin), pin?.installCommand())
+    }
+
+    func testPinnedCommandQuotesShellValues() {
+        let pin = ReleasePin(version: "v'$(touch nope)", channel: "nightly; false",
+                             baseURL: URL(string: "https://example.com/release")!)
+        XCTAssertTrue(pin.installCommand().contains("LEMON_VERSION='v'\"'\"'$(touch nope)'"))
+        XCTAssertTrue(pin.installCommand().contains("LEMON_CHANNEL='nightly; false'"))
     }
 
     func testStableApplicationLocation() {
@@ -417,6 +424,33 @@ final class RuntimeInstallerTests: XCTestCase {
             default:
                 XCTFail("Unexpected error: \(error)")
             }
+        }
+    }
+
+    func testArchiveBackendChainedSymlinkEscapeAndCycle() async throws {
+        for links in [
+            ["bot/d/a": "../x", "bot/x/a": ".", "bot/leak": "d/a/a/a/a/../../../../../config.toml"],
+            ["bot/d/a": "../x/a", "bot/x/a": "../d/a"],
+        ] {
+            let (tarball, size, sha) = try makeFakeBackendTarball(
+                baseDir: tempDir, version: "2026.11.1", links: links)
+            let manifest = manifestJSON(artifacts: [
+                artifactEntry(file: tarball.lastPathComponent, sha: sha, size: size, profile: "lemon_bot")
+            ])
+            let base = "https://github.com/z80dev/lemon"
+            MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/manifest.json"] = (200, [:], manifest)
+            MockURLProtocol.handlers["\(base)/releases/download/v2026.11.1/\(tarball.lastPathComponent)"] =
+                (200, [:], try Data(contentsOf: tarball))
+            let plan = RuntimeInstaller.Plan(
+                action: .installBackend(version: "2026.11.1", channel: "stable", digestEnforced: true),
+                layout: layout, baseURL: URL(string: base)!, manifestSHA256: digest(manifest))
+            do {
+                try await RuntimeInstaller.install(plan, session: MockURLProtocol.session()) { _ in }
+                XCTFail("Expected unsafe archive")
+            } catch let error as RuntimeInstallError {
+                guard case .unsafeArchive = error else { return XCTFail("Unexpected error: \(error)") }
+            }
+            assertNothingInstalled()
         }
     }
 
@@ -909,6 +943,30 @@ final class RuntimeInstallerTests: XCTestCase {
         XCTAssertTrue(MockURLProtocol.requests.isEmpty, "a stale plan must not fetch anything")
     }
 
+    func testExistingComponentPointerChangesInvalidateMissingComponentPlan() async throws {
+        let fm = FileManager.default
+        for existing in [layout.runtimeCurrentLink, layout.backendCurrentLink] {
+            try fm.createDirectory(at: existing.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let original = existing == layout.runtimeCurrentLink ? "2026.11.1" : "versions/2026.11.1-stable-darwin-arm64"
+            try fm.createSymbolicLink(atPath: existing.path, withDestinationPath: original)
+            let plan = try RuntimeInstaller.plan(
+                layout: layout, pin: ReleasePin(version: "2026.11.1", manifestSHA256: String(repeating: "a", count: 64)))
+            for replacement in [original.replacingOccurrences(of: "2026.11.1", with: "2026.10.25"), "elsewhere/" + original] {
+                try fm.removeItem(at: existing)
+                try fm.createSymbolicLink(atPath: existing.path, withDestinationPath: replacement)
+                do {
+                    try await RuntimeInstaller.install(plan, session: MockURLProtocol.session()) { _ in }
+                    XCTFail("Expected planStale")
+                } catch let error as RuntimeInstallError {
+                    XCTAssertEqual(error, .planStale)
+                }
+                XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: existing.path), replacement)
+                XCTAssertTrue(MockURLProtocol.requests.isEmpty)
+            }
+            try fm.removeItem(at: existing)
+        }
+    }
+
     // MARK: - Shared assertions and fixtures
 
     private func assertNothingInstalled(file: StaticString = #filePath, line: UInt = #line) {
@@ -1094,7 +1152,8 @@ final class RuntimeInstallerTests: XCTestCase {
     private func makeFakeBackendTarball(
         baseDir: URL,
         version: String,
-        symlinkEscaping: Bool = false
+        symlinkEscaping: Bool = false,
+        links: [String: String] = [:]
     ) throws -> (url: URL, size: Int64, sha256: String) {
         let staging = baseDir.appendingPathComponent("backend_staging_\(UUID().uuidString)")
         let fm = FileManager.default
@@ -1127,6 +1186,11 @@ final class RuntimeInstallerTests: XCTestCase {
         if symlinkEscaping {
             let escapeLink = staging.appendingPathComponent("bot/escape_link")
             try fm.createSymbolicLink(atPath: escapeLink.path, withDestinationPath: "../../etc/passwd")
+        }
+        for (path, target) in links {
+            let link = staging.appendingPathComponent(path)
+            try fm.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.createSymbolicLink(atPath: link.path, withDestinationPath: target)
         }
 
         return try makeTarball(stagingDir: staging, tarballName: "lemon-\(version)-stable-darwin-arm64-lemon_bot.tar.gz", relativePaths: ["bot"])
