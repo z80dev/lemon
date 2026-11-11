@@ -172,6 +172,8 @@
 
 ### Changed
 
+- Keep immutable execution-node service adapters separate from mutable worker
+  state so connection and invocation updates retain the BEAM's small-map layout.
 - Seen-line edit protection now defaults on: anchored edits to lines not shown in
   a numbered read are refused. Disable with `[runtime.tools.edit]
   enforce_seen_lines = false`. The Git guard remains on by default

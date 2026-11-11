@@ -17,19 +17,21 @@ defmodule LemonCore.LoopbackListener do
 
   @doc false
   def owned_by_self?(port, opts) when is_integer(port) and port in 1..65_535 do
-    with {:ok, uid} <- uid(opts) do
-      case Keyword.get(opts, :os_type, :os.type()) do
-        {:unix, :linux} ->
-          linux(port, uid, Keyword.get(opts, :proc_root, "/proc"))
+    case uid(opts) do
+      {:ok, uid} ->
+        case Keyword.get(opts, :os_type, :os.type()) do
+          {:unix, :linux} ->
+            linux(port, uid, Keyword.get(opts, :proc_root, "/proc"))
 
-        {:unix, os} when os in [:darwin, :freebsd, :openbsd, :netbsd, :dragonfly] ->
-          lsof(port, uid, opts)
+          {:unix, os} when os in [:darwin, :freebsd, :openbsd, :netbsd, :dragonfly] ->
+            lsof(port, uid, opts)
 
-        _ ->
-          :unverifiable
-      end
-    else
-      _ -> :unverifiable
+          _ ->
+            :unverifiable
+        end
+
+      _ ->
+        :unverifiable
     end
   rescue
     _ -> :unverifiable

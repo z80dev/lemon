@@ -36,7 +36,7 @@ defmodule LemonCore.Service.Role do
     value = Keyword.get(opts, :port) || Map.get(env, key) || saved_port(key, opts)
 
     case Integer.parse(to_string(value || fallback)) do
-      {port, ""} when port in 1..65535 -> port
+      {port, ""} when port in 1..65_535 -> port
       _ -> fallback
     end
   end
@@ -249,7 +249,7 @@ defmodule LemonCore.Service.Role do
 
     valid_ports =
       Enum.all?([:node_port, :gateway_port, :product_port, :backend_port], fn key ->
-        is_nil(opts[key]) or (is_integer(opts[key]) and opts[key] in 1..65535)
+        is_nil(opts[key]) or (is_integer(opts[key]) and opts[key] in 1..65_535)
       end)
 
     destination = opts[:ssh]
