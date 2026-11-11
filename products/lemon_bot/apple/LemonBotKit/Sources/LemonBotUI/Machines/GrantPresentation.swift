@@ -7,6 +7,11 @@ enum GrantPresentation {
     static func label(_ level: String) -> String {
         switch level { case "read_only": return "View only"; case "read_interact": return "Full"; default: return "Off" }
     }
+    static func pendingMessage(_ grant: BotGrant) -> String? {
+        guard let pending = grant.pendingLevel else { return nil }
+        let widening = (levels.firstIndex(of: pending) ?? 0) > (levels.firstIndex(of: grant.requestedLevel) ?? 0)
+        return widening ? "Turns on when the current task finishes" : "Turns off when the current task finishes"
+    }
     static let names = ["terminal": "Terminal", "shell": "Terminal", "files": "Files", "browser": "Browser", "computer_use": "Computer use", "accessibility": "Accessibility", "screen_recording": "Screen Recording", "event_synthesizing": "Event Synthesizing", "full_disk_access": "Full Disk Access", "connectors": "Session connections", "x11_desktop": "X11 desktop automation", "desktop": "Desktop automation"]
     static func name(_ id: String, _ capability: MachineCapability?, connectorName: String? = nil) -> String {
         if let name = capability?.name, !name.isEmpty { return name }

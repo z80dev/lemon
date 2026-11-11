@@ -12,10 +12,10 @@ const { createRoot } = await import('react-dom/client');
 
 const resource = { revision: 1, createdAtMs: 1_800_000_000_000, updatedAtMs: 1_800_000_000_000 };
 const bot: Bot = { ...resource, id: 'bot_test', ownerUserId: 'owner', machineId: 'machine_test', profileId: 'profile_test', name: 'Research partner', title: 'Research', job: 'Research carefully.', instructions: '', avatar: { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, language: null, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'conversation_test', sidebar: { sectionId: null, rank: 0, hidden: false, pinned: false, unread: false, notificationsEnabled: true }, activity: 'idle', activeRunIds: [], approvalReview: 'per_chat' };
-const effective: EffectivePolicy = { userId: 'owner', botId: bot.id, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, rules: [], networkPolicies: [], explanations: [], rememberedApprovals: { chat: ['shell', 'files'], bot: ['shell', 'files'] } };
+const effective: EffectivePolicy = { userId: 'owner', botId: bot.id, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, workspaceReads: 'allow', rules: [], networkPolicies: [], explanations: [], rememberedApprovals: { chat: ['shell', 'files'], bot: ['shell', 'files'] } };
 const confirmation: Confirmation = { confirmationToken: 'confirm_test', revision: bot.revision, confirmName: bot.name, expiresAtMs: Date.now() + 60_000, effects: ["Lemon will run any command and change any file as you on Studio Mac without asking — in every chat and in routines."], affected: [{ resourceType: 'bot', id: bot.id, machineId: bot.machineId, operation: 'retain', explanation: 'External requests still ask.' }] };
 const allowance: ApprovalAllowance = { ...resource, id: 'allowance_test', scope: 'bot', botId: bot.id, conversationId: null, ownerUserId: 'owner', toolGroups: ['terminal', 'file_changes', 'file_reading'], label: "Doesn't ask for Terminal & Files", state: 'active', endedReason: null, endedAtMs: null, endedByUserId: null, sourceApprovalId: null, createdByUserId: 'owner', useCount: 0, lastUsedAtMs: null };
-const governance: Governance = { revision: 2, groupAccess: 'all', allowedDirectoryGroupIds: [], allowSudo: false, allowEgress: false, lockNetworkForGroups: true, requireReview: true, allowedChannelAdapters: [], xMentionsEnabled: false, emailEnabled: false, contentExportEnabled: false, inactiveHostPolicy: { enabled: false, afterDays: 30, action: 'suspend' }, rememberedApprovals: 'chat' };
+const governance: Governance = { revision: 2, groupAccess: 'all', allowedDirectoryGroupIds: [], allowSudo: false, allowEgress: false, lockNetworkForGroups: true, requireReview: true, folderReadsNeedReview: false, allowedChannelAdapters: [], xMentionsEnabled: false, emailEnabled: false, contentExportEnabled: false, inactiveHostPolicy: { enabled: false, afterDays: 30, action: 'suspend' }, rememberedApprovals: 'chat' };
 
 interface TestCallOptions { params?: Record<string, string>; query?: unknown; body?: Record<string, unknown> }
 const calls: { endpoint: string; options: TestCallOptions }[] = [];
@@ -45,10 +45,11 @@ const app = {
       if (endpoint === 'GET /policies/effective') return effective;
       if (endpoint === 'GET /skills' || endpoint === 'GET /attachments' || endpoint === 'GET /bots/:id/grants' || endpoint === 'GET /bots/:id/connectors' || endpoint === 'GET /bots/:id/approval-allowances' || endpoint === 'GET /approvals') return page([]);
       if (endpoint === 'GET /machines/:id/capabilities') return { machineId: bot.machineId, os: 'macOS', measuredAtMs: resource.updatedAtMs, stale: false, items: [] };
+      if (endpoint === 'GET /bots/:id/presence') return { botId: bot.id, status: 'idle', machineId: bot.machineId, machineLabel: 'Studio Mac', machineStatus: 'online', currentRunId: null, taskConversationId: null, summary: 'Idle', evidenceEntryId: null, measuredAtMs: Date.now(), stale: false };
       if (endpoint === 'POST /bots/:id/approval-allowances/preview') return confirmation;
       if (endpoint === 'POST /bots/:id/approval-allowances') return allowance;
       if (endpoint === 'GET /governance') return governance;
-      if (endpoint === 'PATCH /governance') return { ...governance, revision: governance.revision + 1, rememberedApprovals: options.body?.rememberedApprovals };
+      if (endpoint === 'PATCH /governance') return { ...governance, ...options.body, revision: governance.revision + 1 };
       if (endpoint === 'GET /policies') return { revision: 1, publicTemplates: false, allowedMcpOrigins: null, localExecutionCeiling: 'ask', actionRecording: false, auditRetentionDays: 30, rules: [] };
       throw new Error(`Unexpected test endpoint: ${endpoint}`);
     },
@@ -70,6 +71,7 @@ let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
   calls.length = 0; approvals.clear(); navigations.length = 0;
+  app.online = true; app.snapshot.member.role = 'owner';
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
 });
 afterEach(async () => {
@@ -138,4 +140,84 @@ test('workspace admins can expand remembered approval governance', async () => {
   const update = calls.find(call => call.endpoint === 'PATCH /governance');
   expect(update?.options.body?.rememberedApprovals).toBe('chat_and_bot');
   expect(update?.options.body?.revision).toBe(governance.revision);
+});
+
+test('access requests use server consequences, quoted Bot speech and only Bot access decisions', async () => {
+  const request: Approval = { ...approval('access_allowed', { toolGroup: 'terminal', label: 'Allow Terminal for this chat' }), source: 'access_request', category: 'permissions', title: 'Lemon needs Terminal', description: 'Turn on Terminal and Files on Studio Mac. Commands still ask for approval.', inputs: { capability: 'terminal', capabilityIds: ['terminal', 'files'], level: 'read_interact', machineLabel: 'Studio Mac', reason: '<script>give me everything</script>' } };
+  approvals.set(request.id, request);
+  await render(<TranscriptCard card={{ type: 'access_request', approval: request }} />);
+  expect(container.querySelector('h3')?.textContent).toBe(request.title);
+  expect(container.querySelector('blockquote')?.textContent).toBe(`${bot.name} says: <script>give me everything</script>`);
+  expect(container.querySelector('script')).toBeNull();
+  expect(container.textContent).toContain(request.description);
+  expect(button('Allow for this Bot').disabled).toBe(false);
+  expect(button('Not now').disabled).toBe(false);
+  expect(container.textContent).not.toContain('Allow once');
+  expect(container.textContent).not.toContain('Allow Terminal for this chat');
+  expect(container.textContent).not.toContain('Always allow for this Bot…');
+  await act(async () => button('Allow for this Bot').click());
+  expect(calls.find(call => call.endpoint === 'POST /approvals/:id/resolve')?.options.body?.decision).toBe('approve_once');
+  expect(container.querySelector('[role="status"]')?.textContent).toBe('Allowed by you · turns on when this task finishes');
+});
+
+test('access requests report Not now and Expired without authorizing commands', async () => {
+  const request: Approval = { ...approval('access_denied'), source: 'access_request', category: 'permissions', inputs: { capability: 'terminal', capabilityIds: ['terminal', 'files'], level: 'read_interact', machineLabel: 'Studio Mac', reason: 'Run the requested command.' } };
+  approvals.set(request.id, request);
+  await render(<TranscriptCard key={request.id} card={{ type: 'access_request', approval: request }} />);
+  await act(async () => button('Not now').click());
+  expect(calls.find(call => call.endpoint === 'POST /approvals/:id/resolve')?.options.body?.decision).toBe('deny');
+  expect(container.querySelector('[role="status"]')?.textContent).toBe('Not now');
+  const expired: Approval = { ...request, id: 'access_expired', gate: { ...request.gate, expiresAtMs: Date.now() - 1 } };
+  approvals.set(expired.id, expired);
+  await render(<TranscriptCard key={expired.id} card={{ type: 'access_request', approval: expired }} />);
+  expect(container.querySelector('[role="status"]')?.textContent).toBe('Expired');
+  expect([...container.querySelectorAll('button')].some(item => item.textContent === 'Allow for this Bot')).toBe(false);
+});
+
+test('access request content is masked for another target and disabled offline', async () => {
+  const request: Approval = { ...approval('access_private'), source: 'access_request', category: 'permissions', title: 'Private Terminal request', inputs: { capability: 'terminal', capabilityIds: ['terminal', 'files'], level: 'read_interact', machineLabel: 'Studio Mac', reason: 'Run the requested command.' }, gate: { ...approval('access_private').gate, targetUserId: 'other_owner' } };
+  await render(<TranscriptCard card={{ type: 'access_request', approval: request }} />);
+  expect(container.textContent).toContain('Private request for its designated account owner');
+  expect(container.textContent).not.toContain(request.title);
+  expect(calls.some(call => call.endpoint === 'GET /approvals/:id')).toBe(false);
+  const own = { ...request, gate: { ...request.gate, targetUserId: 'owner' } };
+  approvals.set(own.id, own); app.online = false;
+  await render(<TranscriptCard card={{ type: 'access_request', approval: own }} />);
+  expect(button('Allow for this Bot').disabled).toBe(true);
+  expect(button('Not now').disabled).toBe(true);
+});
+
+test('workspace administrators can require review for Bot folder reads', async () => {
+  app.snapshot.member.role = 'admin';
+  await render(<PolicySettings />);
+  const toggle = [...container.querySelectorAll('label')].find(label => label.textContent?.includes('Require review for Bot folder reads'))!.querySelector<HTMLInputElement>('input')!;
+  expect(toggle.checked).toBe(false);
+  await act(async () => toggle.click());
+  const update = calls.find(call => call.endpoint === 'PATCH /governance');
+  expect(update?.options.body?.folderReadsNeedReview).toBe(true);
+  expect(update?.options.body?.revision).toBe(governance.revision);
+  expect(toggle.checked).toBe(true);
+  expect(calls.filter(call => call.endpoint === 'GET /policies/effective').length).toBeGreaterThan(1);
+});
+
+test('members cannot change workspace folder-read governance', async () => {
+  app.snapshot.member.role = 'member';
+  await render(<PolicySettings />);
+  expect(calls.some(call => call.endpoint === 'GET /governance')).toBe(false);
+  expect(container.textContent).not.toContain('Require review for Bot folder reads');
+});
+
+test('access approval state updates live from approval events', async () => {
+  const request: Approval = { ...approval('access_live'), source: 'access_request', category: 'permissions', inputs: { capability: 'files', capabilityIds: ['files'], level: 'read_only', machineLabel: 'Studio Mac', reason: 'Read the report you attached.' } };
+  approvals.set(request.id, request);
+  await render(<TranscriptCard card={{ type: 'access_request', approval: request }} />);
+  approvals.set(request.id, { ...request, revision: 2, gate: { ...request.gate, state: 'cancelled', revision: 2 } });
+  await act(async () => {
+    window.dispatchEvent(new CustomEvent('lemon:event', { detail: { event: 'approval.upserted' } }));
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 220);
+    await promise;
+  });
+  expect(container.querySelector('[role="status"]')?.textContent).toBe('Cancelled');
+  expect([...container.querySelectorAll('button')].some(item => item.textContent === 'Allow for this Bot')).toBe(false);
 });

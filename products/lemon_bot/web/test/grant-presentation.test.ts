@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
 import type { BotGrant, MachineCapability } from '@lemon-bot/sdk';
-import { grantControlReason, grantGroup, grantName, grantStatus } from '../src/features/bots/grant-presentation';
+import { grantControlReason, grantGroup, grantName, grantStatus, pendingGrantStatus } from '../src/features/bots/grant-presentation';
 
 const capability: MachineCapability = { id: 'terminal', name: 'Measured terminal', category: 'shell', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['bash'], reason: 'destination_shell_measured', measuredAtMs: 1, stale: false };
-const grant: BotGrant = { id: 'grant', botId: 'bot', machineId: 'machine', capabilityId: 'terminal', requestedLevel: 'read_interact', effectiveLevel: 'read_interact', reasons: [capability.reason], revision: 1, createdAtMs: 1, updatedAtMs: 1 };
+const grant: BotGrant = { id: 'grant', botId: 'bot', machineId: 'machine', capabilityId: 'terminal', requestedLevel: 'read_interact', pendingLevel: null, effectiveLevel: 'read_interact', reasons: [capability.reason], revision: 1, createdAtMs: 1, updatedAtMs: 1 };
 
 test('measured names and categories win, connectors use their resource names', () => {
   expect(grantName('terminal', capability)).toBe(capability.name);
@@ -60,4 +60,12 @@ test('macOS permission reasons explain checked grants and Worker setup', () => {
     expect(grantStatus(policy, desktop)).toContain('workspace policy');
     expect(grantStatus({ ...policy, reasons: [...policy.reasons, 'Tool-policy cutover has not been acknowledged.'] }, desktop)).toContain('not yet confirmed');
   }
+});
+
+test('pending copy distinguishes widening and narrowing without claiming access has changed', () => {
+  expect(pendingGrantStatus(grant)).toBeNull();
+  expect(pendingGrantStatus({ ...grant, requestedLevel: 'off', pendingLevel: 'read_interact' })).toBe('Turns on when the current task finishes');
+  expect(pendingGrantStatus({ ...grant, pendingLevel: 'off' })).toBe('Turns off when the current task finishes');
+  expect(pendingGrantStatus({ ...grant, pendingLevel: 'read_only' })).toBe('Turns off when the current task finishes');
+  expect(pendingGrantStatus({ ...grant, requestedLevel: 'read_only', pendingLevel: 'read_interact' })).toBe('Turns on when the current task finishes');
 });

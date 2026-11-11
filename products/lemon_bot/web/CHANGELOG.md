@@ -27,6 +27,8 @@
 
 ### Added
 
+- Bots can ask to turn on Terminal, Files or Browser in a private access card, with explicit Bot-wide consent and queued-task status. Access changes made while working stay editable, update live and offer Stop task. Files settings explain unreviewed Bot-folder reads only on supporting computers under effective policy; workspace administrators can require review.
+
 - Same-computer browser sign-in uses one-use `lemon-bot open` links, strips tickets
   before routing, and explains local owner access once. Account settings show sign-in
   methods, let locally confirmed owners add email/password, and support local

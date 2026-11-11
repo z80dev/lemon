@@ -505,3 +505,74 @@ extension ProtocolTests {
         XCTAssertThrowsError(try JSONDecoder().decode(Conversation.self, from: JSONEncoder().encode(resource)))
     }
 }
+
+extension ProtocolTests {
+    func testAccessRequestCardAndStrictApprovalSource() throws {
+        let cards = try JSONDecoder().decode([Card].self, from: WireFixtures.cards)
+        guard case .accessRequest(let card) = try XCTUnwrap(cards.first { $0.type == "access_request" }) else { return XCTFail("Missing access card") }
+        XCTAssertEqual(card.approval.source, "access_request")
+        XCTAssertEqual(card.approval.inputs["capabilityIds"], .array([.string("terminal"), .string("files")]))
+        XCTAssertEqual(try JSONDecoder().decode(Card.self, from: JSONEncoder().encode(Card.accessRequest(card))), .accessRequest(card))
+        var approval = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(card.approval))
+        for source in ["lemon_exec", "product", "access_request"] {
+            approval["source"] = .string(source)
+            XCTAssertEqual(try JSONDecoder().decode(Approval.self, from: JSONEncoder().encode(approval)).source, source)
+        }
+        approval["source"] = .string("future_source")
+        XCTAssertThrowsError(try JSONDecoder().decode(Approval.self, from: JSONEncoder().encode(approval)))
+        let invalidCard: JSONObject = ["type": .string("access_request"), "approval": .object(approval)]
+        XCTAssertThrowsError(try JSONDecoder().decode(Card.self, from: JSONEncoder().encode(invalidCard)))
+        XCTAssertThrowsError(try JSONDecoder().decode(Card.self, from: Data(#"{"type":"access_request"}"#.utf8)))
+    }
+
+    func testGrantPendingLevelIsRequiredNullableAndEncodesNull() throws {
+        let grants = try JSONDecoder().decode([BotGrant].self, from: WireFixtures.grants)
+        XCTAssertNil(grants[0].pendingLevel)
+        XCTAssertEqual(grants[1].pendingLevel, "read_interact")
+        XCTAssertEqual(grants[1].requestedLevel, "off")
+        XCTAssertEqual(grants[1].effectiveLevel, "off")
+        let encoded = try JSONEncoder().encode(grants)
+        XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: encoded), try JSONDecoder().decode(JSONValue.self, from: WireFixtures.grants))
+        var missing = try JSONDecoder().decode([JSONObject].self, from: encoded)[0]
+        XCTAssertEqual(missing.removeValue(forKey: "pendingLevel"), .null)
+        XCTAssertThrowsError(try JSONDecoder().decode(BotGrant.self, from: JSONEncoder().encode(missing)))
+    }
+
+    func testFolderPolicyFieldsRoundTripAndRemainStrict() throws {
+        let policy = EffectivePolicy(userId: "owner", directoryGroupIds: [], productAccess: true, localExecutionCeiling: "ask", workspaceReads: "allow", allowSudo: false, allowEgress: true, rules: [], networkPolicies: [], explanations: [])
+        var value = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(policy))
+        for mode in ["allow", "ask"] {
+            value["workspaceReads"] = .string(mode)
+            XCTAssertEqual(try JSONDecoder().decode(EffectivePolicy.self, from: JSONEncoder().encode(value)).workspaceReads, mode)
+        }
+        value["workspaceReads"] = .string("deny")
+        XCTAssertThrowsError(try JSONDecoder().decode(EffectivePolicy.self, from: JSONEncoder().encode(value)))
+        value.removeValue(forKey: "workspaceReads")
+        XCTAssertThrowsError(try JSONDecoder().decode(EffectivePolicy.self, from: JSONEncoder().encode(value)))
+        let events = try JSONDecoder().decode([JSONObject].self, from: WireFixtures.events)
+        var governance = try XCTUnwrap(events.first { $0["event"]?.stringValue == "governance.updated" }?["payload"]?.objectValue)
+        for review in [false, true] {
+            governance["folderReadsNeedReview"] = .bool(review)
+            let decoded = try JSONDecoder().decode(Governance.self, from: JSONEncoder().encode(governance))
+            XCTAssertEqual(decoded.folderReadsNeedReview, review)
+            XCTAssertEqual(try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(decoded))["folderReadsNeedReview"], .bool(review))
+        }
+        let update = GovernanceUpdate(clientNonce: "folder_policy_nonce", revision: 1, folderReadsNeedReview: true)
+        XCTAssertEqual(try JSONDecoder().decode(GovernanceUpdate.self, from: JSONEncoder().encode(update)).folderReadsNeedReview, true)
+        let unchanged = GovernanceUpdate(clientNonce: "folder_policy_nonce", revision: 1)
+        XCTAssertNil(try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(unchanged))["folderReadsNeedReview"])
+    }
+
+    func testBotFolderCapabilityIsOptionalAndTyped() throws {
+        let old = MachineCapabilities(machineId: "machine", os: "macos", measuredAtMs: 1, stale: false, items: [])
+        var value = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(old))
+        XCTAssertNil(value["botFolder"])
+        XCTAssertNil(try JSONDecoder().decode(MachineCapabilities.self, from: JSONEncoder().encode(value)).botFolder)
+        value["botFolder"] = .bool(true)
+        let supported = try JSONDecoder().decode(MachineCapabilities.self, from: JSONEncoder().encode(value))
+        XCTAssertEqual(supported.botFolder, true)
+        XCTAssertEqual(try JSONDecoder().decode(MachineCapabilities.self, from: JSONEncoder().encode(supported)), supported)
+        value["botFolder"] = .string("true")
+        XCTAssertThrowsError(try JSONDecoder().decode(MachineCapabilities.self, from: JSONEncoder().encode(value)))
+    }
+}

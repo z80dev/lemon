@@ -188,6 +188,7 @@ struct TranscriptCardView: View {
             case .messageDraft(let value): DraftReviewView(store: store, draft: value.draft)
             case .calendarEvent(let value): calendar(value.event)
             case .permissionRequest(let value): ApprovalReviewView(store: store, approval: value.approval)
+            case .accessRequest(let value): ApprovalReviewView(store: store, approval: value.approval)
             case .autoReviewApproval(let value): ApprovalReviewView(store: store, approval: value.approval)
             case .localToolPermission(let value): ApprovalReviewView(store: store, approval: value.approval)
             case .publishApproval(let value): ApprovalReviewView(store: store, approval: value.approval)
@@ -220,6 +221,7 @@ struct TranscriptCardView: View {
         case .secretRequest(let value): return value.request.gate.targetUserId
         case .humanStep(let value): return value.step.gate.targetUserId
         case .permissionRequest(let value): return value.approval.gate.targetUserId
+        case .accessRequest(let value): return value.approval.gate.targetUserId
         case .autoReviewApproval(let value): return value.approval.gate.targetUserId
         case .localToolPermission(let value): return value.approval.gate.targetUserId
         case .publishApproval(let value): return value.approval.gate.targetUserId
