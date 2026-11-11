@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Stop the Lemon Bot transcript (Mac and iPhone) from pinning a CPU core in an
+  endless SwiftUI layout loop while a conversation is open.
+
 - Load the certificate provider before Telegram and Discord setup construct their
   first HTTPS request, preserving TLS verification on cold CLI invocations.
 

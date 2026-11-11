@@ -350,6 +350,12 @@ Drag the transcript downward to dismiss the keyboard interactively. A transcript
 already at the latest message stays there when the keyboard or composer resizes;
 reading older messages does not force a jump to the bottom.
 
+The transcript is a `LazyVStack` positioned with explicit `ScrollViewReader`
+bottom requests (initial open, follow), not `.defaultScrollAnchor(.bottom)`: that
+anchor re-adjusts the offset as lazy rows refine their measured heights and can
+spin the main thread in an endless layout loop. Entry navigation takes priority
+over the initial bottom request.
+
 Groups have one human owner and two to six Bots owned by that person. There are no human invitations, successor transfer or Group Leave. Deletion uses the existing exact preview/confirmation and verified active/unknown-work lifecycle. Authoritative conversation deletion removes only this account's room draft and copied staging files, not selected originals or another account's cache. Legacy cached foreign live Bots/rooms do not regain visibility during offline restoration.
 
 The transcript renders the declared entry/card families with attributable actors and durable states. Questions are ordinary non-secret fields; secrets use a masked write-only destination flow. Approvals show the exact target, Bot, host, review scope and consequences. Only the targeted user can explicitly act before expiry; approval is not proof an external action completed. Email/Slack/channel drafts expose edited recipients, target/thread, body and files before Send. Unknown delivery is not Sent. Replies, reactions and feedback never resolve gates. Stop reports the server's actual run state; queued, steering and interrupting labels come from the receipt.
