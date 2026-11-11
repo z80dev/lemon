@@ -168,9 +168,9 @@ defmodule LemonCore.Service do
                       |> base()
                       |> Map.merge(%{
                         installed: File.exists?(spec.path),
-                        state: "blocked",
-                        detail: to_string(reason)
+                        state: "blocked"
                       })
+                      |> Map.merge(error_fields(reason))
                   end
               end
 
@@ -567,8 +567,14 @@ defmodule LemonCore.Service do
             enrollment_result?(output, "invite_rejected") ->
               {:error, :invite_rejected}
 
-            status in [126, 127] or enrollment_result?(output, "enroll_start_failed") ->
-              {:error, :enroll_start_failed}
+            status in [126, 127] ->
+              {:error, {:enroll_start_failed, :launcher_unavailable}}
+
+            enrollment_result?(output, "enroll_start_failed:address_in_use") ->
+              {:error, {:enroll_start_failed, :address_in_use}}
+
+            enrollment_result?(output, "enroll_start_failed:runtime_start_failed") ->
+              {:error, {:enroll_start_failed, :runtime_start_failed}}
 
             true ->
               {:error, :enrollment_outcome_unknown}
@@ -584,6 +590,12 @@ defmodule LemonCore.Service do
   defp enrollment_result?(output, result) do
     output |> String.split("\n", trim: true) |> List.last() == "lemon node join: " <> result
   end
+
+  defp error_fields({:enroll_start_failed, reason})
+       when reason in [:launcher_unavailable, :address_in_use, :runtime_start_failed],
+       do: %{detail: "enroll_start_failed", reason: Atom.to_string(reason)}
+
+  defp error_fields(reason), do: %{detail: to_string(reason)}
 
   defp wait_ready(spec, module, opts) do
     seconds = Keyword.get(opts, :wait, if(spec.role == "controller", do: 120, else: 60))

@@ -362,7 +362,7 @@ defmodule CodingAgent.ExecutionNode.CLITest do
     ]
 
     ExUnit.CaptureIO.capture_io([input: String.duplicate("A", 43) <> "\n"], fn ->
-      assert {:error, :enroll_start_failed} =
+      assert {:error, "enroll_start_failed:address_in_use"} =
                CLI.run(
                  [
                    "--name",

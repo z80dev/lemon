@@ -312,12 +312,17 @@ defmodule LemonCore.ServiceTest do
   } do
     original = opts[:command_runner]
 
-    for {response, detail} <- [
-          {{"lemon node join: invite_rejected\n", 2}, "invite_rejected"},
-          {{"lemon node join: enroll_start_failed\n", 2}, "enroll_start_failed"},
-          {{"", 127}, "enroll_start_failed"},
-          {{"local or remote failure with private-credential", 2}, "enrollment_outcome_unknown"},
-          {{"lemon node join: enrollment_outcome_unknown\n", 1}, "enrollment_outcome_unknown"}
+    for {response, detail, reason} <- [
+          {{"lemon node join: invite_rejected\n", 2}, "invite_rejected", nil},
+          {{"lemon node join: enroll_start_failed:address_in_use\n", 2}, "enroll_start_failed",
+           "address_in_use"},
+          {{"lemon node join: enroll_start_failed:runtime_start_failed\n", 2},
+           "enroll_start_failed", "runtime_start_failed"},
+          {{"", 127}, "enroll_start_failed", "launcher_unavailable"},
+          {{"local or remote failure with private-credential", 2}, "enrollment_outcome_unknown",
+           nil},
+          {{"lemon node join: enrollment_outcome_unknown\n", 1}, "enrollment_outcome_unknown",
+           nil}
         ] do
       runner = fn executable, args, command_opts ->
         if "--enroll-only" in args, do: response, else: original.(executable, args, command_opts)
@@ -326,8 +331,10 @@ defmodule LemonCore.ServiceTest do
       attempt =
         Keyword.merge(opts, command_runner: runner, invite_code: String.duplicate("x", 43))
 
-      assert {:ok, %{units: [%{installed: false, state: "blocked", detail: ^detail}]}} =
+      assert {:ok, %{units: [%{installed: false, state: "blocked", detail: ^detail} = unit]}} =
                Service.install(["worker"], attempt)
+
+      assert Map.get(unit, :reason) == reason
     end
   end
 

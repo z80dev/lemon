@@ -188,9 +188,22 @@ defmodule CodingAgent.ExecutionNode.CLI do
         success
 
       {:error, _} = error ->
-        if opts[:enroll_only], do: {:error, :enroll_start_failed}, else: error
+        if opts[:enroll_only] do
+          reason = if address_in_use?(error), do: :address_in_use, else: :runtime_start_failed
+          {:error, {:enroll_start_failed, reason}}
+        else
+          error
+        end
     end
   end
+
+  defp address_in_use?(:eaddrinuse), do: true
+
+  defp address_in_use?(reason) when is_tuple(reason),
+    do: reason |> Tuple.to_list() |> Enum.any?(&address_in_use?/1)
+
+  defp address_in_use?(reason) when is_list(reason), do: Enum.any?(reason, &address_in_use?/1)
+  defp address_in_use?(_), do: false
 
   @spec parse([String.t()]) :: {:ok, keyword()} | {:error, String.t()}
   def parse(argv) do
@@ -483,7 +496,10 @@ defmodule CodingAgent.ExecutionNode.CLI do
   defp format_reason({{:pairing_failed, :outcome_unknown}, _}), do: :enrollment_outcome_unknown
   defp format_reason({:pairing_failed, :invite_rejected}), do: :invite_rejected
   defp format_reason({{:pairing_failed, :invite_rejected}, _}), do: :invite_rejected
-  defp format_reason(:enroll_start_failed), do: :enroll_start_failed
+
+  defp format_reason({:enroll_start_failed, reason})
+       when reason in [:address_in_use, :runtime_start_failed],
+       do: "enroll_start_failed:#{reason}"
 
   defp format_reason(:operator_token_required) do
     "the controller requires an operator token for pairing; set LEMON_NODE_OPERATOR_TOKEN or pass --operator-token"

@@ -820,7 +820,8 @@ The one-shot enrollment process uses the worker unit's isolated environment,
 including `LEMON_GATEWAY_HEALTH_PORT=0` and `LEMON_ROUTER_HEALTH_PORT=0`, so it can
 start beside the controller. `invite_rejected` means an explicit controller
 refusal before consumption; `enroll_start_failed` identifies a local startup
-failure without exposing raw diagnostics. Other failed exchanges report
+failure with a bounded `reason` (`address_in_use`, `runtime_start_failed`, or
+`launcher_unavailable`), never raw diagnostics. Other failed exchanges report
 `enrollment_outcome_unknown`: the code may already have been consumed. No failure
 automatically retries the code; obtain a fresh invite before attempting again.
 
