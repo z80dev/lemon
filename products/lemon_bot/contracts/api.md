@@ -49,7 +49,18 @@ One product deployment has one workspace and one attached Lemon swarm. No anonym
 
 `POST /auth/local` is same-OS-user proof instead of a password: `Authorization: Bearer <DATA_DIR/local-access.key>` (a private 0600 file the backend keeps; re-read per request) with an optional `LocalAccessRequest.displayName`. It signs in as the workspace owner with an ordinary bounded session, and on an empty instance first creates that passwordless owner (`<os-user>@lemon.local`) and a host-named workspace, discarding any pending setup proof. It carries no `clientNonce`: a lost response leaves at most an unused session, so the client simply repeats it. Native Mac clients read the key locally or over SSH; it is never shown, logged or sent to a browser.
 
-AuthResult.token is a cryptographically random opaque bearer; authentication table stores only digest (bounded encrypted one-time credential receipts are separate). Normal login session lifetime is 30 days; device-paired expiry is explicit null until revoked (§12), no refresh-token plane. Normal expired session requires new login; paired reopen restores its existing own Keychain token without minting again. Multiple local backend/account pairs are supported, sign-out clears that account cache and revokes current session. DELETE /auth/sessions/:id revokes owned session; password change revokes others. POST /auth/reauth returns single-use own five-minute token for account deletion.
+Browser same-machine proof uses `lemon-bot open`: before minting or delivering a ticket, the CLI sends a fresh nonce to the direct-loopback-only `POST /auth/local/challenge` and verifies the response's domain-separated HMAC with the private DATA_DIR master key. It does not trust the public setup descriptor to identify the listener. The resulting ticket is bound to that verified instance, delivered privately in `#lemonbot-signin=…`, and redeemed with `POST /auth/local/redeem`. Browser tickets last 60 seconds, terminal/headless tickets five minutes, with at most five outstanding. Only an exact numeric loopback listener accepts challenge or redemption; the ticket's loopback Origin and Host must match (missing Origin on redemption requires `Sec-Fetch-Site: same-origin`), and proxy headers are refused. Failure-only throttling never blocks a valid ticket. The exact loopback listener origin is trusted as a frontend origin even when the public URL is remote. Local-key and ticket sessions are locally confirmed for ten minutes, allowing a first `POST /me/password` and `{local:true}` reauthentication. `GET /me/sign-in` reports own sign-in methods and the remaining local-confirmation window.
+
+| Sign-in situation | Password policy |
+|---|---|
+| This computer's browser (`lemon-bot open`), Mac app, or headless server over `ssh -L` | No password: authenticated OS-user access is local proof. |
+| iPhone pairing | No password; the owner approves a separate device session. |
+| Another computer's browser at the published origin, without an SSH tunnel | Email/password or a linked SSO identity is required. |
+| Account deletion or OIDC link/unlink | Password or locally confirmed reauthentication within ten minutes. |
+
+Adding an email and password is optional; it is needed only for remote browser access, not local access or phone pairing. Existing-password changes still require the current password; adding the first password requires fresh local confirmation and does not revoke other sessions. The final credential write revalidates the current session, local-confirmation freshness and SSO policy after password hashing.
+
+AuthResult.token is a cryptographically random opaque bearer; authentication table stores only digest (bounded encrypted one-time credential receipts are separate). Normal login session lifetime is 30 days; device-paired expiry is explicit null until revoked (§12), no refresh-token plane. Normal expired session requires new login; paired reopen restores its existing own Keychain token without minting again. Multiple local backend/account pairs are supported, sign-out clears that account cache and revokes current session. DELETE /auth/sessions/:id revokes owned session; password change revokes others. POST /auth/reauth returns single-use own five-minute token for account deletion with `{password}` or, within ten minutes of a local sign-in, `{local:true}`.
 
 Role labels in table:
 
@@ -131,17 +142,22 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 | Method and path (under /v1) | Request | Response | Query | Required role / ACL | Additional errors |
 |---|---|---|---|---|---|
 | `GET /setup` | `undefined` | `SetupStatus` | `undefined` | Public | conflict, expired |
+| `GET /identity` | `undefined` | `BackendIdentity` | `undefined` | Authenticated product session | unauthenticated, forbidden |
 | `POST /setup` | `SetupRequest` | `AuthResult` | `undefined` | Public | conflict, expired |
 | `POST /auth/login` | `LoginRequest` | `AuthResult` | `undefined` | Public | conflict, expired |
 | `POST /auth/local` | `LocalAccessRequest` | `AuthResult` | `undefined` | Local-access key | unauthenticated |
+| `POST /auth/local/challenge` | `LocalBackendChallengeRequest` | `LocalBackendChallenge` | `undefined` | Public (direct loopback; master-key HMAC proof) | forbidden, capability_unavailable |
+| `POST /auth/local/redeem` | `LocalTicketRedeem` | `AuthResult` | `undefined` | Public (one-use local ticket, loopback origin) | unauthenticated, expired, forbidden, capability_unavailable |
 | `POST /auth/invites/accept` | `AcceptInviteRequest` | `AuthResult` | `undefined` | Public | conflict, expired |
-| `POST /auth/reauth` | `ReauthRequest` | `ReauthResult` | `undefined` | Own | expired |
+| `POST /auth/reauth` | `ReauthRequest` | `ReauthResult` | `undefined` | Own | expired, unauthenticated |
 | `GET /auth/sessions` | `undefined` | `Page<AuthSession>` | `PageQuery` | Own | expired |
 | `DELETE /auth/sessions/:id` | `Mutation` | `Deleted` | `undefined` | Own | expired |
 | `POST /auth/logout` | `Mutation` | `Empty` | `undefined` | Own | expired |
 | `GET /me` | `undefined` | `User` | `undefined` | Own | expired |
+| `GET /me/sign-in` | `undefined` | `SignInMethods` | `undefined` | Own | expired |
 | `PATCH /me` | `UserUpdate` | `User` | `undefined` | Own | expired |
 | `PUT /me/password` | `PasswordUpdate` | `Empty` | `undefined` | Own | expired |
+| `POST /me/password` | `PasswordCreate` | `User` | `undefined` | Own (no password yet; locally confirmed ≤10 min) | conflict, expired, policy_denied |
 | `POST /me/preview` | `PreviewRequest` | `Confirmation` | `undefined` | Own | expired |
 | `DELETE /me` | `AccountDelete` | `Deleted` | `undefined` | Own | expired |
 | `GET /workspace` | `undefined` | `Workspace` | `undefined` | Member | — |
@@ -162,6 +178,8 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 | `POST /instance/reconnect` | `Mutation` | `InstanceStatus` | `undefined` | Owner/Admin | — |
 | `POST /instance/runtime/:action` | `RuntimeActionRequest` | `RuntimeOperation` (202) | `undefined` | Owner | capability_unavailable, confirmation_required, conflict |
 | `GET /instance/providers` | `undefined` | `ProviderManagement` | `undefined` | Owner | upstream_unavailable, capability_unavailable |
+| `POST /instance/providers/check` | `ProviderCheckRequest` | `ProviderCheckResult` | `undefined` | Owner | conflict, upstream_unavailable, capability_unavailable |
+| `POST /instance/providers/:providerId/import` | `ProviderImportRequest` | `ProviderManagement` | `undefined` | Owner | nonce_conflict, conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
 | `PUT /instance/providers/:providerId/api-key` | `ProviderApiKeySet` | `ProviderManagement` | `undefined` | Owner | conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
 | `POST /instance/providers/:providerId/disconnect` | `ProviderTargetRequest` | `ProviderManagement` | `undefined` | Owner | conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
 | `POST /instance/providers/default` | `ProviderDefaultSet` | `ProviderManagement` | `undefined` | Owner | conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
@@ -169,6 +187,8 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 | `POST /instance/providers/:providerId/device-login/:loginId/poll` | `ProviderDeviceLoginRequest` | `ProviderDeviceLogin` | `undefined` | Owner + initiating product session | nonce_conflict, conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
 | `POST /instance/providers/:providerId/device-login/:loginId/cancel` | `ProviderDeviceLoginRequest` | `ProviderDeviceLogin` | `undefined` | Owner + initiating product session | nonce_conflict, conflict, outcome_unknown, upstream_unavailable, capability_unavailable |
 | `GET /machines/:id/providers` | `undefined` | `ProviderManagement` | `undefined` | Owner + actual machine owner | machine_offline, upstream_unavailable, capability_unavailable |
+| `POST /machines/:id/providers/check` | `ProviderCheckRequest` | `ProviderCheckResult` | `undefined` | Owner + actual machine owner | conflict, machine_offline, upstream_unavailable, capability_unavailable |
+| `POST /machines/:id/providers/:providerId/import` | `ProviderImportRequest` | `ProviderManagement` | `undefined` | Owner + actual machine owner | nonce_conflict, conflict, outcome_unknown, machine_offline, upstream_unavailable, capability_unavailable |
 | `PUT /machines/:id/providers/:providerId/api-key` | `ProviderApiKeySet` | `ProviderManagement` | `undefined` | Owner + actual machine owner | conflict, outcome_unknown, machine_offline, upstream_unavailable, capability_unavailable |
 | `POST /machines/:id/providers/:providerId/disconnect` | `ProviderTargetRequest` | `ProviderManagement` | `undefined` | Owner + actual machine owner | conflict, outcome_unknown, machine_offline, upstream_unavailable, capability_unavailable |
 | `POST /machines/:id/providers/default` | `ProviderDefaultSet` | `ProviderManagement` | `undefined` | Owner + actual machine owner | conflict, outcome_unknown, machine_offline, upstream_unavailable, capability_unavailable |
@@ -177,7 +197,10 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 | `POST /machines/:id/providers/:providerId/device-login/:loginId/cancel` | `ProviderDeviceLoginRequest` | `ProviderDeviceLogin` | `undefined` | Owner + actual machine owner + initiating product session | nonce_conflict, conflict, outcome_unknown, machine_offline, upstream_unavailable, capability_unavailable |
 | `GET /sync` | `undefined` | `Snapshot` | `undefined` | Member | — |
 | `GET /machines` | `undefined` | `Page<Machine>` | `PageQuery` | Machine | machine_offline, upstream_unavailable, capability_unavailable, policy_denied |
+| `GET /machines/enrollment-preview` | `undefined` | `MachineEnrollmentPreview` | `undefined` | Owner/Admin | upstream_unavailable, capability_unavailable |
 | `POST /machines` | `MachineAttach` | `MachineAttachResult` | `undefined` | Admin | conflict, upstream_unavailable |
+| `POST /machines/ssh` | `MachineSshSetupRequest` | `MachineSetup` (202) | `undefined` | Owner/Admin | conflict, upstream_unavailable |
+| `GET /machine-setups/:id` | `undefined` | `MachineSetup` | `undefined` | Initiator or Owner | not_found, policy_denied |
 | `GET /machines/:id` | `undefined` | `Machine` | `undefined` | Machine | machine_offline, upstream_unavailable, capability_unavailable, policy_denied |
 | `PATCH /machines/:id` | `MachineUpdate` | `Machine` | `undefined` | Machine | machine_offline, upstream_unavailable, capability_unavailable, policy_denied |
 | `POST /machines/:id/reconnect` | `MachineReconnect` | `MachineInvite` | `undefined` | Machine | machine_offline, upstream_unavailable, capability_unavailable, policy_denied |
@@ -207,6 +230,11 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 | `POST /bots` | `BotCreate` | `Bot` | `undefined` | Member + Machine | machine_offline, upstream_unavailable, policy_denied, conflict |
 | `GET /bots/:id` | `undefined` | `Bot` | `undefined` | Member | machine_offline, upstream_unavailable, policy_denied, conflict |
 | `PATCH /bots/:id` | `BotUpdate` | `Bot` | `undefined` | Bot owner | machine_offline, upstream_unavailable, policy_denied, conflict |
+| `GET /bots/:id/agent-identity` | `undefined` | `{agent: AgentIdentity}` | `undefined` | Bot owner | capability_unavailable, upstream_unavailable |
+| `PATCH /bots/:id/agent-identity` | `AgentIdentityUpdate` | `{agent: AgentIdentity}` | `undefined` | Bot owner | conflict, outcome_unknown, capability_unavailable, upstream_unavailable |
+| `GET /bots/:id/agents` | `undefined` | `{agents: AgentIdentity[]}` | `{query?: string; limit?: number}` | Bot owner | capability_unavailable, upstream_unavailable |
+| `POST /bots/:id/agent-messages` | `AgentMessageSend` | `AgentMessageReceipt` (202) | `undefined` | Bot owner | conflict, outcome_unknown, machine_offline, capability_unavailable, upstream_unavailable |
+| `GET /bots/:id/agent-messages/:messageId` | `undefined` | `AgentMessageReceipt` | `undefined` | Bot owner + exact originating Bot | capability_unavailable, upstream_unavailable |
 | `POST /bots/:id/duplicate` | `BotDuplicate` | `Bot` | `undefined` | Bot owner | machine_offline, upstream_unavailable, policy_denied, conflict |
 | `POST /bots/:id/preview` | `PreviewRequest` | `Confirmation` | `undefined` | Bot owner | machine_offline, upstream_unavailable, policy_denied, conflict |
 | `DELETE /bots/:id` | `Confirm` | `Deleted` | `undefined` | Bot owner | machine_offline, upstream_unavailable, policy_denied, conflict |
@@ -252,6 +280,12 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 | `GET /approvals` | `undefined` | `Page<Approval>` | `PageQuery & { state?: ResolutionState; botId?: ID }` | Member (visible gate) | expired, conflict, policy_denied, machine_offline |
 | `GET /approvals/:id` | `undefined` | `Approval` | `undefined` | Member (visible gate) | expired, conflict, policy_denied, machine_offline |
 | `POST /approvals/:id/resolve` | `ApprovalResolve` | `Approval` | `undefined` | Target | expired, conflict, policy_denied, machine_offline |
+| `GET /conversations/:id/approval-allowances` | `undefined` | `Page<ApprovalAllowance>` | `PageQuery & { state?: 'active' \| 'ended' }` | Owner | forbidden |
+| `GET /bots/:id/approval-allowances` | `undefined` | `Page<ApprovalAllowance>` | `PageQuery & { state?: 'active' \| 'ended' }` | Bot owner | forbidden |
+| `POST /approval-allowances/:id/stop` | `Update` | `ApprovalAllowance` | `undefined` | Owner | revision_conflict |
+| `PATCH /bots/:id/approval-review` | `ApprovalReviewUpdate` | `Bot` | `undefined` | Interactive Bot owner | revision_conflict, forbidden |
+| `POST /bots/:id/approval-allowances/preview` | `Mutation` | `Confirmation` | `undefined` | Interactive Bot owner | policy_denied, forbidden |
+| `POST /bots/:id/approval-allowances` | `Confirm` | `ApprovalAllowance` | `undefined` | Interactive Bot owner | policy_denied, confirmation_required, expired |
 | `GET /questions` | `undefined` | `Page<Question>` | `PageQuery & { state?: ResolutionState }` | Member (visible gate) | expired, conflict, policy_denied, machine_offline |
 | `GET /questions/:id` | `undefined` | `Question` | `undefined` | Member (visible gate) | expired, conflict, policy_denied, machine_offline |
 | `POST /questions/:id/resolve` | `QuestionResolve` | `Question` | `undefined` | Target | expired, conflict, policy_denied, machine_offline |
@@ -327,6 +361,17 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 
 **Machines.** POST /machines is attach: name 1–120, nodeName `[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}`, unique durable swarm name, labels string map bounded 32 keys/256 chars each; backend calls node.pair.invite purpose lemon_bot and stores machineId→nodeId once enrolled. Default invite 15 min, maximum 24 h; joinCommand is copied exactly from platform and downloads the repository-owned join script, **never** containing an enrollment code, node token or operator token. The separate inviteCode is entered through the script's hidden terminal prompt and passed to Lemon through stdin, not command arguments or shell history. MachineAttachResult contains pending machine and invite; poll machine or receive machine.upserted until online. Invites are visible only to machine owner/admin; machine access users cannot create/revoke/reconnect invites or change accessUserIds. Reconnect issues a new repair-bound invite for the **same** node identity, not a new machine; revoke old pending invites. LastSeen is durable and offline ≠ deleted. HostInfo is live, unavailable if offline, never fabricate last-known measurements as current. Detach previews affected bots/routines, cancels runs and future triggers, revokes node, removes machine from ordinary list but retains revoked tombstone for referenced bots (GET still returns revoked); bots remain visible offline until moved/deleted. No SSH removal, host uninstall/reboot/image rebuild or machine-file deletion implied. Authorized host owner/operator explicitly accepts privileged host relationship. Workspace admin cannot quietly attach an arbitrary node from nodes.list: enrollment requires actual host invitation.
 
+`Machine.credential` is an optional controller node-session measurement: `active | expired | revoked | unknown`; an absent field means not yet measured, and controller `none`/missing maps to `unknown`. A machine needs reconnecting only when `status === 'offline'` and `credential` is `expired` or `revoked`. Offline with an active credential is an outage, not an authentication problem. Sessions expire after seven days without contact and renew automatically while connected. Repair uses `POST /machines/:id/reconnect` and preserves the durable machine/node identity.
+
+**Enrollment preflight.** `GET /machines/enrollment-preview` calls read-only `node.pair.preview` with operator pairing authority and returns `{reachability:"loopback_only"|"routable",ssh:{available,reason}}`. SSH reason is controller_remote/node_gateway_unavailable/launcher_unavailable or null. The controller uses the advertised invitation URL, not the backend connection URL. Preview creates no invite. Routable means configured non-loopback wss, not proven connectivity.
+
+**SSH setup.** `POST /machines/ssh` accepts sshDestination, optional name and retry machineId, plus a mutation nonce. The persistent setup advances through checking_ssh/opening_tunnel/issuing_invite/installing/verifying/online; state is running/succeeded/failed. Initiator-only `machine_setup.upserted` events report progress. Retry resumes or repairs the same machine; uncertain enrollment never resends its code. Running jobs become failed/interrupted after restart.
+
+`Machine.link` is `{kind:"direct"}` for existing/direct machines, or `{kind:"ssh_tunnel",sshDestination,nodePort,productPort,tunnel:{state,detail,checkedAtMs}}`. Destination is null for non-managers. Tunnel state is online/reconnecting/failed/stopped/unknown; detail is ssh_auth_failed/host_key_changed/host_unreachable/forward_refused/remote_port_in_use or null. Only the node gateway and matching product port are forwarded.
+For mixed-version compatibility, `Machine.link` and preview `ssh` are optional on the wire: absence means direct and SSH unavailable respectively. Current backends always emit both fields.
+
+`MachineSetup` includes machineId, sshDestination, step, state, nullable failure `{code,message,detail}`, nullable persistence (login/boot/session/none), and finishedAtMs. Failure codes are ssh_unreachable, ssh_auth_failed, ssh_host_key_changed, unsupported_host, port_in_use, forward_refused, runtime_install_failed, enroll_failed, enroll_outcome_unknown, service_failed, not_bot_ready, controller_unavailable, and interrupted. Diagnostics exclude enrollment secrets.
+
 **Files/secrets/terminal.** Paths are destination-local under worker allowed roots, default node user's home. Reject traversal/symlink escape after canonicalization, never resolve host paths on controller/backend. File read/write chunk decoded max 1 MiB, offset nonnegative, length default/max 1 MiB, exact base64; write requires expectedModifiedAtMs for existing-file overwrite. `truncate` only with offset 0; `mkdirs` default false. File move never overwrites an existing destination; delete preview binds path/stat revision/children; exact basename confirmation; file Deleted.id is original path. ShowHidden default false; cursor bound to directory snapshot; directory mutation invalidates cursor. GET stat is not a transfer. File import reads bounded regular file into attachment storage; MIME detected server-side, ACL bound before transfer. `SecretSet` replaces value atomically, names `[A-Z][A-Z0-9_]{0,63}`, max value 32 KiB, no empty value; name/description/scope only returned. Bot-scoped names are still on the bot machine and **not an OS isolation guarantee**. Write-only prevents value entering product transcript/model/WS/push/audit; user-run shell is full host access, destination tools must scrub secret output but privileged host users can still inspect their own storage. No promise of browser secret auto-fill. A failure to list secret store is 503, not empty.
 
 `FileChunk.size` is the **total source file size in bytes**, matching owning `node.fs.read.size`, never the decoded chunk length. `offset` is this chunk's start; actual chunk length is the byte length after base64 decoding (`Uint8Array.byteLength` / Swift `Data.count`), so the next read starts at `offset + decodedLength`. `eof` reports whether the actual source end was reached. Download progress uses returned total size; do not infer EOF by comparing decodedLength to size. No new required length field or runtime remapping.
@@ -334,6 +379,10 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 TerminalOpen requires caller-owned registered device; cols 20–500, rows 5–300. Open invokes node.shell.open with cwd interpreted on node, returns product terminal ID. Bind upstream shell to backend connection, product terminal to user+device+WS; only opener can input/resize/read/close, even admins cannot attach to another person's shell. Input decoded ≤64 KiB. WS terminal_subscribe may reattach same device's terminal with 60-second disconnect grace; backend keeps last 1 MiB or 10,000 output chunks per terminal and reports terminal_gap beyond that bound. Number seq from 1 per terminal; terminal output is not workspace replay. Close after grace, revocation, process exit, or explicit delete; shell exit ≠ bot stop. No shell output in generic audit/push.
 
 **Bots.** Name 1–120, title max 140, job/instructions max 32 KiB each; duplicate display names allowed, IDs stable. BotCreate defaults title/job/instructions empty, character avatar (`shape:"round",color:"yellow",attachmentId:null`), voice `{voiceId:"default",speed:1,language:null}`, language null, skillIds empty. ownerUserId is derived only from actual authenticated user, immutable and never caller-selectable. Create profile `lb-<stable-id-slug>` on enrolled online machine; generated systemPrompt includes job/instructions/base product tools. Each Bot has one canonical owner main session; tasks/groups/channels execute through the same assigned profile placement, never invisible requester-machine switching. Different users cannot read/use/maintain this live Bot even with workspace Admin/Owner role. No Team-copy/publishing/managers/required flags. Host files/browser/CLI identities remain ambient host trust, not product sharing or OS isolation. Avatar image is ready image AttachmentUpload(purpose avatar) then PATCH avatar; real configured image generation returns unattached attachment for crop/Set avatar. No provider means capability_unavailable; character option remains usable.
+
+Creation accepts optional `access: "standard" | "none"` on `BotCreate`, `BotDuplicate` and `TemplateImport` (including JSON import and `templateId` creation). Standard deliberately enables requested Terminal/Files `read_interact` and Browser `read_only` grants before the first profile/tool-policy synchronization, for supported IDs in the measured destination inventory. Unknown or unsupported capabilities are skipped. Effective access remains the minimum of requested access, machine/OS ceiling and workspace policy; default command approval is unchanged. `"none"` or omission leaves requested grants off, including API callers and templates. `TemplateContent.suggestedAccess` is only a suggestion for the importing client to show and confirm by sending `access`; template content never grants authority by itself. First-party creation screens default to Standard, explain host-account access at submission and offer Chat only. Empty Bot chats offer machine-appropriate starter tasks; protected macOS folders may still require OS permission.
+
+Starter tasks use OS/disk summaries, installed-application/package inventories and process snapshots rather than walking personal folders. They explicitly avoid scans of macOS-protected folders (such as Downloads, Desktop and Documents), which can trigger privacy prompts attributed to the worker runtime.
 
 Duplicate carries selected profile/settings/skills, copies selected routines as **paused**, no memory/chat/attachments/secrets/logins/connector tokens. GET export and template content omit learned memories, history, credentials, private URLs in credential fields; user review required for publication (instructions can still contain confidential prose, no magical scrub guarantee). Templates copied as separate Bots owned solely by importing user, routines paused; terms accepted if third-party. Public template detail is anonymously readable only when audience public and policies.publicTemplates true; catalog listing/import authenticated. Revoking public policy blocks existing links immediately; no compatibility copy. Delete bot preview includes sessions/cards/routines/channel-binding cleanup, warns files/logins remain. Own Bot-group membership updates remove deleted bot and notify room.
 
@@ -379,7 +428,7 @@ Then `{"type":"subscribe","requestId":"sub_1","cursor":"40","conversationIds":[]
 
 Persist one monotonically increasing workspace sequence and state change atomically in SQLite before publishing. Sequence gaps are expected due to ACL/subscription filtering. Periodic watermark lets clients advance across invisible gaps without leaking content/count detail. Persist events ≥7 days; cursor older than earliest predecessor yields error cursor_expired and no partial replay; client clears derived live state, GET /sync + list/history refetch, subscribe new cursor. No blanket controller event forwarding: resolve run/profile/session ownership, filter each resource plus current principal; private sidebar/read/composer/notification/notes projected only for owner. Deletions use persisted ACL tombstones. Membership/publish revoke prevents subsequent replay of now-inaccessible history. Bot upsert sidebar/mainConversationId viewer-projected; event global seq fixed, payload may differ safely per authorized viewer. `GET /sync` atomically snapshots product SQLite state (up to 200 per collection), includes hasMore flags; capabilities live control availability. If swarm offline retain stored resources with truthful offline/unknown state, no fake successful reconciliation. Clients page remaining collections then fetch active selected transcript; no global full-transcript snapshot implied.
 
-RealtimeEvent exact envelope: `{"type":"event","seq":"43","event":"entry.delta","payload":{"conversationId":"c_1","entryId":"e_1","runId":"r_1","offset":0,"text":"Hello"},"timestampMs":1791940000000}`. Clients deduplicate by seq and upsert by ID+revision; assistant streaming deltas ordered/offset-checked, missing offsets require GET entry rather than concatenating blindly. Only final entry.upserted closes streaming. All durable event names/payloads below; no arbitrary string event or catch-all payload. Resource upserts include full authorized resource, not JSON Patch. IDs deleting an object refer to that exact object; seq never reused. Notifications are durable; push delivery best-effort APNs/Web Push with authenticated fetch reconciliation, no "exactly once push" claim.
+RealtimeEvent exact envelope: `{"type":"event","seq":"43","event":"entry.delta","payload":{"conversationId":"c_1","entryId":"e_1","runId":"r_1","offset":0,"text":"Hello"},"timestampMs":1791940000000}`. Within one connection, event frames are delivered in strictly increasing `seq`; replay and live frames never interleave out of order. A frame with `seq` ≤ the last applied cursor is a duplicate. Clients deduplicate by seq and upsert by ID+revision; assistant streaming deltas ordered/offset-checked, missing offsets require GET entry rather than concatenating blindly. Only final entry.upserted closes streaming. When a run becomes terminal, no transcript message of that run remains `streaming`; clients render a streaming message whose run is known to be terminal as final. All durable event names/payloads below; no arbitrary string event or catch-all payload. Resource upserts include full authorized resource, not JSON Patch. IDs deleting an object refer to that exact object; seq never reused. Notifications are durable; push delivery best-effort APNs/Web Push with authenticated fetch reconciliation, no "exactly once push" claim.
 
 | Durable event | Payload type |
 |---|---|
@@ -456,13 +505,105 @@ All MCP results are MCPCallResult<T>, structuredContent exact result type; text 
 
 Tool approval **is not the execution**: request_approval returns permission for exact proposed action, bot must still execute through permitted native tool and report actual success/failure. Explicit draft Send/human step/secret input/native tool permission remain independent gates. Consequential categories required ask_first override tool request. Bot->bot receipts wake specialist asynchronously and include visible source/target entry; do not wait recursively for target completion. Handoff respects requested replyConversationId only if both Bots and reply conversation owned by unchanged actual initiating user; otherwise deny. Attachments sent directly are authorized descriptors and copied into target destination, not raw source paths.
 
+`request_access { capability: 'terminal' | 'files' | 'browser', access?: 'view' | 'full', reason, expiresInMs? }` asks the owner to enable access for this Bot, not approve a command. The server computes scope (Terminal includes supported Files); the reason is untrusted quoted Bot speech. Its `access_request` approval accepts only `approve_once` or `deny`, never remembered allowances. Allowed returns `allowed/after_this_task/automatic`; other decisions return `not_now`, `expired`, `cancelled`, or `already_available`, with null `appliesWhen` and `retry: 'none'`. Only requestable capabilities are exposed; unattended runs cannot ask. One card per capability/run and three per conversation/hour apply.
+
+### Addressed agents: existing context, separate handle
+
+An agent handle names an **existing** conversation. It is not the Bot's display
+`name`, its persona/profile, a new task, a native family task address (`agent://`),
+or an editor file mention. `Bot.agentHandle` is optional and nullable;
+`Bot.agentAddress` is an optional stable address for older stored resources.
+Bot addresses are `bot://<backend-instance-id>/<bot-id>` and remain unchanged when
+the handle or display name changes. Native conversations use `session://…`;
+the product projection does not expose raw native daemon session keys or private
+scope/metadata. Use returned addresses, never infer them from display labels.
+
+`AgentIdentityUpdate` is `{clientNonce,name:string|null}`. `null` clears only the
+handle. Names accept optional `@`, normalize to lower-case ASCII, and match
+`[a-z][a-z0-9_-]{0,63}`. Case-only rename is idempotent; a collision leaves the old
+binding intact. Old handles stop resolving after rename/clear; stable addresses
+still target the same conversation. Removing a Bot or revoking its owner's
+authority makes its address unavailable, not an alias to a replacement.
+
+In Web, open the current chat's **Details** or **Edit identity** for the separate
+**Agent handle** controls. Details also offers **Reachable agents and messages**.
+Native macOS/iOS **Edit identity** separates the handle from the display name;
+chat Details exposes the handle, stable address and command help. In Bot chat,
+use `/agent-name bob`, `/agent-name --clear`, `/agents [query]`, or
+`/tell @bob <message>`. The TUI has the same three commands, while its `/name`
+still changes only the session title. Discovery is a bounded content-free roster,
+not transcript access; unavailable reads must not become an empty roster.
+
+The backend derives scope from current authority, never model or client input:
+
+- The private operator configuration must explicitly pin
+  `namedAgentOperatorUserId` to the account permitted to bridge into `operator`.
+  It is unset by default: without it, all product users have private Bot-only
+  scopes. An operator sets this in the backend's private configuration file
+  (`LEMON_BOT_CONFIG_FILE`, default `DATA_DIR/config.json`), not through product UI.
+  That account must still be the enabled current `workspace.ownerUserId`, and
+  only its owned Bots can bridge to local TUI conversations. A member's `owner`
+  role, initial setup, or an ownership transfer alone cannot grant operator
+  custody. Transfer disables the existing link; it never retargets the pin.
+- Other users, including admins, see only their private owner-scoped Bot
+  namespace. Neither workspace role nor a familiar handle grants access to
+  another human's Bot, transcript, machine, or operator sessions.
+- Owner, machine, policy, verified invocation and no-handoff restrictions are
+  rechecked at dispatch and return. Channel invocations retain their audience
+  restrictions; a private main-context answer is not sent to an unapproved room.
+
+`AgentMessageSend` is `{clientNonce,target,text,conversationId?}`; the REST route
+binds the source Bot and authorizes the optional originating conversation
+(default: that Bot's main conversation). `MessageAgentInput` for MCP is only
+`{clientNonce,target,text}`: its originating conversation comes from verified
+invocation proof, not a model field. The target is an explicit `@handle` or stable
+address. The destination is the existing main Bot conversation,
+not a new isolated task. `message_bot` and `handoff` remain the APIs for separate
+jobs. MCP addressed calls bind source and reply audience to the verified active
+invocation, never to model-supplied authority. Native `agent_message` is not a
+way for managed product runs to borrow the operator namespace.
+
+Receipts carry `messageId`, `sourceId`, `targetId`, `status`, nullable `runId` and
+nullable `response`. **accepted** means admitted/queued, not answered;
+**completed** carries the visible answer; **failed** is terminal failure;
+**outcome_unknown** retains an ambiguous mutation. Retain the same nonce/message
+ID and read status; do not create a new message to retry an unknown outcome.
+Changed intent under the same ID conflicts. Self-send and missing/offline targets
+are refused without fallback. Busy targets queue instead of steering other work.
+Replies carry peer provenance, are not new human instructions, and return to the
+exact originating conversation without automatic response-to-response loops.
+
+The backend's authenticated operator WebSocket binds external identities and
+receives targeted `agent.message.request` / `agent.message.result` events.
+Requests submit through ordinary product runtime/ACL and retain the fixed
+message-to-product-run mapping before effects. Actual completion, not admission,
+supplies the response. Another connection cannot complete that target's receipt.
+Disconnect preserves identity but makes the transport offline; reconnect rebinds
+identity, never replays pending/unknown messages. Private message bodies are not
+broadcast as global named-agent events.
+
+The on-demand `sh scripts/smoke_named_agents.sh` uses private local state,
+authenticated loopback WebSockets and scripted inference. It exercises native
+existing-context routing and external transport, plus the real product REST
+addressed service, authentication, owner ACL, nonce journal, peer provenance and
+two-way messaging. Its product fixture executor forwards to actual native
+sessions; it does **not** exercise unchanged managed-node TLS/MCP invocation
+proof, provisioning, live providers/platforms, or physical Apple clients.
+It is not part of default tests/CI, and its presence is not passing evidence.
+See the [TUI smoke instructions](../../../clients/tui/README.md#on-demand-offline-smoke)
+for prerequisites and the opt-in private fixture server for manual UI checks.
+
 | Tool name | Input type | structuredContent result | Blocking | Behavior |
 |---|---|---|---|---|
+| `list_agents` | `AgentListQuery` | `{ agents: AgentIdentity[] }` | No | Bounded content-free roster in the authenticated owner's scope; optional query/limit. |
+| `rename_agent` | `AgentIdentityUpdate` | `{ agent: AgentIdentity }` | Yes; registry acknowledgment | Rename/clear only the authenticated source Bot's handle. |
+| `message_agent` | `MessageAgentInput` | `AgentMessageReceipt` | No; admission receipt | Message an existing handle/stable address from the verified invocation room; actual answer arrives asynchronously. Status is read through REST, not a separate MCP tool. |
 | `message_bot` | `MessageBotInput` | `MessageBotResult` | No; atomic receiver receipt | Wake allowed target; visible handoff and source context; returns receipt, not target completion. |
 | `handoff` | `HandoffInput` | `MessageBotResult` | No; atomic receiver receipt | As message_bot with explicit task ownership; target response routed to verified originating conversation. |
 | `create_draft` | `DraftToolInput` | `Draft` | No | Create editable card only. Never transmit externally. |
 | `ask_user` | `AskUserInput` | `QuestionToolResult` | Yes; until terminal gate | Persist question and answers; decline/expiry yields null answers; never choose a default. |
 | `request_approval` | `ApprovalToolInput` | `ApprovalToolResult` | Yes; until terminal gate | Approval only for proposed action; deny/expiry/cancellation never execute. |
+| `request_access` | `AccessRequestInput` | `AccessRequestToolResult` | Yes; until terminal gate | Queue owner-approved access; after the task ends, sync/acknowledge the profile, then visibly continue the original human request once. |
 | `request_human_step` | `HumanStepInput` | `HumanStepToolResult` | Yes; until terminal gate | Open machine/terminal/authorized external browser, then explicit done/skip; not remote screen control. |
 | `request_secret` | `SecretToolInput` | `SecretToolResult` | Yes; until terminal gate | Write-only destination storage; result has name/saved only, never value. |
 | `send_voice_memo` | `VoiceMemoInput` | `ToolEntryResult` | Yes; bounded TTS operation | Real configured TTS into immutable audio attachment and voice_memo card; unavailable if no provider. |
@@ -893,6 +1034,62 @@ The following JSON Schema 2020-12 dictionary supplies **every input** plus share
         "color",
         "attachmentId"
       ],
+      "additionalProperties": false
+    },
+    "list_agents": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      },
+      "additionalProperties": false
+    },
+    "rename_agent": {
+      "type": "object",
+      "properties": {
+        "clientNonce": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "name": {
+          "type": ["string", "null"],
+          "maxLength": 65,
+          "pattern": "^@?[A-Za-z][A-Za-z0-9_-]{0,63}$"
+        }
+      },
+      "required": ["clientNonce", "name"],
+      "additionalProperties": false
+    },
+    "message_agent": {
+      "type": "object",
+      "properties": {
+        "clientNonce": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32768
+        }
+      },
+      "required": ["clientNonce", "target", "text"],
       "additionalProperties": false
     },
     "message_bot": {
@@ -1495,6 +1692,10 @@ The following JSON Schema 2020-12 dictionary supplies **every input** plus share
           "type": "string",
           "minLength": 1,
           "maxLength": 128
+        },
+        "access": {
+          "type": "string",
+          "enum": ["standard", "none"]
         }
       },
       "required": [
@@ -1523,7 +1724,7 @@ Screen IDs are shared navigation destinations, **not extra REST paths**. Current
 | bot.settings | Owned Details/Media/assigned Machine, routines/memory/reference files, notify toggle, connectors/skills and actual effective native permissions | bots/sidebar, routines, memory, connectors, attachments |
 | group.create | 2–6 owned Bot picker only, lead/name/details/edit; one human owner, no humans/member-transfer/leave UI; preserve draft on uncertain create; Delete preview | conversations create/update/preview/delete, owned bots |
 | machines | Online/offline/pending/revoked inventory, last seen, attached machine bot count, attach button, consent/access ownership | machines list |
-| machine.attach | Named machine, one-use copy join command/code, expiry/reissue/cancel, provider/cwd/service instructions, waiting→online, repair same identity | machines POST/reconnect/invites + machine.upserted |
+| machine.attach | Add a machine over SSH, reviewed setup/progress and waiting→online; advanced scoped one-use join command/code with expiry/reissue/cancel; repair same identity. Same-machine bootstrap enrolls a supervised worker without a manual join command. | machines POST/reconnect/invites, machine-setups + machine.upserted |
 | machine.detail | Host-info cpu/memory/disk/version/user/cwd/time; bots on host; shared-access warning; files/terminal/secrets tabs; access-user edit; reconnect/detach preview/exact-name | machines/host, bots?machineId, machine files/secrets, terminals |
 | machine.files | Breadcrumb/list/hidden, stat/preview/download/upload/new folder/rename/move/delete preview; size/type/error/truncation, host path scope explicit | node file product endpoints, files/import, attachments |
 | machine.terminal | Full-access confirmation, cwd/size, VT-compatible PTY view/input/resize, disconnect grace/gap/exit/close; no fake web terminal | terminals + WS terminal frames |
@@ -1556,6 +1757,7 @@ Create: `POST /v1/bots` → `Bot`, JSON `{"clientNonce":"01LEMONBOTCREATE0000000
 Send: `POST /v1/conversations/c_1/messages` → 202 MessageReceipt, JSON `{"clientNonce":"01LEMONBOTMESSAGE000000000","text":"Review these receipts","attachmentIds":["attachment_1"],"mode":"followup"}`. Response includes real durable entries/run IDs immediately, never a synthetic completed assistant answer.
 
 Resolve: `POST /v1/approvals/a_1/resolve`, JSON `{"clientNonce":"01LEMONBOTAPPROVE000000000","revision":1,"decision":"approve_once"}` → Approval gate approved, not proof proposed action completed.
+Eligible native approvals also accept `"decision":"approve_chat"`; the runtime receives only `approve_once`, and the approved gate has `resolvedScope: "chat"`.
 
 Draft Send: `POST /v1/drafts/d_1/send`, JSON `{ "clientNonce":"01LEMONBOTSENDDRAFT00000000", "revision":2, "content":{"kind":"email","connectorId":"connector_1","from":"finance@example.org","to":["reviewer@example.org"],"cc":[],"bcc":[],"subject":"Expense review","body":"Please review attached receipts.","attachmentIds":[]} }` → Draft sending, then draft.upserted sent only after verification.
 
@@ -1601,11 +1803,33 @@ All clients keep one visible Bot identity/status anchor with assigned machine la
 
 MachineCapabilities lists actual configured capabilities and measured OS grants (off/read_only/read_interact, supported, tools, reason, measuredAtMs, stale). Offline inspection returns last measured rows explicitly stale; never turns unknown into permission. Relevant Mac host requests its own TCC, not remote iOS/web; Linux never shows invented Apple Calendar grants. BotGrant effectiveLevel is min(requestedLevel, machine configured level, OS grant, effective required product policy), order off < read_only < read_interact. Unsupported/missing grant yields off. PATCH requested grants requires actual Bot owner and actual mapped native tool-policy support; unsupported mapping capability_unavailable, no purely cosmetic security switch. Machine OS permission is not Bot permission and no host sandbox claim.
 
+`effectiveLevel` is a live projection of requested access, measured machine capability, OS permission, workspace policy and tool-policy cutover state; unconfirmed cutovers report off. Applied grant PATCH responses and `grant.upserted` carry the post-acknowledgment projection, remeasured after destination acknowledgement (falling back to pre-sync measurement if remeasurement fails). `grant.upserted` is scoped to the Bot and owner. Clients refetch `GET /bots/:id/grants` on `grant.upserted`, `machine.upserted` for the Bot's machine, `policies.updated` and `governance.updated`; effective projection changes do not themselves bump the stored revision.
+
+Grant PATCH during an active task returns 200 with unchanged requested/effective levels and required nullable `pendingLevel`; choosing the current level clears pending. Queued `grant.upserted` is emitted immediately. Pending changes apply together only when idle, online, and profile sync is acknowledged. Narrowing also waits; Stop task cancels current work. Access continuations use a durable nonce and original human source entry; cancelled tasks or newer human messages get a notice instead of resend.
+
+`MachineCapabilities.botFolder?: boolean` reports advertised destination support (absent/false on older workers). Supported Bot profiles use a destination-derived `files` folder; attachments/share_file resolve relative paths there. No caller-selected folder is accepted.
+
+Grant PATCH during an active task returns 200 with unchanged requested/effective levels and required nullable `pendingLevel`; choosing the current level clears pending. Queued `grant.upserted` is emitted immediately. Pending changes apply together only when idle, online, and profile sync is acknowledged. Narrowing also waits; Stop task cancels current work. Access continuations use a durable nonce and original human source entry; cancelled tasks or newer human messages get a notice instead of resend.
+
+`MachineCapabilities.botFolder?: boolean` reports advertised destination support (absent/false on older workers). Supported Bot profiles use a destination-derived `files` folder; attachments/share_file resolve relative paths there. No caller-selected folder is accepted.
+
 ActivityItem is sanitized chronological user-visible run/tool/approval/preference/memory/artifact/enrollment facts with bot/run/task/conversation/machine provenance. Default descending occurredAtMs,id; workspace activity filters bot/machine/time and never leaks private DMs, even to admins. Per-bot equivalent enforces same ACL, path botId cannot be overridden by query. Upcoming merges enabled owned routine nextRunAtMs and caller reminders, ascending dueAtMs,id; from defaults now, to defaults +30 days, max 366 days; timezone/last outcome/offline blockedReason explicit. A task conversation is not a run. Reminder is a one-off durable **notification**, not an agent scheduling engine; bot+user+conversation scoped, deliver once as result notification at dueAtMs, cancellation prevents future delivery, backend timer/outbox handles notification due-time only. Agent recurring work still Lemon cron. Existing task run may continue beyond due time; Upcoming does not fabricate completed work.
 
 ### Plain-language action reviews and Identity / Job / Memory
+Native execution approvals reuse existing fields: `title` is the redacted single-line action preview (maximum 160 characters, ellipsis when truncated), `target` is the tool display name, and `scope.machineLabel` identifies its machine. `description` and `inputs` retain review details and the proposal digest.
+
 
 Approval.scope is ReviewScope: scope badge once/run/site/connector, target Bot+machine labels, exact origin/connector/run, expiry and concrete consequences. Native exec defaults once; run/site/connector contexts explain bounded proposal, not broader automatic grant. Financial/destructive/permission-changing/external-message gates never show blanket Always allow; future rules only when true narrower supported policy, never revive expired proposal. Phone notification links exact request, not a generic approve screen.
+
+Remembered approvals are recorded, revocable backend resources. `chatOption` offers one group: Terminal (`bash`, `bash_output`, `kill_process`), File changes (`write`, `edit`, `patch`, `ast_grep`, `checkpoint`) or File reading (`read`, `ls`, `find`, `grep`). Chat allowances bind to the exact invocation context and interactive owner-chat origin; routines, native follow-ups and external triggers cannot borrow them. Grant, policy, governance, membership, placement or review-mode changes end allowances; Stop allowing affects future actions, not already-running commands. Product approvals, force-human requests, unknown/non-group tools and strict required or personal ask-first rules are never eligible. Governance defaults to `chat`; `off` disables remembering and `chat_and_bot` additionally permits owner-only preview/confirm bot-wide exemptions. Bot-wide allowances cover owner chats, routines and native follow-ups, never email, Slack, X or webhook triggers. `requireReview` permits an explicit recorded chat decision; bot-wide exemption separately requires admin-enabled governance. The runtime still requests each action and receives only `approve_once` or `deny`.
+
+Private approval cards retain the originating run's conversation for allowance
+binding and concurrent-card matching, even when displayed in the owner's DM.
+Each concurrent dispatch rechecks the active allowance, current policy and pending
+gate, recording its decision before the RPC; uncertain outcomes use the normal
+approval reconciliation lifecycle. External or unknown root/parent provenance
+remains ineligible across native continuations. Multiple approved capability
+requests from one originating run/source share one durable continuation nonce.
 
 Identity tab edits name/title/avatar/voice/language via bot update; Job tab edits Job/instructions/style/boundaries, effective hard policy separately; Memory tab handles owned profile facts. Every Job/voice/language change (manual or natural language) creates PreferenceChange with before/after/source/reason/user/machine and resulting Bot revision. Natural-language “be more concise” uses MCP update_preferences **only** with actual authorized user sourceEntryId (external/email/tool text cannot attest intent). One preference scope per create (job+instructions together, OR voice, OR language); revision is Bot revision. Undo request carries PreferenceChange revision and current botRevision, rejects if changed fields no longer match recorded after or another change intervened; restores before through profiles.update/scoped settings, increments Bot/change revisions, state undone. No SOUL.md duplicate store, no cross-bot personalization. Memory corrections are inspectable Memory resources, not unsafe unrestricted systemPrompt mutation.
 
@@ -1761,6 +1985,8 @@ OIDC provider management Owner-only; public discovery exposes id/name/enabled/re
 SCIM integration token issued once (digest only later), scopes scim.users/scim.groups, Owner creates/revokes; bearer cannot call product chats/admin APIs. Standard Content-Type application/scim+json, RFC 7643/7644 schemas; User id maps product User+Member, userName normalized unique verified identifier, active=false immediately revokes product sessions/push/WS/pending gates/future routines, without deleting host files. DELETE user deprovisions membership, not private content expose; cannot deprovision final owner. Groups map DirectoryGroup, not chat groups. Groups member list references existing SCIM Users; SCIM operations never grant Owner. SCIM PUT full replacement; PATCH Operations supported paths userName, displayName, name, emails, active, externalId and Groups displayName/externalId/members/add/remove/value filter; unsupported path returns SCIMError scimType invalidPath/mutability, never silently ignored. Last-modified/created are RFC3339 UTC strings (SCIM exception to *AtMs), meta.version strong ETag, If-Match required on existing update/delete, 412 stale, GET 200/POST 201/update 200/delete 204 no body, SCIMError JSON schema on failures (401/403/404/409 uniqueness/400 invalidFilter/413). SCIM has no product clientNonce: standard externalId uniqueness and provider delivery id/header request correlation fence creates; repeated same externalId compatible create returns existing 200, conflicting body 409; no arbitrary batch endpoint (`bulk.supported:false`). startIndex one-based default1, count default50/max200, filter subset exact `userName eq "…"`, `externalId eq "…"`, `displayName eq "…"`, `active eq true|false`, optional `and`; invalid unsupported filters 400. attributes/excludedAttributes fixed known fields, ACL and schema fields retained. ServiceProviderConfig/ResourceTypes/Schemas are actual discovery responses, not fabricated advanced feature promises.
 
 Directory local create/update Admin, SCIM/OIDC-managed memberships cannot be overwritten via local PATCH except explicitly configured owner override; source provenance visible. GroupPolicy has product eligibility/capability ceilings/required rules/network references. EffectivePolicy is explainable actual composition: product access is workspace enabled AND enabled membership AND all/selected-group grant; ordinary eligible-group capabilities widen to most permissive bounded by locked workspace hard ceiling; personal choice may tighten; required ask_first wins conflicts, enforced reviewer lock exception only if admin group policy permits it. Directory groups never grant live Bots or auto-add/defaultBotIds; no implicit template clones. Network group policies replace workspace default only if workspace lockNetworkForGroups false; for multiple applicable group policies use intersection (most restrictive), otherwise locked workspace. Allowlist matching domains exact or explicit leading `*.` suffix only (no substring), CIDR canonical IPv4/IPv6+ports/protocol, required runtime destinations explicitly operator-owned and displayed. Source-service/OS access still ceilings. Egress/sudo apply Governance/GroupPolicy with explanation and registered host enforcement; product rules are not shell sandbox claims.
+
+`Governance.folderReadsNeedReview` defaults false. `EffectivePolicy.workspaceReads` is `ask` when that switch is on, local execution is denied, or an explicit required/personal Files ask-first rule applies; otherwise `allow`. Synthetic `requireReview` rules do not count. Only botFolder workers with effective Files read access receive `workspace_read_exempt`. Eligible read/ls/grep inside the derived folder skip review; after an exempt read webfetch/websearch require review for the session, including restored/child sessions. Writes, Terminal, Browser, outside reads and find retain ordinary review.
 
 ### Applied network, egress, setup and owned-host recovery
 
@@ -2024,3 +2250,20 @@ Paired AuthSession.expiresAtMs is **null until revoked**, always explicit JSON n
 - `mobile.pairing` on iOS: AVCapture QR scanner with OS camera permission or Paste link fallback; strict parse, actual non-consuming name/origin preview, explicit Request, matching code and waiting desktop approval, pending/denied/expired/network/error/request-ID states; fixed-nonce complete/reconcile, no fabricated Connected.
 - After connected: store own token in Keychain, retain cluster/account/selected owned Bot/conversation and last safe cursor. Reopen restores saved connection, then verifies authority and syncs actual owner resources; no pairing or session mint loop. Offline keeps configuration/drafts and does not replay work mutations. Revoked/disabled session shows explicit Reconnect; do not erase cluster silently or impersonate another user. Foreground pending completion may poll with the same nonce until deadline; interrupted/lost response uses that same receipt, never a new nonce.
 - `settings.account` Devices/Sessions shows paired phone as until-revoked, plus explicit disconnect/sign-out/revoke controls and consequences. Workspace transfer/identity/admin controls remain separate metadata operations, never transfer any live Bot or pairing's human owner.
+
+### Model readiness
+
+Provider management includes `readiness` and `detected`. Older targets without
+`providers.management.check` return `null` and `[]`; check/import return
+`capability_unavailable`. Readiness states are `verified`, `saved`,
+`action_required`, and `not_configured`. Both verified and saved count as ready,
+but saved does not claim a successful live check. Static `lastValidation` is separate.
+The explicit check is non-generating (no message is sent), may refresh the target's
+OAuth token, and is safe to retry. Its body contains `clientNonce`, exact `targetId`,
+and optional `providerId`; the result contains `management` and `readiness`.
+Login import requires `source: "codex_cli"` and `consent: "copy_login"` with the
+target and nonce, and only accepts provider `openai_codex` detected on that target.
+No path is accepted. Lemon copies and refreshes its own encrypted login, never
+changes `~/.codex/auth.json` or the default model, and never returns tokens.
+Either app may subsequently require sign-in; device-code sign-in gives Lemon its
+own login instead. An uncertain import must be reconciled, not automatically retried.

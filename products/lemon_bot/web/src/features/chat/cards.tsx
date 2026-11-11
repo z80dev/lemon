@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Approval, Card, Connector, Draft, DraftContent, Field as QuestionField, Gate, HumanStep, JSONValue, Question, SecretRequest } from '@lemon-bot/sdk';
-import { nonce } from '@lemon-bot/sdk';
+import { approvalTextPresentation, nonce } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
 import { ErrorNotice, Field, Loading, formatTime, safeExternal, useQuery } from '../../ui';
 import { IntentNotice, copyText, useClock, useIntent } from './common';
@@ -43,9 +43,48 @@ function QuestionCard({ id, initial }: { id: string; initial?: Question }) {
   return <form className="stack" onSubmit={event => { event.preventDefault(); void resolve('answer'); }}><h3>{question.title}</h3><p className="muted small">Not for passwords, OTPs or confidential credentials. Answers are visible to the Bot.</p><GateState gate={question.gate} />{question.fields.map(field => <InputField key={field.id} field={field} value={question.gate.state === 'completed' ? question.answers?.[field.id] : answers[field.id]} disabled={!allowed || intent.busy || intent.uncertain} change={value => setAnswers(current => { const next = { ...current }; if (value === undefined) delete next[field.id]; else next[field.id] = value; return next; })} />)}<ErrorNotice error={validation || query.error} /><IntentNotice intent={intent} reconcile={query.reload} /><div className="row"><button className="primary" disabled={!allowed || intent.busy || intent.uncertain}>Submit answer</button><button type="button" disabled={!allowed || intent.busy || intent.uncertain} onClick={() => void resolve('decline')}>Decline</button></div></form>;
 }
 function ApprovalCard({ initial }: { initial: Approval }) {
-  const { client, navigate, snapshot } = useApp(); const query = useQuery(`approval:${initial.id}`, () => client.call('GET /approvals/:id', { params: { id: initial.id } })); const approval = query.data || initial; const allowed = useGate(approval.gate); const intent = useIntent();
-  async function resolve(decision: 'approve_once' | 'deny') { if (allowed) await intent.run(async () => query.setData(await client.call('POST /approvals/:id/resolve', { params: { id: approval.id }, body: { revision: approval.revision, clientNonce: nonce(), decision } }))); }
-  return <div className="stack"><div className="row spread"><h3>{approval.title}</h3><span className="badge">{categoryLabels[approval.category]}</span></div><p>{approval.description}</p><dl><dt>Bot</dt><dd>{snapshot.bots.find(bot => bot.id === approval.botId)?.name || 'Bot'}</dd><dt>Where it runs</dt><dd>{approval.scope.machineLabel}</dd><dt>What it will do</dt><dd>{approval.target}</dd><dt>Review</dt><dd>{approval.policyMode === 'ask_first' ? 'Ask first' : approval.policyMode === 'auto_review' ? 'Automatic review' : 'Allowed'} · {approval.review === 'not_run' ? 'Not checked' : humanize(approval.review)}</dd><dt>Origin</dt><dd>{approval.scope.origin || 'Not specified'}</dd></dl><h4>Consequences</h4><ul>{approval.scope.consequences.map((text, i) => <li key={i}>{text}</li>)}</ul><details><summary>Details · proposed inputs</summary><p>Scope: {approval.scope.kind}{approval.ruleId && ` · Rule: ${approval.ruleId}`}</p><dl>{Object.entries(approval.inputs).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{typeof value === 'string' ? value : JSON.stringify(value)}</dd></div>)}</dl></details><GateState gate={approval.gate}/><ErrorNotice error={query.error}/><IntentNotice intent={intent} reconcile={query.reload}/><div className="row"><button className="primary" disabled={!allowed || intent.busy || intent.uncertain} onClick={() => void resolve('approve_once')}>Allow once</button><button className="danger" disabled={!allowed || intent.busy || intent.uncertain} onClick={() => void resolve('deny')}>Deny</button><button onClick={() => navigate({ screen: 'settings.policies', botId: approval.botId })}>Review future rules</button></div></div>;
+  const { client, navigate, snapshot } = useApp(); const query = useQuery(`approval:${initial.id}`, () => client.call('GET /approvals/:id', { params: { id: initial.id } })); const approval = query.data || initial; const allowed = useGate(approval.gate); const intent = useIntent(); const now = useClock();
+  const accessRequest = approval.source === 'access_request';
+  const terminal = !accessRequest && approval.target === 'Terminal';
+  const command = terminal && typeof approval.inputs.command === 'string' ? approval.inputs.command : null;
+  const presentation = approvalTextPresentation(command ?? approval.title);
+  const reviewKey = JSON.stringify([approval.id, approval.revision, command]);
+  const [expandedReview, setExpandedReview] = useState<string | null>(null);
+  const expanded = expandedReview === reviewKey;
+  const commandReviewed = !terminal || (command !== null && command.length > 0 && (!presentation.truncated || expanded));
+  const displayInputs = Object.entries(approval.inputs).map(([key, value]) => ({ key, ...approvalTextPresentation(typeof value === 'string' ? value : JSON.stringify(value)) }));
+  const hasControls = presentation.hasControls || displayInputs.some(input => input.hasControls);
+  const botName = snapshot.bots.find(bot => bot.id === approval.botId)?.name || 'Bot';
+  const owner = snapshot.member.role === 'owner' && snapshot.bots.some(bot => bot.id === approval.botId && bot.ownerUserId === snapshot.user.id);
+  const effective = useQuery(`approval:${approval.id}:bot-wide`, () => owner && !accessRequest ? client.call('GET /policies/effective', { query: { botId: approval.botId } }) : Promise.resolve(null));
+  const state = approval.gate.state === 'pending' && approval.gate.expiresAtMs <= now ? 'expired' : approval.gate.state;
+  const by = approval.gate.resolvedByUserId === snapshot.user.id ? 'you' : approval.gate.resolvedByUserId ? 'another person' : 'policy';
+  const result = accessRequest ? state === 'approved' ? `Allowed by ${by} · turns on when this task finishes` : state === 'denied' ? 'Not now' : humanize(state) : state === 'approved' ? approval.resolvedScope === 'chat' ? `Allowed for this chat by ${by}` : `Allowed once by ${by}` : state === 'denied' ? `Denied by ${by}` : humanize(state);
+  async function resolve(decision: 'approve_once' | 'approve_chat' | 'deny') { if (allowed && (decision === 'deny' || commandReviewed)) await intent.run(async () => query.setData(await client.call('POST /approvals/:id/resolve', { params: { id: approval.id }, body: { revision: approval.revision, clientNonce: nonce(), decision } }))); }
+  return <div className="stack">
+    <div className="row spread"><h3>{terminal ? 'Command' : presentation.text}</h3><span className="badge">{categoryLabels[approval.category]}</span></div>
+    {hasControls && <span className="badge" role="note" style={{ whiteSpace: 'normal' }}>Warning: hidden or directional characters are shown as Unicode escapes.</span>}
+    {terminal && <>
+      <pre dir="ltr" style={{ whiteSpace: 'pre', overflow: 'auto', maxHeight: '20rem', unicodeBidi: 'isolate' }}><code>{expanded ? presentation.text : presentation.preview}</code></pre>
+      {command === null && <p role="alert">The full command is unavailable. Deny this request and ask for a new one.</p>}
+      {presentation.truncated && <><button aria-expanded={expanded} onClick={() => setExpandedReview(expanded ? null : reviewKey)}>{expanded ? 'Collapse command' : 'Show full command'}</button>{!expanded && <p>Show the full command before allowing it.</p>}</>}
+    </>}
+    {accessRequest ? <><p>{approval.description}</p><blockquote><em>{botName}</em> says: <q>{typeof approval.inputs.reason === 'string' ? approval.inputs.reason : ''}</q></blockquote></> : <p className="muted">{approval.target} on {approval.scope.machineLabel}</p>}
+    <details><summary>Details</summary>
+      <p>{approval.description}</p>
+      <p>Bot: {snapshot.bots.find(bot => bot.id === approval.botId)?.name || 'Bot'}</p>
+      <p>Scope: {approval.scope.kind}{approval.ruleId && ` · Rule: ${approval.ruleId}`}</p>
+      <p>Review: {humanize(approval.policyMode)} · {humanize(approval.review)}</p>
+      <p>Origin: {approval.scope.origin || 'Not specified'}</p>
+      <ul>{approval.scope.consequences.map((text, i) => <li key={i}>{text}</li>)}</ul>
+      <dl style={{ gridTemplateColumns: 'minmax(0, 1fr)' }}>{displayInputs.map(input => <div key={input.key}><dt>{input.key}</dt><dd><pre dir="ltr" style={{ whiteSpace: 'pre', overflow: 'auto', maxHeight: '20rem', unicodeBidi: 'isolate' }}><code>{input.text}</code></pre></dd></div>)}</dl>
+      <GateState gate={approval.gate}/>
+      {!accessRequest && <button onClick={() => navigate({ screen: 'settings.policies', botId: approval.botId })}>Review future rules</button>}
+      {!accessRequest && owner && !!effective.data?.rememberedApprovals?.bot.length && <button disabled={!commandReviewed} onClick={() => navigate({ screen: 'bot.overview', id: approval.botId, botId: approval.botId, tab: 'settings.approvals' })}>Always allow for this Bot…</button>}
+    </details>
+    <ErrorNotice error={query.error}/><IntentNotice intent={intent} reconcile={query.reload}/>
+    {state === 'pending' ? <div className="row"><button className="primary" disabled={!allowed || !commandReviewed || intent.busy || intent.uncertain} onClick={() => void resolve('approve_once')}>{accessRequest ? 'Allow for this Bot' : 'Allow once'}</button>{!accessRequest && approval.chatOption && <button disabled={!allowed || !commandReviewed || intent.busy || intent.uncertain} onClick={() => void resolve('approve_chat')}>{approval.chatOption.label}</button>}<button className="danger" disabled={!allowed || intent.busy || intent.uncertain} onClick={() => void resolve('deny')}>{accessRequest ? 'Not now' : 'Deny'}</button></div> : <p role="status">{result}{!accessRequest && approval.gate.resolvedAtMs != null && state !== 'expired' && ` · ${new Date(approval.gate.resolvedAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}</p>}
+  </div>;
 }
 function HumanCard({ initial }: { initial: HumanStep }) {
   const { client, navigate, snapshot } = useApp(); const query = useQuery(`human-step:${initial.id}`, () => client.call('GET /human-steps/:id', { params: { id: initial.id } })); const step = query.data || initial; const allowed = useGate(step.gate); const intent = useIntent(); const external = step.externalUrl && safeExternal(step.externalUrl);
@@ -155,7 +194,7 @@ export function TranscriptCard({ card }: { card: Card }) {
   if ((card.type === 'secret_request' && card.request.gate.targetUserId !== snapshot.user.id) ||
       (card.type === 'human_step' && card.step.gate.targetUserId !== snapshot.user.id) ||
       ((card.type === 'email_draft' || card.type === 'slack_draft' || card.type === 'message_draft') && card.draft.ownerUserId !== snapshot.user.id) ||
-      ((card.type === 'permission_request' || card.type === 'auto_review_approval' || card.type === 'local_tool_permission' || card.type === 'publish_approval') && card.approval.gate.targetUserId !== snapshot.user.id)) return <p className="muted">Private request for its designated account owner. Its content and actions are not available here.</p>;
+      ((card.type === 'access_request' || card.type === 'permission_request' || card.type === 'auto_review_approval' || card.type === 'local_tool_permission' || card.type === 'publish_approval') && card.approval.gate.targetUserId !== snapshot.user.id)) return <p className="muted">Private request for its designated account owner. Its content and actions are not available here.</p>;
   switch (card.type) {
     case 'text': return <RichText text={card.text} />;
     case 'attachment': return <><RichText text={card.caption} /><AttachmentLink id={card.attachmentId} /></>;
@@ -165,7 +204,7 @@ export function TranscriptCard({ card }: { card: Card }) {
     case 'secret_request': return <SecretCard initial={card.request} />;
     case 'human_step': return <HumanCard initial={card.step} />;
     case 'email_draft': case 'slack_draft': case 'message_draft': return <DraftCard initial={card.draft} />;
-    case 'permission_request': case 'auto_review_approval': case 'local_tool_permission': case 'publish_approval': return <ApprovalCard initial={card.approval} />;
+    case 'access_request': case 'permission_request': case 'auto_review_approval': case 'local_tool_permission': case 'publish_approval': return <ApprovalCard initial={card.approval} />;
     case 'connector': return <ConnectorRow connector={card.connector} />;
     case 'connectors': return <div className="stack">{card.connectors.map(connector => <ConnectorRow key={connector.id} connector={connector} />)}</div>;
     case 'scm_connect': return <div className="stack"><h3>{card.provider} source control</h3><p>{card.reason}</p><button onClick={() => navigate({ screen: 'connect.apps', id: card.connectorId })}>Configure / authenticate verified connector</button></div>;

@@ -7,6 +7,19 @@ defmodule CodingAgent.Tools.GrepTest do
 
   @moduletag :tmp_dir
 
+  test "fallback match exhaustion reports an error rather than empty or partial results", %{
+    tmp_dir: root
+  } do
+    File.write!(Path.join(root, "input.txt"), String.duplicate("a", 100) <> "!")
+
+    assert {:error, message} =
+             Grep.execute("limit", %{"pattern" => "(a+)+$"}, nil, nil, root,
+               ripgrep_available?: false
+             )
+
+    assert message =~ "match budget"
+  end
+
   test "both backends center long lines on the first match", %{tmp_dir: root} do
     file = Path.join(root, "long.txt")
     File.write!(file, String.duplicate("é", 1500) <> "needle" <> String.duplicate("x", 600))

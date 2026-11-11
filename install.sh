@@ -61,7 +61,7 @@ Usage:
   sh install.sh --resolve-version
 
 Options:
-  --profile NAME  Select full, min, or lemon_bot (backend only, no BEAM/TUI).
+  --profile NAME  Select full, min, bot (runtime + backend), or lemon_bot (backend only).
   --force         Reinstall even if the target version is already present.
   --verify        Boot on ephemeral ports, then stop. Native: poll /healthz.
                   Backend: check /v1/setup and web before promotion.
@@ -94,7 +94,7 @@ Environment:
                               pinned release manifest publishes.
   LEMON_CHANNEL               Release channel. Default: stable for unpinned
                               installs. An explicit value must match the manifest.
-  LEMON_PROFILE               full | min | lemon_bot, or a full profile name
+  LEMON_PROFILE               full | min | bot | lemon_bot, or a full profile name
                               (lemon_runtime_full, lemon_runtime_min).
                               Default: lemon_runtime_full.
   LEMON_NO_TUI                Set to 1 to install the runtime only, skipping the
@@ -238,13 +238,15 @@ check_glibc
 
 # ----------------------------------------------------------------- profile ---
 
+BOT_PRESET=0
 case "$PROFILE_INPUT" in
   full|lemon_runtime_full) PROFILE="lemon_runtime_full" ;;
   min|lemon_runtime_min) PROFILE="lemon_runtime_min" ;;
+  bot) PROFILE="lemon_runtime_full"; BOT_PRESET=1; REQUIRE_BOT=1 ;;
   lemon_bot) PROFILE="lemon_bot" ;;
   *)
     die "unknown LEMON_PROFILE '$PROFILE_INPUT'.
-  Use full, min, lemon_bot, or a full runtime profile name."
+  Use full, min, bot, lemon_bot, or a full runtime profile name."
     ;;
 esac
 
@@ -441,8 +443,12 @@ try:
     os.remove(staging)
 except FileNotFoundError:
     pass
-os.symlink(target, staging)
-os.replace(staging, link)' "$1" "$2"
+try:
+    os.symlink(target, staging)
+    os.replace(staging, link)
+finally:
+    if os.path.lexists(staging):
+        os.remove(staging)' "$1" "$2"
 }
 
 validate_bot_archive() {
@@ -573,6 +579,7 @@ PY
 
 # ------------------------------------------------------------------ layout ---
 
+configure_layout() {
 LEMON_ROOT="$HOME/.lemon"
 VERSIONS_DIR="$LEMON_ROOT/versions"
 BIN_DIR="$LEMON_ROOT/bin"
@@ -594,6 +601,8 @@ mkdir -p "$VERSIONS_DIR" "$BIN_DIR" "$TMP_DIR"
 if [ "$PROFILE" != "lemon_bot" ]; then
   mkdir -p "$LEMON_ROOT/run" "$LEMON_ROOT/store"
 fi
+}
+configure_layout
 
 # ----------------------------------------------------------------- cleanup ---
 #
@@ -610,10 +619,54 @@ CLEANUP_TUI_TARBALL=""
 CLEANUP_PARTIAL=""
 CLEANUP_PREVIOUS=""
 CLEANUP_TARGET=""
+INSTALL_PHASE=install
+BOT_TRANSACTION=0
+RUNTIME_PARTIAL=""
+BACKEND_PARTIAL=""
+RUNTIME_TARGET=""
+BACKEND_TARGET=""
+RUNTIME_PREVIOUS=""
+BACKEND_PREVIOUS=""
+RUNTIME_POINTER_CHANGED=0
+BACKEND_POINTER_CHANGED=0
+
+rollback_profile() {
+  # Restore replaced trees as well as pointers: --force can replace the tree
+  # to which the original current pointer already refers.
+  if [ -n "$5" ] && [ -d "$5" ]; then
+    rm -rf "$4"
+    mv "$5" "$4"
+  elif [ -n "$4" ] && [ -z "$5" ]; then
+    rm -rf "$4"
+  fi
+  if [ "$6" != "1" ]; then
+    return
+  fi
+  if [ "$2" = "1" ]; then
+    atomic_symlink "$3" "$1"
+  elif [ -L "$1" ]; then
+    rm -f "$1"
+  fi
+}
 
 cleanup() {
+  if [ -n "${manifest_file:-}" ]; then
+    rm -f "$manifest_file"
+  fi
   if [ "$INSTALL_COMMITTED" = "1" ]; then
     return 0
+  fi
+  if [ "$BOT_TRANSACTION" = "1" ]; then
+    rollback_profile "$HOME/.lemon/versions/current" "$RUNTIME_HAD_CURRENT" \
+      "$RUNTIME_OLD_CURRENT" "$RUNTIME_TARGET" "$RUNTIME_PREVIOUS" "$RUNTIME_POINTER_CHANGED"
+    rollback_profile "$HOME/.lemon/lemon_bot/current" "$BACKEND_HAD_CURRENT" \
+      "$BACKEND_OLD_CURRENT" "$BACKEND_TARGET" "$BACKEND_PREVIOUS" "$BACKEND_POINTER_CHANGED"
+    if [ -n "$RUNTIME_PARTIAL" ]; then
+      rm -rf "$RUNTIME_PARTIAL"
+    fi
+    if [ -n "$BACKEND_PARTIAL" ]; then
+      rm -rf "$BACKEND_PARTIAL"
+    fi
   fi
 
   if [ -n "$CLEANUP_TARBALL" ]; then
@@ -628,7 +681,7 @@ cleanup() {
     rm -rf "$CLEANUP_PARTIAL"
   fi
 
-  if [ -n "$CLEANUP_PREVIOUS" ] && [ -d "$CLEANUP_PREVIOUS" ]; then
+  if [ "$BOT_TRANSACTION" != "1" ] && [ -n "$CLEANUP_PREVIOUS" ] && [ -d "$CLEANUP_PREVIOUS" ]; then
     if [ -n "$CLEANUP_TARGET" ] && [ ! -d "$CLEANUP_TARGET" ]; then
       mv "$CLEANUP_PREVIOUS" "$CLEANUP_TARGET" || true
     else
@@ -645,6 +698,13 @@ trap 'cleanup; exit 143' TERM
 
 ensure_links() {
   # ensure_links <version>
+  if [ "$BOT_TRANSACTION" = "1" ]; then
+    if [ "$PROFILE" = "lemon_bot" ]; then
+      BACKEND_POINTER_CHANGED=1
+    else
+      RUNTIME_POINTER_CHANGED=1
+    fi
+  fi
   atomic_symlink "$1" "$CURRENT_LINK"
 
   if [ ! -L "$BIN_DIR/$LAUNCHER" ] || [ "$(readlink "$BIN_DIR/$LAUNCHER")" != "$LAUNCHER_TARGET" ]; then
@@ -688,11 +748,11 @@ path_hint() {
         printf '%s\n' "$path_line"
       } >>"$rc_file"
     fi
-    PATH_NOTE="New shells will find lemon. To use it in this shell, run: $path_line"
+    PATH_NOTE="New shells will find $LAUNCHER."
     return 0
   fi
 
-  PATH_NOTE="$BIN_DIR is not on your PATH. Add it with: $path_line"
+  PATH_NOTE="$BIN_DIR is not on your PATH; the next step below uses its full path."
 }
 
 free_port() {
@@ -707,6 +767,7 @@ verify_boot() (
   if [ "$PROFILE" = "lemon_bot" ]; then
     return
   fi
+  verify_launcher="${1:-$BIN_DIR/lemon}"
   control_port="$(free_port)"
   web_port="$(free_port)"
   sim_port="$(free_port)"
@@ -720,7 +781,7 @@ verify_boot() (
   export LEMON_AGENT_DIR="$verify_home/.lemon/agent" LEMON_DOTENV_DIR="$verify_home"
   export RELEASE_TMP="$verify_home/runtime" RELEASE_NODE="$verify_node"
   export LEMON_CONTROL_PLANE_PORT="$control_port"
-  trap '"$BIN_DIR/lemon" stop >/dev/null 2>&1 || true; rm -rf "$verify_home"' EXIT
+  trap '"$verify_launcher" stop >/dev/null 2>&1 || true; rm -rf "$verify_home"' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
   cd "$verify_home"
@@ -733,7 +794,7 @@ verify_boot() (
     LEMON_GATEWAY_HEALTH_PORT="$gateway_health_port" \
     LEMON_ROUTER_HEALTH_PORT="$router_health_port" \
     RELEASE_NODE="$verify_node" \
-    "$BIN_DIR/lemon" daemon; then
+    "$verify_launcher" daemon; then
     die "the installed runtime failed to start. Files are in $VERSIONS_DIR."
   fi
 
@@ -782,60 +843,47 @@ verify_bot_runtime() (
   cat "$check_errors" >&2
   return 1
 )
+SETUP_DONE=0
 setup_handoff() {
   if [ "$PROFILE" = "lemon_bot" ]; then
     if [ ! -x "$HOME/.lemon/bin/lemon" ]; then
-      info "Lemon itself is not installed here. To run Lemon on this machine too, install it with:"
-      info "    curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh"
+      info "Backend-only manual install; no local runtime lifecycle command is installed."
+      info "Install the combined preset: curl -fsSL $BASE_URL/releases/download/v$VERSION/install.sh | sh -s -- --profile bot"
     fi
+    info "Lemon Bot can connect to a local or remote Lemon controller."
   elif [ "$SKIP_SETUP" = "1" ]; then
-    info "Setup skipped. Run this when you are ready to configure Lemon:"
-    info "    $BIN_DIR/lemon setup"
+    info "Setup skipped."
   elif (exec </dev/tty) 2>/dev/null; then
     info ""
     if ! "$BIN_DIR/lemon" setup </dev/tty; then
       die "Lemon setup did not complete. The runtime remains installed at $TARGET_DIR. Re-run: $BIN_DIR/lemon setup"
     fi
+    SETUP_DONE=1
   else
-    info "No interactive terminal is available. Run this when you are ready to configure Lemon:"
-    info "    $BIN_DIR/lemon setup"
+    info "No interactive terminal is available; configure Lemon with the next step below."
   fi
 }
 
 finish() {
   info ""
-  if [ "$PROFILE" = "lemon_bot" ]; then
-    info "Run lemon-bot to start. It connects to Lemon on this machine (offering to start it) or another machine you choose."
-  elif [ -x "$CURRENT_LINK/tui/bin/lemon-tui" ]; then
-    info "Run lemon to start."
-  else
-    info "Run lemon --help to see available commands."
-  fi
   if [ -n "$PATH_NOTE" ]; then
     info "$PATH_NOTE"
+  fi
+  if [ "$PROFILE" = "lemon_bot" ]; then
+    info "Next: \"$BIN_DIR/lemon-bot\""
+  elif [ "$SETUP_DONE" = "0" ]; then
+    info "Next: \"$BIN_DIR/lemon\" setup"
+  elif [ -x "$CURRENT_LINK/tui/bin/lemon-tui" ]; then
+    info "Next: \"$BIN_DIR/lemon\""
+  else
+    info "Next: \"$BIN_DIR/lemon\" --help"
   fi
 }
 
 # ----------------------------------------------------------------- install ---
 
-manifest_file="$TMP_DIR/manifest.json"
-if ! fetch "$MANIFEST_URL" "$manifest_file"; then
-  rm -f "$manifest_file"
-  die "could not download the release manifest: $MANIFEST_URL
-  Check the version/channel, or install from source: $DOCS_URL"
-fi
-
-artifact_line=""
-if ! artifact_line="$(select_artifact "$manifest_file" "$PROFILE")"; then
-  rm -f "$manifest_file"
-  exit 1
-fi
-
-if [ "$RESOLVE_VERSION" = "1" ]; then
-  rm -f "$manifest_file"
-  printf '%s\n' "$artifact_line" | cut -f4
-  exit 0
-fi
+install_profile() {
+artifact_line="$(select_artifact "$manifest_file" "$PROFILE")" || exit 1
 
 # The TUI is a second, optional artifact in the same manifest: a separate
 # per-platform tarball that unpacks into tui/ next to the runtime's bin/.
@@ -843,6 +891,9 @@ fi
 WANT_TUI=1
 if [ "$PROFILE" = "lemon_bot" ] || [ "${LEMON_NO_TUI:-0}" = "1" ] || [ "$REQUIRE_BOT" = "1" ]; then
   WANT_TUI=0
+fi
+if [ "$BOT_PRESET" = "1" ] && [ "$PROFILE" != "lemon_bot" ] && [ "${LEMON_NO_TUI:-1}" = "0" ]; then
+  WANT_TUI=1
 fi
 
 tui_line=""
@@ -853,7 +904,6 @@ if [ "$WANT_TUI" = "1" ]; then
   fi
 fi
 
-rm -f "$manifest_file"
 
 ARTIFACT_FILE="$(printf '%s\n' "$artifact_line" | cut -f1)"
 ARTIFACT_SHA="$(printf '%s\n' "$artifact_line" | cut -f2)"
@@ -890,13 +940,33 @@ if [ "$PROFILE" = "lemon_bot" ]; then
   TARGET_DIR="$VERSIONS_DIR/$INSTALL_KEY"
 fi
 
-if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ]; then
-  if [ "$REQUIRE_BOT" = "1" ] && ! verify_bot_runtime "$TARGET_DIR"; then
-    die "the installed Lemon $VERSION at $TARGET_DIR does not report the required bot worker APIs.
-  Re-run with --force to reinstall it from the release."
+# Runtime versions share a directory across profiles. Never mistake an older
+# min install for the combined preset's full runtime.
+REUSE_PROFILE=1
+if [ "$BOT_PRESET" = "1" ] && [ "$PROFILE" != "lemon_bot" ]; then
+  if [ ! -f "$TARGET_DIR/.installer-profile" ] ||
+    [ "$(cat "$TARGET_DIR/.installer-profile")" != "$PROFILE" ]; then
+    REUSE_PROFILE=0
   fi
-  if [ "$PROFILE" = "lemon_bot" ]; then
-    verify_bot "$TARGET_DIR"
+  if [ "$WANT_TUI" = "0" ] && [ -d "$TARGET_DIR/tui" ]; then
+    REUSE_PROFILE=0
+  fi
+fi
+if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ] && [ "$REUSE_PROFILE" = "1" ]; then
+  if [ "$INSTALL_PHASE" != "promote" ]; then
+    if [ "$REQUIRE_BOT" = "1" ] && ! verify_bot_runtime "$TARGET_DIR"; then
+      die "the installed Lemon $VERSION at $TARGET_DIR does not report the required bot worker APIs.
+  Re-run with --force to reinstall it from the release."
+    fi
+    if [ "$PROFILE" = "lemon_bot" ]; then
+      verify_bot "$TARGET_DIR"
+    fi
+  fi
+  if [ "$INSTALL_PHASE" = "stage" ]; then
+    if [ "$VERIFY" = "1" ]; then
+      verify_boot "$TARGET_DIR/bin/lemon"
+    fi
+    return
   fi
   if [ "$PROFILE" = "lemon_bot" ]; then
     ensure_links "versions/$INSTALL_KEY"
@@ -909,16 +979,15 @@ if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ]; then
     info "$INSTALL_LABEL is already installed. Re-run with --force to reinstall it."
   fi
 
-  if [ "$VERIFY" = "1" ]; then
+  if [ "$VERIFY" = "1" ] && [ "$INSTALL_PHASE" != "promote" ]; then
     verify_boot
   fi
 
   path_hint
-  setup_handoff
-  finish
-  exit 0
+  return
 fi
 
+if [ "$INSTALL_PHASE" != "promote" ]; then
 tarball="$TMP_DIR/$ARTIFACT_FILE"
 CLEANUP_TARBALL="$tarball"
 rm -f "$tarball"
@@ -1014,12 +1083,41 @@ if [ "$REQUIRE_BOT" = "1" ] && ! verify_bot_runtime "$partial_dir"; then
   die "Lemon $VERSION does not report the required bot worker APIs; refusing to install it.
   The previously installed runtime, if any, was left untouched."
 fi
+if [ "$INSTALL_PHASE" = "stage" ] && [ "$VERIFY" = "1" ]; then
+  verify_boot "$partial_dir/bin/lemon"
+fi
+
+printf '%s\n' "$PROFILE" >"$partial_dir/.installer-profile"
+fi
+
+if [ "$INSTALL_PHASE" = "stage" ]; then
+  if [ "$PROFILE" = "lemon_bot" ]; then
+    BACKEND_PARTIAL="$partial_dir"
+  else
+    RUNTIME_PARTIAL="$partial_dir"
+  fi
+  return
+fi
+partial_dir="$TARGET_DIR.partial"
 
 # A directory swap is two renames, and POSIX offers no way to make that one
 # step. The old copy is therefore moved aside rather than deleted, restored if
 # the second rename fails, and only discarded once versions/current has been
 # flipped onto the new one.
 previous_dir=""
+if [ "$BOT_TRANSACTION" = "1" ]; then
+  if [ "$PROFILE" = "lemon_bot" ]; then
+    BACKEND_TARGET="$TARGET_DIR"
+    if [ -d "$TARGET_DIR" ]; then
+      BACKEND_PREVIOUS="$TARGET_DIR.previous.$$"
+    fi
+  else
+    RUNTIME_TARGET="$TARGET_DIR"
+    if [ -d "$TARGET_DIR" ]; then
+      RUNTIME_PREVIOUS="$TARGET_DIR.previous.$$"
+    fi
+  fi
+fi
 
 if [ -d "$TARGET_DIR" ]; then
   previous_dir="$TARGET_DIR.previous.$$"
@@ -1052,13 +1150,14 @@ else
   ensure_links "$INSTALL_KEY"
 fi
 
-# Past this point the install is live: versions/current resolves to the new
-# tree, so the leftovers below are garbage rather than a rollback path.
-INSTALL_COMMITTED=1
-
-if [ -n "$previous_dir" ]; then
-  rm -rf "$previous_dir"
-  CLEANUP_PREVIOUS=""
+# The combined preset commits only after both profiles have been promoted.
+# Until then, retain both replaced trees and both original pointer targets.
+if [ "$BOT_TRANSACTION" != "1" ]; then
+  INSTALL_COMMITTED=1
+  if [ -n "$previous_dir" ]; then
+    rm -rf "$previous_dir"
+    CLEANUP_PREVIOUS=""
+  fi
 fi
 
 info "Installed $INSTALL_LABEL"
@@ -1068,10 +1167,80 @@ elif ! "$BIN_DIR/lemon" version >/dev/null 2>&1; then
   warn "'$BIN_DIR/lemon version' did not succeed. Run it directly to see why."
 fi
 
-if [ "$VERIFY" = "1" ]; then
+if [ "$VERIFY" = "1" ] && [ "$INSTALL_PHASE" != "promote" ]; then
   verify_boot
 fi
 
 path_hint
-setup_handoff
-finish
+}
+
+manifest_file="$TMP_DIR/manifest.json"
+if ! fetch "$MANIFEST_URL" "$manifest_file"; then
+  rm -f "$manifest_file"
+  die "could not download the release manifest: $MANIFEST_URL"
+fi
+if [ "$RESOLVE_VERSION" = "1" ]; then
+  artifact_line="$(select_artifact "$manifest_file" "$PROFILE")" || exit 1
+  if [ "$BOT_PRESET" = "1" ]; then
+    select_artifact "$manifest_file" lemon_bot >/dev/null || exit 1
+  fi
+  printf '%s\n' "$artifact_line" | cut -f4
+  rm -f "$manifest_file"
+  exit 0
+fi
+if [ "$BOT_PRESET" = "1" ]; then
+  # Stage and verify both artifacts before changing either live tree or pointer.
+  select_artifact "$manifest_file" lemon_bot >/dev/null || exit 1
+  RUNTIME_HAD_CURRENT=0
+  BACKEND_HAD_CURRENT=0
+  RUNTIME_OLD_CURRENT=""
+  BACKEND_OLD_CURRENT=""
+  if [ -L "$HOME/.lemon/versions/current" ]; then
+    RUNTIME_OLD_CURRENT="$(readlink "$HOME/.lemon/versions/current")"
+    RUNTIME_HAD_CURRENT=1
+  fi
+  if [ -L "$HOME/.lemon/lemon_bot/current" ]; then
+    BACKEND_OLD_CURRENT="$(readlink "$HOME/.lemon/lemon_bot/current")"
+    BACKEND_HAD_CURRENT=1
+  fi
+  BOT_TRANSACTION=1
+  INSTALL_PHASE=stage
+  install_profile
+  PROFILE=lemon_bot
+  REQUIRE_BOT=0
+  configure_layout
+  install_profile
+
+  INSTALL_PHASE=promote
+  PROFILE=lemon_runtime_full
+  REQUIRE_BOT=1
+  configure_layout
+  install_profile
+  PROFILE=lemon_bot
+  REQUIRE_BOT=0
+  configure_layout
+  install_profile
+  INSTALL_COMMITTED=1
+  if [ -n "$RUNTIME_PREVIOUS" ]; then
+    rm -rf "$RUNTIME_PREVIOUS"
+  fi
+  if [ -n "$BACKEND_PREVIOUS" ]; then
+    rm -rf "$BACKEND_PREVIOUS"
+  fi
+else
+  install_profile
+fi
+rm -f "$manifest_file"
+if [ "$BOT_PRESET" = "1" ]; then
+  if [ "$SKIP_SETUP" != "1" ] && (exec </dev/tty) 2>/dev/null; then
+    # Hand over the real terminal device: macOS kqueue cannot poll the /dev/tty
+    # alias, so the backend's raw-mode prompt would never receive input.
+    terminal_device=/dev/$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')
+    [ -c "$terminal_device" ] || terminal_device=/dev/tty
+    exec "$HOME/.local/bin/lemon-bot" <"$terminal_device"
+  fi
+  info "Run: $HOME/.local/bin/lemon-bot"
+else
+  setup_handoff
+  finish
+fi

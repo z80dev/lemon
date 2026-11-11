@@ -2,23 +2,67 @@
 
 Native SwiftUI clients for the independent Lemon Bot product backend. macOS and iOS share the `LemonBotKit` Swift package, Codable resources, product-session transport, observable live state and native `LemonBotUI` screens. They never connect to Lemon's operator WebSocket or receive its credential. The [canonical API](../contracts/api.md), [wire types](../contracts/protocol.ts) and [card lifecycle](../contracts/cards.md) define server behavior; this README describes packaging and platform use, not a second protocol.
 
-Sidebar previews retain loaded messages offline; uncached rows say “Messages load when you're online.” Section headings expose expanded/collapsed state to VoiceOver, explain offline availability, and pinned Bots announce selection. On Mac, record global shortcuts in Settings rather than typing shortcut syntax; Previous/Next Bot are listed in the Conversation menu (⌘[/⌘]).
+Sidebar previews use the conversation's last-entry ID from sync, fetching that entry once online without opening the chat. Loaded previews remain available offline; uncached rows say “Messages load when you're online.” Section headings expose expanded/collapsed state to VoiceOver, explain offline availability, and pinned Bots announce selection. On Mac, record global shortcuts in Settings rather than typing shortcut syntax; Previous/Next Bot are listed in the Conversation menu (⌘[/⌘]).
+
+When the last entry is a tool event, previews inspect the preceding 20 transcript
+sequences for the newest previewable entry. The sidebar caches the result against
+the conversation's last-entry ID, not the earlier reply's ID.
+
+Machine Bot access uses the same [grouped grants controls](../web/README.md#assistant-destinations)
+as web: measured capability names, Off / View only / Full, warnings only when
+effective access differs, and one Why disclosure for raw reasons and policy.
+Bot grants do not grant macOS privacy access. The separate **macOS permissions**
+pane can explicitly request Screen Recording and Accessibility through the local
+Worker helper; Full Disk Access is changed in System Settings. These are OS-user
+permissions shared by Bots and anything they run, not per-Bot isolation.
+
+Bots can ask for Terminal, Files or Browser with a private access card: **Allow
+for this Bot** queues access for after the current task, then the backend continues
+the original request automatically; **Not now** leaves access unchanged. Grant
+controls stay editable during tasks and show queued changes with **Stop task**.
+Workspace owners and admins can require review for reads in a Bot’s folder under
+Policies. On supported machines, eligible folder reads otherwise skip review;
+subsequent web fetches and searches require approval. Writes, Terminal and Browser
+keep their existing approval rules.
+
+Live reply indicators and the desktop pet ignore streaming messages from finished
+runs. Idle/offline Bot updates re-read all locally nonterminal runs, including
+unknown outcomes, without presenting uncertain work as actively running. Final
+reply reads retry independently on later idle/offline updates if a run finishes
+but its reply cannot be fetched, even after that run leaves the active-run list.
+Recovery state is isolated to the account and cleared on sign-out or lost
+conversation access. Bot access refreshes when grants, its machine, or workspace
+policy changes.
+
+Create Bot checks model readiness on the selected execution machine, not the
+controller. **Verified** and **Saved** both allow creation; Saved is not a passed
+live check. Missing model authentication does not block owner sign-in or management.
+See [model setup](../../../docs/user-guide/setup.md) for connection, explicit
+Codex CLI import consent, skip behavior and non-generating checks.
 
 ## End-user release packaging
 
-End users open the notarized DMG, drag **Lemon Bot** to **Applications**, and launch
-it normally. They do not need Xcode, Metal, XcodeGen, Bun, Node or a source checkout.
-The arm64 Mac package requires macOS 14+. iPhone distribution is through App Store
-Connect/TestFlight, not a simulator bundle renamed to an IPA.
+The arm64 DMG pipeline for macOS 14+ exists, but distribution currently remains
+an unsigned, unnotarized preview until Developer ID and notary credentials are
+available. The credential-free CI artifact is not an end-user installer and is
+not attached to GitHub Releases. The configured signed path builds, notarizes
+and publishes a Developer ID DMG; iPhone distribution uses App Store
+Connect/TestFlight.
 
-The release builder requires macOS, Python 3, Xcode 26.3 selected through
-`DEVELOPER_DIR`, XcodeGen 2.46+, the Xcode Metal Toolchain, and access to Swift
-package dependencies. Install/accept those prerequisites on CI before packaging.
+End-user installation and sign-in live in [Lemon Bot getting started](../../../docs/getting-started/lemon-bot.md).
+The Mac app needs no developer tools or preinstalled Python: its runtime bundles
+CPython. The Terminal installer still requires a working `python3`.
+
+Contributor packaging requires Xcode 26.3+ (27.2 verified).
+The release builder requires macOS, Python 3, XcodeGen 2.46+, the Xcode Metal
+Toolchain and access to Swift package dependencies. Select the installed Xcode
+with `DEVELOPER_DIR`; these are build-machine requirements, not app prerequisites.
 Run from this directory; output must be outside this source directory:
 
 ```sh
 python3 release.py macos --version 2026.10.14 --build 1 \
-  --channel preview --output /tmp/lemon-bot-apple-release
+  --channel preview --output /tmp/lemon-bot-apple-release \
+  --runtime-manifest /tmp/release-artifacts/manifest.json
 python3 release.py ios --version 2026.10.14 --build 1 \
   --channel preview --output /tmp/lemon-bot-apple-release
 # Explicitly authorizes the actual App Store Connect upload:
@@ -58,19 +102,29 @@ IPA with Xcode, and `ios-upload` submits it through Apple's `altool` API-key pat
 Upload acceptance is not processing success, TestFlight availability, beta review
 approval or App Store publication. Check those external receipts in App Store Connect.
 
-Missing credentials fail closed; the currently reported zero signing identities
-and only `HEX_API_KEY` repository secret cannot produce normal Apple distribution.
-No release mode silently falls back to unsigned/ad-hoc output. For the integration
-owner's packaging smoke only, explicitly run:
+CI uses macos-26, Xcode 26.3 and checksum-pinned XcodeGen 2.46.0. Configure
+repository variables `APPLE_TEAM_ID`, `APPLE_DEVELOPER_ID_APPLICATION`,
+`APPLE_MAC_PROVISIONING_PROFILE_SPECIFIER`; secrets
+`APPLE_DEVELOPER_ID_P12_BASE64`, `APPLE_DEVELOPER_ID_P12_PASSWORD`,
+`APPLE_MAC_PROVISIONING_PROFILE_BASE64`, `APPLE_ASC_KEY_ID`,
+`APPLE_ASC_ISSUER_ID`, `APPLE_ASC_KEY_P8_BASE64`.
+No configured inputs produces an `apple-local-preview-darwin-arm64` workflow
+artifact retained for 14 days only. Partial configuration fails listing missing
+names; configured signing/notarization failure blocks publication. CI imports
+credentials into a temporary keychain and removes them even on failure.
+For local packaging smoke only, explicitly run:
 
 ```sh
 python3 release.py macos-preview --version 2026.10.14 --build 1 \
   --channel preview --output /tmp/lemon-bot-apple-local-preview
 ```
 
-This separately named `local-preview` Debug ad-hoc DMG/ZIP is **not notarized**
-and not a normal end-user release. It preserves the local Debug Keychain identity
-constraints documented below. Never publish it as a signed installer.
+This separately named `local-preview` Debug ad-hoc DMG/ZIP is **unsigned for
+distribution and not notarized**. On macOS 15+, first open requires System
+Settings → Privacy & Security → **Open Anyway**. Ad-hoc development builds can
+re-prompt for Keychain access after each rebuild; this is not expected for signed
+releases with a stable signing identity. TCC grants may also need renewal.
+These artifacts are never attached to GitHub Releases; no signed DMG is published yet.
 
 The builder emits artifacts and a JSON receipt only after all requested steps
 succeed; it does not publish a release or create another workflow. Receipt fields:
@@ -81,18 +135,29 @@ succeed; it does not publish a release or create another workflow. Receipt field
 (`darwin-arm64`, `ios`), lowercase `sha256`, integer `sizeBytes`.
 Mac names are `lemon-bot-<CalVer>-<channel>-darwin-arm64-notarized.{dmg,zip}`;
 preview replaces `notarized` with `local-preview`. iOS is
-`lemon-bot-<CalVer>-<channel>-ios-app-store.ipa`. Canonical release integration
-owns mapping these additional installer records into schema-2 manifests and
-publication; local-preview records must not become normal installer entries.
+`lemon-bot-<CalVer>-<channel>-ios-app-store.ipa`. The Mac receipt also includes
+`runtimeManifestSha256` (null without a manifest). Signed Mac builds require
+`--runtime-manifest`; preview builds may supply it. The exact schema-2 manifest's
+digest is embedded in the Mac app as `LemonBotRuntimeManifestSHA256`, alongside
+`LemonBotRuntimeBaseURL` (default `https://github.com/z80dev/lemon`), establishing
+the runtime download pin. `--runtime-base-url` accepts only an HTTPS base without
+query, fragment or trailing slash. iOS builds reject runtime manifests.
+CI verifies the receipt and manifest digest before attaching only the notarized
+DMG and receipt; stable also publishes `Lemon-Bot-darwin-arm64.dmg`.
+Local notary credentials may use `APPLE_NOTARY_KEYCHAIN` to select their keychain.
+The signed Mac receipt lists the publishable DMG only; the generated app ZIP is
+an intermediate/local output and is not attached to the GitHub Release.
 
 ## Generate, build and launch
 
-Requirements: Xcode 26.3, XcodeGen 2.46+, the iOS simulator runtime, the Xcode Metal Toolchain used by SwiftTerm, and access to the SwiftTerm package dependency. Run these commands from this `apple` directory:
+Development requires Xcode 26.3+ (27.2 verified), XcodeGen 2.46+, the iOS simulator runtime, the Xcode Metal Toolchain used by SwiftTerm, and access to the SwiftTerm package dependency. Run these commands from this `apple` directory:
 
 ```sh
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-# Once per Xcode installation, if the Metal component is missing:
-# xcodebuild -downloadComponent MetalToolchain
+# Once per Xcode installation, accept the license if builds request it:
+sudo xcodebuild -license accept
+# Install the Metal component used by SwiftTerm:
+xcodebuild -downloadComponent MetalToolchain
 xcodegen generate --spec project.yml
 open LemonBot.xcodeproj
 
@@ -128,57 +193,26 @@ The checked-in specification uses `org.lemonbot.mac`, `org.lemonbot.ios`, `org.l
 
 ### Connect the Mac app
 
-The Mac app is not sandboxed: it is a Developer ID app that runs as you, reads your
-files and runs `ssh` the way Terminal does. Being that OS user, or being able to
-`ssh` into a machine, is the credential. First launch shows two choices:
+Use [Lemon Bot getting started](../../../docs/getting-started/lemon-bot.md) for the Mac app's first-run, owner sign-in and permission workflow; use [attaching a bot machine](../../../docs/user-guide/attaching-a-bot-machine.md) for additional hosts. The app runs as your OS user without App Sandbox isolation. Local account access or SSH access is the authority, not a public URL or tailnet membership.
 
-- **This Mac → Connect.** The app runs a small POSIX script (`MachineBootstrap.script`)
-  that checks `http://127.0.0.1:4100/v1/setup`, starts an installed `lemon-bot --no-open`
-  detached if it isn't running (falling back to `bun run … start` in the
-  `lemonCheckoutPath` checkout, default `~/lemon`), and prints the backend's private
-  `~/.lemon/lemon_bot/local-access.key`. The app sends that key once to
-  `POST /v1/auth/local`, which signs in as the workspace owner — creating the owner
-  and workspace on a fresh install — and saves the account with `route = .thisMac`.
-- **Another machine → `me@studio` → Connect.** The same script runs through
-  `ssh -T <host> sh -s` with `BatchMode=yes` (keys or agent only, no password prompt)
-  and `StrictHostKeyChecking=accept-new`. The app then keeps
-  `ssh -N -L 127.0.0.1:<port>:127.0.0.1:4100 <host>` open, where `<port>` is a stable
-  value in 41000–41999 derived from the host, so the saved account's base URL never
-  changes. The tunnel restarts with backoff while that account is active and closes
-  on account switch, sign-out and quit. The remote machine needs only `lemon-bot`
-  installed; nothing listens off loopback.
+Choose **This Mac → Connect** for local setup. To add an execution host to the
+current workspace, use **Machines → Add a machine** over SSH; this is different
+from connecting the app to another backend. Review OS access in this Mac's
+**macOS permissions** pane, separately from each Bot's access grants.
 
-Neither path asks for an email, password or setup code. A machine-key session
-expires like any product session; on `reconnect_required` the app signs in with
-the machine again automatically. **Sign in with an email and password instead**
-opens the account form: enter a product origin, bootstrap an empty deployment with
-the operator's one-use setup code, or use local sign-in or a configured OIDC
-provider. OIDC native completion requires `lemonbot://auth/complete` in the
-backend's client-redirect allowlist. Its confidential IdP credential stays
-server-side; native flow uses PKCE. iPhone onboarding prioritizes connecting to
-your already signed-in desktop, not enterprise setup or invitations.
+Contributor integration details:
 
-Bots need a machine: a Lemon execution node. When nothing is online yet, the
-sidebar's first-run card sets up the machine you connected to on its own and then
-offers **Create a Bot** (the editor preselects the only online machine). For an
-owner or admin it reads the host name, creates the machine (`POST /v1/machines`)
-or reissues a repair invite for an existing one with the same node name, and runs
-`HostEnrollment.script` there — locally or over the same `ssh`. The script picks a
-bot-capable `lemon` matching the invite's pinned version (installing it the way
-`join-node.sh` does when missing), enrolls once with `node join
---invite-code-stdin` (the one-use code travels inside the script on stdin), then
-hands the worker to a `org.lemon.node.<name>` LaunchAgent on macOS or a
-`lemon-node-<name>.service` systemd user unit on Linux, with your login shell's
-`PATH` and a log in `~/.lemon/logs/node-<name>.log`. Success is reported only once
-the backend sees the machine online. A machine that is already enrolled just gets
-its worker restarted under that supervisor. Failures stay on the card with
-**Try again** and **Attach another way** (the manual join command).
+- The native installer verifies release manifests/artifacts and installs missing runtime/backend components without changing an installed version. New installs require the app's embedded manifest digest; filling a missing component at an existing different version uses that version's HTTPS manifest and checksums. A stable `/Applications` or `~/Applications` location is required for native installation and the Worker helper.
+- Connection bootstrap delegates to `lemon-bot up --json --no-open --no-worker`; host enrollment delegates to `up --json --no-open`. The CLI owns local-owner sign-in, invitation handling and supervision. The app observes NDJSON and confirms the returned machine online through the backend, rather than treating command launch as readiness.
+- Another-machine connections run the bootstrap over `ssh -T` with `BatchMode=yes` and `StrictHostKeyChecking=accept-new`. The app holds a loopback `ssh -N -L` tunnel on a stable local port in 41000–41999, reconnects it with backoff while active, and closes it on account switch, sign-out or quit. The remote host needs the matching Bot preset.
+- This Mac may pass the installed Worker helper as `--worker-wrapper`; a local helper path is never sent over SSH. macOS privacy grants belong to that helper identity, not each Bot. Without the wrapper, runtime-version changes can invalidate grants attributed to `erlexec`.
+- Local/SSH account routes use the private `local-access.key` with `POST /v1/auth/local`, returning bounded product sessions. Password/SSO routes remain separate; native OIDC completion requires the exact `lemonbot://auth/complete` allowlist entry and PKCE, with IdP credentials server-side.
 
-To check the flow by hand: with Lemon Bot stopped, choose **This Mac** and confirm
-it starts and opens the workspace with no form; quit and relaunch and confirm the
-account restores. With a host you can `ssh` into, connect, kill the `ssh -N`
-process and confirm the workspace reconnects. A host without key access shows the
-ssh error under **Details**; one without Lemon Bot shows the install command.
+### Add another worker machine
+
+The [machine attachment guide](../../../docs/user-guide/attaching-a-bot-machine.md) owns SSH-assisted setup, scoped join commands, trust and service persistence. SSH-assisted attachment is performed by the backend using its host's SSH keys, not by the native client. A tunneled worker depends on that controller host staying awake with Lemon running.
+
+Contributor acceptance should exercise local startup and account restoration, SSH tunnel recovery, missing SSH access, missing runtime/backend and failed enrollment. Native progress must retain typed lifecycle failures separately from SSH transport failures; failed host-setup attempts are not automatically retried.
 
 Accounts and device-bound product credentials use native Keychain, keyed by exact backend/account. On macOS, all account and pending-pairing reads, updates, inserts and removals explicitly select the standard local login Keychain with synchronization disabled. Its encrypted, code-signing-ACL-protected items do not sync through iCloud; this is not a hardware-bound or backup-nonportable storage guarantee. On iOS, the same items retain `AfterFirstUnlockThisDeviceOnly` accessibility and synchronization is explicitly disabled. Backend device/session binding and revocation remain independent of the local storage implementation. The last account and selected Bot/conversation restore on launch. Account switching keeps workspace state separate; sign-out revokes the session and removes that account's local cache. Ordinary sessions keep bounded expiry; paired `AuthSession.expiresAtMs: null` means **until revoked**, not expired or a client-generated refresh token. Offline restoration retains the saved cluster, credential, drafts and last-known selection; reconnection performs reads/realtime subscriptions, never replays ordinary mutations. Authoritative revocation shows **Reconnect to your desktop** and disables old authority.
 
@@ -190,18 +224,9 @@ An opaque creation timeout without returned IDs stays fenced when the server exp
 
 ## Connect iPhone to your desktop
 
-1. Configure the already running backend's reachable HTTPS `publicUrl`. **Tailscale Serve** is the recommended option when your Mac and phone already have Tailscale reachability. The Mac guide explains installation/login, same tailnet, ACL, MagicDNS, TLS and backend prerequisites. The app never changes Serve or starts a backend: any operator-chosen setup outside the app must use an unused HTTPS listener/port, preserve existing routes, and never use Funnel. TLS must validate normally; a QR never permits a bypass. A physical phone's `127.0.0.1` is the phone, not the Mac.
-2. On macOS choose **Connect iPhone → Check connection readiness**. Review the exact advertised HTTPS Tailscale origin, instance and workspace verified against the existing authenticated backend, then choose **Create QR code**. The guide refuses loopback, wrong-service and mismatched identity rather than switching backends. See the [Mac guide](LemonBotMac/README.md#connect-iphone). Treat the QR, copied link and screenshots as temporary secrets; no desktop session or operator credential is encoded.
-3. On iPhone choose **Scan QR code** or paste the link and choose **Check pasted link**. The phone runs the shared public preflight against the QR's expected backend instance before fetching the non-consuming workspace preview. Review the exact workspace name, origin, backend instance ID, workspace ID and original expiry before choosing **Request connection**. A wrong service, changed instance or invalid TLS fails closed; scanning and checking alone do not claim access.
-4. Compare the device name and six-digit verification code on both devices. On the Mac select **The exact device name and code match my iPhone**, then **Approve this iPhone**, or **Deny**. Approval does not mean the phone has finished connecting.
-5. While the pairing screen is visible and the phone is active, it observes a confirmed pending request and finishes automatically after approval; no manual finish step is needed in the normal flow. Checks use the saved completion nonce, never claim or approve again, and stop at the saved original expiry. The phone verifies authenticated `/identity` with its own new session against the QR's instance and workspace before saving its credential and instance pin in Keychain. The Mac independently observes status while its window is active; **Connected — iPhone completed pairing** means the backend reports completion, not merely approval.
-6. The phone opens the same workspace after the initial read-only restore attempt. A saved credential is not proof of connectivity: **Connected to verified workspace** requires an online verified workspace; an offline/failed initial sync is shown as saved access without a live connection, and rejected access requires reconnect.
+Follow [Lemon Bot getting started](../../../docs/getting-started/lemon-bot.md) for reachable HTTPS, desktop-approved pairing and revocation. Tailscale reachability alone is not sign-in authority; a QR does not permit a TLS bypass or make the desktop's loopback address reachable from a physical phone.
 
-Pending requests survive reopening. A confirmed `pending_approval` request can be observed again in the foreground within its original expiry. Unknown claim/completion or network outcomes stop automatic checks and are never resumed merely by reopening. Use **Check my request** explicitly to reconcile the same saved claim/completion receipt; **Check previous QR code** on Mac reconciles its issuance rather than creating another QR. The QR keeps its original five-minute expiry. After an explicit expired or denied result, discard the saved request and create a new QR as a separate action. A successfully installed session stays valid until revoked.
-
-Launch and foreground reconnect restore the phone's own Keychain account read-only. When an instance pin exists, public setup is checked before any saved token is sent, then authenticated identity must match the pinned instance and workspace before sync or socket authentication. A legacy unpinned iOS account can acquire a pin only after a verified authenticated baseline. An identity mismatch fails closed as reconnect-required, retains cached content and pending-mutation fences, and never replays sends or approvals. An unreachable backend retains the saved credential and presents offline/recovery state instead of claiming success.
-
-Revoke the phone through **Settings → Account → Registered devices** or **Product sessions**. Device removal revokes its bound session; the phone shows explicit reconnect, not fake offline success. Reconnect requires a separate explicit connection flow. Camera, speech, share-sheet staging and selected files remain independent of pairing; no ambient capture or automatic send is introduced.
+Native implementation invariants: preview is read-only; requesting access and desktop approval are explicit. Phone completion retains its original nonce and five-minute deadline, verifies instance/workspace with the new device session before Keychain storage, and never replays ordinary mutations. A completed phone session lasts until revoked. Unknown pairing outcomes require explicit same-receipt reconciliation, not a new claim. See the shared API below for contributor integration details.
 
 ### Shared native preflight API
 
@@ -338,6 +363,12 @@ space from the transcript; errors and unconfirmed outcomes remain visible inline
 Drag the transcript downward to dismiss the keyboard interactively. A transcript
 already at the latest message stays there when the keyboard or composer resizes;
 reading older messages does not force a jump to the bottom.
+
+The transcript is a `LazyVStack` positioned with explicit `ScrollViewReader`
+bottom requests (initial open, follow), not `.defaultScrollAnchor(.bottom)`: that
+anchor re-adjusts the offset as lazy rows refine their measured heights and can
+spin the main thread in an endless layout loop. Entry navigation takes priority
+over the initial bottom request.
 
 Groups have one human owner and two to six Bots owned by that person. There are no human invitations, successor transfer or Group Leave. Deletion uses the existing exact preview/confirmation and verified active/unknown-work lifecycle. Authoritative conversation deletion removes only this account's room draft and copied staging files, not selected originals or another account's cache. Legacy cached foreign live Bots/rooms do not regain visibility during offline restoration.
 

@@ -20,8 +20,8 @@ export const responses = new Map<string, unknown>();
 export const app = {
   online: true,
   device: { id: 'device_test' },
-  snapshot: { user: { id: 'owner' }, workspace: { id: 'workspace_test', ownerUserId: 'owner' }, bots: [bot], machines: [machine], capabilities: { imageGeneration: false } },
-  client: { call: async (endpoint: string, options: unknown) => {
+  snapshot: { user: { id: 'owner' }, member: { role: 'owner' }, workspace: { id: 'workspace_test', ownerUserId: 'owner' }, bots: [bot], machines: [machine], capabilities: { imageGeneration: false } },
+  client: { baseUrl: 'https://bot.test', call: async (endpoint: string, options: unknown) => {
     calls.push({ endpoint, options });
     if (!responses.has(endpoint)) throw new Error(`Unexpected test endpoint: ${endpoint}`);
     const response = responses.get(endpoint);
@@ -30,11 +30,13 @@ export const app = {
   } },
   realtime: { subscribe: (listener: (frame: RealtimeServerFrame) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; }, send: () => undefined },
   navigate: (route: Route) => { navigations.push(route); },
+  refresh: async () => {},
   reportError: (error: unknown) => { throw error; },
 } as unknown as AppContextValue;
 export function useApp() { return app; }
 export function resetFixtures() {
   calls.length = 0; navigations.length = 0; listeners.clear(); responses.clear(); app.online = true;
+  app.snapshot.machines = [machine]; app.snapshot.bots = [bot];
   const page = (items: unknown[]) => ({ items, nextCursor: null });
   for (const [endpoint, value] of Object.entries({
     'GET /machines/:id': machine,
@@ -43,7 +45,10 @@ export function resetFixtures() {
     'GET /machines': page([machine]),
     'GET /bots': page([bot]),
     'GET /bots/:id': bot,
+    'GET /bots/:id/presence': { botId: bot.id, status: 'idle', machineId: machine.id, machineLabel: machine.name, machineStatus: machine.status, currentRunId: null, taskConversationId: null, summary: 'Idle', evidenceEntryId: null, measuredAtMs: resource.updatedAtMs, stale: false },
+    'GET /policies/effective': { userId: 'owner', botId: bot.id, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, workspaceReads: 'allow', rules: [], networkPolicies: [], explanations: [] },
     'GET /bots/:id/memory': page([memory]),
+    'GET /skills': page([]),
     'GET /entries/:id': { id: memory.sourceEntryId, conversationId: bot.mainConversationId },
     'GET /templates': page([template]),
     'GET /templates/:id': template,

@@ -210,7 +210,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ]
   },
   "claude-fable-5-1": {
@@ -228,7 +229,7 @@
     "cost": {
       "input": 10,
       "output": 50,
-      "cache_read": 1,
+      "cache_read": 0.25,
       "cache_write": 12.5
     },
     "context_window": 1000000,
@@ -238,7 +239,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ]
   },
   "claude-haiku-4-5": {
@@ -317,7 +319,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ]
   },
   "claude-mythos-5": {
@@ -345,7 +348,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ]
   },
   "claude-mythos-5-1": {
@@ -373,7 +377,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ]
   },
   "claude-opus-4-0": {
@@ -532,7 +537,7 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "max"
     ]
   },
   "claude-opus-4-7": {
@@ -560,7 +565,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ]
   },
   "claude-opus-4-8": {
@@ -588,7 +594,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ]
   },
   "claude-opus-5": {
@@ -616,7 +623,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ]
   },
   "claude-opus-5-5": {
@@ -631,7 +639,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ],
     "input": [
       "text",
@@ -644,7 +653,10 @@
       "cache_write": 5.0
     },
     "context_window": 1000000,
-    "max_tokens": 128000
+    "max_tokens": 128000,
+    "compat": {
+      "anthropic_thinking_display": true
+    }
   },
   "claude-sonnet-4-0": {
     "id": "claude-sonnet-4-0",
@@ -757,7 +769,8 @@
     "reasoning_efforts": [
       "low",
       "medium",
-      "high"
+      "high",
+      "max"
     ]
   },
   "claude-sonnet-5": {
@@ -785,7 +798,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ]
   },
   "claude-sonnet-5-5": {
@@ -813,7 +827,8 @@
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
     ]
   }
 }

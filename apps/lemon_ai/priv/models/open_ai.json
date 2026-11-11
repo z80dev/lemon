@@ -123,7 +123,10 @@
     "context_window": 1047576,
     "max_tokens": 32768,
     "adaptive_thinking": false,
-    "reasoning_efforts": []
+    "reasoning_efforts": [],
+    "service_tier_cost": {
+      "priority": 1.75
+    }
   },
   "gpt-4.1-mini": {
     "id": "gpt-4.1-mini",
@@ -145,7 +148,10 @@
     "context_window": 1047576,
     "max_tokens": 32768,
     "adaptive_thinking": false,
-    "reasoning_efforts": []
+    "reasoning_efforts": [],
+    "service_tier_cost": {
+      "priority": 1.75
+    }
   },
   "gpt-4.1-nano": {
     "id": "gpt-4.1-nano",
@@ -189,7 +195,10 @@
     "context_window": 128000,
     "max_tokens": 16384,
     "adaptive_thinking": false,
-    "reasoning_efforts": []
+    "reasoning_efforts": [],
+    "service_tier_cost": {
+      "priority": 1.7
+    }
   },
   "gpt-4o-2024-05-13": {
     "id": "gpt-4o-2024-05-13",
@@ -277,7 +286,10 @@
     "context_window": 128000,
     "max_tokens": 16384,
     "adaptive_thinking": false,
-    "reasoning_efforts": []
+    "reasoning_efforts": [],
+    "service_tier_cost": {
+      "priority": 1.6666666666666667
+    }
   },
   "gpt-5": {
     "id": "gpt-5",
@@ -304,7 +316,10 @@
       "low",
       "medium",
       "high"
-    ]
+    ],
+    "service_tier_cost": {
+      "priority": 2.0
+    }
   },
   "gpt-5-chat-latest": {
     "id": "gpt-5-chat-latest",
@@ -380,7 +395,10 @@
       "low",
       "medium",
       "high"
-    ]
+    ],
+    "service_tier_cost": {
+      "priority": 1.8
+    }
   },
   "gpt-5-nano": {
     "id": "gpt-5-nano",
@@ -430,9 +448,6 @@
     "max_tokens": 272000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
-      "minimal",
-      "low",
-      "medium",
       "high"
     ]
   },
@@ -457,11 +472,14 @@
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
-      "minimal",
+      "none",
       "low",
       "medium",
       "high"
-    ]
+    ],
+    "service_tier_cost": {
+      "priority": 2.0
+    }
   },
   "gpt-5.1-chat-latest": {
     "id": "gpt-5.1-chat-latest",
@@ -590,11 +608,15 @@
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
       "xhigh"
-    ]
+    ],
+    "service_tier_cost": {
+      "priority": 2.0
+    }
   },
   "gpt-5.2-chat-latest": {
     "id": "gpt-5.2-chat-latest",
@@ -671,7 +693,6 @@
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
-      "low",
       "medium",
       "high",
       "xhigh"
@@ -716,10 +737,11 @@
       "cache_read": 0.175,
       "cache_write": 0
     },
-    "context_window": 272000,
+    "context_window": 400000,
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
@@ -741,17 +763,28 @@
       "input": 2.5,
       "output": 15,
       "cache_read": 0.25,
-      "cache_write": 0
+      "cache_write": 0,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 5,
+        "output": 22.5,
+        "cache_read": 0.5,
+        "cache_write": 0
+      }
     },
     "context_window": 1050000,
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
       "xhigh"
-    ]
+    ],
+    "service_tier_cost": {
+      "priority": 2.0
+    }
   },
   "gpt-5.4-mini": {
     "id": "gpt-5.4-mini",
@@ -774,11 +807,15 @@
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
       "xhigh"
-    ]
+    ],
+    "service_tier_cost": {
+      "priority": 2.0
+    }
   },
   "gpt-5.4-nano": {
     "id": "gpt-5.4-nano",
@@ -801,6 +838,7 @@
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
@@ -822,13 +860,19 @@
       "input": 30,
       "output": 180,
       "cache_read": 0,
-      "cache_write": 0
+      "cache_write": 0,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 60,
+        "output": 270,
+        "cache_read": 0,
+        "cache_write": 0
+      }
     },
     "context_window": 1050000,
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
-      "low",
       "medium",
       "high",
       "xhigh"
@@ -849,17 +893,29 @@
       "input": 5,
       "output": 30,
       "cache_read": 0.5,
-      "cache_write": 0
+      "cache_write": 0,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 10,
+        "output": 45,
+        "cache_read": 1,
+        "cache_write": 0
+      }
     },
     "context_window": 1050000,
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
       "xhigh"
-    ]
+    ],
+    "service_tier_cost": {
+      "flex": 0.5,
+      "priority": 2.5
+    }
   },
   "gpt-5.5-pro": {
     "id": "gpt-5.5-pro",
@@ -876,13 +932,19 @@
       "input": 30,
       "output": 180,
       "cache_read": 0,
-      "cache_write": 0
+      "cache_write": 0,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 60,
+        "output": 270,
+        "cache_read": 0,
+        "cache_write": 0
+      }
     },
     "context_window": 1050000,
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
-      "low",
       "medium",
       "high",
       "xhigh"
@@ -906,21 +968,31 @@
       "cache_write": 5,
       "long_context": {
         "input_threshold": 272000,
-        "input": 10,
-        "output": 45,
-        "cache_read": 1,
-        "cache_write": 12.5
+        "input": 8,
+        "output": 30,
+        "cache_read": 0.8,
+        "cache_write": 10
       }
     },
     "context_window": 1050000,
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
-    ]
+      "xhigh",
+      "max"
+    ],
+    "compat": {
+      "openai_prompt_cache_options": true,
+      "openai_temperature_requires_none": true
+    },
+    "service_tier_cost": {
+      "flex": 0.5,
+      "priority": 2.0
+    }
   },
   "gpt-5.6-cyber": {
     "id": "gpt-5.6-cyber",
@@ -947,7 +1019,11 @@
       "medium",
       "high",
       "xhigh"
-    ]
+    ],
+    "compat": {
+      "openai_temperature_requires_none": true,
+      "openai_prompt_cache_options": true
+    }
   },
   "gpt-5.6-luna": {
     "id": "gpt-5.6-luna",
@@ -977,11 +1053,21 @@
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
-    ]
+      "xhigh",
+      "max"
+    ],
+    "compat": {
+      "openai_prompt_cache_options": true,
+      "openai_temperature_requires_none": true
+    },
+    "service_tier_cost": {
+      "flex": 0.5,
+      "priority": 2.0
+    }
   },
   "gpt-5.6-luna-pro": {
     "id": "gpt-5.6-luna-pro",
@@ -1015,7 +1101,11 @@
       "medium",
       "high",
       "xhigh"
-    ]
+    ],
+    "compat": {
+      "openai_temperature_requires_none": true,
+      "openai_prompt_cache_options": true
+    }
   },
   "gpt-5.6-sol": {
     "id": "gpt-5.6-sol",
@@ -1035,21 +1125,31 @@
       "cache_write": 5,
       "long_context": {
         "input_threshold": 272000,
-        "input": 10,
-        "output": 45,
-        "cache_read": 1,
-        "cache_write": 12.5
+        "input": 8,
+        "output": 30,
+        "cache_read": 0.8,
+        "cache_write": 10
       }
     },
     "context_window": 1050000,
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
-    ]
+      "xhigh",
+      "max"
+    ],
+    "compat": {
+      "openai_prompt_cache_options": true,
+      "openai_temperature_requires_none": true
+    },
+    "service_tier_cost": {
+      "flex": 0.5,
+      "priority": 2.0
+    }
   },
   "gpt-5.6-sol-pro": {
     "id": "gpt-5.6-sol-pro",
@@ -1083,7 +1183,11 @@
       "medium",
       "high",
       "xhigh"
-    ]
+    ],
+    "compat": {
+      "openai_temperature_requires_none": true,
+      "openai_prompt_cache_options": true
+    }
   },
   "gpt-5.6-terra": {
     "id": "gpt-5.6-terra",
@@ -1113,11 +1217,21 @@
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
-    ]
+      "xhigh",
+      "max"
+    ],
+    "compat": {
+      "openai_prompt_cache_options": true,
+      "openai_temperature_requires_none": true
+    },
+    "service_tier_cost": {
+      "flex": 0.5,
+      "priority": 2.0
+    }
   },
   "gpt-5.6-terra-pro": {
     "id": "gpt-5.6-terra-pro",
@@ -1151,7 +1265,11 @@
       "medium",
       "high",
       "xhigh"
-    ]
+    ],
+    "compat": {
+      "openai_temperature_requires_none": true,
+      "openai_prompt_cache_options": true
+    }
   },
   "gpt-6-astra": {
     "id": "gpt-6-astra",
@@ -1184,8 +1302,18 @@
       "low",
       "medium",
       "high",
-      "xhigh"
-    ]
+      "xhigh",
+      "max"
+    ],
+    "compat": {
+      "openai_prompt_cache_options": true,
+      "openai_temperature_requires_none": true
+    },
+    "service_tier_cost": {
+      "flex": 0.5,
+      "priority": 2.0,
+      "ultrafast": 6.0
+    }
   },
   "gpt-6-luna": {
     "id": "gpt-6-luna",
@@ -1202,17 +1330,34 @@
       "input": 0.1,
       "output": 0.5,
       "cache_read": 0.01,
-      "cache_write": 0.125
+      "cache_write": 0.125,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 0.2,
+        "output": 0.75,
+        "cache_read": 0.02,
+        "cache_write": 0.25
+      }
     },
     "context_window": 1050000,
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
-    ]
+      "xhigh",
+      "max"
+    ],
+    "compat": {
+      "openai_prompt_cache_options": true,
+      "openai_temperature_requires_none": true
+    },
+    "service_tier_cost": {
+      "flex": 0.5,
+      "priority": 2.0
+    }
   },
   "gpt-6-sol": {
     "id": "gpt-6-sol",
@@ -1229,17 +1374,34 @@
       "input": 2,
       "output": 10,
       "cache_read": 0.2,
-      "cache_write": 2.5
+      "cache_write": 2.5,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 4,
+        "output": 15,
+        "cache_read": 0.4,
+        "cache_write": 5
+      }
     },
     "context_window": 1050000,
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
-    ]
+      "xhigh",
+      "max"
+    ],
+    "compat": {
+      "openai_prompt_cache_options": true,
+      "openai_temperature_requires_none": true
+    },
+    "service_tier_cost": {
+      "flex": 0.5,
+      "priority": 2.0
+    }
   },
   "gpt-6.1-sol": {
     "id": "gpt-6.1-sol",
@@ -1256,7 +1418,14 @@
       "input": 2,
       "output": 10,
       "cache_read": 0.1,
-      "cache_write": 2.5
+      "cache_write": 2.5,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 4,
+        "output": 15,
+        "cache_read": 0.2,
+        "cache_write": 5
+      }
     },
     "context_window": 1050000,
     "max_tokens": 128000,
@@ -1265,8 +1434,62 @@
       "low",
       "medium",
       "high",
-      "xhigh"
-    ]
+      "xhigh",
+      "max"
+    ],
+    "compat": {
+      "openai_prompt_cache_options": true,
+      "openai_temperature_requires_none": true
+    },
+    "service_tier_cost": {
+      "flex": 0.5,
+      "priority": 2.0,
+      "ultrafast": 6.0
+    }
+  },
+  "gpt-6.1-terra": {
+    "id": "gpt-6.1-terra",
+    "name": "GPT-6.1 Terra",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "api": "openai_responses",
+    "provider": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "cost": {
+      "input": 1,
+      "output": 5,
+      "cache_read": 0.05,
+      "cache_write": 1.25,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 2,
+        "output": 7.5,
+        "cache_read": 0.1,
+        "cache_write": 2.5
+      }
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000,
+    "adaptive_thinking": false,
+    "reasoning_efforts": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "compat": {
+      "openai_prompt_cache_options": true,
+      "openai_temperature_requires_none": true
+    },
+    "service_tier_cost": {
+      "flex": 0.5,
+      "priority": 2.0
+    }
   },
   "gpt-daybreak-blue-latest": {
     "id": "gpt-daybreak-blue-latest",
@@ -1283,16 +1506,54 @@
       "input": 4,
       "output": 20,
       "cache_read": 0.4,
-      "cache_write": 5
+      "cache_write": 5,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 8,
+        "output": 30,
+        "cache_read": 0.8,
+        "cache_write": 10
+      }
     },
     "context_window": 1050000,
     "max_tokens": 128000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high",
-      "xhigh"
+      "xhigh",
+      "max"
+    ]
+  },
+  "gpt-daybreak-red-latest": {
+    "id": "gpt-daybreak-red-latest",
+    "name": "Daybreak Red",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "api": "openai_responses",
+    "provider": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "cost": {
+      "input": 12.5,
+      "output": 75,
+      "cache_read": 1.25,
+      "cache_write": 15.625
+    },
+    "context_window": 400000,
+    "max_tokens": 128000,
+    "adaptive_thinking": false,
+    "reasoning_efforts": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
     ]
   },
   "o1": {
@@ -1316,11 +1577,9 @@
     "max_tokens": 100000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
-      "minimal",
       "low",
       "medium",
-      "high",
-      "xhigh"
+      "high"
     ]
   },
   "o1-pro": {
@@ -1344,11 +1603,9 @@
     "max_tokens": 100000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
-      "minimal",
       "low",
       "medium",
-      "high",
-      "xhigh"
+      "high"
     ]
   },
   "o3": {
@@ -1372,12 +1629,13 @@
     "max_tokens": 100000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
-      "minimal",
       "low",
       "medium",
-      "high",
-      "xhigh"
-    ]
+      "high"
+    ],
+    "service_tier_cost": {
+      "priority": 1.75
+    }
   },
   "o3-mini": {
     "id": "o3-mini",
@@ -1399,11 +1657,9 @@
     "max_tokens": 100000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
-      "minimal",
       "low",
       "medium",
-      "high",
-      "xhigh"
+      "high"
     ]
   },
   "o4-mini": {
@@ -1427,11 +1683,9 @@
     "max_tokens": 100000,
     "adaptive_thinking": false,
     "reasoning_efforts": [
-      "minimal",
       "low",
       "medium",
-      "high",
-      "xhigh"
+      "high"
     ]
   },
   "o4-mini-deep-research": {
@@ -1461,5 +1715,17 @@
       "high",
       "xhigh"
     ]
+  },
+  "chat-latest": {
+    "id": "chat-latest",
+    "name": "Chat Latest",
+    "api": "openai_responses",
+    "provider": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "reasoning": false,
+    "input": ["text", "image"],
+    "cost": {"input": 5, "output": 30, "cache_read": 0.5, "cache_write": 0},
+    "context_window": 400000,
+    "max_tokens": 128000
   }
 }

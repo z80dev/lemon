@@ -37,6 +37,7 @@ const networkRule = z.object({ kind: z.enum(['domain', 'ip_cidr']), value: z.str
 const command = z.object({ argv: z.array(z.string().min(1).max(32768)).min(1).max(64), cwd: z.string().min(1), timeoutMs: z.number().int().min(1000).max(1800000), probeArgv: z.array(z.string().min(1).max(32768)).min(1).max(64) }).strict();
 const providerSchema = z.object({
   version: z.literal(1),
+  namedAgentOperatorUserId: ident.optional(),
   trustedFrontendOrigins: z.array(origin),
   oauthRedirectUris: z.array(z.string().url()).refine(values => values.every(value => value === 'lemonbot://auth/complete' || new URL(value).protocol === 'https:' || ['localhost', '127.0.0.1', '[::1]'].includes(new URL(value).hostname) && new URL(value).protocol === 'http:'), 'Unsafe OAuth client redirect'),
   serverSecrets: z.record(z.string().regex(/^[A-Za-z0-9_.-]{1,128}$/), secretSource),

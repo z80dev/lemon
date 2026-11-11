@@ -46,7 +46,8 @@ defmodule LemonRouter.Application do
         # Router-owned adaptive routing feedback store; opens SQLite lazily.
         LemonRouter.RoutingFeedbackStore,
         # Run orchestrator
-        LemonRouter.RunOrchestrator
+        LemonRouter.RunOrchestrator,
+        LemonRouter.AgentMessaging
       ] ++ maybe_health_server_child()
 
     opts = [strategy: :one_for_one, name: LemonRouter.Supervisor]
@@ -54,6 +55,7 @@ defmodule LemonRouter.Application do
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
         configure_router_bridge()
+        :ok = LemonCore.AgentMessaging.configure(LemonRouter.AgentMessaging)
         {:ok, pid}
 
       other ->

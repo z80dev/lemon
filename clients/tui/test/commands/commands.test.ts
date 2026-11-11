@@ -5,6 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { modelCommand } from "../../src/commands/model.ts";
+import { DEFAULT_METHODS } from "../../src/dev/fake-server.ts";
 import { reportedContextFixture } from "../../src/dev/fixtures/context-fixtures.ts";
 import type { RunsRecentListResult } from "../../src/protocol/types.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
@@ -15,7 +16,11 @@ let harness: Harness;
 
 beforeEach(async () => {
 	initTheme({ colorLevel: 3 });
-	harness = await createHarness({ sessionKey: "tui-session", cwd: "/workspace/project" });
+	harness = await createHarness({
+		sessionKey: "tui-session",
+		cwd: "/workspace/project",
+		methods: [...DEFAULT_METHODS, "agent.identity.list"],
+	});
 });
 
 afterEach(() => {
@@ -629,21 +634,24 @@ describe("runs and goals", () => {
 		]);
 	});
 
-	test("/agents renders the Lemon agent directory", async () => {
-		harness.server.respondWith("agents.list", {
+	test("/agents renders addressable conversations, not persona templates", async () => {
+		harness.server.respondWith("agent.identity.list", {
 			agents: [
 				{
-					agentId: "researcher",
-					name: "Researcher",
-					description: "Finds primary sources",
-					sessionCount: 3,
-					activeSessionCount: 1,
+					id: "session://research-session",
+					sessionKey: "research-session",
+					kind: "session",
+					name: "researcher",
+					label: "Finds primary sources",
+					status: "running",
 				},
 			],
 		});
 		await harness.run("/agents");
-		expect(harness.host.text).toContain("Researcher (researcher)");
-		expect(harness.host.text).toContain("1 active");
+		expect(harness.host.text).toContain("@researcher");
+		expect(harness.host.text).toContain("session://research-session");
+		expect(harness.host.text).toContain("running");
+		expect(harness.server.requestsFor("agents.list")).toHaveLength(0);
 	});
 
 	test("/tasks combines active and recent task views", async () => {

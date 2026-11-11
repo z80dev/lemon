@@ -2,14 +2,16 @@
 
 Install Lemon, connect a model, make one small repository change, and keep the
 same session for larger work. You need an interactive terminal on macOS (Apple
-Silicon) or Linux (x86_64 or ARM64), `curl`, `tar`, `python3`, and an account
-with a model provider. The prebuilt release bundles its own Erlang/Elixir
+Silicon, macOS 14+) or Linux (x86_64 or ARM64, glibc 2.39+), `curl`, `tar`,
+`python3`, and an account with a model provider. The prebuilt release bundles its own Erlang/Elixir
 runtime, the terminal client and the browser-automation driver, so you do not
 install any of them. Browser tools additionally need Node.js 24 or later and
 Chrome/Chromium; `lemon doctor` reports what is missing. Model requests use
 your provider's account.
 
 Other platforms or a container: see [Install](../install.md).
+For the Mac app or a browser-based Bot rather than repository coding, use
+[Lemon Bot in 3 minutes](lemon-bot.md).
 
 ## 1. Install and connect a model
 
@@ -21,26 +23,47 @@ The installer verifies the runtime and terminal-UI checksums, installs them unde
 `~/.lemon`, adds `~/.lemon/bin` to PATH for new shells, and then starts
 `lemon setup` in your terminal.
 
-In setup, choose **OpenAI Codex**, then **Sign in with ChatGPT (browser OAuth)**.
-If you already use the Codex CLI, you can instead choose **Import existing Codex
-CLI ChatGPT login (read-only copy)**; import is opt-in and never automatic. With a
-Claude Pro or Max plan, choose **Anthropic**, then **Sign in with Claude Pro/Max
-(browser)**. Other providers, local servers (Ollama, LM Studio, llama.cpp, vLLM,
-LiteLLM) and API-key login are also supported; see
-[Set up Lemon](../user-guide/setup.md). Accept the offered default model, or pick
-another one your account can use.
+Setup's **Connect a model** step lists what it already found on this machine
+first. If you use the Codex CLI, the first choice copies that ChatGPT login into
+Lemon without changing `~/.codex/auth.json`. Lemon and the Codex CLI share this
+login; if either refreshes it, the other may need to sign in again. Choose
+*Sign in with ChatGPT (browser)* to give Lemon its own login instead. A provider key
+exported in your shell (for example `ANTHROPIC_API_KEY`) is offered as an
+explicit save into Lemon's encrypted store, because the background service
+cannot see your shell. Nothing is copied or saved without choosing it.
+
+Otherwise choose **Choose a provider…**, then **OpenAI Codex** → **Sign in with
+ChatGPT (browser OAuth)**. With a Claude Pro or Max plan, choose **Anthropic**,
+then **Sign in with Claude Pro/Max (browser)**. Other providers, local servers
+(Ollama, LM Studio, llama.cpp, vLLM, LiteLLM) and API-key login are also
+supported; see [Set up Lemon](../user-guide/setup.md). Accept the offered default
+model, or pick another one your account can use.
 
 Setup is safe to rerun: a usable provider is kept, not logged in again. It only
 asks about ports if one is already taken, and suggests a free one. Do not paste
 credentials into chat or a repository. Coming from Hermes? Run
 `lemon migrate hermes` after setup.
 
-Setup prints **Setup complete** only after a passing live credential check. If
-you installed with `--skip-setup`, had no terminal when installing, or stopped
-setup early, run it now:
+Setup ends with the state of your model, never a guess:
+
+- **Setup complete. Model: P / M (verified with P; no message was sent).** — a
+  non-generating check just passed.
+- **Setup complete. Model: P / M (saved; Lemon checks it on your first
+  message).** — the credential resolves, but the provider has no quick live
+  check, was unreachable, or the check failed for a non-authentication reason.
+
+Both paths offer **Open Lemon now? [Y/n]**. Explicit `--skip-verify` instead
+reports a saved, skipped check and does not offer to launch. Missing, expired
+or rejected credentials require action rather than claiming readiness.
+To connect or re-check a model later, run `lemon setup model` (or
+`lemon setup model --json` for a non-interactive readiness check;
+add `--offline` to avoid provider requests).
+
+If you installed with `--skip-setup`, had no terminal, or stopped setup early,
+run the installer's absolute-path next step:
 
 ```bash
-lemon setup
+"$HOME/.lemon/bin/lemon" setup
 ```
 
 (If `lemon` is not found in the terminal you installed from, open a new
@@ -147,8 +170,9 @@ cards and permissions and Lemon owns the coding session. See the
 `lemon gateway setup telegram` or `lemon gateway setup discord`. See
 [Set up Lemon](../user-guide/setup.md#optional-telegram-or-discord).
 
-**Mac app:** the native macOS application is Lemon Bot, built from source
-today. See [Install: Mac app](../install.md#mac-app).
+**Lemon Bot:** install the browser product with the one-command Bot preset, or
+build the native Mac app from source. No signed DMG is published yet.
+Follow [Lemon Bot in 3 minutes](lemon-bot.md) for either path.
 
 ## 4. Grow the workflow, not the setup ceremony
 

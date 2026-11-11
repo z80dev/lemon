@@ -245,6 +245,12 @@ async function fixture(reviewedSetups: ReviewedSetup[] = []): Promise<Fixture> {
     decrypt: () => unexpected('decryption before codec'),
     invoke: () => unexpected('internal invocation'),
     syncBotProfile: () => unexpected('profile synchronization'),
+    addressedAgents: {
+      identity: () => unexpected('addressed agent identity'), rename: () => unexpected('addressed agent rename'), list: () => unexpected('addressed agent list'),
+      send: () => unexpected('addressed agent send'), status: () => unexpected('addressed agent status'), command: () => unexpected('addressed agent command'),
+      authorizeReplay: () => unexpected('addressed agent replay'), registerBot: () => unexpected('addressed agent registration'), unregisterBot: () => unexpected('addressed agent unregistration'),
+      registerAll: () => unexpected('addressed agent registrations'), reconcile: () => unexpected('addressed agent reconciliation'), close: () => unexpected('addressed agent close'),
+    },
   };
   installHelpers(services);
   services.now = () => 1800000000000;
@@ -279,7 +285,7 @@ async function fixture(reviewedSetups: ReviewedSetup[] = []): Promise<Fixture> {
   };
   setBehavior(behavior);
   const policy = createPolicyServices(services);
-  const governance: P.Governance = { revision: 1, groupAccess: 'all', allowedDirectoryGroupIds: [], allowSudo: false, allowEgress: true, lockNetworkForGroups: true, requireReview: true, allowedChannelAdapters: [], xMentionsEnabled: false, emailEnabled: false, contentExportEnabled: false, inactiveHostPolicy: { enabled: false, afterDays: 30, action: 'suspend' } };
+  const governance: P.Governance = { revision: 1, groupAccess: 'all', allowedDirectoryGroupIds: [], allowSudo: false, allowEgress: true, lockNetworkForGroups: true, requireReview: true, folderReadsNeedReview: false, allowedChannelAdapters: [], xMentionsEnabled: false, emailEnabled: false, contentExportEnabled: false, inactiveHostPolicy: { enabled: false, afterDays: 30, action: 'suspend' } };
   store.setMetadata('governance', governance);
   const host = createHostServices(services), routes = createHostRoutes(services, host);
   const requests = new Set<Promise<unknown>>();

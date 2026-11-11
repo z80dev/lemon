@@ -46,8 +46,9 @@ defmodule LemonCli.Setup.ProviderManagement do
   """
 
   alias LemonAgent.ModelRuntime.ProviderNames
+  alias LemonAi.Auth.OpenAICodexOAuth
   alias LemonCli.Onboarding.{Provider, Providers, Runner}
-  alias LemonCli.Setup.{DeviceLogin, ProviderAuth}
+  alias LemonCli.Setup.{DeviceLogin, ModelReadiness, ProviderAuth}
   alias LemonCore.{Config, Secrets}
   alias LemonCore.Config.TomlPatch
 
@@ -59,6 +60,131 @@ defmodule LemonCli.Setup.ProviderManagement do
     with {:ok, target} <- target(opts) do
       locked(path(opts), fn -> listing(target, opts) end)
     end
+  end
+
+  def check(provider_id_or_nil, opts \\ []) do
+    with {:ok, target} <- target(opts),
+         {:ok, listing_with_readiness} <-
+           locked(path(opts), fn ->
+             listing(target, Keyword.put(opts, :readiness, true))
+           end) do
+      check_opts = Keyword.put(opts, :provider, provider_id_or_nil)
+
+      readiness =
+        check_opts
+        |> ModelReadiness.check()
+        |> ModelReadiness.to_wire()
+
+      {:ok,
+       %{
+         management: listing_with_readiness,
+         readiness: readiness
+       }}
+    end
+  end
+
+  def import_login("openai_codex", "codex_cli", opts) do
+    with {:ok, target} <- target(opts) do
+      case OpenAICodexOAuth.import_codex_cli_login([]) do
+        {:ok, secret} ->
+          persist_imported_login(target, secret, opts)
+
+        {:error, :enoent} ->
+          {:error, :login_not_found}
+
+        {:error, :missing_home} ->
+          {:error, :login_not_found}
+
+        {:error, _} ->
+          {:error, :login_unusable}
+      end
+    end
+  end
+
+  def import_login(_provider_id, _source, _opts) do
+    {:error, :invalid_request}
+  end
+
+  defp persist_imported_login(target, secret, opts) when is_map(secret) do
+    encoded = OpenAICodexOAuth.encode_secret(secret)
+
+    with true <- byte_size(encoded) <= 65_536,
+         true <- secret["type"] == "openai_codex_oauth",
+         true <- present?(secret["access_token"]) and present?(secret["refresh_token"]),
+         {:ok, spec} <- provider("openai_codex") do
+      credential_mutation(target, "openai_codex", opts, fn ->
+        locked(path(opts), fn ->
+          with {:ok, content, config} <- read_config(path(opts)),
+               {:ok, project} <- project_config(opts) do
+            spec = configured_spec(spec, config)
+            name = managed_secret_name("openai_codex", path(opts))
+
+            with :ok <- unshared(config, project, spec, [name]),
+                 :ok <-
+                   persist_locked(
+                     path(opts),
+                     [{name, {:set, encoded, spec.oauth_secret_provider}}],
+                     &Runner.update_provider_auth_config(&1, spec, :codex_cli, name),
+                     content,
+                     opts
+                   ) do
+              listing(target, Keyword.put(opts, :readiness, true))
+            end
+          end
+        end)
+      end)
+    else
+      _ -> {:error, :login_unusable}
+    end
+  rescue
+    _ -> {:error, :unavailable}
+  catch
+    _, _ -> {:error, :unavailable}
+  end
+
+  defp wire_detected(list) when is_list(list) do
+    Enum.map(list, fn
+      %{"source" => "codex_cli", "providerId" => _} = item ->
+        item
+
+      %{"source" => "environment", "providerId" => _, "variable" => _} = item ->
+        item
+
+      %{source: :codex_cli} = item ->
+        %{
+          "source" => "codex_cli",
+          "providerId" => to_string(item[:provider_id] || item[:providerId])
+        }
+
+      %{source: "codex_cli"} = item ->
+        %{
+          "source" => "codex_cli",
+          "providerId" =>
+            to_string(
+              item[:provider_id] || item["provider_id"] || item[:providerId] || item["providerId"]
+            )
+        }
+
+      %{source: :environment} = item ->
+        %{
+          "source" => "environment",
+          "providerId" => to_string(item[:provider_id] || item[:providerId]),
+          "variable" => to_string(item[:variable])
+        }
+
+      %{source: "environment"} = item ->
+        %{
+          "source" => "environment",
+          "providerId" =>
+            to_string(
+              item[:provider_id] || item["provider_id"] || item[:providerId] || item["providerId"]
+            ),
+          "variable" => to_string(item[:variable] || item["variable"])
+        }
+
+      other ->
+        other
+    end)
   end
 
   def device_start(params, opts \\ []), do: device_operation(:start, params, opts)
@@ -412,12 +538,31 @@ defmodule LemonCli.Setup.ProviderManagement do
       defaults = effective_default(config, project)
 
       with {:ok, rows} <- rows do
-        {:ok,
-         %{
-           target: target,
-           default: defaults,
-           providers: Enum.reverse(rows)
-         }}
+        base_listing = %{
+          target: target,
+          default: defaults,
+          providers: Enum.reverse(rows)
+        }
+
+        if Keyword.get(opts, :readiness) do
+          readiness =
+            opts
+            |> ModelReadiness.status()
+            |> ModelReadiness.to_wire()
+
+          detected =
+            opts
+            |> ModelReadiness.detect()
+            |> wire_detected()
+
+          {:ok,
+           Map.merge(base_listing, %{
+             readiness: readiness,
+             detected: detected
+           })}
+        else
+          {:ok, base_listing}
+        end
       end
     end
   end

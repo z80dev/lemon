@@ -18,10 +18,20 @@ export LEMON_CONTROL_PLANE_OPERATOR_TOKEN="$(openssl rand -hex 32)"
 
 Connect to the configured `/ws` endpoint (default local port 4040).
 
-The HTTP/WebSocket listener accepts an OTP `:ip` setting, for example
-`config :lemon_control_plane, ip: {127, 0, 0, 1}` before application startup.
-Its default remains `:any`. Disposable paired benchmark runtimes explicitly use
-loopback; this does not change an already-running service.
+Listeners default to `127.0.0.1`: control plane **4040**, node gateway **4044**,
+and LemonWeb **4080**. Use `LEMON_CONTROL_PLANE_BIND_IP` to opt into a different
+main bind; a non-loopback main bind requires an operator token, rejects tokenless
+compatibility, and serves only `GET /ws` and `GET /healthz` to remote peers.
+OpenAI/ACP HTTP APIs require bearer authentication even locally (their dedicated
+token, or the operator token when unset). Remote HTTP additionally requires
+`LEMON_CONTROL_PLANE_REMOTE_HTTP=openai,acp` and each enabled API's dedicated token.
+
+Expose **4044**, not 4040, for remote execution nodes. This gateway serves only
+`/ws` (node/enrollment credentials; never operators or tokenless access) and
+`/healthz`. Configure `LEMON_CONTROL_PLANE_NODE_BIND_IP` / `_NODE_PORT`; port `0`
+disables it. An occupied gateway port leaves the controller running but makes
+gateway availability false. Put TLS or an encrypted overlay in front of any
+non-loopback listener. Bind changes require a restart.
 
 Send:
 
@@ -229,9 +239,9 @@ the router profile registry after mutations:
 | --- | --- | --- | --- |
 | `profiles.list` | read | `{}` | `{profiles,count}` |
 | `profiles.get` | read | `{id}` | `{profile,summary}` |
-| `profiles.create` | admin | `{id,[name,description,avatar,model,systemPrompt,node,mcpServers,toolPolicy]}` | `{profile,summary}` |
-| `profiles.update` | admin | `{id,[name,description,avatar,model,systemPrompt,node,mcpServers,toolPolicy]}` | `{profile,summary}` |
-| `profiles.clone` | admin | `{sourceId,id,[name,description,avatar,model,systemPrompt,node,mcpServers,toolPolicy]}` | `{profile,summary}` |
+| `profiles.create` | admin | `{id,[name,description,avatar,model,systemPrompt,node,workingDirectory,mcpServers,toolPolicy]}` | `{profile,summary}` |
+| `profiles.update` | admin | `{id,[name,description,avatar,model,systemPrompt,node,workingDirectory,mcpServers,toolPolicy]}` | `{profile,summary}` |
+| `profiles.clone` | admin | `{sourceId,id,[name,description,avatar,model,systemPrompt,node,workingDirectory,mcpServers,toolPolicy]}` | `{profile,summary}` |
 | `profile.chat` | write | `{id,prompt,[model,queueMode,images]}` | `{runId,profileId,sessionKey,node,summary}` |
 | `profiles.sync` | admin | `{id,[nodeId,mutationId]}` | `{profileId,nodeId,mutationId,acknowledged,revisionDigest}` |
 | `profiles.sync.status` | read | `{id,nodeId,mutationId}` | `{profileId,nodeId,mutationId,status,acknowledged,revisionDigest}` |
@@ -297,10 +307,14 @@ the complete default connector list for this run. Omission inherits the profile;
 `[]` attaches none. Supplied definitions never merge owner headers or connectors.
 Only operator-authorized requests reach this seam.
 `invocationToolPolicy` also requires `profileId` and uses the same validated
-native shape. Omission or `{}` adds no restriction; `allow: []` denies all.
+native shape, including sparse tri-state `workspace_read_exempt` (`true | false | nil`).
+Omission or `{}` adds no restriction; `allow: []` denies all.
 It intersects rather than replaces persistent/session/node floors, so caller
-grants cannot widen denied or required-approval tools. Profile executions never
+grants cannot widen denied or required-approval tools or introduce
+`workspace_read_exempt: true` when the durable profile lacks it. Profile executions never
 inherit ambient machine-global MCP connections, including explicit `[]`.
+Remote profile executions with `workingDirectory: "profile_files"` run in the
+profile's derived sibling `files` directory when `cwd` is omitted (default is `"node_default"`).
 Profile-owned skills load metadata from the destination profile's
 `workspace/.lemon/skill/<key>/SKILL.md`, independently of execution cwd;
 `read_skill` lazily loads the full body through the owning skill registry.
@@ -494,13 +508,17 @@ work, or create another session store.
 
 Fresh managed native runs register their existing live owner before execution,
 so recovery does not require a lifecycle index created by the first finalized
-run. Managed user entries carry owner-written `lemonRun` provenance in the
-existing native journal: logical run ID, logical session key and native UUID.
-Terminal association follows the selected user entry's exact owned binding,
-not the order in which start events reach storage. Declared malformed or
-foreign bindings remain unknown; legacy untagged journals retain conservative
-prompt/time matching. This metadata does not enter provider input or create
-another ownership store.
+run. Managed user entries and `async_followup` custom entries carry owner-written
+`lemonRun` provenance in the existing native journal: logical run ID, logical
+session key and native UUID (`details.lemonRun` on custom entries). Terminal
+association follows the selected input's exact owned binding, not the order in
+which start events reach storage. A peer result's `details.run_id` identifies the
+peer execution, never the receiving turn. Declared malformed or foreign bindings
+and unbound async inputs remain unknown; only legacy untagged human inputs retain
+conservative prompt/time matching. A matching live native owner can identify its
+active async turn before summary publication; retained recovery requires matching
+stored ownership. This metadata does not enter provider input or create another
+ownership store.
 
 Requests accept:
 
@@ -551,8 +569,10 @@ A live attempt identifies the native execution instance; a retained attempt
 uses its fixed run ID when that association is known. The selected native
 branch, not simply the newest session run or an idle live session's retained
 invocation ID, determines completion. Ambiguous prompt/start-interval association
-remains unknown. Answer-so-far belongs only to the current selected user turn;
-before that turn produces text, it is empty rather than the previous answer.
+remains unknown. Answer-so-far belongs only to the current selected input turn,
+whether human or asynchronous; before it produces text, it is empty rather than
+the previous answer. Earlier turns' tools and messages are not reassigned to the
+current run.
 
 The server compares two complete owner-read collections. If they differ, it
 returns `status: "retry", reason: "snapshot_raced"` with no snapshot. Optional
@@ -1053,7 +1073,9 @@ post-response privacy check.
 
 | Method | Scope | Request | Success payload |
 | --- | --- | --- | --- |
-| `providers.management.list` | admin | `{}` | Redacted provider listing for the controller |
+| `providers.management.list` | admin | `{readiness?}` | Redacted provider listing for the controller |
+| `providers.management.check` | admin | `{targetId,providerId?}` | Bounded non-generating readiness check and controller listing |
+| `providers.management.import` | admin | `{targetId,providerId,source}` | Explicit Codex CLI ChatGPT login import and controller listing |
 | `providers.management.api_key.set` | admin | `{targetId,providerId,value}` | Updated redacted listing |
 | `providers.management.disconnect` | admin | `{targetId,providerId}` | Updated redacted listing |
 | `providers.management.default.set` | admin | `{targetId,providerId,modelId}` | Updated redacted listing |
@@ -1062,7 +1084,9 @@ post-response privacy check.
 | `providers.management.device.challenge` | admin (internal) | `{targetId,providerId,loginId,ownerId,sessionId}` | Public device login state plus nullable `challengeNonce` |
 | `providers.management.device.cancel` | admin | `{targetId,providerId,loginId,ownerId,sessionId}` | Public device login state |
 | `providers.management.device.complete` | admin (internal) | `{targetId,providerId,loginId,ownerId,sessionId,completionId,challengeNonce,commit}` | Public device login state |
-| `node.providers.management.list` | admin | `{nodeId}` | Redacted provider listing for the destination |
+| `node.providers.management.list` | admin | `{nodeId,readiness?}` | Redacted provider listing for the destination |
+| `node.providers.management.check` | admin | `{nodeId,targetId,providerId?}` | Bounded non-generating readiness check and destination listing |
+| `node.providers.management.import` | admin | `{nodeId,targetId,providerId,source}` | Explicit Codex CLI ChatGPT login import and destination listing |
 | `node.providers.management.api_key.set` | admin | `{nodeId,targetId,providerId,value}` | Updated destination listing |
 | `node.providers.management.disconnect` | admin | `{nodeId,targetId,providerId}` | Updated destination listing |
 | `node.providers.management.default.set` | admin | `{nodeId,targetId,providerId,modelId}` | Updated destination listing |
@@ -1301,9 +1325,13 @@ tools,reason,measuredAtMs,stale}`. Categories are `files|shell|browser|connector
 levels `off|read_only|read_interact`, and OS grant states
 `granted|denied|not_required|unknown`. Probes read the destination's actual tool
 catalog/root permissions, executable availability and browser backend status.
-macOS Peekaboo grants and Linux X11 connection status are passive, bounded
-checks; unavailable inspection stays unknown, never fabricated denial or grant.
-Full Disk Access has no supported nonprompting macOS query and remains unknown.
+macOS grants are measured by the non-prompting Lemon Bot Worker helper configured
+through `LEMON_TCC_PROBE`; without it, grant inspection stays unknown. Peekaboo is
+still required for desktop control, but permission inspection never invokes its
+prompting permission command. The helper also measures Full Disk Access without
+prompting; that capability remains configured `off` with no tools. Linux X11
+connection checks are passive and bounded. Unavailable inspection never becomes
+a fabricated denial or grant.
 Connector authorization is session-scoped, not invented from method names.
 These measurements are not per-bot grants or an OS sandbox.
 The shell tool inventory includes `lsp_diagnostics` only when that exact native

@@ -4,6 +4,113 @@ The source checkout (`./bin/lemon`) and packaged releases (`lemon`) share the
 same command surface. The launcher handles lifecycle commands; all other
 commands are dispatched by the CLI registry.
 
+## Inspect a named worker
+
+`lemon node status --name NAME [--json]` reads the local worker status without
+starting a runtime or contacting the controller. JSON includes its state, reason,
+durable node ID, change time and OS PID, never credentials or controller URLs.
+
+`node join` selects private DETS state under
+`~/.lemon/nodes/state/<sha256-of-trimmed-name>/`. Settings, skills, sessions and
+the SQLite credential store remain shared. Do not use `LEMON_AGENT_DIR` or
+`LEMON_STORE_PATH` as worker-isolation switches. Another live VM owning a DETS
+directory causes memory-only operation rather than a second writer.
+
+States include `starting`, `online`, `reconnecting`, `needs_reauthorization`,
+`needs_enrollment`, and `conflict`. Credential problems park a stored-token
+worker rather than restarting it in a loop. Repair the machine's authorization
+through Lemon Bot; see [worker recovery](attaching-a-bot-machine.md#inventory-reconnect-and-recovery).
+
+## User services
+
+`lemon service` manages user-owned controller, Bot backend, worker and SSH-tunnel
+processes. It is distinct from `lemon daemon`, which alone does not install
+login/boot persistence:
+
+```text
+lemon service install ROLE... [options]
+lemon service status [ROLE...] [--name NAME] [--json]
+lemon service repair [ROLE...] [--name NAME] [--enable-linger] [--wait SECS] [--json]
+lemon service uninstall ROLE... [--name NAME] [--json]
+```
+
+Roles are `controller`, `backend`, `worker`, and `tunnel`. Install requires a
+role; status/repair without roles select all Lemon-owned units for this user.
+For a complete local Bot, prefer the resumable `lemon-bot` bootstrap in
+[Lemon Bot in 3 minutes](../getting-started/lemon-bot.md), which also enrolls
+the local machine and signs in the browser.
+
+```bash
+lemon service install controller backend --bot "$HOME/.local/bin/lemon-bot" --wait 120
+lemon service status --json
+lemon service repair
+```
+
+Worker installation requires `--name NAME` and, on first installation,
+`--controller URL`. `--cwd DIR` defaults to HOME; `--allowed-root PATH` is
+repeatable. `--invite-code-stdin` reads a one-use enrollment code through stdin,
+never argv or environment. Use the product's generated join command rather than
+inventing an invite. The macOS-only `--exec-wrapper PATH` accepts an absolute
+executable inside an app bundle for the signed worker helper.
+
+Install/repair accept `--wait SECS` (0 installs without waiting), `--json`, and
+`--enable-linger`; install also accepts `--manual`. Defaults wait up to 120
+seconds for the controller, 60 for backend/worker. Status reports manager,
+persistence and per-unit readiness, not merely whether a unit file exists.
+JSON is one schema-1 document on stdout; progress goes to stderr. Exit codes are
+0 for ready, 1 for not-ready/operational failure, and 2 for usage errors.
+
+macOS uses LaunchAgents in the logged-in GUI user's domain: **login, not boot**.
+Linux uses `systemd --user`; units live under
+`${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user`, and boot/logout persistence
+requires linger. Without it, status reports session-only operation.
+`--enable-linger` attempts to enable it without sudo and prints the administrator
+command if required. No usable manager, or `--manual`, means detached manual
+processes with **no automatic restart after reboot/logout**; run
+`lemon service repair` after restarting.
+
+Repair only adopts verified Lemon-owned processes; it does not kill a foreign
+port owner. A graceful `lemon stop` leaves the controller stopped until the next
+login/boot or an explicit start/repair. `service uninstall` stops/removes the
+selected units but keeps data and credentials; removing a worker service does
+not revoke its machine in Lemon Bot.
+
+## SSH tunnel runner
+
+```bash
+lemon tunnel run --name studio --ssh me@studio \
+  --node-port 4044 --gateway-port 4044 \
+  --product-port 4100 --backend-port 4100
+```
+
+Run this foreground transport on the controller host. `--node-port` is the
+destination's loopback listening port; `--gateway-port` is the controller's
+node-only gateway. The optional product/backend ports must be supplied together.
+This is reverse forwarding, not the `ssh -L` browser tunnel used for headless
+sign-in. It does not enroll a worker or carry an operator token.
+
+The runner starts no BEAM VM. It records private state at
+`~/.lemon/run/service/tunnel-<name>.json`, reports online after SSH survives
+five seconds, exits 75 on transient failure, 0 on deliberate/terminal stops,
+and 2 on invalid arguments. For persistent operation and SSH prerequisites, use
+the [managed tunnel instructions](attaching-a-bot-machine.md#add-a-machine-over-ssh).
+
+```text
+lemon tunnel run --name NAME --ssh DEST --node-port P --gateway-port G [--product-port Q --backend-port B]
+```
+
+All ports are explicit integers from 1 through 65535. `--name` identifies the
+managed tunnel; `--ssh` selects the SSH destination. The four port flags have
+the same meanings under `lemon service install tunnel`.
+
+## Uninstall
+
+`lemon uninstall [--purge] [--json]` previews removal and returns a confirmation
+digest. `lemon uninstall [--purge] --confirm DIGEST` executes that exact preview.
+Data is retained unless `--purge` is explicitly included in both preview and
+confirmation. Source checkouts remove owned units, not the checkout.
+See [Uninstall](updates.md#uninstall) before removing programs, secrets or backups.
+
 ## No-argument behavior
 
 This behavior is identical in source checkouts and packaged installs:
@@ -103,9 +210,9 @@ for default behavior, rate limits and lost-code handling.
 ## Connect an iPhone to Lemon Bot
 
 ```bash
-lemon connect iphone --backend http://127.0.0.1:8787
+lemon connect iphone --backend http://127.0.0.1:4100
 # Optional explicit public origin:
-lemon connect iphone --backend http://127.0.0.1:8787 \
+lemon connect iphone --backend http://127.0.0.1:4100 \
   --origin https://bot.example.ts.net
 ```
 
@@ -166,6 +273,7 @@ The registry defines their help and completion; the launcher executes them:
 | `start` | Yes | Yes | Run the runtime in the foreground. |
 | `daemon` | Yes | Yes | Start the runtime in the background and wait for health. |
 | `stop`, `restart`, `status` | Yes | Yes | Manage an owned foreground/background runtime, or probe local runtime health. |
+| `uninstall [--purge]` | Yes (units only) | Yes | Uninstall Lemon service units, files, and configuration. |
 | `remote`, `eval EXPR`, `rpc EXPR` | No | Yes | Use release VM remote/eval/RPC tools. |
 
 Source runtime options go after `start`, `daemon`, or `restart`:
@@ -369,7 +477,7 @@ Source top-level and command help read the shared registry directly with Elixir,
 without Mix compilation, runtime startup, or credential creation. Packaged
 top-level help and launcher-command help also skip runtime configuration, so
 they work before `lemon setup` without the web secret. Other source
-commands require Elixir 1.19.5+, Erlang/OTP 28.5+, and Mix; lifecycle health checks
+commands require Elixir 1.20.5+, Erlang/OTP 29.1.2+, and Mix; lifecycle health checks
 require curl. Missing prerequisites produce an installation hint rather than a
 misleading stopped-runtime result.
 Commands that document `--json` emit JSON on success. Redacted operational
@@ -668,6 +776,118 @@ it accepts no path and restores no config, credentials, sessions, or stores.
 Source checkouts expose check/history but fail packaged plan/apply/rollback
 closed. See [Safely update and roll back Lemon](updates.md) for the complete
 safety contract and current publisher-signing/network-cap residuals.
+
+## Service lifecycle
+
+`lemon service` supervises Lemon components through the platform's native service manager
+(launchd on macOS, systemd user services on Linux) or unmanaged background processes (`--manual`).
+
+Supported roles:
+- `controller`: The primary Lemon runtime daemon.
+- `backend`: The Lemon Bot web backend (`lemon-bot`).
+- `worker`: A named execution node connected to a controller.
+- `tunnel`: Per-machine SSH-link supervision (`--name`, `--ssh`,
+  `--node-port`, `--gateway-port`, optional `--product-port`/`--backend-port`).
+
+```bash
+# Install and start controller and backend services
+lemon service install controller backend
+
+# Install a worker node reading an enrollment invite from stdin
+printf "%s\n" "$INVITE_CODE" | lemon service install worker --name chico --controller wss://controller.example/ws --invite-code-stdin
+
+# Inspect service status
+lemon service status --json
+
+# Reconcile or adopt running processes
+lemon service repair
+
+# Stop and remove worker unit
+lemon service uninstall worker --name chico
+```
+
+With `--json`, commands emit a single schema 1 JSON document containing manager, persistence,
+linger state, and unit status. Success exits 0 when all units reach ready/online state within `--wait`,
+1 for operational failures or not-ready units, and 2 for usage errors.
+
+`status` and `repair` without roles enumerate installed units. Workers require
+`--name NAME`; first install also requires the exact `--controller URL`. Their
+`--cwd` defaults to `$HOME`; `--allowed-root PATH` is repeatable.
+`--exec-wrapper PATH` selects an executable inside a macOS app bundle, persists
+it in the unit, and uses the same path for permission probes. Repair refuses a
+missing wrapper rather than silently changing the worker's signed identity.
+`--bot PATH` defaults to `~/.local/bin/lemon-bot`. Backend units reject inherited
+`LEMON_BOT_OPERATOR_TOKEN` and `LEMON_BOT_ENCRYPTION_KEY`; secrets never enter units.
+Backend units also retain the resolved `LEMON_CONTROL_PLANE_PORT`, including
+non-default local ports when no `ports.env` exists. `install --restart-backend`
+reloads an unchanged running backend once; an already updated/new unit is not
+restarted a second time. The Bot chooser uses this when its saved controller
+URL or credentials change, then verifies connection to that controller.
+
+An existing unit keeps its recorded login `PATH`, locale and configured
+environment values. Calling install again from another shell, Lemon Bot, or the
+Mac app does not restart services just because that caller has a different
+environment. Explicit service options still update the unit. To deliberately
+recapture its environment, uninstall that unit and install it again; credentials
+and application data remain intact.
+
+The one-shot enrollment process uses the worker unit's isolated environment,
+including `LEMON_GATEWAY_HEALTH_PORT=0` and `LEMON_ROUTER_HEALTH_PORT=0`, so it can
+start beside the controller. `invite_rejected` means an explicit controller
+refusal before consumption; `enroll_start_failed` identifies a local startup
+failure with a bounded `reason` (`address_in_use`, `runtime_start_failed`, or
+`launcher_unavailable`), never raw diagnostics. Other failed exchanges report
+`enrollment_outcome_unknown`: the code may already have been consumed. No failure
+automatically retries the code; obtain a fresh invite before attempting again.
+
+Readiness waits default to 120 seconds for the controller, 60 for other roles;
+`--wait 0` skips waiting. A controller takeover with running workers must still
+wait for controller health before resuming them. `--enable-linger` requests
+Linux boot persistence without invoking sudo. Manual units remain discoverable
+through `status` and `uninstall`; an inventory containing manual units reports
+`manager:"none", persistence:"none"` rather than promising persistence for all.
+
+The schema-1 document is:
+
+```json
+{"schema":1,"manager":"launchd","persistence":"login","linger":null,"units":[{"role":"worker","name":"chico","label":"org.lemon.node.chico","installed":true,"loaded":true,"state":"online","pid":7748,"version":null,"log":"/Users/me/.lemon/logs/node-chico.log","detail":null,"execWrapper":null}]}
+```
+
+Worker units expose their configured absolute `execWrapper` path, or `null` when
+unwrapped. Local setup consumers can compare it before repairing a worker's
+signed helper identity; this field is not part of remote management projections.
+
+`manager` is `launchd|systemd|none`; `persistence` is `login|boot|session|none`.
+`linger` is a boolean on systemd and otherwise null. Unit `state` is
+`ready|online|starting|reconnecting|needs_reauthorization|needs_enrollment|conflict|stopped|failed|blocked|unsupervised|foreign|unknown|not_installed`.
+`detail` contains a stable reason code or null, never raw command output.
+`pid` and `version` may be null. Mutations also include
+`action: created|updated|unchanged|adopted|started|restarted|removed`. Filesystem paths
+include the log and a worker's `execWrapper`; credentials, invite codes and argv
+are never projected. Worker `online` must refer to the manager's actual PID, so a
+stale status left by `node join --enroll-only` cannot claim readiness.
+
+Uninstalling a worker unit does not revoke its machine credential: remove the
+machine in Lemon Bot separately to revoke access.
+
+## Complete uninstall
+
+Packaged releases provide a safe, preview-confirmed uninstaller that stops and removes
+all service units, program installations, and shell configuration additions:
+
+```bash
+# Generate a fresh preview and confirmation digest
+lemon uninstall
+
+# Execute removal using the exact digest from preview
+lemon uninstall --confirm <exact-preview-digest>
+
+# Purge ~/.lemon and Keychain secrets in addition to program files
+lemon uninstall --purge
+lemon uninstall --purge --confirm <digest-from-purge-preview>
+```
+
+Source checkouts support removing service units only. Program paths in checkouts remain untouched.
 
 ## External secret sources
 
@@ -985,6 +1205,19 @@ lemon tern install [--config-dir PATH]
 | --- | --- |
 | `--config-dir PATH` | Tern configuration directory (not a config file) |
 
+#### `lemon connect`
+
+Pair an iPhone with an already-running Lemon Bot backend.
+
+```text
+lemon connect iphone --backend ORIGIN [--origin HTTPS_ORIGIN]
+```
+
+`iphone` interactively signs in and approves one exact iPhone request.
+`--backend` selects the required intended backend; `--origin` selects its public
+HTTPS origin, defaulting to the backend's `publicUrl`. See
+[iPhone pairing](#connect-an-iphone-to-lemon-bot) for credential handling.
+
 #### `lemon run`
 
 Run a prompt non-interactively (-p, --print).
@@ -1009,12 +1242,13 @@ lemon run [PROMPT] [--output text|json|stream-json] [options]
 Run first-time setup and configuration.
 
 ```text
-lemon setup [provider|runtime|gateway|doctor] [options]
+lemon setup [provider|model|runtime|gateway|doctor] [options]
 ```
 
 | Subcommand | Purpose |
 | --- | --- |
 | `provider` | Configure an AI provider |
+| `model` | Connect a model or report readiness |
 | `runtime` | Configure runtime profile and port bindings |
 | `gateway` | Configure gateway adapters |
 | `doctor` | Run diagnostics or write a support bundle (alias for doctor) |
@@ -1031,6 +1265,25 @@ lemon setup [provider|runtime|gateway|doctor] [options]
 | `--codex-auth-path PATH` | Auth file for --auth codex-cli only |
 | `--model MODEL` | Model to make the default after onboarding |
 | `--if-required` | Exit immediately unless setup is still required |
+| `--model-optional` | Allow setup to finish without configuring a model |
+| `--json` | Output one JSON document (`setup model`) |
+| `--offline` | Report static readiness without live connectivity check (`setup model`) |
+
+`lemon setup model` runs the Connect-a-model step on its own: it lists the
+logins already present on this machine first (a Codex CLI ChatGPT login, a
+provider key exported in the shell) and copies or saves one only when you
+choose it. `lemon setup model --json` prints one readiness document
+(`state`, `providerId`, `modelId`, `check`, `reason`, `availableModelIds`,
+`suggestedModelId`, `checkedAtMs`) plus `detected`, and never prompts. It exits
+`0` when the model is `verified` or `saved`, `1` when it needs action, and `64`
+for usage errors. `lemon setup --if-required --model-optional` finishes once
+config and secrets are complete, leaving the model for later.
+
+The `model` subcommand accepts `--provider`, `--config-path`, `--cwd`,
+`--non-interactive`, `--json` and `--offline`; provider-onboarding flags such as
+`--token`, `--model`, `--auth` and `--skip-verify` belong to `setup provider`,
+not `setup model`. Without `--offline`, a JSON report performs a non-generating
+provider check. **Saved** is not a successful live request.
 
 #### `lemon model`
 
@@ -1098,7 +1351,8 @@ lemon pairing revoke <telegram|discord> <CHAT_ID>
 | `deny` | Consume a code without allowing its chat |
 | `revoke` | Remove a paired chat from the allowlist (accepted by the command, not yet listed in registry help) |
 
-Local operator only. Approval updates the user gateway config; restart the runtime to apply the allowlist.
+Local operator only. See [channel pairing](#channel-pairing) for live adapter
+updates and failure handling; the registry's restart advice is outdated.
 
 #### `lemon doctor`
 
@@ -1113,6 +1367,7 @@ lemon doctor [options]
 | `--verbose, -v` | Show passing and skipped checks |
 | `--json` | Output one JSON document |
 | `--live` | Opt in to bounded, non-generating connectivity checks |
+| `--provider NAME\|all` | With `--live`, check one provider or every configured provider (default: default provider only) |
 | `--project-dir PATH` | Use a specific project directory |
 | `--bundle [PATH]` | Write a redacted support bundle |
 | `--bundle-path PATH` | Set the support bundle path |
@@ -1649,17 +1904,19 @@ Inspect worker compatibility or join a named execution node.
 
 ```text
 lemon node join --name NAME --controller wss://HOST/ws [options]
+lemon node status --name NAME [--json]
 lemon node capabilities [--json] [--require-bot] [--expected-version VERSION]
 ```
 
 | Subcommand | Purpose |
 | --- | --- |
 | `join` | Pair with or reconnect to a controller |
+| `status` | Read local worker status without starting a runtime |
 | `capabilities` | Inspect installed worker API compatibility without starting a runtime |
 
 | Option | Purpose |
 | --- | --- |
-| `--json` | Print worker compatibility JSON (capabilities) |
+| `--json` | Print JSON for capabilities or status |
 | `--require-bot` | Fail if required bot worker APIs are absent (capabilities) |
 | `--expected-version VERSION` | Require the exact installed worker CalVer (capabilities) |
 | `--name NAME` | Unique execution node name |
@@ -1671,6 +1928,79 @@ lemon node capabilities [--json] [--require-bot] [--expected-version VERSION]
 | `--allow-insecure-controller` | Allow non-loopback ws:// |
 | `--cwd PATH` | Default local working directory |
 | `--allowed-root PATH` | Allowed host file/shell root (repeatable) |
+
+The worker's own `lemon node --help` additionally documents `--enroll-only`
+(exit after enrollment; requires `--invite-code-stdin`), `--capabilities TOOLS`
+(`all` or comma-separated names), `--operator-token TOKEN`, and `--token TOKEN`.
+Prefer destination-local credential environment variables over token arguments;
+use the generated join recipe for one-use invites.
+
+#### Generated join-node script
+
+The machine's generated `scripts/join-node.sh` recipe installs a worker service
+by default; do not construct an enrollment code yourself. It accepts `--name`,
+`--controller`, `--source`, `--version`, `--base-url`, `--cwd`, `--code-stdin`,
+`--code-fd` (descriptor 3–9), `--json`, and `--foreground` / `--no-service`.
+`--json` is service-mode only. With no code-input flag it prompts privately.
+
+Exit codes are **0** for success, **1** for failure before enrollment was
+attempted, **2** for failed or uncertain enrollment (do not reuse the code), and
+**3** for an installed service that is not online yet. Check `lemon service
+status worker --name NAME` for code 3. There is no automatic foreground fallback.
+Signal exits are 129 (HUP), 130 (INT), and 143 (TERM).
+
+
+#### `lemon service`
+
+Manage background system service units for Lemon roles.
+
+```text
+lemon service install ROLE... [options]
+lemon service status [ROLE...] [options]
+lemon service repair [ROLE...] [options]
+lemon service uninstall ROLE... [options]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `install` | Install and start background service units |
+| `status` | Inspect status of managed service units |
+| `repair` | Repair, recreate, or adopt service units |
+| `uninstall` | Stop and remove background service units |
+
+| Option | Purpose |
+| --- | --- |
+| `--name NAME` | Worker execution node name (required for worker) |
+| `--controller URL` | Controller control-plane WebSocket URL |
+| `--cwd PATH` | Default working directory for worker units |
+| `--allowed-root PATH` | Allowed file/shell root for worker units (repeatable) |
+| `--invite-code-stdin` | Read one 43-character enrollment code from stdin |
+| `--exec-wrapper PATH` | Signed helper wrapper path inside an .app bundle (macOS) |
+| `--bot PATH` | Executable path for the backend service (lemon-bot) |
+| `--restart-backend` | Install only: reload an unchanged backend after controller selection changes |
+| `--ssh DEST` | SSH destination for the tunnel role |
+| `--node-port PORT` | Remote node gateway forward port |
+| `--gateway-port PORT` | Local node gateway port |
+| `--product-port PORT` | Remote product forward port |
+| `--backend-port PORT` | Local product backend port |
+| `--wait SECS` | Seconds to wait for units to reach ready (default 120s controller, 60s backend/worker) |
+| `--manual` | Run units as unmanaged background processes |
+| `--enable-linger` | Enable systemd user linger for persistence after logout (Linux) |
+| `--json` | Emit one sanitized schema 1 JSON document |
+
+#### `lemon uninstall`
+
+Remove Lemon service units, paths, and environment changes.
+
+```text
+lemon uninstall [--purge] [--confirm DIGEST] [--json]
+```
+
+| Option | Purpose |
+| --- | --- |
+| `--purge` | Remove ~/.lemon and stored secrets in addition to program files and units |
+| `--confirm DIGEST` | Exact confirmation digest from a fresh preview |
+| `--json` | Emit preview or result as JSON |
 
 #### `lemon version`
 
@@ -1730,10 +2060,10 @@ lemon models [options]
 
 | Option | Purpose |
 | --- | --- |
-| `--provider NAME` | Filter by provider |
+| `--provider NAME`, `-p NAME` | Filter by provider |
 | `--vision` | Only image-capable models |
 | `--thinking` | Only reasoning-capable models |
-| `--limit N` | Maximum rows |
+| `--limit N`, `-l N` | Maximum rows |
 | `--json` | Emit catalog and summary JSON |
 | `--discover` | Query a preset provider endpoint for its models |
 | `--base-url URL` | Endpoint for --discover |
@@ -1755,12 +2085,12 @@ lemon policy <list|set|get|clear> [channel] [options]
 
 | Option | Purpose |
 | --- | --- |
-| `--account ID` | Channel account |
-| `--peer ID` | Peer or chat |
-| `--thread ID` | Thread or topic |
-| `--model MODEL` | Model override |
+| `--account ID`, `-a ID` | Channel account |
+| `--peer ID`, `-p ID` | Peer or chat |
+| `--thread ID`, `-t ID` | Thread or topic |
+| `--model MODEL`, `-m MODEL` | Model override |
 | `--thinking LEVEL` | Thinking override |
-| `--reason TEXT` | Policy metadata reason |
+| `--reason TEXT`, `-r TEXT` | Policy metadata reason |
 | `--all` | Clear all policies for the channel |
 
 #### `lemon skill`
@@ -1813,6 +2143,48 @@ lemon usage [--days N | --since YYYY-MM-DD --until YYYY-MM-DD] [--by day|provide
 | `--until YYYY-MM-DD` | Inclusive last UTC date |
 | `--by GROUP` | day, provider (default), model, or session |
 | `--json` | Emit redacted usage JSON |
+
+## Lemon Bot CLI
+
+The separately installed `lemon-bot` executable manages the product backend.
+For installation and the first Bot, use [Lemon Bot in 3 minutes](../getting-started/lemon-bot.md).
+
+```text
+lemon-bot [--choose-lemon] [--no-open]
+lemon-bot up [--json] [--no-open] [--no-worker] [--name NAME] [--worker-wrapper PATH]
+lemon-bot open [--headless] [--no-wait]
+lemon-bot setup [--print-origin] [--same-machine]
+lemon-bot connect iphone --backend ORIGIN [--origin HTTPS_ORIGIN]
+lemon-bot --version
+lemon-bot --help
+```
+
+| Command or flag | Behavior |
+| --- | --- |
+| `lemon-bot` | In a terminal, runs resumable bootstrap, installs background services, enrolls this machine, opens a signed-in browser, then exits. Without a runtime launcher it instead serves in the foreground and prints installation instructions. |
+| `--choose-lemon` | Ask which controller to use again; the saved selection is privately encrypted. This is a top-level flag, not an `up` option. |
+| Top-level `--no-open` | Serve in the foreground without opening a browser. Plain invocation also serves in the foreground without a terminal or in service mode. |
+| `up` | Resume bootstrap, reusing existing owner, machine and service state. |
+| `up --json` | Emit NDJSON step events and one final result, not one JSON document; diagnostics go to stderr and credentials are excluded. Interactive prompts can still occur in a terminal. |
+| `up --no-open` | Complete bootstrap without browser sign-in; unlike top-level `--no-open`, does not select foreground serving. |
+| `up --no-worker` | Leave local worker enrollment for a later `up`. |
+| `up --name NAME` | Override the worker name (1–64 letters, digits, `_`, `.`, `-`; starts with a letter or digit). |
+| `up --worker-wrapper PATH` | Absolute worker wrapper executable path, passed to service installation. |
+| `open` | Sign this computer's browser in as owner using a one-use, five-minute link; creates the owner on first use. Requires the matching local backend running on loopback. |
+| `open --headless` | Print the private link and an `ssh -N -L` forwarding command to the terminal, not stdout. Requires a terminal. |
+| `open --no-wait` | Return after delivering the link instead of waiting for redemption; does not prove sign-in completed. |
+| `setup` | Verify the existing data-directory instance at its configured HTTPS `*.ts.net` origin; does not bootstrap services or check model readiness. |
+| `setup --print-origin` | Read-only verified-origin inspection. |
+| `setup --same-machine` | Permit literal loopback for local development/smoke checks, not physical-phone readiness. |
+| `connect iphone` | The same interactive pairing flow as [`lemon connect iphone`](#connect-an-iphone-to-lemon-bot), with required `--backend` and optional `--origin`. |
+| `--version`, `--help` / `-h` | Print version or help without loading private state. |
+
+`up` exits 0 when ready, 1 when setup needs attention or fails, and 2 for invalid
+arguments. Its result includes `type`, `status`, `port`, `machineId`, `manager`,
+`persistence`, and optionally `installCommand`. `open` exits 0 on redemption
+(or delivery with `--no-wait`), 1 on operational failure/expiry, 2 for invalid
+arguments or a missing required terminal, 130 on SIGINT, and 143 on SIGTERM.
+Never share a sign-in link or controller operator token.
 
 ## Shell completion
 

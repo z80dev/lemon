@@ -1013,6 +1013,189 @@ defmodule LemonCore.ProfileStoreTest do
     refute inspect(snapshot) =~ "Controller-only"
   end
 
+  @tag :tmp_dir
+  test "profile paths include files sibling and prepare_home creates files directory with mode 0700",
+       %{tmp_dir: root} do
+    opts = opts(root)
+    assert {:ok, paths} = ProfileStore.paths("files-test", opts)
+    assert paths["files"] == Path.join(paths["home"], "files")
+    assert Path.dirname(paths["files"]) == paths["home"]
+    refute String.starts_with?(paths["files"], paths["workspace"])
+
+    assert {:ok, profile} = ProfileStore.create(%{id: "files-test", name: "Files Test"}, opts)
+    assert File.dir?(profile["paths"]["files"])
+    stat = File.stat!(profile["paths"]["files"])
+    assert Bitwise.band(stat.mode, 0o777) == 0o700
+  end
+
+  @tag :tmp_dir
+  test "workingDirectory defaults to node_default and persists and projects profile_files",
+       %{tmp_dir: root} do
+    opts = opts(root)
+
+    # Default when omitted
+    assert {:ok, default_prof} =
+             ProfileStore.create(%{id: "default-wd", name: "Default WD"}, opts)
+
+    assert default_prof["workingDirectory"] == "node_default"
+    assert "working_directory" in default_prof["managedKeys"]
+    assert {:ok, fetched_default} = ProfileStore.get("default-wd", opts)
+    assert fetched_default["workingDirectory"] == "node_default"
+
+    # Explicit profile_files
+    assert {:ok, files_prof} =
+             ProfileStore.create(
+               %{id: "files-wd", name: "Files WD", workingDirectory: "profile_files"},
+               opts
+             )
+
+    assert files_prof["workingDirectory"] == "profile_files"
+    assert "working_directory" in files_prof["managedKeys"]
+    assert {:ok, fetched_files} = ProfileStore.get("files-wd", opts)
+    assert fetched_files["workingDirectory"] == "profile_files"
+
+    # Rejection of invalid value
+    assert {:error, {:invalid_field, :working_directory}} =
+             ProfileStore.create(%{id: "bad-wd", workingDirectory: "invalid"}, opts)
+
+    # Update workingDirectory
+    assert {:ok, updated} =
+             ProfileStore.update("default-wd", %{workingDirectory: "profile_files"}, opts)
+
+    assert updated["workingDirectory"] == "profile_files"
+    assert {:ok, fetched_updated} = ProfileStore.get("default-wd", opts)
+    assert fetched_updated["workingDirectory"] == "profile_files"
+
+    # Rejection on update
+    assert {:error, {:invalid_field, :working_directory}} =
+             ProfileStore.update("default-wd", %{workingDirectory: "bad"}, opts)
+
+    # Clone preserves workingDirectory
+    assert {:ok, cloned} =
+             ProfileStore.clone("files-wd", %{id: "cloned-wd", name: "Cloned WD"}, opts)
+
+    assert cloned["workingDirectory"] == "profile_files"
+  end
+
+  test "chat_request sets remote_cwd_mode only for remote node with profile_files and cwd nil" do
+    # Remote node, profile_files, cwd nil -> remote_cwd_mode = "profile_files"
+    prof_remote_files = %{
+      "id" => "bot-remote",
+      "node" => "machine-1",
+      "workingDirectory" => "profile_files",
+      "canonicalSessionKey" => "agent:bot-remote:main",
+      "paths" => %{"workspace" => "/ws"}
+    }
+
+    assert {:ok, req1} = ProfileStore.chat_request(prof_remote_files, "run task")
+    assert req1.meta[:remote_cwd_mode] == "profile_files"
+    assert req1.cwd == nil
+
+    # Remote node, profile_files, but explicit cwd -> remote_cwd_mode NOT set
+    assert {:ok, req2} =
+             ProfileStore.chat_request(prof_remote_files, "run task", cwd: "/explicit/dir")
+
+    assert req2.meta[:remote_cwd_mode] == nil
+    assert req2.cwd == "/explicit/dir"
+
+    # Local node, profile_files, cwd nil -> remote_cwd_mode NOT set
+    prof_local_files = %{
+      "id" => "bot-local",
+      "node" => "local",
+      "workingDirectory" => "profile_files",
+      "canonicalSessionKey" => "agent:bot-local:main",
+      "paths" => %{"workspace" => "/ws"}
+    }
+
+    assert {:ok, req3} = ProfileStore.chat_request(prof_local_files, "run task")
+    assert req3.meta[:remote_cwd_mode] == nil
+    assert req3.cwd == "/ws"
+
+    # Remote node, node_default, cwd nil -> remote_cwd_mode NOT set
+    prof_remote_default = %{
+      "id" => "bot-default",
+      "node" => "machine-1",
+      "workingDirectory" => "node_default",
+      "canonicalSessionKey" => "agent:bot-default:main",
+      "paths" => %{"workspace" => "/ws"}
+    }
+
+    assert {:ok, req4} = ProfileStore.chat_request(prof_remote_default, "run task")
+    assert req4.meta[:remote_cwd_mode] == nil
+
+    # Strips caller-forged remote_cwd_mode from meta
+    assert {:ok, req5} =
+             ProfileStore.chat_request(prof_remote_default, "run task",
+               meta: %{"remote_cwd_mode" => "profile_files", remote_cwd_mode: "profile_files"}
+             )
+
+    assert req5.meta[:remote_cwd_mode] == nil
+    refute Map.has_key?(req5.meta, "remote_cwd_mode")
+  end
+
+  test "chat_request drops invocation-supplied workspace_read_exempt: true unless durable profile has it" do
+    # Profile without workspace_read_exempt
+    prof_without = %{
+      "id" => "prof-no-exempt",
+      "node" => "machine-1",
+      "toolPolicy" => %{"allow" => ["read", "write"]},
+      "canonicalSessionKey" => "agent:prof-no-exempt:main",
+      "paths" => %{"workspace" => "/ws"}
+    }
+
+    # Invocation attempts to introduce workspace_read_exempt: true -> dropped
+    assert {:ok, req1} =
+             ProfileStore.chat_request(prof_without, "hello",
+               tool_policy: %{"workspace_read_exempt" => true}
+             )
+
+    refute req1.tool_policy[:workspace_read_exempt] == true
+    refute req1.tool_policy["workspace_read_exempt"] == true
+
+    # Invocation supplies struct with workspace_read_exempt: true -> dropped
+    tp_struct = LemonCore.ToolPolicy.parse!(%{"workspace_read_exempt" => true})
+
+    assert {:ok, req2} =
+             ProfileStore.chat_request(prof_without, "hello", tool_policy: tp_struct)
+
+    refute req2.tool_policy[:workspace_read_exempt] == true
+
+    # Invocation supplies workspace_read_exempt: false -> respected (narrowing)
+    assert {:ok, req3} =
+             ProfileStore.chat_request(prof_without, "hello",
+               tool_policy: %{"workspace_read_exempt" => false}
+             )
+
+    assert req3.tool_policy[:workspace_read_exempt] == false or
+             req3.tool_policy["workspace_read_exempt"] == false
+
+    # Profile WITH workspace_read_exempt: true -> invocation true is preserved
+    prof_with = %{
+      "id" => "prof-with-exempt",
+      "node" => "machine-1",
+      "toolPolicy" => %{"allow" => ["read", "write"], "workspace_read_exempt" => true},
+      "canonicalSessionKey" => "agent:prof-with-exempt:main",
+      "paths" => %{"workspace" => "/ws"}
+    }
+
+    assert {:ok, req4} =
+             ProfileStore.chat_request(prof_with, "hello",
+               tool_policy: %{"workspace_read_exempt" => true}
+             )
+
+    assert req4.tool_policy[:workspace_read_exempt] == true or
+             req4.tool_policy["workspace_read_exempt"] == true
+
+    # Profile WITH workspace_read_exempt: true, invocation supplies false -> narrows to false
+    assert {:ok, req5} =
+             ProfileStore.chat_request(prof_with, "hello",
+               tool_policy: %{"workspace_read_exempt" => false}
+             )
+
+    assert req5.tool_policy[:workspace_read_exempt] == false or
+             req5.tool_policy["workspace_read_exempt"] == false
+  end
+
   defp persona_digest(id, prompt) do
     canonical = [id, nil, prompt, Enum.map(LemonCore.ProfileSnapshot.filenames(), &[&1, nil])]
     :crypto.hash(:sha256, Jason.encode!(canonical)) |> Base.encode16(case: :lower)

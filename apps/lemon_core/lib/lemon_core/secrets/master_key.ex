@@ -29,6 +29,13 @@ defmodule LemonCore.Secrets.MasterKey do
 
   which logs a deprecation warning on first use. Re-encrypting under a proper
   key is the real fix: `lemon secrets rotate-key` (`LemonCore.Secrets.KeyRotation`).
+
+  ## Scoped resolution
+
+  `scoped/1` memoizes Keychain fetches, including failures, for one command in
+  the calling process. Nested scopes share the memo; the outermost scope always
+  clears it. Secret writes refresh it inside the write lock; outside a scope,
+  key rotation and external edits remain visible.
   """
 
   require Logger
@@ -43,11 +50,40 @@ defmodule LemonCore.Secrets.MasterKey do
 
   @type source :: atom()
 
+  @spec scoped((-> result)) :: result when result: var
+  def scoped(fun) when is_function(fun, 0) do
+    scope = {__MODULE__, :scope}
+    depth = Process.get(scope, 0)
+    Process.put(scope, depth + 1)
+
+    try do
+      fun.()
+    after
+      if depth == 0 do
+        Process.delete(scope)
+        Process.delete({__MODULE__, :memo})
+      else
+        Process.put(scope, depth)
+      end
+    end
+  end
+
   @spec resolve(keyword()) :: {:ok, binary(), source()} | {:error, atom() | tuple()}
   def resolve(opts \\ []) do
     opts
     |> KeyProvider.order()
     |> resolve_chain(opts, %{invalid: nil, failure: nil})
+  end
+
+  @doc """
+  Resolves the current key without reusing scoped reads, then refreshes the scope.
+  Secret writers must call this inside their write lock so a concurrent rotation
+  cannot leave a new record encrypted with a retired key.
+  """
+  @spec resolve_fresh(keyword()) :: {:ok, binary(), source()} | {:error, atom() | tuple()}
+  def resolve_fresh(opts \\ []) do
+    Process.delete({__MODULE__, :memo})
+    resolve(opts)
   end
 
   @doc """
@@ -77,7 +113,12 @@ defmodule LemonCore.Secrets.MasterKey do
     keychain_result = keychain && fetch_from(keychain, opts)
 
     source =
-      case resolve(opts) do
+      case resolve_chain(
+             providers,
+             opts,
+             %{invalid: nil, failure: nil},
+             if(keychain, do: %{keychain => keychain_result}, else: %{})
+           ) do
         {:ok, _key, source} -> source
         {:error, _reason} -> nil
       end
@@ -114,6 +155,24 @@ defmodule LemonCore.Secrets.MasterKey do
   """
   @spec fetch_from(module(), keyword()) :: {:ok, binary()} | {:error, term()}
   def fetch_from(provider, opts) do
+    if Process.get({__MODULE__, :scope}, 0) > 0 and KeyProvider.name(provider) == :keychain do
+      memo = Process.get({__MODULE__, :memo}, %{})
+
+      case Map.fetch(memo, provider) do
+        {:ok, result} ->
+          result
+
+        :error ->
+          result = fetch_uncached(provider, opts)
+          Process.put({__MODULE__, :memo}, Map.put(memo, provider, result))
+          result
+      end
+    else
+      fetch_uncached(provider, opts)
+    end
+  end
+
+  defp fetch_uncached(provider, opts) do
     if KeyProvider.available?(provider, opts) do
       case provider.fetch(opts) do
         {:ok, encoded} -> decode_master_key(encoded, opts)
@@ -124,7 +183,9 @@ defmodule LemonCore.Secrets.MasterKey do
     end
   end
 
-  defp resolve_chain([], _opts, acc) do
+  defp resolve_chain(providers, opts, acc), do: resolve_chain(providers, opts, acc, %{})
+
+  defp resolve_chain([], _opts, acc, _prefetched) do
     cond do
       acc.invalid -> {:error, acc.invalid}
       acc.failure -> {:error, acc.failure}
@@ -132,22 +193,30 @@ defmodule LemonCore.Secrets.MasterKey do
     end
   end
 
-  defp resolve_chain([provider | rest], opts, acc) do
-    case fetch_from(provider, opts) do
+  defp resolve_chain([provider | rest], opts, acc, prefetched) do
+    case Map.get_lazy(prefetched, provider, fn -> fetch_from(provider, opts) end) do
       {:ok, key} ->
         {:ok, key, KeyProvider.name(provider)}
 
       {:error, reason} when reason in @skip_reasons ->
-        resolve_chain(rest, opts, acc)
+        resolve_chain(rest, opts, acc, prefetched)
 
       {:error, reason} when reason in @invalid_reasons ->
         case KeyProvider.on_invalid(provider) do
-          :continue -> resolve_chain(rest, opts, %{acc | invalid: acc.invalid || reason})
-          _halt -> {:error, reason}
+          :continue ->
+            resolve_chain(rest, opts, %{acc | invalid: acc.invalid || reason}, prefetched)
+
+          _halt ->
+            {:error, reason}
         end
 
       {:error, reason} ->
-        resolve_chain(rest, opts, %{acc | failure: acc.failure || wrap_error(provider, reason)})
+        resolve_chain(
+          rest,
+          opts,
+          %{acc | failure: acc.failure || wrap_error(provider, reason)},
+          prefetched
+        )
     end
   end
 
@@ -175,18 +244,34 @@ defmodule LemonCore.Secrets.MasterKey do
     if KeyProvider.available?(provider, opts) do
       case provider.put(encoded, opts) do
         :ok ->
+          memoize_put(provider, decode_master_key(encoded, opts))
           {:ok, %{source: name, configured: true, key_file: init_location(name, opts)}}
 
         {:error, reason} when reason in @skip_reasons ->
+          memoize_put(provider, :invalidate)
           init_chain(rest, encoded, opts, errors ++ [{name, reason}])
 
         {:error, reason} ->
+          memoize_put(provider, :invalidate)
           # A backend that exists but refused is a real failure: falling through
           # would write a second, conflicting key somewhere else.
           {:error, init_error(provider, reason)}
       end
     else
       init_chain(rest, encoded, opts, errors ++ [{name, :unavailable}])
+    end
+  end
+
+  defp memoize_put(provider, result) do
+    if Process.get({__MODULE__, :scope}, 0) > 0 do
+      memo = Process.get({__MODULE__, :memo}, %{})
+
+      updated =
+        if result == :invalidate,
+          do: Map.delete(memo, provider),
+          else: Map.put(memo, provider, result)
+
+      Process.put({__MODULE__, :memo}, updated)
     end
   end
 

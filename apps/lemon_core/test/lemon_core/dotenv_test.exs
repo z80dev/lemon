@@ -68,6 +68,13 @@ defmodule LemonCore.DotenvTest do
   end
 
   describe "load/2" do
+    test "malformed quoted backslash runs retain the ordinary unquoted fallback", %{tmp_dir: dir} do
+      value = "\"" <> String.duplicate("\\", 100) <> "\"x"
+      File.write!(Path.join(dir, ".env"), "DOTENV_QUOTED=" <> value)
+      assert :ok = Dotenv.load(dir)
+      assert System.get_env("DOTENV_QUOTED") == value
+    end
+
     test "loads variables from .env", %{tmp_dir: tmp_dir} do
       File.write!(Path.join(tmp_dir, ".env"), """
       DOTENV_SIMPLE=hello

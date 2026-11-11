@@ -293,7 +293,7 @@
       "cache_write": 0.0
     },
     "context_window": 1048576,
-    "max_tokens": 131072,
+    "max_tokens": 262144,
     "reasoning_efforts": [
       "low",
       "high",
@@ -338,7 +338,7 @@
     "cost": {
       "input": 0.15,
       "output": 0.6,
-      "cache_read": 0.0,
+      "cache_read": 0.015,
       "cache_write": 0.0
     },
     "context_window": 131072,
@@ -493,7 +493,7 @@
       "cache_write": 0.0
     },
     "context_window": 1048576,
-    "max_tokens": 1048576,
+    "max_tokens": 131072,
     "reasoning_efforts": [
       "low",
       "high",
@@ -570,8 +570,7 @@
     "base_url": "https://api.fireworks.ai/inference/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 0.3,
@@ -580,7 +579,7 @@
       "cache_write": 0.0
     },
     "context_window": 512000,
-    "max_tokens": 131072,
+    "max_tokens": 512000,
     "reasoning_efforts": [
       "minimal",
       "low",
@@ -652,7 +651,7 @@
       "cache_write": 0.0
     },
     "context_window": 262144,
-    "max_tokens": 262144,
+    "max_tokens": 131072,
     "reasoning_efforts": [
       "minimal",
       "low",
@@ -678,7 +677,7 @@
       "cache_read": 0.25,
       "cache_write": 0.0
     },
-    "context_window": 1000000,
+    "context_window": 262144,
     "max_tokens": 131072,
     "reasoning_efforts": [
       "minimal",
@@ -705,7 +704,7 @@
       "cache_write": 0.0
     },
     "context_window": 1048576,
-    "max_tokens": 131072,
+    "max_tokens": 262144,
     "reasoning_efforts": [
       "low",
       "high",
@@ -750,11 +749,405 @@
       "cache_write": 0.0
     },
     "context_window": 1048576,
-    "max_tokens": 1048576,
+    "max_tokens": 131072,
     "reasoning_efforts": [
       "low",
       "high",
       "xhigh"
     ]
+  },
+  "accounts/fireworks/models/nemotron-3-ultra-nvfp4": {
+    "id": "accounts/fireworks/models/nemotron-3-ultra-nvfp4",
+    "name": "Nemotron 3 Ultra 550B A55B",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.6,
+      "output": 2.4,
+      "cache_read": 0.12,
+      "cache_write": 0.0
+    },
+    "context_window": 262144,
+    "max_tokens": 128000
+  },
+  "accounts/fireworks/models/minimax-m3p1-flash": {
+    "id": "accounts/fireworks/models/minimax-m3p1-flash",
+    "name": "MiniMax-M3.1-Flash",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.15,
+      "output": 0.6,
+      "cache_read": 0.015,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 512000
+  },
+  "accounts/fireworks/models/muse-spark-open": {
+    "id": "accounts/fireworks/models/muse-spark-open",
+    "name": "Muse Spark Open",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1.25,
+      "output": 4.25,
+      "cache_read": 0.15,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 131072
+  },
+  "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b": {
+    "id": "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b",
+    "name": "Nemotron 3.5 Lightning 30B A3B",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.05,
+      "output": 0.2,
+      "cache_read": 0.01,
+      "cache_write": 0.0
+    },
+    "context_window": 262144,
+    "max_tokens": 262144
+  },
+  "accounts/fireworks/models/ember-1": {
+    "id": "accounts/fireworks/models/ember-1",
+    "name": "Ember-1",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 3.0,
+      "output": 15.0,
+      "cache_read": 0.3,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 131072
+  },
+  "accounts/fireworks/models/deepseek-v4p1-flash-1017": {
+    "id": "accounts/fireworks/models/deepseek-v4p1-flash-1017",
+    "name": "DeepSeek V4.1 Flash 1017",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 1.2,
+      "cache_read": 0.006,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 384000
+  },
+  "accounts/fireworks/models/inkling": {
+    "id": "accounts/fireworks/models/inkling",
+    "name": "Inkling",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1.0,
+      "output": 4.05,
+      "cache_read": 0.17,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 1048576
+  },
+  "accounts/fireworks/routers/deepseek-flash-latest": {
+    "id": "accounts/fireworks/routers/deepseek-flash-latest",
+    "name": "DeepSeek Flash Latest",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 1.2,
+      "cache_read": 0.006,
+      "cache_write": 0.0
+    },
+    "context_window": 1000000,
+    "max_tokens": 384000
+  },
+  "accounts/fireworks/routers/minimax-latest": {
+    "id": "accounts/fireworks/routers/minimax-latest",
+    "name": "MiniMax Latest",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 1.2,
+      "cache_read": 0.06,
+      "cache_write": 0.0
+    },
+    "context_window": 512000,
+    "max_tokens": 512000
+  },
+  "accounts/fireworks/routers/qwen-max-latest": {
+    "id": "accounts/fireworks/routers/qwen-max-latest",
+    "name": "Qwen Max Latest (Qwen3.8 Max)",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 6.0,
+      "cache_read": 0.25,
+      "cache_write": 0.0
+    },
+    "context_window": 262144,
+    "max_tokens": 131072
+  },
+  "accounts/fireworks/routers/kimi-fast-latest": {
+    "id": "accounts/fireworks/routers/kimi-fast-latest",
+    "name": "Kimi Fast Latest",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 4.5,
+      "output": 22.5,
+      "cache_read": 0.45,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 131072
+  },
+  "accounts/fireworks/routers/glm-latest": {
+    "id": "accounts/fireworks/routers/glm-latest",
+    "name": "GLM Latest",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 1.4,
+      "output": 4.4,
+      "cache_read": 0.26,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 262144
+  },
+  "accounts/fireworks/routers/glm-fast-latest": {
+    "id": "accounts/fireworks/routers/glm-fast-latest",
+    "name": "GLM 5.3 Fast (Latest)",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 2.1,
+      "output": 6.6,
+      "cache_read": 0.39,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 262144
+  },
+  "accounts/fireworks/routers/deepseek-v4p1-flash-1017-spot": {
+    "id": "accounts/fireworks/routers/deepseek-v4p1-flash-1017-spot",
+    "name": "DeepSeek V4.1 Flash 1017 Spot",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.21,
+      "output": 0.84,
+      "cache_read": 0.0042,
+      "cache_write": 0.0
+    },
+    "context_window": 1000000,
+    "max_tokens": 384000
+  },
+  "accounts/fireworks/routers/kimi-latest": {
+    "id": "accounts/fireworks/routers/kimi-latest",
+    "name": "Kimi Latest",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 3.0,
+      "output": 15.0,
+      "cache_read": 0.3,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 131072
+  },
+  "accounts/fireworks/routers/glm-5p3-spot": {
+    "id": "accounts/fireworks/routers/glm-5p3-spot",
+    "name": "GLM 5.3 Spot",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.98,
+      "output": 3.08,
+      "cache_read": 0.182,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 262144
+  },
+  "accounts/fireworks/routers/deepseek-v4p1-flash-spot": {
+    "id": "accounts/fireworks/routers/deepseek-v4p1-flash-spot",
+    "name": "DeepSeek V4.1 Flash Spot",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.21,
+      "output": 0.84,
+      "cache_read": 0.0042,
+      "cache_write": 0.0
+    },
+    "context_window": 1000000,
+    "max_tokens": 384000
+  },
+  "accounts/fireworks/routers/kimi-k3-spot": {
+    "id": "accounts/fireworks/routers/kimi-k3-spot",
+    "name": "Kimi K3 Spot",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.1,
+      "output": 10.5,
+      "cache_read": 0.21,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 131072
+  },
+  "accounts/fireworks/routers/glm-flash-latest": {
+    "id": "accounts/fireworks/routers/glm-flash-latest",
+    "name": "GLM Flash Latest (GLM 5.3 Flash)",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.15,
+      "output": 0.5,
+      "cache_read": 0.03,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 131072
+  },
+  "accounts/fireworks/models/kimi-k3p1-pro": {
+    "id": "accounts/fireworks/models/kimi-k3p1-pro",
+    "name": "Kimi K3.1 Pro",
+    "api": "openai_completions",
+    "provider": "fireworks",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.2,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 131072
   }
 }

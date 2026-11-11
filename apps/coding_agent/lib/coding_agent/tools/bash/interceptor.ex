@@ -16,6 +16,9 @@ defmodule CodingAgent.Tools.Bash.Interceptor do
     else
       :ok
     end
+  rescue
+    SystemLimitError ->
+      {:blocked, "Blocked: shell interception pattern exceeded its match budget."}
   end
 
   defp match_rule(rules, available, candidates) do

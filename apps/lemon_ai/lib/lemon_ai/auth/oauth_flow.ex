@@ -403,18 +403,18 @@ defmodule LemonAi.Auth.OAuthFlow do
   Parse a full authorization URI without discarding malformed authority suffixes.
 
   The authority must contain a host and, when specified, a nonempty numeric
-  port in range. Parsing failures expose only a credential-free error atom.
+  port in range. Check the original authority: URI parsing may discard an
+  out-of-range port. Parsing failures expose only a credential-free error atom.
   Callback endpoint, userinfo and fragment checks remain in `validate_redirect_input/2`.
   """
   @spec parse_authorization_uri(String.t()) ::
           {:ok, URI.t()} | {:error, :invalid_authorization_input}
   def parse_authorization_uri(input) do
-    with %URI{scheme: scheme, host: host, authority: authority, port: port} = uri <-
-           URI.parse(input),
+    with %URI{scheme: scheme, host: host, authority: authority} = uri <- URI.parse(input),
          true <- is_binary(scheme) and is_binary(host) and host != "",
-         true <- is_binary(authority) and valid_authority?(authority),
-         true <- is_nil(port) or port in 0..65_535,
-         {:ok, validated} <- URI.new(URI.to_string(uri)) do
+         true <- is_binary(authority),
+         {:ok, port} <- parse_authority_port(authority),
+         {:ok, validated} <- URI.new(URI.to_string(%{uri | port: port || uri.port})) do
       {:ok, validated}
     else
       _ -> {:error, :invalid_authorization_input}
@@ -423,11 +423,24 @@ defmodule LemonAi.Auth.OAuthFlow do
     _ -> {:error, :invalid_authorization_input}
   end
 
-  # URI.parse/1 retains the raw authority even when it drops a malformed port.
-  # Validate it before serializing, then validate the normalized URI. Normalizing
-  # valid decimal ports avoids URI.new/1's five-digit limit on unnormalized input.
-  defp valid_authority?(authority) do
-    Regex.match?(~r/\A(?:[^@]*@)?(?:\[[^\[\]]+\]|[^:@\[\]]+)(?::[0-9]+)?\z/, authority)
+  # URI.parse/1 retains the raw authority but, since Elixir 1.20, sets an
+  # out-of-range port to nil. Parse the original port before serialization can
+  # drop it, preserving valid decimal ports with leading zeroes.
+  defp parse_authority_port(authority) do
+    case Regex.named_captures(
+           ~r/\A(?:[^@]*@)?(?:\[[^\[\]]+\]|[^:@\[\]]+)(?::(?<port>[0-9]+))?\z/,
+           authority
+         ) do
+      %{"port" => ""} ->
+        {:ok, nil}
+
+      %{"port" => port} ->
+        port = String.to_integer(port)
+        if port in 0..65_535, do: {:ok, port}, else: :error
+
+      nil ->
+        :error
+    end
   end
 
   @doc "Reject a full callback URL unless it matches the configured redirect endpoint."

@@ -432,6 +432,38 @@ defmodule CodingAgent.Tools.Read do
 
   @selector_token ~r/\A(?:img|conflicts|raw|\d+(?:-\d*|\+\d+)?(?:,\d+(?:-\d*|\+\d+)?)*|-\d+)\z/
 
+  @doc false
+  def approval_target(path, cwd, opts) do
+    with {:ok, params, _view} <- apply_path_selector(%{"path" => path}, cwd, opts) do
+      {:ok, approval_local_path(params["path"], cwd, opts)}
+    end
+  end
+
+  @doc false
+  def approval_path(path, cwd, opts) do
+    with {base, tokens} <- split_selector(path),
+         true <- selector_target?(path, base, cwd, opts) do
+      Enum.join([approval_local_path(base, cwd, opts) | tokens], ":")
+    else
+      _ -> approval_local_path(path, cwd, opts)
+    end
+  end
+
+  defp approval_local_path(path, cwd, opts) do
+    resolved = PathHelpers.resolve_path(path, cwd, opts)
+
+    # Preserve the read tool's bootstrap fallback before making the path absolute;
+    # absolute paths deliberately disable that fallback during execution.
+    if missing_file?(resolved) do
+      case maybe_workspace_bootstrap_fallback(path, cwd, opts) do
+        {:ok, fallback, _stat} -> fallback
+        :no_fallback -> resolved
+      end
+    else
+      resolved
+    end
+  end
+
   # A trailing `:selector` (up to two, e.g. `:10-20:raw`) only applies when the
   # literal path is missing and the remaining base names a real source, so
   # files containing colons and archive members keep their existing meaning.

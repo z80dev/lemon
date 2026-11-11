@@ -235,6 +235,8 @@ defmodule CodingAgent.Executor.SessionRunner do
         profile_instructions: get_in(meta, [:profile_instructions]),
         stream_fn: stream_fn,
         tool_policy: tool_policy,
+        bot_folder_root: get_opt(run_opts, :bot_folder_root),
+        config_cwd: get_opt(run_opts, :config_cwd),
         channel_identity: LemonCore.MapHelpers.get_key(meta, :channel_identity),
         invocation_context_key: LemonCore.MapHelpers.get_key(meta, :invocation_context_key),
         memory_context_key: LemonCore.MapHelpers.get_key(meta, :memory_context_key),
@@ -599,7 +601,7 @@ defmodule CodingAgent.Executor.SessionRunner do
     meta = request.meta || %{}
     id = request_agent_id(request)
     profile_id = meta[:profile_id] || meta["profile_id"]
-    config = LemonCore.Config.load_base_from_disk(cwd)
+    config = LemonCore.Config.load_base_from_disk(get_opt(run_opts, :config_cwd) || cwd)
 
     ids =
       Enum.uniq([id, profile_id, LemonCore.SessionKey.agent_id(request.session_key || "")]) --

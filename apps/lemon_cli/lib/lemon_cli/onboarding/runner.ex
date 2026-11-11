@@ -49,6 +49,13 @@ defmodule LemonCli.Onboarding.Runner do
     }
   end
 
+  @doc """
+  Runs provider onboarding for `spec` with the parsed `args`.
+
+  Besides `:io`, callers may pass `:token` (a credential the caller already
+  holds, kept out of argv), `:discovery` (preset endpoint model discovery) and
+  `:codex_discover` (ChatGPT account model discovery).
+  """
   @spec run([String.t()], Provider.t(), keyword()) :: :ok
   def run(args, %Provider{} = spec, opts \\ []) when is_list(args) do
     io = Keyword.get(opts, :io, default_io())
@@ -64,6 +71,14 @@ defmodule LemonCli.Onboarding.Runner do
         switches: @common_switches ++ spec.switches,
         aliases: [n: :non_interactive]
       )
+
+    # A caller that already holds the credential (for example the wizard saving a
+    # key found in the user's shell) passes it in-process, never through argv.
+    cli_opts =
+      case Keyword.get(opts, :token) do
+        token when is_binary(token) and token != "" -> Keyword.put_new(cli_opts, :token, token)
+        _ -> cli_opts
+      end
 
     explicit_auth =
       if value = normalize_optional_string(cli_opts[:auth]), do: parse_auth_mode!(value, spec)
@@ -139,7 +154,7 @@ defmodule LemonCli.Onboarding.Runner do
     :ok
   end
 
-  defp onboard(cli_opts, spec, io, _opts) do
+  defp onboard(cli_opts, spec, io, opts) do
     auth_mode = resolve_auth_mode!(cli_opts, spec, io)
     {secret_value, secret_provider} = resolve_secret_payload!(cli_opts, spec, auth_mode, io)
 
@@ -155,13 +170,14 @@ defmodule LemonCli.Onboarding.Runner do
 
     selected_model =
       if set_default? do
-        discovery_key = if auth_mode == :api_key, do: secret_value
-        choose_default_model!(cli_opts[:model], spec, io, discovery_key)
+        choose_default_model!(cli_opts[:model], spec, io, secret_value, opts)
       else
         nil
       end
 
     secret_provider = secret_provider || spec.api_key_secret_provider
+
+    io.info.("Saving provider credentials and configuration…")
 
     persist!(config_path, [{secret_name, {:set, secret_value, secret_provider}}], fn content ->
       content
@@ -404,6 +420,8 @@ defmodule LemonCli.Onboarding.Runner do
         {secret_value, secret_provider_for_auth(spec, :api_key)}
 
       nil when auth_mode == :codex_cli ->
+        io.info.("Importing your Codex login and loading models…")
+
         result =
           spec.oauth_module.import_codex_cli_login(path: opts[:codex_auth_path])
 
@@ -557,14 +575,14 @@ defmodule LemonCli.Onboarding.Runner do
 
   # Preset providers (`LemonAi.Models.Presets`) serve an open model set: any
   # requested id is accepted and the picker lists what the endpoint reports.
-  defp choose_default_model!(requested_model, %Provider{} = spec, _io, api_key)
+  defp choose_default_model!(requested_model, %Provider{} = spec, io, secret_or_key, opts)
        when is_binary(requested_model) and requested_model != "" do
     requested_model = String.trim(requested_model)
 
     if preset_provider(spec) != nil do
       requested_model
     else
-      available = available_model_ids(spec, api_key)
+      available = available_model_ids(spec, secret_or_key, io, opts)
 
       if requested_model in available do
         requested_model
@@ -574,8 +592,8 @@ defmodule LemonCli.Onboarding.Runner do
     end
   end
 
-  defp choose_default_model!(_requested_model, %Provider{} = spec, io, api_key) do
-    available = available_model_ids(spec, api_key)
+  defp choose_default_model!(_requested_model, %Provider{} = spec, io, secret_or_key, opts) do
+    available = available_model_ids(spec, secret_or_key, io, opts)
 
     if available == [] do
       fail!("No models found for #{spec.id}. Pass --model MODEL to choose one by id.")
@@ -765,7 +783,61 @@ defmodule LemonCli.Onboarding.Runner do
     end
   end
 
-  defp available_model_ids(%Provider{} = spec, api_key) do
+  # A Codex ChatGPT login lists exactly what the account offers; other providers
+  # use the bundled catalog (or a preset endpoint probed with the pasted key).
+  defp available_model_ids(%Provider{} = spec, secret_or_key, io, opts) do
+    oauth_payload = decode_oauth_payload(secret_or_key)
+    api_key = if oauth_payload, do: nil, else: secret_or_key
+    token = oauth_payload && oauth_payload["access_token"]
+
+    if spec.id == "openai-codex" and is_binary(token) and token != "" do
+      discover_fn =
+        Keyword.get(opts, :codex_discover) ||
+          (&LemonAi.Models.OpenAICodexDiscovery.discover/1)
+
+      case discover_fn.(access_token: token, timeout_ms: 5_000) do
+        {:ok, models} ->
+          models
+          |> Enum.map(fn
+            %{id: id} = model ->
+              %{
+                provider: to_string(Map.get(model, :provider, "openai_codex")),
+                id: id,
+                name: Map.get(model, :name) || id
+              }
+
+            id when is_binary(id) ->
+              %{provider: "openai_codex", id: id, name: id}
+          end)
+          |> ModelCatalog.sort_for_picker()
+          |> Enum.map(& &1.id)
+          |> Enum.uniq()
+
+        _ ->
+          io.info.(
+            "Couldn't list the models your ChatGPT account offers; showing Lemon's catalog."
+          )
+
+          static_catalog_model_ids(spec, api_key)
+      end
+    else
+      static_catalog_model_ids(spec, api_key)
+    end
+  end
+
+  defp decode_oauth_payload(secret) when is_binary(secret) do
+    case Jason.decode(secret) do
+      {:ok, %{"access_token" => token} = payload} when is_binary(token) -> payload
+      _ -> nil
+    end
+  end
+
+  defp decode_oauth_payload(%{"access_token" => token} = payload) when is_binary(token),
+    do: payload
+
+  defp decode_oauth_payload(_), do: nil
+
+  defp static_catalog_model_ids(%Provider{} = spec, api_key) do
     models_module = Module.concat([:"Elixir.LemonAi", :Models])
 
     with true <- Code.ensure_loaded?(models_module),

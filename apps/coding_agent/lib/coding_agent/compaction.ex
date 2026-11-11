@@ -789,7 +789,7 @@ defmodule CodingAgent.Compaction do
   end
 
   defp escape_summary_boundary(text) do
-    String.replace(text, ~r/<\s*\/?\s*conversation\s*>/i, fn tag ->
+    String.replace(text, ~r/<\s*(?:\/\s*)?conversation\s*>/i, fn tag ->
       "&lt;" <> String.trim_leading(tag, "<")
     end)
   end

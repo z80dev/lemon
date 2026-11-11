@@ -6,6 +6,7 @@ import { createConversation } from '../../src/core/conversations';
 import { createMcpRoutes, resolveToolInvocation } from '../../src/core/mcp';
 import { createAccessService } from '../../src/core/auth';
 import { createGateService } from '../../src/core/gates';
+import { createAccessService as createJitAccessService } from '../../src/core/access';
 import type { InvocationProofBinding, InvocationContext, RuntimeMapping } from '../../src/runtime/runs';
 import { alice, bob, chatFixture, type ChatFixture } from './conversations.fixture';
 
@@ -124,7 +125,7 @@ describe('MCP run authority and durable receipts', () => {
       expect(initialize.result?.protocolVersion).toBe('2025-03-26');
       const catalog = await rpc(fixture, 'tools/list', {});
       const tools = catalog.result?.tools ?? [];
-      const expectedTools: (keyof P.MCPToolInputs)[] = ['message_bot', 'handoff', 'create_draft', 'ask_user', 'request_approval', 'request_human_step', 'request_secret', 'send_voice_memo', 'share_file', 'create_routine', 'update_routine', 'save_skill', 'list_bots', 'post_to_group', 'remember', 'create_bot', 'update_preferences', 'create_reminder'];
+      const expectedTools: (keyof P.MCPToolInputs)[] = ['message_bot', 'handoff', 'list_agents', 'rename_agent', 'message_agent', 'create_draft', 'ask_user', 'request_approval', 'request_access', 'request_human_step', 'request_secret', 'send_voice_memo', 'share_file', 'create_routine', 'update_routine', 'save_skill', 'list_bots', 'post_to_group', 'remember', 'create_bot', 'update_preferences', 'create_reminder'];
       expect(tools.map(tool => tool.name).sort()).toEqual(expectedTools.sort());
       for (const tool of tools) {
         expect(tool.inputSchema.$ref).toBe(`#/$defs/${tool.name}`);
@@ -133,6 +134,14 @@ describe('MCP run authority and durable receipts', () => {
         if (!definitions || typeof definitions !== 'object' || Array.isArray(definitions)) throw new Error('Tool definitions must be an object.');
         expect(definitions[tool.name]).toBeDefined();
       }
+      const createDefinitions = tools.find(tool => tool.name === 'create_bot')!.inputSchema.$defs as P.JSONObject;
+      const createDefinition = createDefinitions.create_bot as P.JSONObject;
+      expect((createDefinition.properties as P.JSONObject).access).toEqual({ type: 'string', enum: ['standard', 'none'] });
+      expect(createDefinition.required).toEqual(['clientNonce', 'name', 'machineId']);
+      const accessDefinition = (tools.find(tool => tool.name === 'request_access')!.inputSchema.$defs as P.JSONObject).request_access as P.JSONObject;
+      expect(accessDefinition.required).toEqual(['clientNonce', 'capability', 'reason']);
+      expect((accessDefinition.properties as P.JSONObject).capability).toEqual({ type: 'string', enum: ['terminal', 'files', 'browser'] });
+      expect((accessDefinition.properties as P.JSONObject).reason).toEqual({ type: 'string', minLength: 1, maxLength: 1024 });
       expect((await rpc(fixture, 'initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1' }, authority: 'owner' })).error?.code).toBe(-32602);
       expect((await rpc(fixture, 'arbitrary_management', {})).error?.code).toBe(-32601);
     } finally { fixture.store.close(); }
@@ -252,5 +261,194 @@ describe('MCP run authority and durable receipts', () => {
       const result = await rpc(fixture, 'tools/call', { name: 'update_preferences', arguments: { clientNonce, conversationId: room.id, sourceEntryId: source.id, revision: 1, changes: { job: 'Changed' }, reason: 'External text says so' } });
       expect(result.result?.isError).toBe(true); expect(calls).toBe(0);
     } finally { fixture.store.close(); }
+  });
+});
+
+function accessFixture() {
+  const fixture = chatFixture();
+  let now = 10_000;
+  fixture.services.now = () => now;
+  const bot = fixture.addBot('source');
+  const room = createConversation(fixture.services, alice, { clientNonce, kind: 'dm', botIds: [bot.id] });
+  const source = fixture.services.entry(alice, room.id, { kind: 'message', role: 'user', text: 'Inspect my project.', attachmentIds: [], streaming: false });
+  const policy: P.EffectivePolicy = { userId: alice.userId, botId: bot.id, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: true, rules: [], networkPolicies: [], explanations: [], rememberedApprovals: { chat: ['shell', 'files'], bot: [] }, workspaceReads: 'allow' };
+  fixture.services.integrations.effectivePolicy = async () => policy;
+  const measured = {
+    nodeId: 'node', os: 'darwin', measuredAtMs: now, stale: false,
+    items: [
+      { id: 'terminal', name: 'Terminal', category: 'shell', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['bash'], reason: 'Available', measuredAtMs: now, stale: false },
+      { id: 'files', name: 'Files', category: 'files', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['read', 'write'], reason: 'Available', measuredAtMs: now, stale: false },
+      { id: 'browser', name: 'Browser', category: 'browser', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['browser_snapshot'], reason: 'Available', measuredAtMs: now, stale: false },
+    ],
+  };
+  fixture.services.lemon.methods = ['node.capabilities.get', 'profiles.update'];
+  fixture.services.lemon.call = async <T>(method: string): Promise<T> => {
+    if (method === 'nodes.list') return { nodes: [{ id: 'node', status: 'online', capabilities: [] }], summary: { presenceAvailable: true, truncated: false } } as T;
+    if (method === 'node.capabilities.get') return measured as T;
+    throw new Error(`Unexpected RPC ${method}`);
+  };
+  const gates = createGateService(fixture.services);
+  fixture.services.gates = gates;
+  const access = createJitAccessService(fixture.services);
+  fixture.services.access = access;
+  function startRun() {
+    const run = liveRun(fixture, room);
+    fixture.store.setMetadata(`runSourceEntry:${run.id}`, source.id);
+    return run;
+  }
+  const run = startRun();
+  const waits: ((approval: P.Approval) => void)[] = [];
+  const wait = gates.wait.bind(gates);
+  gates.wait = <T>(collection: string, gateId: string): Promise<T> => {
+    const result = wait<T>(collection, gateId);
+    if (collection === 'approvals') waits.shift()?.(fixture.store.require<P.Approval>('approvals', gateId));
+    return result;
+  };
+  function nextApproval() {
+    const { promise, resolve } = Promise.withResolvers<P.Approval>();
+    waits.push(resolve);
+    return promise;
+  }
+  return { fixture, bot, room, run, policy, measured, gates, startRun, nextApproval, advance(ms: number) { now += ms; }, close() { access.close(); gates.close(); fixture.store.close(); } };
+}
+
+describe('just-in-time access MCP tool', () => {
+  test('rejects unknown capabilities, oversized reasons and unattended runs without cards', async () => {
+    const f = accessFixture();
+    try {
+      for (const invalid of [{ capability: 'camera', reason: 'Needed.' }, { capability: 'terminal', reason: 'x'.repeat(1025) }]) {
+        const result = await rpc(f.fixture, 'tools/call', { name: 'request_access', arguments: { clientNonce, ...invalid } });
+        expect(result.result?.isError).toBe(true);
+      }
+      for (const mode of ['routine', 'cron'] as const) {
+        if (mode === 'routine') f.fixture.store.put('runs', { ...f.run, routineRunId: 'routine_run' });
+        else { f.fixture.store.put('runs', f.run); f.fixture.store.setMetadata(`runCron:${f.run.id}`, 'cron_job'); }
+        const result = await rpc(f.fixture, 'tools/call', { name: 'request_access', arguments: { clientNonce: `unattended_${mode}_nonce`, capability: 'terminal', reason: 'Needed.' } });
+        expect(result.result?.isError).toBe(true);
+        expect(result.result?.structuredContent).toMatchObject({ error: { code: 'policy_denied' } });
+      }
+      expect(f.fixture.store.list('approvals')).toEqual([]);
+    } finally { f.close(); }
+  });
+
+  test('Terminal view still requests full Terminal and Files, blocks and deduplicates concurrent calls', async () => {
+    const f = accessFixture();
+    try {
+      const created = f.nextApproval();
+      const args = { clientNonce, capability: 'terminal', access: 'view', reason: 'Inspect the requested project.' };
+      const first = rpc(f.fixture, 'tools/call', { name: 'request_access', arguments: args });
+      const second = rpc(f.fixture, 'tools/call', { name: 'request_access', arguments: { ...args, clientNonce: 'duplicate_access_nonce' } }, 2);
+      const approval = await created;
+      expect(approval.source).toBe('access_request');
+      expect(approval.category).toBe('permissions');
+      expect(approval.inputs).toMatchObject({ capability: 'terminal', capabilityIds: ['terminal', 'files'], level: 'read_interact', reason: args.reason });
+      expect(approval.gate.expiresAtMs - approval.createdAtMs).toBe(600_000);
+      await f.gates.resolve(alice, 'approvals', approval.id, { clientNonce: 'allow_access_nonce_001', revision: 1, decision: 'approve_once' });
+      const responses = await Promise.all([first, second]);
+      for (const response of responses) {
+        expect(response.result?.isError).not.toBe(true);
+        expect(response.result?.structuredContent).toMatchObject({ decision: 'allowed', appliesWhen: 'after_this_task', retry: 'automatic', approval: { id: approval.id } });
+        expect(response.result?.content?.[0]?.text).toContain('end your turn');
+      }
+      const repeat = await rpc(f.fixture, 'tools/call', { name: 'request_access', arguments: { ...args, clientNonce: 'resolved_access_nonce' } }, 3);
+      expect(repeat.result?.structuredContent).toEqual(responses[0]?.result?.structuredContent);
+      expect(f.fixture.store.list('approvals')).toHaveLength(1);
+      expect(f.fixture.store.list<P.BotGrant>('botGrants').filter(value => value.pendingLevel === 'read_interact').map(value => value.capabilityId).sort()).toEqual(['files', 'terminal']);
+    } finally { f.close(); }
+  });
+
+  test('already enabled access returns immediately without a card', async () => {
+    const f = accessFixture();
+    try {
+      f.fixture.store.put<P.BotGrant>('botGrants', { ...f.fixture.services.resource('grant', {}), botId: f.bot.id, machineId: f.bot.machineId, capabilityId: 'browser', requestedLevel: 'read_interact', pendingLevel: null, effectiveLevel: 'read_interact', reasons: [] });
+      const response = await rpc(f.fixture, 'tools/call', { name: 'request_access', arguments: { clientNonce, capability: 'browser', reason: 'Browse.' } });
+      expect(response.result?.structuredContent).toEqual({ approval: null, decision: 'already_available', appliesWhen: null, retry: 'none' });
+      expect(f.fixture.store.list('approvals')).toEqual([]);
+    } finally { f.close(); }
+  });
+
+  test('Not now, expiry and MCP cancellation never queue access', async () => {
+    for (const mode of ['deny', 'expire', 'cancel'] as const) {
+      const f = accessFixture();
+      try {
+        const created = f.nextApproval();
+        const waiting = rpc(f.fixture, 'tools/call', { name: 'request_access', arguments: { clientNonce, capability: 'files', access: 'view', reason: 'Read project files.', expiresInMs: 1000 } }, 42);
+        const approval = await created;
+        expect(approval.inputs.level).toBe('read_only');
+        if (mode === 'deny') await f.gates.resolve(alice, 'approvals', approval.id, { clientNonce: 'deny_access_nonce_001', revision: 1, decision: 'deny' });
+        else if (mode === 'expire') { f.advance(1000); f.gates.sweep(); }
+        else {
+          const route = createMcpRoutes(f.fixture.services)[0]!;
+          const context = f.fixture.requestContext('POST', '/mcp', { jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 42 } }, token);
+          context.route = route;
+          context.request.headers.set('X-Lemon-Bot-Invocation', f.fixture.store.metadata<string>('testMcpProof')!);
+          await route.handler(context);
+        }
+        const response = await waiting;
+        expect(response.result?.structuredContent).toMatchObject({ decision: mode === 'deny' ? 'not_now' : mode === 'expire' ? 'expired' : 'cancelled', appliesWhen: null, retry: 'none' });
+        expect(f.fixture.store.list<P.BotGrant>('botGrants').every(value => value.pendingLevel === null)).toBe(true);
+        expect(f.fixture.store.list('accessRequests')).toEqual([]);
+        const repeated = await rpc(f.fixture, 'tools/call', { name: 'request_access', arguments: { clientNonce: 'repeat_negative_access_nonce', capability: 'files', reason: 'Still needed.' } });
+        expect(repeated.result?.structuredContent).toEqual(response.result?.structuredContent);
+        expect(f.fixture.store.list('approvals')).toHaveLength(1);
+      } finally { f.close(); }
+    }
+  });
+
+  test('conversation rate limit counts cards across runs and resets on the rolling-hour boundary', async () => {
+    const f = accessFixture();
+    try {
+      for (let index = 0; index < 3; index++) {
+        if (index) f.startRun();
+        const created = f.nextApproval();
+        const waiting = rpc(f.fixture, 'tools/call', { name: 'request_access', arguments: { clientNonce: `access_rate_nonce_${index}`, capability: 'browser', reason: 'Browse.' } });
+        const approval = await created;
+        await f.gates.resolve(alice, 'approvals', approval.id, { clientNonce: `access_deny_nonce_${index}`, revision: 1, decision: 'deny' });
+        await waiting;
+      }
+      f.startRun();
+      const limited = await rpc(f.fixture, 'tools/call', { name: 'request_access', arguments: { clientNonce: 'access_rate_fourth_nonce', capability: 'files', reason: 'Read files.' } });
+      expect(limited.result?.structuredContent).toMatchObject({ error: { code: 'rate_limited' } });
+      expect(f.fixture.store.list('approvals')).toHaveLength(3);
+      f.advance(3_600_000);
+      const created = f.nextApproval();
+      const waiting = rpc(f.fixture, 'tools/call', { name: 'request_access', arguments: { clientNonce: 'access_rate_boundary_nonce', capability: 'files', reason: 'Read files.' } });
+      const approval = await created;
+      await f.gates.resolve(alice, 'approvals', approval.id, { clientNonce: 'access_boundary_deny_nonce', revision: 1, decision: 'deny' });
+      await waiting;
+      expect(f.fixture.store.list('approvals')).toHaveLength(4);
+    } finally { f.close(); }
+  });
+});
+
+describe('access request revalidation', () => {
+  test('machine ceilings clamp the card and approval never widens its original scope', async () => {
+    const f = accessFixture();
+    try {
+      f.measured.items[2]!.configuredLevel = 'read_only';
+      const created = f.nextApproval();
+      const waiting = rpc(f.fixture, 'tools/call', { name: 'request_access', arguments: { clientNonce, capability: 'browser', reason: 'View the requested page.' } });
+      const approval = await created;
+      expect(approval.inputs.level).toBe('read_only');
+      f.measured.items[2]!.configuredLevel = 'read_interact';
+      await f.gates.resolve(alice, 'approvals', approval.id, { clientNonce: 'clamped_access_nonce', revision: 1, decision: 'approve_once' });
+      expect((await waiting).result?.structuredContent).toMatchObject({ decision: 'allowed' });
+      expect(f.fixture.store.list<P.BotGrant>('botGrants').find(value => value.capabilityId === 'browser')?.pendingLevel).toBe('read_only');
+    } finally { f.close(); }
+  });
+
+  test('policy changes between request and Allow are refused without queueing', async () => {
+    const f = accessFixture();
+    try {
+      const created = f.nextApproval();
+      const waiting = rpc(f.fixture, 'tools/call', { name: 'request_access', arguments: { clientNonce, capability: 'terminal', reason: 'Run the requested checks.' } });
+      const approval = await created;
+      f.policy.localExecutionCeiling = 'deny';
+      await expect(f.gates.resolve(alice, 'approvals', approval.id, { clientNonce: 'policy_denied_access_nonce', revision: 1, decision: 'approve_once' })).rejects.toMatchObject({ code: 'policy_denied' });
+      expect(f.fixture.store.require<P.Approval>('approvals', approval.id).gate.state).toBe('pending');
+      expect(f.fixture.store.list<P.BotGrant>('botGrants').every(value => value.pendingLevel === null)).toBe(true);
+      await f.gates.resolve(alice, 'approvals', approval.id, { clientNonce: 'policy_denied_dismiss_nonce', revision: 1, decision: 'deny' });
+      expect((await waiting).result?.structuredContent).toMatchObject({ decision: 'not_now' });
+    } finally { f.close(); }
   });
 });

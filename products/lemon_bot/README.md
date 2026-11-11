@@ -36,7 +36,9 @@ The backend stores accounts, sessions, device pairing, Bot groups, transcripts, 
 
 Every Bot has an assigned machine, a Lemon profile and an owner conversation. Tasks use independent sessions; groups coordinate 2–6 Bots owned by the same person. Identity, Job and Memory can be reviewed separately, including preference changes and undo. Workspace/Public templates create reviewed copies owned by the recipient.
 
-Setup starts with a named assistant and a machine, with optional phone pairing. Usage shows provider spend and limits. Integrations and host controls depend on configured providers and permissions.
+For first-run choices, owner sign-in, model connection and permissions, use the [Lemon Bot getting-started guide](../../docs/getting-started/lemon-bot.md). Usage shows provider spend and limits; integrations and host controls depend on configured providers and permissions.
+
+When a task needs missing Terminal, Files or Browser access, a Bot can ask through an owner-only access card. Allowing changes the Bot's access after its current task finishes, then visibly continues your original request; commands still require their normal approval. Grant edits during a task also queue, with Stop task available. Supported workers keep task files in a private per-Bot folder; folder reads can skip approval unless workspace policy requires it, and reading there makes subsequent web access ask first.
 
 Instance provider rows show the last observed Lemon provider failure and its time.
 The runtime retains one bounded, credential-free category summary per provider,
@@ -45,11 +47,17 @@ that history. It is in-memory diagnostic history, cleared when Lemon restarts,
 not a live provider probe. Raw provider messages, paths and credentials are never
 included in `providers[].lastError`.
 
+## Install a release
+
+Start with the [Lemon Bot getting-started guide](../../docs/getting-started/lemon-bot.md): the Mac app, the Terminal Bot installer, or attaching a second machine. The Mac app installs a runtime with bundled Python and needs no developer tools; the Terminal installer still requires a working `python3`. The DMG pipeline currently produces unsigned, unnotarized preview artifacts only; end-user distribution awaits Developer ID and notarization credentials.
+
+For an installed runtime, `lemon-bot up` resumes background setup and local worker enrollment; `lemon-bot open` reopens the browser signed in. Over SSH, use `lemon-bot open --headless` for the tunnel command and one-use, five-minute link. Same-machine setup does not require copying a join command or keeping a foreground worker terminal open.
+
 ## Running an integrated checkout
 
-Requirements: a running authenticated Lemon controller with the required profile, placement, node-I/O, memory and live-stream RPCs; Bun 1.4+; Node 24 for Vite tooling. Owner setup and the management API work with zero model-provider credentials or default model. Bot execution later requires a supported controller default model and destination-local provider authentication; `lemon setup` configures those locally. Native builds use Xcode 26.3 and XcodeGen 2.46; signing and provisioning are required for installed Apple devices.
+Requirements: an authenticated Lemon controller with the required profile, placement, node-I/O, memory and live-stream RPCs; Bun 1.4+; Node 24 for Vite tooling. Owner sign-in and management do not require model-provider credentials or a default model. Bot replies require a model and destination-local provider authentication; see [model setup](../../docs/user-guide/setup.md). Native development requires Xcode 26.3+ (27.2 verified) and XcodeGen 2.46+; see the [Apple build guide](apple/README.md#generate-build-and-launch).
 
-1. Start/reuse **the existing swarm**, following the repository [CLI guide](../../docs/user-guide/cli.md), or let `lemon-bot` start it. Do not generate a second unrelated product operator token.
+1. Start/reuse the existing controller following the [CLI guide](../../docs/user-guide/cli.md). Keep its operator token on the backend; do not create an unrelated product token.
 2. Start the backend:
 
 ```bash
@@ -57,9 +65,9 @@ bun --cwd products/lemon_bot/backend install
 bun run --cwd products/lemon_bot/backend start
 ```
 
-With no environment it serves `http://127.0.0.1:4100`, keeps private state in `~/.lemon/lemon_bot`, and on first start in a terminal asks whether to use the Lemon on this machine (found through the launchers' port and managed `~/.lemon/run/control-plane-<port>.token`, and started on request when stopped) or another machine's `wss://…/ws` controller and operator token. The choice is saved; `--choose-lemon` asks again. A service manager sets the [backend environment](#backend-configuration) instead; explicit `LEMON_BOT_CONTROL_URL`/`LEMON_BOT_OPERATOR_TOKEN` override the saved choice. See the [backend README](backend/README.md#standalone-installation).
+The default backend serves `http://127.0.0.1:4100` and keeps private state in `~/.lemon/lemon_bot`. Startup modes and operator environment variables are described in the [backend README](backend/README.md). Use the canonical [getting-started guide](../../docs/getting-started/lemon-bot.md) for owner sign-in rather than treating the development server as anonymous signup.
 
-`LEMON_BOT_PUBLIC_URL` is the externally reachable product origin, **not** control-plane URL. Registered bot MCP URLs, webhook URLs, OAuth callbacks and attachment downloads derive from it. Every execution node must reach it (loopback public URL cannot serve a remote node). Production uses HTTPS and matching WSS, trusted proxy origin/header validation and private data directory ownership. Backend `start` serves production built web when present; `dev` runs backend watch mode. Startup logs never contain setup credentials: an interactive start on an empty DB shows the one-use owner setup code on the controlling terminal only; otherwise run the explicit local [`lemon-bot setup`](backend/README.md#provider-free-owner-setup) command (`bun src/cli.ts setup` from the backend source directory). It prints a verified tailnet HTTPS origin separately from a sensitive five-minute single-use proof shown only on the controlling terminal. Open that origin on phone/Web and use the existing owner setup form before any LLM sign-in. Normal accounts use local login/invite or configured OIDC; anonymous setup exposes only the minimal product/setup/pairing fingerprint, never workspace/account identity or setup credentials.
+`LEMON_BOT_PUBLIC_URL` is the reachable product origin, not the controller URL. Execution machines must reach it for MCP and attachments; a remote worker cannot use the backend's loopback address. Backend `start` serves built production web assets when present; `dev` runs backend watch mode.
 
 3. Web development and production assets:
 
@@ -72,17 +80,11 @@ bun run --cwd products/lemon_bot/web build
 
 The web dev server runs at `http://127.0.0.1:4081`. Its `/v1` (including realtime WebSocket), `/hooks` and `/mcp` requests proxy to `http://127.0.0.1:4100`; set `LEMON_BOT_DEV_BACKEND` in the web development environment to use another backend origin. The Vite dev socket is separate from product realtime. Web never connects directly to Lemon `/ws`.
 
-4. Native apps: generate `apple/project.yml` with XcodeGen, open `apple/LemonBot.xcodeproj`, choose LemonBotMac or LemonBotiOS, and configure signing/App Group/APNs for installed devices. macOS connects in one click to **This Mac** or **Another machine** you can `ssh` into, starting Lemon Bot there if needed and signing in as owner with that machine's private local-access key ([details](apple/README.md#connect-the-mac-app)); iPhone uses the QR/paste-link flow below to persistently attach to that desktop cluster. `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` is the reference toolchain. Share extension exchanges only explicit user-selected content through App Group, never operator authority. Credentials use Keychain. Task `lemonbot://` links contain resource IDs only; short-lived pairing QR is a separate secret-bearing account-security flow.
+4. For native development, follow the [Apple build guide](apple/README.md#generate-build-and-launch). Configure signing, App Group and APNs for installed devices; the share extension exchanges only explicit user-selected content, never operator authority.
 
 ### Connect iPhone persistently to the desktop cluster
 
-1. Assume desktop/phone Tailscale reachability is already configured. Set `LEMON_BOT_PUBLIC_URL` to the exact reachable HTTPS product origin (Tailscale Serve is recommended), for example `https://desktop.<tailnet>.ts.net`; every attached worker must reach it too. Lemon Bot does not provision Tailscale, host networking or another auth service. Loopback HTTP is same-machine development/Simulator only, not an iPhone remote address or trust inferred from QR.
-2. In macOS or the desktop web app choose **Connect iPhone**. Authenticated owner creates a five-minute one-use QR containing only product origin, backend instance ID, cluster ID and random pairing code: `lemonbot://pair?backend=<encoded-origin>&instance=<instanceId>&cluster=<workspaceId>&code=<one-use-code>`. No operator token, desktop session bearer or permanent credential. Verify the origin is the same Bot backend/workspace first using the shared [preflight contract](contracts/preflight.md), not a controller health check or Lemon Web/Phoenix response.
-3. iPhone scans with camera permission or pastes that exact link. Read-only `/v1/pairings/preview` verifies stored code/cluster without consuming it. Review exact cluster name and HTTPS origin, then explicitly Request connection. Claim consumes QR authority once and displays the same six-digit device verification code on both devices.
-4. Desktop owner reviews requesting device name/code and approves once (or denies). Only approval creates a distinct device-bound product session. Phone completes with one fixed nonce; pending/denied/expired are explicit. If response is lost, identical receipt reconciliation returns the **same** device/session until original five-minute deadline, never a second mint. After deadline re-pair explicitly.
-5. Phone stores its own token and cluster/account/selected Bot/conversation in Keychain/local state. Paired `AuthSession.expiresAtMs` is explicit null until revoked, unlike normal bounded login sessions. Reopen restores connection; offline keeps it without replaying work. Existing Account → Devices/Sessions lists/revokes the phone; disabled/revoked authority shows Reconnect. QR/claim credentials never enter transcript, push, audit or logs.
-
-This phone is a client of the same desktop owner and cluster, not a new shared Team member, execution machine or source of node/operator credentials. Camera/microphone/push remain explicit iOS permissions.
+Follow [Lemon Bot getting started](../../docs/getting-started/lemon-bot.md) for reachable HTTPS, owner-approved phone pairing and revocation. The phone receives its own product session, never the desktop session or operator token; it is a client, not an execution machine.
 
 ### Backend configuration
 
@@ -134,14 +136,9 @@ Automated host management, setup, network/egress application and read-only drive
 
 ## Attach and manage a machine
 
-1. Sign in as workspace owner/admin; open **Machines → Attach a machine**. Enter friendly name, durable unique nodeName, purpose/labels. Review that a trusted worker runs with its OS user's privileges and co-resident bots share files/logins.
-2. Backend creates a short-lived, one-use `node.pair.invite` with purpose lemon_bot. Copy the server-returned **joinCommand** to the destination machine. It reuses a compatible Lemon or installs the pinned release, then prompts for the enrollment code with input hidden; no enrollment secret belongs in the command, shell history or environment. Host must reach the controller and product MCP URL. Configure provider authentication locally with `lemon setup`; enrollment verifies worker software compatibility, not provider account access, model availability or remaining quota. Provider credentials do not copy from the controller.
-3. Run/supervise that worker using the host's service manager. UI shows invite issued/waiting/installing-or-connecting/verified online or expiry/offline errors; it does not infer successful installation from copying a command. On actual machine.upserted online, host info/capabilities show measured version/OS/user/cwd/filesystem roots and grants. Mac OS access prompts belong to that Mac host only; Linux bots do not ask for Apple Calendar access.
-4. Create a Bot onto this machine. Identity/status anchor always shows assigned host, current task and truthful idle/working/making/needs-input/offline; click avatar/header for Activity + Upcoming, Identity/Job/Memory, grants and Ideas. Files/terminal are full host access, secret UI is names-only/masked.
-5. Reconnect repairs same durable node identity with a new one-use invite, not a new machine. Host management operations (update/recover/restart/suspend/recreate/delete isolated environment) require an actually configured host driver and exact-scope preview/confirmation. They are separate from detaching, never silently remove SSH/user data. Offline/unknown operation outcomes are persisted and reconciled.
-6. Move an idle owned Bot with preview to an online owned destination: persona/skills/profile memory acknowledged before cutover, product history retained, native continuation starts fresh. Files/browser sessions/provider credentials do not copy automatically. Detach exact-name confirmation revokes execution trust, pauses affected work, preserves user host files/logins and offline Bot metadata.
+Use [attaching a bot machine](../../docs/user-guide/attaching-a-bot-machine.md) for SSH setup, scoped invitations, repair and service persistence. Configure model authentication on the destination; enrollment and capability checks do not establish provider access, quota or OS permission grants.
 
-Never approve an action just because a card says "working". Read Bot/machine/scope/consequences and exact target; Send on outward drafts is always explicit. Delete conversation, forget selected memory, disconnect connector, reset selected Bot scopes and detach machine are distinct previewed actions. Product deletion does not automatically revoke external provider sessions or erase operator backups.
+Attached workers run with their OS user's privileges. Co-resident Bots share files, browser sessions and CLI credentials; personas are not OS isolation. Detaching trust, deleting product data and host-management operations are distinct actions, not automatic erasure of the host or its external logins. Review exact targets and consequences before approval.
 
 ## Contributor checks
 

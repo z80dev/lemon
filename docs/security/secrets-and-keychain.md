@@ -80,6 +80,11 @@ Additional nuance:
 - Key material must be base64-encoded 32-byte data. Raw passphrase-like strings are rejected with `:weak_master_key` (there is no password stretching); `allow_legacy_raw_keys: true` restores the old behaviour for setups that already encrypted secrets under such a value. `lemon secrets rotate-key` moves such a setup onto a generated key.
 - `status/1` suppresses expected keychain absence (`:missing`, `:keychain_unavailable`) from `keychain_error` while still surfacing hard failures.
 - The local source launcher `bin/lemon` also normalizes `LEMON_SECRETS_MASTER_KEY` from `~/.lemon/secrets_master_key` on non-macOS systems so stale desktop/session env does not override the working local key by accident.
+- `status/1` reuses its Keychain lookup when resolving the active source.
+- CLI setup commands use `MasterKey.scoped/1`: Keychain results (including failures)
+  are cached only in the caller for the command lifetime, nested scopes share the
+  cache, and successful initialization replaces a cached miss. Cleanup also runs
+  on exceptions. Servers remain unscoped so external key changes stay visible.
 
 ## Operator Notes
 
@@ -92,6 +97,11 @@ Additional nuance:
   minimal child environments, `100..30000` ms timeouts, `1..1048576` byte
   output bounds, and an optional bounded process-local cache that defaults off.
 - If keychain prompts are denied (`User interaction is not allowed`), Lemon can still operate via env fallback when configured.
+- Development Mac builds are ad-hoc signed and can prompt for Keychain access
+  again after each rebuild. This is distinct from the worker's
+  [macOS privacy permissions](agent-safety-contract.md#macos-permissions).
+  Signed releases retain a stable signing identity and avoid that rebuild
+  re-prompt; no signed DMG is published yet.
 
 ## Conditional Credential Saves
 

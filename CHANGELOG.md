@@ -8,7 +8,189 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- Packaged `lemon daemon` (and `stop`, `rpc`, `remote`) failed with "daemon
+  started but its pid could not be determined" when the machine's hostname
+  resolved to a non-loopback address, because distribution is now
+  loopback-only. Short-name release nodes default to the `localhost` host.
+
+---
+
+## [2026.11.2]
+
+### Added
+
+- Include bundled Python in the actual darwin runtime tarballs, not just the
+  assembly directory, and reject archives missing its interpreter or licenses.
+- `lemon service install|status|repair|uninstall` manages controller, Lemon Bot
+  backend and named worker services with launchd/systemd, identity-verified
+  takeover, application readiness, truthful persistence and a manual fallback.
+- `lemon uninstall` previews the exact units, programs and shell changes and
+  requires a fresh confirmation digest; data is preserved unless `--purge`.
+
+### Changed
+
+- Secret writes refresh the master key inside the mutation lock even during a
+  cached setup command, preventing credential loss after concurrent key rotation.
+- Codex login import warns about shared refresh-token sign-outs before consent;
+  setup also offers independent ChatGPT browser sign-in directly.
+- Bind uninstall confirmation and deferred deletion to canonical filesystem
+  identities; reject symlinked ancestors and stale replacement targets.
+- Wait for a new controller process at the selected root during supervised
+  restarts, and recognize launchd units when HOME contains XML-special characters.
+- Restart the Bot backend once after changing controller selection, verify its
+  selected-controller connection, and persist non-default local controller ports
+  in backend service units.
+
+- Source launchers now reuse a private random per-install distribution cookie;
+  dedicated control-plane and gateway launchers also default distribution and
+  epmd to loopback. Both primary launchers honor the saved node-gateway port,
+  including `0` to disable it, without overriding explicit environment settings.
+- Harden Lemon Bot installation: reject chained archive symlink escapes and
+  cycles, preserve release pins in Terminal commands, invalidate setup plans
+  when either component pointer changes, and stage both combined-preset
+  components before promotion with rollback on failure.
+- Keep Files-enabled Bot folders outside trusted extension, configuration,
+  persona and project-prompt discovery during session startup, reload and rebuild.
+
+- Managed controllers route start/restart through their service manager.
+  Deliberate stops stay down; updates restart only previously running units,
+  stop workers before restarting the controller, and update an installed Lemon
+  Bot backend in lockstep with the runtime.
+- Reject invalid destination ports before URI normalization or default-port
+  fallback in MCP origin authorization, context/web fetches and redirects,
+  webhook callbacks, and node enrollment URLs on Elixir 1.20.
+- Add a shell-only supervised reverse SSH tunnel for second-machine node gateway
+  and Lemon Bot access, with private status, credential-free SSH environments,
+  stale same-user sshd cleanup and terminal host-key/auth/forwarding failures.
+- Added the embedded Lemon Bot Worker helper, non-prompting macOS grant probes,
+  and explicit local-machine Permissions controls with System Settings links.
+- Named workers now bind loopback credential checks to the established peer's
+  exact connection tuple, including every new tunneled MCP request; cached DNS
+  pins and replacement listeners cannot authorize a foreign peer. Listener
+  preflight matches address, family and port. Deliberate cross-user deployments
+  can opt out with `LEMON_NODE_TRUST_LOOPBACK_LISTENER=1`.
+- SSH machine setup rejects IPv6/localhost product origins before forwarding;
+  the supported loopback product origin is HTTP on `127.0.0.1`. Mac setup retries
+  preserve the SSH destination and machine ID for direct links as well as tunnels.
+- Pairing preview reports node-gateway health; tunnel invitations bind the exact
+  destination loopback port without selecting a controller-local source checkout.
+- Build Mac DMGs in release CI with a signed runtime-manifest pin, credential
+  gating, notarization and verified receipts. Unconfigured builds remain
+  unpublished preview artifacts; stable signed releases include a fixed DMG alias.
+- Combined `--profile bot` installer preset: bot-verified full runtime without
+  the TUI and the same-version backend, with a single Lemon Bot setup hand-off.
+  Backend-only `--profile lemon_bot` remains available for manual deployments.
+- `lemon service` manages controller, backend, worker and tunnel services, reports actual
+  persistence, and supports headless stdin enrollment. Worker join commands use
+  services by default; `--foreground` opts out. Preview-confirmed `lemon uninstall`
+  removes managed programs and services, keeping data unless `--purge` is chosen.
+- Node-only gateway on loopback port `4044` for secure node tunnels/proxies:
+  node/enrollment `/ws` and `/healthz` only, never operator or tokenless access.
+  Setup reserves the gateway port and doctor reports exposed listeners.
+- Supervised reverse SSH tunnels for second-machine node gateway and Lemon Bot
+  access, with private status, credential-free SSH environments, stale same-user
+  sshd cleanup and terminal host-key/auth/forwarding failures. Pairing preview
+  reports gateway health; invitations bind the exact destination loopback port
+  without selecting a controller-local source checkout.
+- Embedded Lemon Bot Worker helper, non-prompting macOS grant probes, and explicit
+  local-machine Permissions controls with System Settings links.
+- Release-pinned Mac app setup verifies and installs missing runtime/backend
+  components without developer tools; darwin runtimes bundle checksum-pinned
+  CPython and avoid Apple's Python shim when Command Line Tools are absent.
+- Release CI builds Mac DMGs with a signed runtime-manifest pin, credential gating,
+  notarization and verified receipts. Unconfigured builds remain unpublished
+  preview artifacts; stable signed releases include a fixed DMG alias.
+
+- Source toolchain, CI and release builds now use Elixir 1.20.5 and Erlang/OTP 29.1.2 (was Elixir 1.19.5 / OTP 28.5); source checkouts must upgrade before building.
+- **Breaking security change:** control-plane, web and simulation listeners now
+  bind `127.0.0.1` by default, as do launcher epmd/distribution defaults. Existing
+  LAN clients must opt into `*_BIND_IP`, configure operator authentication, and
+  restart. Non-loopback main traffic is restricted to `/ws` and `/healthz`;
+  remote OpenAI/ACP APIs require explicit opt-in and dedicated tokens.
+- OpenAI/ACP require bearer authentication by default (falling back to the
+  operator token); tokenless local OpenAI/ACP/A2A requires the explicit loopback
+  compatibility flag. Containers explicitly bind inside their namespace and
+  require an operator token.
+- **Breaking update-order change:** local updates and rollbacks stop running
+  managed workers before restarting the controller, then restart those workers
+  only after the controller is healthy. A managed Lemon Bot backend updates with
+  the runtime and restarts afterward if it was running. Remote workers are never
+  silently updated; update each host explicitly.
+- Consolidated the canonical [Lemon Bot getting-started guide](docs/getting-started/lemon-bot.md)
+  around the three setup paths: Mac app, Terminal/browser (local or headless),
+  and adding a second execution machine. Documentation distinguishes listener exposure, service persistence,
+  destination-local model readiness and explicit access consent.
+
+### Fixed
+
+- Profile memory transfers enforce the complete source snapshot's JSON size budget
+  before scanning document credentials, rejecting oversized snapshots consistently
+  instead of reporting memory unavailable when Elixir 1.20.5 raises a regex match limit.
+- Source and packaged launchers use portable GNU/BSD permission probes and
+  consistently abbreviate controller log paths with `~` in status output.
+- CLI setup and service handling honor their typed readiness and error contracts
+  under Elixir 1.20 / OTP 29 without unreachable fallback clauses.
+- Harden runtime text screening for Elixir 1.20 regex match-limit exceptions:
+  redaction withholds unscannable values, secret obfuscation withholds
+  an incompletely screened batch, and skill audits, shell guards and schema
+  validation fail closed. SMS matchers return explicit errors without claiming
+  messages; service readiness keeps its managed handle. Document/web extraction,
+  search, previews and provider-error classification now handle adversarial text
+  predictably. Remove overlapping dotenv/config, path-redaction and compaction
+  patterns instead of relying on regex backtracking limits.
+- Named workers refuse credential-bearing loopback connections unless the listener
+  belongs to their OS user, including tunneled MCP requests. Deliberate cross-user
+  deployments can opt out with `LEMON_NODE_TRUST_LOOPBACK_LISTENER=1`.
+- Isolate named workers' DETS state from the controller, guard against concurrent
+  VM writers, back up and rebuild the controller's legacy DETS files once, and
+  expose local worker state with `lemon node status --name NAME --json`.
+- Execution-node sessions renew while connected and expire after seven days
+  without contact. Rejected or missing credentials park the worker until repair
+  saves new credentials, while controller outages retry without restart loops.
+- Stop the Lemon Bot transcript (Mac and iPhone) from pinning a CPU core in an
+  endless SwiftUI layout loop while a conversation is open.
+- Setup caches Keychain lookups only for the command lifetime, reports model
+  readiness truthfully, and checks Codex account model access without generating
+  a message. `lemon setup model` and opt-in provider-management readiness/check/
+  import methods support explicit connection and destination-local login consent.
+- Load the certificate provider and core secrets store before Telegram and Discord
+  setup make their first HTTPS request, preserving TLS verification and avoiding
+  `store_unavailable` crashes in cold source and packaged CLI invocations.
+
+### Removed
+
+- Removed software-factory project registration, test-runner lease routing, and
+  factory-only CI checkout attestations and contract fixtures.
+
+---
+
+## [2026.11.1]
+
+### Changed
+
+- Refresh `lemon_ai` model catalogs for current models, including GPT-6.1 Terra,
+  Gemini 4 Argon, Kimi K3.1 Pro, MiniMax M3.1 Flash and newer gateway offerings,
+  with updated pricing, token limits and capability metadata.
+
+### Fixed
+
+- The terminal integration check waits for the rendered answer as well as
+  completion signals, avoiding a race that could fail the client release gate.
+
+---
+
+## [2026.11.0]
+
+### Added
+
+- Address existing conversations with durable agent handles and stable addresses:
+  `/agent-name`, `/agents`, and `/tell` in the TUI, plus separate Lemon Bot handles,
+  discovery, and addressed messaging. Renaming a handle preserves the conversation
+  and stable ID; titles, personas, file references, and family task addresses remain
+  separate. Replies return to the originating conversation, with explicit accepted,
+  completed, failed, or outcome-unknown receipts and owner-scoped Bot visibility.
 
 ---
 

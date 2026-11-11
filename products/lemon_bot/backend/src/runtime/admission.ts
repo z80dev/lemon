@@ -4,6 +4,7 @@ import { ApiError, errorEnvelope, fail } from '../core/errors';
 import { id, parse, z } from '../core/validation';
 import { nativeBotToolPolicy } from '../core/experiences';
 import { buildInvocationContext, buildMemoryContextKey, effectiveInvocationAudience, type InvocationContext, type RuntimeMapping } from './runs';
+import { runOrigin } from '../core/approval-allowances';
 
 export const nativeFollowupAdmissionPath = '/internal/runtime/followup/admission';
 interface Issuer { botId: string; profileId: string; url: string; digest: string; encryptedToken: string; state: 'pending' | 'configured' | 'rejected' | 'outcome_unknown' }
@@ -134,6 +135,8 @@ export function createRuntimeAdmissionRoutes(services: BackendServices): Route[]
       const resource = fresh;
       services.store.transaction(() => {
         services.store.put('runs', resource); services.store.setMetadata(`nativeRunProduct:${runId}`, resource.id); services.store.setMetadata(`runtimeRun:${resource.id}`, bound); services.store.setMetadata(`runPrincipal:${resource.id}`, authority.actor);
+        const origins = [runOrigin(services, authority.root.run.id), runOrigin(services, authority.parent.run.id)];
+        services.store.setMetadata(`runApprovalOrigin:${resource.id}`, origins.find(origin => !['owner_chat', 'routine', 'native_followup'].includes(origin)) ?? 'native_followup');
         services.store.setMetadata(`runParent:${resource.id}`, authority.parent.run.id); services.store.setMetadata(`nativeRootSource:${resource.id}`, lineage.sourceRootRunId); services.store.setMetadata(`runIntent:${resource.id}`, reservation.fingerprint);
         for (const prefix of ['runReturnConversation', 'runSourceEntry', 'runNoHandoff']) { const value = services.store.metadata(`${prefix}:${authority.root.run.id}`); if (value !== null) services.store.setMetadata(`${prefix}:${resource.id}`, value); }
         reservation.runId = resource.id; services.store.setMetadata(key, reservation); services.events.emit('run.upserted', resource, { conversationId: resource.conversationId, botId: resource.botId });

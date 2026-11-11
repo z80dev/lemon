@@ -1,6 +1,8 @@
 import type { Database } from 'bun:sqlite';
 import type * as P from '../../../contracts/protocol';
 import type { InvocationMcpServer } from '../runtime/runs';
+import type { AddressedAgentService } from './agent-addressing';
+import type { JitAccessService } from './access';
 
 export interface HttpClient { (input: RequestInfo | URL, init?: RequestInit): Promise<Response> }
 export type Entity = P.Resource & Record<string, unknown>;
@@ -30,7 +32,7 @@ export interface EventService {
   visible(principal: Principal, event: P.RealtimeEvent, audience: EventAudience): boolean;
   subscribe(listener: (event: P.RealtimeEvent, audience: EventAudience) => void): () => void;
 }
-export interface AuthSessionOptions { persistent?: boolean }
+export interface AuthSessionOptions { persistent?: boolean; localConfirmed?: boolean }
 export interface AccessService {
   authenticate(request: Request, policy?: Authentication): Promise<Principal | null>;
   user(userId: string): P.User;
@@ -84,7 +86,7 @@ export interface GateService {
   wait<T = unknown>(collection: string, id: string): Promise<T>;
   cancelUser(userId: string): void;
 }
-export interface WorkspaceToolRestrictions { localExecutionCeiling: P.Policies['localExecutionCeiling']; rules: P.PolicyRule[]; allowedMcpOrigins: string[] | null; requireReview: boolean }
+export interface WorkspaceToolRestrictions { localExecutionCeiling: P.Policies['localExecutionCeiling']; rules: P.PolicyRule[]; allowedMcpOrigins: string[] | null; requireReview: boolean; folderReadsNeedReview: boolean }
 export interface IntegrationServices {
   admission(principal: Principal, botId: string, routineId?: string): Promise<void>;
   effectivePolicy(principal: Principal, botId?: string): Promise<P.EffectivePolicy>;
@@ -98,7 +100,7 @@ export interface IntegrationServices {
   providerCapabilities(): Partial<P.Capabilities> & { inventory?: unknown[] };
   speech?(principal: Principal, request: P.SpeechRequest, provenance?: P.DeliverableProvenance): Promise<P.SpeechResult>;
   deprovisionUser?(userId: string): Promise<void>;
-  requireSSO?(userId: string): Promise<boolean> | boolean;
+  requireSSO?(userId: string): boolean;
   reconcile?(): Promise<void>;
   authorizeConnector?(principal: Principal, input: { connectorId: string; botId: string; conversationId: string; toolName: string; operationId: string }): Promise<void>;
   connectorProvisioning?(principal: Principal, botId: string): Promise<unknown>;
@@ -117,6 +119,7 @@ export interface IntegrationServices {
 }
 export interface BackendConfiguration {
   publicUrl: string; controlUrl: string; dataDir: string; host: string; port: number;
+  loopbackOrigin?: string | null;
   /** Current controller credential. With `operatorTokenFile` set, the controller link refreshes it from that launcher-managed file before every connection attempt. */
   operatorToken: string;
   operatorTokenFile?: string;
@@ -127,7 +130,8 @@ export interface BackendConfiguration {
 }
 export interface BackendServices {
   config: BackendConfiguration; store: EntityStore; events: EventService; auth: AccessService; mutations: MutationService;
-  lemon: LemonService; runtime: RuntimeService; attachments: AttachmentService; gates: GateService; integrations: IntegrationServices;
+  lemon: LemonService; runtime: RuntimeService; addressedAgents: AddressedAgentService; attachments: AttachmentService; gates: GateService; integrations: IntegrationServices;
+  access?: JitAccessService;
   http?: HttpClient;
   id(prefix?: string): string;
   now(): number;

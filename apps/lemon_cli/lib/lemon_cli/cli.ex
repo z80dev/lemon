@@ -58,10 +58,19 @@ defmodule LemonCli.CLI do
   Starts only the core services needed to read encrypted credentials; a cold
   source-wrapper invocation has not started the secrets store yet.
   """
-  @spec setup_required?() :: boolean()
-  def setup_required? do
-    ensure_apps_started!([:lemon_core])
-    not Readiness.ready?(Readiness.status())
+  @spec setup_required?(keyword()) :: boolean()
+  def setup_required?(opts \\ []) do
+    MasterKey.scoped(fn ->
+      ensure_apps_started!([:lemon_core])
+      status = Readiness.status()
+
+      if Keyword.get(opts, :model_optional, false) do
+        pending = Readiness.pending_steps(status)
+        :config in pending or :secrets in pending
+      else
+        not Readiness.ready?(status)
+      end
+    end)
   end
 
   @doc """
@@ -75,6 +84,12 @@ defmodule LemonCli.CLI do
   def main(argv) do
     :ok = :io.setopts(:standard_io, encoding: :unicode)
     :ok = :io.setopts(:standard_error, encoding: :unicode)
+
+    # One-shot commands start core services too, but their boot chatter is not
+    # command output. Keep warnings/errors and long-running log streams intact.
+    unless List.first(argv) in ["node", "logs"] do
+      :ok = :logger.set_primary_config(:level, :warning)
+    end
 
     exit_code =
       LogSilencer.with_quiet_logs(
@@ -148,7 +163,7 @@ defmodule LemonCli.CLI do
           print_command_usage(entry)
           @exit_ok
 
-        CommandRegistry.lifecycle?(command) ->
+        command != "uninstall" and CommandRegistry.lifecycle?(command) ->
           IO.puts(:stderr, "`lemon #{command}` is handled by the lemon launcher script.")
           @exit_usage
 
@@ -226,6 +241,8 @@ defmodule LemonCli.CLI do
   defp run_command("completion", args), do: LemonCli.CompletionCommand.run(args)
   defp run_command("migrate", args), do: LemonCli.MigrateCommand.run(args)
   defp run_command("node", args), do: run_node(args)
+  defp run_command("service", args), do: LemonCli.ServiceCommand.run(args)
+  defp run_command("uninstall", args), do: LemonCli.UninstallCommand.run(args)
 
   defp run_command("version", ["--verbose"]) do
     IO.puts(LemonCore.Update.Version.describe())
@@ -258,16 +275,21 @@ defmodule LemonCli.CLI do
   # source umbrella load it, so resolve the node CLI at runtime.
   defp execution_node_cli, do: Module.concat(["CodingAgent", "ExecutionNode", "CLI"])
 
-  defp run_node([command | args]) when command in ["join", "capabilities"] do
+  defp run_node([command | args]) when command in ["join", "capabilities", "status"] do
     node_cli = execution_node_cli()
 
     if Code.ensure_loaded?(node_cli) do
       if command == "join", do: ensure_apps_started!([:lemon_cli])
-      forwarded = if command == "capabilities", do: [command | args], else: args
+      forwarded = if command == "join", do: args, else: [command | args]
 
       case node_cli.run(forwarded) do
         :ok ->
           @exit_ok
+
+        {:error, reason}
+        when reason in [:enrollment_outcome_unknown, "enrollment_outcome_unknown"] ->
+          IO.puts(:stderr, "lemon node #{command}: enrollment_outcome_unknown")
+          @exit_error
 
         {:error, message} ->
           IO.puts(:stderr, "lemon node #{command}: #{message}")
@@ -300,24 +322,33 @@ defmodule LemonCli.CLI do
   # needed, runs the wizard and re-checks, so a configured install pays for a
   # single boot and an unconfigured daemon is never started.
   defp run_setup_if_required(args) do
-    if setup_required?() do
-      IO.puts("Setup is required before Lemon can start; launching `lemon setup`.")
-      wizard_status = run_wizard(args, launch: false)
+    MasterKey.scoped(fn ->
+      model_optional? = "--model-optional" in args
+      args = List.delete(args, "--model-optional")
+      opts = if model_optional?, do: [model_optional: true], else: []
 
-      if setup_required?() do
-        IO.puts(:stderr, "Setup is incomplete. Run `lemon setup` to finish configuration.")
-        if wizard_status == @exit_ok, do: @exit_error, else: wizard_status
+      if setup_required?(opts) do
+        IO.puts("Setup is required before Lemon can start; launching `lemon setup`.")
+        wizard_opts = [launch: false] ++ if(model_optional?, do: [model_optional: true], else: [])
+        wizard_status = run_wizard(args, wizard_opts)
+
+        if setup_required?(opts) do
+          IO.puts(:stderr, "Setup is incomplete. Run `lemon setup` to finish configuration.")
+          if wizard_status == @exit_ok, do: @exit_error, else: wizard_status
+        else
+          @exit_ok
+        end
       else
         @exit_ok
       end
-    else
-      @exit_ok
-    end
+    end)
   end
 
   defp run_wizard(args, opts \\ []) do
     case Wizard.run(args, Runner.default_io(), Keyword.put(opts, :usage_command, "lemon setup")) do
       :ok -> @exit_ok
+      {:error, :usage} -> 64
+      {:error, :not_ready} -> @exit_error
       {:error, reason} -> exit_code_for(reason)
     end
   end
@@ -332,6 +363,9 @@ defmodule LemonCli.CLI do
   end
 
   defp run_gateway(args) do
+    # Release eval and source --no-start invocations have no secrets store yet.
+    ensure_apps_started!([:lemon_core])
+
     # The launcher contract is `gateway setup <transport>`; the bare
     # `gateway <transport>` form forwards identically.
     forwarded =
@@ -345,6 +379,10 @@ defmodule LemonCli.CLI do
       {:error, reason} -> exit_code_for(reason)
     end
   end
+
+  # `setup model` usage errors use the shell convention exit 64, so the
+  # `lemon-bot` terminal can feature-detect an older runtime.
+  defp exit_code_for(:usage), do: 64
 
   defp exit_code_for(reason)
        when reason in [:unknown_subcommand, :unknown_transport, :invalid_arguments],

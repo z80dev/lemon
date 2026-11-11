@@ -1,6 +1,6 @@
 ARG LEMON_GIT_SHA=unknown
 
-FROM hexpm/elixir:1.19.5-erlang-28.5-debian-bookworm-20260505 AS build
+FROM hexpm/elixir:1.20.5-erlang-29.1.2-debian-bookworm-20261104 AS build
 
 ARG LEMON_GIT_SHA
 

@@ -62,8 +62,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - otp: "28.5"
-            elixir: "1.19.5"
+          - otp: "29.1.2"
+            elixir: "1.20.5"
             advisory: false
           - otp: "26.2"
             elixir: "1.15.8"
@@ -98,8 +98,8 @@ jobs:
       - name: Setup BEAM
         uses: erlef/setup-beam@v1
         with:
-          otp-version: "28.5"
-          elixir-version: "1.19.5"
+          otp-version: "29.1.2"
+          elixir-version: "1.20.5"
           # setup-beam never retries a mirror; jsDelivr proxies builds.hex.pm.
           hexpm-mirrors: |
             https://builds.hex.pm

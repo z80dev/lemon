@@ -1,6 +1,6 @@
 # Native macOS app
 
-`LemonBotMacApp` hosts the shared `LemonBotRootView(store:)` and one menu-bar entry. Requires macOS 14+, the shared LemonBotKit/LemonBotUI products, and a Lemon Bot backend on this Mac or on a machine you can `ssh` into. First launch connects to either in one click with that machine's private key — no email, password or setup code; see [Connect the Mac app](../README.md#connect-the-mac-app). The Apple project owns build/signing settings; this directory supplies `Info.plist` and `LemonBotMac.entitlements`.
+`LemonBotMacApp` hosts the shared `LemonBotRootView(store:)` and one menu-bar entry. Requires macOS 14+ and the shared LemonBotKit/LemonBotUI products. **This Mac → Connect** installs missing runtime/backend components, resumes supervised setup and signs in with this machine's private key; connecting to another backend uses SSH. Neither requires an email, password or setup-code form. See [Connect the Mac app](../README.md#connect-the-mac-app) for installation prerequisites. The Apple project owns build/signing settings; this directory supplies `Info.plist` and `LemonBotMac.entitlements`.
 
 ## Connect iPhone
 
@@ -46,6 +46,23 @@ Launch restores a saved Keychain-backed account, registers this Mac, and publish
 
 Neither configuration enables App Sandbox: the app runs `ssh` and starts `lemon-bot` as your user, like Terminal (Developer ID distribution permits this). Mac Debug selects `LemonBotMacDebug.entitlements` with explicit microphone/Speech and no profile-requiring APNs or App Group capabilities. Its empty `APS_ENVIRONMENT` disables remote registration at startup and in both notification permission actions; local notification permission and delivery remain available. Mac Release retains `LemonBotMac.entitlements` and production `APS_ENVIRONMENT`, requiring a matching APNs signing profile/team and the backend's real key/team/topic configuration. The Mac has no App Group consumer; the iOS app/share group's entitlement and APNs configuration are unchanged. No screen/Accessibility/full-disk entitlement is requested.
 
+## macOS permissions
+
+Owners and admins can open **macOS permissions** in this Mac's machine detail.
+It is not shown for remote machines or during setup. The embedded **Lemon Bot
+Worker.app** provides a non-prompting status probe; **Allow…** is an explicit,
+explained request through that helper. Full Disk Access and folder permissions
+link to System Settings. Returning to the app or choosing **Check again** reads
+fresh machine capabilities.
+
+For an existing unwrapped worker, **Use Lemon Bot Worker** repairs its service
+with the embedded executable and restarts it once. Install Lemon Bot in
+`/Applications` or `~/Applications` first. The helper is not a sandbox: any Bot
+command can use its grants. Developer ID signing supplies a stable bundle
+identity; attribution and grant persistence across upgrades still require the
+disposable-Mac release validation. Ad-hoc Debug rebuilds do not promise retained
+grants. Setup and passive capability checks never request these permissions.
+
 ## Integration checks (parent-owned)
 
 Generate the XcodeGen project and build the LemonBotMac scheme with `CODE_SIGNING_ALLOWED=NO` for compilation-only CI. For actual login/Keychain checks, use the ad-hoc-signed Debug build and exact replacement/launch commands in the [Apple build guide](../README.md#generate-build-and-launch). Sign in, quit and relaunch that same app, and confirm the saved account restores; also save/resume/cancel a pending pairing across a restart. macOS uses encrypted, non-iCloud-sync local login-Keychain items, not iOS `ThisDeviceOnly` protection. Do not infer storage success from mocked lifecycle tests. On a signed Mac, also exercise shortcut conflicts/press-release during permission dialogs, denied/no-input Speech, draft preservation across conversations/accounts, actual backend voice preview/transcription/TTS and fallback, active-call mute/end, explicit Services/file import, foreground same-room suppression versus another room, and revoked/foreign-workspace deep links. Implementation workers do not run builds, tests, lint, formatting, XcodeGen, permission prompts or provider probes.
@@ -64,4 +81,3 @@ Generate the XcodeGen project and build the LemonBotMac scheme with `CODE_SIGNIN
 - Corrected account and pending-pairing persistence to use one explicit non-sync local login Keychain on macOS, without unsupported iOS accessibility attributes. iOS retains `AfterFirstUnlockThisDeviceOnly`; credential access failures still surface without fallback or deletion. Debug Mac builds default to local ad-hoc signing, and runtime instructions replace the unsigned app rather than treating a compilation-only build as a storage check.
 - Split local Mac Debug signing from provisioned Release capabilities: Debug omits APNs and the unused Mac App Group, while all notification-registration callers respect the selected configuration. Local notifications and sandbox/network/selected-file permissions remain enabled. This configuration still requires integration-owner build and real app verification; an ad-hoc signing request is not a successful-build receipt.
 - Fixed the macOS account enumeration query: bulk password-data reads are invalid for the login Keychain. It now enumerates this service's non-sync item references and reads each exact password separately, without deleting, migrating or silently skipping saved credentials. Pending-pairing reads remain single-item operations.
-- Added **Start Lemon** for a down loopback backend: copies a shell-quoted command and opens Terminal without executing it. Paste and press Return to start Lemon and Lemon Bot as your user. Runtime discovery includes installed launchers and the configured checkout's `bin/lemon`; bounded health polling alone confirms success. Failures are bounded/redacted. No scripts, Apple Events, entitlement changes, auto-start, privilege escalation or launchd install. See the [setup and manual hand-off checklist](../README.md#connection-recovery).

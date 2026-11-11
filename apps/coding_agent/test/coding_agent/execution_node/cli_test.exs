@@ -4,6 +4,105 @@ defmodule CodingAgent.ExecutionNode.CLITest do
   alias CodingAgent.ExecutionNode.CLI
   alias CodingAgent.ExecutionNode.Worker
 
+  defmodule UnavailableSocket do
+    def start_link(_opts), do: {:error, :fixture_socket_unavailable}
+  end
+
+  setup do
+    original = Application.fetch_env(:lemon_core, :require_owned_loopback)
+    trust = System.get_env("LEMON_NODE_TRUST_LOOPBACK_LISTENER")
+
+    on_exit(fn ->
+      case original do
+        {:ok, value} -> Application.put_env(:lemon_core, :require_owned_loopback, value)
+        :error -> Application.delete_env(:lemon_core, :require_owned_loopback)
+      end
+
+      if trust,
+        do: System.put_env("LEMON_NODE_TRUST_LOOPBACK_LISTENER", trust),
+        else: System.delete_env("LEMON_NODE_TRUST_LOOPBACK_LISTENER")
+    end)
+  end
+
+  @tag :tmp_dir
+  test "enables ownership checks unless the exact explicit trust opt-out is set", %{tmp_dir: root} do
+    for {override, required?} <- [{nil, true}, {"true", true}, {"0", true}, {"1", false}] do
+      if override,
+        do: System.put_env("LEMON_NODE_TRUST_LOOPBACK_LISTENER", override),
+        else: System.delete_env("LEMON_NODE_TRUST_LOOPBACK_LISTENER")
+
+      assert {:error, _} =
+               CLI.run(
+                 [
+                   "--name",
+                   "guard-fixture",
+                   "--controller",
+                   "ws://127.0.0.1:4044/ws",
+                   "--token",
+                   "fixture-token",
+                   "--cwd",
+                   root
+                 ],
+                 configure_state: fn _ -> :ok end,
+                 ensure_all_started: fn _ -> {:ok, []} end,
+                 socket_module: UnavailableSocket,
+                 status_writer: fn _, _ -> :ok end
+               )
+
+      assert Application.get_env(:lemon_core, :require_owned_loopback) == required?
+    end
+
+    assert CLI.help() =~ "LEMON_NODE_TRUST_LOOPBACK_LISTENER=1"
+    assert CLI.help() =~ "another uid"
+  end
+
+  test "explains refused loopback ownership without exposing credentials" do
+    assert {:error, reason} =
+             CLI.run(
+               [
+                 "--name",
+                 "guard-fixture",
+                 "--controller",
+                 "ws://127.0.0.1:4044/ws",
+                 "--token",
+                 "private-node-token"
+               ],
+               configure_state: fn _ -> {:error, :loopback_listener_not_owned} end
+             )
+
+    assert reason =~ "not owned by this user"
+    assert reason =~ "LEMON_NODE_TRUST_LOOPBACK_LISTENER=1"
+    refute reason =~ "private-node-token"
+  end
+
+  @tag :tmp_dir
+  test "forwards an isolated status writer to a real worker", %{tmp_dir: tmp_dir} do
+    parent = self()
+
+    assert {:error, _} =
+             CLI.run(
+               [
+                 "--name",
+                 "status-writer-fixture",
+                 "--controller",
+                 "ws://127.0.0.1:12345/ws",
+                 "--token",
+                 "fixture-token",
+                 "--cwd",
+                 tmp_dir
+               ],
+               configure_state: fn _ -> :ok end,
+               ensure_all_started: fn _ -> {:ok, []} end,
+               socket_module: UnavailableSocket,
+               status_writer: fn name, status ->
+                 send(parent, {:worker_status, name, status})
+                 :ok
+               end
+             )
+
+    assert_receive {:worker_status, "status-writer-fixture", %{"state" => "starting"}}
+  end
+
   test "parses the node join surface" do
     assert {:ok, opts} =
              CLI.parse([
@@ -81,6 +180,18 @@ defmodule CodingAgent.ExecutionNode.CLITest do
     assert opts[:invite_code_stdin]
     refute opts[:invite_code]
     refute opts[:operator_token]
+  end
+
+  test "invite enrollment rejects discarded ports instead of defaulting the controller" do
+    for controller <- [
+          "wss://controller.example:65536/ws",
+          "wss://controller.example:99999/ws",
+          "ws://127.0.0.1:65536/ws",
+          "wss://[::1]:65536/ws"
+        ] do
+      assert {:error, "invalid enrollment name or secure controller URL"} =
+               CLI.parse(["--name", "bot", "--controller", controller, "--invite-code-stdin"])
+    end
   end
 
   test "rejects invite recovery combinations and never echoes enrollment secrets" do
@@ -253,6 +364,72 @@ defmodule CodingAgent.ExecutionNode.CLITest do
              Worker.handle_info({:execution_node_socket, self(), {:connected, %{}}}, state)
   end
 
+  test "one-shot local runtime startup failure has a bounded non-rejection result" do
+    deps = [
+      runtime_features: fn -> %{"botReady" => true} end,
+      configure_state: fn _ -> :ok end,
+      ensure_all_started: fn _ ->
+        {:error, {:coding_agent, {:health, :eaddrinuse, "/private/path"}}}
+      end
+    ]
+
+    ExUnit.CaptureIO.capture_io([input: String.duplicate("A", 43) <> "\n"], fn ->
+      assert {:error, "enroll_start_failed:address_in_use"} =
+               CLI.run(
+                 [
+                   "--name",
+                   "bot",
+                   "--controller",
+                   "wss://controller.example/ws",
+                   "--invite-code-stdin",
+                   "--enroll-only"
+                 ],
+                 deps
+               )
+    end)
+  end
+
+  test "only an explicit pre-consumption controller refusal rejects an invite" do
+    state = %Worker{socket: self(), socket_mode: :pairing, invite_code: String.duplicate("A", 43)}
+    rejection = %{"code" => "UNAUTHORIZED", "message" => "private server diagnostic"}
+
+    assert {:stop, {:pairing_failed, :invite_rejected}, ^state} =
+             Worker.handle_info(
+               {:execution_node_socket, self(), {:response, :pair_request, {:error, rejection}}},
+               state
+             )
+
+    assert {:stop, {:pairing_failed, :outcome_unknown}, ^state} =
+             Worker.handle_info(
+               {:execution_node_socket, self(),
+                {:response, {:pair_challenge, "node"}, {:error, rejection}}},
+               state
+             )
+
+    for {stage, outcome} <- [{nil, :invite_rejected}, {:requesting, :outcome_unknown}] do
+      current = %{state | pairing_stage: stage}
+
+      assert {:noreply, ^current} =
+               Worker.handle_info(
+                 {:execution_node_socket, self(), {:authentication_error, rejection}},
+                 current
+               )
+
+      assert_receive {:stop_after_authentication_error, {:pairing_failed, ^outcome}}
+    end
+
+    worker =
+      spawn(fn ->
+        receive do
+          :reject -> exit({:pairing_failed, :invite_rejected})
+        end
+      end)
+
+    monitor = Process.monitor(worker)
+    send(worker, :reject)
+    assert {:error, :invite_rejected} = CLI.await_worker(worker, monitor, enroll_only: true)
+  end
+
   test "normalizes the destination execution capability ceiling" do
     assert {:ok, :all} = CLI.execution_capabilities([], nil)
     assert {:ok, :all} = CLI.execution_capabilities([capabilities: "*"], "read")
@@ -264,5 +441,82 @@ defmodule CodingAgent.ExecutionNode.CLITest do
 
     assert {:error, "--capabilities must be 'all' or a comma-separated tool list"} =
              CLI.execution_capabilities([capabilities: ""], nil)
+  end
+
+  test "--enroll-only requires --invite-code-stdin" do
+    assert {:error, "--enroll-only requires --invite-code-stdin"} =
+             CLI.parse([
+               "--name",
+               "bot",
+               "--controller",
+               "wss://controller.example/ws",
+               "--enroll-only"
+             ])
+
+    assert {:ok, opts} =
+             CLI.parse([
+               "--name",
+               "bot",
+               "--controller",
+               "wss://controller.example/ws",
+               "--invite-code-stdin",
+               "--enroll-only"
+             ])
+
+    assert opts[:enroll_only] == true
+    assert opts[:invite_code_stdin] == true
+  end
+
+  test "--enroll-only stops the worker before returning the first online status" do
+    {:ok, worker} = Agent.start(fn -> :enrolled end)
+    monitor = Process.monitor(worker)
+    send(self(), {:execution_node_worker, worker, {:status, :online, "node-abc"}})
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        assert :ok = CLI.await_worker(worker, monitor, enroll_only: true)
+      end)
+
+    assert output =~ "Execution node online (node-abc)"
+    refute Process.alive?(worker)
+  end
+
+  test "uncertain enrollment returns its stable code without another exchange" do
+    worker =
+      spawn(fn ->
+        receive do
+          :fail -> exit({:pairing_failed, :outcome_unknown})
+        end
+      end)
+
+    monitor = Process.monitor(worker)
+    send(worker, :fail)
+
+    assert {:error, :enrollment_outcome_unknown} =
+             CLI.await_worker(worker, monitor, enroll_only: true)
+
+    refute Process.alive?(worker)
+  end
+
+  test "a parked one-shot enrollment exits without leaving a worker running" do
+    {:ok, worker} = Agent.start(fn -> :enrolling end)
+    monitor = Process.monitor(worker)
+    send(self(), {:execution_node_worker, worker, {:status, :needs_reauthorization, :expired}})
+
+    ExUnit.CaptureIO.capture_io(fn ->
+      assert {:error, :enrollment_outcome_unknown} =
+               CLI.await_worker(worker, monitor, enroll_only: true)
+    end)
+
+    refute Process.alive?(worker)
+  end
+
+  test "normal exit before online never claims one-shot enrollment succeeded" do
+    {:ok, worker} = Agent.start(fn -> :enrolling end)
+    monitor = Process.monitor(worker)
+    Agent.stop(worker)
+
+    assert {:error, :enrollment_outcome_unknown} =
+             CLI.await_worker(worker, monitor, enroll_only: true)
   end
 end

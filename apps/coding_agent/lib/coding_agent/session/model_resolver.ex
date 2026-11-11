@@ -198,11 +198,11 @@ defmodule CodingAgent.Session.ModelResolver do
   defp resolve_role_model(spec, settings), do: resolve_session_model(spec, settings)
 
   defp check_role_availability!(
-         %LemonAi.Types.Model{provider: :"openai-codex"} = model,
+         %LemonAi.Types.Model{provider: :openai_codex} = model,
          settings,
          selector
        ) do
-    token = build_get_api_key(settings).(:"openai-codex")
+    token = build_get_api_key(settings).(:openai_codex)
 
     # Declarative model resolution also runs without credentials (for previews
     # and custom stream functions). Verify account support when a concrete
@@ -696,11 +696,11 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp provider_to_atom(_), do: nil
 
-  # SettingsManager keeps legacy config compatibility by representing dashed
-  # provider names as underscored atoms (for example :openai_codex). Model
-  # registry keys retain their canonical spelling (for example
-  # :"openai-codex"), so canonicalize only at this registry boundary. Unknown
-  # providers are preserved for the existing custom-provider fallback path.
+  # SettingsManager keeps legacy config compatibility by representing provider
+  # names as underscored atoms (for example :openai_codex). Model registry keys
+  # use the same canonical spelling, so canonicalize only at this registry
+  # boundary. Unknown providers are preserved for the existing custom-provider
+  # fallback path.
   defp canonical_registry_provider(provider) when is_atom(provider) do
     provider
     |> Atom.to_string()

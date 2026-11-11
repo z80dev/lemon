@@ -26,7 +26,7 @@ struct SidebarView: View {
     @State private var showHidden = false
     @State private var unreadOnly = false
     @State private var visibleRows: Set<ID> = []
-    @State private var previews: [ID: SidebarPreview] = [:]
+    @State private var previews: [ID: (lastEntryID: ID, text: String?)] = [:]
     @State private var action = UIActionState()
     @State private var showConnection = false
     @FocusState private var filterFocused: Bool
@@ -87,8 +87,9 @@ struct SidebarView: View {
         .searchable(text: $query, isPresented: $searching, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search Bots and groups")
         .toolbar { phoneToolbar }
         #endif
-        .task(id: previewKey) { await loadPreviews() }
+        .task(id: store.sidebarPreviewKey) { await loadPreviews() }
         #if os(macOS)
+        .task(id: store.hostSetupTrigger) { Task { await store.automaticallySetUpHostMachine() } }
         .popover(isPresented: $showConnection) { ScrollView { ConnectionStatusView(store: store).padding(12) }.frame(width: 440, height: 520) }
         #else
         .sheet(isPresented: $showConnection) {
@@ -108,6 +109,11 @@ struct SidebarView: View {
         #endif
         if !pinned.isEmpty { pinnedRow.padding(.bottom, 10).sidebarRow() }
         utilityRows
+        #if os(macOS)
+        if !store.bots.isEmpty {
+            HostOfflineBanner(store: store, bot: store.bots.first { $0.id == selectedBotID }).sidebarRow()
+        }
+        #endif
         if store.bots.isEmpty { setupRow.sidebarRow() }
         botList
         roomList
@@ -266,6 +272,7 @@ struct SidebarView: View {
             if let machine = store.machines.first(where: { $0.status == "online" }) {
                 Text("Create your first Bot").font(LBFont.rowTitle).foregroundStyle(LB.ink)
                 Text("\(machine.name) is ready. Give your Bot a name and a job.").font(LBFont.meta).foregroundStyle(LB.muted)
+                readinessLine(for: machine)
                 Button("Create a Bot") { newBot() }.buttonStyle(.lemonPrimary)
             } else {
                 #if os(macOS)
@@ -276,11 +283,25 @@ struct SidebarView: View {
             }
         }
         .padding(.horizontal, 4).padding(.vertical, 8)
-        #if os(macOS)
-        .task(id: "\(store.account?.id ?? "")|\(store.connectionState)|\(store.machines.count)") {
-            if store.shouldSetUpHost { await store.setUpHostMachine() }
+    }
+    /// First-run readiness for the sole online machine. It never replaces a provider target the
+    /// owner already loaded elsewhere, and an unreadable readiness simply shows nothing.
+    @ViewBuilder private func readinessLine(for machine: Machine) -> some View {
+        let readiness = store.providerSettings.machineID == machine.id ? store.providerSettings.management?.readiness : nil
+        Group {
+            if let readiness {
+                switch readiness.state {
+                case .verified: Text("Model: Verified").font(LBFont.meta).foregroundStyle(LB.success)
+                case .saved: Text("Model: Saved").font(LBFont.meta).foregroundStyle(LB.muted)
+                case .actionRequired, .notConfigured: Text("Model: Not connected").font(LBFont.meta).foregroundStyle(LB.warning)
+                }
+            }
         }
-        #endif
+        .task(id: machine.id) {
+            guard store.canManageProviders, store.providerSettings.machineID != machine.id,
+                  store.providerSettings.management == nil, store.providerPendingIntents.isEmpty else { return }
+            await store.selectProviderTarget(machineID: machine.id)
+        }
     }
 
     @ViewBuilder private var attachContent: some View {
@@ -527,17 +548,13 @@ struct SidebarView: View {
 
     private func presence(_ bot: Bot) -> AvatarPresence { AvatarPresence(activity: bot.activity, online: store.isOnline) }
 
-    private var previewKey: String {
-        (store.bots.map(\.mainConversationId) + rooms.map(\.id)).map { id in "\(id):\(store.conversations.first { $0.id == id }?.lastEntryId ?? "")" }.joined(separator: "|")
-    }
     private func loadPreviews() async {
         for room in store.conversations where ["dm", "task", "group"].contains(room.kind) {
-            guard let lastID = room.lastEntryId, previews[room.id]?.entryID != lastID else { continue }
-            let entry: TranscriptEntry?
-            if let cached = store.entries[room.id]?.last(where: { $0.id == lastID }) { entry = cached }
-            else if store.isOnline { entry = try? await store.read(resourcePath("entries", lastID)) }
-            else { entry = nil }
-            if let entry, let preview = SidebarPreview(entry: entry, userID: store.user?.id) { previews[room.id] = preview }
+            guard let lastID = room.lastEntryId, previews[room.id]?.lastEntryID != lastID else { continue }
+            do {
+                let preview = try await store.sidebarPreview(in: room)
+                if preview != nil || store.isOnline { previews[room.id] = (lastID, preview?.text) }
+            } catch { /* A later summary change or reconnect retries failed reads. */ }
         }
     }
     private func sidebar(_ bot: Bot, _ fields: JSONObject) async {
@@ -568,6 +585,46 @@ struct SidebarView: View {
     }
 }
 
+/// A persistent recovery surface shared by the Bot list and conversation header.
+#if os(macOS)
+struct HostOfflineBanner: View {
+    let store: LemonBotStore
+    let bot: Bot?
+    var belowHeader = false
+
+    private var machine: Machine? {
+        if let bot { return store.machines.first { $0.id == bot.machineId && $0.status == "offline" } }
+        return store.machines.first { $0.nodeName == store.hostMachineNodeName && $0.status == "offline" }
+    }
+
+    var body: some View {
+        if let machine {
+            SoftCard(fill: LB.raised) {
+                Text(machine.needsReconnect ? "\(machine.name) needs reconnecting" : "\(machine.name) is offline").font(LBFont.rowTitle).foregroundStyle(LB.ink)
+                if store.hostRoute != nil && machine.nodeName == store.hostMachineNodeName && ["owner", "admin"].contains(store.member?.role ?? "") {
+                    switch store.hostSetup {
+                    case .running(let step):
+                        HStack { ProgressView().controlSize(.small); Text(step).font(LBFont.meta) }
+                    case .failed(let message, let detail):
+                        Text(message).font(LBFont.meta).foregroundStyle(LB.danger)
+                        if let detail {
+                            DisclosureGroup("Details") { Text(detail).font(LBFont.code).textSelection(.enabled) }
+                        }
+                        Button("Try again") { Task { await store.setUpHostMachine() } }.buttonStyle(.lemonPrimary)
+                            .disabled(!store.isOnline)
+                    case .idle, .done:
+                        Button(machine.needsReconnect ? "Reconnect" : "Start it") { Task { await store.setUpHostMachine() } }.buttonStyle(.lemonPrimary)
+                            .disabled(!store.isOnline)
+                    }
+                } else {
+                    Text("Ask this machine’s owner to start its Lemon worker.").font(LBFont.meta).foregroundStyle(LB.muted)
+                }
+            }.padding(8).padding(.top, belowHeader ? 76 : 0)
+        }
+    }
+}
+#endif
+
 private extension View {
     /// Row chrome for the iOS List container (no separators/backgrounds, tight insets); no-op on macOS.
     @ViewBuilder func sidebarRow() -> some View {
@@ -581,40 +638,6 @@ private extension View {
     }
 }
 
-/// One-line last-message preview for a sidebar row.
-struct SidebarPreview: Equatable {
-    var entryID: ID
-    var text: String
-    /// Markdown → single-line plain text ("**Done** — `x`" → "Done — x").
-    static func plain(_ markdown: String) -> String {
-        let lines = markdown.split(whereSeparator: \.isNewline).map { line in
-            String(line).replacingOccurrences(of: #"^\s*(?:[#>]+|[-*+]|\d+[.)])\s+"#, with: "", options: .regularExpression)
-        }.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty && !$0.hasPrefix("```") }
-        let joined = lines.joined(separator: " ")
-        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        let plain = (try? AttributedString(markdown: joined, options: options)).map { String($0.characters) } ?? joined
-        return plain.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-    init?(entry: TranscriptEntry, userID: ID?) {
-        entryID = entry.id
-        switch entry {
-        case .message(let message):
-            let body = SidebarPreview.plain(message.text)
-            if body.isEmpty && message.attachmentIds.isEmpty {
-                guard message.role != "user", !message.streaming else { return nil }
-                text = "Couldn't finish the last request"
-            } else {
-                let content = body.isEmpty ? "Sent an attachment" : body
-                text = message.role == "user" ? "You: \(content)" : content
-            }
-        case .userAttachment: text = "You: Sent an attachment"
-        case .card: text = "Needs a look"
-        case .voiceCall: text = "Voice chat"
-        case .notice(let notice): text = notice.text
-        default: return nil
-        }
-    }
-}
 
 /// Round account avatar with initials in lemon.
 struct AccountInitials: View {

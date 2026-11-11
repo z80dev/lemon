@@ -12,6 +12,7 @@ const pairingLabels: Record<Pairing['status'], string> = { waiting: 'Waiting for
 
 export function PairingScreen() {
   const { client, snapshot, online, navigate } = useApp();
+  const signIn = useQuery('pairing:sign-in', () => client.call('GET /me/sign-in'));
   const storageKey = `lemonbot.pairing-intent:${client.baseUrl}:${snapshot.workspace.id}:${snapshot.user.id}`;
   const [intent, setIntent] = useState<PairingIntent | null>(() => {
     try {
@@ -178,6 +179,7 @@ export function PairingScreen() {
       const sessions = query.data!.sessions.filter(session => session.deviceId === device.id);
       return <article className="card stack" key={device.id}><div className="row spread"><strong>{device.name}</strong><Badge>iOS · {device.appVersion}</Badge></div><p>Last seen: {formatTime(device.lastSeenAtMs)}</p>{sessions.length ? <ul>{sessions.map(session => <li key={session.id}>Session: {session.expiresAtMs === null ? 'Until revoked' : `Expires ${formatTime(session.expiresAtMs)}`} · Last seen {formatTime(session.lastSeenAtMs)}</li>)}</ul> : <p className="muted">No active device session reported.</p>}<button className="danger" disabled={disabled} onClick={() => setRevoking(device)}>Revoke this iPhone</button></article>;
     })}{!query.data.devices.some(device => device.platform === 'ios') && <p className="muted">No iPhone is registered on your account.</p>}<button onClick={() => navigate({ screen: 'settings.account' })}>Manage all account sessions and devices</button></section>}
+    {signIn.data?.password === false && <p className="small muted">Your iPhone doesn't need a password. To use Lemon Bot in a browser on another computer, add an email and password in Settings → Account.</p>}
     {revoking && <ConfirmDialog title={`Revoke ${revoking.name}?`} disabled={disabled} onCancel={() => setRevoking(undefined)} onConfirm={async () => { await revoke(revoking); if (!intentRef.current) setRevoking(undefined); }}><p>Its sessions stop working on this Lemon Bot. The iPhone has to pair again.</p><ErrorNotice error={error}/></ConfirmDialog>}
   </section>;
 }

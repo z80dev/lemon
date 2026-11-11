@@ -37,7 +37,7 @@ defmodule LemonAi.Models.OpenAICodexDiscoveryTest do
     opts = options(token)
     assert {:ok, [model]} = Discovery.discover(opts)
     assert model.id == "gpt-6.1-sol"
-    assert model.cost == Models.get_model(:"openai-codex", "gpt-6.1-sol").cost
+    assert model.cost == Models.get_model(:openai_codex, "gpt-6.1-sol").cost
     assert_receive :requested
     assert {:ok, [^model]} = Discovery.discover(options(token("synthetic-account", "renewed")))
     refute_receive :requested, 20
@@ -45,6 +45,27 @@ defmodule LemonAi.Models.OpenAICodexDiscoveryTest do
     refute encoded_keys =~ "synthetic-account"
     refute encoded_keys =~ token
     refute encoded_keys =~ "example.invalid"
+  end
+
+  test "direct API catalog additions do not become ChatGPT OAuth models" do
+    assert %LemonAi.Types.Model{} = Models.get_model(:openai, "gpt-6.1-terra")
+    assert is_nil(Models.get_model(:openai_codex, "gpt-6.1-terra"))
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      Req.Test.json(conn, %{
+        "models" => [
+          %{"slug" => "gpt-6.1-terra", "supported_in_api" => true},
+          %{"slug" => "gpt-6.1-sol", "supported_in_api" => true}
+        ]
+      })
+    end)
+
+    opts = options(token("api-catalog-account"))
+    assert {:ok, [%{id: "gpt-6.1-sol"}]} = Discovery.discover(opts)
+
+    unadvertised = Models.get_model(:openai_codex, "gpt-6-astra")
+    assert {:error, message} = Discovery.ensure_available(unadvertised, opts)
+    assert message =~ "not available for this ChatGPT account"
   end
 
   test "different accounts and endpoints never share availability" do
@@ -86,7 +107,7 @@ defmodule LemonAi.Models.OpenAICodexDiscoveryTest do
     assert_receive :requested
     assert {:ok, []} = Discovery.discover(opts)
     refute_receive :requested, 20
-    model = Models.get_model(:"openai-codex", "gpt-6-luna")
+    model = Models.get_model(:openai_codex, "gpt-6-luna")
     assert {:error, message} = Discovery.ensure_available(model, opts)
     assert message =~ "not available for this ChatGPT account"
     assert message =~ "[model_roles]"
@@ -114,7 +135,7 @@ defmodule LemonAi.Models.OpenAICodexDiscoveryTest do
         codex_req_options: [plug: {Req.Test, __MODULE__}]
       )
 
-    refute Enum.any?(models, &(&1.provider == :"openai-codex"))
+    refute Enum.any?(models, &(&1.provider == :openai_codex))
     assert Enum.any?(models, &(&1.provider == :anthropic))
   end
 

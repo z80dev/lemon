@@ -124,6 +124,297 @@ defmodule CodingAgent.ControlPlaneProviderTest do
     end
   end
 
+  describe "trusted addressing context" do
+    @describetag :tmp_dir
+
+    setup %{tmp_dir: root} do
+      original_agent_dir = System.get_env("LEMON_AGENT_DIR")
+      System.put_env("LEMON_AGENT_DIR", Path.join(root, "agent"))
+      cwd = Path.join(root, "original")
+      File.mkdir_p!(cwd)
+      key = "agent:context-#{System.unique_integer([:positive])}:main"
+      session = CodingAgent.SessionManager.new(cwd)
+      path = CodingAgent.SessionManager.session_file_path(cwd, session.header.id)
+      :ok = CodingAgent.SessionManager.save_to_file(path, session)
+
+      :ok =
+        LemonCore.ChatStateStore.put(key, %LemonCore.ChatState{
+          last_engine: "lemon",
+          last_resume_token: session.header.id
+        })
+
+      on_exit(fn ->
+        LemonCore.ChatStateStore.delete(key)
+        LemonCore.RunStore.delete_session_index(key)
+
+        if original_agent_dir,
+          do: System.put_env("LEMON_AGENT_DIR", original_agent_dir),
+          else: System.delete_env("LEMON_AGENT_DIR")
+      end)
+
+      %{cwd: cwd, key: key, session: session, path: path}
+    end
+
+    test "live ordinary, profile and fork roots retain actual authority", context do
+      policy = CodingAgent.ToolPolicy.from_profile(:read_only)
+      servers = [%{"type" => "http", "url" => "https://ordinary.example/mcp"}]
+
+      for kind <- [:ordinary, :profile, :fork] do
+        key = if(kind == :fork, do: context.key <> ":sub:user-fork", else: context.key)
+
+        session =
+          CodingAgent.SessionManager.new(context.cwd,
+            parent_session: if(kind == :fork, do: "user-fork-parent")
+          )
+
+        path = CodingAgent.SessionManager.session_file_path(context.cwd, session.header.id)
+        :ok = CodingAgent.SessionManager.save_to_file(path, session)
+
+        opts = [
+          cwd: context.cwd,
+          workspace_dir: Path.join(context.cwd, "workspace"),
+          session_file: path,
+          session_key: key,
+          register: true,
+          model: Mocks.mock_model(),
+          tools: [],
+          tool_policy: policy,
+          task_child: false,
+          native_source_profile_id: if(kind == :profile, do: "research"),
+          invocation_mcp_servers: servers
+        ]
+
+        pid = start_supervised!(Supervisor.child_spec({CodingAgent.Session, opts}, id: kind))
+
+        assert {:ok, recovered} = ControlPlaneProvider.session_addressing_context(key)
+        assert recovered.cwd == context.cwd
+        assert recovered.task_child == false
+        assert recovered.resume == LemonCore.ResumeToken.new("lemon", session.header.id)
+        assert recovered.tool_policy == CodingAgent.Session.get_state(pid).tool_policy
+        assert recovered.meta == %{mcp_servers: servers}
+        assert recovered[:profile_id] == if(kind == :profile, do: "research")
+        refute Map.has_key?(recovered, :approval_context)
+
+        if kind == :fork do
+          assert CodingAgent.Session.get_state(pid).session_scope == :subagent
+        end
+
+        stop_supervised!(kind)
+      end
+    end
+
+    test "cold legacy journal and newly created empty session recover without introspection",
+         context do
+      assert {:ok, recovered} = ControlPlaneProvider.session_addressing_context(context.key)
+      assert recovered.cwd == context.cwd
+      assert recovered.resume.value == context.session.header.id
+      assert recovered.task_child == false
+
+      fresh_key = "agent:new-context-#{System.unique_integer([:positive])}:main"
+
+      on_exit(fn ->
+        LemonCore.ChatStateStore.delete(fresh_key)
+        LemonCore.RunStore.delete_session_index(fresh_key)
+      end)
+
+      assert {:ok, %{"created" => true, "sessionId" => id}} =
+               ControlPlaneProvider.session_create(fresh_key, context.cwd)
+
+      assert {:ok, %{cwd: cwd, resume: %{value: ^id}, task_child: false}} =
+               ControlPlaneProvider.session_addressing_context(fresh_key)
+
+      assert cwd == context.cwd
+    end
+
+    test "cold user fork preserves parentage without becoming a task child", context do
+      fork_key = context.key <> ":sub:user-fork"
+
+      on_exit(fn ->
+        LemonCore.ChatStateStore.delete(fork_key)
+        LemonCore.RunStore.delete_session_index(fork_key)
+      end)
+
+      assert :ok = ControlPlaneProvider.session_fork(context.key, context.cwd, fork_key)
+      assert {:ok, recovered} = ControlPlaneProvider.session_addressing_context(fork_key)
+      assert recovered.cwd == context.cwd
+      assert recovered.task_child == false
+      refute recovered.resume.value == context.session.header.id
+    end
+
+    test "cold recovery rejects spoofed headers, ambiguous journals and corrupt headers",
+         context do
+      spoof = %{context.session | header: %{context.session.header | id: "another-native-id"}}
+      :ok = CodingAgent.SessionManager.save_to_file(context.path, spoof)
+
+      assert {:error, :context_unavailable} =
+               ControlPlaneProvider.session_addressing_context(context.key)
+
+      :ok = CodingAgent.SessionManager.save_to_file(context.path, context.session)
+      other_cwd = Path.join(context.cwd, "other")
+      File.mkdir_p!(other_cwd)
+      duplicate = %{context.session | header: %{context.session.header | cwd: other_cwd}}
+      other_path = CodingAgent.SessionManager.session_file_path(other_cwd, duplicate.header.id)
+      :ok = CodingAgent.SessionManager.save_to_file(other_path, duplicate)
+
+      assert {:error, :context_unavailable} =
+               ControlPlaneProvider.session_addressing_context(context.key)
+
+      File.rm!(other_path)
+      File.write!(context.path, "{broken\n")
+
+      assert {:error, :context_unavailable} =
+               ControlPlaneProvider.session_addressing_context(context.key)
+    end
+
+    test "cold recovery does not traverse journal or bucket symlinks", context do
+      outside = Path.join(context.cwd, "outside.jsonl")
+      File.rename!(context.path, outside)
+      File.ln_s!(outside, context.path)
+
+      assert {:error, :context_unavailable} =
+               ControlPlaneProvider.session_addressing_context(context.key)
+
+      File.rm!(context.path)
+      bucket = Path.dirname(context.path)
+      moved_bucket = bucket <> "-outside"
+      File.rename!(bucket, moved_bucket)
+      File.rename!(outside, Path.join(moved_bucket, Path.basename(context.path)))
+      File.ln_s!(moved_bucket, bucket)
+
+      assert {:error, :context_unavailable} =
+               ControlPlaneProvider.session_addressing_context(context.key)
+    end
+
+    test "missing original cwd, non-native mapping and caller paths never select a workspace",
+         context do
+      File.rmdir!(context.cwd)
+
+      assert {:error, :context_unavailable} =
+               ControlPlaneProvider.session_addressing_context(context.key)
+
+      refute File.exists?(context.cwd)
+
+      File.mkdir_p!(context.cwd)
+
+      :ok =
+        LemonCore.ChatStateStore.put(context.key, %LemonCore.ChatState{
+          last_engine: "other",
+          last_resume_token: context.session.header.id
+        })
+
+      assert {:error, :context_unavailable} =
+               ControlPlaneProvider.session_addressing_context(context.key)
+
+      assert {:error, :forbidden} = ControlPlaneProvider.session_addressing_context(context.cwd)
+    end
+
+    test "ambiguous live roots, managed owners and actual children are refused", context do
+      base = [
+        cwd: context.cwd,
+        workspace_dir: Path.join(context.cwd, "workspace"),
+        session_key: context.key,
+        register: true,
+        model: Mocks.mock_model(),
+        tools: []
+      ]
+
+      for id <- [:first, :second] do
+        start_supervised!(Supervisor.child_spec({CodingAgent.Session, base}, id: id))
+      end
+
+      assert {:error, :context_unavailable} =
+               ControlPlaneProvider.session_addressing_context(context.key)
+
+      stop_supervised!(:first)
+      stop_supervised!(:second)
+
+      for {id, options} <- [
+            managed: [native_managed_context: true],
+            reserved_mcp: [
+              native_managed_context: false,
+              invocation_mcp_servers: [
+                %{"url" => "https://bot.example/lemon_bot/invocations/run"}
+              ]
+            ],
+            child: [session_scope: :subagent, task_child: true]
+          ] do
+        pid =
+          start_supervised!(
+            Supervisor.child_spec({CodingAgent.Session, Keyword.merge(base, options)}, id: id)
+          )
+
+        if id == :child do
+          # A running worker sharing the key cannot shadow its stopped root.
+          assert {:ok, %{resume: %{value: root_id}}} =
+                   ControlPlaneProvider.session_addressing_context(context.key)
+
+          assert root_id == context.session.header.id
+
+          :ok =
+            LemonCore.ChatStateStore.put(context.key, %LemonCore.ChatState{
+              last_engine: "lemon",
+              last_resume_token: CodingAgent.Session.get_state(pid).session_manager.header.id
+            })
+        end
+
+        assert {:error, :forbidden} =
+                 ControlPlaneProvider.session_addressing_context(context.key)
+
+        stop_supervised!(id)
+      end
+
+      assert {:error, :forbidden} =
+               ControlPlaneProvider.session_addressing_context(
+                 "agent:default:lemon_bot:bot:dm:one"
+               )
+
+      assert {:error, :context_unavailable} =
+               ControlPlaneProvider.session_addressing_context(context.key <> ":sub:missing")
+    end
+
+    test "cold managed run metadata refuses recovery instead of returning proof or MCP",
+         context do
+      run_id = "managed-context-#{LemonCore.Id.uuid()}"
+      on_exit(fn -> LemonCore.RunStore.delete_session(context.key) end)
+
+      {:ok, execution} =
+        LemonCore.ExecutionContext.new(run_id: run_id, cwd: context.cwd, agent_id: "default")
+
+      {:ok, session} =
+        CodingAgent.SessionManager.append_execution_context(context.session, execution)
+
+      :ok = CodingAgent.SessionManager.save_to_file(context.path, session)
+
+      :ok =
+        LemonCore.RunStore.finalize(run_id, %{
+          session_key: context.key,
+          meta: %{
+            invocation_proof: "private-proof",
+            invocation_context_key: "private-context",
+            mcp_servers: [
+              %{"url" => "https://bot.example/private", "headers" => %{"secret" => "x"}}
+            ]
+          }
+        })
+
+      assert {:error, :forbidden} =
+               ControlPlaneProvider.session_addressing_context(context.key)
+    end
+
+    test "cold delegated execution authority is refused without projecting its context",
+         context do
+      {:ok, parent} =
+        LemonCore.ExecutionContext.new(run_id: "parent", cwd: context.cwd, agent_id: "default")
+
+      {:ok, child} = LemonCore.ExecutionContext.child(parent, run_id: "child")
+      {:ok, session} = CodingAgent.SessionManager.append_execution_context(context.session, child)
+      :ok = CodingAgent.SessionManager.save_to_file(context.path, session)
+
+      assert {:error, :forbidden} =
+               ControlPlaneProvider.session_addressing_context(context.key)
+    end
+  end
+
   describe "durable native session adapters" do
     setup do
       cwd = Path.join(System.tmp_dir!(), "provider-session-#{System.unique_integer([:positive])}")

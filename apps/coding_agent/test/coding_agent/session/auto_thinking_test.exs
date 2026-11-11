@@ -82,8 +82,10 @@ defmodule CodingAgent.Session.AutoThinkingTest do
       File.rm_rf!(root)
 
       try do
-        assert Agent.get(http_requests, & &1) == [],
-               "scripted sessions must not call HTTP providers"
+        requests = Agent.get(http_requests, & &1)
+
+        assert requests == [],
+               "scripted sessions must not call HTTP providers; saw #{inspect(Enum.reverse(requests))}"
       after
         Agent.stop(http_requests)
       end

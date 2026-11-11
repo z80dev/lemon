@@ -6,6 +6,12 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Added
 
+- `lemon setup model [--json] [--offline] [--provider NAME]`: the Connect-a-model
+  step on its own. `--json` prints one readiness document plus the detected
+  logins and never prompts; exit `0` when the model is verified or saved, `1`
+  when it needs action, `64` for usage errors.
+- `lemon setup --if-required --model-optional` finishes once config and secrets
+  are complete, so the Bot path can start the daemon and connect a model later.
 - Supervised, target-local Codex device-login start/poll/cancel with exact
   target/provider/login/owner/session binding and an eight-field public status.
   Only the fixed OpenAI verification URL and public user code leave the target;
@@ -39,6 +45,10 @@ All notable changes to `lemon_cli` are documented here.
   The CLI application registers this optional implementation at runtime for
   controller and named worker startup; core-only consumers fail closed when
   setup support is absent.
+- `LemonCli.Setup.ProviderManagement` check and import operations: non-generating
+  model readiness checks outside the config lock (`check/2`), explicit Codex CLI
+  ChatGPT login import (`import_login/3`) preserving existing configuration defaults,
+  and optional readiness/detected listings on `list/1`.
 - Provider metadata covers the canonical runtime catalog, including unsupported
   provisioning methods. Phone-compatible device-code metadata reflects the real
   Codex, GitHub Copilot, Kimi Code and xAI device grants; browser-callback OAuth
@@ -56,6 +66,21 @@ All notable changes to `lemon_cli` are documented here.
   target's global configuration.
 
 ### Changed
+
+- Setup replaces "Onboard an AI provider now?" with **Connect a model**, listing
+  detected Codex CLI ChatGPT logins and shell-exported provider keys first.
+  Nothing is imported without an explicit choice and stated consent.
+- Setup summaries distinguish a non-generating `verified` check from a `saved`
+  model that will be checked on the first message. Unreachable providers and
+  non-authentication check failures leave setup complete with the reason shown;
+  unavailable/deferred checks no longer incorrectly claim `--skip-verify`.
+  Both ready states offer **Open Lemon now?**, except an explicitly deferred `--skip-verify` check.
+- Setup reports progress before blocking application startup, import and provider
+  checks, and caches the secrets master key for the command lifetime across
+  `lemon setup`, `lemon setup model`, `lemon model` and `setup --if-required`.
+- One-shot CLI boot logs omit info messages but preserve warnings and errors.
+- Installation ends with one absolute-path next step; worker enrollment keeps
+  foreground/service guidance visible when the machine comes online.
 
 - `lemon setup` no longer asks about the runtime profile or a Hermes import,
   and a first run no longer prints the step status or config/secret file
@@ -88,6 +113,10 @@ All notable changes to `lemon_cli` are documented here.
   project's providers and credential pools. Default selection is a separate operation.
 
 ### Fixed
+
+- Source and packaged launchers discover systemd user units under an absolute
+  `XDG_CONFIG_HOME`, while invalid relative values fall back to `$HOME/.config`
+  as required by the XDG base-directory specification.
 
 - Preserve normalized completed-event usage in print JSON instead of overwriting
   it with `agent.wait`'s internal usage detail. Offline native replay verifies

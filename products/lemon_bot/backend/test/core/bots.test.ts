@@ -3,21 +3,27 @@ import { createHash } from 'node:crypto';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, Route } from '../../src/core/services';
 import { ApiError } from '../../src/core/errors';
-import { createBotRoutes, baseBotMcpConfig, syncBotProfile, createBotService, syncBotPolicyFloor, productBotTools, assertWorkspaceRestrictionManagement } from '../../src/core/bots';
+import { createBotRoutes, baseBotMcpConfig, baseBotMcpTemplate, syncBotProfile, createBotService, syncBotPolicyFloor, productBotTools, assertWorkspaceRestrictionManagement, markBotProfilesForRefresh } from '../../src/core/bots';
 import { createConversationRoutes } from '../../src/core/conversations';
+import { effectiveBotGrants } from '../../src/core/experiences';
 import { createResourceRoutes } from '../../src/core/resources';
+import { createGateService } from '../../src/core/gates';
 import { authFixture, routeContext } from './auth.test';
 
 interface Call { method: string; params: Record<string, unknown>; mutation: boolean }
-// Captured authenticated native mcp.execution_names DTO for lemon-bot at https://product.example/mcp.
-// Keep the fixture origin bound to this capture rather than synthesizing native aliases.
+// Existing native aliases are retained from the authenticated capture; addressed tool aliases are deterministic fixture values.
+// Keep the fixture origin bound to the captured lemon-bot endpoint.
 const fixturePublicUrl = 'https://product.example';
 const projectedProductTools = [
   { name: 'message_bot', executionName: 'mcp_lemon_bot_message_bot_e27f8366c893fc7d4ace784f51ce12a1' },
   { name: 'handoff', executionName: 'mcp_lemon_bot_handoff_9f74e5f82ed019f6a9084a1daa468386' },
+  { name: 'list_agents', executionName: 'mcp_lemon_bot_list_agents_fixture' },
+  { name: 'rename_agent', executionName: 'mcp_lemon_bot_rename_agent_fixture' },
+  { name: 'message_agent', executionName: 'mcp_lemon_bot_message_agent_fixture' },
   { name: 'create_draft', executionName: 'mcp_lemon_bot_create_draft_6e65809e9170b8c9b3cb0da09b714275' },
   { name: 'ask_user', executionName: 'mcp_lemon_bot_ask_user_10d4fd7a91be9332225ab7a9f47f9f2f' },
   { name: 'request_approval', executionName: 'mcp_lemon_bot_request_approval_ca54a9645adf9ba042f0e53146a13ee0' },
+  { name: 'request_access', executionName: 'mcp_lemon_bot_request_access_fixture' },
   { name: 'request_human_step', executionName: 'mcp_lemon_bot_request_human_ste_688cee41cf6bff126499b440c3a8624c' },
   { name: 'request_secret', executionName: 'mcp_lemon_bot_request_secret_c5d5dd62ffb1c7cd4ebdaf58ee1da740' },
   { name: 'send_voice_memo', executionName: 'mcp_lemon_bot_send_voice_memo_94b772ea7c8f891201c61ad1c1a26482' },
@@ -32,7 +38,7 @@ const projectedProductTools = [
   { name: 'update_preferences', executionName: 'mcp_lemon_bot_update_preference_f55d35c688fc2ca9a6d77f7bb3c75d94' },
   { name: 'create_reminder', executionName: 'mcp_lemon_bot_create_reminder_d1a7af45016ffbce56b89af97037eae8' },
 ];
-function fixture() {
+function fixture(items: P.MachineCapabilities['items'] = [], acknowledgedWorkingDirectory?: 'node_default') {
   const f = authFixture();
   f.services.config.publicUrl = fixturePublicUrl;
   const calls: Call[] = [];
@@ -56,7 +62,7 @@ function fixture() {
         const profile: Record<string, unknown> = { canonicalSessionKey: `agent:${profileId}:main`, ...profileRows.get(profileId), ...params };
         const definitions = profile.mcpServers as { name: string; url: string; headers: Record<string, string>; enabledTools?: string[]; allowedOrigins?: string[]; approvedPrivateOrigins?: string[] }[] | undefined;
         const canonical = (definitions ?? []).map(server => [server.name, server.url, Object.entries(server.headers).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0), server.enabledTools ?? null, server.allowedOrigins ?? null, server.approvedPrivateOrigins ?? null]);
-        const acknowledged = { ...profile, mcpConfigFingerprint: createHash('sha256').update(JSON.stringify(canonical)).digest('hex') };
+        const acknowledged = { ...profile, ...(acknowledgedWorkingDirectory ? { workingDirectory: acknowledgedWorkingDirectory } : {}), mcpConfigFingerprint: createHash('sha256').update(JSON.stringify(canonical)).digest('hex') };
         profileRows.set(profileId, acknowledged); value = { profile: acknowledged };
       } else if (method === 'profiles.get') {
         const profile = profileRows.get(String(params.id));
@@ -77,7 +83,7 @@ function fixture() {
       else if (method === 'runs.active.list') value = { runs: [], filters: { profileId: params.profileId, limit: params.limit }, ...(nativePresence ? { presence: nativePresence } : {}) };
       else if (method === 'node.profile.paths') value = { nodeId: params.nodeId, profileId: params.profileId, workspacePath: `/worker/profiles/${params.profileId}/workspace`, skillsPath: `/worker/profiles/${params.profileId}/workspace/.lemon/skill` };
       else if (method === 'nodes.list') value = { nodes: f.store.list<P.Machine>('machines', machine => !params.nodeId || machine.nodeId === params.nodeId).map(machine => ({ id: machine.nodeId, status: machine.status, capabilities: ['node.capabilities.get'] })), summary: { presenceAvailable: true, truncated: false } };
-      else if (method === 'node.capabilities.get') value = { nodeId: params.nodeId, os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [] };
+      else if (method === 'node.capabilities.get') value = { nodeId: params.nodeId, os: 'linux', measuredAtMs: f.services.now(), stale: false, items };
       else if (method === 'node.host.info') value = { defaultCwd: '/home/lemon' };
       else if (method === 'node.fs.stat') {
         const file = hostFiles.get(`${params.nodeId}:${params.path}`);
@@ -112,7 +118,7 @@ function fixture() {
   f.services.runtime = { submit: unavailable, send: unavailable, cancel: unavailable, reconcile: unavailable, revokeConnectorInvocations: unavailable, sessionKey: (_room, bot) => `agent:${bot.profileId}:main` };
   f.services.integrations.connectorConfig = async () => [];
   f.services.integrations.connectorTemplates = async () => [];
-  f.services.integrations.effectivePolicy = async (actor, botId) => ({ userId: actor.userId, botId: botId ?? null, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, rules: [], networkPolicies: [], explanations: [] });
+  f.services.integrations.effectivePolicy = async (actor, botId) => ({ userId: actor.userId, botId: botId ?? null, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', workspaceReads: 'allow', allowSudo: false, allowEgress: false, rules: [], networkPolicies: [], explanations: [] });
   f.services.integrations.emitProviderNotifications = async () => {};
   f.services.syncBotProfile = (actor, botId) => syncBotProfile(f.services, actor, botId);
   const routes: Route[] = [...createBotRoutes(f.services), ...createConversationRoutes(f.services), ...createResourceRoutes(f.services)];
@@ -140,7 +146,7 @@ function fixture() {
   }
   function machine(machineId: string, nodeId: string, shared = false): P.Machine {
     const labels: Record<string, string> = shared ? { 'lemon_bot.shared_context': 'true' } : {};
-    const row: P.Machine = { ...f.services.resource('machine', { nodeId, nodeName: nodeId, name: machineId, ownerUserId: 'alice', accessUserIds: ['admin'], status: 'online' as const, lastSeenAtMs: f.services.now(), labels, botIds: [] }), id: machineId };
+    const row: P.Machine = { ...f.services.resource('machine', { nodeId, nodeName: nodeId, name: machineId, ownerUserId: 'alice', accessUserIds: ['admin'], status: 'online' as const, lastSeenAtMs: f.services.now(), labels, botIds: [], link: { kind: 'direct' as const } }), id: machineId };
     return f.store.put('machines', row);
   }
   machine('machine', 'node-source'); machine('destination', 'node-destination', true);
@@ -165,6 +171,27 @@ const nonce = (suffix: string) => `bot_test_nonce_${suffix}`;
 function confirmed(confirmation: P.Confirmation, extra: Record<string, unknown> = {}) { return { clientNonce: nonce('confirm'), revision: confirmation.revision, confirmationToken: confirmation.confirmationToken, confirmName: confirmation.confirmName, ...extra }; }
 
 describe('bot authority and viewer state', () => {
+  test('loopback MCP accepts only proven same-host workers or an exact SSH product port',()=>{
+    const f=fixture();f.services.config.publicUrl='http://127.0.0.1:4100';
+    const direct=f.store.require<P.Machine>('machines','machine');
+    const tunnel:P.Machine={...direct,link:{kind:'ssh_tunnel',sshDestination:'me@worker',nodePort:4044,productPort:4100,tunnel:{state:'online',detail:null,checkedAtMs:1}}};
+    try {
+      expect(()=>baseBotMcpTemplate(f.services,direct)).toThrow();
+      const accepted=baseBotMcpTemplate(f.services,tunnel);
+      expect(accepted).toMatchObject({url:'http://127.0.0.1:4100/mcp',headers:{},allowedOrigins:['http://127.0.0.1:4100'],approvedPrivateOrigins:['http://127.0.0.1:4100']});
+      if(tunnel.link?.kind!=='ssh_tunnel')throw new Error('Expected SSH tunnel fixture.');
+      const link=tunnel.link;
+      for(const productPort of [null,4101]){
+        expect(()=>baseBotMcpTemplate(f.services,{...tunnel,link:{...link,productPort}})).toThrow();
+      }
+      f.store.setMetadata(`machineSameHost:${direct.id}`,direct.nodeId);
+      expect(baseBotMcpTemplate(f.services,direct).url).toBe(accepted.url);
+      f.services.config.publicUrl='http://localhost:4100';
+      expect(()=>baseBotMcpTemplate(f.services,tunnel)).toThrow();
+      f.services.config.publicUrl='https://product.example';
+      expect(baseBotMcpTemplate(f.services,direct)).toMatchObject({url:'https://product.example/mcp',approvedPrivateOrigins:[]});
+    } finally {f.store.close();}
+  });
   test('workspace roles never read another member personal bot', async () => {
     const f = fixture(), bot = f.bot();
     for (const actor of [f.owner, f.admin]) await expect(f.request('GET', `/v1/bots/${bot.id}`, undefined, actor)).rejects.toMatchObject({ code: 'not_found' });
@@ -206,6 +233,92 @@ describe('bot authority and viewer state', () => {
     await expect(f.request('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce('raw_credential'), revision: bot.revision, headers: { Authorization: 'not-permitted' } })).rejects.toMatchObject({ code: 'invalid_request' });
     expect(f.calls).toHaveLength(0); expect(f.store.require<P.Bot>('bots', bot.id).name).toBe(bot.name);
   });
+});
+
+function standardCapabilities(): P.MachineCapabilities['items'] {
+  return [
+    { id: 'terminal', name: 'Terminal', category: 'shell', tools: ['bash', 'bash_output', 'kill_process'] },
+    { id: 'files', name: 'Files', category: 'files', tools: ['read', 'write', 'edit'] },
+    { id: 'browser', name: 'Browser', category: 'browser', tools: ['browser_snapshot', 'browser_click'] },
+  ].map(item => ({ ...item, supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', reason: 'measured', measuredAtMs: 1700000000000, stale: false })) as P.MachineCapabilities['items'];
+}
+const standardRequested: Record<string, P.AccessLevel> = { terminal: 'read_interact', files: 'read_interact', browser: 'read_only' };
+function requestedLevels(f: Pick<BackendServices, 'store'>, botId?: string) {
+  return Object.fromEntries(f.store.list<P.BotGrant>('botGrants', grant => !botId || grant.botId === botId).map(grant => [grant.capabilityId, grant.requestedLevel]));
+}
+describe('creation access consent and first-run policy', () => {
+  test('Standard persists requested grants before the first policy projection and profile synchronization', async () => {
+    const f = fixture(standardCapabilities());
+    let policyProjected = false;
+    f.fail(method => {
+      if (method === 'mcp.execution_names' || method === 'profiles.create' || method === 'profiles.sync') {
+        expect(requestedLevels(f)).toEqual(standardRequested);
+        policyProjected = true;
+      }
+    });
+    const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce('standard'), name: 'Lemon', machineId: 'machine', access: 'standard' });
+    expect(policyProjected).toBe(true);
+    const policy = f.calls.find(call => call.method === 'profiles.create')!.params.toolPolicy as { allow: string[]; deny: string[]; require_approval: string[] };
+    expect(policy.allow).toContain('bash'); expect(policy.require_approval).toContain('bash');
+    expect(policy.allow).toContain('write'); expect(policy.allow).toContain('browser_snapshot'); expect(policy.deny).toContain('browser_click');
+    for (const grant of f.store.list<P.BotGrant>('botGrants', grant => grant.botId === bot.id)) {
+      expect(grant.id).toBe(`grant_${f.services.mutations.digest({ botId: bot.id, machineId: bot.machineId, capabilityId: grant.capabilityId }).slice(0, 48)}`);
+      expect(grant.effectiveLevel).toBe('off');
+    }
+  });
+  test('Standard keeps machine and workspace ceilings without reducing requested consent', async () => {
+    for (const denied of [false, true]) {
+      const items = standardCapabilities();
+      items[1]!.configuredLevel = 'read_only'; items[2]!.osGrant = 'denied';
+      const f = fixture(items), effective = f.services.integrations.effectivePolicy;
+      if (denied) f.services.integrations.effectivePolicy = async (actor, botId) => ({ ...await effective(actor, botId), localExecutionCeiling: 'deny' });
+      const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce(`capped_${denied}`), name: 'Capped', machineId: 'machine', access: 'standard' });
+      const grants = await effectiveBotGrants(f.services, f.alice, bot);
+      expect(requestedLevels(f, bot.id)).toEqual(standardRequested);
+      expect(Object.fromEntries(grants.map(grant => [grant.capabilityId, grant.effectiveLevel]))).toEqual({ terminal: denied ? 'off' : 'read_interact', files: denied ? 'off' : 'read_only', browser: 'off' });
+      const policy = f.calls.find(call => call.method === 'profiles.create')!.params.toolPolicy as { allow: string[]; deny: string[] };
+      expect(policy.deny).toContain('write'); expect(policy.deny).toContain('browser_snapshot');
+      expect(policy.allow.includes('bash')).toBe(!denied);
+    }
+  });
+  test('unknown and unsupported capabilities are skipped without failing creation', async () => {
+    const items = standardCapabilities();
+    items[0]!.supported = false; items.push({ ...items[1]!, id: 'unrecognized-files' });
+    const f = fixture(items);
+    const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce('unsupported'), name: 'Portable', machineId: 'machine', access: 'standard' });
+    expect(requestedLevels(f, bot.id)).toEqual({ terminal: 'off', files: 'read_interact', browser: 'read_only', 'unrecognized-files': 'off' });
+  });
+  for (const access of [undefined, 'none'] as const) {
+    test(`${access ?? 'omitted'} access keeps all grants off`, async () => {
+      const f = fixture(standardCapabilities());
+      const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce(`off_${access}`), name: 'Chat only', machineId: 'machine', ...(access ? { access } : {}) });
+      expect(requestedLevels(f, bot.id)).toEqual({ terminal: 'off', files: 'off', browser: 'off' });
+      const policy = f.calls.find(call => call.method === 'profiles.create')!.params.toolPolicy as { deny: string[] };
+      expect(policy.deny).toContain('bash');
+    });
+  }
+  for (const mode of ['json', 'duplicate', 'template', 'templateId'] as const) {
+    for (const access of ['standard', 'none', undefined] as const) {
+      test(`${mode} creation honors ${access ?? 'omitted'} access rather than template suggestions`, async () => {
+        const f = fixture(standardCapabilities()), source = f.bot();
+        const content = await f.request<P.TemplateContent>('GET', `/v1/bots/${source.id}/export`, undefined);
+        content.suggestedAccess = access === 'standard' ? 'none' : 'standard';
+        const template: P.BotTemplate = f.services.resource('template', { ownerUserId: 'alice', audience: 'workspace', sourceBotId: source.id, content, provenance: { publisher: 'Alice', sourceUrl: null, termsUrl: null, thirdParty: false }, shareUrl: `${fixturePublicUrl}/template` });
+        f.store.put('templates', template);
+        const input = { clientNonce: nonce(`copy_${mode}_${access}`), name: 'Copy', machineId: 'destination', ...(access ? { access } : {}) };
+        const bot = mode === 'json'
+          ? await f.request<P.Bot>('POST', '/v1/bots/import', { ...input, content, acceptedTerms: true })
+          : mode === 'duplicate'
+            ? await f.request<P.Bot>('POST', `/v1/bots/${source.id}/duplicate`, { ...input, includeSkills: false, includeRoutines: false })
+            : mode === 'template'
+              ? await f.request<P.Bot>('POST', `/v1/templates/${template.id}/import`, { ...input, acceptedTerms: true })
+              : await f.request<P.Bot>('POST', '/v1/bots', { ...input, templateId: template.id });
+        expect(requestedLevels(f, bot.id)).toEqual(access === 'standard' ? standardRequested : { terminal: 'off', files: 'off', browser: 'off' });
+        const policy = f.calls.find(call => call.method === 'profiles.create')!.params.toolPolicy as { allow: string[] };
+        expect(policy.allow.includes('bash')).toBe(access === 'standard');
+      });
+    }
+  }
 });
 
 describe('acknowledged bot provisioning and placement', () => {
@@ -357,15 +470,21 @@ describe('section rank and provider prerequisites', () => {
 describe('acknowledged recovery and shared floor ownership', () => {
   test('a lost persona reply reconciles by exact read-only receipt, never by another update/sync', async () => {
     const f = fixture(), bot = f.bot();
+    f.store.setMetadata('nodeRuntimeFeatures:machine', { nodeId: 'node-source', features: { botFolder: true } });
     f.fail((method) => { if (method === 'profiles.sync') throw new ApiError('outcome_unknown', 'Persona receipt lost.', false); });
     await expect(f.request('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce('lost_persona'), revision: bot.revision, job: 'Approved new job' })).rejects.toMatchObject({ code: 'outcome_unknown' });
     f.fail(null);
+    for (const key of ['botPublicMcpCeiling', 'botControllerFloor', 'botWorkingDirectory', 'profileCanonicalSession']) f.store.setMetadata(`${key}:${bot.id}`, null);
     const writes = f.calls.filter(call => call.method === 'profiles.update' || call.method === 'profiles.sync').length;
     await createBotService(f.services).reconcile();
     expect(f.calls.filter(call => call.method === 'profiles.update' || call.method === 'profiles.sync')).toHaveLength(writes);
     expect(f.calls.some(call => call.method === 'profiles.sync.status')).toBe(true);
     expect(f.store.require<P.Bot>('bots', bot.id).job).toBe('Approved new job');
     expect(f.store.metadata(`botLifecycle:${bot.id}`)).toBeNull();
+    expect(f.store.metadata(`botPublicMcpCeiling:${bot.id}`)).toMatchObject({ servers: [{ name: 'lemon-bot', enabledTools: [...productBotTools] }] });
+    expect(f.store.metadata(`botControllerFloor:${bot.id}`)).toEqual((f.store.metadata<{ toolPolicy: P.JSONObject }>(`botDesiredProfile:${bot.id}`))!.toolPolicy);
+    expect(f.store.metadata(`botWorkingDirectory:${bot.id}`)).toEqual({ mode: 'profile_files', machineId: bot.machineId, profileId: bot.profileId });
+    expect(f.store.metadata(`profileCanonicalSession:${bot.id}`)).toBe(`agent:${bot.profileId}:main`);
   });
   test('member owner policy refresh installs actual durable policy, never an administrator’s or stale shared floor', async () => {
     const f = fixture(), bot = f.bot();
@@ -563,7 +682,7 @@ describe('trusted restriction-only management without live Bot authority', () =>
     f.store.setMetadata(`nativeFollowupIssuerConfig:${bot.id}`, { state: 'outcome_unknown', encryptedToken: 'must-not-be-read-by-management' });
     f.services.integrations.workspaceRestrictions = target => {
       expect(target).toEqual({ botId: bot.id, machineId: bot.machineId });
-      return { localExecutionCeiling: 'deny', rules: [], allowedMcpOrigins: [fixturePublicUrl], requireReview: true };
+      return { localExecutionCeiling: 'deny', rules: [], allowedMcpOrigins: [fixturePublicUrl], requireReview: true, folderReadsNeedReview: false };
     };
     f.services.integrations.effectivePolicy = async () => { throw new Error('Management cannot query owner or administrator effective-user policy.'); };
     f.services.integrations.connectorTemplates = async () => { throw new Error('Management cannot rebuild private owner connector configuration.'); };
@@ -599,7 +718,7 @@ describe('authenticated SCIM restriction management', () => {
     await syncBotProfile(f.services, f.alice, bot.id);
     const { actor } = await scimAuthority(f.services, f.admin);
     expect(actor.kind).toBe('integration'); expect(actor.role).toBe('member'); expect(actor.userId).toBe(f.admin.userId);
-    f.services.integrations.workspaceRestrictions = () => ({ localExecutionCeiling: 'deny', rules: [], allowedMcpOrigins: [fixturePublicUrl], requireReview: true });
+    f.services.integrations.workspaceRestrictions = () => ({ localExecutionCeiling: 'deny', rules: [], allowedMcpOrigins: [fixturePublicUrl], requireReview: true, folderReadsNeedReview: false });
     const start = f.calls.length;
     assertWorkspaceRestrictionManagement(f.services, actor);
     await syncBotPolicyFloor(f.services, actor, bot.id);
@@ -627,4 +746,263 @@ describe('authenticated SCIM restriction management', () => {
       expect(f.calls).toHaveLength(0);
     }
   });
+});
+describe('approval review projection and lifecycle invalidation', () => {
+  test('botDto projects approvalReview derived from active bot allowance else metadata default per_chat', async () => {
+    const f = fixture(), bot = f.bot();
+    const fetchedDefault = await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined);
+    expect(fetchedDefault.approvalReview).toBe('per_chat');
+
+    f.store.setMetadata(`botApprovalReview:${bot.id}`, 'every_time');
+    const fetchedEveryTime = await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined);
+    expect(fetchedEveryTime.approvalReview).toBe('every_time');
+
+    const botAllowance: P.ApprovalAllowance = f.services.resource<Omit<P.ApprovalAllowance, keyof P.Resource>>('allowance', {
+      scope: 'bot',
+      botId: bot.id,
+      conversationId: null,
+      ownerUserId: bot.ownerUserId,
+      toolGroups: ['terminal', 'file_changes', 'file_reading'],
+      label: 'Standing approval for Terminal and files',
+      state: 'active',
+      endedReason: null,
+      endedAtMs: null,
+      endedByUserId: null,
+      sourceApprovalId: null,
+      createdByUserId: bot.ownerUserId,
+      useCount: 0,
+      lastUsedAtMs: null,
+    });
+    f.store.put('approvalAllowances', botAllowance);
+    const fetchedBotWide = await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined);
+    expect(fetchedBotWide.approvalReview).toBe('bot_wide');
+  });
+
+  test('bot move eagerly ends active approval allowances with bot_moved', async () => {
+    const f = fixture(), bot = f.bot();
+    const allowance: P.ApprovalAllowance = f.services.resource<Omit<P.ApprovalAllowance, keyof P.Resource>>('allowance', {
+      scope: 'chat',
+      botId: bot.id,
+      conversationId: bot.mainConversationId,
+      ownerUserId: bot.ownerUserId,
+      toolGroups: ['terminal'],
+      label: 'Terminal allowed in this chat',
+      state: 'active',
+      endedReason: null,
+      endedAtMs: null,
+      endedByUserId: null,
+      sourceApprovalId: 'appr_1',
+      createdByUserId: bot.ownerUserId,
+      useCount: 0,
+      lastUsedAtMs: null,
+    });
+    f.store.put('approvalAllowances', allowance);
+    const plan = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('move_allowance_preview'), action: 'move', targetMachineId: 'destination' });
+    await f.request<P.Bot>('POST', `/v1/bots/${bot.id}/move`, confirmed(plan, { machineId: 'destination' }));
+    const ended = f.store.require<P.ApprovalAllowance>('approvalAllowances', allowance.id);
+    expect(ended.state).toBe('ended');
+    expect(ended.endedReason).toBe('bot_moved');
+  });
+
+  test('bot reset removes bot allowances and clears review metadata', async () => {
+    const f = fixture(), bot = f.bot();
+    const allowance: P.ApprovalAllowance = f.services.resource<Omit<P.ApprovalAllowance, keyof P.Resource>>('allowance', {
+      scope: 'chat',
+      botId: bot.id,
+      conversationId: bot.mainConversationId,
+      ownerUserId: bot.ownerUserId,
+      toolGroups: ['terminal'],
+      label: 'Terminal allowed in this chat',
+      state: 'active',
+      endedReason: null,
+      endedAtMs: null,
+      endedByUserId: null,
+      sourceApprovalId: 'appr_1',
+      createdByUserId: bot.ownerUserId,
+      useCount: 0,
+      lastUsedAtMs: null,
+    });
+    f.store.put('approvalAllowances', allowance);
+    f.store.setMetadata(`approvalAllowanceBinding:${allowance.id}`, { contextKey: 'ctx_key' });
+    f.store.setMetadata(`botApprovalReview:${bot.id}`, 'every_time');
+
+    const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('reset_allowance_preview'), action: 'reset', resetScopes: ['job'] });
+    await f.request('POST', `/v1/bots/${bot.id}/reset`, confirmed(preview, { resetScopes: ['job'] }));
+
+    expect(f.store.get('approvalAllowances', allowance.id)).toBeNull();
+    expect(f.store.metadata(`approvalAllowanceBinding:${allowance.id}`)).toBeNull();
+    expect(f.store.metadata(`botApprovalReview:${bot.id}`)).toBeNull();
+  });
+
+  test('bot delete removes bot allowances and clears review metadata', async () => {
+    const f = fixture(), bot = f.bot();
+    const gates = createGateService(f.services); f.services.gates = gates;
+    try {
+      const allowance: P.ApprovalAllowance = f.services.resource<Omit<P.ApprovalAllowance, keyof P.Resource>>('allowance', {
+        scope: 'chat',
+        botId: bot.id,
+        conversationId: bot.mainConversationId,
+        ownerUserId: bot.ownerUserId,
+        toolGroups: ['terminal'],
+        label: 'Terminal allowed in this chat',
+        state: 'active',
+        endedReason: null,
+        endedAtMs: null,
+        endedByUserId: null,
+        sourceApprovalId: 'appr_1',
+        createdByUserId: bot.ownerUserId,
+        useCount: 0,
+        lastUsedAtMs: null,
+      });
+      f.store.put('approvalAllowances', allowance);
+      f.store.setMetadata(`approvalAllowanceBinding:${allowance.id}`, { contextKey: 'ctx_key' });
+      f.store.setMetadata(`botApprovalReview:${bot.id}`, 'every_time');
+      const access = f.services.resource('access', { botId: bot.id, state: 'queued' });
+      f.store.put('accessRequests', access);
+      f.store.setMetadata(`profileRefresh:${bot.id}`, true);
+      f.store.setMetadata(`botWorkingDirectory:${bot.id}`, { mode: 'profile_files', machineId: bot.machineId, profileId: bot.profileId });
+
+      const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('delete_allowance_preview'), action: 'delete' });
+      await f.request('DELETE', `/v1/bots/${bot.id}`, confirmed(preview));
+
+      expect(f.store.get('approvalAllowances', allowance.id)).toBeNull();
+      expect(f.store.metadata(`approvalAllowanceBinding:${allowance.id}`)).toBeNull();
+      expect(f.store.metadata(`botApprovalReview:${bot.id}`)).toBeNull();
+      expect(f.store.get('accessRequests', access.id)).toBeNull();
+      expect(f.store.metadata(`profileRefresh:${bot.id}`)).toBeNull();
+      expect(f.store.metadata(`botWorkingDirectory:${bot.id}`)).toBeNull();
+    } finally { gates.close(); }
+  });
+});
+
+describe('feature-gated Bot working folders and startup refresh', () => {
+  for (const botFolder of [undefined, false, true]) {
+    test(`create and sync gate workingDirectory on botFolder=${botFolder}`, async () => {
+      const f = fixture();
+      if (botFolder !== undefined) f.store.setMetadata('nodeRuntimeFeatures:machine', { nodeId: 'node-source', features: { botFolder } });
+      const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce(`folder_${botFolder}`), name: 'Folder', machineId: 'machine' });
+      await syncBotProfile(f.services, f.alice, bot.id);
+      for (const call of f.calls.filter(call => call.method === 'profiles.create' || call.method === 'profiles.update')) {
+        if (botFolder === true) expect(call.params.workingDirectory).toBe('profile_files');
+        else expect(Object.hasOwn(call.params, 'workingDirectory')).toBe(false);
+        expect(String(call.params.systemPrompt)).toContain('call request_access once');
+      }
+      expect(f.store.metadata(`botWorkingDirectory:${bot.id}`)).toEqual(botFolder === true ? { mode: 'profile_files', machineId: bot.machineId, profileId: bot.profileId } : null);
+      markBotProfilesForRefresh(f.services);
+      expect(f.store.metadata(`profileRefresh:${bot.id}`)).toBeNull();
+    });
+  }
+  test('an incorrect folder acknowledgement remains outcome unknown and never syncs', async () => {
+    const f = fixture([], 'node_default'), bot = f.bot();
+    f.store.setMetadata('nodeRuntimeFeatures:machine', { nodeId: 'node-source', features: { botFolder: true } });
+    await expect(syncBotProfile(f.services, f.alice, bot.id)).rejects.toMatchObject({ code: 'outcome_unknown' });
+    expect(f.calls.some(call => call.method === 'profiles.sync')).toBe(false);
+    expect(f.store.metadata(`botWorkingDirectory:${bot.id}`)).toBeNull();
+  });
+  test('startup marks missing, stale and extra tool ceilings without issuing mutations', async () => {
+    for (const tools of [[], productBotTools.filter(tool => tool !== 'request_access'), [...productBotTools, 'unexpected']]) {
+      const f = fixture(), bot = f.bot();
+      f.store.setMetadata(`botPublicMcpCeiling:${bot.id}`, { servers: [{ name: 'lemon-bot', enabledTools: tools }] });
+      markBotProfilesForRefresh(f.services);
+      expect(f.store.metadata(`profileRefresh:${bot.id}`)).toBe(true);
+      expect(f.calls).toHaveLength(0);
+    }
+  });
+  test('startup marks a newly supported or stale placement folder, not a current folder', async () => {
+    const f = fixture(), bot = f.bot();
+    f.store.setMetadata(`botPublicMcpCeiling:${bot.id}`, { servers: [{ name: 'lemon-bot', enabledTools: [...productBotTools].reverse() }] });
+    markBotProfilesForRefresh(f.services);
+    expect(f.store.metadata(`profileRefresh:${bot.id}`)).toBeNull();
+    f.store.setMetadata('nodeRuntimeFeatures:machine', { nodeId: 'node-source', features: { botFolder: true } });
+    for (const directory of [null, { mode: 'profile_files', machineId: 'old-machine', profileId: bot.profileId }, { mode: 'profile_files', machineId: bot.machineId, profileId: 'old-profile' }]) {
+      f.store.setMetadata(`botWorkingDirectory:${bot.id}`, directory);
+      markBotProfilesForRefresh(f.services);
+      expect(f.store.metadata(`profileRefresh:${bot.id}`)).toBe(true);
+      f.store.setMetadata(`profileRefresh:${bot.id}`, null);
+    }
+    await syncBotProfile(f.services, f.alice, bot.id);
+    markBotProfilesForRefresh(f.services);
+    expect(f.store.metadata(`profileRefresh:${bot.id}`)).toBeNull();
+  });
+  for (const lostReceipt of [false, true]) {
+    test(`moving a folder-enabled Bot to an older worker requires a default-directory receipt (lost=${lostReceipt})`, async () => {
+      const f = fixture(standardCapabilities());
+      f.store.setMetadata('nodeRuntimeFeatures:machine', { nodeId: 'node-source', features: { botFolder: true } });
+      const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce(`downgrade_create_${lostReceipt}`), name: 'Portable', machineId: 'machine', access: 'standard' });
+      const plan = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce(`downgrade_preview_${lostReceipt}`), action: 'move', targetMachineId: 'destination' });
+      const start = f.calls.length;
+      if (lostReceipt) f.fail((method, params) => { if (method === 'profiles.update' && params.workingDirectory === 'node_default') throw new ApiError('outcome_unknown', 'Directory reset receipt lost.', false); });
+      const move = f.request<P.Bot>('POST', `/v1/bots/${bot.id}/move`, confirmed(plan, { machineId: 'destination' }));
+      if (lostReceipt) {
+        await expect(move).rejects.toMatchObject({ code: 'outcome_unknown' });
+        expect(f.store.require<P.Bot>('bots', bot.id).machineId).toBe('machine');
+        expect(f.store.metadata(`botLifecycle:${bot.id}`)).toMatchObject({ status: 'outcome_unknown' });
+        expect(f.calls.slice(start).some(call => call.method === 'profiles.sync' && call.params.nodeId === 'node-destination')).toBe(false);
+      } else {
+        expect((await move).machineId).toBe('destination');
+        const calls = f.calls.slice(start);
+        const reset = calls.findIndex(call => call.method === 'profiles.update' && call.params.workingDirectory === 'node_default');
+        const sync = calls.findIndex(call => call.method === 'profiles.sync' && call.params.nodeId === 'node-destination');
+        expect(reset).toBeGreaterThanOrEqual(0); expect(reset).toBeLessThan(sync);
+        expect(Object.hasOwn(calls[reset]!.params.toolPolicy as object, 'workspace_read_exempt')).toBe(false);
+        const lastUpdate = calls.filter(call => call.method === 'profiles.update').at(-1)!;
+        expect(Object.hasOwn(lastUpdate.params, 'workingDirectory')).toBe(false);
+        expect(Object.hasOwn(lastUpdate.params.toolPolicy as object, 'workspace_read_exempt')).toBe(false);
+      }
+    });
+  }
+  test('a folder advertisement from another durable node never enables profile folders', async () => {
+    const f = fixture(), bot = f.bot();
+    f.store.setMetadata('nodeRuntimeFeatures:machine', { nodeId: 'another-node', features: { botFolder: true } });
+    await syncBotProfile(f.services, f.alice, bot.id);
+    expect(Object.hasOwn(f.calls.find(call => call.method === 'profiles.update')!.params, 'workingDirectory')).toBe(false);
+  });
+  for (const action of ['reset', 'move'] as const) {
+    test(`${action} discards queued access and pending grants only for that Bot`, async () => {
+      const f = fixture(), bot = f.bot();
+      const access = f.services.resource('access', { botId: bot.id, state: 'queued' });
+      const other = f.services.resource('access', { botId: 'another-bot', state: 'queued' });
+      const grant: P.BotGrant = f.services.resource('grant', { botId: bot.id, machineId: bot.machineId, capabilityId: 'files', requestedLevel: 'off', pendingLevel: 'read_only', effectiveLevel: 'off', reasons: [] });
+      f.store.put('accessRequests', access); f.store.put('accessRequests', other); f.store.put('botGrants', grant);
+      const scopes = action === 'reset' ? { resetScopes: ['job'] } : { targetMachineId: 'destination' };
+      const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce(`queued_${action}`), action, ...scopes });
+      expect(preview.affected.some(effect => effect.resourceType === 'accessRequests' && effect.id === access.id)).toBe(true);
+      await f.request('POST', `/v1/bots/${bot.id}/${action}`, confirmed(preview, action === 'reset' ? { resetScopes: ['job'] } : { machineId: 'destination' }));
+      expect(f.store.get('accessRequests', access.id)).toBeNull();
+      expect(f.store.get('accessRequests', other.id)).toEqual(other);
+      expect(f.store.require<P.BotGrant>('botGrants', grant.id)).toMatchObject({ requestedLevel: 'off', pendingLevel: null });
+    });
+  }
+  for (const prior of [undefined, true, false]) {
+    for (const review of [false, true]) {
+      test(`management preserves tri-state folder exemption ${prior} with review=${review}`, async () => {
+        const f = fixture(), bot = f.bot();
+        if (review) f.store.setMetadata(`nodeRuntimeFeatures:${bot.machineId}`, { nodeId: f.store.require<P.Machine>('machines', bot.machineId).nodeId, features: { botFolder: true } });
+        await syncBotProfile(f.services, f.alice, bot.id);
+        const floor = f.store.metadata<P.JSONObject>(`botControllerFloor:${bot.id}`)!;
+        f.store.setMetadata(`botControllerFloor:${bot.id}`, { ...floor, ...(prior === undefined ? {} : { workspace_read_exempt: prior }) });
+        f.services.integrations.workspaceRestrictions = () => ({ localExecutionCeiling: 'ask', rules: [], allowedMcpOrigins: null, requireReview: false, folderReadsNeedReview: review });
+        await syncBotPolicyFloor(f.services, f.admin, bot.id);
+        const hardened = f.store.metadata<P.JSONObject>(`botControllerFloor:${bot.id}`)!;
+        if (review) expect(hardened.workspace_read_exempt).toBe(false);
+        else if (prior === undefined) {
+          expect(hardened.workspace_read_exempt).toBeUndefined();
+          expect(Object.hasOwn(hardened, 'workspace_read_exempt')).toBe(false);
+        } else expect(hardened.workspace_read_exempt).toBe(prior);
+      });
+    }
+  }
+});
+
+test('a current profile clears a refresh marker only after policy synchronization is acknowledged', async () => {
+  const f = fixture(), bot = f.bot();
+  await syncBotProfile(f.services, f.alice, bot.id);
+  for (const state of ['pending', 'outcome_unknown', 'acknowledged', null]) {
+    f.store.setMetadata(`profileRefresh:${bot.id}`, true);
+    f.store.setMetadata(`botPolicySync:${bot.id}`, state === null ? null : { state });
+    const calls = f.calls.length;
+    markBotProfilesForRefresh(f.services);
+    expect(f.store.metadata(`profileRefresh:${bot.id}`)).toBe(state === null || state === 'acknowledged' ? null : true);
+    expect(f.calls).toHaveLength(calls);
+  }
 });

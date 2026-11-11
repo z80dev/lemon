@@ -13,6 +13,9 @@ defmodule LemonCore.Redact do
   depth/item/byte bounds, and fixed runtime-error summaries. In particular, apply
   redaction before truncating text, not after cutting a credential in half.
 
+  Text that exhausts the regex engine's match budget is withheld in full as
+  `[REDACTED]` (one replacement). Never return a partially screened value.
+
   Inside a conservative unquoted URL-like token after `?`, an `&key=value`
   starts an independent query pair, so non-sensitive query pairs are retained.
   Keys use ASCII letters, digits, `.`, `_`, `%`, or `-`; values also allow `~` and `+`.
@@ -77,7 +80,7 @@ defmodule LemonCore.Redact do
   @credentials ~r/(?:sk-[A-Za-z0-9_-]{8,}|(?i:(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}|xox[a-z]-[A-Za-z0-9-]{8,})|AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35}|\beyJ(?:[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|[A-Za-z0-9+\/_-]{30,}(?:\.[A-Za-z0-9+\/_-]+)*=*))/
   @authorization ~r/\bbearer\s+[A-Za-z0-9._~+\/=:-]+/i
   @assignment ~r/((?<![\w.-])["']?[A-Za-z0-9_.-]*(?:#{@key_pattern}|session|private)[A-Za-z0-9_.-]*["']?[ \t]*[:=][ \t]*)(basic[ \t]+[A-Za-z0-9._~+\/=:-]+|""".*?(?:"""|\z)|'''.*?(?:'''|\z)|"(?:\\.|[^"\\])*(?:"|\z)|'(?:\\.|[^'\\])*(?:'|\z)|\[REDACTED\]|[^\s,;&"'{}\[\]]+|&)/is
-  @config_assignment ~r/^([ \t]*[^#\n=\[]*?=[ \t]*)([^\n]+)$/m
+  @config_assignment ~r/^([^#\n=\[]*?=[ \t]*)([^\n]+)$/m
   @pairing_code ~r/((?:pairing code:\s*|lemon pairing (?:approve|deny) (?:telegram|discord)\s+))[A-HJ-NP-Z2-9]{8}\b/i
   @hex_key ~r/0x[a-fA-F0-9]{64}/
 
@@ -130,6 +133,9 @@ defmodule LemonCore.Redact do
     result = tokenize(value, legacy, count, passes, tokenizer?, strict?, drop_keys?)
 
     if Keyword.get(opts, :count, false), do: result, else: elem(result, 0)
+  rescue
+    SystemLimitError ->
+      if Keyword.get(opts, :count, false), do: {@marker, 1}, else: @marker
   end
 
   def text(value, opts) do

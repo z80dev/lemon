@@ -77,6 +77,7 @@ defmodule LemonGateway.Transports.Webhook.Request do
          %URI{scheme: scheme, host: host} = uri <- URI.parse(value),
          normalized_scheme when normalized_scheme in ["http", "https"] <-
            String.downcase(to_string(scheme)),
+         true <- is_integer(uri.port) and uri.port in 1..65_535,
          canonical_host when is_binary(canonical_host) <- canonicalize_host(host),
          true <- allow_private_hosts || not private_callback_host?(canonical_host, opts) do
       {:ok, URI.to_string(%{uri | host: canonical_host})}

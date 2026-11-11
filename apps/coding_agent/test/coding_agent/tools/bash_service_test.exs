@@ -27,6 +27,30 @@ defmodule CodingAgent.Tools.BashServiceTest do
     {:ok, cwd: cwd, opts: opts}
   end
 
+  test "readiness match exhaustion retains the service handle and reports failure", %{
+    cwd: cwd,
+    opts: opts
+  } do
+    result =
+      Bash.execute(
+        "limit",
+        %{
+          "command" => "printf '" <> String.duplicate("a", 100) <> "!'; read value",
+          "name" => "limit",
+          "ready" => %{"log" => "(a+)+$", "timeout_s" => 5}
+        },
+        nil,
+        nil,
+        cwd,
+        opts
+      )
+
+    assert %AgentToolResult{is_error: true, details: %{process_id: id}} = result
+    assert text(result) =~ "match budget"
+    assert Service.resolve("limit", cwd, opts) == id
+    assert {:ok, %{status: :running}} = ProcessManager.poll(id)
+  end
+
   test "service identity is registered before external launch", %{cwd: cwd, opts: opts} do
     owner = self()
     service = %{name: "atomic", project: cwd, generation: 1}

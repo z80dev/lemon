@@ -416,14 +416,16 @@ defmodule CodingAgent.TaskStoreServer do
     else
       File.mkdir_p!(Path.dirname(state.dets_path))
 
-      dets_file = String.to_charlist(state.dets_path)
-
-      case :dets.open_file(@dets_table, file: dets_file, type: :set) do
+      case CodingAgent.StatePaths.open_dets(@dets_table, state.dets_path) do
         {:ok, _} ->
           %{state | dets_initialized: true}
 
         {:error, {:already_open, _pid}} ->
           %{state | dets_initialized: true}
+
+        {:error, {:state_dir_locked, pid}} ->
+          CodingAgent.StatePaths.warn_locked(pid)
+          state
 
         {:error, reason} ->
           Logger.warning("Failed to open DETS: #{inspect(reason)}")
@@ -632,6 +634,6 @@ defmodule CodingAgent.TaskStoreServer do
   defp dets_path(opts) do
     Keyword.get(opts, :dets_path) ||
       Application.get_env(:coding_agent, :task_store_path) ||
-      Path.join(CodingAgent.Config.agent_dir(), "tasks.dets")
+      CodingAgent.StatePaths.dets_path("tasks.dets")
   end
 end

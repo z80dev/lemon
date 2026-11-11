@@ -30,7 +30,9 @@ defmodule CodingAgent.Session.CustomProviderResolutionTest do
       base_url: "https://llm.internal/v1",
       api_key_env: "MY_GATEWAY_KEY",
       headers: %{"X-Team" => "platform"},
-      models: [%{id: "qwen3-coder", name: "Qwen3 Coder", context_window: 131_072}]
+      models: [
+        %{id: "custom-fixture-model", name: "Custom Fixture Model", context_window: 131_072}
+      ]
     },
     "local" => %{
       api: "openai_responses",
@@ -51,10 +53,16 @@ defmodule CodingAgent.Session.CustomProviderResolutionTest do
   end
 
   test "explicit provider:model, provider/model and bare listed ids resolve custom models" do
-    for spec <- ["my-gateway:qwen3-coder", "my-gateway/qwen3-coder", "qwen3-coder"] do
+    for spec <- [
+          "my-gateway:custom-fixture-model",
+          "my-gateway/custom-fixture-model",
+          "custom-fixture-model"
+        ] do
       model = ModelResolver.resolve_session_model(spec, settings())
 
-      assert %Model{provider: "my-gateway", id: "qwen3-coder", api: :openai_completions} = model
+      assert %Model{provider: "my-gateway", id: "custom-fixture-model", api: :openai_completions} =
+               model
+
       assert model.base_url == "https://llm.internal/v1"
       assert model.context_window == 131_072
       assert model.headers == %{"x-team" => "platform"}
@@ -77,7 +85,7 @@ defmodule CodingAgent.Session.CustomProviderResolutionTest do
 
     config = %LemonCore.Config{
       providers: %{id => @providers["my-gateway"]},
-      agent: %{default_provider: nil, default_model: "#{id}:qwen3-coder"}
+      agent: %{default_provider: nil, default_model: "#{id}:custom-fixture-model"}
     }
 
     settings = SettingsManager.from_config(config)
@@ -85,27 +93,32 @@ defmodule CodingAgent.Session.CustomProviderResolutionTest do
     assert_raise ArgumentError, fn -> String.to_existing_atom(String.replace(id, "-", "_")) end
 
     model = ModelResolver.resolve_session_model(nil, settings)
-    assert %Model{provider: ^id, id: "qwen3-coder"} = model
+    assert %Model{provider: ^id, id: "custom-fixture-model"} = model
   end
 
   test "a default provider with a provider-prefixed model id resolves the bare id" do
     config = %LemonCore.Config{
       providers: @providers,
-      agent: %{default_provider: "my-gateway", default_model: "my-gateway:qwen3-coder"}
+      agent: %{default_provider: "my-gateway", default_model: "my-gateway:custom-fixture-model"}
     }
 
     settings = SettingsManager.from_config(config)
     model = ModelResolver.resolve_session_model(nil, settings)
-    assert %Model{provider: "my-gateway", id: "qwen3-coder", context_window: 131_072} = model
+
+    assert %Model{provider: "my-gateway", id: "custom-fixture-model", context_window: 131_072} =
+             model
   end
 
   test "task and compaction selectors resolve custom models" do
     settings =
       settings(%{
-        model_roles: %{"task" => "my-gateway:qwen3-coder", "compaction" => "local:summarizer"}
+        model_roles: %{
+          "task" => "my-gateway:custom-fixture-model",
+          "compaction" => "local:summarizer"
+        }
       })
 
-    parent = ModelResolver.resolve_session_model("my-gateway:qwen3-coder", settings)
+    parent = ModelResolver.resolve_session_model("my-gateway:custom-fixture-model", settings)
 
     assert %Model{provider: "my-gateway"} =
              ModelResolver.resolve_task_model(nil, settings, parent)

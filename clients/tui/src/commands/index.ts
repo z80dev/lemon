@@ -6,6 +6,7 @@
  * built by a function rather than exported as a constant.
  */
 
+import { agentNameCommand, agentsCommand, tellCommand } from "./agent-addressing.ts";
 import { approvalsCommand, approveCommand, denyCommand } from "./approvals.ts";
 import { blueprintCommand, blueprintsCommand } from "./blueprints.ts";
 import { contextCommand } from "./context.ts";
@@ -25,7 +26,6 @@ import { cronCommand } from "./cron.ts";
 import { costCommand, logsCommand, statusCommand, usageCommand } from "./diagnostics.ts";
 import { forkCommand } from "./fork.ts";
 import {
-	agentsCommand,
 	backgroundCommand,
 	btwCommand,
 	commandsCommand,
@@ -87,6 +87,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		sessionCommand,
 		forkCommand,
 		nameCommand,
+		agentNameCommand,
 		treeCommand,
 		rewindCommand,
 		resetCommand,
@@ -116,6 +117,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		btwCommand,
 		runsCommand,
 		agentsCommand,
+		tellCommand,
 		tasksCommand,
 		ompCommand,
 		goalCommand,

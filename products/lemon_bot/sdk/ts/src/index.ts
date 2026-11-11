@@ -6,6 +6,7 @@ export type { ErrorContext } from './errors.ts';
 export { parsePairUrl } from './pairing.ts';
 export { BotPreflightError, preflightBotOrigin, validateBotIdentity, validateBotOrigin, validateBotSetup } from '../../../contracts/preflight.ts';
 export type { BotOriginUse, BotPreflightCode, BotPreflightOptions, BotPreflightResult } from '../../../contracts/preflight.ts';
+export { approvalTextPresentation } from '../../../contracts/approval-presentation.ts';
 export { RealtimeConnection, compareCursors } from './realtime.ts';
 export type { RealtimeOptions, RealtimeState } from './realtime.ts';
 export { applyEntryDelta, mergeRevisions, reduceEntryEvent, upsertRevision } from './reducers.ts';

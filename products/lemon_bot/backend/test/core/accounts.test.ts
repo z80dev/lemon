@@ -7,8 +7,8 @@ import { ApiError } from '../../src/core/errors';
 import { authFixture, routeContext } from './auth.test';
 import { issueOwnerSetupProof } from '../../src/core/setup';
 
-function accounts(hooks: Parameters<typeof createAccountRoutes>[1] = {}) {
-  const fixture = authFixture(hooks); const routes = createAccountRoutes(fixture.services, hooks);
+function accounts(hooks: Parameters<typeof createAccountRoutes>[1] = {}, dependencies?: Parameters<typeof createAccountRoutes>[2]) {
+  const fixture = authFixture(hooks); const routes = createAccountRoutes(fixture.services, hooks, dependencies);
   async function call<T>(method: string, path: string, body: unknown = undefined, user: Principal | null = fixture.alice, params: Record<string, string> = {}): Promise<T> {
     const route = routes.find(value => value.method === method && value.path === path);
     if (!route) throw new Error('Account route not found.');
@@ -76,6 +76,23 @@ describe('account lifecycle', () => {
     expect((await f.services.auth.authenticate(authenticated(current.token)))?.sessionId).toBe(current.session.id);
     await expect(f.services.auth.authenticate(authenticated(other.token))).rejects.toMatchObject({ code: 'unauthenticated' }); expect(revoked).toEqual([other.session.id]);
     expect(await Bun.password.verify('Replacement password 77', f.store.require<{ passwordHash: string }>('credentials', 'alice').passwordHash)).toBe(true);
+  });
+  test('first-password commit refuses a session revoked while its password is hashing', async () => {
+    const hashing = Promise.withResolvers<void>();
+    const releaseHash = Promise.withResolvers<string>();
+    const f = accounts({}, { async hashPassword() { hashing.resolve(); return await releaseHash.promise; } });
+    const auth = await f.services.auth.session('alice', null, { localConfirmed: true });
+    const actor = await f.services.auth.authenticate(authenticated(auth.token), 'member');
+    expect(actor).not.toBeNull();
+    const pending = f.call('POST', '/v1/me/password', { clientNonce: opaqueToken(), email: 'alice-password@example.com', password: testPassword }, actor);
+    await hashing.promise;
+    const secret = f.store.require<{ id: string; tokenDigest: string; revoked: boolean; localConfirmedAtMs: number }>('sessionSecrets', auth.session.id);
+    f.store.put('sessionSecrets', { ...secret, revoked: true });
+    f.store.remove('authSessions', auth.session.id);
+    releaseHash.resolve('MOCK-argon2id-hash');
+    await expect(pending).rejects.toMatchObject({ code: 'unauthenticated' });
+    expect(f.store.get('credentials', 'alice')).toBeNull();
+    expect(f.services.auth.user('alice').email).toBe('alice@example.com');
   });
   test('an invitation never resets an existing local password', async () => {
     const f = accounts(); const existing = f.addUser('returning'); f.store.put('members', f.services.update(f.services.auth.member('returning'), { enabled: false }));
@@ -240,5 +257,56 @@ describe('account lifecycle', () => {
     expect(f.store.require<P.AuthSession>('authSessions', paired.session.id).deviceId).toBe(device.id);
     await f.call('DELETE', '/v1/devices/:id', { clientNonce: opaqueToken() }, f.alice, { id: device.id });
     await expect(f.services.auth.authenticate(authenticated(paired.token))).rejects.toMatchObject({ code: 'unauthenticated' });
+  });
+  test('member role or enabled change eagerly ends allowances for that user', async () => {
+    const f = accounts();
+    const member = f.services.auth.member('alice');
+    const allowance: P.ApprovalAllowance = f.services.resource<Omit<P.ApprovalAllowance, keyof P.Resource>>('allowance', {
+      scope: 'chat',
+      botId: 'bot-1',
+      conversationId: 'room-1',
+      ownerUserId: 'alice',
+      toolGroups: ['terminal'],
+      label: 'Terminal allowed in this chat',
+      state: 'active',
+      endedReason: null,
+      endedAtMs: null,
+      endedByUserId: null,
+      sourceApprovalId: 'appr-1',
+      createdByUserId: 'alice',
+      useCount: 0,
+      lastUsedAtMs: null,
+    });
+    f.store.put('approvalAllowances', allowance);
+    await f.call('PATCH', '/v1/members/:id', { clientNonce: opaqueToken(), revision: member.revision, role: 'admin' }, f.owner, { id: member.id });
+    const updated = f.store.require<P.ApprovalAllowance>('approvalAllowances', allowance.id);
+    expect(updated.state).toBe('ended');
+    expect(updated.endedReason).toBe('membership_changed');
+  });
+  test('member deletion eagerly ends allowances for that user', async () => {
+    const f = accounts();
+    const member = f.services.auth.member('alice');
+    const allowance: P.ApprovalAllowance = f.services.resource<Omit<P.ApprovalAllowance, keyof P.Resource>>('allowance', {
+      scope: 'chat',
+      botId: 'bot-1',
+      conversationId: 'room-1',
+      ownerUserId: 'alice',
+      toolGroups: ['terminal'],
+      label: 'Terminal allowed in this chat',
+      state: 'active',
+      endedReason: null,
+      endedAtMs: null,
+      endedByUserId: null,
+      sourceApprovalId: 'appr-1',
+      createdByUserId: 'alice',
+      useCount: 0,
+      lastUsedAtMs: null,
+    });
+    f.store.put('approvalAllowances', allowance);
+    const preview = await f.call<P.Confirmation>('POST', '/v1/members/:id/preview', { clientNonce: opaqueToken(), action: 'delete' }, f.owner, { id: member.id });
+    await f.call('DELETE', '/v1/members/:id', { clientNonce: opaqueToken(), revision: preview.revision, confirmationToken: preview.confirmationToken, confirmName: preview.confirmName }, f.owner, { id: member.id });
+    const updated = f.store.require<P.ApprovalAllowance>('approvalAllowances', allowance.id);
+    expect(updated.state).toBe('ended');
+    expect(updated.endedReason).toBe('membership_changed');
   });
 });

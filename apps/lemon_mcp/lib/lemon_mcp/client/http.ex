@@ -78,6 +78,8 @@ defmodule LemonMCP.Client.HTTP do
       url: Keyword.fetch!(opts, :url),
       origin_policy: Keyword.get(opts, :origin_policy),
       destination_pin: nil,
+      peer_owner:
+        Keyword.get(opts, :peer_owner, &LemonCore.LoopbackListener.peer_owned_by_self?/2),
       http_profile: :default,
       headers: Keyword.get(opts, :headers, []),
       oauth: Keyword.get(opts, :oauth, []),
@@ -566,15 +568,34 @@ defmodule LemonMCP.Client.HTTP do
           {content_type, data} -> {to_charlist(url), headers, content_type, data}
         end
 
-      case :httpc.request(
-             method,
-             request,
-             http_opts,
-             [body_format: :binary],
-             state.config.http_profile
-           ) do
+      response =
+        if OriginPolicy.ownership_required?(pin) do
+          LemonMCP.HTTP.OwnedConnection.request(
+            method,
+            url,
+            headers,
+            body,
+            pin,
+            timeout,
+            tls_opts,
+            state.config.peer_owner
+          )
+        else
+          :httpc.request(
+            method,
+            request,
+            http_opts,
+            [body_format: :binary],
+            state.config.http_profile
+          )
+        end
+
+      case response do
         {:ok, {{_version, status, _reason}, _headers, _body}} when status in 300..399 ->
           {:error, :redirect_forbidden}
+
+        {:error, :private_origin_not_owned} = error ->
+          error
 
         {:error, reason} ->
           if is_nil(policy),

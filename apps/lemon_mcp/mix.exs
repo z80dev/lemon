@@ -13,15 +13,7 @@ defmodule LemonMCP.MixProject do
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
-      # Advisory: `threshold: 0` prints the coverage summary but never gates
-      # (summary: true would apply Elixir's default 90% threshold). The legacy
-      # HTTP+SSE client_test is timing-flaky under load, so it is tagged
-      # :integration and excluded from the gating run, which drops SSE-transport
-      # coverage below the former 61% threshold. Follow-up: stabilize the SSE client
-      # handshake (deterministic endpoint/response sync), drop that test's
-      # :integration tag, and restore `threshold: 61`. See
-      # apps/lemon_mcp/test/lemon_mcp/client_test.exs, describe "SSE client".
-      test_coverage: [summary: [threshold: 0]],
+      test_coverage: [summary: [threshold: 61]],
       deps: deps()
     ]
   end
@@ -37,6 +29,7 @@ defmodule LemonMCP.MixProject do
     [
       {:jason, "~> 1.4"},
       {:idna, "~> 7.1"},
+      {:mint, "~> 1.8"},
       # Local HTTP/SSE MCP server fixtures for the client tests
       {:bandit, "~> 1.0", only: :test},
       {:plug, "~> 1.14", only: :test},

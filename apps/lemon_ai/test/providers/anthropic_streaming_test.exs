@@ -711,10 +711,10 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
         | reasoning: true,
           adaptive_thinking: true,
           max_tokens: 8192,
-          reasoning_efforts: [:low, :medium, :high, :xhigh]
+          reasoning_efforts: [:low, :medium, :high, :xhigh, :max]
       }
 
-      for {reasoning, effort} <- [minimal: "low", high: "high", xhigh: "max"] do
+      for {reasoning, effort} <- [minimal: "low", high: "high", xhigh: "xhigh", max: "max"] do
         {:ok, stream} =
           Anthropic.stream(adaptive, context, %StreamOptions{
             api_key: "test-key",
@@ -723,6 +723,47 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
 
         assert_receive {:request_body, body}, 1_000
         assert body["thinking"] == %{"type" => "adaptive"}
+        assert body["output_config"] == %{"effort" => effort}
+        assert {:error, _} = EventStream.result(stream, 1_000)
+      end
+
+      {:ok, stream} =
+        Anthropic.stream(adaptive, context, %StreamOptions{api_key: "test-key", reasoning: :none})
+
+      assert_receive {:request_body, body}, 1_000
+      refute Map.has_key?(body, "thinking")
+      refute Map.has_key?(body, "output_config")
+      assert {:error, _} = EventStream.result(stream, 1_000)
+
+      {:ok, stream} =
+        Anthropic.stream(%{adaptive | reasoning_efforts: []}, context, %StreamOptions{
+          api_key: "test-key",
+          reasoning: :high
+        })
+
+      assert_receive {:request_body, body}, 1_000
+      assert body["thinking"] == %{"type" => "adaptive"}
+      refute Map.has_key?(body, "output_config")
+      assert {:error, _} = EventStream.result(stream, 1_000)
+
+      effort_only = %{
+        adaptive
+        | adaptive_thinking: false,
+          reasoning_efforts: [:low, :high, :max],
+          compat: %{anthropic_effort_only: true}
+      }
+
+      for {reasoning, effort} <- [medium: "low", max: "max"] do
+        {:ok, stream} =
+          Anthropic.stream(effort_only, context, %StreamOptions{
+            api_key: "test-key",
+            reasoning: reasoning,
+            temperature: 0.2
+          })
+
+        assert_receive {:request_body, body}, 1_000
+        refute Map.has_key?(body, "thinking")
+        refute Map.has_key?(body, "temperature")
         assert body["output_config"] == %{"effort" => effort}
         assert {:error, _} = EventStream.result(stream, 1_000)
       end
@@ -789,7 +830,7 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
         {:ok, stream} =
           Anthropic.stream(adaptive, context, %StreamOptions{
             api_key: api_key,
-            reasoning: :xhigh,
+            reasoning: :max,
             temperature: 0.2,
             headers: %{"Anthropic-Beta" => "custom-beta,effort-2025-11-24"}
           })
@@ -814,7 +855,12 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
         )
 
       for adaptive? <- [false, true], choice <- [:any, "lookup"] do
-        thinking_model = %{model() | reasoning: true, adaptive_thinking: adaptive?}
+        thinking_model = %{
+          model()
+          | reasoning: true,
+            adaptive_thinking: adaptive?,
+            reasoning_efforts: if(adaptive?, do: [:low, :high], else: [])
+        }
 
         {:ok, stream} =
           Anthropic.stream(thinking_model, context, %StreamOptions{

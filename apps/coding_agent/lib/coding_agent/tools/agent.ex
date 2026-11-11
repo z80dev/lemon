@@ -33,8 +33,9 @@ defmodule CodingAgent.Tools.Agent do
   """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
-    agent_id_property = build_agent_id_property(cwd, opts)
-    role_property = build_role_property(cwd)
+    config_cwd = Keyword.get(opts, :config_cwd) || cwd
+    agent_id_property = build_agent_id_property(config_cwd, opts)
+    role_property = build_role_property(config_cwd)
 
     %AgentTool{
       name: "agent",
@@ -163,7 +164,7 @@ defmodule CodingAgent.Tools.Agent do
         Map.to_list(Params.inherited_execution_context(opts))
       )
 
-    with {:ok, validated} <- validate_run_params(params, cwd),
+    with {:ok, validated} <- validate_run_params(params, cwd, opts),
          {:ok, delegated_session_key} <- resolve_delegated_session_key(validated, opts),
          {:ok, request} <- build_run_request(validated, delegated_session_key, cwd, opts),
          {:ok, run_id} <- submit_run(request, opts) do
@@ -575,7 +576,7 @@ defmodule CodingAgent.Tools.Agent do
     parent_agent_id = Keyword.get(opts, :agent_id)
     parent_run_id = Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id)
 
-    role_cwd = validated.cwd || cwd
+    role_cwd = Keyword.get(opts, :config_cwd) || validated.cwd || cwd
 
     with {:ok, prompt, persona} <-
            maybe_apply_role_prompt(validated.prompt, validated.role_id, role_cwd) do
@@ -1390,7 +1391,7 @@ defmodule CodingAgent.Tools.Agent do
     }
   end
 
-  defp validate_run_params(params, cwd) when is_map(params) do
+  defp validate_run_params(params, cwd, opts) when is_map(params) do
     agent_id = Map.get(params, "agent_id") |> normalize_optional_string()
     prompt = Map.get(params, "prompt")
     description = Map.get(params, "description") |> normalize_optional_string()
@@ -1409,7 +1410,7 @@ defmodule CodingAgent.Tools.Agent do
     raw_node = Map.get(params, "node")
     node = normalize_optional_string(raw_node)
     model = Map.get(params, "model")
-    role_cwd = delegated_cwd || cwd
+    role_cwd = Keyword.get(opts, :config_cwd) || delegated_cwd || cwd
 
     cond do
       not is_binary(agent_id) ->
@@ -1488,7 +1489,7 @@ defmodule CodingAgent.Tools.Agent do
     end
   end
 
-  defp validate_run_params(_, _cwd), do: {:error, "params must be an object"}
+  defp validate_run_params(_, _cwd, _opts), do: {:error, "params must be an object"}
 
   defp maybe_apply_role_prompt(prompt, nil, _cwd), do: {:ok, prompt, nil}
   defp maybe_apply_role_prompt(prompt, "", _cwd), do: {:ok, prompt, nil}

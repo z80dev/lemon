@@ -35,6 +35,7 @@ defmodule CodingAgent.ToolExecutor do
   """
 
   alias CodingAgent.ToolPolicy
+  alias CodingAgent.WorkspaceReads
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
 
@@ -60,11 +61,15 @@ defmodule CodingAgent.ToolExecutor do
   Wrap a single tool with approval checks.
 
   Argument-sensitive tools resolve the gate at execution time, including after
-  an outer on_tool_call hook has rewritten arguments.
+  an outer on_tool_call hook has rewritten arguments. `webfetch`/`websearch`
+  are wrapped whenever a folder-read exemption could apply or the session is
+  already fenced, so a narrowed policy or a tool reload cannot drop the egress
+  gate a restored or inherited fence earned.
   """
   @spec wrap_with_approval(AgentTool.t(), ToolPolicy.policy(), map()) :: AgentTool.t()
   def wrap_with_approval(%AgentTool{} = tool, policy, context) do
     if tool.name == "lsp" or
+         tool.name in ["webfetch", "websearch"] or
          ToolPolicy.requires_approval?(policy, tool.name, %{}, context[:approval_tier]) do
       wrap_tool(tool, policy, context)
     else
@@ -146,7 +151,27 @@ defmodule CodingAgent.ToolExecutor do
     original_execute = tool.execute
 
     wrapped_execute = fn tool_call_id, params, signal, on_update ->
-      if ToolPolicy.requires_approval?(policy, tool.name, params, context[:approval_tier]) do
+      params = WorkspaceReads.resolve_params(tool.name, params, context)
+
+      policy_required =
+        ToolPolicy.requires_approval?(policy, tool.name, params, context[:approval_tier])
+
+      # The exemption only applies when the egress fence became durable first;
+      # an unfenceable session reviews the read instead.
+      required =
+        cond do
+          tool.name in ["webfetch", "websearch"] and WorkspaceReads.fenced?(context) ->
+            true
+
+          tool.name in ["read", "ls", "grep"] and policy_required ->
+            not (WorkspaceReads.exempt?(policy, tool.name, params, context) and
+                   WorkspaceReads.fence!(context) == :ok)
+
+          true ->
+            policy_required
+        end
+
+      if required do
         execute_with_approval(
           tool.name,
           params,

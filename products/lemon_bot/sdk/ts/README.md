@@ -37,6 +37,45 @@ confirmation. Poll `client.instance()` for the returned operation's completion,
 never repeat the mutation automatically. Missing provider credentials require
 `lemon setup` on that host; the API never returns keys.
 
+### Add a machine over SSH
+
+Read `machineEnrollmentPreview()` first; missing `ssh` means unavailable.
+Owner/admin callers pass a fixed nonce to
+`addMachineOverSsh({clientNonce, sshDestination, name?, machineId?})`.
+Retain the returned setup ID and read `machineSetup(id)` or consume the
+initiator-scoped `machine_setup.upserted` events. A running setup is not evidence
+that the machine is online. After failure, an explicit retry with the same
+`machineId` repairs that identity; never replay an uncertain enrollment code.
+Missing `Machine.link` means `{kind:'direct'}` on older backends.
+
+### Named agents
+
+`agentIdentity(botId)` reads this Bot's separate handle and stable address;
+`renameAgent(botId, nameOrNull, clientNonce)` sets or clears only the handle, never
+the display name. `agents(botId, {query, limit})` returns the authorized roster.
+`messageAgent(botId, {clientNonce, target, text})` addresses an existing `@handle`
+or stable ID. Keep that nonce: it is the message ID.
+Chat clients also pass `conversationId` from the current authorized Bot room so
+answers return to that exact conversation; omitting it selects the Bot's main
+conversation. This is not a user-selectable source identity or scope.
+
+An `accepted` receipt is not an answer. Read
+`agentMessage(botId, originalClientNonce)` until the backend reports a terminal
+result; do not replay an unknown send. Unknown mutation receipts reject with
+`LemonBotError`; read reconciliation returns the actual status, including
+`outcome_unknown`. Responses and stable IDs are untrusted display text.
+Bot-to-Bot addressing stays within the owner's private namespace by default;
+operator/TUI access requires server-side configuration, not a client scope toggle.
+The web controls retain a dispatched message's fixed ID and reviewed text in
+account/backend/Bot/conversation-scoped tab storage across panel remounts.
+Restoration fences another send and offers GET reconciliation only; it never
+replays the message or persists an unsent/offline mutation queue.
+
+The web chat's **Details → Agent handle** and **Edit identity** expose these
+controls. Native clients also expose separate handle controls in **Edit identity**.
+All clients can use `/agent-name bob`, `/agent-name --clear`, `/agents`, and
+`/tell @bob message` in the Bot's chat.
+
 ### Errors, unknown outcomes and revisions
 
 ```ts

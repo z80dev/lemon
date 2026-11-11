@@ -214,9 +214,15 @@ registration: inspect the negotiated capabilities.
 batches. It cannot round-trip client requests or stream notifications; use
 `lemon acp` for interactive integrations.
 
-The HTTP endpoint's optional `LEMON_ACP_API_TOKEN` (or application setting
-`:acp_api_token`) is independent of the internal runtime operator credential.
-When configured, send it as `Authorization: Bearer <token>` or `x-api-key`.
+The HTTP endpoint requires a token by default. Send the configured
+`LEMON_ACP_API_TOKEN` (or application setting `:acp_api_token`) as
+`Authorization: Bearer <token>` or `x-api-key`. When unset, it accepts the
+control-plane operator token instead (managed launcher file:
+`~/.lemon/run/control-plane-<port>.token`). Tokenless direct-loopback access
+requires the explicit compatibility flag and no configured token.
+Off-loopback `/acp` and `/acp/ws` are hidden unless
+`LEMON_CONTROL_PLANE_REMOTE_HTTP=acp` is enabled with a dedicated ACP token.
+Use TLS or an encrypted overlay; keep operator WebSocket proxy paths restricted.
 
 The obsolete `scripts/lemon_acp_stdio.exs` runtime-boot script is removed. Client
 configurations must use `lemon acp`; there is no second runtime or fake runtime

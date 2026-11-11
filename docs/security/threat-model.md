@@ -1,6 +1,6 @@
 # Threat Model & Security Posture
 
-_Last reviewed: 2026-08-10_
+_Last reviewed: 2026-11-11_
 
 This document is for two readers: an **operator** deciding how to run Lemon
 safely, and a **security reviewer** auditing what the platform actually
@@ -29,6 +29,85 @@ cryptographic, network, and boundary machinery those docs assume.
 | Model context | System + operator instructions | Email bodies, web content, external agents | Untrusted-content wrapping (`LemonAgent.Security.ExternalContent`) |
 | Package graph | Declared dependencies | Undeclared cross-package reach | `deps/0` policy + namespace-reference check (`LemonCore.Quality.ArchitectureCheck`) |
 | Published tarball | Files you intend to ship | Gitignored local secrets in the tree | `exclude_patterns` in each package's `mix.exs` |
+
+## Listener exposure
+
+| Listener | Default bind / port | Exposure policy |
+| --- | --- | --- |
+| Control plane | `127.0.0.1:4040` | Operator/node WebSocket authentication; remote peers get only `GET /ws` and `/healthz` by default |
+| Node gateway | `127.0.0.1:4044` | Only node/enrollment `/ws` and `/healthz`; operator and tokenless handshakes refused |
+| LemonWeb | `127.0.0.1:4080` | Operator login; non-loopback startup requires an operator token |
+| Lemon Bot | `127.0.0.1:4100` | Product sessions; private same-user proof for local owner sign-in |
+| A2A (optional) | `127.0.0.1:9901` | Peer tokens; tokenless local fallback requires explicit compatibility opt-in |
+| LemonSim UI (optional) | `127.0.0.1:4090` | Existing simulation access-token policy; public lobby/health remain public |
+| epmd / distribution | Loopback | Launcher defaults; explicit cross-host distribution is an operator choice |
+
+**Breaking change:** LAN clients that relied on wildcard binds must explicitly
+opt in and restart. The [configuration reference](../config.md#listener-exposure-breaking-default-change)
+owns bind variables and remote HTTP API opt-ins; the
+[November upgrade notes](../release/upgrade-2026-11.md) cover migration.
+
+Off-loopback control-plane peers get only `GET /ws` and `GET /healthz` by
+default. OpenAI-compatible and ACP HTTP endpoints need explicit remote opt-in
+and their dedicated API tokens. Main and LemonWeb non-loopback binds require
+an operator token and reject tokenless-loopback compatibility. Put TLS in front
+of browser login. Lemon Bot's separate backend requires a configured public
+origin and HTTPS, or an explicitly trusted encrypted overlay, for remote use.
+
+OpenAI-compatible and ACP APIs require bearer authentication **on loopback too**;
+without a dedicated token they use the operator token. A2A requires peer tokens.
+The legacy tokenless-local compatibility flag is default-off, only applies
+when no token is configured, and must never be enabled behind a reverse proxy.
+It is not the passwordless Lemon Bot sign-in mechanism.
+
+### Remote workers: expose the node gateway, not the controller
+
+Forward **4044 only** for node enrollment and execution traffic, using Tailscale
+Serve or a TLS reverse proxy, or the managed reverse SSH tunnel. Never forward
+**4040** as a node tunnel: that is the operator control plane. The node gateway
+accepts node/enrollment credentials on `/ws`, reports health on `/healthz`, and
+refuses operator and tokenless handshakes. Off-loopback node connections require
+`wss://` unless an authenticated, encrypted overlay is explicitly trusted.
+See [Add a Bot machine](../user-guide/attaching-a-bot-machine.md) for the
+canonical connection procedure. A remote operator backend is a different role:
+give it a separate authenticated TLS route restricted to 4040 `/ws`.
+
+Containers bind explicitly inside their network namespace, require an operator
+token, and should publish host ports on loopback. Launcher epmd/distribution
+defaults are also loopback; an existing pre-upgrade epmd may retain its old
+wildcard listener until stopped. See the configuration reference for remediation.
+
+### Same-user loopback ownership
+
+Loopback means “this host,” not “this user.” Before sending node credentials,
+workers check that a literal-loopback listener belongs to their OS user.
+The guard also covers tunneled MCP requests; absent, foreign or unverifiable
+ownership fails closed. Run the controller and SSH tunnel under the worker's
+account. `LEMON_NODE_TRUST_LOOPBACK_LISTENER=1` is an explicit opt-out only for
+deployments that deliberately trust another local UID; it does not add TLS or
+authenticate a remote server. A reverse proxy's loopback source address is not
+user identity.
+
+### Passwordless local owner
+
+The Mac app and `lemon-bot up` can create the workspace owner without an account
+form. Local access proves possession of the backend's private, owner-only
+`local-access.key`, not just a loopback connection. `lemon-bot open` exchanges
+a short-lived, one-use, origin-bound ticket for a product session; browser
+tickets last one minute and headless terminal links five minutes. The browser
+redemption rejects proxy headers and mismatched origins. Keep these links private.
+
+Local setup and [headless SSH sign-in](../getting-started/lemon-bot.md#headless-or-ssh-server)
+do not need a password. Set one in the account's sign-in settings when you need
+ordinary email/password login from another browser or device without local/SSH
+proof (or use configured SSO). Adding the first password requires a recent local
+confirmation; reopening with `lemon-bot open` supplies it. A remote login uses
+the product account, never the runtime operator token.
+
+Anyone who can read the backend's private key and database already controls
+that workspace. Do not share an OS account with someone who should not have
+that authority. Passwordless local ownership does not bypass Bot access,
+execution approvals, or macOS permissions.
 
 ## 1. Secrets at rest
 
@@ -180,6 +259,11 @@ even *available* is a separate, earlier boundary — `CodingAgent.ToolPolicy`
 runtime profiles — and approvals are not a substitute for removing a tool from a
 restricted profile.
 
+Lemon Bot's **remembered approvals** are a separate product-level allowance
+over eligible native tool groups, not a global runtime grant and not an
+exact-command allowlist. Their scope, exclusions and revocation rules are in
+the [agent safety contract](agent-safety-contract.md#lemon-bot-remembered-approvals).
+
 ## 5. Untrusted external content
 
 Content from outside the trust boundary — email bodies, web-search/fetch
@@ -227,8 +311,8 @@ compile-time edge.
 ## What a reviewer should check
 
 1. **Secrets:** confirm `Crypto` uses AES-256-GCM with per-secret HKDF keys and
-   random salt/nonce; confirm the master-key chain fails closed; note that key
-   rotation is a known gap.
+   random salt/nonce; confirm the master-key chain fails closed and rotation
+   preserves recoverability.
 2. **Publishing:** confirm every published `mix.exs` uses an allowlist `files:`
    and excludes `\.env`/`node_modules` if it ships `priv`.
 3. **Webhooks:** confirm `authorized?/1` runs before parse, the token compare is

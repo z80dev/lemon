@@ -15,6 +15,8 @@ defmodule LemonSkills.Audit.Engine do
   | `:block` | One or more hard findings — installation must be refused, not overrideable. |
 
   The overall verdict is the worst finding: block > warn > pass.
+  A rule that exhausts the regex match budget produces a blocking
+  `audit_match_limit` finding; incomplete screening never counts as a pass.
 
   ## Rules
 
@@ -44,7 +46,7 @@ defmodule LemonSkills.Audit.Engine do
   alias LemonSkills.Audit.LlmReviewer
 
   @type verdict :: :pass | :warn | :block
-  @version 3
+  @version 4
 
   @doc "Version tag for cache invalidation when deterministic audit rules change."
   @spec version() :: pos_integer()
@@ -154,6 +156,10 @@ defmodule LemonSkills.Audit.Engine do
 
   defp run_rule(acc, rule_fn, content) do
     acc ++ rule_fn.(content)
+  rescue
+    SystemLimitError ->
+      acc ++
+        [Finding.block("audit_match_limit", "Security screening exceeded its match budget")]
   end
 
   defp run_llm_review(content, opts) do

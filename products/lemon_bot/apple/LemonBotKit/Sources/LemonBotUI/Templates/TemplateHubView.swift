@@ -69,7 +69,6 @@ public struct TemplateDetailView: View {
     @State private var machineID = ""
     @State private var importName = ""
     @State private var acceptedTerms = false
-    @State private var trustedHost = false
     @State private var reviewed = false
     @State private var audience = "workspace"
     @State private var name = ""
@@ -77,11 +76,17 @@ public struct TemplateDetailView: View {
     @State private var job = ""
     @State private var instructions = ""
     @State private var deletePresented = false
+    @State private var access = "standard"
     @State private var importedBot: Bot?
     @State private var exportDocument: HubJSONDocument?
     @State private var exportPresented = false
     @State private var action = HubAction()
-    public init(store: LemonBotStore, templateID: ID) { self.store = store; self.templateID = templateID }
+    public init(store: LemonBotStore, templateID: ID) {
+        self.store = store
+        self.templateID = templateID
+        let online = store.machines.filter { $0.status == "online" }
+        _machineID = State(initialValue: online.count == 1 ? online[0].id : "")
+    }
     public var body: some View {
         Form {
             HubError(action: action, store: store)
@@ -97,11 +102,31 @@ public struct TemplateDetailView: View {
                 Section("Import distinct owned Bot") {
                     TextField("New Bot name", text: $importName)
                     HubMachinePicker(store: store, selection: $machineID)
+                    if !store.machines.contains(where: { $0.status == "online" }) {
+                        Text("No machine is online. Start one of your machines, then come back.").font(LBFont.meta).foregroundStyle(LB.warning)
+                    }
+                    Picker("Access", selection: $access) {
+                        Text("Standard — recommended").tag("standard")
+                        Text("Chat only").tag("none")
+                    }
+                    if let suggested = template.content.suggestedAccess {
+                        Text("Template author suggested \(suggested == "standard" ? "Standard" : "Chat only"). Confirm or change your access choice.").font(LBFont.meta).foregroundStyle(LB.muted)
+                    } else {
+                        Text(access == "standard"
+                            ? "Standard gives this Bot access to Terminal and Files (and Browser if supported). It asks before running commands."
+                            : "Chat only gives this Bot conversation without local file, tool or shell access.")
+                            .font(LBFont.meta).foregroundStyle(LB.muted)
+                    }
                     Toggle("I reviewed the instructions and accept applicable third-party terms", isOn: $acceptedTerms)
-                    Toggle("I trust this host: co-resident Bots share its files and logins", isOn: $trustedHost)
+                    let machineName = store.machines.first(where: { $0.id == machineID })?.name ?? "this machine"
+                    let botName = importName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? template.content.name : importName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    Text(access == "standard"
+                        ? "\(botName) works on \(machineName) as you, with your files, tools and logins. It asks before running commands."
+                        : "\(botName) works on \(machineName) in chat-only mode without file, tool or shell access.")
+                        .font(LBFont.meta).foregroundStyle(LB.muted)
                     Button("Import new owned Bot") { Task { await action.perform {
-                        importedBot = try await store.mutate("POST", "/templates/\(hubID(template.id))/import", body: ["name": .string(importName), "machineId": .string(machineID), "acceptedTerms": .bool(acceptedTerms)])
-                    } } }.disabled(importName.isEmpty || machineID.isEmpty || !acceptedTerms || !trustedHost || action.busy || action.uncertain || store.connectionState != "online")
+                        importedBot = try await store.mutate("POST", "/templates/\(hubID(template.id))/import", body: ["name": .string(importName), "machineId": .string(machineID), "acceptedTerms": .bool(acceptedTerms), "access": .string(access)])
+                    } } }.disabled(importName.isEmpty || machineID.isEmpty || !acceptedTerms || action.busy || action.uncertain || store.connectionState != "online")
                     if let importedBot { Text("Created distinct Bot \(importedBot.name) on \(importedBot.machineId)"); NavigationLink("Open imported Bot") { BotOverviewView(store: store, botID: importedBot.id) } }
                 }
                 Button("Export declarative template content") { do { exportDocument = HubJSONDocument(data: try JSONEncoder().encode(template.content)); exportPresented = true } catch { action.error = String(describing: error) } }
@@ -123,7 +148,12 @@ public struct TemplateDetailView: View {
                 }
             }
         }.navigationTitle(template?.content.name ?? "Template")
-            .task { await action.perform(readOnly: true) { let value: BotTemplate = try await store.read("/templates/\(hubID(templateID))"); template = value; importName = value.content.name; name = value.content.name; title = value.content.title; job = value.content.job; instructions = value.content.instructions; audience = value.audience } }
+            .task { await action.perform(readOnly: true) {
+                let value: BotTemplate = try await store.read("/templates/\(hubID(templateID))")
+                template = value; importName = value.content.name; name = value.content.name; title = value.content.title; job = value.content.job; instructions = value.content.instructions; audience = value.audience
+                if let suggested = value.content.suggestedAccess, ["standard", "none"].contains(suggested) { access = suggested } else { access = "standard" }
+                if machineID.isEmpty { let online = store.machines.filter { $0.status == "online" }; if online.count == 1 { machineID = online[0].id } }
+            } }
             .fileExporter(isPresented: $exportPresented, document: exportDocument, contentType: .json, defaultFilename: "lemon-template") { if case .failure(let error) = $0 { action.error = String(describing: error) } }
             .confirmationDialog("Revoke this exact template link? Existing imported Bots remain independent.", isPresented: $deletePresented) {
                 Button("Delete template", role: .destructive) { guard let template else { return }; Task { await action.perform { let _: HubDeleted = try await store.mutate("DELETE", "/templates/\(hubID(template.id))", body: ["revision": .number(Double(template.revision))]); self.template = nil; action.error = "Template link was revoked; existing copies remain." } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")

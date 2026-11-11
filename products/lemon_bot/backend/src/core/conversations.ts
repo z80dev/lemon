@@ -181,6 +181,10 @@ export function deleteConversationResources(services: BackendServices, actor: Pr
   assertDeletionReady(services, room.id);
   return services.store.transaction(() => {
     cancelConversationGates(services, room.id);
+    for (const allowance of services.store.list<P.ApprovalAllowance>('approvalAllowances', value => value.conversationId === room.id)) {
+      services.store.remove('approvalAllowances', allowance.id);
+      services.store.setMetadata(`approvalAllowanceBinding:${allowance.id}`, null);
+    }
     const entryIds = new Set(services.store.list<P.TranscriptEntry>('entries', entry => entry.conversationId === room.id).map(entry => entry.id));
     for (const collection of gateCollections) for (const resource of services.store.list<ConversationGate>(collection, value => entryIds.has(value.entryId))) services.store.remove(collection, resource.id);
     for (const draft of services.store.list<P.Draft>('drafts', value => value.conversationId === room.id)) services.store.remove('drafts', draft.id);
@@ -417,7 +421,11 @@ export function createConversationRoutes(services: BackendServices): Route[] {
       const input = parse(z.object({ ...pageFields, beforeSeq: z.coerce.number().int().positive().optional(), afterSeq: z.coerce.number().int().nonnegative().optional() }).strict(), queryObject(context.query));
       return services.page(context, visibleEntries(services, principal(context.user), room(context).id).filter(entry => (!input.beforeSeq || entry.seq < input.beforeSeq) && (input.afterSeq === undefined || entry.seq > input.afterSeq)), { ascending: true, key: entry => String(entry.seq).padStart(16, '0') });
     }),
-    route('POST', '/conversations/:id/messages', context => sendMessage(services, principal(context.user), room(context).id, parse(messageSchema, context.body), context), 202),
+    route('POST', '/conversations/:id/messages', async context => {
+      const input = parse(messageSchema, context.body), actor = principal(context.user);
+      const command = await services.addressedAgents?.command(actor, context.params.id!, input, context);
+      return command ?? sendMessage(services, actor, context.params.id!, input, context);
+    }, 202),
     route('GET', '/conversations/:id/messages/receipts/:nonce', context => readMessageReceipt(services, principal(context.user), context.params.id!, parse(mutation.shape.clientNonce, context.params.nonce))),
     route('GET', '/entries/:id', context => authorizedEntry(services, principal(context.user), context.params.id!)),
     route('POST', '/entries/:id/feedback', context => {

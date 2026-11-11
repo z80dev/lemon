@@ -16,6 +16,8 @@ defmodule LemonAi.Error do
   Account quota/credit/spend exhaustion is classified as `:rate_limit` for
   credential failover, but is not retryable against the same credential.
   Retry timing metadata is a hint, not permission to retry.
+  Free-form classification and structured marker scans inspect at most 8,192
+  characters; context/transport phrases use bounded gaps to avoid regex exhaustion.
   """
 
   alias LemonAi.Models.Presets
@@ -675,6 +677,7 @@ defmodule LemonAi.Error do
   # "HTTP <status>" mention second. Unmatched text stays :unknown, which the
   # failover path treats fail-open (:next_provider).
   defp classify_message_text(message) do
+    message = truncate_message(message, 8_192)
     status = status_from_message(message)
 
     cond do
@@ -717,10 +720,11 @@ defmodule LemonAi.Error do
   end
 
   defp transient_message?(message) do
+    message = truncate_message(message, 8_192)
     downcased = String.downcase(message)
 
     Regex.match?(
-      ~r/timeout|timed out|econnrefused|econnreset|enetdown|enetunreach|enetwork_unreachable|ehostunreach|nxdomain|connection[ _]?(?:refused|reset|closed|error)|(?:transporterror|connection failed).*reason:\s*:(?:closed|econnreset|timeout)\b|network[ _]?error|fetch failed|upstream[ _]?connect|other[ _]?side[ _]?closed|socket hang up|socket connection was closed|bad[ _]record[ _]mac|temporarily unavailable|stream error.*received from peer/i,
+      ~r/timeout|timed out|econnrefused|econnreset|enetdown|enetunreach|enetwork_unreachable|ehostunreach|nxdomain|connection[ _]?(?:refused|reset|closed|error)|(?:transporterror|connection failed).{0,512}reason:\s*:(?:closed|econnreset|timeout)\b|network[ _]?error|fetch failed|upstream[ _]?connect|other[ _]?side[ _]?closed|socket hang up|socket connection was closed|bad[ _]record[ _]mac|temporarily unavailable|stream error.{0,512}received from peer/i,
       downcased
     )
   end
@@ -790,6 +794,8 @@ defmodule LemonAi.Error do
   defp quota_exhausted_error?(message), do: quota_exhausted_message?(message)
 
   defp quota_exhausted_message?(message) when is_binary(message) do
+    message = truncate_message(message, 8_192)
+
     transient_interval? =
       Regex.match?(~r/per[ _](?:second|minute)|requests?\/min|tokens?\/min/i, message)
 
@@ -839,7 +845,11 @@ defmodule LemonAi.Error do
 
   defp find_error_marker(body) when is_map(body) do
     Enum.find_value(["code", "type", "reason"], fn key ->
-      value = Map.get(body, key)
+      value =
+        case Map.get(body, key) do
+          value when is_binary(value) -> truncate_message(value, 8_192)
+          value -> value
+        end
 
       if is_binary(value) and
            (quota_exhausted_message?(value) or context_length_error_string?(nil, value) or
@@ -1432,10 +1442,10 @@ defmodule LemonAi.Error do
   # ============================================================================
 
   defp context_length_error_string?(status, body) when is_binary(body) do
-    downcased = String.downcase(body)
+    downcased = body |> truncate_message(8_192) |> String.downcase()
 
     Regex.match?(
-      ~r/context[_ ]length[_ ]exceeded|max_tokens_exceeded|token_limit_exceeded|model_context_window_exceeded|context length|prompt is too long|input is too long for requested model|exceeds (?:the |available )?context (?:window|size)|input token count.*exceeds the maximum|maximum prompt length is \d+|reduce the length of the messages|requested tokens?.*exceed.*context|context (?:window|size).*(?:exceeded|overflow|too small)|greater than the context length|exceeded model token limit|too many tokens|token limit exceeded|exceeds the limit of \d+ tokens/i,
+      ~r/context[_ ]length[_ ]exceeded|max_tokens_exceeded|token_limit_exceeded|model_context_window_exceeded|context length|prompt is too long|input is too long for requested model|exceeds (?:the |available )?context (?:window|size)|input token count.{0,512}exceeds the maximum|maximum prompt length is \d+|reduce the length of the messages|requested tokens?.{0,512}exceed.{0,512}context|context (?:window|size).{0,512}(?:exceeded|overflow|too small)|greater than the context length|exceeded model token limit|too many tokens|token limit exceeded|exceeds the limit of \d+ tokens/i,
       downcased
     ) or
       (status in [400, 413, 422] and String.contains?(downcased, "maximum context"))

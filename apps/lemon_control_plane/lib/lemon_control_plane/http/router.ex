@@ -9,9 +9,12 @@ defmodule LemonControlPlane.HTTP.Router do
 
   use Plug.Router
 
+  alias LemonControlPlane.Auth.Authorize
+  alias LemonControlPlane.ListenerPolicy
   alias LemonControlPlane.Protocol.Errors
 
   plug(Plug.Logger, log: :debug)
+  plug(:restrict_non_loopback)
   plug(Plug.Parsers, parsers: [:json], pass: ["application/json"], json_decoder: Jason)
   plug(:match)
   plug(:dispatch)
@@ -108,13 +111,7 @@ defmodule LemonControlPlane.HTTP.Router do
   end
 
   get "/acp/ws" do
-    local? =
-      conn.remote_ip in [{127, 0, 0, 1}, {0, 0, 0, 0, 0, 0, 0, 1}] and
-        Application.get_env(
-          :lemon_control_plane,
-          :allow_unauthenticated_loopback_operator,
-          false
-        ) == true
+    local? = Authorize.tokenless_loopback_allowed?(conn.remote_ip)
 
     params = %{"role" => "operator", "auth" => %{"token" => bearer_token(conn)}}
 
@@ -406,65 +403,44 @@ defmodule LemonControlPlane.HTTP.Router do
     end
   end
 
-  defp openai_auth_result(conn) do
-    case openai_compat_api_token() do
-      nil ->
+  defp openai_auth_result(conn),
+    do: api_auth_result(conn, :openai, "LEMON_OPENAI_COMPAT_API_TOKEN")
+
+  defp acp_auth_result(conn), do: api_auth_result(conn, :acp, "LEMON_ACP_API_TOKEN")
+
+  defp api_auth_result(conn, api, env) do
+    expected = ListenerPolicy.api_token(api) || Authorize.configured_operator_token()
+    presented = presented_openai_token(conn)
+
+    cond do
+      is_binary(expected) and is_binary(presented) and
+          Plug.Crypto.secure_compare(
+            :crypto.hash(:sha256, expected),
+            :crypto.hash(:sha256, presented)
+          ) ->
         :ok
 
-      token ->
-        if presented_openai_token(conn) == token do
-          :ok
-        else
-          missing? = is_nil(presented_openai_token(conn))
-          status = if missing?, do: 401, else: 403
-
-          message = token_auth_message(missing?, "LEMON_OPENAI_COMPAT_API_TOKEN")
-
-          {:error, status, message}
-        end
-    end
-  end
-
-  defp openai_compat_api_token do
-    token =
-      Application.get_env(:lemon_control_plane, :openai_compat_api_token) ||
-        System.get_env("LEMON_OPENAI_COMPAT_API_TOKEN") ||
-        System.get_env("LEMON_OPENAI_COMPAT_TOKEN")
-
-    case token do
-      value when is_binary(value) and value != "" -> value
-      _ -> nil
-    end
-  end
-
-  defp acp_auth_result(conn) do
-    case acp_api_token() do
-      nil ->
+      is_nil(expected) and is_nil(presented) and
+          Authorize.tokenless_loopback_allowed?(conn.remote_ip) ->
         :ok
 
-      token ->
-        if presented_openai_token(conn) == token do
-          :ok
-        else
-          missing? = is_nil(presented_openai_token(conn))
-          status = if missing?, do: 401, else: 403
-
-          message = token_auth_message(missing?, "LEMON_ACP_API_TOKEN")
-
-          {:error, status, message}
-        end
+      true ->
+        missing? = is_nil(presented) or is_nil(expected)
+        message = token_auth_message(missing?, env) |> operator_auth_message()
+        {:error, if(missing?, do: 401, else: 403), message}
     end
   end
 
-  defp acp_api_token do
-    token =
-      Application.get_env(:lemon_control_plane, :acp_api_token) ||
-        System.get_env("LEMON_ACP_API_TOKEN")
+  defp restrict_non_loopback(conn, _opts) do
+    remote_apis = ListenerPolicy.remote_http_apis()
 
-    case token do
-      value when is_binary(value) and value != "" -> value
-      _ -> nil
-    end
+    allowed? =
+      Authorize.loopback_address?(conn.remote_ip) or
+        (conn.method == "GET" and conn.request_path in ["/ws", "/healthz"]) or
+        (:openai in remote_apis and List.first(conn.path_info) == "v1") or
+        (:acp in remote_apis and List.first(conn.path_info) == "acp")
+
+    if allowed?, do: conn, else: conn |> http_error(404, Errors.not_found("Not found")) |> halt()
   end
 
   defp http_error(conn, status, error) do

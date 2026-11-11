@@ -452,6 +452,53 @@ defmodule CodingAgent.Tools.TaskFamilyMessagingTest do
     refute_receive {:peer_abort, ^second_pid}
   end
 
+  test "managed Bot children retain scoped family messaging but cannot use named authority", %{
+    parent: parent,
+    opts: opts
+  } do
+    {first, _first_pid, first_opts} = child(opts, parent, "First")
+    {second, second_pid, _} = child(opts, parent, "Second")
+    {foreign, foreign_pid, _} = child(foreign_opts(parent), parent, "Foreign")
+
+    managed_opts =
+      Keyword.merge(first_opts,
+        native_managed_context: true,
+        session_key: "agent:managed:main",
+        task_child: true
+      )
+
+    tool = CodingAgent.Tools.Task.Messaging.tool("/tmp", managed_opts)
+    roster = tool.execute.("list", %{"action" => "list"}, nil, nil)
+    assert Enum.any?(roster.details.agents, &(&1[:task_id] == second))
+    refute Enum.any?(roster.details.agents, &(&1[:task_id] == foreign))
+
+    for target <- ["Second", "agent://Second"] do
+      assert %LemonAgent.Types.AgentToolResult{details: %{status: "accepted"}} =
+               tool.execute.("family", %{"to" => target, "message" => "Managed family"}, nil, nil)
+
+      envelope = message(second_pid)
+      assert envelope["sender"] == "agent://" <> first
+      assert envelope["body"] == "Managed family"
+    end
+
+    assert {:error, _} =
+             tool.execute.("foreign", %{"to" => foreign, "message" => "Denied"}, nil, nil)
+
+    for params <- [
+          %{"to" => "@Second", "message" => "Denied"},
+          %{"to" => "session://agent:other:main", "message" => "Denied"},
+          %{"to" => "bot://instance/other", "message" => "Denied"},
+          %{"action" => "list", "scope" => "named"},
+          %{"action" => "rename", "name" => "managed"},
+          %{"action" => "status", "message_id" => "foreign"}
+        ] do
+      assert {:error, _} = tool.execute.("named", params, nil, nil)
+    end
+
+    refute_receive {:peer_message, ^second_pid, _}
+    refute_receive {:peer_message, ^foreign_pid, _}
+  end
+
   test "task names are safe addresses and duplicate batch names fail before launch" do
     for name <- ["parent", "ALL", "self", "../bad", "has space", String.duplicate("a", 65), 42] do
       assert {:error, _} =

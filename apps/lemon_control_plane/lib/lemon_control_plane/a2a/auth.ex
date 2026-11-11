@@ -16,9 +16,10 @@ defmodule LemonControlPlane.A2A.Auth do
         {:ok, peer_id}
 
       :error ->
-        if is_nil(token) and not token_required?(peers) and loopback?(conn.remote_ip),
-          do: {:ok, "local"},
-          else: {:error, :unauthorized}
+        if is_nil(token) and not token_required?(peers) and
+             LemonControlPlane.Auth.Authorize.tokenless_loopback_allowed?(conn.remote_ip),
+           do: {:ok, "local"},
+           else: {:error, :unauthorized}
     end
   end
 
@@ -58,8 +59,4 @@ defmodule LemonControlPlane.A2A.Auth do
   end
 
   defp secure_equal?(_, _), do: false
-
-  defp loopback?({127, _, _, _}), do: true
-  defp loopback?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
-  defp loopback?(_), do: false
 end

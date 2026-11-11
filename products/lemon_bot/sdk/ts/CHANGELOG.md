@@ -4,6 +4,21 @@
 
 ### Added
 
+- Typed `machineEnrollmentPreview`, `addMachineOverSsh` and `machineSetup` helpers
+  share SSH setup/link contracts and initiator-scoped progress events. Mutations
+  retain fixed nonces; uncertain enrollment is never automatically replayed.
+- Just-in-time `request_access` and access-request cards expose queued grant
+  `pendingLevel`, per-Bot-folder capability and folder-read governance contracts.
+- Creation, import and duplication accept explicit Standard or Chat-only `access`;
+  templates may suggest access without granting it. Omitted access stays all-off.
+- Target-local `ModelReadiness`/`DetectedLogin` models and typed controller/machine
+  check/import endpoints support non-generating checks and explicit Codex login
+  copy consent with nonce reconciliation.
+- Typed local-listener challenge proof, ticket redemption, own sign-in-method
+  discovery, first-password creation and `{local:true}` reauthentication use the
+  existing generic REST client.
+- Export optional `Machine.credential` and `MachineCredential` so clients distinguish expired/revoked sessions from ordinary offline machines.
+- Add remembered approval contracts: per-chat tool-group decisions, revocable allowances and realtime events, owner-only bot-wide preview/confirm, Bot review modes and workspace governance.
 - Export the shared read-only Bot origin preflight and product/workspace identity validators. Strict pairing links now require an `instance` fingerprint alongside `backend`, `cluster` and `code`; three-key links are rejected.
 - Add shared typed `ProviderDeviceLoginRequest`, `ProviderDeviceLoginStatus` and safe `ProviderDeviceLogin` contracts plus canonical controller/named-machine start, poll and cancel REST keys. Start's fixed nonce is the login ID; polling and cancellation use that route ID with separate fixed nonces and reconcile fresh target state. No credential/token fields are exposed.
 - Instance status now includes build, channel details, provider credential health and explicit runtime actions/via; the shared wire fixture covers controller lifecycle and all credential states.

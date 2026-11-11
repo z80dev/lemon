@@ -350,4 +350,159 @@ defmodule LemonCore.ToolPolicyTest do
       end
     end
   end
+
+  describe "workspace_read_exempt" do
+    test "parses tri-state atom and string keys, defaulting to nil" do
+      assert {:ok, default} = ToolPolicy.parse(%{})
+      assert default.workspace_read_exempt == nil
+
+      assert {:ok, explicit_nil} = ToolPolicy.parse(%{workspace_read_exempt: nil})
+      assert explicit_nil.workspace_read_exempt == nil
+
+      assert {:ok, atom_true} = ToolPolicy.parse(%{workspace_read_exempt: true})
+      assert atom_true.workspace_read_exempt == true
+
+      assert {:ok, string_true} = ToolPolicy.parse(%{"workspace_read_exempt" => true})
+      assert string_true.workspace_read_exempt == true
+
+      assert {:ok, atom_false} = ToolPolicy.parse(%{workspace_read_exempt: false})
+      assert atom_false.workspace_read_exempt == false
+
+      assert {:ok, string_false} = ToolPolicy.parse(%{"workspace_read_exempt" => false})
+      assert string_false.workspace_read_exempt == false
+
+      for invalid <- ["true", "false", 1, 0, [], %{}] do
+        assert {:error, {:invalid_policy_field, :workspace_read_exempt}} =
+                 ToolPolicy.parse(%{"workspace_read_exempt" => invalid})
+      end
+
+      assert {:error, {:conflicting_policy_key, :workspace_read_exempt}} =
+               ToolPolicy.parse(%{
+                 "workspace_read_exempt" => true,
+                 workspace_read_exempt: false
+               })
+    end
+
+    test "to_map and normalize preserve sparse semantics (omitted when nil)" do
+      policy_nil = ToolPolicy.parse!(%{})
+      refute Map.has_key?(ToolPolicy.to_map(policy_nil), "workspace_read_exempt")
+
+      assert {:ok, normalized_nil} = ToolPolicy.normalize(%{})
+      refute Map.has_key?(normalized_nil, "workspace_read_exempt")
+
+      policy_true = ToolPolicy.parse!(%{"workspace_read_exempt" => true})
+      assert ToolPolicy.to_map(policy_true)["workspace_read_exempt"] == true
+
+      assert {:ok, normalized_true} =
+               ToolPolicy.normalize(%{"workspace_read_exempt" => true})
+
+      assert normalized_true["workspace_read_exempt"] == true
+
+      policy_false = ToolPolicy.parse!(%{"workspace_read_exempt" => false})
+      assert ToolPolicy.to_map(policy_false)["workspace_read_exempt"] == false
+
+      assert {:ok, normalized_false} =
+               ToolPolicy.normalize(%{"workspace_read_exempt" => false})
+
+      assert normalized_false["workspace_read_exempt"] == false
+
+      assert {:error, {:invalid_field, :tool_policy}} =
+               ToolPolicy.normalize(%{"workspace_read_exempt" => "invalid"})
+    end
+
+    test "restrict/2 tri-state: nil neutral, false wins, true only if none supplies false" do
+      cases = [
+        {true, true, true},
+        {true, nil, true},
+        {nil, true, true},
+        {nil, nil, nil},
+        {false, true, false},
+        {true, false, false},
+        {false, nil, false},
+        {nil, false, false},
+        {false, false, false}
+      ]
+
+      for {parent_val, requested_val, expected} <- cases do
+        parent =
+          if is_nil(parent_val),
+            do: %{},
+            else: %{workspace_read_exempt: parent_val}
+
+        requested =
+          if is_nil(requested_val),
+            do: %{},
+            else: %{workspace_read_exempt: requested_val}
+
+        assert {:ok, restricted} = ToolPolicy.restrict(parent, requested)
+        assert restricted.workspace_read_exempt == expected
+      end
+    end
+
+    test "intersect/2 preserves sparse tri-state native maps" do
+      assert ToolPolicy.intersect(%{"workspace_read_exempt" => true}, %{}) ==
+               %{workspace_read_exempt: true}
+
+      assert ToolPolicy.intersect(%{}, %{"workspace_read_exempt" => true}) ==
+               %{workspace_read_exempt: true}
+
+      assert ToolPolicy.intersect(
+               %{"workspace_read_exempt" => true},
+               %{"workspace_read_exempt" => false}
+             ) == %{workspace_read_exempt: false}
+
+      refute Map.has_key?(ToolPolicy.intersect(%{}, %{}), :workspace_read_exempt)
+    end
+
+    test "subset?/2 child <= parent: true ⊄ false, true ⊄ nil" do
+      # true ⊄ false and true ⊄ nil
+      refute ToolPolicy.subset?(
+               %{workspace_read_exempt: true},
+               %{workspace_read_exempt: false}
+             )
+
+      refute ToolPolicy.subset?(
+               %{workspace_read_exempt: true},
+               %{}
+             )
+
+      # true <= true
+      assert ToolPolicy.subset?(
+               %{workspace_read_exempt: true},
+               %{workspace_read_exempt: true}
+             )
+
+      # false <= anything
+      assert ToolPolicy.subset?(
+               %{workspace_read_exempt: false},
+               %{workspace_read_exempt: true}
+             )
+
+      assert ToolPolicy.subset?(
+               %{workspace_read_exempt: false},
+               %{}
+             )
+
+      assert ToolPolicy.subset?(
+               %{workspace_read_exempt: false},
+               %{workspace_read_exempt: false}
+             )
+
+      # nil <= anything except when child claims true
+      assert ToolPolicy.subset?(
+               %{},
+               %{workspace_read_exempt: true}
+             )
+
+      assert ToolPolicy.subset?(
+               %{},
+               %{}
+             )
+
+      assert ToolPolicy.subset?(
+               %{},
+               %{workspace_read_exempt: false}
+             )
+    end
+  end
 end

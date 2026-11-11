@@ -11,6 +11,7 @@ defmodule LemonControlPlane.Methods.ProviderManagementTest do
 
   # Explicit offline boundary mock; never contacts a provider or changes config.
   defmodule OfflineDeviceFailureMock do
+    def check(_, _), do: {:error, :unavailable}
     def device_start(_, _), do: raise("OFFLINE_DEVICE_TOKEN_EXCEPTION")
     def device_poll(_, _), do: {:error, :forbidden}
     def device_challenge(_, _), do: {:error, :forbidden}
@@ -20,6 +21,14 @@ defmodule LemonControlPlane.Methods.ProviderManagementTest do
       do: {:error, :provider_binding_rejected}
 
     def device_complete(_, _), do: {:error, :forbidden}
+  end
+
+  defmodule OfflineLoginNotFoundMock do
+    def import_login("openai_codex", "codex_cli", _opts), do: {:error, :login_not_found}
+  end
+
+  defmodule OfflineLoginUnusableMock do
+    def import_login("openai_codex", "codex_cli", _opts), do: {:error, :login_unusable}
   end
 
   test "controller target identity is durable and distinct from named destinations" do
@@ -764,5 +773,89 @@ defmodule LemonControlPlane.Methods.ProviderManagementTest do
       "expiresAtMs" => 1_900_000_000_000,
       "pollIntervalMs" => 5_000
     })
+  end
+
+  test "schemas for check, import, and list readiness validate as expected" do
+    for prefix <- ["", "node."] do
+      list_schema = LemonControlPlane.Protocol.Schemas.get(prefix <> "providers.management.list")
+      assert list_schema.optional["readiness"] == :boolean
+
+      check_schema =
+        LemonControlPlane.Protocol.Schemas.get(prefix <> "providers.management.check")
+
+      assert check_schema.required["targetId"] == :string
+      assert check_schema.optional["providerId"] == :string
+
+      import_schema =
+        LemonControlPlane.Protocol.Schemas.get(prefix <> "providers.management.import")
+
+      assert import_schema.required["targetId"] == :string
+      assert import_schema.required["providerId"] == :string
+      assert import_schema.required["source"] == :string
+
+      if prefix == "node." do
+        assert list_schema.required["nodeId"] == :string
+        assert check_schema.required["nodeId"] == :string
+        assert import_schema.required["nodeId"] == :string
+      end
+    end
+  end
+
+  test "check failure returns unavailable without retrySafe false or mutationMayHaveApplied true" do
+    previous = LemonCore.ProviderManagement.service()
+    Application.put_env(:lemon_core, :provider_management_service, OfflineDeviceFailureMock)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:lemon_core, :provider_management_service, previous),
+        else: Application.delete_env(:lemon_core, :provider_management_service)
+    end)
+
+    {:ok, target} = LemonCore.ProviderManagement.target()
+    params = %{"targetId" => target.id}
+
+    assert {:error, {:unavailable, "Provider management unavailable"}} =
+             LemonControlPlane.Methods.ProviderManagementSupport.handle(
+               "check",
+               params,
+               %{},
+               false
+             )
+  end
+
+  test "login_not_found and login_unusable error mappings" do
+    previous = LemonCore.ProviderManagement.service()
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:lemon_core, :provider_management_service, previous),
+        else: Application.delete_env(:lemon_core, :provider_management_service)
+    end)
+
+    {:ok, target} = LemonCore.ProviderManagement.target()
+
+    for {reason, service} <- [
+          {:login_not_found, OfflineLoginNotFoundMock},
+          {:login_unusable, OfflineLoginUnusableMock}
+        ] do
+      Application.put_env(:lemon_core, :provider_management_service, service)
+
+      assert {:error, {:conflict, msg, details}} =
+               LemonControlPlane.Methods.ProviderManagementSupport.handle(
+                 "import",
+                 %{
+                   "targetId" => target.id,
+                   "providerId" => "openai_codex",
+                   "source" => "codex_cli"
+                 },
+                 %{},
+                 false
+               )
+
+      assert msg =~ "Codex CLI login is not available on this machine"
+      assert details["retrySafe"] == true
+      assert details["mutationMayHaveApplied"] == false
+      assert details["reason"] == Atom.to_string(reason)
+    end
   end
 end

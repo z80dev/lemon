@@ -74,8 +74,9 @@ defmodule CodingAgent.Tools.WebGuard do
     trimmed = String.trim(url)
 
     case URI.parse(trimmed) do
-      %URI{scheme: scheme, host: host} = uri
-      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+      %URI{scheme: scheme, host: host, port: port} = uri
+      when scheme in ["http", "https"] and is_binary(host) and host != "" and
+             is_integer(port) and port in 1..65_535 ->
         {:ok, uri}
 
       _ ->
@@ -84,11 +85,12 @@ defmodule CodingAgent.Tools.WebGuard do
   end
 
   defp build_redirect_url(base_uri, location) when is_binary(location) do
-    next = URI.merge(base_uri, location)
-
-    case to_string(next) do
-      "" -> {:error, {:redirect_error, "Invalid redirect location"}}
-      url -> {:ok, url}
+    with {:ok, target} <- URI.new(location),
+         next <- base_uri |> URI.merge(target) |> URI.to_string(),
+         {:ok, _} <- parse_http_uri(next) do
+      {:ok, next}
+    else
+      _ -> {:error, {:redirect_error, "Invalid redirect location"}}
     end
   rescue
     _ -> {:error, {:redirect_error, "Invalid redirect location"}}
@@ -349,8 +351,6 @@ defmodule CodingAgent.Tools.WebGuard do
     end
   end
 
-  defp default_port?("http", nil), do: true
-  defp default_port?("https", nil), do: true
   defp default_port?("http", 80), do: true
   defp default_port?("https", 443), do: true
   defp default_port?(_, _), do: false

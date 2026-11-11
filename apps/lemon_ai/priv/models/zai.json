@@ -202,12 +202,12 @@
       "text"
     ],
     "cost": {
-      "input": 1.0,
-      "output": 3.2,
-      "cache_read": 0.2,
+      "input": 1.4,
+      "output": 4.4,
+      "cache_read": 0.26,
       "cache_write": 0.0
     },
-    "context_window": 204800,
+    "context_window": 1000000,
     "max_tokens": 131072
   },
   "glm-5.2": {
@@ -307,5 +307,18 @@
     },
     "context_window": 200000,
     "max_tokens": 131072
+  },
+  "glm-5.3-highspeed": {
+    "id": "glm-5.3-highspeed",
+    "name": "GLM-5.3 Highspeed",
+    "api": "openai_completions",
+    "provider": "zai",
+    "base_url": "https://api.z.ai/api/coding/paas/v4",
+    "reasoning": true,
+    "input": ["text"],
+    "cost": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
+    "context_window": 1000000,
+    "max_tokens": 131072,
+    "compat": {"supports_reasoning_effort": false, "thinking_format": "zai", "max_tokens_field": "max_tokens"}
   }
 }

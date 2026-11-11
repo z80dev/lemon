@@ -12,13 +12,16 @@ defmodule LemonMCP.HTTP.OriginPolicy do
   Both lists must be unique, and approved origins must also be allowed. Pins
   retain the original URL, but `host` is the canonical ASCII DNS/IP hostname.
   Raw authority spelling is checked from URL bytes; URI's deprecated opaque
-  authority field is neither inspected nor rewritten.
+  authority field is neither inspected nor rewritten. A discarded invalid port
+  is rejected, never replaced with the scheme's default port.
 
   Every A and AAAA answer must be public unless that exact allowed origin is
   explicitly approved for private networking. The selected address is stable
   regardless of DNS answer order. The transport must use this address without
   resolving again, preserve the origin's Host/TLS identity and disable redirects.
   A pin is internal process data, never authority accepted from a server config.
+  Named-node workers additionally require an approved literal-loopback listener
+  to belong to their uid when `:lemon_core, :require_owned_loopback` is enabled.
 
   `nil` policy returns `{:ok, nil}` without changing legacy operator networking.
   Errors contain only classified atoms, never URLs, hosts or resolver reasons.
@@ -38,6 +41,7 @@ defmodule LemonMCP.HTTP.OriginPolicy do
           | :invalid_dns_answer
           | :too_many_dns_addresses
           | :destination_not_public
+          | :private_origin_not_owned
 
   @type pin :: %{
           url: String.t(),
@@ -65,7 +69,8 @@ defmodule LemonMCP.HTTP.OriginPolicy do
          {:ok, allowed, approved} <- policy_origins(policy),
          :ok <- require_allowed(destination.origin, allowed),
          {:ok, addresses} <- resolve(destination.dns_host, opts),
-         :ok <- validate_addresses(addresses, destination.origin in approved) do
+         :ok <- validate_addresses(addresses, destination.origin in approved),
+         :ok <- require_owned_loopback(destination, approved, opts) do
       {:ok,
        %{
          url: url,
@@ -78,10 +83,34 @@ defmodule LemonMCP.HTTP.OriginPolicy do
     end
   end
 
+  @doc false
+  def ownership_required?(nil), do: false
+
+  def ownership_required?(pin) do
+    Application.get_env(:lemon_core, :require_owned_loopback, false) == true and
+      LemonCore.LoopbackListener.literal_loopback?(pin.host)
+  end
+
   @doc "Returns the canonical HTTP(S) origin, rejecting unsafe URL syntax."
   @spec canonical_origin(term()) :: {:ok, String.t()} | {:error, :invalid_url}
   def canonical_origin(url) do
     with {:ok, destination} <- parse_destination(url), do: {:ok, destination.origin}
+  end
+
+  defp require_owned_loopback(destination, approved, opts) do
+    if Application.get_env(:lemon_core, :require_owned_loopback, false) == true and
+         destination.origin in approved and
+         LemonCore.LoopbackListener.literal_loopback?(destination.dns_host) do
+      check = Keyword.get(opts, :listener_owner, &LemonCore.LoopbackListener.owned_by_self?/1)
+
+      {:ok, address} = :inet.parse_strict_address(String.to_charlist(destination.dns_host))
+
+      if check.({address, destination.port}) == :owned,
+        do: :ok,
+        else: {:error, :private_origin_not_owned}
+    else
+      :ok
+    end
   end
 
   defp parse_destination(url)
@@ -97,7 +126,7 @@ defmodule LemonMCP.HTTP.OriginPolicy do
                 byte_size(host) <= @max_host_bytes <- uri.host,
          authority <- raw_authority(url, uri.scheme),
          true <- valid_authority?(authority),
-         port when is_integer(port) and port in 1..65_535 <- uri.port || default_port(scheme),
+         port when is_integer(port) and port in 1..65_535 <- uri.port,
          {:ok, dns_host} <- canonical_host(host) do
       origin_host = if String.contains?(dns_host, ":"), do: "[#{dns_host}]", else: dns_host
       suffix = if port == default_port(scheme), do: "", else: ":#{port}"

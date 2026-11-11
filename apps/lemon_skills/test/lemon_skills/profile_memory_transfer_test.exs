@@ -289,12 +289,49 @@ defmodule LemonSkills.ProfileMemoryTransferTest do
     own = doc(ctx.source_home, "oversized", String.duplicate("a", 2 * 1024 * 1024))
     :ok = Store.put_sync(ctx.source, own)
     assert {:error, :snapshot_too_large} = prepare(ctx)
+
+    assert {:error, :not_found} =
+             Transfer.snapshot(@profile, "mutation-1", "local", "node-target", ctx.source_opts)
+
     assert {:ok, :deleted} = Store.delete_document(ctx.source, own.doc_id)
 
     for index <- 1..501,
         do: :ok = Store.put_sync(ctx.source, doc(ctx.source_home, "overflow-#{index}", "Fact."))
 
     assert {:error, :snapshot_too_large} = prepare(ctx)
+
+    assert {:error, :not_found} =
+             Transfer.snapshot(@profile, "mutation-1", "local", "node-target", ctx.source_opts)
+  end
+
+  test "source size budget measures encoded bytes and rejects aggregate overflow before screening",
+       ctx do
+    for text <- [
+          String.duplicate("\n", 1024 * 1024),
+          String.duplicate("é", 1024 * 1024)
+        ] do
+      own = doc(ctx.source_home, "encoded-overflow", text)
+      :ok = Store.put_sync(ctx.source, own)
+      assert {:error, :snapshot_too_large} = prepare(ctx)
+      assert {:ok, :deleted} = Store.delete_document(ctx.source, own.doc_id)
+    end
+
+    # Each record is below the byte limit, but the complete snapshot is not.
+    # Credential scanning a long uninterrupted value can exhaust regex limits.
+    text = String.duplicate("a", 1024 * 1024)
+
+    for index <- 1..2 do
+      :ok = Store.put_sync(ctx.source, doc(ctx.source_home, "aggregate-#{index}", text))
+    end
+
+    assert {:error, :snapshot_too_large} = prepare(ctx)
+
+    assert {:error, :not_found} =
+             Transfer.snapshot(@profile, "mutation-1", "local", "node-target", ctx.source_opts)
+
+    assert {:ok, records} = Store.list_agent_recent(ctx.source, @profile, limit: 500)
+    assert length(records) == 2
+    assert Enum.all?(records, &(&1.answer_summary == text))
   end
 
   test "node item policy rejects 500 valid small records before freezing any snapshot", ctx do

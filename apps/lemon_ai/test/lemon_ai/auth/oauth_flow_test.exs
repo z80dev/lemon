@@ -3,6 +3,61 @@ defmodule LemonAi.Auth.OAuthFlowTest do
 
   alias LemonAi.Auth.OAuthFlow
 
+  test "rejects malformed raw callback ports before URI normalization" do
+    for scheme <- ["http", "https", "zcode"],
+        host <- ["localhost", "[::1]"],
+        port <- ["", "secret", "443junk", "65536", "999999", "065536"] do
+      assert {:error, :invalid_authorization_input} =
+               OAuthFlow.parse_authorization_uri(
+                 "#{scheme}://#{host}:#{port}/callback?code=secret"
+               )
+    end
+  end
+
+  test "preserves valid callback ports including boundaries and leading zeroes" do
+    for scheme <- ["http", "https", "zcode"],
+        host <- ["localhost", "[::1]"],
+        port <- ["0", "443", "65535", "000443", "065535", "00000443"] do
+      assert {:ok, uri} =
+               OAuthFlow.parse_authorization_uri("#{scheme}://#{host}:#{port}/callback")
+
+      assert uri.port == String.to_integer(port)
+    end
+
+    for {scheme, port} <- [{"http", 80}, {"https", 443}, {"zcode", nil}] do
+      assert {:ok, uri} = OAuthFlow.parse_authorization_uri("#{scheme}://localhost/callback")
+      assert uri.port == port
+    end
+  end
+
+  for provider <- [
+        LemonAi.Auth.AnthropicOAuth,
+        LemonAi.Auth.GoogleAntigravityOAuth,
+        LemonAi.Auth.GoogleGeminiCliOAuth,
+        LemonAi.Auth.OpenAICodexOAuth
+      ] do
+    test "#{inspect(provider)} rejects malformed callback authorities" do
+      for port <- ["", "secret", "443junk", "65536", "999999", "065536"] do
+        assert {:error, :missing_authorization_code} =
+                 unquote(provider).parse_authorization_input(
+                   "http://localhost:#{port}/callback?code=secret&state=state"
+                 )
+      end
+    end
+
+    test "#{inspect(provider)} accepts valid callback authorities and plain codes" do
+      for authority <- ["localhost", "localhost:0", "localhost:065535", "[::1]:443"] do
+        assert {:ok, %{code: "code", state: "state"}} =
+                 unquote(provider).parse_authorization_input(
+                   "http://#{authority}/callback?code=code&state=state"
+                 )
+      end
+
+      assert {:ok, %{code: "code", state: nil}} =
+               unquote(provider).parse_authorization_input("code")
+    end
+  end
+
   defp poll(results, opts) do
     {:ok, queue} = Agent.start_link(fn -> results end)
     test_pid = self()

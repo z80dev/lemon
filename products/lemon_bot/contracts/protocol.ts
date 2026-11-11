@@ -38,8 +38,29 @@ export interface SetupRequest extends Mutation { setupCode: string; email: strin
 export interface LoginRequest extends Mutation { email: string; password: string; deviceId?: ID }
 /** Sent with `Authorization: Bearer <DATA_DIR/local-access.key>`; signs in as (or creates) the workspace owner. */
 export interface LocalAccessRequest { displayName?: string }
+/** One-use local sign-in ticket from `lemon-bot open`, taken from the `#lemonbot-signin=` URL fragment. */
+export interface LocalTicketRedeem { ticket: string }
+/** Fresh proof that the loopback listener owns this instance's private master key. */
+export interface LocalBackendChallengeRequest { nonce: string }
+export interface LocalBackendChallenge {
+  product: 'lemon_bot';
+  instanceId: ID;
+  version: string;
+  proof: string;
+}
+/** Own sign-in methods. `localOwner` is non-null only for the current workspace owner (the local key signs in as that owner). */
+export interface SignInMethods {
+  password: boolean;
+  email: string;
+  emailIsPlaceholder: boolean;
+  localOwner: { platform: 'macos' | 'linux' | 'other'; hostName: string; osUser: string } | null;
+  /** This session may add a first password or reauthenticate locally until then; null when not locally confirmed or stale. */
+  localConfirmedUntilMs: TimestampMs | null;
+}
+/** First password for an account that has none (e.g. the passwordless local owner). */
+export interface PasswordCreate extends Mutation { email: string; password: string }
 export interface AcceptInviteRequest extends Mutation { inviteToken: string; email: string; password: string; displayName: string }
-export interface ReauthRequest { password: string }
+export type ReauthRequest = { password: string } | { local: true };
 export interface ReauthResult { reauthToken: string; expiresAtMs: TimestampMs }
 export interface UserUpdate extends Update { displayName?: string; email?: string; avatarAttachmentId?: ID | null; preferences?: Preferences; notifications?: NotificationPreferences }
 export interface PasswordUpdate extends Mutation { currentPassword: string; newPassword: string }
@@ -104,6 +125,8 @@ export interface ProviderManagement {
   target: { id: string; nodeId: ID | null; hostname: string };
   default: { providerId: string | null; modelId: string | null };
   providers: ManagedProvider[];
+  readiness: ModelReadiness | null;
+  detected: DetectedLogin[];
 }
 export interface ManagedProvider {
   id: string; displayName: string; methods: ('api_key' | 'device_code' | 'unsupported')[];
@@ -113,6 +136,23 @@ export interface ManagedProvider {
   configurationOverrides: ('project_configuration' | 'credential_pool' | 'external_secret_source')[];
 }
 export interface ProviderTargetRequest extends Mutation { targetId: string }
+export type ModelReadinessState = 'verified' | 'saved' | 'action_required' | 'not_configured';
+export type ModelReadinessReason = 'credential_missing' | 'credential_expired' | 'credential_rejected' | 'model_unavailable' | 'provider_unreachable' | 'check_unavailable' | 'check_failed' | 'no_default' | 'model_provider_mismatch';
+export interface ModelReadiness {
+  state: ModelReadinessState;
+  providerId: string | null;
+  modelId: string | null;
+  check: 'codex_discovery' | 'models_endpoint' | null;
+  reason: ModelReadinessReason | null;
+  availableModelIds: string[] | null;
+  suggestedModelId: string | null;
+  checkedAtMs: TimestampMs | null;
+}
+export type DetectedLogin = { source: 'codex_cli'; providerId: 'openai_codex' } | { source: 'environment'; providerId: string; variable: string };
+export interface ProviderCheckRequest extends ProviderTargetRequest { providerId?: string }
+export interface ProviderCheckResult { management: ProviderManagement; readiness: ModelReadiness }
+/** Explicit consent to copy the target's Codex CLI login, never its source file. */
+export interface ProviderImportRequest extends ProviderTargetRequest { source: 'codex_cli'; consent: 'copy_login' }
 /** Transient request only. Never persist this field in drafts, browser storage or product SQLite. */
 export interface ProviderApiKeySet extends ProviderTargetRequest { value: string }
 export interface ProviderDefaultSet extends ProviderTargetRequest { providerId: string; modelId: string }
@@ -125,9 +165,18 @@ export interface ProviderDeviceLogin {
   verificationUrl: 'https://auth.openai.com/codex/device' | null;
   userCode: string | null; expiresAtMs: TimestampMs | null; pollIntervalMs: number | null;
 }
-export interface Machine extends Resource { nodeId: ID | null; nodeName: string; name: string; ownerUserId: ID; accessUserIds: ID[]; status: 'pending' | 'online' | 'offline' | 'revoked'; lastSeenAtMs: TimestampMs | null; labels: Record<string, string>; botIds: ID[] }
+export type MachineCredential = 'active' | 'expired' | 'revoked' | 'unknown';
+export interface Machine extends Resource { nodeId: ID | null; nodeName: string; name: string; ownerUserId: ID; accessUserIds: ID[]; status: 'pending' | 'online' | 'offline' | 'revoked'; credential?: MachineCredential; lastSeenAtMs: TimestampMs | null; labels: Record<string, string>; botIds: ID[]; link?: MachineLink }
 export interface HostInfo { hostname: string; os: string; osVersion: string; arch: string; cpuCount: number; memTotalBytes: number; memFreeBytes: number; diskTotalBytes: number; diskFreeBytes: number; uptimeSec: number; lemonVersion: string; defaultCwd: string; user: string; measuredAtMs: TimestampMs }
 export interface MachineInvite extends Resource { machineId: ID; inviteCode: string; joinCommand: string; expiresAtMs: TimestampMs; status: 'pending' | 'joined' | 'expired' | 'revoked'; enrollment: 'invited' | 'waiting_for_join' | 'connecting' | 'verifying' | 'online' | 'expired' | 'failed' | 'revoked'; lastError: string | null }
+export type MachineLinkState = 'online' | 'reconnecting' | 'failed' | 'stopped' | 'unknown';
+export type MachineLinkDetail = 'ssh_auth_failed' | 'host_key_changed' | 'host_unreachable' | 'forward_refused' | 'remote_port_in_use';
+export type MachineLink = { kind: 'direct' } | { kind: 'ssh_tunnel'; sshDestination: string | null; nodePort: number; productPort: number | null; tunnel: { state: MachineLinkState; detail: MachineLinkDetail | null; checkedAtMs: TimestampMs | null } };
+export interface MachineEnrollmentPreview { reachability: 'loopback_only' | 'routable'; ssh?: { available: boolean; reason: 'controller_remote' | 'node_gateway_unavailable' | 'launcher_unavailable' | null } }
+export type MachineSetupStep = 'checking_ssh' | 'opening_tunnel' | 'issuing_invite' | 'installing' | 'verifying' | 'online';
+export type MachineSetupFailure = 'ssh_unreachable' | 'ssh_auth_failed' | 'ssh_host_key_changed' | 'unsupported_host' | 'port_in_use' | 'forward_refused' | 'runtime_install_failed' | 'enroll_failed' | 'enroll_outcome_unknown' | 'service_failed' | 'not_bot_ready' | 'controller_unavailable' | 'interrupted';
+export interface MachineSshSetupRequest extends Mutation { sshDestination: string; name?: string; machineId?: ID }
+export interface MachineSetup extends Resource { machineId: ID | null; sshDestination: string; step: MachineSetupStep; state: 'running' | 'succeeded' | 'failed'; failure: { code: MachineSetupFailure; message: string; detail: string | null } | null; persistence: 'login' | 'boot' | 'session' | 'none' | null; finishedAtMs: TimestampMs | null }
 export interface MachineAttach extends Mutation { name: string; nodeName: string; labels?: Record<string, string>; expiresInMs?: number }
 export interface MachineAttachResult { machine: Machine; invite: MachineInvite }
 export interface MachineUpdate extends Update { name?: string; accessUserIds?: ID[]; labels?: Record<string, string> }
@@ -152,21 +201,28 @@ export interface TerminalResize extends Mutation { cols: number; rows: number }
 export interface Avatar { kind: 'character' | 'image'; shape: string; color: string; attachmentId: ID | null }
 export interface SidebarState { pinned: boolean; hidden: boolean; sectionId: ID | null; rank: number; unread: boolean; notificationsEnabled: boolean }
 /** Live work/read invariant: actual actor.userId === bot.ownerUserId, including delegated, scheduled and external-channel work. */
-export interface Bot extends Resource { ownerUserId: ID; machineId: ID; profileId: string; name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; language: string | null; skillIds: ID[]; referenceAttachmentIds: ID[]; mainConversationId: ID; sidebar: SidebarState; activity: BotPresence['status']; activeRunIds: ID[] }
-export interface BotCreate extends Mutation { name: string; machineId: ID; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; skillIds?: ID[]; templateId?: ID }
+export interface AgentIdentity { id: ID; name: string | null; kind: 'session' | 'bot'; sessionKey?: string; label: string; status?: 'running' | 'idle' | 'offline' | 'unknown' }
+export interface AgentIdentityUpdate extends Mutation { name: string | null }
+export interface AgentListQuery { query?: string; limit?: number }
+export type AgentMessageStatus = 'accepted' | 'completed' | 'failed' | 'outcome_unknown';
+export interface AgentMessageReceipt { messageId: ID; sourceId: ID; targetId: ID; status: AgentMessageStatus; runId: ID | null; response: string | null }
+export interface AgentMessageSend extends Mutation { target: string; text: string; conversationId?: ID }
+export interface MessageAgentInput extends Mutation { target: string; text: string }
+export interface Bot extends Resource { ownerUserId: ID; machineId: ID; profileId: string; name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; language: string | null; skillIds: ID[]; referenceAttachmentIds: ID[]; mainConversationId: ID; sidebar: SidebarState; activity: BotPresence['status']; activeRunIds: ID[]; agentHandle?: string | null; agentAddress?: ID; approvalReview?: ApprovalReviewMode }
+export interface BotCreate extends Mutation { name: string; machineId: ID; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; skillIds?: ID[]; templateId?: ID; access?: 'standard' | 'none' }
 export interface BotUpdate extends Update { name?: string; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; skillIds?: ID[]; referenceAttachmentIds?: ID[] }
-export interface BotDuplicate extends Mutation { name: string; machineId: ID; includeSkills: boolean; includeRoutines: boolean }
+export interface BotDuplicate extends Mutation { name: string; machineId: ID; includeSkills: boolean; includeRoutines: boolean; access?: 'standard' | 'none' }
 export interface BotMove extends Confirm { machineId: ID }
 export interface SidebarUpdate extends Update { pinned?: boolean; hidden?: boolean; sectionId?: ID | null; rank?: number; unread?: boolean; notificationsEnabled?: boolean }
 export interface AvatarGenerate extends Mutation { prompt: string }
 export interface Section extends Resource { userId: ID; name: string; rank: number; collapsed: boolean }
 export interface SectionCreate extends Mutation { name: string; rank?: number }
 export interface SectionUpdate extends Update { name?: string; rank?: number; collapsed?: boolean }
-export interface TemplateContent { name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; skills: { name: string; description: string; markdown: string }[]; routines: RoutineSpec[]; connectorNames: string[] }
+export interface TemplateContent { name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; skills: { name: string; description: string; markdown: string }[]; routines: RoutineSpec[]; connectorNames: string[]; suggestedAccess?: 'standard' | 'none' }
 export interface BotTemplate extends Resource { ownerUserId: ID; audience: 'workspace' | 'public'; sourceBotId: ID | null; content: TemplateContent; provenance: { publisher: string; sourceUrl: string | null; termsUrl: string | null; thirdParty: boolean }; shareUrl: string }
 export interface TemplateCreate extends Mutation { botId: ID; audience: BotTemplate['audience']; reviewed: true }
 export interface TemplateUpdate extends Update { audience?: BotTemplate['audience']; content?: TemplateContent; reviewed: true }
-export interface TemplateImport extends Mutation { name: string; machineId: ID; acceptedTerms: boolean }
+export interface TemplateImport extends Mutation { name: string; machineId: ID; acceptedTerms: boolean; access?: 'standard' | 'none' }
 export type ConversationKind = 'dm' | 'task' | 'group' | 'channel';
 /** One human owner only. Groups contain 2–6 Bots all owned by ownerUserId, never other humans. */
 export interface Conversation extends Resource { kind: ConversationKind; name: string; botIds: ID[]; ownerUserId: ID; parentConversationId: ID | null; leadBotId: ID | null; channelBindingId: ID | null; lastEntryId: ID | null; unreadCount: number; lastReadSeq: number; activity: { botId: ID; phase: 'reading' | 'working' | 'typing' }[] }
@@ -205,8 +261,19 @@ export type TranscriptEvent =
 export type ResolutionState = 'pending' | 'submitted' | 'approved' | 'denied' | 'declined' | 'expired' | 'cancelled' | 'completed' | 'failed' | 'outcome_unknown';
 export interface Gate { id: ID; state: ResolutionState; targetUserId: ID; expiresAtMs: TimestampMs; resolvedAtMs: TimestampMs | null; resolvedByUserId: ID | null; revision: number }
 export type ActionCategory = 'shell' | 'files' | 'external_message' | 'calendar' | 'publish' | 'purchase' | 'permissions' | 'connector' | 'handoff';
-export interface Approval extends Resource { gate: Gate; entryId: ID; conversationId: ID; botId: ID; runId: ID | null; source: 'lemon_exec' | 'product'; category: ActionCategory; title: string; description: string; target: string; inputs: JSONObject; policyMode: 'ask_first' | 'auto_review' | 'allow'; review: 'not_run' | 'allow' | 'ask' | 'deny'; ruleId: ID | null; scope: ReviewScope }
-export interface ApprovalResolve extends Update { decision: 'approve_once' | 'deny' }
+export interface Approval extends Resource { gate: Gate; entryId: ID; conversationId: ID; botId: ID; runId: ID | null; source: 'lemon_exec' | 'product' | 'access_request'; category: ActionCategory; title: string; description: string; target: string; inputs: JSONObject; policyMode: 'ask_first' | 'auto_review' | 'allow'; review: 'not_run' | 'allow' | 'ask' | 'deny'; ruleId: ID | null; scope: ReviewScope; chatOption?: ApprovalChatOption | null; resolvedScope?: 'once' | 'chat' | null }
+export interface ApprovalResolve extends Update { decision: 'approve_once' | 'approve_chat' | 'deny' }
+export type ApprovalToolGroup = 'terminal' | 'file_changes' | 'file_reading';
+export interface ApprovalChatOption { toolGroup: ApprovalToolGroup; label: string }
+export type ApprovalReviewMode = 'every_time' | 'per_chat' | 'bot_wide';
+export interface ApprovalReviewUpdate extends Update { mode: 'every_time' | 'per_chat' }
+export interface ApprovalAllowance extends Resource {
+  scope: 'chat' | 'bot'; botId: ID; conversationId: ID | null; ownerUserId: ID;
+  toolGroups: ApprovalToolGroup[]; label: string; state: 'active' | 'ended';
+  endedReason: 'stopped' | 'permissions_changed' | 'policy_changed' | 'review_mode_changed' | 'bot_moved' | 'membership_changed' | null;
+  endedAtMs: TimestampMs | null; endedByUserId: ID | null; sourceApprovalId: ID | null; createdByUserId: ID;
+  useCount: number; lastUsedAtMs: TimestampMs | null;
+}
 export interface Field { id: string; label: string; kind: 'text' | 'multiline' | 'number' | 'boolean' | 'single_select' | 'multi_select'; required: boolean; options?: { value: string; label: string }[]; min?: number; max?: number }
 export interface Question extends Resource { gate: Gate; entryId: ID; conversationId: ID; botId: ID; title: string; fields: Field[]; answers: Record<string, JSONValue> | null }
 export interface QuestionResolve extends Update { decision: 'answer' | 'decline'; answers?: Record<string, JSONValue> }
@@ -235,6 +302,7 @@ export type Card =
   | { type: 'email_draft' | 'slack_draft' | 'message_draft'; draft: Draft }
   | { type: 'calendar_event'; event: CalendarEvent }
   | { type: 'permission_request' | 'auto_review_approval' | 'local_tool_permission' | 'publish_approval'; approval: Approval }
+  | { type: 'access_request'; approval: Approval }
   | { type: 'connector'; connector: Connector }
   | { type: 'connectors'; connectors: Connector[] }
   | { type: 'listener_connect' | 'slack_connect'; channelBinding: ChannelBinding }
@@ -302,8 +370,8 @@ export interface ScopeEffect { resourceType: string; id: ID; machineId: ID | nul
 export interface BotPresence { botId: ID; status: 'idle' | 'working' | 'making' | 'needs_input' | 'offline'; machineId: ID; machineLabel: string; machineStatus: Machine['status']; currentRunId: ID | null; taskConversationId: ID | null; summary: string; evidenceEntryId: ID | null; measuredAtMs: TimestampMs; stale: boolean }
 export type AccessLevel = 'off' | 'read_only' | 'read_interact';
 export interface MachineCapability { id: string; name: string; category: 'files' | 'shell' | 'browser' | 'connector' | 'os_app'; supported: boolean; configuredLevel: AccessLevel; osGrant: 'granted' | 'denied' | 'not_required' | 'unknown'; tools: string[]; reason: string; measuredAtMs: TimestampMs; stale: boolean }
-export interface MachineCapabilities { machineId: ID; os: string; measuredAtMs: TimestampMs; stale: boolean; items: MachineCapability[] }
-export interface BotGrant extends Resource { botId: ID; machineId: ID; capabilityId: string; requestedLevel: AccessLevel; effectiveLevel: AccessLevel; reasons: string[] }
+export interface MachineCapabilities { machineId: ID; os: string; measuredAtMs: TimestampMs; stale: boolean; items: MachineCapability[]; botFolder?: boolean }
+export interface BotGrant extends Resource { botId: ID; machineId: ID; capabilityId: string; requestedLevel: AccessLevel; effectiveLevel: AccessLevel; pendingLevel: AccessLevel | null; reasons: string[] }
 export interface BotGrantUpdate extends Update { requestedLevel: AccessLevel }
 export interface ActivityItem extends Resource { botId: ID; machineId: ID; machineLabel: string; conversationId: ID | null; taskConversationId: ID | null; runId: ID | null; approvalId: ID | null; entryId: ID | null; kind: 'run' | 'tool' | 'approval' | 'memory' | 'preference' | 'artifact' | 'enrollment'; status: 'pending' | 'working' | 'making' | 'succeeded' | 'failed' | 'denied' | 'cancelled' | 'outcome_unknown'; title: string; summary: string; occurredAtMs: TimestampMs }
 export interface ActivityQuery extends PageQuery { botId?: ID; machineId?: ID; fromAtMs?: TimestampMs; toAtMs?: TimestampMs }
@@ -336,10 +404,12 @@ export interface Snapshot { cursor: Cursor; user: User; workspace: Workspace; me
 export type ResourceEventPayloads = {
   'user.updated': User; 'workspace.updated': Workspace; 'member.upserted': Member; 'member.deleted': Deleted; 'invite.upserted': MemberInvite; 'device.upserted': Device; 'device.deleted': Deleted;
   'machine.upserted': Machine; 'machine.deleted': Deleted; 'machine_invite.upserted': MachineInvite;
+  'machine_setup.upserted': MachineSetup;
   'bot.upserted': Bot; 'bot.deleted': Deleted; 'section.upserted': Section; 'section.deleted': Deleted; 'template.upserted': BotTemplate; 'template.deleted': Deleted;
   'conversation.upserted': Conversation; 'conversation.deleted': Deleted; 'conversation.read': { conversationId: ID; userId: ID; throughSeq: number; unread: boolean }; 'composer.updated': ComposerDraft;
   'entry.upserted': TranscriptEntry; 'entry.deleted': { id: ID; conversationId: ID }; 'entry.delta': { conversationId: ID; entryId: ID; runId: ID; offset: number; text: string }; 'run.upserted': Run;
   'attachment.upserted': Attachment; 'attachment.deleted': Deleted; 'approval.upserted': Approval; 'question.upserted': Question; 'human_step.upserted': HumanStep; 'secret_request.upserted': SecretRequest; 'draft.upserted': Draft;
+  'approval_allowance.upserted': ApprovalAllowance;
   'skill.upserted': Skill; 'skill.deleted': Deleted; 'routine.upserted': Routine; 'routine.deleted': Deleted; 'routine_run.upserted': RoutineRun; 'memory.upserted': Memory; 'memory.deleted': { id: ID; botId: ID };
   'pairing.upserted': Pairing;
   'notification.upserted': Notification; 'notification.deleted': Deleted; 'policies.updated': Policies; 'connector.upserted': Connector; 'connector.deleted': Deleted; 'connector_auth.upserted': ConnectorAuth; 'channel.upserted': ChannelBinding; 'channel.deleted': Deleted; 'voice.upserted': VoiceSession;
@@ -389,6 +459,9 @@ export interface HandoffInput extends MessageBotInput { task: string }
 export interface DraftToolInput extends ToolContextInput { content: DraftContent }
 export interface AskUserInput extends ToolContextInput { title: string; fields: Field[]; expiresInMs?: number }
 export interface ApprovalToolInput extends ToolContextInput { category: ActionCategory; title: string; description: string; target: string; inputs: JSONObject; expiresInMs?: number }
+export type AccessCapability = 'terminal' | 'files' | 'browser';
+export interface AccessRequestInput extends ToolContextInput { capability: AccessCapability; access?: 'view' | 'full'; reason: string; expiresInMs?: number }
+export interface AccessRequestToolResult { approval: Approval | null; decision: 'allowed' | 'not_now' | 'expired' | 'cancelled' | 'already_available'; appliesWhen: 'after_this_task' | null; retry: 'automatic' | 'none' }
 export interface HumanStepInput extends ToolContextInput { title: string; instructions: string; reason: HumanStep['reason']; externalUrl?: string; expiresInMs?: number }
 export interface SecretToolInput extends ToolContextInput { name: string; description: string; scope: Secret['scope']; expiresInMs?: number }
 export interface VoiceMemoInput extends ToolContextInput { text: string; voice?: VoiceSettings }
@@ -404,8 +477,8 @@ export interface QuestionToolResult { question: Question; state: ResolutionState
 export interface ApprovalToolResult { approval: Approval; decision: 'approved' | 'denied' | 'expired' | 'cancelled' }
 export interface HumanStepToolResult { step: HumanStep; decision: 'done' | 'skipped' | 'expired' | 'cancelled' }
 export interface SecretToolResult { request: SecretRequest; saved: boolean; name: string }
-export interface MCPToolInputs { message_bot: MessageBotInput; handoff: HandoffInput; create_draft: DraftToolInput; ask_user: AskUserInput; request_approval: ApprovalToolInput; request_human_step: HumanStepInput; request_secret: SecretToolInput; send_voice_memo: VoiceMemoInput; share_file: ShareFileInput; create_routine: Omit<RoutineCreate, 'botId'>; update_routine: RoutineUpdate & { routineId: ID }; save_skill: Omit<SkillCreate, 'machineIds' | 'botId'>; list_bots: BotListInput; post_to_group: PostGroupInput; remember: RememberInput; create_bot: BotCreate; update_preferences: PreferenceToolInput; create_reminder: ReminderToolInput }
-export interface MCPToolResults { message_bot: MessageBotResult; handoff: MessageBotResult; create_draft: Draft; ask_user: QuestionToolResult; request_approval: ApprovalToolResult; request_human_step: HumanStepToolResult; request_secret: SecretToolResult; send_voice_memo: ToolEntryResult; share_file: ToolEntryResult; create_routine: Routine; update_routine: Routine; save_skill: Skill; list_bots: Page<Bot>; post_to_group: MessageReceipt; remember: Memory; create_bot: Bot; update_preferences: PreferenceChange; create_reminder: Reminder }
+export interface MCPToolInputs { message_bot: MessageBotInput; handoff: HandoffInput; list_agents: AgentListQuery; rename_agent: AgentIdentityUpdate; message_agent: MessageAgentInput; create_draft: DraftToolInput; ask_user: AskUserInput; request_approval: ApprovalToolInput; request_access: AccessRequestInput; request_human_step: HumanStepInput; request_secret: SecretToolInput; send_voice_memo: VoiceMemoInput; share_file: ShareFileInput; create_routine: Omit<RoutineCreate, 'botId'>; update_routine: RoutineUpdate & { routineId: ID }; save_skill: Omit<SkillCreate, 'machineIds' | 'botId'>; list_bots: BotListInput; post_to_group: PostGroupInput; remember: RememberInput; create_bot: BotCreate; update_preferences: PreferenceToolInput; create_reminder: ReminderToolInput }
+export interface MCPToolResults { message_bot: MessageBotResult; handoff: MessageBotResult; list_agents: { agents: AgentIdentity[] }; rename_agent: { agent: AgentIdentity }; message_agent: AgentMessageReceipt; create_draft: Draft; ask_user: QuestionToolResult; request_approval: ApprovalToolResult; request_access: AccessRequestToolResult; request_human_step: HumanStepToolResult; request_secret: SecretToolResult; send_voice_memo: ToolEntryResult; share_file: ToolEntryResult; create_routine: Routine; update_routine: Routine; save_skill: Skill; list_bots: Page<Bot>; post_to_group: MessageReceipt; remember: Memory; create_bot: Bot; update_preferences: PreferenceChange; create_reminder: Reminder }
 export interface MCPToolSchema { name: keyof MCPToolInputs; description: string; inputSchema: JSONObject }
 export interface MCPCallResult<T> { content: { type: 'text'; text: string }[]; structuredContent: T; isError?: boolean }
 export type Endpoint<Request, Response, Query = undefined> = { request: Request; response: Response; query: Query };
@@ -424,14 +497,14 @@ export interface DirectoryGroupCreate extends Mutation { name: string; memberUse
 export interface DirectoryGroupUpdate extends Update { name?: string; memberUserIds?: ID[] }
 export interface GroupPolicy extends Resource { directoryGroupId: ID; productAccess: boolean; capabilityModes: Partial<Record<ActionCategory, 'ask_first' | 'auto_review' | 'allow'>>; requiredRuleIds: ID[]; localExecutionCeiling: 'deny' | 'ask' | 'allow'; allowEgress: boolean; allowSudo: boolean; networkPolicyId: ID | null; reviewExempt: boolean }
 export interface GroupPolicyUpdate extends Update { productAccess?: boolean; capabilityModes?: GroupPolicy['capabilityModes']; requiredRuleIds?: ID[]; localExecutionCeiling?: GroupPolicy['localExecutionCeiling']; allowEgress?: boolean; allowSudo?: boolean; networkPolicyId?: ID | null; reviewExempt?: boolean }
-export interface Governance { revision: number; groupAccess: 'all' | 'selected'; allowedDirectoryGroupIds: ID[]; allowSudo: boolean; allowEgress: boolean; lockNetworkForGroups: boolean; requireReview: boolean; allowedChannelAdapters: ChannelBinding['adapter'][]; xMentionsEnabled: boolean; emailEnabled: boolean; contentExportEnabled: boolean; inactiveHostPolicy: { enabled: boolean; afterDays: number; action: 'suspend' | 'stop_worker' } }
-export interface GovernanceUpdate extends Update { groupAccess?: Governance['groupAccess']; allowedDirectoryGroupIds?: ID[]; allowSudo?: boolean; allowEgress?: boolean; lockNetworkForGroups?: boolean; requireReview?: boolean; allowedChannelAdapters?: ChannelBinding['adapter'][]; xMentionsEnabled?: boolean; emailEnabled?: boolean; contentExportEnabled?: boolean; inactiveHostPolicy?: Governance['inactiveHostPolicy'] }
+export interface Governance { revision: number; groupAccess: 'all' | 'selected'; allowedDirectoryGroupIds: ID[]; allowSudo: boolean; allowEgress: boolean; lockNetworkForGroups: boolean; requireReview: boolean; folderReadsNeedReview: boolean; allowedChannelAdapters: ChannelBinding['adapter'][]; xMentionsEnabled: boolean; emailEnabled: boolean; contentExportEnabled: boolean; inactiveHostPolicy: { enabled: boolean; afterDays: number; action: 'suspend' | 'stop_worker' }; rememberedApprovals?: 'off' | 'chat' | 'chat_and_bot' }
+export interface GovernanceUpdate extends Update { groupAccess?: Governance['groupAccess']; allowedDirectoryGroupIds?: ID[]; allowSudo?: boolean; allowEgress?: boolean; lockNetworkForGroups?: boolean; requireReview?: boolean; folderReadsNeedReview?: boolean; allowedChannelAdapters?: ChannelBinding['adapter'][]; xMentionsEnabled?: boolean; emailEnabled?: boolean; contentExportEnabled?: boolean; inactiveHostPolicy?: Governance['inactiveHostPolicy']; rememberedApprovals?: 'off' | 'chat' | 'chat_and_bot' }
 export interface NetworkRule { kind: 'domain' | 'ip_cidr'; value: string; ports: number[]; protocol: 'tcp' | 'udp' | 'both' }
 export interface NetworkPolicy extends Resource { scope: 'workspace' | 'directory_group'; directoryGroupId: ID | null; mode: 'allow_all' | 'defaults_plus_allowlist' | 'allowlist_only'; rules: NetworkRule[]; requiredRuntimeDestinations: NetworkRule[] }
 export interface NetworkPolicyCreate extends Mutation { scope: NetworkPolicy['scope']; directoryGroupId?: ID; mode: NetworkPolicy['mode']; rules: NetworkRule[] }
 export interface NetworkPolicyUpdate extends Update { mode?: NetworkPolicy['mode']; rules?: NetworkRule[] }
 export interface PolicyApplication { machineId: ID; desiredRevision: number; appliedRevision: number | null; state: 'pending' | 'applied' | 'failed' | 'offline' | 'unsupported'; error: string | null; measuredAtMs: TimestampMs }
-export interface EffectivePolicy { userId: ID; botId: ID | null; directoryGroupIds: ID[]; productAccess: boolean; localExecutionCeiling: GroupPolicy['localExecutionCeiling']; allowSudo: boolean; allowEgress: boolean; rules: PolicyRule[]; networkPolicies: NetworkPolicy[]; explanations: string[] }
+export interface EffectivePolicy { userId: ID; botId: ID | null; directoryGroupIds: ID[]; productAccess: boolean; localExecutionCeiling: GroupPolicy['localExecutionCeiling']; allowSudo: boolean; allowEgress: boolean; workspaceReads: 'allow' | 'ask'; rules: PolicyRule[]; networkPolicies: NetworkPolicy[]; explanations: string[]; rememberedApprovals?: { chat: ('shell' | 'files')[]; bot: ('shell' | 'files')[] } }
 export interface EgressRoute extends Resource { machineId: ID; ownerUserId: ID; throughMachineId: ID; state: 'connecting' | 'active' | 'disabled' | 'failed'; enabled: boolean; rememberedPreference: boolean; error: string | null }
 export interface EgressRouteCreate extends Mutation { machineId: ID; throughMachineId: ID; enabled: boolean }
 export interface EgressRouteUpdate extends Update { enabled: boolean }
@@ -512,7 +585,7 @@ export interface OIDCGroupMapping { providerId: ID; externalId: string; director
 export interface OIDCSubjectMapping { providerId: ID; subject: string; userId: ID }
 export interface ProviderSpendSource { providerAccount: string; apiBaseUrl: string; secretRef: string }
 export interface ChannelApplicationPrincipal { providerId: string; channelBindingId: ID; externalAppId: string; userId: ID }
-export interface OperatorConfiguration { version: 1; trustedFrontendOrigins: string[]; oauthRedirectUris: string[]; serverSecrets: Record<string, ServerSecretSource>; channelProviders: ChannelProviderConfig[]; emailProviders: EmailProviderConfig[]; eventProviders: EventProviderConfig[]; hostDrivers: HostDriverConfig[]; xProvider: { oauth: OAuthProviderConfig; publicHandle: string; signingSecretRef: string; apiBaseUrl: string; deniedCountries: string[]; allowedMedia: ('photo' | 'video' | 'gif')[] } | null; exportAllowedOrigins: string[]; requiredRuntimeDestinations: NetworkRule[]; breakGlassOwnerUserId: ID | null; connectorProviders?: ConnectorProviderConfig[]; approvedPrivateMcpOrigins?: string[]; reviewedSetupManifests?: ReviewedSetupManifest[]; oidcAllowedOrigins?: string[]; oidcApprovedPrivateOrigins?: string[]; oidcClientApprovals?: OIDCClientApproval[]; machineManagementUserIds?: ID[]; exportPrivateOrigins?: string[]; oidcGroupMappings?: OIDCGroupMapping[]; oidcSubjectMappings?: OIDCSubjectMapping[]; xPublicAccountSecretRef?: string; providerSpendSources?: ProviderSpendSource[]; channelApplicationPrincipals?: ChannelApplicationPrincipal[]; managedDirectoryOwnerOverride?: boolean }
+export interface OperatorConfiguration { version: 1; namedAgentOperatorUserId?: string; trustedFrontendOrigins: string[]; oauthRedirectUris: string[]; serverSecrets: Record<string, ServerSecretSource>; channelProviders: ChannelProviderConfig[]; emailProviders: EmailProviderConfig[]; eventProviders: EventProviderConfig[]; hostDrivers: HostDriverConfig[]; xProvider: { oauth: OAuthProviderConfig; publicHandle: string; signingSecretRef: string; apiBaseUrl: string; deniedCountries: string[]; allowedMedia: ('photo' | 'video' | 'gif')[] } | null; exportAllowedOrigins: string[]; requiredRuntimeDestinations: NetworkRule[]; breakGlassOwnerUserId: ID | null; connectorProviders?: ConnectorProviderConfig[]; approvedPrivateMcpOrigins?: string[]; reviewedSetupManifests?: ReviewedSetupManifest[]; oidcAllowedOrigins?: string[]; oidcApprovedPrivateOrigins?: string[]; oidcClientApprovals?: OIDCClientApproval[]; machineManagementUserIds?: ID[]; exportPrivateOrigins?: string[]; oidcGroupMappings?: OIDCGroupMapping[]; oidcSubjectMappings?: OIDCSubjectMapping[]; xPublicAccountSecretRef?: string; providerSpendSources?: ProviderSpendSource[]; channelApplicationPrincipals?: ChannelApplicationPrincipal[]; managedDirectoryOwnerOverride?: boolean }
 /** Canonical method+path keys. Undefined means no JSON body/query, never an empty JSON object. */
 export interface RestEndpoints {
   'GET /account-teardowns': Endpoint<undefined, Page<AccountTeardown>, PageQuery & { userId?: ID; state?: AccountTeardown['state'] }>;
@@ -548,6 +621,12 @@ export interface RestEndpoints {
   'PATCH /directory/groups/:id/policy': Endpoint<GroupPolicyUpdate, GroupPolicy>;
   'GET /governance': Endpoint<undefined, Governance>;
   'PATCH /governance': Endpoint<GovernanceUpdate, Governance>;
+  'GET /conversations/:id/approval-allowances': Endpoint<undefined, Page<ApprovalAllowance>, PageQuery & { state?: 'active' | 'ended' }>;
+  'GET /bots/:id/approval-allowances': Endpoint<undefined, Page<ApprovalAllowance>, PageQuery & { state?: 'active' | 'ended' }>;
+  'POST /approval-allowances/:id/stop': Endpoint<Update, ApprovalAllowance>;
+  'PATCH /bots/:id/approval-review': Endpoint<ApprovalReviewUpdate, Bot>;
+  'POST /bots/:id/approval-allowances/preview': Endpoint<Mutation, Confirmation>;
+  'POST /bots/:id/approval-allowances': Endpoint<Confirm, ApprovalAllowance>;
   'GET /policies/effective': Endpoint<undefined, EffectivePolicy, { userId?: ID; botId?: ID }>;
   'GET /network-policies': Endpoint<undefined, Page<NetworkPolicy>, PageQuery>;
   'POST /network-policies': Endpoint<NetworkPolicyCreate, NetworkPolicy>;
@@ -649,14 +728,18 @@ export interface RestEndpoints {
   'POST /setup': Endpoint<SetupRequest, AuthResult>;
   'POST /auth/login': Endpoint<LoginRequest, AuthResult>;
   'POST /auth/local': Endpoint<LocalAccessRequest, AuthResult>;
+  'POST /auth/local/challenge': Endpoint<LocalBackendChallengeRequest, LocalBackendChallenge>;
+  'POST /auth/local/redeem': Endpoint<LocalTicketRedeem, AuthResult>;
   'POST /auth/invites/accept': Endpoint<AcceptInviteRequest, AuthResult>;
   'POST /auth/reauth': Endpoint<ReauthRequest, ReauthResult>;
   'GET /auth/sessions': Endpoint<undefined, Page<AuthSession>, PageQuery>;
   'DELETE /auth/sessions/:id': Endpoint<Mutation, Deleted>;
   'POST /auth/logout': Endpoint<Mutation, Empty>;
   'GET /me': Endpoint<undefined, User>;
+  'GET /me/sign-in': Endpoint<undefined, SignInMethods>;
   'PATCH /me': Endpoint<UserUpdate, User>;
   'PUT /me/password': Endpoint<PasswordUpdate, Empty>;
+  'POST /me/password': Endpoint<PasswordCreate, User>;
   'POST /me/preview': Endpoint<PreviewRequest, Confirmation>;
   'DELETE /me': Endpoint<AccountDelete, Deleted>;
   'GET /workspace': Endpoint<undefined, Workspace>;
@@ -685,6 +768,8 @@ export interface RestEndpoints {
   'POST /instance/reconnect': Endpoint<Mutation, InstanceStatus>;
   'POST /instance/runtime/:action': Endpoint<RuntimeActionRequest, RuntimeOperation>;
   'GET /instance/providers': Endpoint<undefined, ProviderManagement>;
+  'POST /instance/providers/check': Endpoint<ProviderCheckRequest, ProviderCheckResult>;
+  'POST /instance/providers/:providerId/import': Endpoint<ProviderImportRequest, ProviderManagement>;
   'PUT /instance/providers/:providerId/api-key': Endpoint<ProviderApiKeySet, ProviderManagement>;
   'POST /instance/providers/:providerId/disconnect': Endpoint<ProviderTargetRequest, ProviderManagement>;
   'POST /instance/providers/default': Endpoint<ProviderDefaultSet, ProviderManagement>;
@@ -692,6 +777,8 @@ export interface RestEndpoints {
   'POST /instance/providers/:providerId/device-login/:loginId/poll': Endpoint<ProviderDeviceLoginRequest, ProviderDeviceLogin>;
   'POST /instance/providers/:providerId/device-login/:loginId/cancel': Endpoint<ProviderDeviceLoginRequest, ProviderDeviceLogin>;
   'GET /machines/:id/providers': Endpoint<undefined, ProviderManagement>;
+  'POST /machines/:id/providers/check': Endpoint<ProviderCheckRequest, ProviderCheckResult>;
+  'POST /machines/:id/providers/:providerId/import': Endpoint<ProviderImportRequest, ProviderManagement>;
   'PUT /machines/:id/providers/:providerId/api-key': Endpoint<ProviderApiKeySet, ProviderManagement>;
   'POST /machines/:id/providers/:providerId/disconnect': Endpoint<ProviderTargetRequest, ProviderManagement>;
   'POST /machines/:id/providers/default': Endpoint<ProviderDefaultSet, ProviderManagement>;
@@ -700,7 +787,10 @@ export interface RestEndpoints {
   'POST /machines/:id/providers/:providerId/device-login/:loginId/cancel': Endpoint<ProviderDeviceLoginRequest, ProviderDeviceLogin>;
   'GET /sync': Endpoint<undefined, Snapshot>;
   'GET /machines': Endpoint<undefined, Page<Machine>, PageQuery>;
+  'GET /machines/enrollment-preview': Endpoint<undefined, MachineEnrollmentPreview>;
   'POST /machines': Endpoint<MachineAttach, MachineAttachResult>;
+  'POST /machines/ssh': Endpoint<MachineSshSetupRequest, MachineSetup>;
+  'GET /machine-setups/:id': Endpoint<undefined, MachineSetup>;
   'GET /machines/:id': Endpoint<undefined, Machine>;
   'PATCH /machines/:id': Endpoint<MachineUpdate, Machine>;
   'POST /machines/:id/reconnect': Endpoint<MachineReconnect, MachineInvite>;
@@ -730,6 +820,11 @@ export interface RestEndpoints {
   'POST /bots': Endpoint<BotCreate, Bot>;
   'GET /bots/:id': Endpoint<undefined, Bot>;
   'PATCH /bots/:id': Endpoint<BotUpdate, Bot>;
+  'GET /bots/:id/agent-identity': Endpoint<undefined, { agent: AgentIdentity }>;
+  'PATCH /bots/:id/agent-identity': Endpoint<AgentIdentityUpdate, { agent: AgentIdentity }>;
+  'GET /bots/:id/agents': Endpoint<undefined, { agents: AgentIdentity[] }, AgentListQuery>;
+  'POST /bots/:id/agent-messages': Endpoint<AgentMessageSend, AgentMessageReceipt>;
+  'GET /bots/:id/agent-messages/:messageId': Endpoint<undefined, AgentMessageReceipt>;
   'POST /bots/:id/duplicate': Endpoint<BotDuplicate, Bot>;
   'POST /bots/:id/preview': Endpoint<PreviewRequest, Confirmation>;
   'DELETE /bots/:id': Endpoint<Confirm, Deleted>;

@@ -1,8 +1,8 @@
 defmodule LemonAi.Providers.OpenCodeGoSession do
   @moduledoc """
-  `x-opencode-session` header support for the `opencode_go` provider.
+  Conversation and client-identification headers for the `opencode_go` provider.
 
-  OpenCode Go (`https://opencode.ai/zen/go/v1`) rejects requests that do not
+  OpenCode Go (`https://opencode.ai/inference/go/openai/v1`) rejects requests that do not
   carry an `x-opencode-session` header with `400 MissingSessionID`. The value
   must be a stable identifier per conversation, reused for every request of
   that conversation (including retries).
@@ -11,14 +11,15 @@ defmodule LemonAi.Providers.OpenCodeGoSession do
   Sessionless utility calls fall back to a fixed id derived from the system
   prompt, so the same agent role always routes consistently.
 
-  The header is only produced for the `opencode_go` provider; every other
-  provider gets an empty map.
+  Headers are only produced for the `opencode_go` provider; every other
+  provider gets an empty map. The User-Agent identifies Lemon rather than Req.
   """
 
   alias LemonAi.Types.{Context, Model}
 
   @header "x-opencode-session"
   @providers [:opencode_go, "opencode_go"]
+  @user_agent "lemon_ai"
 
   @doc "Name of the session header."
   @spec header_name() :: String.t()
@@ -27,13 +28,13 @@ defmodule LemonAi.Providers.OpenCodeGoSession do
   @doc """
   Returns the extra request headers required by `model`'s provider.
 
-  Returns `%{"x-opencode-session" => id}` for `opencode_go` models and `%{}`
-  for all other providers.
+  Returns a conversation ID and client User-Agent for `opencode_go` models;
+  all other providers receive an empty map.
   """
   @spec headers(Model.t(), Context.t(), map()) :: %{optional(String.t()) => String.t()}
   def headers(%Model{provider: provider}, %Context{} = context, opts)
       when provider in @providers do
-    %{@header => session_id(context, opts)}
+    %{@header => session_id(context, opts), "user-agent" => @user_agent}
   end
 
   def headers(_model, _context, _opts), do: %{}

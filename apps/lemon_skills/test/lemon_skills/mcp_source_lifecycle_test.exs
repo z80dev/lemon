@@ -4,17 +4,48 @@ defmodule LemonSkills.McpSourceLifecycleTest do
   alias LemonSkills.McpSource
 
   test "legacy SSE loss exits the client so the host observes transport loss" do
-    id = make_ref()
-    state = %{state: :ready, stream_request_id: id}
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    on_exit(fn -> :gen_tcp.close(listener) end)
+    {:ok, {_, port}} = :inet.sockname(listener)
+    {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
+    {:ok, conn, id} = Mint.HTTP.request(conn, "GET", "/sse", [], nil)
+    socket = Mint.HTTP.get_socket(conn)
+
+    state = %{
+      state: :ready,
+      stream_request_id: id,
+      stream_conn: conn,
+      stream_socket: socket
+    }
 
     for event <- [
-          {:http, {id, :stream_end, []}},
-          {:http, {id, {:error, :closed}}},
+          {:tcp_closed, socket},
+          {:tcp_error, socket, :closed},
           {:mcp_stream_closed, id}
         ] do
       assert {:stop, :normal, %{state: :disconnected, stream_request_id: nil}} =
                SSE.handle_info(event, state)
     end
+
+    {:ok, _conn} = Mint.HTTP.close(conn)
+  end
+
+  test "legacy SSE ignores stray messages without exposing their contents" do
+    state = %{state: :ready, stream_request_id: make_ref(), stream_socket: make_ref()}
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        for event <- [
+              {:stray, "private message contents"},
+              {:tcp_closed, make_ref()},
+              {:mcp_stream_closed, make_ref()}
+            ] do
+          assert {:noreply, ^state} = SSE.handle_info(event, state)
+        end
+      end)
+
+    assert log =~ "Ignoring unexpected MCP SSE client message"
+    refute log =~ "private message contents"
   end
 
   setup do

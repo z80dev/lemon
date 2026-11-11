@@ -4,15 +4,55 @@
 
 ### Changed
 
+- Bot creation preselects the sole online owned computer, presents explicit
+  Standard access and keeps optional customization collapsed. Import and duplicate
+  confirm their own access choice; empty chats offer one-click starter tasks.
+- Create Bot checks model readiness on the selected machine, offers consented
+  detected-login import before device sign-in or API-key entry, and supports Skip
+  with a conversation reminder. Providers settings expose readiness, explicit
+  live checks and Codex CLI import without silently copying credentials.
+- Web and Mac starter tasks inspect system summaries, installed tools and running
+  processes rather than personal folders, avoiding protected-folder scans.
+
+- Surface "needs reconnecting" state and warning copy on expired or revoked machines across machine list, machine detail and chat inspector, and issue repair invites via POST.
+- Connecting a computer needs only its friendly name, with optional settings under Advanced. Loopback controllers require an explicit same-computer choice before issuing an invite; verified online enrollment offers Create a Bot on that machine.
+- Web and Mac grants use measured names, grouped Off / View only / Full controls, actionable status, and one Why disclosure; saved grants update from the server response.
 - Reply chips show the original author and a short message preview; Send has a keyboard-focus tooltip.
 - Standardized computer connection setup as “Connect a computer” and raised status badges to 12px. Narrow sidebar headers keep their New Bot button on the logo row, truncating long connection labels instead.
 - Load feature screens on demand instead of bundling all routes into the initial client chunk.
 
 ### Fixed
+- After first-password creation replaces a local placeholder address, the profile
+  editor adopts the saved email so a later preferences change cannot restore the
+  placeholder.
+
+- Web and Mac command approvals require expanding truncated previews before Allow,
+  preserve command line breaks in the card and Details, and visibly escape hidden
+  or directional Unicode characters with a warning without altering execution.
+- First-run home copy recognizes online computers instead of asking to connect
+  one again. Mac sidebar previews retry after initial sync goes online. Both clients
+  look behind trailing tool events for the latest reply without opening the chat,
+  caching that result against the conversation's last-entry ID.
+
+- Finished runs no longer leave “Writing a reply” or a caret behind when completion
+  arrives late; idle or offline Bots reconcile every nonterminal run, including
+  unknown outcomes. Terminal run revisions survive removal from active work, so
+  delayed status reads cannot resurrect work or forward superseded results.
+  Grant changes cannot be replaced by older in-flight refreshes.
 
 - Device registration, About and update requirements use the build's package version and complete semantic-version precedence instead of hardcoded version checks.
 
 ### Added
+
+- Private access cards let Bots request Terminal, Files or Browser with explicit
+  Bot-wide consent and queued-task status. Busy-Bot changes stay editable, update
+  live and offer Stop task. Supporting computers explain policy-controlled
+  unreviewed Bot-folder reads; workspace administrators can require review.
+
+- Same-computer browser sign-in uses one-use `lemon-bot open` links, strips tickets
+  before routing, and explains local owner access once. Account settings show sign-in
+  methods, let locally confirmed owners add email/password, and support local
+  confirmation for account deletion. iPhone pairing still needs no password.
 
 - Owner-only Providers settings use the shared product API for controller or
   owned-machine status, write-only API-key add/replace, Codex device sign-in with

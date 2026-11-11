@@ -7,6 +7,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
     name: :string,
     controller: :string,
     pair: :boolean,
+    enroll_only: :boolean,
     operator_token: :string,
     invite_code_stdin: :boolean,
     token: :string,
@@ -26,6 +27,11 @@ defmodule CodingAgent.ExecutionNode.CLI do
     case run(argv) do
       :ok ->
         :ok
+
+      {:error, reason}
+      when reason in [:enrollment_outcome_unknown, "enrollment_outcome_unknown"] ->
+        IO.puts(:stderr, "lemon node join: enrollment_outcome_unknown")
+        System.halt(1)
 
       {:error, message} ->
         IO.puts(:stderr, "lemon node join: #{message}")
@@ -87,6 +93,38 @@ defmodule CodingAgent.ExecutionNode.CLI do
     end
   end
 
+  def run(["status" | argv], _deps) do
+    case OptionParser.parse(argv, strict: [name: :string, json: :boolean]) do
+      {opts, [], []} ->
+        if is_binary(opts[:name]) and String.trim(opts[:name]) != "" do
+          case CodingAgent.StatePaths.read_status(opts[:name]) do
+            {:ok, status} ->
+              if opts[:json] do
+                IO.puts(Jason.encode!(status))
+              else
+                reason = if status["reason"], do: " (#{status["reason"]})", else: ""
+
+                since =
+                  DateTime.from_unix!(status["changedAtMs"], :millisecond)
+                  |> DateTime.to_iso8601()
+
+                IO.puts("#{status["localName"]}: #{status["state"]}#{reason} since #{since}")
+              end
+
+              :ok
+
+            _ ->
+              {:error, "no worker status recorded for this name"}
+          end
+        else
+          {:error, "--name is required"}
+        end
+
+      _ ->
+        {:error, "invalid worker status options"}
+    end
+  end
+
   def run(argv, deps) do
     Process.flag(:trap_exit, true)
 
@@ -95,8 +133,18 @@ defmodule CodingAgent.ExecutionNode.CLI do
          :ok <- require_invite_features(opts, deps),
          {:ok, opts} <- read_invite(opts),
          {:ok, execution_capabilities} <- execution_capabilities(opts),
-         {:ok, _started} <- Application.ensure_all_started(:coding_agent),
+         :ok <-
+           Keyword.get(deps, :configure_state, &CodingAgent.StatePaths.configure_worker/1).(
+             opts[:name]
+           ),
+         {:ok, _started} <- start_runtime(opts, deps),
          :ok <- load_all_modules(),
+         :ok <-
+           Application.put_env(
+             :lemon_core,
+             :require_owned_loopback,
+             System.get_env("LEMON_NODE_TRUST_LOOPBACK_LISTENER") != "1"
+           ),
          {:ok, worker} <-
            Worker.start_link(
              node_name: opts[:name],
@@ -112,6 +160,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
              cwd: default_cwd(opts),
              execution_capabilities: execution_capabilities,
              notify_pid: self(),
+             status_writer: Keyword.get(deps, :status_writer),
              socket_module: Keyword.get(deps, :socket_module, CodingAgent.ExecutionNode.Socket),
              executor_module: Keyword.get(deps, :executor_module, CodingAgent.Executor),
              token_store_module:
@@ -119,7 +168,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
              token_store_opts: Keyword.get(deps, :token_store_opts, [])
            ) do
       monitor = Process.monitor(worker)
-      await_worker(worker, monitor)
+      await_worker(worker, monitor, opts)
     else
       true ->
         IO.puts(help())
@@ -132,6 +181,29 @@ defmodule CodingAgent.ExecutionNode.CLI do
         {:error, format_reason(reason)}
     end
   end
+
+  defp start_runtime(opts, deps) do
+    case Keyword.get(deps, :ensure_all_started, &Application.ensure_all_started/1).(:coding_agent) do
+      {:ok, _} = success ->
+        success
+
+      {:error, _} = error ->
+        if opts[:enroll_only] do
+          reason = if address_in_use?(error), do: :address_in_use, else: :runtime_start_failed
+          {:error, {:enroll_start_failed, reason}}
+        else
+          error
+        end
+    end
+  end
+
+  defp address_in_use?(:eaddrinuse), do: true
+
+  defp address_in_use?(reason) when is_tuple(reason),
+    do: reason |> Tuple.to_list() |> Enum.any?(&address_in_use?/1)
+
+  defp address_in_use?(reason) when is_list(reason), do: Enum.any?(reason, &address_in_use?/1)
+  defp address_in_use?(_), do: false
 
   @spec parse([String.t()]) :: {:ok, keyword()} | {:error, String.t()}
   def parse(argv) do
@@ -182,6 +254,9 @@ defmodule CodingAgent.ExecutionNode.CLI do
       blank?(opts[:controller]) ->
         {:error, "--controller is required"}
 
+      opts[:enroll_only] && opts[:invite_code_stdin] != true ->
+        {:error, "--enroll-only requires --invite-code-stdin"}
+
       opts[:invite_code_stdin] &&
           Enum.any?(
             [:node_id, :repair, :operator_token, :token],
@@ -205,7 +280,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
          byte_size(opts[:controller]) <= 2048 and
          uri.scheme in ["ws", "wss"] and is_binary(uri.host) and uri.host != "" and
          uri.userinfo == nil and uri.query == nil and uri.fragment == nil and
-         (is_nil(uri.port) or (is_integer(uri.port) and uri.port in 1..65_535)) and
+         is_integer(uri.port) and uri.port in 1..65_535 and
          not String.match?(opts[:controller], ~r/[\s\x00-\x1f\x7f]/) and
          (uri.scheme == "wss" or uri.host in ["localhost", "127.0.0.1", "::1"]) do
       {:ok, opts}
@@ -232,29 +307,75 @@ defmodule CodingAgent.ExecutionNode.CLI do
     end
   end
 
-  defp await_worker(worker, monitor) do
+  @doc false
+  def await_worker(worker, monitor, opts \\ []) do
     receive do
       {:execution_node_worker, ^worker, {:status, :online, node_id}} ->
         suffix = if is_binary(node_id), do: " (#{node_id})", else: ""
         IO.puts("Execution node online#{suffix}")
-        await_worker(worker, monitor)
+
+        if opts[:enroll_only] do
+          stop_enrollment_worker(worker, monitor)
+        else
+          await_worker(worker, monitor, opts)
+        end
 
       {:execution_node_worker, ^worker, {:status, status}} ->
         IO.puts("Execution node #{status}")
-        await_worker(worker, monitor)
+        await_worker(worker, monitor, opts)
+
+      {:execution_node_worker, ^worker, {:status, kind, reason}}
+      when kind in [:needs_reauthorization, :needs_enrollment, :conflict] ->
+        remedy =
+          case kind do
+            :needs_reauthorization ->
+              "reconnect this machine from Lemon Bot (Machines → Reconnect); this worker resumes automatically when new credentials are saved"
+
+            :needs_enrollment ->
+              "no saved credential for this controller; enroll it with the join command from Lemon Bot"
+
+            :conflict ->
+              "another worker is connected as this node; retrying every minute"
+          end
+
+        IO.puts("Execution node #{kind} (#{reason}): #{remedy}")
+
+        if opts[:enroll_only] do
+          case stop_enrollment_worker(worker, monitor) do
+            :ok -> {:error, :enrollment_outcome_unknown}
+            error -> error
+          end
+        else
+          await_worker(worker, monitor, opts)
+        end
 
       {:execution_node_worker, ^worker, {:status, status, _detail}} ->
         IO.puts("Execution node #{status}")
-        await_worker(worker, monitor)
+        await_worker(worker, monitor, opts)
 
       {:DOWN, ^monitor, :process, ^worker, :normal} ->
-        :ok
+        if opts[:enroll_only], do: {:error, :enrollment_outcome_unknown}, else: :ok
 
       {:DOWN, ^monitor, :process, ^worker, reason} ->
         {:error, format_reason(reason)}
 
       {:EXIT, ^worker, _reason} ->
-        await_worker(worker, monitor)
+        await_worker(worker, monitor, opts)
+    end
+  end
+
+  defp stop_enrollment_worker(worker, monitor) do
+    try do
+      GenServer.stop(worker, :normal, 5_000)
+
+      receive do
+        {:DOWN, ^monitor, :process, ^worker, :normal} -> :ok
+        {:DOWN, ^monitor, :process, ^worker, _reason} -> {:error, "worker_shutdown_failed"}
+      after
+        5_000 -> {:error, "worker_shutdown_failed"}
+      end
+    catch
+      :exit, _ -> {:error, "worker_shutdown_failed"}
     end
   end
 
@@ -324,11 +445,15 @@ defmodule CodingAgent.ExecutionNode.CLI do
     """
     Usage: lemon node join --name NAME --controller wss://HOST/ws [options]
            lemon node capabilities [--json] [--require-bot] [--expected-version VERSION]
+           lemon node status --name NAME [--json]
+
+    Workers with rejected credentials stay running and resume after repair.
 
     Options:
       --pair                    Pair and store a controller-issued node token
       --operator-token TOKEN    Operator token used only during pairing
       --invite-code-stdin       Read one bounded enrollment code from stdin (implies --pair)
+      --enroll-only             Exit with code 0 after enrollment succeeds (requires --invite-code-stdin)
       --token TOKEN             Existing node session token (overrides stored token)
       --node-id ID              Load or repair a credential by durable controller node ID
       --repair                  Operator-authorized repair for a legacy record without a recovery token
@@ -356,6 +481,9 @@ defmodule CodingAgent.ExecutionNode.CLI do
     controllers require wss:// by default. The insecure override is acceptable
     only when another verified transport layer, such as Tailscale, encrypts and
     authenticates the complete path.
+    Loopback listeners must belong to this user before credentials are sent.
+    Set LEMON_NODE_TRUST_LOOPBACK_LISTENER=1 only when you deliberately trust a
+    controller or tunnel running under another uid on this machine.
     File RPC paths and shell working directories use --allowed-root (home by default).
     Explicit roots extend the home default; repeat the flag to permit multiple roots.
     LEMON_NODE_CAPABILITIES provides the same destination-local ceiling as --capabilities.
@@ -364,9 +492,14 @@ defmodule CodingAgent.ExecutionNode.CLI do
 
   defp blank?(value), do: not is_binary(value) or String.trim(value) == ""
 
-  defp format_reason({:pairing_failed, :outcome_unknown}) do
-    "enrollment outcome is unknown; do not retry this code; ask the owner to reconcile the durable node and issue a repair invitation if needed"
-  end
+  defp format_reason({:pairing_failed, :outcome_unknown}), do: :enrollment_outcome_unknown
+  defp format_reason({{:pairing_failed, :outcome_unknown}, _}), do: :enrollment_outcome_unknown
+  defp format_reason({:pairing_failed, :invite_rejected}), do: :invite_rejected
+  defp format_reason({{:pairing_failed, :invite_rejected}, _}), do: :invite_rejected
+
+  defp format_reason({:enroll_start_failed, reason})
+       when reason in [:address_in_use, :runtime_start_failed],
+       do: "enroll_start_failed:#{reason}"
 
   defp format_reason(:operator_token_required) do
     "the controller requires an operator token for pairing; set LEMON_NODE_OPERATOR_TOKEN or pass --operator-token"
@@ -384,16 +517,16 @@ defmodule CodingAgent.ExecutionNode.CLI do
     "operator authentication failed while pairing"
   end
 
-  defp format_reason(:node_authentication_failed) do
-    "node authentication failed; rotate it with --pair or provide a valid LEMON_NODE_TOKEN"
-  end
-
   defp format_reason(:missing_node_recovery_token) do
     "the legacy node credential has no recovery token; rerun --pair --repair with operator authorization"
   end
 
   defp format_reason(:insecure_controller_url) do
     "non-loopback ws:// controllers are blocked; use wss:// or explicitly pass --allow-insecure-controller only for development or a verified encrypted overlay"
+  end
+
+  defp format_reason(:loopback_listener_not_owned) do
+    "the loopback listener is not owned by this user; restart the controller or SSH tunnel under this account, or explicitly trust another uid with LEMON_NODE_TRUST_LOOPBACK_LISTENER=1"
   end
 
   defp format_reason(reason) do

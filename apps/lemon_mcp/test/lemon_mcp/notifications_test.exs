@@ -59,43 +59,72 @@ defmodule LemonMCP.NotificationsTest do
 
   test "legacy SSE dispatches fragmented notifications and ignores server requests" do
     owner = self()
-    request_id = make_ref()
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    on_exit(fn -> :gen_tcp.close(listener) end)
+    {:ok, {_, port}} = :inet.sockname(listener)
+    {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
+    {:ok, conn, request_id} = Mint.HTTP.request(conn, "GET", "/sse", [], nil)
+    socket = Mint.HTTP.get_socket(conn)
 
     state = %{
       stream_request_id: request_id,
+      stream_conn: conn,
+      stream_socket: socket,
       sse_buffer: "",
       sse_event: %{event: nil, data: []},
       config: %{notification_handler: fn notification -> send(owner, notification) end}
     }
 
-    for method <- [
+    {:noreply, state} =
+      LemonMCP.Client.SSE.handle_info(
+        {:tcp, socket,
+         "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n"},
+        state
+      )
+
+    state =
+      Enum.reduce(
+        [
           "notifications/tools/list_changed",
           "notifications/resources/list_changed",
           "notifications/prompts/list_changed",
           "notifications/resources/updated"
-        ] do
-      params = %{"uri" => "fixture://status"}
-      data = Jason.encode!(%{jsonrpc: "2.0", method: method, params: params})
+        ],
+        state,
+        fn method, state ->
+          params = %{"uri" => "fixture://status"}
+          data = Jason.encode!(%{jsonrpc: "2.0", method: method, params: params})
 
-      {:noreply, partial} =
-        LemonMCP.Client.SSE.handle_info({:http, {request_id, :stream, "data: " <> data}}, state)
+          {:noreply, partial} =
+            LemonMCP.Client.SSE.handle_info(
+              {:tcp, socket, http_chunk("data: " <> data <> "\n")},
+              state
+            )
 
-      {:noreply, _} =
-        LemonMCP.Client.SSE.handle_info({:http, {request_id, :stream, "\n\n"}}, partial)
+          refute_receive %{method: ^method}
 
-      assert_receive %{method: ^method, params: ^params}
-    end
+          {:noreply, state} =
+            LemonMCP.Client.SSE.handle_info({:tcp, socket, http_chunk("\n")}, partial)
+
+          assert_receive %{method: ^method, params: ^params}
+          state
+        end
+      )
 
     request = Jason.encode!(%{jsonrpc: "2.0", id: 7, method: "server/request"})
 
     assert {:noreply, _} =
              LemonMCP.Client.SSE.handle_info(
-               {:http, {request_id, :stream, "data: " <> request <> "\n\n"}},
+               {:tcp, socket, http_chunk("data: " <> request <> "\n\n")},
                state
              )
 
     refute_receive %{method: "server/request"}
+    Mint.HTTP.close(conn)
   end
+
+  defp http_chunk(data),
+    do: IO.iodata_to_binary([Integer.to_string(byte_size(data), 16), "\r\n", data, "\r\n"])
 
   for kind <- [:stdio, :http], mode <- [:receive, :crash, :slow, :none] do
     test "#{kind} isolates #{mode} notification handlers" do

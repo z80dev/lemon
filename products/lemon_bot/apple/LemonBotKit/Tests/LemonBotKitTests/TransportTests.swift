@@ -104,4 +104,65 @@ final class TransportTests: XCTestCase {
         do { _ = try await client.download(foreign, destination: destination); XCTFail("Reject foreign ticket origin") } catch ClientError.invalidBinary {}
         XCTAssertEqual(TestHTTPProtocol.requests.count, 1)
     }
+    func testLostNamedMessageAcknowledgementReconcilesOriginalNonceWithoutReplaying() async throws {
+        let nonce = "named_message_lost_123456"
+        var dispatchedNonce: String?
+        var statusReads = 0
+        TestHTTPProtocol.handler = { request in
+            if request.httpMethod == "POST" {
+                XCTAssertEqual(request.url?.path, "/v1/bots/source/agent-messages")
+                let body = try JSONDecoder().decode(JSONObject.self, from: TestHTTPProtocol.body(request))
+                dispatchedNonce = body["clientNonce"]?.stringValue
+                XCTAssertEqual(body["conversationId"], .string("selected-task"))
+                throw URLError(.networkConnectionLost)
+            }
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/v1/bots/source/agent-messages/\(nonce)")
+            statusReads += 1
+            let receipt = AgentMessageReceipt(messageId: nonce, sourceId: "bot://instance/source", targetId: "bot://instance/bob", status: statusReads == 1 ? "outcome_unknown" : "completed", runId: nil, response: statusReads == 1 ? nil : "Bob's answer for the selected task.")
+            return (200, ["Content-Type": "application/json"], try JSONEncoder().encode(receipt))
+        }
+        let session = TestHTTPProtocol.session()
+        defer { session.invalidateAndCancel() }
+        let client = try HTTPTransport(baseURL: XCTUnwrap(URL(string: "https://product.example")), token: "session", session: session)
+        do {
+            _ = try await client.messageAgent(botID: "source", target: "@bob", text: "Original question", clientNonce: nonce, conversationID: "selected-task")
+            XCTFail("A lost named-message response must remain uncertain.")
+        } catch ClientError.outcomeUnknown(let value) {
+            XCTAssertEqual(value, nonce)
+            XCTAssertEqual(value, dispatchedNonce)
+        }
+        XCTAssertEqual(TestHTTPProtocol.requests.map(\.httpMethod), ["POST"])
+        let unknown = try await client.agentMessage(botID: "source", messageID: nonce)
+        XCTAssertEqual(unknown.messageId, dispatchedNonce)
+        XCTAssertEqual(unknown.status, "outcome_unknown")
+        XCTAssertNil(unknown.response)
+        let completed = try await client.agentMessage(botID: "source", messageID: nonce)
+        XCTAssertEqual(completed.messageId, unknown.messageId)
+        XCTAssertEqual(completed.status, "completed")
+        XCTAssertEqual(completed.response, "Bob's answer for the selected task.")
+        XCTAssertEqual(TestHTTPProtocol.requests.map(\.httpMethod), ["POST", "GET", "GET"])
+    }
+    func testNamedMessageUnknownAcknowledgementIsNotReportedAsSuccess() async throws {
+        let nonce = "named_message_unknown_123456"
+        TestHTTPProtocol.handler = { request in
+            let mutation = request.httpMethod == "POST"
+            let receipt = AgentMessageReceipt(messageId: nonce, sourceId: "bot://instance/source", targetId: "bot://instance/bob", status: mutation ? "outcome_unknown" : "completed", runId: nil, response: mutation ? nil : "The answer arrived later.")
+            return (mutation ? 202 : 200, ["Content-Type": "application/json"], try JSONEncoder().encode(receipt))
+        }
+        let session = TestHTTPProtocol.session()
+        defer { session.invalidateAndCancel() }
+        let client = try HTTPTransport(baseURL: XCTUnwrap(URL(string: "https://product.example")), session: session)
+        do {
+            _ = try await client.messageAgent(botID: "source", target: "@bob", text: "Original question", clientNonce: nonce)
+            XCTFail("An outcome_unknown receipt is not a confirmed send.")
+        } catch ClientError.outcomeUnknown(let value) {
+            XCTAssertEqual(value, nonce)
+        }
+        XCTAssertEqual(TestHTTPProtocol.requests.map(\.httpMethod), ["POST"])
+        let completed = try await client.agentMessage(botID: "source", messageID: nonce)
+        XCTAssertEqual(completed.status, "completed")
+        XCTAssertEqual(completed.response, "The answer arrived later.")
+        XCTAssertEqual(TestHTTPProtocol.requests.map(\.httpMethod), ["POST", "GET"])
+    }
 }

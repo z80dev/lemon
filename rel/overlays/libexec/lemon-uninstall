@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Consume the private post-VM manifest without following directory symlinks."""
+import json
+import os
+import stat
+import sys
+
+
+DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def identity(info):
+    kind = ("directory" if stat.S_ISDIR(info.st_mode) else
+            "regular" if stat.S_ISREG(info.st_mode) else
+            "symlink" if stat.S_ISLNK(info.st_mode) else "unsupported")
+    return kind, info.st_dev, info.st_ino
+
+
+def verify(info, expected):
+    if identity(info) != (expected["type"], expected["device"], expected["inode"]):
+        raise ValueError("uninstall path identity changed")
+
+
+def parent_fd(entry):
+    """Pin and verify every ancestor from /, never resolve a symlink."""
+    parent = os.path.dirname(entry["path"])
+    chain = []
+    while parent != "/":
+        chain.append(parent)
+        parent = os.path.dirname(parent)
+    chain = ["/"] + list(reversed(chain))
+    if [item["path"] for item in entry["ancestors"]] != chain:
+        raise ValueError("invalid uninstall ancestor chain")
+    fd = os.open("/", DIRECTORY)
+    try:
+        for index, expected in enumerate(entry["ancestors"]):
+            if expected["type"] != "directory":
+                raise ValueError("unsafe uninstall ancestor")
+            if index:
+                child = os.open(os.path.basename(expected["path"]), DIRECTORY, dir_fd=fd)
+                os.close(fd)
+                fd = child
+            verify(os.fstat(fd), expected)
+        verify(os.stat(os.path.basename(entry["path"]), dir_fd=fd, follow_symlinks=False), entry)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def remove(parent, name, expected):
+    info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    verify(info, expected)
+    if not stat.S_ISDIR(info.st_mode):
+        os.unlink(name, dir_fd=parent)
+        return
+    fd = os.open(name, DIRECTORY, dir_fd=parent)
+    try:
+        verify(os.fstat(fd), expected)
+        with os.scandir(fd) as children:
+            for child in children:
+                child_info = child.stat(follow_symlinks=False)
+                kind, device, inode = identity(child_info)
+                remove(fd, child.name, {"type": kind, "device": device, "inode": inode})
+        verify(os.stat(name, dir_fd=parent, follow_symlinks=False), expected)
+        os.rmdir(name, dir_fd=parent)
+    finally:
+        os.close(fd)
+
+
+def main():
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    home = os.path.realpath(os.environ["HOME"])
+    if manifest.get("schema") != 2 or manifest.get("home") != home or home == "/":
+        raise ValueError("invalid uninstall manifest")
+    base = os.path.join(home, ".lemon")
+    allowed = {base, os.path.join(home, ".local/bin/lemon-bot")}
+    allowed.update(os.path.join(base, path) for path in
+                   ("versions", "bin", "updates", "tmp", "lemon_bot/versions", "lemon_bot/current"))
+    entries = manifest["paths"]
+    seen = set()
+    for entry in entries:
+        path = entry["path"]
+        if path not in allowed or path in seen:
+            raise ValueError("refusing to remove unrecognized path")
+        seen.add(path)
+        if entry["type"] not in ("directory", "regular", "symlink"):
+            raise ValueError("unsafe uninstall target")
+        fd = parent_fd(entry)
+        os.close(fd)
+    if any(path.startswith(other + "/") for path in seen for other in seen if path != other):
+        raise ValueError("overlapping uninstall targets")
+    for entry in entries:
+        fd = parent_fd(entry)
+        try:
+            remove(fd, os.path.basename(entry["path"]), entry)
+        finally:
+            os.close(fd)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, KeyError, TypeError):
+        print("Uninstall refused: unsafe, changed, or unrecognized path in manifest.", file=sys.stderr)
+        sys.exit(1)

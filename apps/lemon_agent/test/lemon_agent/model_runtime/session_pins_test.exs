@@ -54,9 +54,9 @@ defmodule LemonAgent.ModelRuntime.SessionPinsTest do
   test "model pins match only the committed model, including canonical provider names" do
     :ok = SessionPins.pin("model-pin", "openai_codex", "ref", "gpt-5")
     pin = SessionPins.get("model-pin")
-    assert SessionPins.matches?(pin, :"openai-codex", "gpt-5")
-    refute SessionPins.matches?(pin, :"openai-codex", "gpt-4")
+    assert SessionPins.matches?(pin, :openai_codex, "gpt-5")
+    refute SessionPins.matches?(pin, :openai_codex, "gpt-4")
     refute SessionPins.matches?(pin, :openai, "gpt-5")
-    assert SessionPins.matches?(%{pin | model_id: nil}, :"openai-codex", "gpt-4")
+    assert SessionPins.matches?(%{pin | model_id: nil}, :openai_codex, "gpt-4")
   end
 end

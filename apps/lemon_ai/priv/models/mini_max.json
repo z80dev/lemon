@@ -15,8 +15,8 @@
       "cache_read": 0.0,
       "cache_write": 0.0
     },
-    "context_window": 196608,
-    "max_tokens": 128000
+    "context_window": 204800,
+    "max_tokens": 131072
   },
   "MiniMax-M2.1": {
     "id": "MiniMax-M2.1",
@@ -31,8 +31,8 @@
     "cost": {
       "input": 0.3,
       "output": 1.2,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "cache_read": 0.03,
+      "cache_write": 0.375
     },
     "context_window": 204800,
     "max_tokens": 131072
@@ -69,7 +69,7 @@
     "cost": {
       "input": 0.6,
       "output": 2.4,
-      "cache_read": 0.06,
+      "cache_read": 0.03,
       "cache_write": 0.375
     },
     "context_window": 204800,
@@ -120,11 +120,6 @@
     "provider": "minimax",
     "base_url": "https://api.minimax.io/anthropic",
     "reasoning": true,
-    "reasoning_efforts": [
-      "low",
-      "medium",
-      "high"
-    ],
     "input": [
       "text",
       "image"
@@ -136,7 +131,8 @@
       "cache_write": 0.0
     },
     "context_window": 1000000,
-    "max_tokens": 128000
+    "max_tokens": 524288,
+    "adaptive_thinking": true
   },
   "minimax-m2": {
     "id": "minimax-m2",
@@ -149,13 +145,13 @@
       "text"
     ],
     "cost": {
-      "input": 0.5,
-      "output": 2.0,
+      "input": 0.3,
+      "output": 1.2,
       "cache_read": 0.0,
       "cache_write": 0.0
     },
-    "context_window": 256000,
-    "max_tokens": 8192
+    "context_window": 204800,
+    "max_tokens": 131072
   },
   "minimax-m2.1": {
     "id": "minimax-m2.1",
@@ -168,13 +164,13 @@
       "text"
     ],
     "cost": {
-      "input": 0.6,
-      "output": 2.4,
-      "cache_read": 0.0,
-      "cache_write": 0.0
+      "input": 0.3,
+      "output": 1.2,
+      "cache_read": 0.03,
+      "cache_write": 0.375
     },
-    "context_window": 256000,
-    "max_tokens": 8192
+    "context_window": 204800,
+    "max_tokens": 131072
   },
   "minimax-m2.5": {
     "id": "minimax-m2.5",
@@ -187,12 +183,40 @@
       "text"
     ],
     "cost": {
-      "input": 0.8,
-      "output": 3.2,
-      "cache_read": 0.0,
+      "input": 0.3,
+      "output": 1.2,
+      "cache_read": 0.03,
+      "cache_write": 0.375
+    },
+    "context_window": 204800,
+    "max_tokens": 131072
+  },
+  "MiniMax-M3.1-Flash": {
+    "id": "MiniMax-M3.1-Flash",
+    "name": "MiniMax-M3.1-Flash",
+    "api": "anthropic_messages",
+    "provider": "minimax",
+    "base_url": "https://api.minimax.io/anthropic",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.15,
+      "output": 0.6,
+      "cache_read": 0.015,
       "cache_write": 0.0
     },
-    "context_window": 256000,
-    "max_tokens": 8192
+    "context_window": 1000000,
+    "max_tokens": 524288,
+    "adaptive_thinking": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
   }
 }

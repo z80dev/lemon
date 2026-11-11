@@ -75,7 +75,7 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
 
     token =
       if MapSet.member?(enabled, "openai-codex") do
-        Credentials.build_get_api_key(cfg).(:"openai-codex")
+        Credentials.build_get_api_key(cfg).(:openai_codex)
       end
 
     LemonAi.Models.list_models(

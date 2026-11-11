@@ -25,7 +25,8 @@ export default {
   themeConfig: {
     logo: "/brand/lemon-mark.svg",
     nav: [
-      { text: "Get started", link: "/getting-started/quickstart", activeMatch: "^/(getting-started/quickstart|install|demo|compare|support|why-beam-for-agents|user-guide/(setup|updates))" },
+      { text: "Lemon Bot", link: "/getting-started/lemon-bot", activeMatch: "^/getting-started/lemon-bot" },
+      { text: "Get started", link: "/getting-started/quickstart", activeMatch: "^/(getting-started/quickstart|install|demo|compare|support|why-beam-for-agents|user-guide/(setup|updates)|release/upgrade-2026-11)" },
       { text: "User guides", link: "/user-guide/web", activeMatch: "^/(user-guide/(?!setup|updates|cli|tui-commands|tern|omp|a2a-peers|honcho)|tools/|security/)" },
       { text: "Reference", items: [
         { text: "Configuration", link: "/config" },
@@ -35,6 +36,7 @@ export default {
         { text: "Control-plane methods", link: "/reference/control-plane" },
         { text: "Skill manifest", link: "/reference/skill-manifest-v2" },
         { text: "Versioning & channels", link: "/release/versioning_and_channels" },
+        { text: "November 2026 upgrade notes", link: "/release/upgrade-2026-11" },
       ] },
       { text: "Integrations", items: [
         { text: "Add a channel", link: "/getting-started/add-a-channel" },
@@ -60,11 +62,14 @@ export default {
         text: "Getting started",
         items: [
           { text: "Home", link: "/" },
-          { text: "Quickstart", link: "/getting-started/quickstart" },
+          { text: "Lemon Bot", link: "/getting-started/lemon-bot" },
+          { text: "Terminal quickstart", link: "/getting-started/quickstart" },
           { text: "Install", link: "/install" },
           { text: "Setup: providers & secrets", link: "/user-guide/setup" },
           { text: "Demo", link: "/demo" },
           { text: "Update and roll back", link: "/user-guide/updates" },
+          { text: "Uninstall", link: "/user-guide/updates#uninstall" },
+          { text: "November 2026 upgrade notes", link: "/release/upgrade-2026-11" },
           { text: "Capabilities & boundaries", link: "/compare" },
           { text: "Why BEAM for agents", link: "/why-beam-for-agents" },
           { text: "Support & troubleshooting", link: "/support" },
@@ -101,6 +106,7 @@ export default {
             collapsed: true,
             items: [
               { text: "Reminders & heartbeats", link: "/user-guide/reminders-and-heartbeats" },
+              { text: "Manage local services", link: "/user-guide/setup#run-lemon-as-a-service" },
               { text: "Attaching a bot machine", link: "/user-guide/attaching-a-bot-machine" },
               { text: "Phone & provider acceptance", link: "/user-guide/phone-acceptance" },
               { text: "Node files, secrets & processes", link: "/user-guide/node-files-and-secrets" },

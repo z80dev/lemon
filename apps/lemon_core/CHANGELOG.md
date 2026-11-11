@@ -36,6 +36,16 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonCore.ToolPolicy` supports sparse tri-state `workspace_read_exempt`
+  (`true | false | nil`, omitted from serialized maps when nil). Parsing,
+  normalization, restriction and intersection treat `nil` as neutral and `false`
+  as winning over `true`; subset checks forbid widening a parent (`true ⊄ false`,
+  `true ⊄ nil`).
+- Profiles have an isolated `<lemon home>/profiles/<id>/files` directory beside
+  `workspace/` and a durable `workingDirectory` choice (`node_default` by default,
+  or `profile_files`). `ProfileStore.chat_request/3` requests `profile_files` cwd
+  only for remote runs with that choice and no explicit cwd. Invocation policy
+  cannot enable `workspace_read_exempt` unless the durable profile already does.
 - Doctor callers pass `runtime: :local | :external | :absent`; checks of
   runtime-owned processes return `LemonCore.Doctor.Check.outside_runtime/3`
   when the standalone CLI cannot observe them.
@@ -59,6 +69,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   rejection has its own `provider_binding_rejected` classification. Public results
   remain bounded status/code fields and the exact OpenAI verification URL, never
   challenges, private OAuth state or tokens.
+
+- Provider management operations expanded with `check` and `import`. Validation
+  enforces exact target identities, strict `openai_codex` and `codex_cli` parameters,
+  path rejection on import requests, and optional `readiness` parameter on `list`.
 
 - Optional destination-local provider management boundary with bounded write-only
   credential requests and a durable controller target identity. Provider setup
@@ -101,7 +115,27 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   invalidate it. Conditional saves share the existing secrets/key-rotation
   mutation lease and use Store's atomic compare-and-swap.
 
+### Changed
+
+- **Breaking update-order change:** updates and rollbacks stop running local
+  managed workers before restarting the controller and restart them only after
+  controller health is established. Managed backend co-artifacts follow the
+  runtime version and the previously running backend restarts last. Remote
+  workers are never silently updated by another host.
+
 ### Fixed
+
+- Linux user services honor an absolute `XDG_CONFIG_HOME` for systemd unit
+  installation and discovery, quote log destinations containing spaces or
+  specifiers, and inspect `/proc` listeners without requiring `lsof`. Socket
+  owners that cannot be proven still fail closed.
+
+- Service install preserves recorded PATH and locale across callers instead of
+  restarting running controller/backend units for ambient shell differences.
+- Worker enrollment uses the unit's isolated health-port environment and
+  distinguishes startup failure, explicit invite rejection and uncertain
+  consumption. Core reads the shared worker-status contract without an umbrella
+  dependency on the execution agent.
 
 - `runtime.lemon_root` skips when `LEMON_PATH` is unset instead of warning about
   a compile-time path that in releases names the build machine.

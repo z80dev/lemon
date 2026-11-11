@@ -4,6 +4,15 @@ defmodule LemonMemory.SafetyTest do
   alias LemonMemory.Document
   alias LemonMemory.Safety
 
+  test "oversized unscannable text is rejected and never exported verbatim" do
+    input = String.duplicate("a", 1_000_000) <> " token=must-not-leak"
+    assert Safety.contains_secret?(input)
+    assert Safety.note_refusal_reason(input) == :secret
+    refute Safety.safe_document?(%Document{prompt_summary: input, answer_summary: "safe"})
+    assert Safety.redact(input) == {"[REDACTED]", 1}
+    assert Safety.redact_for_operator(input) == {"[REDACTED]", 1}
+  end
+
   test "redact removes complete secret matches and reports the count" do
     planted = "sk-abcdefghijklmnopqrstuvwxyz123456"
     {text, count} = Safety.redact("visible #{planted} password=hunter2")

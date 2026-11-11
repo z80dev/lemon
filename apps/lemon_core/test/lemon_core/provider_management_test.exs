@@ -22,6 +22,25 @@ defmodule LemonCore.ProviderManagementTest do
       result(opts)
     end
 
+    def check(provider, opts) do
+      send(self(), {:mock_check, provider, opts})
+
+      {:ok,
+       %{
+         "management" => elem(result(opts), 1),
+         "readiness" => %{
+           "state" => "verified",
+           "providerId" => provider,
+           "modelId" => "gpt-6.1-sol"
+         }
+       }}
+    end
+
+    def import_login(provider, source, opts) do
+      send(self(), {:mock_import, provider, source, opts})
+      result(opts)
+    end
+
     for operation <- [
           :device_start,
           :device_poll,
@@ -73,6 +92,16 @@ defmodule LemonCore.ProviderManagementTest do
       do: {:error, :provider_binding_rejected}
 
     def device_complete(_, _), do: {:error, :forbidden}
+  end
+
+  # The boundary forwards only destination-local options, never test knobs, so
+  # each login error is a distinct offline implementation.
+  defmodule OfflineLoginNotFoundMock do
+    def import_login("openai_codex", "codex_cli", _opts), do: {:error, :login_not_found}
+  end
+
+  defmodule OfflineLoginUnusableMock do
+    def import_login("openai_codex", "codex_cli", _opts), do: {:error, :login_unusable}
   end
 
   test "registered implementations serve both controller and named destination calls" do
@@ -155,6 +184,59 @@ defmodule LemonCore.ProviderManagementTest do
              ProviderManagement.validate("list", %{"nodeId" => String.duplicate("a", 252)}, true)
 
     assert {:error, :invalid_target} = ProviderManagement.target("invalid/node")
+  end
+
+  test "validation rules for list, check, and import" do
+    assert :ok = ProviderManagement.validate("list", %{"readiness" => true})
+    assert :ok = ProviderManagement.validate("list", %{})
+
+    assert {:error, :invalid_request} =
+             ProviderManagement.validate("list", %{"readiness" => "yes"})
+
+    assert {:error, :invalid_request} = ProviderManagement.validate("list", %{"extra" => true})
+
+    assert :ok = ProviderManagement.validate("check", %{"targetId" => "node:a"})
+
+    assert :ok =
+             ProviderManagement.validate("check", %{
+               "targetId" => "node:a",
+               "providerId" => "openai_codex"
+             })
+
+    assert {:error, :invalid_request} =
+             ProviderManagement.validate("check", %{"targetId" => "invalid/target"})
+
+    assert {:error, :invalid_request} =
+             ProviderManagement.validate("check", %{"targetId" => "node:a", "extra" => 1})
+
+    assert :ok =
+             ProviderManagement.validate("import", %{
+               "targetId" => "node:a",
+               "providerId" => "openai_codex",
+               "source" => "codex_cli"
+             })
+
+    assert {:error, :invalid_request} =
+             ProviderManagement.validate("import", %{
+               "targetId" => "node:a",
+               "providerId" => "anthropic",
+               "source" => "codex_cli"
+             })
+
+    assert {:error, :invalid_request} =
+             ProviderManagement.validate("import", %{
+               "targetId" => "node:a",
+               "providerId" => "openai_codex",
+               "source" => "browser"
+             })
+
+    assert {:error, :invalid_request} =
+             ProviderManagement.validate("import", %{
+               "targetId" => "node:a",
+               "providerId" => "openai_codex",
+               "source" => "codex_cli",
+               "path" => "/tmp/auth.json"
+             })
   end
 
   test "node transport crash diagnostics redact credential-bearing requests" do
@@ -437,6 +519,76 @@ defmodule LemonCore.ProviderManagementTest do
       end)
 
     refute logs =~ "OFFLINE_DEVICE_TOKEN_EXCEPTION"
+  end
+
+  test "check and import operations execute through registered service with exact target binding" do
+    opts = [node_id: "node-c", service: OfflineServiceMock]
+    assert {:ok, c} = ProviderManagement.execute("list", %{}, opts)
+    target_id = c["target"]["id"]
+
+    assert {:ok, check_res} =
+             ProviderManagement.execute(
+               "check",
+               %{"targetId" => target_id, "providerId" => "openai_codex"},
+               opts
+             )
+
+    assert is_map(check_res["management"])
+    assert check_res["readiness"]["state"] == "verified"
+    assert_received {:mock_check, "openai_codex", check_opts}
+    assert check_opts[:target].id == target_id
+
+    assert {:ok, _} =
+             ProviderManagement.execute(
+               "import",
+               %{
+                 "targetId" => target_id,
+                 "providerId" => "openai_codex",
+                 "source" => "codex_cli"
+               },
+               opts
+             )
+
+    assert_received {:mock_import, "openai_codex", "codex_cli", import_opts}
+    assert import_opts[:target].id == target_id
+
+    assert {:error, :target_mismatch} =
+             ProviderManagement.execute(
+               "import",
+               %{
+                 "targetId" => "node:other",
+                 "providerId" => "openai_codex",
+                 "source" => "codex_cli"
+               },
+               opts
+             )
+  end
+
+  test "import login errors pass through preserved error atoms" do
+    assert {:ok, err_target} = ProviderManagement.target("node-err")
+
+    params = %{
+      "targetId" => err_target.id,
+      "providerId" => "openai_codex",
+      "source" => "codex_cli"
+    }
+
+    assert {:error, :login_not_found} =
+             ProviderManagement.execute("import", params,
+               node_id: "node-err",
+               service: OfflineLoginNotFoundMock
+             )
+
+    assert {:error, :login_unusable} =
+             ProviderManagement.execute("import", params,
+               node_id: "node-err",
+               service: OfflineLoginUnusableMock
+             )
+  end
+
+  test "list with readiness forwards readiness option" do
+    opts = [node_id: "node-readiness", service: OfflineServiceMock]
+    assert {:ok, _} = ProviderManagement.execute("list", %{"readiness" => true}, opts)
   end
 
   defp device_params do

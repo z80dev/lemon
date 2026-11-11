@@ -305,17 +305,15 @@ defmodule CodingAgent.Session.NavigateLabelTest do
     first = entry_id(session, "assistant", "answer to: first")
     alpha = entry_id(session, "assistant", "answer to: alpha")
 
+    # Queue the mutations on the session itself: the provider first resolves the
+    # live owner with a state call, which would let the two mutations race after
+    # resume instead of being queued in a known order.
     :sys.suspend(session)
     on_exit(fn -> if Process.alive?(session), do: :sys.resume(session) end)
 
-    first_label =
-      Task.async(fn -> ControlPlaneProvider.session_label(ctx.key, ctx.root, first, "one") end)
-
+    first_label = Task.async(fn -> Session.label_entry_receipt(session, first, "one") end)
     await_calls(session, 1)
-
-    second_label =
-      Task.async(fn -> ControlPlaneProvider.session_label(ctx.key, ctx.root, first, "two") end)
-
+    second_label = Task.async(fn -> Session.label_entry_receipt(session, first, "two") end)
     await_calls(session, 2)
     :sys.resume(session)
     assert {:ok, %{"label" => "one"}} = Task.await(first_label)
@@ -323,15 +321,9 @@ defmodule CodingAgent.Session.NavigateLabelTest do
     assert tree_label(ctx, first) == "two"
 
     :sys.suspend(session)
-
-    first_navigation =
-      Task.async(fn -> ControlPlaneProvider.session_navigate(ctx.key, ctx.root, first, []) end)
-
+    first_navigation = Task.async(fn -> Session.navigate_entry(session, first, []) end)
     await_calls(session, 1)
-
-    second_navigation =
-      Task.async(fn -> ControlPlaneProvider.session_navigate(ctx.key, ctx.root, alpha, []) end)
-
+    second_navigation = Task.async(fn -> Session.navigate_entry(session, alpha, []) end)
     await_calls(session, 2)
     :sys.resume(session)
     assert {:ok, %{"leafId" => ^first}} = Task.await(first_navigation)
@@ -536,10 +528,16 @@ defmodule CodingAgent.Session.NavigateLabelTest do
     end)
   end
 
+  # Count only the queued mutations under test; unrelated calls (e.g. state reads
+  # from other processes) must not satisfy the ordering barrier.
   defp await_calls(session, count) do
     await_barrier(fn ->
       {:messages, messages} = Process.info(session, :messages)
-      Enum.count(messages, &match?({:"$gen_call", _, _}, &1)) >= count
+
+      Enum.count(messages, fn
+        {:"$gen_call", _, {op, _, _}} when op in [:label_entry_receipt, :navigate_entry] -> true
+        _ -> false
+      end) >= count
     end)
   end
 

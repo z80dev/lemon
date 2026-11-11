@@ -54,6 +54,8 @@ defmodule LemonMemory.Safety do
       true ->
         nil
     end
+  rescue
+    SystemLimitError -> :prompt_injection
   end
 
   def note_refusal_reason(_, _), do: nil
@@ -116,6 +118,10 @@ defmodule LemonMemory.Safety do
       |> truncate_utf8(max_bytes)
 
     {cleaned, count}
+  rescue
+    SystemLimitError ->
+      {"[REDACTED]" |> truncate_utf8(opts |> Keyword.get(:max_bytes, 1_200) |> clamp_max_bytes()),
+       1}
   end
 
   @doc """

@@ -58,4 +58,30 @@ defmodule LemonCore.Update.ReceiptStoreTest do
     opts = [paths_opts: [home_dir: tmp_dir]]
     assert {:error, :invalid_receipt_id} = ReceiptStore.fetch_receipt("../../secret", opts)
   end
+
+  test "keeps the backend version identity and still drops unknown fields", %{tmp_dir: tmp_dir} do
+    opts = [paths_opts: [home_dir: tmp_dir]]
+
+    assert {:ok, receipt} =
+             ReceiptStore.put_receipt(
+               %{
+                 "action" => "apply",
+                 "created_at_ms" => 1,
+                 "from_version" => "1.0.0",
+                 "to_version" => "2.0.0",
+                 "from_bot_version" => "1.0.0-stable-darwin-arm64",
+                 "to_bot_version" => "2.0.0-stable-darwin-arm64",
+                 "bot_path" => "/Users/someone/.lemon/lemon_bot",
+                 "status" => "applied"
+               },
+               opts
+             )
+
+    assert receipt["from_bot_version"] == "1.0.0-stable-darwin-arm64"
+    assert receipt["to_bot_version"] == "2.0.0-stable-darwin-arm64"
+    refute Map.has_key?(receipt, "bot_path")
+
+    [path] = Path.wildcard(Path.join([ReceiptStore.root(opts), "receipts", "*.json"]))
+    refute File.read!(path) =~ "/Users/someone"
+  end
 end

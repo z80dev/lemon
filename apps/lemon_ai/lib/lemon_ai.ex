@@ -67,7 +67,7 @@ defmodule LemonAi do
     * `:max_tokens` - Maximum tokens to generate
     * `:api_key` - Override the default API key
     * `:headers` - Additional HTTP headers
-    * `:reasoning` - Thinking level (:minimal, :low, :medium, :high, :xhigh)
+    * `:reasoning` - Thinking level (:none, :minimal, :low, :medium, :high, :xhigh, :max)
 
   ## Examples
 

@@ -18,17 +18,9 @@ defmodule CodingAgent.Session.Persistence do
           serialized = MessageSerialization.serialize_message(message)
 
           serialized =
-            case {Map.get(state, :run_id), Map.get(state, :session_key)} do
-              {run_id, key}
-              when is_binary(run_id) and run_id != "" and is_binary(key) and key != "" ->
-                Map.put(serialized, "lemonRun", %{
-                  "id" => run_id,
-                  "sessionKey" => key,
-                  "sessionId" => state.session_manager.header.id
-                })
-
-              _ ->
-                serialized
+            case lemon_run(state) do
+              nil -> serialized
+              run -> Map.put(serialized, "lemonRun", run)
             end
 
           SessionManager.append_message(state.session_manager, serialized)
@@ -46,13 +38,28 @@ defmodule CodingAgent.Session.Persistence do
           )
 
         %CodingAgent.Messages.CustomMessage{} ->
-          append_custom_message_once(state.session_manager, message)
+          append_custom_message_once(state, message)
 
         _ ->
           state.session_manager
       end
 
     %{state | session_manager: new_session_manager}
+  end
+
+  defp lemon_run(state) do
+    case {Map.get(state, :run_id), Map.get(state, :session_key)} do
+      {run_id, key}
+      when is_binary(run_id) and run_id != "" and is_binary(key) and key != "" ->
+        %{
+          "id" => run_id,
+          "sessionKey" => key,
+          "sessionId" => state.session_manager.header.id
+        }
+
+      _ ->
+        nil
+    end
   end
 
   defp record_uncapped_usage(state, message) do
@@ -158,17 +165,41 @@ defmodule CodingAgent.Session.Persistence do
   end
 
   defp append_custom_message_once(
-         %Session{} = session_manager,
+         state,
          %CodingAgent.Messages.CustomMessage{} = message
        ) do
-    serialized = MessageSerialization.serialize_message(message)
+    serialized = serialize_custom_message(state, message)
 
-    if custom_message_persisted?(session_manager, serialized) do
-      session_manager
+    if custom_message_persisted?(state.session_manager, serialized) do
+      state.session_manager
     else
-      SessionManager.append_custom_message(session_manager, serialized)
+      SessionManager.append_custom_message(state.session_manager, serialized)
     end
   end
+
+  defp serialize_custom_message(
+         state,
+         %CodingAgent.Messages.CustomMessage{custom_type: "async_followup"} = message
+       ) do
+    serialized = MessageSerialization.serialize_message(message)
+    details = async_followup_details(serialized["details"], lemon_run(state))
+    Map.put(serialized, "details", details)
+  end
+
+  defp serialize_custom_message(_state, message) do
+    MessageSerialization.serialize_message(message)
+  end
+
+  # Run ownership is session-derived, never async-followup provenance. Normalize
+  # before fingerprinting so direct persistence and the later loop event agree.
+  defp async_followup_details(details, run) when is_map(details) do
+    details = Map.drop(details, ["lemonRun", :lemonRun])
+    if run, do: Map.put(details, "lemonRun", run), else: details
+  end
+
+  defp async_followup_details(nil, nil), do: nil
+  defp async_followup_details(nil, run), do: %{"lemonRun" => run}
+  defp async_followup_details(details, _run), do: details
 
   defp custom_message_persisted?(%Session{} = session_manager, serialized) do
     Enum.any?(SessionManager.entries(session_manager), fn

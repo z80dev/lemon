@@ -34,6 +34,13 @@ defmodule LemonCore.TerminalBackendPolicyTest do
     end)
   end
 
+  test "long fractional CPU near misses reject without overlapping digit runs" do
+    System.put_env("LEMON_DOCKER_TERMINAL_CPUS", "0." <> String.duplicate("1", 10_000) <> "!")
+
+    assert {:error, {:invalid_docker_resource_limit, "cpus"}} =
+             TerminalBackendPolicy.validate(:docker)
+  end
+
   test "allows registered backends by default" do
     assert TerminalBackendPolicy.validate(:local) == :ok
     assert TerminalBackendPolicy.validate(:docker) == :ok

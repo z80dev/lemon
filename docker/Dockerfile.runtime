@@ -12,7 +12,7 @@
 
 ARG LEMON_GIT_SHA=unknown
 
-FROM hexpm/elixir:1.19.5-erlang-28.5-debian-bookworm-20260505 AS build
+FROM hexpm/elixir:1.20.5-erlang-29.1.2-debian-bookworm-20261104 AS build
 
 ARG LEMON_GIT_SHA
 
@@ -96,6 +96,15 @@ ENV RELEASE_NAME=lemon_runtime_full
 ENV PHX_SERVER=true
 ENV LEMON_GIT_SHA=$LEMON_GIT_SHA
 ENV LEMON_STORE_PATH=/data/store
+# The container publishes its ports with `-p`, so the HTTP listeners bind every
+# interface here; the entrypoint refuses to boot without an operator token.
+# Erlang distribution and epmd stay on loopback: releases/<vsn>/env.sh
+# (rel/env.sh.eex) applies that default to every release command, including
+# this image's CMD, which calls the release binary directly.
+ENV LEMON_CONTROL_PLANE_BIND_IP=0.0.0.0
+ENV LEMON_CONTROL_PLANE_NODE_BIND_IP=0.0.0.0
+ENV LEMON_WEB_BIND_IP=0.0.0.0
+ENV LEMON_SIM_UI_BIND_IP=0.0.0.0
 
 RUN groupadd --system --gid 10001 lemon && \
     useradd --uid 10001 --gid lemon --home-dir /data --shell /usr/sbin/nologin lemon && \
@@ -111,10 +120,10 @@ RUN chmod -R g+rX /app && chmod 0755 /usr/local/bin/lemon-entrypoint
 
 VOLUME ["/data"]
 
-# control plane / lemon_web / sim UI. The sim UI endpoint only starts when
-# LEMON_SIM_UI_SECRET_KEY_BASE and its companion vars are supplied (see
-# config/runtime.exs); 4090 is declared so that deployment is a matter of env.
-EXPOSE 4040 4080 4090
+# control plane / node gateway / lemon_web / sim UI. The sim UI endpoint only
+# starts when LEMON_SIM_UI_SECRET_KEY_BASE and its companion vars are supplied
+# (see config/runtime.exs); 4090 is declared so that deployment is a matter of env.
+EXPOSE 4040 4044 4080 4090
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl --fail --silent --show-error "http://127.0.0.1:${LEMON_CONTROL_PLANE_PORT:-4040}/healthz" >/dev/null || exit 1

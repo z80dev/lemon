@@ -76,25 +76,6 @@ jobs:
           fetch-depth: 0
           filter: blob:none
 
-      - name: Record tested checkout identity
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          python3 -I - <<'PY'
-          import json, os, subprocess
-          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-          print("FACTORY_CI_IDENTITY=" + json.dumps({
-              "tested_sha": tested,
-              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
-              "base_sha": os.environ["PR_BASE_SHA"] or tested,
-              "run_id": int(os.environ["GITHUB_RUN_ID"]),
-              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-          }))
-          PY
-
       - name: Select affected apps and lanes
         id: select
         env:
@@ -141,28 +122,6 @@ jobs:
           fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
           filter: blob:none
 
-      - name: Record tested checkout identity
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          python3 -I - <<'PY'
-          import json, os, subprocess
-          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-          print("FACTORY_CI_IDENTITY=" + json.dumps({
-              "tested_sha": tested,
-              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
-              "base_sha": os.environ["PR_BASE_SHA"] or tested,
-              "run_id": int(os.environ["GITHUB_RUN_ID"]),
-              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-          }))
-          PY
-
-      - name: Test CI checkout identity contract
-        run: python3 scripts/test_ci_checkout_identity.py
-
       - name: BEAM setup
         id: beam
         uses: ./.github/actions/beam-setup
@@ -201,25 +160,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Record tested checkout identity
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          python3 -I - <<'PY'
-          import json, os, subprocess
-          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-          print("FACTORY_CI_IDENTITY=" + json.dumps({
-              "tested_sha": tested,
-              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
-              "base_sha": os.environ["PR_BASE_SHA"] or tested,
-              "run_id": int(os.environ["GITHUB_RUN_ID"]),
-              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-          }))
-          PY
-
       - name: BEAM setup
         uses: ./.github/actions/beam-setup
         with:
@@ -246,25 +186,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Record tested checkout identity
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          python3 -I - <<'PY'
-          import json, os, subprocess
-          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-          print("FACTORY_CI_IDENTITY=" + json.dumps({
-              "tested_sha": tested,
-              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
-              "base_sha": os.environ["PR_BASE_SHA"] or tested,
-              "run_id": int(os.environ["GITHUB_RUN_ID"]),
-              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-          }))
-          PY
-
       - name: BEAM setup
         id: beam
         uses: ./.github/actions/beam-setup
@@ -278,9 +199,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: _build/dialyzer
-          key: ${{ runner.os }}-plt-otp28.5-elixir1.19.5-${{ hashFiles('mix.lock') }}
+          key: ${{ runner.os }}-plt-otp29.1.2-elixir1.20.5-${{ hashFiles('mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-plt-otp28.5-elixir1.19.5-
+            ${{ runner.os }}-plt-otp29.1.2-elixir1.20.5-
 
       - name: Compile
         run: mix compile
@@ -307,7 +228,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: _build/dialyzer
-          key: ${{ runner.os }}-plt-otp28.5-elixir1.19.5-${{ hashFiles('mix.lock') }}
+          key: ${{ runner.os }}-plt-otp29.1.2-elixir1.20.5-${{ hashFiles('mix.lock') }}
 
       - name: Save deps and _build
         if: github.event_name == 'push' && steps.beam.outputs.cache-hit != 'true'
@@ -328,25 +249,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Record tested checkout identity
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          python3 -I - <<'PY'
-          import json, os, subprocess
-          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-          print("FACTORY_CI_IDENTITY=" + json.dumps({
-              "tested_sha": tested,
-              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
-              "base_sha": os.environ["PR_BASE_SHA"] or tested,
-              "run_id": int(os.environ["GITHUB_RUN_ID"]),
-              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-          }))
-          PY
 
       - name: BEAM setup
         id: beam
@@ -376,25 +278,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Record tested checkout identity
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          python3 -I - <<'PY'
-          import json, os, subprocess
-          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-          print("FACTORY_CI_IDENTITY=" + json.dumps({
-              "tested_sha": tested,
-              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
-              "base_sha": os.environ["PR_BASE_SHA"] or tested,
-              "run_id": int(os.environ["GITHUB_RUN_ID"]),
-              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-          }))
-          PY
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -427,25 +310,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Record tested checkout identity
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          python3 -I - <<'PY'
-          import json, os, subprocess
-          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-          print("FACTORY_CI_IDENTITY=" + json.dumps({
-              "tested_sha": tested,
-              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
-              "base_sha": os.environ["PR_BASE_SHA"] or tested,
-              "run_id": int(os.environ["GITHUB_RUN_ID"]),
-              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-          }))
-          PY
 
       - name: BEAM setup
         uses: ./.github/actions/beam-setup
@@ -503,25 +367,6 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Record tested checkout identity
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          python3 -I - <<'PY'
-          import json, os, subprocess
-          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-          print("FACTORY_CI_IDENTITY=" + json.dumps({
-              "tested_sha": tested,
-              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
-              "base_sha": os.environ["PR_BASE_SHA"] or tested,
-              "run_id": int(os.environ["GITHUB_RUN_ID"]),
-              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-          }))
-          PY
-
       - name: Fetch base branch
         run: git fetch --no-tags origin "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
 
@@ -554,28 +399,6 @@ jobs:
       issues: write
 
     steps:
-      # The required summary check must attest even when optional lanes skip.
-      - uses: actions/checkout@v4
-
-      - name: Record tested checkout identity
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          python3 -I - <<'PY'
-          import json, os, subprocess
-          tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-          print("FACTORY_CI_IDENTITY=" + json.dumps({
-              "tested_sha": tested,
-              "pr_head_sha": os.environ["PR_HEAD_SHA"] or tested,
-              "base_sha": os.environ["PR_BASE_SHA"] or tested,
-              "run_id": int(os.environ["GITHUB_RUN_ID"]),
-              "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-          }))
-          PY
-
       - name: Classify job results
         id: status
         env:

@@ -1,10 +1,195 @@
 import { describe, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
 import { ApiError } from '../../src/core/errors';
-import { buildMemoryContextKey, buildPrivateBotMemoryContextKey, createRuntimeService, observeInvocation, quiesceBotInvocations, reserveCronAdmission, revokeConnectorInvocations, type InvocationContext, type InvocationProofBinding, type RuntimeMapping } from '../../src/runtime/runs';
+import { buildInvocationContext, buildMemoryContextKey, buildPrivateBotMemoryContextKey, createRuntimeService, observeInvocation, quiesceBotInvocations, reserveCronAdmission, revokeConnectorInvocations, type InvocationContext, type InvocationProofBinding, type RuntimeMapping } from '../../src/runtime/runs';
 import { fixture, productExecutionProjection } from './fixture';
 
 describe('owned placed runtime', () => {
+  for (const botFolder of [false, true]) test(`attachment folder routing with botFolder=${botFolder}`, async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const attachment = f.services.resource('attachment', { ownerUserId: f.alice.userId, filename: 'input.txt', mime: 'text/plain' });
+    f.store.put('attachments', attachment);
+    f.services.attachments = { async bytes() { return new Uint8Array([65]); } } as unknown as typeof f.services.attachments;
+    const original = f.rpc;
+    f.rpc = async (method, params) => {
+      if (method === 'node.runtime.features') {
+        const result = await original(method, params) as { features: object };
+        return { ...result, features: { ...result.features, ...(botFolder ? { botFolder: true } : {}) } };
+      }
+      if (method === 'node.fs.write') return { path: params.path, mtimeMs: 1, bytesWritten: 1 };
+      return original(method, params);
+    };
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: `attachment_folder_${botFolder}_001`, text: 'read this', attachmentIds: [attachment.id] });
+      const write = f.calls.find(call => call.method === 'node.fs.write')!;
+      expect(write.params.path).toBe(`${botFolder ? 'inputs' : '.lemon_bot/inputs'}/${run.id}/${attachment.id}`);
+      if (botFolder) expect(write.params.profileId).toBe(f.bot.profileId);
+      else expect(write.params).not.toHaveProperty('profileId');
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('request_access is hidden by a narrowing floor when no measured capability can turn on', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const original = f.rpc;
+    f.rpc = async (method, params) => {
+      const result = await original(method, params);
+      return method === 'node.capabilities.get' ? { ...(result as object), items: [] } : result;
+    };
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'access_hidden_empty_001', text: 'ping' });
+      const invocation = f.store.metadata<InvocationContext>(`runtimeInvocation:${run.id}`)!;
+      expect(invocation.invocationToolPolicy.deny).toContain('mcp_lemon_bot_request_access_fixture');
+      expect(invocation.invocationToolPolicy.deny).toContain('bash');
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('terminal projection schedules pending access work', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const scheduled: string[] = [];
+    f.services.access = { async prepare() { return null; }, queue() {}, schedule(botId) { scheduled.push(botId); }, async reconcileAll() {}, close() {} };
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'access_schedule_end_001', text: 'ping' });
+      const bound = f.store.metadata<RuntimeMapping>(`runtimeRun:${run.id}`)!;
+      const original = f.rpc;
+      f.rpc = async (method, params) => method === 'agent.wait' ? { runId: run.id, ok: true, cancelled: false, answer: 'done' } : original(method, params);
+      await runtime.project('agent', { type: 'completed', runId: run.id, sessionKey: bound.sessionKey });
+      expect(scheduled).toContain(f.bot.id);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('completion recovers the sole streaming reply after its mapping field is lost', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'recover_sole_status_nonce1', text: 'ping' });
+      const key = `runtimeRun:${run.id}`; const bound = f.store.metadata<RuntimeMapping>(key)!;
+      await runtime.project('chat', { type: 'delta', runId: run.id, sessionKey: bound.sessionKey, seq: 1, text: 'pong' });
+      const streamed = f.store.metadata<RuntimeMapping>(key)!;
+      f.store.setMetadata(key, { ...streamed, assistantEntryId: null });
+      const original = f.rpc;
+      f.rpc = async (method, params) => method === 'agent.wait' ? { runId: run.id, ok: true, cancelled: false, answer: 'pong' } : original(method, params);
+      await runtime.project('agent', { type: 'completed', runId: run.id, sessionKey: bound.sessionKey });
+      const entries = f.store.list<P.TranscriptEntry>('entries', entry => entry.runId === run.id && entry.kind === 'message');
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ id: streamed.assistantEntryId, text: 'pong', streaming: false });
+      expect(f.store.metadata<RuntimeMapping>(key)?.assistantEntryId).toBe(streamed.assistantEntryId);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('a stalled reconciliation receipt preserves the streaming mapping and one final reply', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'stalled_receipt_status_001', text: 'ping' });
+      const key = `runtimeRun:${run.id}`; const bound = f.store.metadata<RuntimeMapping>(key)!;
+      const { promise: waiting, resolve: entered } = Promise.withResolvers<void>();
+      const { promise: receipt, resolve: release } = Promise.withResolvers<unknown>();
+      const original = f.rpc;
+      f.rpc = async (method, params) => {
+        if (method === 'runs.receipt.get') { entered(); return receipt; }
+        return original(method, params);
+      };
+      const reconcile = runtime.reconcile(); await waiting;
+      await runtime.project('chat', { type: 'delta', runId: run.id, sessionKey: bound.sessionKey, seq: 1, text: 'pong' });
+      const streamed = f.store.metadata<RuntimeMapping>(key)!;
+      release({ receipt: { runId: run.id, sessionKey: bound.sessionKey, state: 'accepted', effectiveMode: 'new_run', targetRunId: run.id } });
+      await reconcile;
+      expect(f.store.metadata<RuntimeMapping>(key)).toMatchObject({ assistantEntryId: streamed.assistantEntryId, deltaSeq: 1 });
+      f.rpc = async (method, params) => method === 'agent.wait' ? { runId: run.id, ok: true, cancelled: false, answer: 'pong' } : original(method, params);
+      await runtime.project('agent', { type: 'completed', runId: run.id, sessionKey: bound.sessionKey });
+      expect(f.store.list<P.TranscriptEntry>('entries', entry => entry.runId === run.id && entry.kind === 'message')).toMatchObject([{ id: streamed.assistantEntryId, text: 'pong', streaming: false }]);
+      expect(f.store.list<P.TranscriptEntry>('entries', entry => entry.runId === run.id && entry.kind === 'message')).toHaveLength(1);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('reconciliation does not resurrect a reserved candidate completed during an earlier receipt read', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const { promise: waiting, resolve: entered } = Promise.withResolvers<void>();
+    const { promise: receipt, resolve: release } = Promise.withResolvers<unknown>();
+    try {
+      await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'snapshot_first_status_001', text: 'first' });
+      await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'snapshot_second_status_001', text: 'second' });
+      // Store iteration is ID-ordered, not submission-ordered (run IDs are random).
+      // Gate the first actual candidate so the reserved one cannot be visited yet.
+      const candidates = f.store.list<P.Run>('runs');
+      const first = candidates[0]!, second = candidates[1]!;
+      f.store.put('runs', { ...second, status: 'reserved' });
+      const firstBound = f.store.metadata<RuntimeMapping>(`runtimeRun:${first.id}`)!;
+      const secondBound = f.store.metadata<RuntimeMapping>(`runtimeRun:${second.id}`)!;
+      const original = f.rpc;
+      f.rpc = async (method, params) => {
+        if (method === 'runs.receipt.get' && params.runId === first.id) { entered(); return receipt; }
+        if (method === 'agent.wait' && params.runId === second.id) return { runId: second.id, ok: true, cancelled: false, answer: 'done' };
+        return original(method, params);
+      };
+      const statuses: string[] = [];
+      f.services.events.subscribe(event => { if (event.event === 'run.upserted' && event.payload.id === second.id) statuses.push(event.payload.status); });
+      const reconcile = runtime.reconcile(); await waiting;
+      await runtime.project('agent', { type: 'completed', runId: second.id, sessionKey: secondBound.sessionKey });
+      const completed = f.store.require<P.Run>('runs', second.id);
+      expect(completed.status).toBe('succeeded');
+      release({ receipt: { runId: first.id, sessionKey: firstBound.sessionKey, state: 'accepted', effectiveMode: 'new_run', targetRunId: first.id } });
+      await reconcile;
+      expect(f.store.require<P.Run>('runs', second.id)).toEqual(completed);
+      expect(statuses).toEqual(['succeeded']);
+      expect(f.calls.filter(call => call.method === 'runs.receipt.get' && call.params.runId === second.id)).toHaveLength(0);
+    } finally { release(null); runtime.close(); f.store.close(); }
+  });
+
+  test('completion reuses an unmapped streaming reply and closes every stray without deletion', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'missing_mapping_status_001', text: 'ping' });
+      const key = `runtimeRun:${run.id}`; const bound = f.store.metadata<RuntimeMapping>(key)!;
+      await runtime.project('chat', { type: 'delta', runId: run.id, sessionKey: bound.sessionKey, seq: 1, text: 'pong' });
+      f.store.setMetadata(key, { ...f.store.metadata<RuntimeMapping>(key)!, assistantEntryId: null });
+      const stray = f.services.entry(f.alice, f.conversation.id, { kind: 'message', role: 'assistant', text: 'legacy duplicate', streaming: true, attachmentIds: [], actor: { kind: 'bot', id: f.bot.id, displayName: f.bot.name }, runId: run.id, clientNonce: null });
+      const closed: string[] = [];
+      const unlisten = f.services.events.subscribe(event => { if (event.event === 'entry.upserted' && event.payload.kind === 'message' && !event.payload.streaming) closed.push(event.payload.id); });
+      const original = f.rpc;
+      f.rpc = async (method, params) => method === 'agent.wait' ? { runId: run.id, ok: true, cancelled: false, answer: 'pong' } : original(method, params);
+      await runtime.project('agent', { type: 'completed', runId: run.id, sessionKey: bound.sessionKey });
+      const entries = f.store.list<P.TranscriptEntry>('entries', entry => entry.runId === run.id && entry.kind === 'message');
+      expect(entries).toHaveLength(2);
+      expect(entries.every(entry => entry.kind === 'message' && !entry.streaming)).toBe(true);
+      expect(f.store.metadata<RuntimeMapping>(key)?.assistantEntryId).toBe(stray.id);
+      expect(closed.sort()).toEqual(entries.map(entry => entry.id).sort());
+      unlisten();
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('reconciliation skips a submission awaiting its chat acknowledgement', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const { promise: waiting, resolve: entered } = Promise.withResolvers<void>();
+    const { promise: pending, resolve: release } = Promise.withResolvers<void>();
+    const original = f.rpc; const statuses: string[] = [];
+    f.services.events.subscribe(event => { if (event.event === 'run.upserted') statuses.push(event.payload.status); });
+    f.rpc = async (method, params) => { if (method === 'chat.send') { entered(); await pending; } return original(method, params); };
+    try {
+      const submit = runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'submitting_status_nonce01', text: 'ping' });
+      await waiting; await runtime.reconcile();
+      expect(f.calls.filter(call => call.method === 'runs.receipt.get')).toHaveLength(0);
+      expect(statuses).not.toContain('outcome_unknown');
+      release(); expect((await submit).run.status).toBe('running');
+    } finally { release(); runtime.close(); f.store.close(); }
+  });
+
+  test('legacy repair closes terminal streaming rows once without deleting text', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'legacy_stream_status_001', text: 'ping' });
+      f.store.put('runs', { ...run, status: 'succeeded', completedAtMs: f.services.now() });
+      const entry = f.services.entry(f.alice, f.conversation.id, { kind: 'message', role: 'assistant', text: 'old answer', streaming: true, attachmentIds: [], actor: { kind: 'bot', id: f.bot.id, displayName: f.bot.name }, runId: run.id, clientNonce: null });
+      const pendingRun = { ...run, id: 'pending_legacy_projection', status: 'cancelled' as const };
+      f.store.put('runs', pendingRun); f.store.setMetadata(`runtimeTerminalProjectionPending:${pendingRun.id}`, true);
+      const pending = f.services.entry(f.alice, f.conversation.id, { kind: 'message', role: 'assistant', text: 'pending answer', streaming: true, attachmentIds: [], actor: { kind: 'bot', id: f.bot.id, displayName: f.bot.name }, runId: pendingRun.id, clientNonce: null });
+      const closed: string[] = [];
+      f.services.events.subscribe(event => { if (event.event === 'entry.upserted' && event.payload.id === entry.id) closed.push(entry.id); });
+      await runtime.reconcile(); await runtime.reconcile();
+      expect(f.store.require<P.TranscriptEntry>('entries', entry.id)).toMatchObject({ streaming: false, text: 'old answer' });
+      expect(closed).toEqual([entry.id]);
+      expect(f.store.require<P.TranscriptEntry>('entries', pending.id)).toMatchObject({ streaming: true });
+    } finally { runtime.close(); f.store.close(); }
+  });
+
   test('legacy sharing, manager labels and administrative roles cannot execute another owner’s Bot before any RPC', async () => {
     const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
     const legacy = { ...f.bot, visibility: 'team', published: true, managerUserIds: [f.bob.userId] }; f.store.put('bots', legacy);
@@ -73,6 +258,8 @@ describe('owned placed runtime', () => {
     try {
       const started = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'measured_not_granted_001', text: 'work' });
       const context = f.store.metadata<InvocationContext>(`runtimeInvocation:${started.run.id}`)!;
+      expect(context.invocationToolPolicy.allow).toContain('mcp_lemon_bot_request_access_fixture');
+      expect((context.invocationToolPolicy.deny as string[]).includes('mcp_lemon_bot_request_access_fixture')).toBe(false);
       expect(context.invocationToolPolicy).toMatchObject({ profile: 'custom', deny: expect.arrayContaining(['read', 'write', 'bash', 'lsp_diagnostics', 'remember', 'recall']) });
       expect(context.invocationToolPolicy.allow).not.toEqual(expect.arrayContaining(['read', 'write', 'bash']));
       expect(f.store.list<P.BotGrant>('botGrants').every(grant => grant.requestedLevel === 'off')).toBe(true);
@@ -325,6 +512,11 @@ describe('owned placed runtime', () => {
       expect(f.store.list('runs')).toHaveLength(1); expect(f.store.list('routineRuns')).toHaveLength(1); expect(f.calls.filter(call => call.method === 'chat.send')).toHaveLength(0);
       const reserved = f.store.list<P.Run>('runs')[0]!;
       expect(f.store.metadata(`runCron:${reserved.id}`)).toBe(context.cronRunId);
+      expect(f.store.metadata(`runApprovalOrigin:${reserved.id}`)).toBe('routine');
+      const invocation = await buildInvocationContext(f.services, f.alice, f.conversation, f.bot, context.routerRunId, [{ allow: 'all', workspace_read_exempt: false }, { allow: 'all', workspace_read_exempt: true }]);
+      expect(invocation.invocationToolPolicy.deny).toContain('mcp_lemon_bot_request_access_fixture');
+      expect(invocation.invocationToolPolicy.workspace_read_exempt).toBe(false);
+      expect(invocation.invocationToolPolicy.deny).toContain('bash');
       const bobRun: P.Run = f.services.resource('run', { conversationId: f.conversation.id, botId: f.bot.id, initiatorUserId: 'bob', clientNonce: 'bob_run_nonce_0000000', status: 'running', error: null, startedAtMs: f.services.now(), completedAtMs: null, routineRunId: null }); f.store.put('runs', bobRun);
       f.rpc = async (method, params) => {
         if (method === 'chat.abort') { expect(params.runId).toBe(context.routerRunId); return { aborted: true }; }

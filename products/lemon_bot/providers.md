@@ -32,8 +32,9 @@ attached controller or `GET /v1/machines/:id/providers` for an enrolled executio
 machine they actually own. Administrative host access or a shared machine ACL
 does not authorize configuring another person's provider account. These endpoints
 work before a model provider is configured; they do not expose coding sessions.
-Use the same private Tailscale HTTPS product origin as the normal Bot app, not
-a relay, Funnel, controller URL in the browser, or phone-local callback.
+Use the configured product origin: loopback for same-machine use, or reachable
+private HTTPS for remote clients and phones. Never use the controller URL in the
+browser or a phone-local callback.
 
 The response separates the exact target (`id`, durable `nodeId` where applicable,
 and `hostname`) from the current default provider/model. Select and display that
@@ -102,6 +103,28 @@ The returned default is the effective target default, including existing project
 and environment precedence. An explicit default write changes only the global
 default; an active higher-priority override can therefore leave the effective
 selection unchanged.
+
+### Model readiness and detected logins
+
+`readiness` is separate from static `lastValidation`: `verified` means a
+non-generating live check passed; `saved` means credentials resolve but the check
+is unavailable, unreachable or failed for a non-auth reason. Both count as ready.
+`action_required` identifies missing, expired or rejected credentials, unavailable
+models or mismatched defaults; `not_configured` means no usable model is configured.
+Explicit `POST …/providers/check` may refresh OAuth credentials on the target but
+never sends a message. Its bounded result includes a reason, check kind, available
+model IDs, suggested model and check timestamp. Listings themselves are offline.
+
+`detected` lists only Codex CLI login presence or environment variable names,
+never values or paths. Import is explicit: `POST …/providers/openai_codex/import`
+requires `source: "codex_cli"`, `consent: "copy_login"`, exact `targetId` and a
+fixed `clientNonce`. The target must still detect that login. No path override is
+accepted; import never changes the default. Lemon keeps and refreshes its own
+encrypted copy; `~/.codex/auth.json` is not changed. If either app asks you to sign
+in again, sign in there, or use device-code sign-in to give Lemon its own login.
+Uncertain imports use the same reconciliation rules as disconnect, never automatic
+replay. Older runtimes return `readiness: null`, `detected: []` and do not offer
+check/import. Machine routes require both workspace and actual machine ownership.
 
 ### Providers settings on Web, iPhone and Mac
 
@@ -415,4 +438,4 @@ Web Push requires VAPID public/private key and contact subject (`LEMON_BOT_VAPID
 
 ## Central integration checks
 
-This assignment intentionally runs no build/test/lint/format or live provider checks. After all slices integrate, the orchestrator should run backend TypeScript checks and `bun test` from `products/lemon_bot/backend`, then actual configured OAuth/SCIM/provider/native-process/notification smoke checks with private disposable credentials. Provider absence is an explicit deployment prerequisite, not evidence an operation was exercised.
+Run backend TypeScript checks and `bun test` from `products/lemon_bot/backend`, then exercise configured OAuth/SCIM/provider/native-process/notification flows with private disposable credentials. Provider absence is an explicit deployment prerequisite, not evidence an operation was exercised.

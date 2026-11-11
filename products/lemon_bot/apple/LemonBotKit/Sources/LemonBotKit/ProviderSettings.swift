@@ -157,12 +157,25 @@ extension LemonBotStore {
         let state = providerSettings
         let value = state.secret, providerID = state.editingProviderID
         state.clearCredential() // Before validation or the first suspension, on every submit path.
-        guard let providerID, canWriteProviders,
-              state.management?.providers.first(where: { $0.id == providerID })?.methods.contains(.apiKey) == true,
-              !value.isEmpty, value.utf8.count <= 16384, !value.contains("\0") else {
+        guard let providerID else {
             state.message = "Enter a nonempty API key (at most 16,384 UTF-8 bytes, without NUL)."; return
         }
-        await writeProviderManagement("PUT", suffix: "/\(providerID)/api-key", extra: ["value": .string(value)])
+        await submitProviderApiKey(providerID: providerID, key: value)
+    }
+    @discardableResult
+    public func submitProviderApiKey(providerID: String, key: String) async -> ProviderManagement? {
+        let state = providerSettings
+        guard canWriteProviders, let target = state.management?.target,
+              let encoded = try? HTTPTransport.pathID(providerID) else { return nil }
+        guard state.management?.providers.first(where: { $0.id == providerID })?.methods.contains(.apiKey) == true,
+              !key.isEmpty, key.utf8.count <= 16384, !key.contains("\0") else {
+            state.message = "Enter a nonempty API key (at most 16,384 UTF-8 bytes, without NUL)."
+            return nil
+        }
+        return await performProviderRequest("PUT", path: providerBasePath + "/\(encoded)/api-key",
+                                            body: ["targetId": .string(target.id), "value": .string(key)]) { (result: ProviderManagement) in
+            try self.adoptProviderManagement(result, target: target)
+        }
     }
     public func requestProviderDisconnect(_ providerID: String) {
         let state = providerSettings
@@ -189,24 +202,76 @@ extension LemonBotStore {
         }
     }
     private func writeProviderManagement(_ method: String, suffix: String, extra: JSONObject = [:]) async {
-        let state = providerSettings, context = state.context, current = generation
+        let state = providerSettings
         guard canWriteProviders, let target = state.management?.target else { return }
         // The provider ID is always selected from metadata, but still encode it as a path component.
         let components = suffix.split(separator: "/")
         guard let encoded = try? components.map({ try HTTPTransport.pathID(String($0)) }).joined(separator: "/") else { return }
         var body = extra; body["targetId"] = .string(target.id)
+        let _: ProviderManagement? = await performProviderRequest(method, path: providerBasePath + "/" + encoded, body: body) { (result: ProviderManagement) in
+            try self.adoptProviderManagement(result, target: target)
+        }
+    }
+    /// One fenced envelope for every provider write: context/generation bound, busy-flagged,
+    /// credential-clearing, and never surfacing arbitrary backend errors from a credential path.
+    private func performProviderRequest<T: Decodable>(_ method: String, path: String, body: JSONObject, adopt: (T) throws -> Void) async -> T? {
+        let state = providerSettings, context = state.context, current = generation
         state.busy = true; state.message = nil
         defer { if validProviderContext(context, current) { state.busy = false; state.clearCredential() } }
         do {
-            let result: ProviderManagement = try await mutate(method, providerBasePath + "/" + encoded, body: body)
-            guard validProviderContext(context, current) else { return }
-            try validateProviderManagement(result)
-            guard result.target == target else { throw ClientError.invalidFrame }
-            state.management = result
+            let result: T = try await mutate(method, path, body: body)
+            guard validProviderContext(context, current) else { return nil }
+            try adopt(result)
+            return result
         } catch {
-            guard validProviderContext(context, current) else { return }
-            // Never retain or display arbitrary backend errors from a credential mutation.
+            guard validProviderContext(context, current) else { return nil }
             state.message = providerPendingIntents.isEmpty ? "The provider action could not be completed. Check status before trying again." : "The action is unconfirmed. Check status; do not submit it again. The original operation remains fenced."
+            return nil
+        }
+    }
+    private func adoptProviderManagement(_ value: ProviderManagement, target: ProviderManagement.Target, readiness: ModelReadiness? = nil) throws {
+        try validateProviderManagement(value)
+        guard value.target == target else { throw ClientError.invalidFrame }
+        var adopted = value
+        if let readiness { adopted.readiness = readiness }
+        providerSettings.management = adopted
+    }
+    @discardableResult
+    public func checkProviders(providerID: String? = nil) async -> ProviderCheckResult? {
+        let state = providerSettings
+        guard canWriteProviders, let target = state.management?.target else { return nil }
+        var body: JSONObject = ["targetId": .string(target.id)]
+        if let providerID, !providerID.isEmpty {
+            // The provider is always selected from listing metadata, never free text.
+            guard state.management?.providers.contains(where: { $0.id == providerID }) == true else { return nil }
+            body["providerId"] = .string(providerID)
+        }
+        return await performProviderRequest("POST", path: providerBasePath + "/check", body: body) { (result: ProviderCheckResult) in
+            try self.adoptProviderManagement(result.management, target: target, readiness: result.readiness)
+        }
+    }
+    /// The request itself is the owner's explicit consent to copy this target's Codex CLI login.
+    /// It never changes the default and never sends a path.
+    @discardableResult
+    public func importCodexLogin(providerID: String = "openai_codex") async -> ProviderManagement? {
+        let state = providerSettings
+        guard canWriteProviders, let target = state.management?.target,
+              state.management?.detected.contains(where: { $0.source == .codexCLI && $0.providerId == providerID }) == true,
+              let encoded = try? HTTPTransport.pathID(providerID) else { return nil }
+        let body: JSONObject = ["targetId": .string(target.id), "source": .string("codex_cli"), "consent": .string("copy_login")]
+        return await performProviderRequest("POST", path: providerBasePath + "/\(encoded)/import", body: body) { (result: ProviderManagement) in
+            try self.adoptProviderManagement(result, target: target)
+        }
+    }
+    @discardableResult
+    public func setProviderDefault(providerID: String, modelID: String) async -> ProviderManagement? {
+        let state = providerSettings
+        guard canWriteProviders, let target = state.management?.target,
+              state.management?.providers.contains(where: { $0.id == providerID }) == true,
+              !modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let body: JSONObject = ["targetId": .string(target.id), "providerId": .string(providerID), "modelId": .string(modelID)]
+        return await performProviderRequest("POST", path: providerBasePath + "/default", body: body) { (result: ProviderManagement) in
+            try self.adoptProviderManagement(result, target: target)
         }
     }
 

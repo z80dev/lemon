@@ -169,8 +169,34 @@ defmodule LemonCore.Update.CLI do
     IO.puts("Receipt: #{result.receipt["id"]}")
   end
 
-  defp restart_message(%{restart: "restarted"}), do: "Managed daemon restarted."
-  defp restart_message(%{restart: "not_running"}), do: "No daemon was running; none was started."
+  defp restart_message(result) do
+    [controller_message(result)]
+    |> then(&(&1 ++ unit_messages(result)))
+    |> Enum.join(" ")
+  end
+
+  defp controller_message(%{restart: "restarted"}), do: "Managed daemon restarted."
+
+  defp controller_message(%{restart: "not_running"}),
+    do: "No daemon was running; none was started."
+
+  defp controller_message(%{restart: "failed"}), do: "Managed daemon restart failed."
+  defp controller_message(_result), do: ""
+
+  defp unit_messages(result) do
+    [
+      unit_message("Worker units", Map.get(result, :workers) || Map.get(result, "workers")),
+      unit_message("Lemon Bot backend", Map.get(result, :backend) || Map.get(result, "backend"))
+    ]
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp unit_message(_label, nil), do: nil
+  defp unit_message(_label, "not_installed"), do: nil
+  defp unit_message(_label, "not_running"), do: nil
+  defp unit_message(label, "restarted"), do: "#{label} restarted."
+  defp unit_message(label, "failed"), do: "#{label} did not restart."
+  defp unit_message(_label, _other), do: nil
 
   defp sanitize_result(result) when is_map(result) do
     result
@@ -210,8 +236,9 @@ defmodule LemonCore.Update.CLI do
     %{
       "kind" => "daemon_restart_failed",
       "message" =>
-        "The version selection and receipt were committed, but the daemon restart failed. " <>
-          "Inspect lemon status and the runtime log before recovering or rolling back.",
+        "The version selection and receipt were committed, but a coordinated restart step " <>
+          "failed. Inspect lemon status, lemon service status, and the runtime log before " <>
+          "recovering or rolling back.",
       "result" => sanitize_result(result)
     }
   end
@@ -250,6 +277,57 @@ defmodule LemonCore.Update.CLI do
 
   defp safe_message(:staged_version_mismatch),
     do: "The staged launcher reported the wrong version."
+
+  defp safe_message(:staged_bot_version_mismatch),
+    do: "The staged Lemon Bot backend reported the wrong version."
+
+  defp safe_message(:staged_bot_version_command_failed),
+    do: "The staged Lemon Bot backend could not report its version."
+
+  defp safe_message(:staged_bot_version_timeout),
+    do: "The staged Lemon Bot backend version check timed out."
+
+  defp safe_message(:incomplete_bot_release),
+    do: "The staged Lemon Bot backend is missing required files."
+
+  defp safe_message(:bot_binary_is_symlink),
+    do: "The staged Lemon Bot backend binary is not a regular file."
+
+  defp safe_message(:active_bot_verification_failed),
+    do: "The Lemon Bot backend pointer did not name the selected version."
+
+  defp safe_message(:invalid_bot_binary),
+    do: "The selected Lemon Bot backend has no usable executable."
+
+  defp safe_message(:bot_symlink_failed),
+    do: "The Lemon Bot backend pointer could not be moved."
+
+  defp safe_message(:invalid_bot_target),
+    do: "The Lemon Bot backend target is not a managed install key."
+
+  defp safe_message(:stale_current_bot_version),
+    do: "The active Lemon Bot backend no longer matches the receipt."
+
+  defp safe_message(:missing_bot_artifact),
+    do:
+      "This release publishes no Lemon Bot backend for this platform; " <>
+        "the runtime is not updated without it."
+
+  defp safe_message(:unit_inventory_unavailable),
+    do: "The supervised Lemon units could not be read; nothing was restarted."
+
+  defp safe_message(:invalid_unit_snapshot),
+    do: "The supervised Lemon units could not be read; nothing was restarted."
+
+  defp safe_message(:service_manager_unavailable),
+    do:
+      "Supervised Lemon units exist but the service manager is unavailable; " <>
+        "nothing was restarted."
+
+  defp safe_message(:gui_session_required),
+    do:
+      "Supervised Lemon units need a logged-in desktop session to inspect; " <>
+        "nothing was restarted."
 
   defp safe_message(_kind), do: "The update operation was refused safely."
 

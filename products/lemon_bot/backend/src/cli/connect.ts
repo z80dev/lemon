@@ -23,13 +23,13 @@ export interface ConnectOptions {
 }
 
 /** Raw terminal input never enters a shell, readline history, or the process argument vector. */
-export function terminal(): ConnectTerminal {
+export function terminal(output: NodeJS.WriteStream = process.stdout): ConnectTerminal {
   return {
     interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY && process.stderr.isTTY),
-    write: message => { process.stdout.write(`${message}\n`); },
-    sensitive: message => { process.stdout.write(`${message}\n`); },
+    write: message => { output.write(`${message}\n`); },
+    sensitive: message => { output.write(`${message}\n`); },
     read(label, hidden = false, deadline) {
-      process.stdout.write(label);
+      output.write(label);
       const { promise, resolve, reject } = Promise.withResolvers<string>();
       let value = '';
       const wasRaw = process.stdin.isRaw;
@@ -38,7 +38,7 @@ export function terminal(): ConnectTerminal {
         clearTimeout(timer);
         process.stdin.off('data', data); process.stdin.off('end', ended); process.stdin.off('error', ended);
         process.stdin.setRawMode(wasRaw); process.stdin.pause();
-        process.stdout.write('\n');
+        output.write('\n');
         if (error) reject(error); else resolve(value);
       }
       const ended = () => finish(new ConnectError('Terminal input ended; no approval was given.'));
@@ -46,8 +46,8 @@ export function terminal(): ConnectTerminal {
         for (const character of chunk.toString('utf8')) {
           if (character === '\u0003' || character === '\u0004') { finish(new ConnectError('Cancelled; no automatic approval or mutation retry.')); return; }
           if (character === '\r' || character === '\n') { finish(); return; }
-          if (character === '\u007f' || character === '\b') { value = Array.from(value).slice(0, -1).join(''); if (!hidden) process.stdout.write('\b \b'); }
-          else if (!/[\p{Cc}\p{Cf}]/u.test(character)) { value += character; if (!hidden) process.stdout.write(character); }
+          if (character === '\u007f' || character === '\b') { value = Array.from(value).slice(0, -1).join(''); if (!hidden) output.write('\b \b'); }
+          else if (!/[\p{Cc}\p{Cf}]/u.test(character)) { value += character; if (!hidden) output.write(character); }
           if (Buffer.byteLength(value) > 1024) { finish(new ConnectError('Input is too long.')); return; }
         }
       }

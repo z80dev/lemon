@@ -15,24 +15,32 @@ export function productUrl(value: string) {
 export function savedAccounts(): SavedAccount[] {
   try { const value: unknown = JSON.parse(localStorage.getItem('lemonbot.accounts') || '[]'); return Array.isArray(value) ? value.filter((row): row is SavedAccount => !!row && typeof row === 'object' && 'baseUrl' in row && typeof row.baseUrl === 'string' && 'email' in row && typeof row.email === 'string') : []; } catch { return []; }
 }
+export function rememberSession(result: AuthResult, backend: string): WebSession {
+  const accounts = savedAccounts().filter(account => !(account.baseUrl === backend && account.email === result.user.email));
+  accounts.push({ baseUrl: backend, email: result.user.email, workspaceId: result.workspace.id, workspaceName: result.workspace.name });
+  localStorage.setItem('lemonbot.accounts', JSON.stringify(accounts));
+  const session = { baseUrl: backend, token: result.token, email: result.user.email, workspaceId: result.workspace.id };
+  sessionStorage.setItem('lemonbot.session', JSON.stringify(session));
+  return session;
+}
 export function AuthScreen({ onAuth, initialBackend, notice }: { onAuth: (session: WebSession) => void; initialBackend?: string; notice?: string }) {
   const [baseUrl, setBaseUrl] = useState(initialBackend || `${location.origin}/v1`);
   const [backendInput, setBackendInput] = useState(baseUrl);
   const [backendError, setBackendError] = useState<unknown>();
-  const [mode, setMode] = useState<'login' | 'setup'>('login');
+  const [selectedMode, setMode] = useState<'login' | 'setup'>('login');
   const [email, setEmail] = useState(''); const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState(''); const [workspaceName, setWorkspaceName] = useState(''); const [setupCode, setSetupCode] = useState('');
   const [pendingOIDC, setPendingOIDC] = useState(false);
   const action = useAction(); const client = new LemonBotClient({ baseUrl });
   const setup = useQuery(`setup:${baseUrl}`, () => client.call('GET /setup'));
   const providers = useQuery(`oidc:${baseUrl}`, () => client.call('GET /auth/oidc/providers'));
+  const mode = setup.data?.setupRequired ? 'setup' : selectedMode;
+  const loopback = ['127.0.0.1', '[::1]'].includes(location.hostname);
+  const [copied, setCopied] = useState(false);
   useEffect(() => { setMode(setup.data?.setupRequired ? 'setup' : 'login'); }, [setup.data?.setupRequired]);
   const finish = (result: AuthResult, backend = baseUrl) => {
-    const accounts = savedAccounts().filter(account => !(account.baseUrl === backend && account.email === result.user.email));
-    accounts.push({ baseUrl: backend, email: result.user.email, workspaceId: result.workspace.id, workspaceName: result.workspace.name });
-    localStorage.setItem('lemonbot.accounts', JSON.stringify(accounts));
-    const session = { baseUrl: backend, token: result.token, email: result.user.email, workspaceId: result.workspace.id };
-    sessionStorage.setItem('lemonbot.session', JSON.stringify(session)); setPassword(''); setSetupCode(''); onAuth(session);
+    const session = rememberSession(result, backend);
+    setPassword(''); setSetupCode(''); onAuth(session);
   };
   useEffect(() => {
     const query = new URLSearchParams(location.search);
@@ -59,10 +67,12 @@ export function AuthScreen({ onAuth, initialBackend, notice }: { onAuth: (sessio
       sessionStorage.removeItem('lemonbot.oidc.login'); finish(result, pending.baseUrl);
     }).finally(() => setPendingOIDC(false));
   }, []);
-  return <main className="auth-layout"><section className="auth-story"><div className="brand"><LemonMark/> Lemon Bot</div><div><div className="eyebrow">Your personal assistant</div><h1>Your Bots.<br/>Your computers.</h1><p>Named assistants with focused jobs on computers you own. Your Bots keep working when you close this window.</p><div className="auth-companion" aria-hidden="true"><LemonFace size={128}/></div></div><p className="small">Your computers. Your accounts. Your choice.<br/>Bots on the same computer share that computer user’s files and sign-ins. Give Bots separate computers or user accounts when you need to keep their access apart.</p></section><section className="auth-form"><div className="auth-card stack">{notice && <p className="auth-session-notice" role="status" aria-live="polite">{notice}</p>}<div className="eyebrow">Connect to Lemon Bot</div><h2>{mode === 'setup' ? 'Create your owner account' : 'Welcome back'}</h2><form onSubmit={event => { event.preventDefault(); try { const url = productUrl(backendInput); setBaseUrl(url); setBackendError(undefined); } catch (error) { setBackendError(error); } }}><Field label="Product backend URL" hint="Connect to Lemon Bot, never the Lemon operator endpoint."><div className="row"><input type="url" required value={backendInput} onChange={event => setBackendInput(event.target.value)} /><button>Connect</button></div></Field></form><ErrorNotice error={backendError || setup.error}/>{setup.loading && !setup.data ? <Loading/> : setup.data && <><form className="stack" onSubmit={event => { event.preventDefault(); void action.run(async () => { const result = mode === 'setup' ? await client.call('POST /setup', { body: { clientNonce: nonce(), setupCode, email, password, displayName, workspaceName } }) : await client.call('POST /auth/login', { body: { clientNonce: nonce(), email, password } }); finish(result); }); }}>
+  const form = <form className="stack" onSubmit={event => { event.preventDefault(); void action.run(async () => { const result = mode === 'setup' ? await client.call('POST /setup', { body: { clientNonce: nonce(), setupCode, email, password, displayName, workspaceName } }) : await client.call('POST /auth/login', { body: { clientNonce: nonce(), email, password } }); finish(result); }); }}>
       {mode === 'setup' && <><Field label="One-time owner setup code" hint="Your administrator gets this one-time code from the server’s terminal."><input required value={setupCode} autoComplete="off" onChange={event => setSetupCode(event.target.value)}/></Field><Field label="Workspace name"><input required maxLength={120} value={workspaceName} onChange={event => setWorkspaceName(event.target.value)}/></Field></>}
       {mode !== 'login' && <Field label="Your name"><input required maxLength={120} value={displayName} autoComplete="name" onChange={event => setDisplayName(event.target.value)}/></Field>}
       <Field label="Email"><input required type="email" value={email} autoComplete="username" onChange={event => setEmail(event.target.value)}/></Field><Field label="Password" hint={mode !== 'login' ? 'At least 12 characters.' : undefined}><input type="password" required minLength={mode === 'login' ? undefined : 12} value={password} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} onChange={event => setPassword(event.target.value)}/></Field><ErrorNotice error={action.error}/><button className="primary" disabled={action.busy || pendingOIDC}>{action.busy ? 'Connecting…' : mode === 'setup' ? 'Create owner account' : 'Sign in'}</button></form>
+  const localHint = <section className="panel stack">{mode === 'setup' ? <p>Run this in Terminal on this computer — it creates your owner account and signs you in, no password needed:</p> : <p>On this computer? Run <code>lemon-bot open</code> in Terminal to sign in without a password.</p>}<div className="row"><code>lemon-bot open</code><button type="button" onClick={() => void navigator.clipboard.writeText('lemon-bot open').then(() => setCopied(true)).catch(error => setBackendError(error))}>{copied ? 'Copied' : 'Copy'}</button></div></section>;
+  return <main className="auth-layout"><section className="auth-story"><div className="brand"><LemonMark/> Lemon Bot</div><div><div className="eyebrow">Your personal assistant</div><h1>Your Bots.<br/>Your computers.</h1><p>Named assistants with focused jobs on computers you own. Your Bots keep working when you close this window.</p><div className="auth-companion" aria-hidden="true"><LemonFace size={128}/></div></div><p className="small">Your computers. Your accounts. Your choice.<br/>Bots on the same computer share that computer user’s files and sign-ins. Give Bots separate computers or user accounts when you need to keep their access apart.</p></section><section className="auth-form"><div className="auth-card stack">{notice && <p className="auth-session-notice" role="status" aria-live="polite">{notice}</p>}<div className="eyebrow">Connect to Lemon Bot</div><h2>{mode === 'setup' ? loopback ? 'Finish setting up Lemon Bot' : 'Create your owner account' : 'Welcome back'}</h2><form onSubmit={event => { event.preventDefault(); try { const url = productUrl(backendInput); setBaseUrl(url); setBackendError(undefined); } catch (error) { setBackendError(error); } }}><Field label="Product backend URL" hint="Connect to Lemon Bot, never the Lemon operator endpoint."><div className="row"><input type="url" required value={backendInput} onChange={event => setBackendInput(event.target.value)} /><button>Connect</button></div></Field></form><ErrorNotice error={backendError || setup.error}/>{setup.loading && !setup.data ? <Loading/> : setup.data && <>{loopback && localHint}{loopback && mode === 'setup' ? <details><summary>Use a one-time setup code instead</summary>{form}</details> : form}
       {mode === 'login' && <><ErrorNotice error={providers.error}/>{providers.data?.filter(provider => provider.enabled).map(provider => <button key={provider.id} disabled={action.busy} onClick={() => void action.run(async () => {
         const verifier = nonce() + nonce(); const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)); const challenge = btoa(String.fromCharCode(...new Uint8Array(digest))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
         const flow = await client.call('POST /auth/oidc/start', { body: { clientNonce: nonce(), providerId: provider.id, redirectUri: `${location.origin}/`, codeChallenge: challenge, purpose: 'login' } });

@@ -18,6 +18,97 @@ backup directories or credential-inclusion settings in `config.toml`. See
 [Back up and restore Lemon user state](user-guide/backups.md) for the versioned
 `~/.lemon` data contract.
 
+## Listener exposure (breaking default change)
+
+The control plane (`4040`), LemonWeb (`4080`), LemonSim UI (`4090`, when enabled),
+and node gateway (`4044`) bind **127.0.0.1 by default**, including releases.
+Existing LAN clients must explicitly opt in and restart:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `LEMON_CONTROL_PLANE_BIND_IP` | `127.0.0.1` | Main operator WebSocket / HTTP listener |
+| `LEMON_WEB_BIND_IP` | `127.0.0.1` | Operator browser interface |
+| `LEMON_SIM_UI_BIND_IP` | `127.0.0.1` | Simulation interface (retains its own access-token policy) |
+| `LEMON_CONTROL_PLANE_NODE_BIND_IP` | `127.0.0.1` | Node-only gateway |
+| `LEMON_CONTROL_PLANE_NODE_PORT` | `4044` | Node-only port; `0` disables it |
+| `LEMON_CONTROL_PLANE_REMOTE_HTTP` | empty | Comma-separated subset of `openai,acp` |
+
+Bind values must be literal IPv4 or IPv6 addresses. Non-loopback main and web
+binds require `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` and refuse
+`LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true`. Put TLS in front of
+LemonWeb: an operator login over plaintext LAN HTTP exposes the credential.
+Remote peers on the main listener get only `GET /ws` and `GET /healthz`;
+everything else is 404 unless the corresponding HTTP API is explicitly enabled
+with `LEMON_CONTROL_PLANE_REMOTE_HTTP` and its dedicated
+`LEMON_OPENAI_COMPAT_API_TOKEN` / `LEMON_ACP_API_TOKEN`.
+
+OpenAI and ACP require authentication locally too. If their dedicated token is
+unset they accept the operator token, including the launcher's private
+`~/.lemon/run/control-plane-<port>.token` file. The explicit default-off loopback
+compatibility flag permits tokenless local APIs only when no token is configured;
+it also gates tokenless local A2A. Never enable it behind a local reverse proxy.
+
+Forward node traffic only to **4044**: its `/ws` accepts node and enrollment
+credentials, never operator or tokenless clients; `/healthz` identifies
+`lemon-node-gateway`. Occupied or disabled gateway ports are nonfatal but reported
+unavailable by `LemonControlPlane.NodeGateway.status/0`. The launcher reserves a
+gateway port alongside the main/web ports in `~/.lemon/ports.env`.
+
+These runtime listeners are separate from the Lemon Bot product backend,
+which defaults to `127.0.0.1:4100`. For browser access over SSH, keep it on
+loopback and use the [Bot headless sign-in flow](getting-started/lemon-bot.md#headless-or-ssh-server).
+For another execution machine, use the
+[node-gateway or managed SSH route](user-guide/attaching-a-bot-machine.md#prepare-the-controller);
+changing a bind address does not itself configure TLS or make an invite reachable.
+
+Launchers default epmd and Erlang distribution to loopback. Explicit long-name
+`--name` distribution opts out of the distribution-interface default; epmd's
+`ERL_EPMD_ADDRESS` can be set explicitly. Run `lemon doctor` to inspect listener
+binds. A pre-upgrade epmd may still listen on all interfaces: with Lemon stopped,
+run `epmd -kill` or restart the computer.
+The dedicated source control-plane and gateway launchers use the same defaults.
+Source launchers generate or reuse `~/.lemon/cookie` (mode `0600`) unless a cookie
+is explicitly supplied through `--cookie`, `LEMON_GATEWAY_NODE_COOKIE`, or
+`LEMON_GATEWAY_COOKIE`. Both primary launchers load the saved
+`LEMON_CONTROL_PLANE_NODE_PORT` from `ports.env`, including `0` (disabled);
+an explicit environment value takes precedence.
+
+These listener settings are environment/application configuration, not new
+`config.toml` tables. The [generated environment registry](config-registry.md)
+lists declared types, defaults, aliases and owning applications. Regenerate it
+from a source checkout with
+`mix run --no-start scripts/generate_config_registry.exs`; this does not start
+applications or resolve credentials.
+
+### Worker and invitation environment
+
+Worker CLI inputs are destination-local and do not belong in `config.toml`:
+
+| Variable | Purpose |
+| --- | --- |
+| `LEMON_NODE_TRUST_LOOPBACK_LISTENER` | Default unset: require a loopback controller/tunnel listener owned by this user before sending credentials. Set exactly `1` only to explicitly trust a listener under another UID. |
+| `LEMON_NODE_ALLOW_INSECURE_CONTROLLER` | Explicit override for non-loopback `ws://`; use only with a verified encrypted/authenticated overlay or development. Prefer `wss://`. |
+| `LEMON_NODE_CAPABILITIES` | Destination-local tool ceiling: `all` or comma-separated tool names; `--capabilities` takes precedence. |
+| `LEMON_NODE_LAUNCH_CWD` | Launch directory used when `node join --cwd` is absent; otherwise falls back to the process directory. |
+| `LEMON_NODE_OPERATOR_TOKEN` | Pairing authority for operator-authorized enrollment; never distribute it to Bot/browser clients. |
+| `LEMON_NODE_TOKEN` | Explicit existing node session token; normally let the worker use its private stored credential instead. |
+| `LEMON_GATEWAY_HEALTH_PORT`, `LEMON_ROUTER_HEALTH_PORT` | Managed worker/enrollment processes set both to `0` to avoid competing with controller health listeners. |
+
+`node join` isolates DETS state under
+`~/.lemon/nodes/state/<sha256-of-trimmed-name>/`; configuration, skills, sessions
+and SQLite credentials remain shared. `LEMON_AGENT_DIR` and `LEMON_STORE_PATH`
+are not worker-isolation switches. See [worker status and recovery](user-guide/cli.md#inspect-a-named-worker).
+
+On the **controller**, `LEMON_CONTROL_PLANE_PUBLIC_WS_URL` selects the reachable
+secure WebSocket URL embedded in invitations (`ws://` is allowed only on
+loopback). Route workers to the node-only gateway, not an exposed operator API.
+`LEMON_NODE_SOURCE_CHECKOUT` selects an absolute destination-local checkout for
+generated join recipes. `LEMON_NODE_INSTALL_VERSION` and
+`LEMON_NODE_INSTALL_BASE_URL` select an exact supported artifact version and
+HTTPS installation base; runtime feature checks still apply. These variables
+configure invitation generation, not destination provider credentials.
+
+
 ## Example
 
 ```toml
@@ -186,7 +277,7 @@ allow = "all"
 deny = []
 require_approval = ["bash", "write", "edit"]
 no_reply = false
-
+# workspace_read_exempt = true # optional tri-state boolean; false wins, nil neutral
 [[gateway.bindings]]
 transport = "telegram"
 chat_id = 12345678
@@ -196,15 +287,18 @@ agent_id = "default"
 Tool policies are parsed strictly by `LemonCore.ToolPolicy`. Unknown profiles,
 unknown or conflicting keys, malformed allow/deny/block/approval values, and
 unsupported approval modes fail closed rather than falling back to full
-access. Omitting `[profiles.<id>.tool_policy]` retains the explicit runtime
+access. `workspace_read_exempt` is a sparse tri-state boolean (`true`, `false`,
+or `nil` when omitted) controlling approval exemption for workspace reads.
+Omitting `[profiles.<id>.tool_policy]` retains the explicit runtime
 default; supplying an invalid table produces a deny-all policy.
 
 `LemonCore.ProfileStore` is the lifecycle owner for user-managed profiles.
 Commands such as `lemon profile create research` patch only the selected
 `[profiles.<id>]` table, preserving unrelated global-config keys and comments.
 Managed records may include `name`, `description`, `avatar`, `model`,
-`system_prompt`, `node`, `status`, `profile_version`, `created_at`, and
-`updated_at`. Home/workspace paths and the stable `agent:<id>:main` session key
+`system_prompt`, `node`, `working_directory` (`"node_default"` or `"profile_files"`),
+`status`, `profile_version`, `created_at`, and `updated_at`.
+Home/workspace/files paths and the stable `agent:<id>:main` session key
 are derived from the validated ID rather than stored; do not add credentials or
 filesystem paths to the profile table. See
 [User-managed profiles](user-guide/profiles.md) for clone, credential-safe
@@ -523,9 +617,10 @@ Each record is keyed by a hash of the durable node ID and includes the exact
 controller URL, so reuse fails closed for a different controller. The token
 store requires that exact URL even for direct durable-ID lookup and returns no
 recovery material for a missing or mismatched controller. Later starts
-omit `--pair`. Re-run with `--pair` after session expiry to keep the same
-identity and controller-side name while rotating the session and revoking older
-tokens and live sockets. Concurrent challenge exchange can mint only one
+omit `--pair`. Valid node activity extends the seven-day session window;
+an inactive worker may still expire. Recovery rotates the session and revokes
+older tokens and live sockets while retaining the durable identity.
+Concurrent challenge exchange can mint only one
 credential, and result settlement is accepted only from the connection and
 session generation that received the invocation. Controller renames do not
 change the local key. Compatible legacy records
@@ -612,8 +707,8 @@ Environment variables override file values. Common overrides:
   started by `./bin/lemon-tui` is stopped with the TUI. Start a persistent
   source runtime with `./bin/lemon daemon`, then attach with the same token.
 - `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` — explicit legacy
-  compatibility opt-in (`true`/`false` or `1`/`0`) for tokenless operator
-  connections from direct loopback peers. Defaults to `false`; never enable it
+  compatibility opt-in (`true`/`false` or `1`/`0`) for tokenless operator,
+  OpenAI/ACP HTTP and A2A access from direct loopback peers. Defaults to `false`; never enable it
   for a reverse-proxied control plane.
 
 The browser monitoring client intentionally has no build-time or URL-based

@@ -25,6 +25,20 @@ async function setup() {
 }
 
 describe('authenticated fresh native follow-up admission', () => {
+  test('external provenance survives multiple native continuations', async () => {
+    const s = await setup();
+    try {
+      s.f.store.setMetadata(`runApprovalOrigin:${s.started.run.id}`, 'external');
+      let candidate = { ...s.lineage };
+      const rpc = s.f.rpc;
+      s.f.rpc = async (method, params) => method === 'runs.followup.lineage.get' ? candidate : rpc(method, params);
+      for (let i = 0; i < 3; i++) {
+        expect(await s.route.handler(s.context({ runId: candidate.runId }))).toMatchObject({ allow: true });
+        expect(s.f.store.metadata(`runApprovalOrigin:${candidate.runId}`)).toBe('external');
+        candidate = { ...candidate, parentRunId: candidate.runId, runId: `external_followup_${i}` };
+      }
+    } finally { s.dispose(); }
+  });
   test('same-owner helper admission keeps the original human while provisioning fresh target credentials and F proof', async () => {
     const s = await setup();
     try {
@@ -37,6 +51,7 @@ describe('authenticated fresh native follow-up admission', () => {
       expect(response).toMatchObject({ allow: true, invocation: { sharedMemoryGrant: false, invocationProof: { runId: candidate.runId, secretName: `lemon_bot/invocations/${candidate.runId}` }, invocationMcpServers: [{ name: 'lemon-bot', headers: { Authorization: 'Bearer ${LEMON_SECRET:LEMON_BOT_HELPER_FIXTURE}' } }] } });
       expect(s.f.store.require<P.Run>('runs', candidate.runId)).toMatchObject({ botId: helper.id, initiatorUserId: s.f.alice.userId });
       expect(s.f.store.metadata(`runPrincipal:${candidate.runId}`)).toEqual(s.f.alice);
+      expect(s.f.store.metadata(`runApprovalOrigin:${candidate.runId}`)).toBe('native_followup');
       expect(s.f.calls.filter(call => call.method === 'node.secrets.set' && call.params.operationId === candidate.runId)).toHaveLength(1);
       expect(s.f.calls.filter(call => call.method === 'chat.send')).toHaveLength(1);
     } finally { s.dispose(); }

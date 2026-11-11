@@ -200,6 +200,17 @@ defmodule CodingAgent.Tools.Bash.Service do
         Process.sleep(20)
         await_ready(id, name, ready, signal, deadline)
     end
+  rescue
+    SystemLimitError ->
+      result(
+        id,
+        name,
+        :unknown,
+        false,
+        "Service readiness pattern exceeded its match budget; inspect proc://#{name}. " <>
+          "The service remains managed; do not automatically rerun.",
+        true
+      )
   end
 
   defp ready?(nil, _output, _deadline), do: true

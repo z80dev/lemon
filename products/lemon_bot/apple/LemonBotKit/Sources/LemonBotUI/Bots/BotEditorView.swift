@@ -23,7 +23,7 @@ struct BotEditorView: View {
     @State private var speed: Double
     @State private var voiceLanguage: String
     @State private var language: String
-    @State private var consent = false
+    @State private var access = "standard"
     @State private var notify: Bool
     @State private var references: [ID]
     @State private var avatarPicker = false
@@ -35,7 +35,8 @@ struct BotEditorView: View {
     @State private var generatedPrompt = ""
     @State private var currentRevision: Int
     @State private var action = UIActionState()
-    init(store: LemonBotStore, bot: Bot? = nil) {
+    @State private var modelReadyOrSkipped: Bool
+    init(store: LemonBotStore, bot: Bot? = nil, machineID: ID? = nil) {
         self.store = store; self.bot = bot
         _name = State(initialValue: bot?.name ?? "")
         _title = State(initialValue: bot?.title ?? "")
@@ -43,7 +44,7 @@ struct BotEditorView: View {
         _instructions = State(initialValue: bot?.instructions ?? "")
         // One online machine is the obvious choice; more than one stays an explicit pick.
         let online = store.machines.filter { $0.status == "online" }
-        _machineID = State(initialValue: bot?.machineId ?? (online.count == 1 ? online[0].id : ""))
+        _machineID = State(initialValue: bot?.machineId ?? machineID ?? (online.count == 1 ? online[0].id : ""))
         _shape = State(initialValue: bot?.avatar.shape ?? "round")
         _color = State(initialValue: bot?.avatar.color ?? "yellow")
         _avatarID = State(initialValue: bot?.avatar.attachmentId)
@@ -54,6 +55,9 @@ struct BotEditorView: View {
         _notify = State(initialValue: bot?.sidebar.notificationsEnabled ?? true)
         _references = State(initialValue: bot?.referenceAttachmentIds ?? [])
         _currentRevision = State(initialValue: bot?.revision ?? 1)
+        _access = State(initialValue: "standard")
+        let initialMachineID = bot?.machineId ?? machineID ?? (online.count == 1 ? online[0].id : "")
+        _modelReadyOrSkipped = State(initialValue: bot != nil || ModelReadinessSkipStore.isSkipped(workspaceID: store.workspace?.id, machineID: initialMachineID))
     }
     var body: some View {
         NavigationStack {
@@ -72,10 +76,22 @@ struct BotEditorView: View {
                         if !store.machines.contains(where: { $0.status == "online" }) {
                             Text("No machine is online. Start one of your machines, then come back.").font(LBFont.meta).foregroundStyle(LB.warning)
                         }
-                        Toggle("I trust this host and accept shared files, browser logins and CLI credentials", isOn: $consent)
-                        Text("Bots on one OS user are not isolated. Use separate hosts/users for hard isolation.").font(LBFont.meta)
+                        Picker("Access", selection: $access) {
+                            Text("Standard — recommended").tag("standard")
+                            Text("Chat only").tag("none")
+                        }
+                        Text(access == "standard"
+                            ? "Standard gives this Bot access to Terminal and Files (and Browser if supported). It asks before running commands."
+                            : "Chat only gives this Bot conversation without local file, tool or shell access.")
+                            .font(LBFont.meta).foregroundStyle(LB.muted)
                     }
                 }
+                if bot == nil, !machineID.isEmpty {
+                    ModelReadinessView(store: store, machineID: machineID) { ready in
+                        modelReadyOrSkipped = ready
+                    }
+                }
+                if let bot { AgentHandleView(store: store, bot: bot) }
                 SwiftUI.Section("Avatar") {
                     Picker("Character shape", selection: $shape) { Text("Round").tag("round"); Text("Square").tag("square"); Text("Star").tag("star") }
                     Picker("Character color", selection: $color) { ForEach(["yellow", "blue", "green", "purple", "orange", "red"], id: \.self) { value in Text(value.capitalized).tag(value) } }
@@ -116,10 +132,19 @@ struct BotEditorView: View {
                 }
                 ActionErrorView(message: action.error)
                 if let receipt = action.receipt { Text(receipt).font(LBFont.meta) }
-                Button(bot == nil ? "Create Bot" : "Save changes") { Task { await save() } }.disabled(action.busy || name.isEmpty || store.connectionState != "online" || (bot == nil && (machineID.isEmpty || !consent)))
+                if bot == nil {
+                    let machineName = store.machines.first(where: { $0.id == machineID })?.name ?? "this machine"
+                    let botName = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Lemon" : name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    Text(access == "standard"
+                        ? "\(botName) works on \(machineName) as you, with your files, tools and logins. It asks before running commands."
+                        : "\(botName) works on \(machineName) in chat-only mode without file, tool or shell access.")
+                        .font(LBFont.meta).foregroundStyle(LB.muted)
+                }
+                Button(bot == nil ? "Create Bot" : "Save changes") { Task { await save() } }.disabled(action.busy || name.isEmpty || store.connectionState != "online" || (bot == nil && (machineID.isEmpty || !modelReadyOrSkipped)))
                 if store.connectionState != "online" { Text("Reconnect to save changes.").font(LBFont.meta).foregroundStyle(LB.muted) }
                 else if name.isEmpty { Text("Add a name to save.").font(LBFont.meta).foregroundStyle(LB.muted) }
-                else if bot == nil && (machineID.isEmpty || !consent) { Text("Choose an online machine and accept its shared files and logins to create this Bot.").font(LBFont.meta).foregroundStyle(LB.muted) }
+                else if bot == nil && machineID.isEmpty { Text("Choose an online machine to create this Bot.").font(LBFont.meta).foregroundStyle(LB.muted) }
+                else if bot == nil && !modelReadyOrSkipped { Text("Connect a model or skip to create this Bot.").font(LBFont.meta).foregroundStyle(LB.muted) }
             }.formStyle(.grouped).navigationTitle(bot == nil ? "New Bot" : "Edit \(bot!.name)")
                 .toolbar { Button("Cancel") { dismiss() } }
                 .fileImporter(isPresented: $avatarPicker, allowedContentTypes: [.image]) { result in
@@ -127,6 +152,10 @@ struct BotEditorView: View {
                 }
                 .fileImporter(isPresented: $referencePicker, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
                     switch result { case .success(let urls): Task { await uploadReferences(urls) }; case .failure(let error): action.error = String(describing: error) }
+                }
+                // A new machine is a new readiness question; never carry the previous target's answer.
+                .onChange(of: machineID) { _, value in
+                    modelReadyOrSkipped = bot != nil || ModelReadinessSkipStore.isSkipped(workspaceID: store.workspace?.id, machineID: value)
                 }
         }.frame(minWidth: 340, minHeight: 560)
     }
@@ -201,6 +230,7 @@ struct BotEditorView: View {
                 let _: Bot = try await store.mutate("PATCH", resourcePath("bots", bot.id, "/sidebar"), body: ["revision": .number(Double(currentRevision)), "notificationsEnabled": .bool(notify)])
             } else {
                 body["machineId"] = .string(machineID); body["job"] = .string(job); body["instructions"] = .string(instructions); body["voice"] = .object(voice); body["language"] = language.isEmpty ? .null : .string(language)
+                body["access"] = .string(access)
                 result = try await store.mutate("POST", "/bots", body: body)
             }
             try await store.refresh()

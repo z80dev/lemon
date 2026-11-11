@@ -1,9 +1,7 @@
 import type { BackendConfiguration } from '../core/services';
-import { controllerSettings, isLoopback, launcherProcess, readControllerChoice, saveControllerChoice, validateControlUrl, type ControllerChoice, type ControllerSource, type PrivateCodec } from '../core/config';
+import { controllerSettings, isLoopback, readControllerChoice, saveControllerChoice, validateControlUrl, type ControllerChoice, type ControllerSource, type PrivateCodec } from '../core/config';
 import { createLemonService } from '../runtime/lemon';
 import type { ConnectTerminal } from './connect';
-
-const installCommand = 'curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh';
 
 export interface ControllerPreparation {
   terminal: ConnectTerminal;
@@ -15,8 +13,6 @@ export interface ControllerPreparation {
   /** `--choose-lemon`: show the choice even when one is saved. */
   choose: boolean;
   fetch?: typeof fetch;
-  /** Runs the Lemon launcher attached to this terminal; test seam. */
-  launch?: (launcher: string, args: string[]) => Promise<number>;
   /** Checks a remote controller and returns a problem, or null once it accepts the token; test seam. */
   verify?: (controlUrl: string, operatorToken: string, trustedOverlay: boolean) => Promise<string | null>;
 }
@@ -33,10 +29,6 @@ export async function localLemonRunning(controlUrl: string, fetcher: typeof fetc
   } catch { return false; }
 }
 
-async function launchAttached(launcher: string, args: string[]): Promise<number> {
-  return Bun.spawn([launcher, ...args], { ...launcherProcess(launcher), stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' }).exited;
-}
-
 async function verifyController(controlUrl: string, operatorToken: string, trustedOverlay: boolean): Promise<string | null> {
   // A long reconnect delay turns the first failure into a stable answer instead of a retry loop.
   const link = createLemonService({ controlUrl, operatorToken, trustedOverlay }, { reconnectMinMs: 60_000 });
@@ -51,24 +43,6 @@ async function verifyController(controlUrl: string, operatorToken: string, trust
 }
 
 const yes = (answer: string, fallback: boolean) => answer ? ['y', 'yes'].includes(answer.trim().toLowerCase()) : fallback;
-
-async function ensureLocalLemon(input: ControllerPreparation, running: boolean): Promise<void> {
-  const { terminal: io, config } = input;
-  if (running) { io.write(`Using Lemon on this machine (${config.controlUrl}).`); return; }
-  if (!config.runtimeLauncher) {
-    io.write(`Lemon is not installed on this machine. Install it with:\n  ${installCommand}\nLemon Bot connects as soon as Lemon starts.`);
-    return;
-  }
-  if (!yes(await io.read('Lemon is not running on this machine. Start it now? [Y/n] '), true)) {
-    io.write('Lemon Bot connects when Lemon starts: run lemon daemon, or choose Start in the Lemon Bot app.');
-    return;
-  }
-  const launch = input.launch ?? launchAttached;
-  // Like `lemon` itself, a first launch finishes Lemon's own setup in this terminal before booting the daemon.
-  let status = await launch(config.runtimeLauncher, ['setup', '--if-required']);
-  if (status === 0) status = await launch(config.runtimeLauncher, ['daemon']);
-  io.write(status === 0 ? 'Lemon is running on this machine.' : `Lemon did not start (exit ${status}). Lemon Bot keeps retrying; fix the error above, then run lemon daemon.`);
-}
 
 async function askRemote(input: ControllerPreparation): Promise<ControllerChoice | null> {
   const { terminal: io, config } = input;
@@ -90,7 +64,7 @@ async function askRemote(input: ControllerPreparation): Promise<ControllerChoice
 
 /**
  * Interactive startup: choose this machine's Lemon or another machine's, save the choice in private DATA_DIR,
- * and offer to start a stopped local Lemon. Explicit environment settings are never overridden.
+ * without starting processes; `lemon-bot up` owns setup and supervision.
  */
 export async function prepareController(input: ControllerPreparation): Promise<void> {
   const { terminal: io, environment, config, codec, source } = input;
@@ -101,8 +75,7 @@ export async function prepareController(input: ControllerPreparation): Promise<v
   }
   const saved = source === 'saved' ? await readControllerChoice(config.dataDir, codec) : null;
   if (saved && !input.choose) {
-    if (saved.mode === 'local') await ensureLocalLemon(input, await localLemonRunning(config.controlUrl, fetcher));
-    else io.write(`Using Lemon at ${config.controlUrl}.`);
+    io.write(saved.mode === 'local' ? `Using Lemon on this machine (${config.controlUrl}).` : `Using Lemon at ${config.controlUrl}.`);
     io.write('To switch between this machine and another machine, run lemon-bot --choose-lemon.');
     return;
   }
@@ -115,7 +88,6 @@ export async function prepareController(input: ControllerPreparation): Promise<v
     if (answer === '1') {
       await saveControllerChoice(config.dataDir, codec, { mode: 'local' });
       Object.assign(config, local);
-      await ensureLocalLemon(input, running);
       return;
     }
     if (answer === '2') {

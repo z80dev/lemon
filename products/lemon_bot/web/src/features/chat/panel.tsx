@@ -7,6 +7,8 @@ import { BotAvatar, ErrorNotice, LemonFace, useAction, useQuery } from '../../ui
 import { compactDuration, currentStep, humanize, liveRunStatuses, relativeTime, toolIcon } from '../../live';
 import { ConversationDetails } from './details';
 import { TypingDots } from './index';
+import { AgentControls } from '../bots/agents';
+import { machineNeedsReconnect } from '../machines/shared';
 
 export type PanelTab = 'activity' | 'details' | 'library';
 const outcomeLabel: Record<string, string> = { succeeded: 'Finished', failed: 'Couldn’t finish', cancelled: 'Stopped', outcome_unknown: 'Unconfirmed' };
@@ -40,17 +42,19 @@ export function BotPanel({ id, conversation, changed, runs, entries, tab, setTab
   const lastFinished = finished.find(run => run.completedAtMs !== null);
   const steps = entries.filter(entry => entry.kind === 'tool_call' && !!entry.runId && live.some(run => run.id === entry.runId)).slice(-8);
   const tasks = snapshot.conversations.filter(room => room.kind === 'task' && room.parentConversationId === conversation.id).sort((a, b) => b.updatedAtMs - a.updatedAtMs);
+  const reconnectNeeded = machine ? machineNeedsReconnect(machine) : false;
   const status = step?.needsInput || bot?.activity === 'needs_input' ? 'needs_input' : live.length ? 'working' : bot?.activity === 'offline' ? 'offline' : 'idle';
-  const statusLabel: Record<string, string> = { idle: 'Idle', working: 'Working', needs_input: 'Needs you', offline: 'Offline' };
-  const machineMeta = machine ? `${humanize(machine.status)}${machine.lastSeenAtMs ? ` · seen ${relativeTime(machine.lastSeenAtMs)}` : ''}` : 'Assigned machine';
+  const statusLabel: Record<string, string> = { idle: 'Idle', working: 'Working', needs_input: 'Needs you', offline: reconnectNeeded ? 'Needs reconnecting' : 'Offline' };
+  const machineMeta = machine ? `${reconnectNeeded ? 'Needs reconnecting' : humanize(machine.status)}${machine.lastSeenAtMs ? ` · seen ${relativeTime(machine.lastSeenAtMs)}` : ''}` : 'Assigned machine';
   const name = conversation.kind === 'dm' && bot ? bot.name : conversation.name;
   return <aside className="chat-panel" id={id} aria-label="Bot details and activity">
     <button className="ghost-circle panel-close" aria-label="Close details" onClick={() => setTab(null)}><X size={16}/></button>
     <div className="panel-hero">
       {bot ? <BotAvatar bot={bot} size={72} presence={online}/> : <LemonFace size={72}/>}
       <h2>{name}</h2>
+      {bot?.agentHandle && <p>@{bot.agentHandle}</p>}
       {bot && (bot.title ? <p className="muted">{bot.title}</p> : <button className="add-label" onClick={() => navigate({ screen: 'bot.edit', id: bot.id, botId: bot.id })}>Add a label</button>)}
-      {bot && <div className="status-chips"><span className="chip"><span className={`status-dot ${status}`} aria-hidden="true"/>{statusLabel[status]}</span>{machine && <span className="chip"><span className={`status-dot ${machine.status === 'online' ? 'idle' : 'offline'}`} aria-hidden="true"/>{machine.name}</span>}</div>}
+      {bot && <div className="status-chips"><span className="chip"><span className={`status-dot ${status}`} aria-hidden="true"/>{statusLabel[status]}</span>{machine && <span className="chip"><span className={`status-dot ${machine.status === 'online' ? 'idle' : reconnectNeeded ? 'needs_input' : 'offline'}`} aria-hidden="true"/>{machine.name}</span>}</div>}
     </div>
     <div className="segmented sliding" role="tablist" aria-label="Inspector sections" style={{ ['--tab-index' as string]: ['activity', 'details', 'library'].indexOf(tab) }}>
       <span className="segmented-thumb" aria-hidden="true"/>
@@ -63,7 +67,7 @@ export function BotPanel({ id, conversation, changed, runs, entries, tab, setTab
           {step ? <>
             <div className="now-step">{step.needsInput ? <Hand size={16} className="warning-text" aria-hidden="true"/> : (() => { const Icon = toolIcon(step.tool || ''); return <Icon size={16} aria-hidden="true"/>; })()}<span>{step.title}</span>{step.sinceMs !== undefined && <small>{compactDuration(step.sinceMs)}</small>}</div>
             {steps.length > 0 && <ol className="step-rows">{steps.map(entry => { if (entry.kind !== 'tool_call') return null; const Icon = toolIcon(entry.tool); return <li key={entry.id}><details><summary><Icon size={14} aria-hidden="true"/><span className="step-text"><span>{entry.title || humanize(entry.tool)}</span>{entry.detail && <small>{entry.detail.split('\n')[0]}</small>}</span>{entry.status === 'started' ? <TypingDots/> : entry.status === 'failed' ? <X size={13} className="danger-text" aria-label="Failed"/> : <Check size={13} className="faint" aria-label="Done"/>}</summary><pre>{entry.tool}{entry.detail ? `\n${entry.detail}` : ''}</pre></details></li>; })}</ol>}
-          </> : <><p className="now-idle">{status === 'offline' ? 'Offline — its machine isn’t reachable' : 'Idle — nothing running'}</p>{lastFinished && <small className="faint">Last finished {relativeTime(lastFinished.completedAtMs ?? lastFinished.updatedAtMs)}</small>}</>}
+          </> : <><p className="now-idle">{status === 'offline' ? (reconnectNeeded ? 'Offline — its machine needs reconnecting' : 'Offline — its machine isn’t reachable') : 'Idle — nothing running'}</p>{lastFinished && <small className="faint">Last finished {relativeTime(lastFinished.completedAtMs ?? lastFinished.updatedAtMs)}</small>}</>}
         </section>
         {bot && <Row icon={Monitor} title={machine?.name || 'Machine'} meta={machineMeta} onClick={() => navigate({ screen: 'machine.detail', id: bot.machineId, botId: bot.id })}/>}
         <section className="panel-section"><h3>Recent runs</h3>
@@ -87,6 +91,7 @@ export function BotPanel({ id, conversation, changed, runs, entries, tab, setTab
       </>}
       {tab === 'details' && <>
         {bot && <>
+          <AgentControls bot={bot} conversationId={conversation.id} />
           <section className="panel-section"><h3>Persona</h3>
             <Row icon={Pencil} title="Instructions" meta={bot.instructions ? <span className="clamp-2">{bot.instructions}</span> : 'None yet'} onClick={() => navigate({ screen: 'bot.edit', id: bot.id, botId: bot.id })}/>
             <Row icon={Sparkles} title="Skills" meta={`${bot.skillIds.length} enabled`} onClick={() => navigate({ screen: 'skills', botId: bot.id })}/>

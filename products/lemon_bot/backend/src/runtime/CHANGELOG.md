@@ -1,5 +1,18 @@
 # Runtime changes
 
+## 2026-11-11
+- Re-read reconciliation candidates after earlier receipt waits so a completed run cannot be restored to an uncertain reserved-submission state.
+- Web and Apple idle reconciliation includes uncertain outcomes; delayed web reads cannot restore completed runs, and Apple retries final-entry reads independently after run completion.
+- Approval presentation preserves command line boundaries and marks shortened
+  headlines and escaped invisible Unicode controls. The full reviewable proposal
+  remains available to clients; commands that cannot be fully shown fail closed.
+
+## 2026-11-10
+- Preserve realtime sequence order through reply/status fan-out and close terminal-run streaming messages (including legacy rows), so completed replies no longer leave Bots stuck on “Thinking” or “Writing a reply”.
+- Reconciliation retains streaming entry identities and delta progress and skips locally in-flight submissions, preventing duplicate final replies and false uncertain-submission states without deleting transcript history.
+- Return and publish effective grant projections only after destination policy acknowledgment and a fresh capability measurement.
+- Lead runtime approvals with a bounded redacted action and tool/machine provenance on web and Apple clients; keep technical context in Details and replace resolved decision buttons with an attributed result. Approval scopes and input redaction are unchanged.
+
 ## 2026-10-14
 - Cut runtime fixtures and fresh native-F admission over to one actual human owner: source/parent/helper Bots and execution hosts must match that owner even under legacy ACLs or cached receipts. Preserve six-field fresh proofs, fixed-ID no-replay behavior and restrictive owner-native policy floors; reject foreign roles/proofs without replacing the actor. Use canonical owner-only resources and stable assigned-profile memory identity, not removed Team sharing, consent or per-user note fields.
 - Select the exact native Run owner before control aliases when projecting steering/interruption targets and approvals; equal timestamps or alias ordering cannot redirect receipts to the new control request.

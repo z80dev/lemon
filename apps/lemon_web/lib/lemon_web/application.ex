@@ -5,6 +5,15 @@ defmodule LemonWeb.Application do
 
   @impl true
   def start(_type, _args) do
+    endpoint = Application.get_env(:lemon_web, LemonWeb.Endpoint, [])
+    ip = endpoint |> Keyword.get(:http, []) |> Keyword.get(:ip, {127, 0, 0, 1})
+
+    with :ok <- LemonControlPlane.ListenerPolicy.validate_operator_bind(ip, "LemonWeb") do
+      start_supervisor()
+    end
+  end
+
+  defp start_supervisor do
     # Global run start/stop feed for shell notifications (idempotent).
     LemonWeb.ShellLive.RunEvents.attach()
 

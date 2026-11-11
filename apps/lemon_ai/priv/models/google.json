@@ -126,8 +126,8 @@
       "cache_read": 0,
       "cache_write": 0
     },
-    "context_window": 131072,
-    "max_tokens": 65536,
+    "context_window": 128000,
+    "max_tokens": 64000,
     "adaptive_thinking": false,
     "reasoning_efforts": []
   },
@@ -559,6 +559,7 @@
     "adaptive_thinking": false,
     "reasoning_efforts": [
       "low",
+      "medium",
       "high"
     ]
   },
@@ -584,6 +585,7 @@
     "adaptive_thinking": false,
     "reasoning_efforts": [
       "low",
+      "medium",
       "high"
     ]
   },
@@ -599,9 +601,9 @@
     "provider": "google",
     "base_url": "https://generativelanguage.googleapis.com/v1beta",
     "cost": {
-      "input": 1.5,
-      "output": 9,
-      "cache_read": 0.15,
+      "input": 0.75,
+      "output": 3.75,
+      "cache_read": 0.075,
       "cache_write": 0
     },
     "context_window": 1048576,
@@ -715,7 +717,32 @@
     "max_tokens": 65536,
     "adaptive_thinking": false,
     "reasoning_efforts": [
-      "minimal",
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "gemini-4-argon": {
+    "id": "gemini-4-argon",
+    "name": "Gemini 4 Argon",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "api": "google_generative_ai",
+    "provider": "google",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta",
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 0
+    },
+    "context_window": 1048576,
+    "max_tokens": 65536,
+    "adaptive_thinking": false,
+    "reasoning_efforts": [
       "low",
       "medium",
       "high"
@@ -741,7 +768,11 @@
     "context_window": 1048576,
     "max_tokens": 65536,
     "adaptive_thinking": false,
-    "reasoning_efforts": []
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ]
   },
   "gemini-flash-lite-latest": {
     "id": "gemini-flash-lite-latest",
@@ -763,7 +794,38 @@
     "context_window": 1048576,
     "max_tokens": 65536,
     "adaptive_thinking": false,
-    "reasoning_efforts": []
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "gemini-pro-latest": {
+    "id": "gemini-pro-latest",
+    "name": "Gemini Pro Latest",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "api": "google_generative_ai",
+    "provider": "google",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta",
+    "cost": {
+      "input": 2,
+      "output": 12,
+      "cache_read": 0.2,
+      "cache_write": 0
+    },
+    "context_window": 1048576,
+    "max_tokens": 65536,
+    "adaptive_thinking": false,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ]
   },
   "gemini-robotics-er-1.6-preview": {
     "id": "gemini-robotics-er-1.6-preview",
@@ -962,5 +1024,18 @@
     "max_tokens": 8192,
     "adaptive_thinking": false,
     "reasoning_efforts": []
+  },
+  "gemini-robotics-er-2-preview": {
+    "id": "gemini-robotics-er-2-preview",
+    "name": "Gemini Robotics-ER 2 Preview",
+    "api": "google_generative_ai",
+    "provider": "google",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta",
+    "reasoning": true,
+    "reasoning_efforts": ["minimal", "low", "medium", "high"],
+    "input": ["text", "image"],
+    "cost": {"input": 1, "output": 5, "cache_read": 0.1, "cache_write": 0},
+    "context_window": 131072,
+    "max_tokens": 65536
   }
 }

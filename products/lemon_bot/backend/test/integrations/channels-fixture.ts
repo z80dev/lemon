@@ -8,6 +8,7 @@ import type { AccessService, BackendServices, EntityStore, GateService, HttpClie
 import { createAccessService } from '../../src/core/auth';
 import { createGateService } from '../../src/core/gates';
 import { revokeConnectorInvocations } from '../../src/runtime/runs';
+import { createAddressedAgentService } from '../../src/core/agent-addressing';
 import { z } from 'zod';
 import { IntegrationError } from '../../src/integrations/common';
 interface FixtureGateService extends GateService { close(): void }
@@ -42,6 +43,7 @@ export function fixture(store = entityStore(), principal: Principal = { kind: 'u
   const denied = (): never => { throw new Error('Unexpected channel fixture boundary.'); };
   let access: AccessService | undefined;
   let gates: FixtureGateService | undefined;
+  let addressedAgents: BackendServices['addressedAgents'] | undefined;
   const services: BackendServices = {
     config: { publicUrl: 'https://product.example', controlUrl: 'wss://controller.example/ws', operatorToken: 'test-only', dataDir: '/test', host: '127.0.0.1', port: 4080, trustedOverlay: false, operator: { version: 1, trustedFrontendOrigins: [], oauthRedirectUris: ['https://product.example/return'], serverSecrets: {}, channelProviders: [], emailProviders: [], eventProviders: [], hostDrivers: [], xProvider: null, exportAllowedOrigins: [], requiredRuntimeDestinations: [], breakGlassOwnerUserId: null, xPublicAccountSecretRef: 'public' } },
     store,
@@ -65,6 +67,7 @@ export function fixture(store = entityStore(), principal: Principal = { kind: 'u
     },
     mutations: { execute: async (_context, operation) => operation(), checkRevision(resource, revision) { if (resource.revision !== revision) throw new IntegrationError('revision_conflict', 'Changed.'); }, preview: denied, confirm: denied, digest: value => createHash('sha256').update(JSON.stringify(value)).digest('base64url') },
     lemon: { controller: { url: 'ws://127.0.0.1:4040/ws', state: 'connected', connectedAtMs: 1, lastDisconnectedAtMs: null, lastError: null, nextRetryAtMs: null, methodCount: 0 }, reconnect() {}, connected: true, methods: [], call: async () => denied(), onEvent: () => () => undefined, onConnected: () => () => undefined, start() {}, close() {} },
+    get addressedAgents() { return addressedAgents ??= createAddressedAgentService(services); },
     runtime: {
       async submit(who, conversation, selectedBot, message) {
         submissions.push({ principal: who, conversationId: conversation.id, message });
@@ -96,7 +99,7 @@ export function fixture(store = entityStore(), principal: Principal = { kind: 'u
       }
       return gates;
     },
-    integrations: { admission: async () => undefined, effectivePolicy: async who => ({ userId: who.userId, botId: null, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, rules: [], networkPolicies: [], explanations: [] }), connectorConfig: async () => [], sendApprovedDraft: async () => denied(), emitProviderNotifications: async () => undefined, channelIngress: async () => denied(), providerCapabilities: () => ({}) },
+    integrations: { admission: async () => undefined, effectivePolicy: async who => ({ userId: who.userId, botId: null, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, workspaceReads: 'allow', rules: [], networkPolicies: [], explanations: [] }), connectorConfig: async () => [], sendApprovedDraft: async () => denied(), emitProviderNotifications: async () => undefined, channelIngress: async () => denied(), providerCapabilities: () => ({}) },
     id: prefix => `${prefix ?? 'id'}_${++serial}`, now: () => clock,
     resource: (prefix, fields) => ({ ...fields, id: `${prefix}_${++serial}`, revision: 1, createdAtMs: clock, updatedAtMs: clock }),
     update: (resource, changes) => ({ ...resource, ...changes, revision: resource.revision + 1, updatedAtMs: clock }),
@@ -149,7 +152,7 @@ export function fixture(store = entityStore(), principal: Principal = { kind: 'u
   store.put('machines', { ...services.resource('machine', { name: 'Test machine', nodeName: 'test', nodeId: 'node_test', ownerUserId: principal.userId, accessUserIds: [], status: 'online', lastSeenAtMs: clock, labels: {}, botIds: [bot.id] }), id: bot.machineId } satisfies P.Machine);
   const conversation: P.Conversation = { ...services.resource('conversation', { kind: 'dm' as const, name: 'Main', botIds: [bot.id], ownerUserId: principal.userId, parentConversationId: null, leadBotId: bot.id, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] }), id: bot.mainConversationId }; store.put('conversations', conversation);
   store.setMetadata('governance', { revision: 1, allowedChannelAdapters: ['slack', 'email', 'discord', 'telegram', 'whatsapp'], emailEnabled: true, xMentionsEnabled: true }); store.setMetadata('workspaceId', principal.workspaceId);
-  fixtureClosers.set(services, () => { gates?.close(); store.db.close(); });
+  fixtureClosers.set(services, () => { addressedAgents?.close(); gates?.close(); store.db.close(); });
   return { services, principal, bot, submissions, emitted, setClock(value: number) { clock = value; }, secrets };
 }
 export function additionalOwner(services: BackendServices, source: P.Bot, userId = 'user_b', role: P.Role = 'admin'): { principal: Principal; bot: P.Bot } {

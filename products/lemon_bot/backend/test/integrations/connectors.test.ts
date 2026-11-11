@@ -28,17 +28,21 @@ type Server = z.infer<typeof serverSchema>;
 const profileSchema = z.object({ id: z.string(), name: z.string(), description: z.string(), systemPrompt: z.string(), toolPolicy: z.record(z.string(), z.json()), mcpServers: z.array(serverSchema) }).strict();
 type Profile = z.infer<typeof profileSchema>;
 
-// Authenticated native mcp.execution_names capture for lemon-bot at
-// https://product.example/mcp; aliases are opaque response data, never recomputed.
-const productToolNames = ['message_bot', 'handoff', 'create_draft', 'ask_user', 'request_approval', 'request_human_step', 'request_secret', 'send_voice_memo', 'share_file', 'create_routine', 'update_routine', 'save_skill', 'list_bots', 'post_to_group', 'remember', 'create_bot', 'update_preferences', 'create_reminder'] as const;
+// Existing native aliases are retained from the authenticated capture for https://product.example/mcp;
+// addressed tool aliases are deterministic fixture values and remain opaque response data.
+const productToolNames = ['message_bot', 'handoff', 'list_agents', 'rename_agent', 'message_agent', 'create_draft', 'ask_user', 'request_approval', 'request_access', 'request_human_step', 'request_secret', 'send_voice_memo', 'share_file', 'create_routine', 'update_routine', 'save_skill', 'list_bots', 'post_to_group', 'remember', 'create_bot', 'update_preferences', 'create_reminder'] as const;
 const productExecutionProjection = {
   server: { name: 'lemon-bot' },
   tools: [
     { name: 'message_bot', executionName: 'mcp_lemon_bot_message_bot_e27f8366c893fc7d4ace784f51ce12a1' },
     { name: 'handoff', executionName: 'mcp_lemon_bot_handoff_9f74e5f82ed019f6a9084a1daa468386' },
+    { name: 'list_agents', executionName: 'mcp_lemon_bot_list_agents_fixture' },
+    { name: 'rename_agent', executionName: 'mcp_lemon_bot_rename_agent_fixture' },
+    { name: 'message_agent', executionName: 'mcp_lemon_bot_message_agent_fixture' },
     { name: 'create_draft', executionName: 'mcp_lemon_bot_create_draft_6e65809e9170b8c9b3cb0da09b714275' },
     { name: 'ask_user', executionName: 'mcp_lemon_bot_ask_user_10d4fd7a91be9332225ab7a9f47f9f2f' },
     { name: 'request_approval', executionName: 'mcp_lemon_bot_request_approval_ca54a9645adf9ba042f0e53146a13ee0' },
+    { name: 'request_access', executionName: 'mcp_lemon_bot_request_access_fixture' },
     { name: 'request_human_step', executionName: 'mcp_lemon_bot_request_human_ste_688cee41cf6bff126499b440c3a8624c' },
     { name: 'request_secret', executionName: 'mcp_lemon_bot_request_secret_c5d5dd62ffb1c7cd4ebdaf58ee1da740' },
     { name: 'send_voice_memo', executionName: 'mcp_lemon_bot_send_voice_memo_94b772ea7c8f891201c61ad1c1a26482' },
@@ -111,8 +115,10 @@ class DestinationPeer implements LemonService {
         result = { nodeId: input.nodeId, protocol: 1, lemonVersion: 'fixture', methods: this.methods, features: { hostIO: true, filesystemCAS: true, deletePreviews: true, encryptedSecrets: true, ptyShell: true, mcpDiscovery: true, profileSync: true, liveStreaming: true, repairInvites: true, nativeExecutionPolicy: true }, botReady: true, missingFeatures: [], nativePrivacyContext: { version: 1 } }; break;
       }
       case 'mcp.execution_names': {
-        z.object({ server: z.object({ name: z.literal('lemon-bot'), url: z.literal(`${PUBLIC_URL}/mcp`) }).strict(), toolNames: z.array(z.enum(productToolNames)).refine(names => names.length === productToolNames.length && names.every((name, index) => name === productToolNames[index])) }).strict().parse(params);
-        result = structuredClone(productExecutionProjection); break;
+        const input = z.object({ server: z.object({ name: z.literal('lemon-bot'), url: z.literal(`${PUBLIC_URL}/mcp`) }).strict(), toolNames: z.array(z.enum(productToolNames)).min(1).max(productToolNames.length).refine(names => new Set(names).size === names.length) }).strict().parse(params);
+        const requested = new Set<string>(input.toolNames);
+        const tools = productExecutionProjection.tools.filter(tool => requested.has(tool.name));
+        result = structuredClone({ server: productExecutionProjection.server, tools, count: tools.length }); break;
       }
       case 'profile.followup.admission.set': {
         const input = z.object({ profileId: z.literal('lb-fixture'), url: z.literal(`${PUBLIC_URL}/internal/runtime/followup/admission`), token: z.string().min(32) }).strict().parse(params);
@@ -263,6 +269,12 @@ async function fixture() {
     notify: unexpectedBoundary('helpers.notify before installation'),
     invoke: unexpectedBoundary('router.invoke before installation'),
     syncBotProfile: (actor, botId) => syncBotProfile(services, actor, botId),
+    addressedAgents: {
+      identity: unexpectedBoundary('addressedAgents.identity'), rename: unexpectedBoundary('addressedAgents.rename'), list: unexpectedBoundary('addressedAgents.list'),
+      send: unexpectedBoundary('addressedAgents.send'), status: unexpectedBoundary('addressedAgents.status'), command: unexpectedBoundary('addressedAgents.command'),
+      authorizeReplay: unexpectedBoundary('addressedAgents.authorizeReplay'), registerBot: unexpectedBoundary('addressedAgents.registerBot'), unregisterBot: unexpectedBoundary('addressedAgents.unregisterBot'),
+      registerAll: unexpectedBoundary('addressedAgents.registerAll'), reconcile: unexpectedBoundary('addressedAgents.reconcile'), close: unexpectedBoundary('addressedAgents.close'),
+    },
   };
   installHelpers(services);
   services.id = (prefix = 'id') => `${prefix}_${String(++serial).padStart(24, '0')}`;
@@ -315,6 +327,17 @@ async function fixture() {
 }
 
 describe('destination connector configuration', () => {
+  test('placement reconciliation clears any pending connector grant change', async () => {
+    const f = await fixture(), created = await f.create();
+    const connector = created.body.connector;
+    const grant = f.connectors.grantFor(connector)!;
+    f.store.put('botGrants', f.services.update(grant, { pendingLevel: 'read_only' }));
+    const moved = { ...f.bot, machineId: 'new-machine' };
+    f.store.put('bots', moved);
+    f.connectors.reconcilePlacement(moved);
+    expect(f.store.require<P.BotGrant>('botGrants', grant.id)).toMatchObject({ pendingLevel: null, effectiveLevel: 'off' });
+    expect(f.store.require<P.Connector>('connectors', connector.id).state).toBe('disconnected');
+  });
   test('discovers on the actual destination, keeps values out of resources/events/profile, defaults tools disabled', async () => {
     const f = await fixture();
     const result = await f.create();
@@ -323,6 +346,8 @@ describe('destination connector configuration', () => {
     expect(result.body.secretNames).toEqual(['RECORDS_TOKEN']);
     expect(result.body.connector.tools).toEqual([{ name: 'read_items', enabled: false }, { name: 'write_item', enabled: false }]);
     expect(result.body.grants[0]?.effectiveLevel).toBe('read_interact');
+    expect(result.body.grants[0]?.pendingLevel).toBeNull();
+    expect(f.store.list<P.BotGrant>('botGrants', grant => grant.botId === f.bot.id).every(grant => grant.pendingLevel === null)).toBe(true);
     const discovery = f.peer.calls.find(call => call.method === 'node.mcp.discover')!;
     expect(discovery.params.nodeId).toBe('node-1');
     expect(serverSchema.parse(discovery.params.server).headers.Authorization).toBe('Bearer ${LEMON_SECRET:RECORDS_TOKEN}');

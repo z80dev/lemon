@@ -73,6 +73,14 @@ defmodule LemonCore.Config.LegacyAgentMigrationTest do
   end
 
   describe "migrate_content/1" do
+    test "long quoted dotted keys migrate without overlapping regex alternatives" do
+      key = Enum.map_join(1..100, ".", fn _ -> ~s("a") end)
+      content = "[agent]\n" <> key <> " = true\n"
+      assert {:ok, migrated, _} = LegacyAgentMigration.migrate_content(content)
+      assert {:ok, decoded} = Toml.decode(migrated)
+      assert decoded["runtime"] == elem(Toml.decode(content), 1)["agent"]
+    end
+
     test "rewrites the TUI-written file to the current schema" do
       assert {:ok, migrated, changes} = LegacyAgentMigration.migrate_content(@tui_written)
 

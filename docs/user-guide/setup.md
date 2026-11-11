@@ -24,11 +24,52 @@ after Web health is confirmed. Installer flags, platform support, containers and
 source installs are in the [Install guide](../install.md); updating is in
 [Update, roll back, and uninstall](updates.md).
 
+For the native Mac app or the separate Lemon Bot browser product, follow
+[Lemon Bot in 3 minutes](../getting-started/lemon-bot.md). Its `bot` install
+preset installs the runtime and backend together; it is not `lemon web`.
+
 Setup writes to `~/.lemon`: `config.toml` for configuration, the encrypted
 secrets store for credentials (its master key is kept in the macOS Keychain
 entry **Lemon Secrets** or, when file-backed, `~/.lemon/secrets_master_key`),
 and the durable store under `~/.lemon/store`. See [Configuration](../config.md)
 for the file format.
+
+## Run Lemon as a service
+
+After setup, use the same lifecycle command on macOS and Linux:
+
+```bash
+lemon service install controller
+lemon service install backend --bot "$HOME/.local/bin/lemon-bot"
+lemon service status --json
+lemon service repair
+```
+
+For the combined Bot install, `lemon-bot up` configures these services and enrolls
+this computer without copying an invite. The runtime command also supports
+`worker --name NAME` and the reserved per-machine `tunnel` role.
+
+macOS LaunchAgents start when you log in; a GUI login session is required.
+Linux user services run while you are logged in unless linger is enabled:
+`lemon service repair --enable-linger`. Lemon never invokes sudo; if polkit
+refuses, it prints the exact administrator command. `--manual` and hosts without
+a user service manager run without reboot/logout persistence.
+
+`lemon stop` deliberately keeps the controller down. `lemon daemon` and
+`lemon restart` hand off to its manager when installed. `lemon service repair`
+starts stopped units and checks actual application health and process identity.
+Controller readiness defaults to 120 seconds; backend and worker readiness to
+60 seconds. Use `--wait 0` to install without waiting.
+
+Units use stable launchers and never store invite codes or operator/encryption
+secrets. Existing Lemon worker agents are adopted under the same name. A
+verified detached controller/backend can be taken over once, with brief downtime;
+foreign or unverified processes are never killed.
+
+`lemon service uninstall ROLE...` removes only the units and keeps data and
+credentials. Remove a worker's machine entry in Lemon Bot separately to revoke
+its access. Full removal uses the preview-and-confirm
+[`lemon uninstall`](updates.md) command.
 
 ## What setup does—and does not do
 
@@ -44,8 +85,8 @@ re-checks the saved state, performs pending work, and re-verifies an existing pr
 5. checks the ports the runtime will use and, only if one is taken by another
    program, offers a free one (see [Runtime profile and ports](#runtime-profile-and-ports));
    and
-6. shows a first prompt and success check, then offers to open Lemon in an
-   interactive terminal after a passing live check.
+6. reports whether the model is verified or saved, and offers to open Lemon in
+   an interactive terminal unless you explicitly deferred verification.
 
 Setup does not ask about the runtime profile or import Hermes data. The
 installer installs the full runtime (`--profile min` selects the minimal one).
@@ -55,10 +96,19 @@ read, including on errors or closed input. Without an interactive terminal, setu
 fails before prompting. Use `lemon setup --non-interactive` to prepare config and
 secrets, then a flag-driven provider command as shown below.
 
-Declining provider onboarding leaves **pending steps**, not a failed step. The
-wizard only prints **Setup complete** after a passing live credential check.
-When the check is skipped or unsupported, it explicitly says the provider was
-not live-verified; local configuration can still be saved successfully.
+Declining provider onboarding leaves **pending steps**, not a failed step.
+With a configured model, the wizard prints **Setup complete** with one of:
+
+- **verified with …; no message was sent**: a non-generating check passed;
+- **saved; Lemon checks it on your first message**: credentials resolve, but a
+  quick check is unavailable, unreachable, or failed for a non-authentication
+  reason;
+- **saved; live check skipped by --skip-verify**: you explicitly deferred it.
+
+The first two offer **Open Lemon now? [Y/n]**; the explicitly skipped check does
+not. Missing, expired or rejected credentials and unavailable model selections
+need action, not a success claim. The Bot bootstrap uses `--model-optional`, so
+you can defer the model to the browser; a Bot still cannot reply until it has one.
 
 The finish screen reuses the README's first coding task. Success means a reply
 arrives and `lemon doctor` shows no **FAIL**. Get one conversation working before
@@ -123,6 +173,12 @@ For a provider setup that includes the live credential check, use:
 
 ```bash
 lemon setup provider
+# Or to run the standalone model connection step:
+lemon setup model
+# Check readiness without prompts (may contact the provider; sends no message):
+lemon setup model --json
+# Inspect saved readiness without contacting the provider:
+lemon setup model --json --offline
 ```
 
 The live check is deferred with `--skip-verify`, which is useful when you are
@@ -137,9 +193,9 @@ The full wizard always selects a default provider/model; `setup provider`
 accepts `--set-default` to request this explicitly; it appears in
 `lemon setup --help`.
 
-If a provider verification fails, setup remains incomplete. Correct the
-credential or model and rerun `lemon setup provider`; do not expect a failed
-verification to be treated as a working setup.
+An authentication or model-selection failure leaves setup incomplete. Correct
+the credential or model and rerun `lemon setup model`. A **saved** result is
+not proof of a successful live request; confirm it with your first conversation.
 
 Native model IDs retain their colons: with `defaults.provider = "ollama"`,
 both `qwen3:32b` and `ollama:qwen3:32b` select model `qwen3:32b`.
@@ -225,9 +281,11 @@ overrides elsewhere use the `provider:model` form.
 
 The installer picks the profile: full by default, minimal with
 `sh install.sh --profile min`. Setup never asks about ports unless one is
-taken. The full runtime uses 4040 (control plane) and 4080 (web UI); the
-minimal runtime uses only 4040. If another program already listens on one of
-them, setup offers the next free port (`Use 4041 instead? [Y/n]`). Declining
+taken. Default listeners bind `127.0.0.1`: 4040 (control plane), 4044
+(node-only gateway), 4080 (full runtime web UI), and 4100 (separately installed
+Lemon Bot backend). The minimal runtime has no web UI. If another program
+already listens on a setup-managed port, setup offers the next free port
+(`Use 4041 instead? [Y/n]`). Declining
 lets you enter a port; non-interactive setup takes the suggestion
 automatically. Ports held by an already running Lemon are left alone.
 
@@ -264,7 +322,7 @@ automatically for an existing config.
 
 `lemon doctor` reports diagnostics; it is not a replacement for provider
 onboarding. To retry first-time state, use `lemon setup`. To correct a provider
-or model, use `lemon setup provider` or `lemon model`.
+or model, use `lemon setup model`, `lemon setup provider`, or `lemon model`.
 
 ## Optional Telegram or Discord
 
@@ -359,8 +417,8 @@ are unchanged.
 ## Source development
 
 A source checkout is for development, unsupported platforms, and release work.
-Only this path needs the development toolchain (Elixir 1.19.5+, Erlang/OTP
-28.5+, Bun 1.3.14+, and Node.js 24 LTS+ for the web client); see
+Only this path needs the development toolchain (Elixir 1.20.5+, Erlang/OTP
+29.1.2+, Bun 1.3.14+, and Node.js 24 LTS+ for the web client); see
 [Install: source development](../install.md#source-development).
 
 ```bash
@@ -408,7 +466,7 @@ Start `./bin/lemon daemon` separately when the runtime should outlive the TUI.
 | Symptom | What to do |
 | --- | --- |
 | Setup exits before prompting | It needs an interactive terminal. In scripts, use `lemon setup --non-interactive` and then `lemon model --non-interactive ...` ([headless configuration](#automated-or-headless-configuration)). |
-| Provider verification failed | Setup stays incomplete. Fix the credential or model, rerun `lemon setup provider`, or defer the live check with `--skip-verify` when offline. |
+| Model needs action | Fix a missing/rejected credential or model selection and rerun `lemon setup model`. A saved but unverified connection is not a passed live check; use `lemon setup model --json` to check again. |
 | Not sure what is configured | `lemon config validate`, `lemon secrets status`, `lemon providers status`. |
 | Revoked key or connectivity problem | `lemon doctor --live --verbose` makes bounded, non-generating requests. |
 | First `lemon` launch asks for setup again | An interrupted provider setup is offered again on the next interactive launch; finish it with `lemon setup`. |

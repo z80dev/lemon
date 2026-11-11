@@ -261,6 +261,21 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
     assert secret["account_id"] == "acc_auto"
   end
 
+  test "detects usable CLI logins without returning tokens or making requests", %{home: home} do
+    Req.Test.stub(__MODULE__, fn _ -> flunk("detection must not call HTTP") end)
+    path = Path.join(home, "detected.json")
+    assert OpenAICodexOAuth.codex_cli_login_status(path: path) == :absent
+    original = write_cli_login(path, cli_login(-60))
+    assert OpenAICodexOAuth.codex_cli_login_status(path: path) == :present
+    assert File.read!(path) == original
+    write_cli_login(path, %{"OPENAI_API_KEY" => "synthetic-key"})
+    assert OpenAICodexOAuth.codex_cli_login_status(path: path) == {:unusable, :not_chatgpt_oauth}
+    File.write!(path, "invalid")
+
+    assert OpenAICodexOAuth.codex_cli_login_status(path: path) ==
+             {:unusable, :invalid_codex_cli_login}
+  end
+
   test "imports only the selected synthetic CLI copy without HTTP or writes", %{home: home} do
     Req.Test.stub(__MODULE__, fn _ -> flunk("import must not call HTTP") end)
     path = Path.join([home, ".codex", "auth.json"])
@@ -307,6 +322,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
     for {login, reason} <- cases do
       original = write_cli_login(path, login)
       assert OpenAICodexOAuth.import_codex_cli_login(path: path) == {:error, reason}
+      assert OpenAICodexOAuth.codex_cli_login_status(path: path) == {:unusable, reason}
       assert File.read!(path) == original
     end
 

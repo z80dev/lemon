@@ -44,8 +44,10 @@ const controller: ProviderManagement = {
     { id: 'anthropic', displayName: 'Anthropic', methods: ['api_key'], configured: false, status: 'needs_login', lastValidation: null, environmentOverrides: [], configurationOverrides: [] },
     { id: 'openai_codex', displayName: 'ChatGPT / Codex', methods: ['device_code'], configured: true, status: 'expired', lastValidation: { kind: 'resolver', ready: false, atMs: 1000 }, environmentOverrides: ['OPENAI_API_KEY'], configurationOverrides: ['credential_pool', 'project_configuration'] },
   ],
+  readiness: null,
+  detected: [],
 };
-const worker: ProviderManagement = { ...controller, target: { id: 'worker-target', nodeId: 'worker-node', hostname: 'worker.test' } };
+const worker: ProviderManagement = { ...controller, target: { id: 'worker-target', nodeId: 'worker-node', hostname: 'worker.test' }, readiness: null, detected: [] };
 const ownedMachine = { id: 'machine', name: 'My worker', ownerUserId: 'owner', nodeId: 'worker-node', status: 'online' };
 function pending(request: MockRequest): ProviderDeviceLogin {
   const loginId = request.path.includes('/device-login/') ? request.path.split('/device-login/')[1]!.split('/')[0]! : request.body.clientNonce!;
@@ -58,6 +60,39 @@ function defaultResponse(request: MockRequest): unknown {
   if (request.path === '/machines') return { items: [ownedMachine, { ...ownedMachine, id: 'foreign', ownerUserId: 'someone-else', name: 'Not mine' }], nextCursor: null };
   if (request.path === '/auth/sessions') return { items: [{ id: 'current-session', current: true }], nextCursor: null };
   if (request.path.includes('/device-login')) return request.path.endsWith('/cancel') ? terminal(request, 'cancelled') : pending(request);
+  if (request.path.endsWith('/check')) {
+    const base = request.path.startsWith('/machines/machine/providers') ? worker : controller;
+    const verified = {
+      ...structuredClone(base),
+      readiness: {
+        state: 'verified' as const,
+        providerId: request.body.providerId || 'openai_codex',
+        modelId: 'gpt-6.1-sol',
+        check: 'codex_discovery' as const,
+        reason: null,
+        availableModelIds: ['gpt-6.1-sol'],
+        suggestedModelId: 'gpt-6.1-sol',
+        checkedAtMs: 1731283200000,
+      },
+    };
+    return { management: verified, readiness: verified.readiness };
+  }
+  if (request.path.endsWith('/import')) {
+    const base = request.path.startsWith('/machines/machine/providers') ? worker : controller;
+    return {
+      ...structuredClone(base),
+      readiness: {
+        state: 'verified' as const,
+        providerId: 'openai_codex',
+        modelId: 'gpt-6.1-sol',
+        check: 'codex_discovery' as const,
+        reason: null,
+        availableModelIds: ['gpt-6.1-sol'],
+        suggestedModelId: 'gpt-6.1-sol',
+        checkedAtMs: 1731283200000,
+      },
+    };
+  }
   if (request.path.startsWith('/machines/machine/providers')) return structuredClone(worker);
   if (request.path.startsWith('/instance/providers')) return structuredClone(controller);
   throw new Error(`Unexpected mock request: ${request.method} ${request.path}`);
@@ -309,6 +344,8 @@ test('untrusted verification URL and mismatched login binding fail closed', asyn
 test('journal parsing allowlists fields and does not restore injected credential/code/URL properties', () => {
   sessionStorage.setItem('mock-journal', JSON.stringify({ kind: 'api_key', clientNonce: 'nonce', targetId: 'target', providerId: 'anthropic', value: 'MOCK_KEY', userCode: 'MOCK_CODE', verificationUrl: 'https://evil.test' }));
   expect(readProviderIntent('mock-journal')).toEqual({ kind: 'api_key', clientNonce: 'nonce', targetId: 'target', providerId: 'anthropic' });
+  sessionStorage.setItem('mock-journal', JSON.stringify({ kind: 'import', clientNonce: 'nonce', targetId: 'target', providerId: 'openai_codex', source: 'codex_cli', consent: 'copy_login', path: '/home/u/.codex/auth.json' }));
+  expect(readProviderIntent('mock-journal')).toEqual({ kind: 'import', clientNonce: 'nonce', targetId: 'target', providerId: 'openai_codex' });
   sessionStorage.setItem('mock-journal', JSON.stringify({ kind: 'device', clientNonce: 'nonce', targetId: 'target', providerId: 'alias', pollNonce: 'poll', cancelNonce: 'cancel', action: 'poll', startedAtMs: Date.now() }));
   expect(readProviderIntent('mock-journal')).toBeNull();
 });
@@ -407,4 +444,55 @@ test('storage refusal prevents credential dispatch rather than losing the reconc
     await click('Submit API key');
     expect(input.value).toBe(''); expect(mutations()).toHaveLength(0); expect(container.innerHTML).not.toContain('MOCK_WRITE_ONLY_KEY');
   } finally { Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, writable: true, value: storage }); }
+});
+
+test('displays model readiness per target and triggers Check now', async () => {
+  const readyController: ProviderManagement = {
+    ...controller,
+    readiness: {
+      state: 'action_required',
+      providerId: 'openai_codex',
+      modelId: 'gpt-6.1-sol',
+      check: 'codex_discovery',
+      reason: 'credential_expired',
+      availableModelIds: ['gpt-6.1-sol'],
+      suggestedModelId: 'gpt-6.1-sol',
+      checkedAtMs: 1000,
+    },
+  };
+  respond = request => request.path.startsWith('/instance/providers') && !request.path.endsWith('/check') ? structuredClone(readyController) : defaultResponse(request);
+  await render();
+  expect(container.textContent).toContain('Model readiness');
+  expect(container.textContent).toContain('Action required');
+  expect(container.textContent).toContain('Credential expired');
+  await click('Check now');
+  const checkReq = requests.find(r => r.path === '/instance/providers/check');
+  expect(checkReq).toBeDefined();
+  expect(checkReq?.method).toBe('POST');
+  expect(container.textContent).toContain('Verified');
+});
+
+test('Import Codex CLI login shows consent dialog and dispatches explicit consent', async () => {
+  const detectedController: ProviderManagement = {
+    ...controller,
+    detected: [{ source: 'codex_cli', providerId: 'openai_codex' }],
+  };
+  respond = request => request.path.startsWith('/instance/providers') && !request.path.endsWith('/import') ? structuredClone(detectedController) : defaultResponse(request);
+  await render();
+  expect(container.textContent).toContain('Detected logins');
+  const importBtn = button('Import Codex CLI login');
+  expect(importBtn).toBeDefined();
+  await act(async () => importBtn.click());
+  // Modal is opened
+  expect(container.textContent).toContain('Import Codex CLI login?');
+  expect(container.textContent).toContain('Copy your Codex CLI ChatGPT login on controller.test into Lemon');
+  expect(container.textContent).toContain('Your ~/.codex/auth.json is not changed');
+  expect(container.textContent).toContain('Lemon and the Codex CLI will share this login; if either refreshes it, the other may need to sign in again.');
+  // Confirm the dialog
+  await click('Confirm');
+  const importReq = requests.find(r => r.path === '/instance/providers/openai_codex/import');
+  expect(importReq).toBeDefined();
+  expect(importReq?.method).toBe('POST');
+  expect(importReq?.body.source).toBe('codex_cli');
+  expect(importReq?.body.consent).toBe('copy_login');
 });

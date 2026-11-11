@@ -16,6 +16,14 @@ either explicit `extension_paths` configuration or
 Set `[runtime.extensions] enabled = false` to stop the tool registry from loading
 extension paths while keeping manifest diagnostics and support-bundle visibility.
 
+For Files-enabled Bots, the Bot folder is a tool execution directory, not a
+trusted project root. Session startup, extension reload and tool rebuild resolve
+project extensions from the trusted `config_cwd`, never from the Bot folder.
+Project instructions, prompt templates, rules, personas, skills, MCP configuration
+and WASM discovery use that same configuration boundary (profile-scoped skills
+retain their dedicated profile workspace). Writing `.lemon/extensions/*.exs` or
+`AGENTS.md` in a Bot folder does not grant it extension or system-prompt authority.
+
 ## Extension Behaviour
 
 Every extension must implement the `CodingAgent.Extensions.Extension` behaviour with at least `name/0` and `version/0`:

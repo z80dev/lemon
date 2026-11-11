@@ -19,7 +19,7 @@ import { useBot } from './shared';
 import './bots.css';
 
 export function BotsScreen({ route }: { route: Route }) {
-  if (route.screen === 'bot.create') return <CreateBot />;
+  if (route.screen === 'bot.create') return <CreateBot route={route} />;
   if (route.screen === 'group.create' || route.screen === 'group.edit') return <GroupScreen id={route.id} />;
   if (route.screen === 'templates') return <TemplatesScreen id={route.id} botId={route.botId} />;
   if (route.screen === 'memory' || route.screen === 'memory.import') return <MemoryScreen botId={route.botId ?? route.id} />;

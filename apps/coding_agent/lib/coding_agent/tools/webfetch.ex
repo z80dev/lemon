@@ -606,17 +606,25 @@ defmodule CodingAgent.Tools.WebFetch do
         {:ok, _other} ->
           extract_html_content_fallback(html, extract_mode)
 
+        {:error, :regex_match_limit} ->
+          {:error, "HTML extraction exceeded its regex match budget"}
+
         {:error, _reason} ->
           extract_html_content_fallback(html, extract_mode)
       end
     else
       extract_html_content_fallback(html, extract_mode)
     end
+  rescue
+    SystemLimitError -> {:error, "HTML extraction exceeded its regex match budget"}
   end
 
   defp safe_readability_extract(runtime, html, extract_mode, url) do
     runtime.readability_extract.(html, extract_mode, url)
   rescue
+    SystemLimitError ->
+      {:error, :regex_match_limit}
+
     error ->
       {:error, "Readability extraction failed: #{Exception.message(error)}"}
   catch
@@ -834,6 +842,10 @@ defmodule CodingAgent.Tools.WebFetch do
     |> String.replace(~r/^\s*[-*+]\s+/m, "")
     |> String.replace(~r/^\s*\d+\.\s+/m, "")
     |> normalize_whitespace()
+  rescue
+    SystemLimitError ->
+      # Plain Markdown remains usable text; never return a partially converted result.
+      markdown
   end
 
   defp remove_tag_with_contents(html, tag) do

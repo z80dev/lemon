@@ -2,61 +2,95 @@ import XCTest
 @testable import LemonBotKit
 
 final class HostEnrollmentTests: XCTestCase {
-    private let release = "curl -fsSL --proto '=https' --proto-redir '=https' 'https://github.com/z80dev/lemon/releases/download/v2026.10.22/join-node.sh' | bash -s -- '--name' 'chico' '--controller' 'ws://127.0.0.1:4040/ws' '--version' '2026.10.22' '--base-url' 'https://github.com/z80dev/lemon'"
-
-    func testReleaseAndSourceJoinCommandsYieldTheirTargets() throws {
-        XCTAssertEqual(try HostEnrollment.target(fromJoinCommand: release),
-                       .init(name: "chico", controller: "ws://127.0.0.1:4040/ws", source: nil, version: "2026.10.22", baseURL: "https://github.com/z80dev/lemon"))
-        let source = "bash '/Users/me/lemon/scripts/join-node.sh' '--name' 'studio' '--controller' 'wss://controller.example/ws' '--source' '/Users/me/lemon'"
-        XCTAssertEqual(try HostEnrollment.target(fromJoinCommand: source),
-                       .init(name: "studio", controller: "wss://controller.example/ws", source: "/Users/me/lemon", version: nil, baseURL: nil))
+    func testAutomaticRepairNeverRetriesRunningOrFailedAttempts() {
+        XCTAssertTrue(HostSetupState.idle.allowsAutomaticAttempt)
+        XCTAssertTrue(HostSetupState.done.allowsAutomaticAttempt)
+        XCTAssertFalse(HostSetupState.running("Starting").allowsAutomaticAttempt)
+        XCTAssertFalse(HostSetupState.failed(message: "Unavailable", detail: nil).allowsAutomaticAttempt)
     }
 
-    func testJoinValuesThatWouldNeedEscapingAreRefused() {
-        for command in [
-            release.replacingOccurrences(of: "'chico'", with: "'chico; rm -rf ~'"),
-            release.replacingOccurrences(of: "ws://127.0.0.1:4040/ws", with: "ws://evil.example/ws"),
-            release.replacingOccurrences(of: "ws://127.0.0.1:4040/ws", with: "wss://host/ws?token=x"),
-            release.replacingOccurrences(of: "https://github.com/z80dev/lemon'", with: "http://github.com/z80dev/lemon'"),
-            release.replacingOccurrences(of: "'2026.10.22' '--base-url'", with: "'$(id)' '--base-url'"),
-            "bash '/x/join-node.sh' '--name' 'a' '--controller' 'ws://127.0.0.1:4040/ws' '--source' 'relative/path'",
+    func testNDJSONStepsMapToHostSetupAndResultKeepsMachineIdentity() throws {
+        let output = #"""
+        {"type":"step","step":"units","state":"running","detail":null}
+        {"type":"step","step":"worker","state":"running","detail":"repair"}
+        {"type":"result","status":"ready","port":4100,"machineId":"machine_studio","manager":"launchd","persistence":"login"}
+        """#
+        XCTAssertEqual(BootstrapProgress.line(String(output.split(separator: "\n")[0]))?.hostSetup, .running("Starting Lemon services…"))
+        XCTAssertEqual(BootstrapProgress.line(String(output.split(separator: "\n")[1]))?.hostSetup, .running("Setting up Lemon’s worker…"))
+        let result = try BootstrapProgress.result(output)
+        XCTAssertEqual(try result.requireMachine(machine: "studio"), "machine_studio")
+        XCTAssertEqual(result.persistence, "login")
+        XCTAssertNil(result.hostSetup)
+        XCTAssertNil(BootstrapProgress.line("not json"))
+        XCTAssertNil(BootstrapProgress.line(#"{"type":"step","step":"worker","state":"ok"}"#)?.hostSetup)
+        XCTAssertThrowsError(try BootstrapProgress.result(output + "\n" + output))
+        XCTAssertThrowsError(try BootstrapProgress.result("Welcome to my server\n"))
+    }
+
+    func testResultFailuresMapWithoutExposingRawCommandOutput() throws {
+        for (status, expected) in [
+            ("runtime_missing", HostEnrollment.Failure.runtimeMissing(machine: "m")),
+            ("needs_attention", .runtimeMissing(machine: "m")),
+            ("enroll_failed", .enrollmentFailed(machine: "m", log: "enroll_failed")),
+            ("service_failed", .serviceFailed(machine: "m", log: "service_failed")),
+            ("setup_required", .serviceFailed(machine: "m", log: "setup_required")),
         ] {
-            XCTAssertThrowsError(try HostEnrollment.target(fromJoinCommand: command), command)
+            let result = try BootstrapProgress.result("{\"type\":\"result\",\"status\":\"\(status)\"}")
+            XCTAssertThrowsError(try result.requireMachine(machine: "m")) { XCTAssertEqual($0 as? HostEnrollment.Failure, expected) }
         }
+        XCTAssertThrowsError(try BootstrapProgress.result(#"{"type":"result","status":"ready","machineId":null}"#).requireMachine(machine: "m"))
     }
 
-    func testHostIdentityBecomesAValidNodeNameAndFriendlyName() {
-        let mac = HostEnrollment.identity("host=Chico\ncomputer=Ada’s MacBook Pro\nstatus=ready\n")
-        XCTAssertEqual(mac.nodeName, "chico"); XCTAssertEqual(mac.displayName, "Ada’s MacBook Pro")
-        let linux = HostEnrollment.identity("host=build_box-01\nstatus=ready\n")
-        XCTAssertEqual(linux.nodeName, "build_box-01"); XCTAssertEqual(linux.displayName, "build_box-01")
+    func testHostIdentityStillSupportsAutomaticRepairTrigger() {
+        XCTAssertEqual(HostEnrollment.nodeName("host=Chico\nstatus=ready\n"), "chico")
+        XCTAssertEqual(HostEnrollment.nodeName(fromHostname: "build_box-01"), "build_box-01")
         XCTAssertEqual(HostEnrollment.nodeName(fromHostname: "--Ünïcode Host!"), "ncodehost")
         XCTAssertEqual(HostEnrollment.nodeName(fromHostname: "!!!"), "lemon-host")
     }
 
-    func testCodeTravelsQuotedInsideTheScriptNotAsAnArgument() throws {
-        let target = try HostEnrollment.target(fromJoinCommand: release)
-        let script = HostEnrollment.script(target, code: "A1b2_c3-" + String(repeating: "x", count: 35))
-        XCTAssertTrue(script.hasPrefix("name='chico'\ncontroller='ws://127.0.0.1:4040/ws'\n"))
-        XCTAssertTrue(script.contains("code='A1b2_c3-"))
-        XCTAssertTrue(HostEnrollment.script(target, code: nil).contains("code=''"))
-    }
-
-    func testScriptStatusesMapToOutcomesAndFailures() throws {
-        XCTAssertEqual(try HostEnrollment.parse("status=ready\n", machine: "m"), .ready)
-        XCTAssertEqual(try HostEnrollment.parse("status=needs_enrollment\n", machine: "m"), .needsEnrollment)
-        XCTAssertThrowsError(try HostEnrollment.parse("status=runtime_missing\n", machine: "m")) { XCTAssertEqual($0 as? HostEnrollment.Failure, .runtimeMissing(machine: "m")) }
-        XCTAssertThrowsError(try HostEnrollment.parse("status=enroll_failed\nlog=refused\n", machine: "m")) { XCTAssertEqual($0 as? HostEnrollment.Failure, .enrollmentFailed(machine: "m", log: "refused")) }
-        XCTAssertThrowsError(try HostEnrollment.parse("motd\n", machine: "m")) { XCTAssertEqual($0 as? HostEnrollment.Failure, .unexpected(detail: "The setup script returned no result.")) }
+    func testHostScriptDelegatesLifecycleWithoutInviteOrSupervisorImplementation() {
+        XCTAssertTrue(HostEnrollment.setupScript.contains("up --json --no-open"))
+        XCTAssertTrue(HostEnrollment.setupScript.contains("--worker-wrapper"))
+        for obsolete in ["nohup", "pkill", "launchctl", "systemctl", "invite-code"] {
+            XCTAssertFalse(HostEnrollment.setupScript.contains(obsolete))
+        }
     }
 
     func testGeneratedScriptIsValidShell() throws {
-        let script = HostEnrollment.script(try HostEnrollment.target(fromJoinCommand: release), code: nil)
         let process = Process(), input = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/sh"); process.arguments = ["-n"]
         process.standardInput = input
-        try process.run(); input.fileHandleForWriting.write(Data(script.utf8)); try input.fileHandleForWriting.close()
+        try process.run(); input.fileHandleForWriting.write(Data(HostEnrollment.setupScript.utf8)); try input.fileHandleForWriting.close()
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
+    }
+    func testHostScriptReturnsLifecycleFailureWithoutScrapingWorkerLogs() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("host-test-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let bot = home.appendingPathComponent(".local/bin/lemon-bot")
+        try FileManager.default.createDirectory(at: bot.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let mock = #"""
+        #!/bin/sh
+        [ "$*" = "up --json --no-open" ] || exit 2
+        printf '%s\n' '{"type":"step","step":"worker","state":"running","detail":"repair"}'
+        printf '%s\n' '{"type":"result","status":"enroll_failed","port":4100,"machineId":"machine_chico","manager":"launchd","persistence":"login"}'
+        exit 1
+        """#
+        try mock.write(to: bot, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bot.path)
+        let process = Process(), input = Pipe(), output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-s"]
+        process.environment = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
+        process.standardInput = input; process.standardOutput = output; process.standardError = FileHandle.nullDevice
+        try process.run()
+        input.fileHandleForWriting.write(Data(HostEnrollment.setupScript.utf8))
+        try input.fileHandleForWriting.close()
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 1)
+        XCTAssertThrowsError(try BootstrapProgress.result(text).requireMachine(machine: "chico")) {
+            XCTAssertEqual($0 as? HostEnrollment.Failure, .enrollmentFailed(machine: "chico", log: "enroll_failed"))
+        }
     }
 }

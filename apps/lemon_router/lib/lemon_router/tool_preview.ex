@@ -63,6 +63,8 @@ defmodule LemonRouter.ToolPreview do
 
   # If `text` is an `inspect/1` output of AgentToolResult/TextContent, extract the
   # nested `text: "..."` fields without evaluating Elixir code.
+  defp extract_text_from_inspected_struct(text) when byte_size(text) > 64 * 1024, do: nil
+
   defp extract_text_from_inspected_struct(text) when is_binary(text) do
     if String.contains?(text, "%LemonAgent.Types.AgentToolResult{") or
          String.contains?(text, "%LemonAi.Types.TextContent{") do
@@ -79,6 +81,8 @@ defmodule LemonRouter.ToolPreview do
     else
       nil
     end
+  rescue
+    SystemLimitError -> nil
   end
 
   # Elixir's inspect escapes common sequences inside quotes (e.g. \n, \t, \").

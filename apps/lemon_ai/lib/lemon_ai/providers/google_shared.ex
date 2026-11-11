@@ -15,6 +15,7 @@ defmodule LemonAi.Providers.GoogleShared do
     Context,
     ImageContent,
     Model,
+    StreamOptions,
     TextContent,
     ThinkingContent,
     Tool,
@@ -67,6 +68,59 @@ defmodule LemonAi.Providers.GoogleShared do
   # ============================================================================
   # Thinking/Reasoning Support
   # ============================================================================
+
+  @thinking_efforts %{
+    "MINIMAL" => :minimal,
+    "LOW" => :low,
+    "MEDIUM" => :medium,
+    "HIGH" => :high,
+    "XHIGH" => :xhigh,
+    "MAX" => :max
+  }
+
+  @doc """
+  Add thinking configuration using the model's declared reasoning efforts.
+
+  Level-based models use `thinkingLevel`, never `thinkingBudget` (rejected by
+  Gemini 4). Models without declared levels retain explicit budget overrides.
+  A nil or `:none` reasoning option leaves the provider's defaults unchanged.
+  """
+  @spec put_thinking_config(map(), Model.t(), StreamOptions.t()) :: map()
+  def put_thinking_config(config, %Model{reasoning: true} = model, %StreamOptions{} = opts)
+      when opts.reasoning in [:minimal, :low, :medium, :high, :xhigh, :max] do
+    budgets = opts.thinking_budgets || %{}
+    effort = if opts.reasoning in [:xhigh, :max], do: :high, else: opts.reasoning
+    thinking_config = %{"includeThoughts" => true}
+
+    thinking_config =
+      cond do
+        model.reasoning_efforts != [] ->
+          level = Map.get(budgets, :level) || opts.reasoning
+
+          level =
+            if is_binary(level) do
+              Map.get(@thinking_efforts, String.upcase(level), level)
+            else
+              level
+            end
+
+          level = LemonAi.Models.reasoning_effort_for(model, level)
+          Map.put(thinking_config, "thinkingLevel", level |> to_string() |> String.upcase())
+
+        level = Map.get(budgets, :level) ->
+          Map.put(thinking_config, "thinkingLevel", level)
+
+        budget = Map.get(budgets, :budget_tokens) || Map.get(budgets, effort) ->
+          Map.put(thinking_config, "thinkingBudget", budget)
+
+        true ->
+          thinking_config
+      end
+
+    Map.put(config, "thinkingConfig", thinking_config)
+  end
+
+  def put_thinking_config(config, _model, _opts), do: config
 
   @doc """
   Determines whether a streamed Gemini Part should be treated as "thinking".

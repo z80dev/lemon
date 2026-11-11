@@ -8,6 +8,12 @@ import type { BackendConfiguration } from './services';
 import { parseOperatorConfiguration } from '../integrations/config';
 import { defaultWebRoot } from './layout';
 export function isLoopback(host:string):boolean { return host==='localhost'||host==='127.0.0.1'||host==='[::1]'||host==='::1'; }
+/** The exact listener origin eligible for same-machine browser proof; DNS names are not proof. */
+export function loopbackOrigin(host:string,port:number):string|null {
+  if(host==='127.0.0.1')return `http://127.0.0.1:${port}`;
+  if(host==='::1'||host==='[::1]')return `http://[::1]:${port}`;
+  return null;
+}
 /** Product listener default. Lemon's own runtime owns 4040 (control plane), 4080 (Web) and 4090 (simulation UI). */
 export const defaultBotPort=4100;
 type Environment=Record<string,string|undefined>;
@@ -136,7 +142,7 @@ export async function loadConfiguration(environment:Environment=process.env):Pro
   const choice=await readControllerChoice(dataDir,createPrivateCodec(key));
   const controllerSource:ControllerSource=environment.LEMON_BOT_CONTROL_URL||environment.LEMON_BOT_OPERATOR_TOKEN?'environment':choice?'saved':'default';
   const controller=await controllerSettings(environment,choice);
-  return {config:{publicUrl:publicUrl.origin,host,port,dataDir,trustedOverlay,operator,webRoot,...controller},key,controllerSource};
+  return {config:{publicUrl:publicUrl.origin,loopbackOrigin:loopbackOrigin(host,port),host,port,dataDir,trustedOverlay,operator,webRoot,...controller},key,controllerSource};
 }
 export interface PrivateCodec {encrypt(value:unknown):string;decrypt<T=unknown>(value:string):T}
 export function createPrivateCodec(key:Uint8Array):PrivateCodec {

@@ -65,7 +65,7 @@ defmodule LemonAi.Providers.AzureOpenAIResponses do
   # Providers that use OpenAI-style tool call IDs
   @tool_call_providers MapSet.new([
                          :openai,
-                         :"openai-codex",
+                         :openai_codex,
                          :opencode,
                          :"azure-openai-responses"
                        ])
@@ -232,7 +232,9 @@ defmodule LemonAi.Providers.AzureOpenAIResponses do
     # Add optional parameters
     params = maybe_add_param(params, "prompt_cache_key", opts.session_id)
     params = maybe_add_param(params, "max_output_tokens", opts.max_tokens)
-    params = maybe_add_param(params, "temperature", opts.temperature)
+
+    params =
+      maybe_add_param(params, "temperature", OpenAIResponsesShared.temperature_for(model, opts))
 
     # Add tools if present
     params =

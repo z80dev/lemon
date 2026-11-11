@@ -31,10 +31,18 @@ defmodule CodingAgent.Session.WasmBridge do
           CodingAgent.SettingsManager.t(),
           String.t(),
           map() | nil,
-          map() | nil
+          map() | nil,
+          String.t() | nil
         ) :: map()
-  def maybe_start_wasm_sidecar(cwd, settings_manager, session_id, tool_policy, approval_context) do
-    wasm_config = WasmConfig.load(cwd, settings_manager)
+  def maybe_start_wasm_sidecar(
+        cwd,
+        settings_manager,
+        session_id,
+        tool_policy,
+        approval_context,
+        config_cwd \\ nil
+      ) do
+    wasm_config = WasmConfig.load(config_cwd || cwd, settings_manager)
 
     if wasm_config.enabled do
       session_pid = self()
@@ -163,7 +171,8 @@ defmodule CodingAgent.Session.WasmBridge do
           state.settings_manager,
           state.session_manager.header.id,
           state.tool_policy,
-          state.approval_context
+          state.approval_context,
+          state.config_cwd
         )
     end
   end

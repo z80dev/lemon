@@ -167,13 +167,17 @@ and build numbers, distribution, and artifact filename/format/platform/checksum/
 size. A receipt's `uploadAccepted` means transport acceptance only, not App
 Store review or public availability.
 
-Normal desktop application assets must be Developer ID signed and notarized
-(`developer-id-notarized`); App Store delivery requires the actual signing and
-App Store Connect credentials (`app-store`). `local-preview` artifacts must
-never enter normal publication. The tarball workflow does not fabricate or
-publish signed `.dmg`, application `.zip`, or `.ipa` assets. Wiring those assets
-into normal publication requires the real signing credentials and an
-authenticated receipt/artifact handoff from the Apple builder first.
+The release workflow assembles the schema-2 manifest before building the Mac app,
+which embeds its SHA-256 digest. With complete Developer ID credentials, it
+publishes the notarized DMG and schema-version-1 receipt after
+`scripts/verify_apple_release` checks distribution, version/channel, manifest pin
+and artifact hashes/sizes. Stable releases additionally provide the fixed
+`Lemon-Bot-darwin-arm64.dmg` alias for `releases/latest/download/` links.
+With no Apple credentials, CI retains an unsigned, non-notarized `local-preview`
+DMG/ZIP only as a 14-day workflow artifact, never as release assets. Partial
+credentials fail listing the missing names; signing/notarization failures with
+configured credentials block the release. App Store delivery still requires
+actual signing/App Store Connect credentials and is not published by this job.
 
 macOS source installs are best effort. macOS `x86_64` and Windows have no
 release artifacts; use a source install, WSL, or the container image.
@@ -190,8 +194,8 @@ also checks that the filename agrees with those fields:
   "channel": "stable",
   "commit": "0123456789abcdef0123456789abcdef01234567",
   "built_at": "2026-08-16T00:00:00Z",
-  "otp": "28.5",
-  "elixir": "1.19.5",
+  "otp": "29.1.2",
+  "elixir": "1.20.5",
   "artifacts": [
     {
       "file": "lemon-2026.08.0-stable-linux-x86_64-lemon_runtime_full.tar.gz",

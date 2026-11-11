@@ -18,8 +18,8 @@ defmodule LemonAi.Models.Catalog do
   `mix lemon.models` lists what is currently defined.
 
   The optional `adaptive_thinking` (boolean, default `false`) and
-  `reasoning_efforts` (array of `"minimal" | "low" | "medium" | "high" |
-  "xhigh"`, default `[]`) fields are explicit reasoning capability flags; see
+  `reasoning_efforts` (array of `"none" | "minimal" | "low" | "medium" |
+  "high" | "xhigh" | "max"`, default `[]`) fields are explicit reasoning capability flags; see
   `LemonAi.Types.Model`. Providers must gate thinking/effort request shapes on
   these flags, never on model-id substrings.
 
@@ -80,15 +80,21 @@ defmodule LemonAi.Models.Catalog do
 
   # Ascending; `reasoning_efforts` entries are stored in this order.
   @reasoning_efforts [
+    {"none", :none},
     {"minimal", :minimal},
     {"low", :low},
     {"medium", :medium},
     {"high", :high},
-    {"xhigh", :xhigh}
+    {"xhigh", :xhigh},
+    {"max", :max}
   ]
 
   @compat_boolean_fields %{
     "anthropic_thinking_display" => :anthropic_thinking_display,
+    "openai_prompt_cache_options" => :openai_prompt_cache_options,
+    "openai_temperature_requires_none" => :openai_temperature_requires_none,
+    "bedrock_reasoning_config" => :bedrock_reasoning_config,
+    "anthropic_effort_only" => :anthropic_effort_only,
     "supports_store" => :supports_store,
     "supports_developer_role" => :supports_developer_role,
     "supports_reasoning_effort" => :supports_reasoning_effort,
@@ -100,7 +106,7 @@ defmodule LemonAi.Models.Catalog do
   }
 
   @max_tokens_fields ["max_tokens", "max_completion_tokens"]
-  @thinking_formats ["openai", "zai"]
+  @thinking_formats ["openai", "zai", "deepseek", "qwen"]
 
   @doc """
   The source path of a catalog file, for `@external_resource`.
@@ -191,7 +197,7 @@ defmodule LemonAi.Models.Catalog do
   defp to_service_tier_cost(%{} = tiers) do
     Map.new(tiers, fn
       {tier, multiplier}
-      when tier in ["flex", "priority"] and is_number(multiplier) and multiplier > 0 ->
+      when tier in ["flex", "priority", "ultrafast"] and is_number(multiplier) and multiplier > 0 ->
         {tier, multiplier}
 
       entry ->

@@ -14,6 +14,48 @@ defmodule CodingAgent.Tools.WebGuardTest do
              )
   end
 
+  test "rejects discarded ports before DNS or transport" do
+    for port <- ["65536", "99999", "100000", "00065536"] do
+      assert {:error, {:invalid_url, _}} =
+               WebGuard.guarded_get("https://example.com:#{port}/",
+                 resolve_host: fn _ -> flunk("invalid port reached DNS") end,
+                 http_get: fn _, _ -> flunk("invalid port reached transport") end
+               )
+    end
+  end
+
+  test "rejects discarded absolute and network-path redirect ports" do
+    for location <- ["https://example.com:65536/b", "//example.com:65536/b"] do
+      assert {:error, {:redirect_error, "Invalid redirect location"}} =
+               WebGuard.guarded_get("https://example.com/a",
+                 resolve_host: fn _ -> {:ok, [{203, 0, 113, 7}]} end,
+                 http_get: fn url, _ ->
+                   assert url == "https://203.0.113.7/a"
+                   {:ok, %Req.Response{status: 302, headers: [{"location", location}], body: ""}}
+                 end
+               )
+    end
+  end
+
+  test "network-path redirects with no explicit port retain the scheme default" do
+    assert {:ok, %Req.Response{status: 200}, "https://example.com/b"} =
+             WebGuard.guarded_get("https://example.com/a",
+               resolve_host: fn _ -> {:ok, [{203, 0, 113, 7}]} end,
+               http_get: fn
+                 "https://203.0.113.7/a", _ ->
+                   {:ok,
+                    %Req.Response{
+                      status: 302,
+                      headers: [{"location", "//example.com/b"}],
+                      body: ""
+                    }}
+
+                 "https://203.0.113.7/b", _ ->
+                   {:ok, %Req.Response{status: 200, headers: [], body: "done"}}
+               end
+             )
+  end
+
   test "blocks localhost before resolver or http_get" do
     resolver = fn _host -> flunk("resolver should not be called") end
     http_get = fn _url, _opts -> flunk("http_get should not be called") end

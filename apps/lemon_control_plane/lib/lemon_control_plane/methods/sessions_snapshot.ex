@@ -142,21 +142,30 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
   end
 
   defp compose(key, native, limit, ctx, continuation) do
-    entries = native.entries
-    {run_id, run, run_status} = current_run(key, native)
+    {previous_entries, turn_entries} = split_current_turn(native.entries)
+    input = List.first(turn_entries)
+    {run_id, run, run_status} = current_run(key, native, input)
     completed = committed_completion(run)
     terminal = is_map(completed)
-    streaming = native.streaming and not terminal
+
+    streaming =
+      native.streaming and not terminal and
+        not (input_kind(input) == :async and run_status == "unknown")
+
     phase = phase(native, completed, streaming, run_status)
 
     repaired =
       if terminal,
-        do: LemonControlPlane.ACP.History.reconcile_answers(entries, [{run_id, run}]),
-        else: entries
+        do: LemonControlPlane.ACP.History.reconcile_answers(turn_entries, [{run_id, run}]),
+        else: turn_entries
 
-    rows = ChatHistory.native_messages(repaired, true)
-    rows = append_partial(rows, native.partial, run_id, streaming)
-    rows = tag_current_turn(rows, run_id)
+    turn_rows =
+      repaired
+      |> ChatHistory.native_messages(true)
+      |> append_partial(native.partial, run_id, streaming)
+      |> tag_current_turn(run_id)
+
+    rows = ChatHistory.native_messages(previous_entries, true) ++ turn_rows
 
     event_rows =
       if terminal,
@@ -172,7 +181,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
     processes = processes(native.session_id)
     todos = todos(key, native.cwd)
     plan = plan(native.plan)
-    answer_text = if terminal, do: field(completed, :answer) || "", else: answer(rows)
+    answer_text = if terminal, do: field(completed, :answer) || "", else: answer(turn_rows)
 
     answer = %{
       "text" => text(answer_text, 16_384),
@@ -185,7 +194,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
       "sessionId" => native.session_id,
       "branchId" => native.branch_id,
       "runId" => run_id,
-      "attempt" => Map.get(native, :attempt) || run_id,
+      "attempt" => if(is_binary(run_id), do: Map.get(native, :attempt) || run_id),
       "revision" =>
         digest({native.revision, run_id, run, approvals, children, processes, todos, plan})
     }
@@ -244,74 +253,108 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
 
   defp continues_run?(_, _, _, _), do: false
 
-  defp current_run(key, %{run_id: id} = native) when is_binary(id) do
-    case RunStore.fetch(id) do
-      {:ok, run} when is_map(run) ->
-        owned =
-          is_nil(field(run, :summary)) or
-            (field(run, :session_key) || field(field(run, :summary), :session_key)) == key
+  defp current_run(key, %{run_id: id} = native, input) when is_binary(id) do
+    async = input_kind(input) == :async
 
-        cond do
-          not owned ->
-            {nil, nil, "unavailable"}
+    if async and
+         bound_run_id(field(field(input, :details), :lemonRun), native.session_id, key) != id do
+      current_run(key, Map.delete(native, :run_id), input)
+    else
+      case RunStore.fetch(id) do
+        {:ok, run} when is_map(run) ->
+          summary = field(run, :summary)
 
-          native.streaming ->
-            {id, run, "ok"}
+          owned =
+            if async do
+              field(run, :session_key) in [nil, key] and
+                (is_nil(summary) or field(summary, :session_key) == key)
+            else
+              is_nil(summary) or (field(run, :session_key) || field(summary, :session_key)) == key
+            end
 
-          elem(match_branch_run(native.entries, [{id, run}], native.session_id, key), 0) == id ->
-            {id, run, "ok"}
+          cond do
+            not owned ->
+              {nil, nil, if(async, do: "unknown", else: "unavailable")}
 
-          # An idle live session retains its invocation run_id after rewind.
-          # That ID cannot select an answer from the abandoned branch.
-          true ->
-            current_run(key, Map.delete(native, :run_id))
-        end
+            native.streaming ->
+              {id, run, "ok"}
 
-      {:ok, nil} ->
-        if native.streaming,
-          do: {id, nil, "unavailable"},
-          else: current_run(key, Map.delete(native, :run_id))
+            elem(match_branch_run(native.entries, [{id, run}], native.session_id, key, input), 0) ==
+                id ->
+              {id, run, "ok"}
 
-      _ ->
-        {if(native.streaming, do: id), nil, "unavailable"}
+            # An idle live session retains its invocation run_id after rewind.
+            # That ID cannot select an answer from the abandoned branch.
+            true ->
+              current_run(key, Map.delete(native, :run_id), input)
+          end
+
+        {:ok, nil} ->
+          if native.streaming,
+            do: {id, nil, "unavailable"},
+            else: current_run(key, Map.delete(native, :run_id), input)
+
+        _ ->
+          {if(native.streaming, do: id), nil, "unavailable"}
+      end
     end
   end
 
-  defp current_run(key, native) do
-    case RunHistoryStore.fetch(key, limit: 200) do
-      {:ok, runs} -> match_branch_run(native.entries, runs, native.session_id, key)
-      _ -> {nil, nil, "unavailable"}
+  defp current_run(key, native, input) do
+    if input_kind(input) == :async and
+         is_nil(bound_run_id(field(field(input, :details), :lemonRun), native.session_id, key)) do
+      {nil, nil, "unknown"}
+    else
+      case RunHistoryStore.fetch(key, limit: 200) do
+        {:ok, runs} -> match_branch_run(native.entries, runs, native.session_id, key, input)
+        _ -> {nil, nil, "unavailable"}
+      end
     end
   end
 
-  # Managed user entries bind the logical invocation before execution; event
-  # receipt timestamps can legitimately follow the user's creation timestamp.
-  defp match_branch_run(entries, runs, native_id, key) do
-    user =
-      Enum.reduce(entries, nil, fn entry, latest ->
-        if field(field(entry, :message), :role) in [:user, "user"], do: entry, else: latest
-      end)
+  # Both managed human and asynchronous peer inputs bind their own invocation.
+  # Peer provenance (notably details.run_id) never owns the receiving turn.
+  defp match_branch_run(entries, runs, native_id, key, input) do
+    case input_kind(input) do
+      :async ->
+        match_bound_run(field(field(input, :details), :lemonRun), runs, native_id, key)
 
-    message = field(user, :message)
+      :user ->
+        message = field(input, :message)
 
-    case field(message, :lemonRun) do
-      %{"id" => id, "sessionKey" => ^key, "sessionId" => ^native_id}
-      when is_binary(id) and id != "" ->
+        if Map.has_key?(message, "lemonRun") or Map.has_key?(message, :lemonRun),
+          do: match_bound_run(field(message, :lemonRun), runs, native_id, key),
+          else: match_legacy_branch_run(entries, runs)
+
+      nil ->
+        {nil, nil, "ok"}
+    end
+  end
+
+  defp match_bound_run(binding, runs, native_id, key) do
+    case bound_run_id(binding, native_id, key) do
+      nil ->
+        {nil, nil, "unknown"}
+
+      id ->
         case Enum.filter(runs, fn {run_id, run} ->
-               run_id == id and field(field(run, :summary), :session_key) == key
+               run_id == id and field(field(run, :summary), :session_key) == key and
+                 field(run, :session_key) in [nil, key]
              end) do
           [{^id, run}] -> {id, run, "ok"}
           _ -> {nil, nil, "unknown"}
         end
+    end
+  end
 
-      nil ->
-        if is_map(message) and
-             (Map.has_key?(message, "lemonRun") or Map.has_key?(message, :lemonRun)),
-           do: {nil, nil, "unknown"},
-           else: match_legacy_branch_run(entries, runs)
+  defp bound_run_id(binding, native_id, key) do
+    case binding do
+      %{"id" => id, "sessionKey" => ^key, "sessionId" => ^native_id}
+      when is_binary(id) and id != "" ->
+        id
 
       _ ->
-        {nil, nil, "unknown"}
+        nil
     end
   end
 
@@ -391,27 +434,35 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
 
   defp append_partial(rows, _, _, _), do: rows
 
-  defp tag_current_turn(rows, nil), do: rows
+  # Project each side of the actual journal boundary separately. Async inputs
+  # have no human row in ChatHistory, so a last-user/content heuristic would
+  # incorrectly relabel the preceding human answer and unfinished tool calls.
+  defp split_current_turn(entries) do
+    {boundary, _count} =
+      Enum.reduce(entries, {nil, 0}, fn entry, {boundary, index} ->
+        {if(input_kind(entry), do: index, else: boundary), index + 1}
+      end)
 
-  defp tag_current_turn(rows, run_id) do
-    last_user =
-      rows
-      |> Enum.with_index()
-      |> Enum.filter(fn {row, _} -> row["role"] == "user" end)
-      |> List.last()
+    if is_nil(boundary), do: {entries, []}, else: Enum.split(entries, boundary)
+  end
 
-    case last_user do
-      {_row, index} ->
-        rows
-        |> Enum.with_index()
-        |> Enum.map(fn {row, offset} ->
-          if offset >= index, do: Map.put(row, "runId", run_id), else: row
-        end)
+  defp input_kind(entry) do
+    cond do
+      field(entry, :type) in [:message, "message"] and
+          field(field(entry, :message), :role) in [:user, "user"] ->
+        :user
 
-      nil ->
-        rows
+      field(entry, :type) in [:custom_message, "customMessage"] and
+          (field(entry, :custom_type) || field(entry, :customType)) == "async_followup" ->
+        :async
+
+      true ->
+        nil
     end
   end
+
+  defp tag_current_turn(rows, nil), do: rows
+  defp tag_current_turn(rows, run_id), do: Enum.map(rows, &Map.put(&1, "runId", run_id))
 
   defp actions(rows, run_id, streaming) do
     rows
@@ -711,8 +762,8 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
   defp clean(_, _), do: nil
 
   defp answer(rows) do
-    # A newly selected user turn may not have produced any assistant text yet.
-    # Never present the previous turn's answer as this attempt's answer-so-far.
+    # The caller supplies only this input's projected rows, including async
+    # turns whose custom-message boundary has no human transcript row.
     rows
     |> Enum.reverse()
     |> Enum.take_while(&(&1["role"] != "user"))

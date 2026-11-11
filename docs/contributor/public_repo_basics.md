@@ -7,7 +7,7 @@ working in this repository. The authoritative contributor guide is the root
 
 ## Prerequisites
 
-- Elixir 1.19.5+ and Erlang/OTP 28.5+ (pinned in `.tool-versions`)
+- Elixir 1.20.5+ and Erlang/OTP 29.1.2+ (pinned in `.tool-versions`)
 - A C toolchain (`cc`/`gcc` + `make`); the SQLite store compiles a native NIF
 - Bun 1.3.14+ (for `clients/tui`)
 - Node.js 24 LTS+ (for `clients/lemon-browser-node` and the `docs/` site)

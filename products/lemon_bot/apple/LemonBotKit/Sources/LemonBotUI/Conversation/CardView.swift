@@ -188,6 +188,7 @@ struct TranscriptCardView: View {
             case .messageDraft(let value): DraftReviewView(store: store, draft: value.draft)
             case .calendarEvent(let value): calendar(value.event)
             case .permissionRequest(let value): ApprovalReviewView(store: store, approval: value.approval)
+            case .accessRequest(let value): ApprovalReviewView(store: store, approval: value.approval)
             case .autoReviewApproval(let value): ApprovalReviewView(store: store, approval: value.approval)
             case .localToolPermission(let value): ApprovalReviewView(store: store, approval: value.approval)
             case .publishApproval(let value): ApprovalReviewView(store: store, approval: value.approval)
@@ -220,6 +221,7 @@ struct TranscriptCardView: View {
         case .secretRequest(let value): return value.request.gate.targetUserId
         case .humanStep(let value): return value.step.gate.targetUserId
         case .permissionRequest(let value): return value.approval.gate.targetUserId
+        case .accessRequest(let value): return value.approval.gate.targetUserId
         case .autoReviewApproval(let value): return value.approval.gate.targetUserId
         case .localToolPermission(let value): return value.approval.gate.targetUserId
         case .publishApproval(let value): return value.approval.gate.targetUserId
@@ -355,12 +357,14 @@ struct TemplateShareCardView: View {
     let state: String
     init(store: LemonBotStore, templateID: ID, name: String, shareURL: String, state: String) {
         self.store = store; self.templateID = templateID; self.name = name; self.shareURL = shareURL; self.state = state
+        let online = store.machines.filter { $0.status == "online" }
+        _machineID = State(initialValue: online.count == 1 ? online[0].id : "")
     }
     @Environment(\.openURL) private var openURL
     @State private var template: BotTemplate?
     @State private var importName = ""
     @State private var machineID = ""
-    @State private var reviewed = false
+    @State private var access = "standard"
     @State private var acceptedTerms = false
     @State private var action = UIActionState()
     var body: some View {
@@ -380,16 +384,33 @@ struct TemplateShareCardView: View {
                 TextField("New Bot name", text: $importName).cardField()
                 CardChoice(placeholder: "Choose online machine", selection: $machineID, options: store.machines.filter { $0.status == "online" }.map { (value: $0.id, label: $0.name) })
                 if !store.machines.contains(where: { $0.status == "online" }) { Text("No machine is online. Start one to import this template.").cardMeta() }
-                Toggle("I've read the instructions and understand this Bot shares this machine's files and logins", isOn: $reviewed).cardToggle()
+                CardChoice(placeholder: "Choose access", selection: $access, options: [
+                    (value: "standard", label: "Standard — recommended"),
+                    (value: "none", label: "Chat only")
+                ])
+                if let suggested = template.content.suggestedAccess {
+                    Text("Template author suggested: \(suggested == "standard" ? "Standard" : "Chat only"). Confirm or change your access choice.").cardMeta()
+                } else {
+                    Text(access == "standard"
+                        ? "Standard gives this Bot access to Terminal and Files (and Browser if supported). It asks before running commands."
+                        : "Chat only gives this Bot conversation without local file, tool or shell access.")
+                        .cardMeta()
+                }
                 if template.provenance.thirdParty { Toggle("I accept the third-party terms", isOn: $acceptedTerms).cardToggle() }
+                let machineName = store.machines.first(where: { $0.id == machineID })?.name ?? "this machine"
+                let botName = importName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? template.content.name : importName.trimmingCharacters(in: .whitespacesAndNewlines)
+                Text(access == "standard"
+                    ? "\(botName) works on \(machineName) as you, with your files, tools and logins. It asks before running commands."
+                    : "\(botName) works on \(machineName) in chat-only mode without file, tool or shell access.")
+                    .cardMeta()
             }
             CardActions {
                 if template != nil {
                     Button("Import as my separate Bot") { Task { await action.perform {
-                        let bot: Bot = try await store.mutate("POST", resourcePath("templates", templateID, "/import"), body: ["name": .string(importName), "machineId": .string(machineID), "acceptedTerms": .bool(acceptedTerms)])
+                        let bot: Bot = try await store.mutate("POST", resourcePath("templates", templateID, "/import"), body: ["name": .string(importName), "machineId": .string(machineID), "acceptedTerms": .bool(acceptedTerms), "access": .string(access)])
                         try await store.refresh(); store.selectedConversationID = bot.mainConversationId
                     } } }.buttonStyle(.cardPrimary)
-                        .disabled(action.busy || state != "available" || !reviewed || importName.isEmpty || machineID.isEmpty || (template?.provenance.thirdParty == true && !acceptedTerms) || store.connectionState != "online")
+                        .disabled(action.busy || state != "available" || importName.isEmpty || machineID.isEmpty || (template?.provenance.thirdParty == true && !acceptedTerms) || store.connectionState != "online")
                 }
                 if let url = safeExternalURL(shareURL) {
                     Button("Open details") { openURL(url) }.buttonStyle(.pill(.secondary)).help(url.absoluteString)
@@ -404,7 +425,12 @@ struct TemplateShareCardView: View {
             ActionErrorView(message: action.error)
         }.task(id: templateID) {
             guard state == "available" else { return }
-            await action.perform { template = try await store.read(resourcePath("templates", templateID)); importName = template?.content.name ?? name }
+            await action.perform {
+                template = try await store.read(resourcePath("templates", templateID))
+                importName = template?.content.name ?? name
+                if let suggested = template?.content.suggestedAccess, ["standard", "none"].contains(suggested) { access = suggested } else { access = "standard" }
+                if machineID.isEmpty { let online = store.machines.filter { $0.status == "online" }; if online.count == 1 { machineID = online[0].id } }
+            }
         }
     }
 }

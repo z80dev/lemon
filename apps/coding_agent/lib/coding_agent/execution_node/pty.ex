@@ -19,7 +19,7 @@ defmodule CodingAgent.ExecutionNode.PTY do
            CodingAgent.ExecutionNode.HostIO.resolve(args["cwd"] || opts[:default_cwd], opts),
          true <- File.dir?(cwd),
          {:ok, cols, rows} <- dimensions(args),
-         python when is_binary(python) <- System.find_executable("python3"),
+         {:ok, python} <- CodingAgent.ExecutionNode.Python.executable(),
          shell when is_binary(shell) <- System.get_env("SHELL") || System.find_executable("sh"),
          true <- File.regular?(shell) do
       helper = Path.join(to_string(:code.priv_dir(:coding_agent)), "node_pty.py")
@@ -50,6 +50,7 @@ defmodule CodingAgent.ExecutionNode.PTY do
         {:stop, :pty_unavailable}
       end
     else
+      {:error, :not_installed} -> {:stop, :pty_unavailable}
       {:error, reason} -> {:stop, reason}
       _ -> {:stop, :pty_unavailable}
     end

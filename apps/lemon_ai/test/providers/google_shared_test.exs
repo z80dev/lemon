@@ -14,6 +14,7 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
     Context,
     ImageContent,
     Model,
+    StreamOptions,
     TextContent,
     Tool,
     UserMessage
@@ -38,6 +39,86 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
 
     test "returns false for empty map" do
       refute GoogleShared.thinking_part?(%{})
+    end
+  end
+
+  describe "put_thinking_config/3" do
+    test "maps declared reasoning levels without inferring from model IDs" do
+      model = %Model{reasoning: true, reasoning_efforts: [:low, :medium, :high]}
+
+      for {effort, expected} <- [
+            {:minimal, "LOW"},
+            {:low, "LOW"},
+            {:medium, "MEDIUM"},
+            {:high, "HIGH"},
+            {:xhigh, "HIGH"},
+            {:max, "HIGH"}
+          ] do
+        opts = %StreamOptions{reasoning: effort}
+
+        assert GoogleShared.put_thinking_config(%{}, model, opts) == %{
+                 "thinkingConfig" => %{
+                   "includeThoughts" => true,
+                   "thinkingLevel" => expected
+                 }
+               }
+      end
+    end
+
+    test "uses levels instead of budgets for level-based models" do
+      model = %Model{reasoning: true, reasoning_efforts: [:low, :medium, :high]}
+      opts = %StreamOptions{reasoning: :medium, thinking_budgets: %{budget_tokens: 8192}}
+
+      assert GoogleShared.put_thinking_config(%{}, model, opts) == %{
+               "thinkingConfig" => %{"includeThoughts" => true, "thinkingLevel" => "MEDIUM"}
+             }
+    end
+
+    test "normalizes explicit levels and clamps them to the model capabilities" do
+      model = %Model{reasoning: true, reasoning_efforts: [:low, :medium, :high]}
+
+      for override <- [:minimal, "minimal", "MINIMAL"] do
+        opts = %StreamOptions{reasoning: :high, thinking_budgets: %{level: override}}
+
+        assert GoogleShared.put_thinking_config(%{}, model, opts) == %{
+                 "thinkingConfig" => %{"includeThoughts" => true, "thinkingLevel" => "LOW"}
+               }
+      end
+    end
+
+    test "keeps fixed OAuth model tiers rather than changing their reasoning level" do
+      model = %Model{reasoning: true, reasoning_efforts: [:medium]}
+      opts = %StreamOptions{reasoning: :max, thinking_budgets: %{level: "HIGH"}}
+
+      assert GoogleShared.put_thinking_config(%{}, model, opts) == %{
+               "thinkingConfig" => %{"includeThoughts" => true, "thinkingLevel" => "MEDIUM"}
+             }
+    end
+
+    test "preserves budget configuration for models without declared levels" do
+      model = %Model{reasoning: true}
+
+      for opts <- [
+            %StreamOptions{reasoning: :medium, thinking_budgets: %{budget_tokens: 8192}},
+            %StreamOptions{reasoning: :max, thinking_budgets: %{high: 8192}}
+          ] do
+        assert GoogleShared.put_thinking_config(%{}, model, opts) == %{
+                 "thinkingConfig" => %{"includeThoughts" => true, "thinkingBudget" => 8192}
+               }
+      end
+    end
+
+    test "does not enable thinking for none, nil, or a non-reasoning model" do
+      config = %{"maxOutputTokens" => 1024}
+      model = %Model{reasoning: true, reasoning_efforts: [:low, :medium, :high]}
+
+      for effort <- [nil, :none] do
+        assert GoogleShared.put_thinking_config(config, model, %StreamOptions{reasoning: effort}) ==
+                 config
+      end
+
+      assert GoogleShared.put_thinking_config(config, %Model{}, %StreamOptions{reasoning: :max}) ==
+               config
     end
   end
 

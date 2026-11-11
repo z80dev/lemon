@@ -22,14 +22,14 @@ defmodule LemonCore.ProviderManagement do
   """
   @setting :provider_management_service
   @device_operations ~w(device.start device.poll device.challenge device.cancel device.complete)
-  @operations ~w(list api_key.set disconnect default.set) ++ @device_operations
+  @operations ~w(list api_key.set disconnect default.set check import) ++ @device_operations
   @device_statuses ~w(starting pending completed denied expired cancelled lost failed)
   @device_fields Enum.map(
                    ~w(loginId targetId providerId status verificationUrl userCode expiresAtMs pollIntervalMs)a,
                    &{Atom.to_string(&1), &1}
                  )
   @verification_url "https://auth.openai.com/codex/device"
-  @errors ~w(invalid_provider unsupported_method invalid_api_key invalid_model invalid_target invalid_request forbidden provider_binding_rejected config_read_failed invalid_config config_write_failed secret_read_failed secret_write_failed secret_delete_failed shared_credential rollback_failed reload_failed unavailable busy)a
+  @errors ~w(invalid_provider unsupported_method invalid_api_key invalid_model invalid_target invalid_request forbidden provider_binding_rejected config_read_failed invalid_config config_write_failed secret_read_failed secret_write_failed secret_delete_failed shared_credential rollback_failed reload_failed unavailable busy login_not_found login_unusable)a
 
   def operations, do: @operations
 
@@ -88,71 +88,120 @@ defmodule LemonCore.ProviderManagement do
   end
 
   def validate(operation, params, node? \\ false) do
-    fields =
-      case operation do
-        "list" ->
-          []
+    cond do
+      not is_map(params) ->
+        {:error, :invalid_request}
 
-        "api_key.set" ->
-          ["targetId", "providerId", "value"]
+      operation == "list" ->
+        expected_keys = if node?, do: ["nodeId"], else: []
+        allowed_keys = [expected_keys, ["readiness" | expected_keys]]
+        keys = Enum.sort(Map.keys(params))
 
-        "disconnect" ->
-          ["targetId", "providerId"]
+        if Enum.any?(allowed_keys, &(Enum.sort(&1) == keys)) and
+             (not node? or identity?(params["nodeId"], 251)) and
+             (not Map.has_key?(params, "readiness") or is_boolean(params["readiness"])) do
+          :ok
+        else
+          {:error, :invalid_request}
+        end
 
-        "default.set" ->
-          ["targetId", "providerId", "modelId"]
+      operation == "check" ->
+        expected_keys = if node?, do: ["nodeId", "targetId"], else: ["targetId"]
+        allowed_keys = [expected_keys, ["providerId" | expected_keys]]
+        keys = Enum.sort(Map.keys(params))
 
-        "device.complete" ->
-          [
-            "targetId",
-            "providerId",
-            "loginId",
-            "ownerId",
-            "sessionId",
-            "completionId",
-            "challengeNonce",
-            "commit"
-          ]
+        if Enum.any?(allowed_keys, &(Enum.sort(&1) == keys)) and
+             identity?(params["targetId"], 256) and
+             (not node? or identity?(params["nodeId"], 251)) and
+             (not Map.has_key?(params, "providerId") or identity?(params["providerId"], 256)) do
+          :ok
+        else
+          {:error, :invalid_request}
+        end
 
-        operation when operation in @device_operations ->
-          ["targetId", "providerId", "loginId", "ownerId", "sessionId"]
+      operation == "import" ->
+        expected_keys =
+          if node?,
+            do: ["nodeId", "providerId", "source", "targetId"],
+            else: ["providerId", "source", "targetId"]
 
-        _ ->
-          nil
-      end
+        keys = Enum.sort(Map.keys(params))
 
-    required = if node? and fields, do: ["nodeId" | fields], else: fields
+        if keys == Enum.sort(expected_keys) and
+             identity?(params["targetId"], 256) and
+             (not node? or identity?(params["nodeId"], 251)) and
+             params["providerId"] == "openai_codex" and
+             params["source"] == "codex_cli" and
+             not Enum.any?(Map.keys(params), &String.contains?(String.downcase(&1), "path")) do
+          :ok
+        else
+          {:error, :invalid_request}
+        end
 
-    if is_map(params) and is_list(required) and Enum.sort(Map.keys(params)) == Enum.sort(required) and
-         Enum.all?(required, fn field ->
-           case field do
-             "commit" ->
-               is_boolean(params[field])
+      true ->
+        fields =
+          case operation do
+            "api_key.set" ->
+              ["targetId", "providerId", "value"]
 
-             "challengeNonce" ->
-               challenge_nonce?(params[field]) or
-                 (params["commit"] == false and params[field] == "")
+            "disconnect" ->
+              ["targetId", "providerId"]
 
-             "nodeId" ->
-               identity?(params[field], 251)
+            "default.set" ->
+              ["targetId", "providerId", "modelId"]
 
-             "targetId" ->
-               identity?(params[field], 256)
+            "device.complete" ->
+              [
+                "targetId",
+                "providerId",
+                "loginId",
+                "ownerId",
+                "sessionId",
+                "completionId",
+                "challengeNonce",
+                "commit"
+              ]
 
-             field when field in ["loginId", "ownerId", "sessionId", "completionId"] ->
-               identity?(params[field], 256)
+            operation when operation in @device_operations ->
+              ["targetId", "providerId", "loginId", "ownerId", "sessionId"]
 
-             "value" ->
-               bounded?(params[field], 16_384)
+            _ ->
+              nil
+          end
 
-             _ ->
-               bounded?(params[field], 256)
-           end
-         end) and
-         (operation not in @device_operations or params["providerId"] == "openai_codex") do
-      :ok
-    else
-      {:error, :invalid_request}
+        required = if node? and fields, do: ["nodeId" | fields], else: fields
+
+        if is_list(required) and Enum.sort(Map.keys(params)) == Enum.sort(required) and
+             Enum.all?(required, fn field ->
+               case field do
+                 "commit" ->
+                   is_boolean(params[field])
+
+                 "challengeNonce" ->
+                   challenge_nonce?(params[field]) or
+                     (params["commit"] == false and params[field] == "")
+
+                 "nodeId" ->
+                   identity?(params[field], 251)
+
+                 "targetId" ->
+                   identity?(params[field], 256)
+
+                 field when field in ["loginId", "ownerId", "sessionId", "completionId"] ->
+                   identity?(params[field], 256)
+
+                 "value" ->
+                   bounded?(params[field], 16_384)
+
+                 _ ->
+                   bounded?(params[field], 256)
+               end
+             end) and
+             (operation not in @device_operations or params["providerId"] == "openai_codex") do
+          :ok
+        else
+          {:error, :invalid_request}
+        end
     end
   end
 
@@ -245,6 +294,8 @@ defmodule LemonCore.ProviderManagement do
     args =
       case operation do
         "list" -> [[]]
+        "check" -> [params["providerId"], []]
+        "import" -> [params["providerId"], params["source"], []]
         "api_key.set" -> [params["providerId"], params["value"], []]
         "disconnect" -> [params["providerId"], []]
         "default.set" -> [params["providerId"], params["modelId"], []]
@@ -254,6 +305,8 @@ defmodule LemonCore.ProviderManagement do
     function =
       case operation do
         "list" -> :list
+        "check" -> :check
+        "import" -> :import_login
         "api_key.set" -> :set_api_key
         "disconnect" -> :disconnect
         "default.set" -> :set_default
@@ -264,8 +317,25 @@ defmodule LemonCore.ProviderManagement do
         "device.complete" -> :device_complete
       end
 
-    args =
-      List.replace_at(args, -1, Keyword.take(opts, [:target, :config_path, :cwd, :authority]))
+    forward_opts =
+      Keyword.take(opts, [
+        :target,
+        :config_path,
+        :cwd,
+        :authority,
+        :readiness,
+        :verifier,
+        :codex_discover
+      ])
+
+    forward_opts =
+      if operation == "list" and params["readiness"] == true do
+        Keyword.put(forward_opts, :readiness, true)
+      else
+        forward_opts
+      end
+
+    args = List.replace_at(args, -1, forward_opts)
 
     if is_atom(service) and not is_nil(service) and Code.ensure_loaded?(service) and
          function_exported?(service, function, length(args)) do

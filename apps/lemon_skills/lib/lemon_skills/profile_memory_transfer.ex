@@ -16,6 +16,8 @@ defmodule LemonSkills.ProfileMemoryTransfer do
   raw run metadata. Non-home repositories retain opaque workspace identities;
   no source filesystem path is transported. validate checks the full source
   revision, including excluded metadata, before the controller's first apply.
+  Source document payload limits are checked before credential screening, so
+  oversized snapshots are rejected without depending on regex engine match limits.
   """
   import Kernel, except: [binding: 1]
 
@@ -394,8 +396,13 @@ defmodule LemonSkills.ProfileMemoryTransfer do
             "preferences" => files
           }
 
-          with :ok <- snapshot_payload(snapshot) do
+          with :ok <- snapshot_payload(snapshot),
+               false <- Enum.any?(docs, &secret_term?(&1.meta)),
+               :ok <- validate_records(records, context.profile, context.home) do
             {:ok, {snapshot, Store.transfer_revisions(docs)}}
+          else
+            true -> {:error, :unsafe_snapshot}
+            error -> error
           end
         end
       end)
@@ -430,13 +437,7 @@ defmodule LemonSkills.ProfileMemoryTransfer do
             "revision" => Store.document_revision(doc)
           }
 
-          with true <- not secret_term?(doc.meta),
-               :ok <- validate_record(record, context.profile, context.home) do
-            {:cont, {:ok, [record | records]}}
-          else
-            false -> {:halt, {:error, :unsafe_snapshot}}
-            error -> {:halt, error}
-          end
+          {:cont, {:ok, [record | records]}}
 
         error ->
           {:halt, error}
@@ -666,12 +667,7 @@ defmodule LemonSkills.ProfileMemoryTransfer do
              true <-
                length(Enum.uniq_by(snapshot["documents"], & &1["id"])) ==
                  length(snapshot["documents"]) do
-          Enum.reduce_while(snapshot["documents"], :ok, fn record, :ok ->
-            case validate_record(record, context.profile, snapshot["homeDigest"]) do
-              :ok -> {:cont, :ok}
-              error -> {:halt, error}
-            end
-          end)
+          validate_records(snapshot["documents"], context.profile, snapshot["homeDigest"])
         else
           false -> {:error, :invalid_snapshot}
           error -> error
@@ -696,6 +692,15 @@ defmodule LemonSkills.ProfileMemoryTransfer do
       {:error, _} ->
         {:error, :invalid_snapshot}
     end
+  end
+
+  defp validate_records(records, profile, home) do
+    Enum.reduce_while(records, :ok, fn record, :ok ->
+      case validate_record(record, profile, home) do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
   end
 
   defp validate_record(record, profile, home) do

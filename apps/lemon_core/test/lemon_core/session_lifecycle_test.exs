@@ -2,6 +2,7 @@ defmodule LemonCore.SessionLifecycleTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.{
+    AgentIdentity,
     ChatStateStore,
     PolicyStore,
     RunStore,
@@ -455,10 +456,17 @@ defmodule LemonCore.SessionLifecycleTest do
     assert {:ok, _} = SessionLifecycle.patch(session_key, %{title: "Keep", pinned: true})
     assert :ok = ChatStateStore.put(session_key, %{messages: ["keep"]})
     assert :ok = PolicyStore.put_session(session_key, %{model: "keep-model"})
+    identity_id = "session://" <> session_key
+    old_name = "failure_old_#{suffix}"
+    new_name = "failure_new_#{suffix}"
+    assert {:ok, _} = AgentIdentity.register("operator", identity_id, %{name: old_name})
 
     assert {:error, :injected_commit_failure} =
              SessionLifecycle.delete(session_key,
-               run_delete_fun: fn ^session_key -> {:error, :injected_commit_failure} end
+               run_delete_fun: fn ^session_key ->
+                 assert {:ok, _} = AgentIdentity.rename("operator", identity_id, new_name)
+                 {:error, :injected_commit_failure}
+               end
              )
 
     assert SessionLifecycle.get(session_key)
@@ -467,6 +475,117 @@ defmodule LemonCore.SessionLifecycleTest do
     assert PolicyStore.get_session(session_key) == %{model: "keep-model"}
     assert SessionMetadataStore.get(session_key).title == "Keep"
     assert SessionMetadataStore.get(session_key).pinned == true
+
+    assert {:ok, %{id: ^identity_id, name: ^new_name}} =
+             AgentIdentity.resolve("operator", identity_id)
+
+    assert {:error, :not_found} = AgentIdentity.resolve("operator", old_name)
+  end
+
+  test "verified deletion releases the identity without deleting a reused old handle" do
+    suffix = unique_suffix()
+    first = "agent:identity_delete_first_#{suffix}:main"
+    second = "agent:identity_delete_second_#{suffix}:main"
+    first_id = "session://" <> first
+    second_id = "session://" <> second
+    old_name = "delete_old_#{suffix}"
+    new_name = "delete_new_#{suffix}"
+    on_exit(fn -> cleanup_sessions([first, second]) end)
+
+    seed_session(first, "run-identity-first-#{suffix}", "first", "first answer")
+    seed_session(second, "run-identity-second-#{suffix}", "second", "second answer")
+    assert {:ok, _} = AgentIdentity.register("operator", first_id, %{name: old_name})
+    assert {:ok, _} = AgentIdentity.rename("operator", first_id, new_name)
+    assert {:ok, _} = AgentIdentity.register("operator", second_id, %{name: old_name})
+
+    assert {:ok, %{verified: true}} = SessionLifecycle.delete(first)
+    assert {:error, :not_found} = AgentIdentity.resolve("operator", first_id)
+    assert {:error, :not_found} = AgentIdentity.resolve("operator", new_name)
+    assert {:ok, %{id: ^second_id}} = AgentIdentity.resolve("operator", old_name)
+    assert {:ok, _} = AgentIdentity.rename("operator", second_id, new_name)
+  end
+
+  test "recreation in the verified-delete gap preserves the replacement identity and handle" do
+    suffix = unique_suffix()
+    key = "agent:identity_delete_gap_#{suffix}:main"
+    id = "session://" <> key
+    old_name = "gap_old_#{suffix}"
+    new_name = "gap_new_#{suffix}"
+
+    on_exit(fn ->
+      AgentIdentity.remove("operator", id)
+      cleanup_sessions([key])
+    end)
+
+    seed_session(key, "run-delete-gap-#{suffix}", "original", "original answer")
+    assert {:ok, original} = RunStore.ensure_session_incarnation(key)
+    assert {:ok, _} = AgentIdentity.register("operator", id, %{name: old_name})
+    test = self()
+    deleter = Task.async(fn -> receive do: (:delete -> SessionLifecycle.delete(key)) end)
+    barrier = make_ref()
+
+    # Suspend only the deleter after its strict missing-index verification,
+    # while Store serves its identity snapshot. Other callers remain runnable.
+    debug = fn suspended, event, _extra ->
+      case event do
+        {:in, {:"$gen_call", {pid, _tag}, {:generic_fetch, :agent_identities_v1, "operator"}}}
+        when pid == deleter.pid and not suspended ->
+          send(test, :identity_release_paused)
+          receive do: (:serve_identity_snapshot -> :ok)
+          true
+
+        _ ->
+          suspended
+      end
+    end
+
+    assert :ok = :sys.install(Store, {debug, false})
+
+    try do
+      send(deleter.pid, :delete)
+      assert_receive :identity_release_paused, 5_000
+      Process.put(barrier, :paused)
+      assert true = :erlang.suspend_process(deleter.pid)
+      send(Process.whereis(Store), :serve_identity_snapshot)
+      Process.put(barrier, :released)
+      assert :ok = :sys.remove(Store, debug)
+      assert {:ok, nil} = RunStore.fetch_session_index(key)
+      assert :ok = RunStore.create_session_index(key, "identity_delete_gap_#{suffix}", :web)
+      assert {:ok, replacement} = RunStore.ensure_session_incarnation(key)
+      refute replacement.incarnation == original.incarnation
+
+      assert :ok =
+               Store.compare_and_swap(:sessions_index, key, replacement, %{
+                 replacement
+                 | created_at_ms: original.created_at_ms
+               })
+
+      assert {:ok, _} = AgentIdentity.register("operator", id, %{name: new_name})
+      assert true = :erlang.resume_process(deleter.pid)
+      assert {:ok, %{verified: true}} = Task.await(deleter, 5_000)
+
+      assert {:ok, %{id: ^id, name: ^new_name, incarnation: incarnation}} =
+               AgentIdentity.resolve("operator", new_name)
+
+      refute incarnation == original.incarnation
+      assert {:error, :not_found} = AgentIdentity.resolve("operator", old_name)
+      assert {:ok, %{incarnation: ^incarnation}} = RunStore.ensure_session_incarnation(key)
+    after
+      if Process.delete(barrier) == :paused,
+        do: send(Process.whereis(Store), :serve_identity_snapshot)
+
+      :sys.remove(Store, debug)
+
+      if Process.alive?(deleter.pid) do
+        try do
+          :erlang.resume_process(deleter.pid)
+        catch
+          :error, :badarg -> :ok
+        end
+
+        Task.shutdown(deleter, :brutal_kill)
+      end
+    end
   end
 
   defp seed_session(session_key, run_id, prompt, answer, events \\ [], updated_at_ms \\ nil) do

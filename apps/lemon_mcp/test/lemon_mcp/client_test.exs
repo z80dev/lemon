@@ -1157,23 +1157,12 @@ defmodule LemonMCP.ClientTest do
   end
 
   describe "SSE client" do
-    # Excluded from the gating suite (CI runs `--exclude integration`). This is a
-    # real socket-level HTTP+SSE handshake against a local Bandit fixture; its
-    # timing is flaky under load (the streaming endpoint/response round-trip
-    # intermittently misses its deadline), which both fails the run and drops
-    # lemon_mcp coverage. It still runs locally with `--include integration`.
-    # Follow-up: make the handshake deterministic (proper endpoint/response
-    # synchronization instead of timeouts), then remove this tag and restore the
-    # coverage threshold in apps/lemon_mcp/mix.exs.
-    @tag :integration
     test "initializes, lists tools, and calls tools through legacy HTTP+SSE transport" do
       {port, store} = start_sse_transport()
 
       {:ok, client} =
         LemonMCP.Client.SSE.start_link(
           url: "http://127.0.0.1:#{port}/sse",
-          # Generous deadline: this only binds when something is wrong, and
-          # 2s flaked on loaded CI runners (full umbrella under --cover).
           timeout_ms: 15_000
         )
 
@@ -1209,6 +1198,26 @@ defmodule LemonMCP.ClientTest do
 
       assert :ok = LemonMCP.Client.SSE.close(client)
       stop_sse_streams(store)
+    end
+
+    for fragmented <- [false, true] do
+      @tag fragmented: fragmented
+      test "reads the initial endpoint without waiting for another TCP packet (fragmented=#{fragmented})",
+           %{fragmented: fragmented} do
+        {port, store} = start_coalesced_sse_transport(fragmented)
+
+        {:ok, client} =
+          LemonMCP.Client.SSE.start_link(
+            url: "http://127.0.0.1:#{port}/sse",
+            timeout_ms: 1_000
+          )
+
+        assert LemonMCP.Client.SSE.state(client) == :ready
+        assert {:ok, tools} = LemonMCP.Client.SSE.list_tools(client)
+        assert Enum.map(tools, & &1["name"]) == ["echo", "fail"]
+        assert :ok = LemonMCP.Client.SSE.close(client)
+        stop_sse_streams(store)
+      end
     end
   end
 
@@ -1265,6 +1274,60 @@ defmodule LemonMCP.ClientTest do
 
     {port, store}
   end
+
+  defp start_coalesced_sse_transport(fragmented) do
+    {post_port, store} = start_sse_transport()
+
+    {:ok, listener} =
+      :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+
+    on_exit(fn -> :gen_tcp.close(listener) end)
+    {:ok, {_ip, port}} = :inet.sockname(listener)
+
+    start_supervised!({Task,
+     fn ->
+       {:ok, socket} = :gen_tcp.accept(listener)
+       {:ok, _request} = :gen_tcp.recv(socket, 0, 1_000)
+       stream_pid = self()
+       Agent.update(store, &Map.put(&1, "coalesced", stream_pid))
+
+       endpoint = "data: http://127.0.0.1:#{post_port}/messages/coalesced\n\n"
+
+       chunks =
+         if fragmented,
+           do: ["event: endpoint\n", endpoint],
+           else: ["event: endpoint\n" <> endpoint]
+
+       # One write puts the headers and endpoint in the initial response.
+       # No heartbeat or other packet can unblock a buffering HTTP client.
+       :ok =
+         :gen_tcp.send(socket, [
+           "HTTP/1.1 200 OK\r\n",
+           "content-type: text/event-stream\r\n",
+           "transfer-encoding: chunked\r\n\r\n",
+           Enum.map(chunks, &http_chunk/1)
+         ])
+
+       raw_sse_loop(socket)
+     end})
+
+    {port, store}
+  end
+
+  defp raw_sse_loop(socket) do
+    receive do
+      {:sse_message, data} ->
+        case :gen_tcp.send(socket, http_chunk("event: message\ndata: #{data}\n\n")) do
+          :ok -> raw_sse_loop(socket)
+          {:error, _} -> :ok
+        end
+
+      :stop ->
+        :gen_tcp.close(socket)
+    end
+  end
+
+  defp http_chunk(data), do: [Integer.to_string(byte_size(data), 16), "\r\n", data, "\r\n"]
 
   defp start_streamable_http_transport do
     {:ok, store} = start_supervised({Agent, fn -> [] end})

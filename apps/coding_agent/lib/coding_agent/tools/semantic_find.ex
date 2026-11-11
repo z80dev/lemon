@@ -187,7 +187,10 @@ defmodule CodingAgent.Tools.SemanticFind do
 
   # -- Preconditions -----------------------------------------------------------
 
-  defp settings(cwd, opts), do: Keyword.get(opts, :settings_manager) || SettingsManager.load(cwd)
+  defp settings(cwd, opts),
+    do:
+      Keyword.get(opts, :settings_manager) ||
+        SettingsManager.load(Keyword.get(opts, :config_cwd) || cwd)
 
   defp resolve_model(settings, config) do
     selector =

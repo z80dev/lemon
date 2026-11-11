@@ -94,7 +94,7 @@ defmodule LemonAi.Providers.TransportErrorTest do
     context = Context.new(messages: [%UserMessage{content: "Hello"}])
 
     for {provider, api, id, key} <- [
-          {OpenAICodexResponses, :openai_codex_responses, :"openai-codex", jwt},
+          {OpenAICodexResponses, :openai_codex_responses, :openai_codex, jwt},
           {OpenAIResponses, :openai_responses, :openai, "synthetic-key"}
         ] do
       model = %Model{

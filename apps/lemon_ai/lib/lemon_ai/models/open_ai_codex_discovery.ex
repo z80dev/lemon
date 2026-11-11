@@ -56,7 +56,7 @@ defmodule LemonAi.Models.OpenAICodexDiscovery do
 
   @doc "Return an actionable error before using a model unavailable to this account."
   @spec ensure_available(Model.t(), [option()]) :: :ok | {:error, String.t()}
-  def ensure_available(%Model{provider: :"openai-codex", id: id} = model, opts) do
+  def ensure_available(%Model{provider: :openai_codex, id: id} = model, opts) do
     opts = Keyword.put_new(opts, :base_url, model.base_url)
 
     case discover(opts) do
@@ -172,7 +172,7 @@ defmodule LemonAi.Models.OpenAICodexDiscovery do
               id = entry["slug"] || entry["id"]
 
               if is_binary(id) and id != "" and entry["supported_in_api"] != false do
-                case Models.get_model(:"openai-codex", id) do
+                case Models.get_model(:openai_codex, id) do
                   %Model{} = model ->
                     compat =
                       Map.merge(model.compat || %{}, %{

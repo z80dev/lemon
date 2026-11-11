@@ -92,6 +92,47 @@ normalized_env = fn name ->
   end
 end
 
+bind_ip = fn var, default ->
+  case :inet.parse_address(to_charlist(System.get_env(var) || default)) do
+    {:ok, ip} -> ip
+    {:error, _} -> raise "Invalid #{var}: expected an IPv4 or IPv6 address"
+  end
+end
+
+config :lemon_control_plane, :ip, bind_ip.("LEMON_CONTROL_PLANE_BIND_IP", "127.0.0.1")
+
+node_port =
+  case Integer.parse(System.get_env("LEMON_CONTROL_PLANE_NODE_PORT") || "4044") do
+    {port, ""} when port in 0..65_535 -> port
+    _ -> raise "LEMON_CONTROL_PLANE_NODE_PORT must be an integer from 0 to 65535"
+  end
+
+config :lemon_control_plane, :node_gateway,
+  port:
+    if(config_env() == :test and is_nil(System.get_env("LEMON_CONTROL_PLANE_NODE_PORT")),
+      do: 0,
+      else: node_port
+    ),
+  ip: bind_ip.("LEMON_CONTROL_PLANE_NODE_BIND_IP", "127.0.0.1")
+
+remote_http_apis =
+  (normalized_env.("LEMON_CONTROL_PLANE_REMOTE_HTTP") || "")
+  |> String.split(",", trim: true)
+  |> Enum.map(fn api ->
+    case String.trim(api) do
+      "openai" -> :openai
+      "acp" -> :acp
+      _ -> raise "LEMON_CONTROL_PLANE_REMOTE_HTTP accepts only openai,acp"
+    end
+  end)
+
+config :lemon_control_plane, :remote_http_apis, remote_http_apis
+
+config :lemon_web, LemonWeb.Endpoint, http: [ip: bind_ip.("LEMON_WEB_BIND_IP", "127.0.0.1")]
+
+config :lemon_sim_ui, LemonSimUi.Endpoint,
+  http: [ip: bind_ip.("LEMON_SIM_UI_BIND_IP", "127.0.0.1")]
+
 # ── lemon-sim product block (1 of 3) — sim wiring outside apps/lemon_sim*
 # (docs/platform-split.md). `sim_ui_endpoint_enabled?` defined here is read again by
 # block 3, so the two must stay together and keep this order. ──
@@ -527,7 +568,7 @@ if config_env() == :prod do
 
       endpoint_config = [
         url: [host: host, port: url_port, scheme: url_scheme],
-        http: [ip: {0, 0, 0, 0}, port: port],
+        http: [ip: bind_ip.("#{env_prefix}_BIND_IP", "127.0.0.1"), port: port],
         secret_key_base: secret_key_base || System.fetch_env!("#{env_prefix}_SECRET_KEY_BASE")
       ]
 

@@ -15,7 +15,89 @@ public struct ProviderManagement: Codable, Hashable {
     public var target: Target
     public var `default`: Default
     public var providers: [ManagedProvider]
-    public init(target: Target, default value: Default, providers: [ManagedProvider]) { self.target = target; self.default = value; self.providers = providers }
+    public var readiness: ModelReadiness?
+    public var detected: [DetectedLogin]
+    public init(target: Target, default value: Default, providers: [ManagedProvider], readiness: ModelReadiness? = nil, detected: [DetectedLogin] = []) {
+        self.target = target; self.default = value; self.providers = providers; self.readiness = readiness; self.detected = detected
+    }
+    private enum CodingKeys: String, CodingKey { case target, `default`, providers, readiness, detected }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        target = try values.decode(Target.self, forKey: .target)
+        self.default = try values.decode(Default.self, forKey: .default)
+        providers = try values.decode([ManagedProvider].self, forKey: .providers)
+        readiness = try values.decodeIfPresent(ModelReadiness.self, forKey: .readiness)
+        detected = try values.decodeIfPresent([DetectedLogin].self, forKey: .detected) ?? []
+    }
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(target, forKey: .target)
+        try values.encode(self.default, forKey: .default)
+        try values.encode(providers, forKey: .providers)
+        try values.encodeIfPresent(readiness, forKey: .readiness)
+        try values.encode(detected, forKey: .detected)
+    }
+}
+
+public struct ModelReadiness: Codable, Hashable {
+    public enum State: String, Codable { case verified, saved, actionRequired = "action_required", notConfigured = "not_configured" }
+    public enum Reason: String, Codable {
+        case credentialMissing = "credential_missing", credentialExpired = "credential_expired", credentialRejected = "credential_rejected"
+        case modelUnavailable = "model_unavailable", providerUnreachable = "provider_unreachable", checkUnavailable = "check_unavailable"
+        case checkFailed = "check_failed", noDefault = "no_default", modelProviderMismatch = "model_provider_mismatch"
+    }
+    public enum Check: String, Codable { case codexDiscovery = "codex_discovery", modelsEndpoint = "models_endpoint" }
+    public var state: State
+    public var providerId: String?
+    public var modelId: String?
+    public var check: Check?
+    public var reason: Reason?
+    public var availableModelIds: [String]?
+    public var suggestedModelId: String?
+    public var checkedAtMs: TimestampMs?
+    public init(state: State, providerId: String? = nil, modelId: String? = nil, check: Check? = nil, reason: Reason? = nil, availableModelIds: [String]? = nil, suggestedModelId: String? = nil, checkedAtMs: TimestampMs? = nil) {
+        self.state = state; self.providerId = providerId; self.modelId = modelId; self.check = check; self.reason = reason; self.availableModelIds = availableModelIds; self.suggestedModelId = suggestedModelId; self.checkedAtMs = checkedAtMs
+    }
+    public var isReady: Bool { state == .verified || state == .saved }
+}
+
+public struct DetectedLogin: Codable, Hashable {
+    public enum Source: String, Codable { case codexCLI = "codex_cli", environment }
+    public var source: Source
+    public var providerId: String
+    public var variable: String?
+    public init(source: Source, providerId: String, variable: String? = nil) {
+        self.source = source; self.providerId = providerId; self.variable = variable
+    }
+}
+
+public struct ProviderCheckResult: Codable, Hashable {
+    public var management: ProviderManagement
+    public var readiness: ModelReadiness
+    public init(management: ProviderManagement, readiness: ModelReadiness) {
+        self.management = management; self.readiness = readiness
+    }
+}
+
+public enum ModelReadinessSkipStore {
+    public static func key(workspaceID: String?, machineID: String?) -> String {
+        "model_readiness_skip_\(workspaceID ?? "default")_\(machineID ?? "default")"
+    }
+    public static func isSkipped(workspaceID: String?, machineID: String?) -> Bool {
+        UserDefaults.standard.bool(forKey: key(workspaceID: workspaceID, machineID: machineID))
+    }
+    public static func setSkipped(_ skipped: Bool, workspaceID: String?, machineID: String?) {
+        UserDefaults.standard.set(skipped, forKey: key(workspaceID: workspaceID, machineID: machineID))
+    }
+}
+
+/// The soft gate shared by Create Bot and the first-run card: a target without readable
+/// readiness never blocks, and an explicit Skip is client-only state per (workspace, machine).
+public enum ModelReadinessGate {
+    public static func readyOrSkipped(readiness: ModelReadiness?, canManage: Bool, machineOnline: Bool, skipped: Bool) -> Bool {
+        guard canManage, machineOnline, let readiness else { return true }
+        return readiness.isReady || skipped
+    }
 }
 
 public struct ManagedProvider: Codable, Hashable, Identifiable {

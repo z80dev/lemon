@@ -275,7 +275,7 @@
     "cost": {
       "input": 0.15,
       "output": 0.6,
-      "cache_read": 0.0,
+      "cache_read": 0.075,
       "cache_write": 0.0
     },
     "context_window": 131072,
@@ -294,7 +294,7 @@
     "cost": {
       "input": 0.075,
       "output": 0.3,
-      "cache_read": 0.0,
+      "cache_read": 0.0375,
       "cache_write": 0.0
     },
     "context_window": 131072,
@@ -355,12 +355,31 @@
       "cache_read": 0.0,
       "cache_write": 0.0
     },
-    "context_window": 131042,
+    "context_window": 131072,
     "max_tokens": 16384,
     "reasoning_efforts": [
       "low",
       "medium",
       "high"
     ]
+  },
+  "openai/gpt-oss-safeguard-20b": {
+    "id": "openai/gpt-oss-safeguard-20b",
+    "name": "Safety GPT OSS 20B",
+    "api": "openai_completions",
+    "provider": "groq",
+    "base_url": "https://api.groq.com/openai/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.075,
+      "output": 0.3,
+      "cache_read": 0.0375,
+      "cache_write": 0.0
+    },
+    "context_window": 131072,
+    "max_tokens": 65536
   }
 }

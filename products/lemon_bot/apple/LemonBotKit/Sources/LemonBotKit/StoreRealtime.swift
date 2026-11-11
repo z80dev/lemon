@@ -194,6 +194,7 @@ extension LemonBotStore {
     func clearConversationAccess(_ id: ID) {
         conversations.removeAll { $0.id == id }; entries[id] = nil; drafts[id] = nil
         runs.removeAll { $0.conversationId == id }; typingByConversation[id] = nil
+        pendingRunEntryReconciliations = pendingRunEntryReconciliations.filter { $0.value.conversationId != id }
         if selectedConversationID == id { selectedConversationID = nil }
         if visibleConversationID == id { visibleConversationID = nil }
         if let account {
@@ -224,6 +225,7 @@ extension LemonBotStore {
     }
     func apply(_ event: RealtimeEvent) async throws {
         switch event.payload {
+        case .machineSetupUpserted(let value): try await receiveMachineSetup(value)
         case .userUpdated(let value): if value.id == user?.id, value.revision >= (user?.revision ?? 0) { user = value }
         case .workspaceUpdated(let value): if value.id == workspace?.id, value.revision >= (workspace?.revision ?? 0) { workspace = value }
         case .memberUpserted(let value): if value.userId == user?.id, value.revision >= (member?.revision ?? 0) { member = value }
@@ -231,9 +233,13 @@ extension LemonBotStore {
             guard value.ownerUserId == account?.userID, value.workspaceId == account?.workspaceID else { throw ClientError.invalidFrame }
             upsert(&pairings, value, id: { $0.id }, revision: { $0.revision })
             if value.id == pairingQRID, value.status != "waiting" { pairingURL = nil }
-        case .machineUpserted(let value): upsert(&machines, value, id: { $0.id }, revision: { $0.revision })
+        case .machineUpserted(let value):
+            upsert(&machines, value, id: { $0.id }, revision: { $0.revision })
+            for bot in bots where bot.machineId == value.id { grantsVersion[bot.id, default: 0] += 1 }
         case .machineDeleted(let value): machines.removeAll { $0.id == value.id }
-        case .botUpserted(let value): upsert(&bots, value, id: { $0.id }, revision: { $0.revision })
+        case .botUpserted(let value):
+            upsert(&bots, value, id: { $0.id }, revision: { $0.revision })
+            if ["idle", "offline"].contains(value.activity) { scheduleRunReconciliation(botID: value.id) }
         case .botDeleted(let value): bots.removeAll { $0.id == value.id }
         case .sectionUpserted(let value): upsert(&sections, value, id: { $0.id }, revision: { $0.revision })
         case .sectionDeleted(let value): sections.removeAll { $0.id == value.id }
@@ -269,7 +275,12 @@ extension LemonBotStore {
         case .notificationUpserted(let value): upsert(&notifications, value, id: { $0.id }, revision: { $0.revision })
         case .notificationDeleted(let value): notifications.removeAll { $0.id == value.id }
         case .voiceUpserted(let value): if value.userId == user?.id { voiceSession = value }
-        case .botPresence(let value): if let index = bots.firstIndex(where: { $0.id == value.botId }) { bots[index].activity = value.status }
+        case .botPresence(let value):
+            if let index = bots.firstIndex(where: { $0.id == value.botId }) { bots[index].activity = value.status }
+            if ["idle", "offline"].contains(value.status) { scheduleRunReconciliation(botID: value.botId) }
+        case .grantUpserted(let value): grantsVersion[value.botId, default: 0] += 1
+        case .policiesUpdated, .governanceUpdated:
+            for bot in bots { grantsVersion[bot.id, default: 0] += 1 }
         default: break
         }
         latestResources[event.event] = event.payload

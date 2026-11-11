@@ -79,6 +79,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.SessionManager.{Session, SessionEntry}
   alias CodingAgent.Tools.Task.Control
   alias CodingAgent.Wasm.SidecarSupervisor
+  alias CodingAgent.WorkspaceReads
   alias LemonAgent.ContextRegistry
   alias LemonAgent.ModelRuntime.SessionPins
   alias LemonAgent.Types.AgentTool
@@ -152,6 +153,9 @@ defmodule CodingAgent.Session do
     :wasm_status,
     :plan_gate,
     :terminal_event,
+    :bot_folder_root,
+    :config_cwd,
+    :native_source_profile_id,
     branch_generation: 0,
     todo_projection: {:ok, []},
     tool_started_at: %{},
@@ -232,6 +236,9 @@ defmodule CodingAgent.Session do
             | {:canceled, term()}
             | {:turn_end, LemonAi.Types.AssistantMessage.t(), list()}
             | nil,
+          bot_folder_root: String.t() | nil,
+          config_cwd: String.t() | nil,
+          native_source_profile_id: String.t() | nil,
           branch_generation: non_neg_integer(),
           todo_projection: {:ok, [map()]} | {:error, term()},
           tool_started_at: %{String.t() => integer()},
@@ -316,7 +323,7 @@ defmodule CodingAgent.Session do
   1. Explicit `:system_prompt` option (if provided)
   2. Prompt template content loaded via `:prompt_template` (if provided)
   3. Lemon base prompt (coding rules for the session's tools + skills + workspace bootstrap)
-  4. CLAUDE.md/AGENTS.md content from ResourceLoader (auto-loaded from cwd)
+  4. CLAUDE.md/AGENTS.md content from ResourceLoader (auto-loaded from trusted config_cwd)
   5. Environment block (cwd, platform, shell, git snapshot, date), captured once at start
 
   Empty strings are filtered out before joining.
@@ -714,6 +721,12 @@ defmodule CodingAgent.Session do
   @doc "Current context usage and the configured automatic-compaction budget."
   def context_budget(session), do: GenServer.call(session, :context_budget)
 
+  @doc "Durably fence web egress before an exempt workspace read executes."
+  @spec record_workspace_read_fence(GenServer.server()) ::
+          :ok | {:error, :journal_write_failed | :fence_unavailable}
+  def record_workspace_read_fence(session),
+    do: GenServer.call(session, :record_workspace_read_fence)
+
   @doc """
   Per-category context-window usage of the request this session would send.
   See `CodingAgent.Session.ContextUsage`.
@@ -917,6 +930,20 @@ defmodule CodingAgent.Session do
       end
     else
       {:reply, {:error, :aborted}, state}
+    end
+  end
+
+  # Called from a tool task before an exempt workspace read is allowed to run;
+  # this process is the only journal writer, so the durable fence entry is
+  # appended here. The reply is `:ok` only once the fence is durable.
+  def handle_call(:record_workspace_read_fence, _from, state) do
+    # Fence ancestors before exposing any unreviewed bytes, including streamed
+    # task output and async completions. An unavailable ancestor denies exemption.
+    parent = state.session_manager.header.parent_session
+
+    case if(is_nil(parent), do: :ok, else: WorkspaceReads.fence!(parent)) do
+      :ok -> persist_workspace_read_fence(state)
+      {:error, _} = error -> {:reply, error, state}
     end
   end
 
@@ -1769,6 +1796,38 @@ defmodule CodingAgent.Session do
   # ============================================================================
   # Private Functions
   # ============================================================================
+  defp persist_workspace_read_fence(state) do
+    entry_type = WorkspaceReads.fence_entry_type()
+
+    cond do
+      SessionManager.latest_custom_entry(state.session_manager, entry_type) ->
+        {:reply, WorkspaceReads.set_fenced(state.session_manager.header.id), state}
+
+      not is_binary(state.session_file) ->
+        {:reply, {:error, :journal_write_failed}, state}
+
+      true ->
+        entry =
+          SessionEntry.custom(entry_type, %{
+            "fenced" => true,
+            "timestamp" => System.system_time(:millisecond)
+          })
+
+        session_manager = SessionManager.append_entry(state.session_manager, entry)
+
+        try do
+          SessionManager.persist(session_manager, state.session_file)
+        rescue
+          File.Error ->
+            {:reply, {:error, :journal_write_failed}, state}
+        else
+          persisted ->
+            reply = WorkspaceReads.set_fenced(persisted.header.id)
+            {:reply, reply, %{state | session_manager: persisted}}
+        end
+    end
+  end
+
   defp handle_session_down(ref, pid, _reason, state) do
     cond do
       state.auto_compaction.task_monitor_ref == ref ->
@@ -2104,7 +2163,7 @@ defmodule CodingAgent.Session do
   @spec refresh_system_prompt(t(), String.t(), [ContextRegistry.section()]) :: t()
   defp refresh_system_prompt(state, skill_context, system_sections) do
     case PromptComposer.maybe_refresh_system_prompt(
-           state.cwd,
+           state.config_cwd || state.cwd,
            state.explicit_system_prompt,
            state.prompt_template,
            state.workspace_dir,

@@ -21,6 +21,7 @@ info() { printf '\033[0;32m[lemon]\033[0m %s\n' "$1"; }
 warn() { printf '\033[0;33m[lemon]\033[0m %s\n' "$1"; }
 error() { printf '\033[0;31m[lemon]\033[0m %s\n' "$1" >&2; }
 
+ORIGINAL_ARGS=("$@")
 LAUNCH_CWD="$(pwd)"
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 while [ -L "$SCRIPT_PATH" ]; do
@@ -30,6 +31,9 @@ while [ -L "$SCRIPT_PATH" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+case "${1:-}" in
+  tunnel) shift; exec "$LEMON_ROOT/rel/overlays/libexec/lemon-tunnel" "$@" ;;
+esac
 TUI_DIR="$LEMON_ROOT/clients/tui"
 LEMON_HOME_DIR="$HOME/.lemon"
 STATE_DIR="$LEMON_HOME_DIR/run"
@@ -43,7 +47,7 @@ load_port_settings() {
   [ -f "$1" ] || return 0
   while IFS='=' read -r key value || [ -n "$key" ]; do
     case "$key" in
-      LEMON_CONTROL_PLANE_PORT | LEMON_WEB_PORT | LEMON_SIM_UI_PORT)
+      LEMON_CONTROL_PLANE_PORT | LEMON_CONTROL_PLANE_NODE_PORT | LEMON_WEB_PORT | LEMON_SIM_UI_PORT)
         if [[ "$value" =~ ^[0-9]{1,5}$ && -z "${!key:-}" ]]; then
           export "$key=$value"
         fi
@@ -53,13 +57,39 @@ load_port_settings() {
 }
 load_port_settings "$LEMON_HOME_DIR/ports.env"
 
+# Scope epmd and Erlang distribution interface to loopback by default unless
+# the user explicitly chose long-name distribution (--name) or supplied overrides.
+load_environment() {
+  export ERL_EPMD_ADDRESS="${ERL_EPMD_ADDRESS:-127.0.0.1}"
+
+  local has_name=0 arg
+  if [ "${NODE_MODE:-}" = "name" ] || [ "${RELEASE_DISTRIBUTION:-}" = "name" ]; then
+    has_name=1
+  fi
+  for arg in "${ORIGINAL_ARGS[@]}"; do
+    if [ "$arg" = "--name" ]; then
+      has_name=1
+      break
+    fi
+  done
+  if [ "$has_name" = "0" ]; then
+    case "${ELIXIR_ERL_OPTIONS:-}" in
+      *inet_dist_use_interface*) ;;
+      *)
+        export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-}${ELIXIR_ERL_OPTIONS:+ }-kernel inet_dist_use_interface {127,0,0,1}"
+        ;;
+    esac
+  fi
+}
+load_environment
+
 PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
 WEB_PORT="${LEMON_WEB_PORT:-4080}"
 SIM_PORT="${LEMON_SIM_UI_PORT:-4090}"
 export LEMON_CONTROL_PLANE_PORT="$PORT" LEMON_WEB_PORT="$WEB_PORT" LEMON_SIM_UI_PORT="$SIM_PORT"
 NODE_MODE=""
 NODE_NAME="${LEMON_GATEWAY_NODE_NAME:-lemon}"
-NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-lemon_gateway_dev_cookie}}"
+NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-}}"
 DISTRIBUTED=1
 DEBUG=""
 
@@ -140,6 +170,7 @@ paths_overlap() {
 runtime_paths() {
   PIDFILE="${LEMON_RUNTIME_PID_FILE:-$STATE_DIR/lemon-$PORT.pid}"
   [[ "$PIDFILE" = /* ]] || PIDFILE="$LAUNCH_CWD/$PIDFILE"
+  ROOTFILE="$STATE_DIR/lemon-$PORT.root"
   LOG_FILE="${LEMON_RUNTIME_LOG_FILE:-$STATE_DIR/lemon-$PORT.log}"
   LOCK_DIR="$STATE_DIR/lemon-$PORT.lock"
 }
@@ -164,7 +195,7 @@ require_curl() {
 
 require_elixir() {
   if ! command -v elixir >/dev/null 2>&1 || ! command -v mix >/dev/null 2>&1; then
-    error "Elixir and Mix are required for a source checkout (Elixir 1.19.5+, Erlang/OTP 28.5+); see docs/install.md, Source development"
+    error "Elixir and Mix are required for a source checkout (Elixir 1.20.5+, Erlang/OTP 29.1.2+); see docs/install.md, Source development"
     exit 1
   fi
 }
@@ -376,7 +407,7 @@ load_managed_token() {
     error "refusing unsafe managed control-plane credential: $file"
     return 2
   fi
-  mode="$(stat -f '%Lp' "$file" 2>/dev/null)" || mode="$(stat -c '%a' "$file" 2>/dev/null)" || mode=""
+  mode="$(stat -c '%a' "$file" 2>/dev/null)" || mode="$(stat -f '%Lp' "$file" 2>/dev/null)" || mode=""
   if [ "$mode" != "600" ]; then
     error "managed control-plane credential must have mode 600: $file"
     return 2
@@ -551,6 +582,15 @@ start_runtime() {
   fi
   rm -f "$PIDFILE"
   if [ "$DISTRIBUTED" = "1" ]; then
+    if [ -z "$NODE_COOKIE" ]; then
+      (
+        umask 077
+        mkdir -p "$LEMON_HOME_DIR"
+        [ -s "$LEMON_HOME_DIR/cookie" ] || openssl rand -hex 32 > "$LEMON_HOME_DIR/cookie"
+        chmod 600 "$LEMON_HOME_DIR/cookie"
+      ) || exit 1
+      NODE_COOKIE="$(cat "$LEMON_HOME_DIR/cookie")"
+    fi
     [ -n "$NODE_COOKIE" ] || { error "distributed mode requires a non-empty --cookie"; exit 2; }
     if [ -z "$NODE_MODE" ]; then
       if [[ "$NODE_NAME" == *@* ]]; then NODE_MODE="name"; else NODE_MODE="sname"; fi
@@ -575,6 +615,7 @@ start_runtime() {
   if [ "$mode" = "foreground" ]; then
     [ "$DISTRIBUTED" = "0" ] || info "Distributed node: --$NODE_MODE $NODE_NAME (attach with iex --remsh and the same cookie)"
     record_runtime_pid "$$"
+    printf '%s\n' "$LEMON_ROOT" > "$ROOTFILE"
     release_start_lock
     exec "${cmd[@]}"
   fi
@@ -582,6 +623,7 @@ start_runtime() {
   nohup "${cmd[@]}" > "$LOG_FILE" 2>&1 &
   pid=$!
   record_runtime_pid "$pid"
+  printf '%s\n' "$LEMON_ROOT" > "$ROOTFILE"
   for ((attempt = 0; attempt < 240; attempt++)); do
     if control_plane_healthy; then
       info "Runtime started in background (pid: $pid); logs: $LOG_FILE"
@@ -614,12 +656,319 @@ stop_runtime() {
     sleep 1
   done
   [ "$(owned_runtime_pid "$file" || true)" != "$pid" ] || kill -KILL "$pid"
-  rm -f "$file"
+  rm -f "$file" "$ROOTFILE"
   info "stopped"
 }
 
+# First <string> following <key>KEY</key> in a plist: Label, or argv[0] of
+# ProgramArguments. Deliberately not a general parser: it reads the two values
+# a Lemon-owned unit must have.
+plist_string() {
+  awk -v key="$2" '
+    index($0, "<key>" key "</key>") { found = 1 }
+    found && match($0, /<string>[^<]*<\/string>/) {
+      value = substr($0, RSTART + 8, RLENGTH - 17)
+      gsub(/&lt;/, "<", value)
+      gsub(/&gt;/, ">", value)
+      gsub(/&quot;/, "\"", value)
+      gsub(/&apos;/, sprintf("%c", 39), value)
+      gsub(/&amp;/, "\\&", value)
+      print value
+      exit
+    }' "$1" 2>/dev/null
+}
+
+# ExecStart=... program, without its arguments or surrounding quotes.
+systemd_program() {
+  awk '
+    /^ExecStart=/ {
+      sub(/^ExecStart=/, "", $0)
+      gsub(/^[ \t]+/, "", $0)
+      sub(/[ \t].*$/, "", $0)
+      gsub(/^"|"$/, "", $0)
+      print
+      exit
+    }' "$1" 2>/dev/null
+}
+
+# A unit is Lemon-owned only if its program is this machine's stable launcher
+# or the launcher running right now. A PATH entry or a comment mentioning
+# Lemon proves nothing.
+lemon_program() {
+  case "$1" in
+    "$LEMON_HOME_DIR/bin/lemon") return 0 ;;
+    "${LEMON_LAUNCHER:-}") [ -n "${LEMON_LAUNCHER:-}" ] && return 0 ;;
+  esac
+  return 1
+}
+
+systemd_user_dir() {
+  case "${XDG_CONFIG_HOME:-}" in
+    /*) printf '%s/systemd/user\n' "$XDG_CONFIG_HOME" ;;
+    *) printf '%s/.config/systemd/user\n' "$HOME" ;;
+  esac
+}
+
+controller_unit() {
+  local label unit plist unit_path uid first
+  if [ "$PORT" = "4040" ]; then
+    label="org.lemon.controller"
+    unit="lemon-controller.service"
+  else
+    label="org.lemon.controller.$PORT"
+    unit="lemon-controller-$PORT.service"
+  fi
+
+  # launchd (macOS): a regular plist, never a symlink, whose Label is exactly
+  # ours and whose ProgramArguments[0] is a Lemon launcher.
+  plist="$HOME/Library/LaunchAgents/$label.plist"
+  if [ -f "$plist" ] && [ ! -L "$plist" ] &&
+     [ "$(plist_string "$plist" Label)" = "$label" ] &&
+     lemon_program "$(plist_string "$plist" ProgramArguments)"; then
+    uid="$(id -u 2>/dev/null || printf '%s' "${UID:-0}")"
+    if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
+      printf 'launchd %s\n' "$label"
+      return 0
+    fi
+  fi
+
+  # systemd (Linux): the managed header or a Lemon ExecStart program.
+  unit_path="$(systemd_user_dir)/$unit"
+  if [ -f "$unit_path" ] && [ ! -L "$unit_path" ]; then
+    first=""
+    IFS= read -r first < "$unit_path" || true
+    case "$first" in
+      "# Managed by lemon service"*) ;;
+      *) lemon_program "$(systemd_program "$unit_path")" || unit_path="" ;;
+    esac
+    if [ -n "$unit_path" ] && systemctl --user is-enabled "$unit" >/dev/null 2>&1; then
+      printf 'systemd %s\n' "$unit"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+# LemonCore.Service logs every controller to the same role log, regardless of
+# the control port.
+controller_log() { printf '%s\n' "$LEMON_HOME_DIR/logs/controller.log"; }
+
 status_context() {
   printf '  web: port %s\n  sim: port %s\n  log: %s (foreground output stays in its terminal)\n' "$WEB_PORT" "$SIM_PORT" "$LOG_FILE"
+  local cunit mgr label log_file
+  if cunit="$(controller_unit 2>/dev/null)" && [ -n "$cunit" ]; then
+    mgr="${cunit%% *}"
+    label="${cunit#* }"
+    log_file="$(controller_log)"
+    printf '  supervised by %s (%s); log: %s\n' "$mgr" "$label" "~${log_file#"$HOME"}"
+  else
+    printf "  not supervised: run 'lemon service install controller'\n"
+  fi
+}
+
+start_daemon() {
+  local reuse="${1:-1}"
+  if control_plane_healthy; then
+    [ "$reuse" = 1 ] || { error "another runtime is serving port $PORT; restart did not replace it; stop it where it runs, then retry"; return 1; }
+    info "a healthy Lemon runtime is already running on port $PORT; reusing it"
+    return 0
+  fi
+  local cunit mgr label uid
+  if cunit="$(controller_unit 2>/dev/null)" && [ -n "$cunit" ]; then
+    mgr="${cunit%% *}"
+    label="${cunit#* }"
+    if [ "$mgr" = "launchd" ]; then
+      uid="$(id -u 2>/dev/null || printf '%s' "${UID:-0}")"
+      launchctl kickstart "gui/$uid/$label" || {
+        error "could not kickstart controller unit $label"
+        return 1
+      }
+    elif [ "$mgr" = "systemd" ]; then
+      systemctl --user start "$label" || {
+        error "could not start controller unit $label"
+        return 1
+      }
+    fi
+    if wait_until control_plane_healthy 120; then
+      info "started via $mgr ($label)"
+      return 0
+    else
+      error "runtime did not become healthy on port $PORT within 120s; see $LEMON_HOME_DIR/logs/controller.log"
+      return 1
+    fi
+  fi
+  start_runtime daemon "$@"
+}
+
+daemon_identity() {
+  local digest
+  digest="$(printf '%s\n' "$1" "$2" "$3" "$PORT" | openssl dgst -sha256)"
+  printf '%s\n' "${digest##* }"
+}
+
+# Private update protocol. The source record stores pid and the process start
+# time it was born with; both must still match before this launcher claims an
+# identity. Comparing only the live start time would accept a recycled PID.
+update_daemon_snapshot() {
+  local pid stored recorded born file
+  if [ ! -e "$PIDFILE" ]; then
+    if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
+      error "port $PORT answers but is not managed by this HOME ($HOME); stop it where it runs"
+      return 1
+    fi
+    printf 'stopped\n'
+    return 0
+  fi
+  for file in "$PIDFILE" "$ROOTFILE"; do
+    if [ ! -f "$file" ] || [ -L "$file" ] || [ ! -O "$file" ]; then
+      error "unsafe or missing managed daemon record: $file"
+      return 1
+    fi
+  done
+  pid=""
+  stored=""
+  recorded=""
+  { IFS= read -r pid; IFS= read -r stored || true; } < "$PIDFILE" || true
+  IFS= read -r recorded < "$ROOTFILE" || true
+  if [[ ! "$pid" =~ ^[1-9][0-9]*$ ]] || [ -z "$stored" ] || [ ! -d "$recorded" ]; then
+    error "invalid managed daemon identity; no process was signalled"
+    return 1
+  fi
+  recorded="$(cd "$recorded" && pwd -P)" || return
+  born="$(process_identity "$pid" || true)"
+  if [ -z "$born" ] || [ "$born" != "$stored" ]; then
+    if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
+      error "stale daemon record with occupied port $PORT; no process was signalled"
+      return 1
+    fi
+    printf 'stopped\n'
+    return 0
+  fi
+  daemon_identity "$pid" "$born" "$recorded"
+}
+
+# Graceful stop of a runtime this HOME recorded and still owns. A process that
+# does not match the token is never signalled, and one that ignores SIGTERM is
+# reported, never killed.
+stop_recorded_runtime() {
+  local root="$1" token="$2" pid stored born attempt
+  root="$(cd "$root" && pwd -P)" || return
+  pid=""
+  stored=""
+  { IFS= read -r pid; IFS= read -r stored || true; } < "$PIDFILE" || true
+  born="$(process_identity "$pid" || true)"
+  if [[ ! "$pid" =~ ^[1-9][0-9]*$ ]] || [ -z "$born" ] || [ "$born" != "$stored" ] ||
+     [ "$(daemon_identity "$pid" "$born" "$root")" != "$token" ]; then
+    error "daemon changed before stop; no process was signalled"
+    return 1
+  fi
+  kill -TERM "$pid" || return 1
+  for ((attempt = 0; attempt < 300; attempt++)); do
+    [ "$(process_identity "$pid" || true)" = "$born" ] || break
+    sleep 0.1
+  done
+  if [ "$(process_identity "$pid" || true)" = "$born" ]; then
+    error "daemon has not exited after stop; no further signal was sent"
+    return 1
+  fi
+  rm -f "$PIDFILE" "$ROOTFILE"
+}
+
+# A manager restart is asynchronous: health may still belong to the old VM.
+# Require a new process identity, the selected root, and an authenticated
+# snapshot before allowing the update coordinator to bring workers back.
+wait_restarted_runtime() {
+  local old_pid="$1" old_born="$2" attempt pid born recorded snapshot
+  for ((attempt = 0; attempt < 120; attempt++)); do
+    pid="" recorded=""
+    if [ -f "$PIDFILE" ] && [ ! -L "$PIDFILE" ] &&
+       [ -f "$ROOTFILE" ] && [ ! -L "$ROOTFILE" ]; then
+      IFS= read -r pid < "$PIDFILE" || true
+      IFS= read -r recorded < "$ROOTFILE" || true
+      born="$(process_identity "$pid" 2>/dev/null || true)"
+      if [ -n "$born" ] && { [ "$pid" != "$old_pid" ] || [ "$born" != "$old_born" ]; } &&
+         [ -d "$recorded" ] && [ "$(cd "$recorded" && pwd -P)" = "$(cd "$LEMON_ROOT" && pwd -P)" ] &&
+         control_plane_healthy; then
+        snapshot="$(update_daemon_snapshot 2>/dev/null)" || snapshot=""
+        if [ "$snapshot" = "$(daemon_identity "$pid" "$born" "$(cd "$LEMON_ROOT" && pwd -P)")" ]; then
+          return 0
+        fi
+      fi
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+restart_updated_daemon() {
+  local token="$1" previous="$2" current recorded old_pid old_born
+  previous="$(cd "$previous" && pwd -P)" || return
+  current="$(update_daemon_snapshot)" || return
+  IFS= read -r recorded < "$ROOTFILE" || true
+  recorded="$(cd "$recorded" && pwd -P)" || return
+  if [ "$current" = stopped ] || [ "$current" != "$token" ] || [ "$recorded" != "$previous" ]; then
+    error "daemon changed during update; no process was signalled"
+    return 1
+  fi
+  IFS= read -r old_pid < "$PIDFILE" || return
+  old_born="$(process_identity "$old_pid")" || return
+  local cunit mgr label uid
+  if cunit="$(controller_unit 2>/dev/null)" && [ -n "$cunit" ]; then
+    mgr="${cunit%% *}"
+    label="${cunit#* }"
+    if [ "$mgr" = "launchd" ]; then
+      uid="$(id -u 2>/dev/null || printf '%s' "${UID:-0}")"
+      launchctl kickstart -k "gui/$uid/$label" || {
+        error "could not restart controller unit $label via launchctl"
+        return 1
+      }
+    elif [ "$mgr" = "systemd" ]; then
+      systemctl --user --no-block restart "$label" || {
+        error "could not restart controller unit $label via systemctl"
+        return 1
+      }
+    fi
+    if ! wait_restarted_runtime "$old_pid" "$old_born"; then
+      error "replacement runtime did not become healthy at $LEMON_ROOT within 120s; see $(controller_log)"
+      return 1
+    fi
+    info "restarted selected checkout at $LEMON_ROOT"
+    return 0
+  fi
+  stop_recorded_runtime "$previous" "$token" || return
+  start_daemon 0 || return
+  info "restarted selected checkout at $LEMON_ROOT"
+}
+
+# The post-VM executor revalidates the preview's canonical filesystem identities
+# and deletes relative to pinned directory descriptors, never through symlinks.
+apply_uninstall_manifest() {
+  python3 "$LEMON_ROOT/rel/overlays/libexec/lemon-uninstall" "$1"
+}
+
+run_uninstall() {
+  local manifest_dir manifest_file cli_status=0 delete_status=0
+  manifest_dir="$(mktemp -d "${TMPDIR:-/tmp}/lemon-uninstall.XXXXXX")"
+  manifest_file="$manifest_dir/manifest"
+  touch "$manifest_file"
+  chmod 600 "$manifest_file"
+  export LEMON_UNINSTALL_MANIFEST="$manifest_file"
+
+  set +e
+  cd "$LEMON_ROOT"
+  MIX_QUIET=1 compile_source >&2
+  env MIX_QUIET=1 elixir "$LEMON_ROOT/scripts/lemon_cli.exs" "$@"
+  cli_status=$?
+  if [ "$cli_status" -eq 0 ] && [ -s "$manifest_file" ]; then
+    apply_uninstall_manifest "$manifest_file"
+    delete_status=$?
+  fi
+  set -e
+
+  rm -rf "$manifest_dir"
+  [ "$cli_status" -eq 0 ] || exit "$cli_status"
+  exit "$delete_status"
 }
 
 open_browser() {
@@ -661,6 +1010,20 @@ case "$COMMAND" in
 esac
 
 case "$COMMAND" in
+  __update-daemon)
+    case "${2:-}:$#" in
+      snapshot:2) update_daemon_snapshot ;;
+      restart:4) restart_updated_daemon "$3" "$4" ;;
+      stop:3)
+        recorded=""
+        IFS= read -r recorded < "$ROOTFILE" 2>/dev/null || true
+        [ -n "$recorded" ] || recorded="$LEMON_ROOT"
+        stop_recorded_runtime "$recorded" "$3"
+        ;;
+      *) error "invalid internal update lifecycle request"; exit 2 ;;
+    esac
+    exit $?
+    ;;
   -h|--help) run_help ;;
   help) shift; run_help "$@" ;;
 esac
@@ -677,7 +1040,7 @@ done
 case "$COMMAND" in --version|version|backup) run_cli "$@" ;; esac
 validate_runtime_ports
 case "$COMMAND" in
-  tui|web|start|daemon|stop|restart|status|acp|run|-p|--print) require_curl ;;
+  tui|web|start|daemon|stop|restart|status|__update-daemon|acp|run|-p|--print) require_curl ;;
 esac
 
 case "$COMMAND" in
@@ -685,7 +1048,7 @@ case "$COMMAND" in
     shift
     case "${1:-}" in -h|--help) run_help acp ;; esac
     prepare_runtime_credential || exit 1
-    if ! control_plane_healthy; then start_runtime daemon >&2; fi
+    if ! control_plane_healthy; then start_daemon >&2; fi
     run_cli acp "$@"
     ;;
   tui)
@@ -704,7 +1067,7 @@ case "$COMMAND" in
         compile_source >/dev/null
         (run_cli setup --if-required) || exit 1
       fi
-      start_runtime daemon
+      start_daemon
     fi
     if [ -z "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}${LEMON_WS_TOKEN:-}" ]; then
       case "${LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK:-}" in
@@ -730,7 +1093,7 @@ case "$COMMAND" in
     [ "$status" -le 1 ] || exit 1
     if ! web_healthy; then
       info "Web UI is not running; starting Lemon"
-      start_runtime daemon
+      start_daemon
       wait_until web_healthy 30 || { error "Web UI did not become healthy on port $WEB_PORT within 30s"; exit 1; }
     fi
     info "Lemon Web: http://127.0.0.1:$WEB_PORT/"
@@ -746,7 +1109,7 @@ case "$COMMAND" in
   daemon)
     shift
     parse_runtime_options "$@"
-    start_runtime daemon
+    start_daemon
     ;;
 
   stop)
@@ -758,13 +1121,26 @@ case "$COMMAND" in
   restart)
     shift
     parse_runtime_options "$@"
-    if managed_runtime_pidfile >/dev/null; then
-      stop_runtime || exit 1
-    elif control_port_in_use; then
-      error "port $PORT answers but is not managed by this HOME ($HOME); stop it where it runs, then retry restart"
-      exit 1
+    cunit="$(controller_unit 2>/dev/null)" || cunit=""
+    if [ -n "$cunit" ]; then
+      snapshot="$(update_daemon_snapshot)" || exit 1
+      if [ "$snapshot" = stopped ]; then
+        start_daemon 0
+      else
+        recorded=""
+        IFS= read -r recorded < "$ROOTFILE" 2>/dev/null || true
+        [ -n "$recorded" ] || recorded="$LEMON_ROOT"
+        restart_updated_daemon "$snapshot" "$recorded"
+      fi
+    else
+      if managed_runtime_pidfile >/dev/null; then
+        stop_runtime || exit 1
+      elif control_port_in_use; then
+        error "port $PORT answers but is not managed by this HOME ($HOME); stop it where it runs, then retry restart"
+        exit 1
+      fi
+      start_daemon 0
     fi
-    start_runtime daemon 0
     ;;
 
   status)
@@ -788,6 +1164,10 @@ case "$COMMAND" in
       status_context
       exit 1
     fi
+    ;;
+
+  uninstall)
+    run_uninstall "$@"
     ;;
 
   *)

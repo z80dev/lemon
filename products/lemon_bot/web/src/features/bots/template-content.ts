@@ -18,8 +18,9 @@ export function parseTemplate(text: string): TemplateContent {
   return value;
 }
 function isTemplateContent(value: unknown): value is TemplateContent {
-  if (!object(value) || !Object.keys(value).every(key => ['name', 'title', 'job', 'instructions', 'avatar', 'voice', 'skills', 'routines', 'connectorNames'].includes(key))) return false;
+  if (!object(value) || !Object.keys(value).every(key => ['name', 'title', 'job', 'instructions', 'avatar', 'voice', 'skills', 'routines', 'connectorNames', 'suggestedAccess'].includes(key))) return false;
   if (!['name', 'title', 'job', 'instructions'].every(key => typeof value[key] === 'string')) return false;
+  if (value.suggestedAccess !== undefined && !['standard', 'none'].includes(String(value.suggestedAccess))) return false;
   const avatar = value.avatar; const voice = value.voice;
   if (!object(avatar) || !['character', 'image'].includes(String(avatar.kind)) || typeof avatar.shape !== 'string' || typeof avatar.color !== 'string' || !(avatar.attachmentId === null || typeof avatar.attachmentId === 'string') || !Object.keys(avatar).every(key => ['kind', 'shape', 'color', 'attachmentId'].includes(key))) return false;
   if (!object(voice) || typeof voice.voiceId !== 'string' || typeof voice.speed !== 'number' || voice.speed < 0.5 || voice.speed > 2 || !(voice.language === null || typeof voice.language === 'string') || !Object.keys(voice).every(key => ['voiceId', 'speed', 'language'].includes(key))) return false;

@@ -6,12 +6,12 @@ defmodule LemonSimUi.SimManagerTest do
 
   test "parse_model_spec resolves hyphenated provider names" do
     assert SimManager.parse_model_spec("openai-codex:gpt-6-luna") ==
-             {:"openai-codex", "gpt-6-luna"}
+             {:openai_codex, "gpt-6-luna"}
   end
 
   test "parse_model_spec resolves aliased provider names" do
     assert SimManager.parse_model_spec("openai_codex:gpt-6-luna") ==
-             {:"openai-codex", "gpt-6-luna"}
+             {:openai_codex, "gpt-6-luna"}
   end
 
   test "parse_model_spec resolves world-snapshot provider/model strings" do
@@ -19,7 +19,7 @@ defmodule LemonSimUi.SimManagerTest do
     assert SimManager.parse_model_spec("kimi/k2p5") == {:kimi, "k2p5"}
 
     assert SimManager.parse_model_spec("openai-codex/gpt-6-luna") ==
-             {:"openai-codex", "gpt-6-luna"}
+             {:openai_codex, "gpt-6-luna"}
   end
 
   test "parse_model_spec treats unknown-prefix slashes as a bare model id" do

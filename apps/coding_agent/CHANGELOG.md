@@ -4,6 +4,21 @@
 
 ### Added
 
+- Per-Bot folder reads can skip human approval only when effective policy sets
+  `workspace_read_exempt == true` and the trusted worker folder, bound execution
+  scope and canonical `ProfileStore.paths(profile_id)["files"]` resolve to the
+  same directory. `read` and explicit-file ripgrep targets must be single-linked
+  regular files inside that folder; `ls` may list the folder. Directory grep,
+  internal URLs and `find` require approval. Memory-path aliases use the execution
+  resolver and approval binds the resolved target. Failed canonicalization,
+  including exhausted symlink traversal, never grants an exemption.
+  Before an exempt read, `CodingAgent.WorkspaceReads` durably fences the session
+  and every ancestor. Existing descendants consult ancestor fences, so streamed
+  task output and async results cannot escape through an unfenced parent/sibling.
+  `webfetch` and `websearch` then require approval even after restore, extension
+  reload or policy narrowing. Unreachable ancestors and lost mirrors fail closed.
+  Extension/config discovery uses the trusted config root, not Bot-written
+  `.lemon/config.toml` in the folder.
 - Configured local ACP/debug/eval/tool/Wasm launch adapters now participate in
   opt-in durable native-process tracking. ACP creates and debugger launch/attach
   dispatches retain external-work uncertainty even after errors; a missing ACP
@@ -160,6 +175,8 @@
 
 ### Changed
 
+- Keep immutable execution-node service adapters separate from mutable worker
+  state so connection and invocation updates retain the BEAM's small-map layout.
 - Seen-line edit protection now defaults on: anchored edits to lines not shown in
   a numbered read are refused. Disable with `[runtime.tools.edit]
   enforce_seen_lines = false`. The Git guard remains on by default
@@ -187,6 +204,8 @@
 
 ### Fixed
 
+- Named-node request decoding recognizes optional `cwdMode` and canonical
+  `:cwd_mode` without crashing legacy requests that omit the field.
 - Native session ledgers, descendant scopes, and explicit run-tree budgets retain
   unknown token and dollar totals instead of charging zero. Relevant caps block
   further model requests and child launches; repeated reports, stale snapshots,

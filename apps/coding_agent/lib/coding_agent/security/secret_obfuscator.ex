@@ -28,6 +28,8 @@ defmodule CodingAgent.Security.SecretObfuscator do
   The obfuscator keeps its placeholder table in a public ETS table owned by the
   process that built it (the session), so the transform and the tool wrappers
   share regex-discovered placeholders.
+  Match-budget exhaustion withholds the complete provider-visible text batch;
+  it never skips the failing rule or forwards a partially screened message.
   """
 
   alias CodingAgent.Security.SecretObfuscator.{Loader, Placeholder, Replacement}
@@ -123,6 +125,8 @@ defmodule CodingAgent.Security.SecretObfuscator do
     }
 
     redact_prepared(text, obfuscator, {regex_matches, tokens, unsafe_matches})
+  rescue
+    SystemLimitError -> "[REDACTED]"
   end
 
   def obfuscate(_obfuscator, text), do: text
@@ -196,6 +200,12 @@ defmodule CodingAgent.Security.SecretObfuscator do
       )
 
     {:ok, messages}
+  rescue
+    SystemLimitError ->
+      {withheld, _} =
+        map_messages(messages, nil, fn _text, state -> {"[REDACTED]", state} end, true)
+
+      {:ok, withheld}
   end
 
   @doc """
@@ -739,11 +749,15 @@ defmodule CodingAgent.Security.SecretObfuscator do
     else
       label
     end
+  rescue
+    SystemLimitError -> nil
   end
 
   defp prefix_secret_shaped?(obfuscator, prefix) do
     Enum.any?(obfuscator.sanitized_values, &Placeholder.label_collides_with_secret?(prefix, &1)) or
       Enum.any?(obfuscator.regexes, &Regex.match?(&1.regex, prefix))
+  rescue
+    SystemLimitError -> true
   end
 
   # ── Key ───────────────────────────────────────────────────────────────────

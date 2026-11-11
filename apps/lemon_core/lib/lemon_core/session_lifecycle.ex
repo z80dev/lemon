@@ -20,7 +20,7 @@ defmodule LemonCore.SessionLifecycle do
   a preview of the exact current candidate set.
   """
 
-  alias LemonCore.{ChatStateStore, PolicyStore, RunStore, SessionMetadataStore}
+  alias LemonCore.{AgentIdentity, ChatStateStore, PolicyStore, RunStore, SessionMetadataStore}
 
   @default_limit 100
   @max_limit 500
@@ -318,14 +318,20 @@ defmodule LemonCore.SessionLifecycle do
     end
   end
 
-  @doc "Delete all core-owned state for one session and verify it is gone."
+  @doc "Delete core-owned state and release only the deleted session incarnation's identity."
   @spec delete(String.t()) :: {:ok, map()} | {:error, term()}
   def delete(session_key) when is_binary(session_key), do: delete(session_key, [])
 
   @doc false
   @spec delete(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def delete(session_key, opts) when is_binary(session_key) and is_list(opts) do
-    existed = get(session_key) != nil
+    with {:ok, incarnation} <- deletion_incarnation(session_key) do
+      delete_incarnation(session_key, opts, incarnation)
+    end
+  end
+
+  defp delete_incarnation(session_key, opts, incarnation) do
+    existed = incarnation != nil
     run_delete_fun = Keyword.get(opts, :run_delete_fun, &RunStore.delete_session/1)
     canonical_verify_fun = Keyword.get(opts, :canonical_verify_fun, &verify_canonical_deleted/1)
 
@@ -341,7 +347,8 @@ defmodule LemonCore.SessionLifecycle do
            :ok <- normalize_delete_result(SessionMetadataStore.delete(session_key)),
            :ok <- verify_ancillary_deleted(session_key),
            :ok <- normalize_delete_result(run_delete_fun.(session_key)),
-           :ok <- canonical_verify_fun.(session_key) do
+           :ok <- canonical_verify_fun.(session_key),
+           :ok <- release_agent_identity(session_key, incarnation) do
         {:ok, %{session_key: session_key, existed: existed, verified: true}}
       end
 
@@ -350,9 +357,9 @@ defmodule LemonCore.SessionLifecycle do
         ok
 
       {:error, reason} ->
-        # Canonical run deletion is the final mutation. If that commit or its
-        # verification fails, we can restore the ancillary snapshots, but we
-        # deliberately do not claim the run history itself was recoverable.
+        # Identity release happens only after canonical deletion verifies, so a
+        # failed canonical commit cannot erase or restore over a renamed handle.
+        # Ancillary snapshots remain recoverable; run history is not.
         restore_ancillary_state(session_key, snapshots)
         {:error, reason}
     end
@@ -867,6 +874,33 @@ defmodule LemonCore.SessionLifecycle do
       deleted_count: length(deleted),
       verified: not dry_run and length(deleted) == length(candidates)
     }
+  end
+
+  defp deletion_incarnation(session_key) do
+    case RunStore.ensure_session_incarnation(session_key) do
+      {:ok, index} -> {:ok, index.incarnation}
+      {:error, :not_found} -> {:ok, nil}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp release_agent_identity(session_key, incarnation) do
+    case RunStore.ensure_session_incarnation(session_key) do
+      {:ok, %{incarnation: ^incarnation}} ->
+        {:error, :delete_not_verified}
+
+      result when elem(result, 0) == :ok or result == {:error, :not_found} ->
+        # A replacement may already exist, or register after this read. The
+        # scope CAS removes only the old incarnation, while still fencing
+        # in-flight claims when the scope/entry was absent.
+        case AgentIdentity.remove("operator", "session://" <> session_key, incarnation) do
+          {:error, :invalid_id} -> :ok
+          removed -> removed
+        end
+
+      {:error, _} = error ->
+        error
+    end
   end
 
   defp verify_ancillary_deleted(session_key) do

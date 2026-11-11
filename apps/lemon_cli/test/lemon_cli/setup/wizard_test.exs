@@ -1,9 +1,57 @@
+defmodule LemonCli.Setup.WizardTest.CountingKeychain do
+  @moduledoc false
+  # A keychain-named key provider that counts reads and can make each read
+  # slow, so a wizard run can be measured without touching the real Keychain.
+  @behaviour LemonCore.Secrets.KeyProvider
+
+  @impl true
+  def name, do: :keychain
+
+  @impl true
+  def available?(_opts), do: true
+
+  @impl true
+  def on_invalid, do: :continue
+
+  @impl true
+  def fetch(_opts) do
+    %{key: key, delay: delay} =
+      Agent.get_and_update(__MODULE__, fn state ->
+        {state, %{state | count: state.count + 1}}
+      end)
+
+    if delay > 0, do: Process.sleep(delay)
+    if key, do: {:ok, key}, else: {:error, :missing}
+  end
+
+  @impl true
+  def put(encoded, _opts) do
+    Agent.update(__MODULE__, &%{&1 | key: encoded})
+    :ok
+  end
+
+  def start do
+    case Agent.start_link(fn -> %{key: nil, delay: 0, count: 0} end, name: __MODULE__) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> {:ok, pid}
+    end
+  end
+
+  def put_key(encoded, opts), do: put(encoded, opts)
+
+  @doc "Starts counting from zero and applies a per-read delay in milliseconds."
+  def reset(delay), do: Agent.update(__MODULE__, &%{&1 | delay: delay, count: 0})
+
+  def count, do: Agent.get(__MODULE__, & &1.count)
+end
+
 defmodule LemonCli.Setup.WizardTest do
   # async: false because we manipulate Application env, HOME, and the secrets store
   use ExUnit.Case, async: false
 
   alias LemonCli.Onboarding.Runner
   alias LemonCli.Setup.Wizard
+  alias LemonCli.Setup.WizardTest.CountingKeychain
   alias LemonCore.Config.Modular
   alias LemonCore.Secrets
   alias LemonCore.Setup.Readiness
@@ -18,7 +66,12 @@ defmodule LemonCli.Setup.WizardTest do
     }
   end
 
-  @port_vars ["LEMON_CONTROL_PLANE_PORT", "LEMON_WEB_PORT", "LEMON_SIM_UI_PORT"]
+  @port_vars [
+    "LEMON_CONTROL_PLANE_PORT",
+    "LEMON_CONTROL_PLANE_NODE_PORT",
+    "LEMON_WEB_PORT",
+    "LEMON_SIM_UI_PORT"
+  ]
 
   setup do
     tmp_dir =
@@ -123,6 +176,7 @@ defmodule LemonCli.Setup.WizardTest do
     setup %{config_path: path} do
       configure_ready_provider(path)
       System.put_env("LEMON_CONTROL_PLANE_PORT", "4040")
+      System.put_env("LEMON_CONTROL_PLANE_NODE_PORT", "4044")
       System.put_env("LEMON_WEB_PORT", "4080")
 
       {:ok,
@@ -175,6 +229,49 @@ defmodule LemonCli.Setup.WizardTest do
              )
 
       assert System.get_env("LEMON_WEB_PORT") == "4081"
+    end
+
+    test "an occupied node gateway port 4044 is detected, replaced, and saved", ctx do
+      opts = [port_free?: &(&1 != 4044), launch: false] ++ ctx.opts
+      assert :ok = Wizard.run_full([], recording_io([""]), opts)
+
+      events = drain_events([])
+
+      assert "Port 4044 for the node gateway is already in use. Use 4045 instead? [Y/n]: " in prompt_events(
+               events
+             )
+
+      env_file = File.read!(Path.join(ctx.home, ".lemon/ports.env"))
+      assert env_file =~ "LEMON_CONTROL_PLANE_NODE_PORT=4045\n"
+      assert System.get_env("LEMON_CONTROL_PLANE_NODE_PORT") == "4045"
+    end
+
+    test "non-interactive setup replaces occupied node gateway port 4044 and persists it", ctx do
+      opts = [port_free?: &(&1 != 4044), non_interactive: true] ++ ctx.opts
+      assert :ok = Wizard.run_full([], recording_io(), opts)
+
+      events = drain_events([])
+      assert prompt_events(events) == []
+
+      assert info_event?(
+               events,
+               &(&1 == "Port 4044 for the node gateway is in use; Lemon will use 4045.")
+             )
+
+      env_file = File.read!(Path.join(ctx.home, ".lemon/ports.env"))
+      assert env_file =~ "LEMON_CONTROL_PLANE_NODE_PORT=4045\n"
+      assert System.get_env("LEMON_CONTROL_PLANE_NODE_PORT") == "4045"
+    end
+
+    test "a node gateway disabled with LEMON_CONTROL_PLANE_NODE_PORT=0 is never reserved", ctx do
+      System.put_env("LEMON_CONTROL_PLANE_NODE_PORT", "0")
+
+      opts = [port_free?: &(&1 != 4044), non_interactive: true] ++ ctx.opts
+      assert :ok = Wizard.run_full([], recording_io(), opts)
+
+      events = drain_events([])
+      refute info_event?(events, &String.contains?(&1, "node gateway"))
+      assert System.get_env("LEMON_CONTROL_PLANE_NODE_PORT") == "0"
     end
 
     test "free ports, or ports owned by a running Lemon, are left alone", ctx do
@@ -429,10 +526,10 @@ defmodule LemonCli.Setup.WizardTest do
           {:info, message} -> [message]
           _ -> []
         end)
-        |> Enum.drop_while(&(&1 != "Setup complete."))
+        |> Enum.drop_while(&(not String.starts_with?(&1, "Setup complete.")))
 
       assert summary == [
-               "Setup complete.",
+               "Setup complete. Model: openai / openai:gpt-5 (verified with OpenAI; no message was sent).",
                "Success check: a reply arrives and `lemon doctor` shows no FAIL.",
                "Run `lemon` in your repository and try this first prompt:",
                "  Read the repository instructions. Find how to run the tests. Add the test command to README if missing, run the focused tests, and show the diff.",
@@ -530,21 +627,34 @@ defmodule LemonCli.Setup.WizardTest do
       refute info_event?(events, &String.contains?(&1, "Setup complete"))
     end
 
-    test "skipped or unavailable live verification never claims setup complete", %{
-      config_path: path
-    } do
+    test "explicitly deferred verification does not launch", %{config_path: path} do
       configure_ready_provider(path)
+      io = Map.put(recording_io(), :interactive?, fn -> true end)
 
-      for opts <- [
-            [skip_verify: true, verifier: fn _ -> flunk("skipped check ran") end],
-            [verifier: fn _ -> {:skip, :offline} end]
-          ] do
-        io = recording_io()
-        assert :ok = Wizard.run_full([], io, [config_path: path, non_interactive: true] ++ opts)
-        events = drain_events([])
-        assert info_event?(events, &String.contains?(&1, "not live-verified"))
-        refute info_event?(events, &String.contains?(&1, "Setup complete"))
-      end
+      assert :ok =
+               Wizard.run_full([], io,
+                 config_path: path,
+                 skip_verify: true,
+                 verifier: fn _ -> flunk("skipped check ran") end,
+                 launcher: fn -> flunk("deferred verification must not launch") end
+               )
+    end
+
+    test "an unavailable live check still offers launch", %{config_path: path} do
+      configure_ready_provider(path)
+      io = Map.put(recording_io([""]), :interactive?, fn -> true end)
+
+      assert :ok =
+               Wizard.run_full([], io,
+                 config_path: path,
+                 verifier: fn _ -> {:skip, :not_supported} end,
+                 launcher: fn ->
+                   send(self(), :launched)
+                   :ok
+                 end
+               )
+
+      assert_received :launched
     end
   end
 
@@ -597,8 +707,12 @@ defmodule LemonCli.Setup.WizardTest do
       assert Readiness.ready?(Readiness.status(config_path: path))
 
       events = drain_events([])
-      assert info_event?(events, &String.contains?(&1, "not live-verified"))
-      refute info_event?(events, &String.contains?(&1, "Setup complete"))
+
+      assert info_event?(
+               events,
+               &(&1 ==
+                   "Setup complete. Model: openai / openai:gpt-5 (saved; live check skipped by --skip-verify).")
+             )
     end
   end
 
@@ -679,6 +793,302 @@ defmodule LemonCli.Setup.WizardTest do
     end
   end
 
+  describe "run_full/3 — Connect a model step" do
+    test "offers a detected Codex CLI login first and never imports it without a choice", %{
+      config_path: path,
+      home: home
+    } do
+      write_codex_cli_login(home)
+      set_master_key_env()
+
+      io = recording_io(["s"])
+      assert {:error, :setup_incomplete} = Wizard.run_full([], io, config_path: path)
+
+      events = drain_events([])
+      options = Enum.filter(info_messages(events), &String.match?(&1, ~r/^  \d+\. /))
+
+      assert [first | _] = options
+      assert first =~ "1. Copy your Codex CLI ChatGPT login into Lemon"
+      assert List.last(options) =~ "Skip — finish later with `lemon setup model`"
+      assert Enum.any?(options, &String.contains?(&1, "Sign in with ChatGPT (browser)"))
+      messages = info_messages(events)
+      warning = Enum.find_index(messages, &String.contains?(&1, "if either refreshes it"))
+      choice = Enum.find_index(messages, &String.contains?(&1, "1. Copy your Codex"))
+      assert is_integer(warning) and warning < choice
+      refute first =~ "read-only copy"
+
+      # The login is only read when a choice says so.
+      settings = if File.exists?(path), do: Toml.decode_file!(path), else: %{}
+      refute get_in(settings, ["providers", "openai-codex"])
+      refute info_event?(events, &String.contains?(&1, "Importing your Codex"))
+    end
+
+    test "a detected shell key is offered as an explicit save, not used silently", %{
+      config_path: path
+    } do
+      previous = System.get_env("ANTHROPIC_API_KEY")
+      System.put_env("ANTHROPIC_API_KEY", "sk-ant-shell")
+
+      on_exit(fn ->
+        if previous,
+          do: System.put_env("ANTHROPIC_API_KEY", previous),
+          else: System.delete_env("ANTHROPIC_API_KEY")
+      end)
+
+      set_master_key_env()
+      io = recording_io(["s"])
+      assert {:error, :setup_incomplete} = Wizard.run_full([], io, config_path: path)
+
+      events = drain_events([])
+
+      assert info_event?(
+               events,
+               &String.contains?(
+                 &1,
+                 "Save ANTHROPIC_API_KEY from this shell into Lemon's encrypted store"
+               )
+             )
+
+      settings = if File.exists?(path), do: Toml.decode_file!(path), else: %{}
+      refute get_in(settings, ["defaults", "provider"])
+    end
+
+    test "end of input in the model step fails instead of choosing", %{config_path: path} do
+      set_master_key_env()
+      io = %{recording_io() | prompt: fn _ -> :eof end}
+
+      assert_raise Mix.Error, ~r/No interactive terminal/, fn ->
+        Wizard.run_full([], io, config_path: path)
+      end
+    end
+
+    test "--model-optional Skip completes setup with the provider step pending", %{
+      config_path: path
+    } do
+      set_master_key_env()
+      io = recording_io(["s"])
+
+      assert :ok = Wizard.run_full([], io, config_path: path, model_optional: true)
+
+      state = Readiness.status(config_path: path)
+      assert Readiness.pending_steps(state) == [:provider]
+
+      events = drain_events([])
+      assert info_event?(events, &String.contains?(&1, "Skip — set it up in the browser"))
+      assert info_event?(events, &String.contains?(&1, "Setup complete. Model setup deferred"))
+    end
+
+    test "without --model-optional a Skip leaves setup unfinished", %{config_path: path} do
+      set_master_key_env()
+      io = recording_io(["s"])
+
+      assert {:error, :setup_incomplete} = Wizard.run_full([], io, config_path: path)
+
+      events = drain_events([])
+      assert info_event?(events, &String.contains?(&1, "Setup unfinished — pending steps"))
+      assert info_event?(events, &String.contains?(&1, "provider: run `lemon setup model`"))
+    end
+  end
+
+  describe "run_full/3 — truthful summaries" do
+    test "a provider without a quick live check is saved, not mislabelled", %{config_path: path} do
+      configure_ready_provider(path)
+      io = Map.put(recording_io([""]), :interactive?, fn -> true end)
+
+      assert :ok =
+               Wizard.run_full([], io,
+                 config_path: path,
+                 verifier: fn _ -> {:skip, {:unsupported_api, :oauth}} end,
+                 launcher: fn ->
+                   send(self(), :launched)
+                   :ok
+                 end
+               )
+
+      events = drain_events([])
+
+      assert info_event?(
+               events,
+               &(&1 ==
+                   "Setup complete. Model: openai / openai:gpt-5 (saved; Lemon checks it on your first message).")
+             )
+
+      refute info_event?(events, &String.contains?(&1, "--skip-verify"))
+      assert :launched in events
+    end
+
+    test "an unreachable provider is saved with its reason and still offers launch", %{
+      config_path: path
+    } do
+      configure_ready_provider(path)
+      io = Map.put(recording_io([""]), :interactive?, fn -> true end)
+
+      assert :ok =
+               Wizard.run_full([], io,
+                 config_path: path,
+                 verifier: fn _ -> {:error, :unreachable} end,
+                 launcher: fn ->
+                   send(self(), :launched)
+                   :ok
+                 end
+               )
+
+      events = drain_events([])
+
+      assert info_event?(
+               events,
+               &(&1 ==
+                   "Setup complete. Model: openai / openai:gpt-5 (saved; Lemon checks it on your first message).")
+             )
+
+      assert info_event?(events, &String.contains?(&1, "Provider unreachable"))
+      assert :launched in events
+    end
+
+    test "a rejected credential never claims completion", %{config_path: path} do
+      configure_ready_provider(path)
+      io = recording_io()
+
+      assert {:error, :verification_failed} =
+               Wizard.run_full([], io,
+                 config_path: path,
+                 non_interactive: true,
+                 verifier: fn _ -> {:error, :unauthorized} end
+               )
+
+      events = drain_events([])
+      assert info_event?(events, &String.contains?(&1, "Setup did not complete"))
+      refute info_event?(events, &String.contains?(&1, "Setup complete."))
+    end
+  end
+
+  describe "run_full/3 — progress and keychain cost" do
+    setup do
+      previous = Application.get_env(:lemon_core, LemonCore.Secrets)
+      {:ok, _agent} = CountingKeychain.start()
+
+      Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [CountingKeychain])
+      System.delete_env("LEMON_SECRETS_MASTER_KEY")
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:lemon_core, LemonCore.Secrets, previous),
+          else: Application.delete_env(:lemon_core, LemonCore.Secrets)
+      end)
+
+      :ok
+    end
+
+    @keychain_delay_ms 5_000
+    @boundary_budget_ms 1_000
+
+    test "a 5s keychain costs at most two reads and leaves no reported gap above 1s", %{
+      config_path: path,
+      home: home
+    } do
+      CountingKeychain.put_key(Base.encode64(:crypto.strong_rand_bytes(32)), [])
+      write_codex_cli_login(home)
+      CountingKeychain.reset(@keychain_delay_ms)
+
+      # Scripted answers: the detected Codex login, then the offered default model.
+      io = timed_io(["1", ""])
+
+      assert :ok =
+               Wizard.run([], io,
+                 config_path: path,
+                 verifier: fn _ -> {:ok, %{}} end,
+                 codex_discover: fn _opts -> {:ok, ["gpt-6.1-sol", "gpt-6-sol"]} end,
+                 launch: false
+               )
+
+      assert CountingKeychain.count() <= 2
+
+      events = drain_events([])
+      timeline = timed_timeline(events)
+      [{_, :info, first_message} | _] = timeline
+      assert first_message == "Starting Lemon setup…"
+
+      assert Enum.count(timeline, fn
+               {_, :info, message} -> String.starts_with?(message, "Importing your Codex")
+               _ -> false
+             end) == 1
+
+      # Obs 1's two reported pauses: the answered Connect-a-model choice to the
+      # next visible line, and the import summary to "Verifying…".
+      assert boundary_ms(timeline, {:prompt, "Select [default: 1, q to cancel]: "}) <=
+               @boundary_budget_ms
+
+      assert boundary_ms(timeline, {:info, "OpenAI Codex onboarding complete."}) <=
+               @boundary_budget_ms
+
+      assert info_event?(events, &String.contains?(&1, "Verifying provider configuration"))
+
+      # The discovered model is a real catalog id, so the live check resolves it
+      # and this run proves the verified path, not a skipped one.
+      assert info_event?(
+               events,
+               &(&1 ==
+                   "Setup complete. Model: openai-codex / openai-codex:gpt-6.1-sol " <>
+                     "(verified with OpenAI Codex; no message was sent).")
+             )
+
+      refute info_event?(events, &String.contains?(&1, "live check not available"))
+
+      # Any remaining wait is announced: it follows a progress line.
+      timeline
+      |> Enum.chunk_every(2, 1, :discard)
+      |> Enum.each(fn [{before_at, kind, before_message}, {after_at, _kind, after_message}] ->
+        if after_at - before_at >= @keychain_delay_ms do
+          assert kind == :info and progress_line?(before_message),
+                 "silent #{after_at - before_at}ms gap between " <>
+                   "#{inspect(before_message)} and #{inspect(after_message)}"
+        end
+      end)
+    end
+  end
+
+  describe "run_model/3 — readiness exit result" do
+    for {state, check_result, expected} <- [
+          {:verified, {:ok, %{}}, :ok},
+          {:saved, {:error, :unreachable}, :ok},
+          {:action_required, {:error, :unauthorized}, {:error, :not_ready}}
+        ] do
+      test "JSON mode returns #{inspect(expected)} for #{state} readiness", %{config_path: path} do
+        configure_ready_provider(path)
+
+        output =
+          ExUnit.CaptureIO.capture_io(fn ->
+            assert unquote(Macro.escape(expected)) ==
+                     Wizard.run_model(["--json"], silent_io(),
+                       config_path: path,
+                       cwd: Path.dirname(path),
+                       verifier: fn _ -> unquote(Macro.escape(check_result)) end
+                     )
+          end)
+
+        assert %{"state" => unquote(Atom.to_string(state))} = Jason.decode!(output)
+      end
+    end
+
+    test "offline JSON mode accepts saved atom readiness without a live check", %{
+      config_path: path
+    } do
+      configure_ready_provider(path)
+
+      output =
+        ExUnit.CaptureIO.capture_io(fn ->
+          assert :ok =
+                   Wizard.run_model(["--json", "--offline"], silent_io(),
+                     config_path: path,
+                     cwd: Path.dirname(path),
+                     verifier: fn _ -> flunk("offline readiness must not make a live check") end
+                   )
+        end)
+
+      assert %{"state" => "saved"} = Jason.decode!(output)
+    end
+  end
+
   # ──────────────────────────────────────────────────────────────────────────
   # Helpers
   # ──────────────────────────────────────────────────────────────────────────
@@ -718,9 +1128,99 @@ defmodule LemonCli.Setup.WizardTest do
     }
   end
 
+  # Records monotonic timestamps for every user-visible event (including the
+  # moment a prompt is answered), so a test can prove no step blocks silently.
+  defp timed_io(prompts) do
+    pid = self()
+    prompt_agent = start_agent(prompts)
+
+    stamp = fn kind, message ->
+      send(pid, {:timed, System.monotonic_time(:millisecond), kind, message})
+    end
+
+    %{
+      info: fn message -> stamp.(:info, message) end,
+      error: fn message -> stamp.(:error, message) end,
+      prompt: fn message ->
+        answer = pop_response(prompt_agent)
+        # Stamped after the answer: the clock starts when the user replies.
+        stamp.(:prompt, message)
+        answer
+      end,
+      secret: fn _message -> "" end
+    }
+  end
+
+  defp timed_timeline(events) do
+    Enum.flat_map(events, fn
+      {:timed, at, kind, message} -> [{at, kind, message}]
+      _other -> []
+    end)
+  end
+
+  # Milliseconds between the named event and the next visible line.
+  defp boundary_ms(timeline, {kind, message}) do
+    index =
+      Enum.find_index(timeline, fn {_at, event_kind, event_message} ->
+        event_kind == kind and event_message == message
+      end)
+
+    assert is_integer(index), "event #{inspect(message)} never happened"
+
+    {at, _kind, _message} = Enum.at(timeline, index)
+    next = Enum.at(timeline, index + 1)
+    assert next, "no line followed #{inspect(message)}"
+    {next_at, _next_kind, _next_message} = next
+
+    next_at - at
+  end
+
+  defp progress_line?(message) do
+    String.starts_with?(message, "Starting Lemon setup") or
+      String.starts_with?(message, "Checking ") or
+      String.starts_with?(message, "Verifying provider configuration") or
+      String.starts_with?(message, "Importing your Codex") or
+      String.starts_with?(message, "Saving ")
+  end
+
+  defp info_messages(events) do
+    Enum.flat_map(events, fn
+      {:info, message} -> [message]
+      _other -> []
+    end)
+  end
+
+  defp write_codex_cli_login(home) do
+    claims = %{
+      "exp" => System.system_time(:second) + 3_600,
+      "https://api.openai.com/auth" => %{"chatgpt_account_id" => "wizard-account"}
+    }
+
+    token = "header." <> Base.url_encode64(Jason.encode!(claims), padding: false) <> ".signature"
+
+    auth_path = Path.join([home, ".codex", "auth.json"])
+    File.mkdir_p!(Path.dirname(auth_path))
+
+    File.write!(
+      auth_path,
+      Jason.encode!(%{
+        "auth_mode" => "chatgpt",
+        "tokens" => %{
+          "access_token" => token,
+          "refresh_token" => "wizard-refresh",
+          "account_id" => "wizard-account",
+          "id_token" => token
+        }
+      })
+    )
+
+    auth_path
+  end
+
   defp info_event?(events, predicate) do
     Enum.any?(events, fn
       {:info, message} -> predicate.(message)
+      {:timed, _at, :info, message} -> predicate.(message)
       _other -> false
     end)
   end
