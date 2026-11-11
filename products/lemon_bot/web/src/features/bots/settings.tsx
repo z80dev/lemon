@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { nonce, type Bot, type BotResetScope, type Confirmation, type PreviewRequest } from '@lemon-bot/sdk';
+import { nonce, type ApprovalAllowance, type Bot, type BotResetScope, type Confirmation, type PreviewRequest } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
 import { ConfirmDialog, ErrorNotice, Field, formatBytes, useAction, useQuery } from '../../ui';
 import { AccessChoice, canManage, Check, collect, downloadJson, IntentNotice, MachineChoice, machineAccess, Selection, useIntent, useMachines } from './shared';
@@ -8,7 +8,7 @@ const resetScopeLabels: Record<BotResetScope, string> = { conversations: 'Conver
 const lifecycleLabels: Record<string, string> = { duplicate: 'Make a copy', move: 'Move to another computer', reset: 'Reset', delete: 'Delete' };
 const botDestinationLabels: Record<string, string> = { 'machine.detail': 'Computer', routines: 'Routines', memory: 'Memory', skills: 'Skills', 'connect.apps': 'Connections' };
 
-export function SettingsPanel({ bot, reload }: { bot: Bot; reload: () => Promise<void> }) {
+export function SettingsPanel({ bot, reload, openApprovalConfirm = false }: { bot: Bot; reload: () => Promise<void>; openApprovalConfirm?: boolean }) {
   const { client, snapshot, navigate } = useApp();
   const owner = bot.ownerUserId === snapshot.user.id; const admin = snapshot.member.role !== 'member'; const editable = canManage(bot, snapshot.user.id);
   const skills = useQuery(`bot:${bot.id}:skill-library`, () => collect(cursor => client.call('GET /skills', { query: { cursor, limit: 200 } })));
@@ -22,9 +22,54 @@ export function SettingsPanel({ bot, reload }: { bot: Bot; reload: () => Promise
   return <section className="stack">
     <section className="panel stack"><h2>Details and assigned machine</h2><dl><dt>Owner</dt><dd>{snapshot.user.displayName}</dd><dt>Machine</dt><dd>{machine?.name ?? bot.machineId} · {machine?.status ?? 'unknown'}</dd></dl><div className="row">{['machine.detail', 'routines', 'memory', 'skills', 'connect.apps'].map(screen => <button key={screen} onClick={() => navigate({ screen, id: screen === 'machine.detail' ? bot.machineId : undefined, botId: bot.id })}>{botDestinationLabels[screen]}</button>)}</div><Check checked={bot.sidebar.notificationsEnabled} disabled={intent.disabled} onChange={notificationsEnabled => void intent.run(async () => { await client.call('PATCH /bots/:id/sidebar', { params: { id: bot.id }, body: { clientNonce: nonce(), revision: bot.revision, notificationsEnabled } }); await reload(); })}>My notifications for this Bot</Check><Check checked={bot.sidebar.hidden} disabled={intent.disabled} onChange={hidden => void intent.run(async () => { await client.call('PATCH /bots/:id/sidebar', { params: { id: bot.id }, body: { clientNonce: nonce(), revision: bot.revision, hidden } }); await reload(); })}>Hide in my sidebar (suppresses my notifications; does not pause work)</Check></section>
     <GrantsPanel key={bot.id} bot={bot} editable={editable} />
+    <ApprovalSettings bot={bot} owner={owner} reload={reload} openConfirm={openApprovalConfirm} />
     <ErrorNotice error={skills.error} /><Selection title="Bot skills" items={skills.data ?? []} selected={selectedSkills} onChange={setSelectedSkills} disabled={!editable || intent.disabled} /><button disabled={!editable || intent.disabled} onClick={() => void intent.run(async () => { await client.call('PATCH /bots/:id', { params: { id: bot.id }, body: { clientNonce: nonce(), revision: bot.revision, skillIds: selectedSkills } }); await reload(); })}>Save skill references</button>
     <section className="panel stack"><h2>Reference files</h2><ErrorNotice error={attachments.error} /><Selection title="Files injected as references" items={[...mediaItems.map(item => ({ id: item.id, name: item.filename, description: `${item.mime} · ${formatBytes(item.size)}` })), ...referenceReady.filter(item => !mediaItems.some(media => media.id === item.id))]} selected={references} onChange={setReferences} disabled={!editable || intent.disabled} /><Field label="Upload a reference file"><input type="file" disabled={!editable || intent.disabled} onChange={event => setReferenceFile(event.target.files?.[0])} /></Field><button disabled={!editable || intent.disabled || !referenceFile} onClick={() => void intent.run(async () => { if (!referenceFile) return; const attachment = await client.upload(referenceFile, { clientNonce: nonce(), purpose: 'reference', botId: bot.id }, referenceFile.name); setReferenceReady(previous => [...previous, { id: attachment.id, name: attachment.filename }]); setReferences(previous => [...previous, attachment.id]); setReferenceFile(undefined); await attachments.reload(); })}>Upload real reference (save association separately)</button><button disabled={!editable || intent.disabled} onClick={() => void intent.run(async () => { await client.call('PATCH /bots/:id', { params: { id: bot.id }, body: { clientNonce: nonce(), revision: bot.revision, referenceAttachmentIds: references } }); await reload(); })}>Save reference associations</button><h3>Media and deliverables</h3>{mediaItems.map(item => <div className="row spread" key={item.id}><span>{item.filename} · {formatBytes(item.size)} · {item.mime}</span><button onClick={() => navigate({ screen: 'file.viewer', id: item.id, botId: bot.id })}>Preview / download original</button></div>)}</section>
     <button disabled={read.busy} onClick={() => void read.run(async () => downloadJson(await client.call('GET /bots/:id/export', { params: { id: bot.id } }), `${bot.name}-template.json`))}>Export declarative Bot template</button><ErrorNotice error={read.error} /><IntentNotice intent={intent} reconcile={reload} /><BotLifecycle bot={bot} editable={editable} canDelete={owner} canReset={owner && machineAccess(machine, snapshot.user.id, admin)} reload={reload} />
+  </section>;
+}
+function ApprovalSettings({ bot, owner, reload, openConfirm }: { bot: Bot; owner: boolean; reload: () => Promise<void>; openConfirm: boolean }) {
+  const { client } = useApp();
+  const effective = useQuery(`bot:${bot.id}:approval-policy`, () => owner ? client.call('GET /policies/effective', { query: { botId: bot.id } }) : Promise.resolve(null));
+  const allowances = useQuery(`bot:${bot.id}:approval-allowances`, () => owner ? collect(cursor => client.call('GET /bots/:id/approval-allowances', { params: { id: bot.id }, query: { cursor, limit: 200, state: 'active' } })) : Promise.resolve([] as ApprovalAllowance[]));
+  const intent = useIntent();
+  const [confirmation, setConfirmation] = useState<Confirmation>();
+  const [previewOnLoad, setPreviewOnLoad] = useState(openConfirm);
+  const review = bot.approvalReview ?? 'per_chat';
+  const botWideAllowed = !!effective.data?.rememberedApprovals?.bot.length;
+  const previewBotWide = async () => {
+    const value = await intent.run(() => client.call('POST /bots/:id/approval-allowances/preview', { params: { id: bot.id }, body: { clientNonce: nonce() } }));
+    if (value) setConfirmation(value);
+  };
+  useEffect(() => {
+    if (!previewOnLoad || effective.loading) return;
+    setPreviewOnLoad(false);
+    if (owner && review !== 'bot_wide' && botWideAllowed) void previewBotWide();
+  }, [previewOnLoad, effective.loading, owner, review, botWideAllowed]);
+  const setReview = (mode: 'every_time' | 'per_chat') => void intent.run(async () => {
+    await client.call('PATCH /bots/:id/approval-review', { params: { id: bot.id }, body: { revision: bot.revision, clientNonce: nonce(), mode } });
+    await Promise.all([reload(), allowances.reload()]);
+  });
+  const activeChats = allowances.data?.filter(allowance => allowance.scope === 'chat') ?? [];
+  return <section className="panel stack" aria-labelledby={`approval-settings-${bot.id}`}>
+    <h2 id={`approval-settings-${bot.id}`}>Approvals</h2>
+    <p>Choose how often {bot.name} asks before using Terminal or changing and reading files. Required rules and workspace policy still apply.</p>
+    {!owner && <p className="muted">Only this Bot’s owner can change remembered approvals.</p>}
+    <ErrorNotice error={effective.error || allowances.error} />
+    <fieldset className="stack" disabled={!owner || intent.disabled}>
+      <legend>Review mode</legend>
+      <label className="row"><input type="radio" name={`approval-review-${bot.id}`} checked={review === 'every_time'} onChange={() => setReview('every_time')} />Ask every time</label>
+      <label className="row"><input type="radio" name={`approval-review-${bot.id}`} checked={review === 'per_chat'} onChange={() => setReview('per_chat')} />Ask once per chat</label>
+      <label className="row"><input type="radio" name={`approval-review-${bot.id}`} checked={review === 'bot_wide'} disabled={!botWideAllowed && review !== 'bot_wide'} onChange={() => void previewBotWide()} />Don't ask for Terminal &amp; Files</label>
+    </fieldset>
+    {!effective.loading && !botWideAllowed && review !== 'bot_wide' && <p className="small muted">Bot-wide approval is disabled by workspace governance or an effective ask-first rule.</p>}
+    <h3>Allowed in active chats</h3>
+    {activeChats.length === 0 ? <p className="muted">No chats currently remember an approval.</p> : <ul className="list">{activeChats.map(allowance => <li className="list-row" key={allowance.id}><div><strong>{allowance.label}</strong><p className="small muted">Used {allowance.useCount} {allowance.useCount === 1 ? 'time' : 'times'}{allowance.lastUsedAtMs ? ` · last used ${new Date(allowance.lastUsedAtMs).toLocaleString()}` : ''}</p></div><button disabled={intent.disabled} onClick={() => void intent.run(async () => { await client.call('POST /approval-allowances/:id/stop', { params: { id: allowance.id }, body: { revision: allowance.revision, clientNonce: nonce() } }); await allowances.reload(); })}>Stop</button></li>)}</ul>}
+    <IntentNotice intent={intent} reconcile={async () => { await Promise.all([effective.reload(), allowances.reload(), reload()]); }} />
+    {confirmation && <ConfirmDialog title={`Let ${bot.name} run Terminal & Files without asking?`} confirmation={confirmation} disabled={intent.disabled} onCancel={() => setConfirmation(undefined)} onConfirm={async confirm => {
+      const created = await intent.run(() => client.call('POST /bots/:id/approval-allowances', { params: { id: bot.id }, body: { ...confirm, clientNonce: nonce() } }));
+      if (created) { setConfirmation(undefined); await Promise.all([allowances.reload(), reload()]); }
+    }} />}
   </section>;
 }
 function BotLifecycle({ bot, editable, canDelete, canReset, reload }: { bot: Bot; editable: boolean; canDelete: boolean; canReset: boolean; reload: () => Promise<void> }) {

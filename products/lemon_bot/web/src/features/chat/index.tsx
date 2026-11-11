@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FeedbackCreate, Run, TranscriptEntry, TranscriptEvent } from '@lemon-bot/sdk';
+import type { ApprovalAllowance, FeedbackCreate, Run, TranscriptEntry, TranscriptEvent } from '@lemon-bot/sdk';
 import { nonce } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
 import type { Route } from '../../app';
@@ -156,9 +156,10 @@ export function ConversationScreen({ route }: { route: Route }) {
 }
 function ConversationBody({ id, route }: { id: string; route: Route }) {
   const { client, realtime, snapshot, online, navigate } = useApp(); const conversationQuery = useQuery(`conversation:${id}`, () => client.call('GET /conversations/:id', { params: { id } })); const history = useQuery(`entries:${id}`, () => client.call('GET /conversations/:id/entries', { params: { id }, query: { limit: 100 } }));
+  const allowances = useQuery(`approval-allowances:${id}`, () => client.call('GET /conversations/:id/approval-allowances', { params: { id }, query: { state: 'active', limit: 200 } }));
   const runQuery = useQuery(`runs:${id}`, () => client.call('GET /runs', { query: { conversationId: id, limit: 200 } })); const runsRef = useRef<Run[]>([]); const [runs, setRuns] = useState<Run[]>([]);
   const [entries, setEntries] = useState<TranscriptEntry[]>([]); const entriesRef = useRef(entries); entriesRef.current = entries; const [replyId, setReplyId] = useState<string | null>(null); const [panel, setPanel] = useState<PanelTab | null>(null); const headerMenu = useRef<HTMLDetailsElement>(null); const [findOpen, setFindOpen] = useState(false); const findInput = useRef<HTMLInputElement>(null); const [older, setOlder] = useState(false); const [paging, setPaging] = useState(false); const [pageError, setPageError] = useState<unknown>(); const [liveError, setLiveError] = useState<unknown>(); const [find, setFind] = useState(''); const [findQuery, setFindQuery] = useState(''); const [typing, setTyping] = useState<{ userId: string; expiresAtMs: number }[]>([]); const [jumped, setJumped] = useState(false);
-  const scroller = useRef<HTMLDivElement>(null); const end = useRef<HTMLDivElement>(null); const pinned = useRef(true); const initialScroll = useRef(false); const lastRead = useRef(0); const unreadBoundary = useRef<number | undefined>(undefined); const clock = useClock(); const stopIntent = useIntent(); const [starterTask, setStarterTask] = useState<{ text: string; id: number }>(); const readFailure = useRef(false); const [readError, setReadError] = useState<unknown>(); const readInFlight = useRef(false); const visibleThrough = useRef(0); const visibleEntries = useRef(new Set<string>()); const [readVersion, setReadVersion] = useState(0); const refetching = useRef(new Set<string>());
+  const scroller = useRef<HTMLDivElement>(null); const end = useRef<HTMLDivElement>(null); const pinned = useRef(true); const initialScroll = useRef(false); const lastRead = useRef(0); const unreadBoundary = useRef<number | undefined>(undefined); const clock = useClock(); const stopIntent = useIntent(); const allowanceIntent = useIntent(); const [starterTask, setStarterTask] = useState<{ text: string; id: number }>(); const readFailure = useRef(false); const [readError, setReadError] = useState<unknown>(); const readInFlight = useRef(false); const visibleThrough = useRef(0); const visibleEntries = useRef(new Set<string>()); const [readVersion, setReadVersion] = useState(0); const refetching = useRef(new Set<string>());
   const forwardSeq = useRef(0); const [newer, setNewer] = useState(false); const [newBelow, setNewBelow] = useState(false); const [settled, setSettled] = useState(false);
   const [routePending, setRoutePending] = useState(!!route.entryId); const [routeRejected, setRouteRejected] = useState(false);
   const search = useQuery(`conversation-search:${id}:${findQuery}`, async () => {
@@ -196,6 +197,14 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
       if (frame.event === 'run.upserted' && frame.payload.conversationId === id) reconcileRun(frame.payload);
       if (frame.event === 'entry.upserted' && frame.payload.conversationId === id) upsert([frame.payload]);
       if (frame.event === 'entry.deleted' && frame.payload.conversationId === id) { const entryId = frame.payload.id; entriesRef.current = entriesRef.current.filter(entry => entry.id !== entryId); setEntries(entriesRef.current); }
+      if (frame.event === 'approval_allowance.upserted' && frame.payload.conversationId === id) {
+        const allowance = frame.payload;
+        allowances.setData(current => {
+          const items = current?.items.filter(item => item.id !== allowance.id) ?? [];
+          if (allowance.state === 'active') items.push(allowance);
+          return { items, nextCursor: current?.nextCursor ?? null };
+        });
+      }
       if (frame.event === 'entry.delta' && frame.payload.conversationId === id) {
         const delta = frame.payload; const old = entriesRef.current.find(entry => entry.id === delta.entryId);
         if (old?.kind === 'message' && old.runId === delta.runId && old.text.length > delta.offset && old.text.slice(delta.offset, delta.offset + delta.text.length) === delta.text) return;
@@ -277,6 +286,10 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
   const typingNow = typing.filter(item => item.expiresAtMs > clock && item.userId !== snapshot.user.id).length > 0;
   const placeholderForLive = entries.some(entry => entry.kind === 'message' && entry.actor.kind !== 'user' && (isStreaming(entry, runs) || (!entry.text && !!entry.runId && liveRuns.some(run => run.id === entry.runId))));
   const stopAll = () => void stopIntent.run(async () => { for (const run of stoppable.filter(item => item.status !== 'outcome_unknown')) updateRun(await client.call('POST /runs/:id/cancel', { params: { id: run.id }, body: { clientNonce: nonce(), reason: 'Explicit user Stop' } })); });
+  const stopAllowance = (allowance: ApprovalAllowance) => void allowanceIntent.run(async () => {
+    const stopped = await client.call('POST /approval-allowances/:id/stop', { params: { id: allowance.id }, body: { revision: allowance.revision, clientNonce: nonce() } });
+    allowances.setData(current => current && ({ ...current, items: current.items.filter(item => item.id !== stopped.id) }));
+  });
   const toolRun = (index: number) => { const tools: Extract<TranscriptEntry, { kind: 'tool_call' }>[] = []; for (let cursor = index; cursor < entries.length; cursor++) { const item = entries[cursor]; if (item.targetedUserId && item.targetedUserId !== snapshot.user.id) continue; if (item.kind !== 'tool_call') break; tools.push(item); } return tools; };
   let previous: TranscriptEntry | undefined;
   return <section className={`chat-page ${panel ? 'panel-open' : ''}`} style={botStyle(leadBot)}>
@@ -288,6 +301,11 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
         <span className="chat-title-name">{title}</span>
         {step && <span className="working-dot" aria-label="Working"/>}
       </button>
+      <div className="chat-approval-chips">
+        {leadBot?.approvalReview === 'bot_wide'
+          ? <span className="chat-approval-chip">Doesn't ask for Terminal &amp; Files · <button onClick={() => navigate({ screen: 'bot.overview', id: leadBot.id, botId: leadBot.id, tab: 'settings.approvals' })}>Change</button></span>
+          : allowances.data?.items.filter(allowance => allowance.state === 'active').map(allowance => <span className="chat-approval-chip" key={allowance.id}>{allowance.label} · <button disabled={!online || allowanceIntent.busy || allowanceIntent.uncertain} onClick={() => stopAllowance(allowance)}>Stop allowing</button></span>)}
+      </div>
       <details className="chat-menu" ref={headerMenu}>
         <summary className="ghost-circle" aria-label="Conversation menu"><MoreHorizontal size={16}/></summary>
         <div className="menu" role="menu" onClick={event => { if ((event.target as Element).closest('button')) headerMenu.current?.removeAttribute('open'); }}>
@@ -303,7 +321,7 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
       <form onSubmit={event => { event.preventDefault(); setFindQuery(find.trim()); }}><Search size={15} aria-hidden="true"/><label className="sr-only" htmlFor={`find-${id}`}>Find in this conversation</label><input id={`find-${id}`} ref={findInput} autoFocus placeholder="Find in chat" value={find} maxLength={512} onChange={event => setFind(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { setFindOpen(false); setFind(''); setFindQuery(''); } }} /><button type="button" className="ghost-mini" aria-label="Close find" onClick={() => { setFindOpen(false); setFind(''); setFindQuery(''); }}><X size={14}/></button></form>
       {findQuery && <div className="chat-find-results"><ErrorNotice error={search.error} />{search.loading && <Loading />}{search.data?.items.map(hit => hit.kind === 'message' && <button key={hit.entry.id} onClick={() => void jump(hit.entry.id)}><strong>{hit.entry.actor.displayName}</strong> {hit.snippet}</button>)}{search.data && !search.data.items.length && <p className="muted">No matches.</p>}</div>}
     </div>}
-    {!!(conversationQuery.error || history.error || runQuery.error) && <div className="chat-load-notice stack"><ErrorNotice error={conversationQuery.error || history.error || runQuery.error}/><button className="pill-button secondary" onClick={() => void Promise.all([conversationQuery.reload(), history.reload(), runQuery.reload()]).then(() => setLiveError(undefined)).catch(setLiveError)}>Try again</button></div>}
+    {!!(conversationQuery.error || history.error || runQuery.error || allowances.error) && <div className="chat-load-notice stack"><ErrorNotice error={conversationQuery.error || history.error || runQuery.error || allowances.error}/><button className="pill-button secondary" onClick={() => void Promise.all([conversationQuery.reload(), history.reload(), runQuery.reload(), allowances.reload()]).then(() => setLiveError(undefined)).catch(setLiveError)}>Try again</button></div>}
     {conversationQuery.loading && !conversation && <Loading label="Loading conversation…"/>}
     {conversation && <div className={`chat-layout ${panel ? 'with-panel' : ''}`}>
       <div className="chat-main">
@@ -341,6 +359,7 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
           </div>}
           {!step && typingNow && <div className="chat-presence" role="status">Someone is typing…</div>}
           <IntentNotice intent={stopIntent} reconcile={async () => { const page = await client.call('GET /runs', { query: { conversationId: id, limit: 200 } }); for (const run of page.items) updateRun(run); }} />
+          <IntentNotice intent={allowanceIntent} reconcile={allowances.reload} />
           <Composer key={id} conversation={conversation} bot={leadBot} replyId={replyId} clearReply={() => setReplyId(null)} starterTask={starterTask} accepted={receipt => { upsert(receipt.entries, true); for (const run of receipt.runs) updateRun(run); }} />
         </div>
       </div>
