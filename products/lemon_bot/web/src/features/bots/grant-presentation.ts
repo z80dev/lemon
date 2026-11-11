@@ -45,6 +45,11 @@ export function grantControlReason(id: string, level: AccessLevel, capability?: 
   if ((capability?.category === 'shell' || id === 'terminal' || id === 'shell') && level === 'read_only') return 'Terminal can run arbitrary commands; View only cannot be enforced.';
   return undefined;
 }
+export function pendingGrantStatus(grant: BotGrant): string | null {
+  if (grant.pendingLevel === null) return null;
+  const rank: Record<AccessLevel, number> = { off: 0, read_only: 1, read_interact: 2 };
+  return rank[grant.pendingLevel] > rank[grant.requestedLevel] ? 'Turns on when the current task finishes' : 'Turns off when the current task finishes';
+}
 export function grantStatus(grant: BotGrant, capability?: MachineCapability): string {
   if (grant.reasons.includes('Tool-policy cutover has not been acknowledged.')) return 'Access changes are not yet confirmed — refresh before making another change.';
   if (grant.reasons.some(reason => reason.startsWith('Local execution is deny;') || reason === 'Workspace, membership or eligible directory group denied product access.')) return 'Limited by workspace policy — ask a workspace administrator to review access.';

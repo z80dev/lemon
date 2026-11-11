@@ -21,25 +21,36 @@ Object.assign(globalThis, {
 const { createRoot } = await import('react-dom/client');
 
 const resource = { revision: 1, createdAtMs: 1, updatedAtMs: 1 };
-const initial: BotGrant = { ...resource, id: 'grant_terminal', botId: bot.id, machineId: machine.id, capabilityId: 'terminal', requestedLevel: 'off', effectiveLevel: 'off', reasons: ['destination_shell_measured'] };
+const initial: BotGrant = { ...resource, id: 'grant_terminal', botId: bot.id, machineId: machine.id, capabilityId: 'terminal', requestedLevel: 'off', pendingLevel: null, effectiveLevel: 'off', reasons: ['destination_shell_measured'] };
 const stale: BotGrant = { ...initial, revision: 2, requestedLevel: 'read_interact', effectiveLevel: 'off', reasons: ['Tool-policy cutover has not been acknowledged.'] };
 const effective: BotGrant = { ...stale, revision: 3, effectiveLevel: 'read_interact', reasons: ['destination_shell_measured'] };
 const capabilities: MachineCapabilities = { machineId: machine.id, os: 'macOS', measuredAtMs: 1, stale: false, items: [{ id: 'terminal', name: 'Terminal', category: 'shell', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['bash'], reason: 'destination_shell_measured', measuredAtMs: 1, stale: false }] };
 const staleRead = Promise.withResolvers<Page<BotGrant>>();
 let grantReads = 0;
 const calls: string[] = [];
+let current: BotGrant | undefined;
+let patched = effective;
+let botFolder: boolean | undefined;
+let workspaceReads: 'allow' | 'ask' = 'ask';
+let currentRunId: string | null = 'run_from_presence';
+let presenceStale = false;
+const cancelled: string[] = [];
 const app = {
   online: true,
-  client: { call: async (endpoint: string) => {
+  client: { call: async (endpoint: string, options?: { params?: { id?: string } }) => {
     calls.push(endpoint);
     if (endpoint === 'GET /bots/:id/grants') {
       grantReads++;
+      if (current) return { items: [current], nextCursor: null };
       if (grantReads === 1) return { items: [initial], nextCursor: null };
       if (grantReads === 2) return staleRead.promise;
       return { items: [effective], nextCursor: null };
     }
-    if (endpoint === 'PATCH /bots/:id/grants/:grantId') return effective;
-    if (endpoint === 'GET /machines/:id/capabilities') return capabilities;
+    if (endpoint === 'PATCH /bots/:id/grants/:grantId') { current = current ? patched : undefined; return patched; }
+    if (endpoint === 'GET /machines/:id/capabilities') return { ...capabilities, botFolder };
+    if (endpoint === 'GET /policies/effective') return { userId: bot.ownerUserId, botId: bot.id, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, workspaceReads, rules: [], networkPolicies: [], explanations: [] };
+    if (endpoint === 'GET /bots/:id/presence') return { botId: bot.id, status: currentRunId ? 'working' : 'idle', machineId: machine.id, machineLabel: machine.name, machineStatus: machine.status, currentRunId, taskConversationId: null, summary: currentRunId ? 'Working' : 'Idle', evidenceEntryId: null, measuredAtMs: Date.now(), stale: presenceStale };
+    if (endpoint === 'POST /runs/:id/cancel') { cancelled.push(options?.params?.id ?? ''); return {}; }
     if (endpoint === 'GET /bots/:id/connectors') return { items: [], nextCursor: null };
     throw new Error(`Unexpected test endpoint: ${endpoint}`);
   } },
@@ -53,6 +64,8 @@ let root: Root;
 beforeEach(() => {
   grantReads = 0;
   calls.length = 0;
+  current = undefined; patched = effective; botFolder = undefined; workspaceReads = 'ask';
+  currentRunId = 'run_from_presence'; presenceStale = false; cancelled.length = 0; app.online = true;
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
@@ -94,5 +107,72 @@ test('PATCH reload wins over an older event-triggered grant read', async () => {
 
   expect(full.getAttribute('aria-pressed')).toBe('true');
   expect(container.textContent).not.toContain('currently Off');
+  expect(calls.filter(endpoint => endpoint === 'PATCH /bots/:id/grants/:grantId')).toHaveLength(1);
+});
+
+test('busy PATCH stays editable, stops the presence run and applies through grant events', async () => {
+  current = initial;
+  patched = { ...initial, revision: 2, pendingLevel: 'read_interact' };
+  await render(<GrantsPanel bot={bot} editable />);
+  await waitFor(() => !!container.querySelector('button[aria-label="Terminal: Full"]'));
+  const full = container.querySelector<HTMLButtonElement>('button[aria-label="Terminal: Full"]')!;
+  await act(async () => full.click());
+  await waitFor(() => container.textContent!.includes('Turns on when the current task finishes'));
+  expect(full.disabled).toBe(false);
+  expect(full.getAttribute('aria-pressed')).toBe('true');
+  const off = container.querySelector<HTMLButtonElement>('button[aria-label="Terminal: Off"]')!;
+  expect(off.disabled).toBe(false);
+  const stop = [...container.querySelectorAll('button')].find(button => button.textContent === 'Stop task')!;
+  await act(async () => stop.click());
+  expect(cancelled).toEqual(['run_from_presence']);
+  current = effective;
+  await act(async () => window.dispatchEvent(new CustomEvent('lemon:event', { detail: { event: 'grant.upserted' } })));
+  await waitFor(() => !container.textContent!.includes('Turns on when the current task finishes'));
+  expect(full.getAttribute('aria-pressed')).toBe('true');
+  expect(container.textContent).not.toContain('Stop task');
+});
+
+test('pending narrowing and Stop task fail closed without fresh presence or online owner access', async () => {
+  current = { ...effective, pendingLevel: 'off' };
+  currentRunId = null;
+  await render(<GrantsPanel bot={bot} editable />);
+  await waitFor(() => container.textContent!.includes('Turns off when the current task finishes'));
+  const stop = () => [...container.querySelectorAll('button')].find(button => button.textContent === 'Stop task')!;
+  expect(stop().disabled).toBe(true);
+  currentRunId = 'run_from_presence'; presenceStale = true;
+  await act(async () => window.dispatchEvent(new CustomEvent('lemon:event', { detail: { event: 'bot.presence' } })));
+  await waitFor(() => calls.filter(endpoint => endpoint === 'GET /bots/:id/presence').length === 2);
+  expect(stop().disabled).toBe(true);
+  app.online = false;
+  await render(<GrantsPanel bot={bot} editable />);
+  expect(stop().disabled).toBe(true);
+  app.online = true;
+  await render(<GrantsPanel bot={bot} editable={false} />);
+  expect(stop().disabled).toBe(true);
+  expect(cancelled).toEqual([]);
+});
+
+test('Files explains folder reads only when both the machine and effective policy allow them', async () => {
+  current = { ...effective, id: 'grant_files', capabilityId: 'files' };
+  for (const [feature, policy, shown] of [
+    [undefined, 'allow', false], [false, 'allow', false], [true, 'ask', false], [true, 'allow', true],
+  ] as const) {
+    botFolder = feature; workspaceReads = policy;
+    await render(<GrantsPanel key={`${feature}:${policy}`} bot={bot} editable />);
+    await waitFor(() => !!container.querySelector('button[aria-label="Files: Full"]'));
+    expect(container.textContent!.includes(`Reading files in ${bot.name}'s folder doesn't ask.`)).toBe(shown);
+  }
+});
+
+test('an owner can clear a pending change using the still-interactive current-level control', async () => {
+  current = { ...initial, revision: 2, pendingLevel: 'read_interact' };
+  patched = { ...initial, revision: 3 };
+  await render(<GrantsPanel bot={bot} editable />);
+  await waitFor(() => container.textContent!.includes('Turns on when the current task finishes'));
+  const off = container.querySelector<HTMLButtonElement>('button[aria-label="Terminal: Off"]')!;
+  await act(async () => off.click());
+  await waitFor(() => !container.textContent!.includes('Turns on when the current task finishes'));
+  expect(off.getAttribute('aria-pressed')).toBe('true');
+  expect(container.textContent).not.toContain('Stop task');
   expect(calls.filter(endpoint => endpoint === 'PATCH /bots/:id/grants/:grantId')).toHaveLength(1);
 });

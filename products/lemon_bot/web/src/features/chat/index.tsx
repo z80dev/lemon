@@ -117,7 +117,7 @@ function EntryView({ entry, attachments, jump, reply, changed, context }: { entr
     case 'card': {
       shape = 'card';
       const room = snapshot.conversations.find(conversation => conversation.id === entry.conversationId);
-      const privateTypes: Record<string, true> = { secret_request: true, human_step: true, email_draft: true, slack_draft: true, message_draft: true, permission_request: true, auto_review_approval: true, local_tool_permission: true, publish_approval: true };
+      const privateTypes: Record<string, true> = { access_request: true, secret_request: true, human_step: true, email_draft: true, slack_draft: true, message_draft: true, permission_request: true, auto_review_approval: true, local_tool_permission: true, publish_approval: true };
       content = (room?.kind === 'group' || room?.kind === 'channel') && privateTypes[entry.card.type] ? <p className="error-notice">Sensitive requests must be reviewed in your authorized private task or DM, not in this shared room.</p> : <TranscriptCard card={entry.card} />; break;
     }
     case 'user_attachment': content = <AttachmentLink id={entry.attachmentId} />; break;

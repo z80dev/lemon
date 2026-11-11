@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import { Window } from 'happy-dom';
 import { act } from 'react';
 import type { Root } from 'react-dom/client';
-import { LemonBotClient, type Bot, type Conversation, type Machine, type RealtimeEvent, type RealtimeOptions, type RealtimeServerFrame, type Run, type Snapshot, type TranscriptEntry } from '@lemon-bot/sdk';
+import { LemonBotClient, type Approval, type Bot, type Conversation, type Machine, type RealtimeEvent, type RealtimeOptions, type RealtimeServerFrame, type Run, type Snapshot, type TranscriptEntry } from '@lemon-bot/sdk';
 
 const browser = new Window({ url: 'https://bot.test/#screen=conversation&id=conversation_test&botId=bot_test' });
 const media = { matches: false, media: '', onchange: null, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true };
@@ -36,6 +36,7 @@ const running: Run = { ...resource, id: 'run_test', conversationId: conversation
 const finished: Run = { ...running, revision: 2, updatedAtMs: 2, status: 'succeeded', completedAtMs: 2 };
 const streaming: TranscriptEntry = { ...resource, id: 'entry_test', conversationId: conversation.id, seq: 1, timestampMs: 1, actor: { kind: 'bot', id: bot.id, displayName: bot.name }, clientNonce: null, batchId: null, replyToEntryId: null, runId: running.id, targetedUserId: null, reactions: [], kind: 'message', role: 'assistant', text: 'Done', streaming: true, attachmentIds: [] };
 const finalEntry: TranscriptEntry = { ...streaming, revision: 2, updatedAtMs: 2, streaming: false };
+let transcriptEntries: TranscriptEntry[] = [streaming];
 function snapshot(): Snapshot {
   return {
     cursor: '1',
@@ -58,6 +59,7 @@ beforeEach(() => {
   calls.length = 0;
   subscribers.clear();
   realtimeOptions = undefined;
+  conversation.kind = 'dm'; transcriptEntries = [streaming];
   sessionStorage.clear();
   localStorage.clear();
   location.hash = 'screen=conversation&id=conversation_test&botId=bot_test';
@@ -72,12 +74,13 @@ beforeEach(() => {
       case 'GET /sync': return snapshot();
       case 'POST /devices': return { ...resource, id: 'device_test', userId: 'user_test', installationId: 'install_test', platform: 'web', name: 'Browser', appVersion: '1.0.0', pushEnabled: false, lastSeenAtMs: 1 };
       case 'GET /conversations/:id': return conversation;
-      case 'GET /conversations/:id/entries': return { items: [streaming], nextCursor: null };
+      case 'GET /conversations/:id/entries': return { items: transcriptEntries, nextCursor: null };
       case 'GET /runs': return { items: [running], nextCursor: null };
       case 'GET /runs/:id': return finished;
       case 'GET /entries/:id': return finalEntry;
       case 'GET /machines/:id/host': return { hostname: 'studio', os: 'macOS', osVersion: '26', arch: 'arm64', cpuCount: 8, memTotalBytes: 1, memFreeBytes: 1, diskTotalBytes: 1, diskFreeBytes: 1, uptimeSec: 1, lemonVersion: '1', defaultCwd: '/tmp', user: 'owner', measuredAtMs: 1 };
       case 'GET /conversations/:id/composer': return { conversationId: conversation.id, text: '', attachmentIds: [], replyToEntryId: null, updatedAtMs: 1, revision: 1 };
+      case 'GET /conversations/:id/approval-allowances': return { items: [], nextCursor: null };
       case 'GET /skills': return { items: [], nextCursor: null };
       case 'GET /capabilities': return snapshot().capabilities;
       default: throw new Error(`Unexpected test endpoint: ${endpoint}`);
@@ -129,4 +132,23 @@ test('idle presence reconciles a withheld terminal run and its streaming entry w
   expect(calls.filter(endpoint => endpoint === 'GET /runs/:id')).toHaveLength(1);
   expect(calls.filter(endpoint => endpoint === 'GET /entries/:id')).toHaveLength(1);
   expect(container.querySelector('.chat-working')).toBeNull();
+});
+
+test('shared rooms mask access-request content and never fetch its private approval', async () => {
+  const approval: Approval = {
+    ...resource, id: 'access_private', entryId: 'entry_access', conversationId: conversation.id, botId: bot.id, runId: running.id,
+    source: 'access_request', category: 'permissions', title: 'Private access title', description: 'Private machine access description', target: 'Terminal',
+    inputs: { capability: 'terminal', capabilityIds: ['terminal', 'files'], level: 'read_interact', machineLabel: 'Studio', reason: 'Private reason' },
+    policyMode: 'ask_first', review: 'ask', ruleId: null,
+    scope: { kind: 'once', label: 'This Bot', machineId: machine.id, machineLabel: 'Studio', botId: bot.id, runId: running.id, origin: 'owner_chat', connectorId: null, consequences: [], expiresAtMs: Date.now() + 60_000 },
+    gate: { id: 'gate_access', targetUserId: 'user_test', state: 'pending', expiresAtMs: Date.now() + 60_000, resolvedAtMs: null, resolvedByUserId: null, revision: 1 },
+  };
+  conversation.kind = 'group';
+  transcriptEntries = [{ ...streaming, id: approval.entryId, kind: 'card', card: { type: 'access_request', approval } }];
+  await act(async () => root.render(<App />));
+  await waitFor(() => container.textContent!.includes('Sensitive requests must be reviewed in your authorized private task or DM'));
+  expect(container.textContent).not.toContain(approval.title);
+  expect(container.textContent).not.toContain(approval.description);
+  expect(container.textContent).not.toContain('Private reason');
+  expect(calls).not.toContain('GET /approvals/:id');
 });

@@ -45,6 +45,8 @@ export function resetFixtures() {
     'GET /machines': page([machine]),
     'GET /bots': page([bot]),
     'GET /bots/:id': bot,
+    'GET /bots/:id/presence': { botId: bot.id, status: 'idle', machineId: machine.id, machineLabel: machine.name, machineStatus: machine.status, currentRunId: null, taskConversationId: null, summary: 'Idle', evidenceEntryId: null, measuredAtMs: resource.updatedAtMs, stale: false },
+    'GET /policies/effective': { userId: 'owner', botId: bot.id, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, workspaceReads: 'allow', rules: [], networkPolicies: [], explanations: [] },
     'GET /bots/:id/memory': page([memory]),
     'GET /skills': page([]),
     'GET /entries/:id': { id: memory.sourceEntryId, conversationId: bot.mainConversationId },
