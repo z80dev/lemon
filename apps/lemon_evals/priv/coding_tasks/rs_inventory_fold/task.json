@@ -1,0 +1,7 @@
+{
+  "id": "rs_inventory_fold",
+  "language": "rust",
+  "category": "data",
+  "difficulty": "medium",
+  "prompt": "Complete the ordered inventory event fold using the exact API and error precedence in README.md. Implement reservation accumulation, partial release/shipment, signed corrections, checked arithmetic, and rejection atomicity across incremental apply and fold. Keep the dependency-free package, update relevant documentation and add tests."
+}

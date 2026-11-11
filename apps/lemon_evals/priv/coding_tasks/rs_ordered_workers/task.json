@@ -1,0 +1,7 @@
+{
+  "id": "rs_ordered_workers",
+  "language": "rust",
+  "category": "concurrency",
+  "difficulty": "hard",
+  "prompt": "Repair the ordered worker runner: it currently executes sequentially and aborts on the first job error. Implement the existing generic run_ordered API as a bounded std::thread worker pool. README.md specifies dispatch, input-order output, typed failure selection, panic isolation, zero-worker behavior and shutdown. Each submitted job must run exactly once even if another job returns Err or panics, all spawned workers must be joined before returning, and the lowest failing input index must determine the returned error. The implementation must accept non-Clone inputs/results/errors. There must be at most workers simultaneous work calls, while min(workers, jobs.len()) blocked independent jobs must be able to enter work concurrently. Use no dependencies or unsafe code. Add deterministic concurrency tests and document the shutdown policy."
+}

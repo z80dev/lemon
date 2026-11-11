@@ -1,0 +1,7 @@
+{
+  "id": "rs_manifest_cli",
+  "language": "rust",
+  "category": "cli",
+  "difficulty": "easy",
+  "prompt": "Repair manifestctl so its std::env::args command-line interface, manifest filters and sorting, totals, and deterministic diagnostics match README.md exactly. Preserve the multi-file design and use only the Rust standard library."
+}
