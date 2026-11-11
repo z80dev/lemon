@@ -364,8 +364,10 @@ def run_trial(trial, task, args, out):
     prepare, argv_for, parse = AGENTS[agent]
     trial_dir = out / 'trials' / trial['id']
     trial_dir.mkdir(parents=True, exist_ok=True)
-    token = trial_token(args.proxy_secret, trial['id'])
-    row = {**{key: trial[key] for key in ('id', 'task', 'agent', 'rep')},
+    # A rerun (after an interrupted campaign) must not inherit the aborted attempt's proxy traffic.
+    attempt = f'{trial["id"]}#{secrets.token_hex(4)}'
+    token = trial_token(args.proxy_secret, attempt)
+    row = {**{key: trial[key] for key in ('id', 'task', 'agent', 'rep')}, 'proxy_trial': attempt,
            'language': task['language'], 'category': task['category'], 'difficulty': task['difficulty'],
            'model': args.model, 'thinking': args.thinking, 'passed': False, 'failure': None}
     container = None
@@ -523,7 +525,7 @@ def cmd_report(args):
     rows = list(latest.values())
     proxy = proxy_stats(args.proxy_log or (out / 'proxy.jsonl'))
     for row in rows:
-        stats = proxy.get(row['id'])
+        stats = proxy.get(row.get('proxy_trial', row['id']))
         if stats:
             row['model_requests'] = stats['requests']
             row['rate_limited'] = stats['rate_limited']
