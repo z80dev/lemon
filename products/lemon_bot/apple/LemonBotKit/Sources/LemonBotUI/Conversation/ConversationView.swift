@@ -30,6 +30,7 @@ public struct ConversationView: View {
     @State private var hasNewBelow = false
     @State private var settled = false
     @State private var toast: StatusToast?
+    @State private var hostInfo: HostInfo?
     @Environment(\.lbReduceMotion) private var reduceMotion
     #if os(iOS)
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -224,6 +225,15 @@ public struct ConversationView: View {
                 try? await Task.sleep(for: .seconds(2.5))
                 if !Task.isCancelled { flashID = nil }
             }
+            .task(id: bot?.machineId) {
+                guard let machineID = bot?.machineId, !machineID.isEmpty else { hostInfo = nil; return }
+                do {
+                    let host: HostInfo = try await store.read(resourcePath("machines", machineID, "/host"))
+                    hostInfo = host
+                } catch {
+                    hostInfo = nil
+                }
+            }
         }
     }
 
@@ -258,11 +268,67 @@ public struct ConversationView: View {
         }
     }
 
+    private var hostnameTask: String {
+        let os = hostInfo?.os.lowercased() ?? ""
+        if os.contains("mac") || os.contains("darwin") {
+            return "What's this Mac's hostname and macOS version?"
+        } else if os.contains("linux") {
+            return "What's this machine's hostname and Linux distribution?"
+        } else {
+            return "What's this machine's hostname and OS version?"
+        }
+    }
+
+    private func sendStarterTask(_ text: String) async {
+        await action.perform {
+            guard canMutate else { throw ClientError.offline }
+            let _ = try await store.send(conversationID: conversationID, text: text, attachmentIDs: [])
+        }
+    }
+
+    private func starterButton(task: String, icon: String) -> some View {
+        Button {
+            Task { await sendStarterTask(task) }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(LB.accent)
+                    .frame(width: 20)
+                Text(task)
+                    .font(LBFont.rowSubtitle)
+                    .foregroundStyle(LB.ink)
+                    .multilineTextAlignment(.leading)
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(LB.fill))
+        }
+        .buttonStyle(.plain)
+        .disabled(!canMutate || action.busy)
+        .accessibilityLabel(task)
+    }
+
     private var emptyHint: some View {
-        VStack(spacing: 10) {
-            if let bot { BotAvatarView(store: store, bot: bot).frame(width: 64, height: 64) } else { LemonMark(size: 64) }
-            Text("Message \(title)").font(LBFont.rowSubtitle).foregroundStyle(LB.muted)
-        }.accessibilityElement(children: .combine)
+        VStack(spacing: 12) {
+            if let bot {
+                BotAvatarView(store: store, bot: bot).frame(width: 64, height: 64)
+                Text("Message \(title)").font(LBFont.rowSubtitle).foregroundStyle(LB.muted)
+                VStack(spacing: 8) {
+                    starterButton(task: hostnameTask, icon: "terminal")
+                    starterButton(task: "What's taking up space in Downloads?", icon: "arrow.down.circle")
+                    starterButton(task: "List the projects in my home folder.", icon: "folder")
+                }
+                .frame(maxWidth: 380)
+                .padding(.top, 4)
+            } else {
+                LemonMark(size: 64)
+                Text("Message \(title)").font(LBFont.rowSubtitle).foregroundStyle(LB.muted)
+            }
+        }
+        .padding(.horizontal, 20)
+        .accessibilityElement(children: .contain)
     }
 
     // MARK: Bottom stack
