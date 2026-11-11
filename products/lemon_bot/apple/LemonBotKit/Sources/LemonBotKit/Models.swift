@@ -1877,7 +1877,12 @@ public struct Machine: Codable, Hashable, Identifiable {
     public var `labels`: [String: String]
     public var `botIds`: [ID]
     public var `credential`: String?
-    public var link: MachineLink = .direct
+    /// Optional on the wire (older backends omit it); absent means a direct link.
+    public var wireLink: MachineLink?
+    public var link: MachineLink {
+        get { wireLink ?? .direct }
+        set { wireLink = newValue }
+    }
     public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, nodeId: ID? = nil, nodeName: String, name: String, ownerUserId: ID, accessUserIds: [ID], status: String, lastSeenAtMs: TimestampMs? = nil, labels: [String: String], botIds: [ID], credential: String? = nil) {
         self.`id` = id
         self.`revision` = revision
@@ -1898,7 +1903,7 @@ public struct Machine: Codable, Hashable, Identifiable {
     enum LinkCodingKeys: String, CodingKey { case link }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        link = try decoder.container(keyedBy: LinkCodingKeys.self).decodeIfPresent(MachineLink.self, forKey: .link) ?? .direct
+        wireLink = try decoder.container(keyedBy: LinkCodingKeys.self).decodeIfPresent(MachineLink.self, forKey: .link)
         self.`id` = try c.decode(ID.self, forKey: .`id`)
         self.`revision` = try c.decode(Int.self, forKey: .`revision`)
         self.`createdAtMs` = try c.decode(TimestampMs.self, forKey: .`createdAtMs`)
@@ -1923,7 +1928,7 @@ public struct Machine: Codable, Hashable, Identifiable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         var linkContainer = encoder.container(keyedBy: LinkCodingKeys.self)
-        try linkContainer.encode(link, forKey: .link)
+        try linkContainer.encodeIfPresent(wireLink, forKey: .link)
         try c.encode(`id`, forKey: .`id`)
         try c.encode(`revision`, forKey: .`revision`)
         try c.encode(`createdAtMs`, forKey: .`createdAtMs`)
