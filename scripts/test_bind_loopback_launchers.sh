@@ -206,6 +206,29 @@ hook_env() {
   exit 1
 }
 
+# Loopback-scoped short names must address a loopback host: a bare name would
+# resolve `hostname`, which can map to a LAN/tailnet address nothing listens on.
+hook_node() {
+  env -i PATH="$PATH" HOME="$TEST_DIR" RELEASE_NAME=lemon_runtime_min "$@" sh -c \
+    '. "$1"; printf "%s\n" "${RELEASE_NODE:-}"' sh "$ENV_HOOK"
+}
+[ "$(hook_node)" = "lemon_runtime_min@localhost" ] || {
+  echo "FAIL: env.sh default RELEASE_NODE='$(hook_node)'" >&2
+  exit 1
+}
+[ "$(hook_node RELEASE_NODE=custom)" = "custom@localhost" ] || {
+  echo "FAIL: env.sh bare RELEASE_NODE='$(hook_node RELEASE_NODE=custom)'" >&2
+  exit 1
+}
+[ "$(hook_node RELEASE_NODE=custom@box)" = "custom@box" ] || {
+  echo "FAIL: env.sh overrode explicit RELEASE_NODE host" >&2
+  exit 1
+}
+[ -z "$(hook_node RELEASE_DISTRIBUTION=name)" ] || {
+  echo "FAIL: env.sh set RELEASE_NODE under long-name distribution" >&2
+  exit 1
+}
+
 echo "[test] rel/env.sh.eex release distribution defaults OK"
 
 # ── 3. Docker entrypoint: docker/docker-entrypoint.sh ─────────────────────────

@@ -8,7 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- Packaged `lemon daemon` (and `stop`, `rpc`, `remote`) failed with "daemon
+  started but its pid could not be determined" when the machine's hostname
+  resolved to a non-loopback address, because distribution is now
+  loopback-only. Short-name release nodes default to the `localhost` host.
 
 ---
 

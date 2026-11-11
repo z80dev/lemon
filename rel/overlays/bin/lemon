@@ -710,6 +710,8 @@ release_command() (
   done
   unset RELEASE_ROOT RELEASE_VSN RELEASE_NAME RELEASE_PROG RELEASE_COMMAND RELEASE_MODE
   unset RELEASE_BOOT_SCRIPT RELEASE_BOOT_SCRIPT_CLEAN
+  # env.sh's loopback node default; the target root derives its own naming.
+  [ "${RELEASE_NODE:-}" != "$PROFILE@localhost" ] || unset RELEASE_NODE
   exec "$root/bin/$PROFILE" "$@"
 )
 
