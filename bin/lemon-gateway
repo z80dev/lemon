@@ -35,13 +35,13 @@ Options:
   --debug                 Enable debug logging
   --name <name@host>      Start as a distributed long-name node
   --sname <name>          Start as a distributed short-name node (default: lemon_gateway)
-  --cookie <cookie>       Distributed Erlang cookie (default: $LEMON_GATEWAY_NODE_COOKIE or lemon_gateway_dev_cookie)
+  --cookie <cookie>       Distributed Erlang cookie (default: env override or ~/.lemon/cookie)
   --no-distribution       Disable distributed node startup
   --help, -h              Show this help
 
 Environment overrides:
   LEMON_GATEWAY_NODE_NAME      Default node name when using distribution (default: lemon_gateway)
-  LEMON_GATEWAY_NODE_COOKIE    Default cookie (default: lemon_gateway_dev_cookie)
+  LEMON_GATEWAY_NODE_COOKIE    Override the per-install ~/.lemon/cookie
   LEMON_GATEWAY_COOKIE         Legacy fallback cookie env var
   LEMON_DOTENV_DIR             Directory whose .env file should be loaded
 EOF
@@ -50,7 +50,7 @@ EOF
 DEBUG=""
 NODE_MODE=""
 NODE_NAME="${LEMON_GATEWAY_NODE_NAME:-lemon_gateway}"
-NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-lemon_gateway_dev_cookie}}"
+NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-}}"
 DISTRIBUTED=1
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -109,6 +109,25 @@ if [[ -z "$NODE_MODE" ]]; then
   else
     NODE_MODE="sname"
   fi
+fi
+
+# Match the primary launcher's local-only distribution defaults.
+export ERL_EPMD_ADDRESS="${ERL_EPMD_ADDRESS:-127.0.0.1}"
+if [[ "$NODE_MODE" != "name" ]]; then
+  case "${ELIXIR_ERL_OPTIONS:-}" in
+    *inet_dist_use_interface*) ;;
+    *) export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-}${ELIXIR_ERL_OPTIONS:+ }-kernel inet_dist_use_interface {127,0,0,1}" ;;
+  esac
+fi
+
+if [[ "$DISTRIBUTED" == "1" && -z "$NODE_COOKIE" ]]; then
+  (
+    umask 077
+    mkdir -p "$HOME/.lemon"
+    [ -s "$HOME/.lemon/cookie" ] || openssl rand -hex 32 > "$HOME/.lemon/cookie"
+    chmod 600 "$HOME/.lemon/cookie"
+  ) || exit 1
+  NODE_COOKIE="$(cat "$HOME/.lemon/cookie")"
 fi
 
 if [[ "$DISTRIBUTED" == "1" ]] && [[ -z "$NODE_COOKIE" ]]; then

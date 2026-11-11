@@ -20,6 +20,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Source launchers now reuse a private random per-install distribution cookie;
+  dedicated control-plane and gateway launchers also default distribution and
+  epmd to loopback. Both primary launchers honor the saved node-gateway port,
+  including `0` to disable it, without overriding explicit environment settings.
+
 - Managed controllers route start/restart through their service manager.
   Deliberate stops stay down; updates restart only previously running units,
   stop workers before restarting the controller, and update an installed Lemon

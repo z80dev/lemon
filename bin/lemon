@@ -47,7 +47,7 @@ load_port_settings() {
   [ -f "$1" ] || return 0
   while IFS='=' read -r key value || [ -n "$key" ]; do
     case "$key" in
-      LEMON_CONTROL_PLANE_PORT | LEMON_WEB_PORT | LEMON_SIM_UI_PORT)
+      LEMON_CONTROL_PLANE_PORT | LEMON_CONTROL_PLANE_NODE_PORT | LEMON_WEB_PORT | LEMON_SIM_UI_PORT)
         if [[ "$value" =~ ^[0-9]{1,5}$ && -z "${!key:-}" ]]; then
           export "$key=$value"
         fi
@@ -89,7 +89,7 @@ SIM_PORT="${LEMON_SIM_UI_PORT:-4090}"
 export LEMON_CONTROL_PLANE_PORT="$PORT" LEMON_WEB_PORT="$WEB_PORT" LEMON_SIM_UI_PORT="$SIM_PORT"
 NODE_MODE=""
 NODE_NAME="${LEMON_GATEWAY_NODE_NAME:-lemon}"
-NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-lemon_gateway_dev_cookie}}"
+NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-}}"
 DISTRIBUTED=1
 DEBUG=""
 
@@ -582,6 +582,15 @@ start_runtime() {
   fi
   rm -f "$PIDFILE"
   if [ "$DISTRIBUTED" = "1" ]; then
+    if [ -z "$NODE_COOKIE" ]; then
+      (
+        umask 077
+        mkdir -p "$LEMON_HOME_DIR"
+        [ -s "$LEMON_HOME_DIR/cookie" ] || openssl rand -hex 32 > "$LEMON_HOME_DIR/cookie"
+        chmod 600 "$LEMON_HOME_DIR/cookie"
+      ) || exit 1
+      NODE_COOKIE="$(cat "$LEMON_HOME_DIR/cookie")"
+    fi
     [ -n "$NODE_COOKIE" ] || { error "distributed mode requires a non-empty --cookie"; exit 2; }
     if [ -z "$NODE_MODE" ]; then
       if [[ "$NODE_NAME" == *@* ]]; then NODE_MODE="name"; else NODE_MODE="sname"; fi
