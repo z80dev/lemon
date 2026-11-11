@@ -7,15 +7,18 @@
 - Per-Bot folder reads can skip human approval only when effective policy sets
   `workspace_read_exempt == true` and the trusted worker folder, bound execution
   scope and canonical `ProfileStore.paths(profile_id)["files"]` resolve to the
-  same directory. `read`, `ls` and non-symlink-following ripgrep qualify only for
-  targets inside that folder; internal URLs and `find` never qualify. `read`
-  additionally requires a regular file with a single link.
-  Before an exempt read, `CodingAgent.WorkspaceReads` requires a durable
-  `workspace_read_fence` journal entry and supervised ETS mirror. The fence makes
-  `webfetch` and `websearch` require approval for the rest of the session, survives
-  restore, extension reload and policy narrowing, and passes to `task` children.
-  Live sessions fail closed if their mirror is lost. Extension/config discovery
-  uses the trusted config root, not Bot-written `.lemon/config.toml` in the folder.
+  same directory. `read` and explicit-file ripgrep targets must be single-linked
+  regular files inside that folder; `ls` may list the folder. Directory grep,
+  internal URLs and `find` require approval. Memory-path aliases use the execution
+  resolver and approval binds the resolved target. Failed canonicalization,
+  including exhausted symlink traversal, never grants an exemption.
+  Before an exempt read, `CodingAgent.WorkspaceReads` durably fences the session
+  and every ancestor. Existing descendants consult ancestor fences, so streamed
+  task output and async results cannot escape through an unfenced parent/sibling.
+  `webfetch` and `websearch` then require approval even after restore, extension
+  reload or policy narrowing. Unreachable ancestors and lost mirrors fail closed.
+  Extension/config discovery uses the trusted config root, not Bot-written
+  `.lemon/config.toml` in the folder.
 - Configured local ACP/debug/eval/tool/Wasm launch adapters now participate in
   opt-in durable native-process tracking. ACP creates and debugger launch/attach
   dispatches retain external-work uncertainty even after errors; a missing ACP

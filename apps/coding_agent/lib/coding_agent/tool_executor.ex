@@ -69,8 +69,7 @@ defmodule CodingAgent.ToolExecutor do
   @spec wrap_with_approval(AgentTool.t(), ToolPolicy.policy(), map()) :: AgentTool.t()
   def wrap_with_approval(%AgentTool{} = tool, policy, context) do
     if tool.name == "lsp" or
-         (tool.name in ["webfetch", "websearch"] and
-            (WorkspaceReads.policy_exempt?(policy) or WorkspaceReads.fenced?(context))) or
+         tool.name in ["webfetch", "websearch"] or
          ToolPolicy.requires_approval?(policy, tool.name, %{}, context[:approval_tier]) do
       wrap_tool(tool, policy, context)
     else
@@ -152,6 +151,8 @@ defmodule CodingAgent.ToolExecutor do
     original_execute = tool.execute
 
     wrapped_execute = fn tool_call_id, params, signal, on_update ->
+      params = WorkspaceReads.resolve_params(tool.name, params, context)
+
       policy_required =
         ToolPolicy.requires_approval?(policy, tool.name, params, context[:approval_tier])
 

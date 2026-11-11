@@ -2,7 +2,7 @@ defmodule CodingAgent.WorkspaceReadsTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.Task.Params
-  alias CodingAgent.{SessionManager, ToolExecutor, WorkspaceReads}
+  alias CodingAgent.{Session, SessionManager, SettingsManager, ToolExecutor, WorkspaceReads}
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias LemonCore.{ProfileStore, ToolPolicy}
@@ -76,6 +76,28 @@ defmodule CodingAgent.WorkspaceReadsTest do
     pid
   end
 
+  defp real_session(root, opts \\ []) do
+    settings = SettingsManager.load(root)
+    settings = %{settings | tools: Map.put(settings.tools, :wasm, %{enabled: false})}
+
+    defaults = [
+      cwd: root,
+      workspace_dir: Path.join(root, "workspace"),
+      model: LemonAgent.Test.Mocks.mock_model(),
+      settings_manager: settings,
+      system_prompt: "Test.",
+      tools: [],
+      register: true
+    ]
+
+    start_supervised!(
+      Supervisor.child_spec({Session, Keyword.merge(defaults, opts)},
+        id: make_ref(),
+        restart: :temporary
+      )
+    )
+  end
+
   describe "exempt?/4" do
     test "exempts read, ls and grep inside the folder", %{
       files_root: root,
@@ -101,7 +123,7 @@ defmodule CodingAgent.WorkspaceReadsTest do
                  ctx
                )
 
-        assert WorkspaceReads.exempt?(policy, "grep", %{"pattern" => "x", "path" => "."}, ctx)
+        refute WorkspaceReads.exempt?(policy, "grep", %{"pattern" => "x", "path" => "."}, ctx)
       end
     end
 
@@ -147,6 +169,91 @@ defmodule CodingAgent.WorkspaceReadsTest do
       assert File.stat!(original).links >= 2
       refute WorkspaceReads.exempt?(policy, "read", %{"path" => "original.txt"}, ctx)
       refute WorkspaceReads.exempt?(policy, "read", %{"path" => "hardlink.txt"}, ctx)
+    end
+
+    test "grep refuses hard links and all directory discovery scopes", %{
+      files_root: root,
+      policy: policy,
+      ctx: ctx,
+      tmp: tmp
+    } do
+      outside = Path.join(tmp, "private.txt")
+      File.write!(outside, "private bytes")
+      File.mkdir_p!(Path.join(root, "nested/deep"))
+      File.ln!(outside, Path.join(root, "nested/deep/linked.txt"))
+      File.write!(Path.join(root, "safe.txt"), "safe")
+
+      for path <- ["nested/deep/linked.txt", "nested/deep", "nested", ".", "safe.txt;nested"] do
+        refute WorkspaceReads.exempt?(
+                 policy,
+                 "grep",
+                 %{"pattern" => "private", "path" => path},
+                 ctx
+               )
+      end
+    end
+
+    test "memory aliases check the execution workspace, not same-named folder files", %{
+      files_root: root,
+      policy: policy,
+      ctx: ctx,
+      tmp: tmp
+    } do
+      workspace = Path.join(tmp, "workspace")
+      ctx = Map.put(ctx, :workspace_dir, workspace)
+
+      for base <- [root, workspace] do
+        File.mkdir_p!(Path.join(base, "memory"))
+
+        for path <- ["MEMORY.md", "USER.md", "memory/note.md"] do
+          File.write!(Path.join(base, path), base)
+        end
+      end
+
+      for path <- ["MEMORY.md", "USER.md", "memory/note.md"] do
+        refute WorkspaceReads.exempt?(policy, "read", %{"path" => path}, ctx)
+        refute WorkspaceReads.exempt?(policy, "read", %{"path" => path <> ":1:raw"}, ctx)
+        refute WorkspaceReads.exempt?(policy, "grep", %{"path" => path}, ctx)
+        assert WorkspaceReads.exempt?(policy, "read", %{"path" => "./" <> path}, ctx)
+      end
+
+      refute WorkspaceReads.exempt?(policy, "grep", %{"path" => "memory"}, ctx)
+      # Literal colon-bearing names still take precedence over selectors.
+      File.write!(Path.join(root, "MEMORY.md:raw"), "literal")
+      assert WorkspaceReads.exempt?(policy, "read", %{"path" => "MEMORY.md:raw"}, ctx)
+    end
+
+    test "canonicalization errors and exhausted link chains deny every exemption", %{
+      files_root: root,
+      policy: policy,
+      ctx: ctx,
+      tmp: tmp
+    } do
+      outside = Path.join(tmp, "outside")
+      File.mkdir_p!(outside)
+      File.write!(Path.join(outside, "secret.txt"), "private")
+
+      for n <- 0..32 do
+        target = if n == 32, do: outside, else: Path.join(root, "hop-#{n + 1}")
+        File.ln_s!(target, Path.join(root, "hop-#{n}"))
+      end
+
+      File.ln_s!("cycle", Path.join(root, "cycle"))
+      File.ln_s!("missing", Path.join(root, "dangling"))
+
+      assert {:error, :eloop} = WorkspaceReads.realpath(Path.join(root, "hop-0"))
+      assert {:error, :eloop} = WorkspaceReads.realpath(Path.join(root, "cycle"))
+      assert {:error, :enoent} = WorkspaceReads.realpath(Path.join(root, "dangling"))
+
+      for path <- ["hop-0/secret.txt", "cycle", "dangling", "missing"],
+          tool <- ["read", "ls", "grep"] do
+        refute WorkspaceReads.exempt?(policy, tool, %{"path" => path}, ctx)
+      end
+
+      refute WorkspaceReads.exempt?(policy, "ls", %{"path" => "."}, %{
+               ctx
+               | bot_folder_root: Path.join(root, "cycle")
+             })
     end
 
     test "refuses internal URLs", %{policy: policy, ctx: ctx} do
@@ -345,6 +452,172 @@ defmodule CodingAgent.WorkspaceReadsTest do
         )
 
       refute Keyword.has_key?(child_opts, :workspace_read_fenced)
+    end
+
+    test "child reads durably fence ancestors before sync or async output is exposed", %{
+      files_root: root,
+      policy: policy,
+      ctx: ctx
+    } do
+      File.write!(Path.join(root, "data.txt"), "private child content")
+      grandparent = real_session(root)
+      grandparent_state = Session.get_state(grandparent)
+      parent = real_session(root, parent_session: grandparent_state.session_manager.header.id)
+      parent_state = Session.get_state(parent)
+      parent_id = parent_state.session_manager.header.id
+      sibling = real_session(root, parent_session: parent_id)
+      child = real_session(root, parent_session: parent_id)
+      child_id = Session.get_state(child).session_manager.header.id
+      observer = self()
+
+      web_policy = exempt_policy(nil)
+
+      web_tools =
+        for session <- [grandparent, parent, sibling],
+            name <- ["webfetch", "websearch"] do
+          id = Session.get_state(session).session_manager.header.id
+
+          context = %{
+            session_id: id,
+            approval_request_fun: fn _ ->
+              send(observer, {:web_approval, id, name})
+              {:ok, :denied}
+            end
+          }
+
+          tool = %AgentTool{
+            name: name,
+            description: "Web",
+            parameters: %{},
+            execute: fn _, _, _, _ -> flunk("unreviewed web egress") end
+          }
+
+          {id, name, ToolExecutor.wrap_with_approval(tool, web_policy, context)}
+        end
+
+      context =
+        ctx
+        |> Map.put(:session_id, child_id)
+        |> Map.put(:approval_request_fun, fn _ -> flunk("safe child read asked") end)
+
+      tool = CodingAgent.Tools.Read.tool(root)
+      wrapped = ToolExecutor.wrap_with_approval(tool, policy, context)
+
+      for mode <- [:sync, :async] do
+        result =
+          if mode == :sync do
+            wrapped.execute.("read-sync", %{"path" => "data.txt"}, nil, nil)
+          else
+            Task.async(fn ->
+              wrapped.execute.("read-async", %{"path" => "data.txt"}, nil, nil)
+            end)
+            |> Task.await()
+          end
+
+        assert Enum.any?(result.content, &String.contains?(&1.text, "private child content"))
+
+        for state <- [grandparent_state, parent_state] do
+          assert {:ok, journal} = SessionManager.load_from_file(state.session_file)
+          assert SessionManager.latest_custom_entry(journal, WorkspaceReads.fence_entry_type())
+        end
+
+        for {id, name, web} <- web_tools do
+          web.execute.("web", %{}, nil, nil)
+          assert_received {:web_approval, ^id, ^name}
+        end
+      end
+
+      GenServer.stop(parent)
+      :ets.delete(:coding_agent_workspace_read_fence, parent_id)
+      restored = real_session(root, session_file: parent_state.session_file)
+      assert WorkspaceReads.fenced?(restored)
+    end
+
+    test "unreachable or unwritable ancestors refuse the child's exemption", %{
+      files_root: root
+    } do
+      for reply <- [:missing, {:error, :journal_write_failed}] do
+        parent_id = "unavailable-parent-#{System.unique_integer([:positive])}"
+        if reply != :missing, do: fence_session(parent_id, reply)
+        child = real_session(root, parent_session: parent_id)
+
+        assert {:error, reason} = WorkspaceReads.fence!(child)
+        assert reason in [:session_unavailable, :journal_write_failed]
+        manager = Session.get_state(child).session_manager
+        refute SessionManager.latest_custom_entry(manager, WorkspaceReads.fence_entry_type())
+      end
+    end
+
+    test "registration cannot clear a fence or detach an existing descendant" do
+      parent = "monotonic-parent-#{System.unique_integer([:positive])}"
+      child = "monotonic-child-#{System.unique_integer([:positive])}"
+      :ok = WorkspaceReads.register_session(parent, true)
+      :ok = WorkspaceReads.register_session(child, false, parent)
+      :ok = WorkspaceReads.register_session(child, false)
+      :ok = WorkspaceReads.register_session(parent, false)
+      assert WorkspaceReads.fenced?(parent)
+      assert WorkspaceReads.fenced?(child)
+    end
+  end
+
+  test "approval and execution bind the redirected memory target in both wrappers", %{
+    files_root: root,
+    policy: policy,
+    ctx: ctx,
+    tmp: tmp
+  } do
+    workspace = Path.join(tmp, "private-workspace")
+    File.mkdir_p!(Path.join(workspace, "memory"))
+    File.mkdir_p!(Path.join(root, "memory"))
+    observer = self()
+
+    for path <- ["MEMORY.md", "USER.md", "memory/note.md"] do
+      File.write!(Path.join(root, path), "decoy")
+      File.write!(Path.join(workspace, path), "actual workspace bytes")
+    end
+
+    File.write!(Path.join(workspace, "SOUL.md"), "bootstrap fallback bytes")
+
+    context =
+      ctx
+      |> Map.put(:workspace_dir, workspace)
+      |> Map.put(:approval_request_fun, fn request ->
+        send(observer, {:approval_target, request.action["path"]})
+        {:ok, :approved, :once}
+      end)
+
+    fence_session(ctx.session_id)
+
+    direct =
+      CodingAgent.Tools.Read.tool(root, workspace_dir: workspace)
+      |> ToolExecutor.wrap_with_approval(policy, context)
+
+    [registry] =
+      CodingAgent.ToolRegistry.get_tools(root,
+        enabled_only: [:read],
+        include_extensions: false,
+        include_mcp: false,
+        tool_policy: policy,
+        workspace_dir: workspace,
+        approval_context: Map.put(context, :workspace_dir, root)
+      )
+
+    for tool <- [direct, registry],
+        path <- ["MEMORY.md", "USER.md", "memory/note.md"],
+        selector <- ["", ":1:raw"] do
+      expected = Path.join(workspace, path) <> selector
+      result = tool.execute.("memory-read", %{"path" => path <> selector}, nil, nil)
+      assert_received {:approval_target, ^expected}
+      assert Enum.any?(result.content, &String.contains?(&1.text, "actual workspace bytes"))
+      refute WorkspaceReads.fenced?(ctx.session_id)
+    end
+
+    for tool <- [direct, registry] do
+      expected = Path.join(workspace, "SOUL.md")
+      result = tool.execute.("bootstrap-read", %{"path" => "SOUL.md"}, nil, nil)
+      assert_received {:approval_target, ^expected}
+      assert Enum.any?(result.content, &String.contains?(&1.text, "bootstrap fallback bytes"))
+      refute WorkspaceReads.fenced?(ctx.session_id)
     end
   end
 
