@@ -56,8 +56,13 @@ defmodule LemonControlPlane.ListenerSecurityTest do
   end
 
   test "off-loopback main listener only exposes websocket and health by default" do
-    for path <- ["/v1/models", "/acp", "/acp/ws", "/missing"] do
-      response = remote(:get, path) |> Router.call([])
+    for {method, path} <- [
+          {:get, "/v1/models"},
+          {:post, "/acp"},
+          {:get, "/acp/ws"},
+          {:get, "/missing"}
+        ] do
+      response = remote(method, path) |> Router.call([])
       assert response.status == 404
       assert Jason.decode!(response.resp_body)["error"]["code"] == "NOT_FOUND"
     end
@@ -95,6 +100,27 @@ defmodule LemonControlPlane.ListenerSecurityTest do
     assert (conn(:get, "/v1/models")
             |> put_req_header("authorization", "Bearer operator-secret")
             |> Router.call([])).status == 200
+
+    acp =
+      conn(
+        :post,
+        "/acp",
+        Jason.encode!(%{
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: %{protocolVersion: 1}
+        })
+      )
+
+    response =
+      acp
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", "Bearer operator-secret")
+      |> Router.call([])
+
+    assert response.status == 200
+    assert Jason.decode!(response.resp_body)["jsonrpc"] == "2.0"
 
     Application.delete_env(:lemon_control_plane, :operator_token)
     Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, true)

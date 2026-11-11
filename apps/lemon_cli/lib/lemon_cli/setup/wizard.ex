@@ -437,18 +437,30 @@ defmodule LemonCli.Setup.Wizard do
 
     unless running?.(env.control_port) do
       free? = Keyword.get(opts, :port_free?, &Ports.free?/1)
-      current = %{control: env.control_port, web: env.web_port, sim: env.sim_port}
+
+      current = %{
+        control: env.control_port,
+        node: resolve_node_port(),
+        web: env.web_port,
+        sim: env.sim_port
+      }
 
       chosen =
         Enum.reduce(Ports.required(Profile.default_name()), current, fn key, ports ->
           port = ports[key]
           reserved = ports |> Map.delete(key) |> Map.values()
 
-          if port not in reserved and free?.(port) do
-            ports
-          else
-            replacement = replacement_port(key, port, reserved, free?, io, non_interactive?)
-            Map.put(ports, key, replacement)
+          # A node gateway explicitly disabled with port 0 binds nothing.
+          cond do
+            key == :node and port == 0 ->
+              ports
+
+            port not in reserved and free?.(port) ->
+              ports
+
+            true ->
+              replacement = replacement_port(key, port, reserved, free?, io, non_interactive?)
+              Map.put(ports, key, replacement)
           end
         end)
 
@@ -677,7 +689,13 @@ defmodule LemonCli.Setup.Wizard do
   end
 
   defp resolve_ports(cli_opts, env, io, non_interactive?) do
-    current = %{control: env.control_port, web: env.web_port, sim: env.sim_port}
+    current = %{
+      control: env.control_port,
+      node: resolve_node_port(),
+      web: env.web_port,
+      sim: env.sim_port
+    }
+
     flags = [control_port: :control, web_port: :web, sim_port: :sim]
 
     invalid =
@@ -707,6 +725,7 @@ defmodule LemonCli.Setup.Wizard do
         {:ok,
          %{
            control: prompt_port("control-plane", current.control, io),
+           node: current.node,
            web: prompt_port("web", current.web, io),
            sim: prompt_port("sim-ui", current.sim, io)
          }}
@@ -732,6 +751,20 @@ defmodule LemonCli.Setup.Wizard do
 
   defp valid_port?(port), do: is_integer(port) and port > 0 and port <= 65_535
 
+  # The node gateway port comes from the environment only; `0` disables it.
+  defp resolve_node_port do
+    case System.get_env("LEMON_CONTROL_PLANE_NODE_PORT") do
+      nil ->
+        Ports.default_node_port()
+
+      val ->
+        case Integer.parse(String.trim(val)) do
+          {port, ""} when port >= 0 and port <= 65_535 -> port
+          _ -> Ports.default_node_port()
+        end
+    end
+  end
+
   defp print_runtime_summary(profile_name, ports, io, opts) do
     profile = Profile.get(profile_name)
 
@@ -741,6 +774,11 @@ defmodule LemonCli.Setup.Wizard do
     io.info.("")
     io.info.("Ports:")
     io.info.("  control-plane : #{ports.control}")
+
+    if ports[:node] && ports[:node] != Ports.default_node_port() do
+      io.info.("  node-gateway  : #{ports.node}")
+    end
+
     io.info.("  web           : #{ports.web}")
     io.info.("  sim-ui        : #{ports.sim}")
     io.info.("")

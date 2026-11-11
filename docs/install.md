@@ -226,8 +226,15 @@ runtime to `ghcr.io/z80dev/lemon`, tagged by exact version, by channel (`stable`
 `preview`, `nightly`), and `latest` for stable
 (`.github/workflows/release.yml`, `docker/Dockerfile.runtime`). The image runs
 as a non-root user, keeps all state on the `/data` volume (`HOME=/data`), exposes
-ports 4040 (control plane), 4080 (Web) and 4090 (simulation UI), and has a
-`/healthz` health check.
+ports 4040 (control plane), 4044 (node gateway), 4080 (Web) and 4090 (simulation UI),
+and has a `/healthz` health check.
+
+The container explicitly binds control plane, node gateway, Web, and simulation
+UI listeners to `0.0.0.0` so published host ports (`-p`) are reachable. Because
+non-loopback exposure requires authentication, `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`
+must be configured in the container environment on every start; the token is
+never written to the storage volume, and the entrypoint exits with a readable
+error if it is omitted.
 
 Modeled on the release CI smoke test, which waits for `/healthz` on ports 4040
 and 4080. Generate the master key once with `openssl rand -base64 32` (Lemon
@@ -239,9 +246,21 @@ docker run -d --name lemon \
   -p 127.0.0.1:4040:4040 -p 127.0.0.1:4080:4080 \
   -v lemon-data:/data \
   -e LEMON_SECRETS_MASTER_KEY="<your base64 key>" \
+  -e LEMON_CONTROL_PLANE_OPERATOR_TOKEN="<your hex token>" \
   ghcr.io/z80dev/lemon:latest
 curl -fsS http://127.0.0.1:4040/healthz
 ```
+
+Generate the operator token with `openssl rand -hex 32` and pass it via `-e`
+on each start as well as to your clients and the Web login page. To attach
+external worker machines, also publish the node gateway port
+`-p 127.0.0.1:4044:4044`.
+
+Erlang distribution and epmd stay on loopback inside the container: every
+packaged release sources `releases/<version>/env.sh`, which defaults
+`ERL_EPMD_ADDRESS` to `127.0.0.1` and pins the distribution listen interface
+unless `RELEASE_DISTRIBUTION=name` is set. To cluster across hosts, set
+`RELEASE_DISTRIBUTION=name`, `RELEASE_NODE`, and an explicit `ERL_EPMD_ADDRESS`.
 
 If `LEMON_WEB_SECRET_KEY_BASE` or `LEMON_GATEWAY_NODE_COOKIE` is unset, the
 entrypoint generates one, warns, and stores it in `/data/.lemon/env`; set

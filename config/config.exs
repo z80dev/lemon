@@ -88,6 +88,7 @@ config :lemon_core, :doctor_runtime,
 # Modules missing from a given build are skipped (see LemonCore.Doctor).
 config :lemon_core, :doctor_checks, [
   LemonCli.Doctor.Providers,
+  LemonControlPlane.Doctor.Checks.Listeners,
   LemonMemory.Doctor.Checks.Memory,
   LemonSkills.Doctor.Checks.Skills,
   LemonAutomation.Doctor.Checks.Synthesis,
