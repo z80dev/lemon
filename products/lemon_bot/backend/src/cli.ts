@@ -1,6 +1,7 @@
 import { productVersion as version } from './core/version';
-import { runConnect } from './cli/connect';
-import { terminal } from './cli/connect';
+// One import per module: Bun 1.4.2 --compile emits an undefined `__promiseAll` helper
+// when the same lazily initialized module is imported twice from an entry point.
+import { runConnect, terminal } from './cli/connect';
 import { foregroundStartup } from './cli/startup';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
