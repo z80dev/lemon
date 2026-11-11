@@ -55,17 +55,18 @@ struct ApprovalReviewView: View {
     var body: some View {
         let proposal = current
         VStack(alignment: .leading, spacing: 10) {
-            CardHeader(symbol: "checkmark.shield", title: proposal.title)
-            if !proposal.description.isEmpty { Text(proposal.description).font(LBFont.body).foregroundStyle(LB.ink) }
-            // Key facts stay visible: exact target, scope, Bot, machine and consequences.
-            VStack(alignment: .leading, spacing: 3) {
-                cardFact("Target", proposal.target).textSelection(.enabled)
-                cardFact("Scope", proposal.scope.label)
-                cardFact("Bot · Machine", "\(store.bots.first(where: { $0.id == proposal.botId })?.name ?? proposal.botId) · \(proposal.scope.machineLabel)")
-                ForEach(proposal.scope.consequences, id: \.self) { consequence in CardNote(symbol: "exclamationmark.triangle.fill", text: consequence, tint: LB.warning) }
-            }.font(LBFont.rowSubtitle).frame(maxWidth: .infinity, alignment: .leading)
-            GateStatusView(store: store, gate: proposal.gate, details: false)
+            if proposal.target == "Terminal" {
+                Text(proposal.title).font(.system(.headline, design: .monospaced)).textSelection(.enabled)
+            } else {
+                CardHeader(symbol: "checkmark.shield", title: proposal.title)
+            }
+            Text("\(proposal.target) on \(proposal.scope.machineLabel)").font(LBFont.rowSubtitle).foregroundStyle(.secondary)
             CardDetails {
+                Text(proposal.description)
+                cardFact("Scope", proposal.scope.label)
+                cardFact("Bot", store.bots.first(where: { $0.id == proposal.botId })?.name ?? proposal.botId)
+                ForEach(proposal.scope.consequences, id: \.self) { consequence in Text(consequence) }
+                GateStatusView(store: store, gate: proposal.gate, details: false)
                 HStack(spacing: 6) { StatusBadge(text: proposal.category); StatusBadge(text: proposal.scope.kind) }
                 if let origin = proposal.scope.origin { Text("Origin: \(origin)").textSelection(.enabled) }
                 if let connector = proposal.scope.connectorId { Text("Connector: \(connector)").textSelection(.enabled) }
@@ -75,14 +76,24 @@ struct ApprovalReviewView: View {
                     Text("\(key): \(inputSummary(proposal.inputs[key]!))").textSelection(.enabled)
                 }
                 Text("Review: \(humanizedStatus(proposal.review)) · Policy: \(humanizedStatus(proposal.policyMode))")
+                if let rule = proposal.ruleId { Text("Rule: \(rule)") }
                 Button("Copy support details") { copyText("Connector: \(proposal.scope.connectorId ?? "Not set")\nRun: \(proposal.scope.runId ?? "Not set")\nRule: \(proposal.ruleId ?? "Not set")") }.buttonStyle(.pill(.quiet, compact: true))
                 GateDetailLines(store: store, gate: proposal.gate)
             }
             TimelineView(.periodic(from: .now, by: 1)) { _ in
-                HStack(spacing: 8) {
-                    Button("Allow once") { Task { await resolve("approve_once") } }.buttonStyle(.cardPrimary)
-                    Button("Deny", role: .destructive) { Task { await resolve("deny") } }.buttonStyle(.pill(.secondary))
-                }.disabled(action.busy || !gateAllowsAction(store, proposal.gate) || Double(proposal.scope.expiresAtMs) <= Date().timeIntervalSince1970 * 1000)
+                let expired = proposal.gate.state == "pending" && Double(proposal.gate.expiresAtMs) <= Date().timeIntervalSince1970 * 1000
+                if proposal.gate.state == "pending" && !expired {
+                    HStack(spacing: 8) {
+                        Button("Allow once") { Task { await resolve("approve_once") } }.buttonStyle(.cardPrimary)
+                        Button("Deny", role: .destructive) { Task { await resolve("deny") } }.buttonStyle(.pill(.secondary))
+                    }.disabled(action.busy || !gateAllowsAction(store, proposal.gate) || Double(proposal.scope.expiresAtMs) <= Date().timeIntervalSince1970 * 1000)
+                } else {
+                    let state = expired ? "expired" : proposal.gate.state
+                    let who = proposal.gate.resolvedByUserId == store.user?.id ? "you" : proposal.gate.resolvedByUserId == nil ? "policy" : "another person"
+                    let result = state == "approved" ? "Allowed once by \(who)" : state == "denied" ? "Denied by \(who)" : humanizedStatus(state)
+                    let time = proposal.gate.resolvedAtMs.map { " · " + timestamp(Double($0)).formatted(date: .omitted, time: .shortened) } ?? ""
+                    Text(result + (state == "expired" ? "" : time)).font(LBFont.rowSubtitle)
+                }
             }
             ActionErrorView(message: action.error)
         }
