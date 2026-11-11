@@ -27,6 +27,35 @@ final class ProtocolTests: XCTestCase {
         let wire = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(content))
         XCTAssertNil(wire["access"])
     }
+    func testRememberedApprovalsDecodeOldAndNewWireShapes() throws {
+        let events = try JSONDecoder().decode([JSONObject].self, from: WireFixtures.events)
+        for (event, key, value) in [
+            ("bot.upserted", "approvalReview", JSONValue.string("per_chat")),
+            ("approval.upserted", "chatOption", .object(["toolGroup": .string("terminal"), "label": .string("Allow Terminal for this chat")]))
+        ] {
+            var payload = try XCTUnwrap(events.first { $0["event"]?.stringValue == event }?["payload"]?.objectValue)
+            func decode(_ payload: JSONObject) throws {
+                let data = try JSONEncoder().encode(payload)
+                if event == "bot.upserted" { _ = try JSONDecoder().decode(Bot.self, from: data) }
+                else { _ = try JSONDecoder().decode(Approval.self, from: data) }
+            }
+            payload.removeValue(forKey: key)
+            try decode(payload)
+            payload[key] = value
+            try decode(payload)
+            if event == "approval.upserted" {
+                payload["resolvedScope"] = .string("chat")
+                let approval = try JSONDecoder().decode(Approval.self, from: JSONEncoder().encode(payload))
+                XCTAssertEqual(approval.chatOption?.toolGroup, "terminal")
+                XCTAssertEqual(approval.resolvedScope, "chat")
+            }
+        }
+        let resolve = ApprovalResolve(clientNonce: "remembered_nonce_123", revision: 1, decision: "approve_chat")
+        XCTAssertEqual(try JSONDecoder().decode(ApprovalResolve.self, from: JSONEncoder().encode(resolve)), resolve)
+        let allowance = try JSONDecoder().decode(ApprovalAllowance.self, from: Data(#"{"id":"a","revision":1,"createdAtMs":1,"updatedAtMs":1,"scope":"chat","botId":"b","conversationId":"c","ownerUserId":"u","toolGroups":["terminal"],"label":"Terminal allowed in this chat","state":"active","endedReason":null,"endedAtMs":null,"endedByUserId":null,"sourceApprovalId":"p","createdByUserId":"u","useCount":0,"lastUsedAtMs":null}"#.utf8))
+        let event = RealtimeEvent(seq: "1", payload: .approvalAllowanceUpserted(allowance), timestampMs: 1)
+        XCTAssertEqual(try JSONDecoder().decode(RealtimeEvent.self, from: JSONEncoder().encode(event)), event)
+    }
     func testEveryDeclaredCardRoundTripsWithExactDiscriminator() throws {
         let cards = try JSONDecoder().decode([Card].self, from: WireFixtures.cards)
         let reencoded = try JSONEncoder().encode(cards)
