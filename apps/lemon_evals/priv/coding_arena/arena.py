@@ -468,13 +468,15 @@ def run_trial(trial, task, args, out, gate=None):
             row['failure'] = ('timeout' if timed_out else
                               'agent_error' if not result.get('ok') and not row['files_changed'] and not answer else
                               'verifier_failed')
-            # A quota or rate-limit 429 makes the trial unscorable; record it for --retry-infrastructure.
-            if attempt_rate_limited(args, attempt):
-                row['scored_failure'] = row['failure']
-                row['failure'] = 'infrastructure'
-                row['infrastructure_error'] = 'upstream 429 (provider quota or rate limit)'
-                if gate:
-                    gate.close()
+        # A quota or rate-limit 429 disturbs the trial whatever its outcome (and only long runs survive one to
+        # pass), so it is unscorable either way; record it for --retry-infrastructure.
+        if attempt_rate_limited(args, attempt):
+            row['scored_failure'] = row['failure']
+            row['passed'] = False
+            row['failure'] = 'infrastructure'
+            row['infrastructure_error'] = 'upstream 429 (provider quota or rate limit)'
+            if gate:
+                gate.close()
     except Exception as error:  # noqa: BLE001 - infrastructure failures are recorded, not fatal
         row['failure'] = 'infrastructure'
         row['infrastructure_error'] = redact(str(error), token)[-2000:]
