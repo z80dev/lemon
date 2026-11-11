@@ -105,8 +105,12 @@ describe('owned placed runtime', () => {
     const { promise: waiting, resolve: entered } = Promise.withResolvers<void>();
     const { promise: receipt, resolve: release } = Promise.withResolvers<unknown>();
     try {
-      const first = (await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'snapshot_first_status_001', text: 'first' })).run;
-      const second = (await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'snapshot_second_status_001', text: 'second' })).run;
+      await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'snapshot_first_status_001', text: 'first' });
+      await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'snapshot_second_status_001', text: 'second' });
+      // Store iteration is ID-ordered, not submission-ordered (run IDs are random).
+      // Gate the first actual candidate so the reserved one cannot be visited yet.
+      const candidates = f.store.list<P.Run>('runs');
+      const first = candidates[0]!, second = candidates[1]!;
       f.store.put('runs', { ...second, status: 'reserved' });
       const firstBound = f.store.metadata<RuntimeMapping>(`runtimeRun:${first.id}`)!;
       const secondBound = f.store.metadata<RuntimeMapping>(`runtimeRun:${second.id}`)!;
