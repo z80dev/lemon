@@ -114,6 +114,10 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Fixed
 
+- Source and packaged launchers discover systemd user units under an absolute
+  `XDG_CONFIG_HOME`, while invalid relative values fall back to `$HOME/.config`
+  as required by the XDG base-directory specification.
+
 - Preserve normalized completed-event usage in print JSON instead of overwriting
   it with `agent.wait`'s internal usage detail. Offline native replay verifies
   exact counters for both disclosure variants and null counters when absent.

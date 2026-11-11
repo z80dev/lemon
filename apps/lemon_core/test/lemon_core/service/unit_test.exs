@@ -62,6 +62,27 @@ defmodule LemonCore.Service.UnitTest do
     assert {:ok, %{argv: [^path, "start"]}} = Unit.parse(body, "systemd")
   end
 
+  test "systemd uses an absolute XDG config home and safely quotes log paths", %{opts: opts} do
+    config_home = Path.join(opts[:home], "config space/%literal")
+    env = %{"XDG_CONFIG_HOME" => config_home}
+    xdg_opts = Keyword.put(opts, :env, env)
+
+    assert {:ok, spec} = Role.build("controller", "systemd", xdg_opts)
+    spec = %{spec | log: Path.join(opts[:home], "log space/%literal/$variable.log")}
+    assert spec.path == Path.join(config_home, "systemd/user/lemon-controller.service")
+
+    body = Unit.render(spec, "systemd")
+    escaped_log = String.replace(spec.log, "%", "%%")
+    assert body =~ ~s(StandardOutput="append:#{escaped_log}")
+    assert body =~ ~s(StandardError="append:#{escaped_log}")
+
+    relative_opts = Keyword.put(opts, :env, %{"XDG_CONFIG_HOME" => "relative/config"})
+    assert {:ok, fallback} = Role.build("controller", "systemd", relative_opts)
+
+    assert fallback.path ==
+             Path.join(opts[:home], ".config/systemd/user/lemon-controller.service")
+  end
+
   test "labels reflect nondefault ports and adopt existing worker names" do
     assert Role.label("controller", "launchd", nil, 4040) == "org.lemon.controller"
     assert Role.label("controller", "launchd", nil, 4140) == "org.lemon.controller.4140"

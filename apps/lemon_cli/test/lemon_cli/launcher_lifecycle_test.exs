@@ -35,7 +35,7 @@ defmodule LemonCli.LauncherLifecycleTest do
     overrides =
       ~w(LEMON_CONTROL_PLANE_OPERATOR_TOKEN LEMON_RUNTIME_PID_FILE LEMON_RUNTIME_LOG_FILE
       LEMON_CONTROL_PLANE_PORT LEMON_WEB_PORT LEMON_SIM_UI_PORT RELEASE_TMP RELEASE_COOKIE
-      RELEASE_DISTRIBUTION NODE_MODE)
+      RELEASE_DISTRIBUTION NODE_MODE XDG_CONFIG_HOME)
 
     env =
       Enum.map(overrides, &{&1, nil}) ++
@@ -169,6 +169,50 @@ defmodule LemonCli.LauncherLifecycleTest do
       assert output =~ "running, healthy on port"
       assert output =~ "not managed by this HOME"
       assert output =~ "(launcher)"
+    end
+  end
+
+  test "both statuses find systemd units under a nondefault XDG config home", ctx do
+    config_home = Path.join(ctx.home, "xdg config")
+    unit = "lemon-controller-#{env_value(ctx.env, "LEMON_CONTROL_PLANE_PORT")}.service"
+    unit_dir = Path.join(config_home, "systemd/user")
+    File.mkdir_p!(unit_dir)
+
+    File.write!(
+      Path.join(unit_dir, unit),
+      "# Managed by lemon service (role=controller) — edits are overwritten\n"
+    )
+
+    executable(Path.join(ctx.tools, "systemctl"), """
+    case "$*" in
+      "--user is-enabled #{unit}") exit 0 ;;
+      *) exit 1 ;;
+    esac
+    """)
+
+    env =
+      ctx.env
+      |> put("TEST_HEALTH", ~s({"ok":true}))
+      |> put("XDG_CONFIG_HOME", config_home)
+
+    for root <- [ctx.source, ctx.release] do
+      assert {output, 0} = launch(root, ["status"], env)
+      assert output =~ "supervised by systemd (#{unit})"
+    end
+
+    default_unit_dir = Path.join(ctx.home, ".config/systemd/user")
+    File.mkdir_p!(default_unit_dir)
+
+    File.cp!(
+      Path.join(unit_dir, unit),
+      Path.join(default_unit_dir, unit)
+    )
+
+    relative_env = put(env, "XDG_CONFIG_HOME", "relative/config")
+
+    for root <- [ctx.source, ctx.release] do
+      assert {output, 0} = launch(root, ["status"], relative_env)
+      assert output =~ "supervised by systemd (#{unit})"
     end
   end
 
