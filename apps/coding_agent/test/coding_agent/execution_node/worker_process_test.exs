@@ -98,7 +98,7 @@ defmodule CodingAgent.ExecutionNode.WorkerProcessTest do
 
     assert Enum.sort(Map.keys(Worker.runtime_features()["features"])) ==
              Enum.sort(
-               ~w(hostIO filesystemCAS deletePreviews encryptedSecrets ptyShell mcpDiscovery profileSync liveStreaming repairInvites nativeExecutionPolicy)
+               ~w(botFolder hostIO filesystemCAS deletePreviews encryptedSecrets ptyShell mcpDiscovery profileSync liveStreaming repairInvites nativeExecutionPolicy)
              )
   end
 

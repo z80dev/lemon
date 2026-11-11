@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Named-node request decoding recognizes the optional `cwdMode` field and its
+  canonical `:cwd_mode` alias without crashing legacy requests that omit it.
+
 ### Added
 
 - `CodingAgent.WorkspaceReads` exempts `read`, `ls` and `grep` calls inside the
