@@ -4,6 +4,11 @@ Native SwiftUI clients for the independent Lemon Bot product backend. macOS and 
 
 Sidebar previews retain loaded messages offline; uncached rows say “Messages load when you're online.” Section headings expose expanded/collapsed state to VoiceOver, explain offline availability, and pinned Bots announce selection. On Mac, record global shortcuts in Settings rather than typing shortcut syntax; Previous/Next Bot are listed in the Conversation menu (⌘[/⌘]).
 
+Machine Bot access uses the same [grouped grants controls](../web/README.md#assistant-destinations)
+as web: measured capability names, Off / View only / Full, warnings only when
+effective access differs, and one Why disclosure for raw reasons and policy.
+Desktop permissions remain inspection-only; these controls never prompt for TCC.
+
 ## End-user release packaging
 
 End users open the notarized DMG, drag **Lemon Bot** to **Applications**, and launch
