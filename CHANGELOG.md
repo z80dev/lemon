@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.11.2]
+
 ### Added
 
 - Include bundled Python in the actual darwin runtime tarballs, not just the
