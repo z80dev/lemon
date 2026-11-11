@@ -248,9 +248,12 @@ public struct InstallLayout: Equatable, Sendable {
         self.home = home.standardizedFileURL
     }
 
+    #if os(macOS)
+    /// The current user's install layout; the runtime is installed only on macOS.
     public init() {
         self.init(home: FileManager.default.homeDirectoryForCurrentUser)
     }
+    #endif
 
     // Runtime layout
     public var runtimeVersionsDir: URL {

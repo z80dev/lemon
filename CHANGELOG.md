@@ -8,7 +8,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- The Lemon Bot iPhone app compiles again: a macOS-only home-directory
+  initializer in `LemonBotKit` is no longer built for iOS.
 
 ---
 
