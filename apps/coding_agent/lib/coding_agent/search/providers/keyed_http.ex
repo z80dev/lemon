@@ -1,7 +1,7 @@
 defmodule CodingAgent.Search.Providers.KeyedHttp do
   @moduledoc false
 
-  # Shared plumbing for API-key search providers (Tavily, Kagi, Jina): the
+  # Shared plumbing for API-key search providers (Tavily, Kagi, Jina, Keenable): the
   # missing-key setup payload and bounded HTTP error reporting.
 
   alias CodingAgent.Search.Result

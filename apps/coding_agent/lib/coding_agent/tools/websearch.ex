@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools.WebSearch do
   WebSearch tool for the coding agent.
 
   Uses the capability-aware search provider registry. Bundled providers include
-  Brave Search, Exa, Perplexity Sonar, Tavily, Kagi, Jina, keyless DuckDuckGo,
+  Brave Search, Exa, Perplexity Sonar, Tavily, Kagi, Jina, Keenable, keyless DuckDuckGo,
   and configurable SearXNG.
   """
 
@@ -43,7 +43,8 @@ defmodule CodingAgent.Tools.WebSearch do
   @keyed_providers %{
     "tavily" => "TAVILY_API_KEY",
     "kagi" => "KAGI_API_KEY",
-    "jina" => "JINA_API_KEY"
+    "jina" => "JINA_API_KEY",
+    "keenable" => "KEENABLE_API_KEY"
   }
   @openrouter_key_prefixes ["sk-or-"]
   @brave_freshness_shortcuts MapSet.new(["pd", "pw", "pm", "py"])

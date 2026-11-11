@@ -2065,7 +2065,7 @@ Lemon includes web tools under `runtime.tools.web`. For full setup and troublesh
 ```toml
 [runtime.tools.web.search]
 enabled = true
-provider = "brave"   # brave | exa | perplexity | tavily | kagi | jina | duckduckgo | searxng | extension id
+provider = "brave"   # brave | exa | perplexity | tavily | kagi | jina | keenable | duckduckgo | searxng | extension id
 max_results = 5
 timeout_seconds = 30
 cache_ttl_minutes = 15
@@ -2090,8 +2090,8 @@ api_key_secret = "SEARXNG_API_KEY"
 # Optional if EXA_API_KEY is set.
 api_key = "<exa-api-key>"
 
-# tavily, kagi and jina take the same shape (api_key or api_key_secret);
-# TAVILY_API_KEY / KAGI_API_KEY / JINA_API_KEY are used when unset.
+# tavily, kagi, jina and keenable take the same shape (api_key or api_key_secret);
+# TAVILY_API_KEY / KAGI_API_KEY / JINA_API_KEY / KEENABLE_API_KEY are used when unset.
 [runtime.tools.web.search.providers.tavily]
 api_key_secret = "TAVILY_API_KEY"
 

@@ -7,6 +7,7 @@ defmodule CodingAgent.Search.ProvidersTest do
     Exa,
     Jina,
     Kagi,
+    Keenable,
     Perplexity,
     Searxng,
     Tavily
@@ -266,6 +267,55 @@ defmodule CodingAgent.Search.ProvidersTest do
 
       assert hd(payload["results"])["description"] =~ "Agent harness"
       refute inspect(payload) =~ "tvly-secret"
+    end
+
+    test "Keenable posts an x-api-key query with a clamped snippet cap and maps results" do
+      parent = self()
+
+      http_post = fn "https://api.keenable.ai/v1/search", opts ->
+        send(parent, {:keenable, opts[:json]})
+        assert {"x-api-key", "kn-secret"} in opts[:headers]
+        assert {"x-keenable-title", "Lemon"} in opts[:headers]
+
+        {:ok,
+         %Req.Response{
+           status: 200,
+           body: %{
+             "results" => [
+               %{
+                 "url" => "https://a.example",
+                 "title" => "A",
+                 "description" => "",
+                 "snippet" => "snip",
+                 "published_at" => "2026-10-30T00:00:00Z"
+               },
+               %{"title" => "missing url"}
+             ]
+           }
+         }}
+      end
+
+      context = %{api_key: "kn-secret", timeout_ms: 100, http_post: http_post}
+      assert {:ok, payload} = Keenable.search(@request, context)
+
+      assert_received {:keenable,
+                       %{
+                         "query" => "lemon agents",
+                         "max_results" => 3,
+                         "snippet_max_length" => 2_000
+                       }}
+
+      assert [%{"url" => "https://a.example", "published" => "2026-10-30T00:00:00Z"} = result] =
+               payload["results"]
+
+      assert result["description"] =~ "snip"
+      refute inspect(payload) =~ "kn-secret"
+
+      assert {:ok, _} = Keenable.search(%{@request | max_chars: 50}, context)
+      assert_received {:keenable, %{"snippet_max_length" => 180}}
+
+      assert {:error, %{"error" => "missing_keenable_api_key"}} =
+               Keenable.available?(:search, %{api_key: ""})
     end
 
     test "Kagi reads V1 result buckets in order and caps the count" do
