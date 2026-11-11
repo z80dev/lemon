@@ -100,6 +100,8 @@ export async function chatOptionFor(
   option: P.ApprovalChatOption;
   context: { toolGroup: P.ApprovalToolGroup; contextKey: string; origin: string };
 } | null> {
+  // Access consent changes a Bot grant; it never approves commands or remembered execution.
+  if (input.source === 'access_request') return null;
   if (input.source !== 'lemon_exec') return null;
   if (input.forceHuman === true) return null;
   const group = approvalToolGroup(input.tool);

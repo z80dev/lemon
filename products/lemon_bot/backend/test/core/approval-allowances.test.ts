@@ -123,6 +123,7 @@ function fixture() {
     directoryGroupIds: [],
     productAccess: true,
     localExecutionCeiling: 'allow',
+    workspaceReads: 'allow',
     allowSudo: false,
     allowEgress: true,
     rules: [],
@@ -297,6 +298,23 @@ describe('core eligibility: chatOptionFor', () => {
       contextKey: 'ctx_key_123',
       origin: 'owner_chat',
     });
+  });
+
+  test('access requests never offer remembered allowances even with an eligible tool and context', async () => {
+    const { services, store, owner, bot, room } = fixture();
+    try {
+      const run: P.Run = services.resource('run', {
+        conversationId: room.id, botId: bot.id, initiatorUserId: owner.userId, clientNonce: 'access_nonce_00000001',
+        status: 'running', error: null, startedAtMs: 1000, completedAtMs: null, routineRunId: null,
+      });
+      store.put('runs', run);
+      store.setMetadata(`runApprovalOrigin:${run.id}`, 'owner_chat');
+      store.setMetadata('runtimeInvocation:up_access', { invocationContextKey: 'eligible_context' });
+      const input = { bot, run, upstreamRunId: 'up_access', tool: 'bash' };
+      expect(await chatOptionFor(services, owner, { ...input, source: 'lemon_exec' })).not.toBeNull();
+      expect(await chatOptionFor(services, owner, { ...input, source: 'access_request' })).toBeNull();
+      expect(store.list('approvalAllowances')).toEqual([]);
+    } finally { store.close(); }
   });
 
   test('refuses product-source, forceHuman, non-eligible tools, and non-interactive principal', async () => {

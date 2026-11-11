@@ -4,6 +4,9 @@
 
 ### Added
 
+- Added owner-reviewed just-in-time Terminal/Files/Browser requests, queued busy-Bot grant changes and acknowledged, idempotent continuations of the original request.
+- Supported workers use per-Bot folders for task files and attachments; optional reviewed-folder policy preserves ordinary command approval and fences web access after unreviewed folder reads. Existing Bots refresh profiles when idle.
+
 - Added explicit Standard access at Bot creation, import and duplication: supported Terminal/Files read-write and Browser read-only requested grants are saved before the first profile sync. Machine/workspace limits and command approvals remain enforced; omitted access and Chat only keep grants off.
 
 - Added one-use same-machine browser sign-in tickets with exact loopback binding, failure-only throttling, private handoff cleanup and a five-ticket cap. Local-key and ticket sessions can add a first email/password or reauthenticate locally for ten minutes; `GET /me/sign-in` reports those methods without exposing private session metadata.

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
-import { createMachineRoutes, ensureMachineRuntimeReady, refreshMachines } from '../../src/runtime/machines';
+import { createMachineRoutes, ensureMachineRuntimeReady, importMachineFile, refreshMachines } from '../../src/runtime/machines';
 import { getTerminalService } from '../../src/runtime/terminals';
 import { fixture, compatibleFeatures } from './fixture';
 const stat = { path: '/home/worker/result.txt', type: 'regular', size: 3, mtimeMs: 101, mode: 0o600, mime: 'text/plain', readable: false, writable: true };
@@ -74,6 +74,56 @@ describe('privileged destination machine boundary', () => {
       expect(f.store.list('botGrants')).toEqual([]);
     } finally { f.store.close(); }
   });
+
+  for (const botFolder of [undefined, false, true]) {
+    test(`botFolder=${botFolder} is optional and never participates in required readiness`, async () => {
+      const f = fixture();
+      const feature = compatibleFeatures(f.machine.nodeId!);
+      if (botFolder !== undefined) feature.features.botFolder = botFolder;
+      f.rpc = async method => { if (method !== 'node.runtime.features') throw new Error('Unexpected RPC'); return feature; };
+      try {
+        const ready = await ensureMachineRuntimeReady(f.services, f.machine, true);
+        expect(ready.botReady).toBe(true);
+        expect(ready.features.botFolder).toBe(botFolder);
+        feature.features.hostIO = false;
+        await expect(ensureMachineRuntimeReady(f.services, f.machine, true)).rejects.toMatchObject({ code: 'capability_unavailable' });
+      } finally { f.store.close(); }
+    });
+  }
+
+  for (const botFolder of [undefined, false, true]) {
+    for (const botContext of [false, true]) {
+      test(`file import uses profileId only for Bot context=${botContext} with botFolder=${botFolder}`, async () => {
+        const f = fixture(), originalRpc = f.rpc;
+        const feature = compatibleFeatures(f.machine.nodeId!);
+        if (botFolder !== undefined) feature.features.botFolder = botFolder;
+        f.store.setMetadata(`nodeRuntimeFeatures:${f.machine.id}`, feature);
+        const input: P.FileImport = { clientNonce: 'folder_file_import_0001', path: 'result.txt', ...(botContext ? { botId: f.bot.id, conversationId: f.conversation.id } : {}) };
+        const attachment: P.Attachment = f.services.resource('attachment', { ownerUserId: f.alice.userId, conversationId: input.conversationId ?? null, botId: input.botId ?? null, filename: 'result.txt', mime: 'text/plain', size: 3, sha256: 'a'.repeat(64), width: null, height: null, durationMs: null, source: 'node', state: 'ready', preview: 'text', provenance: { botId: input.botId ?? null, machineId: f.machine.id, runId: null, sourceEntryId: null, generatedAtMs: null } });
+        f.services.attachments = {
+          async create(actor, bytes, metadata) { expect(actor).toEqual(f.alice); expect(Buffer.from(bytes).toString()).toBe('abc'); expect(metadata.filename).toBe('result.txt'); return attachment; },
+          async copy() { throw new Error('Unexpected attachment copy'); },
+          async bytes() { throw new Error('Unexpected attachment bytes'); },
+          download() { throw new Error('Unexpected attachment download'); },
+        };
+        f.rpc = async (method, params) => {
+          if (method === 'node.fs.stat') return stat;
+          if (method === 'node.fs.read') return { path: stat.path, offset: 0, dataBase64: 'YWJj', size: 3, mime: 'text/plain', eof: true };
+          return originalRpc(method, params);
+        };
+        try {
+          expect(await importMachineFile(f.services, f.alice, f.machine.id, input)).toEqual(attachment);
+          const files = f.calls.filter(call => call.method === 'node.fs.stat' || call.method === 'node.fs.read');
+          expect(files).toHaveLength(3);
+          for (const call of files) {
+            if (botContext && botFolder === true) expect(call.params.profileId).toBe(f.bot.profileId);
+            else expect(Object.hasOwn(call.params, 'profileId')).toBe(false);
+          }
+          expect(files[0]!.params.path).toBe('result.txt');
+        } finally { f.store.close(); }
+      });
+    }
+  }
 
   test('bot visibility never confers human host access; invalid chunks and truncate offset are rejected before dispatch', async () => {
     const f = fixture(); const routes = createMachineRoutes(f.services); const write = routes.find(route => route.method === 'PUT' && route.path === '/v1/machines/:id/files')!;

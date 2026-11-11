@@ -9,6 +9,8 @@ import { botPresence, createExperienceRoutes, createExperienceService, desiredBo
 import { productBotTools } from '../../src/core/bots';
 import { z } from '../../src/core/validation';
 import { buildPrivateBotMemoryContextKey } from '../../src/runtime/runs';
+import { anyRequestable, createAccessService, queueGrantChanges, requestable, type AccessRequestRecord } from '../../src/core/access';
+import { submissionKey } from '../../src/core/conversations';
 
 const noticePayload = z.object({
   kind: z.literal('notice'), severity: z.enum(['info', 'warning', 'error']), text: z.string(), requestId: z.string().nullable(), targetedUserId: z.string(),
@@ -49,7 +51,7 @@ function fixture() {
     } },
     runtime: { async reconcile() {} },
     integrations: {
-      async effectivePolicy(): Promise<P.EffectivePolicy> { return { userId: user.userId, botId: bot.id, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'allow', allowSudo: false, allowEgress: false, rules: [], networkPolicies: [], explanations: [] }; },
+      async effectivePolicy(): Promise<P.EffectivePolicy> { return { userId: user.userId, botId: bot.id, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'allow', workspaceReads: 'allow', allowSudo: false, allowEgress: false, rules: [], networkPolicies: [], explanations: [] }; },
     },
     events: { emit() {} },
     async syncBotProfile() { synced++; },
@@ -305,7 +307,7 @@ describe('truthful presence and private activity', () => {
   test('unknown OS permission enforces off even when product and bot request allow', async () => {
     const f = fixture();
     try {
-      f.store.put('botGrants', { ...f.base, id: 'grant', botId: 'bot', machineId: 'machine', capabilityId: 'files', requestedLevel: 'read_interact', effectiveLevel: 'read_interact', reasons: [] } satisfies P.BotGrant);
+      f.store.put('botGrants', { ...f.base, id: 'grant', botId: 'bot', machineId: 'machine', capabilityId: 'files', requestedLevel: 'read_interact', effectiveLevel: 'read_interact', reasons: [] } satisfies Omit<P.BotGrant, 'pendingLevel'>);
       const grants = await effectiveBotGrants(f.services, user, f.bot, { machineId: 'machine', os: 'Darwin', measuredAtMs: f.services.now(), stale: false, items: [{ id: 'files', name: 'Files', category: 'files', supported: true, configuredLevel: 'read_interact', osGrant: 'unknown', tools: ['read'], reason: 'No permission evidence', measuredAtMs: f.services.now(), stale: false }] });
       expect(grants[0]!.effectiveLevel).toBe('off');
     } finally { f.close(); }
@@ -337,7 +339,7 @@ describe('native grant enforcement boundaries', () => {
       const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [] };
       const connector: P.Connector = { ...f.base, id: 'foreign-connector', botId: 'bot', ownerUserId: 'bob', name: 'Private account', url: 'https://private.example.test/mcp', accountLabel: 'Foreign account', authKind: 'none', state: 'connected', tools: [{ name: 'private_tool', enabled: true }], secretHeaderNames: [], lastError: null };
       f.store.put('connectors', connector);
-      f.store.put('botGrants', { ...f.base, id: 'foreign-grant', botId: 'bot', machineId: 'machine', capabilityId: `connector:${connector.id}`, requestedLevel: 'read_interact', effectiveLevel: 'read_interact', reasons: [] } satisfies P.BotGrant);
+      f.store.put('botGrants', { ...f.base, id: 'foreign-grant', botId: 'bot', machineId: 'machine', capabilityId: `connector:${connector.id}`, requestedLevel: 'read_interact', pendingLevel: null, effectiveLevel: 'read_interact', reasons: [] } satisfies P.BotGrant);
       f.store.setMetadata(`connector:${connector.id}`, 'foreign-private-metadata');
       let decrypted = 0;
       f.services.decrypt = <T>(): T => { decrypted++; throw new Error('Foreign credentials must not be resolved'); };
@@ -348,7 +350,7 @@ describe('native grant enforcement boundaries', () => {
       expect(decrypted).toBe(0);
     } finally { f.close(); }
   });
-  test('read-only file grants produce actual deny policy and active work blocks cutover', async () => {
+  test('read-only file grants produce actual deny policy and active work queues cutover', async () => {
     const f = fixture();
     try {
       const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [{ id: 'files', name: 'Files', category: 'files', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['read', 'write', 'edit', 'grep'], reason: 'Policy roots measured', measuredAtMs: f.services.now(), stale: false }] };
@@ -369,8 +371,17 @@ describe('native grant enforcement boundaries', () => {
       const policy = await nativeBotToolPolicy(f.services, user, f.bot, measured);
       expect(policy.deny).toContain('write'); expect(policy.deny).toContain('bash'); expect(policy.deny).not.toContain('read');
       f.store.put('runs', { ...f.base, id: 'active', conversationId: 'room', botId: 'bot', initiatorUserId: 'alice', clientNonce: nonce, status: 'running', error: null, startedAtMs: f.services.now(), completedAtMs: null, routineRunId: null } satisfies P.Run);
-      await expect(f.request('PATCH', '/bots/:id/grants/:grantId', { clientNonce: nonce, revision: changed.revision, requestedLevel: 'read_interact' }, { id: 'bot', grantId: grant.id })).rejects.toMatchObject({ code: 'conflict' });
+      f.services.events = createEventService(f.services);
+      const published: P.BotGrant[] = [];
+      f.services.events.subscribe(event => { if (event.event === 'grant.upserted') published.push(event.payload); });
+      const queued = await f.request<P.BotGrant>('PATCH', '/bots/:id/grants/:grantId', { clientNonce: nonce, revision: changed.revision, requestedLevel: 'read_interact' }, { id: 'bot', grantId: grant.id });
+      expect(queued.pendingLevel).toBe('read_interact');
+      expect(queued.requestedLevel).toBe('read_only'); expect(queued.effectiveLevel).toBe('read_only');
       expect(f.store.require<P.BotGrant>('botGrants', grant.id).requestedLevel).toBe('read_only');
+      expect(f.synced).toBe(1);
+      const cleared = await f.request<P.BotGrant>('PATCH', '/bots/:id/grants/:grantId', { clientNonce: nonce, revision: queued.revision, requestedLevel: 'read_only' }, { id: 'bot', grantId: grant.id });
+      expect(cleared.pendingLevel).toBeNull(); expect(cleared.revision).toBe(queued.revision + 1);
+      expect(published).toEqual([queued, cleared]);
       for (const state of ['pending', 'outcome_unknown']) {
         f.store.setMetadata('botPolicySync:bot', { state });
         expect((await effectiveBotGrants(f.services, user, f.bot, measured))[0]!.effectiveLevel).toBe('off');
@@ -494,7 +505,7 @@ describe('native grant enforcement boundaries', () => {
     const f = fixture();
     try {
       const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [{ id: 'files', name: 'Files', category: 'files', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['read', 'write'], reason: 'Measured', measuredAtMs: f.services.now(), stale: false }] };
-      f.store.put('botGrants', { ...f.base, id: 'file-grant', botId: 'bot', machineId: 'machine', capabilityId: 'files', requestedLevel: 'read_only', effectiveLevel: 'read_only', reasons: [] } satisfies P.BotGrant);
+      f.store.put('botGrants', { ...f.base, id: 'file-grant', botId: 'bot', machineId: 'machine', capabilityId: 'files', requestedLevel: 'read_only', pendingLevel: null, effectiveLevel: 'read_only', reasons: [] } satisfies P.BotGrant);
       const floor = await f.services.integrations.effectivePolicy(user, f.bot.id);
       const permitted = await nativeBotToolPolicy(f.services, user, f.bot, measured);
       f.services.integrations.effectivePolicy = async (actor, botId) => { expect(actor.userId).toBe(f.bot.ownerUserId); expect(botId).toBe(f.bot.id); return { ...floor, localExecutionCeiling: 'deny' }; };
@@ -516,7 +527,7 @@ describe('native grant enforcement boundaries', () => {
     try {
       f.store.remove('bots', f.bot.id);
       const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [{ id: 'files', name: 'Files', category: 'files', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['read', 'operator_extension'], reason: 'Measured', measuredAtMs: f.services.now(), stale: false }] };
-      f.store.put('botGrants', { ...f.base, id: 'file-grant', botId: 'bot', machineId: 'machine', capabilityId: 'files', requestedLevel: 'read_interact', effectiveLevel: 'read_interact', reasons: [] } satisfies P.BotGrant);
+      f.store.put('botGrants', { ...f.base, id: 'file-grant', botId: 'bot', machineId: 'machine', capabilityId: 'files', requestedLevel: 'read_interact', pendingLevel: null, effectiveLevel: 'read_interact', reasons: [] } satisfies P.BotGrant);
       const policy = await nativeBotToolPolicy(f.services, user, f.bot, measured);
       expect(policy.allow).toContain('read'); expect(policy.allow).not.toContain('write'); expect(policy.allow).not.toContain('operator_extension');
       for (const tool of projectedProductTools) expect(policy.allow).toContain(tool.executionName);
@@ -552,8 +563,8 @@ describe('native grant enforcement boundaries', () => {
         { id: 'terminal', name: 'Terminal', category: 'shell', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['bash', 'lsp_diagnostics'], reason: 'Measured local tooling', measuredAtMs: f.services.now(), stale: false },
       ] };
       for (const files of ['off', 'read_only', 'read_interact'] as const) for (const shell of ['off', 'read_only', 'read_interact'] as const) {
-        f.store.put('botGrants', { ...f.base, id: 'file-grant', botId: 'bot', machineId: 'machine', capabilityId: 'files', requestedLevel: files, effectiveLevel: files, reasons: [] } satisfies P.BotGrant);
-        f.store.put('botGrants', { ...f.base, id: 'shell-grant', botId: 'bot', machineId: 'machine', capabilityId: 'terminal', requestedLevel: shell, effectiveLevel: shell, reasons: [] } satisfies P.BotGrant);
+        f.store.put('botGrants', { ...f.base, id: 'file-grant', botId: 'bot', machineId: 'machine', capabilityId: 'files', requestedLevel: files, pendingLevel: null, effectiveLevel: files, reasons: [] } satisfies P.BotGrant);
+        f.store.put('botGrants', { ...f.base, id: 'shell-grant', botId: 'bot', machineId: 'machine', capabilityId: 'terminal', requestedLevel: shell, pendingLevel: null, effectiveLevel: shell, reasons: [] } satisfies P.BotGrant);
         const policy = await nativeBotToolPolicy(f.services, user, f.bot, measured);
         if (files === 'read_interact' && shell === 'read_interact') { expect(policy.allow).toContain('lsp_diagnostics'); expect(policy.deny).not.toContain('lsp_diagnostics'); }
         else { expect(policy.allow).not.toContain('lsp_diagnostics'); expect(policy.deny).toContain('lsp_diagnostics'); }
@@ -573,7 +584,7 @@ describe('native grant enforcement boundaries', () => {
       const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [] };
       const connector: P.Connector = { ...f.base, id: 'connector', botId: 'bot', ownerUserId: 'alice', name: 'Reports', url: 'https://example.test/mcp', accountLabel: 'Own account', authKind: 'none', state: 'connected', tools: [{ name: 'declared_read', enabled: true }, { name: 'write_report', enabled: true }], secretHeaderNames: [], lastError: null };
       f.store.put('connectors', connector);
-      f.store.put('botGrants', { ...f.base, id: 'connector-grant', botId: 'bot', machineId: 'machine', capabilityId: 'connector:connector', requestedLevel: 'read_interact', effectiveLevel: 'read_interact', reasons: [] } satisfies P.BotGrant);
+      f.store.put('botGrants', { ...f.base, id: 'connector-grant', botId: 'bot', machineId: 'machine', capabilityId: 'connector:connector', requestedLevel: 'read_interact', pendingLevel: null, effectiveLevel: 'read_interact', reasons: [] } satisfies P.BotGrant);
       f.store.setMetadata('connector:connector', JSON.stringify({ machineId: 'machine', configuredLevel: 'read_interact', discoveredAtMs: f.services.now(), readOnlyTools: ['declared_read'], executionNames: { declared_read: 'actual_read_alias', write_report: 'actual_write_alias' } }));
       const shared = await nativeBotToolPolicy(f.services, user, f.bot, measured);
       expect(shared.require_approval).toEqual(['actual_write_alias']);
@@ -710,7 +721,7 @@ function workspaceFixture() {
   const ceiling = { servers, fingerprint: 'a'.repeat(64) };
   f.store.setMetadata(`botPublicMcpCeiling:${f.bot.id}`, ceiling);
   const acknowledged: P.JSONObject = { profile: 'custom', allow: [...projectedProductTools.map(tool => tool.executionName), ...connectorAliases, 'read', 'write', 'bash', 'lsp_diagnostics', 'task', 'webfetch', 'websearch'], deny: ['retained_deny'], blocked_tools: ['retained_block'], require_approval: ['retained_approval'] };
-  const restrictions: WorkspaceToolRestrictions = { localExecutionCeiling: 'allow', rules: [], allowedMcpOrigins: null, requireReview: false };
+  const restrictions: WorkspaceToolRestrictions = { localExecutionCeiling: 'allow', rules: [], allowedMcpOrigins: null, requireReview: false, folderReadsNeedReview: false };
   f.services.integrations.workspaceRestrictions = scope => { expect(scope).toEqual({ botId: f.bot.id, machineId: f.bot.machineId }); return restrictions; };
   f.services.integrations.effectivePolicy = async () => { throw new Error('Workspace hardening must not evaluate an owner policy'); };
   f.services.integrations.connectorConfig = async () => { throw new Error('Workspace hardening must not resolve credentials'); };
@@ -799,4 +810,343 @@ describe('bounded workspace native hardening', () => {
       expect(f.projectionCalls).toHaveLength(0);
     } finally { f.close(); }
   });
+});
+
+function accessFixture() {
+  const f = fixture();
+  const measured: P.MachineCapabilities = { machineId: f.machine.id, os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [
+    { id: 'terminal', name: 'Terminal', category: 'shell', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['bash'], reason: 'Measured terminal', measuredAtMs: f.services.now(), stale: false },
+    { id: 'files', name: 'Files', category: 'files', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['read', 'write', 'grep', 'ls'], reason: 'Measured files', measuredAtMs: f.services.now(), stale: false },
+    { id: 'browser', name: 'Browser', category: 'browser', supported: true, configuredLevel: 'read_only', osGrant: 'granted', tools: ['browser_snapshot'], reason: 'Measured browser', measuredAtMs: f.services.now(), stale: false },
+  ] };
+  f.services.lemon.methods = ['profiles.update', 'nodes.list', 'node.capabilities.get', 'mcp.execution_names'];
+  f.services.lemon.call = async <T>(method: string): Promise<T> => {
+    if (method === 'nodes.list') return { nodes: [{ id: 'node', status: 'online', capabilities: [] }], summary: { presenceAvailable: true, truncated: false } } as T;
+    if (method === 'node.capabilities.get') { const { machineId: _machineId, ...data } = measured; return { ...data, nodeId: 'node' } as T; }
+    if (method === 'mcp.execution_names') return projectionReply() as T;
+    throw new Error(`Unexpected RPC: ${method}`);
+  };
+  f.store.setMetadata('botPublicMcpCeiling:bot', { servers: [{ name: 'lemon-bot', enabledTools: [...productBotTools] }] });
+  const source: P.TranscriptEntry = { ...f.base, id: 'source', conversationId: f.room.id, seq: 1, timestampMs: f.services.now() - 1, actor: { kind: 'user', id: 'alice', displayName: 'Alice' }, clientNonce: null, batchId: null, replyToEntryId: null, runId: null, targetedUserId: null, reactions: [], kind: 'message', role: 'user', text: 'Please create my report.', streaming: false, attachmentIds: [] };
+  const run: P.Run = { ...f.base, id: 'origin', conversationId: f.room.id, botId: f.bot.id, initiatorUserId: 'alice', clientNonce: nonce, status: 'succeeded', error: null, startedAtMs: f.services.now() - 1, completedAtMs: f.services.now(), routineRunId: null };
+  const approval: P.Approval = { ...f.base, id: 'access-approval', gate: { id: 'access-approval', state: 'approved', targetUserId: 'alice', expiresAtMs: f.services.now() + 600000, resolvedAtMs: f.services.now(), resolvedByUserId: 'alice', revision: 2 }, entryId: 'approval-entry', conversationId: f.room.id, botId: f.bot.id, runId: run.id, source: 'access_request', category: 'permissions', title: 'Bot needs Terminal and Files', description: 'Run commands and change files on Laptop.', target: f.machine.id, inputs: { capability: 'terminal', capabilityIds: ['terminal', 'files'], level: 'read_interact', levels: { terminal: 'read_interact', files: 'read_interact' }, machineLabel: f.machine.name, reason: 'Create the report' }, policyMode: 'ask_first', review: 'not_run', ruleId: null, scope: { kind: 'once', label: 'Allow for this Bot', machineId: f.machine.id, machineLabel: f.machine.name, botId: f.bot.id, runId: run.id, origin: null, connectorId: null, consequences: [], expiresAtMs: f.services.now() + 600000 } };
+  f.store.put('entries', source); f.store.put('runs', run); f.store.put('approvals', approval);
+  f.store.setMetadata(`runSourceEntry:${run.id}`, source.id);
+  let submitted = 0;
+  f.services.integrations.admission = async () => {};
+  f.services.entry = (_actor, conversationId, input) => {
+    const entry = { ...source, ...input, ...f.services.resource('entry', {}), conversationId, seq: f.store.list('entries').length + 1, timestampMs: f.services.now() } as P.TranscriptEntry;
+    f.store.put('entries', entry);
+    return entry;
+  };
+  f.services.runtime.submit = async (actor, room, bot, message) => {
+    submitted++;
+    const next: P.Run = { ...run, id: `continued-${submitted}`, clientNonce: message.clientNonce };
+    f.store.put('runs', next);
+    const submission = f.store.metadata<{ sourceEntryId: string }>(submissionKey(actor, room.id, message.clientNonce));
+    f.store.setMetadata(`runSourceEntry:${next.id}`, submission?.sourceEntryId);
+    return { run: next, delivery: { botId: bot.id, requestedMode: 'followup', effectiveMode: 'started', targetRunId: null, runId: next.id } };
+  };
+  const access = createAccessService(f.services);
+  async function queue() {
+    await effectiveBotGrants(f.services, user, f.bot, measured);
+    f.store.transaction(() => queueGrantChanges(f.services, f.bot, { terminal: 'read_interact', files: 'read_interact' }, approval.id));
+  }
+  return { ...f, measured, source, run, approval, access, queue, get submitted() { return submitted; }, close() { access.close(); f.close(); } };
+}
+
+describe('just-in-time grant application and continuation', () => {
+  test('requestability clamps levels, bundles Files, and refuses stale, denied, already-on or queued access', async () => {
+    const f = accessFixture();
+    try {
+      const policy = await f.services.integrations.effectivePolicy(user, f.bot.id);
+      const grants = await effectiveBotGrants(f.services, user, f.bot, f.measured);
+      expect(requestable(f.services, user, f.bot, f.measured, policy, grants, 'terminal', 'view')).toMatchObject({ capabilityIds: ['terminal', 'files'], levels: { terminal: 'read_interact', files: 'read_interact' } });
+      expect(requestable(f.services, user, f.bot, f.measured, policy, grants, 'browser')).toMatchObject({ levels: { browser: 'read_only' } });
+      expect(anyRequestable(f.services, user, f.bot, f.measured, policy, grants)).toBe(true);
+      expect(requestable(f.services, user, f.bot, { ...f.measured, stale: true }, policy, grants, 'terminal')).toMatchObject({ code: 'capability_unavailable' });
+      expect(requestable(f.services, user, f.bot, f.measured, { ...policy, localExecutionCeiling: 'deny' }, grants, 'terminal')).toMatchObject({ code: 'policy_denied' });
+      const terminal = grants.find(value => value.capabilityId === 'terminal')!;
+      expect(requestable(f.services, user, f.bot, f.measured, policy, [{ ...terminal, pendingLevel: 'read_interact' }], 'terminal')).toMatchObject({ code: 'already_available' });
+      expect(requestable(f.services, user, f.bot, f.measured, policy, [{ ...terminal, requestedLevel: 'read_interact' }], 'terminal')).toMatchObject({ code: 'already_available' });
+      f.measured.items[0]!.configuredLevel = 'read_only';
+      expect(requestable(f.services, user, f.bot, f.measured, policy, grants, 'terminal')).toMatchObject({ code: 'capability_unavailable' });
+    } finally { f.close(); }
+  });
+  test('preparing access rechecks policy, target owner, unattended origin and original clamped scope', async () => {
+    const f = accessFixture();
+    try {
+      const prepared = await f.access.prepare(user, { ...f.approval, inputs: { ...f.approval.inputs, levels: { terminal: 'read_interact', files: 'read_only' } } });
+      expect(prepared?.changes).toEqual({ terminal: 'read_interact', files: 'read_only' });
+      await expect(f.access.prepare({ ...user, userId: 'bob' }, f.approval)).rejects.toMatchObject({ code: 'forbidden' });
+      f.store.setMetadata(`runCron:${f.run.id}`, true);
+      await expect(f.access.prepare(user, f.approval)).rejects.toMatchObject({ code: 'policy_denied' });
+      f.store.setMetadata(`runCron:${f.run.id}`, null);
+      const policy = await f.services.integrations.effectivePolicy(user, f.bot.id);
+      f.services.integrations.effectivePolicy = async () => ({ ...policy, localExecutionCeiling: 'deny' });
+      await expect(f.access.prepare(user, f.approval)).rejects.toMatchObject({ code: 'policy_denied' });
+    } finally { f.close(); }
+  });
+  test('all pending grants synchronize once and continuation carries original human authority', async () => {
+    const f = accessFixture();
+    try {
+      await f.queue();
+      await Promise.all([f.access.reconcileAll(), f.access.reconcileAll()]);
+      expect(f.store.metadata('botPolicySync:bot')).toMatchObject({ state: 'acknowledged', grantIds: expect.any(Array) });
+      expect(f.store.list<P.BotGrant>('botGrants').filter(value => value.requestedLevel === 'read_interact')).toHaveLength(2);
+      expect(f.store.list<P.BotGrant>('botGrants').every(value => value.pendingLevel === null)).toBe(true);
+      expect(f.submitted).toBe(1);
+      expect(f.store.metadata('runSourceEntry:continued-1')).toBe(f.source.id);
+      const continuation = f.store.list<P.TranscriptEntry>('entries', entry => entry.actor.kind === 'system' && entry.kind === 'message')[0]!;
+      expect(continuation).toMatchObject({ text: expect.stringContaining('continuing your request'), actor: { kind: 'system' } });
+      expect(f.store.metadata(`externalEntry:${continuation.id}`)).toBe(true);
+      expect(f.store.require<AccessRequestRecord>('accessRequests', f.approval.id).state).toBe('continued');
+    } finally { f.close(); }
+  });
+  test('crash after send receipt but before continuation ledger commit never redispatches', async () => {
+    const f = accessFixture();
+    try {
+      await f.queue();
+      const put = f.store.put.bind(f.store);
+      let crashed = false;
+      f.store.put = (collection, value) => {
+        if (!crashed && collection === 'accessRequests' && 'state' in value && value.state === 'continued') { crashed = true; throw new Error('simulated process interruption'); }
+        return put(collection, value);
+      };
+      await f.access.reconcileAll();
+      expect(crashed).toBe(true); expect(f.submitted).toBe(1);
+      expect(f.store.require<AccessRequestRecord>('accessRequests', f.approval.id).state).toBe('applied');
+      f.store.put = put;
+      await f.access.reconcileAll();
+      expect(f.submitted).toBe(1);
+      expect(f.store.require<AccessRequestRecord>('accessRequests', f.approval.id).state).toBe('continued');
+    } finally { f.close(); }
+  });
+  test('crash after durable continuation plan but before send resumes with the original nonce', async () => {
+    const f = accessFixture();
+    try {
+      await f.queue();
+      f.services.integrations.admission = async () => { throw new Error('simulated process interruption'); };
+      await f.access.reconcileAll();
+      expect(f.store.require<AccessRequestRecord>('accessRequests', f.approval.id).continuation?.dispatch).toBe(true);
+      expect(f.submitted).toBe(0);
+      f.services.integrations.admission = async () => {};
+      await f.access.reconcileAll(); await f.access.reconcileAll();
+      expect(f.submitted).toBe(1);
+    } finally { f.close(); }
+  });
+  for (const reason of ['cancelled', 'newer_human'] as const) test(`applied access posts a notice without resending: ${reason}`, async () => {
+    const f = accessFixture();
+    try {
+      await f.queue();
+      if (reason === 'cancelled') f.store.put('runs', { ...f.run, status: 'cancelled' });
+      else f.store.put('entries', { ...f.source, id: 'newer', seq: 2, timestampMs: f.services.now() + 1, text: 'Never mind.' });
+      await f.access.reconcileAll(); await f.access.reconcileAll();
+      expect(f.submitted).toBe(0);
+      const notices = f.store.list<P.TranscriptEntry>('entries', entry => entry.kind === 'notice');
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({ text: "Terminal is now on for Bot. Send your request again when you're ready." });
+      expect(f.store.require<AccessRequestRecord>('accessRequests', f.approval.id).state).toBe('not_continued');
+    } finally { f.close(); }
+  });
+  test('every active run including outcome_unknown and unresolved policy fences block application', async () => {
+    const f = accessFixture();
+    try {
+      await f.queue();
+      for (const status of ['reserved', 'queued', 'running', 'awaiting_input', 'outcome_unknown'] as const) {
+        f.store.put('runs', { ...f.run, status });
+        await f.access.reconcileAll();
+        expect(f.store.require<AccessRequestRecord>('accessRequests', f.approval.id).state).toBe('queued');
+      }
+      f.store.put('runs', f.run);
+      for (const state of ['pending', 'outcome_unknown']) {
+        f.store.setMetadata('botPolicySync:bot', { state });
+        await f.access.reconcileAll();
+        expect(f.submitted).toBe(0);
+        expect(f.store.require<AccessRequestRecord>('accessRequests', f.approval.id).state).toBe('queued');
+      }
+      f.store.setMetadata('botPolicySync:bot', { state: 'acknowledged' });
+      await f.access.reconcileAll();
+      expect(f.submitted).toBe(1);
+    } finally { f.close(); }
+  });
+  test('sync failure retains an outcome_unknown fence and only acknowledged readback permits continuation', async () => {
+    const f = accessFixture();
+    try {
+      await f.queue();
+      f.services.events = createEventService(f.services);
+      const published: P.BotGrant[] = [];
+      f.services.events.subscribe(event => { if (event.event === 'grant.upserted') published.push(event.payload); });
+      let syncCalls = 0;
+      f.services.syncBotProfile = async () => { syncCalls++; throw new Error('ack lost'); };
+      await f.access.reconcileAll(); await f.access.reconcileAll();
+      expect(syncCalls).toBe(1); expect(f.submitted).toBe(0);
+      expect(f.store.metadata('botPolicySync:bot')).toMatchObject({ state: 'outcome_unknown' });
+      expect(f.store.require<AccessRequestRecord>('accessRequests', f.approval.id).state).toBe('applying');
+      expect(published).toHaveLength(0);
+      f.store.setMetadata('botPolicySync:bot', { ...f.store.metadata<object>('botPolicySync:bot'), state: 'acknowledged' });
+      await f.access.reconcileAll();
+      expect(syncCalls).toBe(1); expect(f.submitted).toBe(1);
+      expect(published).toHaveLength(2);
+      expect(published.every(value => value.pendingLevel === null && value.effectiveLevel === 'read_interact')).toBe(true);
+    } finally { f.close(); }
+  });
+  test('invalid pending capability clears with an owner notice and no continuation', async () => {
+    const f = accessFixture();
+    try {
+      await f.queue();
+      f.measured.items = f.measured.items.filter(item => item.id !== 'terminal');
+      await f.access.reconcileAll();
+      expect(f.store.list<P.BotGrant>('botGrants').every(value => value.pendingLevel === null)).toBe(true);
+      expect(f.store.require<AccessRequestRecord>('accessRequests', f.approval.id).state).toBe('failed');
+      expect(f.submitted).toBe(0);
+    } finally { f.close(); }
+  });
+});
+
+describe('Bot folder native policy projection', () => {
+  test('legacy grant rows project pendingLevel null and Terminal read-only PATCH remains refused', async () => {
+    const f = accessFixture();
+    try {
+      const legacy = { ...f.base, id: 'legacy', botId: 'bot', machineId: 'machine', capabilityId: 'terminal', requestedLevel: 'off', effectiveLevel: 'off', reasons: [] };
+      f.store.put('botGrants', legacy);
+      const grant = (await effectiveBotGrants(f.services, user, f.bot, f.measured)).find(value => value.id === legacy.id)!;
+      expect(grant.pendingLevel).toBeNull();
+      await expect(f.request('PATCH', '/bots/:id/grants/:grantId', { clientNonce: nonce, revision: grant.revision, requestedLevel: 'read_only' }, { id: f.bot.id, grantId: grant.id })).rejects.toMatchObject({ code: 'capability_unavailable' });
+    } finally { f.close(); }
+  });
+  test('folder exemption is sparse and requires feature, allowed workspace reads and effective file access', async () => {
+    const f = accessFixture();
+    try {
+      const grants = await effectiveBotGrants(f.services, user, f.bot, f.measured);
+      const files = grants.find(value => value.capabilityId === 'files')!;
+      f.store.put('botGrants', { ...files, requestedLevel: 'read_only' });
+      expect((await nativeBotToolPolicy(f.services, user, f.bot, f.measured)).workspace_read_exempt).toBeUndefined();
+      f.store.setMetadata('nodeRuntimeFeatures:machine', { nodeId: 'node', features: { botFolder: true } });
+      expect((await nativeBotToolPolicy(f.services, user, f.bot, f.measured)).workspace_read_exempt).toBe(true);
+      const policy = await f.services.integrations.effectivePolicy(user, f.bot.id);
+      f.services.integrations.effectivePolicy = async () => ({ ...policy, workspaceReads: 'ask' });
+      expect((await nativeBotToolPolicy(f.services, user, f.bot, f.measured)).workspace_read_exempt).toBeUndefined();
+      f.services.integrations.effectivePolicy = async () => ({ ...policy, localExecutionCeiling: 'deny' });
+      expect((await nativeBotToolPolicy(f.services, user, f.bot, f.measured)).workspace_read_exempt).toBeUndefined();
+      f.services.integrations.effectivePolicy = async () => ({ ...policy, localExecutionCeiling: 'ask' });
+      expect((await nativeBotToolPolicy(f.services, user, f.bot, f.measured)).workspace_read_exempt).toBe(true);
+      f.store.put('botGrants', { ...files, requestedLevel: 'off' });
+      expect((await nativeBotToolPolicy(f.services, user, f.bot, f.measured)).workspace_read_exempt).toBeUndefined();
+    } finally { f.close(); }
+  });
+  test('workspace hardening preserves tri-state exemption and explicit folder review wins', async () => {
+    const f = workspaceFixture();
+    try {
+      f.acknowledged.workspace_read_exempt = true;
+      expect((await workspaceNativeToolRestrictions(f.services, f.bot, f.acknowledged)).workspace_read_exempt).toBe(true);
+      f.restrictions.requireReview = true;
+      expect((await workspaceNativeToolRestrictions(f.services, f.bot, f.acknowledged)).workspace_read_exempt).toBe(true);
+      f.restrictions.folderReadsNeedReview = true;
+      expect((await workspaceNativeToolRestrictions(f.services, f.bot, f.acknowledged)).workspace_read_exempt).toBe(false);
+      f.restrictions.folderReadsNeedReview = false;
+      f.acknowledged.workspace_read_exempt = false;
+      expect((await workspaceNativeToolRestrictions(f.services, f.bot, f.acknowledged)).workspace_read_exempt).toBe(false);
+    } finally { f.close(); }
+  });
+});
+
+describe('access continuation boundary recovery', () => {
+  test('a private access card continues in the originating group, not the gate room', async () => {
+    const f = accessFixture();
+    try {
+      const origin = { ...f.room, kind: 'group' as const };
+      f.store.put('conversations', origin);
+      f.store.put('conversations', { ...f.room, id: 'private-gate', kind: 'dm' });
+      f.store.put('approvals', { ...f.approval, conversationId: 'private-gate' });
+      await f.queue();
+      expect(f.store.require<AccessRequestRecord>('accessRequests', f.approval.id).conversationId).toBe(origin.id);
+      await f.access.reconcileAll();
+      expect(f.submitted).toBe(1);
+      expect(f.store.list<P.TranscriptEntry>('entries', entry => entry.kind === 'message' && entry.actor.kind === 'system')[0]?.conversationId).toBe(origin.id);
+    } finally { f.close(); }
+  });
+  test('removed Bots never dispatch and retained conversations receive a single notice', async () => {
+    const f = accessFixture();
+    try {
+      await f.queue();
+      f.store.remove('bots', f.bot.id);
+      await f.access.reconcileAll(); await f.access.reconcileAll();
+      expect(f.submitted).toBe(0);
+      expect(f.store.list<P.TranscriptEntry>('entries', entry => entry.kind === 'notice')).toHaveLength(1);
+      expect(f.store.require<AccessRequestRecord>('accessRequests', f.approval.id).state).toBe('not_continued');
+    } finally { f.close(); }
+  });
+  test('lifecycle and offline destination keep pending grants queued', async () => {
+    const f = accessFixture();
+    try {
+      await f.queue();
+      f.store.setMetadata('botLifecycle:bot', { action: 'reset' });
+      await f.access.reconcileAll();
+      expect(f.store.require<AccessRequestRecord>('accessRequests', f.approval.id).state).toBe('queued');
+      f.store.setMetadata('botLifecycle:bot', null);
+      f.store.put('machines', { ...f.machine, status: 'offline' });
+      await f.access.reconcileAll();
+      expect(f.store.require<AccessRequestRecord>('accessRequests', f.approval.id).state).toBe('queued');
+      f.store.put('machines', f.machine);
+      await f.access.reconcileAll();
+      expect(f.submitted).toBe(1);
+    } finally { f.close(); }
+  });
+  test('a human message after durable plan but before send suppresses automatic retry', async () => {
+    const f = accessFixture();
+    try {
+      await f.queue();
+      f.services.integrations.admission = async () => { throw new Error('interrupted before receipt'); };
+      await f.access.reconcileAll();
+      f.store.put('entries', { ...f.source, id: 'newer-after-plan', seq: 2, timestampMs: f.services.now() + 1, text: 'Stop.' });
+      f.services.integrations.admission = async () => {};
+      await f.access.reconcileAll();
+      expect(f.submitted).toBe(0);
+      expect(f.store.require<AccessRequestRecord>('accessRequests', f.approval.id).state).toBe('not_continued');
+    } finally { f.close(); }
+  });
+  test('synchronous queue rejects a stale prepared Bot and ignores already-granted primary access', async () => {
+    const f = accessFixture();
+    try {
+      const prepared = (await f.access.prepare(user, f.approval))!;
+      f.store.put('bots', { ...f.bot, revision: f.bot.revision + 1 });
+      expect(() => f.store.transaction(() => f.access.queue(prepared))).toThrow(ApiError);
+      expect(f.store.list('accessRequests')).toHaveLength(0);
+      f.store.put('bots', f.bot);
+      const terminal = f.store.list<P.BotGrant>('botGrants', value => value.capabilityId === 'terminal')[0]!;
+      f.store.put('botGrants', { ...terminal, requestedLevel: 'read_interact' });
+      f.store.transaction(() => f.access.queue(prepared));
+      expect(f.store.list('accessRequests')).toHaveLength(0);
+      expect(f.store.list<P.BotGrant>('botGrants').every(value => value.pendingLevel === null)).toBe(true);
+    } finally { f.close(); }
+  });
+  test('capability responses expose botFolder only on workers which advertise it', async () => {
+    const f = accessFixture();
+    try {
+      expect((await f.request<P.MachineCapabilities>('GET', '/machines/:id/capabilities', undefined, { id: f.machine.id })).botFolder).toBeUndefined();
+      f.store.setMetadata('nodeRuntimeFeatures:machine', { nodeId: 'node', features: { botFolder: true } });
+      expect((await f.request<P.MachineCapabilities>('GET', '/machines/:id/capabilities', undefined, { id: f.machine.id })).botFolder).toBe(true);
+    } finally { f.close(); }
+  });
+  test('old-format workspace policies remain sparse even when folder review is required', async () => {
+    const f = workspaceFixture();
+    try {
+      f.restrictions.folderReadsNeedReview = true;
+      expect((await workspaceNativeToolRestrictions(f.services, f.bot, f.acknowledged)).workspace_read_exempt).toBeUndefined();
+    } finally { f.close(); }
+  });
+});
+
+test('maximum-size human requests continue within the message byte limit without losing source identity', async () => {
+  const f = accessFixture();
+  try {
+    f.store.put('entries', { ...f.source, text: 'é'.repeat(32768) });
+    await f.queue(); await f.access.reconcileAll();
+    expect(f.submitted).toBe(1);
+    const continuation = f.store.list<P.TranscriptEntry>('entries', entry => entry.kind === 'message' && entry.actor.kind === 'system')[0]!;
+    if (continuation.kind !== 'message') throw new Error('Expected continuation message');
+    expect(Buffer.byteLength(continuation.text)).toBeLessThanOrEqual(65536);
+    expect(f.store.metadata('runSourceEntry:continued-1')).toBe(f.source.id);
+  } finally { f.close(); }
 });

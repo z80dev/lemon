@@ -20,8 +20,8 @@ const nodesSchema = z.object({ nodes: z.array(z.object({ id, name: z.string().nu
 const inviteSchema = z.object({ inviteId: id, inviteCode: z.string().min(1), joinCommand: z.string().min(1), expiresAtMs: integer }).passthrough();
 const chunkSchema = z.object({ path, offset: integer, dataBase64: z.string(), size: integer, mime: z.string(), eof: z.boolean() }).passthrough();
 interface FilePreviewBinding { machineId: string; path: string; principalId: string; targetId: string; revision: number; snapshot: string; upstreamToken: string; expiresAtMs: number; name: string }
-export interface MachineRuntimeFeatures { nodeId: string; protocol: 1; lemonVersion: string; methods: string[]; features: { hostIO: boolean; filesystemCAS: boolean; deletePreviews: boolean; encryptedSecrets: boolean; ptyShell: boolean; mcpDiscovery: boolean; profileSync: boolean; liveStreaming: boolean; repairInvites: boolean; nativeExecutionPolicy: boolean }; botReady: boolean; missingFeatures: string[]; capabilities?: P.JSONObject; nativePrivacyContext?: { version: 1 } }
-const runtimeFeaturesSchema = z.object({ nodeId: id, protocol: z.literal(1), lemonVersion: z.string(), methods: z.array(z.string()), features: z.object({ hostIO: z.boolean(), filesystemCAS: z.boolean(), deletePreviews: z.boolean(), encryptedSecrets: z.boolean(), ptyShell: z.boolean(), mcpDiscovery: z.boolean(), profileSync: z.boolean(), liveStreaming: z.boolean(), repairInvites: z.boolean(), nativeExecutionPolicy: z.boolean() }).strict(), botReady: z.boolean(), missingFeatures: z.array(z.string().max(128)).max(100), capabilities: z.record(z.string(), z.json()).optional(), nativePrivacyContext: z.object({ version: z.literal(1) }).strict().optional() }).strict();
+export interface MachineRuntimeFeatures { nodeId: string; protocol: 1; lemonVersion: string; methods: string[]; features: { hostIO: boolean; filesystemCAS: boolean; deletePreviews: boolean; encryptedSecrets: boolean; ptyShell: boolean; mcpDiscovery: boolean; profileSync: boolean; liveStreaming: boolean; repairInvites: boolean; nativeExecutionPolicy: boolean; botFolder?: boolean }; botReady: boolean; missingFeatures: string[]; capabilities?: P.JSONObject; nativePrivacyContext?: { version: 1 } }
+const runtimeFeaturesSchema = z.object({ nodeId: id, protocol: z.literal(1), lemonVersion: z.string(), methods: z.array(z.string()), features: z.object({ hostIO: z.boolean(), filesystemCAS: z.boolean(), deletePreviews: z.boolean(), encryptedSecrets: z.boolean(), ptyShell: z.boolean(), mcpDiscovery: z.boolean(), profileSync: z.boolean(), liveStreaming: z.boolean(), repairInvites: z.boolean(), nativeExecutionPolicy: z.boolean(), botFolder: z.boolean().optional() }).strict(), botReady: z.boolean(), missingFeatures: z.array(z.string().max(128)).max(100), capabilities: z.record(z.string(), z.json()).optional(), nativePrivacyContext: z.object({ version: z.literal(1) }).strict().optional() }).strict();
 
 export async function ensureMachineRuntimeReady(services: BackendServices, machine: P.Machine, refresh = false): Promise<MachineRuntimeFeatures> {
   if (!services.lemon.connected) fail('upstream_unavailable', 'The controller is not connected.');
@@ -33,7 +33,7 @@ export async function ensureMachineRuntimeReady(services: BackendServices, machi
     if (result.nodeId !== machine.nodeId) fail('upstream_unavailable', 'Runtime feature measurement belongs to another node.');
     cached = { ...result, controlEpoch: epoch }; services.store.setMetadata(`nodeRuntimeFeatures:${machine.id}`, cached);
   }
-  if (!cached.botReady || !Object.values(cached.features).every(value => value === true)) fail('capability_unavailable', 'The worker is connected but lacks required Lemon Bot runtime features. Upgrade and reverify that same durable worker.');
+  if (!cached.botReady || !Object.entries(cached.features).every(([feature, value]) => feature === 'botFolder' || value === true)) fail('capability_unavailable', 'The worker is connected but lacks required Lemon Bot runtime features. Upgrade and reverify that same durable worker.');
   return cached;
 }
 
@@ -291,21 +291,24 @@ export async function importMachineFile(services: BackendServices, actor: Princi
   if (!services.lemon.connected) fail('upstream_unavailable', 'The controller is not connected.');
   if (!machine.nodeId || machine.status !== 'online') fail('machine_offline', 'The destination is not online.');
   if (input.conversationId) services.auth.conversation(actor, input.conversationId);
-  if (input.botId && services.auth.bot(actor, input.botId).machineId !== machine.id) fail('invalid_request', 'Bot file import belongs to another destination.');
+  const bot = input.botId ? services.auth.bot(actor, input.botId) : null;
+  if (bot && bot.machineId !== machine.id) fail('invalid_request', 'Bot file import belongs to another destination.');
+  const runtime = services.store.metadata<MachineRuntimeFeatures>(`nodeRuntimeFeatures:${machine.id}`);
+  const profile = bot && runtime?.nodeId === machine.nodeId && runtime?.features.botFolder === true ? { profileId: bot.profileId } : {};
   const run = provenance.runId ? services.store.require<P.Run>('runs', provenance.runId) : null;
   if (run && (run.botId !== input.botId || run.initiatorUserId !== actor.userId || run.conversationId !== input.conversationId)) fail('forbidden', 'File provenance does not belong to this bot invocation.');
   if (provenance.sourceEntryId) { const entry = services.store.require<P.TranscriptEntry>('entries', provenance.sourceEntryId); if (!input.conversationId || entry.conversationId !== input.conversationId || !services.auth.canRead(actor, 'entries', entry)) fail('not_found', 'File source entry is not accessible.'); }
-  const before = remote(statSchema, await services.lemon.call('node.fs.stat', { nodeId: machine.nodeId, path: input.path }));
+  const before = remote(statSchema, await services.lemon.call('node.fs.stat', { nodeId: machine.nodeId, path: input.path, ...profile }));
   if (before.type !== 'regular') fail('invalid_request', 'Only regular destination files may be imported.');
   if (before.size > 200 * 1_048_576) fail('too_large', 'File import exceeds 200 MiB; content-inspected non-video attachments remain limited to 25 MiB.');
   const bytes = new Uint8Array(before.size); let offset = 0;
   while (offset < bytes.length) {
-    const result = remote(chunkSchema, await services.lemon.call('node.fs.read', { nodeId: machine.nodeId, path: before.path, offset, length: Math.min(1_048_576, bytes.length - offset) }));
+    const result = remote(chunkSchema, await services.lemon.call('node.fs.read', { nodeId: machine.nodeId, path: before.path, offset, length: Math.min(1_048_576, bytes.length - offset), ...profile }));
     const chunk = decodeChunk(result.dataBase64, 1_048_576);
     if (result.offset !== offset || result.path !== before.path || result.size !== before.size || !chunk.length || offset + chunk.length > bytes.length) fail('revision_conflict', 'The destination file changed during transfer.');
     bytes.set(chunk, offset); offset += chunk.length;
   }
-  const after = remote(statSchema, await services.lemon.call('node.fs.stat', { nodeId: machine.nodeId, path: before.path }));
+  const after = remote(statSchema, await services.lemon.call('node.fs.stat', { nodeId: machine.nodeId, path: before.path, ...profile }));
   if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) fail('revision_conflict', 'The destination file changed during transfer.');
   const metadata = { clientNonce: input.clientNonce, purpose: 'message' as const, filename: provenance.filename ?? fileInfo(before).name, source: 'node' as const, ...(input.botId ? { botId: input.botId } : {}), ...(input.conversationId ? { conversationId: input.conversationId } : {}), provenance: { botId: input.botId ?? null, runId: run?.id ?? null, machineId: machine.id, sourceEntryId: provenance.sourceEntryId ?? null, generatedAtMs: run?.completedAtMs ?? null } };
   return services.attachments.create(actor, bytes, metadata);

@@ -92,27 +92,29 @@ export async function machineCapabilities(s: BackendServices, user: Principal, m
   if (bot && ownedBot(s, user, bot.id).machineId !== machineId) fail('invalid_request', 'Capability measurement must use the bot assigned machine.');
   const machine = bot ? s.store.require<P.Machine>('machines', machineId) : s.auth.machine(user, machineId);
   const cached = s.store.get<P.MachineCapabilities & { id: string }>('machineCapabilities', machineId);
+  const features = s.store.metadata<{ nodeId: string; features: { botFolder?: boolean } }>(`nodeRuntimeFeatures:${machineId}`);
+  const folder = features?.nodeId === machine.nodeId && features?.features.botFolder === true ? { botFolder: true } : {};
   if (!s.lemon.connected || machine.status !== 'online' || !machine.nodeId) {
     if (!cached) fail('machine_offline', 'No measured capability snapshot is available for this machine.');
-    return { machineId, os: cached.os, measuredAtMs: cached.measuredAtMs, stale: true, items: cached.items.map(value => ({ ...value, stale: true })) };
+    return { machineId, os: cached.os, measuredAtMs: cached.measuredAtMs, stale: true, items: cached.items.map(value => ({ ...value, stale: true })), ...folder };
   }
   const listed = nodeReply.safeParse(await s.lemon.call('nodes.list', { nodeId: machine.nodeId }));
   if (!listed.success || !listed.data.summary.presenceAvailable || listed.data.summary.truncated) fail('upstream_unavailable', 'The controller did not return complete measured node presence.');
   const node = listed.data.nodes.find(value => value.id === machine.nodeId);
   if (!node || node.status !== 'online') {
-    if (cached) return { machineId, os: cached.os, measuredAtMs: cached.measuredAtMs, stale: true, items: cached.items.map(value => ({ ...value, stale: true })) };
+    if (cached) return { machineId, os: cached.os, measuredAtMs: cached.measuredAtMs, stale: true, items: cached.items.map(value => ({ ...value, stale: true })), ...folder };
     fail('machine_offline', 'The destination is not verified online.');
   }
   if (!s.lemon.methods.includes('node.capabilities.get')) fail('capability_unavailable', 'The runtime does not advertise measured destination capability inspection.');
   const reply = measuredCapabilities.safeParse(await s.lemon.call('node.capabilities.get', { nodeId: machine.nodeId }));
   if (!reply.success || reply.data.nodeId !== machine.nodeId) fail('upstream_unavailable', 'Destination returned an invalid capability measurement.');
   const { nodeId: _nodeId, ...measurement } = reply.data;
-  const result: P.MachineCapabilities = { ...measurement, machineId };
+  const result: P.MachineCapabilities = { ...measurement, machineId, ...folder };
   s.store.put('machineCapabilities', { ...result, id: machineId });
   return result;
 }
 function requestedGrant(s: BackendServices, bot: P.Bot, capabilityId: string, requestedLevel: P.AccessLevel): P.BotGrant {
-  return { ...s.resource('grant', { botId: bot.id, machineId: bot.machineId, capabilityId, requestedLevel, effectiveLevel: 'off' as const, reasons: [] as string[] }), id: `grant_${s.mutations.digest({ botId: bot.id, machineId: bot.machineId, capabilityId }).slice(0, 48)}` };
+  return { ...s.resource('grant', { botId: bot.id, machineId: bot.machineId, capabilityId, requestedLevel, pendingLevel: null, effectiveLevel: 'off' as const, reasons: [] as string[] }), id: `grant_${s.mutations.digest({ botId: bot.id, machineId: bot.machineId, capabilityId }).slice(0, 48)}` };
 }
 /** Creation consent sets requested access only; ordinary machine and policy ceilings still apply. */
 export async function initializeBotAccess(s: BackendServices, user: Principal, bot: P.Bot, access: P.BotCreate['access']): Promise<P.MachineCapabilities | undefined> {
@@ -170,8 +172,8 @@ function projectEffectiveBotGrants(s: BackendServices, user: Principal, bot: P.B
     const requestedLevel = stored?.requestedLevel ?? 'off';
     const machineLevel = cap.supported && !cap.stale && (cap.osGrant === 'granted' || cap.osGrant === 'not_required') ? cap.configuredLevel : 'off';
     const policyLevel: P.AccessLevel = unresolved || !policy.productAccess || policy.localExecutionCeiling === 'deny' ? 'off' : 'read_interact';
-    return { ...stored, botId: bot.id, machineId: bot.machineId, capabilityId: cap.id, requestedLevel, effectiveLevel: levels[Math.min(rank[requestedLevel], rank[machineLevel], rank[policyLevel])]!, reasons: [cap.reason, 'Native grants restrict named tools, not host privileges; shell and browser evaluation can access other host resources.', ...(unresolved ? ['Tool-policy cutover has not been acknowledged.'] : []), ...policy.explanations] };
-  }).concat(persisted.filter(value => !inventory.some(cap => cap.id === value.capabilityId)).map(value => ({ ...value, effectiveLevel: 'off' as const, reasons: ['No measured machine capability ceiling is available.'] })));
+    return { ...stored, botId: bot.id, machineId: bot.machineId, capabilityId: cap.id, requestedLevel, pendingLevel: stored.pendingLevel ?? null, effectiveLevel: levels[Math.min(rank[requestedLevel], rank[machineLevel], rank[policyLevel])]!, reasons: [cap.reason, 'Native grants restrict named tools, not host privileges; shell and browser evaluation can access other host resources.', ...(unresolved ? ['Tool-policy cutover has not been acknowledged.'] : []), ...policy.explanations] };
+  }).concat(persisted.filter(value => !inventory.some(cap => cap.id === value.capabilityId)).map(value => ({ ...value, pendingLevel: value.pendingLevel ?? null, effectiveLevel: 'off' as const, reasons: ['No measured machine capability ceiling is available.'] })));
 }
 
 const nativeReadTools: Record<string, true> = { read: true, grep: true, find: true, ls: true, browser_tabs: true, browser_snapshot: true, browser_get_content: true, browser_events: true, browser_screenshot: true, browser_analyze: true };
@@ -181,7 +183,7 @@ const nativeToolFamilies: Record<string, string[]> = {
   browser: ['browser_tabs', 'browser_tab_open', 'browser_tab_activate', 'browser_tab_close', 'browser_navigate', 'browser_snapshot', 'browser_get_content', 'browser_click', 'browser_type', 'browser_hover', 'browser_select_option', 'browser_upload_file', 'browser_download', 'browser_press', 'browser_scroll', 'browser_back', 'browser_wait_for_selector', 'browser_evaluate', 'browser_events', 'browser_get_cookies', 'browser_set_cookies', 'browser_clear_state', 'browser_screenshot', 'browser_analyze'],
 };
 const nativeBaselineTools = ['read_skill', 'webfetch', 'websearch', 'task', 'agent_message', 'wait', 'parent_question'];
-async function executionNames(s: BackendServices, server: { name: string; url: string }, toolNames: readonly string[]): Promise<string[]> {
+export async function executionNames(s: BackendServices, server: { name: string; url: string }, toolNames: readonly string[]): Promise<string[]> {
   if (!s.lemon.connected || !s.lemon.methods.includes('mcp.execution_names')) fail('capability_unavailable', 'The controller does not advertise pure MCP execution-name projection.');
   const raw = await s.lemon.call('mcp.execution_names', { server, toolNames: [...toolNames] }, { mutation: false });
   const result = z.object({ server: z.object({ name: z.literal(server.name) }).strict(), tools: z.array(z.object({ name: z.string(), executionName: z.string().min(1).max(64).regex(/^mcp_[a-z0-9_]+$/) }).strict()).length(toolNames.length), count: z.literal(toolNames.length) }).strict().safeParse(raw);
@@ -198,7 +200,7 @@ const productExcludedNativeTools: Record<string, true> = {
 };
 
 const policyTools = z.array(z.string().min(1).max(128)).max(16384);
-const acknowledgedNativePolicy = z.object({ profile: z.literal('custom'), allow: policyTools, deny: policyTools.default([]), blocked_tools: policyTools.default([]), require_approval: policyTools.default([]) }).strict();
+const acknowledgedNativePolicy = z.object({ profile: z.literal('custom'), allow: policyTools, deny: policyTools.default([]), blocked_tools: policyTools.default([]), require_approval: policyTools.default([]), workspace_read_exempt: z.boolean().optional() }).strict();
 const publicMcpCeiling = z.object({
   servers: z.array(z.object({ name: z.string().min(1).max(128), url: z.url(), enabledTools: z.array(z.string().min(1).max(128)).max(256).refine(names => new Set(names).size === names.length) }).strict()).max(16384),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
@@ -253,7 +255,8 @@ export async function workspaceNativeToolRestrictions(s: BackendServices, bot: P
   }
   for (const tool of allowed) if (denied.has(tool) || blocked.has(tool) || tool.startsWith('mcp_') && !mappedAliases.has(tool)) allowed.delete(tool);
   if ([allowed, denied, blocked, approvals].some(values => values.size > 16384)) fail('capability_unavailable', 'The complete restricted native policy exceeds the owning schema limit.');
-  return { profile: 'custom', allow: [...allowed].sort(), deny: [...denied].sort(), blocked_tools: [...blocked].sort(), require_approval: [...approvals].sort() };
+  const folderReview = restrictions.folderReadsNeedReview || restrictions.localExecutionCeiling === 'deny' || restrictions.rules.some(rule => rule.category === 'files' && rule.mode === 'ask_first');
+  return { profile: 'custom', allow: [...allowed].sort(), deny: [...denied].sort(), blocked_tools: [...blocked].sort(), require_approval: [...approvals].sort(), ...(previous.data.workspace_read_exempt !== undefined ? { workspace_read_exempt: folderReview ? false : previous.data.workspace_read_exempt } : measured?.botFolder && folderReview ? { workspace_read_exempt: false } : {}) };
 }
 /** Desired and per-run native policy use the actual Bot owner; runtime admission fences pending cutovers. */
 export async function nativeBotToolPolicy(s: BackendServices, user: Principal, bot: P.Bot, capabilities?: P.MachineCapabilities): Promise<P.JSONObject> {
@@ -311,7 +314,10 @@ export async function nativeBotToolPolicy(s: BackendServices, user: Principal, b
   }
   for (const tool of denied) { allowed.delete(tool); approvalTools.delete(tool); }
   if (allowed.size > 16384 || denied.size > 16384 || approvalTools.size > 16384) fail('capability_unavailable', 'The native policy schema cannot represent this complete tool permission set.');
-  return { profile: 'custom', allow: [...allowed].sort(), deny: [...denied].sort(), blocked_tools: Object.keys(productExcludedNativeTools), require_approval: [...approvalTools].sort() };
+  const folder = s.store.metadata<{ features?: { botFolder?: boolean }; nodeId?: string }>(`nodeRuntimeFeatures:${bot.machineId}`);
+  const machine = s.store.get<P.Machine>('machines', bot.machineId);
+  const folderReads = folder?.features?.botFolder === true && folder.nodeId === machine?.nodeId && policy.workspaceReads === 'allow' && grants.some(grant => grant.capabilityId === diagnosticFiles?.id && rank[grant.effectiveLevel] >= rank.read_only);
+  return { profile: 'custom', allow: [...allowed].sort(), deny: [...denied].sort(), blocked_tools: Object.keys(productExcludedNativeTools), require_approval: [...approvalTools].sort(), ...(folderReads ? { workspace_read_exempt: true } : {}) };
 }
 
 export function botPresence(s: BackendServices, user: Principal, bot: P.Bot): P.BotPresence {
@@ -762,20 +768,27 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
       if (connector ? !s.integrations.connectorProvisioning : !capability || !Object.hasOwn(nativeToolFamilies, capability.category) || !s.lemon.methods.includes('profiles.update')) fail('capability_unavailable', 'No destination policy mapping exists for this capability.');
       if (!connector && capability?.category === 'shell' && body.requestedLevel === 'read_only') fail('capability_unavailable', 'A general shell has no enforceable read-only native tool mapping.');
       await s.runtime.reconcile();
-      if (s.store.list<P.Run>('runs', run => run.botId === bot.id && ['reserved', 'queued', 'running', 'awaiting_input', 'outcome_unknown'].includes(run.status)).length) fail('conflict', 'Stop or finish active bot work before changing tool permissions.');
+      const busy = s.store.list<P.Run>('runs', run => run.botId === bot.id && ['reserved', 'queued', 'running', 'awaiting_input', 'outcome_unknown'].includes(run.status)).length > 0;
       const sync = s.store.metadata<{ state: string }>(`botPolicySync:${bot.id}`);
       if (sync && sync.state !== 'acknowledged') fail('outcome_unknown', 'An earlier tool-policy cutover is unresolved.', false);
-      const next = s.update(grant, { requestedLevel: body.requestedLevel });
+      const next = s.update(grant, busy ? { pendingLevel: body.requestedLevel === grant.requestedLevel ? null : body.requestedLevel } : { requestedLevel: body.requestedLevel, pendingLevel: null });
       context.nonceResourceIds.push(bot.id, next.id);
-      s.store.transaction(() => { const current = s.store.get<P.BotGrant>('botGrants', grant.id); if (current) s.mutations.checkRevision(current, body.revision); s.store.put('botGrants', next); s.store.setMetadata(`botPolicySync:${bot.id}`, { state: 'pending', grantId: next.id, revision: next.revision }); });
+      s.store.transaction(() => {
+        const current = s.store.get<P.BotGrant>('botGrants', grant.id);
+        if (current) s.mutations.checkRevision(current, body.revision);
+        s.store.put('botGrants', next);
+        if (!busy) s.store.setMetadata(`botPolicySync:${bot.id}`, { state: 'pending', grantIds: [next.id], revision: next.revision });
+        else s.events.emit('grant.upserted', next, { userIds: [user.userId], botId: bot.id });
+      });
+      if (busy) return next;
       try {
         if (connector) await s.integrations.connectorProvisioning!(user, bot.id);
         else await s.syncBotProfile(user, bot.id);
       } catch {
-        s.store.setMetadata(`botPolicySync:${bot.id}`, { state: 'outcome_unknown', grantId: next.id, revision: next.revision });
+        s.store.setMetadata(`botPolicySync:${bot.id}`, { state: 'outcome_unknown', grantIds: [next.id], revision: next.revision });
         fail('outcome_unknown', 'Requested grants were saved but native policy enforcement is unconfirmed.', false, { resourceIds: [bot.id, next.id] });
       }
-      s.store.setMetadata(`botPolicySync:${bot.id}`, { state: 'acknowledged', grantId: next.id, revision: next.revision });
+      s.store.setMetadata(`botPolicySync:${bot.id}`, { state: 'acknowledged', grantIds: [next.id], revision: next.revision });
       const fresh = await machineCapabilities(s, user, bot.machineId, bot).catch(() => measured);
       const effective = projectEffectiveBotGrants(s, user, bot, fresh, await s.integrations.effectivePolicy(user, bot.id), false).find(value => value.id === next.id) ?? fail('not_found', 'Grant does not exist.');
       s.store.put('botGrants', effective);

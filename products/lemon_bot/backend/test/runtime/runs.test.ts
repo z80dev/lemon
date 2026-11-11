@@ -1,10 +1,62 @@
 import { describe, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
 import { ApiError } from '../../src/core/errors';
-import { buildMemoryContextKey, buildPrivateBotMemoryContextKey, createRuntimeService, observeInvocation, quiesceBotInvocations, reserveCronAdmission, revokeConnectorInvocations, type InvocationContext, type InvocationProofBinding, type RuntimeMapping } from '../../src/runtime/runs';
+import { buildInvocationContext, buildMemoryContextKey, buildPrivateBotMemoryContextKey, createRuntimeService, observeInvocation, quiesceBotInvocations, reserveCronAdmission, revokeConnectorInvocations, type InvocationContext, type InvocationProofBinding, type RuntimeMapping } from '../../src/runtime/runs';
 import { fixture, productExecutionProjection } from './fixture';
 
 describe('owned placed runtime', () => {
+  for (const botFolder of [false, true]) test(`attachment folder routing with botFolder=${botFolder}`, async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const attachment = f.services.resource('attachment', { ownerUserId: f.alice.userId, filename: 'input.txt', mime: 'text/plain' });
+    f.store.put('attachments', attachment);
+    f.services.attachments = { async bytes() { return new Uint8Array([65]); } } as unknown as typeof f.services.attachments;
+    const original = f.rpc;
+    f.rpc = async (method, params) => {
+      if (method === 'node.runtime.features') {
+        const result = await original(method, params) as { features: object };
+        return { ...result, features: { ...result.features, ...(botFolder ? { botFolder: true } : {}) } };
+      }
+      if (method === 'node.fs.write') return { path: params.path, mtimeMs: 1, bytesWritten: 1 };
+      return original(method, params);
+    };
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: `attachment_folder_${botFolder}_001`, text: 'read this', attachmentIds: [attachment.id] });
+      const write = f.calls.find(call => call.method === 'node.fs.write')!;
+      expect(write.params.path).toBe(`${botFolder ? 'inputs' : '.lemon_bot/inputs'}/${run.id}/${attachment.id}`);
+      if (botFolder) expect(write.params.profileId).toBe(f.bot.profileId);
+      else expect(write.params).not.toHaveProperty('profileId');
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('request_access is hidden by a narrowing floor when no measured capability can turn on', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const original = f.rpc;
+    f.rpc = async (method, params) => {
+      const result = await original(method, params);
+      return method === 'node.capabilities.get' ? { ...(result as object), items: [] } : result;
+    };
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'access_hidden_empty_001', text: 'ping' });
+      const invocation = f.store.metadata<InvocationContext>(`runtimeInvocation:${run.id}`)!;
+      expect(invocation.invocationToolPolicy.deny).toContain('mcp_lemon_bot_request_access_fixture');
+      expect(invocation.invocationToolPolicy.deny).toContain('bash');
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('terminal projection schedules pending access work', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const scheduled: string[] = [];
+    f.services.access = { async prepare() { return null; }, queue() {}, schedule(botId) { scheduled.push(botId); }, async reconcileAll() {}, close() {} };
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'access_schedule_end_001', text: 'ping' });
+      const bound = f.store.metadata<RuntimeMapping>(`runtimeRun:${run.id}`)!;
+      const original = f.rpc;
+      f.rpc = async (method, params) => method === 'agent.wait' ? { runId: run.id, ok: true, cancelled: false, answer: 'done' } : original(method, params);
+      await runtime.project('agent', { type: 'completed', runId: run.id, sessionKey: bound.sessionKey });
+      expect(scheduled).toContain(f.bot.id);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
   test('completion recovers the sole streaming reply after its mapping field is lost', async () => {
     const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
     try {
@@ -172,6 +224,8 @@ describe('owned placed runtime', () => {
     try {
       const started = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'measured_not_granted_001', text: 'work' });
       const context = f.store.metadata<InvocationContext>(`runtimeInvocation:${started.run.id}`)!;
+      expect(context.invocationToolPolicy.allow).toContain('mcp_lemon_bot_request_access_fixture');
+      expect((context.invocationToolPolicy.deny as string[]).includes('mcp_lemon_bot_request_access_fixture')).toBe(false);
       expect(context.invocationToolPolicy).toMatchObject({ profile: 'custom', deny: expect.arrayContaining(['read', 'write', 'bash', 'lsp_diagnostics', 'remember', 'recall']) });
       expect(context.invocationToolPolicy.allow).not.toEqual(expect.arrayContaining(['read', 'write', 'bash']));
       expect(f.store.list<P.BotGrant>('botGrants').every(grant => grant.requestedLevel === 'off')).toBe(true);
@@ -425,6 +479,10 @@ describe('owned placed runtime', () => {
       const reserved = f.store.list<P.Run>('runs')[0]!;
       expect(f.store.metadata(`runCron:${reserved.id}`)).toBe(context.cronRunId);
       expect(f.store.metadata(`runApprovalOrigin:${reserved.id}`)).toBe('routine');
+      const invocation = await buildInvocationContext(f.services, f.alice, f.conversation, f.bot, context.routerRunId, [{ allow: 'all', workspace_read_exempt: false }, { allow: 'all', workspace_read_exempt: true }]);
+      expect(invocation.invocationToolPolicy.deny).toContain('mcp_lemon_bot_request_access_fixture');
+      expect(invocation.invocationToolPolicy.workspace_read_exempt).toBe(false);
+      expect(invocation.invocationToolPolicy.deny).toContain('bash');
       const bobRun: P.Run = f.services.resource('run', { conversationId: f.conversation.id, botId: f.bot.id, initiatorUserId: 'bob', clientNonce: 'bob_run_nonce_0000000', status: 'running', error: null, startedAtMs: f.services.now(), completedAtMs: null, routineRunId: null }); f.store.put('runs', bobRun);
       f.rpc = async (method, params) => {
         if (method === 'chat.abort') { expect(params.runId).toBe(context.routerRunId); return { aborted: true }; }

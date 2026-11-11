@@ -9,7 +9,8 @@ import { z, id } from '../core/validation';
 import { refreshMachines, ensureMachineRuntimeReady } from './machines';
 import { emitBotRuntimeProjection } from './projection';
 import { safeSummary, scrub } from '../integrations/common';
-import { nativeBotToolPolicy } from '../core/experiences';
+import { nativeBotToolPolicy, machineCapabilities, effectiveBotGrants, executionNames } from '../core/experiences';
+import { anyRequestable } from '../core/access';
 import { approvalToolGroup, TOOL_GROUPS, matchApprovalAllowance, recordAllowanceUse } from '../core/approval-allowances';
 
 /** Build display text only from the same allowlisted, redacted proposal shown in Details. */
@@ -152,6 +153,7 @@ const nativeFloorSchema = z.object({
   require_approval: z.array(z.string().min(1).max(256)).max(16384).optional(),
   approvals: z.record(z.string(), z.enum(['always', 'never'])).optional(),
   no_reply: z.boolean().optional(),
+  workspace_read_exempt: z.boolean().optional(),
 }).strict();
 
 /** Already-expanded trusted native floors; native ToolPolicy remains the final canonical enforcer. */
@@ -161,6 +163,7 @@ function restrictNativePolicy(current: P.JSONObject, floors: readonly P.JSONObje
   let allow = base.allow;
   const deny = new Set(base.deny), blocked = new Set(base.blocked_tools), approval = new Set(base.require_approval);
   const approvals = new Map(Object.entries(base.approvals ?? {})); let noReply = base.no_reply === true;
+  let workspaceReadExempt = base.workspace_read_exempt;
   for (const floor of floors) {
     const parsed = upstream(nativeFloorSchema, floor);
     if (parsed.allow !== 'all') { const permitted = new Set(parsed.allow); allow = allow === 'all' ? parsed.allow : allow.filter(tool => permitted.has(tool)); }
@@ -169,10 +172,13 @@ function restrictNativePolicy(current: P.JSONObject, floors: readonly P.JSONObje
     for (const tool of parsed.require_approval ?? []) approval.add(tool);
     for (const [tool, mode] of Object.entries(parsed.approvals ?? {})) approvals.set(tool, approvals.get(tool) === 'always' || mode === 'always' ? 'always' : 'never');
     noReply ||= parsed.no_reply === true;
+    if (parsed.workspace_read_exempt === false || workspaceReadExempt === false) workspaceReadExempt = false;
+    else if (parsed.workspace_read_exempt === true) workspaceReadExempt = true;
   }
   const result: P.JSONObject = { profile: 'custom', allow, deny: [...deny].sort(), blocked_tools: [...blocked], require_approval: [...approval].sort() };
   if (approvals.size) result.approvals = Object.fromEntries(approvals);
   if (noReply) result.no_reply = true;
+  if (workspaceReadExempt !== undefined) result.workspace_read_exempt = workspaceReadExempt;
   return result;
 }
 
@@ -188,7 +194,15 @@ export async function buildInvocationContext(services: BackendServices, actor: P
   if (!retained || retained.kind !== actor.kind || retained.id !== actor.id || retained.userId !== actor.userId || run.botId !== bot.id || run.conversationId !== conversation.id || terminalStatuses.includes(run.status)) fail('forbidden', 'Invocation clients do not belong to this reserved initiating context.');
   const existing = services.store.metadata<InvocationContext>(`runtimeInvocation:${fixedRunId}`);
   if (existing) return existing;
-  const invocationToolPolicy = restrictNativePolicy(await nativeBotToolPolicy(services, actor, bot), nativeFloors);
+  const floors = [...nativeFloors];
+  const unattended = run.routineRunId !== null || !!services.store.metadata<string>(`runCron:${run.id}`);
+  const measured = await machineCapabilities(services, actor, bot.machineId, bot);
+  const policy = await services.integrations.effectivePolicy(actor, bot.id);
+  if (unattended || !anyRequestable(services, actor, bot, measured, policy, await effectiveBotGrants(services, actor, bot, measured))) {
+    const deny = await executionNames(services, { name: 'lemon-bot', url: new URL('/mcp', services.config.publicUrl).href }, ['request_access']);
+    floors.push({ allow: 'all', deny });
+  }
+  const invocationToolPolicy = restrictNativePolicy(await nativeBotToolPolicy(services, actor, bot, measured), floors);
   const audience = effectiveInvocationAudience(services, actor, conversation, run.id);
   const connectors = await services.integrations.connectorConfig(actor, bot.id, audience.id, fixedRunId);
   const invocationMcpServers: InvocationMcpServer[] = [baseBotMcpConfig(services, bot), ...connectors];
@@ -274,7 +288,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
   }
   function emitRun(run: P.Run) {
     services.store.put('runs', run); services.events.emit('run.upserted', run, { conversationId: run.conversationId, botId: run.botId });
-    if (terminalStatuses.includes(run.status)) closeStreaming(run);
+    if (terminalStatuses.includes(run.status)) { closeStreaming(run); services.access?.schedule(run.botId); }
     const bot = services.store.get<P.Bot>('bots', run.botId);
     if (bot) {
       const active = services.store.list<P.Run>('runs', value => value.botId === bot.id && !terminalStatuses.includes(value.status));
@@ -553,11 +567,12 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
           if (attachment.mime.startsWith('image/') && ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(attachment.mime) && images.length < 5 && imageBytes + bytes.byteLength <= 10_485_760) {
             images.push({ type: 'image', mime_type: attachment.mime, data: Buffer.from(bytes).toString('base64') }); imageBytes += bytes.byteLength;
           } else {
-            const destination = `.lemon_bot/inputs/${run.id}/${attachment.id}`;
+            const botFolder = services.store.metadata<{ features?: { botFolder?: boolean } }>(`nodeRuntimeFeatures:${machine.id}`)?.features?.botFolder === true;
+            const destination = `${botFolder ? 'inputs' : '.lemon_bot/inputs'}/${run.id}/${attachment.id}`;
             let offset = 0; let revision = 0;
             do {
               const chunk = bytes.subarray(offset, Math.min(bytes.byteLength, offset + 1_048_576));
-              const write = upstream(z.object({ path: z.string(), mtimeMs: z.number().int().nonnegative(), bytesWritten: z.number().int().nonnegative() }).passthrough(), await services.lemon.call('node.fs.write', { nodeId: machine.nodeId, path: destination, dataBase64: Buffer.from(chunk).toString('base64'), offset, truncate: offset === 0, mkdirs: true, expectedModifiedAtMs: revision }, { mutation: true, resourceIds: [run.id, attachment.id] }));
+              const write = upstream(z.object({ path: z.string(), mtimeMs: z.number().int().nonnegative(), bytesWritten: z.number().int().nonnegative() }).passthrough(), await services.lemon.call('node.fs.write', { nodeId: machine.nodeId, ...(botFolder ? { profileId: bot.profileId } : {}), path: destination, dataBase64: Buffer.from(chunk).toString('base64'), offset, truncate: offset === 0, mkdirs: true, expectedModifiedAtMs: revision }, { mutation: true, resourceIds: [run.id, attachment.id] }));
               if (write.bytesWritten !== chunk.byteLength) fail('outcome_unknown', 'The attachment transfer was not fully acknowledged.', false, { resourceIds: [run.id, attachment.id] });
               revision = write.mtimeMs; offset += chunk.byteLength;
               if (offset >= bytes.byteLength) fileContext.push(JSON.stringify({ filename: attachment.filename, mime: attachment.mime, path: write.path, size: bytes.byteLength }));
@@ -645,6 +660,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
             await queryFinal(services.store.require<P.Run>('runs', run.id), mapping(run.id) ?? bound);
           }
         }
+        await services.access?.reconcileAll();
       })().finally(() => { reconciliation = null; });
       return reconciliation;
     },

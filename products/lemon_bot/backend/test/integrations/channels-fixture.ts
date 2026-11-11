@@ -99,7 +99,7 @@ export function fixture(store = entityStore(), principal: Principal = { kind: 'u
       }
       return gates;
     },
-    integrations: { admission: async () => undefined, effectivePolicy: async who => ({ userId: who.userId, botId: null, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, rules: [], networkPolicies: [], explanations: [] }), connectorConfig: async () => [], sendApprovedDraft: async () => denied(), emitProviderNotifications: async () => undefined, channelIngress: async () => denied(), providerCapabilities: () => ({}) },
+    integrations: { admission: async () => undefined, effectivePolicy: async who => ({ userId: who.userId, botId: null, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, workspaceReads: 'allow', rules: [], networkPolicies: [], explanations: [] }), connectorConfig: async () => [], sendApprovedDraft: async () => denied(), emitProviderNotifications: async () => undefined, channelIngress: async () => denied(), providerCapabilities: () => ({}) },
     id: prefix => `${prefix ?? 'id'}_${++serial}`, now: () => clock,
     resource: (prefix, fields) => ({ ...fields, id: `${prefix}_${++serial}`, revision: 1, createdAtMs: clock, updatedAtMs: clock }),
     update: (resource, changes) => ({ ...resource, ...changes, revision: resource.revision + 1, updatedAtMs: clock }),

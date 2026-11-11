@@ -250,7 +250,7 @@ export function createConnectorServices(services: BackendServices) {
     services.store.transaction(() => {
       saveDetails(connector.id, { machineId: bot.machineId, bindings: values, readOnlyTools: [], executionNames: {}, providerId: configured?.id ?? null, oauthSecretNames: [], oauthExpiresAtMs: null, discoveredAtMs: null, configuredLevel: 'off', provisionState: 'pending', desiredState: null, desiredFingerprint: null, provisionActorUserId: actor.userId });
       services.store.put('connectors', connector);
-      const grant: P.BotGrant = services.resource('grant', { botId, machineId: bot.machineId, capabilityId: `connector:${connector.id}`, requestedLevel: level, effectiveLevel: 'off', reasons: ['Awaiting actual destination connector discovery.'] });
+      const grant: P.BotGrant = services.resource('grant', { botId, machineId: bot.machineId, capabilityId: `connector:${connector.id}`, requestedLevel: level, pendingLevel: null, effectiveLevel: 'off', reasons: ['Awaiting actual destination connector discovery.'] });
       services.store.put('botGrants', grant);
       services.events.emit('grant.upserted', grant, { botId });
     });
@@ -415,7 +415,7 @@ export function createConnectorServices(services: BackendServices) {
       if (config.machineId === bot.machineId) continue;
       saveDetails(connector.id, { ...config, configuredLevel: 'off', discoveredAtMs: null, provisionState: 'acknowledged' });
       publish(services.update(connector, { state: 'disconnected', tools: connector.tools.map(tool => ({ ...tool, enabled: false })), lastError: 'Assigned machine changed. Set up credentials on the new destination; no credentials were copied.' }));
-      for (const grant of services.store.list<P.BotGrant>('botGrants', value => value.botId === bot.id && value.capabilityId === `connector:${connector.id}`)) services.store.put('botGrants', services.update(grant, { effectiveLevel: 'off', reasons: ['Connector credentials remain on the previous destination.'] }));
+      for (const grant of services.store.list<P.BotGrant>('botGrants', value => value.botId === bot.id && value.capabilityId === `connector:${connector.id}`)) services.store.put('botGrants', services.update(grant, { effectiveLevel: 'off', pendingLevel: null, reasons: ['Connector credentials remain on the previous destination.'] }));
     }
   }
   async function reconcileConnector(actor: Principal, id: string): Promise<P.Connector | P.Deleted> {
