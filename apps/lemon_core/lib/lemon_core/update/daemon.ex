@@ -16,7 +16,8 @@ defmodule LemonCore.Update.Daemon do
   follows the order row 4 (InvWorkerState) requires:
 
     1. stop the running worker units;
-    2. restart the controller — only once every one of them is proven stopped;
+    2. restart the controller — wait for a new process identity at the selected
+       root, not a healthy response from the process being replaced;
     3. start those worker units again;
     4. restart the backend unit when it was running.
 

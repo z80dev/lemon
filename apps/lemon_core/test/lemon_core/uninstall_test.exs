@@ -184,6 +184,83 @@ defmodule LemonCore.UninstallTest do
         refute preview.purge
       end
     end
+
+    test "rejects symlinked owned ancestors even when the leaf is absent", ctx do
+      for relative <- [".lemon", ".lemon/lemon_bot", ".local", ".local/bin"],
+          leaf_present? <- [false, true] do
+        home = Path.join(ctx.tmp_dir, "home-#{System.unique_integer([:positive])}")
+        outside = Path.join(ctx.tmp_dir, "outside-#{System.unique_integer([:positive])}")
+        File.mkdir_p!(home)
+        File.mkdir_p!(outside)
+        sentinel = Path.join(outside, "keep")
+        File.write!(sentinel, "external")
+
+        if leaf_present? do
+          File.mkdir_p!(Path.join(outside, "versions"))
+          File.write!(Path.join(outside, "lemon-bot"), "external executable")
+        end
+
+        ancestor = Path.join(home, relative)
+        File.mkdir_p!(Path.dirname(ancestor))
+        File.ln_s!(outside, ancestor)
+        options = opts(%{ctx | home: home}, purge: true)
+
+        assert {:error, :unsafe_uninstall_path} = Uninstall.preview(options)
+
+        assert {:error, :unsafe_uninstall_path} =
+                 Uninstall.execute(Keyword.put(options, :confirm, String.duplicate("a", 64)))
+
+        assert File.read!(sentinel) == "external"
+        assert File.read!(ctx.manifest) == ""
+      end
+    end
+
+    test "allows a leaf symlink without following its external target", ctx do
+      outside = Path.join(ctx.tmp_dir, "external-release")
+      File.mkdir_p!(outside)
+      sentinel = Path.join(outside, "keep")
+      File.write!(sentinel, "external")
+      File.mkdir_p!(Path.join(ctx.home, ".lemon"))
+      link = Path.join(ctx.home, ".lemon/versions")
+      File.ln_s!(outside, link)
+      options = opts(ctx)
+      {:ok, preview} = Uninstall.preview(options)
+
+      assert [%{type: "symlink", path: path} = identity] = preview.path_identities
+      assert path == Path.join(preview.canonical_home, ".lemon/versions")
+      assert Enum.all?(identity.ancestors, &(&1.type == "directory"))
+
+      assert {:ok, _} =
+               Uninstall.execute(Keyword.put(options, :confirm, preview.confirmation_digest))
+
+      assert [%{"path" => ^path, "type" => "symlink"}] =
+               Jason.decode!(File.read!(ctx.manifest))["paths"]
+
+      assert File.read!(sentinel) == "external"
+      assert {:ok, ^outside} = File.read_link(link)
+    end
+
+    test "canonicalizes trusted HOME aliases but not owned ancestors", ctx do
+      installed_release(ctx.home)
+      alias_home = Path.join(ctx.tmp_dir, "home-alias")
+      File.ln_s!(ctx.home, alias_home)
+      {:ok, direct} = Uninstall.preview(opts(ctx))
+      options = opts(%{ctx | home: alias_home})
+      {:ok, aliased} = Uninstall.preview(options)
+
+      assert aliased.canonical_home == direct.canonical_home
+      assert aliased.path_identities == direct.path_identities
+
+      assert {:ok, _} =
+               Uninstall.execute(Keyword.put(options, :confirm, aliased.confirmation_digest))
+
+      document = Jason.decode!(File.read!(ctx.manifest))
+      assert document["home"] == direct.canonical_home
+
+      assert Enum.all?(document["paths"], fn entry ->
+               String.starts_with?(entry["path"], direct.canonical_home <> "/")
+             end)
+    end
   end
 
   describe "preview/1 rc scanning" do
@@ -362,6 +439,52 @@ defmodule LemonCore.UninstallTest do
 
       assert {:ok, _} =
                Uninstall.execute(opts(ctx, confirm: String.upcase(preview.confirmation_digest)))
+    end
+
+    test "rejects a replaced target or ancestor even when all path names are unchanged", ctx do
+      installed_release(ctx.home)
+
+      for relative <- [".lemon/versions", ".lemon/lemon_bot", ".lemon", ""] do
+        options = opts(ctx)
+        {:ok, preview} = Uninstall.preview(options)
+        path = Path.join(ctx.home, relative)
+        saved = path <> "-previous-#{System.unique_integer([:positive])}"
+        File.rename!(path, saved)
+        File.mkdir_p!(path)
+
+        if relative in [".lemon", ""] do
+          installed_release(ctx.home)
+        else
+          File.mkdir_p!(Path.join(ctx.home, ".lemon/lemon_bot/versions"))
+        end
+
+        assert {:error, {:digest_mismatch, _}} =
+                 Uninstall.execute(Keyword.put(options, :confirm, preview.confirmation_digest))
+
+        assert File.dir?(path)
+        assert File.dir?(saved)
+        assert File.read!(ctx.manifest) == ""
+      end
+    end
+
+    test "binds an ancestor identity even if the target inode is preserved", ctx do
+      parent = Path.join(ctx.home, ".lemon/lemon_bot")
+      target = Path.join(parent, "versions")
+      File.mkdir_p!(target)
+      options = opts(ctx)
+      {:ok, preview} = Uninstall.preview(options)
+      inode = File.lstat!(target).inode
+      saved = parent <> "-previous"
+      File.rename!(parent, saved)
+      File.mkdir_p!(parent)
+      File.rename!(Path.join(saved, "versions"), target)
+      assert File.lstat!(target).inode == inode
+
+      assert {:error, {:digest_mismatch, _}} =
+               Uninstall.execute(Keyword.put(options, :confirm, preview.confirmation_digest))
+
+      assert File.dir?(target)
+      assert File.read!(ctx.manifest) == ""
     end
   end
 
@@ -669,7 +792,28 @@ defmodule LemonCore.UninstallTest do
                Uninstall.execute(Keyword.put(options, :confirm, preview.confirmation_digest))
 
       assert result.deleted_paths == preview.program_paths ++ preview.purge_paths
-      assert File.read!(ctx.manifest) == Enum.join(result.deleted_paths, "\n") <> "\n"
+      document = Jason.decode!(File.read!(ctx.manifest))
+      assert document["schema"] == 2
+      assert document["home"] == preview.canonical_home
+
+      assert Enum.sort(Enum.map(document["paths"], & &1["path"])) ==
+               Enum.sort([
+                 Path.join(preview.canonical_home, ".lemon"),
+                 Path.join(preview.canonical_home, ".local/bin/lemon-bot")
+               ])
+
+      preview_identities = preview.path_identities |> Jason.encode!() |> Jason.decode!()
+      assert Enum.all?(document["paths"], &(&1 in preview_identities))
+
+      for identity <- document["paths"] do
+        stat = File.lstat!(identity["path"])
+        assert identity["device"] == stat.major_device
+        assert identity["inode"] == stat.inode
+        assert identity["type"] == Atom.to_string(stat.type)
+        assert List.first(identity["ancestors"])["path"] == "/"
+        assert List.last(identity["ancestors"])["path"] == Path.dirname(identity["path"])
+        assert Enum.all?(identity["ancestors"], &(&1["type"] == "directory"))
+      end
 
       for path <- result.deleted_paths, do: assert(File.exists?(path))
     end
@@ -713,6 +857,71 @@ defmodule LemonCore.UninstallTest do
                Uninstall.execute(Keyword.put(options, :confirm, preview.confirmation_digest))
 
       assert result.deleted_paths == []
+    end
+
+    test "refuses target or ancestor swaps after confirmation and before handoff", ctx do
+      for relative <- [".lemon/versions", ".lemon/lemon_bot"] do
+        installed_release(ctx.home)
+        path = Path.join(ctx.home, relative)
+        saved = path <> "-previous"
+        outside = Path.join(ctx.tmp_dir, "external-#{System.unique_integer([:positive])}")
+        File.mkdir_p!(outside)
+        sentinel = Path.join(outside, "keep")
+        File.write!(sentinel, "external")
+
+        options =
+          opts(ctx,
+            command_runner: fn _executable, args, _opts ->
+              if args == ["__update-daemon", "snapshot"] do
+                File.rename!(path, saved)
+                File.ln_s!(outside, path)
+              end
+
+              {"stopped\n", 0}
+            end
+          )
+
+        {:ok, preview} = Uninstall.preview(options)
+
+        assert {:error, :uninstall_path_changed} =
+                 Uninstall.execute(Keyword.put(options, :confirm, preview.confirmation_digest))
+
+        assert File.read!(ctx.manifest) == ""
+        assert File.read!(sentinel) == "external"
+        assert File.dir?(saved)
+        File.rm!(path)
+        File.rename!(saved, path)
+      end
+    end
+
+    test "revalidates identities again after Keychain removal before publishing", ctx do
+      installed_release(ctx.home)
+      path = Path.join(ctx.home, ".lemon/versions")
+      saved = path <> "-previous"
+
+      options =
+        opts(ctx,
+          purge: true,
+          os: :darwin,
+          command_runner: fn executable, _args, _opts ->
+            if executable == "security" do
+              File.rename!(path, saved)
+              File.mkdir_p!(path)
+              {"", 0}
+            else
+              {"stopped\n", 0}
+            end
+          end
+        )
+
+      {:ok, preview} = Uninstall.preview(options)
+
+      assert {:error, :uninstall_path_changed} =
+               Uninstall.execute(Keyword.put(options, :confirm, preview.confirmation_digest))
+
+      assert File.read!(ctx.manifest) == ""
+      assert File.dir?(saved)
+      assert File.dir?(path)
     end
   end
 

@@ -145,6 +145,40 @@ defmodule LemonCore.Update.DaemonTest do
       refute result.restart_required
     end
 
+    test "workers resume once the asynchronous controller replacement is ready", %{
+      tmp_dir: tmp_dir
+    } do
+      home = install_launcher!(tmp_dir, "2099.01.0", @token, 0)
+      parent = self()
+
+      runner = fn _launcher, ["__update-daemon", "restart" | _], _opts ->
+        send(parent, {:waiting_for_replacement, self()})
+
+        receive do
+          :replacement_ready -> {"replacement ready", 0}
+        end
+      end
+
+      opts = base_opts(tmp_dir, home) |> Keyword.put(:command_runner, runner)
+
+      snapshot = %{
+        controller: @token,
+        workers: [worker("chico")],
+        backend: backend_unit(),
+        backend_installed?: true
+      }
+
+      task = Task.async(fn -> Daemon.restart(%{}, snapshot, "2020.01.0", "2099.01.0", opts) end)
+      assert_receive {:waiting_for_replacement, waiter}
+      assert order(tmp_dir) == ["stop:chico"]
+      send(waiter, :replacement_ready)
+
+      assert {:ok, %{workers: "restarted", backend: "restarted", restart_required: false}} =
+               Task.await(task)
+
+      assert order(tmp_dir) == ["stop:chico", "start:chico", "restart_backend:"]
+    end
+
     test "a stopped controller still cycles the running units without starting a daemon", %{
       tmp_dir: tmp_dir
     } do

@@ -20,6 +20,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Bind uninstall confirmation and deferred deletion to canonical filesystem
+  identities; reject symlinked ancestors and stale replacement targets.
+- Wait for a new controller process at the selected root during supervised
+  restarts, and recognize launchd units when HOME contains XML-special characters.
+- Restart the Bot backend once after changing controller selection, verify its
+  selected-controller connection, and persist non-default local controller ports
+  in backend service units.
+
 - Source launchers now reuse a private random per-install distribution cookie;
   dedicated control-plane and gateway launchers also default distribution and
   epmd to loopback. Both primary launchers honor the saved node-gateway port,

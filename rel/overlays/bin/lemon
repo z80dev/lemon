@@ -107,7 +107,13 @@ plist_string() {
   awk -v key="$2" '
     index($0, "<key>" key "</key>") { found = 1 }
     found && match($0, /<string>[^<]*<\/string>/) {
-      print substr($0, RSTART + 8, RLENGTH - 17)
+      value = substr($0, RSTART + 8, RLENGTH - 17)
+      gsub(/&lt;/, "<", value)
+      gsub(/&gt;/, ">", value)
+      gsub(/&quot;/, "\"", value)
+      gsub(/&apos;/, sprintf("%c", 39), value)
+      gsub(/&amp;/, "\\&", value)
+      print value
       exit
     }' "$1" 2>/dev/null
 }
@@ -778,8 +784,34 @@ stop_recorded_runtime() {
   rm -f "$PIDFILE" "$ROOTFILE"
 }
 
+# A manager restart is asynchronous: health may still belong to the old VM.
+# Require a new process identity, the selected root, and an authenticated
+# snapshot before allowing the update coordinator to bring workers back.
+wait_restarted_runtime() {
+  local old_pid="$1" old_born="$2" attempt pid born recorded snapshot
+  for ((attempt = 0; attempt < 120; attempt++)); do
+    pid="" recorded=""
+    if [ -f "$PIDFILE" ] && [ ! -L "$PIDFILE" ] &&
+       [ -f "$ROOTFILE" ] && [ ! -L "$ROOTFILE" ]; then
+      IFS= read -r pid < "$PIDFILE" || true
+      IFS= read -r recorded < "$ROOTFILE" || true
+      born="$(process_identity "$pid" 2>/dev/null || true)"
+      if [ -n "$born" ] && { [ "$pid" != "$old_pid" ] || [ "$born" != "$old_born" ]; } &&
+         [ -d "$recorded" ] && [ "$(cd "$recorded" && pwd -P)" = "$(cd "$LEMON_ROOT" && pwd -P)" ] &&
+         control_plane_healthy; then
+        snapshot="$(update_daemon_snapshot 2>/dev/null)" || snapshot=""
+        if [ "$snapshot" = "$(daemon_identity "$pid" "$born" "$(cd "$LEMON_ROOT" && pwd -P)")" ]; then
+          return 0
+        fi
+      fi
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 restart_updated_daemon() {
-  local token="$1" previous="$2" current recorded
+  local token="$1" previous="$2" current recorded old_pid old_born
   previous="$(cd "$previous" && pwd -P)" || return
   current="$(update_daemon_snapshot)" || return
   IFS= read -r recorded < "$ROOTFILE" || true
@@ -788,6 +820,8 @@ restart_updated_daemon() {
     error "daemon changed during update; no process was signalled"
     return 1
   fi
+  IFS= read -r old_pid < "$PIDFILE" || return
+  old_born="$(process_identity "$old_pid")" || return
   local cunit mgr label uid
   if cunit="$(controller_unit 2>/dev/null)" && [ -n "$cunit" ]; then
     mgr="${cunit%% *}"
@@ -804,14 +838,8 @@ restart_updated_daemon() {
         return 1
       }
     fi
-    if ! wait_until control_plane_healthy 120; then
-      error "runtime did not become healthy on port $PORT within 120s"
-      return 1
-    fi
-    IFS= read -r recorded < "$ROOTFILE" || true
-    [ -z "$recorded" ] || recorded="$(cd "$recorded" && pwd -P)" || true
-    if [ "$recorded" != "$LEMON_ROOT" ]; then
-      error "another runtime won the restart; selected release was not started"
+    if ! wait_restarted_runtime "$old_pid" "$old_born"; then
+      error "replacement runtime did not become healthy at $LEMON_ROOT within 120s"
       return 1
     fi
     info "restarted selected release at $LEMON_ROOT"
@@ -849,35 +877,12 @@ open_browser() {
   warn "No browser opener found; open the URL above manually."
 }
 
-# The CLI may only ask for the paths the installer owns. Anything else is
-# refused, and a failed removal is reported instead of being swallowed.
-uninstall_candidate() {
-  case "$1" in
-    "$LEMON_HOME_DIR" | \
-    "$LEMON_HOME_DIR/versions" | \
-    "$LEMON_HOME_DIR/bin" | \
-    "$LEMON_HOME_DIR/updates" | \
-    "$LEMON_HOME_DIR/tmp" | \
-    "$LEMON_HOME_DIR/lemon_bot/versions" | \
-    "$LEMON_HOME_DIR/lemon_bot/current" | \
-    "$HOME/.local/bin/lemon-bot") return 0 ;;
-  esac
-  return 1
-}
-
+# The post-VM executor revalidates the preview's canonical filesystem identities
+# and deletes relative to pinned directory descriptors, never through symlinks.
 apply_uninstall_manifest() {
-  local file="$1" path status=0
-  while IFS= read -r path || [ -n "$path" ]; do
-    [ -n "$path" ] || continue
-    if ! uninstall_candidate "$path"; then
-      error "refusing to remove unrecognized path from uninstall manifest: $path"
-      status=1
-    elif ! rm -rf "$path"; then
-      error "could not remove $path"
-      status=1
-    fi
-  done < "$file"
-  return "$status"
+  local python=python3
+  [ ! -x "$LEMON_ROOT/python/bin/python3" ] || python="$LEMON_ROOT/python/bin/python3"
+  "$python" "$LEMON_ROOT/libexec/lemon-uninstall" "$1"
 }
 
 run_uninstall() {

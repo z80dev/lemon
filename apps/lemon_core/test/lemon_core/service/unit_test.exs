@@ -91,6 +91,25 @@ defmodule LemonCore.Service.UnitTest do
     refute Map.has_key?(spec.env, "UNRELATED_SECRET")
   end
 
+  test "backend launch persists the resolved local controller port without ports.env", %{
+    opts: opts
+  } do
+    refute File.exists?(Path.join(opts[:home], ".lemon/ports.env"))
+
+    opts =
+      Keyword.merge(opts,
+        port: 4201,
+        env: %{"LEMON_CONTROL_PLANE_PORT" => "4144", "LEMON_BOT_PORT" => "4200"}
+      )
+
+    for manager <- ["launchd", "systemd", "none"] do
+      assert {:ok, spec} = Role.build("backend", manager, opts)
+      assert {:ok, parsed} = Unit.parse(Unit.render(spec, manager), manager)
+      assert parsed.env["LEMON_BOT_PORT"] == "4201"
+      assert parsed.env["LEMON_CONTROL_PLANE_PORT"] == "4144"
+    end
+  end
+
   test "signed exec wrappers survive argument decoding and require executable bundles", %{
     opts: opts
   } do

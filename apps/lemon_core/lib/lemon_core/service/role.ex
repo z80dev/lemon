@@ -295,6 +295,10 @@ defmodule LemonCore.Service.Role do
       "backend" ->
         Map.merge(base, Map.take(source, @backend_env))
         |> Map.put("LEMON_BOT_PORT", to_string(port(role, opts)))
+        |> Map.put(
+          "LEMON_CONTROL_PLANE_PORT",
+          to_string(port("controller", Keyword.delete(opts, :port)))
+        )
 
       "controller" ->
         Map.put(base, "LEMON_CONTROL_PLANE_PORT", to_string(port(role, opts)))

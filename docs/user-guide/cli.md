@@ -816,6 +816,11 @@ it in the unit, and uses the same path for permission probes. Repair refuses a
 missing wrapper rather than silently changing the worker's signed identity.
 `--bot PATH` defaults to `~/.local/bin/lemon-bot`. Backend units reject inherited
 `LEMON_BOT_OPERATOR_TOKEN` and `LEMON_BOT_ENCRYPTION_KEY`; secrets never enter units.
+Backend units also retain the resolved `LEMON_CONTROL_PLANE_PORT`, including
+non-default local ports when no `ports.env` exists. `install --restart-backend`
+reloads an unchanged running backend once; an already updated/new unit is not
+restarted a second time. The Bot chooser uses this when its saved controller
+URL or credentials change, then verifies connection to that controller.
 
 An existing unit keeps its recorded login `PATH`, locale and configured
 environment values. Calling install again from another shell, Lemon Bot, or the
@@ -855,7 +860,7 @@ signed helper identity; this field is not part of remote management projections.
 `ready|online|starting|reconnecting|needs_reauthorization|needs_enrollment|conflict|stopped|failed|blocked|unsupervised|foreign|unknown|not_installed`.
 `detail` contains a stable reason code or null, never raw command output.
 `pid` and `version` may be null. Mutations also include
-`action: created|updated|unchanged|adopted|started|removed`. Filesystem paths
+`action: created|updated|unchanged|adopted|started|restarted|removed`. Filesystem paths
 include the log and a worker's `execWrapper`; credentials, invite codes and argv
 are never projected. Worker `online` must refer to the manager's actual PID, so a
 stale status left by `node join --enroll-only` cannot claim readiness.
@@ -1970,6 +1975,7 @@ lemon service uninstall ROLE... [options]
 | `--invite-code-stdin` | Read one 43-character enrollment code from stdin |
 | `--exec-wrapper PATH` | Signed helper wrapper path inside an .app bundle (macOS) |
 | `--bot PATH` | Executable path for the backend service (lemon-bot) |
+| `--restart-backend` | Install only: reload an unchanged backend after controller selection changes |
 | `--ssh DEST` | SSH destination for the tunnel role |
 | `--node-port PORT` | Remote node gateway forward port |
 | `--gateway-port PORT` | Local node gateway port |
