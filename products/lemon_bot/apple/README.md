@@ -9,6 +9,11 @@ as web: measured capability names, Off / View only / Full, warnings only when
 effective access differs, and one Why disclosure for raw reasons and policy.
 Desktop permissions remain inspection-only; these controls never prompt for TCC.
 
+Live reply indicators and the desktop pet ignore streaming messages from finished
+runs. Idle/offline Bot updates re-read locally active runs and their replies to
+recover missed completion events. Bot access refreshes when grants, its machine,
+or workspace policy changes.
+
 ## End-user release packaging
 
 End users open the notarized DMG, drag **Lemon Bot** to **Applications**, and launch

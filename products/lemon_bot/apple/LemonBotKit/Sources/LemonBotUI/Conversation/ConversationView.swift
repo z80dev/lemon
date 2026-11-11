@@ -72,7 +72,7 @@ public struct ConversationView: View {
     private var showTyping: Bool {
         let live = store.liveRuns(in: conversationID)
         guard live.contains(where: { $0.status != "awaiting_input" }) else { return false }
-        return !(store.entries[conversationID] ?? []).sorted { $0.seq < $1.seq }.suffix(5).contains { $0.streaming }
+        return !(store.entries[conversationID] ?? []).sorted { $0.seq < $1.seq }.suffix(5).contains { if case .message(let message) = $0 { return store.isStreaming(message) }; return false }
     }
     private var visibleError: String? { action.error ?? store.errorMessage }
     private var canMutate: Bool { store.connectionState == "online" }
@@ -687,7 +687,7 @@ struct TranscriptEntryView: View {
     @ViewBuilder private var mainContent: some View {
         switch entry {
         case .message(let message):
-            if !message.text.isEmpty || message.streaming { MessageBubble(text: message.text, streaming: message.streaming, mine: isMine, palette: palette) }
+            if !message.text.isEmpty || store.isStreaming(message) { MessageBubble(text: message.text, streaming: store.isStreaming(message), mine: isMine, palette: palette) }
         case .card(let card):
             TranscriptCardView(store: store, card: card.card).frame(maxWidth: LBMetric.bubbleMaxWidth, alignment: .leading)
         case .userAttachment(let attachment):
