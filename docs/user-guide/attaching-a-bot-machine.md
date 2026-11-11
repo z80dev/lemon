@@ -55,8 +55,8 @@ returned by the preview.
 Run the copied command and enter its separate one-use code on the destination.
 The page observes enrollment live and, once verified online, offers
 **Online — Create a Bot here** with that machine selected. Provider credentials
-must still be configured on the destination, and its worker must remain running;
-this flow does not install a service automatically.
+must still be configured on the destination. The join script installs the worker
+through `lemon service` by default and exits after it is online.
 
 ### Select a compatible destination runtime
 
@@ -236,7 +236,7 @@ or assume a matching version has the required APIs.
 
 Source mode uses only the provisioned checkout's `bin/lemon` and requires its
 `mix.exs`; it never falls back to a PATH executable. Release mode first reuses
-a `lemon` on `PATH`, then `$HOME/.lemon/versions/<configured-version>/bin/lemon`,
+`$HOME/.lemon/bin/lemon`,
 if it reports the exact version and passes `node capabilities --json --require-bot`.
 Otherwise it fetches
 the canonical `install.sh` from the same base URL and exact release tag,
@@ -248,7 +248,8 @@ installs no TUI and stages the runtime, runs `node capabilities --json
 then promotes it, leaving any live install untouched on failure. The join script
 repeats the version/capability gate. This selects a bot-capable canonical
 full/min Lemon runtime, never the standalone `lemon_bot` backend artifact.
-It never uses the mutable `versions/current` symlink to enroll.
+Enrollment and the service use that stable launcher through `versions/current`;
+installing a pin flips the pointer so restarts use the selected version.
 
 Review remote scripts according to your policy. The installer requires `curl`,
 `tar`, and `python3` on a supported macOS/Linux host; source checkouts require
@@ -279,16 +280,28 @@ indefinitely. Have the controller owner inspect `nodes.list` and issue a bound
 repair invitation for any identity already created. Issue a new unbound invite
 only for a genuinely new identity/name.
 
-The worker prints `Execution node online (NODE_ID)` and stays in the foreground.
-Keep it running, or supervise this foreground command with your OS service
-manager. Configure model-provider credentials **on the destination** with
+By default the script calls `lemon service install worker --invite-code-stdin
+--wait 60 --json`, passing the code only on stdin, and exits once the worker is
+online. It reports persistence: login, boot, session (logged-in only), or none.
+An unavailable lifecycle command fails clearly, without a foreground fallback.
+Add `--foreground` (`--no-service` is an alias) to keep the worker in the terminal.
+Configure model-provider credentials **on the destination** with
 `lemon setup` or `lemon model --provider ...`; the noninteractive installer does
 not copy credentials from the controller or run provider setup.
 
+For headless use, save the script to a file and pass `--code-stdin` with the
+43-character code plus newline on stdin. `--code-fd N` accepts an already-open
+descriptor 3–9, including when the script itself is piped to Bash. These options
+are mutually exclusive; neither puts the code in argv or the environment.
+`--json` emits only the lifecycle JSON document on stdout (service mode only).
+Exit status is 0 for online, 1 for not attempted, 2 for an enrollment attempt
+without an installed unit, or 3 for installed but not online yet. Never reuse a
+code after an attempted or uncertain enrollment; ask the owner for a repair invite.
+
 ## Working directory and host-access roots
 
-Start from an existing destination-local project directory, or add `--cwd` to
-the join invocation. The default is the caller's launch directory. File RPCs use
+Add `--cwd` with an existing absolute destination-local project directory to
+the join script; its default is `$HOME`. File RPCs use
 the destination OS user's home as the allowed root by default. To permit a
 project outside home, configure roots on the destination:
 

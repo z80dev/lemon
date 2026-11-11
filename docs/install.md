@@ -86,7 +86,7 @@ starting an unconfigured daemon. Details are in [Set up Lemon](user-guide/setup.
 
 | Flag | Effect |
 | --- | --- |
-| `--profile NAME` | Select `full`, `min`, or `lemon_bot`. Same as `LEMON_PROFILE`. |
+| `--profile NAME` | Select `full`, `min`, `bot` (runtime + backend), or `lemon_bot` (backend only). Same as `LEMON_PROFILE`. |
 | `--force` | Reinstall a version that is already present. |
 | `--verify` | Boot the installed runtime on ephemeral ports in a throwaway `HOME` and poll `/healthz` before finishing. |
 | `--no-modify-path` | Do not edit your shell rc file; the final next step uses the launcher's absolute path. |
@@ -105,7 +105,7 @@ curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -
 | --- | --- | --- |
 | `LEMON_VERSION` | *(latest stable)* | Pin an exact version. Required for `preview` and `nightly`. A pin alone accepts whichever channel its manifest publishes. |
 | `LEMON_CHANNEL` | `stable` | Release channel. When set explicitly it must match the manifest, even with a pin. |
-| `LEMON_PROFILE` | `lemon_runtime_full` | `full`, `min`, `lemon_bot`, or a full profile name. |
+| `LEMON_PROFILE` | `lemon_runtime_full` | `full`, `min`, `bot`, `lemon_bot`, or a full profile name. |
 | `LEMON_NO_TUI` | *(unset)* | `1` installs the runtime only, skipping the terminal UI download. |
 | `LEMON_INSTALL_IGNORE_GLIBC` | *(unset)* | `1` silences the Linux glibc 2.39 baseline warning. |
 | `LEMON_INSTALL_BASE_URL` | `https://github.com/z80dev/lemon` | Release host override, for mirrors and tests. Plain `http://` is accepted with a warning. |
@@ -130,7 +130,19 @@ model and manifest schema.
 | --- | --- | --- |
 | `full` (`lemon_runtime_full`) | Runtime, local Web UI, simulation dashboard assets, TUI | Default. `lemon web` needs this profile. |
 | `min` (`lemon_runtime_min`) | Runtime and TUI | No Web UI. |
-| `lemon_bot` | Standalone [Lemon Bot](../products/lemon_bot/README.md) backend | Installs under `~/.lemon/lemon_bot` and links `~/.local/bin/lemon-bot`; state stays in `~/.lemon/lemon_bot`. Run `lemon-bot`: it serves `http://127.0.0.1:4100` and asks whether to use the Lemon on this machine (offering to start it) or another machine's. Install `full` or `min` too to run Lemon on the same machine. |
+| `bot` | Full runtime and Lemon Bot backend at one manifest version | No TUI by default; runtime must pass the bot capability/version gate. `LEMON_NO_TUI=0` opts into the TUI. |
+| `lemon_bot` | Standalone [Lemon Bot](../products/lemon_bot/README.md) backend only | Independent pointer under `~/.lemon/lemon_bot`; launcher `~/.local/bin/lemon-bot`. For remote controllers, containers, or manual supervision; does not install a runtime or services. |
+
+For a complete Bot installation:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --profile bot
+```
+
+After both artifacts install, a terminal hands off to `lemon-bot`, which owns
+setup and service enrollment. Without a terminal, or with `--skip-setup`, the
+installer prints one `Run: <absolute path>/lemon-bot` next step. It does not run
+the runtime setup wizard separately.
 
 ### Install layout
 

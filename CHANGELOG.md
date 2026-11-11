@@ -30,6 +30,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Node-only gateway on loopback port `4044` for secure node tunnels/proxies:
   node/enrollment `/ws` and `/healthz` only, never operator or tokenless access.
   Setup reserves the gateway port and doctor reports exposed listeners.
+- Combined `--profile bot` installer preset: bot-verified full runtime without
+  the TUI and the same-version backend, with a single Lemon Bot setup hand-off.
+- Worker join commands install services by default, report actual persistence,
+  and support headless stdin/file-descriptor enrollment. `--foreground` opts out;
+  backend-only `--profile lemon_bot` remains available for manual deployments.
 
 ### Fixed
 
