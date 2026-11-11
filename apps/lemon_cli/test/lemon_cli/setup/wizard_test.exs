@@ -530,21 +530,34 @@ defmodule LemonCli.Setup.WizardTest do
       refute info_event?(events, &String.contains?(&1, "Setup complete"))
     end
 
-    test "skipped or unavailable live verification never claims setup complete", %{
-      config_path: path
-    } do
+    test "explicitly deferred verification does not launch", %{config_path: path} do
       configure_ready_provider(path)
+      io = Map.put(recording_io(), :interactive?, fn -> true end)
 
-      for opts <- [
-            [skip_verify: true, verifier: fn _ -> flunk("skipped check ran") end],
-            [verifier: fn _ -> {:skip, :offline} end]
-          ] do
-        io = recording_io()
-        assert :ok = Wizard.run_full([], io, [config_path: path, non_interactive: true] ++ opts)
-        events = drain_events([])
-        assert info_event?(events, &String.contains?(&1, "not live-verified"))
-        refute info_event?(events, &String.contains?(&1, "Setup complete"))
-      end
+      assert :ok =
+               Wizard.run_full([], io,
+                 config_path: path,
+                 skip_verify: true,
+                 verifier: fn _ -> flunk("skipped check ran") end,
+                 launcher: fn -> flunk("deferred verification must not launch") end
+               )
+    end
+
+    test "an unavailable live check still offers launch", %{config_path: path} do
+      configure_ready_provider(path)
+      io = Map.put(recording_io([""]), :interactive?, fn -> true end)
+
+      assert :ok =
+               Wizard.run_full([], io,
+                 config_path: path,
+                 verifier: fn _ -> {:skip, :not_supported} end,
+                 launcher: fn ->
+                   send(self(), :launched)
+                   :ok
+                 end
+               )
+
+      assert_received :launched
     end
   end
 

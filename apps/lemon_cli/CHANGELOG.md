@@ -4,6 +4,14 @@ All notable changes to `lemon_cli` are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Setup shows provider/import progress, truthfully distinguishes unavailable live
+  checks from deferred checks, and offers launch after saving an unchecked provider.
+- One-shot CLI boot logs omit info messages while preserving warnings and errors.
+- Installation ends with one absolute-path next step; worker enrollment keeps its
+  foreground/service guidance visible when the machine comes online.
+
 ### Added
 
 - Supervised, target-local Codex device-login start/poll/cancel with exact

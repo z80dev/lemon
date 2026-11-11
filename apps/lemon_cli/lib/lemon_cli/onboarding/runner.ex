@@ -404,6 +404,8 @@ defmodule LemonCli.Onboarding.Runner do
         {secret_value, secret_provider_for_auth(spec, :api_key)}
 
       nil when auth_mode == :codex_cli ->
+        io.info.("Importing your Codex login and loading models…")
+
         result =
           spec.oauth_module.import_codex_cli_login(path: opts[:codex_auth_path])
 
