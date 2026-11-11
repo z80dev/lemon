@@ -1,0 +1,7 @@
+{
+  "id": "rs_route_overlay",
+  "language": "rust",
+  "category": "feature",
+  "difficulty": "medium",
+  "prompt": "Implement layered prefix routing for the deployment router. Complete RouteTable's existing API and path canonicalization; the full contract is in README.md. Layers are an overlay of exact prefix keys: the newest definition or tombstone wins for each key, then the longest component-prefix among remaining keys wins globally (a newer broad route does not hide an older specific one). apply_layer validates the entire batch before mutating, duplicate canonical keys use the last change, successful empty layers still count, and pop_layer restores previous definitions. Preserve the public types, zero-based Resolved.layer provenance, canonical remainder and all documented errors. Add regression tests and update the README with an overlay example."
+}

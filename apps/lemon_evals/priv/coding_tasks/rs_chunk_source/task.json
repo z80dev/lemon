@@ -1,0 +1,7 @@
+{
+  "id": "rs_chunk_source",
+  "language": "rust",
+  "category": "api_design",
+  "difficulty": "medium",
+  "prompt": "Repair the chunk_source library and its trait adapters/extensions to implement the complete resumable partial-read contract in README.md. Preserve all signatures, support trait objects, and keep the dependency-free module layout."
+}

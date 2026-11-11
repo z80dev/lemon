@@ -1,0 +1,7 @@
+{
+  "id": "rs_window_cursor",
+  "language": "rust",
+  "category": "bug_fix",
+  "difficulty": "easy",
+  "prompt": "Fix the batch cursor in this crate without changing its public API. It lends consecutive non-overlapping batches from a borrowed slice, including the final short batch; it must never yield an empty batch. Batch.offset is the original slice index and Batch.items must borrow the original elements (no Clone bound or copied storage). BatchCursor::new rejects size zero with CursorError::ZeroSize, even for an empty slice. size_hint and ExactSizeIterator::len must always report the exact number of remaining batches, before and after next/nth/consumption. Exhaustion is fused. Arbitrarily large positive batch sizes, including usize::MAX, must work without arithmetic overflow. Preserve the APIs and visible tests; update the README to describe the corrected boundary behavior."
+}

@@ -1,0 +1,7 @@
+{
+  "id": "rs_prefix_index",
+  "language": "rust",
+  "category": "performance",
+  "difficulty": "hard",
+  "prompt": "Replace the naive scoped path-prefix scan with a scalable mutable routing index. Preserve the complete normalization, tenant/global specificity, Deny, replacement, and deletion semantics in README.md. Meet its deterministic public nodes_visited bound for every query, including after update/delete churn. Keep APIs and the dependency-free offline package; add regression tests and document the indexing strategy."
+}
