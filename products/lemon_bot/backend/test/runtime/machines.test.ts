@@ -83,6 +83,10 @@ describe('privileged destination machine boundary', () => {
     const { link: _legacyLink, ...legacy } = f.machine;
     f.store.put('machines', legacy);
     const originalMachine = f.services.auth.machine.bind(f.services.auth);
+    const originalCanRead = f.services.auth.canRead.bind(f.services.auth);
+    f.services.auth.canRead = (actor, table, value) => table === 'conversations'
+      ? (value as P.Conversation).ownerUserId === actor.userId
+      : originalCanRead(actor, table, value);
     f.services.auth.machine = (actor, machineId, manage) => {
       if (actor.userId === f.bob.userId) {
         if (manage) throw new ApiError('forbidden', 'Read-only host access.');
@@ -136,7 +140,7 @@ describe('privileged destination machine boundary', () => {
       const remove = routes.find(route => route.method === 'DELETE' && route.path === '/v1/machines/:id')!;
       try {
         const confirmation = await preview.handler(f.context(preview, { clientNonce: `machine_preview_detach_${exitCode}`, action: 'detach' }, f.alice, { id: f.machine.id })) as P.Confirmation;
-        expect(await remove.handler(f.context(remove, { clientNonce: `machine_confirm_detach_${exitCode}`, confirmationToken: confirmation.confirmationToken, confirmName: confirmation.confirmName }, f.alice, { id: f.machine.id }))).toEqual({ id: f.machine.id, deleted: true });
+        expect(await remove.handler(f.context(remove, { clientNonce: `machine_confirm_detach_${exitCode}`, revision: confirmation.revision, confirmationToken: confirmation.confirmationToken, confirmName: confirmation.confirmName }, f.alice, { id: f.machine.id }))).toEqual({ id: f.machine.id, deleted: true });
         expect(order).toEqual(['revoke', 'uninstall']);
         expect(spawn.mock.calls[0]?.[0]).toEqual(['/mock/lemon', 'service', 'uninstall', 'tunnel', '--name', f.machine.nodeName, '--json']);
         expect(f.store.require<P.Machine>('machines', f.machine.id).status).toBe('revoked');

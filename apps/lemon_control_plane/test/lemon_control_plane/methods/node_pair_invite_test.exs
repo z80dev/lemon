@@ -175,7 +175,9 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
 
     for port <- [nil, false, "4052", 4052.0, [], %{}, -1, 0, 65_536] do
       params = %{"nodeName" => name, "tunnelPort" => port}
-      assert {:error, {:invalid_request, "Invalid tunnelPort"}} = NodePairInvite.handle(params, @ctx)
+
+      assert {:error, {:invalid_request, "Invalid tunnelPort"}} =
+               NodePairInvite.handle(params, @ctx)
 
       unless is_nil(port) or is_integer(port) do
         assert {:error, _} = Schemas.validate("node.pair.invite", params)
@@ -341,7 +343,9 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
                  "role" => "operator",
                  "scopes" => ["operator.admin", "operator.pairing"],
                  "auth" => %{"inviteCode" => invite["inviteCode"]}
-               }, local?: false)
+               },
+               local?: false
+             )
 
     assert auth.role == :enrollment
 

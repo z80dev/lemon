@@ -179,8 +179,9 @@ describe('bot authority and viewer state', () => {
       const accepted=baseBotMcpTemplate(f.services,tunnel);
       expect(accepted).toMatchObject({url:'http://127.0.0.1:4100/mcp',headers:{},allowedOrigins:['http://127.0.0.1:4100'],approvedPrivateOrigins:['http://127.0.0.1:4100']});
       if(tunnel.link?.kind!=='ssh_tunnel')throw new Error('Expected SSH tunnel fixture.');
+      const link=tunnel.link;
       for(const productPort of [null,4101]){
-        expect(()=>baseBotMcpTemplate(f.services,{...tunnel,link:{...tunnel.link,productPort}})).toThrow();
+        expect(()=>baseBotMcpTemplate(f.services,{...tunnel,link:{...link,productPort}})).toThrow();
       }
       f.store.setMetadata(`machineSameHost:${direct.id}`,direct.nodeId);
       expect(baseBotMcpTemplate(f.services,direct).url).toBe(accepted.url);
