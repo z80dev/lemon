@@ -89,6 +89,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "model" => :string,
         "systemPrompt" => :string,
         "node" => :string,
+        "workingDirectory" => :string,
         "mcpServers" => :list,
         "toolPolicy" => :map
       }
@@ -102,6 +103,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "model" => :string,
         "systemPrompt" => :string,
         "node" => :string,
+        "workingDirectory" => :string,
         "mcpServers" => :list,
         "toolPolicy" => :map
       }
@@ -115,6 +117,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "model" => :string,
         "systemPrompt" => :string,
         "node" => :string,
+        "workingDirectory" => :string,
         "mcpServers" => :list,
         "toolPolicy" => :map
       }
@@ -889,12 +892,15 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "node.host.info" => %{required: %{"nodeId" => :string}},
     "node.fs.list" => %{
       required: %{"nodeId" => :string, "path" => :string},
-      optional: %{"showHidden" => :boolean}
+      optional: %{"showHidden" => :boolean, "profileId" => :string}
     },
-    "node.fs.stat" => %{required: %{"nodeId" => :string, "path" => :string}},
+    "node.fs.stat" => %{
+      required: %{"nodeId" => :string, "path" => :string},
+      optional: %{"profileId" => :string}
+    },
     "node.fs.read" => %{
       required: %{"nodeId" => :string, "path" => :string},
-      optional: %{"offset" => :integer, "length" => :integer}
+      optional: %{"offset" => :integer, "length" => :integer, "profileId" => :string}
     },
     "node.fs.write" => %{
       required: %{"nodeId" => :string, "path" => :string, "dataBase64" => :string},
@@ -902,10 +908,14 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "offset" => :integer,
         "truncate" => :boolean,
         "mkdirs" => :boolean,
-        "expectedModifiedAtMs" => :integer
+        "expectedModifiedAtMs" => :integer,
+        "profileId" => :string
       }
     },
-    "node.fs.mkdir" => %{required: %{"nodeId" => :string, "path" => :string}},
+    "node.fs.mkdir" => %{
+      required: %{"nodeId" => :string, "path" => :string},
+      optional: %{"profileId" => :string}
+    },
     "node.fs.move" => %{
       required: %{
         "nodeId" => :string,

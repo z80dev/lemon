@@ -36,6 +36,21 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonCore.ToolPolicy` supports sparse tri-state `workspace_read_exempt`
+  (`true | false | nil`, omitted from serialized maps when nil). Parsing,
+  normalization, restriction, intersection and subset checks treat `nil` as
+  neutral, `false` as winning over `true`, and enforce child-within-parent
+  boundaries (`true ⊄ false`, `true ⊄ nil`).
+- `LemonCore.ProfileStore` derives isolated `"files"` path boundaries under
+  `<lemon home>/profiles/<id>/files` sibling to `workspace/`.
+- `LemonCore.ProfileStore` supports the durable `workingDirectory` profile
+  field (`"node_default" | "profile_files"`, default `"node_default"`).
+- `LemonCore.ProfileStore.chat_request/3` sets `meta.remote_cwd_mode = "profile_files"`
+  only for remote node runs (`node != "local"`) with `workingDirectory == "profile_files"`
+  and omitted cwd (`cwd == nil`).
+- `LemonCore.ProfileStore.chat_request/3` enforces an invocation widening guard
+  that drops an invocation-supplied `workspace_read_exempt: true` unless the
+  durable profile `toolPolicy` already explicitly has it.
 - Doctor callers pass `runtime: :local | :external | :absent`; checks of
   runtime-owned processes return `LemonCore.Doctor.Check.outside_runtime/3`
   when the standalone CLI cannot observe them.

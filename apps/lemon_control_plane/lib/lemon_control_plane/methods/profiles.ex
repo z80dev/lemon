@@ -15,6 +15,7 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
       "model" => params["model"],
       "systemPrompt" => params["systemPrompt"],
       "node" => params["node"],
+      "workingDirectory" => params["workingDirectory"],
       "mcpServers" => params["mcpServers"],
       "toolPolicy" => params["toolPolicy"]
     }
@@ -22,6 +23,9 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
     |> Map.new()
   end
 
+  def validate_working_directory(nil), do: :ok
+  def validate_working_directory(dir) when dir in ["node_default", "profile_files"], do: :ok
+  def validate_working_directory(_), do: {:error, {:invalid_field, :working_directory}}
   def refresh(id \\ nil) do
     if Process.whereis(LemonRouter.AgentProfiles) == nil do
       :ok
@@ -187,7 +191,8 @@ defmodule LemonControlPlane.Methods.ProfilesCreate do
 
   @impl true
   def handle(params, _ctx) do
-    with {:ok, profile} <- LemonCore.ProfileStore.create(ProfilesSupport.profile_attrs(params)),
+    with :ok <- ProfilesSupport.validate_working_directory(params["workingDirectory"]),
+         {:ok, profile} <- LemonCore.ProfileStore.create(ProfilesSupport.profile_attrs(params)),
          :ok <- ProfilesSupport.refresh(profile["id"]) do
       {:ok, ProfilesSupport.result(profile)}
     else
@@ -210,9 +215,13 @@ defmodule LemonControlPlane.Methods.ProfilesUpdate do
   @impl true
   def handle(params, _ctx) do
     attrs =
-      Map.take(params, ~w(name description avatar model systemPrompt node mcpServers toolPolicy))
+      Map.take(
+        params,
+        ~w(name description avatar model systemPrompt node workingDirectory mcpServers toolPolicy)
+      )
 
-    with {:ok, profile} <- LemonCore.ProfileStore.update(params["id"], attrs),
+    with :ok <- ProfilesSupport.validate_working_directory(params["workingDirectory"]),
+         {:ok, profile} <- LemonCore.ProfileStore.update(params["id"], attrs),
          :ok <- ProfilesSupport.refresh(profile["id"]) do
       {:ok, ProfilesSupport.result(profile)}
     else
@@ -234,7 +243,8 @@ defmodule LemonControlPlane.Methods.ProfilesClone do
 
   @impl true
   def handle(params, _ctx) do
-    with {:ok, profile} <-
+    with :ok <- ProfilesSupport.validate_working_directory(params["workingDirectory"]),
+         {:ok, profile} <-
            LemonCore.ProfileStore.clone(
              params["sourceId"],
              ProfilesSupport.profile_attrs(params)

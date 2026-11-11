@@ -38,7 +38,8 @@ defmodule LemonCore.ToolPolicy do
           allowed_commands: :all | [String.t()],
           blocked_commands: [String.t()],
           max_file_size: pos_integer() | nil,
-          sandbox: boolean()
+          sandbox: boolean(),
+          workspace_read_exempt: boolean() | nil
         }
 
   @enforce_keys [
@@ -55,7 +56,7 @@ defmodule LemonCore.ToolPolicy do
     :max_file_size,
     :sandbox
   ]
-  defstruct @enforce_keys
+  defstruct @enforce_keys ++ [workspace_read_exempt: nil]
 
   @profiles [
     :full_access,
@@ -81,7 +82,8 @@ defmodule LemonCore.ToolPolicy do
     :allowed_commands,
     :blocked_commands,
     :max_file_size,
-    :sandbox
+    :sandbox,
+    :workspace_read_exempt
   ]
 
   @native_keys [
@@ -483,7 +485,12 @@ defmodule LemonCore.ToolPolicy do
         allowed_commands: intersect_allow(parent.allowed_commands, requested.allowed_commands),
         blocked_commands: union(parent.blocked_commands, requested.blocked_commands),
         max_file_size: minimum_limit(parent.max_file_size, requested.max_file_size),
-        sandbox: parent.sandbox or requested.sandbox
+        sandbox: parent.sandbox or requested.sandbox,
+        workspace_read_exempt:
+          restrict_workspace_read_exempt(
+            parent.workspace_read_exempt,
+            requested.workspace_read_exempt
+          )
       })
     end
   end
@@ -516,7 +523,8 @@ defmodule LemonCore.ToolPolicy do
         (not parent.no_reply or child.no_reply) and
         (not parent.sandbox or child.sandbox) and
         (is_nil(parent.max_file_size) or
-           (is_integer(child.max_file_size) and child.max_file_size <= parent.max_file_size))
+           (is_integer(child.max_file_size) and child.max_file_size <= parent.max_file_size)) and
+        workspace_read_exempt_subset?(child, parent)
     else
       _ -> false
     end
@@ -647,7 +655,7 @@ defmodule LemonCore.ToolPolicy do
   def to_map(policy), do: policy |> parse!() |> encode_policy()
 
   defp encode_policy(policy) do
-    %{
+    base = %{
       "allow" => encode_allow(policy.allow),
       "deny" => policy.deny,
       "blocked_tools" => policy.blocked_tools,
@@ -662,6 +670,12 @@ defmodule LemonCore.ToolPolicy do
       "max_file_size" => policy.max_file_size,
       "sandbox" => policy.sandbox
     }
+
+    if is_nil(policy.workspace_read_exempt) do
+      base
+    else
+      Map.put(base, "workspace_read_exempt", policy.workspace_read_exempt)
+    end
   end
 
   @doc "Compatibility parser that raises instead of broadening malformed input."
@@ -683,7 +697,8 @@ defmodule LemonCore.ToolPolicy do
       allowed_commands: [],
       blocked_commands: [],
       max_file_size: nil,
-      sandbox: true
+      sandbox: true,
+      workspace_read_exempt: false
     }
   end
 
@@ -734,7 +749,11 @@ defmodule LemonCore.ToolPolicy do
              Map.get(fields, :max_file_size, base.max_file_size),
              :max_file_size
            ),
-         {:ok, sandbox} <- parse_boolean(Map.get(fields, :sandbox, base.sandbox), :sandbox) do
+         {:ok, sandbox} <- parse_boolean(Map.get(fields, :sandbox, base.sandbox), :sandbox),
+         {:ok, workspace_read_exempt} <-
+           parse_workspace_read_exempt(
+             Map.get(fields, :workspace_read_exempt, base.workspace_read_exempt)
+           ) do
       bounded_policy(%__MODULE__{
         allow: intersect_allow(base.allow, allow),
         deny: union(base.deny, deny),
@@ -747,7 +766,8 @@ defmodule LemonCore.ToolPolicy do
         allowed_commands: intersect_allow(base.allowed_commands, allowed_commands),
         blocked_commands: union(base.blocked_commands, blocked_commands),
         max_file_size: minimum_limit(base.max_file_size, max_file_size),
-        sandbox: sandbox
+        sandbox: sandbox,
+        workspace_read_exempt: workspace_read_exempt
       })
     end
   end
@@ -915,6 +935,26 @@ defmodule LemonCore.ToolPolicy do
   defp parse_boolean(value, _field) when is_boolean(value), do: {:ok, value}
   defp parse_boolean(_value, field), do: {:error, {:invalid_policy_field, field}}
 
+  defp parse_workspace_read_exempt(nil), do: {:ok, nil}
+  defp parse_workspace_read_exempt(value) when is_boolean(value), do: {:ok, value}
+  defp parse_workspace_read_exempt(_value),
+    do: {:error, {:invalid_policy_field, :workspace_read_exempt}}
+
+  defp restrict_workspace_read_exempt(parent, requested) do
+    cond do
+      parent == false or requested == false -> false
+      parent == true or requested == true -> true
+      true -> nil
+    end
+  end
+
+  defp workspace_read_exempt_subset?(child, parent) do
+    case {child.workspace_read_exempt, parent.workspace_read_exempt} do
+      {true, other} -> other == true
+      _ -> true
+    end
+  end
+
   defp parse_optional_positive_integer(nil, _field), do: {:ok, nil}
 
   defp parse_optional_positive_integer(value, _field) when is_integer(value) and value > 0,
@@ -961,7 +1001,8 @@ defmodule LemonCore.ToolPolicy do
       allowed_commands: :all,
       blocked_commands: [],
       max_file_size: nil,
-      sandbox: false
+      sandbox: false,
+      workspace_read_exempt: nil
     }
   end
 

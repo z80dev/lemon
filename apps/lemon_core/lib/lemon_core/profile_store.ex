@@ -36,7 +36,7 @@ defmodule LemonCore.ProfileStore do
   @version 1
   @id_regex ~r/^[a-z0-9][a-z0-9_-]{0,63}$/
   @node_regex ~r/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
-  @managed_keys ~w(name description avatar model system_prompt node mcp_servers_json tool_policy_json status profile_version created_at updated_at)
+  @managed_keys ~w(name description avatar model system_prompt node working_directory mcp_servers_json tool_policy_json status profile_version created_at updated_at)
   @max_name_bytes 512
   @max_name_scalars 120
   @max_description_bytes 4_096
@@ -78,7 +78,8 @@ defmodule LemonCore.ProfileStore do
          "workspace" => workspace,
          "memory" => Path.join(workspace, "memory"),
          "skills" => Path.join([workspace, ".lemon", "skill"]),
-         "sessions" => Path.join(home, "sessions")
+         "sessions" => Path.join(home, "sessions"),
+         "files" => Path.join(home, "files")
        }}
     end
   end
@@ -141,7 +142,7 @@ defmodule LemonCore.ProfileStore do
 
       clone_attrs =
         source
-        |> Map.take(~w(name description avatar model systemPrompt node mcpServers toolPolicy))
+        |> Map.take(~w(name description avatar model systemPrompt node workingDirectory mcpServers toolPolicy))
         |> Map.merge(stringify_keys(attrs))
         |> Map.put("id", value(attrs, "id") || slug(value(attrs, "name")))
 
@@ -311,6 +312,8 @@ defmodule LemonCore.ProfileStore do
           :remote_cwd_explicit,
           "remote_cwd",
           :remote_cwd,
+          "remote_cwd_mode",
+          :remote_cwd_mode,
           "cwd",
           :cwd,
           "tool_policy",
@@ -336,6 +339,26 @@ defmodule LemonCore.ProfileStore do
         |> Map.put(:remote_cwd_explicit, node != "local" and is_binary(cwd))
         |> Map.put(:remote_cwd, if(node != "local", do: cwd))
 
+      meta =
+        if node != "local" and is_nil(cwd) and profile["workingDirectory"] == "profile_files" do
+          Map.put(meta, :remote_cwd_mode, "profile_files")
+        else
+          meta
+        end
+
+      invocation_policy =
+        opts
+        |> Keyword.get(:tool_policy)
+        |> LemonCore.ToolPolicy.expand()
+
+      invocation_policy =
+        if profile_policy["workspace_read_exempt"] != true and
+             invocation_policy[:workspace_read_exempt] == true,
+          do: Map.delete(invocation_policy, :workspace_read_exempt),
+          else: invocation_policy
+
+      effective_tool_policy = LemonCore.ToolPolicy.intersect(profile_policy, invocation_policy)
+
       {:ok,
        RunRequest.new(%{
          origin: Keyword.get(opts, :origin, :control_plane),
@@ -355,8 +378,7 @@ defmodule LemonCore.ProfileStore do
          cwd: cwd,
          run_id: Keyword.get(opts, :run_id),
          resume: Keyword.get(opts, :resume),
-         tool_policy:
-           LemonCore.ToolPolicy.intersect(profile_policy, Keyword.get(opts, :tool_policy)),
+         tool_policy: effective_tool_policy,
          meta: meta
        })}
     else
@@ -556,6 +578,7 @@ defmodule LemonCore.ProfileStore do
     |> put_optional_string(table, "model", attrs["model"])
     |> put_optional_string(table, "system_prompt", attrs["systemPrompt"])
     |> put_profile_string(table, "node", attrs["node"])
+    |> put_profile_string(table, "working_directory", attrs["workingDirectory"] || "node_default")
     |> put_profile_string(table, "mcp_servers_json", Jason.encode!(attrs["mcpServers"]))
     |> put_profile_string(table, "tool_policy_json", Jason.encode!(attrs["toolPolicy"]))
     |> put_profile_string(table, "status", "active")
@@ -582,10 +605,12 @@ defmodule LemonCore.ProfileStore do
          :ok <- File.mkdir_p(Path.join(temp_home, "workspace/memory")),
          :ok <- File.mkdir_p(Path.join(temp_home, "workspace/.lemon/skill")),
          :ok <- File.mkdir_p(Path.join(temp_home, "sessions")),
+         :ok <- File.mkdir_p(Path.join(temp_home, "files")),
          :ok <- File.write(Path.join(temp_home, "config.toml"), profile_config_header()),
          :ok <- maybe_copy_clone_home(Keyword.get(opts, :clone_home), temp_home) do
       _ = File.chmod(profiles_root, 0o700)
       _ = File.chmod(temp_home, 0o700)
+      _ = File.chmod(Path.join(temp_home, "files"), 0o700)
       {:ok, temp_home}
     else
       {:error, reason} ->
@@ -848,6 +873,8 @@ defmodule LemonCore.ProfileStore do
          "model" => optional_string(raw["model"]),
          "systemPrompt" => system_prompt,
          "node" => string_value(raw["node"], "local"),
+         "workingDirectory" =>
+           string_value(raw["working_directory"] || raw["workingDirectory"], "node_default"),
          "mcpServers" => decode_mcp_servers(raw["mcp_servers_json"]),
          "toolPolicy" => tool_policy,
          "status" => string_value(raw["status"], "active"),
@@ -871,6 +898,10 @@ defmodule LemonCore.ProfileStore do
          {:ok, system_prompt} <-
            optional_system_prompt(value(attrs, "systemPrompt") || value(attrs, "system_prompt")),
          {:ok, node} <- normalize_node(value(attrs, "node")),
+         {:ok, working_directory} <-
+           normalize_working_directory(
+             value(attrs, "workingDirectory") || value(attrs, "working_directory")
+           ),
          {:ok, mcp_servers} <-
            normalize_mcp_servers(value(attrs, "mcpServers") || value(attrs, "mcp_servers") || []),
          {:ok, tool_policy} <-
@@ -894,11 +925,19 @@ defmodule LemonCore.ProfileStore do
          "model" => model,
          "systemPrompt" => system_prompt,
          "node" => node,
+         "workingDirectory" => working_directory,
          "mcpServers" => mcp_servers,
          "toolPolicy" => tool_policy
        }}
     end
   end
+
+  defp normalize_working_directory(nil), do: {:ok, "node_default"}
+  defp normalize_working_directory("node_default"), do: {:ok, "node_default"}
+  defp normalize_working_directory(:node_default), do: {:ok, "node_default"}
+  defp normalize_working_directory("profile_files"), do: {:ok, "profile_files"}
+  defp normalize_working_directory(:profile_files), do: {:ok, "profile_files"}
+  defp normalize_working_directory(_), do: {:error, {:invalid_field, :working_directory}}
 
   defp decode_tool_policy(%{"tool_policy_json" => json}) do
     with {:ok, policy} <- Jason.decode(json),
@@ -1320,7 +1359,8 @@ defmodule LemonCore.ProfileStore do
       [
         {"system_prompt", "systemPrompt"},
         {"mcp_servers", "mcpServers"},
-        {"tool_policy", "toolPolicy"}
+        {"tool_policy", "toolPolicy"},
+        {"working_directory", "workingDirectory"}
       ],
       patch,
       fn
