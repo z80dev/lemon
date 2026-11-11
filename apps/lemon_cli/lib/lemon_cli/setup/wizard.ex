@@ -911,7 +911,7 @@ defmodule LemonCli.Setup.Wizard do
     if interactive?(io, non_interactive?) and Keyword.get(opts, :launch, true) and
          Verification.pending_steps(state) == [] and launch_ready?(result) and
          prompt_yes?("Open Lemon now?", io) do
-      launcher = Keyword.get(opts, :launcher, &launch_tui/0)
+      launcher = Keyword.get(opts, :launcher, fn -> handoff("tui", opts) end)
 
       case launcher.() do
         :ok -> :ok
@@ -925,26 +925,22 @@ defmodule LemonCli.Setup.Wizard do
   defp launch_ready?({:ok, %{live: live}}), do: live in [:ok, :skipped, :saved]
   defp launch_ready?(_result), do: false
 
-  defp launch_tui do
-    case System.get_env("LEMON_LAUNCHER") || System.find_executable("lemon") do
-      launcher when is_binary(launcher) and launcher != "" ->
-        # System.cmd ports do not inherit stdin. Reattach the confirmed TTY
-        # explicitly, passing the launcher as data rather than shell source.
-        case System.cmd("/bin/sh", [
-               "-c",
-               "exec \"$1\" tui </dev/tty >/dev/tty 2>&1",
-               "lemon-setup",
-               launcher
-             ]) do
-          {_, 0} -> :ok
-          _ -> {:error, :launch_failed}
+  # Programs this VM spawns get no controlling terminal (`erl_child_setup`
+  # runs in its own session), so a TUI or terminal prompt cannot run from
+  # here. Interactive follow-ups are named in the private file the `lemon`
+  # launcher passes as LEMON_SETUP_HANDOFF; the launcher, which owns the
+  # terminal, runs them after this VM exits. Only fixed step names are written.
+  defp handoff(step, opts) when step in ["tui", "bot-up", "bot-up required"] do
+    case Keyword.get_lazy(opts, :handoff, fn -> System.get_env("LEMON_SETUP_HANDOFF") end) do
+      path when is_binary(path) and path != "" ->
+        case File.write(path, step <> "\n", [:append]) do
+          :ok -> :ok
+          {:error, reason} -> {:error, {:handoff_failed, reason}}
         end
 
       _ ->
-        {:error, :launcher_not_found}
+        {:error, :no_terminal_launcher}
     end
-  rescue
-    _error in ErlangError -> {:error, :launch_failed}
   end
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -986,7 +982,7 @@ defmodule LemonCli.Setup.Wizard do
           {{:error, :bot_requires_packaged_install}, true}
 
         bot when bot in [:browser, :both] ->
-          {setup_bot(io, interactive?, opts), explicit != nil}
+          {setup_bot(io, interactive?, explicit != nil, opts), explicit != nil}
 
         :bot_installed ->
           io.info.("")
@@ -1028,7 +1024,7 @@ defmodule LemonCli.Setup.Wizard do
     end
   end
 
-  defp setup_bot(io, interactive?, opts) do
+  defp setup_bot(io, interactive?, explicit?, opts) do
     install = Keyword.get(opts, :install_bot, &Remote.install_bot/1)
     io.info.("")
     io.info.("Installing Lemon Bot…")
@@ -1036,7 +1032,7 @@ defmodule LemonCli.Setup.Wizard do
     case install.([]) do
       {:ok, %{version: version, launcher: launcher}} ->
         io.info.("Lemon Bot #{version} is installed.")
-        run_bot_up(io, launcher, interactive?, opts)
+        run_bot_up(io, launcher, interactive?, explicit?, opts)
 
       {:error, reason} ->
         io.error.("Could not install Lemon Bot: #{bot_install_error(reason)}.")
@@ -1047,13 +1043,25 @@ defmodule LemonCli.Setup.Wizard do
 
   # `lemon-bot up` runs `lemon setup --if-required --model-optional`, a no-op
   # once this wizard connected a model, then installs services, signs in the
-  # local owner, enrolls this machine and opens the browser.
-  defp run_bot_up(io, launcher, interactive?, opts) do
+  # local owner, enrolls this machine and opens the browser. In a terminal it
+  # runs after this wizard exits (see handoff/2); headless it runs here.
+  defp run_bot_up(io, launcher, interactive?, explicit?, opts) do
     args = ["up", "--this-machine" | if(interactive?, do: [], else: ["--no-open"])]
-    runner = Keyword.get(opts, :bot_runner, &run_component/3)
+
+    runner =
+      Keyword.get(opts, :bot_runner, fn
+        _launcher, _args, true ->
+          handoff(if(explicit?, do: "bot-up required", else: "bot-up"), opts)
+
+        executable, args, false ->
+          run_headless(executable, args)
+      end)
 
     case runner.(launcher, args, interactive?) do
       :ok ->
+        if interactive?,
+          do: io.info.("Lemon Bot setup continues in this terminal after the last question.")
+
         :ok
 
       {:error, reason} ->
@@ -1062,34 +1070,19 @@ defmodule LemonCli.Setup.Wizard do
     end
   end
 
-  # Interactive children get the real terminal device: macOS kqueue cannot poll
-  # the /dev/tty alias, so raw-mode prompts would never see input. Inherited
-  # RELEASE_* selection is stripped so nested launchers boot their own release.
-  defp run_component(executable, args, true = _interactive?) do
-    script =
-      ~S{t=/dev/$(ps -o tty= -p $$ 2>/dev/null | tr -d ' '); [ -c "$t" ] || t=/dev/tty; exec "$@" <"$t" >"$t" 2>&1}
-
-    System.cmd("/bin/sh", ["-c", script, "lemon-setup", executable | args],
-      env: ManagedInstall.command_env()
-    )
-    |> exit_result()
+  # Inherited RELEASE_* selection is stripped so nested launchers boot their own release.
+  defp run_headless(executable, args) do
+    case System.cmd(executable, args,
+           env: ManagedInstall.command_env(),
+           stderr_to_stdout: true,
+           into: IO.stream(:stdio, :line)
+         ) do
+      {_output, 0} -> :ok
+      {_output, status} -> {:error, {:exit_status, status}}
+    end
   rescue
     _error in ErlangError -> {:error, :launch_failed}
   end
-
-  defp run_component(executable, args, false) do
-    System.cmd(executable, args,
-      env: ManagedInstall.command_env(),
-      stderr_to_stdout: true,
-      into: IO.stream(:stdio, :line)
-    )
-    |> exit_result()
-  rescue
-    _error in ErlangError -> {:error, :launch_failed}
-  end
-
-  defp exit_result({_output, 0}), do: :ok
-  defp exit_result({_output, status}), do: {:error, {:exit_status, status}}
 
   defp bot_install_error(:missing_bot_artifact),
     do: "this release has no Lemon Bot for this platform"

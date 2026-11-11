@@ -739,6 +739,46 @@ defmodule LemonCli.Setup.WizardTest do
       assert_received :launched
     end
 
+    test "in a terminal, Bot setup and the TUI are handed to the launcher in order", %{
+      config_path: path,
+      tmp_dir: tmp_dir
+    } do
+      configure_ready_provider(path)
+      handoff = Path.join(tmp_dir, "handoff")
+
+      handed_off = fn answers, overrides ->
+        File.rm(handoff)
+
+        opts =
+          path
+          |> component_opts([install_bot: installed_bot(), handoff: handoff] ++ overrides)
+          |> Keyword.drop([:bot_runner, :launcher])
+
+        assert :ok = Wizard.run_full([], tty(recording_io(answers)), opts)
+        File.read!(handoff)
+      end
+
+      # Both, no Telegram, open Lemon: the Bot first, then the TUI.
+      assert handed_off.(["3", "", ""], []) == "bot-up\ntui\n"
+      # An explicit --use makes the Bot step required; Browser never opens the TUI.
+      assert handed_off.([""], use: "browser") == "bot-up required\n"
+
+      assert info_event?(
+               drain_events([]),
+               &String.contains?(&1, "continues in this terminal after the last question")
+             )
+    end
+
+    test "without the lemon launcher the TUI is not opened from setup's VM", %{
+      config_path: path
+    } do
+      configure_ready_provider(path)
+      opts = path |> component_opts(handoff: nil) |> Keyword.delete(:launcher)
+
+      assert :ok = Wizard.run_full([], tty(recording_io(["1", "", "", ""])), opts)
+      assert error_event?(drain_events([]), &String.contains?(&1, "Run `lemon` to try again"))
+    end
+
     test "Terminal offers background services, defaulting to no", %{config_path: path} do
       configure_ready_provider(path)
 

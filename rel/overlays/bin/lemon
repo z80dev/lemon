@@ -600,6 +600,39 @@ run_cli() {
   exec "$RELEASE_BIN" eval "$CLI_EXPR" "$@"
 }
 
+# The setup VM's children get no controlling terminal (erl_child_setup runs in
+# its own session), so setup names its interactive follow-ups in a private
+# handoff file and this launcher, which owns the terminal, runs them after the
+# VM exits. Only these fixed step names are honoured. Steps read the real
+# terminal device: macOS kqueue cannot poll the /dev/tty alias the installer
+# passes as stdin.
+run_setup() {
+  local handoff status=0 step device
+  [ "$PROFILE" != "sim_broadcast_platform" ] || sim_command "$@"
+  handoff="$(mktemp "${TMPDIR:-/tmp}/lemon-setup.XXXXXX")" || exit 1
+  LEMON_SETUP_HANDOFF="$handoff" "$RELEASE_BIN" eval "$CLI_EXPR" "$@" || status=$?
+  device="/dev/$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')"
+  [ -c "$device" ] || device=/dev/stdin
+  while IFS= read -r step <&3; do
+    case "$step" in
+      "bot-up" | "bot-up required")
+        if ! "$HOME/.local/bin/lemon-bot" up --this-machine <"$device" 3<&-; then
+          error "Lemon Bot setup did not finish. Resume it with 'lemon-bot up'."
+          if [ "$step" = "bot-up required" ] && [ "$status" -eq 0 ]; then status=1; fi
+        fi
+        ;;
+      tui)
+        if [ "$status" -eq 0 ]; then
+          rm -f "$handoff"
+          exec "$LEMON_ROOT/bin/lemon" tui <"$device" 3<&-
+        fi
+        ;;
+    esac
+  done 3<"$handoff"
+  rm -f "$handoff"
+  exit "$status"
+}
+
 # Build identity, help, and backup must work before setup: skip the config
 # provider so runtime.exs cannot demand secrets or endpoint settings that do
 # not exist yet.
@@ -1106,6 +1139,11 @@ case "$COMMAND" in
 
   uninstall)
     run_uninstall "$@"
+    ;;
+
+  setup)
+    ensure_managed_token || exit 1
+    run_setup "$@"
     ;;
 
   *)

@@ -283,6 +283,57 @@ defmodule LemonCli.LauncherLifecycleTest do
     assert status != 0
   end
 
+  test "packaged setup runs only handed-off Bot and TUI steps, after its VM exits", ctx do
+    # The stub VM names steps exactly as the setup wizard does.
+    executable(Path.join(ctx.release, "bin/lemon_runtime_min"), """
+    case "$1" in
+      eval) printf '%b' "$TEST_STEPS" >"$LEMON_SETUP_HANDOFF"; echo setup-vm; exit "${TEST_SETUP_STATUS:-0}" ;;
+      *) echo 'unexpected release invocation' >&2; exit 99 ;;
+    esac
+    """)
+
+    bot = Path.join(ctx.home, ".local/bin/lemon-bot")
+    File.mkdir_p!(Path.dirname(bot))
+    executable(bot, ~s(echo "bot $*"; exit "${TEST_BOT_STATUS:-0}"))
+    tui = Path.join(ctx.release, "tui/bin/lemon-tui")
+    File.mkdir_p!(Path.dirname(tui))
+    executable(tui, ~s(echo "tui $*"))
+    handoffs = Path.join(ctx.home, "handoffs")
+    File.mkdir_p!(handoffs)
+
+    env =
+      ctx.env
+      |> put("TEST_HEALTH", ~s({"ok":true}))
+      |> put("LEMON_CONTROL_PLANE_OPERATOR_TOKEN", "launcher-test-token")
+      |> put("TMPDIR", handoffs)
+
+    setup = fn steps, extra ->
+      launch(
+        ctx.release,
+        ["setup"],
+        Enum.reduce(extra, put(env, "TEST_STEPS", steps), fn {k, v}, acc -> put(acc, k, v) end)
+      )
+    end
+
+    assert {out, 0} = setup.("bot-up\\ntui\\n", [])
+    assert out =~ ~r/setup-vm.*bot up --this-machine.*tui --ws-url/s
+
+    # A failed required Bot step fails setup and skips the TUI; an optional one does not.
+    assert {out, 1} = setup.("bot-up required\\ntui\\n", [{"TEST_BOT_STATUS", "1"}])
+    assert out =~ "Resume it with 'lemon-bot up'"
+    refute out =~ "tui --ws-url"
+    assert {out, 0} = setup.("bot-up\\ntui\\n", [{"TEST_BOT_STATUS", "1"}])
+    assert out =~ "tui --ws-url"
+
+    # Arbitrary lines are never executed, and the VM's own failure is preserved.
+    assert {out, 0} = setup.("echo injected\\n", [])
+    refute out =~ "injected"
+    assert {out, 3} = setup.("tui\\n", [{"TEST_SETUP_STATUS", "3"}])
+    refute out =~ "tui --ws-url"
+
+    assert File.ls!(handoffs) == []
+  end
+
   defp launch(root, args, env) do
     System.cmd("/bin/bash", [Path.join(root, "bin/lemon") | args],
       env: env,

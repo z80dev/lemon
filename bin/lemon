@@ -493,6 +493,23 @@ run_cli() {
   exec env MIX_QUIET=1 elixir "$LEMON_ROOT/scripts/lemon_cli.exs" "$@"
 }
 
+# The setup VM's children get no controlling terminal (erl_child_setup runs in
+# its own session), so setup names "Open Lemon now?" in a private handoff file
+# and this launcher, which owns the terminal, opens the TUI after the VM exits.
+# Source checkouts never hand off Lemon Bot steps.
+run_setup() {
+  local handoff status=0 step=""
+  cd "$LEMON_ROOT"
+  MIX_QUIET=1 compile_source >&2
+  handoff="$(mktemp "${TMPDIR:-/tmp}/lemon-setup.XXXXXX")" || exit 1
+  LEMON_SETUP_HANDOFF="$handoff" MIX_QUIET=1 elixir "$LEMON_ROOT/scripts/lemon_cli.exs" "$@" ||
+    status=$?
+  IFS= read -r step <"$handoff" || true
+  rm -f "$handoff"
+  if [ "$status" -eq 0 ] && [ "$step" = tui ]; then exec "$LEMON_ROOT/bin/lemon" tui; fi
+  exit "$status"
+}
+
 parse_runtime_options() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1168,6 +1185,11 @@ case "$COMMAND" in
 
   uninstall)
     run_uninstall "$@"
+    ;;
+
+  setup)
+    ensure_managed_token || exit 1
+    run_setup "$@"
     ;;
 
   *)

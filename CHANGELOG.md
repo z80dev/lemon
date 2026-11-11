@@ -8,7 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- `lemon setup` failed to open Lemon or finish Lemon Bot setup with
+  "/dev/tty: Device not configured": programs started by setup's VM have no
+  terminal. Setup now hands the TUI and `lemon-bot up` to the `lemon` launcher,
+  which runs them in your terminal after the setup questions.
 
 ---
 
