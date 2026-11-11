@@ -9,18 +9,22 @@ LemonSim & benchmarks. Source modules and tests define implementation APIs.
 
 | Goal | Guide |
 | --- | --- |
-| Install and get a first model-backed answer | [Quickstart](getting-started/quickstart.md) |
+| Create your first Bot in the browser | [Lemon Bot](getting-started/lemon-bot.md) |
+| Get a first model-backed answer in the terminal | [Terminal quickstart](getting-started/quickstart.md) |
 | Choose a supported install or source checkout | [Install](install.md) |
-| Configure providers, secrets and channels | [Setup](user-guide/setup.md) |
+| Configure providers, secrets, channels and services | [Setup](user-guide/setup.md) |
 | Explore the assistant on real work | [Demo](demo.md) |
 | Update safely, or roll back | [Safe updates](user-guide/updates.md) |
+| Remove Lemon, with or without saved data | [Uninstall](user-guide/updates.md#uninstall) |
+| Upgrade an existing installation to the new local-first defaults | [November 2026 upgrade notes](release/upgrade-2026-11.md) |
 | Understand current limits | [Capabilities](compare.md) and [support](support.md) |
 | Understand why Lemon runs on the BEAM | [Why BEAM for agents](why-beam-for-agents.md) |
 | Watch a keyless simulation | [LemonSim UI](../apps/lemon_sim_ui/README.md#keyless-demo) |
 
 ## User guides
 
-- Interfaces: [browser](user-guide/web.md), [TUI](../clients/tui/README.md) and [CLI and sessions](user-guide/cli.md)
+- Interfaces: [Lemon Bot](getting-started/lemon-bot.md), [coding dashboard](user-guide/web.md),
+  [TUI](../clients/tui/README.md) and [CLI and sessions](user-guide/cli.md)
 - [Lemon Bot physical phone and provider acceptance](user-guide/phone-acceptance.md)
 - [Profiles](user-guide/profiles.md), [memory](user-guide/memory.md), [skills](user-guide/skills.md),
   [instruction files and rules](user-guide/context-files.md),
