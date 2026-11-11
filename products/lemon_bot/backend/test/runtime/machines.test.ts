@@ -1,8 +1,10 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
 import { createMachineRoutes, ensureMachineRuntimeReady, refreshMachines } from '../../src/runtime/machines';
 import { getTerminalService } from '../../src/runtime/terminals';
 import { fixture, compatibleFeatures } from './fixture';
+import { createSyncRoutes } from '../../src/core/sync';
+import { ApiError } from '../../src/core/errors';
 const stat = { path: '/home/worker/result.txt', type: 'regular', size: 3, mtimeMs: 101, mode: 0o600, mime: 'text/plain', readable: false, writable: true };
 
 describe('privileged destination machine boundary', () => {
@@ -40,17 +42,26 @@ describe('privileged destination machine boundary', () => {
     } finally { getTerminalService(f.services).dispose(); f.store.close(); }
   });
 
-  test('enrollment preview projects authoritative loopback and wss reachability without issuing an invite or exposing secrets', async () => {
+  test('enrollment preview reports SSH prerequisites without issuing an invite or exposing controller details', async () => {
     const f = fixture(); const routes = createMachineRoutes(f.services);
     const route = routes.find(route => route.path === '/v1/machines/enrollment-preview')!;
     try {
       expect(route.auth).toBe('admin');
       for (const reachability of ['loopback_only', 'routable'] as const) {
-        f.rpc = async method => {
-          expect(method).toBe('node.pair.preview');
-          return { reachability, controllerUrl: 'wss://private.example/ws', operatorToken: f.services.config.operatorToken };
-        };
-        expect(await route.handler(f.context(route, undefined))).toEqual({ reachability });
+        for (const [controlUrl, gateway, launcher, reason] of [
+          ['wss://controller.example/ws', true, '/private/lemon', 'controller_remote'],
+          ['ws://127.0.0.1:4040/ws', false, '/private/lemon', 'node_gateway_unavailable'],
+          ['ws://127.0.0.1:4040/ws', true, undefined, 'launcher_unavailable'],
+          ['ws://127.0.0.1:4040/ws', true, '/private/lemon', null],
+        ] as const) {
+          f.services.config.controlUrl = controlUrl;
+          f.services.config.runtimeLauncher = launcher;
+          f.rpc = async method => {
+            expect(method).toBe('node.pair.preview');
+            return { reachability, nodeGateway: { available: gateway, port: gateway ? 4044 : null }, controllerUrl: 'wss://private.example/ws', operatorToken: f.services.config.operatorToken };
+          };
+          expect(await route.handler(f.context(route, undefined))).toEqual({ reachability, ssh: { available: reason === null, reason } });
+        }
       }
       expect(f.calls.every(call => !call.mutation)).toBe(true);
       expect(f.store.list('machineInvites')).toEqual([]);
@@ -61,6 +72,77 @@ describe('privileged destination machine boundary', () => {
       await expect(route.handler(f.context(route, undefined))).rejects.toMatchObject({ code: 'upstream_unavailable' });
       expect(f.calls).toHaveLength(dispatched);
     } finally { getTerminalService(f.services).dispose(); f.store.close(); }
+  });
+
+  test('legacy links default to direct in REST and snapshots; SSH addresses require management access', async () => {
+    const f = fixture(); const routes = createMachineRoutes(f.services);
+    const list = routes.find(route => route.method === 'GET' && route.path === '/v1/machines')!;
+    const get = routes.find(route => route.method === 'GET' && route.path === '/v1/machines/:id')!;
+    const sync = createSyncRoutes(f.services).find(route => route.path === '/v1/sync')!;
+    f.store.put('workspaces', { id: f.alice.workspaceId });
+    const { link: _legacyLink, ...legacy } = f.machine;
+    f.store.put('machines', legacy);
+    const originalMachine = f.services.auth.machine.bind(f.services.auth);
+    f.services.auth.machine = (actor, machineId, manage) => {
+      if (actor.userId === f.bob.userId) {
+        if (manage) throw new ApiError('forbidden', 'Read-only host access.');
+        return f.store.require<P.Machine>('machines', machineId);
+      }
+      return originalMachine(actor, machineId, manage);
+    };
+    try {
+      expect(await get.handler(f.context(get, undefined, f.alice, { id: f.machine.id }))).toMatchObject({ link: { kind: 'direct' } });
+      expect((await list.handler(f.context(list, undefined)) as P.Page<P.Machine>).items[0]?.link).toEqual({ kind: 'direct' });
+      expect((await sync.handler(f.context(sync, undefined)) as P.Snapshot).machines[0]?.link).toEqual({ kind: 'direct' });
+      const link: P.MachineLink = { kind: 'ssh_tunnel', sshDestination: 'me@private-host', nodePort: 4044, productPort: 4100, tunnel: { state: 'unknown', detail: null, checkedAtMs: null } };
+      f.store.put('machines', { ...f.machine, link });
+      expect(await get.handler(f.context(get, undefined, f.alice, { id: f.machine.id }))).toMatchObject({ link: { sshDestination: 'me@private-host' } });
+      expect(await get.handler(f.context(get, undefined, f.bob, { id: f.machine.id }))).toMatchObject({ link: { sshDestination: null } });
+      expect((await list.handler(f.context(list, undefined, f.bob)) as P.Page<P.Machine>).items[0]?.link).toMatchObject({ kind: 'ssh_tunnel', sshDestination: null });
+      expect((await sync.handler(f.context(sync, undefined, f.bob)) as P.Snapshot).machines[0]?.link).toMatchObject({ kind: 'ssh_tunnel', sshDestination: null });
+      expect(f.store.require<P.Machine>('machines', f.machine.id).link).toMatchObject({ sshDestination: 'me@private-host' });
+    } finally { getTerminalService(f.services).dispose(); f.store.close(); }
+  });
+
+  test('SSH setup routes declare asynchronous status and reject malformed input before spawning', async () => {
+    const f = fixture(); const routes = createMachineRoutes(f.services);
+    const start = routes.find(route => route.method === 'POST' && route.path === '/v1/machines/ssh')!;
+    const get = routes.find(route => route.path === '/v1/machine-setups/:id')!;
+    try {
+      expect(start).toMatchObject({ auth: 'admin', status: 202, mutation: false });
+      await expect(Promise.resolve().then(() => start.handler(f.context(start, { clientNonce: 'machine_ssh_nonce_invalid', sshDestination: 'me@host', unknown: true })))).rejects.toMatchObject({ code: 'invalid_request' });
+      await expect(Promise.resolve().then(() => get.handler(f.context(get, undefined, f.alice, { id: 'missing_setup' })))).rejects.toMatchObject({ code: 'not_found' });
+      expect(f.calls).toHaveLength(0);
+      expect(f.store.list('machineSetups')).toEqual([]);
+    } finally { getTerminalService(f.services).dispose(); f.store.close(); }
+  });
+
+  test('detach uninstalls the tunnel only after node revocation and audits failures without blocking detach', async () => {
+    for (const exitCode of [0, 1]) {
+      const f = fixture(); f.services.config.runtimeLauncher = '/mock/lemon';
+      f.store.put('machines', { ...f.machine, link: { kind: 'ssh_tunnel', sshDestination: 'me@worker', nodePort: 4044, productPort: 4100, tunnel: { state: 'online', detail: null, checkedAtMs: 1 } } });
+      const order: string[] = [];
+      f.rpc = async (method, params) => {
+        expect(method).toBe('nodes.revoke');
+        expect(params).toEqual({ nodeId: f.machine.nodeId, confirmName: f.machine.nodeName });
+        order.push('revoke'); return { revoked: true };
+      };
+      const spawn = spyOn(Bun, 'spawn').mockImplementation(() => {
+        order.push('uninstall');
+        return { exited: Promise.resolve(exitCode), stdout: new Blob(['']).stream(), stderr: new Blob(['']).stream(), kill() {} } as unknown as Bun.Subprocess;
+      });
+      const routes = createMachineRoutes(f.services);
+      const preview = routes.find(route => route.path === '/v1/machines/:id/preview')!;
+      const remove = routes.find(route => route.method === 'DELETE' && route.path === '/v1/machines/:id')!;
+      try {
+        const confirmation = await preview.handler(f.context(preview, { clientNonce: `machine_preview_detach_${exitCode}`, action: 'detach' }, f.alice, { id: f.machine.id })) as P.Confirmation;
+        expect(await remove.handler(f.context(remove, { clientNonce: `machine_confirm_detach_${exitCode}`, confirmationToken: confirmation.confirmationToken, confirmName: confirmation.confirmName }, f.alice, { id: f.machine.id }))).toEqual({ id: f.machine.id, deleted: true });
+        expect(order).toEqual(['revoke', 'uninstall']);
+        expect(spawn.mock.calls[0]?.[0]).toEqual(['/mock/lemon', 'service', 'uninstall', 'tunnel', '--name', f.machine.nodeName, '--json']);
+        expect(f.store.require<P.Machine>('machines', f.machine.id).status).toBe('revoked');
+        expect(f.store.list<P.AuditRecord>('auditRecords', value => value.action === 'machine.tunnel_uninstall')).toMatchObject([{ outcome: exitCode === 0 ? 'succeeded' : 'failed' }]);
+      } finally { spawn.mockRestore(); getTerminalService(f.services).dispose(); f.store.close(); }
+    }
   });
 
   test('accepts live authenticated privacy capability descriptors without inventing grants', async () => {

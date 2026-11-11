@@ -139,7 +139,7 @@ export function baseBotMcpConfig(s: BackendServices, bot: P.Bot): McpDefinition 
 export function baseBotMcpTemplate(s: BackendServices, machine: P.Machine): McpDefinition {
   const url = botEndpoint(s, machine);
   const approved = s.config.operator.approvedPrivateMcpOrigins ?? [];
-  // A proven same-host loopback endpoint is itself the explicitly approved private destination.
+  // Same-host and SSH-forwarded loopback endpoints are explicitly approved private destinations.
   const isPrivate = approved.includes(url.origin) || loopbackEndpoint(url);
   return { name: 'lemon-bot', url: url.href, headers: {}, enabledTools: [...productBotTools], allowedOrigins: [url.origin], approvedPrivateOrigins: isPrivate ? [url.origin] : [] };
 }
@@ -148,14 +148,14 @@ function loopbackEndpoint(url: URL): boolean {
   return url.protocol === 'http:' && (url.hostname === '127.0.0.1' || url.hostname === '[::1]') && !url.username && !url.password;
 }
 /**
- * Workers reach the product over its public origin. Off-host workers need reachable HTTPS; a loopback origin
- * serves only workers proven to share this backend's host (see `proveSameHost`), so its bearer never leaves it.
+ * Workers reach the product over its public origin. A loopback origin is allowed only for proven
+ * same-host workers or an SSH machine forwarding that exact product port from this backend.
  */
 function botEndpoint(s: BackendServices, machine?: P.Machine): URL {
   const url = new URL('/mcp', s.config.publicUrl);
   const loopbackName = url.hostname === 'localhost' || url.hostname.endsWith('.localhost') || /^127\./.test(url.hostname) || url.hostname === '[::1]' || url.hostname === '0.0.0.0';
   if (url.protocol === 'https:' && !url.username && !url.password && !loopbackName) return url;
-  if (machine && loopbackEndpoint(url) && sameHost(s, machine)) return url;
+  if (machine && loopbackEndpoint(url) && (sameHost(s, machine) || machine.link?.kind === 'ssh_tunnel' && machine.link.productPort === Number(url.port || '80'))) return url;
   process.stderr.write('LEMON_BOT_PUBLIC_URL must be a worker-reachable non-loopback HTTPS origin for Bots on other machines.\n');
   if (machine && loopbackEndpoint(url)) fail('capability_unavailable', `Lemon Bot is only reachable on its own computer, so Bots can run there but not on ${machine.name}. Give Lemon Bot a secure address that ${machine.name} can reach, or choose the machine Lemon Bot runs on.`);
   fail('capability_unavailable', 'This server needs a secure address your machine can reach before Bot setup can finish. Ask the operator to configure it.');

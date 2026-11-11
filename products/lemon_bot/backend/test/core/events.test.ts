@@ -5,7 +5,7 @@ import { installHelpers } from '../../src/core/helpers';
 import { botPresence, createExperienceService } from '../../src/core/experiences';
 import { fixture as runtimeFixture } from '../runtime/fixture';
 import type { BackendServices, Principal } from '../../src/core/services';
-import type { Notification, RealtimeEvent, Run, TranscriptEntry } from '../../../contracts/protocol';
+import type { Machine, Notification, RealtimeEvent, Run, TranscriptEntry } from '../../../contracts/protocol';
 const alice:Principal={kind:'user',id:'alice',userId:'alice',workspaceId:'workspace',role:'member',sessionId:'session',botId:null,deviceId:null};
 const bob:Principal={...alice,id:'bob',userId:'bob',role:'owner'};
 function fixture(){
@@ -23,6 +23,25 @@ function finalizationFixture(){
   return {...f,run,entry};
 }
 describe('persisted realtime authorization and transaction boundary',()=>{
+  test('machine events redact SSH destinations on publication and historical replay, and normalize legacy links',()=>{
+    const f=runtimeFixture();const observed:RealtimeEvent[]=[];
+    try {
+      f.services.events.subscribe(event=>{observed.push(event);});
+      const machine:Machine={...f.machine,link:{kind:'ssh_tunnel',sshDestination:'me@private-host',nodePort:4044,productPort:4100,tunnel:{state:'online',detail:null,checkedAtMs:1}}};
+      f.store.put('machines',machine);
+      const published=f.services.events.emit('machine.upserted',machine,{machineId:machine.id});
+      expect(observed).toEqual([published]);
+      expect(published.payload).toMatchObject({link:{kind:'ssh_tunnel',sshDestination:null}});
+      expect(f.store.require<Machine>('machines',machine.id).link).toMatchObject({sshDestination:'me@private-host'});
+      // Older event rows may contain a full stored machine; replay must apply today's privacy projection.
+      f.store.db.query('UPDATE events SET payload=? WHERE seq=?').run(JSON.stringify(machine),BigInt(published.seq));
+      expect(f.services.events.replay(f.alice,'0')[0]?.payload).toMatchObject({link:{sshDestination:null}});
+      const {link:_link,...legacy}=machine;
+      f.store.db.query('UPDATE events SET payload=? WHERE seq=?').run(JSON.stringify(legacy),BigInt(published.seq));
+      expect(f.services.events.replay(f.alice,'0')[0]?.payload).toMatchObject({link:{kind:'direct'}});
+      expect(f.services.events.emit('machine.upserted',legacy,{machineId:machine.id}).payload).toMatchObject({link:{kind:'direct'}});
+    } finally {f.store.close();}
+  });
   test('private replay filters before delivery even for workspace owner and resumes across invisible gaps',()=>{
     const {store,services,notification}=fixture();const first=services.events.emit('notification.upserted',notification('alice'),{userIds:['alice']});const second=services.events.emit('notification.upserted',notification('bob'),{userIds:['bob']});
     expect(services.events.replay(alice,'0').map(event=>event.seq)).toEqual([first.seq]);expect(services.events.replay(bob,'0').map(event=>event.seq)).toEqual([second.seq]);expect(services.events.cursor()).toBe(second.seq);
