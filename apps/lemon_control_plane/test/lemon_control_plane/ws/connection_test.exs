@@ -83,7 +83,12 @@ defmodule LemonControlPlane.WS.ConnectionTest do
       LemonCore.Store.delete(:nodes_registry, node_id)
     end)
 
-    assert {:ok, state} = Connection.init([])
+    assert {:ok, state} =
+             Connection.init(
+               peer: {127, 0, 0, 1},
+               allowed_roles: [:node, :enrollment],
+               tokenless: false
+             )
 
     frame =
       Jason.encode!(%{
@@ -134,7 +139,12 @@ defmodule LemonControlPlane.WS.ConnectionTest do
         "params" => %{"auth" => %{"token" => token}, "capabilities" => stored}
       })
 
-    assert {:ok, reconnect_state} = Connection.init([])
+    assert {:ok, reconnect_state} =
+             Connection.init(
+               peer: {127, 0, 0, 1},
+               allowed_roles: [:node, :enrollment],
+               tokenless: false
+             )
 
     assert {:push, {:text, fresh_hello}, _} =
              Connection.handle_in({frame, [opcode: :text]}, reconnect_state)

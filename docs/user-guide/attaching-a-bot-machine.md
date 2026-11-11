@@ -19,9 +19,22 @@ export LEMON_CONTROL_PLANE_PUBLIC_WS_URL='wss://controller.example/ws'
 ```
 
 This setting generates join commands; it does not configure TLS or expose a
-listener. Arrange TLS termination and routing to the existing control plane
-separately. An Elixir deployment can instead set
-`:lemon_control_plane, :public_ws_url`. Without either setting, the command uses
+listener. Route a TLS proxy (for example Tailscale Serve) to the **node gateway
+at `http://127.0.0.1:4044`**, never the main port 4040. The gateway serves only
+`GET /ws` for authenticated node/enrollment roles and `GET /healthz`; it cannot
+authenticate operators or expose OpenAI/ACP. Its bind/port are configurable via
+`LEMON_CONTROL_PLANE_NODE_BIND_IP` and `LEMON_CONTROL_PLANE_NODE_PORT`.
+An occupied or disabled (`0`) gateway port requires fixing before forwarding.
+
+Keep operator access local. A trusted remote backend needing operator `/ws`
+must use a separate TLS, path-limited proxy to **4040 `/ws` only** and authenticate
+with the operator token. Do not forward the whole main listener. Main and web
+listeners now bind loopback by default; LAN binds require explicit opt-in and
+operator authentication. Never enable tokenless loopback compatibility behind
+either proxy.
+
+An Elixir deployment can instead set `:lemon_control_plane, :public_ws_url`.
+Without either setting, the command uses
 `ws://127.0.0.1:<control-plane-port>/ws`, suitable only for a machine on the same
 host. Off-loopback invite commands require `wss://`; URLs must not contain user
 credentials, query credentials, or fragments.

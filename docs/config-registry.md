@@ -138,19 +138,21 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_A2A_PUBLIC_URL` | string | _(none)_ |  | `lemon_control_plane` | Public A2A JSON-RPC URL advertised in Lemon's Agent Card. |
 | `LEMON_A2A_RATE_LIMIT_PER_MINUTE` | integer | _(none)_ |  | `lemon_control_plane` | Per-peer A2A JSON-RPC request limit per minute. |
 | `LEMON_A2A_REPLY_TIMEOUT_MS` | integer | _(none)_ |  | `lemon_control_plane` | Maximum synchronous wait for an A2A peer run. |
-| `LEMON_ACP_API_TOKEN` | string | _(none)_ | yes | `lemon_control_plane` | Bearer token required for the ACP (agent control protocol) HTTP API. |
+| `LEMON_ACP_API_TOKEN` | string | _(none)_ | yes | `lemon_control_plane` | Bearer token for the ACP (agent control protocol) HTTP API; defaults to the operator token. |
 | `LEMON_AGENT_PROFILES_CWD` | string | _(none)_ |  | `lemon_router` | Working directory override used to resolve router agent profiles. |
-| `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` | boolean | `false` |  | `lemon_control_plane` | Explicitly allow legacy tokenless WebSocket operator access from direct loopback peers. |
+| `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` | boolean | `false` |  | `lemon_control_plane` | Explicitly allow legacy tokenless operator, OpenAI, ACP and A2A access from direct loopback peers. |
+| `LEMON_CONTROL_PLANE_BIND_IP` | string | `127.0.0.1` |  | `lemon_control_plane` | Control-plane bind address; non-loopback requires an operator token and disables tokenless compatibility. |
 | `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` | string | _(none)_ | yes | `lemon_control_plane` | Shared operator credential required by control-plane WebSocket operator connections. |
 | `LEMON_CONTROL_PLANE_PORT` | integer | _(none)_ |  | `lemon_control_plane` | Port the control-plane HTTP server listens on. |
+| `LEMON_CONTROL_PLANE_REMOTE_HTTP` | list (comma-separated) | `[]` |  | `lemon_control_plane` | Off-loopback HTTP API opt-in (openai,acp); each enabled API requires its dedicated token. |
 | `LEMON_GATEWAY_ENABLE_A2A` | boolean | `false` |  | `lemon_control_plane` | Enable the A2A peer listener. |
 | `LEMON_GATEWAY_HEALTH_PORT` | integer | _(none)_ |  | `lemon_gateway` | Port the gateway health-check endpoint listens on. |
-| `LEMON_OPENAI_COMPAT_API_TOKEN`<br>_(alias: `LEMON_OPENAI_COMPAT_TOKEN`)_ | string | _(none)_ | yes | `lemon_control_plane` | Bearer token required for the OpenAI-compatible HTTP API. |
+| `LEMON_OPENAI_COMPAT_API_TOKEN`<br>_(alias: `LEMON_OPENAI_COMPAT_TOKEN`)_ | string | _(none)_ | yes | `lemon_control_plane` | Bearer token for the OpenAI-compatible HTTP API; defaults to the operator token. |
 | `LEMON_OPENAI_COMPAT_IMAGE_URL_ALLOWED_HOSTS`<br>_(alias: `LEMON_OPENAI_COMPAT_IMAGE_HOST_ALLOWLIST`)_ | list (comma-separated) | `[]` |  | `lemon_control_plane` | Comma-separated hostname allowlist for OpenAI-compat image URL fetch. |
 | `LEMON_OPENAI_COMPAT_IMAGE_URL_FETCH` | boolean | `false` |  | `lemon_control_plane` | Whether the OpenAI-compat endpoint is allowed to fetch image URLs from messages. |
 | `LEMON_ROUTER_HEALTH_PORT` | integer | _(none)_ |  | `lemon_router` | Port the router health-check endpoint listens on. |
 | `LEMON_SIM_UI_ACCESS_TOKEN` | string | _(none)_ | yes | `lemon_sim_ui` | Admin token; required with at least 32 bytes for a production Sim UI endpoint. |
-| `LEMON_SIM_UI_BIND_IP` | string | `127.0.0.1` |  | `lemon_sim_ui` | Bind IP address for the LemonSimUi dev endpoint. |
+| `LEMON_SIM_UI_BIND_IP` | string | `127.0.0.1` |  | `lemon_sim_ui` | Bind IP address for the LemonSimUi endpoint in development and releases. |
 | `LEMON_SIM_UI_HOST` | string | `localhost` |  | `lemon_sim_ui` | Public hostname for the LemonSimUi prod endpoint; explicit in production. |
 | `LEMON_SIM_UI_PORT` | integer | `4090` |  | `lemon_sim_ui` | Port LemonSimUi listens on. |
 | `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER` | boolean | `false` |  | `lemon_sim_ui` | Whether the public VendingBench launcher page is exposed. |
@@ -158,6 +160,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_SIM_UI_SUITE_ROOTS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Colon-separated extra suite root directories for LemonSimUi. |
 | `LEMON_SIM_UI_URL_PORT` | integer | `443` |  | `lemon_sim_ui` | Public URL port for generated LemonSimUi links. |
 | `LEMON_SIM_UI_URL_SCHEME` | string | `https` |  | `lemon_sim_ui` | Public URL scheme for generated LemonSimUi links (http or https). |
+| `LEMON_WEB_BIND_IP` | string | `127.0.0.1` |  | `lemon_web` | LemonWeb bind address; non-loopback requires an operator token and TLS should terminate in front. |
 | `LEMON_WEB_HOST` | string | `localhost` |  | `lemon_web` | Public hostname for the LemonWeb prod endpoint. |
 | `LEMON_WEB_PORT` | integer | `4080` |  | `lemon_web` | Port LemonWeb listens on. |
 | `LEMON_WEB_SECRET_KEY_BASE` | string | _(none)_ | yes | `lemon_web` | Phoenix secret_key_base for the LemonWeb prod endpoint. |
@@ -188,6 +191,8 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
+| `LEMON_CONTROL_PLANE_NODE_BIND_IP` | string | `127.0.0.1` |  | `lemon_control_plane` | Node-only gateway bind address; accepts authenticated nodes and enrollment, never operators. |
+| `LEMON_CONTROL_PLANE_NODE_PORT` | integer | `4044` |  | `lemon_control_plane` | Node-only WebSocket gateway port; 0 disables the listener. |
 | `LEMON_CONTROL_PLANE_PUBLIC_WS_URL` | string | _(none)_ |  | `lemon_control_plane` | Reachable secure control-plane WebSocket URL embedded in node invitations; ws is allowed only for loopback. |
 | `LEMON_NODE_INSTALL_BASE_URL` | string | _(none)_ |  | `lemon_control_plane` | HTTPS operator-supported pinned node artifact base URL passed to the existing installer; never defaults to published artifacts. |
 | `LEMON_NODE_INSTALL_VERSION` | string | _(none)_ |  | `lemon_control_plane` | Exact operator-supported node artifact CalVer; requires an HTTPS node install base URL and actual feature checks. |

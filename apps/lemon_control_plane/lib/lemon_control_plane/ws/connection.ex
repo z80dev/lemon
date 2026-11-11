@@ -39,6 +39,7 @@ defmodule LemonControlPlane.WS.Connection do
     :state_version,
     :delivery,
     :heartbeat_timer_ref,
+    allowed_roles: :all,
     resync_required: false
   ]
 
@@ -51,7 +52,8 @@ defmodule LemonControlPlane.WS.Connection do
           state_version: map(),
           delivery: Delivery.t() | nil,
           resync_required: boolean(),
-          heartbeat_timer_ref: reference() | nil
+          heartbeat_timer_ref: reference() | nil,
+          allowed_roles: :all | [Authorize.role()]
         }
 
   ## WebSock Callbacks
@@ -61,12 +63,9 @@ defmodule LemonControlPlane.WS.Connection do
     conn_id = LemonCore.Id.uuid()
 
     local? =
-      opts |> Keyword.get(:peer) |> local_peer?() and
-        Application.get_env(
-          :lemon_control_plane,
-          :allow_unauthenticated_loopback_operator,
-          false
-        ) == true
+      Keyword.get(opts, :tokenless, true) and local_peer?(Keyword.get(opts, :peer)) and
+        Application.get_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, false) ==
+          true
 
     state = %__MODULE__{
       conn_id: conn_id,
@@ -74,6 +73,7 @@ defmodule LemonControlPlane.WS.Connection do
       connected: false,
       event_seq: 0,
       local?: local?,
+      allowed_roles: Keyword.get(opts, :allowed_roles, :all),
       state_version: %{},
       delivery: Delivery.new(self())
     }
@@ -314,12 +314,17 @@ defmodule LemonControlPlane.WS.Connection do
   defp handle_connect(id, params, state) do
     case Authorize.from_params(params || %{}, local?: state.local?) do
       {:ok, auth} ->
-        case register_node_connection(auth, params || %{}) do
-          :ok ->
-            finish_connect(auth, state)
+        if state.allowed_roles == :all or auth.role in state.allowed_roles do
+          case register_node_connection(auth, params || %{}) do
+            :ok ->
+              finish_connect(auth, state)
 
-          {:error, error} ->
-            {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
+            {:error, error} ->
+              {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
+          end
+        else
+          error = Errors.unauthorized("This endpoint accepts only execution nodes")
+          {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
         end
 
       {:error, {:unauthorized, message}} ->

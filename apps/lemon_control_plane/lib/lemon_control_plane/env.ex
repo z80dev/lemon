@@ -10,6 +10,57 @@ defmodule LemonControlPlane.Env do
 
   @declarations [
     %{
+      name: :lemon_control_plane_bind_ip,
+      env_var: "LEMON_CONTROL_PLANE_BIND_IP",
+      aliases: [],
+      type: :string,
+      default: "127.0.0.1",
+      doc:
+        "Control-plane bind address; non-loopback requires an operator token and disables tokenless compatibility.",
+      secret?: false,
+      required?: false,
+      area: :endpoints,
+      apps: [:lemon_control_plane]
+    },
+    %{
+      name: :lemon_control_plane_node_port,
+      env_var: "LEMON_CONTROL_PLANE_NODE_PORT",
+      aliases: [],
+      type: :integer,
+      default: 4044,
+      doc: "Node-only WebSocket gateway port; 0 disables the listener.",
+      secret?: false,
+      required?: false,
+      area: :execution_nodes,
+      apps: [:lemon_control_plane]
+    },
+    %{
+      name: :lemon_control_plane_node_bind_ip,
+      env_var: "LEMON_CONTROL_PLANE_NODE_BIND_IP",
+      aliases: [],
+      type: :string,
+      default: "127.0.0.1",
+      doc:
+        "Node-only gateway bind address; accepts authenticated nodes and enrollment, never operators.",
+      secret?: false,
+      required?: false,
+      area: :execution_nodes,
+      apps: [:lemon_control_plane]
+    },
+    %{
+      name: :lemon_control_plane_remote_http,
+      env_var: "LEMON_CONTROL_PLANE_REMOTE_HTTP",
+      aliases: [],
+      type: :list,
+      default: [],
+      doc:
+        "Off-loopback HTTP API opt-in (openai,acp); each enabled API requires its dedicated token.",
+      secret?: false,
+      required?: false,
+      area: :endpoints,
+      apps: [:lemon_control_plane]
+    },
+    %{
       name: :lemon_control_plane_public_ws_url,
       env_var: "LEMON_CONTROL_PLANE_PUBLIC_WS_URL",
       aliases: [],
@@ -150,7 +201,8 @@ defmodule LemonControlPlane.Env do
       aliases: [],
       type: :string,
       default: nil,
-      doc: "Bearer token required for the ACP (agent control protocol) HTTP API.",
+      doc:
+        "Bearer token for the ACP (agent control protocol) HTTP API; defaults to the operator token.",
       secret?: true,
       required?: false,
       area: :endpoints,
@@ -187,7 +239,7 @@ defmodule LemonControlPlane.Env do
       type: :boolean,
       default: false,
       doc:
-        "Explicitly allow legacy tokenless WebSocket operator access from direct loopback peers.",
+        "Explicitly allow legacy tokenless operator, OpenAI, ACP and A2A access from direct loopback peers.",
       secret?: false,
       required?: false,
       area: :endpoints,
@@ -199,7 +251,7 @@ defmodule LemonControlPlane.Env do
       aliases: ["LEMON_OPENAI_COMPAT_TOKEN"],
       type: :string,
       default: nil,
-      doc: "Bearer token required for the OpenAI-compatible HTTP API.",
+      doc: "Bearer token for the OpenAI-compatible HTTP API; defaults to the operator token.",
       secret?: true,
       required?: false,
       area: :endpoints,

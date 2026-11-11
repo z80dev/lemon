@@ -10,6 +10,19 @@ defmodule LemonWeb.Env do
 
   @declarations [
     %{
+      name: :lemon_web_bind_ip,
+      env_var: "LEMON_WEB_BIND_IP",
+      aliases: [],
+      type: :string,
+      default: "127.0.0.1",
+      doc:
+        "LemonWeb bind address; non-loopback requires an operator token and TLS should terminate in front.",
+      secret?: false,
+      required?: false,
+      area: :endpoints,
+      apps: [:lemon_web]
+    },
+    %{
       name: :lemon_web_host,
       env_var: "LEMON_WEB_HOST",
       aliases: [],
