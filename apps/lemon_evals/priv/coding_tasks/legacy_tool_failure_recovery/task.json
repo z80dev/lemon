@@ -1,0 +1,7 @@
+{
+  "id": "legacy_tool_failure_recovery",
+  "language": "python",
+  "category": "debugging",
+  "difficulty": "medium",
+  "prompt": "First run `python3 missing_check.py` to observe its failure. Recover by inspecting calculator.py and running the real test_calculator.py instead. Fix the integer division bug in average; empty input must raise ValueError. Add an empty-input regression test. Use Python standard-library unittest for any tests; do not install dependencies."
+}

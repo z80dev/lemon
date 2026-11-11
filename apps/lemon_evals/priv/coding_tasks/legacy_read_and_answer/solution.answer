@@ -1,0 +1,1 @@
+Production uses port 7317; staging uses port 7304. ports.port(environment) reads config.json and adds the shared base_port of 7300 to the selected environment offset. Production has offset 17, while staging has offset 4, so staging differs by 13. No files were modified.

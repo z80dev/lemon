@@ -1,0 +1,7 @@
+{
+  "id": "legacy_order_dependent_policy_cache",
+  "language": "python",
+  "category": "debugging",
+  "difficulty": "hard",
+  "prompt": "Diagnose and fix the reproducibly order-dependent policy tests. Use repro.py with multiple seeds, preserve caching and all existing assertions, and add regression tests. README.md defines isolation, deny precedence, snapshot, and per-call grant semantics. Use Python standard-library unittest for any tests; do not install dependencies."
+}

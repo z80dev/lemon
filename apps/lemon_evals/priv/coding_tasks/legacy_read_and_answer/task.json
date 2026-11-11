@@ -1,0 +1,8 @@
+{
+  "id": "legacy_read_and_answer",
+  "language": "python",
+  "category": "read_only",
+  "difficulty": "easy",
+  "prompt": "Inspect the source and configuration. Explain which port production uses and why staging differs. Do not modify files. Include both numeric port values in your answer. Use Python standard-library unittest for any tests; do not install dependencies.",
+  "read_only": true
+}

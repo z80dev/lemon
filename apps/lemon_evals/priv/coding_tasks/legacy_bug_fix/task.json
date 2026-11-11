@@ -3,5 +3,5 @@
   "language": "python",
   "category": "bug_fix",
   "difficulty": "easy",
-  "prompt": "Fix the slug function so punctuation does not leave repeated or edge hyphens. Run the existing tests. Use Python standard-library unittest for any tests."
+  "prompt": "Fix the slug function so punctuation does not leave repeated or edge hyphens. Run the existing tests. Use Python standard-library unittest for any tests; do not install dependencies."
 }
