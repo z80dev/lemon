@@ -127,11 +127,15 @@ public struct ConversationView: View {
         return Group {
             #if os(iOS)
             // The composer belongs to the keyboard-adjusted safe area, not the transcript's content.
-            transcript(rows, entries: entries, typing: showTyping, highlight: findOpen && !find.isEmpty ? current : flashID)
-                .safeAreaInset(edge: .bottom, spacing: 0) { bottomStack.background(LB.canvas) }
+            VStack(spacing: 0) {
+                ModelReadinessBanner(store: store, bot: bot)
+                transcript(rows, entries: entries, typing: showTyping, highlight: findOpen && !find.isEmpty ? current : flashID)
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) { bottomStack.background(LB.canvas) }
             #else
             VStack(spacing: 0) {
                 HostOfflineBanner(store: store, bot: bot, belowHeader: true)
+                ModelReadinessBanner(store: store, bot: bot)
                 transcript(rows, entries: entries, typing: showTyping, highlight: findOpen && !find.isEmpty ? current : flashID)
                 bottomStack
             }
@@ -838,5 +842,56 @@ struct TranscriptEventView: View {
     private func botName(_ id: ID) -> String { store.bots.first { $0.id == id }?.name ?? "A Bot" }
     private func link<Destination: View>(_ label: String, @ViewBuilder destination: () -> Destination) -> some View {
         NavigationLink { destination() } label: { Text(label).font(LBFont.metaEmphasis).foregroundStyle(LB.accent) }.buttonStyle(.plain)
+    }
+}
+
+struct ModelReadinessBanner: View {
+    let store: LemonBotStore
+    let bot: Bot?
+    @State private var showSettings = false
+
+    private var machine: Machine? {
+        guard let bot else { return nil }
+        return store.machines.first { $0.id == bot.machineId }
+    }
+
+    private var isSkipped: Bool {
+        guard let machine else { return false }
+        return ModelReadinessSkipStore.isSkipped(workspaceID: store.workspace?.id, machineID: machine.id)
+    }
+
+    /// Last known readiness only. An unread or unreadable target never claims "no model".
+    private var isModelReady: Bool {
+        guard let machine, store.providerSettings.machineID == machine.id,
+              let readiness = store.providerSettings.management?.readiness else { return true }
+        return readiness.isReady
+    }
+
+    var body: some View {
+        if let machine, isSkipped, !isModelReady {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(LB.warning)
+                Text("No model is connected on \(machine.name) — replies will fail until you connect one.")
+                    .font(LBFont.meta)
+                    .foregroundStyle(LB.ink)
+                Spacer()
+                Button("Connect a model") {
+                    Task {
+                        if store.providerSettings.machineID != machine.id { await store.selectProviderTarget(machineID: machine.id) }
+                        showSettings = true
+                    }
+                }
+                .buttonStyle(.pill(.secondary, compact: true))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(LB.raised)
+            .sheet(isPresented: $showSettings) {
+                NavigationStack {
+                    ProvidersSettingsView(store: store)
+                }
+            }
+        }
     }
 }

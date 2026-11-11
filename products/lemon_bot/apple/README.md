@@ -9,6 +9,15 @@ as web: measured capability names, Off / View only / Full, warnings only when
 effective access differs, and one Why disclosure for raw reasons and policy.
 Desktop permissions remain inspection-only; these controls never prompt for TCC.
 
+Create Bot checks model readiness on the selected execution machine, not the
+controller. Detected Codex CLI logins require explicit copy consent; device-code
+sign-in and API-key entry are alternatives. **Verified** and **Saved** both allow
+creation. **Skip for now** is remembered locally per workspace and machine, with
+a conversation reminder until a model is connected. Providers settings offer
+**Check now** and consented import; checks send no message but may refresh the
+target's OAuth token. Older runtimes and users without provider-management access
+are not gated on unavailable model status.
+
 ## End-user release packaging
 
 End users open the notarized DMG, drag **Lemon Bot** to **Applications**, and launch

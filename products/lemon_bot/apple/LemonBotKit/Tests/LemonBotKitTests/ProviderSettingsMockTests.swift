@@ -544,3 +544,205 @@ extension ProviderSettingsMockTests {
         }
     }
 }
+
+// Model readiness: optional wire fields, the explicit check/import request shapes and the soft gate.
+// MOCK TRANSPORT ONLY: no provider, machine or real configuration is contacted.
+extension ProviderSettingsMockTests {
+    private func readiness(_ state: ModelReadiness.State = .verified) -> ModelReadiness {
+        ModelReadiness(state: state, providerId: "openai_codex", modelId: "mock-model", check: .codexDiscovery, reason: state == .verified ? nil : .credentialMissing,
+                       availableModelIds: ["mock-model", "mock-other"], suggestedModelId: "mock-model", checkedAtMs: 1_731_283_200_000)
+    }
+    private func readinessInventory(_ state: ModelReadiness.State = .verified, detected: [DetectedLogin] = [.init(source: .codexCLI, providerId: "openai_codex")]) -> ProviderManagement {
+        var management = inventory()
+        management.readiness = readiness(state)
+        management.detected = detected
+        return management
+    }
+
+    func testMockListingDecodesWithAndWithoutReadinessAndDetected() throws {
+        let legacy = Data(#"{"target":{"id":"mock-controller","nodeId":null,"hostname":"mock-host"},"default":{"providerId":null,"modelId":null},"providers":[]}"#.utf8)
+        let old = try JSONDecoder().decode(ProviderManagement.self, from: legacy)
+        XCTAssertNil(old.readiness)
+        XCTAssertEqual(old.detected, [])
+
+        let current = Data(#"""
+        {"target":{"id":"mock-controller","nodeId":null,"hostname":"mock-host"},"default":{"providerId":"openai_codex","modelId":"mock-model"},"providers":[],
+         "readiness":{"state":"action_required","providerId":"openai_codex","modelId":"mock-model","check":"codex_discovery","reason":"model_unavailable","availableModelIds":["mock-model"],"suggestedModelId":"mock-model","checkedAtMs":1731283200000},
+         "detected":[{"source":"codex_cli","providerId":"openai_codex"},{"source":"environment","providerId":"anthropic","variable":"ANTHROPIC_API_KEY"}]}
+        """#.utf8)
+        let listing = try JSONDecoder().decode(ProviderManagement.self, from: current)
+        XCTAssertEqual(listing.readiness?.state, .actionRequired)
+        XCTAssertEqual(listing.readiness?.check, .codexDiscovery)
+        XCTAssertEqual(listing.readiness?.reason, .modelUnavailable)
+        XCTAssertEqual(listing.readiness?.suggestedModelId, "mock-model")
+        XCTAssertEqual(listing.readiness?.checkedAtMs, 1_731_283_200_000)
+        XCTAssertEqual(listing.detected.map(\.source), [.codexCLI, .environment])
+        XCTAssertEqual(listing.detected.last?.variable, "ANTHROPIC_API_KEY")
+        XCTAssertFalse(listing.readiness?.isReady ?? true)
+
+        let nullReadiness = Data(#"{"target":{"id":"mock-controller","nodeId":null,"hostname":"mock-host"},"default":{"providerId":null,"modelId":null},"providers":[],"readiness":null,"detected":[]}"#.utf8)
+        let projected = try JSONDecoder().decode(ProviderManagement.self, from: nullReadiness)
+        XCTAssertNil(projected.readiness)
+        XCTAssertEqual(projected.detected, [])
+
+        let result = try JSONDecoder().decode(ProviderCheckResult.self, from: Data(#"""
+        {"management":{"target":{"id":"mock-controller","nodeId":null,"hostname":"mock-host"},"default":{"providerId":"openai_codex","modelId":"mock-model"},"providers":[]},
+         "readiness":{"state":"saved","providerId":"openai_codex","modelId":"mock-model","check":null,"reason":"check_unavailable","availableModelIds":null,"suggestedModelId":null,"checkedAtMs":null}}
+        """#.utf8))
+        XCTAssertEqual(result.readiness.state, .saved)
+        XCTAssertTrue(result.readiness.isReady)
+        XCTAssertNil(result.management.readiness)
+    }
+
+    func testMockCheckSendsTargetBoundBodyAndAdoptsReturnedReadiness() async throws {
+        let (store, _) = try makeStore()
+        store.providerSettings.management = readinessInventory(.actionRequired)
+        let checked = ProviderCheckResult(management: readinessInventory(.actionRequired), readiness: readiness(.verified))
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/instance/providers/check")
+            let body = try self.requestBody(request)
+            XCTAssertEqual(body["targetId"], .string("mock-controller"))
+            XCTAssertEqual(body["providerId"], .string("openai_codex"))
+            XCTAssertNotNil(body["clientNonce"]?.stringValue)
+            XCTAssertEqual(Set(body.keys), ["targetId", "providerId", "clientNonce"])
+            return (200, [:], try JSONEncoder().encode(checked))
+        }
+        let result = await store.checkProviders(providerID: "openai_codex")
+        XCTAssertEqual(result?.readiness.state, .verified)
+        XCTAssertEqual(store.providerSettings.management?.readiness?.state, .verified)
+        XCTAssertTrue(store.pendingIntents.isEmpty)
+
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(Set(try self.requestBody(request).keys), ["targetId", "clientNonce"])
+            return (200, [:], try JSONEncoder().encode(checked))
+        }
+        _ = await store.checkProviders()
+        XCTAssertEqual(TestHTTPProtocol.requests.last?.url?.path, "/v1/instance/providers/check")
+    }
+
+    func testMockCheckRejectsAnotherTargetsResultAndKeepsNoInventory() async throws {
+        let (store, _) = try makeStore()
+        store.providerSettings.management = readinessInventory()
+        let foreign = ProviderCheckResult(management: inventory(nodeID: "mock-node", targetID: "mock-other-target"), readiness: readiness())
+        TestHTTPProtocol.handler = { _ in (200, [:], try JSONEncoder().encode(foreign)) }
+        let result = await store.checkProviders()
+        XCTAssertNil(result)
+        XCTAssertEqual(store.providerSettings.management?.target.id, "mock-controller")
+        XCTAssertNotNil(store.providerSettings.message)
+    }
+
+    func testMockImportCarriesExplicitConsentAndNeverChangesTheDefault() async throws {
+        let (store, _) = try makeStore()
+        store.providerSettings.management = readinessInventory(.actionRequired)
+        var listing = readinessInventory(.saved, detected: [])
+        listing.providers[1].configured = true
+        listing.providers[1].status = .ready
+        let imported = listing
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/instance/providers/openai_codex/import")
+            let body = try self.requestBody(request)
+            XCTAssertEqual(body["targetId"], .string("mock-controller"))
+            XCTAssertEqual(body["source"], .string("codex_cli"))
+            XCTAssertEqual(body["consent"], .string("copy_login"))
+            XCTAssertEqual(Set(body.keys), ["targetId", "source", "consent", "clientNonce"])
+            return (200, [:], try JSONEncoder().encode(imported))
+        }
+        let result = await store.importCodexLogin()
+        XCTAssertEqual(result?.default, self.inventory().default)
+        XCTAssertEqual(store.providerSettings.management?.default.providerId, "anthropic")
+        XCTAssertEqual(store.providerSettings.management?.providers.first(where: { $0.id == "openai_codex" })?.configured, true)
+        XCTAssertTrue(store.pendingIntents.isEmpty)
+    }
+
+    func testMockCheckAndImportAreTargetBoundToTheSelectedMachine() async throws {
+        let (store, _) = try makeStore()
+        let owned = Machine(id: "mock-owned", revision: 1, createdAtMs: 1, updatedAtMs: 1, nodeId: "mock-node", nodeName: "mock-worker", name: "Mock worker", ownerUserId: saved().userID, accessUserIds: [], status: "online", labels: [:], botIds: [])
+        store.machines = [owned]
+        var listing = inventory(nodeID: "mock-node", targetID: "mock-worker-target")
+        listing.readiness = readiness(.actionRequired)
+        listing.detected = [.init(source: .codexCLI, providerId: "openai_codex")]
+        let management = listing
+        let checked = ProviderCheckResult(management: management, readiness: readiness())
+        TestHTTPProtocol.handler = { request in
+            XCTAssertTrue(request.url!.path.hasPrefix("/v1/machines/mock-owned/providers"))
+            if request.httpMethod == "GET" { return (200, [:], try JSONEncoder().encode(management)) }
+            XCTAssertEqual(try self.requestBody(request)["targetId"], .string("mock-worker-target"))
+            if request.url!.path.hasSuffix("/check") { return (200, [:], try JSONEncoder().encode(checked)) }
+            return (200, [:], try JSONEncoder().encode(management))
+        }
+        await store.selectProviderTarget(machineID: owned.id)
+        XCTAssertEqual(store.providerSettings.management?.readiness?.state, .actionRequired)
+        _ = await store.checkProviders()
+        XCTAssertEqual(TestHTTPProtocol.requests.last?.url?.path, "/v1/machines/mock-owned/providers/check")
+        XCTAssertEqual(store.providerSettings.management?.readiness?.state, .verified)
+        _ = await store.importCodexLogin()
+        XCTAssertEqual(TestHTTPProtocol.requests.last?.url?.path, "/v1/machines/mock-owned/providers/openai_codex/import")
+    }
+
+    func testMockCheckAndImportRequireWritableOwnerTargetAndNeverDispatchOtherwise() async throws {
+        let (store, _) = try makeStore()
+        store.providerSettings.management = readinessInventory(.actionRequired)
+        store.member?.role = "member"
+        TestHTTPProtocol.handler = { _ in XCTFail("no provider request may be dispatched without owner access"); return (200, [:], Data()) }
+        let checked = await store.checkProviders()
+        let imported = await store.importCodexLogin()
+        let keyed = await store.submitProviderApiKey(providerID: "anthropic", key: "mock-key")
+        let defaulted = await store.setProviderDefault(providerID: "anthropic", modelID: "mock-model")
+        XCTAssertNil(checked); XCTAssertNil(imported); XCTAssertNil(keyed); XCTAssertNil(defaulted)
+        XCTAssertTrue(TestHTTPProtocol.requests.isEmpty)
+    }
+
+    func testMockApiKeySubmissionValidatesLocallyAndNeverJournalsTheKey() async throws {
+        let (store, persistence) = try makeStore()
+        TestHTTPProtocol.handler = { _ in XCTFail("an invalid key must never be dispatched"); return (200, [:], Data()) }
+        let empty = await store.submitProviderApiKey(providerID: "anthropic", key: "")
+        let withNul = await store.submitProviderApiKey(providerID: "anthropic", key: "mock\0key")
+        XCTAssertNil(empty); XCTAssertNil(withNul)
+        XCTAssertTrue(TestHTTPProtocol.requests.isEmpty)
+        let management = inventory()
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/instance/providers/anthropic/api-key")
+            XCTAssertEqual(try self.requestBody(request)["value"], .string("mock-panel-key"))
+            return (200, [:], try JSONEncoder().encode(management))
+        }
+        let stored = await store.submitProviderApiKey(providerID: "anthropic", key: "mock-panel-key")
+        XCTAssertNotNil(stored)
+        XCTAssertEqual(store.providerSettings.secret, "")
+        XCTAssertFalse(try journalText(persistence).contains("mock-panel-key"))
+    }
+
+    func testMockSoftGateSkipsOnlyWithinItsWorkspaceAndMachine() throws {
+        XCTAssertTrue(ModelReadinessGate.readyOrSkipped(readiness: readiness(.verified), canManage: true, machineOnline: true, skipped: false))
+        XCTAssertTrue(ModelReadinessGate.readyOrSkipped(readiness: readiness(.saved), canManage: true, machineOnline: true, skipped: false))
+        XCTAssertFalse(ModelReadinessGate.readyOrSkipped(readiness: readiness(.actionRequired), canManage: true, machineOnline: true, skipped: false))
+        XCTAssertFalse(ModelReadinessGate.readyOrSkipped(readiness: readiness(.notConfigured), canManage: true, machineOnline: true, skipped: false))
+        XCTAssertTrue(ModelReadinessGate.readyOrSkipped(readiness: readiness(.notConfigured), canManage: true, machineOnline: true, skipped: true))
+        // No readable readiness, no owner access and an offline machine never gate Create.
+        XCTAssertTrue(ModelReadinessGate.readyOrSkipped(readiness: nil, canManage: true, machineOnline: true, skipped: false))
+        XCTAssertTrue(ModelReadinessGate.readyOrSkipped(readiness: readiness(.actionRequired), canManage: false, machineOnline: true, skipped: false))
+        XCTAssertTrue(ModelReadinessGate.readyOrSkipped(readiness: readiness(.actionRequired), canManage: true, machineOnline: false, skipped: false))
+
+        let workspace = "mock-workspace-\(UUID().uuidString)", other = "mock-workspace-\(UUID().uuidString)"
+        addTeardownBlock {
+            for machine in ["mock-owned", "mock-other"] {
+                UserDefaults.standard.removeObject(forKey: ModelReadinessSkipStore.key(workspaceID: workspace, machineID: machine))
+                UserDefaults.standard.removeObject(forKey: ModelReadinessSkipStore.key(workspaceID: other, machineID: machine))
+            }
+        }
+        ModelReadinessSkipStore.setSkipped(true, workspaceID: workspace, machineID: "mock-owned")
+        XCTAssertTrue(ModelReadinessSkipStore.isSkipped(workspaceID: workspace, machineID: "mock-owned"))
+        XCTAssertFalse(ModelReadinessSkipStore.isSkipped(workspaceID: workspace, machineID: "mock-other"))
+        XCTAssertFalse(ModelReadinessSkipStore.isSkipped(workspaceID: other, machineID: "mock-owned"))
+        ModelReadinessSkipStore.setSkipped(false, workspaceID: workspace, machineID: "mock-owned")
+        XCTAssertFalse(ModelReadinessSkipStore.isSkipped(workspaceID: workspace, machineID: "mock-owned"))
+    }
+
+    func testMockReadinessPanelBuildsForTheSelectedMachine() async throws {
+        let (store, _) = try makeStore()
+        store.providerSettings.management = readinessInventory(.actionRequired)
+        _ = ModelReadinessView(store: store, machineID: "mock-owned") { _ in }
+        _ = ProvidersSettingsView(store: store)
+    }
+}

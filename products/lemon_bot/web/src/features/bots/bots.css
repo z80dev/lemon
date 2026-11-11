@@ -46,3 +46,16 @@
 .consent-notice { font-size: 13.5px; color: var(--muted); line-height: 1.45; margin: 8px 0 4px; }
 .customize-disclosure { border: 1px dashed var(--line); }
 .customize-disclosure summary { cursor: pointer; user-select: none; padding: 4px 0; }
+
+.model-readiness { gap: 12px; }
+.model-readiness-title { display: flex; align-items: center; gap: 8px; font-size: 14px; margin: 0; }
+.model-readiness-checking { display: flex; align-items: center; gap: 8px; margin: 0; }
+.model-readiness-checking .spinner { width: 12px; height: 12px; border-width: 1.5px; }
+.model-readiness-connect { gap: 12px; }
+.model-readiness-detected { gap: 8px; padding: 12px 14px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 6%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line)); }
+.model-readiness-device { gap: 8px; padding: 12px 14px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--line)); }
+.model-readiness-skipped { gap: 10px; }
+.model-readiness-options { gap: 8px; }
+.model-readiness-options button { display: inline-flex; align-items: center; gap: 7px; }
+.ghost-button { background: transparent; color: var(--muted); }
+.ghost-button:hover:not(:disabled) { background: var(--fill); color: var(--ink); }

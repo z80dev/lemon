@@ -13,6 +13,8 @@
 .chat-menu { position: absolute; right: 14px; top: calc(8px + env(safe-area-inset-top)); }
 .chat-menu > .menu { right: 0; top: 38px; width: min(250px, calc(100vw - 32px)); }
 .chat-back { position: absolute; left: 12px; top: calc(10px + env(safe-area-inset-top)); }
+.chat-model-skipped-banner { position: absolute; z-index: 22; top: calc(72px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 10px; background: var(--warn-soft); color: var(--warning); border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent); border-radius: 999px; padding: 5px 14px; font-size: 13px; font-weight: 500; max-width: min(600px, calc(100vw - 32px)); box-shadow: var(--float-shadow); }
+.chat-model-skipped-banner button.chat-link { background: transparent; border: 0; color: inherit; font-weight: 600; text-decoration: underline; padding: 0; min-height: 0; cursor: pointer; }
 .chat-find { position: absolute; z-index: 25; top: calc(56px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); width: min(480px, calc(100% - 24px)); background: var(--raised); border-radius: 16px; box-shadow: var(--menu-shadow); padding: 4px; animation: snappy-in 260ms cubic-bezier(.25,1,.5,1); }
 .chat-find form { display: flex; align-items: center; gap: 8px; padding-left: 10px; color: var(--muted); }
 .chat-find input { border: 0; background: transparent; padding: 6px 0; min-height: 32px; font-size: 14px; }

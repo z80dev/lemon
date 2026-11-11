@@ -29,6 +29,14 @@ public struct ProviderManagement: Codable, Hashable {
         readiness = try values.decodeIfPresent(ModelReadiness.self, forKey: .readiness)
         detected = try values.decodeIfPresent([DetectedLogin].self, forKey: .detected) ?? []
     }
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(target, forKey: .target)
+        try values.encode(self.default, forKey: .default)
+        try values.encode(providers, forKey: .providers)
+        try values.encodeIfPresent(readiness, forKey: .readiness)
+        try values.encode(detected, forKey: .detected)
+    }
 }
 
 public struct ModelReadiness: Codable, Hashable {
@@ -47,6 +55,10 @@ public struct ModelReadiness: Codable, Hashable {
     public var availableModelIds: [String]?
     public var suggestedModelId: String?
     public var checkedAtMs: TimestampMs?
+    public init(state: State, providerId: String? = nil, modelId: String? = nil, check: Check? = nil, reason: Reason? = nil, availableModelIds: [String]? = nil, suggestedModelId: String? = nil, checkedAtMs: TimestampMs? = nil) {
+        self.state = state; self.providerId = providerId; self.modelId = modelId; self.check = check; self.reason = reason; self.availableModelIds = availableModelIds; self.suggestedModelId = suggestedModelId; self.checkedAtMs = checkedAtMs
+    }
+    public var isReady: Bool { state == .verified || state == .saved }
 }
 
 public struct DetectedLogin: Codable, Hashable {
@@ -54,11 +66,38 @@ public struct DetectedLogin: Codable, Hashable {
     public var source: Source
     public var providerId: String
     public var variable: String?
+    public init(source: Source, providerId: String, variable: String? = nil) {
+        self.source = source; self.providerId = providerId; self.variable = variable
+    }
 }
 
 public struct ProviderCheckResult: Codable, Hashable {
     public var management: ProviderManagement
     public var readiness: ModelReadiness
+    public init(management: ProviderManagement, readiness: ModelReadiness) {
+        self.management = management; self.readiness = readiness
+    }
+}
+
+public enum ModelReadinessSkipStore {
+    public static func key(workspaceID: String?, machineID: String?) -> String {
+        "model_readiness_skip_\(workspaceID ?? "default")_\(machineID ?? "default")"
+    }
+    public static func isSkipped(workspaceID: String?, machineID: String?) -> Bool {
+        UserDefaults.standard.bool(forKey: key(workspaceID: workspaceID, machineID: machineID))
+    }
+    public static func setSkipped(_ skipped: Bool, workspaceID: String?, machineID: String?) {
+        UserDefaults.standard.set(skipped, forKey: key(workspaceID: workspaceID, machineID: machineID))
+    }
+}
+
+/// The soft gate shared by Create Bot and the first-run card: a target without readable
+/// readiness never blocks, and an explicit Skip is client-only state per (workspace, machine).
+public enum ModelReadinessGate {
+    public static func readyOrSkipped(readiness: ModelReadiness?, canManage: Bool, machineOnline: Bool, skipped: Bool) -> Bool {
+        guard canManage, machineOnline, let readiness else { return true }
+        return readiness.isReady || skipped
+    }
 }
 
 public struct ManagedProvider: Codable, Hashable, Identifiable {

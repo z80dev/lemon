@@ -9,3 +9,4 @@ export const WorkScreen = lazy(() => import('./features/work').then(module => ({
 export const SettingsScreen = lazy(() => import('./features/settings').then(module => ({ default: module.SettingsScreen })));
 export const OwnerControlsScreen = lazy(() => import('./features/enterprise').then(module => ({ default: module.OwnerControlsScreen })));
 export const PairingScreen = lazy(() => import('./features/pairing').then(module => ({ default: module.PairingScreen })));
+export const ModelStatusLine = lazy(() => import('./features/bots/model-readiness').then(module => ({ default: module.ModelStatusLine })));

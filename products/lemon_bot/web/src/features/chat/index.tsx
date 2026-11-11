@@ -12,6 +12,7 @@ import { BotPanel, type PanelTab } from './panel';
 import { AttachmentLink, RichText } from './files';
 import { IntentNotice, copyText, mergeEntries, useClock, useIntent } from './common';
 import './chat.css';
+import { getModelReadinessSkip, isReadyState, ModelReadinessModal } from '../bots/model-readiness';
 export { FileViewer } from './files';
 
 function EventLine({ event }: { event: TranscriptEvent }) {
@@ -239,6 +240,16 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
   const leadMachine = leadBot ? snapshot.machines.find(m => m.id === leadBot.machineId) : undefined;
   const hostQuery = useQuery(`machine-host:${leadBot?.machineId || 'none'}`, () => (leadBot?.machineId ? client.call('GET /machines/:id/host', { params: { id: leadBot.machineId } }).catch(() => null) : Promise.resolve(null)));
   const detectedOs = (hostQuery.data?.os || leadMachine?.labels?.os || '').toLowerCase();
+  const [modelModalOpen, setModelModalOpen] = useState(false);
+  const isOwner = snapshot.member.role === 'owner' && snapshot.workspace.ownerUserId === snapshot.user.id;
+  const hasSkipFlag = leadBot?.machineId ? getModelReadinessSkip(snapshot.workspace.id, leadBot.machineId) : false;
+  const machineProviders = useQuery(`chat:machine-providers:${leadBot?.machineId || 'none'}`, async () => {
+    if (!hasSkipFlag || !leadBot?.machineId || !isOwner) return null;
+    try { return await client.call('GET /machines/:id/providers', { params: { id: leadBot.machineId } }); }
+    catch { return null; }
+  });
+  // Only a known, not-ready readiness raises the banner; an unreadable or uncapable target stays silent.
+  const modelNotReady = hasSkipFlag && !!machineProviders.data?.readiness && !isReadyState(machineProviders.data);
   if (routePending) return <section className="page"><PageHeader title="Checking conversation link" /><Loading /></section>;
   const mismatchedContext = conversation && ((route.botId && !conversation.botIds.includes(route.botId)) || (route.taskConversationId && (conversation.kind !== 'task' || conversation.id !== route.taskConversationId)) || (route.conversationId && route.conversationId !== conversation.id && route.conversationId !== conversation.parentConversationId));
   if (routeRejected || mismatchedContext) return <section className="page"><PageHeader title="Conversation link rejected" /><ErrorNotice error={routeRejected ? pageError : new Error('The linked Bot, conversation or task identifiers do not match this authorized context.')} /><button onClick={() => navigate({ screen: 'conversation', id })}>Open this authorized conversation without the mismatched link</button></section>;
@@ -282,6 +293,12 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
         </div>
       </details>
     </header>
+    {modelNotReady && (
+      <div className="chat-model-skipped-banner" role="status">
+        <span>No model is connected on {leadMachine?.name || 'this machine'} — replies will fail until you connect one.</span>
+        <button type="button" className="chat-link" onClick={() => setModelModalOpen(true)}>Connect a model</button>
+      </div>
+    )}
     {findOpen && <div className="chat-find" role="search">
       <form onSubmit={event => { event.preventDefault(); setFindQuery(find.trim()); }}><Search size={15} aria-hidden="true"/><label className="sr-only" htmlFor={`find-${id}`}>Find in this conversation</label><input id={`find-${id}`} ref={findInput} autoFocus placeholder="Find in chat" value={find} maxLength={512} onChange={event => setFind(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { setFindOpen(false); setFind(''); setFindQuery(''); } }} /><button type="button" className="ghost-mini" aria-label="Close find" onClick={() => { setFindOpen(false); setFind(''); setFindQuery(''); }}><X size={14}/></button></form>
       {findQuery && <div className="chat-find-results"><ErrorNotice error={search.error} />{search.loading && <Loading />}{search.data?.items.map(hit => hit.kind === 'message' && <button key={hit.entry.id} onClick={() => void jump(hit.entry.id)}><strong>{hit.entry.actor.displayName}</strong> {hit.snippet}</button>)}{search.data && !search.data.items.length && <p className="muted">No matches.</p>}</div>}
@@ -329,5 +346,15 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
       </div>
       {panel && <BotPanel id={`panel-${id}`} conversation={conversation} changed={conversationQuery.setData} runs={runs} entries={entries} tab={panel} setTab={setPanel} stop={run => void stopIntent.run(async () => updateRun(await client.call('POST /runs/:id/cancel', { params: { id: run.id }, body: { clientNonce: nonce(), reason: 'Explicit user Stop' } })))} stopDisabled={!online || stopIntent.busy || stopIntent.uncertain} />}
     </div>}
+    {modelModalOpen && leadBot?.machineId && (
+      <ModelReadinessModal
+        machineId={leadBot.machineId}
+        onClose={() => setModelModalOpen(false)}
+        onReady={() => {
+          setModelModalOpen(false);
+          void machineProviders.reload();
+        }}
+      />
+    )}
   </section>;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { nonce, type ManagedProvider, type ProviderDeviceLogin, type ProviderManagement } from '@lemon-bot/sdk';
+import { nonce, type ManagedProvider, type ModelReadinessReason, type ModelReadinessState, type ProviderDeviceLogin, type ProviderManagement } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
 import { Badge, ConfirmDialog, Field, Loading, formatTime, useQuery } from '../../ui';
 import { allPages } from './shared';
@@ -8,6 +8,41 @@ import { checkedDeviceLogin, providerApi, providerFailure, readProviderIntent, t
 const statusLabels: Record<ManagedProvider['status'], string> = { ready: 'Ready', needs_login: 'Needs login', expired: 'Expired', configured: 'Configured' };
 const deviceLabels: Record<ProviderDeviceLogin['status'], string> = { starting: 'Starting', pending: 'Waiting for sign-in', completed: 'Sign-in completed', denied: 'Sign-in denied', expired: 'Sign-in expired', cancelled: 'Sign-in cancelled', lost: 'Sign-in no longer available', failed: 'Sign-in failed' };
 const overrideLabels = { project_configuration: 'Project configuration', credential_pool: 'Credential pool', external_secret_source: 'External secret source' };
+
+/** Chip text. `verified` and `saved` both count as ready; the difference is always shown. */
+export const readinessStateLabels: Record<ModelReadinessState, string> = {
+  verified: 'Verified',
+  saved: 'Saved',
+  action_required: 'Action required',
+  not_configured: 'Not connected',
+};
+
+/** One sentence explaining what the chip means; never implies an unperformed live check. */
+export const readinessStateSummaries: Record<ModelReadinessState, string> = {
+  verified: 'Verified with a non-generating check; no message was sent.',
+  saved: 'Saved — Lemon checks it on your first message.',
+  action_required: 'This model cannot reply until the credential or default is fixed.',
+  not_configured: 'No default provider and model are connected on this target.',
+};
+
+export function readinessBadgeTone(state: ModelReadinessState): 'good' | 'muted' | 'warning' | 'danger' {
+  if (state === 'verified') return 'good';
+  if (state === 'saved') return 'muted';
+  if (state === 'action_required') return 'warning';
+  return 'muted';
+}
+
+export const readinessReasonLabels: Record<ModelReadinessReason, string> = {
+  credential_missing: 'Credential missing',
+  credential_expired: 'Credential expired',
+  credential_rejected: 'Credential rejected',
+  model_unavailable: 'Model unavailable for account',
+  provider_unreachable: 'Provider unreachable',
+  check_unavailable: 'Live check unavailable for this provider',
+  check_failed: 'Live check failed',
+  no_default: 'No default provider or model configured',
+  model_provider_mismatch: 'Default model does not match provider',
+};
 
 export function ProvidersSettings() {
   const { client, snapshot } = useApp();
@@ -82,10 +117,12 @@ function ProviderControls({ management, stale, api, machineId, sessionId, reload
   const [providerId, setProviderId] = useState('');
   const [modelId, setModelId] = useState('');
   const [defaultConfirmation, setDefaultConfirmation] = useState<{ providerId: string; modelId: string } | null>(null);
+  const [importingCodex, setImportingCodex] = useState(false);
+  const [checkingReadiness, setCheckingReadiness] = useState(false);
   const mounted = useRef(true);
   useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
-    const hide = () => { foregroundRef.current = false; setForeground(false); setEditing(null); setDisconnecting(null); setDefaultConfirmation(null); setLogin(null); };
+    const hide = () => { foregroundRef.current = false; setForeground(false); setEditing(null); setDisconnecting(null); setDefaultConfirmation(null); setImportingCodex(false); setLogin(null); };
     const show = () => { foregroundRef.current = document.visibilityState !== 'hidden'; setForeground(foregroundRef.current); };
     const visibility = () => { if (document.visibilityState === 'hidden') hide(); else show(); };
     document.addEventListener('visibilitychange', visibility); window.addEventListener('pagehide', hide); window.addEventListener('blur', hide); window.addEventListener('focus', show);
@@ -121,6 +158,29 @@ function ProviderControls({ management, stale, api, machineId, sessionId, reload
       if (!dispatched || !safe.unknown) { try { save(null); } catch { /* Keep the in-memory fence when storage fails. */ } }
       if (mounted.current) { setMessage(safe.message); setUncertain(dispatched && safe.unknown); }
     } finally { busyRef.current = false; if (mounted.current) setBusy(false); }
+  }
+  async function checkReadiness(targetProviderId?: string) {
+    if (busyRef.current || !online || stale || !foreground) return;
+    busyRef.current = true; setBusy(true); setMessage(''); setReviewed(false);
+    setCheckingReadiness(true);
+    try {
+      const result = await api.check({
+        targetId: target.id,
+        clientNonce: nonce(),
+        ...(targetProviderId ? { providerId: targetProviderId } : {}),
+      });
+      acceptStatus(result.management);
+      if (mounted.current) {
+        setMessage(`Readiness check complete: ${readinessStateLabels[result.readiness.state] || result.readiness.state}.`);
+      }
+    } catch (failure) {
+      const safe = providerFailure(failure);
+      if (mounted.current) setMessage(safe.message);
+    } finally {
+      busyRef.current = false;
+      setCheckingReadiness(false);
+      if (mounted.current) setBusy(false);
+    }
   }
   async function deviceAction(action: DeviceAction, original?: Extract<ProviderIntent, { kind: 'device' }>, reconciliation = false) {
     if (!online || busyRef.current || stale || !foreground || (uncertain && !reconciliation)) return;
@@ -171,6 +231,78 @@ function ProviderControls({ management, stale, api, machineId, sessionId, reload
   const deviceIntent = intent?.kind === 'device' ? intent : null;
   return <div className="stack">
     <section className="panel stack"><h2>Execution target</h2><dl className="settings-facts"><dt>Workspace</dt><dd>{snapshot.workspace.name} · {snapshot.workspace.id}</dd><dt>Backend</dt><dd><code>{new URL(client.baseUrl).origin}</code></dd><dt>Target</dt><dd>{machineId ? 'Owned execution machine' : 'Controller'} · {target.hostname}</dd><dt>Target ID</dt><dd><code>{target.id}</code></dd>{machineId && <><dt>Machine ID</dt><dd><code>{machineId}</code></dd></>}<dt>Node ID</dt><dd><code>{target.nodeId || 'Controller (no node ID)'}</code></dd></dl><button disabled={!online || busy} onClick={() => void checkStatus()}>Check status</button></section>
+    {management.readiness ? (
+      <section className="panel stack" aria-label="Model readiness">
+        <div className="row spread">
+          <h2>Model readiness</h2>
+          <Badge tone={readinessBadgeTone(management.readiness.state)}>
+            {readinessStateLabels[management.readiness.state]}
+          </Badge>
+        </div>
+        <dl className="settings-facts">
+          <dt>State</dt>
+          <dd>
+            {readinessStateSummaries[management.readiness.state]}
+            {management.readiness.reason && ` · ${readinessReasonLabels[management.readiness.reason]}`}
+          </dd>
+          {management.readiness.providerId && (
+            <>
+              <dt>Active provider</dt>
+              <dd><code>{management.readiness.providerId}</code></dd>
+            </>
+          )}
+          {management.readiness.modelId && (
+            <>
+              <dt>Active model</dt>
+              <dd><code>{management.readiness.modelId}</code></dd>
+            </>
+          )}
+          {management.readiness.check && (
+            <>
+              <dt>Check method</dt>
+              <dd>{management.readiness.check === 'codex_discovery' ? 'Codex discovery' : 'Models endpoint'}</dd>
+            </>
+          )}
+          {management.readiness.checkedAtMs && (
+            <>
+              <dt>Last checked</dt>
+              <dd>{formatTime(management.readiness.checkedAtMs)}</dd>
+            </>
+          )}
+        </dl>
+        <div className="row">
+          <button disabled={disabled || checkingReadiness} onClick={() => void checkReadiness()}>
+            {checkingReadiness ? 'Checking…' : 'Check now'}
+          </button>
+        </div>
+      </section>
+    ) : (
+      <section className="panel" aria-label="Model readiness">
+        <h2>Model readiness</h2>
+        <p className="muted">Model status unavailable</p>
+      </section>
+    )}
+    {management.detected && management.detected.length > 0 && (
+      <section className="panel stack" aria-label="Detected logins">
+        <h2>Detected logins</h2>
+        <p className="muted small">Detected on this target. Importing requires your explicit consent and copies credentials into Lemon’s encrypted store.</p>
+        {management.detected.map((item, idx) => (
+          <div key={idx} className="row spread">
+            {item.source === 'codex_cli' ? (
+              <>
+                <span>Codex CLI ChatGPT login (<code>~/.codex/auth.json</code>)</span>
+                <button disabled={disabled} onClick={() => setImportingCodex(true)}>Import Codex CLI login</button>
+              </>
+            ) : (
+              <>
+                <span>Environment variable <code>{item.variable}</code> for {item.providerId}</span>
+                <Badge tone="muted">Available</Badge>
+              </>
+            )}
+          </div>
+        ))}
+      </section>
+    )}
     {!online && <p role="status">You’re offline. Provider changes are never queued.</p>}
     {message && <p role="status" className="panel">{message}</p>}
     {intent && <section className="panel stack" role="status"><h2>{deviceIntent ? 'Device sign-in' : 'Unconfirmed provider change'}</h2><p>Provider: {intent.providerId} · Target: {intent.targetId}</p>
@@ -181,10 +313,13 @@ function ProviderControls({ management, stale, api, machineId, sessionId, reload
     <section className="panel stack"><h2>Current default</h2><dl className="settings-facts"><dt>Provider</dt><dd>{management.default.providerId || 'Not selected'}</dd><dt>Model</dt><dd>{management.default.modelId || 'Not selected'}</dd></dl><p>This is the effective target default. Changing the global default is separate from credentials, never rewrites Bots or profiles, and may remain overridden by project or environment settings.</p><button disabled={disabled} onClick={() => { setProviderId(management.default.providerId || management.providers[0]?.id || ''); setModelId(management.default.modelId || ''); setDefaultOpen(true); }}>Change default</button>
       {defaultOpen && <form className="stack" onSubmit={event => { event.preventDefault(); if (!disabled && providerId && modelId.trim()) setDefaultConfirmation({ providerId, modelId: modelId.trim() }); }}><Field label="Default provider"><select value={providerId} onChange={event => setProviderId(event.target.value)} disabled={disabled}>{management.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.displayName} · {provider.id}</option>)}</select></Field><Field label="Default model"><input value={modelId} maxLength={256} onChange={event => setModelId(event.target.value)} required disabled={disabled} autoComplete="off"/></Field><div className="row"><button disabled={disabled || !modelId.trim()}>Review default change</button><button type="button" onClick={() => { setDefaultOpen(false); setModelId(''); setDefaultConfirmation(null); }}>Cancel</button></div></form>}
     </section>
-    <section className="stack" aria-label="Providers"><h2>Providers</h2>{!management.providers.length && <p>No provider methods are advertised by this target.</p>}{management.providers.map(provider => <article className="panel stack" key={provider.id}><div className="row spread"><h3>{provider.displayName}</h3><Badge tone={provider.status === 'ready' ? 'good' : provider.status === 'configured' ? 'muted' : 'warning'}>{statusLabels[provider.status]}</Badge></div><p><code>{provider.id}</code> · Configured: {provider.configured ? 'Yes' : 'No'}</p><p>{provider.lastValidation ? `Last resolver validation: ${provider.lastValidation.ready ? 'Ready' : 'Not ready'} · ${formatTime(provider.lastValidation.atMs)}` : 'Last resolver validation: Not checked'}. This static resolver check does not validate the provider account, quota or a model call.</p>
+    <section className="stack" aria-label="Providers"><h2>Providers</h2>{!management.providers.length && <p>No provider methods are advertised by this target.</p>}{management.providers.map(provider => <article className="panel stack" key={provider.id}><div className="row spread"><h3>{provider.displayName}</h3><div className="row"><Badge tone={provider.status === 'ready' ? 'good' : provider.status === 'configured' ? 'muted' : 'warning'}>{statusLabels[provider.status]}</Badge>{management.readiness?.providerId === provider.id && <Badge tone={readinessBadgeTone(management.readiness.state)}>{readinessStateLabels[management.readiness.state]}</Badge>}</div></div><p><code>{provider.id}</code> · Configured: {provider.configured ? 'Yes' : 'No'}</p><p>{provider.lastValidation ? `Last resolver validation: ${provider.lastValidation.ready ? 'Ready' : 'Not ready'} · ${formatTime(provider.lastValidation.atMs)}` : 'Last resolver validation: Not checked'}. This static resolver check does not validate the provider account, quota or a model call.</p>
+      {management.readiness?.providerId === provider.id && (
+        <p>Live readiness: {readinessStateLabels[management.readiness.state]} — {readinessStateSummaries[management.readiness.state]}{management.readiness.reason && ` (${readinessReasonLabels[management.readiness.reason]})`}{management.readiness.checkedAtMs ? ` · Checked ${formatTime(management.readiness.checkedAtMs)}` : ''}</p>
+      )}
       {!!provider.environmentOverrides.length && <p className="warning-text">Environment overrides: {provider.environmentOverrides.join(', ')}. A global credential change may not become effective.</p>}
       {!!provider.configurationOverrides.length && <p className="warning-text">Configuration overrides: {provider.configurationOverrides.map(item => overrideLabels[item]).join(', ')}. Resolve these on the target; this screen never resets credential pools or project configuration.</p>}
-      <div className="row">{provider.methods.includes('api_key') && <button disabled={disabled} onClick={() => setEditing(provider)}>{provider.configured ? 'Replace credential' : 'Add API key'}</button>}{provider.id === 'openai_codex' && provider.methods.includes('device_code') && <button disabled={disabled} onClick={() => void deviceAction('start')}>{provider.configured ? 'Re-authenticate' : 'Sign in with device code'}</button>}<button className="danger" disabled={disabled || !provider.configured} onClick={() => setDisconnecting(provider)}>Disconnect</button></div>
+      <div className="row">{!!management.readiness && <button aria-label={`Check ${provider.displayName} now`} disabled={disabled || checkingReadiness} onClick={() => void checkReadiness(provider.id)}>Check now</button>}{provider.methods.includes('api_key') && <button disabled={disabled} onClick={() => setEditing(provider)}>{provider.configured ? 'Replace credential' : 'Add API key'}</button>}{provider.id === 'openai_codex' && provider.methods.includes('device_code') && <button disabled={disabled} onClick={() => void deviceAction('start')}>{provider.configured ? 'Re-authenticate' : 'Sign in with device code'}</button>}<button className="danger" disabled={disabled || !provider.configured} onClick={() => setDisconnecting(provider)}>Disconnect</button></div>
       {!provider.methods.includes('api_key') && !(provider.id === 'openai_codex' && provider.methods.includes('device_code')) && <p className="muted">No supported sign-in method is advertised for this client on the target.</p>}
     </article>)}</section>
     {editing && <SecureApiKeyForm key={editing.id} provider={editing} management={management} machineId={machineId} disabled={disabled} cancel={() => setEditing(null)} submit={value => {
@@ -202,6 +337,16 @@ function ProviderControls({ management, stale, api, machineId, sessionId, reload
       const next: ProviderIntent = { kind: 'default', clientNonce: nonce(), targetId: target.id, ...choice };
       await mutate(next, () => api.changeDefault({ clientNonce: next.clientNonce, targetId: target.id, ...choice }));
     }}><TargetReview management={management} machineId={machineId}/><p>Set the global default to {defaultConfirmation.providerId} / {defaultConfirmation.modelId}? Higher-priority overrides may leave Current default unchanged. No credential changes and no Bot/profile rewrites.</p></ConfirmDialog>}
+    {importingCodex && <ConfirmDialog title="Import Codex CLI login?" disabled={disabled} onCancel={() => setImportingCodex(false)} onConfirm={async () => {
+      setImportingCodex(false);
+      const next: ProviderIntent = { kind: 'import', clientNonce: nonce(), targetId: target.id, providerId: 'openai_codex' };
+      await mutate(next, () => api.importLogin('openai_codex', {
+        targetId: target.id,
+        clientNonce: next.clientNonce,
+        source: 'codex_cli',
+        consent: 'copy_login',
+      }));
+    }}><TargetReview management={management} machineId={machineId}/><p>Copy your Codex CLI ChatGPT login on {target.hostname} into Lemon. Lemon keeps and refreshes its own copy; your <code>~/.codex/auth.json</code> is not changed. If either app later asks you to sign in again, sign in there — or use <em>Sign in with ChatGPT</em> to give Lemon its own login.</p></ConfirmDialog>}
   </div>;
 }
 
@@ -210,7 +355,7 @@ function TargetReview({ management, machineId }: { management: ProviderManagemen
   return <p>Workspace: {snapshot.workspace.name} · {snapshot.workspace.id}<br/>Backend: {new URL(client.baseUrl).origin}<br/>Execution target: {management.target.hostname} · {management.target.id} · Node ID: {management.target.nodeId || 'Controller'}{machineId && <> · Machine ID: {machineId}</>}</p>;
 }
 
-function SecureApiKeyForm({ provider, management, machineId, disabled, submit, cancel }: { provider: ManagedProvider; management: ProviderManagement; machineId?: string; disabled: boolean; submit: (value: string) => Promise<void>; cancel: () => void }) {
+export function SecureApiKeyForm({ provider, management, machineId, disabled, submit, cancel }: { provider: ManagedProvider; management: ProviderManagement; machineId?: string; disabled: boolean; submit: (value: string) => Promise<void>; cancel: () => void }) {
   const field = useRef<HTMLInputElement>(null);
   const [invalid, setInvalid] = useState(false);
   useLayoutEffect(() => {

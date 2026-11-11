@@ -5,7 +5,7 @@ import { ArrowDown, ChevronRight, GitBranch, History, Inbox, LayoutGrid, ListFil
 import { AccountAvatar, BotAvatar, ConfirmDialog, EmptyState, ErrorNotice, LemonFace, LemonMark, Loading, useAction } from './ui';
 import { currentStep, previewText } from './live';
 import { SettingsRoute, isSettingsScreen } from './settings-shell';
-import { BotsScreen, ConversationScreen, FileViewer, SettingsScreen } from './route-components';
+import { BotsScreen, ConversationScreen, FileViewer, ModelStatusLine, SettingsScreen } from './route-components';
 import { VoiceOverlay } from './features/chat/voice-loader';
 import { appVersion, requiresClientUpdate } from './version';
 import { ActivityScreen, Palette, SearchScreen } from './navigation';
@@ -245,10 +245,12 @@ function DecisionLink({ route }: { route: Route }) {
   useEffect(() => { let cancelled = false; void (async () => { try { const approval = await client.call('GET /approvals/:id', { params: { id: route.id! } }); if (approval.botId !== route.botId || (route.tab && approval.conversationId !== route.tab) || (route.entryId && approval.entryId !== route.entryId)) throw new Error('Decision link identifiers do not match the authorized current request.'); await client.call('GET /entries/:id', { params: { id: approval.entryId } }); if (!cancelled) navigate({ screen: 'conversation', id: approval.conversationId, botId: approval.botId, entryId: approval.entryId }); } catch (failure) { if (!cancelled) { reportError(failure); setLoading(false); } } })(); return () => { cancelled = true; }; }, [route.id]);
   return loading ? <Loading/> : <EmptyState title="Decision unavailable" action={<button onClick={() => navigate({ screen: 'home' })}>Back to your Bots</button>}>It may have expired, been deleted, or no longer be accessible. Opening a link never approves an action.</EmptyState>;
 }
+/** First-run card: one online computer also reports whether a model is connected on it. */
 function Home() {
   const { snapshot, navigate } = useApp();
-  const online = snapshot.machines.some(machine => machine.status === 'online');
-  if (snapshot.bots.length === 0) return <div className="home"><EmptyState title="Create your first Bot" action={<div className="row"><button className="primary" onClick={() => navigate({ screen: online ? 'bot.create' : 'machine.attach' })}>{online ? 'Create a Bot' : 'Connect a computer'}</button><button onClick={() => navigate({ screen: 'templates' })}>Explore templates</button></div>}><p>Bots run on a computer you connect to Lemon Bot, even when this app is closed. Connect one, wait for it to show online, then give your first Bot a name and a job.</p></EmptyState></div>;
+  const onlineMachines = snapshot.machines.filter(machine => machine.status === 'online');
+  const sole = onlineMachines.length === 1 ? onlineMachines[0] : undefined;
+  if (snapshot.bots.length === 0) return <div className="home"><EmptyState title="Create your first Bot" action={<div className="row"><button className="primary" onClick={() => navigate({ screen: onlineMachines.length ? 'bot.create' : 'machine.attach' })}>{onlineMachines.length ? 'Create a Bot' : 'Connect a computer'}</button><button onClick={() => navigate({ screen: 'templates' })}>Explore templates</button></div>}><p>Bots run on a computer you connect to Lemon Bot, even when this app is closed. Connect one, wait for it to show online, then give your first Bot a name and a job.</p>{sole && <Suspense fallback={null}><ModelStatusLine machineId={sole.id}/></Suspense>}</EmptyState></div>;
   return <div className="home"><EmptyState title="Message a Bot"><p>Pick a Bot to continue where you left off. Bots keep working on their computers while this app is closed.</p></EmptyState></div>;
 }
 interface Preview { entryId: string; text: string }
