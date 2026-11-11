@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import { Store } from '../../src/core/store';
 import { createEventService } from '../../src/core/events';
 import { installHelpers } from '../../src/core/helpers';
+import { botPresence, createExperienceService } from '../../src/core/experiences';
+import { fixture as runtimeFixture } from '../runtime/fixture';
 import type { BackendServices, Principal } from '../../src/core/services';
-import type { Notification } from '../../../contracts/protocol';
+import type { Notification, RealtimeEvent, Run, TranscriptEntry } from '../../../contracts/protocol';
 const alice:Principal={kind:'user',id:'alice',userId:'alice',workspaceId:'workspace',role:'member',sessionId:'session',botId:null,deviceId:null};
 const bob:Principal={...alice,id:'bob',userId:'bob',role:'owner'};
 function fixture(){
@@ -13,6 +15,12 @@ function fixture(){
   installHelpers(services);services.events=createEventService(services);
   const notification=(userId:string):Notification=>services.resource('notification',{userId,conversationId:'room',botId:'bot',entryId:'entry',kind:'result',title:'Result',body:'Private result',requestId:null,readAtMs:null,dismissedAtMs:null,target:{kind:'entry',botId:'bot',conversationId:'room',entryId:'entry',taskConversationId:null},deepLink:'lemonbot://workspace/workspace/bot/bot?conversationId=room&entryId=entry'});
   return {store,services,notification};
+}
+function finalizationFixture(){
+  const f=runtimeFixture();
+  const run:Run=f.services.resource('run',{conversationId:f.conversation.id,botId:f.bot.id,initiatorUserId:f.alice.userId,clientNonce:'completion',status:'succeeded',error:null,startedAtMs:f.services.now(),completedAtMs:f.services.now(),routineRunId:null});
+  const entry:Extract<TranscriptEntry,{kind:'message'}>=f.services.resource('entry',{conversationId:f.conversation.id,seq:1,timestampMs:f.services.now(),actor:{kind:'bot',id:f.bot.id,displayName:f.bot.name},clientNonce:null,batchId:null,replyToEntryId:null,runId:run.id,targetedUserId:null,reactions:[],kind:'message',role:'assistant',text:'pong',streaming:false,attachmentIds:[]});
+  return {...f,run,entry};
 }
 describe('persisted realtime authorization and transaction boundary',()=>{
   test('private replay filters before delivery even for workspace owner and resumes across invisible gaps',()=>{
@@ -55,5 +63,97 @@ describe('persisted realtime authorization and transaction boundary',()=>{
     expect(services.events.replay({...alice,deviceId:'desktop'},'0').map(value=>value.seq)).toEqual([event.seq]);expect(services.events.replay({...alice,deviceId:'browser'},'0').map(value=>value.seq)).toEqual([event.seq]);
     expect(services.events.replay({...alice,deviceId:'phone'},'0')).toEqual([]);expect(services.events.replay(alice,'0')).toEqual([]);expect(services.events.replay({...bob,deviceId:'desktop'},'0')).toEqual([]);
     store.put('devices',{id:'desktop',userId:'bob',platform:'macos'});expect(services.events.replay({...alice,deviceId:'desktop'},'0')).toEqual([]);store.remove('devices','browser');expect(services.events.replay({...alice,deviceId:'browser'},'0')).toEqual([]);store.close();
+  });
+  test('afterTransaction deduplicates hooks after every commit callback and drops rolled-back hooks',()=>{
+    const store=new Store(':memory:');const observed:string[]=[];const after=()=>{observed.push('after');};
+    try {
+      store.transaction(()=>{
+        store.afterTransaction(after);
+        store.afterCommit(()=>{observed.push('first');});
+        store.transaction(()=>{store.afterTransaction(after);store.afterCommit(()=>{observed.push('second');});});
+        expect(observed).toEqual([]);
+      });
+      expect(observed).toEqual(['first','second','after']);
+      expect(()=>store.transaction(()=>{store.afterTransaction(()=>{observed.push('rollback');});throw new Error('rollback');})).toThrow('rollback');
+      store.transaction(()=>{store.afterCommit(()=>{observed.push('next');});});
+      expect(observed).toEqual(['first','second','after','next']);
+      store.afterTransaction(after);expect(observed.at(-1)).toBe('after');
+    } finally {store.close();}
+  });
+  for(const nestedTransaction of [false,true]){
+    test(`listener emission${nestedTransaction?' in a nested transaction':''} follows the entire committed batch`,()=>{
+      const f=finalizationFixture();const observed:RealtimeEvent[]=[];const applied:RealtimeEvent[]=[];let cursor=0n;
+      try {
+        f.services.events.subscribe(event=>{
+          observed.push(event);
+          if(BigInt(event.seq)<=cursor)return;
+          cursor=BigInt(event.seq);applied.push(event);
+        });
+        f.services.events.subscribe(event=>{
+          if(event.event!=='entry.upserted')return;
+          const emit=()=>{f.services.events.emit('bot.presence',botPresence(f.services,f.alice,f.bot),{userIds:[f.alice.userId]});};
+          if(nestedTransaction)f.store.transaction(emit);else emit();
+        });
+        f.store.transaction(()=>{
+          f.services.events.emit('entry.upserted',f.entry,{conversationId:f.conversation.id});
+          f.services.events.emit('run.upserted',f.run,{botId:f.bot.id});
+          f.services.events.emit('bot.upserted',f.bot,{botId:f.bot.id});
+          expect(observed).toEqual([]);
+        });
+        expect(observed.map(event=>event.seq)).toEqual(['1','2','3','4']);
+        expect(observed.map(event=>event.event)).toEqual(['entry.upserted','run.upserted','bot.upserted','bot.presence']);
+        expect(applied).toEqual(observed);
+      } finally {f.store.close();}
+    });
+  }
+  test('rollback discards events from nested transactions and cannot leak them into the next drain',()=>{
+    const f=finalizationFixture();const observed:RealtimeEvent[]=[];
+    try {
+      f.services.events.subscribe(event=>{observed.push(event);});
+      expect(()=>f.store.transaction(()=>{
+        f.services.events.emit('entry.upserted',f.entry);
+        f.store.transaction(()=>{f.services.events.emit('run.upserted',f.run);});
+        throw new Error('rollback');
+      })).toThrow('rollback');
+      expect(observed).toEqual([]);expect(f.services.events.replay(f.alice,'0')).toEqual([]);expect(f.services.events.cursor()).toBe('0');
+      const committed=f.services.events.emit('bot.upserted',f.bot);
+      expect(observed).toEqual([committed]);expect(committed.seq).toBe('1');
+    } finally {f.store.close();}
+  });
+  test('depth-zero publication remains synchronous, including listener-originated emissions',()=>{
+    const {store,services,notification}=fixture();const observed:string[]=[];
+    try {
+      services.events.subscribe(event=>{
+        observed.push(`first:${event.seq}`);
+        if(event.seq==='1')services.events.emit('notification.upserted',notification('alice'));
+      });
+      services.events.subscribe(event=>{observed.push(`second:${event.seq}`);});
+      services.events.emit('notification.upserted',notification('alice'));
+      expect(observed).toEqual(['first:1','second:1','first:2','second:2']);
+    } finally {store.close();}
+  });
+  test('experience projections follow the final entry, terminal run and idle bot batch',()=>{
+    const f=finalizationFixture();const lifecycle=createExperienceService(f.services);const observed:RealtimeEvent[]=[];
+    try {
+      f.store.put('runs',{...f.run,status:'running',completedAtMs:null});
+      f.store.put('entries',{...f.entry,streaming:true});
+      f.store.put('bots',{...f.bot,activity:'working',activeRunIds:[f.run.id]});
+      // Production fan-out subscribes before the experience projection listener.
+      f.services.events.subscribe(event=>{observed.push(event);});
+      lifecycle.start();
+      f.services.events.emit('run.upserted',f.store.require<Run>('runs',f.run.id));
+      expect(observed.some(event=>event.event==='bot.presence'&&event.payload.status==='working')).toBe(true);
+      const cursor=f.services.events.cursor();observed.length=0;
+      f.store.transaction(()=>{
+        f.store.put('entries',f.entry);f.services.events.emit('entry.upserted',f.entry,{conversationId:f.conversation.id,botId:f.bot.id});
+        f.store.put('runs',f.run);f.services.events.emit('run.upserted',f.run,{conversationId:f.conversation.id,botId:f.bot.id});
+        f.store.put('bots',f.bot);f.services.events.emit('bot.upserted',f.bot,{botId:f.bot.id});
+      });
+      expect(observed.map(event=>event.event)).toEqual(['entry.upserted','run.upserted','bot.upserted','bot.presence','activity.upserted']);
+      expect(observed.map(event=>event.seq)).toEqual(Array.from({length:5},(_,index)=>(BigInt(cursor)+BigInt(index)+1n).toString()));
+      const presence=observed.find(event=>event.event==='bot.presence');
+      expect(presence?.payload).toMatchObject({botId:f.bot.id,status:'idle',currentRunId:null});
+      expect(f.store.list('auditRecords')).toEqual([]);
+    } finally {lifecycle.close();f.store.close();}
   });
 });

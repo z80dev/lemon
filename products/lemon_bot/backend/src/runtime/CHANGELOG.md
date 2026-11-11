@@ -1,6 +1,9 @@
 # Runtime changes
 
 ## 2026-11-10
+- Preserve realtime sequence order through reply/status fan-out so completed replies no longer leave Bots stuck on “Thinking” or “Writing a reply”.
+- Keep streaming entry identities and delta progress across reconciliation, skip locally in-flight submissions, and close terminal-run streaming messages (including legacy rows) without deleting transcript history; final replies no longer fork into duplicates.
+- Return and publish grant projections only after destination policy acknowledgment, refreshing measured capabilities before reporting effective access.
 - Lead runtime approvals with a bounded redacted action and tool/machine provenance on web and Apple clients; keep technical context in Details and replace resolved decision buttons with an attributed result. Approval scopes and input redaction are unchanged.
 
 ## 2026-10-14

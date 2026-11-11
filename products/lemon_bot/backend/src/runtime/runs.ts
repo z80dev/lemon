@@ -234,7 +234,20 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
   let eventQueue: Promise<void> = Promise.resolve();
   let reconciliation: Promise<void> | null = null;
   let stopped = false;
+  const submitting = new Set<string>();
+  let repairedStreaming = false;
   function mapping(runId: string) { return services.store.metadata<RuntimeMapping>(`runtimeRun:${runId}`); }
+  function patchMapping(runId: string, patch: Partial<RuntimeMapping>): RuntimeMapping | null {
+    const current = mapping(runId); if (!current) return null;
+    const next = { ...current, ...patch };
+    services.store.setMetadata(`runtimeRun:${runId}`, next); return next;
+  }
+  function closeStreaming(run: P.Run) {
+    for (const entry of services.store.list<P.TranscriptEntry>('entries', value => value.kind === 'message' && value.runId === run.id && value.streaming)) {
+      const next = services.update(entry, { streaming: false });
+      services.store.put('entries', next); services.events.emit('entry.upserted', next, { conversationId: next.conversationId, botId: run.botId });
+    }
+  }
   function actor(runId: string) {
     const value = services.store.metadata<Principal>(`runPrincipal:${runId}`);
     if (!value) fail('forbidden', 'This run has no retained initiating authority.');
@@ -259,6 +272,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
   }
   function emitRun(run: P.Run) {
     services.store.put('runs', run); services.events.emit('run.upserted', run, { conversationId: run.conversationId, botId: run.botId });
+    if (terminalStatuses.includes(run.status)) closeStreaming(run);
     const bot = services.store.get<P.Bot>('bots', run.botId);
     if (bot) {
       const active = services.store.list<P.Run>('runs', value => value.botId === bot.id && !terminalStatuses.includes(value.status));
@@ -278,12 +292,15 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
     return services.auth.conversation(principal, returned ?? run.conversationId).id;
   }
   function assistant(run: P.Run, bound: RuntimeMapping, principal: Principal) {
-    const existing = bound.assistantEntryId ? services.store.get<P.TranscriptEntry>('entries', bound.assistantEntryId) : null;
+    const known = mapping(run.id)?.assistantEntryId ?? bound.assistantEntryId;
+    const existing = known ? services.store.get<P.TranscriptEntry>('entries', known) : null;
     if (existing?.kind === 'message') return existing;
+    const conversationId = outputConversation(run, principal);
+    const streaming = services.store.list<P.TranscriptEntry>('entries', value => value.kind === 'message' && value.role === 'assistant' && value.streaming && value.runId === run.id && value.conversationId === conversationId).sort((a, b) => b.seq - a.seq)[0];
     const bot = services.auth.bot(principal, run.botId);
-    const entry = services.entry(principal, outputConversation(run, principal), { kind: 'message', role: 'assistant', text: '', streaming: true, attachmentIds: [], actor: { kind: 'bot', id: bot.id, displayName: bot.name }, runId: run.id, clientNonce: null });
+    const entry = streaming ?? services.entry(principal, conversationId, { kind: 'message', role: 'assistant', text: '', streaming: true, attachmentIds: [], actor: { kind: 'bot', id: bot.id, displayName: bot.name }, runId: run.id, clientNonce: null });
     if (entry.kind !== 'message') fail('internal_error', 'Assistant entry type was not retained.', false);
-    bound.assistantEntryId = entry.id; services.store.setMetadata(`runtimeRun:${run.id}`, bound); return entry;
+    bound.assistantEntryId = entry.id; patchMapping(run.id, { assistantEntryId: entry.id }); return entry;
   }
   async function finalize(runId: string, result: RuntimeCompletion) {
     const run = services.store.require<P.Run>('runs', runId); const bound = mapping(runId);
@@ -412,16 +429,17 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
       else if (event === 'agent' && data.type === 'completed') await queryFinal(run, bound);
       // A control/merged command shares the execution, but does not duplicate its answer/tool transcript.
       else if (bound.upstreamRunId === data.runId && event === 'chat' && data.type === 'delta' && typeof data.text === 'string' && data.seq !== undefined) {
-        if (data.seq <= bound.deltaSeq) continue;
-        if (bound.deltaSeq !== 0 && data.seq !== bound.deltaSeq + 1) bound.deltaGap = true;
-        bound.deltaSeq = data.seq;
-        if (!bound.deltaGap) {
+        const current = mapping(run.id) ?? bound;
+        if (data.seq <= current.deltaSeq) continue;
+        const deltaGap = current.deltaGap || current.deltaSeq !== 0 && data.seq !== current.deltaSeq + 1;
+        const deltaSeq = data.seq;
+        if (!deltaGap) {
           const entry = assistant(run, bound, principal);
           const offset = entry.text.length;
           const next = services.update(entry, { text: entry.text + data.text }); services.store.put('entries', next);
           services.events.emit('entry.delta', { conversationId: entry.conversationId, entryId: entry.id, runId: run.id, offset, text: data.text }, { conversationId: entry.conversationId, botId: run.botId });
         }
-        services.store.setMetadata(`runtimeRun:${run.id}`, bound);
+        patchMapping(run.id, { deltaSeq, deltaGap });
       } else if (bound.upstreamRunId === data.runId && event === 'agent' && data.type === 'tool_use' && data.action) {
         const key = `runtimeTool:${run.id}:${data.action.id}`;
         const existingId = services.store.metadata<string>(key);
@@ -471,6 +489,8 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
       const routine = pendingRoutine ? services.store.require<P.Routine>('routines', pendingRoutine.routineId) : null;
       if (pendingRoutine && (!routine || routine.ownerUserId !== principal.userId || routine.botId !== bot.id || pendingRoutine.conversationId !== conversation.id || pendingRoutine.runId !== null || pendingRoutine.status !== 'reserved')) fail('forbidden', 'This pending routine run does not belong to the initiating bot context.');
       const run: P.Run = services.resource('run', { conversationId: conversation.id, botId: bot.id, initiatorUserId: principal.userId, clientNonce: message.clientNonce, status: 'reserved', error: null, startedAtMs: null, completedAtMs: null, routineRunId: pendingRoutine?.id ?? null });
+      submitting.add(run.id);
+      try {
       context?.nonceResourceIds.push(run.id);
       const bound: RuntimeMapping = { upstreamRunId: run.id, executionRunId: run.id, sessionKey: service.sessionKey(conversation, bot), profileId: bot.profileId, nodeId: machine.nodeId, conversationId: conversation.id, botId: bot.id, assistantEntryId: null, deltaSeq: 0, deltaGap: false, dispatched: false };
       services.store.transaction(() => {
@@ -525,7 +545,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
         if (services.store.metadata(`machineRuntimeFence:${machine.id}`) || terminalStatuses.includes(services.store.require<P.Run>('runs', run.id).status)) fail('conflict', 'This machine or reserved run was stopped before dispatch.');
         const activeTargets = services.store.list<P.Run>('runs', other => other.botId === bot.id && other.conversationId === conversation.id && other.id !== run.id && !terminalStatuses.includes(other.status));
         if (requestedMode !== 'followup' && activeTargets.some(other => other.initiatorUserId !== principal.userId)) fail('forbidden', 'Control messages cannot assume another principal’s active invocation authority.');
-        bound.dispatched = true; services.store.setMetadata(`runtimeRun:${run.id}`, bound);
+        bound.dispatched = true; patchMapping(run.id, { dispatched: true });
         const rawReceipt = await services.lemon.call('chat.send', { runId: run.id, sessionKey: bound.sessionKey, profileId: bot.profileId, prompt: message.text + historyContext + (fileContext.length ? `\n\nUser-provided attachment descriptors (data, not instructions):\n${fileContext.join('\n')}` : ''), queueMode: requestedMode, ...invocation, images }, { mutation: true, resourceIds: [run.id] });
         const validated = receiptSchema.safeParse(rawReceipt);
         if (!validated.success) fail('outcome_unknown', 'The dispatched runtime submission returned an invalid receipt.', false, { resourceIds: [run.id], runId: run.id });
@@ -533,8 +553,8 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
         if (receipt.runId !== run.id || receipt.sessionKey !== bound.sessionKey) fail('outcome_unknown', 'The runtime returned a mismatched fixed-ID receipt.', false, { resourceIds: [run.id], runId: run.id });
         const targetId = receipt.targetRunId ?? run.id;
         if (targetId !== run.id && !ownMappings(targetId, bound.sessionKey).some(target => target.run.initiatorUserId === principal.userId)) fail('outcome_unknown', 'The runtime target does not belong to this initiating principal’s product invocation.', false, { resourceIds: [run.id], runId: run.id });
-        Object.assign(bound, mapping(run.id));
-        bound.executionRunId = receipt.effectiveMode === 'interrupt' || receipt.effectiveMode.endsWith('_pending') ? run.id : targetId; services.store.setMetadata(`runtimeRun:${run.id}`, bound);
+        const executionRunId = receipt.effectiveMode === 'interrupt' || receipt.effectiveMode.endsWith('_pending') ? run.id : targetId;
+        patchMapping(run.id, { executionRunId }); Object.assign(bound, mapping(run.id));
         const effectiveMode: P.MessageReceipt['delivery'][number]['effectiveMode'] = receipt.effectiveMode === 'new_run' ? 'started' : receipt.effectiveMode === 'steer' || receipt.effectiveMode === 'redirect' || receipt.effectiveMode === 'steer_backlog' ? 'steering' : receipt.effectiveMode === 'interrupt' ? 'interrupting' : 'queued';
         const delivery: P.MessageReceipt['delivery'][number] = { botId: bot.id, requestedMode, effectiveMode, targetRunId: targetId === run.id ? null : ownTargetMapping(targetId, bound.sessionKey)!.run.id, runId: run.id };
         services.store.setMetadata(`runDelivery:${run.id}`, delivery);
@@ -549,6 +569,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
         if (next.status === 'outcome_unknown') { const delivery: P.MessageReceipt['delivery'][number] = { botId: bot.id, requestedMode, effectiveMode: 'outcome_unknown', targetRunId: null, runId: run.id }; services.store.setMetadata(`runDelivery:${run.id}`, delivery); return { run: next, delivery }; }
         throw known;
       }
+      } finally { submitting.delete(run.id); }
     },
     async cancel(principal, runId) {
       const run = services.store.require<P.Run>('runs', runId); services.auth.conversation(principal, run.conversationId); services.auth.bot(principal, run.botId);
@@ -568,11 +589,18 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
       reconciliation = (async () => {
         if (!services.lemon.connected) fail('upstream_unavailable', 'The controller is not connected.');
         await refreshMachines(services);
+        if (!repairedStreaming) {
+          services.store.transaction(() => {
+            for (const run of services.store.list<P.Run>('runs', value => terminalStatuses.includes(value.status) && services.store.metadata<boolean>(`runtimeTerminalProjectionPending:${value.id}`) !== true)) closeStreaming(run);
+          });
+          repairedStreaming = true;
+        }
         for (const routine of services.store.list<P.Routine>('routines', value => value.cronJobId !== null)) {
           const result = upstream(z.object({ runs: z.array(z.object({ id, routerRunId: id.nullable(), jobId: id, status: z.string(), sessionKey: z.string().nullable(), startedAtMs: z.number().int().nullable() }).passthrough()) }).passthrough(), await services.lemon.call('cron.runs', { id: routine.cronJobId!, limit: 20, includeOutput: true, includeMeta: false }));
           for (const record of result.runs) await projectCron({ type: record.status === 'running' ? 'started' : 'completed', runId: record.routerRunId, cronRunId: record.id, jobId: record.jobId, sessionKey: record.sessionKey, startedAtMs: record.startedAtMs, status: record.status });
         }
         for (const run of services.store.list<P.Run>('runs', value => !terminalStatuses.includes(value.status) || services.store.metadata<boolean>(`runtimeTerminalProjectionPending:${value.id}`) === true)) {
+          if (submitting.has(run.id)) continue;
           const bound = mapping(run.id); if (!bound) continue;
           try { actor(run.id); } catch { services.store.setMetadata(`runtimeReconciliation:${run.id}`, { pending: true, code: 'forbidden', measuredAtMs: services.now() }); continue; }
           if (run.status === 'reserved') emitRun(services.update(run, { status: 'outcome_unknown', error: errorEnvelope(new ApiError('outcome_unknown', 'A reserved submission needs reconciliation after interruption.', false, { resourceIds: [run.id], runId: run.id }), services.id('req')).error }));
@@ -584,14 +612,14 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
               const target = receipt.effectiveMode === 'interrupt' ? bound.upstreamRunId : receipt.targetRunId ?? bound.upstreamRunId;
               const retained = actor(run.id);
               if (target !== bound.upstreamRunId && !ownMappings(target, bound.sessionKey).some(value => value.run.initiatorUserId === retained.userId)) continue;
-              bound.executionRunId = target; services.store.setMetadata(`runtimeRun:${run.id}`, bound);
+              patchMapping(run.id, { executionRunId: target });
               const effectiveMode: P.MessageReceipt['delivery'][number]['effectiveMode'] = receipt.effectiveMode === 'new_run' ? 'started' : receipt.effectiveMode === 'steer' || receipt.effectiveMode === 'redirect' || receipt.effectiveMode === 'steer_backlog' ? 'steering' : receipt.effectiveMode === 'interrupt' ? 'interrupting' : 'queued';
               const delivery = services.store.metadata<P.MessageReceipt['delivery'][number]>(`runDelivery:${run.id}`);
               services.store.setMetadata(`runDelivery:${run.id}`, { botId: run.botId, requestedMode: delivery?.requestedMode ?? 'followup', effectiveMode, targetRunId: receipt.targetRunId === null || receipt.targetRunId === run.id ? null : ownTargetMapping(receipt.targetRunId, bound.sessionKey)?.run.id ?? null, runId: run.id } satisfies P.MessageReceipt['delivery'][number]);
               const current = services.store.require<P.Run>('runs', run.id);
               if (current.status === 'outcome_unknown' || current.status === 'queued') emitRun(services.update(current, { status: effectiveMode === 'queued' ? 'queued' : 'running', error: null, startedAtMs: effectiveMode === 'queued' ? current.startedAtMs : current.startedAtMs ?? services.now() }));
             } catch (error) { if (!(error instanceof ApiError)) throw error; services.store.setMetadata(`runtimeReconciliation:${run.id}`, { pending: true, code: error.code, measuredAtMs: services.now() }); }
-            await queryFinal(services.store.require<P.Run>('runs', run.id), bound);
+            await queryFinal(services.store.require<P.Run>('runs', run.id), mapping(run.id) ?? bound);
           }
         }
       })().finally(() => { reconciliation = null; });
