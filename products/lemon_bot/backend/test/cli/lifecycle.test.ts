@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
-import { parseServiceStatus, service, spawn } from '../../src/cli/lifecycle';
+import { parseServiceStatus, service, spawn, type ServiceStatus } from '../../src/cli/lifecycle';
 
-const status = { schema: 1, manager: 'launchd', persistence: 'login', linger: null, units: [{ role: 'worker', name: 'studio', state: 'needs_reauthorization', detail: 'node_authentication_failed' }] };
+const status: ServiceStatus = { schema: 1, manager: 'launchd', persistence: 'login', linger: null, units: [{ role: 'worker', name: 'studio', state: 'needs_reauthorization', detail: 'node_authentication_failed' }] };
 test('non-zero service receipt preserves authoritative parked state', async () => {
   const result = await service('/tmp/mock-lemon', ['status', 'worker', '--name', 'studio'], async (_executable, args) => {
     expect(args).toEqual(['service', 'status', 'worker', '--name', 'studio', '--json']);

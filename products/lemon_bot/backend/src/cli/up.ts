@@ -13,6 +13,7 @@ import { service, spawn, type Spawn, type ServiceStatus, type ServiceResult } fr
 
 const nodePattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const nonce = () => randomBytes(24).toString('base64url');
+const serviceDetails = ['port_in_use_foreign', 'unhealthy_recorded_runtime', 'gui_session_required', 'unit_foreign', 'daemon_ownership_unverified', 'enrollment_outcome_unknown', 'invite_rejected', 'node_authentication_failed', 'restore_in_progress', 'timeout', 'exec_wrapper_missing'];
 type Step = 'runtime' | 'controller_choice' | 'setup' | 'units' | 'linger' | 'owner' | 'machine' | 'worker';
 export type UpStatus = 'ready' | 'runtime_missing' | 'setup_required' | 'service_failed' | 'enroll_failed' | 'needs_attention';
 export interface UpResult {
@@ -130,7 +131,7 @@ export async function runUpCli(args: string[], dependencies: UpDependencies = de
   const emit = (current: Step, state: 'running' | 'ok' | 'skipped' | 'failed', detail: string | null = null) => {
     step = current;
     if (json) d.stdout(`${JSON.stringify({ type: 'step', step: current, state, detail })}\n`);
-    else d.stderr(`${current}: ${state}${detail ? ` (${detail})` : ''}\n`);
+    if (!json || state === 'failed') d.stderr(`${current}: ${state}${detail ? ` (${detail})` : ''}\n`);
   };
   const result: UpResult = { type: 'result', status: 'service_failed', port: 4100, machineId: null, manager: 'none', persistence: 'none' };
   const finish = (status: UpStatus) => {
@@ -181,7 +182,8 @@ export async function runUpCli(args: string[], dependencies: UpDependencies = de
     const units = await lifecycle(['install', ...(local ? ['controller', 'backend'] : ['backend']), '--bot', botPath, '--wait', '120']);
     if (units.status) remember(units.status);
     if (units.exitCode !== 0 || !units.status || !units.status.units.length || units.status.units.some(unit => unit.state !== 'ready')) {
-      emit('units', 'failed', 'service_failed'); return finish('service_failed');
+      const detail = units.status?.units.find(unit => unit.detail !== null && serviceDetails.includes(unit.detail))?.detail ?? 'service_failed';
+      emit('units', 'failed', detail); return finish('service_failed');
     }
     emit('units', 'ok');
     if (result.persistence === 'session' && d.terminal.interactive) {
@@ -189,6 +191,7 @@ export async function runUpCli(args: string[], dependencies: UpDependencies = de
       if (['', 'y', 'yes'].includes((await d.terminal.read('Keep Lemon running after you log out? [Y/n] ')).trim().toLowerCase())) {
         const linger = await lifecycle(['repair', '--enable-linger']);
         if (linger.status) remember(linger.status);
+        if (result.persistence === 'session') d.stderr(`sudo loginctl enable-linger ${userInfo().username}\n`);
         if (linger.exitCode !== 0) { emit('linger', 'failed', 'linger_unavailable'); return finish('service_failed'); }
         emit('linger', 'ok');
       } else emit('linger', 'skipped', 'declined');

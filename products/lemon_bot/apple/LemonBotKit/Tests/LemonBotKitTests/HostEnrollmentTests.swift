@@ -64,90 +64,33 @@ final class HostEnrollmentTests: XCTestCase {
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
     }
-    func testScriptReturnsNeedsEnrollmentImmediatelyWhenLogHasNeedsReauthorization() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("host-test-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
-
-        let mockBin = tempDir.appendingPathComponent("bin")
-        try FileManager.default.createDirectory(at: mockBin, withIntermediateDirectories: true)
-
-        let lemonScript = """
+    func testHostScriptReturnsLifecycleFailureWithoutScrapingWorkerLogs() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("host-test-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let bot = home.appendingPathComponent(".local/bin/lemon-bot")
+        try FileManager.default.createDirectory(at: bot.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let mock = #"""
         #!/bin/sh
-        if [ "$1" = "node" ] && [ "$2" = "capabilities" ]; then
-            exit 0
-        fi
-        if [ "$1" = "node" ] && [ "$2" = "join" ]; then
-            echo "Execution node needs_reauthorization (session_expired): token expired"
-            exit 0
-        fi
-        exit 0
-        """
-        let lemonPath = mockBin.appendingPathComponent("lemon")
-        try lemonScript.write(to: lemonPath, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: lemonPath.path)
-
-        let launchctlScript = """
-        #!/bin/sh
-        if [ "$1" = "bootstrap" ]; then
-            mkdir -p "$HOME/.lemon/logs"
-            echo "Execution node needs_reauthorization (session_expired): token expired" >> "$HOME/.lemon/logs/node-chico.log"
-        fi
-        exit 0
-        """
-        let launchctlPath = mockBin.appendingPathComponent("launchctl")
-        try launchctlScript.write(to: launchctlPath, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launchctlPath.path)
-
-        let systemctlScript = """
-        #!/bin/sh
-        if echo "$*" | grep -q "enable"; then
-            mkdir -p "$HOME/.lemon/logs"
-            echo "Execution node needs_reauthorization (session_expired): token expired" >> "$HOME/.lemon/logs/node-chico.log"
-        fi
-        exit 0
-        """
-        let systemctlPath = mockBin.appendingPathComponent("systemctl")
-        try systemctlScript.write(to: systemctlPath, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: systemctlPath.path)
-
-        let sleepScript = "#!/bin/sh\nexit 0\n"
-        let sleepPath = mockBin.appendingPathComponent("sleep")
-        try sleepScript.write(to: sleepPath, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: sleepPath.path)
-
-        let target = HostEnrollment.JoinTarget(
-            name: "chico",
-            controller: "ws://127.0.0.1:4040/ws",
-            source: tempDir.path,
-            version: nil,
-            baseURL: nil
-        )
-        let script = HostEnrollment.script(target, code: nil)
-
+        [ "$*" = "up --json --no-open" ] || exit 2
+        printf '%s\n' '{"type":"step","step":"worker","state":"running","detail":"repair"}'
+        printf '%s\n' '{"type":"result","status":"enroll_failed","port":4100,"machineId":"machine_chico","manager":"launchd","persistence":"login"}'
+        exit 1
+        """#
+        try mock.write(to: bot, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bot.path)
         let process = Process(), input = Pipe(), output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-s"]
-        process.environment = [
-            "HOME": tempDir.path,
-            "PATH": mockBin.path + ":/usr/bin:/bin"
-        ]
-        process.standardInput = input
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-
-        let start = Date()
+        process.environment = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
+        process.standardInput = input; process.standardOutput = output; process.standardError = FileHandle.nullDevice
         try process.run()
-        input.fileHandleForWriting.write(Data(script.utf8))
+        input.fileHandleForWriting.write(Data(HostEnrollment.setupScript.utf8))
         try input.fileHandleForWriting.close()
-        let outText = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         process.waitUntilExit()
-        let elapsed = Date().timeIntervalSince(start)
-
-        XCTAssertEqual(process.terminationStatus, 0)
-        XCTAssertLessThan(elapsed, 10.0, "Script should have returned early without waiting 60s timeout")
-        XCTAssertTrue(outText.contains("status=needs_enrollment"), "Output was: \(outText)")
-        let outcome = try HostEnrollment.parse(outText, machine: "chico")
-        XCTAssertEqual(outcome, .needsEnrollment)
+        XCTAssertEqual(process.terminationStatus, 1)
+        XCTAssertThrowsError(try BootstrapProgress.result(text).requireMachine(machine: "chico")) {
+            XCTAssertEqual($0 as? HostEnrollment.Failure, .enrollmentFailed(machine: "chico", log: "enroll_failed"))
+        }
     }
 }

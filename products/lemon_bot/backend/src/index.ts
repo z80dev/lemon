@@ -195,6 +195,8 @@ export async function runBackend(options:{chooseLemon?:boolean;openBrowser?:bool
     catch(error){process.stderr.write(`${error instanceof Error?error.message:'Choosing a Lemon failed.'}\n`);process.exit(1);}
   } else if(options.chooseLemon){process.stderr.write('lemon-bot --choose-lemon needs an interactive terminal.\n');process.exit(2);}
   const backend=await createBackend(config,key);const server=backend.start();
+  const shutdown=()=>{void backend.stop().then(()=>process.exit(0)).catch(()=>process.exit(1));};
+  process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
   process.stdout.write(`Lemon Bot listening at ${config.publicUrl} (${server.hostname}:${server.port}).\n`);
   const {lemon}=backend.services;
   lemon.onConnected(()=>{process.stdout.write(`Connected to Lemon at ${config.controlUrl}.\n`);});
@@ -205,8 +207,6 @@ export async function runBackend(options:{chooseLemon?:boolean;openBrowser?:bool
   if (!isLoopback(new URL(config.publicUrl).hostname) && workspace && !backend.services.store.get('credentials', workspace.ownerUserId)) {
     process.stdout.write(`Owner has no password yet: browsers on other computers can't sign in at ${config.publicUrl}. On this computer run lemon-bot open, then Settings → Account → Add email and password.\n`);
   }
-  const shutdown=()=>{void backend.stop().then(()=>process.exit(0)).catch(()=>process.exit(1));};
-  process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
 }
 
 if(import.meta.main)await runBackend();

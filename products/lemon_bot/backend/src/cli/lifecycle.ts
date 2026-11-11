@@ -16,7 +16,7 @@ export const spawn: Spawn = async (executable, args, input = {}) => {
     child.stdin.write(input.stdin); child.stdin.end();
   }
   const [exitCode, stdout, stderr] = await Promise.all([
-    child.exited, input.attached ? '' : new Response(child.stdout).text(), input.attached ? '' : new Response(child.stderr).text(),
+    child.exited, child.stdout instanceof ReadableStream ? new Response(child.stdout).text() : '', child.stderr instanceof ReadableStream ? new Response(child.stderr).text() : '',
   ]);
   return { exitCode, stdout, stderr };
 };
