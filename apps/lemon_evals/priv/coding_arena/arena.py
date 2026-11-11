@@ -239,14 +239,19 @@ def lemon_argv(prompt, args):
             '--cwd', '/work', '--approval-policy', 'allow']
 
 
+OMP_ROLES = ('default', 'smol', 'slow', 'plan', 'task', 'commit', 'scout', 'mechanic', 'research', 'review')
+
+
 def prepare_omp(container, args, token):
-    model = f'kimi-code/{args.omp_model or args.model}'
+    model = f'kimi-code/{args.omp_model or args.model}:{args.thinking}'
+    # kimi-code resolves no env key on its own; the models.yml apiKey names the variable.
     models_yml = f'''providers:
   kimi-code:
     baseUrl: {proxy_base(args)}/coding/v1
+    apiKey: KIMI_API_KEY
 '''
     container.write('/home/agent/.omp/agent/models.yml', models_yml)
-    roles = ''.join(f'  {role}: {model}\n' for role in ('default', 'smol', 'slow', 'plan', 'task', 'commit'))
+    roles = ''.join(f'  {role}: {model}\n' for role in OMP_ROLES)
     container.write('/home/agent/.omp/agent/config.yml', f'modelRoles:\n{roles}')
     return {'KIMI_API_KEY': token, 'HOME': '/home/agent'}
 
@@ -448,11 +453,15 @@ def proxy_stats(path):
             entry = json.loads(line)
         except ValueError:
             continue
-        trial = stats.setdefault(entry.get('trial'), {'requests': 0, 'errors': 0, 'rate_limited': 0, 'models': set()})
+        trial = stats.setdefault(entry.get('trial'), {'requests': 0, 'errors': 0, 'rate_limited': 0, 'models': set(),
+                                                       'input': 0, 'cache_read': 0, 'output': 0})
         if entry.get('path', '').endswith(('/messages', '/chat/completions')):
             trial['requests'] += 1
             if entry.get('model'):
                 trial['models'].add(entry['model'])
+            trial['input'] += entry.get('input_tokens', 0)
+            trial['cache_read'] += entry.get('cache_read_tokens', 0)
+            trial['output'] += entry.get('output_tokens', 0)
         status = entry.get('status', 0)
         trial['rate_limited'] += status == 429
         trial['errors'] += status >= 500
@@ -472,7 +481,12 @@ def cmd_report(args):
         if stats:
             row['model_requests'] = stats['requests']
             row['rate_limited'] = stats['rate_limited']
+            row['upstream_errors'] = stats['errors']
             row['wire_models'] = sorted(stats['models'])
+            # Anthropic-style input_tokens exclude cache reads; total is everything the provider processed.
+            row['wire_input_tokens'] = stats['input'] + stats['cache_read']
+            row['wire_cached_tokens'] = stats['cache_read']
+            row['wire_output_tokens'] = stats['output']
     agents = sorted({row['agent'] for row in rows})
     scored = [row for row in rows if row['failure'] != 'infrastructure']
 
@@ -491,7 +505,8 @@ def cmd_report(args):
     for agent in agents:
         mine = [row for row in scored if row['agent'] == agent]
         efficiency[agent] = {key: median(row.get(key) for row in mine)
-                             for key in ('wall_seconds', 'turns', 'tokens', 'output_tokens', 'tool_calls', 'model_requests')}
+                             for key in ('wall_seconds', 'turns', 'model_requests', 'wire_input_tokens',
+                                         'wire_cached_tokens', 'wire_output_tokens', 'files_changed')}
         efficiency[agent]['failures'] = {}
         for row in mine:
             if row['failure']:
@@ -537,12 +552,13 @@ def render_markdown(report, agents):
                      f"{manifest.get('repetitions')} repetitions, {len(manifest.get('tasks', []))} tasks, "
                      f"timeout {manifest.get('timeout')}s. Infrastructure failures excluded: {report['infrastructure_failures']}.")
         lines.append('')
-    lines += ['| Agent | Passed | Rate | 95% CI | Median wall s | Median turns | Median tokens | Median requests |',
-              '| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: |']
+    lines += ['| Agent | Passed | Rate | 95% CI | Median wall s | Median requests | Median input tok | Median cached tok | Median output tok |',
+              '| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |']
     for agent in agents:
         o, e = report['overall'][agent], report['efficiency'][agent]
         lines.append(f"| {agent} | {o['passed']}/{o['total']} | {o['rate']} | {o['ci95'][0]}–{o['ci95'][1]} | "
-                     f"{e['wall_seconds']} | {e['turns']} | {e['tokens']} | {e['model_requests']} |")
+                     f"{e['wall_seconds']} | {e['model_requests']} | {e['wire_input_tokens']} | "
+                     f"{e['wire_cached_tokens']} | {e['wire_output_tokens']} |")
     if report['paired']:
         p = report['paired']
         lines += ['', f"Paired (task, repetition): {p['pairs']} pairs; " +

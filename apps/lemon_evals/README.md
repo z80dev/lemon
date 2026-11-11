@@ -248,6 +248,48 @@ Default reasoning/configuration remains harness-specific; this is an empirical
 workflow comparison, not a controlled model ranking. `--tasks NAME,NAME` selects
 specific cases for an intentional targeted trial.
 
+### Isolated arena: Lemon vs omp in fresh containers
+
+`priv/coding_arena/arena.py` runs the same comparison under isolation: every
+trial (task × agent × repetition) gets a fresh Docker container that contains
+only that task's fixture repository at `/work` and that agent's own empty HOME.
+Agents never see each other's work, earlier trials, Lemon memory, or the
+operator's configuration. Hidden verifier files are copied in only after the
+agent exits. Tasks live in `priv/coding_tasks/<id>/` (`task.json`, `repo/`,
+`hidden/verify.sh`, and a `solution/` overlay or `solution.answer`).
+
+Model traffic goes through `priv/coding_arena/kimi_auth_proxy.ts` on the host.
+Each trial holds only an HS256 token naming its trial; the proxy swaps it for
+the operator's Kimi Code login from `omp token kimi-code` (omp keeps sole
+ownership of refresh-token rotation) and logs per-request model, request shape
+sizes, status and wire-reported token usage without content. Reports use that
+wire usage, so both agents share one accounting.
+
+```bash
+cd apps/lemon_evals/priv/coding_arena
+docker build -f base.Dockerfile -t lemon-arena-base .
+(cd ../../../.. && docker build -f docker/Dockerfile.runtime --target build -t lemon-arena-build .)
+docker build -f lemon.Dockerfile -t lemon-arena-lemon .
+docker build -f omp.Dockerfile --build-arg OMP_VERSION="$(omp --version | cut -d/ -f2)" -t lemon-arena-omp .
+python3 arena.py validate                  # fixture fails, reference solution passes
+
+export ARENA_PROXY_SECRET="$(openssl rand -hex 32)"   # shared by proxy and runner only
+bun kimi_auth_proxy.ts --port 18787 --log /OPERATOR/PATH/proxy.jsonl &
+python3 arena.py run --output-dir /OPERATOR/PATH/run --model k3.1-pro --thinking high \
+  --repetitions 3 --concurrency 6 --proxy-log /OPERATOR/PATH/proxy.jsonl
+python3 arena.py report --output-dir /OPERATOR/PATH/run --proxy-log /OPERATOR/PATH/proxy.jsonl
+```
+
+`run` is resumable: `results.jsonl` gains one row per finished trial and reruns
+skip recorded trials (`--retry-infrastructure` re-runs container/harness
+failures). Per-trial `agent.stdout`, `changes.diff` and `verify.log` stay in the
+operator-chosen run directory and may contain model output. Both agents use
+`kimi_coding`/`kimi-code` with the same wire model and thinking level; omp's
+model roles all point at that model so its subagents cannot switch models. The
+report gives pass rates with Wilson intervals, an exact McNemar test over
+(task, repetition) pairs, breakdowns by category/language/difficulty, failure
+modes, and median wall time, request count and wire tokens.
+
 ### Profiling Lemon's per-turn token consumers
 
 Use a dedicated source-development daemon, never an existing user's daemon.
