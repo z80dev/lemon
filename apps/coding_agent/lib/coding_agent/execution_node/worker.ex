@@ -9,6 +9,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
   local session, preventing recursive remote routing.
   Incoming execution capabilities are intersected with the destination-local
   `:execution_capabilities` ceiling before a session starts.
+
+  Immutable service adapters live in `services`, separate from per-connection and
+  per-invocation state, so state transitions share their configuration and keep
+  the worker struct within the BEAM's small-map representation.
   """
 
   use GenServer
@@ -127,16 +131,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
     :socket,
     :allowed_roots,
     :invite_code,
-    :socket_module,
-    :socket_opts,
+    :services,
     :socket_mode,
-    :executor_module,
-    :mcp_discovery_module,
-    :profile_sync_module,
-    :task_supervisor,
-    :memory_ingest_server,
-    :token_store_module,
-    :token_store_opts,
     :notify_pid,
     :node_id,
     :expected_node_id,
@@ -149,7 +145,6 @@ defmodule CodingAgent.ExecutionNode.Worker do
     :max_payload_bytes,
     :current_token,
     :token_opt,
-    :status_writer,
     :watch_interval_ms,
     :probe_interval_ms,
     :rejected_fingerprint,
@@ -201,23 +196,25 @@ defmodule CodingAgent.ExecutionNode.Worker do
        default_cwd: default_cwd,
        allowed_roots: Keyword.get(opts, :allowed_roots, [System.user_home!()]),
        invite_code: Keyword.get(opts, :invite_code),
-       socket_module: Keyword.get(opts, :socket_module, Socket),
-       socket_opts: Keyword.get(opts, :socket_opts, []),
-       executor_module: Keyword.get(opts, :executor_module, CodingAgent.Executor),
-       mcp_discovery_module: Keyword.get(opts, :mcp_discovery_module, LemonSkills.McpDiscovery),
-       profile_sync_module:
-         Keyword.get(opts, :profile_sync_module, CodingAgent.ExecutionNode.ProfileSync),
-       task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor),
-       memory_ingest_server: Keyword.get(opts, :memory_ingest_server, Ingest),
-       token_store_module: Keyword.get(opts, :token_store_module, TokenStore),
-       token_store_opts: Keyword.get(opts, :token_store_opts, []),
+       services: %{
+         socket_module: Keyword.get(opts, :socket_module, Socket),
+         socket_opts: Keyword.get(opts, :socket_opts, []),
+         executor_module: Keyword.get(opts, :executor_module, CodingAgent.Executor),
+         mcp_discovery_module: Keyword.get(opts, :mcp_discovery_module, LemonSkills.McpDiscovery),
+         profile_sync_module:
+           Keyword.get(opts, :profile_sync_module, CodingAgent.ExecutionNode.ProfileSync),
+         task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor),
+         memory_ingest_server: Keyword.get(opts, :memory_ingest_server, Ingest),
+         token_store_module: Keyword.get(opts, :token_store_module, TokenStore),
+         token_store_opts: Keyword.get(opts, :token_store_opts, []),
+         status_writer: Keyword.get(opts, :status_writer)
+       },
        notify_pid: Keyword.get(opts, :notify_pid),
        requested_node_id: Keyword.get(opts, :node_id),
        repair: Keyword.get(opts, :repair, false),
        max_payload_bytes: LemonCore.JSONPayload.default_max_bytes(),
        execution_capabilities: Keyword.get(opts, :execution_capabilities, :all),
        token_opt: Keyword.get(opts, :token),
-       status_writer: Keyword.get(opts, :status_writer),
        watch_interval_ms: Keyword.get(opts, :watch_interval_ms),
        probe_interval_ms: Keyword.get(opts, :probe_interval_ms),
        link_state: :connecting
@@ -298,10 +295,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp start_socket(state, mode, connect_params) do
     opts =
-      state.socket_opts
+      state.services.socket_opts
       |> Keyword.merge(owner: self(), url: state.controller, connect_params: connect_params)
 
-    case state.socket_module.start_link(opts) do
+    case state.services.socket_module.start_link(opts) do
       {:ok, socket} ->
         {:ok, %{state | socket: socket, socket_mode: mode, pairing_stage: nil}}
 
@@ -769,7 +766,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     with true <- is_binary(token) and token != "",
          true <- is_binary(node_id) and node_id != "",
          :ok <-
-           state.token_store_module.save(
+           state.services.token_store_module.save(
              state.name,
              %{
                "token" => token,
@@ -777,10 +774,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
                "controller" => state.controller,
                "recoveryToken" => state.recovery_token
              },
-             state.token_store_opts
+             state.services.token_store_opts
            ) do
       old_socket = state.socket
-      :ok = state.socket_module.stop(old_socket)
+      :ok = state.services.socket_module.stop(old_socket)
 
       case connect_authenticated(
              %{state | socket: nil, pairing_stage: nil, invite_code: nil},
@@ -920,7 +917,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
           {:noreply, start_discovery(state, invoke_id, args)}
 
         method == "node.profile.sync" ->
-          sync_module = state.profile_sync_module
+          sync_module = state.services.profile_sync_module
           cwd = state.default_cwd
 
           {:noreply,
@@ -929,7 +926,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
            end)}
 
         method == "node.profile.sync.status" ->
-          sync_module = state.profile_sync_module
+          sync_module = state.services.profile_sync_module
           cwd = state.default_cwd
 
           {:noreply,
@@ -1245,7 +1242,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp start_discovery(state, invoke_id, %{"server" => server}) when is_map(server) do
-    discovery_module = state.mcp_discovery_module
+    discovery_module = state.services.mcp_discovery_module
     cwd = state.default_cwd
 
     start_service_task(state, invoke_id, :discovery_failed, fn ->
@@ -1258,7 +1255,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp start_service_task(state, invoke_id, failure_reason, run) do
     task =
-      Task.Supervisor.async(state.task_supervisor, fn ->
+      Task.Supervisor.async(state.services.task_supervisor, fn ->
         try do
           run.()
         rescue
@@ -1381,7 +1378,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp start_local_run(state, request, run_opts) do
     socket = state.socket
-    socket_module = state.socket_module
+    socket_module = state.services.socket_module
 
     run_opts =
       run_opts
@@ -1426,7 +1423,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     topic = Bus.run_topic(request.run_id)
     :ok = Bus.subscribe(topic)
 
-    case state.executor_module.start_run(
+    case state.services.executor_module.start_run(
            request,
            Map.put(run_opts, :approval_timeout_ms, 600_000),
            self()
@@ -1620,7 +1617,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
       |> Map.put(:completed, %{ok: completed.ok == true, answer: Document.summary_text(answer)})
 
     Ingest.ingest(
-      state.memory_ingest_server,
+      state.services.memory_ingest_server,
       snapshot.run_id,
       %{events: [], started_at: snapshot.started_at},
       summary
@@ -1688,7 +1685,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp execute_invocation_control(state, invocation, operation, text) do
     if String.valid?(text) do
       try do
-        case apply(state.executor_module, operation, [invocation.context, text]) do
+        case apply(state.services.executor_module, operation, [invocation.context, text]) do
           :ok -> :ok
           {:error, :unsupported} -> {:error, "unsupported"}
           {:error, _reason} -> {:error, "rejected"}
@@ -1792,7 +1789,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp request(state, method, params, tag) do
-    state.socket_module.request(state.socket, method, params, tag, 30_000)
+    state.services.socket_module.request(state.socket, method, params, tag, 30_000)
   end
 
   defp resolve_token(_state, token) when is_binary(token) and token != "",
@@ -1800,11 +1797,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp resolve_token(state, _token) do
     load_opts =
-      state.token_store_opts
+      state.services.token_store_opts
       |> Keyword.put(:controller, state.controller)
       |> maybe_put_requested_node_id(state.requested_node_id)
 
-    case state.token_store_module.load(state.name, load_opts) do
+    case state.services.token_store_module.load(state.name, load_opts) do
       {:ok, record} ->
         stored_token(record, state.controller)
 
@@ -1836,11 +1833,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp prepare_pairing_identity(state) do
     load_opts =
-      state.token_store_opts
+      state.services.token_store_opts
       |> Keyword.put(:controller, state.controller)
       |> maybe_put_requested_node_id(state.requested_node_id)
 
-    case state.token_store_module.load(state.name, load_opts) do
+    case state.services.token_store_module.load(state.name, load_opts) do
       {:ok, record} ->
         node_id = record["nodeId"]
         recovery_token = record["recoveryToken"]
@@ -2294,7 +2291,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
        when not is_nil(completed), do: :ok
 
   defp cancel_invocation_execution(state, invocation) do
-    state.executor_module.cancel(invocation.context)
+    state.services.executor_module.cancel(invocation.context)
   catch
     # The runner may finish concurrently with cancellation even before its
     # completion/monitor message reaches this worker. Cleanup must still proceed.
@@ -2408,7 +2405,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
       "osPid" => os_pid()
     }
 
-    writer = state.status_writer || (&StatePaths.write_status/2)
+    writer = state.services.status_writer || (&StatePaths.write_status/2)
     writer.(state.name, payload)
   end
 

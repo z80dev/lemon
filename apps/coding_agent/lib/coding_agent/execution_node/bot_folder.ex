@@ -4,21 +4,23 @@ defmodule CodingAgent.ExecutionNode.BotFolder do
   alias LemonCore.ProfileStore
 
   def ensure(profile_id, opts \\ []) do
-    with {:ok, paths} <- ProfileStore.paths(profile_id, opts) do
-      root = paths["files"]
+    case ProfileStore.paths(profile_id, opts) do
+      {:ok, paths} ->
+        root = paths["files"]
 
-      :global.trans({{__MODULE__, root}, self()}, fn ->
-        with :ok <- private_directory(Path.dirname(Path.dirname(Path.dirname(root)))),
-             :ok <- private_directory(Path.dirname(Path.dirname(root))),
-             :ok <- private_directory(Path.dirname(root)),
-             :ok <- private_directory(root) do
-          {:ok, root}
-        else
-          _ -> {:error, :invalid_cwd}
-        end
-      end)
-    else
-      _ -> {:error, :invalid_cwd}
+        :global.trans({{__MODULE__, root}, self()}, fn ->
+          with :ok <- private_directory(Path.dirname(Path.dirname(Path.dirname(root)))),
+               :ok <- private_directory(Path.dirname(Path.dirname(root))),
+               :ok <- private_directory(Path.dirname(root)),
+               :ok <- private_directory(root) do
+            {:ok, root}
+          else
+            _ -> {:error, :invalid_cwd}
+          end
+        end)
+
+      _ ->
+        {:error, :invalid_cwd}
     end
   end
 

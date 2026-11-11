@@ -187,8 +187,6 @@ defmodule LemonCli.Setup.ProviderManagement do
     end)
   end
 
-  defp wire_detected(_), do: []
-
   def device_start(params, opts \\ []), do: device_operation(:start, params, opts)
   def device_poll(params, opts \\ []), do: device_operation(:poll, params, opts)
   def device_challenge(params, opts \\ []), do: device_operation(:challenge, params, opts)

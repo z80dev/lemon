@@ -407,7 +407,7 @@ load_managed_token() {
     error "refusing unsafe managed control-plane credential: $file"
     return 2
   fi
-  mode="$(stat -f '%Lp' "$file" 2>/dev/null)" || mode="$(stat -c '%a' "$file" 2>/dev/null)" || mode=""
+  mode="$(stat -c '%a' "$file" 2>/dev/null)" || mode="$(stat -f '%Lp' "$file" 2>/dev/null)" || mode=""
   if [ "$mode" != "600" ]; then
     error "managed control-plane credential must have mode 600: $file"
     return 2
@@ -755,7 +755,7 @@ status_context() {
     mgr="${cunit%% *}"
     label="${cunit#* }"
     log_file="$(controller_log)"
-    printf '  supervised by %s (%s); log: %s\n' "$mgr" "$label" "${log_file/#$HOME/~}"
+    printf '  supervised by %s (%s); log: %s\n' "$mgr" "$label" "~${log_file#"$HOME"}"
   else
     printf "  not supervised: run 'lemon service install controller'\n"
   fi

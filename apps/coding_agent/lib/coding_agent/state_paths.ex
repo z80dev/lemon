@@ -28,11 +28,13 @@ defmodule CodingAgent.StatePaths do
     if started? and state_dir() != root do
       {:error, "worker state isolation requires a fresh runtime"}
     else
-      with :ok <- private_dir(root) do
-        Application.put_env(:coding_agent, :state_dir, root)
-        :ok
-      else
-        _ -> {:error, "could not prepare worker state directory"}
+      case private_dir(root) do
+        :ok ->
+          Application.put_env(:coding_agent, :state_dir, root)
+          :ok
+
+        _ ->
+          {:error, "could not prepare worker state directory"}
       end
     end
   end
