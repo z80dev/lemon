@@ -273,7 +273,7 @@ extension LemonBotStore {
 
     public var shouldSetUpHost: Bool {
         hostRoute != nil && ["owner", "admin"].contains(member?.role ?? "") && connectionState == "online"
-            && (machines.isEmpty || machines.contains { $0.nodeName == hostMachineNodeName && $0.status == "offline" })
+            && (!machines.contains { $0.status == "online" } || machines.contains { $0.nodeName == hostMachineNodeName && $0.status == "offline" })
             && hostSetup.allowsAutomaticAttempt
     }
 
