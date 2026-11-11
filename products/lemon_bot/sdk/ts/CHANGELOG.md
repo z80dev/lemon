@@ -4,6 +4,7 @@
 
 ### Added
 
+- Add SSH machine setup/link contracts, initiator-scoped progress events, and typed `machineEnrollmentPreview`, `addMachineOverSsh`, and `machineSetup` helpers. Mutations retain fixed nonces and never automatically replay uncertain enrollment.
 - Creation/import/duplicate contracts accept explicit Standard or Chat-only `access`; templates can suggest access without granting it. Omitted access remains all-off.
 
 - Add target-local `ModelReadiness`/`DetectedLogin` models and typed check/import endpoints for controller and machines. Checks are non-generating; Codex login imports require explicit copy consent and retain nonce reconciliation.

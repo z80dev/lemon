@@ -10,6 +10,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Named workers now refuse credential-bearing loopback connections unless the
+  listener belongs to their OS user, including tunneled MCP requests. Deliberate
+  cross-user deployments can opt out with `LEMON_NODE_TRUST_LOOPBACK_LISTENER=1`.
+- Pairing preview reports node-gateway health; tunnel invitations bind the exact
+  destination loopback port without selecting a controller-local source checkout.
 - Build Mac DMGs in release CI with a signed runtime-manifest pin, credential
   gating, notarization and verified receipts. Unconfigured builds remain
   unpublished preview artifacts; stable signed releases include a fixed DMG alias.
