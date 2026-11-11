@@ -687,6 +687,13 @@ lemon_program() {
   return 1
 }
 
+systemd_user_dir() {
+  case "${XDG_CONFIG_HOME:-}" in
+    /*) printf '%s/systemd/user\n' "$XDG_CONFIG_HOME" ;;
+    *) printf '%s/.config/systemd/user\n' "$HOME" ;;
+  esac
+}
+
 controller_unit() {
   local label unit plist unit_path uid first
   if [ "$PORT" = "4040" ]; then
@@ -711,7 +718,7 @@ controller_unit() {
   fi
 
   # systemd (Linux): the managed header or a Lemon ExecStart program.
-  unit_path="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$unit"
+  unit_path="$(systemd_user_dir)/$unit"
   if [ -f "$unit_path" ] && [ ! -L "$unit_path" ]; then
     first=""
     IFS= read -r first < "$unit_path" || true

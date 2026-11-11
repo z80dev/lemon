@@ -111,6 +111,37 @@ defmodule LemonCore.Service.TakeoverTest do
     end
   end
 
+  test "Linux listener discovery does not require lsof and fails closed on unresolved sockets", %{
+    tmp_dir: home
+  } do
+    proc_root = Path.join(home, "proc")
+    File.mkdir_p!(Path.join(proc_root, "net"))
+    File.mkdir_p!(Path.join([proc_root, "321", "fd"]))
+
+    File.write!(
+      Path.join([proc_root, "net", "tcp"]),
+      "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n" <>
+        "0: 0100007F:1004 00000000:0000 0A 0:0 0:0 0 501 0 9001\n"
+    )
+
+    descriptor = Path.join([proc_root, "321", "fd", "7"])
+    File.ln_s!("socket:[9001]", descriptor)
+    parent = self()
+
+    runner = fn command, _, _ ->
+      send(parent, {:command, command})
+      {"", 127}
+    end
+
+    opts = [os: :linux, proc_root: proc_root, command_runner: runner]
+    assert Identity.listeners(4100, opts) == [321]
+    refute_received {:command, "lsof"}
+
+    File.rm!(descriptor)
+    assert Identity.listeners(4100, opts) == :unknown
+    refute_received {:command, "lsof"}
+  end
+
   test "legacy worker matcher never selects other names or uids", %{tmp_dir: home} do
     program = home <> "/.lemon/versions/v/erts-16/bin/beam.smp"
 

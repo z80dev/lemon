@@ -61,11 +61,13 @@ JSON is one document on stdout; progress goes to stderr. Exit codes are 0 for
 ready, 1 for not-ready/operational failure, and 2 for usage errors.
 
 macOS uses LaunchAgents in the logged-in GUI user's domain: **login, not boot**.
-Linux uses `systemd --user`; boot/logout persistence requires linger. Without
-it, status reports session-only operation. `--enable-linger` attempts to enable
-it without sudo and prints the administrator command if required. No usable
-manager, or `--manual`, means detached manual processes with **no automatic
-restart after reboot/logout**; run `lemon service repair` after restarting.
+Linux uses `systemd --user`; units live under
+`${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user`, and boot/logout persistence
+requires linger. Without it, status reports session-only operation.
+`--enable-linger` attempts to enable it without sudo and prints the administrator
+command if required. No usable manager, or `--manual`, means detached manual
+processes with **no automatic restart after reboot/logout**; run
+`lemon service repair` after restarting.
 
 Repair only adopts verified Lemon-owned processes; it does not kill a foreign
 port owner. A graceful `lemon stop` leaves the controller stopped until the next
