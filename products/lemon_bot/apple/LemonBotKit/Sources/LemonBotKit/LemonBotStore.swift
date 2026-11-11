@@ -22,6 +22,7 @@ import Observation
         didSet { if member?.role != "owner" { providerSettings.reset() } }
     }
     public var bots: [Bot] = []
+    public var machineSetups: [ID: MachineSetup] = [:]
     public var machines: [Machine] = [] {
         didSet {
             if let id = providerSettings.machineID,
@@ -413,6 +414,7 @@ import Observation
         connectionState = "disconnected"; hostSetup = .idle
         connectionIssue = nil; instanceStatus = nil; nextRetryAt = nil; lastConnectionAttemptAt = nil
         user = nil; workspace = nil; member = nil; capabilities = nil; bots = []; machines = []; conversations = []; sections = []; notifications = []; runs = []
+        machineSetups = [:]
         entries = [:]; drafts = [:]; terminalFrames = [:]; terminalGaps = [:]; terminalExits = [:]; terminalExitFrames = [:]; terminalSequences = [:]; terminalSubscriptions = []
         voiceSession = nil; navigationTarget = nil; localSettings = nil; selectedConversationID = nil; deviceID = nil; snapshot = nil; cursor = "0"; latestResources = [:]; errorMessage = nil
         visibleConversationID = nil

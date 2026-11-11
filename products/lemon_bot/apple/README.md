@@ -199,6 +199,18 @@ or SSH routes get this action; other connections explain that the machine's
 owner must start the worker. Runtime/service failures keep their typed result,
 and SSH transport failures remain distinct.
 
+### Add another worker machine
+
+In **Machines → Add a machine**, enter one **SSH address** such as `me@studio`.
+The backend (not the app) connects using its controller computer's SSH keys,
+opens a secure link when needed, installs Lemon as a service and reports a live
+checklist. An optional name is under Advanced. Success explains when the worker
+starts and offers **Create a Bot here** with that machine selected.
+The machine detail shows tunnel state, actionable SSH failures and **Reconnect**.
+Tunnel workers depend on the controller computer staying awake and Lemon running.
+If SSH setup is unavailable, the sheet explains why; routable controllers retain
+**Use a join command instead**. Existing connected-host setup is unchanged.
+
 To check the flow by hand: with Lemon Bot stopped, choose **This Mac** and confirm
 it starts and opens the workspace with no form; quit and relaunch and confirm the
 account restores. With a host you can `ssh` into, connect, kill the `ssh -N`
