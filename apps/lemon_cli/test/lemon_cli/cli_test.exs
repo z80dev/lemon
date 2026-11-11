@@ -220,6 +220,63 @@ defmodule LemonCli.CLITest do
     assert output =~ "Available gateway transports"
   end
 
+  test "setup model --json reports readiness and detected logins without prompting" do
+    output =
+      capture_io(fn ->
+        assert CLI.run(["setup", "model", "--json", "--offline"]) == 1
+      end)
+
+    assert {:ok, document} = Jason.decode(output)
+
+    assert Map.keys(document) |> Enum.sort() == [
+             "availableModelIds",
+             "check",
+             "checkedAtMs",
+             "detected",
+             "modelId",
+             "providerId",
+             "reason",
+             "state",
+             "suggestedModelId"
+           ]
+
+    assert document["state"] == "not_configured"
+    assert document["reason"] == "no_default"
+    assert is_list(document["detected"])
+  end
+
+  test "setup model --json exits 0 once a provider is saved" do
+    write_openai_config("cli_model_readiness_key")
+    assert {:ok, _} = Secrets.set("cli_model_readiness_key", "sk-cli-readiness")
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["setup", "model", "--json", "--offline"]) == 0
+      end)
+
+    assert {:ok, %{"state" => "saved", "providerId" => "openai"}} = Jason.decode(output)
+  end
+
+  test "setup model rejects unknown flags with the shell usage exit code" do
+    capture_io(:stderr, fn ->
+      assert CLI.run(["setup", "model", "--not-a-flag"]) == 64
+    end)
+  end
+
+  test "setup --if-required --model-optional ignores the provider step" do
+    path = Modular.global_path()
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "[defaults]\n")
+
+    assert CLI.setup_required?()
+    refute CLI.setup_required?(model_optional: true)
+
+    output =
+      capture_io(fn -> assert CLI.run(["setup", "--if-required", "--model-optional"]) == 0 end)
+
+    refute output =~ "Setup is required"
+  end
+
   test "forwards model provider arguments to onboarding", %{tmp_dir: tmp_dir} do
     config_path = Path.join(tmp_dir, "config.toml")
 

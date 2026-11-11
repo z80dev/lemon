@@ -286,8 +286,10 @@ online. It reports persistence: login, boot, session (logged-in only), or none.
 An unavailable lifecycle command fails clearly, without a foreground fallback.
 Add `--foreground` (`--no-service` is an alias) to keep the worker in the terminal.
 Configure model-provider credentials **on the destination** with
-`lemon setup` or `lemon model --provider ...`; the noninteractive installer does
-not copy credentials from the controller or run provider setup.
+`lemon setup model` (or inspect readiness with `lemon setup model --json`); the
+noninteractive installer does not copy credentials from the controller or run
+provider setup. A detected Codex CLI login is copied only with your consent;
+each execution machine keeps its own model credentials.
 
 For headless use, save the script to a file and pass `--code-stdin` with the
 43-character code plus newline on stdin. `--code-fd N` accepts an already-open

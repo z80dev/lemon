@@ -21,23 +21,40 @@ The installer verifies the runtime and terminal-UI checksums, installs them unde
 `~/.lemon`, adds `~/.lemon/bin` to PATH for new shells, and then starts
 `lemon setup` in your terminal.
 
-In setup, choose **OpenAI Codex**, then **Sign in with ChatGPT (browser OAuth)**.
-If you already use the Codex CLI, you can instead choose **Import existing Codex
-CLI ChatGPT login (read-only copy)**; import is opt-in and never automatic. With a
-Claude Pro or Max plan, choose **Anthropic**, then **Sign in with Claude Pro/Max
-(browser)**. Other providers, local servers (Ollama, LM Studio, llama.cpp, vLLM,
-LiteLLM) and API-key login are also supported; see
-[Set up Lemon](../user-guide/setup.md). Accept the offered default model, or pick
-another one your account can use.
+Setup's **Connect a model** step lists what it already found on this machine
+first. If you use the Codex CLI, the first choice copies that ChatGPT login into
+Lemon: Lemon keeps and refreshes its own copy and never changes
+`~/.codex/auth.json`. If either app later asks you to sign in again, sign in
+there — or use *Sign in with ChatGPT* to give Lemon its own login. A provider key
+exported in your shell (for example `ANTHROPIC_API_KEY`) is offered as an
+explicit save into Lemon's encrypted store, because the background service
+cannot see your shell. Nothing is copied or saved without choosing it.
+
+Otherwise choose **Choose a provider…**, then **OpenAI Codex** → **Sign in with
+ChatGPT (browser OAuth)**. With a Claude Pro or Max plan, choose **Anthropic**,
+then **Sign in with Claude Pro/Max (browser)**. Other providers, local servers
+(Ollama, LM Studio, llama.cpp, vLLM, LiteLLM) and API-key login are also
+supported; see [Set up Lemon](../user-guide/setup.md). Accept the offered default
+model, or pick another one your account can use.
 
 Setup is safe to rerun: a usable provider is kept, not logged in again. It only
 asks about ports if one is already taken, and suggests a free one. Do not paste
 credentials into chat or a repository. Coming from Hermes? Run
 `lemon migrate hermes` after setup.
 
-Setup prints **Setup complete** after a passing live credential check, or after
-saving a provider with no quick live check. In the latter case, Lemon confirms
-the connection on your first message. Both paths offer **Open Lemon now? [Y/n]**.
+Setup ends with the state of your model, never a guess:
+
+- **Setup complete. Model: P / M (verified with P; no message was sent).** — a
+  non-generating check just passed.
+- **Setup complete. Model: P / M (saved; Lemon checks it on your first
+  message).** — the credential resolves, but the provider has no quick live
+  check, was unreachable, or the check failed for a non-authentication reason.
+
+Both paths offer **Open Lemon now? [Y/n]**. A missing, expired or rejected
+credential prints **Setup did not complete** instead. To connect or re-check a
+model later, run `lemon setup model` (or `lemon setup model --json` for a
+machine-readable report).
+
 If you installed with `--skip-setup`, had no terminal, or stopped setup early,
 run the installer's absolute-path next step:
 

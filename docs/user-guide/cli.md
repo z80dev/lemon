@@ -1021,12 +1021,13 @@ lemon run [PROMPT] [--output text|json|stream-json] [options]
 Run first-time setup and configuration.
 
 ```text
-lemon setup [provider|runtime|gateway|doctor] [options]
+lemon setup [provider|model|runtime|gateway|doctor] [options]
 ```
 
 | Subcommand | Purpose |
 | --- | --- |
 | `provider` | Configure an AI provider |
+| `model` | Connect a model or report readiness |
 | `runtime` | Configure runtime profile and port bindings |
 | `gateway` | Configure gateway adapters |
 | `doctor` | Run diagnostics or write a support bundle (alias for doctor) |
@@ -1043,6 +1044,19 @@ lemon setup [provider|runtime|gateway|doctor] [options]
 | `--codex-auth-path PATH` | Auth file for --auth codex-cli only |
 | `--model MODEL` | Model to make the default after onboarding |
 | `--if-required` | Exit immediately unless setup is still required |
+| `--model-optional` | Allow setup to finish without configuring a model |
+| `--json` | Output one JSON document (`setup model`) |
+| `--offline` | Report static readiness without live connectivity check (`setup model`) |
+
+`lemon setup model` runs the Connect-a-model step on its own: it lists the
+logins already present on this machine first (a Codex CLI ChatGPT login, a
+provider key exported in the shell) and copies or saves one only when you
+choose it. `lemon setup model --json` prints one readiness document
+(`state`, `providerId`, `modelId`, `check`, `reason`, `availableModelIds`,
+`suggestedModelId`, `checkedAtMs`) plus `detected`, and never prompts. It exits
+`0` when the model is `verified` or `saved`, `1` when it needs action, and `64`
+for usage errors. `lemon setup --if-required --model-optional` finishes once
+config and secrets are complete, leaving the model for later.
 
 #### `lemon model`
 
