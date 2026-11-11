@@ -111,6 +111,7 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
     defdelegate browser_status(), to: Probe
     defdelegate mcp_available?(), to: Probe
     defdelegate command(name, args), to: Probe
+    defdelegate tcc_status(), to: Probe
     defdelegate tool_names(cwd, opts), to: Probe
   end
 
