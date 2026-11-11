@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Execution-node sessions now renew while connected and expire after seven days
+  without contact. Rejected or missing credentials park the worker until repair
+  saves new credentials, while controller outages retry without restart loops.
+
 - Load the certificate provider before Telegram and Discord setup construct their
   first HTTPS request, preserving TLS verification on cold CLI invocations.
 
