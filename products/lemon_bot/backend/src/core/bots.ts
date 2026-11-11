@@ -14,6 +14,7 @@ import { previewBotResources, cancelBotResources } from './gates';
 import { cancelConversationVoice } from './voice';
 import { createAttachmentService } from './attachments';
 import { botAgentProjection } from './agent-addressing';
+import { endApprovalAllowances } from './approval-allowances';
 
 const name = boundedText(120, 1).refine(value => !value.includes('\0'));
 const profileText = boundedText(32768).refine(value => Buffer.byteLength(value, 'utf8') <= 32768 && !value.includes('\0'));
@@ -106,7 +107,9 @@ function requireMethods(s: BackendServices, methods: string[]): void {
 }
 /** Explicit DTO projection also removes legacy persisted live-sharing labels from replies and new writes. */
 function botDto(s: BackendServices, bot: P.Bot): P.Bot {
-  return { id: bot.id, revision: bot.revision, createdAtMs: bot.createdAtMs, updatedAtMs: bot.updatedAtMs, ownerUserId: bot.ownerUserId, machineId: bot.machineId, profileId: bot.profileId, name: bot.name, title: bot.title, job: bot.job, instructions: bot.instructions, avatar: bot.avatar, voice: bot.voice, language: bot.language, skillIds: bot.skillIds, referenceAttachmentIds: bot.referenceAttachmentIds, mainConversationId: bot.mainConversationId, sidebar: bot.sidebar, activity: bot.activity, activeRunIds: bot.activeRunIds, ...botAgentProjection(s, bot) };
+  const hasActiveBotAllowance = s.store.list<P.ApprovalAllowance>('approvalAllowances', a => a.botId === bot.id && a.scope === 'bot' && a.state === 'active').length > 0;
+  const approvalReview: P.ApprovalReviewMode = hasActiveBotAllowance ? 'bot_wide' : (s.store.metadata<P.ApprovalReviewMode>(`botApprovalReview:${bot.id}`) ?? 'per_chat');
+  return { id: bot.id, revision: bot.revision, createdAtMs: bot.createdAtMs, updatedAtMs: bot.updatedAtMs, ownerUserId: bot.ownerUserId, machineId: bot.machineId, profileId: bot.profileId, name: bot.name, title: bot.title, job: bot.job, instructions: bot.instructions, avatar: bot.avatar, voice: bot.voice, language: bot.language, skillIds: bot.skillIds, referenceAttachmentIds: bot.referenceAttachmentIds, mainConversationId: bot.mainConversationId, sidebar: bot.sidebar, activity: bot.activity, activeRunIds: bot.activeRunIds, approvalReview, ...botAgentProjection(s, bot) };
 }
 function projected(s: BackendServices, p: Principal, bot: P.Bot): P.Bot {
   owner(bot, p);
@@ -480,6 +483,11 @@ async function resetBot(s: BackendServices, c: RequestContext, bot: P.Bot, input
         remaining = await runtimeMemoryCandidates(s, bot);
       }
     }
+    for (const allowance of s.store.list<P.ApprovalAllowance>('approvalAllowances', value => value.botId === bot.id)) {
+      s.store.remove('approvalAllowances', allowance.id);
+      s.store.setMetadata(`approvalAllowanceBinding:${allowance.id}`, null);
+    }
+    s.store.setMetadata(`botApprovalReview:${bot.id}`, null);
     let changed = bot;
     if (scopes.includes('attachments') && !remove) { changed = s.update(changed, { avatar: { ...defaultAvatar }, referenceAttachmentIds: [] }); s.store.put('bots', changed); }
     if (scopes.includes('job') && !remove) { changed = s.update(changed, { job: '', instructions: '' }); await writeProfile(s, p, changed); s.store.put('bots', changed); }
@@ -511,7 +519,7 @@ async function resetBot(s: BackendServices, c: RequestContext, bot: P.Bot, input
       const issuer = s.store.metadata<{ digest: string }>(`nativeFollowupIssuerConfig:${bot.id}`);
       if (issuer) s.store.setMetadata(`nativeFollowupIssuer:${issuer.digest}`, null);
       s.store.setMetadata(`nativeFollowupIssuerConfig:${bot.id}`, null);
-      for (const key of ['botDesiredProfile', 'botProfileSync', 'botControllerFloor', 'botPublicMcpCeiling', 'botPolicyFloor', 'botPolicySync', 'preferenceSync', 'profileCanonicalSession', 'botPlacementEpoch', 'botPlacementChanged', 'botReconciliation', 'botMoveRoutines', 'botMcpReceipt', 'connectorProfileSync']) s.store.setMetadata(`${key}:${bot.id}`, null);
+      for (const key of ['botDesiredProfile', 'botProfileSync', 'botControllerFloor', 'botPublicMcpCeiling', 'botPolicyFloor', 'botPolicySync', 'preferenceSync', 'profileCanonicalSession', 'botPlacementEpoch', 'botPlacementChanged', 'botReconciliation', 'botMoveRoutines', 'botMcpReceipt', 'connectorProfileSync', 'botApprovalReview']) s.store.setMetadata(`${key}:${bot.id}`, null);
       for (const member of s.store.list<P.Member>('members')) {
         s.store.setMetadata(`botSidebar:${member.userId}:${bot.id}`, null);
         s.store.setMetadata(`botMemoryPreview:${member.userId}:${bot.id}`, null);
@@ -692,6 +700,7 @@ async function moveBot(s: BackendServices, c: RequestContext): Promise<P.Bot> {
     s.store.put('bots', changed);
     s.store.setMetadata(`botPlacementEpoch:${bot.id}`, (s.store.metadata<number>(`botPlacementEpoch:${bot.id}`) ?? 0) + 1);
     s.store.setMetadata(`botPlacementChanged:${bot.id}`, { fromMachineId: bot.machineId, toMachineId: destination.id, atMs: s.now() });
+    endApprovalAllowances(s, p, { botId: bot.id }, 'bot_moved');
     if (hasConnectors) await principal(s.integrations.connectorProvisioning ?? null)(p, changed.id);
     await writeProfile(s, p, changed);
     for (const routine of routines) {

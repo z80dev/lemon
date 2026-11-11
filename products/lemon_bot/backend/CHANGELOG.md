@@ -4,6 +4,7 @@
 
 ### Added
 
+- Remember Terminal and File approvals for an owner chat, with live revocable allowances; workspace admins can additionally enable owner-confirmed bot-wide approval mode. Permission, policy, membership and placement changes invalidate remembered decisions; external triggers always ask.
 - Added credential-free enrollment reachability preview using the controller's actual advertised invite endpoint, before any invitation is issued.
 - Bots can run on the machine Lemon Bot itself runs on without an HTTPS address. With a loopback public origin, the backend first proves a machine's worker shares its host (the worker writes a random value into the private data directory and the backend reads it back), then gives that Bot a loopback MCP endpoint approved as its private origin. Other machines still need a reachable HTTPS origin, with a clearer message saying so.
 - Deleting a Bot, or forgetting its memory, no longer fails with `not_found` once its profile has more than one workspace preference: every deletion renames the remaining entries' file-revision ids, so the backend re-lists between deletions and matches previewed entries by their stable identity.

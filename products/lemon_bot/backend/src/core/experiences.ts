@@ -5,6 +5,7 @@ import { ApiError, fail } from './errors';
 import { z, parse, principal, id, mutation, update, voice, queryObject } from './validation';
 import { productBotTools } from './bots';
 import { buildPrivateBotMemoryContextKey } from '../runtime/runs';
+import { endApprovalAllowances } from './approval-allowances';
 
 const level = z.enum(['off', 'read_only', 'read_interact']);
 const revision = z.number().int().positive();
@@ -755,6 +756,7 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
         fail('outcome_unknown', 'Requested grants were saved but native policy enforcement is unconfirmed.', false, { resourceIds: [bot.id, next.id] });
       }
       s.store.setMetadata(`botPolicySync:${bot.id}`, { state: 'acknowledged', grantId: next.id, revision: next.revision });
+      endApprovalAllowances(s, user, { botId: bot.id }, 'permissions_changed');
       s.events.emit('grant.upserted', effective, { userIds: [user.userId] });
       return effective;
     }),

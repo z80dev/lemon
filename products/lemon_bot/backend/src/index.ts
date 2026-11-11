@@ -31,6 +31,7 @@ import { createConversationRoutes } from './core/conversations';
 import { createAddressedAgentRoutes, createAddressedAgentService } from './core/agent-addressing';
 import { createMcpRoutes } from './core/mcp';
 import { createGateRoutes, createGateService } from './core/gates';
+import { createApprovalAllowanceRoutes } from './core/approval-allowances';
 import { createResourceRoutes } from './core/resources';
 import { createAttachmentRoutes, createAttachmentService } from './core/attachments';
 import { createVoiceRoutes, createVoiceService, type VoiceService } from './core/voice';
@@ -93,6 +94,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
     ...createAccountRoutes(services,hooks),...createSyncRoutes(services),...createInstanceRoutes(services,startedAtMs),...createProviderRoutes(services),...createMachineRoutes(services),
     ...createBotRoutes(services),...createAddressedAgentRoutes(services),...createConversationRoutes(services),...createMcpRoutes(services),
     ...createGateRoutes(services),...createResourceRoutes(services),...createAttachmentRoutes(services),
+    ...createApprovalAllowanceRoutes(services),
     ...createVoiceRoutes(services),...createExperienceRoutes(services),...createIntegrationRoutes(services),
     ...createRuntimeAdmissionRoutes(services),...createPairingRoutes(services)
   ]);

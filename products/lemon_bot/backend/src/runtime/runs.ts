@@ -10,12 +10,14 @@ import { refreshMachines, ensureMachineRuntimeReady } from './machines';
 import { emitBotRuntimeProjection } from './projection';
 import { safeSummary, scrub } from '../integrations/common';
 import { nativeBotToolPolicy } from '../core/experiences';
+import { approvalToolGroup, TOOL_GROUPS, matchApprovalAllowance, recordAllowanceUse } from '../core/approval-allowances';
 
 /** Build display text only from the same allowlisted, redacted proposal shown in Details. */
 export function executionApprovalPresentation(tool: string | null | undefined, inputs: P.JSONObject) {
   const name = safeSummary(tool ?? 'Runtime tool', 128);
-  const files = ['write', 'edit', 'patch', 'read', 'ls', 'find', 'grep'].includes(name);
-  const terminal = ['bash', 'shell', 'exec', 'terminal'].includes(name);
+  const group = approvalToolGroup(name);
+  const files = group === 'file_changes' || group === 'file_reading';
+  const terminal = group === 'terminal' || ['shell', 'exec', 'terminal'].includes(name);
   const browser = name === 'browser' || name.startsWith('browser.');
   const displayName = terminal ? 'Terminal' : files ? 'Files' : browser ? 'Browser' : name;
   const text = (key: string) => typeof inputs[key] === 'string' ? inputs[key] as string : '';
@@ -30,7 +32,7 @@ export function executionApprovalPresentation(tool: string | null | undefined, i
     if (!host) headline = displayName;
   }
   const singleLine = safeSummary(headline, 4096).replace(/[\s\u0000-\u001f\u007f]+/g, ' ').trim();
-  return { title: singleLine.length > 160 ? singleLine.slice(0, 159) + '…' : singleLine, target: displayName };
+  return { title: singleLine.length > 160 ? singleLine.slice(0, 159) + '…' : singleLine, target: displayName, toolGroup: group };
 }
 
 export interface RuntimeMapping {
@@ -397,8 +399,25 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
         await services.lemon.call('exec.approval.resolve', { approvalId: request.approvalId, expectedRunId: request.runId, expectedSessionKey: request.sessionKey, decision: 'deny' }, { mutation: true, resourceIds: [owned.run.id] });
         services.entry(principal, owned.run.conversationId, { kind: 'notice', severity: 'warning', text: 'A runtime action was refused because its concrete proposal could not be displayed safely for review.', requestId: null, runId: owned.run.id, actor: { kind: 'system', id: null, displayName: 'System' } }); return;
       }
+      const allowance = await matchApprovalAllowance(services, principal, owned.run, owned.bound, request.tool ?? '');
+      if (allowance) {
+        services.store.setMetadata(`remoteApproval:${request.approvalId}`, `allowance:${allowance.id}`);
+        try {
+          const ack = await services.lemon.call<unknown>('exec.approval.resolve', { approvalId: request.approvalId, decision: 'approve_once', expectedRunId: request.runId, expectedSessionKey: request.sessionKey }, { mutation: true, resourceIds: [owned.run.id] });
+          const receipt = z.object({ resolved: z.literal(true), approvalId: z.string(), decision: z.literal('approve_once'), sessionKey: z.string(), runId: z.string(), approved: z.literal(true), outcome: z.literal('approved') }).passthrough().safeParse(ack);
+          if (!receipt.success || receipt.data.approvalId !== request.approvalId || receipt.data.sessionKey !== request.sessionKey || receipt.data.runId !== request.runId) fail('outcome_unknown', 'The automatic approval receipt did not match its request.', false);
+          await recordAllowanceUse(services, principal, allowance, { tool: request.tool!, runId: owned.run.id, origin: services.store.metadata<string>(`runApprovalOrigin:${owned.run.id}`) ?? 'other' });
+          return;
+        } catch (error) {
+          if (error instanceof ApiError && error.retrySafe && error.code !== 'outcome_unknown') services.store.setMetadata(`remoteApproval:${request.approvalId}`, null);
+          else {
+            services.entry(principal, owned.run.conversationId, { kind: 'notice', severity: 'warning', text: 'Lemon could not confirm an automatic approval. If the Bot looks stuck, stop it and try again.', requestId: null, runId: owned.run.id, actor: { kind: 'system', id: null, displayName: 'System' } });
+            return;
+          }
+        }
+      }
       const presentation = executionApprovalPresentation(request.tool, inputs);
-      const created = await services.gates.create<P.Approval>(principal, 'approval', { botId: owned.run.botId, conversationId: owned.run.conversationId, runId: owned.run.id, source: 'lemon_exec', category: request.tool && ['write', 'edit', 'patch', 'read', 'ls', 'find', 'grep'].includes(request.tool) ? 'files' : 'shell', ...presentation, description: 'Review the concrete destination action. Credential-bearing and non-review fields are omitted; permission is bound to this unchanged proposal only.', inputs, expiresInMs, clientNonce: `runtime_${services.mutations.digest(request.approvalId).slice(0, 48)}`, upstream: { approvalId: request.approvalId, runId: request.runId, sessionKey: request.sessionKey, nodeId: request.nodeId ?? owned.bound.nodeId, invokeId: request.invokeId ?? null } });
+      const created = await services.gates.create<P.Approval>(principal, 'approval', { botId: owned.run.botId, conversationId: owned.run.conversationId, runId: owned.run.id, source: 'lemon_exec', category: presentation.toolGroup ? TOOL_GROUPS[presentation.toolGroup].category : 'shell', title: presentation.title, target: presentation.target, description: 'Review the concrete destination action. Credential-bearing and non-review fields are omitted; permission is bound to this unchanged proposal only.', inputs, expiresInMs, clientNonce: `runtime_${services.mutations.digest(request.approvalId).slice(0, 48)}`, upstream: { approvalId: request.approvalId, runId: request.runId, sessionKey: request.sessionKey, tool: request.tool ?? null, nodeId: request.nodeId ?? owned.bound.nodeId, invokeId: request.invokeId ?? null } });
       services.store.setMetadata(`remoteApproval:${request.approvalId}`, created.id); emitRun(services.update(owned.run, { status: 'awaiting_input' })); return;
     }
     if (event !== 'agent' && event !== 'chat') return;
@@ -476,6 +495,10 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
       services.store.transaction(() => {
         services.store.put('runs', run); services.store.setMetadata(`runtimeRun:${run.id}`, bound); services.store.setMetadata(`runPrincipal:${run.id}`, principal);
         services.store.setMetadata(`runIntent:${run.id}`, intentDigest);
+        const routineSourceId = pendingRoutine ? services.store.metadata<string>(`routineRunSource:${pendingRoutine.id}`) : null;
+        const routineSource = routineSourceId ? services.store.metadata<{ provider?: string }>(`externalEntry:${routineSourceId}`) : null;
+        const external = services.store.metadata(`externalSubmission:${principal.kind}:${principal.id}:${conversation.id}:${message.clientNonce}`) !== null || conversation.kind === 'channel' || routineSource?.provider === 'routine_event';
+        services.store.setMetadata(`runApprovalOrigin:${run.id}`, external ? 'external' : pendingRoutine ? 'routine' : principal.kind === 'user' && principal.id === principal.userId && principal.sessionId !== null ? 'owner_chat' : 'other');
         services.store.setMetadata(`nativeRunProduct:${run.id}`, run.id);
         if (pendingRoutine) {
           const sourceId = services.store.metadata<string>(`routineRunSource:${pendingRoutine.id}`);
@@ -641,6 +664,7 @@ export async function reserveCronAdmission(services: BackendServices, principal:
     services.store.put('runs', run); services.store.put('routineRuns', record);
     services.store.setMetadata(`runtimeRun:${run.id}`, { upstreamRunId: context.routerRunId, executionRunId: context.routerRunId, sessionKey: services.runtime.sessionKey(services.store.require<P.Conversation>('conversations', routine.conversationId), bot), profileId: bot.profileId, nodeId: machine.nodeId!, conversationId: routine.conversationId, botId: bot.id, assistantEntryId: null, deltaSeq: 0, deltaGap: false, dispatched: true } satisfies RuntimeMapping);
     services.store.setMetadata(`runPrincipal:${run.id}`, principal); services.store.setMetadata(`nativeRunProduct:${context.routerRunId}`, run.id); services.store.setMetadata(`cronRun:${context.cronRunId}`, record.id);
+    services.store.setMetadata(`runApprovalOrigin:${run.id}`, 'routine');
     services.store.setMetadata(`runCron:${run.id}`, context.cronRunId);
     const entry = services.entry(principal, routine.conversationId, { kind: 'message', role: 'user', text: routine.instruction, streaming: false, attachmentIds: [], clientNonce: `cron_${context.cronRunId}`, runId: run.id, actor: { kind: 'system', id: null, displayName: 'Routine' } });
     services.store.setMetadata(`runSourceEntry:${run.id}`, entry.id);

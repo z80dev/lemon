@@ -12,6 +12,7 @@ import { prepareProviderTeardown } from '../enterprise/teardown';
 import { backendDescriptor } from './identity';
 import { beginOwnerSetupClaim, consumeOwnerSetupProof } from './setup';
 import { requireLocalAccess } from './local-access';
+import { endApprovalAllowances } from './approval-allowances';
 
 const name = z.string().trim().min(1).max(120);
 const email = z.string().trim().toLowerCase().pipe(z.email().max(254));
@@ -498,6 +499,7 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
       const { revision, clientNonce, ...changes } = parse(memberSchema, context.body); const target = managedMember(context);
       if (changes.role === 'owner') services.auth.requireRole(current(context), 'owner');
       const updated = store.transaction(() => { const latest = store.require<P.Member>('members', target.id); services.mutations.checkRevision(latest, revision); finalOwner(latest, changes.role, changes.enabled); if (changes.enabled === false) hooks.beforeRevokeUser?.(targetPrincipal(latest)); const result = services.update(latest, changes); store.put('members', result); services.events.emit('member.upserted', result, { public: true }); return result; });
+      endApprovalAllowances(services, current(context), { ownerUserId: target.userId }, 'membership_changed');
       if (changes.enabled === false) await services.auth.revokeUser(target.userId);
       return updated;
     } },
@@ -505,6 +507,7 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
     { method: 'DELETE', path: '/v1/members/:id', auth: 'admin', status: 200, handler: async context => {
       const body = parse(confirm, context.body); const target = managedMember(context);
       store.transaction(() => { const latest = store.require<P.Member>('members', target.id); finalOwner(latest, 'member', false); services.mutations.confirm(current(context), latest, 'delete', body); hooks.beforeRevokeUser?.(targetPrincipal(latest)); store.put('members', services.update(latest, { enabled: false })); });
+      endApprovalAllowances(services, current(context), { ownerUserId: target.userId }, 'membership_changed');
       await services.auth.revokeUser(target.userId); store.remove('members', target.id); services.events.emit('member.deleted', { id: target.id, deleted: true }, { public: true }); return { id: target.id, deleted: true };
     } },
     { method: 'GET', path: '/v1/invites', auth: 'admin', status: 200, handler: context => { listQuery(context); return services.page(context, store.list<P.MemberInvite>('invites').map(value => value.status === 'pending' && value.expiresAtMs <= services.now() ? { ...value, status: 'expired' as const } : value)); } },
