@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.11.4]
+
 ### Added
 
 - `websearch` provider: Keenable (`keenable`), opt-in with `KEENABLE_API_KEY` or
