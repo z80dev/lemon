@@ -4,6 +4,38 @@ defmodule CodingAgent.ExecutionNode.CLITest do
   alias CodingAgent.ExecutionNode.CLI
   alias CodingAgent.ExecutionNode.Worker
 
+  defmodule UnavailableSocket do
+    def start_link(_opts), do: {:error, :fixture_socket_unavailable}
+  end
+
+  @tag :tmp_dir
+  test "forwards an isolated status writer to a real worker", %{tmp_dir: tmp_dir} do
+    parent = self()
+
+    assert {:error, _} =
+             CLI.run(
+               [
+                 "--name",
+                 "status-writer-fixture",
+                 "--controller",
+                 "ws://127.0.0.1:12345/ws",
+                 "--token",
+                 "fixture-token",
+                 "--cwd",
+                 tmp_dir
+               ],
+               configure_state: fn _ -> :ok end,
+               ensure_all_started: fn _ -> {:ok, []} end,
+               socket_module: UnavailableSocket,
+               status_writer: fn name, status ->
+                 send(parent, {:worker_status, name, status})
+                 :ok
+               end
+             )
+
+    assert_receive {:worker_status, "status-writer-fixture", %{"state" => "starting"}}
+  end
+
   test "parses the node join surface" do
     assert {:ok, opts} =
              CLI.parse([

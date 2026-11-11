@@ -151,6 +151,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
              cwd: default_cwd(opts),
              execution_capabilities: execution_capabilities,
              notify_pid: self(),
+             status_writer: Keyword.get(deps, :status_writer),
              socket_module: Keyword.get(deps, :socket_module, CodingAgent.ExecutionNode.Socket),
              executor_module: Keyword.get(deps, :executor_module, CodingAgent.Executor),
              token_store_module:
