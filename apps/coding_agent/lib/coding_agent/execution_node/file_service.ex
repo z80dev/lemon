@@ -27,9 +27,9 @@ defmodule CodingAgent.ExecutionNode.FileService do
   end
 
   def handle(method, args, opts) do
-    policy = path_policy(opts)
-
-    with {:ok, pid} <- ensure_started() do
+    with {:ok, opts} <- profile_options(method, args, opts),
+         {:ok, pid} <- ensure_started() do
+      policy = path_policy(opts)
       deadline = System.monotonic_time(:millisecond) + 25_000
 
       try do
@@ -39,6 +39,53 @@ defmodule CodingAgent.ExecutionNode.FileService do
       end
     end
   end
+
+  defp profile_options(method, args, opts) do
+    case Map.fetch(args, "profileId") do
+      :error ->
+        {:ok, opts}
+
+      {:ok, profile_id}
+      when method in ~w(node.fs.stat node.fs.read node.fs.write node.fs.mkdir node.fs.list) ->
+        with {:ok, root} <- profile_root(method, profile_id),
+             :ok <- relative_profile_path(args["path"], root) do
+          {:ok, Keyword.put(opts, :default_cwd, root)}
+        else
+          {:error, :invalid_cwd} -> {:error, :invalid_request}
+          error -> error
+        end
+
+      _ ->
+        {:error, :invalid_request}
+    end
+  end
+
+  defp profile_root(method, profile_id) when method in ~w(node.fs.write node.fs.mkdir),
+    do: CodingAgent.ExecutionNode.BotFolder.ensure(profile_id)
+
+  defp profile_root(_method, profile_id) do
+    case LemonCore.ProfileStore.paths(profile_id) do
+      {:ok, paths} -> {:ok, paths["files"]}
+      _ -> {:error, :invalid_cwd}
+    end
+  end
+
+  defp relative_profile_path(path, root) when is_binary(path) do
+    if Path.type(path) == :absolute do
+      :ok
+    else
+      case CodingAgent.ExecutionNode.HostIO.resolve(path,
+             default_cwd: root,
+             allowed_roots: [root]
+           ) do
+        {:ok, _} -> :ok
+        error -> error
+      end
+    end
+  end
+
+  defp relative_profile_path(nil, _root), do: :ok
+  defp relative_profile_path(_, _root), do: {:error, :invalid_path}
 
   defp ensure_started do
     case Process.whereis(__MODULE__) do

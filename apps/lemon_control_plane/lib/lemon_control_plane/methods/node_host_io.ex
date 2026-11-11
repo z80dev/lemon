@@ -43,8 +43,20 @@ defmodule LemonControlPlane.Methods.NodeHostIOSupport do
   defp validate("node.secrets.receipt", params), do: operation_id(params, true)
 
   defp validate(method, params) do
-    with :ok <- string(params, "path", 4096) do
+    with :ok <- string(params, "path", 4096),
+         :ok <- profile_id(method, params) do
       validate_file(method, params)
+    end
+  end
+
+  defp profile_id(method, params) do
+    if Map.has_key?(params, "profileId") do
+      if method in ~w(node.fs.list node.fs.stat node.fs.read node.fs.write node.fs.mkdir) and
+           LemonCore.ProfileStore.validate_id(params["profileId"]) == :ok,
+        do: :ok,
+        else: {:error, Errors.invalid_request("profileId must be a valid profile ID")}
+    else
+      :ok
     end
   end
 

@@ -5,6 +5,28 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
   alias LemonCore.ExecutionContext
   alias LemonGateway.ExecutionRequest
 
+  test "profile files mode is a sparse routing field, never execution metadata" do
+    for meta <- [
+          %{remote_cwd_mode: "profile_files", profile_id: "writer"},
+          %{"remote_cwd_mode" => "profile_files", "profile_id" => "writer"}
+        ] do
+      request = %ExecutionRequest{
+        run_id: "placement",
+        session_key: "agent:placement:main",
+        prompt: "hello",
+        execution_context: context(),
+        meta: meta
+      }
+
+      assert {:ok, payload} = RemoteRequestCodec.encode(request)
+      assert payload["cwdMode"] == "profile_files"
+      assert payload["cwd"] == nil
+      refute Map.has_key?(payload["meta"], "remote_cwd_mode")
+      assert {:ok, old_payload} = RemoteRequestCodec.encode(%{request | meta: %{}})
+      refute Map.has_key?(old_payload, "cwdMode")
+    end
+  end
+
   test "both JSON and atom placement flags omit the controller cwd" do
     for meta <- [
           %{remote_cwd_explicit: false, remote_cwd: "/controller/unused"},

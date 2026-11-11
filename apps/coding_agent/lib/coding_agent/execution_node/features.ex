@@ -30,6 +30,7 @@ defmodule CodingAgent.ExecutionNode.Features do
       end)
 
     features = %{
+      "botFolder" => true,
       "hostIO" => supported_platform and all?(capabilities, @host_methods),
       "filesystemCAS" =>
         supported_platform and python and Map.get(assets, "node_fs.py", false) and
