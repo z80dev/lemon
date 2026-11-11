@@ -94,11 +94,17 @@ def task_problems(task):
 # ── Docker ─────────────────────────────────────────────────────────────────
 
 def docker(*argv, timeout=120, check=True, input=None):
-    result = subprocess.run(['docker', *argv], capture_output=True, text=True, timeout=timeout,
-                            input=input, stdin=None if input is not None else subprocess.DEVNULL)
-    if check and result.returncode != 0:
-        raise RuntimeError(f'docker {argv[0]} failed: {result.stderr.strip()[-2000:]}')
-    return result
+    # Checked exec/cp calls are idempotent setup steps; under load Docker Desktop occasionally
+    # fails them with no diagnostics, so retry those. Agent invocations run unchecked, never retried.
+    attempts = 3 if check and argv[0] in ('exec', 'cp') else 1
+    for attempt in range(attempts):
+        result = subprocess.run(['docker', *argv], capture_output=True, text=True, timeout=timeout,
+                                input=input, stdin=None if input is not None else subprocess.DEVNULL)
+        if result.returncode == 0 or not check:
+            return result
+        if attempt + 1 < attempts:
+            time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f'docker {argv[0]} failed (exit {result.returncode}): {result.stderr.strip()[-2000:]}')
 
 
 class Container:
@@ -193,7 +199,10 @@ def cmd_validate(args):
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
         futures = {pool.submit(validate_one, task, IMAGES['base']): task for task in tasks}
         for future in as_completed(futures):
-            outcome = future.result()
+            try:
+                outcome = future.result()
+            except Exception as error:  # noqa: BLE001 - one task's infrastructure failure must not hide the rest
+                outcome = {'task': futures[future]['id'], 'ok': False, 'problems': [f'infrastructure: {error}']}
             status = 'OK ' if outcome['ok'] else 'BAD'
             timing = f"fixture {outcome.get('fixture_seconds', '-')}s solution {outcome.get('solution_seconds', '-')}s"
             print(f'{status} {outcome["task"]}  ({timing})', flush=True)

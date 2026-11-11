@@ -43,5 +43,8 @@ for order in [names, list(reversed(names)), names[2:] + names[:2]]:
     result = subprocess.run([sys.executable, "-m", "unittest", *["test_policy.PolicyTests.test_" + name for name in order]], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
 PY
-python3 -m unittest discover -v 2>&1 | tee /tmp/unittest.log
-! grep -q 'Ran 0 tests' /tmp/unittest.log
+# Run every test file explicitly: `unittest discover` skips directories without __init__.py.
+mapfile -t agent_tests < <(find . -name 'test*.py' -not -path './.git/*' | sort)
+(( ${#agent_tests[@]} > 0 ))
+python3 -m unittest -v "${agent_tests[@]}" 2>&1 | tee /tmp/unittest.log
+grep -qE '^Ran [1-9][0-9]* tests?' /tmp/unittest.log
