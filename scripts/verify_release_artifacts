@@ -13,6 +13,7 @@ Verifies a manifest.json (schema 2) and the release tarballs it describes:
   - the 12-artifact profile x platform matrix is present (or, with
     --platform, only that platform's profiles)
   - lemon_tui is required on every platform but is not a BEAM release
+  - darwin runtimes contain link-free bundled Python and both license notices
 
 Platform tags: linux-x86_64, linux-arm64, darwin-arm64.
 EOF
@@ -232,6 +233,24 @@ for artifact in artifacts:
     actual_sha = digest.hexdigest()
     if actual_sha != expected_sha.lower():
         errors.append(f"{filename}: sha256 mismatch expected {expected_sha} got {actual_sha}")
+
+    if platform == "darwin-arm64" and profile in ("lemon_runtime_min", "lemon_runtime_full"):
+        try:
+            with tarfile.open(artifact_path) as archive:
+                members = archive.getmembers()
+                names = {str(PurePosixPath(member.name)): member for member in members}
+                python = names.get("python/bin/python3")
+                if python is None or not python.isfile() or not python.mode & 0o111:
+                    errors.append(f"{filename}: missing regular executable python/bin/python3")
+                for notice in ("CPYTHON-LICENSE.txt", "PYTHON-BUILD-STANDALONE-LICENSE.txt"):
+                    name = f"python/licenses/{notice}"
+                    member = names.get(name)
+                    if member is None or not member.isfile() or member.size <= 0:
+                        errors.append(f"{filename}: missing nonempty regular {name}")
+                if any(member.issym() or member.islnk() for member in members):
+                    errors.append(f"{filename}: runtime archive must not contain links")
+        except (OSError, tarfile.TarError) as error:
+            errors.append(f"{filename}: unreadable runtime archive: {error}")
 
     if profile == "lemon_bot":
         try:
