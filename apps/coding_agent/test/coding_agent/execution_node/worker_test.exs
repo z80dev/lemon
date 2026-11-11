@@ -654,7 +654,8 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
         socket_module: FakeSocket,
         socket_opts: [test_pid: self()],
         executor_module: FakeExecutor,
-        token_store_opts: [root: token_root]
+        token_store_opts: [root: token_root],
+        status_writer: fn _name, _map -> :ok end
       )
 
     assert_receive {:socket_started, socket, socket_opts}
@@ -695,7 +696,8 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
                token: "token",
                cwd: tmp_dir,
                socket_module: FakeSocket,
-               socket_opts: [test_pid: self()]
+               socket_opts: [test_pid: self()],
+               status_writer: fn _name, _map -> :ok end
              )
 
     assert_receive {:socket_started, _socket, _opts}
@@ -711,7 +713,8 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
                token: "token",
                cwd: tmp_dir,
                socket_module: FakeSocket,
-               socket_opts: [test_pid: self()]
+               socket_opts: [test_pid: self()],
+               status_writer: fn _name, _map -> :ok end
              )
 
     assert_receive {:socket_started, _socket, _opts}
@@ -810,7 +813,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   end
 
   @tag :tmp_dir
-  test "rejects a stored token that authenticates as a different node", %{tmp_dir: tmp_dir} do
+  test "parks when a stored token authenticates as a different node", %{tmp_dir: tmp_dir} do
     token_root = Path.join(tmp_dir, "tokens")
 
     assert :ok =
@@ -824,7 +827,6 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
                root: token_root
              )
 
-    Process.flag(:trap_exit, true)
     {:ok, worker} = start_worker(tmp_dir, [])
     assert_receive {:socket_started, socket, _opts}
 
@@ -834,10 +836,12 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
       {:connected, %{"auth" => %{"clientId" => "different-node"}}}
     })
 
-    assert_receive {:EXIT, ^worker,
-                    {:authenticated_node_id_mismatch,
-                     %{expected: "expected-node", actual: "different-node"}}},
+    assert_receive {:execution_node_worker, ^worker,
+                    {:status, :needs_reauthorization, "node_identity_mismatch"}},
                    1_000
+
+    assert Process.alive?(worker)
+    assert Worker.link_state(worker) == {:parked, :needs_reauthorization, "node_identity_mismatch"}
   end
 
   @tag :tmp_dir
@@ -1240,6 +1244,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
           {Worker,
            [
              node_name: "native-drain",
+             status_writer: fn _, _ -> :ok end,
              controller: "ws://controller:4040/ws",
              allow_insecure_controller: true,
              token: "node-token",
@@ -1382,6 +1387,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
         {Worker,
          [
            node_name: "native-cancel-race",
+           status_writer: fn _, _ -> :ok end,
            controller: "ws://controller:4040/ws",
            allow_insecure_controller: true,
            token: "node-token",
@@ -1999,19 +2005,20 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   end
 
   defp start_worker(tmp_dir, extra_opts) do
-    Worker.start_link(
-      [
-        node_name: "newphy",
-        controller: "ws://controller:4040/ws",
-        allow_insecure_controller: true,
-        cwd: tmp_dir,
-        notify_pid: self(),
-        socket_module: FakeSocket,
-        socket_opts: [test_pid: self()],
-        executor_module: FakeExecutor,
-        token_store_opts: [root: Path.join(tmp_dir, "tokens")]
-      ] ++ extra_opts
-    )
+    default_opts = [
+      node_name: "newphy",
+      controller: "ws://controller:4040/ws",
+      allow_insecure_controller: true,
+      cwd: tmp_dir,
+      notify_pid: self(),
+      socket_module: FakeSocket,
+      socket_opts: [test_pid: self()],
+      executor_module: FakeExecutor,
+      token_store_opts: [root: Path.join(tmp_dir, "tokens")],
+      status_writer: fn _name, _map -> :ok end
+    ]
+
+    Worker.start_link(Keyword.merge(default_opts, extra_opts))
   end
 
   defp invoke(worker, socket, invoke_id, node_id, args) do
@@ -2048,5 +2055,460 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
       |> Map.put("runId", run_id)
       |> Map.put("executionContext", encoded_context)
     end
+  end
+  @tag :tmp_dir
+  test "expired token in node mode parks worker, cancels invocations, writes status, and leaves process running",
+       %{tmp_dir: tmp_dir} do
+    test_pid = self()
+    token_root = Path.join(tmp_dir, "tokens")
+
+    status_writer = fn name, map ->
+      send(test_pid, {:status_written, name, map})
+      :ok
+    end
+
+    assert :ok =
+             TokenStore.save(
+               "newphy",
+               %{
+                 "token" => "session-token",
+                 "nodeId" => "node-1",
+                 "controller" => "ws://controller:4040/ws"
+               },
+               root: token_root
+             )
+
+    {:ok, worker} = start_worker(tmp_dir, status_writer: status_writer)
+    assert_receive {:status_written, "newphy", %{"state" => "starting", "nodeId" => "node-1"}}
+    assert_receive {:socket_started, socket, _opts}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:connected, %{"auth" => %{"clientId" => "node-1"}}}
+    })
+
+    assert_receive {:status_written, "newphy", %{"state" => "online", "nodeId" => "node-1"}}
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, "node-1"}}
+    assert Worker.link_state(worker) == :online
+
+    invoke(worker, socket, "inv-1", "node-1", %{"prompt" => "say hello"})
+    assert_receive {:executor_started, _request, _opts, _sink, _ref, context}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:authentication_error,
+       %{
+         "code" => "UNAUTHORIZED",
+         "message" => "Token has expired",
+         "details" => %{"reason" => "session_expired"}
+       }}
+    })
+
+    assert_receive {:execution_node_worker, ^worker,
+                    {:status, :needs_reauthorization, "session_expired"}}
+
+    assert_receive {:status_written, "newphy",
+                    %{
+                      "version" => 1,
+                      "localName" => "newphy",
+                      "state" => "needs_reauthorization",
+                      "reason" => "session_expired",
+                      "nodeId" => "node-1",
+                      "osPid" => os_pid,
+                      "changedAtMs" => changed_at
+                    }}
+
+    assert is_integer(os_pid) and os_pid > 0
+    assert is_integer(changed_at) and changed_at > 0
+    assert_receive {:executor_cancelled, ^context}
+    assert Process.alive?(worker)
+    assert Worker.link_state(worker) == {:parked, :needs_reauthorization, "session_expired"}
+  end
+
+  @tag :tmp_dir
+  test "auto-resumes when credential file is replaced with a new token", %{tmp_dir: tmp_dir} do
+    test_pid = self()
+    token_root = Path.join(tmp_dir, "tokens")
+
+    status_writer = fn name, map ->
+      send(test_pid, {:status_written, name, map})
+      :ok
+    end
+
+    assert :ok =
+             TokenStore.save(
+               "newphy",
+               %{
+                 "token" => "expired-token",
+                 "nodeId" => "node-1",
+                 "controller" => "ws://controller:4040/ws"
+               },
+               root: token_root
+             )
+
+    {:ok, worker} =
+      start_worker(tmp_dir, status_writer: status_writer, watch_interval_ms: 20)
+
+    assert_receive {:socket_started, socket1, _opts1}
+
+    send(worker, {
+      :execution_node_socket,
+      socket1,
+      {:authentication_error,
+       %{
+         "code" => "UNAUTHORIZED",
+         "message" => "Token has expired",
+         "details" => %{"reason" => "session_expired"}
+       }}
+    })
+
+    assert_receive {:execution_node_worker, ^worker,
+                    {:status, :needs_reauthorization, "session_expired"}}
+    assert Worker.link_state(worker) == {:parked, :needs_reauthorization, "session_expired"}
+
+    assert :ok =
+             TokenStore.save(
+               "newphy",
+               %{
+                 "token" => "fresh-repaired-token",
+                 "nodeId" => "node-1",
+                 "controller" => "ws://controller:4040/ws"
+               },
+               root: token_root
+             )
+
+    assert_receive {:status_written, "newphy", %{"state" => "starting", "nodeId" => "node-1"}},
+                   1_000
+
+    assert_receive {:execution_node_worker, ^worker, {:status, :starting}}, 1_000
+    assert_receive {:socket_started, socket2, socket_opts2}, 1_000
+    assert get_in(socket_opts2, [:connect_params, "auth", "token"]) == "fresh-repaired-token"
+
+    send(worker, {
+      :execution_node_socket,
+      socket2,
+      {:connected, %{"auth" => %{"clientId" => "node-1"}}}
+    })
+
+    assert_receive {:status_written, "newphy", %{"state" => "online", "nodeId" => "node-1"}},
+                   1_000
+
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, "node-1"}}, 1_000
+    assert Worker.link_state(worker) == :online
+  end
+
+  @tag :tmp_dir
+  test "stays parked during credential watch when stored token fingerprint is unchanged",
+       %{tmp_dir: tmp_dir} do
+    token_root = Path.join(tmp_dir, "tokens")
+
+    assert :ok =
+             TokenStore.save(
+               "newphy",
+               %{
+                 "token" => "rejected-token",
+                 "nodeId" => "node-1",
+                 "controller" => "ws://controller:4040/ws"
+               },
+               root: token_root
+             )
+
+    {:ok, worker} = start_worker(tmp_dir, watch_interval_ms: 10, probe_interval_ms: 60_000)
+    assert_receive {:socket_started, socket, _opts}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:authentication_error,
+       %{
+         "code" => "UNAUTHORIZED",
+         "message" => "Token has expired",
+         "details" => %{"reason" => "session_expired"}
+       }}
+    })
+
+    assert_receive {:execution_node_worker, ^worker,
+                    {:status, :needs_reauthorization, "session_expired"}}
+
+    Process.sleep(50)
+    refute_receive {:socket_started, _, _}
+    assert Worker.link_state(worker) == {:parked, :needs_reauthorization, "session_expired"}
+  end
+
+  @tag :tmp_dir
+  test "conflict error parks worker with node_name_conflict and re-probes with the current token",
+       %{tmp_dir: tmp_dir} do
+    token_root = Path.join(tmp_dir, "tokens")
+
+    assert :ok =
+             TokenStore.save(
+               "newphy",
+               %{
+                 "token" => "conflict-token",
+                 "nodeId" => "node-1",
+                 "controller" => "ws://controller:4040/ws"
+               },
+               root: token_root
+             )
+
+    test_pid = self()
+
+    status_writer = fn name, map ->
+      send(test_pid, {:status_written, name, map})
+      :ok
+    end
+
+    {:ok, worker} =
+      start_worker(tmp_dir,
+        status_writer: status_writer,
+        watch_interval_ms: 60_000,
+        probe_interval_ms: 20
+      )
+
+    assert_receive {:socket_started, socket1, _opts1}
+
+    send(worker, {
+      :execution_node_socket,
+      socket1,
+      {:authentication_error,
+       %{
+         "code" => "CONFLICT",
+         "message" => "Node name is already in use",
+         "details" => %{"reason" => "node_name_conflict"}
+       }}
+    })
+
+    assert_receive {:execution_node_worker, ^worker,
+                    {:status, :conflict, "node_name_conflict"}}
+
+    assert_receive {:status_written, "newphy",
+                    %{"state" => "conflict", "reason" => "node_name_conflict"}}
+
+    assert Worker.link_state(worker) == {:parked, :conflict, "node_name_conflict"}
+
+    assert_receive {:status_written, "newphy", %{"state" => "starting"}}, 1_000
+    assert_receive {:execution_node_worker, ^worker, {:status, :starting}}, 1_000
+    assert_receive {:socket_started, _socket2, socket_opts2}, 1_000
+    assert get_in(socket_opts2, [:connect_params, "auth", "token"]) == "conflict-token"
+  end
+
+  @tag :tmp_dir
+  test "fallback conflict without details normalizes to node_name_conflict", %{tmp_dir: tmp_dir} do
+    token_root = Path.join(tmp_dir, "tokens")
+
+    assert :ok =
+             TokenStore.save(
+               "newphy",
+               %{
+                 "token" => "conflict-token",
+                 "nodeId" => "node-1",
+                 "controller" => "ws://controller:4040/ws"
+               },
+               root: token_root
+             )
+
+    {:ok, worker} = start_worker(tmp_dir, probe_interval_ms: 60_000)
+    assert_receive {:socket_started, socket, _opts}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:authentication_error, %{"code" => "CONFLICT", "message" => "Name conflict"}}
+    })
+
+    assert_receive {:execution_node_worker, ^worker,
+                    {:status, :conflict, "node_name_conflict"}}
+
+    assert Worker.link_state(worker) == {:parked, :conflict, "node_name_conflict"}
+  end
+
+  @tag :tmp_dir
+  test "startup with missing credential parks in needs_enrollment/credential_missing and auto-resumes after enrollment",
+       %{tmp_dir: tmp_dir} do
+    test_pid = self()
+    token_root = Path.join(tmp_dir, "tokens")
+
+    status_writer = fn name, map ->
+      send(test_pid, {:status_written, name, map})
+      :ok
+    end
+
+    {:ok, worker} =
+      start_worker(tmp_dir,
+        status_writer: status_writer,
+        watch_interval_ms: 20
+      )
+
+    assert_receive {:execution_node_worker, ^worker,
+                    {:status, :needs_enrollment, "credential_missing"}}
+
+    assert_receive {:status_written, "newphy",
+                    %{
+                      "version" => 1,
+                      "localName" => "newphy",
+                      "state" => "needs_enrollment",
+                      "reason" => "credential_missing",
+                      "nodeId" => nil,
+                      "osPid" => os_pid
+                    }}
+
+    assert is_integer(os_pid) and os_pid > 0
+    assert Process.alive?(worker)
+    assert Worker.link_state(worker) == {:parked, :needs_enrollment, "credential_missing"}
+
+    assert :ok =
+             TokenStore.save(
+               "newphy",
+               %{
+                 "token" => "newly-enrolled-token",
+                 "nodeId" => "enrolled-node",
+                 "controller" => "ws://controller:4040/ws"
+               },
+               root: token_root
+             )
+
+    assert_receive {:status_written, "newphy",
+                    %{"state" => "starting", "nodeId" => "enrolled-node"}},
+                   1_000
+
+    assert_receive {:execution_node_worker, ^worker, {:status, :starting}}, 1_000
+    assert_receive {:socket_started, socket, socket_opts}, 1_000
+    assert get_in(socket_opts, [:connect_params, "auth", "token"]) == "newly-enrolled-token"
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:connected, %{"auth" => %{"clientId" => "enrolled-node"}}}
+    })
+
+    assert_receive {:status_written, "newphy",
+                    %{"state" => "online", "nodeId" => "enrolled-node"}},
+                   1_000
+
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, "enrolled-node"}}, 1_000
+    assert Worker.link_state(worker) == :online
+  end
+
+  @tag :tmp_dir
+  test "startup with controller mismatch parks in needs_enrollment/controller_mismatch",
+       %{tmp_dir: tmp_dir} do
+    token_root = Path.join(tmp_dir, "tokens")
+
+    assert :ok =
+             TokenStore.save(
+               "newphy",
+               %{
+                 "token" => "some-token",
+                 "nodeId" => "node-1",
+                 "controller" => "ws://other-controller:9999/ws"
+               },
+               root: token_root
+             )
+
+    {:ok, worker} = start_worker(tmp_dir, [])
+
+    assert_receive {:execution_node_worker, ^worker,
+                    {:status, :needs_enrollment, "controller_mismatch"}}
+
+    assert Process.alive?(worker)
+    assert Worker.link_state(worker) == {:parked, :needs_enrollment, "controller_mismatch"}
+  end
+
+  @tag :tmp_dir
+  test "startup with corrupted/missing node_id parks in needs_enrollment/credential_unreadable",
+       %{tmp_dir: tmp_dir} do
+    token_root = Path.join(tmp_dir, "tokens")
+
+    path = Path.join(token_root, "node-corrupted.json")
+    File.mkdir_p!(token_root)
+    File.write!(path, Jason.encode!(%{"token" => "tok", "controller" => "ws://controller:4040/ws"}))
+
+    {:ok, worker} = start_worker(tmp_dir, [])
+
+    assert_receive {:execution_node_worker, ^worker,
+                    {:status, :needs_enrollment, "credential_unreadable"}}
+
+    assert Process.alive?(worker)
+    assert Worker.link_state(worker) == {:parked, :needs_enrollment, "credential_unreadable"}
+  end
+
+  @tag :tmp_dir
+  test "missing authenticated node id in hello parks in needs_reauthorization/node_identity_mismatch",
+       %{tmp_dir: tmp_dir} do
+    token_root = Path.join(tmp_dir, "tokens")
+
+    assert :ok =
+             TokenStore.save(
+               "newphy",
+               %{
+                 "token" => "session-token",
+                 "nodeId" => "expected-node",
+                 "controller" => "ws://controller:4040/ws"
+               },
+               root: token_root
+             )
+
+    {:ok, worker} = start_worker(tmp_dir, [])
+    assert_receive {:socket_started, socket, _opts}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:connected, %{"auth" => %{"clientId" => ""}}}
+    })
+
+    assert_receive {:execution_node_worker, ^worker,
+                    {:status, :needs_reauthorization, "node_identity_mismatch"}},
+                   1_000
+
+    assert Process.alive?(worker)
+    assert Worker.link_state(worker) == {:parked, :needs_reauthorization, "node_identity_mismatch"}
+  end
+
+  @tag :tmp_dir
+  test "transient connect error triggers connect_retry, notifies reconnecting, and stays alive",
+       %{tmp_dir: tmp_dir} do
+    test_pid = self()
+
+    status_writer = fn name, map ->
+      send(test_pid, {:status_written, name, map})
+      :ok
+    end
+
+    {:ok, worker} = start_worker(tmp_dir, token: "my-token", status_writer: status_writer)
+    assert_receive {:socket_started, socket, _opts}
+
+    send(worker, {:execution_node_socket, socket, {:connect_retry, "INTERNAL_ERROR"}})
+
+    assert_receive {:execution_node_worker, ^worker, {:status, :reconnecting}}
+    assert_receive {:status_written, "newphy", %{"state" => "reconnecting"}}
+    assert Process.alive?(worker)
+    assert Worker.link_state(worker) == :reconnecting
+  end
+
+  @tag :tmp_dir
+  test "transient authentication_error triggers reconnecting and does not park", %{tmp_dir: tmp_dir} do
+    test_pid = self()
+
+    status_writer = fn name, map ->
+      send(test_pid, {:status_written, name, map})
+      :ok
+    end
+
+    {:ok, worker} = start_worker(tmp_dir, token: "my-token", status_writer: status_writer)
+    assert_receive {:socket_started, socket, _opts}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:authentication_error, %{"code" => "UNAVAILABLE", "message" => "Service unavailable"}}
+    })
+
+    assert_receive {:execution_node_worker, ^worker, {:status, :reconnecting}}
+    assert_receive {:status_written, "newphy", %{"state" => "reconnecting"}}
+    assert Process.alive?(worker)
+    assert Worker.link_state(worker) == :reconnecting
   end
 end

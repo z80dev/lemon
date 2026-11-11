@@ -114,6 +114,7 @@ defmodule CodingAgent.ExecutionNode.WorkerProviderManagementTest do
       start_supervised!(
         {Worker,
          node_name: "cwd-provider-worker",
+         status_writer: fn _, _ -> :ok end,
          controller: "ws://localhost:4040/ws",
          token: "offline-test-token",
          cwd: worker_cwd,
@@ -210,6 +211,7 @@ defmodule CodingAgent.ExecutionNode.WorkerProviderManagementTest do
       start_supervised!(
         {Worker,
          node_name: "offline-provider-worker",
+         status_writer: fn _, _ -> :ok end,
          controller: "ws://localhost:4040/ws",
          token: "offline-test-token",
          cwd: root,
@@ -300,6 +302,7 @@ defmodule CodingAgent.ExecutionNode.WorkerProviderManagementTest do
       start_supervised!(
         {Worker,
          node_name: "offline-device-worker",
+         status_writer: fn _, _ -> :ok end,
          controller: "ws://localhost:4040/ws",
          token: "offline-test-token",
          cwd: root,
