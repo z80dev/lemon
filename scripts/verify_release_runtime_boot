@@ -305,6 +305,35 @@ assert_bundled_browser_driver() {
   esac
 }
 
+# darwin runtime profiles bundle a pinned standalone CPython so a Mac without
+# Apple's Command Line Tools still runs the worker's file/process/PTY helpers.
+# The tree must contain no symlinks (LemonCore.Update.Archive rejects links),
+# and the interpreter must import the helper modules with a bare system PATH.
+assert_bundled_python() {
+  local profile="$1"
+  local extract_dir="$2"
+  local python_bin="$extract_dir/python/bin/python3"
+  local links
+
+  if [ -L "$python_bin" ] || [ ! -f "$python_bin" ] || [ ! -x "$python_bin" ]; then
+    echo "$profile: darwin release has no regular executable python/bin/python3" >&2
+    exit 1
+  fi
+
+  links="$(find "$extract_dir/python" -type l)"
+  if [ -n "$links" ]; then
+    echo "$profile: bundled python tree contains symlinks:" >&2
+    printf '%s\n' "$links" >&2
+    exit 1
+  fi
+
+  if ! env -i PATH=/usr/bin:/bin "$python_bin" \
+    -c 'import pty,fcntl,os; os.pread' > /dev/null 2>&1; then
+    echo "$profile: bundled interpreter cannot import the worker helper modules" >&2
+    exit 1
+  fi
+}
+
 assert_no_asset_warmup_failure() {
   local profile="$1"
   local extract_dir="$2"
@@ -628,9 +657,22 @@ boot_one_profile() {
     exit 1
   fi
 
+  local darwin_runtime=""
+  case "$(basename "$tarball_path")" in
+    *-darwin-arm64-lemon_runtime_min.tar.gz | *-darwin-arm64-lemon_runtime_full.tar.gz)
+      darwin_runtime="1"
+      ;;
+  esac
+
+  local artifact_version=""
+  artifact_version="$(basename "$tarball_path" | sed -n 's/^lemon-\([0-9][0-9.]*\)-.*$/\1/p')"
+
   case "$profile" in
     lemon_runtime_min | lemon_runtime_full)
       assert_bundled_browser_driver "$profile" "$extract_dir"
+      if [ -n "$darwin_runtime" ]; then
+        assert_bundled_python "$profile" "$extract_dir"
+      fi
       ;;
   esac
 
@@ -675,6 +717,33 @@ boot_one_profile() {
   }
   run_release() { run_with_env "$release_bin" "$@"; }
   run_launcher() { run_with_env "$extract_dir/bin/lemon" "$@"; }
+
+  # With a PATH whose only `python3` fails, bot readiness still has to hold:
+  # that is only possible when the worker resolved the bundled interpreter.
+  if [ -n "$darwin_runtime" ]; then
+    local shim_dir="$profile_dir/python-shim"
+    local version_flag=""
+    mkdir -p "$shim_dir"
+    printf '#!/bin/sh\nexit 1\n' > "$shim_dir/python3"
+    chmod +x "$shim_dir/python3"
+
+    if [ -n "$artifact_version" ]; then
+      version_flag="--expected-version $artifact_version"
+    fi
+
+    # shellcheck disable=SC2086 # word-split the optional version flag
+    if ! run_with_env "PATH=$shim_dir:/usr/bin:/bin" "$extract_dir/bin/lemon" \
+      node capabilities --json --require-bot $version_flag \
+      > "$profile_dir/capabilities.json"; then
+      echo "$profile: bot readiness failed with a failing python3 on PATH; the bundled interpreter was not preferred" >&2
+      exit 1
+    fi
+
+    if ! grep -q '"botReady":true' "$profile_dir/capabilities.json"; then
+      echo "$profile: capabilities JSON did not report botReady" >&2
+      exit 1
+    fi
+  fi
 
   if [ "$profile" = "lemon_runtime_min" ] || [ "$profile" = "lemon_runtime_full" ]; then
     run_release eval '

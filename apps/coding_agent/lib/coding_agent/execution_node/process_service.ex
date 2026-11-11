@@ -13,7 +13,7 @@ defmodule CodingAgent.ExecutionNode.ProcessService do
   use GenServer
 
   alias LemonCore.Store
-  alias CodingAgent.ExecutionNode.FileService
+  alias CodingAgent.ExecutionNode.{FileService, Python}
 
   @table :node_process_receipts
   @ttl_ms 86_400_000
@@ -376,11 +376,11 @@ defmodule CodingAgent.ExecutionNode.ProcessService do
   end
 
   defp open_port do
-    case System.find_executable("python3") do
-      nil ->
+    case Python.executable() do
+      {:error, :not_installed} ->
         {:error, :process_unavailable}
 
-      python ->
+      {:ok, python} ->
         helper = Path.join(to_string(:code.priv_dir(:coding_agent)), "node_process.py")
 
         try do
