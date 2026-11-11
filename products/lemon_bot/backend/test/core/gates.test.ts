@@ -6,6 +6,7 @@ import type { BackendServices, EntityStore, Principal, RequestContext } from '..
 import { ApiError } from '../../src/core/errors';
 import { z, parse } from '../../src/core/validation';
 import { createDraft, createGateRoutes, createGateService, cancelConversationGates, previewBotResources, cancelBotResources, acknowledgeExecutionApproval } from '../../src/core/gates';
+import { queueGrantChanges, type PreparedAccessChanges } from '../../src/core/access';
 
 const actor: Principal = { kind: 'user', id: 'user_1', userId: 'user_1', workspaceId: 'workspace_1', role: 'member', sessionId: null, botId: null, deviceId: null };
 const nonce = 'abcdefghijklmnop';
@@ -29,7 +30,7 @@ function fixture() {
   };
   let now = 1000;
   let nextId = 0;
-  const policy: P.EffectivePolicy = { userId: actor.userId, botId: 'bot_1', directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'allow', allowSudo: false, allowEgress: true, rules: [], networkPolicies: [], explanations: [], rememberedApprovals: { chat: ['shell', 'files'], bot: [] } };
+  const policy: P.EffectivePolicy = { userId: actor.userId, botId: 'bot_1', directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'allow', allowSudo: false, allowEgress: true, rules: [], networkPolicies: [], explanations: [], rememberedApprovals: { chat: ['shell', 'files'], bot: [] }, workspaceReads: 'allow' };
   let rpc: (method: string, params: Record<string, unknown>) => Promise<unknown> = async () => unreachable();
   let sender: (draft: P.Draft) => Promise<{ providerMessageId: string | null; runId: string | null }> = async () => unreachable();
   const calls: { method: string; params: Record<string, unknown> }[] = [];
@@ -695,4 +696,128 @@ describe('remembered approvals (groups 1-5)', () => {
     expect(f.calls[0]).toEqual({ method: 'exec.approval.resolve', params: { approvalId: 'upstream_app_1', decision: 'approve_once', expectedSessionKey: 'session_1', expectedRunId: 'upstream_run' } });
     expect(f.calls[1]).toEqual({ method: 'exec.approval.resolve', params: { approvalId: 'upstream_app_2', decision: 'approve_once', expectedSessionKey: 'session_1', expectedRunId: 'upstream_run' } });
   });
+});
+
+describe('access request gates', () => {
+  async function request(services: BackendServices): Promise<P.Approval> {
+    const run: P.Run = services.resource('run', { conversationId: 'room_1', botId: 'bot_1', initiatorUserId: actor.userId, clientNonce: nonce, status: 'running', error: null, startedAtMs: services.now(), completedAtMs: null, routineRunId: null });
+    services.store.put('runs', run);
+    return services.gates.create<P.Approval>(actor, 'approval', {
+      ...common, runId: run.id, source: 'access_request', category: 'permissions', forceHuman: true,
+      title: 'Bot needs Terminal', description: 'Terminal and Files on Machine.', target: 'Machine',
+      inputs: { capability: 'terminal', capabilityIds: ['terminal', 'files'], level: 'read_interact', machineLabel: 'Machine', reason: 'Run the requested checks.' },
+    });
+  }
+  function seedGrants(services: BackendServices): P.BotGrant[] {
+    return ['terminal', 'files'].map(capabilityId => services.store.put<P.BotGrant>('botGrants', services.resource('grant', { botId: 'bot_1', machineId: 'machine_1', capabilityId, requestedLevel: 'off' as const, pendingLevel: null, effectiveLevel: 'off' as const, reasons: [] })));
+  }
+
+  test('only approve_once and deny are accepted and access cards never have chat scope', async () => {
+    const f = fixture();
+    const approval = await request(f.services);
+    expect(approval.gate.state).toBe('pending');
+    expect(approval.policyMode).toBe('ask_first');
+    expect(approval.chatOption).toBeNull();
+    const entry = f.store.require<P.TranscriptEntry>('entries', approval.entryId);
+    expect(entry.kind === 'card' && entry.card.type).toBe('access_request');
+    await expect(f.gates.resolve(actor, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' })).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(f.gates.resolve({ ...actor, id: 'other', userId: 'other' }, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_once' })).rejects.toMatchObject({ code: 'forbidden' });
+    const denied = await f.gates.resolve<P.Approval>(actor, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'deny' });
+    expect(denied.gate.state).toBe('denied');
+    expect(f.store.list('botGrants')).toEqual([]);
+  });
+
+  test('async preparation precedes the atomic approved transition and pending grants', async () => {
+    const f = fixture();
+    seedGrants(f.services);
+    const approval = await request(f.services);
+    const prepared: PreparedAccessChanges = { bot: f.store.require<P.Bot>('bots', 'bot_1'), changes: { terminal: 'read_interact', files: 'read_interact' }, accessRequestId: approval.id };
+    const ready = Promise.withResolvers<PreparedAccessChanges | null>();
+    let queued = false;
+    f.services.access = {
+      prepare: async () => ready.promise,
+      queue(value) {
+        expect(f.store.require<P.Approval>('approvals', approval.id).gate.state).toBe('approved');
+        queueGrantChanges(f.services, value.bot, value.changes, value.accessRequestId);
+        queued = true;
+      },
+      schedule() {}, async reconcileAll() {}, close() {},
+    };
+    const resolving = f.gates.resolve<P.Approval>(actor, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_once' });
+    expect(f.store.require<P.Approval>('approvals', approval.id).gate.state).toBe('pending');
+    expect(queued).toBe(false);
+    ready.resolve(prepared);
+    expect((await resolving).gate.state).toBe('approved');
+    expect(queued).toBe(true);
+    const grants = f.store.list<P.BotGrant>('botGrants');
+    expect(grants).toHaveLength(2);
+    expect(grants.every(value => value.requestedLevel === 'off' && value.pendingLevel === 'read_interact')).toBe(true);
+    expect(f.store.metadata(`accessRequestQueued:${approval.id}`)).toBe(true);
+  });
+
+  test('queue failure after transition rolls back gate, card, events and grants together', async () => {
+    const f = fixture();
+    const originalGrants = seedGrants(f.services);
+    const approval = await request(f.services);
+    const eventCount = f.events().length;
+    f.services.access = {
+      prepare: async () => ({ bot: f.store.require<P.Bot>('bots', 'bot_1'), changes: { terminal: 'read_interact' }, accessRequestId: approval.id }),
+      queue(value) {
+        queueGrantChanges(f.services, value.bot, value.changes, value.accessRequestId);
+        throw new Error('Injected after the approved transition and grant writes.');
+      },
+      schedule() {}, async reconcileAll() {}, close() {},
+    };
+    await expect(f.gates.resolve(actor, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_once' })).rejects.toThrow('Injected after');
+    expect(f.store.require<P.Approval>('approvals', approval.id)).toEqual(approval);
+    const entry = f.store.require<P.TranscriptEntry>('entries', approval.entryId);
+    expect(entry.kind === 'card' && entry.card.type === 'access_request' && entry.card.approval).toEqual(approval);
+    expect(f.store.list<P.BotGrant>('botGrants')).toEqual(originalGrants);
+    expect(f.store.list('accessRequests')).toEqual([]);
+    expect(f.events()).toHaveLength(eventCount);
+    expect(f.store.metadata(`accessRequestQueued:${approval.id}`)).toBeNull();
+  });
+
+  test('a policy denial during async revalidation leaves access pending with no grant', async () => {
+    const f = fixture();
+    const approval = await request(f.services);
+    const ready = Promise.withResolvers<PreparedAccessChanges | null>();
+    let queued = false;
+    f.services.access = { prepare: async () => ready.promise, queue() { queued = true; }, schedule() {}, async reconcileAll() {}, close() {} };
+    const resolving = f.gates.resolve(actor, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_once' });
+    f.policy.localExecutionCeiling = 'deny';
+    ready.resolve({ bot: f.store.require<P.Bot>('bots', 'bot_1'), changes: { terminal: 'read_interact' }, accessRequestId: approval.id });
+    await expect(resolving).rejects.toMatchObject({ code: 'policy_denied' });
+    expect(queued).toBe(false);
+    expect(f.store.require<P.Approval>('approvals', approval.id).gate.state).toBe('pending');
+  });
+
+  test('already available access resolves approved without queueing', async () => {
+    const f = fixture();
+    const approval = await request(f.services);
+    f.services.access = { prepare: async () => null, queue() { throw new Error('Already available access must not queue.'); }, schedule() {}, async reconcileAll() {}, close() {} };
+    expect((await f.gates.resolve<P.Approval>(actor, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_once' })).gate.state).toBe('approved');
+    expect(f.store.metadata(`accessRequestQueued:${approval.id}`)).toBe(false);
+    expect(f.store.list('accessRequests')).toEqual([]);
+  });
+});
+
+test('access becoming available after preparation does not report a queued change', async () => {
+  const f = fixture();
+  const run: P.Run = f.services.resource('run', { conversationId: 'room_1', botId: 'bot_1', initiatorUserId: actor.userId, clientNonce: nonce, status: 'running', error: null, startedAtMs: 1000, completedAtMs: null, routineRunId: null });
+  f.store.put('runs', run);
+  const grant: P.BotGrant = f.services.resource('grant', { botId: 'bot_1', machineId: 'machine_1', capabilityId: 'browser', requestedLevel: 'off', pendingLevel: null, effectiveLevel: 'off', reasons: [] });
+  f.store.put('botGrants', grant);
+  const approval = await f.gates.create<P.Approval>(actor, 'approval', { ...common, runId: run.id, source: 'access_request', category: 'permissions', forceHuman: true, title: 'Bot needs Browser', description: 'View pages.', target: 'Machine', inputs: { capability: 'browser', capabilityIds: ['browser'], level: 'read_only', machineLabel: 'Machine', reason: 'View the page.' } });
+  f.services.access = {
+    prepare: async () => ({ bot: f.store.require<P.Bot>('bots', 'bot_1'), changes: { browser: 'read_only' }, accessRequestId: approval.id }),
+    queue(prepared) {
+      f.store.put('botGrants', { ...grant, requestedLevel: 'read_only' });
+      queueGrantChanges(f.services, prepared.bot, prepared.changes, prepared.accessRequestId);
+    },
+    schedule() {}, async reconcileAll() {}, close() {},
+  };
+  expect((await f.gates.resolve<P.Approval>(actor, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_once' })).gate.state).toBe('approved');
+  expect(f.store.metadata(`accessRequestQueued:${approval.id}`)).not.toBe(true);
+  expect(f.store.list('accessRequests')).toEqual([]);
 });

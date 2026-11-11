@@ -38,6 +38,8 @@ Every Bot has an assigned machine, a Lemon profile and an owner conversation. Ta
 
 Setup starts with a named assistant and a machine, with optional phone pairing. Usage shows provider spend and limits. Integrations and host controls depend on configured providers and permissions.
 
+When a task needs missing Terminal, Files or Browser access, a Bot can ask through an owner-only access card. Allowing changes the Bot's access after its current task finishes, then visibly continues your original request; commands still require their normal approval. Grant edits during a task also queue, with Stop task available. Supported workers keep task files in a private per-Bot folder; folder reads can skip approval unless workspace policy requires it, and reading there makes subsequent web access ask first.
+
 Instance provider rows show the last observed Lemon provider failure and its time.
 The runtime retains one bounded, credential-free category summary per provider,
 including authentication and rate-limit failures; successful calls do not erase

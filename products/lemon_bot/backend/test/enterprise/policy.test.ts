@@ -47,6 +47,25 @@ describe('effective policy composition', () => {
     expect(composeEffectivePolicy(base).networkPolicies.map(item => item.id)).toEqual(['wn']);
     expect(composeEffectivePolicy({ ...base, governance: { ...base.governance, lockNetworkForGroups: false } }).networkPolicies.map(item => item.id)).toEqual(['gn']);
   });
+  test('folder read policy separates explicit files restrictions from synthetic requireReview', () => {
+    const cases: { name: string; changes: Partial<PolicyCompositionInput>; expected: P.EffectivePolicy['workspaceReads'] }[] = [
+      { name: 'default', changes: {}, expected: 'allow' },
+      { name: 'synthetic review', changes: { groupPolicies: [{ ...groupPolicy, reviewExempt: false }] }, expected: 'allow' },
+      { name: 'folder governance', changes: { governance: { ...defaultGovernance, folderReadsNeedReview: true } }, expected: 'ask' },
+      { name: 'execution denied', changes: { policies: { ...fixture().policies, localExecutionCeiling: 'deny' } }, expected: 'ask' },
+      { name: 'required explicit', changes: { rules: [rule('files', 'ask_first', { category: 'files', required: true })] }, expected: 'ask' },
+      { name: 'personal explicit', changes: { rules: [rule('files', 'ask_first', { category: 'files', ownerUserId: 'u' })] }, expected: 'ask' },
+      { name: 'group required ID', changes: { groupPolicies: [{ ...groupPolicy, requiredRuleIds: ['files'] }], rules: [rule('files', 'ask_first', { category: 'files' })] }, expected: 'ask' },
+      { name: 'ordinary workspace rule', changes: { rules: [rule('files', 'ask_first', { category: 'files' })] }, expected: 'allow' },
+      { name: 'foreign personal rule', changes: { rules: [rule('files', 'ask_first', { category: 'files', ownerUserId: 'other' })] }, expected: 'allow' },
+      { name: 'different Bot', changes: { rules: [rule('files', 'ask_first', { category: 'files', required: true, botId: 'other' })] }, expected: 'allow' },
+      { name: 'different machine', changes: { rules: [rule('files', 'ask_first', { category: 'files', required: true, machineId: 'other' })] }, expected: 'allow' },
+      { name: 'required auto review', changes: { rules: [rule('files', 'auto_review', { category: 'files', required: true })] }, expected: 'allow' },
+      { name: 'shell rule', changes: { rules: [rule('shell', 'ask_first', { required: true })] }, expected: 'allow' },
+      { name: 'denied group does not require', changes: { groupPolicies: [{ ...groupPolicy, productAccess: false, requiredRuleIds: ['files'] }], rules: [rule('files', 'ask_first', { category: 'files' })] }, expected: 'allow' },
+    ];
+    for (const value of cases) expect({ name: value.name, workspaceReads: composeEffectivePolicy(fixture(value.changes)).workspaceReads }).toEqual({ name: value.name, workspaceReads: value.expected });
+  });
   test('remembered approvals matrix: default allows chat for shell and files, bot empty', () => {
     const policy = composeEffectivePolicy(fixture());
     expect(policy.rememberedApprovals).toEqual({ chat: ['shell', 'files'], bot: [] });
@@ -147,6 +166,9 @@ test('workspace hardening projects only actual generic restrictions and excludes
   expect(restrictions.localExecutionCeiling).toBe('deny');
   expect(restrictions.allowedMcpOrigins).toEqual(['https://approved.example']);
   expect(restrictions.requireReview).toBe(false);
+  expect(restrictions.folderReadsNeedReview).toBe(false);
+  f.services.store.setMetadata('governance', { ...defaultGovernance, folderReadsNeedReview: true });
+  expect(createPolicyServices(f.services).workspaceRestrictions({ botId: 'b', machineId: 'm' }).folderReadsNeedReview).toBe(true);
   expect(JSON.stringify(restrictions)).not.toContain('owner-private');
   expect(JSON.stringify(restrictions)).not.toContain('foreign-private');
   f.services.store.setMetadata('policies', null); f.services.store.setMetadata('governance', null);
@@ -160,8 +182,22 @@ test('stored governance without rememberedApprovals field reads back as chat', a
   f.services.store.setMetadata('governance', legacyGovernance);
   const services = createPolicyServices(f.services);
   expect(services.governance().rememberedApprovals).toBe('chat');
+  expect(services.governance().folderReadsNeedReview).toBe(false);
   const effective = await services.effectivePolicy(f.owner, f.bot.id);
   expect(effective.rememberedApprovals).toEqual({ chat: ['shell', 'files'], bot: [] });
+});
+
+test('folder read governance updates persist and notify policy enforcement', async () => {
+  const f = serviceFixture();
+  const changes: P.Governance[] = [];
+  const route = createPolicyRoutes(f.services, { governanceChanged: async (_previous, next) => { changes.push(next); } }).find(route => route.method === 'PATCH' && route.path === '/v1/governance')!;
+  const result = await route.handler({
+    services: f.services, request: new Request('http://localhost/v1/governance', { method: 'PATCH' }), params: {}, query: new URLSearchParams(),
+    body: { clientNonce: 'folder_review_nonce_0001', revision: 1, folderReadsNeedReview: true }, user: { ...f.owner, role: 'admin' }, requestId: 'req_folder', route, nonceResourceIds: [],
+  }) as P.Governance;
+  expect(result.folderReadsNeedReview).toBe(true);
+  expect(changes).toEqual([result]);
+  expect((await createPolicyServices(f.services).effectivePolicy(f.owner, f.bot.id)).workspaceReads).toBe('ask');
 });
 
 function makeAllowance(services: BackendServices, id: string, overrides: Partial<P.ApprovalAllowance> = {}): P.ApprovalAllowance {

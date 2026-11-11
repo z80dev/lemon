@@ -3,6 +3,7 @@ import type { BackendServices, GateService, Principal, RequestContext, Route } f
 import { ApiError, fail } from './errors';
 import { z, parse, id, nonce, update, boundedText, principal, queryObject } from './validation';
 import { chatOptionFor, grantChatAllowance, findConcurrentPendingApprovals } from './approval-allowances';
+import type { PreparedAccessChanges } from './access';
 
 const MAX_WAIT = 600_000;
 const categories = z.enum(['shell', 'files', 'external_message', 'calendar', 'publish', 'purchase', 'permissions', 'connector', 'handoff']);
@@ -13,7 +14,7 @@ const option = z.object({ value: boundedText(1024, 1), label: boundedText(1024, 
 const field = z.object({ id: boundedText(128, 1), label: boundedText(1024, 1), kind: z.enum(['text', 'multiline', 'number', 'boolean', 'single_select', 'multi_select']), required: z.boolean(), options: z.array(option).min(1).max(100).optional(), min: z.number().finite().optional(), max: z.number().finite().optional() }).strict();
 const upstreamSchema = z.object({ approvalId: id, sessionKey: boundedText(1024, 1), runId: id, nodeId: id.nullable().optional(), invokeId: id.nullable().optional(), tool: boundedText(128).nullable().optional() }).strict();
 export type ApprovalSource = z.infer<typeof upstreamSchema>;
-const approvalInput = common.extend({ category: categories, title: boundedText(1024, 1), description: boundedText(32_768), target: boundedText(4096, 1), inputs: z.record(z.string(), json), source: z.enum(['product', 'lemon_exec']).optional(), upstream: upstreamSchema.optional(), forceHuman: z.boolean().optional() });
+const approvalInput = common.extend({ category: categories, title: boundedText(1024, 1), description: boundedText(32_768), target: boundedText(4096, 1), inputs: z.record(z.string(), json), source: z.enum(['product', 'lemon_exec', 'access_request']).optional(), upstream: upstreamSchema.optional(), forceHuman: z.boolean().optional() });
 const questionInput = common.extend({ title: boundedText(1024, 1), fields: z.array(field).min(1).max(32) });
 const humanInput = common.extend({ title: boundedText(1024, 1), instructions: boundedText(32_768, 1), reason: z.enum(['login', 'mfa', 'captcha', 'payment', 'identity', 'other']), externalUrl: z.url().refine(value => new URL(value).protocol === 'https:').nullable().optional() });
 const secretInput = common.extend({ name: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/), description: boundedText(4096), scope: z.enum(['machine', 'bot']) });
@@ -105,7 +106,7 @@ function conversationOf(services: BackendServices, resource: GateResource): stri
 }
 function cardFor(collection: Collection, resource: GateResource): P.Card {
   switch (collection) {
-    case 'approvals': { const approval = resource as P.Approval; return { type: approval.category === 'shell' || approval.category === 'files' ? 'local_tool_permission' : approval.category === 'publish' ? 'publish_approval' : approval.policyMode === 'auto_review' ? 'auto_review_approval' : 'permission_request', approval }; }
+    case 'approvals': { const approval = resource as P.Approval; return { type: approval.source === 'access_request' ? 'access_request' : approval.category === 'shell' || approval.category === 'files' ? 'local_tool_permission' : approval.category === 'publish' ? 'publish_approval' : approval.policyMode === 'auto_review' ? 'auto_review_approval' : 'permission_request', approval }; }
     case 'questions': return { type: 'user_form', question: resource as P.Question };
     case 'humanSteps': return { type: 'human_step', step: resource as P.HumanStep };
     case 'secretRequests': return { type: 'secret_request', request: resource as P.SecretRequest };
@@ -364,6 +365,15 @@ export function createGateService(services: BackendServices): GateService & { sw
         creationOwner(services, actor, input);
         const previous = replay<T>(services, actor, kind, input, digest);
         if (previous) return previous;
+        if ('source' in input && input.source === 'access_request') {
+          if (input.category !== 'permissions' || input.forceHuman !== true || !input.runId || !['terminal', 'files', 'browser'].includes(String(input.inputs.capability))) fail('invalid_request', 'Access requests require a human permissions gate bound to a run.');
+          const run = services.store.require<P.Run>('runs', input.runId);
+          if (run.routineRunId !== null || services.store.metadata(`runCron:${run.id}`)) fail('policy_denied', 'Access requests need you present; tell the owner which access to turn on.');
+          const requests = services.store.list<P.Approval>('approvals', value => value.source === 'access_request');
+          const earlier = requests.find(value => value.runId === input.runId && value.inputs.capability === input.inputs.capability);
+          if (earlier) return earlier as T;
+          if (requests.filter(value => (value.runId ? services.store.get<P.Run>('runs', value.runId)?.conversationId : value.conversationId) === input.conversationId && value.createdAtMs > services.now() - 3_600_000).length >= 3) fail('rate_limited', 'At most three access requests are allowed per conversation each hour.');
+        }
         const name = collectionFor[kind];
         const { bot, conversation, target } = context(services, actor, input, kind !== 'question');
         const expiresAtMs = services.now() + (input.expiresInMs ?? MAX_WAIT);
@@ -371,7 +381,7 @@ export function createGateService(services: BackendServices): GateService & { sw
         const entryId = services.id('entry');
         let resource: GateResource;
         if ('category' in input) {
-          if (!policy?.productAccess || (['shell', 'files'].includes(input.category) && policy.localExecutionCeiling === 'deny')) fail('policy_denied', 'Effective policy prohibits this action.');
+          if (!policy?.productAccess || ((['shell', 'files'].includes(input.category) || input.source === 'access_request') && policy.localExecutionCeiling === 'deny')) fail('policy_denied', 'Effective policy prohibits this action.');
           const rules = policy.rules.filter(rule => rule.category === input.category && (rule.botId === null || rule.botId === bot.id) && (rule.machineId === null || rule.machineId === bot.machineId));
           const ask = input.forceHuman === true || rules.some(rule => rule.mode === 'ask_first') || (['shell', 'files'].includes(input.category) && policy.localExecutionCeiling === 'ask');
           const selected = rules.find(rule => rule.mode === 'ask_first') ?? rules.find(rule => rule.mode === 'auto_review') ?? rules.find(rule => rule.mode === 'allow');
@@ -426,11 +436,24 @@ export function createGateService(services: BackendServices): GateService & { sw
       const name = collection(rawCollection);
       const input = name === 'approvals' ? parse(approvalResolve, raw) : name === 'questions' ? parse(questionResolve, raw) : name === 'humanSteps' ? parse(humanResolve, raw) : parse(secretResolve, raw);
       sweep();
+      let prepared: PreparedAccessChanges | null = null;
+      if (name === 'approvals') {
+        const proposal = services.store.require<P.Approval>('approvals', resourceId);
+        if (proposal.source === 'access_request') {
+          if (input.decision !== 'approve_once' && input.decision !== 'deny') fail('invalid_request', 'Access requests accept only approve_once or deny.');
+          if (actor.kind !== 'user' || actor.userId !== proposal.gate.targetUserId) fail('forbidden', 'Only the target member can resolve this request.');
+          pending(services, actor, name, proposal, input.revision);
+          if (input.decision === 'approve_once') {
+            if (!services.access) fail('capability_unavailable', 'Access requests are unavailable.');
+            prepared = await services.access.prepare(actor, proposal);
+          }
+        }
+      }
       if (name === 'approvals' && (input.decision === 'approve_once' || input.decision === 'approve_chat')) {
         const proposal = services.store.require<P.Approval>('approvals', resourceId);
         pending(services, actor, name, proposal, input.revision);
         const policy = await services.integrations.effectivePolicy(actor, proposal.botId);
-        if (!policy.productAccess || (['shell', 'files'].includes(proposal.category) && policy.localExecutionCeiling === 'deny')) fail('policy_denied', 'Effective policy now prohibits this action.');
+        if (!policy.productAccess || ((['shell', 'files'].includes(proposal.category) || proposal.source === 'access_request') && policy.localExecutionCeiling === 'deny')) fail('policy_denied', 'Effective policy now prohibits this action.');
         if (input.decision === 'approve_chat') {
           if (actor.kind !== 'user' || actor.id !== actor.userId || !actor.sessionId) fail('forbidden', 'Interactive user session required.');
           const bot = services.store.require<P.Bot>('bots', proposal.botId);
@@ -470,7 +493,12 @@ export function createGateService(services: BackendServices): GateService & { sw
             const runtimeDecision = (input.decision === 'approve_once' || input.decision === 'approve_chat') ? 'approve_once' : 'deny';
             services.store.setMetadata(`approvalDecision:${current.id}`, { decision: runtimeDecision, productDecision: input.decision, userId: actor.userId, workspaceId: actor.workspaceId });
           }
-          return transition(services, 'approvals', current, state, actor.userId, changes);
+          const transitioned = transition(services, 'approvals', current, state, actor.userId, changes);
+          if (current.source === 'access_request' && state === 'approved') {
+            if (prepared) services.access!.queue(prepared);
+            else services.store.setMetadata(`accessRequestQueued:${current.id}`, false);
+          }
+          return transitioned;
         }
         const current = services.store.require<GateResource>(name, resourceId);
         pending(services, actor, name, current, input.revision);

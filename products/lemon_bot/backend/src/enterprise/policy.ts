@@ -5,7 +5,7 @@ import { ApiError } from '../core/errors';
 import { principal, userPrincipal } from '../integrations/common';
 import { endApprovalAllowances } from '../core/approval-allowances';
 
-export const defaultGovernance: P.Governance = { revision: 1, groupAccess: 'all', allowedDirectoryGroupIds: [], allowSudo: false, allowEgress: false, lockNetworkForGroups: true, requireReview: true, allowedChannelAdapters: [], xMentionsEnabled: false, emailEnabled: false, contentExportEnabled: false, inactiveHostPolicy: { enabled: false, afterDays: 30, action: 'suspend' }, rememberedApprovals: 'chat' };
+export const defaultGovernance: P.Governance = { revision: 1, groupAccess: 'all', allowedDirectoryGroupIds: [], allowSudo: false, allowEgress: false, lockNetworkForGroups: true, requireReview: true, folderReadsNeedReview: false, allowedChannelAdapters: [], xMentionsEnabled: false, emailEnabled: false, contentExportEnabled: false, inactiveHostPolicy: { enabled: false, afterDays: 30, action: 'suspend' }, rememberedApprovals: 'chat' };
 const categories = ['shell', 'files', 'external_message', 'calendar', 'publish', 'purchase', 'permissions', 'connector', 'handoff'] as const;
 const category = z.enum(categories); const mode = z.enum(['ask_first', 'auto_review', 'allow']);
 const id = z.string().min(1).max(256); const nonce = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/); const update = { clientNonce: nonce, revision: z.number().int().positive() };
@@ -13,7 +13,7 @@ const ids = z.array(id).max(1000).refine(values => new Set(values).size === valu
 const createGroup = z.object({ clientNonce: nonce, name: z.string().min(1).max(120), memberUserIds: ids }).strict();
 const patchGroup = z.object({ ...update, name: z.string().min(1).max(120).optional(), memberUserIds: ids.optional() }).strict();
 const patchPolicy = z.object({ ...update, productAccess: z.boolean().optional(), capabilityModes: z.partialRecord(category, mode).optional(), requiredRuleIds: ids.optional(), localExecutionCeiling: z.enum(['deny', 'ask', 'allow']).optional(), allowEgress: z.boolean().optional(), allowSudo: z.boolean().optional(), networkPolicyId: id.nullable().optional(), reviewExempt: z.boolean().optional() }).strict();
-const patchGovernance = z.object({ ...update, groupAccess: z.enum(['all', 'selected']).optional(), allowedDirectoryGroupIds: ids.optional(), allowSudo: z.boolean().optional(), allowEgress: z.boolean().optional(), lockNetworkForGroups: z.boolean().optional(), requireReview: z.boolean().optional(), allowedChannelAdapters: z.array(z.enum(['email', 'slack', 'telegram', 'discord', 'whatsapp'])).optional(), xMentionsEnabled: z.boolean().optional(), emailEnabled: z.boolean().optional(), contentExportEnabled: z.boolean().optional(), inactiveHostPolicy: z.object({ enabled: z.boolean(), afterDays: z.number().int().min(1).max(3650), action: z.enum(['suspend', 'stop_worker']) }).strict().optional(), rememberedApprovals: z.enum(['off', 'chat', 'chat_and_bot']).optional() }).strict();
+const patchGovernance = z.object({ ...update, groupAccess: z.enum(['all', 'selected']).optional(), allowedDirectoryGroupIds: ids.optional(), allowSudo: z.boolean().optional(), allowEgress: z.boolean().optional(), lockNetworkForGroups: z.boolean().optional(), requireReview: z.boolean().optional(), folderReadsNeedReview: z.boolean().optional(), allowedChannelAdapters: z.array(z.enum(['email', 'slack', 'telegram', 'discord', 'whatsapp'])).optional(), xMentionsEnabled: z.boolean().optional(), emailEnabled: z.boolean().optional(), contentExportEnabled: z.boolean().optional(), inactiveHostPolicy: z.object({ enabled: z.boolean(), afterDays: z.number().int().min(1).max(3650), action: z.enum(['suspend', 'stop_worker']) }).strict().optional(), rememberedApprovals: z.enum(['off', 'chat', 'chat_and_bot']).optional() }).strict();
 const revision = z.object(update).strict();
 const ceilingRank: Record<P.GroupPolicy['localExecutionCeiling'], number> = { deny: 0, ask: 1, allow: 2 };
 const modeRank: Record<P.PolicyRule['mode'], number> = { ask_first: 0, auto_review: 1, allow: 2 };
@@ -44,6 +44,7 @@ export function composeEffectivePolicy(input: PolicyCompositionInput): P.Effecti
   const localExecutionCeiling = ceilingRank[groupCeiling] < ceilingRank[input.policies.localExecutionCeiling] ? groupCeiling : input.policies.localExecutionCeiling;
   const requiredIds = new Set(activeGrants.flatMap(policy => policy.requiredRuleIds));
   const applicable = input.rules.filter(rule => (rule.botId === null || rule.botId === input.botId) && (rule.machineId === null || rule.machineId === input.machineId) && (rule.ownerUserId === null || rule.ownerUserId === input.userId));
+  const workspaceReads = input.governance.folderReadsNeedReview || localExecutionCeiling === 'deny' || applicable.some(rule => rule.category === 'files' && rule.mode === 'ask_first' && (rule.required || requiredIds.has(rule.id) || rule.ownerUserId === input.userId)) ? 'ask' : 'allow';
   const rules: P.PolicyRule[] = [];
   for (const action of categories) {
     const candidates = applicable.filter(rule => rule.category === action); const required = candidates.filter(rule => rule.required || requiredIds.has(rule.id));
@@ -81,7 +82,7 @@ export function composeEffectivePolicy(input: PolicyCompositionInput): P.Effecti
   explanations.push(input.governance.lockNetworkForGroups ? 'Workspace network hard lock overrides group network replacements.' : 'Applicable group network policies replace workspace rules and intersect on destination.');
   if (!productAccess) explanations.push('Workspace, membership or eligible directory group denied product access.');
   explanations.push(`Local execution is ${localExecutionCeiling}; workspace ceiling is ${input.policies.localExecutionCeiling}.`);
-  return { userId: input.userId, botId: input.botId, directoryGroupIds: eligible.map(group => group.id).sort(), productAccess, localExecutionCeiling, allowSudo: input.governance.allowSudo && (!activeGrants.length || activeGrants.some(policy => policy.allowSudo)), allowEgress: input.governance.allowEgress && (!activeGrants.length || activeGrants.some(policy => policy.allowEgress)), rules, networkPolicies, explanations, rememberedApprovals };
+  return { userId: input.userId, botId: input.botId, directoryGroupIds: eligible.map(group => group.id).sort(), productAccess, localExecutionCeiling, workspaceReads, allowSudo: input.governance.allowSudo && (!activeGrants.length || activeGrants.some(policy => policy.allowSudo)), allowEgress: input.governance.allowEgress && (!activeGrants.length || activeGrants.some(policy => policy.allowEgress)), rules, networkPolicies, explanations, rememberedApprovals };
 }
 
 export function createPolicyServices(services: BackendServices) {
@@ -96,7 +97,7 @@ export function createPolicyServices(services: BackendServices) {
     const base = policies();
     return {
       localExecutionCeiling: base.localExecutionCeiling, allowedMcpOrigins: base.allowedMcpOrigins,
-      requireReview: governance().requireReview,
+      requireReview: governance().requireReview, folderReadsNeedReview: governance().folderReadsNeedReview,
       rules: services.store.list<P.PolicyRule>('policyRules', rule => rule.ownerUserId === null && (rule.botId === null || rule.botId === scope.botId) && (rule.machineId === null || rule.machineId === scope.machineId)),
     };
   }

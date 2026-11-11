@@ -20,6 +20,7 @@ const nativeProductTools: { name: keyof P.MCPToolInputs; executionName: string }
   { name: 'create_draft', executionName: 'mcp_lemon_bot_create_draft_6e65809e9170b8c9b3cb0da09b714275' },
   { name: 'ask_user', executionName: 'mcp_lemon_bot_ask_user_10d4fd7a91be9332225ab7a9f47f9f2f' },
   { name: 'request_approval', executionName: 'mcp_lemon_bot_request_approval_ca54a9645adf9ba042f0e53146a13ee0' },
+  { name: 'request_access', executionName: 'mcp_lemon_bot_request_access_fixture' },
   { name: 'request_human_step', executionName: 'mcp_lemon_bot_request_human_ste_688cee41cf6bff126499b440c3a8624c' },
   { name: 'request_secret', executionName: 'mcp_lemon_bot_request_secret_c5d5dd62ffb1c7cd4ebdaf58ee1da740' },
   { name: 'send_voice_memo', executionName: 'mcp_lemon_bot_send_voice_memo_94b772ea7c8f891201c61ad1c1a26482' },
@@ -88,7 +89,7 @@ export function fixture(): TestRuntimeFixture {
     async revokeUser() {}, async session() { throw new Error('Not exercised by runtime fixture.'); },
     issueReauth() { throw new Error('Reauthentication is not exercised by the runtime fixture.'); }, consumeReauth() { throw new Error('Reauthentication is not exercised by the runtime fixture.'); },
   } as BackendServices['auth'];
-  services.integrations = { async admission() {}, async effectivePolicy(actor, botId) { return { userId: actor.userId, botId: botId ?? null, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, rules: [], networkPolicies: [], explanations: [] }; }, async connectorConfig(_actor, _botId, _conversationId, operationId) { if (operationId) store.setMetadata(`invocationConnectors:${operationId}`, []); return []; }, async sendApprovedDraft() { throw new Error('Draft delivery is not exercised by the runtime fixture.'); }, async channelIngress() { throw new Error('Channel ingress is not exercised by the runtime fixture.'); }, async emitProviderNotifications() {}, providerCapabilities() { return {}; } } as BackendServices['integrations'];
+  services.integrations = { async admission() {}, async effectivePolicy(actor, botId) { return { userId: actor.userId, botId: botId ?? null, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, workspaceReads: 'allow', rules: [], networkPolicies: [], explanations: [] }; }, async connectorConfig(_actor, _botId, _conversationId, operationId) { if (operationId) store.setMetadata(`invocationConnectors:${operationId}`, []); return []; }, async sendApprovedDraft() { throw new Error('Draft delivery is not exercised by the runtime fixture.'); }, async channelIngress() { throw new Error('Channel ingress is not exercised by the runtime fixture.'); }, async emitProviderNotifications() {}, providerCapabilities() { return {}; } } as BackendServices['integrations'];
   services.gates = { async create() { throw new Error('No gate RPC configured in this fixture.'); }, async resolve() { throw new Error('No gate resolution configured.'); }, async wait() { throw new Error('No gate wait configured.'); }, cancelUser() {} };
   services.events = createEventService(services);
   store.setMetadata('workspaceId', 'workspace');
@@ -103,8 +104,11 @@ export function fixture(): TestRuntimeFixture {
     services, store, alice, bob, machine, bot, conversation, calls,
     async rpc(method, params) {
       if (method === 'mcp.execution_names') {
-        expect(params).toEqual({ server: { name: 'lemon-bot', url: 'https://product.example/mcp' }, toolNames: [...productBotTools] });
-        return productExecutionProjection();
+        const toolNames = params.toolNames as string[];
+        expect(params.server).toEqual({ name: 'lemon-bot', url: 'https://product.example/mcp' });
+        expect(toolNames.every(name => productBotTools.includes(name as keyof P.MCPToolInputs))).toBe(true);
+        const tools = productExecutionProjection().tools.filter(tool => toolNames.includes(tool.name));
+        return { server: { name: 'lemon-bot' }, tools, count: tools.length };
       }
       if (method === 'nodes.list') return { nodes: [{ id: machine.nodeId, name: machine.nodeName, purpose: 'lemon_bot', enrollmentInviteId: null, status: 'online', lastSeenMs: machine.lastSeenAtMs, pairedAtMs: machine.createdAtMs, capabilities: ['node.shell.open', 'node.fs.read'] }], pairings: [], summary: { presenceAvailable: true, truncated: false } };
       if (method === 'node.capabilities.get') return { nodeId: machine.nodeId, os: 'linux', measuredAtMs: services.now(), stale: false, items: [
@@ -125,7 +129,7 @@ export function fixture(): TestRuntimeFixture {
     context(route, body, actor = alice, params = {}, query = new URLSearchParams()) { return { services, route, body, user: actor, params, query, nonceResourceIds: [], requestId: 'req_fixture', request: new Request(`https://product.example${route.path}`) }; },
   };
   const lemon: ConnectedLemonService = {
-    connected: true, methods: ['mcp.execution_names', 'chat.send', 'runs.receipt.get', 'agent.wait', 'chat.abort', 'node.secrets.set', 'node.shell.open', 'node.shell.input', 'node.shell.resize', 'node.shell.close', 'node.fs.write', 'node.fs.stat', 'nodes.list', 'node.capabilities.get', 'node.runtime.features'],
+    connected: true, methods: ['mcp.execution_names', 'profiles.update', 'chat.send', 'runs.receipt.get', 'agent.wait', 'chat.abort', 'node.secrets.set', 'node.shell.open', 'node.shell.input', 'node.shell.resize', 'node.shell.close', 'node.fs.write', 'node.fs.stat', 'nodes.list', 'node.capabilities.get', 'node.runtime.features'],
     controller: { url: 'ws://127.0.0.1:4040/ws', state: 'connected', connectedAtMs: 1, lastDisconnectedAtMs: null, lastError: null, nextRetryAtMs: null, methodCount: 0 }, reconnect() {},
     async call<T>(method: string, params: Record<string, unknown> = {}, options = {}) { calls.push({ method, params, mutation: 'mutation' in options && options.mutation === true }); return await value.rpc(method, params) as T; },
     onEvent(listener) { eventListeners.add(listener); return () => { eventListeners.delete(listener); }; },

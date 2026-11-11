@@ -18,6 +18,7 @@ import { installSecretResolver } from './core/secrets';
 import { createMutationService } from './core/mutations';
 import { createEventService } from './core/events';
 import { createAccessService, type RevocationHooks } from './core/auth';
+import { createAccessService as createJitAccessService } from './core/access';
 import { createAccountRoutes, createAccountService } from './core/accounts';
 import { Router } from './core/router';
 import { createRealtime, type RealtimeData, type RealtimeService } from './core/realtime';
@@ -95,6 +96,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   const accounts=createAccountService(services);
   const pairings=createPairingService(services);
   const addressedAgents=createAddressedAgentService(services);services.addressedAgents=addressedAgents;
+  const access=createJitAccessService(services);services.access=access;
   router.register([
     ...createAccountRoutes(services,hooks),...createSyncRoutes(services),...createInstanceRoutes(services,startedAtMs),...createProviderRoutes(services),...createMachineRoutes(services),
     ...createBotRoutes(services),...createAddressedAgentRoutes(services),...createConversationRoutes(services),...createMcpRoutes(services),
@@ -115,6 +117,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
     }finally{reconciling=false;}
   };
   const removeConnected=lemon.onConnected(()=>{void reconcile();});
+  void access.reconcileAll().catch(()=>services.audit(null,'access.reconcile','controller','failed'));
   const reconcileTimer=setInterval(()=>{void reconcile();},30000);
   const retentionTimer=setInterval(()=>{store.transaction(()=>{
     const now=services.now();store.db.query('DELETE FROM events WHERE timestamp_ms<?').run(now-7*86400000);
@@ -145,7 +148,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
       catch(error){void server.stop(true);server=null;throw error;}
       lemon.start();return server;
     },
-    async stop(){if(stopped)return;stopped=true;clearInterval(reconcileTimer);clearInterval(retentionTimer);removeConnected();pairings.close();experiences.close();addressedAgents.close();realtime.close();voice.close();gates.close();attachments.close();await services.integrations.dispose?.();runtime.close();terminals.dispose();lemon.close();if(server)await server.stop(true);removePid?.();store.close();}
+    async stop(){if(stopped)return;stopped=true;clearInterval(reconcileTimer);clearInterval(retentionTimer);removeConnected();access.close();pairings.close();experiences.close();addressedAgents.close();realtime.close();voice.close();gates.close();attachments.close();await services.integrations.dispose?.();runtime.close();terminals.dispose();lemon.close();if(server)await server.stop(true);removePid?.();store.close();}
   };
 }
 
