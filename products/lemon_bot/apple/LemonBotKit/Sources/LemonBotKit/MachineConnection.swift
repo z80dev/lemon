@@ -80,10 +80,7 @@ public enum MachineBootstrap {
         public let key: String
     }
 
-    public static var installCommand: String {
-        let version = Bundle.main.object(forInfoDictionaryKey: "LemonBotReleaseVersion") as? String ?? "2026.11.1"
-        return "curl -fsSL https://github.com/z80dev/lemon/releases/download/v\(version)/install.sh | sh -s -- --profile bot"
-    }
+    public static var installCommand: String { ReleasePin.current?.installCommand() ?? ReleasePin.fallbackInstallCommand }
 
     /// The source shim is an executable too: every caller delegates the same lifecycle command.
     static let locateScript = #"""

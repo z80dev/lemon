@@ -9,13 +9,17 @@ defmodule CodingAgent.ExecutionNode.HostCommand do
         {:error, :not_installed}
 
       executable ->
-        task = Task.async(fn -> execute(executable, args, opts) end)
-        timeout = Keyword.get(opts, :timeout_ms, 2_000)
+        run_executable(executable, args, opts)
+    end
+  end
 
-        case Task.yield(task, timeout + 100) || Task.shutdown(task, :brutal_kill) do
-          {:ok, result} -> result
-          _ -> {:error, :inspection_timeout}
-        end
+  def run_executable(executable, args, opts \\ []) when is_binary(executable) and is_list(args) do
+    task = Task.async(fn -> execute(executable, args, opts) end)
+    timeout = Keyword.get(opts, :timeout_ms, 2_000)
+
+    case Task.yield(task, timeout + 100) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      _ -> {:error, :inspection_timeout}
     end
   end
 

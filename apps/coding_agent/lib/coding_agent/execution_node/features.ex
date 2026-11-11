@@ -4,7 +4,7 @@ defmodule CodingAgent.ExecutionNode.Features do
   configured bot policy and measured OS permissions. A matching CalVer alone
   never proves that an unpublished/source worker contains the required APIs.
   """
-  alias CodingAgent.ExecutionNode.HostCommand
+  alias CodingAgent.ExecutionNode.{HostCommand, Python}
 
   @host_methods ~w(node.host.info node.capabilities.get node.runtime.features node.fs.list node.fs.stat node.fs.read node.fs.write node.fs.mkdir node.fs.move node.fs.delete.preview node.fs.delete)
   @secret_methods ~w(node.secrets.set node.secrets.list node.secrets.delete node.secrets.receipt)
@@ -104,9 +104,15 @@ defmodule CodingAgent.ExecutionNode.Features do
     script =
       "import json,sys,os,pty,fcntl; print(json.dumps(sys.version_info >= (3,9) and all(hasattr(os,n) for n in ['pread','pwrite','waitstatus_to_exitcode','O_NOFOLLOW'])))"
 
-    case HostCommand.run("python3", ["-c", script]) do
-      {:ok, "true"} -> true
-      _ -> false
+    case Python.executable() do
+      {:ok, python} ->
+        case HostCommand.run_executable(python, ["-c", script]) do
+          {:ok, "true"} -> true
+          _ -> false
+        end
+
+      {:error, :not_installed} ->
+        false
     end
   end
 end

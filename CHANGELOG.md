@@ -38,6 +38,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Worker join commands install services by default, report actual persistence,
   and support headless stdin/file-descriptor enrollment. `--foreground` opts out;
   backend-only `--profile lemon_bot` remains available for manual deployments.
+- Release-pinned Mac app setup verifies and installs missing runtime/backend
+  components without developer tools; darwin runtimes bundle checksum-pinned
+  CPython and avoid Apple's Python shim when Command Line Tools are absent.
 
 ### Fixed
 

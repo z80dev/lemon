@@ -8,6 +8,8 @@ defmodule CodingAgent.ExecutionNode.FileService do
   """
   use GenServer
 
+  alias CodingAgent.ExecutionNode.Python
+
   @errors ~w(invalid_request invalid_path path_not_allowed invalid_allowed_roots
     symlink_loop not_found not_directory not_regular_file content_too_large
     invalid_base64 permission_denied directory_not_empty already_exists
@@ -101,11 +103,11 @@ defmodule CodingAgent.ExecutionNode.FileService do
   end
 
   defp open_port do
-    case System.find_executable("python3") do
-      nil ->
+    case Python.executable() do
+      {:error, :not_installed} ->
         {:error, :host_io_unavailable}
 
-      python ->
+      {:ok, python} ->
         helper = Path.join(to_string(:code.priv_dir(:coding_agent)), "node_fs.py")
 
         port =

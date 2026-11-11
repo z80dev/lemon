@@ -9,7 +9,7 @@ and store in `~/.lemon` and uses the same first-run setup.
 | [Installer](#quick-install) | Everyday use on macOS or Linux | `curl`, `tar`, `python3`, a model-provider account |
 | [Container image](#container-image) | Servers and always-on hosts | Docker |
 | [Source checkout](#source-development) | Contributing, unsupported platforms, building releases | Elixir, Erlang/OTP, Bun |
-| [Mac app](#mac-app) | Lemon Bot on macOS | Built from source today |
+| [Mac app](#mac-app) | Lemon Bot on macOS Apple Silicon | Published DMG when signing is configured; no developer tools |
 
 Want the shortest route to a working chat? Follow the
 [quickstart](getting-started/quickstart.md).
@@ -286,17 +286,23 @@ covered in [Deployment flows](release/deployment_flows.md).
 On macOS, `install.sh` on Apple Silicon gives you the runtime, the terminal UI,
 and `lemon web`; everything above works there.
 
-The native macOS application is **Lemon Bot**, a separate product
-(`products/lemon_bot/apple/LemonBotMac`, macOS 14+) that connects to a running
-Lemon controller and a Lemon Bot backend. The release workflow does not publish
-a signed `.dmg`, application `.zip`, or `.ipa`
-([Apple application prerequisites](release/versioning_and_channels.md#apple-application-prerequisites)),
-so there is no downloadable Mac app to install yet. To build it yourself you
-need Xcode 26.3 and XcodeGen 2.46+; follow the
-[Apple build guide](https://github.com/z80dev/lemon/blob/main/products/lemon_bot/apple/README.md#generate-build-and-launch)
-and the [Lemon Bot README](https://github.com/z80dev/lemon/blob/main/products/lemon_bot/README.md#running-an-integrated-checkout).
-Run `lemon setup` on the controller first; the app never receives Lemon's
-operator credential.
+The native macOS application is **Lemon Bot** (macOS 14+). When release signing is
+configured, download its notarized DMG from GitHub Releases, move the app to
+`/Applications` or `~/Applications`, and choose **Set up Lemon Bot on this Mac**.
+The app needs no developer tools: it downloads a pinned runtime (including
+CPython) and backend, checks the manifest against the digest in its signed
+Info.plist, verifies artifact sizes and hashes, and checks both staged programs
+before installing. Setup then starts Lemon Bot through its managed lifecycle.
+
+Setup installs only missing components, never upgrades an installed component.
+When one component is already at another version, its missing counterpart is
+installed at that version using HTTPS and the release manifest's artifact hashes.
+Use `lemon update` for upgrades. Terminal installation with `install.sh` still
+requires `python3` (Apple's Command Line Tools on macOS).
+
+Without signing credentials CI creates an unsigned local-preview workflow
+artifact only, not a downloadable GitHub Release DMG. For source builds see the
+[Apple build guide](https://github.com/z80dev/lemon/blob/main/products/lemon_bot/apple/README.md#generate-build-and-launch).
 
 ## Source development
 
