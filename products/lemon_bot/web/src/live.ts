@@ -1,14 +1,26 @@
-import type { Conversation, Draft, Run, TranscriptEntry, VoiceSession } from '@lemon-bot/sdk';
+import type { Bot, Conversation, Draft, Run, TranscriptEntry, VoiceSession } from '@lemon-bot/sdk';
 import { Brain, Calendar, FileText, Globe, Mail, Pencil, Send, Sparkles, SquareTerminal, Wrench, type LucideIcon } from 'lucide-react';
 
 /** Shared live-work presentation, mirroring LivePresentation.swift so every client words work the same way. */
 export const liveRunStatuses: Record<string, true> = { reserved: true, queued: true, running: true, awaiting_input: true };
+export const terminalRunStatuses: Record<string, true> = { succeeded: true, failed: true, cancelled: true };
 /** Statuses the server still treats as active for Stop (includes unconfirmed outcomes). */
 export const stoppableRunStatuses: Record<string, true> = { ...liveRunStatuses, outcome_unknown: true };
 export const draftStateLabels: Record<Draft['state'], string> = { editable: 'Draft', sending: 'Sending…', sent: 'Sent', discarded: 'Discarded', failed: 'Not sent', outcome_unknown: 'Send status unknown' };
 export const voiceStateLabels: Record<VoiceSession['state'], string> = { active: 'Call in progress', ended: 'Call ended', failed: 'Call interrupted' };
 
 export interface LiveStep { title: string; tool?: string; sinceMs?: number; needsInput: boolean }
+
+/** Whether an entry should still present as streaming with the run state currently known to the client. */
+export function isStreaming(entry: TranscriptEntry, runs: Pick<Run, 'id' | 'status'>[]): boolean {
+  return entry.kind === 'message' && entry.streaming && !(entry.runId && runs.some(run => run.id === entry.runId && terminalRunStatuses[run.status]));
+}
+
+/** Live runs that conflict with an idle server projection and need a targeted re-read. */
+export function staleLiveRuns(bot: Pick<Bot, 'id' | 'activity'>, runs: Run[]): Run[] {
+  if (bot.activity !== 'idle' && bot.activity !== 'offline') return [];
+  return runs.filter(run => run.botId === bot.id && liveRunStatuses[run.status]);
+}
 
 /** The current human-readable step for live work in a conversation, or undefined when idle. */
 export function currentStep(runs: Run[], entries: TranscriptEntry[], conversation: Pick<Conversation, 'activity'> | undefined): LiveStep | undefined {
@@ -23,7 +35,7 @@ export function currentStep(runs: Run[], entries: TranscriptEntry[], conversatio
     const entry = entries[index];
     if (entry.kind === 'tool_call' && entry.status === 'started' && (entry.runId ? runIds.has(entry.runId) : runIds.size === 0)) return { title: entry.title || humanize(entry.tool), tool: entry.tool, sinceMs: entry.timestampMs, needsInput: false };
   }
-  if (entries.some(entry => entry.kind === 'message' && entry.streaming)) return { title: 'Writing a reply', sinceMs: started, needsInput: false };
+  if (entries.some(entry => entry.kind === 'message' && entry.streaming && !!entry.runId && runIds.has(entry.runId))) return { title: 'Writing a reply', sinceMs: started, needsInput: false };
   const phase = phases[0]?.phase;
   if (phase) return { title: phase === 'reading' ? 'Reading' : phase === 'typing' ? 'Writing a reply' : 'Working', sinceMs: started, needsInput: false };
   if (live.every(run => run.status === 'reserved' || run.status === 'queued')) return { title: 'Queued', needsInput: false };

@@ -5,7 +5,7 @@ import { useApp } from '../../app';
 import type { Route } from '../../app';
 import { AlertCircle, ArrowDown, ArrowRight, Hand, Check, ChevronLeft, ChevronRight, CircleStop, Copy, MoreHorizontal, Reply, Search, Square, ThumbsUp, Wrench, X } from 'lucide-react';
 import { BotAvatar, EmptyState, ErrorNotice, Field, LemonFace, Loading, PageHeader, botStyle, formatTime, useQuery } from '../../ui';
-import { compactDuration, currentStep, humanize, liveRunStatuses, plainLine, relativeTime, separatorDate, stoppableRunStatuses, toolIcon, voiceStateLabels } from '../../live';
+import { compactDuration, currentStep, humanize, isStreaming, liveRunStatuses, plainLine, relativeTime, separatorDate, stoppableRunStatuses, terminalRunStatuses, toolIcon, voiceStateLabels } from '../../live';
 import { TranscriptCard } from './cards';
 import { Composer } from './composer';
 import { BotPanel, type PanelTab } from './panel';
@@ -105,14 +105,15 @@ function EntryView({ entry, attachments, jump, reply, changed, context }: { entr
   const mine = entry.actor.kind === 'user';
   const anchor = { 'data-entry-id': entry.id, 'data-seq': entry.seq, tabIndex: -1, id: `entry-${entry.id}` };
   const fileIds = entry.kind === 'message' ? [...new Set([...entry.attachmentIds, ...attachments])] : [];
+  const streaming = isStreaming(entry, context.run ? [context.run] : []);
   if (entry.kind === 'message' && !mine && !entry.text && !fileIds.length) {
     if (context.run && finishedRun[context.run.status]) return <article className="chat-entry chat-entry-outcome" {...anchor} aria-label={`${entry.actor.displayName}, ${formatTime(entry.timestampMs)}`}><RunOutcomeRow run={context.run} retryText={context.retryText}/></article>;
-    if (entry.streaming || (context.run && context.run.status !== 'succeeded')) return <article className={`chat-entry chat-bot-entry ${context.grouped ? 'grouped' : ''}`} {...anchor}><TypingBubble label={`${entry.actor.displayName} is replying`}/></article>;
+    if (streaming || (context.run && context.run.status !== 'succeeded')) return <article className={`chat-entry chat-bot-entry ${context.grouped ? 'grouped' : ''}`} {...anchor}><TypingBubble label={`${entry.actor.displayName} is replying`}/></article>;
     return null;
   }
   let content; let shape: 'bubble' | 'card' | 'system' | 'outcome' = 'bubble';
   switch (entry.kind) {
-    case 'message': content = <><RichText text={entry.text} />{entry.streaming && <span className="chat-caret" role="status" aria-label="Still writing"/>}{fileIds.map(id => <AttachmentLink key={id} id={id} />)}</>; break;
+    case 'message': content = <><RichText text={entry.text} />{streaming && <span className="chat-caret" role="status" aria-label="Still writing"/>}{fileIds.map(id => <AttachmentLink key={id} id={id} />)}</>; break;
     case 'card': {
       shape = 'card';
       const room = snapshot.conversations.find(conversation => conversation.id === entry.conversationId);
@@ -178,6 +179,13 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
     catch (error) { setLiveError(error); throw error; }
     finally { refetching.current.delete(entryId); }
   }
+  function reconcileRun(run: Run) {
+    updateRun(run);
+    if (!terminalRunStatuses[run.status]) return;
+    for (const entry of entriesRef.current) {
+      if (entry.kind === 'message' && entry.streaming && entry.runId === run.id) void fetchEntry(entry.id).catch(() => undefined);
+    }
+  }
   useEffect(() => {
     if (!realtime) return;
     return realtime.subscribe(async frame => {
@@ -185,7 +193,7 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
       if (frame.type === 'caught_up') { void history.reload().catch(setLiveError); void runQuery.reload().catch(setLiveError); }
       if (frame.type !== 'event') return;
       if (frame.event === 'conversation.upserted' && frame.payload.id === id) { const conversation = frame.payload; conversationQuery.setData(current => !current || current.revision <= conversation.revision ? conversation : current); }
-      if (frame.event === 'run.upserted' && frame.payload.conversationId === id) updateRun(frame.payload);
+      if (frame.event === 'run.upserted' && frame.payload.conversationId === id) reconcileRun(frame.payload);
       if (frame.event === 'entry.upserted' && frame.payload.conversationId === id) upsert([frame.payload]);
       if (frame.event === 'entry.deleted' && frame.payload.conversationId === id) { const entryId = frame.payload.id; entriesRef.current = entriesRef.current.filter(entry => entry.id !== entryId); setEntries(entriesRef.current); }
       if (frame.event === 'entry.delta' && frame.payload.conversationId === id) {
@@ -197,6 +205,15 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
       }
     });
   }, [realtime, id, client]);
+  useEffect(() => {
+    const reconciled = (event: Event) => {
+      const resolved = (event as CustomEvent<Run[]>).detail;
+      if (!Array.isArray(resolved)) return;
+      for (const run of resolved) if (run.conversationId === id) reconcileRun(run);
+    };
+    window.addEventListener('lemonbot:runs-reconciled', reconciled);
+    return () => window.removeEventListener('lemonbot:runs-reconciled', reconciled);
+  }, [client, id]);
   useEffect(() => {
     const notify = () => { if (!document.hidden) for (const entryId of visibleEntries.current) { const entry = entriesRef.current.find(item => item.id === entryId); if (entry) visibleThrough.current = Math.max(visibleThrough.current, entry.seq); } setReadVersion(version => version + 1); };
     document.addEventListener('visibilitychange', notify);
@@ -258,7 +275,7 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
   const title = conversation ? (conversation.kind === 'dm' && leadBot ? leadBot.name : conversation.name) : 'Conversation';
   const step = currentStep(runs.filter(run => run.conversationId === id), entries, conversation);
   const typingNow = typing.filter(item => item.expiresAtMs > clock && item.userId !== snapshot.user.id).length > 0;
-  const placeholderForLive = entries.some(entry => entry.kind === 'message' && entry.actor.kind !== 'user' && (entry.streaming || (!entry.text && !!entry.runId && liveRuns.some(run => run.id === entry.runId))));
+  const placeholderForLive = entries.some(entry => entry.kind === 'message' && entry.actor.kind !== 'user' && (isStreaming(entry, runs) || (!entry.text && !!entry.runId && liveRuns.some(run => run.id === entry.runId))));
   const stopAll = () => void stopIntent.run(async () => { for (const run of stoppable.filter(item => item.status !== 'outcome_unknown')) updateRun(await client.call('POST /runs/:id/cancel', { params: { id: run.id }, body: { clientNonce: nonce(), reason: 'Explicit user Stop' } })); });
   const toolRun = (index: number) => { const tools: Extract<TranscriptEntry, { kind: 'tool_call' }>[] = []; for (let cursor = index; cursor < entries.length; cursor++) { const item = entries[cursor]; if (item.targetedUserId && item.targetedUserId !== snapshot.user.id) continue; if (item.kind !== 'tool_call') break; tools.push(item); } return tools; };
   let previous: TranscriptEntry | undefined;
