@@ -40,6 +40,10 @@ interface CleanupPlan { items: CleanupItem[]; fingerprint: string; affected: P.S
 const localCleanupCollections = ['sections', 'devices', 'notifications', 'composerDrafts', 'voiceSessions', 'milestones', 'reminders', 'identityLinks', 'feedbacks', 'memoryImportPreviews', 'preferenceChanges', 'preferenceUndoAttempts', 'reauthTokens'] as const;
 const activeAccountDeletions = new WeakMap<BackendServices, Set<string>>();
 export interface AccountService { reconcile(): Promise<P.AccountTeardown[]> }
+export interface AccountRouteDependencies { hashPassword(value: string): Promise<string> }
+const accountRouteDefaults: AccountRouteDependencies = {
+  hashPassword: value => Bun.password.hash(value, { algorithm: 'argon2id' }),
+};
 const cleanupState = z.enum(['pending', 'running', 'completed', 'failed', 'outcome_unknown', 'not_required']);
 const cleanupError = z.enum(['invalid_request', 'unauthenticated', 'forbidden', 'not_found', 'conflict', 'nonce_conflict', 'revision_conflict', 'confirmation_required', 'expired', 'too_large', 'unsupported_media', 'rate_limited', 'machine_offline', 'upstream_unavailable', 'capability_unavailable', 'policy_denied', 'outcome_unknown', 'cursor_expired', 'internal_error']);
 const providerRows = z.array(z.object({ providerId: z.string().min(1).max(256).regex(/^[^/\u0000-\u0020]+$/), kind: z.enum(['email', 'oidc', 'connector', 'channel', 'x']), receiptId: id.nullable(), state: cleanupState, updatedAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), errorCode: cleanupError.nullable() }).strict()).max(200);
@@ -101,7 +105,7 @@ export function createAccountService(services: BackendServices): AccountService 
 }
 
 /** Account routes never expose credential rows or private resources in membership projections. */
-export function createAccountRoutes(services: BackendServices, hooks: RevocationHooks = {}): Route[] {
+export function createAccountRoutes(services: BackendServices, hooks: RevocationHooks = {}, dependencies: AccountRouteDependencies = accountRouteDefaults): Route[] {
   const { store } = services;
   const active = activeDeletions(services);
   let dummyHash: Promise<string> | undefined;
@@ -348,9 +352,12 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
       if (store.get<Credential>('credentials', actor.userId)) fail('conflict', 'You already have a password; change it below.');
       if (await services.integrations.requireSSO?.(actor.userId)) fail('policy_denied', 'This account requires configured SSO.');
       if (localConfirmedUntil(store, actor.sessionId, services.now()) === null) fail('expired', "Confirm it's you on this computer: run lemon-bot open, then try again.");
-      const passwordHash = await Bun.password.hash(body.password, { algorithm: 'argon2id' });
+      const passwordHash = await dependencies.hashPassword(body.password);
       return store.transaction(() => {
         if (store.get<Credential>('credentials', actor.userId)) fail('conflict', 'You already have a password; change it below.');
+        current(context);
+        if (localConfirmedUntil(store, actor.sessionId, services.now()) === null) fail('expired', "Confirm it's you on this computer: run lemon-bot open, then try again.");
+        if (services.integrations.requireSSO?.(actor.userId)) fail('policy_denied', 'This account requires configured SSO.');
         uniqueEmail(body.email, actor.userId);
         const updated = services.update(services.auth.user(actor.userId), { email: body.email }); store.put('users', updated);
         const member = services.update(services.auth.member(actor.userId), { email: updated.email }); store.put('members', member);

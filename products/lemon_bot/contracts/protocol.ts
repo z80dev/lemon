@@ -40,6 +40,14 @@ export interface LoginRequest extends Mutation { email: string; password: string
 export interface LocalAccessRequest { displayName?: string }
 /** One-use local sign-in ticket from `lemon-bot open`, taken from the `#lemonbot-signin=` URL fragment. */
 export interface LocalTicketRedeem { ticket: string }
+/** Fresh proof that the loopback listener owns this instance's private master key. */
+export interface LocalBackendChallengeRequest { nonce: string }
+export interface LocalBackendChallenge {
+  product: 'lemon_bot';
+  instanceId: ID;
+  version: string;
+  proof: string;
+}
 /** Own sign-in methods. `localOwner` is non-null only for the current workspace owner (the local key signs in as that owner). */
 export interface SignInMethods {
   password: boolean;
@@ -720,6 +728,7 @@ export interface RestEndpoints {
   'POST /setup': Endpoint<SetupRequest, AuthResult>;
   'POST /auth/login': Endpoint<LoginRequest, AuthResult>;
   'POST /auth/local': Endpoint<LocalAccessRequest, AuthResult>;
+  'POST /auth/local/challenge': Endpoint<LocalBackendChallengeRequest, LocalBackendChallenge>;
   'POST /auth/local/redeem': Endpoint<LocalTicketRedeem, AuthResult>;
   'POST /auth/invites/accept': Endpoint<AcceptInviteRequest, AuthResult>;
   'POST /auth/reauth': Endpoint<ReauthRequest, ReauthResult>;

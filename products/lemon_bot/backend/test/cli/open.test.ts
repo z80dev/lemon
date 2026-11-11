@@ -6,7 +6,7 @@ import { createPrivateCodec } from '../../src/core/config';
 import { createMutationDigest } from '../../src/core/mutations';
 import { Store } from '../../src/core/store';
 import { productVersion } from '../../src/core/version';
-import type { LocalTicketRow } from '../../src/core/local-signin';
+import { localBackendChallengeProof, type LocalTicketRow } from '../../src/core/local-signin';
 import type { BackendServices } from '../../src/core/services';
 import { firstStartSignIn } from '../../src/index';
 import { openPrivateStore, readInstanceId } from '../../src/cli/local-store';
@@ -27,7 +27,10 @@ async function fixture() {
     async sleep(ms) { now += ms; const row = rows()[0]; if (row) store.put('signInTickets', { ...row, redeemedAtMs: now }); },
     onSignal(callback) { signal = callback; return () => { signal = undefined; }; },
     async readLocal(directory) { return readInstanceId(directory); }, openPrivateStore,
-    async probe() { return { product: 'lemon_bot', instanceId: store.metadata('instanceId'), version: productVersion }; },
+    async probe(_origin, nonce) {
+      const identity = { product: 'lemon_bot' as const, instanceId: store.metadata<string>('instanceId')!, version: productVersion };
+      return { ...identity, proof: localBackendChallengeProof(createMutationDigest(key), nonce, identity) };
+    },
     openTerminal() { return { write(value) { tty.push(value); }, close() { terminalClosed = true; } }; },
     async openPath(path) { opened = path; html = await readFile(path, 'utf8'); mode = (await stat(path)).mode & 0o777; directoryMode = (await stat(join(dataDir, 'handoff'))).mode & 0o777; return true; },
     stdout(value) { stdout.push(value); }, stderr(value) { stderr.push(value); },
@@ -61,13 +64,25 @@ describe('lemon-bot open with private persistence and injected IO', () => {
     try {
       if (scenario === 'host') Object.assign(f.deps.env, { LEMON_BOT_HOST: '0.0.0.0', LEMON_BOT_PUBLIC_URL: 'https://server.example' });
       else if (scenario === 'missing') f.deps.readLocal = async () => { throw new Error('PRIVATE'); };
-      else f.deps.probe = async () => {
+      else f.deps.probe = async (_origin, nonce) => {
         if (scenario === 'unreachable') throw new Error('PRIVATE');
-        return { product: scenario === 'product' ? 'wrong' : 'lemon_bot', instanceId: scenario === 'instance' ? 'wrong' : f.store.metadata('instanceId'), version: scenario === 'version' ? '0.0.0' : productVersion };
+        const identity = { product: 'lemon_bot' as const, instanceId: scenario === 'instance' ? 'wrong' : f.store.metadata<string>('instanceId')!, version: scenario === 'version' ? '0.0.0' : productVersion };
+        if (scenario === 'product') return { ...identity, product: 'wrong', proof: '0'.repeat(64) };
+        return { ...identity, proof: localBackendChallengeProof(createMutationDigest(f.key), nonce, identity) };
       };
       expect(await runOpenCli([], f.deps)).toBe(1); expect(f.rows()).toHaveLength(0);
       expect(await Bun.file(join(f.dataDir, 'handoff')).exists()).toBe(false);
       expect(f.stderr.join('')).not.toContain('PRIVATE');
+    } finally { await f.close(); }
+  });
+  test('replayed public descriptor without the private key is refused before ticket delivery', async () => {
+    const f = await fixture();
+    try {
+      f.deps.probe = async () => ({ product: 'lemon_bot', instanceId: f.store.metadata('instanceId'), version: productVersion, proof: '0'.repeat(64) });
+      expect(await runOpenCli([], f.deps)).toBe(1);
+      expect(f.rows()).toHaveLength(0);
+      expect(f.captured().opened).toBe('');
+      expect(f.stderr.join('')).toContain('different Lemon Bot');
     } finally { await f.close(); }
   });
   test('expiry removes file and emits the 15-second hint exactly once', async () => {
@@ -152,8 +167,8 @@ describe('first interactive start uses the same in-process delivery', () => {
 describe('bounded loopback preflight', () => {
   test('manual redirects and oversized JSON are refused', async () => {
     const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) { return new URL(request.url).search ? new Response('{}') : new Response('x'.repeat(16385)); } });
-    try { await expect(probeLocalBackend(`http://127.0.0.1:${server.port}`)).rejects.toThrow(); } finally { await server.stop(true); }
+    try { await expect(probeLocalBackend(`http://127.0.0.1:${server.port}`, 'a'.repeat(43))).rejects.toThrow(); } finally { await server.stop(true); }
     const redirect = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch() { return Response.redirect('http://127.0.0.1:1', 302); } });
-    try { await expect(probeLocalBackend(`http://127.0.0.1:${redirect.port}`)).rejects.toThrow(); } finally { await redirect.stop(true); }
+    try { await expect(probeLocalBackend(`http://127.0.0.1:${redirect.port}`, 'a'.repeat(43))).rejects.toThrow(); } finally { await redirect.stop(true); }
   });
 });

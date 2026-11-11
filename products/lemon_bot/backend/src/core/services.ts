@@ -100,7 +100,7 @@ export interface IntegrationServices {
   providerCapabilities(): Partial<P.Capabilities> & { inventory?: unknown[] };
   speech?(principal: Principal, request: P.SpeechRequest, provenance?: P.DeliverableProvenance): Promise<P.SpeechResult>;
   deprovisionUser?(userId: string): Promise<void>;
-  requireSSO?(userId: string): Promise<boolean> | boolean;
+  requireSSO?(userId: string): boolean;
   reconcile?(): Promise<void>;
   authorizeConnector?(principal: Principal, input: { connectorId: string; botId: string; conversationId: string; toolName: string; operationId: string }): Promise<void>;
   connectorProvisioning?(principal: Principal, botId: string): Promise<unknown>;
