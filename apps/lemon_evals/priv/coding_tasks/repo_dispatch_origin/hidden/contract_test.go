@@ -62,6 +62,11 @@ func TestNullOriginAndLatestTie(t *testing.T) {
             event("accepted","HIGH","2026-01-01T00:00:00Z",9),
             event("moved","LATEST","2026-01-01T00:00:00Z",10),
         },"LOW","LATEST"},
+        {"instant and sequence reversed",[]ledger.EventRow{
+            event("moved","LATEST","2026-01-01T00:00:00Z",10),
+            event("accepted","HIGH","2026-01-01T00:00:00Z",9),
+            event("accepted","LOW","2026-01-01T01:00:00+01:00",2),
+        },"LOW","LATEST"},
         {"time before sequence",[]ledger.EventRow{
             event("accepted","EARLY","2026-01-01T00:00:00Z",90),
             event("accepted","LATE","2026-01-01T00:00:01Z",1),

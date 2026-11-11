@@ -55,7 +55,7 @@ test('scripts and operational JSON use canonical inputs', () => {
   function walk(dir) { return readdirSync(dir,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(join(dir,e.name)):[join(dir,e.name)]); }
   for(const dir of ['src','scripts','config']) for(const path of walk(join(root,dir))) {
     const text=readFileSync(path,'utf8');
-    assert.doesNotMatch(text,/\.deliveryChannel\b|\bdeliveryChannel\s*:|["']deliveryChannel["']|HARBOR_DELIVERY_CHANNEL|--delivery-channel/,path);
+    assert.doesNotMatch(text,/deliveryChannel|HARBOR_DELIVERY_CHANNEL|--delivery-channel/,path);
     if(path.endsWith('.json')) assert.ok('channel' in JSON.parse(text),path);
   }
   assert.doesNotMatch(readFileSync(join(root,'README.md'),'utf8'),/deliveryChannel|HARBOR_DELIVERY_CHANNEL|--delivery-channel/);
