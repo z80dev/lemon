@@ -4,6 +4,11 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Register controller and named-node provider check/import handlers in the RPC
+  method registry so clients can discover and invoke model-readiness capabilities.
+
 ### Added
 
 - Admin-only controller and named-node Codex device login start/poll/cancel plus
