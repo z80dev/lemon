@@ -5,6 +5,7 @@ import { ApiError, fail } from './errors';
 import { z, parse, principal, id, mutation, update, voice, queryObject } from './validation';
 import { productBotTools } from './bots';
 import { buildPrivateBotMemoryContextKey } from '../runtime/runs';
+import { endApprovalAllowances } from './approval-allowances';
 
 const level = z.enum(['off', 'read_only', 'read_interact']);
 const revision = z.number().int().positive();
@@ -778,6 +779,7 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
       const fresh = await machineCapabilities(s, user, bot.machineId, bot).catch(() => measured);
       const effective = projectEffectiveBotGrants(s, user, bot, fresh, await s.integrations.effectivePolicy(user, bot.id), false).find(value => value.id === next.id) ?? fail('not_found', 'Grant does not exist.');
       s.store.put('botGrants', effective);
+      endApprovalAllowances(s, user, { botId: bot.id }, 'permissions_changed');
       s.events.emit('grant.upserted', effective, { userIds: [user.userId], botId: bot.id });
       return effective;
     }),

@@ -3,6 +3,7 @@ import type { BackendServices, Principal } from '../core/services';
 import { ApiError } from '../core/errors';
 import { quiesceBotInvocations } from '../runtime/runs';
 import { assertWorkspaceRestrictionManagement, syncBotPolicyFloor, syncBotProfile } from '../core/bots';
+import { endApprovalAllowances } from '../core/approval-allowances';
 
 /** A stored desired rule is not proof that a previously running native agent lost its authority. */
 export async function refreshEffectivePolicy(services: BackendServices, actor: Principal, botIds?: string[], options: { workspace?: boolean } = {}): Promise<void> {
@@ -24,6 +25,7 @@ export async function refreshEffectivePolicy(services: BackendServices, actor: P
       const current = services.store.metadata<{ operationId?: string; state: string }>(fenceKey);
       if (current?.operationId !== operationId) throw new ApiError('outcome_unknown', 'A newer policy change superseded this synchronization.', false, { resourceIds: [bot.id] });
       services.store.setMetadata(fenceKey, { ...previous, operationId, state: 'acknowledged', revision: services.store.require<P.Bot>('bots', bot.id).revision, actorUserId: actor.userId, workspace: options.workspace === true, acknowledgedAtMs: services.now() });
+      endApprovalAllowances(services, actor, { botId: bot.id }, 'policy_changed');
       services.audit(actor, 'policy.native_apply', bot.id, 'succeeded', { operationId, scope: options.workspace ? 'workspace' : 'principal' });
     } catch (error) {
       const current = services.store.metadata<Record<string, unknown>>(fenceKey);

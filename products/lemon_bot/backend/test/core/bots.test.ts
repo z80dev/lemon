@@ -7,6 +7,7 @@ import { createBotRoutes, baseBotMcpConfig, syncBotProfile, createBotService, sy
 import { createConversationRoutes } from '../../src/core/conversations';
 import { effectiveBotGrants } from '../../src/core/experiences';
 import { createResourceRoutes } from '../../src/core/resources';
+import { createGateService } from '../../src/core/gates';
 import { authFixture, routeContext } from './auth.test';
 
 interface Call { method: string; params: Record<string, unknown>; mutation: boolean }
@@ -716,5 +717,125 @@ describe('authenticated SCIM restriction management', () => {
       await expect(syncBotPolicyFloor(f.services, actor, bot.id)).rejects.toMatchObject({ code: 'forbidden' });
       expect(f.calls).toHaveLength(0);
     }
+  });
+});
+describe('approval review projection and lifecycle invalidation', () => {
+  test('botDto projects approvalReview derived from active bot allowance else metadata default per_chat', async () => {
+    const f = fixture(), bot = f.bot();
+    const fetchedDefault = await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined);
+    expect(fetchedDefault.approvalReview).toBe('per_chat');
+
+    f.store.setMetadata(`botApprovalReview:${bot.id}`, 'every_time');
+    const fetchedEveryTime = await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined);
+    expect(fetchedEveryTime.approvalReview).toBe('every_time');
+
+    const botAllowance: P.ApprovalAllowance = f.services.resource<Omit<P.ApprovalAllowance, keyof P.Resource>>('allowance', {
+      scope: 'bot',
+      botId: bot.id,
+      conversationId: null,
+      ownerUserId: bot.ownerUserId,
+      toolGroups: ['terminal', 'file_changes', 'file_reading'],
+      label: 'Standing approval for Terminal and files',
+      state: 'active',
+      endedReason: null,
+      endedAtMs: null,
+      endedByUserId: null,
+      sourceApprovalId: null,
+      createdByUserId: bot.ownerUserId,
+      useCount: 0,
+      lastUsedAtMs: null,
+    });
+    f.store.put('approvalAllowances', botAllowance);
+    const fetchedBotWide = await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined);
+    expect(fetchedBotWide.approvalReview).toBe('bot_wide');
+  });
+
+  test('bot move eagerly ends active approval allowances with bot_moved', async () => {
+    const f = fixture(), bot = f.bot();
+    const allowance: P.ApprovalAllowance = f.services.resource<Omit<P.ApprovalAllowance, keyof P.Resource>>('allowance', {
+      scope: 'chat',
+      botId: bot.id,
+      conversationId: bot.mainConversationId,
+      ownerUserId: bot.ownerUserId,
+      toolGroups: ['terminal'],
+      label: 'Terminal allowed in this chat',
+      state: 'active',
+      endedReason: null,
+      endedAtMs: null,
+      endedByUserId: null,
+      sourceApprovalId: 'appr_1',
+      createdByUserId: bot.ownerUserId,
+      useCount: 0,
+      lastUsedAtMs: null,
+    });
+    f.store.put('approvalAllowances', allowance);
+    const plan = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('move_allowance_preview'), action: 'move', targetMachineId: 'destination' });
+    await f.request<P.Bot>('POST', `/v1/bots/${bot.id}/move`, confirmed(plan, { machineId: 'destination' }));
+    const ended = f.store.require<P.ApprovalAllowance>('approvalAllowances', allowance.id);
+    expect(ended.state).toBe('ended');
+    expect(ended.endedReason).toBe('bot_moved');
+  });
+
+  test('bot reset removes bot allowances and clears review metadata', async () => {
+    const f = fixture(), bot = f.bot();
+    const allowance: P.ApprovalAllowance = f.services.resource<Omit<P.ApprovalAllowance, keyof P.Resource>>('allowance', {
+      scope: 'chat',
+      botId: bot.id,
+      conversationId: bot.mainConversationId,
+      ownerUserId: bot.ownerUserId,
+      toolGroups: ['terminal'],
+      label: 'Terminal allowed in this chat',
+      state: 'active',
+      endedReason: null,
+      endedAtMs: null,
+      endedByUserId: null,
+      sourceApprovalId: 'appr_1',
+      createdByUserId: bot.ownerUserId,
+      useCount: 0,
+      lastUsedAtMs: null,
+    });
+    f.store.put('approvalAllowances', allowance);
+    f.store.setMetadata(`approvalAllowanceBinding:${allowance.id}`, { contextKey: 'ctx_key' });
+    f.store.setMetadata(`botApprovalReview:${bot.id}`, 'every_time');
+
+    const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('reset_allowance_preview'), action: 'reset', resetScopes: ['job'] });
+    await f.request('POST', `/v1/bots/${bot.id}/reset`, confirmed(preview, { resetScopes: ['job'] }));
+
+    expect(f.store.get('approvalAllowances', allowance.id)).toBeNull();
+    expect(f.store.metadata(`approvalAllowanceBinding:${allowance.id}`)).toBeNull();
+    expect(f.store.metadata(`botApprovalReview:${bot.id}`)).toBeNull();
+  });
+
+  test('bot delete removes bot allowances and clears review metadata', async () => {
+    const f = fixture(), bot = f.bot();
+    const gates = createGateService(f.services); f.services.gates = gates;
+    try {
+      const allowance: P.ApprovalAllowance = f.services.resource<Omit<P.ApprovalAllowance, keyof P.Resource>>('allowance', {
+        scope: 'chat',
+        botId: bot.id,
+        conversationId: bot.mainConversationId,
+        ownerUserId: bot.ownerUserId,
+        toolGroups: ['terminal'],
+        label: 'Terminal allowed in this chat',
+        state: 'active',
+        endedReason: null,
+        endedAtMs: null,
+        endedByUserId: null,
+        sourceApprovalId: 'appr_1',
+        createdByUserId: bot.ownerUserId,
+        useCount: 0,
+        lastUsedAtMs: null,
+      });
+      f.store.put('approvalAllowances', allowance);
+      f.store.setMetadata(`approvalAllowanceBinding:${allowance.id}`, { contextKey: 'ctx_key' });
+      f.store.setMetadata(`botApprovalReview:${bot.id}`, 'every_time');
+
+      const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('delete_allowance_preview'), action: 'delete' });
+      await f.request('DELETE', `/v1/bots/${bot.id}`, confirmed(preview));
+
+      expect(f.store.get('approvalAllowances', allowance.id)).toBeNull();
+      expect(f.store.metadata(`approvalAllowanceBinding:${allowance.id}`)).toBeNull();
+      expect(f.store.metadata(`botApprovalReview:${bot.id}`)).toBeNull();
+    } finally { gates.close(); }
   });
 });

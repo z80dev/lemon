@@ -241,4 +241,55 @@ describe('account lifecycle', () => {
     await f.call('DELETE', '/v1/devices/:id', { clientNonce: opaqueToken() }, f.alice, { id: device.id });
     await expect(f.services.auth.authenticate(authenticated(paired.token))).rejects.toMatchObject({ code: 'unauthenticated' });
   });
+  test('member role or enabled change eagerly ends allowances for that user', async () => {
+    const f = accounts();
+    const member = f.services.auth.member('alice');
+    const allowance: P.ApprovalAllowance = f.services.resource<Omit<P.ApprovalAllowance, keyof P.Resource>>('allowance', {
+      scope: 'chat',
+      botId: 'bot-1',
+      conversationId: 'room-1',
+      ownerUserId: 'alice',
+      toolGroups: ['terminal'],
+      label: 'Terminal allowed in this chat',
+      state: 'active',
+      endedReason: null,
+      endedAtMs: null,
+      endedByUserId: null,
+      sourceApprovalId: 'appr-1',
+      createdByUserId: 'alice',
+      useCount: 0,
+      lastUsedAtMs: null,
+    });
+    f.store.put('approvalAllowances', allowance);
+    await f.call('PATCH', '/v1/members/:id', { clientNonce: opaqueToken(), revision: member.revision, role: 'admin' }, f.owner, { id: member.id });
+    const updated = f.store.require<P.ApprovalAllowance>('approvalAllowances', allowance.id);
+    expect(updated.state).toBe('ended');
+    expect(updated.endedReason).toBe('membership_changed');
+  });
+  test('member deletion eagerly ends allowances for that user', async () => {
+    const f = accounts();
+    const member = f.services.auth.member('alice');
+    const allowance: P.ApprovalAllowance = f.services.resource<Omit<P.ApprovalAllowance, keyof P.Resource>>('allowance', {
+      scope: 'chat',
+      botId: 'bot-1',
+      conversationId: 'room-1',
+      ownerUserId: 'alice',
+      toolGroups: ['terminal'],
+      label: 'Terminal allowed in this chat',
+      state: 'active',
+      endedReason: null,
+      endedAtMs: null,
+      endedByUserId: null,
+      sourceApprovalId: 'appr-1',
+      createdByUserId: 'alice',
+      useCount: 0,
+      lastUsedAtMs: null,
+    });
+    f.store.put('approvalAllowances', allowance);
+    const preview = await f.call<P.Confirmation>('POST', '/v1/members/:id/preview', { clientNonce: opaqueToken(), action: 'delete' }, f.owner, { id: member.id });
+    await f.call('DELETE', '/v1/members/:id', { clientNonce: opaqueToken(), revision: preview.revision, confirmationToken: preview.confirmationToken, confirmName: preview.confirmName }, f.owner, { id: member.id });
+    const updated = f.store.require<P.ApprovalAllowance>('approvalAllowances', allowance.id);
+    expect(updated.state).toBe('ended');
+    expect(updated.endedReason).toBe('membership_changed');
+  });
 });

@@ -193,7 +193,7 @@ export type AgentMessageStatus = 'accepted' | 'completed' | 'failed' | 'outcome_
 export interface AgentMessageReceipt { messageId: ID; sourceId: ID; targetId: ID; status: AgentMessageStatus; runId: ID | null; response: string | null }
 export interface AgentMessageSend extends Mutation { target: string; text: string; conversationId?: ID }
 export interface MessageAgentInput extends Mutation { target: string; text: string }
-export interface Bot extends Resource { ownerUserId: ID; machineId: ID; profileId: string; name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; language: string | null; skillIds: ID[]; referenceAttachmentIds: ID[]; mainConversationId: ID; sidebar: SidebarState; activity: BotPresence['status']; activeRunIds: ID[]; agentHandle?: string | null; agentAddress?: ID }
+export interface Bot extends Resource { ownerUserId: ID; machineId: ID; profileId: string; name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; language: string | null; skillIds: ID[]; referenceAttachmentIds: ID[]; mainConversationId: ID; sidebar: SidebarState; activity: BotPresence['status']; activeRunIds: ID[]; agentHandle?: string | null; agentAddress?: ID; approvalReview?: ApprovalReviewMode }
 export interface BotCreate extends Mutation { name: string; machineId: ID; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; skillIds?: ID[]; templateId?: ID; access?: 'standard' | 'none' }
 export interface BotUpdate extends Update { name?: string; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; skillIds?: ID[]; referenceAttachmentIds?: ID[] }
 export interface BotDuplicate extends Mutation { name: string; machineId: ID; includeSkills: boolean; includeRoutines: boolean; access?: 'standard' | 'none' }
@@ -246,8 +246,19 @@ export type TranscriptEvent =
 export type ResolutionState = 'pending' | 'submitted' | 'approved' | 'denied' | 'declined' | 'expired' | 'cancelled' | 'completed' | 'failed' | 'outcome_unknown';
 export interface Gate { id: ID; state: ResolutionState; targetUserId: ID; expiresAtMs: TimestampMs; resolvedAtMs: TimestampMs | null; resolvedByUserId: ID | null; revision: number }
 export type ActionCategory = 'shell' | 'files' | 'external_message' | 'calendar' | 'publish' | 'purchase' | 'permissions' | 'connector' | 'handoff';
-export interface Approval extends Resource { gate: Gate; entryId: ID; conversationId: ID; botId: ID; runId: ID | null; source: 'lemon_exec' | 'product'; category: ActionCategory; title: string; description: string; target: string; inputs: JSONObject; policyMode: 'ask_first' | 'auto_review' | 'allow'; review: 'not_run' | 'allow' | 'ask' | 'deny'; ruleId: ID | null; scope: ReviewScope }
-export interface ApprovalResolve extends Update { decision: 'approve_once' | 'deny' }
+export interface Approval extends Resource { gate: Gate; entryId: ID; conversationId: ID; botId: ID; runId: ID | null; source: 'lemon_exec' | 'product'; category: ActionCategory; title: string; description: string; target: string; inputs: JSONObject; policyMode: 'ask_first' | 'auto_review' | 'allow'; review: 'not_run' | 'allow' | 'ask' | 'deny'; ruleId: ID | null; scope: ReviewScope; chatOption?: ApprovalChatOption | null; resolvedScope?: 'once' | 'chat' | null }
+export interface ApprovalResolve extends Update { decision: 'approve_once' | 'approve_chat' | 'deny' }
+export type ApprovalToolGroup = 'terminal' | 'file_changes' | 'file_reading';
+export interface ApprovalChatOption { toolGroup: ApprovalToolGroup; label: string }
+export type ApprovalReviewMode = 'every_time' | 'per_chat' | 'bot_wide';
+export interface ApprovalReviewUpdate extends Update { mode: 'every_time' | 'per_chat' }
+export interface ApprovalAllowance extends Resource {
+  scope: 'chat' | 'bot'; botId: ID; conversationId: ID | null; ownerUserId: ID;
+  toolGroups: ApprovalToolGroup[]; label: string; state: 'active' | 'ended';
+  endedReason: 'stopped' | 'permissions_changed' | 'policy_changed' | 'review_mode_changed' | 'bot_moved' | 'membership_changed' | null;
+  endedAtMs: TimestampMs | null; endedByUserId: ID | null; sourceApprovalId: ID | null; createdByUserId: ID;
+  useCount: number; lastUsedAtMs: TimestampMs | null;
+}
 export interface Field { id: string; label: string; kind: 'text' | 'multiline' | 'number' | 'boolean' | 'single_select' | 'multi_select'; required: boolean; options?: { value: string; label: string }[]; min?: number; max?: number }
 export interface Question extends Resource { gate: Gate; entryId: ID; conversationId: ID; botId: ID; title: string; fields: Field[]; answers: Record<string, JSONValue> | null }
 export interface QuestionResolve extends Update { decision: 'answer' | 'decline'; answers?: Record<string, JSONValue> }
@@ -381,6 +392,7 @@ export type ResourceEventPayloads = {
   'conversation.upserted': Conversation; 'conversation.deleted': Deleted; 'conversation.read': { conversationId: ID; userId: ID; throughSeq: number; unread: boolean }; 'composer.updated': ComposerDraft;
   'entry.upserted': TranscriptEntry; 'entry.deleted': { id: ID; conversationId: ID }; 'entry.delta': { conversationId: ID; entryId: ID; runId: ID; offset: number; text: string }; 'run.upserted': Run;
   'attachment.upserted': Attachment; 'attachment.deleted': Deleted; 'approval.upserted': Approval; 'question.upserted': Question; 'human_step.upserted': HumanStep; 'secret_request.upserted': SecretRequest; 'draft.upserted': Draft;
+  'approval_allowance.upserted': ApprovalAllowance;
   'skill.upserted': Skill; 'skill.deleted': Deleted; 'routine.upserted': Routine; 'routine.deleted': Deleted; 'routine_run.upserted': RoutineRun; 'memory.upserted': Memory; 'memory.deleted': { id: ID; botId: ID };
   'pairing.upserted': Pairing;
   'notification.upserted': Notification; 'notification.deleted': Deleted; 'policies.updated': Policies; 'connector.upserted': Connector; 'connector.deleted': Deleted; 'connector_auth.upserted': ConnectorAuth; 'channel.upserted': ChannelBinding; 'channel.deleted': Deleted; 'voice.upserted': VoiceSession;
@@ -465,14 +477,14 @@ export interface DirectoryGroupCreate extends Mutation { name: string; memberUse
 export interface DirectoryGroupUpdate extends Update { name?: string; memberUserIds?: ID[] }
 export interface GroupPolicy extends Resource { directoryGroupId: ID; productAccess: boolean; capabilityModes: Partial<Record<ActionCategory, 'ask_first' | 'auto_review' | 'allow'>>; requiredRuleIds: ID[]; localExecutionCeiling: 'deny' | 'ask' | 'allow'; allowEgress: boolean; allowSudo: boolean; networkPolicyId: ID | null; reviewExempt: boolean }
 export interface GroupPolicyUpdate extends Update { productAccess?: boolean; capabilityModes?: GroupPolicy['capabilityModes']; requiredRuleIds?: ID[]; localExecutionCeiling?: GroupPolicy['localExecutionCeiling']; allowEgress?: boolean; allowSudo?: boolean; networkPolicyId?: ID | null; reviewExempt?: boolean }
-export interface Governance { revision: number; groupAccess: 'all' | 'selected'; allowedDirectoryGroupIds: ID[]; allowSudo: boolean; allowEgress: boolean; lockNetworkForGroups: boolean; requireReview: boolean; allowedChannelAdapters: ChannelBinding['adapter'][]; xMentionsEnabled: boolean; emailEnabled: boolean; contentExportEnabled: boolean; inactiveHostPolicy: { enabled: boolean; afterDays: number; action: 'suspend' | 'stop_worker' } }
-export interface GovernanceUpdate extends Update { groupAccess?: Governance['groupAccess']; allowedDirectoryGroupIds?: ID[]; allowSudo?: boolean; allowEgress?: boolean; lockNetworkForGroups?: boolean; requireReview?: boolean; allowedChannelAdapters?: ChannelBinding['adapter'][]; xMentionsEnabled?: boolean; emailEnabled?: boolean; contentExportEnabled?: boolean; inactiveHostPolicy?: Governance['inactiveHostPolicy'] }
+export interface Governance { revision: number; groupAccess: 'all' | 'selected'; allowedDirectoryGroupIds: ID[]; allowSudo: boolean; allowEgress: boolean; lockNetworkForGroups: boolean; requireReview: boolean; allowedChannelAdapters: ChannelBinding['adapter'][]; xMentionsEnabled: boolean; emailEnabled: boolean; contentExportEnabled: boolean; inactiveHostPolicy: { enabled: boolean; afterDays: number; action: 'suspend' | 'stop_worker' }; rememberedApprovals?: 'off' | 'chat' | 'chat_and_bot' }
+export interface GovernanceUpdate extends Update { groupAccess?: Governance['groupAccess']; allowedDirectoryGroupIds?: ID[]; allowSudo?: boolean; allowEgress?: boolean; lockNetworkForGroups?: boolean; requireReview?: boolean; allowedChannelAdapters?: ChannelBinding['adapter'][]; xMentionsEnabled?: boolean; emailEnabled?: boolean; contentExportEnabled?: boolean; inactiveHostPolicy?: Governance['inactiveHostPolicy']; rememberedApprovals?: 'off' | 'chat' | 'chat_and_bot' }
 export interface NetworkRule { kind: 'domain' | 'ip_cidr'; value: string; ports: number[]; protocol: 'tcp' | 'udp' | 'both' }
 export interface NetworkPolicy extends Resource { scope: 'workspace' | 'directory_group'; directoryGroupId: ID | null; mode: 'allow_all' | 'defaults_plus_allowlist' | 'allowlist_only'; rules: NetworkRule[]; requiredRuntimeDestinations: NetworkRule[] }
 export interface NetworkPolicyCreate extends Mutation { scope: NetworkPolicy['scope']; directoryGroupId?: ID; mode: NetworkPolicy['mode']; rules: NetworkRule[] }
 export interface NetworkPolicyUpdate extends Update { mode?: NetworkPolicy['mode']; rules?: NetworkRule[] }
 export interface PolicyApplication { machineId: ID; desiredRevision: number; appliedRevision: number | null; state: 'pending' | 'applied' | 'failed' | 'offline' | 'unsupported'; error: string | null; measuredAtMs: TimestampMs }
-export interface EffectivePolicy { userId: ID; botId: ID | null; directoryGroupIds: ID[]; productAccess: boolean; localExecutionCeiling: GroupPolicy['localExecutionCeiling']; allowSudo: boolean; allowEgress: boolean; rules: PolicyRule[]; networkPolicies: NetworkPolicy[]; explanations: string[] }
+export interface EffectivePolicy { userId: ID; botId: ID | null; directoryGroupIds: ID[]; productAccess: boolean; localExecutionCeiling: GroupPolicy['localExecutionCeiling']; allowSudo: boolean; allowEgress: boolean; rules: PolicyRule[]; networkPolicies: NetworkPolicy[]; explanations: string[]; rememberedApprovals?: { chat: ('shell' | 'files')[]; bot: ('shell' | 'files')[] } }
 export interface EgressRoute extends Resource { machineId: ID; ownerUserId: ID; throughMachineId: ID; state: 'connecting' | 'active' | 'disabled' | 'failed'; enabled: boolean; rememberedPreference: boolean; error: string | null }
 export interface EgressRouteCreate extends Mutation { machineId: ID; throughMachineId: ID; enabled: boolean }
 export interface EgressRouteUpdate extends Update { enabled: boolean }
@@ -589,6 +601,12 @@ export interface RestEndpoints {
   'PATCH /directory/groups/:id/policy': Endpoint<GroupPolicyUpdate, GroupPolicy>;
   'GET /governance': Endpoint<undefined, Governance>;
   'PATCH /governance': Endpoint<GovernanceUpdate, Governance>;
+  'GET /conversations/:id/approval-allowances': Endpoint<undefined, Page<ApprovalAllowance>, PageQuery & { state?: 'active' | 'ended' }>;
+  'GET /bots/:id/approval-allowances': Endpoint<undefined, Page<ApprovalAllowance>, PageQuery & { state?: 'active' | 'ended' }>;
+  'POST /approval-allowances/:id/stop': Endpoint<Update, ApprovalAllowance>;
+  'PATCH /bots/:id/approval-review': Endpoint<ApprovalReviewUpdate, Bot>;
+  'POST /bots/:id/approval-allowances/preview': Endpoint<Mutation, Confirmation>;
+  'POST /bots/:id/approval-allowances': Endpoint<Confirm, ApprovalAllowance>;
   'GET /policies/effective': Endpoint<undefined, EffectivePolicy, { userId?: ID; botId?: ID }>;
   'GET /network-policies': Endpoint<undefined, Page<NetworkPolicy>, PageQuery>;
   'POST /network-policies': Endpoint<NetworkPolicyCreate, NetworkPolicy>;

@@ -424,6 +424,7 @@ describe('owned placed runtime', () => {
       expect(f.store.list('runs')).toHaveLength(1); expect(f.store.list('routineRuns')).toHaveLength(1); expect(f.calls.filter(call => call.method === 'chat.send')).toHaveLength(0);
       const reserved = f.store.list<P.Run>('runs')[0]!;
       expect(f.store.metadata(`runCron:${reserved.id}`)).toBe(context.cronRunId);
+      expect(f.store.metadata(`runApprovalOrigin:${reserved.id}`)).toBe('routine');
       const bobRun: P.Run = f.services.resource('run', { conversationId: f.conversation.id, botId: f.bot.id, initiatorUserId: 'bob', clientNonce: 'bob_run_nonce_0000000', status: 'running', error: null, startedAtMs: f.services.now(), completedAtMs: null, routineRunId: null }); f.store.put('runs', bobRun);
       f.rpc = async (method, params) => {
         if (method === 'chat.abort') { expect(params.runId).toBe(context.routerRunId); return { aborted: true }; }
