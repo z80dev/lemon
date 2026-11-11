@@ -12,6 +12,14 @@ test('non-zero service receipt preserves authoritative parked state', async () =
   expect(() => parseServiceStatus(JSON.stringify(status) + '\nprogress')).toThrow();
 });
 
+test('local service status preserves and validates the configured worker wrapper', () => {
+  for (const execWrapper of [undefined, null, '/Applications/Lemon Bot.app/Contents/MacOS/Worker']) {
+    const value = { ...status, units: [{ ...status.units[0]!, execWrapper }] };
+    expect(parseServiceStatus(JSON.stringify(value)).units[0]?.execWrapper).toBe(execWrapper);
+  }
+  expect(() => parseServiceStatus(JSON.stringify({ ...status, units: [{ ...status.units[0], execWrapper: 7 }] }))).toThrow();
+});
+
 test('missing/malformed enrollment receipt is unknown, never retried', async () => {
   let calls = 0;
   expect(await service('/tmp/mock', ['install', 'worker'], async () => { calls++; throw new Error('PRIVATE'); })).toEqual({ exitCode: 1, status: null });

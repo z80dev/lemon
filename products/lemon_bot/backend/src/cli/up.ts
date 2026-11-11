@@ -227,10 +227,16 @@ export async function runUpCli(args: string[], dependencies: UpDependencies = de
         result.machineId = machine.id;
         const status = await lifecycle(['status', 'worker', '--name', machine.nodeName]);
         online = machine.status === 'online' && workerOnline(status);
-        if (!online) {
+        const currentWrapper = status.status?.units.find(unit => unit.role === 'worker' && unit.name === machine?.nodeName)?.execWrapper;
+        const wrapperChanged = wrapper !== undefined && currentWrapper !== wrapper;
+        if (!online || wrapperChanged) {
+          const wasOnline = online;
           emit('worker', 'running', 'repair');
-          const repaired = await lifecycle(['repair', 'worker', '--name', machine.nodeName, '--wait', '60']);
+          const repaired = await lifecycle(['repair', 'worker', '--name', machine.nodeName, '--wait', '60', ...(wrapper ? ['--exec-wrapper', wrapper] : [])]);
           online = workerOnline(repaired) && (await refresh()).status === 'online';
+          if (wasOnline && wrapperChanged && !online) {
+            emit('worker', 'failed', 'service_failed'); return finish('service_failed');
+          }
         }
         if (!online) invitation = await request<MachineInvite>(`/machines/${encodeURIComponent(machine.id)}/reconnect`, session, { clientNonce: nonce() });
       } else {
@@ -269,7 +275,7 @@ export async function runUpCli(args: string[], dependencies: UpDependencies = de
           const observed = invites.items.find(invite => invite.id === invitation!.id);
           const current = await refresh();
           if (current.status === 'online') {
-            const repaired = await lifecycle(['repair', 'worker', '--name', machine.nodeName, '--wait', '60']);
+            const repaired = await lifecycle(['repair', 'worker', '--name', machine.nodeName, '--wait', '60', ...(wrapper ? ['--exec-wrapper', wrapper] : [])]);
             if (!workerOnline(repaired)) throw new Error('Worker supervision unavailable.');
             online = true;
           } else if (observed?.status === 'joined') {

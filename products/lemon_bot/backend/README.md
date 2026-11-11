@@ -220,6 +220,10 @@ lemon-bot up [--json] [--no-open] [--no-worker] [--name NODE_NAME] [--worker-wra
 
 `up` reuses an online machine, repairs its existing worker first, or requests a
 name-bound reconnect invite. New-name conflicts try suffixes `-2` through `-4`.
+When `--worker-wrapper` is supplied, even an online worker is repaired if its
+service status reports a different or missing `execWrapper`. The repair uses
+`--exec-wrapper` without issuing an invite; rerunning with the same wrapper is
+unchanged. A failed migration is a service failure, not a reason to re-enroll.
 The one-use code goes only to `lemon service install worker --invite-code-stdin`
 through stdin; it never enters argv, environment, diagnostics or progress. An
 uncertain enrollment is reconciled once from that invite's authoritative state,

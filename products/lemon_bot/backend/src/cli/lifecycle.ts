@@ -24,6 +24,8 @@ export const spawn: Spawn = async (executable, args, input = {}) => {
 export interface ServiceUnit {
   role: 'controller' | 'backend' | 'worker' | 'tunnel'; name: string | null; state: string;
   detail: string | null; action?: string;
+  /** Local service-unit identity, used to migrate an existing worker to its signed helper. */
+  execWrapper?: string | null;
 }
 export interface ServiceStatus {
   schema: 1; manager: 'launchd' | 'systemd' | 'none'; persistence: 'login' | 'boot' | 'session' | 'none';
@@ -36,7 +38,8 @@ export function parseServiceStatus(text: string): ServiceStatus {
   if (value?.schema !== 1 || !['launchd', 'systemd', 'none'].includes(value.manager)
       || !['login', 'boot', 'session', 'none'].includes(value.persistence) || !Array.isArray(value.units)
       || !value.units.every(unit => ['controller', 'backend', 'worker', 'tunnel'].includes(unit.role)
-        && typeof unit.state === 'string' && (unit.detail === null || typeof unit.detail === 'string'))) {
+        && typeof unit.state === 'string' && (unit.detail === null || typeof unit.detail === 'string')
+        && (unit.execWrapper === undefined || unit.execWrapper === null || typeof unit.execWrapper === 'string'))) {
     throw new Error('Invalid service status.');
   }
   return value;

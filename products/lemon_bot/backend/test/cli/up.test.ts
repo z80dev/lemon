@@ -5,13 +5,14 @@ import { joinTarget, nodeName, runUpCli, type UpDependencies } from '../../src/c
 import type { ProcessInput } from '../../src/cli/lifecycle';
 
 const release = (name = 'studio') => `curl 'https://github.com/z80dev/lemon/releases/download/v2026.11.1/join-node.sh' | bash -s -- '--name' '${name}' '--controller' 'ws://127.0.0.1:4040/ws' '--version' '2026.11.1' '--base-url' 'https://github.com/z80dev/lemon'`;
-function harness(options: { existing?: boolean; online?: boolean; remote?: boolean; missing?: boolean; mismatch?: boolean; uncertain?: 'joined' | 'pending'; failure?: string; conflicts?: number; sessionPersistence?: boolean; setupFailure?: boolean } = {}) {
+function harness(options: { existing?: boolean; online?: boolean; remote?: boolean; missing?: boolean; mismatch?: boolean; uncertain?: 'joined' | 'pending'; failure?: string; conflicts?: number; sessionPersistence?: boolean; setupFailure?: boolean; currentWrapper?: string | null; repairFailure?: boolean } = {}) {
   const stdout: string[] = [], stderr: string[] = [], calls: { executable: string; args: string[]; input?: ProcessInput }[] = [], requests: { path: string; body: Record<string, unknown> | undefined }[] = [];
   let exists = options.existing ?? false, online = options.online ?? false, enrollments = 0, issued = 0, conflicts = options.conflicts ?? 0;
+  let execWrapper = options.currentWrapper;
   const machine = { id: 'machine_studio', nodeName: 'studio', name: 'Studio', status: online ? 'online' : 'offline' };
   const invite = () => ({ id: `invite_${++issued}`, machineId: machine.id, inviteCode: `${issued}`.repeat(43), joinCommand: release(machine.nodeName), status: 'pending' });
   const status = (roles: string[], state = 'ready', detail: string | null = null) => ({ schema: 1, manager: 'launchd', persistence: options.sessionPersistence ? 'session' : 'login', linger: null,
-    units: roles.map(role => ({ role, name: role === 'worker' ? machine.nodeName : null, state, detail, action: 'unchanged' })) });
+    units: roles.map(role => ({ role, name: role === 'worker' ? machine.nodeName : null, state, detail, action: 'unchanged', ...(role === 'worker' ? { execWrapper } : {}) })) });
   const dependencies: UpDependencies = {
     environment: { HOME: '/tmp/lifecycle-consumers-scratch', LEMON_BOT_CONTROL_URL: options.remote ? 'wss://remote.example/ws' : 'ws://127.0.0.1:4040/ws' },
     botPath: '/tmp/lemon-bot-source',
@@ -28,11 +29,14 @@ function harness(options: { existing?: boolean; online?: boolean; remote?: boole
       const worker = args.includes('worker');
       let value = status(worker ? ['worker'] : options.remote ? ['backend'] : ['controller', 'backend']);
       let exitCode = 0;
+      const wrapperOption = args.indexOf('--exec-wrapper');
+      if (worker && args[1] === 'repair' && wrapperOption !== -1) execWrapper = args[wrapperOption + 1];
       if (worker && args[1] === 'install') {
         enrollments++;
         if (options.uncertain && enrollments === 1) { value = status(['worker'], 'needs_enrollment', 'enrollment_outcome_unknown'); exitCode = 1; }
         else { online = true; machine.status = 'online'; value = status(['worker'], 'online'); }
       } else if (worker) { value = status(['worker'], online ? 'online' : 'needs_reauthorization'); exitCode = online ? 0 : 1; }
+      if (worker && args[1] === 'repair' && options.repairFailure) { value = status(['worker'], 'blocked', 'exec_wrapper_missing'); exitCode = 1; }
       if (options.failure === 'service') { value = status(['backend'], 'blocked', 'port_in_use_foreign'); exitCode = 1; }
       return { exitCode, stdout: JSON.stringify(value), stderr: '' };
     },
@@ -96,6 +100,43 @@ test('remote controller installs backend only and skips local worker', async () 
   expect(h.calls.find(call => call.args[1] === 'install')?.args).toEqual(['service', 'install', 'backend', '--bot', '/tmp/lemon-bot-source', '--wait', '120', '--json']);
   expect(h.requests.map(request => request.path)).toEqual(['/auth/local', '/auth/logout']);
   expect(h.stdout.join('')).toContain('remote_controller');
+});
+
+for (const currentWrapper of [undefined, null, '/Applications/Old Worker.app/Contents/MacOS/Worker']) test(`online worker migrates ${currentWrapper ?? 'missing'} wrapper without an invite`, async () => {
+  const wrapper = '/Applications/Lemon Bot.app/Contents/Helpers/Lemon Bot Worker.app/Contents/MacOS/Lemon Bot Worker';
+  const h = harness({ existing: true, online: true, currentWrapper });
+  expect(await runUpCli(['--json', '--no-open', '--worker-wrapper', wrapper], h.dependencies)).toBe(0);
+  expect(h.calls.filter(call => call.args[1] === 'repair')).toHaveLength(1);
+  expect(h.calls.find(call => call.args[1] === 'repair')?.args).toEqual(['service', 'repair', 'worker', '--name', 'studio', '--wait', '60', '--exec-wrapper', wrapper, '--json']);
+  expect(h.counts()).toEqual({ issued: 0, enrollments: 0 });
+  expect(h.requests.some(request => request.path.endsWith('/reconnect'))).toBe(false);
+  expect(await runUpCli(['--json', '--no-open', '--worker-wrapper', wrapper], h.dependencies)).toBe(0);
+  expect(h.calls.filter(call => call.args[1] === 'repair')).toHaveLength(1);
+});
+
+test('online worker already using requested wrapper remains unchanged', async () => {
+  const wrapper = '/Applications/Lemon Bot.app/Contents/Helpers/Lemon Bot Worker.app/Contents/MacOS/Lemon Bot Worker';
+  const h = harness({ existing: true, online: true, currentWrapper: wrapper });
+  expect(await runUpCli(['--json', '--worker-wrapper', wrapper], h.dependencies)).toBe(0);
+  expect(h.calls.filter(call => call.args[1] === 'repair')).toHaveLength(0);
+  expect(h.counts()).toEqual({ issued: 0, enrollments: 0 });
+});
+
+test('failed wrapper migration does not mint a replacement invitation', async () => {
+  const h = harness({ existing: true, online: true, repairFailure: true });
+  expect(await runUpCli(['--json', '--worker-wrapper', '/Applications/Lemon Bot.app/Contents/MacOS/Worker'], h.dependencies)).toBe(1);
+  expect(h.result().status).toBe('service_failed');
+  expect(h.counts()).toEqual({ issued: 0, enrollments: 0 });
+  expect(h.requests.some(request => request.path.endsWith('/reconnect'))).toBe(false);
+  expect(h.requests.at(-1)?.path).toBe('/auth/logout');
+});
+
+test('offline worker repair also receives the requested signed wrapper', async () => {
+  const wrapper = '/Applications/Lemon Bot.app/Contents/MacOS/Worker';
+  const h = harness({ existing: true });
+  expect(await runUpCli(['--json', '--worker-wrapper', wrapper], h.dependencies)).toBe(0);
+  expect(h.calls.find(call => call.args[1] === 'repair')?.args).toContain('--exec-wrapper');
+  expect(h.calls.find(call => call.args[1] === 'repair')?.args).toContain(wrapper);
 });
 
 test('online existing host gets no invite; parked credential uses one bound reconnect', async () => {
