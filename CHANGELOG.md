@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Add a shell-only supervised reverse SSH tunnel for second-machine node gateway
+  and Lemon Bot access, with private status, credential-free SSH environments,
+  stale same-user sshd cleanup and terminal host-key/auth/forwarding failures.
 - Build Mac DMGs in release CI with a signed runtime-manifest pin, credential
   gating, notarization and verified receipts. Unconfigured builds remain
   unpublished preview artifacts; stable signed releases include a fixed DMG alias.
