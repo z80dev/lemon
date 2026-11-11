@@ -32,6 +32,23 @@ defmodule LemonCore.Update.Remote do
   degradation the installer applies to pre-TUI releases. `LEMON_NO_TUI=1`
   opts out, mirroring the installer.
 
+  ## Lemon Bot backend co-artifact
+
+      ~/.lemon/lemon_bot/versions/<version>-<channel>-<platform>/bot/
+      ~/.lemon/lemon_bot/current            # independent symlink
+
+  When `~/.lemon/lemon_bot/current` is a managed symlink into
+  `lemon_bot/versions/`, the manifest's `lemon_bot` artifact for the same
+  target version joins the plan as a third co-artifact and the plan digest
+  binds it. It is staged into its own `<key>.partial` directory with the
+  archive rules the installer applies (every member under `bot/`, no escaping
+  or duplicated names, no link-traversing member, a regular
+  `bot/bin/lemon-bot`), verified against `lemon-bot <version>` plus the
+  installer's presence checks, and only then promoted. The runtime pointer
+  flips first and the backend pointer second; a failure after the runtime flip
+  restores **both** previous pointers. The receipt records both versions and
+  rollback restores both. Without a managed backend install nothing changes.
+
   `apply/1` refuses to run outside this layout (manual tarball / server
   installs opt out by construction — they don't live under
   `versions/<version>/`).
@@ -59,6 +76,7 @@ defmodule LemonCore.Update.Remote do
   @default_channel "stable"
   @keep_versions 2
   @tui_profile "lemon_tui"
+  @bot_profile "lemon_bot"
   @manifest_max_bytes 1_048_576
   @artifact_max_bytes 2_147_483_648
 
@@ -70,6 +88,7 @@ defmodule LemonCore.Update.Remote do
           update_available?: boolean(),
           artifact: artifact() | nil,
           tui_artifact: artifact() | nil,
+          bot_artifact: artifact() | nil,
           channel: String.t(),
           auto_update: boolean()
         }
@@ -99,6 +118,7 @@ defmodule LemonCore.Update.Remote do
          update_available?: update_available?(current, latest),
          artifact: select_artifact(manifest, opts),
          tui_artifact: select_tui_artifact(manifest, opts),
+         bot_artifact: select_bot_artifact(manifest, opts),
          channel: channel,
          auto_update: auto_update?(opts),
          manifest_commit: manifest["commit"],
@@ -111,16 +131,24 @@ defmodule LemonCore.Update.Remote do
   Builds a non-mutating, time-bounded update plan for a managed installation.
 
   The opaque digest binds the exact active/running version, channel, raw
-  manifest hash and commit, target, platform/profile, and every selected
-  artifact's filename, size, and SHA-256. Planning performs no filesystem
-  writes and never downloads an artifact.
+  manifest hash and commit, target, platform/profile, the Lemon Bot backend
+  install key this machine runs now, and every selected artifact's filename,
+  size, and SHA-256. Planning performs no filesystem writes and never
+  downloads an artifact.
+
+  A machine with an installer-managed backend is updated in lockstep: if the
+  manifest publishes no `lemon_bot` artifact for the target version and
+  platform, planning refuses with `:missing_bot_artifact` rather than moving
+  the runtime alone.
   """
   @spec plan(opts()) :: {:ok, map()} | {:error, term()}
   def plan(opts \\ []) do
     with {:ok, current} <- ManagedInstall.current(opts),
-         {:ok, info} <- check(opts) do
+         {:ok, info} <- check(opts),
+         :ok <- require_bot_lockstep(info, opts) do
       Plan.build(info,
         current: current,
+        current_bot: ManagedInstall.active_bot(opts),
         running: running_version(opts),
         profile: profile(opts),
         platform: platform(opts),
@@ -128,6 +156,12 @@ defmodule LemonCore.Update.Remote do
         max_artifact_bytes: Keyword.get(opts, :max_artifact_bytes, @artifact_max_bytes)
       )
     end
+  end
+
+  defp require_bot_lockstep(info, opts) do
+    if ManagedInstall.managed_bot?(opts) and is_nil(info.bot_artifact),
+      do: {:error, :missing_bot_artifact},
+      else: :ok
   end
 
   @doc """
@@ -138,17 +172,21 @@ defmodule LemonCore.Update.Remote do
   to `<state_home>/tmp/` — the response body is never buffered in memory —
   and verifies its SHA-256 against the manifest (mandatory; a missing or
   mismatched checksum is a hard error and the partial downloads are deleted).
-  Only once the runtime and, when published, the TUI are both verified does it
-  extract them into `versions/<version>.partial`, assert the staged tree holds
-  the executables it should, rename that into place, and atomically flip
-  `versions/current` via symlink-tmp + rename. An existing usable install of
-  the same version is reused rather than deleted and re-extracted, so the
-  directory `current` points at is never cleared to make room. Prunes old
-  versions, keeping the newly staged one plus the #{@keep_versions} most recent others.
+  Only once the runtime and, when published, the TUI and the managed Lemon Bot
+  backend are all verified does it extract them into
+  `versions/<version>.partial` (and `lemon_bot/versions/<key>.partial`), assert
+  the staged trees hold the executables they should, rename them into place,
+  and atomically flip `versions/current` and then `lemon_bot/current` via
+  symlink-tmp + rename. An existing usable install of the same version is
+  reused rather than deleted and re-extracted, so the directory `current`
+  points at is never cleared to make room. Prunes old versions, keeping the
+  newly staged one plus the #{@keep_versions} most recent others.
 
-  After committing the pointer and receipt, restarts an already-running own
-  daemon through the selected version's launcher. Restart failures return an
-  error containing the committed result/receipt, not a false transaction undo.
+  After committing the pointers and receipt, it stops the running worker
+  units, restarts an already-running own daemon through the selected version's
+  launcher, starts those workers again, and restarts the backend unit when it
+  was running. Restart failures return an error containing the committed
+  result/receipt, not a false transaction undo.
   """
   @spec apply(opts()) :: {:ok, map()} | {:error, term()}
   def apply(opts \\ []) do
@@ -245,6 +283,18 @@ defmodule LemonCore.Update.Remote do
       nil
     else
       find_artifact(manifest, platform(opts), @tui_profile)
+    end
+  end
+
+  # The backend is a co-artifact only for an installer-managed backend pointer.
+  # A machine without `~/.lemon/lemon_bot/current`, or one whose pointer leaves
+  # the managed `lemon_bot/versions/` tree, keeps today's behaviour exactly:
+  # `lemon update` never touches it.
+  defp select_bot_artifact(manifest, opts) do
+    if ManagedInstall.managed_bot?(opts) do
+      find_artifact(manifest, platform(opts), @bot_profile)
+    else
+      nil
     end
   end
 
@@ -374,14 +424,16 @@ defmodule LemonCore.Update.Remote do
   end
 
   defp apply_plan(plan, checkpoint, daemon, opts) do
-    artifact = plan.artifact
-    tui_artifact = plan.tui_artifact
+    # Read before staging: once the pointers move, the key this update can be
+    # rolled back to is no longer discoverable from the filesystem.
+    previous_bot = if bot_key(plan), do: ManagedInstall.active_bot(opts)
 
-    case stage(artifact, tui_artifact, plan.target, opts) do
+    case stage(plan, opts) do
       {:ok, final_dir} ->
-        case flip_and_record(plan, checkpoint, final_dir, opts) do
+        case flip_and_record(plan, checkpoint, final_dir, previous_bot, opts) do
           {:ok, result} ->
             ManagedInstall.prune([plan.target, plan.current], opts)
+            prune_bot(plan, previous_bot, opts)
             Daemon.restart(result, daemon, plan.current, plan.target, opts)
 
           {:error, reason} ->
@@ -394,28 +446,65 @@ defmodule LemonCore.Update.Remote do
     end
   end
 
-  defp flip_and_record(plan, checkpoint, final_dir, opts) do
-    with :ok <- ManagedInstall.flip(plan.target, opts),
-         :ok <- ManagedInstall.verify_active(plan.target, opts),
-         rollback_digest <- Plan.rollback_digest(plan, checkpoint),
-         {:ok, receipt} <-
-           ReceiptStore.put_receipt(
-             %{
-               "action" => "apply",
-               "channel" => plan.channel,
-               "checkpoint_id" => checkpoint["id"],
-               "created_at_ms" => now_ms(opts),
-               "from_version" => plan.current,
-               "manifest_commit" => plan.manifest_commit,
-               "plan_digest" => plan.digest,
-               "platform" => plan.platform,
-               "profile" => plan.profile,
-               "rollback_digest" => rollback_digest,
-               "status" => "applied",
-               "to_version" => plan.target
-             },
-             opts
-           ) do
+  # The receipt's own rollback target is protected, not just whatever the
+  # pointer happens to name after the flip: pruning it would make the apply
+  # receipt's rollback digest unusable.
+  defp prune_bot(%{bot_artifact: nil}, _previous_bot, _opts), do: :ok
+
+  defp prune_bot(plan, previous_bot, opts) do
+    protected = Enum.reject([bot_key(plan), previous_bot], &is_nil/1)
+    ManagedInstall.prune_bot(protected, opts)
+  end
+
+  # The runtime pointer moves first and the backend pointer second, so a
+  # failure anywhere after the first flip has to put *both* pointers back:
+  # a machine must never run a new runtime against an unverified backend, or
+  # the reverse.
+  defp flip_and_record(plan, checkpoint, final_dir, previous_bot, opts) do
+    target_bot = bot_key(plan)
+
+    flip =
+      with :ok <- ManagedInstall.flip(plan.target, opts),
+           :ok <- ManagedInstall.verify_active(plan.target, opts),
+           :ok <- flip_bot(target_bot, opts) do
+        record_receipt(plan, checkpoint, final_dir, previous_bot, target_bot, opts)
+      end
+
+    case flip do
+      {:ok, result} ->
+        {:ok, result}
+
+      {:error, reason} ->
+        ManagedInstall.restore_after_failed_flip(plan.current, plan.target, opts)
+
+        if target_bot,
+          do: ManagedInstall.restore_bot_after_failed_flip(previous_bot, target_bot, opts)
+
+        _ = failed_receipt(plan, checkpoint, reason, opts)
+        {:error, reason}
+    end
+  end
+
+  defp record_receipt(plan, checkpoint, final_dir, previous_bot, target_bot, opts) do
+    fields =
+      %{
+        "action" => "apply",
+        "channel" => plan.channel,
+        "checkpoint_id" => checkpoint["id"],
+        "created_at_ms" => now_ms(opts),
+        "from_version" => plan.current,
+        "manifest_commit" => plan.manifest_commit,
+        "plan_digest" => plan.digest,
+        "platform" => plan.platform,
+        "profile" => plan.profile,
+        "rollback_digest" => Plan.rollback_digest(plan, checkpoint),
+        "status" => "applied",
+        "to_version" => plan.target
+      }
+      |> maybe_put_field("from_bot_version", previous_bot)
+      |> maybe_put_field("to_bot_version", target_bot)
+
+    with {:ok, receipt} <- ReceiptStore.put_receipt(fields, opts) do
       {:ok,
        %{
          staged: plan.target,
@@ -425,13 +514,24 @@ defmodule LemonCore.Update.Remote do
          path: final_dir,
          receipt: receipt
        }}
-    else
-      {:error, reason} ->
-        ManagedInstall.restore_after_failed_flip(plan.current, plan.target, opts)
-        _ = failed_receipt(plan, checkpoint, reason, opts)
-        {:error, reason}
     end
   end
+
+  defp flip_bot(nil, _opts), do: :ok
+
+  defp flip_bot(key, opts) do
+    with :ok <- ManagedInstall.flip_bot(key, opts) do
+      ManagedInstall.verify_active_bot(key, opts)
+    end
+  end
+
+  # The installer's own install key, so one machine can hold the backends of
+  # several channels/platforms side by side exactly as `install.sh` leaves them.
+  defp bot_key(%{bot_artifact: nil}), do: nil
+  defp bot_key(plan), do: "#{plan.target}-#{plan.channel}-#{plan.platform}"
+
+  defp maybe_put_field(map, _key, nil), do: map
+  defp maybe_put_field(map, key, value), do: Map.put(map, key, value)
 
   defp failed_receipt(plan, checkpoint, reason, opts) do
     ReceiptStore.put_receipt(
@@ -471,21 +571,30 @@ defmodule LemonCore.Update.Remote do
   # Recovery belongs strictly inside the post-flip boundary. Validation
   # failures (including a stale current pointer) must never move the pointer.
   defp perform_rollback(receipt, opts) do
-    previous = receipt["to_version"]
-    target = receipt["from_version"]
+    previous_runtime = receipt["to_version"]
+    target_runtime = receipt["from_version"]
+    previous_bot = receipt["to_bot_version"]
+    target_bot = receipt["from_bot_version"]
+    roll_bot? = is_binary(previous_bot) and is_binary(target_bot)
 
-    with :ok <- ManagedInstall.flip(target, opts),
-         :ok <- ManagedInstall.verify_active(target, opts),
-         {:ok, rollback_receipt} <- put_rollback_receipt(receipt, opts) do
-      {:ok,
-       %{
-         active: target,
-         restart_required: true,
-         receipt: rollback_receipt
-       }}
-    else
+    rolled =
+      with :ok <- ManagedInstall.flip(target_runtime, opts),
+           :ok <- ManagedInstall.verify_active(target_runtime, opts),
+           :ok <- flip_bot(if(roll_bot?, do: target_bot), opts),
+           {:ok, rollback_receipt} <- put_rollback_receipt(receipt, opts) do
+        {:ok, %{active: target_runtime, restart_required: true, receipt: rollback_receipt}}
+      end
+
+    case rolled do
+      {:ok, result} ->
+        {:ok, result}
+
       {:error, reason} ->
-        _ = ManagedInstall.restore_after_failed_flip(previous, target, opts)
+        _ = ManagedInstall.restore_after_failed_flip(previous_runtime, target_runtime, opts)
+
+        if roll_bot?,
+          do: ManagedInstall.restore_bot_after_failed_flip(previous_bot, target_bot, opts)
+
         {:error, reason}
     end
   end
@@ -505,6 +614,10 @@ defmodule LemonCore.Update.Remote do
 
       active != receipt["to_version"] ->
         {:error, :stale_current_version}
+
+      is_binary(receipt["to_bot_version"]) and
+          ManagedInstall.active_bot(opts) != receipt["to_bot_version"] ->
+        {:error, :stale_current_bot_version}
 
       true ->
         :ok
@@ -547,29 +660,41 @@ defmodule LemonCore.Update.Remote do
         "rolled_back_receipt_id" => receipt["id"],
         "status" => "rolled_back",
         "to_version" => receipt["from_version"]
-      },
+      }
+      |> maybe_put_field("from_bot_version", receipt["to_bot_version"])
+      |> maybe_put_field("to_bot_version", receipt["from_bot_version"]),
       opts
     )
   end
 
-  # Downloads, extraction, and validation, with a guaranteed cleanup of the
-  # staging directory and both downloads. The `after` block also covers raises
-  # from the bang calls and file streaming below, which would otherwise sail
-  # past every explicit cleanup path and strand a `<version>.partial` directory
+  # Downloads, extraction, and validation, with a guaranteed cleanup of every
+  # staging directory and download. The `after` block also covers raises from
+  # the bang calls and file streaming below, which would otherwise sail past
+  # every explicit cleanup path and strand a `<version>.partial` directory
   # that the next update would have to guess about. On the success path it is a
-  # no-op: `promote/2` has already renamed the staging directory away.
-  defp stage(artifact, tui_artifact, version, opts) do
-    dir = versions_dir(opts)
-    partial = Path.join(dir, "#{version}.partial")
-    downloads = Enum.map([artifact, tui_artifact], &artifact_path(&1, opts))
+  # no-op: promotion has already renamed the staging directories away.
+  defp stage(plan, opts) do
+    artifact = plan.artifact
+    tui_artifact = plan.tui_artifact
+    bot_artifact = plan.bot_artifact
+    version = plan.target
+    partial = Path.join(versions_dir(opts), "#{version}.partial")
+    key = bot_key(plan)
+
+    bot_partial =
+      if key, do: Path.join(ManagedInstall.bot_versions_dir(opts), "#{key}.partial")
+
+    downloads = Enum.map([artifact, tui_artifact, bot_artifact], &artifact_path(&1, opts))
 
     try do
-      with {:ok, tarballs} <- download_verified(artifact, tui_artifact, version, opts),
+      with {:ok, tarballs} <-
+             download_verified(artifact, tui_artifact, bot_artifact, version, opts),
            :ok <- Archive.preflight(tarballs, opts),
-           :ok <- unpack(tarballs, partial, opts),
-           :ok <- Archive.validate_tree(partial, opts),
-           :ok <- verify_staged(partial, tui_artifact, version, opts) do
-        ManagedInstall.promote(partial, version, opts)
+           :ok <- unpack_staged(tarballs, partial, bot_partial, opts),
+           :ok <- validate_staged_trees(partial, bot_partial, opts),
+           :ok <- verify_staged(partial, tui_artifact, version, opts),
+           :ok <- verify_bot_staged(bot_partial, version, plan.platform, opts) do
+        promote_staged(partial, version, bot_partial, key, opts)
       end
     rescue
       _error -> {:error, :staging_failed}
@@ -577,6 +702,7 @@ defmodule LemonCore.Update.Remote do
       _kind, _reason -> {:error, :staging_failed}
     after
       File.rm_rf(partial)
+      if bot_partial, do: File.rm_rf(bot_partial)
 
       Enum.each(downloads, fn
         nil -> :ok
@@ -585,18 +711,57 @@ defmodule LemonCore.Update.Remote do
     end
   end
 
-  # Every byte is on disk and checksum-verified before anything is extracted:
-  # a bad TUI download must not leave a half-staged version behind.
-  defp download_verified(artifact, tui_artifact, version, opts) do
-    with {:ok, tarball} <- download_one(artifact, version, opts) do
-      case download_optional(tui_artifact, version, opts) do
-        {:ok, tui_tarball} ->
-          {:ok, {tarball, tui_tarball}}
+  defp download_verified(artifact, tui_artifact, bot_artifact, version, opts) do
+    with {:ok, tarball} <- download_one(artifact, version, opts),
+         {:ok, tui_tarball} <- download_optional(tui_artifact, version, opts),
+         {:ok, bot_tarball} <- download_optional(bot_artifact, version, opts) do
+      {:ok, {tarball, tui_tarball, bot_tarball}}
+    end
+  end
 
-        {:error, reason} ->
-          File.rm(tarball)
-          {:error, reason}
+  defp unpack_staged({tarball, tui_tarball, bot_tarball}, partial, bot_partial, opts) do
+    with :ok <- unpack({tarball, tui_tarball}, partial, opts) do
+      if bot_tarball && bot_partial do
+        unpack_bot(bot_tarball, bot_partial, opts)
+      else
+        :ok
       end
+    end
+  end
+
+  defp unpack_bot(tarball, bot_partial, opts) do
+    File.rm_rf(bot_partial)
+
+    case File.mkdir_p(bot_partial) do
+      :ok -> extract_into(bot_partial, tarball, opts)
+      {:error, reason} -> {:error, {:staging_failed, reason}}
+    end
+  end
+
+  defp validate_staged_trees(partial, bot_partial, opts) do
+    with :ok <- Archive.validate_tree(partial, opts) do
+      if bot_partial do
+        Archive.validate_bot_tree(bot_partial, opts)
+      else
+        :ok
+      end
+    end
+  end
+
+  defp verify_bot_staged(nil, _version, _platform, _opts), do: :ok
+
+  defp verify_bot_staged(bot_partial, version, platform, opts) do
+    ManagedInstall.verify_bot_staged(bot_partial, version, platform, opts)
+  end
+
+  defp promote_staged(partial, version, nil, _bot_key, opts) do
+    ManagedInstall.promote(partial, version, opts)
+  end
+
+  defp promote_staged(partial, version, bot_partial, bot_key, opts) do
+    with {:ok, final_dir} <- ManagedInstall.promote(partial, version, opts),
+         {:ok, _bot_final} <- ManagedInstall.promote_bot(bot_partial, bot_key, opts) do
+      {:ok, final_dir}
     end
   end
 

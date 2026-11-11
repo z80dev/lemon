@@ -96,8 +96,98 @@ control_port_in_use() {
   (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null
 }
 
+# First <string> following <key>KEY</key> in a plist: Label, or argv[0] of
+# ProgramArguments. Deliberately not a general parser: it reads the two values
+# a Lemon-owned unit must have.
+plist_string() {
+  awk -v key="$2" '
+    index($0, "<key>" key "</key>") { found = 1 }
+    found && match($0, /<string>[^<]*<\/string>/) {
+      print substr($0, RSTART + 8, RLENGTH - 17)
+      exit
+    }' "$1" 2>/dev/null
+}
+
+# ExecStart=... program, without its arguments or surrounding quotes.
+systemd_program() {
+  awk -F= '
+    /^ExecStart=/ {
+      sub(/^ExecStart=/, "", $0)
+      gsub(/^[ \t]+/, "", $0)
+      sub(/[ \t].*$/, "", $0)
+      gsub(/^"|"$/, "", $0)
+      print
+      exit
+    }' "$1" 2>/dev/null
+}
+
+# A unit is Lemon-owned only if its program is this machine's stable launcher
+# or the launcher running right now. A PATH entry or a comment mentioning
+# Lemon proves nothing.
+lemon_program() {
+  case "$1" in
+    "$LEMON_HOME_DIR/bin/lemon") return 0 ;;
+    "${LEMON_LAUNCHER:-}") [ -n "${LEMON_LAUNCHER:-}" ] && return 0 ;;
+  esac
+  return 1
+}
+
+controller_unit() {
+  local label unit plist unit_path uid first
+  if [ "$PORT" = "4040" ]; then
+    label="org.lemon.controller"
+    unit="lemon-controller.service"
+  else
+    label="org.lemon.controller.$PORT"
+    unit="lemon-controller-$PORT.service"
+  fi
+
+  # launchd (macOS): a regular plist, never a symlink, whose Label is exactly
+  # ours and whose ProgramArguments[0] is a Lemon launcher.
+  plist="$HOME/Library/LaunchAgents/$label.plist"
+  if [ -f "$plist" ] && [ ! -L "$plist" ] &&
+     [ "$(plist_string "$plist" Label)" = "$label" ] &&
+     lemon_program "$(plist_string "$plist" ProgramArguments)"; then
+    uid="$(id -u 2>/dev/null || printf '%s' "${UID:-0}")"
+    if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
+      printf 'launchd %s\n' "$label"
+      return 0
+    fi
+  fi
+
+  # systemd (Linux): the managed header or a Lemon ExecStart program.
+  unit_path="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$unit"
+  if [ -f "$unit_path" ] && [ ! -L "$unit_path" ]; then
+    first=""
+    IFS= read -r first < "$unit_path" || true
+    case "$first" in
+      "# Managed by lemon service"*) ;;
+      *) lemon_program "$(systemd_program "$unit_path")" || unit_path="" ;;
+    esac
+    if [ -n "$unit_path" ] && systemctl --user is-enabled "$unit" >/dev/null 2>&1; then
+      printf 'systemd %s\n' "$unit"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+# LemonCore.Service logs every controller to the same role log, regardless of
+# the control port.
+controller_log() { printf '%s\n' "$LEMON_HOME_DIR/logs/controller.log"; }
+
 status_context() {
   printf '  web: port %s\n  sim: port %s\n  log: %s (foreground output stays in its terminal)\n' "$WEB_PORT" "$SIM_PORT" "$LOG_PATH"
+  local cunit mgr label log_file
+  if cunit="$(controller_unit 2>/dev/null)" && [ -n "$cunit" ]; then
+    mgr="${cunit%% *}"
+    label="${cunit#* }"
+    log_file="$(controller_log)"
+    printf '  supervised by %s (%s); log: %s\n' "$mgr" "$label" "${log_file/#$HOME/~}"
+  else
+    printf "  not supervised: run 'lemon service install controller'\n"
+  fi
 }
 
 process_identity() {
@@ -490,6 +580,30 @@ start_daemon() {
     info "a healthy Lemon runtime is already running on port $PORT; reusing it"
     return 0
   fi
+  local cunit mgr label uid
+  if cunit="$(controller_unit 2>/dev/null)" && [ -n "$cunit" ]; then
+    mgr="${cunit%% *}"
+    label="${cunit#* }"
+    if [ "$mgr" = "launchd" ]; then
+      uid="$(id -u 2>/dev/null || printf '%s' "${UID:-0}")"
+      launchctl kickstart "gui/$uid/$label" || {
+        error "could not kickstart controller unit $label"
+        return 1
+      }
+    elif [ "$mgr" = "systemd" ]; then
+      systemctl --user start "$label" || {
+        error "could not start controller unit $label"
+        return 1
+      }
+    fi
+    if wait_until control_plane_healthy 120; then
+      info "started via $mgr ($label)"
+      return 0
+    else
+      error "runtime did not become healthy on port $PORT within 120s; see $LEMON_HOME_DIR/logs/controller.log"
+      return 1
+    fi
+  fi
   check_runtime_stopped || return
   acquire_start_lock || return
   # Another launcher may have completed while this one waited.
@@ -649,6 +763,35 @@ restart_updated_daemon() {
     error "daemon changed during update; no process was signalled"
     return 1
   fi
+  local cunit mgr label uid
+  if cunit="$(controller_unit 2>/dev/null)" && [ -n "$cunit" ]; then
+    mgr="${cunit%% *}"
+    label="${cunit#* }"
+    if [ "$mgr" = "launchd" ]; then
+      uid="$(id -u 2>/dev/null || printf '%s' "${UID:-0}")"
+      launchctl kickstart -k "gui/$uid/$label" || {
+        error "could not restart controller unit $label via launchctl"
+        return 1
+      }
+    elif [ "$mgr" = "systemd" ]; then
+      systemctl --user --no-block restart "$label" || {
+        error "could not restart controller unit $label via systemctl"
+        return 1
+      }
+    fi
+    if ! wait_until control_plane_healthy 120; then
+      error "runtime did not become healthy on port $PORT within 120s"
+      return 1
+    fi
+    IFS= read -r recorded < "$ROOTFILE" || true
+    [ -z "$recorded" ] || recorded="$(cd "$recorded" && pwd -P)" || true
+    if [ "$recorded" != "$LEMON_ROOT" ]; then
+      error "another runtime won the restart; selected release was not started"
+      return 1
+    fi
+    info "restarted selected release at $LEMON_ROOT"
+    return 0
+  fi
   stop_recorded_runtime "$previous" "$token" || return
   RELEASE_BIN="$LEMON_ROOT/bin/$PROFILE"
   start_daemon 0 || return
@@ -681,6 +824,60 @@ open_browser() {
   warn "No browser opener found; open the URL above manually."
 }
 
+# The CLI may only ask for the paths the installer owns. Anything else is
+# refused, and a failed removal is reported instead of being swallowed.
+uninstall_candidate() {
+  case "$1" in
+    "$LEMON_HOME_DIR" | \
+    "$LEMON_HOME_DIR/versions" | \
+    "$LEMON_HOME_DIR/bin" | \
+    "$LEMON_HOME_DIR/updates" | \
+    "$LEMON_HOME_DIR/tmp" | \
+    "$LEMON_HOME_DIR/lemon_bot/versions" | \
+    "$LEMON_HOME_DIR/lemon_bot/current" | \
+    "$HOME/.local/bin/lemon-bot") return 0 ;;
+  esac
+  return 1
+}
+
+apply_uninstall_manifest() {
+  local file="$1" path status=0
+  while IFS= read -r path || [ -n "$path" ]; do
+    [ -n "$path" ] || continue
+    if ! uninstall_candidate "$path"; then
+      error "refusing to remove unrecognized path from uninstall manifest: $path"
+      status=1
+    elif ! rm -rf "$path"; then
+      error "could not remove $path"
+      status=1
+    fi
+  done < "$file"
+  return "$status"
+}
+
+run_uninstall() {
+  local manifest_dir manifest_file cli_status=0 delete_status=0
+  manifest_dir="$(mktemp -d "${TMPDIR:-/tmp}/lemon-uninstall.XXXXXX")"
+  manifest_file="$manifest_dir/manifest"
+  touch "$manifest_file"
+  chmod 600 "$manifest_file"
+  export LEMON_UNINSTALL_MANIFEST="$manifest_file"
+
+  set +e
+  "$RELEASE_BIN" eval "$CLI_EXPR" "$@"
+  cli_status=$?
+  if [ "$cli_status" -eq 0 ] && [ -s "$manifest_file" ]; then
+    apply_uninstall_manifest "$manifest_file"
+    delete_status=$?
+  fi
+  set -e
+
+  rm -rf "$manifest_dir"
+  [ "$cli_status" -eq 0 ] || exit "$cli_status"
+  exit "$delete_status"
+}
+
+
 COMMAND="${1:-}"
 if [ -z "$COMMAND" ] && { [ ! -t 0 ] || [ ! -t 1 ]; }; then
   error "No interactive terminal. Use 'lemon -p \"PROMPT\"' for CI, 'lemon daemon' to start a service, or 'lemon --help'."
@@ -708,6 +905,13 @@ case "$COMMAND" in
     case "${2:-}:$#" in
       snapshot:2) update_daemon_snapshot ;;
       restart:4) load_environment; restart_updated_daemon "$3" "$4" ;;
+      stop:3)
+        load_environment
+        recorded=""
+        IFS= read -r recorded < "$ROOTFILE" 2>/dev/null || true
+        [ -n "$recorded" ] || recorded="$LEMON_ROOT"
+        stop_recorded_runtime "$recorded" "$3"
+        ;;
       *) error "invalid internal update lifecycle request"; exit 2 ;;
     esac
     exit $?
@@ -728,7 +932,7 @@ case "$COMMAND" in
     # generate or persist any secrets.
     run_cli_unconfigured "$@"
     ;;
-  start|daemon|tui|web|restart|acp) ;;
+  start|daemon|tui|web|restart|acp|uninstall) ;;
   *) setup_environment ;;
 esac
 
@@ -860,6 +1064,10 @@ case "$COMMAND" in
     ;;
 
   remote|eval|rpc) exec "$RELEASE_BIN" "$@" ;;
+
+  uninstall)
+    run_uninstall "$@"
+    ;;
 
   *)
     case "$COMMAND" in

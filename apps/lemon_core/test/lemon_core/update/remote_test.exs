@@ -1152,4 +1152,284 @@ defmodule LemonCore.Update.RemoteTest do
                )
     end
   end
+
+  describe "lemon bot backend co-artifact" do
+    test "stages and flips the backend beside the runtime and records both versions", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, _bot_root} = bot_fixture(tmp_dir)
+
+      assert {:ok, %{staged: "2099.01.0", receipt: receipt}} = apply_confirmed(opts)
+
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+
+      assert {:ok, "versions/2099.01.0-stable-test-platform"} =
+               File.read_link(Path.join([state, "lemon_bot", "current"]))
+
+      assert File.exists?(
+               Path.join([
+                 state,
+                 "lemon_bot",
+                 "versions",
+                 "2099.01.0-stable-test-platform",
+                 "bot/bin/lemon-bot"
+               ])
+             )
+
+      assert receipt["from_bot_version"] == "2026.10.0-stable-test-platform"
+      assert receipt["to_bot_version"] == "2099.01.0-stable-test-platform"
+      refute File.exists?(Path.join([state, "tmp", "bot.tar.gz"]))
+
+      refute File.exists?(
+               Path.join([
+                 state,
+                 "lemon_bot",
+                 "versions",
+                 "2099.01.0-stable-test-platform.partial"
+               ])
+             )
+    end
+
+    test "the backend artifact is part of the plan digest", %{tmp_dir: tmp_dir} do
+      {opts, _state, bot_root} = bot_fixture(tmp_dir)
+
+      assert {:ok, with_bot} = Remote.plan(opts)
+      assert with_bot.bot_artifact["profile"] == "lemon_bot"
+
+      # Point the backend outside the managed tree: the plan loses the
+      # co-artifact and therefore has a different digest.
+      File.rm!(Path.join(bot_root, "current"))
+      File.ln_s!(tmp_dir, Path.join(bot_root, "current"))
+
+      assert {:ok, without_bot} = Remote.plan(opts)
+      assert without_bot.bot_artifact == nil
+      refute with_bot.digest == without_bot.digest
+
+      assert {:error, :confirmation_mismatch} =
+               Remote.apply(Keyword.put(opts, :confirm, with_bot.digest))
+    end
+
+    test "rollback restores both pointers", %{tmp_dir: tmp_dir} do
+      {opts, state, _bot_root} = bot_fixture(tmp_dir)
+      assert {:ok, %{receipt: receipt}} = apply_confirmed(opts)
+
+      assert {:ok, %{active: "2020.01.0"}} = Remote.rollback(rollback_opts(opts, state, receipt))
+
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+
+      assert {:ok, "versions/2026.10.0-stable-test-platform"} =
+               File.read_link(Path.join([state, "lemon_bot", "current"]))
+
+      assert {:ok, [rolled, _applied]} = Remote.history(Keyword.put(opts, :limit, 2))
+      assert rolled["from_bot_version"] == "2099.01.0-stable-test-platform"
+      assert rolled["to_bot_version"] == "2026.10.0-stable-test-platform"
+    end
+
+    test "rollback refuses a backend pointer that moved on", %{tmp_dir: tmp_dir} do
+      {opts, state, bot_root} = bot_fixture(tmp_dir)
+      assert {:ok, %{receipt: receipt}} = apply_confirmed(opts)
+
+      install_bot_version!(bot_root, "2100.01.0-stable-test-platform")
+      File.rm!(Path.join(bot_root, "current"))
+      File.ln_s!("versions/2100.01.0-stable-test-platform", Path.join(bot_root, "current"))
+
+      assert {:error, :stale_current_bot_version} =
+               Remote.rollback(rollback_opts(opts, state, receipt))
+
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+    end
+
+    test "a failure after the runtime flip restores both previous pointers", %{tmp_dir: tmp_dir} do
+      {opts, state, _bot_root} = bot_fixture(tmp_dir)
+
+      opts =
+        Keyword.put(opts, :active_bot_verify_fun, fn _key ->
+          {:error, :injected_bot_failure}
+        end)
+
+      assert {:ok, plan} = Remote.plan(opts)
+
+      assert {:error, :injected_bot_failure} =
+               Remote.apply(Keyword.put(opts, :confirm, plan.digest))
+
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+
+      assert {:ok, "versions/2026.10.0-stable-test-platform"} =
+               File.read_link(Path.join([state, "lemon_bot", "current"]))
+
+      assert {:ok, [failed]} = Remote.history(Keyword.put(opts, :limit, 1))
+      assert failed["status"] == "failed_injected_bot_failure"
+    end
+
+    test "a backend archive that escapes its prefix is refused before any pointer moves", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, _bot_root} = bot_fixture(tmp_dir, escaping_bot: true)
+
+      assert {:error, :archive_path_escape} = apply_confirmed(opts)
+
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+
+      assert {:ok, "versions/2026.10.0-stable-test-platform"} =
+               File.read_link(Path.join([state, "lemon_bot", "current"]))
+
+      refute File.dir?(Path.join([state, "versions", "2099.01.0"]))
+    end
+
+    test "a backend reporting the wrong version is refused before any pointer moves", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, _bot_root} = bot_fixture(tmp_dir, bot_version: "2000.01.0")
+
+      assert {:error, :staged_bot_version_mismatch} = apply_confirmed(opts)
+
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+
+      assert {:ok, "versions/2026.10.0-stable-test-platform"} =
+               File.read_link(Path.join([state, "lemon_bot", "current"]))
+    end
+
+    test "an installation with no managed backend is updated exactly as before", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, bot_root} = bot_fixture(tmp_dir)
+      File.rm_rf!(bot_root)
+
+      assert {:ok, %{staged: "2099.01.0", receipt: receipt}} = apply_confirmed(opts)
+
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+      refute Map.has_key?(receipt, "from_bot_version")
+      refute Map.has_key?(receipt, "to_bot_version")
+      refute File.exists?(Path.join(state, "lemon_bot"))
+    end
+
+    test "a release without a backend artifact refuses to move the runtime alone", %{
+      tmp_dir: tmp_dir
+    } do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+
+      router =
+        artifact_router(
+          manifest("2099.01.0", artifacts),
+          "/releases/download/v2099.01.0/pkg.tar.gz",
+          bytes
+        )
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+      bot_root = Path.join(state, "lemon_bot")
+      install_bot_version!(bot_root, "2026.10.0-stable-test-platform")
+      File.ln_s!("versions/2026.10.0-stable-test-platform", Path.join(bot_root, "current"))
+
+      opts = remote_opts(base_url, home, release_root)
+
+      assert {:error, :missing_bot_artifact} = Remote.plan(opts)
+      assert {:error, :missing_bot_artifact} = Remote.apply(opts)
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+      refute File.dir?(Path.join([state, "versions", "2099.01.0"]))
+    end
+
+    test "a backend pointer moved between plan and apply makes the digest stale", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, bot_root} = bot_fixture(tmp_dir)
+      assert {:ok, plan} = Remote.plan(opts)
+
+      install_bot_version!(bot_root, "2026.11.0-stable-test-platform")
+      File.rm!(Path.join(bot_root, "current"))
+      File.ln_s!("versions/2026.11.0-stable-test-platform", Path.join(bot_root, "current"))
+
+      assert {:error, :confirmation_mismatch} =
+               Remote.apply(Keyword.put(opts, :confirm, plan.digest))
+
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+    end
+
+    test "pruning keeps the backend the apply receipt can roll back to", %{tmp_dir: tmp_dir} do
+      {opts, state, bot_root} = bot_fixture(tmp_dir)
+
+      # These sort above the backend in use, so a prune that protected only the
+      # post-flip pointer would drop the receipt's rollback target.
+      for version <- ["2023.01.0", "2027.01.0", "2028.01.0"] do
+        install_bot_version!(bot_root, "#{version}-stable-test-platform")
+      end
+
+      assert {:ok, %{receipt: receipt}} = apply_confirmed(opts)
+
+      versions = Path.join(bot_root, "versions")
+      assert File.dir?(Path.join(versions, "2099.01.0-stable-test-platform"))
+      assert receipt["from_bot_version"] == "2026.10.0-stable-test-platform"
+      assert File.dir?(Path.join(versions, receipt["from_bot_version"]))
+      refute File.dir?(Path.join(versions, "2023.01.0-stable-test-platform"))
+
+      assert {:ok, %{active: "2020.01.0"}} = Remote.rollback(rollback_opts(opts, state, receipt))
+
+      assert {:ok, "versions/2026.10.0-stable-test-platform"} =
+               File.read_link(Path.join(bot_root, "current"))
+    end
+  end
+
+  defp bot_fixture(tmp_dir, fixture_opts \\ []) do
+    {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+
+    {bot_bytes, bot_sha, bot_size} =
+      build_fixture_bot_tarball(
+        tmp_dir,
+        Keyword.get(fixture_opts, :bot_version, "2099.01.0"),
+        Keyword.get(fixture_opts, :escaping_bot, false)
+      )
+
+    artifacts = [
+      artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size),
+      artifact("bot.tar.gz", "lemon_bot", "test-platform", bot_sha, bot_size)
+    ]
+
+    router =
+      downloads_router(manifest("2099.01.0", artifacts), %{
+        "/releases/download/v2099.01.0/pkg.tar.gz" => bytes,
+        "/releases/download/v2099.01.0/bot.tar.gz" => bot_bytes
+      })
+
+    base_url = start_server(router)
+    {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+    bot_root = Path.join(state, "lemon_bot")
+    install_bot_version!(bot_root, "2026.10.0-stable-test-platform")
+    File.ln_s!("versions/2026.10.0-stable-test-platform", Path.join(bot_root, "current"))
+
+    {remote_opts(base_url, home, release_root), state, bot_root}
+  end
+
+  defp install_bot_version!(bot_root, key) do
+    dir = Path.join([bot_root, "versions", key])
+    File.mkdir_p!(Path.join(dir, "bot/bin"))
+    File.mkdir_p!(Path.join(dir, "bot/web"))
+    File.write!(Path.join(dir, "bot/web/index.html"), "<html>")
+    write_executable!(Path.join(dir, "bot/bin/lemon-bot"), "#!/bin/sh\nprintf 'lemon-bot x\\n'\n")
+    dir
+  end
+
+  # The backend artifact carries a single top-level bot/ directory, the same
+  # shape install.sh accepts.
+  defp build_fixture_bot_tarball(tmp_dir, version, escaping?) do
+    src = Path.join(tmp_dir, "bot-src")
+    File.rm_rf!(src)
+    File.mkdir_p!(Path.join(src, "bot/bin"))
+    File.mkdir_p!(Path.join(src, "bot/web"))
+    File.write!(Path.join(src, "bot/web/index.html"), "<html>")
+
+    write_executable!(
+      Path.join(src, "bot/bin/lemon-bot"),
+      "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf 'lemon-bot #{version}\\n'\n"
+    )
+
+    if escaping?, do: File.ln_s!("../../../../etc/passwd", Path.join(src, "bot/escape"))
+
+    tarball = Path.join(tmp_dir, "bot-artifact.tar.gz")
+
+    {_output, 0} =
+      System.cmd("tar", ["-czf", tarball, "-C", src, "."], env: [{"COPYFILE_DISABLE", "1"}])
+
+    digest(tarball)
+  end
 end

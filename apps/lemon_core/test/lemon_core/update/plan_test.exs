@@ -106,4 +106,87 @@ defmodule LemonCore.Update.PlanTest do
 
     refute first == second
   end
+
+  test "digest binds the backend co-artifact and omitting it stays a distinct plan" do
+    bot =
+      artifact(%{
+        "file" => "lemon-bot.tar.gz",
+        "profile" => "lemon_bot",
+        "sha256" => String.duplicate("f", 64)
+      })
+
+    assert {:ok, without_bot} = Plan.build(info(), opts())
+    assert without_bot.bot_artifact == nil
+
+    assert {:ok, with_bot} = Plan.build(info(%{bot_artifact: bot}), opts())
+
+    assert with_bot.bot_artifact == %{
+             "file" => "lemon-bot.tar.gz",
+             "profile" => "lemon_bot",
+             "platform" => "linux-x86_64",
+             "sha256" => String.duplicate("f", 64),
+             "size" => 123
+           }
+
+    assert {:ok, changed_bot} =
+             Plan.build(
+               info(%{bot_artifact: Map.put(bot, "sha256", String.duplicate("0", 64))}),
+               opts()
+             )
+
+    refute without_bot.digest == with_bot.digest
+    refute with_bot.digest == changed_bot.digest
+  end
+
+  test "rejects a backend co-artifact with the wrong profile, platform, or unconfined name" do
+    bot = artifact(%{"file" => "lemon-bot.tar.gz", "profile" => "lemon_bot"})
+
+    assert {:error, :artifact_profile_mismatch} =
+             Plan.build(info(%{bot_artifact: Map.put(bot, "profile", "lemon_tui")}), opts())
+
+    assert {:error, :artifact_platform_mismatch} =
+             Plan.build(info(%{bot_artifact: Map.put(bot, "platform", "darwin-arm64")}), opts())
+
+    assert {:error, :invalid_artifact_file} =
+             Plan.build(info(%{bot_artifact: Map.put(bot, "file", "../escape.tar.gz")}), opts())
+
+    assert {:error, :invalid_artifact_checksum} =
+             Plan.build(info(%{bot_artifact: Map.put(bot, "sha256", "nope")}), opts())
+
+    assert {:error, :invalid_artifact_size} =
+             Plan.build(
+               info(%{artifact: artifact(%{"size" => 5}), bot_artifact: bot}),
+               opts(max_artifact_bytes: 10)
+             )
+  end
+
+  test "digest binds the backend install key the machine runs now" do
+    bot = artifact(%{"file" => "lemon-bot.tar.gz", "profile" => "lemon_bot"})
+
+    assert {:ok, unpointed} = Plan.build(info(%{bot_artifact: bot}), opts())
+    assert unpointed.current_bot == nil
+
+    assert {:ok, pointed} =
+             Plan.build(
+               info(%{bot_artifact: bot}),
+               opts(current_bot: "2026.09.0-stable-linux-x86_64")
+             )
+
+    assert pointed.current_bot == "2026.09.0-stable-linux-x86_64"
+
+    assert {:ok, moved} =
+             Plan.build(
+               info(%{bot_artifact: bot}),
+               opts(current_bot: "2026.08.0-stable-linux-x86_64")
+             )
+
+    refute unpointed.digest == pointed.digest
+    refute pointed.digest == moved.digest
+  end
+
+  test "rejects a backend install key that could carry a path" do
+    for bad <- ["../escape", "versions/2026.09.0", "/abs", ".hidden"] do
+      assert {:error, :invalid_bot_target} = Plan.build(info(), opts(current_bot: bad))
+    end
+  end
 end

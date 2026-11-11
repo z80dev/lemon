@@ -265,4 +265,59 @@ defmodule CodingAgent.ExecutionNode.CLITest do
     assert {:error, "--capabilities must be 'all' or a comma-separated tool list"} =
              CLI.execution_capabilities([capabilities: ""], nil)
   end
+
+  test "--enroll-only requires --invite-code-stdin" do
+    assert {:error, "--enroll-only requires --invite-code-stdin"} =
+             CLI.parse([
+               "--name",
+               "bot",
+               "--controller",
+               "wss://controller.example/ws",
+               "--enroll-only"
+             ])
+
+    assert {:ok, opts} =
+             CLI.parse([
+               "--name",
+               "bot",
+               "--controller",
+               "wss://controller.example/ws",
+               "--invite-code-stdin",
+               "--enroll-only"
+             ])
+
+    assert opts[:enroll_only] == true
+    assert opts[:invite_code_stdin] == true
+  end
+
+  test "--enroll-only stops the worker before returning the first online status" do
+    {:ok, worker} = Agent.start(fn -> :enrolled end)
+    monitor = Process.monitor(worker)
+    send(self(), {:execution_node_worker, worker, {:status, :online, "node-abc"}})
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        assert :ok = CLI.await_worker(worker, monitor, enroll_only: true)
+      end)
+
+    assert output =~ "Execution node online (node-abc)"
+    refute Process.alive?(worker)
+  end
+
+  test "uncertain enrollment returns its stable code without another exchange" do
+    worker =
+      spawn(fn ->
+        receive do
+          :fail -> exit({:pairing_failed, :outcome_unknown})
+        end
+      end)
+
+    monitor = Process.monitor(worker)
+    send(worker, :fail)
+
+    assert {:error, :enrollment_outcome_unknown} =
+             CLI.await_worker(worker, monitor, enroll_only: true)
+
+    refute Process.alive?(worker)
+  end
 end

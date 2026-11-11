@@ -8,6 +8,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- `lemon service install|status|repair|uninstall` manages controller, Lemon Bot
+  backend and named worker services with launchd/systemd, identity-verified
+  takeover, application readiness, truthful persistence and a manual fallback.
+- `lemon uninstall` previews the exact units, programs and shell changes and
+  requires a fresh confirmation digest; data is preserved unless `--purge`.
+
+### Changed
+
+- Managed controllers route start/restart through their service manager.
+  Deliberate stops stay down; updates restart only previously running units,
+  stop workers before restarting the controller, and update an installed Lemon
+  Bot backend in lockstep with the runtime.
+
 ### Fixed
 
 - Load the certificate provider before Telegram and Discord setup construct their

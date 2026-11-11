@@ -30,6 +30,43 @@ entry **Lemon Secrets** or, when file-backed, `~/.lemon/secrets_master_key`),
 and the durable store under `~/.lemon/store`. See [Configuration](../config.md)
 for the file format.
 
+## Run Lemon as a service
+
+After setup, use the same lifecycle command on macOS and Linux:
+
+```bash
+lemon service install controller
+lemon service install backend --bot "$HOME/.local/bin/lemon-bot"
+lemon service status --json
+lemon service repair
+```
+
+For the combined Bot install, `lemon-bot up` configures these services and enrolls
+this computer without copying an invite. The runtime command also supports
+`worker --name NAME` and the reserved per-machine `tunnel` role.
+
+macOS LaunchAgents start when you log in; a GUI login session is required.
+Linux user services run while you are logged in unless linger is enabled:
+`lemon service repair --enable-linger`. Lemon never invokes sudo; if polkit
+refuses, it prints the exact administrator command. `--manual` and hosts without
+a user service manager run without reboot/logout persistence.
+
+`lemon stop` deliberately keeps the controller down. `lemon daemon` and
+`lemon restart` hand off to its manager when installed. `lemon service repair`
+starts stopped units and checks actual application health and process identity.
+Controller readiness defaults to 120 seconds; backend and worker readiness to
+60 seconds. Use `--wait 0` to install without waiting.
+
+Units use stable launchers and never store invite codes or operator/encryption
+secrets. Existing Lemon worker agents are adopted under the same name. A
+verified detached controller/backend can be taken over once, with brief downtime;
+foreign or unverified processes are never killed.
+
+`lemon service uninstall ROLE...` removes only the units and keeps data and
+credentials. Remove a worker's machine entry in Lemon Bot separately to revoke
+its access. Full removal uses the preview-and-confirm
+[`lemon uninstall`](updates.md) command.
+
 ## What setup does—and does not do
 
 `lemon setup` is an idempotent first-time configuration wizard. On each run it

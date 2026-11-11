@@ -1,0 +1,155 @@
+defmodule LemonCli.ServiceCommandTest do
+  use ExUnit.Case, async: true
+  import ExUnit.CaptureIO
+  alias LemonCli.{CLI, ServiceCommand}
+  alias LemonCore.Service.{Role, Unit}
+  @moduletag :tmp_dir
+
+  setup %{tmp_dir: home} do
+    runner = fn
+      "launchctl", ["print", "gui/501"], _ -> {"", 0}
+      "launchctl", ["print", _], _ -> {"pid = 123\n", 0}
+      "launchctl", ["bootout", _], _ -> {"", 0}
+      "ps", _, _ -> {"501 Tue Nov 10 12:00:00 2026 /bin/beam.smp\n", 0}
+      _, _, _ -> {"", 1}
+    end
+
+    opts = [
+      home: home,
+      os: :darwin,
+      uid: "501",
+      env: %{},
+      login_path: "/usr/bin:/bin",
+      command_runner: runner,
+      name: "studio",
+      controller: "ws://127.0.0.1:4044/ws",
+      status_reader: fn _ -> {:ok, %{"state" => "online", "osPid" => 123, "reason" => nil}} end
+    ]
+
+    {:ok, opts: opts}
+  end
+
+  test "invalid commands, names, roles and flags are usage failures" do
+    args = [
+      [],
+      ["restart"],
+      ["install"],
+      ["uninstall"],
+      ["install", "database"],
+      ["install", "worker"],
+      ["install", "worker", "--name", "bad name"],
+      ["install", "worker", "--name", String.duplicate("a", 65)],
+      ["install", "controller", "--wait", "-1"],
+      ["status", "--bot", "/bin/bot"],
+      ["install", "controller", "--invite-code-stdin"]
+    ]
+
+    for argv <- args do
+      assert capture_io(:stderr, fn -> assert ServiceCommand.run(argv) == 2 end) =~ "Error:"
+    end
+  end
+
+  test "bounded stdin rejects malformed or extra credential bytes" do
+    for input <- [
+          "",
+          "short\n",
+          String.duplicate("a", 42) <> "\n",
+          String.duplicate("a", 44) <> "\n",
+          String.duplicate("a", 42) <> "!\n",
+          String.duplicate("a", 43) <> "\nextra"
+        ] do
+      capture_io(:stderr, fn ->
+        capture_io([input: input], fn ->
+          assert ServiceCommand.run([
+                   "install",
+                   "worker",
+                   "--name",
+                   "studio",
+                   "--invite-code-stdin"
+                 ]) == 2
+        end)
+      end)
+    end
+  end
+
+  test "status emits exactly one schema 1 document and exits 0 for online", %{opts: opts} do
+    {:ok, spec} = Role.build("worker", "launchd", opts)
+    :ok = Unit.write(spec, "launchd")
+
+    output =
+      capture_io(fn ->
+        assert ServiceCommand.run(["status", "worker", "--name", "studio", "--json"], opts) == 0
+      end)
+
+    assert {:ok,
+            %{
+              "schema" => 1,
+              "manager" => "launchd",
+              "persistence" => "login",
+              "units" => [%{"state" => "online"}]
+            }} = Jason.decode(output)
+
+    assert length(String.split(String.trim(output), "\n")) == 1
+  end
+
+  test "not-ready and foreign units exit 1", %{opts: opts} do
+    {:ok, spec} = Role.build("worker", "launchd", opts)
+    :ok = Unit.write(spec, "launchd")
+
+    parked =
+      Keyword.put(opts, :status_reader, fn _ ->
+        {:ok,
+         %{"state" => "needs_reauthorization", "osPid" => 123, "reason" => "session_expired"}}
+      end)
+
+    output =
+      capture_io(fn ->
+        assert ServiceCommand.run(["status", "worker", "--name", "studio", "--json"], parked) == 1
+      end)
+
+    assert [%{"state" => "needs_reauthorization"}] = Jason.decode!(output)["units"]
+    :ok = Unit.write(%{spec | argv: ["/bin/sleep", "100"]}, "launchd")
+
+    output =
+      capture_io(fn ->
+        assert ServiceCommand.run(["uninstall", "worker", "--name", "studio", "--json"], opts) ==
+                 1
+      end)
+
+    assert [%{"state" => "foreign"}] = Jason.decode!(output)["units"]
+  end
+
+  test "uninstall success exits 0 and reports removal", %{opts: opts} do
+    {:ok, spec} = Role.build("worker", "launchd", opts)
+    :ok = Unit.write(spec, "launchd")
+
+    output =
+      capture_io(fn ->
+        assert ServiceCommand.run(["uninstall", "worker", "--name", "studio", "--json"], opts) ==
+                 0
+      end)
+
+    assert [%{"action" => "removed", "installed" => false}] = Jason.decode!(output)["units"]
+  end
+
+  test "human output reports the actual persistence and readiness", %{opts: opts} do
+    {:ok, spec} = Role.build("worker", "launchd", opts)
+    :ok = Unit.write(spec, "launchd")
+
+    output =
+      capture_io(fn ->
+        assert ServiceCommand.run(["status", "worker", "--name", "studio"], opts) == 0
+      end)
+
+    assert output =~ "persistence: login"
+    assert output =~ "worker (studio): online"
+  end
+
+  test "help and top-level dispatch do not invoke a manager" do
+    for argv <- [["--help"], ["-h"], ["help"]] do
+      assert capture_io(fn -> assert ServiceCommand.run(argv) == 0 end) =~ "service"
+    end
+
+    assert capture_io(fn -> assert CLI.run(["service", "--help"]) == 0 end) =~ "ROLE"
+  end
+end

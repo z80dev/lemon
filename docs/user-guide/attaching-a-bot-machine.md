@@ -42,8 +42,8 @@ returned by the preview.
 Run the copied command and enter its separate one-use code on the destination.
 The page observes enrollment live and, once verified online, offers
 **Online — Create a Bot here** with that machine selected. Provider credentials
-must still be configured on the destination, and its worker must remain running;
-this flow does not install a service automatically.
+must still be configured on the destination. The join script installs a worker
+service by default; `--foreground` keeps a terminal-owned worker instead.
 
 ### Select a compatible destination runtime
 
@@ -266,11 +266,25 @@ indefinitely. Have the controller owner inspect `nodes.list` and issue a bound
 repair invitation for any identity already created. Issue a new unbound invite
 only for a genuinely new identity/name.
 
-The worker prints `Execution node online (NODE_ID)` and stays in the foreground.
-Keep it running, or supervise this foreground command with your OS service
-manager. Configure model-provider credentials **on the destination** with
-`lemon setup` or `lemon model --provider ...`; the noninteractive installer does
-not copy credentials from the controller or run provider setup.
+The service flow returns when the worker is online and reports whether it runs
+at login, at boot, only during your session, or without persistence. Inspect or
+repair it with:
+
+```bash
+lemon service status worker --name studio-mac --json
+lemon service repair worker --name studio-mac
+```
+
+To enroll directly through the lifecycle command, pipe the code once to
+`lemon service install worker --name NAME --controller URL --cwd "$HOME"
+--invite-code-stdin`. It runs a private `node join --enroll-only` exchange, then
+starts the persistent worker without the code. The one-shot exits after saving
+the credential and reaching online; an uncertain enrollment is never retried.
+Readiness uses `worker-status.json` and the manager's PID, not log scraping.
+
+`lemon node join` itself remains a foreground command. Configure model-provider
+credentials **on the destination** with `lemon setup` or `lemon model --provider
+...`; the installer does not copy credentials from the controller.
 
 ## Working directory and host-access roots
 
