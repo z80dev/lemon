@@ -251,9 +251,6 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
         {:error, {:token_load_failed, _reason}} ->
           {:ok, park(state, {:needs_enrollment, "credential_unreadable"})}
-
-        {:error, _other} ->
-          {:ok, park(state, {:needs_enrollment, "credential_missing"})}
       end
     end
   end
@@ -2124,9 +2121,6 @@ defmodule CodingAgent.ExecutionNode.Worker do
         :operator_authentication_failed
     end
   end
-
-  defp authentication_failure_reason(_error, :node), do: :node_authentication_failed
-  defp authentication_failure_reason(_error, _mode), do: :authentication_failed
 
   defp value(map, key) when is_map(map) do
     case Map.fetch(map, key_atom(key)) do

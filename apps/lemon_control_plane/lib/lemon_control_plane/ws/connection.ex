@@ -354,10 +354,6 @@ defmodule LemonControlPlane.WS.Connection do
       {:error, {:unavailable, message}} ->
         error = Errors.unavailable(message)
         {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
-
-      {:error, _} ->
-        error = Errors.unavailable("Authentication is temporarily unavailable")
-        {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
     end
   end
 
