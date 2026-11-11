@@ -6,6 +6,11 @@ defmodule LemonRouter.ToolPreviewTest do
 
   alias LemonRouter.ToolPreview
 
+  test "oversized inspected structs retain the original text without regex extraction" do
+    text = "%LemonAi.Types.TextContent{text: \"" <> String.duplicate("x", 6_000_000) <> "\"}"
+    assert ToolPreview.to_text(text) == text
+  end
+
   # ============================================================================
   # nil and binary inputs
   # ============================================================================

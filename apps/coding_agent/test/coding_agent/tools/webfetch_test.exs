@@ -11,6 +11,34 @@ defmodule CodingAgent.Tools.WebFetchTest do
     :ok
   end
 
+  test "HTML extraction match exhaustion returns a predictable error without retrying the parser" do
+    html = "<a " <> String.duplicate(" ", 10_000) <> "href=x>visible</a>"
+
+    for readability <- [false, true] do
+      tool =
+        build_tool(
+          http_get: fn _, _ ->
+            {:ok,
+             %Req.Response{status: 200, headers: [{"content-type", "text/html"}], body: html}}
+          end,
+          readability_extract: fn value, _, _ ->
+            Regex.run(~r/<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i, value)
+          end,
+          settings_manager: %{tools: %{web: %{fetch: %{readability: readability}}}}
+        )
+
+      assert {:error, message} =
+               tool.execute.(
+                 "limit",
+                 %{"url" => "https://8.8.8.8/regex", "provider" => "direct"},
+                 nil,
+                 nil
+               )
+
+      assert message =~ "match budget"
+    end
+  end
+
   @tag :tmp_dir
   test "truncated direct, Firecrawl and Exa content has a complete artifact", %{tmp_dir: dir} do
     full = String.duplicate("page content ", 400) <> "UNSEEN_TAIL"

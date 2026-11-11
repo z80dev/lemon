@@ -121,6 +121,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   consistently abbreviate controller log paths with `~` in status output.
 - CLI setup and service handling honor their typed readiness and error contracts
   under Elixir 1.20 / OTP 29 without unreachable fallback clauses.
+- Harden runtime text screening for Elixir 1.20 regex match-limit exceptions:
+  redaction withholds unscannable values, secret obfuscation withholds
+  an incompletely screened batch, and skill audits, shell guards and schema
+  validation fail closed. SMS matchers return explicit errors without claiming
+  messages; service readiness keeps its managed handle. Document/web extraction,
+  search, previews and provider-error classification now handle adversarial text
+  predictably. Remove overlapping dotenv/config, path-redaction and compaction
+  patterns instead of relying on regex backtracking limits.
 - Named workers refuse credential-bearing loopback connections unless the listener
   belongs to their OS user, including tunneled MCP requests. Deliberate cross-user
   deployments can opt out with `LEMON_NODE_TRUST_LOOPBACK_LISTENER=1`.

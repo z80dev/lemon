@@ -3,6 +3,15 @@ defmodule LemonWeb.ManagementTextTest do
 
   alias LemonWeb.ManagementText
 
+  test "long near-path tokens cannot crash redaction or disclose trailing secrets" do
+    assert ManagementText.text(String.duplicate("a", 1_000_000), max_bytes: 96) == "[REDACTED]"
+    path = String.duplicate("a", 60_000) <> "/private-secret"
+    assert ManagementText.text(path, max_bytes: 96) == "[PATH HIDDEN]"
+
+    refute ManagementText.text(String.duplicate("a", 60_000) <> " token=hidden", max_bytes: 96) =~
+             "hidden"
+  end
+
   test "operator labels omit credentials and absolute, relative, and Windows paths before bounds" do
     text =
       "Review api_key=super-secret /private/repo src/main.ex C:\\Users\\operator\\repo https://private.example/config"

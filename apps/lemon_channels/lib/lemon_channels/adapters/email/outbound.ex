@@ -469,6 +469,7 @@ defmodule LemonChannels.Adapters.Email.Outbound do
 
   defp address(nil), do: nil
   defp address({_name, email}) when is_binary(email), do: address(email)
+  defp address(value) when is_binary(value) and byte_size(value) > 1_024, do: nil
 
   defp address(value) when is_binary(value) do
     value = String.trim(value)

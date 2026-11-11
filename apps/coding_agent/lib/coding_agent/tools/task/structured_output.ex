@@ -12,6 +12,8 @@ defmodule CodingAgent.Tools.Task.StructuredOutput do
   Errors identify a JSON path and constraint without including response values.
   Unknown response property names are redacted from paths. `nil` disables the
   contract. Callers should validate before adding `instruction/1` to a prompt.
+  Match-budget exhaustion rejects the complete response, including under `not`
+  and branching schemas; it is not an ordinary non-match that can be inverted.
   """
 
   @max_bytes 65_536
@@ -50,6 +52,8 @@ defmodule CodingAgent.Tools.Task.StructuredOutput do
          :ok <- validate(value, prepared, "$") do
       {:ok, value}
     end
+  rescue
+    SystemLimitError -> error("$", "string pattern exceeded its match budget")
   end
 
   defp decode_json(text) when is_binary(text) do

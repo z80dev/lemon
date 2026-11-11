@@ -146,7 +146,7 @@ defmodule LemonCore.Dotenv do
   end
 
   defp parse_double_quoted(raw_value) do
-    case Regex.run(~r/^"((?:\\.|[^"])*)"(?:\s+#.*)?\s*$/, raw_value, capture: :all_but_first) do
+    case Regex.run(~r/^"((?:\\.|[^"\\])*+)"(?:\s+#.*)?\s*$/, raw_value, capture: :all_but_first) do
       [value] ->
         unescape_double_quoted(value)
 

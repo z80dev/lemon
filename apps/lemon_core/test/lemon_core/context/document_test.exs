@@ -69,6 +69,11 @@ defmodule LemonCore.Context.DocumentTest do
     assert {:error, {:page_limit, 2, 1}} = Document.extract_binary(two_pages, max_pages: 1)
   end
 
+  test "large PDF literal match exhaustion returns an explicit extraction error" do
+    pdf = "%PDF-1.4\n(" <> String.duplicate("a", 6_000_000) <> ") Tj"
+    assert {:error, :document_match_limit} = Document.extract_binary(pdf)
+  end
+
   test "rejects traversal members before archive extraction" do
     binary =
       zip!([
