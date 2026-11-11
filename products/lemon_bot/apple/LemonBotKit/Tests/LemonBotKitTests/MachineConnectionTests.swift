@@ -117,7 +117,8 @@ final class MachineConnectionTests: XCTestCase {
         }
         XCTAssertFalse(MachineBootstrap.script.contains("nohup"))
         XCTAssertFalse(HostEnrollment.setupScript.contains("pkill"))
-        XCTAssertTrue(MachineBootstrap.installCommand.contains("/releases/download/v"))
+        XCTAssertTrue(MachineBootstrap.installCommand.contains("/releases/"))
+        XCTAssertFalse(MachineBootstrap.installCommand.contains("/main/"))
         XCTAssertTrue(MachineBootstrap.installCommand.hasSuffix("--profile bot"))
     }
 
