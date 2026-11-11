@@ -152,9 +152,16 @@ defmodule LemonCore.Update.Plan do
        else: {:error, :invalid_bot_target}
   end
 
-  defp validate_artifact(nil, _profile, _platform, _opts), do: {:error, :no_matching_artifact}
+  @doc """
+  Validates an artifact's filename, profile, platform, SHA-256, and bounded size.
 
-  defp validate_artifact(artifact, expected_profile, expected_platform, opts) do
+  Used by update plans and component-only installs before downloading artifacts.
+  """
+  @spec validate_artifact(map() | nil, String.t(), String.t(), keyword()) ::
+          :ok | {:error, term()}
+  def validate_artifact(nil, _profile, _platform, _opts), do: {:error, :no_matching_artifact}
+
+  def validate_artifact(artifact, expected_profile, expected_platform, opts) do
     file = artifact["file"]
     size = artifact["size"]
     max_bytes = Keyword.get(opts, :max_artifact_bytes, @default_artifact_max_bytes)

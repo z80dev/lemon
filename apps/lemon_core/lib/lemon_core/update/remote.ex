@@ -199,6 +199,52 @@ defmodule LemonCore.Update.Remote do
   end
 
   @doc """
+  Installs the Lemon Bot backend matching the running packaged release.
+
+  Fetches the manifest pinned to the running version, independently of update
+  pins, and verifies and activates its platform-specific backend under the update
+  lock. An already verified active backend is reused without downloading it.
+  Both paths atomically ensure `~/.local/bin/lemon-bot` points at the managed
+  backend; an existing non-symlink launcher is never replaced.
+  """
+  @spec install_bot(opts()) ::
+          {:ok,
+           %{
+             key: String.t(),
+             version: String.t(),
+             launcher: String.t(),
+             installed: boolean()
+           }}
+          | {:error, term()}
+  def install_bot(opts \\ []) do
+    with {:ok, version} <- ManagedInstall.current(opts),
+         {:ok, manifest, _sha256} <-
+           fetch_manifest(manifest_url(base_url(opts), version)),
+         true <- manifest["version"] == version || {:error, :manifest_version_mismatch},
+         artifact when not is_nil(artifact) <-
+           find_artifact(manifest, platform(opts), @bot_profile),
+         :ok <- Plan.validate_artifact(artifact, @bot_profile, platform(opts), opts) do
+      plan = %{
+        target: version,
+        channel: channel(opts),
+        platform: platform(opts),
+        artifact: nil,
+        tui_artifact: nil,
+        bot_artifact: artifact
+      }
+
+      if ManagedInstall.safe_bot_key?(bot_key(plan)) do
+        ReceiptStore.with_lock(opts, fn -> install_bot_locked(plan, opts) end)
+      else
+        {:error, :invalid_bot_target}
+      end
+    else
+      nil -> {:error, :missing_bot_artifact}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
   Restores the exact checkpoint named by a successful update receipt.
 
   Both `:receipt` and its exact `:confirm` rollback digest are required. The
@@ -367,6 +413,79 @@ defmodule LemonCore.Update.Remote do
   # ──────────────────────────────────────────────────────────────────────────
   # apply/1
   # ──────────────────────────────────────────────────────────────────────────
+
+  defp install_bot_locked(plan, opts) do
+    key = bot_key(plan)
+    launcher = Path.join([Paths.home_dir(paths_opts(opts)), ".local", "bin", "lemon-bot"])
+
+    with {:ok, _version} <- ManagedInstall.current(opts),
+         :ok <- check_bot_launcher(launcher) do
+      if ManagedInstall.active_bot(opts) == key and
+           ManagedInstall.verify_active_bot(key, opts) == :ok do
+        bot_install_result(plan, launcher, false, opts)
+      else
+        previous = ManagedInstall.active_bot(opts)
+
+        with {:ok, _final} <- stage(plan, opts) do
+          case flip_bot(key, opts) do
+            :ok ->
+              prune_bot(plan, previous, opts)
+              bot_install_result(plan, launcher, true, opts)
+
+            {:error, reason} ->
+              restore_bot_install(previous, key, opts)
+              {:error, reason}
+          end
+        end
+      end
+    end
+  end
+
+  defp restore_bot_install(nil, key, opts) do
+    if ManagedInstall.active_bot(opts) == key,
+      do: File.rm(ManagedInstall.bot_current_link(opts)),
+      else: :ok
+  end
+
+  defp restore_bot_install(previous, key, opts),
+    do: ManagedInstall.restore_bot_after_failed_flip(previous, key, opts)
+
+  defp bot_install_result(plan, launcher, installed, opts) do
+    with :ok <- ensure_bot_launcher(launcher, opts) do
+      {:ok, %{key: bot_key(plan), version: plan.target, launcher: launcher, installed: installed}}
+    end
+  end
+
+  defp check_bot_launcher(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :symlink}} -> :ok
+      {:error, :enoent} -> :ok
+      {:ok, _stat} -> {:error, {:bot_launcher_conflict, path}}
+      {:error, reason} -> {:error, {:bot_launcher_failed, reason}}
+    end
+  end
+
+  defp ensure_bot_launcher(path, opts) do
+    target =
+      Path.join(ManagedInstall.bot_current_link(opts), "bot/bin/lemon-bot") |> Path.expand()
+
+    tmp = path <> ".tmp.#{System.unique_integer([:positive])}"
+
+    try do
+      with :ok <- File.mkdir_p(Path.dirname(path)),
+           :ok <- File.ln_s(target, tmp),
+           :ok <- check_bot_launcher(path),
+           :ok <- File.rename(tmp, path) do
+        :ok
+      else
+        {:error, {:bot_launcher_conflict, _path}} = error -> error
+        {:error, {:bot_launcher_failed, _reason}} = error -> error
+        {:error, reason} -> {:error, {:bot_launcher_failed, reason}}
+      end
+    after
+      File.rm(tmp)
+    end
+  end
 
   defp apply_locked(opts, expected_digest) do
     # Resolve inherited per-release paths while `current` still names the old release.
@@ -678,7 +797,7 @@ defmodule LemonCore.Update.Remote do
     tui_artifact = plan.tui_artifact
     bot_artifact = plan.bot_artifact
     version = plan.target
-    partial = Path.join(versions_dir(opts), "#{version}.partial")
+    partial = if artifact, do: Path.join(versions_dir(opts), "#{version}.partial")
     key = bot_key(plan)
 
     bot_partial =
@@ -701,7 +820,7 @@ defmodule LemonCore.Update.Remote do
     catch
       _kind, _reason -> {:error, :staging_failed}
     after
-      File.rm_rf(partial)
+      if partial, do: File.rm_rf(partial)
       if bot_partial, do: File.rm_rf(bot_partial)
 
       Enum.each(downloads, fn
@@ -712,7 +831,7 @@ defmodule LemonCore.Update.Remote do
   end
 
   defp download_verified(artifact, tui_artifact, bot_artifact, version, opts) do
-    with {:ok, tarball} <- download_one(artifact, version, opts),
+    with {:ok, tarball} <- download_optional(artifact, version, opts),
          {:ok, tui_tarball} <- download_optional(tui_artifact, version, opts),
          {:ok, bot_tarball} <- download_optional(bot_artifact, version, opts) do
       {:ok, {tarball, tui_tarball, bot_tarball}}
@@ -738,6 +857,9 @@ defmodule LemonCore.Update.Remote do
     end
   end
 
+  defp validate_staged_trees(nil, bot_partial, opts),
+    do: Archive.validate_bot_tree(bot_partial, opts)
+
   defp validate_staged_trees(partial, bot_partial, opts) do
     with :ok <- Archive.validate_tree(partial, opts) do
       if bot_partial do
@@ -753,6 +875,9 @@ defmodule LemonCore.Update.Remote do
   defp verify_bot_staged(bot_partial, version, platform, opts) do
     ManagedInstall.verify_bot_staged(bot_partial, version, platform, opts)
   end
+
+  defp promote_staged(nil, _version, bot_partial, bot_key, opts),
+    do: ManagedInstall.promote_bot(bot_partial, bot_key, opts)
 
   defp promote_staged(partial, version, nil, _bot_key, opts) do
     ManagedInstall.promote(partial, version, opts)
@@ -872,6 +997,8 @@ defmodule LemonCore.Update.Remote do
 
   # The runtime owns bin/ and lib/, the TUI owns tui/, so both unpack into one
   # staging directory and ride the same rename into place.
+  defp unpack({nil, nil}, nil, _opts), do: :ok
+
   defp unpack({tarball, tui_tarball}, partial, opts) do
     File.rm_rf(partial)
 
@@ -884,6 +1011,8 @@ defmodule LemonCore.Update.Remote do
   # Nothing is promoted until the staged tree actually holds the launchers it
   # is supposed to, mirroring the same assertions install.sh makes. A tarball
   # that unpacked into the wrong shape must not become `versions/current`.
+  defp verify_staged(nil, _tui_artifact, _version, _opts), do: :ok
+
   defp verify_staged(partial, tui_artifact, version, opts) do
     cond do
       not executable?(Path.join(partial, "bin/lemon")) ->

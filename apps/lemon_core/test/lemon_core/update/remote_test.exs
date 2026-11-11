@@ -1370,6 +1370,234 @@ defmodule LemonCore.Update.RemoteTest do
     end
   end
 
+  describe "install_bot/1" do
+    test "installs the running version backend and atomic launcher without changing runtime", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, bot_root, launcher} = bot_install_fixture(tmp_dir)
+      opts = Keyword.put(opts, :version, "2100.01.0")
+
+      assert {:ok,
+              %{
+                key: "2020.01.0-stable-test-platform",
+                version: "2020.01.0",
+                launcher: ^launcher,
+                installed: true
+              }} = Remote.install_bot(opts)
+
+      assert {:ok, "versions/2020.01.0-stable-test-platform"} =
+               File.read_link(Path.join(bot_root, "current"))
+
+      assert File.regular?(
+               Path.join([
+                 bot_root,
+                 "versions",
+                 "2020.01.0-stable-test-platform",
+                 "bot/bin/lemon-bot"
+               ])
+             )
+
+      assert {:ok, target} = File.read_link(launcher)
+      assert target == Path.join(bot_root, "current/bot/bin/lemon-bot")
+      assert Path.type(target) == :absolute
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+      assert_bot_install_clean(state, bot_root)
+    end
+
+    test "reuses an active backend without another download and repairs the launcher", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, bot_root, launcher} = bot_install_fixture(tmp_dir)
+      assert {:ok, %{installed: true}} = Remote.install_bot(opts)
+      assert_receive {:bot_download, "/releases/download/v2020.01.0/bot.tar.gz"}
+      File.rm!(launcher)
+      File.ln_s!("/old/backend", launcher)
+
+      assert {:ok, %{installed: false, launcher: ^launcher}} = Remote.install_bot(opts)
+      refute_receive {:bot_download, _path}
+      assert {:ok, target} = File.read_link(launcher)
+      assert target == Path.join(bot_root, "current/bot/bin/lemon-bot")
+
+      File.rm!(launcher)
+      assert {:ok, %{installed: false}} = Remote.install_bot(opts)
+      assert {:ok, ^target} = File.read_link(launcher)
+      refute_receive {:bot_download, _path}
+      assert_bot_install_clean(state, bot_root)
+    end
+
+    test "checksum mismatch leaves no pointer or launcher and cleans staging", %{tmp_dir: tmp_dir} do
+      {opts, state, bot_root, launcher} =
+        bot_install_fixture(tmp_dir, artifact_fields: %{"sha256" => String.duplicate("0", 64)})
+
+      assert {:error, {:checksum_mismatch, _details}} = Remote.install_bot(opts)
+      assert {:error, :enoent} = File.read_link(Path.join(bot_root, "current"))
+      assert {:error, :enoent} = File.lstat(launcher)
+      assert_bot_install_clean(state, bot_root)
+    end
+
+    test "requires the platform's lemon_bot artifact", %{tmp_dir: tmp_dir} do
+      {opts, _state, _bot_root, _launcher} =
+        bot_install_fixture(tmp_dir, artifact_fields: %{"platform" => "other-platform"})
+
+      assert {:error, :missing_bot_artifact} = Remote.install_bot(opts)
+      refute_receive {:bot_download, _path}
+    end
+
+    test "rejects a manifest version different from the running version", %{tmp_dir: tmp_dir} do
+      {opts, _state, _bot_root, _launcher} =
+        bot_install_fixture(tmp_dir, manifest_version: "2099.01.0")
+
+      assert {:error, :manifest_version_mismatch} = Remote.install_bot(opts)
+      refute_receive {:bot_download, _path}
+    end
+
+    test "does not overwrite a non-symlink launcher", %{tmp_dir: tmp_dir} do
+      {opts, _state, bot_root, launcher} = bot_install_fixture(tmp_dir)
+      File.mkdir_p!(Path.dirname(launcher))
+      File.write!(launcher, "keep my launcher")
+
+      assert {:error, {:bot_launcher_conflict, ^launcher}} = Remote.install_bot(opts)
+      assert File.read!(launcher) == "keep my launcher"
+      assert {:error, :enoent} = File.read_link(Path.join(bot_root, "current"))
+      refute_receive {:bot_download, _path}
+    end
+
+    test "rejects source and unsupported release layouts before fetching", %{tmp_dir: tmp_dir} do
+      {opts, _state, _bot_root, _launcher} = bot_install_fixture(tmp_dir)
+
+      for root <- [tmp_dir, Path.join(tmp_dir, "manual-release")] do
+        assert {:error, :unsupported_layout} =
+                 Remote.install_bot(Keyword.put(opts, :release_root, root))
+      end
+
+      refute_receive {:bot_manifest, _path}
+    end
+
+    test "validates artifact fields before downloading", %{tmp_dir: tmp_dir} do
+      for {fields, error} <- [
+            {%{"file" => "../escape.tar.gz"}, :invalid_artifact_file},
+            {%{"sha256" => "bad"}, :invalid_artifact_checksum},
+            {%{"size" => 0}, :invalid_artifact_size}
+          ] do
+        fixture_dir = Path.join(tmp_dir, Atom.to_string(error))
+        File.mkdir_p!(fixture_dir)
+
+        {opts, _state, _bot_root, _launcher} =
+          bot_install_fixture(fixture_dir, artifact_fields: fields)
+
+        assert {:error, ^error} = Remote.install_bot(opts)
+        refute_receive {:bot_download, _path}
+      end
+    end
+
+    test "refuses an escaping backend archive and cleans staging", %{tmp_dir: tmp_dir} do
+      {opts, state, bot_root, launcher} = bot_install_fixture(tmp_dir, escaping_bot: true)
+
+      assert {:error, :archive_path_escape} = Remote.install_bot(opts)
+      assert {:error, :enoent} = File.read_link(Path.join(bot_root, "current"))
+      assert {:error, :enoent} = File.lstat(launcher)
+      assert_bot_install_clean(state, bot_root)
+    end
+
+    test "refuses a backend reporting the wrong version and cleans staging", %{tmp_dir: tmp_dir} do
+      {opts, state, bot_root, launcher} =
+        bot_install_fixture(tmp_dir, bot_version: "2000.01.0")
+
+      assert {:error, :staged_bot_version_mismatch} = Remote.install_bot(opts)
+      assert {:error, :enoent} = File.read_link(Path.join(bot_root, "current"))
+      assert {:error, :enoent} = File.lstat(launcher)
+      assert_bot_install_clean(state, bot_root)
+    end
+
+    test "restores the previous backend pointer when active verification fails", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, bot_root, launcher} = bot_install_fixture(tmp_dir)
+      previous = "2019.01.0-stable-test-platform"
+      install_bot_version!(bot_root, previous)
+      File.ln_s!("versions/#{previous}", Path.join(bot_root, "current"))
+
+      opts =
+        Keyword.put(opts, :active_bot_verify_fun, fn _key -> {:error, :injected_bot_failure} end)
+
+      assert {:error, :injected_bot_failure} = Remote.install_bot(opts)
+      assert {:ok, "versions/#{previous}"} == File.read_link(Path.join(bot_root, "current"))
+      assert {:error, :enoent} = File.lstat(launcher)
+      assert_bot_install_clean(state, bot_root)
+    end
+
+    test "removes a fresh backend pointer when active verification fails", %{tmp_dir: tmp_dir} do
+      {opts, state, bot_root, launcher} = bot_install_fixture(tmp_dir)
+
+      opts =
+        Keyword.put(opts, :active_bot_verify_fun, fn _key -> {:error, :injected_bot_failure} end)
+
+      assert {:error, :injected_bot_failure} = Remote.install_bot(opts)
+      assert {:error, :enoent} = File.read_link(Path.join(bot_root, "current"))
+      assert {:error, :enoent} = File.lstat(launcher)
+      assert_bot_install_clean(state, bot_root)
+    end
+
+    test "pruning protects both the new backend and the previous backend", %{tmp_dir: tmp_dir} do
+      {opts, _state, bot_root, _launcher} = bot_install_fixture(tmp_dir)
+      previous = "2019.01.0-stable-test-platform"
+
+      for version <- [
+            previous,
+            "2021.01.0-stable-test-platform",
+            "2022.01.0-stable-test-platform",
+            "2023.01.0-stable-test-platform"
+          ] do
+        install_bot_version!(bot_root, version)
+      end
+
+      File.ln_s!("versions/#{previous}", Path.join(bot_root, "current"))
+      assert {:ok, %{installed: true, key: key}} = Remote.install_bot(opts)
+      assert File.dir?(Path.join([bot_root, "versions", key]))
+      assert File.dir?(Path.join([bot_root, "versions", previous]))
+      refute File.dir?(Path.join([bot_root, "versions", "2021.01.0-stable-test-platform"]))
+    end
+  end
+
+  defp bot_install_fixture(tmp_dir, fixture_opts \\ []) do
+    {bytes, sha256, size} =
+      build_fixture_bot_tarball(
+        tmp_dir,
+        Keyword.get(fixture_opts, :bot_version, "2020.01.0"),
+        Keyword.get(fixture_opts, :escaping_bot, false)
+      )
+
+    bot_artifact =
+      artifact("bot.tar.gz", "lemon_bot", "test-platform", sha256, size)
+      |> Map.merge(Keyword.get(fixture_opts, :artifact_fields, %{}))
+
+    body = manifest(Keyword.get(fixture_opts, :manifest_version, "2020.01.0"), [bot_artifact])
+    test_pid = self()
+
+    base_url =
+      start_server(fn
+        "/releases/download/v2020.01.0/manifest.json" = path ->
+          send(test_pid, {:bot_manifest, path})
+          {200, "application/json", body}
+
+        "/releases/download/v2020.01.0/bot.tar.gz" = path ->
+          send(test_pid, {:bot_download, path})
+          {200, "application/gzip", bytes}
+
+        _path ->
+          {404, "text/plain", "not found"}
+      end)
+
+    {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+    launcher = Path.join([home, ".local", "bin", "lemon-bot"])
+    {remote_opts(base_url, home, release_root), state, Path.join(state, "lemon_bot"), launcher}
+  end
+
+  defp assert_bot_install_clean(state, bot_root) do
+    refute File.exists?(Path.join([state, "tmp", "bot.tar.gz"]))
+    assert Path.wildcard(Path.join([bot_root, "versions", "*.partial"])) == []
+  end
+
   defp bot_fixture(tmp_dir, fixture_opts \\ []) do
     {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
 
