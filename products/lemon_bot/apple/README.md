@@ -2,7 +2,7 @@
 
 Native SwiftUI clients for the independent Lemon Bot product backend. macOS and iOS share the `LemonBotKit` Swift package, Codable resources, product-session transport, observable live state and native `LemonBotUI` screens. They never connect to Lemon's operator WebSocket or receive its credential. The [canonical API](../contracts/api.md), [wire types](../contracts/protocol.ts) and [card lifecycle](../contracts/cards.md) define server behavior; this README describes packaging and platform use, not a second protocol.
 
-Sidebar previews retain loaded messages offline; uncached rows say “Messages load when you're online.” Section headings expose expanded/collapsed state to VoiceOver, explain offline availability, and pinned Bots announce selection. On Mac, record global shortcuts in Settings rather than typing shortcut syntax; Previous/Next Bot are listed in the Conversation menu (⌘[/⌘]).
+Sidebar previews use the conversation's last-entry ID from sync, fetching that entry once online without opening the chat. Loaded previews remain available offline; uncached rows say “Messages load when you're online.” Section headings expose expanded/collapsed state to VoiceOver, explain offline availability, and pinned Bots announce selection. On Mac, record global shortcuts in Settings rather than typing shortcut syntax; Previous/Next Bot are listed in the Conversation menu (⌘[/⌘]).
 
 Machine Bot access uses the same [grouped grants controls](../web/README.md#assistant-destinations)
 as web: measured capability names, Off / View only / Full, warnings only when

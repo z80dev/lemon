@@ -50,6 +50,57 @@ private final class TestAccountCredentialStore: AccountCredentialStore {
         fixtures[0]["text"] = .string(text); fixtures[0]["runId"] = .string("run"); fixtures[0]["streaming"] = .bool(true); fixtures[0]["revision"] = .number(Double(revision))
         return try JSONDecoder().decode(TranscriptEntry.self, from: JSONEncoder().encode(fixtures[0]))
     }
+    func testSidebarPreviewLoadsSnapshotLastEntryWhenInitialSyncBecomesOnline() async throws {
+        let store = try store()
+        var room = Conversation(id: "resource", revision: 1, createdAtMs: 1, updatedAtMs: 1, kind: "dm", name: "Lemon", botIds: ["bot"], ownerUserId: "resource", lastEntryId: "last_reply", unreadCount: 0, lastReadSeq: 0, activity: [])
+        store.conversations = [room]
+        store.connectionState = "syncing"
+        let syncingKey = store.sidebarPreviewKey
+        let unavailable = try await store.sidebarPreview(in: room)
+        XCTAssertNil(unavailable)
+        XCTAssertTrue(TestHTTPProtocol.requests.isEmpty)
+        XCTAssertTrue(store.entries.isEmpty)
+
+        var reply = try message("## **Finished**\nThe `report` is ready.")
+        if case .message(var body) = reply {
+            body.id = "last_reply"; body.role = "assistant"; body.streaming = false
+            reply = .message(body)
+        }
+        let response = try JSONEncoder().encode(reply)
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/v1/entries/last_reply")
+            return (200, [:], response)
+        }
+        store.connectionState = "online"
+        XCTAssertNotEqual(store.sidebarPreviewKey, syncingKey)
+        let preview = try await store.sidebarPreview(in: room)
+        XCTAssertEqual(preview?.entryID, "last_reply")
+        XCTAssertEqual(preview?.text, "Finished The report is ready.")
+        XCTAssertEqual(TestHTTPProtocol.requests.count, 1)
+        XCTAssertNil(store.selectedConversationID)
+        XCTAssertTrue(store.entries.isEmpty)
+
+        let onlineKey = store.sidebarPreviewKey
+        room.lastEntryId = "next_reply"; store.conversations = [room]
+        XCTAssertNotEqual(store.sidebarPreviewKey, onlineKey)
+    }
+
+    func testSidebarPreviewUsesOnlyMatchingCachedLastEntryOffline() async throws {
+        let store = try store()
+        var room = Conversation(id: "resource", revision: 1, createdAtMs: 1, updatedAtMs: 1, kind: "dm", name: "Lemon", botIds: ["bot"], ownerUserId: "resource", lastEntryId: "resource", unreadCount: 0, lastReadSeq: 0, activity: [])
+        store.entries[room.id] = [try message("**Hello**\nthere")]
+        let cached = try await store.sidebarPreview(in: room)
+        XCTAssertEqual(cached?.text, "You: Hello there")
+        room.lastEntryId = "not_cached"
+        let missing = try await store.sidebarPreview(in: room)
+        XCTAssertNil(missing)
+        room.lastEntryId = nil
+        let empty = try await store.sidebarPreview(in: room)
+        XCTAssertNil(empty)
+        XCTAssertTrue(TestHTTPProtocol.requests.isEmpty)
+    }
+
     func testDraftsAndFilesAreDurableAndAccountBound() throws {
         let persistence = persistence()
         let local = LocalComposerDraft(text: "Unsent", attachmentIDs: ["a"], replyToEntryID: "e", revision: 3)

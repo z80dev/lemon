@@ -21,6 +21,9 @@ Follow [Lemon Bot getting started](../../../docs/getting-started/lemon-bot.md) f
 
 Owner sign-in and management work before model authentication. **Verified** and **Saved** both allow Bot creation, but Saved is not a successful live check. Co-resident Bots share the OS user's files, browser sessions and CLI credentials; personas are not host isolation.
 
+With no Bots, the home card offers creation when a computer is already online;
+otherwise it explains connecting a computer first.
+
 There is no Team Bot publishing, manager assignment, live other-user Bot access, cross-human room membership, Team memory/skills or shared connector authority. Workspace/Public templates contain reviewed declarative content and always create a separate owned Bot, never access to the publisher's live Bot or credentials.
 
 ## Connect iPhone from a desktop browser

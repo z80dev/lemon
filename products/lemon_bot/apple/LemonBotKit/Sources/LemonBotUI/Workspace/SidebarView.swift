@@ -87,7 +87,7 @@ struct SidebarView: View {
         .searchable(text: $query, isPresented: $searching, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search Bots and groups")
         .toolbar { phoneToolbar }
         #endif
-        .task(id: previewKey) { await loadPreviews() }
+        .task(id: store.sidebarPreviewKey) { await loadPreviews() }
         #if os(macOS)
         .task(id: store.hostSetupTrigger) { Task { await store.automaticallySetUpHostMachine() } }
         .popover(isPresented: $showConnection) { ScrollView { ConnectionStatusView(store: store).padding(12) }.frame(width: 440, height: 520) }
@@ -548,17 +548,10 @@ struct SidebarView: View {
 
     private func presence(_ bot: Bot) -> AvatarPresence { AvatarPresence(activity: bot.activity, online: store.isOnline) }
 
-    private var previewKey: String {
-        (store.bots.map(\.mainConversationId) + rooms.map(\.id)).map { id in "\(id):\(store.conversations.first { $0.id == id }?.lastEntryId ?? "")" }.joined(separator: "|")
-    }
     private func loadPreviews() async {
         for room in store.conversations where ["dm", "task", "group"].contains(room.kind) {
             guard let lastID = room.lastEntryId, previews[room.id]?.entryID != lastID else { continue }
-            let entry: TranscriptEntry?
-            if let cached = store.entries[room.id]?.last(where: { $0.id == lastID }) { entry = cached }
-            else if store.isOnline { entry = try? await store.read(resourcePath("entries", lastID)) }
-            else { entry = nil }
-            if let entry, let preview = SidebarPreview(entry: entry, userID: store.user?.id) { previews[room.id] = preview }
+            if let preview = try? await store.sidebarPreview(in: room) { previews[room.id] = preview }
         }
     }
     private func sidebar(_ bot: Bot, _ fields: JSONObject) async {
@@ -642,40 +635,6 @@ private extension View {
     }
 }
 
-/// One-line last-message preview for a sidebar row.
-struct SidebarPreview: Equatable {
-    var entryID: ID
-    var text: String
-    /// Markdown → single-line plain text ("**Done** — `x`" → "Done — x").
-    static func plain(_ markdown: String) -> String {
-        let lines = markdown.split(whereSeparator: \.isNewline).map { line in
-            String(line).replacingOccurrences(of: #"^\s*(?:[#>]+|[-*+]|\d+[.)])\s+"#, with: "", options: .regularExpression)
-        }.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty && !$0.hasPrefix("```") }
-        let joined = lines.joined(separator: " ")
-        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        let plain = (try? AttributedString(markdown: joined, options: options)).map { String($0.characters) } ?? joined
-        return plain.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-    init?(entry: TranscriptEntry, userID: ID?) {
-        entryID = entry.id
-        switch entry {
-        case .message(let message):
-            let body = SidebarPreview.plain(message.text)
-            if body.isEmpty && message.attachmentIds.isEmpty {
-                guard message.role != "user", !message.streaming else { return nil }
-                text = "Couldn't finish the last request"
-            } else {
-                let content = body.isEmpty ? "Sent an attachment" : body
-                text = message.role == "user" ? "You: \(content)" : content
-            }
-        case .userAttachment: text = "You: Sent an attachment"
-        case .card: text = "Needs a look"
-        case .voiceCall: text = "Voice chat"
-        case .notice(let notice): text = notice.text
-        default: return nil
-        }
-    }
-}
 
 /// Round account avatar with initials in lemon.
 struct AccountInitials: View {

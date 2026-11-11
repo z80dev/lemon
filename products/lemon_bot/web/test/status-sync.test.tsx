@@ -37,6 +37,7 @@ const finished: Run = { ...running, revision: 2, updatedAtMs: 2, status: 'succee
 const streaming: TranscriptEntry = { ...resource, id: 'entry_test', conversationId: conversation.id, seq: 1, timestampMs: 1, actor: { kind: 'bot', id: bot.id, displayName: bot.name }, clientNonce: null, batchId: null, replyToEntryId: null, runId: running.id, targetedUserId: null, reactions: [], kind: 'message', role: 'assistant', text: 'Done', streaming: true, attachmentIds: [] };
 const finalEntry: TranscriptEntry = { ...streaming, revision: 2, updatedAtMs: 2, streaming: false };
 let transcriptEntries: TranscriptEntry[] = [streaming];
+let homeMachines: Machine[] | undefined;
 function snapshot(): Snapshot {
   return {
     cursor: '1',
@@ -44,7 +45,7 @@ function snapshot(): Snapshot {
     workspace: { ...resource, id: 'workspace_test', name: 'Workspace', ownerUserId: 'user_test', enabled: true, timezone: 'UTC' },
     member: { ...resource, id: 'member_test', userId: 'user_test', displayName: 'Owner', email: 'owner@example.test', role: 'owner', enabled: true },
     capabilities: { controlConnected: true, methods: [], stt: false, tts: false, imageGeneration: false, apns: false, webPush: false, vapidPublicKey: null, attachmentMaxBytes: 1024, videoMaxBytes: 1024, maxAttachments: 6, minClientVersions: { web: '1.0.0', macos: '1.0.0', ios: '1.0.0' } },
-    bots: [bot], machines: [machine], conversations: [conversation], sections: [], notifications: [], activeRuns: [running],
+    bots: homeMachines ? [] : [bot], machines: homeMachines ?? [machine], conversations: homeMachines ? [] : [conversation], sections: [], notifications: [], activeRuns: homeMachines ? [] : [running],
     hasMore: { bots: false, machines: false, conversations: false, notifications: false },
   };
 }
@@ -60,6 +61,7 @@ beforeEach(() => {
   subscribers.clear();
   realtimeOptions = undefined;
   conversation.kind = 'dm'; transcriptEntries = [streaming];
+  homeMachines = undefined;
   sessionStorage.clear();
   localStorage.clear();
   location.hash = 'screen=conversation&id=conversation_test&botId=bot_test';
@@ -152,3 +154,24 @@ test('shared rooms mask access-request content and never fetch its private appro
   expect(container.textContent).not.toContain('Private reason');
   expect(calls).not.toContain('GET /approvals/:id');
 });
+
+for (const [variant, machines, canCreate] of [
+  ['no computer', [], false],
+  ['offline computer', [{ ...machine, status: 'offline' }], false],
+  ['one online computer', [machine], true],
+  ['multiple online computers', [machine, { ...machine, id: 'machine_second', name: 'Laptop' }], true],
+] as const) {
+  test(`first-run home selects the ${canCreate ? 'create' : 'connect'} variant with ${variant}`, async () => {
+    homeMachines = [...machines];
+    location.hash = 'screen=home';
+    await act(async () => root.render(<App />));
+    await waitFor(() => !!container.querySelector('.home .primary'));
+    const home = container.querySelector('.home')!;
+    const primary = home.querySelector('button.primary')!;
+    expect(primary.textContent).toMatch(canCreate ? /create.*bot/i : /connect.*computer/i);
+    // Assert which guidance renders, without pinning the sentence's wording.
+    expect(home.querySelector('p')?.textContent).toMatch(canCreate ? /online/i : /connect/i);
+    if (machines.length === 1 && canCreate) expect(home.querySelector('p')?.textContent).toContain(machine.name);
+    if (canCreate) expect(home.querySelector('p')?.textContent).not.toMatch(/connect one/i);
+  });
+}
