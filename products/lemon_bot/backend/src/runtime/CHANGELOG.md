@@ -1,5 +1,10 @@
 # Runtime changes
 
+## 2026-11-11
+- Approval presentation preserves command line boundaries and marks shortened
+  headlines and escaped invisible Unicode controls. The full reviewable proposal
+  remains available to clients; commands that cannot be fully shown fail closed.
+
 ## 2026-11-10
 - Preserve realtime sequence order through reply/status fan-out and close terminal-run streaming messages (including legacy rows), so completed replies no longer leave Bots stuck on “Thinking” or “Writing a reply”.
 - Reconciliation retains streaming entry identities and delta progress and skips locally in-flight submissions, preventing duplicate final replies and false uncertain-submission states without deleting transcript history.

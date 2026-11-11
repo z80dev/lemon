@@ -13,9 +13,9 @@ export function secureEqual(a: string, b: string): boolean { const aa = Buffer.f
 export function principal(context: RequestContext): Principal { if (!context.user) throw new ApiError('unauthenticated', 'Sign in to continue.'); return context.user; }
 export function unavailable(prerequisite: string): never { throw new ApiError('capability_unavailable', prerequisite); }
 export function providerFailure(message = 'Configured provider request failed.', uncertain = false): never { throw new ApiError(uncertain ? 'outcome_unknown' : 'upstream_unavailable', message, !uncertain); }
-export function safeSummary(value: unknown, max = 512): string {
+export function safeSummary(value: unknown, max = 512, options?: { preserveLayout?: boolean }): string {
   const text = typeof value === 'string' ? value : 'Provider operation failed.';
-  return text.replace(/(?:Bearer\s+|(?:token|password|secret|api[_-]?key)\s*[:=]\s*)[^\s,;]+/gi, '[redacted]').replace(/https?:\/\/[^\s]+/g, '[provider URL]').slice(0, max);
+  return text.replace(/(?:Bearer\s+|(?:token|password|secret|api[_-]?key)\s*[:=]\s*)[^\s,;]+/gi, match => '[redacted]' + (options?.preserveLayout ? match.replace(/[^\n\t]/g, '') : '')).replace(/https?:\/\/[^\s]+/g, '[provider URL]').slice(0, max);
 }
 export function scrub(value: unknown): P.JSONValue {
   if (value === null || typeof value === 'boolean') return value;

@@ -1,4 +1,5 @@
 import type * as P from '../../../contracts/protocol';
+import { approvalTextPresentation } from '../../../contracts/approval-presentation';
 import type { BackendServices, Principal, RuntimeService } from '../core/services';
 import { sendMessage } from '../core/conversations';
 import { acknowledgeExecutionApproval } from '../core/gates';
@@ -8,7 +9,7 @@ import { ApiError, errorEnvelope, fail } from '../core/errors';
 import { z, id } from '../core/validation';
 import { refreshMachines, ensureMachineRuntimeReady } from './machines';
 import { emitBotRuntimeProjection } from './projection';
-import { safeSummary, scrub } from '../integrations/common';
+import { safeSummary } from '../integrations/common';
 import { nativeBotToolPolicy, machineCapabilities, effectiveBotGrants, executionNames } from '../core/experiences';
 import { anyRequestable } from '../core/access';
 import { approvalToolGroup, TOOL_GROUPS, matchApprovalAllowance, recordAllowanceUse } from '../core/approval-allowances';
@@ -32,8 +33,8 @@ export function executionApprovalPresentation(tool: string | null | undefined, i
     headline = `${text('operation') || text('method') || 'Open'} ${host}`.trim();
     if (!host) headline = displayName;
   }
-  const singleLine = safeSummary(headline, 4096).replace(/[\s\u0000-\u001f\u007f]+/g, ' ').trim();
-  return { title: singleLine.length > 160 ? singleLine.slice(0, 159) + '…' : singleLine, target: displayName, toolGroup: group };
+  const presentation = approvalTextPresentation(safeSummary(headline, Number.POSITIVE_INFINITY, { preserveLayout: true }));
+  return { title: presentation.preview, titleTruncated: presentation.truncated, hasControls: presentation.hasControls, target: approvalTextPresentation(displayName).text, toolGroup: group };
 }
 
 export interface RuntimeMapping {
@@ -410,6 +411,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
       const principal = actor(owned.run.id); services.auth.bot(principal, owned.run.botId); services.auth.conversation(principal, owned.run.conversationId);
       const expiresInMs = Math.min(600_000, request.expiresAtMs - services.now()); if (expiresInMs < 1_000) return;
       const inputs: P.JSONObject = { proposalDigest: services.mutations.digest(request.action), redacted: false };
+      const terminal = approvalToolGroup(request.tool) === 'terminal' || ['shell', 'exec', 'terminal'].includes(request.tool ?? '');
       let concrete = false;
       for (const key of ['command', 'path', 'destination', 'url', 'method', 'operation', 'tool', 'toolName']) {
         const value = request.action[key]; if (typeof value !== 'string' || value.length === 0 || value.length > 4096) continue;
@@ -417,12 +419,13 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
           try {
             const destination = new URL(value);
             if (!['http:', 'https:'].includes(destination.protocol) || safeSummary(destination.hostname, 4096) !== destination.hostname) continue;
-            inputs.url = destination.origin; inputs.redacted = inputs.redacted === true || destination.origin !== value; concrete = true;
+            inputs.url = destination.origin; inputs.redacted = inputs.redacted === true || destination.origin !== value; if (!terminal) concrete = true;
           } catch { continue; }
         } else {
-          const safe = safeSummary(value, 4096); const displayed = scrub(safe);
-          inputs[key] = displayed; inputs.redacted = inputs.redacted === true || safe !== value;
-          if (['command', 'path', 'destination'].includes(key) && typeof displayed === 'string' && displayed.trim() && !/^\[[^\]]+\]$/.test(displayed)) concrete = true;
+          // Bound raw input above, not redacted output: replacements can expand a command.
+          const displayed = safeSummary(value, Number.POSITIVE_INFINITY, { preserveLayout: true });
+          inputs[key] = displayed; inputs.redacted = inputs.redacted === true || displayed !== value;
+          if (['command', 'path', 'destination'].includes(key) && (!terminal || key === 'command') && displayed.trim() && !/^\[[^\]]+\]$/.test(displayed.trim())) concrete = true;
         }
       }
       inputs.omittedInputFields = Object.keys(request.action).filter(key => !['command', 'path', 'destination', 'url', 'method', 'operation', 'tool', 'toolName'].includes(key)).length;

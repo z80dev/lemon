@@ -226,6 +226,12 @@ Terminal approval for this conversation, not every Bot or future chat. Use
 instead of active buttons. A reply containing the command's output is the
 success check—not just an online badge.
 
+Long commands require **Show full command** before either Allow choice becomes
+available. Review the complete scrollable command, including every line; Details
+also preserves line breaks. Hidden or directional Unicode characters are displayed
+as visible `⟨U+202E⟩`-style escapes with a warning, not interpreted by the card.
+These escapes only affect the display; they do not rewrite the command that runs.
+
 For offline or reauthorization states, use **Machines → Reconnect**; the Mac
 app's host-repair controls can recover its own host. For update and removal,
 follow [Update, roll back, and uninstall](../user-guide/updates.md).
