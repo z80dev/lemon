@@ -61,10 +61,7 @@ private struct MachineConnectView: View {
     }
 
     private var stableAppLocation: Bool {
-        let path = Bundle.main.bundleURL.resolvingSymlinksInPath().path
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return !path.contains("/AppTranslocation/")
-            && (path.hasPrefix("/Applications/") || path.hasPrefix(home + "/Applications/"))
+        ReleasePin.isStableApplicationLocation(bundleURL: Bundle.main.bundleURL.resolvingSymlinksInPath())
     }
 
     private enum LocalState: Equatable { case checking, running, stopped, missing }
