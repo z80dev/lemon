@@ -33,7 +33,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 TASKS_DIR = HERE.parent / 'coding_tasks'
-IMAGES = {'base': 'lemon-arena-base', 'lemon': 'lemon-arena-lemon', 'omp': 'lemon-arena-omp'}
+IMAGES = {'base': 'lemon-arena-base', 'lemon': 'lemon-arena-lemon', 'lemon-coding': 'lemon-arena-lemon',
+          'omp': 'lemon-arena-omp'}
 LANGUAGES = {'python', 'javascript', 'typescript', 'go', 'rust', 'bash', 'c', 'sql', 'mixed'}
 CATEGORIES = {'bug_fix', 'feature', 'refactor', 'debugging', 'performance', 'concurrency',
               'read_only', 'test_writing', 'migration', 'cli', 'data', 'parsing', 'api_design'}
@@ -216,7 +217,7 @@ def proxy_base(args):
     return f'http://host.docker.internal:{args.proxy_port}'
 
 
-def prepare_lemon(container, args, token):
+def prepare_lemon(container, args, token, disclosure_profile=None):
     config = f'''[defaults]
 provider = "kimi_coding"
 model = "kimi_coding:{args.model}"
@@ -228,6 +229,8 @@ base_url = "{proxy_base(args)}/coding"
     container.write('/home/agent/.lemon/config.toml', config)
     env = {'KIMI_API_KEY': token, 'LEMON_SECRETS_MASTER_KEY': secrets.token_hex(32),
            'LEMON_CONTROL_PLANE_OPERATOR_TOKEN': secrets.token_hex(32), 'HOME': '/home/agent'}
+    if disclosure_profile:
+        env['LEMON_TOOL_DISCLOSURE_PROFILE'] = disclosure_profile
     started = container.exec(['lemon', 'daemon'], env=env, timeout=240)
     if started.returncode != 0:
         raise RuntimeError('lemon daemon failed to start: ' + (started.stdout + started.stderr)[-1500:])
@@ -297,7 +300,10 @@ def parse_lemon(output):
     return result if isinstance(result, dict) else {}
 
 
+# `lemon-coding` is Lemon with the opt-in `coding` tool-disclosure profile (see docs/config.md).
 AGENTS = {'lemon': (prepare_lemon, lemon_argv, parse_lemon),
+          'lemon-coding': (lambda container, args, token: prepare_lemon(container, args, token, 'coding'),
+                           lemon_argv, parse_lemon),
           'omp': (prepare_omp, omp_argv, parse_omp)}
 
 
@@ -455,13 +461,16 @@ def proxy_stats(path):
             continue
         trial = stats.setdefault(entry.get('trial'), {'requests': 0, 'errors': 0, 'rate_limited': 0, 'models': set(),
                                                        'input': 0, 'cache_read': 0, 'output': 0})
-        if entry.get('path', '').endswith(('/messages', '/chat/completions')):
-            trial['requests'] += 1
-            if entry.get('model'):
-                trial['models'].add(entry['model'])
+        if not entry.get('path', '').endswith(('/messages', '/chat/completions')):
+            continue
+        if entry.get('kind') == 'usage':
             trial['input'] += entry.get('input_tokens', 0)
             trial['cache_read'] += entry.get('cache_read_tokens', 0)
             trial['output'] += entry.get('output_tokens', 0)
+            continue
+        trial['requests'] += 1
+        if entry.get('model'):
+            trial['models'].add(entry['model'])
         status = entry.get('status', 0)
         trial['rate_limited'] += status == 429
         trial['errors'] += status >= 500
@@ -519,16 +528,17 @@ def cmd_report(args):
     pairs = {}
     for row in scored:
         pairs.setdefault((row['task'], row['rep']), {})[row['agent']] = row['passed']
-    paired = None
-    if len(agents) == 2:
-        a, b = agents
-        complete = [pair for pair in pairs.values() if a in pair and b in pair]
-        only_a = sum(pair[a] and not pair[b] for pair in complete)
-        only_b = sum(pair[b] and not pair[a] for pair in complete)
-        paired = {'pairs': len(complete), f'only_{a}': only_a, f'only_{b}': only_b,
-                  'both': sum(pair[a] and pair[b] for pair in complete),
-                  'neither': sum(not pair[a] and not pair[b] for pair in complete),
-                  'mcnemar_exact_p': round(binomial_two_sided(only_a, only_a + only_b), 4)}
+    # Exact McNemar test over (task, repetition) pairs for every agent pair.
+    paired = []
+    for index, a in enumerate(agents):
+        for b in agents[index + 1:]:
+            complete = [pair for pair in pairs.values() if a in pair and b in pair]
+            only_a = sum(pair[a] and not pair[b] for pair in complete)
+            only_b = sum(pair[b] and not pair[a] for pair in complete)
+            paired.append({'a': a, 'b': b, 'pairs': len(complete), 'only_a': only_a, 'only_b': only_b,
+                           'both': sum(pair[a] and pair[b] for pair in complete),
+                           'neither': sum(not pair[a] and not pair[b] for pair in complete),
+                           'mcnemar_exact_p': round(binomial_two_sided(only_a, only_a + only_b), 4)})
     per_task = {}
     for row in scored:
         entry = per_task.setdefault(row['task'], {agent: [0, 0] for agent in agents})
@@ -560,9 +570,12 @@ def render_markdown(report, agents):
                      f"{e['wall_seconds']} | {e['model_requests']} | {e['wire_input_tokens']} | "
                      f"{e['wire_cached_tokens']} | {e['wire_output_tokens']} |")
     if report['paired']:
-        p = report['paired']
-        lines += ['', f"Paired (task, repetition): {p['pairs']} pairs; " +
-                  ', '.join(f'{key} {value}' for key, value in p.items() if key != 'pairs')]
+        lines += ['', '## Paired (same task and repetition)', '',
+                  '| A | B | Pairs | Only A | Only B | Both | Neither | McNemar exact p |',
+                  '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |']
+        for p in report['paired']:
+            lines.append(f"| {p['a']} | {p['b']} | {p['pairs']} | {p['only_a']} | {p['only_b']} | "
+                         f"{p['both']} | {p['neither']} | {p['mcnemar_exact_p']} |")
     lines += ['', '## Failure modes', '']
     for agent in agents:
         lines.append(f"- {agent}: {report['efficiency'][agent]['failures'] or 'none'}; wire models {report['efficiency'][agent]['wire_models']}")

@@ -117,8 +117,7 @@ function inboundToken(req: Request): string | undefined {
 
 // Token usage as the provider reported it on the wire, identical accounting for every client.
 // Handles Anthropic SSE (message_start / message_delta) and OpenAI chat chunks or JSON bodies.
-async function meterUsage(stream: ReadableStream<Uint8Array>): Promise<Record<string, number>> {
-	const text = await new Response(stream).text();
+function usageFromText(text: string): Record<string, number> {
 	const usage: Record<string, number> = {};
 	const merge = (raw: unknown) => {
 		if (!raw || typeof raw !== "object") return;
@@ -147,6 +146,27 @@ async function meterUsage(stream: ReadableStream<Uint8Array>): Promise<Record<st
 		}
 	}
 	return usage;
+}
+
+// Pass chunks through untouched while keeping the lines that can carry usage.
+// (A tee()'d body crashed Bun when a client disconnected mid-stream.)
+function meteredStream(onDone: (usage: Record<string, number>) => void): TransformStream<Uint8Array, Uint8Array> {
+	const decoder = new TextDecoder();
+	let pending = "";
+	let kept = "";
+	return new TransformStream({
+		transform(chunk, controller) {
+			controller.enqueue(chunk);
+			pending += decoder.decode(chunk, { stream: true });
+			const lines = pending.split("\n");
+			pending = lines.pop() ?? "";
+			for (const line of lines) if (line.includes("usage")) kept += `${line}\n`;
+		},
+		flush() {
+			kept += pending + decoder.decode();
+			onDone(usageFromText(kept));
+		},
+	});
 }
 
 Bun.serve({
@@ -189,17 +209,13 @@ Bun.serve({
 			}
 			const outHeaders = new Headers(response.headers);
 			for (const name of ["content-encoding", "content-length", "transfer-encoding", "connection"]) outHeaders.delete(name);
-			const entry = { trial, method: req.method, path: url.pathname, ...shape, status: response.status, retried, ttfb_ms: Date.now() - started };
-			if (!response.body) {
-				log(entry);
-				return new Response(null, { status: response.status, headers: outHeaders });
-			}
-			const [client, meter] = response.body.tee();
-			meterUsage(meter).then(
-				usage => log({ ...entry, ...usage, total_ms: Date.now() - started }),
-				() => log({ ...entry, metered: false, total_ms: Date.now() - started }),
+			// The request record is written at response headers so an aborted stream still counts.
+			log({ trial, method: req.method, path: url.pathname, ...shape, status: response.status, retried, ttfb_ms: Date.now() - started });
+			if (!response.body) return new Response(null, { status: response.status, headers: outHeaders });
+			const body = response.body.pipeThrough(
+				meteredStream(usage => log({ trial, kind: "usage", path: url.pathname, ...usage, total_ms: Date.now() - started })),
 			);
-			return new Response(client, { status: response.status, headers: outHeaders });
+			return new Response(body, { status: response.status, headers: outHeaders });
 		} catch (error) {
 			const message = error instanceof Error ? error.name : "error";
 			log({ trial, method: req.method, path: url.pathname, ...shape, status: 502, error: message, ttfb_ms: Date.now() - started });
@@ -207,6 +223,10 @@ Bun.serve({
 		}
 	},
 });
+
+// One trial's broken stream must never take down every other trial's model traffic.
+process.on("uncaughtException", error => log({ kind: "proxy_exception", error: error?.name ?? "error" }));
+process.on("unhandledRejection", error => log({ kind: "proxy_rejection", error: (error as Error)?.name ?? "error" }));
 
 console.error(`kimi auth proxy listening on ${host}:${port}`);
 
