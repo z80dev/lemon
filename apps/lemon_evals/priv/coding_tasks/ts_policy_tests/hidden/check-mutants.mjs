@@ -29,8 +29,21 @@ function run(cwd, paths) {
   assert.equal(result.signal, null, 'Test process must finish normally');
   return result;
 }
+function runInSandbox(source) {
+  const sandbox = mkdtempSync(join(tmpdir(), 'workspace-policy-'));
+  try {
+    cpSync(join(root, 'src'), join(sandbox, 'src'), { recursive: true });
+    cpSync(join(root, 'test'), join(sandbox, 'test'), { recursive: true });
+    cpSync(join(root, 'package.json'), join(sandbox, 'package.json'));
+    writeFileSync(join(sandbox, 'src/policy.js'), source);
+    return run(sandbox, ['test/smoke.test.js', 'test/policy.test.js']);
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+}
 
-const correct = run(root, ['test/smoke.test.js', 'test/policy.test.js']);
+
+const correct = runInSandbox(canonical);
 if (correct.status !== 0) {
   process.stdout.write(correct.stdout);
   process.stderr.write(correct.stderr);
@@ -43,16 +56,7 @@ for (const [name, before, after] of mutations) {
     '\\x' + char.charCodeAt(0).toString(16).padStart(2, '0')
   ).join(''), 'g');
   assert.equal([...canonical.matchAll(pattern)].length, 1, `Mutation anchor must be unique: ${name}`);
-  const sandbox = mkdtempSync(join(tmpdir(), 'workspace-policy-'));
-  try {
-    cpSync(join(root, 'src'), join(sandbox, 'src'), { recursive: true });
-    cpSync(join(root, 'test'), join(sandbox, 'test'), { recursive: true });
-    cpSync(join(root, 'package.json'), join(sandbox, 'package.json'));
-    writeFileSync(join(sandbox, 'src/policy.js'), canonical.replace(pattern, after));
-    const result = run(sandbox, ['test/policy.test.js']);
-    assert.notEqual(result.status, 0, `Tests failed to detect policy regression: ${name}`);
-  } finally {
-    rmSync(sandbox, { recursive: true, force: true });
-  }
+  const result = runInSandbox(canonical.replace(pattern, after));
+  assert.equal(result.status, 1, `Tests failed to detect policy regression: ${name}`);
 }
 console.log(`Policy tests passed and detected all ${mutations.length} regressions.`);
