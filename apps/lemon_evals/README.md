@@ -282,8 +282,8 @@ python3 arena.py report --output-dir /OPERATOR/PATH/run --proxy-log /OPERATOR/PA
 
 `run` is resumable: `results.jsonl` gains one row per finished trial and reruns
 skip recorded trials (`--retry-infrastructure` re-runs container/harness
-failures). With `--proxy-log`, a failed trial that saw an upstream 429 is
-recorded as an infrastructure failure, and new trials pause until a tiny probe
+failures). With `--proxy-log`, any trial that saw an upstream 429 is recorded
+as an infrastructure failure, and new trials pause until a tiny probe
 request succeeds, so an exhausted subscription quota window pauses the campaign
 instead of failing the remaining trials. Per-trial `agent.stdout`,
 `changes.diff` and `verify.log` stay in the operator-chosen run directory and
