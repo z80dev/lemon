@@ -31,6 +31,9 @@ command.
 |  | Project-local `.lemon` directories and platform keychain contents |
 |  | `cookie`, `env`, `secrets_master_key`, and `nodes/execution/` credentials |
 
+Worker DETS records under `nodes/state/` are included. `.lemon-state.lock` and
+`worker-status.json` are excluded as runtime state, not restored process identity.
+
 Use `--include-credentials` only when the backup destination has the same
 security as the machine's credential store:
 

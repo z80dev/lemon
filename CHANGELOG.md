@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Isolate named workers' DETS state from the controller, guard against concurrent
+  VM writers, back up and rebuild the controller's legacy DETS files once, and
+  expose local worker state with `lemon node status --name NAME --json`.
 - Load the certificate provider before Telegram and Discord setup construct their
   first HTTPS request, preserving TLS verification on cold CLI invocations.
 

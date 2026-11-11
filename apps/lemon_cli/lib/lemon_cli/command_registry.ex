@@ -681,9 +681,10 @@ defmodule LemonCli.CommandRegistry do
       name: "node",
       summary: "Inspect worker compatibility or join a named execution node",
       usage:
-        "lemon node join --name NAME --controller wss://HOST/ws [options]\nlemon node capabilities [--json] [--require-bot] [--expected-version VERSION]",
+        "lemon node join --name NAME --controller wss://HOST/ws [options]\nlemon node status --name NAME [--json]\nlemon node capabilities [--json] [--require-bot] [--expected-version VERSION]",
       subcommands: [
         %{name: "join", summary: "Pair with or reconnect to a controller"},
+        %{name: "status", summary: "Read local worker status without starting a runtime"},
         %{
           name: "capabilities",
           summary: "Inspect installed worker API compatibility without starting a runtime"

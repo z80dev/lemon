@@ -401,14 +401,16 @@ defmodule CodingAgent.RunGraphServer do
     else
       File.mkdir_p!(Path.dirname(state.dets_path))
 
-      dets_file = String.to_charlist(state.dets_path)
-
-      case :dets.open_file(state.dets_table, file: dets_file, type: :set) do
+      case CodingAgent.StatePaths.open_dets(state.dets_table, state.dets_path) do
         {:ok, _} ->
           %{state | dets_initialized: true}
 
         {:error, {:already_open, _pid}} ->
           %{state | dets_initialized: true}
+
+        {:error, {:state_dir_locked, pid}} ->
+          CodingAgent.StatePaths.warn_locked(pid)
+          state
 
         {:error, reason} ->
           Logger.warning("Failed to open RunGraph DETS: #{inspect(reason)}")
@@ -613,6 +615,6 @@ defmodule CodingAgent.RunGraphServer do
   defp dets_path(opts) do
     Keyword.get(opts, :dets_path) ||
       Application.get_env(:coding_agent, :run_graph_path) ||
-      Path.join(CodingAgent.Config.agent_dir(), "run_graph.dets")
+      CodingAgent.StatePaths.dets_path("run_graph.dets")
   end
 end
