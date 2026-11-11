@@ -4,6 +4,18 @@ The source checkout (`./bin/lemon`) and packaged releases (`lemon`) share the
 same command surface. The launcher handles lifecycle commands; all other
 commands are dispatched by the CLI registry.
 
+## Inspect a named worker
+
+`lemon node status --name NAME [--json]` reads the local worker status without
+starting a runtime or contacting the controller. JSON includes its state, reason,
+durable node ID, change time and OS PID, never credentials or controller URLs.
+
+`node join` selects private DETS state under
+`~/.lemon/nodes/state/<sha256-of-trimmed-name>/`. Settings, skills, sessions and
+the SQLite credential store remain shared. Do not use `LEMON_AGENT_DIR` or
+`LEMON_STORE_PATH` as worker-isolation switches. Another live VM owning a DETS
+directory causes memory-only operation rather than a second writer.
+
 ## No-argument behavior
 
 This behavior is identical in source checkouts and packaged installs:
