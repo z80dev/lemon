@@ -112,7 +112,7 @@ defmodule CodingAgent.StatePathsTest do
   @tag :subprocess
   test "all four stores preserve explicit and per-store precedence", %{root: root} do
     {:ok, peer, _} =
-      :peer.start_link(%{
+      :peer.start(%{
         connection: :standard_io,
         args: [~c"-pa" | :code.get_path()]
       })
@@ -166,7 +166,7 @@ defmodule CodingAgent.StatePathsTest do
     root: root
   } do
     {:ok, peer, _} =
-      :peer.start_link(%{
+      :peer.start(%{
         connection: :standard_io,
         args: [~c"-env", ~c"HOME", String.to_charlist(root), ~c"-pa" | :code.get_path()]
       })
@@ -220,7 +220,7 @@ defmodule CodingAgent.StatePathsTest do
   test "two VMs write separate files without orphaning controller writes", %{root: root} do
     # :peer's standard-IO transport does not require a distributed test VM.
     {:ok, peer, _} =
-      :peer.start_link(%{connection: :standard_io, args: [~c"-pa" | :code.get_path()]})
+      :peer.start(%{connection: :standard_io, args: [~c"-pa" | :code.get_path()]})
 
     on_exit(fn -> :peer.stop(peer) end)
     for app <- [:elixir, :logger, :crypto], do: :peer.call(peer, Application, :ensure_all_started, [app])
