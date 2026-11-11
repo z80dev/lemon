@@ -47,6 +47,9 @@ Checks:
   - lemon_bot installs independently of the native runtime, validates archive
     layout and manifest identity/size/digest, and rejects failed or incorrect
     binary version probes before changing the live backend pointer
+  - the combined bot preset stages and verifies both artifacts before promotion;
+    backend download, verification, rename, and pointer failures preserve both
+    live pointers and restore replaced same-version trees
 EOF
   exit 2
 }
@@ -1432,11 +1435,13 @@ def publish_case(case, mutation=None, extra=None, binary=None):
     (dest / "manifest.json").write_text(json.dumps(manifest))
     return f"{base}/{case}"
 
-def install(url, *args, profile_env=False):
+def install(url, *args, profile_env=False, extra_env=None):
     env = {
         "HOME": str(home), "PATH": os.environ["PATH"], "SHELL": "/bin/sh",
         "LEMON_INSTALL_BASE_URL": url, "LEMON_INSTALL_IGNORE_GLIBC": "1",
     }
+    if extra_env:
+        env.update(extra_env)
     command = ["sh", installer, "--no-modify-path", "--skip-setup"]
     if profile_env:
         env["LEMON_PROFILE"] = "lemon_bot"
@@ -1568,32 +1573,36 @@ SERVER
             (root / live).is_dir() and state.read_text() == "retain me" and
             os.readlink(home / ".lemon/versions/current") == native_current,
             "backend update retains previous version, state, and independent native current")
-    # Combined preset resolves both artifacts from a single manifest.
+    # Combined preset resolves and stages both artifacts from one manifest.
+    def publish_combined(case, binary=None, mutation=None):
+        url = publish_case(case, binary=binary, mutation=mutation)
+        dest = serve / case / "releases/latest/download"
+        runtime_name = f"lemon-{version}-stable-{platform}-lemon_runtime_full.tar.gz"
+        runtime = (
+            '#!/bin/sh\n'
+            'if [ "$1" = node ]; then\n'
+            '  [ "$2 $3 $4 $5 $6" = "capabilities --json --require-bot --expected-version '
+            + version + '" ] || exit 1\n'
+            'fi\n'
+            f'printf "{version}\\n"\n'
+        ).encode()
+        with tarfile.open(dest / runtime_name, "w:gz") as archive:
+            entry = tarfile.TarInfo("bin/lemon")
+            entry.size, entry.mode = len(runtime), 0o755
+            archive.addfile(entry, io.BytesIO(runtime))
+        manifest = json.loads((dest / "manifest.json").read_text())
+        data = (dest / runtime_name).read_bytes()
+        manifest["artifacts"].append({
+            "file": runtime_name, "profile": "lemon_runtime_full", "platform": platform,
+            "os": os_name, "arch": arch, "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        })
+        (dest / "manifest.json").write_text(json.dumps(manifest))
+        return url
+
     version = "9999.10.0"
     filename = f"lemon-{version}-stable-{platform}-lemon_bot.tar.gz"
-    combined = publish_case("combined")
-    dest = serve / "combined/releases/latest/download"
-    runtime_name = f"lemon-{version}-stable-{platform}-lemon_runtime_full.tar.gz"
-    runtime = (
-        '#!/bin/sh\n'
-        'if [ "$1" = node ]; then\n'
-        '  [ "$2 $3 $4 $5 $6" = "capabilities --json --require-bot --expected-version '
-        + version + '" ] || exit 1\n'
-        'fi\n'
-        f'printf "{version}\\n"\n'
-    ).encode()
-    with tarfile.open(dest / runtime_name, "w:gz") as archive:
-        entry = tarfile.TarInfo("bin/lemon")
-        entry.size, entry.mode = len(runtime), 0o755
-        archive.addfile(entry, io.BytesIO(runtime))
-    manifest = json.loads((dest / "manifest.json").read_text())
-    data = (dest / runtime_name).read_bytes()
-    manifest["artifacts"].append({
-        "file": runtime_name, "profile": "lemon_runtime_full", "platform": platform,
-        "os": os_name, "arch": arch, "size": len(data),
-        "sha256": hashlib.sha256(data).hexdigest(),
-    })
-    (dest / "manifest.json").write_text(json.dumps(manifest))
+    combined = publish_combined("combined")
     result = install(combined, "--profile", "bot")
     require(result.returncode == 0, f"combined preset installs: {result.stdout.decode()}")
     require(os.readlink(home / ".lemon/versions/current") == version and
@@ -1606,6 +1615,80 @@ SERVER
             "combined preset supports version resolution")
     old_runtime = os.readlink(home / ".lemon/versions/current")
     old_backend = os.readlink(root / "current")
+    version = "9999.11.0"
+    filename = f"lemon-{version}-stable-{platform}-lemon_bot.tar.gz"
+    missing = publish_combined("combined-missing")
+    (serve / "combined-missing/releases/latest/download" / filename).unlink()
+    for case, url in [
+        ("download", missing),
+        ("checksum", publish_combined(
+            "combined-digest", mutation=lambda m: m["artifacts"][0].update(sha256="0" * 64))),
+        ("version", publish_combined("combined-version", binary=b"#!/bin/sh\nexit 1\n")),
+    ]:
+        result = install(url, "--profile", "bot")
+        require(result.returncode != 0 and
+                os.readlink(home / ".lemon/versions/current") == old_runtime and
+                os.readlink(root / "current") == old_backend and
+                not (home / f".lemon/versions/{version}").exists() and
+                not (root / f"versions/{version}-stable-{platform}").exists(),
+                f"combined backend {case} failure preserves both pointers without promotion")
+
+    promotion = publish_combined("combined-promotion")
+    import shutil
+    fault_bin = work / "combined-fault-bin"
+    fault_bin.mkdir()
+    real_mv = shutil.which("mv")
+    (fault_bin / "mv").write_text(
+        '#!/bin/sh\ncase "$1" in\n'
+        '  */lemon_bot/versions/*.partial) echo "injected backend promotion failure" >&2; exit 1 ;;\n'
+        f'esac\nexec "{real_mv}" "$@"\n'
+    )
+    (fault_bin / "mv").chmod(0o755)
+    fault_env = {"PATH": f"{fault_bin}:{os.environ['PATH']}"}
+    result = install(promotion, "--profile", "bot", extra_env=fault_env)
+    require(result.returncode != 0 and
+            os.readlink(home / ".lemon/versions/current") == old_runtime and
+            os.readlink(root / "current") == old_backend and
+            not (home / f".lemon/versions/{version}").exists(),
+            "failed backend directory promotion rolls back the runtime pointer and new tree")
+
+    # Fail after both tree renames and current flips, at the backend launcher.
+    # This exercises rollback of both pointers, including same-version --force.
+    (fault_bin / "mv").unlink()
+    launcher.unlink()
+    launcher.mkdir()
+    for url, args in [(promotion, ()), (combined, ("--force",))]:
+        runtime_tree = home / f".lemon/versions/{old_runtime}"
+        backend_tree = root / old_backend
+        (runtime_tree / "transaction-sentinel").write_text("original runtime")
+        (backend_tree / "transaction-sentinel").write_text("original backend")
+        result = install(url, "--profile", "bot", *args)
+        require(result.returncode != 0 and
+                os.readlink(home / ".lemon/versions/current") == old_runtime and
+                os.readlink(root / "current") == old_backend and
+                (runtime_tree / "transaction-sentinel").read_text() == "original runtime" and
+                (backend_tree / "transaction-sentinel").read_text() == "original backend",
+                f"failed combined launcher promotion restores both pointers and original trees {args}")
+    launcher.rmdir()
+    launcher.symlink_to(root / "current/bot/bin/lemon-bot")
+    fresh_home = work / "home-combined-failed-first-install"
+    (fresh_home / ".local/bin/lemon-bot").mkdir(parents=True)
+    result = install(promotion, "--profile", "bot", extra_env={"HOME": str(fresh_home)})
+    require(result.returncode != 0 and
+            not os.path.lexists(fresh_home / ".lemon/versions/current") and
+            not os.path.lexists(fresh_home / ".lemon/lemon_bot/current") and
+            not (fresh_home / f".lemon/versions/{version}").exists() and
+            not (fresh_home / f".lemon/lemon_bot/versions/{version}-stable-{platform}").exists(),
+            "failed first combined promotion restores the absence of both pointers")
+    require(not list((home / ".lemon/tmp").iterdir()) and
+            not list((root / "tmp").iterdir()) and
+            not list((home / ".lemon/versions").glob("*.partial")) and
+            not list((root / "versions").glob("*.partial")) and
+            not list((home / ".lemon/versions").glob("*.previous.*")) and
+            not list((root / "versions").glob("*.previous.*")) and
+            not list(launcher.parent.glob("lemon-bot.tmp.*")),
+            "combined failures leave no downloads, staging trees, backups, or temporary links")
+    version = old_runtime
     # A regressed installed runtime is checked before either pointer changes.
     (home / f".lemon/versions/{version}/bin/lemon").write_text("#!/bin/sh\nexit 1\n")
     result = install(combined, "--profile", "bot")

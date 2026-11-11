@@ -142,6 +142,9 @@ For a complete Bot installation:
 curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --profile bot
 ```
 
+The combined preset stages and verifies both components before promoting either.
+If installation fails, both previous component pointers are restored.
+
 After both artifacts install, a terminal hands off to `lemon-bot`, which owns
 setup and service enrollment. Without a terminal, or with `--skip-setup`, the
 installer prints one `Run: <absolute path>/lemon-bot` next step. It does not run
@@ -307,6 +310,11 @@ When one component is already at another version, its missing counterpart is
 installed at that version using HTTPS and the release manifest's artifact hashes.
 Use `lemon update` for upgrades. Terminal installation with `install.sh` still
 requires `python3` (Apple's Command Line Tools on macOS).
+The app's Terminal command preserves its pinned version, channel, and download
+base URL. Native setup rechecks both component pointers under the install lock
+and refuses a plan if either changed. Backend archive links are checked through
+their full chains before extraction and again against the staged tree; cycles
+and paths escaping `bot/` are rejected.
 
 Without signing credentials CI creates an unsigned local-preview workflow
 artifact only, not a downloadable GitHub Release DMG. For source builds see the
