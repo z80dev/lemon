@@ -178,6 +178,18 @@ defmodule LemonWeb.WorkManagementLiveTest do
     send(view.pid, :work_tick)
     refute render(view) =~ "javascript:"
     refute has_element?(view, "a", "Open pull request")
+
+    Agent.update(
+      state,
+      &put_in(
+        &1.card.meta["codingWorkflow"]["prUrl"],
+        "https://github.com:65536/lemon/work/pull/12"
+      )
+    )
+
+    send(view.pid, :work_tick)
+    refute render(view) =~ "github.com:65536"
+    refute has_element?(view, "a", "Open pull request")
   end
 
   test "terminal failures, retries and transcript links survive the content-free projection", %{

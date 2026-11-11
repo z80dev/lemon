@@ -6,6 +6,7 @@ defmodule LemonCore.Context.URLFetcher do
   validated IP while retaining the original Host header and TLS SNI name, so a
   later DNS rebind cannot redirect the socket to a private address. Redirects
   are followed manually and re-enter the same checks.
+  Invalid destination ports are rejected before URL normalization can erase them.
   """
 
   import Bitwise
@@ -18,8 +19,10 @@ defmodule LemonCore.Context.URLFetcher do
 
   @spec fetch(String.t(), keyword()) :: {:ok, binary(), map()} | {:error, term()}
   def fetch(url, opts \\ []) when is_binary(url) do
-    initial = normalize_url(String.trim(url))
-    do_fetch(initial, opts, 0, MapSet.new([initial]))
+    with {:ok, uri} <- parse_uri(String.trim(url)) do
+      initial = normalize_url(uri)
+      do_fetch(initial, opts, 0, MapSet.new([initial]))
+    end
   end
 
   defp do_fetch(url, opts, redirect_count, visited) do
@@ -55,8 +58,9 @@ defmodule LemonCore.Context.URLFetcher do
 
   defp parse_uri(url) do
     case URI.parse(url) do
-      %URI{scheme: scheme, host: host} = uri
-      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+      %URI{scheme: scheme, host: host, port: port} = uri
+      when scheme in ["http", "https"] and is_binary(host) and host != "" and
+             is_integer(port) and port in 1..65_535 ->
         {:ok, uri}
 
       _ ->
@@ -167,7 +171,7 @@ defmodule LemonCore.Context.URLFetcher do
            connect_fun.(
              uri.scheme,
              address,
-             uri.port || default_port(uri.scheme),
+             uri.port,
              Keyword.get(http_options, :ssl, []),
              timeout
            ) do
@@ -506,7 +510,7 @@ defmodule LemonCore.Context.URLFetcher do
   defp pinned_url(uri, address) do
     host = address |> :inet.ntoa() |> List.to_string()
     host = if tuple_size(address) == 8, do: "[#{host}]", else: host
-    port = uri.port || default_port(uri.scheme)
+    port = uri.port
     port_suffix = if port == default_port(uri.scheme), do: "", else: ":#{port}"
     path = if uri.path in [nil, ""], do: "/", else: uri.path
     query = if uri.query, do: "?#{uri.query}", else: ""
@@ -514,7 +518,7 @@ defmodule LemonCore.Context.URLFetcher do
   end
 
   defp host_header(uri) do
-    port = uri.port || default_port(uri.scheme)
+    port = uri.port
     if port == default_port(uri.scheme), do: uri.host, else: "#{uri.host}:#{port}"
   end
 
@@ -542,8 +546,12 @@ defmodule LemonCore.Context.URLFetcher do
 
   defp redirect_url(uri, location) do
     try do
-      value = uri |> URI.merge(location) |> URI.to_string() |> normalize_url()
-      if value == "", do: {:error, :invalid_redirect}, else: {:ok, value}
+      with {:ok, target} <- URI.new(location),
+           {:ok, destination} <- parse_uri(uri |> URI.merge(target) |> URI.to_string()) do
+        {:ok, normalize_url(destination)}
+      else
+        _ -> {:error, :invalid_redirect}
+      end
     rescue
       _ -> {:error, :invalid_redirect}
     end
@@ -558,9 +566,7 @@ defmodule LemonCore.Context.URLFetcher do
   defp redacted_url(%URI{} = uri),
     do: %URI{uri | userinfo: nil, query: nil, fragment: nil} |> URI.to_string()
 
-  defp normalize_url(url) do
-    uri = URI.parse(url)
-
+  defp normalize_url(%URI{} = uri) do
     %URI{
       uri
       | scheme: if(uri.scheme, do: String.downcase(uri.scheme)),

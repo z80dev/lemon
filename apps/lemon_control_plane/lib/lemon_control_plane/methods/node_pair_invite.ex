@@ -154,6 +154,7 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
 
       if uri.scheme in ["ws", "wss"] and is_binary(uri.host) and uri.host != "" and
            uri.userinfo == nil and uri.query == nil and uri.fragment == nil and
+           is_integer(uri.port) and uri.port in 1..65_535 and
            (uri.scheme == "wss" or uri.host in ["localhost", "127.0.0.1", "::1"]) do
         {:ok, url}
       else
@@ -234,7 +235,8 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
       uri = URI.parse(url)
 
       uri.scheme == "https" and is_binary(uri.host) and uri.host != "" and
-        uri.userinfo == nil and uri.query == nil and uri.fragment == nil
+        uri.userinfo == nil and uri.query == nil and uri.fragment == nil and
+        is_integer(uri.port) and uri.port in 1..65_535
     else
       false
     end
