@@ -18,6 +18,11 @@
 
 ### Added
 
+- Same-computer browser sign-in uses one-use `lemon-bot open` links, strips tickets
+  before routing, and explains local owner access once. Account settings show sign-in
+  methods, let locally confirmed owners add email/password, and support local
+  confirmation for account deletion. iPhone pairing still needs no password.
+
 - Owner-only Providers settings use the shared product API for controller or
   owned-machine status, write-only API-key add/replace, Codex device sign-in with
   explicit browser navigation and cancellation, and confirmed local disconnect.

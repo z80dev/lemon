@@ -17,7 +17,7 @@ Production assets are emitted to `web/dist`; the backend serves them outside `/v
 
 ## First use
 
-1. Connect to your product backend. An empty deployment requests the one-time owner setup code printed in its operator terminal. Otherwise sign in to your owner account.
+1. On the same computer run `lemon-bot open` (no password). Otherwise sign in, or use the one-time setup code from `lemon-bot setup` on the server.
 2. **Connect a computer** using its **server-issued**, one-use join command. Run it on the destination and wait for verified online status. Configure the computer's actual provider authentication and supervise its worker. Copying a command does not prove enrollment.
 3. Create a named Bot with a focused job on that host, or review a template to create a separate owned copy. Co-resident Bots share the OS user's files, browser sessions and CLI credentials; personas are not host isolation.
 4. Open its chat and give it a concrete task. Text, references, real files and explicit voice input use placed conversations. Stop requests cancel a real run; only its terminal cancelled state proves it stopped, and prior external effects are not undone.
@@ -153,8 +153,8 @@ action can start another change after the current status has been reviewed.
 Deleting account data first shows its server-issued preview and typed confirmation.
 Removing an iPhone, a stored secret, a Bot section or a configuration uses the
 in-app confirmation dialog; cancelling sends no deletion request. Account deletion
-offers password or configured identity-provider confirmation without exposing
-sign-in implementation details.
+offers password, configured identity-provider confirmation, or a fresh local
+confirmation after `lemon-bot open` for a passwordless owner.
 
 Owner account cleanup distinguishes product cleanup from actual provider receipt state, error and observation time. Ledger refresh cannot retry deletion/provider revocation or restore a deleted-user login.
 
