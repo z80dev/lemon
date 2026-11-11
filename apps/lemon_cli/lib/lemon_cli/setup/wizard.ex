@@ -522,8 +522,6 @@ defmodule LemonCli.Setup.Wizard do
 
         case select_connect_model(options, io) do
           {:ok, {:codex_cli, _detected}} ->
-            io.info.("Importing your Codex CLI login and loading models…")
-
             provider_args =
               [
                 "--config-path",

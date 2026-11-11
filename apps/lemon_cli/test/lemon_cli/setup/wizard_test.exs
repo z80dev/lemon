@@ -814,7 +814,7 @@ defmodule LemonCli.Setup.WizardTest do
       # The login is only read when a choice says so.
       settings = if File.exists?(path), do: Toml.decode_file!(path), else: %{}
       refute get_in(settings, ["providers", "openai-codex"])
-      refute info_event?(events, &String.contains?(&1, "Importing your Codex CLI login"))
+      refute info_event?(events, &String.contains?(&1, "Importing your Codex"))
     end
 
     test "a detected shell key is offered as an explicit save, not used silently", %{
@@ -1002,6 +1002,11 @@ defmodule LemonCli.Setup.WizardTest do
       [{_, :info, first_message} | _] = timeline
       assert first_message == "Starting Lemon setup…"
 
+      assert Enum.count(timeline, fn
+               {_, :info, message} -> String.starts_with?(message, "Importing your Codex")
+               _ -> false
+             end) == 1
+
       # Obs 1's two reported pauses: the answered Connect-a-model choice to the
       # next visible line, and the import summary to "Verifying…".
       assert boundary_ms(timeline, {:prompt, "Select [default: 1, q to cancel]: "}) <=
@@ -1126,7 +1131,7 @@ defmodule LemonCli.Setup.WizardTest do
     String.starts_with?(message, "Starting Lemon setup") or
       String.starts_with?(message, "Checking ") or
       String.starts_with?(message, "Verifying provider configuration") or
-      String.starts_with?(message, "Importing your Codex CLI login") or
+      String.starts_with?(message, "Importing your Codex") or
       String.starts_with?(message, "Saving ")
   end
 
