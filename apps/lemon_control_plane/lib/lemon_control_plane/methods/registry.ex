@@ -185,6 +185,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.NodePairRequest,
     LemonControlPlane.Methods.NodePairApprove,
     LemonControlPlane.Methods.NodePairInvite,
+    LemonControlPlane.Methods.NodePairPreview,
     LemonControlPlane.Methods.NodePairInviteRevoke,
     LemonControlPlane.Methods.NodeCapabilitiesGet,
     LemonControlPlane.Methods.NodeRuntimeFeatures,

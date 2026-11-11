@@ -26,6 +26,25 @@ separately. An Elixir deployment can instead set
 host. Off-loopback invite commands require `wss://`; URLs must not contain user
 credentials, query credentials, or fragments.
 
+In Lemon Bot on the web, **Connect a computer** asks for one friendly name. Its
+machine ID is derived from that name (lowercase ASCII letters, digits, dots,
+underscores and dashes; leading punctuation removed; at most 64 characters;
+`lemon-host` if nothing remains). Use a distinct name for each computer.
+Purpose, labels and the default 15-minute invite lifetime are under **Advanced**.
+The page checks the controller's actual advertised endpoint before issuing an
+invite. A loopback-only controller offers **This computer**, meaning the computer
+running the controller—not necessarily your browser. Other computers require
+the reachable `wss://` endpoint above (for example, TLS over your Tailscale network).
+The preview classifies the configured endpoint; it does not probe the destination
+network or prove remote reachability. No operator token or controller address is
+returned by the preview.
+
+Run the copied command and enter its separate one-use code on the destination.
+The page observes enrollment live and, once verified online, offers
+**Online — Create a Bot here** with that machine selected. Provider credentials
+must still be configured on the destination, and its worker must remain running;
+this flow does not install a service automatically.
+
 ### Select a compatible destination runtime
 
 Configure runtime selection **on the controller before issuing an invitation**.
@@ -86,7 +105,7 @@ Compatibility is an API contract, not merely a matching version:
 
 | Component | Required contract |
 | --- | --- |
-| Controller | `node.pair.invite`, `node.pair.invite.revoke`, and exact `nodes.list` enrollment/repair reconciliation with durable node IDs and `enrollmentInviteId`. |
+| Controller | Read-only `node.pair.preview`, `node.pair.invite`, `node.pair.invite.revoke`, and exact `nodes.list` enrollment/repair reconciliation with durable node IDs and `enrollmentInviteId`. |
 | Destination CLI | `node capabilities --json --require-bot` must exit zero only for a complete bot runtime; `node join --invite-code-stdin` must use restricted enrollment and persist destination-local credentials. |
 | Pinned destination build | `version` must report the configured exact pin; it must still pass the capability gate. |
 | Repair flow | Controller-bound repair invitation and generation-checked challenge exchange retain the durable node ID; the destination runs the returned credential-free command and enters the separate code at its hidden prompt. |

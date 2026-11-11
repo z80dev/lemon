@@ -148,6 +148,11 @@ export function createMachineRoutes(services: BackendServices): Route[] {
     const revoked = services.update(invitation, { status: 'revoked', enrollment: 'revoked', inviteCode: '', joinCommand: '' }); services.store.put('machineInvites', revoked); services.events.emit('machine_invite.upserted', revoked, { userIds: [value.ownerUserId] });
   }
   add('GET', '/machines', async context => { parse(pageQuery, queryObject(context.query)); await refreshMachines(services); return services.page(context, services.store.list<P.Machine>('machines', value => value.status !== 'revoked' && services.auth.canRead(user(context), 'machines', value))); });
+  add('GET', '/machines/enrollment-preview', async context => {
+    parse(z.object({}).strict(), queryObject(context.query));
+    if (!services.lemon.connected) fail('upstream_unavailable', 'The controller is not connected.');
+    return remote(z.object({ reachability: z.enum(['loopback_only', 'routable']) }), await services.lemon.call('node.pair.preview')) satisfies P.MachineEnrollmentPreview;
+  }, 200, 'admin');
   add('POST', '/machines', async context => {
     const body = parse(mutation.extend({ name: text, nodeName: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/), labels: labels.optional(), expiresInMs: ttl }), context.body);
     await refreshMachines(services);

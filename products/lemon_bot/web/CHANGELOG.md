@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Connecting a computer needs only its friendly name, with optional settings under Advanced. Loopback controllers require an explicit same-computer choice before issuing an invite; verified online enrollment offers Create a Bot on that machine.
 - Reply chips show the original author and a short message preview; Send has a keyboard-focus tooltip.
 - Standardized computer connection setup as “Connect a computer” and raised status badges to 12px. Narrow sidebar headers keep their New Bot button on the logo row, truncating long connection labels instead.
 - Load feature screens on demand instead of bundling all routes into the initial client chunk.

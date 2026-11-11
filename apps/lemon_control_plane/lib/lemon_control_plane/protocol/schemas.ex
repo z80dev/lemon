@@ -873,6 +873,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
     },
 
     # Node methods
+    "node.pair.preview" => %{required: %{}},
     "node.pair.invite" => %{
       required: %{"nodeName" => :string},
       optional: %{
