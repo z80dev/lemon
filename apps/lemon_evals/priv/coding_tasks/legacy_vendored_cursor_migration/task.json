@@ -1,0 +1,7 @@
+{
+  "id": "legacy_vendored_cursor_migration",
+  "language": "python",
+  "category": "migration",
+  "difficulty": "hard",
+  "prompt": "Complete the local shelf v1-to-v2 migration specified in README.md. Migrate every application consumer to native v2 sessions, opaque pagination, tombstone and byte-decoding semantics; remove the old provider without shims. Preserve public application signatures and add regression tests. Use Python standard-library unittest for any tests; do not install dependencies."
+}

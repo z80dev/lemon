@@ -1,0 +1,7 @@
+{
+  "id": "legacy_repo_search",
+  "language": "python",
+  "category": "migration",
+  "difficulty": "medium",
+  "prompt": "Find every obsolete API_TOKEN_V1 environment reference across this repository, migrate them to API_TOKEN_V2, and update the shared credential reader to use the new name. Preserve unrelated settings and add a regression test. Use Python standard-library unittest for any tests; do not install dependencies."
+}

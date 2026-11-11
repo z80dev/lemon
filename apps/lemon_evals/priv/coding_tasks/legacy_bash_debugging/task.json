@@ -1,0 +1,7 @@
+{
+  "id": "legacy_bash_debugging",
+  "language": "python",
+  "category": "debugging",
+  "difficulty": "easy",
+  "prompt": "The report command `python3 report.py` fails. Diagnose by running it and inspecting the local CSV. Fix parsing and aggregation so the command prints exactly TOTAL=42. Preserve the input file. Use Python standard-library unittest for any tests; do not install dependencies."
+}
