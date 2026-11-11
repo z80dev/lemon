@@ -2421,9 +2421,16 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
        %{tmp_dir: tmp_dir} do
     token_root = Path.join(tmp_dir, "tokens")
 
-    path = Path.join(token_root, "node-corrupted.json")
+    {:ok, path} = TokenStore.path("newphy", root: token_root)
     File.mkdir_p!(token_root)
-    File.write!(path, Jason.encode!(%{"token" => "tok", "controller" => "ws://controller:4040/ws"}))
+    File.write!(
+      path,
+      Jason.encode!(%{
+        "nodeName" => "newphy",
+        "token" => "tok",
+        "controller" => "ws://controller:4040/ws"
+      })
+    )
 
     {:ok, worker} = start_worker(tmp_dir, [])
 

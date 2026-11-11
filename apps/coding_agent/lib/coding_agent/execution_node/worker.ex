@@ -1777,6 +1777,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
       {:error, :not_found} ->
         {:error, :missing_node_token}
 
+      {:error, :controller_mismatch} ->
+        {:error, :stored_token_controller_mismatch}
+
       {:error, reason} ->
         {:error, {:token_load_failed, reason}}
 
