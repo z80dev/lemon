@@ -6,7 +6,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Fixed
+
+- Validate OAuth callback ports in the original authority before URI normalization,
+  rejecting out-of-range ports even when Elixir 1.20 discards them during parsing.
+  Apply the same validation to Anthropic, Google Antigravity, Gemini CLI and Codex
+  callbacks as OpenRouter and Z.AI.
 
 ## [0.2.1] - 2026-11-05
 
