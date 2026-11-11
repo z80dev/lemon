@@ -167,11 +167,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
   end
+
   @doc "Returns the current link state of the worker (:connecting | :online | :reconnecting | {:parked, kind, reason})."
   def link_state(worker) when is_pid(worker) or is_atom(worker) do
     GenServer.call(worker, :get_link_state)
   end
-
 
   @impl true
   def init(opts) do
@@ -484,7 +484,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
         state_to_connect = %{
           state
           | current_token: token,
-             expected_node_id: node_id
+            expected_node_id: node_id
         }
 
         case connect_authenticated(state_to_connect, token, node_id) do
@@ -2153,6 +2153,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp key_atom("prompt"), do: :prompt
   defp key_atom("images"), do: :images
   defp key_atom("cwd"), do: :cwd
+  defp key_atom("cwdMode"), do: :cwd_mode
   defp key_atom("resume"), do: :resume
   defp key_atom("lane"), do: :lane
   defp key_atom("toolPolicy"), do: :tool_policy

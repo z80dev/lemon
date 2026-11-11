@@ -160,6 +160,9 @@ defmodule CodingAgent.ExecutionNode.WorkerProviderManagementTest do
           "api_key.set" ->
             %{"targetId" => listing.target.id, "providerId" => "openai", "value" => "fixture"}
 
+          operation when operation in ["check", "import"] ->
+            %{"targetId" => listing.target.id, "providerId" => "openai"}
+
           "disconnect" ->
             %{"targetId" => listing.target.id, "providerId" => "openai"}
 

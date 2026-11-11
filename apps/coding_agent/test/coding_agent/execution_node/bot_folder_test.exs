@@ -32,6 +32,12 @@ defmodule CodingAgent.ExecutionNode.BotFolderTest do
     assert Bitwise.band(File.stat!(request.cwd).mode, 0o777) == 0o700
   end
 
+  test "cwd mode accepts the canonical atom alias", %{state: state} do
+    request = args() |> Map.delete("cwdMode") |> Map.put(:cwd_mode, "profile_files")
+    assert {:ok, execution, opts} = Worker.execution_request(request, state, "folder")
+    assert execution.cwd == opts.bot_folder_root
+  end
+
   test "mode rejects explicit cwd, invalid id and unknown mode", %{state: state} do
     for request <- [
           Map.put(args(), "cwd", state.default_cwd),
