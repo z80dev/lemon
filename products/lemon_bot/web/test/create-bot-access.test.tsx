@@ -36,6 +36,7 @@ let root: Root;
 
 beforeEach(() => {
   resetFixtures();
+  sessionStorage.clear();
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
@@ -76,8 +77,6 @@ test('CreateBot preselects sole online machine and defaults Access to standard',
 test('CreateBot consumes route.machineId and prefers it over sole-online auto-select', async () => {
   const machine2 = { ...machine, id: 'machine_studio_2', name: 'Studio Mini', status: 'online' as const };
   responses.set('GET /machines', { items: [machine, machine2], nextCursor: null });
-  const snapshotWithMachines = app.snapshot;
-  snapshotWithMachines.machines = [machine, machine2];
 
   await render(<CreateBot route={{ screen: 'bot.create', machineId: 'machine_studio_2' }} />);
   const select = container.querySelector('select[required]') as HTMLSelectElement;
@@ -178,7 +177,8 @@ test('Bot duplicate sends access and retains consent gate only for move', async 
   expect(container.textContent).toContain('I trust this host and explicitly accept its shared access.');
 });
 
-test('Empty conversation shows 3 clickable starter tasks and sends via existing send path', async () => {
+for (const uncertain of [false, true]) {
+test(`Empty starter task uses composer delivery and ${uncertain ? 'retains uncertain nonce without resending' : 'sends immediately'}`, async () => {
   const conversation = {
     id: 'conversation_empty',
     revision: 1,
@@ -226,6 +226,7 @@ test('Empty conversation shows 3 clickable starter tasks and sends via existing 
     runs: [],
     delivery: [],
   });
+  if (uncertain) responses.set('POST /conversations/:id/messages', new Error('Connection lost after submission'));
 
   await render(<ConversationScreen route={{ screen: 'conversation', id: 'conversation_empty' }} />);
 
@@ -242,4 +243,11 @@ test('Empty conversation shows 3 clickable starter tasks and sends via existing 
   expect(sendCall).toBeDefined();
   const sendBody = extractBody(sendCall?.options);
   expect(sendBody.text).toBe("What's this Mac's hostname and macOS version?");
+  if (uncertain) {
+    await act(async () => { starterBtn?.click(); });
+    expect(calls.filter(call => call.endpoint === 'POST /conversations/:id/messages')).toHaveLength(1);
+    const saved = JSON.parse(sessionStorage.getItem('lemonbot.composer:workspace_test:owner:conversation_empty')!);
+    expect(saved.unknownNonce).toBe(sendBody.clientNonce);
+  }
 });
+}

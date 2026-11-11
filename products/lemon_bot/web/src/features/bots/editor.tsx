@@ -51,9 +51,7 @@ export function CreateBot({ route }: { route?: Route } = {}) {
 
   const targetId = route?.machineId;
   const initialMachineId = () => {
-    if (targetId && rows.some(m => m.id === targetId && isAccessibleOnline(m))) {
-      return targetId;
-    }
+    if (targetId) return rows.find(m => m.id === targetId && isAccessibleOnline(m))?.id ?? '';
     const online = rows.filter(isAccessibleOnline);
     return online.length === 1 ? online[0].id : '';
   };
@@ -77,12 +75,13 @@ export function CreateBot({ route }: { route?: Route } = {}) {
         setDraft(prev => ({ ...prev, machineId: targetId }));
         return;
       }
+      if (targetId && machines.loading) return;
       const online = rows.filter(isAccessibleOnline);
       if (online.length === 1) {
         setDraft(prev => ({ ...prev, machineId: online[0].id }));
       }
     }
-  }, [rows, targetId, draft.machineId, snapshot.user.id]);
+  }, [rows, targetId, draft.machineId, snapshot.user.id, machines.loading]);
 
   const templates = useQuery('bots:create:templates', () => collect(cursor => client.call('GET /templates', { query: { cursor, limit: 200 } })));
   const skills = useQuery('bots:create:skills', () => collect(cursor => client.call('GET /skills', { query: { cursor, limit: 200 } })));
