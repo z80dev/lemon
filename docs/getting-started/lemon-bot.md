@@ -60,26 +60,29 @@ Run in an interactive terminal:
 curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --profile bot
 ```
 
-The **`bot`** preset installs a full runtime and the Bot backend at the same
-manifest version, without the TUI by default. **`lemon_bot`** is a different,
-backend-only profile, not the complete setup. On a terminal the installer hands
-off to `lemon-bot`; if it only prints a next step, run that absolute path:
+The **`bot`** preset installs a full runtime, the terminal UI and the Bot backend
+at the same manifest version, then runs `lemon setup --use browser`, the same
+setup every install uses with **Browser** preselected. A plain install reaches
+the same place if you answer **Browser** or **Both** at **How will you use
+Lemon?**. **`lemon_bot`** is a different, backend-only profile, not the complete
+setup. If the installer only prints a next step, run it:
 
 ```bash
-"$HOME/.local/bin/lemon-bot"
+"$HOME/.lemon/bin/lemon" setup --use browser
 ```
 
 Follow the terminal prompts:
 
-1. At **Which Lemon should Lemon Bot use?**, choose **This machine**.
-2. In **Connect a model**, use the detected Codex CLI login if offered (confirm
+1. In **Connect a model**, use the detected Codex CLI login if offered (confirm
    copying it into Lemon), choose a provider, or choose
    **Skip — set it up in the browser**.
-3. Pick a model. Lemon performs a live, non-generating readiness check; it does
+2. Pick a model. Lemon performs a live, non-generating readiness check; it does
    not send a chat message.
-4. Setup installs controller/backend/worker user services, creates the owner
-   without a form, and enrolls this computer as a supervised worker. On macOS,
-   persistence is **login**, not boot.
+3. Setup hands off to `lemon-bot up --this-machine`, which uses the Lemon on this
+   computer, installs controller/backend/worker user services, creates the
+   owner without a form, and enrolls this computer as a supervised worker. On
+   macOS, persistence is **login**, not boot.
+4. Optionally connect Telegram or Discord.
 
 The browser opens already signed in. On a Mac the notice is **Unlocked by your
 Mac login**. At **Create your first Bot**, choose **Create a Bot** and enter a
@@ -98,9 +101,10 @@ All default listeners bind `127.0.0.1`: controller **4040**, node-only gateway
 
 ### Headless or SSH server
 
-Run the same installer and `"$HOME/.local/bin/lemon-bot"` in your SSH terminal on
-the server. SSH is detected: instead of launching a remote browser, the command
-prints a private one-use sign-in link and a tunnel command. On your own computer,
+Run the same installer in your SSH terminal on the server (or
+`"$HOME/.lemon/bin/lemon" setup --use browser` if it only printed that step). SSH
+is detected: instead of launching a remote browser, setup prints a private
+one-use sign-in link and a tunnel command. On your own computer,
 open another terminal and run the **printed** command, for example:
 
 ```bash

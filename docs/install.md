@@ -52,7 +52,8 @@ The installer:
 5. adds `~/.lemon/bin` to PATH in your shell rc file (`~/.zshrc`, `~/.bashrc`, or
    fish `config.fish`) unless you pass `--no-modify-path`;
 6. runs `lemon version`, then starts `lemon setup` (on `/dev/tty`, so the pipe
-   through `sh` does not block it) for the `full` and `min` profiles.
+   through `sh` does not block it). Setup connects a model and asks whether you
+   will use Lemon in the terminal, in the browser (Lemon Bot), or both.
 
 Output stays short: one line before the download, a progress bar on a
 terminal, one line once installed, then setup and a final hint. Checksum
@@ -133,7 +134,7 @@ model and manifest schema.
 | --- | --- | --- |
 | `full` (`lemon_runtime_full`) | Runtime, local Web UI, simulation dashboard assets, TUI | Default. `lemon web` needs this profile. |
 | `min` (`lemon_runtime_min`) | Runtime and TUI | No Web UI. |
-| `bot` | Full runtime and Lemon Bot backend at one manifest version | No TUI by default; runtime must pass the bot capability/version gate. `LEMON_NO_TUI=0` opts into the TUI. |
+| `bot` | Full runtime, TUI, and Lemon Bot backend at one manifest version | Runtime must pass the bot capability/version gate. `LEMON_NO_TUI=1` skips the TUI. Setup runs as `lemon setup --use browser`. |
 | `lemon_bot` | Standalone [Lemon Bot](../products/lemon_bot/README.md) backend only | Independent pointer under `~/.lemon/lemon_bot`; launcher `~/.local/bin/lemon-bot`. For remote controllers, containers, or manual supervision; does not install a runtime or services. |
 
 For a complete Bot installation:
@@ -145,10 +146,11 @@ curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -
 The combined preset stages and verifies both components before promoting either.
 If installation fails, both previous component pointers are restored.
 
-After both artifacts install, a terminal hands off to `lemon-bot`, which owns
-setup and service enrollment. Without a terminal, or with `--skip-setup`, the
-installer prints one `Run: <absolute path>/lemon-bot` next step. It does not run
-the runtime setup wizard separately.
+After both artifacts install, a terminal runs `lemon setup --use browser`: the
+same wizard as every profile, with the Browser answer preselected. Without a
+terminal, or with `--skip-setup`, the installer prints that command as the next
+step. Choosing **Browser** in a plain install's setup downloads the same backend
+for the installed version, so the preset is a shortcut, not a requirement.
 
 ### Install layout
 
@@ -190,9 +192,9 @@ the same rules.
 
 ## Headless and non-interactive installs
 
-For `full` and `min`, the installer starts setup only when it can open
-`/dev/tty`. With no TTY it installs, prints `$HOME/.lemon/bin/lemon setup`, and
-exits 0. The `bot` preset instead prints the `lemon-bot` next step; see the
+The installer starts setup only when it can open `/dev/tty`. With no TTY it
+installs, prints `$HOME/.lemon/bin/lemon setup` (with `--use browser` for the
+`bot` preset), and exits 0; see the
 [Bot headless path](getting-started/lemon-bot.md#headless-or-ssh-server).
 With `--skip-setup` no setup runs. Configure the provider afterwards:
 

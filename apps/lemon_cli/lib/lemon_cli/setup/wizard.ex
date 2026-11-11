@@ -171,6 +171,13 @@ defmodule LemonCli.Setup.Wizard do
   end
 
   defp run_full_wizard(io, opts, explicit_usage) do
+    # Lemon Bot offers "Connect a model" in the browser, so the Bot path may
+    # finish without one, as `lemon-bot up` always allowed.
+    opts =
+      if explicit_usage in [:browser, :both],
+        do: Keyword.put_new(opts, :model_optional, true),
+        else: opts
+
     non_interactive? = Keyword.get(opts, :non_interactive, false)
     config_path = Keyword.get(opts, :config_path) || Modular.global_path()
     unless non_interactive?, do: Runner.ensure_interactive!(io)
@@ -991,7 +998,8 @@ defmodule LemonCli.Setup.Wizard do
           {:ok, false}
 
         :terminal ->
-          {step_background(io, interactive?, packaged?, opts), Keyword.has_key?(opts, :background)}
+          {step_background(io, interactive?, packaged?, opts),
+           Keyword.has_key?(opts, :background)}
 
         nil ->
           {:ok, false}

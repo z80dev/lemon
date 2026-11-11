@@ -12,6 +12,20 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - `websearch` provider: Keenable (`keenable`), opt-in with `KEENABLE_API_KEY` or
   `runtime.tools.web.search.providers.keenable.api_key`. Thanks @KGKallasmaa.
+- One setup wizard for every install: after connecting a model, `lemon setup`
+  asks **How will you use Lemon?** (Terminal, Browser with Lemon Bot, or Both).
+  Browser downloads and verifies the Lemon Bot backend for the installed version
+  and hands off to `lemon-bot up --this-machine`, reusing the connected model;
+  Terminal offers a login service. Setup then offers Telegram/Discord. Pre-answer
+  with `--use terminal|browser|both` and `--background`/`--no-background`.
+- `lemon-bot up --this-machine` uses this computer's Lemon without asking when no
+  controller choice is saved.
+
+### Changed
+
+- The `--profile bot` installer preset also installs the terminal UI
+  (`LEMON_NO_TUI=1` skips it) and finishes with `lemon setup --use browser`
+  instead of running `lemon-bot` directly.
 
 ---
 

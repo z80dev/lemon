@@ -1264,6 +1264,8 @@ lemon setup [provider|model|runtime|gateway|doctor] [options]
 | `--auth oauth\|device\|api_key\|codex-cli` | Authentication mode (import is opt-in) |
 | `--codex-auth-path PATH` | Auth file for --auth codex-cli only |
 | `--model MODEL` | Model to make the default after onboarding |
+| `--use terminal\|browser\|both` | How you will use Lemon; browser installs Lemon Bot |
+| `--background, --no-background` | Run Lemon as a login service (terminal use) |
 | `--if-required` | Exit immediately unless setup is still required |
 | `--model-optional` | Allow setup to finish without configuring a model |
 | `--json` | Output one JSON document (`setup model`) |
@@ -1277,7 +1279,9 @@ choose it. `lemon setup model --json` prints one readiness document
 `suggestedModelId`, `checkedAtMs`) plus `detected`, and never prompts. It exits
 `0` when the model is `verified` or `saved`, `1` when it needs action, and `64`
 for usage errors. `lemon setup --if-required --model-optional` finishes once
-config and secrets are complete, leaving the model for later.
+config and secrets are complete, leaving the model for later. `--use` and
+`--background` pre-answer the full wizard's usage questions; see
+[Terminal, browser, or both](setup.md#terminal-browser-or-both).
 
 The `model` subcommand accepts `--provider`, `--config-path`, `--cwd`,
 `--non-interactive`, `--json` and `--offline`; provider-onboarding flags such as

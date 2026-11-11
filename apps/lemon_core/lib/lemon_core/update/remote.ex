@@ -226,7 +226,8 @@ defmodule LemonCore.Update.Remote do
          :ok <- Plan.validate_artifact(artifact, @bot_profile, platform(opts), opts) do
       plan = %{
         target: version,
-        channel: channel(opts),
+        # install.sh keys backend directories by the manifest's channel.
+        channel: manifest["channel"] || channel(opts),
         platform: platform(opts),
         artifact: nil,
         tui_artifact: nil,

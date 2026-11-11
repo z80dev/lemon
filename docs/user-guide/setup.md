@@ -7,10 +7,12 @@ prebuilt install it runs automatically at the end of the installer:
 curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
 ```
 
-The installer verifies and installs the release, then starts `lemon setup` for
-the `full` and `min` profiles when it can read `/dev/tty`. Complete the provider,
-authentication, and default-model prompts, then accept **Open Lemon now? [Y/n]**
-to start the TUI immediately. To open it later:
+The installer verifies and installs the release (runtime and terminal UI), then
+starts `lemon setup` when it can read `/dev/tty`. Complete the provider,
+authentication, and default-model prompts. Setup then asks **How will you use
+Lemon?** (see [Terminal, browser, or both](#terminal-browser-or-both)); choose
+**Terminal** and accept **Open Lemon now? [Y/n]** to start the TUI immediately.
+To open it later:
 
 ```bash
 lemon
@@ -24,9 +26,33 @@ after Web health is confirmed. Installer flags, platform support, containers and
 source installs are in the [Install guide](../install.md); updating is in
 [Update, roll back, and uninstall](updates.md).
 
-For the native Mac app or the separate Lemon Bot browser product, follow
-[Lemon Bot in 3 minutes](../getting-started/lemon-bot.md). Its `bot` install
-preset installs the runtime and backend together; it is not `lemon web`.
+For the Lemon Bot browser product, choose **Browser** or **Both** at **How will
+you use Lemon?**, or install with the `bot` preset, which runs
+`lemon setup --use browser`. Lemon Bot is not `lemon web`; see
+[Lemon Bot in 3 minutes](../getting-started/lemon-bot.md).
+
+## Terminal, browser, or both
+
+After the model step, a packaged install asks one question:
+
+| Choice | What setup does next |
+| --- | --- |
+| **Terminal** (default) | Asks **Keep Lemon running in the background? [y/N]**; yes runs `lemon service install controller`. Then offers the TUI. |
+| **Browser** | Downloads the Lemon Bot backend for your installed version, verifies its size and SHA-256 against that release's manifest, links `~/.local/bin/lemon-bot`, then runs `lemon-bot up --this-machine`: services, local owner, this computer as a worker, and a signed-in browser. The model you just connected is reused. |
+| **Both** | Browser's steps, then offers the TUI. |
+
+Every choice then offers **Connect Telegram or Discord now? [y/N]**. Pre-answer
+the question with `--use terminal|browser|both` and the service question with
+`--background` or `--no-background`; both work with `--non-interactive`
+(`--use browser` then passes `--no-open` to `lemon-bot up`). Once Lemon Bot is
+installed, setup does not ask again; `lemon-bot up` repairs it.
+
+If Lemon Bot cannot be installed or `lemon-bot up` stops, Lemon stays usable in
+the terminal and setup prints the retry command (`lemon setup --use browser` or
+`lemon-bot up`). With an explicit `--use`, setup also exits non-zero. Installing
+Lemon Bot makes later `lemon update` runs move it in lockstep with the runtime.
+A source checkout skips the question; run Lemon Bot from source with
+[its guide](../../products/lemon_bot/README.md).
 
 Setup writes to `~/.lemon`: `config.toml` for configuration, the encrypted
 secrets store for credentials (its master key is kept in the macOS Keychain
@@ -84,9 +110,11 @@ re-checks the saved state, performs pending work, and re-verifies an existing pr
    check when supported;
 5. checks the ports the runtime will use and, only if one is taken by another
    program, offers a free one (see [Runtime profile and ports](#runtime-profile-and-ports));
-   and
-6. reports whether the model is verified or saved, and offers to open Lemon in
-   an interactive terminal unless you explicitly deferred verification.
+6. reports whether the model is verified or saved; and
+7. on a packaged install, asks how you will use Lemon (see
+   [Terminal, browser, or both](#terminal-browser-or-both)), offers Telegram or
+   Discord setup, and offers to open Lemon in an interactive terminal unless you
+   explicitly deferred verification.
 
 Setup does not ask about the runtime profile or import Hermes data. The
 installer installs the full runtime (`--profile min` selects the minimal one).
@@ -118,9 +146,8 @@ Headless setup never offers or starts the TUI. During bare `lemon`'s first-run
 setup, the original launcher opens the TUI afterwards instead of offering a
 second launch.
 
-It does not install source dependencies, configure Telegram or Discord, start
-a gateway, or run `lemon doctor` automatically. Rerun it whenever setup is
-incomplete:
+It does not install source dependencies, start a gateway, or run `lemon doctor`
+automatically. Rerun it whenever setup is incomplete:
 
 ```bash
 lemon setup

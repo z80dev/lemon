@@ -73,15 +73,18 @@ import with `lemon migrate hermes --dry-run`, then read the
 curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --profile bot
 ```
 
-**What happens:** the installer verifies the runtime and Bot backend, then hands
-off to `lemon-bot`. It connects a model (it can copy an existing Codex CLI login
-with your consent and runs a live check that sends no chat message), installs
-user services, creates the local owner without a form, enrolls this computer as
-a supervised worker, and opens the browser signed in. If the installer only
-prints a next step, run `"$HOME/.local/bin/lemon-bot"`. Resume an interrupted
-setup with `lemon-bot up`, and reopen the workspace signed in with
-`lemon-bot open`. Over SSH it prints a one-use sign-in link and an `ssh -L`
-tunnel command instead of launching a browser.
+**What happens:** the installer verifies the runtime, terminal UI and Bot
+backend, then runs `lemon setup --use browser`, the same setup every install
+uses with **Browser** preselected. A plain install gets there too: answer
+**Browser** or **Both** at **How will you use Lemon?**. Setup connects a model
+(it can copy an existing Codex CLI login with your consent and runs a live check
+that sends no chat message), then `lemon-bot up` installs user services, creates
+the local owner without a form, enrolls this computer as a supervised worker,
+and opens the browser signed in. If the installer only prints a next step, run
+`"$HOME/.lemon/bin/lemon" setup --use browser`. Resume an interrupted Bot setup
+with `lemon-bot up`, and reopen the workspace signed in with `lemon-bot open`.
+Over SSH it prints a one-use sign-in link and an `ssh -L` tunnel command instead
+of launching a browser.
 
 In the browser, choose **Create a Bot**, give it a name, keep the preselected
 machine, and choose **Standard** for Terminal and Files with command approvals.

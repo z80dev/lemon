@@ -801,7 +801,10 @@ defmodule LemonCli.Setup.WizardTest do
                  component_opts(path, non_interactive: true, use: "browser", install_bot: failing)
                )
 
-      assert error_event?(drain_events([]), &String.contains?(&1, "no Lemon Bot for this platform"))
+      assert error_event?(
+               drain_events([]),
+               &String.contains?(&1, "no Lemon Bot for this platform")
+             )
 
       assert :ok =
                Wizard.run_full(
@@ -1086,6 +1089,26 @@ defmodule LemonCli.Setup.WizardTest do
       events = drain_events([])
       assert info_event?(events, &String.contains?(&1, "Skip — set it up in the browser"))
       assert info_event?(events, &String.contains?(&1, "Setup complete. Model setup deferred"))
+    end
+
+    test "--use browser lets Skip defer the model and still sets up Lemon Bot", %{
+      config_path: path
+    } do
+      set_master_key_env()
+
+      assert :ok =
+               Wizard.run_full(
+                 [],
+                 recording_io(["s"]),
+                 component_opts(path,
+                   use: "browser",
+                   install_bot: installed_bot(),
+                   bot_runner: bot_runner()
+                 )
+               )
+
+      assert_received {:bot_up, _launcher, ["up", "--this-machine", "--no-open"], false}
+      assert Readiness.pending_steps(Readiness.status(config_path: path)) == [:provider]
     end
 
     test "without --model-optional a Skip leaves setup unfinished", %{config_path: path} do

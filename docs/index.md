@@ -30,9 +30,10 @@ commands run; Chat only leaves local tools off.
 curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --profile bot
 ```
 
-The installer sets up the runtime and Bot backend, then hands off to guided
-setup. See the [Lemon Bot guide](getting-started/lemon-bot.md) for prerequisites,
-Mac app availability, and private access over SSH.
+The installer sets up the runtime, terminal UI and Bot backend, then runs the
+same guided setup as every install with **Browser** preselected. See the
+[Lemon Bot guide](getting-started/lemon-bot.md) for prerequisites, Mac app
+availability, and private access over SSH.
 
 Prefer the terminal? Use the [terminal quickstart](getting-started/quickstart.md):
 
