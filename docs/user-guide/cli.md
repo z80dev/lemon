@@ -16,6 +16,91 @@ the SQLite credential store remain shared. Do not use `LEMON_AGENT_DIR` or
 `LEMON_STORE_PATH` as worker-isolation switches. Another live VM owning a DETS
 directory causes memory-only operation rather than a second writer.
 
+States include `starting`, `online`, `reconnecting`, `needs_reauthorization`,
+`needs_enrollment`, and `conflict`. Credential problems park a stored-token
+worker rather than restarting it in a loop. Repair the machine's authorization
+through Lemon Bot; see [worker recovery](attaching-a-bot-machine.md#inventory-reconnect-and-recovery).
+
+## User services
+
+`lemon service` manages user-owned controller, Bot backend, worker and SSH-tunnel
+processes. It is distinct from `lemon daemon`, which alone does not install
+login/boot persistence:
+
+```text
+lemon service install ROLE... [options]
+lemon service status [ROLE...] [--name NAME] [--json]
+lemon service repair [ROLE...] [--name NAME] [--enable-linger] [--wait SECS] [--json]
+lemon service uninstall ROLE... [--name NAME] [--json]
+```
+
+Roles are `controller`, `backend`, `worker`, and `tunnel`. Install requires a
+role; status/repair without roles select all Lemon-owned units for this user.
+For a complete local Bot, prefer the resumable `lemon-bot` bootstrap in
+[Lemon Bot in 3 minutes](../getting-started/lemon-bot.md), which also enrolls
+the local machine and signs in the browser.
+
+```bash
+lemon service install controller backend --bot "$HOME/.local/bin/lemon-bot" --wait 120
+lemon service status --json
+lemon service repair
+```
+
+Worker installation requires `--name NAME` and, on first installation,
+`--controller URL`. `--cwd DIR` defaults to HOME; `--allowed-root PATH` is
+repeatable. `--invite-code-stdin` reads a one-use enrollment code through stdin,
+never argv or environment. Use the product's generated join command rather than
+inventing an invite. The macOS-only `--exec-wrapper PATH` accepts an absolute
+executable inside an app bundle for the signed worker helper.
+
+Install/repair accept `--wait SECS` (0 installs without waiting), `--json`, and
+`--enable-linger`; install also accepts `--manual`. Defaults wait up to 120
+seconds for the controller, 60 for backend/worker. Status reports manager,
+persistence and per-unit readiness, not merely whether a unit file exists.
+JSON is one document on stdout; progress goes to stderr. Exit codes are 0 for
+ready, 1 for not-ready/operational failure, and 2 for usage errors.
+
+macOS uses LaunchAgents in the logged-in GUI user's domain: **login, not boot**.
+Linux uses `systemd --user`; boot/logout persistence requires linger. Without
+it, status reports session-only operation. `--enable-linger` attempts to enable
+it without sudo and prints the administrator command if required. No usable
+manager, or `--manual`, means detached manual processes with **no automatic
+restart after reboot/logout**; run `lemon service repair` after restarting.
+
+Repair only adopts verified Lemon-owned processes; it does not kill a foreign
+port owner. A graceful `lemon stop` leaves the controller stopped until the next
+login/boot or an explicit start/repair. `service uninstall` stops/removes the
+selected units but keeps data and credentials; removing a worker service does
+not revoke its machine in Lemon Bot.
+
+## SSH tunnel runner
+
+```bash
+lemon tunnel run --name studio --ssh me@studio \
+  --node-port 4044 --gateway-port 4044 \
+  --product-port 4100 --backend-port 4100
+```
+
+Run this foreground transport on the controller host. `--node-port` is the
+destination's loopback listening port; `--gateway-port` is the controller's
+node-only gateway. The optional product/backend ports must be supplied together.
+This is reverse forwarding, not the `ssh -L` browser tunnel used for headless
+sign-in. It does not enroll a worker or carry an operator token.
+
+The runner starts no BEAM VM. It records private state at
+`~/.lemon/run/service/tunnel-<name>.json`, reports online after SSH survives
+five seconds, exits 75 on transient failure, 0 on deliberate/terminal stops,
+and 2 on invalid arguments. For persistent operation and SSH prerequisites, use
+the [managed tunnel instructions](attaching-a-bot-machine.md#add-a-machine-over-ssh).
+
+## Uninstall
+
+`lemon uninstall [--purge] [--json]` previews removal and returns a confirmation
+digest. `lemon uninstall [--purge] --confirm DIGEST` executes that exact preview.
+Data is retained unless `--purge` is explicitly included in both preview and
+confirmation. Source checkouts remove owned units, not the checkout.
+See [Uninstall](updates.md#uninstall) before removing programs, secrets or backups.
+
 ## No-argument behavior
 
 This behavior is identical in source checkouts and packaged installs:
@@ -1149,6 +1234,12 @@ choose it. `lemon setup model --json` prints one readiness document
 `0` when the model is `verified` or `saved`, `1` when it needs action, and `64`
 for usage errors. `lemon setup --if-required --model-optional` finishes once
 config and secrets are complete, leaving the model for later.
+
+The `model` subcommand accepts `--provider`, `--config-path`, `--cwd`,
+`--non-interactive`, `--json` and `--offline`; provider-onboarding flags such as
+`--token`, `--model`, `--auth` and `--skip-verify` belong to `setup provider`,
+not `setup model`. Without `--offline`, a JSON report performs a non-generating
+provider check. **Saved** is not a successful live request.
 
 #### `lemon model`
 

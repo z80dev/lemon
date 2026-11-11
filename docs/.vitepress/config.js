@@ -25,7 +25,7 @@ export default {
   themeConfig: {
     logo: "/brand/lemon-mark.svg",
     nav: [
-      { text: "Get started", link: "/getting-started/quickstart", activeMatch: "^/(getting-started/quickstart|install|demo|compare|support|why-beam-for-agents|user-guide/(setup|updates))" },
+      { text: "Get started", link: "/getting-started/quickstart", activeMatch: "^/(getting-started/(quickstart|lemon-bot)|install|demo|compare|support|why-beam-for-agents|user-guide/(setup|updates))" },
       { text: "User guides", link: "/user-guide/web", activeMatch: "^/(user-guide/(?!setup|updates|cli|tui-commands|tern|omp|a2a-peers|honcho)|tools/|security/)" },
       { text: "Reference", items: [
         { text: "Configuration", link: "/config" },
@@ -61,6 +61,7 @@ export default {
         items: [
           { text: "Home", link: "/" },
           { text: "Quickstart", link: "/getting-started/quickstart" },
+          { text: "Lemon Bot in 3 minutes", link: "/getting-started/lemon-bot" },
           { text: "Install", link: "/install" },
           { text: "Setup: providers & secrets", link: "/user-guide/setup" },
           { text: "Demo", link: "/demo" },

@@ -17,22 +17,17 @@ Production assets are emitted to `web/dist`; the backend serves them outside `/v
 
 ## First use
 
-1. On the same computer run `lemon-bot open` (no password). Otherwise sign in, or use the one-time setup code from `lemon-bot setup` on the server.
-2. **Connect a computer** using its **server-issued**, one-use join command. Run it on the destination and wait for verified online status. Configure the computer's actual provider authentication and supervise its worker. Copying a command does not prove enrollment.
-3. Create a named Bot with a focused job on that host, or review a template to create a separate owned copy. **Connect a model on that machine** checks its credentials without sending a message. A detected Codex CLI login is copied only with your explicit consent; device-code sign-in and API-key entry are alternatives. **Verified** and **Saved** both allow creation; **Skip for now** allows creation with a reminder that replies need a model. Co-resident Bots share the OS user's files, browser sessions and CLI credentials; personas are not host isolation.
-4. Open its chat and give it a concrete task. Text, references, real files and explicit voice input use placed conversations. Stop requests cancel a real run; only its terminal cancelled state proves it stopped, and prior external effects are not undone.
+Follow [Lemon Bot getting started](../../../docs/getting-started/lemon-bot.md) for installation, local-owner sign-in and first Bot creation; use [model setup](../../../docs/user-guide/setup.md) for destination-local model connection and [attaching a bot machine](../../../docs/user-guide/attaching-a-bot-machine.md) for another execution host. There is no anonymous signup; a public origin or tailnet connection alone grants no account authority.
+
+Owner sign-in and management work before model authentication. **Verified** and **Saved** both allow Bot creation, but Saved is not a successful live check. Co-resident Bots share the OS user's files, browser sessions and CLI credentials; personas are not host isolation.
 
 There is no Team Bot publishing, manager assignment, live other-user Bot access, cross-human room membership, Team memory/skills or shared connector authority. Workspace/Public templates contain reviewed declarative content and always create a separate owned Bot, never access to the publisher's live Bot or credentials.
 
 ## Connect iPhone from a desktop browser
 
-Open **Connect iPhone** in the roster or Settings (canonical screen `device.pairing`). Explicitly create a five-minute, one-use pairing QR. The QR encodes the backend's actual `pairUrl`, not your browser session or an operator credential. It is rendered locally with `qrcode.react`; no QR image service receives the link.
+The canonical [getting-started guide](../../../docs/getting-started/lemon-bot.md) covers reachable HTTPS, desktop-approved pairing and revocation. The browser renders the backend's one-use pairing link locally with `qrcode.react`; no QR service receives it. The phone gets its own device-bound product session, not the browser's session or operator credential.
 
-The backend must advertise its reachable HTTPS public URL. Tailscale Serve is the recommended deployment when desktop and iPhone already have Tailscale reachability. This screen does not provision Tailscale, discover an overlay, or prove phone reachability. A localhost QR works only for same-machine development/Simulator; it cannot connect a physical iPhone to the desktop's localhost.
-
-Scan in Lemon Bot for iOS, inspect the exact cluster and backend origin, then request connection. The browser shows the pending device name, expiry and verification code. Compare that code with the phone and explicitly **Approve** or **Deny**. Approval gives the phone its own device-bound product session, not the browser's session. The paired session lasts **until revoked** (`expiresAtMs: null`). Revoke the device here or revoke its session under Account. Reopening iOS restores its Keychain-backed connection; offline phone state is not permission to replay mutations.
-
-Only explicit button actions mutate pairing/device state. Refresh and polling use GET only. A lost mutation receipt retains its fixed nonce and safe resource metadata in the authenticated tab's session storage and fences another consequential intent until authoritative reconciliation. For a lost QR issuance receipt, a separately labelled explicit action requests the original receipt with the **same** issuance nonce until the original five-minute deadline; it never extends expiry, creates another session or makes a consumed code reusable. Pair URLs exist only in the mounted screen's memory and disappear on claim, expiry, navigation or logout. Safe pending resources contain no QR secret. Nothing stores QR or pairing credentials in public caches, logs, account metadata or URLs belonging to the web app.
+Contributor invariants: preview/refresh/polling are read-only; creating a QR and approving a device require explicit action. Unknown mutations retain the original nonce and fence conflicting actions. Pair URLs remain only in the mounted screen's memory, not cached account metadata or logs. A lost issuance receipt can be reconciled only within its original deadline; successful phone sessions last until revoked. See the [preflight contract](../contracts/preflight.md).
 
 ## Assistant destinations
 
@@ -50,9 +45,10 @@ messages; differing requested/effective access shows a warning and next step.
 The single Why disclosure retains raw reasons and shared policy explanations.
 Desktop and session-scoped capabilities that have no native grant mapping are
 inspection-only here; configure them on the assigned machine or in Connections.
-Saving applies the returned grant immediately; Refresh access rechecks the
-machine. Finish active Bot work before changing access. These controls do not
-change workspace review policy or request macOS privacy permissions.
+Saving applies the returned grant immediately only when the Bot is idle; during
+active work the change queues until that task finishes, with **Stop task** available.
+Refresh access rechecks the machine. These controls do not change workspace
+review policy or request macOS privacy permissions; those belong on the assigned Mac.
 
 The canonical [API](../contracts/api.md), [cards](../contracts/cards.md) and [coverage](../contracts/coverage.md) define wire schemas, ACLs, state machines and provider prerequisites. This guide does not claim exercised coverage.
 

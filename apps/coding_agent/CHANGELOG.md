@@ -2,32 +2,20 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Named-node request decoding recognizes the optional `cwdMode` field and its
-  canonical `:cwd_mode` alias without crashing legacy requests that omit it.
-
 ### Added
 
-- `CodingAgent.WorkspaceReads` exempts `read`, `ls` and `grep` calls inside the
-  canonical per-Bot working folder from human approval when the effective policy
-  carries `workspace_read_exempt == true` and the trusted worker-derived folder
-  root, the bound execution-context workspace scope and
-  `ProfileStore.paths(profile_id)["files"]` are the same directory after symlink
-  resolution. Targets are validated inside the folder after `realpath`, internal
-  URLs are refused, `find` never qualifies, `grep` qualifies only on the
-  non-following ripgrep path, and `read` requires a regular file with a single
-  link. The exemption fails closed: the read is reviewed unless the egress fence
-  first becomes durable as a `workspace_read_fence` journal entry with its
-  supervised ETS mirror. Once fenced, `webfetch` and `websearch` require approval
-  for the rest of the session; the gate survives session restore, extension
-  reload and a narrowed policy, and `task` children inherit it. Every session
-  records its fence state when it starts, so a live session whose mirror was
-  lost with a restarted owner is treated as fenced rather than as unreviewed
-  egress. Extension and configuration discovery resolves from the trusted config
-  root, so a Bot-written `.lemon/config.toml` inside the folder cannot override
-  the runtime.
-
+- Per-Bot folder reads can skip human approval only when effective policy sets
+  `workspace_read_exempt == true` and the trusted worker folder, bound execution
+  scope and canonical `ProfileStore.paths(profile_id)["files"]` resolve to the
+  same directory. `read`, `ls` and non-symlink-following ripgrep qualify only for
+  targets inside that folder; internal URLs and `find` never qualify. `read`
+  additionally requires a regular file with a single link.
+  Before an exempt read, `CodingAgent.WorkspaceReads` requires a durable
+  `workspace_read_fence` journal entry and supervised ETS mirror. The fence makes
+  `webfetch` and `websearch` require approval for the rest of the session, survives
+  restore, extension reload and policy narrowing, and passes to `task` children.
+  Live sessions fail closed if their mirror is lost. Extension/config discovery
+  uses the trusted config root, not Bot-written `.lemon/config.toml` in the folder.
 - Configured local ACP/debug/eval/tool/Wasm launch adapters now participate in
   opt-in durable native-process tracking. ACP creates and debugger launch/attach
   dispatches retain external-work uncertainty even after errors; a missing ACP
@@ -211,6 +199,8 @@
 
 ### Fixed
 
+- Named-node request decoding recognizes optional `cwdMode` and canonical
+  `:cwd_mode` without crashing legacy requests that omit the field.
 - Native session ledgers, descendant scopes, and explicit run-tree budgets retain
   unknown token and dollar totals instead of charging zero. Relevant caps block
   further model requests and child launches; repeated reports, stale snapshots,

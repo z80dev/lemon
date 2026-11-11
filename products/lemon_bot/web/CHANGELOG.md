@@ -4,13 +4,15 @@
 
 ### Changed
 
-- Web and Mac starter tasks now inspect system summaries, installed tools and running processes instead of personal folders, avoiding protected-folder scans during first use.
+- Bot creation preselects the sole online owned computer, presents explicit
+  Standard access and keeps optional customization collapsed. Import and duplicate
+  confirm their own access choice; empty chats offer one-click starter tasks.
 - Create Bot checks model readiness on the selected machine, offers consented
   detected-login import before device sign-in or API-key entry, and supports Skip
-  with a conversation reminder. Providers settings expose live readiness,
-  explicit checks and Codex CLI import without silently copying credentials.
-
-- Bot setup defaults to explicit Standard access, preselects the sole online owned computer, and keeps optional customization collapsed. Import and duplicate confirm their own access choice; empty chats offer one-click starter tasks.
+  with a conversation reminder. Providers settings expose readiness, explicit
+  live checks and Codex CLI import without silently copying credentials.
+- Web and Mac starter tasks inspect system summaries, installed tools and running
+  processes rather than personal folders, avoiding protected-folder scans.
 
 - Surface "needs reconnecting" state and warning copy on expired or revoked machines across machine list, machine detail and chat inspector, and issue repair invites via POST.
 - Connecting a computer needs only its friendly name, with optional settings under Advanced. Loopback controllers require an explicit same-computer choice before issuing an invite; verified online enrollment offers Create a Bot on that machine.
@@ -21,13 +23,18 @@
 
 ### Fixed
 
-- Finished runs no longer leave “Writing a reply” or a caret behind when completion events arrive late, idle Bots reconcile stale run and message state, and grant changes cannot be replaced by an older in-flight refresh.
+- Finished runs no longer leave “Writing a reply” or a caret behind when completion
+  arrives late; idle Bots reconcile stale run/message state. Grant changes cannot
+  be replaced by older in-flight refreshes.
 
 - Device registration, About and update requirements use the build's package version and complete semantic-version precedence instead of hardcoded version checks.
 
 ### Added
 
-- Bots can ask to turn on Terminal, Files or Browser in a private access card, with explicit Bot-wide consent and queued-task status. Access changes made while working stay editable, update live and offer Stop task. Files settings explain unreviewed Bot-folder reads only on supporting computers under effective policy; workspace administrators can require review.
+- Private access cards let Bots request Terminal, Files or Browser with explicit
+  Bot-wide consent and queued-task status. Busy-Bot changes stay editable, update
+  live and offer Stop task. Supporting computers explain policy-controlled
+  unreviewed Bot-folder reads; workspace administrators can require review.
 
 - Same-computer browser sign-in uses one-use `lemon-bot open` links, strips tickets
   before routing, and explains local owner access once. Account settings show sign-in

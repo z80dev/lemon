@@ -1,10 +1,10 @@
 # Update, roll back, and uninstall Lemon
 
 Installer-managed `lemon_runtime_min`, `lemon_runtime_full`, and simulation
-releases expose a preview-confirm update lifecycle. Lemon stages a verified
-version, atomically moves the `~/.lemon/versions/current` pointer, and restarts
-an already-running **verified own managed daemon** using the selected release.
-An installation with no running daemon stays stopped.
+releases expose a preview-confirm update lifecycle. Lemon stages verified
+artifacts and moves the active pointers. It restarts verified own processes
+that were running before the update; a stopped installation stays stopped.
+Managed Bot installations include the matching backend artifact.
 
 ## Choose an update path
 
@@ -79,6 +79,22 @@ of the exact current launcher. It then:
 If validation fails after a pointer moves, Lemon restores the exact prior
 pointers — both of them when a backend is part of the plan. Downloads and
 partial directories are removed on every outcome.
+
+### Service update order (breaking change)
+
+Running worker units must stop **before** the controller restarts and start
+again only **after** it is healthy (steps 6–8 above). Custom supervision must
+follow that same order; restarting only the controller is no longer the complete
+Bot update procedure.
+
+Units use stable launchers (`~/.lemon/bin/lemon`, `~/.local/bin/lemon-bot`),
+not paths inside an old version directory. Remote workers are **never silently
+updated** by the controller: update each destination deliberately. Afterward
+inspect `lemon service status --json`.
+
+Worker/backend restart results report their readiness separately. A restart
+failure after selection does not mean the artifact transaction was undone;
+inspect the committed result and repair the affected service.
 
 Daemon ownership is checked before staging and again before stopping. A
 foreign runtime, an occupied foreign control-plane port, or unverifiable
@@ -325,6 +341,28 @@ Execute by repeating the same flags with the digest from the preview:
 lemon uninstall --confirm <digest>
 lemon uninstall --purge --confirm <digest>   # also deletes ~/.lemon and secrets
 ```
+
+Add `--json` to either form for a machine-readable preview or result. For
+services only, use `lemon service uninstall ROLE...` (for a named worker,
+`lemon service uninstall worker --name NAME`); this keeps programs and data.
+Removing a worker service does not revoke the machine: remove it in Lemon Bot
+if you also want to revoke its authorization.
+
+Before any data removal, create and verify a backup **outside** `~/.lemon`:
+
+```bash
+lemon backup create --output ~/lemon-final.lemonbackup
+lemon backup verify ~/lemon-final.lemonbackup
+```
+
+Backups exclude the `cookie`, `env`, `secrets_master_key` files and
+`nodes/execution/` unless `--include-credentials` is selected. Included config
+and other files may still contain inline secrets, so treat every bundle as
+sensitive. The default backup directory is inside `~/.lemon` and is deleted by
+`--purge`. See [Back up and restore](backups.md).
+
+To remove a single old release instead, use `lemonup uninstall <version>`; it
+refuses to delete the active `versions/current`.
 
 The digest covers each unit's identity *and* its current file content, every
 program path, every rc-file line with its position, and the `--purge` choice.

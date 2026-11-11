@@ -5,7 +5,16 @@ existing controller; it is not a new controller, virtual machine, or desktop
 sandbox. You keep normal SSH, terminal, and filesystem access. Bots assigned to
 the same machine share its OS account, files, and browser logins.
 
+For the short Mac/web workflows, start with
+[Lemon Bot in 3 minutes](../getting-started/lemon-bot.md#c-add-a-second-machine).
+This page covers topology, invitations and recovery in detail.
+
 ## Add a machine over SSH
+
+In the Mac app, choose **Machines → Add a machine** to open SSH setup, enter
+`me@studio`, and choose **Add a machine**. The progress checklist ends with **Create a Bot
+here** when the destination is online. Connect a model on that destination;
+SSH enrollment does not copy the controller's provider credentials.
 
 For a loopback-only controller, the backend on the controller host can maintain
 a reverse SSH link to the destination using your own SSH account and keys.
@@ -57,6 +66,12 @@ Keep the controller operator token on the controller or trusted application
 backend. Do **not** send it to a machine owner or put it in an attachment command.
 The backend authenticates to the control plane's `/ws` as an operator and needs
 `operator.pairing` to issue invitations.
+
+Direct remote workers also need a reachable HTTPS `LEMON_BOT_PUBLIC_URL` for
+MCP and attachments. Route that product origin to the backend (normally
+`127.0.0.1:4100`), independently of the node gateway. The SSH-assisted loopback
+path instead forwards the product port through its managed tunnel. A reachable
+node gateway alone does not make Bot tools usable.
 
 Set the controller's advertised endpoint before issuing invites:
 
@@ -271,9 +286,11 @@ Enter the separately returned one-use code at the
 **hidden terminal prompt**. The prompt reads `/dev/tty`, not the piped script stdin.
 The script disables tracing, restores terminal echo on exit/interruption, validates
 the bounded code without normalizing special characters, and passes it once to
-`node join --invite-code-stdin`. It never puts the code in process arguments or
-environment variables. A controlling terminal is required; EOF or invalid input
-stops before downloads, runtime inspection, or enrollment.
+`lemon service install worker --invite-code-stdin` (or `node join` in foreground
+mode). It never puts the code in process arguments or environment variables.
+By default a controlling terminal is required; EOF or invalid input stops
+before downloads, runtime inspection, or enrollment. For automation, use the
+explicit private stdin/descriptor modes below.
 
 **Publication prerequisite:** the matching release must publish `join-node.sh`
 and the canonical `install.sh` as version-scoped assets. Neither script is fetched
@@ -389,8 +406,8 @@ lemon node join --name studio-mac \
 ```
 
 This example reconnects **after enrollment** using the destination's saved
-credential. During enrollment the join script preserves your launch directory;
-start it from the desired existing project directory.
+credential. The join script defaults to `$HOME`; pass `--cwd /srv/bots/project`
+to select an existing destination directory during enrollment.
 
 `--allowed-root` is repeatable. Explicit roots **extend** the home default, so
 home remains permitted. These flags become destination-local
@@ -448,7 +465,8 @@ Only that opening connection receives `node.shell.output` payloads
 `node.shell.exit` payloads `{"shellId":"SHELL_ID","code":0}`; another connection
 cannot operate the shell.
 
-The worker requires `python3` to allocate a real PTY, not a pipe-backed shell.
+The worker uses Python 3.9+ to allocate a real PTY, not a pipe-backed shell.
+Packaged macOS runtimes bundle it; Linux uses the destination's Python.
 It runs the destination user's shell with worker-local cwd, opened through the
 same descriptor-root resolver and applied with `fchdir` before forking. Substituted
 symlinks cannot redirect that opening cwd. Startup reads one bounded binary policy
@@ -570,12 +588,13 @@ permission checks, including ACLs. Terminal inspection checks the actual shell
 and Python installation. Browser inspection uses its owning backend's status
 and the built-in tool catalog; it does not launch a browser.
 
-On macOS, installed Peekaboo's passive `permissions status --json` reports
-Accessibility, Screen Recording and Event Synthesizing for its selected
-execution actor ([command contract](https://github.com/openclaw/Peekaboo/blob/main/docs/commands/permissions.md)).
-A missing CLI is **absent**, a failed/unrecognized inspection is **unknown**, and only a measured negative
-grant is **denied**. Full Disk Access has no supported nonprompting query and
-is reported unknown. On Linux, X11 automation requires installed `xdotool` and
+On macOS, the worker's configured `LEMON_TCC_PROBE` helper runs
+`--status --json` to measure permissions without requesting them. The Mac app
+can supply its signed **Lemon Bot Worker** helper; without a usable helper,
+permission inspection reports unknown rather than guessing from another app's
+grant. Desktop tools still require their execution machinery, such as Peekaboo.
+Full Disk Access is unknown unless the helper returns a measured result.
+On Linux, X11 automation requires installed `xdotool` and
 an observed authenticated display connection; an unavailable display is not
 misrepresented as an explicit OS denial. No inspection takes a screenshot or
 prompts for access.

@@ -54,6 +54,13 @@ credentials, never operator or tokenless clients; `/healthz` identifies
 unavailable by `LemonControlPlane.NodeGateway.status/0`. The launcher reserves a
 gateway port alongside the main/web ports in `~/.lemon/ports.env`.
 
+These runtime listeners are separate from the Lemon Bot product backend,
+which defaults to `127.0.0.1:4100`. For browser access over SSH, keep it on
+loopback and use the [Bot headless sign-in flow](getting-started/lemon-bot.md#headless-or-ssh-server).
+For another execution machine, use the
+[node-gateway or managed SSH route](user-guide/attaching-a-bot-machine.md#prepare-the-controller);
+changing a bind address does not itself configure TLS or make an invite reachable.
+
 Launchers default epmd and Erlang distribution to loopback. Explicit long-name
 `--name` distribution opts out of the distribution-interface default; epmd's
 `ERL_EPMD_ADDRESS` can be set explicitly. Run `lemon doctor` to inspect listener

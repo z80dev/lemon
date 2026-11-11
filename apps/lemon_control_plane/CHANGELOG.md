@@ -25,16 +25,23 @@ All notable changes to `lemon_control_plane` are documented here.
   encrypted secret store and provider configuration through CLI onboarding
   persistence; local disconnect is not provider-side revocation.
 
-- Admin-scoped controller and named-node provider readiness checks (`providers.management.check`
-  and `node.providers.management.check`) with bounded non-generating model discovery,
-  consent-bound Codex CLI login import (`providers.management.import` and
-  `node.providers.management.import`) with conflict mapping for missing/unusable logins,
-  and optional readiness projection on `providers.management.list`.
+- Admin-scoped controller and named-node provider readiness checks
+  (`providers.management.check`, `node.providers.management.check`) use bounded
+  non-generating discovery. Explicit Codex CLI import (`providers.management.import`,
+  `node.providers.management.import`) stays destination-local and maps missing or
+  unusable logins to conflicts; listings optionally include readiness.
+
+### Changed
+
+- **Breaking security change:** HTTP/WebSocket listeners default to loopback.
+  LAN deployments must explicitly configure `LEMON_CONTROL_PLANE_BIND_IP` and
+  authentication. The separate node gateway defaults to `127.0.0.1:4044`;
+  off-loopback OpenAI/ACP HTTP access requires explicit opt-in and dedicated tokens.
 
 ### Fixed
 
-- Honor the configured HTTP/WebSocket listener IP so isolated benchmark runtimes
-  can bind to loopback without changing the default or existing services.
+- Honor the configured HTTP/WebSocket listener IP, including isolated benchmark
+  runtimes and explicitly exposed deployments.
 - Preserve explicitly reported positive usage costs independently of unavailable
   token counters, including historical cost-only records and completed agent
   events. Explicit unknown prices still win, and partial cache counters remain
