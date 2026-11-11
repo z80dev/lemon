@@ -1,0 +1,7 @@
+{
+  "id": "go_stocksum_cli",
+  "language": "go",
+  "category": "cli",
+  "difficulty": "easy",
+  "prompt": "Complete the stocksum command and its testable app.Run(args []string, input io.Reader, stdout, stderr io.Writer) int entry point. Use the standard flag package: -sku (default empty, exact SKU filter), -min (signed int64, default 0, inclusive minimum final total). Reject positional arguments/unknown flags/invalid flag values with exit 2, nonempty stderr, and no stdout. -h/-help must return 0 with usage on stderr and no stdout. Read CSV with exactly the header sku,quantity and two fields per data record; standard encoding/csv quoting and blank-line behavior apply. Trim surrounding whitespace in data fields only; SKU must be nonempty and quantity a signed base-10 int64. Negative quantities are valid. Aggregate by SKU before filtering; sums are guaranteed to fit int64. Output CSV header sku,total followed by matching SKUs in ascending bytewise order, one row each, decimal totals and newline termination, including a header when no rows match. Empty input, bad header/record/quantity or read errors return 1, nonempty stderr, and no stdout (do not leak partial results). Output write errors return 1 with a diagnostic. The main program must propagate Run's exit status. Preserve the module and add tests."
+}

@@ -1,0 +1,7 @@
+{
+  "id": "go_snapshot_retention",
+  "language": "go",
+  "category": "feature",
+  "difficulty": "medium",
+  "prompt": "Implement retention.Plan(snapshots []Snapshot, policy Policy) ([]string, error) for the snapshot janitor. Policy.Keep is a nonnegative per-volume count; Cutoff is an int64 timestamp. Always preserve pinned snapshots. Pinned snapshots do not consume Keep slots. Among unpinned snapshots in each volume, preserve the first Keep ordered by Created descending then ID ascending. Independently preserve every snapshot with Created >= Cutoff. Return IDs of all remaining snapshots sorted ascending, or nil when there are none. Empty input succeeds. Reject negative Keep, empty IDs/volumes, or duplicate IDs anywhere (even across volumes) with nil result and an error matching ErrInvalid via errors.Is. Validate the whole input before producing output. Do not mutate caller data. Timestamp values may include int64 extremes; compare without subtraction. Preserve existing types and add tests."
+}
