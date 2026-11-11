@@ -1,0 +1,7 @@
+{
+  "id": "ts_lru_expiry",
+  "language": "typescript",
+  "category": "bug_fix",
+  "difficulty": "easy",
+  "prompt": "Repair the expiring session cache using the complete contract in README.md. # Expiring session cache\n\nFix `ExpiringCache<V>` in `src/cache.ts` without changing its public API. The constructor takes a positive integer capacity and a `now(): number` clock (milliseconds); invalid capacities throw RangeError. `set(key: string, value: V, ttlMs: number): void` requires finite nonnegative TTL (otherwise RangeError with no mutation). An entry expires when `now() >= expiresAt`. TTL zero removes an existing key and stores nothing. The injected clock is nondecreasing and finite; sample it once per public operation. `get(key): V | undefined` removes expired entries and makes a live hit most recently used WITHOUT extending its expiry. `has(key): boolean` detects even a stored undefined and does not change recency. `size: number` counts only live entries. `set` replaces an existing key, resets its expiry, and makes it most recent. Remove all expired entries before choosing a capacity victim; evict the least recently set/gotten live key. `get`, `has`, and `size` must purge expired entries too. Keys are arbitrary strings. Preserve the session-store integration and existing tests. Add regression coverage. Run `node --test test/*.test.ts`."
+}
