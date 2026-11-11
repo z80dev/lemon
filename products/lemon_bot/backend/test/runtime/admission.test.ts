@@ -37,6 +37,7 @@ describe('authenticated fresh native follow-up admission', () => {
       expect(response).toMatchObject({ allow: true, invocation: { sharedMemoryGrant: false, invocationProof: { runId: candidate.runId, secretName: `lemon_bot/invocations/${candidate.runId}` }, invocationMcpServers: [{ name: 'lemon-bot', headers: { Authorization: 'Bearer ${LEMON_SECRET:LEMON_BOT_HELPER_FIXTURE}' } }] } });
       expect(s.f.store.require<P.Run>('runs', candidate.runId)).toMatchObject({ botId: helper.id, initiatorUserId: s.f.alice.userId });
       expect(s.f.store.metadata(`runPrincipal:${candidate.runId}`)).toEqual(s.f.alice);
+      expect(s.f.store.metadata(`runApprovalOrigin:${candidate.runId}`)).toBe('native_followup');
       expect(s.f.calls.filter(call => call.method === 'node.secrets.set' && call.params.operationId === candidate.runId)).toHaveLength(1);
       expect(s.f.calls.filter(call => call.method === 'chat.send')).toHaveLength(1);
     } finally { s.dispose(); }

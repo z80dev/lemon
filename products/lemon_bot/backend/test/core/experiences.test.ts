@@ -74,6 +74,11 @@ function fixture() {
       return entry;
     },
     notify(_principal: Principal, input: Record<string, unknown>): P.Notification { notificationCount++; const value = { ...base, id: `notification_${serial++}`, ...input } as P.Notification; store.put('notifications', value); return value; },
+    audit(actor: Principal | null, action: string, targetId: string, outcome: P.AuditRecord['outcome'], details: P.JSONObject = {}): P.AuditRecord {
+      const record: P.AuditRecord = { ...base, id: allocateId('audit'), actor: actor ? { kind: 'user', id: actor.userId, displayName: actor.userId } : { kind: 'system', id: null, displayName: 'System' }, action, resourceType: action.split('.')[0] ?? 'resource', resourceId: targetId, outcome, requestId: 'request', metadata: details };
+      store.put('auditRecords', record);
+      return record;
+    },
     encrypt(input: unknown): string { return JSON.stringify(input); },
     decrypt<T>(input: string): T { return JSON.parse(input) as T; },
   } as unknown as BackendServices;
@@ -371,6 +376,43 @@ describe('native grant enforcement boundaries', () => {
         expect((await effectiveBotGrants(f.services, user, f.bot, measured))[0]!.effectiveLevel).toBe('off');
         expect((await desiredBotGrants(f.services, user, f.bot, measured))[0]!.effectiveLevel).toBe('read_only');
       }
+    } finally { f.close(); }
+  });
+  test('grant PATCH eagerly ends active approval allowances for the bot', async () => {
+    const f = fixture();
+    try {
+      const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [{ id: 'files', name: 'Files', category: 'files', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['read', 'write', 'edit', 'grep'], reason: 'Policy roots measured', measuredAtMs: f.services.now(), stale: false }] };
+      f.services.lemon.methods = ['nodes.list', 'node.capabilities.get', 'profiles.update', 'mcp.execution_names'];
+      f.services.lemon.call = async <T>(method: string): Promise<T> => {
+        if (method === 'mcp.execution_names') return projectionReply() as T;
+        if (method === 'nodes.list') return { nodes: [{ id: 'node', status: 'online', capabilities: ['node.capabilities.get'] }], summary: { presenceAvailable: true, truncated: false } } as T;
+        if (method === 'node.capabilities.get') { const { machineId: _machineId, ...data } = measured; return { ...data, nodeId: 'node' } as T; }
+        throw new Error('Unexpected RPC');
+      };
+      const allowance: P.ApprovalAllowance = {
+        ...f.base,
+        id: 'allowance_grant_test',
+        scope: 'chat',
+        botId: f.bot.id,
+        conversationId: 'room',
+        ownerUserId: 'alice',
+        toolGroups: ['terminal'],
+        label: 'Terminal allowed in this chat',
+        state: 'active',
+        endedReason: null,
+        endedAtMs: null,
+        endedByUserId: null,
+        sourceApprovalId: 'appr_1',
+        createdByUserId: 'alice',
+        useCount: 1,
+        lastUsedAtMs: f.services.now(),
+      };
+      f.store.put('approvalAllowances', allowance);
+      const grant = (await effectiveBotGrants(f.services, user, f.bot, measured))[0]!;
+      await f.request<P.BotGrant>('PATCH', '/bots/:id/grants/:grantId', { clientNonce: nonce, revision: grant.revision, requestedLevel: 'read_only' }, { id: 'bot', grantId: grant.id });
+      const updated = f.store.require<P.ApprovalAllowance>('approvalAllowances', allowance.id);
+      expect(updated.state).toBe('ended');
+      expect(updated.endedReason).toBe('permissions_changed');
     } finally { f.close(); }
   });
   test('one native policy uses and refreshes the actual owners execution ceiling', async () => {

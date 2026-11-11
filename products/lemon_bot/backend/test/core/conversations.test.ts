@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
 import { ApiError } from '../../src/core/errors';
 import { Router } from '../../src/core/router';
-import { authorizedEntry, createConversation, createConversationRoutes, fenceContext, messageTargets, recentRoomContext, sendMessage, visibleEntries } from '../../src/core/conversations';
+import { createGateService } from '../../src/core/gates';
+import { authorizedEntry, createConversation, createConversationRoutes, deleteConversationResources, fenceContext, messageTargets, recentRoomContext, sendMessage, visibleEntries } from '../../src/core/conversations';
 import { alice, bob, chatFixture } from './conversations.fixture';
 
 const clientNonce = 'message_nonce_00000001';
@@ -214,5 +215,36 @@ describe('conversation routing and privacy boundaries', () => {
       expect(human.entries[0]?.actor.kind).toBe('user');
       expect(fixture.store.metadata(`entryAuthority:${human.entries[0]!.id}`)).toMatchObject({ kind: 'human', userId: 'alice' });
     } finally { fixture.store.close(); }
+  });
+  test('conversation deletion removes chat approval allowances and binding metadata', () => {
+    const fixture = chatFixture();
+    const gates = createGateService(fixture.services); fixture.services.gates = gates;
+    try {
+      fixture.addBot('one');
+      const room = createConversation(fixture.services, alice, { clientNonce, kind: 'dm', botIds: ['one'] });
+      const allowance: P.ApprovalAllowance = fixture.services.resource<Omit<P.ApprovalAllowance, keyof P.Resource>>('allowance', {
+        scope: 'chat',
+        botId: 'one',
+        conversationId: room.id,
+        ownerUserId: 'alice',
+        toolGroups: ['terminal'],
+        label: 'Terminal allowed in this chat',
+        state: 'active',
+        endedReason: null,
+        endedAtMs: null,
+        endedByUserId: null,
+        sourceApprovalId: 'appr-1',
+        createdByUserId: 'alice',
+        useCount: 0,
+        lastUsedAtMs: null,
+      });
+      fixture.store.put('approvalAllowances', allowance);
+      fixture.store.setMetadata(`approvalAllowanceBinding:${allowance.id}`, { contextKey: 'ctx_key' });
+
+      deleteConversationResources(fixture.services, alice, room);
+
+      expect(fixture.store.get('approvalAllowances', allowance.id)).toBeNull();
+      expect(fixture.store.metadata(`approvalAllowanceBinding:${allowance.id}`)).toBeNull();
+    } finally { gates.close(); fixture.store.close(); }
   });
 });
