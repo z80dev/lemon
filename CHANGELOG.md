@@ -12,7 +12,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - `websearch` provider: Keenable (`keenable`), opt-in with `KEENABLE_API_KEY` or
   `runtime.tools.web.search.providers.keenable.api_key`. Thanks @KGKallasmaa.
-No unreleased changes yet.
 
 ---
 
