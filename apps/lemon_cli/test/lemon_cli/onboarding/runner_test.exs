@@ -371,7 +371,7 @@ defmodule LemonCli.Onboarding.RunnerTest do
 
     assert {:ok, config} = Toml.decode_file(config_path)
     assert config["defaults"]["provider"] == "openai-codex"
-    assert config["defaults"]["model"] == "gpt-6.1-sol"
+    assert config["defaults"]["model"] == "openai-codex:gpt-6.1-sol"
   end
 
   test "Codex discovery failure falls back to Lemon's catalog with an explanation", %{
