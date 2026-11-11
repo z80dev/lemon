@@ -5,7 +5,6 @@
 #     -t lemon-arena-base apps/lemon_evals/priv/coding_arena
 FROM node:22-bookworm
 
-ARG TARGETARCH
 ARG GO_VERSION=1.23.4
 
 RUN apt-get update && \
@@ -16,7 +15,8 @@ RUN apt-get update && \
     ln -sf /usr/bin/python3 /usr/local/bin/python && \
     rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" | tar -C /usr/local -xz
+# dpkg's arch names match Go's (amd64/arm64); TARGETARCH is unset under the legacy builder.
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-$(dpkg --print-architecture).tar.gz" | tar -C /usr/local -xz
 
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path && \
