@@ -68,6 +68,43 @@ defmodule LemonCore.Service.ReadinessTest do
     end
   end
 
+  test "worker readiness reads the core-owned status file without an agent module", %{
+    opts: opts,
+    manager: manager
+  } do
+    spec = %{role: "worker", name: "studio"}
+    path = LemonCore.WorkerStatus.path("studio", opts)
+    digest = :crypto.hash(:sha256, "studio") |> Base.encode16(case: :lower)
+
+    assert path ==
+             Path.join([opts[:home], ".lemon", "nodes", "state", digest, "worker-status.json"])
+
+    File.mkdir_p!(Path.dirname(path))
+
+    status = %{
+      "version" => 1,
+      "localName" => "studio",
+      "state" => "online",
+      "reason" => nil,
+      "nodeId" => "node",
+      "changedAtMs" => 1,
+      "osPid" => 123
+    }
+
+    File.write!(path, Jason.encode!(status))
+    assert {"online", nil} = Readiness.probe(spec, manager, opts)
+    assert {"unsupervised", nil} = Readiness.probe(spec, %{manager | pid: 124}, opts)
+
+    for invalid <- [
+          %{status | "localName" => "other"},
+          %{status | "reason" => "/private/credential"},
+          Map.put(status, "extra", "untrusted")
+        ] do
+      File.write!(path, Jason.encode!(invalid))
+      assert {"starting", nil} = Readiness.probe(spec, manager, opts)
+    end
+  end
+
   test "absent optional worker module reports unknown", %{opts: opts, manager: manager} do
     opts = Keyword.put(opts, :status_reader, fn _ -> {:error, :module_unavailable} end)
     assert {"unknown", nil} = Readiness.probe(%{role: "worker", name: "studio"}, manager, opts)

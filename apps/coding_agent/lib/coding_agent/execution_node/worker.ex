@@ -417,8 +417,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
         send(
           self(),
-          {:stop_after_authentication_error,
-           authentication_failure_reason(error, state.socket_mode)}
+          {:stop_after_authentication_error, pairing_authentication_failure(error, state)}
         )
 
         {:noreply, state}
@@ -807,6 +806,14 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp handle_socket_response({:invoke_control_result, _control_id}, _result, state),
     do: {:noreply, state}
 
+  defp handle_socket_response(
+         :pair_request,
+         {:error, %{"code" => "UNAUTHORIZED"}},
+         %{invite_code: code} = state
+       )
+       when is_binary(code),
+       do: {:stop, {:pairing_failed, :invite_rejected}, state}
+
   defp handle_socket_response(tag, {:error, reason}, state)
        when tag in [:pair_request, :pair_approve] do
     handle_pairing_error(reason, state)
@@ -840,6 +847,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
     {:stop, {:pairing_failed, :outcome_unknown}, state}
   end
 
+  defp handle_pairing_error(_reason, %{invite_code: code} = state) when is_binary(code),
+    do: {:stop, {:pairing_failed, :outcome_unknown}, state}
+
   defp handle_pairing_error(reason, state) when reason in [:disconnected, :timeout] do
     state = if reason == :timeout, do: resume_pairing(state), else: state
     {:noreply, state}
@@ -847,6 +857,15 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp handle_pairing_error(reason, state),
     do: {:stop, {:pairing_failed, safe_reason(reason)}, state}
+
+  defp pairing_authentication_failure(error, %{invite_code: code} = state) when is_binary(code) do
+    if is_nil(state.pairing_stage) and match?(%{"code" => "UNAUTHORIZED"}, error),
+      do: {:pairing_failed, :invite_rejected},
+      else: {:pairing_failed, :outcome_unknown}
+  end
+
+  defp pairing_authentication_failure(error, state),
+    do: authentication_failure_reason(error, state.socket_mode)
 
   defp resume_pairing(%{pairing_id: pairing_id} = state)
        when is_binary(pairing_id) and pairing_id != "" do

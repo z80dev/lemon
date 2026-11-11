@@ -44,6 +44,12 @@ defmodule LemonCore.Service.UnitTest do
       assert {:ok, parsed} = Unit.parse(body, manager)
       assert parsed.argv == spec.argv
       assert parsed.env == spec.env
+
+      if role == "worker" do
+        assert parsed.env["LEMON_GATEWAY_HEALTH_PORT"] == "0"
+        assert parsed.env["LEMON_ROUTER_HEALTH_PORT"] == "0"
+      end
+
       assert Unit.owned?(parsed, spec, opts)
     end
   end

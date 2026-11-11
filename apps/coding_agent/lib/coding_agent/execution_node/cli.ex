@@ -137,10 +137,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
            Keyword.get(deps, :configure_state, &CodingAgent.StatePaths.configure_worker/1).(
              opts[:name]
            ),
-         {:ok, _started} <-
-           Keyword.get(deps, :ensure_all_started, &Application.ensure_all_started/1).(
-             :coding_agent
-           ),
+         {:ok, _started} <- start_runtime(opts, deps),
          :ok <- load_all_modules(),
          :ok <-
            Application.put_env(
@@ -182,6 +179,16 @@ defmodule CodingAgent.ExecutionNode.CLI do
 
       {:error, reason} ->
         {:error, format_reason(reason)}
+    end
+  end
+
+  defp start_runtime(opts, deps) do
+    case Keyword.get(deps, :ensure_all_started, &Application.ensure_all_started/1).(:coding_agent) do
+      {:ok, _} = success ->
+        success
+
+      {:error, _} = error ->
+        if opts[:enroll_only], do: {:error, :enroll_start_failed}, else: error
     end
   end
 
@@ -474,6 +481,9 @@ defmodule CodingAgent.ExecutionNode.CLI do
 
   defp format_reason({:pairing_failed, :outcome_unknown}), do: :enrollment_outcome_unknown
   defp format_reason({{:pairing_failed, :outcome_unknown}, _}), do: :enrollment_outcome_unknown
+  defp format_reason({:pairing_failed, :invite_rejected}), do: :invite_rejected
+  defp format_reason({{:pairing_failed, :invite_rejected}, _}), do: :invite_rejected
+  defp format_reason(:enroll_start_failed), do: :enroll_start_failed
 
   defp format_reason(:operator_token_required) do
     "the controller requires an operator token for pairing; set LEMON_NODE_OPERATOR_TOKEN or pass --operator-token"

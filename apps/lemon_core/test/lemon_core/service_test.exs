@@ -164,6 +164,49 @@ defmodule LemonCore.ServiceTest do
              Service.install(["worker"], changed)
   end
 
+  test "controller and backend retain their installed environment across callers", %{
+    opts: opts,
+    state: state
+  } do
+    bot = Path.join(opts[:home], ".local/bin/lemon-bot")
+    File.mkdir_p!(Path.dirname(bot))
+    File.write!(bot, "#!/bin/sh\nexit 0\n")
+    File.chmod!(bot, 0o700)
+    pid_file = Path.join(opts[:home], ".lemon/run/lemon-4040.pid")
+    File.mkdir_p!(Path.dirname(pid_file))
+    File.write!(pid_file, "123\n")
+    record = Path.join(opts[:home], ".lemon/lemon_bot/run/lemon-bot-4100.json")
+    File.mkdir_p!(Path.dirname(record))
+    File.write!(record, Jason.encode!(%{pid: 123, startedAt: @started, instanceId: "ours"}))
+    File.chmod!(record, 0o600)
+
+    opts =
+      Keyword.merge(opts,
+        http_get: fn url ->
+          if String.ends_with?(url, "/healthz"),
+            do: {:ok, %{"ok" => true}},
+            else: {:ok, %{"product" => "lemon_bot", "instanceId" => "ours"}}
+        end
+      )
+
+    assert {:ok, %{units: [_, _]}} = Service.install(["controller", "backend"], opts)
+    Agent.update(state, &%{&1 | calls: []})
+
+    other =
+      Keyword.merge(opts,
+        login_path: "/different/shell/bin:/bin",
+        env: %{"PATH" => "/other/bin", "LANG" => "C", "SHELL" => "/different/shell"}
+      )
+
+    assert {:ok, %{units: [%{action: "unchanged"}, %{action: "unchanged"}]}} =
+             Service.install(["controller", "backend"], other)
+
+    refute Enum.any?(Agent.get(state, & &1.calls), fn {command, args} ->
+             command == "launchctl" and
+               List.first(args) in ["bootstrap", "bootout", "kickstart", "kill"]
+           end)
+  end
+
   test "worker status exposes the persisted execution wrapper for setup repair", %{opts: opts} do
     assert {:ok, %{units: [%{execWrapper: nil}]}} = Service.install(["worker"], opts)
     wrapper = Path.join(opts[:home], "Lemon Bot.app/Contents/MacOS/worker-helper")
@@ -239,6 +282,11 @@ defmodule LemonCore.ServiceTest do
     assert_receive {:enroll, args, command_opts}
     refute Enum.any?(args, &String.contains?(&1, code))
     assert command_opts[:input] == code <> "\n"
+    env = Map.new(command_opts[:env])
+    assert env["LEMON_GATEWAY_HEALTH_PORT"] == "0"
+    assert env["LEMON_ROUTER_HEALTH_PORT"] == "0"
+    assert env["HOME"] == opts[:home]
+    refute inspect(env) =~ code
     refute_received {:enroll, _, _}
   end
 
@@ -257,6 +305,84 @@ defmodule LemonCore.ServiceTest do
             %{
               units: [%{installed: false, state: "blocked", detail: "enrollment_outcome_unknown"}]
             }} = Service.install(["worker"], opts)
+  end
+
+  test "enrollment distinguishes rejection, startup failure and uncertain consumption", %{
+    opts: opts
+  } do
+    original = opts[:command_runner]
+
+    for {response, detail} <- [
+          {{"lemon node join: invite_rejected\n", 2}, "invite_rejected"},
+          {{"lemon node join: enroll_start_failed\n", 2}, "enroll_start_failed"},
+          {{"", 127}, "enroll_start_failed"},
+          {{"local or remote failure with private-credential", 2}, "enrollment_outcome_unknown"},
+          {{"lemon node join: enrollment_outcome_unknown\n", 1}, "enrollment_outcome_unknown"}
+        ] do
+      runner = fn executable, args, command_opts ->
+        if "--enroll-only" in args, do: response, else: original.(executable, args, command_opts)
+      end
+
+      attempt =
+        Keyword.merge(opts, command_runner: runner, invite_code: String.duplicate("x", 43))
+
+      assert {:ok, %{units: [%{installed: false, state: "blocked", detail: ^detail}]}} =
+               Service.install(["worker"], attempt)
+    end
+  end
+
+  test "enrollment can bind its health listeners while controller health ports are occupied", %{
+    opts: opts
+  } do
+    {:ok, gateway} = :gen_tcp.listen(0, ip: {127, 0, 0, 1}, active: false)
+    {:ok, router} = :gen_tcp.listen(0, ip: {127, 0, 0, 1}, active: false)
+
+    on_exit(fn ->
+      :gen_tcp.close(gateway)
+      :gen_tcp.close(router)
+    end)
+
+    {:ok, {_, gateway_port}} = :inet.sockname(gateway)
+    {:ok, {_, router_port}} = :inet.sockname(router)
+    launcher = Path.join(opts[:home], ".lemon/bin/lemon")
+    File.mkdir_p!(Path.dirname(launcher))
+
+    File.write!(launcher, """
+    #!/usr/bin/env elixir
+    for {key, occupied} <- [{"LEMON_GATEWAY_HEALTH_PORT", #{gateway_port}}, {"LEMON_ROUTER_HEALTH_PORT", #{router_port}}] do
+      port = System.get_env(key, Integer.to_string(occupied)) |> String.to_integer()
+      case :gen_tcp.listen(port, ip: {127, 0, 0, 1}, active: false) do
+        {:ok, _socket} -> :ok
+        {:error, _} -> System.halt(2)
+      end
+    end
+    if byte_size(IO.read(:stdio, 45)) != 44, do: System.halt(2)
+    """)
+
+    File.chmod!(launcher, 0o700)
+    original = opts[:command_runner]
+
+    runner = fn executable, args, command_opts ->
+      if "--enroll-only" in args,
+        do: LemonCore.Service.Command.run(executable, args, [], command_opts),
+        else: original.(executable, args, command_opts)
+    end
+
+    path = Enum.map_join(["elixir", "erl"], ":", &(System.find_executable(&1) |> Path.dirname()))
+
+    attempt =
+      Keyword.merge(opts,
+        launcher: launcher,
+        command_runner: runner,
+        login_path: path <> ":/usr/bin:/bin",
+        env: %{
+          "LEMON_GATEWAY_HEALTH_PORT" => to_string(gateway_port),
+          "LEMON_ROUTER_HEALTH_PORT" => to_string(router_port)
+        },
+        invite_code: String.duplicate("x", 43)
+      )
+
+    assert {:ok, %{units: [%{state: "online"}]}} = Service.install(["worker"], attempt)
   end
 
   test "waiting returns a bounded timeout instead of claiming online", %{opts: opts} do

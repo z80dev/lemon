@@ -4,8 +4,6 @@ defmodule CodingAgent.StatePaths do
   alias LemonCore.PidFile
 
   @files ~w(tasks.dets parent_questions.dets run_graph.dets processes.dets)
-  @states ~w(starting online reconnecting needs_reauthorization needs_enrollment conflict)
-  @reasons ~w(session_expired session_invalid node_not_found credential_rejected credential_missing credential_unreadable controller_mismatch node_name_conflict node_identity_mismatch)
 
   def state_dir,
     do: Application.get_env(:coding_agent, :state_dir) || CodingAgent.Config.agent_dir()
@@ -21,12 +19,7 @@ defmodule CodingAgent.StatePaths do
 
   def dets_path(name), do: Path.join(state_dir(), name)
 
-  def worker_root(name) do
-    name = String.trim(name)
-    if name == "", do: raise(ArgumentError, "worker name must not be blank")
-    digest = :crypto.hash(:sha256, name) |> Base.encode16(case: :lower)
-    Path.join([System.user_home!(), ".lemon", "nodes", "state", digest])
-  end
+  def worker_root(name), do: LemonCore.WorkerStatus.root(name)
 
   def configure_worker(name) do
     root = worker_root(name)
@@ -145,7 +138,7 @@ defmodule CodingAgent.StatePaths do
     end
   end
 
-  def status_path(name), do: Path.join(worker_root(name), "worker-status.json")
+  def status_path(name), do: LemonCore.WorkerStatus.path(name)
 
   def write_status(name, map) do
     status = Map.new(map, fn {key, value} -> {to_string(key), value} end)
@@ -157,7 +150,7 @@ defmodule CodingAgent.StatePaths do
         "osPid" => String.to_integer(System.pid())
       })
 
-    if valid_status?(status) do
+    if LemonCore.WorkerStatus.valid?(status) do
       with :ok <- private_dir(worker_root(name)),
            do: atomic_write(status_path(name), Jason.encode!(status))
     else
@@ -165,35 +158,7 @@ defmodule CodingAgent.StatePaths do
     end
   end
 
-  def read_status(name) do
-    case File.read(status_path(name)) do
-      {:ok, bytes} ->
-        with {:ok, map} <- Jason.decode(bytes),
-             true <- valid_status?(map),
-             true <- map["localName"] == String.trim(name) do
-          {:ok, map}
-        else
-          _ -> {:error, :invalid}
-        end
-
-      {:error, :enoent} ->
-        {:error, :not_found}
-
-      _ ->
-        {:error, :invalid}
-    end
-  end
-
-  defp valid_status?(map) when is_map(map) do
-    Enum.sort(Map.keys(map)) ==
-      Enum.sort(~w(version localName state reason nodeId changedAtMs osPid)) and
-      map["version"] == 1 and is_binary(map["localName"]) and map["state"] in @states and
-      map["reason"] in [nil | @reasons] and (is_nil(map["nodeId"]) or is_binary(map["nodeId"])) and
-      is_integer(map["changedAtMs"]) and map["changedAtMs"] >= 0 and is_integer(map["osPid"]) and
-      map["osPid"] > 0
-  end
-
-  defp valid_status?(_), do: false
+  def read_status(name), do: LemonCore.WorkerStatus.read(name)
 
   defp private_dir(dir) do
     with :ok <- File.mkdir_p(dir), do: File.chmod(dir, 0o700)

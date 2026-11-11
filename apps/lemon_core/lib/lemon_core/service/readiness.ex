@@ -99,11 +99,7 @@ defmodule LemonCore.Service.Readiness do
         fun.(name)
 
       _ ->
-        module = Module.concat([CodingAgent, StatePaths])
-
-        if Code.ensure_loaded?(module) and function_exported?(module, :read_status, 1),
-          do: apply(module, :read_status, [name]),
-          else: {:error, :module_unavailable}
+        LemonCore.WorkerStatus.read(name, home: Role.home(opts))
     end
   end
 

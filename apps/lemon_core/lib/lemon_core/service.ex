@@ -331,8 +331,14 @@ defmodule LemonCore.Service do
       {:ok, parsed} ->
         inherited = Role.options_from_argv(parsed.argv)
         merged = Keyword.merge(inherited, opts)
-        env = Map.merge(parsed.env, Keyword.get(opts, :env, System.get_env()))
+        env = Map.merge(Keyword.get(opts, :env, System.get_env()), parsed.env)
         merged = Keyword.put(merged, :env, env)
+
+        merged =
+          case parsed.env["PATH"] do
+            path when is_binary(path) -> Keyword.put(merged, :login_path, path)
+            _ -> merged
+          end
 
         if operation in [:status, :uninstall] do
           {:ok, Map.merge(shell, %{argv: parsed.argv, env: parsed.env, options: merged}),
@@ -542,17 +548,31 @@ defmodule LemonCore.Service do
 
       [launcher | args] = argv
 
+      env =
+        System.get_env()
+        |> Map.new(fn {name, _value} -> {name, nil} end)
+        |> Map.merge(spec.env)
+        |> Map.to_list()
+
       case Command.run(launcher, args ++ ["--invite-code-stdin", "--enroll-only"], opts,
              input: code <> "\n",
+             env: env,
              timeout: 120_000
            ) do
         {_, 0} ->
           :ok
 
-        {output, _} ->
-          if String.contains?(output, "enrollment_outcome_unknown"),
-            do: {:error, :enrollment_outcome_unknown},
-            else: {:error, :invite_rejected}
+        {output, status} ->
+          cond do
+            enrollment_result?(output, "invite_rejected") ->
+              {:error, :invite_rejected}
+
+            status in [126, 127] or enrollment_result?(output, "enroll_start_failed") ->
+              {:error, :enroll_start_failed}
+
+            true ->
+              {:error, :enrollment_outcome_unknown}
+          end
       end
     else
       :ok
@@ -560,6 +580,10 @@ defmodule LemonCore.Service do
   end
 
   defp enroll(_, _), do: :ok
+
+  defp enrollment_result?(output, result) do
+    output |> String.split("\n", trim: true) |> List.last() == "lemon node join: " <> result
+  end
 
   defp wait_ready(spec, module, opts) do
     seconds = Keyword.get(opts, :wait, if(spec.role == "controller", do: 120, else: 60))
@@ -687,14 +711,7 @@ defmodule LemonCore.Service do
   end
 
   defp cleanup_status(%{role: "worker", name: name}, opts) do
-    module = Module.concat([CodingAgent, StatePaths])
-
-    if Code.ensure_loaded?(module) and function_exported?(module, :status_path, 1) do
-      path = apply(module, :status_path, [name])
-
-      if String.starts_with?(path, Path.join(Role.home(opts), ".lemon/nodes/state") <> "/"),
-        do: File.rm(path)
-    end
+    File.rm(LemonCore.WorkerStatus.path(name, home: Role.home(opts)))
 
     :ok
   end

@@ -809,6 +809,21 @@ missing wrapper rather than silently changing the worker's signed identity.
 `--bot PATH` defaults to `~/.local/bin/lemon-bot`. Backend units reject inherited
 `LEMON_BOT_OPERATOR_TOKEN` and `LEMON_BOT_ENCRYPTION_KEY`; secrets never enter units.
 
+An existing unit keeps its recorded login `PATH`, locale and configured
+environment values. Calling install again from another shell, Lemon Bot, or the
+Mac app does not restart services just because that caller has a different
+environment. Explicit service options still update the unit. To deliberately
+recapture its environment, uninstall that unit and install it again; credentials
+and application data remain intact.
+
+The one-shot enrollment process uses the worker unit's isolated environment,
+including `LEMON_GATEWAY_HEALTH_PORT=0` and `LEMON_ROUTER_HEALTH_PORT=0`, so it can
+start beside the controller. `invite_rejected` means an explicit controller
+refusal before consumption; `enroll_start_failed` identifies a local startup
+failure without exposing raw diagnostics. Other failed exchanges report
+`enrollment_outcome_unknown`: the code may already have been consumed. No failure
+automatically retries the code; obtain a fresh invite before attempting again.
+
 Readiness waits default to 120 seconds for the controller, 60 for other roles;
 `--wait 0` skips waiting. A controller takeover with running workers must still
 wait for controller health before resuming them. `--enable-linger` requests

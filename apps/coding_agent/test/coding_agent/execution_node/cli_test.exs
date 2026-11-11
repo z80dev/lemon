@@ -352,6 +352,72 @@ defmodule CodingAgent.ExecutionNode.CLITest do
              Worker.handle_info({:execution_node_socket, self(), {:connected, %{}}}, state)
   end
 
+  test "one-shot local runtime startup failure has a bounded non-rejection result" do
+    deps = [
+      runtime_features: fn -> %{"botReady" => true} end,
+      configure_state: fn _ -> :ok end,
+      ensure_all_started: fn _ ->
+        {:error, {:coding_agent, {:health, :eaddrinuse, "/private/path"}}}
+      end
+    ]
+
+    ExUnit.CaptureIO.capture_io([input: String.duplicate("A", 43) <> "\n"], fn ->
+      assert {:error, :enroll_start_failed} =
+               CLI.run(
+                 [
+                   "--name",
+                   "bot",
+                   "--controller",
+                   "wss://controller.example/ws",
+                   "--invite-code-stdin",
+                   "--enroll-only"
+                 ],
+                 deps
+               )
+    end)
+  end
+
+  test "only an explicit pre-consumption controller refusal rejects an invite" do
+    state = %Worker{socket: self(), socket_mode: :pairing, invite_code: String.duplicate("A", 43)}
+    rejection = %{"code" => "UNAUTHORIZED", "message" => "private server diagnostic"}
+
+    assert {:stop, {:pairing_failed, :invite_rejected}, ^state} =
+             Worker.handle_info(
+               {:execution_node_socket, self(), {:response, :pair_request, {:error, rejection}}},
+               state
+             )
+
+    assert {:stop, {:pairing_failed, :outcome_unknown}, ^state} =
+             Worker.handle_info(
+               {:execution_node_socket, self(),
+                {:response, {:pair_challenge, "node"}, {:error, rejection}}},
+               state
+             )
+
+    for {stage, outcome} <- [{nil, :invite_rejected}, {:requesting, :outcome_unknown}] do
+      current = %{state | pairing_stage: stage}
+
+      assert {:noreply, ^current} =
+               Worker.handle_info(
+                 {:execution_node_socket, self(), {:authentication_error, rejection}},
+                 current
+               )
+
+      assert_receive {:stop_after_authentication_error, {:pairing_failed, ^outcome}}
+    end
+
+    worker =
+      spawn(fn ->
+        receive do
+          :reject -> exit({:pairing_failed, :invite_rejected})
+        end
+      end)
+
+    monitor = Process.monitor(worker)
+    send(worker, :reject)
+    assert {:error, :invite_rejected} = CLI.await_worker(worker, monitor, enroll_only: true)
+  end
+
   test "normalizes the destination execution capability ceiling" do
     assert {:ok, :all} = CLI.execution_capabilities([], nil)
     assert {:ok, :all} = CLI.execution_capabilities([capabilities: "*"], "read")

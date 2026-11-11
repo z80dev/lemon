@@ -125,6 +125,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- Service install preserves recorded PATH and locale across callers instead of
+  restarting running controller/backend units for ambient shell differences.
+- Worker enrollment uses the unit's isolated health-port environment and
+  distinguishes startup failure, explicit invite rejection and uncertain
+  consumption. Core reads the shared worker-status contract without an umbrella
+  dependency on the execution agent.
+
 - `runtime.lemon_root` skips when `LEMON_PATH` is unset instead of warning about
   a compile-time path that in releases names the build machine.
 - `LemonCore.BrowserProvider` maps the local probe's fixed reason atoms to fixed

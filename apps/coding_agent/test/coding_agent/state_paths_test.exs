@@ -29,6 +29,9 @@ defmodule CodingAgent.StatePathsTest do
     assert StatePaths.worker_root(" a/b ") ==
              Path.join([System.user_home!(), ".lemon", "nodes", "state", digest])
 
+    assert StatePaths.worker_root(" a/b ") == LemonCore.WorkerStatus.root(" a/b ")
+    assert StatePaths.status_path(" a/b ") == LemonCore.WorkerStatus.path(" a/b ")
+
     assert_raise ArgumentError, fn -> StatePaths.worker_root(" ") end
   end
 
@@ -118,7 +121,10 @@ defmodule CodingAgent.StatePathsTest do
       })
 
     on_exit(fn -> :peer.stop(peer) end)
-    for app <- [:elixir, :logger, :crypto], do: :peer.call(peer, Application, :ensure_all_started, [app])
+
+    for app <- [:elixir, :logger, :crypto],
+        do: :peer.call(peer, Application, :ensure_all_started, [app])
+
     :ok = :peer.call(peer, Application, :put_env, [:coding_agent, :agent_dir, root])
 
     stores = [
@@ -172,7 +178,10 @@ defmodule CodingAgent.StatePathsTest do
       })
 
     on_exit(fn -> :peer.stop(peer) end)
-    for app <- [:elixir, :logger, :crypto], do: :peer.call(peer, Application, :ensure_all_started, [app])
+
+    for app <- [:elixir, :logger, :crypto],
+        do: :peer.call(peer, Application, :ensure_all_started, [app])
+
     :ok = :peer.call(peer, ExUnit, :start, [[autorun: false]])
 
     status = %{
@@ -223,7 +232,10 @@ defmodule CodingAgent.StatePathsTest do
       :peer.start(%{connection: :standard_io, args: [~c"-pa" | :code.get_path()]})
 
     on_exit(fn -> :peer.stop(peer) end)
-    for app <- [:elixir, :logger, :crypto], do: :peer.call(peer, Application, :ensure_all_started, [app])
+
+    for app <- [:elixir, :logger, :crypto],
+        do: :peer.call(peer, Application, :ensure_all_started, [app])
+
     worker = Path.join(root, "worker")
     :ok = :peer.call(peer, Application, :put_env, [:coding_agent, :state_dir, worker])
     controller_path = StatePaths.dets_path("tasks.dets")
