@@ -16,6 +16,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   reaching the model ("The runtime reported that this run failed"): MCP
   requests to a local or private Lemon Bot address carried two
   `content-type` headers, which Lemon Bot rejected.
+- On macOS, `lemon service install` no longer leaves a changed service stopped
+  ("blocked", `service_command_failed`): it waits for launchd to finish
+  removing the old unit before loading the new one.
 
 ---
 

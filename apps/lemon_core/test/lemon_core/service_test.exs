@@ -20,6 +20,15 @@ defmodule LemonCore.ServiceTest do
           {"", if(snapshot.gui, do: 0, else: 1)}
 
         {"launchctl", ["print", _]} ->
+          # Real launchd keeps a booted-out service listed briefly after
+          # `bootout` returns; `bootout_lag` models that many more lookups.
+          if snapshot.loaded and Map.get(snapshot, :removing, 0) > 0 do
+            Agent.update(state, fn s ->
+              left = s.removing - 1
+              %{s | removing: left, loaded: left > 0}
+            end)
+          end
+
           if snapshot.loaded,
             do:
               {if(snapshot.alive,
@@ -29,11 +38,19 @@ defmodule LemonCore.ServiceTest do
             else: {"", 1}
 
         {"launchctl", ["bootstrap" | _]} ->
-          Agent.update(state, &%{&1 | loaded: true, alive: true})
-          {"", 0}
+          if snapshot.loaded do
+            {"Bootstrap failed: 5: Input/output error", 5}
+          else
+            Agent.update(state, &%{&1 | loaded: true, alive: true})
+            {"", 0}
+          end
 
         {"launchctl", ["bootout" | _]} ->
-          Agent.update(state, &%{&1 | loaded: false, alive: false})
+          case Map.get(snapshot, :bootout_lag, 0) do
+            0 -> Agent.update(state, &%{&1 | loaded: false, alive: false})
+            lag -> Agent.update(state, &Map.merge(&1, %{alive: false, removing: lag}))
+          end
+
           {"", 0}
 
         {"launchctl", ["kickstart" | _]} ->
@@ -313,6 +330,18 @@ defmodule LemonCore.ServiceTest do
 
   test "changing owned content rewrites the unit", %{opts: opts} do
     assert {:ok, _} = Service.install(["worker"], opts)
+    changed = Keyword.put(opts, :allowed_root, opts[:home])
+
+    assert {:ok, %{units: [%{action: "updated", state: "online"}]}} =
+             Service.install(["worker"], changed)
+  end
+
+  test "a changed unit is reinstalled after launchd finishes removing the old one", %{
+    opts: opts,
+    state: state
+  } do
+    assert {:ok, _} = Service.install(["worker"], opts)
+    Agent.update(state, &Map.put(&1, :bootout_lag, 3))
     changed = Keyword.put(opts, :allowed_root, opts[:home])
 
     assert {:ok, %{units: [%{action: "updated", state: "online"}]}} =

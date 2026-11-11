@@ -58,10 +58,31 @@ defmodule LemonCore.Service.Launchd do
     end
   end
 
+  # `bootout` returns before launchd finishes removing the service; bootstrapping
+  # the same label meanwhile fails ("5: Input/output error"), which left a
+  # reinstalled unit unloaded. Callers proceed only once it is really gone.
   def unload(spec, opts) do
-    if status(spec, opts).loaded,
-      do: Command.ok("launchctl", ["bootout", target(spec, opts)], opts),
-      else: :ok
+    if status(spec, opts).loaded do
+      with :ok <- Command.ok("launchctl", ["bootout", target(spec, opts)], opts) do
+        wait_unloaded(spec, opts, System.monotonic_time(:millisecond) + 10_000)
+      end
+    else
+      :ok
+    end
+  end
+
+  defp wait_unloaded(spec, opts, deadline) do
+    cond do
+      not status(spec, opts).loaded ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        {:error, :unload_timeout}
+
+      true ->
+        Process.sleep(100)
+        wait_unloaded(spec, opts, deadline)
+    end
   end
 
   def uninstall(spec, opts) do
