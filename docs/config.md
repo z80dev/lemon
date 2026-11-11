@@ -229,7 +229,7 @@ allow = "all"
 deny = []
 require_approval = ["bash", "write", "edit"]
 no_reply = false
-
+# workspace_read_exempt = true # optional tri-state boolean; false wins, nil neutral
 [[gateway.bindings]]
 transport = "telegram"
 chat_id = 12345678
@@ -239,15 +239,18 @@ agent_id = "default"
 Tool policies are parsed strictly by `LemonCore.ToolPolicy`. Unknown profiles,
 unknown or conflicting keys, malformed allow/deny/block/approval values, and
 unsupported approval modes fail closed rather than falling back to full
-access. Omitting `[profiles.<id>.tool_policy]` retains the explicit runtime
+access. `workspace_read_exempt` is a sparse tri-state boolean (`true`, `false`,
+or `nil` when omitted) controlling approval exemption for workspace reads.
+Omitting `[profiles.<id>.tool_policy]` retains the explicit runtime
 default; supplying an invalid table produces a deny-all policy.
 
 `LemonCore.ProfileStore` is the lifecycle owner for user-managed profiles.
 Commands such as `lemon profile create research` patch only the selected
 `[profiles.<id>]` table, preserving unrelated global-config keys and comments.
 Managed records may include `name`, `description`, `avatar`, `model`,
-`system_prompt`, `node`, `status`, `profile_version`, `created_at`, and
-`updated_at`. Home/workspace paths and the stable `agent:<id>:main` session key
+`system_prompt`, `node`, `working_directory` (`"node_default"` or `"profile_files"`),
+`status`, `profile_version`, `created_at`, and `updated_at`.
+Home/workspace/files paths and the stable `agent:<id>:main` session key
 are derived from the validated ID rather than stored; do not add credentials or
 filesystem paths to the profile table. See
 [User-managed profiles](user-guide/profiles.md) for clone, credential-safe

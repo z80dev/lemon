@@ -1462,9 +1462,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
          {:ok, images} <-
            LemonAi.ImageInputs.validate(Map.get(args, "images", Map.get(args, :images, []))),
          {:ok, prompt} <- invocation_prompt(prompt, images),
-         {:ok, cwd} <- invocation_cwd(requested_cwd, state.default_cwd),
          {:ok, meta} <-
            args |> value("meta") |> normalize_meta() |> normalize_invocation_proof(run_id),
+         {:ok, cwd, folder_opts} <-
+           invocation_directory(value(args, "cwdMode"), requested_cwd, meta, state.default_cwd),
          {:ok, execution_context} <- ExecutionContext.decode(value(args, "executionContext")),
          :ok <- validate_context_run_id(execution_context, run_id),
          {:ok, execution_context} <-
@@ -1488,9 +1489,23 @@ defmodule CodingAgent.ExecutionNode.Worker do
         meta: meta
       }
 
-      {:ok, request, %{cwd: cwd, run_id: run_id}}
+      {:ok, request, Map.merge(%{cwd: cwd, run_id: run_id}, folder_opts)}
     end
   end
+
+  defp invocation_directory(nil, requested_cwd, _meta, default_cwd) do
+    with {:ok, cwd} <- invocation_cwd(requested_cwd, default_cwd),
+         do: {:ok, cwd, %{}}
+  end
+
+  defp invocation_directory("profile_files", nil, meta, default_cwd) do
+    with {:ok, cwd} <-
+           CodingAgent.ExecutionNode.BotFolder.ensure(meta[:profile_id] || meta["profile_id"]) do
+      {:ok, cwd, %{bot_folder_root: cwd, config_cwd: default_cwd}}
+    end
+  end
+
+  defp invocation_directory(_, _, _, _), do: {:error, :invalid_cwd}
 
   defp complete_invocation(state, invoke_id, completed) do
     invocation = Map.fetch!(state.invocations, invoke_id)

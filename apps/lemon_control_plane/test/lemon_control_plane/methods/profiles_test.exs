@@ -520,6 +520,98 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
     end
   end
 
+  test "workingDirectory is accepted, validated and echoed in profiles methods" do
+    # Schema validates string type and rejects non-strings
+    assert :ok =
+             Schemas.validate("profiles.create", %{
+               "id" => "wd-test",
+               "workingDirectory" => "profile_files"
+             })
+
+    assert {:error, _} =
+             Schemas.validate("profiles.create", %{
+               "id" => "wd-test",
+               "workingDirectory" => 123
+             })
+
+    assert :ok =
+             Schemas.validate("profiles.update", %{
+               "id" => "wd-test",
+               "workingDirectory" => "profile_files"
+             })
+
+    # Create with workingDirectory: "profile_files"
+    params = %{
+      "id" => "wd-bot",
+      "name" => "WD Bot",
+      "node" => "remote-box",
+      "workingDirectory" => "profile_files"
+    }
+
+    assert {:ok, created} = ProfilesCreate.handle(params, %{})
+    assert created["profile"]["workingDirectory"] == "profile_files"
+
+    assert {:ok, fetched} = ProfilesGet.handle(%{"id" => "wd-bot"}, %{})
+    assert fetched["profile"]["workingDirectory"] == "profile_files"
+
+    # Create without workingDirectory defaults to "node_default"
+    assert {:ok, default_created} =
+             ProfilesCreate.handle(%{"id" => "wd-default", "name" => "Default Bot"}, %{})
+
+    assert default_created["profile"]["workingDirectory"] == "node_default"
+
+    # Create with invalid workingDirectory fails closed
+    assert {:error, {:invalid_request, _}} =
+             ProfilesCreate.handle(
+               %{"id" => "wd-bad", "workingDirectory" => "invalid_mode"},
+               %{}
+             )
+
+    # Update workingDirectory
+    assert {:ok, updated} =
+             ProfilesUpdate.handle(
+               %{"id" => "wd-default", "workingDirectory" => "profile_files"},
+               %{}
+             )
+
+    assert updated["profile"]["workingDirectory"] == "profile_files"
+
+    assert {:ok, fetched_up} = ProfilesGet.handle(%{"id" => "wd-default"}, %{})
+    assert fetched_up["profile"]["workingDirectory"] == "profile_files"
+
+    # Update with invalid workingDirectory
+    assert {:error, {:invalid_request, _}} =
+             ProfilesUpdate.handle(%{"id" => "wd-default", "workingDirectory" => "bogus"}, %{})
+
+    # Clone preserves workingDirectory
+    assert {:ok, cloned} =
+             ProfilesClone.handle(%{"sourceId" => "wd-bot", "id" => "wd-clone"}, %{})
+
+    assert cloned["profile"]["workingDirectory"] == "profile_files"
+
+    # Chat request carries remote_cwd_mode: "profile_files"
+    assert {:ok, _receipt} =
+             ProfileChat.handle(%{"id" => "wd-bot", "prompt" => "Deploy"}, %{})
+
+    assert_receive {:profile_request, request}
+    assert request.meta[:remote_cwd_mode] == "profile_files"
+    assert request.cwd == nil
+  end
+
+  test "node.fs schemas accept optional profileId" do
+    base = %{"nodeId" => "node-1", "path" => "/files/doc.txt", "profileId" => "bot-1"}
+
+    assert :ok = Schemas.validate("node.fs.list", base)
+    assert :ok = Schemas.validate("node.fs.stat", base)
+    assert :ok = Schemas.validate("node.fs.read", base)
+    assert :ok = Schemas.validate("node.fs.write", Map.put(base, "dataBase64", "aGVsbG8="))
+    assert :ok = Schemas.validate("node.fs.mkdir", base)
+
+    for method <- ~w(node.fs.list node.fs.stat node.fs.read node.fs.mkdir) do
+      assert {:error, _} = Schemas.validate(method, Map.put(base, "profileId", 123))
+    end
+  end
+
   defp image do
     %{"type" => "image", "mime_type" => "image/png", "data" => @png_data}
   end

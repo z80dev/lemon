@@ -58,7 +58,9 @@ defmodule CodingAgent.Session.Presentation do
               :native_source_floor_fun,
               :invocation_proof,
               :invocation_proof_verified,
-              :native_managed_context
+              :native_managed_context,
+              :bot_folder_root,
+              :config_cwd
             ])
           )
         )
@@ -128,6 +130,10 @@ defmodule CodingAgent.Session.Presentation do
     |> maybe_add_opt(:resume_source, Keyword.get(opts, :resume_source))
     |> maybe_add_opt(:workspace_dir, Keyword.get(opts, :workspace_dir))
     |> maybe_add_opt(:extra_tools, normalize_extra_tools_opt(Keyword.get(opts, :extra_tools)))
+    |> maybe_add_opt(:bot_folder_root, Keyword.get(opts, :bot_folder_root))
+    |> maybe_add_opt(:config_cwd, Keyword.get(opts, :config_cwd))
+    |> maybe_add_opt(:native_source_profile_id, Keyword.get(opts, :native_source_profile_id))
+    |> maybe_add_opt(:workspace_read_fenced, Keyword.get(opts, :workspace_read_fenced))
   end
 
   @doc """

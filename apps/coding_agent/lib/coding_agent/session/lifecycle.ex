@@ -31,8 +31,11 @@ defmodule CodingAgent.Session.Lifecycle do
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools.Task.Params
   alias CodingAgent.Workspace
+  alias CodingAgent.WorkspaceReads
   alias LemonAgent.ModelRuntime.StreamOptions
   alias LemonAgent.ModelRuntime.ModelRouting
+
+  @fence_entry WorkspaceReads.fence_entry_type()
 
   @spec initialize(keyword(), pid()) ::
           {:ok, Session.t(), Extensions.extension_status_report() | nil}
@@ -66,6 +69,8 @@ defmodule CodingAgent.Session.Lifecycle do
     session_manager = load_or_create_session(cwd, session_file, session_id, parent_session)
     cwd = session_manager.header.cwd
 
+    session_manager = seed_workspace_read_fence(session_manager, opts)
+
     {:ok, session_manager} =
       SessionManager.append_execution_context(
         session_manager,
@@ -86,7 +91,8 @@ defmodule CodingAgent.Session.Lifecycle do
     task_child =
       Keyword.get(opts, :task_child, Keyword.get(opts, :session_scope) in [:subagent, "subagent"])
 
-    settings_manager = Keyword.get(opts, :settings_manager) || SettingsManager.load(cwd)
+    config_cwd = Keyword.get(opts, :config_cwd) || cwd
+    settings_manager = Keyword.get(opts, :settings_manager) || SettingsManager.load(config_cwd)
     budget_limits = Keyword.get(opts, :budget_limits, settings_manager.budgets)
     {session_manager, budget_usage} = BudgetLedger.initialize(session_manager)
 
@@ -176,6 +182,21 @@ defmodule CodingAgent.Session.Lifecycle do
           do: Map.delete(context, :channel_identity),
           else: context
       end)
+      |> then(fn context ->
+        # The folder-read exemption binds the bound workspace scope, and a
+        # restored or inherited fence keeps gating web egress for this session
+        # even if the policy no longer carries the exemption.
+        if is_map(context) do
+          context
+          |> maybe_put_workspace_scope_root(execution_context)
+          |> Map.put(
+            :workspace_read_fenced,
+            not is_nil(SessionManager.latest_custom_entry(session_manager, @fence_entry))
+          )
+        else
+          context
+        end
+      end)
 
     secret_obfuscator =
       SecretObfuscator.for_session(settings_manager, cwd)
@@ -254,7 +275,10 @@ defmodule CodingAgent.Session.Lifecycle do
             agent_id: agent_id,
             hooks: lifecycle.hooks,
             secret_obfuscator: secret_obfuscator,
-            approval_context: approval_context
+            approval_context: approval_context,
+            bot_folder_root: Keyword.get(opts, :bot_folder_root),
+            config_cwd: config_cwd,
+            native_source_profile_id: Keyword.get(opts, :native_source_profile_id)
           },
           session_pid
         )
@@ -530,7 +554,9 @@ defmodule CodingAgent.Session.Lifecycle do
       tool_policy: tool_policy,
       execution_context: execution_context,
       approval_context: approval_context,
-      secret_obfuscator: secret_obfuscator,
+      bot_folder_root: Keyword.get(opts, :bot_folder_root),
+      config_cwd: config_cwd,
+      native_source_profile_id: Keyword.get(opts, :native_source_profile_id),
       extensions: lifecycle.extensions,
       hooks: lifecycle.hooks,
       extension_status_report: lifecycle.extension_status_report,
@@ -593,7 +619,10 @@ defmodule CodingAgent.Session.Lifecycle do
         shared_memory_grant: (state.approval_context || %{})[:shared_memory_grant] == true,
         wasm_tools: wasm_reload.wasm_tools,
         wasm_status: wasm_reload.wasm_status,
-        tool_disclosure: state.tool_disclosure
+        tool_disclosure: state.tool_disclosure,
+        bot_folder_root: state.bot_folder_root,
+        config_cwd: state.config_cwd,
+        native_source_profile_id: state.native_source_profile_id
       ]
       |> Keyword.merge(private_native_opts(state.approval_context))
       |> Keyword.put(
@@ -809,6 +838,37 @@ defmodule CodingAgent.Session.Lifecycle do
     end
   end
 
+  # A restored branch keeps the egress fence it earned, and a `task` child
+  # spawned after its parent was fenced starts fenced too. The state is always
+  # recorded explicitly, so a lost ETS mirror reads as unknown (and therefore
+  # fenced) rather than as a session that never fenced.
+  defp seed_workspace_read_fence(session_manager, opts) do
+    session_id = session_manager.header.id
+    persisted? = not is_nil(SessionManager.latest_custom_entry(session_manager, @fence_entry))
+    inherited? = Keyword.get(opts, :workspace_read_fenced) == true
+
+    WorkspaceReads.register_session(session_id, persisted? or inherited?)
+
+    if inherited? and not persisted? do
+      SessionManager.append_entry(
+        session_manager,
+        SessionManager.SessionEntry.custom(@fence_entry, %{
+          "fenced" => true,
+          "inherited" => true,
+          "timestamp" => System.system_time(:millisecond)
+        })
+      )
+    else
+      session_manager
+    end
+  end
+
+  defp maybe_put_workspace_scope_root(context, %{workspace_scope: %{root: root}})
+       when is_binary(root),
+       do: Map.put_new(context, :workspace_scope_root, root)
+
+  defp maybe_put_workspace_scope_root(context, _execution_context), do: context
+
   defp resolve_approval_context(opts, session_id, tool_policy) do
     approval_context = Keyword.get(opts, :approval_context)
 
@@ -909,7 +969,9 @@ defmodule CodingAgent.Session.Lifecycle do
       :native_source_floor_fun,
       :invocation_proof,
       :invocation_proof_verified,
-      :native_managed_context
+      :native_managed_context,
+      :bot_folder_root,
+      :config_cwd
     ]
   end
 

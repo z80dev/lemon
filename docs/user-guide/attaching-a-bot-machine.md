@@ -135,9 +135,10 @@ starting a worker or connecting to a controller:
 ```
 
 The JSON has `{protocol,lemonVersion,methods,features,botReady,missingFeatures}`.
-Protocol is `1`; `features` has ten booleans: `hostIO`, `filesystemCAS`,
+Protocol is `1`; `features` has ten required booleans: `hostIO`, `filesystemCAS`,
 `deletePreviews`, `encryptedSecrets`, `ptyShell`, `mcpDiscovery`, `profileSync`,
-`liveStreaming`, `repairInvites`, and `nativeExecutionPolicy`. Required Python
+`liveStreaming`, `repairInvites`, and `nativeExecutionPolicy`, plus optional
+`botFolder` for per-Bot working folders. Required Python
 primitives/helper assets, the large native tool-policy JSON envelope and native
 privacy-context protocol version 1 are checked, not assumed. Profile readiness
 includes owning `node.profile.paths`; native policy readiness also requires the
@@ -326,6 +327,28 @@ roots. A PTY is still a full shell running as the destination user: root checks
 are not an OS sandbox and do not restrict commands to those directories. Use a
 dedicated OS account/container and tool policy for stronger isolation. Enrollment
 itself does not isolate bots on the same host.
+
+### Bot folder
+
+Workers advertising `features.botFolder` support profiles with
+`workingDirectory: "profile_files"`. These runs start in the destination's
+`~/.lemon/profiles/<profileId>/files` (0700), separate from managed persona,
+memory and skills files. The validated profile ID determines the path; callers
+cannot supply a folder root. Older workers and `node_default` profiles retain
+the worker's default working directory.
+
+Attachments and relative shared-file paths use the same folder when file RPCs
+carry `profileId`; absolute paths and destination allowed roots remain unchanged.
+The Bot folder is not an OS sandbox. Its project config is not loaded: runtime
+configuration still comes from the worker's default cwd.
+
+With the durable `workspace_read_exempt` policy enabled, safe `read`, `ls` and
+non-following `grep` calls within that folder need no approval. Symlink escapes,
+hard-linked reads and `find` never qualify. The first unreviewed read permanently
+fences that session's `webfetch` and `websearch` behind approval, including after
+restore and in later child tasks. Workspace folder-review policy can disable
+the exemption; a run request alone cannot enable it.
+
 
 ## Files, secrets, and terminal access
 

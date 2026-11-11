@@ -3,6 +3,23 @@ defmodule LemonControlPlane.Methods.NodeHostIOTest do
 
   alias LemonControlPlane.Methods
 
+  test "profile file IDs are validated before destination dispatch" do
+    for handler <- [
+          Methods.NodeFsList,
+          Methods.NodeFsStat,
+          Methods.NodeFsRead,
+          Methods.NodeFsWrite,
+          Methods.NodeFsMkdir
+        ],
+        id <- [nil, "../escape", "/absolute", "a/b"] do
+      assert {:error, {:invalid_request, _}} =
+               handler.handle(
+                 %{"nodeId" => "node-test", "path" => "report.txt", "profileId" => id},
+                 %{}
+               )
+    end
+  end
+
   test "every destination handler declares asynchronous operator authorization" do
     assert Methods.NodeHostInfo.scopes() == [:read]
 

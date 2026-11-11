@@ -40,6 +40,7 @@ defmodule CodingAgent.Application do
       CodingAgent.Session.UserPrompt,
       CodingAgent.MutationLock,
       CodingAgent.FileReadTracker,
+      CodingAgent.WorkspaceReads,
       CodingAgent.ConflictStore,
       CodingAgent.ExecutionNode.FileService,
       CodingAgent.ExecutionNode.ProcessService,

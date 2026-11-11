@@ -12,6 +12,7 @@ defmodule CodingAgent.Tools.Task.Params do
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools.AskParent
   alias CodingAgent.Tools.Task.StructuredOutput
+  alias CodingAgent.WorkspaceReads
   alias LemonAgent.Types.AgentTool
   alias LemonCore.SessionKey
 
@@ -609,6 +610,12 @@ defmodule CodingAgent.Tools.Task.Params do
     parent_state = if is_pid(parent_session), do: inherited_session_state(opts)
     inherited_context = inherited_execution_context(opts, parent_state)
 
+    # A child spawned after the parent made an unreviewed folder read starts
+    # fenced, so the egress gate cannot be escaped through delegation.
+    parent_fenced? =
+      WorkspaceReads.fenced?(parent_session) or
+        (is_map(parent_state) and WorkspaceReads.fenced?(parent_state))
+
     child_policy =
       case {inherited_context.tool_policy, validated[:tool_policy]} do
         {nil, requested} -> requested
@@ -676,6 +683,7 @@ defmodule CodingAgent.Tools.Task.Params do
       |> maybe_put_kw(:session_key, validated[:session_key])
       |> maybe_put_kw(:agent_id, validated[:agent_id])
       |> maybe_put_kw(:extra_tools, child_extra_tools_if_present(child_extra_tools))
+      |> maybe_put_kw(:workspace_read_fenced, if(parent_fenced?, do: true, else: nil))
 
     [
       {:cwd, cwd},
@@ -837,7 +845,9 @@ defmodule CodingAgent.Tools.Task.Params do
       :native_source_floor_fun,
       :invocation_proof,
       :invocation_proof_verified,
-      :native_managed_context
+      :native_managed_context,
+      :bot_folder_root,
+      :config_cwd
     ]
   end
 

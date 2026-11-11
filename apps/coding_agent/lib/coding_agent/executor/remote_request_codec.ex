@@ -130,12 +130,20 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
             "native_root_binding",
             :nativeRootBinding,
             "nativeRootBinding",
+            :remote_cwd_mode,
+            "remote_cwd_mode",
             :remote_cwd,
             "remote_cwd",
             :remote_cwd_explicit,
             "remote_cwd_explicit"
           ])
       }
+
+      payload =
+        case source_meta[:remote_cwd_mode] || source_meta["remote_cwd_mode"] do
+          "profile_files" -> Map.put(payload, "cwdMode", "profile_files")
+          _ -> payload
+        end
 
       json_round_trip(payload, opts)
     end

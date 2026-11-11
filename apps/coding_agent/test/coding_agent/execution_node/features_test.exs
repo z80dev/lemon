@@ -26,7 +26,8 @@ defmodule CodingAgent.ExecutionNode.FeaturesTest do
     assert %{"protocol" => 1, "botReady" => true, "missingFeatures" => [], "features" => flags} =
              Features.snapshot(capabilities(), @opts)
 
-    assert map_size(flags) == 10
+    assert map_size(flags) == 11
+    assert flags["botFolder"]
     assert Enum.all?(Map.values(flags), &(&1 == true))
 
     for {method, flag} <- [

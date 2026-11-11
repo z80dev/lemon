@@ -239,9 +239,9 @@ the router profile registry after mutations:
 | --- | --- | --- | --- |
 | `profiles.list` | read | `{}` | `{profiles,count}` |
 | `profiles.get` | read | `{id}` | `{profile,summary}` |
-| `profiles.create` | admin | `{id,[name,description,avatar,model,systemPrompt,node,mcpServers,toolPolicy]}` | `{profile,summary}` |
-| `profiles.update` | admin | `{id,[name,description,avatar,model,systemPrompt,node,mcpServers,toolPolicy]}` | `{profile,summary}` |
-| `profiles.clone` | admin | `{sourceId,id,[name,description,avatar,model,systemPrompt,node,mcpServers,toolPolicy]}` | `{profile,summary}` |
+| `profiles.create` | admin | `{id,[name,description,avatar,model,systemPrompt,node,workingDirectory,mcpServers,toolPolicy]}` | `{profile,summary}` |
+| `profiles.update` | admin | `{id,[name,description,avatar,model,systemPrompt,node,workingDirectory,mcpServers,toolPolicy]}` | `{profile,summary}` |
+| `profiles.clone` | admin | `{sourceId,id,[name,description,avatar,model,systemPrompt,node,workingDirectory,mcpServers,toolPolicy]}` | `{profile,summary}` |
 | `profile.chat` | write | `{id,prompt,[model,queueMode,images]}` | `{runId,profileId,sessionKey,node,summary}` |
 | `profiles.sync` | admin | `{id,[nodeId,mutationId]}` | `{profileId,nodeId,mutationId,acknowledged,revisionDigest}` |
 | `profiles.sync.status` | read | `{id,nodeId,mutationId}` | `{profileId,nodeId,mutationId,status,acknowledged,revisionDigest}` |
@@ -307,10 +307,14 @@ the complete default connector list for this run. Omission inherits the profile;
 `[]` attaches none. Supplied definitions never merge owner headers or connectors.
 Only operator-authorized requests reach this seam.
 `invocationToolPolicy` also requires `profileId` and uses the same validated
-native shape. Omission or `{}` adds no restriction; `allow: []` denies all.
+native shape, including sparse tri-state `workspace_read_exempt` (`true | false | nil`).
+Omission or `{}` adds no restriction; `allow: []` denies all.
 It intersects rather than replaces persistent/session/node floors, so caller
-grants cannot widen denied or required-approval tools. Profile executions never
+grants cannot widen denied or required-approval tools or introduce
+`workspace_read_exempt: true` when the durable profile lacks it. Profile executions never
 inherit ambient machine-global MCP connections, including explicit `[]`.
+Remote profile executions with `workingDirectory: "profile_files"` run in the
+profile's derived sibling `files` directory when `cwd` is omitted (default is `"node_default"`).
 Profile-owned skills load metadata from the destination profile's
 `workspace/.lemon/skill/<key>/SKILL.md`, independently of execution cwd;
 `read_skill` lazily loads the full body through the owning skill registry.
