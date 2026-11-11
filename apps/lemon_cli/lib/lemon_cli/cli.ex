@@ -76,6 +76,12 @@ defmodule LemonCli.CLI do
     :ok = :io.setopts(:standard_io, encoding: :unicode)
     :ok = :io.setopts(:standard_error, encoding: :unicode)
 
+    # One-shot commands start core services too, but their boot chatter is not
+    # command output. Keep warnings/errors and long-running log streams intact.
+    unless List.first(argv) in ["node", "logs"] do
+      :ok = :logger.set_primary_config(:level, :warning)
+    end
+
     exit_code =
       LogSilencer.with_quiet_logs(
         "--json" in argv or List.first(argv) in ["run", "-p", "--print", "acp", "setup"],

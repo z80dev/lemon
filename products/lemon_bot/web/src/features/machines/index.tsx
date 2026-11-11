@@ -25,17 +25,17 @@ function MachineList() {
 }
 
 function AttachMachine({ machineId }: { machineId?: string }) {
-  const { client, navigate, online, realtime, snapshot, reportError } = useApp()
+  const { client, navigate, online, realtime, snapshot, reportError } = useApp();
   const [target, setTarget] = useState(machineId);
   const [name, setName] = useState('');
-  const [nodeName, setNodeName] = useState('');
   const [purpose, setPurpose] = useState('');
   const [labels, setLabels] = useState<{ key: string; value: string }[]>([]);
   const [expiry, setExpiry] = useState(15);
-  const [trusted, setTrusted] = useState(false);
+  const [destination, setDestination] = useState('other');
   const [invite, setInvite] = useState<MachineInvite>();
   const [copied, setCopied] = useState(false);
   const intent = useIntent();
+  const preflight = useQuery('machine-enrollment-preview', () => client.call('GET /machines/enrollment-preview'));
   const state = useQuery(`enrollment:${target || 'new'}`, async () => {
     if (!target) return null;
     const [machine, invites] = await Promise.all([client.call('GET /machines/:id', { params: { id: target } }), client.call('GET /machines/:id/invites', { params: { id: target }, query: { limit: 200 } })]);
@@ -52,13 +52,80 @@ function AttachMachine({ machineId }: { machineId?: string }) {
   const expired = !!current && current.expiresAtMs <= Date.now() && current.status === 'pending';
   const verified = !state.error && online && machine?.status === 'online' && machine.nodeId !== null;
   const progress = state.error ? 'verification_unavailable' : verified ? 'online' : machine?.status === 'offline' && current?.status === 'joined' ? 'offline' : expired ? 'expired' : current?.enrollment || 'invited';
-  return <main className="page stack"><PageHeader title={target ? 'Connect this machine' : 'Connect a machine'} eyebrow="Add a machine you control" /><PrivilegeWarning /><ErrorNotice error={state.error} /><IntentNotice intent={intent} reconcile={async () => { if (target) await state.reload(); else { await client.call('GET /machines', { query: { limit: 200 } }); navigate({ screen: 'machines' }); } }} />{!target ? <form className="panel stack" onSubmit={event => { event.preventDefault(); void intent.run(async () => {
-    const labelMap: Record<string, string> = {};
-    for (const label of labels) { if (!label.key || label.key in labelMap) throw new Error('Label keys must be nonempty and unique.'); labelMap[label.key] = label.value; }
-    if (purpose) { if ('purpose' in labelMap) throw new Error('Purpose already has a label entry. Use the Purpose field or one purpose label, not both.'); labelMap.purpose = purpose; }
-    const result = await client.call('POST /machines', { body: { clientNonce: nonce(), name, nodeName, labels: labelMap, expiresInMs: expiry * 60000 } });
-    setTarget(result.machine.id); setInvite(result.invite);
-  }); }}><Field label="Friendly name"><input required maxLength={120} value={name} onChange={event => setName(event.target.value)} /></Field><Field label="Machine ID" hint="Letters, numbers, dots and dashes. Reconnecting with the same ID reuses this machine."><input required pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}" value={nodeName} onChange={event => setNodeName(event.target.value)} /></Field><Field label="Purpose"><input maxLength={256} value={purpose} onChange={event => setPurpose(event.target.value)} /></Field><fieldset className="stack"><legend>Machine labels</legend>{labels.map((label, index) => <div className="row" key={index}><input aria-label={`Label ${index + 1} key`} required maxLength={256} value={label.key} onChange={event => setLabels(values => values.map((value, position) => position === index ? { ...value, key: event.target.value } : value))} /><input aria-label={`Label ${index + 1} value`} maxLength={256} value={label.value} onChange={event => setLabels(values => values.map((value, position) => position === index ? { ...value, value: event.target.value } : value))} /><button type="button" onClick={() => setLabels(values => values.filter((_, position) => position !== index))}>Remove</button></div>)}<button type="button" disabled={labels.length >= 31} onClick={() => setLabels(values => [...values, { key: '', value: '' }])}>Add label</button></fieldset><Field label="Invite lifetime (minutes)"><input type="number" min={1} max={1440} required value={expiry} onChange={event => setExpiry(Number(event.target.value))} /></Field><label className="row"><input type="checkbox" checked={trusted} onChange={event => setTrusted(event.target.checked)} />I own or administer this machine and accept that Bots have full access as its computer user.</label><button className="primary" disabled={!trusted || !canManage || intent.disabled}>Issue one-use join command</button></form> : <section className="panel stack"><div className="row spread"><h2>{machine?.name || 'Enrollment'}</h2><Badge tone={verified ? 'good' : 'warning'}>{progress.replaceAll('_', ' ')}</Badge></div><ol className="machine-steps" aria-label="Observed enrollment progress">{['invited', 'waiting_for_join', 'connecting', 'verifying', 'online'].map(step => <li key={step} aria-current={step === progress ? 'step' : undefined}>{step.replaceAll('_', ' ')}</li>)}</ol><p role="status">{verified ? 'This machine is confirmed online.' : 'Waiting for this machine to connect. Copying the command does not install or connect it.'}</p>{current && <><Field label="Exact server join command"><textarea readOnly rows={4} spellCheck={false} value={current.joinCommand} /></Field><p className="small">One-use code: <code>{current.inviteCode}</code> · Expires {formatTime(current.expiresAtMs)} · {current.status}</p><button disabled={expired || current.status !== 'pending'} onClick={() => { void navigator.clipboard.writeText(current.joinCommand).then(() => setCopied(true)).catch(error => { setCopied(false); throw error; }).catch(error => reportError(error)); }}>{copied ? 'Command copied (not enrollment proof)' : 'Copy exact join command'}</button>{current.lastError && <p className="error-notice" role="alert">{current.lastError}</p>}{canManage && current.status === 'pending' && <button className="danger" disabled={intent.disabled} onClick={() => void intent.run(async () => { await client.call('DELETE /machines/:id/invites/:inviteId', { params: { id: target, inviteId: current.id }, body: { clientNonce: nonce() } }); await state.reload(); setInvite(undefined); })}>Revoke this invite</button>}</>}{canManage && <><Field label="Repair invite lifetime (minutes)"><input type="number" min={1} max={1440} value={expiry} onChange={event => setExpiry(Number(event.target.value))} /></Field><button disabled={intent.disabled || expiry < 1 || expiry > 1440} onClick={() => void intent.run(async () => { setInvite(await client.call('POST /machines/:id/reconnect', { params: { id: target }, body: { clientNonce: nonce(), expiresInMs: expiry * 60000 } })); setCopied(false); await state.reload(); })}>Reissue / reconnect same identity</button></>}<button onClick={() => navigate({ screen: 'machine.detail', id: target })}>Inspect machine</button></section>}<section className="panel"><h2>On the destination machine</h2><ol><li>Run the command shown above on your machine. It installs Lemon if needed and connects using a one-use invite.</li><li>Configure model/provider authentication and the default working directory locally. Do not paste provider credentials into chat.</li><li>Ensure this machine can reach Lemon and your Lemon Bot server, including its MCP address.</li><li>Keep the Lemon worker running with your machine’s service manager. Closing this browser does not stop Bots; stopping the worker does.</li></ol></section></main>;
+  const loopbackOnly = preflight.data?.reachability === 'loopback_only';
+  const canIssue = online && canManage && !intent.disabled && !preflight.error && !!preflight.data && (!loopbackOnly || destination === 'this') && expiry >= 1 && expiry <= 1440;
+  async function checkReachability() {
+    const preview = await client.call('GET /machines/enrollment-preview');
+    if (preview.reachability === 'loopback_only' && destination !== 'this') {
+      await preflight.reload();
+      throw new Error('This controller only accepts same-computer joins. Choose This computer or configure a reachable wss:// controller.');
+    }
+  }
+  const reachability = <section className="stack" aria-label="Controller reachability">
+    <ErrorNotice error={preflight.error} />
+    {!preflight.data && !preflight.error && <Loading label="Checking controller reachability…" />}
+    {loopbackOnly && <>
+      <p>This controller is loopback-only. Its join command works only on the computer running the controller, which may not be the computer running this browser.</p>
+      <fieldset className="stack"><legend>Where will you run the join command?</legend>
+        <label className="row"><input type="radio" name="destination" value="this" checked={destination === 'this'} onChange={() => setDestination('this')} />This computer — the controller’s computer</label>
+        <label className="row"><input type="radio" name="destination" value="other" checked={destination === 'other'} onChange={() => setDestination('other')} />Another computer</label>
+      </fieldset>
+      <p>Other computers need a reachable <code>wss://</code> controller before you issue an invite. <a href="https://lemon.food/user-guide/attaching-a-bot-machine#prepare-the-controller" target="_blank" rel="noopener noreferrer">Set up controller TLS and routing</a>.</p>
+    </>}
+    {preflight.data?.reachability === 'routable' && <p className="muted">The controller advertises a secure network address. The destination must be able to reach it; this check does not test its network connection.</p>}
+    <button type="button" disabled={preflight.loading || !online} onClick={() => void preflight.reload().catch(reportError)}>Check controller reachability</button>
+  </section>;
+  return <main className="page stack">
+    <PageHeader title={target ? 'Connect this computer' : 'Connect a computer'} eyebrow="Add a machine you control" />
+    <ErrorNotice error={state.error} />
+    <IntentNotice intent={intent} reconcile={async () => { if (target) await state.reload(); else { await client.call('GET /machines', { query: { limit: 200 } }); navigate({ screen: 'machines' }); } }} />
+    {!target ? <form className="panel stack" onSubmit={event => { event.preventDefault(); if (!canIssue) return; void intent.run(async () => {
+      const labelMap: Record<string, string> = {};
+      for (const label of labels) { if (!label.key || label.key in labelMap) throw new Error('Label keys must be nonempty and unique.'); labelMap[label.key] = label.value; }
+      if (purpose) { if ('purpose' in labelMap) throw new Error('Purpose already has a label entry. Use the Purpose field or one purpose label, not both.'); labelMap.purpose = purpose; }
+      await checkReachability();
+      const nodeName = name.toLowerCase().replace(/[^a-z0-9._-]/g, '').replace(/^[^a-z0-9]+/, '').slice(0, 64) || 'lemon-host';
+      const result = await client.call('POST /machines', { body: { clientNonce: nonce(), name: name.trim(), nodeName, labels: labelMap, expiresInMs: expiry * 60000 } });
+      setTarget(result.machine.id); setInvite(result.invite);
+    }); }}>
+      <Field label="Friendly name"><input required maxLength={120} value={name} onChange={event => setName(event.target.value)} /></Field>
+      <details><summary>Advanced</summary><div className="stack">
+        <Field label="Purpose"><input maxLength={256} value={purpose} onChange={event => setPurpose(event.target.value)} /></Field>
+        <fieldset className="stack"><legend>Machine labels</legend>{labels.map((label, index) => <div className="row" key={index}>
+          <input aria-label={`Label ${index + 1} key`} maxLength={256} value={label.key} onChange={event => setLabels(values => values.map((value, position) => position === index ? { ...value, key: event.target.value } : value))} />
+          <input aria-label={`Label ${index + 1} value`} maxLength={256} value={label.value} onChange={event => setLabels(values => values.map((value, position) => position === index ? { ...value, value: event.target.value } : value))} />
+          <button type="button" onClick={() => setLabels(values => values.filter((_, position) => position !== index))}>Remove</button>
+        </div>)}<button type="button" disabled={labels.length >= 31} onClick={() => setLabels(values => [...values, { key: '', value: '' }])}>Add label</button></fieldset>
+        <Field label="Invite lifetime (minutes)"><input type="number" min={1} max={1440} value={expiry} onChange={event => setExpiry(Number(event.target.value))} /></Field>
+      </div></details>
+      {reachability}
+      <p>By connecting, you confirm you own or administer this computer and accept that Bots work as its computer user, with access to its files, tools and logins.</p>
+      <button className="primary" disabled={!canIssue || !name.trim()}>Issue one-use join command</button>
+    </form> : <section className="panel stack">
+      <div className="row spread"><h2>{machine?.name || 'Enrollment'}</h2><Badge tone={verified ? 'good' : 'warning'}>{progress.replaceAll('_', ' ')}</Badge></div>
+      <p role="status" aria-live="polite">{verified ? 'This computer is confirmed online.' : state.error ? 'Connection status could not be verified.' : 'Waiting for this computer to connect. Copying the command does not install or connect it.'}</p>
+      {verified && <button className="primary" onClick={() => { const route = { screen: 'bot.create', machineId: target }; navigate(route); }}>Online — Create a Bot here</button>}
+      {current && <>
+        <Field label="Exact server join command"><textarea readOnly rows={4} spellCheck={false} value={current.joinCommand} /></Field>
+        <p className="small">One-use code: <code>{current.inviteCode}</code> · Expires {formatTime(current.expiresAtMs)} · {current.status}</p>
+        <button disabled={expired || current.status !== 'pending'} onClick={() => { void navigator.clipboard.writeText(current.joinCommand).then(() => setCopied(true)).catch(error => { setCopied(false); reportError(error); }); }}>{copied ? 'Command copied (not enrollment proof)' : 'Copy exact join command'}</button>
+        {current.lastError && <p className="error-notice" role="alert">{current.lastError}</p>}
+        {canManage && current.status === 'pending' && <button className="danger" disabled={intent.disabled} onClick={() => void intent.run(async () => { await client.call('DELETE /machines/:id/invites/:inviteId', { params: { id: target, inviteId: current.id }, body: { clientNonce: nonce() } }); await state.reload(); setInvite(undefined); })}>Revoke this invite</button>}
+      </>}
+      {canManage && <details><summary>Reconnect this computer</summary><div className="stack">
+        {reachability}
+        <Field label="Repair invite lifetime (minutes)"><input type="number" min={1} max={1440} value={expiry} onChange={event => setExpiry(Number(event.target.value))} /></Field>
+        <button disabled={!canIssue} onClick={() => void intent.run(async () => { await checkReachability(); setInvite(await client.call('POST /machines/:id/reconnect', { params: { id: target }, body: { clientNonce: nonce(), expiresInMs: expiry * 60000 } })); setCopied(false); await state.reload(); })}>Reissue / reconnect same identity</button>
+      </div></details>}
+      <button onClick={() => navigate({ screen: 'machine.detail', id: target })}>Inspect machine</button>
+    </section>}
+    <section className="panel"><h2>On the destination computer</h2><ol>
+      <li>Run the command shown above on your computer. It installs Lemon if needed and connects using a one-use invite.</li>
+      <li>Configure model/provider authentication and the default working directory locally. Do not paste provider credentials into chat.</li>
+      <li>Ensure this computer can reach Lemon and your Lemon Bot server, including its MCP address.</li>
+      <li>Keep the Lemon worker running with your computer’s service manager. Closing this browser does not stop Bots; stopping the worker does.</li>
+    </ol></section>
+  </main>;
 }
 
 function MachineScreen({ route }: { route: Route }) {

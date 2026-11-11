@@ -89,6 +89,7 @@ struct SidebarView: View {
         #endif
         .task(id: previewKey) { await loadPreviews() }
         #if os(macOS)
+        .task(id: store.hostSetupTrigger) { Task { await store.automaticallySetUpHostMachine() } }
         .popover(isPresented: $showConnection) { ScrollView { ConnectionStatusView(store: store).padding(12) }.frame(width: 440, height: 520) }
         #else
         .sheet(isPresented: $showConnection) {
@@ -108,6 +109,11 @@ struct SidebarView: View {
         #endif
         if !pinned.isEmpty { pinnedRow.padding(.bottom, 10).sidebarRow() }
         utilityRows
+        #if os(macOS)
+        if !store.bots.isEmpty {
+            HostOfflineBanner(store: store, bot: store.bots.first { $0.id == selectedBotID }).sidebarRow()
+        }
+        #endif
         if store.bots.isEmpty { setupRow.sidebarRow() }
         botList
         roomList
@@ -276,11 +282,6 @@ struct SidebarView: View {
             }
         }
         .padding(.horizontal, 4).padding(.vertical, 8)
-        #if os(macOS)
-        .task(id: "\(store.account?.id ?? "")|\(store.connectionState)|\(store.machines.count)") {
-            if store.shouldSetUpHost { await store.setUpHostMachine() }
-        }
-        #endif
     }
 
     @ViewBuilder private var attachContent: some View {
@@ -567,6 +568,46 @@ struct SidebarView: View {
         await action.perform { let _: LemonBotKit.Section = try await store.mutate("PATCH", resourcePath("sections", section.id), body: ["revision": .number(Double(section.revision)), "collapsed": .bool(collapsed)]); try await store.refresh() }
     }
 }
+
+/// A persistent recovery surface shared by the Bot list and conversation header.
+#if os(macOS)
+struct HostOfflineBanner: View {
+    let store: LemonBotStore
+    let bot: Bot?
+    var belowHeader = false
+
+    private var machine: Machine? {
+        if let bot { return store.machines.first { $0.id == bot.machineId && $0.status == "offline" } }
+        return store.machines.first { $0.nodeName == store.hostMachineNodeName && $0.status == "offline" }
+    }
+
+    var body: some View {
+        if let machine {
+            SoftCard(fill: LB.raised) {
+                Text("\(machine.name) is offline").font(LBFont.rowTitle).foregroundStyle(LB.ink)
+                if store.hostRoute != nil && machine.nodeName == store.hostMachineNodeName && ["owner", "admin"].contains(store.member?.role ?? "") {
+                    switch store.hostSetup {
+                    case .running(let step):
+                        HStack { ProgressView().controlSize(.small); Text(step).font(LBFont.meta) }
+                    case .failed(let message, let detail):
+                        Text(message).font(LBFont.meta).foregroundStyle(LB.danger)
+                        if let detail {
+                            DisclosureGroup("Details") { Text(detail).font(LBFont.code).textSelection(.enabled) }
+                        }
+                        Button("Try again") { Task { await store.setUpHostMachine() } }.buttonStyle(.lemonPrimary)
+                            .disabled(!store.isOnline)
+                    case .idle, .done:
+                        Button("Start it") { Task { await store.setUpHostMachine() } }.buttonStyle(.lemonPrimary)
+                            .disabled(!store.isOnline)
+                    }
+                } else {
+                    Text("Ask this machine’s owner to start its Lemon worker.").font(LBFont.meta).foregroundStyle(LB.muted)
+                }
+            }.padding(8).padding(.top, belowHeader ? 76 : 0)
+        }
+    }
+}
+#endif
 
 private extension View {
     /// Row chrome for the iOS List container (no separators/backgrounds, tight insets); no-op on macOS.

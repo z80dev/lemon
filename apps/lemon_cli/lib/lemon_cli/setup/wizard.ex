@@ -121,7 +121,7 @@ defmodule LemonCli.Setup.Wizard do
      replaced by the next free one after a `[Y/n]` confirmation (automatically
      in non-interactive mode) and saved to `~/.lemon/ports.env`. Ports owned
      by an already running Lemon are left alone.
-  7. Print a summary that only claims completion after a passing live check.
+  7. Print completion after a passing live check or a saved provider without a live check.
 
   The runtime profile is not part of first-run setup: the installer chooses it.
 
@@ -400,6 +400,8 @@ defmodule LemonCli.Setup.Wizard do
           end
 
         if answer do
+          io.info.("Checking available providers…")
+
           provider_args =
             ["--config-path", config_path, "--set-default"] ++
               if(forced, do: ["--provider", forced], else: []) ++
@@ -519,7 +521,7 @@ defmodule LemonCli.Setup.Wizard do
 
   defp step_offer_launch(io, state, result, non_interactive?, opts) do
     if interactive?(io, non_interactive?) and Keyword.get(opts, :launch, true) and
-         Verification.pending_steps(state) == [] and match?({:ok, %{live: :ok}}, result) and
+         Verification.pending_steps(state) == [] and launch_ready?(result) and
          prompt_yes?("Open Lemon now?", io) do
       launcher = Keyword.get(opts, :launcher, &launch_tui/0)
 
@@ -529,6 +531,9 @@ defmodule LemonCli.Setup.Wizard do
       end
     end
   end
+
+  defp launch_ready?({:ok, %{live: live}}), do: live in [:ok, :skipped]
+  defp launch_ready?(_result), do: false
 
   defp launch_tui do
     case System.get_env("LEMON_LAUNCHER") || System.find_executable("lemon") do
@@ -571,11 +576,19 @@ defmodule LemonCli.Setup.Wizard do
 
         io.info.("")
 
+      {[], {:ok, %{live: :skipped, provider: provider}}} ->
+        io.info.(
+          "Saved. #{provider} has no quick live check; Lemon will confirm it on your first message."
+        )
+
+        io.info.("Setup complete.")
+        io.info.("")
+
       {[], result} when result == :ok or elem(result, 0) == :ok ->
         io.info.("Configuration saved, but the provider was not live-verified.")
 
         io.info.(
-          "Run `lemon setup` without --skip-verify to check it, or `lemon doctor` for diagnostics."
+          "Live verification was deferred. Run `lemon setup` to check it, or `lemon doctor` for diagnostics."
         )
 
         io.info.("")

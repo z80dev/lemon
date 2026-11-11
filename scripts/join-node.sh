@@ -100,9 +100,18 @@ else
     compatible "$lemon_bin" || fail 'The installed Lemon runtime is incompatible with the configured build'
   fi
 fi
+printf 'Connecting %s. Keep this running while you use this machine; for service installation, see https://lemon.food/user-guide/attaching-a-bot-machine.\n' "$name"
 # printf is a Bash builtin: the credential never becomes a process argument or environment value.
 # Exactly one enrollment attempt; uncertain outcomes must be reconciled by the owner.
 printf '%s\n' "$code" | LEMON_GATEWAY_HEALTH_PORT=0 LEMON_ROUTER_HEALTH_PORT=0 \
-  "$lemon_bin" node join --name "$name" --controller "$controller" --invite-code-stdin
+  "$lemon_bin" node join --name "$name" --controller "$controller" --invite-code-stdin |
+  while IFS= read -r line; do
+    printf '%s\n' "$line"
+    case "$line" in
+      "Execution node online"*)
+        printf '%s is online. Keep this running, or install it as a service: https://lemon.food/user-guide/attaching-a-bot-machine\n' "$name"
+        ;;
+    esac
+  done
 }
 main "$@"

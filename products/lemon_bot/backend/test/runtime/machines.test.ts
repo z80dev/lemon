@@ -6,6 +6,29 @@ import { fixture, compatibleFeatures } from './fixture';
 const stat = { path: '/home/worker/result.txt', type: 'regular', size: 3, mtimeMs: 101, mode: 0o600, mime: 'text/plain', readable: false, writable: true };
 
 describe('privileged destination machine boundary', () => {
+  test('enrollment preview projects authoritative loopback and wss reachability without issuing an invite or exposing secrets', async () => {
+    const f = fixture(); const routes = createMachineRoutes(f.services);
+    const route = routes.find(route => route.path === '/v1/machines/enrollment-preview')!;
+    try {
+      expect(route.auth).toBe('admin');
+      for (const reachability of ['loopback_only', 'routable'] as const) {
+        f.rpc = async method => {
+          expect(method).toBe('node.pair.preview');
+          return { reachability, controllerUrl: 'wss://private.example/ws', operatorToken: f.services.config.operatorToken };
+        };
+        expect(await route.handler(f.context(route, undefined))).toEqual({ reachability });
+      }
+      expect(f.calls.every(call => !call.mutation)).toBe(true);
+      expect(f.store.list('machineInvites')).toEqual([]);
+      f.rpc = async () => ({ reachability: 'unknown' });
+      await expect(route.handler(f.context(route, undefined))).rejects.toMatchObject({ code: 'upstream_unavailable' });
+      f.disconnect();
+      const dispatched = f.calls.length;
+      await expect(route.handler(f.context(route, undefined))).rejects.toMatchObject({ code: 'upstream_unavailable' });
+      expect(f.calls).toHaveLength(dispatched);
+    } finally { getTerminalService(f.services).dispose(); f.store.close(); }
+  });
+
   test('accepts live authenticated privacy capability descriptors without inventing grants', async () => {
     const f = fixture();
     f.rpc = async method => {

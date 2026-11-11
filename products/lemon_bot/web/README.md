@@ -43,6 +43,17 @@ Only explicit button actions mutate pairing/device state. Refresh and polling us
 - **Settings:** owner account/password/sessions/devices, cluster identity, appearance, notifications/voice, policies, usage/spend limits and necessary provider/network/host configuration. Ordinary chat does not require directory, SCIM or enterprise setup.
 - **Connections:** machine-labelled MCP setup/tool controls/account consent, real channel install/link flows, email availability/approval/claim/read/search and X account setup. Unconfigured providers show their actual prerequisites, never fake connected state.
 
+Bot access on web and Mac is grouped into Everyday, collapsed Control this Mac,
+and Connections. Controls use Off / View only / Full; Terminal cannot enforce
+View only. Machine measurements provide capability names and human status
+messages; differing requested/effective access shows a warning and next step.
+The single Why disclosure retains raw reasons and shared policy explanations.
+Desktop and session-scoped capabilities that have no native grant mapping are
+inspection-only here; configure them on the assigned machine or in Connections.
+Saving applies the returned grant immediately; Refresh access rechecks the
+machine. Finish active Bot work before changing access. These controls do not
+change workspace review policy or request macOS privacy permissions.
+
 The canonical [API](../contracts/api.md), [cards](../contracts/cards.md) and [coverage](../contracts/coverage.md) define wire schemas, ACLs, state machines and provider prerequisites. This guide does not claim exercised coverage.
 
 ## Keyboard and accessibility

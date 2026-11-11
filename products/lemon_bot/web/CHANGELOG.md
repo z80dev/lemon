@@ -6,6 +6,8 @@
 
 - Bot setup defaults to explicit Standard access, preselects the sole online owned computer, and keeps optional customization collapsed. Import and duplicate confirm their own access choice; empty chats offer one-click starter tasks.
 
+- Connecting a computer needs only its friendly name, with optional settings under Advanced. Loopback controllers require an explicit same-computer choice before issuing an invite; verified online enrollment offers Create a Bot on that machine.
+- Web and Mac grants use measured names, grouped Off / View only / Full controls, actionable status, and one Why disclosure; saved grants update from the server response.
 - Reply chips show the original author and a short message preview; Send has a keyboard-focus tooltip.
 - Standardized computer connection setup as “Connect a computer” and raised status badges to 12px. Narrow sidebar headers keep their New Bot button on the logo row, truncating long connection labels instead.
 - Load feature screens on demand instead of bundling all routes into the initial client chunk.

@@ -1,5 +1,8 @@
 # Runtime changes
 
+## 2026-11-10
+- Lead runtime approvals with a bounded redacted action and tool/machine provenance on web and Apple clients; keep technical context in Details and replace resolved decision buttons with an attributed result. Approval scopes and input redaction are unchanged.
+
 ## 2026-10-14
 - Cut runtime fixtures and fresh native-F admission over to one actual human owner: source/parent/helper Bots and execution hosts must match that owner even under legacy ACLs or cached receipts. Preserve six-field fresh proofs, fixed-ID no-replay behavior and restrictive owner-native policy floors; reject foreign roles/proofs without replacing the actor. Use canonical owner-only resources and stable assigned-profile memory identity, not removed Team sharing, consent or per-user note fields.
 - Select the exact native Run owner before control aliases when projecting steering/interruption targets and approvals; equal timestamps or alias ordering cannot redirect receipts to the new control request.

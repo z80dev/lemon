@@ -1998,6 +1998,21 @@ public struct MachineInvite: Codable, Hashable, Identifiable {
     }
 }
 
+public struct MachineEnrollmentPreview: Codable, Hashable {
+    public var reachability: String
+    public init(reachability: String) {
+        self.reachability = reachability
+    }
+    enum CodingKeys: String, CodingKey { case reachability }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        reachability = try c.decode(String.self, forKey: .reachability)
+        guard ["loopback_only", "routable"].contains(reachability) else {
+            throw DecodingError.dataCorruptedError(forKey: .reachability, in: c, debugDescription: "Invalid MachineEnrollmentPreview.reachability")
+        }
+    }
+}
+
 public struct MachineAttach: Codable, Hashable {
     public var `clientNonce`: String
     public var `name`: String

@@ -4,6 +4,11 @@ Native SwiftUI clients for the independent Lemon Bot product backend. macOS and 
 
 Sidebar previews retain loaded messages offline; uncached rows say “Messages load when you're online.” Section headings expose expanded/collapsed state to VoiceOver, explain offline availability, and pinned Bots announce selection. On Mac, record global shortcuts in Settings rather than typing shortcut syntax; Previous/Next Bot are listed in the Conversation menu (⌘[/⌘]).
 
+Machine Bot access uses the same [grouped grants controls](../web/README.md#assistant-destinations)
+as web: measured capability names, Off / View only / Full, warnings only when
+effective access differs, and one Why disclosure for raw reasons and policy.
+Desktop permissions remain inspection-only; these controls never prompt for TCC.
+
 ## End-user release packaging
 
 End users open the notarized DMG, drag **Lemon Bot** to **Applications**, and launch
@@ -158,9 +163,9 @@ backend's client-redirect allowlist. Its confidential IdP credential stays
 server-side; native flow uses PKCE. iPhone onboarding prioritizes connecting to
 your already signed-in desktop, not enterprise setup or invitations.
 
-Bots need a machine: a Lemon execution node. When nothing is online yet, the
-sidebar's first-run card sets up the machine you connected to on its own and then
-offers **Create a Bot** (the editor preselects the only online machine). For an
+Bots need a machine: a Lemon execution node. The workspace sets up an empty
+deployment or repairs an offline connected host independently of Bot count. With
+no Bots, the first-run card then offers **Create a Bot** (the editor preselects the only online machine). For an
 owner or admin it reads the host name, creates the machine (`POST /v1/machines`)
 or reissues a repair invite for an existing one with the same node name, and runs
 `HostEnrollment.script` there — locally or over the same `ssh`. The script picks a
@@ -171,8 +176,14 @@ hands the worker to a `org.lemon.node.<name>` LaunchAgent on macOS or a
 `lemon-node-<name>.service` systemd user unit on Linux, with your login shell's
 `PATH` and a log in `~/.lemon/logs/node-<name>.log`. Success is reported only once
 the backend sees the machine online. A machine that is already enrolled just gets
-its worker restarted under that supervisor. Failures stay on the card with
-**Try again** and **Attach another way** (the manual join command).
+its worker restarted under that supervisor. Offline machines remain visible in a
+banner in the Bot list and conversation with **Start it**, progress, and failures
+with **Details** and **Try again**. Failed attempts are never retried automatically.
+Only owners/admins on This Mac or SSH connections get the start action; other
+connections and Bots assigned to another host explain that the machine’s owner
+must start the worker. Repair stops only the named launchd/systemd unit, never
+processes matched by command text. Previously unsupervised workers must be stopped
+manually before repair; the app does not guess their process ownership.
 
 To check the flow by hand: with Lemon Bot stopped, choose **This Mac** and confirm
 it starts and opens the workspace with no form; quit and relaunch and confirm the

@@ -35,12 +35,14 @@ asks about ports if one is already taken, and suggests a free one. Do not paste
 credentials into chat or a repository. Coming from Hermes? Run
 `lemon migrate hermes` after setup.
 
-Setup prints **Setup complete** only after a passing live credential check. If
-you installed with `--skip-setup`, had no terminal when installing, or stopped
-setup early, run it now:
+Setup prints **Setup complete** after a passing live credential check, or after
+saving a provider with no quick live check. In the latter case, Lemon confirms
+the connection on your first message. Both paths offer **Open Lemon now? [Y/n]**.
+If you installed with `--skip-setup`, had no terminal, or stopped setup early,
+run the installer's absolute-path next step:
 
 ```bash
-lemon setup
+"$HOME/.lemon/bin/lemon" setup
 ```
 
 (If `lemon` is not found in the terminal you installed from, open a new

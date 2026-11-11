@@ -64,9 +64,10 @@ touches `config.toml`, secrets, or the store.
 ### First run
 
 Complete the setup prompts: provider, sign-in or API key, and default model.
-Setup verifies the provider and, when the check passes, offers **Open Lemon now?**
-Accept it to open the terminal UI and send your first message. Later, open a new
-terminal (or `export PATH="$HOME/.lemon/bin:$PATH"` in the current one) and run:
+Setup prints **Setup complete** and offers **Open Lemon now? [Y/n]** after a live
+check passes or a provider without a quick check is saved. For the latter,
+the connection is confirmed on your first message. An explicitly deferred check
+does not offer to open Lemon. Later, open a new terminal and run:
 
 ```bash
 lemon            # interactive terminal: opens the TUI, starting a daemon if needed
@@ -88,7 +89,7 @@ starting an unconfigured daemon. Details are in [Set up Lemon](user-guide/setup.
 | `--profile NAME` | Select `full`, `min`, or `lemon_bot`. Same as `LEMON_PROFILE`. |
 | `--force` | Reinstall a version that is already present. |
 | `--verify` | Boot the installed runtime on ephemeral ports in a throwaway `HOME` and poll `/healthz` before finishing. |
-| `--no-modify-path` | Do not edit your shell rc file; print the PATH line instead. |
+| `--no-modify-path` | Do not edit your shell rc file; the final next step uses the launcher's absolute path. |
 | `--skip-setup` | Install without starting the setup wizard. |
 | `--require-bot` | Worker hosts: install only the `full` or `min` runtime (never `lemon_bot` or the TUI) and refuse to promote it unless `lemon node capabilities --json --require-bot --expected-version <manifest version>` passes on the staged tree. |
 | `--resolve-version` | Print the version this run would install, then exit. |
@@ -160,6 +161,12 @@ To add the launcher to PATH yourself:
 ```bash
 export PATH="$HOME/.lemon/bin:$PATH"
 ```
+
+The installer ends with one absolute-path **Next:** command, so it also works
+in the current shell before PATH changes take effect. It points to setup when
+setup was skipped, otherwise the launcher. The backend-only `lemon_bot` profile
+uses `~/.local/bin/lemon-bot` and adds `~/.local/bin` to new shells' PATH under
+the same rules.
 
 ## Headless and non-interactive installs
 

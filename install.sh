@@ -688,11 +688,11 @@ path_hint() {
         printf '%s\n' "$path_line"
       } >>"$rc_file"
     fi
-    PATH_NOTE="New shells will find lemon. To use it in this shell, run: $path_line"
+    PATH_NOTE="New shells will find $LAUNCHER."
     return 0
   fi
 
-  PATH_NOTE="$BIN_DIR is not on your PATH. Add it with: $path_line"
+  PATH_NOTE="$BIN_DIR is not on your PATH; the next step below uses its full path."
 }
 
 free_port() {
@@ -782,37 +782,36 @@ verify_bot_runtime() (
   cat "$check_errors" >&2
   return 1
 )
+SETUP_DONE=0
 setup_handoff() {
   if [ "$PROFILE" = "lemon_bot" ]; then
-    if [ ! -x "$HOME/.lemon/bin/lemon" ]; then
-      info "Lemon itself is not installed here. To run Lemon on this machine too, install it with:"
-      info "    curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh"
-    fi
+    info "Lemon Bot can connect to a local or remote Lemon controller."
   elif [ "$SKIP_SETUP" = "1" ]; then
-    info "Setup skipped. Run this when you are ready to configure Lemon:"
-    info "    $BIN_DIR/lemon setup"
+    info "Setup skipped."
   elif (exec </dev/tty) 2>/dev/null; then
     info ""
     if ! "$BIN_DIR/lemon" setup </dev/tty; then
       die "Lemon setup did not complete. The runtime remains installed at $TARGET_DIR. Re-run: $BIN_DIR/lemon setup"
     fi
+    SETUP_DONE=1
   else
-    info "No interactive terminal is available. Run this when you are ready to configure Lemon:"
-    info "    $BIN_DIR/lemon setup"
+    info "No interactive terminal is available; configure Lemon with the next step below."
   fi
 }
 
 finish() {
   info ""
-  if [ "$PROFILE" = "lemon_bot" ]; then
-    info "Run lemon-bot to start. It connects to Lemon on this machine (offering to start it) or another machine you choose."
-  elif [ -x "$CURRENT_LINK/tui/bin/lemon-tui" ]; then
-    info "Run lemon to start."
-  else
-    info "Run lemon --help to see available commands."
-  fi
   if [ -n "$PATH_NOTE" ]; then
     info "$PATH_NOTE"
+  fi
+  if [ "$PROFILE" = "lemon_bot" ]; then
+    info "Next: \"$BIN_DIR/lemon-bot\""
+  elif [ "$SETUP_DONE" = "0" ]; then
+    info "Next: \"$BIN_DIR/lemon\" setup"
+  elif [ -x "$CURRENT_LINK/tui/bin/lemon-tui" ]; then
+    info "Next: \"$BIN_DIR/lemon\""
+  else
+    info "Next: \"$BIN_DIR/lemon\" --help"
   fi
 }
 
