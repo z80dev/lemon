@@ -309,7 +309,7 @@ artifact only, not a downloadable GitHub Release DMG. For source builds see the
 Use a source checkout to develop Lemon, run on an unsupported platform, or build
 release artifacts. These requirements apply only to source installs:
 
-- Elixir 1.19.5+ and Erlang/OTP 28.5+
+- Elixir 1.20.5+ and Erlang/OTP 29.1.2+
 - Bun 1.3.14+ for the terminal client
 - Node.js 24 LTS+ for the browser client and this documentation site
 

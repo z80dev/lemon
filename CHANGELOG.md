@@ -27,6 +27,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   unpublished preview artifacts; stable signed releases include a fixed DMG alias.
 ### Changed
 
+- Source toolchain, CI and release builds now use Elixir 1.20.5 and Erlang/OTP 29.1.2 (was Elixir 1.19.5 / OTP 28.5); source checkouts must upgrade before building.
 - **Breaking security change:** control-plane, web and simulation listeners now
   bind `127.0.0.1` by default, as do launcher epmd/distribution defaults. Existing
   LAN clients must opt into `*_BIND_IP`, configure operator authentication, and

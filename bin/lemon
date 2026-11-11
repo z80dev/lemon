@@ -194,7 +194,7 @@ require_curl() {
 
 require_elixir() {
   if ! command -v elixir >/dev/null 2>&1 || ! command -v mix >/dev/null 2>&1; then
-    error "Elixir and Mix are required for a source checkout (Elixir 1.19.5+, Erlang/OTP 28.5+); see docs/install.md, Source development"
+    error "Elixir and Mix are required for a source checkout (Elixir 1.20.5+, Erlang/OTP 29.1.2+); see docs/install.md, Source development"
     exit 1
   fi
 }
