@@ -45,6 +45,21 @@ defmodule LemonMCP.HTTP.OriginPolicyTest do
                OriginPolicy.canonical_origin("https://[2606:4700:4700:0:0:0:0:1111]:443/mcp")
     end
 
+    test "never treats a discarded out-of-range port as the default origin" do
+      for authority <- ["mcp.example", "[2606:4700:4700::1111]"],
+          scheme <- ["http", "https"],
+          port <- ["65536", "99999", "100000", "00065536"] do
+        url = "#{scheme}://#{authority}:#{port}/mcp"
+        assert {:error, :invalid_url} = OriginPolicy.canonical_origin(url)
+
+        assert {:error, :invalid_url} =
+                 OriginPolicy.pin(url, policy(), resolver([@public_v4]))
+      end
+
+      assert {:ok, "https://mcp.example:65535"} =
+               OriginPolicy.canonical_origin("https://mcp.example:65535/mcp")
+    end
+
     test "rejects credentials, fragments, ambiguous authorities and non-HTTP URLs" do
       for url <- [
             "https://user:password@mcp.example/mcp",

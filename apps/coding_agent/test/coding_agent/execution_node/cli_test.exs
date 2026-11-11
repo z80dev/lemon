@@ -182,6 +182,18 @@ defmodule CodingAgent.ExecutionNode.CLITest do
     refute opts[:operator_token]
   end
 
+  test "invite enrollment rejects discarded ports instead of defaulting the controller" do
+    for controller <- [
+          "wss://controller.example:65536/ws",
+          "wss://controller.example:99999/ws",
+          "ws://127.0.0.1:65536/ws",
+          "wss://[::1]:65536/ws"
+        ] do
+      assert {:error, "invalid enrollment name or secure controller URL"} =
+               CLI.parse(["--name", "bot", "--controller", controller, "--invite-code-stdin"])
+    end
+  end
+
   test "rejects invite recovery combinations and never echoes enrollment secrets" do
     base = ["--name", "bot", "--controller", "wss://controller.example/ws", "--invite-code-stdin"]
 

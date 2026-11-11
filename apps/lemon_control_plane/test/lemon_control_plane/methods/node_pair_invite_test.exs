@@ -115,6 +115,23 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     assert Enum.sort(LemonCore.Store.list(:node_pair_invites)) == before
   end
 
+  test "rejects discarded controller ports before issuing enrollment credentials", %{name: name} do
+    before = LemonCore.Store.list(:node_pair_invites) |> Enum.sort()
+
+    for url <- [
+          "wss://controller.example:65536/ws",
+          "wss://controller.example:99999/ws",
+          "ws://127.0.0.1:65536/ws",
+          "wss://[::1]:65536/ws"
+        ] do
+      Application.put_env(:lemon_control_plane, :public_ws_url, url)
+      assert {:error, _} = NodePairInvite.controller_url()
+      assert {:error, _} = NodePairInvite.handle(%{"nodeName" => name}, @ctx)
+    end
+
+    assert Enum.sort(LemonCore.Store.list(:node_pair_invites)) == before
+  end
+
   test "preview reports a disabled or missing gateway without exposing its configured port" do
     put_gateway_status(nil)
 
@@ -653,6 +670,8 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
 
     for base <- [
           "http://releases.example",
+          "https://releases.example:65536",
+          "https://releases.example:99999",
           "https://user:secret@releases.example",
           "https://releases.example?token=secret",
           "https://releases.example/#fragment"

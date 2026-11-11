@@ -35,6 +35,49 @@ defmodule LemonCore.Context.URLFetcherTest do
              )
   end
 
+  test "rejects discarded ports before normalization, DNS, or requests" do
+    opts = [
+      resolve_fun: fn _ -> flunk("invalid port reached DNS") end,
+      request_fun: fn _, _, _, _ -> flunk("invalid port reached transport") end
+    ]
+
+    for port <- ["65536", "99999", "100000", "00065536"] do
+      assert {:error, :invalid_url} =
+               URLFetcher.fetch("https://example.test:#{port}/a", opts)
+    end
+  end
+
+  test "rejects invalid absolute and network-path redirect ports before serialization" do
+    for location <- ["https://example.test:65536/b", "//example.test:65536/b"] do
+      request = fn url, _, _, _ ->
+        assert url == "https://93.184.216.34/a"
+        {:ok, {{~c"HTTP/1.1", 302, ~c"Found"}, [{~c"location", location}], ""}}
+      end
+
+      assert {:error, :invalid_redirect} =
+               URLFetcher.fetch("https://example.test/a",
+                 resolve_fun: fn _ -> {:ok, [{93, 184, 216, 34}]} end,
+                 request_fun: request
+               )
+    end
+  end
+
+  test "network-path redirects with no explicit port retain the scheme default" do
+    request = fn
+      "https://93.184.216.34/a", _, _, _ ->
+        {:ok, {{~c"HTTP/1.1", 302, ~c"Found"}, [{~c"location", "//example.test/b"}], ""}}
+
+      "https://93.184.216.34/b", _, _, _ ->
+        {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], "done"}}
+    end
+
+    assert {:ok, "done", %{redirects: 1}} =
+             URLFetcher.fetch("https://example.test/a",
+               resolve_fun: fn _ -> {:ok, [{93, 184, 216, 34}]} end,
+               request_fun: request
+             )
+  end
+
   test "blocks IPv4-mapped IPv6 loopback, RFC1918, link-local, and CGNAT answers" do
     request = fn _url, _headers, _http, _max -> flunk("mapped private request was attempted") end
 

@@ -29,6 +29,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Deliberate stops stay down; updates restart only previously running units,
   stop workers before restarting the controller, and update an installed Lemon
   Bot backend in lockstep with the runtime.
+- Reject invalid destination ports before URI normalization or default-port
+  fallback in MCP origin authorization, context/web fetches and redirects,
+  webhook callbacks, and node enrollment URLs on Elixir 1.20.
 - Add a shell-only supervised reverse SSH tunnel for second-machine node gateway
   and Lemon Bot access, with private status, credential-free SSH environments,
   stale same-user sshd cleanup and terminal host-key/auth/forwarding failures.

@@ -280,7 +280,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
          byte_size(opts[:controller]) <= 2048 and
          uri.scheme in ["ws", "wss"] and is_binary(uri.host) and uri.host != "" and
          uri.userinfo == nil and uri.query == nil and uri.fragment == nil and
-         (is_nil(uri.port) or (is_integer(uri.port) and uri.port in 1..65_535)) and
+         is_integer(uri.port) and uri.port in 1..65_535 and
          not String.match?(opts[:controller], ~r/[\s\x00-\x1f\x7f]/) and
          (uri.scheme == "wss" or uri.host in ["localhost", "127.0.0.1", "::1"]) do
       {:ok, opts}
