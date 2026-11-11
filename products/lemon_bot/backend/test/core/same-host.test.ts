@@ -54,6 +54,33 @@ describe('loopback Bot endpoint', () => {
     expect(() => baseBotMcpTemplate(g.services, { ...g.machine, nodeId: 'node-2' })).toThrow(ApiError);
   });
 
+  test('an SSH tunnel accepts only its forwarded literal IPv4 product port', async () => {
+    const f = await fixture('http://127.0.0.1:4100', 'elsewhere');
+    f.machine.link = { kind: 'ssh_tunnel', sshDestination: 'me@studio', nodePort: 4044, productPort: 4100, tunnel: { state: 'online', detail: null, checkedAtMs: 1 } };
+    expect(baseBotMcpTemplate(f.services, f.machine)).toMatchObject({ url: 'http://127.0.0.1:4100/mcp', allowedOrigins: ['http://127.0.0.1:4100'], approvedPrivateOrigins: ['http://127.0.0.1:4100'] });
+    f.services.config.publicUrl = 'http://127.0.0.1:4101';
+    expect(() => baseBotMcpTemplate(f.services, f.machine)).toThrow(ApiError);
+    f.services.config.publicUrl = 'https://bot.example.ts.net';
+    expect(baseBotMcpTemplate(f.services, f.machine).url).toBe('https://bot.example.ts.net/mcp');
+    expect(f.writes).toHaveLength(0);
+  });
+
+  test.each(['http://[::1]:4100', 'http://[0:0:0:0:0:0:0:1]:4100', 'https://[::1]:4100', 'http://localhost:4100', 'https://bot.localhost:4100', 'http://127.0.0.2:4100', 'http://0.0.0.0:4100', 'https://127.0.0.1:4100'])('an existing SSH tunnel rejects unsupported loopback product origin %s', async publicUrl => {
+    const f = await fixture(publicUrl, 'same-host');
+    f.machine.link = { kind: 'ssh_tunnel', sshDestination: 'me@studio', nodePort: 4044, productPort: 4100, tunnel: { state: 'online', detail: null, checkedAtMs: 1 } };
+    expect(() => baseBotMcpTemplate(f.services, f.machine)).toThrow(ApiError);
+    // A cached local proof must not bypass the tunnel's IPv4-only destination contract.
+    f.store.setMetadata(`machineSameHost:${f.machine.id}`, f.machine.nodeId);
+    expect(() => baseBotMcpTemplate(f.services, f.machine)).toThrow(ApiError);
+    expect(f.writes).toHaveLength(0);
+  });
+
+  test('a proven same-host worker without a tunnel retains IPv6 loopback support', async () => {
+    const f = await fixture('http://[::1]:4100', 'same-host');
+    await proveSameHost(f.services, f.machine);
+    expect(baseBotMcpTemplate(f.services, f.machine)).toMatchObject({ url: 'http://[::1]:4100/mcp', allowedOrigins: ['http://[::1]:4100'], approvedPrivateOrigins: ['http://[::1]:4100'] });
+  });
+
   test('an HTTPS origin needs no proof and a localhost name is never treated as literal loopback', async () => {
     const secure = await fixture('https://bot.example.ts.net', 'elsewhere');
     await proveSameHost(secure.services, secure.machine);

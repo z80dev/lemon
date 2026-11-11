@@ -203,6 +203,81 @@ defmodule LemonMCP.HTTPPinningTest do
     assert length(events(ctx)) == 3
   end
 
+  test "each credential-bearing request checks its established peer despite a cached pin", ctx do
+    previous = Application.fetch_env(:lemon_core, :require_owned_loopback)
+    Application.put_env(:lemon_core, :require_owned_loopback, true)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:lemon_core, :require_owned_loopback, value)
+        :error -> Application.delete_env(:lemon_core, :require_owned_loopback)
+      end
+    end)
+
+    ownership = start_supervised!({Agent, fn -> :owned end}, id: :ownership)
+    parent = self()
+
+    check = fn socket, :tcp ->
+      assert {:ok, {{127, 0, 0, 1}, port}} = :inet.peername(socket)
+      assert port == ctx.port
+      assert {:ok, {{127, 0, 0, 1}, local_port}} = :inet.sockname(socket)
+      send(parent, {:checked_connection, local_port})
+      Agent.get(ownership, & &1)
+    end
+
+    client =
+      start_supervised!(
+        {HTTP,
+         url: ctx.origin <> "/mcp",
+         origin_policy: private_policy(ctx.origin),
+         headers: [{"authorization", "Bearer must-not-leak"}],
+         peer_owner: check,
+         timeout_ms: 2_000}
+      )
+
+    assert HTTP.state(client) == :ready
+    assert_receive {:checked_connection, first}
+    assert_receive {:checked_connection, second}
+    assert first != second
+    assert {:ok, _} = HTTP.list_tools(client)
+    assert_receive {:checked_connection, _}
+    before = events(ctx)
+
+    for result <- [:foreign, :absent, :unverifiable] do
+      Agent.update(ownership, fn _ -> result end)
+      assert {:error, :private_origin_not_owned} = HTTP.list_tools(client)
+      assert_receive {:checked_connection, _}
+      assert events(ctx) == before
+    end
+
+    Agent.update(ownership, fn _ -> :owned end)
+    assert {:ok, _} = HTTP.list_tools(client)
+    assert_receive {:checked_connection, _}
+  end
+
+  test "real owned-peer transport supports every MCP request", ctx do
+    previous = Application.fetch_env(:lemon_core, :require_owned_loopback)
+    Application.put_env(:lemon_core, :require_owned_loopback, true)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:lemon_core, :require_owned_loopback, value)
+        :error -> Application.delete_env(:lemon_core, :require_owned_loopback)
+      end
+    end)
+
+    client =
+      start_supervised!(
+        {HTTP,
+         url: ctx.origin <> "/mcp", origin_policy: private_policy(ctx.origin), timeout_ms: 2_000}
+      )
+
+    assert {:ok, _} = HTTP.list_tools(client)
+
+    assert {:ok, [%{"text" => "echo:owned"}]} =
+             HTTP.call_tool(client, "echo", %{"message" => "owned"})
+  end
+
   test "IDNA original URL routes to its pin using the canonical ASCII Host", ctx do
     url = "http://BÜCHER.Example.:#{ctx.port}/mcp"
     policy = private_policy("http://xn--bcher-kva.example:#{ctx.port}")

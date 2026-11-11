@@ -29,9 +29,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   stale same-user sshd cleanup and terminal host-key/auth/forwarding failures.
 - Added the embedded Lemon Bot Worker helper, non-prompting macOS grant probes,
   and explicit local-machine Permissions controls with System Settings links.
-- Named workers now refuse credential-bearing loopback connections unless the
-  listener belongs to their OS user, including tunneled MCP requests. Deliberate
-  cross-user deployments can opt out with `LEMON_NODE_TRUST_LOOPBACK_LISTENER=1`.
+- Named workers now bind loopback credential checks to the established peer's
+  exact connection tuple, including every new tunneled MCP request; cached DNS
+  pins and replacement listeners cannot authorize a foreign peer. Listener
+  preflight matches address, family and port. Deliberate cross-user deployments
+  can opt out with `LEMON_NODE_TRUST_LOOPBACK_LISTENER=1`.
+- SSH machine setup rejects IPv6/localhost product origins before forwarding;
+  the supported loopback product origin is HTTP on `127.0.0.1`. Mac setup retries
+  preserve the SSH destination and machine ID for direct links as well as tunnels.
 - Pairing preview reports node-gateway health; tunnel invitations bind the exact
   destination loopback port without selecting a controller-local source checkout.
 - Build Mac DMGs in release CI with a signed runtime-manifest pin, credential

@@ -24,7 +24,8 @@ defmodule CodingAgent.ExecutionNode.Socket do
     :ping_interval_ms,
     :ping_token,
     :max_payload_bytes,
-    :listener_owner,
+    :peer_owner,
+    :connection,
     :connect_blocked_reason,
     pending: %{},
     connect_failures: 0,
@@ -51,8 +52,8 @@ defmodule CodingAgent.ExecutionNode.Socket do
       connect_params: connect_params,
       reconnect_delay_ms: Keyword.get(opts, :reconnect_delay_ms, 500),
       ping_interval_ms: Keyword.get(opts, :ping_interval_ms, 25_000),
-      listener_owner:
-        Keyword.get(opts, :listener_owner, &LemonCore.LoopbackListener.owned_by_self?/1),
+      peer_owner:
+        Keyword.get(opts, :peer_owner, &LemonCore.LoopbackListener.peer_owned_by_self?/2),
       max_payload_bytes: LemonCore.JSONPayload.default_max_bytes()
     }
 
@@ -76,7 +77,7 @@ defmodule CodingAgent.ExecutionNode.Socket do
   end
 
   @impl WebSockex
-  def handle_connect(_conn, state) do
+  def handle_connect(conn, state) do
     id = LemonCore.Id.uuid()
     ping_token = make_ref()
     send(self(), {:execution_node_send_connect, id})
@@ -86,6 +87,7 @@ defmodule CodingAgent.ExecutionNode.Socket do
      %{
        state
        | connect_id: id,
+         connection: conn,
          pending: %{},
          stopping: false,
          ping_token: ping_token,
@@ -196,7 +198,7 @@ defmodule CodingAgent.ExecutionNode.Socket do
         {:execution_node_send_connect, id},
         %{connect_id: id} = state
       ) do
-    if owned_loopback_listener?(state) do
+    if owned_loopback_peer?(state) do
       frame = Codec.encode_request(id, "connect", state.connect_params)
       {:reply, {:text, frame}, state}
     else
@@ -268,13 +270,17 @@ defmodule CodingAgent.ExecutionNode.Socket do
     %{state | connect_params: redacted_params, pending: Map.keys(state.pending)}
   end
 
-  defp owned_loopback_listener?(state) do
+  defp owned_loopback_peer?(state) do
     if Application.get_env(:lemon_core, :require_owned_loopback, false) == true do
       uri = URI.parse(state.url)
 
       if LemonCore.LoopbackListener.literal_loopback?(uri.host) do
-        check = state.listener_owner || (&LemonCore.LoopbackListener.owned_by_self?/1)
-        check.(uri.port) == :owned
+        check = state.peer_owner || (&LemonCore.LoopbackListener.peer_owned_by_self?/2)
+
+        case state.connection do
+          %{socket: socket, transport: transport} -> check.(socket, transport) == :owned
+          _ -> false
+        end
       else
         true
       end

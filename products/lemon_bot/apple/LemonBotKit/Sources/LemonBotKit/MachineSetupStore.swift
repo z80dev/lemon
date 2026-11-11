@@ -93,6 +93,11 @@ extension LemonBotStore {
         if let name, !name.isEmpty { body["name"] = .string(name) }
         return try await startMachineSetup(body)
     }
+    public func retryMachineSetup(setup: MachineSetup) async throws -> MachineSetup {
+        var body: JSONObject = ["sshDestination": .string(setup.sshDestination)]
+        if let machineId = setup.machineId { body["machineId"] = .string(machineId) }
+        return try await startMachineSetup(body)
+    }
     public func retryMachineSetup(machine: Machine) async throws -> MachineSetup {
         guard case let .sshTunnel(destination?, _, _, _) = machine.link else { throw ClientError.invalidPath }
         return try await startMachineSetup(["sshDestination": .string(destination), "machineId": .string(machine.id)])

@@ -82,6 +82,14 @@ defmodule LemonMCP.HTTP.OriginPolicy do
     end
   end
 
+  @doc false
+  def ownership_required?(nil), do: false
+
+  def ownership_required?(pin) do
+    Application.get_env(:lemon_core, :require_owned_loopback, false) == true and
+      LemonCore.LoopbackListener.literal_loopback?(pin.host)
+  end
+
   @doc "Returns the canonical HTTP(S) origin, rejecting unsafe URL syntax."
   @spec canonical_origin(term()) :: {:ok, String.t()} | {:error, :invalid_url}
   def canonical_origin(url) do
@@ -94,7 +102,9 @@ defmodule LemonMCP.HTTP.OriginPolicy do
          LemonCore.LoopbackListener.literal_loopback?(destination.dns_host) do
       check = Keyword.get(opts, :listener_owner, &LemonCore.LoopbackListener.owned_by_self?/1)
 
-      if check.(destination.port) == :owned,
+      {:ok, address} = :inet.parse_strict_address(String.to_charlist(destination.dns_host))
+
+      if check.({address, destination.port}) == :owned,
         do: :ok,
         else: {:error, :private_origin_not_owned}
     else

@@ -80,4 +80,73 @@ private final class MachineSetupCredentials: AccountCredentialStore {
         XCTAssertEqual(result.id, "setup")
         XCTAssertEqual(store.machineSetups["setup"], result)
     }
+    func testFailedDirectLinkSetupRetryUsesOriginalDestinationAndMachineID() async throws {
+        let store = makeStore()
+        store.account = StoredAccount(id: "test", baseURL: URL(string: "https://product.example/v1")!, email: "test@example.org", displayName: "Test", token: "session", userID: "user", workspaceID: "workspace")
+        store.connectionState = "online"
+        store.transport = try HTTPTransport(baseURL: URL(string: "https://product.example/v1")!, token: "session", session: TestHTTPProtocol.session())
+        var machine = Machine(id: "direct-machine", revision: 1, createdAtMs: 1, updatedAtMs: 1, nodeName: "studio", name: "Studio", ownerUserId: "user", accessUserIds: [], status: "offline", labels: [:], botIds: [])
+        machine.link = .direct
+        store.machines = [machine]
+        var failed = try JSONDecoder().decode(MachineSetup.self, from: fixture(state: "failed", failure: #"{"code":"service_failed","message":"Failed","detail":null}"#))
+        failed.machineId = machine.id
+        try await store.receiveMachineSetup(failed)
+        let response = fixture()
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/machines/ssh")
+            let body = try JSONDecoder().decode(JSONObject.self, from: TestHTTPProtocol.body(request))
+            XCTAssertEqual(body["sshDestination"], .string(failed.sshDestination))
+            XCTAssertEqual(body["machineId"], .string(machine.id))
+            XCTAssertNotNil(body["clientNonce"])
+            return (202, [:], response)
+        }
+        defer { TestHTTPProtocol.handler = nil; TestHTTPProtocol.requests = [] }
+        let result = try await store.retryMachineSetup(setup: XCTUnwrap(store.machineSetups[failed.id]))
+        XCTAssertEqual(result.state, .running)
+        XCTAssertEqual(store.machineSetups[result.id], result)
+    }
+    func testFailedSetupRetryWithoutMachineIDOmitMachineID() async throws {
+        let store = makeStore()
+        store.account = StoredAccount(id: "test", baseURL: URL(string: "https://product.example/v1")!, email: "test@example.org", displayName: "Test", token: "session", userID: "user", workspaceID: "workspace")
+        store.connectionState = "online"
+        store.transport = try HTTPTransport(baseURL: URL(string: "https://product.example/v1")!, token: "session", session: TestHTTPProtocol.session())
+        let failed = try JSONDecoder().decode(MachineSetup.self, from: fixture(state: "failed", failure: #"{"code":"ssh_unreachable","message":"Failed","detail":null}"#))
+        try await store.receiveMachineSetup(failed)
+        let response = fixture()
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/machines/ssh")
+            let body = try JSONDecoder().decode(JSONObject.self, from: TestHTTPProtocol.body(request))
+            XCTAssertEqual(body["sshDestination"], .string(failed.sshDestination))
+            XCTAssertNil(body["machineId"])
+            XCTAssertNotNil(body["clientNonce"])
+            return (202, [:], response)
+        }
+        defer { TestHTTPProtocol.handler = nil; TestHTTPProtocol.requests = [] }
+        let result = try await store.retryMachineSetup(setup: XCTUnwrap(store.machineSetups[failed.id]))
+        XCTAssertEqual(result.state, .running)
+        XCTAssertEqual(store.machineSetups[result.id], result)
+    }
+    func testExistingMachineReconnectUsesTunnelDestinationAndMachineID() async throws {
+        let store = makeStore()
+        store.account = StoredAccount(id: "test", baseURL: URL(string: "https://product.example/v1")!, email: "test@example.org", displayName: "Test", token: "session", userID: "user", workspaceID: "workspace")
+        store.connectionState = "online"
+        store.transport = try HTTPTransport(baseURL: URL(string: "https://product.example/v1")!, token: "session", session: TestHTTPProtocol.session())
+        var machine = Machine(id: "tunnel-machine", revision: 1, createdAtMs: 1, updatedAtMs: 1, nodeName: "studio", name: "Studio", ownerUserId: "user", accessUserIds: [], status: "offline", labels: [:], botIds: [])
+        machine.link = .sshTunnel(sshDestination: "me@studio", nodePort: 4044, productPort: 4100, tunnel: MachineTunnel(state: .failed, detail: .host_unreachable))
+        let response = fixture()
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/machines/ssh")
+            let body = try JSONDecoder().decode(JSONObject.self, from: TestHTTPProtocol.body(request))
+            XCTAssertEqual(body["sshDestination"], .string("me@studio"))
+            XCTAssertEqual(body["machineId"], .string(machine.id))
+            XCTAssertNotNil(body["clientNonce"])
+            return (202, [:], response)
+        }
+        defer { TestHTTPProtocol.handler = nil; TestHTTPProtocol.requests = [] }
+        let result = try await store.retryMachineSetup(machine: machine)
+        XCTAssertEqual(result.state, .running)
+    }
 }

@@ -155,7 +155,7 @@ function botEndpoint(s: BackendServices, machine?: P.Machine): URL {
   const url = new URL('/mcp', s.config.publicUrl);
   const loopbackName = url.hostname === 'localhost' || url.hostname.endsWith('.localhost') || /^127\./.test(url.hostname) || url.hostname === '[::1]' || url.hostname === '0.0.0.0';
   if (url.protocol === 'https:' && !url.username && !url.password && !loopbackName) return url;
-  if (machine && loopbackEndpoint(url) && (sameHost(s, machine) || machine.link?.kind === 'ssh_tunnel' && machine.link.productPort === Number(url.port || '80'))) return url;
+  if (machine && loopbackEndpoint(url) && (machine.link?.kind === 'ssh_tunnel' ? url.hostname === '127.0.0.1' && machine.link.productPort === Number(url.port || '80') : sameHost(s, machine))) return url;
   process.stderr.write('LEMON_BOT_PUBLIC_URL must be a worker-reachable non-loopback HTTPS origin for Bots on other machines.\n');
   if (machine && loopbackEndpoint(url)) fail('capability_unavailable', `Lemon Bot is only reachable on its own computer, so Bots can run there but not on ${machine.name}. Give Lemon Bot a secure address that ${machine.name} can reach, or choose the machine Lemon Bot runs on.`);
   fail('capability_unavailable', 'This server needs a secure address your machine can reach before Bot setup can finish. Ask the operator to configure it.');

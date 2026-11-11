@@ -66,8 +66,8 @@ struct MachineSSHSetupView: View {
     private func start() {
         Task { await action.perform {
             let result: MachineSetup
-            if let machine { result = try await store.retryMachineSetup(machine: machine) }
-            else if let id = setup?.machineId, let machine = store.machines.first(where: { $0.id == id }) { result = try await store.retryMachineSetup(machine: machine) }
+            if let setup { result = try await store.retryMachineSetup(setup: setup) }
+            else if let machine { result = try await store.retryMachineSetup(machine: machine) }
             else { result = try await store.addMachineOverSSH(destination: destination, name: name) }
             setupID = result.id
         } }
