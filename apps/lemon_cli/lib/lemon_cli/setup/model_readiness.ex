@@ -353,7 +353,7 @@ defmodule LemonCli.Setup.ModelReadiness do
     ProviderNames.provider_config(Map.get(settings, "providers", %{}), provider_id) || %{}
   end
 
-  defp readiness(state, provider_id, model_id, fields \\ []) do
+  defp readiness(state, provider_id, model_id, fields) do
     %{
       state: state,
       provider_id: provider_id,
@@ -386,8 +386,6 @@ defmodule LemonCli.Setup.ModelReadiness do
     do: not is_nil(default_provider) and canonical(provider) == canonical(default_provider)
 
   # Only a known provider prefix is stripped, so ids such as `qwen:7b` survive.
-  defp model_id(nil, _provider_id), do: nil
-
   defp model_id(model, provider_id) do
     model = to_string(model)
 

@@ -1238,11 +1238,13 @@ defmodule LemonCore.ProfileStore do
 
   defp bounded_string(_value, field, _max), do: {:error, {:invalid_field, field}}
 
-  defp validate_id(id) when is_binary(id) do
+  @doc "Checks a profile ID against the canonical profile ID format."
+  @spec validate_id(term()) :: :ok | {:error, :invalid_id}
+  def validate_id(id) when is_binary(id) do
     if Regex.match?(@id_regex, id), do: :ok, else: {:error, :invalid_id}
   end
 
-  defp validate_id(_), do: {:error, :invalid_id}
+  def validate_id(_), do: {:error, :invalid_id}
 
   defp reject_reserved_id("default"), do: {:error, :reserved_profile}
   defp reject_reserved_id(_), do: :ok
