@@ -58,6 +58,13 @@ defmodule LemonControlPlane.A2A.RunnerTest do
     previous_config = Application.get_env(:lemon_control_plane, :a2a_config)
     previous_bridge = Application.get_env(:lemon_core, :router_bridge)
 
+    previous_loopback =
+      Application.get_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator)
+
+    # Runner fixtures use the local peer to exercise lifecycle and redaction,
+    # not authentication. Opt into that tokenless test identity explicitly.
+    Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, true)
+
     Application.put_env(:lemon_control_plane, :a2a_config, %{
       host: "127.0.0.1",
       port: 9901,
@@ -84,6 +91,13 @@ defmodule LemonControlPlane.A2A.RunnerTest do
     on_exit(fn ->
       restore_env(:lemon_control_plane, :a2a_config, previous_config)
       restore_env(:lemon_core, :router_bridge, previous_bridge)
+
+      restore_env(
+        :lemon_control_plane,
+        :allow_unauthenticated_loopback_operator,
+        previous_loopback
+      )
+
       BlockingSubmitter.clear_owner()
       AbortRouter.clear()
     end)

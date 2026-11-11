@@ -11,6 +11,7 @@ defmodule LemonControlPlane.Methods.ProviderManagementTest do
 
   # Explicit offline boundary mock; never contacts a provider or changes config.
   defmodule OfflineDeviceFailureMock do
+    def check(_, _), do: {:error, :unavailable}
     def device_start(_, _), do: raise("OFFLINE_DEVICE_TOKEN_EXCEPTION")
     def device_poll(_, _), do: {:error, :forbidden}
     def device_challenge(_, _), do: {:error, :forbidden}
@@ -20,6 +21,14 @@ defmodule LemonControlPlane.Methods.ProviderManagementTest do
       do: {:error, :provider_binding_rejected}
 
     def device_complete(_, _), do: {:error, :forbidden}
+  end
+
+  defmodule OfflineLoginNotFoundMock do
+    def import_login("openai_codex", "codex_cli", _opts), do: {:error, :login_not_found}
+  end
+
+  defmodule OfflineLoginUnusableMock do
+    def import_login("openai_codex", "codex_cli", _opts), do: {:error, :login_unusable}
   end
 
   test "controller target identity is durable and distinct from named destinations" do
@@ -793,6 +802,15 @@ defmodule LemonControlPlane.Methods.ProviderManagementTest do
   end
 
   test "check failure returns unavailable without retrySafe false or mutationMayHaveApplied true" do
+    previous = LemonCore.ProviderManagement.service()
+    Application.put_env(:lemon_core, :provider_management_service, OfflineDeviceFailureMock)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:lemon_core, :provider_management_service, previous),
+        else: Application.delete_env(:lemon_core, :provider_management_service)
+    end)
+
     {:ok, target} = LemonCore.ProviderManagement.target()
     params = %{"targetId" => target.id}
 
@@ -806,32 +824,33 @@ defmodule LemonControlPlane.Methods.ProviderManagementTest do
   end
 
   test "login_not_found and login_unusable error mappings" do
-    for reason <- [:login_not_found, :login_unusable] do
+    previous = LemonCore.ProviderManagement.service()
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:lemon_core, :provider_management_service, previous),
+        else: Application.delete_env(:lemon_core, :provider_management_service)
+    end)
+
+    {:ok, target} = LemonCore.ProviderManagement.target()
+
+    for {reason, service} <- [
+          {:login_not_found, OfflineLoginNotFoundMock},
+          {:login_unusable, OfflineLoginUnusableMock}
+        ] do
+      Application.put_env(:lemon_core, :provider_management_service, service)
+
       assert {:error, {:conflict, msg, details}} =
                LemonControlPlane.Methods.ProviderManagementSupport.handle(
                  "import",
                  %{
-                   "targetId" => "invalid",
+                   "targetId" => target.id,
                    "providerId" => "openai_codex",
                    "source" => "codex_cli"
                  },
                  %{},
                  false
                )
-               |> case do
-        {:error, {:invalid_request, _}} ->
-          # Test direct mapping helper branch
-          {:error,
-           LemonControlPlane.Protocol.Errors.error(
-             :conflict,
-             "Codex CLI login is not available on this machine",
-             %{
-               "reason" => Atom.to_string(reason),
-               "retrySafe" => true,
-               "mutationMayHaveApplied" => false
-             }
-           )}
-      end
 
       assert msg =~ "Codex CLI login is not available on this machine"
       assert details["retrySafe"] == true
