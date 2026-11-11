@@ -4,29 +4,6 @@ All notable changes to `lemon_cli` are documented here.
 
 ## [Unreleased]
 
-### Changed
-
-- Setup replaces "Onboard an AI provider now?" with a **Connect a model** step
-  that lists the logins already present on this machine first (a Codex CLI
-  ChatGPT login, a provider key exported in the shell) and acts only on an
-  explicit choice, with the consent stated in the choice itself.
-- Setup summaries report the saved model truthfully: `verified` names the
-  non-generating check, `saved` says Lemon checks it on the first message (with
-  the reason when the provider was unreachable or the check failed), and a
-  deferred check no longer claims that `--skip-verify` was given. Both ready
-  states offer **Open Lemon now?**.
-- An unreachable provider or a check that fails for a non-authentication reason
-  now leaves setup complete with a saved model instead of failing verification.
-- Setup prints a progress line before every step that can block (application
-  start and the non-generating provider check), and resolves the secrets master
-  key once per command (`lemon setup`, `lemon setup model`, `lemon model`,
-  `setup --if-required`), so a slow keychain costs one read instead of 24.
-- Setup shows provider/import progress, truthfully distinguishes unavailable live
-  checks from deferred checks, and offers launch after saving an unchecked provider.
-- One-shot CLI boot logs omit info messages while preserving warnings and errors.
-- Installation ends with one absolute-path next step; worker enrollment keeps its
-  foreground/service guidance visible when the machine comes online.
-
 ### Added
 
 - `lemon setup model [--json] [--offline] [--provider NAME]`: the Connect-a-model
@@ -89,6 +66,21 @@ All notable changes to `lemon_cli` are documented here.
   target's global configuration.
 
 ### Changed
+
+- Setup replaces "Onboard an AI provider now?" with **Connect a model**, listing
+  detected Codex CLI ChatGPT logins and shell-exported provider keys first.
+  Nothing is imported without an explicit choice and stated consent.
+- Setup summaries distinguish a non-generating `verified` check from a `saved`
+  model that will be checked on the first message. Unreachable providers and
+  non-authentication check failures leave setup complete with the reason shown;
+  unavailable/deferred checks no longer incorrectly claim `--skip-verify`.
+  Both ready states offer **Open Lemon now?**, except an explicitly deferred `--skip-verify` check.
+- Setup reports progress before blocking application startup, import and provider
+  checks, and caches the secrets master key for the command lifetime across
+  `lemon setup`, `lemon setup model`, `lemon model` and `setup --if-required`.
+- One-shot CLI boot logs omit info messages but preserve warnings and errors.
+- Installation ends with one absolute-path next step; worker enrollment keeps
+  foreground/service guidance visible when the machine comes online.
 
 - `lemon setup` no longer asks about the runtime profile or a Hermes import,
   and a first run no longer prints the step status or config/secret file

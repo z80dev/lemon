@@ -11,8 +11,9 @@ and store in `~/.lemon` and uses the same first-run setup.
 | [Source checkout](#source-development) | Contributing, unsupported platforms, building releases | Elixir, Erlang/OTP, Bun |
 | [Mac app](#mac-app) | Lemon Bot on macOS Apple Silicon | Published DMG when signing is configured; no developer tools |
 
-Want the shortest route to a working chat? Follow the
-[quickstart](getting-started/quickstart.md).
+For repository coding, follow the [quickstart](getting-started/quickstart.md).
+For the Mac app or browser-based Bot, follow
+[Lemon Bot in 3 minutes](getting-started/lemon-bot.md).
 
 ## Supported platforms
 
@@ -21,7 +22,7 @@ runners (`.github/workflows/release.yml`):
 
 | Platform | `full` (default) | `min` | Terminal UI | `lemon_bot` backend |
 | --- | --- | --- | --- | --- |
-| macOS Apple Silicon (`darwin-arm64`) | yes | yes | yes | yes |
+| macOS 14+ Apple Silicon (`darwin-arm64`) | yes | yes | yes | yes |
 | Linux x86_64 (`linux-x86_64`) | yes | yes | yes | yes |
 | Linux ARM64 (`linux-arm64`) | yes | yes | yes | yes |
 
@@ -64,10 +65,12 @@ touches `config.toml`, secrets, or the store.
 ### First run
 
 Complete the setup prompts: provider, sign-in or API key, and default model.
-Setup prints **Setup complete** and offers **Open Lemon now? [Y/n]** after a live
-check passes or a provider without a quick check is saved. For the latter,
-the connection is confirmed on your first message. An explicitly deferred check
-does not offer to open Lemon. Later, open a new terminal and run:
+Setup reports **Setup complete** with a **verified** or **saved** model state.
+A saved credential is not proof of a successful live request; Lemon checks it
+on the first message. Both states offer **Open Lemon now? [Y/n]**, except an
+explicit `--skip-verify`, which reports the deferred check without offering to
+launch. Missing, expired or rejected credentials require action. Later, open a
+new terminal and run:
 
 ```bash
 lemon            # interactive terminal: opens the TUI, starting a daemon if needed
@@ -149,7 +152,7 @@ the runtime setup wizard separately.
 | Path | Contents |
 | --- | --- |
 | `~/.lemon/versions/<version>/` | One extracted release: `bin/`, `lib/`, and `tui/bin/lemon-tui` |
-| `~/.lemon/versions/current` | Symlink to the active version; the only thing updates move |
+| `~/.lemon/versions/current` | Symlink to the active runtime; Bot has a separate `~/.lemon/lemon_bot/current` pointer |
 | `~/.lemon/bin/lemon` | Launcher symlink to `../versions/current/bin/lemon` |
 | `~/.lemon/config.toml` | Your configuration (written by setup) |
 | `~/.lemon/store/` | Durable store |
@@ -167,6 +170,8 @@ The installer needs `curl`, `tar`, and `python3`. `python3` reads the manifest
 and performs the atomic symlink flip, so `jq` is not required. On macOS,
 `xcode-select --install` provides it; on Debian-family Linux, `sudo apt-get
 install python3`. The installer does not need Elixir, Erlang, Bun, or Node.js.
+This Python prerequisite is for the Terminal installer, not the Mac app:
+packaged macOS runtimes bundle Python for their worker tools.
 
 To add the launcher to PATH yourself:
 
@@ -182,10 +187,11 @@ the same rules.
 
 ## Headless and non-interactive installs
 
-The installer starts setup only for `full` and `min`, and only when it can open
+For `full` and `min`, the installer starts setup only when it can open
 `/dev/tty`. With no TTY it installs, prints `$HOME/.lemon/bin/lemon setup`, and
-exits 0. With `--skip-setup` it never opens the wizard. Configure the provider
-afterwards with explicit values:
+exits 0. The `bot` preset instead prints the `lemon-bot` next step; see the
+[Bot headless path](getting-started/lemon-bot.md#headless-or-ssh-server).
+With `--skip-setup` no setup runs. Configure the provider afterwards:
 
 ```bash
 lemon setup --non-interactive
@@ -198,11 +204,13 @@ lemon doctor
 For the live credential check, use `lemon setup provider` with the same flags;
 add `--skip-verify` to defer it. See [Set up Lemon](user-guide/setup.md#automated-or-headless-configuration).
 
-Run the runtime as a background service with `lemon daemon`, check it with
-`lemon status`, and stop it with `lemon stop`. A packaged install reads
-`LEMON_CONTROL_PLANE_PORT` (default 4040), `LEMON_WEB_PORT` (4080) and
-`LEMON_SIM_UI_PORT` (4090); ports chosen by `lemon setup` are saved to
-`~/.lemon/ports.env` and fill in whichever of those are unset.
+`lemon daemon` starts a detached runtime; it is not by itself a login/boot
+service. For OS-managed startup, use
+[`lemon service install controller`](user-guide/cli.md#user-services).
+Check runtime health with `lemon status` and stop it with `lemon stop`.
+A packaged install reads `LEMON_CONTROL_PLANE_PORT` (default 4040),
+`LEMON_WEB_PORT` (4080) and `LEMON_SIM_UI_PORT` (4090); setup saves chosen ports
+to `~/.lemon/ports.env`, filling in values not already exported.
 
 ## Optional Telegram or Discord
 
@@ -409,12 +417,10 @@ sessions, memory, or store. The full contract, rollback
 (`lemon update history`, `lemon update rollback`), source-checkout and mirror
 behavior are in [Update, roll back, and uninstall](user-guide/updates.md).
 
-There is no `lemon uninstall`; removal is deleting `~/.lemon/versions`,
-`~/.lemon/bin`, and the PATH line the installer added, with an optional
-full-data removal. See [Uninstall](user-guide/updates.md#uninstall) before
-deleting `~/.lemon`, which also holds your configuration, secrets, and the
-default `~/.lemon/backups/`; write any backup you want to keep outside
-`~/.lemon` with `lemon backup create --output <path>`.
+`lemon uninstall` previews removal of Lemon-owned services and program files,
+keeping data by default. Execute only after reviewing its confirmation digest.
+`--purge` also removes data and secrets; first put any backup outside `~/.lemon`.
+See [Uninstall](user-guide/updates.md#uninstall) for the exact commands.
 
 ## Troubleshooting
 

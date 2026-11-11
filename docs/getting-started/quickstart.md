@@ -2,14 +2,16 @@
 
 Install Lemon, connect a model, make one small repository change, and keep the
 same session for larger work. You need an interactive terminal on macOS (Apple
-Silicon) or Linux (x86_64 or ARM64), `curl`, `tar`, `python3`, and an account
-with a model provider. The prebuilt release bundles its own Erlang/Elixir
+Silicon, macOS 14+) or Linux (x86_64 or ARM64, glibc 2.39+), `curl`, `tar`,
+`python3`, and an account with a model provider. The prebuilt release bundles its own Erlang/Elixir
 runtime, the terminal client and the browser-automation driver, so you do not
 install any of them. Browser tools additionally need Node.js 24 or later and
 Chrome/Chromium; `lemon doctor` reports what is missing. Model requests use
 your provider's account.
 
 Other platforms or a container: see [Install](../install.md).
+For the Mac app or a browser-based Bot rather than repository coding, use
+[Lemon Bot in 3 minutes](lemon-bot.md).
 
 ## 1. Install and connect a model
 
@@ -50,10 +52,12 @@ Setup ends with the state of your model, never a guess:
   message).** — the credential resolves, but the provider has no quick live
   check, was unreachable, or the check failed for a non-authentication reason.
 
-Both paths offer **Open Lemon now? [Y/n]**. A missing, expired or rejected
-credential prints **Setup did not complete** instead. To connect or re-check a
-model later, run `lemon setup model` (or `lemon setup model --json` for a
-machine-readable report).
+Both paths offer **Open Lemon now? [Y/n]**. Explicit `--skip-verify` instead
+reports a saved, skipped check and does not offer to launch. Missing, expired
+or rejected credentials require action rather than claiming readiness.
+To connect or re-check a model later, run `lemon setup model` (or
+`lemon setup model --json` for a non-interactive readiness check;
+add `--offline` to avoid provider requests).
 
 If you installed with `--skip-setup`, had no terminal, or stopped setup early,
 run the installer's absolute-path next step:
@@ -166,8 +170,9 @@ cards and permissions and Lemon owns the coding session. See the
 `lemon gateway setup telegram` or `lemon gateway setup discord`. See
 [Set up Lemon](../user-guide/setup.md#optional-telegram-or-discord).
 
-**Mac app:** the native macOS application is Lemon Bot, built from source
-today. See [Install: Mac app](../install.md#mac-app).
+**Lemon Bot:** use the native Mac app or its separate browser product. The DMG
+pipeline exists, but only unsigned CI previews are available until release
+signing credentials are configured. Follow [Lemon Bot in 3 minutes](lemon-bot.md).
 
 ## 4. Grow the workflow, not the setup ceremony
 

@@ -1,10 +1,10 @@
 # Update, roll back, and uninstall Lemon
 
 Installer-managed `lemon_runtime_min`, `lemon_runtime_full`, and simulation
-releases expose a preview-confirm update lifecycle. Lemon stages a verified
-version, atomically moves the `~/.lemon/versions/current` pointer, and restarts
-an already-running **verified own managed daemon** using the selected release.
-An installation with no running daemon stays stopped.
+releases expose a preview-confirm update lifecycle. Lemon stages verified
+artifacts and moves the active pointers. It restarts verified own processes
+that were running before the update; a stopped installation stays stopped.
+Managed Bot installations include the matching backend artifact.
 
 ## Choose an update path
 
@@ -36,7 +36,7 @@ download, or staged version. Its opaque digest binds all of the following:
 - the exact running version and `versions/current` target;
 - channel, target version, release profile, and platform;
 - the SHA-256 of the raw manifest plus its source commit;
-- each selected runtime/TUI artifact filename, declared size, and SHA-256;
+- each selected runtime/TUI/Bot-backend artifact filename, declared size, and SHA-256;
 - a short expiry window.
 
 The digest is authorization for one exact plan, not a general `--yes` switch.
@@ -62,14 +62,31 @@ of the exact current launcher. It then:
    sizes all fail closed;
 4. extracts into a partial directory, verifies the resulting tree and the
    staged `bin/lemon version`, then promotes it with a same-filesystem rename;
-5. atomically flips `versions/current`, verifies the active launcher, and only
-   then writes the successful receipt;
-6. if a managed daemon was running before the transaction, re-verifies its
-   ownership and process identity, stops that exact daemon, and starts the new
-   selected release, waiting for readiness.
+5. moves the runtime pointer and, for a managed Bot installation, the backend
+   pointer, verifies the active programs, then writes the receipt;
+6. restarts previously running Lemon-owned services in the order below.
 
-If validation fails after the pointer moves, Lemon restores the exact prior
-pointer. Downloads and partial directories are removed on every outcome.
+If validation fails after a pointer moves, Lemon restores the prior pointers.
+Downloads and partial directories are removed on every outcome.
+
+### Service update order (breaking change)
+
+Running worker units must stop **before** the controller restarts and start
+again only **after** it is healthy. The updater snapshots running owned units,
+stops those workers, restarts the controller through its supervisor when managed,
+waits for readiness, starts the workers and waits for online, then restarts a
+previously running backend. Custom supervision must follow that same order;
+restarting only the controller is no longer the complete Bot update procedure.
+
+Units use stable launchers (`~/.lemon/bin/lemon`, `~/.local/bin/lemon-bot`),
+not paths inside an old version directory. A managed Bot backend is staged at
+the same release version; apply and rollback move its pointer with the runtime's.
+Remote workers are **never silently updated** by the controller: update each
+destination deliberately. Afterward inspect `lemon service status --json`.
+
+Worker/backend restart results report their readiness separately. A restart
+failure after selection does not mean the artifact transaction was undone;
+inspect the committed result and repair the affected service.
 
 Daemon ownership is checked before staging and again before stopping. A
 foreign runtime, an occupied foreign control-plane port, or unverifiable
@@ -222,50 +239,36 @@ receipt, and daemon-ownership checks remain mandatory.
 
 ## Uninstall
 
-Lemon has no `lemon uninstall` command and installs no system service, so
-removal is deleting what the installer created
-(`install.sh` layout: `~/.lemon/versions`, `~/.lemon/bin`). Your data in
-`~/.lemon` is separate from the program files, so you choose whether to keep it.
+`lemon uninstall` removes owned services and installed programs, keeping your
+configuration, sessions, secrets and Bot data by default. Preview first:
 
-1. **Optional: back up your state.** Config, sessions, and the store are
-   included by default; only the `cookie`, `env`, and `secrets_master_key`
-   files and `nodes/execution/` are excluded unless you pass `--include-credentials`.
-   `config.toml` and other files are copied as-is and may hold inline secrets
-   ([Back up and restore](backups.md)). The default destination is
-   `~/.lemon/backups/`, which is inside the Lemon home, so if you plan to
-   [remove all data](#remove-all-data) write the bundle somewhere else with
-   `--output` (the path must not already exist):
+```bash
+lemon uninstall --json
+lemon uninstall --confirm <confirmation-digest>
+```
 
-   ```bash
-   lemon backup create --output ~/lemon-final.lemonbackup
-   lemon backup verify ~/lemon-final.lemonbackup
-   ```
+Review the exact units, paths and installer-added shell PATH lines in the
+preview. Confirmation authorizes that plan, not an arbitrary later removal.
+The command stops owned units through their managers and verifies ownership
+before stopping a detached controller; it does not kill a foreign port owner.
+Program removal happens after the CLI exits.
 
-2. **Stop the runtime.** It exits non-zero if nothing was running; that is fine.
+For services only, use `lemon service uninstall ROLE...` (for a named worker,
+`lemon service uninstall worker --name NAME`). This keeps programs and data.
+Removing a worker service does not revoke the machine: remove it in Lemon Bot
+if you also want to revoke its authorization.
 
-   ```bash
-   lemon stop
-   ```
+Before any data removal, create and verify a backup **outside** `~/.lemon`:
 
-3. **Optional: sign out of subscription logins.** Deletes the stored OAuth
-   login for a provider (repeat per provider, for example `anthropic` or
-   `openai-codex`):
+```bash
+lemon backup create --output ~/lemon-final.lemonbackup
+lemon backup verify ~/lemon-final.lemonbackup
+```
 
-   ```bash
-   lemon model anthropic --logout
-   ```
-
-4. **Remove the program, keep your data.** This deletes every installed
-   release, the launcher, update receipts and checkpoints, and installer
-   scratch space; `config.toml`, `store/`, `agent/`, and secrets stay:
-
-   ```bash
-   rm -rf ~/.lemon/versions ~/.lemon/bin ~/.lemon/updates ~/.lemon/tmp
-   ```
-
-5. **Remove the PATH entry.** The installer appended two lines to your shell
-   rc file (`~/.zshrc`, `~/.bashrc`, or fish `config.fish`): the comment
-   `# added by the lemon installer` and the PATH line after it. Delete both.
+Backups exclude the `cookie`, `env`, `secrets_master_key` files and
+`nodes/execution/` unless `--include-credentials` is selected. Included config
+and other files may still contain inline secrets, so treat every bundle as
+sensitive. See [Back up and restore](backups.md).
 
 To remove a single old release instead, use `lemonup uninstall <version>`; it
 refuses to delete the active `versions/current`.
@@ -274,35 +277,31 @@ refuses to delete the active `versions/current`.
 
 This permanently deletes your configuration, sessions, memory, the secrets
 master key (when file-backed), and `~/.lemon/backups/`. If you might want any
-of it back, first create a bundle outside `~/.lemon` with `--output` (see
-step 1 above), run `lemon backup verify` on it, and keep it on storage you
-control. A backup left in the default `~/.lemon/backups/` is deleted with the
-rest. Only the `cookie`, `env`, `secrets_master_key` files and `nodes/execution/`
-are excluded unless you add `--include-credentials`; `config.toml` and other
-included files may contain inline API keys, so treat every bundle as sensitive.
+of it back, create and verify the external backup above. The default backup
+directory is inside `~/.lemon` and is deleted by purge. Preview and confirm
+the destructive variant explicitly:
 
 ```bash
-rm -rf ~/.lemon
+lemon uninstall --purge --json
+lemon uninstall --purge --confirm <confirmation-digest>
 ```
 
-On macOS the secrets master key may live in the Keychain instead of a file.
-Delete that entry too:
-
-```bash
-security delete-generic-password -s "Lemon Secrets" -a default
-```
+On macOS, purge also removes the **Lemon Secrets** / `default` Keychain item.
 
 Also revoke any provider API keys or bot tokens (Telegram, Discord) you gave
 Lemon, at the provider; deleting local files does not revoke them.
 
 ### Other layouts
 
-- **Source checkout:** delete the checkout directory. `~/.lemon` is shared with
-  installed releases; remove it only as above. If `~/.lemon/bin/lemon` points at
-  the checkout (`lemonup use local`), run `lemonup use <version>` first, or
-  delete the link.
-- **Standalone `lemon_bot` backend:** delete `~/.local/bin/lemon-bot` and
-  `~/.lemon/lemon_bot`. The latter holds the backend's database, attachments,
-  and encryption key, so back it up first if you need it.
+- **Source checkout:** `lemon uninstall` removes owned units only. Manage the
+  checkout with your Git/filesystem tools. `~/.lemon` can be shared with installed
+  releases; do not remove shared data unintentionally. If `~/.lemon/bin/lemon`
+  points at the checkout, select an installed release with `lemonup use <version>`
+  before deleting the checkout.
+- **Standalone `lemon_bot` backend:** when a runtime CLI is installed, include
+  its owned backend service/programs in the uninstall preview. Without that CLI,
+  stop your manually supervised backend before removing its launcher and
+  `~/.lemon/lemon_bot/versions` / `current`; preserve the remaining
+  `~/.lemon/lemon_bot` data unless you deliberately intend to delete it.
 - **Container:** `docker rm -f lemon` removes the container. `docker volume rm
   lemon-data` (your volume name) deletes everything on `/data`.

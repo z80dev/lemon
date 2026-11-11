@@ -5,49 +5,13 @@ A Bun HTTP/WebSocket service for personally owned assistants attached to an exis
 ## Run
 ### Standalone installation
 
-The canonical release installer supports `--profile lemon_bot` on Linux x86_64,
-Linux arm64 and macOS arm64. Follow the [versioned release installation
-guide](../../../docs/release/versioning_and_channels.md). The bundle contains
-`bot/bin/lemon-bot`, the complete external `bot/web` app, and its native image
-dependencies; running it requires no installed Bun, Node, Elixir or source checkout.
-Then run `lemon-bot` rather than `bun run start`. `lemon-bot --version` reports the
-exact release CalVer and `lemon-bot --help` describes startup; neither initializes
-private product state.
+Use [Lemon Bot getting started](../../../docs/getting-started/lemon-bot.md) for the Mac app, combined Terminal installer and first sign-in; use [attaching a bot machine](../../../docs/user-guide/attaching-a-bot-machine.md) for additional workers. The combined `bot` preset installs matching runtime and backend versions. The `lemon_bot` profile is backend-only for existing controllers and manual/remote deployments.
 
-In a terminal, plain `lemon-bot` runs `lemon-bot up`: it sets up background
-services, signs in as the local owner, enrolls this machine as a Bot worker,
-opens the browser through `lemon-bot open`, and exits. The combined installer
-`--profile bot` supplies the matching controller, worker and backend. The
-backend-only `--profile lemon_bot` remains available for manual/remote use.
-The backend serves `http://127.0.0.1:4100` with private state in `~/.lemon/lemon_bot`.
-First terminal setup asks which Lemon to use:
+The Linux x86_64, Linux arm64 and macOS arm64 backend bundle contains `bot/bin/lemon-bot`, production `bot/web` assets and native image dependencies. Running the backend requires no installed Bun, Node, Elixir or source checkout. The Terminal installer itself still requires `python3`; this is separate from the Mac app's native installer and bundled runtime Python.
 
-1. **This machine.** The controller is found through `LEMON_CONTROL_PLANE_PORT`,
-   then `~/.lemon/ports.env`, then 4040, and uses the launcher-managed
-   `~/.lemon/run/control-plane-<port>.token`. Interactive setup finishes with
-   `lemon setup --if-required` before the units start.
-2. **Another machine.** Enter its `wss://…/ws` controller address and its operator
-   token (hidden input; on that machine it is in `~/.lemon/run/control-plane-<port>.token`).
-   The connection is verified before saving.
+`lemon-bot --version` and `--help` do not initialize private product state. Interactive plain startup delegates to `up` when the runtime launcher exists; without it, startup falls back to a foreground backend and prints a pinned install command. `--no-open`, service mode and non-terminal plain startup remain foreground servers. Explicit `up --no-open` instead requests service setup without browser handoff, and `up --no-worker` skips local enrollment.
 
-The choice is saved in `DATA_DIR/controller.json` (0600; a remote token is
-encrypted with the product master key). `lemon-bot --choose-lemon` asks again,
-then continues with `up`. Explicit `LEMON_BOT_CONTROL_URL` or
-`LEMON_BOT_OPERATOR_TOKEN` override it. A same-machine credential is never sent
-to a controller on another host. Remote-controller setup installs the backend
-only; worker enrollment remains an explicit scoped invite on its actual host.
-
-`lemon-bot --no-open`, service mode, and a plain non-terminal invocation remain
-foreground servers. `up --no-open` instead sets up services without opening a
-browser. `up --no-worker` leaves worker setup for later.
-
-Keep `LEMON_BOT_DATA_DIR`, private operator configuration and server credential
-sources outside the versioned installation. `up` delegates supervision and safe
-legacy-process adoption to `lemon service`; it never writes units or signals
-processes itself. Runtime-missing errors give the exact-version `--profile bot`
-installer command. An empty backend never prints setup credentials in logs.
-Never put the controller operator credential in a browser, generated join command,
-archive or log.
+Default listener/state: `http://127.0.0.1:4100`, `~/.lemon/lemon_bot`. Keep data, private operator configuration and credentials outside versioned installations. Controller choice is stored in private `controller.json`, with remote tokens encrypted; explicit environment overrides take precedence. Never put the controller operator token in clients, join commands, archives or logs.
 
 ### Source development
 
@@ -59,11 +23,16 @@ bun install
 bun run start
 ```
 
-`bun run start` follows the same startup as `lemon-bot`, including the Lemon choice. `bun run dev` enables Bun watch mode. Source execution loads `../web/dist`; build the web product separately with `bun --cwd ../web run build`. Packaged execution loads `bot/web` beside its executable independently of the working directory. `LEMON_BOT_WEB_ROOT` explicitly overrides either layout. Missing web assets produce an explicit installation response without disabling the API. Startup logs never contain a setup code.
+`bun run start` uses the CLI startup modes above; `bun run dev` uses the same CLI with Bun watch mode, not a separate foreground-only entrypoint. Source execution loads `../web/dist`; build the web product separately with `bun --cwd ../web run build`. Packaged execution loads `bot/web` beside its executable independently of the working directory. `LEMON_BOT_WEB_ROOT` explicitly overrides either layout. Missing web assets produce an explicit installation response without disabling the API. Startup logs never contain setup credentials.
 
-The public origin must be reachable from execution hosts for the bot MCP endpoint. Use reachable HTTPS, normally Tailscale Serve, for managed Bot provisioning and phone connections. A loopback public URL supports same-machine API/Simulator development but is not evidence that an enrolled worker shares the backend's network namespace. Supply the configured public origin through the proxy; arbitrary browser origins are rejected. Authenticated product clients connect to `/v1` and `/v1/realtime`, never directly to the controller.
-
-With the default loopback origin (`http://127.0.0.1:4100`), Bots can still run on the machine Lemon Bot itself runs on. Before using a machine, the backend has its worker write a random value into this backend's private `DATA_DIR/tmp` and reads it back; only a worker that passes (same host, same OS user) gets a loopback MCP endpoint, approved as its private origin. Bots on any other machine need the reachable HTTPS origin above. Lemon's controller trusts admission callbacks from `http://127.0.0.1:4100` by default, so this needs no configuration.
+The public origin must be reachable from execution hosts for the bot MCP endpoint.
+Use reachable HTTPS, normally Tailscale Serve, for remote workers and phone
+connections. A loopback public URL supports same-machine use after the backend
+verifies shared-host placement. SSH-assisted workers can instead use the managed
+reverse product tunnel described in [machine attachment](../../../docs/user-guide/attaching-a-bot-machine.md#add-a-machine-over-ssh).
+Supply the configured public origin through the proxy; arbitrary browser origins
+are rejected. Authenticated product clients use `/v1` and `/v1/realtime`, never
+the operator WebSocket.
 
 Operator `approvedPrivateMcpOrigins` explicitly approves private first-party origins. Literal-loopback HTTP is permitted only for the configured first-party origin. Bot provisioning still requires a reachable address and verified machine placement. See the [provider guide](../providers.md) for the validated operator configuration.
 
@@ -86,117 +55,19 @@ Provider, identity, push, image, network/egress and host-management configuratio
 
 ## Same-machine and SSH access
 
-Run `lemon-bot open` on this computer to sign your browser in as the workspace owner,
-without a password or setup form. An interactive first loopback start does this
-automatically; `--no-open` instead prints the command. The listener must be exactly
-`127.0.0.1` or `::1` (not `localhost`); the published tailnet URL can stay unchanged.
-The command checks the running backend's instance identity and version before issuing
-anything. On first redemption it creates the passwordless owner and workspace.
+The canonical [getting-started guide](../../../docs/getting-started/lemon-bot.md) covers passwordless local browser sign-in, SSH handoff and remote account sign-in. OS-account access is authority: tailnet reachability or knowing a product URL alone is not.
 
-The one-use browser link lasts 60 seconds and travels through a 0600 HTML file in
-the private 0700 `DATA_DIR/handoff` directory. Only that file path reaches the
-browser opener's argv; the ticket never reaches stdout or stderr. Normally the
-command waits for sign-in and removes the file on success, expiry, interruption or
-exit. `--no-wait` returns after delivery and leaves cleanup to backend redemption
-and the expiry sweep, so the browser has time to read the file. Old orphan handoff
-files are swept as well. At most five unexpired unused links may exist.
+`lemon-bot open` verifies the running backend's exact instance/version before issuing a one-use ticket. Browser delivery passes a private handoff-file path, not the ticket, in opener argv. Headless delivery requires a controlling terminal before issuance and writes the sensitive link there, never to stdout/stderr. `open` needs a literal-loopback listener even when the configured public origin is HTTPS.
 
-Over SSH, run `lemon-bot open --headless` on the server with a controlling terminal
-(for example, `ssh -t user@host lemon-bot open --headless`). It prints a private
-five-minute link and an `ssh -N -L 4100:127.0.0.1:4100 user@host` command on
-`/dev/tty` only. Run the tunnel on your own computer, then open the link there;
-the same local port must be free. SSH, Linux without a graphical display, and a
-missing browser opener automatically select this mode. Without a controlling
-terminal the command refuses before minting a headless ticket.
-
-Your OS login is sufficient for this computer's browser and the Mac app; iPhone
-pairing does not require a password. A browser on another computer at the published
-HTTPS origin (without an SSH tunnel) needs email/password or linked SSO. To add
-email and a first password, run `lemon-bot open`, then Settings → Account →
-Add email and password within ten minutes. Local confirmation also permits
-reauthentication for account deletion and identity linking during that window.
-
-Every start keeps a private `DATA_DIR/local-access.key` (64 hex characters, mode 0600,
-owned by this user; a missing or unsafe file is replaced). Whoever can read it can
-already read `master.key` and the database, so it grants nothing that host access
-does not. `POST /v1/auth/local` with `Authorization: Bearer <key>` and an optional
-`{"displayName": "…"}` body returns an ordinary 30-day `AuthResult` for the workspace
-owner. On an empty instance it first creates that owner (`<os-user>@lemon.local`, no
-password) and a workspace named after the host, and discards any pending setup code.
-The key is re-read per request: rewrite the file to rotate it. The Mac app uses this
-to connect in one click, reading the key directly on the same machine or with
-`ssh <host>` plus a loopback tunnel for another one; see
-[Connect the Mac app](../apple/README.md#connect-the-mac-app). Password and SSO
-accounts, invitations and the setup code below are unchanged.
+Native/CLI local sign-in uses `POST /v1/auth/local` with the same user's private `DATA_DIR/local-access.key`. The backend re-reads that key per request; an empty instance creates a passwordless owner and workspace. This returns an ordinary bounded product session, not operator authority. Apple clients' credential-storage and transport details are in the [Apple README](../apple/README.md#connect-the-mac-app).
 
 ## Provider-free owner setup
 
-Start the backend separately (an interactive loopback `lemon-bot` start opens the app already signed in).
-No model provider login, API key or default model is needed to claim the initial owner,
-register phone/browser devices, sign in or inspect the management API. Missing
-providers affect execution readiness, not backend reachability. This command
-does **not** start/install services, provision Tailscale/Serve or enable Funnel.
+Owner sign-in, phone pairing and management do not require model credentials or a default model. Connect a model on the execution target before expecting replies; see [model setup](../../../docs/user-guide/setup.md).
 
-In the same trusted local operator environment, run:
+The canonical [getting-started guide](../../../docs/getting-started/lemon-bot.md) explains when to use local sign-in versus the operator-issued `lemon-bot setup` proof. For source development its equivalent is `bun src/cli.ts setup`; `setup --print-origin` performs discovery only, and explicit `--same-machine` permits literal-loopback development, not physical-phone readiness.
 
-```sh
-lemon-bot setup
-# Source checkout equivalent, from products/lemon_bot/backend:
-bun src/cli.ts setup
-# Machine-readable discovery only; no proof issuance and no terminal required:
-lemon-bot setup --print-origin
-```
-
-Both forms use the running instance's data directory and public origin: the same
-defaults as `lemon-bot` or its `LEMON_BOT_DATA_DIR`/`LEMON_BOT_PUBLIC_URL`/`LEMON_BOT_PORT`
-overrides. Proof issuance also requires its existing private `master.key`
-or original `LEMON_BOT_ENCRYPTION_KEY`; discovery alone does not read the key.
-Neither form requires controller/operator credentials in its environment.
-
-The command reads the existing private DATA_DIR instance identity and verifies
-the exact configured tailnet HTTPS origin with the shared [preflight](../contracts/preflight.md).
-It sends no operator/product credential or setup proof during the read-only probe,
-refuses redirects/TLS bypass and requires the advertised origin and local instance
-ID to match. It prints **only the verified non-secret origin to stdout**. Normal
-`setup` also displays a separately labelled **sensitive**, five-minute, one-use
-owner setup code directly on the controlling terminal (`/dev/tty`), never to
-stdout/stderr, startup logs or a plaintext file. A controlling terminal is required
-before issuance. Do not record that terminal, share screenshots or put the code
-in argv, a URL, QR, browser storage, analytics or clipboard automatically.
-
-On phone or Web, explicitly open that exact trusted HTTPS origin and use the
-existing owner setup form: enter the separate code, choose account credentials
-and name the workspace. Submit only to that instance's same-origin `/v1/setup`;
-there is no central proxy or cross-origin credential flow. A browser can type the
-origin/code manually; camera or native features are unnecessary. The code proves
-operator custody; a URL or tailnet membership alone is **not** owner authority.
-The resulting product session authorizes the same account/workspace before any
-LLM sign-in. Additional phones use existing owner-approved pairing.
-
-The proof is encrypted at rest with its digest, absolute expiry and attempt count
-in private product metadata. Re-running `setup` during its lifetime reprints the
-same proof without extending expiry or resetting attempts. Ten attempts exhaust
-it across restarts and minute-rate resets; only an explicit local command can
-replace an expired/exhausted proof. The existing ten-per-minute setup/global
-authentication limits still apply, including after local renewal. Claiming
-atomically consumes the proof and creates one owner/workspace/session even when
-requests race; expiry is checked again after password hashing. A fixed-nonce lost
-response can reconcile only the original still-authorized session using the same
-account credentials, never create another owner/session. Old pre-upgrade codes
-without an expiry are refused; request a new proof locally.
-
-Already configured instances refuse new owner setup and retain all existing
-accounts, workspace and device pairing. `setup --print-origin` still works for
-read-only discovery; use normal sign-in/pairing instead of re-bootstrap. For
-explicit **same-machine development/release smoke only**, append
-`--same-machine` (including with `--print-origin`) to permit literal loopback
-`127.0.0.1`/`[::1]` HTTP. This never means physical-phone readiness.
-
-Mock/unit coverage does not establish real phone/Tailscale or provider access.
-Operator acceptance must separately verify the printed TLS origin from the phone
-and browser, claim a fresh isolated instance once, reconnect the same workspace,
-and demonstrate a second claim is refused. Provider sign-in/real model execution
-is separate and never performed automatically by this command or its tests.
+Proof issuance verifies the configured tailnet HTTPS origin against the private instance identity, requires a controlling terminal and writes the five-minute one-use code only there. It does not start services, configure networking or sign in to a provider. Claiming is fenced against duplicate owner/session creation; already configured instances refuse re-bootstrap. See the [preflight contract](../contracts/preflight.md) and API for proof expiry, attempt limits and reconciliation semantics.
 
 ## Runtime prerequisites
 
@@ -224,7 +95,8 @@ The one-use code goes only to `lemon service install worker --invite-code-stdin`
 through stdin; it never enters argv, environment, diagnostics or progress. An
 uncertain enrollment is reconciled once from that invite's authoritative state,
 never resent. Only a confirmed joined invite permits one fresh bound reconnect.
-The temporary local-owner session is revoked in `finally`, including failures.
+The temporary local-owner session is signed out in `finally`; if logout fails,
+the CLI warns that it must be revoked in Account settings.
 
 The final browser handoff invokes `lemon-bot open` with the inherited terminal
 (over SSH: `open --headless`). It is omitted without a terminal or with `--no-open`.
@@ -264,22 +136,9 @@ Realtime changes and events commit together before publication. Reconnect restor
 
 ## Connect an iPhone
 
-Configure a reachable HTTPS `LEMON_BOT_PUBLIC_URL`; Tailscale Serve on the desktop is the recommended deployment. The product does not provision Tailscale or host a networking relay. Loopback HTTP is only for same-machine development/Simulator and cannot attach a remote phone.
+Follow [Lemon Bot getting started](../../../docs/getting-started/lemon-bot.md) for reachable HTTPS, pairing and revocation. An owner-approved phone gets a separate device-bound product session that lasts until revoked, not merely until the one-use QR expires.
 
-The desktop owner creates a five-minute one-use pairing QR. The phone previews the exact cluster/origin, claims it with its installation identity, and displays the same six-digit verification code as the desktop. The owner approves that device once. Completion privately returns one device-bound product session for Keychain storage; it remains valid until revoked, not until the QR expires. QR URLs never contain an operator credential, desktop session, or permanent phone token.
-
-Pending completion evolves with the same nonce. Lost completion responses replay the same encrypted session receipt only before the original five-minute deadline; after that, pair again rather than mint another session. Existing connected credentials survive QR expiry, but device deletion, account/workspace revocation and logout revoke their actual authority. A paired bearer cannot register another installation to evade its device binding. Desktop-only pairing events contain safe state, never credentials; clients without an identified desktop device can use the owner list/detail endpoints.
-
-Before creating a phone QR, read authenticated `GET /v1/identity` on the intended
-configured backend and preflight the advertised HTTPS origin against that instance
-and workspace. `GET /v1/setup` is the minimal public product fingerprint, not a
-generic health probe. A Phoenix 404 (including Lemon Web), controller health or an
-HTTP 200 landing page is not the Bot API. The four-key QR carries the expected
-instance and workspace IDs; public setup does not disclose workspace identity.
-See the shared [preflight contract](../contracts/preflight.md) for TypeScript SDK,
-Mac/iOS and CLI predicates, bounded progress observation and TLS requirements.
-
-Reopening a paired app restores its saved cluster/account selection. Offline state keeps the saved connection without automatically replaying mutations. Revoked credentials require an explicit reconnect.
+The [preflight contract](../contracts/preflight.md) defines exact origin, instance and workspace checks. Controller health, Lemon Web/Phoenix and an HTTP 200 landing page are not the Bot API. Pairing reconciliation uses its original nonce/deadline; it is not permission to replay ordinary mutations.
 
 ## Contributor checks
 

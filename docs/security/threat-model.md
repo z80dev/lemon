@@ -41,14 +41,17 @@ cryptographic, network, and boundary machinery those docs assume.
 | A2A (optional) | `127.0.0.1:9901` | Peer tokens; tokenless local fallback requires explicit compatibility opt-in |
 | epmd / distribution | Loopback | Launcher defaults; explicit cross-host distribution is an operator choice |
 
-**Breaking change:** existing LAN users must opt into `*_BIND_IP` and restart.
-The main listener refuses a non-loopback bind without an operator token or with
-tokenless compatibility enabled. Remote OpenAI/ACP requires both an explicit
-`LEMON_CONTROL_PLANE_REMOTE_HTTP` opt-in and the dedicated API token; locally these
-APIs require their token or fall back to the operator token. A local socket peer
-is not proof of a trusted user: reverse proxies also arrive from loopback, so
-`LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` is default-off and unsafe
-behind proxies.
+**Breaking change:** existing LAN users must opt into explicit listener binds
+and restart. The [configuration reference](../config.md#listener-exposure-breaking-default-change)
+owns the bind variables, defaults and remote HTTP API opt-ins. Main and web
+listeners require operator authentication when exposed; remote OpenAI/ACP also
+require their dedicated API tokens.
+
+A loopback socket peer is not proof of a trusted user: reverse proxies also
+arrive from loopback. Tokenless compatibility is default-off and unsafe behind
+proxies. Lemon Bot's local-owner sign-in instead relies on private same-user
+material and short-lived, one-use, origin-bound browser tickets. Do not share a
+local OS account with someone who should not control its workspace.
 
 Expose **4044 only** for remote nodes, with TLS or a verified encrypted overlay.
 A remote operator backend needs a separate TLS proxy restricted to 4040 `/ws`.

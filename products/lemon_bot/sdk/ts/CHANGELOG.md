@@ -4,13 +4,18 @@
 
 ### Added
 
-- Add SSH machine setup/link contracts, initiator-scoped progress events, and typed `machineEnrollmentPreview`, `addMachineOverSsh`, and `machineSetup` helpers. Mutations retain fixed nonces and never automatically replay uncertain enrollment.
-- Add just-in-time `request_access`, access-request cards, queued grant `pendingLevel`, per-Bot-folder capability and folder-read governance contracts.
-
-- Creation/import/duplicate contracts accept explicit Standard or Chat-only `access`; templates can suggest access without granting it. Omitted access remains all-off.
-
-- Add target-local `ModelReadiness`/`DetectedLogin` models and typed check/import endpoints for controller and machines. Checks are non-generating; Codex login imports require explicit copy consent and retain nonce reconciliation.
-- Add typed local ticket redemption, own sign-in-method discovery, first-password creation and `{local:true}` reauthentication through the existing generic REST client.
+- Typed `machineEnrollmentPreview`, `addMachineOverSsh` and `machineSetup` helpers
+  share SSH setup/link contracts and initiator-scoped progress events. Mutations
+  retain fixed nonces; uncertain enrollment is never automatically replayed.
+- Just-in-time `request_access` and access-request cards expose queued grant
+  `pendingLevel`, per-Bot-folder capability and folder-read governance contracts.
+- Creation, import and duplication accept explicit Standard or Chat-only `access`;
+  templates may suggest access without granting it. Omitted access stays all-off.
+- Target-local `ModelReadiness`/`DetectedLogin` models and typed controller/machine
+  check/import endpoints support non-generating checks and explicit Codex login
+  copy consent with nonce reconciliation.
+- Typed local-ticket redemption, own sign-in-method discovery, first-password
+  creation and `{local:true}` reauthentication use the existing generic REST client.
 - Export optional `Machine.credential` and `MachineCredential` so clients distinguish expired/revoked sessions from ordinary offline machines.
 - Add remembered approval contracts: per-chat tool-group decisions, revocable allowances and realtime events, owner-only bot-wide preview/confirm, Bot review modes and workspace governance.
 - Export the shared read-only Bot origin preflight and product/workspace identity validators. Strict pairing links now require an `instance` fingerprint alongside `backend`, `cluster` and `code`; three-key links are rejected.
