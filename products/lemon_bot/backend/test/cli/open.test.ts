@@ -137,7 +137,8 @@ describe('first interactive start uses the same in-process delivery', () => {
     try {
       if (scenario === 'configured') f.store.setMetadata('workspaceId', 'existing');
       if (scenario === 'headless') f.deps.env.SSH_TTY = '/dev/pts/mock';
-      const services = { store: f.store, now: f.deps.now, mutations: { digest: createMutationDigest(f.key) }, config: { dataDir: f.dataDir, loopbackOrigin: scenario === 'nonloopback' ? null : 'http://127.0.0.1:4100', publicUrl: 'https://server.example' } } as BackendServices;
+      // Deliberately limited mock: this path uses only store, clock, digest and configuration.
+      const services = { store: f.store, now: f.deps.now, mutations: { digest: createMutationDigest(f.key) }, config: { dataDir: f.dataDir, loopbackOrigin: scenario === 'nonloopback' ? null : 'http://127.0.0.1:4100', publicUrl: 'https://server.example' } } as unknown as BackendServices;
       await firstStartSignIn(services, { interactive: scenario !== 'noninteractive', write(value) { writes.push(value); } }, { openBrowser: scenario !== 'no-open' }, f.deps, { offer() { legacyOffered++; }, open(value) { legacyOpened = value; } });
       expect(f.rows()).toHaveLength(scenario === 'loopback' || scenario === 'headless' ? 1 : 0);
       expect(f.tty.join('')).not.toContain('setup code');
