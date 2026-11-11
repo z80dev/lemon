@@ -151,7 +151,8 @@ test('detected Codex login shows the consent sentence and one click runs import,
   await nameTheBot();
 
   expect(container.textContent).toContain('Codex CLI ChatGPT login found on Studio Mac');
-  expect(container.textContent).toContain('Lemon keeps and refreshes its own copy; your ~/.codex/auth.json is not changed');
+  expect(container.textContent).toContain('Your ~/.codex/auth.json is not changed');
+  expect(container.textContent).toContain('Lemon and the Codex CLI will share this login; if either refreshes it, the other may need to sign in again.');
   expect(button('Create Bot').disabled).toBe(true);
   expect(providerCalls('POST /machines/:id/providers/:providerId/import')).toHaveLength(0);
 

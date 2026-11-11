@@ -34,7 +34,8 @@ defmodule LemonCore.Secrets.MasterKey do
 
   `scoped/1` memoizes Keychain fetches, including failures, for one command in
   the calling process. Nested scopes share the memo; the outermost scope always
-  clears it. Outside a scope, key rotation and external edits remain visible.
+  clears it. Secret writes refresh it inside the write lock; outside a scope,
+  key rotation and external edits remain visible.
   """
 
   require Logger
@@ -72,6 +73,17 @@ defmodule LemonCore.Secrets.MasterKey do
     opts
     |> KeyProvider.order()
     |> resolve_chain(opts, %{invalid: nil, failure: nil})
+  end
+
+  @doc """
+  Resolves the current key without reusing scoped reads, then refreshes the scope.
+  Secret writers must call this inside their write lock so a concurrent rotation
+  cannot leave a new record encrypted with a retired key.
+  """
+  @spec resolve_fresh(keyword()) :: {:ok, binary(), source()} | {:error, atom() | tuple()}
+  def resolve_fresh(opts \\ []) do
+    Process.delete({__MODULE__, :memo})
+    resolve(opts)
   end
 
   @doc """

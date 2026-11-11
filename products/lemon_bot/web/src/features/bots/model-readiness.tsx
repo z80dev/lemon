@@ -226,7 +226,7 @@ export function ModelReadinessPanel({ machineId, onReadyChange, ignoreSkip = fal
       {codexDetected && form === 'none' && <div className="model-readiness-detected stack">
         <div className="row spread"><strong>Codex CLI ChatGPT login found on {host}</strong><Badge tone="good">Detected</Badge></div>
         <p className="consent-notice">
-          Copy your Codex CLI ChatGPT login on {host} into Lemon. Lemon keeps and refreshes its own copy; your <code>~/.codex/auth.json</code> is not changed. If either app later asks you to sign in again, sign in there — or use <em>Sign in with ChatGPT</em> to give Lemon its own login.
+          Copy your Codex CLI ChatGPT login on {host} into Lemon. Your <code>~/.codex/auth.json</code> is not changed. Lemon and the Codex CLI will share this login; if either refreshes it, the other may need to sign in again. Use <em>Sign in with ChatGPT</em> to give Lemon its own login instead.
         </p>
         <button type="button" className="primary" disabled={busy || !online} onClick={() => void run(async () => {
           await api.importLogin('openai_codex', { targetId: management.target.id, clientNonce: nonce(), source: 'codex_cli', consent: 'copy_login' });

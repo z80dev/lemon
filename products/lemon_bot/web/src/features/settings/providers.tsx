@@ -346,7 +346,7 @@ function ProviderControls({ management, stale, api, machineId, sessionId, reload
         source: 'codex_cli',
         consent: 'copy_login',
       }));
-    }}><TargetReview management={management} machineId={machineId}/><p>Copy your Codex CLI ChatGPT login on {target.hostname} into Lemon. Lemon keeps and refreshes its own copy; your <code>~/.codex/auth.json</code> is not changed. If either app later asks you to sign in again, sign in there — or use <em>Sign in with ChatGPT</em> to give Lemon its own login.</p></ConfirmDialog>}
+    }}><TargetReview management={management} machineId={machineId}/><p>Copy your Codex CLI ChatGPT login on {target.hostname} into Lemon. Your <code>~/.codex/auth.json</code> is not changed. Lemon and the Codex CLI will share this login; if either refreshes it, the other may need to sign in again. Use <em>Sign in with ChatGPT</em> to give Lemon its own login instead.</p></ConfirmDialog>}
   </div>;
 }
 

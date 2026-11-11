@@ -111,7 +111,7 @@ public struct ModelReadinessView: View {
             Button("Copy login and connect") { Task { await connectCodexCLI() } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Copy your Codex CLI ChatGPT login on \(hostname) into Lemon. Lemon keeps and refreshes its own copy; your ~/.codex/auth.json is not changed. If either app later asks you to sign in again, sign in there — or use Sign in with ChatGPT to give Lemon its own login.")
+            Text("Copy your Codex CLI ChatGPT login on \(hostname) into Lemon. Your ~/.codex/auth.json is not changed. Lemon and the Codex CLI will share this login; if either refreshes it, the other may need to sign in again. Use Sign in with ChatGPT to give Lemon its own login instead.")
         }
     }
 

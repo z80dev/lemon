@@ -177,6 +177,8 @@ defmodule LemonCli.Onboarding.Runner do
 
     secret_provider = secret_provider || spec.api_key_secret_provider
 
+    io.info.("Saving provider credentials and configuration…")
+
     persist!(config_path, [{secret_name, {:set, secret_value, secret_provider}}], fn content ->
       content
       |> update_provider_auth_config(spec, auth_mode, secret_name)

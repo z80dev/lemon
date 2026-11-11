@@ -486,7 +486,8 @@ test('Import Codex CLI login shows consent dialog and dispatches explicit consen
   // Modal is opened
   expect(container.textContent).toContain('Import Codex CLI login?');
   expect(container.textContent).toContain('Copy your Codex CLI ChatGPT login on controller.test into Lemon');
-  expect(container.textContent).toContain('Lemon keeps and refreshes its own copy; your ~/.codex/auth.json is not changed');
+  expect(container.textContent).toContain('Your ~/.codex/auth.json is not changed');
+  expect(container.textContent).toContain('Lemon and the Codex CLI will share this login; if either refreshes it, the other may need to sign in again.');
   // Confirm the dialog
   await click('Confirm');
   const importReq = requests.find(r => r.path === '/instance/providers/openai_codex/import');

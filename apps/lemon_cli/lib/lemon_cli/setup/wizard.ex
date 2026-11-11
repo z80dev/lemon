@@ -520,6 +520,13 @@ defmodule LemonCli.Setup.Wizard do
 
         options = build_connect_model_options(detected_logins, opts)
 
+        if Enum.any?(detected_logins, &(&1.source == :codex_cli)) do
+          io.info.(
+            "Lemon and the Codex CLI will share this login; if either refreshes it, " <>
+              "the other may need to sign in again. Import does not change ~/.codex/auth.json."
+          )
+        end
+
         case select_connect_model(options, io) do
           {:ok, {:codex_cli, _detected}} ->
             provider_args =
@@ -565,6 +572,14 @@ defmodule LemonCli.Setup.Wizard do
 
             Provider.configure(provider_args, io, configure_opts)
 
+          {:ok, :chatgpt} ->
+            choose_and_configure_provider(
+              config_path,
+              io,
+              non_interactive?,
+              Keyword.merge(opts, provider: "openai-codex", auth: "oauth")
+            )
+
           {:ok, :choose_provider} ->
             choose_and_configure_provider(config_path, io, non_interactive?, opts)
 
@@ -606,8 +621,7 @@ defmodule LemonCli.Setup.Wizard do
       Enum.map(detected_logins, fn
         %{source: :codex_cli} = detected ->
           %{
-            label:
-              "Copy your Codex CLI ChatGPT login into Lemon (read-only copy of ~/.codex/auth.json)",
+            label: "Copy your Codex CLI ChatGPT login into Lemon (shared login)",
             value: {:codex_cli, detected}
           }
 
@@ -628,6 +642,7 @@ defmodule LemonCli.Setup.Wizard do
 
     detected_options ++
       [
+        %{label: "Sign in with ChatGPT (browser)", value: :chatgpt},
         %{label: "Choose a provider…", value: :choose_provider},
         %{label: skip_label, value: :skip}
       ]
