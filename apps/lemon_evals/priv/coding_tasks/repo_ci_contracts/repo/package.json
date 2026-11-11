@@ -1,0 +1,9 @@
+{
+  "name": "warehouse-desk",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "ci": "node scripts/ci.ts",
+    "test": "node --test tests/*.test.ts"
+  }
+}

@@ -1,0 +1,10 @@
+import type { Catalog } from './domain/catalog.ts';
+import type { StockLedger } from './domain/stock.ts';
+import type { ReservationBook } from './domain/reservations.ts';
+import type { AuditLog } from './domain/audit.ts';
+export type Context = { actorId: string | null; clock: () => number };
+export type Request = { method: string; path: string; body?: Record<string, unknown> };
+export type Response = { status: number; body: unknown };
+export type Services = { catalog: Catalog; stock: StockLedger; reservations: ReservationBook; audit: AuditLog };
+export type Route = { name: string; method: 'GET' | 'POST'; path: string; requiresActor: boolean;
+  handle: (request: Request, context: Context, services: Services, params: Record<string, string>) => Response };

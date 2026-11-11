@@ -1,0 +1,200 @@
+[
+  {
+    "module": "articles",
+    "fn": "releaseArticle",
+    "input": {
+      "articleId": " a-1 ",
+      "title": " Hello "
+    },
+    "payload": {
+      "articleId": "a-1",
+      "title": "Hello"
+    },
+    "topic": "article.released"
+  },
+  {
+    "module": "archives",
+    "fn": "archiveDocument",
+    "input": {
+      "documentId": " d-1 ",
+      "reason": " old "
+    },
+    "payload": {
+      "documentId": "d-1",
+      "reason": "old"
+    },
+    "topic": "document.archived"
+  },
+  {
+    "module": "invoices",
+    "fn": "issueInvoice",
+    "input": {
+      "invoiceId": " i-1 ",
+      "cents": 1200
+    },
+    "payload": {
+      "invoiceId": "i-1",
+      "cents": 1200,
+      "currency": "USD"
+    },
+    "topic": "invoice.issued"
+  },
+  {
+    "module": "payments",
+    "fn": "capturePayment",
+    "input": {
+      "paymentId": " p-1 ",
+      "cents": 500
+    },
+    "payload": {
+      "paymentId": "p-1",
+      "cents": 500
+    },
+    "topic": "payment.captured"
+  },
+  {
+    "module": "refunds",
+    "fn": "requestRefund",
+    "input": {
+      "paymentId": " p-1 ",
+      "cents": 200,
+      "reason": " duplicate "
+    },
+    "payload": {
+      "paymentId": "p-1",
+      "cents": 200,
+      "reason": "duplicate"
+    },
+    "topic": "refund.requested"
+  },
+  {
+    "module": "shipments",
+    "fn": "packShipment",
+    "input": {
+      "shipmentId": " s-1 ",
+      "tracking": " ab12 "
+    },
+    "payload": {
+      "shipmentId": "s-1",
+      "tracking": "AB12"
+    },
+    "topic": "shipment.packed"
+  },
+  {
+    "module": "orders",
+    "fn": "submitOrder",
+    "input": {
+      "orderId": " o-1 ",
+      "lines": 3
+    },
+    "payload": {
+      "orderId": "o-1",
+      "lines": 3
+    },
+    "topic": "order.submitted"
+  },
+  {
+    "module": "inventory",
+    "fn": "reserveInventory",
+    "input": {
+      "sku": " sku-1 ",
+      "quantity": 4
+    },
+    "payload": {
+      "sku": "SKU-1",
+      "quantity": 4
+    },
+    "topic": "inventory.reserved"
+  },
+  {
+    "module": "members",
+    "fn": "inviteMember",
+    "input": {
+      "email": " A@Example.test ",
+      "role": " EDITOR "
+    },
+    "payload": {
+      "email": "a@example.test",
+      "role": "editor"
+    },
+    "topic": "member.invited"
+  },
+  {
+    "module": "access",
+    "fn": "revokeAccess",
+    "input": {
+      "memberId": " m-1 ",
+      "reason": " departed "
+    },
+    "payload": {
+      "memberId": "m-1",
+      "reason": "departed"
+    },
+    "topic": "access.revoked"
+  },
+  {
+    "module": "projects",
+    "fn": "createProject",
+    "input": {
+      "projectId": " p-1 ",
+      "slug": " New Project "
+    },
+    "payload": {
+      "projectId": "p-1",
+      "slug": "new-project"
+    },
+    "topic": "project.created"
+  },
+  {
+    "module": "deployments",
+    "fn": "promoteDeployment",
+    "input": {
+      "deploymentId": " dep-1 ",
+      "environment": " PROD "
+    },
+    "payload": {
+      "deploymentId": "dep-1",
+      "environment": "prod"
+    },
+    "topic": "deployment.promoted"
+  },
+  {
+    "module": "incidents",
+    "fn": "openIncident",
+    "input": {
+      "incidentId": " inc-1 ",
+      "severity": 2
+    },
+    "payload": {
+      "incidentId": "inc-1",
+      "severity": 2
+    },
+    "topic": "incident.opened"
+  },
+  {
+    "module": "comments",
+    "fn": "addComment",
+    "input": {
+      "threadId": " t-1 ",
+      "body": " hello "
+    },
+    "payload": {
+      "threadId": "t-1",
+      "body": "hello"
+    },
+    "topic": "comment.added"
+  },
+  {
+    "module": "reports",
+    "fn": "scheduleReport",
+    "input": {
+      "reportId": " r-1 ",
+      "format": " CSV "
+    },
+    "payload": {
+      "reportId": "r-1",
+      "format": "csv"
+    },
+    "topic": "report.scheduled"
+  }
+]
