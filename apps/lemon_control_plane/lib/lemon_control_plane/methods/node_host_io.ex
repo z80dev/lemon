@@ -53,8 +53,8 @@ defmodule LemonControlPlane.Methods.NodeHostIOSupport do
     if Map.has_key?(params, "profileId") do
       if method in ~w(node.fs.list node.fs.stat node.fs.read node.fs.write node.fs.mkdir) and
            LemonCore.ProfileStore.validate_id(params["profileId"]) == :ok,
-        do: :ok,
-        else: {:error, Errors.invalid_request("profileId must be a valid profile ID")}
+         do: :ok,
+         else: {:error, Errors.invalid_request("profileId must be a valid profile ID")}
     else
       :ok
     end

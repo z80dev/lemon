@@ -395,6 +395,7 @@ defmodule LemonCore.ToolPolicyTest do
 
       assert {:ok, normalized_true} =
                ToolPolicy.normalize(%{"workspace_read_exempt" => true})
+
       assert normalized_true["workspace_read_exempt"] == true
 
       policy_false = ToolPolicy.parse!(%{"workspace_read_exempt" => false})
@@ -402,6 +403,7 @@ defmodule LemonCore.ToolPolicyTest do
 
       assert {:ok, normalized_false} =
                ToolPolicy.normalize(%{"workspace_read_exempt" => false})
+
       assert normalized_false["workspace_read_exempt"] == false
 
       assert {:error, {:invalid_field, :tool_policy}} =

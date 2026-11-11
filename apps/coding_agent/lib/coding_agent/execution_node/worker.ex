@@ -1341,7 +1341,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp invocation_directory(nil, requested_cwd, _meta, default_cwd) do
     with {:ok, cwd} <- invocation_cwd(requested_cwd, default_cwd),
-      do: {:ok, cwd, %{}}
+         do: {:ok, cwd, %{}}
   end
 
   defp invocation_directory("profile_files", nil, meta, default_cwd) do

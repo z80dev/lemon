@@ -26,6 +26,7 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
   def validate_working_directory(nil), do: :ok
   def validate_working_directory(dir) when dir in ["node_default", "profile_files"], do: :ok
   def validate_working_directory(_), do: {:error, {:invalid_field, :working_directory}}
+
   def refresh(id \\ nil) do
     if Process.whereis(LemonRouter.AgentProfiles) == nil do
       :ok

@@ -611,6 +611,7 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
       assert {:error, _} = Schemas.validate(method, Map.put(base, "profileId", 123))
     end
   end
+
   defp image do
     %{"type" => "image", "mime_type" => "image/png", "data" => @png_data}
   end

@@ -142,7 +142,9 @@ defmodule LemonCore.ProfileStore do
 
       clone_attrs =
         source
-        |> Map.take(~w(name description avatar model systemPrompt node workingDirectory mcpServers toolPolicy))
+        |> Map.take(
+          ~w(name description avatar model systemPrompt node workingDirectory mcpServers toolPolicy)
+        )
         |> Map.merge(stringify_keys(attrs))
         |> Map.put("id", value(attrs, "id") || slug(value(attrs, "name")))
 
@@ -354,8 +356,8 @@ defmodule LemonCore.ProfileStore do
       invocation_policy =
         if profile_policy["workspace_read_exempt"] != true and
              invocation_policy[:workspace_read_exempt] == true,
-          do: Map.delete(invocation_policy, :workspace_read_exempt),
-          else: invocation_policy
+           do: Map.delete(invocation_policy, :workspace_read_exempt),
+           else: invocation_policy
 
       effective_tool_policy = LemonCore.ToolPolicy.intersect(profile_policy, invocation_policy)
 

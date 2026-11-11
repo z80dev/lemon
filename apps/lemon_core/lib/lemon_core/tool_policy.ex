@@ -937,6 +937,7 @@ defmodule LemonCore.ToolPolicy do
 
   defp parse_workspace_read_exempt(nil), do: {:ok, nil}
   defp parse_workspace_read_exempt(value) when is_boolean(value), do: {:ok, value}
+
   defp parse_workspace_read_exempt(_value),
     do: {:error, {:invalid_policy_field, :workspace_read_exempt}}
 

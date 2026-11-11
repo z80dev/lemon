@@ -24,12 +24,20 @@ defmodule CodingAgent.ExecutionNode.BotFolder do
 
   defp private_directory(path) do
     case File.lstat(path) do
-      {:ok, %File.Stat{type: :directory}} -> File.chmod(path, 0o700)
+      {:ok, %File.Stat{type: :directory}} ->
+        File.chmod(path, 0o700)
+
       {:error, :enoent} ->
-        with :ok <- File.mkdir_p(Path.dirname(path)),
-             :ok <- File.mkdir(path),
-             do: File.chmod(path, 0o700)
-      _ -> {:error, :invalid_directory}
+        with :ok <- File.mkdir_p(Path.dirname(path)) do
+          case File.mkdir(path) do
+            :ok -> File.chmod(path, 0o700)
+            {:error, :eexist} -> private_directory(path)
+            error -> error
+          end
+        end
+
+      _ ->
+        {:error, :invalid_directory}
     end
   end
 end
