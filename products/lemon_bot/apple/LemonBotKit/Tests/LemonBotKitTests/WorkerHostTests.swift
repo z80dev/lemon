@@ -17,7 +17,7 @@ final class WorkerHostTests: XCTestCase {
     }
 
     func testLocatorAndWorkerUnit() throws {
-        let home = FileManager.default.temporaryDirectory.appendingPathComponent("tcc-helper-tests-" + UUID().uuidString)
+        let home = URL(fileURLWithPath: "/tmp/tcc-helper-scratch").appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: home) }
         let app = home.appendingPathComponent("Applications/Lemon Bot.app")
         let helper = app.appendingPathComponent("Contents/Helpers/Lemon Bot Worker.app")
@@ -27,8 +27,8 @@ final class WorkerHostTests: XCTestCase {
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: helper.appendingPathComponent("Contents/Info.plist"))
         try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-        XCTAssertEqual(WorkerHost.executableURL(appBundle: app, home: home.path), executable)
-        XCTAssertEqual(WorkerHost.appURL(appBundle: app, home: home.path), helper)
+        XCTAssertEqual(WorkerHost.executableURL(appBundle: app, home: home.path)?.path, executable.path)
+        XCTAssertEqual(WorkerHost.appURL(appBundle: app, home: home.path)?.path, helper.path)
         XCTAssertNil(WorkerHost.executableURL(appBundle: home.appendingPathComponent("Downloads/Lemon Bot.app"), home: home.path))
         XCTAssertNil(WorkerHost.executableURL(appBundle: home.appendingPathComponent("Applications/AppTranslocation/Lemon Bot.app"), home: home.path))
         let agents = home.appendingPathComponent("Library/LaunchAgents")
