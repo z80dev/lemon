@@ -1877,6 +1877,7 @@ public struct Machine: Codable, Hashable, Identifiable {
     public var `labels`: [String: String]
     public var `botIds`: [ID]
     public var `credential`: String?
+    public var link: MachineLink = .direct
     public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, nodeId: ID? = nil, nodeName: String, name: String, ownerUserId: ID, accessUserIds: [ID], status: String, lastSeenAtMs: TimestampMs? = nil, labels: [String: String], botIds: [ID], credential: String? = nil) {
         self.`id` = id
         self.`revision` = revision
@@ -1894,8 +1895,10 @@ public struct Machine: Codable, Hashable, Identifiable {
         self.`credential` = credential
     }
     enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `nodeId`, `nodeName`, `name`, `ownerUserId`, `accessUserIds`, `status`, `lastSeenAtMs`, `labels`, `botIds`, `credential` }
+    enum LinkCodingKeys: String, CodingKey { case link }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        link = try decoder.container(keyedBy: LinkCodingKeys.self).decodeIfPresent(MachineLink.self, forKey: .link) ?? .direct
         self.`id` = try c.decode(ID.self, forKey: .`id`)
         self.`revision` = try c.decode(Int.self, forKey: .`revision`)
         self.`createdAtMs` = try c.decode(TimestampMs.self, forKey: .`createdAtMs`)
@@ -1919,6 +1922,8 @@ public struct Machine: Codable, Hashable, Identifiable {
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        var linkContainer = encoder.container(keyedBy: LinkCodingKeys.self)
+        try linkContainer.encode(link, forKey: .link)
         try c.encode(`id`, forKey: .`id`)
         try c.encode(`revision`, forKey: .`revision`)
         try c.encode(`createdAtMs`, forKey: .`createdAtMs`)
@@ -2064,13 +2069,15 @@ public struct MachineInvite: Codable, Hashable, Identifiable {
 
 public struct MachineEnrollmentPreview: Codable, Hashable {
     public var reachability: String
+    public var ssh: MachineSSHAvailability?
     public init(reachability: String) {
         self.reachability = reachability
     }
-    enum CodingKeys: String, CodingKey { case reachability }
+    enum CodingKeys: String, CodingKey { case reachability, ssh }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         reachability = try c.decode(String.self, forKey: .reachability)
+        ssh = try c.decodeIfPresent(MachineSSHAvailability.self, forKey: .ssh)
         guard ["loopback_only", "routable"].contains(reachability) else {
             throw DecodingError.dataCorruptedError(forKey: .reachability, in: c, debugDescription: "Invalid MachineEnrollmentPreview.reachability")
         }
@@ -15495,6 +15502,7 @@ public enum RealtimePayload: Codable, Hashable {
     case deviceUpserted(Device)
     case deviceDeleted(Deleted)
     case machineUpserted(Machine)
+    case machineSetupUpserted(MachineSetup)
     case machineDeleted(Deleted)
     case machineInviteUpserted(MachineInvite)
     case botUpserted(Bot)
@@ -15569,6 +15577,7 @@ public enum RealtimePayload: Codable, Hashable {
     case .deviceUpserted(let value): try value.encode(to: encoder)
     case .deviceDeleted(let value): try value.encode(to: encoder)
     case .machineUpserted(let value): try value.encode(to: encoder)
+    case .machineSetupUpserted(let value): try value.encode(to: encoder)
     case .machineDeleted(let value): try value.encode(to: encoder)
     case .machineInviteUpserted(let value): try value.encode(to: encoder)
     case .botUpserted(let value): try value.encode(to: encoder)
@@ -15650,6 +15659,7 @@ public struct RealtimeEvent: Codable, Hashable {
     case .deviceUpserted: return "device.upserted"
     case .deviceDeleted: return "device.deleted"
     case .machineUpserted: return "machine.upserted"
+    case .machineSetupUpserted: return "machine_setup.upserted"
     case .machineDeleted: return "machine.deleted"
     case .machineInviteUpserted: return "machine_invite.upserted"
     case .botUpserted: return "bot.upserted"
@@ -15732,6 +15742,7 @@ public struct RealtimeEvent: Codable, Hashable {
         case "device.upserted": payload = .deviceUpserted(try c.decode(Device.self, forKey: .payload))
         case "device.deleted": payload = .deviceDeleted(try c.decode(Deleted.self, forKey: .payload))
         case "machine.upserted": payload = .machineUpserted(try c.decode(Machine.self, forKey: .payload))
+        case "machine_setup.upserted": payload = .machineSetupUpserted(try c.decode(MachineSetup.self, forKey: .payload))
         case "machine.deleted": payload = .machineDeleted(try c.decode(Deleted.self, forKey: .payload))
         case "machine_invite.upserted": payload = .machineInviteUpserted(try c.decode(MachineInvite.self, forKey: .payload))
         case "bot.upserted": payload = .botUpserted(try c.decode(Bot.self, forKey: .payload))

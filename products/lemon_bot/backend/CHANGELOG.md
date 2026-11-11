@@ -6,6 +6,7 @@
 
 - Added backend-driven SSH machine attachment with asynchronous private setup progress, durable nonce replay, supervised node/product reverse tunnels, and reconnect-safe enrollment. Enrollment preview reports SSH prerequisites; machine views show cached tunnel health without exposing SSH destinations to non-managers, and detaching a machine attempts tunnel removal after trust revocation. Bots can use a forwarded loopback product endpoint only when the machine's configured product port matches exactly.
 
+- Native Machines now offers one-address SSH setup with realtime progress, service persistence, preselected Bot creation, tunnel diagnostics and Reconnect.
 - Added resumable `lemon-bot up` background setup with secret-free NDJSON progress, local-owner sign-in, safe worker repair/enrollment, one-use stdin handoff, and browser sign-in through `lemon-bot open`. Plain terminal startup now sets up services and exits; non-terminal, service and `--no-open` invocations remain foreground servers.
 - Added private backend PID/start-time/instance records after listen, removed on clean shutdown, for verified lifecycle adoption.
 - Added explicit Standard access at Bot creation, import and duplication: supported Terminal/Files read-write and Browser read-only requested grants are saved before the first profile sync. Machine/workspace limits and command approvals remain enforced; omitted access and Chat only keep grants off.

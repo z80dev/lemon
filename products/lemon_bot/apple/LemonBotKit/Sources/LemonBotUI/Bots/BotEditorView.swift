@@ -36,7 +36,7 @@ struct BotEditorView: View {
     @State private var currentRevision: Int
     @State private var action = UIActionState()
     @State private var modelReadyOrSkipped: Bool
-    init(store: LemonBotStore, bot: Bot? = nil) {
+    init(store: LemonBotStore, bot: Bot? = nil, machineID: ID? = nil) {
         self.store = store; self.bot = bot
         _name = State(initialValue: bot?.name ?? "")
         _title = State(initialValue: bot?.title ?? "")
@@ -44,7 +44,7 @@ struct BotEditorView: View {
         _instructions = State(initialValue: bot?.instructions ?? "")
         // One online machine is the obvious choice; more than one stays an explicit pick.
         let online = store.machines.filter { $0.status == "online" }
-        _machineID = State(initialValue: bot?.machineId ?? (online.count == 1 ? online[0].id : ""))
+        _machineID = State(initialValue: bot?.machineId ?? machineID ?? (online.count == 1 ? online[0].id : ""))
         _shape = State(initialValue: bot?.avatar.shape ?? "round")
         _color = State(initialValue: bot?.avatar.color ?? "yellow")
         _avatarID = State(initialValue: bot?.avatar.attachmentId)
@@ -56,7 +56,7 @@ struct BotEditorView: View {
         _references = State(initialValue: bot?.referenceAttachmentIds ?? [])
         _currentRevision = State(initialValue: bot?.revision ?? 1)
         _access = State(initialValue: "standard")
-        let initialMachineID = bot?.machineId ?? (online.count == 1 ? online[0].id : "")
+        let initialMachineID = bot?.machineId ?? machineID ?? (online.count == 1 ? online[0].id : "")
         _modelReadyOrSkipped = State(initialValue: bot != nil || ModelReadinessSkipStore.isSkipped(workspaceID: store.workspace?.id, machineID: initialMachineID))
     }
     var body: some View {

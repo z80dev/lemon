@@ -224,6 +224,7 @@ extension LemonBotStore {
     }
     func apply(_ event: RealtimeEvent) async throws {
         switch event.payload {
+        case .machineSetupUpserted(let value): try await receiveMachineSetup(value)
         case .userUpdated(let value): if value.id == user?.id, value.revision >= (user?.revision ?? 0) { user = value }
         case .workspaceUpdated(let value): if value.id == workspace?.id, value.revision >= (workspace?.revision ?? 0) { workspace = value }
         case .memberUpserted(let value): if value.userId == user?.id, value.revision >= (member?.revision ?? 0) { member = value }

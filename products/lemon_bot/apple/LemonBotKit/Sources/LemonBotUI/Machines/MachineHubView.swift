@@ -25,8 +25,8 @@ public struct MachineHubView: View {
             NavigationLink("Owned-host operations") { HostOperationsView(store: store) }
         }
         .navigationTitle("Machines")
-        .toolbar { Button("Attach machine") { attach = true }; Button("Refresh") { Task { await load() } } }
-        .sheet(isPresented: $attach) { NavigationStack { MachineAttachView(store: store) } }
+        .toolbar { Button("Add a machine") { attach = true }; Button("Refresh") { Task { await load() } } }
+        .sheet(isPresented: $attach, onDismiss: { Task { await load() } }) { NavigationStack { MachineSSHSetupView(store: store) } }
         .task { await load() }
     }
     private func load(more: Bool = false) async {
@@ -125,6 +125,7 @@ public struct MachineDetailView: View {
     @State private var name = ""
     @State private var preview: HubConfirmation?
     @State private var action = HubAction()
+    @State private var reconnect = false
     public init(store: LemonBotStore, machineID: ID) { self.store = store; self.machineID = machineID }
     public var body: some View {
         Form {
@@ -144,6 +145,7 @@ public struct MachineDetailView: View {
                         let updated: Machine = try await store.mutate("PATCH", "/machines/\(hubID(machineID))", body: ["revision": .number(Double(machine.revision)), "name": .string(name)]); self.machine = updated
                     } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
                 }
+                MachineTunnelSection(machine: machine) { reconnect = true }
                 Section("Machine information") {
                     if let host {
                         LabeledContent("Hostname / OS", value: "\(host.hostname) · \(host.os) \(host.osVersion) · \(host.arch)")
@@ -204,6 +206,9 @@ public struct MachineDetailView: View {
             }
         }.formStyle(.grouped).navigationTitle(machine?.name ?? "Machine").toolbar { Button("Refresh") { Task { await action.checkStatus(store) { try await load() } } } }
             .task { await action.perform(readOnly: true) { try await load() } }
+            .sheet(isPresented: $reconnect, onDismiss: { Task { await action.perform(readOnly: true) { try await load() } } }) {
+                if let machine { NavigationStack { MachineSSHSetupView(store: store, machine: machine) } }
+            }
     }
     private func load() async throws {
         let value: Machine = try await store.read("/machines/\(hubID(machineID))"); machine = value; name = value.name
