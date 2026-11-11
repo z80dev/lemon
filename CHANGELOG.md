@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.11.5]
+
 ### Fixed
 
 - `lemon setup` failed to open Lemon or finish Lemon Bot setup with
