@@ -9,30 +9,38 @@ If you only read one section, read [Your first contribution](#your-first-contrib
 
 ## Before You Start
 
-1. **Run `mix lemon.doctor`** — ensures your environment is set up correctly.
-2. **Read `docs/contributor/public_repo_basics.md`** — branching, commit style, feature flags.
-3. **Read `docs/contributor/ownership.md`** — code ownership lanes and CODEOWNERS rules.
+1. **Read `docs/contributor/public_repo_basics.md`** — branching, commit style, feature flags.
+2. **Read `docs/contributor/ownership.md`** — code ownership lanes and CODEOWNERS rules.
+3. **Use the setup below, then run `./bin/lemon doctor`** before a manual agent run.
 
 ## Prerequisites
 
-- **Elixir 1.20.5+ / OTP 29.1.2+.** The source toolchain is pinned in
+- **Elixir 1.20.5+ / OTP 29.1.2+.** The BEAM toolchain is pinned in
   `.tool-versions`, as in CI. Package release prerequisites are documented
   separately in the [package release instructions](docs/release/hex-packages.md).
-- **A version manager** (`asdf` or `mise`) can install the pinned toolchain.
-- **A C toolchain** (`cc`/`gcc` + `make`). The SQLite-backed store compiles `exqlite`'s native
-  NIF from C source, so `mix compile` needs a working compiler — `build-essential` on Debian/Ubuntu,
-  `base-devel` on Arch, Xcode command-line tools on macOS.
+- **Bun per client subtree:** 1.3.14+ for `clients/tui` and 1.4.2 for
+  `products/lemon_bot`, pinned in their respective `.bun-version` files.
+- **Node.js 24 LTS+** for the browser client and documentation site.
+- **A version manager** (`asdf` or `mise`) can install the pinned BEAM toolchain.
+- **A C toolchain** (`cc`/`gcc` + `make`). The SQLite-backed store compiles
+  `exqlite`'s native NIF from C source, so `mix compile` needs
+  `build-essential` on Debian/Ubuntu, `base-devel` on Arch, or Xcode Command
+  Line Tools on macOS.
 
 ## Quick Start
 
 ```bash
 git clone https://github.com/z80dev/lemon.git
 cd lemon
-asdf install   # or `mise install` — toolchain is pinned in .tool-versions (Elixir 1.20.5 / OTP 29.1.2, same as CI)
-mix deps.get && mix compile
-mix lemon.doctor
+asdf install   # or: mise install
+mix deps.get
+mix compile
+./bin/lemon setup
+./bin/lemon doctor
 ```
 
+The root version-manager file installs the BEAM toolchain. Install Bun or Node
+separately when working on the corresponding client, Bot, or docs subtree.
 Full setup: [`docs/user-guide/setup.md`](docs/user-guide/setup.md)
 
 ## Development
@@ -64,9 +72,8 @@ repo or in your own. Here is the whole on-ramp:
    mix lemon.new my_agent
    ```
 
-   (`mix lemon.new my_agent --hex` depends on the published Hex packages
-   instead of this checkout; it cannot be combined with `--channel`, and
-   resolves once 0.2.0 is on hex.pm.)
+   `mix lemon.new my_agent --hex` uses the published Hex packages instead of
+   this checkout and cannot be combined with `--channel`.
 
 2. **Follow the guide.** [Add a channel](docs/getting-started/add-a-channel.md)
    walks from the console loop the generator gives you to a registered
@@ -89,9 +96,9 @@ shaped to receive.
 
 Extension behaviours have matching compliance suites in the
 `lemon_platform_test` kit. Implement the behaviour, then exercise its documented
-invariants with the matching case. The kit's five-package release set is at
-0.2.0 in this repository but is not yet published; `PluginCase` also requires
-the in-repository `lemon_channels`. See [package status](docs/platform-split.md).
+invariants with the matching case. The five-package 0.2.0 release set is
+published on Hex; `PluginCase` also requires the in-repository
+`lemon_channels`. See [package status](docs/platform-split.md).
 
 | You want to add | Implement | Compliance suite | Guide |
 |-----------------|-----------|------------------|-------|
