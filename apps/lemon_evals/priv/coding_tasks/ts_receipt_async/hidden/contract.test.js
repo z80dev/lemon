@@ -7,14 +7,17 @@ import { collectReceipts } from '../src/batch.js';
 const order={customerId:'c',lines:[{sku:'x',quantity:2},{sku:'x',quantity:0},{sku:'y',quantity:3}]};
 function stub({faultAt,reason,closeReason,closeFails=false,missing=false,customer={name:'Ada'}}={}){
  const events=[]; let release; const closed=new Promise(resolve=>{release=resolve});
+ let enteredClose; const closeEntered=new Promise(resolve=>{enteredClose=resolve});
  const read=(name,value)=>async(...args)=>{events.push([name,...args]);assert.equal(args.length,1);if(faultAt===name)throw reason;return value};
- const session={order:read('order',missing?null:order),customer:read('customer',customer),price:async(...args)=>{events.push(['price',...args]);assert.equal(args.length,1);if(faultAt==='price')throw reason;return args[0]==='x'?100:7},close:async(...args)=>{assert.equal(args.length,0);events.push(['close']);await closed;if(closeFails)throw closeReason}};
- return {events,release,async open(...args){assert.equal(args.length,0);events.push(['open']);if(faultAt==='open')throw reason;return session;}};
+ const session={order:read('order',missing?null:order),customer:read('customer',customer),price:async(...args)=>{events.push(['price',...args]);assert.equal(args.length,1);if(faultAt==='price')throw reason;return args[0]==='x'?100:7},close:async(...args)=>{assert.equal(args.length,0);events.push(['close']);enteredClose();await closed;if(closeFails)throw closeReason}};
+ return {events,release,closeEntered,async open(...args){assert.equal(args.length,0);events.push(['open']);if(faultAt==='open')throw reason;return session;}};
 }
 test('new API and ordered reads, repeated lines, awaited close',async()=>{
  assert.equal('loadReceipt' in service,false);
  const store=stub(); let done=false; const result=service.buildReceipt('o',store).then(x=>{done=true;return x});
- for(let i=0;i<20;i++)await Promise.resolve(); assert.equal(done,false);
+ await store.closeEntered;
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(done,false);
  assert.deepEqual(store.events,[['open'],['order','o'],['customer','c'],['price','x'],['price','x'],['price','y'],['close']]);
  store.release(); assert.deepEqual(await result,{id:'o',customer:'Ada',totalCents:221});
  for(const customer of [null,{name:''}]) {const s=stub({customer});s.release();assert.equal((await service.buildReceipt('o',s)).customer,customer===null?'Guest':'');}
