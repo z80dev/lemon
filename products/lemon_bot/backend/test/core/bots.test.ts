@@ -219,7 +219,7 @@ function standardCapabilities(): P.MachineCapabilities['items'] {
     { id: 'browser', name: 'Browser', category: 'browser', tools: ['browser_snapshot', 'browser_click'] },
   ].map(item => ({ ...item, supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', reason: 'measured', measuredAtMs: 1700000000000, stale: false })) as P.MachineCapabilities['items'];
 }
-const standardRequested = { terminal: 'read_interact', files: 'read_interact', browser: 'read_only' };
+const standardRequested: Record<string, P.AccessLevel> = { terminal: 'read_interact', files: 'read_interact', browser: 'read_only' };
 function requestedLevels(f: Pick<BackendServices, 'store'>, botId?: string) {
   return Object.fromEntries(f.store.list<P.BotGrant>('botGrants', grant => !botId || grant.botId === botId).map(grant => [grant.capabilityId, grant.requestedLevel]));
 }

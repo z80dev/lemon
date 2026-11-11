@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Bot setup defaults to explicit Standard access, preselects the sole online owned computer, and keeps optional customization collapsed. Import and duplicate confirm their own access choice; empty chats offer one-click starter tasks.
+
 - Reply chips show the original author and a short message preview; Send has a keyboard-focus tooltip.
 - Standardized computer connection setup as “Connect a computer” and raised status badges to 12px. Narrow sidebar headers keep their New Bot button on the logo row, truncating long connection labels instead.
 - Load feature screens on demand instead of bundling all routes into the initial client chunk.

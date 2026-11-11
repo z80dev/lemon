@@ -12,7 +12,7 @@ import { ActivityScreen, Palette, SearchScreen } from './navigation';
 import { ConnectionPanel } from './connection';
 import { connectionLabel, sessionEnded } from './connection-state';
 
-export interface Route { screen: string; id?: string; botId?: string; tab?: string; entryId?: string; conversationId?: string; taskConversationId?: string }
+export interface Route { screen: string; id?: string; botId?: string; tab?: string; entryId?: string; conversationId?: string; taskConversationId?: string; machineId?: string }
 export interface AppContextValue { client: LemonBotClient; realtime: RealtimeConnection | null; snapshot: Snapshot; device: Device | null; online: boolean; navigate: (route: Route) => void; refresh: () => Promise<void>; updateInstance: (status: InstanceStatus) => void; reportError: (error: unknown) => void; draftPrompt: (conversationId: string, text: string) => void; logout: () => Promise<void>; forgetConversation: (conversationId: string) => void }
 const AppContext = createContext<AppContextValue | null>(null);
 export function useApp() { const value = useContext(AppContext); if (!value) throw new Error('Lemon Bot workspace context is not mounted.'); return value; }
@@ -51,7 +51,7 @@ export function openWorkspaceLink(value: string, workspaceId: string, navigate: 
 }
 function initialRoute(): Route {
   const query = new URLSearchParams(location.hash.replace(/^#/, '') || location.search);
-  return { screen: query.get('screen') || 'home', id: query.get('id') || undefined, botId: query.get('botId') || undefined, tab: query.get('tab') || undefined, entryId: query.get('entryId') || undefined, conversationId: query.get('conversationId') || undefined, taskConversationId: query.get('taskConversationId') || undefined };
+  return { screen: query.get('screen') || 'home', id: query.get('id') || undefined, botId: query.get('botId') || undefined, tab: query.get('tab') || undefined, entryId: query.get('entryId') || undefined, conversationId: query.get('conversationId') || undefined, taskConversationId: query.get('taskConversationId') || undefined, machineId: query.get('machineId') || undefined };
 }
 function upsert<T extends Resource>(items: T[], resource: T) { const previous = items.find(item => item.id === resource.id); if (previous && previous.revision >= resource.revision) return items; return previous ? items.map(item => item.id === resource.id ? resource : item) : [...items, resource]; }
 function applySnapshotEvent(snapshot: Snapshot, event: RealtimeEvent): Snapshot {
@@ -237,7 +237,7 @@ function DestinationContent({ route, activeBot }: { route: Route; activeBot?: Bo
   if (['activity', 'upcoming'].includes(route.screen)) return <ActivityScreen route={route}/>;
   if (isSettingsScreen(route.screen)) return <SettingsRoute route={route}/>;
   if (route.screen === 'inbox') return <SettingsScreen route={route}/>;
-  if (route.screen.startsWith('bot.') || ['memory', 'memory.import', 'preference.changes', 'group.create', 'group.edit', 'voice.preview'].includes(route.screen)) return <BotsScreen route={{ ...route, id: route.id || activeBot?.id, botId: route.botId || activeBot?.id }}/>;
+  if (route.screen.startsWith('bot.') || ['memory', 'memory.import', 'preference.changes', 'group.create', 'group.edit', 'voice.preview'].includes(route.screen)) return <BotsScreen route={{ ...route, id: route.id || activeBot?.id, botId: route.botId || activeBot?.id, machineId: route.machineId }}/>;
   return <EmptyState title="This destination is unavailable" action={<button onClick={() => navigate({ screen: 'home' })}>Return to your Bots</button>}/>;
 }
 function DecisionLink({ route }: { route: Route }) {

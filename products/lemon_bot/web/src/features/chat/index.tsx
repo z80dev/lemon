@@ -3,7 +3,7 @@ import type { FeedbackCreate, Run, TranscriptEntry, TranscriptEvent } from '@lem
 import { nonce } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
 import type { Route } from '../../app';
-import { AlertCircle, ArrowDown, Hand, Check, ChevronLeft, ChevronRight, CircleStop, Copy, MoreHorizontal, Reply, Search, Square, ThumbsUp, Wrench, X } from 'lucide-react';
+import { AlertCircle, ArrowDown, ArrowRight, Hand, Check, ChevronLeft, ChevronRight, CircleStop, Copy, MoreHorizontal, Reply, Search, Square, ThumbsUp, Wrench, X } from 'lucide-react';
 import { BotAvatar, EmptyState, ErrorNotice, Field, LemonFace, Loading, PageHeader, botStyle, formatTime, useQuery } from '../../ui';
 import { compactDuration, currentStep, humanize, liveRunStatuses, plainLine, relativeTime, separatorDate, stoppableRunStatuses, toolIcon, voiceStateLabels } from '../../live';
 import { TranscriptCard } from './cards';
@@ -157,7 +157,7 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
   const { client, realtime, snapshot, online, navigate } = useApp(); const conversationQuery = useQuery(`conversation:${id}`, () => client.call('GET /conversations/:id', { params: { id } })); const history = useQuery(`entries:${id}`, () => client.call('GET /conversations/:id/entries', { params: { id }, query: { limit: 100 } }));
   const runQuery = useQuery(`runs:${id}`, () => client.call('GET /runs', { query: { conversationId: id, limit: 200 } })); const runsRef = useRef<Run[]>([]); const [runs, setRuns] = useState<Run[]>([]);
   const [entries, setEntries] = useState<TranscriptEntry[]>([]); const entriesRef = useRef(entries); entriesRef.current = entries; const [replyId, setReplyId] = useState<string | null>(null); const [panel, setPanel] = useState<PanelTab | null>(null); const headerMenu = useRef<HTMLDetailsElement>(null); const [findOpen, setFindOpen] = useState(false); const findInput = useRef<HTMLInputElement>(null); const [older, setOlder] = useState(false); const [paging, setPaging] = useState(false); const [pageError, setPageError] = useState<unknown>(); const [liveError, setLiveError] = useState<unknown>(); const [find, setFind] = useState(''); const [findQuery, setFindQuery] = useState(''); const [typing, setTyping] = useState<{ userId: string; expiresAtMs: number }[]>([]); const [jumped, setJumped] = useState(false);
-  const scroller = useRef<HTMLDivElement>(null); const end = useRef<HTMLDivElement>(null); const pinned = useRef(true); const initialScroll = useRef(false); const lastRead = useRef(0); const unreadBoundary = useRef<number | undefined>(undefined); const clock = useClock(); const stopIntent = useIntent(); const readFailure = useRef(false); const [readError, setReadError] = useState<unknown>(); const readInFlight = useRef(false); const visibleThrough = useRef(0); const visibleEntries = useRef(new Set<string>()); const [readVersion, setReadVersion] = useState(0); const refetching = useRef(new Set<string>());
+  const scroller = useRef<HTMLDivElement>(null); const end = useRef<HTMLDivElement>(null); const pinned = useRef(true); const initialScroll = useRef(false); const lastRead = useRef(0); const unreadBoundary = useRef<number | undefined>(undefined); const clock = useClock(); const stopIntent = useIntent(); const [starterTask, setStarterTask] = useState<{ text: string; id: number }>(); const readFailure = useRef(false); const [readError, setReadError] = useState<unknown>(); const readInFlight = useRef(false); const visibleThrough = useRef(0); const visibleEntries = useRef(new Set<string>()); const [readVersion, setReadVersion] = useState(0); const refetching = useRef(new Set<string>());
   const forwardSeq = useRef(0); const [newer, setNewer] = useState(false); const [newBelow, setNewBelow] = useState(false); const [settled, setSettled] = useState(false);
   const [routePending, setRoutePending] = useState(!!route.entryId); const [routeRejected, setRouteRejected] = useState(false);
   const search = useQuery(`conversation-search:${id}:${findQuery}`, async () => {
@@ -235,6 +235,10 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
     window.addEventListener('keydown', keyboard); window.addEventListener('lemonbot:toggle-inspector', toggle);
     return () => { window.removeEventListener('keydown', keyboard); window.removeEventListener('lemonbot:toggle-inspector', toggle); };
   }, []);
+  const leadBot = conversation ? snapshot.bots.find(bot => bot.id === (conversation.leadBotId || conversation.botIds[0])) : undefined;
+  const leadMachine = leadBot ? snapshot.machines.find(m => m.id === leadBot.machineId) : undefined;
+  const hostQuery = useQuery(`machine-host:${leadBot?.machineId || 'none'}`, () => (leadBot?.machineId ? client.call('GET /machines/:id/host', { params: { id: leadBot.machineId } }).catch(() => null) : Promise.resolve(null)));
+  const detectedOs = (hostQuery.data?.os || leadMachine?.labels?.os || '').toLowerCase();
   if (routePending) return <section className="page"><PageHeader title="Checking conversation link" /><Loading /></section>;
   const mismatchedContext = conversation && ((route.botId && !conversation.botIds.includes(route.botId)) || (route.taskConversationId && (conversation.kind !== 'task' || conversation.id !== route.taskConversationId)) || (route.conversationId && route.conversationId !== conversation.id && route.conversationId !== conversation.parentConversationId));
   if (routeRejected || mismatchedContext) return <section className="page"><PageHeader title="Conversation link rejected" /><ErrorNotice error={routeRejected ? pageError : new Error('The linked Bot, conversation or task identifiers do not match this authorized context.')} /><button onClick={() => navigate({ screen: 'conversation', id })}>Open this authorized conversation without the mismatched link</button></section>;
@@ -242,7 +246,13 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
   const retryTextFor = (run: Run, before?: number) => { const exact = entries.find(entry => entry.kind === 'message' && entry.actor.kind === 'user' && entry.clientNonce === run.clientNonce); const fallback = before === undefined ? undefined : [...entries].reverse().find(entry => entry.seq < before && entry.kind === 'message' && entry.actor.kind === 'user'); const source = exact || fallback; return source?.kind === 'message' && source.text ? source.text : undefined; };
   const placedRuns = new Set(entries.map(entry => entry.runId).filter((runId): runId is string => !!runId));
   const orphanOutcomes = runs.filter(run => finishedRun[run.status] && !placedRuns.has(run.id)).sort((a, b) => (a.completedAtMs || a.createdAtMs) - (b.completedAtMs || b.createdAtMs));
-  const leadBot = conversation ? snapshot.bots.find(bot => bot.id === (conversation.leadBotId || conversation.botIds[0])) : undefined;
+  const isMac = detectedOs.includes('darwin') || detectedOs.includes('mac');
+  const isLinux = detectedOs.includes('linux');
+  const starterTasks = [
+    isMac ? "What's this Mac's hostname and macOS version?" : isLinux ? "What's this Linux machine's hostname and OS version?" : "What's this computer's hostname and OS version?",
+    "What's taking up space in Downloads?",
+    "List the projects in my home folder.",
+  ];
   const members = conversation ? conversation.botIds.map(botId => snapshot.bots.find(bot => bot.id === botId)).filter((bot): bot is NonNullable<typeof bot> => !!bot) : [];
   const shared = conversation?.kind === 'group' || conversation?.kind === 'channel';
   const title = conversation ? (conversation.kind === 'dm' && leadBot ? leadBot.name : conversation.name) : 'Conversation';
@@ -287,7 +297,7 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
             {!!readError && <div className="stack"><p>Couldn’t save your place.</p><button className="pill-button secondary compact" onClick={() => { void client.call('GET /conversations/:id', { params: { id } }).then(actual => { lastRead.current = actual.lastReadSeq; conversationQuery.setData(actual); setReadError(undefined); readFailure.current = false; visibleThrough.current = actual.lastReadSeq; }).catch(setReadError); }}>Check saved place</button></div>}
             {!!liveError && !history.error && <button className="pill-button secondary compact" onClick={() => void history.reload().then(() => setLiveError(undefined)).catch(setLiveError)}>Reload messages</button>}
             {history.loading && !entries.length && <Loading label="Loading messages…"/>}
-            {!history.loading && !history.error && !entries.length && !step && !liveRuns.length && <div className="chat-empty">{leadBot ? <BotAvatar bot={leadBot} size={72}/> : <LemonFace size={72}/>}<h2>{title}</h2><p className="muted">{leadBot?.job || leadBot?.title || 'Messages, files and work will appear here.'}</p></div>}
+            {!history.loading && !history.error && !entries.length && !step && !liveRuns.length && <div className="chat-empty">{leadBot ? <BotAvatar bot={leadBot} size={72}/> : <LemonFace size={72}/>}<h2>{title}</h2><p className="muted">{leadBot?.job || leadBot?.title || 'Messages, files and work will appear here.'}</p>{leadBot && <div className="chat-starter-tasks" role="group" aria-label="Suggested starter tasks">{starterTasks.map(task => <button key={task} type="button" className="chat-starter-button" disabled={!online} onClick={() => setStarterTask(previous => ({ text: task, id: (previous?.id ?? 0) + 1 }))}><span>{task}</span><ArrowRight size={14} className="chat-starter-arrow" aria-hidden="true" /></button>)}</div>}</div>}
             {entries.map((entry, index) => {
               if (entry.kind === 'user_attachment' && entry.batchId && entries.some(item => item.kind === 'message' && item.batchId === entry.batchId)) return null;
               if (entry.targetedUserId && entry.targetedUserId !== snapshot.user.id) return null;
@@ -314,7 +324,7 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
           </div>}
           {!step && typingNow && <div className="chat-presence" role="status">Someone is typing…</div>}
           <IntentNotice intent={stopIntent} reconcile={async () => { const page = await client.call('GET /runs', { query: { conversationId: id, limit: 200 } }); for (const run of page.items) updateRun(run); }} />
-          <Composer key={id} conversation={conversation} bot={leadBot} replyId={replyId} clearReply={() => setReplyId(null)} accepted={receipt => { upsert(receipt.entries, true); for (const run of receipt.runs) updateRun(run); }} />
+          <Composer key={id} conversation={conversation} bot={leadBot} replyId={replyId} clearReply={() => setReplyId(null)} starterTask={starterTask} accepted={receipt => { upsert(receipt.entries, true); for (const run of receipt.runs) updateRun(run); }} />
         </div>
       </div>
       {panel && <BotPanel id={`panel-${id}`} conversation={conversation} changed={conversationQuery.setData} runs={runs} entries={entries} tab={panel} setTab={setPanel} stop={run => void stopIntent.run(async () => updateRun(await client.call('POST /runs/:id/cancel', { params: { id: run.id }, body: { clientNonce: nonce(), reason: 'Explicit user Stop' } })))} stopDisabled={!online || stopIntent.busy || stopIntent.uncertain} />}

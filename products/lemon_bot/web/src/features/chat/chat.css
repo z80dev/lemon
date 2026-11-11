@@ -127,8 +127,14 @@
 .chat-outcome-box dt { color: var(--muted); }
 .chat-outcome-box dd { margin: 0; color: var(--ink); display: flex; align-items: center; gap: 4px; min-width: 0; }
 .chat-outcome-box code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.chat-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; margin: 12vh auto 0; max-width: 340px; }
+.chat-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; margin: 10vh auto 0; max-width: 380px; width: 100%; }
 .chat-empty h2 { margin: 8px 0 0; font-size: 20px; }
+.chat-starter-tasks { display: flex; flex-direction: column; gap: 8px; width: 100%; margin-top: 16px; }
+.chat-starter-button { display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: left; padding: 11px 14px; background: var(--bubble); border: 1px solid var(--fill); border-radius: 12px; font-size: 13.5px; color: var(--ink); cursor: pointer; transition: background 150ms ease, border-color 150ms ease, transform 150ms ease; min-height: 44px; width: 100%; }
+.chat-starter-button:hover:not(:disabled) { background: var(--hover); border-color: var(--separator); transform: translateY(-1px); }
+.chat-starter-button:disabled { opacity: 0.6; cursor: not-allowed; }
+.chat-starter-arrow { color: var(--muted); flex-shrink: 0; transition: transform 150ms ease, color 150ms ease; }
+.chat-starter-button:hover:not(:disabled) .chat-starter-arrow { transform: translateX(2px); color: var(--ink); }
 /* Dock: new-messages pill, working row, composer. */
 .chat-dock { flex-shrink: 0; width: 100%; max-width: 760px; margin: 0 auto; padding: 0 16px 14px; padding-bottom: calc(14px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; position: relative; }
 .new-messages { position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 5px; border: 0; border-radius: 999px; background: var(--unread); color: #fff; font-size: 12px; font-weight: 600; padding: 6px 12px; min-height: 0; box-shadow: var(--float-shadow); animation: snappy-in 260ms cubic-bezier(.25,1,.5,1); }
