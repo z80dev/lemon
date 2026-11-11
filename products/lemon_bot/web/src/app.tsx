@@ -1,9 +1,9 @@
 import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { LemonBotClient, nonce, type Bot, type Conversation, type Device, type InstanceStatus, type RealtimeConnection, type RealtimeEvent, type RealtimeState, type Resource, type Snapshot } from '@lemon-bot/sdk';
+import { LemonBotClient, nonce, type Bot, type Conversation, type Device, type InstanceStatus, type RealtimeConnection, type RealtimeEvent, type RealtimeState, type Resource, type Run, type Snapshot } from '@lemon-bot/sdk';
 import { AuthScreen, savedAccounts, type WebSession } from './auth';
 import { ArrowDown, ChevronRight, GitBranch, History, Inbox, LayoutGrid, ListFilter, Menu, MoreHorizontal, Plus, Search, SquarePen } from 'lucide-react';
 import { AccountAvatar, BotAvatar, ConfirmDialog, EmptyState, ErrorNotice, LemonFace, LemonMark, Loading, useAction } from './ui';
-import { currentStep, previewText } from './live';
+import { currentStep, previewText, staleLiveRuns } from './live';
 import { SettingsRoute, isSettingsScreen } from './settings-shell';
 import { BotsScreen, ConversationScreen, FileViewer, SettingsScreen } from './route-components';
 import { VoiceOverlay } from './features/chat/voice-loader';
@@ -58,6 +58,10 @@ function initialRoute(): Route {
   return { screen: query.get('screen') || 'home', id: query.get('id') || undefined, botId: query.get('botId') || undefined, tab: query.get('tab') || undefined, entryId: query.get('entryId') || undefined, conversationId: query.get('conversationId') || undefined, taskConversationId: query.get('taskConversationId') || undefined, machineId: query.get('machineId') || undefined };
 }
 function upsert<T extends Resource>(items: T[], resource: T) { const previous = items.find(item => item.id === resource.id); if (previous && previous.revision >= resource.revision) return items; return previous ? items.map(item => item.id === resource.id ? resource : item) : [...items, resource]; }
+function applyRun(snapshot: Snapshot, run: Run): Snapshot {
+  const active = ['reserved', 'queued', 'running', 'awaiting_input', 'outcome_unknown'].includes(run.status);
+  return { ...snapshot, activeRuns: active ? upsert(snapshot.activeRuns, run) : snapshot.activeRuns.filter(value => value.id !== run.id) };
+}
 function applySnapshotEvent(snapshot: Snapshot, event: RealtimeEvent): Snapshot {
   switch (event.event) {
     case 'user.updated': return event.payload.revision > snapshot.user.revision ? { ...snapshot, user: event.payload } : snapshot;
@@ -74,7 +78,7 @@ function applySnapshotEvent(snapshot: Snapshot, event: RealtimeEvent): Snapshot 
     case 'section.deleted': return { ...snapshot, sections: snapshot.sections.filter(section => section.id !== event.payload.id) };
     case 'notification.upserted': return { ...snapshot, notifications: upsert(snapshot.notifications, event.payload) };
     case 'notification.deleted': return { ...snapshot, notifications: snapshot.notifications.filter(item => item.id !== event.payload.id) };
-    case 'run.upserted': return { ...snapshot, activeRuns: ['reserved', 'queued', 'running', 'awaiting_input', 'outcome_unknown'].includes(event.payload.status) ? upsert(snapshot.activeRuns, event.payload) : snapshot.activeRuns.filter(run => run.id !== event.payload.id) };
+    case 'run.upserted': return applyRun(snapshot, event.payload);
     default: return snapshot;
   }
 }
@@ -108,6 +112,7 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reas
   const [attempt, setAttempt] = useState(0), [bootRetryAt, setBootRetryAt] = useState<number | null>(null);
   const [lastAttemptAt, setLastAttemptAt] = useState(Date.now());
   const bootFailures = useRef(0);
+  const reconcilingRunBots = useRef(new Set<string>());
   const [runtimeRunning, setRuntimeRunning] = useState(false);
   const [phone, setPhone] = useState(() => matchMedia('(max-width: 760px)').matches);
   useEffect(() => { const media = matchMedia('(max-width: 760px)'); const change = () => setPhone(media.matches); media.addEventListener('change', change); return () => media.removeEventListener('change', change); }, []);
@@ -151,9 +156,28 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reas
         try { let installationId = localStorage.getItem('lemonbot.installation'); if (!installationId) { installationId = nonce(); localStorage.setItem('lemonbot.installation', installationId); }
           registration = await client.call('POST /devices', { body: { clientNonce: nonce(), installationId, platform: 'web', name: 'Web browser', appVersion } }); if (disposed) return; setDevice(registration);
         } catch (failure) { if (!disposed) reportError(failure); }
-        socket = client.realtime({ deviceId: registration?.id, cursor: value.cursor, onEvent: async event => {
-          if (disposed) return; if (snapshotRef.current) update(applySnapshotEvent(snapshotRef.current, event));
+        socket = client.realtime({ deviceId: registration?.id, cursor: value.cursor, onEvent: event => {
+          if (disposed) return;
+          if (snapshotRef.current) update(applySnapshotEvent(snapshotRef.current, event));
           if (event.event === 'conversation.deleted') forgetConversation(event.payload.id);
+          const bot = event.event === 'bot.presence'
+            ? { id: event.payload.botId, activity: event.payload.status }
+            : event.event === 'bot.upserted' ? event.payload : undefined;
+          const current = snapshotRef.current;
+          if (bot && current) {
+            const stale = staleLiveRuns(bot, current.activeRuns);
+            if (stale.length && !reconcilingRunBots.current.has(bot.id)) {
+              reconcilingRunBots.current.add(bot.id);
+              void Promise.all(stale.map(run => client.call('GET /runs/:id', { params: { id: run.id } }))).then(runs => {
+                if (disposed) return;
+                for (const run of runs) {
+                  const snapshot = snapshotRef.current;
+                  if (snapshot) update(applyRun(snapshot, run));
+                }
+                window.dispatchEvent(new CustomEvent('lemonbot:runs-reconciled', { detail: runs }));
+              }).catch(() => undefined).finally(() => reconcilingRunBots.current.delete(bot.id));
+            }
+          }
           window.dispatchEvent(new CustomEvent('lemon:event', { detail: event }));
         }, onState: (state, failure) => {
           if (disposed) return;

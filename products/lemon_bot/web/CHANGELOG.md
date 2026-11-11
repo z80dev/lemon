@@ -16,6 +16,8 @@
 
 ### Fixed
 
+- Finished runs no longer leave “Writing a reply” or a caret behind when completion events arrive late, idle Bots reconcile stale run and message state, and grant changes cannot be replaced by an older in-flight refresh.
+
 - Device registration, About and update requirements use the build's package version and complete semantic-version precedence instead of hardcoded version checks.
 
 ### Added

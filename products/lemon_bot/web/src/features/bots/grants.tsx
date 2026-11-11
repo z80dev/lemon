@@ -23,6 +23,7 @@ export function GrantsPanel({ bot, editable }: { bot: Bot; editable: boolean }) 
         {(Object.keys(accessLabels) as AccessLevel[]).map(level => <button key={level} className={grant.requestedLevel === level ? 'selected' : undefined} type="button" aria-label={`${label}: ${accessLabels[level]}`} aria-pressed={grant.requestedLevel === level} aria-describedby={`grant-status-${grant.id} grant-restrictions-${grant.id}`} disabled={!editable || intent.disabled || !!grantControlReason(grant.capabilityId, level, capability)} title={grantControlReason(grant.capabilityId, level, capability)} onClick={() => void intent.run(async () => {
           const updated = await client.call('PATCH /bots/:id/grants/:grantId', { params: { id: bot.id, grantId: grant.id }, body: { clientNonce: nonce(), revision: grant.revision, requestedLevel: level } });
           grants.setData(previous => previous?.map(item => item.id === updated.id ? updated : item));
+          await grants.reload();
         })}>{accessLabels[level]}</button>)}
       </div>
       <p id={`grant-status-${grant.id}`} className={limited ? 'warning-text' : 'muted'} role="status">{limited && <strong>Requested {accessLabels[grant.requestedLevel]}; currently {accessLabels[grant.effectiveLevel]}. </strong>}{grantStatus(grant, capability)}</p>
