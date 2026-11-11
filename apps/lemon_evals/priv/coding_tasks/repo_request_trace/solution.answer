@@ -1,0 +1,70 @@
+{
+  "accepted": {
+    "status": 201,
+    "key": "team-birch:harbor-west:2026-03-09:req-17",
+    "amount": 1000,
+    "fee": 13,
+    "remaining": 187,
+    "replayed": false
+  },
+  "replay": {
+    "status": 200,
+    "key": "team-birch:harbor-west:2026-03-09:req-17",
+    "amount": 1000,
+    "fee": 13,
+    "remaining": 187,
+    "replayed": true
+  },
+  "closed": {
+    "status": 423,
+    "code": "PROJECT_CLOSED",
+    "origin": "harbor.projects.resolve"
+  },
+  "denied": {
+    "status": 401,
+    "code": "AUTH_TOKEN",
+    "origin": "harbor.auth.authenticate"
+  },
+  "over_budget": {
+    "status": 409,
+    "code": "BUDGET_LIMIT",
+    "origin": "harbor.budget.check"
+  },
+  "summary": {
+    "events": 1,
+    "used": 1813,
+    "remaining": 187,
+    "audit_statuses": [
+      201,
+      200,
+      423,
+      401,
+      409
+    ]
+  },
+  "stages": [
+    "harbor.app.handle",
+    "harbor.routes.resolve",
+    "harbor.auth.authenticate",
+    "harbor.service.reserve",
+    "harbor.schema.require",
+    "harbor.tenants.get",
+    "harbor.projects.resolve",
+    "harbor.calendar.parse_day",
+    "harbor.currency.normalize",
+    "harbor.money.cents",
+    "harbor.fees.calculate",
+    "harbor.keys.reservation",
+    "harbor.idempotency.lookup",
+    "harbor.budget.check",
+    "harbor.events.build",
+    "harbor.journal.commit",
+    "harbor.responses.created",
+    "harbor.audit.record"
+  ],
+  "replay_skips": [
+    "harbor.budget.check",
+    "harbor.events.build",
+    "harbor.journal.commit"
+  ]
+}

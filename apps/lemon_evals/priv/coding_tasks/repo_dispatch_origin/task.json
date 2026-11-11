@@ -1,0 +1,8 @@
+{
+  "id": "repo_dispatch_origin",
+  "language": "go",
+  "category": "bug_fix",
+  "difficulty": "hard",
+  "timeout_s": 900,
+  "prompt": "The dispatch desk reports a transfer depot as the origin of D-100. Repair the\nroot cause in the repository/storage reconstruction path, not by patching the\nHTTP response or adding a second history calculation in service/view/CLI.\nTrace the real request path and preserve all existing public APIs.\n\nThe origin must be the earliest accepted event by (At instant, Sequence),\nregardless of ledger insertion order; equal instants use the lower sequence.\nOther event kinds never supply an origin, and a stream without acceptance has\norigin null. Latest_hub must remain the latest accepted or moved event by the\nsame ordering (higher sequence on ties), or \"\" with neither kind. Ignore rows\nbelonging to other accounts or dispatch IDs. Reads must not mutate or alias\nledger state. Preserve row status/reference and tenant-scoped 401/404 behavior,\nexact response shapes and storage errors described in README. CLI and direct\nrepository users must get the same corrected model as HTTP callers. Update the\nevent documentation to explain the fixed reconstruction rule.\n\nRun visible tests with `go test ./...`.\n"
+}
