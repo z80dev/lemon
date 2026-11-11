@@ -104,6 +104,8 @@ export interface ProviderManagement {
   target: { id: string; nodeId: ID | null; hostname: string };
   default: { providerId: string | null; modelId: string | null };
   providers: ManagedProvider[];
+  readiness: ModelReadiness | null;
+  detected: DetectedLogin[];
 }
 export interface ManagedProvider {
   id: string; displayName: string; methods: ('api_key' | 'device_code' | 'unsupported')[];
@@ -113,6 +115,23 @@ export interface ManagedProvider {
   configurationOverrides: ('project_configuration' | 'credential_pool' | 'external_secret_source')[];
 }
 export interface ProviderTargetRequest extends Mutation { targetId: string }
+export type ModelReadinessState = 'verified' | 'saved' | 'action_required' | 'not_configured';
+export type ModelReadinessReason = 'credential_missing' | 'credential_expired' | 'credential_rejected' | 'model_unavailable' | 'provider_unreachable' | 'check_unavailable' | 'check_failed' | 'no_default' | 'model_provider_mismatch';
+export interface ModelReadiness {
+  state: ModelReadinessState;
+  providerId: string | null;
+  modelId: string | null;
+  check: 'codex_discovery' | 'models_endpoint' | null;
+  reason: ModelReadinessReason | null;
+  availableModelIds: string[] | null;
+  suggestedModelId: string | null;
+  checkedAtMs: TimestampMs | null;
+}
+export type DetectedLogin = { source: 'codex_cli'; providerId: 'openai_codex' } | { source: 'environment'; providerId: string; variable: string };
+export interface ProviderCheckRequest extends ProviderTargetRequest { providerId?: string }
+export interface ProviderCheckResult { management: ProviderManagement; readiness: ModelReadiness }
+/** Explicit consent to copy the target's Codex CLI login, never its source file. */
+export interface ProviderImportRequest extends ProviderTargetRequest { source: 'codex_cli'; consent: 'copy_login' }
 /** Transient request only. Never persist this field in drafts, browser storage or product SQLite. */
 export interface ProviderApiKeySet extends ProviderTargetRequest { value: string }
 export interface ProviderDefaultSet extends ProviderTargetRequest { providerId: string; modelId: string }
@@ -693,6 +712,8 @@ export interface RestEndpoints {
   'POST /instance/reconnect': Endpoint<Mutation, InstanceStatus>;
   'POST /instance/runtime/:action': Endpoint<RuntimeActionRequest, RuntimeOperation>;
   'GET /instance/providers': Endpoint<undefined, ProviderManagement>;
+  'POST /instance/providers/check': Endpoint<ProviderCheckRequest, ProviderCheckResult>;
+  'POST /instance/providers/:providerId/import': Endpoint<ProviderImportRequest, ProviderManagement>;
   'PUT /instance/providers/:providerId/api-key': Endpoint<ProviderApiKeySet, ProviderManagement>;
   'POST /instance/providers/:providerId/disconnect': Endpoint<ProviderTargetRequest, ProviderManagement>;
   'POST /instance/providers/default': Endpoint<ProviderDefaultSet, ProviderManagement>;
@@ -700,6 +721,8 @@ export interface RestEndpoints {
   'POST /instance/providers/:providerId/device-login/:loginId/poll': Endpoint<ProviderDeviceLoginRequest, ProviderDeviceLogin>;
   'POST /instance/providers/:providerId/device-login/:loginId/cancel': Endpoint<ProviderDeviceLoginRequest, ProviderDeviceLogin>;
   'GET /machines/:id/providers': Endpoint<undefined, ProviderManagement>;
+  'POST /machines/:id/providers/check': Endpoint<ProviderCheckRequest, ProviderCheckResult>;
+  'POST /machines/:id/providers/:providerId/import': Endpoint<ProviderImportRequest, ProviderManagement>;
   'PUT /machines/:id/providers/:providerId/api-key': Endpoint<ProviderApiKeySet, ProviderManagement>;
   'POST /machines/:id/providers/:providerId/disconnect': Endpoint<ProviderTargetRequest, ProviderManagement>;
   'POST /machines/:id/providers/default': Endpoint<ProviderDefaultSet, ProviderManagement>;
