@@ -53,6 +53,7 @@ private struct MachineConnectView: View {
     @State private var failure: (target: ConnectTarget, error: Error)?
     @State private var reopening: ID?
     @State private var installStep: RuntimeInstallStep?
+    @State private var setupTask: Task<Void, Never>?
 
     private var setupPin: ReleasePin? {
         guard let pin = ReleasePin.current, pin.manifestSHA256 != nil else { return nil }
@@ -93,6 +94,7 @@ private struct MachineConnectView: View {
         .navigationTitle("")
         .toolbar { if store.account != nil { Button("Close") { dismiss() } } }
         .task { await checkThisMac() }
+        .onDisappear { setupTask?.cancel() }
     }
 
     // MARK: Cards
@@ -229,8 +231,8 @@ private struct MachineConnectView: View {
     private func setUpThisMac() {
         guard busy == nil, stableAppLocation, let pin = setupPin else { return }
         busy = .thisMac; failure = nil; step = nil
-        Task {
-            defer { busy = nil; installStep = nil; step = nil }
+        setupTask = Task {
+            defer { busy = nil; installStep = nil; step = nil; setupTask = nil }
             do {
                 let plan = try RuntimeInstaller.plan(layout: InstallLayout(home: FileManager.default.homeDirectoryForCurrentUser), pin: pin)
                 try await RuntimeInstaller.install(plan) { value in
