@@ -1317,9 +1317,13 @@ tools,reason,measuredAtMs,stale}`. Categories are `files|shell|browser|connector
 levels `off|read_only|read_interact`, and OS grant states
 `granted|denied|not_required|unknown`. Probes read the destination's actual tool
 catalog/root permissions, executable availability and browser backend status.
-macOS Peekaboo grants and Linux X11 connection status are passive, bounded
-checks; unavailable inspection stays unknown, never fabricated denial or grant.
-Full Disk Access has no supported nonprompting macOS query and remains unknown.
+macOS grants are measured by the non-prompting Lemon Bot Worker helper configured
+through `LEMON_TCC_PROBE`; without it, grant inspection stays unknown. Peekaboo is
+still required for desktop control, but permission inspection never invokes its
+prompting permission command. The helper also measures Full Disk Access without
+prompting; that capability remains configured `off` with no tools. Linux X11
+connection checks are passive and bounded. Unavailable inspection never becomes
+a fabricated denial or grant.
 Connector authorization is session-scoped, not invented from method names.
 These measurements are not per-bot grants or an OS sandbox.
 The shell tool inventory includes `lsp_diagnostics` only when that exact native

@@ -38,3 +38,26 @@ test('unknown machine reason codes stay out of status while raw evidence remains
   expect(grantStatus(unknown)).not.toContain('future_machine_code');
   expect(unknown.reasons).toEqual(['future_machine_code']);
 });
+
+test('macOS permission reasons explain checked grants and Worker setup', () => {
+  const expected = {
+    macos_grant_measured: 'macOS permission checked.',
+    macos_grant_denied: "macOS hasn't allowed this — open Permissions on that Mac.",
+    macos_grant_probe_unavailable: "macOS permissions can't be checked until this Mac uses Lemon Bot Worker — open Permissions on that Mac.",
+  };
+  for (const [reason, message] of Object.entries(expected)) {
+    const measured = reason === 'macos_grant_measured';
+    const desktop: MachineCapability = {
+      ...capability, id: 'accessibility', category: 'os_app', reason,
+      configuredLevel: measured ? 'read_interact' : 'off',
+      osGrant: measured ? 'granted' : reason === 'macos_grant_denied' ? 'denied' : 'unknown',
+      stale: reason === 'macos_grant_probe_unavailable',
+    };
+    const permission: BotGrant = { ...grant, capabilityId: desktop.id, effectiveLevel: desktop.configuredLevel, reasons: [reason] };
+    expect(grantStatus(permission, desktop)).toBe(message);
+    expect(permission.reasons).toEqual([reason]);
+    const policy = { ...permission, reasons: [reason, 'Local execution is deny; workspace ceiling is deny.'] };
+    expect(grantStatus(policy, desktop)).toContain('workspace policy');
+    expect(grantStatus({ ...policy, reasons: [...policy.reasons, 'Tool-policy cutover has not been acknowledged.'] }, desktop)).toContain('not yet confirmed');
+  }
+});

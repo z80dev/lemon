@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleDisplayName</key><string>Lemon Bot Worker</string>
+    <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSUIElement</key><true/>
+    <key>NSDesktopFolderUsageDescription</key><string>Your Bots work with files and apps on this Mac when you ask them to.</string>
+    <key>NSDocumentsFolderUsageDescription</key><string>Your Bots work with files and apps on this Mac when you ask them to.</string>
+    <key>NSDownloadsFolderUsageDescription</key><string>Your Bots work with files and apps on this Mac when you ask them to.</string>
+    <key>NSRemovableVolumesUsageDescription</key><string>Your Bots work with files and apps on this Mac when you ask them to.</string>
+    <key>NSNetworkVolumesUsageDescription</key><string>Your Bots work with files and apps on this Mac when you ask them to.</string>
+    <key>NSAppleEventsUsageDescription</key><string>Your Bots work with files and apps on this Mac when you ask them to.</string>
+</dict></plist>
