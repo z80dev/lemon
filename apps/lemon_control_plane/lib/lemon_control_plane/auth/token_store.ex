@@ -27,6 +27,12 @@ defmodule LemonControlPlane.Auth.TokenStore do
   # Default token TTL: 24 hours
   @default_ttl_ms 24 * 60 * 60 * 1000
 
+  # Default node session TTL: 7 days
+  @node_session_ttl_ms 7 * 24 * 60 * 60 * 1000
+
+  @doc "Default node session TTL (7 days in milliseconds)."
+  @spec node_session_ttl_ms() :: pos_integer()
+  def node_session_ttl_ms, do: @node_session_ttl_ms
   @type token_info :: %{
           token: String.t(),
           identity: map(),
@@ -91,17 +97,19 @@ defmodule LemonControlPlane.Auth.TokenStore do
   Returns the identity map if valid, or an error if:
   - Token doesn't exist
   - Token has expired
+  - Underlying session store is unavailable
   """
-  @spec validate(String.t()) :: {:ok, map()} | {:error, :invalid_token | :expired_token}
+  @spec validate(String.t()) ::
+          {:ok, map()} | {:error, :invalid_token | :expired_token | :store_unavailable}
   def validate(nil), do: {:error, :invalid_token}
   def validate(""), do: {:error, :invalid_token}
 
   def validate(token) when is_binary(token) do
-    case Store.get(@store_namespace, token) do
-      nil ->
+    case Store.fetch(@store_namespace, token) do
+      {:ok, nil} ->
         {:error, :invalid_token}
 
-      info when is_map(info) ->
+      {:ok, info} when is_map(info) ->
         # Support both atom and string keys (for JSONL reload)
         expires_at = get_field(info, :expires_at_ms)
         identity = get_field(info, :identity)
@@ -120,9 +128,12 @@ defmodule LemonControlPlane.Auth.TokenStore do
             validate_current_identity(token, identity)
         end
 
-      # Handle legacy format or malformed data
-      _ ->
+      {:ok, _} ->
+        # Handle legacy format or malformed data
         {:error, :invalid_token}
+
+      {:error, _} ->
+        {:error, :store_unavailable}
     end
   end
 
@@ -298,6 +309,160 @@ defmodule LemonControlPlane.Auth.TokenStore do
 
   def node_session_state(_node_id), do: :none
 
+  @doc """
+  Extends a node session's expiration time to `now + 7 days` if it is the current
+  head, matching `generation`, and not expired.
+
+  Returns `{:ok, expires_at_ms}` if extended or if gain is below `min_extension_ms`
+  (no-op). Returns `{:error, :not_current | :expired | :store_unavailable}` on refusal.
+
+  ## Options
+
+  - `:now_ms` - Current timestamp in milliseconds (defaults to system time)
+  - `:min_extension_ms` - Minimum extension gain to trigger a CAS write (defaults to 1 hour = 3_600_000 ms)
+  """
+  @spec touch_node_session(String.t(), non_neg_integer(), keyword()) ::
+          {:ok, integer()} | {:error, :not_current | :expired | :store_unavailable}
+  def touch_node_session(node_id, generation, opts \\ [])
+
+  def touch_node_session(node_id, generation, opts)
+      when is_binary(node_id) and node_id != "" and is_integer(generation) and generation >= 0 do
+    now_ms = Keyword.get(opts, :now_ms) || System.system_time(:millisecond)
+    min_extension_ms = Keyword.get(opts, :min_extension_ms, 3_600_000)
+    key = head_key("node", node_id)
+
+    case Store.fetch(@head_namespace, key) do
+      {:ok, head} when is_map(head) ->
+        token = head_token(head)
+        current_gen = head_generation(head)
+
+        cond do
+          is_nil(token) or not is_binary(token) or token == "" ->
+            # Revoked head (token is nil)
+            {:error, :not_current}
+
+          current_gen != generation ->
+            # Old generation or mismatch
+            {:error, :not_current}
+
+          true ->
+            touch_token_record(
+              token,
+              node_id,
+              generation,
+              key,
+              now_ms,
+              min_extension_ms
+            )
+        end
+
+      {:ok, nil} ->
+        {:error, :not_current}
+
+      {:ok, _} ->
+        {:error, :not_current}
+
+      {:error, _} ->
+        {:error, :store_unavailable}
+    end
+  end
+
+  def touch_node_session(_node_id, _generation, _opts), do: {:error, :not_current}
+
+  defp touch_token_record(
+         token,
+         node_id,
+         generation,
+         head_key,
+         now_ms,
+         min_extension_ms
+       ) do
+    case Store.fetch(@store_namespace, token) do
+      {:ok, info} when is_map(info) ->
+        expires_at = get_field(info, :expires_at_ms)
+        identity = get_field(info, :identity)
+        identity_gen = if is_map(identity), do: get_field(identity, :sessionGeneration)
+        identity_node = if is_map(identity), do: identity_id(identity, "node")
+
+        cond do
+          not is_integer(expires_at) ->
+            {:error, :not_current}
+
+          identity_node != node_id ->
+            {:error, :not_current}
+
+          identity_gen != generation ->
+            {:error, :not_current}
+
+          now_ms >= expires_at ->
+            # Expired token cannot be extended
+            {:error, :expired}
+
+          true ->
+            target_expires_at = now_ms + @node_session_ttl_ms
+            gain = target_expires_at - expires_at
+
+            if gain < min_extension_ms do
+              {:ok, expires_at}
+            else
+              apply_touch_cas(token, info, target_expires_at, head_key, generation)
+            end
+        end
+
+      {:ok, nil} ->
+        {:error, :not_current}
+
+      {:ok, _} ->
+        {:error, :not_current}
+
+      {:error, _} ->
+        {:error, :store_unavailable}
+    end
+  end
+
+  defp apply_touch_cas(token, info, target_expires_at, head_key, generation) do
+    updated_info = put_expires_at(info, target_expires_at)
+
+    case Store.compare_and_swap(@store_namespace, token, info, updated_info) do
+      :ok ->
+        case Store.fetch(@head_namespace, head_key) do
+          {:ok, current_head} when is_map(current_head) ->
+            if head_token(current_head) == token and head_generation(current_head) == generation do
+              {:ok, target_expires_at}
+            else
+              {:error, :not_current}
+            end
+
+          {:ok, _} ->
+            {:error, :not_current}
+
+          {:error, _} ->
+            {:error, :store_unavailable}
+        end
+
+      {:error, :mismatch} ->
+        {:error, :not_current}
+
+      {:error, _} ->
+        {:error, :store_unavailable}
+    end
+  end
+
+  defp put_expires_at(info, expires_at) do
+    cond do
+      Map.has_key?(info, :expires_at_ms) and Map.has_key?(info, "expires_at_ms") ->
+        info
+        |> Map.put(:expires_at_ms, expires_at)
+        |> Map.put("expires_at_ms", expires_at)
+
+      Map.has_key?(info, "expires_at_ms") ->
+        Map.put(info, "expires_at_ms", expires_at)
+
+      true ->
+        Map.put(info, :expires_at_ms, expires_at)
+    end
+  end
+
   defp do_replace_node_session(_token, _identity, _node_id, _opts, 0),
     do: {:error, :concurrent_session_rotation}
 
@@ -352,7 +517,13 @@ defmodule LemonControlPlane.Auth.TokenStore do
   end
 
   defp token_info(token, identity, opts) do
-    ttl_ms = Keyword.get(opts, :ttl_ms, @default_ttl_ms)
+    default_ttl =
+      case identity_type(identity) do
+        "node" -> @node_session_ttl_ms
+        _ -> @default_ttl_ms
+      end
+
+    ttl_ms = Keyword.get(opts, :ttl_ms, default_ttl)
     now = System.system_time(:millisecond)
 
     %{
@@ -374,18 +545,31 @@ defmodule LemonControlPlane.Auth.TokenStore do
   defp validate_current_node_token(token, identity) do
     node_id = identity_id(identity, "node")
     generation = get_field(identity, :sessionGeneration)
-    head = if is_binary(node_id), do: Store.get(@head_namespace, head_key("node", node_id))
 
-    cond do
-      is_nil(head) and is_nil(generation) ->
-        # Compatibility for sessions issued before generation heads existed.
+    if is_binary(node_id) and node_id != "" do
+      case Store.fetch(@head_namespace, head_key("node", node_id)) do
+        {:ok, head} ->
+          cond do
+            is_nil(head) and is_nil(generation) ->
+              # Compatibility for sessions issued before generation heads existed.
+              {:ok, identity}
+
+            head_token(head) == token and head_generation(head) == generation ->
+              {:ok, identity}
+
+            true ->
+              {:error, :invalid_token}
+          end
+
+        {:error, _} ->
+          {:error, :store_unavailable}
+      end
+    else
+      if is_nil(generation) do
         {:ok, identity}
-
-      head_token(head) == token and head_generation(head) == generation ->
-        {:ok, identity}
-
-      true ->
+      else
         {:error, :invalid_token}
+      end
     end
   end
 

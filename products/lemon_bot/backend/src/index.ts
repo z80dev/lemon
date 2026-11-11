@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { chmod } from 'node:fs/promises';
+import { chmod, mkdir } from 'node:fs/promises';
 import { closeSync, openSync, writeSync } from 'node:fs';
 import type { Server } from 'bun';
 import type { BackendConfiguration, BackendServices } from './core/services';
@@ -7,14 +7,18 @@ import type { Policies } from '../../contracts/protocol';
 import { loadConfiguration, createPrivateCodec, validateRuntimeLauncher, isLoopback, type ControllerSource } from './core/config';
 import { issueOwnerSetupProof } from './core/setup';
 import { ensureLocalAccessKey } from './core/local-access';
+import { handoffDirectory, sweepLocalSignIn } from './core/local-signin';
 import { terminal } from './cli/connect';
 import { prepareController } from './cli/lemon-runtime';
+import { recordBackendPid } from './cli/backend-pid';
+import { deliverLocalSignIn, signInDeliveryDefaults, type SignInDeliveryDependencies } from './cli/open';
 import { Store } from './core/store';
 import { installHelpers } from './core/helpers';
 import { installSecretResolver } from './core/secrets';
 import { createMutationService } from './core/mutations';
 import { createEventService } from './core/events';
 import { createAccessService, type RevocationHooks } from './core/auth';
+import { createAccessService as createJitAccessService } from './core/access';
 import { createAccountRoutes, createAccountService } from './core/accounts';
 import { Router } from './core/router';
 import { createRealtime, type RealtimeData, type RealtimeService } from './core/realtime';
@@ -31,6 +35,7 @@ import { createConversationRoutes } from './core/conversations';
 import { createAddressedAgentRoutes, createAddressedAgentService } from './core/agent-addressing';
 import { createMcpRoutes } from './core/mcp';
 import { createGateRoutes, createGateService } from './core/gates';
+import { createApprovalAllowanceRoutes } from './core/approval-allowances';
 import { createResourceRoutes } from './core/resources';
 import { createAttachmentRoutes, createAttachmentService } from './core/attachments';
 import { createVoiceRoutes, createVoiceService, type VoiceService } from './core/voice';
@@ -52,6 +57,8 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   const store=new Store(join(config.dataDir,'product.sqlite'));
   await chmod(join(config.dataDir,'product.sqlite'),0o600);
   await ensureLocalAccessKey(config.dataDir);
+  await mkdir(handoffDirectory(config.dataDir),{recursive:true,mode:0o700});
+  await chmod(handoffDirectory(config.dataDir),0o700);
   const codec=createPrivateCodec(key);
   const sentinel=store.metadata<string>('encryptionKeyCheck');
   if(sentinel){if(codec.decrypt(sentinel)!=='lemon_bot_private_key_v1'){store.close();throw new Error('Product encryption key does not match existing private state.');}}
@@ -89,10 +96,12 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   const accounts=createAccountService(services);
   const pairings=createPairingService(services);
   const addressedAgents=createAddressedAgentService(services);services.addressedAgents=addressedAgents;
+  const access=createJitAccessService(services);services.access=access;
   router.register([
     ...createAccountRoutes(services,hooks),...createSyncRoutes(services),...createInstanceRoutes(services,startedAtMs),...createProviderRoutes(services),...createMachineRoutes(services),
     ...createBotRoutes(services),...createAddressedAgentRoutes(services),...createConversationRoutes(services),...createMcpRoutes(services),
     ...createGateRoutes(services),...createResourceRoutes(services),...createAttachmentRoutes(services),
+    ...createApprovalAllowanceRoutes(services),
     ...createVoiceRoutes(services),...createExperienceRoutes(services),...createIntegrationRoutes(services),
     ...createRuntimeAdmissionRoutes(services),...createPairingRoutes(services)
   ]);
@@ -108,17 +117,19 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
     }finally{reconciling=false;}
   };
   const removeConnected=lemon.onConnected(()=>{void reconcile();});
+  void access.reconcileAll().catch(()=>services.audit(null,'access.reconcile','controller','failed'));
   const reconcileTimer=setInterval(()=>{void reconcile();},30000);
-  const retentionTimer=setInterval(()=>store.transaction(()=>{
+  const retentionTimer=setInterval(()=>{store.transaction(()=>{
     const now=services.now();store.db.query('DELETE FROM events WHERE timestamp_ms<?').run(now-7*86400000);
     store.db.query('DELETE FROM nonces WHERE created_at_ms<? AND state IN (\'complete\',\'failed\')').run(now-30*86400000);
     store.db.query('DELETE FROM confirmations WHERE expires_at_ms<?').run(now);
     store.db.query('DELETE FROM entities WHERE collection=\'pageCursors\' AND json_extract(value,\'$.expiresAtMs\')<=?').run(now);
     const auditRetentionDays=store.metadata<Policies>('policies')?.auditRetentionDays??90;
     store.db.query('DELETE FROM entities WHERE collection=\'auditRecords\' AND json_extract(value,\'$.createdAtMs\')<?').run(now-auditRetentionDays*86400000);
-  }),60000);
+  });void sweepLocalSignIn({store,now:services.now,digest:services.mutations.digest,dataDir:config.dataDir});},60000);
   reconcileTimer.unref();retentionTimer.unref();
   let server:Server<RealtimeData>|null=null;let stopped=false;
+  let removePid: (() => void) | undefined;
   return {
     services,router,realtime,
     start(){
@@ -133,9 +144,11 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
           }
           return await router.fetch(request);
         },websocket:realtime.websocket});
+      try { removePid=recordBackendPid(config.dataDir,server.port!,services.store.metadata<string>('instanceId')!); }
+      catch(error){void server.stop(true);server=null;throw error;}
       lemon.start();return server;
     },
-    async stop(){if(stopped)return;stopped=true;clearInterval(reconcileTimer);clearInterval(retentionTimer);removeConnected();pairings.close();experiences.close();addressedAgents.close();realtime.close();voice.close();gates.close();attachments.close();await services.integrations.dispose?.();runtime.close();terminals.dispose();lemon.close();if(server)await server.stop(true);store.close();}
+    async stop(){if(stopped)return;stopped=true;clearInterval(reconcileTimer);clearInterval(retentionTimer);removeConnected();access.close();pairings.close();experiences.close();addressedAgents.close();realtime.close();voice.close();gates.close();attachments.close();await services.integrations.dispose?.();runtime.close();terminals.dispose();lemon.close();if(server)await server.stop(true);removePid?.();store.close();}
   };
 }
 
@@ -157,6 +170,25 @@ function openInBrowser(url:string):void {
   if(!opener)return;
   try{Bun.spawn([opener,url],{stdin:'ignore',stdout:'ignore',stderr:'ignore'}).unref();}catch{/* No opener installed. */}
 }
+/** Only an interactive, unconfigured start offers owner proof. */
+export async function firstStartSignIn(
+  services: BackendServices,
+  io: { interactive: boolean; write(value: string): void },
+  options: { openBrowser?: boolean },
+  deps: SignInDeliveryDependencies = signInDeliveryDefaults,
+  legacy = { offer: offerOwnerSetup, open: openInBrowser },
+): Promise<void> {
+  if (!io.interactive || services.store.metadata('workspaceId') !== null) return;
+  const origin = services.config.loopbackOrigin;
+  if (!origin) {
+    legacy.offer(services);
+    if (options.openBrowser !== false) legacy.open(services.config.publicUrl);
+  } else if (options.openBrowser === false) {
+    io.write('Sign in from this computer: lemon-bot open (over SSH: lemon-bot open --headless)\n');
+  } else {
+    await deliverLocalSignIn({ store: services.store, now: services.now, digest: services.mutations.digest, dataDir: services.config.dataDir }, origin, { noWait: true }, deps);
+  }
+}
 export async function runBackend(options:{chooseLemon?:boolean;openBrowser?:boolean}={}):Promise<void> {
   let configuration:{config:BackendConfiguration;key:Uint8Array;controllerSource:ControllerSource};
   try {configuration=await loadConfiguration();}
@@ -168,16 +200,18 @@ export async function runBackend(options:{chooseLemon?:boolean;openBrowser?:bool
     catch(error){process.stderr.write(`${error instanceof Error?error.message:'Choosing a Lemon failed.'}\n`);process.exit(1);}
   } else if(options.chooseLemon){process.stderr.write('lemon-bot --choose-lemon needs an interactive terminal.\n');process.exit(2);}
   const backend=await createBackend(config,key);const server=backend.start();
+  const shutdown=()=>{void backend.stop().then(()=>process.exit(0)).catch(()=>process.exit(1));};
+  process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
   process.stdout.write(`Lemon Bot listening at ${config.publicUrl} (${server.hostname}:${server.port}).\n`);
   const {lemon}=backend.services;
   lemon.onConnected(()=>{process.stdout.write(`Connected to Lemon at ${config.controlUrl}.\n`);});
   setTimeout(()=>{if(!lemon.connected)process.stdout.write(`Waiting for Lemon at ${config.controlUrl}: ${lemon.controller.lastError?.message??'still connecting.'}\n`);},5000).unref();
-  if(io.interactive&&backend.services.store.metadata('workspaceId')===null){
-    offerOwnerSetup(backend.services);
-    if(options.openBrowser!==false)openInBrowser(config.publicUrl);
+  await firstStartSignIn(backend.services, io, options);
+  const workspaceId = backend.services.store.metadata<string>('workspaceId');
+  const workspace = workspaceId ? backend.services.store.get<{ id: string; ownerUserId: string }>('workspaces', workspaceId) : null;
+  if (!isLoopback(new URL(config.publicUrl).hostname) && workspace && !backend.services.store.get('credentials', workspace.ownerUserId)) {
+    process.stdout.write(`Owner has no password yet: browsers on other computers can't sign in at ${config.publicUrl}. On this computer run lemon-bot open, then Settings → Account → Add email and password.\n`);
   }
-  const shutdown=()=>{void backend.stop().then(()=>process.exit(0)).catch(()=>process.exit(1));};
-  process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
 }
 
 if(import.meta.main)await runBackend();

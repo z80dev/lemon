@@ -552,6 +552,171 @@ defmodule LemonCli.Setup.ProviderManagementTest do
     refute File.exists?(ctx.config_path)
   end
 
+  test "list without readiness is byte-identical and key set snapshot unchanged", ctx do
+    assert {:ok, listing} = Management.list(ctx.opts)
+    assert Map.keys(listing) |> Enum.sort() == [:default, :providers, :target]
+    refute Map.has_key?(listing, :readiness)
+    refute Map.has_key?(listing, :detected)
+  end
+
+  test "list with readiness includes readiness and detected keys", ctx do
+    assert {:ok, listing} = Management.list(Keyword.put(ctx.opts, :readiness, true))
+
+    assert Map.keys(listing) |> Enum.sort() == [
+             :default,
+             :detected,
+             :providers,
+             :readiness,
+             :target
+           ]
+
+    assert is_map(listing.readiness)
+    assert is_list(listing.detected)
+    assert is_binary(listing.readiness["state"])
+  end
+
+  test "check returns shape and runs network check outside config lock", ctx do
+    caller = self()
+
+    verifier = fn _input, _opts ->
+      send(caller, {:in_check, self()})
+
+      receive do
+        :continue_check ->
+          {:ok, %{check: :codex_discovery, model_ids: ["gpt-6.1-sol"]}}
+      after
+        5_000 -> {:error, :timeout}
+      end
+    end
+
+    check_task =
+      Task.async(fn ->
+        Management.check("openai_codex", Keyword.put(ctx.opts, :verifier, verifier))
+      end)
+
+    assert_receive {:in_check, check_pid}
+
+    # Concurrent api_key mutation succeeds while check is waiting in verifier outside config lock
+    assert {:ok, _} = Management.set_api_key("zai", "concurrent-key", ctx.opts)
+    config = Toml.decode_file!(ctx.config_path)
+    assert config["providers"]["zai"]["api_key_secret"]
+
+    send(check_pid, :continue_check)
+    assert {:ok, result} = Task.await(check_task)
+    assert Map.keys(result) |> Enum.sort() == [:management, :readiness]
+
+    assert Map.keys(result.management) |> Enum.sort() == [
+             :default,
+             :detected,
+             :providers,
+             :readiness,
+             :target
+           ]
+
+    assert result.readiness["state"] == "verified"
+    assert result.readiness["providerId"] == "openai_codex"
+  end
+
+  test "import_login missing file returns login_not_found", ctx do
+    auth_path = Path.join([System.get_env("HOME"), ".codex", "auth.json"])
+    File.rm(auth_path)
+
+    assert {:error, :login_not_found} =
+             Management.import_login("openai_codex", "codex_cli", ctx.opts)
+  end
+
+  test "import_login unusable login returns login_unusable", ctx do
+    auth_path = Path.join([System.get_env("HOME"), ".codex", "auth.json"])
+    File.mkdir_p!(Path.dirname(auth_path))
+    File.write!(auth_path, Jason.encode!(%{"auth_mode" => "apikey"}))
+
+    assert {:error, :login_unusable} =
+             Management.import_login("openai_codex", "codex_cli", ctx.opts)
+  end
+
+  test "import_login rejects invalid parameters", ctx do
+    assert {:error, :invalid_request} =
+             Management.import_login("anthropic", "codex_cli", ctx.opts)
+
+    assert {:error, :invalid_request} =
+             Management.import_login("openai_codex", "browser", ctx.opts)
+  end
+
+  test "import_login copies login, preserves defaults, and sets provider oauth config", ctx do
+    home = System.get_env("HOME")
+    auth_path = Path.join([home, ".codex", "auth.json"])
+    File.mkdir_p!(Path.dirname(auth_path))
+
+    login_payload = %{
+      "auth_mode" => "chatgpt",
+      "tokens" => %{
+        "access_token" => make_test_jwt("acc_import", 3_600),
+        "refresh_token" => "synthetic-refresh-token",
+        "account_id" => "acc_import",
+        "id_token" => make_test_jwt("acc_import", 3_600)
+      }
+    }
+
+    original_auth_contents = Jason.encode!(login_payload)
+    File.write!(auth_path, original_auth_contents)
+
+    initial_config = """
+    [defaults]
+    provider = "anthropic"
+    model = "claude-sonnet-5-5"
+
+    [providers.anthropic]
+    api_key_secret = "anthropic-key"
+    """
+
+    write(ctx.config_path, initial_config)
+
+    assert {:ok, listing} =
+             Management.import_login("openai_codex", "codex_cli", ctx.opts)
+
+    # 1. Listing includes readiness
+    assert Map.keys(listing) |> Enum.sort() == [
+             :default,
+             :detected,
+             :providers,
+             :readiness,
+             :target
+           ]
+
+    # 2. Defaults are UNCHANGED
+    saved_config = Toml.decode_file!(ctx.config_path)
+    assert saved_config["defaults"]["provider"] == "anthropic"
+    assert saved_config["defaults"]["model"] == "claude-sonnet-5-5"
+
+    # 3. Provider config has oauth_secret and auth_source
+    codex_cfg = saved_config["providers"]["openai-codex"]
+    assert codex_cfg["auth_source"] == "oauth"
+    secret_name = codex_cfg["oauth_secret"]
+    assert secret_name =~ ~r/^provider_openai_codex_/
+
+    # 4. Secret store holds the encoded secret
+    assert {:ok, secret_json} = MockSecrets.get(secret_name)
+    assert {:ok, decoded_secret} = Jason.decode(secret_json)
+    assert decoded_secret["type"] == "openai_codex_oauth"
+    assert decoded_secret["refresh_token"] == "synthetic-refresh-token"
+    assert decoded_secret["access_token"] == login_payload["tokens"]["access_token"]
+
+    # 5. Source auth.json is UNCHANGED
+    assert File.read!(auth_path) == original_auth_contents
+  end
+
+  defp make_test_jwt(account_id, expires_in_seconds) do
+    exp = DateTime.utc_now() |> DateTime.add(expires_in_seconds, :second) |> DateTime.to_unix()
+
+    payload =
+      Jason.encode!(%{
+        "exp" => exp,
+        "https://api.openai.com/auth" => %{"chatgpt_account_id" => account_id}
+      })
+
+    "header." <> Base.url_encode64(payload, padding: false) <> ".signature"
+  end
+
   defp row(listing, id), do: Enum.find(listing.providers, &(&1.id == id))
 
   defp write(path, content) do

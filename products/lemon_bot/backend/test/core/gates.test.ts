@@ -6,6 +6,7 @@ import type { BackendServices, EntityStore, Principal, RequestContext } from '..
 import { ApiError } from '../../src/core/errors';
 import { z, parse } from '../../src/core/validation';
 import { createDraft, createGateRoutes, createGateService, cancelConversationGates, previewBotResources, cancelBotResources, acknowledgeExecutionApproval } from '../../src/core/gates';
+import { queueGrantChanges, type PreparedAccessChanges } from '../../src/core/access';
 
 const actor: Principal = { kind: 'user', id: 'user_1', userId: 'user_1', workspaceId: 'workspace_1', role: 'member', sessionId: null, botId: null, deviceId: null };
 const nonce = 'abcdefghijklmnop';
@@ -29,11 +30,12 @@ function fixture() {
   };
   let now = 1000;
   let nextId = 0;
-  const policy: P.EffectivePolicy = { userId: actor.userId, botId: 'bot_1', directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'allow', allowSudo: false, allowEgress: true, rules: [], networkPolicies: [], explanations: [] };
+  const policy: P.EffectivePolicy = { userId: actor.userId, botId: 'bot_1', directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'allow', allowSudo: false, allowEgress: true, rules: [], networkPolicies: [], explanations: [], rememberedApprovals: { chat: ['shell', 'files'], bot: [] }, workspaceReads: 'allow' };
   let rpc: (method: string, params: Record<string, unknown>) => Promise<unknown> = async () => unreachable();
   let sender: (draft: P.Draft) => Promise<{ providerMessageId: string | null; runId: string | null }> = async () => unreachable();
   const calls: { method: string; params: Record<string, unknown> }[] = [];
   const sent: P.Draft[] = [];
+  const auditRows: { principal: Principal | null; action: string; targetId: string; outcome: string; details: Record<string, unknown> }[] = [];
   const services = new Proxy({} as BackendServices, { get(_object, key) { if (!Reflect.has(implemented, key)) return unreachable(); return Reflect.get(implemented, key); }, set(_object, key, value) { Reflect.set(implemented, key, value); return true; } });
   const implemented: Partial<BackendServices> = {
     store,
@@ -48,6 +50,11 @@ function fixture() {
     lemon: { controller: { url: 'ws://127.0.0.1:4040/ws', state: 'connected', connectedAtMs: 1, lastDisconnectedAtMs: null, lastError: null, nextRetryAtMs: null, methodCount: 0 }, reconnect() {}, connected: true, methods: ['node.secrets.set', 'exec.approval.resolve'], async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> { calls.push({ method, params }); return await rpc(method, params) as T; }, onEvent: () => () => {}, onConnected: unreachable, start: unreachable, close: unreachable },
     runtime: Object.assign({ submit: unreachable, send: unreachable, cancel: unreachable, reconcile: unreachable, sessionKey: () => 'session_1' }, { revokeConnectorInvocations: unreachable }),
     integrations: { admission: unreachable, effectivePolicy: async () => policy, connectorConfig: unreachable, async sendApprovedDraft(_principal, draft) { sent.push(structuredClone(draft)); return sender(draft); }, emitProviderNotifications: unreachable, channelIngress: unreachable, providerCapabilities: unreachable },
+    audit: (p: Principal | null, action: string, targetId: string, outcome: P.AuditRecord['outcome'], details: P.JSONObject = {}) => {
+      const row = { principal: p, action, targetId, outcome, details };
+      auditRows.push(row);
+      return { ...services.resource('audit', {}), actor: p ? { kind: p.kind === 'bot' ? 'bot' : 'user', id: p.kind === 'bot' ? p.botId : p.userId, displayName: 'Member' } : { kind: 'system', id: null, displayName: 'System' }, action, resourceType: 'allowance', resourceId: targetId, outcome, requestId: 'req_1', metadata: details } as P.AuditRecord;
+    },
     entry(principal, conversationId, payload) {
       const entryActor = parse(z.object({ kind: z.enum(['user', 'bot', 'system']), id: z.string().nullable(), displayName: z.string() }).strict(), payload.actor ?? { kind: 'user', id: principal.userId, displayName: 'Member' });
       const base: P.EntryBase = { ...services.resource('entry', {}), id: parse(z.string(), payload.id ?? services.id('entry')), conversationId, seq: store.list<P.TranscriptEntry>('entries', item => item.conversationId === conversationId).length + 1, timestampMs: now, actor: entryActor, clientNonce: null, batchId: null, replyToEntryId: null, runId: parse(z.string().nullable(), payload.runId ?? null), targetedUserId: parse(z.string().nullable(), payload.targetedUserId ?? null), reactions: [] };
@@ -73,7 +80,7 @@ function fixture() {
   let gates = createGateService(services);
   services.gates = gates;
   cleanup.push(() => { gates.close(); db.close(); });
-  return { services, store, db, policy, calls, sent, get gates() { return gates; }, advance(ms: number) { now += ms; }, rpc(handler: typeof rpc) { rpc = handler; }, sender(handler: typeof sender) { sender = handler; }, restart() { gates = createGateService(services); services.gates = gates; return gates; }, events() { return db.query<{ name: string; payload: string; audience: string }, []>('SELECT name,payload,audience FROM events ORDER BY seq').all(); } };
+  return { services, store, db, policy, calls, sent, auditRows, get gates() { return gates; }, advance(ms: number) { now += ms; }, rpc(handler: typeof rpc) { rpc = handler; }, sender(handler: typeof sender) { sender = handler; }, restart() { gates = createGateService(services); services.gates = gates; return gates; }, events() { return db.query<{ name: string; payload: string; audience: string }, []>('SELECT name,payload,audience FROM events ORDER BY seq').all(); } };
 }
 const common = { botId: 'bot_1', conversationId: 'room_1', targetUserId: actor.userId };
 const questionInput = { ...common, title: 'Choose', fields: [{ id: 'selection', label: 'Choice', kind: 'single_select', required: true, options: [{ value: 'yes', label: 'Yes' }] }, { id: 'count', label: 'Count', kind: 'number', required: true, min: 1, max: 5 }] };
@@ -428,4 +435,389 @@ describe('owner-only live gates and independent Send', () => {
     expect(f.sent).toHaveLength(1);
     expect(f.sent[0].content).toEqual(content);
   });
+});
+
+describe('remembered approvals (groups 1-5)', () => {
+  const owner: Principal = { kind: 'user', id: actor.userId, userId: actor.userId, workspaceId: 'workspace_1', role: 'member', sessionId: 'sess_1', botId: null, deviceId: null };
+
+  function setupValidRun(f: { store: EntityStore; services: BackendServices }, runId = 'run_1', upstreamRunId = 'upstream_run') {
+    f.store.put<P.Run>('runs', { ...f.services.resource('run', {}), id: runId, conversationId: 'room_1', botId: 'bot_1', initiatorUserId: actor.userId, clientNonce: nonce, status: 'running', error: null, startedAtMs: 1000, completedAtMs: null, routineRunId: null });
+    f.store.setMetadata(`runApprovalOrigin:${runId}`, 'owner_chat');
+    f.store.setMetadata(`runtimeInvocation:${upstreamRunId}`, { invocationContextKey: 'ctx_key_1', invocationMcpServers: [], invocationToolPolicy: [], memoryContextKey: 'mem_1', invocationProof: { runId: upstreamRunId, serverName: 'srv', serverUrl: 'url', headerName: 'hdr', secretName: 'sec' } });
+  }
+
+  test('group 1: happy path approve_chat on eligible lemon_exec bash approval', async () => {
+    const f = fixture();
+    setupValidRun(f);
+
+    const approval = await f.gates.create<P.Approval>(owner, 'approval', {
+      ...common,
+      runId: 'run_1',
+      source: 'lemon_exec',
+      upstream: { approvalId: 'upstream_app_1', runId: 'upstream_run', sessionKey: 'session_1', tool: 'bash' },
+      category: 'shell',
+      title: 'Execute',
+      description: 'Run bash',
+      target: 'exec',
+      inputs: {},
+    });
+    expect(approval.chatOption).toEqual({ toolGroup: 'terminal', label: 'Allow Terminal for this chat' });
+    expect(approval.resolvedScope).toBeNull();
+
+    f.rpc(async (_method, params) => ({
+      resolved: true,
+      approvalId: params.approvalId,
+      sessionKey: params.expectedSessionKey,
+      runId: params.expectedRunId,
+      decision: params.decision,
+      approved: true,
+      outcome: 'approved',
+    }));
+
+    const resolved = await f.gates.resolve<P.Approval>(owner, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' });
+
+    // runtime call has decision: 'approve_once' and exact bindings
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]).toEqual({
+      method: 'exec.approval.resolve',
+      params: { approvalId: 'upstream_app_1', decision: 'approve_once', expectedSessionKey: 'session_1', expectedRunId: 'upstream_run' },
+    });
+
+    // gate ends approved with resolvedScope: 'chat'
+    expect(resolved.gate.state).toBe('approved');
+    expect(resolved.resolvedScope).toBe('chat');
+
+    // one active chat allowance {toolGroups:['terminal']} is created
+    const allowances = f.store.list<P.ApprovalAllowance>('approvalAllowances', a => a.scope === 'chat' && a.state === 'active');
+    expect(allowances).toHaveLength(1);
+    expect(allowances[0].toolGroups).toEqual(['terminal']);
+    expect(allowances[0].botId).toBe('bot_1');
+    expect(allowances[0].conversationId).toBe('room_1');
+    expect(allowances[0].ownerUserId).toBe(actor.userId);
+
+    // audit row approval_allowance.create is written
+    expect(f.auditRows.some(row => row.action === 'approval_allowance.create')).toBe(true);
+  });
+
+  test('group 2: refused with policy_denied and makes no runtime call', async () => {
+    // 1. product-source approval
+    {
+      const f = fixture();
+      setupValidRun(f);
+      const app = await f.gates.create<P.Approval>(owner, 'approval', { ...common, source: 'product', category: 'shell', title: 'Prod', description: 'desc', target: 'tgt', inputs: {} });
+      expect(app.chatOption).toBeNull();
+      await expect(f.gates.resolve(owner, 'approvals', app.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' })).rejects.toMatchObject({ code: 'policy_denied' });
+      expect(f.calls).toHaveLength(0);
+    }
+
+    // 2. categories external_message, purchase, permissions
+    for (const cat of ['external_message', 'purchase', 'permissions'] as const) {
+      const f = fixture();
+      setupValidRun(f);
+      const app = await f.gates.create<P.Approval>(owner, 'approval', { ...common, source: 'product', category: cat, title: 'Action', description: 'desc', target: 'tgt', inputs: {} });
+      expect(app.chatOption).toBeNull();
+      await expect(f.gates.resolve(owner, 'approvals', app.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' })).rejects.toMatchObject({ code: 'policy_denied' });
+      expect(f.calls).toHaveLength(0);
+    }
+
+    // 3. tools browser_click, lsp_diagnostics, tool_invoke, mcp_x, propose_plan
+    for (const tool of ['browser_click', 'lsp_diagnostics', 'tool_invoke', 'mcp_x', 'propose_plan']) {
+      const f = fixture();
+      setupValidRun(f);
+      const app = await f.gates.create<P.Approval>(owner, 'approval', { ...common, runId: 'run_1', source: 'lemon_exec', upstream: { approvalId: 'u1', runId: 'upstream_run', sessionKey: 'session_1', tool }, category: 'shell', title: 'Tool', description: 'desc', target: 'exec', inputs: {} });
+      expect(app.chatOption).toBeNull();
+      await expect(f.gates.resolve(owner, 'approvals', app.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' })).rejects.toMatchObject({ code: 'policy_denied' });
+      expect(f.calls).toHaveLength(0);
+    }
+
+    // 4. forceHuman
+    {
+      const f = fixture();
+      setupValidRun(f);
+      const app = await f.gates.create<P.Approval>(owner, 'approval', { ...common, runId: 'run_1', source: 'lemon_exec', upstream: { approvalId: 'u1', runId: 'upstream_run', sessionKey: 'session_1', tool: 'bash' }, category: 'shell', title: 'Force', description: 'desc', target: 'exec', inputs: {}, forceHuman: true });
+      expect(app.chatOption).toBeNull();
+      await expect(f.gates.resolve(owner, 'approvals', app.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' })).rejects.toMatchObject({ code: 'policy_denied' });
+      expect(f.calls).toHaveLength(0);
+    }
+
+    // 5. origin of routine, external, native_followup or other
+    for (const origin of ['routine', 'external', 'native_followup', 'other']) {
+      const f = fixture();
+      setupValidRun(f, 'run_origin', 'upstream_origin');
+      f.store.setMetadata('runApprovalOrigin:run_origin', origin);
+      const app = await f.gates.create<P.Approval>(owner, 'approval', { ...common, runId: 'run_origin', source: 'lemon_exec', upstream: { approvalId: 'u1', runId: 'upstream_origin', sessionKey: 'session_1', tool: 'bash' }, category: 'shell', title: 'Origin', description: 'desc', target: 'exec', inputs: {} });
+      expect(app.chatOption).toBeNull();
+      await expect(f.gates.resolve(owner, 'approvals', app.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' })).rejects.toMatchObject({ code: 'policy_denied' });
+      expect(f.calls).toHaveLength(0);
+    }
+
+    // 6. governance off
+    {
+      const f = fixture();
+      setupValidRun(f);
+      f.policy.rememberedApprovals = { chat: [], bot: [] };
+      const app = await f.gates.create<P.Approval>(owner, 'approval', { ...common, runId: 'run_1', source: 'lemon_exec', upstream: { approvalId: 'u1', runId: 'upstream_run', sessionKey: 'session_1', tool: 'bash' }, category: 'shell', title: 'GovOff', description: 'desc', target: 'exec', inputs: {} });
+      expect(app.chatOption).toBeNull();
+      await expect(f.gates.resolve(owner, 'approvals', app.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' })).rejects.toMatchObject({ code: 'policy_denied' });
+      expect(f.calls).toHaveLength(0);
+    }
+
+    // 7. review mode every_time
+    {
+      const f = fixture();
+      setupValidRun(f);
+      f.store.setMetadata('botApprovalReview:bot_1', 'every_time');
+      const app = await f.gates.create<P.Approval>(owner, 'approval', { ...common, runId: 'run_1', source: 'lemon_exec', upstream: { approvalId: 'u1', runId: 'upstream_run', sessionKey: 'session_1', tool: 'bash' }, category: 'shell', title: 'EveryTime', description: 'desc', target: 'exec', inputs: {} });
+      expect(app.chatOption).toBeNull();
+      await expect(f.gates.resolve(owner, 'approvals', app.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' })).rejects.toMatchObject({ code: 'policy_denied' });
+      expect(f.calls).toHaveLength(0);
+    }
+
+    // 8. required ask_first shell rule
+    {
+      const f = fixture();
+      setupValidRun(f);
+      f.policy.rememberedApprovals = { chat: ['files'], bot: [] };
+      const app = await f.gates.create<P.Approval>(owner, 'approval', { ...common, runId: 'run_1', source: 'lemon_exec', upstream: { approvalId: 'u1', runId: 'upstream_run', sessionKey: 'session_1', tool: 'bash' }, category: 'shell', title: 'RequiredAsk', description: 'desc', target: 'exec', inputs: {} });
+      expect(app.chatOption).toBeNull();
+      await expect(f.gates.resolve(owner, 'approvals', app.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' })).rejects.toMatchObject({ code: 'policy_denied' });
+      expect(f.calls).toHaveLength(0);
+    }
+
+    // 9. personal ask_first shell rule
+    {
+      const f = fixture();
+      setupValidRun(f);
+      f.policy.rememberedApprovals = { chat: ['files'], bot: [] };
+      const app = await f.gates.create<P.Approval>(owner, 'approval', { ...common, runId: 'run_1', source: 'lemon_exec', upstream: { approvalId: 'u1', runId: 'upstream_run', sessionKey: 'session_1', tool: 'bash' }, category: 'shell', title: 'PersonalAsk', description: 'desc', target: 'exec', inputs: {} });
+      expect(app.chatOption).toBeNull();
+      await expect(f.gates.resolve(owner, 'approvals', app.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' })).rejects.toMatchObject({ code: 'policy_denied' });
+      expect(f.calls).toHaveLength(0);
+    }
+
+    // 10. stored context key that differs from the run's current key
+    {
+      const f = fixture();
+      setupValidRun(f);
+      const app = await f.gates.create<P.Approval>(owner, 'approval', { ...common, runId: 'run_1', source: 'lemon_exec', upstream: { approvalId: 'u1', runId: 'upstream_run', sessionKey: 'session_1', tool: 'bash' }, category: 'shell', title: 'ContextMismatch', description: 'desc', target: 'exec', inputs: {} });
+      expect(app.chatOption).toBeDefined();
+      // mutate context key of the run
+      f.store.setMetadata('runtimeInvocation:upstream_run', { invocationContextKey: 'ctx_key_MUTATED', invocationMcpServers: [], invocationToolPolicy: [], memoryContextKey: 'mem_1', invocationProof: { runId: 'upstream_run', serverName: 'srv', serverUrl: 'url', headerName: 'hdr', secretName: 'sec' } });
+      await expect(f.gates.resolve(owner, 'approvals', app.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' })).rejects.toMatchObject({ code: 'policy_denied' });
+      expect(f.calls).toHaveLength(0);
+    }
+  });
+
+  test('group 3: non-interactive principals get forbidden/policy_denied', async () => {
+    const f = fixture();
+    setupValidRun(f);
+
+    const app = await f.gates.create<P.Approval>(owner, 'approval', { ...common, runId: 'run_1', source: 'lemon_exec', upstream: { approvalId: 'u1', runId: 'upstream_run', sessionKey: 'session_1', tool: 'bash' }, category: 'shell', title: 'NonInteractive', description: 'desc', target: 'exec', inputs: {} });
+
+    // 1. bot principal
+    const botActor: Principal = { kind: 'bot', id: 'bot_2', userId: actor.userId, workspaceId: 'workspace_1', role: 'member', sessionId: null, botId: 'bot_2', deviceId: null };
+    await expect(f.gates.resolve(botActor, 'approvals', app.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' })).rejects.toMatchObject({ code: 'forbidden' });
+
+    // 2. integration principal
+    const integActor: Principal = { kind: 'integration', id: 'integ_1', userId: actor.userId, workspaceId: 'workspace_1', role: 'member', sessionId: null, botId: null, deviceId: null };
+    await expect(f.gates.resolve(integActor, 'approvals', app.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' })).rejects.toMatchObject({ code: 'forbidden' });
+
+    // 3. user principal with sessionId: null
+    await expect(f.gates.resolve(actor, 'approvals', app.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' })).rejects.toMatchObject({ code: 'forbidden' });
+
+    expect(f.calls).toHaveLength(0);
+  });
+
+  test('group 4: runtime resolve failure and outcome_unknown recovery via acknowledge', async () => {
+    // 1. retry-safe failure leaves no allowance and gate failed
+    {
+      const f = fixture();
+      setupValidRun(f);
+
+      const app = await f.gates.create<P.Approval>(owner, 'approval', { ...common, runId: 'run_1', source: 'lemon_exec', upstream: { approvalId: 'upstream_fail', runId: 'upstream_run', sessionKey: 'session_1', tool: 'bash' }, category: 'shell', title: 'Fail', description: 'desc', target: 'exec', inputs: {} });
+
+      f.rpc(async () => { throw new ApiError('policy_denied', 'Runtime rejected', true); });
+      const res = await f.gates.resolve<P.Approval>(owner, 'approvals', app.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' });
+      expect(res.gate.state).toBe('failed');
+      expect(f.store.list('approvalAllowances')).toHaveLength(0);
+    }
+
+    // 2. outcome_unknown failure leaves no allowance; acknowledge grants it
+    {
+      const f = fixture();
+      setupValidRun(f);
+
+      const app = await f.gates.create<P.Approval>(owner, 'approval', { ...common, runId: 'run_1', source: 'lemon_exec', upstream: { approvalId: 'upstream_unknown', runId: 'upstream_run', sessionKey: 'session_1', tool: 'bash' }, category: 'shell', title: 'Unknown', description: 'desc', target: 'exec', inputs: {} });
+
+      f.rpc(async () => { throw new ApiError('upstream_unavailable', 'Controller timed out', false); });
+      const res = await f.gates.resolve<P.Approval>(owner, 'approvals', app.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' });
+      expect(res.gate.state).toBe('outcome_unknown');
+      expect(f.store.list('approvalAllowances')).toHaveLength(0);
+
+      // later acknowledge affirming approve_once with productDecision approve_chat
+      const ack = acknowledgeExecutionApproval(f.services, { approvalId: 'upstream_unknown', runId: 'upstream_run', sessionKey: 'session_1', decision: 'approve_once' });
+      expect(ack).toBe(true);
+      const updated = f.store.require<P.Approval>('approvals', app.id);
+      expect(updated.gate.state).toBe('approved');
+      expect(updated.resolvedScope).toBe('chat');
+
+      const allowances = f.store.list<P.ApprovalAllowance>('approvalAllowances', a => a.scope === 'chat' && a.state === 'active');
+      expect(allowances).toHaveLength(1);
+      expect(allowances[0].toolGroups).toEqual(['terminal']);
+    }
+  });
+
+  test('group 5: concurrent cards - approve_chat on one resolves the other with resolvedScope chat', async () => {
+    const f = fixture();
+    setupValidRun(f);
+
+    const app1 = await f.gates.create<P.Approval>(owner, 'approval', { ...common, runId: 'run_1', source: 'lemon_exec', upstream: { approvalId: 'upstream_app_1', runId: 'upstream_run', sessionKey: 'session_1', tool: 'bash' }, category: 'shell', title: 'Exec 1', description: 'Run bash 1', target: 'exec', inputs: {} });
+    const app2 = await f.gates.create<P.Approval>(owner, 'approval', { ...common, runId: 'run_1', source: 'lemon_exec', upstream: { approvalId: 'upstream_app_2', runId: 'upstream_run', sessionKey: 'session_1', tool: 'bash' }, category: 'shell', title: 'Exec 2', description: 'Run bash 2', target: 'exec', inputs: {} });
+
+    f.rpc(async (_method, params) => ({
+      resolved: true,
+      approvalId: params.approvalId,
+      sessionKey: params.expectedSessionKey,
+      runId: params.expectedRunId,
+      decision: params.decision,
+      approved: true,
+      outcome: 'approved',
+    }));
+
+    const res1 = await f.gates.resolve<P.Approval>(owner, 'approvals', app1.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' });
+    expect(res1.gate.state).toBe('approved');
+    expect(res1.resolvedScope).toBe('chat');
+
+    const res2 = f.store.require<P.Approval>('approvals', app2.id);
+    expect(res2.gate.state).toBe('approved');
+    expect(res2.resolvedScope).toBe('chat');
+
+    expect(f.calls).toHaveLength(2);
+    expect(f.calls[0]).toEqual({ method: 'exec.approval.resolve', params: { approvalId: 'upstream_app_1', decision: 'approve_once', expectedSessionKey: 'session_1', expectedRunId: 'upstream_run' } });
+    expect(f.calls[1]).toEqual({ method: 'exec.approval.resolve', params: { approvalId: 'upstream_app_2', decision: 'approve_once', expectedSessionKey: 'session_1', expectedRunId: 'upstream_run' } });
+  });
+});
+
+describe('access request gates', () => {
+  async function request(services: BackendServices): Promise<P.Approval> {
+    const run: P.Run = services.resource('run', { conversationId: 'room_1', botId: 'bot_1', initiatorUserId: actor.userId, clientNonce: nonce, status: 'running', error: null, startedAtMs: services.now(), completedAtMs: null, routineRunId: null });
+    services.store.put('runs', run);
+    return services.gates.create<P.Approval>(actor, 'approval', {
+      ...common, runId: run.id, source: 'access_request', category: 'permissions', forceHuman: true,
+      title: 'Bot needs Terminal', description: 'Terminal and Files on Machine.', target: 'Machine',
+      inputs: { capability: 'terminal', capabilityIds: ['terminal', 'files'], level: 'read_interact', machineLabel: 'Machine', reason: 'Run the requested checks.' },
+    });
+  }
+  function seedGrants(services: BackendServices): P.BotGrant[] {
+    return ['terminal', 'files'].map(capabilityId => services.store.put<P.BotGrant>('botGrants', services.resource('grant', { botId: 'bot_1', machineId: 'machine_1', capabilityId, requestedLevel: 'off' as const, pendingLevel: null, effectiveLevel: 'off' as const, reasons: [] })));
+  }
+
+  test('only approve_once and deny are accepted and access cards never have chat scope', async () => {
+    const f = fixture();
+    const approval = await request(f.services);
+    expect(approval.gate.state).toBe('pending');
+    expect(approval.policyMode).toBe('ask_first');
+    expect(approval.chatOption).toBeNull();
+    const entry = f.store.require<P.TranscriptEntry>('entries', approval.entryId);
+    expect(entry.kind === 'card' && entry.card.type).toBe('access_request');
+    await expect(f.gates.resolve(actor, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_chat' })).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(f.gates.resolve({ ...actor, id: 'other', userId: 'other' }, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_once' })).rejects.toMatchObject({ code: 'forbidden' });
+    const denied = await f.gates.resolve<P.Approval>(actor, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'deny' });
+    expect(denied.gate.state).toBe('denied');
+    expect(f.store.list('botGrants')).toEqual([]);
+  });
+
+  test('async preparation precedes the atomic approved transition and pending grants', async () => {
+    const f = fixture();
+    seedGrants(f.services);
+    const approval = await request(f.services);
+    const prepared: PreparedAccessChanges = { bot: f.store.require<P.Bot>('bots', 'bot_1'), changes: { terminal: 'read_interact', files: 'read_interact' }, accessRequestId: approval.id };
+    const ready = Promise.withResolvers<PreparedAccessChanges | null>();
+    let queued = false;
+    f.services.access = {
+      prepare: async () => ready.promise,
+      queue(value) {
+        expect(f.store.require<P.Approval>('approvals', approval.id).gate.state).toBe('approved');
+        queueGrantChanges(f.services, value.bot, value.changes, value.accessRequestId);
+        queued = true;
+      },
+      schedule() {}, async reconcileAll() {}, close() {},
+    };
+    const resolving = f.gates.resolve<P.Approval>(actor, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_once' });
+    expect(f.store.require<P.Approval>('approvals', approval.id).gate.state).toBe('pending');
+    expect(queued).toBe(false);
+    ready.resolve(prepared);
+    expect((await resolving).gate.state).toBe('approved');
+    expect(queued).toBe(true);
+    const grants = f.store.list<P.BotGrant>('botGrants');
+    expect(grants).toHaveLength(2);
+    expect(grants.every(value => value.requestedLevel === 'off' && value.pendingLevel === 'read_interact')).toBe(true);
+    expect(f.store.metadata(`accessRequestQueued:${approval.id}`)).toBe(true);
+  });
+
+  test('queue failure after transition rolls back gate, card, events and grants together', async () => {
+    const f = fixture();
+    const originalGrants = seedGrants(f.services);
+    const approval = await request(f.services);
+    const eventCount = f.events().length;
+    f.services.access = {
+      prepare: async () => ({ bot: f.store.require<P.Bot>('bots', 'bot_1'), changes: { terminal: 'read_interact' }, accessRequestId: approval.id }),
+      queue(value) {
+        queueGrantChanges(f.services, value.bot, value.changes, value.accessRequestId);
+        throw new Error('Injected after the approved transition and grant writes.');
+      },
+      schedule() {}, async reconcileAll() {}, close() {},
+    };
+    await expect(f.gates.resolve(actor, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_once' })).rejects.toThrow('Injected after');
+    expect(f.store.require<P.Approval>('approvals', approval.id)).toEqual(approval);
+    const entry = f.store.require<P.TranscriptEntry>('entries', approval.entryId);
+    expect(entry.kind === 'card' && entry.card.type === 'access_request' && entry.card.approval).toEqual(approval);
+    expect(f.store.list<P.BotGrant>('botGrants')).toEqual(originalGrants);
+    expect(f.store.list('accessRequests')).toEqual([]);
+    expect(f.events()).toHaveLength(eventCount);
+    expect(f.store.metadata(`accessRequestQueued:${approval.id}`)).toBeNull();
+  });
+
+  test('a policy denial during async revalidation leaves access pending with no grant', async () => {
+    const f = fixture();
+    const approval = await request(f.services);
+    const ready = Promise.withResolvers<PreparedAccessChanges | null>();
+    let queued = false;
+    f.services.access = { prepare: async () => ready.promise, queue() { queued = true; }, schedule() {}, async reconcileAll() {}, close() {} };
+    const resolving = f.gates.resolve(actor, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_once' });
+    f.policy.localExecutionCeiling = 'deny';
+    ready.resolve({ bot: f.store.require<P.Bot>('bots', 'bot_1'), changes: { terminal: 'read_interact' }, accessRequestId: approval.id });
+    await expect(resolving).rejects.toMatchObject({ code: 'policy_denied' });
+    expect(queued).toBe(false);
+    expect(f.store.require<P.Approval>('approvals', approval.id).gate.state).toBe('pending');
+  });
+
+  test('already available access resolves approved without queueing', async () => {
+    const f = fixture();
+    const approval = await request(f.services);
+    f.services.access = { prepare: async () => null, queue() { throw new Error('Already available access must not queue.'); }, schedule() {}, async reconcileAll() {}, close() {} };
+    expect((await f.gates.resolve<P.Approval>(actor, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_once' })).gate.state).toBe('approved');
+    expect(f.store.metadata(`accessRequestQueued:${approval.id}`)).toBe(false);
+    expect(f.store.list('accessRequests')).toEqual([]);
+  });
+});
+
+test('access becoming available after preparation does not report a queued change', async () => {
+  const f = fixture();
+  const run: P.Run = f.services.resource('run', { conversationId: 'room_1', botId: 'bot_1', initiatorUserId: actor.userId, clientNonce: nonce, status: 'running', error: null, startedAtMs: 1000, completedAtMs: null, routineRunId: null });
+  f.store.put('runs', run);
+  const grant: P.BotGrant = f.services.resource('grant', { botId: 'bot_1', machineId: 'machine_1', capabilityId: 'browser', requestedLevel: 'off', pendingLevel: null, effectiveLevel: 'off', reasons: [] });
+  f.store.put('botGrants', grant);
+  const approval = await f.gates.create<P.Approval>(actor, 'approval', { ...common, runId: run.id, source: 'access_request', category: 'permissions', forceHuman: true, title: 'Bot needs Browser', description: 'View pages.', target: 'Machine', inputs: { capability: 'browser', capabilityIds: ['browser'], level: 'read_only', machineLabel: 'Machine', reason: 'View the page.' } });
+  f.services.access = {
+    prepare: async () => ({ bot: f.store.require<P.Bot>('bots', 'bot_1'), changes: { browser: 'read_only' }, accessRequestId: approval.id }),
+    queue(prepared) {
+      f.store.put('botGrants', { ...grant, requestedLevel: 'read_only' });
+      queueGrantChanges(f.services, prepared.bot, prepared.changes, prepared.accessRequestId);
+    },
+    schedule() {}, async reconcileAll() {}, close() {},
+  };
+  expect((await f.gates.resolve<P.Approval>(actor, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_once' })).gate.state).toBe('approved');
+  expect(f.store.metadata(`accessRequestQueued:${approval.id}`)).not.toBe(true);
+  expect(f.store.list('accessRequests')).toEqual([]);
 });

@@ -256,14 +256,16 @@ defmodule CodingAgent.ParentQuestionStoreServer do
     else
       File.mkdir_p!(Path.dirname(state.dets_path))
 
-      dets_file = String.to_charlist(state.dets_path)
-
-      case :dets.open_file(@dets_table, file: dets_file, type: :set) do
+      case CodingAgent.StatePaths.open_dets(@dets_table, state.dets_path) do
         {:ok, _} ->
           %{state | dets_initialized: true}
 
         {:error, {:already_open, _pid}} ->
           %{state | dets_initialized: true}
+
+        {:error, {:state_dir_locked, pid}} ->
+          CodingAgent.StatePaths.warn_locked(pid)
+          state
 
         {:error, reason} ->
           Logger.warning("Failed to open parent question DETS: #{inspect(reason)}")
@@ -405,6 +407,6 @@ defmodule CodingAgent.ParentQuestionStoreServer do
   defp dets_path(opts) do
     Keyword.get(opts, :dets_path) ||
       Application.get_env(:coding_agent, :parent_question_store_path) ||
-      Path.join(CodingAgent.Config.agent_dir(), "parent_questions.dets")
+      CodingAgent.StatePaths.dets_path("parent_questions.dets")
   end
 end

@@ -11,18 +11,22 @@ struct BotLifecycleView: View {
     @State private var includeSkills = true
     @State private var includeRoutines = false
     @State private var sharedHostConsent = false
+    @State private var access = "standard"
     @State private var resetScopes: Set<String> = []
     @State private var confirmation: Confirmation?
     @State private var action = UIActionState()
     init(store: LemonBotStore, bot: Bot) {
         self.store = store; self.bot = bot
+        let online = store.machines.filter { $0.status == "online" }
+        _machineID = State(initialValue: online.count == 1 ? online[0].id : "")
         _operation = State(initialValue: "duplicate")
+        _access = State(initialValue: "standard")
     }
     private var owner: Bool { bot.ownerUserId == store.user?.id }
     private var cannotSubmit: Bool {
         if action.busy || !store.isOnline { return true }
         switch operation {
-        case "duplicate": return name.isEmpty || machineID.isEmpty || !sharedHostConsent
+        case "duplicate": return name.isEmpty || machineID.isEmpty
         case "move": return machineID.isEmpty || !sharedHostConsent || !bot.activeRunIds.isEmpty
         case "reset": return resetScopes.isEmpty
         default: return false
@@ -49,7 +53,24 @@ struct BotLifecycleView: View {
                         if !store.machines.contains(where: { $0.status == "online" && (operation != "move" || $0.id != bot.machineId) }) {
                             Text(operation == "move" ? "No other machine is online to move to." : "No machine is online. Start one of your machines, then come back.").font(LBFont.meta).foregroundStyle(LB.warning)
                         }
-                        Toggle("I understand Bots on this computer user share files and logins", isOn: $sharedHostConsent)
+                        if operation == "duplicate" {
+                            Picker("Access", selection: $access) {
+                                Text("Standard — recommended").tag("standard")
+                                Text("Chat only").tag("none")
+                            }
+                            Text(access == "standard"
+                                ? "Standard gives this duplicate access to Terminal, Files and Browser on the destination machine. It asks before running commands."
+                                : "Chat only copies settings without tool or terminal access.")
+                                .font(LBFont.meta).foregroundStyle(LB.muted)
+                            let machineName = store.machines.first(where: { $0.id == machineID })?.name ?? "this machine"
+                            let botName = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "\(bot.name) (copy)" : name.trimmingCharacters(in: .whitespacesAndNewlines)
+                            Text(access == "standard"
+                                ? "\(botName) works on \(machineName) as you, with your files, tools and logins. It asks before running commands."
+                                : "\(botName) works on \(machineName) in chat-only mode without file, tool or shell access.")
+                                .font(LBFont.meta).foregroundStyle(LB.muted)
+                        } else {
+                            Toggle("I understand Bots on this computer user share files and logins", isOn: $sharedHostConsent)
+                        }
                     }
                 }
                 switch operation {
@@ -121,7 +142,7 @@ struct BotLifecycleView: View {
     private func selection(_ id: ID, set: Binding<Set<ID>>) -> Binding<Bool> { Binding(get: { set.wrappedValue.contains(id) }, set: { if $0 { set.wrappedValue.insert(id) } else { set.wrappedValue.remove(id) } }) }
     private func copyBot() async {
         await action.perform {
-            let body: JSONObject = ["name": .string(name), "machineId": .string(machineID), "includeSkills": .bool(includeSkills), "includeRoutines": .bool(includeRoutines)]
+            let body: JSONObject = ["name": .string(name), "machineId": .string(machineID), "includeSkills": .bool(includeSkills), "includeRoutines": .bool(includeRoutines), "access": .string(access)]
             let copy: Bot = try await store.mutate("POST", resourcePath("bots", bot.id, "/duplicate"), body: body)
             try await store.refresh(); store.selectedConversationID = copy.mainConversationId
             dismiss()

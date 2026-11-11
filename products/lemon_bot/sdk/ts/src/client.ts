@@ -106,6 +106,14 @@ export class LemonBotClient {
     return this.call('POST /instance/runtime/:action', { params: { action }, body: { clientNonce: nonce(), confirm } });
   }
 
+  machineEnrollmentPreview() { return this.call('GET /machines/enrollment-preview'); }
+  addMachineOverSsh(body: RestRequest<'POST /machines/ssh'>) {
+    return this.call('POST /machines/ssh', { body });
+  }
+  machineSetup(setupId: string) {
+    return this.call('GET /machine-setups/:id', { params: { id: setupId } });
+  }
+
   agentIdentity(botId: string) {
     return this.call('GET /bots/:id/agent-identity', { params: { id: botId } });
   }

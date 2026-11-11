@@ -7,7 +7,7 @@ final class GrantPresentationTests: XCTestCase {
         MachineCapability(id: "terminal", name: "Measured terminal", category: "shell", supported: true, configuredLevel: "read_interact", osGrant: "not_required", tools: ["bash"], reason: "destination_shell_measured", measuredAtMs: 1, stale: false)
     }
     private var grant: BotGrant {
-        BotGrant(id: "grant", revision: 1, createdAtMs: 1, updatedAtMs: 1, botId: "bot", machineId: "machine", capabilityId: "terminal", requestedLevel: "read_interact", effectiveLevel: "read_interact", reasons: [capability.reason])
+        BotGrant(id: "grant", revision: 1, createdAtMs: 1, updatedAtMs: 1, botId: "bot", machineId: "machine", capabilityId: "terminal", requestedLevel: "read_interact", effectiveLevel: "read_interact", pendingLevel: nil, reasons: [capability.reason])
     }
     func testMeasuredNamesAndCategoriesWin() {
         XCTAssertEqual(GrantPresentation.name("terminal", capability), capability.name)
@@ -36,9 +36,58 @@ final class GrantPresentationTests: XCTestCase {
         var limited = grant; limited.effectiveLevel = "off"
         XCTAssertNotEqual(GrantPresentation.status(limited, capability), ready)
     }
+    func testMacPermissionReasonsExplainWorkerSetup() {
+        let expected = [
+            "macos_grant_measured": "macOS permission checked.",
+            "macos_grant_denied": "macOS hasn't allowed this — open Permissions on that Mac.",
+            "macos_grant_probe_unavailable": "macOS permissions can't be checked until this Mac uses Lemon Bot Worker — open Permissions on that Mac."
+        ]
+        for (reason, message) in expected {
+            var desktop = capability
+            desktop.id = "accessibility"
+            desktop.category = "os_app"
+            desktop.reason = reason
+            desktop.configuredLevel = reason == "macos_grant_measured" ? "read_interact" : "off"
+            desktop.osGrant = reason == "macos_grant_measured" ? "granted" : reason == "macos_grant_denied" ? "denied" : "unknown"
+            desktop.stale = reason == "macos_grant_probe_unavailable"
+            var permission = grant
+            permission.capabilityId = desktop.id
+            permission.reasons = [reason]
+            permission.effectiveLevel = desktop.configuredLevel
+            XCTAssertEqual(GrantPresentation.status(permission, desktop), message)
+            XCTAssertEqual(permission.reasons, [reason])
+            permission.reasons.append("Local execution is deny; workspace ceiling is deny.")
+            XCTAssertTrue(GrantPresentation.status(permission, desktop).contains("workspace policy"))
+            permission.reasons.append("Tool-policy cutover has not been acknowledged.")
+            XCTAssertTrue(GrantPresentation.status(permission, desktop).contains("not yet confirmed"))
+        }
+    }
     func testUnknownCodesStayInRawEvidence() {
         var unknown = grant; unknown.reasons = ["future_machine_code"]; unknown.effectiveLevel = "off"
         XCTAssertFalse(GrantPresentation.status(unknown, nil).contains("future_machine_code"))
         XCTAssertEqual(unknown.reasons, ["future_machine_code"])
+    }
+    func testQueuedGrantChangesUseRequestedRatherThanEffectiveLevel() {
+        var queued = grant
+        XCTAssertNil(GrantPresentation.pendingMessage(queued))
+        queued.pendingLevel = "off"
+        XCTAssertEqual(GrantPresentation.pendingMessage(queued), "Turns off when the current task finishes")
+        queued.pendingLevel = "read_only"
+        queued.effectiveLevel = "off"
+        XCTAssertEqual(GrantPresentation.pendingMessage(queued), "Turns off when the current task finishes")
+        queued.requestedLevel = "off"
+        XCTAssertEqual(GrantPresentation.pendingMessage(queued), "Turns on when the current task finishes")
+        queued.pendingLevel = nil
+        XCTAssertNil(GrantPresentation.pendingMessage(queued))
+    }
+    func testAccessRequestLabelsQuotedReasonAndResolution() throws {
+        let cards = try JSONDecoder().decode([Card].self, from: WireFixtures.cards)
+        guard case .accessRequest(let card) = try XCTUnwrap(cards.first { $0.type == "access_request" }) else { return XCTFail("Missing access card") }
+        XCTAssertEqual(AccessRequestPresentation.allowLabel, "Allow for this Bot")
+        XCTAssertEqual(AccessRequestPresentation.denyLabel, "Not now")
+        XCTAssertEqual(AccessRequestPresentation.reason(card.approval, botName: "Lemon"), "Lemon says: “I need Terminal to finish your request.”")
+        XCTAssertEqual(AccessRequestPresentation.result(state: "approved", who: "you"), "Allowed by you · turns on when this task finishes")
+        XCTAssertEqual(AccessRequestPresentation.result(state: "denied", who: "you"), "Not now")
+        XCTAssertEqual(AccessRequestPresentation.result(state: "expired", who: "you"), "Expired")
     }
 }

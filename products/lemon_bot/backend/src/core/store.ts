@@ -9,6 +9,7 @@ export class Store implements EntityStore {
   readonly db: Database;
   private depth = 0;
   private callbacks: (() => void)[] = [];
+  private batch = new Set<() => void>();
   private writes = new Set<(collection:string,id:string,value:unknown)=>void>();
   constructor(path: string) {
     this.db = new Database(path, { create:true, strict:true });
@@ -51,10 +52,11 @@ export class Store implements EntityStore {
   transaction<T>(operation:()=>T):T {
     if(this.depth>0){const result=operation();if(result instanceof Promise)throw new TypeError('SQLite transactions must remain synchronous.');return result;}
     this.db.exec('BEGIN IMMEDIATE'); this.depth=1;
-    try { const result=operation(); if(result instanceof Promise) throw new TypeError('SQLite transactions must remain synchronous.'); this.db.exec('COMMIT'); this.depth=0; const callbacks=this.callbacks; this.callbacks=[]; for(const callback of callbacks) callback(); return result; }
-    catch(error) { if(this.depth>0) this.db.exec('ROLLBACK'); this.depth=0; this.callbacks=[]; throw error; }
+    try { const result=operation(); if(result instanceof Promise) throw new TypeError('SQLite transactions must remain synchronous.'); this.db.exec('COMMIT'); this.depth=0; const callbacks=this.callbacks; this.callbacks=[]; for(const callback of callbacks) callback(); const after=[...this.batch]; this.batch.clear(); for(const callback of after) callback(); return result; }
+    catch(error) { if(this.depth>0) this.db.exec('ROLLBACK'); this.depth=0; this.callbacks=[]; this.batch.clear(); throw error; }
   }
   afterCommit(callback:()=>void):void { if(this.depth>0) this.callbacks.push(callback); else callback(); }
+  afterTransaction(callback:()=>void):void { if(this.depth>0) this.batch.add(callback); else callback(); }
   onWrite(listener:(collection:string,id:string,value:unknown)=>void):()=>void {this.writes.add(listener);return()=>{this.writes.delete(listener);};}
   metadata<T>(key:string):T|null {
     const row=this.db.query('SELECT value FROM metadata WHERE key=?').get(key) as {value:string}|null;

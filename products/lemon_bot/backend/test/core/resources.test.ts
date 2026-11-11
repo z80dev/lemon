@@ -80,7 +80,7 @@ function fixture() {
   const supplied={store,get mutations(){return mutations;},auth,runtime,config:{publicUrl:'https://bot.example'},
     integrations:{
       async admission(){return;},
-      async effectivePolicy(user:Principal,botId:string):Promise<P.EffectivePolicy>{calls.push({method:'effectivePolicy',params:{userId:user.userId,botId}});return {userId:user.userId,botId,directoryGroupIds:[],productAccess:true,localExecutionCeiling:'ask',allowSudo:false,allowEgress:false,rules:[],networkPolicies:[],explanations:[]};},
+      async effectivePolicy(user:Principal,botId:string):Promise<P.EffectivePolicy>{calls.push({method:'effectivePolicy',params:{userId:user.userId,botId}});return {userId:user.userId,botId,directoryGroupIds:[],productAccess:true,localExecutionCeiling:'ask',allowSudo:false,allowEgress:false,workspaceReads:'allow',rules:[],networkPolicies:[],explanations:[]};},
       async connectorConfig(user:Principal,botId:string,conversationId:string,operationId:string){calls.push({method:'connectorConfig',params:{userId:user.userId,botId,conversationId,operationId}});return [];},
       async refreshPolicy(user:Principal,botIds:string[],options:{workspace?:boolean}){calls.push({method:'refreshPolicy',params:{userId:user.userId,botIds,...options}});if(policyRefreshError)throw policyRefreshError;},
     },

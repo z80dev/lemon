@@ -160,6 +160,10 @@ For a provider setup that includes the live credential check, use:
 
 ```bash
 lemon setup provider
+# Or to run the standalone model connection step:
+lemon setup model
+# Inspect model readiness as JSON:
+lemon setup model --json
 ```
 
 The live check is deferred with `--skip-verify`, which is useful when you are
@@ -301,7 +305,7 @@ automatically for an existing config.
 
 `lemon doctor` reports diagnostics; it is not a replacement for provider
 onboarding. To retry first-time state, use `lemon setup`. To correct a provider
-or model, use `lemon setup provider` or `lemon model`.
+or model, use `lemon setup model`, `lemon setup provider`, or `lemon model`.
 
 ## Optional Telegram or Discord
 

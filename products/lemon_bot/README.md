@@ -38,12 +38,22 @@ Every Bot has an assigned machine, a Lemon profile and an owner conversation. Ta
 
 Setup starts with a named assistant and a machine, with optional phone pairing. Usage shows provider spend and limits. Integrations and host controls depend on configured providers and permissions.
 
+When a task needs missing Terminal, Files or Browser access, a Bot can ask through an owner-only access card. Allowing changes the Bot's access after its current task finishes, then visibly continues your original request; commands still require their normal approval. Grant edits during a task also queue, with Stop task available. Supported workers keep task files in a private per-Bot folder; folder reads can skip approval unless workspace policy requires it, and reading there makes subsequent web access ask first.
+
 Instance provider rows show the last observed Lemon provider failure and its time.
 The runtime retains one bounded, credential-free category summary per provider,
 including authentication and rate-limit failures; successful calls do not erase
 that history. It is in-memory diagnostic history, cleared when Lemon restarts,
 not a live provider probe. Raw provider messages, paths and credentials are never
 included in `providers[].lastError`.
+
+## Install a release
+
+Use `install.sh --profile bot` for the full runtime (without the TUI by default)
+and backend at the same version. The installer verifies runtime Bot capabilities
+and hands off to `lemon-bot` in a terminal; `--skip-setup` or a headless install
+prints its absolute path instead. `--profile lemon_bot` remains backend-only for
+remote controllers or manual supervision. See [installation](../../docs/install.md).
 
 ## Running an integrated checkout
 

@@ -26,7 +26,8 @@ defmodule CodingAgent.ExecutionNode.FeaturesTest do
     assert %{"protocol" => 1, "botReady" => true, "missingFeatures" => [], "features" => flags} =
              Features.snapshot(capabilities(), @opts)
 
-    assert map_size(flags) == 10
+    assert map_size(flags) == 11
+    assert flags["botFolder"]
     assert Enum.all?(Map.values(flags), &(&1 == true))
 
     for {method, flag} <- [
@@ -72,5 +73,24 @@ defmodule CodingAgent.ExecutionNode.FeaturesTest do
     snapshot = Features.snapshot(%{"coding_agent.run" => %{"version" => 1}}, @opts)
     refute snapshot["botReady"]
     assert snapshot["missingFeatures"] == Enum.sort(snapshot["missingFeatures"])
+  end
+
+  test "the default interpreter probe runs the resolved interpreter, not PATH's python3" do
+    script =
+      "import json,sys,os,pty,fcntl; print(json.dumps(sys.version_info >= (3,9) and all(hasattr(os,n) for n in ['pread','pwrite','waitstatus_to_exitcode','O_NOFOLLOW'])))"
+
+    expected =
+      case CodingAgent.ExecutionNode.Python.executable() do
+        {:ok, python} ->
+          CodingAgent.ExecutionNode.HostCommand.run_executable(python, ["-c", script]) ==
+            {:ok, "true"}
+
+        {:error, :not_installed} ->
+          false
+      end
+
+    probed = Features.snapshot(capabilities(), Keyword.delete(@opts, :python_supported))
+    assert probed["features"]["ptyShell"] == expected
+    assert probed["features"]["filesystemCAS"] == expected
   end
 end

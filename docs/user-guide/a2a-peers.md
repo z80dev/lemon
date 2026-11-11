@@ -58,11 +58,13 @@ timeout_ms = 300000
 `outbound_token_secret` when the peer uses different credentials. Literal
 tokens are not accepted in this section.
 
-The listener is tokenless only when it is bound to a direct loopback address
-and no inbound token secret is configured. A non-loopback listener fails
-validation unless at least one inbound peer token secret is present. Across
-machines, use HTTPS/WSS termination or a verified encrypted overlay and set
-`public_url` to the URL peers can actually reach.
+The listener permits tokenless access only from a direct loopback peer when no
+inbound token secret is configured **and**
+`LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true` is explicitly enabled.
+The default is token-required; never enable compatibility behind a local proxy.
+A non-loopback listener fails validation unless at least one inbound peer token
+secret is present. Across machines, use HTTPS/WSS termination or a verified
+encrypted overlay and set `public_url` to the URL peers can actually reach.
 
 `enable_a2a`, `host`, `port`, `public_url`, `reply_timeout_ms`,
 `rate_limit_per_minute` and `max_context_turns` can also be overridden with

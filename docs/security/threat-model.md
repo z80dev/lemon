@@ -30,6 +30,33 @@ cryptographic, network, and boundary machinery those docs assume.
 | Package graph | Declared dependencies | Undeclared cross-package reach | `deps/0` policy + namespace-reference check (`LemonCore.Quality.ArchitectureCheck`) |
 | Published tarball | Files you intend to ship | Gitignored local secrets in the tree | `exclude_patterns` in each package's `mix.exs` |
 
+## Listener exposure
+
+| Listener | Default bind / port | Exposure policy |
+| --- | --- | --- |
+| Control plane | `127.0.0.1:4040` | Operator/node WebSocket authentication; remote peers get only `GET /ws` and `/healthz` by default |
+| Node gateway | `127.0.0.1:4044` | Only node/enrollment `/ws` and `/healthz`; operator and tokenless handshakes refused |
+| LemonWeb | `127.0.0.1:4080` | Operator login; non-loopback startup requires an operator token |
+| LemonSim UI (optional) | `127.0.0.1:4090` | Existing simulation access-token policy; public lobby/health remain public |
+| A2A (optional) | `127.0.0.1:9901` | Peer tokens; tokenless local fallback requires explicit compatibility opt-in |
+| epmd / distribution | Loopback | Launcher defaults; explicit cross-host distribution is an operator choice |
+
+**Breaking change:** existing LAN users must opt into `*_BIND_IP` and restart.
+The main listener refuses a non-loopback bind without an operator token or with
+tokenless compatibility enabled. Remote OpenAI/ACP requires both an explicit
+`LEMON_CONTROL_PLANE_REMOTE_HTTP` opt-in and the dedicated API token; locally these
+APIs require their token or fall back to the operator token. A local socket peer
+is not proof of a trusted user: reverse proxies also arrive from loopback, so
+`LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` is default-off and unsafe
+behind proxies.
+
+Expose **4044 only** for remote nodes, with TLS or a verified encrypted overlay.
+A remote operator backend needs a separate TLS proxy restricted to 4040 `/ws`.
+Use TLS before exposing the web login. Containers explicitly bind `0.0.0.0`
+inside their network namespace, require an operator token, and should publish
+host ports on `127.0.0.1`. `lemon doctor` reports listener exposure and stale
+wildcard epmd processes; with Lemon stopped, `epmd -kill` or a reboot clears them.
+
 ## 1. Secrets at rest
 
 Provider keys and other secrets are encrypted, never stored in `config.toml` in

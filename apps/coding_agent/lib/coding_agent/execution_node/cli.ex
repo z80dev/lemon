@@ -93,6 +93,38 @@ defmodule CodingAgent.ExecutionNode.CLI do
     end
   end
 
+  def run(["status" | argv], _deps) do
+    case OptionParser.parse(argv, strict: [name: :string, json: :boolean]) do
+      {opts, [], []} ->
+        if is_binary(opts[:name]) and String.trim(opts[:name]) != "" do
+          case CodingAgent.StatePaths.read_status(opts[:name]) do
+            {:ok, status} ->
+              if opts[:json] do
+                IO.puts(Jason.encode!(status))
+              else
+                reason = if status["reason"], do: " (#{status["reason"]})", else: ""
+
+                since =
+                  DateTime.from_unix!(status["changedAtMs"], :millisecond)
+                  |> DateTime.to_iso8601()
+
+                IO.puts("#{status["localName"]}: #{status["state"]}#{reason} since #{since}")
+              end
+
+              :ok
+
+            _ ->
+              {:error, "no worker status recorded for this name"}
+          end
+        else
+          {:error, "--name is required"}
+        end
+
+      _ ->
+        {:error, "invalid worker status options"}
+    end
+  end
+
   def run(argv, deps) do
     Process.flag(:trap_exit, true)
 
@@ -101,8 +133,21 @@ defmodule CodingAgent.ExecutionNode.CLI do
          :ok <- require_invite_features(opts, deps),
          {:ok, opts} <- read_invite(opts),
          {:ok, execution_capabilities} <- execution_capabilities(opts),
-         {:ok, _started} <- Application.ensure_all_started(:coding_agent),
+         :ok <-
+           Keyword.get(deps, :configure_state, &CodingAgent.StatePaths.configure_worker/1).(
+             opts[:name]
+           ),
+         {:ok, _started} <-
+           Keyword.get(deps, :ensure_all_started, &Application.ensure_all_started/1).(
+             :coding_agent
+           ),
          :ok <- load_all_modules(),
+         :ok <-
+           Application.put_env(
+             :lemon_core,
+             :require_owned_loopback,
+             System.get_env("LEMON_NODE_TRUST_LOOPBACK_LISTENER") != "1"
+           ),
          {:ok, worker} <-
            Worker.start_link(
              node_name: opts[:name],
@@ -118,6 +163,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
              cwd: default_cwd(opts),
              execution_capabilities: execution_capabilities,
              notify_pid: self(),
+             status_writer: Keyword.get(deps, :status_writer),
              socket_module: Keyword.get(deps, :socket_module, CodingAgent.ExecutionNode.Socket),
              executor_module: Keyword.get(deps, :executor_module, CodingAgent.Executor),
              token_store_module:
@@ -249,18 +295,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
         IO.puts("Execution node online#{suffix}")
 
         if opts[:enroll_only] do
-          try do
-            GenServer.stop(worker, :normal, 5_000)
-
-            receive do
-              {:DOWN, ^monitor, :process, ^worker, :normal} -> :ok
-              {:DOWN, ^monitor, :process, ^worker, _reason} -> {:error, "worker_shutdown_failed"}
-            after
-              5_000 -> {:error, "worker_shutdown_failed"}
-            end
-          catch
-            :exit, _ -> {:error, "worker_shutdown_failed"}
-          end
+          stop_enrollment_worker(worker, monitor)
         else
           await_worker(worker, monitor, opts)
         end
@@ -269,18 +304,58 @@ defmodule CodingAgent.ExecutionNode.CLI do
         IO.puts("Execution node #{status}")
         await_worker(worker, monitor, opts)
 
+      {:execution_node_worker, ^worker, {:status, kind, reason}}
+      when kind in [:needs_reauthorization, :needs_enrollment, :conflict] ->
+        remedy =
+          case kind do
+            :needs_reauthorization ->
+              "reconnect this machine from Lemon Bot (Machines → Reconnect); this worker resumes automatically when new credentials are saved"
+
+            :needs_enrollment ->
+              "no saved credential for this controller; enroll it with the join command from Lemon Bot"
+
+            :conflict ->
+              "another worker is connected as this node; retrying every minute"
+          end
+
+        IO.puts("Execution node #{kind} (#{reason}): #{remedy}")
+
+        if opts[:enroll_only] do
+          case stop_enrollment_worker(worker, monitor) do
+            :ok -> {:error, :enrollment_outcome_unknown}
+            error -> error
+          end
+        else
+          await_worker(worker, monitor, opts)
+        end
+
       {:execution_node_worker, ^worker, {:status, status, _detail}} ->
         IO.puts("Execution node #{status}")
         await_worker(worker, monitor, opts)
 
       {:DOWN, ^monitor, :process, ^worker, :normal} ->
-        :ok
+        if opts[:enroll_only], do: {:error, :enrollment_outcome_unknown}, else: :ok
 
       {:DOWN, ^monitor, :process, ^worker, reason} ->
         {:error, format_reason(reason)}
 
       {:EXIT, ^worker, _reason} ->
         await_worker(worker, monitor, opts)
+    end
+  end
+
+  defp stop_enrollment_worker(worker, monitor) do
+    try do
+      GenServer.stop(worker, :normal, 5_000)
+
+      receive do
+        {:DOWN, ^monitor, :process, ^worker, :normal} -> :ok
+        {:DOWN, ^monitor, :process, ^worker, _reason} -> {:error, "worker_shutdown_failed"}
+      after
+        5_000 -> {:error, "worker_shutdown_failed"}
+      end
+    catch
+      :exit, _ -> {:error, "worker_shutdown_failed"}
     end
   end
 
@@ -350,6 +425,9 @@ defmodule CodingAgent.ExecutionNode.CLI do
     """
     Usage: lemon node join --name NAME --controller wss://HOST/ws [options]
            lemon node capabilities [--json] [--require-bot] [--expected-version VERSION]
+           lemon node status --name NAME [--json]
+
+    Workers with rejected credentials stay running and resume after repair.
 
     Options:
       --pair                    Pair and store a controller-issued node token
@@ -383,6 +461,9 @@ defmodule CodingAgent.ExecutionNode.CLI do
     controllers require wss:// by default. The insecure override is acceptable
     only when another verified transport layer, such as Tailscale, encrypts and
     authenticates the complete path.
+    Loopback listeners must belong to this user before credentials are sent.
+    Set LEMON_NODE_TRUST_LOOPBACK_LISTENER=1 only when you deliberately trust a
+    controller or tunnel running under another uid on this machine.
     File RPC paths and shell working directories use --allowed-root (home by default).
     Explicit roots extend the home default; repeat the flag to permit multiple roots.
     LEMON_NODE_CAPABILITIES provides the same destination-local ceiling as --capabilities.
@@ -410,16 +491,16 @@ defmodule CodingAgent.ExecutionNode.CLI do
     "operator authentication failed while pairing"
   end
 
-  defp format_reason(:node_authentication_failed) do
-    "node authentication failed; rotate it with --pair or provide a valid LEMON_NODE_TOKEN"
-  end
-
   defp format_reason(:missing_node_recovery_token) do
     "the legacy node credential has no recovery token; rerun --pair --repair with operator authorization"
   end
 
   defp format_reason(:insecure_controller_url) do
     "non-loopback ws:// controllers are blocked; use wss:// or explicitly pass --allow-insecure-controller only for development or a verified encrypted overlay"
+  end
+
+  defp format_reason(:loopback_listener_not_owned) do
+    "the loopback listener is not owned by this user; restart the controller or SSH tunnel under this account, or explicitly trust another uid with LEMON_NODE_TRUST_LOOPBACK_LISTENER=1"
   end
 
   defp format_reason(reason) do

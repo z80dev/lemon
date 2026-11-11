@@ -18,6 +18,49 @@ backup directories or credential-inclusion settings in `config.toml`. See
 [Back up and restore Lemon user state](user-guide/backups.md) for the versioned
 `~/.lemon` data contract.
 
+## Listener exposure (breaking default change)
+
+The control plane (`4040`), LemonWeb (`4080`), LemonSim UI (`4090`, when enabled),
+and node gateway (`4044`) bind **127.0.0.1 by default**, including releases.
+Existing LAN clients must explicitly opt in and restart:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `LEMON_CONTROL_PLANE_BIND_IP` | `127.0.0.1` | Main operator WebSocket / HTTP listener |
+| `LEMON_WEB_BIND_IP` | `127.0.0.1` | Operator browser interface |
+| `LEMON_SIM_UI_BIND_IP` | `127.0.0.1` | Simulation interface (retains its own access-token policy) |
+| `LEMON_CONTROL_PLANE_NODE_BIND_IP` | `127.0.0.1` | Node-only gateway |
+| `LEMON_CONTROL_PLANE_NODE_PORT` | `4044` | Node-only port; `0` disables it |
+| `LEMON_CONTROL_PLANE_REMOTE_HTTP` | empty | Comma-separated subset of `openai,acp` |
+
+Bind values must be literal IPv4 or IPv6 addresses. Non-loopback main and web
+binds require `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` and refuse
+`LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true`. Put TLS in front of
+LemonWeb: an operator login over plaintext LAN HTTP exposes the credential.
+Remote peers on the main listener get only `GET /ws` and `GET /healthz`;
+everything else is 404 unless the corresponding HTTP API is explicitly enabled
+with `LEMON_CONTROL_PLANE_REMOTE_HTTP` and its dedicated
+`LEMON_OPENAI_COMPAT_API_TOKEN` / `LEMON_ACP_API_TOKEN`.
+
+OpenAI and ACP require authentication locally too. If their dedicated token is
+unset they accept the operator token, including the launcher's private
+`~/.lemon/run/control-plane-<port>.token` file. The explicit default-off loopback
+compatibility flag permits tokenless local APIs only when no token is configured;
+it also gates tokenless local A2A. Never enable it behind a local reverse proxy.
+
+Forward node traffic only to **4044**: its `/ws` accepts node and enrollment
+credentials, never operator or tokenless clients; `/healthz` identifies
+`lemon-node-gateway`. Occupied or disabled gateway ports are nonfatal but reported
+unavailable by `LemonControlPlane.NodeGateway.status/0`. The launcher reserves a
+gateway port alongside the main/web ports in `~/.lemon/ports.env`.
+
+Launchers default epmd and Erlang distribution to loopback. Explicit long-name
+`--name` distribution opts out of the distribution-interface default; epmd's
+`ERL_EPMD_ADDRESS` can be set explicitly. Run `lemon doctor` to inspect listener
+binds. A pre-upgrade epmd may still listen on all interfaces: with Lemon stopped,
+run `epmd -kill` or restart the computer.
+
+
 ## Example
 
 ```toml
@@ -186,7 +229,7 @@ allow = "all"
 deny = []
 require_approval = ["bash", "write", "edit"]
 no_reply = false
-
+# workspace_read_exempt = true # optional tri-state boolean; false wins, nil neutral
 [[gateway.bindings]]
 transport = "telegram"
 chat_id = 12345678
@@ -196,15 +239,18 @@ agent_id = "default"
 Tool policies are parsed strictly by `LemonCore.ToolPolicy`. Unknown profiles,
 unknown or conflicting keys, malformed allow/deny/block/approval values, and
 unsupported approval modes fail closed rather than falling back to full
-access. Omitting `[profiles.<id>.tool_policy]` retains the explicit runtime
+access. `workspace_read_exempt` is a sparse tri-state boolean (`true`, `false`,
+or `nil` when omitted) controlling approval exemption for workspace reads.
+Omitting `[profiles.<id>.tool_policy]` retains the explicit runtime
 default; supplying an invalid table produces a deny-all policy.
 
 `LemonCore.ProfileStore` is the lifecycle owner for user-managed profiles.
 Commands such as `lemon profile create research` patch only the selected
 `[profiles.<id>]` table, preserving unrelated global-config keys and comments.
 Managed records may include `name`, `description`, `avatar`, `model`,
-`system_prompt`, `node`, `status`, `profile_version`, `created_at`, and
-`updated_at`. Home/workspace paths and the stable `agent:<id>:main` session key
+`system_prompt`, `node`, `working_directory` (`"node_default"` or `"profile_files"`),
+`status`, `profile_version`, `created_at`, and `updated_at`.
+Home/workspace/files paths and the stable `agent:<id>:main` session key
 are derived from the validated ID rather than stored; do not add credentials or
 filesystem paths to the profile table. See
 [User-managed profiles](user-guide/profiles.md) for clone, credential-safe
@@ -612,8 +658,8 @@ Environment variables override file values. Common overrides:
   started by `./bin/lemon-tui` is stopped with the TUI. Start a persistent
   source runtime with `./bin/lemon daemon`, then attach with the same token.
 - `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` — explicit legacy
-  compatibility opt-in (`true`/`false` or `1`/`0`) for tokenless operator
-  connections from direct loopback peers. Defaults to `false`; never enable it
+  compatibility opt-in (`true`/`false` or `1`/`0`) for tokenless operator,
+  OpenAI/ACP HTTP and A2A access from direct loopback peers. Defaults to `false`; never enable it
   for a reverse-proxied control plane.
 
 The browser monitoring client intentionally has no build-time or URL-based

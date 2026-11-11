@@ -284,6 +284,35 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
     end
   end
 
+  @doc """
+  Reports whether a refreshable Codex CLI ChatGPT login is present, without
+  returning credentials, refreshing tokens, or changing the source file.
+  """
+  @spec codex_cli_login_status(keyword()) :: :present | :absent | {:unusable, atom()}
+  def codex_cli_login_status(opts \\ []) do
+    case import_codex_cli_login(opts) do
+      {:ok, _secret} ->
+        :present
+
+      {:error, :enoent} ->
+        :absent
+
+      {:error, reason}
+      when reason in [
+             :not_chatgpt_oauth,
+             :invalid_access_token,
+             :missing_refresh_token,
+             :invalid_expiry,
+             :missing_account_id,
+             :invalid_codex_cli_login
+           ] ->
+        {:unusable, reason}
+
+      {:error, _reason} ->
+        {:unusable, :invalid_codex_cli_login}
+    end
+  end
+
   defp codex_auth_path(opts) do
     case Keyword.get(opts, :path) do
       nil ->

@@ -37,6 +37,17 @@ confirmation. Poll `client.instance()` for the returned operation's completion,
 never repeat the mutation automatically. Missing provider credentials require
 `lemon setup` on that host; the API never returns keys.
 
+### Add a machine over SSH
+
+Read `machineEnrollmentPreview()` first; missing `ssh` means unavailable.
+Owner/admin callers pass a fixed nonce to
+`addMachineOverSsh({clientNonce, sshDestination, name?, machineId?})`.
+Retain the returned setup ID and read `machineSetup(id)` or consume the
+initiator-scoped `machine_setup.upserted` events. A running setup is not evidence
+that the machine is online. After failure, an explicit retry with the same
+`machineId` repairs that identity; never replay an uncertain enrollment code.
+Missing `Machine.link` means `{kind:'direct'}` on older backends.
+
 ### Named agents
 
 `agentIdentity(botId)` reads this Bot's separate handle and stable address;

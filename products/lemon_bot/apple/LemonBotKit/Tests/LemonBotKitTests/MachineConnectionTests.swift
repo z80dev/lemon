@@ -67,10 +67,6 @@ final class MachineConnectionTests: XCTestCase {
         try ("#!/bin/sh\n" + body).write(to: path, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
     }
-    /// `curl` answers only once `marker` exists: the stand-in for a listening backend.
-    private func fakeCurl() throws {
-        try executable(root.appendingPathComponent("bin/curl"), "[ -f \"\(root.path)/up\" ]\n")
-    }
     private func runScript() throws -> String {
         let process = Process(), output = Pipe(), input = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -88,34 +84,42 @@ final class MachineConnectionTests: XCTestCase {
         try (key + "\n").write(to: data.appendingPathComponent("local-access.key"), atomically: true, encoding: .utf8)
     }
 
-    func testRunningLemonBotReturnsItsKeyWithoutStartingAnything() throws {
-        try fakeCurl(); FileManager.default.createFile(atPath: root.appendingPathComponent("up").path, contents: nil)
-        try writeKey(String(repeating: "C", count: 64))
-        let ready = try MachineBootstrap.parse(runScript(), machine: "this Mac")
-        XCTAssertEqual(ready, .init(port: 4100, key: String(repeating: "c", count: 64), started: false))
-    }
-
-    func testStoppedLemonBotIsStartedDetachedThenReadyWithItsKey() throws {
-        try fakeCurl()
+    func testInstalledBotRunsLifecycleAndReturnsReadyKey() throws {
         let key = String(repeating: "d", count: 64)
-        // The installed launcher "starts" by writing its key and coming up.
-        try executable(home.appendingPathComponent(".lemon/lemon_bot/current/bot/bin/lemon-bot"),
-                       "[ \"$1\" = --no-open ] || exit 2\nprintf '%s\\n' \(key) > \"$HOME/.lemon/lemon_bot/local-access.key\"\ntouch \"\(root.path)/up\"\n")
-        let ready = try MachineBootstrap.parse(runScript(), machine: "this Mac")
-        XCTAssertEqual(ready, .init(port: 4100, key: key, started: true))
-        let mode = try FileManager.default.attributesOfItem(atPath: data.path)[.posixPermissions] as? Int
-        XCTAssertEqual(mode, 0o700)
+        try writeKey(key)
+        try executable(home.appendingPathComponent(".local/bin/lemon-bot"), #"""
+        [ "$*" = "up --json --no-open --no-worker" ] || exit 2
+        printf '%s\n' '{"type":"step","step":"units","state":"running","detail":null}'
+        printf '%s\n' '{"type":"result","status":"ready","port":4100,"machineId":null,"manager":"launchd","persistence":"login"}'
+        """#)
+        let output = try runScript()
+        XCTAssertTrue(output.contains("\"type\":\"step\""))
+        XCTAssertTrue(output.contains("status=ready"))
+        XCTAssertEqual(try MachineBootstrap.parse(output, machine: "this Mac"), .init(port: 4100, key: key))
     }
 
-    func testMissingInstallAndOldBackendAreDistinctFailures() throws {
-        try fakeCurl()
+    func testMissingInstallAndIncompatibleRuntimeAreDistinctFailures() throws {
         XCTAssertThrowsError(try MachineBootstrap.parse(runScript(), machine: "studio")) {
             XCTAssertEqual($0 as? MachineConnectionError, .notInstalled(machine: "studio"))
         }
-        FileManager.default.createFile(atPath: root.appendingPathComponent("up").path, contents: nil)
+        try executable(home.appendingPathComponent(".local/bin/lemon-bot"),
+                       "printf '%s\\n' '{\"type\":\"result\",\"status\":\"needs_attention\"}'\nexit 1\n")
         XCTAssertThrowsError(try MachineBootstrap.parse(runScript(), machine: "studio")) {
             XCTAssertEqual($0 as? MachineConnectionError, .outdated(machine: "studio"))
         }
+    }
+
+    func testServiceFailureKeepsStderrDiagnosticsAndNoDetachedCommandsRemain() throws {
+        try executable(home.appendingPathComponent(".local/bin/lemon-bot"),
+                       "echo 'port_in_use_foreign' >&2\nprintf '%s\\n' '{\"type\":\"result\",\"status\":\"service_failed\"}'\nexit 1\n")
+        XCTAssertThrowsError(try MachineBootstrap.parse(runScript(), machine: "studio")) {
+            XCTAssertEqual($0 as? MachineConnectionError, .startFailed(machine: "studio", log: "port_in_use_foreign"))
+        }
+        XCTAssertFalse(MachineBootstrap.script.contains("nohup"))
+        XCTAssertFalse(HostEnrollment.setupScript.contains("pkill"))
+        XCTAssertTrue(MachineBootstrap.installCommand.contains("/releases/"))
+        XCTAssertFalse(MachineBootstrap.installCommand.contains("/main/"))
+        XCTAssertTrue(MachineBootstrap.installCommand.hasSuffix("--profile bot"))
     }
 
     func testParseRejectsMalformedKeysAndKeepsStartLog() {

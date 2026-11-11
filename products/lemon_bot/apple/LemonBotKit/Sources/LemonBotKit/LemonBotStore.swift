@@ -2,6 +2,10 @@ import Foundation
 import Observation
 
 @MainActor @Observable public final class LemonBotStore {
+    static let liveRunStatuses: Set<String> = ["reserved", "queued", "running", "awaiting_input"]
+    static let terminalRunStatuses: Set<String> = ["succeeded", "failed", "cancelled"]
+    public internal(set) var grantsVersion: [ID: Int] = [:]
+    @ObservationIgnored var reconcilingRunBots: Set<ID> = []
     public var account: StoredAccount? {
         didSet {
             if oldValue?.id != account?.id || oldValue?.token != account?.token { providerSettings.reset() }
@@ -18,6 +22,7 @@ import Observation
         didSet { if member?.role != "owner" { providerSettings.reset() } }
     }
     public var bots: [Bot] = []
+    public var machineSetups: [ID: MachineSetup] = [:]
     public var machines: [Machine] = [] {
         didSet {
             if let id = providerSettings.machineID,
@@ -98,6 +103,40 @@ import Observation
             accounts = try keychain.load()
             if let pending = try keychain.loadPendingPairing() { installPendingPairing(pending) }
         } catch { errorMessage = error.localizedDescription }
+    }
+    public func isStreaming(_ message: MessageEntry) -> Bool {
+        message.streaming && !runs.contains { $0.id == message.runId && Self.terminalRunStatuses.contains($0.status) }
+    }
+
+    func scheduleRunReconciliation(botID: ID) {
+        let stale = runs.filter { $0.botId == botID && Self.liveRunStatuses.contains($0.status) }
+        guard !stale.isEmpty, reconcilingRunBots.insert(botID).inserted else { return }
+        let current = generation
+        Task { [weak self] in
+            guard let self else { return }
+            defer { if generation == current { reconcilingRunBots.remove(botID) } }
+            for run in stale {
+                do {
+                    let authoritative: Run = try await read("/runs/\(HTTPTransport.pathID(run.id))")
+                    try assertGeneration(current)
+                    guard authoritative.id == run.id, authoritative.botId == botID, authoritative.conversationId == run.conversationId else { throw ClientError.invalidFrame }
+                    upsert(&runs, authoritative, id: { $0.id }, revision: { $0.revision })
+                    if Self.terminalRunStatuses.contains(authoritative.status) {
+                        let streaming = (entries[run.conversationId] ?? []).filter { $0.runId == run.id && $0.streaming }
+                        for entry in streaming {
+                            let final: TranscriptEntry = try await read("/entries/\(HTTPTransport.pathID(entry.id))")
+                            try assertGeneration(current)
+                            guard final.id == entry.id, final.runId == run.id, final.conversationId == run.conversationId else { throw ClientError.invalidFrame }
+                            upsertEntry(final)
+                        }
+                    }
+                } catch {
+                    // A subsequent idle presence retries failed authorized reads.
+                    guard generation == current else { return }
+                }
+            }
+            try? persistCache()
+        }
     }
     func activeTransport() throws -> HTTPTransport {
         guard account != nil, connectionState != "reconnect_required", let transport else { throw ClientError.signedOut }
@@ -375,6 +414,7 @@ import Observation
         connectionState = "disconnected"; hostSetup = .idle
         connectionIssue = nil; instanceStatus = nil; nextRetryAt = nil; lastConnectionAttemptAt = nil
         user = nil; workspace = nil; member = nil; capabilities = nil; bots = []; machines = []; conversations = []; sections = []; notifications = []; runs = []
+        machineSetups = [:]
         entries = [:]; drafts = [:]; terminalFrames = [:]; terminalGaps = [:]; terminalExits = [:]; terminalExitFrames = [:]; terminalSequences = [:]; terminalSubscriptions = []
         voiceSession = nil; navigationTarget = nil; localSettings = nil; selectedConversationID = nil; deviceID = nil; snapshot = nil; cursor = "0"; latestResources = [:]; errorMessage = nil
         visibleConversationID = nil
@@ -384,6 +424,7 @@ import Observation
         pairings = []; pairingURL = nil; pairingQRID = nil
         ownerPairingPreflight = nil
         typingByConversation = [:]
+        grantsVersion = [:]; reconcilingRunBots = []
     }
     func persistCache() throws {
         guard let account, var value = snapshot else { return }
@@ -473,5 +514,11 @@ import Observation
     func upsertEntry(_ value: TranscriptEntry) {
         var list = entries[value.conversationId] ?? []
         upsert(&list, value, id: { $0.id }, revision: { $0.revision }); list.sort { $0.seq < $1.seq }; entries[value.conversationId] = list
+    }
+}
+
+extension Machine {
+    public var needsReconnect: Bool {
+        status == "offline" && (credential == "expired" || credential == "revoked")
     }
 }

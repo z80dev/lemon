@@ -21,6 +21,7 @@ info() { printf '\033[0;32m[lemon]\033[0m %s\n' "$1"; }
 warn() { printf '\033[0;33m[lemon]\033[0m %s\n' "$1"; }
 error() { printf '\033[0;31m[lemon]\033[0m %s\n' "$1" >&2; }
 
+ORIGINAL_ARGS=("$@")
 LAUNCH_CWD="$(pwd)"
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 while [ -L "$SCRIPT_PATH" ]; do
@@ -30,6 +31,9 @@ while [ -L "$SCRIPT_PATH" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+case "${1:-}" in
+  tunnel) shift; exec "$LEMON_ROOT/rel/overlays/libexec/lemon-tunnel" "$@" ;;
+esac
 TUI_DIR="$LEMON_ROOT/clients/tui"
 LEMON_HOME_DIR="$HOME/.lemon"
 STATE_DIR="$LEMON_HOME_DIR/run"
@@ -52,6 +56,32 @@ load_port_settings() {
   done <"$1"
 }
 load_port_settings "$LEMON_HOME_DIR/ports.env"
+
+# Scope epmd and Erlang distribution interface to loopback by default unless
+# the user explicitly chose long-name distribution (--name) or supplied overrides.
+load_environment() {
+  export ERL_EPMD_ADDRESS="${ERL_EPMD_ADDRESS:-127.0.0.1}"
+
+  local has_name=0 arg
+  if [ "${NODE_MODE:-}" = "name" ] || [ "${RELEASE_DISTRIBUTION:-}" = "name" ]; then
+    has_name=1
+  fi
+  for arg in "${ORIGINAL_ARGS[@]}"; do
+    if [ "$arg" = "--name" ]; then
+      has_name=1
+      break
+    fi
+  done
+  if [ "$has_name" = "0" ]; then
+    case "${ELIXIR_ERL_OPTIONS:-}" in
+      *inet_dist_use_interface*) ;;
+      *)
+        export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-}${ELIXIR_ERL_OPTIONS:+ }-kernel inet_dist_use_interface {127,0,0,1}"
+        ;;
+    esac
+  fi
+}
+load_environment
 
 PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
 WEB_PORT="${LEMON_WEB_PORT:-4080}"

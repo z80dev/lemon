@@ -3,6 +3,78 @@ defmodule LemonCore.Secrets.MasterKeyTest do
 
   alias LemonCore.Secrets.MasterKey
 
+  defmodule CountingKeychain do
+    def available?, do: true
+
+    def get_master_key(_opts) do
+      Process.put(:master_key_reads, Process.get(:master_key_reads, 0) + 1)
+      Process.get(:master_key_result, {:ok, Base.encode64(:binary.copy(<<7>>, 32))})
+    end
+
+    def put_master_key(_value, _opts), do: Process.get(:master_key_put_result, :ok)
+  end
+
+  test "status fetches Keychain once without a scope" do
+    assert MasterKey.status(keychain_module: CountingKeychain, key_providers: [:keychain]).configured
+    assert Process.get(:master_key_reads) == 1
+  end
+
+  test "nested scopes memoize successes and release the key after exceptions" do
+    opts = [keychain_module: CountingKeychain, key_providers: [:keychain]]
+
+    assert_raise RuntimeError, fn ->
+      MasterKey.scoped(fn ->
+        assert {:ok, _, :keychain} = MasterKey.resolve(opts)
+        MasterKey.scoped(fn -> assert MasterKey.status(opts).configured end)
+        assert Process.get(:master_key_reads) == 1
+        raise "scope cleanup"
+      end)
+    end
+
+    assert Process.get({MasterKey, :memo}) == nil
+    assert Process.get({MasterKey, :scope}) == nil
+    assert {:ok, _, :keychain} = MasterKey.resolve(opts)
+    assert Process.get(:master_key_reads) == 2
+  end
+
+  test "scopes memoize failures and successful initialization replaces the memo" do
+    opts = [
+      keychain_module: CountingKeychain,
+      key_providers: [:keychain],
+      env_getter: fn _ -> nil end,
+      target: :keychain
+    ]
+
+    Process.put(:master_key_result, {:error, :missing})
+
+    MasterKey.scoped(fn ->
+      MasterKey.resolve(opts)
+      MasterKey.resolve(opts)
+      assert Process.get(:master_key_reads) == 1
+      assert {:ok, _} = MasterKey.init(opts)
+      assert {:ok, key, :keychain} = MasterKey.resolve(opts)
+      assert byte_size(key) == 32
+      assert Process.get(:master_key_reads) == 1
+    end)
+
+    assert Process.get({MasterKey, :memo}) == nil
+    MasterKey.resolve(opts)
+    MasterKey.resolve(opts)
+    assert Process.get(:master_key_reads) == 3
+  end
+
+  test "failed initialization invalidates the scoped fetch result" do
+    opts = [keychain_module: CountingKeychain, key_providers: [:keychain], target: :keychain]
+    Process.put(:master_key_put_result, {:error, :denied})
+
+    MasterKey.scoped(fn ->
+      assert {:ok, _, :keychain} = MasterKey.resolve(opts)
+      assert {:error, _} = MasterKey.init(opts)
+      assert {:ok, _, :keychain} = MasterKey.resolve(opts)
+      assert Process.get(:master_key_reads) == 2
+    end)
+  end
+
   defmodule KeychainOk do
     def available?, do: true
 

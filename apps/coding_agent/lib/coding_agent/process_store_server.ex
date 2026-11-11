@@ -802,14 +802,16 @@ defmodule CodingAgent.ProcessStoreServer do
     else
       File.mkdir_p!(Path.dirname(state.dets_path))
 
-      dets_file = String.to_charlist(state.dets_path)
-
-      case :dets.open_file(@dets_table, file: dets_file, type: :set) do
+      case CodingAgent.StatePaths.open_dets(@dets_table, state.dets_path) do
         {:ok, _} ->
           %{state | dets_initialized: true, loaded_from_dets: false}
 
         {:error, {:already_open, _pid}} ->
           %{state | dets_initialized: true, loaded_from_dets: false}
+
+        {:error, {:state_dir_locked, pid}} ->
+          CodingAgent.StatePaths.warn_locked(pid)
+          %{state | dets_initialized: false, loaded_from_dets: false}
 
         {:error, _reason} ->
           Logger.warning("Process launch storage unavailable")
@@ -1123,6 +1125,6 @@ defmodule CodingAgent.ProcessStoreServer do
   defp dets_path(opts) do
     Keyword.get(opts, :dets_path) ||
       Application.get_env(:coding_agent, :process_store_path) ||
-      Path.join(CodingAgent.Config.agent_dir(), "processes.dets")
+      CodingAgent.StatePaths.dets_path("processes.dets")
   end
 end

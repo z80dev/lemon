@@ -181,6 +181,10 @@ export function deleteConversationResources(services: BackendServices, actor: Pr
   assertDeletionReady(services, room.id);
   return services.store.transaction(() => {
     cancelConversationGates(services, room.id);
+    for (const allowance of services.store.list<P.ApprovalAllowance>('approvalAllowances', value => value.conversationId === room.id)) {
+      services.store.remove('approvalAllowances', allowance.id);
+      services.store.setMetadata(`approvalAllowanceBinding:${allowance.id}`, null);
+    }
     const entryIds = new Set(services.store.list<P.TranscriptEntry>('entries', entry => entry.conversationId === room.id).map(entry => entry.id));
     for (const collection of gateCollections) for (const resource of services.store.list<ConversationGate>(collection, value => entryIds.has(value.entryId))) services.store.remove(collection, resource.id);
     for (const draft of services.store.list<P.Draft>('drafts', value => value.conversationId === room.id)) services.store.remove('drafts', draft.id);

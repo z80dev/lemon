@@ -123,23 +123,32 @@ defmodule CodingAgent.ExecutionNode.TokenStore do
     alias_name = String.trim(node_name)
     controller = Keyword.get(opts, :controller)
 
-    matches =
+    alias_records =
       root(opts)
       |> Path.join("node-*.json")
       |> Path.wildcard()
       |> Enum.reduce([], fn path, acc ->
         case read_record(path) do
           {:ok, record} ->
-            if alias_matches?(record, alias_name, controller), do: [record | acc], else: acc
+            if alias_matches?(record, alias_name, nil), do: [record | acc], else: acc
 
           {:error, _reason} ->
             acc
         end
       end)
 
+    matches = Enum.filter(alias_records, &alias_matches?(&1, alias_name, controller))
+
     case matches do
       [record] -> {:ok, record}
-      [] -> load_legacy_and_migrate(alias_name, opts)
+      [] ->
+        case load_legacy_and_migrate(alias_name, opts) do
+          {:error, :not_found} when alias_records != [] ->
+            {:error, :controller_mismatch}
+
+          result ->
+            result
+        end
       _ -> {:error, :ambiguous_node_alias}
     end
   end

@@ -101,7 +101,8 @@ defmodule LemonCli.Setup.Verification do
   @spec verify_provider(keyword()) :: {:ok, verify_ok()} | {:error, verify_failure()}
   def verify_provider(opts \\ []) do
     config = Keyword.get(opts, :config) || effective_config(opts)
-    provider_state = effective_provider_state(setup_state(opts).provider, config, opts)
+    setup = Keyword.get(opts, :setup_state) || setup_state(opts)
+    provider_state = effective_provider_state(setup.provider, config, opts)
     opts = bind_verification_options(opts, config, provider_state)
 
     with :ok <- assert_provider_complete(provider_state, opts) do
@@ -120,7 +121,8 @@ defmodule LemonCli.Setup.Verification do
   @spec verification_options(keyword()) :: keyword()
   def verification_options(opts \\ []) do
     config = Keyword.get(opts, :config) || effective_config(opts)
-    provider_state = effective_provider_state(setup_state(opts).provider, config, opts)
+    setup = Keyword.get(opts, :setup_state) || setup_state(opts)
+    provider_state = effective_provider_state(setup.provider, config, opts)
     bind_verification_options(opts, config, provider_state)
   end
 
@@ -253,10 +255,13 @@ defmodule LemonCli.Setup.Verification do
     default_provider = config.agent[:default_provider]
     provider = Keyword.get(opts, :provider) || default_provider
 
+    use_probe? = not same_provider?(provider, default_provider)
+    probe? = Keyword.get(opts, :probe?, use_probe?)
+
     model =
-      if same_provider?(provider, default_provider),
-        do: config.agent[:default_model],
-        else: probe_model_id(config, provider)
+      if probe?,
+        do: probe_model_id(config, provider),
+        else: config.agent[:default_model]
 
     resolved = Keyword.get(opts, :verification_model) || effective_model(config, provider, model)
     provider_cfg = provider_config(config, provider)
@@ -276,7 +281,12 @@ defmodule LemonCli.Setup.Verification do
         {:skip, {:unsupported_api, resolved.api}}
 
       true ->
-        opts = opts |> Keyword.put(:config, config) |> Keyword.put(:verification_model, resolved)
+        opts =
+          opts
+          |> Keyword.put(:config, config)
+          |> Keyword.put(:verification_model, resolved)
+          |> Keyword.put(:probe?, probe?)
+
         build_live_input(opts, provider, model)
     end
   end
@@ -320,6 +330,7 @@ defmodule LemonCli.Setup.Verification do
     config = Keyword.fetch!(opts, :config)
     provider_cfg = provider_config(config, provider)
     resolved_model = Keyword.get(opts, :verification_model)
+    probe? = Keyword.get(opts, :probe?, false)
 
     with {:ok, api_key} <- fetch_live_credential(config, provider, provider_cfg),
          {:ok, resolved_model} <- fetch_effective_model(resolved_model, config, provider, model) do
@@ -334,6 +345,8 @@ defmodule LemonCli.Setup.Verification do
          %{
            provider: provider,
            model: model,
+           model_id: resolved_model.id,
+           probe?: probe?,
            api: resolved_model.api,
            base_url: resolved_model.base_url,
            api_key: api_key,

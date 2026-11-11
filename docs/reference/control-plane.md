@@ -9,8 +9,9 @@ for framing, authentication and the domain-specific method reference.
 Non-`/v1` HTTP failures use `{"error":{"code":"UNAUTHORIZED","message":"..."}}`,
 with the same string codes as WebSocket error frames. ACP HTTP authentication
 failures use this HTTP envelope; authenticated ACP method replies retain JSON-RPC
-framing and numeric method-error codes. `/v1/*` retains OpenAI-compatible errors
-(`error.message` and `error.type`), and `/healthz` remains `{"ok":true}`.
+framing and numeric method-error codes. Local or explicitly enabled `/v1/*`
+retains OpenAI-compatible errors (`error.message` and `error.type`); remote
+hidden routes use the generic 404 envelope. `/healthz` remains `{"ok":true}`.
 
 HTTP authentication errors name `Authorization: Bearer <token>` and the server's
 token configuration: `LEMON_ACP_API_TOKEN` for `/acp`,
@@ -18,6 +19,13 @@ token configuration: `LEMON_ACP_API_TOKEN` for `/acp`,
 `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` for `/acp/ws`. Managed launchers store the
 operator token at `~/.lemon/run/control-plane-<port>.token`. Native `/ws` clients
 send that token in `connect.params.auth.token`, not an HTTP header.
+OpenAI/ACP HTTP authentication falls back to that operator token when its
+dedicated token is unset; both APIs require authentication by default.
+Off-loopback main peers see only `/ws` and `/healthz` unless the corresponding
+HTTP API is explicitly enabled with a dedicated token. See
+[listener exposure](../config.md#listener-exposure-breaking-default-change).
+The separate node gateway on `127.0.0.1:4044` is the forwarding target for remote
+nodes: only node/enrollment `/ws` and `/healthz`, never operators.
 Error `details` are optional JSON context; unsupported runtime terms are omitted,
 never inspected into wire responses, so the original code and message survive.
 

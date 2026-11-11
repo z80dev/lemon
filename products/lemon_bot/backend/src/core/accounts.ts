@@ -3,7 +3,7 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RequestContext, Route } from './services';
 import { ApiError, fail } from './errors';
 import { z, parse, principal, id, mutation, update, confirm, voice, queryObject } from './validation';
-import { opaqueToken, type AccountDeletionFence, type Credential, type SessionSecret, type RevocationHooks } from './auth';
+import { opaqueToken, localConfirmedUntil, type AccountDeletionFence, type Credential, type SessionSecret, type RevocationHooks } from './auth';
 import { validatePushRegistration } from '../integrations/push';
 import { clearUserConversationState } from './conversations';
 import { deleteUserPairings, revokeWorkspacePairings } from './pairing';
@@ -11,7 +11,8 @@ import { hasProductAccess } from '../enterprise/policy';
 import { prepareProviderTeardown } from '../enterprise/teardown';
 import { backendDescriptor } from './identity';
 import { beginOwnerSetupClaim, consumeOwnerSetupProof } from './setup';
-import { requireLocalAccess } from './local-access';
+import { createLocalSignInRoutes } from './local-signin';
+import { endApprovalAllowances } from './approval-allowances';
 
 const name = z.string().trim().min(1).max(120);
 const email = z.string().trim().toLowerCase().pipe(z.email().max(254));
@@ -27,7 +28,6 @@ const push = z.discriminatedUnion('kind', [
 const setupSchema = mutation.extend({ setupCode: z.string().min(16).max(512), email, password, displayName: name, workspaceName: name });
 const loginSchema = mutation.extend({ email, password, deviceId: id.optional() });
 const acceptSchema = mutation.extend({ inviteToken: z.string().min(16).max(512), email, password, displayName: name });
-const localAccessSchema = z.object({ displayName: name.optional() }).strict();
 const userSchema = update.extend({ displayName: name.optional(), email: email.optional(), avatarAttachmentId: id.nullable().optional(), preferences: preferences.optional(), notifications: notifications.optional() });
 const workspaceSchema = update.extend({ name: name.optional(), timezone: timezone.optional(), enabled: z.boolean().optional(), ownerUserId: id.optional() });
 const memberSchema = update.extend({ role: z.enum(['owner', 'admin', 'member']).optional(), enabled: z.boolean().optional() });
@@ -294,24 +294,6 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
       const user = await localAccount(body.email, body.password);
       return services.auth.session(user.id, body.deviceId);
     } },
-    // Possession of DATA_DIR/local-access.key is same-OS-user (or SSH) proof: sign in as the workspace owner,
-    // creating that owner on an empty instance. No password exists for an owner created here.
-    { method: 'POST', path: '/v1/auth/local', auth: 'public', mutation: false, status: 200, handler: async context => {
-      requireLocalAccess(services.config.dataDir, context.request);
-      const body = parse(localAccessSchema, context.body);
-      const ownerUserId = store.transaction(() => {
-        if (store.metadata<string>('workspaceId') !== null) return workspace().ownerUserId;
-        const account = userInfo().username;
-        const user = makeUser(`${account.toLowerCase().replace(/[^a-z0-9_+-]/g, '') || 'owner'}@lemon.local`, body.displayName ?? account);
-        const member = services.resource('member', { userId: user.id, email: user.email, displayName: user.displayName, role: 'owner' as const, enabled: true });
-        const created = services.resource('workspace', { name: hostname().replace(/\.local$/, '').slice(0, 120) || 'Lemon Bot', ownerUserId: user.id, enabled: true, timezone: 'UTC' });
-        store.put('users', user); store.put('members', member); store.put('workspaces', created);
-        store.setMetadata('workspaceId', created.id);
-        for (const key of ['setupCode', 'setupCodeDigest', 'setupCodeState']) store.setMetadata(key, null);
-        return user.id;
-      });
-      return services.auth.session(ownerUserId);
-    } },
     { method: 'POST', path: '/v1/auth/invites/accept', auth: 'public', status: 200, handler: async context => {
       const body = parse(acceptSchema, context.body); rateLimit(body.email);
       const secret = store.list<{ id: string; tokenDigest: string }>('inviteSecrets', value => value.tokenDigest === services.mutations.digest(body.inviteToken))[0];
@@ -338,8 +320,10 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
       return user.authResult;
     } },
     { method: 'POST', path: '/v1/auth/reauth', auth: 'member', mutation: false, status: 200, handler: async context => {
-      const body = parse(z.object({ password }).strict(), context.body); const actor = current(context); rateLimit(actor.userId);
-      if (!await verify(actor.userId, body.password)) fail('unauthenticated', 'Password is incorrect.');
+      const body = parse(z.union([z.object({ password }).strict(), z.object({ local: z.literal(true) }).strict()]), context.body); const actor = current(context); rateLimit(actor.userId);
+      if ('local' in body) {
+        if (localConfirmedUntil(store, actor.sessionId, services.now()) === null) fail('unauthenticated', 'Confirm on this computer first: run lemon-bot open.');
+      } else if (!await verify(actor.userId, body.password)) fail('unauthenticated', 'Password is incorrect.');
       if (await services.integrations.requireSSO?.(actor.userId)) fail('policy_denied', 'This account requires SSO reauthentication.');
       return services.auth.issueReauth(actor.userId);
     } },
@@ -350,6 +334,32 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
     { method: 'DELETE', path: '/v1/auth/sessions/:id', auth: 'member', status: 200, handler: async context => { parse(mutation, context.body); const sessionId = parse(id, context.params.id); await revokeSession(current(context), sessionId); return { id: sessionId, deleted: true } satisfies P.Deleted; } },
     { method: 'POST', path: '/v1/auth/logout', auth: 'member', status: 200, handler: async context => { parse(mutation, context.body); const actor = current(context); if (!actor.sessionId) fail('unauthenticated', 'User session required.'); await revokeSession(actor, actor.sessionId); await hooks.onLogoutUser?.(actor.userId); return { ok: true }; } },
     { method: 'GET', path: '/v1/me', auth: 'member', status: 200, handler: context => services.auth.user(current(context).userId) },
+    { method: 'GET', path: '/v1/me/sign-in', auth: 'member', status: 200, handler: context => {
+      const actor = current(context); const user = services.auth.user(actor.userId);
+      const password = store.get<Credential>('credentials', user.id) !== null;
+      return { password, email: user.email, emailIsPlaceholder: !password && user.email.endsWith('@lemon.local'),
+        localOwner: actor.userId === workspace().ownerUserId ? { platform: process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : 'other', hostName: hostname().replace(/\.local$/, ''), osUser: userInfo().username } : null,
+        localConfirmedUntilMs: localConfirmedUntil(store, actor.sessionId, services.now()) } satisfies P.SignInMethods;
+    } },
+    { method: 'POST', path: '/v1/me/password', auth: 'member', status: 200, handler: async context => {
+      const body = parse(mutation.extend({ email, password }), context.body); const actor = current(context);
+      if (body.email.endsWith('@lemon.local')) fail('invalid_request', 'Use your own email address, not a lemon.local placeholder.');
+      rateLimit(actor.userId);
+      if (store.get<Credential>('credentials', actor.userId)) fail('conflict', 'You already have a password; change it below.');
+      if (await services.integrations.requireSSO?.(actor.userId)) fail('policy_denied', 'This account requires configured SSO.');
+      if (localConfirmedUntil(store, actor.sessionId, services.now()) === null) fail('expired', "Confirm it's you on this computer: run lemon-bot open, then try again.");
+      const passwordHash = await Bun.password.hash(body.password, { algorithm: 'argon2id' });
+      return store.transaction(() => {
+        if (store.get<Credential>('credentials', actor.userId)) fail('conflict', 'You already have a password; change it below.');
+        uniqueEmail(body.email, actor.userId);
+        const updated = services.update(services.auth.user(actor.userId), { email: body.email }); store.put('users', updated);
+        const member = services.update(services.auth.member(actor.userId), { email: updated.email }); store.put('members', member);
+        store.put<Credential>('credentials', { id: actor.userId, passwordHash });
+        services.events.emit('user.updated', updated, { userIds: [actor.userId] }); services.events.emit('member.upserted', member, { public: true });
+        services.audit(actor, 'account.password.create', actor.userId, 'succeeded');
+        return updated;
+      });
+    } },
     { method: 'PATCH', path: '/v1/me', auth: 'member', status: 200, handler: context => {
       const { revision, clientNonce, ...changes } = parse(userSchema, context.body); const actor = current(context);
       return store.transaction(() => {
@@ -498,6 +508,7 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
       const { revision, clientNonce, ...changes } = parse(memberSchema, context.body); const target = managedMember(context);
       if (changes.role === 'owner') services.auth.requireRole(current(context), 'owner');
       const updated = store.transaction(() => { const latest = store.require<P.Member>('members', target.id); services.mutations.checkRevision(latest, revision); finalOwner(latest, changes.role, changes.enabled); if (changes.enabled === false) hooks.beforeRevokeUser?.(targetPrincipal(latest)); const result = services.update(latest, changes); store.put('members', result); services.events.emit('member.upserted', result, { public: true }); return result; });
+      endApprovalAllowances(services, current(context), { ownerUserId: target.userId }, 'membership_changed');
       if (changes.enabled === false) await services.auth.revokeUser(target.userId);
       return updated;
     } },
@@ -505,6 +516,7 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
     { method: 'DELETE', path: '/v1/members/:id', auth: 'admin', status: 200, handler: async context => {
       const body = parse(confirm, context.body); const target = managedMember(context);
       store.transaction(() => { const latest = store.require<P.Member>('members', target.id); finalOwner(latest, 'member', false); services.mutations.confirm(current(context), latest, 'delete', body); hooks.beforeRevokeUser?.(targetPrincipal(latest)); store.put('members', services.update(latest, { enabled: false })); });
+      endApprovalAllowances(services, current(context), { ownerUserId: target.userId }, 'membership_changed');
       await services.auth.revokeUser(target.userId); store.remove('members', target.id); services.events.emit('member.deleted', { id: target.id, deleted: true }, { public: true }); return { id: target.id, deleted: true };
     } },
     { method: 'GET', path: '/v1/invites', auth: 'admin', status: 200, handler: context => { listQuery(context); return services.page(context, store.list<P.MemberInvite>('invites').map(value => value.status === 'pending' && value.expiresAtMs <= services.now() ? { ...value, status: 'expired' as const } : value)); } },
@@ -574,8 +586,9 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
       return observed;
     } },
   ];
+  routes.push(...createLocalSignInRoutes(services));
   const lists: Record<string, true> = { '/v1/auth/sessions': true, '/v1/members': true, '/v1/invites': true, '/v1/devices': true, '/v1/account-teardowns': true };
-  return routes.map(route => ({ ...route, ...(route.method === 'POST' && route.auth === 'public' ? { authorizeReplay: authorizeLocalReplay } : {}), handler(context: RequestContext) {
+  return routes.map(route => ({ ...route, ...(route.method === 'POST' && route.auth === 'public' && route.mutation !== false ? { authorizeReplay: authorizeLocalReplay } : {}), handler(context: RequestContext) {
     if (!(route.method === 'GET' && lists[route.path]) && context.query.size > 0) fail('invalid_request', 'This endpoint does not accept query parameters.');
     return route.handler(context);
   } }));

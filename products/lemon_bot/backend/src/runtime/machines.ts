@@ -3,9 +3,10 @@ import type { BackendServices, Principal, RequestContext, Route } from '../core/
 import { ApiError, fail } from '../core/errors';
 import { z, parse, principal, id, mutation, update, confirm, boundedText, queryObject } from '../core/validation';
 import { decodeChunk, getTerminalService } from './terminals';
-import { emitBotRuntimeProjection } from './projection';
+import { emitBotRuntimeProjection, machineProjection } from './projection';
 import { machineCapabilities, effectiveBotGrants } from '../core/experiences';
 import { quiesceMachineInvocations } from './runs';
+import { createMachineSshSetup, machineSshPreview, refreshMachineTunnelStatus, uninstallMachineTunnel } from './machine-ssh';
 
 const text = boundedText(120, 1);
 const path = z.string().min(1).max(4096).refine(value => !/[\u0000-\u001f]/.test(value));
@@ -16,12 +17,12 @@ const pageQuery = z.object({ cursor: z.string().optional(), limit: z.coerce.numb
 const statSchema = z.object({ path, type: z.enum(['regular', 'directory', 'symlink']), size: integer, mtimeMs: integer, mode: integer, mime: z.string().nullable(), readable: z.boolean(), writable: z.boolean() }).passthrough();
 type RemoteStat = z.infer<typeof statSchema>;
 const hostSchema = z.object({ hostname: z.string(), os: z.string(), osVersion: z.string(), arch: z.string(), cpuCount: integer.positive(), memTotalBytes: integer, memFreeBytes: integer, diskTotalBytes: integer, diskFreeBytes: integer, uptimeSec: z.number().nonnegative(), lemonVersion: z.string(), defaultCwd: path, user: z.string() }).passthrough();
-const nodesSchema = z.object({ nodes: z.array(z.object({ id, name: z.string().nullable(), purpose: z.string().nullable(), enrollmentInviteId: id.nullable(), status: z.enum(['online', 'offline', 'unknown']), lastSeenMs: integer.nullable(), pairedAtMs: integer.nullable(), capabilities: z.array(z.string()) }).passthrough()), summary: z.object({ presenceAvailable: z.boolean(), truncated: z.boolean() }).passthrough() }).passthrough();
+const nodesSchema = z.object({ nodes: z.array(z.object({ id, name: z.string().nullable(), purpose: z.string().nullable(), enrollmentInviteId: id.nullable(), status: z.enum(['online', 'offline', 'unknown']), session: z.enum(['active', 'expired', 'revoked', 'none', 'unknown']).optional(), lastSeenMs: integer.nullable(), pairedAtMs: integer.nullable(), capabilities: z.array(z.string()) }).passthrough()), summary: z.object({ presenceAvailable: z.boolean(), truncated: z.boolean() }).passthrough() }).passthrough();
 const inviteSchema = z.object({ inviteId: id, inviteCode: z.string().min(1), joinCommand: z.string().min(1), expiresAtMs: integer }).passthrough();
 const chunkSchema = z.object({ path, offset: integer, dataBase64: z.string(), size: integer, mime: z.string(), eof: z.boolean() }).passthrough();
 interface FilePreviewBinding { machineId: string; path: string; principalId: string; targetId: string; revision: number; snapshot: string; upstreamToken: string; expiresAtMs: number; name: string }
-export interface MachineRuntimeFeatures { nodeId: string; protocol: 1; lemonVersion: string; methods: string[]; features: { hostIO: boolean; filesystemCAS: boolean; deletePreviews: boolean; encryptedSecrets: boolean; ptyShell: boolean; mcpDiscovery: boolean; profileSync: boolean; liveStreaming: boolean; repairInvites: boolean; nativeExecutionPolicy: boolean }; botReady: boolean; missingFeatures: string[]; capabilities?: P.JSONObject; nativePrivacyContext?: { version: 1 } }
-const runtimeFeaturesSchema = z.object({ nodeId: id, protocol: z.literal(1), lemonVersion: z.string(), methods: z.array(z.string()), features: z.object({ hostIO: z.boolean(), filesystemCAS: z.boolean(), deletePreviews: z.boolean(), encryptedSecrets: z.boolean(), ptyShell: z.boolean(), mcpDiscovery: z.boolean(), profileSync: z.boolean(), liveStreaming: z.boolean(), repairInvites: z.boolean(), nativeExecutionPolicy: z.boolean() }).strict(), botReady: z.boolean(), missingFeatures: z.array(z.string().max(128)).max(100), capabilities: z.record(z.string(), z.json()).optional(), nativePrivacyContext: z.object({ version: z.literal(1) }).strict().optional() }).strict();
+export interface MachineRuntimeFeatures { nodeId: string; protocol: 1; lemonVersion: string; methods: string[]; features: { hostIO: boolean; filesystemCAS: boolean; deletePreviews: boolean; encryptedSecrets: boolean; ptyShell: boolean; mcpDiscovery: boolean; profileSync: boolean; liveStreaming: boolean; repairInvites: boolean; nativeExecutionPolicy: boolean; botFolder?: boolean }; botReady: boolean; missingFeatures: string[]; capabilities?: P.JSONObject; nativePrivacyContext?: { version: 1 } }
+const runtimeFeaturesSchema = z.object({ nodeId: id, protocol: z.literal(1), lemonVersion: z.string(), methods: z.array(z.string()), features: z.object({ hostIO: z.boolean(), filesystemCAS: z.boolean(), deletePreviews: z.boolean(), encryptedSecrets: z.boolean(), ptyShell: z.boolean(), mcpDiscovery: z.boolean(), profileSync: z.boolean(), liveStreaming: z.boolean(), repairInvites: z.boolean(), nativeExecutionPolicy: z.boolean(), botFolder: z.boolean().optional() }).strict(), botReady: z.boolean(), missingFeatures: z.array(z.string().max(128)).max(100), capabilities: z.record(z.string(), z.json()).optional(), nativePrivacyContext: z.object({ version: z.literal(1) }).strict().optional() }).strict();
 
 export async function ensureMachineRuntimeReady(services: BackendServices, machine: P.Machine, refresh = false): Promise<MachineRuntimeFeatures> {
   if (!services.lemon.connected) fail('upstream_unavailable', 'The controller is not connected.');
@@ -33,7 +34,7 @@ export async function ensureMachineRuntimeReady(services: BackendServices, machi
     if (result.nodeId !== machine.nodeId) fail('upstream_unavailable', 'Runtime feature measurement belongs to another node.');
     cached = { ...result, controlEpoch: epoch }; services.store.setMetadata(`nodeRuntimeFeatures:${machine.id}`, cached);
   }
-  if (!cached.botReady || !Object.values(cached.features).every(value => value === true)) fail('capability_unavailable', 'The worker is connected but lacks required Lemon Bot runtime features. Upgrade and reverify that same durable worker.');
+  if (!cached.botReady || !Object.entries(cached.features).every(([feature, value]) => feature === 'botFolder' || value === true)) fail('capability_unavailable', 'The worker is connected but lacks required Lemon Bot runtime features. Upgrade and reverify that same durable worker.');
   return cached;
 }
 
@@ -63,8 +64,9 @@ export async function refreshMachines(services: BackendServices): Promise<void> 
     }
     if (node) services.store.setMetadata(`nodeSnapshot:${machine.id}`, node);
     const lastSeenAtMs = node?.lastSeenMs ?? machine.lastSeenAtMs;
-    if (status !== machine.status || (node && node.id !== machine.nodeId) || lastSeenAtMs !== machine.lastSeenAtMs) {
-      const next = services.update(machine, { status, nodeId: node?.id ?? machine.nodeId, lastSeenAtMs });
+    const credential: P.MachineCredential = node ? node.session === 'active' || node.session === 'expired' || node.session === 'revoked' ? node.session : 'unknown' : machine.credential ?? 'unknown';
+    if (status !== machine.status || credential !== machine.credential || (node && node.id !== machine.nodeId) || lastSeenAtMs !== machine.lastSeenAtMs) {
+      const next = services.update(machine, { status, credential, nodeId: node?.id ?? machine.nodeId, lastSeenAtMs });
       services.store.put('machines', next); services.events.emit('machine.upserted', next, { machineId: next.id });
       for (const bot of services.store.list<P.Bot>('bots', value => value.machineId === next.id)) {
         const activity = status !== 'online' ? 'offline' : bot.activeRunIds.length ? 'working' : 'idle';
@@ -92,6 +94,12 @@ export async function getHostInfo(services: BackendServices, user: Principal, ma
 
 export function createMachineRoutes(services: BackendServices): Route[] {
   const terminal = getTerminalService(services);
+  const sshSetup = createMachineSshSetup(services, {
+    issue: (context, value, options) => issue(context, value, undefined, options),
+    revokeInvite,
+    refreshMachines: () => refreshMachines(services),
+    ensureMachineRuntimeReady: value => ensureMachineRuntimeReady(services, value, true),
+  });
   const routes: Route[] = [];
   function add(method: string, suffix: string, handler: Route['handler'], status = 200, auth: Route['auth'] = 'member') {
     routes.push({ method, path: `/v1${suffix}`, auth, status, handler, authorizeReplay(context) {
@@ -117,13 +125,13 @@ export function createMachineRoutes(services: BackendServices): Route[] {
     if (actor.kind !== 'user' || (value.ownerUserId !== actor.userId && !['admin', 'owner'].includes(actor.role))) fail('forbidden', 'Only the machine owner or an authorized administrator may manage enrollment and access.');
   }
   async function stat(value: P.Machine, name: string) { return remote(statSchema, await services.lemon.call('node.fs.stat', { nodeId: value.nodeId!, path: name })); }
-  async function issue(context: RequestContext, value: P.Machine, expiresInMs: number | undefined): Promise<P.MachineInvite> {
+  async function issue(context: RequestContext, value: P.Machine, expiresInMs: number | undefined, options: { tunnelPort?: number } = {}): Promise<P.MachineInvite> {
     manager(user(context), value);
     const invitation: P.MachineInvite = services.resource('machine_invite', { machineId: value.id, inviteCode: '', joinCommand: '', expiresAtMs: services.now() + (expiresInMs ?? 900_000), status: 'pending', enrollment: 'invited', lastError: null });
     context.nonceResourceIds.push(value.id, invitation.id);
     services.store.put('machineInvites', invitation);
     try {
-      const raw = await services.lemon.call('node.pair.invite', { nodeName: value.nodeName, purpose: 'lemon_bot', labels: value.labels, ...(value.nodeId ? { nodeId: value.nodeId } : {}), ...(expiresInMs !== undefined ? { expiresInMs } : {}) }, { mutation: true, resourceIds: [value.id, invitation.id] });
+      const raw = await services.lemon.call('node.pair.invite', { nodeName: value.nodeName, purpose: 'lemon_bot', labels: value.labels, ...(value.nodeId ? { nodeId: value.nodeId } : {}), ...(expiresInMs !== undefined ? { expiresInMs } : {}), ...(options.tunnelPort !== undefined ? { tunnelPort: options.tunnelPort } : {}) }, { mutation: true, resourceIds: [value.id, invitation.id] });
       const parsed = inviteSchema.safeParse(raw);
       if (!parsed.success) fail('outcome_unknown', 'The enrollment may have been issued but its receipt is invalid.', false, { resourceIds: [value.id, invitation.id] });
       const result = parsed.data;
@@ -147,30 +155,50 @@ export function createMachineRoutes(services: BackendServices): Route[] {
     await services.lemon.call('node.pair.invite.revoke', { inviteId: upstream }, { mutation: true, resourceIds: [invitation.id] });
     const revoked = services.update(invitation, { status: 'revoked', enrollment: 'revoked', inviteCode: '', joinCommand: '' }); services.store.put('machineInvites', revoked); services.events.emit('machine_invite.upserted', revoked, { userIds: [value.ownerUserId] });
   }
-  add('GET', '/machines', async context => { parse(pageQuery, queryObject(context.query)); await refreshMachines(services); return services.page(context, services.store.list<P.Machine>('machines', value => value.status !== 'revoked' && services.auth.canRead(user(context), 'machines', value))); });
+  add('GET', '/machines', async context => {
+    parse(pageQuery, queryObject(context.query));
+    await refreshMachines(services);
+    await refreshMachineTunnelStatus(services);
+    return services.page(context, services.store.list<P.Machine>('machines', value => value.status !== 'revoked' && services.auth.canRead(user(context), 'machines', value)).map(value => machineProjection(services, user(context), value)));
+  });
   add('GET', '/machines/enrollment-preview', async context => {
     parse(z.object({}).strict(), queryObject(context.query));
     if (!services.lemon.connected) fail('upstream_unavailable', 'The controller is not connected.');
-    return remote(z.object({ reachability: z.enum(['loopback_only', 'routable']) }), await services.lemon.call('node.pair.preview')) satisfies P.MachineEnrollmentPreview;
+    const preview = remote(z.object({ reachability: z.enum(['loopback_only', 'routable']), nodeGateway: z.object({ available: z.boolean(), port: z.number().int().min(1).max(65535).nullable() }).optional() }), await services.lemon.call('node.pair.preview'));
+    return machineSshPreview(services, preview);
   }, 200, 'admin');
+  // Setup owns its durable nonce journal so a replay returns current progress, not a stale running receipt.
+  routes.push({ method: 'POST', path: '/v1/machines/ssh', auth: 'admin', status: 202, mutation: false, handler: context => {
+    const body = parse(mutation.extend({ sshDestination: boundedText(256, 1), name: text.optional(), machineId: id.optional() }), context.body);
+    return sshSetup.start(context, body);
+  } });
+  add('GET', '/machine-setups/:id', context => {
+    parse(z.object({}).strict(), queryObject(context.query));
+    return sshSetup.get(user(context), parse(id, context.params.id));
+  });
   add('POST', '/machines', async context => {
     const body = parse(mutation.extend({ name: text, nodeName: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/), labels: labels.optional(), expiresInMs: ttl }), context.body);
     await refreshMachines(services);
     if (services.store.list<P.Machine>('machines', value => value.nodeName === body.nodeName).length) fail('conflict', 'This durable node name is already attached.');
     const nodes = remote(nodesSchema, await services.lemon.call('nodes.list', { name: body.nodeName }));
     if (nodes.nodes.some(value => value.name === body.nodeName)) fail('conflict', 'An existing node cannot be attached without host enrollment.');
-    const value: P.Machine = services.resource('machine', { nodeId: null, nodeName: body.nodeName, name: body.name, ownerUserId: user(context).userId, accessUserIds: [], status: 'pending', lastSeenAtMs: null, labels: body.labels ?? {}, botIds: [] });
+    const value: P.Machine = services.resource('machine', { nodeId: null, nodeName: body.nodeName, name: body.name, ownerUserId: user(context).userId, accessUserIds: [], status: 'pending', credential: 'unknown', lastSeenAtMs: null, labels: body.labels ?? {}, botIds: [], link: { kind: 'direct' } });
     services.store.put('machines', value); context.nonceResourceIds.push(value.id);
     services.events.emit('machine.upserted', value, { machineId: value.id });
     return { machine: value, invite: await issue(context, value, body.expiresInMs) } satisfies P.MachineAttachResult;
   }, 201, 'admin');
-  add('GET', '/machines/:id', async context => { machine(context); await refreshMachines(services); return machine(context); });
+  add('GET', '/machines/:id', async context => {
+    machine(context);
+    await refreshMachines(services);
+    await refreshMachineTunnelStatus(services);
+    return machineProjection(services, user(context), machine(context));
+  });
   add('PATCH', '/machines/:id', context => {
     const body = parse(update.extend({ name: text.optional(), accessUserIds: z.array(id).max(200).optional(), labels: labels.optional() }), context.body);
     const value = machine(context, true); manager(user(context), value); services.mutations.checkRevision(value, body.revision);
     if (body.accessUserIds) for (const userId of body.accessUserIds) { const member = services.auth.member(userId); if (!member.enabled) fail('invalid_request', 'Machine access requires an enabled member.'); }
     const changes: Partial<P.Machine> = {}; if (body.name !== undefined) changes.name = body.name; if (body.labels !== undefined) changes.labels = body.labels; if (body.accessUserIds !== undefined) changes.accessUserIds = [...new Set(body.accessUserIds)];
-    const next = services.update(value, changes); services.store.put('machines', next); services.events.emit('machine.upserted', next, { machineId: value.id }); return next;
+    const next = services.update(value, { ...changes, link: value.link ?? { kind: 'direct' } }); services.store.put('machines', next); services.events.emit('machine.upserted', next, { machineId: value.id }); return machineProjection(services, user(context), next);
   });
   add('POST', '/machines/:id/reconnect', async context => {
     const body = parse(mutation.extend({ expiresInMs: ttl }), context.body); const value = machine(context, true); manager(user(context), value);
@@ -201,6 +229,7 @@ export function createMachineRoutes(services: BackendServices): Route[] {
     if (stopped.status !== 'cancelled') fail('outcome_unknown', 'The machine’s executing invocations have not reached an acknowledged terminal state.', false, { resourceIds: [value.id, ...stopped.runIds] });
     await terminal.closeMachine(value.id);
     if (value.nodeId) await services.lemon.call('nodes.revoke', { nodeId: value.nodeId, confirmName: value.nodeName }, { mutation: true, resourceIds: [value.id] });
+    await uninstallMachineTunnel(services, user(context), value);
     for (const invitation of services.store.list<P.MachineInvite>('machineInvites', item => item.machineId === value.id && item.status === 'pending')) await revokeInvite(user(context), invitation);
     const revoked = services.update(value, { status: 'revoked' }); services.store.put('machines', revoked); services.events.emit('machine.deleted', { id: value.id, deleted: true }, { machineId: value.id });
     for (const botId of binding.botIds) { const bot = services.store.require<P.Bot>('bots', botId); const offline = services.update(bot, { activity: 'offline' }); services.store.put('bots', offline); emitBotRuntimeProjection(services, offline); }
@@ -290,21 +319,24 @@ export async function importMachineFile(services: BackendServices, actor: Princi
   if (!services.lemon.connected) fail('upstream_unavailable', 'The controller is not connected.');
   if (!machine.nodeId || machine.status !== 'online') fail('machine_offline', 'The destination is not online.');
   if (input.conversationId) services.auth.conversation(actor, input.conversationId);
-  if (input.botId && services.auth.bot(actor, input.botId).machineId !== machine.id) fail('invalid_request', 'Bot file import belongs to another destination.');
+  const bot = input.botId ? services.auth.bot(actor, input.botId) : null;
+  if (bot && bot.machineId !== machine.id) fail('invalid_request', 'Bot file import belongs to another destination.');
+  const runtime = services.store.metadata<MachineRuntimeFeatures>(`nodeRuntimeFeatures:${machine.id}`);
+  const profile = bot && runtime?.nodeId === machine.nodeId && runtime?.features.botFolder === true ? { profileId: bot.profileId } : {};
   const run = provenance.runId ? services.store.require<P.Run>('runs', provenance.runId) : null;
   if (run && (run.botId !== input.botId || run.initiatorUserId !== actor.userId || run.conversationId !== input.conversationId)) fail('forbidden', 'File provenance does not belong to this bot invocation.');
   if (provenance.sourceEntryId) { const entry = services.store.require<P.TranscriptEntry>('entries', provenance.sourceEntryId); if (!input.conversationId || entry.conversationId !== input.conversationId || !services.auth.canRead(actor, 'entries', entry)) fail('not_found', 'File source entry is not accessible.'); }
-  const before = remote(statSchema, await services.lemon.call('node.fs.stat', { nodeId: machine.nodeId, path: input.path }));
+  const before = remote(statSchema, await services.lemon.call('node.fs.stat', { nodeId: machine.nodeId, path: input.path, ...profile }));
   if (before.type !== 'regular') fail('invalid_request', 'Only regular destination files may be imported.');
   if (before.size > 200 * 1_048_576) fail('too_large', 'File import exceeds 200 MiB; content-inspected non-video attachments remain limited to 25 MiB.');
   const bytes = new Uint8Array(before.size); let offset = 0;
   while (offset < bytes.length) {
-    const result = remote(chunkSchema, await services.lemon.call('node.fs.read', { nodeId: machine.nodeId, path: before.path, offset, length: Math.min(1_048_576, bytes.length - offset) }));
+    const result = remote(chunkSchema, await services.lemon.call('node.fs.read', { nodeId: machine.nodeId, path: before.path, offset, length: Math.min(1_048_576, bytes.length - offset), ...profile }));
     const chunk = decodeChunk(result.dataBase64, 1_048_576);
     if (result.offset !== offset || result.path !== before.path || result.size !== before.size || !chunk.length || offset + chunk.length > bytes.length) fail('revision_conflict', 'The destination file changed during transfer.');
     bytes.set(chunk, offset); offset += chunk.length;
   }
-  const after = remote(statSchema, await services.lemon.call('node.fs.stat', { nodeId: machine.nodeId, path: before.path }));
+  const after = remote(statSchema, await services.lemon.call('node.fs.stat', { nodeId: machine.nodeId, path: before.path, ...profile }));
   if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) fail('revision_conflict', 'The destination file changed during transfer.');
   const metadata = { clientNonce: input.clientNonce, purpose: 'message' as const, filename: provenance.filename ?? fileInfo(before).name, source: 'node' as const, ...(input.botId ? { botId: input.botId } : {}), ...(input.conversationId ? { conversationId: input.conversationId } : {}), provenance: { botId: input.botId ?? null, runId: run?.id ?? null, machineId: machine.id, sourceEntryId: provenance.sourceEntryId ?? null, generatedAtMs: run?.completedAtMs ?? null } };
   return services.attachments.create(actor, bytes, metadata);

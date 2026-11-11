@@ -46,6 +46,23 @@ Launch restores a saved Keychain-backed account, registers this Mac, and publish
 
 Neither configuration enables App Sandbox: the app runs `ssh` and starts `lemon-bot` as your user, like Terminal (Developer ID distribution permits this). Mac Debug selects `LemonBotMacDebug.entitlements` with explicit microphone/Speech and no profile-requiring APNs or App Group capabilities. Its empty `APS_ENVIRONMENT` disables remote registration at startup and in both notification permission actions; local notification permission and delivery remain available. Mac Release retains `LemonBotMac.entitlements` and production `APS_ENVIRONMENT`, requiring a matching APNs signing profile/team and the backend's real key/team/topic configuration. The Mac has no App Group consumer; the iOS app/share group's entitlement and APNs configuration are unchanged. No screen/Accessibility/full-disk entitlement is requested.
 
+## macOS permissions
+
+Owners and admins can open **macOS permissions** in this Mac's machine detail.
+It is not shown for remote machines or during setup. The embedded **Lemon Bot
+Worker.app** provides a non-prompting status probe; **Allow…** is an explicit,
+explained request through that helper. Full Disk Access and folder permissions
+link to System Settings. Returning to the app or choosing **Check again** reads
+fresh machine capabilities.
+
+For an existing unwrapped worker, **Use Lemon Bot Worker** repairs its service
+with the embedded executable and restarts it once. Install Lemon Bot in
+`/Applications` or `~/Applications` first. The helper is not a sandbox: any Bot
+command can use its grants. Developer ID signing supplies a stable bundle
+identity; attribution and grant persistence across upgrades still require the
+disposable-Mac release validation. Ad-hoc Debug rebuilds do not promise retained
+grants. Setup and passive capability checks never request these permissions.
+
 ## Integration checks (parent-owned)
 
 Generate the XcodeGen project and build the LemonBotMac scheme with `CODE_SIGNING_ALLOWED=NO` for compilation-only CI. For actual login/Keychain checks, use the ad-hoc-signed Debug build and exact replacement/launch commands in the [Apple build guide](../README.md#generate-build-and-launch). Sign in, quit and relaunch that same app, and confirm the saved account restores; also save/resume/cancel a pending pairing across a restart. macOS uses encrypted, non-iCloud-sync local login-Keychain items, not iOS `ThisDeviceOnly` protection. Do not infer storage success from mocked lifecycle tests. On a signed Mac, also exercise shortcut conflicts/press-release during permission dialogs, denied/no-input Speech, draft preservation across conversations/accounts, actual backend voice preview/transcription/TTS and fallback, active-call mute/end, explicit Services/file import, foreground same-room suppression versus another room, and revoked/foreign-workspace deep links. Implementation workers do not run builds, tests, lint, formatting, XcodeGen, permission prompts or provider probes.

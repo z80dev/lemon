@@ -15,8 +15,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   require Logger
 
-  alias CodingAgent.ExecutionNode.{Codec, Socket, TokenStore}
+  alias CodingAgent.ExecutionNode.{Codec, ConnectFailure, Socket, TokenStore}
   alias CodingAgent.Executor.RemoteEventCodec
+  alias CodingAgent.StatePaths
   alias LemonCore.{Bus, ExecApprovals, ExecutionContext, ToolPolicy}
   alias LemonGateway.ExecutionRequest
   alias LemonMemory.{ContextScope, Document, Ingest, Project}
@@ -146,6 +147,15 @@ defmodule CodingAgent.ExecutionNode.Worker do
     :pairing_stage,
     :pairing_id,
     :max_payload_bytes,
+    :current_token,
+    :token_opt,
+    :status_writer,
+    :watch_interval_ms,
+    :probe_interval_ms,
+    :rejected_fingerprint,
+    :watch_timer,
+    :probe_timer,
+    link_state: :connecting,
     shells: %{},
     process_tasks: %{},
     execution_capabilities: :all,
@@ -156,6 +166,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
+  end
+
+  @doc "Returns the current link state of the worker (:connecting | :online | :reconnecting | {:parked, kind, reason})."
+  def link_state(worker) when is_pid(worker) or is_atom(worker) do
+    GenServer.call(worker, :get_link_state)
   end
 
   @impl true
@@ -200,7 +215,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
        requested_node_id: Keyword.get(opts, :node_id),
        repair: Keyword.get(opts, :repair, false),
        max_payload_bytes: LemonCore.JSONPayload.default_max_bytes(),
-       execution_capabilities: Keyword.get(opts, :execution_capabilities, :all)
+       execution_capabilities: Keyword.get(opts, :execution_capabilities, :all),
+       token_opt: Keyword.get(opts, :token),
+       status_writer: Keyword.get(opts, :status_writer),
+       watch_interval_ms: Keyword.get(opts, :watch_interval_ms),
+       probe_interval_ms: Keyword.get(opts, :probe_interval_ms),
+       link_state: :connecting
      }}
   end
 
@@ -214,8 +234,23 @@ defmodule CodingAgent.ExecutionNode.Worker do
         connect_pairing(state, Keyword.get(opts, :operator_token))
       end
     else
-      with {:ok, token, expected_node_id} <- resolve_token(state, Keyword.get(opts, :token)) do
-        connect_authenticated(state, token, expected_node_id)
+      token_opt = Keyword.get(opts, :token)
+
+      case resolve_token(state, token_opt) do
+        {:ok, token, expected_node_id} ->
+          connect_authenticated(state, token, expected_node_id)
+
+        {:error, :missing_node_token} ->
+          {:ok, park(state, {:needs_enrollment, "credential_missing"})}
+
+        {:error, :stored_token_controller_mismatch} ->
+          {:ok, park(state, {:needs_enrollment, "controller_mismatch"})}
+
+        {:error, :stored_token_missing_node_id} ->
+          {:ok, park(state, {:needs_enrollment, "credential_unreadable"})}
+
+        {:error, {:token_load_failed, _reason}} ->
+          {:ok, park(state, {:needs_enrollment, "credential_unreadable"})}
       end
     end
   end
@@ -243,9 +278,22 @@ defmodule CodingAgent.ExecutionNode.Worker do
       "capabilities" => capabilities()
     }
 
+    write_status(state, "starting", nil, expected_node_id || state.node_id)
+
     with {:ok, state} <- start_socket(state, :node, connect_params) do
-      {:ok, %{state | expected_node_id: expected_node_id}}
+      {:ok,
+       %{
+         state
+         | current_token: token,
+           expected_node_id: expected_node_id,
+           link_state: :connecting
+       }}
     end
+  end
+
+  @impl true
+  def handle_call(:get_link_state, _from, state) do
+    {:reply, state.link_state, state}
   end
 
   defp start_socket(state, mode, connect_params) do
@@ -284,20 +332,21 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
       :node ->
         state = update_payload_limit(state, hello)
-        node_id = get_in(hello, ["auth", "clientId"])
+        node_id = get_in(hello, ["auth", "clientId"]) || get_in(hello, ["identity", "nodeId"])
 
         cond do
           not is_binary(node_id) or node_id == "" ->
-            {:stop, :missing_authenticated_node_id, state}
+            {:noreply, park(state, {:needs_reauthorization, "node_identity_mismatch"})}
 
           is_binary(state.expected_node_id) and state.expected_node_id != node_id ->
-            {:stop,
-             {:authenticated_node_id_mismatch,
-              %{expected: state.expected_node_id, actual: node_id}}, state}
+            {:noreply, park(state, {:needs_reauthorization, "node_identity_mismatch"})}
 
           true ->
+            state = cancel_timers(state)
+            state = %{state | link_state: :online, node_id: node_id, rejected_fingerprint: nil}
+            write_status(state, "online", nil, node_id)
             notify(state, {:status, :online, node_id})
-            {:noreply, %{state | node_id: node_id}}
+            {:noreply, state}
         end
     end
   end
@@ -325,31 +374,135 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   def handle_info(
+        {:execution_node_socket, socket, {:connect_retry, _code}},
+        %{socket: socket} = state
+      ) do
+    notify(state, {:status, :reconnecting})
+    write_status(state, "reconnecting", nil, state.node_id)
+    {:noreply, %{state | link_state: :reconnecting}}
+  end
+
+  def handle_info(
         {:execution_node_socket, socket, {:disconnected, reason}},
         %{socket: socket} = state
       ) do
     state = cancel_all_invocations(state)
     notify(state, {:status, :reconnecting})
+    write_status(state, "reconnecting", nil, nil)
     Logger.warning("Execution node connection lost; reconnecting: #{safe_reason(reason)}")
-    {:noreply, %{state | node_id: nil}}
+    {:noreply, %{state | node_id: nil, link_state: :reconnecting}}
   end
 
   def handle_info(
         {:execution_node_socket, socket, {:authentication_error, error}},
         %{socket: socket} = state
       ) do
-    notify(state, {:status, :authentication_error})
+    case state.socket_mode do
+      :node ->
+        classification = ConnectFailure.classify(error)
 
-    send(
-      self(),
-      {:stop_after_authentication_error, authentication_failure_reason(error, state.socket_mode)}
-    )
+        case classification do
+          {kind, reason} ->
+            {:noreply, park(state, {kind, reason})}
 
-    {:noreply, state}
+          :transient ->
+            state = cancel_all_invocations(state)
+            notify(state, {:status, :reconnecting})
+            write_status(state, "reconnecting", nil, nil)
+            {:noreply, %{state | node_id: nil, link_state: :reconnecting}}
+        end
+
+      :pairing ->
+        notify(state, {:status, :authentication_error})
+
+        send(
+          self(),
+          {:stop_after_authentication_error,
+           authentication_failure_reason(error, state.socket_mode)}
+        )
+
+        {:noreply, state}
+    end
   end
 
   def handle_info({:stop_after_authentication_error, reason}, state) do
     {:stop, reason, state}
+  end
+
+  def handle_info(:credential_watch, %{link_state: {:parked, _kind, _reason}} = state) do
+    case resolve_token(state, nil) do
+      {:ok, token, node_id} ->
+        new_fp = token_fingerprint(token)
+
+        if new_fp != state.rejected_fingerprint do
+          Logger.info("Saved credentials updated for node #{state.name}; resuming")
+          state = cancel_timers(state)
+          notify(state, {:status, :starting})
+
+          state_to_connect = %{
+            state
+            | rejected_fingerprint: nil,
+              token_opt: nil,
+              current_token: token,
+              expected_node_id: node_id
+          }
+
+          case connect_authenticated(state_to_connect, token, node_id) do
+            {:ok, new_state} ->
+              {:noreply, %{new_state | link_state: :connecting}}
+
+            {:error, _reason} ->
+              {:noreply, %{state | watch_timer: schedule_watch_timer(state)}}
+          end
+        else
+          {:noreply, %{state | watch_timer: schedule_watch_timer(state)}}
+        end
+
+      _ ->
+        {:noreply, %{state | watch_timer: schedule_watch_timer(state)}}
+    end
+  end
+
+  def handle_info(:credential_watch, state) do
+    {:noreply, %{state | watch_timer: nil}}
+  end
+
+  def handle_info(:reprobe, %{link_state: {:parked, kind, reason}} = state) do
+    token_result =
+      if is_binary(state.current_token) and state.current_token != "" do
+        {:ok, state.current_token, state.expected_node_id || state.node_id}
+      else
+        resolve_token(state, nil)
+      end
+
+    case token_result do
+      {:ok, token, node_id} ->
+        Logger.info("Re-probing connection for node #{state.name}")
+        state = cancel_timers(state)
+        notify(state, {:status, :starting})
+
+        state_to_connect = %{
+          state
+          | current_token: token,
+            expected_node_id: node_id
+        }
+
+        case connect_authenticated(state_to_connect, token, node_id) do
+          {:ok, new_state} ->
+            {:noreply, %{new_state | link_state: :connecting}}
+
+          {:error, _reason} ->
+            parked = park(state, {kind, reason})
+            {:noreply, parked}
+        end
+
+      _ ->
+        {:noreply, %{state | probe_timer: schedule_probe_timer(state, kind)}}
+    end
+  end
+
+  def handle_info(:reprobe, state) do
+    {:noreply, %{state | probe_timer: nil}}
   end
 
   def handle_info({:node_pty, invoke_id, type, payload}, state) do
@@ -551,6 +704,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   @impl true
   def terminate(_reason, state) do
+    _ = cancel_timers(state)
     _ = cancel_all_invocations(state)
     :ok
   end
@@ -1308,9 +1462,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
          {:ok, images} <-
            LemonAi.ImageInputs.validate(Map.get(args, "images", Map.get(args, :images, []))),
          {:ok, prompt} <- invocation_prompt(prompt, images),
-         {:ok, cwd} <- invocation_cwd(requested_cwd, state.default_cwd),
          {:ok, meta} <-
            args |> value("meta") |> normalize_meta() |> normalize_invocation_proof(run_id),
+         {:ok, cwd, folder_opts} <-
+           invocation_directory(value(args, "cwdMode"), requested_cwd, meta, state.default_cwd),
          {:ok, execution_context} <- ExecutionContext.decode(value(args, "executionContext")),
          :ok <- validate_context_run_id(execution_context, run_id),
          {:ok, execution_context} <-
@@ -1334,9 +1489,23 @@ defmodule CodingAgent.ExecutionNode.Worker do
         meta: meta
       }
 
-      {:ok, request, %{cwd: cwd, run_id: run_id}}
+      {:ok, request, Map.merge(%{cwd: cwd, run_id: run_id}, folder_opts)}
     end
   end
+
+  defp invocation_directory(nil, requested_cwd, _meta, default_cwd) do
+    with {:ok, cwd} <- invocation_cwd(requested_cwd, default_cwd),
+         do: {:ok, cwd, %{}}
+  end
+
+  defp invocation_directory("profile_files", nil, meta, default_cwd) do
+    with {:ok, cwd} <-
+           CodingAgent.ExecutionNode.BotFolder.ensure(meta[:profile_id] || meta["profile_id"]) do
+      {:ok, cwd, %{bot_folder_root: cwd, config_cwd: default_cwd}}
+    end
+  end
+
+  defp invocation_directory(_, _, _, _), do: {:error, :invalid_cwd}
 
   defp complete_invocation(state, invoke_id, completed) do
     invocation = Map.fetch!(state.invocations, invoke_id)
@@ -1622,6 +1791,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
       {:error, :not_found} ->
         {:error, :missing_node_token}
+
+      {:error, :controller_mismatch} ->
+        {:error, :stored_token_controller_mismatch}
 
       {:error, reason} ->
         {:error, {:token_load_failed, reason}}
@@ -1968,9 +2140,6 @@ defmodule CodingAgent.ExecutionNode.Worker do
     end
   end
 
-  defp authentication_failure_reason(_error, :node), do: :node_authentication_failed
-  defp authentication_failure_reason(_error, _mode), do: :authentication_failed
-
   defp value(map, key) when is_map(map) do
     case Map.fetch(map, key_atom(key)) do
       {:ok, canonical} -> canonical
@@ -1984,6 +2153,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp key_atom("prompt"), do: :prompt
   defp key_atom("images"), do: :images
   defp key_atom("cwd"), do: :cwd
+  defp key_atom("cwdMode"), do: :cwd_mode
   defp key_atom("resume"), do: :resume
   defp key_atom("lane"), do: :lane
   defp key_atom("toolPolicy"), do: :tool_policy
@@ -2116,5 +2286,117 @@ defmodule CodingAgent.ExecutionNode.Worker do
     reason
     |> inspect(limit: 10, printable_limit: 500)
     |> String.slice(0, 1_000)
+  end
+
+  defp park(state, {kind, reason}) do
+    reason = normalize_reason(reason)
+    Logger.warning("Execution node #{state.name} parked (#{kind}: #{reason})")
+
+    state = cancel_all_invocations(state)
+
+    if is_pid(state.socket) do
+      Process.unlink(state.socket)
+
+      try do
+        GenServer.stop(state.socket, :normal)
+      catch
+        :exit, _ -> :ok
+      end
+    end
+
+    notify(state, {:status, kind, reason})
+    write_status(state, to_string(kind), reason, state.node_id || state.expected_node_id)
+
+    state = cancel_timers(state)
+
+    fingerprint =
+      cond do
+        is_binary(state.current_token) and state.current_token != "" ->
+          token_fingerprint(state.current_token)
+
+        is_binary(state.token_opt) and state.token_opt != "" ->
+          token_fingerprint(state.token_opt)
+
+        true ->
+          state.rejected_fingerprint
+      end
+
+    watch_timer = schedule_watch_timer(state)
+    probe_timer = schedule_probe_timer(state, kind)
+
+    %{
+      state
+      | socket: nil,
+        socket_mode: :node,
+        link_state: {:parked, kind, reason},
+        rejected_fingerprint: fingerprint,
+        watch_timer: watch_timer,
+        probe_timer: probe_timer
+    }
+  end
+
+  defp cancel_timers(state) do
+    if state.watch_timer, do: Process.cancel_timer(state.watch_timer)
+    if state.probe_timer, do: Process.cancel_timer(state.probe_timer)
+    %{state | watch_timer: nil, probe_timer: nil}
+  end
+
+  defp schedule_watch_timer(state) do
+    interval = state.watch_interval_ms || 5_000
+    Process.send_after(self(), :credential_watch, interval)
+  end
+
+  defp schedule_probe_timer(state, kind) do
+    interval = probe_interval_ms(state, kind)
+    Process.send_after(self(), :reprobe, interval)
+  end
+
+  defp probe_interval_ms(%{probe_interval_ms: ms}, _kind) when is_integer(ms) and ms > 0, do: ms
+
+  defp probe_interval_ms(_state, :conflict), do: 60_000
+
+  defp probe_interval_ms(_state, kind) when kind in [:needs_reauthorization, :needs_enrollment] do
+    base = 900_000
+    jitter = :rand.uniform(round(base * 0.4) + 1) - round(base * 0.2)
+    max(1, base + jitter)
+  end
+
+  defp probe_interval_ms(_state, _other), do: 60_000
+
+  defp token_fingerprint(token) when is_binary(token) and token != "" do
+    :crypto.hash(:sha256, token) |> Base.encode16(case: :lower)
+  end
+
+  defp token_fingerprint(_), do: nil
+
+  defp normalize_reason("conflict"), do: "node_name_conflict"
+  defp normalize_reason(:conflict), do: "node_name_conflict"
+  defp normalize_reason(nil), do: nil
+  defp normalize_reason(reason) when is_binary(reason), do: reason
+  defp normalize_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp normalize_reason(other), do: to_string(other)
+
+  defp write_status(state, status_state, reason, node_id) do
+    normalized_reason = normalize_reason(reason)
+
+    payload = %{
+      "version" => 1,
+      "localName" => state.name,
+      "state" => to_string(status_state),
+      "reason" => normalized_reason,
+      "nodeId" => if(is_binary(node_id) and node_id != "", do: node_id, else: nil),
+      "changedAtMs" => System.system_time(:millisecond),
+      "osPid" => os_pid()
+    }
+
+    writer = state.status_writer || (&StatePaths.write_status/2)
+    writer.(state.name, payload)
+  end
+
+  defp os_pid do
+    case Integer.parse(System.pid()) do
+      {pid, _} -> pid
+      :error -> 0
+    end
   end
 end

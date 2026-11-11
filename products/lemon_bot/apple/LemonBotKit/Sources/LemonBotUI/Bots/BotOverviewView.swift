@@ -30,6 +30,7 @@ public struct BotOverviewView: View {
                     default: overviewBody(bot)
                     }
                     if manages {
+                        BotApprovalsView(store: store, bot: bot)
                         HStack {
                             Button("Edit identity / settings") { editor = true }
                             Button("Duplicate, move, reset or delete…") { lifecycle = true }
@@ -176,6 +177,17 @@ struct BotGrantRow: View {
         VStack(alignment: .leading) {
             Text(current.capabilityId).font(.headline)
             Text("Requested: \(current.requestedLevel) · effective: \(current.effectiveLevel)").font(LBFont.meta)
+            if let pending = GrantPresentation.pendingMessage(current) {
+                HStack {
+                    Text(pending).font(LBFont.meta)
+                    Button("Stop task") { Task { await action.perform {
+                        let presence: BotPresence = try await store.read("/bots/\(hubID(current.botId))/presence")
+                        guard let runID = presence.currentRunId else { return }
+                        let receipt: Run = try await store.mutate("POST", resourcePath("runs", runID, "/cancel"), body: ["reason": .string("Explicit user Stop")])
+                        if let index = store.runs.firstIndex(where: { $0.id == receipt.id }) { store.runs[index] = receipt }
+                    } } }.disabled(!manages || action.busy || store.connectionState != "online")
+                }
+            }
             ForEach(current.reasons, id: \.self) { reason in Text(reason).font(LBFont.meta) }
             if manages {
                 Menu("Request Bot access level") {
@@ -208,5 +220,97 @@ struct BotJobEditorView: View {
             } } }.disabled(action.busy || !manages || store.connectionState != "online" || reason.isEmpty)
             ActionErrorView(message: action.error)
         }.textFieldStyle(.roundedBorder).disabled(!manages)
+    }
+}
+
+struct BotApprovalsView: View {
+    let store: LemonBotStore
+    let bot: Bot
+    var previewOnOpen = false
+    var afterConfirm: (() async -> Void)? = nil
+    @State private var policy: EffectivePolicy?
+    @State private var allowances: [ApprovalAllowance] = []
+    @State private var confirmation: Confirmation?
+    @State private var action = UIActionState()
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Approvals").font(.headline)
+            Text("Current: \(bot.approvalReview == "bot_wide" ? "Don't ask for Terminal & Files" : bot.approvalReview == "every_time" ? "Ask every time" : "Ask once per chat")")
+            ForEach(["every_time", "per_chat"], id: \.self) { mode in
+                Button(mode == "every_time" ? "Ask every time" : "Ask once per chat") {
+                    Task { await action.perform {
+                        let _: Bot = try await store.mutate("PATCH", resourcePath("bots", bot.id, "/approval-review"), body: ["revision": .number(Double(bot.revision)), "mode": .string(mode)])
+                        try await store.refresh()
+                    } }
+                }
+            }
+            Button("Don't ask for Terminal & Files…") { Task { await action.perform {
+                confirmation = try await store.mutate("POST", resourcePath("bots", bot.id, "/approval-allowances/preview"), body: [:])
+            } } }.disabled(policy?.rememberedApprovals?.bot.isEmpty != false)
+            if policy?.rememberedApprovals?.bot.isEmpty != false {
+                Text("Workspace governance or required policy does not allow Bot-wide approvals.").font(LBFont.meta)
+            }
+            ForEach(allowances.filter { $0.scope == "chat" && $0.state == "active" }) { allowance in
+                HStack {
+                    Text(allowance.label)
+                    Button("Stop allowing") { Task { await action.perform {
+                        let _: ApprovalAllowance = try await store.mutate("POST", resourcePath("approval-allowances", allowance.id, "/stop"), body: ["revision": .number(Double(allowance.revision))])
+                        try await load()
+                    } } }
+                }
+            }
+            Text("Stopping applies to future actions; an already approved command is not recalled.").font(LBFont.meta)
+            ActionErrorView(message: action.error)
+        }.disabled(action.busy || !store.isOnline)
+            .task(id: store.eventVersion) { await action.perform { try await load() } }
+            .task {
+                if previewOnOpen {
+                    await action.perform {
+                        confirmation = try await store.mutate("POST", resourcePath("bots", bot.id, "/approval-allowances/preview"), body: [:])
+                    }
+                }
+            }
+            .sheet(isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } })) {
+                if let confirmation {
+                    ScopeConfirmationView(store: store, confirmation: confirmation, title: "Bot-wide approvals") { body in
+                        let _: ApprovalAllowance = try await store.mutate("POST", resourcePath("bots", bot.id, "/approval-allowances"), body: body)
+                        try await store.refresh()
+                        try await load()
+                        await afterConfirm?()
+                    }
+                }
+            }
+    }
+    private func load() async throws {
+        policy = try await store.read("/policies/effective", query: ["botId": bot.id])
+        allowances = try await allResources(store, resourcePath("bots", bot.id, "/approval-allowances"), query: ["state": "active"])
+    }
+}
+
+struct ChatApprovalAllowancesView: View {
+    let store: LemonBotStore
+    let conversationID: ID
+    let bot: Bot?
+    @State private var allowances: [ApprovalAllowance] = []
+    @State private var action = UIActionState()
+    var body: some View {
+        VStack(spacing: 4) {
+            if let bot, bot.approvalReview == "bot_wide" {
+                NavigationLink("Doesn't ask for Terminal & Files · Change") { BotOverviewView(store: store, botID: bot.id) }
+            }
+            ForEach(allowances.filter { $0.state == "active" }) { allowance in
+                HStack {
+                    Text(allowance.label)
+                    Button("Stop allowing") { Task { await action.perform {
+                        let _: ApprovalAllowance = try await store.mutate("POST", resourcePath("approval-allowances", allowance.id, "/stop"), body: ["revision": .number(Double(allowance.revision))])
+                        try await load()
+                    } } }.disabled(action.busy || !store.isOnline)
+                }.font(LBFont.meta)
+            }
+            ActionErrorView(message: action.error)
+        }.task(id: "\(conversationID):\(store.eventVersion)") { await action.perform { try await load() } }
+    }
+    private func load() async throws {
+        allowances = try await allResources(store, resourcePath("conversations", conversationID, "/approval-allowances"), query: ["state": "active"])
     }
 }

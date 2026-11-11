@@ -43,10 +43,10 @@ defmodule CodingAgent.ExecutionNode.Capabilities do
 
   defp files(probe, catalog, opts) do
     tools = select(catalog, ~w(read grep find ls write edit patch))
-    executable = probe.executable("python3")
-    access = if is_binary(executable), do: probe.root_access(opts), else: {:error, :not_installed}
+    python = probe.python()
+    access = if is_binary(python), do: probe.root_access(opts), else: {:error, :not_installed}
 
-    case {executable, access} do
+    case {python, access} do
       {nil, _} ->
         item("files", "Files", "files", false, "off", "unknown", [], "python3_not_installed")
 
@@ -84,7 +84,7 @@ defmodule CodingAgent.ExecutionNode.Capabilities do
 
   defp shell(probe, catalog) do
     tools = select(catalog, ~w(bash bash_output kill_process process_input lsp_diagnostics))
-    supported = is_binary(probe.executable("python3")) and probe.shell_available?()
+    supported = is_binary(probe.python()) and probe.shell_available?()
     level = if supported and "bash" in tools, do: "read_interact", else: "off"
 
     item(
@@ -205,13 +205,13 @@ defmodule CodingAgent.ExecutionNode.Capabilities do
 
   defp desktop(:darwin, probe, catalog) do
     executable = probe.executable("peekaboo")
-    permissions = if executable, do: permissions(probe), else: {:error, :not_installed}
+    permissions = permissions(probe)
     tools = select(catalog, ["bash"])
 
     for {id, name, permission} <- [
           {"accessibility", "macOS Accessibility", "accessibility"},
-          {"screen_recording", "macOS Screen Recording", "screenrecording"},
-          {"event_synthesizing", "macOS Event Synthesizing", "eventsynthesizing"}
+          {"screen_recording", "macOS Screen Recording", "screenRecording"},
+          {"event_synthesizing", "macOS Event Synthesizing", "postEvent"}
         ] do
       grant =
         case permissions do
@@ -224,16 +224,16 @@ defmodule CodingAgent.ExecutionNode.Capabilities do
       level =
         cond do
           not supported or grant != "granted" or tools == [] -> "off"
-          permission == "screenrecording" -> "read_only"
+          permission == "screenRecording" -> "read_only"
           true -> "read_interact"
         end
 
       reason =
         cond do
           not supported -> "peekaboo_not_installed"
-          grant == "granted" -> "peekaboo_grant_measured"
-          grant == "denied" -> "peekaboo_grant_denied"
-          true -> "peekaboo_grant_inspection_unavailable"
+          grant == "granted" -> "macos_grant_measured"
+          grant == "denied" -> "macos_grant_denied"
+          true -> "macos_grant_probe_unavailable"
         end
 
       item(
@@ -249,16 +249,7 @@ defmodule CodingAgent.ExecutionNode.Capabilities do
       )
     end ++
       [
-        item(
-          "full_disk_access",
-          "macOS Full Disk Access",
-          "os_app",
-          true,
-          "off",
-          "unknown",
-          [],
-          "macos_has_no_nonprompting_full_disk_grant_query"
-        )
+        full_disk_access(permissions)
       ]
   end
 
@@ -307,57 +298,46 @@ defmodule CodingAgent.ExecutionNode.Capabilities do
     ]
 
   defp permissions(probe) do
-    with {:ok, output} <- probe.command("peekaboo", ["permissions", "status", "--json"]),
-         {:ok, json} <- Jason.decode(output) do
-      {:ok, permission_records(json, %{})}
+    with {:ok, status} when is_map(status) <- probe.tcc_status() do
+      {:ok, permission_records(status)}
     else
-      _ -> {:error, :inspection_unavailable}
+      _ -> {:error, :probe_unavailable}
     end
   end
 
-  defp permission_records(map, acc) when is_map(map) do
-    name = map["permission"] || map["name"] || map["type"]
-    acc = if is_binary(name), do: add_permission(acc, name, map), else: acc
-
-    Enum.reduce(map, acc, fn {key, value}, result ->
-      result =
-        cond do
-          is_boolean(value) -> add_permission(result, key, %{"granted" => value})
-          is_map(value) -> add_permission(result, key, value)
-          true -> result
-        end
-
-      permission_records(value, result)
+  defp permission_records(status) do
+    Map.new(~w(accessibility screenRecording postEvent fullDiskAccess), fn key ->
+      grant = Map.get(status, key)
+      {key, if(grant in ["granted", "denied", "unknown"], do: grant, else: "unknown")}
     end)
   end
 
-  defp permission_records(list, acc) when is_list(list),
-    do: Enum.reduce(list, acc, &permission_records/2)
-
-  defp permission_records(_, acc), do: acc
-
-  defp add_permission(acc, name, record) do
-    key = name |> String.downcase() |> String.replace(~r/[^a-z]/, "")
-    key = if key in ["screenrecording", "screencapture"], do: "screenrecording", else: key
-
+  defp full_disk_access(permissions) do
     grant =
-      cond do
-        record["granted"] == true or record["isGranted"] == true -> "granted"
-        record["granted"] == false or record["isGranted"] == false -> "denied"
-        record["status"] in ["granted", "authorized"] -> "granted"
-        record["status"] in ["denied", "notGranted"] -> "denied"
-        true -> "unknown"
+      case permissions do
+        {:ok, grants} -> grants["fullDiskAccess"]
+        _ -> "unknown"
       end
 
-    if key in ["accessibility", "screenrecording", "eventsynthesizing"] and grant != "unknown" do
-      case Map.fetch(acc, key) do
-        :error -> Map.put(acc, key, grant)
-        {:ok, ^grant} -> acc
-        {:ok, _} -> Map.put(acc, key, "unknown")
+    reason =
+      case {permissions, grant} do
+        {{:error, _}, _} -> "macos_has_no_nonprompting_full_disk_grant_query"
+        {_, "granted"} -> "macos_grant_measured"
+        {_, "denied"} -> "macos_grant_denied"
+        _ -> "macos_grant_probe_unavailable"
       end
-    else
-      acc
-    end
+
+    item(
+      "full_disk_access",
+      "macOS Full Disk Access",
+      "os_app",
+      true,
+      "off",
+      grant,
+      [],
+      reason,
+      grant == "unknown"
+    )
   end
 
   defp item(id, name, category, supported, level, grant, tools, reason, stale \\ false) do
@@ -380,9 +360,30 @@ end
 
 defmodule CodingAgent.ExecutionNode.Capabilities.Probe do
   @moduledoc false
-  alias CodingAgent.ExecutionNode.{HostCommand, HostIO}
+  alias CodingAgent.ExecutionNode.{HostCommand, HostIO, Python}
+
   def executable(name), do: System.find_executable(name)
+
+  def python do
+    case Python.executable() do
+      {:ok, path} -> path
+      {:error, :not_installed} -> nil
+    end
+  end
+
   def command(name, args), do: HostCommand.run(name, args)
+
+  def tcc_status do
+    with probe when is_binary(probe) <- System.get_env("LEMON_TCC_PROBE"),
+         true <- Path.type(probe) == :absolute,
+         ^probe <- System.find_executable(probe),
+         {:ok, output} <- HostCommand.run_executable(probe, ["--status", "--json"]),
+         {:ok, %{"version" => 1} = status} <- Jason.decode(output) do
+      {:ok, status}
+    else
+      _ -> {:error, :probe_unavailable}
+    end
+  end
 
   def shell_available? do
     shell = System.get_env("SHELL") || System.find_executable("sh")

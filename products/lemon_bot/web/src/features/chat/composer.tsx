@@ -17,7 +17,7 @@ function storedDraft(key: string): LocalDraft | undefined {
   try { const raw = sessionStorage.getItem(key); if (!raw) return; const data: unknown = JSON.parse(raw); if (data && typeof data === 'object' && 'text' in data && typeof data.text === 'string' && 'attachmentIds' in data && Array.isArray(data.attachmentIds) && data.attachmentIds.every(id => typeof id === 'string') && 'revision' in data && typeof data.revision === 'number') return data as LocalDraft; } catch { /* Damaged local cache is not server truth. */ }
 }
 
-export function Composer({ conversation, bot, replyId, clearReply, accepted }: { conversation: Conversation; bot?: Bot; replyId: string | null; clearReply: () => void; accepted: (resources: Pick<MessageReceipt, 'entries' | 'runs'>) => void }) {
+export function Composer({ conversation, bot, replyId, clearReply, accepted, starterTask }: { conversation: Conversation; bot?: Bot; replyId: string | null; clearReply: () => void; accepted: (resources: Pick<MessageReceipt, 'entries' | 'runs'>) => void; starterTask?: { text: string; id: number } }) {
   const { client, snapshot, online, realtime } = useApp(); const key = `lemonbot.composer:${snapshot.workspace.id}:${snapshot.user.id}:${conversation.id}`;
   const query = useQuery(`composer:${conversation.id}`, () => client.call('GET /conversations/:id/composer', { params: { id: conversation.id } }));
   const [local, setLocal] = useState<LocalDraft>(() => storedDraft(key) || { text: '', attachmentIds: [], replyToEntryId: null, revision: 0, references: [], mentions: [], everyone: false });
@@ -87,12 +87,12 @@ export function Composer({ conversation, bot, replyId, clearReply, accepted }: {
       }
     });
   }
-  async function send() {
-    const current = localRef.current;
+  async function send(starterText?: string) {
+    const current = starterText === undefined ? localRef.current : { ...localRef.current, text: starterText, attachmentIds: [], replyToEntryId: null, references: [], mentions: [], everyone: false };
     if (!online || sendIntent.busy || sendIntent.uncertain || saveIntent.busy || saveIntent.uncertain || uploadIntent.busy || journal.current || conflict || current.acknowledged) return;
     if (!current.text.trim() && !current.attachmentIds.length) return;
     if (new TextEncoder().encode(current.text).length > 64 * 1024) { setError(new Error('Message exceeds 64 KiB.')); return; }
-    setError(undefined); const clientNonce = nonce(); journal.current = clientNonce; setLocal(value => ({ ...value, unknownNonce: clientNonce, refused: false })); sessionStorage.setItem(key, JSON.stringify({ ...current, unknownNonce: clientNonce, refused: false }));
+    setError(undefined); const clientNonce = nonce(); journal.current = clientNonce; setLocal({ ...current, unknownNonce: clientNonce, refused: false }); sessionStorage.setItem(key, JSON.stringify({ ...current, unknownNonce: clientNonce, refused: false }));
     const result = await sendIntent.run(async () => {
       const receipt = await client.call('POST /conversations/:id/messages', { params: { id: conversation.id }, body: { clientNonce, text: current.text, attachmentIds: current.attachmentIds, ...(current.replyToEntryId ? { replyToEntryId: current.replyToEntryId } : {}), mentions: current.mentions, everyone: current.everyone, references: current.references, mode } }); accepted(receipt); setDelivery(receipt);
       if (receipt.status === 'outcome_unknown') throw new Error('We couldn’t confirm your message was delivered. Check its status before sending again.');
@@ -110,6 +110,7 @@ export function Composer({ conversation, bot, replyId, clearReply, accepted }: {
     journal.current = undefined; clearReply(); if (realtime?.state === 'live') { try { realtime.send({ type: 'typing', conversationId: conversation.id, active: false }); } catch (failure) { setError(failure); } }
     setLocal(value => ({ ...value, text: '', attachmentIds: [], replyToEntryId: null, references: [], mentions: [], everyone: false, unknownNonce: undefined, refused: false })); setDirty(true);
   }
+  useEffect(() => { if (starterTask) void send(starterTask.text); }, [starterTask]);
   async function reconcileMessage() {
     const clientNonce = journal.current || localRef.current.unknownNonce; if (!clientNonce) { await query.reload(); return; }
     const receipt = await client.messageReceipt(conversation.id, clientNonce);

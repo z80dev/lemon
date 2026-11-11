@@ -61,7 +61,7 @@ defmodule LemonCli.DoctorLiveTest do
 
   test "unsupported OAuth APIs are skipped without HTTP" do
     input = %{
-      api: :openai_codex_responses,
+      api: :github_copilot,
       base_url: "https://example.invalid",
       api_key: "oauth",
       headers: %{}

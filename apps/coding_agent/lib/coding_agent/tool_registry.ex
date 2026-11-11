@@ -18,6 +18,7 @@ defmodule CodingAgent.ToolRegistry do
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools
   alias CodingAgent.Wasm.Policy, as: WasmPolicy
+  alias CodingAgent.WorkspaceReads
   alias LemonAgent.Types.AgentTool
 
   @type tool_name :: String.t()
@@ -206,14 +207,20 @@ defmodule CodingAgent.ToolRegistry do
     {resolved_tools, _conflicts} =
       resolve_tools(builtin, wasm_tools, extension_tools, mcp_tools, true)
 
-    resolved_tools
-    |> filter_tools(disabled, enabled_only)
-    |> filter_policy_blocked(tool_policy)
-    |> configure_bash(cwd, opts)
-    |> maybe_wrap_approval(
-      tool_policy,
-      Keyword.get(opts, :approval_context) ||
-        Map.new(
+    folder_ctx =
+      Keyword.take(opts, [
+        :bot_folder_root,
+        :config_cwd,
+        :native_source_profile_id,
+        :execution_context
+      ])
+
+    approval_ctx =
+      case Keyword.get(opts, :approval_context) do
+        ctx when is_map(ctx) ->
+          Enum.reduce(folder_ctx, ctx, fn {key, value}, acc -> Map.put_new(acc, key, value) end)
+
+        _ ->
           Keyword.take(opts, [
             :run_id,
             :session_id,
@@ -222,8 +229,16 @@ defmodule CodingAgent.ToolRegistry do
             :invocation_context_key,
             :approval_request_fun
           ])
-        )
-    )
+          |> Keyword.merge(folder_ctx)
+          |> Map.new()
+      end
+      |> Map.put_new(:cwd, cwd)
+
+    resolved_tools
+    |> filter_tools(disabled, enabled_only)
+    |> filter_policy_blocked(tool_policy)
+    |> configure_bash(cwd, opts)
+    |> maybe_wrap_approval(tool_policy, approval_ctx)
   end
 
   defp configure_bash(tools, cwd, opts) do
@@ -748,14 +763,19 @@ defmodule CodingAgent.ToolRegistry do
     end
   end
 
+  # Extension discovery reads `.lemon` configuration, so it uses the trusted
+  # config root (the worker default cwd for a Bot folder), never a working
+  # directory the model itself can write.
   defp resolve_extension_paths(cwd, opts) do
-    if extensions_enabled?(cwd) do
+    config_cwd = Keyword.get(opts, :config_cwd) || cwd
+
+    if extensions_enabled?(config_cwd) do
       case Keyword.get(opts, :extension_paths) do
         paths when is_list(paths) ->
           paths
 
         _ ->
-          configured_extension_paths(cwd) ++ default_extension_paths_if_trusted(cwd)
+          configured_extension_paths(config_cwd) ++ default_extension_paths_if_trusted(config_cwd)
       end
     else
       []
@@ -1052,10 +1072,25 @@ defmodule CodingAgent.ToolRegistry do
       execute = fn tool_call_id, params, signal, on_update ->
         tier = if source == :builtin, do: ToolPolicy.tier(name, params), else: :exec
 
-        required =
+        policy_required =
           ToolPolicy.requires_approval?(tool_policy, name, params, tier) or
             wasm_default_requires_approval?(tool_policy, name, source) or
             mcp_requires_approval?(source)
+
+        # A folder read runs unreviewed only when the egress fence became
+        # durable first; afterwards every web call in the session is reviewed.
+        required =
+          cond do
+            name in ["webfetch", "websearch"] and WorkspaceReads.fenced?(approval_context) ->
+              true
+
+            name in ["read", "ls", "grep"] and policy_required ->
+              not (WorkspaceReads.exempt?(tool_policy, name, params, approval_context) and
+                     WorkspaceReads.fence!(approval_context) == :ok)
+
+            true ->
+              policy_required
+          end
 
         if required do
           ToolExecutor.execute_with_approval(

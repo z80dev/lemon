@@ -25,6 +25,7 @@ defmodule LemonCli.Setup.Provider do
   alias LemonCli.Onboarding.Provider, as: ProviderSpec
   alias LemonCli.Setup.{ProviderAuth, Scaffold, Verification}
   alias LemonCore.Secrets
+  alias LemonCore.Secrets.MasterKey
 
   @doc """
   Runs provider onboarding within the setup context.
@@ -61,19 +62,21 @@ defmodule LemonCli.Setup.Provider do
   """
   @spec run([String.t()], map(), keyword()) :: :ok | {:error, term()}
   def run(args, io, opts \\ []) when is_list(args) and is_map(io) do
-    case Enum.filter(args, &(&1 in ["--status", "--logout"])) do
-      [] ->
-        case configure(args, io, opts) do
-          {:ok, _verification} -> :ok
-          {:error, _reason} = error -> error
-        end
+    MasterKey.scoped(fn ->
+      case Enum.filter(args, &(&1 in ["--status", "--logout"])) do
+        [] ->
+          case configure(args, io, opts) do
+            {:ok, _verification} -> :ok
+            {:error, _reason} = error -> error
+          end
 
-      [flag] ->
-        run_auth_action(flag, List.delete(args, flag), io)
+        [flag] ->
+          run_auth_action(flag, List.delete(args, flag), io)
 
-      _ ->
-        Runner.fail!("Use only one of --status or --logout.")
-    end
+        _ ->
+          Runner.fail!("Use only one of --status or --logout.")
+      end
+    end)
   end
 
   @doc false
@@ -135,7 +138,12 @@ defmodule LemonCli.Setup.Provider do
           value -> fetch_provider!(value)
         end
 
-      Runner.run(remaining_args, provider, Keyword.put(Keyword.take(opts, [:discovery]), :io, io))
+      Runner.run(
+        remaining_args,
+        provider,
+        Keyword.put(Keyword.take(opts, [:discovery, :token, :codex_discover]), :io, io)
+      )
+
       :ok
     end)
   end
@@ -146,17 +154,30 @@ defmodule LemonCli.Setup.Provider do
 
   @doc false
   def verify_config(config_path, io, opts \\ []) do
-    provider_state = Verification.setup_state(config_path: config_path).provider
+    setup_state = opts[:setup_state] || Verification.setup_state(config_path: config_path)
+    provider_state = setup_state.provider
 
     if provider_state.provider && provider_state.model do
       io.info.("")
       io.info.("Verifying provider configuration...")
+      skip_verify? = Keyword.get(opts, :skip_verify, false)
+
+      unless skip_verify? do
+        provider_label =
+          case Providers.find(provider_state.provider) do
+            %{display_name: name} -> name
+            _ -> provider_state.provider
+          end
+
+        io.info.("Checking #{provider_label} with a non-generating request (no message is sent)…")
+      end
 
       verification_opts =
         opts
         |> Keyword.take([:verifier, :config, :verification_model, :cwd])
         |> Keyword.put(:config_path, config_path)
-        |> Keyword.put(:skip_verify, Keyword.get(opts, :skip_verify, false))
+        |> Keyword.put(:skip_verify, skip_verify?)
+        |> Keyword.put(:setup_state, setup_state)
         |> Verification.verification_options()
 
       case Verification.verify_provider(verification_opts) do
@@ -167,6 +188,27 @@ defmodule LemonCli.Setup.Provider do
           )
 
           {:ok, result}
+
+        {:error, %{step: :live, reason: reason, message: message}}
+        when reason == :unreachable or
+               (is_tuple(reason) and elem(reason, 0) == :check_failed) ->
+          # A provider Lemon cannot reach (or a check that failed for a
+          # non-auth reason) leaves a usable credential saved, not rejected:
+          # the first message re-checks it.
+          io.info.(
+            "Provider configuration saved: #{provider_state.provider} / #{provider_state.model} " <>
+              "(credential usable; #{saved_detail(reason)})."
+          )
+
+          io.info.(message)
+
+          {:ok,
+           %{
+             provider: provider_state.provider,
+             model: provider_state.model,
+             live: :saved,
+             reason: saved_reason(reason)
+           }}
 
         {:error, %{message: message}} ->
           io.error.("Verification failed. Run `lemon setup provider` to check the provider.")
@@ -180,6 +222,12 @@ defmodule LemonCli.Setup.Provider do
       {:ok, nil}
     end
   end
+
+  defp saved_reason(:unreachable), do: :provider_unreachable
+  defp saved_reason(_reason), do: :check_failed
+
+  defp saved_detail(:unreachable), do: "could not reach the provider"
+  defp saved_detail(_reason), do: "the quick live check did not complete"
 
   defp live_detail(:ok, %{live_note: note}) when is_binary(note), do: ", #{note}"
   defp live_detail(:skipped, %{live_note: note}) when is_binary(note), do: "; #{note}"

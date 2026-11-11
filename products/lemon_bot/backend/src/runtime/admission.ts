@@ -134,6 +134,7 @@ export function createRuntimeAdmissionRoutes(services: BackendServices): Route[]
       const resource = fresh;
       services.store.transaction(() => {
         services.store.put('runs', resource); services.store.setMetadata(`nativeRunProduct:${runId}`, resource.id); services.store.setMetadata(`runtimeRun:${resource.id}`, bound); services.store.setMetadata(`runPrincipal:${resource.id}`, authority.actor);
+        services.store.setMetadata(`runApprovalOrigin:${resource.id}`, 'native_followup');
         services.store.setMetadata(`runParent:${resource.id}`, authority.parent.run.id); services.store.setMetadata(`nativeRootSource:${resource.id}`, lineage.sourceRootRunId); services.store.setMetadata(`runIntent:${resource.id}`, reservation.fingerprint);
         for (const prefix of ['runReturnConversation', 'runSourceEntry', 'runNoHandoff']) { const value = services.store.metadata(`${prefix}:${authority.root.run.id}`); if (value !== null) services.store.setMetadata(`${prefix}:${resource.id}`, value); }
         reservation.runId = resource.id; services.store.setMetadata(key, reservation); services.events.emit('run.upserted', resource, { conversationId: resource.conversationId, botId: resource.botId });

@@ -285,7 +285,7 @@ async function fixture(reviewedSetups: ReviewedSetup[] = []): Promise<Fixture> {
   };
   setBehavior(behavior);
   const policy = createPolicyServices(services);
-  const governance: P.Governance = { revision: 1, groupAccess: 'all', allowedDirectoryGroupIds: [], allowSudo: false, allowEgress: true, lockNetworkForGroups: true, requireReview: true, allowedChannelAdapters: [], xMentionsEnabled: false, emailEnabled: false, contentExportEnabled: false, inactiveHostPolicy: { enabled: false, afterDays: 30, action: 'suspend' } };
+  const governance: P.Governance = { revision: 1, groupAccess: 'all', allowedDirectoryGroupIds: [], allowSudo: false, allowEgress: true, lockNetworkForGroups: true, requireReview: true, folderReadsNeedReview: false, allowedChannelAdapters: [], xMentionsEnabled: false, emailEnabled: false, contentExportEnabled: false, inactiveHostPolicy: { enabled: false, afterDays: 30, action: 'suspend' } };
   store.setMetadata('governance', governance);
   const host = createHostServices(services), routes = createHostRoutes(services, host);
   const requests = new Set<Promise<unknown>>();

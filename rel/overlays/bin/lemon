@@ -21,6 +21,7 @@ info() { printf '\033[0;32m[lemon]\033[0m %s\n' "$1"; }
 warn() { printf '\033[0;33m[lemon]\033[0m %s\n' "$1"; }
 error() { printf '\033[0;31m[lemon]\033[0m %s\n' "$1" >&2; }
 
+ORIGINAL_ARGS=("$@")
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 while [ -L "$SCRIPT_PATH" ]; do
   SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
@@ -29,6 +30,9 @@ while [ -L "$SCRIPT_PATH" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
 LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+case "${1:-}" in
+  tunnel) shift; exec "$LEMON_ROOT/libexec/lemon-tunnel" "$@" ;;
+esac
 
 PROFILE=""
 for candidate in lemon_runtime_full lemon_runtime_min sim_broadcast_platform; do
@@ -509,6 +513,27 @@ load_environment() {
   LEMON_STORE_PATH="$store"
   export LEMON_STORE_PATH
   export PHX_SERVER="${PHX_SERVER:-true}"
+
+  export ERL_EPMD_ADDRESS="${ERL_EPMD_ADDRESS:-127.0.0.1}"
+
+  local has_name=0 arg
+  if [ "${RELEASE_DISTRIBUTION:-}" = "name" ]; then
+    has_name=1
+  fi
+  for arg in "${ORIGINAL_ARGS[@]}"; do
+    if [ "$arg" = "--name" ]; then
+      has_name=1
+      break
+    fi
+  done
+  if [ "$has_name" = "0" ]; then
+    case "${ELIXIR_ERL_OPTIONS:-}" in
+      *inet_dist_use_interface*) ;;
+      *)
+        export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-}${ELIXIR_ERL_OPTIONS:+ }-kernel inet_dist_use_interface {127,0,0,1}"
+        ;;
+    esac
+  fi
 }
 
 # Per-user defaults are persisted only after startup has excluded a live runtime

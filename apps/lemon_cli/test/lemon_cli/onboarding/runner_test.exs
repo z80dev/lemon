@@ -337,6 +337,83 @@ defmodule LemonCli.Onboarding.RunnerTest do
     assert LemonCore.Store.list(Secrets.table()) == []
   end
 
+  test "Codex picker lists only the models the ChatGPT account offers", %{tmp_dir: tmp_dir} do
+    spec = Providers.fetch!("openai-codex")
+    config_path = Path.join(tmp_dir, "codex-discovery.toml")
+    auth_path = Path.join(tmp_dir, "codex-auth.json")
+    write_codex_cli_login(auth_path)
+    io = build_io(self(), [""], [])
+
+    Runner.run(
+      [
+        "--config-path",
+        config_path,
+        "--non-interactive",
+        "--auth",
+        "codex-cli",
+        "--codex-auth-path",
+        auth_path,
+        "--set-default"
+      ],
+      spec,
+      io: io,
+      codex_discover: fn opts ->
+        assert is_binary(opts[:access_token]) and opts[:access_token] != ""
+        assert opts[:timeout_ms] == 5_000
+        {:ok, [%{id: "gpt-6.1-sol", name: "GPT 6.1 Sol"}, %{id: "account-only-model"}]}
+      end
+    )
+
+    messages = drain_events([]) |> Enum.map(fn {_kind, message} -> message end)
+    listing = Enum.filter(messages, &String.contains?(&1, "account-only-model"))
+    assert listing != []
+    refute Enum.any?(messages, &String.contains?(&1, "gpt-5.6-sol"))
+
+    assert {:ok, config} = Toml.decode_file(config_path)
+    assert config["defaults"]["provider"] == "openai-codex"
+    assert config["defaults"]["model"] == "gpt-6.1-sol"
+  end
+
+  test "Codex discovery failure falls back to Lemon's catalog with an explanation", %{
+    tmp_dir: tmp_dir
+  } do
+    spec = Providers.fetch!("openai-codex")
+    config_path = Path.join(tmp_dir, "codex-fallback.toml")
+    auth_path = Path.join(tmp_dir, "codex-auth-fallback.json")
+    write_codex_cli_login(auth_path)
+    io = build_io(self(), [""], [])
+
+    Runner.run(
+      [
+        "--config-path",
+        config_path,
+        "--non-interactive",
+        "--auth",
+        "codex-cli",
+        "--codex-auth-path",
+        auth_path,
+        "--set-default"
+      ],
+      spec,
+      io: io,
+      codex_discover: fn _opts -> {:error, :transport_failure} end
+    )
+
+    messages = drain_events([]) |> Enum.map(fn {_kind, message} -> message end)
+
+    assert Enum.any?(
+             messages,
+             &String.contains?(
+               &1,
+               "Couldn't list the models your ChatGPT account offers; showing Lemon's catalog."
+             )
+           )
+
+    assert {:ok, config} = Toml.decode_file(config_path)
+    assert config["defaults"]["provider"] == "openai-codex"
+    assert is_binary(config["defaults"]["model"])
+  end
+
   test "catalog API-key providers store the pasted key and reference it from config", %{
     tmp_dir: tmp_dir
   } do
@@ -641,5 +718,32 @@ defmodule LemonCli.Onboarding.RunnerTest do
     after
       0 -> Enum.reverse(acc)
     end
+  end
+
+  defp write_codex_cli_login(path) do
+    exp = DateTime.utc_now() |> DateTime.add(3_600, :second) |> DateTime.to_unix()
+
+    payload =
+      Jason.encode!(%{
+        "exp" => exp,
+        "https://api.openai.com/auth" => %{"chatgpt_account_id" => "acc_picker"}
+      })
+
+    jwt = "header." <> Base.url_encode64(payload, padding: false) <> ".signature"
+
+    login = %{
+      "auth_mode" => "chatgpt",
+      "OPENAI_API_KEY" => nil,
+      "tokens" => %{
+        "access_token" => jwt,
+        "refresh_token" => "synthetic-refresh",
+        "account_id" => "acc_picker",
+        "id_token" => jwt
+      }
+    }
+
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, Jason.encode!(login))
+    path
   end
 end

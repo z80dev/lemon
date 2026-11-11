@@ -30,7 +30,7 @@ VERSION = '2099.01.7-private'
 
 class JoinLifecycle(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR'))
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.log = self.root / 'calls.jsonl'
@@ -46,7 +46,7 @@ version = os.environ.get('TEST_VERSION', '2099.01.7-private')
 record = {'args': args, 'exe': sys.argv[0], 'home': os.environ.get('HOME'), 'cwd': os.getcwd(),
           'envSecret': any('A' * 43 in v for v in os.environ.values()),
           'activated': os.path.lexists(os.path.join(os.environ.get('TEST_ROOT', '/nonexistent'), '.lemon/versions/current'))}
-if args[:2] == ['node', 'join']:
+if args[:2] == ['node', 'join'] or args[:3] == ['service', 'install', 'worker']:
     record['input'] = sys.stdin.buffer.read().decode()
 with open(os.environ['TEST_LOG'], 'a') as out:
     out.write(json.dumps(record) + '\\n')
@@ -59,6 +59,14 @@ if args[:2] == ['node', 'capabilities']:
     ready = os.environ.get('TEST_CAPABILITY', '0') == '0'
     print(json.dumps({'lemonVersion': version, 'botReady': ready}))
     sys.exit(0 if expected == version and (ready or '--require-bot' not in args) else 2)
+if args == ['service', '--help']:
+    sys.exit(int(os.environ.get('TEST_SERVICE_HELP', '0')))
+if args[:3] == ['service', 'install', 'worker']:
+    print(json.dumps({'schema': 1, 'persistence': os.environ.get('TEST_PERSISTENCE', 'login'),
+                     'units': [{'role': 'worker', 'state': os.environ.get('TEST_STATE', 'online'),
+                                'installed': os.environ.get('TEST_INSTALLED', 'true') == 'true',
+                                'detail': os.environ.get('TEST_DETAIL')}]}))
+    sys.exit(int(os.environ.get('TEST_JOIN_STATUS', '0')))
 if args[:2] == ['node', 'join']:
     sys.exit(int(os.environ.get('TEST_JOIN_STATUS', '0')))
 sys.exit(64)
@@ -67,7 +75,7 @@ sys.exit(64)
         (self.source / 'bin').mkdir()
         (self.source / 'bin' / 'lemon').symlink_to(self.fixture)
         self.env = dict(os.environ, HOME=str(self.root), TEST_LOG=str(self.log))
-        self.args = ['--name', "bot's machine", '--controller', 'wss://controller.example/ws', '--source', str(self.source)]
+        self.args = ['--name', 'bot-machine', '--controller', 'wss://controller.example/ws', '--source', str(self.source), '--foreground']
 
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
@@ -160,7 +168,7 @@ sys.exit(status)
         self.assertFalse(any(row['args'][:2] == ['node', 'join'] for row in self.calls()))
 
     def test_missing_source_and_no_tty_do_not_enroll(self):
-        self.assertNotEqual(self.launch(self.args[:-1] + [str(self.root / 'missing')])[0], 0)
+        self.assertNotEqual(self.launch(self.args[:5] + [str(self.root / 'missing'), '--foreground'])[0], 0)
         result = subprocess.run(['bash', str(SCRIPT), *self.args], stdin=subprocess.DEVNULL,
                                 capture_output=True, env=self.env, start_new_session=True)
         self.assertNotEqual(result.returncode, 0)
@@ -237,7 +245,7 @@ exec "$TEST_REAL_CURL" "$@"
         self.env.update(PATH=str(tools) + ':' + os.environ['PATH'], TEST_REAL_CURL=shutil.which('curl'),
                         TEST_PUBLISH_PORT=str(server.server_address[1]), TEST_ROOT=str(self.root),
                         LEMON_INSTALL_IGNORE_GLIBC='1', LEMON_PROFILE='lemon_bot')
-        return self.args[:4] + ['--version', VERSION, '--base-url', 'https://releases.example/lemon']
+        return self.args[:4] + ['--version', VERSION, '--base-url', 'https://releases.example/lemon', '--foreground']
 
     def installed(self):
         return self.root / '.lemon' / 'versions' / VERSION / 'bin' / 'lemon'
@@ -267,9 +275,9 @@ exec "$TEST_REAL_CURL" "$@"
         self.assertNotEqual(Path(checks[0]['home']).resolve(), self.root.resolve())
         joins = self.joins()
         self.assertEqual(len(joins), 1)
-        self.assertEqual(joins[0]['exe'], str(self.installed()))
-        self.assertEqual(joins[0]['args'][2:], ['--name', "bot's machine", '--controller',
-                                                 'wss://controller.example/ws', '--invite-code-stdin'])
+        self.assertEqual(joins[0]['exe'], str(self.root / '.lemon/bin/lemon'))
+        self.assertEqual(joins[0]['args'][2:], ['--name', 'bot-machine', '--controller',
+                         'wss://controller.example/ws', '--cwd', str(self.root), '--invite-code-stdin'])
         self.assertEqual(joins[0]['input'], CODE + '\n')
         self.assertFalse(joins[0]['envSecret'])
         self.assertNotIn(CODE, json.dumps([{key: value for key, value in row.items() if key != 'input'}
@@ -314,6 +322,71 @@ exec "$TEST_REAL_CURL" "$@"
         # The failed reinstall left the previously activated runtime in place.
         self.assertTrue(self.installed().is_file())
         self.assertEqual(os.readlink(self.root / '.lemon' / 'versions' / 'current'), VERSION)
+
+    def test_service_default_sends_code_only_on_stdin_and_reports_persistence(self):
+        status, output = self.launch(self.args[:-1])
+        self.assertEqual(status, 0)
+        self.assertIn(b'persistence: login', output)
+        calls = [row for row in self.calls() if row['args'][:2] == ['service', 'install']]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]['args'], ['service', 'install', 'worker', '--name', 'bot-machine',
+                         '--controller', 'wss://controller.example/ws', '--cwd', str(self.root), '--invite-code-stdin',
+                         '--wait', '60', '--json'])
+        self.assertEqual(calls[0]['input'], CODE + '\n')
+        self.assertFalse(calls[0]['envSecret'])
+        self.assertNotIn(CODE, json.dumps(calls[0]['args']))
+        self.assertEqual(self.joins(), [])
+
+    def test_service_requires_online_and_propagates_failure_without_retry(self):
+        for state, status in [('starting', '0'), ('blocked', '1'), ('online', '1')]:
+            self.env.update(TEST_STATE=state, TEST_JOIN_STATUS=status, TEST_DETAIL='timeout')
+            result, output = self.launch(self.args[:-1])
+            self.assertEqual(result, 3)
+            self.assertIn(b'timeout', output)
+        self.assertEqual(len([row for row in self.calls() if row['args'][:2] == ['service', 'install']]), 3)
+        self.assertEqual(self.joins(), [])
+
+    def test_invalid_arguments_are_rejected_before_enrollment(self):
+        for args in [self.args + ['--unknown'], self.args + ['--version'],
+                     ['--name', 'bad name', *self.args[2:]]]:
+            self.assertNotEqual(self.launch(args)[0], 0)
+        self.assertEqual(self.calls(), [])
+
+    def headless(self, *options, payload=(CODE + '\n').encode()):
+        return subprocess.run(['bash', str(SCRIPT), *self.args[:-1], *options],
+                              input=payload, capture_output=True, env=self.env,
+                              cwd=self.root, start_new_session=True)
+
+    def test_headless_stdin_json_and_exit_contract(self):
+        result = self.headless('--code-stdin', '--json')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['units'][0]['state'], 'online')
+        self.env.update(TEST_JOIN_STATUS='1', TEST_STATE='blocked', TEST_INSTALLED='false')
+        self.assertEqual(self.headless('--code-stdin').returncode, 2)
+        self.env['TEST_INSTALLED'] = 'true'
+        self.assertEqual(self.headless('--code-stdin').returncode, 3)
+        self.env['TEST_SERVICE_HELP'] = '2'
+        self.assertEqual(self.headless('--code-stdin').returncode, 1)
+
+    def test_headless_rejects_invalid_codes_and_options_before_probe(self):
+        for payload in [b'A' * 42 + b'\n', b'A' * 44 + b'\n', b'A' * 43,
+                        b'A' * 42 + b'!\n', b'A' * 43 + b'\0']:
+            self.assertEqual(self.headless('--code-stdin', payload=payload).returncode, 1)
+        for options in [('--code-fd', '2'), ('--code-fd', '10'),
+                        ('--code-stdin', '--code-fd', '3')]:
+            self.assertEqual(self.headless(*options).returncode, 1)
+        self.assertEqual(self.calls(), [])
+
+    def test_headless_file_descriptor(self):
+        with tempfile.TemporaryFile() as code:
+            code.write((CODE + '\n').encode())
+            code.seek(0)
+            fd = code.fileno()
+            self.assertIn(fd, range(3, 10))
+            result = subprocess.run(['bash', str(SCRIPT), *self.args[:-1], '--code-fd', str(fd)],
+                                    pass_fds=(fd,), capture_output=True, env=self.env,
+                                    cwd=self.root, start_new_session=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_uncertain_join_failure_is_not_retried(self):
         self.env['TEST_JOIN_STATUS'] = '1'

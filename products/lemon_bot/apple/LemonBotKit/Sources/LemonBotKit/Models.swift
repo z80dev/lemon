@@ -1134,19 +1134,74 @@ public struct AcceptInviteRequest: Codable, Hashable {
     }
 }
 
-public struct ReauthRequest: Codable, Hashable {
-    public var `password`: String
-    public init(password: String) {
-        self.`password` = password
+public struct LocalTicketRedeem: Codable, Hashable {
+    public var ticket: String
+    public init(ticket: String) { self.ticket = ticket }
+}
+
+public struct PasswordCreate: Codable, Hashable {
+    public var clientNonce: String
+    public var email: String
+    public var password: String
+    public init(clientNonce: String, email: String, password: String) {
+        self.clientNonce = clientNonce; self.email = email; self.password = password
     }
-    enum CodingKeys: String, CodingKey { case `password` }
+}
+
+public struct SignInMethods: Codable, Hashable {
+    public struct LocalOwner: Codable, Hashable {
+        public enum Platform: String, Codable, Hashable { case macos, linux, other }
+        public var platform: Platform
+        public var hostName: String
+        public var osUser: String
+        public init(platform: Platform, hostName: String, osUser: String) {
+            self.platform = platform; self.hostName = hostName; self.osUser = osUser
+        }
+    }
+    public var password: Bool
+    public var email: String
+    public var emailIsPlaceholder: Bool
+    public var localOwner: LocalOwner?
+    public var localConfirmedUntilMs: TimestampMs?
+    public init(password: Bool, email: String, emailIsPlaceholder: Bool, localOwner: LocalOwner?, localConfirmedUntilMs: TimestampMs?) {
+        self.password = password; self.email = email; self.emailIsPlaceholder = emailIsPlaceholder
+        self.localOwner = localOwner; self.localConfirmedUntilMs = localConfirmedUntilMs
+    }
+    enum CodingKeys: String, CodingKey { case password, email, emailIsPlaceholder, localOwner, localConfirmedUntilMs }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`password` = try c.decode(String.self, forKey: .`password`)
+        password = try c.decode(Bool.self, forKey: .password)
+        email = try c.decode(String.self, forKey: .email)
+        emailIsPlaceholder = try c.decode(Bool.self, forKey: .emailIsPlaceholder)
+        localOwner = try c.decode(LocalOwner?.self, forKey: .localOwner)
+        localConfirmedUntilMs = try c.decode(TimestampMs?.self, forKey: .localConfirmedUntilMs)
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`password`, forKey: .`password`)
+        try c.encode(password, forKey: .password)
+        try c.encode(email, forKey: .email)
+        try c.encode(emailIsPlaceholder, forKey: .emailIsPlaceholder)
+        try c.encode(localOwner, forKey: .localOwner)
+        try c.encode(localConfirmedUntilMs, forKey: .localConfirmedUntilMs)
+    }
+}
+
+public struct ReauthRequest: Codable, Hashable {
+    public var password: String?
+    public var local: Bool?
+    public init(password: String) { self.password = password; self.local = nil }
+    private init(local: Bool) { self.password = nil; self.local = local }
+    public static let local = ReauthRequest(local: true)
+    enum CodingKeys: String, CodingKey { case password, local }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.password = try c.decodeOptional(String.self, forKey: .password)
+        self.local = try c.decodeOptional(Bool.self, forKey: .local)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(password, forKey: .password)
+        try c.encodeIfPresent(local, forKey: .local)
     }
 }
 
@@ -1821,7 +1876,9 @@ public struct Machine: Codable, Hashable, Identifiable {
     public var `lastSeenAtMs`: TimestampMs?
     public var `labels`: [String: String]
     public var `botIds`: [ID]
-    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, nodeId: ID? = nil, nodeName: String, name: String, ownerUserId: ID, accessUserIds: [ID], status: String, lastSeenAtMs: TimestampMs? = nil, labels: [String: String], botIds: [ID]) {
+    public var `credential`: String?
+    public var link: MachineLink = .direct
+    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, nodeId: ID? = nil, nodeName: String, name: String, ownerUserId: ID, accessUserIds: [ID], status: String, lastSeenAtMs: TimestampMs? = nil, labels: [String: String], botIds: [ID], credential: String? = nil) {
         self.`id` = id
         self.`revision` = revision
         self.`createdAtMs` = createdAtMs
@@ -1835,10 +1892,13 @@ public struct Machine: Codable, Hashable, Identifiable {
         self.`lastSeenAtMs` = lastSeenAtMs
         self.`labels` = labels
         self.`botIds` = botIds
+        self.`credential` = credential
     }
-    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `nodeId`, `nodeName`, `name`, `ownerUserId`, `accessUserIds`, `status`, `lastSeenAtMs`, `labels`, `botIds` }
+    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `nodeId`, `nodeName`, `name`, `ownerUserId`, `accessUserIds`, `status`, `lastSeenAtMs`, `labels`, `botIds`, `credential` }
+    enum LinkCodingKeys: String, CodingKey { case link }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        link = try decoder.container(keyedBy: LinkCodingKeys.self).decodeIfPresent(MachineLink.self, forKey: .link) ?? .direct
         self.`id` = try c.decode(ID.self, forKey: .`id`)
         self.`revision` = try c.decode(Int.self, forKey: .`revision`)
         self.`createdAtMs` = try c.decode(TimestampMs.self, forKey: .`createdAtMs`)
@@ -1853,9 +1913,17 @@ public struct Machine: Codable, Hashable, Identifiable {
         self.`lastSeenAtMs` = try c.decode(TimestampMs?.self, forKey: .`lastSeenAtMs`)
         self.`labels` = try c.decode([String: String].self, forKey: .`labels`)
         self.`botIds` = try c.decode([ID].self, forKey: .`botIds`)
+        self.`credential` = try c.decodeOptional(String.self, forKey: .`credential`)
+        if let credential = self.`credential` {
+            guard ["active", "expired", "revoked", "unknown"].contains(credential) else {
+                throw DecodingError.dataCorruptedError(forKey: .`credential`, in: c, debugDescription: "Invalid Machine.credential")
+            }
+        }
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        var linkContainer = encoder.container(keyedBy: LinkCodingKeys.self)
+        try linkContainer.encode(link, forKey: .link)
         try c.encode(`id`, forKey: .`id`)
         try c.encode(`revision`, forKey: .`revision`)
         try c.encode(`createdAtMs`, forKey: .`createdAtMs`)
@@ -1869,6 +1937,7 @@ public struct Machine: Codable, Hashable, Identifiable {
         try c.encode(`lastSeenAtMs`, forKey: .`lastSeenAtMs`)
         try c.encode(`labels`, forKey: .`labels`)
         try c.encode(`botIds`, forKey: .`botIds`)
+        try c.encodeIfPresent(`credential`, forKey: .`credential`)
     }
 }
 
@@ -2000,13 +2069,15 @@ public struct MachineInvite: Codable, Hashable, Identifiable {
 
 public struct MachineEnrollmentPreview: Codable, Hashable {
     public var reachability: String
+    public var ssh: MachineSSHAvailability?
     public init(reachability: String) {
         self.reachability = reachability
     }
-    enum CodingKeys: String, CodingKey { case reachability }
+    enum CodingKeys: String, CodingKey { case reachability, ssh }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         reachability = try c.decode(String.self, forKey: .reachability)
+        ssh = try c.decodeIfPresent(MachineSSHAvailability.self, forKey: .ssh)
         guard ["loopback_only", "routable"].contains(reachability) else {
             throw DecodingError.dataCorruptedError(forKey: .reachability, in: c, debugDescription: "Invalid MachineEnrollmentPreview.reachability")
         }
@@ -2696,6 +2767,7 @@ public struct Bot: Codable, Hashable, Identifiable {
     public var `machineId`: ID
     public var `profileId`: String
     public var `name`: String
+    public var approvalReview: String? = nil
     public var agentHandle: String? = nil
     public var agentAddress: String? = nil
     public var `title`: String
@@ -2732,7 +2804,7 @@ public struct Bot: Codable, Hashable, Identifiable {
         self.`activity` = activity
         self.`activeRunIds` = activeRunIds
     }
-    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `ownerUserId`, `machineId`, `profileId`, `name`, agentHandle, agentAddress, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `skillIds`, `referenceAttachmentIds`, `mainConversationId`, `sidebar`, `activity`, `activeRunIds` }
+    enum CodingKeys: String, CodingKey { case approvalReview, `id`, `revision`, `createdAtMs`, `updatedAtMs`, `ownerUserId`, `machineId`, `profileId`, `name`, agentHandle, agentAddress, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `skillIds`, `referenceAttachmentIds`, `mainConversationId`, `sidebar`, `activity`, `activeRunIds` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`id` = try c.decode(ID.self, forKey: .`id`)
@@ -2743,6 +2815,7 @@ public struct Bot: Codable, Hashable, Identifiable {
         self.`machineId` = try c.decode(ID.self, forKey: .`machineId`)
         self.`profileId` = try c.decode(String.self, forKey: .`profileId`)
         self.`name` = try c.decode(String.self, forKey: .`name`)
+        approvalReview = try c.decodeIfPresent(String.self, forKey: .approvalReview)
         self.agentHandle = try c.decodeIfPresent(String.self, forKey: .agentHandle)
         self.agentAddress = try c.decodeIfPresent(String.self, forKey: .agentAddress)
         self.`title` = try c.decode(String.self, forKey: .`title`)
@@ -2768,6 +2841,7 @@ public struct Bot: Codable, Hashable, Identifiable {
         try c.encode(`machineId`, forKey: .`machineId`)
         try c.encode(`profileId`, forKey: .`profileId`)
         try c.encode(`name`, forKey: .`name`)
+        try c.encodeIfPresent(approvalReview, forKey: .approvalReview)
         try c.encodeIfPresent(agentHandle, forKey: .agentHandle)
         try c.encodeIfPresent(agentAddress, forKey: .agentAddress)
         try c.encode(`title`, forKey: .`title`)
@@ -2797,7 +2871,8 @@ public struct BotCreate: Codable, Hashable {
     public var `language`: String??
     public var `skillIds`: [ID]?
     public var `templateId`: ID?
-    public init(clientNonce: String, name: String, machineId: ID, title: String? = nil, job: String? = nil, instructions: String? = nil, avatar: Avatar? = nil, voice: VoiceSettings? = nil, language: String?? = nil, skillIds: [ID]? = nil, templateId: ID? = nil) {
+    public var `access`: String?
+    public init(clientNonce: String, name: String, machineId: ID, title: String? = nil, job: String? = nil, instructions: String? = nil, avatar: Avatar? = nil, voice: VoiceSettings? = nil, language: String?? = nil, skillIds: [ID]? = nil, templateId: ID? = nil, access: String? = nil) {
         self.`clientNonce` = clientNonce
         self.`name` = name
         self.`machineId` = machineId
@@ -2809,8 +2884,9 @@ public struct BotCreate: Codable, Hashable {
         self.`language` = language
         self.`skillIds` = skillIds
         self.`templateId` = templateId
+        self.`access` = access
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `machineId`, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `skillIds`, `templateId` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `machineId`, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `skillIds`, `templateId`, `access` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
@@ -2824,6 +2900,8 @@ public struct BotCreate: Codable, Hashable {
         self.`language` = c.contains(.`language`) ? .some(try c.decodeIfPresent(String.self, forKey: .`language`)) : nil
         self.`skillIds` = try c.decodeOptional([ID].self, forKey: .`skillIds`)
         self.`templateId` = try c.decodeOptional(ID.self, forKey: .`templateId`)
+        self.`access` = try c.decodeOptional(String.self, forKey: .`access`)
+        if let access, !["standard", "none"].contains(access) { throw DecodingError.dataCorruptedError(forKey: .`access`, in: c, debugDescription: "Invalid BotCreate.access") }
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -2838,6 +2916,7 @@ public struct BotCreate: Codable, Hashable {
         if let value = `language` { try c.encode(value, forKey: .`language`) }
         try c.encodeIfPresent(`skillIds`, forKey: .`skillIds`)
         try c.encodeIfPresent(`templateId`, forKey: .`templateId`)
+        try c.encodeIfPresent(`access`, forKey: .`access`)
     }
 }
 
@@ -2903,14 +2982,16 @@ public struct BotDuplicate: Codable, Hashable {
     public var `machineId`: ID
     public var `includeSkills`: Bool
     public var `includeRoutines`: Bool
-    public init(clientNonce: String, name: String, machineId: ID, includeSkills: Bool, includeRoutines: Bool) {
+    public var `access`: String?
+    public init(clientNonce: String, name: String, machineId: ID, includeSkills: Bool, includeRoutines: Bool, access: String? = nil) {
         self.`clientNonce` = clientNonce
         self.`name` = name
         self.`machineId` = machineId
         self.`includeSkills` = includeSkills
         self.`includeRoutines` = includeRoutines
+        self.`access` = access
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `machineId`, `includeSkills`, `includeRoutines` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `machineId`, `includeSkills`, `includeRoutines`, `access` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
@@ -2918,6 +2999,8 @@ public struct BotDuplicate: Codable, Hashable {
         self.`machineId` = try c.decode(ID.self, forKey: .`machineId`)
         self.`includeSkills` = try c.decode(Bool.self, forKey: .`includeSkills`)
         self.`includeRoutines` = try c.decode(Bool.self, forKey: .`includeRoutines`)
+        self.`access` = try c.decodeOptional(String.self, forKey: .`access`)
+        if let access, !["standard", "none"].contains(access) { throw DecodingError.dataCorruptedError(forKey: .`access`, in: c, debugDescription: "Invalid BotDuplicate.access") }
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -2926,6 +3009,7 @@ public struct BotDuplicate: Codable, Hashable {
         try c.encode(`machineId`, forKey: .`machineId`)
         try c.encode(`includeSkills`, forKey: .`includeSkills`)
         try c.encode(`includeRoutines`, forKey: .`includeRoutines`)
+        try c.encodeIfPresent(`access`, forKey: .`access`)
     }
 }
 
@@ -3136,7 +3220,8 @@ public struct TemplateContent: Codable, Hashable {
     public var `skills`: [TemplateContentSkills]
     public var `routines`: [RoutineSpec]
     public var `connectorNames`: [String]
-    public init(name: String, title: String, job: String, instructions: String, avatar: Avatar, voice: VoiceSettings, skills: [TemplateContentSkills], routines: [RoutineSpec], connectorNames: [String]) {
+    public var `suggestedAccess`: String?
+    public init(name: String, title: String, job: String, instructions: String, avatar: Avatar, voice: VoiceSettings, skills: [TemplateContentSkills], routines: [RoutineSpec], connectorNames: [String], suggestedAccess: String? = nil) {
         self.`name` = name
         self.`title` = title
         self.`job` = job
@@ -3146,8 +3231,9 @@ public struct TemplateContent: Codable, Hashable {
         self.`skills` = skills
         self.`routines` = routines
         self.`connectorNames` = connectorNames
+        self.`suggestedAccess` = suggestedAccess
     }
-    enum CodingKeys: String, CodingKey { case `name`, `title`, `job`, `instructions`, `avatar`, `voice`, `skills`, `routines`, `connectorNames` }
+    enum CodingKeys: String, CodingKey { case `name`, `title`, `job`, `instructions`, `avatar`, `voice`, `skills`, `routines`, `connectorNames`, `suggestedAccess` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`name` = try c.decode(String.self, forKey: .`name`)
@@ -3159,6 +3245,8 @@ public struct TemplateContent: Codable, Hashable {
         self.`skills` = try c.decode([TemplateContentSkills].self, forKey: .`skills`)
         self.`routines` = try c.decode([RoutineSpec].self, forKey: .`routines`)
         self.`connectorNames` = try c.decode([String].self, forKey: .`connectorNames`)
+        self.`suggestedAccess` = try c.decodeOptional(String.self, forKey: .`suggestedAccess`)
+        if let suggestedAccess, !["standard", "none"].contains(suggestedAccess) { throw DecodingError.dataCorruptedError(forKey: .`suggestedAccess`, in: c, debugDescription: "Invalid TemplateContent.suggestedAccess") }
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -3171,6 +3259,7 @@ public struct TemplateContent: Codable, Hashable {
         try c.encode(`skills`, forKey: .`skills`)
         try c.encode(`routines`, forKey: .`routines`)
         try c.encode(`connectorNames`, forKey: .`connectorNames`)
+        try c.encodeIfPresent(`suggestedAccess`, forKey: .`suggestedAccess`)
     }
 }
 
@@ -3294,19 +3383,23 @@ public struct TemplateImport: Codable, Hashable {
     public var `name`: String
     public var `machineId`: ID
     public var `acceptedTerms`: Bool
-    public init(clientNonce: String, name: String, machineId: ID, acceptedTerms: Bool) {
+    public var `access`: String?
+    public init(clientNonce: String, name: String, machineId: ID, acceptedTerms: Bool, access: String? = nil) {
         self.`clientNonce` = clientNonce
         self.`name` = name
         self.`machineId` = machineId
         self.`acceptedTerms` = acceptedTerms
+        self.`access` = access
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `machineId`, `acceptedTerms` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `machineId`, `acceptedTerms`, `access` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
         self.`name` = try c.decode(String.self, forKey: .`name`)
         self.`machineId` = try c.decode(ID.self, forKey: .`machineId`)
         self.`acceptedTerms` = try c.decode(Bool.self, forKey: .`acceptedTerms`)
+        self.`access` = try c.decodeOptional(String.self, forKey: .`access`)
+        if let access, !["standard", "none"].contains(access) { throw DecodingError.dataCorruptedError(forKey: .`access`, in: c, debugDescription: "Invalid TemplateImport.access") }
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -3314,6 +3407,7 @@ public struct TemplateImport: Codable, Hashable {
         try c.encode(`name`, forKey: .`name`)
         try c.encode(`machineId`, forKey: .`machineId`)
         try c.encode(`acceptedTerms`, forKey: .`acceptedTerms`)
+        try c.encodeIfPresent(`access`, forKey: .`access`)
     }
 }
 
@@ -3847,6 +3941,46 @@ public struct Gate: Codable, Hashable, Identifiable {
     }
 }
 
+public struct ApprovalChatOption: Codable, Hashable {
+    public var toolGroup: String
+    public var label: String
+}
+
+public struct RememberedApprovalPolicy: Codable, Hashable {
+    public var chat: [String]
+    public var bot: [String]
+}
+
+public struct ApprovalReviewUpdate: Codable, Hashable {
+    public var clientNonce: String
+    public var revision: Int
+    public var mode: String
+    public init(clientNonce: String, revision: Int, mode: String) {
+        self.clientNonce = clientNonce; self.revision = revision; self.mode = mode
+    }
+}
+
+public struct ApprovalAllowance: Codable, Hashable, Identifiable {
+    public var id: ID
+    public var revision: Int
+    public var createdAtMs: TimestampMs
+    public var updatedAtMs: TimestampMs
+    public var scope: String
+    public var botId: ID
+    public var conversationId: ID?
+    public var ownerUserId: ID
+    public var toolGroups: [String]
+    public var label: String
+    public var state: String
+    public var endedReason: String?
+    public var endedAtMs: TimestampMs?
+    public var endedByUserId: ID?
+    public var sourceApprovalId: ID?
+    public var createdByUserId: ID
+    public var useCount: Int
+    public var lastUsedAtMs: TimestampMs?
+}
+
 public struct Approval: Codable, Hashable, Identifiable {
     public var `id`: ID
     public var `revision`: Int
@@ -3867,6 +4001,8 @@ public struct Approval: Codable, Hashable, Identifiable {
     public var `review`: String
     public var `ruleId`: ID?
     public var `scope`: ReviewScope
+    public var chatOption: ApprovalChatOption? = nil
+    public var resolvedScope: String? = nil
     public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, gate: Gate, entryId: ID, conversationId: ID, botId: ID, runId: ID? = nil, source: String, category: ActionCategory, title: String, description: String, target: String, inputs: JSONObject, policyMode: String, review: String, ruleId: ID? = nil, scope: ReviewScope) {
         self.`id` = id
         self.`revision` = revision
@@ -3888,7 +4024,7 @@ public struct Approval: Codable, Hashable, Identifiable {
         self.`ruleId` = ruleId
         self.`scope` = scope
     }
-    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `gate`, `entryId`, `conversationId`, `botId`, `runId`, `source`, `category`, `title`, `description`, `target`, `inputs`, `policyMode`, `review`, `ruleId`, `scope` }
+    enum CodingKeys: String, CodingKey { case chatOption, resolvedScope, `id`, `revision`, `createdAtMs`, `updatedAtMs`, `gate`, `entryId`, `conversationId`, `botId`, `runId`, `source`, `category`, `title`, `description`, `target`, `inputs`, `policyMode`, `review`, `ruleId`, `scope` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`id` = try c.decode(ID.self, forKey: .`id`)
@@ -3901,7 +4037,7 @@ public struct Approval: Codable, Hashable, Identifiable {
         self.`botId` = try c.decode(ID.self, forKey: .`botId`)
         self.`runId` = try c.decode(ID?.self, forKey: .`runId`)
         self.`source` = try c.decode(String.self, forKey: .`source`)
-        guard ["lemon_exec", "product"].contains(`source`) else { throw DecodingError.dataCorruptedError(forKey: .`source`, in: c, debugDescription: "Invalid Approval.source") }
+        guard ["lemon_exec", "product", "access_request"].contains(`source`) else { throw DecodingError.dataCorruptedError(forKey: .`source`, in: c, debugDescription: "Invalid Approval.source") }
         self.`category` = try c.decode(ActionCategory.self, forKey: .`category`)
         self.`title` = try c.decode(String.self, forKey: .`title`)
         self.`description` = try c.decode(String.self, forKey: .`description`)
@@ -3913,6 +4049,8 @@ public struct Approval: Codable, Hashable, Identifiable {
         guard ["not_run", "allow", "ask", "deny"].contains(`review`) else { throw DecodingError.dataCorruptedError(forKey: .`review`, in: c, debugDescription: "Invalid Approval.review") }
         self.`ruleId` = try c.decode(ID?.self, forKey: .`ruleId`)
         self.`scope` = try c.decode(ReviewScope.self, forKey: .`scope`)
+        chatOption = try c.decodeIfPresent(ApprovalChatOption.self, forKey: .chatOption)
+        resolvedScope = try c.decodeIfPresent(String.self, forKey: .resolvedScope)
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -3935,6 +4073,8 @@ public struct Approval: Codable, Hashable, Identifiable {
         try c.encode(`review`, forKey: .`review`)
         try c.encode(`ruleId`, forKey: .`ruleId`)
         try c.encode(`scope`, forKey: .`scope`)
+        try c.encodeIfPresent(chatOption, forKey: .chatOption)
+        try c.encodeIfPresent(resolvedScope, forKey: .resolvedScope)
     }
 }
 
@@ -3953,7 +4093,7 @@ public struct ApprovalResolve: Codable, Hashable {
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
         self.`revision` = try c.decode(Int.self, forKey: .`revision`)
         self.`decision` = try c.decode(String.self, forKey: .`decision`)
-        guard ["approve_once", "deny"].contains(`decision`) else { throw DecodingError.dataCorruptedError(forKey: .`decision`, in: c, debugDescription: "Invalid ApprovalResolve.decision") }
+        guard ["approve_once", "approve_chat", "deny"].contains(`decision`) else { throw DecodingError.dataCorruptedError(forKey: .`decision`, in: c, debugDescription: "Invalid ApprovalResolve.decision") }
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -6601,14 +6741,16 @@ public struct MachineCapabilities: Codable, Hashable {
     public var `measuredAtMs`: TimestampMs
     public var `stale`: Bool
     public var `items`: [MachineCapability]
-    public init(machineId: ID, os: String, measuredAtMs: TimestampMs, stale: Bool, items: [MachineCapability]) {
+    public var botFolder: Bool?
+    public init(machineId: ID, os: String, measuredAtMs: TimestampMs, stale: Bool, items: [MachineCapability], botFolder: Bool? = nil) {
         self.`machineId` = machineId
         self.`os` = os
         self.`measuredAtMs` = measuredAtMs
         self.`stale` = stale
         self.`items` = items
+        self.botFolder = botFolder
     }
-    enum CodingKeys: String, CodingKey { case `machineId`, `os`, `measuredAtMs`, `stale`, `items` }
+    enum CodingKeys: String, CodingKey { case `machineId`, `os`, `measuredAtMs`, `stale`, `items`, botFolder }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`machineId` = try c.decode(ID.self, forKey: .`machineId`)
@@ -6616,6 +6758,7 @@ public struct MachineCapabilities: Codable, Hashable {
         self.`measuredAtMs` = try c.decode(TimestampMs.self, forKey: .`measuredAtMs`)
         self.`stale` = try c.decode(Bool.self, forKey: .`stale`)
         self.`items` = try c.decode([MachineCapability].self, forKey: .`items`)
+        botFolder = try c.decodeOptional(Bool.self, forKey: .botFolder)
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -6624,6 +6767,7 @@ public struct MachineCapabilities: Codable, Hashable {
         try c.encode(`measuredAtMs`, forKey: .`measuredAtMs`)
         try c.encode(`stale`, forKey: .`stale`)
         try c.encode(`items`, forKey: .`items`)
+        try c.encodeIfPresent(botFolder, forKey: .botFolder)
     }
 }
 
@@ -6637,8 +6781,9 @@ public struct BotGrant: Codable, Hashable, Identifiable {
     public var `capabilityId`: String
     public var `requestedLevel`: AccessLevel
     public var `effectiveLevel`: AccessLevel
+    public var `pendingLevel`: AccessLevel?
     public var `reasons`: [String]
-    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, botId: ID, machineId: ID, capabilityId: String, requestedLevel: AccessLevel, effectiveLevel: AccessLevel, reasons: [String]) {
+    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, botId: ID, machineId: ID, capabilityId: String, requestedLevel: AccessLevel, effectiveLevel: AccessLevel, pendingLevel: AccessLevel?, reasons: [String]) {
         self.`id` = id
         self.`revision` = revision
         self.`createdAtMs` = createdAtMs
@@ -6648,9 +6793,10 @@ public struct BotGrant: Codable, Hashable, Identifiable {
         self.`capabilityId` = capabilityId
         self.`requestedLevel` = requestedLevel
         self.`effectiveLevel` = effectiveLevel
+        self.`pendingLevel` = pendingLevel
         self.`reasons` = reasons
     }
-    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `botId`, `machineId`, `capabilityId`, `requestedLevel`, `effectiveLevel`, `reasons` }
+    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `botId`, `machineId`, `capabilityId`, `requestedLevel`, `effectiveLevel`, `pendingLevel`, `reasons` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`id` = try c.decode(ID.self, forKey: .`id`)
@@ -6662,6 +6808,7 @@ public struct BotGrant: Codable, Hashable, Identifiable {
         self.`capabilityId` = try c.decode(String.self, forKey: .`capabilityId`)
         self.`requestedLevel` = try c.decode(AccessLevel.self, forKey: .`requestedLevel`)
         self.`effectiveLevel` = try c.decode(AccessLevel.self, forKey: .`effectiveLevel`)
+        self.`pendingLevel` = try c.decode(AccessLevel?.self, forKey: .`pendingLevel`)
         self.`reasons` = try c.decode([String].self, forKey: .`reasons`)
     }
     public func encode(to encoder: Encoder) throws {
@@ -6675,6 +6822,7 @@ public struct BotGrant: Codable, Hashable, Identifiable {
         try c.encode(`capabilityId`, forKey: .`capabilityId`)
         try c.encode(`requestedLevel`, forKey: .`requestedLevel`)
         try c.encode(`effectiveLevel`, forKey: .`effectiveLevel`)
+        try c.encode(`pendingLevel`, forKey: .`pendingLevel`)
         try c.encode(`reasons`, forKey: .`reasons`)
     }
 }
@@ -9082,12 +9230,14 @@ public struct Governance: Codable, Hashable {
     public var `allowEgress`: Bool
     public var `lockNetworkForGroups`: Bool
     public var `requireReview`: Bool
+    public var `folderReadsNeedReview`: Bool
     public var `allowedChannelAdapters`: [String]
     public var `xMentionsEnabled`: Bool
     public var `emailEnabled`: Bool
     public var `contentExportEnabled`: Bool
     public var `inactiveHostPolicy`: GovernanceInactiveHostPolicy
-    public init(revision: Int, groupAccess: String, allowedDirectoryGroupIds: [ID], allowSudo: Bool, allowEgress: Bool, lockNetworkForGroups: Bool, requireReview: Bool, allowedChannelAdapters: [String], xMentionsEnabled: Bool, emailEnabled: Bool, contentExportEnabled: Bool, inactiveHostPolicy: GovernanceInactiveHostPolicy) {
+    public var rememberedApprovals: String? = nil
+    public init(revision: Int, groupAccess: String, allowedDirectoryGroupIds: [ID], allowSudo: Bool, allowEgress: Bool, lockNetworkForGroups: Bool, requireReview: Bool, folderReadsNeedReview: Bool, allowedChannelAdapters: [String], xMentionsEnabled: Bool, emailEnabled: Bool, contentExportEnabled: Bool, inactiveHostPolicy: GovernanceInactiveHostPolicy) {
         self.`revision` = revision
         self.`groupAccess` = groupAccess
         self.`allowedDirectoryGroupIds` = allowedDirectoryGroupIds
@@ -9095,13 +9245,14 @@ public struct Governance: Codable, Hashable {
         self.`allowEgress` = allowEgress
         self.`lockNetworkForGroups` = lockNetworkForGroups
         self.`requireReview` = requireReview
+        self.`folderReadsNeedReview` = folderReadsNeedReview
         self.`allowedChannelAdapters` = allowedChannelAdapters
         self.`xMentionsEnabled` = xMentionsEnabled
         self.`emailEnabled` = emailEnabled
         self.`contentExportEnabled` = contentExportEnabled
         self.`inactiveHostPolicy` = inactiveHostPolicy
     }
-    enum CodingKeys: String, CodingKey { case `revision`, `groupAccess`, `allowedDirectoryGroupIds`, `allowSudo`, `allowEgress`, `lockNetworkForGroups`, `requireReview`, `allowedChannelAdapters`, `xMentionsEnabled`, `emailEnabled`, `contentExportEnabled`, `inactiveHostPolicy` }
+    enum CodingKeys: String, CodingKey { case rememberedApprovals, `revision`, `groupAccess`, `allowedDirectoryGroupIds`, `allowSudo`, `allowEgress`, `lockNetworkForGroups`, `requireReview`, `folderReadsNeedReview`, `allowedChannelAdapters`, `xMentionsEnabled`, `emailEnabled`, `contentExportEnabled`, `inactiveHostPolicy` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`revision` = try c.decode(Int.self, forKey: .`revision`)
@@ -9112,11 +9263,13 @@ public struct Governance: Codable, Hashable {
         self.`allowEgress` = try c.decode(Bool.self, forKey: .`allowEgress`)
         self.`lockNetworkForGroups` = try c.decode(Bool.self, forKey: .`lockNetworkForGroups`)
         self.`requireReview` = try c.decode(Bool.self, forKey: .`requireReview`)
+        self.`folderReadsNeedReview` = try c.decode(Bool.self, forKey: .`folderReadsNeedReview`)
         self.`allowedChannelAdapters` = try c.decode([String].self, forKey: .`allowedChannelAdapters`)
         self.`xMentionsEnabled` = try c.decode(Bool.self, forKey: .`xMentionsEnabled`)
         self.`emailEnabled` = try c.decode(Bool.self, forKey: .`emailEnabled`)
         self.`contentExportEnabled` = try c.decode(Bool.self, forKey: .`contentExportEnabled`)
         self.`inactiveHostPolicy` = try c.decode(GovernanceInactiveHostPolicy.self, forKey: .`inactiveHostPolicy`)
+        rememberedApprovals = try c.decodeIfPresent(String.self, forKey: .rememberedApprovals)
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -9127,11 +9280,13 @@ public struct Governance: Codable, Hashable {
         try c.encode(`allowEgress`, forKey: .`allowEgress`)
         try c.encode(`lockNetworkForGroups`, forKey: .`lockNetworkForGroups`)
         try c.encode(`requireReview`, forKey: .`requireReview`)
+        try c.encode(`folderReadsNeedReview`, forKey: .`folderReadsNeedReview`)
         try c.encode(`allowedChannelAdapters`, forKey: .`allowedChannelAdapters`)
         try c.encode(`xMentionsEnabled`, forKey: .`xMentionsEnabled`)
         try c.encode(`emailEnabled`, forKey: .`emailEnabled`)
         try c.encode(`contentExportEnabled`, forKey: .`contentExportEnabled`)
         try c.encode(`inactiveHostPolicy`, forKey: .`inactiveHostPolicy`)
+        try c.encodeIfPresent(rememberedApprovals, forKey: .rememberedApprovals)
     }
 }
 
@@ -9144,12 +9299,14 @@ public struct GovernanceUpdate: Codable, Hashable {
     public var `allowEgress`: Bool?
     public var `lockNetworkForGroups`: Bool?
     public var `requireReview`: Bool?
+    public var `folderReadsNeedReview`: Bool?
     public var `allowedChannelAdapters`: [String]?
     public var `xMentionsEnabled`: Bool?
     public var `emailEnabled`: Bool?
     public var `contentExportEnabled`: Bool?
     public var `inactiveHostPolicy`: GovernanceUpdateInactiveHostPolicy?
-    public init(clientNonce: String, revision: Int, groupAccess: String? = nil, allowedDirectoryGroupIds: [ID]? = nil, allowSudo: Bool? = nil, allowEgress: Bool? = nil, lockNetworkForGroups: Bool? = nil, requireReview: Bool? = nil, allowedChannelAdapters: [String]? = nil, xMentionsEnabled: Bool? = nil, emailEnabled: Bool? = nil, contentExportEnabled: Bool? = nil, inactiveHostPolicy: GovernanceUpdateInactiveHostPolicy? = nil) {
+    public var rememberedApprovals: String? = nil
+    public init(clientNonce: String, revision: Int, groupAccess: String? = nil, allowedDirectoryGroupIds: [ID]? = nil, allowSudo: Bool? = nil, allowEgress: Bool? = nil, lockNetworkForGroups: Bool? = nil, requireReview: Bool? = nil, folderReadsNeedReview: Bool? = nil, allowedChannelAdapters: [String]? = nil, xMentionsEnabled: Bool? = nil, emailEnabled: Bool? = nil, contentExportEnabled: Bool? = nil, inactiveHostPolicy: GovernanceUpdateInactiveHostPolicy? = nil) {
         self.`clientNonce` = clientNonce
         self.`revision` = revision
         self.`groupAccess` = groupAccess
@@ -9158,13 +9315,14 @@ public struct GovernanceUpdate: Codable, Hashable {
         self.`allowEgress` = allowEgress
         self.`lockNetworkForGroups` = lockNetworkForGroups
         self.`requireReview` = requireReview
+        self.`folderReadsNeedReview` = folderReadsNeedReview
         self.`allowedChannelAdapters` = allowedChannelAdapters
         self.`xMentionsEnabled` = xMentionsEnabled
         self.`emailEnabled` = emailEnabled
         self.`contentExportEnabled` = contentExportEnabled
         self.`inactiveHostPolicy` = inactiveHostPolicy
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `revision`, `groupAccess`, `allowedDirectoryGroupIds`, `allowSudo`, `allowEgress`, `lockNetworkForGroups`, `requireReview`, `allowedChannelAdapters`, `xMentionsEnabled`, `emailEnabled`, `contentExportEnabled`, `inactiveHostPolicy` }
+    enum CodingKeys: String, CodingKey { case rememberedApprovals, `clientNonce`, `revision`, `groupAccess`, `allowedDirectoryGroupIds`, `allowSudo`, `allowEgress`, `lockNetworkForGroups`, `requireReview`, `folderReadsNeedReview`, `allowedChannelAdapters`, `xMentionsEnabled`, `emailEnabled`, `contentExportEnabled`, `inactiveHostPolicy` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
@@ -9175,11 +9333,13 @@ public struct GovernanceUpdate: Codable, Hashable {
         self.`allowEgress` = try c.decodeOptional(Bool.self, forKey: .`allowEgress`)
         self.`lockNetworkForGroups` = try c.decodeOptional(Bool.self, forKey: .`lockNetworkForGroups`)
         self.`requireReview` = try c.decodeOptional(Bool.self, forKey: .`requireReview`)
+        self.`folderReadsNeedReview` = try c.decodeOptional(Bool.self, forKey: .`folderReadsNeedReview`)
         self.`allowedChannelAdapters` = try c.decodeOptional([String].self, forKey: .`allowedChannelAdapters`)
         self.`xMentionsEnabled` = try c.decodeOptional(Bool.self, forKey: .`xMentionsEnabled`)
         self.`emailEnabled` = try c.decodeOptional(Bool.self, forKey: .`emailEnabled`)
         self.`contentExportEnabled` = try c.decodeOptional(Bool.self, forKey: .`contentExportEnabled`)
         self.`inactiveHostPolicy` = try c.decodeOptional(GovernanceUpdateInactiveHostPolicy.self, forKey: .`inactiveHostPolicy`)
+        rememberedApprovals = try c.decodeIfPresent(String.self, forKey: .rememberedApprovals)
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -9191,11 +9351,13 @@ public struct GovernanceUpdate: Codable, Hashable {
         try c.encodeIfPresent(`allowEgress`, forKey: .`allowEgress`)
         try c.encodeIfPresent(`lockNetworkForGroups`, forKey: .`lockNetworkForGroups`)
         try c.encodeIfPresent(`requireReview`, forKey: .`requireReview`)
+        try c.encodeIfPresent(`folderReadsNeedReview`, forKey: .`folderReadsNeedReview`)
         try c.encodeIfPresent(`allowedChannelAdapters`, forKey: .`allowedChannelAdapters`)
         try c.encodeIfPresent(`xMentionsEnabled`, forKey: .`xMentionsEnabled`)
         try c.encodeIfPresent(`emailEnabled`, forKey: .`emailEnabled`)
         try c.encodeIfPresent(`contentExportEnabled`, forKey: .`contentExportEnabled`)
         try c.encodeIfPresent(`inactiveHostPolicy`, forKey: .`inactiveHostPolicy`)
+        try c.encodeIfPresent(rememberedApprovals, forKey: .rememberedApprovals)
     }
 }
 
@@ -9382,24 +9544,27 @@ public struct EffectivePolicy: Codable, Hashable {
     public var `directoryGroupIds`: [ID]
     public var `productAccess`: Bool
     public var `localExecutionCeiling`: String
+    public var `workspaceReads`: String
     public var `allowSudo`: Bool
     public var `allowEgress`: Bool
     public var `rules`: [PolicyRule]
     public var `networkPolicies`: [NetworkPolicy]
     public var `explanations`: [String]
-    public init(userId: ID, botId: ID? = nil, directoryGroupIds: [ID], productAccess: Bool, localExecutionCeiling: String, allowSudo: Bool, allowEgress: Bool, rules: [PolicyRule], networkPolicies: [NetworkPolicy], explanations: [String]) {
+    public var rememberedApprovals: RememberedApprovalPolicy? = nil
+    public init(userId: ID, botId: ID? = nil, directoryGroupIds: [ID], productAccess: Bool, localExecutionCeiling: String, workspaceReads: String, allowSudo: Bool, allowEgress: Bool, rules: [PolicyRule], networkPolicies: [NetworkPolicy], explanations: [String]) {
         self.`userId` = userId
         self.`botId` = botId
         self.`directoryGroupIds` = directoryGroupIds
         self.`productAccess` = productAccess
         self.`localExecutionCeiling` = localExecutionCeiling
+        self.`workspaceReads` = workspaceReads
         self.`allowSudo` = allowSudo
         self.`allowEgress` = allowEgress
         self.`rules` = rules
         self.`networkPolicies` = networkPolicies
         self.`explanations` = explanations
     }
-    enum CodingKeys: String, CodingKey { case `userId`, `botId`, `directoryGroupIds`, `productAccess`, `localExecutionCeiling`, `allowSudo`, `allowEgress`, `rules`, `networkPolicies`, `explanations` }
+    enum CodingKeys: String, CodingKey { case rememberedApprovals, `userId`, `botId`, `directoryGroupIds`, `productAccess`, `localExecutionCeiling`, `workspaceReads`, `allowSudo`, `allowEgress`, `rules`, `networkPolicies`, `explanations` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`userId` = try c.decode(ID.self, forKey: .`userId`)
@@ -9407,11 +9572,14 @@ public struct EffectivePolicy: Codable, Hashable {
         self.`directoryGroupIds` = try c.decode([ID].self, forKey: .`directoryGroupIds`)
         self.`productAccess` = try c.decode(Bool.self, forKey: .`productAccess`)
         self.`localExecutionCeiling` = try c.decode(String.self, forKey: .`localExecutionCeiling`)
+        self.`workspaceReads` = try c.decode(String.self, forKey: .`workspaceReads`)
+        guard ["allow", "ask"].contains(`workspaceReads`) else { throw DecodingError.dataCorruptedError(forKey: .`workspaceReads`, in: c, debugDescription: "Invalid EffectivePolicy.workspaceReads") }
         self.`allowSudo` = try c.decode(Bool.self, forKey: .`allowSudo`)
         self.`allowEgress` = try c.decode(Bool.self, forKey: .`allowEgress`)
         self.`rules` = try c.decode([PolicyRule].self, forKey: .`rules`)
         self.`networkPolicies` = try c.decode([NetworkPolicy].self, forKey: .`networkPolicies`)
         self.`explanations` = try c.decode([String].self, forKey: .`explanations`)
+        rememberedApprovals = try c.decodeIfPresent(RememberedApprovalPolicy.self, forKey: .rememberedApprovals)
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -9420,11 +9588,13 @@ public struct EffectivePolicy: Codable, Hashable {
         try c.encode(`directoryGroupIds`, forKey: .`directoryGroupIds`)
         try c.encode(`productAccess`, forKey: .`productAccess`)
         try c.encode(`localExecutionCeiling`, forKey: .`localExecutionCeiling`)
+        try c.encode(`workspaceReads`, forKey: .`workspaceReads`)
         try c.encode(`allowSudo`, forKey: .`allowSudo`)
         try c.encode(`allowEgress`, forKey: .`allowEgress`)
         try c.encode(`rules`, forKey: .`rules`)
         try c.encode(`networkPolicies`, forKey: .`networkPolicies`)
         try c.encode(`explanations`, forKey: .`explanations`)
+        try c.encodeIfPresent(rememberedApprovals, forKey: .rememberedApprovals)
     }
 }
 
@@ -12824,6 +12994,27 @@ public struct CardHandoff: Codable, Hashable {
     }
 }
 
+public struct CardAccessRequest: Codable, Hashable {
+    public var type: String
+    public var approval: Approval
+    public init(approval: Approval) {
+        self.type = "access_request"
+        self.approval = approval
+    }
+    enum CodingKeys: String, CodingKey { case type, approval }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decode(String.self, forKey: .type)
+        guard type == "access_request" else { throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "Invalid CardAccessRequest.type") }
+        approval = try c.decode(Approval.self, forKey: .approval)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(type, forKey: .type)
+        try c.encode(approval, forKey: .approval)
+    }
+}
+
 public enum Card: Codable, Hashable {
     case unsupported(UnsupportedCard)
     case `text`(CardText)
@@ -12838,6 +13029,7 @@ public enum Card: Codable, Hashable {
     case `messageDraft`(CardMessageDraft)
     case `calendarEvent`(CardCalendarEvent)
     case `permissionRequest`(CardPermissionRequest)
+    case accessRequest(CardAccessRequest)
     case `autoReviewApproval`(CardAutoReviewApproval)
     case `localToolPermission`(CardLocalToolPermission)
     case `publishApproval`(CardPublishApproval)
@@ -12866,6 +13058,7 @@ public enum Card: Codable, Hashable {
         case "message_draft": self = .`messageDraft`(try CardMessageDraft(from: decoder))
         case "calendar_event": self = .`calendarEvent`(try CardCalendarEvent(from: decoder))
         case "permission_request": self = .`permissionRequest`(try CardPermissionRequest(from: decoder))
+        case "access_request": self = .accessRequest(try CardAccessRequest(from: decoder))
         case "auto_review_approval": self = .`autoReviewApproval`(try CardAutoReviewApproval(from: decoder))
         case "local_tool_permission": self = .`localToolPermission`(try CardLocalToolPermission(from: decoder))
         case "publish_approval": self = .`publishApproval`(try CardPublishApproval(from: decoder))
@@ -12895,6 +13088,7 @@ public enum Card: Codable, Hashable {
         case .`messageDraft`(let v): try v.encode(to: encoder)
         case .`calendarEvent`(let v): try v.encode(to: encoder)
         case .`permissionRequest`(let v): try v.encode(to: encoder)
+        case .accessRequest(let v): try v.encode(to: encoder)
         case .`autoReviewApproval`(let v): try v.encode(to: encoder)
         case .`localToolPermission`(let v): try v.encode(to: encoder)
         case .`publishApproval`(let v): try v.encode(to: encoder)
@@ -12923,6 +13117,7 @@ public enum Card: Codable, Hashable {
         case .`messageDraft`: return "message_draft"
         case .`calendarEvent`: return "calendar_event"
         case .`permissionRequest`: return "permission_request"
+        case .accessRequest: return "access_request"
         case .`autoReviewApproval`: return "auto_review_approval"
         case .`localToolPermission`: return "local_tool_permission"
         case .`publishApproval`: return "publish_approval"
@@ -15353,6 +15548,7 @@ public enum RealtimePayload: Codable, Hashable {
     case deviceUpserted(Device)
     case deviceDeleted(Deleted)
     case machineUpserted(Machine)
+    case machineSetupUpserted(MachineSetup)
     case machineDeleted(Deleted)
     case machineInviteUpserted(MachineInvite)
     case botUpserted(Bot)
@@ -15372,6 +15568,7 @@ public enum RealtimePayload: Codable, Hashable {
     case attachmentUpserted(Attachment)
     case attachmentDeleted(Deleted)
     case approvalUpserted(Approval)
+    case approvalAllowanceUpserted(ApprovalAllowance)
     case questionUpserted(Question)
     case humanStepUpserted(HumanStep)
     case secretRequestUpserted(SecretRequest)
@@ -15426,6 +15623,7 @@ public enum RealtimePayload: Codable, Hashable {
     case .deviceUpserted(let value): try value.encode(to: encoder)
     case .deviceDeleted(let value): try value.encode(to: encoder)
     case .machineUpserted(let value): try value.encode(to: encoder)
+    case .machineSetupUpserted(let value): try value.encode(to: encoder)
     case .machineDeleted(let value): try value.encode(to: encoder)
     case .machineInviteUpserted(let value): try value.encode(to: encoder)
     case .botUpserted(let value): try value.encode(to: encoder)
@@ -15445,6 +15643,7 @@ public enum RealtimePayload: Codable, Hashable {
     case .attachmentUpserted(let value): try value.encode(to: encoder)
     case .attachmentDeleted(let value): try value.encode(to: encoder)
     case .approvalUpserted(let value): try value.encode(to: encoder)
+    case .approvalAllowanceUpserted(let value): try value.encode(to: encoder)
     case .questionUpserted(let value): try value.encode(to: encoder)
     case .humanStepUpserted(let value): try value.encode(to: encoder)
     case .secretRequestUpserted(let value): try value.encode(to: encoder)
@@ -15506,6 +15705,7 @@ public struct RealtimeEvent: Codable, Hashable {
     case .deviceUpserted: return "device.upserted"
     case .deviceDeleted: return "device.deleted"
     case .machineUpserted: return "machine.upserted"
+    case .machineSetupUpserted: return "machine_setup.upserted"
     case .machineDeleted: return "machine.deleted"
     case .machineInviteUpserted: return "machine_invite.upserted"
     case .botUpserted: return "bot.upserted"
@@ -15525,6 +15725,7 @@ public struct RealtimeEvent: Codable, Hashable {
     case .attachmentUpserted: return "attachment.upserted"
     case .attachmentDeleted: return "attachment.deleted"
     case .approvalUpserted: return "approval.upserted"
+    case .approvalAllowanceUpserted: return "approval_allowance.upserted"
     case .questionUpserted: return "question.upserted"
     case .humanStepUpserted: return "human_step.upserted"
     case .secretRequestUpserted: return "secret_request.upserted"
@@ -15587,6 +15788,7 @@ public struct RealtimeEvent: Codable, Hashable {
         case "device.upserted": payload = .deviceUpserted(try c.decode(Device.self, forKey: .payload))
         case "device.deleted": payload = .deviceDeleted(try c.decode(Deleted.self, forKey: .payload))
         case "machine.upserted": payload = .machineUpserted(try c.decode(Machine.self, forKey: .payload))
+        case "machine_setup.upserted": payload = .machineSetupUpserted(try c.decode(MachineSetup.self, forKey: .payload))
         case "machine.deleted": payload = .machineDeleted(try c.decode(Deleted.self, forKey: .payload))
         case "machine_invite.upserted": payload = .machineInviteUpserted(try c.decode(MachineInvite.self, forKey: .payload))
         case "bot.upserted": payload = .botUpserted(try c.decode(Bot.self, forKey: .payload))
@@ -15606,6 +15808,7 @@ public struct RealtimeEvent: Codable, Hashable {
         case "attachment.upserted": payload = .attachmentUpserted(try c.decode(Attachment.self, forKey: .payload))
         case "attachment.deleted": payload = .attachmentDeleted(try c.decode(Deleted.self, forKey: .payload))
         case "approval.upserted": payload = .approvalUpserted(try c.decode(Approval.self, forKey: .payload))
+        case "approval_allowance.upserted": payload = .approvalAllowanceUpserted(try c.decode(ApprovalAllowance.self, forKey: .payload))
         case "question.upserted": payload = .questionUpserted(try c.decode(Question.self, forKey: .payload))
         case "human_step.upserted": payload = .humanStepUpserted(try c.decode(HumanStep.self, forKey: .payload))
         case "secret_request.upserted": payload = .secretRequestUpserted(try c.decode(SecretRequest.self, forKey: .payload))

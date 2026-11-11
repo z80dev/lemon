@@ -13,7 +13,7 @@ defmodule CodingAgent.ExecutionNode.Socket do
 
   require Logger
 
-  alias CodingAgent.ExecutionNode.Codec
+  alias CodingAgent.ExecutionNode.{Codec, ConnectFailure}
 
   defstruct [
     :owner,
@@ -24,7 +24,10 @@ defmodule CodingAgent.ExecutionNode.Socket do
     :ping_interval_ms,
     :ping_token,
     :max_payload_bytes,
+    :listener_owner,
+    :connect_blocked_reason,
     pending: %{},
+    connect_failures: 0,
     stopping: false
   ]
 
@@ -34,6 +37,7 @@ defmodule CodingAgent.ExecutionNode.Socket do
           | {:event, String.t(), map()}
           | {:response, term(), {:ok, term()} | {:error, term()}}
           | {:authentication_error, term()}
+          | {:connect_retry, term()}
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -47,6 +51,8 @@ defmodule CodingAgent.ExecutionNode.Socket do
       connect_params: connect_params,
       reconnect_delay_ms: Keyword.get(opts, :reconnect_delay_ms, 500),
       ping_interval_ms: Keyword.get(opts, :ping_interval_ms, 25_000),
+      listener_owner:
+        Keyword.get(opts, :listener_owner, &LemonCore.LoopbackListener.owned_by_self?/1),
       max_payload_bytes: LemonCore.JSONPayload.default_max_bytes()
     }
 
@@ -76,7 +82,15 @@ defmodule CodingAgent.ExecutionNode.Socket do
     send(self(), {:execution_node_send_connect, id})
     schedule_ping(state.ping_interval_ms, ping_token)
 
-    {:ok, %{state | connect_id: id, pending: %{}, stopping: false, ping_token: ping_token}}
+    {:ok,
+     %{
+       state
+       | connect_id: id,
+         pending: %{},
+         stopping: false,
+         ping_token: ping_token,
+         connect_blocked_reason: nil
+     }}
   end
 
   @impl WebSockex
@@ -100,6 +114,7 @@ defmodule CodingAgent.ExecutionNode.Socket do
          %{
            state
            | connect_id: nil,
+             connect_failures: 0,
              max_payload_bytes: advertised_payload_limit(hello, state)
          }}
 
@@ -108,8 +123,18 @@ defmodule CodingAgent.ExecutionNode.Socket do
         {:ok, state}
 
       {:ok, {:response, id, {:error, error}}} when id == state.connect_id ->
-        notify(state, {:authentication_error, error})
-        {:close, {1008, "authentication failed"}, %{state | stopping: true}}
+        case ConnectFailure.classify(error) do
+          :transient ->
+            code = if is_map(error), do: Map.get(error, "code"), else: nil
+            notify(state, {:connect_retry, code})
+
+            {:close, {1013, "try again later"},
+             %{state | stopping: false, connect_failures: state.connect_failures + 1}}
+
+          _ ->
+            notify(state, {:authentication_error, error})
+            {:close, {1008, "authentication failed"}, %{state | stopping: true}}
+        end
 
       {:ok, {:response, id, result}} ->
         {pending, rest} = Map.pop(state.pending, id)
@@ -171,8 +196,15 @@ defmodule CodingAgent.ExecutionNode.Socket do
         {:execution_node_send_connect, id},
         %{connect_id: id} = state
       ) do
-    frame = Codec.encode_request(id, "connect", state.connect_params)
-    {:reply, {:text, frame}, state}
+    if owned_loopback_listener?(state) do
+      frame = Codec.encode_request(id, "connect", state.connect_params)
+      {:reply, {:text, frame}, state}
+    else
+      reason = :loopback_listener_not_owned
+      Logger.warning("Execution node refused loopback credentials: #{reason}")
+      notify(state, {:connect_retry, reason})
+      {:close, %{state | connect_blocked_reason: reason}}
+    end
   end
 
   def handle_info({:request_timeout, id}, state) do
@@ -202,13 +234,22 @@ defmodule CodingAgent.ExecutionNode.Socket do
     reason = Map.get(status, :reason, :disconnected)
     attempt = Map.get(status, :attempt_number, 1)
     fail_pending(state, :disconnected)
-    notify(state, {:disconnected, reason})
+    unless state.connect_blocked_reason, do: notify(state, {:disconnected, reason})
 
-    delay = min(state.reconnect_delay_ms * max(attempt, 1), 5_000)
+    delay = reconnect_delay(state, attempt)
     if delay > 0, do: Process.sleep(delay)
 
     {:reconnect, %{state | pending: %{}, connect_id: nil, ping_token: nil}}
   end
+
+  @doc false
+  def reconnect_delay(%{connect_failures: failures}, _attempt) when failures > 0 do
+    base = min(1_000 * Integer.pow(2, min(failures - 1, 6)), 60_000)
+    min(round(base * (0.8 + :rand.uniform() * 0.4)), 60_000)
+  end
+
+  def reconnect_delay(state, attempt),
+    do: min(state.reconnect_delay_ms * max(attempt, 1), 5_000)
 
   @impl WebSockex
   def terminate(reason, state) do
@@ -225,6 +266,21 @@ defmodule CodingAgent.ExecutionNode.Socket do
       end
 
     %{state | connect_params: redacted_params, pending: Map.keys(state.pending)}
+  end
+
+  defp owned_loopback_listener?(state) do
+    if Application.get_env(:lemon_core, :require_owned_loopback, false) == true do
+      uri = URI.parse(state.url)
+
+      if LemonCore.LoopbackListener.literal_loopback?(uri.host) do
+        check = state.listener_owner || (&LemonCore.LoopbackListener.owned_by_self?/1)
+        check.(uri.port) == :owned
+      else
+        true
+      end
+    else
+      true
+    end
   end
 
   defp fail_pending(state, reason) do

@@ -6,6 +6,8 @@ defmodule CodingAgent.Application do
 
   @impl true
   def start(_type, _args) do
+    CodingAgent.StatePaths.prepare_default_layout()
+
     lane_caps =
       Application.get_env(:coding_agent, :lane_caps, %{
         main: 4,
@@ -38,6 +40,7 @@ defmodule CodingAgent.Application do
       CodingAgent.Session.UserPrompt,
       CodingAgent.MutationLock,
       CodingAgent.FileReadTracker,
+      CodingAgent.WorkspaceReads,
       CodingAgent.ConflictStore,
       CodingAgent.ExecutionNode.FileService,
       CodingAgent.ExecutionNode.ProcessService,

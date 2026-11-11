@@ -157,11 +157,20 @@ host list through `:openai_compat_image_url_allowed_hosts`,
 `LEMON_OPENAI_COMPAT_IMAGE_HOST_ALLOWLIST`. The preview policy accepts HTTPS
 only and rejects non-allowlisted hosts before starting a Lemon run.
 
-By default the preview `/v1` surface is unauthenticated for local development.
-Set `:openai_compat_api_token` in `:lemon_control_plane` application config or
-`LEMON_OPENAI_COMPAT_API_TOKEN` / `LEMON_OPENAI_COMPAT_TOKEN` in the environment
-to require either `Authorization: Bearer <token>` or `x-api-key: <token>`. A
-missing token returns HTTP `401`; a wrong token returns `403`.
+The `/v1` surface requires authentication by default, including local development.
+Send `Authorization: Bearer <token>` or `x-api-key: <token>` using
+`:openai_compat_api_token` in `:lemon_control_plane` application config or
+`LEMON_OPENAI_COMPAT_API_TOKEN` / `LEMON_OPENAI_COMPAT_TOKEN`. When unset, it
+accepts the operator token (managed launcher file:
+`~/.lemon/run/control-plane-<port>.token`). Missing credentials return HTTP `401`;
+wrong credentials return `403`. Tokenless access requires the explicit
+`LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true` flag, no configured
+token, and an actual direct loopback peer; never use that mode behind a proxy.
+
+Remote `/v1/*` is hidden by default. Opt in with
+`LEMON_CONTROL_PLANE_REMOTE_HTTP=openai`, a dedicated API token and a main bind
+configured via `LEMON_CONTROL_PLANE_BIND_IP`; non-loopback main binds additionally
+require an operator token. Terminate TLS or use a verified encrypted overlay.
 
 ## Proof Lane
 

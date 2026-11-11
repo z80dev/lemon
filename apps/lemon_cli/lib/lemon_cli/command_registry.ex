@@ -128,9 +128,10 @@ defmodule LemonCli.CommandRegistry do
     %{
       name: "setup",
       summary: "Run first-time setup and configuration",
-      usage: "lemon setup [provider|runtime|gateway|doctor] [options]",
+      usage: "lemon setup [provider|model|runtime|gateway|doctor] [options]",
       subcommands: [
         %{name: "provider", summary: "Configure an AI provider"},
+        %{name: "model", summary: "Connect a model or report readiness"},
         %{name: "runtime", summary: "Configure runtime profile and port bindings"},
         %{name: "gateway", summary: "Configure gateway adapters"},
         %{name: "doctor", summary: "Run diagnostics or write a support bundle (alias for doctor)"}
@@ -161,6 +162,17 @@ defmodule LemonCli.CommandRegistry do
           "--if-required",
           ["--if-required"],
           "Exit immediately unless setup is still required"
+        ),
+        option(
+          "--model-optional",
+          ["--model-optional"],
+          "Allow setup to finish without configuring a model"
+        ),
+        option("--json", ["--json"], "Output one JSON document"),
+        option(
+          "--offline",
+          ["--offline"],
+          "Report static readiness without live connectivity check"
         )
       ]
     },
@@ -681,9 +693,10 @@ defmodule LemonCli.CommandRegistry do
       name: "node",
       summary: "Inspect worker compatibility or join a named execution node",
       usage:
-        "lemon node join --name NAME --controller wss://HOST/ws [options]\nlemon node capabilities [--json] [--require-bot] [--expected-version VERSION]",
+        "lemon node join --name NAME --controller wss://HOST/ws [options]\nlemon node status --name NAME [--json]\nlemon node capabilities [--json] [--require-bot] [--expected-version VERSION]",
       subcommands: [
         %{name: "join", summary: "Pair with or reconnect to a controller"},
+        %{name: "status", summary: "Read local worker status without starting a runtime"},
         %{
           name: "capabilities",
           summary: "Inspect installed worker API compatibility without starting a runtime"

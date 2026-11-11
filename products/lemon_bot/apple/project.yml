@@ -41,6 +41,11 @@ targets:
         product: LemonBotKit
       - package: LemonBotKit
         product: LemonBotUI
+      - target: LemonBotWorkerHost
+        embed: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.lemonbot.mac
@@ -55,6 +60,27 @@ targets:
           CODE_SIGN_IDENTITY: "-"
           CODE_SIGN_ENTITLEMENTS: LemonBotMac/LemonBotMacDebug.entitlements
           APS_ENVIRONMENT: ""
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: $(LEMON_MAC_APP_PROFILE)
+  LemonBotWorkerHost:
+    type: application
+    platform: macOS
+    sources:
+      - path: LemonBotWorkerHost
+        excludes:
+          - "*.plist"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.lemonbot.mac.worker
+        PRODUCT_NAME: Lemon Bot Worker
+        INFOPLIST_FILE: LemonBotWorkerHost/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ""
+        PROVISIONING_PROFILE_SPECIFIER: ""
+        SKIP_INSTALL: YES
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "-"
   LemonBotiOS:
     type: application
     platform: iOS
@@ -122,6 +148,7 @@ targets:
       - path: Tests
       - path: LemonBotMac/MacGlobalHotkeys.swift
       - path: LemonBotMac/MacShortcutRecorder.swift
+      - path: LemonBotWorkerHost/Arguments.swift
     dependencies:
       - package: LemonBotKit
         product: LemonBotKit

@@ -45,22 +45,49 @@ func gateAllowsAction(_ store: LemonBotStore, _ gate: Gate) -> Bool {
     store.connectionState == "online" && gate.targetUserId == store.user?.id && gate.state == "pending" && Double(gate.expiresAtMs) > Date().timeIntervalSince1970 * 1000
 }
 
+enum AccessRequestPresentation {
+    static let allowLabel = "Allow for this Bot"
+    static let denyLabel = "Not now"
+    static func reason(_ approval: Approval, botName: String) -> String? {
+        guard let reason = approval.inputs["reason"]?.stringValue else { return nil }
+        return "\(botName) says: “\(reason)”"
+    }
+    static func result(state: String, who: String) -> String {
+        switch state {
+        case "approved": return "Allowed by \(who) · turns on when this task finishes"
+        case "denied": return "Not now"
+        case "expired": return "Expired"
+        default: return humanizedStatus(state)
+        }
+    }
+}
+
 struct ApprovalReviewView: View {
     let store: LemonBotStore
     let approval: Approval
     init(store: LemonBotStore, approval: Approval) { self.store = store; self.approval = approval }
     @State private var action = UIActionState()
     @State private var resolved: Approval?
+    @State private var botWide = false
+    @State private var rememberedPolicy: EffectivePolicy?
     private var current: Approval { (resolved?.revision ?? 0) > approval.revision ? resolved! : approval }
     var body: some View {
         let proposal = current
+        let accessRequest = proposal.source == "access_request"
         VStack(alignment: .leading, spacing: 10) {
-            if proposal.target == "Terminal" {
+            if proposal.target == "Terminal" && !accessRequest {
                 Text(proposal.title).font(.system(.headline, design: .monospaced)).textSelection(.enabled)
             } else {
                 CardHeader(symbol: "checkmark.shield", title: proposal.title)
             }
-            Text("\(proposal.target) on \(proposal.scope.machineLabel)").font(LBFont.rowSubtitle).foregroundStyle(.secondary)
+            if accessRequest {
+                Text(proposal.description).font(LBFont.rowSubtitle).foregroundStyle(.secondary)
+                if let reason = AccessRequestPresentation.reason(proposal, botName: store.bots.first(where: { $0.id == proposal.botId })?.name ?? "Bot") {
+                    Text(verbatim: reason).font(LBFont.body).textSelection(.enabled)
+                }
+            } else {
+                Text("\(proposal.target) on \(proposal.scope.machineLabel)").font(LBFont.rowSubtitle).foregroundStyle(.secondary)
+            }
             CardDetails {
                 Text(proposal.description)
                 cardFact("Scope", proposal.scope.label)
@@ -84,18 +111,42 @@ struct ApprovalReviewView: View {
                 let expired = proposal.gate.state == "pending" && Double(proposal.gate.expiresAtMs) <= Date().timeIntervalSince1970 * 1000
                 if proposal.gate.state == "pending" && !expired {
                     HStack(spacing: 8) {
-                        Button("Allow once") { Task { await resolve("approve_once") } }.buttonStyle(.cardPrimary)
-                        Button("Deny", role: .destructive) { Task { await resolve("deny") } }.buttonStyle(.pill(.secondary))
+                        Button(accessRequest ? AccessRequestPresentation.allowLabel : "Allow once") { Task { await resolve("approve_once") } }.buttonStyle(.cardPrimary)
+                        if !accessRequest, let option = proposal.chatOption {
+                            Button(option.label) { Task { await resolve("approve_chat") } }.buttonStyle(.pill(.secondary))
+                        }
+                        if !accessRequest, proposal.chatOption != nil,
+                           let bot = store.bots.first(where: { $0.id == proposal.botId }),
+                           bot.ownerUserId == store.user?.id,
+                           rememberedPolicy?.rememberedApprovals?.bot.isEmpty == false {
+                            Menu {
+                                Button("Always allow for this Bot…") { botWide = true }
+                            } label: { Image(systemName: "ellipsis") }
+                        }
+                        Button(accessRequest ? AccessRequestPresentation.denyLabel : "Deny", role: accessRequest ? nil : .destructive) { Task { await resolve("deny") } }.buttonStyle(.pill(.secondary))
                     }.disabled(action.busy || !gateAllowsAction(store, proposal.gate) || Double(proposal.scope.expiresAtMs) <= Date().timeIntervalSince1970 * 1000)
                 } else {
                     let state = expired ? "expired" : proposal.gate.state
                     let who = proposal.gate.resolvedByUserId == store.user?.id ? "you" : proposal.gate.resolvedByUserId == nil ? "policy" : "another person"
-                    let result = state == "approved" ? "Allowed once by \(who)" : state == "denied" ? "Denied by \(who)" : humanizedStatus(state)
+                    let result = accessRequest ? AccessRequestPresentation.result(state: state, who: who) : state == "approved" ? "\(proposal.resolvedScope == "chat" ? "Allowed for this chat" : "Allowed once") by \(who)" : state == "denied" ? "Denied by \(who)" : humanizedStatus(state)
                     let time = proposal.gate.resolvedAtMs.map { " · " + timestamp(Double($0)).formatted(date: .omitted, time: .shortened) } ?? ""
-                    Text(result + (state == "expired" ? "" : time)).font(LBFont.rowSubtitle)
+                    Text(result + (accessRequest || state == "expired" ? "" : time)).font(LBFont.rowSubtitle)
                 }
             }
             ActionErrorView(message: action.error)
+        }
+        .task(id: approval.botId) {
+            guard approval.source != "access_request" else { return }
+            do { rememberedPolicy = try await store.read("/policies/effective", query: ["botId": approval.botId]) }
+            catch { action.error = error.localizedDescription }
+        }
+        .sheet(isPresented: $botWide) {
+            if let bot = store.bots.first(where: { $0.id == approval.botId }) {
+                BotApprovalsView(store: store, bot: bot, previewOnOpen: true, afterConfirm: {
+                    await resolve("approve_once")
+                    botWide = false
+                }).padding()
+            }
         }
     }
     private func resolve(_ decision: String) async {

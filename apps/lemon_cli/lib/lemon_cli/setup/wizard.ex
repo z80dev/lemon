@@ -13,9 +13,8 @@ defmodule LemonCli.Setup.Wizard do
   (flag-driven, CI-friendly) operation through the shared `io_callbacks` map.
   """
 
-  alias LemonCli.Onboarding.PromptUI
-  alias LemonCli.Onboarding.Runner
-  alias LemonCli.Setup.{Gateway, Ports, Provider, Scaffold, Verification}
+  alias LemonCli.Onboarding.{PromptUI, Providers, Runner}
+  alias LemonCli.Setup.{Gateway, ModelReadiness, Ports, Provider, Scaffold, Verification}
   alias LemonCore.Config.Modular
   alias LemonCore.Runtime.{Env, Health, Profile}
   alias LemonCore.Secrets
@@ -43,56 +42,65 @@ defmodule LemonCli.Setup.Wizard do
   """
   @spec run([String.t()], io_callbacks(), keyword()) :: :ok | {:error, term()}
   def run(args, io, opts \\ []) when is_list(args) and is_map(io) do
-    usage_command = Keyword.get(opts, :usage_command, "mix lemon.setup")
+    MasterKey.scoped(fn ->
+      usage_command = Keyword.get(opts, :usage_command, "mix lemon.setup")
 
-    # parse_head stops at the first non-flag argument (the subcommand name),
-    # leaving subcommand-specific flags untouched so subcommand parsers get them.
-    {parsed, rest, invalid} =
-      OptionParser.parse_head(args,
-        strict: [
-          non_interactive: :boolean,
-          config_path: :string,
-          provider: :string,
-          skip_verify: :boolean,
-          set_default: :boolean,
-          token: :string,
-          auth: :string,
-          codex_auth_path: :string,
-          model: :string
-        ],
-        aliases: [n: :non_interactive]
-      )
+      # parse_head stops at the first non-flag argument (the subcommand name),
+      # leaving subcommand-specific flags untouched so subcommand parsers get them.
+      {parsed, rest, invalid} =
+        OptionParser.parse_head(args,
+          strict: [
+            non_interactive: :boolean,
+            config_path: :string,
+            provider: :string,
+            skip_verify: :boolean,
+            set_default: :boolean,
+            token: :string,
+            auth: :string,
+            codex_auth_path: :string,
+            model: :string,
+            model_optional: :boolean
+          ],
+          aliases: [n: :non_interactive]
+        )
 
-    case {invalid, rest} do
-      {[_ | _], _} ->
-        io.error.("Unknown or invalid setup options. Run `#{usage_command} --help`.")
-        {:error, :invalid_arguments}
+      case {invalid, rest} do
+        {[_ | _], _} ->
+          io.error.("Unknown or invalid setup options. Run `#{usage_command} --help`.")
+          {:error, :invalid_arguments}
 
-      {[], ["provider" | provider_args]} ->
-        Provider.run(provider_args, io, setup_verify_opts(opts))
+        {[], ["provider" | provider_args]} ->
+          Provider.run(provider_args, io, setup_verify_opts(opts))
 
-      {[], ["runtime" | runtime_args]} ->
-        run_runtime(runtime_args, io, parsed)
+        {[], ["model" | model_args]} ->
+          run_model(model_args, io, Keyword.merge(opts, parsed))
 
-      {[], ["gateway" | gateway_args]} ->
-        Gateway.run(gateway_args, io)
+        {[], ["runtime" | runtime_args]} ->
+          run_runtime(runtime_args, io, parsed)
 
-      {[], ["doctor" | doctor_args]} ->
-        case LemonCli.CLI.doctor(doctor_args) do
-          0 -> :ok
-          _ -> {:error, :doctor_failed}
-        end
+        {[], ["gateway" | gateway_args]} ->
+          Gateway.run(gateway_args, io)
 
-      {[], []} ->
-        run_full([], io, Keyword.merge(opts, parsed))
+        {[], ["doctor" | doctor_args]} ->
+          case LemonCli.CLI.doctor(doctor_args) do
+            0 -> :ok
+            _ -> {:error, :doctor_failed}
+          end
 
-      {[], [_subcommand | _]} ->
-        io.error.("Unknown setup subcommand. Run `#{usage_command} --help` to list subcommands.")
-        io.info.("")
-        io.info.("Usage: #{usage_command} [provider|runtime|gateway|doctor] [options]")
-        print_help_hint(io, usage_command)
-        {:error, :unknown_subcommand}
-    end
+        {[], []} ->
+          run_full([], io, Keyword.merge(opts, parsed))
+
+        {[], [_subcommand | _]} ->
+          io.error.(
+            "Unknown setup subcommand. Run `#{usage_command} --help` to list subcommands."
+          )
+
+          io.info.("")
+          io.info.("Usage: #{usage_command} [provider|model|runtime|gateway|doctor] [options]")
+          print_help_hint(io, usage_command)
+          {:error, :unknown_subcommand}
+      end
+    end)
   end
 
   defp print_help_hint(io, "mix lemon.setup"),
@@ -142,6 +150,7 @@ defmodule LemonCli.Setup.Wizard do
     non_interactive? = Keyword.get(opts, :non_interactive, false)
     config_path = Keyword.get(opts, :config_path) || Modular.global_path()
     unless non_interactive?, do: Runner.ensure_interactive!(io)
+    io.info.("Starting Lemon setup…")
     Runner.ensure_required_apps!()
 
     print_banner(io)
@@ -156,14 +165,19 @@ defmodule LemonCli.Setup.Wizard do
     ensure_ports(io, non_interactive?, opts)
 
     state = Verification.setup_state(config_path: config_path)
+    model_optional? = Keyword.get(opts, :model_optional, false)
+
+    incomplete? =
+      if model_optional?,
+        do: Verification.pending_steps(state) -- [:provider] != [],
+        else: not Readiness.ready?(state)
 
     result =
-      if (result == :ok or match?({:ok, _}, result)) and
-           not Readiness.ready?(state),
-         do: {:error, :setup_incomplete},
-         else: result
+      if (result == :ok or match?({:ok, _}, result)) and incomplete?,
+        do: {:error, :setup_incomplete},
+        else: result
 
-    print_summary(io, state, result)
+    print_summary(io, state, result, opts)
     step_offer_launch(io, state, result, non_interactive?, opts)
 
     case result do
@@ -219,6 +233,91 @@ defmodule LemonCli.Setup.Wizard do
       end
     end
   end
+
+  @doc """
+  Runs the Connect-a-model step alone (`lemon setup model`).
+
+  `--json` prints one `LemonCli.Setup.ModelReadiness` wire document plus the
+  detected logins and never prompts; `--offline` reports the static state
+  without a live check. Without `--json` it runs the interactive step.
+  """
+  @spec run_model([String.t()], io_callbacks(), keyword()) :: :ok | {:error, term()}
+  def run_model(args, io, opts \\ []) do
+    usage_command = Keyword.get(opts, :usage_command, "lemon setup")
+
+    {parsed, rest, invalid} =
+      OptionParser.parse(args,
+        strict: [
+          json: :boolean,
+          offline: :boolean,
+          provider: :string,
+          config_path: :string,
+          cwd: :string,
+          non_interactive: :boolean,
+          help: :boolean
+        ],
+        aliases: [h: :help, n: :non_interactive]
+      )
+
+    if invalid != [] or rest != [] or parsed[:help] do
+      io.error.("Usage: #{usage_command} model [--json] [--offline] [--provider NAME]")
+      {:error, :usage}
+    else
+      effective_opts = Keyword.merge(opts, parsed)
+      config_path = effective_opts[:config_path] || Modular.global_path()
+
+      if effective_opts[:json] do
+        Runner.ensure_required_apps!()
+
+        readiness_opts =
+          effective_opts
+          |> Keyword.take([:provider, :cwd, :verifier, :codex_discover])
+          |> Keyword.put(:config_path, config_path)
+
+        readiness =
+          if effective_opts[:offline] do
+            ModelReadiness.status(readiness_opts)
+          else
+            ModelReadiness.check(readiness_opts)
+          end
+
+        detected = ModelReadiness.to_wire(ModelReadiness.detect(readiness_opts))
+
+        wire_map =
+          readiness
+          |> ModelReadiness.to_wire()
+          |> Map.put("detected", detected)
+
+        IO.puts(Jason.encode!(wire_map))
+
+        if ready_state?(readiness.state), do: :ok, else: {:error, :not_ready}
+      else
+        non_interactive? = effective_opts[:non_interactive] || false
+        unless non_interactive?, do: Runner.ensure_interactive!(io)
+        io.info.("Starting Lemon setup…")
+        Runner.ensure_required_apps!()
+
+        with :ok <- ensure_config(config_path, io),
+             :ok <- ensure_secrets(io) do
+          case connect_model_step(config_path, io, non_interactive?, effective_opts) do
+            {:ok, _verification} ->
+              :ok
+
+            :ok ->
+              readiness = ModelReadiness.status(config_path: config_path)
+              if ready_state?(readiness.state), do: :ok, else: {:error, :not_ready}
+
+            {:error, _reason} = error ->
+              error
+          end
+        end
+      end
+    end
+  end
+
+  # `verified` and `saved` both count as ready: the credential resolves, and
+  # Lemon re-checks a `saved` provider on the first message.
+  defp ready_state?(state), do: state in [:verified, :saved, "verified", "saved"]
 
   # ──────────────────────────────────────────────────────────────────────────
   # Full wizard steps
@@ -392,39 +491,260 @@ defmodule LemonCli.Setup.Wizard do
         :ok
 
       true ->
-        answer =
-          if non_interactive? or forced do
-            true
-          else
-            prompt_yes?("Onboard an AI provider now?", io)
-          end
+        connect_model_step(config_path, io, non_interactive?, opts)
+    end
+  end
 
-        if answer do
-          io.info.("Checking available providers…")
+  # The Connect-a-model step: detected logins first, then the provider picker,
+  # then Skip. Nothing is copied or saved without an explicit choice.
+  defp connect_model_step(config_path, io, non_interactive?, opts) do
+    forced = Keyword.get(opts, :provider)
 
-          provider_args =
-            ["--config-path", config_path, "--set-default"] ++
-              if(forced, do: ["--provider", forced], else: []) ++
-              if(non_interactive?, do: ["--non-interactive"], else: []) ++
-              Enum.flat_map([:token, :auth, :model, :codex_auth_path], fn key ->
-                flag = key |> Atom.to_string() |> String.replace("_", "-")
-                if value = opts[key], do: ["--#{flag}", value], else: []
-              end) ++
-              if(Keyword.get(opts, :skip_verify, false), do: ["--skip-verify"], else: [])
+    cond do
+      forced ->
+        choose_and_configure_provider(config_path, io, non_interactive?, opts)
 
-          Provider.configure(provider_args, io, setup_verify_opts(opts))
-        else
-          io.info.("Skipped. Run `lemon setup provider` when ready.")
-          :ok
+      non_interactive? ->
+        io.info.(
+          "Skipping provider setup (non-interactive). Run `lemon setup model` to onboard a provider."
+        )
+
+        :ok
+
+      true ->
+        detected_logins = ModelReadiness.detect(config_path: config_path)
+
+        options = build_connect_model_options(detected_logins, opts)
+
+        case select_connect_model(options, io) do
+          {:ok, {:codex_cli, _detected}} ->
+            io.info.("Importing your Codex CLI login and loading models…")
+
+            provider_args =
+              [
+                "--config-path",
+                config_path,
+                "--provider",
+                "openai-codex",
+                "--auth",
+                "codex-cli",
+                "--set-default"
+              ] ++
+                if(Keyword.get(opts, :skip_verify, false), do: ["--skip-verify"], else: []) ++
+                if(opts[:codex_auth_path],
+                  do: ["--codex-auth-path", opts[:codex_auth_path]],
+                  else: []
+                )
+
+            Provider.configure(provider_args, io, setup_verify_opts(opts))
+
+          {:ok, {:environment, detected}} ->
+            var_name = detected.variable
+            io.info.("Saving #{var_name} into Lemon's encrypted store…")
+
+            provider_args =
+              [
+                "--config-path",
+                config_path,
+                "--provider",
+                detected.provider_id,
+                "--auth",
+                "api-key",
+                "--set-default"
+              ] ++
+                if(Keyword.get(opts, :skip_verify, false), do: ["--skip-verify"], else: [])
+
+            # The value never reaches argv: a shell key stays out of the
+            # process list and out of any command echo.
+            configure_opts =
+              opts
+              |> setup_verify_opts()
+              |> Keyword.put(:token, System.get_env(var_name))
+
+            Provider.configure(provider_args, io, configure_opts)
+
+          {:ok, :choose_provider} ->
+            choose_and_configure_provider(config_path, io, non_interactive?, opts)
+
+          {:ok, :skip} ->
+            if Keyword.get(opts, :model_optional, false) do
+              io.info.("Skipped. Set up a model in the browser when Lemon is running.")
+            else
+              io.info.("Skipped. Run `lemon setup model` when ready.")
+            end
+
+            :ok
+
+          :cancel ->
+            io.info.("Skipped. Run `lemon setup model` when ready.")
+            :ok
         end
     end
   end
+
+  defp choose_and_configure_provider(config_path, io, non_interactive?, opts) do
+    forced = Keyword.get(opts, :provider)
+    io.info.("Checking available providers…")
+
+    provider_args =
+      ["--config-path", config_path, "--set-default"] ++
+        if(forced, do: ["--provider", forced], else: []) ++
+        if(non_interactive?, do: ["--non-interactive"], else: []) ++
+        Enum.flat_map([:token, :auth, :model, :codex_auth_path], fn key ->
+          flag = key |> Atom.to_string() |> String.replace("_", "-")
+          if value = opts[key], do: ["--#{flag}", value], else: []
+        end) ++
+        if(Keyword.get(opts, :skip_verify, false), do: ["--skip-verify"], else: [])
+
+    Provider.configure(provider_args, io, setup_verify_opts(opts))
+  end
+
+  defp build_connect_model_options(detected_logins, opts) do
+    detected_options =
+      Enum.map(detected_logins, fn
+        %{source: :codex_cli} = detected ->
+          %{
+            label:
+              "Copy your Codex CLI ChatGPT login into Lemon (read-only copy of ~/.codex/auth.json)",
+            value: {:codex_cli, detected}
+          }
+
+        %{source: :environment, variable: var_name} = detected ->
+          %{
+            label:
+              "Save #{var_name} from this shell into Lemon's encrypted store (the background service can't see your shell)",
+            value: {:environment, detected}
+          }
+      end)
+
+    skip_label =
+      if Keyword.get(opts, :model_optional, false) do
+        "Skip — set it up in the browser"
+      else
+        "Skip — finish later with `lemon setup model`"
+      end
+
+    detected_options ++
+      [
+        %{label: "Choose a provider…", value: :choose_provider},
+        %{label: skip_label, value: :skip}
+      ]
+  end
+
+  defp select_connect_model(options, io) do
+    case select_value(io, %{
+           title: "Connect a model",
+           options: options,
+           default_index: 0
+         }) do
+      {:ok, value} ->
+        {:ok, value}
+
+      :cancel ->
+        :cancel
+
+      :fallback ->
+        io.info.("")
+        io.info.("Connect a model")
+        io.info.("")
+
+        options
+        |> Enum.with_index(1)
+        |> Enum.each(fn {option, number} ->
+          marker = if number == 1, do: " (default)", else: ""
+          io.info.("  #{number}. #{option.label}#{marker}")
+        end)
+
+        prompt_connect_choice(options, 0, io)
+    end
+  end
+
+  defp prompt_connect_choice(options, default_index, io) do
+    case io.prompt.("Select [default: #{default_index + 1}, q to cancel]: ") do
+      nil -> Runner.no_terminal!()
+      :eof -> Runner.no_terminal!()
+      input -> parse_connect_choice(normalize_input(input), options, default_index, io)
+    end
+  end
+
+  defp parse_connect_choice(choice, options, default_index, io) do
+    cond do
+      choice == "" ->
+        {:ok, options |> Enum.at(default_index) |> Map.fetch!(:value)}
+
+      choice in ["q", "quit", "cancel"] ->
+        :cancel
+
+      choice in ["n", "no", "s", "skip"] ->
+        case Enum.find(options, &(&1.value == :skip)) do
+          %{value: val} -> {:ok, val}
+          nil -> :cancel
+        end
+
+      choice in ["y", "yes"] ->
+        {:ok, options |> Enum.at(default_index) |> Map.fetch!(:value)}
+
+      String.match?(choice, ~r/^\d+$/) ->
+        index = String.to_integer(choice) - 1
+
+        if index >= 0 and index < length(options) do
+          {:ok, options |> Enum.at(index) |> Map.fetch!(:value)}
+        else
+          io.error.("Invalid selection. Enter 1–#{length(options)}.")
+          prompt_connect_choice(options, default_index, io)
+        end
+
+      true ->
+        io.error.("Invalid selection. Enter 1–#{length(options)}.")
+        prompt_connect_choice(options, default_index, io)
+    end
+  end
+
+  defp select_value(io, params) do
+    case Map.get(io, :select) do
+      select when is_function(select, 1) ->
+        case select.(params) do
+          {:ok, value} ->
+            {:ok, value}
+
+          :cancel ->
+            :cancel
+
+          {:error, reason} ->
+            if reason == :end_of_input, do: Runner.no_terminal!()
+
+            io.error.(
+              "Interactive onboarding UI unavailable (#{format_selector_error(reason)}). Falling back to prompt mode."
+            )
+
+            :fallback
+
+          value ->
+            {:ok, value}
+        end
+
+      _ ->
+        :fallback
+    end
+  end
+
+  defp format_selector_error(:no_selection), do: "selector exited before a choice was made"
+  defp format_selector_error(:invalid_selector_params), do: "invalid selector parameters"
+  defp format_selector_error(_reason), do: "the selector could not be started"
 
   # Setup-journey callers opt into the live credential check; direct
   # `lemon model` onboarding (LemonCli.CLI) stays offline-strong only.
   defp setup_verify_opts(opts) do
     opts
-    |> Keyword.take([:verifier, :skip_verify, :config, :verification_model, :cwd, :discovery])
+    |> Keyword.take([
+      :verifier,
+      :skip_verify,
+      :config,
+      :verification_model,
+      :cwd,
+      :discovery,
+      :codex_discover
+    ])
     |> Keyword.put(:live_verify, true)
   end
 
@@ -437,18 +757,30 @@ defmodule LemonCli.Setup.Wizard do
 
     unless running?.(env.control_port) do
       free? = Keyword.get(opts, :port_free?, &Ports.free?/1)
-      current = %{control: env.control_port, web: env.web_port, sim: env.sim_port}
+
+      current = %{
+        control: env.control_port,
+        node: resolve_node_port(),
+        web: env.web_port,
+        sim: env.sim_port
+      }
 
       chosen =
         Enum.reduce(Ports.required(Profile.default_name()), current, fn key, ports ->
           port = ports[key]
           reserved = ports |> Map.delete(key) |> Map.values()
 
-          if port not in reserved and free?.(port) do
-            ports
-          else
-            replacement = replacement_port(key, port, reserved, free?, io, non_interactive?)
-            Map.put(ports, key, replacement)
+          # A node gateway explicitly disabled with port 0 binds nothing.
+          cond do
+            key == :node and port == 0 ->
+              ports
+
+            port not in reserved and free?.(port) ->
+              ports
+
+            true ->
+              replacement = replacement_port(key, port, reserved, free?, io, non_interactive?)
+              Map.put(ports, key, replacement)
           end
         end)
 
@@ -532,7 +864,9 @@ defmodule LemonCli.Setup.Wizard do
     end
   end
 
-  defp launch_ready?({:ok, %{live: live}}), do: live in [:ok, :skipped]
+  # `verified` and `saved` both open Lemon; an explicit `--skip-verify` keeps
+  # today's behaviour of not offering the launch after a deferred check.
+  defp launch_ready?({:ok, %{live: live}}), do: live in [:ok, :skipped, :saved]
   defp launch_ready?(_result), do: false
 
   defp launch_tui do
@@ -557,12 +891,19 @@ defmodule LemonCli.Setup.Wizard do
     _error in ErlangError -> {:error, :launch_failed}
   end
 
-  defp print_summary(io, state, result) do
+  defp print_summary(io, state, result, opts) do
     io.info.("")
+    pending = Verification.pending_steps(state)
+    model_optional? = Keyword.get(opts, :model_optional, false)
 
-    case {Verification.pending_steps(state), result} do
-      {[], {:ok, %{live: :ok}}} ->
-        io.info.("Setup complete.")
+    case {pending, result} do
+      {[], {:ok, %{provider: provider, model: model, live: :ok}}} ->
+        provider_label = provider_display_name(provider)
+
+        io.info.(
+          "Setup complete. Model: #{provider} / #{model} (verified with #{provider_label}; no message was sent)."
+        )
+
         io.info.("Success check: a reply arrives and `lemon doctor` shows no FAIL.")
         io.info.("Run `lemon` in your repository and try this first prompt:")
 
@@ -576,19 +917,27 @@ defmodule LemonCli.Setup.Wizard do
 
         io.info.("")
 
-      {[], {:ok, %{live: :skipped, provider: provider}}} ->
+      {[], {:ok, %{provider: provider, model: model, live: :disabled}}} ->
         io.info.(
-          "Saved. #{provider} has no quick live check; Lemon will confirm it on your first message."
+          "Setup complete. Model: #{provider} / #{model} (saved; live check skipped by --skip-verify)."
         )
 
-        io.info.("Setup complete.")
+        io.info.("")
+
+      {[], {:ok, %{provider: provider, model: model} = res}} ->
+        io.info.(
+          "Setup complete. Model: #{provider} / #{model} (saved; Lemon checks it on your first message)."
+        )
+
+        print_saved_reason(res, io)
         io.info.("")
 
       {[], result} when result == :ok or elem(result, 0) == :ok ->
-        io.info.("Configuration saved, but the provider was not live-verified.")
+        provider = state.provider.provider || "default"
+        model = state.provider.model || "default"
 
         io.info.(
-          "Live verification was deferred. Run `lemon setup` to check it, or `lemon doctor` for diagnostics."
+          "Setup complete. Model: #{provider} / #{model} (saved; Lemon checks it on your first message)."
         )
 
         io.info.("")
@@ -599,6 +948,10 @@ defmodule LemonCli.Setup.Wizard do
         io.info.("Setup did not complete. Resolve the errors above, then run `lemon setup`.")
         io.info.("")
 
+      {[:provider], :ok} when model_optional? ->
+        io.info.("Setup complete. Model setup deferred (set it up in the browser).")
+        io.info.("")
+
       {pending, _result} ->
         io.info.("Setup unfinished — pending steps:")
         print_pending(pending, state, io)
@@ -607,11 +960,32 @@ defmodule LemonCli.Setup.Wizard do
     end
   end
 
+  defp provider_display_name(provider_id) do
+    case Providers.find(provider_id) do
+      %{display_name: name} when is_binary(name) -> name
+      _ -> provider_id
+    end
+  end
+
+  defp print_saved_reason(%{reason: :provider_unreachable}, io) do
+    io.info.("Provider unreachable; Lemon will retry on your first message.")
+  end
+
+  defp print_saved_reason(%{reason: :check_failed}, io) do
+    io.info.("Quick live check failed; Lemon will retry on your first message.")
+  end
+
+  defp print_saved_reason(%{live_note: note}, io) when is_binary(note) do
+    io.info.("Live check note: #{note}")
+  end
+
+  defp print_saved_reason(_res, _io), do: :ok
+
   defp print_pending(pending, state, io) do
     Enum.each(pending, fn
       :config -> io.info.("  config:   re-run `lemon setup` or create #{state.config.path}")
       :secrets -> io.info.("  secrets:  re-run `lemon setup` (or run `lemon secrets init`)")
-      :provider -> io.info.("  provider: run `lemon setup provider`")
+      :provider -> io.info.("  provider: run `lemon setup model`")
     end)
   end
 
@@ -677,7 +1051,13 @@ defmodule LemonCli.Setup.Wizard do
   end
 
   defp resolve_ports(cli_opts, env, io, non_interactive?) do
-    current = %{control: env.control_port, web: env.web_port, sim: env.sim_port}
+    current = %{
+      control: env.control_port,
+      node: resolve_node_port(),
+      web: env.web_port,
+      sim: env.sim_port
+    }
+
     flags = [control_port: :control, web_port: :web, sim_port: :sim]
 
     invalid =
@@ -707,6 +1087,7 @@ defmodule LemonCli.Setup.Wizard do
         {:ok,
          %{
            control: prompt_port("control-plane", current.control, io),
+           node: current.node,
            web: prompt_port("web", current.web, io),
            sim: prompt_port("sim-ui", current.sim, io)
          }}
@@ -732,6 +1113,20 @@ defmodule LemonCli.Setup.Wizard do
 
   defp valid_port?(port), do: is_integer(port) and port > 0 and port <= 65_535
 
+  # The node gateway port comes from the environment only; `0` disables it.
+  defp resolve_node_port do
+    case System.get_env("LEMON_CONTROL_PLANE_NODE_PORT") do
+      nil ->
+        Ports.default_node_port()
+
+      val ->
+        case Integer.parse(String.trim(val)) do
+          {port, ""} when port >= 0 and port <= 65_535 -> port
+          _ -> Ports.default_node_port()
+        end
+    end
+  end
+
   defp print_runtime_summary(profile_name, ports, io, opts) do
     profile = Profile.get(profile_name)
 
@@ -741,6 +1136,11 @@ defmodule LemonCli.Setup.Wizard do
     io.info.("")
     io.info.("Ports:")
     io.info.("  control-plane : #{ports.control}")
+
+    if ports[:node] && ports[:node] != Ports.default_node_port() do
+      io.info.("  node-gateway  : #{ports.node}")
+    end
+
     io.info.("  web           : #{ports.web}")
     io.info.("  sim-ui        : #{ports.sim}")
     io.info.("")

@@ -89,6 +89,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "model" => :string,
         "systemPrompt" => :string,
         "node" => :string,
+        "workingDirectory" => :string,
         "mcpServers" => :list,
         "toolPolicy" => :map
       }
@@ -102,6 +103,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "model" => :string,
         "systemPrompt" => :string,
         "node" => :string,
+        "workingDirectory" => :string,
         "mcpServers" => :list,
         "toolPolicy" => :map
       }
@@ -115,6 +117,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "model" => :string,
         "systemPrompt" => :string,
         "node" => :string,
+        "workingDirectory" => :string,
         "mcpServers" => :list,
         "toolPolicy" => :map
       }
@@ -740,7 +743,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "expectedRunId" => :string
       }
     },
-    "providers.management.list" => %{required: %{}},
+    "providers.management.list" => %{
+      required: %{},
+      optional: %{"readiness" => :boolean}
+    },
     "providers.management.api_key.set" => %{
       required: %{"targetId" => :string, "providerId" => :string, "value" => :string}
     },
@@ -750,7 +756,17 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "providers.management.default.set" => %{
       required: %{"targetId" => :string, "providerId" => :string, "modelId" => :string}
     },
-    "node.providers.management.list" => %{required: %{"nodeId" => :string}},
+    "providers.management.check" => %{
+      required: %{"targetId" => :string},
+      optional: %{"providerId" => :string}
+    },
+    "providers.management.import" => %{
+      required: %{"targetId" => :string, "providerId" => :string, "source" => :string}
+    },
+    "node.providers.management.list" => %{
+      required: %{"nodeId" => :string},
+      optional: %{"readiness" => :boolean}
+    },
     "node.providers.management.api_key.set" => %{
       required: %{
         "nodeId" => :string,
@@ -768,6 +784,18 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "targetId" => :string,
         "providerId" => :string,
         "modelId" => :string
+      }
+    },
+    "node.providers.management.check" => %{
+      required: %{"nodeId" => :string, "targetId" => :string},
+      optional: %{"providerId" => :string}
+    },
+    "node.providers.management.import" => %{
+      required: %{
+        "nodeId" => :string,
+        "targetId" => :string,
+        "providerId" => :string,
+        "source" => :string
       }
     },
     "providers.management.device.start" => %{
@@ -880,7 +908,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "purpose" => :string,
         "labels" => :map,
         "expiresInMs" => :integer,
-        "nodeId" => :string
+        "nodeId" => :string,
+        "tunnelPort" => :integer
       }
     },
     "node.pair.invite.revoke" => %{required: %{"inviteId" => :string}},
@@ -889,12 +918,15 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "node.host.info" => %{required: %{"nodeId" => :string}},
     "node.fs.list" => %{
       required: %{"nodeId" => :string, "path" => :string},
-      optional: %{"showHidden" => :boolean}
+      optional: %{"showHidden" => :boolean, "profileId" => :string}
     },
-    "node.fs.stat" => %{required: %{"nodeId" => :string, "path" => :string}},
+    "node.fs.stat" => %{
+      required: %{"nodeId" => :string, "path" => :string},
+      optional: %{"profileId" => :string}
+    },
     "node.fs.read" => %{
       required: %{"nodeId" => :string, "path" => :string},
-      optional: %{"offset" => :integer, "length" => :integer}
+      optional: %{"offset" => :integer, "length" => :integer, "profileId" => :string}
     },
     "node.fs.write" => %{
       required: %{"nodeId" => :string, "path" => :string, "dataBase64" => :string},
@@ -902,10 +934,14 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "offset" => :integer,
         "truncate" => :boolean,
         "mkdirs" => :boolean,
-        "expectedModifiedAtMs" => :integer
+        "expectedModifiedAtMs" => :integer,
+        "profileId" => :string
       }
     },
-    "node.fs.mkdir" => %{required: %{"nodeId" => :string, "path" => :string}},
+    "node.fs.mkdir" => %{
+      required: %{"nodeId" => :string, "path" => :string},
+      optional: %{"profileId" => :string}
+    },
     "node.fs.move" => %{
       required: %{
         "nodeId" => :string,

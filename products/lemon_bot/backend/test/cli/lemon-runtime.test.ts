@@ -26,7 +26,6 @@ async function harness() {
     const input: ControllerPreparation = {
       terminal, environment, config, codec: createPrivateCodec(key), source: controllerSource, choose,
       fetch: (async () => Response.json({ ok: state.healthy })) as unknown as typeof fetch,
-      launch: async (_launcher, args) => { state.launches.push(args); return 0; },
       verify: async (url, token) => { state.verified.push(`${url} ${token}`); return null; },
     };
     await prepareController(input);
@@ -36,11 +35,11 @@ async function harness() {
   return { state, load, prepare, launcher };
 }
 
-test('first start on this machine offers to start a stopped Lemon, then remembers the choice', async () => {
+test('first start chooses a stopped local Lemon without launching it, then remembers the choice', async () => {
   const h = await harness();
-  const prepared = await h.prepare(['', '']);
+  const prepared = await h.prepare(['']);
   expect(h.state.output.join('\n')).toContain('1) This machine (installed, not running)');
-  expect(h.state.launches).toEqual([['setup', '--if-required'], ['daemon']]);
+  expect(h.state.launches).toEqual([]);
   expect(prepared.config).toMatchObject({ controlUrl: 'ws://127.0.0.1:4040/ws', runtimeLauncher: h.launcher });
   expect((await h.load()).controllerSource).toBe('saved');
   // The saved choice skips the question, and a running Lemon needs no start.
@@ -49,9 +48,10 @@ test('first start on this machine offers to start a stopped Lemon, then remember
   expect(h.state.launches).toEqual([]);
 });
 
-test('declining the start leaves Lemon stopped and still saves this machine', async () => {
+test('saved local choice never asks to start the runtime', async () => {
   const h = await harness();
-  await h.prepare(['1', 'n']);
+  await h.prepare(['1']);
+  await h.prepare([]);
   expect(h.state.launches).toEqual([]);
   expect((await h.load()).controllerSource).toBe('saved');
 });

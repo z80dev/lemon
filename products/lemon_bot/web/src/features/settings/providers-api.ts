@@ -1,9 +1,9 @@
-import { LemonBotError, type LemonBotClient, type ProviderDefaultSet, type ProviderDeviceLogin, type ProviderManagement, type ProviderTargetRequest } from '@lemon-bot/sdk';
+import { LemonBotError, type LemonBotClient, type ProviderCheckRequest, type ProviderCheckResult, type ProviderDefaultSet, type ProviderDeviceLogin, type ProviderImportRequest, type ProviderManagement, type ProviderTargetRequest } from '@lemon-bot/sdk';
 
 export const codexVerificationUrl = 'https://auth.openai.com/codex/device';
 export type DeviceAction = 'start' | 'poll' | 'cancel';
 export type ProviderIntent =
-  | { kind: 'api_key' | 'disconnect'; clientNonce: string; targetId: string; providerId: string }
+  | { kind: 'api_key' | 'disconnect' | 'import'; clientNonce: string; targetId: string; providerId: string }
   | { kind: 'default'; clientNonce: string; targetId: string; providerId: string; modelId: string }
   | { kind: 'device'; clientNonce: string; targetId: string; providerId: 'openai_codex'; pollNonce: string; cancelNonce: string; action: DeviceAction; startedAtMs: number };
 
@@ -14,7 +14,7 @@ export function readProviderIntent(storageKey: string): ProviderIntent | null {
     const bounded = (item: unknown): item is string => typeof item === 'string' && item.length > 0 && item.length <= 256 && !/[\u0000-\u001f]/.test(item);
     if (!value || !bounded(value.clientNonce) || !bounded(value.targetId) || !bounded(value.providerId)) return null;
     const common = { clientNonce: value.clientNonce, targetId: value.targetId, providerId: value.providerId };
-    if (value.kind === 'api_key' || value.kind === 'disconnect') return { ...common, kind: value.kind };
+    if (value.kind === 'api_key' || value.kind === 'disconnect' || value.kind === 'import') return { ...common, kind: value.kind };
     if (value.kind === 'default' && bounded(value.modelId)) return { ...common, kind: 'default', modelId: value.modelId };
     if (value.kind === 'device' && value.providerId === 'openai_codex' && bounded(value.pollNonce) && bounded(value.cancelNonce) && ['start', 'poll', 'cancel'].includes(value.action) && typeof value.startedAtMs === 'number' && Number.isFinite(value.startedAtMs) && value.startedAtMs > 0) {
       return { ...common, kind: 'device', providerId: 'openai_codex', pollNonce: value.pollNonce, cancelNonce: value.cancelNonce, action: value.action, startedAtMs: value.startedAtMs };
@@ -38,6 +38,8 @@ export interface ProviderApi {
   disconnect: (providerId: string, body: ProviderTargetRequest) => Promise<ProviderManagement>;
   changeDefault: (body: ProviderDefaultSet) => Promise<ProviderManagement>;
   device: (intent: Extract<ProviderIntent, { kind: 'device' }>) => Promise<ProviderDeviceLogin>;
+  check: (body: ProviderCheckRequest) => Promise<ProviderCheckResult>;
+  importLogin: (providerId: string, body: ProviderImportRequest) => Promise<ProviderManagement>;
 }
 
 export function providerApi(client: LemonBotClient, machineId?: string): ProviderApi {
@@ -66,6 +68,12 @@ export function providerApi(client: LemonBotClient, machineId?: string): Provide
       if (action === 'poll') return client.call('POST /instance/providers/:providerId/device-login/:loginId/poll', { params, body });
       return client.call('POST /instance/providers/:providerId/device-login/:loginId/cancel', { params, body });
     },
+    check: (body: ProviderCheckRequest) => machineId
+      ? client.call('POST /machines/:id/providers/check', { params: { id: machineId }, body })
+      : client.call('POST /instance/providers/check', { body }),
+    importLogin: (providerId: string, body: ProviderImportRequest) => machineId
+      ? client.call('POST /machines/:id/providers/:providerId/import', { params: { id: machineId, providerId }, body })
+      : client.call('POST /instance/providers/:providerId/import', { params: { providerId }, body }),
   };
 }
 

@@ -9,7 +9,7 @@ and store in `~/.lemon` and uses the same first-run setup.
 | [Installer](#quick-install) | Everyday use on macOS or Linux | `curl`, `tar`, `python3`, a model-provider account |
 | [Container image](#container-image) | Servers and always-on hosts | Docker |
 | [Source checkout](#source-development) | Contributing, unsupported platforms, building releases | Elixir, Erlang/OTP, Bun |
-| [Mac app](#mac-app) | Lemon Bot on macOS | Built from source today |
+| [Mac app](#mac-app) | Lemon Bot on macOS Apple Silicon | Published DMG when signing is configured; no developer tools |
 
 Want the shortest route to a working chat? Follow the
 [quickstart](getting-started/quickstart.md).
@@ -86,7 +86,7 @@ starting an unconfigured daemon. Details are in [Set up Lemon](user-guide/setup.
 
 | Flag | Effect |
 | --- | --- |
-| `--profile NAME` | Select `full`, `min`, or `lemon_bot`. Same as `LEMON_PROFILE`. |
+| `--profile NAME` | Select `full`, `min`, `bot` (runtime + backend), or `lemon_bot` (backend only). Same as `LEMON_PROFILE`. |
 | `--force` | Reinstall a version that is already present. |
 | `--verify` | Boot the installed runtime on ephemeral ports in a throwaway `HOME` and poll `/healthz` before finishing. |
 | `--no-modify-path` | Do not edit your shell rc file; the final next step uses the launcher's absolute path. |
@@ -105,7 +105,7 @@ curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -
 | --- | --- | --- |
 | `LEMON_VERSION` | *(latest stable)* | Pin an exact version. Required for `preview` and `nightly`. A pin alone accepts whichever channel its manifest publishes. |
 | `LEMON_CHANNEL` | `stable` | Release channel. When set explicitly it must match the manifest, even with a pin. |
-| `LEMON_PROFILE` | `lemon_runtime_full` | `full`, `min`, `lemon_bot`, or a full profile name. |
+| `LEMON_PROFILE` | `lemon_runtime_full` | `full`, `min`, `bot`, `lemon_bot`, or a full profile name. |
 | `LEMON_NO_TUI` | *(unset)* | `1` installs the runtime only, skipping the terminal UI download. |
 | `LEMON_INSTALL_IGNORE_GLIBC` | *(unset)* | `1` silences the Linux glibc 2.39 baseline warning. |
 | `LEMON_INSTALL_BASE_URL` | `https://github.com/z80dev/lemon` | Release host override, for mirrors and tests. Plain `http://` is accepted with a warning. |
@@ -130,7 +130,19 @@ model and manifest schema.
 | --- | --- | --- |
 | `full` (`lemon_runtime_full`) | Runtime, local Web UI, simulation dashboard assets, TUI | Default. `lemon web` needs this profile. |
 | `min` (`lemon_runtime_min`) | Runtime and TUI | No Web UI. |
-| `lemon_bot` | Standalone [Lemon Bot](../products/lemon_bot/README.md) backend | Installs under `~/.lemon/lemon_bot` and links `~/.local/bin/lemon-bot`; state stays in `~/.lemon/lemon_bot`. Run `lemon-bot`: it serves `http://127.0.0.1:4100` and asks whether to use the Lemon on this machine (offering to start it) or another machine's. Install `full` or `min` too to run Lemon on the same machine. |
+| `bot` | Full runtime and Lemon Bot backend at one manifest version | No TUI by default; runtime must pass the bot capability/version gate. `LEMON_NO_TUI=0` opts into the TUI. |
+| `lemon_bot` | Standalone [Lemon Bot](../products/lemon_bot/README.md) backend only | Independent pointer under `~/.lemon/lemon_bot`; launcher `~/.local/bin/lemon-bot`. For remote controllers, containers, or manual supervision; does not install a runtime or services. |
+
+For a complete Bot installation:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --profile bot
+```
+
+After both artifacts install, a terminal hands off to `lemon-bot`, which owns
+setup and service enrollment. Without a terminal, or with `--skip-setup`, the
+installer prints one `Run: <absolute path>/lemon-bot` next step. It does not run
+the runtime setup wizard separately.
 
 ### Install layout
 
@@ -226,8 +238,15 @@ runtime to `ghcr.io/z80dev/lemon`, tagged by exact version, by channel (`stable`
 `preview`, `nightly`), and `latest` for stable
 (`.github/workflows/release.yml`, `docker/Dockerfile.runtime`). The image runs
 as a non-root user, keeps all state on the `/data` volume (`HOME=/data`), exposes
-ports 4040 (control plane), 4080 (Web) and 4090 (simulation UI), and has a
-`/healthz` health check.
+ports 4040 (control plane), 4044 (node gateway), 4080 (Web) and 4090 (simulation UI),
+and has a `/healthz` health check.
+
+The container explicitly binds control plane, node gateway, Web, and simulation
+UI listeners to `0.0.0.0` so published host ports (`-p`) are reachable. Because
+non-loopback exposure requires authentication, `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`
+must be configured in the container environment on every start; the token is
+never written to the storage volume, and the entrypoint exits with a readable
+error if it is omitted.
 
 Modeled on the release CI smoke test, which waits for `/healthz` on ports 4040
 and 4080. Generate the master key once with `openssl rand -base64 32` (Lemon
@@ -239,9 +258,21 @@ docker run -d --name lemon \
   -p 127.0.0.1:4040:4040 -p 127.0.0.1:4080:4080 \
   -v lemon-data:/data \
   -e LEMON_SECRETS_MASTER_KEY="<your base64 key>" \
+  -e LEMON_CONTROL_PLANE_OPERATOR_TOKEN="<your hex token>" \
   ghcr.io/z80dev/lemon:latest
 curl -fsS http://127.0.0.1:4040/healthz
 ```
+
+Generate the operator token with `openssl rand -hex 32` and pass it via `-e`
+on each start as well as to your clients and the Web login page. To attach
+external worker machines, also publish the node gateway port
+`-p 127.0.0.1:4044:4044`.
+
+Erlang distribution and epmd stay on loopback inside the container: every
+packaged release sources `releases/<version>/env.sh`, which defaults
+`ERL_EPMD_ADDRESS` to `127.0.0.1` and pins the distribution listen interface
+unless `RELEASE_DISTRIBUTION=name` is set. To cluster across hosts, set
+`RELEASE_DISTRIBUTION=name`, `RELEASE_NODE`, and an explicit `ERL_EPMD_ADDRESS`.
 
 If `LEMON_WEB_SECRET_KEY_BASE` or `LEMON_GATEWAY_NODE_COOKIE` is unset, the
 entrypoint generates one, warns, and stores it in `/data/.lemon/env`; set
@@ -255,17 +286,23 @@ covered in [Deployment flows](release/deployment_flows.md).
 On macOS, `install.sh` on Apple Silicon gives you the runtime, the terminal UI,
 and `lemon web`; everything above works there.
 
-The native macOS application is **Lemon Bot**, a separate product
-(`products/lemon_bot/apple/LemonBotMac`, macOS 14+) that connects to a running
-Lemon controller and a Lemon Bot backend. The release workflow does not publish
-a signed `.dmg`, application `.zip`, or `.ipa`
-([Apple application prerequisites](release/versioning_and_channels.md#apple-application-prerequisites)),
-so there is no downloadable Mac app to install yet. To build it yourself you
-need Xcode 26.3 and XcodeGen 2.46+; follow the
-[Apple build guide](https://github.com/z80dev/lemon/blob/main/products/lemon_bot/apple/README.md#generate-build-and-launch)
-and the [Lemon Bot README](https://github.com/z80dev/lemon/blob/main/products/lemon_bot/README.md#running-an-integrated-checkout).
-Run `lemon setup` on the controller first; the app never receives Lemon's
-operator credential.
+The native macOS application is **Lemon Bot** (macOS 14+). When release signing is
+configured, download its notarized DMG from GitHub Releases, move the app to
+`/Applications` or `~/Applications`, and choose **Set up Lemon Bot on this Mac**.
+The app needs no developer tools: it downloads a pinned runtime (including
+CPython) and backend, checks the manifest against the digest in its signed
+Info.plist, verifies artifact sizes and hashes, and checks both staged programs
+before installing. Setup then starts Lemon Bot through its managed lifecycle.
+
+Setup installs only missing components, never upgrades an installed component.
+When one component is already at another version, its missing counterpart is
+installed at that version using HTTPS and the release manifest's artifact hashes.
+Use `lemon update` for upgrades. Terminal installation with `install.sh` still
+requires `python3` (Apple's Command Line Tools on macOS).
+
+Without signing credentials CI creates an unsigned local-preview workflow
+artifact only, not a downloadable GitHub Release DMG. For source builds see the
+[Apple build guide](https://github.com/z80dev/lemon/blob/main/products/lemon_bot/apple/README.md#generate-build-and-launch).
 
 ## Source development
 

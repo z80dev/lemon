@@ -29,6 +29,7 @@ defmodule LemonControlPlane.WS.Connection do
   alias LemonCore.Bus.Delivery
 
   @heartbeat_interval_ms 25_000
+  @node_session_touch_interval_ms 3_600_000
 
   defstruct [
     :conn_id,
@@ -39,6 +40,8 @@ defmodule LemonControlPlane.WS.Connection do
     :state_version,
     :delivery,
     :heartbeat_timer_ref,
+    :node_session_touch_timer_ref,
+    allowed_roles: :all,
     resync_required: false
   ]
 
@@ -51,7 +54,9 @@ defmodule LemonControlPlane.WS.Connection do
           state_version: map(),
           delivery: Delivery.t() | nil,
           resync_required: boolean(),
-          heartbeat_timer_ref: reference() | nil
+          heartbeat_timer_ref: reference() | nil,
+          node_session_touch_timer_ref: reference() | nil,
+          allowed_roles: :all | [Authorize.role()]
         }
 
   ## WebSock Callbacks
@@ -61,12 +66,9 @@ defmodule LemonControlPlane.WS.Connection do
     conn_id = LemonCore.Id.uuid()
 
     local? =
-      opts |> Keyword.get(:peer) |> local_peer?() and
-        Application.get_env(
-          :lemon_control_plane,
-          :allow_unauthenticated_loopback_operator,
-          false
-        ) == true
+      Keyword.get(opts, :tokenless, true) and local_peer?(Keyword.get(opts, :peer)) and
+        Application.get_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, false) ==
+          true
 
     state = %__MODULE__{
       conn_id: conn_id,
@@ -74,6 +76,7 @@ defmodule LemonControlPlane.WS.Connection do
       connected: false,
       event_seq: 0,
       local?: local?,
+      allowed_roles: Keyword.get(opts, :allowed_roles, :all),
       state_version: %{},
       delivery: Delivery.new(self())
     }
@@ -220,6 +223,14 @@ defmodule LemonControlPlane.WS.Connection do
 
   def handle_info(:heartbeat, state), do: {:ok, state}
 
+  def handle_info(:node_session_touch, %{connected: true, auth: %{role: :node} = auth} = state) do
+    touch_node_session(auth)
+    timer_ref = schedule_node_session_touch()
+    {:ok, %{state | node_session_touch_timer_ref: timer_ref}}
+  end
+
+  def handle_info(:node_session_touch, state), do: {:ok, state}
+
   def handle_info(_msg, state) do
     Logger.debug("Unhandled message in WS connection redacted=true")
     {:ok, state}
@@ -234,6 +245,9 @@ defmodule LemonControlPlane.WS.Connection do
     if is_reference(state.heartbeat_timer_ref),
       do: Process.cancel_timer(state.heartbeat_timer_ref)
 
+
+    if is_reference(state.node_session_touch_timer_ref),
+      do: Process.cancel_timer(state.node_session_touch_timer_ref)
     # Unregister from presence
     if state.connected do
       unregister_presence(state)
@@ -314,31 +328,62 @@ defmodule LemonControlPlane.WS.Connection do
   defp handle_connect(id, params, state) do
     case Authorize.from_params(params || %{}, local?: state.local?) do
       {:ok, auth} ->
-        case register_node_connection(auth, params || %{}) do
-          :ok ->
-            finish_connect(auth, state)
+        if state.allowed_roles == :all or auth.role in state.allowed_roles do
+          case register_node_connection(auth, params || %{}) do
+            :ok ->
+              finish_connect(auth, state)
 
-          {:error, error} ->
-            {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
+            {:error, error} ->
+              {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
+          end
+        else
+          error = Errors.unauthorized("This endpoint accepts only execution nodes")
+          {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
         end
 
-      {:error, {:unauthorized, message}} ->
-        message =
-          if Map.get(params || %{}, "role") in [nil, "operator"] do
-            message <>
-              ". Set connect.auth.token from LEMON_CONTROL_PLANE_OPERATOR_TOKEN or the launcher's ~/.lemon/run/control-plane-<port>.token file."
-          else
-            message
-          end
+      {:error, {:unauthorized, message, details}} ->
+        message = maybe_append_operator_hint(message, params)
+        error = Errors.error(:unauthorized, message, details)
+        {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
 
+      {:error, {:unauthorized, message}} ->
+        message = maybe_append_operator_hint(message, params)
         error = Errors.unauthorized(message)
         {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
+
+      {:error, {:unavailable, message}} ->
+        error = Errors.unavailable(message)
+        {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
+    end
+  end
+
+  defp maybe_append_operator_hint(message, params) do
+    if Map.get(params || %{}, "role") in [nil, "operator"] do
+      message <>
+        ". Set connect.auth.token from LEMON_CONTROL_PLANE_OPERATOR_TOKEN or the launcher's ~/.lemon/run/control-plane-<port>.token file."
+    else
+      message
     end
   end
 
   defp finish_connect(auth, state) do
     timer_ref = Process.send_after(self(), :heartbeat, @heartbeat_interval_ms)
-    state = %{state | auth: auth, connected: true, heartbeat_timer_ref: timer_ref}
+
+    touch_timer_ref =
+      if auth.role == :node do
+        touch_node_session(auth)
+        schedule_node_session_touch()
+      else
+        nil
+      end
+
+    state = %{
+      state
+      | auth: auth,
+        connected: true,
+        heartbeat_timer_ref: timer_ref,
+        node_session_touch_timer_ref: touch_timer_ref
+    }
 
     # Register with presence
     register_presence(state)
@@ -441,8 +486,10 @@ defmodule LemonControlPlane.WS.Connection do
       true ->
         case NodeStore.get_node(node_id) do
           nil ->
-            {:error, Errors.unauthorized("Paired node was not found")}
-
+            {:error,
+             Errors.error(:unauthorized, "Paired node was not found", %{
+               "reason" => "node_not_found"
+             })}
           node ->
             register_durable_node(node_id, node, auth, params)
         end
@@ -471,8 +518,10 @@ defmodule LemonControlPlane.WS.Connection do
         {:error, Errors.unauthorized("Paired node has no durable name")}
 
       {:error, {:name_taken, _name}} ->
-        {:error, Errors.conflict("Node name is already in use")}
-
+        {:error,
+         Errors.error(:conflict, "Node name is already in use", %{
+           "reason" => "node_name_conflict"
+         })}
       {:error, :invalid_name} ->
         {:error, Errors.unauthorized("Paired node has no durable name")}
 
@@ -586,5 +635,34 @@ defmodule LemonControlPlane.WS.Connection do
       pid when is_pid(pid) ->
         LemonControlPlane.Presence.unregister(state.conn_id)
     end
+  end
+
+  defp touch_node_session(%{role: :node, client_id: node_id} = auth)
+       when is_binary(node_id) and node_id != "" do
+    generation = get_field(auth.identity || %{}, :sessionGeneration) || 0
+    touch_node_session(node_id, generation)
+  end
+
+  defp touch_node_session(_auth), do: :ok
+
+  defp touch_node_session(node_id, generation)
+       when is_binary(node_id) and node_id != "" and is_integer(generation) do
+    case LemonControlPlane.Auth.TokenStore.touch_node_session(node_id, generation) do
+      {:ok, _expires_at} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.debug(
+          "Failed to touch node session for #{node_id} generation #{generation}: #{inspect(reason)}"
+        )
+
+        :ok
+    end
+  end
+
+  defp touch_node_session(_node_id, _generation), do: :ok
+
+  defp schedule_node_session_touch do
+    Process.send_after(self(), :node_session_touch, @node_session_touch_interval_ms)
   end
 end

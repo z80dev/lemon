@@ -22,8 +22,59 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Deliberate stops stay down; updates restart only previously running units,
   stop workers before restarting the controller, and update an installed Lemon
   Bot backend in lockstep with the runtime.
+- Add a shell-only supervised reverse SSH tunnel for second-machine node gateway
+  and Lemon Bot access, with private status, credential-free SSH environments,
+  stale same-user sshd cleanup and terminal host-key/auth/forwarding failures.
+- Added the embedded Lemon Bot Worker helper, non-prompting macOS grant probes,
+  and explicit local-machine Permissions controls with System Settings links.
+- Named workers now refuse credential-bearing loopback connections unless the
+  listener belongs to their OS user, including tunneled MCP requests. Deliberate
+  cross-user deployments can opt out with `LEMON_NODE_TRUST_LOOPBACK_LISTENER=1`.
+- Pairing preview reports node-gateway health; tunnel invitations bind the exact
+  destination loopback port without selecting a controller-local source checkout.
+- Build Mac DMGs in release CI with a signed runtime-manifest pin, credential
+  gating, notarization and verified receipts. Unconfigured builds remain
+  unpublished preview artifacts; stable signed releases include a fixed DMG alias.
+### Changed
+
+- **Breaking security change:** control-plane, web and simulation listeners now
+  bind `127.0.0.1` by default, as do launcher epmd/distribution defaults. Existing
+  LAN clients must opt into `*_BIND_IP`, configure operator authentication, and
+  restart. Non-loopback main traffic is restricted to `/ws` and `/healthz`;
+  remote OpenAI/ACP APIs require explicit opt-in and dedicated tokens.
+- OpenAI/ACP require bearer authentication by default (falling back to the
+  operator token); tokenless local OpenAI/ACP/A2A requires the explicit loopback
+  compatibility flag. Containers explicitly bind inside their namespace and
+  require an operator token.
+
+### Added
+
+- Node-only gateway on loopback port `4044` for secure node tunnels/proxies:
+  node/enrollment `/ws` and `/healthz` only, never operator or tokenless access.
+  Setup reserves the gateway port and doctor reports exposed listeners.
+- Combined `--profile bot` installer preset: bot-verified full runtime without
+  the TUI and the same-version backend, with a single Lemon Bot setup hand-off.
+- Worker join commands install services by default, report actual persistence,
+  and support headless stdin/file-descriptor enrollment. `--foreground` opts out;
+  backend-only `--profile lemon_bot` remains available for manual deployments.
+- Release-pinned Mac app setup verifies and installs missing runtime/backend
+  components without developer tools; darwin runtimes bundle checksum-pinned
+  CPython and avoid Apple's Python shim when Command Line Tools are absent.
 
 ### Fixed
+
+- Isolate named workers' DETS state from the controller, guard against concurrent
+  VM writers, back up and rebuild the controller's legacy DETS files once, and
+  expose local worker state with `lemon node status --name NAME --json`.
+- Stop the Lemon Bot transcript (Mac and iPhone) from pinning a CPU core in an
+  endless SwiftUI layout loop while a conversation is open.
+- Execution-node sessions now renew while connected and expire after seven days
+  without contact. Rejected or missing credentials park the worker until repair
+  saves new credentials, while controller outages retry without restart loops.
+- Setup caches Keychain lookups only for the command lifetime, reports model
+  readiness truthfully, and checks Codex account model access without generating
+  a message. `lemon setup model` and opt-in provider-management readiness/check/
+  import methods support explicit connection and destination-local login consent.
 
 - Load the certificate provider before Telegram and Discord setup construct their
   first HTTPS request, preserving TLS verification on cold CLI invocations.

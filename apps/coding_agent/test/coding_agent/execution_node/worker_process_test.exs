@@ -34,6 +34,7 @@ defmodule CodingAgent.ExecutionNode.WorkerProcessTest do
       start_supervised!(
         {Worker,
          node_name: node,
+         status_writer: fn _, _ -> :ok end,
          controller: "ws://localhost:4040/ws",
          token: "test-token",
          cwd: root,
@@ -97,7 +98,7 @@ defmodule CodingAgent.ExecutionNode.WorkerProcessTest do
 
     assert Enum.sort(Map.keys(Worker.runtime_features()["features"])) ==
              Enum.sort(
-               ~w(hostIO filesystemCAS deletePreviews encryptedSecrets ptyShell mcpDiscovery profileSync liveStreaming repairInvites nativeExecutionPolicy)
+               ~w(botFolder hostIO filesystemCAS deletePreviews encryptedSecrets ptyShell mcpDiscovery profileSync liveStreaming repairInvites nativeExecutionPolicy)
              )
   end
 

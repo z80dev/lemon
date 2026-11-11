@@ -2,6 +2,60 @@ import XCTest
 @testable import LemonBotKit
 
 final class ProtocolTests: XCTestCase {
+    func testCreationAccessPreservesExplicitConsentAndLegacyOmission() throws {
+        for access in [nil, "standard", "none"] as [String?] {
+            let create = BotCreate(clientNonce: "creation_nonce_1234", name: "Lemon", machineId: "machine", access: access)
+            let duplicate = BotDuplicate(clientNonce: "duplicate_nonce_1234", name: "Copy", machineId: "machine", includeSkills: false, includeRoutines: false, access: access)
+            let templateImport = TemplateImport(clientNonce: "template_nonce_1234", name: "Imported", machineId: "machine", acceptedTerms: true, access: access)
+            XCTAssertEqual(try JSONDecoder().decode(BotCreate.self, from: JSONEncoder().encode(create)).access, access)
+            XCTAssertEqual(try JSONDecoder().decode(BotDuplicate.self, from: JSONEncoder().encode(duplicate)).access, access)
+            XCTAssertEqual(try JSONDecoder().decode(TemplateImport.self, from: JSONEncoder().encode(templateImport)).access, access)
+            for data in [try JSONEncoder().encode(create), try JSONEncoder().encode(duplicate), try JSONEncoder().encode(templateImport)] {
+                let wire = try JSONDecoder().decode(JSONObject.self, from: data)
+                XCTAssertEqual(wire["access"], access.map(JSONValue.string))
+            }
+        }
+        let legacy = Data(#"{"clientNonce":"creation_nonce_1234","name":"Lemon","machineId":"machine"}"#.utf8)
+        XCTAssertNil(try JSONDecoder().decode(BotCreate.self, from: legacy).access)
+        XCTAssertThrowsError(try JSONDecoder().decode(BotCreate.self, from: Data(#"{"clientNonce":"creation_nonce_1234","name":"Lemon","machineId":"machine","access":"unrestricted"}"#.utf8)))
+    }
+    func testTemplateSuggestedAccessIsOptionalDeclarativeContent() throws {
+        var content = TemplateContent(name: "Lemon", title: "", job: "", instructions: "", avatar: Avatar(kind: "character", shape: "round", color: "yellow"), voice: VoiceSettings(voiceId: "default", speed: 1), skills: [], routines: [], connectorNames: [])
+        XCTAssertNil(try JSONDecoder().decode(TemplateContent.self, from: JSONEncoder().encode(content)).suggestedAccess)
+        content.suggestedAccess = "standard"
+        XCTAssertEqual(try JSONDecoder().decode(TemplateContent.self, from: JSONEncoder().encode(content)).suggestedAccess, "standard")
+        let wire = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(content))
+        XCTAssertNil(wire["access"])
+    }
+    func testRememberedApprovalsDecodeOldAndNewWireShapes() throws {
+        let events = try JSONDecoder().decode([JSONObject].self, from: WireFixtures.events)
+        for (event, key, value) in [
+            ("bot.upserted", "approvalReview", JSONValue.string("per_chat")),
+            ("approval.upserted", "chatOption", .object(["toolGroup": .string("terminal"), "label": .string("Allow Terminal for this chat")]))
+        ] {
+            var payload = try XCTUnwrap(events.first { $0["event"]?.stringValue == event }?["payload"]?.objectValue)
+            func decode(_ payload: JSONObject) throws {
+                let data = try JSONEncoder().encode(payload)
+                if event == "bot.upserted" { _ = try JSONDecoder().decode(Bot.self, from: data) }
+                else { _ = try JSONDecoder().decode(Approval.self, from: data) }
+            }
+            payload.removeValue(forKey: key)
+            try decode(payload)
+            payload[key] = value
+            try decode(payload)
+            if event == "approval.upserted" {
+                payload["resolvedScope"] = .string("chat")
+                let approval = try JSONDecoder().decode(Approval.self, from: JSONEncoder().encode(payload))
+                XCTAssertEqual(approval.chatOption?.toolGroup, "terminal")
+                XCTAssertEqual(approval.resolvedScope, "chat")
+            }
+        }
+        let resolve = ApprovalResolve(clientNonce: "remembered_nonce_123", revision: 1, decision: "approve_chat")
+        XCTAssertEqual(try JSONDecoder().decode(ApprovalResolve.self, from: JSONEncoder().encode(resolve)), resolve)
+        let allowance = try JSONDecoder().decode(ApprovalAllowance.self, from: Data(#"{"id":"a","revision":1,"createdAtMs":1,"updatedAtMs":1,"scope":"chat","botId":"b","conversationId":"c","ownerUserId":"u","toolGroups":["terminal"],"label":"Terminal allowed in this chat","state":"active","endedReason":null,"endedAtMs":null,"endedByUserId":null,"sourceApprovalId":"p","createdByUserId":"u","useCount":0,"lastUsedAtMs":null}"#.utf8))
+        let event = RealtimeEvent(seq: "1", payload: .approvalAllowanceUpserted(allowance), timestampMs: 1)
+        XCTAssertEqual(try JSONDecoder().decode(RealtimeEvent.self, from: JSONEncoder().encode(event)), event)
+    }
     func testEveryDeclaredCardRoundTripsWithExactDiscriminator() throws {
         let cards = try JSONDecoder().decode([Card].self, from: WireFixtures.cards)
         let reencoded = try JSONEncoder().encode(cards)
@@ -115,6 +169,106 @@ final class ProtocolTests: XCTestCase {
         XCTAssertNil(connection.externalAccountId); XCTAssertNil(connection.username)
         let encoded = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(connection))
         XCTAssertEqual(encoded["externalAccountId"], .null); XCTAssertEqual(encoded["username"], .null)
+    }
+    func testMachineDecodesWithAndWithoutCredentialAndCalculatesNeedsReconnect() throws {
+        let oldJson = Data(#"""
+        {
+            "id": "machine_old",
+            "revision": 1,
+            "createdAtMs": 1000,
+            "updatedAtMs": 2000,
+            "nodeId": "node_1",
+            "nodeName": "chico",
+            "name": "Chico",
+            "ownerUserId": "user_1",
+            "accessUserIds": [],
+            "status": "offline",
+            "lastSeenAtMs": 2500,
+            "labels": {},
+            "botIds": []
+        }
+        """#.utf8)
+        let oldMachine = try JSONDecoder().decode(Machine.self, from: oldJson)
+        XCTAssertNil(oldMachine.credential)
+        XCTAssertFalse(oldMachine.needsReconnect)
+
+        for (status, credential, expectedReconnect) in [
+            ("offline", "expired", true),
+            ("offline", "revoked", true),
+            ("offline", "active", false),
+            ("offline", "unknown", false),
+            ("online", "expired", false),
+            ("online", "active", false),
+            ("pending", "expired", false),
+            ("revoked", "expired", false),
+        ] {
+            let json = Data("""
+            {
+                "id": "machine_new",
+                "revision": 1,
+                "createdAtMs": 1000,
+                "updatedAtMs": 2000,
+                "nodeId": "node_1",
+                "nodeName": "chico",
+                "name": "Chico",
+                "ownerUserId": "user_1",
+                "accessUserIds": [],
+                "status": "\(status)",
+                "lastSeenAtMs": 2500,
+                "labels": {},
+                "botIds": [],
+                "credential": "\(credential)"
+            }
+            """.utf8)
+            let machine = try JSONDecoder().decode(Machine.self, from: json)
+            XCTAssertEqual(machine.credential, credential)
+            XCTAssertEqual(machine.needsReconnect, expectedReconnect, "Failed for status=\(status), credential=\(credential)")
+        }
+
+        let invalidJson = Data(#"""
+        {
+            "id": "machine_bad",
+            "revision": 1,
+            "createdAtMs": 1000,
+            "updatedAtMs": 2000,
+            "nodeId": null,
+            "nodeName": "chico",
+            "name": "Chico",
+            "ownerUserId": "user_1",
+            "accessUserIds": [],
+            "status": "offline",
+            "lastSeenAtMs": null,
+            "labels": {},
+            "botIds": [],
+            "credential": "invalid_credential_value"
+        }
+        """#.utf8)
+        XCTAssertThrowsError(try JSONDecoder().decode(Machine.self, from: invalidJson))
+
+        let machineWithCred = Machine(
+            id: "m1", revision: 1, createdAtMs: 1000, updatedAtMs: 2000,
+            nodeId: "n1", nodeName: "chico", name: "Chico",
+            ownerUserId: "u1", accessUserIds: [], status: "offline",
+            labels: [:], botIds: [], credential: "expired"
+        )
+        XCTAssertTrue(machineWithCred.needsReconnect)
+        let encodedWithCred = try JSONEncoder().encode(machineWithCred)
+        let roundTrippedWithCred = try JSONDecoder().decode(Machine.self, from: encodedWithCred)
+        XCTAssertEqual(roundTrippedWithCred.credential, "expired")
+        XCTAssertTrue(roundTrippedWithCred.needsReconnect)
+
+        let machineWithoutCred = Machine(
+            id: "m2", revision: 1, createdAtMs: 1000, updatedAtMs: 2000,
+            nodeId: "n1", nodeName: "chico", name: "Chico",
+            ownerUserId: "u1", accessUserIds: [], status: "offline",
+            labels: [:], botIds: []
+        )
+        XCTAssertNil(machineWithoutCred.credential)
+        XCTAssertFalse(machineWithoutCred.needsReconnect)
+        let encodedWithoutCred = try JSONEncoder().encode(machineWithoutCred)
+        let roundTrippedWithoutCred = try JSONDecoder().decode(Machine.self, from: encodedWithoutCred)
+        XCTAssertNil(roundTrippedWithoutCred.credential)
+        XCTAssertFalse(roundTrippedWithoutCred.needsReconnect)
     }
 }
 
@@ -349,5 +503,76 @@ extension ProtocolTests {
         var resource = try XCTUnwrap(try JSONDecoder().decode([JSONObject].self, from: WireFixtures.events).first { $0["event"]?.stringValue == "conversation.upserted" }?["payload"]?.objectValue)
         resource["kind"] = .string("team_dm")
         XCTAssertThrowsError(try JSONDecoder().decode(Conversation.self, from: JSONEncoder().encode(resource)))
+    }
+}
+
+extension ProtocolTests {
+    func testAccessRequestCardAndStrictApprovalSource() throws {
+        let cards = try JSONDecoder().decode([Card].self, from: WireFixtures.cards)
+        guard case .accessRequest(let card) = try XCTUnwrap(cards.first { $0.type == "access_request" }) else { return XCTFail("Missing access card") }
+        XCTAssertEqual(card.approval.source, "access_request")
+        XCTAssertEqual(card.approval.inputs["capabilityIds"], .array([.string("terminal"), .string("files")]))
+        XCTAssertEqual(try JSONDecoder().decode(Card.self, from: JSONEncoder().encode(Card.accessRequest(card))), .accessRequest(card))
+        var approval = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(card.approval))
+        for source in ["lemon_exec", "product", "access_request"] {
+            approval["source"] = .string(source)
+            XCTAssertEqual(try JSONDecoder().decode(Approval.self, from: JSONEncoder().encode(approval)).source, source)
+        }
+        approval["source"] = .string("future_source")
+        XCTAssertThrowsError(try JSONDecoder().decode(Approval.self, from: JSONEncoder().encode(approval)))
+        let invalidCard: JSONObject = ["type": .string("access_request"), "approval": .object(approval)]
+        XCTAssertThrowsError(try JSONDecoder().decode(Card.self, from: JSONEncoder().encode(invalidCard)))
+        XCTAssertThrowsError(try JSONDecoder().decode(Card.self, from: Data(#"{"type":"access_request"}"#.utf8)))
+    }
+
+    func testGrantPendingLevelIsRequiredNullableAndEncodesNull() throws {
+        let grants = try JSONDecoder().decode([BotGrant].self, from: WireFixtures.grants)
+        XCTAssertNil(grants[0].pendingLevel)
+        XCTAssertEqual(grants[1].pendingLevel, "read_interact")
+        XCTAssertEqual(grants[1].requestedLevel, "off")
+        XCTAssertEqual(grants[1].effectiveLevel, "off")
+        let encoded = try JSONEncoder().encode(grants)
+        XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: encoded), try JSONDecoder().decode(JSONValue.self, from: WireFixtures.grants))
+        var missing = try JSONDecoder().decode([JSONObject].self, from: encoded)[0]
+        XCTAssertEqual(missing.removeValue(forKey: "pendingLevel"), .null)
+        XCTAssertThrowsError(try JSONDecoder().decode(BotGrant.self, from: JSONEncoder().encode(missing)))
+    }
+
+    func testFolderPolicyFieldsRoundTripAndRemainStrict() throws {
+        let policy = EffectivePolicy(userId: "owner", directoryGroupIds: [], productAccess: true, localExecutionCeiling: "ask", workspaceReads: "allow", allowSudo: false, allowEgress: true, rules: [], networkPolicies: [], explanations: [])
+        var value = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(policy))
+        for mode in ["allow", "ask"] {
+            value["workspaceReads"] = .string(mode)
+            XCTAssertEqual(try JSONDecoder().decode(EffectivePolicy.self, from: JSONEncoder().encode(value)).workspaceReads, mode)
+        }
+        value["workspaceReads"] = .string("deny")
+        XCTAssertThrowsError(try JSONDecoder().decode(EffectivePolicy.self, from: JSONEncoder().encode(value)))
+        value.removeValue(forKey: "workspaceReads")
+        XCTAssertThrowsError(try JSONDecoder().decode(EffectivePolicy.self, from: JSONEncoder().encode(value)))
+        let events = try JSONDecoder().decode([JSONObject].self, from: WireFixtures.events)
+        var governance = try XCTUnwrap(events.first { $0["event"]?.stringValue == "governance.updated" }?["payload"]?.objectValue)
+        for review in [false, true] {
+            governance["folderReadsNeedReview"] = .bool(review)
+            let decoded = try JSONDecoder().decode(Governance.self, from: JSONEncoder().encode(governance))
+            XCTAssertEqual(decoded.folderReadsNeedReview, review)
+            XCTAssertEqual(try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(decoded))["folderReadsNeedReview"], .bool(review))
+        }
+        let update = GovernanceUpdate(clientNonce: "folder_policy_nonce", revision: 1, folderReadsNeedReview: true)
+        XCTAssertEqual(try JSONDecoder().decode(GovernanceUpdate.self, from: JSONEncoder().encode(update)).folderReadsNeedReview, true)
+        let unchanged = GovernanceUpdate(clientNonce: "folder_policy_nonce", revision: 1)
+        XCTAssertNil(try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(unchanged))["folderReadsNeedReview"])
+    }
+
+    func testBotFolderCapabilityIsOptionalAndTyped() throws {
+        let old = MachineCapabilities(machineId: "machine", os: "macos", measuredAtMs: 1, stale: false, items: [])
+        var value = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(old))
+        XCTAssertNil(value["botFolder"])
+        XCTAssertNil(try JSONDecoder().decode(MachineCapabilities.self, from: JSONEncoder().encode(value)).botFolder)
+        value["botFolder"] = .bool(true)
+        let supported = try JSONDecoder().decode(MachineCapabilities.self, from: JSONEncoder().encode(value))
+        XCTAssertEqual(supported.botFolder, true)
+        XCTAssertEqual(try JSONDecoder().decode(MachineCapabilities.self, from: JSONEncoder().encode(supported)), supported)
+        value["botFolder"] = .string("true")
+        XCTAssertThrowsError(try JSONDecoder().decode(MachineCapabilities.self, from: JSONEncoder().encode(value)))
     }
 }

@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FeedbackCreate, Run, TranscriptEntry, TranscriptEvent } from '@lemon-bot/sdk';
+import type { ApprovalAllowance, FeedbackCreate, Run, TranscriptEntry, TranscriptEvent } from '@lemon-bot/sdk';
 import { nonce } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
 import type { Route } from '../../app';
-import { AlertCircle, ArrowDown, Hand, Check, ChevronLeft, ChevronRight, CircleStop, Copy, MoreHorizontal, Reply, Search, Square, ThumbsUp, Wrench, X } from 'lucide-react';
+import { AlertCircle, ArrowDown, ArrowRight, Hand, Check, ChevronLeft, ChevronRight, CircleStop, Copy, MoreHorizontal, Reply, Search, Square, ThumbsUp, Wrench, X } from 'lucide-react';
 import { BotAvatar, EmptyState, ErrorNotice, Field, LemonFace, Loading, PageHeader, botStyle, formatTime, useQuery } from '../../ui';
-import { compactDuration, currentStep, humanize, liveRunStatuses, plainLine, relativeTime, separatorDate, stoppableRunStatuses, toolIcon, voiceStateLabels } from '../../live';
+import { compactDuration, currentStep, humanize, isStreaming, liveRunStatuses, plainLine, relativeTime, separatorDate, stoppableRunStatuses, terminalRunStatuses, toolIcon, voiceStateLabels } from '../../live';
 import { TranscriptCard } from './cards';
 import { Composer } from './composer';
 import { BotPanel, type PanelTab } from './panel';
 import { AttachmentLink, RichText } from './files';
 import { IntentNotice, copyText, mergeEntries, useClock, useIntent } from './common';
 import './chat.css';
+import { getModelReadinessSkip, isReadyState, ModelReadinessModal } from '../bots/model-readiness';
 export { FileViewer } from './files';
 
 function EventLine({ event }: { event: TranscriptEvent }) {
@@ -105,18 +106,19 @@ function EntryView({ entry, attachments, jump, reply, changed, context }: { entr
   const mine = entry.actor.kind === 'user';
   const anchor = { 'data-entry-id': entry.id, 'data-seq': entry.seq, tabIndex: -1, id: `entry-${entry.id}` };
   const fileIds = entry.kind === 'message' ? [...new Set([...entry.attachmentIds, ...attachments])] : [];
+  const streaming = isStreaming(entry, context.run ? [context.run] : []);
   if (entry.kind === 'message' && !mine && !entry.text && !fileIds.length) {
     if (context.run && finishedRun[context.run.status]) return <article className="chat-entry chat-entry-outcome" {...anchor} aria-label={`${entry.actor.displayName}, ${formatTime(entry.timestampMs)}`}><RunOutcomeRow run={context.run} retryText={context.retryText}/></article>;
-    if (entry.streaming || (context.run && context.run.status !== 'succeeded')) return <article className={`chat-entry chat-bot-entry ${context.grouped ? 'grouped' : ''}`} {...anchor}><TypingBubble label={`${entry.actor.displayName} is replying`}/></article>;
+    if (streaming || (context.run && context.run.status !== 'succeeded')) return <article className={`chat-entry chat-bot-entry ${context.grouped ? 'grouped' : ''}`} {...anchor}><TypingBubble label={`${entry.actor.displayName} is replying`}/></article>;
     return null;
   }
   let content; let shape: 'bubble' | 'card' | 'system' | 'outcome' = 'bubble';
   switch (entry.kind) {
-    case 'message': content = <><RichText text={entry.text} />{entry.streaming && <span className="chat-caret" role="status" aria-label="Still writing"/>}{fileIds.map(id => <AttachmentLink key={id} id={id} />)}</>; break;
+    case 'message': content = <><RichText text={entry.text} />{streaming && <span className="chat-caret" role="status" aria-label="Still writing"/>}{fileIds.map(id => <AttachmentLink key={id} id={id} />)}</>; break;
     case 'card': {
       shape = 'card';
       const room = snapshot.conversations.find(conversation => conversation.id === entry.conversationId);
-      const privateTypes: Record<string, true> = { secret_request: true, human_step: true, email_draft: true, slack_draft: true, message_draft: true, permission_request: true, auto_review_approval: true, local_tool_permission: true, publish_approval: true };
+      const privateTypes: Record<string, true> = { access_request: true, secret_request: true, human_step: true, email_draft: true, slack_draft: true, message_draft: true, permission_request: true, auto_review_approval: true, local_tool_permission: true, publish_approval: true };
       content = (room?.kind === 'group' || room?.kind === 'channel') && privateTypes[entry.card.type] ? <p className="error-notice">Sensitive requests must be reviewed in your authorized private task or DM, not in this shared room.</p> : <TranscriptCard card={entry.card} />; break;
     }
     case 'user_attachment': content = <AttachmentLink id={entry.attachmentId} />; break;
@@ -155,9 +157,10 @@ export function ConversationScreen({ route }: { route: Route }) {
 }
 function ConversationBody({ id, route }: { id: string; route: Route }) {
   const { client, realtime, snapshot, online, navigate } = useApp(); const conversationQuery = useQuery(`conversation:${id}`, () => client.call('GET /conversations/:id', { params: { id } })); const history = useQuery(`entries:${id}`, () => client.call('GET /conversations/:id/entries', { params: { id }, query: { limit: 100 } }));
+  const allowances = useQuery(`approval-allowances:${id}`, () => client.call('GET /conversations/:id/approval-allowances', { params: { id }, query: { state: 'active', limit: 200 } }));
   const runQuery = useQuery(`runs:${id}`, () => client.call('GET /runs', { query: { conversationId: id, limit: 200 } })); const runsRef = useRef<Run[]>([]); const [runs, setRuns] = useState<Run[]>([]);
   const [entries, setEntries] = useState<TranscriptEntry[]>([]); const entriesRef = useRef(entries); entriesRef.current = entries; const [replyId, setReplyId] = useState<string | null>(null); const [panel, setPanel] = useState<PanelTab | null>(null); const headerMenu = useRef<HTMLDetailsElement>(null); const [findOpen, setFindOpen] = useState(false); const findInput = useRef<HTMLInputElement>(null); const [older, setOlder] = useState(false); const [paging, setPaging] = useState(false); const [pageError, setPageError] = useState<unknown>(); const [liveError, setLiveError] = useState<unknown>(); const [find, setFind] = useState(''); const [findQuery, setFindQuery] = useState(''); const [typing, setTyping] = useState<{ userId: string; expiresAtMs: number }[]>([]); const [jumped, setJumped] = useState(false);
-  const scroller = useRef<HTMLDivElement>(null); const end = useRef<HTMLDivElement>(null); const pinned = useRef(true); const initialScroll = useRef(false); const lastRead = useRef(0); const unreadBoundary = useRef<number | undefined>(undefined); const clock = useClock(); const stopIntent = useIntent(); const readFailure = useRef(false); const [readError, setReadError] = useState<unknown>(); const readInFlight = useRef(false); const visibleThrough = useRef(0); const visibleEntries = useRef(new Set<string>()); const [readVersion, setReadVersion] = useState(0); const refetching = useRef(new Set<string>());
+  const scroller = useRef<HTMLDivElement>(null); const end = useRef<HTMLDivElement>(null); const pinned = useRef(true); const initialScroll = useRef(false); const lastRead = useRef(0); const unreadBoundary = useRef<number | undefined>(undefined); const clock = useClock(); const stopIntent = useIntent(); const allowanceIntent = useIntent(); const [starterTask, setStarterTask] = useState<{ text: string; id: number }>(); const readFailure = useRef(false); const [readError, setReadError] = useState<unknown>(); const readInFlight = useRef(false); const visibleThrough = useRef(0); const visibleEntries = useRef(new Set<string>()); const [readVersion, setReadVersion] = useState(0); const refetching = useRef(new Set<string>());
   const forwardSeq = useRef(0); const [newer, setNewer] = useState(false); const [newBelow, setNewBelow] = useState(false); const [settled, setSettled] = useState(false);
   const [routePending, setRoutePending] = useState(!!route.entryId); const [routeRejected, setRouteRejected] = useState(false);
   const search = useQuery(`conversation-search:${id}:${findQuery}`, async () => {
@@ -178,6 +181,13 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
     catch (error) { setLiveError(error); throw error; }
     finally { refetching.current.delete(entryId); }
   }
+  function reconcileRun(run: Run) {
+    updateRun(run);
+    if (!terminalRunStatuses[run.status]) return;
+    for (const entry of entriesRef.current) {
+      if (entry.kind === 'message' && entry.streaming && entry.runId === run.id) void fetchEntry(entry.id).catch(() => undefined);
+    }
+  }
   useEffect(() => {
     if (!realtime) return;
     return realtime.subscribe(async frame => {
@@ -185,9 +195,17 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
       if (frame.type === 'caught_up') { void history.reload().catch(setLiveError); void runQuery.reload().catch(setLiveError); }
       if (frame.type !== 'event') return;
       if (frame.event === 'conversation.upserted' && frame.payload.id === id) { const conversation = frame.payload; conversationQuery.setData(current => !current || current.revision <= conversation.revision ? conversation : current); }
-      if (frame.event === 'run.upserted' && frame.payload.conversationId === id) updateRun(frame.payload);
+      if (frame.event === 'run.upserted' && frame.payload.conversationId === id) reconcileRun(frame.payload);
       if (frame.event === 'entry.upserted' && frame.payload.conversationId === id) upsert([frame.payload]);
       if (frame.event === 'entry.deleted' && frame.payload.conversationId === id) { const entryId = frame.payload.id; entriesRef.current = entriesRef.current.filter(entry => entry.id !== entryId); setEntries(entriesRef.current); }
+      if (frame.event === 'approval_allowance.upserted' && frame.payload.conversationId === id) {
+        const allowance = frame.payload;
+        allowances.setData(current => {
+          const items = current?.items.filter(item => item.id !== allowance.id) ?? [];
+          if (allowance.state === 'active') items.push(allowance);
+          return { items, nextCursor: current?.nextCursor ?? null };
+        });
+      }
       if (frame.event === 'entry.delta' && frame.payload.conversationId === id) {
         const delta = frame.payload; const old = entriesRef.current.find(entry => entry.id === delta.entryId);
         if (old?.kind === 'message' && old.runId === delta.runId && old.text.length > delta.offset && old.text.slice(delta.offset, delta.offset + delta.text.length) === delta.text) return;
@@ -197,6 +215,15 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
       }
     });
   }, [realtime, id, client]);
+  useEffect(() => {
+    const reconciled = (event: Event) => {
+      const resolved = (event as CustomEvent<Run[]>).detail;
+      if (!Array.isArray(resolved)) return;
+      for (const run of resolved) if (run.conversationId === id) reconcileRun(run);
+    };
+    window.addEventListener('lemonbot:runs-reconciled', reconciled);
+    return () => window.removeEventListener('lemonbot:runs-reconciled', reconciled);
+  }, [client, id]);
   useEffect(() => {
     const notify = () => { if (!document.hidden) for (const entryId of visibleEntries.current) { const entry = entriesRef.current.find(item => item.id === entryId); if (entry) visibleThrough.current = Math.max(visibleThrough.current, entry.seq); } setReadVersion(version => version + 1); };
     document.addEventListener('visibilitychange', notify);
@@ -235,6 +262,20 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
     window.addEventListener('keydown', keyboard); window.addEventListener('lemonbot:toggle-inspector', toggle);
     return () => { window.removeEventListener('keydown', keyboard); window.removeEventListener('lemonbot:toggle-inspector', toggle); };
   }, []);
+  const leadBot = conversation ? snapshot.bots.find(bot => bot.id === (conversation.leadBotId || conversation.botIds[0])) : undefined;
+  const leadMachine = leadBot ? snapshot.machines.find(m => m.id === leadBot.machineId) : undefined;
+  const hostQuery = useQuery(`machine-host:${leadBot?.machineId || 'none'}`, () => (leadBot?.machineId ? client.call('GET /machines/:id/host', { params: { id: leadBot.machineId } }).catch(() => null) : Promise.resolve(null)));
+  const detectedOs = (hostQuery.data?.os || leadMachine?.labels?.os || '').toLowerCase();
+  const [modelModalOpen, setModelModalOpen] = useState(false);
+  const isOwner = snapshot.member.role === 'owner' && snapshot.workspace.ownerUserId === snapshot.user.id;
+  const hasSkipFlag = leadBot?.machineId ? getModelReadinessSkip(snapshot.workspace.id, leadBot.machineId) : false;
+  const machineProviders = useQuery(`chat:machine-providers:${leadBot?.machineId || 'none'}`, async () => {
+    if (!hasSkipFlag || !leadBot?.machineId || !isOwner) return null;
+    try { return await client.call('GET /machines/:id/providers', { params: { id: leadBot.machineId } }); }
+    catch { return null; }
+  });
+  // Only a known, not-ready readiness raises the banner; an unreadable or uncapable target stays silent.
+  const modelNotReady = hasSkipFlag && !!machineProviders.data?.readiness && !isReadyState(machineProviders.data);
   if (routePending) return <section className="page"><PageHeader title="Checking conversation link" /><Loading /></section>;
   const mismatchedContext = conversation && ((route.botId && !conversation.botIds.includes(route.botId)) || (route.taskConversationId && (conversation.kind !== 'task' || conversation.id !== route.taskConversationId)) || (route.conversationId && route.conversationId !== conversation.id && route.conversationId !== conversation.parentConversationId));
   if (routeRejected || mismatchedContext) return <section className="page"><PageHeader title="Conversation link rejected" /><ErrorNotice error={routeRejected ? pageError : new Error('The linked Bot, conversation or task identifiers do not match this authorized context.')} /><button onClick={() => navigate({ screen: 'conversation', id })}>Open this authorized conversation without the mismatched link</button></section>;
@@ -242,14 +283,24 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
   const retryTextFor = (run: Run, before?: number) => { const exact = entries.find(entry => entry.kind === 'message' && entry.actor.kind === 'user' && entry.clientNonce === run.clientNonce); const fallback = before === undefined ? undefined : [...entries].reverse().find(entry => entry.seq < before && entry.kind === 'message' && entry.actor.kind === 'user'); const source = exact || fallback; return source?.kind === 'message' && source.text ? source.text : undefined; };
   const placedRuns = new Set(entries.map(entry => entry.runId).filter((runId): runId is string => !!runId));
   const orphanOutcomes = runs.filter(run => finishedRun[run.status] && !placedRuns.has(run.id)).sort((a, b) => (a.completedAtMs || a.createdAtMs) - (b.completedAtMs || b.createdAtMs));
-  const leadBot = conversation ? snapshot.bots.find(bot => bot.id === (conversation.leadBotId || conversation.botIds[0])) : undefined;
+  const isMac = detectedOs.includes('darwin') || detectedOs.includes('mac');
+  const isLinux = detectedOs.includes('linux');
+  const starterTasks = [
+    isMac ? "What's this Mac's hostname, macOS version and free disk space? Use df -h /, not a folder scan." : isLinux ? "What's this Linux machine's hostname, OS version and free disk space? Use df -h /, not a folder scan." : "What's this computer's hostname, OS version and free disk space? Use system summaries, not folder scans.",
+    isMac ? "Which apps and command-line tools are installed here? Check /Applications and package-manager inventories, not personal folders." : isLinux ? "Which command-line tools and packages are installed here? Use PATH and package-manager inventories, not personal folders." : "Which apps and command-line tools are installed here? Use system application and package-manager inventories, not personal folders.",
+    "Summarize what's running right now using a process snapshot, without reading personal files.",
+  ];
   const members = conversation ? conversation.botIds.map(botId => snapshot.bots.find(bot => bot.id === botId)).filter((bot): bot is NonNullable<typeof bot> => !!bot) : [];
   const shared = conversation?.kind === 'group' || conversation?.kind === 'channel';
   const title = conversation ? (conversation.kind === 'dm' && leadBot ? leadBot.name : conversation.name) : 'Conversation';
   const step = currentStep(runs.filter(run => run.conversationId === id), entries, conversation);
   const typingNow = typing.filter(item => item.expiresAtMs > clock && item.userId !== snapshot.user.id).length > 0;
-  const placeholderForLive = entries.some(entry => entry.kind === 'message' && entry.actor.kind !== 'user' && (entry.streaming || (!entry.text && !!entry.runId && liveRuns.some(run => run.id === entry.runId))));
+  const placeholderForLive = entries.some(entry => entry.kind === 'message' && entry.actor.kind !== 'user' && (isStreaming(entry, runs) || (!entry.text && !!entry.runId && liveRuns.some(run => run.id === entry.runId))));
   const stopAll = () => void stopIntent.run(async () => { for (const run of stoppable.filter(item => item.status !== 'outcome_unknown')) updateRun(await client.call('POST /runs/:id/cancel', { params: { id: run.id }, body: { clientNonce: nonce(), reason: 'Explicit user Stop' } })); });
+  const stopAllowance = (allowance: ApprovalAllowance) => void allowanceIntent.run(async () => {
+    const stopped = await client.call('POST /approval-allowances/:id/stop', { params: { id: allowance.id }, body: { revision: allowance.revision, clientNonce: nonce() } });
+    allowances.setData(current => current && ({ ...current, items: current.items.filter(item => item.id !== stopped.id) }));
+  });
   const toolRun = (index: number) => { const tools: Extract<TranscriptEntry, { kind: 'tool_call' }>[] = []; for (let cursor = index; cursor < entries.length; cursor++) { const item = entries[cursor]; if (item.targetedUserId && item.targetedUserId !== snapshot.user.id) continue; if (item.kind !== 'tool_call') break; tools.push(item); } return tools; };
   let previous: TranscriptEntry | undefined;
   return <section className={`chat-page ${panel ? 'panel-open' : ''}`} style={botStyle(leadBot)}>
@@ -261,6 +312,11 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
         <span className="chat-title-name">{title}</span>
         {step && <span className="working-dot" aria-label="Working"/>}
       </button>
+      <div className="chat-approval-chips">
+        {leadBot?.approvalReview === 'bot_wide'
+          ? <span className="chat-approval-chip">Doesn't ask for Terminal &amp; Files · <button onClick={() => navigate({ screen: 'bot.overview', id: leadBot.id, botId: leadBot.id, tab: 'settings.approvals' })}>Change</button></span>
+          : allowances.data?.items.filter(allowance => allowance.state === 'active').map(allowance => <span className="chat-approval-chip" key={allowance.id}>{allowance.label} · <button disabled={!online || allowanceIntent.busy || allowanceIntent.uncertain} onClick={() => stopAllowance(allowance)}>Stop allowing</button></span>)}
+      </div>
       <details className="chat-menu" ref={headerMenu}>
         <summary className="ghost-circle" aria-label="Conversation menu"><MoreHorizontal size={16}/></summary>
         <div className="menu" role="menu" onClick={event => { if ((event.target as Element).closest('button')) headerMenu.current?.removeAttribute('open'); }}>
@@ -272,11 +328,17 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
         </div>
       </details>
     </header>
+    {modelNotReady && (
+      <div className="chat-model-skipped-banner" role="status">
+        <span>No model is connected on {leadMachine?.name || 'this machine'} — replies will fail until you connect one.</span>
+        <button type="button" className="chat-link" onClick={() => setModelModalOpen(true)}>Connect a model</button>
+      </div>
+    )}
     {findOpen && <div className="chat-find" role="search">
       <form onSubmit={event => { event.preventDefault(); setFindQuery(find.trim()); }}><Search size={15} aria-hidden="true"/><label className="sr-only" htmlFor={`find-${id}`}>Find in this conversation</label><input id={`find-${id}`} ref={findInput} autoFocus placeholder="Find in chat" value={find} maxLength={512} onChange={event => setFind(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { setFindOpen(false); setFind(''); setFindQuery(''); } }} /><button type="button" className="ghost-mini" aria-label="Close find" onClick={() => { setFindOpen(false); setFind(''); setFindQuery(''); }}><X size={14}/></button></form>
       {findQuery && <div className="chat-find-results"><ErrorNotice error={search.error} />{search.loading && <Loading />}{search.data?.items.map(hit => hit.kind === 'message' && <button key={hit.entry.id} onClick={() => void jump(hit.entry.id)}><strong>{hit.entry.actor.displayName}</strong> {hit.snippet}</button>)}{search.data && !search.data.items.length && <p className="muted">No matches.</p>}</div>}
     </div>}
-    {!!(conversationQuery.error || history.error || runQuery.error) && <div className="chat-load-notice stack"><ErrorNotice error={conversationQuery.error || history.error || runQuery.error}/><button className="pill-button secondary" onClick={() => void Promise.all([conversationQuery.reload(), history.reload(), runQuery.reload()]).then(() => setLiveError(undefined)).catch(setLiveError)}>Try again</button></div>}
+    {!!(conversationQuery.error || history.error || runQuery.error || allowances.error) && <div className="chat-load-notice stack"><ErrorNotice error={conversationQuery.error || history.error || runQuery.error || allowances.error}/><button className="pill-button secondary" onClick={() => void Promise.all([conversationQuery.reload(), history.reload(), runQuery.reload(), allowances.reload()]).then(() => setLiveError(undefined)).catch(setLiveError)}>Try again</button></div>}
     {conversationQuery.loading && !conversation && <Loading label="Loading conversation…"/>}
     {conversation && <div className={`chat-layout ${panel ? 'with-panel' : ''}`}>
       <div className="chat-main">
@@ -287,7 +349,7 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
             {!!readError && <div className="stack"><p>Couldn’t save your place.</p><button className="pill-button secondary compact" onClick={() => { void client.call('GET /conversations/:id', { params: { id } }).then(actual => { lastRead.current = actual.lastReadSeq; conversationQuery.setData(actual); setReadError(undefined); readFailure.current = false; visibleThrough.current = actual.lastReadSeq; }).catch(setReadError); }}>Check saved place</button></div>}
             {!!liveError && !history.error && <button className="pill-button secondary compact" onClick={() => void history.reload().then(() => setLiveError(undefined)).catch(setLiveError)}>Reload messages</button>}
             {history.loading && !entries.length && <Loading label="Loading messages…"/>}
-            {!history.loading && !history.error && !entries.length && !step && !liveRuns.length && <div className="chat-empty">{leadBot ? <BotAvatar bot={leadBot} size={72}/> : <LemonFace size={72}/>}<h2>{title}</h2><p className="muted">{leadBot?.job || leadBot?.title || 'Messages, files and work will appear here.'}</p></div>}
+            {!history.loading && !history.error && !entries.length && !step && !liveRuns.length && <div className="chat-empty">{leadBot ? <BotAvatar bot={leadBot} size={72}/> : <LemonFace size={72}/>}<h2>{title}</h2><p className="muted">{leadBot?.job || leadBot?.title || 'Messages, files and work will appear here.'}</p>{leadBot && <div className="chat-starter-tasks" role="group" aria-label="Suggested starter tasks">{starterTasks.map(task => <button key={task} type="button" className="chat-starter-button" disabled={!online} onClick={() => setStarterTask(previous => ({ text: task, id: (previous?.id ?? 0) + 1 }))}><span>{task}</span><ArrowRight size={14} className="chat-starter-arrow" aria-hidden="true" /></button>)}</div>}</div>}
             {entries.map((entry, index) => {
               if (entry.kind === 'user_attachment' && entry.batchId && entries.some(item => item.kind === 'message' && item.batchId === entry.batchId)) return null;
               if (entry.targetedUserId && entry.targetedUserId !== snapshot.user.id) return null;
@@ -314,10 +376,21 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
           </div>}
           {!step && typingNow && <div className="chat-presence" role="status">Someone is typing…</div>}
           <IntentNotice intent={stopIntent} reconcile={async () => { const page = await client.call('GET /runs', { query: { conversationId: id, limit: 200 } }); for (const run of page.items) updateRun(run); }} />
-          <Composer key={id} conversation={conversation} bot={leadBot} replyId={replyId} clearReply={() => setReplyId(null)} accepted={receipt => { upsert(receipt.entries, true); for (const run of receipt.runs) updateRun(run); }} />
+          <IntentNotice intent={allowanceIntent} reconcile={allowances.reload} />
+          <Composer key={id} conversation={conversation} bot={leadBot} replyId={replyId} clearReply={() => setReplyId(null)} starterTask={starterTask} accepted={receipt => { upsert(receipt.entries, true); for (const run of receipt.runs) updateRun(run); }} />
         </div>
       </div>
       {panel && <BotPanel id={`panel-${id}`} conversation={conversation} changed={conversationQuery.setData} runs={runs} entries={entries} tab={panel} setTab={setPanel} stop={run => void stopIntent.run(async () => updateRun(await client.call('POST /runs/:id/cancel', { params: { id: run.id }, body: { clientNonce: nonce(), reason: 'Explicit user Stop' } })))} stopDisabled={!online || stopIntent.busy || stopIntent.uncertain} />}
     </div>}
+    {modelModalOpen && leadBot?.machineId && (
+      <ModelReadinessModal
+        machineId={leadBot.machineId}
+        onClose={() => setModelModalOpen(false)}
+        onReady={() => {
+          setModelModalOpen(false);
+          void machineProviders.reload();
+        }}
+      />
+    )}
   </section>;
 }

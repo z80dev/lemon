@@ -20,8 +20,6 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
   alias LemonControlPlane.Auth.TokenStore
   alias LemonControlPlane.NodeStore
 
-  # Token TTL: 7 days (node sessions are long-lived)
-  @token_ttl_ms 7 * 24 * 60 * 60 * 1000
 
   @impl true
   def name, do: "connect.challenge"
@@ -58,7 +56,7 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
          "verified" => true,
          "identityType" => identity["type"],
          "identityId" => identity_id(identity),
-         "tokenTtlMs" => @token_ttl_ms,
+        "tokenTtlMs" => TokenStore.node_session_ttl_ms(),
          "credentialDelivery" => %{
            "includesSessionToken" => true
          },
@@ -78,7 +76,7 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
          session_opts
        )
        when is_binary(node_id) do
-    opts = Keyword.merge(session_opts, ttl_ms: @token_ttl_ms, conn_id: ctx[:conn_id])
+    opts = Keyword.merge(session_opts, ttl_ms: TokenStore.node_session_ttl_ms(), conn_id: ctx[:conn_id])
 
     with {:ok, token_info} <- TokenStore.replace_node_session(token, identity, opts),
          {:ok, generation} <- session_generation(token_info.identity),
@@ -92,7 +90,7 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
   defp issue_session(identity, token, ctx, _session_opts) do
     with {:ok, _token_info} <-
            TokenStore.store(token, identity,
-             ttl_ms: @token_ttl_ms,
+            ttl_ms: TokenStore.node_session_ttl_ms(),
              conn_id: ctx[:conn_id]
            ) do
       verified_response(identity, token)
