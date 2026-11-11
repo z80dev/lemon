@@ -11,7 +11,7 @@ interface PairingIntent { kind: 'create' | 'approve' | 'deny' | 'revoke'; client
 const pairingLabels: Record<Pairing['status'], string> = { waiting: 'Waiting for your iPhone', pending_approval: 'Waiting for approval', approved: 'Approved — finish on your iPhone', consumed: 'Connected', denied: 'Denied', expired: 'Expired' };
 
 export function PairingScreen() {
-  const { client, snapshot, online, navigate } = useApp();
+  const { client, snapshot, reachable: online, navigate } = useApp();
   const signIn = useQuery('pairing:sign-in', () => client.call('GET /me/sign-in'));
   const storageKey = `lemonbot.pairing-intent:${client.baseUrl}:${snapshot.workspace.id}:${snapshot.user.id}`;
   const [intent, setIntent] = useState<PairingIntent | null>(() => {

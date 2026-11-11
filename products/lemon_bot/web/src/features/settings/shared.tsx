@@ -15,8 +15,10 @@ export async function allPages<T extends { id: string }>(load: (cursor?: Cursor)
 }
 
 // A failed transport can have committed. Only an explicit authoritative read unlocks a new intent.
+// Settings are stored by Lemon Bot itself, so they stay editable while only its Lemon link is down;
+// the backend refuses the few changes that need Lemon.
 export function useIntent(reconcile: () => Promise<void>) {
-  const { online } = useApp();
+  const { reachable: online } = useApp();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>();
   const [unknown, setUnknown] = useState(false);
@@ -49,7 +51,7 @@ export interface Intent {
   disabled: boolean;
 }
 export function IntentNotice({ intent }: { intent: Intent }) {
-  const { online } = useApp();
+  const { reachable: online } = useApp();
   return <>{!online && <p role="status" className="error-notice">You’re offline. Changes can’t be saved right now. Reconnect, then try again.</p>}<RecoveryNotice error={intent.error} uncertain={intent.unknown} busy={intent.busy} available={online} onCheck={intent.reload}/></>;
 }
 export function Toggle({ label, checked, onChange, disabled = false, hint }: { label: string; checked: boolean; onChange: (value: boolean) => void; disabled?: boolean; hint?: string }) {

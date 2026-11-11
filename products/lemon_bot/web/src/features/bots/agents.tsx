@@ -3,6 +3,7 @@ import { LemonBotError, nonce, type Bot, type AgentMessageReceipt } from '@lemon
 import { useApp } from '../../app';
 import { ErrorNotice, Field, Loading, useAction, useQuery } from '../../ui';
 import { IntentNotice, useIntent } from './shared';
+import './bots.css';
 
 /** Address existing agents; never touches the conversation's unsent composer draft. */
 export function AgentControls({ bot, conversationId = bot.mainConversationId }: { bot: Bot; conversationId?: string }) {

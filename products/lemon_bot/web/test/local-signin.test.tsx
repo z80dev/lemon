@@ -16,7 +16,7 @@ const navigate = mock(() => undefined);
 const context = {
   client: { baseUrl: 'http://127.0.0.1:4100/v1', call },
   snapshot: { workspace: { id: 'workspace', name: 'Workspace' }, user: { id: 'owner' }, bots: [] },
-  online: true, refresh: async () => undefined, logout: async () => undefined, navigate,
+  online: true, reachable: true, refresh: async () => undefined, logout: async () => undefined, navigate,
 };
 mock.module('../src/app', () => ({ ...originalApp, useApp: () => context }));
 mock.module('../src/ui', () => ({ ...originalUi, useQuery: (key: string) => ({ data: queries.get(key), loading: false, reload: async () => undefined, setData: () => undefined }) }));

@@ -45,7 +45,8 @@ export function BotPanel({ id, conversation, changed, runs, entries, tab, setTab
   const reconnectNeeded = machine ? machineNeedsReconnect(machine) : false;
   const status = step?.needsInput || bot?.activity === 'needs_input' ? 'needs_input' : live.length ? 'working' : bot?.activity === 'offline' ? 'offline' : 'idle';
   const statusLabel: Record<string, string> = { idle: 'Idle', working: 'Working', needs_input: 'Needs you', offline: reconnectNeeded ? 'Needs reconnecting' : 'Offline' };
-  const machineMeta = machine ? `${reconnectNeeded ? 'Needs reconnecting' : humanize(machine.status)}${machine.lastSeenAtMs ? ` · seen ${relativeTime(machine.lastSeenAtMs)}` : ''}` : 'Assigned machine';
+  // "Last seen" only explains an absent machine; an online machine's lastSeenAtMs is not refreshed continuously.
+  const machineMeta = machine ? `${reconnectNeeded ? 'Needs reconnecting' : humanize(machine.status)}${machine.lastSeenAtMs && machine.status !== 'online' ? ` · seen ${relativeTime(machine.lastSeenAtMs)}` : ''}` : 'Assigned machine';
   const name = conversation.kind === 'dm' && bot ? bot.name : conversation.name;
   return <aside className="chat-panel" id={id} aria-label="Bot details and activity">
     <button className="ghost-circle panel-close" aria-label="Close details" onClick={() => setTab(null)}><X size={16}/></button>

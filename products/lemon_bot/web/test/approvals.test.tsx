@@ -24,6 +24,7 @@ const navigations: Route[] = [];
 const page = <T,>(items: T[]) => ({ items, nextCursor: null });
 const app = {
   online: true,
+  reachable: true,
   snapshot: {
     user: { id: 'owner', displayName: 'Owner' },
     member: { role: 'owner' },

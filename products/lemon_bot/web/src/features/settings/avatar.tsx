@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useApp } from '../../app';
-import { useQuery, ErrorNotice, Loading } from '../../ui';
+import { useQuery, ErrorNotice, Loading, AccountAvatar as InitialsAvatar } from '../../ui';
 
-export function AccountAvatar({ attachmentId }: { attachmentId: string | null }) {
+export function AccountAvatar({ attachmentId, name }: { attachmentId: string | null; name: string }) {
   const { client } = useApp();
   const image = useQuery(`settings:avatar:${attachmentId ?? 'none'}`, async () => {
     if (!attachmentId) return null;
@@ -16,5 +16,5 @@ export function AccountAvatar({ attachmentId }: { attachmentId: string | null })
     const next = URL.createObjectURL(image.data); setUrl(next);
     return () => URL.revokeObjectURL(next);
   }, [image.data]);
-  return <div className="stack"><ErrorNotice error={image.error} />{image.loading && attachmentId && <Loading />}{url ? <img className="settings-account-avatar" alt="Account avatar preview" src={url} /> : !attachmentId ? <span className="avatar settings-account-avatar" aria-label="No account avatar">◌</span> : null}</div>;
+  return <div className="stack"><ErrorNotice error={image.error} />{image.loading && attachmentId && <Loading />}{url ? <img className="settings-account-avatar" alt="Account avatar preview" src={url} /> : !attachmentId ? <InitialsAvatar name={name} size={80}/> : null}</div>;
 }

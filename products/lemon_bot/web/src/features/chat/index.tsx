@@ -99,7 +99,7 @@ function ToolGroup({ tools }: { tools: Extract<TranscriptEntry, { kind: 'tool_ca
     {open && <ol className="chat-tool-rows">{tools.map(tool => { const Icon = toolIcon(tool.tool); return <li key={tool.id} data-entry-id={tool.id} data-seq={tool.seq}><details><summary><Icon size={13} aria-hidden="true"/><span className="chat-tool-title">{tool.title || humanize(tool.tool)}</span>{tool.status === 'started' ? <span className="mini-spinner" aria-label="Running"/> : tool.status === 'failed' ? <AlertCircle size={12} className="danger-text" aria-label="Failed"/> : <Check size={12} className="faint" aria-label="Done"/>}</summary><pre>{tool.tool}{tool.detail ? `\n${tool.detail}` : ''}</pre></details></li>; })}</ol>}
   </div>;
 }
-interface EntryContext { run?: Run; retryText?: string; grouped: boolean; showName: boolean }
+interface EntryContext { run?: Run; retryText?: string; grouped: boolean; showName: boolean; lastReply: boolean }
 function EntryView({ entry, attachments, jump, reply, changed, context }: { entry: TranscriptEntry; attachments: string[]; jump: (id: string) => void; reply: (id: string) => void; changed: (entry: TranscriptEntry) => void; context: EntryContext }) {
   const { snapshot, navigate } = useApp();
   if (entry.targetedUserId && entry.targetedUserId !== snapshot.user.id) return null;
@@ -140,6 +140,7 @@ function EntryView({ entry, attachments, jump, reply, changed, context }: { entr
     <div className={shape === 'card' ? 'chat-card' : 'chat-bubble'} title={when} onClick={event => { if (matchMedia('(pointer: coarse)').matches && event.target instanceof Element && !event.target.closest('button,a,input,textarea,select,summary')) event.currentTarget.parentElement?.focus({ preventScroll: true }); }}>{content}</div>
     <time className="sr-only" dateTime={new Date(entry.timestampMs).toISOString()}>{when}</time>
     {actions && <EntryActions entry={entry} changed={changed} reply={reply} />}
+    {context.lastReply && entry.kind === 'message' && context.run && finishedRun[context.run.status] && <RunOutcomeRow run={context.run} retryText={context.retryText}/>}
   </article>;
 }
 /** Error/warning notices use the failed-row shape; request IDs only under Details. */
@@ -160,7 +161,7 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
   const allowances = useQuery(`approval-allowances:${id}`, () => client.call('GET /conversations/:id/approval-allowances', { params: { id }, query: { state: 'active', limit: 200 } }));
   const runQuery = useQuery(`runs:${id}`, () => client.call('GET /runs', { query: { conversationId: id, limit: 200 } })); const runsRef = useRef<Run[]>([]); const [runs, setRuns] = useState<Run[]>([]);
   const [entries, setEntries] = useState<TranscriptEntry[]>([]); const entriesRef = useRef(entries); entriesRef.current = entries; const [replyId, setReplyId] = useState<string | null>(null); const [panel, setPanel] = useState<PanelTab | null>(null); const headerMenu = useRef<HTMLDetailsElement>(null); const [findOpen, setFindOpen] = useState(false); const findInput = useRef<HTMLInputElement>(null); const [older, setOlder] = useState(false); const [paging, setPaging] = useState(false); const [pageError, setPageError] = useState<unknown>(); const [liveError, setLiveError] = useState<unknown>(); const [find, setFind] = useState(''); const [findQuery, setFindQuery] = useState(''); const [typing, setTyping] = useState<{ userId: string; expiresAtMs: number }[]>([]); const [jumped, setJumped] = useState(false);
-  const scroller = useRef<HTMLDivElement>(null); const end = useRef<HTMLDivElement>(null); const pinned = useRef(true); const initialScroll = useRef(false); const lastRead = useRef(0); const unreadBoundary = useRef<number | undefined>(undefined); const clock = useClock(); const stopIntent = useIntent(); const allowanceIntent = useIntent(); const [starterTask, setStarterTask] = useState<{ text: string; id: number }>(); const readFailure = useRef(false); const [readError, setReadError] = useState<unknown>(); const readInFlight = useRef(false); const visibleThrough = useRef(0); const visibleEntries = useRef(new Set<string>()); const [readVersion, setReadVersion] = useState(0); const refetching = useRef(new Set<string>());
+  const scroller = useRef<HTMLDivElement>(null); const end = useRef<HTMLDivElement>(null); const pinned = useRef(true); const initialScroll = useRef(false); const lastRead = useRef(0); const unreadBoundary = useRef<number | undefined>(undefined); const unreadCeiling = useRef<number | undefined>(undefined); const clock = useClock(); const stopIntent = useIntent(); const allowanceIntent = useIntent(); const [starterTask, setStarterTask] = useState<{ text: string; id: number }>(); const readFailure = useRef(false); const [readError, setReadError] = useState<unknown>(); const readInFlight = useRef(false); const visibleThrough = useRef(0); const visibleEntries = useRef(new Set<string>()); const [readVersion, setReadVersion] = useState(0); const refetching = useRef(new Set<string>());
   const forwardSeq = useRef(0); const [newer, setNewer] = useState(false); const [newBelow, setNewBelow] = useState(false); const [settled, setSettled] = useState(false);
   const [routePending, setRoutePending] = useState(!!route.entryId); const [routeRejected, setRouteRejected] = useState(false);
   const search = useQuery(`conversation-search:${id}:${findQuery}`, async () => {
@@ -173,8 +174,11 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
   function upsert(incoming: TranscriptEntry[], own = false) { const known = new Set(entriesRef.current.map(entry => entry.id)); const lastSeq = entriesRef.current.at(-1)?.seq ?? 0; entriesRef.current = mergeEntries(entriesRef.current, incoming); setEntries(entriesRef.current); if (own) pinned.current = true; if (pinned.current) requestAnimationFrame(() => end.current?.scrollIntoView({ block: 'end', behavior: 'instant' })); else if (initialScroll.current && incoming.some(entry => !known.has(entry.id) && entry.seq > lastSeq)) setNewBelow(true); }
   function updateRun(run: Run) { const current = runsRef.current.find(value => value.id === run.id); if (current && current.revision > run.revision) return; const next = [...runsRef.current.filter(value => value.id !== run.id), run]; runsRef.current = next; setRuns(next); }
   useEffect(() => { if (runQuery.data) { for (const run of runQuery.data.items) updateRun(run); } }, [runQuery.data]);
-  useEffect(() => { if (history.data) { upsert(history.data.items); if (!initialScroll.current) { setOlder(!!history.data.nextCursor); initialScroll.current = true; window.setTimeout(() => setSettled(true), 400); } } }, [history.data]);
+  useEffect(() => { if (history.data) { upsert(history.data.items); if (!initialScroll.current) { setOlder(!!history.data.nextCursor); initialScroll.current = true; unreadCeiling.current = history.data.items.reduce((seq, entry) => Math.max(seq, entry.seq), 0); window.setTimeout(() => setSettled(true), 400); } } }, [history.data]);
   useEffect(() => { if (conversationQuery.data) { lastRead.current = Math.max(lastRead.current, conversationQuery.data.lastReadSeq); unreadBoundary.current ??= conversationQuery.data.lastReadSeq; } }, [conversationQuery.data?.lastReadSeq]);
+  // The marker shows what was unread when you opened the chat: entries arriving while you watch are read, and your own messages never start it.
+  const unreadAfter = unreadBoundary.current === undefined ? undefined : entries.reduce((seq, entry) => entry.actor.kind === 'user' && entry.actor.id === snapshot.user.id ? Math.max(seq, entry.seq) : seq, unreadBoundary.current);
+  const unreadThrough = unreadCeiling.current;
   async function fetchEntry(entryId: string) {
     if (refetching.current.has(entryId)) return; refetching.current.add(entryId);
     try { upsert([await client.call('GET /entries/:id', { params: { id: entryId } })]); }
@@ -282,6 +286,8 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
   const runById = new Map(runs.map(run => [run.id, run]));
   const retryTextFor = (run: Run, before?: number) => { const exact = entries.find(entry => entry.kind === 'message' && entry.actor.kind === 'user' && entry.clientNonce === run.clientNonce); const fallback = before === undefined ? undefined : [...entries].reverse().find(entry => entry.seq < before && entry.kind === 'message' && entry.actor.kind === 'user'); const source = exact || fallback; return source?.kind === 'message' && source.text ? source.text : undefined; };
   const placedRuns = new Set(entries.map(entry => entry.runId).filter((runId): runId is string => !!runId));
+  // A stopped or failed run that already wrote text gets its outcome under its last reply, not silently.
+  const lastReplyOfRun = new Map(entries.filter(entry => entry.kind === 'message' && entry.actor.kind !== 'user' && entry.runId).map(entry => [entry.runId!, entry.id]));
   const orphanOutcomes = runs.filter(run => finishedRun[run.status] && !placedRuns.has(run.id)).sort((a, b) => (a.completedAtMs || a.createdAtMs) - (b.completedAtMs || b.createdAtMs));
   const isMac = detectedOs.includes('darwin') || detectedOs.includes('mac');
   const isLinux = detectedOs.includes('linux');
@@ -354,13 +360,13 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
               if (entry.kind === 'user_attachment' && entry.batchId && entries.some(item => item.kind === 'message' && item.batchId === entry.batchId)) return null;
               if (entry.targetedUserId && entry.targetedUserId !== snapshot.user.id) return null;
               if (entry.kind === 'tool_call' && previous?.kind === 'tool_call') { previous = entry; return null; }
-              const unread = unreadBoundary.current !== undefined && entry.seq > unreadBoundary.current && (index === 0 || entries[index - 1].seq <= unreadBoundary.current);
+              const unread = unreadAfter !== undefined && unreadThrough !== undefined && entry.seq > unreadAfter && entry.seq <= unreadThrough && (index === 0 || entries[index - 1].seq <= unreadAfter);
               const separator = !previous || entry.timestampMs - previous.timestampMs > 1800000 || new Date(entry.timestampMs).toDateString() !== new Date(previous.timestampMs).toDateString();
               const bubbleKinds: Record<string, true> = { message: true, user_attachment: true };
               const grouped = !separator && !unread && !!previous && bubbleKinds[previous.kind] && bubbleKinds[entry.kind] && previous.actor.kind === entry.actor.kind && previous.actor.id === entry.actor.id && entry.timestampMs - previous.timestampMs < 300000;
               previous = entry;
               const run = entry.runId ? runById.get(entry.runId) : undefined;
-              return <div className={`chat-row ${grouped ? 'grouped' : ''}`} key={entry.id}>{separator && <div className="chat-day" role="separator">{separatorDate(entry.timestampMs, clock)}</div>}{unread && <div className="chat-unread" role="separator" aria-label="Unread messages"><span>Unread</span></div>}{entry.kind === 'tool_call' ? <ToolGroup tools={toolRun(index)}/> : <EntryView entry={entry} attachments={attachmentGroups.get(entry.id) || []} jump={entryId => void jump(entryId)} reply={setReplyId} changed={entry => upsert([entry])} context={{ run, retryText: run && finishedRun[run.status] ? retryTextFor(run, entry.seq) : undefined, grouped, showName: shared }} />}</div>;
+              return <div className={`chat-row ${grouped ? 'grouped' : ''}`} key={entry.id}>{separator && <div className="chat-day" role="separator">{separatorDate(entry.timestampMs, clock)}</div>}{unread && <div className="chat-unread" role="separator" aria-label="Unread messages"><span>Unread</span></div>}{entry.kind === 'tool_call' ? <ToolGroup tools={toolRun(index)}/> : <EntryView entry={entry} attachments={attachmentGroups.get(entry.id) || []} jump={entryId => void jump(entryId)} reply={setReplyId} changed={entry => upsert([entry])} context={{ run, retryText: run && finishedRun[run.status] ? retryTextFor(run, entry.seq) : undefined, grouped, showName: shared, lastReply: !!entry.runId && lastReplyOfRun.get(entry.runId) === entry.id }} />}</div>;
             })}
             {orphanOutcomes.map(run => <div className="chat-row" key={run.id}><div className="chat-entry chat-entry-outcome"><RunOutcomeRow run={run} retryText={retryTextFor(run)}/></div></div>)}
             {liveRuns.length > 0 && !placeholderForLive && <div className="chat-row"><article className="chat-entry chat-bot-entry"><TypingBubble label={`${leadBot?.name || 'Bot'} is working`}/></article></div>}

@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Stop allowing, Bot approval review mode and Bot-wide allowance confirmation
+  no longer hang forever: their handlers own nonce idempotency, so the router no
+  longer wraps them in a second mutation that awaited its own pending reservation.
 - External-trigger provenance remains untrusted across native continuations.
   Concurrent remembered approvals recheck revocation, policy and pending state,
   persist decisions before dispatch, and reconcile uncertain outcomes.
