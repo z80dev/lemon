@@ -100,10 +100,11 @@ defmodule LemonCli.ServiceCommandTest do
     record = Path.join(opts[:home], ".lemon/lemon_bot/run/lemon-bot-4100.json")
     File.mkdir_p!(Path.dirname(record))
 
+    # The replacement backend writes its own record; the old one ran as pid 123.
     File.write!(
       record,
       Jason.encode!(%{
-        pid: 123,
+        pid: 456,
         startedAt: "Tue Nov 10 12:00:00 2026",
         instanceId: "ours"
       })
@@ -112,6 +113,7 @@ defmodule LemonCli.ServiceCommandTest do
     File.chmod!(record, 0o600)
     caller = self()
     runner = opts[:command_runner]
+    {:ok, restarted} = Agent.start_link(fn -> false end)
 
     opts =
       Keyword.merge(opts,
@@ -119,8 +121,12 @@ defmodule LemonCli.ServiceCommandTest do
         http_get: fn _ -> {:ok, %{"product" => "lemon_bot", "instanceId" => "ours"}} end,
         command_runner: fn
           "launchctl", ["kickstart", "-k", "gui/501/org.lemon.bot"], _ ->
+            Agent.update(restarted, fn _ -> true end)
             send(caller, :backend_restarted)
             {"", 0}
+
+          "launchctl", ["print", "gui/501/org.lemon.bot"], _ ->
+            {"pid = #{if Agent.get(restarted, & &1), do: 456, else: 123}\n", 0}
 
           command, args, options ->
             runner.(command, args, options)
