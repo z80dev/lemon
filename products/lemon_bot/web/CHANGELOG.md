@@ -26,6 +26,9 @@
   editor adopts the saved email so a later preferences change cannot restore the
   placeholder.
 
+- Web and Mac command approvals require expanding truncated previews before Allow,
+  preserve command line breaks in the card and Details, and visibly escape hidden
+  or directional Unicode characters with a warning without altering execution.
 - First-run home copy recognizes online computers instead of asking to connect
   one again. Mac sidebar previews retry after initial sync goes online. Both clients
   look behind trailing tool events for the latest reply without opening the chat,

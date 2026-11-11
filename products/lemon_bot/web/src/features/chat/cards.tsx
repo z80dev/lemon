@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Approval, Card, Connector, Draft, DraftContent, Field as QuestionField, Gate, HumanStep, JSONValue, Question, SecretRequest } from '@lemon-bot/sdk';
-import { nonce } from '@lemon-bot/sdk';
+import { approvalTextPresentation, nonce } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
 import { ErrorNotice, Field, Loading, formatTime, safeExternal, useQuery } from '../../ui';
 import { IntentNotice, copyText, useClock, useIntent } from './common';
@@ -45,15 +45,30 @@ function QuestionCard({ id, initial }: { id: string; initial?: Question }) {
 function ApprovalCard({ initial }: { initial: Approval }) {
   const { client, navigate, snapshot } = useApp(); const query = useQuery(`approval:${initial.id}`, () => client.call('GET /approvals/:id', { params: { id: initial.id } })); const approval = query.data || initial; const allowed = useGate(approval.gate); const intent = useIntent(); const now = useClock();
   const accessRequest = approval.source === 'access_request';
+  const terminal = !accessRequest && approval.target === 'Terminal';
+  const command = terminal && typeof approval.inputs.command === 'string' ? approval.inputs.command : null;
+  const presentation = approvalTextPresentation(command ?? approval.title);
+  const reviewKey = JSON.stringify([approval.id, approval.revision, command]);
+  const [expandedReview, setExpandedReview] = useState<string | null>(null);
+  const expanded = expandedReview === reviewKey;
+  const commandReviewed = !terminal || (command !== null && command.length > 0 && (!presentation.truncated || expanded));
+  const displayInputs = Object.entries(approval.inputs).map(([key, value]) => ({ key, ...approvalTextPresentation(typeof value === 'string' ? value : JSON.stringify(value)) }));
+  const hasControls = presentation.hasControls || displayInputs.some(input => input.hasControls);
   const botName = snapshot.bots.find(bot => bot.id === approval.botId)?.name || 'Bot';
   const owner = snapshot.member.role === 'owner' && snapshot.bots.some(bot => bot.id === approval.botId && bot.ownerUserId === snapshot.user.id);
   const effective = useQuery(`approval:${approval.id}:bot-wide`, () => owner && !accessRequest ? client.call('GET /policies/effective', { query: { botId: approval.botId } }) : Promise.resolve(null));
   const state = approval.gate.state === 'pending' && approval.gate.expiresAtMs <= now ? 'expired' : approval.gate.state;
   const by = approval.gate.resolvedByUserId === snapshot.user.id ? 'you' : approval.gate.resolvedByUserId ? 'another person' : 'policy';
   const result = accessRequest ? state === 'approved' ? `Allowed by ${by} · turns on when this task finishes` : state === 'denied' ? 'Not now' : humanize(state) : state === 'approved' ? approval.resolvedScope === 'chat' ? `Allowed for this chat by ${by}` : `Allowed once by ${by}` : state === 'denied' ? `Denied by ${by}` : humanize(state);
-  async function resolve(decision: 'approve_once' | 'approve_chat' | 'deny') { if (allowed) await intent.run(async () => query.setData(await client.call('POST /approvals/:id/resolve', { params: { id: approval.id }, body: { revision: approval.revision, clientNonce: nonce(), decision } }))); }
+  async function resolve(decision: 'approve_once' | 'approve_chat' | 'deny') { if (allowed && (decision === 'deny' || commandReviewed)) await intent.run(async () => query.setData(await client.call('POST /approvals/:id/resolve', { params: { id: approval.id }, body: { revision: approval.revision, clientNonce: nonce(), decision } }))); }
   return <div className="stack">
-    <div className="row spread"><h3>{!accessRequest && approval.target === 'Terminal' ? <code>{approval.title}</code> : approval.title}</h3><span className="badge">{categoryLabels[approval.category]}</span></div>
+    <div className="row spread"><h3>{terminal ? 'Command' : presentation.text}</h3><span className="badge">{categoryLabels[approval.category]}</span></div>
+    {hasControls && <span className="badge" role="note" style={{ whiteSpace: 'normal' }}>Warning: hidden or directional characters are shown as Unicode escapes.</span>}
+    {terminal && <>
+      <pre dir="ltr" style={{ whiteSpace: 'pre', overflow: 'auto', maxHeight: '20rem', unicodeBidi: 'isolate' }}><code>{expanded ? presentation.text : presentation.preview}</code></pre>
+      {command === null && <p role="alert">The full command is unavailable. Deny this request and ask for a new one.</p>}
+      {presentation.truncated && <><button aria-expanded={expanded} onClick={() => setExpandedReview(expanded ? null : reviewKey)}>{expanded ? 'Collapse command' : 'Show full command'}</button>{!expanded && <p>Show the full command before allowing it.</p>}</>}
+    </>}
     {accessRequest ? <><p>{approval.description}</p><blockquote><em>{botName}</em> says: <q>{typeof approval.inputs.reason === 'string' ? approval.inputs.reason : ''}</q></blockquote></> : <p className="muted">{approval.target} on {approval.scope.machineLabel}</p>}
     <details><summary>Details</summary>
       <p>{approval.description}</p>
@@ -62,13 +77,13 @@ function ApprovalCard({ initial }: { initial: Approval }) {
       <p>Review: {humanize(approval.policyMode)} · {humanize(approval.review)}</p>
       <p>Origin: {approval.scope.origin || 'Not specified'}</p>
       <ul>{approval.scope.consequences.map((text, i) => <li key={i}>{text}</li>)}</ul>
-      <dl>{Object.entries(approval.inputs).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{typeof value === 'string' ? value : JSON.stringify(value)}</dd></div>)}</dl>
+      <dl style={{ gridTemplateColumns: 'minmax(0, 1fr)' }}>{displayInputs.map(input => <div key={input.key}><dt>{input.key}</dt><dd><pre dir="ltr" style={{ whiteSpace: 'pre', overflow: 'auto', maxHeight: '20rem', unicodeBidi: 'isolate' }}><code>{input.text}</code></pre></dd></div>)}</dl>
       <GateState gate={approval.gate}/>
       {!accessRequest && <button onClick={() => navigate({ screen: 'settings.policies', botId: approval.botId })}>Review future rules</button>}
-      {!accessRequest && owner && !!effective.data?.rememberedApprovals?.bot.length && <button onClick={() => navigate({ screen: 'bot.overview', id: approval.botId, botId: approval.botId, tab: 'settings.approvals' })}>Always allow for this Bot…</button>}
+      {!accessRequest && owner && !!effective.data?.rememberedApprovals?.bot.length && <button disabled={!commandReviewed} onClick={() => navigate({ screen: 'bot.overview', id: approval.botId, botId: approval.botId, tab: 'settings.approvals' })}>Always allow for this Bot…</button>}
     </details>
     <ErrorNotice error={query.error}/><IntentNotice intent={intent} reconcile={query.reload}/>
-    {state === 'pending' ? <div className="row"><button className="primary" disabled={!allowed || intent.busy || intent.uncertain} onClick={() => void resolve('approve_once')}>{accessRequest ? 'Allow for this Bot' : 'Allow once'}</button>{!accessRequest && approval.chatOption && <button disabled={!allowed || intent.busy || intent.uncertain} onClick={() => void resolve('approve_chat')}>{approval.chatOption.label}</button>}<button className="danger" disabled={!allowed || intent.busy || intent.uncertain} onClick={() => void resolve('deny')}>{accessRequest ? 'Not now' : 'Deny'}</button></div> : <p role="status">{result}{!accessRequest && approval.gate.resolvedAtMs != null && state !== 'expired' && ` · ${new Date(approval.gate.resolvedAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}</p>}
+    {state === 'pending' ? <div className="row"><button className="primary" disabled={!allowed || !commandReviewed || intent.busy || intent.uncertain} onClick={() => void resolve('approve_once')}>{accessRequest ? 'Allow for this Bot' : 'Allow once'}</button>{!accessRequest && approval.chatOption && <button disabled={!allowed || !commandReviewed || intent.busy || intent.uncertain} onClick={() => void resolve('approve_chat')}>{approval.chatOption.label}</button>}<button className="danger" disabled={!allowed || intent.busy || intent.uncertain} onClick={() => void resolve('deny')}>{accessRequest ? 'Not now' : 'Deny'}</button></div> : <p role="status">{result}{!accessRequest && approval.gate.resolvedAtMs != null && state !== 'expired' && ` · ${new Date(approval.gate.resolvedAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}</p>}
   </div>;
 }
 function HumanCard({ initial }: { initial: HumanStep }) {

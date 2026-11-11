@@ -62,6 +62,89 @@ enum AccessRequestPresentation {
     }
 }
 
+/// Display-only escaping. Never use this text as an executable command or mutation payload.
+struct ApprovalTextPresentation {
+    let text: String
+    let preview: String
+    let truncated: Bool
+    let hasControls: Bool
+
+    init(_ value: String) {
+        var escaped = ""
+        var controls = false
+        for scalar in value.unicodeScalars {
+            let code = scalar.value
+            if scalar.properties.generalCategory == .format || scalar.properties.isDefaultIgnorableCodePoint
+                || (code < 0x20 && code != 0x09 && code != 0x0A)
+                || (0x7F...0x9F).contains(code) || code == 0x2028 || code == 0x2029 {
+                escaped += "⟨U+\(String(format: "%04X", code))⟩"
+                controls = true
+            } else {
+                escaped.unicodeScalars.append(scalar)
+            }
+        }
+        text = escaped
+        hasControls = controls
+        truncated = escaped.unicodeScalars.count > 160
+        preview = truncated ? String(String.UnicodeScalarView(escaped.unicodeScalars.prefix(159))) + "…" : escaped
+    }
+
+    /// Isolate each paragraph so neither surrounding UI nor command text changes its base direction.
+    static func isolated(_ text: String) -> String {
+        "\u{2066}" + text.replacingOccurrences(of: "\n", with: "\u{2069}\n\u{2066}") + "\u{2069}"
+    }
+}
+
+struct ApprovalReviewPresentation {
+    struct Identity: Equatable {
+        let id: ID
+        let revision: Int
+        let value: String
+        let hasCommand: Bool
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.id == rhs.id && lhs.revision == rhs.revision && lhs.hasCommand == rhs.hasCommand
+                && lhs.value.unicodeScalars.elementsEqual(rhs.value.unicodeScalars)
+        }
+    }
+
+    let identity: Identity
+    let text: ApprovalTextPresentation
+    let missingCommand: Bool
+    let accessRequest: Bool
+    let terminal: Bool
+
+    init(_ approval: Approval) {
+        accessRequest = approval.source == "access_request"
+        terminal = !accessRequest && approval.target == "Terminal"
+        let command = terminal ? approval.inputs["command"]?.stringValue : nil
+        let value = command ?? approval.title
+        identity = Identity(id: approval.id, revision: approval.revision, value: value, hasCommand: command != nil)
+        text = ApprovalTextPresentation(value)
+        missingCommand = terminal && (command?.isEmpty ?? true)
+    }
+
+    func allowsApproval(expanded: Identity?) -> Bool {
+        !terminal || (!missingCommand && (!text.truncated || expanded == identity))
+    }
+}
+
+@ViewBuilder
+private func approvalDetailText(_ value: String, accessRequest: Bool) -> some View {
+    if accessRequest {
+        Text(verbatim: value)
+            .lineLimit(nil).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+    } else {
+        let presentation = ApprovalTextPresentation(value)
+        VStack(alignment: .leading, spacing: 4) {
+            if presentation.hasControls { LabelChip(text: "Escaped controls", tint: LB.warning) }
+            Text(verbatim: ApprovalTextPresentation.isolated(presentation.text))
+                .lineLimit(nil).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                .environment(\.layoutDirection, .leftToRight)
+        }
+    }
+}
+
 struct ApprovalReviewView: View {
     let store: LemonBotStore
     let approval: Approval
@@ -69,16 +152,46 @@ struct ApprovalReviewView: View {
     @State private var action = UIActionState()
     @State private var resolved: Approval?
     @State private var botWide = false
+    @State private var botWideReview: ApprovalReviewPresentation.Identity?
+    @State private var expandedReview: ApprovalReviewPresentation.Identity?
     @State private var rememberedPolicy: EffectivePolicy?
     private var current: Approval { (resolved?.revision ?? 0) > approval.revision ? resolved! : approval }
     var body: some View {
         let proposal = current
         let accessRequest = proposal.source == "access_request"
+        let review = ApprovalReviewPresentation(proposal)
+        let expanded = expandedReview == review.identity
+        let canApprove = review.allowsApproval(expanded: expandedReview)
         VStack(alignment: .leading, spacing: 10) {
-            if proposal.target == "Terminal" && !accessRequest {
-                Text(proposal.title).font(.system(.headline, design: .monospaced)).textSelection(.enabled)
+            if review.terminal {
+                if review.text.truncated && expanded {
+                    ScrollView {
+                        commandText(review.text.text)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxHeight: 260)
+                } else {
+                    commandText(review.text.preview)
+                }
+                if review.text.hasControls {
+                    LabelChip(text: "Escaped controls", tint: LB.warning)
+                    CardNote(symbol: "exclamationmark.triangle", text: "Invisible or directional characters are shown as ⟨U+XXXX⟩. The original command is unchanged.", tint: LB.warning)
+                }
+                if review.text.truncated {
+                    Button(expanded ? "Collapse command" : "Show full command") {
+                        expandedReview = expanded ? nil : review.identity
+                    }.buttonStyle(.pill(.secondary, compact: true))
+                    if !expanded {
+                        Text("Review the full command before allowing it.").cardMeta()
+                    }
+                }
+                if review.missingCommand {
+                    CardNote(symbol: "exclamationmark.triangle", text: "The full command is unavailable. Deny this request and ask the Bot to make a new one.", tint: LB.warning)
+                }
             } else {
-                CardHeader(symbol: "checkmark.shield", title: proposal.title)
+                CardHeader(symbol: "checkmark.shield", title: accessRequest ? proposal.title : ApprovalTextPresentation.isolated(review.text.text))
+                if !accessRequest && review.text.hasControls {
+                    LabelChip(text: "Escaped controls", tint: LB.warning)
+                }
             }
             if accessRequest {
                 Text(proposal.description).font(LBFont.rowSubtitle).foregroundStyle(.secondary)
@@ -86,44 +199,58 @@ struct ApprovalReviewView: View {
                     Text(verbatim: reason).font(LBFont.body).textSelection(.enabled)
                 }
             } else {
-                Text("\(proposal.target) on \(proposal.scope.machineLabel)").font(LBFont.rowSubtitle).foregroundStyle(.secondary)
+                approvalDetailText("\(proposal.target) on \(proposal.scope.machineLabel)", accessRequest: false).font(LBFont.rowSubtitle).foregroundStyle(.secondary)
             }
             CardDetails {
-                Text(proposal.description)
-                cardFact("Scope", proposal.scope.label)
-                cardFact("Bot", store.bots.first(where: { $0.id == proposal.botId })?.name ?? proposal.botId)
-                ForEach(proposal.scope.consequences, id: \.self) { consequence in Text(consequence) }
+                approvalDetailText(proposal.title, accessRequest: accessRequest)
+                approvalDetailText(proposal.description, accessRequest: accessRequest)
+                approvalDetailText("Scope: \(proposal.scope.label)", accessRequest: accessRequest)
+                approvalDetailText("Bot: \(store.bots.first(where: { $0.id == proposal.botId })?.name ?? proposal.botId)", accessRequest: accessRequest)
+                ForEach(proposal.scope.consequences, id: \.self) { consequence in approvalDetailText(consequence, accessRequest: accessRequest) }
                 GateStatusView(store: store, gate: proposal.gate, details: false)
-                HStack(spacing: 6) { StatusBadge(text: proposal.category); StatusBadge(text: proposal.scope.kind) }
-                if let origin = proposal.scope.origin { Text("Origin: \(origin)").textSelection(.enabled) }
-                if let connector = proposal.scope.connectorId { Text("Connector: \(connector)").textSelection(.enabled) }
-                if let run = proposal.scope.runId { Text("Run: \(run)").textSelection(.enabled) }
+                if accessRequest {
+                    HStack(spacing: 6) { StatusBadge(text: proposal.category); StatusBadge(text: proposal.scope.kind) }
+                } else {
+                    approvalDetailText("Category: \(proposal.category)", accessRequest: false)
+                    approvalDetailText("Scope kind: \(proposal.scope.kind)", accessRequest: false)
+                }
+                if let origin = proposal.scope.origin { approvalDetailText("Origin: \(origin)", accessRequest: accessRequest) }
+                if let connector = proposal.scope.connectorId { approvalDetailText("Connector: \(connector)", accessRequest: accessRequest) }
+                if let run = proposal.scope.runId { approvalDetailText("Run: \(run)", accessRequest: accessRequest) }
                 Text("Review scope expires \(timestamp(Double(proposal.scope.expiresAtMs)).formatted())")
                 ForEach(Array(proposal.inputs.keys.sorted()), id: \.self) { key in
-                    Text("\(key): \(inputSummary(proposal.inputs[key]!))").textSelection(.enabled)
+                    approvalDetailText("\(key): \(inputSummary(proposal.inputs[key]!))", accessRequest: accessRequest)
+                        .font(.system(.body, design: .monospaced))
                 }
-                Text("Review: \(humanizedStatus(proposal.review)) · Policy: \(humanizedStatus(proposal.policyMode))")
-                if let rule = proposal.ruleId { Text("Rule: \(rule)") }
+                approvalDetailText("Review: \(humanizedStatus(proposal.review)) · Policy: \(humanizedStatus(proposal.policyMode))", accessRequest: accessRequest)
+                if let rule = proposal.ruleId { approvalDetailText("Rule: \(rule)", accessRequest: accessRequest) }
                 Button("Copy support details") { copyText("Connector: \(proposal.scope.connectorId ?? "Not set")\nRun: \(proposal.scope.runId ?? "Not set")\nRule: \(proposal.ruleId ?? "Not set")") }.buttonStyle(.pill(.quiet, compact: true))
-                GateDetailLines(store: store, gate: proposal.gate)
+                if accessRequest {
+                    GateDetailLines(store: store, gate: proposal.gate)
+                } else {
+                    approvalDetailText("Target user: \(proposal.gate.targetUserId == store.user?.id ? "You" : proposal.gate.targetUserId)", accessRequest: false)
+                    Text("Expires \(timestamp(Double(proposal.gate.expiresAtMs)).formatted())")
+                    Text("Revision \(proposal.gate.revision)")
+                }
             }
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 let expired = proposal.gate.state == "pending" && Double(proposal.gate.expiresAtMs) <= Date().timeIntervalSince1970 * 1000
                 if proposal.gate.state == "pending" && !expired {
                     HStack(spacing: 8) {
-                        Button(accessRequest ? AccessRequestPresentation.allowLabel : "Allow once") { Task { await resolve("approve_once") } }.buttonStyle(.cardPrimary)
+                        Button(accessRequest ? AccessRequestPresentation.allowLabel : "Allow once") { Task { await resolve("approve_once", reviewed: review.identity) } }.buttonStyle(.cardPrimary).disabled(!canApprove)
                         if !accessRequest, let option = proposal.chatOption {
-                            Button(option.label) { Task { await resolve("approve_chat") } }.buttonStyle(.pill(.secondary))
+                            Button(option.label) { Task { await resolve("approve_chat", reviewed: review.identity) } }.buttonStyle(.pill(.secondary)).disabled(!canApprove)
                         }
                         if !accessRequest, proposal.chatOption != nil,
                            let bot = store.bots.first(where: { $0.id == proposal.botId }),
                            bot.ownerUserId == store.user?.id,
                            rememberedPolicy?.rememberedApprovals?.bot.isEmpty == false {
                             Menu {
-                                Button("Always allow for this Bot…") { botWide = true }
+                                Button("Always allow for this Bot…") { botWideReview = review.identity; botWide = true }
                             } label: { Image(systemName: "ellipsis") }
+                            .disabled(!canApprove)
                         }
-                        Button(accessRequest ? AccessRequestPresentation.denyLabel : "Deny", role: accessRequest ? nil : .destructive) { Task { await resolve("deny") } }.buttonStyle(.pill(.secondary))
+                        Button(accessRequest ? AccessRequestPresentation.denyLabel : "Deny", role: accessRequest ? nil : .destructive) { Task { await resolve("deny", reviewed: review.identity) } }.buttonStyle(.pill(.secondary))
                     }.disabled(action.busy || !gateAllowsAction(store, proposal.gate) || Double(proposal.scope.expiresAtMs) <= Date().timeIntervalSince1970 * 1000)
                 } else {
                     let state = expired ? "expired" : proposal.gate.state
@@ -135,23 +262,38 @@ struct ApprovalReviewView: View {
             }
             ActionErrorView(message: action.error)
         }
+        .onChange(of: review.identity) { _, _ in
+            expandedReview = nil
+            botWideReview = nil
+            botWide = false
+        }
         .task(id: approval.botId) {
             guard approval.source != "access_request" else { return }
             do { rememberedPolicy = try await store.read("/policies/effective", query: ["botId": approval.botId]) }
             catch { action.error = error.localizedDescription }
         }
         .sheet(isPresented: $botWide) {
-            if let bot = store.bots.first(where: { $0.id == approval.botId }) {
+            if canApprove, botWideReview == review.identity,
+               let bot = store.bots.first(where: { $0.id == proposal.botId }) {
                 BotApprovalsView(store: store, bot: bot, previewOnOpen: true, afterConfirm: {
-                    await resolve("approve_once")
+                    await resolve("approve_once", reviewed: review.identity)
                     botWide = false
                 }).padding()
             }
         }
     }
-    private func resolve(_ decision: String) async {
+    private func commandText(_ value: String) -> some View {
+        Text(verbatim: ApprovalTextPresentation.isolated(value))
+            .font(.system(.headline, design: .monospaced))
+            .lineLimit(nil).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            .environment(\.layoutDirection, .leftToRight)
+    }
+    private func resolve(_ decision: String, reviewed: ApprovalReviewPresentation.Identity) async {
+        let proposal = current
+        let review = ApprovalReviewPresentation(proposal)
+        guard decision == "deny" || (reviewed == review.identity && review.allowsApproval(expanded: expandedReview)) else { return }
         await action.perform {
-            resolved = try await store.mutate("POST", resourcePath("approvals", current.id, "/resolve"), body: ["revision": .number(Double(current.revision)), "decision": .string(decision)])
+            resolved = try await store.mutate("POST", resourcePath("approvals", proposal.id, "/resolve"), body: ["revision": .number(Double(proposal.revision)), "decision": .string(decision)])
         }
     }
 }

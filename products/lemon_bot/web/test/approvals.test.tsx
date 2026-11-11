@@ -106,6 +106,73 @@ test('approval card renders the chat choice only when eligible and reports the r
   expect(container.textContent).toContain('Allowed for this chat by you');
 });
 
+test('truncated commands require full review before either Allow choice and reset on revision', async () => {
+  const item = approval('approval_long', { toolGroup: 'terminal', label: 'Allow Terminal for this chat' });
+  const command = `printf '${'ok '.repeat(80)}'\nrm -rf /tmp/review-target`;
+  item.inputs.command = command; item.title = command.slice(0, 159) + '…';
+  approvals.set(item.id, item);
+  await render(<TranscriptCard card={{ type: 'local_tool_permission', approval: item }} />);
+  expect(button('Allow once').disabled).toBe(true);
+  expect(button('Allow Terminal for this chat').disabled).toBe(true);
+  expect(button('Deny').disabled).toBe(false);
+  await act(async () => button('Allow once').click());
+  expect(calls.some(call => call.endpoint === 'POST /approvals/:id/resolve')).toBe(false);
+  await act(async () => button('Show full command').click());
+  expect(container.querySelector('pre code')?.textContent).toBe(command);
+  expect(button('Allow once').disabled).toBe(false);
+  expect(button('Allow Terminal for this chat').disabled).toBe(false);
+  await act(async () => button('Collapse command').click());
+  expect(button('Allow once').disabled).toBe(true);
+  await act(async () => button('Show full command').click());
+  item.revision += 1; item.inputs.command = `${command}\nprintf changed`;
+  await render(<TranscriptCard card={{ type: 'local_tool_permission', approval: item }} />);
+  expect(button('Allow once').disabled).toBe(true);
+  expect(button('Allow Terminal for this chat').disabled).toBe(true);
+  await act(async () => button('Show full command').click());
+  await act(async () => button('Allow once').click());
+  expect(calls.find(call => call.endpoint === 'POST /approvals/:id/resolve')?.options.body?.revision).toBe(2);
+});
+
+test('commands retain comment-ending newlines in the card and Details', async () => {
+  const item = approval('approval_multiline');
+  const command = 'printf ok # c\nrm -rf /tmp/review-target';
+  item.inputs.command = command; item.title = command.replace('\n', ' ');
+  approvals.set(item.id, item);
+  await render(<TranscriptCard card={{ type: 'local_tool_permission', approval: item }} />);
+  expect(container.querySelector('pre code')?.textContent).toBe(command);
+  expect(container.querySelector('dd pre code')?.textContent).toBe(command);
+  for (const pre of container.querySelectorAll('pre')) {
+    expect(pre.style.whiteSpace).toBe('pre');
+    expect(pre.dir).toBe('ltr');
+    expect(pre.style.unicodeBidi).toBe('isolate');
+  }
+  expect(button('Allow once').disabled).toBe(false);
+});
+
+test('directional and invisible command characters are visibly escaped without changing inputs', async () => {
+  const item = approval('approval_controls');
+  const command = 'printf \u202Eok\u2066\u200B\u200F\uFEFF\u0008\nnext';
+  item.inputs.command = command; item.title = command;
+  approvals.set(item.id, item);
+  await render(<TranscriptCard card={{ type: 'local_tool_permission', approval: item }} />);
+  const expected = 'printf ⟨U+202E⟩ok⟨U+2066⟩⟨U+200B⟩⟨U+200F⟩⟨U+FEFF⟩⟨U+0008⟩\nnext';
+  expect(container.querySelector('pre code')?.textContent).toBe(expected);
+  expect(container.querySelector('dd pre code')?.textContent).toBe(expected);
+  expect(container.textContent).toContain('Warning: hidden or directional characters');
+  expect(item.inputs.command).toBe(command);
+});
+
+test('a Terminal approval without its full command cannot be allowed', async () => {
+  const item = approval('approval_missing_command', { toolGroup: 'terminal', label: 'Allow Terminal for this chat' });
+  item.inputs = { path: '/tmp/review-target' };
+  approvals.set(item.id, item);
+  await render(<TranscriptCard card={{ type: 'local_tool_permission', approval: item }} />);
+  expect(button('Allow once').disabled).toBe(true);
+  expect(button('Allow Terminal for this chat').disabled).toBe(true);
+  expect(button('Deny').disabled).toBe(false);
+  expect(container.textContent).toContain('The full command is unavailable.');
+});
+
 test('bot-wide review mode requires the server preview and typed-name confirmation', async () => {
   let reloads = 0;
   await render(<SettingsPanel bot={bot} reload={async () => { reloads++; }} />);

@@ -3,6 +3,9 @@
 ## 2026-11-11
 - Re-read reconciliation candidates after earlier receipt waits so a completed run cannot be restored to an uncertain reserved-submission state.
 - Web and Apple idle reconciliation includes uncertain outcomes; delayed web reads cannot restore completed runs, and Apple retries final-entry reads independently after run completion.
+- Approval presentation preserves command line boundaries and marks shortened
+  headlines and escaped invisible Unicode controls. The full reviewable proposal
+  remains available to clients; commands that cannot be fully shown fail closed.
 
 ## 2026-11-10
 - Preserve realtime sequence order through reply/status fan-out and close terminal-run streaming messages (including legacy rows), so completed replies no longer leave Bots stuck on “Thinking” or “Writing a reply”.
