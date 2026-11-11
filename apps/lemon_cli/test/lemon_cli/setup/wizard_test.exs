@@ -810,6 +810,12 @@ defmodule LemonCli.Setup.WizardTest do
       assert [first | _] = options
       assert first =~ "1. Copy your Codex CLI ChatGPT login into Lemon"
       assert List.last(options) =~ "Skip — finish later with `lemon setup model`"
+      assert Enum.any?(options, &String.contains?(&1, "Sign in with ChatGPT (browser)"))
+      messages = info_messages(events)
+      warning = Enum.find_index(messages, &String.contains?(&1, "if either refreshes it"))
+      choice = Enum.find_index(messages, &String.contains?(&1, "1. Copy your Codex"))
+      assert is_integer(warning) and warning < choice
+      refute first =~ "read-only copy"
 
       # The login is only read when a choice says so.
       settings = if File.exists?(path), do: Toml.decode_file!(path), else: %{}

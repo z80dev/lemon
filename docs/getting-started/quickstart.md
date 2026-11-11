@@ -25,9 +25,9 @@ The installer verifies the runtime and terminal-UI checksums, installs them unde
 
 Setup's **Connect a model** step lists what it already found on this machine
 first. If you use the Codex CLI, the first choice copies that ChatGPT login into
-Lemon: Lemon keeps and refreshes its own copy and never changes
-`~/.codex/auth.json`. If either app later asks you to sign in again, sign in
-there — or use *Sign in with ChatGPT* to give Lemon its own login. A provider key
+Lemon without changing `~/.codex/auth.json`. Lemon and the Codex CLI share this
+login; if either refreshes it, the other may need to sign in again. Choose
+*Sign in with ChatGPT (browser)* to give Lemon its own login instead. A provider key
 exported in your shell (for example `ANTHROPIC_API_KEY`) is offered as an
 explicit save into Lemon's encrypted store, because the background service
 cannot see your shell. Nothing is copied or saved without choosing it.

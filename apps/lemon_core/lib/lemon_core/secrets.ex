@@ -110,7 +110,7 @@ defmodule LemonCore.Secrets do
     with {:ok, existing} <- Store.fetch(server, @table, {owner, name}),
          {:ok, rows} <- fetch_receipt_rows(server),
          {:ok, found} <- operation_receipt(rows, owner, opts),
-         {:ok, master_key, _source} <- MasterKey.resolve(opts) do
+         {:ok, master_key, _source} <- MasterKey.resolve_fresh(opts) do
       provider = normalize_optional_string(opts[:provider]) || @default_provider
       expires_at = normalize_optional_integer(opts[:expires_at])
 
@@ -335,7 +335,7 @@ defmodule LemonCore.Secrets do
             fn ->
               with {:ok, rows} <- fetch_receipt_rows(server),
                    {:ok, _} <- Receipts.find(rows, owner, nil, nil),
-                   {:ok, master_key, _source} <- MasterKey.resolve(opts),
+                   {:ok, master_key, _source} <- MasterKey.resolve_fresh(opts),
                    {:ok, encrypted} <- encrypt_record(entry, value, master_key, []) do
                 record =
                   Enum.reduce(
@@ -387,7 +387,7 @@ defmodule LemonCore.Secrets do
           with {:ok, entry} <- fetch_revision_entry(server, owner, name, revision),
                {:ok, rows} <- fetch_receipt_rows(server),
                {:ok, _} <- Receipts.find(rows, owner, nil, nil),
-               {:ok, master_key, _source} <- MasterKey.resolve(opts),
+               {:ok, master_key, _source} <- MasterKey.resolve_fresh(opts),
                {:ok, record} <- encrypt_record(entry, value, master_key, opts) do
             swap_revision(server, owner, name, revision, entry, record)
           end

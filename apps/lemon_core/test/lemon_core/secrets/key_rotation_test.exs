@@ -120,6 +120,50 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     {:ok, key_file: key_file, opts: opts}
   end
 
+  for operation <- [:set, :restore, :set_if_revision] do
+    @operation operation
+    test "#{operation} refreshes a scoped Keychain key after another process rotates it", ctx do
+      start_supervised!(
+        {Agent, fn -> %{key: File.read!(ctx.key_file), failures: 0, failures_after_put: 0} end},
+        id: FlakyKeychain
+      )
+      |> Process.register(FlakyKeychain)
+
+      opts = Keyword.put(ctx.opts, :key_providers, [FlakyKeychain])
+      assert {:ok, _} = Secrets.set("ALPHA", "original", opts)
+      assert {:ok, snapshot} = Secrets.snapshot("ALPHA", opts)
+
+      LemonCore.Secrets.MasterKey.scoped(fn ->
+        assert {:ok, old_key, :keychain} = LemonCore.Secrets.MasterKey.resolve(opts)
+
+        revision =
+          Task.async(fn ->
+            assert {:ok, preview} = KeyRotation.preview(opts)
+            assert {:ok, _} = KeyRotation.rotate(preview.confirmation_token, opts)
+            assert {:ok, "original", revision} = Secrets.get_with_revision("ALPHA", opts)
+            revision
+          end)
+          |> Task.await()
+
+        assert {:ok, ^old_key, :keychain} = LemonCore.Secrets.MasterKey.resolve(opts)
+
+        result =
+          case @operation do
+            :set -> Secrets.set("ALPHA", "replacement", opts)
+            :restore -> Secrets.restore("ALPHA", snapshot, opts)
+            :set_if_revision -> Secrets.set_if_revision("ALPHA", "replacement", revision, opts)
+          end
+
+        assert {:ok, _} = result
+        assert {:ok, current_key, :keychain} = LemonCore.Secrets.MasterKey.resolve(opts)
+        refute current_key == old_key
+      end)
+
+      expected = if @operation == :restore, do: "original", else: "replacement"
+      assert {:ok, ^expected} = Secrets.get("ALPHA", opts)
+    end
+  end
+
   test "rotation re-encrypts every secret under a new key and retires the old one", ctx do
     old_key = read_key(ctx.key_file)
 

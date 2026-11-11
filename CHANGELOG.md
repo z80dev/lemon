@@ -20,6 +20,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Secret writes refresh the master key inside the mutation lock even during a
+  cached setup command, preventing credential loss after concurrent key rotation.
+- Codex login import warns about shared refresh-token sign-outs before consent;
+  setup also offers independent ChatGPT browser sign-in directly.
+
 - Source launchers now reuse a private random per-install distribution cookie;
   dedicated control-plane and gateway launchers also default distribution and
   epmd to loopback. Both primary launchers honor the saved node-gateway port,
