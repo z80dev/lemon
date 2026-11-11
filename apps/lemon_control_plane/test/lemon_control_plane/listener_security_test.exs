@@ -241,8 +241,13 @@ defmodule LemonControlPlane.ListenerSecurityTest do
   end
 
   defp assert_websocket_upgrade(plug) do
-    server =
-      start_supervised!({Bandit, plug: plug, ip: {127, 0, 0, 1}, port: 0, startup_log: false})
+    child =
+      Supervisor.child_spec(
+        {Bandit, plug: plug, ip: {127, 0, 0, 1}, port: 0, startup_log: false},
+        id: {__MODULE__, plug}
+      )
+
+    server = start_supervised!(child)
 
     {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(server)
     {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 2_000)
@@ -258,7 +263,7 @@ defmodule LemonControlPlane.ListenerSecurityTest do
       assert response =~ "HTTP/1.1 101"
     after
       :gen_tcp.close(socket)
-      stop_supervised!(Bandit)
+      stop_supervised!(child.id)
     end
   end
 

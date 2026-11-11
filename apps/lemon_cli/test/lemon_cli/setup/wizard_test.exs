@@ -18,7 +18,12 @@ defmodule LemonCli.Setup.WizardTest do
     }
   end
 
-  @port_vars ["LEMON_CONTROL_PLANE_PORT", "LEMON_WEB_PORT", "LEMON_SIM_UI_PORT"]
+  @port_vars [
+    "LEMON_CONTROL_PLANE_PORT",
+    "LEMON_CONTROL_PLANE_NODE_PORT",
+    "LEMON_WEB_PORT",
+    "LEMON_SIM_UI_PORT"
+  ]
 
   setup do
     tmp_dir =
@@ -123,6 +128,7 @@ defmodule LemonCli.Setup.WizardTest do
     setup %{config_path: path} do
       configure_ready_provider(path)
       System.put_env("LEMON_CONTROL_PLANE_PORT", "4040")
+      System.put_env("LEMON_CONTROL_PLANE_NODE_PORT", "4044")
       System.put_env("LEMON_WEB_PORT", "4080")
 
       {:ok,
@@ -211,7 +217,6 @@ defmodule LemonCli.Setup.WizardTest do
 
     test "a node gateway disabled with LEMON_CONTROL_PLANE_NODE_PORT=0 is never reserved", ctx do
       System.put_env("LEMON_CONTROL_PLANE_NODE_PORT", "0")
-      on_exit(fn -> System.delete_env("LEMON_CONTROL_PLANE_NODE_PORT") end)
 
       opts = [port_free?: &(&1 != 4044), non_interactive: true] ++ ctx.opts
       assert :ok = Wizard.run_full([], recording_io(), opts)
