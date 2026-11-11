@@ -88,7 +88,9 @@ defmodule CodingAgent.Workspace do
   `.lemon/skill` tree. Generic sessions retain their project cwd.
   """
   def skill_cwd(cwd, opts) do
-    if profile_owned?(opts), do: scope_opt(opts, :workspace_dir), else: cwd
+    if profile_owned?(opts),
+      do: scope_opt(opts, :workspace_dir),
+      else: scope_opt(opts, :config_cwd) || cwd
   end
 
   defp scope_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key)

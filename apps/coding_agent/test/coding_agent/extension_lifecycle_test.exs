@@ -14,6 +14,92 @@ defmodule CodingAgent.ExtensionLifecycleTest do
     :ok
   end
 
+  test "Bot-folder payloads never compile during initialization, reload or rebuild", %{
+    tmp_dir: tmp
+  } do
+    trusted = Path.join(tmp, "trusted")
+    bot = Path.join(tmp, "bot")
+    File.mkdir_p!(trusted)
+    File.mkdir_p!(Path.join(bot, ".lemon/extensions"))
+    marker = Path.join(tmp, "compiled")
+    payload = Path.join(bot, ".lemon/extensions/payload.exs")
+    File.write!(payload, "File.write!(#{inspect(marker)}, \"compiled\")")
+    File.ln_s!(payload, Path.join(bot, ".lemon/extensions/symlink.exs"))
+    File.ln!(payload, Path.join(bot, ".lemon/extensions/hardlink.exs"))
+
+    opts = [
+      cwd: bot,
+      config_cwd: trusted,
+      settings_manager: %{extension_paths: [], extension_auto_load_default_paths: true},
+      tool_opts: [config_cwd: trusted]
+    ]
+
+    initial = ExtensionLifecycle.initialize(opts)
+    refute File.exists?(marker)
+    assert Config.project_extensions_dir(trusted) in initial.extension_paths
+    refute Config.project_extensions_dir(bot) in initial.extension_paths
+
+    reloaded = ExtensionLifecycle.reload(opts)
+    refute File.exists?(marker)
+    assert reloaded.extension_paths == initial.extension_paths
+
+    CodingAgent.ToolRegistry.invalidate_extension_cache()
+
+    ExtensionLifecycle.rebuild_tools(
+      opts ++ [extensions: initial.extensions, hooks: initial.hooks]
+    )
+
+    refute File.exists?(marker)
+  end
+
+  test "session startup keeps Bot instructions and extensions outside the trusted project", %{
+    tmp_dir: tmp
+  } do
+    trusted = Path.join(tmp, "project")
+    bot = Path.join(tmp, "bot-session")
+    File.mkdir_p!(trusted)
+    File.mkdir_p!(Path.join(bot, ".lemon/extensions"))
+    File.write!(Path.join(trusted, "AGENTS.md"), "TRUSTED_PROJECT_INSTRUCTIONS")
+    File.write!(Path.join(bot, "AGENTS.md"), "BOT_WRITTEN_INSTRUCTIONS")
+    marker = Path.join(tmp, "session-compiled")
+
+    File.write!(
+      Path.join(bot, ".lemon/extensions/payload.exs"),
+      "File.write!(#{inspect(marker)}, \"compiled\")"
+    )
+
+    settings = %{
+      CodingAgent.SettingsManager.load(trusted)
+      | extension_auto_load_default_paths: true
+    }
+
+    model = %LemonAi.Types.Model{
+      id: "trust-test",
+      name: "Trust test",
+      api: :mock,
+      provider: :mock_provider,
+      base_url: "https://invalid.test",
+      reasoning: false,
+      input: [:text],
+      cost: %LemonAi.Types.ModelCost{},
+      context_window: 128_000,
+      max_tokens: 4096
+    }
+
+    session =
+      start_supervised!(
+        {CodingAgent.Session,
+         [cwd: bot, config_cwd: trusted, model: model, settings_manager: settings, tools: []]}
+      )
+
+    state = CodingAgent.Session.get_state(session)
+    assert state.cwd == bot
+    assert state.system_prompt =~ "TRUSTED_PROJECT_INSTRUCTIONS"
+    refute state.system_prompt =~ "BOT_WRITTEN_INSTRUCTIONS"
+    refute File.exists?(marker)
+    assert CodingAgent.Workspace.skill_cwd(bot, config_cwd: trusted) == trusted
+  end
+
   describe "extension_paths/2" do
     test "uses explicit settings paths without auto-loading default directories", %{
       tmp_dir: tmp_dir

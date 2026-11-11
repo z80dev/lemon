@@ -41,6 +41,7 @@ defmodule CodingAgent.ExtensionLifecycle do
   @spec initialize(keyword()) :: lifecycle_result()
   def initialize(opts) do
     cwd = Keyword.fetch!(opts, :cwd)
+    config_cwd = Keyword.get(opts, :config_cwd) || cwd
     settings_manager = Keyword.fetch!(opts, :settings_manager)
     tool_opts = Keyword.get(opts, :tool_opts, [])
     custom_tools = Keyword.get(opts, :custom_tools)
@@ -52,7 +53,7 @@ defmodule CodingAgent.ExtensionLifecycle do
     approval_context =
       Keyword.get(opts, :approval_context, Keyword.get(tool_opts, :approval_context))
 
-    extension_paths = extension_paths(cwd, settings_manager)
+    extension_paths = extension_paths(config_cwd, settings_manager)
 
     {extensions, load_errors} =
       case Keyword.fetch(tool_opts, :extension_inventory) do
@@ -71,6 +72,7 @@ defmodule CodingAgent.ExtensionLifecycle do
 
     tool_opts =
       tool_opts
+      |> Keyword.put(:config_cwd, config_cwd)
       |> Keyword.put(:extension_paths, extension_paths)
       |> Keyword.put(:wasm_tools, wasm_tools)
       |> Keyword.put(:wasm_status, wasm_status)
@@ -128,6 +130,7 @@ defmodule CodingAgent.ExtensionLifecycle do
   @spec reload(keyword()) :: lifecycle_result()
   def reload(opts) do
     cwd = Keyword.fetch!(opts, :cwd)
+    config_cwd = Keyword.get(opts, :config_cwd) || cwd
     settings_manager = Keyword.fetch!(opts, :settings_manager)
     tool_opts = Keyword.get(opts, :tool_opts, [])
     extra_tools = Keyword.get(opts, :extra_tools, [])
@@ -149,7 +152,7 @@ defmodule CodingAgent.ExtensionLifecycle do
     Extensions.unregister_extension_providers(old_provider_registration)
     Extensions.clear_extension_cache()
 
-    extension_paths = extension_paths(cwd, settings_manager)
+    extension_paths = extension_paths(config_cwd, settings_manager)
     ToolRegistry.invalidate_extension_cache(cwd)
 
     {extensions, load_errors} = load_extensions(extension_paths)
@@ -160,6 +163,7 @@ defmodule CodingAgent.ExtensionLifecycle do
 
     tool_opts =
       tool_opts
+      |> Keyword.put(:config_cwd, config_cwd)
       |> Keyword.put(:extension_paths, extension_paths)
       |> Keyword.put(:wasm_tools, wasm_tools)
       |> Keyword.put(:wasm_status, wasm_status)
@@ -233,6 +237,7 @@ defmodule CodingAgent.ExtensionLifecycle do
         }
   def rebuild_tools(opts) do
     cwd = Keyword.fetch!(opts, :cwd)
+    config_cwd = Keyword.get(opts, :config_cwd) || cwd
     settings_manager = Keyword.fetch!(opts, :settings_manager)
     tool_opts = Keyword.get(opts, :tool_opts, [])
     tool_policy = Keyword.get(opts, :tool_policy, Keyword.get(tool_opts, :tool_policy))
@@ -242,7 +247,8 @@ defmodule CodingAgent.ExtensionLifecycle do
 
     tool_opts =
       tool_opts
-      |> Keyword.put(:extension_paths, extension_paths(cwd, settings_manager))
+      |> Keyword.put(:config_cwd, config_cwd)
+      |> Keyword.put(:extension_paths, extension_paths(config_cwd, settings_manager))
       |> Keyword.put(:wasm_tools, Keyword.get(opts, :wasm_tools, []))
       |> Keyword.put(:wasm_status, Keyword.get(opts, :wasm_status))
       |> Keyword.put(:tool_policy, tool_policy)

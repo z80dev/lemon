@@ -395,7 +395,9 @@ defmodule CodingAgent.Tools.Task.Execution do
     mode =
       Map.get(validated, :merge) ||
         (Keyword.get(opts, :settings_manager) ||
-           CodingAgent.SettingsManager.load(execution.effective_cwd)).task.worktree_merge
+           CodingAgent.SettingsManager.load(
+             Keyword.get(opts, :config_cwd) || execution.effective_cwd
+           )).task.worktree_merge
 
     Worktree.prepare(execution.effective_cwd, execution.task_id, mode)
   end

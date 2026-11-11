@@ -311,7 +311,7 @@ defmodule CodingAgent.Session.CompactionManager do
         model,
         state.settings_manager,
         existing_stream_options,
-        state.cwd
+        Map.get(state, :config_cwd) || state.cwd
       )
 
     api_key =

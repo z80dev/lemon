@@ -20,6 +20,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Keep Files-enabled Bot folders outside trusted extension, configuration,
+  persona and project-prompt discovery during session startup, reload and rebuild.
+
 - Managed controllers route start/restart through their service manager.
   Deliberate stops stay down; updates restart only previously running units,
   stop workers before restarting the controller, and update an installed Lemon

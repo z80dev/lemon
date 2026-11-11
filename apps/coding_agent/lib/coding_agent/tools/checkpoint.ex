@@ -7,7 +7,9 @@ defmodule CodingAgent.Tools.Checkpoint do
   def available?(opts) do
     settings =
       Keyword.get(opts, :settings_manager) ||
-        CodingAgent.SettingsManager.load(Keyword.get(opts, :cwd, File.cwd!()))
+        CodingAgent.SettingsManager.load(
+          Keyword.get(opts, :config_cwd) || Keyword.get(opts, :cwd, File.cwd!())
+        )
 
     tools = Map.get(settings, :tools, %{})
     section = Map.get(tools, :checkpoint, Map.get(tools, "checkpoint", %{}))
