@@ -554,6 +554,7 @@ defmodule CodingAgent.Session.Lifecycle do
       tool_policy: tool_policy,
       execution_context: execution_context,
       approval_context: approval_context,
+      secret_obfuscator: secret_obfuscator,
       bot_folder_root: Keyword.get(opts, :bot_folder_root),
       config_cwd: config_cwd,
       native_source_profile_id: Keyword.get(opts, :native_source_profile_id),
