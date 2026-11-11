@@ -44,8 +44,9 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
           "auth" => %{"token" => token}
         })
 
-      assert {:error, {:unauthorized, message}} = result
+      assert {:error, {:unauthorized, message, details}} = result
       assert message =~ "expired"
+      assert details == %{"reason" => "session_expired"}
     end
 
     test "returns unauthorized error for invalid token" do
@@ -54,8 +55,33 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
           "auth" => %{"token" => "nonexistent-token-123"}
         })
 
-      assert {:error, {:unauthorized, message}} = result
+      assert {:error, {:unauthorized, message, details}} = result
       assert message =~ "Invalid"
+      assert details == %{"reason" => "session_invalid"}
+    end
+
+    test "returns unavailable error when store is down" do
+      pid = Process.whereis(LemonCore.Store)
+
+      if is_pid(pid) do
+        Process.unregister(LemonCore.Store)
+
+        on_exit(fn ->
+          if Process.alive?(pid) and not is_pid(Process.whereis(LemonCore.Store)) do
+            Process.register(pid, LemonCore.Store)
+          end
+        end)
+
+        result =
+          Authorize.from_params(%{
+            "auth" => %{"token" => "some-token-during-outage"}
+          })
+
+        assert {:error, {:unavailable, message}} = result
+        assert message == "Session store is unavailable"
+
+        Process.register(pid, LemonCore.Store)
+      end
     end
 
     test "valid token returns auth context successfully" do
@@ -130,8 +156,9 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
           "auth" => %{"token" => token}
         })
 
-      assert {:error, {:unauthorized, message}} = result
+      assert {:error, {:unauthorized, message, details}} = result
       assert message =~ "expired"
+      assert details == %{"reason" => "session_expired"}
     end
 
     test "handles valid token with string keys in store" do

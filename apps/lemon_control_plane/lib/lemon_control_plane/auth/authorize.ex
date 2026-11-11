@@ -61,6 +61,11 @@ defmodule LemonControlPlane.Auth.Authorize do
           identity: map() | nil
         }
 
+  @type auth_error ::
+          {:unauthorized, String.t()}
+          | {:unauthorized, String.t(), map()}
+          | {:unavailable, String.t()}
+
   @doc """
   Creates a new auth context from connection parameters.
 
@@ -68,10 +73,10 @@ defmodule LemonControlPlane.Auth.Authorize do
   determine role and scopes. `:local?` defaults to true for direct in-process
   callers; the WebSocket boundary always supplies the actual peer classification.
   """
-  @spec from_params(map()) :: {:ok, auth_context()} | {:error, term()}
+  @spec from_params(map()) :: {:ok, auth_context()} | {:error, auth_error() | term()}
   def from_params(params), do: from_params(params, local?: true)
 
-  @spec from_params(map(), keyword()) :: {:ok, auth_context()} | {:error, term()}
+  @spec from_params(map(), keyword()) :: {:ok, auth_context()} | {:error, auth_error() | term()}
   def from_params(params, opts) do
     token = get_in(params, ["auth", "token"])
     requested_role = parse_role(params["role"])
@@ -123,14 +128,17 @@ defmodule LemonControlPlane.Auth.Authorize do
         end
 
       {:error, :expired_token} ->
-        {:error, {:unauthorized, "Token has expired"}}
+        {:error, {:unauthorized, "Token has expired", %{"reason" => "session_expired"}}}
 
       {:error, :invalid_token}
       when requested_role == :operator and is_binary(configured_operator_token) ->
         {:error, {:unauthorized, "Operator token is invalid"}}
 
       {:error, :invalid_token} ->
-        {:error, {:unauthorized, "Invalid token"}}
+        {:error, {:unauthorized, "Invalid token", %{"reason" => "session_invalid"}}}
+
+      {:error, :store_unavailable} ->
+        {:error, {:unavailable, "Session store is unavailable"}}
     end
   end
 

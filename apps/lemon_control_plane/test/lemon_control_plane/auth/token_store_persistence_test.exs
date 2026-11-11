@@ -284,4 +284,224 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
       refute expired_token in tokens
     end
   end
+
+  describe "node_session_ttl_ms/0" do
+    test "returns 7 days in milliseconds" do
+      assert TokenStore.node_session_ttl_ms() == 7 * 24 * 60 * 60 * 1000
+    end
+  end
+
+  describe "touch_node_session/3" do
+    test "extends current head token when gain exceeds min_extension_ms" do
+      node_id = "touch-node-#{System.unique_integer([:positive])}"
+      identity = %{"type" => "node", "nodeId" => node_id}
+      token = "touch-token-#{System.unique_integer([:positive])}"
+
+      assert {:ok, initial} =
+               TokenStore.replace_node_session(token, identity, ttl_ms: 3 * 24 * 60 * 60 * 1000)
+
+      # Two days after issue the session is still valid, and a touch slides it
+      # to a full canonical TTL measured from the touch, not from issue.
+      touch_time = initial.issued_at_ms + 2 * 24 * 60 * 60 * 1000
+      expected_expiry = touch_time + TokenStore.node_session_ttl_ms()
+
+      assert {:ok, ^expected_expiry} =
+               TokenStore.touch_node_session(node_id, 1, now_ms: touch_time)
+
+      assert LemonCore.Store.get(:session_tokens, token).expires_at_ms == expected_expiry
+    end
+
+    test "no-op when gain is below min_extension_ms" do
+      node_id = "noop-node-#{System.unique_integer([:positive])}"
+      identity = %{"type" => "node", "nodeId" => node_id}
+      token = "noop-token-#{System.unique_integer([:positive])}"
+
+      assert {:ok, initial} =
+               TokenStore.replace_node_session(token, identity,
+                 ttl_ms: TokenStore.node_session_ttl_ms()
+               )
+
+      # Ten minutes after issue the gain would be ten minutes, under the hour.
+      touch_time = initial.issued_at_ms + 10 * 60 * 1000
+      initial_expiry = initial.expires_at_ms
+
+      assert {:ok, ^initial_expiry} =
+               TokenStore.touch_node_session(node_id, 1, now_ms: touch_time)
+
+      assert LemonCore.Store.get(:session_tokens, token).expires_at_ms == initial_expiry
+    end
+
+    test "writes once the gain reaches exactly min_extension_ms" do
+      node_id = "boundary-node-#{System.unique_integer([:positive])}"
+      identity = %{"type" => "node", "nodeId" => node_id}
+      token = "boundary-token-#{System.unique_integer([:positive])}"
+
+      assert {:ok, initial} =
+               TokenStore.replace_node_session(token, identity,
+                 ttl_ms: TokenStore.node_session_ttl_ms()
+               )
+
+      touch_time = initial.issued_at_ms + 3_600_000
+      expected_expiry = touch_time + TokenStore.node_session_ttl_ms()
+
+      assert {:ok, ^expected_expiry} =
+               TokenStore.touch_node_session(node_id, 1, now_ms: touch_time)
+
+      assert LemonCore.Store.get(:session_tokens, token).expires_at_ms == expected_expiry
+    end
+
+    test "refuses old generation" do
+      node_id = "gen-node-#{System.unique_integer([:positive])}"
+      identity = %{"type" => "node", "nodeId" => node_id}
+      token1 = "gen-token-1-#{System.unique_integer([:positive])}"
+      token2 = "gen-token-2-#{System.unique_integer([:positive])}"
+
+      assert {:ok, _} = TokenStore.replace_node_session(token1, identity, ttl_ms: 60_000)
+      assert {:ok, second} = TokenStore.replace_node_session(token2, identity, ttl_ms: 60_000)
+      assert second.identity["sessionGeneration"] == 2
+
+      assert {:error, :not_current} = TokenStore.touch_node_session(node_id, 1)
+      assert {:error, :invalid_token} = TokenStore.validate(token1)
+    end
+
+    test "refuses revoked head" do
+      node_id = "revoked-node-#{System.unique_integer([:positive])}"
+      identity = %{"type" => "node", "nodeId" => node_id}
+      token = "revoked-token-#{System.unique_integer([:positive])}"
+
+      assert {:ok, _} = TokenStore.replace_node_session(token, identity, ttl_ms: 60_000)
+      assert {:ok, 1} = TokenStore.revoke_identity("node", node_id)
+      assert TokenStore.node_session_state(node_id) == :revoked
+
+      assert {:error, :not_current} = TokenStore.touch_node_session(node_id, 1)
+    end
+
+    test "refuses expired token" do
+      node_id = "expired-touch-node-#{System.unique_integer([:positive])}"
+      identity = %{"type" => "node", "nodeId" => node_id}
+      token = "expired-touch-token-#{System.unique_integer([:positive])}"
+
+      assert {:ok, initial} =
+               TokenStore.replace_node_session(token, identity, ttl_ms: 10_000)
+
+      assert {:error, :expired} =
+               TokenStore.touch_node_session(node_id, 1, now_ms: initial.expires_at_ms)
+
+      assert {:error, :expired} =
+               TokenStore.touch_node_session(node_id, 1, now_ms: initial.expires_at_ms + 10_000)
+    end
+
+    test "refuses a token record whose identity carries no session generation" do
+      node_id = "no-generation-node-#{System.unique_integer([:positive])}"
+      identity = %{"type" => "node", "nodeId" => node_id}
+      token = "no-generation-token-#{System.unique_integer([:positive])}"
+
+      assert {:ok, initial} =
+               TokenStore.replace_node_session(token, identity, ttl_ms: 60_000)
+
+      # A malformed reload drops sessionGeneration from the stored identity.
+      LemonCore.Store.put(:session_tokens, token, %{
+        initial
+        | identity: Map.delete(initial.identity, "sessionGeneration")
+      })
+
+      assert {:error, :not_current} = TokenStore.touch_node_session(node_id, 1)
+    end
+
+    test "refuses a token record bound to a different node" do
+      node_id = "bound-node-#{System.unique_integer([:positive])}"
+      identity = %{"type" => "node", "nodeId" => node_id}
+      token = "bound-token-#{System.unique_integer([:positive])}"
+
+      assert {:ok, initial} =
+               TokenStore.replace_node_session(token, identity, ttl_ms: 60_000)
+
+      LemonCore.Store.put(:session_tokens, token, %{
+        initial
+        | identity: Map.put(initial.identity, "nodeId", node_id <> "-other")
+      })
+
+      assert {:error, :not_current} = TokenStore.touch_node_session(node_id, 1)
+    end
+
+    test "refuses when node has no head" do
+      node_id = "nonexistent-node-#{System.unique_integer([:positive])}"
+      assert {:error, :not_current} = TokenStore.touch_node_session(node_id, 1)
+    end
+
+    test "refuses malformed arguments without touching the store" do
+      assert {:error, :not_current} = TokenStore.touch_node_session("", 1)
+      assert {:error, :not_current} = TokenStore.touch_node_session(nil, 1)
+      assert {:error, :not_current} = TokenStore.touch_node_session("node", nil)
+      assert {:error, :not_current} = TokenStore.touch_node_session("node", -1)
+    end
+
+    test "handles string keys in token record" do
+      node_id = "string-key-node-#{System.unique_integer([:positive])}"
+      identity = %{"type" => "node", "nodeId" => node_id}
+      token = "string-key-token-#{System.unique_integer([:positive])}"
+
+      assert {:ok, initial} =
+               TokenStore.replace_node_session(token, identity, ttl_ms: 24 * 60 * 60 * 1000)
+
+      # JSONL reload turns every key into a string.
+      LemonCore.Store.put(:session_tokens, token, %{
+        "token" => initial.token,
+        "identity" => %{
+          "type" => "node",
+          "nodeId" => node_id,
+          "sessionGeneration" => 1
+        },
+        "issued_at_ms" => initial.issued_at_ms,
+        "expires_at_ms" => initial.expires_at_ms,
+        "conn_id" => initial.conn_id
+      })
+
+      touch_time = initial.issued_at_ms + 12 * 60 * 60 * 1000
+      expected_expiry = touch_time + TokenStore.node_session_ttl_ms()
+
+      assert {:ok, ^expected_expiry} =
+               TokenStore.touch_node_session(node_id, 1, now_ms: touch_time)
+
+      updated = LemonCore.Store.get(:session_tokens, token)
+      assert updated["expires_at_ms"] == expected_expiry
+      refute Map.has_key?(updated, :expires_at_ms)
+    end
+
+    test "a rotation racing a touch never revives the superseded credential" do
+      node_id = "cas-node-#{System.unique_integer([:positive])}"
+      identity = %{"type" => "node", "nodeId" => node_id}
+      first = "cas-token-1-#{System.unique_integer([:positive])}"
+      second = "cas-token-2-#{System.unique_integer([:positive])}"
+
+      assert {:ok, initial} =
+               TokenStore.replace_node_session(first, identity, ttl_ms: 24 * 60 * 60 * 1000)
+
+      touch_time = initial.issued_at_ms + 12 * 60 * 60 * 1000
+
+      rotation =
+        Task.async(fn ->
+          TokenStore.replace_node_session(second, identity, ttl_ms: 24 * 60 * 60 * 1000)
+        end)
+
+      touch =
+        Task.async(fn ->
+          TokenStore.touch_node_session(node_id, 1, now_ms: touch_time)
+        end)
+
+      assert {:ok, rotated} = Task.await(rotation, 2_000)
+      touch_result = Task.await(touch, 2_000)
+
+      assert match?({:ok, _}, touch_result) or touch_result == {:error, :not_current}
+
+      # Whatever the interleaving, only the new generation authenticates and the
+      # superseded record is gone, so a touch can never resurrect it.
+      assert rotated.identity["sessionGeneration"] == 2
+      assert TokenStore.current_node_generation(node_id) == 2
+      assert {:error, :invalid_token} = TokenStore.validate(first)
+      rotated_identity = rotated.identity
+      assert {:ok, ^rotated_identity} = TokenStore.validate(second)
+      assert {:error, :not_current} = TokenStore.touch_node_session(node_id, 1)
+    end
+  end
 end

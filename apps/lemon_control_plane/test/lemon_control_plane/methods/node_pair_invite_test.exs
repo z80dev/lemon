@@ -706,7 +706,8 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
                cwd: tmp_dir,
                invite_code: invite["inviteCode"],
                token_store_opts: [root: tmp_dir],
-               notify_pid: self()
+               notify_pid: self(),
+               status_writer: fn _, _ -> :ok end
              ]
            ]},
         restart: :temporary
@@ -753,7 +754,8 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
                cwd: tmp_dir,
                invite_code: repair["inviteCode"],
                token_store_opts: [root: tmp_dir],
-               notify_pid: self()
+               notify_pid: self(),
+               status_writer: fn _, _ -> :ok end
              ]
            ]},
         restart: :temporary
@@ -800,7 +802,8 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
                controller: url,
                cwd: tmp_dir,
                token_store_opts: [root: tmp_dir],
-               notify_pid: self()
+               notify_pid: self(),
+               status_writer: fn _, _ -> :ok end
              ]
            ]},
         restart: :temporary
