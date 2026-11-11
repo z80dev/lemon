@@ -104,7 +104,7 @@ defmodule CodingAgent.Tools.Task.Params do
     context = Map.get(params, "context")
     schema_mode = Map.get(params, "schema_mode")
     request_budget = Map.get(params, "request_budget")
-    role_cwd = delegated_cwd || cwd
+    role_cwd = Keyword.get(opts, :config_cwd) || delegated_cwd || cwd
 
     cond do
       not is_binary(description) or String.trim(description) == "" ->
@@ -308,7 +308,12 @@ defmodule CodingAgent.Tools.Task.Params do
   def with_settings(cwd, opts) do
     if Keyword.get(opts, :settings_manager),
       do: opts,
-      else: Keyword.put(opts, :settings_manager, SettingsManager.load(cwd))
+      else:
+        Keyword.put(
+          opts,
+          :settings_manager,
+          SettingsManager.load(Keyword.get(opts, :config_cwd) || cwd)
+        )
   end
 
   @doc """
@@ -317,7 +322,10 @@ defmodule CodingAgent.Tools.Task.Params do
   """
   @spec task_settings(String.t(), keyword()) :: SettingsManager.task_settings()
   def task_settings(cwd, opts) do
-    settings = Keyword.get(opts, :settings_manager) || SettingsManager.load(cwd)
+    settings =
+      Keyword.get(opts, :settings_manager) ||
+        SettingsManager.load(Keyword.get(opts, :config_cwd) || cwd)
+
     Map.merge(%SettingsManager{}.task, Map.get(settings, :task) || %{})
   end
 
@@ -569,7 +577,7 @@ defmodule CodingAgent.Tools.Task.Params do
 
   defp enabled_personas(cwd, opts) do
     disabled = task_settings(cwd, opts).disabled_agents
-    Enum.reject(Subagents.list(cwd), &(&1.id in disabled))
+    Enum.reject(Subagents.list(Keyword.get(opts, :config_cwd) || cwd), &(&1.id in disabled))
   end
 
   @spec maybe_add_enum(AgentTool.t(), [String.t()] | nil) :: AgentTool.t()
@@ -588,7 +596,10 @@ defmodule CodingAgent.Tools.Task.Params do
   @spec resolve_task_model(String.t(), keyword(), map()) ::
           {term(), CodingAgent.SettingsManager.t()}
   def resolve_task_model(cwd, opts, validated) do
-    settings = Keyword.get(opts, :settings_manager) || CodingAgent.SettingsManager.load(cwd)
+    settings =
+      Keyword.get(opts, :settings_manager) ||
+        SettingsManager.load(Keyword.get(opts, :config_cwd) || cwd)
+
     inherited_model = resolve_inherited_model(opts)
 
     model =

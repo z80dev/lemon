@@ -24,6 +24,7 @@ defmodule CodingAgent.Tools.ToolAuth do
   def tool(cwd, opts \\ []) do
     session_pid = Keyword.get(opts, :session_pid)
     settings_manager = Keyword.get(opts, :settings_manager)
+    config_cwd = Keyword.get(opts, :config_cwd) || cwd
 
     %AgentTool{
       name: "tool_auth",
@@ -44,7 +45,7 @@ defmodule CodingAgent.Tools.ToolAuth do
         },
         "required" => ["name"]
       },
-      execute: &execute(&1, &2, &3, &4, cwd, session_pid, settings_manager)
+      execute: &execute(&1, &2, &3, &4, config_cwd, session_pid, settings_manager)
     }
   end
 

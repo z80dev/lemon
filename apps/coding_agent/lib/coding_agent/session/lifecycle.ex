@@ -207,7 +207,8 @@ defmodule CodingAgent.Session.Lifecycle do
         settings_manager,
         session_manager.header.id,
         tool_policy,
-        approval_context
+        approval_context,
+        config_cwd
       )
 
     tool_opts =
@@ -222,6 +223,7 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.put(:session_key, session_key)
       |> Keyword.put(:agent_id, agent_id)
       |> Keyword.put(:settings_manager, settings_manager)
+      |> Keyword.put(:config_cwd, config_cwd)
       |> Keyword.put(:workspace_dir, workspace_dir)
       |> Keyword.put(:session_scope, session_scope)
       |> Keyword.put(:task_child, task_child)
@@ -248,6 +250,7 @@ defmodule CodingAgent.Session.Lifecycle do
     lifecycle =
       ExtensionLifecycle.initialize(
         cwd: cwd,
+        config_cwd: config_cwd,
         settings_manager: settings_manager,
         tool_opts: tool_opts,
         custom_tools: custom_tools,
@@ -300,7 +303,7 @@ defmodule CodingAgent.Session.Lifecycle do
 
         nil ->
           PromptComposer.compose_sections(
-            cwd,
+            config_cwd,
             explicit_system_prompt,
             prompt_template,
             workspace_dir,
@@ -360,7 +363,7 @@ defmodule CodingAgent.Session.Lifecycle do
         model,
         settings_manager,
         Keyword.get(opts, :stream_options),
-        cwd
+        config_cwd
       )
 
     resolve_stream_options = fn next_model, previous_model, options ->
@@ -371,7 +374,9 @@ defmodule CodingAgent.Session.Lifecycle do
           StreamOptions.sanitize_for_provider_switch(options)
         end
 
-      options = ModelResolver.build_stream_options(next_model, settings_manager, options, cwd)
+      options =
+        ModelResolver.build_stream_options(next_model, settings_manager, options, config_cwd)
+
       provider = next_model.provider
 
       api_key =
@@ -394,7 +399,12 @@ defmodule CodingAgent.Session.Lifecycle do
 
           classifier_model ->
             options =
-              ModelResolver.build_stream_options(classifier_model, settings_manager, nil, cwd)
+              ModelResolver.build_stream_options(
+                classifier_model,
+                settings_manager,
+                nil,
+                config_cwd
+              )
 
             provider = classifier_model.provider
 
@@ -441,7 +451,7 @@ defmodule CodingAgent.Session.Lifecycle do
     end
 
     stream_fn =
-      ProviderFallback.maybe_wrap(guarded_stream_fn, settings_manager, cwd,
+      ProviderFallback.maybe_wrap(guarded_stream_fn, settings_manager, config_cwd,
         session_id: session_manager.header.id
       )
 
@@ -634,6 +644,7 @@ defmodule CodingAgent.Session.Lifecycle do
     lifecycle =
       ExtensionLifecycle.reload(
         cwd: state.cwd,
+        config_cwd: state.config_cwd,
         settings_manager: state.settings_manager,
         tool_opts: tool_opts,
         extra_tools: state.extra_tools,
@@ -796,6 +807,7 @@ defmodule CodingAgent.Session.Lifecycle do
     built =
       ExtensionLifecycle.rebuild_tools(
         cwd: state.cwd,
+        config_cwd: state.config_cwd,
         settings_manager: state.settings_manager,
         tool_opts: tool_opts,
         extensions: state.extensions,

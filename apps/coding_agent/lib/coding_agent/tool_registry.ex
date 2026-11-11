@@ -614,7 +614,7 @@ defmodule CodingAgent.ToolRegistry do
         configured =
           if profile_mcp_scope?(opts),
             do: [],
-            else: discover_configured_mcp_tools(cwd)
+            else: discover_configured_mcp_tools(Keyword.get(opts, :config_cwd) || cwd)
 
         configured ++ discover_session_mcp_tools(opts)
     end

@@ -323,7 +323,7 @@ defmodule CodingAgent.Session do
   1. Explicit `:system_prompt` option (if provided)
   2. Prompt template content loaded via `:prompt_template` (if provided)
   3. Lemon base prompt (coding rules for the session's tools + skills + workspace bootstrap)
-  4. CLAUDE.md/AGENTS.md content from ResourceLoader (auto-loaded from cwd)
+  4. CLAUDE.md/AGENTS.md content from ResourceLoader (auto-loaded from trusted config_cwd)
   5. Environment block (cwd, platform, shell, git snapshot, date), captured once at start
 
   Empty strings are filtered out before joining.
@@ -2152,7 +2152,7 @@ defmodule CodingAgent.Session do
   @spec refresh_system_prompt(t(), String.t(), [ContextRegistry.section()]) :: t()
   defp refresh_system_prompt(state, skill_context, system_sections) do
     case PromptComposer.maybe_refresh_system_prompt(
-           state.cwd,
+           state.config_cwd || state.cwd,
            state.explicit_system_prompt,
            state.prompt_template,
            state.workspace_dir,
