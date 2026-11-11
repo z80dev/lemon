@@ -249,9 +249,9 @@ function ConversationBody({ id, route }: { id: string; route: Route }) {
   const isMac = detectedOs.includes('darwin') || detectedOs.includes('mac');
   const isLinux = detectedOs.includes('linux');
   const starterTasks = [
-    isMac ? "What's this Mac's hostname and macOS version?" : isLinux ? "What's this Linux machine's hostname and OS version?" : "What's this computer's hostname and OS version?",
-    "What's taking up space in Downloads?",
-    "List the projects in my home folder.",
+    isMac ? "What's this Mac's hostname, macOS version and free disk space? Use df -h /, not a folder scan." : isLinux ? "What's this Linux machine's hostname, OS version and free disk space? Use df -h /, not a folder scan." : "What's this computer's hostname, OS version and free disk space? Use system summaries, not folder scans.",
+    isMac ? "Which apps and command-line tools are installed here? Check /Applications and package-manager inventories, not personal folders." : isLinux ? "Which command-line tools and packages are installed here? Use PATH and package-manager inventories, not personal folders." : "Which apps and command-line tools are installed here? Use system application and package-manager inventories, not personal folders.",
+    "Summarize what's running right now using a process snapshot, without reading personal files.",
   ];
   const members = conversation ? conversation.botIds.map(botId => snapshot.bots.find(bot => bot.id === botId)).filter((bot): bot is NonNullable<typeof bot> => !!bot) : [];
   const shared = conversation?.kind === 'group' || conversation?.kind === 'channel';
