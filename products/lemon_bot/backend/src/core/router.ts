@@ -39,7 +39,7 @@ export class Router {
     if(route.auth==='integration'&&principal.kind!=='integration')fail('forbidden','Integration authentication is required.');
     if(route.auth==='member'&&principal.kind==='bot')fail('forbidden','Product sessions and bot tokens are separate authorities.');
   }
-  originAllowed(request:Request):boolean {const origin=request.headers.get('Origin');return !origin||origin===this.services.config.publicUrl||this.services.config.operator.trustedFrontendOrigins.includes(origin);}
+  originAllowed(request:Request):boolean {const origin=request.headers.get('Origin');return !origin||origin===this.services.config.publicUrl||origin===this.services.config.loopbackOrigin||this.services.config.operator.trustedFrontendOrigins.includes(origin);}
   private responseHeaders(request:Request,requestId:string):Headers {
     const headers=new Headers({'X-Request-Id':requestId,'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff'});const origin=request.headers.get('Origin');if(origin&&this.originAllowed(request)){headers.set('Access-Control-Allow-Origin',origin);headers.set('Vary','Origin');headers.set('Access-Control-Expose-Headers','X-Request-Id,Retry-After');}return headers;
   }

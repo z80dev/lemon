@@ -46,7 +46,7 @@ public enum PetActivity {
                 if case .toolCall(let value) = entry, value.status == "started", value.runId == run.id { return value }
                 return nil
             }.first
-            let writing = recentEntries.contains { if case .message(let value) = $0 { return value.streaming }; return false }
+            let writing = recentEntries.contains { if case .message(let value) = $0 { return value.streaming && value.runId == run.id }; return false }
             if tool != nil || writing {
                 let title = tool.map { $0.title.isEmpty ? humanized($0.tool) : $0.title } ?? "Writing a reply"
                 return PetStatus(mood: .working, detail: "\(botName(run, bots: bots)) · \(title)", deepLink: runLink(run, workspaceID: workspaceID))

@@ -6,6 +6,11 @@
 
 - Added resumable `lemon-bot up` background setup with secret-free NDJSON progress, local-owner sign-in, safe worker repair/enrollment, one-use stdin handoff, and browser sign-in through `lemon-bot open`. Plain terminal startup now sets up services and exits; non-terminal, service and `--no-open` invocations remain foreground servers.
 - Added private backend PID/start-time/instance records after listen, removed on clean shutdown, for verified lifecycle adoption.
+- Added explicit Standard access at Bot creation, import and duplication: supported Terminal/Files read-write and Browser read-only requested grants are saved before the first profile sync. Machine/workspace limits and command approvals remain enforced; omitted access and Chat only keep grants off.
+
+- Added one-use same-machine browser sign-in tickets with exact loopback binding, failure-only throttling, private handoff cleanup and a five-ticket cap. Local-key and ticket sessions can add a first email/password or reauthenticate locally for ten minutes; `GET /me/sign-in` reports those methods without exposing private session metadata.
+- Added `lemon-bot open [--headless] [--no-wait]` and zero-form interactive first-start sign-in. Browser links use private HTML handoff files (60 seconds); headless/SSH links use only the controlling terminal (five minutes), never command arguments or stdout/stderr. The CLI verifies the local instance/version, waits for redemption by default, and cleans up on redemption, expiry or interruption; `--no-wait` delegates file cleanup to the backend. Existing `lemon-bot setup` remains available.
+- Project controller node-session credentials onto machines and emit credential transitions, distinguishing reconnect-required expiry/revocation from ordinary outages.
 - Added credential-free enrollment reachability preview using the controller's actual advertised invite endpoint, before any invitation is issued.
 - Bots can run on the machine Lemon Bot itself runs on without an HTTPS address. With a loopback public origin, the backend first proves a machine's worker shares its host (the worker writes a random value into the private data directory and the backend reads it back), then gives that Bot a loopback MCP endpoint approved as its private origin. Other machines still need a reachable HTTPS origin, with a clearer message saying so.
 - Deleting a Bot, or forgetting its memory, no longer fails with `not_found` once its profile has more than one workspace preference: every deletion renames the remaining entries' file-revision ids, so the backend re-lists between deletions and matches previewed entries by their stable identity.
@@ -21,6 +26,10 @@
 - Added tolerant build/provider/channel instance health and owner-confirmed remote controller restart/stop, observing reconnect/disconnect completion with a 300-second deadline. Replaced the runtime-control boolean with explicit actions and launcher/controller routing.
 
 ### Fixed
+
+- Fixed replies leaving Bots stuck on “Thinking” or “Writing a reply”: realtime events retain sequence order through status fan-out, and terminal runs close remaining streaming messages.
+- Fixed a reconciliation race that could duplicate the final assistant reply or briefly mark an in-flight submission as uncertain.
+- Grant changes now return and publish the acknowledged effective state using a fresh machine capability measurement, so pending cutover or stale pre-sync projections do not win over the final result.
 
 - Codex OAuth success no longer persists credentials autonomously. Each normal
   poll first obtains an internal target challenge, then rechecks exact current

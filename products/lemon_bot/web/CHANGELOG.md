@@ -4,6 +4,11 @@
 
 ### Changed
 
+- Web and Mac starter tasks now inspect system summaries, installed tools and running processes instead of personal folders, avoiding protected-folder scans during first use.
+
+- Bot setup defaults to explicit Standard access, preselects the sole online owned computer, and keeps optional customization collapsed. Import and duplicate confirm their own access choice; empty chats offer one-click starter tasks.
+
+- Surface "needs reconnecting" state and warning copy on expired or revoked machines across machine list, machine detail and chat inspector, and issue repair invites via POST.
 - Connecting a computer needs only its friendly name, with optional settings under Advanced. Loopback controllers require an explicit same-computer choice before issuing an invite; verified online enrollment offers Create a Bot on that machine.
 - Web and Mac grants use measured names, grouped Off / View only / Full controls, actionable status, and one Why disclosure; saved grants update from the server response.
 - Reply chips show the original author and a short message preview; Send has a keyboard-focus tooltip.
@@ -15,6 +20,11 @@
 - Device registration, About and update requirements use the build's package version and complete semantic-version precedence instead of hardcoded version checks.
 
 ### Added
+
+- Same-computer browser sign-in uses one-use `lemon-bot open` links, strips tickets
+  before routing, and explains local owner access once. Account settings show sign-in
+  methods, let locally confirmed owners add email/password, and support local
+  confirmation for account deletion. iPhone pairing still needs no password.
 
 - Owner-only Providers settings use the shared product API for controller or
   owned-machine status, write-only API-key add/replace, Codex device sign-in with

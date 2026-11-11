@@ -86,6 +86,36 @@ Provider, identity, push, image, network/egress and host-management configuratio
 
 ## Same-machine and SSH access
 
+Run `lemon-bot open` on this computer to sign your browser in as the workspace owner,
+without a password or setup form. An interactive first loopback start does this
+automatically; `--no-open` instead prints the command. The listener must be exactly
+`127.0.0.1` or `::1` (not `localhost`); the published tailnet URL can stay unchanged.
+The command checks the running backend's instance identity and version before issuing
+anything. On first redemption it creates the passwordless owner and workspace.
+
+The one-use browser link lasts 60 seconds and travels through a 0600 HTML file in
+the private 0700 `DATA_DIR/handoff` directory. Only that file path reaches the
+browser opener's argv; the ticket never reaches stdout or stderr. Normally the
+command waits for sign-in and removes the file on success, expiry, interruption or
+exit. `--no-wait` returns after delivery and leaves cleanup to backend redemption
+and the expiry sweep, so the browser has time to read the file. Old orphan handoff
+files are swept as well. At most five unexpired unused links may exist.
+
+Over SSH, run `lemon-bot open --headless` on the server with a controlling terminal
+(for example, `ssh -t user@host lemon-bot open --headless`). It prints a private
+five-minute link and an `ssh -N -L 4100:127.0.0.1:4100 user@host` command on
+`/dev/tty` only. Run the tunnel on your own computer, then open the link there;
+the same local port must be free. SSH, Linux without a graphical display, and a
+missing browser opener automatically select this mode. Without a controlling
+terminal the command refuses before minting a headless ticket.
+
+Your OS login is sufficient for this computer's browser and the Mac app; iPhone
+pairing does not require a password. A browser on another computer at the published
+HTTPS origin (without an SSH tunnel) needs email/password or linked SSO. To add
+email and a first password, run `lemon-bot open`, then Settings → Account →
+Add email and password within ten minutes. Local confirmation also permits
+reauthentication for account deletion and identity linking during that window.
+
 Every start keeps a private `DATA_DIR/local-access.key` (64 hex characters, mode 0600,
 owned by this user; a missing or unsafe file is replaced). Whoever can read it can
 already read `master.key` and the database, so it grants nothing that host access
@@ -101,8 +131,8 @@ accounts, invitations and the setup code below are unchanged.
 
 ## Provider-free owner setup
 
-Start the backend separately (an interactive `lemon-bot` start already shows the code). No model
-provider login, API key or default model is needed to claim the initial owner,
+Start the backend separately (an interactive loopback `lemon-bot` start opens the app already signed in).
+No model provider login, API key or default model is needed to claim the initial owner,
 register phone/browser devices, sign in or inspect the management API. Missing
 providers affect execution readiness, not backend reachability. This command
 does **not** start/install services, provision Tailscale/Serve or enable Funnel.

@@ -26,6 +26,7 @@ async function fixture(realAdapter = false) {
     listings.set(nodeId ?? 'controller', {
       target: { id: nodeId ? `node:${nodeId}` : 'controller:mock-instance', nodeId, hostname: nodeId ?? 'controller-mock' },
       default: { providerId: null, modelId: null },
+      readiness: null, detected: [],
       providers: [
         { id: 'openai', displayName: 'OpenAI', methods: ['api_key'], configured: false, status: 'needs_login', lastValidation: null, environmentOverrides: [], configurationOverrides: [] },
         { id: 'openai_codex', displayName: 'OpenAI Codex', methods: ['api_key', 'device_code'], configured: false, status: 'needs_login', lastValidation: null, environmentOverrides: [], configurationOverrides: [] },
@@ -58,6 +59,7 @@ async function fixture(realAdapter = false) {
       const result = listings.get(typeof params.nodeId === 'string' ? params.nodeId : 'controller')!;
       if (method.endsWith('.list')) { onList?.(); return structuredClone(result) as T; }
       if (failure && (!failureMethod || method.endsWith(failureMethod))) throw failure;
+      if (method.endsWith('.check')) return { management: structuredClone(result), readiness: structuredClone(result.readiness) } as T;
       if (method.includes('.device.')) {
         const identity = `${params.targetId}:${params.loginId}`;
         const binding = Object.fromEntries(Object.entries(params).filter(([key]) => !['completionId', 'challengeNonce', 'commit'].includes(key)));
@@ -164,6 +166,95 @@ async function fixture(realAdapter = false) {
   };
 }
 const keyBody = () => ({ ...nonce(), targetId: 'controller:mock-instance', value: mockKey });
+
+const ready: P.ModelReadiness = { state: 'verified', providerId: 'openai_codex', modelId: 'gpt-6', check: 'codex_discovery', reason: null, availableModelIds: ['gpt-6'], suggestedModelId: 'gpt-6', checkedAtMs: 1234 };
+async function readinessFixture() {
+  const f = await fixture();
+  f.services.lemon.methods.push(...['check', 'import'].flatMap(action => [`providers.management.${action}`, `node.providers.management.${action}`]));
+  for (const listing of f.listings.values()) {
+    listing.readiness = structuredClone(ready);
+    listing.detected = [{ source: 'codex_cli', providerId: 'openai_codex' }];
+  }
+  return f;
+}
+describe('model readiness and consented login import', () => {
+  test('old runtime remains compatible and rejects unsupported actions', async () => {
+    const f = await fixture();
+    const listing = await (await f.request()).json();
+    expect(listing.readiness).toBeNull(); expect(listing.detected).toEqual([]);
+    for (const [suffix, extra] of [['check', {}], ['openai_codex/import', { source: 'codex_cli', consent: 'copy_login' }]] as const) {
+      expect((await (await f.request(`/v1/instance/providers/${suffix}`, { ...nonce(), targetId: listing.target.id, ...extra })).json()).error.code).toBe('capability_unavailable');
+    }
+    expect(f.calls.every(call => !('readiness' in call.params))).toBe(true);
+  });
+  test('checks both targets without generation or mutation using fixed runtime params', async () => {
+    const f = await readinessFixture();
+    for (const [base, targetId, nodeId] of [['/v1/instance', 'controller:mock-instance', null], [`/v1/machines/${f.machine.id}`, 'node:node-owned', 'node-owned']] as const) {
+      const response = await f.request(`${base}/providers/check`, { ...nonce(), targetId, providerId: 'openai_codex' });
+      expect(response.status).toBe(200);
+      expect((await response.json()).readiness).toEqual(ready);
+      expect(f.calls.at(-1)).toEqual({ method: `${nodeId ? 'node.' : ''}providers.management.check`, params: { targetId, providerId: 'openai_codex', ...(nodeId ? { nodeId } : {}) }, mutation: false });
+      expect(f.calls.at(-2)?.params.readiness).toBe(true);
+    }
+    f.failWith(new Error('private upstream detail'), '.check');
+    const failed = await (await f.request('/v1/instance/providers/check', { ...nonce(), targetId: 'controller:mock-instance' })).json();
+    expect(failed.error.code).toBe('upstream_unavailable'); expect(failed.error.retrySafe).toBe(true);
+    expect(JSON.stringify(failed)).not.toContain('private upstream detail');
+  });
+  test('check and import enforce owner, machine owner, online and current owner authority', async () => {
+    for (const suffix of ['check', 'openai_codex/import']) {
+      const f = await readinessFixture();
+      const body = { ...nonce(), targetId: 'node:node-owned', ...(suffix.endsWith('import') ? { source: 'codex_cli', consent: 'copy_login' } : {}) };
+      const path = `/v1/machines/${f.machine.id}/providers/${suffix}`;
+      for (const token of [f.adminAuth.token, f.memberAuth.token]) expect((await f.request(path, body, token)).status).toBe(403);
+      f.store.put('machines', { ...f.machine, ownerUserId: 'alice' });
+      expect((await f.request(path, body)).status).toBe(403);
+      f.store.put('machines', { ...f.machine, status: 'offline' });
+      expect((await (await f.request(path, { ...body, ...nonce() })).json()).error.code).toBe('machine_offline');
+      f.store.put('machines', f.machine);
+      f.onList(() => { spyOn(f.services.auth, 'authenticate').mockResolvedValue(null); });
+      expect((await f.request(path, { ...body, ...nonce() })).status).toBe(401);
+      expect(f.calls.every(call => call.method.endsWith('.list'))).toBe(true);
+    }
+  });
+  test('imports require exact consent, source, provider and detected login; replay never recopies', async () => {
+    const f = await readinessFixture(), path = '/v1/instance/providers/openai_codex/import';
+    const body = { ...nonce(), targetId: 'controller:mock-instance', source: 'codex_cli', consent: 'copy_login' };
+    for (const extra of [{ consent: undefined }, { consent: 'yes' }, { source: 'environment' }, { path: '/private/auth.json' }]) {
+      expect((await f.request(path, { ...body, ...extra, ...nonce() })).status).toBe(400);
+    }
+    expect((await f.request('/v1/instance/providers/openai/import', { ...body, ...nonce() })).status).toBe(409);
+    f.listings.get('controller')!.detected = [];
+    expect((await f.request(path, { ...body, ...nonce() })).status).toBe(409);
+    f.listings.get('controller')!.detected = [{ source: 'codex_cli', providerId: 'openai_codex' }];
+    const first = await f.request(path, body);
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual(await (await f.request(path, body)).json());
+    expect(f.calls.filter(call => call.method.endsWith('.import'))).toEqual([{ method: 'providers.management.import', params: { targetId: body.targetId, providerId: 'openai_codex', source: 'codex_cli' }, mutation: true }]);
+    expect((await (await f.request(path, { ...body, consent: 'different' })).json()).error.code).toBe('nonce_conflict');
+  });
+  test('strict projections reject unknown fields and oversized readiness without leaking tokens', async () => {
+    for (const invalid of [{ ...ready, accessToken: 'secret-token' }, { ...ready, availableModelIds: Array(65).fill('model') }, { ...ready, modelId: 'x'.repeat(257) }]) {
+      const f = await readinessFixture();
+      f.listings.get('controller')!.readiness = invalid as P.ModelReadiness;
+      const response = await f.request();
+      expect((await response.json()).error.code).toBe('upstream_unavailable');
+      // Corrupt only the RPC receipt, after the preflight listing was validated.
+      f.listings.get('controller')!.readiness = ready;
+      const original = f.services.lemon.call.bind(f.services.lemon);
+      f.services.lemon.call = async <T>(method: string, params?: Record<string, unknown>, options?: Parameters<typeof original>[2]) => {
+        const result = await original<T>(method, params, options);
+        if (method.endsWith('.check')) (result as P.ProviderCheckResult).readiness = invalid as P.ModelReadiness;
+        if (method.endsWith('.import')) (result as P.ProviderManagement).readiness = invalid as P.ModelReadiness;
+        return result;
+      };
+      for (const [suffix, code, extra] of [['check', 'upstream_unavailable', {}], ['openai_codex/import', 'outcome_unknown', { source: 'codex_cli', consent: 'copy_login' }]] as const) {
+        const error = await (await f.request(`/v1/instance/providers/${suffix}`, { ...nonce(), targetId: 'controller:mock-instance', ...extra })).json();
+        expect(error.error.code).toBe(code); expect(JSON.stringify(error)).not.toContain('secret-token');
+      }
+    }
+  });
+});
 
 describe('write-only target provider management', () => {
   test('lists actual upstream methods, independent default and exact target, without requiring credentials', async () => {

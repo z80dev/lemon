@@ -11,8 +11,12 @@ import { appVersion, requiresClientUpdate } from './version';
 import { ActivityScreen, Palette, SearchScreen } from './navigation';
 import { ConnectionPanel } from './connection';
 import { connectionLabel, sessionEnded } from './connection-state';
+import { takeSignInTicket, TicketSignIn, ticketErrorNotice, UnlockedNotice } from './local-signin';
 
-export interface Route { screen: string; id?: string; botId?: string; tab?: string; entryId?: string; conversationId?: string; taskConversationId?: string }
+const pendingTicket = takeSignInTicket();
+let pendingTicketConsumed = false;
+
+export interface Route { screen: string; id?: string; botId?: string; tab?: string; entryId?: string; conversationId?: string; taskConversationId?: string; machineId?: string }
 export interface AppContextValue { client: LemonBotClient; realtime: RealtimeConnection | null; snapshot: Snapshot; device: Device | null; online: boolean; navigate: (route: Route) => void; refresh: () => Promise<void>; updateInstance: (status: InstanceStatus) => void; reportError: (error: unknown) => void; draftPrompt: (conversationId: string, text: string) => void; logout: () => Promise<void>; forgetConversation: (conversationId: string) => void }
 const AppContext = createContext<AppContextValue | null>(null);
 export function useApp() { const value = useContext(AppContext); if (!value) throw new Error('Lemon Bot workspace context is not mounted.'); return value; }
@@ -51,7 +55,7 @@ export function openWorkspaceLink(value: string, workspaceId: string, navigate: 
 }
 function initialRoute(): Route {
   const query = new URLSearchParams(location.hash.replace(/^#/, '') || location.search);
-  return { screen: query.get('screen') || 'home', id: query.get('id') || undefined, botId: query.get('botId') || undefined, tab: query.get('tab') || undefined, entryId: query.get('entryId') || undefined, conversationId: query.get('conversationId') || undefined, taskConversationId: query.get('taskConversationId') || undefined };
+  return { screen: query.get('screen') || 'home', id: query.get('id') || undefined, botId: query.get('botId') || undefined, tab: query.get('tab') || undefined, entryId: query.get('entryId') || undefined, conversationId: query.get('conversationId') || undefined, taskConversationId: query.get('taskConversationId') || undefined, machineId: query.get('machineId') || undefined };
 }
 function upsert<T extends Resource>(items: T[], resource: T) { const previous = items.find(item => item.id === resource.id); if (previous && previous.revision >= resource.revision) return items; return previous ? items.map(item => item.id === resource.id ? resource : item) : [...items, resource]; }
 function applySnapshotEvent(snapshot: Snapshot, event: RealtimeEvent): Snapshot {
@@ -75,7 +79,8 @@ function applySnapshotEvent(snapshot: Snapshot, event: RealtimeEvent): Snapshot 
   }
 }
 export function App() {
-  const [session, setSession] = useState<WebSession | null>(() => { try { const stored = JSON.parse(sessionStorage.getItem('lemonbot.session') || 'null'); return stored && typeof stored.baseUrl === 'string' && typeof stored.token === 'string' && typeof stored.workspaceId === 'string' ? stored : null; } catch { return null; } });
+  const [ticket, setTicket] = useState(() => pendingTicketConsumed ? null : pendingTicket);
+  const [session, setSession] = useState<WebSession | null>(() => { if (pendingTicket && !pendingTicketConsumed) return null; try { const stored = JSON.parse(sessionStorage.getItem('lemonbot.session') || 'null'); return stored && typeof stored.baseUrl === 'string' && typeof stored.token === 'string' && typeof stored.workspaceId === 'string' ? stored : null; } catch { return null; } });
   const [initialBackend, setInitialBackend] = useState<string>();
   const [signInNotice, setSignInNotice] = useState<string>();
   const forget = () => { const keys = Object.keys(sessionStorage); for (const key of keys) if (key.startsWith('lemonbot.')) sessionStorage.removeItem(key); setSession(null); };
@@ -91,6 +96,7 @@ export function App() {
     };
     window.addEventListener('lemonbot:account-target', change); return () => window.removeEventListener('lemonbot:account-target', change);
   }, [session]);
+  if (ticket) return <TicketSignIn ticket={ticket} onAuth={value => { pendingTicketConsumed = true; setTicket(null); setSignInNotice(undefined); setSession(value); }} onFail={error => { pendingTicketConsumed = true; setTicket(null); forget(); setInitialBackend(`${location.origin}/v1`); setSignInNotice(ticketErrorNotice(error)); }}/>;
   return session ? <Workspace key={`${session.baseUrl}:${session.token}`} session={session} onLogout={reason => { setInitialBackend(session.baseUrl); setSignInNotice(reason); forget(); }} /> : <AuthScreen onAuth={value => { setSignInNotice(undefined); setSession(value); }} initialBackend={initialBackend} notice={signInNotice}/>;
 }
 function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reason?: string) => void }) {
@@ -222,7 +228,7 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reas
   const settingsScreen = isSettingsScreen(route.screen);
   const atHome = route.screen === 'home';
   const connected = connection === 'live' && browserOnline && snapshot.capabilities.controlConnected !== false;
-  return <AppContext.Provider value={context}><div className={`workspace ${sidebar ? 'sidebar-open' : ''} ${conversationScreen ? 'in-conversation' : ''} ${settingsScreen ? 'in-settings' : ''} ${atHome ? 'at-home' : ''} ${connected ? '' : 'disconnected'}`} data-theme={appearance}><a className="skip-link" href="#main-content">Skip to workspace content</a><Roster route={route} close={() => setSidebar(false)} openPalette={() => setPalette(true)} unreadInbox={unreadInbox} connection={connected ? null : connectionLabel(connection, browserOnline, snapshot.capabilities.controlConnected)} reconnect={retry} recovery={(!connected || runtimeRunning) && phone && atHome ? recoveryPanel : undefined}/><div className="workspace-main">{!conversationScreen && !atHome && !settingsScreen && <header className="workspace-bar"><button className="icon-button mobile-menu" aria-label="Open Bot list" onClick={() => setSidebar(value => !value)}><Menu size={20}/></button>{activeBot ? <button className="companion-anchor" onClick={() => navigate({ screen: 'conversation', id: activeBot.mainConversationId, botId: activeBot.id })}><BotAvatar bot={activeBot} size={22}/><strong>{activeBot.name}</strong></button> : <span/>}<div className="row workspace-tools"><button className="ghost-circle" aria-label="Search everything" title={`Search (${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'}K)`} onClick={() => setPalette(true)}><Search size={15}/></button></div></header>}<main id="main-content" className="main-content" tabIndex={-1}>{!!error && <div className="global-error"><ErrorNotice error={error}/><button onClick={() => setError(undefined)}>Dismiss</button></div>}{(!connected || runtimeRunning) && !(phone && atHome) && route.screen !== 'settings.instance' && recoveryPanel}<Destination route={route} activeBot={activeBot}/></main></div>{palette && <Palette close={() => setPalette(false)}/>}<VoiceOverlay/></div></AppContext.Provider>;
+  return <AppContext.Provider value={context}><div className={`workspace ${sidebar ? 'sidebar-open' : ''} ${conversationScreen ? 'in-conversation' : ''} ${settingsScreen ? 'in-settings' : ''} ${atHome ? 'at-home' : ''} ${connected ? '' : 'disconnected'}`} data-theme={appearance}><a className="skip-link" href="#main-content">Skip to workspace content</a><Roster route={route} close={() => setSidebar(false)} openPalette={() => setPalette(true)} unreadInbox={unreadInbox} connection={connected ? null : connectionLabel(connection, browserOnline, snapshot.capabilities.controlConnected)} reconnect={retry} recovery={(!connected || runtimeRunning) && phone && atHome ? recoveryPanel : undefined}/><div className="workspace-main">{!conversationScreen && !atHome && !settingsScreen && <header className="workspace-bar"><button className="icon-button mobile-menu" aria-label="Open Bot list" onClick={() => setSidebar(value => !value)}><Menu size={20}/></button>{activeBot ? <button className="companion-anchor" onClick={() => navigate({ screen: 'conversation', id: activeBot.mainConversationId, botId: activeBot.id })}><BotAvatar bot={activeBot} size={22}/><strong>{activeBot.name}</strong></button> : <span/>}<div className="row workspace-tools"><button className="ghost-circle" aria-label="Search everything" title={`Search (${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'}K)`} onClick={() => setPalette(true)}><Search size={15}/></button></div></header>}<main id="main-content" className="main-content" tabIndex={-1}><UnlockedNotice/>{!!error && <div className="global-error"><ErrorNotice error={error}/><button onClick={() => setError(undefined)}>Dismiss</button></div>}{(!connected || runtimeRunning) && !(phone && atHome) && route.screen !== 'settings.instance' && recoveryPanel}<Destination route={route} activeBot={activeBot}/></main></div>{palette && <Palette close={() => setPalette(false)}/>}<VoiceOverlay/></div></AppContext.Provider>;
 }
 function Destination({ route, activeBot }: { route: Route; activeBot?: Bot }) {
   return <Suspense fallback={<Loading label="Loading screen…"/>}><DestinationContent route={route} activeBot={activeBot}/></Suspense>;
@@ -237,7 +243,7 @@ function DestinationContent({ route, activeBot }: { route: Route; activeBot?: Bo
   if (['activity', 'upcoming'].includes(route.screen)) return <ActivityScreen route={route}/>;
   if (isSettingsScreen(route.screen)) return <SettingsRoute route={route}/>;
   if (route.screen === 'inbox') return <SettingsScreen route={route}/>;
-  if (route.screen.startsWith('bot.') || ['memory', 'memory.import', 'preference.changes', 'group.create', 'group.edit', 'voice.preview'].includes(route.screen)) return <BotsScreen route={{ ...route, id: route.id || activeBot?.id, botId: route.botId || activeBot?.id }}/>;
+  if (route.screen.startsWith('bot.') || ['memory', 'memory.import', 'preference.changes', 'group.create', 'group.edit', 'voice.preview'].includes(route.screen)) return <BotsScreen route={{ ...route, id: route.id || activeBot?.id, botId: route.botId || activeBot?.id, machineId: route.machineId }}/>;
   return <EmptyState title="This destination is unavailable" action={<button onClick={() => navigate({ screen: 'home' })}>Return to your Bots</button>}/>;
 }
 function DecisionLink({ route }: { route: Route }) {

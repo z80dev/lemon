@@ -5,6 +5,105 @@ import { buildMemoryContextKey, buildPrivateBotMemoryContextKey, createRuntimeSe
 import { fixture, productExecutionProjection } from './fixture';
 
 describe('owned placed runtime', () => {
+  test('completion recovers the sole streaming reply after its mapping field is lost', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'recover_sole_status_nonce1', text: 'ping' });
+      const key = `runtimeRun:${run.id}`; const bound = f.store.metadata<RuntimeMapping>(key)!;
+      await runtime.project('chat', { type: 'delta', runId: run.id, sessionKey: bound.sessionKey, seq: 1, text: 'pong' });
+      const streamed = f.store.metadata<RuntimeMapping>(key)!;
+      f.store.setMetadata(key, { ...streamed, assistantEntryId: null });
+      const original = f.rpc;
+      f.rpc = async (method, params) => method === 'agent.wait' ? { runId: run.id, ok: true, cancelled: false, answer: 'pong' } : original(method, params);
+      await runtime.project('agent', { type: 'completed', runId: run.id, sessionKey: bound.sessionKey });
+      const entries = f.store.list<P.TranscriptEntry>('entries', entry => entry.runId === run.id && entry.kind === 'message');
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ id: streamed.assistantEntryId, text: 'pong', streaming: false });
+      expect(f.store.metadata<RuntimeMapping>(key)?.assistantEntryId).toBe(streamed.assistantEntryId);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('a stalled reconciliation receipt preserves the streaming mapping and one final reply', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'stalled_receipt_status_001', text: 'ping' });
+      const key = `runtimeRun:${run.id}`; const bound = f.store.metadata<RuntimeMapping>(key)!;
+      const { promise: waiting, resolve: entered } = Promise.withResolvers<void>();
+      const { promise: receipt, resolve: release } = Promise.withResolvers<unknown>();
+      const original = f.rpc;
+      f.rpc = async (method, params) => {
+        if (method === 'runs.receipt.get') { entered(); return receipt; }
+        return original(method, params);
+      };
+      const reconcile = runtime.reconcile(); await waiting;
+      await runtime.project('chat', { type: 'delta', runId: run.id, sessionKey: bound.sessionKey, seq: 1, text: 'pong' });
+      const streamed = f.store.metadata<RuntimeMapping>(key)!;
+      release({ receipt: { runId: run.id, sessionKey: bound.sessionKey, state: 'accepted', effectiveMode: 'new_run', targetRunId: run.id } });
+      await reconcile;
+      expect(f.store.metadata<RuntimeMapping>(key)).toMatchObject({ assistantEntryId: streamed.assistantEntryId, deltaSeq: 1 });
+      f.rpc = async (method, params) => method === 'agent.wait' ? { runId: run.id, ok: true, cancelled: false, answer: 'pong' } : original(method, params);
+      await runtime.project('agent', { type: 'completed', runId: run.id, sessionKey: bound.sessionKey });
+      expect(f.store.list<P.TranscriptEntry>('entries', entry => entry.runId === run.id && entry.kind === 'message')).toMatchObject([{ id: streamed.assistantEntryId, text: 'pong', streaming: false }]);
+      expect(f.store.list<P.TranscriptEntry>('entries', entry => entry.runId === run.id && entry.kind === 'message')).toHaveLength(1);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('completion reuses an unmapped streaming reply and closes every stray without deletion', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'missing_mapping_status_001', text: 'ping' });
+      const key = `runtimeRun:${run.id}`; const bound = f.store.metadata<RuntimeMapping>(key)!;
+      await runtime.project('chat', { type: 'delta', runId: run.id, sessionKey: bound.sessionKey, seq: 1, text: 'pong' });
+      f.store.setMetadata(key, { ...f.store.metadata<RuntimeMapping>(key)!, assistantEntryId: null });
+      const stray = f.services.entry(f.alice, f.conversation.id, { kind: 'message', role: 'assistant', text: 'legacy duplicate', streaming: true, attachmentIds: [], actor: { kind: 'bot', id: f.bot.id, displayName: f.bot.name }, runId: run.id, clientNonce: null });
+      const closed: string[] = [];
+      const unlisten = f.services.events.subscribe(event => { if (event.event === 'entry.upserted' && event.payload.kind === 'message' && !event.payload.streaming) closed.push(event.payload.id); });
+      const original = f.rpc;
+      f.rpc = async (method, params) => method === 'agent.wait' ? { runId: run.id, ok: true, cancelled: false, answer: 'pong' } : original(method, params);
+      await runtime.project('agent', { type: 'completed', runId: run.id, sessionKey: bound.sessionKey });
+      const entries = f.store.list<P.TranscriptEntry>('entries', entry => entry.runId === run.id && entry.kind === 'message');
+      expect(entries).toHaveLength(2);
+      expect(entries.every(entry => entry.kind === 'message' && !entry.streaming)).toBe(true);
+      expect(f.store.metadata<RuntimeMapping>(key)?.assistantEntryId).toBe(stray.id);
+      expect(closed.sort()).toEqual(entries.map(entry => entry.id).sort());
+      unlisten();
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('reconciliation skips a submission awaiting its chat acknowledgement', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const { promise: waiting, resolve: entered } = Promise.withResolvers<void>();
+    const { promise: pending, resolve: release } = Promise.withResolvers<void>();
+    const original = f.rpc; const statuses: string[] = [];
+    f.services.events.subscribe(event => { if (event.event === 'run.upserted') statuses.push(event.payload.status); });
+    f.rpc = async (method, params) => { if (method === 'chat.send') { entered(); await pending; } return original(method, params); };
+    try {
+      const submit = runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'submitting_status_nonce01', text: 'ping' });
+      await waiting; await runtime.reconcile();
+      expect(f.calls.filter(call => call.method === 'runs.receipt.get')).toHaveLength(0);
+      expect(statuses).not.toContain('outcome_unknown');
+      release(); expect((await submit).run.status).toBe('running');
+    } finally { release(); runtime.close(); f.store.close(); }
+  });
+
+  test('legacy repair closes terminal streaming rows once without deleting text', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'legacy_stream_status_001', text: 'ping' });
+      f.store.put('runs', { ...run, status: 'succeeded', completedAtMs: f.services.now() });
+      const entry = f.services.entry(f.alice, f.conversation.id, { kind: 'message', role: 'assistant', text: 'old answer', streaming: true, attachmentIds: [], actor: { kind: 'bot', id: f.bot.id, displayName: f.bot.name }, runId: run.id, clientNonce: null });
+      const pendingRun = { ...run, id: 'pending_legacy_projection', status: 'cancelled' as const };
+      f.store.put('runs', pendingRun); f.store.setMetadata(`runtimeTerminalProjectionPending:${pendingRun.id}`, true);
+      const pending = f.services.entry(f.alice, f.conversation.id, { kind: 'message', role: 'assistant', text: 'pending answer', streaming: true, attachmentIds: [], actor: { kind: 'bot', id: f.bot.id, displayName: f.bot.name }, runId: pendingRun.id, clientNonce: null });
+      const closed: string[] = [];
+      f.services.events.subscribe(event => { if (event.event === 'entry.upserted' && event.payload.id === entry.id) closed.push(entry.id); });
+      await runtime.reconcile(); await runtime.reconcile();
+      expect(f.store.require<P.TranscriptEntry>('entries', entry.id)).toMatchObject({ streaming: false, text: 'old answer' });
+      expect(closed).toEqual([entry.id]);
+      expect(f.store.require<P.TranscriptEntry>('entries', pending.id)).toMatchObject({ streaming: true });
+    } finally { runtime.close(); f.store.close(); }
+  });
+
   test('legacy sharing, manager labels and administrative roles cannot execute another owner’s Bot before any RPC', async () => {
     const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
     const legacy = { ...f.bot, visibility: 'team', published: true, managerUserIds: [f.bob.userId] }; f.store.put('bots', legacy);

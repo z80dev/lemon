@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""Verifies Apple Developer ID release receipts and notarized DMG artifacts.
+
+Enforces fail-closed validation for publish gating:
+- Exactly one receipt: lemon-bot-<version>-<channel>-macos.json
+- Receipt schemaVersion == 1, product == 'lemon_bot', distribution == 'developer-id-notarized'
+- Version and channel match expected arguments
+- runtimeManifestSha256 in receipt matches exact sha256(manifest.json)
+- Artifact list includes the notarized DMG lemon-bot-<version>-<channel>-darwin-arm64-notarized.dmg
+- Every listed artifact exists on disk with matching size and SHA-256
+- Strictly rejects any local-preview files anywhere in the artifact directory
+"""
+
+import argparse
+import fnmatch
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import sys
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Verify Apple Developer ID publish receipt and notarized artifacts."
+    )
+    parser.add_argument(
+        "artifact_dir",
+        metavar="ARTIFACT_DIR",
+        type=Path,
+        help="Directory containing release artifacts, manifest.json, and Apple receipt",
+    )
+    parser.add_argument(
+        "--version",
+        required=True,
+        help="Expected release version (CalVer YYYY.MM.PATCH)",
+    )
+    parser.add_argument(
+        "--channel",
+        required=True,
+        help="Expected release channel (preview or stable)",
+    )
+    return parser.parse_args(argv)
+
+
+def verify_apple_release(artifact_dir: Path, version: str, channel: str) -> list[str]:
+    errors = []
+
+    # 1. Parameter format validations
+    if not isinstance(version, str) or not version:
+        errors.append("version must be a non-empty string")
+    elif not re.fullmatch(r"\d{4}\.\d{1,2}\.\d+", version):
+        errors.append(f"version must be CalVer YYYY.MM.PATCH: {version!r}")
+
+    if not isinstance(channel, str) or not channel:
+        errors.append("channel must be a non-empty string")
+    elif not re.fullmatch(r"[A-Za-z0-9._-]+", channel):
+        errors.append(f"channel contains invalid characters: {channel!r}")
+
+    if not artifact_dir.exists():
+        errors.append(f"artifact directory not found: {artifact_dir}")
+        return errors
+
+    if not artifact_dir.is_dir():
+        errors.append(f"artifact directory is not a directory: {artifact_dir}")
+        return errors
+
+    # 2. Refuse any local-preview file or directory in the artifact directory
+    for root, dirs, files in os.walk(artifact_dir):
+        for name in files + dirs:
+            if fnmatch.fnmatch(name.lower(), "*local-preview*") or "local-preview" in name.lower():
+                rel_path = os.path.relpath(os.path.join(root, name), artifact_dir)
+                errors.append(f"rejected local-preview artifact found: {rel_path}")
+
+    # 3. Receipt discovery & uniqueness
+    expected_receipt_name = f"lemon-bot-{version}-{channel}-macos.json"
+    receipt_path = artifact_dir / expected_receipt_name
+
+    bot_macos_receipts = [
+        p for p in artifact_dir.iterdir()
+        if p.is_file() and p.name.startswith("lemon-bot-") and p.name.endswith("-macos.json")
+    ]
+
+    if not receipt_path.is_file():
+        errors.append(f"missing required Apple publish receipt: {expected_receipt_name}")
+    elif len(bot_macos_receipts) != 1 or bot_macos_receipts[0].name != expected_receipt_name:
+        found_names = sorted(p.name for p in bot_macos_receipts)
+        errors.append(
+            f"expected exactly one Apple receipt {expected_receipt_name}, found {len(bot_macos_receipts)}: {found_names}"
+        )
+
+    # Reject unexpected additional receipts (preview receipts, other channels/versions)
+    extra_receipts = [
+        p for p in artifact_dir.iterdir()
+        if p.is_file() and (
+            p.name.endswith("-macos-preview.json") or
+            (p.name.startswith("lemon-bot-") and p.name.endswith(".json") and p.name != expected_receipt_name)
+        )
+    ]
+    if extra_receipts:
+        errors.append(
+            f"unexpected additional receipt(s) found in {artifact_dir}: {sorted(p.name for p in extra_receipts)}"
+        )
+
+    # 4. Parse receipt JSON
+    receipt = None
+    if receipt_path.is_file():
+        try:
+            with open(receipt_path, "r", encoding="utf-8") as handle:
+                receipt = json.load(handle)
+        except Exception as exc:
+            errors.append(f"{expected_receipt_name}: invalid JSON: {exc}")
+
+    if receipt_path.is_file():
+        if not isinstance(receipt, dict):
+            errors.append(f"{expected_receipt_name}: receipt root must be a JSON object")
+            receipt = None
+
+    # 5. Receipt field assertions
+    if receipt is not None:
+        schema_version = receipt.get("schemaVersion")
+        if type(schema_version) is not int or schema_version != 1:
+            errors.append(f"{expected_receipt_name}: schemaVersion must be 1, got {schema_version!r}")
+
+        product = receipt.get("product")
+        if product != "lemon_bot":
+            errors.append(f"{expected_receipt_name}: product must be 'lemon_bot', got {product!r}")
+
+        distribution = receipt.get("distribution")
+        if distribution != "developer-id-notarized":
+            errors.append(
+                f"{expected_receipt_name}: distribution must be 'developer-id-notarized', got {distribution!r}"
+            )
+
+        receipt_version = receipt.get("version")
+        if receipt_version != version:
+            errors.append(
+                f"{expected_receipt_name}: version mismatch: expected {version!r}, got {receipt_version!r}"
+            )
+
+        receipt_channel = receipt.get("channel")
+        if receipt_channel != channel:
+            errors.append(
+                f"{expected_receipt_name}: channel mismatch: expected {channel!r}, got {receipt_channel!r}"
+            )
+
+    # 6. Verify runtimeManifestSha256 == sha256(manifest.json)
+    manifest_path = artifact_dir / "manifest.json"
+    if not manifest_path.is_file():
+        errors.append(f"manifest.json missing from artifact directory: {artifact_dir}")
+    else:
+        try:
+            manifest_bytes = manifest_path.read_bytes()
+            manifest_digest = hashlib.sha256(manifest_bytes).hexdigest().lower()
+        except OSError as exc:
+            errors.append(f"failed to read manifest.json: {exc}")
+            manifest_digest = None
+
+        if receipt is not None and manifest_digest is not None:
+            receipt_manifest_sha = receipt.get("runtimeManifestSha256")
+            if not isinstance(receipt_manifest_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", receipt_manifest_sha):
+                errors.append(
+                    f"{expected_receipt_name}: runtimeManifestSha256 must be a 64-character hex string, got {receipt_manifest_sha!r}"
+                )
+            elif receipt_manifest_sha.lower() != manifest_digest:
+                errors.append(
+                    f"{expected_receipt_name}: runtimeManifestSha256 mismatch: expected {manifest_digest}, got {receipt_manifest_sha.lower()}"
+                )
+
+        # Sanity check manifest version and channel if readable
+        try:
+            manifest_data = json.loads(manifest_bytes.decode("utf-8"))
+            if isinstance(manifest_data, dict):
+                mv = manifest_data.get("version")
+                if mv and mv != version:
+                    errors.append(f"manifest.json version mismatch: expected {version!r}, got {mv!r}")
+                mc = manifest_data.get("channel")
+                if mc and mc != channel:
+                    errors.append(f"manifest.json channel mismatch: expected {channel!r}, got {mc!r}")
+        except Exception:
+            pass
+
+    # 7. Verify artifacts
+    expected_dmg_name = f"lemon-bot-{version}-{channel}-darwin-arm64-notarized.dmg"
+
+    if receipt is not None:
+        artifacts = receipt.get("artifacts")
+        if not isinstance(artifacts, list) or len(artifacts) == 0:
+            errors.append(f"{expected_receipt_name}: artifacts must be a non-empty list")
+            artifacts = []
+
+        seen_filenames = set()
+        has_expected_dmg = False
+
+        for idx, artifact in enumerate(artifacts):
+            if not isinstance(artifact, dict):
+                errors.append(f"{expected_receipt_name}: artifact at index {idx} must be a JSON object")
+                continue
+
+            filename = artifact.get("filename")
+            if not isinstance(filename, str) or not filename:
+                errors.append(f"{expected_receipt_name}: artifact at index {idx} missing filename")
+                continue
+
+            if (
+                os.path.basename(filename) != filename
+                or os.path.isabs(filename)
+                or ".." in filename
+                or "/" in filename
+                or "\\" in filename
+            ):
+                errors.append(f"{expected_receipt_name}: artifact filename must be a simple basename: {filename!r}")
+                continue
+
+            if filename in seen_filenames:
+                errors.append(f"{expected_receipt_name}: duplicate artifact filename in receipt: {filename}")
+                continue
+            seen_filenames.add(filename)
+
+            format_type = artifact.get("format")
+            if filename.endswith(".dmg") or format_type == "dmg":
+                if filename != expected_dmg_name:
+                    errors.append(
+                        f"{expected_receipt_name}: DMG filename must equal {expected_dmg_name!r}, got {filename!r}"
+                    )
+                else:
+                    has_expected_dmg = True
+
+            expected_size = artifact.get("sizeBytes")
+            if expected_size is None and "size" in artifact:
+                expected_size = artifact.get("size")
+
+            if type(expected_size) is not int or expected_size <= 0:
+                errors.append(f"{filename}: size must be a positive integer, got {expected_size!r}")
+                continue
+
+            expected_sha = artifact.get("sha256")
+            if not isinstance(expected_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha):
+                errors.append(f"{filename}: sha256 must be a 64-character hex string, got {expected_sha!r}")
+                continue
+
+            platform = artifact.get("platform")
+            if platform is not None and platform != "darwin-arm64":
+                errors.append(f"{filename}: unexpected platform {platform!r}, expected 'darwin-arm64'")
+
+            artifact_file = artifact_dir / filename
+            if not artifact_file.exists():
+                errors.append(f"{filename}: artifact file missing from {artifact_dir}")
+                continue
+            if not artifact_file.is_file() or artifact_file.is_symlink():
+                errors.append(f"{filename}: artifact must be a regular file on disk")
+                continue
+
+            actual_size = artifact_file.stat().st_size
+            if actual_size != expected_size:
+                errors.append(f"{filename}: size mismatch: expected {expected_size}, got {actual_size}")
+
+            digest = hashlib.sha256()
+            try:
+                with open(artifact_file, "rb") as f:
+                    for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                actual_sha = digest.hexdigest().lower()
+                if actual_sha != expected_sha.lower():
+                    errors.append(f"{filename}: sha256 mismatch: expected {expected_sha.lower()}, got {actual_sha}")
+            except OSError as exc:
+                errors.append(f"{filename}: failed to read file for hashing: {exc}")
+
+        if not has_expected_dmg:
+            errors.append(
+                f"{expected_receipt_name}: missing expected DMG artifact {expected_dmg_name} in receipt"
+            )
+
+    # 8. Check for unexpected DMG files in artifact directory
+    for dmg_path in artifact_dir.glob("*.dmg"):
+        if dmg_path.name == expected_dmg_name:
+            continue
+        if channel == "stable" and dmg_path.name == "Lemon-Bot-darwin-arm64.dmg":
+            expected_dmg_path = artifact_dir / expected_dmg_name
+            if expected_dmg_path.is_file():
+                try:
+                    alias_sha = hashlib.sha256(dmg_path.read_bytes()).hexdigest().lower()
+                    orig_sha = hashlib.sha256(expected_dmg_path.read_bytes()).hexdigest().lower()
+                    if alias_sha != orig_sha:
+                        errors.append(
+                            f"stable alias {dmg_path.name} sha256 ({alias_sha}) does not match {expected_dmg_name} ({orig_sha})"
+                        )
+                except OSError as exc:
+                    errors.append(f"failed to read stable alias {dmg_path.name}: {exc}")
+            continue
+        errors.append(f"unexpected DMG artifact found in directory: {dmg_path.name}")
+
+    return errors
+
+
+def main(argv=None):
+    try:
+        args = parse_args(argv)
+    except SystemExit as exc:
+        sys.exit(exc.code)
+
+    artifact_dir = args.artifact_dir.resolve()
+    version = args.version
+    channel = args.channel
+
+    errors = verify_apple_release(artifact_dir, version, channel)
+
+    if errors:
+        for error in errors:
+            print(f"error: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    expected_receipt_name = f"lemon-bot-{version}-{channel}-macos.json"
+    print(f"ok {expected_receipt_name} verified against manifest.json")
+    print(f"ok verified Apple release artifacts for Lemon {version} ({channel})")
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

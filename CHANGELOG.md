@@ -8,8 +8,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- Build Mac DMGs in release CI with a signed runtime-manifest pin, credential
+  gating, notarization and verified receipts. Unconfigured builds remain
+  unpublished preview artifacts; stable signed releases include a fixed DMG alias.
+
 ### Fixed
 
+- Isolate named workers' DETS state from the controller, guard against concurrent
+  VM writers, back up and rebuild the controller's legacy DETS files once, and
+  expose local worker state with `lemon node status --name NAME --json`.
 - Load the certificate provider before Telegram and Discord setup construct their
   first HTTPS request, preserving TLS verification on cold CLI invocations.
 

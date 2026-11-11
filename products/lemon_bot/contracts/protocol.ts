@@ -38,8 +38,21 @@ export interface SetupRequest extends Mutation { setupCode: string; email: strin
 export interface LoginRequest extends Mutation { email: string; password: string; deviceId?: ID }
 /** Sent with `Authorization: Bearer <DATA_DIR/local-access.key>`; signs in as (or creates) the workspace owner. */
 export interface LocalAccessRequest { displayName?: string }
+/** One-use local sign-in ticket from `lemon-bot open`, taken from the `#lemonbot-signin=` URL fragment. */
+export interface LocalTicketRedeem { ticket: string }
+/** Own sign-in methods. `localOwner` is non-null only for the current workspace owner (the local key signs in as that owner). */
+export interface SignInMethods {
+  password: boolean;
+  email: string;
+  emailIsPlaceholder: boolean;
+  localOwner: { platform: 'macos' | 'linux' | 'other'; hostName: string; osUser: string } | null;
+  /** This session may add a first password or reauthenticate locally until then; null when not locally confirmed or stale. */
+  localConfirmedUntilMs: TimestampMs | null;
+}
+/** First password for an account that has none (e.g. the passwordless local owner). */
+export interface PasswordCreate extends Mutation { email: string; password: string }
 export interface AcceptInviteRequest extends Mutation { inviteToken: string; email: string; password: string; displayName: string }
-export interface ReauthRequest { password: string }
+export type ReauthRequest = { password: string } | { local: true };
 export interface ReauthResult { reauthToken: string; expiresAtMs: TimestampMs }
 export interface UserUpdate extends Update { displayName?: string; email?: string; avatarAttachmentId?: ID | null; preferences?: Preferences; notifications?: NotificationPreferences }
 export interface PasswordUpdate extends Mutation { currentPassword: string; newPassword: string }
@@ -104,6 +117,8 @@ export interface ProviderManagement {
   target: { id: string; nodeId: ID | null; hostname: string };
   default: { providerId: string | null; modelId: string | null };
   providers: ManagedProvider[];
+  readiness: ModelReadiness | null;
+  detected: DetectedLogin[];
 }
 export interface ManagedProvider {
   id: string; displayName: string; methods: ('api_key' | 'device_code' | 'unsupported')[];
@@ -113,6 +128,23 @@ export interface ManagedProvider {
   configurationOverrides: ('project_configuration' | 'credential_pool' | 'external_secret_source')[];
 }
 export interface ProviderTargetRequest extends Mutation { targetId: string }
+export type ModelReadinessState = 'verified' | 'saved' | 'action_required' | 'not_configured';
+export type ModelReadinessReason = 'credential_missing' | 'credential_expired' | 'credential_rejected' | 'model_unavailable' | 'provider_unreachable' | 'check_unavailable' | 'check_failed' | 'no_default' | 'model_provider_mismatch';
+export interface ModelReadiness {
+  state: ModelReadinessState;
+  providerId: string | null;
+  modelId: string | null;
+  check: 'codex_discovery' | 'models_endpoint' | null;
+  reason: ModelReadinessReason | null;
+  availableModelIds: string[] | null;
+  suggestedModelId: string | null;
+  checkedAtMs: TimestampMs | null;
+}
+export type DetectedLogin = { source: 'codex_cli'; providerId: 'openai_codex' } | { source: 'environment'; providerId: string; variable: string };
+export interface ProviderCheckRequest extends ProviderTargetRequest { providerId?: string }
+export interface ProviderCheckResult { management: ProviderManagement; readiness: ModelReadiness }
+/** Explicit consent to copy the target's Codex CLI login, never its source file. */
+export interface ProviderImportRequest extends ProviderTargetRequest { source: 'codex_cli'; consent: 'copy_login' }
 /** Transient request only. Never persist this field in drafts, browser storage or product SQLite. */
 export interface ProviderApiKeySet extends ProviderTargetRequest { value: string }
 export interface ProviderDefaultSet extends ProviderTargetRequest { providerId: string; modelId: string }
@@ -125,7 +157,8 @@ export interface ProviderDeviceLogin {
   verificationUrl: 'https://auth.openai.com/codex/device' | null;
   userCode: string | null; expiresAtMs: TimestampMs | null; pollIntervalMs: number | null;
 }
-export interface Machine extends Resource { nodeId: ID | null; nodeName: string; name: string; ownerUserId: ID; accessUserIds: ID[]; status: 'pending' | 'online' | 'offline' | 'revoked'; lastSeenAtMs: TimestampMs | null; labels: Record<string, string>; botIds: ID[] }
+export type MachineCredential = 'active' | 'expired' | 'revoked' | 'unknown';
+export interface Machine extends Resource { nodeId: ID | null; nodeName: string; name: string; ownerUserId: ID; accessUserIds: ID[]; status: 'pending' | 'online' | 'offline' | 'revoked'; credential?: MachineCredential; lastSeenAtMs: TimestampMs | null; labels: Record<string, string>; botIds: ID[] }
 export interface HostInfo { hostname: string; os: string; osVersion: string; arch: string; cpuCount: number; memTotalBytes: number; memFreeBytes: number; diskTotalBytes: number; diskFreeBytes: number; uptimeSec: number; lemonVersion: string; defaultCwd: string; user: string; measuredAtMs: TimestampMs }
 export interface MachineInvite extends Resource { machineId: ID; inviteCode: string; joinCommand: string; expiresAtMs: TimestampMs; status: 'pending' | 'joined' | 'expired' | 'revoked'; enrollment: 'invited' | 'waiting_for_join' | 'connecting' | 'verifying' | 'online' | 'expired' | 'failed' | 'revoked'; lastError: string | null }
 export interface MachineEnrollmentPreview { reachability: 'loopback_only' | 'routable' }
@@ -161,20 +194,20 @@ export interface AgentMessageReceipt { messageId: ID; sourceId: ID; targetId: ID
 export interface AgentMessageSend extends Mutation { target: string; text: string; conversationId?: ID }
 export interface MessageAgentInput extends Mutation { target: string; text: string }
 export interface Bot extends Resource { ownerUserId: ID; machineId: ID; profileId: string; name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; language: string | null; skillIds: ID[]; referenceAttachmentIds: ID[]; mainConversationId: ID; sidebar: SidebarState; activity: BotPresence['status']; activeRunIds: ID[]; agentHandle?: string | null; agentAddress?: ID }
-export interface BotCreate extends Mutation { name: string; machineId: ID; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; skillIds?: ID[]; templateId?: ID }
+export interface BotCreate extends Mutation { name: string; machineId: ID; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; skillIds?: ID[]; templateId?: ID; access?: 'standard' | 'none' }
 export interface BotUpdate extends Update { name?: string; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; skillIds?: ID[]; referenceAttachmentIds?: ID[] }
-export interface BotDuplicate extends Mutation { name: string; machineId: ID; includeSkills: boolean; includeRoutines: boolean }
+export interface BotDuplicate extends Mutation { name: string; machineId: ID; includeSkills: boolean; includeRoutines: boolean; access?: 'standard' | 'none' }
 export interface BotMove extends Confirm { machineId: ID }
 export interface SidebarUpdate extends Update { pinned?: boolean; hidden?: boolean; sectionId?: ID | null; rank?: number; unread?: boolean; notificationsEnabled?: boolean }
 export interface AvatarGenerate extends Mutation { prompt: string }
 export interface Section extends Resource { userId: ID; name: string; rank: number; collapsed: boolean }
 export interface SectionCreate extends Mutation { name: string; rank?: number }
 export interface SectionUpdate extends Update { name?: string; rank?: number; collapsed?: boolean }
-export interface TemplateContent { name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; skills: { name: string; description: string; markdown: string }[]; routines: RoutineSpec[]; connectorNames: string[] }
+export interface TemplateContent { name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; skills: { name: string; description: string; markdown: string }[]; routines: RoutineSpec[]; connectorNames: string[]; suggestedAccess?: 'standard' | 'none' }
 export interface BotTemplate extends Resource { ownerUserId: ID; audience: 'workspace' | 'public'; sourceBotId: ID | null; content: TemplateContent; provenance: { publisher: string; sourceUrl: string | null; termsUrl: string | null; thirdParty: boolean }; shareUrl: string }
 export interface TemplateCreate extends Mutation { botId: ID; audience: BotTemplate['audience']; reviewed: true }
 export interface TemplateUpdate extends Update { audience?: BotTemplate['audience']; content?: TemplateContent; reviewed: true }
-export interface TemplateImport extends Mutation { name: string; machineId: ID; acceptedTerms: boolean }
+export interface TemplateImport extends Mutation { name: string; machineId: ID; acceptedTerms: boolean; access?: 'standard' | 'none' }
 export type ConversationKind = 'dm' | 'task' | 'group' | 'channel';
 /** One human owner only. Groups contain 2–6 Bots all owned by ownerUserId, never other humans. */
 export interface Conversation extends Resource { kind: ConversationKind; name: string; botIds: ID[]; ownerUserId: ID; parentConversationId: ID | null; leadBotId: ID | null; channelBindingId: ID | null; lastEntryId: ID | null; unreadCount: number; lastReadSeq: number; activity: { botId: ID; phase: 'reading' | 'working' | 'typing' }[] }
@@ -657,14 +690,17 @@ export interface RestEndpoints {
   'POST /setup': Endpoint<SetupRequest, AuthResult>;
   'POST /auth/login': Endpoint<LoginRequest, AuthResult>;
   'POST /auth/local': Endpoint<LocalAccessRequest, AuthResult>;
+  'POST /auth/local/redeem': Endpoint<LocalTicketRedeem, AuthResult>;
   'POST /auth/invites/accept': Endpoint<AcceptInviteRequest, AuthResult>;
   'POST /auth/reauth': Endpoint<ReauthRequest, ReauthResult>;
   'GET /auth/sessions': Endpoint<undefined, Page<AuthSession>, PageQuery>;
   'DELETE /auth/sessions/:id': Endpoint<Mutation, Deleted>;
   'POST /auth/logout': Endpoint<Mutation, Empty>;
   'GET /me': Endpoint<undefined, User>;
+  'GET /me/sign-in': Endpoint<undefined, SignInMethods>;
   'PATCH /me': Endpoint<UserUpdate, User>;
   'PUT /me/password': Endpoint<PasswordUpdate, Empty>;
+  'POST /me/password': Endpoint<PasswordCreate, User>;
   'POST /me/preview': Endpoint<PreviewRequest, Confirmation>;
   'DELETE /me': Endpoint<AccountDelete, Deleted>;
   'GET /workspace': Endpoint<undefined, Workspace>;
@@ -693,6 +729,8 @@ export interface RestEndpoints {
   'POST /instance/reconnect': Endpoint<Mutation, InstanceStatus>;
   'POST /instance/runtime/:action': Endpoint<RuntimeActionRequest, RuntimeOperation>;
   'GET /instance/providers': Endpoint<undefined, ProviderManagement>;
+  'POST /instance/providers/check': Endpoint<ProviderCheckRequest, ProviderCheckResult>;
+  'POST /instance/providers/:providerId/import': Endpoint<ProviderImportRequest, ProviderManagement>;
   'PUT /instance/providers/:providerId/api-key': Endpoint<ProviderApiKeySet, ProviderManagement>;
   'POST /instance/providers/:providerId/disconnect': Endpoint<ProviderTargetRequest, ProviderManagement>;
   'POST /instance/providers/default': Endpoint<ProviderDefaultSet, ProviderManagement>;
@@ -700,6 +738,8 @@ export interface RestEndpoints {
   'POST /instance/providers/:providerId/device-login/:loginId/poll': Endpoint<ProviderDeviceLoginRequest, ProviderDeviceLogin>;
   'POST /instance/providers/:providerId/device-login/:loginId/cancel': Endpoint<ProviderDeviceLoginRequest, ProviderDeviceLogin>;
   'GET /machines/:id/providers': Endpoint<undefined, ProviderManagement>;
+  'POST /machines/:id/providers/check': Endpoint<ProviderCheckRequest, ProviderCheckResult>;
+  'POST /machines/:id/providers/:providerId/import': Endpoint<ProviderImportRequest, ProviderManagement>;
   'PUT /machines/:id/providers/:providerId/api-key': Endpoint<ProviderApiKeySet, ProviderManagement>;
   'POST /machines/:id/providers/:providerId/disconnect': Endpoint<ProviderTargetRequest, ProviderManagement>;
   'POST /machines/:id/providers/default': Endpoint<ProviderDefaultSet, ProviderManagement>;

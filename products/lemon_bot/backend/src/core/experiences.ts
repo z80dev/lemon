@@ -110,6 +110,28 @@ export async function machineCapabilities(s: BackendServices, user: Principal, m
   s.store.put('machineCapabilities', { ...result, id: machineId });
   return result;
 }
+function requestedGrant(s: BackendServices, bot: P.Bot, capabilityId: string, requestedLevel: P.AccessLevel): P.BotGrant {
+  return { ...s.resource('grant', { botId: bot.id, machineId: bot.machineId, capabilityId, requestedLevel, effectiveLevel: 'off' as const, reasons: [] as string[] }), id: `grant_${s.mutations.digest({ botId: bot.id, machineId: bot.machineId, capabilityId }).slice(0, 48)}` };
+}
+/** Creation consent sets requested access only; ordinary machine and policy ceilings still apply. */
+export async function initializeBotAccess(s: BackendServices, user: Principal, bot: P.Bot, access: P.BotCreate['access']): Promise<P.MachineCapabilities | undefined> {
+  assertBotOwner(user, bot);
+  if (access !== 'standard') return;
+  const measured = await machineCapabilities(s, user, bot.machineId, bot);
+  const standard: Record<string, { category: P.MachineCapabilities['items'][number]['category']; level: P.AccessLevel }> = {
+    terminal: { category: 'shell', level: 'read_interact' },
+    files: { category: 'files', level: 'read_interact' },
+    browser: { category: 'browser', level: 'read_only' },
+  };
+  s.store.transaction(() => {
+    for (const capability of measured.items) {
+      const preset = standard[capability.id];
+      if (!preset || !capability.supported || capability.category !== preset.category) continue;
+      s.store.put('botGrants', requestedGrant(s, bot, capability.id, preset.level));
+    }
+  });
+  return measured;
+}
 export async function effectiveBotGrants(s: BackendServices, user: Principal, bot: P.Bot, capabilities?: P.MachineCapabilities): Promise<P.BotGrant[]> {
   assertBotOwner(user, bot);
   const measured = capabilities ?? await machineCapabilities(s, user, bot.machineId, bot);
@@ -141,7 +163,7 @@ function projectEffectiveBotGrants(s: BackendServices, user: Principal, bot: P.B
   return inventory.map(cap => {
     let stored = persisted.find(value => value.capabilityId === cap.id);
     if (!stored) {
-      stored = { ...s.resource('grant', { botId: bot.id, machineId: bot.machineId, capabilityId: cap.id, requestedLevel: 'off' as const, effectiveLevel: 'off' as const, reasons: [] as string[] }), id: `grant_${s.mutations.digest({ botId: bot.id, machineId: bot.machineId, capabilityId: cap.id }).slice(0, 48)}` };
+      stored = requestedGrant(s, bot, cap.id, 'off');
       s.store.put('botGrants', stored);
     }
     const requestedLevel = stored?.requestedLevel ?? 'off';
@@ -745,8 +767,6 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
       const next = s.update(grant, { requestedLevel: body.requestedLevel });
       context.nonceResourceIds.push(bot.id, next.id);
       s.store.transaction(() => { const current = s.store.get<P.BotGrant>('botGrants', grant.id); if (current) s.mutations.checkRevision(current, body.revision); s.store.put('botGrants', next); s.store.setMetadata(`botPolicySync:${bot.id}`, { state: 'pending', grantId: next.id, revision: next.revision }); });
-      const effective = projectEffectiveBotGrants(s, user, bot, measured, await s.integrations.effectivePolicy(user, bot.id), true).find(value => value.id === next.id)!;
-      s.store.put('botGrants', effective);
       try {
         if (connector) await s.integrations.connectorProvisioning!(user, bot.id);
         else await s.syncBotProfile(user, bot.id);
@@ -755,7 +775,10 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
         fail('outcome_unknown', 'Requested grants were saved but native policy enforcement is unconfirmed.', false, { resourceIds: [bot.id, next.id] });
       }
       s.store.setMetadata(`botPolicySync:${bot.id}`, { state: 'acknowledged', grantId: next.id, revision: next.revision });
-      s.events.emit('grant.upserted', effective, { userIds: [user.userId] });
+      const fresh = await machineCapabilities(s, user, bot.machineId, bot).catch(() => measured);
+      const effective = projectEffectiveBotGrants(s, user, bot, fresh, await s.integrations.effectivePolicy(user, bot.id), false).find(value => value.id === next.id) ?? fail('not_found', 'Grant does not exist.');
+      s.store.put('botGrants', effective);
+      s.events.emit('grant.upserted', effective, { userIds: [user.userId], botId: bot.id });
       return effective;
     }),
     route('GET', '/activity', activityRead), route('GET', '/bots/:id/activity', activityRead),

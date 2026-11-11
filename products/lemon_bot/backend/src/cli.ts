@@ -41,6 +41,10 @@ Never share the controller operator token with clients.
 } else if (args[0] === 'up') {
   const { runUpCli } = await import('./cli/up');
   process.exitCode = await runUpCli(args.slice(1));
+} else if (args[0] === 'open') {
+  // Keep platform/private-storage modules out of help and version dispatch.
+  const { runOpenCli } = await import('./cli/open');
+  process.exitCode = await runOpenCli(args.slice(1));
 } else if (args[0] === 'setup') {
   // Private-state and platform imports must remain lazy for help/version.
   const { runSetupCli } = await import('./setup-cli');

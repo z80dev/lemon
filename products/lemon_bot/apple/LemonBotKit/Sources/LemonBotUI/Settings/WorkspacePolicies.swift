@@ -49,6 +49,8 @@ struct PolicySettingsView: View {
     @State private var description = ""
     @State private var required = false
     @State private var machine = ""
+    @State private var governance: Governance?
+    @State private var rememberedApprovals = "chat"
     var body: some View {
         Form {
             AdminStatus(control: control, store: store, refresh: { await control.perform { try await load() } })
@@ -61,6 +63,18 @@ struct PolicySettingsView: View {
                     ForEach(effective.rules) { Text("\($0.category): \($0.mode) · \($0.required ? "locked required" : "personal/group") · \($0.description)") }
                 }
             }
+            Section("Remembered approvals") {
+                Picker("Remembered approvals", selection: $rememberedApprovals) {
+                    Text("Off").tag("off")
+                    Text("This chat").tag("chat")
+                    Text("This chat and Bot-wide").tag("chat_and_bot")
+                }
+                AdminAction(title: "Save remembered approvals", store: store, control: control) {
+                    guard let governance else { return }
+                    _ = try await store.mutate("PATCH", "/governance", body: ["revision": .number(Double(governance.revision)), "rememberedApprovals": .string(rememberedApprovals)], as: Governance.self)
+                    try await load()
+                }
+            }.disabled(governance == nil || (store.member?.role != "admin" && store.member?.role != "owner"))
             Section("Workspace hard ceiling") {
                 Toggle("Public templates", isOn: $publicTemplates)
                 Toggle("No MCP origin restriction", isOn: $unrestrictedOrigins)
@@ -103,6 +117,10 @@ struct PolicySettingsView: View {
         let value = try await store.read("/policies", as: Policies.self); policies = value
         publicTemplates = value.publicTemplates; unrestrictedOrigins = value.allowedMcpOrigins == nil; origins = (value.allowedMcpOrigins ?? []).joined(separator: "\n"); ceiling = value.localExecutionCeiling; recording = value.actionRecording; retention = value.auditRetentionDays
         effective = try await store.read("/policies/effective", as: EffectivePolicy.self)
+        if store.member?.role == "admin" || store.member?.role == "owner" {
+            governance = try await store.read("/governance")
+            rememberedApprovals = governance?.rememberedApprovals ?? "chat"
+        }
         approvals = try await adminReadAll(store, "/approvals", query: ["state": "pending"], as: Approval.self)
     }
 }

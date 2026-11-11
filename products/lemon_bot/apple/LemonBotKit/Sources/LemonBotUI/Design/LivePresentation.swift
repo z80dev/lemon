@@ -68,7 +68,7 @@ extension LemonBotStore {
         }).first {
             return LiveStep(title: tool.title.isEmpty ? humanizedStatus(tool.tool) : tool.title, symbol: toolSymbol(tool.tool), since: timestamp(Double(tool.timestampMs)))
         }
-        if recent.contains(where: { if case .message(let m) = $0, m.streaming { return true }; return false }) {
+        if recent.contains(where: { if case .message(let m) = $0, m.streaming, m.runId.map(runIDs.contains) == true { return true }; return false }) {
             return LiveStep(title: "Writing a reply", symbol: "text.cursor", since: started)
         }
         if let phase = phases.first?.phase {

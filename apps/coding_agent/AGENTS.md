@@ -75,6 +75,10 @@ history, compaction and supervised delegation. The loop/model runtime comes from
 
 ## Named execution nodes
 
+- Worker DETS state lives in the worker root chosen by `node join`; never share
+  a DETS directory between VMs. `LEMON_AGENT_DIR` and `LEMON_STORE_PATH` are not
+  isolation switches.
+
 - Pairing stores session/recovery credentials in private node-ID-keyed records
   (0700 directory, 0600 files) bound to the exact controller URL. ID lookup without
   that URL returns no credentials. Re-pair renews the same identity; legacy repair

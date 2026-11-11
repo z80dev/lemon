@@ -23,7 +23,7 @@ struct BotEditorView: View {
     @State private var speed: Double
     @State private var voiceLanguage: String
     @State private var language: String
-    @State private var consent = false
+    @State private var access = "standard"
     @State private var notify: Bool
     @State private var references: [ID]
     @State private var avatarPicker = false
@@ -54,6 +54,7 @@ struct BotEditorView: View {
         _notify = State(initialValue: bot?.sidebar.notificationsEnabled ?? true)
         _references = State(initialValue: bot?.referenceAttachmentIds ?? [])
         _currentRevision = State(initialValue: bot?.revision ?? 1)
+        _access = State(initialValue: "standard")
     }
     var body: some View {
         NavigationStack {
@@ -72,8 +73,14 @@ struct BotEditorView: View {
                         if !store.machines.contains(where: { $0.status == "online" }) {
                             Text("No machine is online. Start one of your machines, then come back.").font(LBFont.meta).foregroundStyle(LB.warning)
                         }
-                        Toggle("I trust this host and accept shared files, browser logins and CLI credentials", isOn: $consent)
-                        Text("Bots on one OS user are not isolated. Use separate hosts/users for hard isolation.").font(LBFont.meta)
+                        Picker("Access", selection: $access) {
+                            Text("Standard — recommended").tag("standard")
+                            Text("Chat only").tag("none")
+                        }
+                        Text(access == "standard"
+                            ? "Standard gives this Bot access to Terminal and Files (and Browser if supported). It asks before running commands."
+                            : "Chat only gives this Bot conversation without local file, tool or shell access.")
+                            .font(LBFont.meta).foregroundStyle(LB.muted)
                     }
                 }
                 if let bot { AgentHandleView(store: store, bot: bot) }
@@ -117,10 +124,18 @@ struct BotEditorView: View {
                 }
                 ActionErrorView(message: action.error)
                 if let receipt = action.receipt { Text(receipt).font(LBFont.meta) }
-                Button(bot == nil ? "Create Bot" : "Save changes") { Task { await save() } }.disabled(action.busy || name.isEmpty || store.connectionState != "online" || (bot == nil && (machineID.isEmpty || !consent)))
+                if bot == nil {
+                    let machineName = store.machines.first(where: { $0.id == machineID })?.name ?? "this machine"
+                    let botName = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Lemon" : name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    Text(access == "standard"
+                        ? "\(botName) works on \(machineName) as you, with your files, tools and logins. It asks before running commands."
+                        : "\(botName) works on \(machineName) in chat-only mode without file, tool or shell access.")
+                        .font(LBFont.meta).foregroundStyle(LB.muted)
+                }
+                Button(bot == nil ? "Create Bot" : "Save changes") { Task { await save() } }.disabled(action.busy || name.isEmpty || store.connectionState != "online" || (bot == nil && machineID.isEmpty))
                 if store.connectionState != "online" { Text("Reconnect to save changes.").font(LBFont.meta).foregroundStyle(LB.muted) }
                 else if name.isEmpty { Text("Add a name to save.").font(LBFont.meta).foregroundStyle(LB.muted) }
-                else if bot == nil && (machineID.isEmpty || !consent) { Text("Choose an online machine and accept its shared files and logins to create this Bot.").font(LBFont.meta).foregroundStyle(LB.muted) }
+                else if bot == nil && machineID.isEmpty { Text("Choose an online machine to create this Bot.").font(LBFont.meta).foregroundStyle(LB.muted) }
             }.formStyle(.grouped).navigationTitle(bot == nil ? "New Bot" : "Edit \(bot!.name)")
                 .toolbar { Button("Cancel") { dismiss() } }
                 .fileImporter(isPresented: $avatarPicker, allowedContentTypes: [.image]) { result in
@@ -202,6 +217,7 @@ struct BotEditorView: View {
                 let _: Bot = try await store.mutate("PATCH", resourcePath("bots", bot.id, "/sidebar"), body: ["revision": .number(Double(currentRevision)), "notificationsEnabled": .bool(notify)])
             } else {
                 body["machineId"] = .string(machineID); body["job"] = .string(job); body["instructions"] = .string(instructions); body["voice"] = .object(voice); body["language"] = language.isEmpty ? .null : .string(language)
+                body["access"] = .string(access)
                 result = try await store.mutate("POST", "/bots", body: body)
             }
             try await store.refresh()

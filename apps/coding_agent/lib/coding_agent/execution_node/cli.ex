@@ -87,6 +87,38 @@ defmodule CodingAgent.ExecutionNode.CLI do
     end
   end
 
+  def run(["status" | argv], _deps) do
+    case OptionParser.parse(argv, strict: [name: :string, json: :boolean]) do
+      {opts, [], []} ->
+        if is_binary(opts[:name]) and String.trim(opts[:name]) != "" do
+          case CodingAgent.StatePaths.read_status(opts[:name]) do
+            {:ok, status} ->
+              if opts[:json] do
+                IO.puts(Jason.encode!(status))
+              else
+                reason = if status["reason"], do: " (#{status["reason"]})", else: ""
+
+                since =
+                  DateTime.from_unix!(status["changedAtMs"], :millisecond)
+                  |> DateTime.to_iso8601()
+
+                IO.puts("#{status["localName"]}: #{status["state"]}#{reason} since #{since}")
+              end
+
+              :ok
+
+            _ ->
+              {:error, "no worker status recorded for this name"}
+          end
+        else
+          {:error, "--name is required"}
+        end
+
+      _ ->
+        {:error, "invalid worker status options"}
+    end
+  end
+
   def run(argv, deps) do
     Process.flag(:trap_exit, true)
 
@@ -95,7 +127,14 @@ defmodule CodingAgent.ExecutionNode.CLI do
          :ok <- require_invite_features(opts, deps),
          {:ok, opts} <- read_invite(opts),
          {:ok, execution_capabilities} <- execution_capabilities(opts),
-         {:ok, _started} <- Application.ensure_all_started(:coding_agent),
+         :ok <-
+           Keyword.get(deps, :configure_state, &CodingAgent.StatePaths.configure_worker/1).(
+             opts[:name]
+           ),
+         {:ok, _started} <-
+           Keyword.get(deps, :ensure_all_started, &Application.ensure_all_started/1).(
+             :coding_agent
+           ),
          :ok <- load_all_modules(),
          {:ok, worker} <-
            Worker.start_link(
@@ -243,6 +282,23 @@ defmodule CodingAgent.ExecutionNode.CLI do
         IO.puts("Execution node #{status}")
         await_worker(worker, monitor)
 
+      {:execution_node_worker, ^worker, {:status, kind, reason}}
+      when kind in [:needs_reauthorization, :needs_enrollment, :conflict] ->
+        remedy =
+          case kind do
+            :needs_reauthorization ->
+              "reconnect this machine from Lemon Bot (Machines → Reconnect); this worker resumes automatically when new credentials are saved"
+
+            :needs_enrollment ->
+              "no saved credential for this controller; enroll it with the join command from Lemon Bot"
+
+            :conflict ->
+              "another worker is connected as this node; retrying every minute"
+          end
+
+        IO.puts("Execution node #{kind} (#{reason}): #{remedy}")
+        await_worker(worker, monitor)
+
       {:execution_node_worker, ^worker, {:status, status, _detail}} ->
         IO.puts("Execution node #{status}")
         await_worker(worker, monitor)
@@ -324,6 +380,9 @@ defmodule CodingAgent.ExecutionNode.CLI do
     """
     Usage: lemon node join --name NAME --controller wss://HOST/ws [options]
            lemon node capabilities [--json] [--require-bot] [--expected-version VERSION]
+           lemon node status --name NAME [--json]
+
+    Workers with rejected credentials stay running and resume after repair.
 
     Options:
       --pair                    Pair and store a controller-issued node token
@@ -382,10 +441,6 @@ defmodule CodingAgent.ExecutionNode.CLI do
 
   defp format_reason(:operator_authentication_failed) do
     "operator authentication failed while pairing"
-  end
-
-  defp format_reason(:node_authentication_failed) do
-    "node authentication failed; rotate it with --pair or provide a valid LEMON_NODE_TOKEN"
   end
 
   defp format_reason(:missing_node_recovery_token) do

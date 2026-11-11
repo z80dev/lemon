@@ -1210,39 +1210,7 @@ defmodule LemonCore.Backup do
     end
   end
 
-  # Source records bind liveness to a process start time; legacy/release PID
-  # records may contain only the PID. Never signal a process from this probe.
-  defp live_pid_file?(path) do
-    with {:ok, contents} <- read_regular_file(path),
-         [pid | rest] <- String.split(contents, "\n"),
-         {pid, ""} when pid > 0 <- Integer.parse(String.trim(pid)) do
-      process_alive?(pid, rest |> List.first("") |> String.trim())
-    else
-      _ -> false
-    end
-  end
-
-  defp process_alive?(pid, born) do
-    pid = Integer.to_string(pid)
-
-    case System.cmd("ps", ["-p", pid, "-o", "stat="], stderr_to_stdout: true) do
-      {state, 0} ->
-        not String.contains?(state, "Z") and (born == "" or process_start_time(pid) == born)
-
-      {_output, _status} ->
-        false
-    end
-  rescue
-    # Failure to execute the liveness probe is not evidence of a stopped daemon.
-    _ -> true
-  end
-
-  defp process_start_time(pid) do
-    case System.cmd("ps", ["-p", pid, "-o", "lstart="], stderr_to_stdout: true) do
-      {output, 0} -> String.trim(output)
-      _ -> nil
-    end
-  end
+  defp live_pid_file?(path), do: LemonCore.PidFile.live?(path)
 
   defp probe_running?(opts, port) do
     case Keyword.get(opts, :runtime_probe) do
@@ -1411,6 +1379,9 @@ defmodule LemonCore.Backup do
     base = Path.basename(relative)
 
     cond do
+      base in [".lemon-state.lock", "worker-status.json"] ->
+        "runtime_state"
+
       MapSet.member?(@always_excluded_roots, top) ->
         "runtime_or_generated"
 

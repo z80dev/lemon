@@ -46,6 +46,23 @@ describe('typed client at the fetch boundary', () => {
     expect(boundary.requests).toHaveLength(1);
   });
 
+  test('creation access is explicit across create, duplicate and template import', async () => {
+    for (const access of [undefined, 'standard', 'none'] as const) {
+      const boundary = fetchBoundary(async request => {
+        const body = await request.json() as Record<string, unknown>;
+        expect(body.access).toBe(access);
+        expect(Object.hasOwn(body, 'access')).toBe(access !== undefined);
+        return Response.json({ id: 'created' }, { status: 201 });
+      });
+      const client = new LemonBotClient({ baseUrl: origin, fetch: boundary.clientFetch });
+      const body = { clientNonce: nonce(), name: 'Lemon', machineId: 'machine', ...(access ? { access } : {}) };
+      await client.call('POST /bots', { body });
+      await client.call('POST /bots/:id/duplicate', { params: { id: 'source' }, body: { ...body, includeSkills: false, includeRoutines: false } });
+      await client.call('POST /templates/:id/import', { params: { id: 'template' }, body: { ...body, acceptedTerms: true } });
+      expect(boundary.requests).toHaveLength(3);
+    }
+  });
+
   test('multipart carries exactly metadata and actual original bytes', async () => {
     const bytes = new Uint8Array([0, 255, 3, 10]);
     const metadata = { clientNonce: nonce(), purpose: 'message' as const, conversationId: 'conversation_1' };

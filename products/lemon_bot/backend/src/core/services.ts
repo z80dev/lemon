@@ -31,7 +31,7 @@ export interface EventService {
   visible(principal: Principal, event: P.RealtimeEvent, audience: EventAudience): boolean;
   subscribe(listener: (event: P.RealtimeEvent, audience: EventAudience) => void): () => void;
 }
-export interface AuthSessionOptions { persistent?: boolean }
+export interface AuthSessionOptions { persistent?: boolean; localConfirmed?: boolean }
 export interface AccessService {
   authenticate(request: Request, policy?: Authentication): Promise<Principal | null>;
   user(userId: string): P.User;
@@ -118,6 +118,7 @@ export interface IntegrationServices {
 }
 export interface BackendConfiguration {
   publicUrl: string; controlUrl: string; dataDir: string; host: string; port: number;
+  loopbackOrigin?: string | null;
   /** Current controller credential. With `operatorTokenFile` set, the controller link refreshes it from that launcher-managed file before every connection attempt. */
   operatorToken: string;
   operatorTokenFile?: string;

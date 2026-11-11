@@ -30,6 +30,7 @@ public struct ConversationView: View {
     @State private var hasNewBelow = false
     @State private var settled = false
     @State private var toast: StatusToast?
+    @State private var hostInfo: HostInfo?
     @Environment(\.lbReduceMotion) private var reduceMotion
     #if os(iOS)
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -71,7 +72,7 @@ public struct ConversationView: View {
     private var showTyping: Bool {
         let live = store.liveRuns(in: conversationID)
         guard live.contains(where: { $0.status != "awaiting_input" }) else { return false }
-        return !(store.entries[conversationID] ?? []).sorted { $0.seq < $1.seq }.suffix(5).contains { $0.streaming }
+        return !(store.entries[conversationID] ?? []).sorted { $0.seq < $1.seq }.suffix(5).contains { if case .message(let message) = $0 { return store.isStreaming(message) }; return false }
     }
     private var visibleError: String? { action.error ?? store.errorMessage }
     private var canMutate: Bool { store.connectionState == "online" }
@@ -225,6 +226,15 @@ public struct ConversationView: View {
                 try? await Task.sleep(for: .seconds(2.5))
                 if !Task.isCancelled { flashID = nil }
             }
+            .task(id: bot?.machineId) {
+                guard let machineID = bot?.machineId, !machineID.isEmpty else { hostInfo = nil; return }
+                do {
+                    let host: HostInfo = try await store.read(resourcePath("machines", machineID, "/host"))
+                    hostInfo = host
+                } catch {
+                    hostInfo = nil
+                }
+            }
         }
     }
 
@@ -259,11 +269,78 @@ public struct ConversationView: View {
         }
     }
 
+    private var hostnameTask: String {
+        let os = hostInfo?.os.lowercased() ?? ""
+        if os.contains("mac") || os.contains("darwin") {
+            return "What's this Mac's hostname, macOS version and free disk space? Use df -h /, not a folder scan."
+        } else if os.contains("linux") {
+            return "What's this Linux machine's hostname, OS version and free disk space? Use df -h /, not a folder scan."
+        } else {
+            return "What's this computer's hostname, OS version and free disk space? Use system summaries, not folder scans."
+        }
+    }
+
+    private var installedToolsTask: String {
+        let os = hostInfo?.os.lowercased() ?? ""
+        if os.contains("mac") || os.contains("darwin") {
+            return "Which apps and command-line tools are installed here? Check /Applications and package-manager inventories, not personal folders."
+        } else if os.contains("linux") {
+            return "Which command-line tools and packages are installed here? Use PATH and package-manager inventories, not personal folders."
+        } else {
+            return "Which apps and command-line tools are installed here? Use system application and package-manager inventories, not personal folders."
+        }
+    }
+
+    private func sendStarterTask(_ text: String) async {
+        await action.perform {
+            guard canMutate else { throw ClientError.offline }
+            let _ = try await store.send(conversationID: conversationID, text: text, attachmentIDs: [])
+        }
+    }
+
+    private func starterButton(task: String, icon: String) -> some View {
+        Button {
+            Task { await sendStarterTask(task) }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(LB.accent)
+                    .frame(width: 20)
+                Text(task)
+                    .font(LBFont.rowSubtitle)
+                    .foregroundStyle(LB.ink)
+                    .multilineTextAlignment(.leading)
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(LB.fill))
+        }
+        .buttonStyle(.plain)
+        .disabled(!canMutate || action.busy)
+        .accessibilityLabel(task)
+    }
+
     private var emptyHint: some View {
-        VStack(spacing: 10) {
-            if let bot { BotAvatarView(store: store, bot: bot).frame(width: 64, height: 64) } else { LemonMark(size: 64) }
-            Text("Message \(title)").font(LBFont.rowSubtitle).foregroundStyle(LB.muted)
-        }.accessibilityElement(children: .combine)
+        VStack(spacing: 12) {
+            if let bot {
+                BotAvatarView(store: store, bot: bot).frame(width: 64, height: 64)
+                Text("Message \(title)").font(LBFont.rowSubtitle).foregroundStyle(LB.muted)
+                VStack(spacing: 8) {
+                    starterButton(task: hostnameTask, icon: "terminal")
+                    starterButton(task: installedToolsTask, icon: "app.badge")
+                    starterButton(task: "Summarize what's running right now using a process snapshot, without reading personal files.", icon: "chart.bar")
+                }
+                .frame(maxWidth: 380)
+                .padding(.top, 4)
+            } else {
+                LemonMark(size: 64)
+                Text("Message \(title)").font(LBFont.rowSubtitle).foregroundStyle(LB.muted)
+            }
+        }
+        .padding(.horizontal, 20)
+        .accessibilityElement(children: .contain)
     }
 
     // MARK: Bottom stack
@@ -302,7 +379,10 @@ public struct ConversationView: View {
     // MARK: Chrome
 
     private func headerPill(floating: Bool) -> some View {
-        ConversationHeaderPill(store: store, bots: headerBots, title: title, working: isWorking, floating: floating) { inspector.toggle() }
+        VStack(spacing: 4) {
+            ConversationHeaderPill(store: store, bots: headerBots, title: title, working: isWorking, floating: floating) { inspector.toggle() }
+            ChatApprovalAllowancesView(store: store, conversationID: conversationID, bot: bot)
+        }
     }
 
     @ViewBuilder private func chrome(matches: [ID], current: ID?) -> some View {
@@ -607,7 +687,7 @@ struct TranscriptEntryView: View {
     @ViewBuilder private var mainContent: some View {
         switch entry {
         case .message(let message):
-            if !message.text.isEmpty || message.streaming { MessageBubble(text: message.text, streaming: message.streaming, mine: isMine, palette: palette) }
+            if !message.text.isEmpty || store.isStreaming(message) { MessageBubble(text: message.text, streaming: store.isStreaming(message), mine: isMine, palette: palette) }
         case .card(let card):
             TranscriptCardView(store: store, card: card.card).frame(maxWidth: LBMetric.bubbleMaxWidth, alignment: .leading)
         case .userAttachment(let attachment):

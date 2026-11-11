@@ -133,6 +133,10 @@ describe('MCP run authority and durable receipts', () => {
         if (!definitions || typeof definitions !== 'object' || Array.isArray(definitions)) throw new Error('Tool definitions must be an object.');
         expect(definitions[tool.name]).toBeDefined();
       }
+      const createDefinitions = tools.find(tool => tool.name === 'create_bot')!.inputSchema.$defs as P.JSONObject;
+      const createDefinition = createDefinitions.create_bot as P.JSONObject;
+      expect((createDefinition.properties as P.JSONObject).access).toEqual({ type: 'string', enum: ['standard', 'none'] });
+      expect(createDefinition.required).toEqual(['clientNonce', 'name', 'machineId']);
       expect((await rpc(fixture, 'initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1' }, authority: 'owner' })).error?.code).toBe(-32602);
       expect((await rpc(fixture, 'arbitrary_management', {})).error?.code).toBe(-32601);
     } finally { fixture.store.close(); }

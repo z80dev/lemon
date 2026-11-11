@@ -33,7 +33,7 @@ struct MachineBotGrantsView: View {
                 }
                 ForEach(Array(Set(grants.flatMap(\.reasons))).sorted(), id: \.self) { Text($0).font(LBFont.meta) }
             }
-        }.task(id: bot.id) { await load() }
+        }.task(id: "\(bot.id):\(store.grantsVersion[bot.id] ?? 0)") { await load() }
     }
     private func capability(_ grant: BotGrant) -> MachineCapability? {
         capabilities?.items.first { $0.id == grant.capabilityId }

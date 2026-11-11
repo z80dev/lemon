@@ -1,11 +1,17 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type * as P from '../../../contracts/protocol';
-import type { AccessService, AuthSessionOptions, Authentication, BackendServices, Principal } from './services';
+import type { AccessService, AuthSessionOptions, Authentication, BackendServices, EntityStore, Principal } from './services';
 import { ApiError, fail } from './errors';
 import { authenticateIntegration } from '../enterprise/tokens';
 import { hasProductAccess } from '../enterprise/policy';
 import { revokeUserPairings } from './pairing';
-export interface SessionSecret { id: string; tokenDigest: string; revoked: boolean }
+export interface SessionSecret { id: string; tokenDigest: string; revoked: boolean; localConfirmedAtMs?: number }
+export const localConfirmationWindowMs = 10 * 60 * 1000;
+export function localConfirmedUntil(store: EntityStore, sessionId: string | null, now: number): number | null {
+  const secret = sessionId === null ? null : store.get<SessionSecret>('sessionSecrets', sessionId);
+  const until = secret?.localConfirmedAtMs === undefined ? null : secret.localConfirmedAtMs + localConfirmationWindowMs;
+  return secret?.revoked === false && until !== null && until > now ? until : null;
+}
 export interface Credential { id: string; passwordHash: string }
 export interface RevocationHooks {
   beforeRevokeUser?: (principal: Principal) => void;
@@ -276,7 +282,7 @@ export function createAccessService(services: BackendServices, hooks: Revocation
       const token = opaqueToken();
       const result = services.resource('session', { userId, deviceId, expiresAtMs: options.persistent ? null : services.now() + lifetime, lastSeenAtMs: services.now(), current: false });
       store.put('authSessions', result);
-      store.put<SessionSecret>('sessionSecrets', { id: result.id, tokenDigest: services.mutations.digest(token), revoked: false });
+      store.put<SessionSecret>('sessionSecrets', { id: result.id, tokenDigest: services.mutations.digest(token), revoked: false, ...(options.localConfirmed ? { localConfirmedAtMs: services.now() } : {}) });
       return { token, session: { ...result, current: true }, user: account, workspace: currentWorkspace, member: current };
     }));
   }

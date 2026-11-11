@@ -35,3 +35,14 @@
 @media (prefers-reduced-motion: reduce) {
   .page .avatar-crop, .page .avatar-crop img { transition: none; animation: none; }
 }
+
+.access-choice-field { margin-top: 4px; }
+.access-options { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.access-option { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; cursor: pointer; transition: border-color 150ms ease, background 150ms ease; }
+.access-option:hover { background: var(--fill); }
+.access-option.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.access-option input[type='radio'] { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.access-title { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.consent-notice { font-size: 13.5px; color: var(--muted); line-height: 1.45; margin: 8px 0 4px; }
+.customize-disclosure { border: 1px dashed var(--line); }
+.customize-disclosure summary { cursor: pointer; user-select: none; padding: 4px 0; }

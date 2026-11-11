@@ -15,7 +15,50 @@ public struct ProviderManagement: Codable, Hashable {
     public var target: Target
     public var `default`: Default
     public var providers: [ManagedProvider]
-    public init(target: Target, default value: Default, providers: [ManagedProvider]) { self.target = target; self.default = value; self.providers = providers }
+    public var readiness: ModelReadiness?
+    public var detected: [DetectedLogin]
+    public init(target: Target, default value: Default, providers: [ManagedProvider], readiness: ModelReadiness? = nil, detected: [DetectedLogin] = []) {
+        self.target = target; self.default = value; self.providers = providers; self.readiness = readiness; self.detected = detected
+    }
+    private enum CodingKeys: String, CodingKey { case target, `default`, providers, readiness, detected }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        target = try values.decode(Target.self, forKey: .target)
+        self.default = try values.decode(Default.self, forKey: .default)
+        providers = try values.decode([ManagedProvider].self, forKey: .providers)
+        readiness = try values.decodeIfPresent(ModelReadiness.self, forKey: .readiness)
+        detected = try values.decodeIfPresent([DetectedLogin].self, forKey: .detected) ?? []
+    }
+}
+
+public struct ModelReadiness: Codable, Hashable {
+    public enum State: String, Codable { case verified, saved, actionRequired = "action_required", notConfigured = "not_configured" }
+    public enum Reason: String, Codable {
+        case credentialMissing = "credential_missing", credentialExpired = "credential_expired", credentialRejected = "credential_rejected"
+        case modelUnavailable = "model_unavailable", providerUnreachable = "provider_unreachable", checkUnavailable = "check_unavailable"
+        case checkFailed = "check_failed", noDefault = "no_default", modelProviderMismatch = "model_provider_mismatch"
+    }
+    public enum Check: String, Codable { case codexDiscovery = "codex_discovery", modelsEndpoint = "models_endpoint" }
+    public var state: State
+    public var providerId: String?
+    public var modelId: String?
+    public var check: Check?
+    public var reason: Reason?
+    public var availableModelIds: [String]?
+    public var suggestedModelId: String?
+    public var checkedAtMs: TimestampMs?
+}
+
+public struct DetectedLogin: Codable, Hashable {
+    public enum Source: String, Codable { case codexCLI = "codex_cli", environment }
+    public var source: Source
+    public var providerId: String
+    public var variable: String?
+}
+
+public struct ProviderCheckResult: Codable, Hashable {
+    public var management: ProviderManagement
+    public var readiness: ModelReadiness
 }
 
 public struct ManagedProvider: Codable, Hashable, Identifiable {

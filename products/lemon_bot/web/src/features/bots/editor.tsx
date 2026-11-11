@@ -1,8 +1,8 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { nonce, type Avatar, type Bot, type BotCreate, type VoiceSettings } from '@lemon-bot/sdk';
-import { useApp } from '../../app';
+import { useApp, type Route } from '../../app';
 import { ErrorNotice, Field, PageHeader, useAction, useQuery } from '../../ui';
-import { collect, IntentNotice, MachineChoice, Selection, useIntent, useObjectUrl } from './shared';
+import { collect, IntentNotice, MachineChoice, AccessChoice, Selection, useIntent, useMachines, useObjectUrl } from './shared';
 import { AgentControls } from './agents';
 
 const defaultAvatar: Avatar = { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null };
@@ -42,15 +42,209 @@ export function AvatarEditor({ value, onChange, botId, disabled = false }: { val
     await read.run(async () => { const download = await client.download(attachment.id); const bytes = await client.downloadBytes(download); setBlob(new Blob([new Uint8Array(bytes)], { type: download.mime })); });
   })}>Generate real image for crop</button>{!snapshot.capabilities.imageGeneration && <p className="muted">Image generation requires an operator-configured image provider. Character and uploads remain available.</p>}</>}<IntentNotice intent={action} /><ErrorNotice error={read.error} /></fieldset>;
 }
-export function CreateBot() {
+export function CreateBot({ route }: { route?: Route } = {}) {
   const { client, navigate, refresh, snapshot } = useApp();
   const intent = useIntent();
-  const [draft, setDraft] = useState<Omit<BotCreate, 'clientNonce'>>({ name: '', machineId: '', title: '', job: '', instructions: '', avatar: defaultAvatar, voice: defaultVoice, language: null, skillIds: [] });
-  const [consent, setConsent] = useState(false);
+  const machines = useMachines();
+  const rows = machines.data ?? snapshot.machines;
+  const isAccessibleOnline = (m: (typeof rows)[number]) => m.status === 'online' && m.ownerUserId === snapshot.user.id;
+
+  const targetId = route?.machineId;
+  const initialMachineId = () => {
+    if (targetId) return rows.find(m => m.id === targetId && isAccessibleOnline(m))?.id ?? '';
+    const online = rows.filter(isAccessibleOnline);
+    return online.length === 1 ? online[0].id : '';
+  };
+
+  const [draft, setDraft] = useState<Omit<BotCreate, 'clientNonce'>>({
+    name: '',
+    machineId: initialMachineId(),
+    title: '',
+    job: '',
+    instructions: '',
+    avatar: defaultAvatar,
+    voice: defaultVoice,
+    language: null,
+    skillIds: [],
+    access: 'standard',
+  });
+
+  useEffect(() => {
+    if (!draft.machineId) {
+      if (targetId && rows.some(m => m.id === targetId && isAccessibleOnline(m))) {
+        setDraft(prev => ({ ...prev, machineId: targetId }));
+        return;
+      }
+      if (targetId && machines.loading) return;
+      const online = rows.filter(isAccessibleOnline);
+      if (online.length === 1) {
+        setDraft(prev => ({ ...prev, machineId: online[0].id }));
+      }
+    }
+  }, [rows, targetId, draft.machineId, snapshot.user.id, machines.loading]);
+
   const templates = useQuery('bots:create:templates', () => collect(cursor => client.call('GET /templates', { query: { cursor, limit: 200 } })));
   const skills = useQuery('bots:create:skills', () => collect(cursor => client.call('GET /skills', { query: { cursor, limit: 200 } })));
   const update = (patch: Partial<typeof draft>) => setDraft(previous => ({ ...previous, ...patch }));
-  return <main className="page stack"><PageHeader title="Create a Bot" eyebrow="A focused job, on a machine you trust" /><div className="grid">{suggestions.map(role => <button className="card" key={role.name} onClick={() => update(role)}><strong>{role.name}</strong><p>{role.job}</p></button>)}<button className="card" onClick={() => update({ name: '', job: '', instructions: '', templateId: undefined })}>Custom role</button></div><ErrorNotice error={templates.error} /><Field label="Start from a reviewed template"><select value={draft.templateId ?? ''} onChange={event => { const template = templates.data?.find(item => item.id === event.target.value); if (template) navigate({ screen: 'templates', id: template.id }); else update({ templateId: undefined }); }}><option value="">Custom or suggested role</option>{templates.data?.map(template => <option key={template.id} value={template.id}>{template.content.name} · {template.provenance.publisher}</option>)}</select></Field><form className="stack" onSubmit={event => { event.preventDefault(); void intent.run(async () => { const bot = await client.call('POST /bots', { body: { ...draft, clientNonce: nonce() } }); await refresh(); navigate({ screen: 'bot.overview', id: bot.id }); }); }}><fieldset className="panel stack" disabled={intent.disabled}><legend>Identity</legend><Field label="Name"><input required maxLength={120} value={draft.name} onChange={event => update({ name: event.target.value })} /></Field><Field label="Title"><input maxLength={140} value={draft.title} onChange={event => update({ title: event.target.value })} /></Field></fieldset><AvatarEditor value={draft.avatar ?? defaultAvatar} onChange={avatar => update({ avatar })} disabled={intent.disabled} /><fieldset className="panel stack" disabled={intent.disabled}><legend>Job and standing boundaries</legend><Field label="Job"><textarea maxLength={32768} value={draft.job} onChange={event => update({ job: event.target.value })} /></Field><Field label="Instructions"><textarea maxLength={32768} value={draft.instructions} onChange={event => update({ instructions: event.target.value })} /></Field><VoiceFields value={draft.voice ?? defaultVoice} onChange={voice => update({ voice })} /><Field label="Response language"><input placeholder="Automatic" value={draft.language ?? ''} onChange={event => update({ language: event.target.value || null })} /></Field></fieldset><ErrorNotice error={skills.error} /><Selection title="Installed skills" items={skills.data ?? []} selected={draft.skillIds ?? []} onChange={skillIds => update({ skillIds })} disabled={intent.disabled} /><MachineChoice value={draft.machineId} onChange={machineId => update({ machineId })} consent={consent} onConsent={setConsent} /><button className="primary" disabled={intent.disabled || !consent || !draft.machineId || !draft.name.trim()}>Create Bot</button></form><IntentNotice intent={intent} reconcile={refresh} />{intent.uncertain && <section className="panel"><h2>Current Bots — check before creating another</h2>{snapshot.bots.map(bot => <button key={bot.id} onClick={() => navigate({ screen: 'bot.overview', id: bot.id })}>{bot.name} · {bot.id}</button>)}</section>}</main>;
+
+  const selectedMachine = rows.find(m => m.id === draft.machineId);
+  const botName = draft.name.trim() || 'This Bot';
+  const machineName = selectedMachine?.name || 'this computer';
+
+  return (
+    <main className="page stack">
+      <PageHeader title="Create a Bot" eyebrow="A focused job, on a machine you trust" />
+      <div className="grid">
+        {suggestions.map(role => (
+          <button className="card" key={role.name} onClick={() => update(role)}>
+            <strong>{role.name}</strong>
+            <p>{role.job}</p>
+          </button>
+        ))}
+        <button className="card" onClick={() => update({ name: '', job: '', instructions: '', templateId: undefined })}>
+          Custom role
+        </button>
+      </div>
+      <ErrorNotice error={templates.error} />
+      <Field label="Start from a reviewed template">
+        <select
+          value={draft.templateId ?? ''}
+          onChange={event => {
+            const template = templates.data?.find(item => item.id === event.target.value);
+            if (template) navigate({ screen: 'templates', id: template.id });
+            else update({ templateId: undefined });
+          }}
+        >
+          <option value="">Custom or suggested role</option>
+          {templates.data?.map(template => (
+            <option key={template.id} value={template.id}>
+              {template.content.name} · {template.provenance.publisher}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      <form
+        className="stack"
+        onSubmit={event => {
+          event.preventDefault();
+          void intent.run(async () => {
+            const bot = await client.call('POST /bots', {
+              body: {
+                ...draft,
+                access: draft.access || 'standard',
+                clientNonce: nonce(),
+              },
+            });
+            await refresh();
+            navigate({ screen: 'bot.overview', id: bot.id });
+          });
+        }}
+      >
+        <fieldset className="panel stack" disabled={intent.disabled}>
+          <legend>Identity</legend>
+          <Field label="Name">
+            <input
+              required
+              maxLength={120}
+              value={draft.name}
+              onChange={event => update({ name: event.target.value })}
+            />
+          </Field>
+          <Field label="Title">
+            <input
+              maxLength={140}
+              value={draft.title}
+              onChange={event => update({ title: event.target.value })}
+            />
+          </Field>
+        </fieldset>
+
+        <fieldset className="panel stack" disabled={intent.disabled}>
+          <legend>Job</legend>
+          <Field label="Job and purpose">
+            <textarea
+              maxLength={32768}
+              value={draft.job}
+              onChange={event => update({ job: event.target.value })}
+            />
+          </Field>
+        </fieldset>
+
+        <MachineChoice
+          value={draft.machineId}
+          onChange={machineId => update({ machineId })}
+          showConsent={false}
+        />
+
+        <AccessChoice
+          value={draft.access ?? 'standard'}
+          onChange={access => update({ access })}
+          disabled={intent.disabled}
+        />
+
+        <details className="panel stack customize-disclosure">
+          <summary>
+            <strong>Customize</strong>
+            <span className="muted small"> — avatar, voice, skills, language, instructions</span>
+          </summary>
+          <Field label="Instructions" hint="Standing boundaries and persistent instructions.">
+            <textarea
+              maxLength={32768}
+              value={draft.instructions}
+              onChange={event => update({ instructions: event.target.value })}
+            />
+          </Field>
+          <AvatarEditor
+            value={draft.avatar ?? defaultAvatar}
+            onChange={avatar => update({ avatar })}
+            disabled={intent.disabled}
+          />
+          <VoiceFields
+            value={draft.voice ?? defaultVoice}
+            onChange={voice => update({ voice })}
+          />
+          <Field label="Response language">
+            <input
+              placeholder="Automatic"
+              value={draft.language ?? ''}
+              onChange={event => update({ language: event.target.value || null })}
+            />
+          </Field>
+          <ErrorNotice error={skills.error} />
+          <Selection
+            title="Installed skills"
+            items={skills.data ?? []}
+            selected={draft.skillIds ?? []}
+            onChange={skillIds => update({ skillIds })}
+            disabled={intent.disabled}
+          />
+        </details>
+
+        <p className="consent-notice">
+          {botName} works on {machineName} as you, with your files, tools and logins. It asks before running commands.
+        </p>
+        <button
+          className="primary"
+          disabled={intent.disabled || !draft.machineId || !draft.name.trim()}
+        >
+          Create Bot
+        </button>
+      </form>
+
+      <IntentNotice intent={intent} reconcile={refresh} />
+      {intent.uncertain && (
+        <section className="panel">
+          <h2>Current Bots — check before creating another</h2>
+          {snapshot.bots.map(bot => (
+            <button key={bot.id} onClick={() => navigate({ screen: 'bot.overview', id: bot.id })}>
+              {bot.name} · {bot.id}
+            </button>
+          ))}
+        </section>
+      )}
+    </main>
+  );
 }
 export function IdentityEditor(props: { bot: Bot; reload: () => Promise<void>; editable: boolean }) {
   return <div className="stack"><AgentControls key={props.bot.id} bot={props.bot} /><DisplayIdentityEditor {...props} /></div>;
