@@ -310,6 +310,7 @@ defmodule Lemon.MixProject do
     File.cp!(cpython, Path.join(notices, "CPYTHON-LICENSE.txt"))
     File.cp!(builder, Path.join(notices, "PYTHON-BUILD-STANDALONE-LICENSE.txt"))
   end
+
   defp symlinks(dir) do
     find = System.find_executable("find") || Mix.raise("find is required to bundle python")
 

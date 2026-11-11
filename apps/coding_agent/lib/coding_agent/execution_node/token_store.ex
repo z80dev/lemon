@@ -140,7 +140,9 @@ defmodule CodingAgent.ExecutionNode.TokenStore do
     matches = Enum.filter(alias_records, &alias_matches?(&1, alias_name, controller))
 
     case matches do
-      [record] -> {:ok, record}
+      [record] ->
+        {:ok, record}
+
       [] ->
         case load_legacy_and_migrate(alias_name, opts) do
           {:error, :not_found} when alias_records != [] ->
@@ -149,7 +151,9 @@ defmodule CodingAgent.ExecutionNode.TokenStore do
           result ->
             result
         end
-      _ -> {:error, :ambiguous_node_alias}
+
+      _ ->
+        {:error, :ambiguous_node_alias}
     end
   end
 

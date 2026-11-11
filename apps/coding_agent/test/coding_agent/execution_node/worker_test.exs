@@ -841,7 +841,9 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
                    1_000
 
     assert Process.alive?(worker)
-    assert Worker.link_state(worker) == {:parked, :needs_reauthorization, "node_identity_mismatch"}
+
+    assert Worker.link_state(worker) ==
+             {:parked, :needs_reauthorization, "node_identity_mismatch"}
   end
 
   @tag :tmp_dir
@@ -2056,6 +2058,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
       |> Map.put("executionContext", encoded_context)
     end
   end
+
   @tag :tmp_dir
   test "expired token in node mode parks worker, cancels invocations, writes status, and leaves process running",
        %{tmp_dir: tmp_dir} do
@@ -2166,6 +2169,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
 
     assert_receive {:execution_node_worker, ^worker,
                     {:status, :needs_reauthorization, "session_expired"}}
+
     assert Worker.link_state(worker) == {:parked, :needs_reauthorization, "session_expired"}
 
     assert :ok =
@@ -2280,8 +2284,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
        }}
     })
 
-    assert_receive {:execution_node_worker, ^worker,
-                    {:status, :conflict, "node_name_conflict"}}
+    assert_receive {:execution_node_worker, ^worker, {:status, :conflict, "node_name_conflict"}}
 
     assert_receive {:status_written, "newphy",
                     %{"state" => "conflict", "reason" => "node_name_conflict"}}
@@ -2318,8 +2321,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
       {:authentication_error, %{"code" => "CONFLICT", "message" => "Name conflict"}}
     })
 
-    assert_receive {:execution_node_worker, ^worker,
-                    {:status, :conflict, "node_name_conflict"}}
+    assert_receive {:execution_node_worker, ^worker, {:status, :conflict, "node_name_conflict"}}
 
     assert Worker.link_state(worker) == {:parked, :conflict, "node_name_conflict"}
   end
@@ -2423,6 +2425,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
 
     {:ok, path} = TokenStore.path("newphy", root: token_root)
     File.mkdir_p!(token_root)
+
     File.write!(
       path,
       Jason.encode!(%{
@@ -2471,7 +2474,9 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
                    1_000
 
     assert Process.alive?(worker)
-    assert Worker.link_state(worker) == {:parked, :needs_reauthorization, "node_identity_mismatch"}
+
+    assert Worker.link_state(worker) ==
+             {:parked, :needs_reauthorization, "node_identity_mismatch"}
   end
 
   @tag :tmp_dir
@@ -2496,7 +2501,9 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   end
 
   @tag :tmp_dir
-  test "transient authentication_error triggers reconnecting and does not park", %{tmp_dir: tmp_dir} do
+  test "transient authentication_error triggers reconnecting and does not park", %{
+    tmp_dir: tmp_dir
+  } do
     test_pid = self()
 
     status_writer = fn name, map ->

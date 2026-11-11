@@ -15,13 +15,17 @@ defmodule CodingAgent.ExecutionNode.ConnectFailureTest do
     end
 
     assert ConnectFailure.classify(%{"code" => "CONFLICT"}) == {:conflict, "conflict"}
+
     assert ConnectFailure.classify(%{
              "code" => "CONFLICT",
              "details" => %{"reason" => "node_name_conflict"}
            }) ==
              {:conflict, "node_name_conflict"}
 
-    assert ConnectFailure.classify(%{"code" => "UNAUTHORIZED", "details" => %{"reason" => "secret"}}) ==
+    assert ConnectFailure.classify(%{
+             "code" => "UNAUTHORIZED",
+             "details" => %{"reason" => "secret"}
+           }) ==
              {:needs_reauthorization, "credential_rejected"}
   end
 

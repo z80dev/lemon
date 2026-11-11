@@ -330,7 +330,10 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTccProbeTest do
 
     write_probe(dir, "printf '%s\\n' '#{Jason.encode!(status)}'")
     assert HostProbe.tcc_status() == {:ok, status}
-    assert {:ok, snapshot} = Capabilities.get(platform: {:unix, :darwin}, capability_probe: HelperProbe)
+
+    assert {:ok, snapshot} =
+             Capabilities.get(platform: {:unix, :darwin}, capability_probe: HelperProbe)
+
     items = Map.new(snapshot["items"], &{&1["id"], &1})
 
     for id <- ~w(accessibility event_synthesizing full_disk_access) do
@@ -382,7 +385,10 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTccProbeTest do
 
   test "missing helper leaves grants unknown without prompting" do
     assert HostProbe.tcc_status() == {:error, :probe_unavailable}
-    assert {:ok, snapshot} = Capabilities.get(platform: {:unix, :darwin}, capability_probe: HelperProbe)
+
+    assert {:ok, snapshot} =
+             Capabilities.get(platform: {:unix, :darwin}, capability_probe: HelperProbe)
+
     items = Map.new(snapshot["items"], &{&1["id"], &1})
 
     for id <- ~w(accessibility screen_recording event_synthesizing full_disk_access) do
@@ -392,7 +398,9 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTccProbeTest do
     end
 
     assert items["accessibility"]["reason"] == "macos_grant_probe_unavailable"
-    assert items["full_disk_access"]["reason"] == "macos_has_no_nonprompting_full_disk_grant_query"
+
+    assert items["full_disk_access"]["reason"] ==
+             "macos_has_no_nonprompting_full_disk_grant_query"
   end
 
   test "helper must be an absolute executable file", %{tmp_dir: dir} do

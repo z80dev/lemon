@@ -118,6 +118,7 @@ defmodule CodingAgent.ExecutionNode.SocketTest do
     assert failed.connect_failures == 1
     assert {:ok, connecting} = Socket.handle_connect(:ignored, failed)
     assert connecting.connect_failures == 1
+
     error =
       Jason.encode!(%{
         type: "res",
@@ -125,6 +126,7 @@ defmodule CodingAgent.ExecutionNode.SocketTest do
         ok: false,
         error: %{code: "INTERNAL_ERROR"}
       })
+
     assert {:close, {1013, _}, failed_again} = Socket.handle_frame({:text, error}, connecting)
     assert failed_again.connect_failures == 2
     assert {:ok, ready} = Socket.handle_frame({:text, ~s({"type":"hello-ok"})}, failed_again)
@@ -135,7 +137,10 @@ defmodule CodingAgent.ExecutionNode.SocketTest do
     state = %Socket{owner: self(), connect_id: "connect"}
     error = ~s({"type":"res","id":"connect","ok":false,"error":{"code":"UNAUTHORIZED"}})
     assert {:close, {1008, _}, failed} = Socket.handle_frame({:text, error}, state)
-    assert_receive {:execution_node_socket, _, {:authentication_error, %{"code" => "UNAUTHORIZED"}}}
+
+    assert_receive {:execution_node_socket, _,
+                    {:authentication_error, %{"code" => "UNAUTHORIZED"}}}
+
     assert failed.stopping
     assert {:ok, _} = Socket.handle_disconnect(%{}, failed)
     refute_receive {:execution_node_socket, _, {:connect_retry, _}}
