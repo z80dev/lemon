@@ -33,34 +33,61 @@ a reviewed diff.
 <tr><td><b>Built not to fall over</b></td><td>Every run, conversation, and tool call is its own supervised BEAM process. A crashing tool becomes an error the model can read, a provider outage trips that provider's circuit breaker, and a retry never sends the same message twice.</td></tr>
 </table>
 
-## Install
+## Quick start
 
-macOS (Apple Silicon) or Linux:
+Prebuilt releases support Apple Silicon macOS and Linux (`x86_64` or ARM64,
+glibc 2.39+) and include their own Erlang/Elixir runtime.
+
+### Lemon coding agent (TUI)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --skip-setup
-export PATH="$HOME/.lemon/bin:$PATH"
-lemon setup
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
 ```
 
-Prebuilt releases bundle the runtime and TUI; you don't need Elixir. In setup, pick
-**OpenAI Codex → Sign in with ChatGPT**, **Anthropic → Sign in with Claude
-Pro/Max**, explicitly import an existing Codex CLI login, or enter any provider API
-key. Coming from Hermes? Run `lemon migrate hermes --dry-run` and see the
-[migration guide](docs/user-guide/migrate-from-hermes.md).
+**What happens:** the installer verifies and installs the runtime and TUI, adds
+Lemon to PATH for new shells, and opens setup so you can connect a model and
+choose **Open Lemon now**.
 
-## Your first session
+To start later, open a new terminal in a repository:
 
-Open a terminal in a repository and run `lemon`. It starts the daemon or reuses a
-running one, then opens the TUI. Try:
+```bash
+cd path/to/your/repo
+lemon
+```
+
+`lemon` starts or reuses the daemon and opens the TUI. Try:
 
 > Read the repository instructions. Find how to run the tests. Add the test
 > command to README if missing, run the focused tests, and show the diff.
 
 **Ctrl+O** picks a model, **Ctrl+X** reopens a past session, and **Esc** stops
-the turn. Pressing **Ctrl+C** twice quits the TUI but leaves the daemon and its
-work running. The [coding quickstart](docs/getting-started/quickstart.md) covers
-the full first-run workflow.
+the turn. Press **Ctrl+C** twice to quit the TUI without stopping the daemon.
+Follow the [coding quickstart](docs/getting-started/quickstart.md) for provider
+choices and the complete first-run workflow. Coming from Hermes? Preview an
+import with `lemon migrate hermes --dry-run`, then read the
+[migration guide](docs/user-guide/migrate-from-hermes.md).
+
+### Lemon Bot (browser)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --profile bot
+```
+
+**What happens:** the installer adds the runtime and Bot backend, then
+`lemon-bot` connects a model, installs user services, creates the local owner,
+enrolls this computer as a supervised worker, and opens the browser signed in.
+
+In the browser, choose **Create a Bot**, give it a name, keep the preselected
+machine, and choose **Standard** for Terminal and Files with command approvals.
+Pick a starter task, or ask it for this computer's hostname and OS version and
+approve the displayed command once. Follow
+[Lemon Bot in 3 minutes](docs/getting-started/lemon-bot.md) for SSH/headless
+setup, access choices, and additional machines.
+
+**Mac app status:** build the app
+[from source](products/lemon_bot/apple/README.md#generate-build-and-launch)
+today. A signed and notarized DMG is pending signing credentials and is not yet
+published.
 
 ## What you can do with it
 
@@ -168,20 +195,31 @@ rollback. Read the [safety model](docs/security/safety.md).
 **It's yours.** MIT licensed and self-hosted. Lemon is local-first but not
 local-only: your configured providers receive the data their requests need.
 
+## Network security
+
+Lemon binds its listeners to `127.0.0.1` by default: the controller on `4040`,
+the node-only gateway on `4044`, the web UI on `4080`, the optional simulation
+UI on `4090`, and Lemon Bot on `4100`. To connect from another machine, keep
+them on loopback and use an SSH forward, or put the required authenticated
+endpoint behind TLS or a verified encrypted overlay. Remote workers need the
+node-only `4044` gateway, not the operator listener. Follow the
+[listener security guidance](docs/security/threat-model.md#listener-exposure)
+before enabling remote access.
+
 ## Command cheat sheet
 
 ```bash
 lemon                 # TUI in the current directory (starts or reuses the daemon)
 lemon -p "…"          # one-shot run; add --output json|stream-json
 lemon web             # browser workspace
-lemon setup           # providers and defaults (safe to re-run)
-lemon model           # switch provider or model
+lemon setup           # providers, ports, and defaults (safe to re-run)
+lemon setup model     # connect a model or report its readiness
 lemon doctor          # diagnose config, credentials, and runtime health
 lemon sessions        # list and manage stored sessions
-lemon omp start       # delegate a task to omp
+lemon omp start "…"   # delegate a task to omp
 lemon mcp list        # inspect MCP servers
-lemon backup          # verified backups
-lemon status | stop | restart
+lemon backup create   # create a verified backup
+lemon status          # runtime status; also: lemon stop, lemon restart
 ```
 
 Full reference: [CLI guide](docs/user-guide/cli.md), [TUI](clients/tui/README.md),
@@ -211,13 +249,17 @@ See [LemonSim](apps/lemon_sim/README.md) and the
 
 ## Develop from source
 
-Requires Erlang/OTP 29.1.2+, Elixir 1.20.5+, and Bun 1.3.14+ (TUI). Node.js 24+ is
-used for docs and the browser client.
+Source development requires Erlang/OTP 29.1.2+, Elixir 1.20.5+, and a C
+toolchain. JavaScript toolchains are pinned per subtree: Bun 1.3.14+ for
+`clients/tui`, Bun 1.4.2 for `products/lemon_bot`, and Node.js 24 LTS+ for the
+browser client and documentation.
 
 ```bash
 git clone https://github.com/z80dev/lemon.git && cd lemon
-mix local.hex --force && mix deps.get && mix compile
-./bin/lemon setup && ./bin/lemon
+mix deps.get
+mix compile
+./bin/lemon setup
+./bin/lemon
 ```
 
 Run `scripts/test fast` and `scripts/test quality` from the root. See
