@@ -31,6 +31,7 @@ defmodule LemonCli.ServiceCommand do
     invite_code_stdin: :boolean,
     exec_wrapper: :string,
     bot: :string,
+    restart_backend: :boolean,
     ssh: :string,
     node_port: :integer,
     gateway_port: :integer,

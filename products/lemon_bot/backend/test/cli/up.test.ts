@@ -5,10 +5,12 @@ import { joinTarget, nodeName, runUpCli, type UpDependencies } from '../../src/c
 import type { ProcessInput } from '../../src/cli/lifecycle';
 
 const release = (name = 'studio') => `curl 'https://github.com/z80dev/lemon/releases/download/v2026.11.1/join-node.sh' | bash -s -- '--name' '${name}' '--controller' 'ws://127.0.0.1:4040/ws' '--version' '2026.11.1' '--base-url' 'https://github.com/z80dev/lemon'`;
-function harness(options: { existing?: boolean; online?: boolean; remote?: boolean; missing?: boolean; mismatch?: boolean; uncertain?: 'joined' | 'pending'; failure?: string; conflicts?: number; sessionPersistence?: boolean; setupFailure?: boolean; currentWrapper?: string | null; repairFailure?: boolean } = {}) {
+function harness(options: { existing?: boolean; online?: boolean; remote?: boolean; missing?: boolean; mismatch?: boolean; uncertain?: 'joined' | 'pending'; failure?: string; conflicts?: number; sessionPersistence?: boolean; setupFailure?: boolean; currentWrapper?: string | null; repairFailure?: boolean; selection?: Partial<Pick<BackendConfiguration, 'controlUrl' | 'operatorToken' | 'operatorTokenFile'>>; controllerState?: 'reconnecting' | 'rejected'; controllerUrl?: string; connectionDelay?: number } = {}) {
   const stdout: string[] = [], stderr: string[] = [], calls: { executable: string; args: string[]; input?: ProcessInput }[] = [], requests: { path: string; body: Record<string, unknown> | undefined }[] = [];
   let exists = options.existing ?? false, online = options.online ?? false, enrollments = 0, issued = 0, conflicts = options.conflicts ?? 0;
   let execWrapper = options.currentWrapper;
+  const config = { controlUrl: options.remote ? 'wss://remote.example/ws' : 'ws://127.0.0.1:4040/ws', operatorToken: 'OLD_TOKEN_PRIVATE', runtimeLauncher: options.remote ? undefined : '/tmp/lemon', dataDir: '/tmp/lifecycle-consumers-scratch/data', port: 45123 } as BackendConfiguration;
+  let instanceReads = 0;
   const machine = { id: 'machine_studio', nodeName: 'studio', name: 'Studio', status: online ? 'online' : 'offline' };
   const invite = () => ({ id: `invite_${++issued}`, machineId: machine.id, inviteCode: `${issued}`.repeat(43), joinCommand: release(machine.nodeName), status: 'pending' });
   const status = (roles: string[], state = 'ready', detail: string | null = null) => ({ schema: 1, manager: 'launchd', persistence: options.sessionPersistence ? 'session' : 'login', linger: null,
@@ -17,7 +19,8 @@ function harness(options: { existing?: boolean; online?: boolean; remote?: boole
     environment: { HOME: '/tmp/lifecycle-consumers-scratch', LEMON_BOT_CONTROL_URL: options.remote ? 'wss://remote.example/ws' : 'ws://127.0.0.1:4040/ws' },
     botPath: '/tmp/lemon-bot-source',
     terminal: { interactive: false, write(value) { stderr.push(value); }, sensitive() { throw new Error('Unexpected sensitive terminal output'); }, read: async () => '' },
-    load: async () => ({ config: { controlUrl: options.remote ? 'wss://remote.example/ws' : 'ws://127.0.0.1:4040/ws', runtimeLauncher: options.remote ? undefined : '/tmp/lemon', dataDir: '/tmp/lifecycle-consumers-scratch/data', port: 45123 } as BackendConfiguration, key: new Uint8Array(32), controllerSource: 'environment' }),
+    load: async () => ({ config: { ...config }, key: new Uint8Array(32), controllerSource: 'environment' }),
+    prepareController: async input => { if (input.choose) { Object.assign(config, options.selection); Object.assign(input.config, config); } },
     executable: async path => !path.endsWith('/lemon-bot') && !options.missing,
     readKey: () => 'LOCAL_KEY_PRIVATE', hostIdentity: async () => ({ nodeName: 'studio', displayName: 'Studio', ownerName: 'Ada' }),
     stdout(value) { stdout.push(value); }, stderr(value) { stderr.push(value); }, sleep: async () => {},
@@ -51,6 +54,7 @@ function harness(options: { existing?: boolean; online?: boolean; remote?: boole
         expect(body).toEqual({ displayName: 'Ada' }); return Response.json({ token: 'SESSION_PRIVATE' });
       }
       expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer SESSION_PRIVATE');
+      if (path === '/instance') return Response.json({ controller: { url: options.controllerUrl ?? config.controlUrl, state: options.controllerState ?? (instanceReads++ < (options.connectionDelay ?? 0) ? 'connecting' : 'connected') } });
       if (body) expect(body.clientNonce).toMatch(/^[A-Za-z0-9_-]{16,128}$/);
       if (path === '/auth/logout') return Response.json({ ok: true });
       if (path.endsWith('/reconnect')) return Response.json(invite());
@@ -98,8 +102,51 @@ test('remote controller installs backend only and skips local worker', async () 
   const h = harness({ remote: true });
   expect(await runUpCli(['--json'], h.dependencies)).toBe(0);
   expect(h.calls.find(call => call.args[1] === 'install')?.args).toEqual(['service', 'install', 'backend', '--bot', '/tmp/lemon-bot-source', '--wait', '120', '--json']);
-  expect(h.requests.map(request => request.path)).toEqual(['/auth/local', '/auth/logout']);
+  expect(h.requests.map(request => request.path)).toEqual(['/auth/local', '/instance', '/auth/logout']);
   expect(h.stdout.join('')).toContain('remote_controller');
+});
+
+for (const selection of [
+  { controlUrl: 'wss://new-controller.example/ws' },
+  { operatorToken: 'NEW_TOKEN_PRIVATE' },
+  { operatorTokenFile: '/tmp/rotated-controller.token' },
+]) test(`changed controller ${Object.keys(selection)[0]} reloads the backend once; identical choice is idempotent`, async () => {
+  const h = harness({ remote: true, selection, connectionDelay: 2 });
+  h.dependencies.terminal.interactive = true;
+  expect(await runUpCli(['--json', '--no-open'], h.dependencies, { chooseLemon: true })).toBe(0);
+  expect(h.calls.filter(call => call.args.includes('--restart-backend'))).toHaveLength(1);
+  expect(h.requests.filter(request => request.path === '/instance')).toHaveLength(3);
+  expect(await runUpCli(['--json', '--no-open'], h.dependencies, { chooseLemon: true })).toBe(0);
+  expect(h.calls.filter(call => call.args.includes('--restart-backend'))).toHaveLength(1);
+  expect(h.stdout.join('') + h.stderr.join('')).not.toMatch(/OLD_TOKEN_PRIVATE|NEW_TOKEN_PRIVATE/);
+});
+
+test('unchanged controller selection never requests a backend restart', async () => {
+  const h = harness({ remote: true });
+  h.dependencies.terminal.interactive = true;
+  expect(await runUpCli(['--json', '--no-open'], h.dependencies, { chooseLemon: true })).toBe(0);
+  expect(h.calls.some(call => call.args.includes('--restart-backend'))).toBe(false);
+});
+
+for (const readiness of [
+  { controllerState: 'reconnecting' as const },
+  { controllerState: 'rejected' as const },
+  { controllerUrl: 'wss://remote.example/ws' },
+]) test(`new controller readiness fails closed for ${Object.keys(readiness)[0]}`, async () => {
+  const h = harness({ remote: true, selection: { controlUrl: 'wss://new-controller.example/ws' }, ...readiness });
+  h.dependencies.terminal.interactive = true;
+  expect(await runUpCli(['--json', '--no-open'], h.dependencies, { chooseLemon: true })).toBe(1);
+  expect(h.result().status).toBe('service_failed');
+  expect(h.calls.filter(call => call.args.includes('--restart-backend'))).toHaveLength(1);
+  expect(h.requests.at(-1)?.path).toBe('/auth/logout');
+  expect(h.requests.some(request => request.path === '/machines')).toBe(false);
+});
+
+test('resolved nondefault local controller port reaches lifecycle installation', async () => {
+  const h = harness({ controllerUrl: 'ws://127.0.0.1:4144/ws' });
+  h.dependencies.load = async () => ({ config: { controlUrl: 'ws://127.0.0.1:4144/ws', operatorToken: '', runtimeLauncher: '/tmp/lemon', dataDir: '/tmp/lifecycle-consumers-scratch/data', port: 45123 } as BackendConfiguration, key: new Uint8Array(32), controllerSource: 'default' });
+  expect(await runUpCli(['--json', '--no-worker'], h.dependencies)).toBe(0);
+  expect(h.calls.find(call => call.args[1] === 'install')?.input?.environment?.LEMON_CONTROL_PLANE_PORT).toBe('4144');
 });
 
 for (const currentWrapper of [undefined, null, '/Applications/Old Worker.app/Contents/MacOS/Worker']) test(`online worker migrates ${currentWrapper ?? 'missing'} wrapper without an invite`, async () => {
@@ -175,7 +222,7 @@ test('unit failure refuses owner sign-in; no-worker skips machines', async () =>
   const broken = harness({ failure: 'service' });
   expect(await runUpCli(['--json'], broken.dependencies)).toBe(1); expect(broken.requests).toHaveLength(0);
   const h = harness(); expect(await runUpCli(['--json', '--no-worker'], h.dependencies)).toBe(0);
-  expect(h.requests.map(request => request.path)).toEqual(['/auth/local', '/auth/logout']);
+  expect(h.requests.map(request => request.path)).toEqual(['/auth/local', '/instance', '/auth/logout']);
 });
 
 test('interactive setup precedes units, linger prompts, open inherits terminal after logout', async () => {

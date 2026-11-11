@@ -92,6 +92,57 @@ defmodule LemonCli.ServiceCommandTest do
     assert length(String.split(String.trim(output), "\n")) == 1
   end
 
+  test "install backend accepts the choice reload flag and restarts once", %{opts: opts} do
+    bot = Path.join(opts[:home], ".local/bin/lemon-bot")
+    File.mkdir_p!(Path.dirname(bot))
+    File.write!(bot, "#!/bin/sh\nexit 0\n")
+    File.chmod!(bot, 0o700)
+    record = Path.join(opts[:home], ".lemon/lemon_bot/run/lemon-bot-4100.json")
+    File.mkdir_p!(Path.dirname(record))
+
+    File.write!(
+      record,
+      Jason.encode!(%{
+        pid: 123,
+        startedAt: "Tue Nov 10 12:00:00 2026",
+        instanceId: "ours"
+      })
+    )
+
+    File.chmod!(record, 0o600)
+    caller = self()
+    runner = opts[:command_runner]
+
+    opts =
+      Keyword.merge(opts,
+        wait: 0,
+        http_get: fn _ -> {:ok, %{"product" => "lemon_bot", "instanceId" => "ours"}} end,
+        command_runner: fn
+          "launchctl", ["kickstart", "-k", "gui/501/org.lemon.bot"], _ ->
+            send(caller, :backend_restarted)
+            {"", 0}
+
+          command, args, options ->
+            runner.(command, args, options)
+        end
+      )
+
+    {:ok, spec} = Role.build("backend", "launchd", opts)
+    :ok = Unit.write(spec, "launchd")
+
+    output =
+      capture_io(fn ->
+        assert ServiceCommand.run(
+                 ["install", "backend", "--restart-backend", "--json"],
+                 opts
+               ) == 0
+      end)
+
+    assert [%{"action" => "restarted", "state" => "ready"}] = Jason.decode!(output)["units"]
+    assert_received :backend_restarted
+    refute_received :backend_restarted
+  end
+
   test "not-ready and foreign units exit 1", %{opts: opts} do
     {:ok, spec} = Role.build("worker", "launchd", opts)
     :ok = Unit.write(spec, "launchd")

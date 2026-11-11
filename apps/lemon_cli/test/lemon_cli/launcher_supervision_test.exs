@@ -32,6 +32,15 @@ defmodule LemonCli.LauncherSupervisionTest do
     File.mkdir_p!(Path.join(source, "scripts"))
     File.cp!(Path.join(@root, "rel/overlays/bin/lemon"), Path.join(release, "bin/lemon"))
 
+    for destination <- [Path.join(source, "rel/overlays/libexec"), Path.join(release, "libexec")] do
+      File.mkdir_p!(destination)
+
+      File.cp!(
+        Path.join(@root, "rel/overlays/libexec/lemon-uninstall"),
+        Path.join(destination, "lemon-uninstall")
+      )
+    end
+
     health = Path.join(tmp_dir, "health")
     calls = Path.join(tmp_dir, "calls")
     File.write!(calls, "")
@@ -136,6 +145,18 @@ defmodule LemonCli.LauncherSupervisionTest do
       assert output =~ "supervised by launchd (#{label})"
       assert output =~ "log: ~/.lemon/logs/controller.log"
       refute output =~ "not supervised"
+    end
+  end
+
+  test "XML-escaped launcher paths are recognized without double decoding", ctx do
+    home = Path.join(ctx.tmp_dir, "home &amp; <studio> \"quoted\" 'name'")
+    File.mkdir_p!(home)
+    label = launchd_plist(home, ctx.port, "#{home}/.lemon/bin/lemon")
+    env = ctx.env |> put("HOME", home) |> put("TEST_LAUNCHD_LOADED", "1")
+
+    for root <- [ctx.source, ctx.release] do
+      assert {output, 1} = launch(root, ["status"], env)
+      assert output =~ "supervised by launchd (#{label})"
     end
   end
 
@@ -330,28 +351,56 @@ defmodule LemonCli.LauncherSupervisionTest do
   # restart hand-off
   # ──────────────────────────────────────────────────────────────────────────
 
-  test "restart of a supervised controller uses the manager, never stop+start", ctx do
+  test "asynchronous manager restart waits for replacement identity and selected root", ctx do
     label = launchd_plist(ctx.home, ctx.port, "#{ctx.home}/.lemon/bin/lemon")
-    uid = uid()
+    unit = systemd_unit(ctx.home, ctx.port, "# Managed by lemon service (role=controller)")
 
-    env =
-      ctx.env
-      |> put("TEST_LAUNCHD_LOADED", "1")
-      |> put("TEST_HEALTH_BODY", ~s({"ok":true}))
-      |> put("TEST_RPC_PID", System.pid())
+    for root <- [ctx.source, ctx.release], manager <- ["launchd", "systemd"] do
+      env = delayed_restart(ctx, root)
 
-    # A recorded, live runtime: this process stands in for the daemon.
-    record_runtime(ctx, ctx.release)
+      env =
+        env
+        |> put("TEST_LAUNCHD_LOADED", if(manager == "launchd", do: "1", else: "0"))
+        |> put("TEST_SYSTEMD_ENABLED", if(manager == "systemd", do: "1", else: "0"))
 
-    assert {output, 0} = launch(ctx.release, ["restart"], env)
-    assert output =~ "restarted selected release at"
+      assert {snapshot, 0} = launch(root, ["__update-daemon", "snapshot"], env)
 
-    calls = File.read!(ctx.calls)
-    assert calls =~ "launchctl kickstart -k gui/#{uid}/#{label}"
-    refute calls =~ "release daemon"
+      assert {output, 0} =
+               launch(
+                 root,
+                 [
+                   "__update-daemon",
+                   "restart",
+                   String.trim(snapshot),
+                   Path.join(ctx.tmp_dir, "previous")
+                 ],
+                 env
+               )
 
-    # The job never signalled the recorded daemon from inside itself.
-    assert {_, 0} = System.cmd("/bin/kill", ["-0", System.pid()], stderr_to_stdout: true)
+      assert output =~ "restarted selected"
+      assert File.read!(Path.join(ctx.tmp_dir, "wait-count")) == "5"
+      calls = File.read!(ctx.calls)
+
+      assert calls =~
+               if(manager == "launchd",
+                 do: "launchctl kickstart -k gui/#{uid()}/#{label}",
+                 else: "systemctl --user --no-block restart #{unit}"
+               )
+
+      refute calls =~ "release daemon"
+    end
+  end
+
+  test "old healthy process never satisfies same-root supervised restart", ctx do
+    launchd_plist(ctx.home, ctx.port, "#{ctx.home}/.lemon/bin/lemon")
+
+    for root <- [ctx.source, ctx.release] do
+      env = delayed_restart(ctx, root) |> put("TEST_LAUNCHD_LOADED", "1")
+      File.write!(Path.join(ctx.home, ".lemon/run/lemon-#{ctx.port}.root"), root <> "\n")
+      executable(Path.join(ctx.tools, "sleep"), "exit 0")
+      assert {output, 1} = launch(root, ["restart"], env)
+      assert output =~ "replacement runtime did not become healthy"
+    end
   end
 
   test "restart without a unit keeps the unsupervised stop and start path", ctx do
@@ -451,7 +500,7 @@ defmodule LemonCli.LauncherSupervisionTest do
     File.mkdir_p!(Path.dirname(bot))
     File.write!(bot, "#!/bin/sh\n")
 
-    env = put(ctx.env, "TEST_MANIFEST_BODY", "#{versions}\n#{bot}\n")
+    env = put(ctx.env, "TEST_MANIFEST_BODY", manifest(ctx.home, [versions, bot]))
 
     assert {_output, 0} = launch(ctx.release, ["uninstall", "--confirm", "abc"], env)
     refute File.exists?(versions)
@@ -461,7 +510,7 @@ defmodule LemonCli.LauncherSupervisionTest do
   test "source uninstall deletes manifest paths after the CLI exits", ctx do
     versions = Path.join([ctx.home, ".lemon", "versions"])
     File.mkdir_p!(versions)
-    env = put(ctx.env, "TEST_MANIFEST_BODY", "#{versions}\n")
+    env = put(ctx.env, "TEST_MANIFEST_BODY", manifest(ctx.home, [versions]))
 
     assert {_output, 0} = launch(ctx.source, ["uninstall", "--confirm", "abc"], env)
     refute File.exists?(versions)
@@ -475,12 +524,12 @@ defmodule LemonCli.LauncherSupervisionTest do
     File.mkdir_p!(store)
     File.mkdir_p!(ssh)
 
-    env = put(ctx.env, "TEST_MANIFEST_BODY", "#{outside}\n/\n#{ssh}\n#{store}\n#{ctx.home}\n")
+    env = put(ctx.env, "TEST_MANIFEST_BODY", manifest(ctx.home, [outside, ssh, store, ctx.home]))
 
     for root <- [ctx.source, ctx.release] do
       # An unrecognized path is refused, and the refusal is an error exit.
       assert {output, 1} = launch(root, ["uninstall", "--confirm", "abc"], env)
-      assert output =~ "refusing to remove unrecognized path"
+      assert output =~ "unsafe, changed, or unrecognized path"
       assert File.exists?(outside)
       assert File.exists?(store)
       assert File.exists?(ssh)
@@ -491,7 +540,7 @@ defmodule LemonCli.LauncherSupervisionTest do
   test "the launcher removes the data directory only when the CLI asks for it", ctx do
     data = Path.join(ctx.home, ".lemon")
     File.mkdir_p!(Path.join(data, "store"))
-    env = put(ctx.env, "TEST_MANIFEST_BODY", "#{data}\n")
+    env = put(ctx.env, "TEST_MANIFEST_BODY", manifest(ctx.home, [data]))
 
     assert {_output, 0} = launch(ctx.release, ["uninstall", "--purge", "--confirm", "abc"], env)
     refute File.exists?(data)
@@ -503,7 +552,7 @@ defmodule LemonCli.LauncherSupervisionTest do
 
     env =
       ctx.env
-      |> put("TEST_MANIFEST_BODY", "#{versions}\n")
+      |> put("TEST_MANIFEST_BODY", manifest(ctx.home, [versions]))
       |> put("TEST_CLI_STATUS", "1")
 
     for root <- [ctx.source, ctx.release] do
@@ -537,14 +586,148 @@ defmodule LemonCli.LauncherSupervisionTest do
     refute File.exists?(Path.dirname(manifest))
   end
 
+  test "deferred deletion refuses swapped ancestor and leaf identities", ctx do
+    for root <- [ctx.source, ctx.release], swap <- [:ancestor, :leaf] do
+      base = Path.join(ctx.home, ".lemon/lemon_bot")
+      target = Path.join(base, "versions")
+      File.mkdir_p!(target)
+      payload = manifest(ctx.home, [target])
+      moved = if swap == :ancestor, do: base, else: target
+      File.rename!(moved, moved <> ".old")
+      File.mkdir_p!(moved)
+      File.mkdir_p!(target)
+      marker = Path.join(target, "keep")
+      File.write!(marker, "not previewed")
+
+      assert {output, 1} =
+               launch(root, ["uninstall"], put(ctx.env, "TEST_MANIFEST_BODY", payload))
+
+      assert output =~ "unsafe, changed, or unrecognized path"
+      assert File.read!(marker) == "not previewed"
+      File.rm_rf!(base)
+      File.rm_rf!(base <> ".old")
+    end
+  end
+
+  test "deferred deletion never follows a replaced ancestor symlink", ctx do
+    outside = Path.join(ctx.tmp_dir, "outside")
+    File.mkdir_p!(Path.join(outside, "versions"))
+    marker = Path.join(outside, "versions/keep")
+    File.write!(marker, "external")
+
+    for root <- [ctx.source, ctx.release] do
+      base = Path.join(ctx.home, ".lemon/lemon_bot")
+      File.mkdir_p!(Path.join(base, "versions"))
+      payload = manifest(ctx.home, [Path.join(base, "versions")])
+      File.rename!(base, base <> ".old")
+      File.ln_s!(outside, base)
+      assert {_, 1} = launch(root, ["uninstall"], put(ctx.env, "TEST_MANIFEST_BODY", payload))
+      assert File.read!(marker) == "external"
+      File.rm!(base)
+      File.rename!(base <> ".old", base)
+    end
+  end
+
+  test "deferred deletion unlinks a leaf symlink without deleting its target", ctx do
+    outside = Path.join(ctx.tmp_dir, "external")
+    File.mkdir_p!(outside)
+
+    for root <- [ctx.source, ctx.release] do
+      link = Path.join(ctx.home, ".lemon/versions")
+      File.mkdir_p!(Path.dirname(link))
+      File.ln_s!(outside, link)
+      payload = manifest(ctx.home, [link])
+      assert {_, 0} = launch(root, ["uninstall"], put(ctx.env, "TEST_MANIFEST_BODY", payload))
+      assert File.dir?(outside)
+      assert {:error, :enoent} = File.lstat(link)
+    end
+  end
+
   # ──────────────────────────────────────────────────────────────────────────
   # Helpers
   # ──────────────────────────────────────────────────────────────────────────
+
+  defp manifest(home, paths) do
+    canonical = fn path ->
+      {parent, 0} = System.cmd("pwd", ["-P"], cd: Path.dirname(path))
+      Path.join(String.trim(parent), Path.basename(path))
+    end
+
+    {home, 0} = System.cmd("pwd", ["-P"], cd: home)
+
+    entries =
+      Enum.map(paths, fn path ->
+        path = canonical.(path)
+        Map.put(file_identity(path), :ancestors, ancestors(Path.dirname(path)))
+      end)
+
+    Jason.encode!(%{schema: 2, home: String.trim(home), paths: entries})
+  end
+
+  defp ancestors("/"), do: [file_identity("/")]
+  defp ancestors(path), do: ancestors(Path.dirname(path)) ++ [file_identity(path)]
+
+  defp file_identity(path) do
+    stat = File.lstat!(path)
+    %{path: path, type: Atom.to_string(stat.type), device: stat.major_device, inode: stat.inode}
+  end
+
+  defp delayed_restart(ctx, target) do
+    state = Path.join(ctx.home, ".lemon/run")
+    File.mkdir_p!(state)
+    previous = Path.join(ctx.tmp_dir, "previous")
+    File.mkdir_p!(Path.join(previous, "bin"))
+    File.write!(Path.join(state, "lemon-#{ctx.port}.pid"), "4242\nold\n")
+    File.write!(Path.join(state, "lemon-#{ctx.port}.root"), previous <> "\n")
+    File.write!(ctx.health, ~s({"ok":true}))
+    File.write!(ctx.calls, "")
+    count = Path.join(ctx.tmp_dir, "wait-count")
+    File.write!(count, "0")
+
+    executable(Path.join(ctx.tools, "ps"), """
+    case "$*" in
+      *stat=*) echo S ;;
+      *lstart=*) if [ "$2" = 4242 ]; then echo old; else echo new; fi ;;
+      *) exit 1 ;;
+    esac
+    """)
+
+    executable(Path.join(ctx.tools, "sleep"), """
+    n="$(cat "#{count}")"
+    n=$((n + 1))
+    printf %s "$n" > "#{count}"
+    if [ "$n" = 3 ]; then printf '4343\\nnew\\n' > "#{state}/lemon-#{ctx.port}.pid"; fi
+    if [ "$n" = 5 ]; then printf '%s\\n' "#{target}" > "#{state}/lemon-#{ctx.port}.root"; fi
+    """)
+
+    executable(Path.join(ctx.release, "bin/lemon_runtime_min"), """
+    printf 'release %s\\n' "$1" >> "$TEST_CALLS"
+    if [ "$1" = rpc ]; then
+      IFS= read -r pid < "#{state}/lemon-#{ctx.port}.pid"
+      printf '%s:%s\\n' "$pid" "$LEMON_CONTROL_PLANE_PORT"
+    fi
+    """)
+
+    File.cp!(
+      Path.join(ctx.release, "bin/lemon_runtime_min"),
+      Path.join(previous, "bin/lemon_runtime_min")
+    )
+
+    ctx.env
+  end
 
   defp launchd_plist(home, port, program) do
     label = if port == 4040, do: "org.lemon.controller", else: "org.lemon.controller.#{port}"
     dir = Path.join([home, "Library", "LaunchAgents"])
     File.mkdir_p!(dir)
+
+    program =
+      program
+      |> String.replace("&", "&amp;")
+      |> String.replace("<", "&lt;")
+      |> String.replace(">", "&gt;")
+      |> String.replace("\"", "&quot;")
+      |> String.replace("'", "&apos;")
 
     File.write!(Path.join(dir, label <> ".plist"), """
     <?xml version="1.0" encoding="UTF-8"?>

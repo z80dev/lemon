@@ -3,7 +3,7 @@ import { access, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { hostname, homedir, userInfo } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import type { AuthResult, Machine, MachineAttachResult, MachineInvite, Page } from '../../../contracts/protocol';
+import type { AuthResult, InstanceStatus, Machine, MachineAttachResult, MachineInvite, Page } from '../../../contracts/protocol';
 import { createPrivateCodec, isLoopback, loadConfiguration, readManagedToken } from '../core/config';
 import { productVersion } from '../core/version';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +24,7 @@ export interface HostIdentity { nodeName: string; displayName: string; ownerName
 export interface UpDependencies {
   spawn: Spawn; fetch: typeof fetch; terminal: ConnectTerminal;
   load: typeof loadConfiguration; executable(path: string): Promise<boolean>; readKey(path: string): string;
+  prepareController: typeof prepareController;
   hostIdentity(): Promise<HostIdentity>; stdout(value: string): void; stderr(value: string): void;
   sleep(ms: number): Promise<void>; environment: Record<string, string | undefined>;
   botPath: string;
@@ -74,7 +75,7 @@ async function hostIdentity(): Promise<HostIdentity> {
 
 const sourceBot = fileURLToPath(new URL('../../bin/lemon-bot-source', import.meta.url));
 const defaults: UpDependencies = {
-  spawn, fetch, terminal: terminal(process.stderr), load: loadConfiguration,
+  spawn, fetch, terminal: terminal(process.stderr), load: loadConfiguration, prepareController,
   executable: async path => { try { await access(path, constants.X_OK); return true; } catch { return false; } },
   readKey(path) { const result = readManagedToken(path); if (!('token' in result)) throw new Error('Local access unavailable.'); return result.token; },
   hostIdentity, stdout: value => { process.stdout.write(value); }, stderr: value => { process.stderr.write(value); },
@@ -162,12 +163,14 @@ export async function runUpCli(args: string[], dependencies: UpDependencies = de
       d.stderr(`Lemon and Lemon Bot versions differ; update both to ${productVersion}.\n`);
     } else emit('runtime', 'ok');
     emit('controller_choice', 'running');
+    const previousController = { url: config.controlUrl, token: config.operatorToken, tokenFile: config.operatorTokenFile };
     if (d.terminal.interactive) {
       // Choice prompts go to stderr, keeping NDJSON stdout machine-readable.
       const io = { ...d.terminal, write: (text: string) => d.stderr(`${text}\n`) };
-      await prepareController({ terminal: io, environment: d.environment, config, codec: createPrivateCodec(key), source: controllerSource, choose: options.chooseLemon === true, fetch: d.fetch });
+      await d.prepareController({ terminal: io, environment: d.environment, config, codec: createPrivateCodec(key), source: controllerSource, choose: options.chooseLemon === true, fetch: d.fetch });
     } else if (options.chooseLemon) { emit('controller_choice', 'failed', 'terminal_required'); return finish('needs_attention'); }
     emit('controller_choice', 'ok');
+    const controllerChanged = previousController.url !== config.controlUrl || previousController.token !== config.operatorToken || previousController.tokenFile !== config.operatorTokenFile;
     const local = isLoopback(new URL(config.controlUrl).hostname);
     if (local && d.terminal.interactive) {
       emit('setup', 'running');
@@ -179,10 +182,11 @@ export async function runUpCli(args: string[], dependencies: UpDependencies = de
       emit('setup', 'ok');
     } else emit('setup', 'skipped', local ? 'non_interactive' : 'remote_controller');
     const environment = Object.fromEntries(Object.entries(d.environment).filter(([key]) => key.startsWith('LEMON_BOT_')));
+    if (local) environment.LEMON_CONTROL_PLANE_PORT = new URL(config.controlUrl).port || (new URL(config.controlUrl).protocol === 'wss:' ? '443' : '80');
     const lifecycle = (args: string[], stdin?: string) => service(launcher, args, d.spawn, { environment, ...(stdin === undefined ? {} : { stdin }) });
     const remember = (status: ServiceStatus) => { result.manager = status.manager; result.persistence = status.persistence; };
     emit('units', 'running');
-    const units = await lifecycle(['install', ...(local ? ['controller', 'backend'] : ['backend']), '--bot', botPath, '--wait', '120']);
+    const units = await lifecycle(['install', ...(local ? ['controller', 'backend'] : ['backend']), '--bot', botPath, '--wait', '120', ...(controllerChanged ? ['--restart-backend'] : [])]);
     if (units.status) remember(units.status);
     if (units.exitCode !== 0 || !units.status || !units.status.units.length || units.status.units.some(unit => unit.state !== 'ready')) {
       const detail = units.status?.units.find(unit => unit.detail !== null && serviceDetails.includes(unit.detail))?.detail ?? 'service_failed';
@@ -205,6 +209,14 @@ export async function runUpCli(args: string[], dependencies: UpDependencies = de
     const auth = await request<AuthResult>('/auth/local', d.readKey(join(config.dataDir, 'local-access.key')), { displayName: identity.ownerName });
     session = auth.token;
     if (!session) throw new Error('Local owner session unavailable.');
+    let controllerReady = false;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const instance = await request<InstanceStatus>('/instance', session);
+      if (instance.controller.url === config.controlUrl && instance.controller.state === 'connected') { controllerReady = true; break; }
+      if (instance.controller.state === 'rejected') break;
+      if (attempt < 29) await d.sleep(2000);
+    }
+    if (!controllerReady) { emit('owner', 'failed', 'controller_unavailable'); return finish('service_failed'); }
     emit('owner', 'ok');
     failure = 'enroll_failed';
     if (flags.has('--no-worker') || !local) {

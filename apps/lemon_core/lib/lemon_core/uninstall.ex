@@ -4,12 +4,13 @@ defmodule LemonCore.Uninstall do
 
   Destructive lifecycle operation: it previews first and binds the operator's
   confirmation to the exact candidate set — every discovered unit with its
-  current file content, the exact program paths, and the exact rc-file lines.
+  current file content, the exact program paths and their canonical filesystem
+  identities (including every ancestor), and the exact rc-file lines.
   Execution recomputes the preview from live state and refuses unless the
   supplied digest still matches, then removes each previewed unit through
   `LemonCore.Service`, stops a verified unsupervised controller through the
-  launcher's authenticated hook, rewrites the bound rc lines, and hands the
-  exact program paths to the launcher, which deletes them after the VM exits.
+  launcher's authenticated hook, rewrites the bound rc lines, and hands a
+  schema-2 identity manifest to the launcher for deletion after the VM exits.
 
   Errors are stable atoms. No path, command output or exception text leaks into
   a result.
@@ -57,14 +58,19 @@ defmodule LemonCore.Uninstall do
     source? = source?(opts)
     purge? = Keyword.get(opts, :purge, false) == true and not source?
 
-    with {:ok, units} <- discover_units(opts),
-         {:ok, rc_lines} <- rc_entries(source?, home, opts) do
+    with {:ok, canonical_home} <- canonical_home(home),
+         {:ok, units} <- discover_units(opts),
+         {:ok, rc_lines} <- rc_entries(source?, home, opts),
+         {:ok, programs} <- program_paths(source?, home, canonical_home),
+         {:ok, purge_paths} <- purge_paths(source?, purge?, home, canonical_home) do
       candidates = %{
         units: units,
-        program_paths: program_paths(source?, home, opts),
+        program_paths: Enum.map(programs, &elem(&1, 0)),
+        path_identities: Enum.map(programs ++ purge_paths, &elem(&1, 1)),
+        canonical_home: canonical_home,
         rc_lines: rc_lines,
         purge: purge?,
-        purge_paths: purge_paths(source?, purge?, home, opts),
+        purge_paths: Enum.map(purge_paths, &elem(&1, 0)),
         keychain: keychain(source?, purge?, opts),
         source: source?
       }
@@ -76,8 +82,8 @@ defmodule LemonCore.Uninstall do
   @doc """
   SHA-256 over the canonical rendering of the candidate set.
 
-  Every unit binds its identity *and* its current file content, so a reinstall,
-  a port change or an edited unit invalidates an earlier digest.
+  Every removal path binds its canonical device/inode identity and ancestor
+  chain. Every unit binds its identity and current file content.
   """
   @spec confirmation_digest(map()) :: String.t()
   def confirmation_digest(candidates) do
@@ -107,10 +113,19 @@ defmodule LemonCore.Uninstall do
       |> Enum.map(&Enum.join([&1.file, Integer.to_string(&1.index), &1.comment, &1.line], "|"))
       |> Enum.sort()
 
+    identities =
+      candidates
+      |> Map.get(:path_identities, [])
+      |> Enum.sort_by(& &1.path)
+      |> :erlang.term_to_binary()
+      |> Base.encode64()
+
     canonical =
       Enum.join(
         [
-          "schema:1",
+          "schema:2",
+          "home:" <> Map.get(candidates, :canonical_home, ""),
+          "identities:" <> identities,
           "source:#{Map.get(candidates, :source, false) == true}",
           "purge:#{Map.get(candidates, :purge, false) == true}",
           "units:" <> Enum.join(units, "\u0000"),
@@ -156,9 +171,11 @@ defmodule LemonCore.Uninstall do
     with {:ok, manifest} <- manifest_path(paths, opts),
          :ok <- remove_units(candidates.units, opts),
          :ok <- stop_unsupervised_controller(opts),
+         :ok <- revalidate_paths(candidates.path_identities),
          :ok <- rewrite_rc_files(candidates.rc_lines),
          :ok <- remove_keychain_item(candidates.keychain, opts),
-         :ok <- publish_manifest(paths, manifest) do
+         :ok <- revalidate_paths(candidates.path_identities),
+         :ok <- publish_manifest(candidates, manifest) do
       {:ok,
        %{
          uninstalled: true,
@@ -366,13 +383,33 @@ defmodule LemonCore.Uninstall do
     end
   end
 
-  defp publish_manifest([], nil), do: :ok
+  defp publish_manifest(%{path_identities: []}, nil), do: :ok
 
-  defp publish_manifest(paths, manifest) do
-    case File.write(manifest, Enum.join(paths, "\n") <> "\n") do
+  # Schema 2 is also the launcher's deletion contract. Each canonical leaf has
+  # its lstat identity plus the ordered, symlink-free chain from / to its parent.
+  # The launcher validates all entries, then revalidates immediately before each
+  # removal. A symlink leaf is unlinked, never resolved or traversed.
+  defp publish_manifest(candidates, manifest) do
+    document = %{
+      schema: 2,
+      home: candidates.canonical_home,
+      paths: disjoint_paths(candidates.path_identities)
+    }
+
+    case File.write(manifest, Jason.encode!(document) <> "\n") do
       :ok -> :ok
       _ -> {:error, :uninstall_manifest_write_failed}
     end
+  end
+
+  # Purging .lemon subsumes its program directories. The launcher pins parent
+  # descriptors before mutation, so no entry may delete another entry's parent.
+  defp disjoint_paths(paths) do
+    Enum.reject(paths, fn path ->
+      Enum.any?(paths, fn other ->
+        path.path != other.path and String.starts_with?(path.path, other.path <> "/")
+      end)
+    end)
   end
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -489,18 +526,128 @@ defmodule LemonCore.Uninstall do
     ]
   end
 
-  defp program_paths(true, _home, _opts), do: []
+  defp program_paths(true, _home, _canonical_home), do: {:ok, []}
 
-  defp program_paths(false, home, _opts) do
-    home |> candidate_program_paths() |> Enum.filter(&exists?/1)
+  defp program_paths(false, home, canonical_home) do
+    identify_paths(candidate_program_paths(home), home, canonical_home)
   end
 
-  defp purge_paths(false, true, home, _opts) do
-    data = Path.join(home, ".lemon")
-    if exists?(data), do: [data], else: []
+  defp purge_paths(false, true, home, canonical_home) do
+    identify_paths([Path.join(home, ".lemon")], home, canonical_home)
   end
 
-  defp purge_paths(_source?, _purge?, _home, _opts), do: []
+  defp purge_paths(_source?, _purge?, _home, _canonical_home), do: {:ok, []}
+
+  defp identify_paths(paths, home, canonical_home) do
+    with {:ok, ancestors} <- directory_chain(canonical_home) do
+      Enum.reduce_while(paths, {:ok, []}, fn path, {:ok, found} ->
+        relative = Path.relative_to(Path.expand(path), Path.expand(home))
+
+        case identify_path(Path.split(relative), canonical_home, ancestors) do
+          {:ok, nil} -> {:cont, {:ok, found}}
+          {:ok, identity} -> {:cont, {:ok, found ++ [{path, identity}]}}
+          error -> {:halt, error}
+        end
+      end)
+    end
+  end
+
+  defp identify_path([part | rest], parent, ancestors) do
+    path = Path.join(parent, part)
+
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: type} = stat} ->
+        identity = identity(path, stat)
+
+        cond do
+          rest == [] and type in [:directory, :regular, :symlink] ->
+            {:ok, Map.put(identity, :ancestors, ancestors)}
+
+          rest != [] and type == :directory ->
+            identify_path(rest, path, ancestors ++ [identity])
+
+          true ->
+            {:error, :unsafe_uninstall_path}
+        end
+
+      {:error, :enoent} ->
+        {:ok, nil}
+
+      _ ->
+        {:error, :unsafe_uninstall_path}
+    end
+  end
+
+  # Only the trusted HOME prefix may have aliases (notably /tmp on macOS).
+  # Once it is canonical, no owned ancestor is ever followed through a symlink.
+  defp canonical_home(home) do
+    resolve_home(Path.split(Path.expand(home)), "", 40)
+  end
+
+  defp resolve_home([], path, _remaining), do: {:ok, path}
+  defp resolve_home(["/" | rest], "", remaining), do: resolve_home(rest, "/", remaining)
+
+  defp resolve_home([part | rest], parent, remaining) do
+    path = Path.join(parent, part)
+
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :directory}} ->
+        resolve_home(rest, path, remaining)
+
+      {:ok, %File.Stat{type: :symlink}} when remaining > 0 ->
+        case File.read_link(path) do
+          {:ok, target} ->
+            resolve_home(Path.split(Path.expand(target, parent)) ++ rest, "", remaining - 1)
+
+          _ ->
+            {:error, :unsafe_uninstall_path}
+        end
+
+      _ ->
+        {:error, :unsafe_uninstall_path}
+    end
+  end
+
+  defp directory_chain(path) do
+    path
+    |> Path.split()
+    |> Enum.reduce_while({:ok, "", []}, fn part, {:ok, parent, chain} ->
+      directory = if part == "/", do: "/", else: Path.join(parent, part)
+
+      case File.lstat(directory) do
+        {:ok, %File.Stat{type: :directory} = stat} ->
+          {:cont, {:ok, directory, chain ++ [identity(directory, stat)]}}
+
+        _ ->
+          {:halt, {:error, :unsafe_uninstall_path}}
+      end
+    end)
+    |> case do
+      {:ok, _path, chain} -> {:ok, chain}
+      error -> error
+    end
+  end
+
+  defp identity(path, stat) do
+    %{path: path, type: Atom.to_string(stat.type), device: stat.major_device, inode: stat.inode}
+  end
+
+  defp revalidate_paths(paths) do
+    if Enum.all?(paths, fn path ->
+         Enum.all?(path.ancestors ++ [Map.delete(path, :ancestors)], &same_identity?/1)
+       end) do
+      :ok
+    else
+      {:error, :uninstall_path_changed}
+    end
+  end
+
+  defp same_identity?(expected) do
+    case File.lstat(expected.path) do
+      {:ok, stat} -> identity(expected.path, stat) == expected
+      _ -> false
+    end
+  end
 
   defp keychain(false, true, opts) do
     if darwin?(opts), do: "Lemon Secrets/default", else: nil

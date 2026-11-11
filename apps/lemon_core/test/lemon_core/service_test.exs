@@ -23,7 +23,7 @@ defmodule LemonCore.ServiceTest do
           if snapshot.loaded,
             do:
               {if(snapshot.alive,
-                 do: "state = running\npid = 123\n",
+                 do: "state = running\npid = #{Map.get(snapshot, :pid, 123)}\n",
                  else: "state = waiting\nlast exit code = 0\n"
                ), 0},
             else: {"", 1}
@@ -85,6 +85,148 @@ defmodule LemonCore.ServiceTest do
     ]
 
     {:ok, opts: opts, state: state}
+  end
+
+  defp backend_options(opts) do
+    bot = Path.join(opts[:home], ".local/bin/lemon-bot")
+    File.mkdir_p!(Path.dirname(bot))
+    File.write!(bot, "#!/bin/sh\nexit 0\n")
+    File.chmod!(bot, 0o700)
+    record = Path.join(opts[:home], ".lemon/lemon_bot/run/lemon-bot-4100.json")
+    File.mkdir_p!(Path.dirname(record))
+    File.write!(record, Jason.encode!(%{pid: 123, startedAt: @started, instanceId: "ours"}))
+    File.chmod!(record, 0o600)
+
+    Keyword.put(opts, :http_get, fn _ ->
+      {:ok, %{"product" => "lemon_bot", "instanceId" => "ours"}}
+    end)
+  end
+
+  test "backend choice reload restarts unchanged running unit once", %{opts: opts, state: state} do
+    opts = backend_options(opts)
+
+    assert {:ok, %{units: [%{action: "created", state: "ready"}]}} =
+             Service.install(["backend"], opts)
+
+    Agent.update(state, &%{&1 | calls: []})
+
+    assert {:ok, %{units: [%{action: "unchanged", state: "ready"}]}} =
+             Service.install(["backend"], opts)
+
+    refute Enum.any?(Agent.get(state, & &1.calls), fn {command, args} ->
+             command == "launchctl" and
+               List.first(args) in ["bootstrap", "bootout", "kickstart"]
+           end)
+
+    Agent.update(state, &%{&1 | calls: []})
+
+    assert {:ok, %{units: [%{action: "restarted", state: "starting"}]}} =
+             Service.install(["backend"], Keyword.put(opts, :restart_backend, true))
+
+    assert [{"launchctl", ["kickstart", "-k", "gui/501/org.lemon.bot"]}] =
+             Enum.filter(Agent.get(state, & &1.calls), fn {command, args} ->
+               command == "launchctl" and
+                 List.first(args) in ["bootstrap", "bootout", "kickstart"]
+             end)
+  end
+
+  test "backend choice reload waits past old health until replacement is ready", %{
+    opts: opts,
+    state: state
+  } do
+    opts = backend_options(opts)
+    assert {:ok, _} = Service.install(["backend"], opts)
+    runner = opts[:command_runner]
+    record = Path.join(opts[:home], ".lemon/lemon_bot/run/lemon-bot-4100.json")
+
+    wrapped = fn command, args, system_opts ->
+      case {command, args} do
+        {"launchctl", ["kickstart", "-k" | _]} ->
+          Agent.update(state, &Map.put(&1, :restart_polls, 0))
+
+        {"launchctl", ["print", "gui/501/org.lemon.bot"]} ->
+          Agent.update(state, fn current ->
+            if Map.has_key?(current, :restart_polls) do
+              if current.restart_polls == 1 do
+                File.write!(
+                  record,
+                  Jason.encode!(%{pid: 234, startedAt: @started, instanceId: "ours"})
+                )
+
+                Map.put(current, :pid, 234)
+              else
+                %{current | restart_polls: current.restart_polls + 1}
+              end
+            else
+              current
+            end
+          end)
+
+        _ ->
+          :ok
+      end
+
+      runner.(command, args, system_opts)
+    end
+
+    assert {:ok, %{units: [%{action: "restarted", state: "ready", pid: 234}]}} =
+             Service.install(
+               ["backend"],
+               Keyword.merge(opts, restart_backend: true, wait: 2, command_runner: wrapped)
+             )
+  end
+
+  test "changed backend unit starts once without an extra choice restart", %{
+    opts: opts,
+    state: state
+  } do
+    opts = backend_options(opts)
+    assert {:ok, _} = Service.install(["backend"], opts)
+    Agent.update(state, &%{&1 | calls: []})
+
+    changed =
+      Keyword.merge(opts,
+        restart_backend: true,
+        env: %{"LEMON_CONTROL_PLANE_PORT" => "4144"}
+      )
+
+    assert {:ok, %{units: [%{action: "updated", state: "ready"}]}} =
+             Service.install(["backend"], changed)
+
+    calls = Agent.get(state, & &1.calls)
+
+    assert Enum.count(calls, fn {command, args} ->
+             command == "launchctl" and List.first(args) == "bootstrap"
+           end) == 1
+
+    assert Enum.count(calls, fn {command, args} ->
+             command == "launchctl" and List.first(args) == "bootout"
+           end) == 1
+
+    refute Enum.any?(calls, fn {command, args} ->
+             command == "launchctl" and List.first(args) == "kickstart"
+           end)
+
+    {:ok, spec} = Role.build("backend", "launchd", changed)
+    assert {:ok, parsed} = Unit.read(spec.path, "launchd")
+    assert parsed.env["LEMON_CONTROL_PLANE_PORT"] == "4144"
+  end
+
+  test "new backend choice starts only once", %{opts: opts, state: state} do
+    opts = backend_options(opts) |> Keyword.put(:restart_backend, true)
+
+    assert {:ok, %{units: [%{action: "created", state: "ready"}]}} =
+             Service.install(["backend"], opts)
+
+    calls = Agent.get(state, & &1.calls)
+
+    assert Enum.count(calls, fn {command, args} ->
+             command == "launchctl" and List.first(args) == "bootstrap"
+           end) == 1
+
+    refute Enum.any?(calls, fn {command, args} ->
+             command == "launchctl" and List.first(args) in ["kickstart", "bootout"]
+           end)
   end
 
   test "manager detection and persistence are truthful", %{opts: opts, state: state} do

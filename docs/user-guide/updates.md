@@ -87,6 +87,11 @@ again only **after** it is healthy (steps 6–8 above). Custom supervision must
 follow that same order; restarting only the controller is no longer the complete
 Bot update procedure.
 
+For a supervised restart, readiness requires a replacement process identity
+at the selected release root and successful health/authentication checks.
+The old controller answering health while its manager queues the restart does
+not count as success; workers resume only after the replacement is ready.
+
 Units use stable launchers (`~/.lemon/bin/lemon`, `~/.local/bin/lemon-bot`),
 not paths inside an old version directory. Remote workers are **never silently
 updated** by the controller: update each destination deliberately. Afterward
@@ -372,12 +377,12 @@ To remove a single old release instead, use `lemonup uninstall <version>`; it
 refuses to delete the active `versions/current`.
 
 The digest covers each unit's identity *and* its current file content, every
-program path, every rc-file line with its position, and the `--purge` choice.
-It is recomputed from live state at execution time: if anything changed since
-the preview — a unit was reinstalled or edited, a path appeared or vanished,
-you added `--purge` — the digest no longer matches and the command refuses with
-a fresh digest instead of acting. Add `--json` to either mode for
-machine-readable output.
+program path's canonical device/inode identity and ancestor chain, every rc-file
+line with its position, and the `--purge` choice. Symlinked ancestors below HOME
+are refused; a symlink at a deletion target is unlinked without following it.
+It is recomputed from live state at execution time: replacing a directory,
+editing a unit, adding or removing a path, or changing `--purge` invalidates the
+preview. Add `--json` to either mode for machine-readable output.
 
 Execution order is: remove every previewed unit through its service manager by
 its exact identity (which stops the processes), stop an unsupervised controller
@@ -388,6 +393,10 @@ cannot be removed or a controller that cannot be verified stops the uninstall
 with nothing else changed. The deletion itself runs in the launcher after the
 Lemon VM exits, because a running release cannot delete its own program files;
 the launcher removes only the installer's own paths and refuses anything else.
+Its post-VM executor rechecks all bound identities, then traverses pinned
+directory descriptors without following symlinks. Packaged macOS releases use
+their bundled Python; other installations require `python3` for this deletion
+step. Missing prerequisites or changed identities fail closed.
 
 Uninstall does **not** revoke anything remote. Provider API keys, bot tokens
 (Telegram, Discord) and bot machines stay valid: revoke keys at the provider,

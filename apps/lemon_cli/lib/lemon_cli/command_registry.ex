@@ -768,6 +768,11 @@ defmodule LemonCli.CommandRegistry do
           "Signed helper wrapper path inside an .app bundle (macOS)"
         ),
         option("--bot PATH", ["--bot"], "Executable path for the backend service"),
+        option(
+          "--restart-backend",
+          ["--restart-backend"],
+          "Reload a changed controller choice during install without restarting a backend twice"
+        ),
         option("--ssh DEST", ["--ssh"], "SSH destination for the tunnel role"),
         option("--node-port PORT", ["--node-port"], "Remote node gateway forward port"),
         option("--gateway-port PORT", ["--gateway-port"], "Local node gateway port"),

@@ -5,6 +5,9 @@ defmodule LemonCore.Service do
   Public lifecycle operations return schema-1 documents, never credentials or unit
   arguments. `running_units/1` is an internal update snapshot, not a CLI projection.
   All OS calls accept an injectable `:command_runner` (executable, argv, options).
+  `install/2` accepts `:restart_backend` to reload a changed controller choice:
+  an unchanged running backend is restarted once; a newly started or rewritten
+  backend is not restarted again. Its action is `"restarted"`.
   """
   alias LemonCore.Service.{
     Command,
@@ -332,6 +335,16 @@ defmodule LemonCore.Service do
         inherited = Role.options_from_argv(parsed.argv)
         merged = Keyword.merge(inherited, opts)
         env = Map.merge(Keyword.get(opts, :env, System.get_env()), parsed.env)
+
+        env =
+          case {role, Keyword.get(opts, :env, System.get_env())["LEMON_CONTROL_PLANE_PORT"]} do
+            {"backend", port} when is_binary(port) ->
+              Map.put(env, "LEMON_CONTROL_PLANE_PORT", port)
+
+            _ ->
+              env
+          end
+
         merged = Keyword.put(merged, :env, env)
 
         merged =
@@ -444,6 +457,11 @@ defmodule LemonCore.Service do
              :ok <- enroll(spec, opts),
              {:ok, action} <-
                install_unit(spec, existing, observed, adopted, manager, module, opts) do
+          opts =
+            if action == "restarted",
+              do: Keyword.put(opts, :replaced_pid, observed.pid),
+              else: opts
+
           item = wait_ready(spec, module, opts) |> Map.put(:action, action)
 
           with :ok <- cleanup_manual_record(spec, manager, item, opts) do
@@ -510,7 +528,11 @@ defmodule LemonCore.Service do
 
     cond do
       same and observed.loaded and is_integer(observed.pid) and is_nil(opts[:invite_code]) ->
-        {:ok, if(adopted, do: "adopted", else: "unchanged")}
+        if spec.role == "backend" and opts[:restart_backend] == true and not adopted do
+          with :ok <- module.restart(spec, opts), do: {:ok, "restarted"}
+        else
+          {:ok, if(adopted, do: "adopted", else: "unchanged")}
+        end
 
       same and observed.loaded ->
         with :ok <- module.start(spec, opts), do: {:ok, "started"}
@@ -605,6 +627,11 @@ defmodule LemonCore.Service do
 
   defp wait_ready(spec, module, opts, deadline, waiting) do
     item = report(spec, module, opts)
+
+    item =
+      if is_integer(opts[:replaced_pid]) and item.pid == opts[:replaced_pid],
+        do: %{item | state: "starting", detail: nil},
+        else: item
 
     cond do
       Readiness.ready?(item) ->
