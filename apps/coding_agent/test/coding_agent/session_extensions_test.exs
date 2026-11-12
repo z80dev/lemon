@@ -251,7 +251,7 @@ defmodule CodingAgent.SessionExtensionsTest do
 
       module = create_extension_file(tmp_dir, "TestToolsExtension", tools: tools_code)
 
-      session = start_session(cwd: tmp_dir)
+      session = start_session(cwd: tmp_dir, session_mode: :chat)
       state = Session.get_state(session)
 
       tool_names = Enum.map(state.tools, & &1.name)
@@ -266,6 +266,62 @@ defmodule CodingAgent.SessionExtensionsTest do
       assert "ext_tool" in tool_names
 
       cleanup_module(module)
+    end
+
+    test "coding extensions remain searchable and invokable across reload", %{tmp_dir: tmp_dir} do
+      module_name = "TestCodingReloadExtension"
+
+      tools_code = fn version ->
+        """
+        [
+          %LemonAgent.Types.AgentTool{
+            name: "coding_ext_v#{version}",
+            description: "Coding extension version #{version}",
+            parameters: %{},
+            label: "Coding Extension",
+            execute: fn _, _, _, _ ->
+              %LemonAgent.Types.AgentToolResult{content: []}
+            end
+          }
+        ]
+        """
+      end
+
+      module = create_extension_file(tmp_dir, module_name, tools: tools_code.(1))
+      on_exit(fn -> cleanup_module(module) end)
+      session = start_session(cwd: tmp_dir, session_mode: :coding)
+
+      for version <- [1, 2] do
+        if version == 2 do
+          create_extension_file(tmp_dir, module_name, tools: tools_code.(version))
+          assert {:ok, _} = Session.reload_extensions(session)
+        end
+
+        state = Session.get_state(session)
+        name = "coding_ext_v#{version}"
+        refute name in tool_names(state.tools)
+        assert Map.has_key?(state.tool_catalog, name)
+        search = Enum.find(state.tools, &(&1.name == "tool_search"))
+        invoke = Enum.find(state.tools, &(&1.name == "tool_invoke"))
+
+        assert search.execute.("search", %{"query" => "select:#{name}"}, nil, nil).details.matched ==
+                 [name]
+
+        assert %AgentToolResult{is_error: false} =
+                 invoke.execute.("invoke", %{"name" => name, "args" => %{}}, nil, nil)
+
+        if version == 2 do
+          refute Map.has_key?(state.tool_catalog, "coding_ext_v1")
+
+          assert {:error, _} =
+                   invoke.execute.(
+                     "stale",
+                     %{"name" => "coding_ext_v1", "args" => %{}},
+                     nil,
+                     nil
+                   )
+        end
+      end
     end
 
     test "custom tools option takes precedence for base tools", %{tmp_dir: tmp_dir} do
@@ -561,7 +617,7 @@ defmodule CodingAgent.SessionExtensionsTest do
 
       module = create_extension_file(tmp_dir, "TestReloadExtension", tools: v1_tools)
 
-      session = start_session(cwd: tmp_dir)
+      session = start_session(cwd: tmp_dir, session_mode: :chat)
 
       assert eventually(fn ->
                Session.get_state(session).tools

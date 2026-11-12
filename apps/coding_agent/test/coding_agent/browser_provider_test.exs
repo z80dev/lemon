@@ -116,6 +116,7 @@ defmodule CodingAgent.BrowserProviderTest do
         {Session,
          [
            cwd: root,
+           session_mode: :chat,
            workspace_dir: Path.join(root, "workspace"),
            model: Mocks.mock_model(),
            stream_fn: Mocks.mock_stream_fn([Mocks.assistant_message("done")]),

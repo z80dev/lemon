@@ -655,12 +655,18 @@ defmodule CodingAgent.Tools.Task.Params do
         :parent_session,
         :tool_policy,
         :session_key,
-        :agent_id
+        :agent_id,
+        :session_mode
       ])
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
       |> Keyword.put(:settings_manager, settings)
       |> Keyword.put(:invocation_mcp_servers, inherited_context.invocation_mcp_servers)
       |> maybe_put_kw(:memory_context_key, inherited_context.memory_context_key)
+      |> maybe_put_kw(
+        :session_mode,
+        Keyword.get(opts, :session_mode) ||
+          Keyword.get(Map.get(parent_state || %{}, :tool_opts, []), :session_mode)
+      )
       |> Keyword.put(:memory_context_verified, inherited_context.memory_context_verified)
       |> Keyword.put(:shared_memory_grant, inherited_context.shared_memory_grant)
       |> Keyword.merge(Map.to_list(Map.take(inherited_context, private_native_fields())))

@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Native task children preserve their parent's chat/coding session mode instead
+  of silently switching profile conversations to coding disclosure. Subagent
+  persona and private-memory bootstrap restrictions remain unchanged.
 - Models with an unknown or non-positive context window no longer trigger
   automatic token-based compaction on every turn. Context budgets report unknown
   capacity as null; explicit compaction and overflow recovery remain available.

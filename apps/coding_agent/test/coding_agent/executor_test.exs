@@ -674,7 +674,12 @@ defmodule CodingAgent.ExecutorTest do
       end
 
       first =
-        request(tmp_dir, run_id: "handoff-first", prompt: "initialize kernel", stream_fn: stream)
+        request(tmp_dir,
+          run_id: "handoff-first",
+          prompt: "initialize kernel",
+          stream_fn: stream,
+          meta: %{session_mode: :chat}
+        )
 
       {:ok, first_ref, %{runner_pid: runner}} =
         Executor.start_run(first, %{stream_fn: stream}, self())
@@ -748,7 +753,8 @@ defmodule CodingAgent.ExecutorTest do
           run_id: "handoff-second",
           prompt: "reuse resources",
           resume: resume,
-          stream_fn: capture
+          stream_fn: capture,
+          meta: %{session_mode: :chat}
         )
         | session_key: first.session_key
       }

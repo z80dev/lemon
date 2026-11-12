@@ -55,6 +55,33 @@ defmodule CodingAgent.Session.CodingProfileTest do
     assert Enum.any?(state.tools, &(&1.name == "skill_manage"))
   end
 
+  test "task children inherit session mode without widening bootstrap scope", %{tmp_dir: root} do
+    for mode <- [:chat, :coding] do
+      parent = start_session(root, session_mode: mode)
+
+      for overrides <- [[], [session_mode: :coding]] do
+        opts =
+          CodingAgent.Tools.Task.Params.build_session_opts(
+            root,
+            [parent_session: parent, model: LemonAgent.Test.Mocks.mock_model()] ++ overrides,
+            %{}
+          )
+
+        assert opts[:session_mode] == Keyword.get(overrides, :session_mode, mode)
+        assert opts[:session_scope] == :subagent
+        assert opts[:task_child]
+
+        child = start_session(root, opts)
+        state = Session.get_state(child)
+        expected_profile = if opts[:session_mode] == :chat, do: :legacy, else: :coding
+        assert state.extension_status_report.tool_disclosure.profile == expected_profile
+        refute state.system_prompt =~ "## SOUL.md"
+        refute state.system_prompt =~ "## USER.md"
+        refute state.system_prompt =~ "## MEMORY.md"
+      end
+    end
+  end
+
   test "persona and disclosure opt-outs are independent", %{tmp_dir: root} do
     coding = root |> start_session(tool_disclosure: [profile: :legacy]) |> Session.get_state()
     assert coding.extension_status_report.tool_disclosure.profile == :legacy

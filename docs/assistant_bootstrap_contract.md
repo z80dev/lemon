@@ -48,6 +48,10 @@ instructions and rules are unaffected. Canonical main and messaging keys infer
 chat mode; explicit `session_mode: :coding|:chat` overrides inference.
 `persona: false` (`lemon -p --no-persona`) suppresses bootstrap explicitly;
 `persona: true` opts in. The choice persists across prompt refresh.
+Native task children inherit the parent's session mode unless explicitly
+overridden, while retaining the subagent bootstrap allowlist. Coding mode omits
+static assistant-home memory along with persona bootstrap; admitted scoped
+automatic recall still reaches the model as volatile turn context.
 
 Canonical files:
 
