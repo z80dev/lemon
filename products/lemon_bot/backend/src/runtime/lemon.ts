@@ -41,6 +41,12 @@ function nativeSocket(url: string): ControlSocket {
 const upstreamCodes: Record<string, ErrorCode> = { INVALID_REQUEST: 'invalid_request', INVALID_PARAMS: 'invalid_request', UNAUTHORIZED: 'upstream_unavailable', FORBIDDEN: 'forbidden', PERMISSION_DENIED: 'forbidden', NOT_FOUND: 'not_found', CONFLICT: 'conflict', RATE_LIMITED: 'rate_limited', METHOD_NOT_FOUND: 'capability_unavailable', NOT_IMPLEMENTED: 'capability_unavailable' };
 const processAdmissionReasons = new Set(['process_receipt_limit', 'process_limit', 'process_busy']);
 function upstreamFailure(code: string, details: Record<string, unknown> | undefined, mutation: boolean, ids: string[], method: string): ApiError {
+  if (method === 'profile.followup.admission.set') {
+    const callback = code.toLowerCase();
+    if (callback === 'callback_origin_not_allowed' || callback === 'callback_requires_https' || callback === 'invalid_callback_url') {
+      return new ApiError(callback, 'The controller rejected the native follow-up callback address.', true, { resourceIds: ids });
+    }
+  }
   const processMethod = method === 'node.process.run' || method === 'node.process.get' || method === 'node.process.cancel';
   const reason = typeof details?.reason === 'string' ? details.reason : '';
   const processReason = processMethod && processAdmissionReasons.has(reason);

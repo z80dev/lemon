@@ -603,3 +603,151 @@ extension StoreTests {
         XCTAssertTrue(store.pendingIntents.isEmpty)
     }
 }
+
+extension StoreTests {
+    private func lifecycleBot(canRecover: Bool = true) throws -> Bot {
+        let events = try JSONDecoder().decode([RealtimeEvent].self, from: WireFixtures.events)
+        guard let event = events.first(where: { $0.event == "bot.upserted" }), case .botUpserted(var bot) = event.payload else {
+            throw ClientError.invalidFrame
+        }
+        bot.revision = 7
+        bot.activity = "offline"
+        bot.lifecycle = BotLifecycle(action: "create", status: "outcome_unknown", step: "profile_sync", message: "Reconnect the machine to continue.", canFinishSetup: canRecover, canReaddress: canRecover, canDelete: canRecover)
+        return bot
+    }
+
+    func testBotLifecycleRecoveryPostsRevisionAndNonceAndAppliesReturnedBot() async throws {
+        for operation in ["finish-setup", "readdress"] {
+            let store = try store()
+            store.connectionState = "online"
+            let failed = try lifecycleBot()
+            store.bots = [failed]
+            var ready = failed
+            ready.revision += 1
+            ready.lifecycle = nil
+            let response = try JSONEncoder().encode(ready)
+            TestHTTPProtocol.handler = { request in
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/bots/\(failed.id)/\(operation)")
+                let body = try JSONDecoder().decode(JSONObject.self, from: TestHTTPProtocol.body(request))
+                XCTAssertEqual(Set(body.keys), Set(["clientNonce", "revision"]))
+                XCTAssertNotNil(body["clientNonce"]?.stringValue)
+                XCTAssertEqual(body["revision"]?.intValue, failed.revision)
+                return (200, [:], response)
+            }
+            let result: Bot = try await store.mutate("POST", "/bots/\(failed.id)/\(operation)", body: ["revision": .number(Double(failed.revision))])
+            XCTAssertEqual(result, ready)
+            XCTAssertEqual(store.bots, [ready])
+            XCTAssertEqual(result.mainConversationId, failed.mainConversationId)
+            XCTAssertTrue(store.pendingIntents.isEmpty)
+            XCTAssertEqual(TestHTTPProtocol.requests.count, 1)
+        }
+    }
+
+    func testBotLifecycleUnknownReceiptStaysFencedWithoutAutomaticReplay() async throws {
+        let store = try store()
+        store.connectionState = "online"
+        let bot = try lifecycleBot()
+        let response = try JSONEncoder().encode(bot)
+        TestHTTPProtocol.handler = { _ in (200, [:], response) }
+        let _: Bot = try await store.mutate("POST", "/bots/\(bot.id)/finish-setup", body: ["revision": .number(Double(bot.revision))])
+        XCTAssertEqual(store.pendingIntents.count, 1)
+        XCTAssertEqual(store.pendingIntents.first?.state, "outcome_unknown")
+        XCTAssertEqual(store.pendingIntents.first?.resourceIDs, [bot.id])
+        XCTAssertEqual(TestHTTPProtocol.requests.count, 1)
+    }
+
+    func testBotLifecycleExplicitRecoveryChecksFreshPermissionBeforeNewIntent() async throws {
+        for operation in ["finish-setup", "readdress", "delete"] {
+            let store = try store()
+            store.connectionState = "online"
+            let bot = try lifecycleBot()
+            let deleting = operation == "delete"
+            let method = deleting ? "DELETE" : "POST"
+            let path = "/bots/\(bot.id)" + (deleting ? "" : "/\(operation)")
+            let old = MutationIntent(clientNonce: "old_lifecycle_123456", method: method, path: path, expectedRevision: bot.revision - 1, state: "outcome_unknown")
+            store.pendingIntents = [old]
+            var ready = bot
+            ready.lifecycle = nil
+            ready.revision += 1
+            let currentResponse = try JSONEncoder().encode(bot)
+            let resultResponse: Data
+            if deleting { resultResponse = try JSONEncoder().encode(Deleted(id: bot.id, deleted: true)) }
+            else { resultResponse = try JSONEncoder().encode(ready) }
+            TestHTTPProtocol.handler = { request in
+                if request.httpMethod == "GET" {
+                    XCTAssertEqual(request.url?.path, "/v1/bots/\(bot.id)")
+                    return (200, [:], currentResponse)
+                }
+                XCTAssertEqual(request.httpMethod, method)
+                XCTAssertEqual(request.url?.path, "/v1" + path)
+                let body = try JSONDecoder().decode(JSONObject.self, from: TestHTTPProtocol.body(request))
+                XCTAssertNotEqual(body["clientNonce"]?.stringValue, old.clientNonce)
+                XCTAssertEqual(body["revision"]?.intValue, bot.revision)
+                if deleting {
+                    XCTAssertEqual(body["confirmationToken"]?.stringValue, "fresh_preview")
+                    XCTAssertEqual(body["confirmName"]?.stringValue, bot.name)
+                }
+                return (200, [:], resultResponse)
+            }
+            var body: JSONObject = ["revision": .number(Double(bot.revision))]
+            if deleting {
+                body["confirmationToken"] = .string("fresh_preview")
+                body["confirmName"] = .string(bot.name)
+                let _: Deleted = try await store.mutate(method, path, body: body)
+            } else {
+                let _: Bot = try await store.mutate(method, path, body: body)
+            }
+            XCTAssertEqual(TestHTTPProtocol.requests.map(\.httpMethod), ["GET", method])
+            XCTAssertTrue(store.pendingIntents.isEmpty)
+        }
+    }
+
+    func testBotLifecycleRecoveryCannotBypassDeniedPermissionOrStaleRevision() async throws {
+        for stale in [false, true] {
+            let store = try store()
+            store.connectionState = "online"
+            let bot = try lifecycleBot(canRecover: stale)
+            let path = "/bots/\(bot.id)/finish-setup"
+            let old = MutationIntent(clientNonce: "old_lifecycle_123456", method: "POST", path: path, expectedRevision: 1, state: "outcome_unknown")
+            store.pendingIntents = [old]
+            let response = try JSONEncoder().encode(bot)
+            TestHTTPProtocol.handler = { request in
+                XCTAssertEqual(request.httpMethod, "GET")
+                return (200, [:], response)
+            }
+            do {
+                let _: Bot = try await store.mutate("POST", path, body: ["revision": .number(Double(bot.revision - (stale ? 1 : 0)))])
+                XCTFail("Recovery requires current permission and revision")
+            } catch ClientError.unresolvedMutation(let intent) { XCTAssertEqual(intent, old) }
+            XCTAssertEqual(store.pendingIntents, [old])
+            XCTAssertEqual(TestHTTPProtocol.requests.count, 1)
+        }
+    }
+
+    func testBotLifecycleUnknownDeleteStillRequiresConfirmation() async throws {
+        let store = try store()
+        store.connectionState = "online"
+        let old = MutationIntent(clientNonce: "old_lifecycle_123456", method: "DELETE", path: "/bots/resource", state: "outcome_unknown")
+        store.pendingIntents = [old]
+        do {
+            let _: Deleted = try await store.mutate("DELETE", old.path, body: ["revision": .number(7)])
+            XCTFail("Delete must retain its confirmation flow")
+        } catch ClientError.unresolvedMutation(let intent) { XCTAssertEqual(intent, old) }
+        XCTAssertEqual(store.pendingIntents, [old])
+        XCTAssertTrue(TestHTTPProtocol.requests.isEmpty)
+    }
+
+    func testBotLifecycleOfflineRecoveryNeverDispatchesOrQueues() async throws {
+        let store = try store()
+        store.connectionState = "disconnected"
+        for operation in ["finish-setup", "readdress"] {
+            do {
+                let _: Bot = try await store.mutate("POST", "/bots/resource/\(operation)", body: ["revision": .number(7)])
+                XCTFail("Offline recovery must not dispatch")
+            } catch ClientError.offline {}
+        }
+        XCTAssertTrue(store.pendingIntents.isEmpty)
+        XCTAssertTrue(TestHTTPProtocol.requests.isEmpty)
+    }
+}

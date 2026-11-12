@@ -21,6 +21,9 @@ public struct BotOverviewView: View {
             VStack(alignment: .leading, spacing: 18) {
                 if let bot {
                     BotIdentityAnchor(store: store, bot: bot)
+                    if let status = bot.lifecycle {
+                        BotLifecycleNotice(lifecycle: status, manage: manages ? { lifecycle = true } : nil)
+                    }
                     Picker("Bot details", selection: $tab) { Text("Overview").tag("overview"); Text("Identity").tag("identity"); Text("Job").tag("job"); Text("Memory").tag("memory"); Text("Preferences").tag("preferences") }.pickerStyle(.segmented)
                     switch tab {
                     case "identity": identity(bot)

@@ -2763,6 +2763,25 @@ public struct SidebarState: Codable, Hashable {
     }
 }
 
+public struct BotLifecycle: Codable, Hashable {
+    public var action: String
+    public var status: String
+    public var step: String
+    public var message: String
+    public var canFinishSetup: Bool
+    public var canReaddress: Bool
+    public var canDelete: Bool
+    public init(action: String, status: String, step: String, message: String, canFinishSetup: Bool, canReaddress: Bool, canDelete: Bool) {
+        self.action = action
+        self.status = status
+        self.step = step
+        self.message = message
+        self.canFinishSetup = canFinishSetup
+        self.canReaddress = canReaddress
+        self.canDelete = canDelete
+    }
+}
+
 public struct Bot: Codable, Hashable, Identifiable {
     public var `id`: ID
     public var `revision`: Int
@@ -2775,6 +2794,7 @@ public struct Bot: Codable, Hashable, Identifiable {
     public var approvalReview: String? = nil
     public var agentHandle: String? = nil
     public var agentAddress: String? = nil
+    public var lifecycle: BotLifecycle? = nil
     public var `title`: String
     public var `job`: String
     public var `instructions`: String
@@ -2787,7 +2807,7 @@ public struct Bot: Codable, Hashable, Identifiable {
     public var `sidebar`: SidebarState
     public var `activity`: String
     public var `activeRunIds`: [ID]
-    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, ownerUserId: ID, machineId: ID, profileId: String, name: String, title: String, job: String, instructions: String, avatar: Avatar, voice: VoiceSettings, language: String? = nil, skillIds: [ID], referenceAttachmentIds: [ID], mainConversationId: ID, sidebar: SidebarState, activity: String, activeRunIds: [ID]) {
+    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, ownerUserId: ID, machineId: ID, profileId: String, name: String, title: String, job: String, instructions: String, avatar: Avatar, voice: VoiceSettings, language: String? = nil, skillIds: [ID], referenceAttachmentIds: [ID], mainConversationId: ID, sidebar: SidebarState, activity: String, activeRunIds: [ID], lifecycle: BotLifecycle? = nil) {
         self.`id` = id
         self.`revision` = revision
         self.`createdAtMs` = createdAtMs
@@ -2808,8 +2828,9 @@ public struct Bot: Codable, Hashable, Identifiable {
         self.`sidebar` = sidebar
         self.`activity` = activity
         self.`activeRunIds` = activeRunIds
+        self.lifecycle = lifecycle
     }
-    enum CodingKeys: String, CodingKey { case approvalReview, `id`, `revision`, `createdAtMs`, `updatedAtMs`, `ownerUserId`, `machineId`, `profileId`, `name`, agentHandle, agentAddress, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `skillIds`, `referenceAttachmentIds`, `mainConversationId`, `sidebar`, `activity`, `activeRunIds` }
+    enum CodingKeys: String, CodingKey { case approvalReview, lifecycle, `id`, `revision`, `createdAtMs`, `updatedAtMs`, `ownerUserId`, `machineId`, `profileId`, `name`, agentHandle, agentAddress, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `skillIds`, `referenceAttachmentIds`, `mainConversationId`, `sidebar`, `activity`, `activeRunIds` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`id` = try c.decode(ID.self, forKey: .`id`)
@@ -2823,6 +2844,7 @@ public struct Bot: Codable, Hashable, Identifiable {
         approvalReview = try c.decodeIfPresent(String.self, forKey: .approvalReview)
         self.agentHandle = try c.decodeIfPresent(String.self, forKey: .agentHandle)
         self.agentAddress = try c.decodeIfPresent(String.self, forKey: .agentAddress)
+        self.lifecycle = try c.decodeIfPresent(BotLifecycle.self, forKey: .lifecycle)
         self.`title` = try c.decode(String.self, forKey: .`title`)
         self.`job` = try c.decode(String.self, forKey: .`job`)
         self.`instructions` = try c.decode(String.self, forKey: .`instructions`)
@@ -2849,6 +2871,7 @@ public struct Bot: Codable, Hashable, Identifiable {
         try c.encodeIfPresent(approvalReview, forKey: .approvalReview)
         try c.encodeIfPresent(agentHandle, forKey: .agentHandle)
         try c.encodeIfPresent(agentAddress, forKey: .agentAddress)
+        try c.encodeIfPresent(lifecycle, forKey: .lifecycle)
         try c.encode(`title`, forKey: .`title`)
         try c.encode(`job`, forKey: .`job`)
         try c.encode(`instructions`, forKey: .`instructions`)

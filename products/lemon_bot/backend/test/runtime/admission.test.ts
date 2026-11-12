@@ -181,3 +181,34 @@ describe('authenticated fresh native follow-up admission', () => {
     } finally { f.store.close(); }
   });
 });
+
+describe('native issuer configuration recovery', () => {
+  for (const code of ['callback_origin_not_allowed', 'callback_requires_https', 'invalid_callback_url'] as const) {
+    test(`${code} explains the non-secret origin and operator fix`, async () => {
+      const f = fixture(); f.services.lemon.methods.push('profile.followup.admission.set', 'runs.followup.lineage.get');
+      f.rpc = async () => { throw new ApiError(code, 'PRIVATE_CONTROLLER_DIAGNOSTIC'); };
+      try {
+        const failure = await configureNativeFollowupAdmission(f.services, f.bot).catch(error => error as ApiError);
+        expect(failure).toBeInstanceOf(ApiError);
+        if (!(failure instanceof ApiError)) throw new Error('Expected an admission rejection.');
+        expect(failure.code).toBe(code); expect(failure.retrySafe).toBe(true);
+        expect(failure.message).toContain('https://product.example'); expect(failure.message).toContain('LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS');
+        expect(failure.message).not.toContain('PRIVATE_CONTROLLER_DIAGNOSTIC');
+        expect(f.store.metadata(`nativeFollowupIssuerConfig:${f.bot.id}`)).toMatchObject({ state: 'rejected' });
+      } finally { f.store.close(); }
+    });
+  }
+  test('an inconclusive token digest never authorizes a repeated admission mutation', async () => {
+    const f = fixture(); f.services.lemon.methods.push('profile.followup.admission.set', 'profile.followup.admission.get', 'runs.followup.lineage.get');
+    f.rpc = async method => {
+      if (method === 'profile.followup.admission.get') return { profileId: f.bot.profileId, configured: true, url: 'https://product.example' + nativeFollowupAdmissionPath, tokenSha256: '0'.repeat(64) };
+      throw new ApiError('outcome_unknown', 'Lost setter reply.', false);
+    };
+    try {
+      await expect(configureNativeFollowupAdmission(f.services, f.bot)).rejects.toMatchObject({ code: 'outcome_unknown' });
+      await expect(configureNativeFollowupAdmission(f.services, f.bot)).rejects.toMatchObject({ code: 'outcome_unknown' });
+      expect(f.calls.filter(call => call.method === 'profile.followup.admission.set')).toHaveLength(1);
+      expect(f.calls.filter(call => call.method === 'profile.followup.admission.get')).toHaveLength(1);
+    } finally { f.store.close(); }
+  });
+});

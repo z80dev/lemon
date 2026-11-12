@@ -87,6 +87,20 @@ describe('long-lived operator connection', () => {
       expect(service.connected).toBe(true);
     } finally { service.close(); vi.useRealTimers(); }
   });
+  test('native callback rejections retain their distinct retry-safe code without remote diagnostics', async () => {
+    for (const code of ['callback_origin_not_allowed', 'callback_requires_https', 'invalid_callback_url']) {
+      const socket = new Socket(), service = createLemonService(config, { socket: () => socket });
+      try {
+        service.start(); socket.handshake(['profile.followup.admission.set']);
+        const result = service.call('profile.followup.admission.set', {}, { mutation: true, resourceIds: ['bot_fixed'] }).catch(error => error as ApiError);
+        socket.deliver({ type: 'res', id: socket.sent[1]!.id, ok: false, error: { code, message: 'PRIVATE_TOKEN', details: { origin: 'https://product.example', token: 'PRIVATE_TOKEN' } } });
+        const failure = await result;
+        expect(failure).toMatchObject({ code, retrySafe: true, details: { resourceIds: ['bot_fixed'] } });
+        if (!(failure instanceof ApiError)) throw new Error('Expected a sanitized callback rejection.');
+        expect(JSON.stringify(failure)).not.toContain('PRIVATE_TOKEN'); expect(failure.message).not.toContain('PRIVATE_TOKEN');
+      } finally { service.close(); }
+    }
+  });
   test('known remote path rejection is not an uncertain mutation and raw values never escape', async () => {
     const socket = new Socket(); const service = createLemonService(config, { socket: () => socket });
     try {

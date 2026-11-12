@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, Route } from '../core/services';
 import { ApiError, errorEnvelope, fail } from '../core/errors';
@@ -21,28 +22,83 @@ const finished: P.Run['status'][] = ['succeeded', 'failed', 'cancelled'];
 const maxAdmissionBytes = 16_777_216;
 function receipt<T>(schema: z.ZodType<T>, input: unknown): T { const result = schema.safeParse(input); if (!result.success) fail('upstream_unavailable', 'The controller returned an invalid private admission receipt.'); return result.data; }
 
-/** Configure once after actual profile sync; uncertain writes are never repeated. */
-export async function configureNativeFollowupAdmission(services: BackendServices, bot: P.Bot): Promise<void> {
-  bot = services.store.require<P.Bot>('bots', bot.id);
+function issuerKeys(botId: string) { return { active: `nativeFollowupIssuerConfig:${botId}`, pending: `nativeFollowupIssuerPending:${botId}` }; }
+function activateIssuer(services: BackendServices, issuer: Issuer): void {
+  const keys = issuerKeys(issuer.botId);
+  services.store.transaction(() => {
+    const old = services.store.metadata<Issuer>(keys.active);
+    if (old && old.digest !== issuer.digest) services.store.setMetadata(`nativeFollowupIssuer:${old.digest}`, null);
+    services.store.setMetadata(keys.active, { ...issuer, state: 'configured' } satisfies Issuer);
+    services.store.setMetadata(`nativeFollowupIssuer:${issuer.digest}`, issuer.botId);
+    services.store.setMetadata(keys.pending, null);
+  });
+}
+/** A digest of the decrypted UTF-8 token, not the product's keyed JSON digest. */
+function tokenSha256(services: BackendServices, issuer: Issuer): string {
+  return createHash('sha256').update(services.decrypt<string>(issuer.encryptedToken), 'utf8').digest('hex');
+}
+async function issuerReceipt(services: BackendServices, bot: P.Bot) {
+  if (!services.lemon.methods.includes('profile.followup.admission.get')) fail('outcome_unknown', 'The controller cannot resolve this admission receipt. Upgrade the controller before finishing setup; no configuration was retried.', false, { resourceIds: [bot.id] });
+  return receipt(z.object({ profileId: z.literal(bot.profileId), configured: z.boolean(), url: z.string().optional(), tokenSha256: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict(), await services.lemon.call('profile.followup.admission.get', { profileId: bot.profileId }, { mutation: false }));
+}
+/** Read-only reconciliation may adopt a matching issuer, but never sends another setter. */
+export async function reconcileNativeFollowupAdmission(services: BackendServices, bot: P.Bot): Promise<boolean> {
+  const keys = issuerKeys(bot.id);
+  const pending = services.store.metadata<Issuer>(keys.pending);
+  const candidate = pending ?? services.store.metadata<Issuer>(keys.active);
+  if (!candidate) return false;
+  if (!pending && candidate.state === 'configured') return true;
+  const actual = await issuerReceipt(services, bot);
+  if (actual.configured && actual.url === candidate.url && actual.tokenSha256 === tokenSha256(services, candidate)) {
+    activateIssuer(services, candidate); return true;
+  }
+  return false;
+}
+export function nativeAdmissionAddressChange(services: BackendServices, bot: P.Bot): string | null {
+  const old = services.store.metadata<Issuer>(issuerKeys(bot.id).active);
   const url = new URL(nativeFollowupAdmissionPath, services.config.publicUrl).toString();
-  const key = `nativeFollowupIssuerConfig:${bot.id}`;
-  const existing = services.store.metadata<Issuer>(key);
-  if (existing && (existing.profileId !== bot.profileId || existing.url !== url)) fail('conflict', 'Native admission issuer identity changed; complete the existing profile lifecycle first.');
-  if (existing?.state === 'configured') return;
-  if (existing && ['pending', 'outcome_unknown'].includes(existing.state)) fail('outcome_unknown', 'Native admission configuration is unresolved and cannot be repeated.', false, { resourceIds: [bot.id] });
+  return old && old.url !== url ? `Lemon Bot's address changed from ${new URL(old.url).origin} to ${new URL(url).origin}. Choose Update address to configure the new callback; add ${new URL(url).origin} to LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS on the controller first (see the Lemon Bot getting-started guide).` : null;
+}
+/** Re-addressing retains the old issuer until an exact controller acknowledgement. */
+export async function configureNativeFollowupAdmission(services: BackendServices, bot: P.Bot, readdress = false): Promise<void> {
+  bot = services.store.require<P.Bot>('bots', bot.id);
+  const keys = issuerKeys(bot.id), url = new URL(nativeFollowupAdmissionPath, services.config.publicUrl).toString();
+  let existing = services.store.metadata<Issuer>(keys.active);
+  const change = nativeAdmissionAddressChange(services, bot);
+  if (existing && existing.profileId !== bot.profileId) fail('conflict', 'The admission issuer belongs to a different profile; no configuration was changed.');
+  if (change && !readdress) fail('conflict', change);
   if (!services.lemon.methods.includes('profile.followup.admission.set') || !services.lemon.methods.includes('runs.followup.lineage.get')) fail('capability_unavailable', 'This controller lacks authenticated native follow-up admission.');
-  const token = existing ? services.decrypt<string>(existing.encryptedToken) : Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
-  const issuer: Issuer = { botId: bot.id, profileId: bot.profileId, url, digest: services.mutations.digest(token), encryptedToken: existing?.encryptedToken ?? services.encrypt(token), state: 'pending' };
-  services.store.transaction(() => { services.store.setMetadata(key, issuer); services.store.setMetadata(`nativeFollowupIssuer:${issuer.digest}`, bot.id); });
+  let candidate = services.store.metadata<Issuer>(keys.pending) ?? (change ? null : existing);
+  if (candidate && (candidate.profileId !== bot.profileId || candidate.url !== url)) fail('conflict', 'Finish the pending admission address change before changing the public address again.');
+  if (candidate?.state === 'configured') return;
+  if (candidate && ['pending', 'outcome_unknown'].includes(candidate.state)) {
+    const actual = await issuerReceipt(services, bot);
+    if (actual.configured && actual.url === candidate.url && actual.tokenSha256 === tokenSha256(services, candidate)) {
+      activateIssuer(services, candidate); return;
+    }
+    // Only no configuration, or the exact retained old issuer, proves the candidate is not active.
+    const notApplied = !actual.configured || (change && existing && actual.url === existing.url && actual.tokenSha256 === tokenSha256(services, existing));
+    if (!notApplied) fail('outcome_unknown', 'Native admission configuration is unresolved. Its receipt does not prove it was not applied; no configuration was retried.', false, { resourceIds: [bot.id] });
+  }
+  const token = candidate ? services.decrypt<string>(candidate.encryptedToken) : Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
+  const issuer: Issuer = { botId: bot.id, profileId: bot.profileId, url, digest: services.mutations.digest(token), encryptedToken: candidate?.encryptedToken ?? services.encrypt(token), state: 'pending' };
+  const key = change ? keys.pending : keys.active;
+  services.store.transaction(() => {
+    services.store.setMetadata(key, issuer);
+    if (!change) services.store.setMetadata(`nativeFollowupIssuer:${issuer.digest}`, bot.id);
+  });
   try {
     receipt(z.object({ profileId: z.literal(bot.profileId), configured: z.literal(true) }).strict(), await services.lemon.call('profile.followup.admission.set', { profileId: bot.profileId, url, token }, { mutation: true, resourceIds: [bot.id] }));
-    services.store.setMetadata(key, { ...issuer, state: 'configured' } satisfies Issuer);
+    activateIssuer(services, issuer);
   } catch (error) {
-    // An authenticated real callback can observe installation before its RPC acknowledgment.
-    if (services.store.metadata<Issuer>(key)?.state === 'configured') return;
-    const knownRejection = error instanceof ApiError && error.retrySafe && ['forbidden', 'not_found', 'invalid_request', 'capability_unavailable', 'policy_denied'].includes(error.code);
+    if (services.store.metadata<Issuer>(keys.active)?.digest === issuer.digest && services.store.metadata<Issuer>(keys.active)?.state === 'configured') return;
+    const knownRejection = error instanceof ApiError && error.retrySafe && ['forbidden', 'not_found', 'invalid_request', 'capability_unavailable', 'policy_denied', 'callback_origin_not_allowed', 'callback_requires_https', 'invalid_callback_url'].includes(error.code);
     services.store.setMetadata(key, { ...issuer, state: knownRejection ? 'rejected' : 'outcome_unknown' } satisfies Issuer);
-    if (!knownRejection) fail('outcome_unknown', 'Native admission configuration may have been installed.', false, { resourceIds: [bot.id] });
+    if (!knownRejection) fail('outcome_unknown', 'Native admission configuration may have been installed. Finish setup will query its receipt before proceeding.', false, { resourceIds: [bot.id] });
+    const origin = new URL(url).origin;
+    if (error.code === 'callback_origin_not_allowed') fail(error.code, `Lemon isn't set to accept Lemon Bot at ${origin}. Add ${origin} to LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS on the controller, then choose Finish setup (see the Lemon Bot getting-started guide).`);
+    if (error.code === 'callback_requires_https') fail(error.code, `Lemon Bot at ${origin} requires HTTPS. Set LEMON_BOT_PUBLIC_URL to a reachable HTTPS origin, add that origin to LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS, then choose Update address (see the Lemon Bot getting-started guide).`);
+    if (error.code === 'invalid_callback_url') fail(error.code, `Lemon Bot's callback at ${origin} is invalid. Set LEMON_BOT_PUBLIC_URL to a credential-free HTTPS origin without a query or fragment; allow it in LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS (see the Lemon Bot getting-started guide).`);
     throw error;
   }
 }
