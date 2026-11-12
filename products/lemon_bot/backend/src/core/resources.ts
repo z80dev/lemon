@@ -231,6 +231,58 @@ export async function resumeImportedSkill(services:BackendServices,user:Principa
     return services.store.require<P.Skill>('skills',skill.id);
   });
 }
+
+/** Apply a copied skill's disabled intent only after its original install has been reconciled. */
+export async function disableImportedSkill(services:BackendServices,user:Principal,reservation:ImportedSkillReservation):Promise<P.Skill> {
+  return importedResume(services,reservation.operationId,async()=>{
+    const {operationId}=reservation,skill=services.store.require<P.Skill>('skills',reservation.skill.id);
+    requireOwn(user,skill.ownerUserId);
+    if(!skill.botId||skill.botId!==reservation.skill.botId)fail('conflict','Imported skill disable is not bound to its Bot.');
+    routineBot(services,user,skill.botId);
+    const key=`importedSkillDisable:${operationId}`,reservationDigest=services.mutations.digest(reservation);
+    let operation=services.store.metadata<{reservationDigest:string;revision:number;state:'pending'|'complete';paths:HostPath[]}>(key);
+    if(operation&&operation.reservationDigest!==reservationDigest)fail('conflict','Imported disable is bound to another reservation.');
+    const fence=services.store.metadata<Operation>(`resourceOperation:${skill.id}`);
+    if(fence&&fence.action!=='skill.import.disable')fail('outcome_unknown','Reconcile the imported skill install before disabling it.',false,{resourceId:skill.id,operationId});
+    if(operation?.state==='complete'||!operation&&!skill.enabled)return skill;
+    if(!operation){
+      operation={reservationDigest,revision:skill.revision,state:'pending',paths:services.store.metadata<HostPath[]>(`skillHostPaths:${skill.id}`)??[]};
+      services.store.transaction(()=>{
+        services.store.setMetadata(key,operation);
+        services.store.setMetadata(`resourceOperation:${skill.id}`,{state:'pending',revision:skill.revision,action:'skill.import.disable',operationId});
+      });
+    }
+    if(skill.revision!==operation.revision)fail('conflict','The imported skill changed before its disable completed.');
+    try{
+      const tracked=services.store.metadata<HostPath[]>(`skillHostPaths:${skill.id}`)??[],remaining:HostPath[]=[];
+      for(const host of tracked){
+        const reserved=operation.paths.find(path=>path.nodeId===host.nodeId&&path.path===host.path);
+        if(!reserved||reserved.mtimeMs===undefined||reserved.mtimeMs!==host.mtimeMs||!host.path.endsWith(`/${skill.id}/SKILL.md`))fail('outcome_unknown','The imported skill disable lacks an exact owning file receipt.',false);
+        const machine=skillDestination(services,user,skill,host);
+        if(machine.status!=='online'||machine.nodeId!==host.nodeId)fail('machine_offline','Reserved skill destination is unavailable.');
+        assertAvailable(services,'node.fs.stat');
+        try{
+          ack(z.object({path:z.literal(host.path),type:z.literal('regular'),mtimeMs:z.literal(reserved.mtimeMs)}),await services.lemon.call('node.fs.stat',{nodeId:host.nodeId,path:host.path},{mutation:false}));
+          remaining.push(host);
+        }catch(error){if(!(error instanceof ApiError)||error.code!=='not_found')throw error;}
+      }
+      // Missing files confirm prior deletes; unchanged files permit fresh exact previews.
+      services.store.setMetadata(`skillHostPaths:${skill.id}`,remaining);
+      await provisionSkill(services,user,{...skill,enabled:false},[]);
+      const disabled=services.update(skill,{enabled:false});
+      services.store.transaction(()=>{
+        services.store.put('skills',disabled);
+        services.store.setMetadata(key,{...operation,state:'complete'});
+        services.store.setMetadata(`resourceOperation:${skill.id}`,null);
+        services.events.emit('skill.upserted',disabled,{userIds:[user.userId]});
+      });
+      return disabled;
+    }catch(error){
+      services.store.setMetadata(`resourceOperation:${skill.id}`,{state:'outcome_unknown',revision:skill.revision,action:'skill.import.disable',operationId});
+      throw error;
+    }
+  });
+}
 const admissionContext = z.object({jobId:id,profileId:id,routineId:id,creatorId:id,workspaceId:id,cronRunId:id,routerRunId:id,triggeredBy:text(64),scheduledForMs:timestamp.nullable()}).strict();
 const pageQuery = z.object({limit:z.coerce.number().int().min(1).max(200).optional(),cursor:text(12000).optional()}).strict();
 const emptyQuery = z.object({}).strict();

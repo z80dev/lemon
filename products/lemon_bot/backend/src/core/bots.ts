@@ -5,7 +5,7 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RequestContext, Route } from './services';
 import { ApiError, fail } from './errors';
 import { z, parse, principal, id, mutation, update, confirm, voice, boundedText, queryObject } from './validation';
-import { provisionSkill, publicRoutine, reserveImportedSkill, resumeImportedSkill, reserveImportedRoutine, resumeImportedRoutine, type ImportedSkillReservation, type ImportedRoutineReservation } from './resources';
+import { provisionSkill, publicRoutine, reserveImportedSkill, resumeImportedSkill, disableImportedSkill, reserveImportedRoutine, resumeImportedRoutine, type ImportedSkillReservation, type ImportedRoutineReservation } from './resources';
 import { recordPreferenceChange, nativeBotToolPolicy, workspaceNativeToolRestrictions, finalizePreferenceUndos, initializeBotAccess } from './experiences';
 import { deleteConversationResources } from './conversations';
 import { botSessionKeys } from '../runtime/runs';
@@ -529,7 +529,10 @@ async function finishImportedContent(s: BackendServices, c: RequestContext, bot:
   }
   const fence = s.store.metadata<Fence>(`botLifecycle:${bot.id}`)!;
   s.store.setMetadata(`botLifecycle:${bot.id}`, { ...fence, step: 'Install imported skills' });
-  for (const reservation of imported.skillReservations!) await resumeImportedSkill(s, p, reservation);
+  for (const [index,reservation] of imported.skillReservations!.entries()) {
+    await resumeImportedSkill(s,p,reservation);
+    if(imported.disabledSkillIndexes.includes(index))await disableImportedSkill(s,p,reservation);
+  }
   s.store.setMetadata(`botLifecycle:${bot.id}`, { ...fence, step: 'Copy imported routines' });
   for (const reservation of imported.routineReservations!) await resumeImportedRoutine(s, p, reservation);
   const skillIds = imported.skillReservations!.map(reservation => reservation.skill.id);
