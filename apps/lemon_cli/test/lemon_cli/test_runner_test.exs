@@ -42,4 +42,32 @@ defmodule LemonCli.TestRunnerTest do
       end
     end
   end
+
+  test "JavaScript-only lanes do not invoke Elixir", %{tmp_dir: tmp_dir} do
+    invoked = Path.join(tmp_dir, "elixir-invoked")
+
+    for {name, body} <- [
+          {"elixir", "touch #{invoked}\nexit 91"},
+          {"bun", "exit 37"}
+        ] do
+      path = Path.join(tmp_dir, name)
+      File.write!(path, "#!/bin/sh\n#{body}\n")
+      File.chmod!(path, 0o755)
+    end
+
+    for lane <- ["clients", "lemon_bot"] do
+      {output, status} =
+        System.cmd("bash", [Path.join(@root, "scripts/test"), lane],
+          cd: @root,
+          stderr_to_stdout: true,
+          env: [
+            {"PATH", tmp_dir <> ":" <> System.fetch_env!("PATH")},
+            {"LEMON_TEST_REUSE_NODE_MODULES", "0"}
+          ]
+        )
+
+      assert status == 37, output
+      refute File.exists?(invoked)
+    end
+  end
 end

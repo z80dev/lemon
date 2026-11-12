@@ -102,8 +102,11 @@ EOF
 }
 
 ensure_repo_root() {
-  # Reject unsupported regex engines before compilation, test setup or selection.
-  ensure_toolchain
+  # JavaScript-only lanes do not require a BEAM toolchain.
+  case "$LANE" in
+    clients|lemon_bot) ;;
+    *) ensure_toolchain ;;
+  esac
   cd "$ROOT"
 }
 

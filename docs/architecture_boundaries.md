@@ -11,14 +11,13 @@ silent permissions.
 <!-- architecture_policy:start -->
 | App | Actual direct deps from `mix.exs` | Allowed direct deps | Reference-only exceptions |
 | --- | --- | --- | --- |
-| `coding_agent` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_lsp`, `lemon_mcp`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_lsp`, `lemon_mcp`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | *(none)* |
+| `coding_agent` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_lsp`, `lemon_mcp`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | *(none)* |
 | `lemon_agent` | `lemon_ai`, `lemon_core` | `lemon_ai`, `lemon_core` | *(none)* |
 | `lemon_ai` | *(none)* | *(none)* | *(none)* |
 | `lemon_automation` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_mcp`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_browser` | `lemon_core` | `lemon_core` | *(none)* |
 | `lemon_channels` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_core`, `lemon_media` | *(none)* |
 | `lemon_cli` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_mcp`, `lemon_memory`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | `lemon_channels`, `lemon_media` |
-| `lemon_computer_use` | `lemon_agent`, `lemon_ai`, `lemon_core` | `lemon_agent`, `lemon_ai`, `lemon_core` | *(none)* |
 | `lemon_control_plane` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_mcp`, `lemon_media`, `lemon_memory`, `lemon_omp`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_media`, `lemon_memory`, `lemon_omp`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_core` | *(none)* | *(none)* | *(none)* |
 | `lemon_evals` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | *(none)* |
@@ -30,7 +29,7 @@ silent permissions.
 | `lemon_memory` | `lemon_core` | `lemon_core` | *(none)* |
 | `lemon_omp` | `lemon_agent`, `lemon_ai`, `lemon_core` | `lemon_agent`, `lemon_ai`, `lemon_core` | *(none)* |
 | `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_memory` | *(none)* |
-| `lemon_router` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_mcp`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_mcp`, `lemon_media`, `lemon_memory` | *(none)* |
+| `lemon_router` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_mcp`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_media`, `lemon_memory` | *(none)* |
 | `lemon_sim` | `lemon_agent`, `lemon_ai`, `lemon_core` | `lemon_agent`, `lemon_ai`, `lemon_core` | *(none)* |
 | `lemon_sim_ui` | `lemon_ai`, `lemon_core`, `lemon_sim` | `lemon_ai`, `lemon_core`, `lemon_sim` | *(none)* |
 | `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | *(none)* |

@@ -210,12 +210,12 @@ defmodule LemonBrowser.TernSession do
   def handle_call(:opened?, _from, state), do: {:reply, not is_nil(state.block), state}
 
   def handle_call(:fallback, _from, state) do
-    cancel_idle(state)
+    _ = cancel_idle(state)
     {:reply, state.fallback, schedule_idle(state)}
   end
 
   def handle_call({:put_fallback, resolution}, _from, %{block: nil} = state) do
-    cancel_idle(state)
+    _ = cancel_idle(state)
     {:reply, :ok, schedule_idle(%{state | fallback: resolution})}
   end
 
@@ -223,7 +223,7 @@ defmodule LemonBrowser.TernSession do
     do: {:reply, {:error, {:invalid, "Cannot replace an active Tern browser identity"}}, state}
 
   def handle_call({:request, method, args, timeout}, _from, state) do
-    cancel_idle(state)
+    _ = cancel_idle(state)
     state = %{state | deadline: now_ms() + timeout}
 
     {reply, state} =
@@ -253,7 +253,7 @@ defmodule LemonBrowser.TernSession do
 
   @impl true
   def terminate(_reason, state) do
-    cleanup_block(state)
+    _ = cleanup_block(state)
     if is_pid(state.client), do: Tern.close(state.client)
     :ok
   end

@@ -10,7 +10,7 @@ defmodule LemonCli.BotHttpsCommand do
 
   def cli(args) do
     if Enum.any?(args, &(&1 in ["--help", "-h", "help"])) do
-      run(args)
+      :ok = run(args)
       0
     else
       case parse(args) do
