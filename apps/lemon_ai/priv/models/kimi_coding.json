@@ -18,7 +18,6 @@
     "context_window": 262144,
     "max_tokens": 32768,
     "compat": {
-      "anthropic_default_max_output": true,
       "anthropic_session_user_id": true
     }
   },
@@ -42,7 +41,6 @@
     "context_window": 262144,
     "max_tokens": 32768,
     "compat": {
-      "anthropic_default_max_output": true,
       "anthropic_session_user_id": true
     }
   },
@@ -72,7 +70,6 @@
       "max"
     ],
     "compat": {
-      "anthropic_default_max_output": true,
       "anthropic_session_user_id": true
     }
   },
@@ -102,7 +99,6 @@
       "max"
     ],
     "compat": {
-      "anthropic_default_max_output": true,
       "anthropic_session_user_id": true
     }
   },
@@ -132,7 +128,6 @@
     "context_window": 1048576,
     "max_tokens": 32768,
     "compat": {
-      "anthropic_default_max_output": true,
       "anthropic_session_user_id": true
     }
   },
@@ -156,7 +151,6 @@
     "context_window": 262144,
     "max_tokens": 32768,
     "compat": {
-      "anthropic_default_max_output": true,
       "anthropic_session_user_id": true
     }
   },
@@ -186,7 +180,6 @@
       "max"
     ],
     "compat": {
-      "anthropic_default_max_output": true,
       "anthropic_session_user_id": true
     }
   },
@@ -216,7 +209,6 @@
       "max"
     ],
     "compat": {
-      "anthropic_default_max_output": true,
       "anthropic_session_user_id": true
     }
   }

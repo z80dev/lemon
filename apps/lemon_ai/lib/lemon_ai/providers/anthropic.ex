@@ -1090,12 +1090,6 @@ defmodule LemonAi.Providers.Anthropic do
     oauth_request? = anthropic_oauth_request?(model.provider, api_key)
     compat = model.compat || %{}
 
-    # Catalog-declared: some subscription endpoints expect the full output budget.
-    default_max_tokens =
-      if compat_flag?(compat, :anthropic_default_max_output),
-        do: model.max_tokens,
-        else: div(model.max_tokens, 3)
-
     body = %{
       "model" => model.id,
       "messages" =>
@@ -1103,7 +1097,7 @@ defmodule LemonAi.Providers.Anthropic do
           oauth_request?: oauth_request?,
           cache_control: cache_control
         ),
-      "max_tokens" => min(opts.max_tokens || default_max_tokens, model.max_tokens),
+      "max_tokens" => min(opts.max_tokens || model.max_tokens, model.max_tokens),
       "stream" => true
     }
 

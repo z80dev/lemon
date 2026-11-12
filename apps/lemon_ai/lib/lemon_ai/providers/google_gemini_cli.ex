@@ -299,12 +299,8 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
         config
       end
 
-    config =
-      if opts.max_tokens do
-        Map.put(config, "maxOutputTokens", opts.max_tokens)
-      else
-        config
-      end
+    max_tokens = opts.max_tokens || if(model.max_tokens > 0, do: model.max_tokens)
+    config = if max_tokens, do: Map.put(config, "maxOutputTokens", max_tokens), else: config
 
     GoogleShared.put_thinking_config(config, model, opts)
   end

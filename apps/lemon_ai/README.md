@@ -202,6 +202,26 @@ LemonAi.Models.supports_xhigh(model)
 
 ### Provider request controls
 
+Anthropic, OpenAI Chat Completions/Responses, Azure Responses, Google (including
+Vertex and Gemini CLI), and Bedrock requests default to the model's full declared
+output budget, not a fraction of it. Set `max_tokens` in stream options to choose
+a smaller budget; reasoning tokens count against the provider's output limit.
+Anthropic clamps the limit to the model maximum and reserves room for manual
+thinking. A model without a declared positive limit leaves the provider default
+unchanged on transports where the field is optional. Codex subscription requests
+omit output limits, and Bedrock Nova high-effort reasoning omits `maxTokens` as
+required by those endpoints.
+
+Z.AI keeps the coding-plan Chat Completions endpoint
+(`/api/coding/paas/v4/chat/completions`), sends `max_tokens` (131,072 for GLM-5.x),
+and uses top-level `reasoning_effort` alongside `thinking: {type: "enabled"}`
+on models declaring effort support. GLM-5.3 variants use `low`, `high`, or `max`;
+Lemon's `medium` maps to `high`, `xhigh` to `max`, and off/minimal maps to `low`
+because these models require thinking. GLM-5.2 also accepts disabled thinking;
+older models receive only the thinking toggle, not an unsupported effort field.
+These shapes follow Z.AI's [deep-thinking](https://docs.z.ai/guides/capabilities/thinking)
+and [parameter](https://docs.z.ai/guides/overview/concept-param) documentation.
+
 Modern OpenAI Responses models accept sampling temperature only at effective
 effort `:none`. `PI_CACHE_RETENTION=long` requests 12-hour retention through
 `prompt_cache_options.ttl` on current models; older models retain their 24-hour

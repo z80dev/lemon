@@ -217,6 +217,8 @@
     "provider": "zai",
     "base_url": "https://api.z.ai/api/coding/paas/v4",
     "reasoning": true,
+    "reasoning_efforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+    "compat": {"supports_reasoning_effort": true},
     "input": [
       "text"
     ],
@@ -236,6 +238,8 @@
     "provider": "zai",
     "base_url": "https://api.z.ai/api/coding/paas/v4",
     "reasoning": true,
+    "reasoning_efforts": ["low", "high", "max"],
+    "compat": {"supports_reasoning_effort": true},
     "input": [
       "text"
     ],
@@ -255,6 +259,8 @@
     "provider": "zai",
     "base_url": "https://api.z.ai/api/coding/paas/v4",
     "reasoning": true,
+    "reasoning_efforts": ["low", "high", "max"],
+    "compat": {"supports_reasoning_effort": true},
     "input": [
       "text",
       "image"
@@ -275,6 +281,8 @@
     "provider": "zai",
     "base_url": "https://api.z.ai/api/coding/paas/v4",
     "reasoning": true,
+    "reasoning_efforts": ["low", "high", "max"],
+    "compat": {"supports_reasoning_effort": true},
     "input": [
       "text",
       "image"
@@ -315,10 +323,11 @@
     "provider": "zai",
     "base_url": "https://api.z.ai/api/coding/paas/v4",
     "reasoning": true,
+    "reasoning_efforts": ["low", "high", "max"],
     "input": ["text"],
     "cost": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
     "context_window": 1000000,
     "max_tokens": 131072,
-    "compat": {"supports_reasoning_effort": false, "thinking_format": "zai", "max_tokens_field": "max_tokens"}
+    "compat": {"supports_reasoning_effort": true, "thinking_format": "zai", "max_tokens_field": "max_tokens"}
   }
 }
