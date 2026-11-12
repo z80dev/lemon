@@ -71,8 +71,6 @@ defmodule LemonAi.CallDispatcher do
 
   @default_concurrency_cap 10
   @default_queue_timeout_ms 120_000
-  @default_stream_result_timeout_ms 300_000
-  @default_stream_cancel_reason :dispatcher_stream_timeout
 
   # ============================================================================
   # Public API
@@ -99,6 +97,11 @@ defmodule LemonAi.CallDispatcher do
     * `:queue_timeout_ms` - how long to wait for a concurrency slot when the
       provider is at its cap. `0` fails fast. Defaults to the
       `:queue_timeout_ms` application config, or 120 seconds.
+    * `:stream_idle_timeout` - Maximum silence between stream events, in ms
+      (default 180,000). Also configurable under this module's application config.
+    * `:stream_timeout` - Independent hard stream ceiling, in ms (default
+      1,800,000). Also configurable under this module's application config.
+      Both limits accept `:infinity`; per-call values override application config.
 
   ## Examples
 
@@ -147,7 +150,7 @@ defmodule LemonAi.CallDispatcher do
             :ok ->
               try do
                 callback.()
-                |> handle_dispatch_result(provider, slot_ref)
+                |> handle_dispatch_result(provider, slot_ref, opts)
               rescue
                 error ->
                   record_last_error(provider, error)
@@ -375,9 +378,9 @@ defmodule LemonAi.CallDispatcher do
     :exit, {:noproc, _} -> :ok
   end
 
-  defp handle_dispatch_result({:ok, stream_pid} = result, provider, slot_ref)
+  defp handle_dispatch_result({:ok, stream_pid} = result, provider, slot_ref, opts)
        when is_pid(stream_pid) do
-    case start_stream_tracking(provider, slot_ref, stream_pid) do
+    case start_stream_tracking(provider, slot_ref, stream_pid, opts) do
       :ok ->
         result
 
@@ -392,22 +395,23 @@ defmodule LemonAi.CallDispatcher do
     end
   end
 
-  defp handle_dispatch_result(result, provider, slot_ref) do
+  defp handle_dispatch_result(result, provider, slot_ref, _opts) do
     record_result(provider, result)
     release_slot(slot_ref)
     result
   end
 
-  defp start_stream_tracking(provider, slot_ref, stream_pid) do
+  defp start_stream_tracking(provider, slot_ref, stream_pid, opts) do
     case Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
            track_stream_result(provider, slot_ref, stream_pid)
          end) do
       {:ok, tracker_pid} ->
-        case LemonAi.EventStream.subscribe_result(stream_pid, tracker_pid) do
-          {:ok, result_ref} ->
-            send(tracker_pid, {:track_stream_result, result_ref})
-            :ok
-
+        with :ok <-
+               LemonAi.EventStream.configure_timeouts(stream_pid, stream_timeout_options(opts)),
+             {:ok, result_ref} <- LemonAi.EventStream.subscribe_result(stream_pid, tracker_pid) do
+          send(tracker_pid, {:track_stream_result, result_ref})
+          :ok
+        else
           {:error, reason} ->
             Process.exit(tracker_pid, :shutdown)
             {:error, reason}
@@ -458,8 +462,8 @@ defmodule LemonAi.CallDispatcher do
   end
 
   defp await_stream_terminal_result(stream_pid) do
-    timeout_ms = stream_result_timeout_ms()
-
+    # EventStream owns both deadlines. Tracking must not impose another absolute
+    # deadline or consume events away from the caller.
     receive do
       {:track_stream_result, result_ref} ->
         stream_ref = Process.monitor(stream_pid)
@@ -471,26 +475,26 @@ defmodule LemonAi.CallDispatcher do
 
           {:DOWN, ^stream_ref, :process, ^stream_pid, reason} ->
             {:error, {:stream_exit, reason}}
-        after
-          timeout_ms ->
-            Process.demonitor(stream_ref, [:flush])
-
-            Logger.warning(
-              "CallDispatcher stream tracking timeout after #{timeout_ms}ms stream=#{inspect(stream_pid)}"
-            )
-
-            _ = LemonAi.EventStream.cancel(stream_pid, @default_stream_cancel_reason)
-            {:error, :timeout}
         end
     end
   end
 
-  defp stream_result_timeout_ms do
-    case Application.get_env(:lemon_ai, __MODULE__, [])
-         |> Keyword.get(:stream_result_timeout_ms, @default_stream_result_timeout_ms) do
-      value when is_integer(value) and value > 0 -> value
-      _ -> @default_stream_result_timeout_ms
-    end
+  defp stream_timeout_options(opts) do
+    config = Application.get_env(:lemon_ai, __MODULE__, [])
+
+    Enum.reduce(
+      [stream_timeout: :timeout, stream_idle_timeout: :idle_timeout],
+      [
+        timeout_reason: :dispatcher_stream_timeout,
+        idle_timeout_reason: :dispatcher_stream_idle_timeout
+      ],
+      fn {key, stream_key}, acc ->
+        case Keyword.get(opts, key, Keyword.get(config, key)) do
+          nil -> acc
+          value -> Keyword.put(acc, stream_key, value)
+        end
+      end
+    )
   end
 
   defp default_queue_timeout_ms do

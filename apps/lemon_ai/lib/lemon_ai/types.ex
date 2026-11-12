@@ -324,6 +324,11 @@ defmodule LemonAi.Types do
     @moduledoc """
     Options for streaming requests.
 
+    `stream_idle_timeout` cancels after 180,000 ms without any stream event.
+    Every event (including thinking and tool-argument deltas) resets this window.
+    `stream_timeout` is an independent hard ceiling, defaulting to 1,800,000 ms.
+    Either accepts `:infinity` to disable that limit.
+
     `on_payload` is an opt-in Codex or OpenAI-compatible request observer, called
     with the finalized JSON-safe body and provider/model/session metadata before
     HTTP submission. `on_usage` observes terminal raw usage before normalization.
@@ -359,6 +364,7 @@ defmodule LemonAi.Types do
             reasoning: thinking_level() | nil,
             thinking_budgets: map(),
             stream_timeout: timeout(),
+            stream_idle_timeout: timeout(),
             tool_choice: atom() | String.t() | nil,
             project: String.t() | nil,
             location: String.t() | nil,
@@ -379,7 +385,8 @@ defmodule LemonAi.Types do
               caller_headers: nil,
               reasoning: nil,
               thinking_budgets: %{},
-              stream_timeout: 300_000,
+              stream_timeout: 1_800_000,
+              stream_idle_timeout: 180_000,
               tool_choice: nil,
               project: nil,
               location: nil,

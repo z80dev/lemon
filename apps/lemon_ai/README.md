@@ -525,8 +525,19 @@ registry is a convenience, not a requirement.
 
 ```elixir
 config :lemon_ai, LemonAi.CallDispatcher,
-  stream_result_timeout_ms: 300_000   # how long the dispatcher tracks a stream's result
+  stream_idle_timeout: 180_000,      # silence between provider events
+  stream_timeout: 1_800_000          # independent hard response ceiling
 ```
+
+The dispatcher uses the stream's own timers rather than imposing another
+absolute deadline. These settings replace `stream_result_timeout_ms`; explicit
+per-request options take precedence. Both accept `:infinity`.
+
+Direct providers and dispatched calls use the same limits: every event, including
+thinking, text and tool-argument deltas, resets the idle window. Idle cancellation
+is `:stream_idle_timeout` (direct) or `:dispatcher_stream_idle_timeout` (dispatched).
+The hard ceiling never resets; its reasons remain `:timeout` and
+`:dispatcher_stream_timeout`.
 
 `LemonAi.ModelCache` caches provider `GET /models` availability with a configurable TTL
 (default 5 minutes).
@@ -559,7 +570,8 @@ All defined in `LemonAi.Types`:
   api_key: String.t() | nil,
   headers: map(),
   reasoning: :none | :minimal | :low | :medium | :high | :xhigh | :max | nil,
-  stream_timeout: timeout(),        # default 300_000ms
+  stream_timeout: timeout(),        # hard ceiling; default 1_800_000ms
+  stream_idle_timeout: timeout(),   # silence window; default 180_000ms
   tool_choice: atom() | String.t() | nil
   # ...plus Vertex/OAuth fields: project, location, access_token, service_account_json
 }

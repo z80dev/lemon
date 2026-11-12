@@ -320,7 +320,11 @@ context = Types.AgentContext.new(
 config = %Types.AgentLoopConfig{
   model: model,
   convert_to_llm: &my_convert/1,
-  stream_options: %LemonAi.Types.StreamOptions{max_tokens: 4000}
+  stream_options: %LemonAi.Types.StreamOptions{
+    max_tokens: 4000,
+    stream_idle_timeout: 180_000,
+    stream_timeout: 1_800_000
+  }
 }
 
 user_msg = %LemonAi.Types.UserMessage{
@@ -332,6 +336,14 @@ user_msg = %LemonAi.Types.UserMessage{
 Loop.stream([user_msg], context, config)
 |> Enum.each(&IO.inspect/1)
 ```
+
+The same `stream_options` struct is accepted by `Agent.start_link/1`; model-runtime
+option maps also accept both timeout keys (atoms or strings). These are per-model
+response limits, not run deadlines: idle expiry resets on every provider event,
+while the hard ceiling never resets. Either may be `:infinity`. Whole-run event
+streams disable both timers so a long-running tool is not mistaken for a stalled
+provider. Standalone `LemonAgent.EventStream` instances expose these as
+`:idle_timeout` and `:timeout` with the same defaults.
 
 ### Spawning Subagents
 

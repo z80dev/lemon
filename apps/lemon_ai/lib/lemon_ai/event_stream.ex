@@ -14,7 +14,7 @@ defmodule LemonAi.EventStream do
   - **Bounded Queues**: Configurable queue limits prevent unbounded memory growth.
   - **Backpressure**: `push/2` returns `:ok | {:error, :overflow}` for flow control.
   - **Cancellation**: Explicit `cancel/2` API for clean stream termination.
-  - **Timeouts**: Configurable stream timeout with automatic cancellation.
+  - **Timeouts**: Independent inactivity window and hard ceiling with automatic cancellation.
 
   ## Usage
 
@@ -22,7 +22,8 @@ defmodule LemonAi.EventStream do
       {:ok, stream} = EventStream.start_link(
         owner: self(),
         max_queue: 1000,
-        timeout: 300_000
+        timeout: 1_800_000,
+        idle_timeout: 180_000
       )
 
       # Attach a supervised task
@@ -57,7 +58,8 @@ defmodule LemonAi.EventStream do
   # ============================================================================
 
   @default_max_queue 10_000
-  @default_timeout 300_000
+  @default_timeout 1_800_000
+  @default_idle_timeout 180_000
 
   # ============================================================================
   # Event Types
@@ -86,6 +88,7 @@ defmodule LemonAi.EventStream do
           | {:max_queue, pos_integer()}
           | {:drop_strategy, drop_strategy()}
           | {:timeout, timeout()}
+          | {:idle_timeout, timeout()}
 
   # ============================================================================
   # Client API
@@ -100,7 +103,11 @@ defmodule LemonAi.EventStream do
   - `:max_queue` - Maximum events to buffer. Default: #{@default_max_queue}
   - `:drop_strategy` - What to do on overflow: `:drop_oldest`, `:drop_newest`, or `:error`.
     Default: `:error`
-  - `:timeout` - Stream timeout in milliseconds. Default: #{@default_timeout}ms
+  - `:timeout` - Hard ceiling in milliseconds. Default: #{@default_timeout}ms.
+    Cancels with `:timeout`. `:infinity` disables this limit.
+  - `:idle_timeout` - Maximum silence between events. Default: #{@default_idle_timeout}ms.
+    Every pushed event resets it; cancels with `:stream_idle_timeout`.
+    `:infinity` disables this limit.
   """
   @spec start_link([option()]) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -255,6 +262,14 @@ defmodule LemonAi.EventStream do
     :exit, {:normal, _} -> {:error, :stream_not_found}
   end
 
+  @doc false
+  def configure_timeouts(stream, opts) do
+    GenServer.call(stream, {:configure_timeouts, opts})
+  catch
+    :exit, {:noproc, _} -> {:error, :stream_not_found}
+    :exit, {:normal, _} -> {:error, :stream_not_found}
+  end
+
   @doc """
   Collect all text from the stream into a single string.
   """
@@ -298,13 +313,14 @@ defmodule LemonAi.EventStream do
     max_queue = Keyword.get(opts, :max_queue, @default_max_queue)
     drop_strategy = Keyword.get(opts, :drop_strategy, :error)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
+    idle_timeout = Keyword.get(opts, :idle_timeout, @default_idle_timeout)
+    now = System.monotonic_time(:millisecond)
 
     # Monitor the owner process
     owner_ref = if owner != self(), do: Process.monitor(owner), else: nil
 
-    # Set up stream timeout
-    timeout_ref =
-      if timeout != :infinity, do: Process.send_after(self(), :stream_timeout, timeout), else: nil
+    timeout_ref = start_timeout(timeout, :stream_timeout)
+    idle_timeout_ref = start_timeout(idle_timeout, :stream_idle_timeout)
 
     state = %{
       events: :queue.new(),
@@ -322,7 +338,14 @@ defmodule LemonAi.EventStream do
       owner_ref: owner_ref,
       task_pid: nil,
       task_ref: nil,
-      timeout_ref: timeout_ref
+      timeout: timeout,
+      idle_timeout: idle_timeout,
+      started_at: now,
+      last_activity_at: now,
+      timeout_reason: :timeout,
+      idle_timeout_reason: :stream_idle_timeout,
+      timeout_ref: timeout_ref,
+      idle_timeout_ref: idle_timeout_ref
     }
 
     {:ok, state}
@@ -380,6 +403,33 @@ defmodule LemonAi.EventStream do
     end
   end
 
+  def handle_call({:configure_timeouts, _opts}, _from, %{done: true} = state) do
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:configure_timeouts, opts}, _from, state) do
+    cancel_timeouts(state)
+    timeout = Keyword.get(opts, :timeout, state.timeout)
+    idle_timeout = Keyword.get(opts, :idle_timeout, state.idle_timeout)
+    now = System.monotonic_time(:millisecond)
+
+    state = %{
+      state
+      | timeout: timeout,
+        idle_timeout: idle_timeout,
+        timeout_reason: Keyword.get(opts, :timeout_reason, state.timeout_reason),
+        idle_timeout_reason: Keyword.get(opts, :idle_timeout_reason, state.idle_timeout_reason),
+        timeout_ref: start_timeout(remaining(timeout, now - state.started_at), :stream_timeout),
+        idle_timeout_ref:
+          start_timeout(
+            remaining(idle_timeout, now - state.last_activity_at),
+            :stream_idle_timeout
+          )
+    }
+
+    {:reply, :ok, state}
+  end
+
   def handle_call(:stats, _from, state) do
     stats = %{
       queue_size: state.queue_size,
@@ -418,8 +468,7 @@ defmodule LemonAi.EventStream do
 
     state = %{state | result: {:ok, message}, done: true}
 
-    # Cancel the timeout
-    if state.timeout_ref, do: Process.cancel_timer(state.timeout_ref)
+    cancel_timeouts(state)
 
     # Wake up any result waiters
     state = notify_result_waiters(state)
@@ -436,8 +485,7 @@ defmodule LemonAi.EventStream do
 
     state = %{state | result: {:error, message}, done: true}
 
-    # Cancel the timeout
-    if state.timeout_ref, do: Process.cancel_timer(state.timeout_ref)
+    cancel_timeouts(state)
 
     # Wake up any result waiters
     state = notify_result_waiters(state)
@@ -492,6 +540,7 @@ defmodule LemonAi.EventStream do
       state = push_terminal(error_event, state)
 
       state = %{state | result: {:error, error_message}, done: true}
+      cancel_timeouts(state)
       state = notify_result_waiters(state)
       {:noreply, %{state | task_pid: nil, task_ref: nil}}
     else
@@ -526,9 +575,26 @@ defmodule LemonAi.EventStream do
     {:stop, :normal, state}
   end
 
+  def handle_info({:timeout, ref, :stream_timeout}, %{timeout_ref: ref} = state) do
+    handle_info(:stream_timeout, state)
+  end
+
+  def handle_info({:timeout, ref, :stream_idle_timeout}, %{idle_timeout_ref: ref} = state) do
+    if state.done do
+      {:noreply, state}
+    else
+      state = do_cancel(state, state.idle_timeout_reason)
+      {:stop, :normal, state}
+    end
+  end
+
+  def handle_info({:timeout, _ref, _kind}, state), do: {:noreply, state}
+
+  def handle_info(:stream_timeout, %{done: true} = state), do: {:noreply, state}
+
   def handle_info(:stream_timeout, state) do
     Logger.debug("EventStream timeout, canceling stream")
-    state = do_cancel(state, :timeout)
+    state = do_cancel(state, state.timeout_reason)
     {:stop, :normal, state}
   end
 
@@ -561,8 +627,34 @@ defmodule LemonAi.EventStream do
   # Private Helpers
   # ============================================================================
 
-  defp handle_push(event, state, opts \\ []) do
+  defp start_timeout(:infinity, _kind), do: nil
+  defp start_timeout(timeout, kind), do: :erlang.start_timer(timeout, self(), kind)
+
+  defp remaining(:infinity, _elapsed), do: :infinity
+  defp remaining(timeout, elapsed), do: max(timeout - elapsed, 0)
+
+  defp cancel_timeouts(state) do
+    if state.timeout_ref, do: Process.cancel_timer(state.timeout_ref)
+    if state.idle_timeout_ref, do: Process.cancel_timer(state.idle_timeout_ref)
+    :ok
+  end
+
+  defp reset_idle_timeout(%{done: true} = state), do: state
+  defp reset_idle_timeout(%{canceled: true} = state), do: state
+
+  defp reset_idle_timeout(state) do
+    if state.idle_timeout_ref, do: Process.cancel_timer(state.idle_timeout_ref)
+
+    %{
+      state
+      | last_activity_at: System.monotonic_time(:millisecond),
+        idle_timeout_ref: start_timeout(state.idle_timeout, :stream_idle_timeout)
+    }
+  end
+
+  defp handle_push(event, state, opts) do
     log_on_overflow = Keyword.get(opts, :log_on_overflow, false)
+    state = reset_idle_timeout(state)
 
     if state.queue_size >= state.max_queue do
       handle_overflow(event, state, log_on_overflow)
@@ -665,8 +757,7 @@ defmodule LemonAi.EventStream do
   end
 
   defp do_cancel(state, reason) do
-    # Cancel the timeout timer
-    if state.timeout_ref, do: Process.cancel_timer(state.timeout_ref)
+    cancel_timeouts(state)
 
     # Shutdown attached task
     if state.task_pid && Process.alive?(state.task_pid) do
@@ -678,10 +769,7 @@ defmodule LemonAi.EventStream do
 
     state =
       if not state.done do
-        case handle_push(cancel_event, %{state | max_queue: state.max_queue + 1}) do
-          {:ok, new_state} -> new_state
-          {:overflow, new_state} -> new_state
-        end
+        deliver_or_buffer(cancel_event, state)
       else
         state
       end

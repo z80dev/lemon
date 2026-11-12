@@ -22,7 +22,8 @@ defmodule LemonAgent.EventStream do
       {:ok, stream} = EventStream.start_link(
         owner: self(),
         max_queue: 1000,
-        timeout: 300_000
+        timeout: 1_800_000,
+        idle_timeout: 180_000
       )
 
       # Producer pushes events (with backpressure)
@@ -75,7 +76,8 @@ defmodule LemonAgent.EventStream do
   # ============================================================================
 
   @default_max_queue 10_000
-  @default_timeout 300_000
+  @default_timeout 1_800_000
+  @default_idle_timeout 180_000
   @default_task_shutdown_grace_ms 100
   @resync_retention_ms 30_000
 
@@ -115,6 +117,7 @@ defmodule LemonAgent.EventStream do
           | {:drop_strategy, drop_strategy()}
           | {:overflow_event, term()}
           | {:timeout, timeout()}
+          | {:idle_timeout, timeout()}
 
   # ============================================================================
   # Client API
@@ -132,8 +135,12 @@ defmodule LemonAgent.EventStream do
   - `:drop_strategy` - What to do on overflow: `:drop_oldest`, `:drop_newest`, `:error`,
     or `:resync` (fence the stream with one `:overflow_event`). Default: `:error`.
     Resync-fenced streams retain their bounded recovery buffer for at most 30s.
-  - `:timeout` - Stream timeout in milliseconds. Default: #{@default_timeout}ms.
-    Set to `:infinity` to disable timeout.
+  - `:timeout` - Hard ceiling in milliseconds. Default: #{@default_timeout}ms.
+    Cancels with `:timeout`; `:infinity` disables this limit.
+  - `:idle_timeout` - Maximum silence between events. Default: #{@default_idle_timeout}ms.
+    Every pushed event resets it; cancels with `:stream_idle_timeout`.
+    `:infinity` disables this limit. Run-level streams spanning tools should
+    disable both limits and rely on each provider response's timeouts.
 
   ## Examples
 
@@ -375,6 +382,7 @@ defmodule LemonAgent.EventStream do
     max_queue = Keyword.get(opts, :max_queue, @default_max_queue)
     drop_strategy = Keyword.get(opts, :drop_strategy, :error)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
+    idle_timeout = Keyword.get(opts, :idle_timeout, @default_idle_timeout)
 
     # Monitor the owner process (unless it's self, which is the stream itself)
     owner_ref = if owner != self(), do: Process.monitor(owner), else: nil
@@ -385,6 +393,8 @@ defmodule LemonAgent.EventStream do
     # Set up stream timeout
     timeout_ref =
       if timeout != :infinity, do: Process.send_after(self(), :stream_timeout, timeout), else: nil
+
+    idle_timeout_ref = start_idle_timeout(idle_timeout)
 
     state = %{
       events: :queue.new(),
@@ -405,7 +415,9 @@ defmodule LemonAgent.EventStream do
       runner_ref: runner_ref,
       task_pid: nil,
       task_ref: nil,
-      timeout_ref: timeout_ref
+      timeout_ref: timeout_ref,
+      idle_timeout: idle_timeout,
+      idle_timeout_ref: idle_timeout_ref
     }
 
     {:ok, state}
@@ -510,6 +522,7 @@ defmodule LemonAgent.EventStream do
 
       # Cancel the timeout
       if state.timeout_ref, do: Process.cancel_timer(state.timeout_ref)
+      cancel_idle_timeout(state)
 
       # Wake up any result waiters
       state = notify_result_waiters(state)
@@ -529,6 +542,7 @@ defmodule LemonAgent.EventStream do
 
       # Cancel the timeout
       if state.timeout_ref, do: Process.cancel_timer(state.timeout_ref)
+      cancel_idle_timeout(state)
 
       # Wake up any result waiters
       state = notify_result_waiters(state)
@@ -573,6 +587,7 @@ defmodule LemonAgent.EventStream do
 
       state = push_terminal(error_event, state)
       state = %{state | result: {:error, {:runner_crashed, reason}, nil}, done: true}
+      cancel_idle_timeout(state)
       state = notify_result_waiters(state)
       {:noreply, state}
     else
@@ -593,6 +608,7 @@ defmodule LemonAgent.EventStream do
 
       state = push_terminal(error_event, state)
       state = %{state | result: {:error, {:task_crashed, reason}, nil}, done: true}
+      cancel_idle_timeout(state)
       state = notify_result_waiters(state)
       {:noreply, state}
     else
@@ -604,6 +620,17 @@ defmodule LemonAgent.EventStream do
     # Unknown process died - ignore
     {:noreply, state}
   end
+
+  def handle_info({:timeout, ref, :stream_idle_timeout}, %{idle_timeout_ref: ref} = state) do
+    if state.done or state.canceled do
+      {:noreply, state}
+    else
+      state = do_cancel(state, :stream_idle_timeout)
+      {:stop, :normal, state}
+    end
+  end
+
+  def handle_info({:timeout, _ref, :stream_idle_timeout}, state), do: {:noreply, state}
 
   def handle_info(:stream_timeout, %{canceled: true} = state) do
     {:noreply, state}
@@ -642,6 +669,22 @@ defmodule LemonAgent.EventStream do
   # Private Helpers
   # ============================================================================
 
+  defp start_idle_timeout(:infinity), do: nil
+  defp start_idle_timeout(timeout), do: :erlang.start_timer(timeout, self(), :stream_idle_timeout)
+
+  defp cancel_idle_timeout(state) do
+    if state.idle_timeout_ref, do: Process.cancel_timer(state.idle_timeout_ref)
+    :ok
+  end
+
+  defp reset_idle_timeout(%{idle_timeout: :infinity} = state), do: state
+  defp reset_idle_timeout(%{done: true} = state), do: state
+
+  defp reset_idle_timeout(state) do
+    cancel_idle_timeout(state)
+    %{state | idle_timeout_ref: start_idle_timeout(state.idle_timeout)}
+  end
+
   # Handle safe take with exit catching
   defp safe_take(stream) do
     GenServer.call(stream, :take, :infinity)
@@ -655,6 +698,7 @@ defmodule LemonAgent.EventStream do
 
   defp handle_push(event, state, opts) do
     log_on_overflow = Keyword.get(opts, :log_on_overflow, false)
+    state = reset_idle_timeout(state)
 
     if state.queue_size >= state.max_queue do
       handle_overflow(event, state, log_on_overflow)
@@ -736,6 +780,7 @@ defmodule LemonAgent.EventStream do
 
   defp resync_overflow(state) do
     if state.timeout_ref, do: Process.cancel_timer(state.timeout_ref)
+    cancel_idle_timeout(state)
     state = deliver_or_buffer(state.overflow_event, state)
     # A consumer that never reads the recovery marker cannot retain a completed
     # subscription indefinitely. Late terminal casts never extend this deadline.
@@ -782,6 +827,7 @@ defmodule LemonAgent.EventStream do
   defp do_cancel(state, reason) do
     # Cancel the timeout timer
     if state.timeout_ref, do: Process.cancel_timer(state.timeout_ref)
+    cancel_idle_timeout(state)
 
     # Signal cancellation to attached task first (if it exposed an abort signal),
     # then ask it to shutdown gracefully before forcing exit after a short grace period.

@@ -455,6 +455,30 @@ Delegated tasks run as native in-process subagents (child `CodingAgent.Session`
 executions) when the agent invokes its `task` tool. There are no vendor CLI task
 runners and no `[runtime.cli.*]` configuration.
 
+### Model response timeouts
+
+Model responses allow 180,000 ms of inactivity and a separate 1,800,000 ms hard
+ceiling. Every provider event (thinking, text, tool arguments or other activity)
+resets inactivity, not the hard ceiling. Idle expiry reports
+`:stream_idle_timeout` directly or `:dispatcher_stream_idle_timeout` through the
+dispatcher; hard expiry retains `:timeout` / `:dispatcher_stream_timeout`.
+
+Embedding callers configure `stream_idle_timeout` and `stream_timeout` in the
+agent's `stream_options` (`LemonAi.Types.StreamOptions` or a model-runtime option
+map). Both accept `:infinity`. These are response limits, not a whole-run deadline;
+tool execution does not consume a response's idle window. They are not TOML keys.
+Dispatcher application defaults (replacing `stream_result_timeout_ms`) are:
+
+```elixir
+config :lemon_ai, LemonAi.CallDispatcher,
+  stream_idle_timeout: 180_000,
+  stream_timeout: 1_800_000
+```
+
+Explicit per-call options override these dispatcher defaults. Direct provider
+calls use their `StreamOptions` values without consulting dispatcher config.
+
+
 ### Model Roles
 
 `[model_roles]` is a string-to-string map in the same canonical config, layered
