@@ -22,6 +22,26 @@ or `LEMON_TOOL_DISCLOSURE_PROFILE=legacy` restores the previous coding inventory
 The runner below remains a separately authorized experiment path; this decision
 does not imply that its live plan gate has been exercised or authorize paid runs.
 
+### Local prompt accounting after rollout
+
+A native print-equivalent fixture (empty repository, fresh template workspace,
+the same installed skill catalog, no extension/MCP additions, and the CLI's four
+SMS addon tools) measured the following assembled system prompt and disclosed
+tool counts:
+
+| Context | System prompt characters | Disclosed tools |
+| --- | ---: | ---: |
+| Previous defaults: legacy disclosure + original persona bootstrap | 23,976 | 68 |
+| Coding defaults | 11,012 | 28 |
+
+The control explicitly restored the pre-change workspace template and previous
+context/disclosure settings. Coding skill discovery metadata fell from 11,121
+to 4,635 characters; every skill key remained discoverable. This is local prompt
+accounting, not a new wire-level arena or token-use result. Prompt lengths vary
+with installed skills, repository instructions, paths and runtime environment.
+No model requests were made; the throwaway measurement helper was removed.
+
+
 ## CLI contract
 
 Run from the umbrella source checkout. Paired runs require that checkout's
