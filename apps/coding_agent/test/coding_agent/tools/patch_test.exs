@@ -399,7 +399,7 @@ defmodule CodingAgent.Tools.PatchTest do
       assert File.read!(existing) == "original"
     end
 
-    test "rejects duplicate canonical targets before applying the patch", %{tmp_dir: tmp_dir} do
+    test "rejects a second add without an intervening delete before writing", %{tmp_dir: tmp_dir} do
       patch_text = """
       *** Add File: duplicate.txt
       +first
@@ -410,7 +410,7 @@ defmodule CodingAgent.Tools.PatchTest do
       result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
 
       assert {:error, message} = result
-      assert message =~ "duplicate target paths"
+      assert message =~ "File already exists"
       refute File.exists?(Path.join(tmp_dir, "duplicate.txt"))
     end
 

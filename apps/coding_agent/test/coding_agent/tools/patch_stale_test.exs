@@ -27,7 +27,8 @@ defmodule CodingAgent.Tools.PatchStaleTest do
 
       assert {:error, message} = run(cwd, patch, opts)
       assert message =~ "modified on disk since you last read it"
-      assert message =~ "Re-read"
+      assert message =~ "[#{path}##{CodingAgent.Tools.AnchoredEdit.snapshot("current\n")}]"
+      assert message =~ "1: current"
       refute message =~ ":stale"
       assert File.read!(path) == "current\n"
       refute File.exists?(Path.join(cwd, "added.txt"))
@@ -59,11 +60,11 @@ defmodule CodingAgent.Tools.PatchStaleTest do
     end
   end
 
-  test "re-reading permits a previously stale update", %{tmp_dir: cwd, opts: opts} do
+  test "stale feedback permits retry without a separate read", %{tmp_dir: cwd, opts: opts} do
     path = Path.join(cwd, "source.txt")
     File.write!(path, "current\n")
     FileReadTracker.record(opts, path, "old\n")
-    FileReadTracker.record(opts, path, File.read!(path))
+    assert {:error, _} = run(cwd, operation_patch(:update), opts)
 
     assert %AgentToolResult{} =
              run(cwd, "*** Begin Patch\n" <> operation_patch(:update) <> "*** End Patch\n", opts)

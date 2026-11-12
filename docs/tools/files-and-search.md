@@ -186,25 +186,32 @@ still reject changes since the last read. The session retains up to eight
 snapshots per path, each at most 256 KiB and 10,000 lines; larger files still
 support fresh-tag edits, but not historical recovery.
 
-Seen-line enforcement is on by default: every replaced/deleted line and each
-insertion anchor must have appeared in a numbered read of that exact snapshot.
-Set `[runtime.tools.edit] enforce_seen_lines = false` in user/project
-`.lemon/config.toml` to disable it. Tool hosts
-can explicitly override this with `:enforce_seen_lines` in shared tool options
-(alongside `session_id`). Plain `old_text`/`new_text` edits are unaffected.
-Unknown or evicted visibility records fail closed when enforcement is enabled.
+A tag matching the current complete file permits any in-range line, including
+lines omitted by a ranged read or output budget. Choose `mode: "anchored"` with
+`snapshot` + `edits`, or `mode: "text"` with `old_text` + `new_text`, never a mixture.
+The discriminator is optional and inferred when omitted. Provider-valid object
+schemas describe the mutually exclusive fields; runtime errors name fields to
+drop from mixed calls. Tags may be bare hexadecimal, `[TAG]`, or a copied
+`[path#TAG]` header. A header's path must resolve to the requested target, even
+when another file has identical bytes. Whitespace around the value is ignored.
 
-Full reads, offset/limit windows, selector context, and comma windows accumulate
-only their displayed line numbers per session/path/snapshot; omitted lines and
-partial long-line previews do not count. Structural summaries remain immutable
-and untagged, but their visible declaration lines are remembered for the same
-content digest; their omitted bodies are not. Raw reads and grep results do not
-emit snapshot tags and do not grant visibility. Refusals list unseen ranges with
-a concrete `read path:a-b` hint and never write. Re-read using that hint, then use
-the returned snapshot and coordinates. During historical recovery, visibility is
-checked on the original coordinates before the existing unique byte-identical
-anchor translation, not on unrelated lines at those positions in the new file.
-Successful edits do not mark undisplayed lines of their new snapshot as seen.
+Seen-line enforcement is on by default **for historical recovery only**: every
+original replaced/deleted line and insertion anchor must have appeared in a
+numbered read of that old snapshot. Set `[runtime.tools.edit] enforce_seen_lines =
+false` to permit historical recovery from undisplayed, uniquely unchanged anchors.
+Tool hosts may override this with `:enforce_seen_lines`; current-tag edits need
+neither a session nor visibility records. Structural summaries remain untagged;
+an explicit numbered range supplies an editable complete-file tag.
+
+Stale refusals never write. They return the fresh `[path#TAG]` and bounded,
+numbered current context near the requested ranges (or matching text/context).
+This response updates the session's tracked view, so retry with its tag and
+current coordinates without another read. Context is capped at 40 lines / 8 KiB;
+read additional ranges when the displayed context is insufficient.
+
+Local edit/patch source reads and update writes pin the validated file's device,
+inode and type through checked file handles. A replaced path or swapped symlink
+is refused without returning the replacement's retry context.
 
 Local `write`, `edit`, and `patch` accept `"format": true` (default false, unless
 enabled in tool options) to run an available formatter after writing. An explicit
@@ -224,6 +231,20 @@ on an exact miss, `patch` tolerates indentation, horizontal whitespace, and smar
 quote/dash differences using the same normalization as text `edit`. Multiple
 normalized matches are rejected. Unchanged context keeps its original text.
 
+`patch` accepts both `*** Update/Add/Delete File` patches and ordinary unified
+diffs with `---` / `+++` paths and counted `@@ -old,count +new,count @@` hunks,
+including Git `diff --git` / `index` headers and `/dev/null` additions/deletions.
+Unified diffs preserve surviving line terminators after removal-only EOF hunks.
+No-newline markers must name the actual old/new EOF; interior markers, quoted
+paths and binary diffs are rejected. Line numbers never choose between repeated
+context matches. Ambiguous errors list candidate line numbers and nearby numbered source.
+
+Several operations may target the same path: they apply in input order, with
+every operation preflighted against the preceding virtual result before any
+writes. This includes add/update, move/update, and delete/add. Conflicting adds,
+missing sources, stale reads and invalid later hunks fail before writing anything.
+Results contain one original-to-final snapshot per path.
+
 ## Safe overwrites
 
 `write` refuses to overwrite an existing file with content containing a read
@@ -236,9 +257,9 @@ contents are available. Local overwrite format detection samples only the first
 64 KiB, keeping memory bounded even when replacing very large files.
 
 Local `patch` updates, deletes, and move sources check the session's last read
-against the current raw file bytes before any patch writes. If the file changed,
-re-read it before applying the patch. Files not previously read in the session
-can still be patched.
+against the current raw file bytes before any patch writes. A stale refusal
+includes a fresh snapshot tag and bounded numbered context for retry without a
+separate read. Files not previously read in the session can still be patched.
 
 ## JSON queries
 

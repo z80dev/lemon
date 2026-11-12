@@ -6,8 +6,10 @@ defmodule CodingAgent.Tools.Edit do
   inclusive 1-based original line ranges, without reproducing `old_text`.
   All edits are preflighted against one complete-file snapshot. Supported
   operations are `replace`, `insert_before`, `insert_after`, and `delete`.
-  Disjoint edits may share a call; changed snapshots or overlapping ranges
-  fail without writing. Whole-line replacement text may omit its final LF.
+  Disjoint edits may share a call; overlapping ranges fail without writing.
+  A current complete-file tag also permits lines omitted from a partial read.
+  Stale tags recover only uniquely unchanged historical anchors; refusals include
+  a fresh tag and bounded current lines. Whole-line text may omit its final LF.
 
   Alternatively, `old_text` and `new_text` replace one unique text occurrence.
 
@@ -65,8 +67,8 @@ defmodule CodingAgent.Tools.Edit do
 
     - `cwd` - Current working directory for resolving relative paths
     - `opts` - Tool configuration, including `:enforce_seen_lines` (default true).
-      When enabled, anchored edits require a session id and a numbered read of
-      every targeted line; plain text replacements are unaffected.
+      This requires displayed original anchors only for stale-snapshot recovery;
+      a tag matching the current complete file permits any in-range line.
   """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
@@ -76,29 +78,41 @@ defmodule CodingAgent.Tools.Edit do
         "Edit a text file. Prefer snapshot-anchored line edits after read: copy its snapshot tag and " <>
           "send edits [{start_line, end_line, new_text, operation}]. Lines are 1-based and inclusive; " <>
           "every edit uses the ORIGINAL read snapshot. operation is replace (default), insert_before, " <>
-          "insert_after, or delete. No old text is needed. Re-read if the snapshot changed. " <>
-          "Alternatively supply unique old_text and new_text for text matching.",
+          "insert_after, or delete. No old text is needed, including for lines omitted from read. " <>
+          "Stale refusals include a fresh snapshot and current context for retry. " <>
+          "Alternatively use mode=text with only old_text and new_text; mode=anchored uses only snapshot and edits. Never mix these fields.",
       label: "Edit File",
       parameters: %{
         "type" => "object",
         "properties" => %{
           "path" => %{"type" => "string", "description" => "The path to the file to edit"},
+          "mode" => %{
+            "type" => "string",
+            "enum" => ["anchored", "text"],
+            "description" =>
+              "Choose anchored (snapshot + edits; omit old_text/new_text) or text (old_text + new_text; omit snapshot/edits). Inferred when omitted."
+          },
           "old_text" => %{
             "type" => "string",
-            "description" => "The exact text to find and replace (must be unique in the file)"
+            "description" =>
+              "Text mode only: unique text to replace. Omit in anchored mode; never combine with snapshot/edits."
           },
-          "new_text" => %{"type" => "string", "description" => "The replacement text"},
+          "new_text" => %{
+            "type" => "string",
+            "description" =>
+              "Text mode only: replacement text. In anchored mode omit this top-level field and put new_text inside each edit."
+          },
           "snapshot" => %{
             "type" => "string",
-            "description" => "Copy the 16-character file tag from read's [path#SNAPSHOT] header",
-            "pattern" => "^[0-9A-Fa-f]{16}$"
+            "description" =>
+              "Anchored mode only: the 16-character tag, [TAG], or [path#TAG] naming this target. Omit old_text and top-level new_text."
           },
           "edits" => %{
             "type" => "array",
             "minItems" => 1,
             "maxItems" => 100,
             "description" =>
-              "Non-overlapping edits using original read line numbers. Replacement/insertion new_text contains whole lines; a final newline is optional. Original file line endings/final newline are preserved.",
+              "Anchored mode only: non-overlapping original line edits. Omit top-level old_text/new_text; each edit contains its own whole-line new_text. A final newline is optional.",
             "items" => %{
               "type" => "object",
               "properties" => %{
@@ -133,11 +147,7 @@ defmodule CodingAgent.Tools.Edit do
               "Whether to run language diagnostics after editing and report newly introduced issues"
           }
         },
-        "required" => ["path"],
-        "anyOf" => [
-          %{"required" => ["snapshot", "edits"]},
-          %{"required" => ["old_text", "new_text"]}
-        ]
+        "required" => ["path"]
       },
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
@@ -165,7 +175,8 @@ defmodule CodingAgent.Tools.Edit do
       # Parameter validation
       result =
         with :ok <- validate_required_param(path, "path"),
-             {:ok, edit_spec} <- build_edit_spec(params),
+             :ok <- validate_edit_mode(params),
+             {:ok, edit_spec} <- build_edit_spec(params, cwd, opts),
              {:ok, diagnostics?} <- LspDiagnostics.option(params, opts),
              {:ok, format?} <- LspFormatter.option(params, opts) do
           do_execute(
@@ -240,12 +251,13 @@ defmodule CodingAgent.Tools.Edit do
     baseline = LspDiagnostics.baseline(resolved_path, cwd, diagnostics?, opts)
 
     with :ok <- check_aborted(signal),
+         {:ok, identity} <- FileValidation.regular_file_identity(resolved_path, opts),
          :ok <-
            FileValidation.check_mutation_target(
              resolved_path,
              Keyword.put(opts, :mutation_root, cwd)
            ),
-         {:ok, raw_content} <- File.read(resolved_path),
+         {:ok, raw_content} <- FileValidation.read_regular_file(resolved_path, identity),
          :ok <- FileValidation.check_text_content(raw_content, path),
          :ok <- check_read_tracker(opts, resolved_path, raw_content, edit_spec),
          {bom, content} <- FileFormatHelpers.strip_bom(raw_content),
@@ -262,7 +274,8 @@ defmodule CodingAgent.Tools.Edit do
              action: "replace",
              path: resolved_path
            }),
-         :ok <- File.write(resolved_path, final_content) do
+         :ok <- verify_source_unchanged(resolved_path, identity, raw_content, opts, edit_spec),
+         :ok <- FileValidation.write_regular_file(resolved_path, identity, final_content) do
       {formatted, format_error} =
         LspFormatter.after_write(resolved_path, Keyword.get(opts, :format, false), cwd, opts)
 
@@ -303,14 +316,17 @@ defmodule CodingAgent.Tools.Edit do
     end
   end
 
-  defp build_edit_spec(params) do
-    if not is_nil(params["snapshot"]) or not is_nil(params["edits"]) do
+  defp build_edit_spec(params, cwd, opts) do
+    if params["mode"] == "anchored" or not is_nil(params["snapshot"]) or
+         not is_nil(params["edits"]) do
       if not is_nil(params["old_text"]) or not is_nil(params["new_text"]) do
         {:error,
-         "Choose snapshot + edits OR old_text + new_text; anchored replacements put new_text inside each edit."}
+         "Choose one edit mode: drop top-level old_text and new_text for anchored edits; put new_text inside each edit. For text mode, drop snapshot and edits."}
       else
-        with :ok <- AnchoredEdit.validate(params["snapshot"], params["edits"]) do
-          {:ok, {:anchored, params["snapshot"], params["edits"]}}
+        with {:ok, tag, header_path} <- AnchoredEdit.normalize_snapshot(params["snapshot"]),
+             :ok <- validate_snapshot_path(header_path, params["path"], cwd, opts),
+             :ok <- AnchoredEdit.validate(tag, params["edits"]) do
+          {:ok, {:anchored, tag, params["edits"]}}
         end
       end
     else
@@ -322,25 +338,107 @@ defmodule CodingAgent.Tools.Edit do
     end
   end
 
+  defp validate_snapshot_path(nil, _target, _cwd, _opts), do: :ok
+
+  defp validate_snapshot_path(header, target, cwd, opts) do
+    if resolve_path(header, cwd, opts) == resolve_path(target, cwd, opts),
+      do: :ok,
+      else:
+        {:error,
+         "Snapshot header path does not name the requested target; use that target's [path#TAG] header or a bare tag."}
+  end
+
+  defp validate_edit_mode(params) do
+    case params["mode"] do
+      nil ->
+        :ok
+
+      "anchored" ->
+        if not is_nil(params["old_text"]) or not is_nil(params["new_text"]),
+          do:
+            {:error,
+             "mode=anchored: drop top-level old_text and new_text; put new_text inside each edit."},
+          else: :ok
+
+      "text" ->
+        if not is_nil(params["snapshot"]) or not is_nil(params["edits"]),
+          do: {:error, "mode=text: drop snapshot and edits; supply only old_text and new_text."},
+          else: :ok
+
+      _ ->
+        {:error, "mode must be anchored or text"}
+    end
+  end
+
   defp check_read_tracker(_opts, _path, _raw, {:anchored, _, _}), do: :ok
 
-  defp check_read_tracker(opts, path, raw, _spec), do: FileReadTracker.check(opts, path, raw)
+  defp check_read_tracker(opts, path, raw, {:text, old_text, _}) do
+    case FileReadTracker.check(opts, path, raw) do
+      {:error, :stale} ->
+        {:error,
+         "#{path} has been modified on disk since you last read it; no edits were applied." <>
+           AnchoredEdit.current_context(
+             raw,
+             path,
+             opts,
+             AnchoredEdit.context_ranges(raw, [old_text])
+           )}
+
+      :ok ->
+        :ok
+    end
+  end
+
+  defp verify_source_unchanged(path, identity, expected, opts, spec) do
+    case FileValidation.read_regular_file(path, identity) do
+      {:ok, ^expected} ->
+        :ok
+
+      {:ok, current} ->
+        ranges =
+          case spec do
+            {:anchored, _, edits} ->
+              Enum.map(edits, &{&1["start_line"], Map.get(&1, "end_line", &1["start_line"])})
+
+            {:text, old, _} ->
+              AnchoredEdit.context_ranges(current, [old])
+          end
+
+        {:error,
+         "File changed after edit preflight; no edits were applied." <>
+           AnchoredEdit.current_context(current, path, opts, ranges)}
+
+      error ->
+        error
+    end
+  end
 
   defp perform_local_edit(raw, content, {:anchored, tag, edits}, opts, path) do
     previous = FileReadTracker.snapshot_lines(opts, path, tag)
 
-    with :ok <- check_seen_lines(opts, path, tag, edits) do
-      # Validate original coordinates before recovery: rebase_edits only translates
-      # byte-identical, unique ranges, so permission follows those exact seen lines,
-      # never unrelated lines occupying their old positions in the new snapshot.
-      AnchoredEdit.apply(raw, content, tag, edits, previous)
+    result =
+      with :ok <- check_seen_lines(opts, path, tag, edits, raw) do
+        AnchoredEdit.apply(raw, content, tag, edits, previous)
+      end
+
+    case result do
+      {:error, message} ->
+        if tag != AnchoredEdit.snapshot(raw) do
+          ranges = Enum.map(edits, &{&1["start_line"], Map.get(&1, "end_line", &1["start_line"])})
+          {:error, message <> AnchoredEdit.current_context(raw, path, opts, ranges)}
+        else
+          result
+        end
+
+      other ->
+        other
     end
   end
 
   defp perform_local_edit(raw, content, spec, _opts, _path), do: perform_edit(raw, content, spec)
 
-  defp check_seen_lines(opts, path, tag, edits) do
-    if Keyword.get(opts, :enforce_seen_lines, true) do
+  defp check_seen_lines(opts, path, tag, edits, raw) do
+    if tag != AnchoredEdit.snapshot(raw) and Keyword.get(opts, :enforce_seen_lines, true) do
       seen = FileReadTracker.seen_lines(opts, path, tag)
 
       unseen =
@@ -393,12 +491,6 @@ defmodule CodingAgent.Tools.Edit do
 
   defp format_error({:error, :enoent}, path), do: {:error, "File not found: #{path}"}
   defp format_error({:error, :eacces}, path), do: {:error, "Permission denied: #{path}"}
-
-  defp format_error({:error, :stale}, path) do
-    {:error,
-     "#{path} has been modified on disk since you last read it (by the user, a formatter, " <>
-       "or a command). Re-read the file before editing it."}
-  end
 
   defp format_error({:error, :not_found}, _path) do
     {:error,

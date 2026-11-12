@@ -2127,19 +2127,20 @@ disable guidance. See [shell tools](tools/shell.md).
 
 ## Anchored Edit Visibility
 
-Seen-line enforcement is on by default (strict). Disable it in user or project `.lemon/config.toml`:
+Seen-line enforcement is on by default for stale-snapshot recovery. Disable it in user or project `.lemon/config.toml`:
 
 ```toml
 [runtime.tools.edit]
 enforce_seen_lines = false # default true
 ```
 
-Every replaced/deleted line and insertion anchor must have been displayed by a
-numbered read of that snapshot in the current session. Omitted summary bodies and
-window gaps do not count; refusals provide a range-read hint without writing.
-Historical recovery checks visibility before translating unchanged anchors.
-Plain `old_text`/`new_text` replacements are unaffected. The setting must be a
-boolean; the default (true) refuses anchored edits to unread lines. Tool hosts can explicitly override it with the `:enforce_seen_lines` option.
+A tag matching the current complete file permits any in-range line, including
+omitted summary bodies and window gaps. When recovering a historical tag, every
+original replaced/deleted line and insertion anchor must have been displayed by a
+numbered read in the current session before translating uniquely unchanged
+anchors. Stale refusals include fresh tags and bounded current context without
+writing. Plain `old_text`/`new_text` replacements are unaffected. The setting must
+be boolean; tool hosts can explicitly override it with `:enforce_seen_lines`.
 See [file tools](tools/files-and-search.md#anchored-edit-recovery-and-formatting)
 for visibility and snapshot-retention details.
 

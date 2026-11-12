@@ -19,6 +19,89 @@ defmodule CodingAgent.Tools.AnchoredEdit do
     Base.encode16(prefix, case: :upper)
   end
 
+  @doc "Accept a bare tag, a bracketed tag, or a copied read header."
+  def normalize_snapshot(value) when is_binary(value) do
+    value = String.trim(value)
+
+    value =
+      if String.starts_with?(value, "[") and String.ends_with?(value, "]"),
+        do: value |> String.slice(1..-2//1) |> String.trim(),
+        else: value
+
+    case Regex.named_captures(~r/\A(?:(?<path>[^#\[\]\r\n]+)#)?(?<tag>[0-9a-fA-F]{16})\z/, value) do
+      %{"path" => path, "tag" => tag} ->
+        {:ok, String.upcase(tag), if(path != "", do: String.trim(path))}
+
+      _ ->
+        invalid_snapshot()
+    end
+  end
+
+  def normalize_snapshot(_value), do: invalid_snapshot()
+
+  defp invalid_snapshot,
+    do: {:error, "snapshot must be a 16-character file tag or a single [path#TAG] read header."}
+
+  @doc "Return a bounded fresh snapshot and numbered context for a refused mutation."
+  def current_context(raw, path, opts, ranges \\ [{1, 40}]) do
+    {_bom, text} = FileFormatHelpers.strip_bom(raw)
+
+    current =
+      if FileValidation.check_text_content(text, path) == :ok,
+        do: text |> FileFormatHelpers.normalize_to_lf() |> lines(),
+        else: []
+
+    count = length(current)
+
+    selected =
+      ranges
+      |> Enum.flat_map(fn {first, last} ->
+        first = min(max(first - 1, 1), count)
+        last = min(max(last + 2, first), count)
+        if count == 0, do: [], else: Enum.to_list(first..min(last, first + 39))
+      end)
+      |> Enum.uniq()
+      |> Enum.sort()
+      |> Enum.take(40)
+
+    {shown, _bytes} =
+      Enum.reduce_while(selected, {[], 0}, fn number, {shown, bytes} ->
+        line = "#{number}: #{Enum.at(current, number - 1)}\n"
+
+        if bytes + byte_size(line) <= 8192,
+          do: {:cont, {[{number, line} | shown], bytes + byte_size(line)}},
+          else: {:halt, {shown, bytes}}
+      end)
+
+    shown = Enum.reverse(shown)
+    tag = snapshot(raw)
+    CodingAgent.FileReadTracker.record(opts, path, raw)
+    CodingAgent.FileReadTracker.record_seen_lines(opts, path, tag, Enum.map(shown, &elem(&1, 0)))
+    body = Enum.map_join(shown, "", &elem(&1, 1))
+
+    "\n\nCurrent snapshot [#{path}##{tag}] (bounded context; use these current line numbers):\n#{body}"
+  end
+
+  @doc false
+  def context_ranges(raw, needles) do
+    wanted = needles |> Enum.flat_map(&lines/1) |> Enum.reject(&(String.trim(&1) == ""))
+    wanted = MapSet.new(Enum.map(wanted, &FileFormatHelpers.normalize_line/1))
+    raw = if String.valid?(raw), do: raw, else: ""
+
+    matches =
+      raw
+      |> FileFormatHelpers.normalize_to_lf()
+      |> lines()
+      |> Enum.with_index(1)
+      |> Enum.filter(fn {line, _} ->
+        MapSet.member?(wanted, FileFormatHelpers.normalize_line(line))
+      end)
+      |> Enum.take(10)
+      |> Enum.map(fn {_, number} -> {number, number} end)
+
+    if matches == [], do: [{1, 40}], else: matches
+  end
+
   def validate(snapshot, edits) do
     cond do
       not is_binary(snapshot) or not Regex.match?(~r/^[0-9a-fA-F]{16}$/, snapshot) ->

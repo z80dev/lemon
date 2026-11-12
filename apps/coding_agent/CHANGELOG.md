@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Reduced edit/patch retry friction: current full-file snapshot tags permit omitted
+  lines, an optional edit-mode discriminator and provider-visible field guidance
+  distinguish modes, copied/bracketed tags are accepted, and stale refusals include
+  fresh tags and numbered retry context. Copied header paths must name the target;
+  historical recovery still requires uniquely byte-identical anchors.
+- Patch operations may repeat a path in input order with complete preflight;
+  ordinary unified diffs are accepted, ambiguity errors show candidate source,
+  and per-file results describe original-to-final contents.
+- Edit/patch retry reads and writes pin file identities to prevent symlink swaps
+  from disclosing or modifying another file. Unified diffs retain a surviving
+  EOF line's terminator and reject interior no-newline markers.
+
 ### Added
 
 - Per-invocation `project_memory_capture: false` skips automatic fact extraction

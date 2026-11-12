@@ -36,15 +36,19 @@ defmodule CodingAgent.Tools.AnchoredEditConfigTest do
     {:ok, edit} = ToolRegistry.get_tool(ctx.cwd, "edit", opts)
     result = read.execute.("read", %{"path" => ctx.path, "offset" => 1, "limit" => 1}, nil, nil)
     params = edit_params(ctx.path, result.details.snapshot)
+    File.write!(ctx.path, "updated first\nhidden\nlast\n")
 
     assert {:error, message} = edit.execute.("edit", params, nil, nil)
     assert message =~ "Unseen lines 2"
     assert message =~ "read #{ctx.path}:2"
-    assert File.read!(ctx.path) == "first\nhidden\nlast\n"
+    assert File.read!(ctx.path) == "updated first\nhidden\nlast\n"
 
-    read.execute.("read", %{"path" => ctx.path, "offset" => 2, "limit" => 1}, nil, nil)
-    assert %AgentToolResult{} = edit.execute.("edit", params, nil, nil)
-    assert File.read!(ctx.path) == "first\nchanged\nlast\n"
+    fresh = read.execute.("read", %{"path" => ctx.path, "offset" => 2, "limit" => 1}, nil, nil)
+
+    assert %AgentToolResult{} =
+             edit.execute.("edit", edit_params(ctx.path, fresh.details.snapshot), nil, nil)
+
+    assert File.read!(ctx.path) == "updated first\nchanged\nlast\n"
   end
 
   test "explicit tool options override the configured default", ctx do
@@ -56,12 +60,13 @@ defmodule CodingAgent.Tools.AnchoredEditConfigTest do
     {:ok, read} = ToolRegistry.get_tool(ctx.cwd, "read", opts)
     {:ok, edit} = ToolRegistry.get_tool(ctx.cwd, "edit", opts)
     result = read.execute.("read", %{"path" => ctx.path, "limit" => 1}, nil, nil)
+    File.write!(ctx.path, "updated first\nhidden\nlast\n")
 
     assert %AgentToolResult{} =
              edit.execute.("edit", edit_params(ctx.path, result.details.snapshot), nil, nil)
   end
 
-  test "unset config enforces seen lines; false config disables", ctx do
+  test "unset config enforces seen historical anchors; false config disables", ctx do
     for setting <- [nil, "false"] do
       cwd = Path.join(ctx.cwd, setting || "unset")
       File.mkdir_p!(Path.join(cwd, ".lemon"))
@@ -72,6 +77,8 @@ defmodule CodingAgent.Tools.AnchoredEditConfigTest do
       {:ok, edit} = ToolRegistry.get_tool(cwd, "edit", opts)
       File.write!(ctx.path, "first\nhidden\nlast\n")
       tag = AnchoredEdit.snapshot(File.read!(ctx.path))
+      FileReadTracker.record(opts, ctx.path, File.read!(ctx.path))
+      File.write!(ctx.path, "updated first\nhidden\nlast\n")
       result = edit.execute.("edit", edit_params(ctx.path, tag), nil, nil)
 
       if setting do

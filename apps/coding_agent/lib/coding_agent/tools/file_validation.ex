@@ -168,6 +168,102 @@ defmodule CodingAgent.Tools.FileValidation do
 
   def check_mutation_target(_path, _opts), do: {:error, "Path must be a string"}
 
+  @doc "Pin a file's device/inode identity, rejecting symlinks unless explicitly trusted."
+  def regular_file_identity(path, opts \\ []) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :regular} = stat} ->
+        {:ok, stat}
+
+      {:ok, %File.Stat{type: :symlink} = link} ->
+        if Keyword.get(opts, :allow_symlinks, false) do
+          case File.stat(path) do
+            {:ok, %File.Stat{type: :regular} = target} ->
+              {:ok, %{link: link, target: target, mode: target.mode}}
+
+            _ ->
+              identity_error(path)
+          end
+        else
+          identity_error(path)
+        end
+
+      {:ok, _} ->
+        identity_error(path)
+
+      error ->
+        error
+    end
+  end
+
+  @doc "Read only the pinned regular file; never expose a replacement path's contents."
+  def read_regular_file(path, identity) do
+    with_regular_file(path, identity, [:read, :binary], fn io ->
+      case IO.binread(io, :eof) do
+        content when is_binary(content) -> {:ok, content}
+        :eof -> {:ok, ""}
+        error -> error
+      end
+    end)
+  end
+
+  @doc "Write through a checked handle, not a path that can be redirected after checking."
+  def write_regular_file(path, identity, content) do
+    with_regular_file(path, identity, [:read, :write, :binary], fn io ->
+      with {:ok, 0} <- :file.position(io, :bof),
+           :ok <- IO.binwrite(io, content),
+           :ok <- :file.truncate(io) do
+        :ok
+      end
+    end)
+  end
+
+  defp with_regular_file(path, identity, modes, fun) do
+    with :ok <- check_file_identity(path, identity),
+         {:ok, io} <- File.open(path, modes) do
+      try do
+        with {:ok, info} <- :file.read_file_info(io),
+             true <-
+               same_identity?(File.Stat.from_record(info), Map.get(identity, :target, identity)),
+             :ok <- check_file_identity(path, identity) do
+          result = fun.(io)
+          with :ok <- check_file_identity(path, identity), do: result
+        else
+          false -> identity_error(path)
+          error -> error
+        end
+      after
+        File.close(io)
+      end
+    end
+  end
+
+  defp check_file_identity(path, expected) do
+    with {:ok, actual} <-
+           regular_file_identity(path, allow_symlinks: Map.has_key?(expected, :link)) do
+      if same_identity?(actual, expected), do: :ok, else: identity_error(path)
+    end
+  end
+
+  defp same_identity?(%{link: actual_link, target: actual_target}, %{
+         link: expected_link,
+         target: expected_target
+       }) do
+    same_identity?(actual_link, expected_link) and same_identity?(actual_target, expected_target)
+  end
+
+  defp same_identity?(%File.Stat{} = actual, %File.Stat{} = expected) do
+    actual.type == expected.type and actual.type in [:regular, :symlink] and
+      {actual.major_device, actual.minor_device, actual.inode} ==
+        {expected.major_device, expected.minor_device, expected.inode}
+  end
+
+  defp same_identity?(_actual, _expected), do: false
+
+  defp identity_error(path),
+    do:
+      {:error,
+       "File identity changed or is no longer regular (symlinks are refused); no retry context is available: #{path}"}
+
   @doc """
   Formats a file-system error atom into a human-readable message.
 

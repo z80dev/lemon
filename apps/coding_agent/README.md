@@ -176,7 +176,9 @@ array instead of copying a large unique `old_text` block:
 The snapshot covers the complete original file, even for a partial read.
 Ranges are inclusive, one-based, and all operations use the original coordinates.
 Operations are `replace`, `delete`, `insert_before`, and `insert_after`; overlapping
-or stale batches fail without writing. Successful edits return a fresh snapshot.
+or unrecoverable stale batches fail without writing, returning fresh retry context.
+A current tag permits omitted lines; tags may also be copied as `[path#TAG]`.
+Successful edits return a fresh snapshot.
 Original BOM, CRLF/LF, and final-newline conventions are preserved. Exact-text
 editing remains available for a uniquely matched region; ambiguous matches report
 their line locations and never choose an occurrence silently. Read-only internal
@@ -383,9 +385,10 @@ structured details — an edit's `diff` and `first_changed_line`, `exit_code`,
 500-character `reasoning.text` preview plus a `reasoning.full_text` bounded to
 16 KB. The control plane promotes the full copies for operator clients.
 
-Local `patch` calls preflight every hunk in memory, reject duplicate paths and
-destructive move overwrites, revalidate each operation immediately before
-commit, and exclusively create new targets. Commits remain sequential, so a
+Local `patch` accepts apply_patch-style patches and ordinary unified diffs,
+preflights every operation in memory in input order (including repeated paths),
+rejects destructive move overwrites, revalidates each operation before commit,
+and exclusively creates new targets. Commits remain sequential, so a
 later I/O failure reports the already-committed prefix and any possibly changed
 current paths without risking rollback over concurrent filesystem changes.
 Local `write` calls canonicalize the path used for validation and mutation,

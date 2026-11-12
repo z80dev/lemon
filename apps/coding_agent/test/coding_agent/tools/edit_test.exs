@@ -689,11 +689,11 @@ defmodule CodingAgent.Tools.EditTest do
       assert {:error, message} =
                edit(path, tmp_dir, [old_text: "alpha", new_text: "ALPHA"], opts)
 
-      assert message =~ "Re-read the file"
-      assert File.read!(path) == "alpha\nbeta\ngamma\n"
+      assert message =~
+               "Current snapshot [#{path}##{CodingAgent.Tools.AnchoredEdit.snapshot("alpha\nbeta\ngamma\n")}]"
 
-      assert %AgentToolResult{} =
-               CodingAgent.Tools.Read.execute("r2", %{"path" => path}, nil, nil, tmp_dir, opts)
+      assert message =~ "3: gamma"
+      assert File.read!(path) == "alpha\nbeta\ngamma\n"
 
       assert %AgentToolResult{} =
                edit(path, tmp_dir, [old_text: "alpha", new_text: "ALPHA"], opts)
