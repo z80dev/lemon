@@ -2,7 +2,9 @@ defmodule CodingAgent.Tools.Patch do
   @moduledoc """
   Patch tool for the coding agent.
 
-  Applies a unified patch format similar to apply_patch.
+  Applies apply_patch-style patches or ordinary unified diffs. Repeated operations
+  on a path are preflighted and applied in input order, including add/update,
+  move/update, and delete/add sequences. No writes occur on a preflight failure.
 
   ## Security Features
 
@@ -66,14 +68,18 @@ defmodule CodingAgent.Tools.Patch do
   def tool(cwd, opts \\ []) do
     %AgentTool{
       name: "patch",
-      description: "Apply a patch describing file edits, additions, and deletions.",
+      description:
+        "Apply apply_patch-style or unified-diff file edits, additions, and deletions. " <>
+          "Operations on the same path apply in order. Hunk context must uniquely match; " <>
+          "ambiguous errors show candidate lines. Unified diff line numbers never override mismatched context.",
       label: "Apply Patch",
       parameters: %{
         "type" => "object",
         "properties" => %{
           "patch_text" => %{
             "type" => "string",
-            "description" => "Full patch text to apply"
+            "description" =>
+              "Full *** Begin Patch text or unified diff with ---/+++ paths and counted @@ hunks"
           },
           "format" => %{
             "type" => "boolean",
@@ -182,7 +188,7 @@ defmodule CodingAgent.Tools.Patch do
              action: "apply",
              operation_count: length(operations)
            }),
-         {:ok, summary} <- commit_prepared_operations(prepared_operations, signal) do
+         {:ok, summary} <- commit_prepared_operations(prepared_operations, signal, opts) do
       prepared_operations = format_prepared_files(prepared_operations, cwd, opts)
       file_results = prepared_file_results(prepared_operations)
       formatted = Enum.any?(prepared_operations, &Map.get(&1, :formatted, false))
@@ -297,46 +303,41 @@ defmodule CodingAgent.Tools.Patch do
   """
   @spec validate_operations([map()], String.t(), keyword()) :: :ok | {:error, String.t()}
   def validate_operations(operations, cwd, opts) do
-    with :ok <- validate_unique_operation_paths(operations, cwd) do
-      Enum.reduce_while(operations, :ok, fn op, _acc ->
-        case validate_operation(op, cwd, opts) do
-          :ok -> {:cont, :ok}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
-      end)
+    Enum.reduce_while(operations, {:ok, %{}}, fn op, {:ok, files} ->
+      case validate_operation(op, cwd, Keyword.put(opts, :patch_files, files)) do
+        :ok -> {:cont, {:ok, update_virtual_files(files, op, cwd)}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, _files} -> :ok
+      error -> error
     end
   end
 
-  defp validate_unique_operation_paths(operations, cwd) do
-    duplicates =
-      operations
-      |> Enum.flat_map(&operation_targets(&1, cwd))
-      |> Enum.frequencies()
-      |> Enum.filter(fn {_path, count} -> count > 1 end)
-      |> Enum.map(&elem(&1, 0))
-      |> Enum.sort()
+  defp update_virtual_files(files, %{type: :add, path: path}, cwd),
+    do: Map.put(files, resolve_path(path, cwd), true)
 
-    case duplicates do
-      [] -> :ok
-      paths -> {:error, "Patch contains duplicate target paths: #{Enum.join(paths, ", ")}"}
-    end
-  end
+  defp update_virtual_files(files, %{type: :delete, path: path}, cwd),
+    do: Map.put(files, resolve_path(path, cwd), false)
 
-  defp operation_targets(%{type: :update, path: path, move_to: move_to}, cwd) do
+  defp update_virtual_files(files, %{path: path, move_to: move_to}, cwd) do
     source = resolve_path(path, cwd)
-
-    case move_to do
-      nil -> [source]
-      target -> Enum.uniq([source, resolve_path(target, cwd)])
-    end
+    target = if move_to, do: resolve_path(move_to, cwd), else: source
+    files |> Map.put(source, false) |> Map.put(target, true)
   end
 
-  defp operation_targets(%{path: path}, cwd), do: [resolve_path(path, cwd)]
+  defp operation_file_exists?(path, opts) do
+    case Map.fetch(Keyword.get(opts, :patch_files, %{}), path) do
+      {:ok, exists?} -> {:ok, exists?}
+      :error -> file_exists?(path)
+    end
+  end
 
   defp validate_operation(%{type: :add, path: path}, cwd, opts) do
     with :ok <- validate_path_security(path),
          {:ok, resolved} <- resolve_and_validate_path(path, cwd, opts) do
-      case file_exists?(resolved) do
+      case operation_file_exists?(resolved, opts) do
         {:ok, false} -> :ok
         {:ok, true} -> {:error, "File already exists: #{resolved}"}
         {:error, reason} -> {:error, format_error(reason, resolved)}
@@ -347,7 +348,7 @@ defmodule CodingAgent.Tools.Patch do
   defp validate_operation(%{type: :delete, path: path}, cwd, opts) do
     with :ok <- validate_path_security(path),
          {:ok, resolved} <- resolve_and_validate_path(path, cwd, opts) do
-      case file_exists?(resolved) do
+      case operation_file_exists?(resolved, opts) do
         {:ok, true} -> :ok
         {:ok, false} -> {:error, "File not found: #{resolved}"}
         {:error, reason} -> {:error, format_error(reason, resolved)}
@@ -359,11 +360,18 @@ defmodule CodingAgent.Tools.Patch do
     with :ok <- validate_path_security(path),
          :ok <- validate_move_to_path(move_to, cwd, opts),
          {:ok, resolved} <- resolve_and_validate_path(path, cwd, opts),
-         :ok <- validate_move_destination(resolved, move_to, cwd) do
-      case file_exists?(resolved) do
-        {:ok, true} -> validate_file_size(resolved)
-        {:ok, false} -> {:error, "File not found: #{resolved}"}
-        {:error, reason} -> {:error, format_error(reason, resolved)}
+         :ok <- validate_move_destination(resolved, move_to, cwd, opts) do
+      case operation_file_exists?(resolved, opts) do
+        {:ok, true} ->
+          if Map.has_key?(Keyword.get(opts, :patch_files, %{}), resolved),
+            do: :ok,
+            else: validate_file_size(resolved)
+
+        {:ok, false} ->
+          {:error, "File not found: #{resolved}"}
+
+        {:error, reason} ->
+          {:error, format_error(reason, resolved)}
       end
     end
   end
@@ -444,17 +452,17 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  defp validate_move_destination(_source, nil, _cwd), do: :ok
+  defp validate_move_destination(_source, nil, _cwd, _opts), do: :ok
 
-  defp validate_move_destination(source, move_to, cwd) do
+  defp validate_move_destination(source, move_to, cwd, opts) do
     target = resolve_path(move_to, cwd)
 
     if target == source do
       :ok
     else
-      case File.lstat(target) do
-        {:error, :enoent} -> :ok
-        {:ok, _stat} -> {:error, "Move destination already exists: #{target}"}
+      case operation_file_exists?(target, opts) do
+        {:ok, false} -> :ok
+        {:ok, true} -> {:error, "Move destination already exists: #{target}"}
         {:error, reason} -> {:error, format_error(reason, target)}
       end
     end
@@ -642,8 +650,14 @@ defmodule CodingAgent.Tools.Patch do
     lines = String.split(text, ~r/\r?\n/, trim: false)
 
     try do
-      {ops, _idx} = parse_lines(lines, 0, [])
-      operations = Enum.reverse(ops)
+      operations =
+        if Enum.any?(lines, &String.starts_with?(&1, "--- ")) and
+             not Enum.any?(lines, &String.starts_with?(&1, "*** Update File:")) do
+          parse_unified_lines(lines, [])
+        else
+          {ops, _idx} = parse_lines(lines, 0, [])
+          Enum.reverse(ops)
+        end
 
       cond do
         operations == [] ->
@@ -658,6 +672,9 @@ defmodule CodingAgent.Tools.Patch do
           {:ok, operations}
       end
     catch
+      {:unified_error, message} ->
+        {:error, "Invalid unified diff: #{message}. No files changed."}
+
       {:invalid_patch_line, index, line} ->
         {:error,
          "Invalid patch syntax at line #{index + 1}: #{inspect(String.slice(line, 0, 120))}. Prefix hunk lines with a space (context), + (add), or - (remove); start each hunk with @@. No files changed."}
@@ -675,6 +692,128 @@ defmodule CodingAgent.Tools.Patch do
   end
 
   defp empty_update?(_operation), do: false
+  # Counted hunks distinguish ---/+++ content from file headers.
+  defp parse_unified_lines([], operations), do: Enum.reverse(operations)
+
+  defp parse_unified_lines(["--- " <> old, "+++ " <> new | rest], operations) do
+    old = unified_path(old)
+    new = unified_path(new)
+
+    {old, new} =
+      if (String.starts_with?(old, "a/") or old == "/dev/null") and
+           (String.starts_with?(new, "b/") or new == "/dev/null") do
+        {String.replace_prefix(old, "a/", ""), String.replace_prefix(new, "b/", "")}
+      else
+        {old, new}
+      end
+
+    {hunks, rest} = parse_unified_hunks(rest, [])
+    if hunks == [], do: throw({:unified_error, "file headers require counted @@ hunks"})
+
+    operation =
+      cond do
+        old == "/dev/null" and new != "/dev/null" ->
+          case apply_hunks("", hunks, nil) do
+            {:ok, content, _, _} -> %{type: :add, path: new, content: content}
+            {:error, reason} -> throw({:unified_error, reason})
+          end
+
+        new == "/dev/null" and old != "/dev/null" ->
+          %{type: :delete, path: old, hunks: hunks}
+
+        old != "/dev/null" and new != "/dev/null" ->
+          %{type: :update, path: old, move_to: if(old != new, do: new), hunks: hunks}
+
+        true ->
+          throw({:unified_error, "both paths cannot be /dev/null"})
+      end
+
+    parse_unified_lines(rest, [operation | operations])
+  end
+
+  defp parse_unified_lines([line | rest], operations) do
+    if line == "" or
+         Enum.any?(
+           ["diff --git ", "index ", "new file mode ", "deleted file mode "],
+           &String.starts_with?(line, &1)
+         ) do
+      parse_unified_lines(rest, operations)
+    else
+      throw(
+        {:unified_error,
+         "expected ---/+++ file headers, got #{inspect(String.slice(line, 0, 120))}"}
+      )
+    end
+  end
+
+  defp unified_path(header) do
+    path = header |> String.split("\t", parts: 2) |> hd() |> String.trim()
+
+    if path == "" or String.starts_with?(path, "\""),
+      do:
+        throw(
+          {:unified_error, "empty or quoted paths are not supported; use literal ---/+++ paths"}
+        )
+
+    path
+  end
+
+  defp parse_unified_hunks(["@@ " <> _ = line | rest], hunks) do
+    case Regex.named_captures(
+           ~r/\A@@ -(?<old_start>\d+)(?:,(?<old_count>\d+))? \+(?<new_start>\d+)(?:,(?<new_count>\d+))? @@(?:.*)\z/,
+           line
+         ) do
+      %{
+        "old_start" => old_start,
+        "old_count" => old_count,
+        "new_start" => new_start,
+        "new_count" => new_count
+      } ->
+        old_count = unified_count(old_count)
+        new_count = unified_count(new_count)
+        {changes, rest} = parse_unified_changes(rest, old_count, new_count, [])
+
+        hunk = %{
+          changes: changes,
+          unified: true,
+          old_start: String.to_integer(old_start),
+          new_start: String.to_integer(new_start),
+          old_count: old_count,
+          new_count: new_count
+        }
+
+        parse_unified_hunks(rest, [hunk | hunks])
+
+      _ ->
+        throw({:unified_error, "expected @@ -old,count +new,count @@, got #{inspect(line)}"})
+    end
+  end
+
+  defp parse_unified_hunks(rest, hunks), do: {Enum.reverse(hunks), rest}
+  defp unified_count(""), do: 1
+  defp unified_count(value), do: String.to_integer(value)
+
+  defp parse_unified_changes(["\\ No newline at end of file" | rest], old, new, [last | changes]) do
+    parse_unified_changes(rest, old, new, [Map.put(last, :no_newline, true) | changes])
+  end
+
+  defp parse_unified_changes(rest, 0, 0, changes), do: {Enum.reverse(changes), rest}
+
+  defp parse_unified_changes([<<prefix, text::binary>> | rest], old, new, changes)
+       when prefix in [?\s, ?-, ?+] do
+    {type, old, new} =
+      case prefix do
+        ?\s -> {:keep, old - 1, new - 1}
+        ?- -> {:remove, old - 1, new}
+        ?+ -> {:add, old, new - 1}
+      end
+
+    if old < 0 or new < 0, do: throw({:unified_error, "hunk line counts do not match its body"})
+    parse_unified_changes(rest, old, new, [%{type: type, content: text} | changes])
+  end
+
+  defp parse_unified_changes(_rest, _old, _new, _changes),
+    do: throw({:unified_error, "hunk body ended before its declared line counts"})
 
   defp parse_lines(lines, idx, ops) do
     if idx >= length(lines) do
@@ -833,18 +972,31 @@ defmodule CodingAgent.Tools.Patch do
   # ============================================================================
 
   defp prepare_operations(operations, cwd, signal, opts) do
-    Enum.reduce_while(operations, {:ok, []}, fn operation, {:ok, prepared} ->
+    Enum.reduce_while(operations, {:ok, [], %{}}, fn operation, {:ok, prepared, files} ->
       if aborted?(signal) do
         {:halt, {:error, "Operation aborted"}}
       else
-        case prepare_operation(operation, cwd, signal, opts) do
-          {:ok, entry} -> {:cont, {:ok, [entry | prepared]}}
-          {:error, reason} -> {:halt, {:error, reason}}
+        case prepare_operation(operation, cwd, signal, Keyword.put(opts, :prepared_files, files)) do
+          {:ok, entry} ->
+            files =
+              files
+              |> then(fn files ->
+                if entry.source, do: Map.put(files, entry.source, nil), else: files
+              end)
+              |> Map.put(
+                entry.target,
+                if(entry.new_content, do: %{content: entry.new_content, mode: entry.mode})
+              )
+
+            {:cont, {:ok, [entry | prepared], files}}
+
+          {:error, reason} ->
+            {:halt, {:error, reason}}
         end
       end
     end)
     |> case do
-      {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
+      {:ok, prepared, _files} -> {:ok, Enum.reverse(prepared)}
       error -> error
     end
   end
@@ -865,12 +1017,11 @@ defmodule CodingAgent.Tools.Patch do
      }}
   end
 
-  defp prepare_operation(%{type: :delete, path: path}, cwd, _signal, opts) do
+  defp prepare_operation(%{type: :delete, path: path} = operation, cwd, signal, opts) do
     source = resolve_path(path, cwd)
 
-    with {:ok, content} <- safe_read_file(source),
-         :ok <- FileReadTracker.check(opts, source, content),
-         {:ok, stat} <- File.stat(source) do
+    with {:ok, content, mode} <- source_data(source, opts, []),
+         :ok <- validate_deleted_content(content, operation, signal) do
       {:ok,
        %{
          type: :delete,
@@ -878,7 +1029,7 @@ defmodule CodingAgent.Tools.Patch do
          target: source,
          original_content: content,
          new_content: nil,
-         mode: stat.mode,
+         mode: mode,
          additions: 0,
          removals: count_lines(content)
        }}
@@ -896,9 +1047,9 @@ defmodule CodingAgent.Tools.Patch do
     source = resolve_path(path, cwd)
     target = if move_to, do: resolve_path(move_to, cwd), else: source
 
-    with {:ok, content} <- safe_read_file(source),
-         :ok <- FileReadTracker.check(opts, source, content),
-         {:ok, stat} <- File.stat(source),
+    needles = for hunk <- hunks, change <- hunk.changes, change.type != :add, do: change.content
+
+    with {:ok, content, mode} <- source_data(source, opts, needles),
          {:ok, new_content, additions, removals} <- apply_hunks(content, hunks, signal) do
       {:ok,
        %{
@@ -907,7 +1058,7 @@ defmodule CodingAgent.Tools.Patch do
          target: target,
          original_content: content,
          new_content: new_content,
-         mode: stat.mode,
+         mode: mode,
          additions: additions,
          removals: removals
        }}
@@ -916,24 +1067,80 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  defp verify_prepared_operation(%{type: :add, target: target}) do
+  defp validate_deleted_content(content, %{hunks: hunks}, signal) do
+    case apply_hunks(content, hunks, signal) do
+      {:ok, "", _, _} -> :ok
+      {:ok, _, _, _} -> {:error, "Unified deletion must match and remove the complete file"}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_deleted_content(_content, _operation, _signal), do: :ok
+
+  defp source_data(path, opts, needles) do
+    case Map.fetch(Keyword.get(opts, :prepared_files, %{}), path) do
+      {:ok, nil} ->
+        {:error, :enoent}
+
+      {:ok, %{content: content, mode: mode}} ->
+        {:ok, content, mode}
+
+      :error ->
+        with {:ok, content} <- safe_read_file(path),
+             :ok <- check_source_snapshot(path, content, opts, needles),
+             {:ok, stat} <- File.stat(path) do
+          {:ok, content, stat.mode}
+        end
+    end
+  end
+
+  defp check_source_snapshot(path, content, opts, needles) do
+    case FileReadTracker.check(opts, path, content) do
+      {:error, :stale} ->
+        {:error,
+         "#{path} has been modified on disk since you last read it; no patch operations were applied." <>
+           AnchoredEdit.current_context(
+             content,
+             path,
+             opts,
+             AnchoredEdit.context_ranges(content, needles)
+           )}
+
+      :ok ->
+        :ok
+    end
+  end
+
+  defp verify_prepared_operation(%{type: :add, target: target}, _opts) do
     verify_path_absent(target)
   end
 
-  defp verify_prepared_operation(%{type: :move} = prepared) do
-    with :ok <- verify_source_unchanged(prepared),
+  defp verify_prepared_operation(%{type: :move} = prepared, opts) do
+    with :ok <- verify_source_unchanged(prepared, opts),
          :ok <- verify_path_absent(prepared.target) do
       :ok
     end
   end
 
-  defp verify_prepared_operation(prepared), do: verify_source_unchanged(prepared)
+  defp verify_prepared_operation(prepared, opts), do: verify_source_unchanged(prepared, opts)
 
-  defp verify_source_unchanged(%{source: source, original_content: expected}) do
+  defp verify_source_unchanged(%{source: source, original_content: expected}, opts) do
     case File.read(source) do
-      {:ok, ^expected} -> :ok
-      {:ok, _changed} -> {:error, "File changed after patch preflight: #{source}"}
-      {:error, reason} -> {:error, format_error(reason, source)}
+      {:ok, ^expected} ->
+        :ok
+
+      {:ok, changed} ->
+        {:error,
+         "File changed after patch preflight: #{source}" <>
+           AnchoredEdit.current_context(
+             changed,
+             source,
+             opts,
+             AnchoredEdit.context_ranges(changed, [expected])
+           )}
+
+      {:error, reason} ->
+        {:error, format_error(reason, source)}
     end
   end
 
@@ -945,7 +1152,7 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  defp commit_prepared_operations(prepared_operations, signal) do
+  defp commit_prepared_operations(prepared_operations, signal, opts) do
     initial = %{changed: [], additions: 0, removals: 0}
 
     result =
@@ -953,7 +1160,7 @@ defmodule CodingAgent.Tools.Patch do
         if aborted?(signal) do
           {:halt, {:error, partial_commit_error("Operation aborted", acc.changed)}}
         else
-          case verify_prepared_operation(prepared) do
+          case verify_prepared_operation(prepared, opts) do
             :ok ->
               commit_verified_operation(prepared, signal, acc)
 
@@ -1001,7 +1208,7 @@ defmodule CodingAgent.Tools.Patch do
       :ok ->
         {:cont,
          %{
-           changed: acc.changed ++ [prepared.target],
+           changed: Enum.uniq(acc.changed ++ [prepared.target]),
            additions: acc.additions + prepared.additions,
            removals: acc.removals + prepared.removals
          }}
@@ -1077,6 +1284,8 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
+  defp chmod_moved_target(_path, nil), do: :ok
+
   defp chmod_moved_target(path, mode) do
     case File.chmod(path, mode) do
       :ok -> :ok
@@ -1092,7 +1301,26 @@ defmodule CodingAgent.Tools.Patch do
   end
 
   defp format_prepared_files(prepared, cwd, opts) do
-    Enum.map(prepared, fn
+    # Commit checks retain every intermediate state; consumers receive only the
+    # original and final contents of each path, never intermediate snapshot tags.
+    changes =
+      Enum.reduce(prepared, %{}, fn entry, changes ->
+        if entry.type == :move do
+          changes
+          |> record_file_change(entry.source, entry.original_content, nil)
+          |> record_file_change(entry.target, nil, entry.new_content)
+        else
+          record_file_change(changes, entry.target, entry.original_content, entry.new_content)
+        end
+      end)
+
+    paths =
+      Enum.flat_map(prepared, &[&1.source, &1.target]) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+    paths
+    |> Enum.map(&Map.fetch!(changes, &1))
+    |> Enum.reject(&(&1.original_content == nil and &1.new_content == nil))
+    |> Enum.map(fn
       %{type: :delete} = entry ->
         entry
 
@@ -1108,6 +1336,20 @@ defmodule CodingAgent.Tools.Patch do
     end)
   end
 
+  defp record_file_change(changes, path, old, new) do
+    Map.update(
+      changes,
+      path,
+      %{
+        target: path,
+        original_content: old,
+        new_content: new,
+        type: if(is_nil(new), do: :delete, else: :update)
+      },
+      &%{&1 | new_content: new, type: if(is_nil(new), do: :delete, else: :update)}
+    )
+  end
+
   defp written_file_result(entry, old_text) do
     %{formatted: entry.formatted, snapshot: AnchoredEdit.snapshot(entry.new_content)}
     |> then(fn details ->
@@ -1121,12 +1363,6 @@ defmodule CodingAgent.Tools.Patch do
   defp prepared_file_results(prepared) do
     prepared
     |> Enum.flat_map(fn
-      %{type: :move} = entry ->
-        [
-          FileValidation.put_text_snapshots(%{}, entry.source, entry.original_content, nil),
-          written_file_result(entry, nil)
-        ]
-
       %{type: :delete} = entry ->
         [FileValidation.put_text_snapshots(%{}, entry.target, entry.original_content, nil)]
 
@@ -1217,11 +1453,12 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  defp apply_operation_acp(%{type: :delete, path: path}, cwd, signal, opts) do
+  defp apply_operation_acp(%{type: :delete, path: path} = operation, cwd, signal, opts) do
     resolved = resolve_path(path, cwd)
 
     with :ok <- check_abort(signal),
          {:ok, content} <- ACPFileBridge.read_text_file(resolved, nil, nil, opts),
+         :ok <- validate_deleted_content(content, operation, signal),
          :ok <- check_abort(signal),
          :ok <- ACPFileBridge.delete_file(resolved, opts) do
       removals = count_lines(content)
@@ -1378,6 +1615,58 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
+  defp apply_text_hunks(content, [%{unified: true} | _] = hunks, signal) do
+    newline = if String.contains?(content, "\r\n"), do: "\r\n", else: "\n"
+    normalized = FileFormatHelpers.normalize_to_lf(content)
+    lines = if content == "", do: [], else: AnchoredEdit.lines(normalized)
+
+    Enum.reduce_while(hunks, {:ok, lines, 0, 0, String.ends_with?(content, "\n")}, fn hunk,
+                                                                                      {:ok,
+                                                                                       current,
+                                                                                       adds,
+                                                                                       removes,
+                                                                                       final_newline?} ->
+      pattern = for change <- hunk.changes, change.type != :add, do: change.content
+
+      location =
+        if pattern == [] do
+          index = max(hunk.new_start - 1, 0)
+
+          if index <= length(current),
+            do: {:ok, index},
+            else: {:error, "Unified insertion is out of range"}
+        else
+          locate_hunk(current, pattern)
+        end
+
+      with :ok <- check_abort(signal),
+           {:ok, index} <- location,
+           :ok <- check_unified_newline(hunk, index, current, final_newline?),
+           {:ok, updated, added, removed} <- do_apply_changes(current, hunk.changes, index) do
+        at_end? = index + length(pattern) == length(current)
+        last = hunk.changes |> Enum.reject(&(&1.type == :remove)) |> List.last()
+
+        final_newline? =
+          if at_end?,
+            do: last != nil and not Map.get(last, :no_newline, false),
+            else: final_newline?
+
+        {:cont, {:ok, updated, adds + added, removes + removed, final_newline?}}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, updated, adds, removes, final_newline?} ->
+        text = Enum.join(updated, newline)
+        text = if updated != [] and final_newline?, do: text <> newline, else: text
+        {:ok, text, adds, removes}
+
+      error ->
+        error
+    end
+  end
+
   defp apply_text_hunks(content, hunks, signal) do
     lines = String.split(content, ~r/\r?\n/, trim: false)
     newline = if String.contains?(content, "\r\n"), do: "\r\n", else: "\n"
@@ -1406,22 +1695,44 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  defp apply_hunk(lines, %{changes: changes}) do
-    pattern =
-      changes
-      |> Enum.filter(fn change -> change.type in [:keep, :remove] end)
-      |> Enum.map(& &1.content)
+  defp check_unified_newline(hunk, index, lines, final_newline?) do
+    old = Enum.reject(hunk.changes, &(&1.type == :add))
+    last = List.last(old)
 
+    if last && index + length(old) == length(lines) &&
+         Map.get(last, :no_newline, false) == final_newline? do
+      {:error, "Unified hunk final-newline marker does not match the current file"}
+    else
+      :ok
+    end
+  end
+
+  defp apply_hunk(lines, %{changes: changes}) do
+    pattern = for change <- changes, change.type != :add, do: change.content
+
+    with {:ok, start_idx} <- locate_hunk(lines, pattern),
+         do: do_apply_changes(lines, changes, start_idx)
+  end
+
+  defp locate_hunk(lines, pattern) do
     case find_pattern(lines, pattern) do
       {:ok, start_idx} ->
-        do_apply_changes(lines, changes, start_idx)
+        {:ok, start_idx}
 
       {:error, matches} ->
         locations = Enum.map_join(Enum.take(matches, 10), ", ", &Integer.to_string(&1 + 1))
 
+        candidates =
+          Enum.map_join(Enum.take(matches, 10), "\n", fn index ->
+            lines
+            |> Enum.slice(max(index - 1, 0), min(length(pattern) + 2, 6))
+            |> Enum.with_index(max(index - 1, 0) + 1)
+            |> Enum.map_join("\n", fn {line, number} -> "#{number}: #{line}" end)
+          end)
+
         {:error,
          "Ambiguous patch hunk: context matches #{length(matches)} locations at lines #{locations}. " <>
-           "Include more surrounding context to identify one location."}
+           "Include more surrounding context to identify one location. Candidate locations:\n#{candidates}"}
 
       :not_found ->
         context_preview =
@@ -1535,10 +1846,6 @@ defmodule CodingAgent.Tools.Patch do
   defp format_error(:edquot, path), do: "Disk quota exceeded: #{path}"
   defp format_error(:eisdir, path), do: "Is a directory: #{path}"
   defp format_error(:enotdir, path), do: "Not a directory in path: #{path}"
-
-  defp format_error(:stale, path),
-    do:
-      "#{path} has been modified on disk since you last read it. Re-read the file before applying the patch."
 
   defp format_error(:eexist, path), do: "File already exists: #{path}"
   defp format_error(:eperm, path), do: "Operation not permitted: #{path}"

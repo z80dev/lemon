@@ -90,7 +90,7 @@ defmodule CodingAgent.Tools.Read do
         "Read files, directories, archives (archive.zip:member), PDFs, notebooks, images, and SQLite databases " <>
           "(app.db lists tables; app.db:table, app.db:table:key, app.db:table?limit=&offset=&where=&order=, app.db?q=SELECT ...). " <>
           "Text files include a snapshot tag and 1-based lines; prefer edit with snapshot + edits " <>
-          "to change line ranges without copying old text. Use offset/limit or a path selector " <>
+          "to change line ranges without copying old text, including omitted lines while the tag is current. Use offset/limit or a path selector " <>
           "(file:50-80, file:50+20, file:50 from line 50, file:-30 last 30 lines, file:raw or " <>
           "file:50-80:raw for exact unnumbered text, file:5,19-25 for disjoint windows) to page. " <>
           "A single non-raw bounded range includes 1 line before and 3 after; comma lists stay exact. " <>

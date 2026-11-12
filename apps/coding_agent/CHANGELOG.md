@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Reduced edit/patch retry friction: current full-file snapshot tags permit omitted
+  lines, edit modes are mutually exclusive in the schema, copied/bracketed tags
+  are accepted, and stale refusals include fresh tags and numbered retry context.
+  Historical recovery still requires uniquely byte-identical anchors.
+- Patch operations may repeat a path in input order with complete preflight;
+  ordinary unified diffs are accepted, ambiguity errors show candidate source,
+  and per-file results describe original-to-final contents.
+
 ### Added
 
 - Per-Bot folder reads can skip human approval only when effective policy sets
