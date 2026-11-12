@@ -3,7 +3,7 @@ import LemonBotKit
 import CryptoKit
 import Security
 
-private struct PublicOIDCProvider: Decodable, Identifiable {
+nonisolated private struct PublicOIDCProvider: Decodable, Identifiable, Sendable {
     let id: ID
     let name: String
     let enabled: Bool
@@ -523,7 +523,7 @@ private struct AccountSignInView: View {
         guard let url = URL(string: backend) else { throw LoginError.message("Enter your Lemon Bot server address, for example https://bot.example.") }
         return try HTTPTransport.normalizeBaseURL(url)
     }
-    private func publicRequest<T: Decodable>(_ base: URL, _ path: String, body: JSONObject? = nil) async throws -> T {
+    nonisolated private func publicRequest<T: Decodable>(_ base: URL, _ path: String, body: JSONObject? = nil) async throws -> T {
         let transport = try HTTPTransport(baseURL: base)
         if let body { return try await transport.mutate("POST", path, body: body) }
         return try await transport.read(path)

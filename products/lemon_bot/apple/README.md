@@ -226,6 +226,14 @@ An opaque creation timeout without returned IDs stays fenced when the server exp
 
 Follow [Lemon Bot getting started](../../../docs/getting-started/lemon-bot.md) for reachable HTTPS, desktop-approved pairing and revocation. Tailscale reachability alone is not sign-in authority; a QR does not permit a TLS bypass or make the desktop's loopback address reachable from a physical phone.
 
+The Mac pairing window links directly to the HTTPS setup guide when no
+phone-ready address is verified and rechecks the advertisement while foreground,
+so finishing HTTPS setup does not require restarting the app. QR creation
+remains explicit. Debug Mac builds additionally offer a Simulator-only toggle
+for exact HTTP `localhost`, `127.0.0.1` and `[::1]` origins; only Debug iOS
+Simulator builds accept those links. Physical devices and Release iOS builds
+retain the HTTPS requirement.
+
 Native implementation invariants: preview is read-only; requesting access and desktop approval are explicit. Phone completion retains its original nonce and five-minute deadline, verifies instance/workspace with the new device session before Keychain storage, and never replays ordinary mutations. A completed phone session lasts until revoked. Unknown pairing outcomes require explicit same-receipt reconciliation, not a new claim. See the shared API below for contributor integration details.
 
 ### Shared native preflight API
@@ -235,7 +243,9 @@ without AppKit or UI dependencies:
 
 - `BotPreflight.validateOrigin(_:use:)` accepts an exact canonical origin.
   `BotOriginUse.phone` is the default and rejects loopback/unspecified addresses;
-  `.sameMachine` permits local HTTP only for an explicitly local baseline/Simulator.
+  `.sameMachine` permits local HTTP for an explicitly local baseline. Phone
+  pairing selects it only for exact web-compatible loopback hosts in Debug
+  Simulator builds; Release Simulator and physical-device pairing stay `.phone`.
 - `BotPreflightClient(session:).identity(origin:token:use:)` reads the authenticated
   `BackendIdentity` baseline. A supplied URLSession contributes only trusted test
   URLProtocol classes, never TLS/redirect policy.

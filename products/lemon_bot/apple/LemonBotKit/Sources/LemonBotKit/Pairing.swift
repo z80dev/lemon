@@ -96,7 +96,7 @@ extension LemonBotStore {
     }
     public func preparePairing(_ rawLink: String) throws {
         let link = try PairingLink.parse(rawLink)
-        _ = try BotPreflight.validateOrigin(link.origin, use: Self.phoneOriginUse)
+        _ = try BotPreflight.validateOrigin(link.origin, use: Self.phonePairingOriginUse(link.origin))
         if let record = pairingRecord {
             guard record.link == link else { throw PairingClientError.pendingConnection }
             return
@@ -210,7 +210,7 @@ extension LemonBotStore {
                       connected.device.userId == auth.user.id, auth.session.deviceId == connected.device.id,
                       connected.device.platform == "ios", auth.session.expiresAtMs == nil,
                       !auth.token.isEmpty, auth.token.utf8.count <= 4096 else { throw PairingClientError.wrongCluster }
-                _ = try await BotPreflightClient(session: httpSession).preflight(origin: record.link.origin, expectedInstanceID: record.link.instanceId, session: BotPreflightSession(token: auth.token, workspaceID: record.link.workspaceId), use: Self.phoneOriginUse)
+                _ = try await BotPreflightClient(session: httpSession).preflight(origin: record.link.origin, expectedInstanceID: record.link.instanceId, session: BotPreflightSession(token: auth.token, workspaceID: record.link.workspaceId), use: Self.phonePairingOriginUse(record.link.origin))
                 try assertGeneration(current)
                 guard pairingRecord?.claimNonce == originalNonce else { throw PairingClientError.pendingConnection }
                 let saved = try saveAuthenticatedAccount(auth, baseURL: url, deviceID: connected.device.id, installationID: record.installationID, instanceID: record.link.instanceId)
@@ -319,15 +319,23 @@ extension LemonBotStore {
         if let value = defaults.string(forKey: key) { return value }
         let value = UUID().uuidString; defaults.set(value, forKey: key); return value
     }
-    static var phoneOriginUse: BotOriginUse {
-        #if os(iOS) && !targetEnvironment(simulator)
-        return .phone
+    static func phonePairingOriginUse(_ origin: String) -> BotOriginUse {
+        #if DEBUG && targetEnvironment(simulator)
+        return OwnerPairingAddress.isSimulatorOrigin(origin) ? .sameMachine : .phone
         #else
+        return .phone
+        #endif
+    }
+    static func connectionOriginUse(_ origin: String) -> BotOriginUse {
+        #if os(macOS)
+        // Local Mac accounts remain local; this is not permission for phone pairing.
         return .sameMachine
+        #else
+        return phonePairingOriginUse(origin)
         #endif
     }
     private func verifyPhonePairing(_ record: PendingDevicePairing) async throws {
-        _ = try await BotPreflightClient(session: httpSession).preflight(origin: record.link.origin, expectedInstanceID: record.link.instanceId, use: Self.phoneOriginUse)
+        _ = try await BotPreflightClient(session: httpSession).preflight(origin: record.link.origin, expectedInstanceID: record.link.instanceId, use: Self.phonePairingOriginUse(record.link.origin))
         try Task.checkCancellation()
         guard pairingRecord?.claimNonce == record.claimNonce else { throw PairingClientError.pendingConnection }
     }

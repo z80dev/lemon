@@ -45,7 +45,9 @@ enum MacAudioInputs {
         var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         var value: CFString = "" as CFString
         var byteCount = UInt32(MemoryLayout<CFString>.size)
-        try require(AudioObjectGetPropertyData(device, &address, 0, nil, &byteCount, &value))
+        try withUnsafeMutablePointer(to: &value) { pointer in
+            try require(AudioObjectGetPropertyData(device, &address, 0, nil, &byteCount, pointer))
+        }
         return value as String
     }
 

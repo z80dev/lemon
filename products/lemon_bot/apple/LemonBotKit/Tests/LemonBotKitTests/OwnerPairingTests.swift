@@ -91,6 +91,91 @@ private final class OwnerPairingCredentials: AccountCredentialStore {
         TestHTTPProtocol.handler = { request in try self.descriptorResponse(request, overrides: ["publicUrl": "https://product.example.org"]) }
         do { try await store.verifyOwnerPairingOrigin(); XCTFail("Guided journey requires Tailscale HTTPS") } catch { XCTAssertEqual(error as? BotPreflightError, .tailscaleRequired) }
     }
+    func testMissingHTTPSCanBecomeReadyWithoutReplacingAccountOrIssuingAutomatically() async throws {
+        let (store, credentials) = try store()
+        let originalURL = store.account?.baseURL
+        var advertised = "http://127.0.0.1:4100"
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET", "Address discovery must never create or replay a QR")
+            return try self.descriptorResponse(request, overrides: ["publicUrl": advertised])
+        }
+        do { try await store.verifyOwnerPairingOrigin(); XCTFail("A physical phone needs HTTPS") }
+        catch { XCTAssertEqual(error as? BotPreflightError, .loopbackOrigin) }
+        XCTAssertNil(store.ownerPairingPreflight)
+        XCTAssertNil(store.pairingURL)
+        XCTAssertNil(credentials.accounts.first?.instanceID)
+
+        // A later foreground readiness check observes the operator's changed advertisement.
+        advertised = BotPreflightFixtures.origin
+        try await store.verifyOwnerPairingOrigin()
+        XCTAssertEqual(store.ownerPairingPreflight?.origin, advertised)
+        XCTAssertEqual(store.account?.baseURL, originalURL)
+        XCTAssertEqual(credentials.accounts.first?.instanceID, "backend_1")
+        XCTAssertNil(store.pairingURL, "Creating the one-use secret still requires an explicit action")
+    }
+    func testSimulatorAllowanceMatchesOnlyWebLoopbackHosts() throws {
+        for origin in ["http://localhost:4100", "http://127.0.0.1:4100", "http://[::1]:4100"] {
+            XCTAssertTrue(OwnerPairingAddress.isSimulatorOrigin(origin))
+            XCTAssertThrowsError(try OwnerPairingAddress.validate(origin))
+            #if DEBUG
+            XCTAssertEqual(try OwnerPairingAddress.validate(origin, forSimulator: true), .sameMachine)
+            #else
+            XCTAssertThrowsError(try OwnerPairingAddress.validate(origin, forSimulator: true))
+            #endif
+        }
+        for origin in ["http://127.0.0.2:4100", "http://0.0.0.0:4100", "http://dev.localhost:4100", "http://localhost.:4100", "http://192.168.1.2:4100", "http://localhost:4100/path", "http://owner:secret@localhost:4100"] {
+            XCTAssertFalse(OwnerPairingAddress.isSimulatorOrigin(origin))
+            XCTAssertThrowsError(try OwnerPairingAddress.validate(origin, forSimulator: true))
+        }
+    }
+    func testPhoneHTTPAllowanceIsCompiledOnlyForDebugSimulator() throws {
+        let (store, _) = try store()
+        var parts = URLComponents()
+        parts.scheme = "lemonbot"; parts.host = "pair"
+        parts.queryItems = [URLQueryItem(name: "backend", value: "http://127.0.0.1:4100"), URLQueryItem(name: "instance", value: "backend_1"), URLQueryItem(name: "cluster", value: "workspace_1"), URLQueryItem(name: "code", value: String(repeating: "A", count: 43))]
+        let link = try XCTUnwrap(parts.string)
+        #if DEBUG && targetEnvironment(simulator)
+        XCTAssertNoThrow(try store.preparePairing(link))
+        #else
+        XCTAssertThrowsError(try store.preparePairing(link)) { error in
+            XCTAssertEqual(error as? BotPreflightError, .loopbackOrigin)
+        }
+        #endif
+    }
+    #if DEBUG
+    func testExplicitSimulatorReadinessStillVerifiesIdentityAndAdvertisement() async throws {
+        let (store, _) = try store()
+        let local = "http://127.0.0.1:4100"
+        TestHTTPProtocol.handler = { request in
+            try self.descriptorResponse(request, overrides: ["publicUrl": local])
+        }
+        try await store.verifyOwnerPairingOrigin(forSimulator: true)
+        XCTAssertEqual(store.ownerPairingPreflight?.origin, local)
+        XCTAssertEqual(TestHTTPProtocol.requests.map { $0.url?.path }, ["/v1/identity", "/v1/setup", "/v1/identity"])
+        XCTAssertTrue(TestHTTPProtocol.requests.allSatisfy { $0.httpMethod == "GET" })
+        TestHTTPProtocol.handler = { request in
+            try self.descriptorResponse(request, overrides: ["publicUrl": local, "workspaceId": "other_workspace"])
+        }
+        do { try await store.verifyOwnerPairingOrigin(forSimulator: true); XCTFail("Local development cannot bypass workspace identity") }
+        catch { XCTAssertEqual(error as? BotPreflightError, .workspaceMismatch) }
+        XCTAssertNil(store.ownerPairingPreflight)
+    }
+    #endif
+    func testRetainedQRRequiresTheCurrentlyVerifiedAddressAndUnexpiredWaitingReceipt() throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let receipt = pairing(expiresAt: 1_100_000)
+        var parts = URLComponents()
+        parts.scheme = "lemonbot"; parts.host = "pair"
+        parts.queryItems = [URLQueryItem(name: "backend", value: receipt.backendUrl), URLQueryItem(name: "instance", value: "backend_1"), URLQueryItem(name: "cluster", value: "workspace_1"), URLQueryItem(name: "code", value: String(repeating: "A", count: 43))]
+        let link = try XCTUnwrap(parts.string)
+        XCTAssertNil(OwnerPairingProgress.activeLink(link, pairing: receipt, verifiedOrigin: nil, now: now))
+        XCTAssertEqual(OwnerPairingProgress.activeLink(link, pairing: receipt, verifiedOrigin: receipt.backendUrl, now: now), link)
+        XCTAssertNil(OwnerPairingProgress.activeLink(link, pairing: receipt, verifiedOrigin: "https://new.example.ts.net", now: now))
+        XCTAssertNil(OwnerPairingProgress.activeLink(link, pairing: receipt, verifiedOrigin: receipt.backendUrl, now: Date(timeIntervalSince1970: 1_100)))
+        var consumed = receipt
+        consumed.status = "consumed"
+        XCTAssertNil(OwnerPairingProgress.activeLink(link, pairing: consumed, verifiedOrigin: receipt.backendUrl, now: now))
+    }
     func testExplicitApprovalUsesExactCodeAndRevisionThenReadsCompletionWithoutReplay() async throws {
         let (store, _) = try store()
         var request = pairing(status: "pending_approval"), approvalCount = 0

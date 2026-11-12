@@ -93,7 +93,7 @@ final class MacSpeechCapture {
                     ? "Apple Speech permission is not granted. After release, explicitly transcribe the recorded audio using the configured backend, or enable Speech Recognition in System Settings."
                     : "On-device Apple Speech is unavailable for this language. After release, explicitly transcribe the recorded audio using the configured backend."
             }
-            input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                 recognitionRequest?.append(buffer)
                 do { try file.write(from: buffer) }
                 catch {
