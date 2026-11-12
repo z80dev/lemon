@@ -339,10 +339,9 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
     tmp = "#{path}.#{System.pid()}.#{System.unique_integer([:positive])}.tmp"
 
     with :ok <- File.mkdir_p(Path.dirname(path)),
-         {:ok, io} <- File.open(tmp, [:write, :exclusive, :binary]),
+         :ok <- File.write(tmp, "", [:exclusive]),
          :ok <- File.chmod(tmp, 0o600),
-         :ok <- IO.binwrite(io, derived <> "\n"),
-         :ok <- File.close(io),
+         :ok <- File.write(tmp, derived <> "\n"),
          :ok <- File.rename(tmp, path) do
       derived
     else
