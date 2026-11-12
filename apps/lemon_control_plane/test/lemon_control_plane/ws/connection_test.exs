@@ -684,7 +684,9 @@ defmodule LemonControlPlane.WS.ConnectionTest do
                  %{
                    "type" => "node",
                    "nodeId" => node_id
-                 }, ttl_ms: 24 * 60 * 60 * 1000)
+                 },
+                 ttl_ms: 24 * 60 * 60 * 1000
+               )
 
       node_pid = self()
 
