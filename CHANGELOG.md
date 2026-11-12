@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.11.6]
+
 ### Changed
 
 - The TUI startup banner has a new pixel-art lemon with a half-block `lemon`
