@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { resolve } from "node:path";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { fixtureBlock, fixtureByName } from "../src/dev/fixtures/tool-fixtures.ts";
 import type { ToolBlock } from "../src/store/transcript-model.ts";
@@ -222,6 +224,107 @@ function settled(name: string, detail: Record<string, unknown>, ok = true): Tool
 		ok ? "success" : "error",
 	);
 }
+
+function mediaContext(supported: boolean): DescribeContext {
+	return {
+		cols: 100,
+		dark: true,
+		reduceMotion: false,
+		supports: (kind) => kind !== "media" || supported,
+		feature: () => false,
+	};
+}
+
+test("native read media requires negotiated support and an existing local path", () => {
+	const dir = mkdtempSync(join(tmpdir(), "lemon-native-media-"));
+	const path = join(dir, "drawing.svg");
+	writeFileSync(path, "<svg xmlns='http://www.w3.org/2000/svg'/>");
+	try {
+		const tool = settled("read", {
+			args: { path },
+			result: "",
+			details: { media_path: path },
+		});
+		const card = new ToolCardComponent(tool);
+		const rows = card.render(120).join("\n");
+		expect(nodes(card.describe(mediaContext(false))).filter((n) => n.k === "media")).toEqual([]);
+		const media = nodes(card.describe(mediaContext(true))).filter((n) => n.k === "media");
+		expect(media).toHaveLength(1);
+		expect(media[0]?.p?.path).toBe(path);
+		expect(card.render(120).join("\n")).toBe(rows);
+		expect(nodes(card.describe(mediaContext(false))).some((n) => n.k === "media")).toBe(false);
+
+		for (const details of [
+			{ media_path: join(dir, "remote.svg") },
+			{ media_path: "drawing.svg" },
+			{ path },
+		]) {
+			const missing = new ToolCardComponent(settled("read", { details, result: "1: text" }));
+			expect(nodes(missing.describe(mediaContext(true))).some((n) => n.k === "media")).toBe(false);
+		}
+
+		const failed = new ToolCardComponent(settled("read", { details: { media_path: path } }, false));
+		expect(nodes(failed.describe(mediaContext(true))).some((n) => n.k === "media")).toBe(false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("opened read groups retain media and invalidate their cache when host capabilities change", () => {
+	const dir = mkdtempSync(join(tmpdir(), "lemon-native-media-"));
+	const path = join(dir, "drawing.svg");
+	writeFileSync(path, "<svg xmlns='http://www.w3.org/2000/svg'/>");
+	try {
+		const shelf = new ToolShelfComponent();
+		for (const id of ["media-read-1", "media-read-2"]) {
+			const tool = settled("read", { args: { path }, details: { media_path: path } });
+			tool.id = id;
+			shelf.add(tool);
+		}
+		const group = shelf.describe(mediaContext(true)).c?.[0];
+		if (!isNode(group)) throw new Error("expected read group");
+		shelf.handleNativeEvent({ type: "toggle", key: group.key!, collapsed: false });
+		expect(nodes(shelf.describe(mediaContext(true))).filter((n) => n.k === "media")).toHaveLength(
+			2,
+		);
+		expect(nodes(shelf.describe(mediaContext(false))).some((n) => n.k === "media")).toBe(false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("browser screenshot cards display only the saved artifact path in their result details", () => {
+	const dir = mkdtempSync(join(tmpdir(), "lemon-native-media-"));
+	const path = join(dir, "screenshot.png");
+	writeFileSync(path, "saved screenshot");
+	try {
+		const screenshot = (details: Record<string, unknown>) =>
+			new ToolCardComponent(
+				settled("browser_navigate", {
+					name: "browser_screenshot",
+					args: { path },
+					result: "Screenshot saved",
+					details,
+				}),
+			);
+		expect(
+			nodes(screenshot({ path }).describe(mediaContext(true))).filter((n) => n.k === "media"),
+		).toHaveLength(1);
+		expect(
+			nodes(screenshot({ path }).describe(mediaContext(false))).some((n) => n.k === "media"),
+		).toBe(false);
+		expect(nodes(screenshot({}).describe(mediaContext(true))).some((n) => n.k === "media")).toBe(
+			false,
+		);
+		expect(
+			nodes(screenshot({ path: join(dir, "remote.png") }).describe(mediaContext(true))).some(
+				(n) => n.k === "media",
+			),
+		).toBe(false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
 
 test("a failed command is a run box with the daemon's notices moved into the exit chip", () => {
 	const native = new ToolCardComponent(

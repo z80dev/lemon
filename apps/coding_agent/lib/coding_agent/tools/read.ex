@@ -12,6 +12,8 @@ defmodule CodingAgent.Tools.Read do
   - Bounded chunked text scanning, including oversized single-line files
   - Binary/invalid UTF-8 refusal with actionable inspection guidance
   - `agent://` live family rosters and `agent://<task-id-or-name>` identities
+  - Display-only `media_path` details for whole reads of local Tern-viewable files;
+    model-facing content is unchanged, and partial reads never advertise full media
   """
 
   alias CodingAgent.FileReadTracker
@@ -63,6 +65,13 @@ defmodule CodingAgent.Tools.Read do
   @daily_memory_path_regex Regex.compile!(
                              "(?:^|[\\\\/])memory[\\\\/](\\d{4}-\\d{2}-\\d{2})\\.md$"
                            )
+  # Mirrored from Tern's editor kind tables (IMAGE, SVG, MODEL, MODEL_GZ, PLATFORM).
+  # Model sidecars are deliberately absent: the viewer resolves them relative to the model.
+  @tern_media_extensions ~w(.png .apng .jpg .jpeg .jpe .jfif .gif .webp .svg
+    .obj .ply .wrl .vrml .wrz .x3dv .x3dvz .stl .gltf .glb .fbx .usd .usda .usdc .usdz .3ds
+    .pdf .mp4 .m4v .mov .webm .mp3 .m4a .wav .aac .flac .ogg .oga .opus)
+  @tern_model_gz_extensions ~w(.obj .ply .wrl .vrml .x3dv .stl .gltf .glb .fbx .usd .usda .usdc .3ds)
+  @partial_media_params ~w(offset limit page page_limit cell cell_limit)
 
   @doc """
   Returns the Read tool definition.
@@ -254,27 +263,55 @@ defmodule CodingAgent.Tools.Read do
   end
 
   defp read_selected(params, signal, cwd, opts) do
-    case apply_path_selector(params, cwd, opts) do
-      {:ok, params, %{image: true}} ->
-        with {:ok, path} <- resolve_path(params["path"], cwd, opts),
-             {:ok, result} <- ReadSvg.image(path, signal, cwd, opts) do
-          result
+    with {:ok, params, view} <- apply_path_selector(params, cwd, opts) do
+      result =
+        case view do
+          %{image: true} ->
+            with {:ok, path} <- resolve_path(params["path"], cwd, opts),
+                 {:ok, result} <- ReadSvg.image(path, signal, cwd, opts) do
+              result
+            end
+
+          %{conflicts: true} ->
+            Conflicts.read(params["path"], cwd, opts)
+
+          %{tail: tail} when is_integer(tail) ->
+            read_tail(params, tail, view, signal, cwd, opts)
+
+          %{windows: windows} ->
+            read_windows(windows, params, view, signal, cwd, opts, nil)
+
+          _ ->
+            do_read(params, view, signal, cwd, opts)
         end
 
-      {:ok, params, %{conflicts: true}} ->
-        Conflicts.read(params["path"], cwd, opts)
+      maybe_media_path(result, params, view, cwd, opts)
+    end
+  end
 
-      {:ok, params, %{tail: tail} = view} when is_integer(tail) ->
-        read_tail(params, tail, view, signal, cwd, opts)
+  defp maybe_media_path(%AgentToolResult{is_error: false} = result, params, view, cwd, opts) do
+    whole? =
+      Enum.all?(@partial_media_params, &is_nil(params[&1])) and
+        not Enum.any?([:tail, :windows, :conflicts], &Map.has_key?(view, &1))
 
-      {:ok, params, %{windows: windows} = view} ->
-        read_windows(windows, params, view, signal, cwd, opts, nil)
+    with true <- whole?,
+         false <- Map.get(result.details || %{}, :acp_client, false),
+         {:ok, path} <- resolve_path(params["path"], cwd, opts),
+         true <- tern_media?(path) and File.regular?(path) do
+      %{result | details: Map.put(result.details || %{}, :media_path, Path.expand(path))}
+    else
+      _ -> result
+    end
+  end
 
-      {:ok, params, view} ->
-        do_read(params, view, signal, cwd, opts)
+  defp maybe_media_path(result, _params, _view, _cwd, _opts), do: result
 
-      {:error, _} = error ->
-        error
+  defp tern_media?(path) do
+    name = path |> Path.basename() |> String.downcase()
+
+    case Path.extname(name) do
+      ".gz" -> Path.extname(Path.rootname(name)) in @tern_model_gz_extensions
+      ext -> ext in @tern_media_extensions
     end
   end
 

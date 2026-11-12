@@ -282,6 +282,20 @@ defmodule CodingAgent.Tools.ReadFormatsTest do
         assert text(selected) =~ "Beta page"
         refute text(selected) =~ "Alpha page"
 
+        assert %AgentToolResult{details: %{media_path: ^path}, content: content} =
+                 CodingAgent.Tools.Read.execute("pdf", %{"path" => path}, nil, nil, cwd, opts)
+
+        assert content == result.content
+
+        for selection <- [%{"page" => 1}, %{"page_limit" => 1}] do
+          params = Map.put(selection, "path", path)
+
+          assert %AgentToolResult{details: details} =
+                   CodingAgent.Tools.Read.execute("pdf-page", params, nil, nil, cwd, opts)
+
+          refute Map.has_key?(details, :media_path)
+        end
+
       {:error, message} ->
         assert message =~ "pypdf"
         assert message =~ "venv"
