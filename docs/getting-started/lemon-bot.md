@@ -240,6 +240,30 @@ For offline or reauthorization states, use **Machines → Reconnect**; the Mac
 app's host-repair controls can recover its own host. For update and removal,
 follow [Update, roll back, and uninstall](../user-guide/updates.md).
 
+## Finish interrupted Bot setup
+
+A Bot that could not finish creation or import stays in your sidebar with its
+failed step in plain words. Open its settings and choose **Finish setup** after
+fixing the cause—for example, reconnect its execution machine or add the named
+origin to `LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS` on the controller and restart
+Lemon. This resumes the same Bot and conversation; do not create a replacement.
+
+Completed steps are skipped. An interrupted secret, profile, machine sync or
+callback is checked against its owning receipt first. If a receipt remains
+unavailable or inconclusive, the Bot stays blocked with a message instead of
+blindly repeating a mutation. Older controllers need the advertised admission
+receipt method before an uncertain callback can be resolved.
+Imported skills and routines keep their reserved identities across interruption.
+A lost skill-install acknowledgement is resolved by checking that exact managed
+file's content and revision, not by creating another skill or overwriting an
+unverified file.
+
+**Delete** is also available for an unfinished Bot. If deletion is interrupted,
+Lemon Bot checks the remaining scoped resources read-only. When the check
+finishes, **Delete** becomes available again with a fresh preview/confirmation;
+already-removed resources count as done. Other Bots and their resources are not
+part of that cleanup.
+
 ## Optional: another browser or iPhone
 
 Another browser, an iPhone, or an execution machine on another host needs a
@@ -272,10 +296,10 @@ Do all three steps on the computer that runs Lemon Bot. The examples use
    ```
 
 3. **Allow that origin on the controller.** The controller accepts Bot callbacks
-   only from `http://127.0.0.1:4100` by default. Until the new origin is allowed,
-   creating a Bot (and scheduling a routine) fails with a generic error. Add both
-   allowlists to `~/.lemon/env`, which the `lemon` launcher and its controller
-   service read, then restart:
+   only from explicitly allowed origins (literal-loopback HTTP is supported for
+   development). A rejected Bot callback names its origin and the allowlist to
+   fix. Add both allowlists to `~/.lemon/env`, which the `lemon` launcher and its
+   controller service read, then restart:
 
    ```bash
    cat >> "$HOME/.lemon/env" <<'EOF'
@@ -286,8 +310,15 @@ Do all three steps on the computer that runs Lemon Bot. The examples use
    ```
 
    Each entry is an exact origin: scheme, host and port, with no path or
-   trailing slash. Setting a variable replaces the default, so keep
-   `http://127.0.0.1:4100` for Bots created before the change.
+   trailing slash. Setting a variable replaces its previous value; retain any
+   other origins still in use.
+
+4. **Update existing Bots.** Open each Bot's settings and choose **Update address**.
+   The notice names the old and new origin. Lemon Bot prepares a new private
+   callback credential, keeps the old issuer until the controller acknowledges
+   the replacement, then updates and syncs the Bot's tool address. This keeps the
+   same Bot and conversation. If interrupted, choose **Update address** again:
+   its read-only receipt check must resolve before another mutation is allowed.
 
 If an operator is deliberately bootstrapping an unconfigured remote workspace
 instead of using local sign-in, `lemon-bot setup` verifies its configured tailnet

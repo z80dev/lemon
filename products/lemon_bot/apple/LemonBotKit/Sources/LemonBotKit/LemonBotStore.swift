@@ -185,7 +185,7 @@ import Observation
         return value
     }
     public func mutate<T: Decodable>(_ method: String, _ path: String, body: JSONObject, as responseType: T.Type = T.self) async throws -> T {
-        if (method == "DELETE" || body["confirmationToken"] != nil || path.hasSuffix("/resolve") || path.hasSuffix("/send") || path.hasSuffix("/discard") || path.hasSuffix("/reset") || path == "/host-operations" || path.hasPrefix("/pairings")), connectionState != "online" { throw ClientError.offline }
+        if (method == "DELETE" || body["confirmationToken"] != nil || path.hasSuffix("/finish-setup") || path.hasSuffix("/readdress") || path.hasSuffix("/resolve") || path.hasSuffix("/send") || path.hasSuffix("/discard") || path.hasSuffix("/reset") || path == "/host-operations" || path.hasPrefix("/pairings")), connectionState != "online" { throw ClientError.offline }
         let current = generation
         let value: T
         do { value = try await journaledMutate(method, path, body: body, as: responseType) }

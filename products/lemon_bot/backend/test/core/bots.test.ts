@@ -8,54 +8,42 @@ import { createConversationRoutes } from '../../src/core/conversations';
 import { effectiveBotGrants } from '../../src/core/experiences';
 import { createResourceRoutes } from '../../src/core/resources';
 import { createGateService } from '../../src/core/gates';
-import { authFixture, routeContext } from './auth.test';
+import { authFixture } from './auth.test';
+import { Router } from '../../src/core/router';
 
 interface Call { method: string; params: Record<string, unknown>; mutation: boolean }
-// Existing native aliases are retained from the authenticated capture; addressed tool aliases are deterministic fixture values.
-// Keep the fixture origin bound to the captured lemon-bot endpoint.
 const fixturePublicUrl = 'https://product.example';
-const projectedProductTools = [
-  { name: 'message_bot', executionName: 'mcp_lemon_bot_message_bot_e27f8366c893fc7d4ace784f51ce12a1' },
-  { name: 'handoff', executionName: 'mcp_lemon_bot_handoff_9f74e5f82ed019f6a9084a1daa468386' },
-  { name: 'list_agents', executionName: 'mcp_lemon_bot_list_agents_fixture' },
-  { name: 'rename_agent', executionName: 'mcp_lemon_bot_rename_agent_fixture' },
-  { name: 'message_agent', executionName: 'mcp_lemon_bot_message_agent_fixture' },
-  { name: 'create_draft', executionName: 'mcp_lemon_bot_create_draft_6e65809e9170b8c9b3cb0da09b714275' },
-  { name: 'ask_user', executionName: 'mcp_lemon_bot_ask_user_10d4fd7a91be9332225ab7a9f47f9f2f' },
-  { name: 'request_approval', executionName: 'mcp_lemon_bot_request_approval_ca54a9645adf9ba042f0e53146a13ee0' },
-  { name: 'request_access', executionName: 'mcp_lemon_bot_request_access_fixture' },
-  { name: 'request_human_step', executionName: 'mcp_lemon_bot_request_human_ste_688cee41cf6bff126499b440c3a8624c' },
-  { name: 'request_secret', executionName: 'mcp_lemon_bot_request_secret_c5d5dd62ffb1c7cd4ebdaf58ee1da740' },
-  { name: 'send_voice_memo', executionName: 'mcp_lemon_bot_send_voice_memo_94b772ea7c8f891201c61ad1c1a26482' },
-  { name: 'share_file', executionName: 'mcp_lemon_bot_share_file_768d74587235feb2e85ef683d4558c37' },
-  { name: 'create_routine', executionName: 'mcp_lemon_bot_create_routine_480cfac22f6df0d89908d166b1e80b6f' },
-  { name: 'update_routine', executionName: 'mcp_lemon_bot_update_routine_9243c6d1a2783406bed605d7ddf21a9d' },
-  { name: 'save_skill', executionName: 'mcp_lemon_bot_save_skill_ce8a3dbeea117002d1ccc85b12353fb5' },
-  { name: 'list_bots', executionName: 'mcp_lemon_bot_list_bots_151a36bf63151717e5c7dcf2f76752f2' },
-  { name: 'post_to_group', executionName: 'mcp_lemon_bot_post_to_group_f9eeb76c647b0739da6629d63799e809' },
-  { name: 'remember', executionName: 'mcp_lemon_bot_remember_88ac13cb8401ab72fbc6e5caeaedf539' },
-  { name: 'create_bot', executionName: 'mcp_lemon_bot_create_bot_4a92e9bba45de6978e230abb443d9321' },
-  { name: 'update_preferences', executionName: 'mcp_lemon_bot_update_preference_f55d35c688fc2ca9a6d77f7bb3c75d94' },
-  { name: 'create_reminder', executionName: 'mcp_lemon_bot_create_reminder_d1a7af45016ffbce56b89af97037eae8' },
-];
+// Fake discovery preserves the production invariant: endpoint changes change every execution alias.
+function productAliases(url: string) {
+  return productBotTools.map(name => ({ name, executionName: `${`mcp_lemon_bot_${name}`.slice(0, 31)}_${createHash('sha256').update(JSON.stringify(['lemon-bot', new URL(url).href, name])).digest('hex').slice(0, 32)}` }));
+}
+const projectedProductTools = productAliases(`${fixturePublicUrl}/mcp`);
 function fixture(items: P.MachineCapabilities['items'] = [], acknowledgedWorkingDirectory?: 'node_default') {
   const f = authFixture();
   f.services.config.publicUrl = fixturePublicUrl;
   const calls: Call[] = [];
   const profileRows = new Map<string, Record<string, unknown>>();
-  const hostFiles = new Map<string, { size: number; mtimeMs: number }>();
+  const secretReceipts = new Map<string, Record<string, unknown>>();
+  const secretNames = new Map<string, Set<string>>();
+  const issuerRows = new Map<string, { profileId: string; configured: boolean; url?: string; tokenSha256?: string }>();
+  let after: ((method: string, params: Record<string, unknown>) => void) | null = null;
+  let before: ((method: string, params: Record<string, unknown>) => Promise<void>) | null = null;
+  let syncStatus = 'acknowledged';
+  const hostFiles = new Map<string, { size: number; mtimeMs: number; dataBase64: string }>();
   let hostRevision = 0;
   let reject: ((method: string, params: Record<string, unknown>) => void) | null = null;
   let nativePresence: { active: number; queued: number; unknown: number; idle: boolean; complete: boolean } | null = { active: 0, queued: 0, unknown: 0, idle: true, complete: true };
   // Workspace preference entries: like the real store, ids end in the file revision that every deletion bumps.
   const preferences = { entries: [] as string[], revision: 1 };
   const preferenceId = (entry: string) => `pref_user_${entry}.${preferences.revision}`;
-  const methods = ['profiles.create', 'profiles.update', 'profiles.get', 'profiles.sync', 'profiles.sync.status', 'profiles.delete', 'mcp.execution_names', 'profile.followup.admission.set', 'runs.followup.lineage.get', 'runs.active.list', 'memory.transfer', 'memory.transfer.status', 'memory.list', 'memory.delete', 'memory.add', 'nodes.list', 'node.capabilities.get', 'node.secrets.set', 'node.secrets.receipt', 'node.secrets.delete', 'node.host.info', 'node.profile.paths', 'node.fs.stat', 'node.fs.write', 'node.fs.delete', 'cron.pause', 'cron.resume', 'cron.add', 'cron.remove', 'sessions.delete'];
+  const methods = ['profiles.create', 'profiles.update', 'profiles.get', 'profiles.sync', 'profiles.sync.status', 'profiles.delete', 'mcp.execution_names', 'profile.followup.admission.set', 'profile.followup.admission.get', 'runs.followup.lineage.get', 'runs.active.list', 'memory.transfer', 'memory.transfer.status', 'memory.list', 'memory.get', 'memory.delete', 'memory.add', 'nodes.list', 'node.capabilities.get', 'node.secrets.set', 'node.secrets.receipt', 'node.secrets.list', 'node.secrets.delete', 'node.host.info', 'node.profile.paths', 'node.fs.stat', 'node.fs.write', 'node.fs.delete', 'cron.pause', 'cron.resume', 'cron.add', 'cron.remove', 'cron.list', 'sessions.delete', 'sessions.get'];
+  methods.push('node.fs.read');
   f.services.lemon = {
     connected: true, methods,
     controller: { url: 'ws://127.0.0.1:4040/ws', state: 'connected', connectedAtMs: 1, lastDisconnectedAtMs: null, lastError: null, nextRetryAtMs: null, methodCount: 0 }, reconnect() {},
     async call<T>(method: string, params: Record<string, unknown> = {}, options?: { mutation?: boolean }): Promise<T> {
       calls.push({ method, params, mutation: options?.mutation === true }); reject?.(method, params);
+      await before?.(method, params);
       let value: unknown;
       if (method === 'profiles.create' || method === 'profiles.update') {
         const profileId = String(params.id);
@@ -72,14 +60,24 @@ function fixture(items: P.MachineCapabilities['items'] = [], acknowledgedWorking
         value = { profile: { ...profile, mcpConfigFingerprint: createHash('sha256').update(JSON.stringify(canonical)).digest('hex') } };
       }
       else if (method === 'profiles.sync') value = { profileId: params.id, nodeId: params.nodeId, mutationId: params.mutationId, acknowledged: true, revisionDigest: 'a'.repeat(64) };
-      else if (method === 'profiles.sync.status') value = { profileId: params.id, nodeId: params.nodeId, mutationId: params.mutationId, status: 'acknowledged', acknowledged: true, revisionDigest: 'a'.repeat(64) };
-      else if (method === 'profile.followup.admission.set') value = { profileId: params.profileId, configured: true };
-      else if (method === 'mcp.execution_names') {
-        expect(params).toEqual({ server: { name: 'lemon-bot', url: `${fixturePublicUrl}/mcp` }, toolNames: [...productBotTools] });
-        value = { server: { name: 'lemon-bot' }, tools: projectedProductTools, count: projectedProductTools.length };
+      else if (method === 'profiles.sync.status') value = { profileId: params.id, nodeId: params.nodeId, mutationId: params.mutationId, status: syncStatus, acknowledged: syncStatus === 'acknowledged', revisionDigest: syncStatus === 'unknown' ? null : 'a'.repeat(64) };
+      else if (method === 'profile.followup.admission.set') {
+        issuerRows.set(String(params.profileId), { profileId: String(params.profileId), configured: true, url: String(params.url), tokenSha256: createHash('sha256').update(String(params.token), 'utf8').digest('hex') });
+        value = { profileId: params.profileId, configured: true };
       }
-      else if (method === 'node.secrets.set') value = { name: params.name, set: true, operationId: params.operationId, status: 'applied', currentBindingMatches: true };
-      else if (method === 'node.secrets.delete') value = { name: params.name, deleted: true };
+      else if (method === 'profile.followup.admission.get') value = issuerRows.get(String(params.profileId)) ?? { profileId: params.profileId, configured: false };
+      else if (method === 'mcp.execution_names') {
+        expect(params).toEqual({ server: { name: 'lemon-bot', url: new URL('/mcp', f.services.config.publicUrl).toString() }, toolNames: [...productBotTools] });
+        value = { server: { name: 'lemon-bot' }, tools: productAliases(new URL('/mcp', f.services.config.publicUrl).toString()), count: productBotTools.length };
+      }
+      else if (method === 'node.secrets.set') {
+        value = { name: params.name, set: true, operationId: params.operationId, status: 'applied', currentBindingMatches: true };
+        secretReceipts.set(`${params.nodeId}:${params.operationId}`, { nodeId: params.nodeId, ...value as object });
+        const names = secretNames.get(String(params.nodeId)) ?? new Set<string>(); names.add(String(params.name)); secretNames.set(String(params.nodeId), names);
+      }
+      else if (method === 'node.secrets.receipt') value = secretReceipts.get(`${params.nodeId}:${params.operationId}`) ?? { nodeId: params.nodeId, operationId: params.operationId, status: 'not_found', name: null, currentBindingMatches: false };
+      else if (method === 'node.secrets.list') value = { names: [...secretNames.get(String(params.nodeId)) ?? []], limit: 1000, truncated: false };
+      else if (method === 'node.secrets.delete') { secretNames.get(String(params.nodeId))?.delete(String(params.name)); value = { name: params.name, deleted: true }; }
       else if (method === 'runs.active.list') value = { runs: [], filters: { profileId: params.profileId, limit: params.limit }, ...(nativePresence ? { presence: nativePresence } : {}) };
       else if (method === 'node.profile.paths') value = { nodeId: params.nodeId, profileId: params.profileId, workspacePath: `/worker/profiles/${params.profileId}/workspace`, skillsPath: `/worker/profiles/${params.profileId}/workspace/.lemon/skill` };
       else if (method === 'nodes.list') value = { nodes: f.store.list<P.Machine>('machines', machine => !params.nodeId || machine.nodeId === params.nodeId).map(machine => ({ id: machine.nodeId, status: machine.status, capabilities: ['node.capabilities.get'] })), summary: { presenceAvailable: true, truncated: false } };
@@ -89,16 +87,22 @@ function fixture(items: P.MachineCapabilities['items'] = [], acknowledgedWorking
         const file = hostFiles.get(`${params.nodeId}:${params.path}`);
         if (!file) throw new ApiError('not_found', 'Managed file does not exist.');
         value = { path: params.path, type: 'regular', size: file.size, mtimeMs: file.mtimeMs };
+      } else if (method === 'node.fs.read') {
+        const file = hostFiles.get(`${params.nodeId}:${params.path}`);
+        if (!file) throw new ApiError('not_found', 'Managed file does not exist.');
+        const offset = Number(params.offset ?? 0), bytes = Buffer.from(file.dataBase64, 'base64').subarray(offset, offset + Number(params.length ?? file.size));
+        value = { path: params.path, dataBase64: bytes.toString('base64'), offset, length: bytes.length, size: file.size, mime: 'text/markdown', eof: offset + bytes.length === file.size };
       } else if (method === 'node.fs.write') {
         const key = `${params.nodeId}:${params.path}`, previous = hostFiles.get(key);
         if (params.expectedModifiedAtMs !== (previous?.mtimeMs ?? 0)) throw new ApiError('revision_conflict', 'Managed file changed before write.');
         const size = Buffer.from(String(params.dataBase64), 'base64').length, mtimeMs = f.services.now() + ++hostRevision;
-        hostFiles.set(key, { size, mtimeMs }); value = { path: params.path, bytesWritten: size, size, mtimeMs };
+        hostFiles.set(key, { size, mtimeMs, dataBase64: String(params.dataBase64) }); value = { path: params.path, bytesWritten: size, size, mtimeMs };
       } else if (method === 'node.fs.delete') { hostFiles.delete(`${params.nodeId}:${params.path}`); value = { path: params.path, deleted: true }; }
       else if (method === 'memory.transfer') {
         const identity = { profileId: params.profileId, nodeId: params.nodeId, mutationId: params.mutationId, sourceNodeId: 'node-source', snapshotDigest: 'b'.repeat(64) };
         value = params.action === 'preview' ? { ...identity, destinationDigest: 'c'.repeat(64), confirmationToken: 'memory-confirmation-test', sourceCounts: { documents: 2, preferences: 2 }, destinationCounts: { documents: 3, preferences: 1 }, overwrite: true } : { ...identity, copied: true };
       } else if (method === 'memory.list') value = { items: preferences.entries.map(entry => ({ id: preferenceId(entry), updatedAtMs: 1 })), nextCursor: null };
+      else if (method === 'memory.get') { if (!preferences.entries.some(entry => preferenceId(entry) === params.id)) throw new ApiError('not_found', 'Memory absent.'); value = { item: { id: params.id } }; }
       else if (method === 'memory.delete') {
         const index = preferences.entries.findIndex(entry => preferenceId(entry) === params.id);
         if (index < 0) throw new ApiError('not_found', 'Memory item changed; read it again before deleting.');
@@ -107,9 +111,12 @@ function fixture(items: P.MachineCapabilities['items'] = [], acknowledgedWorking
       else if (method === 'cron.pause') value = { id: params.id, paused: true, enabled: false, nextRunAtMs: null };
       else if (method === 'cron.resume') value = { id: params.id, resumed: true, enabled: true, nextRunAtMs: f.services.now() + 3600000 };
       else if (method === 'cron.remove') value = { id: params.id, removed: true };
+      else if (method === 'cron.list') value = { jobs: [] };
       else if (method === 'sessions.delete') value = { sessionKey: params.sessionKey, deleted: true, summary: { verified: true } };
+      else if (method === 'sessions.get') { throw new ApiError('not_found', 'Session absent.'); }
       else if (method === 'profiles.delete') { profileRows.delete(String(params.id)); value = { deleted: { id: params.id } }; }
       else throw new Error(`Unexpected external method in bot lifecycle test: ${method}`);
+      after?.(method, params);
       return value as T;
     },
     onEvent: () => () => {}, onConnected: () => () => {}, start() {}, close() {},
@@ -122,27 +129,19 @@ function fixture(items: P.MachineCapabilities['items'] = [], acknowledgedWorking
   f.services.integrations.emitProviderNotifications = async () => {};
   f.services.syncBotProfile = (actor, botId) => syncBotProfile(f.services, actor, botId);
   const routes: Route[] = [...createBotRoutes(f.services), ...createConversationRoutes(f.services), ...createResourceRoutes(f.services)];
-  function context(method: string, path: string, body: unknown, actor: Principal | null) {
-    const requested = new URL(path, fixturePublicUrl);
-    const route = routes.find(route => route.method === method && new RegExp(`^${route.path.replace(/:[A-Za-z]+/g, '[^/]+')}$`).test(requested.pathname));
-    if (!route) throw new Error('The requested resource operation is not registered.');
-    const params: Record<string, string> = {};
-    const parts = requested.pathname.split('/');
-    route.path.split('/').forEach((part, index) => { if (part.startsWith(':')) params[part.slice(1)] = decodeURIComponent(parts[index]!); });
-    const c = routeContext(f.services, route, body, actor, params, requested.searchParams);
-    c.request = new Request(requested, { method });
-    return c;
-  }
-  f.services.invoke = async <T>(actor: Principal, method: string, path: string, body?: unknown, options?: { botLifecycle: { botId: string; userId: string; action: string } }): Promise<T> => {
-    const c = context(method, path, body, actor);
-    if (options) c.internalBotLifecycle = options.botLifecycle;
-    const result = method === 'GET' || c.route.mutation === false ? await c.route.handler(c) : await f.services.mutations.execute(c, () => c.route.handler(c));
-    return result as T;
-  };
+  const router = new Router(f.services);
+  router.register(routes);
+  const sessions = new Map<string, string>();
   async function request<T>(method: string, path: string, body: unknown, actor: Principal | null = f.alice): Promise<T> {
-    const c = context(method, path, body, actor);
-    const result = method === 'GET' || c.route.mutation === false ? await c.route.handler(c) : await f.services.mutations.execute(c, () => c.route.handler(c));
-    return result as T;
+    let token = actor ? sessions.get(actor.userId) : undefined;
+    if (actor && !token) { token = (await f.services.auth.session(actor.userId)).token; sessions.set(actor.userId, token); }
+    const response = await router.fetch(new Request(new URL(path, f.services.config.publicUrl), { method, headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
+    const payload = await response.json();
+    if (!response.ok) {
+      const { error } = payload as P.ErrorEnvelope;
+      throw new ApiError(error.code, error.message, error.retrySafe, error.details);
+    }
+    return payload as T;
   }
   function machine(machineId: string, nodeId: string, shared = false): P.Machine {
     const labels: Record<string, string> = shared ? { 'lemon_bot.shared_context': 'true' } : {};
@@ -165,7 +164,7 @@ function fixture(items: P.MachineCapabilities['items'] = [], acknowledgedWorking
     f.store.setMetadata(`nativeFollowupIssuer:${digest}`, saved.id);
     return saved;
   }
-  return { ...f, calls, request, machine, bot, preferences, fail: (value: typeof reject) => { reject = value; }, presence: (value: typeof nativePresence) => { nativePresence = value; } };
+  return { ...f, calls, request, router, machine, bot, preferences, issuerRows, secretReceipts, before: (value: typeof before) => { before = value; }, failAfter: (value: typeof after) => { after = value; }, syncStatus: (value: string) => { syncStatus = value; }, fail: (value: typeof reject) => { reject = value; }, presence: (value: typeof nativePresence) => { nativePresence = value; } };
 }
 const nonce = (suffix: string) => `bot_test_nonce_${suffix}`;
 function confirmed(confirmation: P.Confirmation, extra: Record<string, unknown> = {}) { return { clientNonce: nonce('confirm'), revision: confirmation.revision, confirmationToken: confirmation.confirmationToken, confirmName: confirmation.confirmName, ...extra }; }
@@ -1052,4 +1051,355 @@ test('a current profile clears a refresh marker only after policy synchronizatio
     expect(f.store.metadata(`profileRefresh:${bot.id}`)).toBe(state === null || state === 'acknowledged' ? null : true);
     expect(f.calls).toHaveLength(calls);
   }
+});
+
+interface SetupFixture {
+  store: BackendServices['store'];
+  request<T>(method: string, path: string, body: unknown): Promise<T>;
+}
+describe('resumable Bot setup and address migration', () => {
+  async function failedCreate(f: SetupFixture, suffix: string) {
+    await expect(f.request('POST', '/v1/bots', { clientNonce: nonce(suffix), name: 'Resume me', machineId: 'machine' })).rejects.toBeInstanceOf(ApiError);
+    return f.store.list<P.Bot>('bots')[0]!;
+  }
+  async function finish(f: SetupFixture, bot: P.Bot, suffix: string) {
+    return f.request<P.Bot>('POST', `/v1/bots/${bot.id}/finish-setup`, { clientNonce: nonce(suffix), revision: f.store.require<P.Bot>('bots', bot.id).revision });
+  }
+  test('allowlisting a rejected origin finishes the same Bot and conversation, skipping acknowledged steps', async () => {
+    const f = fixture();
+    try {
+      f.fail(method => { if (method === 'profile.followup.admission.set') throw new ApiError('callback_origin_not_allowed', 'Remote diagnostic must not escape.'); });
+      const bot = await failedCreate(f, 'rejected_origin');
+      const view = await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined);
+      expect(view.lifecycle).toMatchObject({ step: 'Allow native follow-ups', canFinishSetup: true, canDelete: true, status: 'failed' });
+      expect(view.lifecycle?.message).toContain(fixturePublicUrl); expect(view.lifecycle?.message).toContain('LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS');
+      const issuer = f.calls.find(call => call.method === 'profile.followup.admission.set')!;
+      const priorWrites = f.calls.filter(call => call.mutation && call.method !== 'profile.followup.admission.set');
+      f.fail(null);
+      const completed = await finish(f, bot, 'allowlisted_finish');
+      expect(completed).toMatchObject({ id: bot.id, mainConversationId: bot.mainConversationId, activity: 'idle' });
+      expect(completed.lifecycle).toBeUndefined();
+      expect(f.store.list<P.Bot>('bots')).toHaveLength(1);
+      expect(f.calls.filter(call => call.mutation && call.method !== 'profile.followup.admission.set')).toEqual(priorWrites);
+      expect(f.calls.filter(call => call.method === 'profile.followup.admission.set').at(-1)?.params).toEqual(issuer.params);
+    } finally { f.store.close(); }
+  });
+  test('worker rejects sync while offline: explicit resume uses its original mutation ID', async () => {
+    const f = fixture();
+    try {
+      f.fail(method => { if (method === 'profiles.sync') throw new ApiError('machine_offline', 'Reconnect the machine.'); });
+      const bot = await failedCreate(f, 'offline_sync'), original = f.calls.find(call => call.method === 'profiles.sync')!;
+      f.fail(null);
+      const completed = await finish(f, bot, 'online_sync');
+      expect(completed.activity).toBe('idle');
+      const syncs = f.calls.filter(call => call.method === 'profiles.sync');
+      expect(syncs).toHaveLength(2); expect(syncs[1]?.params).toEqual(original.params);
+      expect(f.calls.filter(call => call.method === 'profiles.create')).toHaveLength(1);
+    } finally { f.store.close(); }
+  });
+  for (const method of ['node.secrets.set', 'profiles.create', 'profiles.sync', 'profile.followup.admission.set']) {
+    test(`lost ${method} acknowledgement queries owning receipt without redispatch`, async () => {
+      const f = fixture();
+      try {
+        f.failAfter(actual => { if (actual === method) throw new ApiError('outcome_unknown', 'Acknowledgement lost.', false); });
+        const bot = await failedCreate(f, `lost_${method.replaceAll('.', '_')}`);
+        const fence = f.store.metadata<Record<string, unknown>>(`botLifecycle:${bot.id}`)!;
+        f.store.setMetadata(`botLifecycle:${bot.id}`, { ...fence, status: 'running' }); // backend stopped before catch persisted
+        f.failAfter(null);
+        const before = f.calls.length;
+        expect((await finish(f, bot, `resume_${method.replaceAll('.', '_')}`)).activity).toBe('idle');
+        expect(f.calls.filter(call => call.method === method && call.mutation)).toHaveLength(1);
+        const query = method === 'node.secrets.set' ? 'node.secrets.receipt' : method === 'profiles.create' ? 'profiles.get' : method === 'profiles.sync' ? 'profiles.sync.status' : 'profile.followup.admission.get';
+        expect(f.calls.slice(before).some(call => call.method === query && !call.mutation)).toBe(true);
+      } finally { f.store.close(); }
+    });
+  }
+  test('a missing MCP receipt proves not applied and permits the same reserved operation only', async () => {
+    const f = fixture();
+    try {
+      f.fail(method => { if (method === 'node.secrets.set') throw new ApiError('outcome_unknown', 'Disconnected before worker reply.', false); });
+      const bot = await failedCreate(f, 'unapplied_mcp');
+      const first = f.calls.find(call => call.method === 'node.secrets.set')!;
+      f.fail(null); await finish(f, bot, 'unapplied_mcp_finish');
+      expect(f.calls.filter(call => call.method === 'node.secrets.set').map(call => call.params)).toEqual([first.params, first.params]);
+      expect(f.calls.findIndex(call => call.method === 'node.secrets.receipt')).toBeLessThan(f.calls.findLastIndex(call => call.method === 'node.secrets.set'));
+    } finally { f.store.close(); }
+  });
+  test('an unresolvable sync receipt stays blocked and sends no mutation', async () => {
+    const f = fixture();
+    try {
+      f.failAfter(method => { if (method === 'profiles.sync') throw new ApiError('outcome_unknown', 'Reply lost.', false); });
+      const bot = await failedCreate(f, 'unknown_sync');
+      f.failAfter(null); f.syncStatus('unknown');
+      const writes = f.calls.filter(call => call.mutation).length;
+      await expect(finish(f, bot, 'unknown_sync_finish')).rejects.toMatchObject({ code: 'outcome_unknown', retrySafe: false });
+      expect(f.calls.filter(call => call.mutation)).toHaveLength(writes);
+      expect((await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined)).lifecycle?.message).toContain('nothing was retried');
+    } finally { f.store.close(); }
+  });
+  test('an interrupted import retains its copied content and resumes without duplicate skills/routines', async () => {
+    const f = fixture();
+    try {
+      f.fail(method => { if (method === 'profile.followup.admission.set') throw new ApiError('callback_origin_not_allowed', 'Rejected.'); });
+      const content: P.TemplateContent = { name: 'Imported', title: '', job: 'Keep imported job', instructions: '', avatar: { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, skills: [{ name: 'Review', description: 'Review changes', markdown: '# Review\nCheck changes.' }], routines: [{ name: 'Later', instruction: 'Review work', trigger: { kind: 'webhook' }, enabled: false }], connectorNames: [] };
+      await expect(f.request('POST', '/v1/bots/import', { clientNonce: nonce('import_resume'), name: 'Imported', machineId: 'machine', content, acceptedTerms: true })).rejects.toBeInstanceOf(ApiError);
+      const bot = f.store.list<P.Bot>('bots')[0]!, skills = f.store.list<P.Skill>('skills'), routines = f.store.list<P.Routine>('routines');
+      f.fail(null); const completed = await finish(f, bot, 'finish_import');
+      expect(completed).toMatchObject({ id: bot.id, mainConversationId: bot.mainConversationId, job: content.job, skillIds: skills.map(skill => skill.id) });
+      expect(f.store.list<P.Skill>('skills')).toHaveLength(skills.length); expect(f.store.list<P.Routine>('routines').map(routine => routine.id)).toEqual(routines.map(routine => routine.id));
+    } finally { f.store.close(); }
+  });
+  test('address migration interrupted after controller replacement switches a single issuer using its digest receipt', async () => {
+    const f = fixture();
+    try {
+      const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce('old_address'), name: 'Moving address', machineId: 'machine' });
+      const old = f.store.metadata<{ digest: string; url: string }>(`nativeFollowupIssuerConfig:${bot.id}`)!;
+      f.services.config.publicUrl = 'https://new-product.example';
+      const notice = (await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined)).lifecycle!;
+      expect(notice.message).toContain(fixturePublicUrl); expect(notice.message).toContain('https://new-product.example'); expect(notice.canReaddress).toBe(true);
+      f.failAfter(method => { if (method === 'profile.followup.admission.set') throw new ApiError('outcome_unknown', 'Replacement reply lost.', false); });
+      await expect(f.request('POST', `/v1/bots/${bot.id}/readdress`, { clientNonce: nonce('address_lost'), revision: bot.revision })).rejects.toMatchObject({ code: 'outcome_unknown' });
+      expect(f.store.metadata(`nativeFollowupIssuerConfig:${bot.id}`)).toMatchObject(old);
+      const pending = f.store.metadata<{ digest: string }>(`nativeFollowupIssuerPending:${bot.id}`)!;
+      expect(f.store.metadata(`nativeFollowupIssuer:${pending.digest}`)).toBeNull();
+      f.failAfter(null);
+      const completed = await f.request<P.Bot>('POST', `/v1/bots/${bot.id}/readdress`, { clientNonce: nonce('address_resume'), revision: bot.revision });
+      expect(completed).toMatchObject({ id: bot.id, mainConversationId: bot.mainConversationId });
+      expect(completed.lifecycle).toBeUndefined();
+      expect(f.store.metadata(`nativeFollowupIssuer:${old.digest}`)).toBeNull();
+      expect(f.store.metadata(`nativeFollowupIssuer:${pending.digest}`)).toBe(bot.id);
+      expect(f.store.metadata(`nativeFollowupIssuerPending:${bot.id}`)).toBeNull();
+      expect(f.calls.filter(call => call.method === 'profile.followup.admission.set')).toHaveLength(2);
+      const desired = f.store.metadata<{ mcpServers: { url: string }[] }>(`botDesiredProfile:${bot.id}`)!;
+      expect(desired.mcpServers[0]?.url).toBe('https://new-product.example/mcp');
+      expect(f.calls.some(call => call.method === 'profile.followup.admission.get' && !call.mutation)).toBe(true);
+    } finally { f.store.close(); }
+  });
+});
+
+describe('interrupted scoped Bot deletion', () => {
+  for (const method of ['sessions.delete', 'profiles.delete', 'node.secrets.delete']) {
+    test(`lost ${method} reply reconciles read-only then explicit Delete completes without touching another Bot`, async () => {
+      const f = fixture(); const gates = createGateService(f.services); f.services.gates = gates;
+      try {
+        const suffix = method.replaceAll('.', '_');
+        const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce(`delete_create_${suffix}`), name: 'Delete me', machineId: 'machine' });
+        const other = f.bot(), otherRoom = f.store.require<P.Conversation>('conversations', other.mainConversationId);
+        const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce(`delete_preview_${suffix}`), action: 'delete' });
+        f.failAfter(actual => { if (actual === method) throw new ApiError('outcome_unknown', 'Deletion receipt lost.', false); });
+        await expect(f.request('DELETE', `/v1/bots/${bot.id}`, confirmed(preview, { clientNonce: nonce(`delete_first_${suffix}`) }))).rejects.toMatchObject({ code: 'outcome_unknown' });
+        await expect(f.request('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce(`delete_before_read_${suffix}`), action: 'delete' })).rejects.toMatchObject({ code: 'outcome_unknown' });
+        f.failAfter(null); const readsFrom = f.calls.length;
+        await createBotService(f.services).reconcile();
+        expect(f.calls.slice(readsFrom).every(call => !call.mutation)).toBe(true);
+        expect((await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined)).lifecycle).toMatchObject({ status: 'failed', canDelete: true });
+        const fresh = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce(`delete_again_preview_${suffix}`), action: 'delete' });
+        await f.request('DELETE', `/v1/bots/${bot.id}`, confirmed(fresh, { clientNonce: nonce(`delete_again_${suffix}`) }));
+        expect(f.store.get('bots', bot.id)).toBeNull();
+        expect(f.store.require<P.Bot>('bots', other.id)).toEqual(other); expect(f.store.require<P.Conversation>('conversations', otherRoom.id)).toEqual(otherRoom);
+        expect(f.calls.filter(call => call.method === method && call.mutation)).toHaveLength(1);
+      } finally { gates.close(); f.store.close(); }
+    });
+  }
+  test('failed deletion observations do not authorize another Delete', async () => {
+    const f = fixture(), bot = f.bot(); const gates = createGateService(f.services); f.services.gates = gates;
+    try {
+      const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('delete_observation_preview'), action: 'delete' });
+      f.fail(method => { if (method === 'sessions.delete') throw new ApiError('outcome_unknown', 'Lost.', false); });
+      await expect(f.request('DELETE', `/v1/bots/${bot.id}`, confirmed(preview))).rejects.toMatchObject({ code: 'outcome_unknown' });
+      f.fail(method => { if (method === 'sessions.get') throw new ApiError('upstream_unavailable', 'Read unavailable.'); });
+      await createBotService(f.services).reconcile();
+      expect((await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined)).lifecycle?.canDelete).toBe(false);
+    } finally { gates.close(); f.store.close(); }
+  });
+});
+
+test('a loopback Bot resumes a lost address profile update and can move to a second public origin', async () => {
+  const f = fixture();
+  try {
+    f.services.config.publicUrl = 'http://127.0.0.1:4100';
+    f.store.setMetadata('machineSameHost:machine', 'node-source');
+    const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce('loopback_create'), name: 'Local Bot', machineId: 'machine' });
+    const old = f.store.metadata<{ digest: string }>(`nativeFollowupIssuerConfig:${bot.id}`)!;
+    f.services.config.publicUrl = 'https://public-product.example';
+    const notice = (await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined)).lifecycle!;
+    expect(notice.message).toContain('http://127.0.0.1:4100'); expect(notice.message).toContain('https://public-product.example');
+    f.failAfter(method => { if (method === 'profiles.update') throw new ApiError('outcome_unknown', 'Profile reply lost.', false); });
+    await expect(f.request('POST', `/v1/bots/${bot.id}/readdress`, { clientNonce: nonce('loopback_address_lost'), revision: bot.revision })).rejects.toMatchObject({ code: 'outcome_unknown' });
+    expect((await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined)).lifecycle?.canReaddress).toBe(true);
+    expect(f.store.metadata(`nativeFollowupIssuer:${old.digest}`)).toBeNull();
+    f.failAfter(null);
+    const writes = f.calls.filter(call => call.mutation).length;
+    const completed = await f.request<P.Bot>('POST', `/v1/bots/${bot.id}/readdress`, { clientNonce: nonce('loopback_address_resume'), revision: bot.revision });
+    expect(completed.lifecycle).toBeUndefined();
+    expect(completed.mainConversationId).toBe(bot.mainConversationId);
+    expect(f.calls.slice().filter(call => call.method === 'profiles.update')).toHaveLength(1);
+    expect(f.calls.filter(call => call.mutation)).toHaveLength(writes + 1); // only the previously unstarted worker sync
+    f.services.config.publicUrl = 'https://second-product.example';
+    const again = await f.request<P.Bot>('POST', `/v1/bots/${bot.id}/readdress`, { clientNonce: nonce('second_address'), revision: completed.revision });
+    expect(again.lifecycle).toBeUndefined();
+    expect(f.store.metadata(`nativeFollowupIssuerConfig:${bot.id}`)).toMatchObject({ url: 'https://second-product.example/internal/runtime/followup/admission', state: 'configured' });
+    expect(f.calls.filter(call => call.method === 'profiles.update')).toHaveLength(2);
+  } finally { f.store.close(); }
+});
+
+test('address recovery of a failed update retains its worker mutation ID and requested Bot changes', async () => {
+  const f = fixture();
+  try {
+    const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce('update_address_create'), name: 'Before', machineId: 'machine' });
+    f.services.config.publicUrl = 'https://updated-product.example';
+    await expect(f.request('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce('update_new_address'), revision: bot.revision, name: 'After' })).rejects.toMatchObject({ code: 'conflict' });
+    f.fail(method => { if (method === 'profiles.sync') throw new ApiError('machine_offline', 'Reconnect worker.'); });
+    await expect(f.request('POST', `/v1/bots/${bot.id}/readdress`, { clientNonce: nonce('update_address_offline'), revision: bot.revision })).rejects.toMatchObject({ code: 'machine_offline' });
+    const sync = f.calls.filter(call => call.method === 'profiles.sync').at(-1)!;
+    f.fail(null);
+    const completed = await f.request<P.Bot>('POST', `/v1/bots/${bot.id}/readdress`, { clientNonce: nonce('update_address_online'), revision: bot.revision });
+    expect(completed).toMatchObject({ id: bot.id, name: 'After', mainConversationId: bot.mainConversationId });
+    expect(completed.lifecycle).toBeUndefined();
+    expect(f.calls.filter(call => call.method === 'profiles.sync').at(-1)?.params).toEqual(sync.params);
+    expect(f.store.metadata(`botProfileSync:${bot.id}`)).toMatchObject({ mutationId: sync.params.mutationId, acknowledged: true });
+    expect(f.store.metadata(`botLifecycle:${bot.id}`)).toBeNull();
+  } finally { f.store.close(); }
+});
+
+describe('production Router lifecycle review regressions', () => {
+  test('concurrent re-address requests acquire one owner before asynchronous idle preflight', async () => {
+    const f = fixture();
+    try {
+      const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce('race_create'), name: 'Address race', machineId: 'machine' });
+      f.services.config.publicUrl = 'https://race-product.example';
+      const { promise: suspended, resolve: release } = Promise.withResolvers<void>();
+      const { promise: observing, resolve: entered } = Promise.withResolvers<void>();
+      f.before(async method => { if (method === 'runs.active.list') { entered(); await suspended; } });
+      const first = f.request<P.Bot>('POST', `/v1/bots/${bot.id}/readdress`, { clientNonce: nonce('race_first'), revision: bot.revision });
+      await observing;
+      const owner = f.store.metadata<{ id: string }>(`botLifecycle:${bot.id}`)!;
+      await expect(f.request('POST', `/v1/bots/${bot.id}/readdress`, { clientNonce: nonce('race_second'), revision: bot.revision })).rejects.toMatchObject({ code: 'conflict' });
+      expect(f.store.metadata<{ id: string }>(`botLifecycle:${bot.id}`)?.id).toBe(owner.id);
+      release(); await first;
+      expect(f.calls.filter(call => call.method === 'runs.active.list')).toHaveLength(1);
+      expect(f.calls.filter(call => call.method === 'profile.followup.admission.set')).toHaveLength(2); // create, then one replacement
+    } finally { f.store.close(); }
+  });
+  test('address migration reserves the new URL aliases in its profile policy and remains receipt-resumable', async () => {
+    const f = fixture();
+    try {
+      const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce('alias_create'), name: 'Tool aliases', machineId: 'machine' });
+      const oldAliases = productAliases(`${fixturePublicUrl}/mcp`).map(tool => tool.executionName);
+      f.services.config.publicUrl = 'https://aliases-product.example';
+      f.failAfter(method => { if (method === 'profiles.update') throw new ApiError('outcome_unknown', 'Profile response lost.', false); });
+      await expect(f.request('POST', `/v1/bots/${bot.id}/readdress`, { clientNonce: nonce('alias_lost'), revision: bot.revision })).rejects.toMatchObject({ code: 'outcome_unknown' });
+      const desired = f.store.metadata<{ toolPolicy: { allow: string[] }; mcpServers: { url: string }[]; profileIntentId: string }>(`botDesiredProfile:${bot.id}`)!;
+      const aliases = productAliases('https://aliases-product.example/mcp').map(tool => tool.executionName);
+      expect(desired.mcpServers[0]?.url).toBe('https://aliases-product.example/mcp');
+      expect(desired.toolPolicy.allow).toEqual(expect.arrayContaining(aliases));
+      expect(desired.toolPolicy.allow.some(name => oldAliases.includes(name))).toBe(false);
+      f.failAfter(null);
+      await f.request('POST', `/v1/bots/${bot.id}/readdress`, { clientNonce: nonce('alias_resume'), revision: bot.revision });
+      expect(f.calls.filter(call => call.method === 'profiles.update')).toHaveLength(1);
+      expect(f.store.metadata<{ profileIntentId: string }>(`botDesiredProfile:${bot.id}`)?.profileIntentId).toBe(desired.profileIntentId);
+    } finally { f.store.close(); }
+  });
+  test('success publishes a completed Bot with a revision newer than every in-progress event', async () => {
+    const f = fixture(), events: P.Bot[] = [];
+    const stop = f.services.events.subscribe(event => { if (event.event === 'bot.upserted') events.push(event.payload); });
+    try {
+      const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce('completion_events'), name: 'Completed', machineId: 'machine' });
+      const own = events.filter(event => event.id === bot.id), completed = own.at(-1)!;
+      const running = own.filter(event => event.lifecycle?.status === 'running');
+      expect(running.length).toBeGreaterThan(0);
+      expect(completed.lifecycle).toBeUndefined();
+      expect(completed.revision).toBe(bot.revision);
+      expect(running.every(event => event.revision < completed.revision)).toBe(true);
+    } finally { stop(); f.store.close(); }
+  });
+  for (const status of ['failed', 'outcome_unknown'] as const) {
+    test(`a ${status} re-address Delete capability is accepted by the actual preview/delete routes`, async () => {
+      const f = fixture(), gates = createGateService(f.services); f.services.gates = gates;
+      try {
+        const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce(`delete_address_${status}`), name: 'Remove migration', machineId: 'machine' });
+        f.services.config.publicUrl = 'https://delete-migration.example';
+        f.fail(method => { if (method === 'profile.followup.admission.set') throw new ApiError(status === 'failed' ? 'callback_origin_not_allowed' : 'outcome_unknown', 'Rejected or lost.', status === 'failed'); });
+        await expect(f.request('POST', `/v1/bots/${bot.id}/readdress`, { clientNonce: nonce(`delete_address_start_${status}`), revision: bot.revision })).rejects.toBeInstanceOf(ApiError);
+        const view = await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined);
+        expect(view.lifecycle).toMatchObject({ status, canDelete: true });
+        f.fail(null);
+        const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce(`delete_address_preview_${status}`), action: 'delete' });
+        await f.request('DELETE', `/v1/bots/${bot.id}`, confirmed(preview, { clientNonce: nonce(`delete_address_confirm_${status}`) }));
+        expect(f.store.get('bots', bot.id)).toBeNull();
+      } finally { gates.close(); f.store.close(); }
+    });
+  }
+});
+
+test('the completed update event revision remains the preference undo revision', async () => {
+  const f = fixture();
+  try {
+    const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce('preference_revision_create'), name: 'Preferences', machineId: 'machine' });
+    const changed = await f.request<P.Bot>('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce('preference_revision_update'), revision: bot.revision, job: 'Updated job' });
+    const preference = f.store.list<P.PreferenceChange>('preferenceChanges', row => row.botId === bot.id)[0]!;
+    expect(preference.resultingBotRevision).toBe(changed.revision);
+    expect(changed.lifecycle).toBeUndefined();
+  } finally { f.store.close(); }
+});
+
+describe('production Router imported resource recovery', () => {
+  const content: P.TemplateContent = { name: 'Import receipt', title: '', job: 'Recover this import', instructions: '', avatar: { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, skills: [{ name: 'Review', description: 'Review changes', markdown: '# Review\nCheck the patch.' }], routines: [{ name: 'Review later', instruction: 'Review changes', trigger: { kind: 'webhook' }, enabled: false }], connectorNames: [] };
+  interface ImportPlan { imported: { content: P.TemplateContent; disabledSkillIndexes: number[]; skillReservations?: { skill: P.Skill; operationId: string }[]; routineReservations?: { routine: P.Routine; conversation: P.Conversation; operationId: string }[]; skillIds?: string[]; routineIds?: string[] } }
+  test('a lost imported host-write acknowledgement resumes the same reserved skill using its real file receipt', async () => {
+    const f = fixture();
+    try {
+      f.fail(method => {
+        if (method !== 'node.fs.write') return;
+        const bot = f.store.list<P.Bot>('bots')[0]!;
+        const reservation = f.store.metadata<ImportPlan>(`botSetup:${bot.id}`)!.imported.skillReservations![0]!;
+        expect(reservation.skill.id).toBe(f.store.list<P.Skill>('skills')[0]!.id);
+        expect(reservation.operationId.length).toBeGreaterThan(0);
+      });
+      f.failAfter(method => { if (method === 'node.fs.write') throw new ApiError('outcome_unknown', 'Worker acknowledgement lost.', false); });
+      await expect(f.request('POST', '/v1/bots/import', { clientNonce: nonce('production_import_lost'), name: content.name, machineId: 'machine', content, acceptedTerms: true })).rejects.toMatchObject({ code: 'outcome_unknown' });
+      const bot = f.store.list<P.Bot>('bots')[0]!, plan = f.store.metadata<ImportPlan>(`botSetup:${bot.id}`)!, reservation = plan.imported.skillReservations![0]!;
+      const writes = f.calls.filter(call => call.method === 'node.fs.write');
+      expect(writes).toHaveLength(1);
+      expect(String(writes[0]!.params.path)).toContain(reservation.skill.id);
+      f.fail(null); f.failAfter(null);
+      const receiptStart = f.calls.length;
+      const completed = await f.request<P.Bot>('POST', `/v1/bots/${bot.id}/finish-setup`, { clientNonce: nonce('production_import_resume'), revision: bot.revision });
+      expect(completed.skillIds).toEqual([reservation.skill.id]);
+      expect(completed.mainConversationId).toBe(bot.mainConversationId);
+      expect(f.store.list<P.Skill>('skills')).toHaveLength(1);
+      expect(f.store.list<P.Routine>('routines')).toHaveLength(1);
+      expect(f.calls.filter(call => call.method === 'node.fs.write')).toHaveLength(1);
+      expect(f.calls.slice(receiptStart).some(call => call.method === 'node.fs.read' && !call.mutation)).toBe(true);
+      expect(f.store.metadata<ImportPlan>(`botSetup:${bot.id}`)!.imported.skillReservations![0]?.operationId).toBe(reservation.operationId);
+    } finally { f.store.close(); }
+  });
+  test('an inconclusive imported skill receipt stays fenced without creating another resource or dispatching a write', async () => {
+    const f = fixture();
+    try {
+      f.failAfter(method => { if (method === 'node.fs.write') throw new ApiError('outcome_unknown', 'Worker acknowledgement lost.', false); });
+      await expect(f.request('POST', '/v1/bots/import', { clientNonce: nonce('production_import_blocked'), name: content.name, machineId: 'machine', content, acceptedTerms: true })).rejects.toMatchObject({ code: 'outcome_unknown' });
+      const bot = f.store.list<P.Bot>('bots')[0]!, reserved = f.store.list<P.Skill>('skills')[0]!;
+      f.failAfter(null); f.fail(method => { if (method === 'node.fs.read') throw new ApiError('upstream_unavailable', 'Receipt unavailable.'); });
+      const count = f.calls.filter(call => call.mutation).length;
+      await expect(f.request('POST', `/v1/bots/${bot.id}/finish-setup`, { clientNonce: nonce('production_import_blocked_finish'), revision: bot.revision })).rejects.toMatchObject({ code: 'outcome_unknown' });
+      expect(f.store.list<P.Skill>('skills').map(skill => skill.id)).toEqual([reserved.id]);
+      expect(f.calls.filter(call => call.mutation)).toHaveLength(count);
+    } finally { f.store.close(); }
+  });
+  test('pre-reservation imports adopt an existing unknown skill by receipt instead of POSTing another skill', async () => {
+    const f = fixture();
+    try {
+      f.failAfter(method => { if (method === 'node.fs.write') throw new ApiError('outcome_unknown', 'Worker acknowledgement lost.', false); });
+      await expect(f.request('POST', '/v1/bots/import', { clientNonce: nonce('legacy_import_lost'), name: content.name, machineId: 'machine', content, acceptedTerms: true })).rejects.toMatchObject({ code: 'outcome_unknown' });
+      const bot = f.store.list<P.Bot>('bots')[0]!, plan = f.store.metadata<ImportPlan>(`botSetup:${bot.id}`)!, skill = f.store.list<P.Skill>('skills')[0]!;
+      f.store.setMetadata(`botSetup:${bot.id}`, { ...plan, imported: { content, disabledSkillIndexes: [], skillIds: [], routineIds: [] } });
+      f.failAfter(null);
+      const completed = await f.request<P.Bot>('POST', `/v1/bots/${bot.id}/finish-setup`, { clientNonce: nonce('legacy_import_finish'), revision: bot.revision });
+      expect(completed.skillIds).toEqual([skill.id]);
+      expect(f.store.list<P.Skill>('skills')).toHaveLength(1);
+      expect(f.calls.filter(call => call.method === 'node.fs.write')).toHaveLength(1);
+      expect(f.calls.some(call => call.method === 'node.fs.read')).toBe(true);
+    } finally { f.store.close(); }
+  });
 });

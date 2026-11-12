@@ -67,12 +67,32 @@ extension LemonBotStore {
             if account?.id == accountID { pendingIntents = values }
         } catch { if account?.id == accountID { errorMessage = error.localizedDescription } }
     }
+    /// A current server capability permits a new explicit recovery, not replay or proof
+    /// that the old mutation succeeded. Delete still requires a fresh bound preview.
+    private func prepareBotLifecycleRecovery(_ method: String, _ path: String, body: JSONObject) async throws {
+        guard let existing = pendingIntents.first(where: { $0.method == method && $0.path == path }),
+              existing.state == "outcome_unknown",
+              body["clientNonce"]?.stringValue != existing.clientNonce else { return }
+        let parts = path.split(separator: "/").map(String.init)
+        guard parts.first == "bots" else { return }
+        let deleting = method == "DELETE" && parts.count == 2
+        let recovering = method == "POST" && parts.count == 3 && ["finish-setup", "readdress"].contains(parts[2])
+        guard deleting || recovering else { return }
+        guard !deleting || (body["confirmationToken"]?.stringValue != nil && body["confirmName"]?.stringValue != nil) else { return }
+        let bot: Bot = try await read("/" + parts.prefix(2).joined(separator: "/"))
+        guard bot.id == parts[1].removingPercentEncoding, bot.revision == body["revision"]?.intValue,
+              let lifecycle = bot.lifecycle else { throw ClientError.unresolvedMutation(existing) }
+        let allowed = deleting ? lifecycle.canDelete : parts[2] == "finish-setup" ? lifecycle.canFinishSetup : lifecycle.canReaddress
+        guard allowed else { throw ClientError.unresolvedMutation(existing) }
+        if let account { finishIntent((account.id, existing.clientNonce)) }
+    }
     private func unknownResources(_ value: Any) -> ([ID], ID?)? {
         if let v = value as? MessageReceipt, v.status == "outcome_unknown" { return (v.runs.map(\.id) + v.entries.map(\.id), v.runs.first?.id) }
         if let v = value as? Run, v.status == "outcome_unknown" { return ([v.id], v.id) }
         if let v = value as? Draft, v.state == "outcome_unknown" { return ([v.id], v.sendRunId) }
         if let v = value as? HostOperation, v.state == "outcome_unknown" { return ([v.id], nil) }
         if let v = value as? BotResetResult, v.status == "outcome_unknown" { return ([v.bot.id], nil) }
+        if let v = value as? Bot, v.lifecycle?.status == "outcome_unknown" { return ([v.id], nil) }
         if let v = value as? MemoryImportResult, v.status == "outcome_unknown" { return (v.items.map(\.id), nil) }
         if let v = value as? SetupRun, v.state == "outcome_unknown" { return ([v.id], nil) }
         if let v = value as? HookReceipt, v.status == "outcome_unknown" { return ([v.routineRun.id], v.routineRun.runId) }
@@ -94,7 +114,10 @@ extension LemonBotStore {
                   let targetID = payload["targetId"]?.stringValue, existing.resourceIDs == [targetID],
                   Set(payload.keys) == Set(["clientNonce", "targetId"]) else { throw ClientError.invalidNonce }
             handle = (account.id, nonce)
-        } else { handle = try beginIntent(method, path, payload: &payload) }
+        } else {
+            try await prepareBotLifecycleRecovery(method, path, body: payload)
+            handle = try beginIntent(method, path, payload: &payload)
+        }
         defer { if method == "POST", path.hasSuffix("/messages") { scheduleMessageReconciliation() } }
         do {
             let value: T = try await client.mutate(method, path, body: payload, as: responseType)

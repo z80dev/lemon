@@ -5,6 +5,7 @@ import { ErrorNotice, Field, PageHeader, useAction, useQuery } from '../../ui';
 import { collect, IntentNotice, MachineChoice, AccessChoice, Selection, useIntent, useMachines, useObjectUrl } from './shared';
 import { AgentControls } from './agents';
 import { ModelReadinessPanel } from './model-readiness';
+import { BotCreationRecovery, createdBotId } from './lifecycle';
 
 const defaultAvatar: Avatar = { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null };
 const defaultVoice: VoiceSettings = { voiceId: 'default', speed: 1, language: null };
@@ -130,6 +131,7 @@ export function CreateBot({ route }: { route?: Route } = {}) {
         className="stack"
         onSubmit={event => {
           event.preventDefault();
+          if (createdBotId(intent.error)) return;
           void intent.run(async () => {
             const bot = await client.call('POST /bots', {
               body: {
@@ -143,7 +145,7 @@ export function CreateBot({ route }: { route?: Route } = {}) {
           });
         }}
       >
-        <fieldset className="panel stack" disabled={intent.disabled}>
+        <fieldset className="panel stack" disabled={intent.disabled || !!createdBotId(intent.error)}>
           <legend>Identity</legend>
           <Field label="Name">
             <input
@@ -234,23 +236,14 @@ export function CreateBot({ route }: { route?: Route } = {}) {
         </p>
         <button
           className="primary"
-          disabled={intent.disabled || !draft.machineId || !draft.name.trim() || !modelReady}
+          disabled={intent.disabled || !!createdBotId(intent.error) || !draft.machineId || !draft.name.trim() || !modelReady}
         >
           Create Bot
         </button>
       </form>
 
       <IntentNotice intent={intent} reconcile={refresh} />
-      {intent.uncertain && (
-        <section className="panel">
-          <h2>Current Bots — check before creating another</h2>
-          {snapshot.bots.map(bot => (
-            <button key={bot.id} onClick={() => navigate({ screen: 'bot.overview', id: bot.id })}>
-              {bot.name} · {bot.id}
-            </button>
-          ))}
-        </section>
-      )}
+      <BotCreationRecovery intent={intent} />
     </main>
   );
 }

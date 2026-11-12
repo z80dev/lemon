@@ -56,6 +56,9 @@ struct BotInspectorView: View {
                 VStack(spacing: 16) {
                     if let bot {
                         InspectorHeader(store: store, bot: bot, overview: overview, edit: manages ? { destination = .editor } : nil)
+                        if let lifecycle = bot.lifecycle {
+                            BotLifecycleNotice(lifecycle: lifecycle, manage: manages ? { destination = .lifecycle } : nil)
+                        }
                         tabBar
                         Group {
                             switch presentation.tab {

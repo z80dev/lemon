@@ -3,7 +3,7 @@ import LemonBotKit
 
 struct BotLifecycleView: View {
     let store: LemonBotStore
-    let bot: Bot
+    private let initialBot: Bot
     @Environment(\.dismiss) private var dismiss
     @State private var operation = "duplicate"
     @State private var name = ""
@@ -16,15 +16,17 @@ struct BotLifecycleView: View {
     @State private var confirmation: Confirmation?
     @State private var action = UIActionState()
     init(store: LemonBotStore, bot: Bot) {
-        self.store = store; self.bot = bot
+        self.store = store; self.initialBot = bot
         let online = store.machines.filter { $0.status == "online" }
         _machineID = State(initialValue: online.count == 1 ? online[0].id : "")
-        _operation = State(initialValue: "duplicate")
+        _operation = State(initialValue: BotLifecyclePresentation.operations(bot.lifecycle).first ?? "")
         _access = State(initialValue: "standard")
     }
+    private var bot: Bot { store.bots.first { $0.id == initialBot.id } ?? initialBot }
+    private var operations: [String] { owner ? BotLifecyclePresentation.operations(bot.lifecycle) : [] }
     private var owner: Bool { bot.ownerUserId == store.user?.id }
     private var cannotSubmit: Bool {
-        if action.busy || !store.isOnline { return true }
+        if action.busy || !store.isOnline || !operations.contains(operation) { return true }
         switch operation {
         case "duplicate": return name.isEmpty || machineID.isEmpty
         case "move": return machineID.isEmpty || !sharedHostConsent || !bot.activeRunIds.isEmpty
@@ -35,16 +37,23 @@ struct BotLifecycleView: View {
     var body: some View {
         NavigationStack {
             Form {
-                SwiftUI.Section("What would you like to do?") {
-                    Picker("Operation", selection: $operation) {
-                        if owner { Text("Duplicate").tag("duplicate"); Text("Move machine").tag("move") }
-                        if owner { Text("Reset selected scopes").tag("reset") }
-                        if owner { Text("Delete Bot").tag("delete") }
+                if let lifecycle = bot.lifecycle {
+                    SwiftUI.Section("Bot status") { BotLifecycleNotice(lifecycle: lifecycle) }
+                }
+                if !operations.isEmpty {
+                    SwiftUI.Section("What would you like to do?") {
+                        Picker("Operation", selection: $operation) {
+                            ForEach(operations, id: \.self) { operation in
+                                Text(BotLifecyclePresentation.label(operation)).tag(operation)
+                            }
+                        }
                     }
                 }
-                SwiftUI.Section("Hide from my sidebar") {
-                    Text("Hiding only affects your sidebar and notifications. Work keeps running.")
-                    Button("Hide Bot") { Task { await action.perform { let _: Bot = try await store.mutate("PATCH", resourcePath("bots", bot.id, "/sidebar"), body: ["revision": .number(Double(bot.revision)), "hidden": .bool(true)]); try await store.refresh(); dismiss() } } }
+                if bot.lifecycle == nil {
+                    SwiftUI.Section("Hide from my sidebar") {
+                        Text("Hiding only affects your sidebar and notifications. Work keeps running.")
+                        Button("Hide Bot") { Task { await action.perform { let _: Bot = try await store.mutate("PATCH", resourcePath("bots", bot.id, "/sidebar"), body: ["revision": .number(Double(bot.revision)), "hidden": .bool(true)]); try await store.refresh(); dismiss() } } }
+                    }
                 }
                 if ["duplicate", "move"].contains(operation) {
                     SwiftUI.Section("Destination") {
@@ -74,6 +83,14 @@ struct BotLifecycleView: View {
                     }
                 }
                 switch operation {
+                case "finish-setup":
+                    SwiftUI.Section("Finish setup") {
+                        Text("Continue this Bot's setup without creating another Bot or conversation. The service checks unconfirmed steps before continuing.")
+                    }
+                case "readdress":
+                    SwiftUI.Section("Update address") {
+                        Text("Use the service's current address for this Bot. The service checks any unconfirmed address change before continuing.")
+                    }
                 case "duplicate":
                     SwiftUI.Section("What to copy") {
                         Toggle("Include installed skills", isOn: $includeSkills)
@@ -90,13 +107,15 @@ struct BotLifecycleView: View {
                         ForEach(["conversations", "memory", "job", "routines", "connectors", "attachments"], id: \.self) { scope in Toggle(scope == "connectors" ? "Connected apps" : scope.capitalized, isOn: selection(scope, set: $resetScopes)) }
                         Text("The Bot's identity, owner and machine stay, along with anything you don't select. Machine files and outside logins aren't deleted unless the preview says so.")
                     }
-                default:
+                case "delete":
                     SwiftUI.Section("Permanent deletion") {
                         Text("Deleting removes this Bot and the data listed in the preview. Files on the machine, OS accounts, browser logins, backups and provider logins aren't deleted unless the preview says they are.")
                     }
+                default: EmptyView()
                 }
                 ActionErrorView(message: action.error)
                 if let receipt = action.receipt { Text(receipt).font(LBFont.meta) }
+                if !store.isOnline { Text("Reconnect to manage this Bot. No changes are queued while offline.").font(LBFont.meta).foregroundStyle(LB.warning) }
             }.formStyle(.grouped)
                 .scrollContentBackground(.hidden)
                 .frame(maxWidth: 760)
@@ -109,9 +128,13 @@ struct BotLifecycleView: View {
                         Button("Cancel") { dismiss() }.buttonStyle(.pill(.secondary, compact: true)).keyboardShortcut(.cancelAction)
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        if owner {
-                            Button(operation == "duplicate" ? "Duplicate Bot" : "Review \(operation)", role: operation == "delete" ? .destructive : nil) {
-                                Task { if operation == "duplicate" { await copyBot() } else { await preview() } }
+                        if owner && !operations.isEmpty {
+                            Button(["finish-setup", "readdress"].contains(operation) ? BotLifecyclePresentation.label(operation) : operation == "duplicate" ? "Duplicate Bot" : "Review \(operation)", role: operation == "delete" ? .destructive : nil) {
+                                Task {
+                                    if ["finish-setup", "readdress"].contains(operation) { await recover() }
+                                    else if operation == "duplicate" { await copyBot() }
+                                    else { await preview() }
+                                }
                             }.buttonStyle(.pill(operation == "delete" ? .destructive : .primary(LB.lemon, LB.lemonInk), compact: true))
                                 .keyboardShortcut(.defaultAction).disabled(cannotSubmit)
                         }
@@ -123,7 +146,7 @@ struct BotLifecycleView: View {
                                     let _: Bot = try await store.read(resourcePath("bots", bot.id))
                                     try await store.refresh()
                                     action.uncertain = false
-                                    action.receipt = "Current Bot state loaded. Review it before resetting again."
+                                    action.receipt = "Current Bot state loaded. Review the available recovery actions before continuing."
                                 } }
                             }.disabled(action.inFlight || !store.isOnline)
                         }
@@ -133,6 +156,9 @@ struct BotLifecycleView: View {
                     if let confirmation { ScopeConfirmationView(store: store, confirmation: confirmation, title: operation.capitalized + " Bot") { body in try await confirm(body) } }
                 }
         }
+        .onChange(of: operations) { _, available in
+            if !available.contains(operation) { operation = available.first ?? "" }
+        }
         #if os(macOS)
         .frame(minWidth: 560, minHeight: 600)
         #else
@@ -140,6 +166,13 @@ struct BotLifecycleView: View {
         #endif
     }
     private func selection(_ id: ID, set: Binding<Set<ID>>) -> Binding<Bool> { Binding(get: { set.wrappedValue.contains(id) }, set: { if $0 { set.wrappedValue.insert(id) } else { set.wrappedValue.remove(id) } }) }
+    private func recover() async {
+        await action.perform {
+            let _: Bot = try await store.mutate("POST", resourcePath("bots", bot.id, "/\(operation)"), body: ["revision": .number(Double(bot.revision))])
+            try await store.refresh()
+            if bot.lifecycle == nil { dismiss() }
+        }
+    }
     private func copyBot() async {
         await action.perform {
             let body: JSONObject = ["name": .string(name), "machineId": .string(machineID), "includeSkills": .bool(includeSkills), "includeRoutines": .bool(includeRoutines), "access": .string(access)]
@@ -165,9 +198,11 @@ struct BotLifecycleView: View {
             let result: BotResetResult = try await store.mutate("POST", resourcePath("bots", bot.id, "/reset"), body: body)
             action.receipt = result.status == "outcome_unknown" ? "We couldn't confirm the reset finished. Don't retry yet. Check the Bot's current state." : "Reset finished. Kept: \(result.retainedScopes.map { $0 == "connectors" ? "Connected apps" : $0.capitalized }.joined(separator: ", "))."
             if result.status == "outcome_unknown" { action.uncertain = true }
-        default:
+        case "delete":
             let _: Deleted = try await store.mutate("DELETE", resourcePath("bots", bot.id), body: body)
             store.selectedConversationID = nil
+        default:
+            throw AdminFormError("The available Bot actions changed. Close this preview and review the Bot's current state.")
         }
         try await store.refresh()
         if operation != "reset" { dismiss() }

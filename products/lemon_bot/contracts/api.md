@@ -230,6 +230,8 @@ The catalogs in this section and §§10–11 together are exhaustive. Substitute
 | `POST /bots` | `BotCreate` | `Bot` | `undefined` | Member + Machine | machine_offline, upstream_unavailable, policy_denied, conflict |
 | `GET /bots/:id` | `undefined` | `Bot` | `undefined` | Member | machine_offline, upstream_unavailable, policy_denied, conflict |
 | `PATCH /bots/:id` | `BotUpdate` | `Bot` | `undefined` | Bot owner | machine_offline, upstream_unavailable, policy_denied, conflict |
+| `POST /bots/:id/finish-setup` | `Update` | `Bot` | `undefined` | Bot owner | outcome_unknown, machine_offline, capability_unavailable, callback_origin_not_allowed, callback_requires_https, invalid_callback_url |
+| `POST /bots/:id/readdress` | `Update` | `Bot` | `undefined` | Bot owner | outcome_unknown, machine_offline, capability_unavailable, callback_origin_not_allowed, callback_requires_https, invalid_callback_url |
 | `GET /bots/:id/agent-identity` | `undefined` | `{agent: AgentIdentity}` | `undefined` | Bot owner | capability_unavailable, upstream_unavailable |
 | `PATCH /bots/:id/agent-identity` | `AgentIdentityUpdate` | `{agent: AgentIdentity}` | `undefined` | Bot owner | conflict, outcome_unknown, capability_unavailable, upstream_unavailable |
 | `GET /bots/:id/agents` | `undefined` | `{agents: AgentIdentity[]}` | `{query?: string; limit?: number}` | Bot owner | capability_unavailable, upstream_unavailable |
