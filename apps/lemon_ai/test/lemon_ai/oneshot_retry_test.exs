@@ -103,7 +103,7 @@ defmodule LemonAi.OneshotRetryTest do
     assert_receive {:sleep, 1}
     assert_receive {:attempt, 2}
 
-    failed = %{failure("Rate limit exceeded") | retry_after_ms: 17}
+    failed = %{failure("Service temporarily unavailable") | retry_after_ms: 17}
 
     assert OneshotRetry.run(
              scripted([failed, success]),
@@ -113,6 +113,23 @@ defmodule LemonAi.OneshotRetryTest do
     assert_receive {:attempt, 1}
     assert_receive {:sleep, 17}
     assert_receive {:attempt, 2}
+    refute_received {:attempt, _}
+  end
+
+  test "throttles never retry before the 10s floor and respect a smaller wait ceiling" do
+    failure =
+      {:error,
+       {:http_error, 429,
+        %{"error" => %{"code" => "1302", "message" => "Rate limit reached for requests"}}}}
+
+    assert OneshotRetry.run(scripted([failure, :ok]), options(jitter_fun: fn _ -> 500 end)) == :ok
+    assert_receive {:attempt, 1}
+    assert_receive {:sleep, 10_500}
+    assert_receive {:attempt, 2}
+
+    assert OneshotRetry.run(scripted([failure]), options(max_delay_ms: 9_999)) == failure
+    assert_receive {:attempt, 1}
+    refute_received {:sleep, _}
     refute_received {:attempt, _}
   end
 

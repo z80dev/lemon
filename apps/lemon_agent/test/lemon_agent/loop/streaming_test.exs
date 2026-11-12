@@ -534,7 +534,7 @@ defmodule LemonAgent.Loop.StreamingTest do
       assert {:ok, ^final, _} =
                Streaming.stream_assistant_response(
                  simple_context(messages: [user_message("run")]),
-                 simple_config(stream_fn: stream_fn),
+                 simple_config(stream_fn: stream_fn, stream_options: retry_test_options()),
                  nil,
                  nil,
                  stream
@@ -543,8 +543,11 @@ defmodule LemonAgent.Loop.StreamingTest do
       EventStream.complete(stream, [])
 
       assert Enum.any?(EventStream.events(stream), fn
-               {:provider_retry, %{delay_ms: 10}} -> true
-               _ -> false
+               {:provider_retry, %{delay_ms: delay}} ->
+                 delay == if(LemonAi.Error.classify(error) == :rate_limit, do: 10_500, else: 10)
+
+               _ ->
+                 false
              end)
     end
 
@@ -604,6 +607,198 @@ defmodule LemonAgent.Loop.StreamingTest do
       EventStream.complete(stream, [])
       refute Enum.any?(EventStream.events(stream), &match?({:provider_retry, _}, &1))
     end
+  end
+
+  defp retry_test_options do
+    parent = self()
+
+    %StreamOptions{
+      provider_retry: %{
+        max_attempts: 8,
+        jitter_fun: fn 5_000 -> 500 end,
+        sleep_fun: fn ms -> send(parent, {:retry_sleep, ms}) end
+      }
+    }
+  end
+
+  # Model the nested HTTP retries used by real providers. The loop must force
+  # max_attempts to one, not just reduce its own retry counter.
+  defp throttled_provider(parent, error, options, attempt \\ 0) do
+    send(parent, :upstream_attempt)
+    policy = LemonAi.Providers.RetryHelper.policy(options)
+
+    if LemonAi.Providers.RetryHelper.retry_allowed?(attempt, policy) do
+      throttled_provider(parent, error, options, attempt + 1)
+    else
+      {:error, error}
+    end
+  end
+
+  test "one response budget bounds nested provider 429 attempts and honors Retry-After" do
+    parent = self()
+
+    error =
+      {:http_error, 429,
+       %{"error" => %{"code" => 1302, "message" => "Rate limit reached for requests"}},
+       [{"retry-after", "20"}]}
+
+    stream_fn = fn _, _, options -> throttled_provider(parent, error, options) end
+
+    config =
+      simple_config(stream_fn: stream_fn, max_retries: 2, stream_options: retry_test_options())
+
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    assert {:error, ^error} =
+             Streaming.stream_assistant_response(
+               simple_context(messages: [user_message("run")]),
+               config,
+               nil,
+               nil,
+               stream
+             )
+
+    for _ <- 1..3, do: assert_receive(:upstream_attempt)
+    refute_received :upstream_attempt
+    for _ <- 1..2, do: assert_receive({:retry_sleep, 20_000})
+    refute_received {:retry_sleep, _}
+    EventStream.complete(stream, [])
+    assert Enum.count(EventStream.events(stream), &match?({:provider_retry, _}, &1)) == 2
+  end
+
+  test "window quota exhaustion fails after one upstream attempt with reset details" do
+    parent = self()
+    reset = "2026-11-13T12:00:00Z"
+
+    for body <- [
+          %{"error" => %{"message" => "Your subscription quota exceeded", "reset_at" => reset}},
+          %{
+            "error" => %{
+              "type" => "usage_limit_reached",
+              "message" => "Try again later",
+              "resets_at" => 1_794_571_200
+            }
+          }
+        ] do
+      error = LemonAi.Error.parse_http_error(429, body)
+      stream_fn = fn _, _, options -> throttled_provider(parent, error, options) end
+      config = simple_config(stream_fn: stream_fn, stream_options: retry_test_options())
+      {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+      assert {:error, result} =
+               Streaming.stream_assistant_response(
+                 simple_context(messages: [user_message("run")]),
+                 config,
+                 nil,
+                 nil,
+                 stream
+               )
+
+      refute result.retryable
+      assert result.message =~ "Quota exhausted"
+      assert result.message =~ DateTime.to_iso8601(result.rate_limit_info.reset_at)
+      assert_receive :upstream_attempt
+      refute_received :upstream_attempt
+      refute_received {:retry_sleep, _}
+      EventStream.complete(stream, [])
+    end
+  end
+
+  test "idle stream cancellations consume the same response budget" do
+    parent = self()
+
+    for reason <- [:stream_idle_timeout, :dispatcher_stream_idle_timeout] do
+      stream_fn = fn _, _, options ->
+        assert options.provider_retry.max_attempts == 1
+        send(parent, :upstream_attempt)
+        {:ok, ai_stream} = LemonAi.EventStream.start_link(timeout: :infinity)
+        LemonAi.EventStream.push(ai_stream, {:canceled, reason})
+        {:ok, ai_stream}
+      end
+
+      config =
+        simple_config(stream_fn: stream_fn, max_retries: 1, stream_options: retry_test_options())
+
+      {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+      assert {:ok, %{stop_reason: :error, error_details: %{category: :transient}}, _} =
+               Streaming.stream_assistant_response(
+                 simple_context(messages: [user_message("run")]),
+                 config,
+                 nil,
+                 nil,
+                 stream
+               )
+
+      assert_receive :upstream_attempt
+      assert_receive :upstream_attempt
+      refute_received :upstream_attempt
+      assert_receive {:retry_sleep, 1}
+      refute_received {:retry_sleep, _}
+      EventStream.complete(stream, [])
+    end
+  end
+
+  test "abort during injected throttle backoff stops the response budget" do
+    parent = self()
+    signal = AbortSignal.new()
+    on_exit(fn -> AbortSignal.clear(signal) end)
+    options = retry_test_options()
+
+    options = %{
+      options
+      | provider_retry:
+          Map.put(options.provider_retry, :sleep_fun, fn _ -> AbortSignal.abort(signal) end)
+    }
+
+    error = {:http_error, 429, "Rate limit reached for requests"}
+    stream_fn = fn _, _, options -> throttled_provider(parent, error, options) end
+    config = simple_config(stream_fn: stream_fn, stream_options: options)
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    assert {:ok, %{stop_reason: :aborted}, _} =
+             Streaming.stream_assistant_response(
+               simple_context(messages: [user_message("run")]),
+               config,
+               signal,
+               nil,
+               stream
+             )
+
+    assert_receive :upstream_attempt
+    refute_received :upstream_attempt
+    EventStream.complete(stream, [])
+  end
+
+  test "idle cancellation after committed output never replays a provider request" do
+    parent = self()
+    partial = Mocks.assistant_message("partial output")
+
+    stream_fn = fn _, _, _ ->
+      send(parent, :upstream_attempt)
+      {:ok, ai_stream} = LemonAi.EventStream.start_link(timeout: :infinity)
+      LemonAi.EventStream.push(ai_stream, {:start, partial})
+      LemonAi.EventStream.push(ai_stream, {:text_delta, 0, "partial output", partial})
+      LemonAi.EventStream.push(ai_stream, {:canceled, :stream_idle_timeout})
+      {:ok, ai_stream}
+    end
+
+    config = simple_config(stream_fn: stream_fn, stream_options: retry_test_options())
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    assert {:ok, %{stop_reason: :error, error_details: %{output_committed: true}}, _} =
+             Streaming.stream_assistant_response(
+               simple_context(messages: [user_message("run")]),
+               config,
+               nil,
+               nil,
+               stream
+             )
+
+    assert_receive :upstream_attempt
+    refute_received :upstream_attempt
+    refute_received {:retry_sleep, _}
+    EventStream.complete(stream, [])
   end
 
   test "each output event blocks replay even when the provider reports empty content" do

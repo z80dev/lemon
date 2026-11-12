@@ -1002,7 +1002,13 @@ defmodule LemonAi.Providers.OpenAICompletions do
                  ) and
                    RetryHelper.retry_allowed?(attempt, policy) and
                    RetryHelper.retryable_http_error?(response.status, error_body) do
-                http_retry_delay_ms(attempt, policy, error_body, response.headers)
+                http_retry_delay_ms(
+                  attempt,
+                  policy,
+                  error_body,
+                  response.headers,
+                  response.status
+                )
               else
                 :give_up
               end
@@ -1216,20 +1222,10 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
   defp process_sse_line(_stream, state, _line), do: state
 
-  # A server retry hint (headers or body text) wins over backoff; a hint longer
-  # than the policy allows ends in-provider retries.
-  defp http_retry_delay_ms(attempt, policy, error_body, headers) do
-    error_text = extract_error_message(error_body)
-
-    if RetryHelper.rotate_rate_limit?(policy, error_text) do
-      :give_up
-    else
-      case RetryHelper.extract_retry_delay_ms(error_text, headers) do
-        nil -> RetryHelper.backoff_delay_ms(attempt, policy)
-        ms when ms > policy.max_retry_after_ms -> :give_up
-        ms -> ms
-      end
-    end
+  # Shared timing preserves structured body hints and throttle backoff.
+  defp http_retry_delay_ms(attempt, policy, error_body, headers, status \\ 0) do
+    error = LemonAi.Error.parse_http_error(status, error_body, headers)
+    RetryHelper.http_retry_delay_ms(attempt, headers, policy, error)
   end
 
   defp retryable_stream_output_error?(%AssistantMessage{stop_reason: :error} = output),
@@ -1728,22 +1724,4 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
     json <> if(in_string? and not escaped?, do: "\"", else: "") <> Enum.join(stack, "")
   end
-
-  defp extract_error_message(body) when is_binary(body) do
-    case Jason.decode(body) do
-      {:ok, %{"error" => %{"message" => message}}} -> message
-      {:ok, %{"error" => error}} when is_binary(error) -> error
-      _ -> body
-    end
-  end
-
-  defp extract_error_message(body) when is_map(body) do
-    case body do
-      %{"error" => %{"message" => message}} -> message
-      %{"error" => error} when is_binary(error) -> error
-      _ -> inspect(body)
-    end
-  end
-
-  defp extract_error_message(body), do: inspect(body)
 end

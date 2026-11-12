@@ -445,6 +445,15 @@ defmodule LemonAi.ErrorFailoverTest do
     test "hang and crash cancel terminals still count" do
       assert Error.stream_terminal_breaker_failure?({:canceled, :timeout})
       assert Error.stream_terminal_breaker_failure?({:canceled, :owner_down})
+
+      for reason <- [:stream_idle_timeout, :dispatcher_stream_idle_timeout] do
+        assert Error.classify(reason) == :transient
+        assert Error.classify({:canceled, reason}) == :transient
+        assert Error.retryable?(reason)
+        assert Error.retryable?({:canceled, reason})
+        assert Error.circuit_breaker_failure?(reason)
+        assert Error.stream_terminal_breaker_failure?({:canceled, reason})
+      end
     end
   end
 

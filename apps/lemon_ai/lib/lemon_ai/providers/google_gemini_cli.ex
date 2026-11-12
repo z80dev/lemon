@@ -385,24 +385,23 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
       {:ok, %Req.Response{status: status, body: error_body, headers: response_headers}} ->
         error_text = GoogleShared.normalize_http_error_body(error_body)
 
-        rotate? =
-          RetryHelper.rotate_rate_limit?(
-            RetryHelper.policy(opts),
-            {:http_error, status, error_text}
-          )
+        policy = RetryHelper.policy(opts)
+        error = {:http_error, status, error_text, response_headers}
 
-        if not rotate? and attempt < max_retries and
-             GoogleShared.retryable_error?(status, error_text) do
-          delay =
-            case GoogleShared.extract_retry_delay(error_text) do
-              nil -> retry_delay_with_jitter(@base_delay_ms, attempt)
-              ms -> ms
-            end
+        delay =
+          if attempt < max_retries and GoogleShared.retryable_error?(status, error_text) do
+            RetryHelper.http_retry_delay_ms(attempt, response_headers, policy, error)
+          else
+            :give_up
+          end
 
-          Process.sleep(delay)
-          make_request_with_retry(endpoints, headers, body, opts, attempt + 1)
-        else
-          {:error, GoogleShared.safe_http_error(status, error_text, response_headers)}
+        case delay do
+          :give_up ->
+            {:error, GoogleShared.safe_http_error(status, error_text, response_headers)}
+
+          delay_ms ->
+            RetryHelper.sleep(delay_ms)
+            make_request_with_retry(endpoints, headers, body, opts, attempt + 1)
         end
 
       {:error, %Req.TransportError{reason: reason}} ->
