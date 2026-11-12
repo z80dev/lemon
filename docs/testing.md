@@ -3,6 +3,13 @@
 `scripts/test` is the repo-level test runner. CI calls the same lanes, so a
 lane that passes locally runs the same commands in CI.
 
+Source tests require Elixir **1.20.5+** and OTP **29.1.2+**. The runner checks
+Elixir before compilation or test setup and fails immediately on older versions
+(including 1.20.4, whose regex engine can produce unrelated redaction failures).
+`./bin/lemon doctor` reports the Elixir minimum as `runtime.elixir`.
+For runner regression tests only, `LEMON_TEST_ELIXIR_VERSION` overrides the
+detected version string; it does not select or install a runtime.
+
 ## Quick usage
 
 ```bash

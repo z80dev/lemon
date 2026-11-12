@@ -5,6 +5,31 @@ defmodule LemonControlPlane.EventProjectionTest do
   alias LemonAi.Types.{Cost, ImageContent, TextContent, ThinkingContent, Usage}
   alias LemonControlPlane.EventProjection
 
+  test "display projections preserve parser syntax and task names without leaking credentials" do
+    text = ~s(Parser { tokens: [TokenKind::Ident] }\nTokenKind: Identifier\n{"agent":"task"})
+
+    projected =
+      EventProjection.tool_result(%AgentToolResult{
+        content: [%TextContent{text: text <> "\napi_key=configured-value\nBearer abc.def"}],
+        details: %{
+          diagnostics: %{
+            agent: "task",
+            tokens: [1, 2],
+            refresh_token: "short",
+            message: "sk-abcdefgh12345678"
+          }
+        }
+      })
+
+    assert hd(projected["content"])["text"] ==
+             text <> "\napi_key=[REDACTED]\n[REDACTED]"
+
+    assert projected["details"]["diagnostics"]["agent"] == "task"
+    assert projected["details"]["diagnostics"]["tokens"] == [1, 2]
+    assert projected["details"]["diagnostics"]["refresh_token"] == "[REDACTED]"
+    assert projected["details"]["diagnostics"]["message"] == "[REDACTED]"
+  end
+
   test "projects real typed results, nested usage and ordered visible content without runtime state" do
     result = %AgentToolResult{
       content: [

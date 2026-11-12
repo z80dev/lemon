@@ -128,6 +128,14 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- Credential redaction classifies trailing separator-delimited and camelCase
+  key components, protecting `githubToken`, `openaiApiKey` and similar fields
+  while retaining parser `tokens`, `TokenKind`, `token_count` and task names.
+  Explicit credential fields (including short configured values), bearer headers,
+  provider keys, JWTs and strict export filtering remain protected.
+- Doctor reports unsupported Elixir versions below 1.20.5 with upgrade guidance,
+  matching the source test runner's fail-fast minimum check.
+
 - Linux user services honor an absolute `XDG_CONFIG_HOME` for systemd unit
   installation and discovery, quote log destinations containing spaces or
   specifiers, and inspect `/proc` listeners without requiring `lsof`. Socket

@@ -6,6 +6,9 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Added
 
+- `lemon doctor` reports the Elixir 1.20.5 minimum as `runtime.elixir`, with
+  actionable upgrade guidance for unsupported toolchains.
+
 - Kimi Code onboarding offers `--auth omp`, saving only the discovered executable
   path and auth source. Model-auth status and doctor report omp login readiness
   without copying credentials or probing a model endpoint.

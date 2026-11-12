@@ -8,6 +8,88 @@ defmodule LemonCore.RedactTest do
     defstruct [:api_key, :metadata]
   end
 
+  test "coding transcripts retain token syntax and task agent names" do
+    for input <- [
+          "Parser { tokens: [TokenKind::Ident, TokenKind::Eof] }",
+          "TokenKind: Identifier",
+          ~s({"agent":"task","tokens":[1,2],"reasoning":"TokenKind: Identifier"}),
+          ~s(tokens: "ordinary parser content"),
+          ~s(tokenizer: "ordinary parser content")
+        ],
+        opts <- [[], [drop_keys: true], [strict: true]] do
+      assert Redact.text(input, opts) == input
+      assert Redact.text(input, Keyword.put(opts, :count, true)) == {input, 0}
+    end
+
+    data = %{"TokenKind" => "Identifier", agent: "task", tokens: [1, 2]}
+    assert Redact.map(data) == data
+  end
+
+  test "bounded credential names still protect configured values and nested JSON" do
+    for key <- [
+          "OPENAI_API_KEY",
+          "access_token",
+          "refresh_token",
+          "clientSecret",
+          "oauthToken",
+          "openaiApiKey",
+          "githubToken",
+          "slackBotToken",
+          "stripeSecretKey",
+          "my_token",
+          "HTTPAuthorization",
+          "X-API-Key",
+          "gateway.auth_token",
+          "password",
+          "pairing_code"
+        ] do
+      assert Redact.sensitive_key?(key)
+
+      assert Redact.map(%{nested: [%{key => "short"}]}) ==
+               %{nested: [%{key => "[REDACTED]"}]}
+
+      output = Redact.text(Jason.encode!(%{key => "short", "agent" => "task"}))
+      assert output =~ ~s("#{key}":[REDACTED])
+      assert output =~ ~s("agent":"task")
+
+      for separator <- [": ", "=", " = "],
+          opts <- [[], [drop_keys: true], [strict: true], [tokenizer: false]] do
+        input = key <> separator <> ~s("q1w2e3r4")
+        output = Redact.text(input, opts)
+        refute output =~ "q1w2e3r4"
+        assert Redact.text(output, opts) == output
+      end
+    end
+
+    for key <- [
+          "tokens",
+          "TokenKind",
+          "token_count",
+          "tokenCount",
+          "tokenizer",
+          "mytoken",
+          "secretary",
+          "credentialCount",
+          "access_token_expires_at",
+          "accessTokenExpiresAt"
+        ] do
+      refute Redact.sensitive_key?(key)
+      data = %{key => "ordinary-value"}
+      assert Redact.map(data) == data
+
+      for opts <- [[], [drop_keys: true], [strict: true], [tokenizer: false]] do
+        input = key <> ~s(: "ordinary-value")
+        assert Redact.text(input, opts) == input
+      end
+    end
+
+    input = ~s({"agent":"task","nested":{"tokens":[1],"message":"Bearer abc.def"}})
+    output = Redact.text(input)
+    assert output =~ ~s("agent":"task")
+    assert output =~ ~s("tokens":[1])
+    refute output =~ "abc.def"
+  end
+
   test "unscannable text is withheld completely in every redaction mode" do
     input = String.duplicate("a", 1_000_000) <> " token=must-not-leak"
 
