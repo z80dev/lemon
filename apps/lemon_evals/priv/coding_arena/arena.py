@@ -219,12 +219,19 @@ def cmd_validate(args):
 
 # ── agents ─────────────────────────────────────────────────────────────────
 
-def trial_token(secret, trial_id):
+def trial_token(secret, trial_id, claims=None):
     encode = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b'=').decode()
     header = encode(json.dumps({'alg': 'HS256', 'typ': 'JWT'}).encode())
-    payload = encode(json.dumps({'sub': trial_id, 'aud': 'lemon-arena'}).encode())
+    payload = encode(json.dumps({'sub': trial_id, 'aud': 'lemon-arena', **(claims or {})}).encode())
     signature = encode(hmac.new(secret.encode(), f'{header}.{payload}'.encode(), hashlib.sha256).digest())
     return f'{header}.{payload}.{signature}'
+
+
+def codex_trial_claims():
+    # Both harnesses read the ChatGPT account id from the bearer JWT; the trial JWT carries a placeholder
+    # and the proxy sends the real account id from the real token. `exp` keeps clients from refreshing.
+    return {'https://api.openai.com/auth': {'chatgpt_account_id': 'lemon-arena-placeholder'},
+            'exp': int(time.time()) + 86400}
 
 
 # Wire model id → how each harness and the host proxy reach it. Both harnesses always use the same
@@ -240,6 +247,13 @@ MODELS = {
                 'omp_base': '/zai/api/anthropic',
                 # Z.AI answers 1302 "Rate limit reached for requests" (a concurrency throttle) briefly.
                 'probe_interval': 60},
+    # Both harnesses use the ChatGPT Codex Responses endpoint (`/backend-api/codex/responses`) over SSE.
+    # omp defaults to a WebSocket transport there; PI_CODEX_WEBSOCKET=0 keeps it on SSE through the proxy.
+    'gpt-6.1-terra': {'provider': 'codex', 'lemon_provider': 'openai-codex', 'lemon_env': 'OPENAI_CODEX_API_KEY',
+                      'lemon_base': '/chatgpt', 'lemon_extra': 'auth_source = "api_key"\n',
+                      'omp_provider': 'openai-codex', 'omp_env': 'OPENAI_CODEX_API_KEY', 'omp_base': '/chatgpt',
+                      'omp_extra_env': {'PI_CODEX_WEBSOCKET': '0'}, 'claims': codex_trial_claims,
+                      'probe_interval': 120},
 }
 
 
@@ -252,22 +266,32 @@ def proxy_request(args, path, body=None, timeout=60):
                                               'x-api-key': token, 'anthropic-version': '2023-06-01'})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.status, json.loads(response.read() or b'null')
+            raw = response.read()
+            try:
+                return response.status, json.loads(raw or b'null')
+            except ValueError:  # streamed (SSE) bodies are not JSON; the status is what matters
+                return response.status, None
     except urllib.error.HTTPError as error:
         return error.code, None
-    except (OSError, ValueError):  # connection errors, timeouts, non-JSON bodies all mean "unknown"
+    except OSError:  # connection errors and timeouts mean "unknown"
         return 0, None
 
 
 def model_responds(args, model):
     """A tiny real request: True when the provider currently accepts this model (quota left)."""
-    if MODELS[model]['provider'] == 'kimi':
+    provider = MODELS[model]['provider']
+    if provider == 'kimi':
         status, _ = proxy_request(args, '/coding/v1/messages', {
             'model': model, 'max_tokens': 8, 'messages': [{'role': 'user', 'content': 'Reply with OK.'}]})
-    else:
+    elif provider == 'zai':
         status, _ = proxy_request(args, '/zai/api/coding/paas/v4/chat/completions', {
             'model': model, 'max_tokens': 8, 'thinking': {'type': 'disabled'},
             'messages': [{'role': 'user', 'content': 'Reply with OK.'}]})
+    else:
+        status, _ = proxy_request(args, '/chatgpt/codex/responses', {
+            'model': model, 'instructions': 'Reply with OK.', 'stream': True, 'store': False,
+            'reasoning': {'effort': 'low'},
+            'input': [{'role': 'user', 'content': [{'type': 'input_text', 'text': 'OK?'}]}]})
     return status == 200
 
 
@@ -302,7 +326,7 @@ thinking_level = "{args.thinking}"
 
 [providers.{spec['lemon_provider']}]
 base_url = "{proxy_base(args)}{spec['lemon_base']}"
-'''
+{spec.get('lemon_extra', '')}'''
     container.write('/home/agent/.lemon/config.toml', config)
     env = {spec['lemon_env']: token, 'LEMON_SECRETS_MASTER_KEY': secrets.token_hex(32),
            'LEMON_CONTROL_PLANE_OPERATOR_TOKEN': secrets.token_hex(32), 'HOME': '/home/agent'}
@@ -339,7 +363,7 @@ def prepare_omp(container, args, token, model):
     container.write('/home/agent/.omp/agent/models.yml', models_yml)
     roles = ''.join(f'  {role}: {role_model}\n' for role in OMP_ROLES)
     container.write('/home/agent/.omp/agent/config.yml', f'modelRoles:\n{roles}')
-    return {spec['omp_env']: token, 'HOME': '/home/agent'}
+    return {spec['omp_env']: token, 'HOME': '/home/agent', **spec.get('omp_extra_env', {})}
 
 
 def omp_argv(prompt, args, timeout, model):
@@ -434,7 +458,8 @@ def run_trial(trial, task, args, out, model):
     trial_dir.mkdir(parents=True, exist_ok=True)
     # A rerun (after an interrupted campaign) must not inherit the aborted attempt's proxy traffic.
     attempt = f'{trial["id"]}#{secrets.token_hex(4)}'
-    token = trial_token(args.proxy_secret, attempt)
+    claims = MODELS[model].get('claims')
+    token = trial_token(args.proxy_secret, attempt, claims() if claims else None)
     row = {**{key: trial[key] for key in ('id', 'task', 'agent', 'rep')}, 'proxy_trial': attempt,
            'language': task['language'], 'category': task['category'], 'difficulty': task['difficulty'],
            'model': model, 'thinking': args.thinking, 'passed': False, 'failure': None}
@@ -522,19 +547,20 @@ def read_rows(path):
 class Scheduler:
     """Hands trials to workers so that every (task, repetition) group runs on exactly one model.
 
-    A group's model is chosen when its first arm starts and persisted in groups.json: the primary
-    model while it has quota (and, for Kimi, while its 5-hour window is below --kimi-usage-limit),
-    otherwise the fallback. Every arm, including retries after infrastructure or 429 failures, runs on
+    Each model in --models is a pool with its own concurrency budget; all pools run at once. A
+    group's model is chosen when its first arm starts and persisted in groups.json: the first pool
+    (in --models order) with a free slot and quota (for Kimi, while its 5-hour window is below
+    --kimi-usage-limit). Every arm, including retries after infrastructure or 429 failures, runs on
     the group's model. A group without scored rows and with no arm running may move to another model.
     A group with scored rows waits for its model; only after its model has been unavailable for
     --reassign-after seconds is it moved wholesale to an available model, its old rows archived in
     results-archive.jsonl and all of its arms rerun. Upstream 429s mark a model unavailable until a
-    tiny probe request succeeds.
+    tiny probe request succeeds and lower a non-Kimi pool's budget (floor 2).
     """
 
     def __init__(self, args, out, trials, by_id):
         self.args, self.out, self.by_id = args, out, by_id
-        self.models = [args.model] + ([args.fallback_model] if args.fallback_model else [])
+        self.models = [model for model, _ in args.model_caps]
         self.results_path, self.archive_path = out / 'results.jsonl', out / 'results-archive.jsonl'
         self.groups_path = out / 'groups.json'
         self.cv = threading.Condition()
@@ -558,11 +584,8 @@ class Scheduler:
         self.usage_checked, self.kimi_accepts_new = 0.0, True
         self.retries = {}
         self.model_running = {}  # model -> trials in flight
-        # Each model has its own concurrency budget: --concurrency for the primary, --fallback-concurrency for
-        # the fallback (Z.AI throttles concurrent requests; the budget shrinks to 2 while its 429s continue).
-        self.caps = {args.model: args.concurrency}
-        if args.fallback_model:
-            self.caps[args.fallback_model] = args.fallback_concurrency
+        # Per-pool concurrency budgets; 429s shrink non-Kimi budgets (Z.AI and Codex throttle bursts).
+        self.caps = dict(args.model_caps)
         self.finished = 0
 
     def save_groups(self):
@@ -689,7 +712,7 @@ class Scheduler:
             elif row.get('rate_limited'):
                 self.mark_unavailable(model)
                 self.pending.insert(0, trial)
-                if model != self.args.model and self.caps[model] > 2:
+                if MODELS[model]['provider'] != 'kimi' and self.caps[model] > 2:
                     self.caps[model] -= 1
                     print(f'{model} concurrency lowered to {self.caps[model]} after a 429', flush=True)
             elif self.retries.get(trial['id'], 0) < 2:
@@ -713,7 +736,7 @@ def cmd_run(args):
     for row in read_rows(out / 'results.jsonl'):
         if row.get('failure') != 'infrastructure' or not args.retry_infrastructure:
             done.add(row['id'])
-    manifest = {'model': args.model, 'fallback_model': args.fallback_model, 'thinking': args.thinking,
+    manifest = {'models': dict(args.model_caps), 'thinking': args.thinking,
                 'agents': agents, 'repetitions': args.repetitions, 'timeout': args.timeout,
                 'tasks': sorted(by_id), 'images': {agent: image_id(IMAGES[agent]) for agent in agents}}
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
@@ -771,11 +794,16 @@ def proxy_stats(path):
             continue
         trial = stats.setdefault(entry.get('trial'), {'requests': 0, 'errors': 0, 'rate_limited': 0, 'models': set(),
                                                        'input': 0, 'cache_read': 0, 'output': 0})
-        if not entry.get('path', '').endswith(('/messages', '/chat/completions')):
+        if not entry.get('path', '').endswith(('/messages', '/chat/completions', '/responses')):
             continue
         if entry.get('kind') == 'usage':
-            trial['input'] += entry.get('input_tokens', 0)
-            trial['cache_read'] += entry.get('cache_read_tokens', 0)
+            cached = entry.get('cache_read_tokens', 0)
+            uncached = entry.get('input_tokens', 0)
+            # Proxy logs before `usage_style` existed kept OpenAI chat prompt_tokens, which include cache hits.
+            if 'usage_style' not in entry and entry['path'].endswith('/chat/completions'):
+                uncached -= cached
+            trial['input'] += uncached
+            trial['cache_read'] += cached
             trial['output'] += entry.get('output_tokens', 0)
             continue
         trial['requests'] += 1
@@ -899,8 +927,8 @@ def render_markdown(report, agents):
     lines = ['# Coding arena report', '']
     manifest = report['manifest']
     if manifest:
-        fallback = f", fallback `{manifest['fallback_model']}`" if manifest.get('fallback_model') else ''
-        lines.append(f"Primary model `{manifest.get('model')}`{fallback} (thinking {manifest.get('thinking')}), "
+        pools = ', '.join(f'`{model}` (concurrency {cap})' for model, cap in (manifest.get('models') or {}).items())
+        lines.append(f"Model pools {pools} (thinking {manifest.get('thinking')}), "
                      f"{manifest.get('repetitions')} repetitions, {len(manifest.get('tasks', []))} tasks, "
                      f"timeout {manifest.get('timeout')}s. Infrastructure failures excluded: {report['infrastructure_failures']}. "
                      'Every (task, repetition) group runs all arms on one model; comparisons never mix models.')
@@ -943,6 +971,19 @@ def render_markdown(report, agents):
 
 # ── CLI ────────────────────────────────────────────────────────────────────
 
+def parse_model_caps(spec):
+    """'k3.1-pro=10,glm-5.3=3' -> [('k3.1-pro', 10), ('glm-5.3', 3)] in preference order."""
+    pools = []
+    for item in filter(None, (part.strip() for part in spec.split(','))):
+        model, _, cap = item.partition('=')
+        if model not in MODELS or not cap.isdigit() or int(cap) < 1:
+            raise argparse.ArgumentTypeError(f'bad pool {item!r}; expected MODEL=CONCURRENCY with MODEL in {sorted(MODELS)}')
+        pools.append((model, int(cap)))
+    if not pools or len({model for model, _ in pools}) != len(pools):
+        raise argparse.ArgumentTypeError('give each model once')
+    return pools
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--tasks-dir', default=str(TASKS_DIR))
@@ -954,19 +995,16 @@ def main():
     run.add_argument('--output-dir', required=True)
     run.add_argument('--tasks')
     run.add_argument('--agents', default='lemon,omp')
-    run.add_argument('--model', default='k3.1-pro', choices=sorted(MODELS), help='primary wire model id')
-    run.add_argument('--fallback-model', choices=sorted(MODELS),
-                     help='model for new groups while the primary is out of quota (e.g. glm-5.3)')
+    run.add_argument('--models', dest='model_caps', default='k3.1-pro=6', type=parse_model_caps,
+                     help='comma-separated model=concurrency pools in preference order, e.g. '
+                          'k3.1-pro=10,glm-5.3=3,gpt-6.1-terra=6')
     run.add_argument('--kimi-usage-limit', type=float, default=0.9,
                      help='stop starting new groups on Kimi once its 5-hour window reaches this used ratio')
     run.add_argument('--reassign-after', type=int, default=6 * 3600,
                      help='seconds a pinned model may stay unavailable before its unfinished groups move models')
-    run.add_argument('--fallback-concurrency', type=int, default=3,
-                     help='most trials in flight on the fallback model (Z.AI throttles concurrent requests)')
     run.add_argument('--thinking', default='high')
     run.add_argument('--repetitions', type=int, default=3)
     run.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT)
-    run.add_argument('--concurrency', type=int, default=6, help='trials in flight on the primary model')
     run.add_argument('--cpus', default='2')
     run.add_argument('--memory', default='3g')
     run.add_argument('--seed', type=int, default=20261111)

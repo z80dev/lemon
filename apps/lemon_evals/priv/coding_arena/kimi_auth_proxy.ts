@@ -1,5 +1,5 @@
 /**
- * Host-side model auth proxy for isolated arena trials (Kimi Code and Z.AI).
+ * Host-side model auth proxy for isolated arena trials (Kimi Code, Z.AI, ChatGPT Codex).
  *
  * Trial containers never hold a real credential. Each trial receives an
  * HS256-signed JWT whose `sub` is its trial id; the proxy verifies it, swaps it
@@ -10,6 +10,9 @@
  *                  `omp token kimi-code` (a JWT; omp alone owns refresh-token rotation)
  *   /zai/...     → https://api.z.ai/...             Z.AI API key from `omp token zai`
  *                  (static key, cached; refetched once after an upstream 401)
+ *   /chatgpt/... → https://chatgpt.com/backend-api/... ChatGPT Codex OAuth JWT from
+ *                  `omp token openai-codex`; `chatgpt-account-id` is set from its claims, replacing the
+ *                  placeholder account in the trial JWT the client parsed
  *
  * Every request is attributed to its trial in a JSONL log (provider, model,
  * request shape sizes, status, latency, wire usage) without prompts, bodies or
@@ -22,6 +25,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 const UPSTREAM = process.env.KIMI_UPSTREAM ?? "https://api.kimi.com";
 const ZAI_UPSTREAM = process.env.ZAI_UPSTREAM ?? "https://api.z.ai";
+const CHATGPT_UPSTREAM = process.env.CHATGPT_UPSTREAM ?? "https://chatgpt.com/backend-api";
+const CODEX_AUTH_CLAIM = "https://api.openai.com/auth";
 const SECRET = process.env.ARENA_PROXY_SECRET;
 if (!SECRET) throw new Error("ARENA_PROXY_SECRET is required");
 
@@ -60,27 +65,45 @@ function verifyTrialToken(token: string): string | undefined {
 	}
 }
 
-function jwtExpiryMs(token: string): number {
+function jwtClaims(token: string): Record<string, unknown> {
 	try {
-		const claims = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
-		return typeof claims.exp === "number" ? claims.exp * 1000 : 0;
+		const claims: unknown = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+		return claims && typeof claims === "object" ? (claims as Record<string, unknown>) : {};
 	} catch {
-		return 0;
+		return {};
 	}
+}
+
+function codexAccountId(token: string): string | undefined {
+	const auth = jwtClaims(token)[CODEX_AUTH_CLAIM];
+	if (auth && typeof auth === "object" && "chatgpt_account_id" in auth) {
+		const account = auth.chatgpt_account_id;
+		return typeof account === "string" ? account : undefined;
+	}
+}
+
+function jwtExpiryMs(token: string): number {
+	const exp = jwtClaims(token).exp;
+	return typeof exp === "number" ? exp * 1000 : 0;
 }
 
 type Credential = { token: string; expiresMs: number };
 
-// One cache per omp credential: `kimi-code` is a JWT refreshed before expiry, `zai` a static key.
-const credentials: Record<string, { cached?: Credential; inflight?: Promise<string> }> = { "kimi-code": {}, zai: {} };
+// One cache per omp credential: `kimi-code` and `openai-codex` are JWTs refreshed before expiry
+// (omp owns refresh), `zai` a static key.
+const credentials: Record<string, { cached?: Credential; inflight?: Promise<string> }> = {
+	"kimi-code": {},
+	zai: {},
+	"openai-codex": {},
+};
 
 async function fetchUpstreamToken(provider: string, force: boolean): Promise<string> {
-	const argv = [ompBin, "token", provider, ...(force && provider === "kimi-code" ? ["--force-refresh"] : [])];
+	const argv = [ompBin, "token", provider, ...(force && provider !== "zai" ? ["--force-refresh"] : [])];
 	const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
 	const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
 	const token = stdout.trim().split("\n").pop()?.trim() ?? "";
 	if (code !== 0 || !token) throw new Error(`omp token ${provider} failed (exit ${code})`);
-	credentials[provider].cached = { token, expiresMs: provider === "kimi-code" ? jwtExpiryMs(token) : Infinity };
+	credentials[provider].cached = { token, expiresMs: provider === "zai" ? Infinity : jwtExpiryMs(token) };
 	return token;
 }
 
@@ -103,16 +126,25 @@ function requestShape(body: ArrayBuffer): Record<string, unknown> {
 	if (body.byteLength === 0) return {};
 	try {
 		const parsed = JSON.parse(new TextDecoder().decode(body));
-		const system = typeof parsed.system === "string" ? parsed.system : JSON.stringify(parsed.system ?? "");
+		// Anthropic `system`, Responses `instructions`, or chat-completions system/developer messages.
+		const isSystemMessage = (m: unknown): m is { content: unknown } =>
+			!!m && typeof m === "object" && "role" in m && (m.role === "system" || m.role === "developer") && "content" in m;
+		const chatSystem = Array.isArray(parsed.messages)
+			? (parsed.messages as unknown[]).filter(isSystemMessage).map(m => m.content)
+			: [];
+		const raw = parsed.system ?? parsed.instructions ?? (chatSystem.length ? chatSystem : "");
+		const system = typeof raw === "string" ? raw : JSON.stringify(raw);
+		const conversation = parsed.messages ?? parsed.input;
 		return {
 			model: typeof parsed.model === "string" ? parsed.model : undefined,
 			request_bytes: body.byteLength,
 			system_chars: system.length,
 			tools: Array.isArray(parsed.tools) ? parsed.tools.length : 0,
-			messages: Array.isArray(parsed.messages) ? parsed.messages.length : 0,
-			max_tokens: parsed.max_tokens ?? parsed.max_completion_tokens,
+			messages: Array.isArray(conversation) ? conversation.length : 0,
+			max_tokens: parsed.max_tokens ?? parsed.max_completion_tokens ?? parsed.max_output_tokens,
 			thinking: parsed.thinking?.type,
-			effort: parsed.output_config?.effort ?? parsed.reasoning_effort ?? parsed.thinking?.effort,
+			effort:
+				parsed.output_config?.effort ?? parsed.reasoning_effort ?? parsed.thinking?.effort ?? parsed.reasoning?.effort,
 		};
 	} catch {
 		return { request_bytes: body.byteLength };
@@ -126,22 +158,34 @@ function inboundToken(req: Request): string | undefined {
 }
 
 // Token usage as the provider reported it on the wire, identical accounting for every client.
-// Handles Anthropic SSE (message_start / message_delta) and OpenAI chat chunks or JSON bodies.
-function usageFromText(text: string): Record<string, number> {
+// Handles Anthropic SSE (message_start / message_delta), OpenAI chat chunks or JSON bodies, and
+// Responses streams (`response.completed`). `input_tokens` is always the uncached input: OpenAI-style
+// totals include cached tokens, so those are subtracted (`usage_style` records which shape it was).
+function usageFromText(text: string): Record<string, number | string> {
 	const usage: Record<string, number> = {};
+	let style: string | undefined;
 	const merge = (raw: unknown) => {
 		if (!raw || typeof raw !== "object") return;
 		const record = raw as Record<string, unknown>;
-		const details = record.prompt_tokens_details as Record<string, unknown> | undefined;
+		const details = (record.prompt_tokens_details ?? record.input_tokens_details) as Record<string, unknown> | undefined;
+		const openaiStyle = record.prompt_tokens !== undefined || record.input_tokens_details !== undefined;
+		const cached = record.cache_read_input_tokens ?? details?.cached_tokens;
+		const total = record.input_tokens ?? record.prompt_tokens;
 		const fields: Record<string, unknown> = {
-			input_tokens: record.input_tokens ?? record.prompt_tokens,
+			input_tokens:
+				typeof total === "number" && openaiStyle && typeof cached === "number" ? total - cached : total,
 			output_tokens: record.output_tokens ?? record.completion_tokens,
-			cache_read_tokens: record.cache_read_input_tokens ?? details?.cached_tokens,
+			cache_read_tokens: cached,
 			cache_write_tokens: record.cache_creation_input_tokens,
 		};
+		let any = false;
 		for (const [key, value] of Object.entries(fields)) {
-			if (typeof value === "number") usage[key] = Math.max(usage[key] ?? 0, value);
+			if (typeof value === "number") {
+				usage[key] = Math.max(usage[key] ?? 0, value);
+				any = true;
+			}
 		}
+		if (any) style = openaiStyle ? "openai" : "anthropic";
 	};
 	const documents = text.includes("data:")
 		? text.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trim())
@@ -151,28 +195,44 @@ function usageFromText(text: string): Record<string, number> {
 			const event = JSON.parse(document);
 			merge(event.usage);
 			merge(event.message?.usage);
+			merge(event.response?.usage);
 		} catch {
 			// Non-JSON keepalives and [DONE] markers carry no usage.
 		}
 	}
-	return usage;
+	return style ? { ...usage, usage_style: style } : usage;
 }
 
 // Pass chunks through untouched while keeping the lines that can carry usage.
-// (A tee()'d body crashed Bun when a client disconnected mid-stream.)
-function meteredStream(onDone: (usage: Record<string, number>) => void): TransformStream<Uint8Array, Uint8Array> {
+// (A tee()'d body crashed Bun when a client disconnected mid-stream.) Responses streams report usage
+// on their terminal event and clients may drop the connection right after it without reading to EOF,
+// so usage is emitted at that event rather than only on flush.
+const RESPONSES_TERMINAL = ['"response.completed"', '"response.incomplete"', '"response.failed"'];
+
+function meteredStream(onDone: (usage: Record<string, number | string>) => void): TransformStream<Uint8Array, Uint8Array> {
 	const decoder = new TextDecoder();
 	let pending = "";
 	let kept = "";
+	let done = false;
 	return new TransformStream({
 		transform(chunk, controller) {
 			controller.enqueue(chunk);
+			if (done) return;
 			pending += decoder.decode(chunk, { stream: true });
 			const lines = pending.split("\n");
 			pending = lines.pop() ?? "";
-			for (const line of lines) if (line.includes("usage")) kept += `${line}\n`;
+			for (const line of lines) {
+				if (!line.includes("usage")) continue;
+				kept += `${line}\n`;
+				if (RESPONSES_TERMINAL.some(marker => line.includes(marker))) {
+					done = true;
+					onDone(usageFromText(kept));
+					return;
+				}
+			}
 		},
 		flush() {
+			if (done) return;
 			kept += pending + decoder.decode();
 			onDone(usageFromText(kept));
 		},
@@ -193,7 +253,13 @@ Bun.serve({
 			? { provider: "kimi", credential: "kimi-code", upstream: `${UPSTREAM}${url.pathname}` }
 			: url.pathname.startsWith("/zai/")
 				? { provider: "zai", credential: "zai", upstream: `${ZAI_UPSTREAM}${url.pathname.slice("/zai".length)}` }
-				: undefined;
+				: url.pathname.startsWith("/chatgpt/")
+					? {
+							provider: "codex",
+							credential: "openai-codex",
+							upstream: `${CHATGPT_UPSTREAM}${url.pathname.slice("/chatgpt".length)}`,
+						}
+					: undefined;
 		if (!route) return Response.json({ error: "unknown path" }, { status: 404 });
 
 		const body = req.method === "GET" || req.method === "HEAD" ? new ArrayBuffer(0) : await req.arrayBuffer();
@@ -209,6 +275,12 @@ Bun.serve({
 			headers.set("authorization", `Bearer ${token}`);
 			// Z.AI's Anthropic-compatible endpoint (used by omp for GLM) authenticates with x-api-key.
 			if (route.provider === "zai") headers.set("x-api-key", token);
+			// Clients derive the account id from the (placeholder) trial JWT; the real one comes from the real token.
+			if (route.provider === "codex") {
+				const account = codexAccountId(token);
+				if (typeof account === "string") headers.set("chatgpt-account-id", account);
+				else headers.delete("chatgpt-account-id");
+			}
 			return fetch(`${route.upstream}${url.search}`, {
 				method: req.method,
 				headers,
@@ -253,7 +325,7 @@ Bun.serve({
 						provider: route.provider,
 						...usage,
 						// The stream carried no usage record; reports fall back to client-reported usage.
-						...(Object.keys(usage).length === 0 ? { usage_missing: true } : {}),
+						...(Object.keys(usage).length === 0 && req.method === "POST" ? { usage_missing: true } : {}),
 						total_ms: Date.now() - started,
 					}),
 				),
