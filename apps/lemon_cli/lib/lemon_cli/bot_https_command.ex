@@ -42,7 +42,8 @@ defmodule LemonCli.BotHttpsCommand do
   end
 
   def execute(args, opts \\ []) do
-    with {:ok, operation} <- parse(args) do
+    with {:ok, operation} <- parse(args),
+         :ok <- supported_launcher(operation, opts) do
       if operation == :status do
         status(opts)
       else
@@ -84,18 +85,27 @@ defmodule LemonCli.BotHttpsCommand do
   defp change({:enable, mode}, opts) do
     with {:ok, existing} <- read_state(opts),
          {:ok, backend} <- backend_environment(opts),
+         {:ok, opts} <- controller_options(backend, opts),
          {:ok, env_file} <- read_env(opts),
-         {:ok, plan} <- plan(mode, existing, backend, env_file, opts),
-         :ok <- write_state(plan, opts),
-         :ok <- ensure_route(plan, opts),
-         {:ok, env_changed} <- merge_env(plan, env_file, opts) do
-      same =
-        not is_nil(existing) and existing["phase"] == "active" and not env_changed and
-          canonical(backend["LEMON_BOT_PUBLIC_URL"]) == plan["origin"]
+         {:ok, operator} <- read_operator(backend, opts),
+         {:ok, plan} <- plan(mode, existing, backend, env_file, operator, opts),
+         {:ok, route_ready} <- route_ready?(plan, opts) do
+      env_text = merged_env(plan, env_file, opts)
 
-      with :ok <- if(same, do: :ok, else: configure_services(plan["origin"], opts)),
+      same =
+        not is_nil(existing) and existing["phase"] == "active" and
+          env_text == env_file.text and route_ready and
+          canonical(backend["LEMON_BOT_PUBLIC_URL"]) == plan["origin"] and
+          member?(operator.origins, plan["origin"])
+
+      with :ok <- if(same, do: :ok, else: write_state(plan, opts)),
+           :ok <- ensure_route(plan, opts),
+           :ok <- write_env(env_text, opts),
+           :ok <- approve_private_mcp(plan, operator),
+           :ok <- if(same, do: :ok, else: configure_services(plan["origin"], opts)),
            :ok <- verify_identity(plan["origin"], opts),
            :ok <- controller_check(plan["origin"], opts),
+           :ok <- verify_mcp_policy(plan["origin"], backend, opts),
            :ok <- write_state(Map.put(plan, "phase", "active"), opts),
            {:ok, result} <- status(opts) do
         {:ok, Map.put(result, :changed, not same)}
@@ -108,19 +118,23 @@ defmodule LemonCli.BotHttpsCommand do
       if is_nil(state) do
         with {:ok, result} <- status(opts), do: {:ok, Map.put(result, :changed, false)}
       else
-        with {:ok, env_file} <- read_env(opts),
+        with {:ok, backend} <- backend_environment(opts),
+             {:ok, opts} <- controller_options(backend, opts),
+             {:ok, env_file} <- read_env(opts),
+             {:ok, operator} <- read_operator(backend, opts),
              :ok <- remove_owned_route(state, opts),
              :ok <- remove_owned_origins(state, env_file, opts),
-             :ok <- configure_services(nil, opts),
+             :ok <- remove_private_mcp(state, operator),
+             :ok <- configure_services(state["public_url"]["original"], opts),
              :ok <- File.rm(state_path(opts)),
              {:ok, result} <- status(opts) do
-          {:ok, Map.merge(result, %{address: nil, changed: true})}
+          {:ok, Map.put(result, :changed, true)}
         end
       end
     end
   end
 
-  defp plan(mode, state, backend, file, opts) do
+  defp plan(mode, state, backend, file, operator, opts) do
     with {:ok, address} <- address(mode, state, opts),
          :ok <- compatible(state, address),
          :ok <- require_loopback_backend(backend) do
@@ -143,9 +157,24 @@ defmodule LemonCli.BotHttpsCommand do
       else
         {:ok,
          Map.merge(address, %{
-           "schema" => 1,
-           "phase" => if(state, do: state["phase"], else: "pending"),
-           "added" => additions
+           "schema" => 2,
+           "phase" => "pending",
+           "added" => additions,
+           "public_url" =>
+             if(state,
+               do: state["public_url"],
+               else: %{"original" => previous, "owned" => previous in [nil, ""]}
+             ),
+           "private_mcp" =>
+             if(state,
+               do: state["private_mcp"],
+               else: %{
+                 "path" => operator.path,
+                 "added" => not member?(operator.origins, origin),
+                 "field_existed" => Map.has_key?(operator.raw, "approvedPrivateMcpOrigins"),
+                 "file_existed" => operator.existed
+               }
+             )
          })}
       end
     end
@@ -167,6 +196,165 @@ defmodule LemonCli.BotHttpsCommand do
        do: :ok,
        else:
          {:error, "Disable the current managed HTTPS address before choosing another address."}
+  end
+
+  defp supported_launcher(:status, _opts), do: :ok
+
+  defp supported_launcher(_operation, opts) do
+    env = Keyword.get(opts, :env, System.get_env())
+    source_root = Role.launcher(opts) |> Path.dirname() |> Path.dirname()
+
+    if env["LEMON_CLI_LAUNCHER"] == "source" or File.regular?(Path.join(source_root, "mix.exs")),
+      do:
+        {:error,
+         "Managed HTTPS is not supported by source-mode startup. Follow docs/getting-started/lemon-bot.md#appendix-manual-https-setup and configure the source controller's environment explicitly."},
+      else: :ok
+  end
+
+  defp controller_options(backend, opts) do
+    explicit =
+      backend["LEMON_BOT_CONTROL_URL"] not in [nil, ""] or
+        backend["LEMON_BOT_OPERATOR_TOKEN"] not in [nil, ""]
+
+    choice_path = Path.join(data_dir(backend, opts), "controller.json")
+
+    with {:ok, choice} <-
+           if(explicit, do: {:ok, nil}, else: read_private(choice_path, nil, 65_536)),
+         {:ok, choice} <- if(is_binary(choice), do: Jason.decode(choice), else: {:ok, choice}) do
+      cond do
+        is_map(choice) and choice["mode"] == "remote" ->
+          {:error,
+           "The Bot uses a saved remote controller. Managed HTTPS cannot configure or verify that remote controller; use the manual HTTPS appendix on the backend and its actual controller."}
+
+        choice != nil and choice != %{"version" => 1, "mode" => "local"} ->
+          {:error,
+           "The Bot's saved controller choice cannot be resolved safely; inspect it with lemon-bot --choose-lemon."}
+
+        true ->
+          port = backend["LEMON_CONTROL_PLANE_PORT"] || to_string(Role.port("controller", opts))
+          url = backend["LEMON_BOT_CONTROL_URL"] || "ws://127.0.0.1:#{port}/ws"
+
+          with {:ok, uri} <- URI.new(url),
+               true <-
+                 uri.scheme in ["ws", "wss"] and uri.host in ["127.0.0.1", "::1", "localhost"],
+               true <-
+                 uri.path == "/ws" and is_nil(uri.userinfo) and is_nil(uri.query) and
+                   is_nil(uri.fragment),
+               true <- is_integer(uri.port) and uri.port in 1..65_535 do
+            {:ok,
+             opts |> Keyword.put(:controller_url, url) |> Keyword.put(:controller_port, uri.port)}
+          else
+            _ ->
+              {:error,
+               "The Bot uses a remote controller or unsupported controller endpoint. Managed HTTPS refuses to restart or verify a different local controller; use the manual HTTPS appendix."}
+          end
+      end
+    else
+      _ ->
+        {:error,
+         "The Bot's actual controller configuration is unavailable; refusing to use a different local controller."}
+    end
+  end
+
+  defp data_dir(backend, opts),
+    do: backend["LEMON_BOT_DATA_DIR"] || Path.join([Role.home(opts), ".lemon", "lemon_bot"])
+
+  defp read_operator(backend, opts) do
+    path = backend["LEMON_BOT_CONFIG_FILE"] || Path.join(data_dir(backend, opts), "config.json")
+
+    with true <- Role.absolute_safe?(path),
+         {:ok, contents} <- read_private(path, nil, 1_048_576),
+         {:ok, raw} <- if(contents, do: Jason.decode(contents), else: {:ok, %{"version" => 1}}),
+         true <- is_map(raw),
+         origins <- Map.get(raw, "approvedPrivateMcpOrigins", []),
+         true <- is_list(origins) and Enum.all?(origins, &is_binary/1) do
+      {:ok, %{path: path, raw: raw, origins: origins, existed: not is_nil(contents)}}
+    else
+      _ -> {:error, "The existing backend operator configuration cannot be updated safely."}
+    end
+  end
+
+  defp approve_private_mcp(plan, operator) do
+    if plan["private_mcp"]["path"] != operator.path do
+      {:error,
+       "The backend operator configuration path changed; refusing to modify another file."}
+    else
+      if member?(operator.origins, plan["origin"]) do
+        :ok
+      else
+        raw =
+          Map.put(operator.raw, "approvedPrivateMcpOrigins", operator.origins ++ [plan["origin"]])
+
+        atomic_preserving(operator.path, Jason.encode!(raw) <> "\n")
+      end
+    end
+  end
+
+  defp remove_private_mcp(state, operator) do
+    ownership = state["private_mcp"]
+
+    cond do
+      ownership["path"] != operator.path ->
+        {:error,
+         "The backend operator configuration path changed; refusing to modify another file."}
+
+      not ownership["added"] ->
+        :ok
+
+      true ->
+        kept = Enum.reject(operator.origins, &(canonical(&1) == state["origin"]))
+
+        raw =
+          if not ownership["field_existed"] and kept == [],
+            do: Map.delete(operator.raw, "approvedPrivateMcpOrigins"),
+            else: Map.put(operator.raw, "approvedPrivateMcpOrigins", kept)
+
+        if not ownership["file_existed"] and raw == %{"version" => 1},
+          do: if(operator.existed, do: File.rm(operator.path), else: :ok),
+          else: atomic_preserving(operator.path, Jason.encode!(raw) <> "\n")
+    end
+  end
+
+  defp route_ready?(%{"mode" => "url"}, _opts), do: {:ok, true}
+
+  defp route_ready?(plan, opts) do
+    with {:ok, routes} <- command_json(["tailscale", "serve", "status", "--json"], opts),
+         do: {:ok, owned_route?(routes, plan)}
+  end
+
+  defp verify_mcp_policy(origin, backend, opts) do
+    policy =
+      Keyword.get(opts, :mcp_policy, fn address, options ->
+        command_json(
+          [bot_executable(options), "https-policy", "--origin", address, "--json"],
+          Keyword.put(options, :command_env, backend_command_env(backend, address, options))
+        )
+      end)
+
+    pin_opts =
+      case Keyword.fetch(opts, :mcp_resolver) do
+        {:ok, resolver} -> [resolver: resolver]
+        :error -> []
+      end
+
+    with {:ok,
+          %{
+            "origin" => ^origin,
+            "allowedOrigins" => [^origin],
+            "approvedPrivateOrigins" => [^origin]
+          }} <- policy.(origin, opts),
+         {:ok, _} <-
+           OriginPolicy.pin(
+             origin <> "/mcp",
+             %{allowed_origins: [origin], approved_private_origins: [origin]},
+             pin_opts
+           ) do
+      :ok
+    else
+      _ ->
+        {:error,
+         "The backend's first-party MCP policy did not permit execution at this HTTPS origin. Inspect its operator configuration and DNS before retrying."}
+    end
   end
 
   defp address({:url, origin}, _state, _opts),
@@ -271,10 +459,17 @@ defmodule LemonCli.BotHttpsCommand do
 
   defp configure_services(origin, opts) do
     install = Keyword.get(opts, :service_install, &Service.install/2)
+    controller_opts = Keyword.put(opts, :port, Keyword.fetch!(opts, :controller_port))
 
-    with :ok <- ready(install.(["controller"], opts)),
-         :ok <- restart_controller(opts),
-         :ok <- ready(install.(["backend"], Keyword.put(opts, :bot_public_url, origin))) do
+    backend_env =
+      Keyword.get(opts, :env, System.get_env())
+      |> Map.put("LEMON_CONTROL_PLANE_PORT", to_string(opts[:controller_port]))
+
+    backend_opts = opts |> Keyword.put(:env, backend_env) |> Keyword.put(:bot_public_url, origin)
+
+    with :ok <- ready(install.(["controller"], controller_opts)),
+         :ok <- restart_controller(controller_opts),
+         :ok <- ready(install.(["backend"], backend_opts)) do
       :ok
     else
       _ ->
@@ -330,7 +525,7 @@ defmodule LemonCli.BotHttpsCommand do
     check =
       Keyword.get(opts, :controller_check, fn canonical ->
         request = Keyword.get(opts, :rpc, &LemonCli.ControlPlaneClient.request/3)
-        rpc_opts = [url: "ws://127.0.0.1:#{Role.port("controller", opts)}/ws", timeout_ms: 30_000]
+        rpc_opts = [url: Keyword.fetch!(opts, :controller_url), timeout_ms: 30_000]
 
         case request.("doctor.run", %{"botPublicUrl" => canonical}, rpc_opts) do
           {:ok, %{"botPublicOrigin" => ^canonical, "checks" => checks}} ->
@@ -402,7 +597,15 @@ defmodule LemonCli.BotHttpsCommand do
         end
 
       controller =
-        if address && controller_check(address, opts) == :ok, do: "allowed", else: "not confirmed"
+        case controller_options(backend, opts) do
+          {:ok, resolved} ->
+            if address && controller_check(address, resolved) == :ok,
+              do: "allowed",
+              else: "not confirmed"
+
+          _ ->
+            "not confirmed"
+        end
 
       {:ok,
        %{
@@ -441,16 +644,7 @@ defmodule LemonCli.BotHttpsCommand do
     with {:ok, saved} <- backend_environment(opts) do
       bot = bot_executable(opts)
 
-      env =
-        Map.take(
-          Map.merge(Keyword.get(opts, :env, System.get_env()), saved),
-          ~w(HOME LEMON_BOT_DATA_DIR LEMON_BOT_PORT)
-        )
-
-      env =
-        if opts[:bot_public_url],
-          do: Map.put(env, "LEMON_BOT_PUBLIC_URL", opts[:bot_public_url]),
-          else: env
+      env = backend_command_env(saved, opts[:bot_public_url], opts)
 
       with {:ok, output} <-
              command(
@@ -460,6 +654,15 @@ defmodule LemonCli.BotHttpsCommand do
            {:ok, report} when is_map(report) <- Jason.decode(output),
            do: {:ok, report}
     end
+  end
+
+  defp backend_command_env(saved, origin, opts) do
+    env =
+      Map.take(saved, ~w(LEMON_BOT_DATA_DIR LEMON_BOT_PORT LEMON_BOT_CONFIG_FILE))
+      |> Map.put("HOME", Role.home(opts))
+      |> Map.put("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
+
+    if origin, do: Map.put(env, "LEMON_BOT_PUBLIC_URL", origin), else: env
   end
 
   defp bot_executable(opts) do
@@ -497,7 +700,7 @@ defmodule LemonCli.BotHttpsCommand do
     |> Enum.map(&String.trim/1)
   end
 
-  defp merge_env(plan, file, opts) do
+  defp merged_env(plan, file, opts) do
     values =
       Map.new(@allowlists, fn key ->
         originals = entries(file, key, opts)
@@ -510,11 +713,7 @@ defmodule LemonCli.BotHttpsCommand do
         {key, Enum.join(items, ",")}
       end)
 
-    text = replace_env(file.text, values)
-
-    if text == file.text,
-      do: {:ok, false},
-      else: with(:ok <- write_env(text, opts), do: {:ok, true})
+    replace_env(file.text, values)
   end
 
   defp remove_owned_origins(state, file, opts) do
@@ -599,7 +798,7 @@ defmodule LemonCli.BotHttpsCommand do
       else
         with {:ok,
               %{
-                "schema" => 1,
+                "schema" => 2,
                 "origin" => origin,
                 "mode" => mode,
                 "added" => added,
@@ -607,6 +806,7 @@ defmodule LemonCli.BotHttpsCommand do
               } = state} <- Jason.decode(contents),
              {:ok, ^origin} <- OriginPolicy.canonical_https_origin(origin),
              true <- mode in ["url", "tailscale"] and phase in ["pending", "active"],
+             true <- valid_ownership?(state, origin),
              true <-
                is_map(added) and
                  Enum.all?(@allowlists, fn key ->
@@ -626,6 +826,17 @@ defmodule LemonCli.BotHttpsCommand do
     end
   end
 
+  defp valid_ownership?(state, origin) do
+    public = state["public_url"]
+    private = state["private_mcp"]
+
+    is_map(public) and is_boolean(public["owned"]) and
+      public["owned"] == public["original"] in [nil, ""] and
+      (public["original"] in [nil, ""] or canonical(public["original"]) == origin) and
+      is_map(private) and Role.absolute_safe?(private["path"]) and
+      Enum.all?(~w(added field_existed file_existed), &is_boolean(private[&1]))
+  end
+
   defp read_private(path, absent, limit) do
     case File.lstat(path) do
       {:ok, %{type: :regular, size: size}} when size <= limit -> File.read(path)
@@ -635,14 +846,22 @@ defmodule LemonCli.BotHttpsCommand do
   end
 
   defp write_state(state, opts), do: atomic(state_path(opts), Jason.encode!(state) <> "\n")
-  defp write_env(text, opts), do: atomic(env_path(opts), text)
+  defp write_env(text, opts), do: atomic_preserving(env_path(opts), text)
 
-  defp atomic(path, contents) do
+  defp atomic_preserving(path, contents) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular, mode: mode}} -> atomic(path, contents, Bitwise.band(mode, 0o7777))
+      {:error, :enoent} -> atomic(path, contents, 0o600)
+      _ -> {:error, "Refusing to replace a linked or non-regular configuration file."}
+    end
+  end
+
+  defp atomic(path, contents, mode \\ 0o600) do
     if File.read(path) == {:ok, contents} do
       :ok
     else
       with :ok <- File.mkdir_p(Path.dirname(path)),
-           :ok <- Unit.atomic_write(path, contents, 0o600),
+           :ok <- Unit.atomic_write(path, contents, mode),
            do: :ok
     end
   end

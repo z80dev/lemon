@@ -21,6 +21,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `status` reports readiness; `disable` removes only tool-owned configuration
   and routes while preserving other origins. Browser setup offers HTTPS as an
   explicit opt-in and keeps local-only access by default.
+  Managed HTTPS refuses source startup and remote-controller configurations
+  rather than checking the wrong runtime. It owns only its exact private MCP
+  approval, restores adopted public URLs, retains pending receipts after failed
+  reconfiguration, and preserves existing env-file permissions.
 - Lemon Bot backend tests and the web build/tests now gate CI and run in the
   changed-file/premerge lane. Web tests run in separate processes so module
   mocks cannot leak between suites.

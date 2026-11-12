@@ -57,6 +57,10 @@ Never share the controller operator token with clients.
   // Native SQLite/private-state imports must stay lazy so help/version remain portable.
   const { runReaddressCli } = await import('./cli/readdress');
   process.exitCode = await runReaddressCli(args.slice(1));
+} else if (args[0] === 'https-policy') {
+  // Transitive native SQLite/platform modules cannot load on every help/version host.
+  const { runHttpsPolicyCli } = await import('./cli/https-policy');
+  process.exitCode = await runHttpsPolicyCli(args.slice(1));
 } else if (args[0] === 'setup') {
   // Private-state and platform imports must remain lazy for help/version.
   const { runSetupCli } = await import('./setup-cli');

@@ -50,7 +50,13 @@ defmodule LemonCli.ServiceCommandTest do
     File.mkdir_p!(Path.dirname(bot))
     File.write!(bot, "#!/bin/sh\nexit 0\n")
     File.chmod!(bot, 0o700)
-    env = %{"LEMON_BOT_PUBLIC_URL" => "https://old.example"}
+
+    env = %{
+      "LEMON_BOT_PUBLIC_URL" => "https://old.example",
+      "LEMON_BOT_CONFIG_FILE" => Path.join(opts[:home], "operator.json"),
+      "LEMON_BOT_CONTROL_URL" => "ws://127.0.0.1:4040/ws"
+    }
+
     {:ok, saved} = Role.build("backend", "launchd", Keyword.put(opts, :env, env))
     :ok = Unit.write(saved, "launchd")
 
@@ -74,6 +80,8 @@ defmodule LemonCli.ServiceCommandTest do
       assert {:ok, _} = LemonCore.Service.install(["backend"], options)
       assert {:ok, parsed} = Unit.read(saved.path, "launchd")
       assert parsed.env["LEMON_BOT_PUBLIC_URL"] == expected
+      assert parsed.env["LEMON_BOT_CONFIG_FILE"] == env["LEMON_BOT_CONFIG_FILE"]
+      assert parsed.env["LEMON_BOT_CONTROL_URL"] == env["LEMON_BOT_CONTROL_URL"]
     end
   end
 

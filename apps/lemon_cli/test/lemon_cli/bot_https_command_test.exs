@@ -16,6 +16,11 @@ defmodule LemonCli.BotHttpsCommandTest do
     opts = [
       home: home,
       env: %{},
+      mcp_policy: fn origin, _ ->
+        {:ok,
+         %{"origin" => origin, "allowedOrigins" => [origin], "approvedPrivateOrigins" => [origin]}}
+      end,
+      mcp_resolver: fn _ -> {:ok, [{100, 64, 0, 1}]} end,
       backend_env: fn -> {:ok, Agent.get(backend, & &1)} end,
       lock: fn fun -> fun.() end,
       service_install: fn roles, options ->
@@ -60,6 +65,213 @@ defmodule LemonCli.BotHttpsCommandTest do
     ]
 
     {:ok, home: home, opts: opts, calls: calls}
+  end
+
+  test "MCP verification invokes the actual backend policy without runtime cache writes or credentials",
+       %{home: home, opts: opts} do
+    parent = self()
+
+    opts =
+      opts
+      |> Keyword.delete(:mcp_policy)
+      |> Keyword.put(:command, fn
+        [_bot, "https-policy", "--origin", origin, "--json"], options ->
+          send(parent, {:policy_environment, options[:command_env]})
+
+          {:ok,
+           Jason.encode!(%{
+             "origin" => origin,
+             "allowedOrigins" => [origin],
+             "approvedPrivateOrigins" => [origin]
+           })}
+      end)
+
+    assert {:ok, _} = HTTPS.execute(["enable", "--url", "https://bot.example"], opts)
+    assert_received {:policy_environment, environment}
+    assert environment["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] == "0"
+    assert environment["HOME"] == home
+    assert environment["LEMON_BOT_PUBLIC_URL"] == "https://bot.example"
+    refute Map.has_key?(environment, "LEMON_BOT_OPERATOR_TOKEN")
+  end
+
+  test "managed private MCP approval is exact, owned, and execution-verified", %{
+    home: home,
+    opts: opts
+  } do
+    config = Path.join(home, ".lemon/lemon_bot/config.json")
+    File.mkdir_p!(Path.dirname(config))
+
+    original = %{
+      "version" => 1,
+      "approvedPrivateMcpOrigins" => ["https://other.example"],
+      "trustedFrontendOrigins" => ["https://frontend.example"]
+    }
+
+    File.write!(config, Jason.encode!(original))
+    assert {:ok, _} = HTTPS.execute(["enable", "--url", "https://bot.example"], opts)
+
+    assert Jason.decode!(File.read!(config))["approvedPrivateMcpOrigins"] == [
+             "https://other.example",
+             "https://bot.example"
+           ]
+
+    assert {:ok, _} = HTTPS.execute(["disable"], opts)
+    assert Jason.decode!(File.read!(config)) == original
+
+    denied =
+      Keyword.put(opts, :mcp_policy, fn origin, _ ->
+        {:ok, %{"origin" => origin, "allowedOrigins" => [origin], "approvedPrivateOrigins" => []}}
+      end)
+
+    assert {:error, message} = HTTPS.execute(["enable", "--url", "https://bot.example"], denied)
+    assert message =~ "MCP"
+
+    assert Jason.decode!(File.read!(Path.join(home, ".lemon/bot-https.json")))["phase"] ==
+             "pending"
+  end
+
+  test "saved remote controller refuses before any local mutation or readiness check", %{
+    home: home,
+    opts: opts,
+    calls: calls
+  } do
+    directory = Path.join(home, ".lemon/lemon_bot")
+    File.mkdir_p!(directory)
+
+    File.write!(
+      Path.join(directory, "controller.json"),
+      Jason.encode!(%{
+        "version" => 1,
+        "mode" => "remote",
+        "url" => "wss://remote.example/ws",
+        "token" => "never-display-this"
+      })
+    )
+
+    opts =
+      Keyword.put(opts, :controller_check, fn _ ->
+        flunk("must not verify a different local controller")
+      end)
+
+    assert {:error, message} = HTTPS.execute(["enable", "--url", "https://bot.example"], opts)
+    assert message =~ "remote controller"
+    refute message =~ "never-display-this"
+    assert Agent.get(calls, & &1) == []
+    refute File.exists?(Path.join(home, ".lemon/bot-https.json"))
+    assert {:ok, %{controller: "not confirmed"}} = HTTPS.execute(["status"], opts)
+  end
+
+  test "local controller selection uses the backend's saved port", %{opts: opts} do
+    parent = self()
+
+    opts =
+      opts
+      |> Keyword.put(:backend_env, %{"LEMON_CONTROL_PLANE_PORT" => "5050"})
+      |> Keyword.delete(:controller_check)
+      |> Keyword.put(:rpc, fn _, _, rpc_opts ->
+        send(parent, {:controller_url, rpc_opts[:url]})
+
+        {:ok,
+         %{
+           "botPublicOrigin" => "https://bot.example",
+           "checks" => [%{"name" => "bot.admission_origins", "status" => "pass"}]
+         }}
+      end)
+
+    assert {:ok, _} = HTTPS.execute(["enable", "--url", "https://bot.example"], opts)
+    assert_received {:controller_url, "ws://127.0.0.1:5050/ws"}
+  end
+
+  test "adopting a preexisting public URL and MCP approval restores both", %{
+    home: home,
+    opts: opts,
+    calls: calls
+  } do
+    previous = "https://BOT.example:443"
+    opts = Keyword.put(opts, :backend_env, %{"LEMON_BOT_PUBLIC_URL" => previous})
+    config = Path.join(home, ".lemon/lemon_bot/config.json")
+    File.mkdir_p!(Path.dirname(config))
+
+    File.write!(
+      config,
+      Jason.encode!(%{"version" => 1, "approvedPrivateMcpOrigins" => ["https://bot.example"]})
+    )
+
+    assert {:ok, _} = HTTPS.execute(["enable", "--url", "https://bot.example"], opts)
+    state = Jason.decode!(File.read!(Path.join(home, ".lemon/bot-https.json")))
+    assert state["public_url"] == %{"original" => previous, "owned" => false}
+    assert {:ok, %{address: "https://bot.example"}} = HTTPS.execute(["disable"], opts)
+    assert {:install, ["backend"], previous} in Agent.get(calls, & &1)
+
+    assert Jason.decode!(File.read!(config))["approvedPrivateMcpOrigins"] == [
+             "https://bot.example"
+           ]
+  end
+
+  test "source mode refuses before side effects and points at the manual appendix", %{
+    home: home,
+    opts: opts,
+    calls: calls
+  } do
+    opts = Keyword.put(opts, :env, %{"LEMON_CLI_LAUNCHER" => "source"})
+    assert {:error, message} = HTTPS.execute(["enable", "--tailscale"], opts)
+    assert message =~ "source"
+    assert message =~ "manual-https-setup"
+    assert Agent.get(calls, & &1) == []
+    refute File.exists?(Path.join(home, ".lemon/bot-https.json"))
+    refute File.exists?(Path.join(home, ".lemon/env"))
+  end
+
+  test "failed reconfiguration persists pending and retry reapplies services", %{
+    home: home,
+    opts: opts,
+    calls: calls
+  } do
+    assert {:ok, _} = HTTPS.execute(["enable", "--url", "https://bot.example"], opts)
+
+    File.write!(
+      Path.join(home, ".lemon/env"),
+      "#{@native}=http://127.0.0.1:4100\n#{@cron}=http://127.0.0.1:4100\n"
+    )
+
+    failing =
+      Keyword.put(opts, :controller_restart, fn _ ->
+        assert Jason.decode!(File.read!(Path.join(home, ".lemon/bot-https.json")))["phase"] ==
+                 "pending"
+
+        {:error, :failed}
+      end)
+
+    assert {:error, _} = HTTPS.execute(["enable", "--url", "https://bot.example"], failing)
+
+    assert Jason.decode!(File.read!(Path.join(home, ".lemon/bot-https.json")))["phase"] ==
+             "pending"
+
+    before_retry = length(Agent.get(calls, & &1))
+
+    assert {:ok, %{changed: true}} =
+             HTTPS.execute(["enable", "--url", "https://bot.example"], opts)
+
+    assert length(Agent.get(calls, & &1)) > before_retry
+
+    assert Jason.decode!(File.read!(Path.join(home, ".lemon/bot-https.json")))["phase"] ==
+             "active"
+  end
+
+  test "env replacement preserves existing permissions and new env defaults private", %{
+    home: home,
+    opts: opts
+  } do
+    path = Path.join(home, ".lemon/env")
+    File.write!(path, "# keep mode\n")
+    File.chmod!(path, 0o640)
+    assert {:ok, _} = HTTPS.execute(["enable", "--url", "https://bot.example"], opts)
+    assert Bitwise.band(File.stat!(path).mode, 0o7777) == 0o640
+    assert {:ok, _} = HTTPS.execute(["disable"], opts)
+    assert Bitwise.band(File.stat!(path).mode, 0o7777) == 0o640
+    File.rm!(path)
+    assert {:ok, _} = HTTPS.execute(["enable", "--url", "https://bot.example"], opts)
+    assert Bitwise.band(File.stat!(path).mode, 0o7777) == 0o600
   end
 
   test "enable twice is unchanged and disable removes only owned origins", %{
@@ -248,13 +460,20 @@ defmodule LemonCli.BotHttpsCommandTest do
     origin = "https://machine.example.ts.net:8443"
 
     state = %{
-      "schema" => 1,
+      "schema" => 2,
       "phase" => "active",
       "origin" => origin,
       "mode" => "tailscale",
       "port" => 8443,
       "target" => "http://127.0.0.1:4100",
-      "added" => %{@native => [origin], @cron => [origin]}
+      "added" => %{@native => [origin], @cron => [origin]},
+      "public_url" => %{"original" => nil, "owned" => true},
+      "private_mcp" => %{
+        "path" => Path.join(home, ".lemon/lemon_bot/config.json"),
+        "added" => true,
+        "field_existed" => false,
+        "file_existed" => false
+      }
     }
 
     File.write!(Path.join(home, ".lemon/bot-https.json"), Jason.encode!(state))
@@ -333,6 +552,12 @@ defmodule LemonCli.BotHttpsCommandTest do
 
     assert {:ok, %{address: "https://machine.example.ts.net:8444"}} =
              HTTPS.execute(["enable", "--tailscale"], opts)
+
+    config = Path.join(opts[:home], ".lemon/lemon_bot/config.json")
+
+    assert Jason.decode!(File.read!(config))["approvedPrivateMcpOrigins"] == [
+             "https://machine.example.ts.net:8444"
+           ]
 
     assert {:ok, %{changed: false}} = HTTPS.execute(["enable", "--tailscale"], opts)
     assert {:ok, _} = HTTPS.execute(["disable"], opts)

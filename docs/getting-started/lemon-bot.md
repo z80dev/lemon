@@ -253,6 +253,11 @@ from another browser; network/tailnet access alone is not sign-in authority.
 
 ### Give Lemon Bot an HTTPS address
 
+Managed HTTPS requires an **installed release and a local controller**. Source
+startup does not load `~/.lemon/env`, and a backend's saved remote controller
+cannot be configured from this machine; those cases refuse without changing
+configuration. Use the [manual appendix](#appendix-manual-https-setup) instead.
+
 Run on the computer that runs Lemon Bot:
 
 ```bash
@@ -260,8 +265,11 @@ lemon bot https enable --tailscale
 ```
 
 This configures Tailscale Serve for the loopback Bot backend, saves its HTTPS
-origin, updates both controller callback allowlists, and refreshes the managed
-services. Tailscale must already be installed and connected. It uses private
+origin, updates both controller callback allowlists, approves exactly that origin
+for the backend's first-party private MCP tools in its existing operator
+configuration, and refreshes the managed services. It verifies instance identity,
+controller admission and execution's MCP destination policy before marking the
+receipt active. Tailscale must already be installed and connected. It uses private
 tailnet access, **not Funnel**; it does not expose the controller operator port
 4040. Devices still need to sign in to Lemon Bot.
 
@@ -286,8 +294,9 @@ lemon bot https disable
 ```
 
 Disable removes only entries and routes owned by this tool; it preserves other
-configured origins and unrelated Tailscale routes. It does not tear down an
-independently configured reverse proxy.
+configured origins and unrelated Tailscale routes, and restores a public URL that
+was already configured before enable. It preserves existing env-file permissions
+and does not tear down an independently configured reverse proxy.
 
 **Bots created before the address changed will not reply at the new URL until
 their addresses are updated.** The enable summary and `lemon bot https status`
@@ -347,7 +356,7 @@ For terminal-assisted pairing, see
 The CLI above is the recommended workflow. The original manual procedure is
 retained below for operators managing the route and services themselves.
 
-Do all three steps on the computer that runs Lemon Bot. The examples use
+Apply these four steps to the backend and its actual controller. The examples use
 `https://mac.example.ts.net:8443`; use your own machine's exact origin.
 
 1. **Route HTTPS to the backend.** With Tailscale, inspect existing routes first
@@ -374,6 +383,13 @@ Do all three steps on the computer that runs Lemon Bot. The examples use
    allowlists to `~/.lemon/env`, which the `lemon` launcher and its controller
    service read, then restart:
 
+   This file is loaded by the **installed-release launcher**, not source mode.
+   For a source controller, put these variables in its existing
+   `$LEMON_DOTENV_DIR/.env` (default: the startup working directory's `.env`),
+   or explicitly export them in the environment that starts that controller.
+   If the Bot uses a remote controller, configure and restart **that controller**,
+   not a different local instance.
+
    ```bash
    cat >> "$HOME/.lemon/env" <<'EOF'
    export LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS=https://mac.example.ts.net:8443,http://127.0.0.1:4100
@@ -385,3 +401,16 @@ Do all three steps on the computer that runs Lemon Bot. The examples use
    Each entry is an exact origin: scheme, host and port, with no path or
    trailing slash. Setting a variable replaces the default, so keep
    `http://127.0.0.1:4100` for Bots created before the change.
+
+4. **Approve the private MCP destination on the backend.** Add the exact HTTPS
+   origin to `approvedPrivateMcpOrigins` in its existing operator config
+   (`LEMON_BOT_CONFIG_FILE`, or `~/.lemon/lemon_bot/config.json` under the selected
+   `LEMON_BOT_DATA_DIR`). Preserve every other field and approval. For a new file:
+
+   ```json
+   {"version":1,"approvedPrivateMcpOrigins":["https://mac.example.ts.net:8443"]}
+   ```
+
+   Then restart Lemon Bot with `lemon service install backend --restart-backend`.
+   HTTPS identity and callback admission alone do not approve private MCP tool
+   connections; this exact-origin approval is also required for tailnet access.
