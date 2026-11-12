@@ -1,0 +1,8 @@
+{
+  "id": "repo_parcel_hold",
+  "language": "go",
+  "category": "feature",
+  "difficulty": "hard",
+  "timeout_s": 900,
+  "prompt": "Add durable parcel holds across the existing model, JSON snapshot storage,\nservice, HTTP API and CLI. This is a five-layer feature: holds must survive\nreopening the store, appear on existing reads, and be changed through the same\nservice by both clients. Do not replace the application or add a separate hold\ndatabase. Follow every public signature, JSON/error shape, normalization rule,\nidempotency rule, revision rule and persistence guarantee in README's Hold\nfeature contract. In particular use service.Desk.PlaceHold and ReleaseHold,\nPOST/DELETE /v1/parcels/{id}/hold, and CLI hold/release. Hold values must be copied\nat storage boundaries, old snapshots must remain readable, and save failures\nmust not publish partially changed in-memory state. Update operator/storage\ndocumentation for the commands and durable behavior.\n\nVisible tests: `go test ./...`.\n"
+}

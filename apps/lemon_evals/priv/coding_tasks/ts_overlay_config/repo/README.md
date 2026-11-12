@@ -1,0 +1,19 @@
+# Layered service configuration
+
+Implement the layered merge in src/merge.ts and preserve the public API used by src/service.ts.
+
+## Contract
+
+- mergeConfig(base, ...overlays) returns a fresh ConfigObject. Apply overlays left to right, using only own enumerable string keys. All inputs are JSON-like plain objects; base and array contents contain only ConfigValue values. Overlay object properties may additionally contain undefined or the exported DELETE symbol. DELETE and undefined never occur inside arrays.
+- An object patch recursively merges with an existing object. If the previous value is missing, scalar, null, or an array, merge that patch with an empty object instead. Empty object patches therefore preserve an existing object but replace a non-object with {}.
+- Scalars and null replace the old value. Arrays replace, never concatenate or merge by index. Clone arrays, their nested arrays, and their object contents recursively.
+- DELETE removes that property, including when its previous value is null; deleting a missing property is harmless. undefined ignores the property entirely, even when missing. These sentinels must never appear in the result.
+- Do not mutate any input or retain any mutable object/array reference from any input. This applies even without overlays and to unchanged branches. Mutating the returned tree must not affect inputs, and mutating inputs later must not affect the result.
+- Treat keys literally, including __proto__, constructor, and toString. Such keys must be ordinary own data properties, not prototype operations. Results are ordinary objects with Object.prototype as prototype.
+- resolveServiceConfig(source, environment, overrides = {}) applies source.defaults, then the named source.environments entry, then overrides, with the same merge semantics. Only an own environment entry exists; otherwise throw RangeError with message "Unknown environment: " followed by the name. Do not mutate source or overrides.
+
+The exported DELETE symbol is the deletion marker; the string "DELETE" is an ordinary string. Inputs are valid for the declared types; validation of other input shapes is not required. Object key ordering is not part of the API.
+
+## Commands
+
+Node 22 with erasable TypeScript syntax is required. Run node --test test/*.test.ts. There are no dependencies to install.

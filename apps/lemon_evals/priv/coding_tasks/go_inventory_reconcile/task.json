@@ -1,0 +1,7 @@
+{
+  "id": "go_inventory_reconcile",
+  "language": "go",
+  "category": "data",
+  "difficulty": "medium",
+  "prompt": "Implement inventory.Reconcile(opening map[string]int64, events []Event) ([]Balance, error). Movement events have globally unique nonempty ID, Kind \"receive\" or \"ship\", nonempty SKU, positive Quantity, and empty Ref. A \"cancel\" event has a nonempty unique ID, empty SKU, Quantity 0, and Ref naming exactly one movement ID in this batch; it may precede the movement. A movement may be canceled at most once. Canceling a missing ID or a cancellation is invalid. Compute opening + uncanceled receives - uncanceled shipments independently of event ordering. Opening keys must be nonempty and balances nonnegative. Reject any invalid event, duplicate ID, or negative FINAL balance with (nil, error matching ErrInvalid). Intermediate negative balances are fine. All sums of absolute quantities plus opening balances in a SKU fit int64. Return one Balance per SKU appearing in opening or ANY movement, including canceled movements and zero balances; sort by SKU ascending. Empty input returns nil,nil. Neither input may be modified. Add regression tests, preserving the public API."
+}

@@ -1,0 +1,7 @@
+{
+  "id": "repo_reconcile_tests",
+  "language": "python",
+  "category": "test_writing",
+  "difficulty": "hard",
+  "prompt": "Add a robust unittest regression suite for the currently untested `settler.reconcile.reconcile` contract in README.md. Put all new tests in `tests/test_reconcile.py`; use only Python's standard library, and make no other repository changes. The suite is run as `python3 -m unittest discover -s tests -p test_reconcile.py -v` from the repository root.\nYour tests must pass the documented implementation and detect each of these independent regression classes: choosing the smallest revision; grouping by entry_id without account; retaining the first occurrence of equal revisions; treating expires_at == now as still active; ignoring void flags; discarding negative amounts; returning zero balances; consuming a one-shot iterable twice; omitting validation of negative now or invalid entries; returning account insertion order rather than sorted order. Exercise the documented edge cases and avoid depending on private implementation details. The production implementation is intentionally already correct. Tests should be deterministic and must not alter production files, use the network or install packages."
+}

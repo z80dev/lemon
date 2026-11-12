@@ -1,0 +1,7 @@
+{
+  "id": "go_segment_router",
+  "language": "go",
+  "category": "performance",
+  "difficulty": "hard",
+  "prompt": "Optimize routes.Table's longest-prefix routing for large multitenant configurations while preserving its API and semantics. Rule.Prefix and Lookup input must be absolute paths (start with /) and must contain none of ?, #, or NUL; other bytes, including percent signs, are literal and case-sensitive. Canonicalize with path.Clean (collapse duplicate slashes, dot/dot-dot segments, and trailing slash). New rejects invalid prefixes or empty NextHop with nil table and an error matching ErrInvalid, and must not mutate/retain mutable caller slices. Rules match only whole segment boundaries; / matches every valid path. Choose the longest matching canonical prefix; duplicate canonical prefixes choose highest Priority, then earliest input on ties. Lookup returns empty,false for invalid/unmatched paths. Empty tables are valid. Lookup may be called concurrently after construction. Replace per-lookup scanning with an index: construction should be near-linear in total prefix bytes and lookups proportional to path bytes, not rule count. A scale test uses 200,000 tenant routes and 80,000 lookups with a generous 25-second Go-test timeout; linear scans cannot finish. Do not introduce workload-specific shortcuts. Preserve behavior and add correctness tests."
+}

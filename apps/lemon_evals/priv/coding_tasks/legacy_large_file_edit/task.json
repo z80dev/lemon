@@ -1,0 +1,7 @@
+{
+  "id": "legacy_large_file_edit",
+  "language": "python",
+  "category": "bug_fix",
+  "difficulty": "easy",
+  "prompt": "Fix lookup('target') in catalog.py to return 999999 instead of -1. Preserve every other catalog entry and formatting; this is a targeted edit in a large file. Use Python standard-library unittest for any tests; do not install dependencies."
+}

@@ -1,0 +1,7 @@
+{
+  "id": "py_booking_windows",
+  "language": "python",
+  "category": "bug_fix",
+  "difficulty": "easy",
+  "prompt": "Fix Calendar.conflicts(room, start, end) in the meeting-room service. Times are integer minutes and bookings occupy half-open intervals [start,end): touching endpoints do not conflict. Return every active overlapping booking for the requested room as a list of booking IDs, ordered by (start, id). Cancelled bookings and other rooms never conflict. Empty calendars return []. A query with start >= end raises ValueError, even for an empty calendar. Existing Booking records have valid intervals and unique string IDs. Do not mutate bookings or their insertion order. Keep the existing public Booking and Calendar APIs. Run the visible tests and add regression coverage as appropriate."
+}

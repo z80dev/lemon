@@ -1,0 +1,7 @@
+{
+  "id": "rs_record_sinks",
+  "language": "rust",
+  "category": "refactor",
+  "difficulty": "hard",
+  "prompt": "Refactor the ledger report crate so applications can stream the same validated report into a custom sink. Preserve render_csv and render_jsonl output exactly. Introduce and re-export RecordSink, EmitError and emit_report with the exact API and callback/error semantics specified in README.md. The existing built-in CsvSink and JsonLinesSink must implement RecordSink; both legacy render functions must use the single shared emit_report aggregation/traversal (remove their duplicated aggregation logic). Validation must complete before any sink callback, and sink failures must stop immediately without finish. Do not add bounds such as Clone, Display or Send to a sink's error. Add tests covering an external sink and update README.md with a usage example."
+}

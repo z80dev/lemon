@@ -1,0 +1,8 @@
+{
+  "id": "repo_ci_contracts",
+  "language": "typescript",
+  "category": "debugging",
+  "difficulty": "medium",
+  "prompt": "Warehouse Desk's CI contract check is failing after an inventory API merge. Fix implementation contract violations rather than weakening or bypassing CI. Preserve scripts/check-contracts.ts and scripts/ci.ts byte-for-byte, preserve the package.json ci command, and do not remove, disable or loosen existing tests. Update README and changelog to describe the fixes.\n\nThe expected route table, source conventions, authorization, error shapes, stock/reservation state machine and audit contracts are all specified in README. Repair the implementation so `node scripts/ci.ts` and `node --test tests/*.test.ts` both succeed. The checker intentionally combines source lint-like conventions and route metadata checks; it is not the entire specification. Fulfill/cancel behavior, integer validation, error mapping and injected audit timestamps must also be correct. Keep the eight routes and public createApp/createContext APIs, use the context clock rather than wall time, and route mutations through actor authorization. Do not hardcode CI output or special-case test inputs.\n\nUse Node 22 built-in TypeScript stripping and .ts imports only; no packages, compiler or network access. Run the demo with `node scripts/demo.ts`.",
+  "timeout_s": 900
+}

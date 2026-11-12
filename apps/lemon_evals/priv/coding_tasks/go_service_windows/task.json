@@ -1,0 +1,7 @@
+{
+  "id": "go_service_windows",
+  "language": "go",
+  "category": "bug_fix",
+  "difficulty": "easy",
+  "prompt": "Fix windows.Normalize in this maintenance-window library. Windows are half-open integer-second intervals [Start, End). Normalize must reject any Start >= End with (nil, ErrInvalid), including an invalid interval after otherwise valid entries; accept nil/empty input and return nil, nil; sort by start then end; and merge overlapping OR touching intervals into a minimal sorted list. It must not modify the input slice or its elements, and the returned slice must not alias it. Preserve the exported API. Do not use arithmetic that overflows at int64 endpoints. Add regression tests and update README with the corrected behavior."
+}

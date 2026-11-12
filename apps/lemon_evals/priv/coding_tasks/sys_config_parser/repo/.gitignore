@@ -1,0 +1,3 @@
+*.o
+config_dump
+test_config

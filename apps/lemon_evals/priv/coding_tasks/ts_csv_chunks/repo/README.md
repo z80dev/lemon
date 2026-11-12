@@ -1,0 +1,21 @@
+# Streaming CSV imports
+
+The import service receives decoded text in arbitrary chunks. Implement CsvParser in src/parser.ts and CsvTable in src/table.ts while retaining the exports in src/index.ts.
+
+## Parser API
+
+new CsvParser(options?: { delimiter?: string }); write(chunk: string): string[][]; finish(): string[][]. All strings and offsets are UTF-16 code units, not bytes. The default delimiter is comma. A supplied delimiter must have length exactly one and cannot be double quote, CR, or LF; otherwise the constructor throws RangeError("delimiter must be one character other than quote or newline"). Other input types are outside the contract.
+
+write returns only records completed during that call. finish returns the final unterminated record if one exists. Empty input (including any number of empty writes) produces no records. A blank line is one record containing one empty field. A trailing delimiter creates a final empty field. A final record separator does not create an extra record. finish after successful finish returns []; any write, including an empty write, after successful finish throws CsvError with code CLOSED and the total consumed offset.
+
+Fields are separated by the chosen delimiter; records by LF, CR, or CRLF. CRLF is one separator even when split between writes. A record ending in CR is returned immediately by that write, not delayed until the next chunk. A quoted field starts with double quote only at the beginning of a field. Inside it, all characters including delimiters, CR and LF are literal, except a doubled double quote represents one double quote. A closing quote may be followed only by a delimiter, record separator, or EOF. There is no trimming, comment syntax, BOM handling, backslash escaping, or Unicode normalization. Split quoted text, escaped quote pairs, closing quotes, and separators must work across arbitrary chunk boundaries.
+
+Syntax errors throw exported CsvError (name "CsvError") with readonly code and offset properties and message "CODE at offset N": UNEXPECTED_QUOTE for a quote in an unquoted field; AFTER_QUOTE for any invalid character after a closing quote (including spaces); UNTERMINATED_QUOTE when finish reaches EOF while inside a quoted field. offset is the zero-based offending character's absolute index, or total text length at EOF. After a syntax error, all subsequent write/finish calls rethrow the exact same error object. A call that throws returns no partial output. CLOSED is a lifecycle error, not a syntax error.
+
+## Header/schema consumer
+
+new CsvTable(options?: CsvOptions) has write(chunk: string): Record<string,string>[] and finish(): Record<string,string>[]. It uses the first CSV record as column headers, emits no object for that record, and returns one ordinary own-property object per later record. Header strings are used verbatim, including __proto__ and constructor. Every header must be nonempty and unique (case-sensitive). Every data record must have exactly the header count. No records is a valid empty table; a header-only table emits no data. The same streaming/finalization semantics as CsvParser apply.
+
+Export CsvSchemaError (name "CsvSchemaError") with readonly code and record properties and message "CODE at record N". Logical records are numbered from 1, with headers at 1; embedded quoted newlines do not increment this counter. Empty header fields throw EMPTY_HEADER; duplicate header strings throw DUPLICATE_HEADER. Check headers from left to right, checking each field for emptiness before duplication. A data width mismatch throws ROW_WIDTH. CsvTable preserves CsvError objects from its parser. Once any parser or schema error escapes a table method, every later table call rethrows that same object. No rows from a throwing call are returned.
+
+Keep the typed public API and the errors' properties. Use no dependencies. Node 22 can run the erasable TypeScript directly: node --test test/*.test.ts.

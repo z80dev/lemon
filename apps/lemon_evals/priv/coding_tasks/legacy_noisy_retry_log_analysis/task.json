@@ -1,0 +1,7 @@
+{
+  "id": "legacy_noisy_retry_log_analysis",
+  "language": "python",
+  "category": "data",
+  "difficulty": "hard",
+  "prompt": "Investigate logs/worker.jsonl and repair analyze.py according to README.md. Correctly distinguish noise, malformed records, duplicate delivery, retry recovery, pending work, and final-attempt root causes. Preserve the JSON CLI and add unittest regression coverage; implement the general analyzer, not a fixed report for this log. Use Python standard-library unittest for any tests; do not install dependencies."
+}

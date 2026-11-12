@@ -1,0 +1,7 @@
+{
+  "id": "go_release_manifest",
+  "language": "go",
+  "category": "parsing",
+  "difficulty": "medium",
+  "prompt": "Replace manifest.Parse's simplistic parser with the release-manifest grammar. Parse(io.Reader) returns []Entry in source order. Physical lines use LF or CRLF; the final newline is optional; there is no line-length limit. Outside values only ASCII space and tab are whitespace. Ignore blank lines and lines whose first non-whitespace byte is #. Assignments are key = value with optional whitespace around =. Keys match [a-z][a-z0-9_.-]* and must be unique. A bare value is a nonempty token of ASCII letters, digits, underscore, dot, slash, colon or hyphen. A double-quoted value may be empty and contains valid UTF-8 text, with no raw bytes below 0x20 or 0x7f; support only escapes backslash-backslash, backslash-double-quote, backslash-n and backslash-t (the latter two decode to newline/tab). No multiline values. After a value allow spaces/tabs and optionally # plus arbitrary UTF-8 comment text; # may directly follow the value. All physical lines, including comments, must be valid UTF-8. On any syntax/duplicate/UTF-8 error return nil and *ParseError with the 1-based physical Line and a nonempty Message. Reader errors other than EOF return nil and an error preserving errors.Is for the original error. Empty/comment-only input returns nil,nil. Do not silently accept partial results. Preserve existing types and add tests."
+}

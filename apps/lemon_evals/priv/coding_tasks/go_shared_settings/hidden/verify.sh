@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export GOMAXPROCS=2
+cp /verify/hidden_test.go /work/hidden_test.go
+go test ./...
+go vet ./...

@@ -248,6 +248,86 @@ Default reasoning/configuration remains harness-specific; this is an empirical
 workflow comparison, not a controlled model ranking. `--tasks NAME,NAME` selects
 specific cases for an intentional targeted trial.
 
+### Isolated arena: Lemon vs omp in fresh containers
+
+`priv/coding_arena/arena.py` runs the same comparison under isolation: every
+trial (task × agent × repetition) gets a fresh Docker container that contains
+only that task's fixture repository at `/work` and that agent's own empty HOME.
+Agents never see each other's work, earlier trials, Lemon memory, or the
+operator's configuration. Hidden verifier files are copied in only after the
+agent exits. Tasks live in `priv/coding_tasks/<id>/` (`task.json`, `repo/`,
+`hidden/verify.sh`, and a `solution/` overlay or `solution.answer`).
+
+Model traffic goes through `priv/coding_arena/kimi_auth_proxy.ts` on the host.
+Each trial holds only an HS256 token naming its trial; the proxy swaps it for
+the operator's real credential, taken from omp: the Kimi Code login
+(`omp token kimi-code`) on `/coding/...`, the Z.AI key (`omp token zai`) on
+`/zai/...`, and the ChatGPT Codex login (`omp token openai-codex`) on
+`/chatgpt/...`. omp keeps sole ownership of OAuth refresh. Codex clients read
+the account id from their bearer JWT, so Codex trial tokens carry a placeholder
+account claim and the proxy sends the real `chatgpt-account-id`. The proxy logs
+per-request provider, model, request shape sizes, effort, status and
+wire-reported token usage without content (uncached input, cache reads and
+output, normalized across Anthropic, chat-completions and Responses streams;
+`usage_missing` marks streams that carried none). Reports use that wire usage,
+so all agents share one accounting.
+
+```bash
+cd apps/lemon_evals/priv/coding_arena
+docker build -f base.Dockerfile -t lemon-arena-base .
+(cd ../../../.. && docker build -f docker/Dockerfile.runtime --target build -t lemon-arena-build .)
+docker build -f lemon.Dockerfile -t lemon-arena-lemon .
+docker build -f omp.Dockerfile --build-arg OMP_VERSION="$(omp --version | cut -d/ -f2)" -t lemon-arena-omp .
+python3 arena.py validate                  # fixture fails, reference solution passes
+
+export ARENA_PROXY_SECRET="$(openssl rand -hex 32)"   # shared by proxy and runner only
+bun kimi_auth_proxy.ts --port 18787 --log /OPERATOR/PATH/proxy.jsonl &
+python3 arena.py run --output-dir /OPERATOR/PATH/run --models k3.1-pro=10,glm-5.3=3,gpt-6.1-terra=6 \
+  --thinking high --repetitions 3 --proxy-log /OPERATOR/PATH/proxy.jsonl
+python3 arena.py report --output-dir /OPERATOR/PATH/run --proxy-log /OPERATOR/PATH/proxy.jsonl
+```
+
+`run` is resumable: `results.jsonl` gains one row per finished trial and reruns
+skip recorded trials (`--retry-infrastructure` re-runs container/harness
+failures). Per-trial `agent.stdout`, `changes.diff` and `verify.log` stay in the
+operator-chosen run directory and may contain model output.
+
+After fixing a task's hidden verifier, `arena.py reverify --output-dir RUN
+--tasks a,b` replays every recorded trial of those tasks (all arms) from its
+`changes.diff` onto a fresh fixture, runs the current verifier, and appends the
+re-scored row with `original_passed`/`original_failure` kept. Go hidden tests
+prefix their identifiers with `ArenaHidden`/`arenaHidden` so they cannot collide
+with tests the agent adds to the same package.
+
+The unit of comparison is a (task, repetition) group holding every agent arm,
+and a group always runs on one model. `--models` lists model pools in
+preference order, each with its own concurrency budget; all pools run at once.
+`groups.json` records each group's model, chosen when its first arm starts: the
+first pool with a free slot and quota (for Kimi, until its 5-hour window
+reaches `--kimi-usage-limit`). Every arm and every retry of a group runs on the
+group's model. A trial that saw an upstream 429 is recorded as an infrastructure
+failure, the model pauses until a tiny probe request succeeds, the trial is
+retried on the same model, and a non-Kimi pool's budget drops by one (floor 2;
+Z.AI throttles concurrent requests with 429 code 1302). A group whose model is
+out of quota waits for it; only after `--reassign-after` seconds is an
+unfinished group moved to another model, with its recorded rows archived in
+`results-archive.jsonl` and all its arms rerun. Groups with no scored rows yet
+move freely.
+
+Each harness reaches a model the way it normally does, which is part of what is
+measured: Kimi arms use `kimi_coding`/`kimi-code`; for `glm-5.3` Lemon uses Z.AI's
+chat-completions coding endpoint and omp its Anthropic-compatible endpoint; for
+`gpt-6.1-terra` both use the Codex Responses endpoint (Lemon's `openai-codex`
+provider with `auth_source = "api_key"`; omp with `PI_CODEX_WEBSOCKET=0`, because
+its default WebSocket transport cannot pass through the HTTP proxy). omp's model
+roles all point at the group's model so its subagents cannot switch models.
+
+The report is per model: pass rates with Wilson intervals, an exact McNemar
+test over same-model (task, repetition) pairs, failure modes, tool calls and
+median wall time, request count and wire tokens. A pooled section covers only
+complete groups, so every arm faces the same model mix, followed by breakdowns
+by model, category, language and difficulty and a per-task, per-model table.
+
 ### Profiling Lemon's per-turn token consumers
 
 Use a dedicated source-development daemon, never an existing user's daemon.

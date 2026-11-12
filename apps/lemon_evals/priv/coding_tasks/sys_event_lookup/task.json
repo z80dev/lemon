@@ -1,0 +1,7 @@
+{
+  "id": "sys_event_lookup",
+  "language": "sql",
+  "category": "performance",
+  "difficulty": "medium",
+  "prompt": "Repair event_lookup.sql and indexes.sql for the tenant activity API. Return exactly the documented live-event half-open timestamp range, newest first with deterministic ID ties and the requested limit. Install the events_live_lookup index and write a sargable lookup: EXPLAIN QUERY PLAN must perform a range SEARCH using that index and must not use a temporary ORDER BY B-tree. Full parameter, result, index/reapply, and timestamp semantics are in README.md. Use SQLite 3.40 and no external packages. Visible tests: python3 -m unittest discover -s tests -v."
+}

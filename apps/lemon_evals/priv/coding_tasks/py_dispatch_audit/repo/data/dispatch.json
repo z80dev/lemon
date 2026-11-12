@@ -1,0 +1,119 @@
+{
+  "accounts": {
+    "alder": {
+      "rebate_percent": 10
+    },
+    "birch": {
+      "rebate_percent": 0
+    },
+    "cedar": {
+      "rebate_percent": 15
+    }
+  },
+  "shipments": [
+    {
+      "id": "S101",
+      "account": "alder",
+      "status": "ready",
+      "zone": "local",
+      "actual_g": 1200,
+      "dimensions_cm": [
+        30,
+        20,
+        10
+      ],
+      "fragile": true
+    },
+    {
+      "id": "S102",
+      "account": "alder",
+      "status": "ready",
+      "zone": "remote",
+      "actual_g": 2500,
+      "dimensions_cm": [
+        50,
+        40,
+        30
+      ],
+      "fragile": false
+    },
+    {
+      "id": "S103",
+      "account": "birch",
+      "status": "ready",
+      "zone": "local",
+      "actual_g": 1001,
+      "dimensions_cm": [
+        10,
+        10,
+        10
+      ],
+      "fragile": false
+    },
+    {
+      "id": "S104",
+      "account": "birch",
+      "status": "ready",
+      "zone": "remote",
+      "actual_g": 6000,
+      "dimensions_cm": [
+        40,
+        40,
+        20
+      ],
+      "fragile": true
+    },
+    {
+      "id": "S105",
+      "account": "alder",
+      "status": "cancelled",
+      "zone": "remote",
+      "actual_g": 12000,
+      "dimensions_cm": [
+        60,
+        50,
+        40
+      ],
+      "fragile": true
+    },
+    {
+      "id": "S106",
+      "account": "cedar",
+      "status": "held",
+      "zone": "local",
+      "actual_g": 10000,
+      "dimensions_cm": [
+        50,
+        50,
+        50
+      ],
+      "fragile": false
+    },
+    {
+      "id": "S107",
+      "account": "cedar",
+      "status": "ready",
+      "zone": "local",
+      "actual_g": 500,
+      "dimensions_cm": [
+        10,
+        10,
+        10
+      ],
+      "fragile": true
+    },
+    {
+      "id": "S108",
+      "account": "cedar",
+      "status": "ready",
+      "zone": "remote",
+      "actual_g": 1000,
+      "dimensions_cm": [
+        25,
+        20,
+        10
+      ],
+      "fragile": true
+    }
+  ]
+}

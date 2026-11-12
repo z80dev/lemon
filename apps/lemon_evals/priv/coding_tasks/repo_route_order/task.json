@@ -1,0 +1,7 @@
+{
+  "id": "repo_route_order",
+  "language": "python",
+  "category": "debugging",
+  "difficulty": "hard",
+  "prompt": "The individual quote tests pass, but the deployed Courier CLI sometimes picks ground for priority parcels, sends hazardous freight by air, and keeps yesterday's carrier prices. Operators call this flaky; reproduce the deterministic order dependence and fix the underlying planning/caching behavior, not the symptoms in the CLI. Follow the full quote/registry contract in README.md. Preserve the public interfaces of Registry, QuoteService, courier.api.handle and the CLI; caches may be redesigned internally. Equal-priority routes must use lexicographic code order, and registry registration/replacement/removal must be visible on the very next call even after a cached miss. Country normalization, eligibility for all request fields, errors, response fields and arithmetic must remain as documented.\nAdd regression tests covering mixed request order, warmed services, and registry changes; update the README with a brief explanation of the corrected caching strategy. Do not remove caching by rebuilding an entire service or re-importing plugins per request."
+}

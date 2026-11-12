@@ -1,0 +1,7 @@
+{
+  "id": "legacy_multi_file_refactor",
+  "language": "python",
+  "category": "refactor",
+  "difficulty": "medium",
+  "prompt": "Refactor currency formatting into money.py as format_money(cents). Update both consumers, preserve their public behavior, and remove duplicated formatting. Add tests. Use Python standard-library unittest for any tests; do not install dependencies."
+}

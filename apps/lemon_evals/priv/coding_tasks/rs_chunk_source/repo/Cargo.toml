@@ -1,0 +1,4 @@
+[package]
+name = "chunk_source"
+version = "0.1.0"
+edition = "2021"

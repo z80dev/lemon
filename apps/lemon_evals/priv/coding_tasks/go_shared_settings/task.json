@@ -1,0 +1,7 @@
+{
+  "id": "go_shared_settings",
+  "language": "go",
+  "category": "refactor",
+  "difficulty": "medium",
+  "prompt": "Unify the duplicated batch/server settings parsers. Add internal/config with exported Settings{Workers int; Timeout time.Duration}, ErrInvalid and Parse(text string) (Settings,error). Defaults are Workers=4 and Timeout=5s. Parse newline-separated key=value entries, using strings.TrimSpace on lines, keys and values; ignore empty lines and full-line # comments. The only keys are workers (strconv.Atoi syntax, range 1..64) and timeout (time.ParseDuration syntax, strictly positive). Reject unknown/duplicate keys, missing =, and invalid values with the zero Settings and an error matching config.ErrInvalid. There are no inline comments. Both batch.Load and server.Load must return config.Settings and be thin, direct calls to config.Parse, with the parser implemented only in internal/config. Delete their old parse helpers and local Settings types (no aliases). Migrate batch.Describe and server.Ready to config.Settings without changing output/meaning. Keep both existing package entry points and tests, and add regression coverage. Structural tests check that each Load is a single return of the shared Parse call and that the obsolete types/helpers are gone."
+}

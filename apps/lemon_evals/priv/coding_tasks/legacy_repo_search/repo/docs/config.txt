@@ -1,0 +1,2 @@
+API_TOKEN_V1 is the credential variable.
+TIMEOUT=30

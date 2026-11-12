@@ -1,0 +1,7 @@
+{
+  "id": "legacy_inventory_atomic_reservations",
+  "language": "python",
+  "category": "feature",
+  "difficulty": "hard",
+  "prompt": "Implement the atomic reservation feature described in README.md across the existing stockroom layers. Preserve legacy add/list behavior and upgrade existing databases. Add unittest regression coverage for rollback, validation, persistence, and idempotency. Use Python standard-library unittest for any tests; do not install dependencies."
+}

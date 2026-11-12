@@ -1,0 +1,7 @@
+{
+  "id": "sys_subscription_report",
+  "language": "sql",
+  "category": "data",
+  "difficulty": "easy",
+  "prompt": "Fix subscription_report.sql to produce the regional subscription snapshot for bound :as_of (a YYYY-MM-DD date). Choose each account's latest event on or before that day by effective_on then event_id, both descending; future events cannot replace eligible history. Include every account in regional account counts, but count seats and monthly revenue only for currently active accounts. Return the exact documented five columns, zero totals for inactive-only regions, and deterministic region order. README.md defines NULL region labeling/merging, tie behavior, current plan prices, and all edge cases. Use one SQLite 3.40 SELECT with standard-library-only tooling. Visible tests: python3 -m unittest discover -s tests -v."
+}

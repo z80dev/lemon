@@ -1,0 +1,1 @@
+{ "channel": "email", "batchSize": 25, "sender": "harbor" }

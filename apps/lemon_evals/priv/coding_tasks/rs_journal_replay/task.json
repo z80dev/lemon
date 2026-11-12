@@ -1,0 +1,7 @@
+{
+  "id": "rs_journal_replay",
+  "language": "rust",
+  "category": "debugging",
+  "difficulty": "medium",
+  "prompt": "Repair the multi-module journal replay engine. Implement the exact wire format, sequence/error precedence, atomic record rejection, commit/rollback isolation, and unfinished-transaction behavior documented in README.md. Keep the public API and dependency-free offline Cargo package. Add regression tests and update documentation if needed."
+}

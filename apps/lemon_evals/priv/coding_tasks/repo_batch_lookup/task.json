@@ -1,0 +1,8 @@
+{
+  "id": "repo_batch_lookup",
+  "language": "go",
+  "category": "performance",
+  "difficulty": "hard",
+  "timeout_s": 900,
+  "prompt": "The order lookup endpoint has an N+1 query problem hidden in its service-layer\nenrichment loop. Replace per-order/customer/product Find calls in Lookup.Run\nwith the already-supported repository FindMany APIs, preserving complete\nobservable output and the single-record Inspector API.\n\nFollow README's exact batching and error contract: zero calls for empty input;\none order batch of stable unique IDs otherwise; at most one stable unique\ncustomer batch and one SKU batch for found requested orders. Preserve duplicate\nrequest entries, missing entries, order/line order, opaque empty-string keys,\nmissing related-row semantics, nil-on-error behavior, and non-null empty result\nand line arrays. Ignore extra unrequested batch rows and do not mutate inputs\nor repository data. No cross-request caching or wall-time shortcuts. Update\ndocs/performance.md to explain the bounded call plan. Exercise correctness\nusing operation counters rather than elapsed time.\n\nVisible tests: `go test ./...`.\n"
+}

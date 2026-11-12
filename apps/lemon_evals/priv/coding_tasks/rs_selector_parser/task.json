@@ -1,0 +1,7 @@
+{
+  "id": "rs_selector_parser",
+  "language": "rust",
+  "category": "parsing",
+  "difficulty": "hard",
+  "prompt": "Repair the selector_parser crate so tokenization, AST construction, precedence, quoted escapes, and UTF-8 byte diagnostics satisfy README.md. Preserve the documented API and module separation. Implement the complete grammar and all errors without external crates."
+}

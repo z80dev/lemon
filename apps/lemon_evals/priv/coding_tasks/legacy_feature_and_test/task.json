@@ -1,0 +1,7 @@
+{
+  "id": "legacy_feature_and_test",
+  "language": "python",
+  "category": "feature",
+  "difficulty": "medium",
+  "prompt": "Add paginate(items, page, page_size) to paging.py: one-based pages, return the selected slice, reject nonpositive page/page_size with ValueError, and return [] beyond the end. Add unittest regression tests and run them. Use Python standard-library unittest for any tests; do not install dependencies."
+}
