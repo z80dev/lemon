@@ -4,9 +4,10 @@ defmodule LemonCore.Redact do
 
   `text/1` removes credential assignments, authorization values, common provider
   keys, JWTs, and PEM private keys (including an unfinished PEM block). Credential
-  names match complete names or separator-bounded components, not substrings:
-  `tokens` and `TokenKind` are ordinary content. Explicit secret fields still
-  mask short values; guessing entropy must not expose passwords or local tokens.
+  names are classified by trailing components, splitting separator-delimited and
+  camelCase identifiers: `githubToken` and `openaiApiKey` are sensitive, while
+  `tokens`, `TokenKind` and `token_count` are ordinary content. Explicit secret
+  fields still mask short values; guessing entropy must not expose local tokens.
   `map/1` additionally masks values under sensitive atom/string keys, traversing
   maps, structs, lists, keyword lists, and tuples. Structs become plain maps;
   other scalar values and map keys are preserved. Redaction is idempotent.
@@ -78,7 +79,8 @@ defmodule LemonCore.Redact do
 
   @marker "[REDACTED]"
   @key_pattern "(?:pairing[_-]?codes?|access[_-]?key|api[_-]?key|(?:access|refresh|id|api|bot|session)[_-]?token|auth(?:orization|[_-]?token)|bearer(?:[_-]?token)?|cookie|credentials?|master[_-]?key|oauth(?:[_-]?token)?|client[_-]?secret|passw(?:or)?d|private[_-]?key|secret[_-]?access[_-]?key|secret|token|wallet[_-]?key)"
-  @sensitive_key Regex.compile!("(?<![A-Za-z0-9])#{@key_pattern}(?![A-Za-z0-9])", "i")
+  @key_components ~r/[_.%-]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/
+  @assignment_key ~r/([A-Za-z0-9_.%-]+)["']?[ \t]*[:=][ \t]*\z/
   @private_key ~r/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\z)/s
   @credentials ~r/(?:sk-[A-Za-z0-9_-]{8,}|(?i:(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}|xox[a-z]-[A-Za-z0-9-]{8,})|AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35}|\beyJ(?:[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|[A-Za-z0-9+\/_-]{30,}(?:\.[A-Za-z0-9+\/_-]+)*=*))/
   @authorization ~r/\bbearer\s+[A-Za-z0-9._~+\/=:-]+/i
@@ -119,7 +121,7 @@ defmodule LemonCore.Redact do
       |> replace(@private_key, fn _ -> @marker end)
       |> replace(@authorization, fn _ -> @marker end)
       |> replace(@assignment, fn [original, prefix, secret], _query? ->
-        if sensitive_key?(prefix) or (strict? and strict_key?(prefix)) do
+        if sensitive_assignment?(prefix) or (strict? and strict_key?(prefix)) do
           cond do
             drop_keys? -> @marker
             redacted?(secret) -> original
@@ -158,12 +160,57 @@ defmodule LemonCore.Redact do
   def map(value) when is_tuple(value), do: value |> Tuple.to_list() |> map() |> List.to_tuple()
   def map(value), do: text(value)
 
-  @doc "Whether an atom or string key identifies credentials (case-insensitive)."
+  @doc "Whether a key's trailing identifier components name credentials."
   @spec sensitive_key?(term()) :: boolean()
   def sensitive_key?(key) when is_atom(key), do: sensitive_key?(Atom.to_string(key))
   def sensitive_key?(key) when key in ["mcp_servers_json", "mcp_servers", "mcpServers"], do: true
-  def sensitive_key?(key) when is_binary(key), do: Regex.match?(@sensitive_key, key)
+
+  def sensitive_key?(key) when is_binary(key) do
+    key
+    |> String.split(@key_components, trim: true)
+    |> Enum.reverse()
+    |> Enum.map(&String.downcase/1)
+    |> credential_components?()
+  end
+
   def sensitive_key?(_), do: false
+
+  defp credential_components?([name | _])
+       when name in [
+              "token",
+              "secret",
+              "password",
+              "passwd",
+              "credential",
+              "credentials",
+              "cookie",
+              "bearer",
+              "authorization",
+              "oauth",
+              "apikey",
+              "accesskey",
+              "privatekey",
+              "secretkey",
+              "masterkey",
+              "walletkey",
+              "pairingcode",
+              "pairingcodes"
+            ],
+       do: true
+
+  defp credential_components?(["key", kind | _])
+       when kind in ["api", "access", "private", "secret", "master", "wallet"],
+       do: true
+
+  defp credential_components?([code, "pairing" | _]) when code in ["code", "codes"], do: true
+  defp credential_components?(_), do: false
+
+  defp sensitive_assignment?(prefix) do
+    case Regex.run(@assignment_key, prefix, capture: :all_but_first) do
+      [key] -> sensitive_key?(key)
+      nil -> false
+    end
+  end
 
   defp redact_field(key, value) do
     if sensitive_key?(key) and not is_nil(value), do: @marker, else: map(value)
@@ -178,7 +225,7 @@ defmodule LemonCore.Redact do
     |> replace(@config_assignment, fn [original, prefix, value], query? ->
       query? = query? and query_prefix?(prefix)
 
-      if sensitive_key?(prefix) or strict_key?(prefix) do
+      if sensitive_assignment?(prefix) or strict_key?(prefix) do
         # Only a suffix adjacent to an unquoted query value is recoverable.
         # An ampersand after a fragment or inside quotes belongs to the legacy
         # secret extent, not to another query pair.

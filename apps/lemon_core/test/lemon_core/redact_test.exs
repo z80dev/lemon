@@ -32,6 +32,12 @@ defmodule LemonCore.RedactTest do
           "refresh_token",
           "clientSecret",
           "oauthToken",
+          "openaiApiKey",
+          "githubToken",
+          "slackBotToken",
+          "stripeSecretKey",
+          "my_token",
+          "HTTPAuthorization",
           "X-API-Key",
           "gateway.auth_token",
           "password",
@@ -45,10 +51,36 @@ defmodule LemonCore.RedactTest do
       output = Redact.text(Jason.encode!(%{key => "short", "agent" => "task"}))
       assert output =~ ~s("#{key}":[REDACTED])
       assert output =~ ~s("agent":"task")
+
+      for separator <- [": ", "=", " = "],
+          opts <- [[], [drop_keys: true], [strict: true], [tokenizer: false]] do
+        input = key <> separator <> ~s("q1w2e3r4")
+        output = Redact.text(input, opts)
+        refute output =~ "q1w2e3r4"
+        assert Redact.text(output, opts) == output
+      end
     end
 
-    for key <- ["tokens", "TokenKind", "tokenizer", "mytoken", "secretary", "credentialCount"] do
+    for key <- [
+          "tokens",
+          "TokenKind",
+          "token_count",
+          "tokenCount",
+          "tokenizer",
+          "mytoken",
+          "secretary",
+          "credentialCount",
+          "access_token_expires_at",
+          "accessTokenExpiresAt"
+        ] do
       refute Redact.sensitive_key?(key)
+      data = %{key => "ordinary-value"}
+      assert Redact.map(data) == data
+
+      for opts <- [[], [drop_keys: true], [strict: true], [tokenizer: false]] do
+        input = key <> ~s(: "ordinary-value")
+        assert Redact.text(input, opts) == input
+      end
     end
 
     input = ~s({"agent":"task","nested":{"tokens":[1],"message":"Bearer abc.def"}})
