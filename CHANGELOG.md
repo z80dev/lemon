@@ -8,8 +8,31 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- **Tern media previews.** In a Tern pane, a whole-file `read` of an image,
+  SVG, PDF, audio/video file or 3D model, and a saved browser screenshot, shows
+  the file in its tool card through Tern's media viewer, as omp's does. The
+  model-facing result is unchanged; partial reads and remote-only files keep the
+  textual card.
+- **Tern pane cards and status messages.** In Tern the TUI title is a card
+  (`🍋 LEMON: <session>`, or a session's own card-form name such as
+  `🧪 FLAKY: Fix flaky tests`), which Tern heads parked panes with. Program
+  status (OSC 7501) for approvals, questions and failures carries a one-line
+  summary, so Tern's inbox and banners say what needs you.
+- **`lemon tern install --agent-block`** makes Tern's **New agent block** open
+  Lemon's TUI by setting Tern's `agent_command`. Without the flag an existing
+  agent command is left unchanged.
+
+### Changed
+
+- The TUI uses pi-tui 18.18.9 (native buttons, path-based syntax highlighting
+  in Tern) and source development now needs Bun 1.4.4+.
+
 ### Fixed
 
+- The Tern palette's **Focus existing session** finds Lemon panes by program,
+  not only by the old `Lemon · ` title prefix.
 - Packaged `lemon daemon` (and `stop`, `rpc`, `remote`) failed with "daemon
   started but its pid could not be determined" when the machine's hostname
   resolved to a non-loopback address, because distribution is now

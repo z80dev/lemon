@@ -98,6 +98,14 @@ including spaces and `#`, are preserved. The row-rendered TUI exposes the same
 location through OSC 8 links. Nothing opens automatically when a tool runs.
 For an explicit command, use `tern open --split right path/to/file:42`.
 
+A successful whole-file `read` of a file Tern's media viewer handles (images,
+SVG, PDF, audio/video, and 3D models such as `.glb`, `.stl` or `.usdz`, including
+gzip-compressed models) shows the file itself in the read card, as omp's does.
+Saved browser screenshots get the same preview. Partial reads (offsets, pages,
+selectors) do not, and the model still receives the normal read result. The
+preview needs the file on the TUI's machine: against a remote daemon the card
+stays textual.
+
 Use `/name <title>` to name a conversation. Its saved name is restored on the next
 launch and appears in the Tern pane title and the plugin's session picker.
 

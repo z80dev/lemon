@@ -334,6 +334,10 @@ find and ls are file rows, web searches list linked sources, todos are a
 checklist and tasks are subagent rows. Cards fold to a short preview; open one
 from its head (or Ctrl+R), or all with Alt+O or Ctrl+T. Consecutive reads
 fold into one `Read N files` row group whose files open at the read offset.
+A whole-file read of media Tern can show (images, SVG, PDF, audio/video, 3D
+models) and a saved browser screenshot add a native media node with the file,
+when Tern advertises the `media` kind and the path exists on this machine.
+Code, diffs and search rows carry the file path so Tern picks the grammar.
 The tool inspector (`/output`, `/diff`) shows the full receipt as a native
 diff or output block.
 
@@ -353,16 +357,22 @@ inline-code file references such as `src/app.ts:42`, and file tool-card titles
 are clickable through OSC 8. File targets are absolute `file://` URLs with an
 optional `#L42` fragment; spaces and special characters are URL-encoded.
 
-The title shows the focused session name (or key) and current status. `lemon_session`
+In Tern the title is a card, `🍋 LEMON: <session name or key>`, the form Tern
+heads parked panes with; a session named in card form (`🧪 FLAKY: Fix flaky
+tests`) keeps its own card. The title is re-sent after the TSP surface opens,
+since Tern drops a title set before it. Elsewhere the title shows the focused
+session name (or key) and current status. `lemon_session`
 and `lemon_status` are exported as base64 OSC 1337 SetUserVar markers; this
 terminal client intentionally does **not** claim `tern_acp_session`, which is
 reserved for native ACP chats. Tern receives OSC 7501 program status:
 working, blocked for approval or a question, done, or error. Cancelled turns return to neutral
-idle instead of reporting success or failure. Its pane glow, inbox, completion
-banners and Carly waiting state follow those transitions. Other terminals
-receive generic OSC 9 or OSC 777 notifications where supported, otherwise a
-terminal bell (including for interrupted turns), never prompts, answers,
-questions, commands, or tool arguments.
+idle instead of reporting success or failure. Blocked and error states carry
+`msg=`: one line (at most 2048 UTF-8 bytes) naming the pending action, the
+question, or the failure, which Tern's inbox and banners show. Its pane glow,
+inbox, completion banners and Carly waiting state follow those transitions.
+Other terminals receive generic OSC 9 or OSC 777 notifications where supported,
+otherwise a terminal bell (including for interrupted turns), never prompts,
+answers, questions, commands, or tool arguments.
 
 pi-tui negotiates kitty keyboard support with a capability query rather than
 assuming it from environment variables, preserving the parent keyboard flags.
