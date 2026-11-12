@@ -42,7 +42,7 @@ There is no Team Bot publishing, manager assignment, live other-user Bot access,
 
 ## Connect iPhone from a desktop browser
 
-The canonical [getting-started guide](../../../docs/getting-started/lemon-bot.md) covers reachable HTTPS, desktop-approved pairing and revocation. The browser renders the backend's one-use pairing link locally with `qrcode.react`; no QR service receives it. The phone gets its own device-bound product session, not the browser's session or operator credential.
+The canonical [getting-started guide](../../../docs/getting-started/lemon-bot.md) covers reachable HTTPS, desktop-approved pairing and revocation. The browser renders the backend's one-use pairing link locally with `qrcode.react`; no QR service receives it. The same single-use, five-minute link is displayed beside the QR with **Copy link** for pasting into the iPhone app or Simulator. Used or expired links cannot be reused. The phone gets its own device-bound product session, not the browser's session or operator credential.
 
 Contributor invariants: preview/refresh/polling are read-only; creating a QR and approving a device require explicit action. Unknown mutations retain the original nonce and fence conflicting actions. Pair URLs remain only in the mounted screen's memory, not cached account metadata or logs. A lost issuance receipt can be reconciled only within its original deadline; successful phone sessions last until revoked. See the [preflight contract](../contracts/preflight.md).
 

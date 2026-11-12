@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Lemon Bot marks interrupted, never-dispatched messages “Not sent” and permits explicit resend; uncertain dispatched messages remain fenced.
+- Apple push registration accepts bounded variable-length hexadecimal device tokens.
+- Connect iPhone shows a copyable single-use pairing link alongside its QR, with the same expiry and usage state.
+
 ### Added
 
 - **Tern media previews.** In a Tern pane, a whole-file `read` of an image,

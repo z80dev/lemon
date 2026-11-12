@@ -22,7 +22,7 @@ const language = z.string().min(2).max(64).refine(value => { try { return Intl.g
 const preferences = z.object({ appearance: z.enum(['system', 'light', 'dark']), language: language.nullable(), timezone, botColors: z.boolean(), threadsBesideChat: z.boolean(), voice: voice.extend({ language: language.nullable() }), celebrationsEnabled: z.boolean() }).strict();
 const notifications = z.object({ enabled: z.boolean(), sound: z.boolean(), previews: z.boolean(), completed: z.boolean(), needsInput: z.boolean() }).strict();
 const push = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('apns'), token: z.string().regex(/^[a-fA-F0-9]{64}$/), environment: z.enum(['sandbox', 'production']), topic: z.string().min(1).max(255) }).strict(),
+  z.object({ kind: z.literal('apns'), token: z.string().regex(/^(?:[a-fA-F0-9]{2}){32,256}$/), environment: z.enum(['sandbox', 'production']), topic: z.string().min(1).max(255) }).strict(),
   z.object({ kind: z.literal('web_push'), endpoint: z.url().max(4096), keys: z.object({ p256dh: z.string().min(1).max(256), auth: z.string().min(1).max(128) }).strict() }).strict(),
 ]);
 const setupSchema = mutation.extend({ setupCode: z.string().min(16).max(512), email, password, displayName: name, workspaceName: name });

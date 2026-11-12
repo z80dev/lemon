@@ -189,3 +189,24 @@ test('Connect iPhone explains passwordless pairing only when no password is set'
   expect(parsed(renderToStaticMarkup(<PairingScreen/>)).textContent).toContain("Your iPhone doesn't need a password.");
   methods({ ...freshMethods(), password: true }); expect(parsed(renderToStaticMarkup(<PairingScreen/>)).textContent).not.toContain("Your iPhone doesn't need a password.");
 });
+
+for (const terminal of ['expired', 'consumed']) test(`pairing link copies the QR payload and disappears when ${terminal}`, async () => {
+  const pairing = { id: 'pairing', workspaceId: 'workspace', ownerUserId: 'owner', backendUrl: 'https://bot.example', clusterName: 'Workspace', status: 'waiting', expiresAtMs: Date.now() + 300000, createdAtMs: Date.now() };
+  const pairUrl = `lemonbot://pair?backend=https%3A%2F%2Fbot.example&instance=instance&cluster=workspace&code=${'a'.repeat(43)}`;
+  const key = 'pairings:lemonbot.pairing-intent:http://127.0.0.1:4100/v1:workspace:owner';
+  queries.set(key, { pairings: [], devices: [], sessions: [] });
+  call.mockImplementation(async () => ({ pairing, pairUrl }));
+  const copy = mock(async (_value: string) => undefined);
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: copy } });
+  const node = await mount(<PairingScreen/>);
+  await click([...node.querySelectorAll('button')].find(button => button.textContent === 'Create QR code')!);
+  expect(node.querySelector<HTMLInputElement>('input[aria-label="Pairing link"]')?.value).toBe(pairUrl);
+  expect(node.textContent).toContain('single-use and expire');
+  await click([...node.querySelectorAll('button')].find(button => button.textContent === 'Copy link')!);
+  expect(copy).toHaveBeenCalledWith(pairUrl);
+  queries.set(key, { pairings: [{ ...pairing, status: terminal }], devices: [], sessions: [] });
+  await act(async () => { root!.render(<PairingScreen/>); });
+  expect(node.querySelector('input[aria-label="Pairing link"]')).toBeNull();
+  expect(node.querySelector('.pairing-qr')).toBeNull();
+  expect(node.textContent).toContain(terminal === 'expired' ? 'QR code and pairing link have expired' : 'QR code and pairing link have been used');
+});

@@ -666,6 +666,15 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
           if (terminalStatuses.includes(run.status) && services.store.metadata<boolean>(`runtimeTerminalProjectionPending:${run.id}`) !== true) continue;
           const bound = mapping(run.id); if (!bound) continue;
           try { actor(run.id); } catch { services.store.setMetadata(`runtimeReconciliation:${run.id}`, { pending: true, code: 'forbidden', measuredAtMs: services.now() }); continue; }
+          const cronId = services.store.metadata<string>(`runCron:${run.id}`);
+          const admitted = services.store.metadata<{ allow: boolean }>(`nativeFollowupAdmissionReceipt:${bound.upstreamRunId}`)?.allow === true
+            || (cronId !== null && services.store.metadata<{ allow: boolean }>(`cronAdmissionReceipt:${cronId}`)?.allow === true);
+          if ((run.status === 'reserved' || run.status === 'outcome_unknown') && bound.dispatched !== true && !admitted) {
+            // Worker attachment uploads are inert; only dispatch/admission can execute this message.
+            emitRun(services.update(run, { status: 'failed', completedAtMs: services.now(), error: errorEnvelope(new ApiError('upstream_unavailable', 'Not sent: Lemon restarted before this message was sent. Send it again.', true), services.id('req')).error }));
+            closeStreaming(run);
+            continue;
+          }
           if (run.status === 'reserved') emitRun(services.update(run, { status: 'outcome_unknown', error: errorEnvelope(new ApiError('outcome_unknown', 'A reserved submission needs reconciliation after interruption.', false, { resourceIds: [run.id], runId: run.id }), services.id('req')).error }));
           if (bound.dispatched || services.store.metadata<{ allow: boolean }>(`nativeFollowupAdmissionReceipt:${bound.upstreamRunId}`)?.allow === true) {
             try {

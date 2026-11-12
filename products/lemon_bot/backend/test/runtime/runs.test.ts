@@ -5,6 +5,29 @@ import { buildInvocationContext, buildMemoryContextKey, buildPrivateBotMemoryCon
 import { fixture, productExecutionProjection } from './fixture';
 
 describe('owned placed runtime', () => {
+  for (const status of ['reserved', 'outcome_unknown'] as const) test(`restart before dispatch makes ${status} retryable without replay`, async () => {
+    const f = fixture(); let runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const message = { clientNonce: 'restart_before_send_001', text: 'ping', attachmentIds: ['restart_attachment'] };
+    f.store.put('attachments', { ...f.services.resource('attachment', { ownerUserId: f.alice.userId, filename: 'input.txt', mime: 'text/plain' }), id: 'restart_attachment' });
+    f.services.attachments = { async bytes() { return new Uint8Array([65]); } } as unknown as typeof f.services.attachments;
+    const original = f.rpc;
+    f.rpc = async (method, params) => { if (method === 'node.fs.write') throw new ApiError('outcome_unknown', 'interrupted', false); return original(method, params); };
+    try {
+      expect((await runtime.submit(f.alice, f.conversation, f.bot, message)).run.status).toBe('outcome_unknown');
+      const run = f.store.list<P.Run>('runs')[0]!;
+      f.store.put('runs', { ...run, status });
+      runtime.close(); runtime = createRuntimeService(f.services); f.services.runtime = runtime; f.rpc = async (method, params) => method === 'node.fs.write' ? { path: params.path, mtimeMs: 1, bytesWritten: 1 } : method === 'runs.receipt.get' ? { receipt: { runId: params.runId, sessionKey: runtime.sessionKey(f.conversation, f.bot), state: 'accepted', effectiveMode: 'new_run', targetRunId: params.runId } } : original(method, params);
+      await runtime.reconcile();
+      expect(f.store.require<P.Run>('runs', run.id)).toMatchObject({ status: 'failed', error: { retrySafe: true, message: 'Not sent: Lemon restarted before this message was sent. Send it again.' } });
+      expect(f.calls.filter(call => call.method === 'chat.send' || call.method === 'runs.receipt.get')).toHaveLength(0);
+      const resent = await runtime.submit(f.alice, f.conversation, f.bot, { ...message, clientNonce: 'restart_explicit_resend_001' });
+      expect(resent.run.id).not.toBe(run.id);
+      await runtime.reconcile();
+      expect(f.calls.filter(call => call.method === 'chat.send')).toHaveLength(1);
+      expect(f.calls.some(call => call.method === 'runs.receipt.get')).toBe(true);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
   for (const botFolder of [false, true]) test(`attachment folder routing with botFolder=${botFolder}`, async () => {
     const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
     const attachment = f.services.resource('attachment', { ownerUserId: f.alice.userId, filename: 'input.txt', mime: 'text/plain' });

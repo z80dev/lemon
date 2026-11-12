@@ -21,6 +21,19 @@ const authenticated = (token: string) => new Request('https://lemon.example/v1/m
 const testPassword = 'Correct test password 42';
 
 describe('account lifecycle', () => {
+  test('APNs registration accepts bounded variable-length bytes and remains strict', async () => {
+    const f = accounts(); const topics = process.env.LEMON_BOT_APNS_TOPICS; process.env.LEMON_BOT_APNS_TOPICS = 'food.lemon.bot';
+    try {
+      for (const token of ['aB'.repeat(32), 'f0'.repeat(64), '12'.repeat(256)]) {
+        const device = await f.call<P.Device>('POST', '/v1/devices', { clientNonce: opaqueToken(), installationId: opaqueToken(), platform: 'ios', name: 'Phone', appVersion: '1.0.0', push: { kind: 'apns', token, environment: 'sandbox', topic: 'food.lemon.bot' } });
+        expect(device.pushEnabled).toBe(true);
+      }
+      for (const push of [
+        ...['a'.repeat(65), 'z'.repeat(64), 'ab'.repeat(31), 'ab'.repeat(257)].map(token => ({ kind: 'apns', token, environment: 'sandbox', topic: 'food.lemon.bot' })),
+        { kind: 'apns', token: 'ab'.repeat(32), environment: 'sandbox', topic: 'food.lemon.bot', extra: true },
+      ]) await expect(f.call('POST', '/v1/devices', { clientNonce: opaqueToken(), installationId: opaqueToken(), platform: 'ios', name: 'Phone', appVersion: '1.0.0', push })).rejects.toMatchObject({ code: 'invalid_request' });
+    } finally { if (topics === undefined) delete process.env.LEMON_BOT_APNS_TOPICS; else process.env.LEMON_BOT_APNS_TOPICS = topics; f.store.close(); }
+  });
   test('setup atomically creates owner, session and workspace, consumes its digest and prevents repeats', async () => {
     const f = accounts(); for (const collection of ['users', 'members', 'workspaces']) for (const value of f.store.list<{ id: string }>(collection)) f.store.remove(collection, value.id);
     f.store.setMetadata('workspaceId', null); const { code: setupCode } = issueOwnerSetupProof(f.services);
