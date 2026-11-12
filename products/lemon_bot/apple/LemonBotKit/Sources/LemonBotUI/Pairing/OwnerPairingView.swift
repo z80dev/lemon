@@ -16,7 +16,6 @@ public struct OwnerPairingView: View {
     @State private var errorPlace: String?
     @State private var lastChecked: Date?
     @State private var renderedQR: NSImage?
-    @State private var comparedRequests: Set<String> = []
     @State private var simulatorOnly = false
     private static let qrContext = CIContext()
     public init(store: LemonBotStore) { self.store = store }
@@ -125,15 +124,17 @@ public struct OwnerPairingView: View {
                 let expired = pairing.expiresAtMs <= context.date.timeIntervalSince1970 * 1000
                 Text(pairing.status == "consumed" ? "Connected — iPhone completed pairing" : (expired && ["waiting", "pending_approval", "approved"].contains(pairing.status) ? pairingStatusLabel("expired") : (pairing.status == "waiting" ? "Waiting for your iPhone to request connection" : pairingStatusLabel(pairing.status))))
                 if pairing.status == "pending_approval" {
-                    if let device = pairing.deviceName { Text("Device: \(device)").textSelection(.enabled) }
-                    if let code = pairing.verificationCode { Text(code).font(.title.monospaced()).textSelection(.enabled) }
-                    Toggle("The exact device name and code match my iPhone", isOn: Binding(
-                        get: { comparedRequests.contains(comparisonKey(pairing)) },
-                        set: { if $0 { comparedRequests.insert(comparisonKey(pairing)) } else { comparedRequests.remove(comparisonKey(pairing)) } }
-                    ))
-                    Button("Approve this iPhone") { perform(pairing.id) { try await store.approvePairing(pairing) } }
-                        .disabled(busy || observing || fenced(pairing.id) || expired || store.ownerPairingPreflight == nil || !comparedRequests.contains(comparisonKey(pairing)))
-                    Button("Deny", role: .destructive) { perform(pairing.id) { try await store.denyPairing(pairing) } }
+                    LabeledContent("Device", value: pairing.deviceName ?? "Not shown").textSelection(.enabled)
+                    LabeledContent("Verification code") {
+                        Text(pairing.verificationCode ?? "Not shown").font(.title.monospaced()).textSelection(.enabled)
+                    }
+                    Text("Compare with your iPhone. Pair only if both the device name and the six-digit code match exactly; otherwise choose Deny.").font(LBFont.meta)
+                    // The closure captures this exact rendered request (ID, revision, device, code); the store
+                    // sends that revision and code, so a changed request is rejected rather than approved.
+                    Button("Codes match — Pair iPhone") { perform(pairing.id) { try await store.approvePairing(pairing) } }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(busy || observing || fenced(pairing.id) || expired || store.ownerPairingPreflight == nil || !OwnerPairingProgress.canConfirmAndPair(pairing, now: context.date))
+                    Button("Doesn't match — Deny", role: .destructive) { perform(pairing.id) { try await store.denyPairing(pairing) } }
                         .disabled(busy || observing || fenced(pairing.id))
                 }
             }
@@ -141,7 +142,6 @@ public struct OwnerPairingView: View {
             errorView(pairing.id)
         }
     }
-    private func comparisonKey(_ pairing: Pairing) -> String { "\(pairing.id)|\(pairing.revision)|\(pairing.deviceName ?? "")|\(pairing.verificationCode ?? "")" }
     private func activeLink(at now: Date) -> String? {
         OwnerPairingProgress.activeLink(store.pairingURL, pairing: store.issuedPairing, verifiedOrigin: store.ownerPairingPreflight?.origin, now: now)
     }

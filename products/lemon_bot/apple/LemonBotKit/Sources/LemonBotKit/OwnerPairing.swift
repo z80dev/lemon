@@ -79,4 +79,12 @@ public enum OwnerPairingProgress {
     public static func shouldObserve(_ pairings: [Pairing], now: Date = Date()) -> Bool {
         pairings.contains { ["waiting", "pending_approval", "approved"].contains($0.status) && $0.expiresAtMs > now.timeIntervalSince1970 * 1000 }
     }
+    /// The single "Codes match — Pair iPhone" action is offered only for a live request that shows
+    /// both the exact device name and six-digit code; the click approves that rendered revision only.
+    public static func canConfirmAndPair(_ pairing: Pairing, now: Date = Date()) -> Bool {
+        guard pairing.status == "pending_approval", pairing.expiresAtMs > now.timeIntervalSince1970 * 1000,
+              let device = pairing.deviceName, !device.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let code = pairing.verificationCode, code.count == 6, code.allSatisfy({ $0.isASCII && $0.isNumber }) else { return false }
+        return true
+    }
 }
