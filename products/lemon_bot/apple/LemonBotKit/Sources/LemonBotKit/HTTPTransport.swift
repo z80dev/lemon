@@ -59,7 +59,7 @@ public struct HTTPTransport {
             throw ClientError.http(http.statusCode)
         }
     }
-    public func read<T: Decodable>(_ path: String, query: [String: String] = [:], timeout: TimeInterval? = nil, as: T.Type = T.self) async throws -> T {
+    public func read<T: Decodable>(_ path: String, query: [String: String] = [:], timeout: TimeInterval? = nil, as: T.Type = T.self, isolation: isolated (any _Concurrency.Actor)? = #isolation) async throws -> T {
         var request = try request("GET", path, query: query)
         if let timeout { request.timeoutInterval = timeout }
         let (data, response) = try await session.data(for: request)
@@ -86,7 +86,7 @@ public struct HTTPTransport {
         return try JSONDecoder().decode(AuthResult.self, from: data)
     }
     /// One attempt only. Caller retains the nonce and reconciles an uncertain outcome instead of resubmitting.
-    public func mutate<T: Decodable>(_ method: String, _ path: String, body: JSONObject, as: T.Type = T.self) async throws -> T {
+    public func mutate<T: Decodable>(_ method: String, _ path: String, body: JSONObject, as: T.Type = T.self, isolation: isolated (any _Concurrency.Actor)? = #isolation) async throws -> T {
         guard ["POST", "PATCH", "PUT", "DELETE"].contains(method) else { throw ClientError.invalidPath }
         var payload = body
         if path != "/auth/reauth", payload["clientNonce"] == nil { payload["clientNonce"] = .string(UUID().uuidString) }

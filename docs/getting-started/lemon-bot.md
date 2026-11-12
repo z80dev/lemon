@@ -304,8 +304,11 @@ Both devices must reach the HTTPS address above (for Tailscale, both on the
 same tailnet).
 
 In the signed-in browser, open **Settings → Devices · Connect iPhone**; in the
-Mac app, open **Connect iPhone** in Settings and first choose **Check connection
-readiness**. Create a fresh QR code,
+Mac app, open **Connect iPhone** in Settings. If HTTPS is not ready, the Mac
+links to the [HTTPS setup steps](#give-lemon-bot-an-https-address) above and
+checks the backend's advertised address while the window is active. After setup,
+readiness updates without restarting the app; **Check connection readiness**
+also makes an immediate check. Choose **Create QR code** once verified,
 scan or paste it in the phone app, review the destination and request
 connection. Compare the phone's device name and six-digit code with the desktop
 before approving that exact request. Wait for the phone to finish connecting, not
@@ -313,6 +316,13 @@ merely for desktop approval. The phone gets its own revocable product session;
 it is not another execution machine. Revoke it with **Revoke this iPhone** or in
 **Settings → Account → Sessions & devices**. The desktop backend and host must
 remain available even when the desktop UI is closed.
+
+For development only, a Debug Mac build offers **Pair with the iOS Simulator
+on this Mac only**. It accepts HTTP origins with exactly `localhost`,
+`127.0.0.1` or `[::1]`, matching the browser's local pairing allowance. Paste
+the resulting link into a Debug iOS Simulator build. Physical iPhones and
+Release iOS builds still require reachable HTTPS; the toggle never configures a
+route or bypasses identity/TLS checks.
 
 For terminal-assisted pairing, see
 [`lemon connect iphone`](../user-guide/cli.md#connect-an-iphone-to-lemon-bot).

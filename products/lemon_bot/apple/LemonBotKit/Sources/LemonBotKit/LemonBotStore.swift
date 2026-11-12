@@ -363,12 +363,12 @@ import Observation
             if let pinned = saved.instanceID { expected = pinned }
             else {
                 // Upgrade an old iOS account only against its own authenticated workspace.
-                let baseline = try await client.identity(origin: origin, token: saved.token, use: Self.phoneOriginUse)
+                let baseline = try await client.identity(origin: origin, token: saved.token, use: Self.connectionOriginUse(origin))
                 try assertGeneration(current)
-                try BotPreflight.validateIdentity(baseline, expectedInstanceID: baseline.instanceId, workspaceID: saved.workspaceID, use: Self.phoneOriginUse)
+                try BotPreflight.validateIdentity(baseline, expectedInstanceID: baseline.instanceId, workspaceID: saved.workspaceID, use: Self.connectionOriginUse(origin))
                 expected = baseline.instanceId
             }
-            _ = try await client.preflight(origin: origin, expectedInstanceID: expected, session: BotPreflightSession(token: saved.token, workspaceID: saved.workspaceID), use: Self.phoneOriginUse)
+            _ = try await client.preflight(origin: origin, expectedInstanceID: expected, session: BotPreflightSession(token: saved.token, workspaceID: saved.workspaceID), use: Self.connectionOriginUse(origin))
             try Task.checkCancellation()
             try assertGeneration(current)
             if saved.instanceID == nil {

@@ -46,6 +46,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Lemon Bot's Mac **Connect iPhone** window explains missing HTTPS setup, links
+  to the routing/allowlist guide and observes updated advertised addresses without
+  an app restart. Debug-only local pairing is limited to the iOS Simulator and
+  the browser's exact loopback hosts; Release and physical-device checks stay strict.
+- Apple onboarding response decoding no longer inherits main-actor isolation
+  across the HTTP transport boundary.
 - The Tern palette's **Focus existing session** finds Lemon panes by program,
   not only by the old `Lemon · ` title prefix.
 - Kimi Code omp authentication fails closed at the model-request boundary,
