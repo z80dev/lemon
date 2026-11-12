@@ -9,7 +9,8 @@ All notable changes to `lemon_cli` are documented here.
 - Offline `lemon doctor` checks the configured Bot public origin against both
   native follow-up and cron admission allowlists, naming missing environment
   overrides without disclosing URLs. Explicit empty overrides do not fall back
-  to app configuration.
+  to app configuration. Origin matching uses execution's canonicalization,
+  including equivalent IPv6 spellings and explicit default ports.
 - Kimi Code onboarding offers `--auth omp`, saving only the discovered executable
   path and auth source. Model-auth status and doctor report omp login readiness
   without copying credentials or probing a model endpoint.

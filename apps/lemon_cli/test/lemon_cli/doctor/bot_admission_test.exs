@@ -84,6 +84,10 @@ defmodule LemonCli.Doctor.BotAdmissionTest do
         {"https://BOT.EXAMPLE:443/private-callback", "https://bot.example",
          "HTTPS://BOT.EXAMPLE:443"},
         {"HTTPS://BOT.EXAMPLE", "https://bot.example:443", "https://BOT.EXAMPLE"},
+        {"https://[2001:db8::1]", "https://[2001:db8:0:0:0:0:0:1]",
+         "https://[2001:db8:0:0:0:0:0:1]:443"},
+        {"https://[2001:db8:0:0:0:0:0:1]:443/private-callback", "https://[2001:db8::1]:443",
+         "https://[2001:db8::1]"},
         {"http://127.0.0.1", "http://127.0.0.1:80", "http://127.0.0.1"},
         {"http://[::1]:80", "http://[::1]", "http://[::1]:80"},
         {"http://127.0.0.1:4100", "http://127.0.0.1:4100", "http://127.0.0.1:4100"}

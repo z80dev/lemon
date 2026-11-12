@@ -7,6 +7,7 @@ defmodule LemonCli.Doctor.BotAdmission do
   """
 
   alias LemonCore.Doctor.Check
+  alias LemonMCP.HTTP.OriginPolicy
 
   @name "bot.admission_origins"
   @allowlists [
@@ -72,7 +73,7 @@ defmodule LemonCli.Doctor.BotAdmission do
 
   defp allowed?(_bot_origin, _origins), do: false
 
-  # Compare scheme, case-insensitive host and effective port without resolving DNS.
+  # Use execution's origin canonicalization without resolving DNS.
   # Allowlist entries must be origins, while the public URL can include a path.
   defp origin(value, allow_path?) do
     with true <- is_binary(value) and byte_size(value) in 1..2048 and String.valid?(value),
@@ -87,8 +88,9 @@ defmodule LemonCli.Doctor.BotAdmission do
          port <- uri.port || if(scheme == "https", do: 443, else: 80),
          true <- is_integer(port) and port in 1..65_535,
          true <- is_nil(uri.userinfo) and is_nil(uri.query) and is_nil(uri.fragment),
-         true <- allow_path? or is_nil(uri.path) do
-      {:ok, {scheme, host, port}}
+         true <- allow_path? or is_nil(uri.path),
+         {:ok, canonical} <- OriginPolicy.canonical_origin(value) do
+      {:ok, canonical}
     else
       _ -> :error
     end
