@@ -8,7 +8,7 @@
     "lemon-tui": "src/main.ts"
   },
   "engines": {
-    "bun": ">=1.3.14"
+    "bun": ">=1.4.4"
   },
   "dependencies": {
     "@oh-my-pi/pi-natives": "18.18.9",
