@@ -6,7 +6,9 @@ defmodule LemonCli.Setup.ProviderAuth do
   Status reports the configured auth source, the stored login (account,
   access-token expiry, estimated re-login date) and whether the provider's
   credentials resolve. Resolving may refresh an access token that is close to
-  expiry, exactly as a model request would. Credential values are never shown.
+  expiry, exactly as a model request would. For a Kimi Code subscription login
+  it also shows the current quota (`LemonAi.Providers.KimiCodeUsage`; tests
+  inject `:kimi_usage`). Credential values are never shown.
 
   Logout deletes the stored OAuth login secret and removes the provider's
   `auth_source = "oauth"` and `oauth_secret` config entries (and an
@@ -50,8 +52,10 @@ defmodule LemonCli.Setup.ProviderAuth do
       api_key_env_lines(spec, auth_source)
       |> Enum.each(&io.info.("  " <> &1))
 
-      ready? = Credentials.provider_has_credentials?(spec.id, Map.get(config, "providers", %{}))
+      token = Credentials.resolve_provider_api_key(spec.id, Map.get(config, "providers", %{}))
+      ready? = present?(token)
       io.info.("  Credentials usable: #{if ready?, do: "yes", else: "no"}")
+      kimi_usage_line(token, provider_cfg, io, opts)
 
       unless ready?,
         do:
@@ -80,19 +84,49 @@ defmodule LemonCli.Setup.ProviderAuth do
         api_key_env_lines(spec, auth_source)
         |> Enum.each(&io.info.("  " <> &1))
 
-        ready? =
-          if opts[:secret_name] do
-            present?(Credentials.resolve_secret_api_key(secret_name, env_fallback: false))
-          else
-            Credentials.provider_has_credentials?(spec.id, Map.get(config, "providers", %{}))
+        providers = Map.get(config, "providers", %{})
+
+        {ready?, token} =
+          cond do
+            opts[:secret_name] ->
+              token = Credentials.resolve_secret_api_key(secret_name, env_fallback: false)
+              {present?(token), token}
+
+            spec.id == "kimi_coding" ->
+              token = Credentials.resolve_provider_api_key(spec.id, providers)
+              {present?(token), token}
+
+            true ->
+              {Credentials.provider_has_credentials?(spec.id, providers), nil}
           end
 
         io.info.("  Credentials usable: #{if ready?, do: "yes", else: "no"}")
+        if spec.id == "kimi_coding", do: kimi_usage_line(token, provider_cfg, io, opts)
         :ok
 
       {:error, _} = error ->
         auth_failure(error, io)
     end
+  end
+
+  # Quota is reported only for subscription logins (OAuth JWTs); API keys have
+  # no usage endpoint. Errors are summarized without provider detail.
+  defp kimi_usage_line(token, provider_cfg, io, opts) do
+    if LemonAi.Auth.KimiCodeOAuth.oauth_token?(token) do
+      fetch = Keyword.get(opts, :kimi_usage, &LemonAi.Providers.KimiCodeUsage.fetch/2)
+
+      line =
+        case fetch.(token, base_url: normalize(provider_cfg["base_url"])) do
+          {:ok, windows} -> LemonAi.Providers.KimiCodeUsage.format(windows)
+          {:error, :token_expired} -> "skipped (access token expired)"
+          {:error, {:http_error, status}} -> "unavailable (HTTP #{status})"
+          {:error, _} -> "unavailable"
+        end
+
+      io.info.("  Usage: " <> line)
+    end
+
+    :ok
   end
 
   @spec logout(Provider.t(), String.t(), map(), keyword()) :: :ok | {:error, auth_error()}

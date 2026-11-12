@@ -59,6 +59,8 @@ defmodule LemonCli.Setup.Provider do
       (default: `false`; the setup wizard enables it)
     * `:verifier` - injectable live-check function, forwarded to
       `Verification.verify_provider/1` (used by tests to avoid network)
+    * `:kimi_usage` - injectable Kimi Code quota fetch for `--status`,
+      forwarded to `LemonCli.Setup.ProviderAuth.status/4`
   """
   @spec run([String.t()], map(), keyword()) :: :ok | {:error, term()}
   def run(args, io, opts \\ []) when is_list(args) and is_map(io) do
@@ -71,7 +73,7 @@ defmodule LemonCli.Setup.Provider do
           end
 
         [flag] ->
-          run_auth_action(flag, List.delete(args, flag), io)
+          run_auth_action(flag, List.delete(args, flag), io, opts)
 
         _ ->
           Runner.fail!("Use only one of --status or --logout.")
@@ -102,7 +104,7 @@ defmodule LemonCli.Setup.Provider do
     end
   end
 
-  defp run_auth_action(flag, args, io) do
+  defp run_auth_action(flag, args, io, run_opts) do
     Runner.ensure_required_apps!()
 
     case extract_provider_arg(args) do
@@ -126,8 +128,16 @@ defmodule LemonCli.Setup.Provider do
         config_path = opts[:config_path] || extract_config_path([])
 
         case flag do
-          "--status" -> ProviderAuth.status(provider, config_path, io, opts)
-          "--logout" -> ProviderAuth.logout(provider, config_path, io, opts)
+          "--status" ->
+            ProviderAuth.status(
+              provider,
+              config_path,
+              io,
+              opts ++ Keyword.take(run_opts, [:kimi_usage])
+            )
+
+          "--logout" ->
+            ProviderAuth.logout(provider, config_path, io, opts)
         end
     end
   end

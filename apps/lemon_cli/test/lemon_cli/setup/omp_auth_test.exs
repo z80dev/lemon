@@ -166,10 +166,36 @@ defmodule LemonCli.Setup.OmpAuthTest do
     original_omp = File.read!(ctx.omp)
     System.put_env("KIMI_API_KEY", "ignored-environment-key")
 
-    assert :ok = Provider.run(["kimi-code", "--status", "--config-path", ctx.config_path], io())
+    test_pid = self()
+
+    usage = fn token, opts ->
+      send(test_pid, {:usage_token, token, opts})
+
+      {:ok,
+       [
+         %{
+           id: "5h",
+           label: "5h window",
+           used_fraction: 0.76,
+           resets_at: ~U[2026-11-12 04:34:22Z]
+         },
+         %{id: "month", label: "month", used_fraction: 0.5697, resets_at: nil}
+       ]}
+    end
+
+    assert :ok =
+             Provider.run(
+               ["kimi-code", "--status", "--config-path", ctx.config_path],
+               io(),
+               kimi_usage: usage
+             )
+
     output = output()
     assert output =~ "Auth source: omp (reuses omp's Kimi Code login)"
     assert output =~ "Credentials usable: yes"
+    assert output =~ "Usage: 5h window: 76% used, resets 04:34Z; month: 57% used"
+    assert_received {:usage_token, token, [base_url: nil]}
+    assert token == ctx.token
     assert output =~ "ignored while auth_source = \"omp\""
     refute output =~ ctx.token
     refute output =~ "ignored-environment-key"
@@ -214,11 +240,16 @@ defmodule LemonCli.Setup.OmpAuthTest do
     oauth_secret = "#{secret_name}"
     """)
 
-    assert :ok = Provider.run(["kimi-code", "--status", "--config-path", ctx.config_path], io())
+    assert :ok =
+             Provider.run(["kimi-code", "--status", "--config-path", ctx.config_path], io(),
+               kimi_usage: fn _, _ -> {:error, {:http_error, 429}} end
+             )
+
     status = output()
     assert status =~ "Auth source: omp (reuses omp's Kimi Code login)"
     assert status =~ "Stored login: managed by omp"
     assert status =~ "Credentials usable: yes"
+    assert status =~ "Usage: unavailable (HTTP 429)"
     refute status =~ "synthetic-stored-kimi"
 
     assert %{provider: %{complete: true}, secrets: %{source: :not_required}} =

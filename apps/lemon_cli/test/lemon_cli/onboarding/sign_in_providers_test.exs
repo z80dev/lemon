@@ -176,12 +176,18 @@ defmodule LemonCli.Onboarding.SignInProvidersTest do
 
   test "kimi_coding status ignores KIMI_API_KEY while signed in; logout removes the login",
        %{config_path: config_path} do
+    # The login's JWT has already expired by its own claim: status must not
+    # send it to the usage endpoint.
+    claims = Base.url_encode64(~s({"exp":#{System.system_time(:second) - 60}}), padding: false)
+    access_token = "eyJhbGciOiJub25lIn0.#{claims}.sig"
+    Req.Test.stub(__MODULE__, fn _conn -> flunk("an expired token must not be sent") end)
+
     {:ok, _} =
       Secrets.set(
         "llm_kimi_coding_api_key",
         Jason.encode!(%{
           "type" => "kimi_code_oauth",
-          "access_token" => "kimi-at",
+          "access_token" => access_token,
           "refresh_token" => "kimi-rt",
           "expires_at_ms" => System.system_time(:millisecond) + 2 * 3_600_000
         })
@@ -200,7 +206,8 @@ defmodule LemonCli.Onboarding.SignInProvidersTest do
     assert status =~ "Stored login: llm_kimi_coding_api_key (refreshable login)"
     assert status =~ "KIMI_API_KEY: set, ignored while auth_source = \"oauth\""
     assert status =~ "Credentials usable: yes"
-    refute status =~ "kimi-at"
+    assert status =~ "Usage: skipped (access token expired)"
+    refute status =~ access_token
 
     assert :ok =
              SetupProvider.run(["kimi_coding", "--logout", "--config-path", config_path], io())

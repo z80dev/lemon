@@ -9,6 +9,9 @@ All notable changes to `lemon_cli` are documented here.
 - Kimi Code onboarding offers `--auth omp`, saving only the discovered executable
   path and auth source. Model-auth status and doctor report omp login readiness
   without copying credentials or probing a model endpoint.
+- `lemon model kimi_coding --status` shows Kimi Code quota (5-hour window,
+  month, month coding) for subscription and omp logins. Doctor's live Kimi Code
+  check sends the subscription token as a bearer with the Kimi CLI fingerprint.
 - `lemon setup model [--json] [--offline] [--provider NAME]`: the Connect-a-model
   step on its own. `--json` prints one readiness document plus the detected
   logins and never prompts; exit `0` when the model is verified or saved, `1`
