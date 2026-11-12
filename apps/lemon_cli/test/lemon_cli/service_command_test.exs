@@ -6,12 +6,27 @@ defmodule LemonCli.ServiceCommandTest do
   @moduletag :tmp_dir
 
   setup %{tmp_dir: home} do
+    # Like launchd, a booted-out service is no longer listed.
+    booted_out = start_supervised!({Agent, fn -> MapSet.new() end})
+
     runner = fn
-      "launchctl", ["print", "gui/501"], _ -> {"", 0}
-      "launchctl", ["print", _], _ -> {"pid = 123\n", 0}
-      "launchctl", ["bootout", _], _ -> {"", 0}
-      "ps", _, _ -> {"501 Tue Nov 10 12:00:00 2026 /bin/beam.smp\n", 0}
-      _, _, _ -> {"", 1}
+      "launchctl", ["print", "gui/501"], _ ->
+        {"", 0}
+
+      "launchctl", ["print", target], _ ->
+        if Agent.get(booted_out, &MapSet.member?(&1, target)),
+          do: {"", 1},
+          else: {"pid = 123\n", 0}
+
+      "launchctl", ["bootout", target], _ ->
+        Agent.update(booted_out, &MapSet.put(&1, target))
+        {"", 0}
+
+      "ps", _, _ ->
+        {"501 Tue Nov 10 12:00:00 2026 /bin/beam.smp\n", 0}
+
+      _, _, _ ->
+        {"", 1}
     end
 
     opts = [
