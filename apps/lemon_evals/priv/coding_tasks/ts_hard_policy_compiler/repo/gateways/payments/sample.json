@@ -1,0 +1,14 @@
+{
+  "payments_layer": "payments-base",
+  "payments_rules": [
+    {
+      "payments_id": "reader",
+      "payments_effect": "allow",
+      "payments_path": "payments/items",
+      "payments_actions": [
+        "read"
+      ],
+      "payments_priority": 0
+    }
+  ]
+}

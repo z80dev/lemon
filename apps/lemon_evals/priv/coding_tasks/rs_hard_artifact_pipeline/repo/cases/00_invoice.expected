@@ -1,0 +1,11 @@
+run=1
+roots=preview,release
+built|empty|a6a2d31f9155f3b6|
+built|metadata|8964777441938176|tax:24-override
+built|raw|35508c4a6f74c6cb|USD:120
+built|joined|9d3f2ce2df535d17|USD:120 / tax:24-override
+built|normalized|deabf36a5741a303|INVOICE / tax:24-override
+built|preview|16badfad1785adf7|INV
+built|release|2c56a544dbfc02d0|INVOICE / tax:24-override :: INV :: 
+output|preview|INV
+output|release|INVOICE / tax:24-override :: INV :: 

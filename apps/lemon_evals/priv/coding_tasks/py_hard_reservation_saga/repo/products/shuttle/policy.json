@@ -1,0 +1,6 @@
+{
+  "sku_field": "shuttle_code",
+  "quantity_field": "shuttle_count",
+  "prefix": "shuttle:",
+  "limit": 20
+}

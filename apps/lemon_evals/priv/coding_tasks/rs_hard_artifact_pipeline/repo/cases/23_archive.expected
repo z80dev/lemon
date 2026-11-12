@@ -1,0 +1,9 @@
+run=1
+roots=metadata,preview
+built|metadata|07a9e79fcf05dca1|cold
+built|raw|4c5ad3a561893503|2026-11
+built|joined|33425400dd958edc|2026-11 / cold
+built|normalized|3fe07e3698889ed0|ARCHIVE / cold
+built|preview|728506f5e03fbbb1|ARC
+output|metadata|cold
+output|preview|ARC

@@ -1,0 +1,8 @@
+{
+  "id": "export_id",
+  "tenant": "export_tenant",
+  "revision": "export_revision",
+  "day": "export_day",
+  "value": "export_value",
+  "deleted": "export_deleted"
+}

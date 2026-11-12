@@ -1,0 +1,14 @@
+{
+  "exports_layer": "exports-base",
+  "exports_rules": [
+    {
+      "exports_id": "reader",
+      "exports_effect": "allow",
+      "exports_path": "exports/items",
+      "exports_actions": [
+        "read"
+      ],
+      "exports_priority": 0
+    }
+  ]
+}

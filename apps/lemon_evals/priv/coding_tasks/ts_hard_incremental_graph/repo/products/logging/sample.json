@@ -1,0 +1,14 @@
+[
+  {
+    "logging_id": "x",
+    "logging_needs": [],
+    "logging_op": "input"
+  },
+  {
+    "logging_id": "y",
+    "logging_needs": [
+      "x"
+    ],
+    "logging_op": "sum"
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "keys_layer": "keys-base",
+  "keys_rules": [
+    {
+      "keys_id": "reader",
+      "keys_effect": "allow",
+      "keys_path": "keys/items",
+      "keys_actions": [
+        "read"
+      ],
+      "keys_priority": 0
+    }
+  ]
+}

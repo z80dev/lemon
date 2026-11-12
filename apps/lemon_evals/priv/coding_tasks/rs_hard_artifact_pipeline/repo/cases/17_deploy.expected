@@ -1,0 +1,9 @@
+run=1
+roots=metadata,preview
+built|metadata|c614f691a9b3b224|zone-b
+built|raw|1bdc719a2874c017|zone-a!
+built|joined|f5bae889f46e2c35|zone-a! / zone-b
+built|normalized|0c56d732bf1c08e9|DEPLOY! / zone-b
+built|preview|2c65c285c045932f|DEP
+output|metadata|zone-b
+output|preview|DEP

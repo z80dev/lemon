@@ -1,0 +1,8 @@
+{
+  "id": "signup_id",
+  "tenant": "signup_tenant",
+  "revision": "signup_revision",
+  "day": "signup_day",
+  "value": "signup_value",
+  "deleted": "signup_deleted"
+}

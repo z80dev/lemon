@@ -1,0 +1,9 @@
+run=1
+roots=release
+built|metadata|b76c7a65a8642ac8|replica
+built|raw|4da61516a3a17947|origin
+built|joined|f99d60e4f4013733|origin / replica
+built|normalized|e82c603fbc3701cf|MIRROR / replica
+built|preview|54572a04f94646bd|MIR
+built|release|085ab6534b0c0bac|MIRROR / replica :: MIR
+output|release|MIRROR / replica :: MIR

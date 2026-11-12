@@ -1,0 +1,7 @@
+raw|source:north north|
+metadata|source:south|
+joined|join: / |raw,metadata
+normalized|replace:north=>REPORT|joined
+preview|slice:0:3|normalized
+release|join: :: |normalized,preview
+unselected|fail:not a release dependency|

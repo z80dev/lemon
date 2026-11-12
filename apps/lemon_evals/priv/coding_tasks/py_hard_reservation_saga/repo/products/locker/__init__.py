@@ -1,0 +1,1 @@
+"""Locker booking boundary."""

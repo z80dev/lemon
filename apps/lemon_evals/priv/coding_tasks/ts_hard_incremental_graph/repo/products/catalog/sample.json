@@ -1,0 +1,14 @@
+[
+  {
+    "catalog_id": "x",
+    "catalog_needs": [],
+    "catalog_op": "input"
+  },
+  {
+    "catalog_id": "y",
+    "catalog_needs": [
+      "x"
+    ],
+    "catalog_op": "sum"
+  }
+]

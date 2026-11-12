@@ -328,6 +328,86 @@ median wall time, request count and wire tokens. A pooled section covers only
 complete groups, so every arm faces the same model mix, followed by breakdowns
 by model, category, language and difficulty and a per-task, per-model table.
 
+#### Harder long-horizon tasks
+
+Eight `*_hard_*` cases extend the original 72-task suite, with two tasks each
+in Python, TypeScript, Go and Rust. Their 80–200-file fixtures contain connected
+product/source boundaries, configuration and public tests, rather than unrelated
+search padding. They require shared-engine changes followed by complete caller
+migrations and recovery/ownership tests:
+
+| Task | Main contract |
+| --- | --- |
+| `py_hard_reservation_saga` | Atomic multi-product reservations, replay keys, cancellation and snapshot recovery |
+| `py_hard_incremental_rollups` | Revision corrections, tombstones, atomic batches and source-wide checkpoint migration |
+| `ts_hard_incremental_graph` | Validated DAGs, incremental caches, atomic replacement and sixteen build frontends |
+| `ts_hard_policy_compiler` | Overlay compilation, wildcard/condition ranking and sixteen resource gateways |
+| `go_hard_release_graph` | Release dependency validation and incremental change propagation |
+| `go_hard_ledger_recovery` | Transactional journal replay, recovery and reporting |
+| `rs_hard_artifact_pipeline` | Artifact dependency planning, execution and replay |
+| `rs_hard_overlay_compiler` | Layered configuration, tombstones, provenance and validation |
+
+Select them explicitly with `validate --tasks ID,ID` or `run --tasks ID,ID`.
+The normal 600-second trial ceiling still applies; use the same `--timeout`
+for every arm when investigating longer work. Difficulty is a design target,
+not a measured strong-model pass-rate claim; collect fresh paired outcomes
+before claiming the old ceiling has been removed.
+
+`arena.py validate` requires the Docker daemon and `lemon-arena-base` image;
+there is no built-in host-only validation mode. The eight harder tasks also
+accept `WORK_DIR` and `VERIFY_DIR` in their verifier scripts, defaulting to
+`/work` and `/verify`. When Docker is unavailable, a trusted local check can
+copy `repo/` into a disposable directory, invoke `hidden/verify.sh` with those
+two environment variables, require failure, overlay `solution/` into a fresh
+copy, and require success. Check `arena.task_problems()` as well. This checks
+task behavior on the host toolchains, **not** Linux/container isolation, image
+availability or toolchain-version parity. Never run an untrusted agent patch
+this way. Keep temporary copies and validation logs out of commits.
+
+#### Harness caveats and #107 reconciliation
+
+`PI_CODEX_WEBSOCKET=0` is required for omp's Codex arm: its WebSocket transport
+cannot pass through the arena HTTP proxy; the flag forces SSE. Provider endpoint
+choice is also part of the measured harness: Lemon's Z.AI arm uses
+chat-completions, whereas omp's Z.AI arm uses the Anthropic-compatible endpoint.
+Same model names do not make these identical transport/request treatments.
+Record these choices with results; do not interpret a harness comparison as a
+controlled model-only ranking.
+
+The arena supplies the isolated paired-outcome runner needed by #107:
+`--agents lemon-legacy,lemon-coding` groups two Lemon arms that pin
+`LEMON_TOOL_DISCLOSURE_PROFILE=legacy` and `=coding` by task, repetition and
+model, with identical fixtures, late-injected verifiers and shared wire
+accounting. The plain `lemon` arm runs the release defaults (since #518, the
+`auto` profile resolves to `coding` for `lemon -p`), and adding `omp` supplies
+an external comparator. However, it is **not a drop-in replacement** for
+`coding_benchmark_paired.py` or the canonical
+[paired-disclosure workflow](../../docs/benchmarks/paired-disclosure.md):
+
+- The arms pin the profile through the environment but do not observe it: a
+  #107 experiment must still verify the effective profile per trial rather
+  than infer it from the arm label.
+- The paired runner's `paired_configuration()` pins legacy/coding, and
+  `execute_trial()` verifies the observed disclosure profile. It also collects
+  catalog digests, schema/discovery diagnostics and cache-write usage. Arena
+  wire/CLI counters do not replace those attribution checks.
+- The paired runner uses seeded AB/BA counterbalancing, exact source/build/
+  configuration/fixture identities and approved plan digests with bounded
+  attempts/spend. The arena randomizes arm order, schedules model pools and
+  retries infrastructure/429 trials; it has no equivalent approval/spend gate
+  or complete experiment-identity binding. A resumed arena run is not proof of
+  an unchanged approved #107 experiment.
+- Fixtures/verifiers, schedules and reports are separate implementations:
+  arena `load_tasks()` consumes the task directories, while the paired runner
+  accepts cases and a `run_case` callback from the production benchmark.
+  Ported legacy tasks do not imply shared executable fixture definitions.
+
+Use arena results as same-model coding-outcome evidence with those limitations.
+Keep #107's approval, all-attempt accounting and observed-profile requirements
+when making a disclosure rollout decision; no paid run or promotion is
+authorized by this documentation. No paired-runner refactor is included here.
+
+
 ### Profiling Lemon's per-turn token consumers
 
 Use a dedicated source-development daemon, never an existing user's daemon.

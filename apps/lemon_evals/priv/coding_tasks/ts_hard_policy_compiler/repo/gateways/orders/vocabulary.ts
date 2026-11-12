@@ -1,0 +1,1 @@
+export const vocabulary = {"layer": "orders_layer", "rules": "orders_rules", "remove": "orders_remove", "id": "orders_id", "effect": "orders_effect", "path": "orders_path", "actions": "orders_actions", "priority": "orders_priority", "conditions": "orders_conditions", "action": "orders_action", "attributes": "orders_attributes", "defaultResource": "orders/items"} as const;

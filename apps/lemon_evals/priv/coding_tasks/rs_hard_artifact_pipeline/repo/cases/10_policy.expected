@@ -1,0 +1,9 @@
+run=1
+roots=release
+built|metadata|e8a727a58238f212|scope
+built|raw|8401c9a45d0cf226|read read
+built|joined|3abdf3be2c01f67a|read read / scope
+built|normalized|5f85476be89c286c|POLICY POLICY / scope
+built|preview|1863e1445338e9ee|POL
+built|release|c1e5c60b258176a1|POLICY POLICY / scope :: POL
+output|release|POLICY POLICY / scope :: POL

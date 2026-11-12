@@ -1,0 +1,8 @@
+{
+  "id": "upload_id",
+  "tenant": "upload_tenant",
+  "revision": "upload_revision",
+  "day": "upload_day",
+  "value": "upload_value",
+  "deleted": "upload_deleted"
+}

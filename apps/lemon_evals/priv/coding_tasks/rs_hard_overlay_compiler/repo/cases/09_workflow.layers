@@ -1,0 +1,30 @@
+# workflow service deployment: common base, regional routing, security policy
+[base]
+set|service.name|workflow.base
+set|service.port|8080
+set|service.enabled|false
+list|service.tags|base,common,base
+set|service.url|https://${service.name}:${service.port}
+set|auth.token|initial-workflow
+set|auth.header|Bearer ${auth.token}
+set|cache.ttl|300
+set|cache.note|base cache
+set|cachex|prefix lookalike survives
+set|meta.literal|$${service.name} $$ ${service.name}
+[regional]
+parents=base
+append|service.tags|common,ap-south,common
+set|service.port|008233
+set|cache.note|regional cache
+[security]
+parents=base
+append|service.tags|secure,common
+set|auth.token|rotated-workflow
+delete|cache
+[release]
+parents=security,regional
+append|service.tags|ap-south,release,common
+remove|service.tags|common
+set|service.name|workflow.final
+append|service.tags|release,${service.name},workflow.final
+set|cache.ttl|90

@@ -1,0 +1,6 @@
+{
+  "sku_field": "cruise_code",
+  "quantity_field": "cruise_count",
+  "prefix": "cruise:",
+  "limit": 18
+}

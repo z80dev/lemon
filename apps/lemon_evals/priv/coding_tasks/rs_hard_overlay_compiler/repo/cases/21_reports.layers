@@ -1,0 +1,30 @@
+# reports service deployment: common base, regional routing, security policy
+[base]
+set|service.name|reports.base
+set|service.port|8080
+set|service.enabled|false
+list|service.tags|base,common,base
+set|service.url|https://${service.name}:${service.port}
+set|auth.token|initial-reports
+set|auth.header|Bearer ${auth.token}
+set|cache.ttl|300
+set|cache.note|base cache
+set|cachex|prefix lookalike survives
+set|meta.literal|$${service.name} $$ ${service.name}
+[regional]
+parents=base
+append|service.tags|common,eu-north,common
+set|service.port|008001
+set|cache.note|regional cache
+[security]
+parents=base
+append|service.tags|secure,common
+set|auth.token|rotated-reports
+delete|cache
+[release]
+parents=security,regional
+append|service.tags|eu-north,release,common
+remove|service.tags|common
+set|service.name|reports.final
+append|service.tags|release,${service.name},reports.final
+set|cache.ttl|90

@@ -1,0 +1,11 @@
+run=1
+roots=preview,release
+built|empty|a6a2d31f9155f3b6|
+built|metadata|f597ab7ad13777df|chunk-bb
+built|raw|5ec02259cb057f99|chunk-aa
+built|joined|3f351faa0a58ee5f|chunk-aa / chunk-bb
+built|normalized|d68e1e7dcf90d889|BACKUP / chunk-bb
+built|preview|c7e41118f92d28d8|BAC
+built|release|59549dceebe90c7c|BACKUP / chunk-bb :: BAC :: 
+output|preview|BAC
+output|release|BACKUP / chunk-bb :: BAC :: 

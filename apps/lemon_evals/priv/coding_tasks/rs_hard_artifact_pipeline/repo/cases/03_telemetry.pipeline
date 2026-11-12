@@ -1,0 +1,7 @@
+unselected|fail:not a release dependency|
+release|join: :: |normalized,preview
+preview|slice:0:3|normalized
+normalized|replace:cpu=7=>TELEMETRY|joined
+joined|join: / |raw,metadata
+metadata|source:mem=9|
+raw|source:cpu=7|

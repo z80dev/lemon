@@ -1,0 +1,14 @@
+[
+  {
+    "keys_id": "x",
+    "keys_needs": [],
+    "keys_op": "input"
+  },
+  {
+    "keys_id": "y",
+    "keys_needs": [
+      "x"
+    ],
+    "keys_op": "sum"
+  }
+]

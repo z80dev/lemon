@@ -1,0 +1,17 @@
+{
+  "name": "component_04",
+  "version": {
+    "major": 1,
+    "minor": 2,
+    "patch": 3
+  },
+  "group": "train_4",
+  "private": false,
+  "dependencies": [
+    {
+      "name": "component_03",
+      "kind": "build",
+      "policy": "compatible"
+    }
+  ]
+}

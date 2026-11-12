@@ -1,0 +1,6 @@
+{
+  "sku_field": "locker_code",
+  "quantity_field": "locker_count",
+  "prefix": "locker:",
+  "limit": 22
+}

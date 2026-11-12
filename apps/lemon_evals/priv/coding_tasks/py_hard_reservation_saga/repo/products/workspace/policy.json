@@ -1,0 +1,6 @@
+{
+  "sku_field": "workspace_code",
+  "quantity_field": "workspace_count",
+  "prefix": "workspace:",
+  "limit": 23
+}

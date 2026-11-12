@@ -1,0 +1,14 @@
+{
+  "assets_layer": "assets-base",
+  "assets_rules": [
+    {
+      "assets_id": "reader",
+      "assets_effect": "allow",
+      "assets_path": "assets/items",
+      "assets_actions": [
+        "read"
+      ],
+      "assets_priority": 0
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "sku_field": "ferry_code",
+  "quantity_field": "ferry_count",
+  "prefix": "ferry:",
+  "limit": 12
+}

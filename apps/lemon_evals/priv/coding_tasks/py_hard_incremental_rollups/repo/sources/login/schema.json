@@ -1,0 +1,8 @@
+{
+  "id": "login_id",
+  "tenant": "login_tenant",
+  "revision": "login_revision",
+  "day": "login_day",
+  "value": "login_value",
+  "deleted": "login_deleted"
+}

@@ -1,0 +1,6 @@
+{
+  "sku_field": "camp_code",
+  "quantity_field": "camp_count",
+  "prefix": "camp:",
+  "limit": 17
+}

@@ -1,0 +1,6 @@
+{
+  "sku_field": "theater_code",
+  "quantity_field": "theater_count",
+  "prefix": "theater:",
+  "limit": 15
+}

@@ -1,0 +1,14 @@
+{
+  "jobs_layer": "jobs-base",
+  "jobs_rules": [
+    {
+      "jobs_id": "reader",
+      "jobs_effect": "allow",
+      "jobs_path": "jobs/items",
+      "jobs_actions": [
+        "read"
+      ],
+      "jobs_priority": 0
+    }
+  ]
+}

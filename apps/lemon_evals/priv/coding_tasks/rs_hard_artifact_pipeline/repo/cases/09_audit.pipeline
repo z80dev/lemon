@@ -1,0 +1,7 @@
+unselected|fail:not a release dependency|
+release|join: :: |normalized,preview
+preview|slice:0:3|normalized
+normalized|replace:actor=ops=>AUDIT|joined
+joined|join: / |raw,metadata
+metadata|source:allow|
+raw|source:actor=ops|

@@ -1,0 +1,7 @@
+raw|source:λ雪🦀x|
+metadata|source:résumé|
+joined|join: / |raw,metadata
+normalized|replace:λ雪🦀x=>LANGUAGE|joined
+preview|slice:0:3|normalized
+release|join: :: |normalized,preview
+unselected|fail:not a release dependency|

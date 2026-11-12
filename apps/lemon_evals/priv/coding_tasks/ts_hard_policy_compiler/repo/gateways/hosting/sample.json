@@ -1,0 +1,14 @@
+{
+  "hosting_layer": "hosting-base",
+  "hosting_rules": [
+    {
+      "hosting_id": "reader",
+      "hosting_effect": "allow",
+      "hosting_path": "hosting/items",
+      "hosting_actions": [
+        "read"
+      ],
+      "hosting_priority": 0
+    }
+  ]
+}

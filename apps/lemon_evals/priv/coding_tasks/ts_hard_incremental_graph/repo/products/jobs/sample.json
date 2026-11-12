@@ -1,0 +1,14 @@
+[
+  {
+    "jobs_id": "x",
+    "jobs_needs": [],
+    "jobs_op": "input"
+  },
+  {
+    "jobs_id": "y",
+    "jobs_needs": [
+      "x"
+    ],
+    "jobs_op": "sum"
+  }
+]

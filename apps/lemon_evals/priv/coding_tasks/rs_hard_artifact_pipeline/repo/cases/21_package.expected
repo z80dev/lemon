@@ -1,0 +1,10 @@
+run=1
+roots=preview,release
+built|metadata|169d68a7eaf64cf9|bin
+built|raw|59c1f100b9a37214|lib lib!
+built|joined|2990e969d6dd74c6|lib lib! / bin
+built|normalized|470a090440d2a434|PACKAGE PACKAGE! / bin
+built|preview|142fae9e200de1b6|PAC
+built|release|82d44d0b3bc0aa83|PACKAGE PACKAGE! / bin :: PAC
+output|preview|PAC
+output|release|PACKAGE PACKAGE! / bin :: PAC

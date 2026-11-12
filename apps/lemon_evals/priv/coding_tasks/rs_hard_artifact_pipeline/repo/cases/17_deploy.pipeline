@@ -1,0 +1,7 @@
+unselected|fail:not a release dependency|
+release|join: :: |normalized,preview
+preview|slice:0:3|normalized
+normalized|replace:zone-a=>DEPLOY|joined
+joined|join: / |raw,metadata
+metadata|source:zone-b|
+raw|source:zone-a|

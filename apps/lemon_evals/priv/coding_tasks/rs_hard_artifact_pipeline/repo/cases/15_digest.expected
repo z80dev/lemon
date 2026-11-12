@@ -1,0 +1,10 @@
+run=1
+roots=preview,release
+built|metadata|883e3d1bd617bc0f|salt
+built|raw|3339d583a060a602|abcdef
+built|joined|5d37051cd3ea6fdb|abcdef / salt
+built|normalized|10c76e244fb71cf2|DIGEST / salt
+built|preview|3487b767d78537fa|DIG
+built|release|0f3332688b88bad5|DIGEST / salt :: DIG
+output|preview|DIG
+output|release|DIGEST / salt :: DIG

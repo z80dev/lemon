@@ -1,0 +1,8 @@
+{
+  "id": "download_id",
+  "tenant": "download_tenant",
+  "revision": "download_revision",
+  "day": "download_day",
+  "value": "download_value",
+  "deleted": "download_deleted"
+}

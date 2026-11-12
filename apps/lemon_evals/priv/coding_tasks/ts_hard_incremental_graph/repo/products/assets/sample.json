@@ -1,0 +1,14 @@
+[
+  {
+    "assets_id": "x",
+    "assets_needs": [],
+    "assets_op": "input"
+  },
+  {
+    "assets_id": "y",
+    "assets_needs": [
+      "x"
+    ],
+    "assets_op": "sum"
+  }
+]

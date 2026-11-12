@@ -1,0 +1,30 @@
+# archive service deployment: common base, regional routing, security policy
+[base]
+set|service.name|archive.base
+set|service.port|8080
+set|service.enabled|true
+list|service.tags|base,common,base
+set|service.url|https://${service.name}:${service.port}
+set|auth.token|initial-archive
+set|auth.header|Bearer ${auth.token}
+set|cache.ttl|300
+set|cache.note|base cache
+set|cachex|prefix lookalike survives
+set|meta.literal|$${service.name} $$ ${service.name}
+[regional]
+parents=base
+append|service.tags|common,eu-north,common
+set|service.port|008800
+set|cache.note|regional cache
+[security]
+parents=base
+append|service.tags|secure,common
+set|auth.token|rotated-archive
+delete|cache
+[release]
+parents=security,regional
+append|service.tags|eu-north,release,common
+remove|service.tags|common
+set|service.name|archive.final
+append|service.tags|release,${service.name},archive.final
+set|cache.ttl|90

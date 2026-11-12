@@ -1,0 +1,8 @@
+{
+  "id": "import_id",
+  "tenant": "import_tenant",
+  "revision": "import_revision",
+  "day": "import_day",
+  "value": "import_value",
+  "deleted": "import_deleted"
+}

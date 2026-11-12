@@ -1,0 +1,9 @@
+run=1
+roots=release
+built|metadata|9ea3401fb12750d4|credit
+built|raw|37a595fc2d47697c|debit
+built|joined|66861c051a4cff35|debit / credit
+built|normalized|3b0e77e486924dfe|LEDGER / credit
+built|preview|9eacc4b051d27176|LED
+built|release|6cba9c6e4f13c45c|LEDGER / credit :: LED
+output|release|LEDGER / credit :: LED

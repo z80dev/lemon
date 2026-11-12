@@ -1,0 +1,14 @@
+[
+  {
+    "exports_id": "x",
+    "exports_needs": [],
+    "exports_op": "input"
+  },
+  {
+    "exports_id": "y",
+    "exports_needs": [
+      "x"
+    ],
+    "exports_op": "sum"
+  }
+]

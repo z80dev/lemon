@@ -1,0 +1,14 @@
+{
+  "orders_layer": "orders-base",
+  "orders_rules": [
+    {
+      "orders_id": "reader",
+      "orders_effect": "allow",
+      "orders_path": "orders/items",
+      "orders_actions": [
+        "read"
+      ],
+      "orders_priority": 0
+    }
+  ]
+}

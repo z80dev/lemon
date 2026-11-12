@@ -1,0 +1,8 @@
+empty|join::|
+raw|source:core|
+metadata|source:plugin|
+joined|join: / |raw,metadata
+normalized|replace:core=>BUNDLE|joined
+preview|slice:0:3|normalized
+release|join: :: |normalized,preview,empty
+unselected|fail:not a release dependency|

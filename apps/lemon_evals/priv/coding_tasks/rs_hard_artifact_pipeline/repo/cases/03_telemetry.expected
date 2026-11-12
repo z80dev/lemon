@@ -1,0 +1,10 @@
+run=1
+roots=preview,release
+built|metadata|78f3b780687a2189|mem=9
+built|raw|78c2ce040e127e30|cpu=7
+built|joined|b60210b1520ccfa0|cpu=7 / mem=9
+built|normalized|dc0f9d99e6ead00b|TELEMETRY / mem=9
+built|preview|9033897e7a6db708|TEL
+built|release|edbe4c2b576ee879|TELEMETRY / mem=9 :: TEL
+output|preview|TEL
+output|release|TELEMETRY / mem=9 :: TEL

@@ -1,0 +1,1 @@
+"""Checkout analytics wire boundary."""

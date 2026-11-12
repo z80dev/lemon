@@ -1,0 +1,8 @@
+empty|join::|
+raw|source:USD:120|
+metadata|source:tax:24|
+joined|join: / |raw,metadata
+normalized|replace:USD:120=>INVOICE|joined
+preview|slice:0:3|normalized
+release|join: :: |normalized,preview,empty
+unselected|fail:not a release dependency|

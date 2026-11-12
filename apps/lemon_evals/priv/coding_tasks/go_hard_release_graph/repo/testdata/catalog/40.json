@@ -1,0 +1,22 @@
+{
+  "name": "component_40",
+  "version": {
+    "major": 1,
+    "minor": 2,
+    "patch": 3
+  },
+  "group": "train_4",
+  "private": false,
+  "dependencies": [
+    {
+      "name": "component_39",
+      "kind": "build",
+      "policy": "compatible"
+    },
+    {
+      "name": "component_32",
+      "kind": "runtime",
+      "policy": "compatible"
+    }
+  ]
+}

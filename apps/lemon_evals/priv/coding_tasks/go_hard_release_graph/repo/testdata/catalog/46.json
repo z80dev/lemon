@@ -1,0 +1,22 @@
+{
+  "name": "component_46",
+  "version": {
+    "major": 1,
+    "minor": 2,
+    "patch": 3
+  },
+  "group": "",
+  "private": false,
+  "dependencies": [
+    {
+      "name": "component_45",
+      "kind": "build",
+      "policy": "compatible"
+    },
+    {
+      "name": "component_38",
+      "kind": "runtime",
+      "policy": "compatible"
+    }
+  ]
+}

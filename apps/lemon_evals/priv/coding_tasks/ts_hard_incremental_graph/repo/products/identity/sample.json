@@ -1,0 +1,14 @@
+[
+  {
+    "identity_id": "x",
+    "identity_needs": [],
+    "identity_op": "input"
+  },
+  {
+    "identity_id": "y",
+    "identity_needs": [
+      "x"
+    ],
+    "identity_op": "sum"
+  }
+]

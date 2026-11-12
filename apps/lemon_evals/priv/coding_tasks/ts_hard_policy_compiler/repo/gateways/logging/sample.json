@@ -1,0 +1,14 @@
+{
+  "logging_layer": "logging-base",
+  "logging_rules": [
+    {
+      "logging_id": "reader",
+      "logging_effect": "allow",
+      "logging_path": "logging/items",
+      "logging_actions": [
+        "read"
+      ],
+      "logging_priority": 0
+    }
+  ]
+}

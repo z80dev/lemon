@@ -1,0 +1,14 @@
+{
+  "fraud_layer": "fraud-base",
+  "fraud_rules": [
+    {
+      "fraud_id": "reader",
+      "fraud_effect": "allow",
+      "fraud_path": "fraud/items",
+      "fraud_actions": [
+        "read"
+      ],
+      "fraud_priority": 0
+    }
+  ]
+}

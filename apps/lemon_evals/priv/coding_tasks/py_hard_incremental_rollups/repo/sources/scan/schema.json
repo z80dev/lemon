@@ -1,0 +1,8 @@
+{
+  "id": "scan_id",
+  "tenant": "scan_tenant",
+  "revision": "scan_revision",
+  "day": "scan_day",
+  "value": "scan_value",
+  "deleted": "scan_deleted"
+}

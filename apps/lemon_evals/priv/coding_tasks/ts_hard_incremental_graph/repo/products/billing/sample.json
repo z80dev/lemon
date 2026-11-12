@@ -1,0 +1,14 @@
+[
+  {
+    "billing_id": "x",
+    "billing_needs": [],
+    "billing_op": "input"
+  },
+  {
+    "billing_id": "y",
+    "billing_needs": [
+      "x"
+    ],
+    "billing_op": "sum"
+  }
+]

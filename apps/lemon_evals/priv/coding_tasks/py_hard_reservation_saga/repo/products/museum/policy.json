@@ -1,0 +1,6 @@
+{
+  "sku_field": "museum_code",
+  "quantity_field": "museum_count",
+  "prefix": "museum:",
+  "limit": 14
+}

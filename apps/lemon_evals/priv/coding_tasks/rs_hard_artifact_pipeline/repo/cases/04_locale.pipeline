@@ -1,0 +1,7 @@
+raw|source:café雪|
+metadata|source:βeta|
+joined|join: / |raw,metadata
+normalized|replace:café雪=>LOCALE|joined
+preview|slice:0:3|normalized
+release|join: :: |normalized,preview
+unselected|fail:not a release dependency|

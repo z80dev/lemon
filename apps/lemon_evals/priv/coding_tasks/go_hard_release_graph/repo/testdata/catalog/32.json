@@ -1,0 +1,22 @@
+{
+  "name": "component_32",
+  "version": {
+    "major": 1,
+    "minor": 2,
+    "patch": 3
+  },
+  "group": "train_2",
+  "private": false,
+  "dependencies": [
+    {
+      "name": "component_31",
+      "kind": "dev",
+      "policy": "any"
+    },
+    {
+      "name": "component_24",
+      "kind": "runtime",
+      "policy": "any"
+    }
+  ]
+}

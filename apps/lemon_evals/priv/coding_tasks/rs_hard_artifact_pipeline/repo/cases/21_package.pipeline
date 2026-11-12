@@ -1,0 +1,7 @@
+unselected|fail:not a release dependency|
+release|join: :: |normalized,preview
+preview|slice:0:3|normalized
+normalized|replace:lib=>PACKAGE|joined
+joined|join: / |raw,metadata
+metadata|source:bin|
+raw|source:lib lib|

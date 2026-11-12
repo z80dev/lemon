@@ -1,0 +1,6 @@
+{
+  "sku_field": "rail_code",
+  "quantity_field": "rail_count",
+  "prefix": "rail:",
+  "limit": 9
+}

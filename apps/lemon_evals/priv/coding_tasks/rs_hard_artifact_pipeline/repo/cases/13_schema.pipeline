@@ -1,0 +1,7 @@
+unselected|fail:not a release dependency|
+release|join: :: |normalized,preview
+preview|slice:0:3|normalized
+normalized|replace:v2=>SCHEMA|joined
+joined|join: / |raw,metadata
+metadata|source:stable|
+raw|source:v2 v2|

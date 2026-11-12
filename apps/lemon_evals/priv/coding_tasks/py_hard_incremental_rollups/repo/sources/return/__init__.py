@@ -1,0 +1,1 @@
+"""Return analytics wire boundary."""

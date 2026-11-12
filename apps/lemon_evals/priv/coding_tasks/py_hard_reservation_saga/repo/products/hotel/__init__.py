@@ -1,0 +1,1 @@
+"""Hotel booking boundary."""

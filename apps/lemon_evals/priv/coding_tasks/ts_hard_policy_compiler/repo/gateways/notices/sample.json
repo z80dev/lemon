@@ -1,0 +1,14 @@
+{
+  "notices_layer": "notices-base",
+  "notices_rules": [
+    {
+      "notices_id": "reader",
+      "notices_effect": "allow",
+      "notices_path": "notices/items",
+      "notices_actions": [
+        "read"
+      ],
+      "notices_priority": 0
+    }
+  ]
+}
