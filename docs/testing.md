@@ -13,6 +13,7 @@ scripts/test changed --focused  # quick matching-file pre-check only
 scripts/test fast        # what CI's `test` job runs
 scripts/test quality     # what CI's `check` job runs
 scripts/test clients     # what CI's `clients` job runs
+scripts/test lemon_bot   # backend tests, web build and isolated web tests
 scripts/test coverage    # nightly coverage lane
 scripts/test eval-fast
 scripts/test live-eval
@@ -26,10 +27,11 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 | Lane | Runs |
 | --- | --- |
 | `fast` | `mix compile --warnings-as-errors`, then `mix test --exclude integration` (no coverage). |
-| `changed` | Selects the merge-base-to-working-tree diff (including untracked non-ignored files), compiles with warnings as errors, then runs affected apps and reverse dependencies excluding integration; full scope falls back to `fast`. Runs client checks and docs verification when selected. |
+| `changed` | Selects the merge-base-to-working-tree diff (including untracked non-ignored files), compiles with warnings as errors, then runs affected apps and reverse dependencies excluding integration; full scope falls back to `fast`. Runs client, Lemon Bot and docs checks when selected. |
 | `premerge` | Changed-file format check, changed-file `mix credo` with quality's default configuration, skip-tag guard, changed changelog validation, then `changed --narrow`; stops at the first failure and prints step timings. |
 | `quality` | `mix compile --warnings-as-errors`, `mix format --check-formatted`, `mix credo`, the skip-tag guard, `scripts/check_changelog`, `python3 scripts/test_changed_tests.py`, `shellcheck` on the test/install/update/launcher scripts, `scripts/test_lemon_tui_auth.sh`, `scripts/test_lemon_launcher_reuse.sh`, `scripts/test_lemonup.sh`, `mix lemon.skill.lint`, `mix lemon.quality`, and the quality/eval-harness tests. |
 | `clients` | `clients/tui`: `bun install --frozen-lockfile`, `bun run check`, `bun run lint`, `bun test`. `clients/lemon-browser-node`: `npm ci`, `typecheck`, `lint`, `build`, `npm test`. |
+| `lemon_bot` | Frozen Bun installs in `products/lemon_bot/backend` and `web`; backend `bun test`, then web `bun run build` and `bun run test`. |
 | `coverage` | `mix compile --warnings-as-errors`, then `mix test --exclude integration --cover` with each app's `test_coverage` threshold. |
 | `eval-fast` | `mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}` (deterministic eval harness). |
 | `live-eval` | `mix lemon.eval --live-model`; needs a live credential (see below). |
@@ -46,6 +48,15 @@ name. Add `--validate-config` to also validate the runtime config.
 `quality` needs `shellcheck` and `python3` on `PATH`. Client lanes reinstall
 dependencies; set `LEMON_TEST_REUSE_NODE_MODULES=1` to reuse existing
 `node_modules` in local loops.
+
+Lemon Bot uses the Bun version pinned in `products/lemon_bot/.bun-version`.
+Run its entire lane with `scripts/test lemon_bot`, or use `bun test` in
+`products/lemon_bot/backend` and **`bun run test`** in `products/lemon_bot/web`.
+The web script discovers every `test/**/*.test.ts` and `test/**/*.test.tsx`
+and runs each in its own Bun process, stopping on failure. Bun's `mock.restore()`
+does not undo `mock.module()` replacements or cached component imports; suites
+also install different DOM globals. A single shared-process `bun test` is therefore
+not the web suite entrypoint. To run one file, use `bun test ./test/<name>.test.tsx`.
 
 When Bun is installed, `fast` also exercises the production TUI through the
 control plane. Install its locked dependencies in a fresh worktree first:
@@ -89,21 +100,25 @@ BEAM lanes install `clients/tui` (`bun install --frozen-lockfile`) when it has n
 Use `scripts/test changed [--base REF] [mix test args...]` to repeat just the
 affected work. App changes include transitive reverse dependencies, including
 test-only/conditional umbrella dependencies. Shared build/config/tooling inputs
-and unknown paths conservatively select the full fast suite and clients.
+and unknown paths conservatively select the full fast suite, clients and Lemon Bot.
 Documentation/client/product/showcase data changes select apps whose lib, test
 or priv files reference the exact path or an ancestor of at least two segments;
 these data readers do not pull in reverse dependencies. Client changes also run
 `clients`; docs changes run `scripts/verify_docs_site` (Node and Python required).
+Changes under `products/lemon_bot/` outside `apple/` select `lemon_bot`,
+including backend, web, SDK, contracts, lockfiles and the Bun version pin.
+Apple-only changes select the separate `apple` CI lane. Both `changed` and
+`premerge` run the selected Lemon Bot lane, even when no ExUnit apps are affected.
 
 For an inner loop, `scripts/test changed --focused` runs only existing changed
 `*_test.exs` files and conventional `lib/a/b.ex` → `test/a/b_test.exs` matches.
 This is a **quick pre-check, not a substitute for the affected-app run**; it can
-find no matching tests. Selected client/docs checks still run.
+find no matching tests. Selected client/Lemon Bot/docs checks still run.
 Preview the selection with `scripts/changed_tests --focused`; `--format json`
 is machine-readable. `--format github` appends `scope`, `apps`, `test_paths`,
-`clients`, `wasm`, and `docs` to `$GITHUB_OUTPUT`, and a selection summary to
-`$GITHUB_STEP_SUMMARY` when set. The WASM flag is for CI's dedicated runtime
-lane; `changed` itself does not invoke that toolchain.
+`clients`, `wasm`, `docs`, `apple`, and `lemon_bot` to `$GITHUB_OUTPUT`, and a selection summary to
+`$GITHUB_STEP_SUMMARY` when set. WASM and Apple flags are for CI's dedicated
+toolchains; `changed` itself does not invoke them.
 
 Keep `quality` for repository-wide checks. `scripts/check_changelog` checks
 root/app/installer changelogs by default, or named files; Unreleased must be the
@@ -143,12 +158,16 @@ In `ci.yml`, pull requests run only what their diff can affect, chosen by
 selected apps' test directories (one shard for small selections, four when
 `coding_agent` or more than six apps are selected, or for full scope); no
 selected app skips `test`, `dialyzer` and `install` (a diff touching only
-LemonSim selects no app); `clients` and `wasm-runtime` follow their lanes.
+LemonSim selects no app); `clients`, `lemon_bot`, `apple` and `wasm-runtime` follow their lanes.
 `check` always runs. Every other event (pushes to `main`, release preflight,
 nightly, dispatch) runs every job over every app except LemonSim, which is what
 lets a release reuse a main commit's green run. Cross-app effects that only
 appear in the shared umbrella BEAM (an app registering into another's runtime
 registry) are therefore caught by `main`'s full run, not by the pull request.
+The `lemon_bot` job uses `products/lemon_bot/.bun-version` and calls
+`scripts/test lemon_bot`; backend test, web build or web test failures fail the
+required `CI result` gate. Main pushes and release/nightly preflights run it
+unconditionally.
 
 Pushes to `main` are serialized: one run plus the newest pending one, so a
 burst of merges coalesces into a run of the latest commit. When a `main` run

@@ -105,6 +105,7 @@ class SelectorTest(unittest.TestCase):
         self.assertEqual(result["scope"], "full")
         self.assertEqual(len(result["test_paths"]), 8)
         self.assertNotIn("apps/lemon_sim_ui/test", result["test_paths"])
+        self.assertTrue(result["lanes"]["lemon_bot"])
 
     def test_core_includes_transitive_and_test_only_dependencies(self):
         self.put("apps/lemon_core/lib/sample.ex")
@@ -126,6 +127,7 @@ class SelectorTest(unittest.TestCase):
                 self.assertEqual(result["scope"], "full")
                 self.assertTrue(result["lanes"]["clients"])
                 self.assertTrue(result["lanes"]["apple"])
+                self.assertTrue(result["lanes"]["lemon_bot"])
                 self.assertTrue(any(path in reason for reason in result["reasons"]))
                 # Each case starts from the same content, not the previous full trigger.
                 self.commit()
@@ -152,11 +154,29 @@ class SelectorTest(unittest.TestCase):
         result = self.selection()
         self.assertTrue(result["lanes"]["apple"])
         self.assertFalse(result["lanes"]["clients"])
+        self.assertFalse(result["lanes"]["lemon_bot"])
         self.put("products/lemon_bot/backend/src/server.ts")
         self.commit()
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
         self.put("products/lemon_bot/backend/src/server.ts", "// changed\n")
         self.assertFalse(self.selection()["lanes"]["apple"])
+
+    def test_lemon_bot_lane_covers_backend_web_and_shared_inputs(self):
+        for path in (
+            "products/lemon_bot/backend/src/server.ts",
+            "products/lemon_bot/web/test/example.test.tsx",
+            "products/lemon_bot/sdk/ts/src/client.ts",
+            "products/lemon_bot/contracts/protocol.ts",
+            "products/lemon_bot/.bun-version",
+        ):
+            with self.subTest(path=path):
+                self.put(path)
+                result = self.selection()
+                self.assertEqual(result["scope"], "none")
+                self.assertTrue(result["lanes"]["lemon_bot"])
+                self.assertFalse(result["lanes"]["apple"])
+                self.commit()
+                self.git("update-ref", "refs/remotes/origin/main", "HEAD")
 
     def test_bare_directory_is_not_reference_pattern(self):
         self.put("apps/lemon_router/test/not_a_reader.exs", '"docs"\n')
@@ -216,7 +236,7 @@ class SelectorTest(unittest.TestCase):
         output.write_text("existing=value\n")
         with patch.dict(os.environ, GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=str(summary)):
             selector.github(self.selection())
-        self.assertEqual(output.read_text(), "existing=value\nscope=none\napps=\ntest_paths=\nclients=false\nwasm=false\ndocs=false\napple=false\n")
+        self.assertEqual(output.read_text(), "existing=value\nscope=none\napps=\ntest_paths=\nclients=false\nwasm=false\ndocs=false\napple=false\nlemon_bot=false\n")
         self.assertIn("**none**", summary.read_text())
 
     def run_lane(self, *args, fail_command=""):
@@ -225,11 +245,15 @@ class SelectorTest(unittest.TestCase):
         mix = commands / "mix"
         mix.write_text('#!/usr/bin/env python3\nimport json, os, sys\nwith open(os.environ["COMMAND_LOG"], "a") as log: log.write(json.dumps(sys.argv[1:]) + "\\n")\nsys.exit(7 if sys.argv[1] == os.environ.get("FAIL_COMMAND") else 0)\n')
         mix.chmod(0o755)
+        bun = commands / "bun"
+        bun.write_text('#!/usr/bin/env python3\nimport json, os, sys\nwith open(os.environ["COMMAND_LOG"], "a") as log: log.write(json.dumps(["bun", os.path.basename(os.getcwd()), *sys.argv[1:]]) + "\\n")\nsys.exit(7 if "bun:" + sys.argv[1] == os.environ.get("FAIL_COMMAND") else 0)\n')
+        bun.chmod(0o755)
         log = Path(self.temp.name) / "commands.jsonl"
         home = Path(self.temp.name) / "home"
         home.mkdir(exist_ok=True)
         environment = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"],
-                           HOME=str(home), COMMAND_LOG=str(log), FAIL_COMMAND=fail_command)
+                           HOME=str(home), COMMAND_LOG=str(log), FAIL_COMMAND=fail_command,
+                           LEMON_TEST_REUSE_NODE_MODULES="0")
         environment.pop("LEMON_TEST_ALLOW_LIVE_CREDENTIALS", None)
         result = subprocess.run([str(self.root / "scripts/test"), *args], cwd=self.root,
                                 env=environment, capture_output=True, text=True)
@@ -275,6 +299,26 @@ class SelectorTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([call[0] for call in calls], ["format", "credo", "compile", "test"])
         self.assertIn("Not covered: downstream tests that don't name a changed module", result.stdout)
+
+    def test_premerge_runs_lemon_bot_lane_without_exunit(self):
+        self.put("products/lemon_bot/backend/src/server.ts")
+        self.put("products/lemon_bot/web/package.json", "{}")
+        result, calls = self.run_lane("premerge")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [
+            ["bun", "backend", "install", "--frozen-lockfile"],
+            ["bun", "backend", "test"],
+            ["bun", "web", "install", "--frozen-lockfile"],
+            ["bun", "web", "run", "build"],
+            ["bun", "web", "run", "test"],
+        ])
+
+    def test_premerge_stops_when_backend_tests_fail(self):
+        self.put("products/lemon_bot/backend/src/server.ts")
+        result, calls = self.run_lane("premerge", fail_command="bun:test")
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertEqual(calls[-1], ["bun", "backend", "test"])
+        self.assertIn("premerge changed failed", result.stderr)
 
     def narrow_fixture(self):
         self.put("apps/lemon_core/lib/widget.ex", "defmodule LemonCore.Widget do\nend\n")
