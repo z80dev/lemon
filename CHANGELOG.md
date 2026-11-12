@@ -25,6 +25,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   rather than checking the wrong runtime. It owns only its exact private MCP
   approval, restores adopted public URLs, retains pending receipts after failed
   reconfiguration, and preserves existing env-file permissions.
+  Backend configuration changes force the existing service restart path and
+  verification observes its loaded approval, not only the config file. Planning
+  shares the service installer's effective environment; mismatched controller
+  credential ports fail before mutation.
 - Lemon Bot backend tests and the web build/tests now gate CI and run in the
   changed-file/premerge lane. Web tests run in separate processes so module
   mocks cannot leak between suites.

@@ -267,9 +267,13 @@ lemon bot https enable --tailscale
 This configures Tailscale Serve for the loopback Bot backend, saves its HTTPS
 origin, updates both controller callback allowlists, approves exactly that origin
 for the backend's first-party private MCP tools in its existing operator
-configuration, and refreshes the managed services. It verifies instance identity,
-controller admission and execution's MCP destination policy before marking the
-receipt active. Tailscale must already be installed and connected. It uses private
+configuration, and restarts the backend when its effective configuration changes.
+It uses the service installer's environment resolution, verifies instance identity,
+controller admission, execution's MCP destination policy and the running backend's
+loaded approval before marking the receipt active. A controller/launcher credential
+port mismatch refuses before changing settings; select that controller's port with
+`LEMON_CONTROL_PLANE_PORT` when invoking the command. Tailscale must already be
+installed and connected. It uses private
 tailnet access, **not Funnel**; it does not expose the controller operator port
 4040. Devices still need to sign in to Lemon Bot.
 

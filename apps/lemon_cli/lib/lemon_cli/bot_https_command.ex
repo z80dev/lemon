@@ -85,6 +85,7 @@ defmodule LemonCli.BotHttpsCommand do
   defp change({:enable, mode}, opts) do
     with {:ok, existing} <- read_state(opts),
          {:ok, backend} <- backend_environment(opts),
+         opts <- bind_backend_environment(backend, opts),
          {:ok, opts} <- controller_options(backend, opts),
          {:ok, env_file} <- read_env(opts),
          {:ok, operator} <- read_operator(backend, opts),
@@ -106,8 +107,9 @@ defmodule LemonCli.BotHttpsCommand do
            :ok <- verify_identity(plan["origin"], opts),
            :ok <- controller_check(plan["origin"], opts),
            :ok <- verify_mcp_policy(plan["origin"], backend, opts),
+           :ok <- verify_running_policy(plan["origin"], true, opts),
            :ok <- write_state(Map.put(plan, "phase", "active"), opts),
-           {:ok, result} <- status(opts) do
+           {:ok, result} <- status(Keyword.put(opts, :bot_public_url, plan["origin"])) do
         {:ok, Map.put(result, :changed, not same)}
       end
     end
@@ -119,6 +121,7 @@ defmodule LemonCli.BotHttpsCommand do
         with {:ok, result} <- status(opts), do: {:ok, Map.put(result, :changed, false)}
       else
         with {:ok, backend} <- backend_environment(opts),
+             opts <- bind_backend_environment(backend, opts),
              {:ok, opts} <- controller_options(backend, opts),
              {:ok, env_file} <- read_env(opts),
              {:ok, operator} <- read_operator(backend, opts),
@@ -126,8 +129,10 @@ defmodule LemonCli.BotHttpsCommand do
              :ok <- remove_owned_origins(state, env_file, opts),
              :ok <- remove_private_mcp(state, operator),
              :ok <- configure_services(state["public_url"]["original"], opts),
+             :ok <- verify_restored_policy(state["public_url"]["original"], backend, opts),
              :ok <- File.rm(state_path(opts)),
-             {:ok, result} <- status(opts) do
+             {:ok, result} <-
+               status(Keyword.put(opts, :bot_public_url, state["public_url"]["original"])) do
           {:ok, Map.put(result, :changed, true)}
         end
       end
@@ -160,6 +165,15 @@ defmodule LemonCli.BotHttpsCommand do
            "schema" => 2,
            "phase" => "pending",
            "added" => additions,
+           "backend_env" =>
+             if(state,
+               do: state["backend_env"],
+               else:
+                 Map.take(
+                   backend,
+                   ~w(LEMON_BOT_PORT LEMON_BOT_HOST LEMON_BOT_DATA_DIR LEMON_BOT_CONFIG_FILE LEMON_BOT_CONTROL_URL LEMON_CONTROL_PLANE_PORT)
+                 )
+             ),
            "public_url" =>
              if(state,
                do: state["public_url"],
@@ -211,6 +225,23 @@ defmodule LemonCli.BotHttpsCommand do
       else: :ok
   end
 
+  defp bind_backend_environment(backend, opts) do
+    opts
+    |> Keyword.put_new(:launcher_controller_port, Role.port("controller", opts))
+    |> Keyword.put(:env, backend)
+  end
+
+  defp matching_credential_endpoint(uri, opts) do
+    launcher_port = Keyword.get(opts, :launcher_controller_port, Role.port("controller", opts))
+
+    if uri.port == launcher_port do
+      :ok
+    else
+      {:error,
+       "The selected controller uses a different port from the launcher's managed credential. Set LEMON_CONTROL_PLANE_PORT=#{uri.port} when invoking lemon bot https so the launcher loads that endpoint's credential; no settings were changed."}
+    end
+  end
+
   defp controller_options(backend, opts) do
     explicit =
       backend["LEMON_BOT_CONTROL_URL"] not in [nil, ""] or
@@ -240,10 +271,14 @@ defmodule LemonCli.BotHttpsCommand do
                true <-
                  uri.path == "/ws" and is_nil(uri.userinfo) and is_nil(uri.query) and
                    is_nil(uri.fragment),
-               true <- is_integer(uri.port) and uri.port in 1..65_535 do
+               true <- is_integer(uri.port) and uri.port in 1..65_535,
+               :ok <- matching_credential_endpoint(uri, opts) do
             {:ok,
              opts |> Keyword.put(:controller_url, url) |> Keyword.put(:controller_port, uri.port)}
           else
+            {:error, message} ->
+              {:error, message}
+
             _ ->
               {:error,
                "The Bot uses a remote controller or unsupported controller endpoint. Managed HTTPS refuses to restart or verify a different local controller; use the manual HTTPS appendix."}
@@ -465,7 +500,11 @@ defmodule LemonCli.BotHttpsCommand do
       Keyword.get(opts, :env, System.get_env())
       |> Map.put("LEMON_CONTROL_PLANE_PORT", to_string(opts[:controller_port]))
 
-    backend_opts = opts |> Keyword.put(:env, backend_env) |> Keyword.put(:bot_public_url, origin)
+    backend_opts =
+      opts
+      |> Keyword.put(:env, backend_env)
+      |> Keyword.put(:bot_public_url, origin)
+      |> Keyword.put(:restart_backend, true)
 
     with :ok <- ready(install.(["controller"], controller_opts)),
          :ok <- restart_controller(controller_opts),
@@ -518,6 +557,38 @@ defmodule LemonCli.BotHttpsCommand do
       _ ->
         {:error,
          "The HTTPS address did not serve the same Lemon Bot instance as loopback. Check the proxy target and TLS certificate, then run enable again."}
+    end
+  end
+
+  defp verify_running_policy(origin, expected_approval, opts) do
+    get = Keyword.get(opts, :http_get, &http_get/1)
+
+    with {:ok,
+          %{
+            "product" => "lemon_bot",
+            "publicUrl" => public,
+            "firstPartyMcpApproved" => ^expected_approval
+          }} <- get.(loopback(opts) <> "/v1/setup"),
+         true <- canonical(public) == origin do
+      :ok
+    else
+      _ ->
+        {:error,
+         "The running backend has not loaded the expected public URL and first-party MCP approval. Its HTTPS receipt remains pending; inspect the backend service restart before retrying."}
+    end
+  end
+
+  defp verify_restored_policy(original, backend, opts) do
+    origin = if original in [nil, ""], do: loopback(opts), else: canonical(original)
+
+    with {:ok, operator} <- read_operator(backend, opts) do
+      uri = URI.parse(origin)
+
+      approval =
+        member?(operator.origins, origin) or
+          (uri.scheme == "http" and uri.host in ["127.0.0.1", "::1"])
+
+      verify_running_policy(origin, approval, opts)
     end
   end
 
@@ -628,14 +699,13 @@ defmodule LemonCli.BotHttpsCommand do
         {:ok, env}
 
       :error ->
-        {manager, _, _} = Service.manager(opts)
-        port = Role.port("backend", opts)
-        path = Role.unit_path(Role.label("backend", manager, nil, port), manager, opts)
+        case Service.install_spec("backend", opts) do
+          {:ok, spec} ->
+            {:ok, spec.env}
 
-        case Unit.read(path, manager) do
-          {:ok, parsed} -> {:ok, parsed.env}
-          {:error, :not_found} -> {:ok, %{}}
-          _ -> {:error, "The existing Bot service definition cannot be read safely."}
+          _ ->
+            {:error,
+             "The backend service environment cannot be resolved safely through the service installer."}
         end
     end
   end

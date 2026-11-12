@@ -13,6 +13,11 @@ defmodule LemonCli.BotHttpsCommandTest do
     record = fn call -> Agent.update(calls, &[call | &1]) end
     {:ok, backend} = Agent.start_link(fn -> %{} end)
 
+    {:ok, running} =
+      Agent.start_link(fn ->
+        %{"publicUrl" => "http://127.0.0.1:4100", "firstPartyMcpApproved" => true}
+      end)
+
     opts = [
       home: home,
       env: %{},
@@ -26,14 +31,47 @@ defmodule LemonCli.BotHttpsCommandTest do
       service_install: fn roles, options ->
         record.({:install, roles, options[:bot_public_url]})
 
-        if roles == ["backend"],
-          do:
-            Agent.update(backend, fn _ ->
-              if(options[:bot_public_url],
-                do: %{"LEMON_BOT_PUBLIC_URL" => options[:bot_public_url]},
-                else: %{}
+        if roles == ["backend"] do
+          send(parent, {:backend_restart_requested, options[:restart_backend]})
+          environment = Map.delete(options[:env] || %{}, "LEMON_BOT_PUBLIC_URL")
+
+          environment =
+            if options[:bot_public_url],
+              do: Map.put(environment, "LEMON_BOT_PUBLIC_URL", options[:bot_public_url]),
+              else: environment
+
+          Agent.update(backend, fn _ -> environment end)
+
+          if options[:restart_backend] do
+            config_path =
+              environment["LEMON_BOT_CONFIG_FILE"] ||
+                Path.join(
+                  environment["LEMON_BOT_DATA_DIR"] || Path.join(home, ".lemon/lemon_bot"),
+                  "config.json"
+                )
+
+            config =
+              case File.read(config_path) do
+                {:ok, text} -> Jason.decode!(text)
+                _ -> %{}
+              end
+
+            {:ok, public} =
+              LemonMCP.HTTP.OriginPolicy.canonical_origin(
+                options[:bot_public_url] || "http://127.0.0.1:4100"
               )
+
+            uri = URI.parse(public)
+
+            approved =
+              public in (config["approvedPrivateMcpOrigins"] || []) or
+                (uri.scheme == "http" and uri.host in ["127.0.0.1", "::1"])
+
+            Agent.update(running, fn _ ->
+              %{"publicUrl" => public, "firstPartyMcpApproved" => approved}
             end)
+          end
+        end
 
         {:ok, %{units: Enum.map(roles, &%{role: &1, state: "ready"})}}
       end,
@@ -43,7 +81,12 @@ defmodule LemonCli.BotHttpsCommandTest do
       end,
       http_get: fn url ->
         send(parent, {:identity, url})
-        {:ok, %{"product" => "lemon_bot", "instanceId" => "same-instance"}}
+
+        {:ok,
+         Map.merge(
+           %{"product" => "lemon_bot", "instanceId" => "same-instance"},
+           Agent.get(running, & &1)
+         )}
       end,
       controller_check: fn origin ->
         send(parent, {:doctor, origin})
@@ -65,6 +108,85 @@ defmodule LemonCli.BotHttpsCommandTest do
     ]
 
     {:ok, home: home, opts: opts, calls: calls}
+  end
+
+  test "backend policy changes restart on enable, pending retry, and disable and are checked live",
+       %{home: home, opts: opts} do
+    install = opts[:service_install]
+
+    stale =
+      Keyword.put(opts, :service_install, fn roles, options ->
+        install.(roles, Keyword.delete(options, :restart_backend))
+      end)
+
+    assert {:error, message} = HTTPS.execute(["enable", "--url", "https://bot.example"], stale)
+    assert message =~ "running backend"
+
+    assert Jason.decode!(File.read!(Path.join(home, ".lemon/bot-https.json")))["phase"] ==
+             "pending"
+
+    assert {:ok, _} = HTTPS.execute(["enable", "--url", "https://bot.example"], opts)
+    assert_received {:backend_restart_requested, true}
+    assert {:ok, _} = HTTPS.execute(["disable"], opts)
+    assert_received {:backend_restart_requested, true}
+  end
+
+  test "first install resolves the invoking operator environment through the service installer",
+       %{home: home, opts: opts} do
+    bot = Path.join(home, ".local/bin/lemon-bot")
+    File.mkdir_p!(Path.dirname(bot))
+    File.write!(bot, "#!/bin/sh\nexit 0\n")
+    File.chmod!(bot, 0o700)
+    config = Path.join(home, "custom/operator.json")
+
+    opts =
+      opts
+      |> Keyword.delete(:backend_env)
+      |> Keyword.merge(
+        os: :darwin,
+        uid: "501",
+        bot: bot,
+        login_path: "/usr/bin:/bin",
+        command_runner: fn _, _, _ -> {"", 1} end,
+        env: %{
+          "LEMON_BOT_CONFIG_FILE" => config,
+          "LEMON_BOT_DATA_DIR" => Path.join(home, "custom/data")
+        }
+      )
+
+    assert {:ok, _} = HTTPS.execute(["enable", "--url", "https://bot.example"], opts)
+
+    assert Jason.decode!(File.read!(config))["approvedPrivateMcpOrigins"] == [
+             "https://bot.example"
+           ]
+
+    state = Jason.decode!(File.read!(Path.join(home, ".lemon/bot-https.json")))
+    assert state["private_mcp"]["path"] == config
+    refute File.exists?(Path.join(home, ".lemon/lemon_bot/config.json"))
+  end
+
+  test "a controller credential port mismatch refuses before any mutation", %{
+    home: home,
+    opts: opts,
+    calls: calls
+  } do
+    opts =
+      opts
+      |> Keyword.put(:backend_env, %{"LEMON_BOT_CONTROL_URL" => "ws://127.0.0.1:5050/ws"})
+      |> Keyword.put(:env, %{
+        "LEMON_CONTROL_PLANE_PORT" => "4040",
+        "LEMON_CONTROL_PLANE_OPERATOR_TOKEN" => "never-print-this"
+      })
+      |> Keyword.put(:controller_check, fn _ ->
+        flunk("must not authenticate with the wrong port's credential")
+      end)
+
+    assert {:error, message} = HTTPS.execute(["enable", "--url", "https://bot.example"], opts)
+    assert message =~ "LEMON_CONTROL_PLANE_PORT=5050"
+    refute message =~ "never-print-this"
+    assert Agent.get(calls, & &1) == []
+    refute File.exists?(Path.join(home, ".lemon/bot-https.json"))
+    refute File.exists?(Path.join(home, ".lemon/env"))
   end
 
   test "MCP verification invokes the actual backend policy without runtime cache writes or credentials",
@@ -167,6 +289,7 @@ defmodule LemonCli.BotHttpsCommandTest do
     opts =
       opts
       |> Keyword.put(:backend_env, %{"LEMON_CONTROL_PLANE_PORT" => "5050"})
+      |> Keyword.put(:env, %{"LEMON_CONTROL_PLANE_PORT" => "5050"})
       |> Keyword.delete(:controller_check)
       |> Keyword.put(:rpc, fn _, _, rpc_opts ->
         send(parent, {:controller_url, rpc_opts[:url]})

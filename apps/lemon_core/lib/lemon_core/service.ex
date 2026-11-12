@@ -31,6 +31,19 @@ defmodule LemonCore.Service do
   def repair(roles \\ [], opts \\ []), do: perform(:repair, roles, opts)
   def uninstall(roles, opts \\ []), do: perform(:uninstall, roles, opts)
 
+  @doc false
+  def install_spec(role, opts \\ []) do
+    {manager, _, _} = manager(opts)
+
+    with true <- role in Role.roles(),
+         {:ok, spec, _existing} <- resolve(role, manager, opts, :install),
+         true <- spec.argv != [] do
+      {:ok, spec}
+    else
+      _ -> {:error, :service_spec_unavailable}
+    end
+  end
+
   def running_units(opts \\ []) do
     {selected, _, blocked} = manager(opts)
 

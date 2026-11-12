@@ -44,6 +44,42 @@ defmodule LemonCli.ServiceCommandTest do
     {:ok, opts: opts}
   end
 
+  test "install planning uses the installer's exact environment projection and precedence", %{
+    opts: opts
+  } do
+    bot = Path.join(opts[:home], ".local/bin/lemon-bot")
+    File.mkdir_p!(Path.dirname(bot))
+    File.write!(bot, "#!/bin/sh\nexit 0\n")
+    File.chmod!(bot, 0o700)
+
+    invoking = %{
+      "LEMON_BOT_CONFIG_FILE" => Path.join(opts[:home], "invoking.json"),
+      "LEMON_CONTROL_PLANE_PORT" => "5050"
+    }
+
+    options = Keyword.merge(opts, bot: bot, env: invoking)
+    assert {:ok, first} = LemonCore.Service.install_spec("backend", options)
+    assert first.env["LEMON_BOT_CONFIG_FILE"] == invoking["LEMON_BOT_CONFIG_FILE"]
+    assert first.env["LEMON_CONTROL_PLANE_PORT"] == "5050"
+
+    assert :ok =
+             Unit.write(
+               %{
+                 first
+                 | env:
+                     Map.merge(first.env, %{
+                       "LEMON_BOT_CONFIG_FILE" => Path.join(opts[:home], "saved.json"),
+                       "LEMON_CONTROL_PLANE_PORT" => "4040"
+                     })
+               },
+               "launchd"
+             )
+
+    assert {:ok, saved} = LemonCore.Service.install_spec("backend", options)
+    assert saved.env["LEMON_BOT_CONFIG_FILE"] == Path.join(opts[:home], "saved.json")
+    assert saved.env["LEMON_CONTROL_PLANE_PORT"] == "5050"
+  end
+
   test "explicit Bot URL override replaces or removes saved environment without changing default precedence",
        %{opts: opts} do
     bot = Path.join(opts[:home], ".local/bin/lemon-bot")

@@ -30,7 +30,7 @@ export interface MemberInvite extends Resource { email: string; role: 'admin' | 
 export interface AuthSession extends Resource { userId: ID; deviceId: ID | null; expiresAtMs: TimestampMs | null; lastSeenAtMs: TimestampMs; current: boolean }
 export interface AuthResult { token: string; session: AuthSession; user: User; workspace: Workspace; member: Member }
 /** Public-safe product fingerprint; no account, workspace name, owner or credentials. */
-export interface BackendDescriptor { product: 'lemon_bot'; apiVersion: 1; version: string; instanceId: ID; publicUrl: string; capabilities: { pairing: boolean } }
+export interface BackendDescriptor { product: 'lemon_bot'; apiVersion: 1; version: string; instanceId: ID; publicUrl: string; capabilities: { pairing: boolean }; firstPartyMcpApproved?: boolean }
 export interface SetupStatus extends BackendDescriptor { setupRequired: boolean }
 /** Establish the expected identity using the existing configured product session. */
 export interface BackendIdentity extends BackendDescriptor { workspaceId: ID }

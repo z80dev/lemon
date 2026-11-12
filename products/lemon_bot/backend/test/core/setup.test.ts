@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type * as P from '../../../contracts/protocol';
@@ -9,6 +9,7 @@ import { loadConfiguration } from '../../src/core/config';
 import { opaqueToken } from '../../src/core/auth';
 import { createAccountRoutes } from '../../src/core/accounts';
 import { issueOwnerSetupProof, ownerSetupAttemptLimit, ownerSetupLifetimeMs } from '../../src/core/setup';
+import { productVersion } from '../../src/core/version';
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanups.splice(0)) await close(); });
@@ -17,8 +18,9 @@ const password = 'Isolated bootstrap test password 42';
 /** Isolated real backend/SQLite/encryption/auth. MOCK controller identity; no provider credentials or live token exchange. */
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'lemon-owner-setup-'));
-  const configuration = await loadConfiguration({ LEMON_BOT_DATA_DIR: directory, LEMON_BOT_OPERATOR_TOKEN: 'MOCK-controller-operator',
-    LEMON_BOT_CONTROL_URL: 'ws://127.0.0.1:1/ws', LEMON_BOT_PUBLIC_URL: 'https://bootstrap.mock-tailnet.ts.net' });
+  const environment = { LEMON_BOT_DATA_DIR: directory, LEMON_BOT_OPERATOR_TOKEN: 'MOCK-controller-operator',
+    LEMON_BOT_CONTROL_URL: 'ws://127.0.0.1:1/ws', LEMON_BOT_PUBLIC_URL: 'https://bootstrap.mock-tailnet.ts.net' };
+  let configuration = await loadConfiguration(environment);
   let backend: BackendInstance;
   let clock = 1791940000000;
   async function open() { backend = await createBackend(configuration.config, configuration.key); backend.services.now = () => clock; }
@@ -27,7 +29,7 @@ async function fixture() {
   return {
     get backend() { return backend; }, get services() { return backend.services; }, get store() { return backend.services.store; },
     advance(ms: number) { clock += ms; },
-    async restart() { await backend.stop(); await open(); },
+    async restart() { await backend.stop(); configuration = await loadConfiguration(environment); await open(); },
     async request(method: string, path: string, body?: unknown, token?: string, headers: Record<string, string> = {}) {
       return backend.router.fetch(new Request(`${configuration.config.publicUrl}${path}`, { method,
         headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers },
@@ -46,6 +48,23 @@ async function error(response: Response, status: number, code: P.ErrorCode) {
 }
 
 describe('provider-free local owner bootstrap', () => {
+  test('public identity exposes only one own-origin MCP approval boolean from the running process', async () => {
+    const f = await fixture();
+    const expected = {
+      product: 'lemon_bot', apiVersion: 1, version: productVersion,
+      instanceId: f.store.metadata<string>('instanceId')!, publicUrl: f.services.config.publicUrl,
+      capabilities: { pairing: true }, setupRequired: true, firstPartyMcpApproved: false,
+    };
+    expect(await (await f.request('GET', '/v1/setup')).json()).toEqual(expected);
+    await writeFile(join(f.services.config.dataDir, 'config.json'), JSON.stringify({
+      version: 1, approvedPrivateMcpOrigins: [f.services.config.publicUrl, 'https://private-unrelated.example'],
+    }));
+    // Editing the file alone must not claim the running backend has loaded it.
+    expect(await (await f.request('GET', '/v1/setup')).json()).toEqual(expected);
+    await f.restart();
+    expect(await (await f.request('GET', '/v1/setup')).json()).toEqual({ ...expected, firstPartyMcpApproved: true });
+  });
+
   test('no remote issuance or URL/membership authority; TLS preflight explicitly distinguishes empty setup from pairing', async () => {
     const f = await fixture(); const instanceId = f.store.metadata<string>('instanceId')!;
     const setup = await (await f.request('GET', '/v1/setup')).json() as P.SetupStatus;
