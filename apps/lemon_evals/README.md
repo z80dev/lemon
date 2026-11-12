@@ -260,10 +260,12 @@ agent exits. Tasks live in `priv/coding_tasks/<id>/` (`task.json`, `repo/`,
 
 Model traffic goes through `priv/coding_arena/kimi_auth_proxy.ts` on the host.
 Each trial holds only an HS256 token naming its trial; the proxy swaps it for
-the operator's Kimi Code login from `omp token kimi-code` (omp keeps sole
-ownership of refresh-token rotation) and logs per-request model, request shape
-sizes, status and wire-reported token usage without content. Reports use that
-wire usage, so both agents share one accounting.
+the operator's real credential: the Kimi Code login from `omp token kimi-code`
+on `/coding/...` (omp keeps sole ownership of refresh-token rotation) or the
+Z.AI key from `omp token zai` on `/zai/...`. It logs per-request provider,
+model, request shape sizes, status and wire-reported token usage without
+content (`usage_missing` marks streams that carried none). Reports use that
+wire usage, so all agents share one accounting.
 
 ```bash
 cd apps/lemon_evals/priv/coding_arena
@@ -275,24 +277,37 @@ python3 arena.py validate                  # fixture fails, reference solution p
 
 export ARENA_PROXY_SECRET="$(openssl rand -hex 32)"   # shared by proxy and runner only
 bun kimi_auth_proxy.ts --port 18787 --log /OPERATOR/PATH/proxy.jsonl &
-python3 arena.py run --output-dir /OPERATOR/PATH/run --model k3.1-pro --thinking high \
-  --repetitions 3 --concurrency 6 --proxy-log /OPERATOR/PATH/proxy.jsonl
+python3 arena.py run --output-dir /OPERATOR/PATH/run --model k3.1-pro --fallback-model glm-5.3 \
+  --thinking high --repetitions 3 --concurrency 6 --proxy-log /OPERATOR/PATH/proxy.jsonl
 python3 arena.py report --output-dir /OPERATOR/PATH/run --proxy-log /OPERATOR/PATH/proxy.jsonl
 ```
 
 `run` is resumable: `results.jsonl` gains one row per finished trial and reruns
 skip recorded trials (`--retry-infrastructure` re-runs container/harness
-failures). With `--proxy-log`, any trial that saw an upstream 429 is recorded
-as an infrastructure failure, and new trials pause until a tiny probe
-request succeeds, so an exhausted subscription quota window pauses the campaign
-instead of failing the remaining trials. Per-trial `agent.stdout`,
-`changes.diff` and `verify.log` stay in the operator-chosen run directory and
-may contain model output. Both agents use
-`kimi_coding`/`kimi-code` with the same wire model and thinking level; omp's
-model roles all point at that model so its subagents cannot switch models. The
-report gives pass rates with Wilson intervals, an exact McNemar test over
-(task, repetition) pairs, breakdowns by category/language/difficulty, failure
-modes, and median wall time, request count and wire tokens.
+failures). Per-trial `agent.stdout`, `changes.diff` and `verify.log` stay in the
+operator-chosen run directory and may contain model output.
+
+The unit of comparison is a (task, repetition) group holding every agent arm,
+and a group always runs on one model. `groups.json` records each group's model,
+chosen when its first arm starts: the primary model while it has quota (for
+Kimi, until its 5-hour window reaches `--kimi-usage-limit`), otherwise
+`--fallback-model`. Every arm and every retry of a group runs on the group's
+model. A trial that saw an upstream 429 is recorded as an infrastructure
+failure, the model pauses until a tiny probe request succeeds, and the trial
+is retried on the same model. A group whose model is out of quota waits for it;
+only after `--reassign-after` seconds is an unfinished group moved to another
+model, with its recorded rows archived in `results-archive.jsonl` and all its
+arms rerun. Groups with no scored rows yet move freely. Lemon reaches
+`glm-5.3` through Z.AI's chat-completions coding endpoint and omp through Z.AI's
+Anthropic-compatible endpoint; that protocol choice is part of each harness.
+Kimi arms use `kimi_coding`/`kimi-code`; omp's model roles all point at the
+group's model so its subagents cannot switch models.
+
+The report is per model: pass rates with Wilson intervals, an exact McNemar
+test over same-model (task, repetition) pairs, failure modes, tool calls and
+median wall time, request count and wire tokens. A pooled section covers only
+complete groups, so every arm faces the same model mix, followed by breakdowns
+by model, category, language and difficulty and a per-task, per-model table.
 
 ### Profiling Lemon's per-turn token consumers
 

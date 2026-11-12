@@ -1,13 +1,19 @@
 /**
- * Host-side Kimi Code auth proxy for isolated arena trials.
+ * Host-side model auth proxy for isolated arena trials (Kimi Code and Z.AI).
  *
  * Trial containers never hold a real credential. Each trial receives an
  * HS256-signed JWT whose `sub` is its trial id; the proxy verifies it, swaps it
- * for the operator's Kimi Code OAuth access token (obtained from `omp token
- * kimi-code`, so omp alone owns refresh-token rotation), and streams the
- * upstream response back unchanged. Every request is attributed to its trial in
- * a JSONL log (model, request shape sizes, status, latency, wire usage) without
- * prompts, bodies or tokens.
+ * for the operator's real credential, and streams the upstream response back
+ * unchanged. Routes:
+ *
+ *   /coding/...  → https://api.kimi.com/coding/...  Kimi Code OAuth access token from
+ *                  `omp token kimi-code` (a JWT; omp alone owns refresh-token rotation)
+ *   /zai/...     → https://api.z.ai/...             Z.AI API key from `omp token zai`
+ *                  (static key, cached; refetched once after an upstream 401)
+ *
+ * Every request is attributed to its trial in a JSONL log (provider, model,
+ * request shape sizes, status, latency, wire usage) without prompts, bodies or
+ * tokens.
  *
  *   ARENA_PROXY_SECRET=... bun kimi_auth_proxy.ts --port 18787 --log /path/requests.jsonl
  */
@@ -15,6 +21,7 @@ import { appendFileSync } from "node:fs";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 const UPSTREAM = process.env.KIMI_UPSTREAM ?? "https://api.kimi.com";
+const ZAI_UPSTREAM = process.env.ZAI_UPSTREAM ?? "https://api.z.ai";
 const SECRET = process.env.ARENA_PROXY_SECRET;
 if (!SECRET) throw new Error("ARENA_PROXY_SECRET is required");
 
@@ -62,25 +69,28 @@ function jwtExpiryMs(token: string): number {
 	}
 }
 
-let cached: { token: string; expiresMs: number } | undefined;
-let inflight: Promise<string> | undefined;
+type Credential = { token: string; expiresMs: number };
 
-async function fetchUpstreamToken(force: boolean): Promise<string> {
-	const argv = [ompBin, "token", "kimi-code", ...(force ? ["--force-refresh"] : [])];
+// One cache per omp credential: `kimi-code` is a JWT refreshed before expiry, `zai` a static key.
+const credentials: Record<string, { cached?: Credential; inflight?: Promise<string> }> = { "kimi-code": {}, zai: {} };
+
+async function fetchUpstreamToken(provider: string, force: boolean): Promise<string> {
+	const argv = [ompBin, "token", provider, ...(force && provider === "kimi-code" ? ["--force-refresh"] : [])];
 	const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
 	const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-	const token = stdout.trim();
-	if (code !== 0 || !token) throw new Error(`omp token kimi-code failed (exit ${code})`);
-	cached = { token, expiresMs: jwtExpiryMs(token) };
+	const token = stdout.trim().split("\n").pop()?.trim() ?? "";
+	if (code !== 0 || !token) throw new Error(`omp token ${provider} failed (exit ${code})`);
+	credentials[provider].cached = { token, expiresMs: provider === "kimi-code" ? jwtExpiryMs(token) : Infinity };
 	return token;
 }
 
-async function upstreamToken(force = false): Promise<string> {
-	if (!force && cached && cached.expiresMs - REFRESH_MARGIN_MS > Date.now()) return cached.token;
-	inflight ??= fetchUpstreamToken(force).finally(() => {
-		inflight = undefined;
+async function upstreamToken(provider: string, force = false): Promise<string> {
+	const slot = credentials[provider];
+	if (!force && slot.cached && slot.cached.expiresMs - REFRESH_MARGIN_MS > Date.now()) return slot.cached.token;
+	slot.inflight ??= fetchUpstreamToken(provider, force).finally(() => {
+		slot.inflight = undefined;
 	});
-	return inflight;
+	return slot.inflight;
 }
 
 function log(entry: Record<string, unknown>) {
@@ -179,19 +189,27 @@ Bun.serve({
 		const presented = inboundToken(req);
 		const trial = presented ? verifyTrialToken(presented) : undefined;
 		if (!trial) return Response.json({ error: { type: "authentication_error", message: "arena token rejected" } }, { status: 401 });
-		if (!url.pathname.startsWith("/coding/")) return Response.json({ error: "unknown path" }, { status: 404 });
+		const route = url.pathname.startsWith("/coding/")
+			? { provider: "kimi", credential: "kimi-code", upstream: `${UPSTREAM}${url.pathname}` }
+			: url.pathname.startsWith("/zai/")
+				? { provider: "zai", credential: "zai", upstream: `${ZAI_UPSTREAM}${url.pathname.slice("/zai".length)}` }
+				: undefined;
+		if (!route) return Response.json({ error: "unknown path" }, { status: 404 });
 
 		const body = req.method === "GET" || req.method === "HEAD" ? new ArrayBuffer(0) : await req.arrayBuffer();
-		const shape = requestShape(body);
+		const shape = { provider: route.provider, ...requestShape(body) };
 		const headers = new Headers(req.headers);
 		for (const name of ["authorization", "x-api-key", "host", "content-length", "connection", "accept-encoding"]) headers.delete(name);
-		if (!headers.has("x-msh-platform")) {
+		if (route.provider === "kimi" && !headers.has("x-msh-platform")) {
 			for (const [name, value] of Object.entries(FALLBACK_FINGERPRINT)) headers.set(name, value);
 		}
 		const started = Date.now();
 		const send = async (force: boolean) => {
-			headers.set("authorization", `Bearer ${await upstreamToken(force)}`);
-			return fetch(`${UPSTREAM}${url.pathname}${url.search}`, {
+			const token = await upstreamToken(route.credential, force);
+			headers.set("authorization", `Bearer ${token}`);
+			// Z.AI's Anthropic-compatible endpoint (used by omp for GLM) authenticates with x-api-key.
+			if (route.provider === "zai") headers.set("x-api-key", token);
+			return fetch(`${route.upstream}${url.search}`, {
 				method: req.method,
 				headers,
 				body: body.byteLength ? body : undefined,
@@ -213,7 +231,18 @@ Bun.serve({
 			log({ trial, method: req.method, path: url.pathname, ...shape, status: response.status, retried, ttfb_ms: Date.now() - started });
 			if (!response.body) return new Response(null, { status: response.status, headers: outHeaders });
 			const body = response.body.pipeThrough(
-				meteredStream(usage => log({ trial, kind: "usage", path: url.pathname, ...usage, total_ms: Date.now() - started })),
+				meteredStream(usage =>
+					log({
+						trial,
+						kind: "usage",
+						path: url.pathname,
+						provider: route.provider,
+						...usage,
+						// The stream carried no usage record; reports fall back to client-reported usage.
+						...(Object.keys(usage).length === 0 ? { usage_missing: true } : {}),
+						total_ms: Date.now() - started,
+					}),
+				),
 			);
 			return new Response(body, { status: response.status, headers: outHeaders });
 		} catch (error) {

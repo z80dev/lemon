@@ -9,8 +9,10 @@ Subcommands:
 
 Trial containers see only their own fixture repository. Hidden verifier files
 are copied in only after the agent exits. Model traffic goes through the host
-Kimi auth proxy (kimi_auth_proxy.ts) with a per-trial signed token, so no real
-credential enters a container and every request is attributable to its trial.
+auth proxy (kimi_auth_proxy.ts: Kimi Code and Z.AI) with a per-trial signed
+token, so no real credential enters a container and every request is
+attributable to its trial. Every (task, repetition) group runs all arms on one
+model (see Scheduler), so comparisons never mix models.
 """
 import argparse
 import base64
@@ -225,6 +227,57 @@ def trial_token(secret, trial_id):
     return f'{header}.{payload}.{signature}'
 
 
+# Wire model id → how each harness and the host proxy reach it. Both harnesses always use the same
+# wire model inside one comparison; the protocol each harness picks for it is a harness property.
+MODELS = {
+    'k3.1-pro': {'provider': 'kimi', 'lemon_provider': 'kimi_coding', 'lemon_env': 'KIMI_API_KEY',
+                 'lemon_base': '/coding', 'omp_provider': 'kimi-code', 'omp_env': 'KIMI_API_KEY',
+                 'omp_base': '/coding/v1'},
+    # Lemon's catalog serves glm-5.3 over Z.AI's coding-plan chat-completions endpoint; omp's over
+    # Z.AI's Anthropic-compatible endpoint. Same model, quota and credential.
+    'glm-5.3': {'provider': 'zai', 'lemon_provider': 'zai', 'lemon_env': 'ZAI_API_KEY',
+                'lemon_base': '/zai/api/coding/paas/v4', 'omp_provider': 'zai', 'omp_env': 'ZAI_API_KEY',
+                'omp_base': '/zai/api/anthropic'},
+}
+
+
+def proxy_request(args, path, body=None, timeout=60):
+    """One host-side request through the proxy with a throwaway attempt token; returns (status, json)."""
+    token = trial_token(args.proxy_secret, f'scheduler-probe#{secrets.token_hex(4)}')
+    request = urllib.request.Request(f'http://127.0.0.1:{args.proxy_port}{path}',
+                                     data=json.dumps(body).encode() if body is not None else None,
+                                     headers={'content-type': 'application/json', 'authorization': f'Bearer {token}',
+                                              'x-api-key': token, 'anthropic-version': '2023-06-01'})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, json.loads(response.read() or b'null')
+    except urllib.error.HTTPError as error:
+        return error.code, None
+    except (OSError, ValueError):  # connection errors, timeouts, non-JSON bodies all mean "unknown"
+        return 0, None
+
+
+def model_responds(args, model):
+    """A tiny real request: True when the provider currently accepts this model (quota left)."""
+    if MODELS[model]['provider'] == 'kimi':
+        status, _ = proxy_request(args, '/coding/v1/messages', {
+            'model': model, 'max_tokens': 8, 'messages': [{'role': 'user', 'content': 'Reply with OK.'}]})
+    else:
+        status, _ = proxy_request(args, '/zai/api/coding/paas/v4/chat/completions', {
+            'model': model, 'max_tokens': 8, 'thinking': {'type': 'disabled'},
+            'messages': [{'role': 'user', 'content': 'Reply with OK.'}]})
+    return status == 200
+
+
+def kimi_window_usage(args):
+    """Kimi Code 5-hour window used ratio (0..1), or None when unknown."""
+    status, body = proxy_request(args, '/coding/v1/usages', timeout=30)
+    try:
+        return float(body['usages']['limit_5h']['used_ratio']) if status == 200 else None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def attempt_rate_limited(args, attempt):
     """True when the proxy saw an upstream 429 for this attempt (subscription quota or rate limit)."""
     if not args.proxy_log or not Path(args.proxy_log).exists():
@@ -234,70 +287,22 @@ def attempt_rate_limited(args, attempt):
         return any(needle in line and '"status":429' in line for line in handle)
 
 
-class QuotaGate:
-    """Holds new trials while the provider quota is exhausted.
-
-    A trial that fails after an upstream 429 closes the gate. One worker then probes the proxy with
-    a tiny request every `interval` seconds and reopens the gate on success, so a 5-hour quota
-    window that runs out mid-campaign pauses the run instead of failing every remaining trial.
-    """
-
-    def __init__(self, args, interval=300):
-        self.args, self.interval = args, interval
-        self.open = threading.Event()
-        self.open.set()
-        self.lock = threading.Lock()
-        self.probing = False
-
-    def close(self):
-        self.open.clear()
-
-    def wait(self):
-        while not self.open.is_set():
-            with self.lock:
-                probe, self.probing = not self.probing, True
-            if not probe:
-                self.open.wait(self.interval)
-                continue
-            try:
-                while not self.probe():
-                    print(f'quota exhausted; next probe in {self.interval}s', flush=True)
-                    time.sleep(self.interval)
-                print('quota available; resuming', flush=True)
-                self.open.set()
-            finally:
-                with self.lock:
-                    self.probing = False
-
-    def probe(self):
-        token = trial_token(self.args.proxy_secret, f'quota-probe#{secrets.token_hex(4)}')
-        body = json.dumps({'model': self.args.model, 'max_tokens': 8,
-                           'messages': [{'role': 'user', 'content': 'Reply with OK.'}]}).encode()
-        request = urllib.request.Request(f'http://127.0.0.1:{self.args.proxy_port}/coding/v1/messages', data=body,
-                                         headers={'content-type': 'application/json', 'x-api-key': token,
-                                                  'anthropic-version': '2023-06-01'})
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                return response.status == 200
-        except OSError:  # HTTPError (429), connection errors and timeouts all mean "not yet"
-            return False
-
-
 def proxy_base(args):
     return f'http://host.docker.internal:{args.proxy_port}'
 
 
-def prepare_lemon(container, args, token, disclosure_profile=None):
+def prepare_lemon(container, args, token, model, disclosure_profile=None):
+    spec = MODELS[model]
     config = f'''[defaults]
-provider = "kimi_coding"
-model = "kimi_coding:{args.model}"
+provider = "{spec['lemon_provider']}"
+model = "{spec['lemon_provider']}:{model}"
 thinking_level = "{args.thinking}"
 
-[providers.kimi_coding]
-base_url = "{proxy_base(args)}/coding"
+[providers.{spec['lemon_provider']}]
+base_url = "{proxy_base(args)}{spec['lemon_base']}"
 '''
     container.write('/home/agent/.lemon/config.toml', config)
-    env = {'KIMI_API_KEY': token, 'LEMON_SECRETS_MASTER_KEY': secrets.token_hex(32),
+    env = {spec['lemon_env']: token, 'LEMON_SECRETS_MASTER_KEY': secrets.token_hex(32),
            'LEMON_CONTROL_PLANE_OPERATOR_TOKEN': secrets.token_hex(32), 'HOME': '/home/agent'}
     if disclosure_profile:
         env['LEMON_TOOL_DISCLOSURE_PROFILE'] = disclosure_profile
@@ -311,33 +316,34 @@ base_url = "{proxy_base(args)}/coding"
     return env
 
 
-def lemon_argv(prompt, args, timeout):
+def lemon_argv(prompt, args, timeout, model):
     # `lemon -p` has no time option; its client gives up after a fixed 600s drain deadline.
-    return ['lemon', '-p', prompt, '--output', 'stream-json', '--model', f'kimi_coding:{args.model}',
+    return ['lemon', '-p', prompt, '--output', 'stream-json', '--model', f"{MODELS[model]['lemon_provider']}:{model}",
             '--cwd', '/work', '--approval-policy', 'allow']
 
 
 OMP_ROLES = ('default', 'smol', 'slow', 'plan', 'task', 'commit', 'scout', 'mechanic', 'research', 'review')
 
 
-def prepare_omp(container, args, token):
-    model = f'kimi-code/{args.omp_model or args.model}:{args.thinking}'
-    # kimi-code resolves no env key on its own; the models.yml apiKey names the variable.
+def prepare_omp(container, args, token, model):
+    spec = MODELS[model]
+    role_model = f"{spec['omp_provider']}/{model}:{args.thinking}"
+    # The models.yml apiKey names the variable (kimi-code resolves no env key on its own).
     models_yml = f'''providers:
-  kimi-code:
-    baseUrl: {proxy_base(args)}/coding/v1
-    apiKey: KIMI_API_KEY
+  {spec['omp_provider']}:
+    baseUrl: {proxy_base(args)}{spec['omp_base']}
+    apiKey: {spec['omp_env']}
 '''
     container.write('/home/agent/.omp/agent/models.yml', models_yml)
-    roles = ''.join(f'  {role}: {model}\n' for role in OMP_ROLES)
+    roles = ''.join(f'  {role}: {role_model}\n' for role in OMP_ROLES)
     container.write('/home/agent/.omp/agent/config.yml', f'modelRoles:\n{roles}')
-    return {'KIMI_API_KEY': token, 'HOME': '/home/agent'}
+    return {spec['omp_env']: token, 'HOME': '/home/agent'}
 
 
-def omp_argv(prompt, args, timeout):
-    model = f'kimi-code/{args.omp_model or args.model}'
-    return ['omp', '-p', prompt, '--mode', 'json', '--model', model, '--thinking', args.thinking,
-            '--cwd', '/work', '--no-session', '--no-title', '--auto-approve', '--max-time', str(timeout)]
+def omp_argv(prompt, args, timeout, model):
+    return ['omp', '-p', prompt, '--mode', 'json', '--model', f"{MODELS[model]['omp_provider']}/{model}",
+            '--thinking', args.thinking, '--cwd', '/work', '--no-session', '--no-title', '--auto-approve',
+            '--max-time', str(timeout)]
 
 
 def json_lines(output):
@@ -398,7 +404,7 @@ def parse_lemon(output):
 
 # `lemon-coding` is Lemon with the opt-in `coding` tool-disclosure profile (see docs/config.md).
 AGENTS = {'lemon': (prepare_lemon, lemon_argv, parse_lemon),
-          'lemon-coding': (lambda container, args, token: prepare_lemon(container, args, token, 'coding'),
+          'lemon-coding': (lambda container, args, token, model: prepare_lemon(container, args, token, model, 'coding'),
                            lemon_argv, parse_lemon),
           'omp': (prepare_omp, omp_argv, parse_omp)}
 
@@ -419,9 +425,7 @@ def git_diff_stats(container):
             'deletions': numbers.get('deletion', 0)}
 
 
-def run_trial(trial, task, args, out, gate=None):
-    if gate:
-        gate.wait()
+def run_trial(trial, task, args, out, model):
     agent = trial['agent']
     prepare, argv_for, parse = AGENTS[agent]
     trial_dir = out / 'trials' / trial['id']
@@ -431,17 +435,17 @@ def run_trial(trial, task, args, out, gate=None):
     token = trial_token(args.proxy_secret, attempt)
     row = {**{key: trial[key] for key in ('id', 'task', 'agent', 'rep')}, 'proxy_trial': attempt,
            'language': task['language'], 'category': task['category'], 'difficulty': task['difficulty'],
-           'model': args.model, 'thinking': args.thinking, 'passed': False, 'failure': None}
+           'model': model, 'thinking': args.thinking, 'passed': False, 'failure': None}
     container = None
     started = time.monotonic()
     try:
         container = Container(IMAGES[agent], f'arena-{trial["id"]}', args.cpus, args.memory)
         init_repo(container, task)
-        env = prepare(container, args, token)
+        env = prepare(container, args, token, model)
         timeout = min(task.get('timeout_s', args.timeout), args.timeout)
         prompt = task['prompt'].strip() + PROMPT_SUFFIX
         agent_started = time.monotonic()
-        invocation = container.exec(argv_for(prompt, args, timeout), env=env, timeout=timeout + 30)
+        invocation = container.exec(argv_for(prompt, args, timeout, model), env=env, timeout=timeout + 30)
         row['wall_seconds'] = round(time.monotonic() - agent_started, 1)
         row['exit_code'] = invocation.returncode
         (trial_dir / 'agent.stdout').write_text(redact(invocation.stdout, token))
@@ -469,14 +473,13 @@ def run_trial(trial, task, args, out, gate=None):
                               'agent_error' if not result.get('ok') and not row['files_changed'] and not answer else
                               'verifier_failed')
         # A quota or rate-limit 429 disturbs the trial whatever its outcome (and only long runs survive one to
-        # pass), so it is unscorable either way; record it for --retry-infrastructure.
+        # pass), so it is unscorable either way; it is retried on the same model.
         if attempt_rate_limited(args, attempt):
             row['scored_failure'] = row['failure']
             row['passed'] = False
             row['failure'] = 'infrastructure'
             row['infrastructure_error'] = 'upstream 429 (provider quota or rate limit)'
-            if gate:
-                gate.close()
+            row['rate_limited'] = True
     except Exception as error:  # noqa: BLE001 - infrastructure failures are recorded, not fatal
         row['failure'] = 'infrastructure'
         row['infrastructure_error'] = redact(str(error), token)[-2000:]
@@ -488,13 +491,199 @@ def run_trial(trial, task, args, out, gate=None):
     return row
 
 
+def group_key(task, rep):
+    return f'{task}::r{rep}'
+
+
 def plan_trials(tasks, agents, repetitions, seed):
-    trials = [{'id': f'{task["id"]}--{agent}--r{rep}', 'task': task['id'], 'agent': agent, 'rep': rep}
-              for rep in range(1, repetitions + 1) for task in tasks for agent in agents]
-    # Interleave agents and tasks so provider load and time-of-day effects spread evenly.
-    random.Random(seed).shuffle(trials)
-    trials.sort(key=lambda trial: trial['rep'])
+    """Comparison groups (task, repetition) in shuffled order, each group's arms adjacent.
+
+    All arms of a group run on one model and close together in time, so a quota window that ends
+    mid-campaign leaves few groups half-finished.
+    """
+    rng = random.Random(seed)
+    groups = [(rep, task['id']) for rep in range(1, repetitions + 1) for task in tasks]
+    rng.shuffle(groups)
+    groups.sort(key=lambda group: group[0])
+    trials = []
+    for rep, task in groups:
+        arms = list(agents)
+        rng.shuffle(arms)
+        trials += [{'id': f'{task}--{agent}--r{rep}', 'task': task, 'agent': agent, 'rep': rep} for agent in arms]
     return trials
+
+
+def read_rows(path):
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+
+
+class Scheduler:
+    """Hands trials to workers so that every (task, repetition) group runs on exactly one model.
+
+    A group's model is chosen when its first arm starts and persisted in groups.json: the primary
+    model while it has quota (and, for Kimi, while its 5-hour window is below --kimi-usage-limit),
+    otherwise the fallback. Every arm, including retries after infrastructure or 429 failures, runs on
+    the group's model. A group without scored rows and with no arm running may move to another model.
+    A group with scored rows waits for its model; only after its model has been unavailable for
+    --reassign-after seconds is it moved wholesale to an available model, its old rows archived in
+    results-archive.jsonl and all of its arms rerun. Upstream 429s mark a model unavailable until a
+    tiny probe request succeeds.
+    """
+
+    def __init__(self, args, out, trials, by_id):
+        self.args, self.out, self.by_id = args, out, by_id
+        self.models = [args.model] + ([args.fallback_model] if args.fallback_model else [])
+        self.results_path, self.archive_path = out / 'results.jsonl', out / 'results-archive.jsonl'
+        self.groups_path = out / 'groups.json'
+        self.cv = threading.Condition()
+        self.groups = json.loads(self.groups_path.read_text()) if self.groups_path.exists() else {}
+        self.scored = {}  # group -> agents with a scored (non-infrastructure) latest row
+        latest = {}
+        for row in read_rows(self.results_path):
+            latest[row['id']] = row
+        for row in latest.values():
+            key = group_key(row['task'], row['rep'])
+            # Rows recorded before groups.json existed pin their group to the model they ran on.
+            self.groups.setdefault(key, {'model': row['model'], 'history': [
+                {'model': row['model'], 'at': row.get('finished_at'), 'reason': 'recorded rows'}]})
+            if row['failure'] != 'infrastructure':
+                self.scored.setdefault(key, set()).add(row['agent'])
+        self.save_groups()
+        # Groups already started go first so pinned groups finish before new ones begin.
+        self.pending = sorted(trials, key=lambda trial: group_key(trial['task'], trial['rep']) not in self.groups)
+        self.running = {}  # group -> arms in flight
+        self.unavailable = {}  # model -> monotonic time it became unavailable
+        self.usage_checked, self.kimi_accepts_new = 0.0, True
+        self.retries = {}
+        self.finished = 0
+
+    def save_groups(self):
+        self.groups_path.write_text(json.dumps(self.groups, indent=1, sort_keys=True) + '\n')
+
+    def assign(self, key, model, reason):
+        entry = self.groups.setdefault(key, {'history': []})
+        entry['model'] = model
+        entry['history'].append({'model': model, 'at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                                 'reason': reason})
+        self.save_groups()
+        print(f'group {key} -> {model} ({reason})', flush=True)
+
+    def available(self, model):
+        return model not in self.unavailable
+
+    def accepts_new_groups(self, model):
+        if not self.available(model):
+            return False
+        if MODELS[model]['provider'] != 'kimi' or self.args.kimi_usage_limit >= 1:
+            return True
+        if time.monotonic() - self.usage_checked > 60:
+            self.usage_checked = time.monotonic()
+            used = kimi_window_usage(self.args)
+            accepts = used is None or used < self.args.kimi_usage_limit
+            if accepts != self.kimi_accepts_new:
+                print(f'kimi 5h window used {used}: {"accepting" if accepts else "no longer accepting"} new groups',
+                      flush=True)
+            self.kimi_accepts_new = accepts
+        return self.kimi_accepts_new
+
+    def archive_group(self, key):
+        """Move a group's recorded rows out of scoring before it is rerun on another model."""
+        rows = read_rows(self.results_path)
+        moved = [row for row in rows if group_key(row['task'], row['rep']) == key]
+        with self.archive_path.open('a') as handle:
+            for row in moved:
+                handle.write(json.dumps({**row, 'archived_reason': 'group reassigned to another model'}) + '\n')
+        self.results_path.write_text(''.join(json.dumps(row) + '\n' for row in rows if row not in moved))
+        self.scored.pop(key, None)
+        task, rep = key.rsplit('::r', 1)
+        queued = {trial['id'] for trial in self.pending}
+        for agent in self.args.agents.split(','):
+            trial = {'id': f'{task}--{agent}--r{rep}', 'task': task, 'agent': agent, 'rep': int(rep)}
+            if trial['id'] not in queued:
+                self.pending.insert(0, trial)
+
+    def choose(self, trial):
+        """The model to run this trial on now, or None to leave it pending. Caller holds the lock."""
+        key = group_key(trial['task'], trial['rep'])
+        pinned = self.groups.get(key, {}).get('model')
+        if pinned and self.available(pinned):
+            return pinned
+        if self.running.get(key):
+            return None  # arms in flight pin the group to its model
+        fresh = [model for model in self.models if self.accepts_new_groups(model)]
+        if not pinned:
+            if fresh:
+                self.assign(key, fresh[0], 'first arm')
+                return fresh[0]
+            return None
+        others = [model for model in fresh if model != pinned]
+        if not others:
+            return None
+        if not self.scored.get(key):
+            self.assign(key, others[0], f'{pinned} unavailable; no scored rows')
+            return others[0]
+        if time.monotonic() - self.unavailable[pinned] > self.args.reassign_after:
+            self.archive_group(key)
+            self.assign(key, others[0], f'{pinned} unavailable > {self.args.reassign_after}s; rows archived')
+            return others[0]
+        return None
+
+    def next_trial(self):
+        with self.cv:
+            while True:
+                for trial in list(self.pending):
+                    model = self.choose(trial)
+                    if model:
+                        # choose() may have queued a reassigned group's other arms, shifting indexes.
+                        self.pending.remove(trial)
+                        key = group_key(trial['task'], trial['rep'])
+                        self.running[key] = self.running.get(key, 0) + 1
+                        return trial, model
+                if not self.pending and not any(self.running.values()):
+                    return None
+                self.cv.wait(timeout=60)
+
+    def mark_unavailable(self, model):
+        if model in self.unavailable:
+            return
+        self.unavailable[model] = time.monotonic()
+        print(f'{model} quota exhausted or rate limited; pausing it', flush=True)
+        threading.Thread(target=self.probe_until_available, args=(model,), daemon=True).start()
+
+    def probe_until_available(self, model):
+        while True:
+            time.sleep(self.args.probe_interval)
+            if model_responds(self.args, model):
+                with self.cv:
+                    self.unavailable.pop(model, None)
+                    print(f'{model} available again', flush=True)
+                    self.cv.notify_all()
+                return
+
+    def finish(self, trial, model, row):
+        key = group_key(trial['task'], trial['rep'])
+        with self.cv:
+            self.running[key] -= 1
+            with self.results_path.open('a') as handle:
+                handle.write(json.dumps({**row, 'group_model': self.groups[key]['model']}) + '\n')
+            self.finished += 1
+            verdict = 'PASS' if row['passed'] else f'FAIL({row["failure"]})'
+            print(f'[{self.finished}] {row["id"]} on {model}: {verdict} {row.get("wall_seconds", "-")}s '
+                  f'({len(self.pending)} pending)', flush=True)
+            if row['failure'] != 'infrastructure':
+                self.scored.setdefault(key, set()).add(trial['agent'])
+            elif row.get('rate_limited'):
+                self.mark_unavailable(model)
+                self.pending.insert(0, trial)
+            elif self.retries.get(trial['id'], 0) < 2:
+                self.retries[trial['id']] = self.retries.get(trial['id'], 0) + 1
+                self.pending.append(trial)
+            self.cv.notify_all()
+
+    def worker(self):
+        while (item := self.next_trial()):
+            trial, model = item
+            self.finish(trial, model, run_trial(trial, self.by_id[trial['task']], self.args, self.out, model))
 
 
 def cmd_run(args):
@@ -503,29 +692,22 @@ def cmd_run(args):
     tasks = load_tasks(args.tasks_dir, args.tasks.split(',') if args.tasks else None)
     by_id = {task['id']: task for task in tasks}
     agents = args.agents.split(',')
-    results_path = out / 'results.jsonl'
     done = set()
-    if results_path.exists():
-        for line in results_path.read_text().splitlines():
-            row = json.loads(line)
-            if row.get('failure') != 'infrastructure' or not args.retry_infrastructure:
-                done.add(row['id'])
-    manifest = {'model': args.model, 'omp_model': args.omp_model or args.model, 'thinking': args.thinking,
+    for row in read_rows(out / 'results.jsonl'):
+        if row.get('failure') != 'infrastructure' or not args.retry_infrastructure:
+            done.add(row['id'])
+    manifest = {'model': args.model, 'fallback_model': args.fallback_model, 'thinking': args.thinking,
                 'agents': agents, 'repetitions': args.repetitions, 'timeout': args.timeout,
                 'tasks': sorted(by_id), 'images': {agent: image_id(IMAGES[agent]) for agent in agents}}
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     pending = [trial for trial in plan_trials(tasks, agents, args.repetitions, args.seed) if trial['id'] not in done]
     print(f'{len(pending)} trials pending ({len(done)} already recorded)', flush=True)
-    lock = threading.Lock()
-    gate = QuotaGate(args)
-    with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-        futures = [pool.submit(run_trial, trial, by_id[trial['task']], args, out, gate) for trial in pending]
-        for index, future in enumerate(as_completed(futures), 1):
-            row = future.result()
-            with lock, results_path.open('a') as handle:
-                handle.write(json.dumps(row) + '\n')
-            verdict = 'PASS' if row['passed'] else f'FAIL({row["failure"]})'
-            print(f'[{index}/{len(pending)}] {row["id"]}: {verdict} {row.get("wall_seconds", "-")}s', flush=True)
+    scheduler = Scheduler(args, out, pending, by_id)
+    workers = [threading.Thread(target=scheduler.worker) for _ in range(args.concurrency)]
+    for thread in workers:
+        thread.start()
+    for thread in workers:
+        thread.join()
     return cmd_report(args)
 
 
@@ -609,6 +791,13 @@ def cmd_report(args):
             row['wire_output_tokens'] = stats['output']
     agents = sorted({row['agent'] for row in rows})
     scored = [row for row in rows if row['failure'] != 'infrastructure']
+    models = sorted({row['model'] for row in scored})
+    # Comparison unit: (task, repetition, model). The scheduler runs every arm of a group on one model;
+    # keying on the row model as well guarantees no cross-model pair is ever formed.
+    cells = {}
+    for row in scored:
+        cells.setdefault((row['task'], row['rep'], row['model']), {})[row['agent']] = row
+    complete = {key for key, cell in cells.items() if all(agent in cell for agent in agents)}
 
     def summary(subset):
         result = {}
@@ -620,92 +809,118 @@ def cmd_report(args):
                              'ci95': wilson(passed, len(mine))}
         return result
 
-    overall = summary(scored)
-    efficiency = {}
-    for agent in agents:
-        mine = [row for row in scored if row['agent'] == agent]
-        efficiency[agent] = {key: median(row.get(key) for row in mine)
-                             for key in ('wall_seconds', 'turns', 'model_requests', 'wire_input_tokens',
-                                         'wire_cached_tokens', 'wire_output_tokens', 'files_changed')}
-        efficiency[agent]['failures'] = {}
-        for row in mine:
-            if row['failure']:
-                efficiency[agent]['failures'][row['failure']] = efficiency[agent]['failures'].get(row['failure'], 0) + 1
-        efficiency[agent]['wire_models'] = sorted({model for row in mine for model in row.get('wire_models', [])})
-        mix = {}
-        for row in mine:
-            for name, count in (row.get('tools') or {}).items():
-                mix[name] = mix.get(name, 0) + count
-        efficiency[agent]['tool_mix'] = dict(sorted(mix.items(), key=lambda item: -item[1]))
-    breakdowns = {dimension: {value: summary([row for row in scored if row[dimension] == value])
-                              for value in sorted({row[dimension] for row in scored})}
-                  for dimension in ('category', 'language', 'difficulty')}
+    def efficiency(subset):
+        result = {}
+        for agent in agents:
+            mine = [row for row in subset if row['agent'] == agent]
+            entry = {key: median(row.get(key) for row in mine)
+                     for key in ('wall_seconds', 'turns', 'model_requests', 'wire_input_tokens',
+                                 'wire_cached_tokens', 'wire_output_tokens', 'files_changed')}
+            entry['failures'] = {}
+            for row in mine:
+                if row['failure']:
+                    entry['failures'][row['failure']] = entry['failures'].get(row['failure'], 0) + 1
+            entry['wire_models'] = sorted({model for row in mine for model in row.get('wire_models', [])})
+            mix = {}
+            for row in mine:
+                for name, count in (row.get('tools') or {}).items():
+                    mix[name] = mix.get(name, 0) + count
+            entry['tool_mix'] = dict(sorted(mix.items(), key=lambda item: -item[1]))
+            result[agent] = entry
+        return result
 
-    pairs = {}
-    for row in scored:
-        pairs.setdefault((row['task'], row['rep']), {})[row['agent']] = row['passed']
-    # Exact McNemar test over (task, repetition) pairs for every agent pair.
-    paired = []
-    for index, a in enumerate(agents):
-        for b in agents[index + 1:]:
-            complete = [pair for pair in pairs.values() if a in pair and b in pair]
-            only_a = sum(pair[a] and not pair[b] for pair in complete)
-            only_b = sum(pair[b] and not pair[a] for pair in complete)
-            paired.append({'a': a, 'b': b, 'pairs': len(complete), 'only_a': only_a, 'only_b': only_b,
-                           'both': sum(pair[a] and pair[b] for pair in complete),
-                           'neither': sum(not pair[a] and not pair[b] for pair in complete),
-                           'mcnemar_exact_p': round(binomial_two_sided(only_a, only_a + only_b), 4)})
+    def paired(keys):
+        # Exact McNemar test over same-model (task, repetition) pairs for every agent pair.
+        result = []
+        for index, a in enumerate(agents):
+            for b in agents[index + 1:]:
+                both_ran = [cells[key] for key in keys if a in cells[key] and b in cells[key]]
+                only_a = sum(cell[a]['passed'] and not cell[b]['passed'] for cell in both_ran)
+                only_b = sum(cell[b]['passed'] and not cell[a]['passed'] for cell in both_ran)
+                result.append({'a': a, 'b': b, 'pairs': len(both_ran), 'only_a': only_a, 'only_b': only_b,
+                               'both': sum(cell[a]['passed'] and cell[b]['passed'] for cell in both_ran),
+                               'neither': sum(not cell[a]['passed'] and not cell[b]['passed'] for cell in both_ran),
+                               'mcnemar_exact_p': round(binomial_two_sided(only_a, only_a + only_b), 4)})
+        return result
+
+    per_model = {}
+    for model in models:
+        mine = [row for row in scored if row['model'] == model]
+        per_model[model] = {'overall': summary(mine), 'efficiency': efficiency(mine),
+                            'paired': paired([key for key in cells if key[2] == model]),
+                            'groups': len({key for key in cells if key[2] == model}),
+                            'complete_groups': len({key for key in complete if key[2] == model})}
+    # Pooled across models, restricted to complete groups so every arm faces the same model mix.
+    pooled_rows = [row for row in scored if (row['task'], row['rep'], row['model']) in complete]
+    pooled = {'overall': summary(pooled_rows), 'paired': paired(sorted(complete)), 'complete_groups': len(complete)}
+    breakdowns = {dimension: {value: summary([row for row in pooled_rows if row[dimension] == value])
+                              for value in sorted({row[dimension] for row in pooled_rows})}
+                  for dimension in ('model', 'category', 'language', 'difficulty')}
     per_task = {}
     for row in scored:
-        entry = per_task.setdefault(row['task'], {agent: [0, 0] for agent in agents})
+        entry = per_task.setdefault(row['task'], {}).setdefault(row['model'], {agent: [0, 0] for agent in agents})
         entry[row['agent']][0] += row['passed']
         entry[row['agent']][1] += 1
     report = {'manifest': json.loads((out / 'manifest.json').read_text()) if (out / 'manifest.json').exists() else {},
               'trials': len(rows), 'infrastructure_failures': len(rows) - len(scored),
-              'overall': overall, 'paired': paired, 'efficiency': efficiency, 'breakdowns': breakdowns,
-              'per_task': per_task}
+              'models': per_model, 'pooled': pooled, 'breakdowns': breakdowns, 'per_task': per_task}
     (out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     (out / 'report.md').write_text(render_markdown(report, agents))
     print(render_markdown(report, agents))
     return 0
 
 
+def render_paired(lines, title, pairs):
+    lines += ['', title, '', '| A | B | Pairs | Only A | Only B | Both | Neither | McNemar exact p |',
+              '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |']
+    for p in pairs:
+        lines.append(f"| {p['a']} | {p['b']} | {p['pairs']} | {p['only_a']} | {p['only_b']} | "
+                     f"{p['both']} | {p['neither']} | {p['mcnemar_exact_p']} |")
+
+
 def render_markdown(report, agents):
     lines = ['# Coding arena report', '']
     manifest = report['manifest']
     if manifest:
-        lines.append(f"Model `{manifest.get('model')}` (thinking {manifest.get('thinking')}), "
+        fallback = f", fallback `{manifest['fallback_model']}`" if manifest.get('fallback_model') else ''
+        lines.append(f"Primary model `{manifest.get('model')}`{fallback} (thinking {manifest.get('thinking')}), "
                      f"{manifest.get('repetitions')} repetitions, {len(manifest.get('tasks', []))} tasks, "
-                     f"timeout {manifest.get('timeout')}s. Infrastructure failures excluded: {report['infrastructure_failures']}.")
+                     f"timeout {manifest.get('timeout')}s. Infrastructure failures excluded: {report['infrastructure_failures']}. "
+                     'Every (task, repetition) group runs all arms on one model; comparisons never mix models.')
         lines.append('')
-    lines += ['| Agent | Passed | Rate | 95% CI | Median wall s | Median requests | Median input tok | Median cached tok | Median output tok |',
-              '| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |']
+    for model, section in report['models'].items():
+        lines += [f'## Model `{model}`', '',
+                  f"{section['groups']} groups, {section['complete_groups']} with every arm scored.", '',
+                  '| Agent | Passed | Rate | 95% CI | Median wall s | Median requests | Median input tok | Median cached tok | Median output tok |',
+                  '| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |']
+        for agent in agents:
+            o, e = section['overall'][agent], section['efficiency'][agent]
+            lines.append(f"| {agent} | {o['passed']}/{o['total']} | {o['rate']} | {o['ci95'][0]}–{o['ci95'][1]} | "
+                         f"{e['wall_seconds']} | {e['model_requests']} | {e['wire_input_tokens']} | "
+                         f"{e['wire_cached_tokens']} | {e['wire_output_tokens']} |")
+        render_paired(lines, f'### Paired on `{model}` (same task and repetition)', section['paired'])
+        lines += ['', f'### Failure modes and tool calls on `{model}`', '']
+        for agent in agents:
+            e = section['efficiency'][agent]
+            lines.append(f"- {agent}: failures {e['failures'] or 'none'}; wire models {e['wire_models']}; tools {e['tool_mix']}")
+        lines.append('')
+    pooled = report['pooled']
+    lines += ['## Pooled same-model comparison', '',
+              f"{pooled['complete_groups']} complete groups across models; each pair below shares one model.", '',
+              '| Agent | Passed | Rate | 95% CI |', '| --- | ---: | ---: | --- |']
     for agent in agents:
-        o, e = report['overall'][agent], report['efficiency'][agent]
-        lines.append(f"| {agent} | {o['passed']}/{o['total']} | {o['rate']} | {o['ci95'][0]}–{o['ci95'][1]} | "
-                     f"{e['wall_seconds']} | {e['model_requests']} | {e['wire_input_tokens']} | "
-                     f"{e['wire_cached_tokens']} | {e['wire_output_tokens']} |")
-    if report['paired']:
-        lines += ['', '## Paired (same task and repetition)', '',
-                  '| A | B | Pairs | Only A | Only B | Both | Neither | McNemar exact p |',
-                  '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |']
-        for p in report['paired']:
-            lines.append(f"| {p['a']} | {p['b']} | {p['pairs']} | {p['only_a']} | {p['only_b']} | "
-                         f"{p['both']} | {p['neither']} | {p['mcnemar_exact_p']} |")
-    lines += ['', '## Failure modes', '']
-    for agent in agents:
-        lines.append(f"- {agent}: {report['efficiency'][agent]['failures'] or 'none'}; wire models {report['efficiency'][agent]['wire_models']}")
-    lines += ['', '## Tool calls (all trials)', '']
-    for agent in agents:
-        lines.append(f"- {agent}: {report['efficiency'][agent]['tool_mix']}")
+        o = pooled['overall'][agent]
+        lines.append(f"| {agent} | {o['passed']}/{o['total']} | {o['rate']} | {o['ci95'][0]}–{o['ci95'][1]} |")
+    render_paired(lines, '### Pooled paired (same model, task and repetition)', pooled['paired'])
     for dimension, groups in report['breakdowns'].items():
-        lines += ['', f'## By {dimension}', '', '| ' + dimension + ' | ' + ' | '.join(agents) + ' |',
+        lines += ['', f'## By {dimension} (complete groups)', '', '| ' + dimension + ' | ' + ' | '.join(agents) + ' |',
                   '| --- |' + ' ---: |' * len(agents)]
         for value, summary in groups.items():
             lines.append(f'| {value} | ' + ' | '.join(f"{summary[a]['passed']}/{summary[a]['total']}" for a in agents) + ' |')
-    lines += ['', '## Per task', '', '| Task | ' + ' | '.join(agents) + ' |', '| --- |' + ' ---: |' * len(agents)]
-    for task, counts in sorted(report['per_task'].items()):
-        lines.append(f'| {task} | ' + ' | '.join(f'{counts[a][0]}/{counts[a][1]}' for a in agents) + ' |')
+    lines += ['', '## Per task', '', '| Task | Model | ' + ' | '.join(agents) + ' |', '| --- | --- |' + ' ---: |' * len(agents)]
+    for task, by_model in sorted(report['per_task'].items()):
+        for model, counts in sorted(by_model.items()):
+            lines.append(f'| {task} | {model} | ' + ' | '.join(f'{counts[a][0]}/{counts[a][1]}' for a in agents) + ' |')
     return '\n'.join(lines) + '\n'
 
 
@@ -722,8 +937,14 @@ def main():
     run.add_argument('--output-dir', required=True)
     run.add_argument('--tasks')
     run.add_argument('--agents', default='lemon,omp')
-    run.add_argument('--model', default='k3.1-pro', help='Kimi Code wire model id')
-    run.add_argument('--omp-model', help='omp catalog id when it differs from the wire id')
+    run.add_argument('--model', default='k3.1-pro', choices=sorted(MODELS), help='primary wire model id')
+    run.add_argument('--fallback-model', choices=sorted(MODELS),
+                     help='model for new groups while the primary is out of quota (e.g. glm-5.3)')
+    run.add_argument('--kimi-usage-limit', type=float, default=0.9,
+                     help='stop starting new groups on Kimi once its 5-hour window reaches this used ratio')
+    run.add_argument('--reassign-after', type=int, default=6 * 3600,
+                     help='seconds a pinned model may stay unavailable before its unfinished groups move models')
+    run.add_argument('--probe-interval', type=int, default=300, help='seconds between quota probes')
     run.add_argument('--thinking', default='high')
     run.add_argument('--repetitions', type=int, default=3)
     run.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT)
