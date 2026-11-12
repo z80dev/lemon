@@ -10,6 +10,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- **lemon.food home page comes alive.** The hero is now an animated Lemon Bot
+  chat that plays three example conversations (fixing a flaky test behind a
+  Terminal approval card, recalling a decision and setting a reminder, and
+  fanning a review out to helpers). Visitors can press **Allow** or **Deny**
+  themselves, switch or pause examples, and squeeze the mascot, which now
+  reacts to the conversation from behind a turning lemon slice. Sections rise
+  in on scroll and the terminal, browser and chat mocks play out. Reduced-motion
+  visitors see each conversation's final state without animation.
 - **Tern media previews.** In a Tern pane, a whole-file `read` of an image,
   SVG, PDF, audio/video file or 3D model, and a saved browser screenshot, shows
   the file in its tool card through Tern's media viewer, as omp's does. The

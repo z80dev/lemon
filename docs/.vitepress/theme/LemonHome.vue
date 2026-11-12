@@ -1,7 +1,9 @@
 <script setup>
-import { ref } from 'vue'
+import { onBeforeUnmount, ref } from 'vue'
 import { withBase } from 'vitepress'
+import LemonChatDemo from './LemonChatDemo.vue'
 import LemonFace from './LemonFace.vue'
+import LemonSlice from './LemonSlice.vue'
 
 const installer = 'curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh'
 const installs = [
@@ -46,6 +48,61 @@ const paths = [
 
 const choir = ['green', 'blue', 'pink', 'yellow', 'purple', 'orange', 'red']
 const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
+
+// Hero mascot: mirrors the demo Bot's mood, and squeezes when poked.
+const demoMood = ref('happy')
+const squeezeMood = ref('')
+const squish = ref(null)
+const drops = ref([])
+const shouts = ref([])
+const SHOUTS = ['zing!', 'zest!', 'pucker!', 'juicy!', 'so sour!', 'squeeze!']
+let squeezes = 0
+let sprayId = 0
+const timers = new Set()
+function later(fn, ms) {
+  const timer = setTimeout(() => { timers.delete(timer); fn() }, ms)
+  timers.add(timer)
+}
+function squeeze() {
+  squeezes += 1
+  const count = squeezes
+  squeezeMood.value = count >= 5 ? 'derp' : 'joy'
+  later(() => { if (squeezes === count) { squeezes = 0; squeezeMood.value = '' } }, 1600)
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  squish.value?.animate(
+    [{ transform: 'none' }, { transform: 'scale(1.16, .8)', offset: .28 }, { transform: 'scale(.93, 1.09)', offset: .6 }, { transform: 'none' }],
+    { duration: 560, easing: 'cubic-bezier(.34, 1.56, .64, 1)' },
+  )
+  const burst = Array.from({ length: 11 }, (_, index) => {
+    const angle = Math.PI * (1.06 + 0.88 * (index / 10)) + (Math.random() - 0.5) * 0.3
+    const distance = 80 + Math.random() * 80
+    return { id: ++sprayId, dx: `${Math.cos(angle) * distance}px`, dy: `${Math.sin(angle) * distance}px`, size: `${7 + Math.random() * 8}px`, turn: `${(angle * 180) / Math.PI + 225}deg` }
+  })
+  const shout = { id: ++sprayId, text: count >= 5 ? 'okay, okay!' : SHOUTS[(count - 1) % SHOUTS.length], x: `${Math.round((Math.random() - 0.5) * 80)}px` }
+  drops.value.push(...burst)
+  shouts.value.push(shout)
+  later(() => {
+    drops.value = drops.value.filter((drop) => !burst.includes(drop))
+    shouts.value = shouts.value.filter((item) => item !== shout)
+  }, 1200)
+}
+onBeforeUnmount(() => timers.forEach(clearTimeout))
+
+// Scroll reveal: below-the-fold blocks rise in once. Content already on screen
+// at hydration (or with reduced motion) is left alone, so nothing flickers.
+const vReveal = {
+  mounted(el) {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches || el.getBoundingClientRect().top < innerHeight * 0.9) return
+    el.classList.add('reveal-pending')
+    el._reveal = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting) return
+      el.classList.replace('reveal-pending', 'is-revealed')
+      el._reveal.disconnect()
+    }, { rootMargin: '0px 0px -12% 0px' })
+    el._reveal.observe(el)
+  },
+  unmounted(el) { el._reveal?.disconnect() },
+}
 </script>
 
 <template>
@@ -84,21 +141,22 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
         <p class="footnote">Self-hosted · macOS &amp; Linux · Built on Elixir / OTP</p>
       </div>
 
-      <div class="stage" aria-label="Illustration: the Lemon mascot chatting while helper lemons handle subtasks." role="img">
-        <div class="sun" aria-hidden="true"></div>
-        <div class="orbit" aria-hidden="true"></div>
-        <div class="mascot" aria-hidden="true">
-          <LemonFace :size="300" leaf blush track />
-          <span class="mascot-shadow"></span>
+      <div class="stage">
+        <div class="slice-wrap" aria-hidden="true">
+          <LemonSlice />
+          <div class="orbit"></div>
         </div>
-        <div class="bubble user" aria-hidden="true">The upload test is flaky again. Can you take a look?</div>
-        <div class="bubble bot" aria-hidden="true">
-          <LemonFace :size="26" leaf />
-          <span>On it — I’ll have a helper read the CI logs while I check the test.</span>
-        </div>
-        <div class="helper h1" aria-hidden="true"><LemonFace :size="34" color="green" mood="joy" /><span><b>helper</b> reading ci.log</span></div>
-        <div class="helper h2" aria-hidden="true"><LemonFace :size="34" color="blue" mood="wink" /><span><b>memory</b> repo conventions</span></div>
-        <div class="helper h3" aria-hidden="true"><LemonFace :size="34" color="purple" mood="surprised" /><span><b>tool</b> mix test</span></div>
+        <p class="aside-note" aria-hidden="true">
+          a real-ish Lemon Bot chat.<br>go on, press <b>Allow</b> yourself
+          <svg viewBox="0 0 60 52" width="54" height="46"><path d="M6 4c18 2 34 12 40 38" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" /><path d="M37 36l9 8 4-11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        </p>
+        <button type="button" class="mascot" aria-label="Squeeze the lemon" @click="squeeze">
+          <span class="mascot-hint" aria-hidden="true">squeeze me</span>
+          <span ref="squish" class="squish" :class="{ cheer: demoMood === 'joy' }"><LemonFace :size="200" leaf blush track :mood="squeezeMood || demoMood" /></span>
+          <span v-for="drop in drops" :key="drop.id" class="drop" :style="{ '--dx': drop.dx, '--dy': drop.dy, '--s': drop.size, '--r': drop.turn }" aria-hidden="true"></span>
+          <span v-for="shout in shouts" :key="shout.id" class="shout" :style="{ '--x': shout.x }" aria-hidden="true">{{ shout.text }}</span>
+        </button>
+        <LemonChatDemo @mood="demoMood = $event" />
       </div>
     </section>
 
@@ -114,20 +172,20 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
     </div>
 
     <section class="section" aria-labelledby="features-title">
-      <header class="section-head">
+      <header v-reveal class="section-head reveal-stagger">
         <p class="kicker">From a prompt to a practice</p>
         <h2 id="features-title">Good work deserves<br>a place to <em>continue</em>.</h2>
         <p>One runtime for everything an assistant needs beyond its next answer.</p>
       </header>
-      <div class="features">
-        <a v-for="feature in features" :key="feature.title" class="feature" :class="`tone-${feature.color}`" :href="withBase(feature.link)">
+      <div v-reveal class="features reveal-stagger">
+        <a v-for="(feature, index) in features" :key="feature.title" class="feature" :class="`tone-${feature.color}`" :style="{ '--i': index }" :href="withBase(feature.link)">
           <div class="feature-art" aria-hidden="true">
             <template v-if="feature.crew">
-              <LemonFace :size="64" :color="feature.color" :mood="feature.mood" />
+              <LemonFace :size="64" :color="feature.color" :mood="feature.mood" track />
               <LemonFace class="crew-b" :size="40" color="blue" mood="happy" />
               <LemonFace class="crew-c" :size="32" color="pink" mood="wink" />
             </template>
-            <LemonFace v-else :size="68" :color="feature.color" :mood="feature.mood" />
+            <LemonFace v-else :size="68" :color="feature.color" :mood="feature.mood" track />
           </div>
           <h3>{{ feature.title }}</h3>
           <p>{{ feature.text }}</p>
@@ -136,7 +194,7 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
       </div>
     </section>
 
-    <section class="beam" aria-labelledby="beam-title">
+    <section v-reveal class="beam reveal-solo" aria-labelledby="beam-title">
       <div class="beam-copy">
         <p class="kicker">Solid foundations</p>
         <h2 id="beam-title">Agents are a<br><em>concurrency</em> problem.</h2>
@@ -149,7 +207,8 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
           <span>supervisor</span>
         </div>
         <div class="tree-branches">
-          <div v-for="worker in workers" :key="worker.label" class="worker" :class="{ crashes: worker.crashes }">
+          <div v-for="(worker, index) in workers" :key="worker.label" class="worker" :class="{ crashes: worker.crashes }">
+            <i class="pulse" :style="{ '--i': index }" aria-hidden="true"></i>
             <div class="worker-face">
               <LemonFace class="alive" :size="54" :color="worker.color" mood="happy" />
               <LemonFace v-if="worker.crashes" class="dead" :size="54" color="#C9CBBF" mood="crashed" />
@@ -163,42 +222,43 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
     </section>
 
     <section class="section" aria-labelledby="doors-title">
-      <header class="section-head">
+      <header v-reveal class="section-head reveal-stagger">
         <p class="kicker">Wherever you work</p>
         <h2 id="doors-title">One lemon.<br><em>Three doors.</em></h2>
         <p>The same sessions, memory, and tools — from a terminal, a browser tab, or the chat app already on your phone.</p>
       </header>
-      <div class="doors">
-        <a class="door" :href="withBase('/user-guide/cli')">
+      <div v-reveal class="doors reveal-stagger">
+        <a class="door" style="--i: 0" :href="withBase('/user-guide/cli')">
           <div class="mock terminal" aria-hidden="true">
             <div class="mock-bar"><i></i><i></i><i></i><span>~/app</span></div>
-            <pre><span class="dim">$</span> lemon
-<span class="lm">●</span> <b>lemon</b> <span class="dim">· session upload-fix</span>
-<span class="dim">you   ›</span> why is upload_test flaky?
-<span class="lm">lemon ›</span> Two tests share a temp dir.
-        Patch ready — running it now.
-<span class="ok">✓</span> <span class="dim">bash</span> mix test test/upload_test.exs</pre>
+            <pre><span class="tl" style="--d: .5s"><span class="dim">$</span> <span class="typed" style="--n: 5; --d: .55s">lemon</span></span>
+<span class="tl" style="--d: 1.1s"><span class="lm">●</span> <b>lemon</b> <span class="dim">· session upload-fix</span></span>
+<span class="tl" style="--d: 1.45s"><span class="dim">you   ›</span> <span class="typed" style="--n: 25; --d: 1.55s">why is upload_test flaky?</span></span>
+<span class="tl" style="--d: 3.2s"><span class="lm">lemon ›</span> Two tests share a temp dir.</span>
+<span class="tl" style="--d: 3.55s">        Patch ready — running it now.</span>
+<span class="tl" style="--d: 4.3s"><span class="ok">✓</span> <span class="dim">bash</span> mix test test/upload_test.exs <span class="term-caret"></span></span></pre>
           </div>
           <h3>Terminal</h3>
           <p>A fast TUI for long coding sessions, with slash commands and resumable history.</p>
         </a>
-        <a class="door" :href="withBase('/user-guide/web')">
+        <a class="door" style="--i: 1" :href="withBase('/user-guide/web')">
           <div class="mock browser" aria-hidden="true">
             <div class="mock-bar"><i></i><i></i><i></i><span class="url">lemon · sessions</span></div>
             <div class="mock-chat">
-              <div class="msg me">Summarize what changed this week.</div>
-              <div class="msg them"><LemonFace :size="22" leaf /><span>12 commits, 3 merged PRs. The big one: retries in the outbox.</span></div>
+              <div class="msg me" style="--d: .7s">Summarize what changed this week.</div>
+              <div class="msg them" style="--d: 1.4s"><LemonFace :size="22" leaf /><span>12 commits, 3 merged PRs. The big one: retries in the outbox.</span><i class="typing-cover face-gap"><b></b><b></b><b></b></i></div>
             </div>
           </div>
           <h3>Browser</h3>
           <p>Pick up any session in the web interface, with files, runs, and history alongside.</p>
         </a>
-        <a class="door" :href="withBase('/getting-started/add-a-channel')">
+        <a class="door" style="--i: 2" :href="withBase('/getting-started/add-a-channel')">
           <div class="mock phone" aria-hidden="true">
             <div class="phone-head"><LemonFace :size="24" leaf /><span><b>Lemon</b><small>bot</small></span></div>
             <div class="mock-chat">
-              <div class="msg them">Morning! Your release notes are drafted.</div>
-              <div class="msg me">Ship it 🍋</div>
+              <div class="msg them" style="--d: .8s">Morning! Your release notes are drafted.<i class="typing-cover"><b></b><b></b><b></b></i></div>
+              <div class="msg me" style="--d: 2s">Ship it 🍋</div>
+              <div class="msg them" style="--d: 2.6s">Shipped. Have a zesty day ✨<i class="typing-cover"><b></b><b></b><b></b></i></div>
             </div>
           </div>
           <h3>Chat</h3>
@@ -208,12 +268,12 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
     </section>
 
     <section class="section paths-section" aria-labelledby="paths-title">
-      <header class="section-head">
+      <header v-reveal class="section-head reveal-stagger">
         <p class="kicker">Pick your starting point</p>
         <h2 id="paths-title">Make something <em>happen</em>.</h2>
       </header>
-      <div class="paths">
-        <a v-for="path in paths" :key="path.tag" :href="withBase(path.link)" class="path" :class="`tone-${path.color}`">
+      <div v-reveal class="paths reveal-stagger">
+        <a v-for="(path, index) in paths" :key="path.tag" :href="withBase(path.link)" class="path" :class="`tone-${path.color}`" :style="{ '--i': index }">
           <LemonFace class="path-face" :size="56" :color="path.color" :mood="path.mood" :leaf="path.leaf" />
           <span class="kicker">{{ path.tag }}</span>
           <h3>{{ path.title }}</h3>
@@ -223,9 +283,9 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
       </div>
     </section>
 
-    <section class="closing" aria-labelledby="closing-title">
+    <section v-reveal class="closing reveal-solo" aria-labelledby="closing-title">
       <div class="choir" aria-hidden="true">
-        <LemonFace v-for="(color, index) in choir" :key="color" :size="index === 3 ? 92 : 58" :color="color" :mood="choirMoods[index]" :leaf="index === 3" :blush="index === 3" :style="{ '--i': index }" />
+        <LemonFace v-for="(color, index) in choir" :key="color" :size="index === 3 ? 92 : 58" :color="color" :mood="choirMoods[index]" :leaf="index === 3" :blush="index === 3" track :style="{ '--i': index }" />
       </div>
       <h2 id="closing-title">Early days.<br><em>Real building blocks.</em></h2>
       <p>Lemon is pre-1.0 and evolving fast. Start with the supported install path, explore the documented capabilities, and help shape what comes next.</p>
@@ -283,20 +343,23 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
 .btn.ghost:hover { background: var(--vp-c-default-soft); transform: translateY(-2px); }
 .footnote { margin: 18px 0 0; font-size: 13px; color: var(--vp-c-text-3); animation: rise .8s .46s cubic-bezier(.22, 1, .36, 1) both; }
 
-.stage { position: relative; height: 560px; }
-.sun { position: absolute; inset: 70px 30px 60px 60px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, color-mix(in srgb, var(--lemon-brand) 70%, transparent), color-mix(in srgb, var(--lemon-brand) 18%, transparent) 62%, transparent 72%); filter: blur(2px); animation: breathe 7s ease-in-out infinite; }
-.orbit { position: absolute; inset: 40px 0 30px 30px; border-radius: 50%; border: 1.5px dashed color-mix(in srgb, var(--vp-c-text-1) 16%, transparent); animation: spin 80s linear infinite; }
-.mascot { position: absolute; left: 50%; top: 52%; translate: -50% -50%; animation: pop .9s .1s cubic-bezier(.34, 1.56, .64, 1) both; }
-.mascot :deep(.lemon-face) { position: relative; z-index: 1; animation: bob 4.8s ease-in-out infinite; filter: drop-shadow(0 18px 24px rgb(80 70 10 / .18)); }
-.mascot-shadow { position: absolute; left: 18%; right: 18%; bottom: -26px; height: 22px; border-radius: 50%; background: rgb(30 35 20 / .14); filter: blur(6px); animation: shadow 4.8s ease-in-out infinite; }
-.bubble { position: absolute; max-width: 270px; padding: 11px 15px; border-radius: 20px; font-size: 14px; line-height: 1.45; box-shadow: 0 10px 30px -14px rgb(30 35 20 / .35); z-index: 2; }
-.bubble.user { top: 18px; right: 0; background: var(--lemon-brand); color: var(--lemon-ink); border-bottom-right-radius: 6px; animation: float-in .7s .7s cubic-bezier(.34, 1.56, .64, 1) both; }
-.bubble.bot { bottom: 26px; left: 0; display: flex; gap: 10px; align-items: flex-start; background: var(--vp-c-bg-elv); color: var(--vp-c-text-1); border-bottom-left-radius: 6px; animation: float-in .7s 1.4s cubic-bezier(.34, 1.56, .64, 1) both; }
-.helper { position: absolute; z-index: 2; display: flex; align-items: center; gap: 8px; padding: 5px 13px 5px 6px; border-radius: 999px; background: var(--vp-c-bg-elv); font-size: 12.5px; color: var(--vp-c-text-2); box-shadow: 0 8px 24px -14px rgb(30 35 20 / .4); white-space: nowrap; }
-.helper b { color: var(--vp-c-text-1); font-weight: 650; margin-right: 3px; }
-.helper.h1 { top: 130px; left: -6px; animation: float-in .6s 2s cubic-bezier(.34, 1.56, .64, 1) both, drift 6s 2.6s ease-in-out infinite; }
-.helper.h2 { top: 250px; right: -14px; animation: float-in .6s 2.3s cubic-bezier(.34, 1.56, .64, 1) both, drift 7s 2.9s ease-in-out infinite reverse; }
-.helper.h3 { bottom: 120px; right: 24px; animation: float-in .6s 2.6s cubic-bezier(.34, 1.56, .64, 1) both, drift 6.5s 3.2s ease-in-out infinite; }
+.stage { position: relative; padding-top: 132px; }
+.slice-wrap { position: absolute; z-index: 0; top: -30px; right: -76px; width: 440px; height: 440px; pointer-events: none; animation: slice-in 1.4s .05s cubic-bezier(.22, 1, .36, 1) both; }
+.slice-wrap::before { content: ''; position: absolute; inset: -16%; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--lemon-brand) 50%, transparent), transparent 64%); filter: blur(12px); animation: breathe 7s ease-in-out infinite; }
+.slice-wrap :deep(.lemon-slice) { position: relative; opacity: .92; animation: spin 150s linear infinite; }
+.orbit { position: absolute; inset: -30px; border-radius: 50%; border: 1.5px dashed color-mix(in srgb, var(--vp-c-text-1) 16%, transparent); animation: spin 90s linear infinite reverse; }
+.aside-note { position: absolute; z-index: 1; top: 16px; left: 6px; max-width: 210px; margin: 0; font-family: var(--lemon-display); font-variation-settings: 'SOFT' 100, 'WONK' 1; font-style: italic; font-size: 16px; line-height: 1.3; color: var(--vp-c-text-2); rotate: -3deg; animation: float-in .7s 2.6s cubic-bezier(.34, 1.56, .64, 1) both; }
+.aside-note b { font-weight: 650; color: var(--vp-c-text-1); }
+.aside-note svg { display: block; margin: 2px 0 0 40px; color: var(--lemon-brand-deep); }
+.mascot { position: absolute; z-index: 1; top: 0; right: 48px; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; -webkit-tap-highlight-color: transparent; animation: peek 1.1s .45s cubic-bezier(.34, 1.4, .64, 1) both; }
+.squish { display: block; transform-origin: 50% 75%; }
+.squish.cheer { animation: cheer .9s cubic-bezier(.34, 1.56, .64, 1); }
+.mascot :deep(.lemon-face) { animation: bob 4.8s ease-in-out infinite; filter: drop-shadow(0 18px 24px rgb(80 70 10 / .18)); transition: rotate .45s cubic-bezier(.34, 1.56, .64, 1); }
+.mascot:hover :deep(.lemon-face) { rotate: -7deg; }
+.mascot-hint { position: absolute; z-index: 2; top: 26px; left: -74px; padding: 4px 11px; border-radius: 999px 999px 4px 999px; background: var(--vp-c-bg-elv); color: var(--vp-c-text-2); font-size: 12px; font-weight: 600; white-space: nowrap; box-shadow: 0 6px 16px -10px rgb(30 35 20 / .5); opacity: 0; transform: translateY(6px) scale(.9); transition: opacity .2s, transform .25s cubic-bezier(.34, 1.56, .64, 1); pointer-events: none; }
+.mascot:hover .mascot-hint, .mascot:focus-visible .mascot-hint { opacity: 1; transform: none; }
+.drop { position: absolute; z-index: 3; left: 50%; top: 40%; width: var(--s); height: var(--s); margin: calc(var(--s) / -2); border-radius: 50% 0 50% 50%; background: radial-gradient(circle at 35% 35%, #FFF7C9, #EDD56C 55%, #D6B841); pointer-events: none; animation: juice 1s cubic-bezier(.2, .7, .4, 1) forwards; }
+.shout { position: absolute; z-index: 3; left: 50%; top: -18px; translate: calc(-50% + var(--x)) 0; font-family: var(--lemon-display); font-variation-settings: 'SOFT' 100, 'WONK' 1; font-style: italic; font-weight: 650; font-size: 25px; color: var(--vp-c-text-1); white-space: nowrap; pointer-events: none; animation: shout 1.1s cubic-bezier(.22, 1, .36, 1) forwards; }
 
 /* Ticker */
 .ticker { position: relative; overflow: hidden; margin: 0 calc(50% - 50vw); padding: 18px 0; border-block: 1px solid var(--vp-c-divider); background: var(--vp-c-bg-alt); }
@@ -343,6 +406,7 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
 .tree-branches::after { content: ''; position: absolute; top: 16px; left: 12.5%; right: 12.5%; border-top: 2px solid rgb(255 255 255 / .16); border-radius: 2px; }
 .worker { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .worker::before { content: ''; position: absolute; top: -18px; height: 18px; border-left: 2px solid rgb(255 255 255 / .16); }
+.pulse { position: absolute; top: -21px; left: 50%; width: 7px; height: 7px; margin-left: -3px; border-radius: 50%; background: var(--lemon-brand); box-shadow: 0 0 10px 2px rgb(233 212 116 / .55); opacity: 0; animation: pulse-drop 2.8s calc(var(--i) * .55s + .3s) ease-in infinite; }
 .worker-face { position: relative; width: 54px; height: 54px; }
 .worker-face :deep(.lemon-face) { position: absolute; inset: 0; }
 .worker:not(.crashes):nth-child(1) .worker-face { animation: bob 3.6s ease-in-out infinite; }
@@ -354,11 +418,12 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
 .tree-caption { margin: 30px 0 0; font-family: var(--vp-font-family-mono); font-size: 12px; letter-spacing: .08em; color: #959A8E; }
 
 /* Doors */
+/* Subgrid lines up the mocks, titles and copy across doors, so a mock grows to fit its messages without misaligning its neighbours. */
 .doors { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; }
-.door { display: flex; flex-direction: column; }
+.door { display: grid; grid-row: span 3; grid-template-rows: subgrid; row-gap: 0; align-content: start; }
 .door h3 { font-family: var(--lemon-display); font-variation-settings: 'SOFT' 100; font-weight: 600; font-size: 24px; letter-spacing: -.02em; margin: 20px 0 6px; color: var(--vp-c-text-1); }
 .door p { margin: 0; font-size: 15px; line-height: 1.6; color: var(--vp-c-text-2); }
-.mock { height: 220px; border-radius: 22px; overflow: hidden; transition: transform .35s cubic-bezier(.22, 1, .36, 1); box-shadow: 0 1px 0 rgb(0 0 0 / .03), 0 20px 40px -30px rgb(30 35 20 / .45); }
+.mock { min-height: 220px; border-radius: 22px; overflow: hidden; transition: transform .35s cubic-bezier(.22, 1, .36, 1); box-shadow: 0 1px 0 rgb(0 0 0 / .03), 0 20px 40px -30px rgb(30 35 20 / .45); }
 .door:hover .mock { transform: translateY(-6px) rotate(.5deg); }
 .mock-bar { display: flex; align-items: center; gap: 6px; padding: 12px 14px; font-size: 11px; }
 .mock-bar i { width: 9px; height: 9px; border-radius: 50%; background: currentColor; opacity: .22; }
@@ -366,14 +431,22 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
 .terminal { background: var(--lemon-ink-panel); color: #ECEDE6; }
 .terminal pre { margin: 0; padding: 4px 18px; font-family: var(--vp-font-family-mono); font-size: 12px; line-height: 1.75; white-space: pre; }
 .terminal .dim { color: #858A7E; } .terminal .lm { color: #E9D474; } .terminal .ok { color: #8CCB98; } .terminal b { color: #F4F2E4; }
+.typed { display: inline-block; vertical-align: bottom; overflow: hidden; white-space: pre; }
+.term-caret { display: inline-block; width: .55em; height: 1.1em; vertical-align: -.2em; background: var(--lemon-brand); animation: caret 1s steps(1) infinite; }
 .browser { background: var(--vp-c-bg-elv); border: 1px solid var(--vp-c-divider); color: var(--vp-c-text-1); }
 .browser .mock-bar { border-bottom: 1px solid var(--vp-c-divider); }
 .browser .url { flex: 1; text-align: center; padding: 3px 10px; border-radius: 8px; background: var(--vp-c-bg-soft); }
 .mock-chat { display: flex; flex-direction: column; gap: 10px; padding: 18px; font-size: 13px; line-height: 1.45; }
 .msg { max-width: 82%; padding: 9px 13px; border-radius: 18px; }
 .msg.me { align-self: flex-end; background: var(--lemon-brand); color: var(--lemon-ink); border-bottom-right-radius: 6px; }
-.msg.them { align-self: flex-start; display: flex; gap: 8px; align-items: flex-start; background: var(--vp-c-bg-soft); color: var(--vp-c-text-1); border-bottom-left-radius: 6px; }
+.msg.them { position: relative; align-self: flex-start; display: flex; gap: 8px; align-items: flex-start; background: var(--vp-c-bg-soft); color: var(--vp-c-text-1); border-bottom-left-radius: 6px; }
+.typing-cover { position: absolute; inset: 0; display: flex; align-items: center; gap: 4px; padding: 0 14px; border-radius: inherit; background: inherit; opacity: 0; pointer-events: none; }
+.typing-cover.face-gap { padding-left: 43px; }
+.typing-cover b { width: 6px; height: 6px; border-radius: 50%; background: var(--vp-c-text-3); animation: dot 1s ease-in-out infinite; }
+.typing-cover b:nth-child(2) { animation-delay: .15s; }
+.typing-cover b:nth-child(3) { animation-delay: .3s; }
 .phone { background: color-mix(in srgb, var(--tone-blue) 30%, var(--vp-c-bg)); color: var(--vp-c-text-1); }
+.phone .mock-chat { gap: 8px; padding: 14px 16px; }
 .phone-head { display: flex; align-items: center; gap: 10px; padding: 13px 16px; background: color-mix(in srgb, var(--vp-c-bg-elv) 70%, transparent); font-size: 13px; }
 .phone-head small { display: block; font-size: 11px; color: var(--vp-c-text-3); }
 .phone .msg.them { background: var(--vp-c-bg-elv); }
@@ -389,20 +462,41 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
 .closing > p { max-width: 560px; margin: 20px auto 6px; font-size: 18px; line-height: 1.6; color: var(--vp-c-text-2); }
 .choir { display: flex; justify-content: center; align-items: flex-end; gap: 10px; margin-bottom: 30px; }
 .choir :deep(.lemon-face) { animation: hop 2.8s calc(var(--i) * .14s) cubic-bezier(.34, 1.56, .64, 1) infinite; }
+.choir :deep(.lemon-face:hover) { animation: wiggle .55s ease-in-out; }
+
+/* Scroll reveal and the door mocks that play once revealed. */
+.reveal-pending.reveal-solo, .reveal-pending.reveal-stagger > * { opacity: 0; }
+.is-revealed.reveal-solo { animation: rise .9s cubic-bezier(.22, 1, .36, 1) backwards; }
+.is-revealed.reveal-stagger > * { animation: rise .8s calc(var(--i, 0) * 110ms) cubic-bezier(.22, 1, .36, 1) backwards; }
+.section-head.reveal-stagger > :nth-child(2) { --i: 1; }
+.section-head.reveal-stagger > :nth-child(3) { --i: 2; }
+.doors.is-revealed .tl { animation: appear .01s var(--d) backwards; }
+.doors.is-revealed .typed { animation: typing calc(var(--n) * 55ms) var(--d) steps(var(--n), end) backwards; }
+.doors.is-revealed .msg { animation: msg-pop .5s var(--d) cubic-bezier(.34, 1.56, .64, 1) backwards; }
+.doors.is-revealed .typing-cover { animation: cover 1s var(--d) backwards; }
 
 @keyframes rise { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
 @keyframes swipe { to { transform: rotate(-1.6deg) scaleX(1); } }
-@keyframes pop { from { opacity: 0; transform: scale(.6) rotate(-12deg); } to { opacity: 1; transform: none; } }
 @keyframes float-in { from { opacity: 0; transform: translateY(14px) scale(.9); } to { opacity: 1; transform: none; } }
 @keyframes bob { 0%, 100% { transform: translateY(0) rotate(0); } 50% { transform: translateY(-12px) rotate(-2deg); } }
-@keyframes shadow { 0%, 100% { transform: scaleX(1); opacity: 1; } 50% { transform: scaleX(.82); opacity: .6; } }
-@keyframes drift { 0%, 100% { translate: 0 0; } 50% { translate: 0 -8px; } }
 @keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.04); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes marquee { to { transform: translateX(-50%); } }
 @keyframes wiggle { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-9deg); } 60% { transform: rotate(7deg); } }
 @keyframes hop { 0%, 55%, 100% { transform: translateY(0); } 20% { transform: translateY(-16px) rotate(-4deg); } 35% { transform: translateY(0) scaleY(.94); } }
 @keyframes alive { 0%, 34% { opacity: 1; transform: none; } 38% { opacity: 1; transform: rotate(-12deg) translateX(-3px); } 41% { opacity: 0; transform: rotate(10deg); } 62% { opacity: 0; transform: scale(.4); } 70% { opacity: 1; transform: scale(1.12); } 76%, 100% { opacity: 1; transform: none; } }
+@keyframes peek { from { opacity: 0; transform: translateY(96px); } 50% { opacity: 1; } to { opacity: 1; transform: none; } }
+@keyframes slice-in { from { opacity: 0; transform: scale(.7) rotate(-50deg); } to { opacity: 1; transform: none; } }
+@keyframes cheer { 0%, 100% { transform: none; } 30% { transform: translateY(-16px) rotate(-5deg); } 55% { transform: scale(1.06, .94); } 75% { transform: translateY(-5px) rotate(3deg); } }
+@keyframes juice { 0% { opacity: 1; transform: translate(0, 0) rotate(var(--r)) scale(.3); } 45% { opacity: 1; transform: translate(var(--dx), var(--dy)) rotate(var(--r)) scale(1); } 100% { opacity: 0; transform: translate(calc(var(--dx) * 1.2), calc(var(--dy) + 110px)) rotate(var(--r)) scale(.5); } }
+@keyframes shout { from { opacity: 0; transform: translateY(10px) scale(.7) rotate(-6deg); } 25% { opacity: 1; transform: translateY(-8px) scale(1.05) rotate(-3deg); } to { opacity: 0; transform: translateY(-46px) rotate(2deg); } }
+@keyframes pulse-drop { 0% { opacity: 0; transform: translateY(0) scale(.6); } 15% { opacity: 1; } 55% { opacity: 1; transform: translateY(18px) scale(1); } 70%, 100% { opacity: 0; transform: translateY(22px) scale(.4); } }
+@keyframes appear { from { opacity: 0; } to { opacity: 1; } }
+@keyframes typing { from { width: 0; } to { width: calc(var(--n) * 1ch); } }
+@keyframes msg-pop { from { opacity: 0; transform: translateY(10px) scale(.9); } to { opacity: 1; transform: none; } }
+@keyframes cover { 0%, 82% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes dot { 0%, 60%, 100% { transform: translateY(0); opacity: .45; } 30% { transform: translateY(-4px); opacity: 1; } }
+@keyframes caret { 50% { opacity: 0; } }
 @keyframes dead { 0%, 38% { opacity: 0; transform: none; } 41% { opacity: 1; transform: rotate(8deg); } 52% { opacity: 1; transform: translateY(4px) rotate(14deg); } 60%, 100% { opacity: 0; transform: translateY(18px) rotate(30deg); } }
 @keyframes toast { 0%, 66% { opacity: 0; transform: translateY(6px); } 72%, 90% { opacity: 1; transform: none; } 96%, 100% { opacity: 0; transform: translateY(-4px); } }
 
@@ -412,23 +506,19 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
 }
 @media (max-width: 900px) {
   .hero { grid-template-columns: minmax(0, 1fr); padding-top: 48px; gap: 12px; }
-  .stage { height: 500px; max-width: 560px; width: 100%; margin: 0 auto; }
+  .stage { max-width: 560px; width: 100%; margin: 28px auto 0; }
   .doors, .paths { grid-template-columns: 1fr; }
   .mock { max-width: 560px; }
 }
 @media (max-width: 640px) {
   .lemon-home { padding: 0 20px; }
-  .stage { height: 460px; }
-  .sun { inset: 70px 10px 70px 10px; }
-  .orbit { inset: 50px -10px 50px -10px; }
-  .features { grid-template-columns: 1fr; }
-  .mascot :deep(.lemon-face) { width: 210px; height: 210px; }
-  .bubble { max-width: 230px; font-size: 13px; }
-  .bubble.user { top: 0; }
-  .bubble.bot { bottom: 0; }
-  .helper.h1 { top: 100px; left: 0; }
-  .helper.h2 { top: auto; bottom: 100px; right: 0; }
-  .helper.h3 { display: none; }
+  .stage { padding-top: 104px; }
+  .slice-wrap { top: -16px; right: -74px; width: 300px; height: 300px; }
+  .mascot { right: 18px; }
+  .mascot :deep(.lemon-face) { width: 150px; height: 150px; }
+  .mascot-hint { display: none; }
+  .aside-note { top: 4px; left: 0; max-width: 170px; font-size: 14px; }
+  .aside-note svg { width: 40px; height: 34px; margin-left: 30px; }
   .beam { padding: 32px 22px; border-radius: 28px; }
   .tree-branches { gap: 4px; }
   .worker-face, .worker-face :deep(.lemon-face) { width: 44px; height: 44px; }
@@ -440,7 +530,7 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
 @media (prefers-reduced-motion: reduce) {
   .lemon-home *, .lemon-home :deep(*) { animation: none !important; transition: none !important; }
   .hero h1 .move em::after { transform: rotate(-1.6deg); }
-  .worker.crashes .dead, .restart { display: none; }
+  .worker.crashes .dead, .restart, .pulse { display: none; }
 }
 </style>
 
@@ -454,12 +544,17 @@ const choirMoods = ['happy', 'joy', 'wink', 'happy', 'surprised', 'joy', 'derp']
 .dark .lemon-home .hero h1 .move em::after { bottom: -.13em; height: .2em; border-radius: 0; opacity: .75; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 10'%3E%3Cpath d='M0 5 Q10 0 20 5 T40 5' fill='none' stroke='%23E9D474' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E") left center / auto 100% repeat-x; }
 .dark .lemon-home .pill:hover { background: rgb(233 212 116 / .12); color: var(--lemon-text) !important; }
 .dark .lemon-home .install, .dark .lemon-home .beam, .dark .lemon-home .terminal { background: var(--dark-card); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .07); }
-.dark .lemon-home .sun { background: radial-gradient(circle at 42% 38%, rgb(233 212 116 / .2), rgb(233 212 116 / .05) 55%, transparent 68%); filter: blur(8px); }
+.dark .lemon-home .slice-wrap .lemon-slice { opacity: 1; }
+.dark .lemon-home .lemon-slice .rind { fill: rgb(233 212 116 / .1); stroke: rgb(233 212 116 / .34); }
+.dark .lemon-home .lemon-slice .pith { fill: var(--vp-c-bg); }
+.dark .lemon-home .lemon-slice .segment { fill: rgb(233 212 116 / .11); stroke: var(--vp-c-bg); }
+.dark .lemon-home .lemon-slice .juice { stroke: rgb(233 212 116 / .16); stroke-opacity: 1; }
+.dark .lemon-home .lemon-slice .seeds ellipse { fill: rgb(233 212 116 / .22); stroke: none; }
+.dark .lemon-home .slice-wrap::before { background: radial-gradient(circle, rgb(233 212 116 / .16), transparent 62%); }
 .dark .lemon-home .orbit { border-color: rgb(255 255 255 / .1); }
 .dark .lemon-home .mascot .lemon-face { filter: drop-shadow(0 18px 30px rgb(0 0 0 / .45)); }
-.dark .lemon-home .mascot-shadow { background: rgb(0 0 0 / .5); }
-.dark .lemon-home .bubble, .dark .lemon-home .helper { box-shadow: inset 0 0 0 1px rgb(255 255 255 / .06), 0 12px 30px -14px rgb(0 0 0 / .7); }
-.dark .lemon-home .bubble.user { box-shadow: 0 12px 30px -14px rgb(0 0 0 / .7); }
+.dark .lemon-home .mascot-hint { box-shadow: inset 0 0 0 1px rgb(255 255 255 / .08); }
+.dark .lemon-home .aside-note svg { color: #E9D474; opacity: .75; }
 .dark .lemon-home .feature, .dark .lemon-home .path { background: linear-gradient(160deg, color-mix(in srgb, var(--tone) 12%, var(--dark-card)), var(--dark-card) 62%); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 16%, transparent); }
 .dark .lemon-home .feature:hover, .dark .lemon-home .path:hover { background: linear-gradient(160deg, color-mix(in srgb, var(--tone) 20%, var(--dark-card)), var(--dark-card) 72%); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 34%, transparent); }
 .dark .lemon-home .feature-link { color: color-mix(in srgb, var(--tone) 80%, #fff); }
