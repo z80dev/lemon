@@ -33,6 +33,7 @@ defmodule LemonAutomation.MixProject do
       {:lemon_agent, in_umbrella: true},
       {:lemon_ai, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
+      {:lemon_mcp, in_umbrella: true, runtime: false},
       {:lemon_router, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:jason, "~> 1.4"},
