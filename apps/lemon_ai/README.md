@@ -202,6 +202,33 @@ LemonAi.Models.supports_xhigh(model)
 
 ### Provider request controls
 
+Anthropic requests default the required `max_tokens` field to the model's full
+output budget rather than a fraction of it. An explicit `max_tokens` overrides
+that default (clamped to the model maximum, with room reserved for manual thinking).
+First-party Claude models older than 4.5 declare
+`compat.anthropic_context_window_overflow`, enabling the
+`model-context-window-exceeded-2025-08-26` beta so input plus the output budget can
+exceed the context window without a validation error. The beta composes with
+OAuth, effort, and caller betas. A `model_context_window_exceeded` stop is normal
+truncation (`:length`), just like `max_tokens`; see Anthropic's
+[context-window documentation](https://platform.claude.com/docs/en/build-with-claude/context-windows).
+
+Other transports leave optional output limits unset unless `max_tokens` is
+explicitly supplied, retaining server defaults and avoiding context-fit errors
+on local servers or excessive credit preauthorization on OpenRouter. Z.AI is the
+exception described below. Codex subscription requests omit output limits, and
+Bedrock Nova high-effort reasoning omits `maxTokens` as required by those endpoints.
+
+Z.AI keeps the coding-plan Chat Completions endpoint
+(`/api/coding/paas/v4/chat/completions`), sends `max_tokens` (131,072 for GLM-5.x),
+and uses top-level `reasoning_effort` alongside `thinking: {type: "enabled"}`
+on models declaring effort support. GLM-5.3 variants use `low`, `high`, or `max`;
+Lemon's `medium` maps to `high`, `xhigh` to `max`, and off/minimal maps to `low`
+because these models require thinking. GLM-5.2 also accepts disabled thinking;
+older models receive only the thinking toggle, not an unsupported effort field.
+These shapes follow Z.AI's [deep-thinking](https://docs.z.ai/guides/capabilities/thinking)
+and [parameter](https://docs.z.ai/guides/overview/concept-param) documentation.
+
 Modern OpenAI Responses models accept sampling temperature only at effective
 effort `:none`. `PI_CACHE_RETENTION=long` requests 12-hour retention through
 `prompt_cache_options.ttl` on current models; older models retain their 24-hour

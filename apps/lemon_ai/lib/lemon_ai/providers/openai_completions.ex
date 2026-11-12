@@ -354,7 +354,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
     }
     |> maybe_add_stream_options(compat)
     |> maybe_add_store(compat)
-    |> maybe_add_max_tokens(opts, compat)
+    |> maybe_add_max_tokens(model, opts, compat)
     |> maybe_add_temperature(opts)
     |> maybe_add_tools(context, compat)
     |> maybe_add_tool_choice(context, opts)
@@ -374,11 +374,16 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
   defp maybe_add_store(params, _compat), do: params
 
-  defp maybe_add_max_tokens(params, %{max_tokens: max_tokens}, _compat)
-       when is_nil(max_tokens) or max_tokens <= 0, do: params
+  defp maybe_add_max_tokens(params, model, opts, %{max_tokens_field: field}) do
+    default_max_tokens =
+      if model.provider in [:zai, "zai"] or String.contains?(model.base_url || "", "api.z.ai"),
+        do: model.max_tokens
 
-  defp maybe_add_max_tokens(params, %{max_tokens: max_tokens}, %{max_tokens_field: field}) do
-    Map.put(params, field, max_tokens)
+    max_tokens = opts.max_tokens || default_max_tokens
+
+    if max_tokens && max_tokens > 0,
+      do: Map.put(params, field, max_tokens),
+      else: params
   end
 
   defp maybe_add_temperature(params, %{temperature: nil}), do: params
@@ -428,9 +433,25 @@ defmodule LemonAi.Providers.OpenAICompletions do
     end
   end
 
-  defp maybe_add_reasoning(params, _model, %{reasoning: reasoning}, %{thinking_format: "zai"}) do
-    type = if reasoning in [false, :none], do: "disabled", else: "enabled"
-    Map.put(params, "thinking", %{"type" => type})
+  defp maybe_add_reasoning(params, model, %{reasoning: reasoning}, %{
+         thinking_format: "zai",
+         supports_reasoning_effort: supports_effort?
+       }) do
+    requested =
+      case reasoning do
+        false -> :none
+        :medium -> :high
+        :xhigh -> :max
+        level -> level
+      end
+
+    effort = LemonAi.Models.reasoning_effort_for(model, requested)
+    type = if effort in [false, :none], do: "disabled", else: "enabled"
+    params = Map.put(params, "thinking", %{"type" => type})
+
+    if supports_effort? and type == "enabled",
+      do: Map.put(params, "reasoning_effort", to_string(effort)),
+      else: params
   end
 
   defp maybe_add_reasoning(params, model, %{reasoning: reasoning}, %{
@@ -915,7 +936,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
         is_zai
 
     use_max_tokens =
-      is_copilot ||
+      is_zai || is_copilot ||
         provider in [:mistral, "mistral"] || String.contains?(base_url, "mistral.ai") ||
         String.contains?(base_url, "chutes.ai")
 

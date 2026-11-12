@@ -1905,9 +1905,10 @@ Kimi Code reasoning models (`k3`, `k3-256k`, `k3.1-pro`, `k3.1-pro-highspeed`,
 thinking. `max_tokens` defaults to the model's maximum output (an explicit
 `max_tokens` still wins). Requests that carry a session id send
 `metadata.user_id`, a digest of that id (never the id itself), so Kimi can
-route the session's prompt cache; `cache_retention = "none"` omits it. These
-behaviours are catalog flags (`adaptive_thinking`, `compat.anthropic_default_max_output`,
-`compat.anthropic_session_user_id`).
+route the session's prompt cache; `cache_retention = "none"` omits it. Thinking
+and session identity are catalog flags (`adaptive_thinking`,
+`compat.anthropic_session_user_id`); the full output budget is the default for
+the Anthropic transport, not a Kimi-specific flag.
 
 For a subscription login, `lemon model kimi_coding --status` also shows the
 current quota from `GET https://api.kimi.com/coding/v1/usages` (or the

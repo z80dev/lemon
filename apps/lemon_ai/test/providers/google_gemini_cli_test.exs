@@ -324,10 +324,11 @@ defmodule LemonAi.Providers.GoogleGeminiCliTest do
         Plug.Conn.send_resp(conn, 400, "test")
       end)
 
-      {:ok, _stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
+      {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
 
       assert_receive {:request_body, body}, 1000
       refute Map.has_key?(body["request"], "generationConfig")
+      assert {:error, _} = EventStream.result(stream, 1000)
     end
 
     test "includes thinking config when model supports reasoning and reasoning option set" do

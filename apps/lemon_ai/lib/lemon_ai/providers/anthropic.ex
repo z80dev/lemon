@@ -1024,6 +1024,14 @@ defmodule LemonAi.Providers.Anthropic do
         beta_features
       end
 
+    beta_features =
+      if anthropic_oauth_provider?(provider) and
+           compat_flag?(model.compat || %{}, :anthropic_context_window_overflow) do
+        beta_features ++ ["model-context-window-exceeded-2025-08-26"]
+      else
+        beta_features
+      end
+
     base_headers = [
       {"content-type", "application/json"},
       {"accept", "text/event-stream"},
@@ -1091,12 +1099,6 @@ defmodule LemonAi.Providers.Anthropic do
     oauth_request? = anthropic_oauth_request?(model.provider, api_key)
     compat = model.compat || %{}
 
-    # Catalog-declared: some subscription endpoints expect the full output budget.
-    default_max_tokens =
-      if compat_flag?(compat, :anthropic_default_max_output),
-        do: model.max_tokens,
-        else: div(model.max_tokens, 3)
-
     body = %{
       "model" => model.id,
       "messages" =>
@@ -1104,7 +1106,7 @@ defmodule LemonAi.Providers.Anthropic do
           oauth_request?: oauth_request?,
           cache_control: cache_control
         ),
-      "max_tokens" => min(opts.max_tokens || default_max_tokens, model.max_tokens),
+      "max_tokens" => min(opts.max_tokens || model.max_tokens, model.max_tokens),
       "stream" => true
     }
 
@@ -1660,6 +1662,7 @@ defmodule LemonAi.Providers.Anthropic do
 
   defp map_stop_reason("end_turn"), do: :stop
   defp map_stop_reason("max_tokens"), do: :length
+  defp map_stop_reason("model_context_window_exceeded"), do: :length
   defp map_stop_reason("tool_use"), do: :tool_use
   defp map_stop_reason("refusal"), do: :error
   defp map_stop_reason("pause_turn"), do: :stop

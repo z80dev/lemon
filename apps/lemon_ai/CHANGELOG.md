@@ -23,8 +23,7 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - `LemonAi.Providers.KimiCodeUsage` reads Kimi Code quota from `/v1/usages`
   with the bearer token and Kimi CLI fingerprint, skipping expired tokens and
   returning only credential-free errors.
-- Catalog compat flags `anthropic_default_max_output` (default `max_tokens` to
-  the model maximum) and `anthropic_session_user_id` (`metadata.user_id` from a
+- Catalog compat flag `anthropic_session_user_id` (`metadata.user_id` from a
   session-id digest). Kimi Code K3 and `kimi-for-coding` models declare
   `adaptive_thinking` instead of `anthropic_effort_only`, so they send
   `thinking: adaptive` with `output_config.effort` and the effort beta;
@@ -42,6 +41,17 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   `Retry-After` and structured body hints with a 10-second minimum plus jitter.
   Kimi quota exhaustion and Codex usage limits stop retries immediately and
   surface provider reset timestamps. Stream idle timeouts are transient.
+- Anthropic requests use the full declared output-token budget instead of one
+  third, preserving explicit limits. Older first-party Claude catalog models add
+  the context-window-overflow beta alongside existing OAuth/effort/caller betas;
+  `model_context_window_exceeded` is reported as normal `:length` truncation.
+  Other transports retain server-default output limits unless explicitly set,
+  except Z.AI, avoiding local context-fit and OpenRouter preauthorization errors.
+- Z.AI coding Chat Completions sends `max_tokens` and the documented top-level
+  `reasoning_effort` for GLM-5.2/5.3 models, including supported effort mapping
+  and required thinking on GLM-5.3. Older GLM models do not receive unsupported
+  effort fields. The now-redundant `anthropic_default_max_output` catalog flag
+  is removed; full output budgets are the Anthropic default.
 - Validate OAuth callback ports in the original authority before URI normalization,
   rejecting out-of-range ports even when Elixir 1.20 discards them during parsing.
   Apply the same validation to Anthropic, Google Antigravity, Gemini CLI and Codex
