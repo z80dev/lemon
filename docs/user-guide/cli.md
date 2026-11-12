@@ -1379,6 +1379,14 @@ lemon doctor [options]
 | `--bundle [PATH]` | Write a redacted support bundle |
 | `--bundle-path PATH` | Set the support bundle path |
 
+When `LEMON_BOT_PUBLIC_URL` is set, the offline `bot.admission_origins` check
+requires its origin in both `LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS` and
+`LEMON_CRON_ADMISSION_ALLOWED_ORIGINS`. Origins match by scheme, case-insensitive
+host, and effective port (so HTTPS port 443 can be omitted). Each environment
+allowlist replaces its app configuration, even when empty; only an absent variable
+uses the app's configured allowlist, including the same-machine loopback default.
+Missing entries fail with the affected variable names, never URL values.
+
 ### `lemon config`
 
 Validate, show or migrate configuration.

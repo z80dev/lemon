@@ -4,6 +4,9 @@
 
 ### Changed
 
+- Cron admission rejects invalid callback URLs, remote HTTP callbacks and
+  non-allowlisted origins distinctly, returning only a canonical origin for
+  origin rejection. Cron RPCs and tool errors preserve these safe classifications.
 - The `automation.cron_paused` doctor check skips from a standalone CLI without a
   local `CronManager` instead of reporting held-back runs; inside the runtime an
   unreadable pause state still warns.

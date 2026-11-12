@@ -96,6 +96,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_CRON_ADMISSION_ALLOWED_ORIGINS` | string | _(none)_ |  | `lemon_automation` | Comma-separated exact origins allowed for private cron admission callbacks; HTTPS or literal-loopback HTTP only. |
 | `LEMON_CRON_DRIFT_GUARD_ENABLED` | boolean | _(none)_ |  | `lemon_automation` | Override the cron model drift guard (fail closed when the global default model changed under an unpinned job). |
 | `LEMON_CRON_PREFLIGHT_ENABLED` | boolean | _(none)_ |  | `lemon_automation` | Override the cron pre-dispatch preflight (provider/target readiness) toggle. |
+| `LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS` | string | _(none)_ |  | `lemon_router` | Comma-separated exact origins allowed for private native follow-up admission callbacks; HTTPS or literal-loopback HTTP only. |
 
 ### Browser
 

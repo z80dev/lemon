@@ -99,6 +99,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ProfilesRoster,
     LemonControlPlane.Methods.ProfileChat,
     LemonControlPlane.Methods.ProfileFollowupAdmissionSet,
+    LemonControlPlane.Methods.ProfileFollowupAdmissionGet,
     # Profile-scoped memory
     LemonControlPlane.Methods.MemoryList,
     LemonControlPlane.Methods.MemorySearch,

@@ -192,6 +192,15 @@ defmodule LemonCore.EnvTest do
       assert decl.default == 1000
     end
 
+    test "native follow-up origins declare their string type and router owner" do
+      decl = Env.describe(:lemon_native_followup_allowed_origins)
+      assert decl.env_var == "LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS"
+      assert decl.type == :string
+      assert decl.apps == [:lemon_router]
+      assert decl.area == :automation
+      assert decl.default == nil
+    end
+
     test "describe/1 returns nil for an undeclared name" do
       assert Env.describe(:definitely_not_declared) == nil
     end
@@ -235,6 +244,18 @@ defmodule LemonCore.EnvTest do
     test "opts[:default] overrides the declared default" do
       System.delete_env("LEMON_BASE_DELAY_MS")
       assert Env.get(:lemon_base_delay_ms, default: 1234) == 1234
+    end
+
+    test "native follow-up origins resolve through the declaration" do
+      System.delete_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS")
+      assert Env.get(:lemon_native_followup_allowed_origins) == nil
+
+      origins = "https://bot.example, http://127.0.0.1:4100"
+      System.put_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS", origins)
+      assert Env.get(:lemon_native_followup_allowed_origins) == origins
+
+      System.put_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS", "")
+      assert Env.get(:lemon_native_followup_allowed_origins, default: "") == ""
     end
 
     test "casts booleans" do

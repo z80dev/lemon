@@ -6,6 +6,10 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Added
 
+- Admin-only `profile.followup.admission.get` returns configuration presence, URL
+  and the lowercase SHA-256 token digest for reconciliation, never credentials
+  or their secret names. Admission setters and cron mutations report distinct
+  safe callback error codes; only origin rejection includes a canonical origin.
 - Admin-only controller and named-node Codex device login start/poll/cancel plus
   internal challenge/completion/settlement RPCs, with complete binding schemas and
   fixed identities. Completion carries the exact destination-generated nonce,
