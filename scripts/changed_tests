@@ -145,12 +145,13 @@ def select(root, base="origin/main", focused=False, narrow=False, all_apps=False
     touched, readers = set(), set()
     reasons = ["--all: every app (full scope)"] if all_apps else [base_reason] if base_reason else []
     full = all_apps or bool(base_reason)
-    lanes = {"clients": False, "wasm": False, "docs": False}
+    lanes = {"clients": False, "wasm": False, "docs": False, "apple": False}
     for path in files:
         parts = PurePosixPath(path).parts
         top = parts[0]
         lanes["clients"] |= top == "clients" or path == "scripts/test"
         lanes["docs"] |= top == "docs"
+        lanes["apple"] |= path.startswith("products/lemon_bot/apple/")
         lanes["wasm"] |= (
             top == "native" or path.startswith("apps/coding_agent/lib/coding_agent/wasm/")
             or path == "apps/coding_agent/test/coding_agent/wasm_integration_test.exs"
@@ -174,6 +175,7 @@ def select(root, base="origin/main", focused=False, narrow=False, all_apps=False
             reasons.append(f"{path}: no explicit narrow rule (full scope)")
     affected = set(graph) if full else reverse_dependencies(graph, touched) | readers
     lanes["clients"] |= full
+    lanes["apple"] |= full
     excluded = sorted(affected & set(exclude))
     if excluded:
         reasons.append(f"excluded by --exclude-app: {' '.join(excluded)}")

@@ -194,12 +194,12 @@ struct ApprovalReviewView: View {
                 }
             }
             if accessRequest {
-                Text(proposal.description).font(LBFont.rowSubtitle).foregroundStyle(.secondary)
+                Text(proposal.description).font(LBFont.rowSubtitle).foregroundStyle(LB.muted)
                 if let reason = AccessRequestPresentation.reason(proposal, botName: store.bots.first(where: { $0.id == proposal.botId })?.name ?? "Bot") {
                     Text(verbatim: reason).font(LBFont.body).textSelection(.enabled)
                 }
             } else {
-                approvalDetailText("\(proposal.target) on \(proposal.scope.machineLabel)", accessRequest: false).font(LBFont.rowSubtitle).foregroundStyle(.secondary)
+                approvalDetailText("\(proposal.target) on \(proposal.scope.machineLabel)", accessRequest: false).font(LBFont.rowSubtitle).foregroundStyle(LB.muted)
             }
             CardDetails {
                 approvalDetailText(proposal.title, accessRequest: accessRequest)
@@ -236,10 +236,13 @@ struct ApprovalReviewView: View {
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 let expired = proposal.gate.state == "pending" && Double(proposal.gate.expiresAtMs) <= Date().timeIntervalSince1970 * 1000
                 if proposal.gate.state == "pending" && !expired {
-                    HStack(spacing: 8) {
-                        Button(accessRequest ? AccessRequestPresentation.allowLabel : "Allow once") { Task { await resolve("approve_once", reviewed: review.identity) } }.buttonStyle(.cardPrimary).disabled(!canApprove)
+                    // The scope label ("Allow <tool> for this chat") is the consent being given: wrap the actions
+                    // onto separate lines instead of truncating it on narrow widths and large Dynamic Type.
+                    // iPhone: each consent action keeps a 44 pt touch height (visible pills stay compact).
+                    let buttons = Group {
+                        Button(accessRequest ? AccessRequestPresentation.allowLabel : "Allow once") { Task { await resolve("approve_once", reviewed: review.identity) } }.buttonStyle(PillButtonStyle(kind: PillButtonStyle.cardPrimary.kind, minimumTouchSize: LBMetric.composerHitSize)).disabled(!canApprove)
                         if !accessRequest, let option = proposal.chatOption {
-                            Button(option.label) { Task { await resolve("approve_chat", reviewed: review.identity) } }.buttonStyle(.pill(.secondary)).disabled(!canApprove)
+                            Button(option.label) { Task { await resolve("approve_chat", reviewed: review.identity) } }.buttonStyle(PillButtonStyle(kind: .secondary, minimumTouchSize: LBMetric.composerHitSize)).disabled(!canApprove)
                         }
                         if !accessRequest, proposal.chatOption != nil,
                            let bot = store.bots.first(where: { $0.id == proposal.botId }),
@@ -250,7 +253,11 @@ struct ApprovalReviewView: View {
                             } label: { Image(systemName: "ellipsis") }
                             .disabled(!canApprove)
                         }
-                        Button(accessRequest ? AccessRequestPresentation.denyLabel : "Deny", role: accessRequest ? nil : .destructive) { Task { await resolve("deny", reviewed: review.identity) } }.buttonStyle(.pill(.secondary))
+                        Button(accessRequest ? AccessRequestPresentation.denyLabel : "Deny", role: accessRequest ? nil : .destructive) { Task { await resolve("deny", reviewed: review.identity) } }.buttonStyle(PillButtonStyle(kind: .secondary, minimumTouchSize: LBMetric.composerHitSize))
+                    }
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) { buttons }
+                        VStack(alignment: .leading, spacing: 8) { buttons }
                     }.disabled(action.busy || !gateAllowsAction(store, proposal.gate) || Double(proposal.scope.expiresAtMs) <= Date().timeIntervalSince1970 * 1000)
                 } else {
                     let state = expired ? "expired" : proposal.gate.state

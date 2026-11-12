@@ -96,6 +96,8 @@ import Observation
     @ObservationIgnored var pairingQRID: ID?
     @ObservationIgnored var httpSession: URLSession?
     @ObservationIgnored var restoringSelection = false
+    /// The in-flight endpoint identity check that is fencing `transport` (launch, refresh, reconnect).
+    @ObservationIgnored var identityVerification: Task<Void, Error>?
 
     public init(keychain: any AccountCredentialStore = AccountKeychain(), persistence: ClientPersistence = ClientPersistence()) {
         self.keychain = keychain; self.persistence = persistence
@@ -162,8 +164,12 @@ import Observation
             try? persistCache()
         }
     }
-    func activeTransport() throws -> HTTPTransport {
-        guard account != nil, connectionState != "reconnect_required", let transport else { throw ClientError.signedOut }
+    func activeTransport() async throws -> HTTPTransport {
+        // While a saved session's endpoint identity is re-verified (launch, reconnect, backend restart) the transport is
+        // fenced. Wait for that check rather than reporting a valid session as signed out to concurrent screen loads.
+        if transport == nil, let pending = identityVerification { _ = try? await pending.value }
+        guard account != nil, connectionState != "reconnect_required" else { throw ClientError.signedOut }
+        guard let transport else { throw ClientError.notConnected }
         return transport
     }
     func assertGeneration(_ value: UUID) throws { guard value == generation else { throw ClientError.accountChanged } }
@@ -335,6 +341,12 @@ import Observation
     }
     /// Read-only identity fence before sync or socket authentication. Never replace an existing pin.
     func verifyConnectionIdentity() async throws {
+        let check = Task { try await checkConnectionIdentity() }
+        identityVerification = check
+        defer { if identityVerification == check { identityVerification = nil } }
+        try await withTaskCancellationHandler { try await check.value } onCancel: { check.cancel() }
+    }
+    private func checkConnectionIdentity() async throws {
         guard let saved = account else { throw ClientError.signedOut }
         #if !os(iOS)
         // Existing Mac sign-in is outside phone pairing; verified/paired accounts still enforce their pin.

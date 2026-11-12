@@ -19,9 +19,10 @@ struct VoiceCallSummaryView: View {
                 }
                 Spacer(minLength: 8)
                 if current.userId == store.user?.id {
+                    // 44 pt touch targets on iPhone; the chosen rating is filled and announced as selected.
                     HStack(spacing: 6) {
-                        Button { Task { await feedback("good") } } label: { Label("Good call", systemImage: "hand.thumbsup") }.buttonStyle(.pill(.secondary, compact: true))
-                        Button { Task { await feedback("bad") } } label: { Label("Bad call", systemImage: "hand.thumbsdown") }.buttonStyle(.pill(.secondary, compact: true))
+                        feedbackButton("good", title: "Good call", symbol: "hand.thumbsup")
+                        feedbackButton("bad", title: "Bad call", symbol: "hand.thumbsdown")
                     }.labelStyle(.iconOnly).disabled(action.busy || store.connectionState != "online")
                 }
             }
@@ -41,6 +42,12 @@ struct VoiceCallSummaryView: View {
         }.padding(12).frame(maxWidth: LBMetric.bubbleMaxWidth, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: LBMetric.cardRadius, style: .continuous).fill(LB.bubble))
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    private func feedbackButton(_ value: String, title: String, symbol: String) -> some View {
+        let chosen = current.feedback == value
+        return Button { Task { await feedback(value) } } label: { Label(title, systemImage: chosen ? symbol + ".fill" : symbol) }
+            .buttonStyle(PillButtonStyle(kind: chosen ? .primary(LB.accent, LB.raised) : .secondary, compact: true, minimumTouchSize: LBMetric.composerHitSize))
+            .accessibilityAddTraits(chosen ? .isSelected : [])
     }
     private func feedback(_ value: String) async {
         await action.perform { updated = try await store.mutate("PATCH", resourcePath("voice/sessions", current.id), body: ["revision": .number(Double(current.revision)), "feedback": .string(value)]) }

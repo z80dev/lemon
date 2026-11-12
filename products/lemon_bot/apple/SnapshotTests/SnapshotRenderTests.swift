@@ -32,7 +32,7 @@ final class SnapshotRenderTests: XCTestCase {
         XCTAssertTrue(text.contains("original-reference"))
         XCTAssertEqual(humanErrorText(PairingClientError.pendingConnection), PairingClientError.pendingConnection.localizedDescription)
         XCTAssertTrue(humanErrorText(URLError(.notConnectedToInternet)).hasPrefix("You're offline."))
-        XCTAssertEqual(pairingStatusLabel("pending_approval"), "Waiting for approval on your Mac")
+        XCTAssertEqual(pairingStatusLabel("pending_approval"), "Waiting for approval")
         XCTAssertEqual(hubStatusLabel("outcome_unknown"), "Result not confirmed")
     }
 

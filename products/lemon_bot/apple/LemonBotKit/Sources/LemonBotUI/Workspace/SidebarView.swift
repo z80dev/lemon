@@ -31,6 +31,7 @@ struct SidebarView: View {
     @State private var showConnection = false
     @FocusState private var filterFocused: Bool
     @Environment(\.lbReduceMotion) private var reduceMotion
+    @Environment(\.lbBottomAccessoryInset) private var bottomAccessoryInset
 
     private var selectedConversationID: ID? { destination == .conversation ? store.selectedConversationID : nil }
     private var selectedBotID: ID? {
@@ -70,7 +71,7 @@ struct SidebarView: View {
                         Button { lbWithAnimation(reduceMotion) { proxy.scrollTo(first, anchor: .center) } } label: {
                             Label("More unreads", systemImage: "arrow.down").font(LBFont.metaEmphasis)
                         }
-                        .buttonStyle(.pill(.primary(LB.unread, .white), compact: true))
+                        .buttonStyle(.pill(.primary(LB.unread, LB.onUnread), compact: true))
                         .shadow(color: LB.shadow, radius: 8, y: 3)
                         .padding(.bottom, 8)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -117,12 +118,26 @@ struct SidebarView: View {
         if store.bots.isEmpty { setupRow.sidebarRow() }
         botList
         roomList
+        if filtering && !store.bots.isEmpty && listBots.isEmpty && rooms.isEmpty { noFilterResultsRow.sidebarRow() }
         if hiddenCount > 0 && !filtering {
             Button(showHidden ? "Hide hidden Bots" : "Show \(hiddenCount) hidden \(hiddenCount == 1 ? "Bot" : "Bots")") {
                 lbWithAnimation(reduceMotion, LBMotion.snappy) { showHidden.toggle() }
             }.buttonStyle(.pill(.quiet, compact: true)).foregroundStyle(LB.muted).padding(.leading, 12).padding(.top, 6).sidebarRow()
         }
-        Color.clear.frame(height: 72).sidebarRow()
+        Color.clear.frame(height: 72).accessibilityHidden(true).sidebarRow()
+    }
+
+    /// Shown when search text or the Unread filter hides every row, so the list never goes blank without a way back.
+    private var noFilterResultsRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(query.isEmpty ? "No unread chats" : "No Bots or groups match “\(query)”").font(LBFont.rowTitle).foregroundStyle(LB.ink)
+            Text(query.isEmpty ? "You're all caught up." : "Try another name, or search messages and files instead.")
+                .font(LBFont.rowSubtitle).foregroundStyle(LB.muted).fixedSize(horizontal: false, vertical: true)
+            Button("Show all chats") { query = ""; unreadOnly = false }
+                .buttonStyle(PillButtonStyle(kind: .secondary, compact: true, minimumTouchSize: LBMetric.composerHitSize))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16).padding(.vertical, 12)
     }
 
     /// macOS: a lazy stack (custom highlight, hover). iOS: a plain List so rows get native swipe actions.
@@ -207,7 +222,7 @@ struct SidebarView: View {
                 Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(LB.faint) }.buttonStyle(.plain).accessibilityLabel("Clear search")
             }
             Button { unreadOnly.toggle() } label: { Text("Unread") }
-                .buttonStyle(.pill(unreadOnly ? .primary(LB.unread, .white) : .secondary, compact: true))
+                .buttonStyle(.pill(unreadOnly ? .primary(LB.unread, LB.onUnread) : .secondary, compact: true))
                 .accessibilityAddTraits(unreadOnly ? .isSelected : [])
             Button("All", action: searchEverything).buttonStyle(.pill(.secondary, compact: true)).help("Search messages, files and routines (⌘K)")
         }
@@ -249,7 +264,7 @@ struct SidebarView: View {
             if !store.pendingIntents.isEmpty {
                 utilityRow("Unconfirmed actions", symbol: "exclamationmark.arrow.triangle.2.circlepath", count: store.pendingIntents.count, selected: destination == .pending, tint: LB.warning) { openDestination(.pending) }
             }
-            Color.clear.frame(height: 6).sidebarRow()
+            Color.clear.frame(height: 6).accessibilityHidden(true).sidebarRow()
         }
     }
     private func utilityRow(_ title: String, symbol: String, count: Int, selected: Bool, tint: Color? = nil, action: @escaping () -> Void) -> some View {
@@ -459,8 +474,14 @@ struct SidebarView: View {
             HStack {
                 Text("Groups and tasks").font(LBFont.metaEmphasis).foregroundStyle(LB.muted)
                 Spacer()
-                Button(action: newGroup) { Image(systemName: "plus").font(.system(size: 11, weight: .semibold)) }
-                    .buttonStyle(.plain).foregroundStyle(LB.muted).accessibilityLabel("New group").disabled(!store.isOnline)
+                Button(action: newGroup) {
+                    Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
+                        #if os(iOS)
+                        // A 44 pt touch area around the 9 pt glyph; negative padding keeps the header row height.
+                        .frame(width: 44, height: 44).contentShape(Rectangle()).padding(.vertical, -16).padding(.trailing, -16)
+                        #endif
+                }
+                .buttonStyle(.plain).foregroundStyle(LB.muted).accessibilityLabel("New group").disabled(!store.isOnline)
             }.padding(.horizontal, 12).padding(.top, 16).padding(.bottom, 4).sidebarRow()
             ForEach(rooms) { room in roomRow(room) }
         }
@@ -542,6 +563,9 @@ struct SidebarView: View {
             }.buttonStyle(.plain).help("Connectors and channels (⌘⇧M)")
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
+        #if os(iOS)
+        .padding(.bottom, bottomAccessoryInset)
+        #endif
     }
 
     // MARK: Data

@@ -1,17 +1,18 @@
 import Foundation
 
 public enum PairingClientError: Error, LocalizedError {
-    case invalidLink, pendingConnection, notReady, expired, denied, wrongCluster, unconfirmed, rejected(String)
+    case invalidLink, pendingConnection, notReady, expired, denied, alreadyUsed, wrongCluster, unconfirmed, rejected(String)
     public var errorDescription: String? {
         switch self {
-        case .invalidLink: return "That isn't a valid Lemon Bot pairing link. Scan a fresh QR from your Mac. Remote workspaces need an HTTPS address."
+        case .invalidLink: return "That isn't a valid Lemon Bot pairing link. Scan a fresh QR from your desktop. Remote workspaces need an HTTPS address."
         case .pendingConnection: return "Finish or cancel the saved connection request before scanning another QR."
         case .notReady: return "Scan or paste a desktop pairing link before requesting a connection."
-        case .expired: return "This request expired. Create a new QR code on your Mac."
-        case .denied: return "Your Mac denied this device. Create a new QR code to request a connection again."
-        case .wrongCluster: return "The server's workspace or device doesn't match the QR code. Nothing was installed. Scan a fresh QR from your Mac."
+        case .expired: return "This request expired. Create a new QR code on your desktop."
+        case .denied: return "Your desktop denied this device. Create a new QR code to request a connection again."
+        case .alreadyUsed: return "This QR code was already used to request a connection. Create a new QR code on your desktop."
+        case .wrongCluster: return "The server's workspace or device doesn't match the QR code. Nothing was installed. Scan a fresh QR from your desktop."
         case .unconfirmed: return "We couldn't confirm the connection. Check your saved request before scanning another QR code."
-        case .rejected: return "Your Mac couldn't finish connecting this iPhone. Nothing was installed. Check your request."
+        case .rejected: return "Your desktop couldn't finish connecting this iPhone. Nothing was installed. Check your request."
         }
     }
 }
@@ -121,7 +122,9 @@ extension LemonBotStore {
             guard result.expiresAtMs > Date().timeIntervalSince1970 * 1000 else { throw PairingClientError.expired }
             record.preview = result; record.state = "preview_ready"
             try keychain.savePendingPairing(record); installPendingPairing(record)
-        } catch {
+        } catch let failure {
+            // The preview endpoint answers `conflict` only for a QR that was already claimed (one use per QR).
+            let error: Error = (failure as? BackendError)?.failure.code == "conflict" ? PairingClientError.alreadyUsed : failure
             if generation == current, pairingRecord?.claimNonce == record.claimNonce {
                 record.state = pairingFailureState(error, unknown: "preview")
                 try keychain.savePendingPairing(record); installPendingPairing(record)
@@ -341,6 +344,7 @@ extension LemonBotStore {
         if let preflight = error as? BotPreflightError { return preflight == .unavailable ? unknown : "failed" }
         if let safe = error as? PairingClientError {
             if case .wrongCluster = safe { return "failed" }
+            if case .alreadyUsed = safe { return "failed" }
             if case .denied = safe { return "denied" }
             if case .expired = safe { return "expired" }
         }

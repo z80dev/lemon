@@ -121,13 +121,16 @@ struct ActionErrorView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label(diagnosticStart.map { String(message[..<$0]) } ?? message, systemImage: "exclamationmark.circle.fill")
                     .foregroundStyle(LB.danger).textSelection(.enabled)
+                    // Inside a List/Form row, expanding Details must grow the row, not truncate the message.
+                    .fixedSize(horizontal: false, vertical: true)
                 if let diagnosticStart {
                     DisclosureGroup("Details") {
                         Text(String(message[diagnosticStart...]).trimmingCharacters(in: .whitespacesAndNewlines)).textSelection(.enabled)
-                        Button("Copy") { copyText(message) }.buttonStyle(.pill(.quiet, compact: true))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Copy") { copyText(message) }.buttonStyle(PillButtonStyle(kind: .quiet, compact: true, minimumTouchSize: LBMetric.composerHitSize))
                     }
                 } else {
-                    Button("Copy") { copyText(message) }.buttonStyle(.pill(.quiet, compact: true))
+                    Button("Copy") { copyText(message) }.buttonStyle(PillButtonStyle(kind: .quiet, compact: true, minimumTouchSize: LBMetric.composerHitSize))
                 }
             }.font(LBFont.rowSubtitle).padding(.horizontal, 12).padding(.vertical, 8)
                 .background(RoundedRectangle(cornerRadius: LBMetric.rowRadius, style: .continuous).fill(LB.danger.opacity(0.09)))

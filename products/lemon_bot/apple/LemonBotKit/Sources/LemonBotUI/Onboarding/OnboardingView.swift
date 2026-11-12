@@ -401,7 +401,7 @@ private struct AccountSignInView: View {
         Form {
             #if os(iOS)
             SwiftUI.Section("Connect to your desktop") {
-                Text("Connect to your Mac's workspace. Scan its QR code or paste the link, then compare verification codes before approving on your Mac.")
+                Text("Connect to your desktop's workspace. On your Mac or in Lemon Bot on the web, open Settings → Devices → Connect iPhone. Scan the QR code or paste its link, then compare verification codes before approving on the desktop.")
                 Button(store.pendingPairing == nil ? "Scan QR code or paste link" : "Check my request") { showPairing = true }
             }
             SwiftUI.Section("Your persistent assistant") {
@@ -424,7 +424,11 @@ private struct AccountSignInView: View {
             }
             #endif
             SwiftUI.Section("Lemon Bot server") {
-                TextField("https://your-desktop.your-tailnet.ts.net", text: $backend).autocorrectionDisabled()
+                TextField("Server address", text: $backend, prompt: Text("https://your-desktop.your-tailnet.ts.net")).autocorrectionDisabled()
+                    .onSubmit { Task { await discover() } }
+                    #if os(iOS)
+                    .keyboardType(.URL).textContentType(.URL).textInputAutocapitalization(.never)
+                    #endif
                 Button("Check setup and sign-in methods") { Task { await discover() } }.disabled(action.inFlight)
                 if checkedURL != nil {
                     Text(setupRequired ? "Owner setup required. Obtain the one-use setup code from the backend operator terminal." : "Use your local account or configured identity provider.").font(.caption)
@@ -440,16 +444,27 @@ private struct AccountSignInView: View {
             }
             if checkedURL != nil {
                 SwiftUI.Section("Account") {
-                    Picker("Sign in method", selection: $mode) {
-                        Text("Sign in").tag("login")
-                        if setupRequired { Text("Create workspace").tag("setup") }
+                    if setupRequired {
+                        Picker("Sign in method", selection: $mode) {
+                            Text("Sign in").tag("login")
+                            Text("Create workspace").tag("setup")
+                        }
                     }
                     TextField("Email", text: $email).autocorrectionDisabled()
+                        #if os(iOS)
+                        .keyboardType(.emailAddress).textContentType(.username).textInputAutocapitalization(.never)
+                        #endif
                     SecureField("Password", text: $password)
+                        #if os(iOS)
+                        .textContentType(mode == "setup" ? .newPassword : .password)
+                        #endif
                     if mode == "setup" { Text("Use at least 12 letters, numbers or symbols.").font(LBFont.meta) }
                     if mode != "login" { TextField("Display name", text: $displayName) }
                     if mode == "setup" {
                         SecureField("One-use setup code", text: $setupCode)
+                            #if os(iOS)
+                            .textContentType(.oneTimeCode).textInputAutocapitalization(.never)
+                            #endif
                         TextField("Workspace name", text: $workspaceName)
                     }
                     Button(mode == "setup" ? "Create workspace" : "Sign in") {
@@ -485,6 +500,11 @@ private struct AccountSignInView: View {
             .toolbar { if store.account != nil { Button("Close") { dismiss() } } }
             #endif
             .frame(maxWidth: 700)
+            #if os(iOS)
+            // iPad: the readable column's grouped background continues into the side gutters instead of a two-tone page.
+            .frame(maxWidth: .infinity)
+            .background(Color(uiColor: .systemGroupedBackground))
+            #endif
             .onChange(of: backend) { _, _ in checkedURL = nil; providers = []; connectionIssue = nil }
             #if os(iOS)
             .sheet(isPresented: $showPairing) {

@@ -24,7 +24,7 @@ extension LemonBotStore {
                     shouldVerifyIdentity = true
                     try Task.checkCancellation()
                     try self.assertGeneration(current)
-                    let transport = try self.activeTransport()
+                    let transport = try await self.activeTransport()
                     var c = URLComponents(url: try transport.url("/realtime"), resolvingAgainstBaseURL: false)!
                     c.scheme = c.scheme == "https" ? "wss" : "ws"
                     guard let url = c.url else { throw ClientError.invalidPath }

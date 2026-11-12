@@ -109,7 +109,9 @@ public struct ComposerView: View {
     }
     private var draftIsEmpty: Bool { draft.text.isEmpty && draft.attachmentIDs.isEmpty && draft.fileURLs.isEmpty && stagedFilenames.isEmpty }
     private var sendDisabled: Bool {
-        !online || action.inFlight || unresolvedAction || pendingMessageNonce != nil || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.attachmentIDs.isEmpty && draft.fileURLs.isEmpty)
+        // Selected local files must be uploaded (or removed) first; send() would only reject them.
+        !online || action.inFlight || unresolvedAction || pendingMessageNonce != nil || !draft.fileURLs.isEmpty
+            || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.attachmentIDs.isEmpty)
     }
     private var compactKeyboardLayout: Bool {
         #if os(iOS)
@@ -264,12 +266,16 @@ public struct ComposerView: View {
                 AttachmentView(store: store, attachmentID: id).frame(maxHeight: 40).clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 Button { store.setLocalDraft(conversationID: conversationID, text: draft.text, attachmentIDs: draft.attachmentIDs.filter { $0 != id }, replyTo: draft.replyToEntryID) } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(LB.muted)
+                        #if os(iOS)
+                        // 44 pt touch area around the 17 pt glyph without growing the chip.
+                        .frame(width: 44, height: 44).contentShape(Rectangle()).padding(-13)
+                        #endif
                 }.buttonStyle(.plain).accessibilityLabel("Remove attachment")
             }
             .padding(4).background(LB.fill, in: Capsule())
         }
         ForEach(draft.fileURLs, id: \.self) { url in
-            chip(url.lastPathComponent + " · Not sent", symbol: "doc.badge.clock", removeLabel: "Remove local file") {
+            chip(ClientPersistence.stagedFilename(url) + " · Not sent", symbol: "doc.badge.clock", removeLabel: "Remove local file") {
                 Task { await action.perform { try store.removeDraftFile(url, conversationID: conversationID) } }
             }
         }
@@ -287,13 +293,17 @@ public struct ComposerView: View {
 
     @ViewBuilder private var messageInput: some View {
         #if os(iOS)
-        IOSComposerInput(text: text, focused: $focused, maximumLines: verticalSizeClass == .compact ? 2 : compact ? 4 : 8)
-            .overlay(alignment: .topLeading) {
-                if draft.text.isEmpty {
-                    Text(placeholder).font(LBFont.body).foregroundStyle(LB.faint)
-                        .allowsHitTesting(false).accessibilityHidden(true)
-                }
+        // The placeholder sits beside (not over) the one-line editor so a long Bot name at large Dynamic Type wraps
+        // and grows the field instead of truncating to "Message K…".
+        ZStack(alignment: .topLeading) {
+            if draft.text.isEmpty {
+                Text(placeholder).font(LBFont.body).foregroundStyle(LB.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentShape(Rectangle()).onTapGesture { focused = true }
+                    .accessibilityHidden(true)
             }
+            IOSComposerInput(text: text, focused: $focused, maximumLines: verticalSizeClass == .compact ? 2 : compact ? 4 : 8)
+        }
         #else
         TextField(placeholder, text: text, axis: .vertical)
             .lineLimit(compact ? 1...4 : 1...8)
@@ -366,7 +376,7 @@ public struct ComposerView: View {
                 }
                 if receipt.status == "outcome_unknown" { Text("Not confirmed yet. Check the conversation before sending again.").foregroundStyle(LB.warning).font(LBFont.meta) }
                 if !compactKeyboardLayout {
-                    DisclosureGroup("Details") {
+                    DisclosureGroup("Delivery details") {
                         VStack(alignment: .leading, spacing: 2) { receiptDetails(receipt) }
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }.font(LBFont.meta).foregroundStyle(LB.muted)
@@ -376,7 +386,7 @@ public struct ComposerView: View {
                 if let error = run.error { ActionErrorView(message: humanErrorText(BackendError(status: 0, failure: ErrorEnvelopeError(code: error.code, message: error.message, requestId: error.requestId, retrySafe: error.retrySafe, details: error.details)))) }
             }
             if !reconciledRuns.isEmpty && !compactKeyboardLayout {
-                DisclosureGroup("Details") {
+                DisclosureGroup("Delivery details") {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(reconciledRuns) { run in runDeliveryDetails(run) }
                     }.frame(maxWidth: .infinity, alignment: .leading)
@@ -471,7 +481,7 @@ public struct ComposerView: View {
             for url in draft.fileURLs {
                 guard online else { throw ComposerError.message("The account or connection changed. Remaining selected files were not uploaded.") }
                 let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-                let attachment = try await store.upload(fileURL: url, mime: mime, metadata: ["conversationId": .string(conversationID), "purpose": .string("message")])
+                let attachment = try await store.upload(fileURL: url, filename: ClientPersistence.stagedFilename(url), mime: mime, metadata: ["conversationId": .string(conversationID), "purpose": .string("message")])
                 guard store.account?.id == owningAccountID else { throw ComposerError.message("The upload belongs to the previous account; its receipt was not attached to this account.") }
                 guard store.setLocalDraft(conversationID: conversationID, text: draft.text, attachmentIDs: draft.attachmentIDs + [attachment.id], replyTo: draft.replyToEntryID) else { throw ComposerError.message(store.errorMessage ?? "Local draft retention failed; upload receipt is not discarded.") }
                 try store.removeDraftFile(url, conversationID: conversationID)

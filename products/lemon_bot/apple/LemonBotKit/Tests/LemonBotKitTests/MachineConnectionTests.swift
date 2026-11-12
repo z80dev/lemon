@@ -40,7 +40,7 @@ final class MachineConnectionTests: XCTestCase {
         legacy.removeValue(forKey: "route")
         let old = try JSONDecoder().decode(StoredAccount.self, from: JSONSerialization.data(withJSONObject: legacy))
         XCTAssertNil(old.route)
-        XCTAssertEqual(old.location, "127.0.0.1")
+        XCTAssertEqual(old.location, "127.0.0.1:41234")
     }
 
     func testLocalAccessSendsOnlyTheMachineKeyAndName() async throws {

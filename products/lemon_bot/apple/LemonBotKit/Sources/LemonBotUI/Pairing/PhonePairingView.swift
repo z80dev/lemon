@@ -1,6 +1,7 @@
 #if os(iOS)
 import SwiftUI
 import UIKit
+import AVFoundation
 import LemonBotKit
 
 public struct PhonePairingView: View {
@@ -26,9 +27,13 @@ public struct PhonePairingView: View {
     public var body: some View {
         Form {
             Section("1. Scan or paste") {
-                Text("On your Mac choose Connect iPhone. Both devices connect to the same already running Lemon Bot backend. No desktop password is needed.")
+                Text("On your desktop, open Lemon Bot for Mac or Lemon Bot on the web and choose Settings → Devices → Connect iPhone to create a QR code. Both devices connect to the same already running Lemon Bot backend. No desktop password is needed.")
                 if store.pendingPairing == nil && !hasSavedConnection {
-                    Button("Scan QR code") { scanning = true }.disabled(busy)
+                    Button("Scan QR code") {
+                        // Without a camera (Simulator) there is nothing to authorize; go straight to the paste guidance.
+                        if AVCaptureDevice.default(for: .video) == nil { error = "This device has no camera for QR scanning. Paste the pairing link into the field above instead." }
+                        else { error = nil; scanning = true }
+                    }.disabled(busy)
                     SecureField("Paste lemonbot://pair link", text: $link)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .privacySensitive()
@@ -52,18 +57,18 @@ public struct PhonePairingView: View {
                     Text("Backend instance: \(preview.instanceID)").font(LBFont.meta).textSelection(.enabled)
                     Text("Workspace ID: \(preview.workspaceID)").font(LBFont.meta).textSelection(.enabled)
                     if let expiry = preview.expiresAtMs {
-                        Text("Original expiry: \(Date(timeIntervalSince1970: expiry / 1000).formatted(date: .abbreviated, time: .standard))")
+                        Text("Original expiry: \(Date(timeIntervalSince1970: expiry / 1000).formatted(date: .abbreviated, time: .standard))").font(LBFont.meta)
                     }
-                    Text("The address and instance must match your Mac. Checking the preview does not consume the QR; Request connection is your separate consent.")
+                    Text("The address and instance must match your desktop. Checking the preview does not consume the QR; Request connection is your separate consent.")
                         .font(LBFont.meta)
                 }
                 if let code = preview.verificationCode {
-                    Section("3. Compare on your Mac") {
+                    Section("3. Compare on your desktop") {
                         if let deviceName = preview.deviceName {
                             Text("This device: \(deviceName)").textSelection(.enabled)
                         }
                         Text(code).font(.largeTitle.monospaced()).textSelection(.enabled).privacySensitive()
-                        Text("Compare this exact six-digit code and device name on both devices. Only then select the matching-device checkbox and Approve this iPhone on your Mac. Deny any mismatch.")
+                        Text("Compare this exact six-digit code and device name with the request on your desktop. Approve this device there only if both match; deny any mismatch.")
                     }
                 }
             }
@@ -78,7 +83,7 @@ public struct PhonePairingView: View {
                         Text("Saved backend instance: \(instanceID)").font(LBFont.meta).textSelection(.enabled)
                     }
                     if verifiedConnection {
-                        Text("Your own device credential is saved in Keychain. You are connected to the verified workspace, not a copy of the Mac's session.")
+                        Text("Your own device credential is saved in Keychain. You are connected to the verified workspace, not a copy of your desktop's session.")
                     } else if store.connectionState == "reconnect_required" {
                         Text("Saved access could not be verified or was revoked. Cached workspace content stays available, but this is not a connected session. Open connection recovery and reconnect explicitly.")
                     } else {
@@ -94,19 +99,26 @@ public struct PhonePairingView: View {
                 }
             }
             Section("Connection status") {
+                // One TimelineView per Form row: a TimelineView holding several views collapses them into a single
+                // row, which centred the buttons with 20 pt hit areas and made one row tap ambiguous between actions.
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     Text(statusLabel(at: context.date))
-                    if ["preview", "preview_ready"].contains(store.pairingState) {
-                        Button("Check workspace") { perform(.preview) }.disabled(busy)
+                }
+                if ["preview", "preview_ready"].contains(store.pairingState) {
+                    Button("Check workspace") { perform(.preview) }.disabled(busy)
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
                         Button("Request connection") { perform(.request) }
                             .disabled(busy || store.pairingState != "preview_ready" || !previewReady(at: context.date))
                     }
-                    if store.pairingState == "pending_approval" {
-                        if PhonePairingProgress.shouldObserve(state: store.pairingState, expiresAtMs: store.pendingPairing?.expiresAtMs, now: context.date) {
-                            Text("Approval and completion update automatically while this screen is active. After approval, your phone verifies its own session before saving it.")
-                                .font(LBFont.meta)
-                        }
-                        Text("Live checks pause when you leave this screen or the app. The original expiry never extends.").font(LBFont.meta)
+                }
+                if store.pairingState == "pending_approval" {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        VStack(alignment: .leading, spacing: 6) {
+                            if PhonePairingProgress.shouldObserve(state: store.pairingState, expiresAtMs: store.pendingPairing?.expiresAtMs, now: context.date) {
+                                Text("Approval and completion update automatically while this screen is active. After approval, your phone verifies its own session before saving it.")
+                            }
+                            Text("Live checks pause when you leave this screen or the app. The original expiry never extends.")
+                        }.font(LBFont.meta).frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 if ["claim_unknown", "completion_unknown"].contains(store.pairingState) {
@@ -167,7 +179,8 @@ public struct PhonePairingView: View {
     }
     private func statusLabel(at now: Date) -> String {
         if hasSavedConnection { return savedConnectionLabel }
-        if store.pairingState == "pending_approval", let expiry = store.pendingPairing?.expiresAtMs,
+        // A checked preview past its original expiry can no longer be requested; don't advertise it as ready.
+        if ["preview_ready", "pending_approval"].contains(store.pairingState), let expiry = store.pendingPairing?.expiresAtMs,
            expiry <= now.timeIntervalSince1970 * 1000 { return pairingStatusLabel("expired") }
         return pairingStatusLabel(store.pairingState)
     }

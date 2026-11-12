@@ -23,8 +23,9 @@ public struct StoredAccount: Codable, Hashable, Identifiable {
         self.deviceID = deviceID; self.sessionID = sessionID; self.sessionExpiresAtMs = sessionExpiresAtMs; self.installationID = installationID
         self.instanceID = instanceID; self.route = route
     }
-    /// Where this account lives, for account lists and menus.
-    public var location: String { route?.title ?? baseURL.host ?? baseURL.absoluteString }
+    /// Where this account lives, for account lists and menus. An explicit port is kept: two backends on one host
+    /// (127.0.0.1:4100 and :4200) must stay distinguishable.
+    public var location: String { route?.title ?? baseURL.host.map { host in baseURL.port.map { "\(host):\($0)" } ?? host } ?? baseURL.absoluteString }
 }
 
 /// Session credentials have one secure production implementation. Injection keeps
@@ -210,6 +211,13 @@ public final class ClientPersistence {
         let destination = directory.appendingPathComponent(UUID().uuidString + "-" + source.lastPathComponent)
         try FileManager.default.copyItem(at: source, to: destination)
         return destination
+    }
+    /// The user's original filename for a file retained by `stageFile` (drops the "<UUID>-" uniqueness prefix).
+    public static func stagedFilename(_ url: URL) -> String {
+        let name = url.lastPathComponent
+        guard name.count > 37, UUID(uuidString: String(name.prefix(36))) != nil,
+              name[name.index(name.startIndex, offsetBy: 36)] == "-" else { return name }
+        return String(name.dropFirst(37))
     }
     func removeStagedFile(_ url: URL, conversationID: ID, accountID: String) throws {
         let expected = path(accountID, "draft-files/" + Self.digest(conversationID)).standardizedFileURL.resolvingSymlinksInPath()

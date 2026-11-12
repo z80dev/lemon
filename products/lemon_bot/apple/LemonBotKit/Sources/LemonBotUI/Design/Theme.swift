@@ -64,17 +64,22 @@ public enum LB {
     static let separator = Color(light: 0x2B312A, dark: 0xFFFFFF, lightAlpha: 0.09, darkAlpha: 0.08)
 
     static let ink = Color(light: 0x2B312A, dark: 0xECEDE6)
-    public static let muted = Color(light: 0x6E766B, dark: 0xA0A598)
-    static let faint = Color(light: 0x949B8F, dark: 0x70756B)
+    // Secondary text tiers keep WCAG AA (4.5:1) on canvas and raised surfaces in both appearances: muted ≥ 5.3:1 even on
+    // bubbles; faint (timestamps, placeholders, durations) ≥ 4.5:1 on canvas/raised.
+    public static let muted = Color(light: 0x5A6257, dark: 0xA0A598)
+    static let faint = Color(light: 0x676F64, dark: 0x8A8F84)
 
     /// Brand olive, used for focus rings, links and selection accents.
     static let accent = Color(light: 0x3C6248, dark: 0xA3C9A9)
     /// Lemon yellow, the sparing brand accent.
     static let lemon = Color(hex: 0xE9D474)
     static let lemonInk = Color(hex: 0x3F4A33)
-    static let unread = Color(light: 0x3B82F0, dark: 0x5B9BFF)
-    static let success = Color(light: 0x4C8A58, dark: 0x8CCB98)
-    public static let warning = Color(light: 0x93691C, dark: 0xE6BA5E)
+    // Light values keep ≥ 4.5:1 as text on canvas/raised (unread ≥ 4.6:1 on bubbles too); dark values are for text on dark surfaces.
+    static let unread = Color(light: 0x2563D0, dark: 0x5B9BFF)
+    /// Text/icon color on an `unread` fill (white fails on the light dark-mode blue).
+    static let onUnread = Color(light: 0xFFFFFF, dark: 0x0E1B30)
+    static let success = Color(light: 0x3B7347, dark: 0x8CCB98)
+    public static let warning = Color(light: 0x80590F, dark: 0xE6BA5E)
     public static let danger = Color(light: 0xA6423D, dark: 0xEC8478)
 
     static let shadow = Color.black.opacity(0.10)
@@ -142,7 +147,7 @@ struct BotPalette: Equatable {
         case "blue": return BotPalette(avatar: Color(hex: 0xA0C4EA), tint: Color(hex: 0x3F6FA3), onTint: .white)
         case "pink": return BotPalette(avatar: Color(hex: 0xE3AEC3), tint: Color(hex: 0xA2557A), onTint: .white)
         case "purple": return BotPalette(avatar: Color(hex: 0xBDB2E3), tint: Color(hex: 0x6A5CA8), onTint: .white)
-        case "orange": return BotPalette(avatar: Color(hex: 0xEBB487), tint: Color(hex: 0xB0643A), onTint: .white)
+        case "orange": return BotPalette(avatar: Color(hex: 0xEBB487), tint: Color(hex: 0xA65B34), onTint: .white)
         case "red": return BotPalette(avatar: Color(hex: 0xE6A79F), tint: Color(hex: 0xA7473F), onTint: .white)
         default: return BotPalette(avatar: Color(hex: 0xEDD56C), tint: Color(hex: 0xE6CC5A), onTint: Color(hex: 0x2E3420))
         }
@@ -168,6 +173,16 @@ extension EnvironmentValues {
     var lbReduceMotion: Bool {
         get { self[LBReduceMotionKey.self] || accessibilityReduceMotion }
         set { self[LBReduceMotionKey.self] = newValue }
+    }
+}
+
+private struct LBBottomAccessoryInsetKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+extension EnvironmentValues {
+    /// Height of a host app's bottom `safeAreaInset` accessory (iOS banners). A split view's sidebar column does not
+    /// receive an inset applied outside the split view, so the sidebar footer pads itself by this amount instead.
+    public var lbBottomAccessoryInset: CGFloat {
+        get { self[LBBottomAccessoryInsetKey.self] }
+        set { self[LBBottomAccessoryInsetKey.self] = newValue }
     }
 }
 
