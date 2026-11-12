@@ -101,6 +101,25 @@ private final class TestAccountCredentialStore: AccountCredentialStore {
         XCTAssertTrue(TestHTTPProtocol.requests.isEmpty)
     }
 
+    func testSidebarPreviewVersionChangesWhenStreamingReplySettles() throws {
+        let store = try store()
+        let room = Conversation(id: "resource", revision: 1, createdAtMs: 1, updatedAtMs: 1, kind: "dm", name: "Lemon", botIds: ["bot"], ownerUserId: "resource", lastEntryId: "reply", unreadCount: 0, lastReadSeq: 0, activity: [])
+        store.conversations = [room]
+        XCTAssertEqual(store.sidebarPreviewVersion(room), "reply#")
+        var streaming = try message("", revision: 1)
+        if case .message(var body) = streaming { body.id = "reply"; body.role = "assistant"; streaming = .message(body) }
+        store.upsertEntry(streaming)
+        // An empty streaming reply has no preview of its own, so the sidebar shows an earlier entry for now.
+        XCTAssertNil(SidebarPreview(entry: streaming))
+        let streamingKey = store.sidebarPreviewKey
+        var settled = try message("1", revision: 3)
+        if case .message(var body) = settled { body.id = "reply"; body.role = "assistant"; body.streaming = false; settled = .message(body) }
+        store.upsertEntry(settled)
+        XCTAssertEqual(store.sidebarPreviewVersion(room), "reply#3")
+        XCTAssertNotEqual(store.sidebarPreviewKey, streamingKey)
+        XCTAssertEqual(SidebarPreview(entry: settled)?.text, "1")
+    }
+
     func testSidebarPreviewFindsLatestReplyBeforeTrailingToolCall() async throws {
         let store = try store()
         let room = Conversation(id: "resource", revision: 1, createdAtMs: 1, updatedAtMs: 1, kind: "dm", name: "Lemon", botIds: ["bot"], ownerUserId: "resource", lastEntryId: "tool_completed", unreadCount: 0, lastReadSeq: 0, activity: [])
@@ -409,6 +428,17 @@ private final class TestAccountCredentialStore: AccountCredentialStore {
         try store.removeDraftFile(original, conversationID: "chat")
         XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
         XCTAssertTrue(store.draft(for: "chat").fileURLs.isEmpty)
+    }
+    func testStagedDraftFileKeepsTheChosenName() throws {
+        let store = try store()
+        let original = roots[0].appendingPathComponent("Quarterly notes.txt")
+        try FileManager.default.createDirectory(at: roots[0], withIntermediateDirectories: true)
+        try Data("selected content".utf8).write(to: original)
+        let retained = try store.stageDraftFile(original, conversationID: "chat")
+        XCTAssertNotEqual(retained.lastPathComponent, "Quarterly notes.txt")
+        XCTAssertEqual(LocalComposerDraft.displayName(of: retained), "Quarterly notes.txt")
+        XCTAssertEqual(LocalComposerDraft.displayName(of: original), "Quarterly notes.txt")
+        XCTAssertEqual(LocalComposerDraft.displayName(of: URL(fileURLWithPath: "/tmp/not-a-uuid-prefix-0000000000000000-x.txt")), "not-a-uuid-prefix-0000000000000000-x.txt")
     }
     func testTypingExpiresWithoutBecomingDurableWorkspaceState() async throws {
         let store = try store()

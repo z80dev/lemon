@@ -121,6 +121,8 @@ struct ActionErrorView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label(diagnosticStart.map { String(message[..<$0]) } ?? message, systemImage: "exclamationmark.circle.fill")
                     .foregroundStyle(LB.danger).textSelection(.enabled)
+                    // macOS grouped Form rows otherwise clip the message to one truncated line.
+                    .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
                 if let diagnosticStart {
                     DisclosureGroup("Details") {
                         Text(String(message[diagnosticStart...]).trimmingCharacters(in: .whitespacesAndNewlines)).textSelection(.enabled)

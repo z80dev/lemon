@@ -182,15 +182,35 @@ func messageSegments(_ text: String) -> [MessageSegment] {
 }
 
 /// Inline Markdown with newlines preserved; links with unsafe schemes are not made tappable.
+/// Block markers the inline parser leaves raw become readable: `- item` → `• item`, `## Title` → bold.
 func markdownString(_ text: String) -> AttributedString {
     let options = AttributedString.MarkdownParsingOptions(allowsExtendedAttributes: false, interpretedSyntax: .inlineOnlyPreservingWhitespace, failurePolicy: .returnPartiallyParsedIfPossible)
-    var result = (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+    let source = inlineBlockMarkers(text)
+    var result = (try? AttributedString(markdown: source, options: options)) ?? AttributedString(source)
     for run in result.runs {
         guard let url = run.link else { continue }
         if safeExternalURL(url.absoluteString) == nil { result[run.range].link = nil }
         else { result[run.range].underlineStyle = .single }
     }
     return result
+}
+
+/// Prose segments never contain fenced code (see `messageSegments`), so line-leading
+/// block markers can be rewritten safely before inline parsing.
+func inlineBlockMarkers(_ text: String) -> String {
+    text.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+        let indent = line.prefix { $0 == " " || $0 == "\t" }
+        let body = line.dropFirst(indent.count)
+        for marker in ["- ", "* ", "+ "] where body.hasPrefix(marker) && body.count > marker.count {
+            return String(indent) + "• " + body.dropFirst(marker.count)
+        }
+        let hashes = body.prefix { $0 == "#" }
+        if (1...6).contains(hashes.count), body.dropFirst(hashes.count).hasPrefix(" ") {
+            let title = body.dropFirst(hashes.count).trimmingCharacters(in: .whitespaces)
+            if !title.isEmpty { return String(indent) + "**" + title + "**" }
+        }
+        return String(line)
+    }.joined(separator: "\n")
 }
 
 struct CodeBlock: View {

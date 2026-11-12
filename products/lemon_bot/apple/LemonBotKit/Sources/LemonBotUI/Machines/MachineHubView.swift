@@ -25,7 +25,7 @@ public struct MachineHubView: View {
             NavigationLink("Owned-host operations") { HostOperationsView(store: store) }
         }
         .navigationTitle("Machines")
-        .toolbar { Button("Add a machine") { attach = true }; Button("Refresh") { Task { await load() } } }
+        .toolbar { Button("Add a machine", systemImage: "plus") { attach = true }; Button("Refresh", systemImage: "arrow.clockwise") { Task { await load() } } }
         .sheet(isPresented: $attach, onDismiss: { Task { await load() } }) { NavigationStack { MachineSSHSetupView(store: store) } }
         .task { await load() }
     }

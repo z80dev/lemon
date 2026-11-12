@@ -164,6 +164,14 @@ public struct LocalComposerDraft: Codable, Hashable {
         mentions = try c.decodeIfPresent([ID].self, forKey: .mentions) ?? []
         everyone = try c.decodeIfPresent(Bool.self, forKey: .everyone) ?? false
     }
+    /// The name the user chose for a retained file. Staged copies are stored as `<UUID>-<name>` so
+    /// duplicates stay distinct; that prefix is never shown or uploaded.
+    public static func displayName(of fileURL: URL) -> String {
+        let name = fileURL.lastPathComponent
+        let prefix = name.prefix(37)
+        guard prefix.count == 37, prefix.last == "-", UUID(uuidString: String(prefix.dropLast())) != nil, name.count > 37 else { return name }
+        return String(name.dropFirst(37))
+    }
 }
 
 struct AccountCache: Codable {

@@ -59,8 +59,10 @@ struct BotEditorView: View {
         let initialMachineID = bot?.machineId ?? machineID ?? (online.count == 1 ? online[0].id : "")
         _modelReadyOrSkipped = State(initialValue: bot != nil || ModelReadinessSkipStore.isSkipped(workspaceID: store.workspace?.id, machineID: initialMachineID))
     }
+    private static let errorRowID = "bot-editor-error"
     var body: some View {
         NavigationStack {
+            ScrollViewReader { scroller in
             Form {
                 SwiftUI.Section("Identity") {
                     TextField("Name", text: $name)
@@ -130,7 +132,8 @@ struct BotEditorView: View {
                     }
                     SwiftUI.Section("Your notification preference") { Toggle("Notifications for this Bot", isOn: $notify) }
                 }
-                ActionErrorView(message: action.error)
+                // Create/Save sit in the toolbar, far from this row; failures scroll it into view.
+                ActionErrorView(message: action.error).id(Self.errorRowID)
                 if let receipt = action.receipt { Text(receipt).font(LBFont.meta) }
                 if bot == nil {
                     let machineName = store.machines.first(where: { $0.id == machineID })?.name ?? "this machine"
@@ -140,13 +143,24 @@ struct BotEditorView: View {
                         : "\(botName) works on \(machineName) in chat-only mode without file, tool or shell access.")
                         .font(LBFont.meta).foregroundStyle(LB.muted)
                 }
-                Button(bot == nil ? "Create Bot" : "Save changes") { Task { await save() } }.disabled(action.busy || name.isEmpty || store.connectionState != "online" || (bot == nil && (machineID.isEmpty || !modelReadyOrSkipped)))
                 if store.connectionState != "online" { Text("Reconnect to save changes.").font(LBFont.meta).foregroundStyle(LB.muted) }
                 else if name.isEmpty { Text("Add a name to save.").font(LBFont.meta).foregroundStyle(LB.muted) }
                 else if bot == nil && machineID.isEmpty { Text("Choose an online machine to create this Bot.").font(LBFont.meta).foregroundStyle(LB.muted) }
                 else if bot == nil && !modelReadyOrSkipped { Text("Connect a model or skip to create this Bot.").font(LBFont.meta).foregroundStyle(LB.muted) }
             }.formStyle(.grouped).navigationTitle(bot == nil ? "New Bot" : "Edit \(bot!.name)")
-                .toolbar { Button("Cancel") { dismiss() } }
+                .onChange(of: action.error) { _, error in
+                    if error != nil { scroller.scrollTo(Self.errorRowID, anchor: .center) }
+                }
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }.buttonStyle(.pill(.secondary, compact: true)).keyboardShortcut(.cancelAction)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(bot == nil ? "Create Bot" : "Save changes") { Task { await save() } }
+                            .buttonStyle(.pill(.primary(LB.lemon, LB.lemonInk), compact: true)).keyboardShortcut(.defaultAction)
+                            .disabled(action.busy || name.isEmpty || store.connectionState != "online" || (bot == nil && (machineID.isEmpty || !modelReadyOrSkipped)))
+                    }
+                }
                 .fileImporter(isPresented: $avatarPicker, allowedContentTypes: [.image]) { result in
                     switch result { case .success(let url): loadImage(url); case .failure(let error): action.error = String(describing: error) }
                 }
@@ -157,6 +171,7 @@ struct BotEditorView: View {
                 .onChange(of: machineID) { _, value in
                     modelReadyOrSkipped = bot != nil || ModelReadinessSkipStore.isSkipped(workspaceID: store.workspace?.id, machineID: value)
                 }
+            }
         }.frame(minWidth: 340, minHeight: 560)
     }
     private func croppedImage(_ image: Image) -> some View { image.resizable().scaledToFill().scaleEffect(imageScale).offset(x: imageX, y: imageY).frame(width: 256, height: 256).clipped().accessibilityLabel("Reviewed avatar crop") }

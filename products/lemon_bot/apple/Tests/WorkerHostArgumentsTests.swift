@@ -31,7 +31,7 @@ final class WorkerHostArgumentsTests: XCTestCase {
         let argv = [program.path, "node", "start", "--name", "My Mac", "", "--status", "--json"]
         XCTAssertEqual(
             try Arguments.parse(["--"] + argv, home: home.path),
-            .exec(program: program.resolvingSymlinksInPath().path, argv: argv)
+            .exec(program: try canonical(program), argv: argv)
         )
     }
 
@@ -40,7 +40,7 @@ final class WorkerHostArgumentsTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: program)
         XCTAssertEqual(
             try Arguments.parse(["--", link.path, "node"], home: home.path),
-            .exec(program: program.resolvingSymlinksInPath().path, argv: [link.path, "node"])
+            .exec(program: try canonical(program), argv: [link.path, "node"])
         )
     }
 
@@ -77,7 +77,7 @@ final class WorkerHostArgumentsTests: XCTestCase {
         let alias = homeLink.appendingPathComponent(".lemon/bin/lemon").path
         XCTAssertEqual(
             try Arguments.parse(["--", alias], home: homeLink.path),
-            .exec(program: program.resolvingSymlinksInPath().path, argv: [alias])
+            .exec(program: try canonical(program), argv: [alias])
         )
     }
 
@@ -103,6 +103,15 @@ final class WorkerHostArgumentsTests: XCTestCase {
         for argv in [[], ["--"], ["--unknown"], [program.path], ["--exec", program.path], ["--help"]] {
             assertUsage(argv)
         }
+    }
+
+    /// The helper execs the realpath(3) form. `URL.resolvingSymlinksInPath()` is not an
+    /// equivalent oracle: it strips the `/private` prefix, so `/private/var/folders/…`
+    /// (where the temporary directory really lives) would compare unequal.
+    private func canonical(_ url: URL) throws -> String {
+        let resolved = try XCTUnwrap(realpath(url.path, nil))
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     private func assertUsage(_ argv: [String], file: StaticString = #filePath, line: UInt = #line) {

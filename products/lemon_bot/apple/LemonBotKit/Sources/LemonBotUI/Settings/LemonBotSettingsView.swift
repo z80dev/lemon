@@ -205,7 +205,8 @@ public struct LemonBotSettingsView<Platform: View>: View {
         .scrollContentBackground(.hidden)
         .formStyle(.grouped)
         .background(LB.canvas)
-        .navigationTitle(pane.title)
+        // Hidden keep-alive stacks still publish a title; all report the visible pane's.
+        .navigationTitle(router.pane.title)
     }
     #else
     public var body: some View {

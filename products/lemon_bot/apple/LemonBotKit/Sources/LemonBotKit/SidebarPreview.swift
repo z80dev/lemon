@@ -41,8 +41,16 @@ extension LemonBotStore {
     /// Sync installs summaries before realtime becomes online. Retry uncached previews
     /// at that transition even when no conversation's last-entry ID has changed.
     public var sidebarPreviewKey: String {
-        let summaries = conversations.map { "\($0.id):\($0.lastEntryId ?? "")" }.joined(separator: "|")
+        let summaries = conversations.map { "\($0.id):\(sidebarPreviewVersion($0) ?? "")" }.joined(separator: "|")
         return "\(account?.id ?? ""):\(connectionState == "online")|\(summaries)"
+    }
+
+    /// The last entry plus its cached revision. A reply first seen while still streaming (empty, so the
+    /// preview falls back to an earlier entry) changes version when it settles, so the preview is re-read.
+    public func sidebarPreviewVersion(_ room: Conversation) -> String? {
+        guard let lastID = room.lastEntryId else { return nil }
+        let revision = entries[room.id]?.last(where: { $0.id == lastID })?.revision
+        return "\(lastID)#\(revision.map(String.init) ?? "")"
     }
 
     /// Use the snapshot's last-entry ID without opening the chat. Tool events can

@@ -10,6 +10,28 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Lemon Bot for Mac: the sidebar's Search and New Bot buttons work again on
+  macOS 26 (they sat under the window toolbar, which swallowed clicks or hit
+  the sidebar toggle); they are now native toolbar buttons.
+- Lemon Bot for Mac and iPhone: **Create Bot**/**Save changes** sit in the
+  sheet's confirmation position instead of at the bottom of the long form, and
+  a failed save scrolls its error into view. Bot replies show `- item` lists as
+  bullets and `## headings` in bold instead of raw Markdown markers.
+- Lemon Bot for Mac: replies no longer pop a "Notifications are not allowed"
+  error when macOS notifications were never enabled; the error banner's
+  **Open Settings** link only appears for the choose-a-Bot error and opens
+  **This Mac**. The Settings window title follows the selected pane (it always
+  said "Preferences"). Notification clicks reopen a closed workspace window.
+  Machines, Skills and Routines toolbar actions are separate icon buttons
+  instead of one run-together label ("Add a machineRefresh").
+- Lemon Bot for Mac: ⌘[ / ⌘] (Previous/Next Bot) work right after launch;
+  sidebar previews update when a reply finishes instead of sticking on
+  "Needs a look"; attached files keep their own name (they showed and
+  uploaded as `<UUID>-name`); Finder files can be dropped onto the composer;
+  clicking an approval button no longer rings the whole message; the Bot name
+  pill no longer shows messages through it; Devices list says Mac/iPhone/Web
+  browser instead of `macos`/`web`; **Connect iPhone** errors appear beside the
+  step that failed; the shortcut recorder says why a key was refused.
 - The Lemon Bot iPhone app compiles again: a macOS-only home-directory
   initializer in `LemonBotKit` is no longer built for iOS.
 - Lemon Bot replies again. Since 2026.11.3, every Bot run failed before

@@ -397,17 +397,17 @@ public struct ConversationView: View {
     @ViewBuilder private func chrome(matches: [ID], current: ID?) -> some View {
         #if os(macOS)
         ZStack(alignment: .top) {
-            // Scroll edge: messages pass under a soft fade instead of colliding with the pill.
-            LinearGradient(stops: [
-                .init(color: LB.canvas, location: 0),
-                .init(color: LB.canvas.opacity(0.94), location: 0.5),
-                .init(color: LB.canvas.opacity(0), location: 1)
-            ], startPoint: .top, endPoint: .bottom)
-            .frame(maxWidth: .infinity)
-            .frame(height: 76)
-            .allowsHitTesting(false)
-            .ignoresSafeArea(.container, edges: .top)
-            headerPill(floating: true).padding(.top, 10)
+            // Scroll edge: the backdrop is solid behind the whole header (pill plus any chat
+            // allowance row, whatever its height), then fades, so scrolled messages pass under it
+            // instead of showing through the pill.
+            VStack(spacing: 0) {
+                headerPill(floating: true).padding(.top, 10).padding(.bottom, 6)
+                    .frame(maxWidth: .infinity)
+                    .background(LB.canvas.ignoresSafeArea(.container, edges: .top).allowsHitTesting(false))
+                LinearGradient(colors: [LB.canvas, LB.canvas.opacity(0)], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 20)
+                    .allowsHitTesting(false)
+            }
             HStack { Spacer(); actionsMenu.background(Circle().fill(LB.raised)) }.padding(.top, 8).padding(.trailing, 14)
             if findOpen { findBar(matches: matches, current: current).padding(.top, 52).transition(.opacity.combined(with: .move(edge: .top))) }
         }
@@ -676,7 +676,9 @@ struct TranscriptEntryView: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         #if os(macOS)
-        .focusable()
+        // Keyboard navigation focuses rows to reveal their actions; a mouse click (e.g. on an
+        // approval button inside a card) must not leave a focus ring around the whole row.
+        .focusable(interactions: .activate)
         .focused($actionFocus, equals: .row)
         .accessibilityActions { contextItems }
         #else

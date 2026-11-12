@@ -45,6 +45,12 @@ final class SnapshotRenderTests: XCTestCase {
         XCTAssertEqual(deliveryModeLabel("rejected"), "Not started")
     }
 
+    func testMarkdownListAndHeadingLinesRenderReadably() {
+        XCTAssertEqual(inlineBlockMarkers("- Apple\n  * Banana\n+ Mango\n-not a list\n## Plan\n#tag"), "• Apple\n  • Banana\n• Mango\n-not a list\n**Plan**\n#tag")
+        XCTAssertEqual(String(markdownString("## Plan\n- **Ship** it").characters), "Plan\n• Ship it")
+        XCTAssertEqual(messageSegments("```\n- keep\n```"), [.code("- keep", language: nil)])
+    }
+
     func testPollingKeepsActionFailureAndUnconfirmedFence() async {
         let action = HubAction()
         await action.perform { throw ClientError.outcomeUnknown("saved-action") }
