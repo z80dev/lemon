@@ -1262,3 +1262,22 @@ test('a loopback Bot resumes a lost address profile update and can move to a sec
     expect(f.calls.filter(call => call.method === 'profiles.update')).toHaveLength(2);
   } finally { f.store.close(); }
 });
+
+test('address recovery of a failed update retains its worker mutation ID and requested Bot changes', async () => {
+  const f = fixture();
+  try {
+    const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce('update_address_create'), name: 'Before', machineId: 'machine' });
+    f.services.config.publicUrl = 'https://updated-product.example';
+    await expect(f.request('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce('update_new_address'), revision: bot.revision, name: 'After' })).rejects.toMatchObject({ code: 'conflict' });
+    f.fail(method => { if (method === 'profiles.sync') throw new ApiError('machine_offline', 'Reconnect worker.'); });
+    await expect(f.request('POST', `/v1/bots/${bot.id}/readdress`, { clientNonce: nonce('update_address_offline'), revision: bot.revision })).rejects.toMatchObject({ code: 'machine_offline' });
+    const sync = f.calls.filter(call => call.method === 'profiles.sync').at(-1)!;
+    f.fail(null);
+    const completed = await f.request<P.Bot>('POST', `/v1/bots/${bot.id}/readdress`, { clientNonce: nonce('update_address_online'), revision: bot.revision });
+    expect(completed).toMatchObject({ id: bot.id, name: 'After', mainConversationId: bot.mainConversationId });
+    expect(completed.lifecycle).toBeUndefined();
+    expect(f.calls.filter(call => call.method === 'profiles.sync').at(-1)?.params).toEqual(sync.params);
+    expect(f.store.metadata(`botProfileSync:${bot.id}`)).toMatchObject({ mutationId: sync.params.mutationId, acknowledged: true });
+    expect(f.store.metadata(`botLifecycle:${bot.id}`)).toBeNull();
+  } finally { f.store.close(); }
+});

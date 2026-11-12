@@ -250,7 +250,7 @@ async function writeProfile(s: BackendServices, p: Principal, bot: P.Bot): Promi
 }
 async function syncSnapshot(s: BackendServices, bot: P.Bot, machine: P.Machine, ensureAdmission = true): Promise<void> {
   const setup = s.store.metadata<Fence>(`botLifecycle:${bot.id}`);
-  const isSetup = setup && ['create', 'import', 'readdress'].includes(setup.action);
+  const isSetup = setup && (['create', 'import', 'readdress'].includes(setup.action) || setup.action === 'update' && !!s.store.metadata<SetupPlan>(`botSetup:${bot.id}`)?.steps['Update callback address']);
   const profileIntentId = ensureAdmission || isSetup ? s.store.metadata<DesiredProfile>(`botDesiredProfile:${bot.id}`)?.profileIntentId : undefined;
   const prior = s.store.metadata<ProfileSyncReceipt>(`botProfileSync:${bot.id}`);
   const mutationId = isSetup && prior && prior.profileIntentId === profileIntentId ? prior.mutationId : s.id('sync');
