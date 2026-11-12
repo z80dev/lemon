@@ -14,6 +14,21 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   Token parsing tolerates stderr notices while requiring a JWT output line.
   Per-executable/scope cache locking keeps an in-flight fetch from publishing a
   rejected token after a forced refresh.
+- `LemonAi.Providers.KimiCodeUsage` reads Kimi Code quota from `/v1/usages`
+  with the bearer token and Kimi CLI fingerprint, skipping expired tokens and
+  returning only credential-free errors.
+- Catalog compat flags `anthropic_default_max_output` (default `max_tokens` to
+  the model maximum) and `anthropic_session_user_id` (`metadata.user_id` from a
+  session-id digest). Kimi Code K3 and `kimi-for-coding` models declare
+  `adaptive_thinking` instead of `anthropic_effort_only`, so they send
+  `thinking: adaptive` with `output_config.effort` and the effort beta;
+  `kimi-k2.5-coding` accepts images.
+- `KimiCodeOAuth.device_id/1` persists the device id in
+  `~/.lemon/kimi-device-id`, seeded with the previously derived id.
+- `OAuthSecretResolver.resolve_with/4` adopts a login another writer stored
+  when a refresh loses the revision check and that login holds a different,
+  unexpired access token; `resolve_api_key_from_secret/3` uses it for every
+  registered OAuth helper.
 
 ### Fixed
 
@@ -21,6 +36,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   rejecting out-of-range ports even when Elixir 1.20 discards them during parsing.
   Apply the same validation to Anthropic, Google Antigravity, Gemini CLI and Codex
   callbacks as OpenRouter and Z.AI.
+- The Anthropic provider sends the full Kimi CLI fingerprint on every `kimi`
+  and `kimi_coding` request, API key or OAuth, with header names normalized so
+  a catalog or caller header replaces rather than duplicates it. The catalogs'
+  `KimiCLI/1.0` headers, which contradicted `x-msh-version`, are removed.
 
 ## [0.2.1] - 2026-11-05
 

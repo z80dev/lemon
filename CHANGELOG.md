@@ -14,12 +14,23 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `lemon model --provider kimi-code --auth omp`. Lemon resolves access tokens
   through `omp token kimi-code` without copying refresh credentials, storing
   tokens, or falling back to ambient API keys.
+- Kimi Code requests match omp's: adaptive thinking with effort for the K3 and
+  `kimi-for-coding` models, the model's full output budget by default, and a
+  per-session prompt-cache identity. `lemon model kimi_coding --status` shows
+  the subscription quota (5-hour window and month).
 
 ### Fixed
 
 - Kimi Code omp authentication fails closed at the model-request boundary,
   normalizes auth-source spelling consistently for status and logout, and
   serializes access-token cache refreshes so stale fetches cannot replace them.
+
+- Every Kimi Code request now sends one consistent Kimi CLI fingerprint (the
+  catalog's stale `KimiCLI/1.0` user agent is gone), and the device id is
+  persisted in `~/.lemon/kimi-device-id` so a host rename no longer changes it.
+  `lemon doctor --live` checks Kimi Code with bearer authentication and the
+  fingerprint. A refresh that loses to another Lemon process adopts that
+  process's fresh token instead of failing.
 
 - Packaged `lemon daemon` (and `stop`, `rpc`, `remote`) failed with "daemon
   started but its pid could not be determined" when the machine's hostname

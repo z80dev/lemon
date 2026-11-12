@@ -1862,6 +1862,42 @@ returned as successful authentication after a failed refresh. Endpoint/HTTP
 overrides exposed by library APIs are trusted caller options intended for
 testing and controlled integrations, not untrusted remote input.
 
+### Kimi Code requests and quota
+
+Every `kimi_coding` (and `kimi`) model request carries the Kimi CLI
+fingerprint (`user-agent`, `x-msh-platform`, `x-msh-version`, device name,
+model, OS version and device id), whichever credential is used: a subscription
+login (a JWT) is sent as `Authorization: Bearer`, an API key as `x-api-key`.
+The device id is persisted in `~/.lemon/kimi-device-id` (mode 0600). A missing
+file is seeded with the id earlier Lemon versions derived from the host name
+and home directory, so existing logins keep their identity and a later host
+rename no longer changes it; if the file cannot be written, the derived id is
+used for that process.
+
+Kimi Code reasoning models (`k3`, `k3-256k`, `k3.1-pro`, `k3.1-pro-highspeed`,
+`kimi-for-coding`) are requested with `thinking: {type: "adaptive"}` plus
+`output_config.effort` (`low`, `high` or `max`; other levels clamp) and the
+`effort-2025-11-24` beta; a forced tool choice sends effort `low` without
+thinking. `max_tokens` defaults to the model's maximum output (an explicit
+`max_tokens` still wins). Requests that carry a session id send
+`metadata.user_id`, a digest of that id (never the id itself), so Kimi can
+route the session's prompt cache; `cache_retention = "none"` omits it. These
+behaviours are catalog flags (`adaptive_thinking`, `compat.anthropic_default_max_output`,
+`compat.anthropic_session_user_id`).
+
+For a subscription login, `lemon model kimi_coding --status` also shows the
+current quota from `GET https://api.kimi.com/coding/v1/usages` (or the
+provider's `base_url`), for example
+`Usage: 5h window: 76% used, resets 04:34Z; month: 57% used; month (coding): 59% used`.
+An access token that has already expired is not sent. `lemon doctor --live`
+checks `kimi_coding` against `/coding/v1/models` with the same authentication
+and fingerprint as model requests.
+
+If another Lemon process refreshes the same stored login at the same time, the
+refresh that loses the conditional write adopts the winner's stored token when
+it is different and unexpired, instead of failing. This applies to every
+refreshable OAuth login.
+
 ### Kimi Code authentication through omp
 
 To reuse a Kimi Code login managed by omp, sign in to Kimi Code with omp first,
