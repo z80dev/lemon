@@ -27,6 +27,7 @@ defmodule LemonCore.Config.Tools do
       # Browser selection is passive; explicit providers never fall back.
       [runtime.tools.browser]
       provider = "auto"
+      tern = true
 
       # Native app control through LCU (optional lemon_computer_use app).
       # LEMON_COMPUTER_USE_* environment variables take precedence.
@@ -53,7 +54,7 @@ defmodule LemonCore.Config.Tools do
   Environment variables override file configuration:
   - `LEMON_WEB_SEARCH_ENABLED`, `LEMON_WEB_SEARCH_PROVIDER`
   - `LEMON_WEB_FETCH_ENABLED`, `LEMON_WEB_FETCH_MAX_CHARS`
-  - `LEMON_BROWSER_PROVIDER`
+  - `LEMON_BROWSER_PROVIDER`, `LEMON_BROWSER_TERN`
   - `LEMON_WASM_ENABLED`, `LEMON_WASM_AUTO_BUILD`
   - `LEMON_TOOL_DISCLOSURE_ENABLED`, `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS`,
     `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS`, `LEMON_TOOL_DISCLOSURE_PROFILE`
@@ -213,7 +214,10 @@ defmodule LemonCore.Config.Tools do
             default: Map.get(section, "provider", legacy_browser_backend() || "auto")
           )
 
-        section |> Map.delete("provider") |> Map.put(:provider, provider)
+        section
+        |> Map.drop(["provider", "tern"])
+        |> Map.put(:provider, provider)
+        |> Map.put(:tern, Env.get(:lemon_browser_tern, default: Map.get(section, "tern", true)))
 
       invalid ->
         invalid
@@ -572,7 +576,7 @@ defmodule LemonCore.Config.Tools do
       },
       "bash" => Bash.defaults(),
       "lsp" => @lsp_defaults,
-      "browser" => %{"provider" => "auto"},
+      "browser" => %{"provider" => "auto", "tern" => true},
       "web" => %{
         "search" => %{
           "enabled" => true,

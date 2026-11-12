@@ -748,6 +748,8 @@ defmodule LemonCore.Config.Validator do
   defp validate_browser(errors, nil), do: errors
 
   defp validate_browser(errors, %{} = browser) do
+    errors = validate_boolean(errors, browser[:tern], "runtime.tools.browser.tern")
+
     if browser[:provider] in LemonCore.BrowserProvider.providers() do
       errors
     else

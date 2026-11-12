@@ -84,6 +84,32 @@ defmodule CodingAgent.BrowserProviderTest do
     assert probes() == []
   end
 
+  test "pane options reach precomputed, registry and direct tool provider resolution", %{
+    tmp_dir: root
+  } do
+    opts =
+      @base ++
+        [
+          provider: "auto",
+          tern_pane: 42,
+          probe: fn
+            "tern" -> {:ok, "available"}
+            _ -> {:error, "unavailable"}
+          end
+        ]
+
+    resolved = ToolRegistry.put_browser_provider_resolution(opts)
+    assert resolved[:browser_provider_resolution].provider == "tern"
+
+    for tool <- [
+          CodingAgent.Tools.BrowserNavigate.tool(root, opts),
+          elem(ToolRegistry.get_tool(root, "browser_navigate", opts), 1),
+          elem(ToolRegistry.get_tool(root, "browser_navigate", resolved), 1)
+        ] do
+      assert tool.description =~ "Browser provider: tern."
+    end
+  end
+
   test "a session build probes the provider once", %{tmp_dir: root} do
     session =
       start_supervised!(

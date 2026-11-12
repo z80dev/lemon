@@ -96,6 +96,57 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     %{root: root, ctx: %{router_mod: RouterStub}}
   end
 
+  test "loopback pane binding is invocation-only and accepts safe integer boundaries", %{ctx: ctx} do
+    assert Schemas.get("chat.send").optional["ternPane"] == :integer
+
+    for peer <- [{127, 0, 0, 1}, {0, 0, 0, 0, 0, 0, 0, 1}],
+        pane <- [0, 42, 9_007_199_254_740_991] do
+      assert :ok = Schemas.validate("chat.send", params(%{"ternPane" => pane}))
+
+      assert {:ok, _} =
+               ChatSend.handle(params(%{"ternPane" => pane}), Map.put(ctx, :peer, peer))
+
+      assert_received {:submitted, request}
+      assert request.meta.tern_pane == pane
+      refute Map.has_key?(request, :tern_pane)
+    end
+
+    assert {:ok, _} = ChatSend.handle(params(), Map.put(ctx, :peer, {127, 0, 0, 1}))
+    assert_received {:submitted, request}
+    refute Map.has_key?(request.meta, :tern_pane)
+  end
+
+  test "malformed panes fail before submission without echoing supplied values", %{ctx: ctx} do
+    ctx = Map.put(ctx, :peer, {127, 0, 0, 1})
+
+    for pane <- [nil, "", "42", "private-pane", -1, 1.5, 9_007_199_254_740_992, %{}, []] do
+      assert {:error, {:invalid_request, message, nil}} =
+               ChatSend.handle(params(%{"ternPane" => pane}), ctx)
+
+      refute message =~ "private-pane"
+      refute_received {:submitted, _}
+    end
+
+    assert {:error, _} = Schemas.validate("chat.send", params(%{"ternPane" => "42"}))
+  end
+
+  test "remote and unknown peers cannot spoof a local pane binding", %{ctx: ctx} do
+    for peer <- [nil, {192, 0, 2, 1}, "127.0.0.1"] do
+      forged =
+        params(%{
+          "ternPane" => 42,
+          "peer" => {127, 0, 0, 1},
+          "address" => "127.0.0.1",
+          "local?" => true
+        })
+
+      assert {:error, {:invalid_request, _, nil}} =
+               ChatSend.handle(forged, Map.merge(ctx, %{peer: peer, local?: true}))
+
+      refute_received {:submitted, _}
+    end
+  end
+
   test "valid absolute cwd reaches the router request unchanged", %{root: root, ctx: ctx} do
     assert {:ok, %{"runId" => run_id}} =
              ChatSend.handle(params(%{"cwd" => root}), ctx)

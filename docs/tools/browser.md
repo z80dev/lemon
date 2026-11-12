@@ -22,13 +22,20 @@ Set one browser identity for Lemon in your config:
 provider = "auto"
 ```
 
-`LEMON_BROWSER_PROVIDER` overrides this setting. Providers are `auto`, `lcu`,
-`relay`, `local`, `cdp`, `browserbase`, `browser_use`, `firecrawl`, `camofox`,
-`controller`, and `hybrid`. `auto` probes **LCU → authenticated MV3 relay →
-managed local Chrome**, selecting the first available provider. It does not
-automatically select paid hosted providers. Existing explicit legacy backend
-configuration remains supported; prefer the unified provider setting for new
-configuration.
+`LEMON_BROWSER_PROVIDER` overrides this setting. Providers are `auto`, `tern`,
+`lcu`, `relay`, `local`, `cdp`, `browserbase`, `browser_use`, `firecrawl`,
+`camofox`, `controller`, and `hybrid`. For an invocation bound to a local Tern
+pane, `auto` first checks **Tern's native PiP browser**, then probes
+**LCU → authenticated MV3 relay → managed local Chrome**. Other invocations
+retain that latter order. Paid hosted providers are never selected automatically.
+Set `runtime.tools.browser.tern = false` or `LEMON_BROWSER_TERN=0` to opt out.
+Existing explicit legacy backend configuration remains supported.
+
+If an auto-selected Tern PiP cannot open because its window is unavailable, its
+browser operation is unsupported, or its daemon cannot connect, Lemon switches
+to the next browser backend and includes a `providerNote` in the result. The
+fallback is retained for the exact invocation; LCU is not a `browser_*` backend.
+Other errors and errors after a successful open do not switch browser identity.
 
 An explicit provider is **fail-closed**: missing prerequisites or a failed action
 never silently switch to another provider, browser identity, or profile.
@@ -128,6 +135,8 @@ supervision tree stays up.
 - `local`: launches managed local Chrome/Chromium and connects over CDP on
   `127.0.0.1`. Unified `local` selection (including `auto` choosing local)
   ignores attachment settings and does not attach to an existing browser.
+- `tern`: drives a native browser PiP over the bound Tern pane through the
+  daemon browser channel. It does not launch Chrome or use the Node driver.
 - `cdp`: explicitly attaches to `LEMON_BROWSER_CDP_ENDPOINT`. It never launches
   a replacement browser, and stopping the session never closes the user's browser.
   Legacy backend overrides can retain their own attachment configuration; prefer
@@ -146,6 +155,54 @@ supervision tree stays up.
 
 Backend ids are fixed: a third-party backend can be registered, but it cannot
 replace a built-in id.
+
+## Native Tern operation
+
+Tern owns the browser and its web identity; this is not the user's Chrome
+profile or the MV3 relay. The Lemon session must carry its originating integer
+pane binding. Browser availability requires both that binding and a successful
+daemon handshake advertising `browser`; merely having `TERN_PANE` set is not
+enough. `runtime.tools.browser.tern = false` disables integration, and
+`LEMON_BROWSER_TERN=0` opts out through the environment.
+
+Socket discovery is daemon-side only: `TERN_PANE_SOCKET`, then
+`TERN_DAEMON_SOCKET`, then `TERN_CONFIG_DIR/daemon.sock`. On macOS the verified
+default is `~/Library/Application Support/Tern/daemon.sock`. On Linux and other
+platforms there is no guessed default: provide one of those daemon environment
+settings or Tern remains unavailable. Tool arguments and invocation options
+cannot supply a socket path. A connected daemon still needs native browser
+support; headless/unsupported hosts return an explicit tagged error.
+
+Each exact Lemon session/run/pane binding owns at most one PiP. Lemon opens
+`about:blank`, finishes initial configuration, then navigates. Navigation and
+tab-open URLs pass `RoutePolicy`, including the metadata-endpoint block.
+`browser_tabs` lists window browser blocks; their decimal block IDs are
+`targetId`s, not Chrome target IDs. Passing an existing undriven block's ID
+adopts it. Switching a binding to another live block or stealing an already
+driven block is refused.
+
+Native snapshots preserve Tern refs for subsequent click, fill, press, hover,
+and select actions. CSS click/hover resolve geometry in the isolated world and
+send trusted mouse input; typing and page scrolling use trusted input. User
+evaluation runs in the page world. Page-world instrumentation records console,
+uncaught errors and resource failures alongside native navigation/dialog events;
+like any page-world capture, the page can tamper with it. Events are bounded to
+100 retained entries. Screenshots use native capture and the normal Lemon
+artifact pipeline (paths, retention, `includeImage`, and channel delivery).
+
+`browser_tab_close` closes an owned PiP, but **releases** an adopted block to the
+user without closing it. Run completion, application shutdown, and idle expiry
+perform the same ownership-aware cleanup. Idle expiry defaults to five minutes;
+the internal `browser_idle_timeout_ms` option is capped at one hour.
+
+Tern is not a CDP emulator. Raw CDP, history-back, uploads/downloads, cookie
+management, state clearing, a second tab in the same binding, multi-value select,
+and snapshot `interactiveOnly`/`includeText: false` return explicit
+`unsupported` errors rather than simulated success. History-back is refused
+because the daemon cannot expose its destination for pre-navigation route
+validation. Native snapshot/act availability depends on the Tern platform build;
+update Tern if these operations are unavailable.
+
 
 ## Action table
 
@@ -217,8 +274,8 @@ Notes:
   expressions, typed text, upload/download paths, filenames, cookie values, page
   text, or screenshot bytes; URLs appear only as hashed host metadata.
 - Cookie values are redacted by default in results.
-- Unknown, unavailable, or mismatched backends fail closed; a backend failure
-  never switches browser identity or profile.
+- Explicit, mismatched, and unavailable backends fail closed. Only the
+  auto-selected Tern initial-open fallback described above switches identity.
 - Attached browsers are never closed by Lemon.
 - A selected managed profile runs actions **as the user**, with that profile's
   cookies, logins, and permissions. Only opt in profiles whose identity you intend

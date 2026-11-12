@@ -38,6 +38,71 @@ defmodule LemonControlPlane.WS.ConnectionTest do
     def handle(_params, _ctx), do: {:ok, %{"usage" => %LemonAi.Types.Usage{input: 1}}}
   end
 
+  defmodule PeerBindingHandler do
+    @behaviour LemonControlPlane.Method
+    def name, do: "connection.test.peer_binding"
+    def scopes, do: [:write]
+
+    def handle(params, ctx) do
+      LemonControlPlane.Methods.ChatSend.handle(params, Map.put(ctx, :router_mod, __MODULE__))
+    end
+
+    def submit_with_receipt(request) do
+      send(self(), {:peer_binding_submission, request})
+
+      {:ok,
+       %{
+         run_id: request.run_id,
+         session_key: request.session_key,
+         state: :accepted,
+         effective_mode: :queued,
+         target_run_id: request.run_id
+       }}
+    end
+  end
+
+  test "dispatch binds panes using the socket peer, not auth compatibility or request addresses" do
+    :ok = Registry.register(PeerBindingHandler)
+    on_exit(fn -> Registry.unregister(PeerBindingHandler.name()) end)
+
+    for peer <- [{127, 0, 0, 1}, {192, 0, 2, 1}, nil] do
+      assert {:ok, state} = Connection.init(peer: peer, tokenless: false)
+      refute state.local?
+
+      state = %{
+        state
+        | connected: true,
+          auth: %{role: :operator, scopes: [:read, :write], client_id: "pane-client"}
+      }
+
+      frame =
+        Jason.encode!(%{
+          "type" => "req",
+          "id" => "pane-binding",
+          "method" => PeerBindingHandler.name(),
+          "params" => %{
+            "sessionKey" => "agent:pane-binding:main",
+            "prompt" => "hello",
+            "ternPane" => 42,
+            "peer" => "127.0.0.1",
+            "address" => "127.0.0.1",
+            "local?" => true
+          }
+        })
+
+      assert {:push, {:text, response}, _state} =
+               Connection.handle_in({frame, [opcode: :text]}, state)
+
+      if peer == {127, 0, 0, 1} do
+        assert Jason.decode!(response)["ok"] == true
+        assert_received {:peer_binding_submission, %{meta: %{tern_pane: 42}}}
+      else
+        assert Jason.decode!(response)["error"]["code"] == "INVALID_REQUEST"
+        refute_received {:peer_binding_submission, _}
+      end
+    end
+  end
+
   test "a fresh old worker cannot inherit durable native or memory privacy capabilities" do
     suffix = Integer.to_string(System.unique_integer([:positive]))
     node_id = "privacy-handshake-" <> suffix
@@ -613,10 +678,12 @@ defmodule LemonControlPlane.WS.ConnectionTest do
       })
 
       assert {:ok, info} =
-               LemonControlPlane.Auth.TokenStore.replace_node_session(token, %{
-                 "type" => "node",
-                 "nodeId" => node_id
-               }, ttl_ms: 24 * 60 * 60 * 1000)
+               LemonControlPlane.Auth.TokenStore.replace_node_session(
+                 token,
+                 %{
+                   "type" => "node",
+                   "nodeId" => node_id
+                 }, ttl_ms: 24 * 60 * 60 * 1000)
 
       node_pid = self()
 

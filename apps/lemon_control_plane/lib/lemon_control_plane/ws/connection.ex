@@ -37,6 +37,7 @@ defmodule LemonControlPlane.WS.Connection do
     :connected,
     :event_seq,
     :local?,
+    :peer,
     :state_version,
     :delivery,
     :heartbeat_timer_ref,
@@ -51,6 +52,7 @@ defmodule LemonControlPlane.WS.Connection do
           connected: boolean(),
           event_seq: non_neg_integer(),
           local?: boolean(),
+          peer: :inet.ip_address() | nil,
           state_version: map(),
           delivery: Delivery.t() | nil,
           resync_required: boolean(),
@@ -76,6 +78,7 @@ defmodule LemonControlPlane.WS.Connection do
       connected: false,
       event_seq: 0,
       local?: local?,
+      peer: Keyword.get(opts, :peer),
       allowed_roles: Keyword.get(opts, :allowed_roles, :all),
       state_version: %{},
       delivery: Delivery.new(self())
@@ -245,9 +248,9 @@ defmodule LemonControlPlane.WS.Connection do
     if is_reference(state.heartbeat_timer_ref),
       do: Process.cancel_timer(state.heartbeat_timer_ref)
 
-
     if is_reference(state.node_session_touch_timer_ref),
       do: Process.cancel_timer(state.node_session_touch_timer_ref)
+
     # Unregister from presence
     if state.connected do
       unregister_presence(state)
@@ -412,7 +415,8 @@ defmodule LemonControlPlane.WS.Connection do
       auth: state.auth,
       conn_id: state.conn_id,
       conn_pid: self(),
-      local?: state.local?
+      local?: state.local?,
+      peer: state.peer
     }
 
     case Registry.dispatch_mode(method) do
@@ -490,6 +494,7 @@ defmodule LemonControlPlane.WS.Connection do
              Errors.error(:unauthorized, "Paired node was not found", %{
                "reason" => "node_not_found"
              })}
+
           node ->
             register_durable_node(node_id, node, auth, params)
         end
@@ -522,6 +527,7 @@ defmodule LemonControlPlane.WS.Connection do
          Errors.error(:conflict, "Node name is already in use", %{
            "reason" => "node_name_conflict"
          })}
+
       {:error, :invalid_name} ->
         {:error, Errors.unauthorized("Paired node has no durable name")}
 

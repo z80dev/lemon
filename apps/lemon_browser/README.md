@@ -16,6 +16,7 @@ agent platform. Its only Lemon dependency is `lemon_core`.
 | `LemonBrowser.BackendRegistry` | Built-in-safe runtime backend registry |
 | `LemonBrowser.CloudSession` | Exact-session hosted CDP lifecycle and attach-only driver ownership |
 | `LemonBrowser.CamofoxSession` | Exact-session Camofox REST/Firefox adapter |
+| `LemonBrowser.TernSession` | Exact-session/run/pane native PiP ownership, adoption, and bounded cleanup |
 | `LemonBrowser.HybridRouter` | Per-session local/private versus public-provider route memory |
 | `LemonBrowser.LocalServer` | Supervised driver process: `request/3`, `status/0`, `stop/1` |
 | `LemonBrowser.ControllerBroker` | Single-use controller tickets, exact identity binding, capability checks, timeouts |
@@ -65,7 +66,7 @@ facade. See [Choosing a browser provider](../../docs/tools/browser.md#choosing-a
 Runtime packages can implement `LemonBrowser.Backend` and register it with
 `LemonBrowser.BackendRegistry`; built-in backend IDs cannot be replaced.
 
-Built-ins are `local`, `controller`, `hybrid`, `browserbase`, `browser_use`,
+Built-ins are `local`, `tern`, `controller`, `hybrid`, `browserbase`, `browser_use`,
 `firecrawl`, and `camofox`. Hosted CDP sessions are created lazily, attached by
 the Node/Playwright driver in attach-only mode, scoped to the exact Lemon
 session/profile/run, and explicitly released after bounded idle time. The
@@ -77,6 +78,34 @@ tracked before execution. Browser dispatch is separately recorded as uncertain:
 attached browsers and hosted sessions are not contained by the driver's process
 group, and a request error does not prove that external work never started.
 Authorization and unavailable-backend refusals happen before that dispatch record.
+
+### Native Tern browser
+
+The `tern` backend uses `LemonCore.Tern`'s daemon browser channel, not Node,
+Playwright, Chrome, CDP, or a subprocess. Requests require an exact `session_id`,
+optional `run_id`, and integer `tern_pane` binding. Availability probes only the
+daemon's browser handshake and respects the Tern configuration/opt-out.
+
+One PiP belongs to each exact binding. It opens `about:blank`, waits for the
+initial load, installs dialog/event handling, and only then navigates through
+`RoutePolicy`. Native snapshots keep Tern's element refs; ref actions use `act`,
+CSS pointer/typing actions use trusted `input`, and evaluation uses the page
+world. Screenshots return the existing `base64`/`contentType` contract so the
+tool layer retains artifact paths, retention, image inclusion, and delivery.
+
+An explicit `targetId` may adopt an undriven browser block listed by `tabs`.
+Adopted blocks are released, never closed. Owned PiPs close on explicit
+`tabClose`, run completion, application shutdown, or bounded idle expiry
+(five minutes by default, at most one hour via `browser_idle_timeout_ms`).
+`TernSession.close/1` provides exact-binding lifecycle cleanup.
+
+Unsupported operations return `{:error, {:unsupported, message}}`; this includes
+raw CDP, history-back (its destination cannot be route-vetted), uploads,
+downloads, cookies, state clearing, multiple simultaneous tabs in one binding,
+multi-value select, and snapshot `interactiveOnly`/`includeText: false`.
+See [native Tern operation](../../docs/tools/browser.md#native-tern-operation)
+for daemon discovery and platform limitations.
+
 
 ## Vetting a URL first
 

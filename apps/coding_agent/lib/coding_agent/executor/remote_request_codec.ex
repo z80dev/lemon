@@ -98,6 +98,8 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
           source_meta
           |> normalize_meta()
           |> Map.drop([
+            :tern_pane,
+            "tern_pane",
             :native_destination_pid,
             "native_destination_pid",
             "nativeDestinationPid",
