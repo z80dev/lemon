@@ -44,6 +44,39 @@ defmodule LemonCli.ServiceCommandTest do
     {:ok, opts: opts}
   end
 
+  test "explicit Bot URL override replaces or removes saved environment without changing default precedence",
+       %{opts: opts} do
+    bot = Path.join(opts[:home], ".local/bin/lemon-bot")
+    File.mkdir_p!(Path.dirname(bot))
+    File.write!(bot, "#!/bin/sh\nexit 0\n")
+    File.chmod!(bot, 0o700)
+    env = %{"LEMON_BOT_PUBLIC_URL" => "https://old.example"}
+    {:ok, saved} = Role.build("backend", "launchd", Keyword.put(opts, :env, env))
+    :ok = Unit.write(saved, "launchd")
+
+    for {override, expected} <- [
+          {{:set, "https://new.example"}, "https://new.example"},
+          {{:set, nil}, nil},
+          {:absent, "https://old.example"}
+        ] do
+      :ok = Unit.write(saved, "launchd")
+      options = Keyword.merge(opts, bot: bot, wait: 0, http_get: fn _ -> {:error, :offline} end)
+
+      options =
+        case override do
+          {:set, value} ->
+            Keyword.put(options, :bot_public_url, value)
+
+          :absent ->
+            Keyword.put(options, :env, %{"LEMON_BOT_PUBLIC_URL" => "https://ignored.example"})
+        end
+
+      assert {:ok, _} = LemonCore.Service.install(["backend"], options)
+      assert {:ok, parsed} = Unit.read(saved.path, "launchd")
+      assert parsed.env["LEMON_BOT_PUBLIC_URL"] == expected
+    end
+  end
+
   test "invalid commands, names, roles and flags are usage failures" do
     args = [
       [],

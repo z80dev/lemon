@@ -207,6 +207,13 @@ defmodule LemonCli.CLI do
   defp run_command("acp", args), do: LemonCli.AcpCommand.run(args)
   defp run_command("tern", args), do: LemonCli.TernCommand.run(args)
   defp run_command("connect", args), do: LemonCli.ConnectCommand.run(args)
+  defp run_command("bot", ["https" | args]), do: LemonCli.BotHttpsCommand.cli(args)
+
+  defp run_command("bot", _args) do
+    IO.puts(:stderr, "Use lemon bot https --help")
+    @exit_usage
+  end
+
   defp run_command("run", args), do: LemonCli.PrintCommand.run(args)
   defp run_command("setup", args), do: run_setup(args)
   defp run_command("model", args), do: run_model(args)

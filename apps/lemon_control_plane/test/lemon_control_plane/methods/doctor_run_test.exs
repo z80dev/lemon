@@ -25,6 +25,33 @@ defmodule LemonControlPlane.Methods.DoctorRunTest do
     assert Registry.dispatch_mode("doctor.run") == :async
   end
 
+  test "an HTTPS origin is validated and canonicalized before shared doctor evaluation" do
+    parent = self()
+
+    Application.put_env(:lemon_control_plane, :doctor_report_fun, fn opts ->
+      send(parent, {:doctor_opts, opts})
+      Report.from_checks([])
+    end)
+
+    assert {:ok, result} = DoctorRun.handle(%{"botPublicUrl" => "https://BOT.example:443/"}, %{})
+    assert_receive {:doctor_opts, [runtime: :local, bot_public_url: "https://bot.example"]}
+    assert result["botPublicOrigin"] == "https://bot.example"
+
+    for value <- [
+          "http://bot.example",
+          "https://u:p@bot.example",
+          "https://bot.example/path",
+          "https://bot.example?x",
+          "https://bot.example#x",
+          "https://bot.example:",
+          "https://bad host"
+        ] do
+      assert {:error, _} = DoctorRun.handle(%{"botPublicUrl" => value}, %{})
+    end
+
+    refute_received {:doctor_opts, _}
+  end
+
   test "projects a bounded report with paths and secrets redacted" do
     parent = self()
 

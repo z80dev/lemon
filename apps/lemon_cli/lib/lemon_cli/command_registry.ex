@@ -95,6 +95,19 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
+      name: "bot",
+      summary: "Manage Lemon Bot's HTTPS callback address",
+      usage:
+        "lemon bot https enable [--tailscale | --url HTTPS_ORIGIN]\nlemon bot https status\nlemon bot https disable",
+      subcommands: [
+        %{name: "https", summary: "Enable, inspect, or disable the managed HTTPS address"}
+      ],
+      options: [
+        option("--tailscale", ["--tailscale"], "Create a private Tailscale Serve HTTPS route"),
+        option("--url HTTPS_ORIGIN", ["--url"], "Use an existing HTTPS reverse proxy")
+      ]
+    },
+    %{
       name: "connect",
       summary: "Pair an iPhone with an already-running Lemon Bot backend",
       usage: "lemon connect iphone --backend ORIGIN [--origin HTTPS_ORIGIN]",

@@ -8,6 +8,9 @@ defmodule LemonCore.Service do
   `install/2` accepts `:restart_backend` to reload a changed controller choice:
   an unchanged running backend is restarted once; a newly started or rewritten
   backend is not restarted again. Its action is `"restarted"`.
+
+  `:bot_public_url` explicitly replaces the backend unit's saved public URL;
+  `nil` removes it. Without this option, saved environment precedence is unchanged.
   """
   alias LemonCore.Service.{
     Command,

@@ -16,8 +16,8 @@ defmodule LemonCli.Doctor.BotAdmission do
   ]
 
   @spec run(keyword()) :: [Check.t()]
-  def run(_opts \\ []) do
-    case System.fetch_env("LEMON_BOT_PUBLIC_URL") do
+  def run(opts \\ []) do
+    case Keyword.fetch(opts, :bot_public_url) |> public_url() do
       :error ->
         [Check.skip(@name, "LEMON_BOT_PUBLIC_URL is not set.")]
 
@@ -25,6 +25,15 @@ defmodule LemonCli.Doctor.BotAdmission do
         [check(url)]
     end
   end
+
+  defp public_url({:ok, url}) do
+    case OriginPolicy.canonical_https_origin(url) do
+      {:ok, canonical} -> {:ok, canonical}
+      _ -> {:ok, nil}
+    end
+  end
+
+  defp public_url(:error), do: System.fetch_env("LEMON_BOT_PUBLIC_URL")
 
   defp check(url) do
     case origin(url, true) do
@@ -75,7 +84,8 @@ defmodule LemonCli.Doctor.BotAdmission do
 
   # Use execution's origin canonicalization without resolving DNS.
   # Allowlist entries must be origins, while the public URL can include a path.
-  defp origin(value, allow_path?) do
+  @doc "Validates and canonicalizes a callback URL using the execution origin policy."
+  def origin(value, allow_path? \\ false) do
     with true <- is_binary(value) and byte_size(value) in 1..2048 and String.valid?(value),
          false <- Regex.match?(~r/[\s\\\x00-\x1F\x7F]|%(?![0-9a-fA-F]{2})/, value),
          false <- Regex.match?(~r/\Ahttps?:\/\/[^\/?#]*:(?:[\/?#]|\z)/i, value),

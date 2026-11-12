@@ -61,6 +61,33 @@ The canonical [getting-started guide](../../../docs/getting-started/lemon-bot.md
 
 Native/CLI local sign-in uses `POST /v1/auth/local` with the same user's private `DATA_DIR/local-access.key`. The backend re-reads that key per request; an empty instance creates a passwordless owner and workspace. This returns an ordinary bounded product session, not operator authority. Apple clients' credential-storage and transport details are in the [Apple README](../apple/README.md#connect-the-mac-app).
 
+`lemon-bot readdress --status --json` inspects saved per-Bot native admission and
+lifecycle state without signing in, reading encryption keys or contacting the
+controller. Set `LEMON_BOT_PUBLIC_URL` to the effective service origin when calling
+it from another launcher; it otherwise uses the ordinary loopback default.
+The single JSON object has `schemaVersion:1`, `source:"local_read_only"`,
+`readdressAvailable:false`, `reason:"owner_session_required"`, `status`,
+`totalBots`, `truncated`, `bots` and `guidance`. Each Bot exposes its ID and bounded
+display name, admission enum, address-match flag, bounded lifecycle enums and
+`nextAction`. At most 200 Bots are shown; `totalBots` counts the full list and
+`truncated:true` requires checking remaining Bots in the browser.
+
+There is no session-free operator readdress endpoint: local-access proof creates
+an ordinary workspace-owner session, and administrators cannot impersonate other
+Bot owners. Consequently `lemon-bot readdress --all [--json]` reports status and
+owner actions but sends no mutations and exits 1 (`owner_action_required`).
+Status exits 0 on a successful read, including when owner actions remain;
+unavailable state exits 1, never an empty successful result. Bad arguments exit 2.
+No credentials, callback URLs or private lifecycle messages are printed.
+
+For `nextAction:"update_address"`, sign in as that Bot's owner, open the Bot,
+then **Settings**, and choose **Update address** in its lifecycle status panel.
+For interrupted setup choose **Finish setup** instead. For pending or
+`outcome_unknown` effects choose **Check status** and let the backend reconcile
+the original receipts read-only; never redispatch an uncertain mutation or
+create a replacement Bot. This CLI is a saved local snapshot, not proof of a
+current controller acknowledgement.
+
 ## Provider-free owner setup
 
 Owner sign-in, phone pairing and management do not require model credentials or a default model. Connect a model on the execution target before expecting replies; see [model setup](../../../docs/user-guide/setup.md).

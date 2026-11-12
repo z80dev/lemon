@@ -4,9 +4,9 @@ defmodule LemonControlPlane.Methods.DoctorRun do
 
   Runs `LemonCore.Doctor.report/1` — the same built-in and app-registered
   checks the CLI prints — which only reads configuration, secrets readiness,
-  store/process state and `PATH`. It never writes a support bundle (that stays
-  a CLI-only `--bundle` action) and takes no parameters, so callers cannot
-  point it at other directories.
+  store/process state and `PATH`. The optional `botPublicUrl` checks an HTTPS
+  callback origin against the controller's actual admission configuration using
+  the same registered doctor check. It never writes a support bundle.
 
   The projection is bounded and redacted: at most 64 checks, each with
   `name`, `status` (`pass | warn | fail | skip`), `message` and `remediation`
@@ -42,31 +42,49 @@ defmodule LemonControlPlane.Methods.DoctorRun do
   def dispatch_mode, do: :async
 
   @impl true
-  def handle(_params, _ctx) do
+  def handle(params, _ctx) do
+    with {:ok, opts} <- doctor_options(params) do
+      report(opts)
+    end
+  end
+
+  defp doctor_options(%{"botPublicUrl" => url}) do
+    case LemonMCP.HTTP.OriginPolicy.canonical_https_origin(url) do
+      {:ok, origin} -> {:ok, [runtime: :local, bot_public_url: origin]}
+      _ -> {:error, {:invalid_params, "botPublicUrl must be an HTTPS origin.", nil}}
+    end
+  end
+
+  defp doctor_options(_), do: {:ok, [runtime: :local]}
+
+  defp report(opts) do
     report_fun =
       Application.get_env(:lemon_control_plane, :doctor_report_fun, &LemonCore.Doctor.report/1)
 
-    report = report_fun.(runtime: :local)
+    report = report_fun.(opts)
     checks = Enum.take(report.checks, @max_checks)
 
     {:ok,
-     %{
-       "overall" => report |> Report.overall() |> Atom.to_string(),
-       "counts" => %{
-         "pass" => report.pass,
-         "warn" => report.warn,
-         "fail" => report.fail,
-         "skip" => report.skip
-       },
-       "checks" => Enum.map(checks, &project_check/1),
-       "truncated" => length(report.checks) > @max_checks,
-       "generatedAtMs" => System.system_time(:millisecond),
-       "cleanup" => %{
-         "includesPaths" => false,
-         "includesSecretValues" => false,
-         "writesSupportBundle" => false
+     Map.merge(
+       if(opts[:bot_public_url], do: %{"botPublicOrigin" => opts[:bot_public_url]}, else: %{}),
+       %{
+         "overall" => report |> Report.overall() |> Atom.to_string(),
+         "counts" => %{
+           "pass" => report.pass,
+           "warn" => report.warn,
+           "fail" => report.fail,
+           "skip" => report.skip
+         },
+         "checks" => Enum.map(checks, &project_check/1),
+         "truncated" => length(report.checks) > @max_checks,
+         "generatedAtMs" => System.system_time(:millisecond),
+         "cleanup" => %{
+           "includesPaths" => false,
+           "includesSecretValues" => false,
+           "writesSupportBundle" => false
+         }
        }
-     }}
+     )}
   end
 
   defp project_check(check) do

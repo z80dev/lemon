@@ -306,7 +306,14 @@ defmodule LemonCore.Service.Role do
           else: worker
 
       "backend" ->
-        Map.merge(base, Map.take(source, @backend_env))
+        public_env =
+          case Keyword.fetch(opts, :bot_public_url) do
+            {:ok, nil} -> Map.delete(source, "LEMON_BOT_PUBLIC_URL")
+            {:ok, url} -> Map.put(source, "LEMON_BOT_PUBLIC_URL", url)
+            :error -> source
+          end
+
+        Map.merge(base, Map.take(public_env, @backend_env))
         |> Map.put("LEMON_BOT_PORT", to_string(port(role, opts)))
         |> Map.put(
           "LEMON_CONTROL_PLANE_PORT",
