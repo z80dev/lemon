@@ -7,7 +7,7 @@ import { nativeBotToolPolicy } from '../core/experiences';
 import { buildInvocationContext, buildMemoryContextKey, effectiveInvocationAudience, type InvocationContext, type RuntimeMapping } from './runs';
 import { runOrigin } from '../core/approval-allowances';
 
-export const nativeFollowupAdmissionPath = '/internal/runtime/followup/admission';
+import { nativeAdmissionAddressChange, nativeFollowupAdmissionPath } from '../core/bot-lifecycle';
 interface Issuer { botId: string; profileId: string; url: string; digest: string; encryptedToken: string; state: 'pending' | 'configured' | 'rejected' | 'outcome_unknown' }
 const lineageSchema = z.object({
   runId: id, sourceRootRunId: id, parentRunId: id, sourceProfileId: id,
@@ -54,11 +54,6 @@ export async function reconcileNativeFollowupAdmission(services: BackendServices
   }
   return false;
 }
-export function nativeAdmissionAddressChange(services: BackendServices, bot: P.Bot): string | null {
-  const old = services.store.metadata<Issuer>(issuerKeys(bot.id).active);
-  const url = new URL(nativeFollowupAdmissionPath, services.config.publicUrl).toString();
-  return old && old.url !== url ? `Lemon Bot's address changed from ${new URL(old.url).origin} to ${new URL(url).origin}. Choose Update address to configure the new callback; add ${new URL(url).origin} to LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS on the controller first (see the Lemon Bot getting-started guide).` : null;
-}
 /** Re-addressing retains the old issuer until an exact controller acknowledgement. */
 export async function configureNativeFollowupAdmission(services: BackendServices, bot: P.Bot, readdress = false): Promise<void> {
   bot = services.store.require<P.Bot>('bots', bot.id);
@@ -67,7 +62,6 @@ export async function configureNativeFollowupAdmission(services: BackendServices
   const change = nativeAdmissionAddressChange(services, bot);
   if (existing && existing.profileId !== bot.profileId) fail('conflict', 'The admission issuer belongs to a different profile; no configuration was changed.');
   if (change && !readdress) fail('conflict', change);
-  if (!services.lemon.methods.includes('profile.followup.admission.set') || !services.lemon.methods.includes('runs.followup.lineage.get')) fail('capability_unavailable', 'This controller lacks authenticated native follow-up admission.');
   let candidate = services.store.metadata<Issuer>(keys.pending) ?? (change ? null : existing);
   if (candidate && (candidate.profileId !== bot.profileId || candidate.url !== url)) fail('conflict', 'Finish the pending admission address change before changing the public address again.');
   if (candidate?.state === 'configured') return;
@@ -80,6 +74,7 @@ export async function configureNativeFollowupAdmission(services: BackendServices
     const notApplied = !actual.configured || (change && existing && actual.url === existing.url && actual.tokenSha256 === tokenSha256(services, existing));
     if (!notApplied) fail('outcome_unknown', 'Native admission configuration is unresolved. Its receipt does not prove it was not applied; no configuration was retried.', false, { resourceIds: [bot.id] });
   }
+  if (!services.lemon.methods.includes('profile.followup.admission.set') || !services.lemon.methods.includes('runs.followup.lineage.get')) fail('capability_unavailable', 'This controller lacks authenticated native follow-up admission.');
   const token = candidate ? services.decrypt<string>(candidate.encryptedToken) : Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
   const issuer: Issuer = { botId: bot.id, profileId: bot.profileId, url, digest: services.mutations.digest(token), encryptedToken: candidate?.encryptedToken ?? services.encrypt(token), state: 'pending' };
   const key = change ? keys.pending : keys.active;

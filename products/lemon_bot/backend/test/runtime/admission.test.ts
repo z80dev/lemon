@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
 import { ApiError } from '../../src/core/errors';
-import { configureNativeFollowupAdmission, createRuntimeAdmissionRoutes, nativeFollowupAdmissionPath, type NativeFollowupLineage } from '../../src/runtime/admission';
+import { configureNativeFollowupAdmission, createRuntimeAdmissionRoutes, type NativeFollowupLineage } from '../../src/runtime/admission';
+import { nativeFollowupAdmissionPath } from '../../src/core/bot-lifecycle';
 import { createRuntimeService, observeInvocation, type InvocationContext, type RuntimeMapping } from '../../src/runtime/runs';
 import { fixture } from './fixture';
 

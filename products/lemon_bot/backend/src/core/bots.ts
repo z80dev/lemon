@@ -5,11 +5,12 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RequestContext, Route } from './services';
 import { ApiError, fail } from './errors';
 import { z, parse, principal, id, mutation, update, confirm, voice, boundedText, queryObject } from './validation';
-import { provisionSkill, publicRoutine } from './resources';
+import { provisionSkill, publicRoutine, reserveImportedSkill, resumeImportedSkill, reserveImportedRoutine, resumeImportedRoutine, type ImportedSkillReservation, type ImportedRoutineReservation } from './resources';
 import { recordPreferenceChange, nativeBotToolPolicy, workspaceNativeToolRestrictions, finalizePreferenceUndos, initializeBotAccess } from './experiences';
 import { deleteConversationResources } from './conversations';
 import { botSessionKeys } from '../runtime/runs';
-import { configureNativeFollowupAdmission, reconcileNativeFollowupAdmission, nativeAdmissionAddressChange } from '../runtime/admission';
+import { configureNativeFollowupAdmission, reconcileNativeFollowupAdmission } from '../runtime/admission';
+import { botLifecycleProjection, nativeAdmissionAddressChange } from './bot-lifecycle';
 import { previewBotResources, cancelBotResources } from './gates';
 import { cancelConversationVoice } from './voice';
 import { createAttachmentService } from './attachments';
@@ -45,7 +46,7 @@ interface Fence { id: string; action: string; userId: string; revision: number; 
 interface SetupPlan {
   access?: 'standard' | 'none';
   steps: Record<string, 'pending' | 'rejected' | 'acknowledged'>;
-  imported?: { content: P.TemplateContent; disabledSkillIndexes: number[]; nonces: string[]; skillIds: string[]; routineIds: string[] };
+  imported?: { content: P.TemplateContent; disabledSkillIndexes: number[]; skillReservations?: ImportedSkillReservation[]; routineReservations?: ImportedRoutineReservation[] };
 }
 interface MemoryTransferPlan {
   profileId: string; mutationId: string; sourceNodeId: string; nodeId: string;
@@ -95,7 +96,7 @@ function idle(s: BackendServices, bot: P.Bot, deleting = false): void {
   if (s.store.list<P.Draft>('drafts', draft => draft.botId === bot.id && (draft.state === 'sending' || draft.state === 'outcome_unknown')).length) fail('conflict', 'Reconcile outward draft delivery before changing placement or deleting data.');
   const fence = s.store.metadata<Fence>(`botLifecycle:${bot.id}`);
   // A create/import that never finished, or a delete stopped by a definite failure: deleting (again) is its recovery.
-  const deletable = !!fence && (((fence.action === 'create' || fence.action === 'import') && fence.status !== 'running') || (fence.action === 'delete' && fence.status === 'failed'));
+  const deletable = !!fence && ((['create', 'import', 'readdress'].includes(fence.action) && fence.status !== 'running') || (fence.action === 'delete' && fence.status === 'failed'));
   if (fence && !(deleting && deletable)) fail(fence.status === 'outcome_unknown' ? 'outcome_unknown' : 'conflict', 'A prior bot lifecycle operation requires reconciliation.', false, { resourceIds: fence.resourceIds });
 }
 /** Owning presence counts include queued/uncertain work before paging; a legacy empty list is never idle proof. */
@@ -117,16 +118,7 @@ function requireMethods(s: BackendServices, methods: string[]): void {
 function botDto(s: BackendServices, bot: P.Bot): P.Bot {
   const hasActiveBotAllowance = s.store.list<P.ApprovalAllowance>('approvalAllowances', a => a.botId === bot.id && a.scope === 'bot' && a.state === 'active').length > 0;
   const approvalReview: P.ApprovalReviewMode = hasActiveBotAllowance ? 'bot_wide' : (s.store.metadata<P.ApprovalReviewMode>(`botApprovalReview:${bot.id}`) ?? 'per_chat');
-  const fence = s.store.metadata<Fence>(`botLifecycle:${bot.id}`);
-  const addressChange = nativeAdmissionAddressChange(s, bot);
-  const addressRecovery = s.store.metadata<string>(`botReaddressTarget:${bot.id}`) !== null && ['Update callback address', 'Update Bot address', 'Sync updated address'].some(step => s.store.metadata<SetupPlan>(`botSetup:${bot.id}`)?.steps[step] !== 'acknowledged');
-  const lifecycle: P.BotLifecycle | undefined = fence ? {
-    action: fence.action, status: fence.status, step: fence.step ?? 'Finish Bot setup',
-    message: addressChange ?? (addressRecovery ? `${s.store.metadata<string>(`botReaddressNotice:${bot.id}`) ?? 'Continue updating the Bot address.'} ${fence.message ?? ''}` : fence.message) ?? 'Setup was interrupted. Choose Finish setup to check its receipts, or Delete to remove this Bot.',
-    canFinishSetup: ['create', 'import'].includes(fence.action) && fence.status !== 'running',
-    canReaddress: (!!addressChange || addressRecovery || fence.action === 'readdress') && fence.status !== 'running' && ['create', 'import', 'update', 'readdress'].includes(fence.action),
-    canDelete: fence.status !== 'running' && (['create', 'import', 'readdress'].includes(fence.action) || fence.action === 'delete' && fence.status === 'failed'),
-  } : addressChange ? { action: 'readdress', status: 'failed', step: 'Update callback address', message: addressChange, canFinishSetup: false, canReaddress: true, canDelete: true } : undefined;
+  const lifecycle = botLifecycleProjection(s, bot);
   return { id: bot.id, revision: bot.revision, createdAtMs: bot.createdAtMs, updatedAtMs: bot.updatedAtMs, ownerUserId: bot.ownerUserId, machineId: bot.machineId, profileId: bot.profileId, name: bot.name, title: bot.title, job: bot.job, instructions: bot.instructions, avatar: bot.avatar, voice: bot.voice, language: bot.language, skillIds: bot.skillIds, referenceAttachmentIds: bot.referenceAttachmentIds, mainConversationId: bot.mainConversationId, sidebar: bot.sidebar, activity: bot.activity, activeRunIds: bot.activeRunIds, approvalReview, ...botAgentProjection(s, bot), ...(lifecycle ? { lifecycle } : {}) };
 }
 function projected(s: BackendServices, p: Principal, bot: P.Bot): P.Bot {
@@ -283,13 +275,23 @@ async function fenced<T>(s: BackendServices, c: RequestContext, botId: string, a
   const userId = user(c).userId;
   owner(s.store.require<P.Bot>('bots', botId), user(c));
   c.nonceResourceIds.push(botId);
+  const currentFence = s.store.metadata<Fence>(`botLifecycle:${botId}`);
+  if (currentFence && activeLifecycles.has(currentFence.id)) fail('conflict', 'A Bot lifecycle operation is already running.');
   const intent: Fence = resume ? { ...resume, status: 'running' } : { id: s.id('lifecycle'), action, userId, revision: s.store.require<P.Bot>('bots', botId).revision, status: 'running', resourceIds: [botId] };
   activeLifecycles.add(intent.id);
   s.store.setMetadata(`botLifecycle:${botId}`, intent);
   try {
     const value = await operation();
-    s.store.setMetadata(`botLifecycle:${botId}`, null);
-    if (value && typeof value === 'object' && 'profileId' in value && s.store.get<P.Bot>('bots', botId)) return projected(s, user(c), s.store.require<P.Bot>('bots', botId)) as T;
+    let completed: P.Bot | null = null;
+    s.store.transaction(() => {
+      s.store.setMetadata(`botLifecycle:${botId}`, null);
+      const current = s.store.get<P.Bot>('bots', botId);
+      if (current) completed = saveBot(s, s.update(current, {}));
+    });
+    if (completed && value && typeof value === 'object') {
+      if ('profileId' in value) return projected(s, user(c), completed) as T;
+      if ('bot' in value) return { ...value, bot: projected(s, user(c), completed) };
+    }
     return value;
   }
   catch (error) {
@@ -446,7 +448,7 @@ async function readdressBot(s: BackendServices, bot: P.Bot, p: Principal): Promi
   if (!s.store.metadata<DesiredProfile>(`botReaddressProfileBefore:${bot.id}`)) {
     const existing = s.store.metadata<DesiredProfile>(`botDesiredProfile:${bot.id}`);
     if (!existing) fail('conflict', 'The Bot profile snapshot is missing. Finish setup before updating its address.');
-    const desired = { ...existing, mcpServers: await botProfileMcpTemplates(s, bot.id), profileIntentId: s.id('profile') };
+    const desired = { ...existing, mcpServers: await botProfileMcpTemplates(s, bot.id), toolPolicy: await nativeBotToolPolicy(s, p, existing.bot), profileIntentId: s.id('profile') };
     s.store.transaction(() => {
       s.store.setMetadata(`botReaddressProfileBefore:${bot.id}`, existing);
       s.store.setMetadata(`botDesiredProfile:${bot.id}`, desired);
@@ -487,52 +489,52 @@ async function exportContent(s: BackendServices, p: Principal, bot: P.Bot): Prom
 }
 function safeTemplateTrigger(value: P.RoutineTrigger): P.RoutineTrigger { if (value.kind === 'channel_event') fail('policy_denied', 'Channel-bound routines must be removed before declarative export; channel identities are not portable.'); return value; }
 async function importContent(s: BackendServices, c: RequestContext, input: P.BotCreate, value: P.TemplateContent, disabledSkillIndexes: number[] = []): Promise<P.Bot> {
-  return createBot(s, c, { ...input, templateId: undefined, title: value.title, job: value.job, instructions: value.instructions, avatar: value.avatar, voice: value.voice, skillIds: [] }, { content: value, disabledSkillIndexes, nonces: [...value.skills, ...value.routines].map(() => s.id('nonce')), skillIds: [], routineIds: [] });
+  return createBot(s, c, { ...input, templateId: undefined, title: value.title, job: value.job, instructions: value.instructions, avatar: value.avatar, voice: value.voice, skillIds: [] }, { content: value, disabledSkillIndexes });
 }
 async function finishImportedContent(s: BackendServices, c: RequestContext, bot: P.Bot): Promise<void> {
   const p = user(c), key = `botSetup:${bot.id}`;
-  const internal = { botLifecycle: { botId: bot.id, userId: p.userId, action: 'import' } };
   let imported = s.store.metadata<SetupPlan>(key)!.imported!;
-  async function importResource<T>(index: number, path: string, body: Record<string, unknown>, method = 'POST'): Promise<T> {
-    const fence = s.store.metadata<Fence>(`botLifecycle:${bot.id}`)!;
-    s.store.setMetadata(`botLifecycle:${bot.id}`, { ...fence, step: path.includes('/skills') ? 'Install imported skills' : 'Copy imported routines' });
-    if (!imported.nonces[index]) {
-      imported.nonces[index] = s.id('nonce');
-      s.store.setMetadata(key, { ...s.store.metadata<SetupPlan>(key)!, imported });
-    }
-    try { return await s.invoke<T>(p, method, path, { ...body, clientNonce: imported.nonces[index]! }, internal); }
-    catch (error) {
-      // Resource lifecycle removes its local reservation only on a definite no-effect rejection.
-      // Keep uncertain nonces fenced; successful calls use their committed resource receipts.
-      if (error instanceof ApiError && error.retrySafe && error.code !== 'outcome_unknown') {
-        imported.nonces[index] = s.id('nonce');
-        s.store.setMetadata(key, { ...s.store.metadata<SetupPlan>(key)!, imported });
+  if (!imported.skillReservations || !imported.routineReservations) {
+    const legacy = z.object({ skillIds: z.array(z.string()).optional(), routineIds: z.array(z.string()).optional() }).passthrough().parse(imported);
+    const used = new Set<string>();
+    const skillReservations = imported.content.skills.map((spec, index) => {
+      const previous = legacy.skillIds?.[index];
+      const matches = s.store.list<P.Skill>('skills', skill => skill.botId === bot.id && !used.has(skill.id) && (previous ? skill.id === previous : skill.name === spec.name && skill.description === spec.description && skill.markdown === spec.markdown));
+      if (previous && !matches.length) fail('outcome_unknown', 'The old imported skill reservation is missing; no replacement was created.', false, { resourceIds: [bot.id] });
+      if (matches.length > 1) fail('outcome_unknown', 'Several old imported skill reservations match this step. No new skill was created; the owning receipt must be resolved.', false, { resourceIds: [bot.id] });
+      const existing = matches[0];
+      if (existing) {
+        if (existing.ownerUserId !== p.userId) fail('forbidden', 'The imported skill reservation is not owned by this Bot’s owner.');
+        used.add(existing.id);
+        return { skill: existing, operationId: s.id('import_skill') } satisfies ImportedSkillReservation;
       }
-      throw error;
-    }
+      return reserveImportedSkill(s, p, bot, spec, !imported.disabledSkillIndexes.includes(index));
+    });
+    const routineReservations = imported.content.routines.map((spec, index) => {
+      const previous = legacy.routineIds?.[index];
+      const matches = s.store.list<P.Routine & { conversationId: string }>('routines', routine => routine.botId === bot.id && !used.has(routine.id) && (previous ? routine.id === previous : routine.name === spec.name && routine.instruction === spec.instruction && s.mutations.digest(routine.trigger) === s.mutations.digest(spec.trigger)));
+      if (matches.length > 1) fail('outcome_unknown', 'Several old imported routine reservations match this step. No new routine was created; the owning receipt must be resolved.', false, { resourceIds: [bot.id] });
+      if (previous && !matches.length) fail('outcome_unknown', 'The old imported routine reservation is missing; no replacement was created.', false, { resourceIds: [bot.id] });
+      const existing = matches[0];
+      if (existing) {
+        if (existing.ownerUserId !== p.userId) fail('forbidden', 'The imported routine reservation is not owned by this Bot’s owner.');
+        used.add(existing.id);
+        return { routine: existing, conversation: s.store.require<P.Conversation>('conversations', existing.conversationId), operationId: s.id('import_routine') } satisfies ImportedRoutineReservation;
+      }
+      return reserveImportedRoutine(s, p, bot, { ...spec, trigger: safeTemplateTrigger(spec.trigger), enabled: false });
+    });
+    // Every product ID and owning operation ID is durable before any host mutation.
+    imported = { content: imported.content, disabledSkillIndexes: imported.disabledSkillIndexes, skillReservations, routineReservations };
+    s.store.setMetadata(key, { ...s.store.metadata<SetupPlan>(key)!, imported });
   }
-  for (const [index, skill] of imported.content.skills.entries()) {
-    // Replaying an internal nonce only reads its committed receipt. An unresolved nonce remains blocked.
-    const created = imported.skillIds[index] ? s.store.require<P.Skill>('skills', imported.skillIds[index]!) : await importResource<P.Skill>(index, '/v1/skills', { ...skill, botId: bot.id, machineIds: [bot.machineId] });
-    if (imported.disabledSkillIndexes.includes(index) && s.store.require<P.Skill>('skills', created.id).enabled) {
-      const current = s.store.require<P.Skill>('skills', created.id);
-      const disableIndex = imported.content.skills.length + imported.content.routines.length + imported.disabledSkillIndexes.indexOf(index);
-      await importResource<P.Skill>(disableIndex, `/v1/skills/${created.id}`, { revision: current.revision, enabled: false }, 'PATCH');
-    }
-    if (!imported.skillIds.includes(created.id)) {
-      imported = { ...imported, skillIds: [...imported.skillIds, created.id] };
-      s.store.setMetadata(key, { ...s.store.metadata<SetupPlan>(key)!, imported });
-    }
-  }
-  for (const [index, routine] of imported.content.routines.entries()) {
-    const created = imported.routineIds[index] ? s.store.require<P.Routine>('routines', imported.routineIds[index]!) : await importResource<P.Routine>(imported.content.skills.length + index, '/v1/routines', { ...routine, trigger: safeTemplateTrigger(routine.trigger), enabled: false, botId: bot.id });
-    if (!imported.routineIds.includes(created.id)) {
-      imported = { ...imported, routineIds: [...imported.routineIds, created.id] };
-      s.store.setMetadata(key, { ...s.store.metadata<SetupPlan>(key)!, imported });
-    }
-  }
+  const fence = s.store.metadata<Fence>(`botLifecycle:${bot.id}`)!;
+  s.store.setMetadata(`botLifecycle:${bot.id}`, { ...fence, step: 'Install imported skills' });
+  for (const reservation of imported.skillReservations!) await resumeImportedSkill(s, p, reservation);
+  s.store.setMetadata(`botLifecycle:${bot.id}`, { ...fence, step: 'Copy imported routines' });
+  for (const reservation of imported.routineReservations!) await resumeImportedRoutine(s, p, reservation);
+  const skillIds = imported.skillReservations!.map(reservation => reservation.skill.id);
   const current = s.store.require<P.Bot>('bots', bot.id);
-  if (s.mutations.digest(current.skillIds) !== s.mutations.digest(imported.skillIds)) s.store.put('bots', s.update(current, { skillIds: imported.skillIds }));
+  if (s.mutations.digest(current.skillIds) !== s.mutations.digest(skillIds)) s.store.put('bots', s.update(current, { skillIds }));
 }
 function publicTemplates(s: BackendServices): boolean { return s.store.metadata<P.Policies>('policies')?.publicTemplates === true; }
 function readTemplate(s: BackendServices, p: Principal | null, templateId: string): P.BotTemplate {
@@ -908,7 +910,6 @@ export function createBotRoutes(s: BackendServices): Route[] {
     const fence = recoverableFence(s, bot);
     if (fence && !['create', 'import', 'update', 'readdress'].includes(fence.action)) fail('conflict', 'Resolve the current lifecycle before updating the address.');
     if (!fence && !nativeAdmissionAddressChange(s, bot)) fail('conflict', 'This Bot already uses the current address.');
-    await nativeIdle(s, bot);
     ensureSetupPlan(s, bot);
     const target = new URL(s.config.publicUrl).origin;
     const priorTarget = s.store.metadata<string>(`botReaddressTarget:${bot.id}`);
@@ -923,6 +924,7 @@ export function createBotRoutes(s: BackendServices): Route[] {
       s.store.setMetadata(`botReaddressProfileBefore:${bot.id}`, null);
     }
     return fenced(s, c, bot.id, fence?.action ?? 'readdress', async () => {
+      await nativeIdle(s, bot);
       await readdressBot(s, bot, p);
       if (fence && ['create', 'import'].includes(fence.action)) return finishBotSetup(s, c, bot);
       const desired = s.store.metadata<DesiredProfile>(`botDesiredProfile:${bot.id}`);
@@ -937,17 +939,18 @@ export function createBotRoutes(s: BackendServices): Route[] {
     if (input.skillIds) checkSkills(s, p, input.skillIds); if (input.referenceAttachmentIds) checkReferences(s, p, input.referenceAttachmentIds); if (input.avatar) checkAvatar(s, p, input.avatar);
     const { clientNonce: _nonce, revision: _revision, ...changes } = input;
     const changed = s.update(bot, changes); requireMethods(s, ['profiles.update', 'profiles.sync']);
-    return fenced(s, c, bot.id, 'update', async () => {
+    const completed = await fenced(s, c, bot.id, 'update', async () => {
       if (input.skillIds) await provisionBotSkills(s, p, changed, changed.machineId);
       await writeProfile(s, p, changed);
       saveBot(s, changed);
       if (input.name !== undefined) await s.addressedAgents?.registerBot(bot.id);
-      if (input.job !== undefined || input.instructions !== undefined) recordPreferenceChange(s, p, bot, changed, { ...(input.job !== undefined ? { job: input.job } : {}), ...(input.instructions !== undefined ? { instructions: input.instructions } : {}) }, 'Bot settings updated');
-      if (input.voice !== undefined) recordPreferenceChange(s, p, bot, changed, { voice: input.voice }, 'Bot settings updated');
-      if (input.language !== undefined) recordPreferenceChange(s, p, bot, changed, { language: input.language }, 'Bot settings updated');
       s.audit(p, 'bot.update', bot.id, 'succeeded');
       return projected(s, p, changed);
     });
+    if (input.job !== undefined || input.instructions !== undefined) recordPreferenceChange(s, p, bot, completed, { ...(input.job !== undefined ? { job: input.job } : {}), ...(input.instructions !== undefined ? { instructions: input.instructions } : {}) }, 'Bot settings updated');
+    if (input.voice !== undefined) recordPreferenceChange(s, p, bot, completed, { voice: input.voice }, 'Bot settings updated');
+    if (input.language !== undefined) recordPreferenceChange(s, p, bot, completed, { language: input.language }, 'Bot settings updated');
+    return completed;
   });
   add('PATCH', '/bots/:id/sidebar', 200, async c => {
     const p = user(c), input = parse(sidebar, c.body), bot = visible(s, p, pathId(c)); s.mutations.checkRevision(bot, input.revision);
@@ -1219,16 +1222,20 @@ export function createBotService(s: BackendServices): { reconcile(): Promise<voi
               finalizePreferenceUndos(s, bot.id);
               s.events.emit('bot.upserted', botDto(s, s.store.require<P.Bot>('bots', bot.id)), { userIds: [bot.ownerUserId] });
               if (fence?.action === 'update' && fence.id === desired.lifecycleId && (bot.revision === desired.beforeBot.revision || bot.revision === desired.botRevision)) {
-                saveBot(s, desired.bot);
-                s.store.setMetadata(`botLifecycle:${bot.id}`, null);
+                s.store.transaction(() => {
+                  s.store.setMetadata(`botLifecycle:${bot.id}`, null);
+                  saveBot(s, s.update(desired.bot, {}));
+                });
               }
               // Every create effect is now authoritatively acknowledged: the Bot is ready without replaying any step.
               const current = s.store.require<P.Bot>('bots', bot.id);
               const room = s.store.get<P.Conversation>('conversations', current.mainConversationId);
               if (fence?.action === 'create' && fence.status !== 'running' && fence.id === desired.lifecycleId && room?.kind === 'dm' && room.botIds.includes(bot.id) && s.store.metadata(`botMcp:${bot.id}`)) {
-                saveBot(s, s.update(current, { activity: 'idle' }));
-                updateMachineBots(s, current.machineId, bot.id, true);
-                s.store.setMetadata(`botLifecycle:${bot.id}`, null);
+                s.store.transaction(() => {
+                  s.store.setMetadata(`botLifecycle:${bot.id}`, null);
+                  saveBot(s, s.update(current, { activity: 'idle' }));
+                  updateMachineBots(s, current.machineId, bot.id, true);
+                });
                 await s.addressedAgents?.registerBot(bot.id);
                 s.audit(null, 'bot.create', bot.id, 'succeeded');
               }

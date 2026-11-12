@@ -253,6 +253,10 @@ callback is checked against its owning receipt first. If a receipt remains
 unavailable or inconclusive, the Bot stays blocked with a message instead of
 blindly repeating a mutation. Older controllers need the advertised admission
 receipt method before an uncertain callback can be resolved.
+Imported skills and routines keep their reserved identities across interruption.
+A lost skill-install acknowledgement is resolved by checking that exact managed
+file's content and revision, not by creating another skill or overwriting an
+unverified file.
 
 **Delete** is also available for an unfinished Bot. If deletion is interrupted,
 Lemon Bot checks the remaining scoped resources read-only. When the check

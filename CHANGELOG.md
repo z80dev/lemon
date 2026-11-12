@@ -51,7 +51,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   their callback/tool address after `LEMON_BOT_PUBLIC_URL` changes, without
   replacing their identity or conversation. Rejected callback origins name the
   controller allowlist to fix; interrupted deletions offer a receipt-checked
-  Delete action again.
+  Delete action again. Recovery actions survive sync/overview refreshes, imported
+  resources retain their owning reservations, and address migration refreshes
+  the matching tool permissions under one exclusive lifecycle owner.
 - The Tern palette's **Focus existing session** finds Lemon panes by program,
   not only by the old `Lemon · ` title prefix.
 - Kimi Code omp authentication fails closed at the model-request boundary,

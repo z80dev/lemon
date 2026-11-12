@@ -5,6 +5,7 @@ import { ApiError, fail } from './errors';
 import { authenticateIntegration } from '../enterprise/tokens';
 import { hasProductAccess } from '../enterprise/policy';
 import { revokeUserPairings } from './pairing';
+import { botLifecycleProjection } from './bot-lifecycle';
 export interface SessionSecret { id: string; tokenDigest: string; revoked: boolean; localConfirmedAtMs?: number }
 export const localConfirmationWindowMs = 10 * 60 * 1000;
 export function localConfirmedUntil(store: EntityStore, sessionId: string | null, now: number): number | null {
@@ -98,6 +99,7 @@ export function createAccessService(services: BackendServices, hooks: Revocation
       const run = store.get<P.Run>('runs', runId);
       return run !== null && canRead(principal, 'runs', run);
     });
+    const lifecycle = botLifecycleProjection(services, result);
     return {
       id: result.id, revision: result.revision, createdAtMs: result.createdAtMs, updatedAtMs: result.updatedAtMs,
       ownerUserId: result.ownerUserId, machineId: result.machineId, profileId: result.profileId,
@@ -105,6 +107,7 @@ export function createAccessService(services: BackendServices, hooks: Revocation
       avatar: result.avatar, voice: result.voice, language: result.language,
       skillIds: result.skillIds, referenceAttachmentIds: result.referenceAttachmentIds, mainConversationId: result.mainConversationId,
       activity: result.activity, activeRunIds, sidebar: sidebar ?? { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true },
+      ...(lifecycle ? { lifecycle } : {}),
     };
   }
   function conversation(principal: Principal, conversationId: string): P.Conversation {
