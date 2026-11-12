@@ -83,6 +83,7 @@ Canonical test lanes:
              script tests, changelog guard, selector self-test, skill lint, mix lemon.quality, focused quality tests;
              [--base REF] (PR CI) limits format/credo to files changed since REF unless the diff is full scope
   clients    CI client lane: tui (typecheck, lint, bun test) and lemon-browser-node (typecheck, lint, build, vitest)
+  lemon_bot  Lemon Bot backend tests, web production build and isolated web tests
   coverage   Nightly lane: ExUnit excluding integration with --cover (per-app coverage thresholds)
   eval-fast  Small deterministic eval harness run: mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}
   live-eval  Opt-in provider-backed eval run: mix lemon.eval --live-model --iterations ${LEMON_EVAL_ITERATIONS:-3}
@@ -296,6 +297,15 @@ run_clients() {
   (cd clients/lemon-browser-node && npm run typecheck && npm run lint && npm run build && npm test)
 }
 
+run_lemon_bot() {
+  ensure_repo_root
+  scrub_live_credentials
+  run_bun_install_if_needed products/lemon_bot/backend
+  (cd products/lemon_bot/backend && bun test)
+  run_bun_install_if_needed products/lemon_bot/web
+  (cd products/lemon_bot/web && bun run build && bun run test)
+}
+
 run_eval_fast() {
   ensure_repo_root
   setup_test_env
@@ -371,7 +381,7 @@ for path in json.load(open(sys.argv[1]))[sys.argv[2]]:
 run_changed() {
   ensure_repo_root
   setup_test_env
-  local base="origin/main" focused=0 narrow=() arg scope clients docs selection
+  local base="origin/main" focused=0 narrow=() arg scope clients docs lemon_bot selection
   local mix_args=() paths=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -389,9 +399,9 @@ run_changed() {
   done
   selection="$(mktemp "$LEMON_TEST_TMPDIR/changed.XXXXXX")"
   scripts/changed_tests --base "$base" --focused ${narrow[@]+"${narrow[@]}"} --format json >"$selection"
-  read -r scope clients docs < <(python3 -c 'import json, sys
+  read -r scope clients docs lemon_bot < <(python3 -c 'import json, sys
 s = json.load(open(sys.argv[1]))
-print(s["scope"], str(s["lanes"]["clients"]).lower(), str(s["lanes"]["docs"]).lower())
+print(s["scope"], str(s["lanes"]["clients"]).lower(), str(s["lanes"]["docs"]).lower(), str(s["lanes"]["lemon_bot"]).lower())
 ' "$selection")
   if [ "$scope" = "full" ] || python3 -c 'import json, sys
 sys.exit(0 if "lemon_control_plane" in json.load(open(sys.argv[1]))["apps"] else 1)' "$selection"; then
@@ -425,6 +435,9 @@ for reason in s["reasons"]:
   fi
   if [ "$clients" = "true" ]; then
     run_clients
+  fi
+  if [ "$lemon_bot" = "true" ]; then
+    run_lemon_bot
   fi
   if [ "$docs" = "true" ]; then
     scripts/verify_docs_site
@@ -509,6 +522,7 @@ case "$LANE" in
   premerge) run_premerge "$@" ;;
   quality) run_quality "$@" ;;
   clients) run_clients "$@" ;;
+  lemon_bot) run_lemon_bot "$@" ;;
   coverage) run_coverage "$@" ;;
   eval-fast) run_eval_fast "$@" ;;
   live-eval) run_live_eval "$@" ;;

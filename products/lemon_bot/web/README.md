@@ -183,6 +183,13 @@ bun run --cwd products/lemon_bot/sdk/ts check
 bun run --cwd products/lemon_bot/sdk/ts test
 bun run --cwd products/lemon_bot/web check
 bun run --cwd products/lemon_bot/web build
+bun run --cwd products/lemon_bot/web test
 ```
 
 The integrating owner also exercises the connected Safari UI against the real backend, QR scan/claim/approve/completion and device/session revocation. Static build success alone does not demonstrate phone reachability or pairing.
+
+Use `bun run test` for the web suite, not a shared-process `bun test`: module
+mocks and cached imports survive Bun's mock restoration. The script discovers
+all `test/**/*.test.ts(x)` files and gives each its own process and DOM globals,
+stopping on failure. A single file can still run with `bun test ./test/<name>.test.tsx`.
+The repo/CI lane is `scripts/test lemon_bot`; see [testing](../../../docs/testing.md).

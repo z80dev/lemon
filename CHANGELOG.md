@@ -16,6 +16,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Lemon Bot backend tests and the web build/tests now gate CI and run in the
+  changed-file/premerge lane. Web tests run in separate processes so module
+  mocks cannot leak between suites.
 - **Tern media previews.** In a Tern pane, a whole-file `read` of an image,
   SVG, PDF, audio/video file or 3D model, and a saved browser screenshot, shows
   the file in its tool card through Tern's media viewer, as omp's does. The

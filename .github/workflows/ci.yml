@@ -10,6 +10,7 @@ name: CI
 #   dialyzer     full advisory run + allowlist gate (scripts/dialyzer_gate.sh)
 #   install      scripts/verify_source_install + scripts/verify_install_script
 #   clients      scripts/test clients (TUI + lemon-browser-node)
+#   lemon_bot    scripts/test lemon_bot (backend tests + web build/tests)
 #   apple        Lemon Bot iOS Simulator build + share-extension tests (macOS)
 #   wasm-runtime cargo tests + WASM integration test
 #   history      pull requests only: reject unrelated Git history
@@ -71,6 +72,7 @@ jobs:
       clients: ${{ github.event_name != 'pull_request' || steps.select.outputs.clients == 'true' }}
       wasm: ${{ github.event_name != 'pull_request' || steps.select.outputs.wasm == 'true' }}
       apple: ${{ github.event_name != 'pull_request' || steps.select.outputs.apple == 'true' }}
+      lemon_bot: ${{ github.event_name != 'pull_request' || steps.select.outputs.lemon_bot == 'true' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -304,6 +306,34 @@ jobs:
       - name: scripts/test clients
         run: scripts/test clients
 
+  lemon_bot:
+    needs: changes
+    if: needs.changes.outputs.lemon_bot == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: products/lemon_bot/.bun-version
+
+      - name: Cache Bun install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-lemon-bot-bun-${{ hashFiles('products/lemon_bot/.bun-version', 'products/lemon_bot/backend/bun.lock', 'products/lemon_bot/web/bun.lock') }}
+
+      - name: scripts/test lemon_bot
+        run: scripts/test lemon_bot
+
   # The Lemon Bot Apple apps are built nowhere else before release, so an iOS
   # compile break used to ship unnoticed. Credential-free: unsigned Simulator
   # build of the app and share extension, then the share-review unit tests on
@@ -452,7 +482,7 @@ jobs:
   result:
     name: CI result
     if: always()
-    needs: [changes, check, test, dialyzer, install, clients, apple, wasm-runtime, history]
+    needs: [changes, check, test, dialyzer, install, clients, lemon_bot, apple, wasm-runtime, history]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
