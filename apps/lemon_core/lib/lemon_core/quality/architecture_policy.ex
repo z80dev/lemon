@@ -48,6 +48,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_core,
       :lemon_lsp,
       :lemon_media,
+      :lemon_mcp,
       :lemon_memory,
       :lemon_omp,
       :lemon_router,
