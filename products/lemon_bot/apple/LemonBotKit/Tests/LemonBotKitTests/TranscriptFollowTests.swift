@@ -6,32 +6,41 @@ final class TranscriptFollowTests: XCTestCase {
         TranscriptFollow.Edge(offset: offset, contentHeight: content, bottomInset: inset, containerHeight: container)
     }
 
-    func testStreamingGrowthAndKeyboardDoNotUnpinTheReaderAtTheBottom() {
+    func testLayoutThatPushesThePinnedBottomAwayReturnsThereWithoutUnpinning() {
         var follow = TranscriptFollow()
         let bottom = edge(offset: 400, content: 1000)
         // A streamed reply grows the content past the tolerance without moving the offset.
-        follow.observe(from: bottom, to: edge(offset: 400, content: 1200))
+        XCTAssertTrue(follow.observe(from: bottom, to: edge(offset: 400, content: 1200)))
         XCTAssertFalse(follow.nearBottom)
         XCTAssertTrue(follow.shouldFollow)
         XCTAssertFalse(follow.showsJumpToLatest)
-        // The keyboard and composer add a bottom inset without moving the offset.
-        follow.observe(from: edge(offset: 400, content: 1200), to: edge(offset: 400, content: 1200, container: 300, inset: 336))
+        // The keyboard and composer add a bottom inset and shrink the container.
+        XCTAssertTrue(follow.observe(from: edge(offset: 600, content: 1200), to: edge(offset: 600, content: 1200, container: 300, inset: 336)))
         XCTAssertTrue(follow.shouldFollow)
+        // Lazy rows measured above the viewport move the offset with the limit; clamping as the inset shrinks lowers both.
+        XCTAssertFalse(follow.observe(from: edge(offset: 600, content: 1200), to: edge(offset: 560, content: 1160)))
+        XCTAssertTrue(follow.observe(from: edge(offset: 936, content: 1200, container: 300, inset: 336), to: edge(offset: 880, content: 1200, container: 300, inset: 200)))
+        XCTAssertTrue(follow.pinned)
+        // An inset change that keeps the bottom in view needs no scroll.
+        XCTAssertFalse(follow.observe(from: edge(offset: 600, content: 1200), to: edge(offset: 600, content: 1200, inset: 20)))
     }
 
     func testScrollingTowardOlderContentStopsFollowingUntilTheBottomReturns() {
         var follow = TranscriptFollow()
-        follow.observe(from: edge(offset: 400, content: 1000), to: edge(offset: 300, content: 1000))
+        XCTAssertFalse(follow.observe(from: edge(offset: 400, content: 1000), to: edge(offset: 300, content: 1000)))
         XCTAssertFalse(follow.shouldFollow)
         XCTAssertTrue(follow.showsJumpToLatest)
         // Content arriving while reading history keeps the reader where they are.
-        follow.observe(from: edge(offset: 300, content: 1000), to: edge(offset: 300, content: 1400))
+        XCTAssertFalse(follow.observe(from: edge(offset: 300, content: 1000), to: edge(offset: 300, content: 1400)))
         XCTAssertFalse(follow.shouldFollow)
         // Returning to within the tolerance of the bottom resumes following.
         follow.observe(from: edge(offset: 300, content: 1400), to: edge(offset: 780, content: 1400))
         XCTAssertTrue(follow.nearBottom)
         XCTAssertTrue(follow.shouldFollow)
         XCTAssertFalse(follow.showsJumpToLatest)
+        // Scrolling up in the same frame as a streamed token is still reading history.
+        XCTAssertFalse(follow.observe(from: edge(offset: 780, content: 1400), to: edge(offset: 700, content: 1450)))
+        XCTAssertFalse(follow.shouldFollow)
     }
 
     func testSmallDragWithinToleranceStaysPinnedButNeverScrollsDuringTheDrag() {
@@ -66,5 +75,21 @@ final class TranscriptFollowTests: XCTestCase {
         follow.observe(from: edge(offset: 800, content: 1000, inset: 400), to: reading)
         XCTAssertFalse(follow.nearBottom)
         XCTAssertFalse(follow.shouldFollow)
+    }
+
+    func testFallbackKeyboardInsetAloneReturnsAPinnedReaderToTheBottom() throws {
+        let history = TranscriptFollow.EdgeHistory()
+        XCTAssertNil(history.record(inset: 80), "No comparison before the content is measured")
+        let measured = TranscriptFollow.Edge(contentHeight: 1000, scrollBounds: CGRect(x: 0, y: 480, width: 390, height: 600))
+        let first = try XCTUnwrap(history.record(measured: measured))
+        XCTAssertEqual(first.old, first.new)
+        XCTAssertEqual(first.new.distance, 0)
+        // The keyboard raises the inset; the content measurement does not change.
+        let keyboard = try XCTUnwrap(history.record(inset: 380))
+        var follow = TranscriptFollow()
+        XCTAssertTrue(follow.observe(from: keyboard.old, to: keyboard.new))
+        XCTAssertTrue(follow.pinned)
+        history.reset()
+        XCTAssertNil(history.record(inset: 380), "A reopened transcript is never compared with the previous one")
     }
 }

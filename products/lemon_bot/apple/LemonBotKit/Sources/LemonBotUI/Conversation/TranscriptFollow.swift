@@ -3,11 +3,12 @@ import SwiftUI
 /// Whether the transcript keeps the latest message in view as content arrives.
 ///
 /// The reader follows while pinned to the bottom: on open, after an intentional send, after
-/// Jump to latest, or whenever the bottom comes back into view. Only scrolling toward older
-/// content unpins it. A growing streamed reply, a new row, or the keyboard and composer shrinking
-/// the viewport push the bottom out of view without moving the offset, so they are not mistaken
-/// for reading history. Where the system reports scroll phase (iOS 18, macOS 15), nothing scrolls
-/// programmatically while the reader drags or a fling decelerates.
+/// Jump to latest, or whenever the bottom comes back into view. Only the reader scrolling toward
+/// older content unpins it. Layout changes the scroll limit instead: a growing streamed reply, a new
+/// row, lazy rows measuring themselves, or the keyboard and composer resizing the viewport. When
+/// layout pushes the bottom away from a pinned reader, the transcript returns there. Where the system
+/// reports scroll phase (iOS 18, macOS 15), nothing scrolls programmatically while the reader drags
+/// or a fling decelerates.
 struct TranscriptFollow: Equatable {
     /// Bottom distance, in points, still treated as being at the latest message.
     static let nearBottomTolerance: CGFloat = 40
@@ -16,11 +17,14 @@ struct TranscriptFollow: Equatable {
     struct Edge: Equatable {
         /// Top of the scroll view's bounds in content coordinates; it decreases toward older content.
         var offset: CGFloat
-        /// Content still below the visible region, past the bottom inset (keyboard, composer).
-        var distance: CGFloat
+        /// Largest offset: content plus the bottom inset (keyboard, composer) minus the container.
+        /// It changes with content and viewport layout, never with scrolling.
+        var limit: CGFloat
+        /// Content still below the visible region, past the bottom inset.
+        var distance: CGFloat { limit - offset }
         init(offset: CGFloat, contentHeight: CGFloat, bottomInset: CGFloat, containerHeight: CGFloat) {
             self.offset = offset.rounded()
-            self.distance = (contentHeight + bottomInset - offset - containerHeight).rounded()
+            self.limit = (contentHeight + bottomInset - containerHeight).rounded()
         }
         @available(iOS 18, macOS 15, *)
         init(_ geometry: ScrollGeometry) {
@@ -35,15 +39,29 @@ struct TranscriptFollow: Equatable {
         /// Applies the scroll view's bottom safe-area inset, which content-side measurement cannot see.
         func covered(byBottomInset inset: CGFloat) -> Edge {
             var edge = self
-            edge.distance = (distance + inset).rounded()
+            edge.limit = (limit + inset).rounded()
             return edge
         }
     }
 
-    /// The previous content-side edge (iOS 17, macOS 14), whose geometry action reports only the new value.
+    /// iOS 17 and macOS 14: the content-side measurement and the scroll view's bottom inset arrive in
+    /// separate single-value geometry actions; this keeps the previous edge to compare against.
     /// A reference so recording every scroll frame does not invalidate the view that owns it.
     final class EdgeHistory {
-        var edge: Edge?
+        private var measured: Edge?
+        private var inset: CGFloat = 0
+
+        /// Records a measurement or bottom inset; returns the previous and current edges once content was measured.
+        func record(measured: Edge? = nil, inset: CGFloat? = nil) -> (old: Edge, new: Edge)? {
+            let old = self.measured?.covered(byBottomInset: self.inset)
+            if let measured { self.measured = measured }
+            if let inset { self.inset = inset }
+            guard let new = self.measured?.covered(byBottomInset: self.inset) else { return nil }
+            return (old ?? new, new)
+        }
+
+        /// Forgets the previous transcript's measurement; the viewport inset still applies.
+        func reset() { measured = nil }
     }
 
     private(set) var pinned = true
@@ -61,10 +79,18 @@ struct TranscriptFollow: Equatable {
     /// lands cannot pull the reader back.
     mutating func release() { pinned = false; nearBottom = false }
 
-    /// Returning to the bottom pins; only an offset moving toward older content unpins.
-    mutating func observe(from old: Edge, to new: Edge) {
+    /// Returning to the bottom pins. Only the reader moving toward older content unpins: the offset
+    /// decreases and the bottom gets farther away. Layout moving the offset with the limit (lazy rows
+    /// measured above, clamping as content shrinks) or growing the limit (content, keyboard, composer)
+    /// is not reading history.
+    ///
+    /// Returns whether layout pushed the bottom away from a pinned reader, who should be returned there.
+    @discardableResult
+    mutating func observe(from old: Edge, to new: Edge) -> Bool {
         nearBottom = new.distance <= Self.nearBottomTolerance
-        if nearBottom { pinned = true } else if new.offset < old.offset { pinned = false }
+        if nearBottom { pinned = true }
+        else if new.offset < old.offset && new.distance > old.distance { pinned = false }
+        return new.limit != old.limit && pinned && !nearBottom && !userScrolling
     }
 
     /// iOS 18 and macOS 15 scroll phase: the reader is touching, dragging or flinging the transcript.

@@ -27,10 +27,8 @@ public struct ConversationView: View {
     @State private var unreadFromSeq: Int?
     @State private var following = TranscriptFollow()
     @State private var keepEntryID: ID?
-    /// iOS 17 and macOS 14: the transcript's bottom safe-area inset (keyboard, composer), which content measurement cannot see.
-    @State private var scrollBottomInset: CGFloat = 0
-    /// iOS 17 and macOS 14: the last measured edge, held by reference so per-frame measurement never redraws the conversation.
-    @State private var lastEdge = TranscriptFollow.EdgeHistory()
+    /// iOS 17 and macOS 14: the previous measured edge and bottom inset, held by reference so per-frame measurement never redraws the conversation.
+    @State private var edgeHistory = TranscriptFollow.EdgeHistory()
     @State private var hasNewBelow = false
     @State private var settled = false
     @State private var toast: StatusToast?
@@ -159,7 +157,7 @@ public struct ConversationView: View {
         let last = entries.last
         let tail = TailSignature(rowID: rows.last?.id, revision: last?.revision ?? 0, textCount: last?.text?.count ?? 0, typing: typing)
         ScrollViewReader { proxy in
-            trackedScrollView {
+            trackedScrollView(proxy) {
                 LazyVStack(spacing: 0) {
                     if olderCursor != nil {
                         Button("Load older messages") {
@@ -194,9 +192,7 @@ public struct ConversationView: View {
             }
             #if os(iOS)
             .scrollDismissesKeyboard(.interactively)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height - $0.safeAreaInsets.top - $0.safeAreaInsets.bottom } action: { _ in
-                follow(proxy, animated: false, newContent: false)
-            }
+            // Keyboard and composer resizing reach following through the scroll view's own geometry (`trackedScrollView`).
             #endif
             .overlay(alignment: .bottom) {
                 if following.showsJumpToLatest && !rows.isEmpty {
@@ -254,29 +250,35 @@ public struct ConversationView: View {
         }
     }
 
-    /// Scroll geometry tells reading history apart from content growth and keyboard resizing. iOS 18 and macOS 15 report it,
-    /// with scroll phase, directly; earlier systems measure the content against the scroll view's bounds and bottom inset.
-    @ViewBuilder private func trackedScrollView<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+    /// Scroll geometry tells reading history apart from layout: content growth, lazy row measurement and keyboard or composer
+    /// resizing. iOS 18 and macOS 15 report it, with scroll phase, directly; earlier systems measure the content against the
+    /// scroll view's bounds and add its bottom inset. A pinned reader whom layout left above the latest message returns there.
+    @ViewBuilder private func trackedScrollView<Content: View>(_ reader: ScrollViewProxy, @ViewBuilder _ content: () -> Content) -> some View {
         if #available(iOS 18, macOS 15, *) {
             ScrollView { content() }
                 .onScrollGeometryChange(for: TranscriptFollow.Edge.self) { TranscriptFollow.Edge($0) } action: { old, new in
-                    updateFollowing { $0.observe(from: old, to: new) }
+                    observeEdge(from: old, to: new, reader)
                 }
                 .onScrollPhaseChange { _, phase in updateFollowing { $0.observeScrolling(phase.isUserDriven) } }
         } else {
             ScrollView {
                 // Old/new geometry actions need iOS 18 and macOS 15; the single-value action is back-deployed, so keep the previous edge here.
-                content().onGeometryChange(for: TranscriptFollow.Edge.self) { proxy in
-                    TranscriptFollow.Edge(contentHeight: proxy.size.height, scrollBounds: proxy.bounds(of: .scrollView) ?? CGRect(origin: .zero, size: proxy.size))
+                content().onGeometryChange(for: TranscriptFollow.Edge.self) { geometry in
+                    TranscriptFollow.Edge(contentHeight: geometry.size.height, scrollBounds: geometry.bounds(of: .scrollView) ?? CGRect(origin: .zero, size: geometry.size))
                 } action: { measured in
-                    let edge = measured.covered(byBottomInset: scrollBottomInset)
-                    let previous = lastEdge.edge ?? edge
-                    lastEdge.edge = edge
-                    updateFollowing { $0.observe(from: previous, to: edge) }
+                    if let change = edgeHistory.record(measured: measured) { observeEdge(from: change.old, to: change.new, reader) }
                 }
             }
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { scrollBottomInset = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { inset in
+                if let change = edgeHistory.record(inset: inset) { observeEdge(from: change.old, to: change.new, reader) }
+            }
         }
+    }
+
+    private func observeEdge(from old: TranscriptFollow.Edge, to new: TranscriptFollow.Edge, _ reader: ScrollViewProxy) {
+        var returnToBottom = false
+        updateFollowing { returnToBottom = $0.observe(from: old, to: new) }
+        if returnToBottom { follow(reader, animated: false, newContent: false) }
     }
 
     /// Writes follow state only when it changes; geometry reports arrive every scroll frame.
@@ -531,7 +533,7 @@ public struct ConversationView: View {
     private func open() async {
         settled = false; hasNewBelow = false; renderedReadSeq = 0; readTarget = 0; loadedRuns = []; runsError = nil
         updateFollowing { $0.pin() }
-        lastEdge.edge = nil
+        edgeHistory.reset()
         if let conversation, conversation.unreadCount > 0 { unreadFromSeq = conversation.lastReadSeq + 1 } else { unreadFromSeq = nil }
         // Explicit pins avoid bottom-anchor feedback as the lazy stack refines its measured height.
         // Pin cached content before loading, including the reconnect-required early return.
