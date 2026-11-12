@@ -1,8 +1,5 @@
-diff --git a/node_modules/@oh-my-pi/pi-tui/.bun-tag-a30b6e59e9e4f660 b/.bun-tag-a30b6e59e9e4f660
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/src/render/render-utils.ts b/src/render/render-utils.ts
-index c47b39ef83bee9fed3b37a9fa1e7242b4af55757..dcb99b1839616e391c89a71a40dc27e8f7fa4c46 100644
+index 81761c1b5dbeffd932547f8da3d85b3d47818f61..c4273380aad190c33735a46f18872c77c0afa9f9 100644
 --- a/src/render/render-utils.ts
 +++ b/src/render/render-utils.ts
 @@ -7,7 +7,7 @@
@@ -11,14 +8,14 @@ index c47b39ef83bee9fed3b37a9fa1e7242b4af55757..dcb99b1839616e391c89a71a40dc27e8
  import * as path from "node:path";
 -import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 +import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
- import type { Ellipsis } from "@oh-my-pi/pi-natives";
+ import { Ellipsis } from "@oh-my-pi/pi-natives";
  import { expandWindowsLongPath, getWindowsShortPath } from "@oh-my-pi/pi-natives/path";
  import { pluralize, sanitizeText } from "@oh-my-pi/pi-utils";
 diff --git a/src/terminal.ts b/src/terminal.ts
-index db01987077f917f92e247b2da754b508cffcf1c6..3b8b633ec6c9bd9da06981fca3f9b5aa749b21ee 100644
+index 2c228d7edb75a419a0e37c88dfd9b7411a1792f6..832f27ceecc4157df92c629b0d0805bad0fcf4ec 100644
 --- a/src/terminal.ts
 +++ b/src/terminal.ts
-@@ -295,8 +295,8 @@ export class StdoutStallWatchdog {
+@@ -350,8 +350,8 @@ export class StdoutStallWatchdog {
   * Minimal terminal interface for TUI
   */
  
@@ -29,7 +26,7 @@ index db01987077f917f92e247b2da754b508cffcf1c6..3b8b633ec6c9bd9da06981fca3f9b5aa
  // Whether the alternate screen buffer is currently active (mirrors the TUI's
  // overlay enter/leave writes). Consulted by emergencyTerminalRestore: DECRST
  // 1049 must never be written blindly, because Windows' shared VT dispatcher
-@@ -325,6 +325,38 @@ const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
+@@ -380,6 +380,38 @@ const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
  /** UTF-8 codepage id for SetConsoleCP/SetConsoleOutputCP. */
  const CP_UTF8 = 65001;
  
@@ -68,7 +65,7 @@ index db01987077f917f92e247b2da754b508cffcf1c6..3b8b633ec6c9bd9da06981fca3f9b5aa
  /**
   * Lazily-initialized closure re-asserting the UTF-8 console codepage, or
   * `null` when unavailable (non-win32, FFI failure, console detached).
-@@ -414,9 +446,9 @@ export function emergencyTerminalRestore(): void {
+@@ -469,9 +501,9 @@ export function emergencyTerminalRestore(): void {
  				terminal.write(`${keyboardExit}\x1b[?1049l`);
  				altScreenActive = false;
  			}
@@ -80,24 +77,24 @@ index db01987077f917f92e247b2da754b508cffcf1c6..3b8b633ec6c9bd9da06981fca3f9b5aa
  			// Blind restore only if we know a terminal was started but lost track of it
  			// This avoids writing escape sequences for non-TUI commands (grep, commit, etc.)
  			process.stdout.write(
-@@ -776,6 +808,7 @@ export interface ProcessTerminalOptions {
+@@ -855,6 +887,7 @@ export interface ProcessTerminalOptions {
   */
  export class ProcessTerminal implements Terminal {
  	#wasRaw = false;
 +	#restoreInputMode: (() => void) | undefined;
- 	#inputHandler?: (data: string) => void;
- 	#resizeHandler?: () => void;
- 	/** True between a `deferInput` start() and enableInput(). */
-@@ -1048,7 +1081,7 @@ export class ProcessTerminal implements Terminal {
- 		// Own stdout: out-of-band writers route through this terminal, and the
- 		// emergency restore finds it on crash.
+ 	// Set when raw input attaches over a cooked tty: the next read starts with
+ 	// whatever the kernel line-buffered meanwhile. See restoreCookedEnter.
+ 	#cookedTypeahead = false;
+@@ -1150,7 +1183,7 @@ export class ProcessTerminal implements Terminal {
  		setActiveTerminal(this);
+ 		// RGB belongs to this ownership session, including deferred-input prepaint.
+ 		setTerminalBackgroundColor(undefined);
 -		terminalEverStarted = true;
 +		terminalNeedsRestore = true;
  		// Own the blocking write(2) on a pump thread (unix TTYs only). A stale
  		// prebuilt natives module without the export falls back to direct writes.
  		// Test suites spy on `process.stdout.write` with a faked isTTY, so the
-@@ -1114,7 +1147,9 @@ export class ProcessTerminal implements Terminal {
+@@ -1216,7 +1249,9 @@ export class ProcessTerminal implements Terminal {
  		this.#wasRaw = process.stdin.isRaw || false;
  		if (process.stdin.setRawMode) {
  			try {
@@ -108,7 +105,7 @@ index db01987077f917f92e247b2da754b508cffcf1c6..3b8b633ec6c9bd9da06981fca3f9b5aa
  			} catch (err) {
  				this.#markTerminalDisconnected("stdin raw mode setup failed", err);
  				return;
-@@ -2365,7 +2400,14 @@ export class ProcessTerminal implements Terminal {
+@@ -2548,7 +2583,14 @@ export class ProcessTerminal implements Terminal {
  		// live terminal the failure still surfaces - swallowing it would silently
  		// leave stdin in raw mode.
  		try {
@@ -124,7 +121,7 @@ index db01987077f917f92e247b2da754b508cffcf1c6..3b8b633ec6c9bd9da06981fca3f9b5aa
  		} catch (err) {
  			if (!this.#dead) throw err;
  		}
-@@ -2374,6 +2416,7 @@ export class ProcessTerminal implements Terminal {
+@@ -2557,6 +2599,7 @@ export class ProcessTerminal implements Terminal {
  		// After stop() the terminal is shared with other writers; visibility
  		// tracking is only meaningful while this instance owns the TTY.
  		this.#cursorVisible = undefined;

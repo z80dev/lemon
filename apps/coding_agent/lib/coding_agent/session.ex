@@ -1752,6 +1752,7 @@ defmodule CodingAgent.Session do
   def terminate(reason, state) do
     _ = WasmBridge.cancel_host_calls(state, :session_unavailable)
     _ = CompactionManager.cancel_compaction_tasks(state, :session_terminated)
+    close_browser_session(state.tool_opts || [])
 
     # Approvals this session still has pending can never be used once it is
     # gone: expire them (denied) now instead of leaving them answerable.
@@ -1796,6 +1797,17 @@ defmodule CodingAgent.Session do
   # ============================================================================
   # Private Functions
   # ============================================================================
+  # Browser identity belongs to the live invocation, never to resumed resources.
+  defp close_browser_session(opts) do
+    if is_integer(Keyword.get(opts, :tern_pane)) do
+      module = Module.concat(["LemonBrowser", "TernSession"])
+
+      if Code.ensure_loaded?(module) and function_exported?(module, :close, 1) do
+        apply(module, :close, [opts])
+      end
+    end
+  end
+
   defp persist_workspace_read_fence(state) do
     entry_type = WorkspaceReads.fence_entry_type()
 

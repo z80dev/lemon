@@ -10,6 +10,8 @@ defmodule LemonBrowser.Application do
       {DynamicSupervisor, strategy: :one_for_one, name: LemonBrowser.CloudSessionSupervisor},
       {Registry, keys: :unique, name: LemonBrowser.CamofoxSessionRegistry},
       {DynamicSupervisor, strategy: :one_for_one, name: LemonBrowser.CamofoxSessionSupervisor},
+      {Registry, keys: :unique, name: LemonBrowser.TernSessionRegistry},
+      {DynamicSupervisor, strategy: :one_for_one, name: LemonBrowser.TernSessionSupervisor},
       LemonBrowser.HybridRouter,
       LemonBrowser.LocalServer,
       LemonBrowser.ControllerBroker

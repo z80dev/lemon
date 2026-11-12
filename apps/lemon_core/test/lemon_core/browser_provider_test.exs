@@ -10,8 +10,14 @@ defmodule LemonCore.BrowserProviderTest do
   setup do
     keys = [:browser_provider_probe, :browser_provider_lcu_probe]
     previous = Map.new(keys, &{&1, Application.fetch_env(:lemon_core, &1)})
+    tern_env = System.get_env("LEMON_BROWSER_TERN")
+    System.delete_env("LEMON_BROWSER_TERN")
 
     on_exit(fn ->
+      if tern_env,
+        do: System.put_env("LEMON_BROWSER_TERN", tern_env),
+        else: System.delete_env("LEMON_BROWSER_TERN")
+
       Enum.each(previous, fn
         {key, {:ok, value}} -> Application.put_env(:lemon_core, key, value)
         {key, :error} -> Application.delete_env(:lemon_core, key)
@@ -98,6 +104,27 @@ defmodule LemonCore.BrowserProviderTest do
       refute_receive {:checked, _}, 0
       refute result.reason =~ "private details"
     end
+  end
+
+  test "auto prefers Tern only with a pane binding and honors opt-out" do
+    callback = fn _ -> {:ok, "available"} end
+    common = [probe: callback, lcu_probe: fn -> {:ok, "available"} end]
+
+    assert %{provider: "tern"} =
+             BrowserProvider.resolve(common ++ [tern_pane: 42, config: %{provider: "auto"}])
+
+    assert %{provider: "lcu"} =
+             BrowserProvider.resolve(common ++ [config: %{provider: "auto"}])
+
+    assert %{provider: "lcu"} =
+             BrowserProvider.resolve(
+               common ++ [tern_pane: 42, config: %{provider: "auto", tern: false}]
+             )
+
+    assert %{provider: nil} =
+             BrowserProvider.resolve(
+               common ++ [tern_pane: 42, config: %{provider: "tern", tern: false}]
+             )
   end
 
   test "provider option pins requests even when configured auto or a different provider" do

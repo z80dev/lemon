@@ -29,7 +29,7 @@ defmodule LemonControlPlane.EventProjection do
   @detail_fields ~w(type status exit_code exitCode truncated timed_out timedOut background
     process_id processId run_id runId session_id sessionId session_key sessionKey
     action_id actionId tool_call_id toolCallId tool_name toolName name text output
-    stdout stderr diff oldText newText old_text new_text path uri first_changed_line
+    stdout stderr diff oldText newText old_text new_text path media_path uri first_changed_line
     firstChangedLine bytes_written bytesWritten formatted acp_client acpClient
     line_count lineCount count total duration_ms durationMs usage cost diagnostics
     content results locations error_type errorType message reason retryable

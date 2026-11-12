@@ -17,7 +17,15 @@ const profile = {
 	availability: "online",
 };
 
-beforeEach(() => initTheme({ colorLevel: 3 }));
+beforeEach(() => {
+	const pane = process.env.TERN_PANE;
+	delete process.env.TERN_PANE;
+	teardown.push(() => {
+		if (pane === undefined) delete process.env.TERN_PANE;
+		else process.env.TERN_PANE = pane;
+	});
+	initTheme({ colorLevel: 3 });
+});
 
 afterEach(() => {
 	while (teardown.length > 0) teardown.pop()?.();
@@ -104,6 +112,20 @@ describe("profile chat routing in the real TUI shell", () => {
 			sessionKey: "agent:ordinary:main",
 			prompt: "ordinary agent prompt",
 		});
+	});
+
+	test("ordinary profile lookup fallback retains the validated Tern pane", async () => {
+		const previous = process.env.TERN_PANE;
+		teardown.push(() => {
+			if (previous === undefined) delete process.env.TERN_PANE;
+			else process.env.TERN_PANE = previous;
+		});
+		process.env.TERN_PANE = "00042";
+		const { app, server } = await boot();
+		server.failWith("profiles.get", "NOT_FOUND", "Profile not found");
+		await app.sessions.switch("agent:ordinary:main");
+		await app.submit("ordinary Tern prompt");
+		expect(server.requestsFor("chat.send")[0]?.params).toMatchObject({ ternPane: 42 });
 	});
 
 	test("profile deletion between preflight and chat fails closed", async () => {

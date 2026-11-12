@@ -371,6 +371,86 @@ defmodule CodingAgent.Tools.ReadTest do
       assert image.mime_type == "image/png"
       assert Base.decode64!(image.data) == png_data
       assert details.size == byte_size(png_data)
+      assert details.media_path == path
+    end
+  end
+
+  describe "execute/6 - display-only media paths" do
+    test "whole model reads and :raw expose the absolute source without changing content", %{
+      tmp_dir: cwd
+    } do
+      for name <- ~w(scene.obj scene.GLB.GZ scene.3ds.gz image.svg) do
+        path = Path.join(cwd, name)
+        File.write!(path, "first\nsecond\nthird\n")
+
+        assert %AgentToolResult{details: %{media_path: ^path}, content: content} =
+                 Read.execute("whole", %{"path" => name}, nil, nil, cwd, [])
+
+        assert Enum.any?(content, &match?(%TextContent{}, &1))
+
+        assert %AgentToolResult{
+                 details: %{media_path: ^path},
+                 content: [%TextContent{text: text}]
+               } =
+                 Read.execute("raw", %{"path" => name <> ":raw"}, nil, nil, cwd, [])
+
+        assert text == "first\nsecond\nthird"
+      end
+    end
+
+    test "explicit source windows never advertise the whole media file", %{tmp_dir: cwd} do
+      path = Path.join(cwd, "drawing.svg")
+      File.write!(path, "first\nsecond\nthird\n")
+
+      for selection <- [
+            %{"offset" => 1},
+            %{"limit" => 3},
+            %{"page" => 1},
+            %{"page_limit" => 1},
+            %{"cell" => 1},
+            %{"cell_limit" => 1},
+            %{"path" => "drawing.svg:1"},
+            %{"path" => "drawing.svg:1-2:raw"},
+            %{"path" => "drawing.svg:1,3"},
+            %{"path" => "drawing.svg:-1"}
+          ] do
+        params = Map.merge(%{"path" => "drawing.svg"}, selection)
+
+        assert %AgentToolResult{details: details} =
+                 Read.execute("partial", params, nil, nil, cwd, [])
+
+        refute Map.has_key?(details, :media_path), inspect(selection)
+      end
+    end
+
+    test "sidecars, unsupported gzip types, dotfiles and directories are not media", %{
+      tmp_dir: cwd
+    } do
+      for name <- ~w(notes.txt scene.mtl image.png.gz scene.usdz.gz .png) do
+        File.write!(Path.join(cwd, name), "ordinary text")
+
+        assert %AgentToolResult{details: details} =
+                 Read.execute("plain", %{"path" => name}, nil, nil, cwd, [])
+
+        refute Map.has_key?(details, :media_path), name
+      end
+
+      File.mkdir!(Path.join(cwd, "folder.svg"))
+
+      assert %AgentToolResult{details: details} =
+               Read.execute("dir", %{"path" => "folder.svg"}, nil, nil, cwd, [])
+
+      refute Map.has_key?(details, :media_path)
+    end
+
+    test "failed media reads retain their errors instead of a display receipt", %{tmp_dir: cwd} do
+      assert {:error, _} =
+               Read.execute("missing", %{"path" => "missing.png"}, nil, nil, cwd, [])
+
+      File.write!(Path.join(cwd, "broken.glb"), <<0, 255>>)
+
+      assert {:error, _} =
+               Read.execute("binary", %{"path" => "broken.glb"}, nil, nil, cwd, [])
     end
   end
 

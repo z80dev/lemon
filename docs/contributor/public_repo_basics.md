@@ -9,7 +9,7 @@ working in this repository. The authoritative contributor guide is the root
 
 - Elixir 1.20.5+ and Erlang/OTP 29.1.2+ (pinned in `.tool-versions`)
 - A C toolchain (`cc`/`gcc` + `make`); the SQLite store compiles a native NIF
-- Bun 1.3.14+ (for `clients/tui`)
+- Bun 1.4.4+ (for `clients/tui`)
 - Node.js 24 LTS+ (for `clients/lemon-browser-node` and the `docs/` site)
 - At least one configured provider for manual runs; `./bin/lemon setup` writes
   `~/.lemon/config.toml` and stores credentials in the encrypted secret store

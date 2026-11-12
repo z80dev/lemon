@@ -15,11 +15,11 @@ defmodule LemonBrowser do
       when is_binary(method) and is_map(args) and is_integer(timeout_ms) do
     with :ok <- authorize_method(method, args, opts),
          {:ok, backend, opts} <- resolve_backend(opts),
-         true <- backend_available?(backend, opts) do
+         true <- backend == LemonBrowser.Backends.Tern or backend_available?(backend, opts) do
       # Remote sessions and attached browsers are not contained by a local
       # helper's group. Errors after dispatch cannot prove their termination.
       LemonCore.NativeProcess.unsupported!()
-      backend.request(method, args, timeout_ms, opts)
+      dispatch(backend, method, args, timeout_ms, opts)
     else
       false -> {:error, :browser_backend_unavailable}
       {:error, _reason} = error -> error
@@ -49,7 +49,9 @@ defmodule LemonBrowser do
   @spec status(keyword()) :: map()
   def status(opts \\ []) do
     resolution =
-      Keyword.get_lazy(opts, :provider_resolution, &LemonCore.BrowserProvider.resolve/0)
+      Keyword.get_lazy(opts, :provider_resolution, fn ->
+        LemonCore.BrowserProvider.resolve(opts)
+      end)
 
     status =
       case resolve_backend(Keyword.put(opts, :provider_resolution, resolution)) do
@@ -69,7 +71,9 @@ defmodule LemonBrowser do
     case Keyword.get(opts, :backend) do
       nil ->
         resolution =
-          Keyword.get_lazy(opts, :provider_resolution, &LemonCore.BrowserProvider.resolve/0)
+          Keyword.get_lazy(opts, :provider_resolution, fn ->
+            LemonCore.BrowserProvider.resolve(opts)
+          end)
 
         case resolution.provider do
           nil ->
@@ -80,7 +84,13 @@ defmodule LemonBrowser do
 
           provider ->
             id = if provider in ["local", "relay", "cdp"], do: "local", else: provider
-            fetch_backend(id, Keyword.put(opts, :browser_provider, provider))
+
+            opts =
+              opts
+              |> Keyword.put(:browser_provider, provider)
+              |> Keyword.put(:provider_resolution, resolution)
+
+            fetch_backend(id, opts)
         end
 
       id ->
@@ -92,6 +102,67 @@ defmodule LemonBrowser do
     case BackendRegistry.fetch(id) do
       {:ok, backend} -> {:ok, backend, opts}
       :error -> {:error, {:unknown_browser_backend, id}}
+    end
+  end
+
+  defp dispatch(LemonBrowser.Backends.Tern = backend, method, args, timeout, opts) do
+    case LemonBrowser.TernSession.fallback(opts) do
+      nil ->
+        case backend.request(method, args, timeout, opts) do
+          {:error, {kind, _}} = error when kind in [:no_window, :unsupported, :connect] ->
+            if auto_tern?(opts) and method in ["browser.navigate", "browser.tabOpen"] and
+                 is_nil(args["targetId"]) and not LemonBrowser.TernSession.opened?(opts) do
+              fallback(method, args, timeout, opts)
+            else
+              error
+            end
+
+          result ->
+            result
+        end
+
+      resolution ->
+        fallback_request(method, args, timeout, opts, resolution)
+    end
+  end
+
+  defp dispatch(backend, method, args, timeout, opts),
+    do: backend.request(method, args, timeout, opts)
+
+  defp auto_tern?(opts) do
+    resolution = Keyword.get(opts, :provider_resolution, %{})
+    resolution[:requested] == "auto" and not Keyword.has_key?(opts, :backend)
+  end
+
+  defp fallback(method, args, timeout, opts) do
+    # LCU is a different tool surface, not a backend for browser_* calls.
+    resolution =
+      opts
+      |> Keyword.drop([:provider_resolution, :backend])
+      |> Keyword.put(:provider, "auto")
+      |> Keyword.put(:exclude, ["tern", "lcu"])
+      |> LemonCore.BrowserProvider.resolve()
+
+    if resolution.provider do
+      with :ok <- LemonBrowser.TernSession.put_fallback(opts, resolution) do
+        fallback_request(method, args, timeout, opts, resolution)
+      end
+    else
+      {:error, resolution.reason}
+    end
+  end
+
+  defp fallback_request(method, args, timeout, opts, resolution) do
+    opts = Keyword.put(opts, :provider_resolution, resolution)
+
+    with {:ok, backend, opts} <- resolve_backend(opts),
+         true <- backend_available?(backend, opts),
+         {:ok, result} <- backend.request(method, args, timeout, opts) do
+      note = "Tern could not open a browser in this window; using #{resolution.provider} instead."
+      {:ok, if(is_map(result), do: Map.put(result, "providerNote", note), else: result)}
+    else
+      false -> {:error, :browser_backend_unavailable}
+      error -> error
     end
   end
 

@@ -1,24 +1,32 @@
 defmodule LemonCli.TernCommand do
   @moduledoc """
   Installs Lemon's Tern palette plugin and registers the invoking launcher as a
-  custom stdio ACP agent. Unrelated preferences, agents and plugin files are preserved.
+  custom stdio ACP agent. With `--agent-block`, also selects Lemon's TUI for new
+  agent blocks. Unrelated preferences, agents and plugin files are preserved.
   """
 
   @plugin_assets ["plugin.toml", "window.luau"]
   @plugin_receipt ".lemon-install.json"
 
   def run(["install" | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [config_dir: :string])
+    {opts, rest, invalid} =
+      OptionParser.parse(args, strict: [config_dir: :string, agent_block: :boolean])
 
     if rest != [] or invalid != [] do
       usage()
     else
       with {:ok, directory} <- config_directory(opts),
            {:ok, launcher} <- launcher(),
-           :ok <- install(directory, launcher) do
+           :ok <- install(directory, launcher, opts) do
         IO.puts(
           "Installed Lemon's Tern plugin and ACP agent. Run `tern plugin reload` (or restart Tern), then type `lemon` in a Tern pane or choose `Lemon: New session in split` in the palette. For Tern's native ACP chat, run `tern acp lemon`."
         )
+
+        if opts[:agent_block] do
+          IO.puts(
+            "Set Tern's agent_command to Lemon's TUI launcher for new agent blocks. Revert in Tern Settings → Agents, or remove agent_command from settings.json."
+          )
+        end
 
         0
       else
@@ -32,14 +40,16 @@ defmodule LemonCli.TernCommand do
   def run(_args), do: usage()
 
   @doc false
-  def install(directory, launcher) do
+  def install(directory, launcher, opts \\ []) do
     path = Path.join(directory, "settings.json")
 
     launcher = Path.expand(launcher)
+    command = "'" <> String.replace(launcher, "'", "'\\''") <> "' tui"
 
     with {:ok, settings} <- settings(path),
          {:ok, settings} <- register(settings, launcher),
-         {:ok, assets} <- plugin_assets(launcher),
+         {:ok, settings} <- agent_block(settings, command, Keyword.get(opts, :agent_block, false)),
+         {:ok, assets} <- plugin_assets(launcher, command),
          :ok <- plugin_destination(directory, assets),
          :ok <- File.mkdir_p(directory) do
       temporary = path <> ".lemon-" <> Integer.to_string(System.unique_integer([:positive]))
@@ -91,7 +101,17 @@ defmodule LemonCli.TernCommand do
     end
   end
 
-  defp plugin_assets(launcher) do
+  defp agent_block(settings, _command, false), do: {:ok, settings}
+
+  defp agent_block(settings, command, true) do
+    if not Map.has_key?(settings, "agent_command") or is_binary(settings["agent_command"]) do
+      {:ok, Map.put(settings, "agent_command", command)}
+    else
+      {:error, "Tern agent_command must be a string; settings were not changed."}
+    end
+  end
+
+  defp plugin_assets(launcher, command) do
     source = Application.app_dir(:lemon_cli, "priv/tern")
 
     Enum.reduce_while(@plugin_assets, {:ok, %{}}, fn name, {:ok, assets} ->
@@ -105,7 +125,6 @@ defmodule LemonCli.TernCommand do
     end)
     |> case do
       {:ok, assets} ->
-        command = "'" <> String.replace(launcher, "'", "'\\''") <> "' tui"
         config = Jason.encode!(%{"launcher" => launcher, "command" => command}, pretty: true)
         {:ok, Map.put(assets, "launcher.json", config <> "\n")}
 
@@ -261,7 +280,7 @@ defmodule LemonCli.TernCommand do
   end
 
   defp usage do
-    IO.puts(:stderr, "usage: lemon tern install [--config-dir PATH]")
+    IO.puts(:stderr, "usage: lemon tern install [--config-dir PATH] [--agent-block]")
     2
   end
 end

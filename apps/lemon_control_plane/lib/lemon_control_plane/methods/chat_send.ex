@@ -8,6 +8,9 @@ defmodule LemonControlPlane.Methods.ChatSend do
   canonical profile sessions do not accept caller workspace overrides.
   Profile chat may replace MCP attachments with `invocationMcpServers`; omission
   inherits the profile defaults, while an explicit empty list attaches none.
+  `ternPane` binds browser tools for this invocation only. It binds only from an
+  actual direct-loopback WebSocket peer; from any other peer it is ignored. Socket
+  paths remain daemon-local.
   """
 
   @behaviour LemonControlPlane.Method
@@ -24,12 +27,13 @@ defmodule LemonControlPlane.Methods.ChatSend do
   def handle(params, ctx) do
     with {:ok, run_id} <- ChatSubmission.run_id(params),
          {:ok, context_key} <- ChatSubmission.invocation_context_key(params),
-         {:ok, images} <- ImageInputs.validate(Map.get(params, "images", [])) do
-      submit(params, ctx, images, run_id, context_key)
+         {:ok, images} <- ImageInputs.validate(Map.get(params, "images", [])),
+         {:ok, tern_pane} <- tern_pane(params, ctx) do
+      submit(params, ctx, images, run_id, context_key, tern_pane)
     end
   end
 
-  defp submit(params, ctx, images, run_id, context_key) do
+  defp submit(params, ctx, images, run_id, context_key, tern_pane) do
     session_key = params["sessionKey"]
     prompt = params["prompt"] || params["message"]
     profile_id = params["profileId"]
@@ -74,6 +78,7 @@ defmodule LemonControlPlane.Methods.ChatSend do
             submit_params
             |> Map.merge(%{origin: :control_plane, images: images, queue_mode: queue_mode})
             |> Map.update(:meta, %{control_plane: true}, &Map.put(&1, :control_plane, true))
+            |> attach_tern_pane(tern_pane)
 
           with {:ok, submit_params} <-
                  ChatSubmission.attach_execution_context(submit_params, params, ctx) do
@@ -149,6 +154,28 @@ defmodule LemonControlPlane.Methods.ChatSend do
        Map.put(receipt, "summary", summary(run_id, session_key, agent_id, prompt, queue_mode))}
     end
   end
+
+  defp tern_pane(params, ctx) do
+    case Map.fetch(params, "ternPane") do
+      :error ->
+        {:ok, nil}
+
+      {:ok, pane} when is_integer(pane) and pane >= 0 and pane <= 9_007_199_254_740_991 ->
+        # A pane names a terminal on the daemon's own machine. From any other
+        # peer it binds nothing, but the prompt itself is still valid.
+        if LemonControlPlane.Auth.Authorize.loopback_address?(Map.get(ctx, :peer)),
+          do: {:ok, pane},
+          else: {:ok, nil}
+
+      {:ok, _pane} ->
+        {:error, {:invalid_request, "ternPane must be a nonnegative safe integer", nil}}
+    end
+  end
+
+  defp attach_tern_pane(request, nil), do: request
+
+  defp attach_tern_pane(request, pane),
+    do: Map.update(request, :meta, %{tern_pane: pane}, &Map.put(&1, :tern_pane, pane))
 
   defp valid_cwd?(cwd) when is_binary(cwd) and cwd != "" do
     Path.type(cwd) == :absolute and File.dir?(cwd)

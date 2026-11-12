@@ -73,7 +73,7 @@ defmodule LemonCli.CommandRegistry do
     %{
       name: "tern",
       summary: "Install Lemon's Tern palette plugin and ACP agent",
-      usage: "lemon tern install [--config-dir PATH]",
+      usage: "lemon tern install [--config-dir PATH] [--agent-block]",
       subcommands: [
         %{name: "install", summary: "Install the palette plugin and register `tern acp lemon`"}
       ],
@@ -82,7 +82,16 @@ defmodule LemonCli.CommandRegistry do
           "--config-dir PATH",
           ["--config-dir"],
           "Tern configuration directory (not a config file)"
+        ),
+        option(
+          "--agent-block",
+          ["--agent-block"],
+          "Use Lemon's TUI for new agent blocks (opt-in)"
         )
+      ],
+      details: [
+        "Without --agent-block, agent_command is unchanged.",
+        "Revert agent blocks in Tern Settings → Agents, or remove agent_command from settings.json."
       ]
     },
     %{

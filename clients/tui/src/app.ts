@@ -1454,6 +1454,14 @@ export class AppShell {
 			await this.methods.userPromptBind(sessionKey);
 		}
 		const media = images?.length ? { images } : undefined;
+		const pane = process.env.TERN_PANE;
+		const ternPane =
+			detectTerminalCapabilities().tern &&
+			pane !== undefined &&
+			/^\d+$/.test(pane) &&
+			Number.isSafeInteger(Number(pane))
+				? { ternPane: Number(pane) }
+				: undefined;
 		const requestOptions = { ...options, ...(media ? { queueIfOffline: false } : {}) };
 		const remembered = this.#profileSessions.get(sessionKey);
 		if (remembered) {
@@ -1480,6 +1488,7 @@ export class AppShell {
 					cwd: this.#cwd,
 					prompt,
 					...media,
+					...ternPane,
 					...(queueMode ? { queueMode } : {}),
 				},
 				requestOptions,
@@ -1505,6 +1514,7 @@ export class AppShell {
 						prompt,
 						cwd: this.#cwd,
 						...media,
+						...ternPane,
 						...(queueMode ? { queueMode } : {}),
 					},
 					requestOptions,

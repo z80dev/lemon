@@ -1,5 +1,5 @@
 import { node, span, stableKey } from "@oh-my-pi/pi-tui/native/describe";
-import type { NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import type { DescribeContext, NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { DEFAULT_TERMINAL_PREVIEW_LINES } from "@oh-my-pi/pi-tui/render/render-utils";
 import { fileRow } from "@oh-my-pi/pi-tui/tools/native-view";
 import type { NativeToolView } from "@oh-my-pi/pi-tui/tools/renderer";
@@ -35,8 +35,9 @@ export function nativeTool(
 	view: ToolView,
 	collapsed: boolean,
 	elapsed: number | undefined,
+	context?: DescribeContext,
 ): NativeNode {
-	const tool = nativeToolView(block, view, { expanded: !collapsed, elapsedMs: elapsed });
+	const tool = nativeToolView(block, view, { expanded: !collapsed, elapsedMs: elapsed, context });
 	return toolNode(nativeToolRole(view), view.toolName ?? view.kind, tool, {
 		state: view.state,
 		title: view.title,
@@ -109,12 +110,16 @@ export function readGroupKey(firstId: string): string {
  * strong name, quiet range, linked to the read offset). Open, each read's
  * numbered content follows as a section.
  */
-export function nativeReadGroup(reads: readonly GroupedRead[], expanded: boolean): NativeNode {
+export function nativeReadGroup(
+	reads: readonly GroupedRead[],
+	expanded: boolean,
+	context?: DescribeContext,
+): NativeNode {
 	const rows: NativeChild[] = [];
 	const previews: NativeChild[] = [];
 	let failed = 0;
 	for (const { block, view } of reads) {
-		const read = nativeToolView(block, view, { expanded, elapsedMs: undefined });
+		const read = nativeToolView(block, view, { expanded, elapsedMs: undefined, context });
 		const target = typeof read.tool?.target === "string" ? read.tool.target : "…";
 		const [, path = target, range] = TARGET_RANGE.exec(target) ?? [];
 		const meta = read.tool?.meta?.at(-1);

@@ -93,7 +93,7 @@ describe("pi-tui adapters", () => {
 	test("fall back to ASCII/plain text when no theme is installed", () => {
 		expect(peekTheme()).toBeUndefined();
 		expect(getSymbolTheme()).toBe(FALLBACK_SYMBOLS);
-		expect(getMarkdownTheme().heading("Title")).toBe("Title");
+		expect(getMarkdownTheme().heading("Title", 1)).toBe("Title");
 		expect(getSelectListTheme().selectedText("row")).toBe("row");
 		expect(getEditorTheme().borderColor("-")).toBe("-");
 		expect(getSettingsListTheme().label("x", true, true)).toBe("x");
@@ -106,7 +106,7 @@ describe("pi-tui adapters", () => {
 		const symbols = getSymbolTheme();
 		expect(symbols).not.toBe(FALLBACK_SYMBOLS);
 		expect(symbols.cursor).toBe("❯");
-		expect(getMarkdownTheme().heading("Title")).toContain("\x1b[38;2;242;201;76m");
+		expect(getMarkdownTheme().heading("Title", 1)).toContain("\x1b[38;2;242;201;76m");
 		expect(getEditorTheme().selectList).toBe(getSelectListTheme());
 	});
 

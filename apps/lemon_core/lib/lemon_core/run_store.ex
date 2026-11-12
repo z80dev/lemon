@@ -137,7 +137,7 @@ defmodule LemonCore.RunStore do
   defp new_session_incarnation,
     do: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
 
-  @doc "Remove execution-only MCP configuration before persistence or management projection."
+  @doc "Remove invocation-only configuration before persistence or management projection."
   @spec execution_projection(term()) :: term()
   def execution_projection(%_{} = value) do
     Map.merge(value, execution_projection(Map.from_struct(value)))
@@ -146,6 +146,8 @@ defmodule LemonCore.RunStore do
   def execution_projection(value) when is_map(value) do
     value
     |> Map.drop([
+      :tern_pane,
+      "tern_pane",
       :mcp_servers,
       "mcp_servers",
       :mcpServers,

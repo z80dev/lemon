@@ -6,11 +6,12 @@ defmodule LemonCore.Config.BrowserProviderTest do
   @moduletag :tmp_dir
 
   setup %{tmp_dir: dir} do
-    keys = ~w(LEMON_BROWSER_PROVIDER LEMON_BROWSER_BACKEND HOME)
+    keys = ~w(LEMON_BROWSER_PROVIDER LEMON_BROWSER_TERN LEMON_BROWSER_BACKEND HOME)
     original_env = Map.new(keys, &{&1, System.get_env(&1)})
     backend = Application.fetch_env(:lemon_browser, :backend)
     System.delete_env("LEMON_BROWSER_PROVIDER")
     System.delete_env("LEMON_BROWSER_BACKEND")
+    System.delete_env("LEMON_BROWSER_TERN")
     Application.delete_env(:lemon_browser, :backend)
     System.put_env("HOME", dir)
 
@@ -30,8 +31,8 @@ defmodule LemonCore.Config.BrowserProviderTest do
   end
 
   test "browser provider defaults auto with a declared environment override" do
-    assert Tools.defaults()["browser"] == %{"provider" => "auto"}
-    assert Tools.resolve(%{}).browser == %{provider: "auto"}
+    assert Tools.defaults()["browser"] == %{"provider" => "auto", "tern" => true}
+    assert Tools.resolve(%{}).browser == %{provider: "auto", tern: true}
     assert LemonCore.Env.describe(:lemon_browser_provider).env_var == "LEMON_BROWSER_PROVIDER"
     assert LemonCore.Env.describe(:lemon_browser_provider).default == "auto"
   end
@@ -42,6 +43,21 @@ defmodule LemonCore.Config.BrowserProviderTest do
       assert config.browser.provider == provider
       assert Validator.validate_tools(config, []) == []
     end
+  end
+
+  test "Tern opt-out is boolean configuration with environment precedence" do
+    refute tools(%{"tern" => false}).browser.tern
+    assert tools(%{"tern" => true}).browser.tern
+
+    assert "runtime.tools.browser.tern: must be a boolean" in Validator.validate_tools(
+             tools(%{"tern" => "off"}),
+             []
+           )
+
+    System.put_env("LEMON_BROWSER_TERN", "0")
+    refute tools(%{"tern" => true}).browser.tern
+    System.put_env("LEMON_BROWSER_TERN", "1")
+    assert tools(%{"tern" => false}).browser.tern
   end
 
   test "unknown and incorrectly typed provider values fail with a redacted allowlist" do

@@ -142,6 +142,13 @@ only readiness, stable provenance, counts, byte counts, and error kinds.
 | Send channel notifications | `lemon send --to telegram:123 "hello"` | `./bin/lemon send --to telegram:123 "hello"` |
 | Inspect media, models, policies, skills, and usage | `lemon media`, `models`, `policy`, `skill`, `usage` | `./bin/lemon media`, `models`, `policy`, `skill`, `usage` |
 
+`lemon tern install --agent-block` also selects Lemon's TUI for Tern's new agent
+blocks by setting the top-level `agent_command` shell command to the quoted
+launcher plus `tui`. Without this opt-in, the existing agent command is untouched.
+Revert in Tern Settings → Agents, or remove `agent_command` from `settings.json`
+to restore Tern's default. Non-string existing values are refused when opting in;
+no settings or plugin files are changed.
+
 Blueprint and profile-chat commands start the local runtime through the
 launcher when it is not already healthy, in both source checkouts and packaged
 releases.

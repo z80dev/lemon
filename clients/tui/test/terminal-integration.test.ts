@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { PromptHistoryStore } from "../src/composer/prompt-history.ts";
@@ -13,6 +14,7 @@ import { detectTerminalCapabilities } from "../src/terminal/capabilities.ts";
 import { TerminalIntegration } from "../src/terminal/integration.ts";
 import { codeLink, fileTarget, hyperlink } from "../src/terminal/links.ts";
 import { TranscriptMarks } from "../src/terminal/marks.ts";
+import { encodeProgramStatusMessage } from "../src/terminal/signals.ts";
 import { MemoryTerminal } from "./helpers/memory-terminal.ts";
 
 test("Tern detection respects non-TTY, dumb, hyperlink and notification opt-outs", () => {
@@ -164,6 +166,121 @@ test("publishes the finalized native frame before terminal completion becomes ob
 		expect(output.indexOf("complete final answer")).toBeLessThan(output.indexOf("state=done"));
 	} finally {
 		integration.stop();
+		client.close();
+	}
+});
+
+test("Tern reports pending action summaries, questions and failures, but not completed answers", () => {
+	const terminal = new MemoryTerminal();
+	const store = new AppStore("attention");
+	store.setConnection("online");
+	const client = new ControlPlaneClient({ url: "ws://127.0.0.1:1/ws" });
+	const integration = new TerminalIntegration(
+		terminal,
+		store,
+		client,
+		"/repo",
+		detectTerminalCapabilities({ TERM_PROGRAM: "Tern" }, true),
+	);
+	const report = (state: string, message?: string) =>
+		`\x1b]7501;state=${state}:app=lemon${message ? `:msg=${encodeProgramStatusMessage(message)}` : ""}\x1b\\`;
+	try {
+		integration.start();
+		store.addUserPrompt({
+			promptId: "question",
+			sessionKey: "attention",
+			questions: [{ id: "branch", question: "Which\nbranch?", options: [] }],
+		});
+		expect(terminal.writes.at(-1)).toBe(report("blocked:kind=question", "Which branch?"));
+		store.addApproval({
+			approvalId: "approval",
+			runId: "run",
+			sessionKey: "attention",
+			agentId: null,
+			rationale: null,
+			requestedAtMs: null,
+			tool: "bash",
+			action: { command: "git\nstatus" },
+			expiresAtMs: null,
+		});
+		expect(terminal.writes.at(-1)).toBe(report("blocked:kind=permission", "git status"));
+		store.addApproval({
+			...store.approvals.get("approval")!.event,
+			action: { title: "Review changes", command: "git diff" },
+		});
+		expect(terminal.writes.at(-1)).toBe(report("blocked:kind=permission", "Review changes"));
+		store.resolveApproval("approval");
+		expect(terminal.writes.at(-1)).toBe(report("blocked:kind=question", "Which branch?"));
+		store.removeUserPrompt("question");
+		for (const error of ["Provider\nfailed", { message: "Unavailable", code: "offline" }]) {
+			client.events.emit("agent", { type: "started", runId: "run", sessionKey: "attention" });
+			client.events.emit("agent", {
+				type: "completed",
+				runId: "run",
+				sessionKey: "attention",
+				ok: false,
+				error,
+				answer: "",
+				durationMs: 1,
+			});
+			expect(terminal.writes.at(-1)).toBe(
+				report("error", typeof error === "string" ? error : JSON.stringify(error)),
+			);
+		}
+		client.events.emit("agent", { type: "started", runId: "done", sessionKey: "attention" });
+		client.events.emit("agent", {
+			type: "completed",
+			runId: "done",
+			sessionKey: "attention",
+			ok: true,
+			answer: "Do not publish completed answers",
+			durationMs: 1,
+		});
+		expect(terminal.writes.at(-1)).toBe(report("done"));
+	} finally {
+		integration.stop();
+		client.close();
+	}
+});
+
+test("Tern reasserts the focused card after native surface open and resume", () => {
+	const terminal = new (class extends MemoryTerminal {
+		override setTitle(title = ""): void {
+			this.writes.push(`title:${title}`);
+		}
+	})();
+	const store = new AppStore("session-key");
+	store.setConnection("online");
+	const client = new ControlPlaneClient({ url: "ws://127.0.0.1:1/ws" });
+	const integration = new TerminalIntegration(
+		terminal,
+		store,
+		client,
+		"/repo",
+		detectTerminalCapabilities({ TERM_PROGRAM: "Tern" }, true),
+	);
+	try {
+		integration.start();
+		expect(terminal.writes).toContain("title:🍋 LEMON: session-key");
+		terminal.writes.length = 0;
+		terminal.write("surface-open");
+		setNativeRendering(true);
+		expect(terminal.writes).toEqual(["surface-open", "title:🍋 LEMON: session-key"]);
+		store.focused.title = "🧪 FLAKY: Fix tests";
+		integration.update();
+		expect(terminal.writes.at(-1)).toBe("title:🧪 FLAKY: Fix tests");
+		integration.suspend();
+		setNativeRendering(false);
+		terminal.writes.length = 0;
+		terminal.write("surface-resume");
+		setNativeRendering(true);
+		integration.resume();
+		expect(terminal.writes.indexOf("title:🧪 FLAKY: Fix tests")).toBeGreaterThan(
+			terminal.writes.indexOf("surface-resume"),
+		);
+	} finally {
+		integration.stop();
+		setNativeRendering(false);
 		client.close();
 	}
 });
@@ -329,7 +446,7 @@ test("real TUI PTY emits turn/approval signals and restores keyboard, title and 
 		expect(output).toContain("\x1b]7;file://");
 		expect(output).toContain("/src/main.ts#L12\x07");
 		expect(output).toContain("\x1b]8;;https://example.com\x07");
-		expect(output).toContain("\x1b]0;Lemon · terminal-smoke · ready\x07");
+		expect(output).toContain("\x1b]0;🍋 LEMON: terminal-smoke\x07");
 		const cancelledOutputStart = output.length;
 		server.pushEvent("agent", {
 			type: "started",

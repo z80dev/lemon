@@ -622,6 +622,7 @@ defmodule CodingAgent.Session.Lifecycle do
         execution_context: state.execution_context,
         approval_context: state.approval_context,
         invocation_context_key: (state.approval_context || %{})[:invocation_context_key],
+        tern_pane: Keyword.get(state.tool_opts, :tern_pane),
         invocation_mcp_servers: (state.approval_context || %{})[:invocation_mcp_servers],
         channel_identity: (state.approval_context || %{})[:channel_identity],
         memory_context_key: (state.approval_context || %{})[:memory_context_key],

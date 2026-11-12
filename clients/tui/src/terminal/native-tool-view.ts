@@ -17,9 +17,10 @@
  * Pure: the same block and options always describe the same view.
  */
 
+import { existsSync } from "node:fs";
 import { basename, isAbsolute, join } from "node:path";
 import { nativeDiff } from "@oh-my-pi/pi-tui/chrome/diff";
-import { getLanguageFromPath } from "@oh-my-pi/pi-tui/lang-from-path";
+import { nativeMediaNode } from "@oh-my-pi/pi-tui/native/blobs";
 import {
 	code,
 	col,
@@ -31,7 +32,7 @@ import {
 	span,
 	text,
 } from "@oh-my-pi/pi-tui/native/describe";
-import type { NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import type { DescribeContext, NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { getDiffStats, getDomain } from "@oh-my-pi/pi-tui/render/render-utils";
 import { type BashToolDetails, bashToolRenderer } from "@oh-my-pi/pi-tui/tools/bash";
@@ -78,6 +79,8 @@ export interface NativeToolViewOptions {
 	expanded: boolean;
 	/** Milliseconds run so far (live) or in total (settled). */
 	elapsedMs: number | undefined;
+	/** Negotiated host capabilities; absent outside native describe(). */
+	context?: DescribeContext;
 }
 
 /** Everything a per-tool view reads from one block, resolved once. */
@@ -183,13 +186,12 @@ function locationHref(block: ToolBlock): string | undefined {
 
 /** A diff body from renderDiff-form rows (`±N|content`, or `±content` without numbers). */
 export function diffNode(rows: string, path: string | undefined): NativeNode {
-	const lang = path ? getLanguageFromPath(path) : undefined;
 	const lines = rows.split("\n").filter((line) => line.length > 0);
 	// Numbered rows carry real file positions; pi-tui's parser rebuilds hunks from them.
 	if (lines.every((line) => /^[+\- ]\s*\d+\|/.test(line) || /^\s*(\.\.\.|…)\s*$/.test(line))) {
-		return nativeDiff(rows, { lang });
+		return nativeDiff(rows, { path });
 	}
-	return diffFromHunks(splitHunks(lines), lang);
+	return diffFromHunks(splitHunks(lines), path);
 }
 
 /** Unnumbered rows as hunks, split at `...`/`@@` separators (no positions are claimed beyond line 1). */
@@ -209,10 +211,10 @@ function splitHunks(lines: readonly string[]): string[][] {
 	return hunks;
 }
 
-function diffFromHunks(hunks: readonly string[][], lang: string | undefined): NativeNode {
+function diffFromHunks(hunks: readonly string[][], path: string | undefined): NativeNode {
 	return node("diff", {
 		hunks: hunks.map((lines) => ({ oldStart: 1, newStart: 1, lines })),
-		lang,
+		path,
 	});
 }
 
@@ -295,6 +297,8 @@ export function nativeToolView(
 			return taskView(f);
 		case "omp":
 			return ompView(f);
+		case "browser_screenshot":
+			return screenshotView(f);
 		default:
 			return defaultView(f, view.toolName);
 	}
@@ -324,6 +328,26 @@ function defaultView(f: ToolFacts, name: string): NativeToolView {
 			? { output, isError: f.failed, skipped: f.view.state === "cancelled" }
 			: undefined;
 	return describeDefaultToolExecution({ label: toolLabel(name), args: f.args, result, options });
+}
+
+/** Only local, successful receipts can hand a path to the terminal's media viewer. */
+function mediaNode(f: ToolFacts, path: string | undefined): NativeNode | undefined {
+	if (
+		f.view.state !== "success" ||
+		!f.options.context?.supports("media") ||
+		!path ||
+		!isAbsolute(path) ||
+		!existsSync(path)
+	) {
+		return undefined;
+	}
+	return nativeMediaNode(path, `${f.block.id}:media`);
+}
+
+function screenshotView(f: ToolFacts): NativeToolView {
+	const view = defaultView(f, "browser_screenshot");
+	const media = mediaNode(f, str(f.details.path));
+	return media ? { ...view, body: [...(view.body ?? []), media] } : view;
 }
 
 // -- bash ----------------------------------------------------------------------
@@ -425,16 +449,18 @@ function readView(f: ToolFacts): NativeToolView {
 	const path = str(f.details.path) ?? str(f.args.path) ?? str(f.args.file_path);
 	const head = readHead(f, path);
 	if (f.failed) return inlineErrorView(head, failureMessage(f));
-	if (!f.settled || !f.output) return { tool: head, inline: true };
+	if (!f.settled) return { tool: head, inline: true };
+	const media = mediaNode(f, str(f.details.media_path));
+	if (!f.output) return { tool: head, inline: true, body: compact([media]) };
 	const parsed = parseRead(f.output);
 	const start = parsed.numbers?.[0] ?? num(f.details.start_line) ?? num(f.args.offset) ?? 1;
-	const lang = path ? getLanguageFromPath(path) : undefined;
 	return {
 		tool: head,
 		inline: true,
 		body: compact<NativeChild>([
-			...readContentCode(parsed.text, start, parsed.numbers, lang),
+			...readContentCode(parsed.text, start, parsed.numbers, path),
 			footnoteText(compact([parsed.trailer])),
+			media,
 		]),
 	};
 }
@@ -477,10 +503,9 @@ function writeView(f: ToolFacts): NativeToolView {
 	};
 	if (f.failed) return { tool: head, tone: "error", body: [errorText(failureMessage(f))] };
 	if (!content) return { tool: head };
-	const lang = path ? getLanguageFromPath(path) : undefined;
 	return {
 		tool: head,
-		body: [keyed(code(content.replace(/\n$/, ""), { lang, numbers: true }), "source")],
+		body: [keyed(code(content.replace(/\n$/, ""), { path, numbers: true }), "source")],
 		preview: WRITE_PREVIEW,
 	};
 }
@@ -566,7 +591,7 @@ function patchView(f: ToolFacts): NativeToolView {
 	const fileBody = (file: PatchFile): NativeChild =>
 		file.op === "delete" && file.hunks.length === 0
 			? noteText("Deleted")
-			: diffFromHunks(file.hunks, getLanguageFromPath(file.path));
+			: diffFromHunks(file.hunks, file.path);
 	if (files.length === 1) return { tool: head, body: [fileBody(files[0]!)] };
 	return {
 		tool: head,
@@ -666,14 +691,14 @@ function grepView(f: ToolFacts): NativeToolView {
 		sections.push(
 			keyed(
 				col(
-					[
+					compact<NativeChild>([
 						fileRow(display, {
 							chip: { text: String(marks), title: formatCount("match", marks) },
 							href: fileTarget(resolved, firstMatch),
 							key: "file",
 						}),
-						...numberedCode(sorted, { lang: getLanguageFromPath(display) }),
-					],
+						numberedCode(sorted, { path: display }),
+					]),
 					{ gap: "xs", role: "omp.tool.search.file" },
 				),
 				`f:${display}`,

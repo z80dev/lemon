@@ -3,15 +3,17 @@ defmodule LemonCore.BrowserProvider do
   The single passive browser-provider selection boundary.
 
   `resolve/1` never starts a runtime, browser, native host, or paid session. Auto
-  tries connected LCU, configured/connected relay, then a usable local driver.
-  Explicit selection fails closed and never falls back to another identity.
+  prefers Tern for a bound local pane, then tries connected LCU, configured relay,
+  and a usable local driver. Explicit selection fails closed.
 
   Configuration is `runtime.tools.browser.provider` (default `auto`), overridden
   by `LEMON_BROWSER_PROVIDER`. Existing explicit `LEMON_BROWSER_BACKEND` and
   non-default browser application backend settings remain supported by Tools.
 
-  Options may pin `:provider`, inject `:config` (a Config/Modular/Tools value or
-  browser map), and supply `:probe` (arity-one function or module implementing
+  Options may pin `:provider` and inject `:config` (a Config/Modular/Tools value or
+  browser map). `:tern_pane` carries an already-authorized local invocation
+  binding; the daemon socket is always discovered on this machine. Options may
+  supply `:probe` (arity-one function or module implementing
   `available?(provider_string)`) and `:lcu_probe` (arity-zero function). Runtime
   defaults are configured under `:lemon_core, :browser_provider_probe` and
   `:browser_provider_lcu_probe`; the optional browser module is referenced only
@@ -23,7 +25,7 @@ defmodule LemonCore.BrowserProvider do
 
   alias LemonCore.BrowserProvider.LCUProbe
 
-  @providers ~w(auto lcu relay local cdp browserbase browser_use firecrawl camofox controller hybrid)
+  @providers ~w(auto tern lcu relay local cdp browserbase browser_use firecrawl camofox controller hybrid)
   @auto ~w(lcu relay local)
   @timeout_ms 5_000
   @invalid "Invalid browser provider; set runtime.tools.browser.provider to a supported provider."
@@ -32,6 +34,7 @@ defmodule LemonCore.BrowserProvider do
   @probe_failed "Browser provider availability could not be checked; check its configuration and runtime installation."
 
   @availability %{
+    "tern" => "Tern's native browser is available for this pane.",
     "lcu" => "LCU Chrome extension is connected through this installation's relay.",
     "relay" => "The configured browser relay is connected.",
     "local" => "The local browser executable and driver are available.",
@@ -44,6 +47,8 @@ defmodule LemonCore.BrowserProvider do
     "hybrid" => "The configured hybrid browser routes are available."
   }
   @unavailability %{
+    "tern" =>
+      "Tern browser is unavailable; use a local Tern pane and enable its browser integration.",
     "lcu" =>
       "LCU Chrome extension is not connected through its relay; check lcu browser status and reconnect the extension.",
     "relay" =>
@@ -97,7 +102,14 @@ defmodule LemonCore.BrowserProvider do
         else: requested
 
     if requested in @providers do
-      candidates = if requested == "auto", do: @auto, else: [requested]
+      tern? = match?({:ok, _}, LemonCore.Tern.pane(Keyword.get(opts, :tern_pane)))
+
+      candidates =
+        if requested == "auto",
+          do: if(tern?, do: ["tern" | @auto], else: @auto),
+          else: [requested]
+
+      candidates = candidates -- Keyword.get(opts, :exclude, [])
       resolve_candidates(candidates, requested, config, opts, %{})
     else
       %{requested: "invalid", provider: nil, reason: @invalid, checks: %{}}
@@ -141,9 +153,9 @@ defmodule LemonCore.BrowserProvider do
   end
 
   defp auto_reason(checks) do
-    labels = %{"lcu" => "LCU", "relay" => "Relay", "local" => "Local"}
+    labels = %{"tern" => "Tern", "lcu" => "LCU", "relay" => "Relay", "local" => "Local"}
 
-    @auto
+    ["tern" | @auto]
     |> Enum.filter(&Map.has_key?(checks, &1))
     |> Enum.map_join(" ", fn provider ->
       check = Map.fetch!(checks, provider)
@@ -166,6 +178,30 @@ defmodule LemonCore.BrowserProvider do
       {:unavailable, reason} -> {false, unavailability(provider, reason)}
       :timeout -> {false, @timeout}
       _ -> {false, @probe_failed}
+    end
+  end
+
+  defp probe("tern", config, opts, timeout) do
+    if LemonCore.Tern.enabled?(provider_config: section(config, :browser)) do
+      # The general runtime probe has no invocation binding; Tern must probe here.
+      callback = Keyword.get(opts, :probe)
+
+      if callback do
+        probe_callback(callback, "tern")
+      else
+        with {:ok, _} <- LemonCore.Tern.pane(Keyword.get(opts, :tern_pane)),
+             {:ok, client} <- LemonCore.Tern.connect(timeout_ms: max(timeout - 100, 1)) do
+          try do
+            if LemonCore.Tern.supports?(client, "browser"), do: :available, else: :unavailable
+          after
+            LemonCore.Tern.close(client)
+          end
+        else
+          _ -> :unavailable
+        end
+      end
+    else
+      :unavailable
     end
   end
 
@@ -194,6 +230,10 @@ defmodule LemonCore.BrowserProvider do
     callback =
       Keyword.get(opts, :probe, Application.get_env(:lemon_core, :browser_provider_probe))
 
+    probe_callback(callback, provider)
+  end
+
+  defp probe_callback(callback, provider) do
     result =
       cond do
         is_function(callback, 1) ->

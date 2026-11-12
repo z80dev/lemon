@@ -1043,6 +1043,15 @@ defmodule LemonCli.Onboarding.Runner do
   end
 
   defp open_url_in_browser(url) when is_binary(url) and url != "" do
+    case LemonCore.Tern.open_user_page(url) do
+      :ok -> :ok
+      {:error, _} -> open_url_in_system_browser(url)
+    end
+  end
+
+  defp open_url_in_browser(_url), do: {:error, :invalid_url}
+
+  defp open_url_in_system_browser(url) do
     case :os.type() do
       {:unix, :darwin} ->
         run_system_cmd("open", [url])
@@ -1054,8 +1063,6 @@ defmodule LemonCli.Onboarding.Runner do
         run_system_cmd("xdg-open", [url])
     end
   end
-
-  defp open_url_in_browser(_url), do: {:error, :invalid_url}
 
   defp run_system_cmd(command, args), do: run_system_cmd(command, args, nil)
 

@@ -3,6 +3,20 @@ defmodule LemonControlPlane.OperatorAuthWireE2ETest do
 
   alias CodingAgent.ExecutionNode.Socket
 
+  defmodule PeerContextHandler do
+    @behaviour LemonControlPlane.Method
+    def name, do: "wire.test.peer_context"
+    def scopes, do: [:write]
+
+    def handle(_params, ctx) do
+      {:ok,
+       %{
+         "directLoopback" => LemonControlPlane.Auth.Authorize.loopback_address?(ctx[:peer]),
+         "tokenless" => ctx[:local?]
+       }}
+    end
+  end
+
   setup do
     previous_token = Application.get_env(:lemon_control_plane, :operator_token)
 
@@ -48,6 +62,14 @@ defmodule LemonControlPlane.OperatorAuthWireE2ETest do
 
     assert_receive {:execution_node_socket, ^authenticated, {:connected, hello}}, 3_000
     assert get_in(hello, ["auth", "role"]) == "operator"
+
+    assert :ok = LemonControlPlane.Methods.Registry.register(PeerContextHandler)
+    on_exit(fn -> LemonControlPlane.Methods.Registry.unregister(PeerContextHandler.name()) end)
+    Socket.request(authenticated, PeerContextHandler.name(), %{"peer" => "192.0.2.1"}, :peer)
+
+    assert_receive {:execution_node_socket, ^authenticated,
+                    {:response, :peer, {:ok, %{"directLoopback" => true, "tokenless" => false}}}},
+                   3_000
 
     missing =
       start_socket(suffix, :missing,

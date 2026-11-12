@@ -5,6 +5,21 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
   alias LemonCore.ExecutionContext
   alias LemonGateway.ExecutionRequest
 
+  test "controller pane bindings never cross a named-node boundary" do
+    for meta <- [%{tern_pane: 42}, %{"tern_pane" => 42}] do
+      request = %ExecutionRequest{
+        run_id: "placement",
+        session_key: "agent:placement:main",
+        prompt: "hello",
+        execution_context: context(),
+        meta: meta
+      }
+
+      assert {:ok, payload} = RemoteRequestCodec.encode(request)
+      refute Map.has_key?(payload["meta"], "tern_pane")
+    end
+  end
+
   test "profile files mode is a sparse routing field, never execution metadata" do
     for meta <- [
           %{remote_cwd_mode: "profile_files", profile_id: "writer"},

@@ -18,7 +18,7 @@ If you only read one section, read [Your first contribution](#your-first-contrib
 - **Elixir 1.20.5+ / OTP 29.1.2+.** The BEAM toolchain is pinned in
   `.tool-versions`, as in CI. Package release prerequisites are documented
   separately in the [package release instructions](docs/release/hex-packages.md).
-- **Bun per client subtree:** 1.3.14+ for `clients/tui` and 1.4.2 for
+- **Bun per client subtree:** 1.4.4+ for `clients/tui` and 1.4.2 for
   `products/lemon_bot`, pinned in their respective `.bun-version` files.
 - **Node.js 24 LTS+** for the browser client and documentation site.
 - **A version manager** (`asdf` or `mise`) can install the pinned BEAM toolchain.

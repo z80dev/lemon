@@ -19,6 +19,7 @@ import type {
 	NativeNode,
 	NativeUiEvent,
 } from "@oh-my-pi/pi-tui/native/node";
+import { iconButton } from "@oh-my-pi/pi-tui/native/overlay";
 import { Container } from "@oh-my-pi/pi-tui/tui";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import type { UserDelivery, UserDetails } from "../../store/transcript-model.ts";
@@ -76,20 +77,9 @@ export class UserMessageComponent extends Container {
 		const children: NativeChild[] = [];
 		const tools: NativeNode[] = [];
 		if (hasTranscriptActions()) {
-			tools.push(
-				node(
-					"icon",
-					{
-						name: "copy",
-						role: "omp.user.tool",
-						title: "Copy message",
-						aria: "Copy message",
-						actions: { click: "copy-message" },
-					},
-					undefined,
-					"copy",
-				),
-			);
+			const copy = iconButton("copy", "copy-message", "Copy message", { key: "copy" });
+			copy.p!.role = "omp.user.tool";
+			tools.push(copy);
 		}
 		if (sentAt !== undefined) {
 			const at = new Date(sentAt);

@@ -63,6 +63,59 @@ defmodule CodingAgent.SessionToolResourcesLifecycleTest do
     server
   end
 
+  test "session termination closes only its exact browser binding even without a run ID", %{
+    tmp_dir: tmp_dir
+  } do
+    assert {:ok, _} = Application.ensure_all_started(:lemon_browser)
+
+    session =
+      start_session(tmp_dir,
+        tern_pane: 42,
+        browser_provider_resolution: %{
+          requested: "auto",
+          provider: nil,
+          reason: "Browser resolution is not needed for lifecycle cleanup."
+        }
+      )
+
+    opts = Session.get_state(session).tool_opts
+    assert Keyword.get(opts, :run_id) == nil
+    assert Keyword.fetch!(opts, :tern_pane) == 42
+    own_id = Keyword.fetch!(opts, :session_id)
+
+    scopes = [
+      opts,
+      Keyword.put(opts, :session_id, own_id <> "-other"),
+      Keyword.put(opts, :tern_pane, 43),
+      Keyword.put(opts, :run_id, "another-run")
+    ]
+
+    owners =
+      Enum.map(scopes, fn binding ->
+        assert :ok = LemonBrowser.TernSession.put_fallback(binding, %{provider: "local"})
+
+        scope = %{
+          session_id: Keyword.fetch!(binding, :session_id),
+          run_id: Keyword.get(binding, :run_id),
+          pane: Keyword.fetch!(binding, :tern_pane)
+        }
+
+        [{owner, _}] = Registry.lookup(LemonBrowser.TernSessionRegistry, scope)
+        owner
+      end)
+
+    on_exit(fn ->
+      Enum.each(scopes, &LemonBrowser.TernSession.close/1)
+      if Process.alive?(session), do: GenServer.stop(session)
+    end)
+
+    [own_owner | unrelated] = owners
+    monitor = Process.monitor(own_owner)
+    GenServer.stop(session)
+    assert_receive {:DOWN, ^monitor, :process, ^own_owner, :normal}, 5_000
+    assert Enum.all?(unrelated, &Process.alive?/1)
+  end
+
   describe "finalize_session/2" do
     test "a failed save keeps the turn's tool resources from being preserved", %{
       tmp_dir: tmp_dir

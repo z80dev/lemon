@@ -91,6 +91,20 @@ defmodule LemonCli.CommandRegistryTest do
     end
   end
 
+  test "Tern help advertises agent-block opt-in and its reversal" do
+    help = CommandRegistry.help("tern")
+    assert help =~ "lemon tern install [--config-dir PATH] [--agent-block]"
+    assert help =~ "Use Lemon's TUI for new agent blocks (opt-in)"
+    assert help =~ "Without --agent-block, agent_command is unchanged."
+    assert help =~ "Tern Settings → Agents"
+    assert help =~ "remove agent_command from settings.json"
+
+    for launcher <- [:source, :release], shell <- ~w(bash zsh fish) do
+      completion = CompletionCommand.render(shell, launcher)
+      assert completion =~ if(shell == "fish", do: "-l 'agent-block'", else: "--agent-block")
+    end
+  end
+
   test "source and release completion share families but not release VM tools" do
     source = Enum.map(CommandRegistry.completion_commands(:source), & &1.name)
     release = Enum.map(CommandRegistry.completion_commands(:release), & &1.name)

@@ -4,6 +4,7 @@ import {
 	type TranscriptAction,
 } from "@oh-my-pi/pi-tui/chat/transcript-actions";
 import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import { setNativeButtons } from "@oh-my-pi/pi-tui/native/state";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { AssistantMessageComponent } from "../../src/ui/components/assistant-message.ts";
 import { NoticeComponent } from "../../src/ui/components/notice-message.ts";
@@ -20,6 +21,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	setNativeButtons(false);
 	resetTheme();
 	invalidateThemeAdapters();
 });
@@ -54,6 +56,34 @@ describe("UserMessageComponent", () => {
 		};
 		expect(component.isTranscriptBlockFinalized).toBeUndefined();
 	});
+
+	test.each([false, true])(
+		"Copy keeps its action and identity with native buttons=%s",
+		(buttons) => {
+			setNativeButtons(buttons);
+			const copied: TranscriptAction[] = [];
+			setTranscriptActionHandler((action) => copied.push(action));
+			try {
+				const component = new UserMessageComponent("copy this");
+				const toolbar = component.describe().c?.[0];
+				if (!toolbar || !("k" in toolbar)) throw new Error("expected user toolbar");
+				expect(toolbar.c?.[0]).toMatchObject({
+					k: buttons ? "button" : "icon",
+					key: "copy",
+					p: { role: "omp.user.tool", aria: "Copy message", actions: { click: "copy-message" } },
+				});
+				component.handleNativeEvent({
+					type: "action",
+					key: "tools/copy",
+					act: "copy-message",
+					mods: [],
+				});
+				expect(copied).toEqual([{ act: "copy", text: "copy this" }]);
+			} finally {
+				setTranscriptActionHandler(undefined);
+			}
+		},
+	);
 });
 
 describe("AssistantMessageComponent", () => {
@@ -136,33 +166,44 @@ describe("AssistantMessageComponent", () => {
 		expect(text).toContain("Error: provider exploded");
 	});
 
-	test("natively, only the reported turn gets a footer whose Copy copies the reply", () => {
-		const copied: TranscriptAction[] = [];
-		setTranscriptActionHandler((action) => copied.push(action));
-		try {
-			const roles = (node: NativeNode) =>
-				(node.c ?? []).map((child) => ("k" in child ? child.p?.role : "component"));
-			const earlier = new AssistantMessageComponent("Looking first.");
-			earlier.finalize({});
-			expect(roles(earlier.describe())).toEqual([undefined]);
+	test.each([false, true])(
+		"only the reported turn offers Copy with native buttons=%s",
+		(buttons) => {
+			setNativeButtons(buttons);
+			const copied: TranscriptAction[] = [];
+			setTranscriptActionHandler((action) => copied.push(action));
+			try {
+				const roles = (node: NativeNode) =>
+					(node.c ?? []).map((child) => ("k" in child ? child.p?.role : "component"));
+				const earlier = new AssistantMessageComponent("Looking first.");
+				earlier.finalize({});
+				expect(roles(earlier.describe())).toEqual([undefined]);
 
-			const last = new AssistantMessageComponent("half");
-			last.finalize({ interrupted: true, turn: { durationMs: 4200 } });
-			const described = last.describe();
-			expect(described.c?.[0]).toMatchObject({ k: "md", p: { text: "half" } });
-			expect(roles(described)).toEqual([undefined, "omp.assistant.abort", "omp.turn.usage"]);
-			expect(last.describe()).toBe(described);
-			last.handleNativeEvent({
-				type: "action",
-				key: "turn-usage/copy",
-				act: "copy-answer",
-				mods: [],
-			});
-			expect(copied).toEqual([{ act: "copy", text: "half" }]);
-		} finally {
-			setTranscriptActionHandler(undefined);
-		}
-	});
+				const last = new AssistantMessageComponent("half");
+				last.finalize({ interrupted: true, turn: { durationMs: 4200 } });
+				const described = last.describe();
+				expect(described.c?.[0]).toMatchObject({ k: "md", p: { text: "half" } });
+				expect(roles(described)).toEqual([undefined, "omp.assistant.abort", "omp.turn.usage"]);
+				expect(last.describe()).toBe(described);
+				const footer = described.c?.[2];
+				if (!footer || !("k" in footer)) throw new Error("expected turn footer");
+				expect(footer.c?.[0]).toMatchObject({
+					k: buttons ? "button" : "icon",
+					key: "copy",
+					p: { role: "omp.turn.copy", aria: "Copy answer", actions: { click: "copy-answer" } },
+				});
+				last.handleNativeEvent({
+					type: "action",
+					key: "turn-usage/copy",
+					act: "copy-answer",
+					mods: [],
+				});
+				expect(copied).toEqual([{ act: "copy", text: "half" }]);
+			} finally {
+				setTranscriptActionHandler(undefined);
+			}
+		},
+	);
 });
 
 describe("TranscriptContainer", () => {

@@ -41,6 +41,18 @@ That setting only decides whether typing Tern's built-in agent CLIs (`claude`,
 versions turned it on; turn it off in **Settings → Agents** if you prefer those
 CLIs' own interfaces.
 
+To make Tern's **New agent block** open Lemon's TUI instead of omp, opt in:
+
+```bash
+lemon tern install --agent-block
+```
+
+This sets Tern's `agent_command` to the same quoted launcher the palette plugin
+uses (`'/path/to/lemon' tui`), so agent blocks get Tern's Agent chip and Carly
+can find and prompt them. Without the flag an existing `agent_command` is left
+as is. Revert in **Settings → Agents**, or remove `agent_command` from
+`settings.json` to restore Tern's default.
+
 ## Native ACP chat
 
 After registration, open Lemon as a Tern-rendered ACP chat with:
@@ -86,8 +98,44 @@ including spaces and `#`, are preserved. The row-rendered TUI exposes the same
 location through OSC 8 links. Nothing opens automatically when a tool runs.
 For an explicit command, use `tern open --split right path/to/file:42`.
 
+A successful whole-file `read` of a file Tern's media viewer handles (images,
+SVG, PDF, audio/video, and 3D models such as `.glb`, `.stl` or `.usdz`, including
+gzip-compressed models) shows the file itself in the read card, as omp's does.
+Saved browser screenshots get the same preview. Partial reads (offsets, pages,
+selectors) do not, and the model still receives the normal read result. The
+preview needs the file on the TUI's machine: against a remote daemon the card
+stays textual.
+
 Use `/name <title>` to name a conversation. Its saved name is restored on the next
 launch and appears in the Tern pane title and the plugin's session picker.
+
+In Tern the pane title is a card, the form Tern heads parked panes with:
+`🍋 LEMON: <session name or key>`. A card-form name such as
+`/name 🧪 FLAKY: Fix flaky tests` (an emoji or other non-ASCII icon, a code of
+one to six capitals or digits, a colon) is kept as the pane's own card. Run
+state is not repeated in the title: Lemon reports it through Tern's program
+status (OSC 7501), and approval, question and failure states carry a one-line
+summary of the pending action, question or error for Tern's inbox and banners.
+Other terminals keep the `Lemon · <name> · <status>` title.
+
+## Browser in Tern
+
+When the TUI runs in a Tern pane and the daemon runs on the same machine, the
+agent's browser tools use Tern's native browser picture-in-picture over that
+pane instead of headless Chromium, as omp's do. The TUI sends only its pane
+number, and only a direct-loopback connection binds it; the daemon finds Tern's
+socket itself. `browser_tabs` lists the window's browser blocks, and passing a
+block's ID adopts a page you already have open; closing an adopted tab hands it
+back to you instead of closing it. If Tern cannot show a browser (no window,
+unsupported platform) an automatically chosen Tern browser falls back to the
+next provider with a note; an explicit `provider = "tern"` fails instead. Turn
+it off with `runtime.tools.browser.tern = false` or `LEMON_BROWSER_TERN=0`.
+On Linux the daemon needs `TERN_PANE_SOCKET`, `TERN_DAEMON_SOCKET` or
+`TERN_CONFIG_DIR` to find Tern. See [Native Tern operation](../tools/browser.md#native-tern-operation)
+for the supported actions.
+
+`lemon setup` run in a Tern pane opens a sign-in URL you agree to open as a
+Tern browser block beside the pane, falling back to the system browser.
 
 ## Manual registration
 

@@ -74,6 +74,18 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
   alias LemonGateway.ExecutionRequest
   alias LemonSkills.{McpSession, McpSource}
 
+  defmodule PaneBackend do
+    @behaviour LemonBrowser.Backend
+    def id, do: :native_pane_binding_test
+    def available?, do: true
+    def status(_opts), do: %{available: true}
+
+    def request("browser.tabs", _args, _timeout_ms, opts) do
+      send(self(), {:native_browser_binding, Keyword.get(opts, :tern_pane)})
+      {:ok, %{"tabs" => []}}
+    end
+  end
+
   defmodule Coordinator do
     def submit(_key, submission) do
       send(
@@ -102,6 +114,78 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
     end)
 
     :ok
+  end
+
+  @tag :tmp_dir
+  test "native runs thread the pane to browser requests and do not inherit it on resume", %{
+    tmp_dir: root
+  } do
+    config = Path.join(root, "pane-config.toml")
+    File.write!(config, "")
+
+    Application.put_env(
+      :lemon_core,
+      :paths,
+      global_config: config,
+      home_state_dir: Path.join(root, "state")
+    )
+
+    assert :ok = LemonBrowser.BackendRegistry.register(:native_pane_binding_test, PaneBackend)
+    on_exit(fn -> LemonBrowser.BackendRegistry.unregister(:native_pane_binding_test) end)
+    parent = self()
+    session_key = "agent:pane-binding:main"
+
+    Enum.reduce([42, nil], nil, fn pane, resume ->
+      run_id = "pane-binding-#{System.unique_integer([:positive])}"
+      meta = %{model: "openai:gpt-4o", resume_source: :explicit}
+      meta = if is_nil(pane), do: meta, else: Map.put(meta, :tern_pane, pane)
+
+      request = %ExecutionRequest{
+        run_id: run_id,
+        session_key: session_key,
+        cwd: root,
+        prompt: "Inspect this browser.",
+        resume: resume,
+        meta: meta
+      }
+
+      stream_fn = fn _model, _context, _options ->
+        {:ok, stream} = LemonAi.EventStream.start_link()
+        send(parent, {:pane_stream, run_id, stream})
+        {:ok, stream}
+      end
+
+      assert {:ok, run_ref, %{runner_pid: runner}} =
+               Executor.start_run(request, %{stream_fn: stream_fn}, self())
+
+      on_exit(fn -> if Process.alive?(runner), do: GenServer.stop(runner) end)
+      assert_receive {:pane_stream, ^run_id, stream}, 5_000
+      session = :sys.get_state(runner).session
+      state = Session.get_state(session)
+      assert Keyword.get(state.tool_opts, :tern_pane) == pane
+      session_id = state.session_manager.header.id
+
+      assert {:error, :already_streaming} = Session.reload_extensions(session)
+      state = Session.get_state(session)
+      assert Keyword.get(state.tool_opts, :tern_pane) == pane
+
+      tool =
+        CodingAgent.Tools.BrowserTabs.tool(
+          root,
+          Keyword.put(state.tool_opts, :browser_backend, :native_pane_binding_test)
+        )
+
+      assert %LemonAgent.Types.AgentToolResult{} = tool.execute.("tabs", %{}, nil, nil)
+      assert_received {:native_browser_binding, ^pane}
+
+      runner_ref = Process.monitor(runner)
+      response = response()
+      LemonAi.EventStream.push(stream, {:done, :stop, response})
+      LemonAi.EventStream.complete(stream, response)
+      collect_completed(run_ref)
+      assert_receive {:DOWN, ^runner_ref, :process, ^runner, _}, 5_000
+      LemonCore.ResumeToken.new("lemon", session_id)
+    end)
   end
 
   @tag :tmp_dir

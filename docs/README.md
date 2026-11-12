@@ -99,7 +99,7 @@ overview and the app guides below, rather than keeping a second runtime catalog.
 ## Documentation site
 
 Markdown is the source of truth. The VitePress site uses Node.js 24 LTS+,
-Python 3, and Bun 1.3.14+ for the TUI command-reference drift check. From the repository root:
+Python 3, and Bun 1.4.4+ for the TUI command-reference drift check. From the repository root:
 
 ```bash
 npm --prefix docs ci
