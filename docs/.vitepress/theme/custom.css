@@ -114,6 +114,27 @@ body { font-feature-settings: 'ss01', 'cv11'; }
 .dark .VPNavBarMenuLink.active, .dark .VPNavBarMenuGroup.active .button { color: var(--vp-c-brand-1); text-decoration: none; }
 html, body { overflow-x: clip; }
 .DocSearch-Button { border-radius: 999px !important; background: var(--vp-c-bg-soft) !important; }
+/*
+ * VitePress shows the full menu from 768px, but Lemon's seven entries need
+ * about 1000px of bar (doc pages lose the sidebar's width to it). Narrower
+ * bars use the hamburger screen; slightly wider ones get a tighter menu with
+ * search collapsed to its icon.
+ */
+.VPNavScreen { display: block !important; }
+@media (min-width: 768px) and (max-width: 1023px) {
+  .VPNavBarMenu { display: none !important; }
+  .VPNavBarHamburger { display: flex !important; }
+}
+@media (min-width: 1024px) and (max-width: 1199px) {
+  .VPNavBar.has-sidebar .VPNavBarMenu { display: none !important; }
+  .VPNavBar.has-sidebar .VPNavBarHamburger { display: flex !important; }
+  .VPNavBar:not(.has-sidebar) .VPNavBarMenuLink, .VPNavBar:not(.has-sidebar) .VPNavBarMenuGroup .button { padding: 0 8px; font-size: 13.5px; }
+  .VPNavBar:not(.has-sidebar) .DocSearch-Button-Placeholder, .VPNavBar:not(.has-sidebar) .DocSearch-Button-Keys { display: none; }
+}
+@media (min-width: 1200px) and (max-width: 1439px) {
+  .VPNavBar.has-sidebar .VPNavBarMenuLink, .VPNavBar.has-sidebar .VPNavBarMenuGroup .button { padding: 0 8px; font-size: 13.5px; }
+  .VPNavBar.has-sidebar .DocSearch-Button-Placeholder, .VPNavBar.has-sidebar .DocSearch-Button-Keys { display: none; }
+}
 
 /* Sidebar */
 .VPSidebar { border-right: 1px solid var(--vp-c-divider); }
