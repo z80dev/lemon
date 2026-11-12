@@ -20,7 +20,9 @@ defmodule CodingAgent.Tools.Browser do
   @spec tool(String.t(), keyword(), map()) :: AgentTool.t()
   def tool(cwd, opts, spec) do
     {resolution, opts} =
-      Keyword.pop_lazy(opts, :browser_provider_resolution, &LemonCore.BrowserProvider.resolve/0)
+      Keyword.pop_lazy(opts, :browser_provider_resolution, fn ->
+        LemonCore.BrowserProvider.resolve(opts)
+      end)
 
     # Routing reads the selection and, when nothing is available, its reason;
     # per-provider diagnostics stay in doctor and control-plane status.
@@ -39,6 +41,7 @@ defmodule CodingAgent.Tools.Browser do
               :browser_hybrid_local_backend,
               :browser_hybrid_public_backend,
               :session_id,
+              :tern_pane,
               :run_id
             ])
             |> Enum.map(fn

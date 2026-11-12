@@ -153,7 +153,7 @@ defmodule CodingAgent.ToolRegistry do
          not browser_tools_requested?(tool_filters(opts)) do
       opts
     else
-      Keyword.put(opts, :browser_provider_resolution, LemonCore.BrowserProvider.resolve())
+      Keyword.put(opts, :browser_provider_resolution, LemonCore.BrowserProvider.resolve(opts))
     end
   end
 
@@ -520,7 +520,7 @@ defmodule CodingAgent.ToolRegistry do
   # The provider is resolved at most once per build, and only when a browser
   # tool can survive the build's filters.
   defp builtin_tool_tuples(cwd, opts, browser?, resolution) do
-    resolution = if browser?, do: resolution || LemonCore.BrowserProvider.resolve()
+    resolution = if browser?, do: resolution || LemonCore.BrowserProvider.resolve(opts)
     browser_opts = Keyword.put(opts, :browser_provider_resolution, resolution)
 
     builtin_tools()

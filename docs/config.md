@@ -2129,26 +2129,32 @@ for the auto order, fail-closed behavior, LCU prerequisites and connector rollba
 
 ```toml
 [runtime.tools.browser]
-provider = "auto" # lcu, relay, local, cdp, browserbase, browser_use,
+provider = "auto" # tern, lcu, relay, local, cdp, browserbase, browser_use,
                   # firecrawl, camofox, controller, hybrid
+tern = true # false disables native Tern browser integration
 ```
 
-`LEMON_BROWSER_PROVIDER` takes precedence over TOML. `auto` checks LCU, then the
-authenticated relay, then managed local Chrome; it never installs a connector.
-Explicit providers never fall back to another browser identity.
+`LEMON_BROWSER_PROVIDER` takes precedence over TOML. For a direct-loopback TUI
+invocation bound to a Tern pane, `auto` first checks Tern's native browser;
+otherwise it checks LCU, the authenticated relay, then managed local Chrome.
+`LEMON_BROWSER_TERN=0` disables native Tern browser integration. A definite
+unavailable-window/unsupported/connect error during auto-selected PiP opening
+falls back to the next browser backend and reports a note. Explicit `tern`, like
+other explicit providers, never falls back to another browser identity.
 Provider credentials remain in the secret store/environment, not this selector.
 The following environment variables configure individual backends:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `LEMON_BROWSER_PROVIDER` | `auto` | Unified provider id (see above) |
+| `LEMON_BROWSER_TERN` | `true` | Enable native Tern PiP for a locally bound pane (`0` opts out) |
 | `LEMON_BROWSER_DRIVER_PATH` | auto | Browser Node driver path |
 | `LEMON_BROWSER_CDP_ENDPOINT` | none | HTTP discovery or direct `ws`/`wss` CDP endpoint |
 | `LEMON_BROWSER_ATTACH_ONLY` | `false` | Never launch a replacement browser |
 | `LEMON_BROWSER_CDP_PORT` | `18800` | Managed local Chrome CDP port |
 | `LEMON_BROWSER_RELAY_PORT` | `9224` | Loopback MV3 relay port |
 | `LEMON_BROWSER_RELAY_TOKEN` | none | Required relay shared secret |
-| `LEMON_BROWSER_BACKEND` | `local` | `local`, `controller`, `hybrid`, `browserbase`, `browser_use`, `firecrawl`, or `camofox` |
+| `LEMON_BROWSER_BACKEND` | `local` | `local`, `tern`, `controller`, `hybrid`, `browserbase`, `browser_use`, `firecrawl`, or `camofox` |
 | `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | `local` | Local/private route used by `hybrid` |
 | `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | none | Required public route used by `hybrid` |
 | `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | none | Browserbase hosted sessions |

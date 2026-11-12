@@ -296,7 +296,7 @@ grant change. Rich execution frames allow 131,072 JSON items within the
 configured byte limit (default 16 MiB); unrelated traversal stays at 10,000,
 and explicit smaller transport limits remain authoritative.
 
-`chat.send {sessionKey,prompt,[profileId,agentId,cwd,images,queueMode,invocationMcpServers,invocationToolPolicy]}` can use a
+`chat.send {sessionKey,prompt,[profileId,agentId,cwd,ternPane,images,queueMode,invocationMcpServers,invocationToolPolicy]}` can use a
 profile's persona, model and node on arbitrary task/DM/group session keys.
 Named profile requests carry JSON-safe system prompt/bootstrap instructions
 and MCP servers to the worker and omit controller-default cwd. Provider
@@ -306,6 +306,12 @@ With `profileId`, `invocationMcpServers` uses the same server shape and replaces
 the complete default connector list for this run. Omission inherits the profile;
 `[]` attaches none. Supplied definitions never merge owner headers or connectors.
 Only operator-authorized requests reach this seam.
+`ternPane` is an optional JSON integer from `0` through `9007199254740991`.
+It binds native browser tools to that pane for this invocation only, including
+tool reloads, but is not persisted, inherited on a later resumed invocation, or
+forwarded to named execution nodes. Only actual direct-loopback WebSocket peers
+may supply it, even when authenticated; request-supplied addresses are ignored.
+The Tern socket path is resolved on the daemon and is never an invocation option.
 `invocationToolPolicy` also requires `profileId` and uses the same validated
 native shape, including sparse tri-state `workspace_read_exempt` (`true | false | nil`).
 Omission or `{}` adds no restriction; `allow: []` denies all.

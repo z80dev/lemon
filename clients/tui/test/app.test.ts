@@ -13,6 +13,12 @@ import { waitForText } from "./helpers/wait.ts";
 const teardown: Array<() => void> = [];
 
 beforeEach(() => {
+	const pane = process.env.TERN_PANE;
+	delete process.env.TERN_PANE;
+	teardown.push(() => {
+		if (pane === undefined) delete process.env.TERN_PANE;
+		else process.env.TERN_PANE = pane;
+	});
 	initTheme({ colorLevel: 3 });
 });
 
@@ -141,6 +147,38 @@ describe("AppShell", () => {
 		});
 		expect(chatText(app)).toContain("what is the status?");
 	});
+
+	test.each(["0", "00042", "9007199254740991"])(
+		"chat.send forwards decimal safe Tern pane %s as an integer",
+		async (pane) => {
+			const previous = process.env.TERN_PANE;
+			teardown.push(() => {
+				if (previous === undefined) delete process.env.TERN_PANE;
+				else process.env.TERN_PANE = previous;
+			});
+			process.env.TERN_PANE = pane;
+			const { app, server } = await bootApp("pane-binding");
+			await app.submit("use this pane");
+			expect(server.requestsFor("chat.send")[0]?.params).toMatchObject({
+				ternPane: Number(pane),
+			});
+		},
+	);
+
+	test.each(["", "-1", "1.5", "1e3", " 42", "42 ", "0x2a", "9007199254740992"])(
+		"chat.send omits malformed Tern pane %s",
+		async (pane) => {
+			const previous = process.env.TERN_PANE;
+			teardown.push(() => {
+				if (previous === undefined) delete process.env.TERN_PANE;
+				else process.env.TERN_PANE = previous;
+			});
+			process.env.TERN_PANE = pane;
+			const { app, server } = await bootApp("invalid-pane-binding");
+			await app.submit("do not bind an invalid pane");
+			expect(server.requestsFor("chat.send")[0]?.params).not.toHaveProperty("ternPane");
+		},
+	);
 
 	test("blank submissions are ignored", async () => {
 		const { app, server } = await bootApp();

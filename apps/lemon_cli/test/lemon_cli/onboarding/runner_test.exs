@@ -292,6 +292,92 @@ defmodule LemonCli.Onboarding.RunnerTest do
     assert prompt_index < code_index
   end
 
+  test "consented device URLs open beside Tern and release, falling back on failure", %{
+    tmp_dir: tmp_dir
+  } do
+    keys = ~w(TERN_PANE TERN_PANE_SOCKET PATH)
+    previous = Map.new(keys, &{&1, System.get_env(&1)})
+
+    on_exit(fn ->
+      Enum.each(previous, fn {key, value} ->
+        if value, do: System.put_env(key, value), else: System.delete_env(key)
+      end)
+    end)
+
+    bin = Path.join(tmp_dir, "bin")
+    File.mkdir_p!(bin)
+    marker = Path.join(tmp_dir, "system-browser")
+    command = if :os.type() == {:unix, :darwin}, do: "open", else: "xdg-open"
+    executable = Path.join(bin, command)
+    File.write!(executable, "#!/bin/sh\nprintf '%s' \"$1\" > '#{marker}'\n")
+    File.chmod!(executable, 0o700)
+    System.put_env("PATH", bin <> ":" <> System.get_env("PATH", ""))
+    System.put_env("TERN_PANE", "123")
+    path = Path.join(System.tmp_dir!(), "lo-#{System.unique_integer([:positive])}.sock")
+    System.put_env("TERN_PANE_SOCKET", path)
+
+    {:ok, listener} =
+      :gen_tcp.listen(0, [:binary, active: false, ifaddr: {:local, String.to_charlist(path)}])
+
+    parent = self()
+
+    daemon =
+      spawn(fn ->
+        {:ok, socket} = :gen_tcp.accept(listener)
+        assert tern_recv(socket) == %{"hello" => %{}}
+        tern_send(socket, %{"welcome" => %{"ops" => ["browser"]}})
+        open = tern_recv(socket)
+        send(parent, {:tern_open, open["browser"]})
+        tern_send(socket, %{"id" => open["id"], "browser" => %{"ok" => %{"block" => 77}}})
+        release = tern_recv(socket)
+        send(parent, {:tern_release, release["browser"]})
+        tern_send(socket, %{"id" => release["id"], "browser" => %{"ok" => %{}}})
+        :gen_tcp.close(socket)
+      end)
+
+    on_exit(fn ->
+      Process.exit(daemon, :kill)
+      :gen_tcp.close(listener)
+      File.rm(path)
+    end)
+
+    spec = %{Providers.fetch!("github_copilot") | oauth_module: FakeOAuth}
+
+    Runner.run(["--auth", "oauth", "--config-path", Path.join(tmp_dir, "tern.toml")], spec,
+      io: build_io(self(), ["y"], [])
+    )
+
+    assert_receive {:tern_open,
+                    %{
+                      "op" => "open",
+                      "owner" => 123,
+                      "how" => "beside",
+                      "url" => "https://github.com/login/device"
+                    }}
+
+    assert_receive {:tern_release, %{"op" => "release", "block" => 77}}
+    refute File.exists?(marker)
+    :gen_tcp.close(listener)
+    File.rm!(path)
+
+    Runner.run(["--auth", "oauth", "--config-path", Path.join(tmp_dir, "fallback.toml")], spec,
+      io: build_io(self(), ["y"], [])
+    )
+
+    assert File.read!(marker) == "https://github.com/login/device"
+  end
+
+  defp tern_recv(socket) do
+    {:ok, <<size::little-32>>} = :gen_tcp.recv(socket, 4, 5_000)
+    {:ok, json} = :gen_tcp.recv(socket, size, 5_000)
+    Jason.decode!(json)
+  end
+
+  defp tern_send(socket, message) do
+    json = Jason.encode!(message)
+    :gen_tcp.send(socket, <<byte_size(json)::little-32, json::binary>>)
+  end
+
   test "Codex CLI import is explicit and rejects token and path conflicts", %{tmp_dir: tmp_dir} do
     spec = Providers.fetch!("openai-codex")
     assert spec.default_auth_mode == :oauth

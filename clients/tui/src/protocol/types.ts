@@ -432,6 +432,8 @@ export interface ChatSendParams {
 	agentId?: string;
 	/** Launch workspace for ordinary TUI sessions; profiles keep server-owned cwd. */
 	cwd?: string;
+	/** Invocation-only pane binding; accepted by direct-loopback runtimes only. */
+	ternPane?: number;
 	queueMode?: QueueMode;
 }
 

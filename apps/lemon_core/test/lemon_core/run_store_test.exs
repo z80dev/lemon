@@ -43,6 +43,13 @@ defmodule LemonCore.RunStoreTest do
     name
   end
 
+  test "pane bindings are removed recursively from persisted execution projections" do
+    assert RunStore.execution_projection(%{
+             meta: %{tern_pane: 42, keep: "retained"},
+             events: [%{"tern_pane" => 7, "ok" => true}]
+           }) == %{meta: %{keep: "retained"}, events: [%{"ok" => true}]}
+  end
+
   test "fresh session incarnations are unique despite equal timestamps and survive updates" do
     suffix = System.unique_integer([:positive])
     first = "agent:incarnation_first_#{suffix}:main"

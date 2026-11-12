@@ -692,6 +692,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "agentId" => :string,
         "profileId" => :string,
         "cwd" => :string,
+        "ternPane" => :integer,
         "images" => :list,
         "queueMode" => :string
       }

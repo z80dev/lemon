@@ -9,6 +9,7 @@ defmodule LemonBrowser.BackendRegistry do
   @key {__MODULE__, :backends}
   @builtins %{
     local: LemonBrowser.Backends.Local,
+    tern: LemonBrowser.Backends.Tern,
     controller: LemonBrowser.Backends.Controller,
     hybrid: LemonBrowser.Backends.Hybrid,
     browserbase: LemonBrowser.Backends.Browserbase,
