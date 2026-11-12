@@ -36,9 +36,17 @@ defmodule LemonCore.Service do
     {manager, _, _} = manager(opts)
 
     with true <- role in Role.roles(),
-         {:ok, spec, _existing} <- resolve(role, manager, opts, :install),
+         {:ok, spec, existing} <- resolve(role, manager, opts, :install),
          true <- spec.argv != [] do
-      {:ok, spec}
+      # The desired process environment is not caller context or proof of the
+      # controller used by an already installed process.
+      installed_env =
+        case existing do
+          {:ok, parsed} -> parsed.env
+          _ -> nil
+        end
+
+      {:ok, Map.put(spec, :installed_env, installed_env)}
     else
       _ -> {:error, :service_spec_unavailable}
     end

@@ -27,8 +27,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   reconfiguration, and preserves existing env-file permissions.
   Backend configuration changes force the existing service restart path and
   verification observes its loaded approval, not only the config file. Planning
-  shares the service installer's effective environment; mismatched controller
-  credential ports fail before mutation.
+  shares the service installer's backend projection while retaining caller XDG
+  paths and callback allowlists. Credential-port checks use the saved endpoint
+  before the installer's desired-port override and fail before mutation.
 - Lemon Bot backend tests and the web build/tests now gate CI and run in the
   changed-file/premerge lane. Web tests run in separate processes so module
   mocks cannot leak between suites.

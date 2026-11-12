@@ -268,10 +268,12 @@ This configures Tailscale Serve for the loopback Bot backend, saves its HTTPS
 origin, updates both controller callback allowlists, approves exactly that origin
 for the backend's first-party private MCP tools in its existing operator
 configuration, and restarts the backend when its effective configuration changes.
-It uses the service installer's environment resolution, verifies instance identity,
+It resolves the backend's process environment without dropping the caller's
+service paths or existing callback allowlists, verifies instance identity,
 controller admission, execution's MCP destination policy and the running backend's
 loaded approval before marking the receipt active. A controller/launcher credential
-port mismatch refuses before changing settings; select that controller's port with
+port mismatch is checked against the saved backend endpoint before any desired
+port override or settings change; select that controller's port with
 `LEMON_CONTROL_PLANE_PORT` when invoking the command. Tailscale must already be
 installed and connected. It uses private
 tailnet access, **not Funnel**; it does not expose the controller operator port

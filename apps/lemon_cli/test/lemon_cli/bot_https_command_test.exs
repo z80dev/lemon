@@ -110,6 +110,118 @@ defmodule LemonCli.BotHttpsCommandTest do
     {:ok, home: home, opts: opts, calls: calls}
   end
 
+  defp real_linux_options(opts, home, environment) do
+    bot = Path.join(home, ".local/bin/lemon-bot")
+    File.mkdir_p!(Path.dirname(bot))
+    File.write!(bot, "#!/bin/sh\nexit 0\n")
+    File.chmod!(bot, 0o700)
+
+    opts
+    |> Keyword.delete(:backend_env)
+    |> Keyword.merge(
+      os: :linux,
+      uid: "501",
+      bot: bot,
+      login_path: "/usr/bin:/bin",
+      env: environment,
+      command_runner: fn
+        "systemctl", ["--user", "show-environment"], _ -> {"", 0}
+        _, _, _ -> {"", 1}
+      end
+    )
+  end
+
+  test "real resolution preserves caller XDG paths and callback origins through enable and disable",
+       %{home: home, opts: opts} do
+    alias LemonCore.Service
+    alias LemonCore.Service.{Role, Unit}
+    xdg = Path.join(home, "custom-xdg")
+
+    environment = %{
+      "XDG_CONFIG_HOME" => xdg,
+      @native => "http://127.0.0.1:4100,https://native-existing.example",
+      @cron => "http://127.0.0.1:4100,https://cron-existing.example"
+    }
+
+    options = real_linux_options(opts, home, environment)
+    assert {:ok, saved} = Role.build("backend", "systemd", options)
+    assert :ok = Unit.write(saved, "systemd")
+    assert saved.path == Path.join(xdg, "systemd/user/lemon-bot.service")
+    install = options[:service_install]
+
+    options =
+      Keyword.put(options, :service_install, fn roles, installing ->
+        assert installing[:env]["XDG_CONFIG_HOME"] == xdg
+        assert installing[:env][@native] == environment[@native]
+        assert installing[:env][@cron] == environment[@cron]
+
+        for role <- roles do
+          assert {:ok, spec} = Service.install_spec(role, installing)
+          assert Path.dirname(spec.path) == Path.join(xdg, "systemd/user")
+          assert :ok = Unit.write(spec, "systemd")
+        end
+
+        install.(roles, installing)
+      end)
+
+    assert {:ok, _} = HTTPS.execute(["enable", "--url", "https://bot.example"], options)
+    text = File.read!(Path.join(home, ".lemon/env"))
+    assert text =~ "https://native-existing.example"
+    assert text =~ "https://cron-existing.example"
+    assert text =~ "https://bot.example"
+    assert {:ok, actual} = Unit.read(saved.path, "systemd")
+    assert actual.env["LEMON_BOT_PUBLIC_URL"] == "https://bot.example"
+    assert File.exists?(Path.join(xdg, "systemd/user/lemon-controller.service"))
+    refute File.exists?(Path.join(home, ".config/systemd/user"))
+    assert {:ok, _} = HTTPS.execute(["disable"], options)
+    restored = File.read!(Path.join(home, ".lemon/env"))
+    assert restored =~ "https://native-existing.example"
+    assert restored =~ "https://cron-existing.example"
+    refute restored =~ "https://bot.example"
+    assert {:ok, actual} = Unit.read(saved.path, "systemd")
+    refute Map.has_key?(actual.env, "LEMON_BOT_PUBLIC_URL")
+    refute File.exists?(Path.join(home, ".config/systemd/user"))
+  end
+
+  test "real saved controller port is checked before the installer's desired-port override", %{
+    home: home,
+    opts: opts,
+    calls: calls
+  } do
+    alias LemonCore.Service
+    alias LemonCore.Service.{Role, Unit}
+    xdg = Path.join(home, "custom-xdg")
+
+    saved_options =
+      real_linux_options(opts, home, %{
+        "XDG_CONFIG_HOME" => xdg,
+        "LEMON_CONTROL_PLANE_PORT" => "5050"
+      })
+
+    assert {:ok, saved} = Role.build("backend", "systemd", saved_options)
+    assert :ok = Unit.write(saved, "systemd")
+    before = File.read!(saved.path)
+
+    options =
+      real_linux_options(opts, home, %{
+        "XDG_CONFIG_HOME" => xdg,
+        "LEMON_CONTROL_PLANE_PORT" => "4040",
+        "LEMON_CONTROL_PLANE_OPERATOR_TOKEN" => "never-print"
+      })
+
+    assert {:ok, desired} = Service.install_spec("backend", options)
+    assert desired.env["LEMON_CONTROL_PLANE_PORT"] == "4040"
+    assert desired.installed_env["LEMON_CONTROL_PLANE_PORT"] == "5050"
+    assert {:error, message} = HTTPS.execute(["enable", "--url", "https://bot.example"], options)
+    assert message =~ "LEMON_CONTROL_PLANE_PORT=5050"
+    refute message =~ "never-print"
+    assert Agent.get(calls, & &1) == []
+    assert File.read!(saved.path) == before
+    refute File.exists?(Path.join(home, ".lemon/bot-https.json"))
+    refute File.exists?(Path.join(home, ".lemon/env"))
+    refute File.exists?(Path.join(home, ".lemon/lemon_bot/config.json"))
+  end
+
   test "backend policy changes restart on enable, pending retry, and disable and are checked live",
        %{home: home, opts: opts} do
     install = opts[:service_install]

@@ -84,9 +84,9 @@ defmodule LemonCli.BotHttpsCommand do
 
   defp change({:enable, mode}, opts) do
     with {:ok, existing} <- read_state(opts),
-         {:ok, backend} <- backend_environment(opts),
+         {:ok, backend, installed} <- backend_environment(opts),
          opts <- bind_backend_environment(backend, opts),
-         {:ok, opts} <- controller_options(backend, opts),
+         {:ok, opts} <- controller_options(installed || backend, opts),
          {:ok, env_file} <- read_env(opts),
          {:ok, operator} <- read_operator(backend, opts),
          {:ok, plan} <- plan(mode, existing, backend, env_file, operator, opts),
@@ -120,9 +120,9 @@ defmodule LemonCli.BotHttpsCommand do
       if is_nil(state) do
         with {:ok, result} <- status(opts), do: {:ok, Map.put(result, :changed, false)}
       else
-        with {:ok, backend} <- backend_environment(opts),
+        with {:ok, backend, installed} <- backend_environment(opts),
              opts <- bind_backend_environment(backend, opts),
-             {:ok, opts} <- controller_options(backend, opts),
+             {:ok, opts} <- controller_options(installed || backend, opts),
              {:ok, env_file} <- read_env(opts),
              {:ok, operator} <- read_operator(backend, opts),
              :ok <- remove_owned_route(state, opts),
@@ -228,7 +228,7 @@ defmodule LemonCli.BotHttpsCommand do
   defp bind_backend_environment(backend, opts) do
     opts
     |> Keyword.put_new(:launcher_controller_port, Role.port("controller", opts))
-    |> Keyword.put(:env, backend)
+    |> Keyword.put(:backend_process_env, backend)
   end
 
   defp matching_credential_endpoint(uri, opts) do
@@ -622,7 +622,7 @@ defmodule LemonCli.BotHttpsCommand do
 
   defp status(opts) do
     with {:ok, state} <- read_state(opts),
-         {:ok, backend} <- backend_environment(opts),
+         {:ok, backend, installed} <- backend_environment(opts),
          {:ok, file} <- read_env(opts) do
       address = if state, do: state["origin"], else: canonical(backend["LEMON_BOT_PUBLIC_URL"])
 
@@ -668,7 +668,7 @@ defmodule LemonCli.BotHttpsCommand do
         end
 
       controller =
-        case controller_options(backend, opts) do
+        case controller_options(installed || backend, opts) do
           {:ok, resolved} ->
             if address && controller_check(address, resolved) == :ok,
               do: "allowed",
@@ -693,15 +693,15 @@ defmodule LemonCli.BotHttpsCommand do
   defp backend_environment(opts) do
     case Keyword.fetch(opts, :backend_env) do
       {:ok, read} when is_function(read, 0) ->
-        read.()
+        with {:ok, env} <- read.(), do: {:ok, env, env}
 
       {:ok, env} ->
-        {:ok, env}
+        {:ok, env, env}
 
       :error ->
         case Service.install_spec("backend", opts) do
           {:ok, spec} ->
-            {:ok, spec.env}
+            {:ok, spec.env, spec.installed_env}
 
           _ ->
             {:error,
@@ -711,7 +711,7 @@ defmodule LemonCli.BotHttpsCommand do
   end
 
   defp backend_status(opts) do
-    with {:ok, saved} <- backend_environment(opts) do
+    with {:ok, saved, _installed} <- backend_environment(opts) do
       bot = bot_executable(opts)
 
       env = backend_command_env(saved, opts[:bot_public_url], opts)
@@ -938,7 +938,16 @@ defmodule LemonCli.BotHttpsCommand do
 
   defp state_path(opts), do: Path.join([Role.home(opts), ".lemon", @state_file])
   defp env_path(opts), do: Path.join([Role.home(opts), ".lemon", "env"])
-  defp loopback(opts), do: "http://127.0.0.1:#{Role.port("backend", opts)}"
+
+  defp loopback(opts) do
+    port =
+      case opts[:backend_process_env] do
+        %{"LEMON_BOT_PORT" => port} -> port
+        _ -> Role.port("backend", opts)
+      end
+
+    "http://127.0.0.1:#{port}"
+  end
 
   defp canonical(value) do
     case BotAdmission.origin(value) do
