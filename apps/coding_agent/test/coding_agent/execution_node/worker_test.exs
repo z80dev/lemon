@@ -2164,7 +2164,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     state = %Worker{
       name: "newphy",
       default_cwd: tmp_dir,
-      execution_capabilities: ["read"]
+      services: %{execution_capabilities: ["read"]}
     }
 
     assert {:ok, request, _opts} =
@@ -2190,7 +2190,12 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
        %{
          tmp_dir: tmp_dir
        } do
-    state = %Worker{name: "newphy", default_cwd: tmp_dir, execution_capabilities: ["read"]}
+    state = %Worker{
+      name: "newphy",
+      default_cwd: tmp_dir,
+      services: %{execution_capabilities: ["read"]}
+    }
+
     args = remote_args("authority", %{"prompt" => "work", "toolPolicy" => %{allow: :all}})
 
     assert {:error, :execution_context_run_id_mismatch} =
