@@ -30,6 +30,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   shares the service installer's backend projection while retaining caller XDG
   paths and callback allowlists. Credential-port checks use the saved endpoint
   before the installer's desired-port override and fail before mutation.
+  Installed and desired controller endpoints must match; HTTPS setup never
+  changes the controller as a side effect of reinstalling the backend.
 - Lemon Bot backend tests and the web build/tests now gate CI and run in the
   changed-file/premerge lane. Web tests run in separate processes so module
   mocks cannot leak between suites.

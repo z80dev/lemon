@@ -222,6 +222,53 @@ defmodule LemonCli.BotHttpsCommandTest do
     refute File.exists?(Path.join(home, ".lemon/lemon_bot/config.json"))
   end
 
+  test "real resolution refuses a desired controller change before enable or disable mutates settings",
+       %{home: home, opts: opts, calls: calls} do
+    alias LemonCore.Service
+    alias LemonCore.Service.{Role, Unit}
+    xdg = Path.join(home, "custom-xdg")
+    environment = %{"XDG_CONFIG_HOME" => xdg, "LEMON_CONTROL_PLANE_PORT" => "4040"}
+    options = real_linux_options(opts, home, environment)
+    assert {:ok, installed} = Role.build("backend", "systemd", options)
+    assert :ok = Unit.write(installed, "systemd")
+    before_unit = File.read!(installed.path)
+
+    changing =
+      Keyword.put(
+        options,
+        :env,
+        Map.put(environment, "LEMON_BOT_CONTROL_URL", "ws://127.0.0.1:5050/ws")
+      )
+
+    assert {:ok, desired} = Service.install_spec("backend", changing)
+    assert desired.installed_env["LEMON_CONTROL_PLANE_PORT"] == "4040"
+    refute Map.has_key?(desired.installed_env, "LEMON_BOT_CONTROL_URL")
+    assert desired.env["LEMON_BOT_CONTROL_URL"] == "ws://127.0.0.1:5050/ws"
+    assert {:error, message} = HTTPS.execute(["enable", "--url", "https://bot.example"], changing)
+    assert message =~ "doesn't change the controller"
+    assert message =~ "lemon service install"
+    assert Agent.get(calls, & &1) == []
+    assert File.read!(installed.path) == before_unit
+    refute File.exists?(Path.join(home, ".lemon/bot-https.json"))
+    refute File.exists?(Path.join(home, ".lemon/env"))
+    refute File.exists?(Path.join(home, ".lemon/lemon_bot/config.json"))
+
+    assert {:ok, _} = HTTPS.execute(["enable", "--url", "https://bot.example"], options)
+
+    snapshots =
+      Map.new([".lemon/bot-https.json", ".lemon/env", ".lemon/lemon_bot/config.json"], fn path ->
+        {path, File.read!(Path.join(home, path))}
+      end)
+
+    count = length(Agent.get(calls, & &1))
+    assert {:error, message} = HTTPS.execute(["disable"], changing)
+    assert message =~ "doesn't change the controller"
+    assert message =~ "lemon service install"
+    assert length(Agent.get(calls, & &1)) == count
+    assert File.read!(installed.path) == before_unit
+    for {path, contents} <- snapshots, do: assert(File.read!(Path.join(home, path)) == contents)
+  end
+
   test "backend policy changes restart on enable, pending retry, and disable and are checked live",
        %{home: home, opts: opts} do
     install = opts[:service_install]

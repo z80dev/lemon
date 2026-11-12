@@ -86,7 +86,7 @@ defmodule LemonCli.BotHttpsCommand do
     with {:ok, existing} <- read_state(opts),
          {:ok, backend, installed} <- backend_environment(opts),
          opts <- bind_backend_environment(backend, opts),
-         {:ok, opts} <- controller_options(installed || backend, opts),
+         {:ok, opts} <- controller_options(backend, installed, opts),
          {:ok, env_file} <- read_env(opts),
          {:ok, operator} <- read_operator(backend, opts),
          {:ok, plan} <- plan(mode, existing, backend, env_file, operator, opts),
@@ -122,7 +122,7 @@ defmodule LemonCli.BotHttpsCommand do
       else
         with {:ok, backend, installed} <- backend_environment(opts),
              opts <- bind_backend_environment(backend, opts),
-             {:ok, opts} <- controller_options(installed || backend, opts),
+             {:ok, opts} <- controller_options(backend, installed, opts),
              {:ok, env_file} <- read_env(opts),
              {:ok, operator} <- read_operator(backend, opts),
              :ok <- remove_owned_route(state, opts),
@@ -242,7 +242,29 @@ defmodule LemonCli.BotHttpsCommand do
     end
   end
 
-  defp controller_options(backend, opts) do
+  defp controller_options(backend, installed, opts) do
+    with {:ok, desired} <- resolve_controller_options(backend, opts),
+         {:ok, current} <-
+           if(is_nil(installed),
+             do: {:ok, desired},
+             else: resolve_controller_options(installed, opts)
+           ) do
+      desired_uri = URI.parse(desired[:controller_url])
+      current_uri = URI.parse(current[:controller_url])
+      endpoint_keys = [:scheme, :host, :port, :path]
+
+      if Map.take(desired_uri, endpoint_keys) == Map.take(current_uri, endpoint_keys) do
+        with :ok <- matching_credential_endpoint(current_uri, opts),
+             :ok <- matching_credential_endpoint(desired_uri, opts),
+             do: {:ok, desired}
+      else
+        {:error,
+         "`lemon bot https` doesn't change the controller. Installed and desired endpoints differ; change it with `lemon service install` first, or retain the installed endpoint by invoking HTTPS with LEMON_CONTROL_PLANE_PORT=#{current_uri.port} and no controller-URL override. No settings were changed."}
+      end
+    end
+  end
+
+  defp resolve_controller_options(backend, opts) do
     explicit =
       backend["LEMON_BOT_CONTROL_URL"] not in [nil, ""] or
         backend["LEMON_BOT_OPERATOR_TOKEN"] not in [nil, ""]
@@ -271,8 +293,7 @@ defmodule LemonCli.BotHttpsCommand do
                true <-
                  uri.path == "/ws" and is_nil(uri.userinfo) and is_nil(uri.query) and
                    is_nil(uri.fragment),
-               true <- is_integer(uri.port) and uri.port in 1..65_535,
-               :ok <- matching_credential_endpoint(uri, opts) do
+               true <- is_integer(uri.port) and uri.port in 1..65_535 do
             {:ok,
              opts |> Keyword.put(:controller_url, url) |> Keyword.put(:controller_port, uri.port)}
           else
@@ -668,7 +689,7 @@ defmodule LemonCli.BotHttpsCommand do
         end
 
       controller =
-        case controller_options(installed || backend, opts) do
+        case controller_options(backend, installed, opts) do
           {:ok, resolved} ->
             if address && controller_check(address, resolved) == :ok,
               do: "allowed",

@@ -274,8 +274,13 @@ controller admission, execution's MCP destination policy and the running backend
 loaded approval before marking the receipt active. A controller/launcher credential
 port mismatch is checked against the saved backend endpoint before any desired
 port override or settings change; select that controller's port with
-`LEMON_CONTROL_PLANE_PORT` when invoking the command. Tailscale must already be
-installed and connected. It uses private
+`LEMON_CONTROL_PLANE_PORT` when invoking the command.
+
+The command also refuses any difference between installed and desired controller
+endpoints: `lemon bot https` does not change the controller. Change it with
+`lemon service install` first, then enable HTTPS with the matching controller port.
+
+Tailscale must already be installed and connected. It uses private
 tailnet access, **not Funnel**; it does not expose the controller operator port
 4040. Devices still need to sign in to Lemon Bot.
 
