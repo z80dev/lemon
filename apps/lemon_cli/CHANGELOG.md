@@ -9,6 +9,10 @@ All notable changes to `lemon_cli` are documented here.
 - `lemon doctor` reports the Elixir 1.20.5 minimum as `runtime.elixir`, with
   actionable upgrade guidance for unsupported toolchains.
 
+- `lemon -p` / `lemon run` accept `--max-time SECONDS` (positive integer,
+  default 600), preserving cancellation and failed-result reporting on timeout.
+- Print invocations skip auxiliary project-memory extraction while retaining
+  existing memory recall, avoiding unused requests at one-shot teardown.
 - Kimi Code onboarding offers `--auth omp`, saving only the discovered executable
   path and auth source. Model-auth status and doctor report omp login readiness
   without copying credentials or probing a model endpoint.

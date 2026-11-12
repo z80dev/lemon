@@ -126,6 +126,11 @@ defmodule LemonCli.CommandRegistry do
         option("--session KEY", ["--session"], "Resume a session"),
         option("--continue", ["--continue"], "Continue the latest CLI session"),
         option(
+          "--max-time SECONDS",
+          ["--max-time"],
+          "Run timeout in seconds (positive integer; default 600)"
+        ),
+        option(
           "--approval-policy deny|allow",
           ["--approval-policy"],
           "Deny or allow approval requests"

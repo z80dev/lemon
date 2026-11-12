@@ -16,6 +16,25 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
 
   @moduletag :tmp_dir
 
+  defmodule PrintExtractionProvider do
+    @behaviour LemonAi.Provider
+    def api_id, do: :print_memory_extraction_test
+    def provider_id, do: :openai
+
+    def stream(model, _context, _opts) do
+      send(model.compat.test_owner, :unexpected_print_extraction)
+      {:ok, stream} = LemonAi.EventStream.start_link()
+
+      message = %AssistantMessage{
+        content: [%TextContent{text: "[]"}],
+        stop_reason: :stop
+      }
+
+      LemonAi.EventStream.complete(stream, message)
+      {:ok, stream}
+    end
+  end
+
   setup context do
     if context[:exclusive_capture_capacity], do: await_capture_capacity()
     :ok
@@ -50,6 +69,74 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
 
     on_exit(fn -> ProjectMemory.flush(state, 1_000) end)
     %{state: state, store: store}
+  end
+
+  test "print session runner completes and tears down without an auxiliary provider request", %{
+    state: state
+  } do
+    owner = self()
+    LemonAi.ProviderRegistry.register(:print_memory_extraction_test, PrintExtractionProvider)
+    on_exit(fn -> LemonAi.ProviderRegistry.unregister(:print_memory_extraction_test) end)
+    model = %{state.model | api: :print_memory_extraction_test, compat: %{test_owner: owner}}
+    run_ref = make_ref()
+
+    stream_fn = fn _, _, _ ->
+      {:ok, stream} = LemonAi.EventStream.start_link()
+      send(owner, {:print_provider_ready, stream})
+      {:ok, stream}
+    end
+
+    request = %LemonGateway.ExecutionRequest{
+      run_id: "print-memory-test",
+      session_key: state.session_key,
+      prompt: "What is the build command?",
+      cwd: state.cwd,
+      meta: %{model: model, project_memory_capture: false}
+    }
+
+    runner =
+      start_supervised!({
+        CodingAgent.Executor.SessionRunner,
+        request: request, sink_pid: self(), run_ref: run_ref, opts: %{stream_fn: stream_fn}
+      })
+
+    assert_receive {:print_provider_ready, stream}, 5_000
+    session = :sys.get_state(runner).session
+    session_state = CodingAgent.Session.get_state(session)
+    assert session_state.project_memory_capture == false
+    session_monitor = Process.monitor(session)
+    message = assistant("Run mix test from the umbrella root.", :stop)
+    LemonAi.EventStream.push(stream, {:done, :stop, message})
+    LemonAi.EventStream.complete(stream, message)
+
+    assert_receive {:engine_event, ^run_ref, %{__event__: :completed, ok: true}}, 5_000
+    assert_receive {:DOWN, ^session_monitor, :process, ^session, _}, 1_000
+    assert :ok = ProjectMemory.flush(session_state, 1_000)
+    refute_received :unexpected_print_extraction
+  end
+
+  test "one-shot teardown never starts a turn or compaction extraction", %{
+    state: state,
+    store: store
+  } do
+    state = Map.put(state, :project_memory_capture, false)
+    owner = self()
+
+    opts = [
+      store: store,
+      complete: fn _, _, _ ->
+        send(owner, :unexpected_one_shot_extraction)
+        response([])
+      end
+    ]
+
+    # Both session hooks run before one-shot teardown. Neither may admit a
+    # background provider request that can outlive this invocation.
+    assert :skip = ProjectMemory.after_turn(state, turn("Run mix test."), opts)
+    assert :skip = ProjectMemory.after_compaction(state, "Run mix test.", opts)
+    assert :ok = ProjectMemory.flush(state, 0)
+    refute_received :unexpected_one_shot_extraction
+    assert {:ok, []} = Project.read(state, store: store)
   end
 
   test "completed turn extracts real durable facts using bounded model options", %{

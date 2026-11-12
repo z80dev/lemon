@@ -543,6 +543,7 @@ defmodule CodingAgent.Session.Lifecycle do
       tool_disclosure: Keyword.get(opts, :tool_disclosure),
       tool_catalog: lifecycle.tool_catalog,
       session_scope: session_scope,
+      project_memory_capture: Keyword.get(opts, :project_memory_capture, true),
       task_child: task_child,
       task_depth: Keyword.get(opts, :task_depth),
       task_allowed_agents: Keyword.get(opts, :task_allowed_agents),

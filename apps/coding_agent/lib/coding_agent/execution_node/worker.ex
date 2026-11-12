@@ -1480,6 +1480,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
          {:ok, prompt} <- invocation_prompt(prompt, images),
          {:ok, meta} <-
            args |> value("meta") |> normalize_meta() |> normalize_invocation_proof(run_id),
+         :ok <- CodingAgent.Executor.RemoteRequestCodec.validate_project_memory_capture(meta),
          {:ok, cwd, folder_opts} <-
            invocation_directory(value(args, "cwdMode"), requested_cwd, meta, state.default_cwd),
          {:ok, execution_context} <- ExecutionContext.decode(value(args, "executionContext")),
@@ -2005,6 +2006,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     |> atomize_known_keys([
       :model,
       :model_explicit,
+      :project_memory_capture,
       :thinking_level,
       :system_prompt,
       :agent_id,

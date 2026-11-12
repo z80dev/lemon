@@ -74,6 +74,7 @@ defmodule CodingAgent.Session.Presentation do
     |> maybe_add_opt(:thinking_level, Keyword.get(opts, :thinking_level))
     |> maybe_add_opt(:system_prompt, Keyword.get(opts, :system_prompt))
     |> maybe_add_opt(:profile_instructions, Keyword.get(opts, :profile_instructions))
+    |> maybe_add_opt(:project_memory_capture, Keyword.get(opts, :project_memory_capture))
     |> maybe_add_opt(:stream_fn, Keyword.get(opts, :stream_fn))
     |> maybe_add_opt(:tool_policy, tool_policy)
     |> maybe_add_opt(:execution_context, Keyword.get(opts, :execution_context))

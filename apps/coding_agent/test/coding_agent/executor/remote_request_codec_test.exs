@@ -5,6 +5,40 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
   alias LemonCore.ExecutionContext
   alias LemonGateway.ExecutionRequest
 
+  @tag :tmp_dir
+  test "project-memory capture stays false across named-node transport", %{tmp_dir: cwd} do
+    for meta <- [%{project_memory_capture: false}, %{"project_memory_capture" => false}] do
+      request = %ExecutionRequest{
+        run_id: "placement",
+        session_key: "agent:placement:main",
+        prompt: "hello",
+        execution_context: context(),
+        meta: meta
+      }
+
+      assert {:ok, payload} = RemoteRequestCodec.encode(request)
+      assert payload["meta"]["project_memory_capture"] == false
+      state = %CodingAgent.ExecutionNode.Worker{name: "worker", default_cwd: cwd}
+
+      assert {:ok, destination, _} =
+               CodingAgent.ExecutionNode.Worker.execution_request(payload, state, "placement")
+
+      assert destination.meta.project_memory_capture == false
+
+      for invalid <- [nil, "false", 0, %{}] do
+        assert {:error, {:invalid_request_payload, :invalid_project_memory_capture}} =
+                 RemoteRequestCodec.encode(%{request | meta: %{project_memory_capture: invalid}})
+
+        assert {:error, {:invalid_request_payload, :invalid_project_memory_capture}} =
+                 CodingAgent.ExecutionNode.Worker.execution_request(
+                   put_in(payload, ["meta", "project_memory_capture"], invalid),
+                   state,
+                   "placement"
+                 )
+      end
+    end
+  end
+
   test "controller pane bindings never cross a named-node boundary" do
     for meta <- [%{tern_pane: 42}, %{"tern_pane" => 42}] do
       request = %ExecutionRequest{

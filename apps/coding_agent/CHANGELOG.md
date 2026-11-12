@@ -4,6 +4,9 @@
 
 ### Added
 
+- Per-invocation `project_memory_capture: false` skips automatic fact extraction
+  after successful turns and compactions without disabling project-memory recall.
+  Print runs use this option; other sessions retain capture by default.
 - Per-Bot folder reads can skip human approval only when effective policy sets
   `workspace_read_exempt == true` and the trusted worker folder, bound execution
   scope and canonical `ProfileStore.paths(profile_id)["files"]` resolve to the
