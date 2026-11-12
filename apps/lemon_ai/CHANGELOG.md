@@ -12,6 +12,8 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   argv-only omp invocation with node-wide in-memory expiry caching and forced refresh.
   Refresh credentials remain owned by omp.
   Token parsing tolerates stderr notices while requiring a JWT output line.
+  Per-executable/scope cache locking keeps an in-flight fetch from publishing a
+  rejected token after a forced refresh.
 
 ### Fixed
 

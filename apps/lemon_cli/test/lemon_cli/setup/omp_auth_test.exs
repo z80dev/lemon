@@ -186,8 +186,60 @@ defmodule LemonCli.Setup.OmpAuthTest do
     assert output() =~ "omp's Kimi Code login is unchanged"
   end
 
+  test "mixed-case omp selection preserves the real stored OAuth login and secret-name case",
+       ctx do
+    System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
+    Application.put_env(:lemon_core, Secrets, key_providers: [:env])
+    secret_name = "MixedCase_KimiOAuth"
+
+    login =
+      Jason.encode!(%{
+        "type" => "kimi_code_oauth",
+        "access_token" => "synthetic-stored-kimi-access",
+        "refresh_token" => "synthetic-stored-kimi-refresh",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
+      })
+
+    assert {:ok, _} = Secrets.set(secret_name, login)
+    stored = LemonCore.Store.list(Secrets.table())
+
+    File.write!(ctx.config_path, """
+    [defaults]
+    provider = "kimi_coding"
+    model = "k3.1-pro"
+    [providers.kimi_coding]
+    auth_source = " OMP "
+    omp_path = #{Jason.encode!(ctx.omp)}
+    api_key_secret = "#{secret_name}"
+    oauth_secret = "#{secret_name}"
+    """)
+
+    assert :ok = Provider.run(["kimi-code", "--status", "--config-path", ctx.config_path], io())
+    status = output()
+    assert status =~ "Auth source: omp (reuses omp's Kimi Code login)"
+    assert status =~ "Stored login: managed by omp"
+    assert status =~ "Credentials usable: yes"
+    refute status =~ "synthetic-stored-kimi"
+
+    assert %{provider: %{complete: true}, secrets: %{source: :not_required}} =
+             LemonCore.Setup.Readiness.status(config_path: ctx.config_path)
+
+    assert :ok = Provider.run(["kimi-code", "--logout", "--config-path", ctx.config_path], io())
+
+    assert Toml.decode_file!(ctx.config_path)["providers"]["kimi_coding"] == %{
+             "api_key_secret" => secret_name,
+             "oauth_secret" => secret_name
+           }
+
+    assert LemonCore.Store.list(Secrets.table()) == stored
+    assert {:ok, ^login} = Secrets.get(secret_name, prefer_env: false, env_fallback: false)
+
+    assert {:error, :not_found} =
+             Secrets.get(String.downcase(secret_name), prefer_env: false, env_fallback: false)
+  end
+
   test "explicit model readiness check uses omp without a model request", ctx do
-    write_config(ctx)
+    write_config(ctx, " OMP ")
 
     setup = %{
       provider: %{
@@ -211,7 +263,7 @@ defmodule LemonCli.Setup.OmpAuthTest do
   test "static provider projection never executes omp or reads encrypted login", ctx do
     assert %{status: "configured", configured: true, last_validation: nil} =
              ProviderAuth.static_status("kimi_coding", %{
-               "auth_source" => "omp",
+               "auth_source" => " OMP ",
                "omp_path" => ctx.omp
              })
 
@@ -221,7 +273,7 @@ defmodule LemonCli.Setup.OmpAuthTest do
   test "doctor live omp check resolves the token without invoking a models endpoint", ctx do
     config = %{
       agent: %{default_provider: "kimi_coding"},
-      providers: %{"kimi_coding" => %{"auth_source" => "omp", "omp_path" => ctx.omp}}
+      providers: %{"kimi_coding" => %{"auth_source" => " OMP ", "omp_path" => ctx.omp}}
     }
 
     [{"providers.live", check}] =
@@ -290,10 +342,10 @@ defmodule LemonCli.Setup.OmpAuthTest do
     assert LemonCore.Store.list(Secrets.table()) == ctx.stored
   end
 
-  defp write_config(ctx) do
+  defp write_config(ctx, auth_source \\ "omp") do
     File.write!(ctx.config_path, """
     [providers.kimi_coding]
-    auth_source = "omp"
+    auth_source = #{Jason.encode!(auth_source)}
     omp_path = #{Jason.encode!(ctx.omp)}
     api_key_secret = "untouched_kimi_login"
     """)

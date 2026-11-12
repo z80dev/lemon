@@ -787,7 +787,7 @@ defmodule LemonCli.Setup.ProviderManagement do
 
   defp default_model(_, _), do: nil
   defp display_name(id), do: id |> String.replace("_", " ") |> String.capitalize()
-  defp oauth_selected?(cfg), do: String.downcase(to_string(cfg["auth_source"] || "")) == "oauth"
+  defp oauth_selected?(cfg), do: LemonAgent.ModelRuntime.Credentials.oauth_selected?(cfg)
   defp present?(value), do: is_binary(value) and String.trim(value) != ""
   defp path(opts), do: Path.expand(Keyword.get(opts, :config_path, Config.global_path()))
 

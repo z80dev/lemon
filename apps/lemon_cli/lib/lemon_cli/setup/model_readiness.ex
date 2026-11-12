@@ -138,7 +138,8 @@ defmodule LemonCli.Setup.ModelReadiness do
     provider = canonical(Keyword.get(opts, :provider) || setup.provider.provider)
     provider_cfg = if provider == "kimi_coding", do: provider_table(provider, opts), else: %{}
 
-    if provider == "kimi_coding" and provider_cfg["auth_source"] == "omp" do
+    if provider == "kimi_coding" and
+         LemonCore.Config.Providers.normalize_auth_source(provider_cfg["auth_source"]) == "omp" do
       base = status(opts)
 
       if base.state == :saved do

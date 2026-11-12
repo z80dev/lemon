@@ -87,8 +87,9 @@ defmodule LemonCore.Doctor.Checks.Providers do
           entry.ambient.provider_env_configured
       end)
 
-    if (Map.get(provider_config, :auth_source) || Map.get(provider_config, "auth_source")) ==
-         "omp" do
+    if LemonCore.Config.Providers.normalize_auth_source(
+         Map.get(provider_config, :auth_source) || Map.get(provider_config, "auth_source")
+       ) == "omp" do
       if provider_ready?(status, provider) do
         Check.pass(
           "providers.credentials",

@@ -1357,7 +1357,7 @@ defmodule LemonCore.Config.Validator do
         errors
 
       source when is_binary(source) ->
-        normalized = source |> String.trim() |> String.downcase()
+        normalized = LemonCore.Config.Providers.normalize_auth_source(source)
 
         cond do
           is_list(choices) and normalized not in choices ->

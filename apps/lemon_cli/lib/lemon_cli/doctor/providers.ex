@@ -220,7 +220,10 @@ defmodule LemonCli.Doctor.Providers do
         do: ProviderNames.provider_config(providers_map(config), provider) || %{},
         else: %{}
 
-    auth_source = Map.get(provider_cfg, :auth_source) || Map.get(provider_cfg, "auth_source")
+    auth_source =
+      LemonCore.Config.Providers.normalize_auth_source(
+        Map.get(provider_cfg, :auth_source) || Map.get(provider_cfg, "auth_source")
+      )
 
     if kimi? and auth_source == "omp" do
       if LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(

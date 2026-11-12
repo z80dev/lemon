@@ -17,6 +17,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Kimi Code omp authentication fails closed at the model-request boundary,
+  normalizes auth-source spelling consistently for status and logout, and
+  serializes access-token cache refreshes so stale fetches cannot replace them.
+
 - Packaged `lemon daemon` (and `stop`, `rpc`, `remote`) failed with "daemon
   started but its pid could not be determined" when the machine's hostname
   resolved to a non-loopback address, because distribution is now

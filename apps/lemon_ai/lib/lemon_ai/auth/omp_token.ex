@@ -33,30 +33,35 @@ defmodule LemonAi.Auth.OmpToken do
   @spec resolve(String.t() | nil, keyword()) :: {:ok, String.t()} | {:error, atom()}
   def resolve(path \\ nil, opts \\ []) do
     with {:ok, executable} <- discover(path) do
-      now = System.system_time(:second)
-
       scope =
         Enum.map(~w(HOME XDG_CONFIG_HOME PI_CODING_AGENT_DIR OMP_PROFILE), &System.get_env/1)
 
       key = {__MODULE__, executable, scope}
-      cached = :persistent_term.get(key, nil)
+      :global.trans({key, self()}, fn -> resolve_cached(key, executable, opts) end, [node()])
+    end
+  end
 
-      if not Keyword.get(opts, :force_refresh, false) and fresh?(cached, now) do
-        {token, _exp} = cached
+  # Hold the per-key lock through publication so an ordinary in-flight fetch
+  # cannot restore a rejected token after another caller's forced refresh.
+  defp resolve_cached(key, executable, opts) do
+    now = System.system_time(:second)
+    cached = :persistent_term.get(key, nil)
+
+    if not Keyword.get(opts, :force_refresh, false) and fresh?(cached, now) do
+      {token, _exp} = cached
+      {:ok, token}
+    else
+      :persistent_term.erase(key)
+
+      args =
+        ["token", "kimi-code"] ++ if(opts[:force_refresh], do: ["--force-refresh"], else: [])
+
+      with {:ok, output} <- run(executable, args),
+           {:ok, token, exp} <- parse(output, System.system_time(:second)) do
+        if exp > System.system_time(:second) + @skew_s,
+          do: :persistent_term.put(key, {token, exp})
+
         {:ok, token}
-      else
-        :persistent_term.erase(key)
-
-        args =
-          ["token", "kimi-code"] ++ if(opts[:force_refresh], do: ["--force-refresh"], else: [])
-
-        with {:ok, output} <- run(executable, args),
-             {:ok, token, exp} <- parse(output, System.system_time(:second)) do
-          if exp > System.system_time(:second) + @skew_s,
-            do: :persistent_term.put(key, {token, exp})
-
-          {:ok, token}
-        end
       end
     end
   end

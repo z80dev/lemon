@@ -212,7 +212,11 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
       cwd: cwd,
       provider_routing: routing
     ) or
-      (not present?(provider_config_value(provider_cfg, :auth_source)) && not env_configured? &&
+      (is_nil(
+         LemonCore.Config.Providers.normalize_auth_source(
+           provider_config_value(provider_cfg, :auth_source)
+         )
+       ) && not env_configured? &&
          Credentials.provider_has_credentials?(
            "openai_codex",
            %{"openai-codex" => %{"auth_source" => "oauth"}},
@@ -250,7 +254,9 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
   end
 
   defp safe_auth_source(provider_cfg) do
-    case provider_config_value(provider_cfg, :auth_source) do
+    case LemonCore.Config.Providers.normalize_auth_source(
+           provider_config_value(provider_cfg, :auth_source)
+         ) do
       value when value in ["api_key", "oauth", "omp"] -> value
       _ -> nil
     end

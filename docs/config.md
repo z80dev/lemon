@@ -1911,6 +1911,10 @@ never raw subprocess stdout/stderr or token contents.
 `kimi-coding` and `kimi-for-coding`. `kimi-code` is an onboarding alias, not a
 provider-table name. Existing `auth_source = "oauth"` and `"api_key"` modes
 remain available; OAuth remains the default onboarding mode.
+`auth_source` values are case-insensitive and whitespace-trimmed; secret names
+remain case-sensitive. Concurrent cache fills and forced refreshes are serialized
+per executable and login scope, preventing an older fetch from restoring a
+rejected access token.
 
 
 Antigravity OAuth client credentials resolve from Lemon secrets first:

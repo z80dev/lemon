@@ -39,7 +39,7 @@ defmodule LemonCli.Setup.ProviderAuth do
     ensure_oauth_provider!(spec)
     config = read_config(config_path)
     provider_cfg = get_in(config, ["providers", spec.id]) || %{}
-    auth_source = normalize(provider_cfg["auth_source"])
+    auth_source = LemonCore.Config.Providers.normalize_auth_source(provider_cfg["auth_source"])
 
     if spec.id == "kimi_coding" and auth_source == "omp" do
       io.info.("#{spec.display_name} authentication")
@@ -102,11 +102,12 @@ defmodule LemonCli.Setup.ProviderAuth do
     content = read_config_content(expanded)
     provider_cfg = get_in(decode!(content, expanded), ["providers", spec.id]) || %{}
 
-    if spec.id == "kimi_coding" and normalize(provider_cfg["auth_source"]) == "omp" do
+    if spec.id == "kimi_coding" and
+         LemonCore.Config.Providers.normalize_auth_source(provider_cfg["auth_source"]) == "omp" do
       case ProviderManagement.persist(expanded, [], fn content ->
              current = get_in(decode!(content, expanded), ["providers", spec.id]) || %{}
 
-             if normalize(current["auth_source"]) == "omp" do
+             if LemonCore.Config.Providers.normalize_auth_source(current["auth_source"]) == "omp" do
                content
                |> TomlPatch.delete_key(spec.provider_table, "auth_source")
                |> TomlPatch.delete_key(spec.provider_table, "omp_path")
@@ -145,7 +146,8 @@ defmodule LemonCli.Setup.ProviderAuth do
             deleted? and normalize(provider_cfg["api_key_secret"]) == secret_name
 
           if secret_name == oauth_secret_name(spec, provider_cfg) and
-               (normalize(provider_cfg["auth_source"]) == "oauth" or
+               (LemonCore.Config.Providers.normalize_auth_source(provider_cfg["auth_source"]) ==
+                  "oauth" or
                   is_binary(provider_cfg["oauth_secret"]) or stale_api_key_secret?) do
             content
             |> TomlPatch.delete_key(spec.provider_table, "auth_source")
@@ -385,7 +387,8 @@ defmodule LemonCli.Setup.ProviderAuth do
         end
 
       cond do
-        provider_id == "kimi_coding" and normalize(provider_cfg["auth_source"]) == "omp" ->
+        provider_id == "kimi_coding" and
+            LemonCore.Config.Providers.normalize_auth_source(provider_cfg["auth_source"]) == "omp" ->
           observation("configured", true, nil)
 
         provider_id in ["google_vertex", "amazon_bedrock", "bedrock_converse_stream"] ->
@@ -396,7 +399,10 @@ defmodule LemonCli.Setup.ProviderAuth do
           )
 
         provider_id == "openai_codex" and
-            normalize(provider_cfg["auth_source"]) not in ["api_key", "oauth"] ->
+            LemonCore.Config.Providers.normalize_auth_source(provider_cfg["auth_source"]) not in [
+              "api_key",
+              "oauth"
+            ] ->
           observation("needs_login", provider_cfg != %{}, nil)
 
         not selected_oauth? ->

@@ -152,6 +152,20 @@ defmodule LemonCore.Config.Providers do
     }
   end
 
+  @doc """
+  Trims and lowercases an authentication source, returning `nil` for blank or
+  non-string values. Secret names are case-sensitive and must not use this helper.
+  """
+  @spec normalize_auth_source(term()) :: String.t() | nil
+  def normalize_auth_source(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "" -> nil
+      source -> source
+    end
+  end
+
+  def normalize_auth_source(_), do: nil
+
   # Private functions for resolving each provider config
 
   defp resolve_provider(config) when is_map(config) do
@@ -159,7 +173,7 @@ defmodule LemonCore.Config.Providers do
       api_key: config["api_key"],
       base_url: config["base_url"],
       api_key_secret: normalize_optional_string(config["api_key_secret"]),
-      auth_source: normalize_optional_string(config["auth_source"]),
+      auth_source: normalize_enum(config["auth_source"], &normalize_auth_source/1),
       omp_path: normalize_optional_string(config["omp_path"]),
       oauth_secret: normalize_optional_string(config["oauth_secret"]),
       project: normalize_optional_string(config["project"]),

@@ -264,6 +264,11 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   @spec oauth_selected?(map() | nil) :: boolean()
   def oauth_selected?(provider_cfg), do: normalize_auth_source(provider_cfg) == :oauth
 
+  @doc "Whether the provider config explicitly selects OAuth or omp credential authority."
+  @spec authoritative_selected?(map() | nil) :: boolean()
+  def authoritative_selected?(provider_cfg),
+    do: normalize_auth_source(provider_cfg) in [:oauth, :omp]
+
   @spec resolve_provider_api_key(atom() | String.t(), map() | nil, keyword()) :: String.t() | nil
   def resolve_provider_api_key(provider, providers_or_cfg, opts \\ []) do
     provider_cfg = provider_config(providers_or_cfg, provider, opts)
@@ -1005,20 +1010,15 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   end
 
   defp normalize_auth_source(provider_cfg) do
-    source =
-      provider_cfg
-      |> provider_config_value(:auth_source)
-      |> case do
-        value when is_binary(value) -> String.trim(value)
-        _ -> nil
-      end
-
-    cond do
-      source in [nil, ""] -> :missing
-      String.downcase(source) == "oauth" -> :oauth
-      String.downcase(source) == "api_key" -> :api_key
-      String.downcase(source) == "omp" -> :omp
-      true -> {:invalid, source}
+    provider_cfg
+    |> provider_config_value(:auth_source)
+    |> LemonCore.Config.Providers.normalize_auth_source()
+    |> case do
+      nil -> :missing
+      "oauth" -> :oauth
+      "api_key" -> :api_key
+      "omp" -> :omp
+      source -> {:invalid, source}
     end
   end
 

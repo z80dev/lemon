@@ -101,6 +101,33 @@ defmodule LemonCore.Config.ProvidersTest do
       assert config.providers["openai-codex"][:oauth_secret] == "llm_openai_codex_api_key"
     end
 
+    test "normalizes auth sources without changing case-sensitive secret references" do
+      config =
+        Providers.resolve(%{
+          "providers" => %{
+            "kimi_coding" => %{
+              "auth_source" => " OMP ",
+              "api_key_secret" => "MixedCase_KimiLogin"
+            },
+            "anthropic" => %{
+              "auth_source" => " OAuTh ",
+              "oauth_secret" => "MixedCase_ClaudeLogin"
+            },
+            "openai-codex" => %{
+              "auth_source" => " API_KEY ",
+              "api_key_secret" => "MixedCase_CodexKey"
+            }
+          }
+        })
+
+      assert config.providers["kimi_coding"][:auth_source] == "omp"
+      assert config.providers["kimi_coding"][:api_key_secret] == "MixedCase_KimiLogin"
+      assert config.providers["anthropic"][:auth_source] == "oauth"
+      assert config.providers["anthropic"][:oauth_secret] == "MixedCase_ClaudeLogin"
+      assert config.providers["openai-codex"][:auth_source] == "api_key"
+      assert config.providers["openai-codex"][:api_key_secret] == "MixedCase_CodexKey"
+    end
+
     test "filters out nil values" do
       settings = %{
         "providers" => %{

@@ -267,7 +267,9 @@ defmodule LemonCore.Doctor.ProviderDiagnostics do
   end
 
   defp safe_auth_source(provider_config) do
-    case map_value(provider_config, :auth_source) do
+    case LemonCore.Config.Providers.normalize_auth_source(
+           map_value(provider_config, :auth_source)
+         ) do
       value when value in ["api_key", "oauth", "omp"] -> value
       _ -> nil
     end

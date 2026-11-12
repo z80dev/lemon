@@ -421,7 +421,7 @@ defmodule LemonCli.Onboarding.Providers do
     auth_source =
       provider_cfg
       |> Map.get("auth_source")
-      |> normalize_optional_string()
+      |> LemonCore.Config.Providers.normalize_auth_source()
 
     cond do
       auth_source == "oauth" -> "oauth configured"
@@ -445,13 +445,6 @@ defmodule LemonCli.Onboarding.Providers do
       _ -> %{}
     end
   end
-
-  defp normalize_optional_string(value) when is_binary(value) do
-    value = String.trim(value)
-    if value == "", do: nil, else: String.downcase(value)
-  end
-
-  defp normalize_optional_string(_), do: nil
 
   defp normalize_name(value) do
     value

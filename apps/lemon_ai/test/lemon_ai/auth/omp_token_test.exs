@@ -101,6 +101,69 @@ defmodule LemonAi.Auth.OmpTokenTest do
     assert {:error, :omp_invalid_token} = OmpToken.resolve(path)
   end
 
+  test "forced refresh waits for an in-flight miss and leaves only the fresh token cached", %{
+    path: path,
+    dir: dir
+  } do
+    entered = Path.join(dir, "entered")
+    release = Path.join(dir, "release")
+    calls = Path.join(dir, "calls")
+    assert {"", 0} = System.cmd("mkfifo", [entered, release])
+    original = jwt(1800)
+    fresh = jwt(3600)
+
+    script(path, """
+    if [ "${3-}" = --force-refresh ]; then
+      printf 'force\\n' >> '#{calls}'
+      printf '%s\\n' '#{fresh}'
+    else
+      printf 'normal\\n' >> '#{calls}'
+      printf started > '#{entered}'
+      read -r release < '#{release}'
+      printf '%s\\n' '#{original}'
+    fi
+    """)
+
+    notification =
+      Task.async(fn ->
+        # Raw I/O keeps the FIFO handshake off the shared Erlang file server,
+        # which credential discovery also needs for executable stat calls.
+        {:ok, fifo} = :file.open(String.to_charlist(entered), [:read, :raw, :binary])
+
+        try do
+          {:ok, message} = :file.read(fifo, 7)
+          message
+        after
+          :file.close(fifo)
+        end
+      end)
+
+    ordinary = Task.async(fn -> OmpToken.resolve(path) end)
+    assert Task.await(notification, 5_000) == "started"
+    caller = self()
+
+    forced =
+      Task.async(fn ->
+        send(caller, :force_requested)
+        OmpToken.resolve(path, force_refresh: true)
+      end)
+
+    assert_receive :force_requested
+
+    try do
+      # The first subprocess is blocked on our FIFO, not on a timing delay.
+      # A forced refresh must remain pending until that fetch can publish.
+      assert Task.yield(forced, 1_000) == nil
+    after
+      File.write!(release, "continue\n")
+    end
+
+    assert {:ok, ^original} = Task.await(ordinary, 5_000)
+    assert {:ok, ^fresh} = Task.await(forced, 5_000)
+    assert {:ok, ^fresh} = Task.async(fn -> OmpToken.resolve(path) end) |> Task.await()
+    assert File.read!(calls) == "normal\nforce\n"
+  end
+
   test "missing and non-executable paths produce actionable credential-free guidance", %{
     path: path
   } do

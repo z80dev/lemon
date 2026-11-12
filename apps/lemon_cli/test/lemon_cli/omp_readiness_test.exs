@@ -21,7 +21,7 @@ defmodule LemonCli.OmpReadinessTest do
     %{dir: dir, path: Path.join(dir, "omp"), config_path: Path.join(dir, ".lemon/config.toml")}
   end
 
-  test "omp-only setup and doctor use external token readiness without a local encrypted login",
+  test "mixed-case omp setup and doctor use external token readiness without a local encrypted login",
        ctx do
     token = jwt()
     script(ctx.path, "printf '%s' '#{token}'")
@@ -30,6 +30,16 @@ defmodule LemonCli.OmpReadinessTest do
     assert state.provider.complete
     assert state.secrets.complete
     assert state.secrets.source == :not_required
+
+    snapshot =
+      LemonAgent.ModelRuntime.ProviderStatus.snapshot(%{
+        "projectDir" => ctx.dir,
+        "provider" => "kimi_coding"
+      })
+
+    provider = Enum.find(snapshot["providers"], &(&1["provider"] == "kimi_coding"))
+    assert provider["credentialReady"]
+    assert provider["config"]["authSource"] == "omp"
 
     check =
       Providers.run(project_dir: ctx.dir) |> Enum.find(&(&1.name == "providers.credentials"))
@@ -59,7 +69,7 @@ defmodule LemonCli.OmpReadinessTest do
     provider = "kimi_coding"
     model = "k3.1-pro"
     [providers.kimi_coding]
-    auth_source = "omp"
+    auth_source = " OMP "
     omp_path = #{Jason.encode!(ctx.path)}
     api_key = "ignored-inline"
     """)

@@ -184,7 +184,9 @@ defmodule LemonCore.Setup.Readiness do
 
   defp omp_provider?(provider, cfg) do
     normalize_provider_name(provider) in ["kimi-coding", "kimi-for-coding"] and
-      (Map.get(cfg, :auth_source) || Map.get(cfg, "auth_source")) == "omp"
+      LemonCore.Config.Providers.normalize_auth_source(
+        Map.get(cfg, :auth_source) || Map.get(cfg, "auth_source")
+      ) == "omp"
   end
 
   # A referenced credential is usable when the encrypted store can decrypt it,

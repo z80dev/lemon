@@ -252,8 +252,9 @@ defmodule LemonCli.Setup.Provider do
 
   defp omp_auth?(provider, config_path) do
     provider in ["kimi_coding", "kimi-coding"] and
-      get_in(read_config(Path.expand(config_path)), ["providers", provider, "auth_source"]) ==
-        "omp"
+      LemonCore.Config.Providers.normalize_auth_source(
+        get_in(read_config(Path.expand(config_path)), ["providers", provider, "auth_source"])
+      ) == "omp"
   end
 
   defp ensure_provider_secrets_ready(args, io) do
