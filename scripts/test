@@ -444,7 +444,8 @@ premerge_step() (
 
 # Sets CHANGED_SCOPE (full|apps|none) and the existing changed files since the
 # merge base with REF: CHANGED_FORMAT (.ex/.exs/.heex), CHANGED_ELIXIR
-# (.ex/.exs) and CHANGED_CHANGELOGS (CHANGELOG.md, existing or deleted).
+# (.ex/.exs) and CHANGED_CHANGELOGS (CHANGELOG.md, existing or deleted; not
+# fixture data under apps/*/priv).
 collect_changed_files() {
   local selection path
   CHANGED_FORMAT=() CHANGED_ELIXIR=() CHANGED_CHANGELOGS=()
@@ -456,7 +457,10 @@ collect_changed_files() {
       case "$path" in *.ex|*.exs|*.heex) CHANGED_FORMAT+=("$path") ;; esac
       case "$path" in *.ex|*.exs) CHANGED_ELIXIR+=("$path") ;; esac
     fi
-    case "$path" in CHANGELOG.md|*/CHANGELOG.md) CHANGED_CHANGELOGS+=("$path") ;; esac
+    case "$path" in
+      apps/*/priv/*) ;;
+      CHANGELOG.md|*/CHANGELOG.md) CHANGED_CHANGELOGS+=("$path") ;;
+    esac
   done < <(selection_paths "$selection" changed_files)
   rm -f "$selection"
 }
