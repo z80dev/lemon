@@ -100,7 +100,7 @@ struct LemonBotMacApp: App {
             .task {
                 delegate.platform = platform
                 delegate.pet = pet
-                pet.openWorkspace = { openWindow(id: "workspace") }
+                platform.openWorkspace = { openWindow(id: "workspace") }
                 pet.openSettings = { SettingsRouter.shared.pane = .platform; openSettings() }
                 pet.start()
                 platform.start()
@@ -127,7 +127,7 @@ struct LemonBotMacApp: App {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: "exclamationmark.circle.fill").foregroundStyle(LB.danger)
                 Text(error).font(LBFont.rowSubtitle).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                if platform.selectedBot == nil && store.account != nil { SettingsLink { Text("Open Settings") } }
+                if error == MacPlatformController.chooseBotMessage { Button("Open Settings") { SettingsRouter.shared.pane = .platform; openSettings() } }
                 Button { platform.errorMessage = nil } label: { Image(systemName: "xmark") }
                     .buttonStyle(.plain).foregroundStyle(LB.muted).accessibilityLabel("Dismiss error")
             }

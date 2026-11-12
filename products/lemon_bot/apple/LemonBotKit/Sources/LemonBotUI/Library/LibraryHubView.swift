@@ -38,7 +38,7 @@ struct SkillLibraryView: View {
                 }
             } }
             if cursor != nil { Button("More skills") { Task { await load(more: true) } } }
-        }.navigationTitle("Skills").toolbar { Button("New skill") { create = true }; Button("Search / refresh") { Task { await load() } } }
+        }.navigationTitle("Skills").toolbar { Button("New skill", systemImage: "plus") { create = true }; Button("Search / refresh", systemImage: "arrow.clockwise") { Task { await load() } } }
             .sheet(isPresented: $create) { NavigationStack { SkillEditorView(store: store, initial: nil) } }
             .task { await load() }
     }

@@ -22,7 +22,7 @@ struct RoutineLibraryView: View {
                 }
             } }
             if cursor != nil { Button("More routines") { Task { await load(more: true) } } }
-        }.navigationTitle("Routines").toolbar { Button("New routine") { creating = true }; Button("Refresh") { Task { await load() } } }
+        }.navigationTitle("Routines").toolbar { Button("New routine", systemImage: "plus") { creating = true }; Button("Refresh", systemImage: "arrow.clockwise") { Task { await load() } } }
             .sheet(isPresented: $creating) { NavigationStack { RoutineEditorView(store: store, initial: nil) } }.task { await load() }
     }
     private func load(more: Bool = false) async { await action.perform(readOnly: true) {

@@ -28,6 +28,15 @@ func adminRevision(_ revision: Int) -> JSONObject { ["revision": .number(Double(
 func adminDate(_ milliseconds: Double) -> String {
     Date(timeIntervalSince1970: milliseconds / 1000).formatted(date: .abbreviated, time: .shortened)
 }
+/// Human name for a `Device.platform` wire value (`web`, `macos`, `ios`).
+func devicePlatformName(_ platform: String) -> String {
+    switch platform {
+    case "macos": "Mac"
+    case "ios": "iPhone"
+    case "web": "Web browser"
+    default: platform
+    }
+}
 
 @MainActor func adminReadAll<T: Codable & Hashable>(_ store: LemonBotStore, _ path: String, query: [String: String] = [:], as: T.Type) async throws -> [T] {
     var query = query

@@ -116,7 +116,9 @@ public struct LemonBotRootView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .background { shortcuts }
-        .focusedSceneValue(\.navigateBot, orderedBots.isEmpty ? nil : adjacentBot)
+        .onReceive(NotificationCenter.default.publisher(for: .lemonBotNavigateBot)) { note in
+            if let offset = note.object as? Int { adjacentBot(offset) }
+        }
     }
 
     @ViewBuilder private var detail: some View {

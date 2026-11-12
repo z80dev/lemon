@@ -137,7 +137,7 @@ struct DeviceSettingsRow: View {
     @State private var enabled = false
     var body: some View {
         VStack(alignment: .leading) {
-            Text("\(device.platform) · \(device.appVersion) · last seen \(adminDate(Double(device.lastSeenAtMs)))").font(LBFont.meta)
+            Text("\(devicePlatformName(device.platform)) · \(device.appVersion) · last seen \(adminDate(Double(device.lastSeenAtMs)))").font(LBFont.meta)
             TextField("Device name", text: $name)
             Toggle("Push enabled", isOn: $enabled)
             AdminAction(title: "Save device", store: store, control: control) {

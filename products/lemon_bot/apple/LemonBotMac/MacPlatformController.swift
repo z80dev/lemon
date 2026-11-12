@@ -23,6 +23,8 @@ final class MacPlatformController: NSObject {
     var panelConversationID: ID?
     var mainViewedConversationID: ID?
     var uncertainVoiceSend = false
+    /// Reopens the workspace scene when its window no longer exists.
+    var openWorkspace: (() -> Void)?
     private let hotkeys = MacGlobalHotkeys()
     private var composerPanel: NSPanel?
     private var companionPanel: NSPanel?
@@ -53,6 +55,7 @@ final class MacPlatformController: NSObject {
         }
     }
 
+    static let chooseBotMessage = "Choose a Bot in Lemon Bot Settings first."
     var selectedBot: Bot? { store.bots.first { $0.id == settings.selectedBotId } }
     var online: Bool { store.account != nil && store.connectionState == "online" }
     var viewedConversationID: ID? {
@@ -141,7 +144,7 @@ final class MacPlatformController: NSObject {
 
     func summon() {
         guard store.account != nil else { errorMessage = "Sign in to Lemon Bot to use the quick composer."; NSApp.activate(ignoringOtherApps: true); return }
-        guard let bot = selectedBot else { errorMessage = "Choose a Bot in Lemon Bot Settings first."; NSApp.activate(ignoringOtherApps: true); return }
+        guard let bot = selectedBot else { errorMessage = Self.chooseBotMessage; NSApp.activate(ignoringOtherApps: true); return }
         panelConversationID = bot.mainConversationId
         if composerPanel == nil {
             composerPanel = makePanel(title: "Lemon Bot — Quick composer", id: "lemonbot.composer", size: NSSize(width: 520, height: 340))
@@ -466,8 +469,15 @@ final class MacPlatformController: NSObject {
     }
 
     func route(_ url: URL) async {
-        do { try await store.navigate(url); NSApp.activate(ignoringOtherApps: true) }
+        do { try await store.navigate(url); showWorkspace() }
         catch { errorMessage = error.localizedDescription }
+    }
+
+    /// Brings the workspace window forward, including after the user closed it.
+    func showWorkspace() {
+        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "lemonbot.main" }) { window.makeKeyAndOrderFront(nil) }
+        else { openWorkspace?() }
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func publishPresence() async {
@@ -508,6 +518,7 @@ final class MacPlatformController: NSObject {
             notificationBaseline = true
             return
         }
+        var requests: [UNNotificationRequest] = []
         for notification in store.notifications where !seenNotifications.contains(notification.id) {
             seenNotifications.insert(notification.id)
             guard notification.readAtMs == nil, notification.dismissedAtMs == nil, let preferences = store.user?.notifications, preferences.enabled else { continue }
@@ -522,9 +533,16 @@ final class MacPlatformController: NSObject {
             content.userInfo = ["deepLink": notification.deepLink, "workspaceId": store.workspace?.id ?? "", "notificationId": notification.id, "conversationId": notification.conversationId ?? "", "botId": notification.botId ?? ""]
             // An approval keeps its own identifier; informational results coalesce per room.
             let key = notification.kind == "result" ? "result-\(notification.conversationId ?? notification.id)" : notification.id
-            let request = UNNotificationRequest(identifier: "\(store.account?.id ?? "")-\(key)", content: content, trigger: nil)
-            UNUserNotificationCenter.current().add(request) { [weak self] error in
-                if let error { Task { @MainActor in self?.errorMessage = error.localizedDescription } }
+            requests.append(UNNotificationRequest(identifier: "\(store.account?.id ?? "")-\(key)", content: content, trigger: nil))
+        }
+        guard !requests.isEmpty else { return }
+        Task {
+            // Banners need the user's explicit macOS permission (Settings → Enable macOS notifications…).
+            // Without it there is nothing to show; the inbox and unread state stay authoritative.
+            let center = UNUserNotificationCenter.current()
+            guard [.authorized, .provisional].contains(await center.notificationSettings().authorizationStatus) else { return }
+            for request in requests {
+                do { try await center.add(request) } catch { errorMessage = error.localizedDescription; return }
             }
         }
     }

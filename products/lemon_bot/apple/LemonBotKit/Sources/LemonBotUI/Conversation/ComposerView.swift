@@ -26,6 +26,7 @@ public struct ComposerView: View {
     @State private var stagedFilenames: [String] = []
     #if os(macOS)
     @FocusState private var focused: Bool
+    @State private var dropTargeted = false
     #else
     @State private var focused = false
     @State private var deliveryDetailsOpen = false
@@ -140,6 +141,13 @@ public struct ComposerView: View {
         .padding(.bottom, compactKeyboardLayout ? 0 : focused ? 4 : 14)
         #else
         .padding(.bottom, 14)
+        // Finder drops stage files exactly like Choose files; nothing uploads until the user confirms.
+        .dropDestination(for: URL.self) { urls, _ in
+            let files = urls.filter(\.isFileURL)
+            guard !files.isEmpty, !action.inFlight else { return false }
+            Task { await attach(files) }
+            return true
+        } isTargeted: { dropTargeted = $0 }
         #endif
         .frame(maxWidth: LBMetric.transcriptMaxWidth)
         .frame(maxWidth: .infinity)
@@ -158,7 +166,11 @@ public struct ComposerView: View {
         }
         .padding(.horizontal, 8).padding(.vertical, 8)
         .background(LB.raised, in: shape)
+        #if os(macOS)
+        .overlay(shape.strokeBorder(dropTargeted ? LB.accent : focused ? LB.accent.opacity(0.35) : LB.separator, lineWidth: dropTargeted ? 2 : 1))
+        #else
         .overlay(shape.strokeBorder(focused ? LB.accent.opacity(0.35) : LB.separator, lineWidth: 1))
+        #endif
         .shadow(color: scheme == .light ? LB.shadow : .clear, radius: 12, y: 4)
     }
 
@@ -269,7 +281,7 @@ public struct ComposerView: View {
             .padding(4).background(LB.fill, in: Capsule())
         }
         ForEach(draft.fileURLs, id: \.self) { url in
-            chip(url.lastPathComponent + " · Not sent", symbol: "doc.badge.clock", removeLabel: "Remove local file") {
+            chip(LocalComposerDraft.displayName(of: url) + " · Not sent", symbol: "doc.badge.clock", removeLabel: "Remove local file") {
                 Task { await action.perform { try store.removeDraftFile(url, conversationID: conversationID) } }
             }
         }
@@ -471,7 +483,7 @@ public struct ComposerView: View {
             for url in draft.fileURLs {
                 guard online else { throw ComposerError.message("The account or connection changed. Remaining selected files were not uploaded.") }
                 let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-                let attachment = try await store.upload(fileURL: url, mime: mime, metadata: ["conversationId": .string(conversationID), "purpose": .string("message")])
+                let attachment = try await store.upload(fileURL: url, filename: LocalComposerDraft.displayName(of: url), mime: mime, metadata: ["conversationId": .string(conversationID), "purpose": .string("message")])
                 guard store.account?.id == owningAccountID else { throw ComposerError.message("The upload belongs to the previous account; its receipt was not attached to this account.") }
                 guard store.setLocalDraft(conversationID: conversationID, text: draft.text, attachmentIDs: draft.attachmentIDs + [attachment.id], replyTo: draft.replyToEntryID) else { throw ComposerError.message(store.errorMessage ?? "Local draft retention failed; upload receipt is not discarded.") }
                 try store.removeDraftFile(url, conversationID: conversationID)

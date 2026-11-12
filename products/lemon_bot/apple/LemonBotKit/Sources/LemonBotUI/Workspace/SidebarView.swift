@@ -26,7 +26,7 @@ struct SidebarView: View {
     @State private var showHidden = false
     @State private var unreadOnly = false
     @State private var visibleRows: Set<ID> = []
-    @State private var previews: [ID: (lastEntryID: ID, text: String?)] = [:]
+    @State private var previews: [ID: (version: String, text: String?)] = [:]
     @State private var action = UIActionState()
     @State private var showConnection = false
     @FocusState private var filterFocused: Bool
@@ -82,6 +82,7 @@ struct SidebarView: View {
         }
         #if os(macOS)
         .background(LB.sidebar)
+        .toolbar { macToolbar }
         #else
         .background(LB.canvas)
         .searchable(text: $query, isPresented: $searching, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search Bots and groups")
@@ -143,28 +144,31 @@ struct SidebarView: View {
 
     @ViewBuilder private var topBar: some View {
         #if os(macOS)
-        HStack(spacing: 8) {
-            Spacer()
-            connectionPill
-            Button {
-                lbWithAnimation(reduceMotion, LBMotion.snappy) { searching.toggle() }
-                if searching { filterFocused = true } else { query = "" }
-            } label: { Label("Search Bots", systemImage: "magnifyingglass") }
-                .buttonStyle(GhostCircleButtonStyle(size: 32))
-                .help("Search Bots (⌘⇧F) · Search everything (⌘K)")
-            Button(action: newBot) { Label("New Bot", systemImage: "plus") }
-                .buttonStyle(GhostCircleButtonStyle(size: 32))
-                .disabled(!store.isOnline)
-                .help("New Bot (⌘N)")
-                .contextMenu { Button("New group of Bots", systemImage: "person.2", action: newGroup) }
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 52)
+        // The window's toolbar owns this titlebar strip and receives its clicks, so the
+        // sidebar's controls live there (`macToolbar`); this keeps rows below it.
+        Color.clear.frame(height: 52)
         #else
         // iPhone uses the navigation bar (large "Chats" title, + button) and pull-down search.
         if !store.isOnline || store.connectionIssue != nil { HStack { Spacer(); connectionPill }.padding(.horizontal, 16).padding(.vertical, 4) }
         #endif
     }
+
+    #if os(macOS)
+    @ToolbarContentBuilder private var macToolbar: some ToolbarContent {
+        ToolbarItemGroup {
+            connectionPill
+            Button {
+                lbWithAnimation(reduceMotion, LBMotion.snappy) { searching.toggle() }
+                if searching { filterFocused = true } else { query = "" }
+            } label: { Label("Search Bots", systemImage: "magnifyingglass") }
+                .help("Search Bots (⌘⇧F) · Search everything (⌘K)")
+            Button(action: newBot) { Label("New Bot", systemImage: "plus") }
+                .disabled(!store.isOnline)
+                .help("New Bot (⌘N)")
+                .contextMenu { Button("New group of Bots", systemImage: "person.2", action: newGroup) }
+        }
+    }
+    #endif
 
     #if os(iOS)
     @ToolbarContentBuilder private var phoneToolbar: some ToolbarContent {
@@ -550,10 +554,12 @@ struct SidebarView: View {
 
     private func loadPreviews() async {
         for room in store.conversations where ["dm", "task", "group"].contains(room.kind) {
-            guard let lastID = room.lastEntryId, previews[room.id]?.lastEntryID != lastID else { continue }
+            guard let version = store.sidebarPreviewVersion(room), previews[room.id]?.version != version else { continue }
             do {
                 let preview = try await store.sidebarPreview(in: room)
-                if preview != nil || store.isOnline { previews[room.id] = (lastID, preview?.text) }
+                // A newer summary restarted this task while the read was in flight; its result is stale.
+                guard !Task.isCancelled else { return }
+                if preview != nil || store.isOnline { previews[room.id] = (version, preview?.text) }
             } catch { /* A later summary change or reconnect retries failed reads. */ }
         }
     }

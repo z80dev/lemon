@@ -16,8 +16,7 @@ struct MacMiniComposer: View {
                 Button("Dictate…") { controller.beginDictation(conversationID: conversationID) }
                 Button("Open conversation") {
                     Task { do { try await controller.store.openConversation(conversationID) } catch { controller.errorMessage = error.localizedDescription } }
-                    NSApp.activate(ignoringOtherApps: true)
-                    NSApp.windows.first { $0.identifier?.rawValue == "lemonbot.main" }?.makeKeyAndOrderFront(nil)
+                    controller.showWorkspace()
                 }
             }
             if let error = controller.errorMessage { Text(error).foregroundStyle(LB.danger).textSelection(.enabled) }
@@ -91,7 +90,7 @@ struct MacVoiceView: View {
                     Button(session.muted ? "Unmute" : "Mute") { Task { await controller.updateCall(muted: !session.muted) } }
                     Button("Return to chat") {
                         Task { do { try await controller.store.openConversation(session.conversationId) } catch { controller.errorMessage = error.localizedDescription } }
-                        NSApp.windows.first { $0.identifier?.rawValue == "lemonbot.main" }?.makeKeyAndOrderFront(nil)
+                        controller.showWorkspace()
                     }
                     Button("End voice chat", role: .destructive) { Task { await controller.endCall() } }
                 }.disabled(!controller.online || controller.busy)

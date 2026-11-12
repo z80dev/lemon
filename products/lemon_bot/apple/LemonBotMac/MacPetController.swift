@@ -67,7 +67,6 @@ final class MacPetController: NSObject {
     private(set) var status = PetStatus(mood: .signedOut)
     var errorMessage: String?
     var importing = false
-    var openWorkspace: (() -> Void)?
     var openSettings: (() -> Void)?
 
     @ObservationIgnored private let platform: MacPlatformController
@@ -528,15 +527,9 @@ final class MacPetController: NSObject {
 
     func activate() {
         switch PetClickAction.resolve(status) {
-        case .route(let url): Task { await platform.route(url); focusWorkspace() }
-        case .openWorkspace: focusWorkspace()
+        case .route(let url): Task { await platform.route(url); platform.showWorkspace() }
+        case .openWorkspace: platform.showWorkspace()
         }
-    }
-
-    private func focusWorkspace() {
-        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "lemonbot.main" }) { window.makeKeyAndOrderFront(nil) }
-        else { openWorkspace?() }
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     func contextMenu(_ event: NSEvent) {
@@ -548,7 +541,7 @@ final class MacPetController: NSObject {
         }
         NSMenu.popUpContextMenu(menu, with: event, for: content)
     }
-    @objc private func openFromMenu() { focusWorkspace() }
+    @objc private func openFromMenu() { platform.showWorkspace() }
     @objc private func settingsFromMenu() { openSettings?(); NSApp.activate(ignoringOtherApps: true) }
     @objc private func hideFromMenu() { updatePreferences { $0.enabled = false } }
 

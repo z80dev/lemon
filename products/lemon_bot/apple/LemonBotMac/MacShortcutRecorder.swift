@@ -71,7 +71,8 @@ struct MacShortcutRecorder: NSViewRepresentable {
             if event.keyCode == 51 || event.keyCode == 117 { changed?(""); value = ""; finish(); return }
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             guard let key = MacGlobalHotkeys.keys.first(where: { $0.value == UInt32(event.keyCode) })?.key else {
-                NSSound.beep(); return
+                reject("Use a letter, number, Space, Return, Tab or F-key")
+                return
             }
             let modifiers: [(NSEvent.ModifierFlags, String)] = [(.control, "control"), (.option, "option"), (.shift, "shift"), (.command, "command")]
             let candidate = (modifiers.compactMap { flags.contains($0.0) ? $0.1 : nil } + [key]).joined(separator: "+")
@@ -81,10 +82,15 @@ struct MacShortcutRecorder: NSViewRepresentable {
                 changed?(candidate)
                 finish()
             } catch {
-                title = "Use Command, Control or Option"
-                setAccessibilityValue("Use Command, Control or Option with a supported key")
-                NSSound.beep()
+                reject("Add Command, Control or Option")
             }
+        }
+        /// Keeps recording and says why the key was refused; a bare beep gave no reason.
+        private func reject(_ reason: String) {
+            title = reason
+            setAccessibilityValue(reason)
+            NSAccessibility.post(element: self, notification: .valueChanged)
+            NSSound.beep()
         }
     }
 }

@@ -12,6 +12,8 @@ public struct OwnerPairingView: View {
     @State private var busy = false
     @State private var observing = false
     @State private var error: String?
+    /// Which step produced `error`, so it shows beside the control that failed.
+    @State private var errorPlace: String?
     @State private var lastChecked: Date?
     @State private var renderedQR: NSImage?
     @State private var comparedRequests: Set<String> = []
@@ -28,9 +30,13 @@ public struct OwnerPairingView: View {
                         Text("Workspace: \(store.workspace?.name ?? account.workspaceID)").textSelection(.enabled)
                     }
                     Text("Read the advertised HTTPS address from your already configured backend, then verify that it serves the same Lemon Bot instance and workspace. No backend or account is replaced.")
-                    Button("Check connection readiness") {
-                        perform { try await store.verifyOwnerPairingOrigin(); try await store.refreshPairings(); lastChecked = Date() }
-                    }.disabled(busy || observing)
+                    HStack {
+                        Button("Check connection readiness") {
+                            perform("readiness") { try await store.verifyOwnerPairingOrigin(); try await store.refreshPairings(); lastChecked = Date() }
+                        }.disabled(busy || observing)
+                        if busy && errorPlace == "readiness" { ProgressView().controlSize(.small) }
+                    }
+                    errorView("readiness")
                     if let ready = store.ownerPairingPreflight {
                         Label("Verified from this Mac", systemImage: "checkmark.shield")
                         Text(ready.origin).font(.headline.monospaced()).textSelection(.enabled)
@@ -41,10 +47,10 @@ public struct OwnerPairingView: View {
                 }
                 Section("3. Scan and request connection") {
                     Text("On your iPhone choose Scan QR code or paste the one-use link. Review the workspace, address and expiry, then choose Request connection.")
-                    Button("Create QR code") { perform { try await store.createPairing() } }
+                    Button("Create QR code") { perform("qr") { try await store.createPairing() } }
                         .disabled(busy || observing || store.ownerPairingPreflight == nil || store.pendingIntents.contains { $0.path == "/pairings" })
                     if store.pendingIntents.contains(where: { $0.path == "/pairings" }) {
-                        Button("Check previous QR code") { perform { try await store.reconcilePairingIssuance() } }
+                        Button("Check previous QR code") { perform("qr") { try await store.reconcilePairingIssuance() } }
                             .disabled(busy || observing || store.ownerPairingPreflight == nil)
                         Text("Check the QR you already created first. This doesn't make a new one or extend its five-minute expiry.").font(LBFont.meta)
                     }
@@ -61,23 +67,23 @@ public struct OwnerPairingView: View {
                         }
                     }
                     Text("The QR is a temporary secret. Do not share screenshots. It is not your desktop session or password.").font(.caption)
+                    errorView("qr")
                 }
                 Section("4. Compare, then approve") {
                     Text("Requests update while this window is active. Approval requires your explicit comparison; it is never automatic.")
                     Button("Refresh requests") {
-                        perform { try await store.refreshOwnerPairingStatus(); lastChecked = Date() }
+                        perform("requests") { try await store.refreshOwnerPairingStatus(); lastChecked = Date() }
                     }.disabled(busy || observing || store.ownerPairingPreflight == nil)
                     if let lastChecked { Text("Last checked \(lastChecked.formatted(date: .omitted, time: .standard))").font(.caption) }
+                    errorView("requests")
                 }
                 ForEach(store.pairings) { pairing in requestSection(pairing) }
                 Section("Paired device access") {
                     Text("Connected means the phone completed its own session, not just that you approved. Both clients use the same server-backed workspace; closing this Mac window does not disconnect the phone.")
                     Text("Manage or revoke this phone in Settings → Account → Devices / sessions. Revoking its device or session removes its access; pairing again requires explicit desktop approval.")
                 }
-                ActionErrorView(message: error)
-                if busy || observing { ProgressView() }
             }.formStyle(.grouped).navigationTitle("Connect iPhone")
-                .toolbar { Button("Done") { dismiss() } }
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
                 .task(id: "\(store.account?.id ?? "")|\(scenePhase == .active)") { await observeRequests() }
                 .onAppear { renderedQR = store.pairingURL.flatMap(makeQRImage) }
                 .onChange(of: store.pairingURL) { _, link in renderedQR = link.flatMap(makeQRImage) }
@@ -111,13 +117,14 @@ public struct OwnerPairingView: View {
                         get: { comparedRequests.contains(comparisonKey(pairing)) },
                         set: { if $0 { comparedRequests.insert(comparisonKey(pairing)) } else { comparedRequests.remove(comparisonKey(pairing)) } }
                     ))
-                    Button("Approve this iPhone") { perform { try await store.approvePairing(pairing) } }
+                    Button("Approve this iPhone") { perform(pairing.id) { try await store.approvePairing(pairing) } }
                         .disabled(busy || observing || fenced(pairing.id) || expired || store.ownerPairingPreflight == nil || !comparedRequests.contains(comparisonKey(pairing)))
-                    Button("Deny", role: .destructive) { perform { try await store.denyPairing(pairing) } }
+                    Button("Deny", role: .destructive) { perform(pairing.id) { try await store.denyPairing(pairing) } }
                         .disabled(busy || observing || fenced(pairing.id))
                 }
             }
             if fenced(pairing.id) { Text("We couldn't confirm whether this went through. Live status checks the saved receipt without approving again. Refresh if a check failed.").font(LBFont.meta) }
+            errorView(pairing.id)
         }
     }
     private func comparisonKey(_ pairing: Pairing) -> String { "\(pairing.id)|\(pairing.revision)|\(pairing.deviceName ?? "")|\(pairing.verificationCode ?? "")" }
@@ -135,18 +142,21 @@ public struct OwnerPairingView: View {
             guard !busy, !observing, store.ownerPairingPreflight != nil,
                   OwnerPairingProgress.shouldObserve(store.pairings) else { continue }
             observing = true
-            do { try await store.refreshOwnerPairingStatus(); lastChecked = Date(); error = nil }
-            catch { if !Task.isCancelled { self.error = humanErrorText(error) } }
+            do { try await store.refreshOwnerPairingStatus(); lastChecked = Date(); if errorPlace == "requests" { error = nil } }
+            catch { if !Task.isCancelled { self.error = humanErrorText(error); errorPlace = "requests" } }
             observing = false
         }
     }
     private func fenced(_ id: ID) -> Bool {
         store.pendingIntents.contains { $0.path == "/pairings/\(id)/approve" || $0.path == "/pairings/\(id)/deny" }
     }
-    private func perform(_ operation: @escaping @MainActor () async throws -> Void) {
+    private func perform(_ place: String, _ operation: @escaping @MainActor () async throws -> Void) {
         guard !busy, !observing else { return }
-        busy = true; error = nil
+        busy = true; error = nil; errorPlace = place
         Task { defer { busy = false }; do { try await operation() } catch { self.error = humanErrorText(error) } }
+    }
+    @ViewBuilder private func errorView(_ place: String) -> some View {
+        if errorPlace == place { ActionErrorView(message: error) }
     }
     private func makeQRImage(_ link: String) -> NSImage? {
         let filter = CIFilter.qrCodeGenerator()

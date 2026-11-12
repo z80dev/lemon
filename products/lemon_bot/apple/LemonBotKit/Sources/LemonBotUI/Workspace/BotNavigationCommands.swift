@@ -1,27 +1,21 @@
 import SwiftUI
 
-private struct BotNavigationKey: FocusedValueKey {
-    typealias Value = (Int) -> Void
+public extension Notification.Name {
+    /// Posted by **Previous Bot**/**Next Bot**; `object` is the `Int` offset. The workspace handles it.
+    static let lemonBotNavigateBot = Notification.Name("LemonBot.navigateBot")
 }
 
-public extension FocusedValues {
-    var navigateBot: ((Int) -> Void)? {
-        get { self[BotNavigationKey.self] }
-        set { self[BotNavigationKey.self] = newValue }
-    }
-}
-
+/// macOS menu commands for stepping through Bots. They post instead of reading a focused value:
+/// SwiftUI only refreshes command state when a menu opens, so a focus-gated item stayed disabled
+/// and ⌘[ / ⌘] did nothing after launch until the user had opened the menu bar once.
 public struct BotNavigationCommands: Commands {
-    @FocusedValue(\.navigateBot) private var navigate
     public init() {}
     public var body: some Commands {
         CommandMenu("Conversation") {
-            Button("Previous Bot") { navigate?(-1) }
+            Button("Previous Bot") { NotificationCenter.default.post(name: .lemonBotNavigateBot, object: -1) }
                 .keyboardShortcut("[", modifiers: .command)
-                .disabled(navigate == nil)
-            Button("Next Bot") { navigate?(1) }
+            Button("Next Bot") { NotificationCenter.default.post(name: .lemonBotNavigateBot, object: 1) }
                 .keyboardShortcut("]", modifiers: .command)
-                .disabled(navigate == nil)
         }
     }
 }
