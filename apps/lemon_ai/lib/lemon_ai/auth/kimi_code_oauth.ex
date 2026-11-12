@@ -9,10 +9,10 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
   option override the auth host.
 
   Kimi identifies clients by a Kimi CLI fingerprint: `request_headers/0` is sent
-  with every auth request and, by `LemonAi.Providers.Anthropic`, with model
-  requests that carry an OAuth access token (`oauth_token?/1`). The device id
-  is derived from the host name and home directory, so it is stable across runs
-  without writing state.
+  with every auth request and, by `LemonAi.Providers.Anthropic`, with every
+  Kimi Code model request (API key or OAuth). The device id is persisted at
+  `~/.lemon/kimi-device-id` (mode 0600), as omp persists its own; see
+  `device_id/1`.
 
   `resolve_api_key_from_secret/3` refreshes five minutes before expiry or on
   `force_refresh: true`; see `LemonAi.Auth.OAuthFlow` for locking and
@@ -28,6 +28,7 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
   @refresh_skew_ms 5 * 60 * 1000
   # Kimi gates on the Kimi CLI fingerprint; pin a released Kimi CLI version.
   @kimi_cli_version "1.52.0"
+  @device_id_file "kimi-device-id"
 
   @type oauth_secret :: %{required(String.t()) => String.t() | integer() | nil}
 
@@ -172,7 +173,7 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
 
   def oauth_token?(_), do: false
 
-  @doc "Kimi CLI fingerprint headers (lower-case names)."
+  @doc "Kimi CLI fingerprint headers (lower-case names), built once per VM."
   @spec request_headers() :: [{String.t(), String.t()}]
   def request_headers do
     key = {__MODULE__, :request_headers}
@@ -186,6 +187,45 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
       headers ->
         headers
     end
+  end
+
+  @doc """
+  The device id sent as `x-msh-device-id`.
+
+  Read from `<home>/.lemon/kimi-device-id`. When the file is missing or empty
+  it is seeded with the id Lemon derived from host name and home directory
+  before the id was persisted, so existing logins keep the identity they were
+  minted under and later host renames no longer change it. If the file cannot
+  be read or written, the derived id is used for this VM. Never raises.
+
+  Options: `:home` (defaults to `$HOME`), `:hostname`.
+  """
+  @spec device_id(keyword()) :: String.t()
+  def device_id(opts \\ []) do
+    home = Keyword.get_lazy(opts, :home, &home_dir/0)
+    derived = derived_device_id(Keyword.get_lazy(opts, :hostname, &hostname/0), home)
+
+    if is_binary(home) and home != "" do
+      path = Path.join([home, ".lemon", @device_id_file])
+
+      case File.read(path) do
+        {:ok, content} ->
+          case sanitize_device_id(content) do
+            nil -> seed_device_id(path, derived)
+            stored -> stored
+          end
+
+        {:error, :enoent} ->
+          seed_device_id(path, derived)
+
+        {:error, _} ->
+          derived
+      end
+    else
+      derived
+    end
+  rescue
+    _ -> derived_device_id(hostname(), home_dir())
   end
 
   # ── Refresh ────────────────────────────────────────────────────────────────
@@ -230,16 +270,14 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
   end
 
   defp build_request_headers do
-    hostname = hostname()
-
     [
       {"user-agent", "KimiCLI/#{@kimi_cli_version}"},
       {"x-msh-platform", "kimi_cli"},
       {"x-msh-version", @kimi_cli_version},
-      {"x-msh-device-name", sanitize(hostname)},
+      {"x-msh-device-name", sanitize(hostname())},
       {"x-msh-device-model", sanitize(device_model())},
       {"x-msh-os-version", sanitize(os_version())},
-      {"x-msh-device-id", device_id(hostname)}
+      {"x-msh-device-id", device_id()}
     ]
   end
 
@@ -277,12 +315,41 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
     end
   end
 
-  defp device_id(hostname) do
-    home = System.user_home() || ""
-
-    :crypto.hash(:sha256, "lemon-kimi-device:#{hostname}:#{home}")
+  # The pre-persistence identity; seeds the device-id file once.
+  defp derived_device_id(hostname, home) do
+    :crypto.hash(:sha256, "lemon-kimi-device:#{hostname}:#{home || ""}")
     |> Base.encode16(case: :lower)
     |> binary_part(0, 32)
+  end
+
+  defp home_dir do
+    OAuthFlow.non_empty_binary(System.get_env("HOME")) || System.user_home()
+  end
+
+  defp sanitize_device_id(content) do
+    case content |> String.replace(~r/[^\x20-\x7E]/, "") |> String.trim() do
+      "" -> nil
+      id -> id
+    end
+  end
+
+  # Create a private temporary file, then rename it into place so a concurrent
+  # reader never sees a partial id; racing writers all store the derived value.
+  defp seed_device_id(path, derived) do
+    tmp = "#{path}.#{System.pid()}.#{System.unique_integer([:positive])}.tmp"
+
+    with :ok <- File.mkdir_p(Path.dirname(path)),
+         {:ok, io} <- File.open(tmp, [:write, :exclusive, :binary]),
+         :ok <- File.chmod(tmp, 0o600),
+         :ok <- IO.binwrite(io, derived <> "\n"),
+         :ok <- File.close(io),
+         :ok <- File.rename(tmp, path) do
+      derived
+    else
+      _ ->
+        _ = File.rm(tmp)
+        derived
+    end
   end
 
   # Header values must be printable ASCII.

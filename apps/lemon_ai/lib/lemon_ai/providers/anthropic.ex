@@ -984,9 +984,10 @@ defmodule LemonAi.Providers.Anthropic do
     is_anthropic_oauth =
       anthropic_oauth_provider?(provider) and AnthropicOAuth.oauth_token?(api_key)
 
-    # Kimi Code OAuth tokens authenticate as a bearer with the Kimi CLI fingerprint.
-    is_kimi_oauth =
-      provider in @kimi_providers and KimiCodeOAuth.oauth_token?(api_key)
+    # Kimi Code identifies clients by the Kimi CLI fingerprint on every request;
+    # OAuth access tokens (JWTs) authenticate as a bearer, API keys as x-api-key.
+    is_kimi = provider in @kimi_providers
+    is_kimi_oauth = is_kimi and KimiCodeOAuth.oauth_token?(api_key)
 
     auth_headers =
       cond do
@@ -1041,10 +1042,10 @@ defmodule LemonAi.Providers.Anthropic do
         []
       end
 
-    oauth_headers =
+    client_headers =
       cond do
         is_anthropic_oauth -> AnthropicOAuth.oauth_headers()
-        is_kimi_oauth -> KimiCodeOAuth.request_headers()
+        is_kimi -> KimiCodeOAuth.request_headers()
         true -> []
       end
 
@@ -1060,7 +1061,9 @@ defmodule LemonAi.Providers.Anthropic do
         fn headers, acc -> RequestHeaders.merge(acc, headers) end
       )
 
-    headers = Map.new(base_headers ++ auth_headers ++ copilot_headers ++ oauth_headers)
+    # Normalize names so a later layer replaces, never duplicates, a header.
+    headers =
+      RequestHeaders.merge(%{}, base_headers ++ auth_headers ++ copilot_headers ++ client_headers)
 
     Map.merge(headers, extra_headers, fn
       "anthropic-beta", required, extra ->
@@ -1085,6 +1088,13 @@ defmodule LemonAi.Providers.Anthropic do
     history_info = %{prepared_message_count: length(history_messages)}
     cache_control = cache_control(model, opts)
     oauth_request? = anthropic_oauth_request?(model.provider, api_key)
+    compat = model.compat || %{}
+
+    # Catalog-declared: some subscription endpoints expect the full output budget.
+    default_max_tokens =
+      if compat_flag?(compat, :anthropic_default_max_output),
+        do: model.max_tokens,
+        else: div(model.max_tokens, 3)
 
     body = %{
       "model" => model.id,
@@ -1093,7 +1103,7 @@ defmodule LemonAi.Providers.Anthropic do
           oauth_request?: oauth_request?,
           cache_control: cache_control
         ),
-      "max_tokens" => min(opts.max_tokens || div(model.max_tokens, 3), model.max_tokens),
+      "max_tokens" => min(opts.max_tokens || default_max_tokens, model.max_tokens),
       "stream" => true
     }
 
@@ -1124,7 +1134,7 @@ defmodule LemonAi.Providers.Anthropic do
       end
 
     body = maybe_apply_tool_choice(body, opts.tool_choice, oauth_request?)
-    compat = model.compat || %{}
+    body = maybe_put_session_user_id(body, compat, cache_control, opts.session_id)
 
     # Thinking request shape is driven by the model's capability flags:
     # adaptive-thinking models take effort levels, older models a manual budget.
@@ -1199,6 +1209,26 @@ defmodule LemonAi.Providers.Anthropic do
       end
 
     {body, history_info}
+  end
+
+  defp compat_flag?(compat, key),
+    do: Map.get(compat, key) == true or Map.get(compat, Atom.to_string(key)) == true
+
+  # Kimi Code routes its prompt cache by `metadata.user_id`, as omp sends it.
+  # A digest of the session id keeps the identity stable per session without
+  # sending the id itself; caching disabled (`cache_retention: :none`) sends none.
+  defp maybe_put_session_user_id(body, compat, cache_control, session_id) do
+    if compat_flag?(compat, :anthropic_session_user_id) and cache_control != nil and
+         is_binary(session_id) and session_id != "" do
+      digest =
+        :crypto.hash(:sha256, "lemon-session:" <> session_id)
+        |> Base.encode16(case: :lower)
+        |> binary_part(0, 32)
+
+      Map.put(body, "metadata", %{"user_id" => "lemon_" <> digest})
+    else
+      body
+    end
   end
 
   @doc """
