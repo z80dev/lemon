@@ -29,6 +29,8 @@ public struct ConversationView: View {
     @State private var keepEntryID: ID?
     /// iOS 17 and macOS 14: the transcript's bottom safe-area inset (keyboard, composer), which content measurement cannot see.
     @State private var scrollBottomInset: CGFloat = 0
+    /// iOS 17 and macOS 14: the last measured edge, held by reference so per-frame measurement never redraws the conversation.
+    @State private var lastEdge = TranscriptFollow.EdgeHistory()
     @State private var hasNewBelow = false
     @State private var settled = false
     @State private var toast: StatusToast?
@@ -263,11 +265,14 @@ public struct ConversationView: View {
                 .onScrollPhaseChange { _, phase in updateFollowing { $0.observeScrolling(phase.isUserDriven) } }
         } else {
             ScrollView {
+                // Old/new geometry actions need iOS 18 and macOS 15; the single-value action is back-deployed, so keep the previous edge here.
                 content().onGeometryChange(for: TranscriptFollow.Edge.self) { proxy in
                     TranscriptFollow.Edge(contentHeight: proxy.size.height, scrollBounds: proxy.bounds(of: .scrollView) ?? CGRect(origin: .zero, size: proxy.size))
-                } action: { old, new in
-                    let inset = scrollBottomInset
-                    updateFollowing { $0.observe(from: old.covered(byBottomInset: inset), to: new.covered(byBottomInset: inset)) }
+                } action: { measured in
+                    let edge = measured.covered(byBottomInset: scrollBottomInset)
+                    let previous = lastEdge.edge ?? edge
+                    lastEdge.edge = edge
+                    updateFollowing { $0.observe(from: previous, to: edge) }
                 }
             }
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { scrollBottomInset = $0 }
@@ -526,6 +531,7 @@ public struct ConversationView: View {
     private func open() async {
         settled = false; hasNewBelow = false; renderedReadSeq = 0; readTarget = 0; loadedRuns = []; runsError = nil
         updateFollowing { $0.pin() }
+        lastEdge.edge = nil
         if let conversation, conversation.unreadCount > 0 { unreadFromSeq = conversation.lastReadSeq + 1 } else { unreadFromSeq = nil }
         // Explicit pins avoid bottom-anchor feedback as the lazy stack refines its measured height.
         // Pin cached content before loading, including the reconnect-required early return.

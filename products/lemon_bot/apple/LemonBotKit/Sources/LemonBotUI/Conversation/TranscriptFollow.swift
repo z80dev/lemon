@@ -40,6 +40,12 @@ struct TranscriptFollow: Equatable {
         }
     }
 
+    /// The previous content-side edge (iOS 17, macOS 14), whose geometry action reports only the new value.
+    /// A reference so recording every scroll frame does not invalidate the view that owns it.
+    final class EdgeHistory {
+        var edge: Edge?
+    }
+
     private(set) var pinned = true
     private(set) var nearBottom = true
     private(set) var userScrolling = false
