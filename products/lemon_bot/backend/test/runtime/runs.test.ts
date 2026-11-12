@@ -338,6 +338,20 @@ describe('owned placed runtime', () => {
     } finally { runtime.close(); f.store.close(); }
   });
 
+  test('a tool still running when its run is cancelled ends as stopped, not a permanent spinner', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'tool_closed_on_cancel_01', text: 'work' });
+      const sessionKey = f.store.metadata<RuntimeMapping>(`runtimeRun:${run.id}`)!.sessionKey;
+      await runtime.project('agent', { type: 'tool_use', runId: run.id, sessionKey, action: { id: 'tool_call_shell', kind: 'command', title: 'sleep', detail: { name: 'bash' } }, phase: 'started', ok: null, message: null });
+      const original = f.rpc;
+      f.rpc = async (method, params) => method === 'agent.wait' ? { runId: run.id, ok: false, cancelled: true, answer: null } : original(method, params);
+      await runtime.project('agent', { type: 'completed', runId: run.id, sessionKey });
+      expect(f.store.require<P.Run>('runs', run.id).status).toBe('cancelled');
+      expect(f.store.list<P.TranscriptEntry>('entries', entry => entry.kind === 'tool_call' && entry.runId === run.id)).toMatchObject([{ tool: 'bash', title: 'bash stopped', status: 'failed' }]);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
   test('a submission its Stop fenced at the controller reconciles to stopped, not unknown forever', async () => {
     const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
     const original = f.rpc;

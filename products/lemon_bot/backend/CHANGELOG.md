@@ -16,7 +16,8 @@
   session key no longer fail schema validation.
 - Tool rows show the tool's own name (for example `bash`, `read`) and in-progress
   rows appear; model turns, reasoning, notes and approvals are no longer recorded
-  as nameless "tool" rows.
+  as nameless "tool" rows. A tool still running when its run ends now finishes
+  (completed, or stopped/failed) instead of spinning forever.
 - File paths outside a machine's allowed folders return `invalid_request` with
   an explanation naming `--allowed-root`, not a generic 403 that told the owner
   to ask a workspace owner. Off-host Bot placement is `invalid_request` with its

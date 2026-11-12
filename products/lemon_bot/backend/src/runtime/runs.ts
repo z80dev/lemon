@@ -281,12 +281,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
     const next = { ...current, ...patch };
     services.store.setMetadata(`runtimeRun:${runId}`, next); return next;
   }
-  function closeStreaming(run: P.Run) {
-    for (const entry of services.store.list<P.TranscriptEntry>('entries', value => value.kind === 'message' && value.runId === run.id && value.streaming)) {
-      const next = services.update(entry, { streaming: false });
-      services.store.put('entries', next); services.events.emit('entry.upserted', next, { conversationId: next.conversationId, botId: run.botId });
-    }
-  }
+  function closeStreaming(run: P.Run) { closeRunEntries(services, run); }
   function actor(runId: string) {
     const value = services.store.metadata<Principal>(`runPrincipal:${runId}`);
     if (!value) fail('forbidden', 'This run has no retained initiating authority.');
@@ -822,12 +817,28 @@ async function stopInvocationResources(services: BackendServices, runs: P.Run[],
       const status: P.Run['status'] = result.cancelled ? 'cancelled' : result.ok ? 'succeeded' : 'failed';
       const closed = services.update(services.store.require<P.Run>('runs', run.id), { status, completedAtMs: services.now() });
       services.store.put('runs', closed); services.events.emit('run.upserted', closed, { conversationId: run.conversationId, botId: run.botId });
-      for (const entry of services.store.list<P.TranscriptEntry>('entries', entry => entry.runId === run.id && entry.kind === 'message' && entry.streaming)) {
-        if (entry.kind === 'message') { const final = services.update(entry, { streaming: false }); services.store.put('entries', final); services.events.emit('entry.upserted', final, { conversationId: final.conversationId, botId: run.botId }); }
-      }
+      closeRunEntries(services, closed);
     } catch { uncertain = true; }
   }
   return uncertain ? 'outcome_unknown' : 'cancelled';
+}
+
+/**
+ * A terminal run can't still be streaming or running a tool. Ends streaming
+ * replies and any tool row whose end event never arrived, so clients don't
+ * show a permanent spinner: completed only when the run succeeded, otherwise
+ * failed (titled "stopped" for a cancelled run).
+ */
+function closeRunEntries(services: BackendServices, run: P.Run) {
+  const status = run.status === 'succeeded' ? 'completed' as const : 'failed' as const;
+  for (const entry of services.store.list<P.TranscriptEntry>('entries', value => value.runId === run.id && (value.kind === 'message' && value.streaming || value.kind === 'tool_call' && value.status === 'started'))) {
+    const next = entry.kind === 'message'
+      ? services.update(entry, { streaming: false })
+      : entry.kind === 'tool_call'
+        ? services.update(entry, { status, title: `${entry.tool} ${run.status === 'cancelled' ? 'stopped' : status}` })
+        : entry;
+    services.store.put('entries', next); services.events.emit('entry.upserted', next, { conversationId: next.conversationId, botId: run.botId });
+  }
 }
 
 
