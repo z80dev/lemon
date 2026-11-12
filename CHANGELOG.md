@@ -97,6 +97,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   distinguish malformed URLs, HTTPS requirements and non-allowlisted origins.
   `LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS` is declared in the environment registry;
   `lemon doctor` checks both admission allowlists for `LEMON_BOT_PUBLIC_URL`.
+- **lemon.food home page comes alive.** The hero is now an animated copy of the
+  Lemon Bot web app that plays three example conversations (fixing a flaky test
+  behind a Terminal approval card, recalling a decision and setting a reminder,
+  and fanning a review out to helpers). Visitors can press **Allow** or **Deny**
+  themselves, switch or pause examples, and squeeze the mascot, which reacts to
+  the conversation from behind a turning lemon slice. The "doors" section now
+  shows faithful miniatures of the real terminal UI and the Mac and iPhone apps.
+  Reduced-motion visitors see final states without animation, and the top
+  navigation collapses to its menu button wherever the full menu would overflow.
 - **Tern media previews.** In a Tern pane, a whole-file `read` of an image,
   SVG, PDF, audio/video file or 3D model, and a saved browser screenshot, shows
   the file in its tool card through Tern's media viewer, as omp's does. The

@@ -2,8 +2,11 @@
 import { onBeforeUnmount, ref } from 'vue'
 import { withBase } from 'vitepress'
 import LemonChatDemo from './LemonChatDemo.vue'
+import IosAppMock from './IosAppMock.vue'
 import LemonFace from './LemonFace.vue'
 import LemonSlice from './LemonSlice.vue'
+import MacAppMock from './MacAppMock.vue'
+import TuiMock from './TuiMock.vue'
 
 const installer = 'curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh'
 const installs = [
@@ -224,45 +227,24 @@ const vReveal = {
     <section class="section" aria-labelledby="doors-title">
       <header v-reveal class="section-head reveal-stagger">
         <p class="kicker">Wherever you work</p>
-        <h2 id="doors-title">One lemon.<br><em>Three doors.</em></h2>
-        <p>The same sessions, memory, and tools — from a terminal, a browser tab, or the chat app already on your phone.</p>
+        <h2 id="doors-title">One lemon.<br><em>Every door.</em></h2>
+        <p>The same Bots, sessions, memory and tools in the terminal, the Mac and iPhone apps, the browser app up top, or the Telegram and Discord chats you already use.</p>
       </header>
       <div v-reveal class="doors reveal-stagger">
         <a class="door" style="--i: 0" :href="withBase('/user-guide/cli')">
-          <div class="mock terminal" aria-hidden="true">
-            <div class="mock-bar"><i></i><i></i><i></i><span>~/app</span></div>
-            <pre><span class="tl" style="--d: .5s"><span class="dim">$</span> <span class="typed" style="--n: 5; --d: .55s">lemon</span></span>
-<span class="tl" style="--d: 1.1s"><span class="lm">●</span> <b>lemon</b> <span class="dim">· session upload-fix</span></span>
-<span class="tl" style="--d: 1.45s"><span class="dim">you   ›</span> <span class="typed" style="--n: 25; --d: 1.55s">why is upload_test flaky?</span></span>
-<span class="tl" style="--d: 3.2s"><span class="lm">lemon ›</span> Two tests share a temp dir.</span>
-<span class="tl" style="--d: 3.55s">        Patch ready — running it now.</span>
-<span class="tl" style="--d: 4.3s"><span class="ok">✓</span> <span class="dim">bash</span> mix test test/upload_test.exs <span class="term-caret"></span></span></pre>
-          </div>
+          <div class="mock"><TuiMock /></div>
           <h3>Terminal</h3>
           <p>A fast TUI for long coding sessions, with slash commands and resumable history.</p>
         </a>
-        <a class="door" style="--i: 1" :href="withBase('/user-guide/web')">
-          <div class="mock browser" aria-hidden="true">
-            <div class="mock-bar"><i></i><i></i><i></i><span class="url">lemon · sessions</span></div>
-            <div class="mock-chat">
-              <div class="msg me" style="--d: .7s">Summarize what changed this week.</div>
-              <div class="msg them" style="--d: 1.4s"><LemonFace :size="22" leaf /><span>12 commits, 3 merged PRs. The big one: retries in the outbox.</span><i class="typing-cover face-gap"><b></b><b></b><b></b></i></div>
-            </div>
-          </div>
-          <h3>Browser</h3>
-          <p>Pick up any session in the web interface, with files, runs, and history alongside.</p>
+        <a class="door" style="--i: 1" :href="withBase('/getting-started/lemon-bot#a-mac-app')">
+          <div class="mock"><MacAppMock /></div>
+          <h3>Mac</h3>
+          <p>The native Lemon Bot app, with every Bot, chat and approval a click away.</p>
         </a>
-        <a class="door" style="--i: 2" :href="withBase('/getting-started/add-a-channel')">
-          <div class="mock phone" aria-hidden="true">
-            <div class="phone-head"><LemonFace :size="24" leaf /><span><b>Lemon</b><small>bot</small></span></div>
-            <div class="mock-chat">
-              <div class="msg them" style="--d: .8s">Morning! Your release notes are drafted.<i class="typing-cover"><b></b><b></b><b></b></i></div>
-              <div class="msg me" style="--d: 2s">Ship it 🍋</div>
-              <div class="msg them" style="--d: 2.6s">Shipped. Have a zesty day ✨<i class="typing-cover"><b></b><b></b><b></b></i></div>
-            </div>
-          </div>
-          <h3>Chat</h3>
-          <p>Talk to the same assistant from Telegram, Discord, and other channels.</p>
+        <a class="door" style="--i: 2" :href="withBase('/getting-started/lemon-bot#connect-an-iphone')">
+          <div class="mock"><IosAppMock /></div>
+          <h3>iPhone</h3>
+          <p>Check in on a Bot, read its answers and approve a command from your pocket.</p>
         </a>
       </div>
     </section>
@@ -423,33 +405,8 @@ const vReveal = {
 .door { display: grid; grid-row: span 3; grid-template-rows: subgrid; row-gap: 0; align-content: start; }
 .door h3 { font-family: var(--lemon-display); font-variation-settings: 'SOFT' 100; font-weight: 600; font-size: 24px; letter-spacing: -.02em; margin: 20px 0 6px; color: var(--vp-c-text-1); }
 .door p { margin: 0; font-size: 15px; line-height: 1.6; color: var(--vp-c-text-2); }
-.mock { min-height: 220px; border-radius: 22px; overflow: hidden; transition: transform .35s cubic-bezier(.22, 1, .36, 1); box-shadow: 0 1px 0 rgb(0 0 0 / .03), 0 20px 40px -30px rgb(30 35 20 / .45); }
+.mock { display: grid; place-items: center; transition: transform .35s cubic-bezier(.22, 1, .36, 1); }
 .door:hover .mock { transform: translateY(-6px) rotate(.5deg); }
-.mock-bar { display: flex; align-items: center; gap: 6px; padding: 12px 14px; font-size: 11px; }
-.mock-bar i { width: 9px; height: 9px; border-radius: 50%; background: currentColor; opacity: .22; }
-.mock-bar span { margin-left: 8px; font-family: var(--vp-font-family-mono); opacity: .55; }
-.terminal { background: var(--lemon-ink-panel); color: #ECEDE6; }
-.terminal pre { margin: 0; padding: 4px 18px; font-family: var(--vp-font-family-mono); font-size: 12px; line-height: 1.75; white-space: pre; }
-.terminal .dim { color: #858A7E; } .terminal .lm { color: #E9D474; } .terminal .ok { color: #8CCB98; } .terminal b { color: #F4F2E4; }
-.typed { display: inline-block; vertical-align: bottom; overflow: hidden; white-space: pre; }
-.term-caret { display: inline-block; width: .55em; height: 1.1em; vertical-align: -.2em; background: var(--lemon-brand); animation: caret 1s steps(1) infinite; }
-.browser { background: var(--vp-c-bg-elv); border: 1px solid var(--vp-c-divider); color: var(--vp-c-text-1); }
-.browser .mock-bar { border-bottom: 1px solid var(--vp-c-divider); }
-.browser .url { flex: 1; text-align: center; padding: 3px 10px; border-radius: 8px; background: var(--vp-c-bg-soft); }
-.mock-chat { display: flex; flex-direction: column; gap: 10px; padding: 18px; font-size: 13px; line-height: 1.45; }
-.msg { max-width: 82%; padding: 9px 13px; border-radius: 18px; }
-.msg.me { align-self: flex-end; background: var(--lemon-brand); color: var(--lemon-ink); border-bottom-right-radius: 6px; }
-.msg.them { position: relative; align-self: flex-start; display: flex; gap: 8px; align-items: flex-start; background: var(--vp-c-bg-soft); color: var(--vp-c-text-1); border-bottom-left-radius: 6px; }
-.typing-cover { position: absolute; inset: 0; display: flex; align-items: center; gap: 4px; padding: 0 14px; border-radius: inherit; background: inherit; opacity: 0; pointer-events: none; }
-.typing-cover.face-gap { padding-left: 43px; }
-.typing-cover b { width: 6px; height: 6px; border-radius: 50%; background: var(--vp-c-text-3); animation: dot 1s ease-in-out infinite; }
-.typing-cover b:nth-child(2) { animation-delay: .15s; }
-.typing-cover b:nth-child(3) { animation-delay: .3s; }
-.phone { background: color-mix(in srgb, var(--tone-blue) 30%, var(--vp-c-bg)); color: var(--vp-c-text-1); }
-.phone .mock-chat { gap: 8px; padding: 14px 16px; }
-.phone-head { display: flex; align-items: center; gap: 10px; padding: 13px 16px; background: color-mix(in srgb, var(--vp-c-bg-elv) 70%, transparent); font-size: 13px; }
-.phone-head small { display: block; font-size: 11px; color: var(--vp-c-text-3); }
-.phone .msg.them { background: var(--vp-c-bg-elv); }
 
 /* Paths */
 .paths { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
@@ -464,16 +421,12 @@ const vReveal = {
 .choir :deep(.lemon-face) { animation: hop 2.8s calc(var(--i) * .14s) cubic-bezier(.34, 1.56, .64, 1) infinite; }
 .choir :deep(.lemon-face:hover) { animation: wiggle .55s ease-in-out; }
 
-/* Scroll reveal and the door mocks that play once revealed. */
+/* Scroll reveal: below-the-fold blocks rise in once. */
 .reveal-pending.reveal-solo, .reveal-pending.reveal-stagger > * { opacity: 0; }
 .is-revealed.reveal-solo { animation: rise .9s cubic-bezier(.22, 1, .36, 1) backwards; }
 .is-revealed.reveal-stagger > * { animation: rise .8s calc(var(--i, 0) * 110ms) cubic-bezier(.22, 1, .36, 1) backwards; }
 .section-head.reveal-stagger > :nth-child(2) { --i: 1; }
 .section-head.reveal-stagger > :nth-child(3) { --i: 2; }
-.doors.is-revealed .tl { animation: appear .01s var(--d) backwards; }
-.doors.is-revealed .typed { animation: typing calc(var(--n) * 55ms) var(--d) steps(var(--n), end) backwards; }
-.doors.is-revealed .msg { animation: msg-pop .5s var(--d) cubic-bezier(.34, 1.56, .64, 1) backwards; }
-.doors.is-revealed .typing-cover { animation: cover 1s var(--d) backwards; }
 
 @keyframes rise { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
 @keyframes swipe { to { transform: rotate(-1.6deg) scaleX(1); } }
@@ -491,12 +444,6 @@ const vReveal = {
 @keyframes juice { 0% { opacity: 1; transform: translate(0, 0) rotate(var(--r)) scale(.3); } 45% { opacity: 1; transform: translate(var(--dx), var(--dy)) rotate(var(--r)) scale(1); } 100% { opacity: 0; transform: translate(calc(var(--dx) * 1.2), calc(var(--dy) + 110px)) rotate(var(--r)) scale(.5); } }
 @keyframes shout { from { opacity: 0; transform: translateY(10px) scale(.7) rotate(-6deg); } 25% { opacity: 1; transform: translateY(-8px) scale(1.05) rotate(-3deg); } to { opacity: 0; transform: translateY(-46px) rotate(2deg); } }
 @keyframes pulse-drop { 0% { opacity: 0; transform: translateY(0) scale(.6); } 15% { opacity: 1; } 55% { opacity: 1; transform: translateY(18px) scale(1); } 70%, 100% { opacity: 0; transform: translateY(22px) scale(.4); } }
-@keyframes appear { from { opacity: 0; } to { opacity: 1; } }
-@keyframes typing { from { width: 0; } to { width: calc(var(--n) * 1ch); } }
-@keyframes msg-pop { from { opacity: 0; transform: translateY(10px) scale(.9); } to { opacity: 1; transform: none; } }
-@keyframes cover { 0%, 82% { opacity: 1; } 100% { opacity: 0; } }
-@keyframes dot { 0%, 60%, 100% { transform: translateY(0); opacity: .45; } 30% { transform: translateY(-4px); opacity: 1; } }
-@keyframes caret { 50% { opacity: 0; } }
 @keyframes dead { 0%, 38% { opacity: 0; transform: none; } 41% { opacity: 1; transform: rotate(8deg); } 52% { opacity: 1; transform: translateY(4px) rotate(14deg); } 60%, 100% { opacity: 0; transform: translateY(18px) rotate(30deg); } }
 @keyframes toast { 0%, 66% { opacity: 0; transform: translateY(6px); } 72%, 90% { opacity: 1; transform: none; } 96%, 100% { opacity: 0; transform: translateY(-4px); } }
 
@@ -508,7 +455,7 @@ const vReveal = {
   .hero { grid-template-columns: minmax(0, 1fr); padding-top: 48px; gap: 12px; }
   .stage { max-width: 560px; width: 100%; margin: 28px auto 0; }
   .doors, .paths { grid-template-columns: 1fr; }
-  .mock { max-width: 560px; }
+  .mock { max-width: 560px; width: 100%; margin-inline: auto; }
 }
 @media (max-width: 640px) {
   .lemon-home { padding: 0 20px; }
@@ -543,7 +490,7 @@ const vReveal = {
 .dark .lemon-home .hero h1 .move em, .dark .lemon-home h2 em { color: var(--lemon-text); }
 .dark .lemon-home .hero h1 .move em::after { bottom: -.13em; height: .2em; border-radius: 0; opacity: .75; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 10'%3E%3Cpath d='M0 5 Q10 0 20 5 T40 5' fill='none' stroke='%23E9D474' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E") left center / auto 100% repeat-x; }
 .dark .lemon-home .pill:hover { background: rgb(233 212 116 / .12); color: var(--lemon-text) !important; }
-.dark .lemon-home .install, .dark .lemon-home .beam, .dark .lemon-home .terminal { background: var(--dark-card); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .07); }
+.dark .lemon-home .install, .dark .lemon-home .beam { background: var(--dark-card); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .07); }
 .dark .lemon-home .slice-wrap .lemon-slice { opacity: 1; }
 .dark .lemon-home .lemon-slice .rind { fill: rgb(233 212 116 / .1); stroke: rgb(233 212 116 / .34); }
 .dark .lemon-home .lemon-slice .pith { fill: var(--vp-c-bg); }
@@ -559,7 +506,5 @@ const vReveal = {
 .dark .lemon-home .feature:hover, .dark .lemon-home .path:hover { background: linear-gradient(160deg, color-mix(in srgb, var(--tone) 20%, var(--dark-card)), var(--dark-card) 72%); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 34%, transparent); }
 .dark .lemon-home .feature-link { color: color-mix(in srgb, var(--tone) 80%, #fff); }
 .dark .lemon-home .path .kicker { color: color-mix(in srgb, var(--tone) 65%, var(--vp-c-text-2)); }
-.dark .lemon-home .phone { background: color-mix(in srgb, var(--tone-blue) 9%, var(--dark-card)); box-shadow: inset 0 0 0 1px rgb(160 196 234 / .14); }
-.dark .lemon-home .browser { background: var(--dark-card); }
 .dark .lemon-home .closing { background: radial-gradient(80% 70% at 50% 0%, rgb(233 212 116 / .13), transparent 72%), var(--dark-card); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .06); }
 </style>
