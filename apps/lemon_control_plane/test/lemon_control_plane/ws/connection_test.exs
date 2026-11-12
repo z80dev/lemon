@@ -93,12 +93,13 @@ defmodule LemonControlPlane.WS.ConnectionTest do
       assert {:push, {:text, response}, _state} =
                Connection.handle_in({frame, [opcode: :text]}, state)
 
+      assert Jason.decode!(response)["ok"] == true
+      assert_received {:peer_binding_submission, request}
+
       if peer == {127, 0, 0, 1} do
-        assert Jason.decode!(response)["ok"] == true
-        assert_received {:peer_binding_submission, %{meta: %{tern_pane: 42}}}
+        assert request.meta.tern_pane == 42
       else
-        assert Jason.decode!(response)["error"]["code"] == "INVALID_REQUEST"
-        refute_received {:peer_binding_submission, _}
+        refute Map.has_key?(request.meta, :tern_pane)
       end
     end
   end

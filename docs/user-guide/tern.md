@@ -118,6 +118,25 @@ status (OSC 7501), and approval, question and failure states carry a one-line
 summary of the pending action, question or error for Tern's inbox and banners.
 Other terminals keep the `Lemon · <name> · <status>` title.
 
+## Browser in Tern
+
+When the TUI runs in a Tern pane and the daemon runs on the same machine, the
+agent's browser tools use Tern's native browser picture-in-picture over that
+pane instead of headless Chromium, as omp's do. The TUI sends only its pane
+number, and only a direct-loopback connection binds it; the daemon finds Tern's
+socket itself. `browser_tabs` lists the window's browser blocks, and passing a
+block's ID adopts a page you already have open; closing an adopted tab hands it
+back to you instead of closing it. If Tern cannot show a browser (no window,
+unsupported platform) an automatically chosen Tern browser falls back to the
+next provider with a note; an explicit `provider = "tern"` fails instead. Turn
+it off with `runtime.tools.browser.tern = false` or `LEMON_BROWSER_TERN=0`.
+On Linux the daemon needs `TERN_PANE_SOCKET`, `TERN_DAEMON_SOCKET` or
+`TERN_CONFIG_DIR` to find Tern. See [Native Tern operation](../tools/browser.md#native-tern-operation)
+for the supported actions.
+
+`lemon setup` run in a Tern pane opens a sign-in URL you agree to open as a
+Tern browser block beside the pane, falling back to the system browser.
+
 ## Manual registration
 
 Tern's **Settings → Agents → Custom agents** uses this shape:

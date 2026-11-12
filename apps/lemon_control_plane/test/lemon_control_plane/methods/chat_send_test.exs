@@ -140,10 +140,10 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
           "local?" => true
         })
 
-      assert {:error, {:invalid_request, _, nil}} =
-               ChatSend.handle(forged, Map.merge(ctx, %{peer: peer, local?: true}))
-
-      refute_received {:submitted, _}
+      # The prompt is still submitted; only the local pane binding is dropped.
+      assert {:ok, _} = ChatSend.handle(forged, Map.merge(ctx, %{peer: peer, local?: true}))
+      assert_received {:submitted, request}
+      refute Map.has_key?(request.meta, :tern_pane)
     end
   end
 

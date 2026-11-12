@@ -23,6 +23,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - **`lemon tern install --agent-block`** makes Tern's **New agent block** open
   Lemon's TUI by setting Tern's `agent_command`. Without the flag an existing
   agent command is left unchanged.
+- **Tern browser.** Browser tools of a TUI run in a Tern pane (local daemon)
+  drive Tern's native browser picture-in-picture over that pane and can adopt
+  the user's open browser blocks, releasing rather than closing them. An
+  automatically chosen Tern browser falls back to the next provider when Tern
+  cannot show one; explicit `provider = "tern"` fails closed. Opt out with
+  `runtime.tools.browser.tern = false` or `LEMON_BROWSER_TERN=0`. `lemon setup`
+  in a Tern pane opens consented sign-in URLs as a Tern browser block beside it.
 
 ### Changed
 

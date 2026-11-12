@@ -8,8 +8,9 @@ defmodule LemonControlPlane.Methods.ChatSend do
   canonical profile sessions do not accept caller workspace overrides.
   Profile chat may replace MCP attachments with `invocationMcpServers`; omission
   inherits the profile defaults, while an explicit empty list attaches none.
-  `ternPane` binds browser tools for this invocation only and is accepted solely
-  from an actual direct-loopback WebSocket peer. Socket paths remain daemon-local.
+  `ternPane` binds browser tools for this invocation only. It binds only from an
+  actual direct-loopback WebSocket peer; from any other peer it is ignored. Socket
+  paths remain daemon-local.
   """
 
   @behaviour LemonControlPlane.Method
@@ -159,15 +160,15 @@ defmodule LemonControlPlane.Methods.ChatSend do
       :error ->
         {:ok, nil}
 
-      {:ok, pane} ->
-        if LemonControlPlane.Auth.Authorize.loopback_address?(Map.get(ctx, :peer)) and
-             is_integer(pane) and pane >= 0 and pane <= 9_007_199_254_740_991 do
-          {:ok, pane}
-        else
-          {:error,
-           {:invalid_request,
-            "ternPane requires a direct-loopback peer and a nonnegative safe integer", nil}}
-        end
+      {:ok, pane} when is_integer(pane) and pane >= 0 and pane <= 9_007_199_254_740_991 ->
+        # A pane names a terminal on the daemon's own machine. From any other
+        # peer it binds nothing, but the prompt itself is still valid.
+        if LemonControlPlane.Auth.Authorize.loopback_address?(Map.get(ctx, :peer)),
+          do: {:ok, pane},
+          else: {:ok, nil}
+
+      {:ok, _pane} ->
+        {:error, {:invalid_request, "ternPane must be a nonnegative safe integer", nil}}
     end
   end
 
