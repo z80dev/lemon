@@ -207,7 +207,8 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   end
 
   defp oauth_resolve(:anthropic, secret_name, value, opts) do
-    LemonAi.Auth.AnthropicOAuth.resolve_api_key_from_secret(
+    OAuthSecretResolver.resolve_with(
+      LemonAi.Auth.AnthropicOAuth,
       secret_name,
       value,
       [
@@ -218,7 +219,8 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   end
 
   defp oauth_resolve(:openai_codex, secret_name, value, opts) do
-    LemonAi.Auth.OpenAICodexOAuth.resolve_api_key_from_secret(
+    OAuthSecretResolver.resolve_with(
+      LemonAi.Auth.OpenAICodexOAuth,
       secret_name,
       value,
       [
@@ -667,7 +669,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   defp resolve_openai_codex_oauth_secret(secret_name) do
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
       {:ok, value, _source} ->
-        case LemonAi.Auth.OpenAICodexOAuth.resolve_api_key_from_secret(secret_name, value,
+        case OAuthSecretResolver.resolve_with(
+               LemonAi.Auth.OpenAICodexOAuth,
+               secret_name,
+               value,
                persist_secret: &persist_openai_codex_secret/3,
                reload_secret: &reload_secret/1
              ) do
@@ -773,7 +778,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   defp resolve_anthropic_oauth_secret(secret_name) do
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
       {:ok, value, _source} ->
-        case LemonAi.Auth.AnthropicOAuth.resolve_api_key_from_secret(secret_name, value,
+        case OAuthSecretResolver.resolve_with(
+               LemonAi.Auth.AnthropicOAuth,
+               secret_name,
+               value,
                persist_secret: &persist_anthropic_secret/3,
                reload_secret: &reload_secret/1
              ) do

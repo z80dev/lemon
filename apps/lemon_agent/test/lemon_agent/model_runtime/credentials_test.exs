@@ -502,7 +502,14 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
         end
 
         send(holder, :finish_refresh)
-        assert {:error, :oauth_secret_changed} = Task.await(task, 5_000)
+
+        # The losing refresh is never stored; a fresh replacement login is
+        # adopted instead of failing, a deleted one is not.
+        case unquote(mutation) do
+          :replace -> assert {:ok, "replacement-login"} = Task.await(task, 5_000)
+          :delete -> assert {:error, :oauth_secret_changed} = Task.await(task, 5_000)
+        end
+
         assert {:ok, ^untouched} = Secrets.get(other)
         refute_received {:cas_request, _}
 
