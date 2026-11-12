@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Component, TerminalFramePlan, ViewportSize } from "@oh-my-pi/pi-tui/tui";
-import { TUI } from "@oh-my-pi/pi-tui/tui";
+import { Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { AssistantMessageComponent } from "../../src/ui/components/assistant-message.ts";
 import { TranscriptContainer } from "../../src/ui/components/transcript-container.ts";
@@ -132,6 +132,25 @@ describe("RowFrameProvider history transactions", () => {
 		expect(covered.viewport.length).toBeLessThanOrEqual(SIZE.rows);
 		dock.rows = ["editor"];
 		expect(provider.renderFrame(SIZE)).toEqual(before);
+	});
+
+	test("an animating header stays live under pressure and retires its settled frame", () => {
+		const transcript = new TranscriptContainer();
+		transcript.addChild(new Rows(["one", "two", "three", "four", "five", "six"]));
+		const banner = new Rows(["banner frame 1"]);
+		banner.finalized = false;
+		const header = new Container();
+		header.addChild(banner);
+		const provider = new RowFrameProvider(transcript, [header], [new Rows(["editor"])]);
+		const plan = provider.renderFrame(SIZE);
+		expect(plan.history).toBeUndefined();
+		expect(plan.viewport.length).toBeLessThanOrEqual(SIZE.rows);
+		banner.rows = ["banner settled"];
+		banner.finalized = true;
+		const history: string[] = [];
+		drain(provider, history);
+		expect(content(history)[0]).toBe("banner settled");
+		expect(content(history)).not.toContain("banner frame 1");
 	});
 
 	test("resize previews do not retire, and replay preserves the emitted source boundary", () => {

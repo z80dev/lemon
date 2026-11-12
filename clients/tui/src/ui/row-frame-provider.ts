@@ -11,6 +11,7 @@ import type {
 	TUI,
 	ViewportSize,
 } from "@oh-my-pi/pi-tui/tui";
+import { Container } from "@oh-my-pi/pi-tui/tui";
 import type { TranscriptContainer } from "./components/transcript-container.ts";
 
 interface OfferedHistory {
@@ -18,6 +19,13 @@ interface OfferedHistory {
 	width: number;
 	transcriptId?: number;
 	header?: readonly string[];
+}
+
+/** Animated chrome (the banner's intro) stays live until it settles: retired rows are frozen. */
+function isSettled(component: Component): boolean {
+	const block = component as Component & { isTranscriptBlockFinalized?(): boolean };
+	if (block.isTranscriptBlockFinalized?.() === false) return false;
+	return !(component instanceof Container) || component.children.every(isSettled);
 }
 
 /** Owns Lemon's main/dock layout and the terminal's monotonic history id space. */
@@ -184,7 +192,9 @@ export class RowFrameProvider implements TerminalFrameProvider, NativeSurfacePro
 			if (header.length > 0) {
 				if (
 					!this.#flush &&
-					header.length + this.#transcript.liveRowCount(width, capacity - header.length) <= capacity
+					(!this.#main.every(isSettled) ||
+						header.length + this.#transcript.liveRowCount(width, capacity - header.length) <=
+							capacity)
 				) {
 					return undefined;
 				}
