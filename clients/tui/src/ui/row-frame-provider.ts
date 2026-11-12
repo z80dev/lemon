@@ -136,8 +136,8 @@ export class RowFrameProvider implements TerminalFrameProvider, NativeSurfacePro
 	}
 
 	/** TSP owns its whole document; ANSI retirement never removes native nodes. */
-	describeSurface(_cx: DescribeContext): NativeSurface {
-		const blocks = this.#transcript.nativeBlocks();
+	describeSurface(cx: DescribeContext): NativeSurface {
+		const blocks = this.#transcript.nativeBlocks(cx);
 		const main = this.#surface.main;
 		if (
 			main.length !== this.#main.length + blocks.length ||

@@ -13,8 +13,9 @@
  */
 
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
-import { EMPTY_NODE, kbd, node, text } from "@oh-my-pi/pi-tui/native/describe";
+import { EMPTY_NODE, node } from "@oh-my-pi/pi-tui/native/describe";
 import type { NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
+import { actionButton } from "@oh-my-pi/pi-tui/native/overlay";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
 import type { QueueItem } from "../../store/queue-store.ts";
@@ -197,20 +198,9 @@ export class QueuePanelComponent implements Component {
 				);
 			}
 			if (item.state !== "waiting-connection") {
-				children.push(
-					node(
-						"row",
-						{
-							role: "omp.queue.edit",
-							gap: "xs",
-							align: "center",
-							title: "Edit  ctrl+q",
-							actions: { click: "queue.edit" },
-						},
-						[kbd("ctrl+q"), text("Edit")],
-						"edit",
-					),
-				);
+				const edit = actionButton("Edit", "queue.edit", { keys: "ctrl+q", key: "edit" });
+				edit.p!.role = "omp.queue.edit";
+				children.push(edit);
 			}
 			const selected = this.focused && index === this.#selected;
 			return node(

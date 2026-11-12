@@ -19,6 +19,7 @@ import { Markdown } from "@oh-my-pi/pi-tui/components/markdown";
 import { Text } from "@oh-my-pi/pi-tui/components/text";
 import { col, node, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
+import { iconButton } from "@oh-my-pi/pi-tui/native/overlay";
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { formatTurnUsage } from "@oh-my-pi/pi-tui/overlays/usage-row";
 import { Container } from "@oh-my-pi/pi-tui/tui";
@@ -302,20 +303,9 @@ export class AssistantMessageComponent extends Container {
 function describeTurnFooter(turn: TurnSummary, answered: boolean): NativeNode | undefined {
 	const line: NativeNode[] = [];
 	if (answered && hasTranscriptActions()) {
-		line.push(
-			node(
-				"icon",
-				{
-					name: "copy",
-					role: "omp.turn.copy",
-					title: "Copy answer",
-					aria: "Copy answer",
-					actions: { click: "copy-answer" },
-				},
-				undefined,
-				"copy",
-			),
-		);
+		const copy = iconButton("copy", "copy-answer", "Copy answer", { key: "copy" });
+		copy.p!.role = "omp.turn.copy";
+		line.push(copy);
 	}
 	const usage = turnUsageText(turn);
 	if (usage) {

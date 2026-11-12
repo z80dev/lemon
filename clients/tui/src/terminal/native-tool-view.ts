@@ -19,7 +19,6 @@
 
 import { basename, isAbsolute, join } from "node:path";
 import { nativeDiff } from "@oh-my-pi/pi-tui/chrome/diff";
-import { getLanguageFromPath } from "@oh-my-pi/pi-tui/lang-from-path";
 import {
 	code,
 	col,
@@ -183,13 +182,12 @@ function locationHref(block: ToolBlock): string | undefined {
 
 /** A diff body from renderDiff-form rows (`±N|content`, or `±content` without numbers). */
 export function diffNode(rows: string, path: string | undefined): NativeNode {
-	const lang = path ? getLanguageFromPath(path) : undefined;
 	const lines = rows.split("\n").filter((line) => line.length > 0);
 	// Numbered rows carry real file positions; pi-tui's parser rebuilds hunks from them.
 	if (lines.every((line) => /^[+\- ]\s*\d+\|/.test(line) || /^\s*(\.\.\.|…)\s*$/.test(line))) {
-		return nativeDiff(rows, { lang });
+		return nativeDiff(rows, { path });
 	}
-	return diffFromHunks(splitHunks(lines), lang);
+	return diffFromHunks(splitHunks(lines), path);
 }
 
 /** Unnumbered rows as hunks, split at `...`/`@@` separators (no positions are claimed beyond line 1). */
@@ -209,10 +207,10 @@ function splitHunks(lines: readonly string[]): string[][] {
 	return hunks;
 }
 
-function diffFromHunks(hunks: readonly string[][], lang: string | undefined): NativeNode {
+function diffFromHunks(hunks: readonly string[][], path: string | undefined): NativeNode {
 	return node("diff", {
 		hunks: hunks.map((lines) => ({ oldStart: 1, newStart: 1, lines })),
-		lang,
+		path,
 	});
 }
 
@@ -428,12 +426,11 @@ function readView(f: ToolFacts): NativeToolView {
 	if (!f.settled || !f.output) return { tool: head, inline: true };
 	const parsed = parseRead(f.output);
 	const start = parsed.numbers?.[0] ?? num(f.details.start_line) ?? num(f.args.offset) ?? 1;
-	const lang = path ? getLanguageFromPath(path) : undefined;
 	return {
 		tool: head,
 		inline: true,
 		body: compact<NativeChild>([
-			...readContentCode(parsed.text, start, parsed.numbers, lang),
+			...readContentCode(parsed.text, start, parsed.numbers, path),
 			footnoteText(compact([parsed.trailer])),
 		]),
 	};
@@ -477,10 +474,9 @@ function writeView(f: ToolFacts): NativeToolView {
 	};
 	if (f.failed) return { tool: head, tone: "error", body: [errorText(failureMessage(f))] };
 	if (!content) return { tool: head };
-	const lang = path ? getLanguageFromPath(path) : undefined;
 	return {
 		tool: head,
-		body: [keyed(code(content.replace(/\n$/, ""), { lang, numbers: true }), "source")],
+		body: [keyed(code(content.replace(/\n$/, ""), { path, numbers: true }), "source")],
 		preview: WRITE_PREVIEW,
 	};
 }
@@ -566,7 +562,7 @@ function patchView(f: ToolFacts): NativeToolView {
 	const fileBody = (file: PatchFile): NativeChild =>
 		file.op === "delete" && file.hunks.length === 0
 			? noteText("Deleted")
-			: diffFromHunks(file.hunks, getLanguageFromPath(file.path));
+			: diffFromHunks(file.hunks, file.path);
 	if (files.length === 1) return { tool: head, body: [fileBody(files[0]!)] };
 	return {
 		tool: head,
@@ -666,14 +662,14 @@ function grepView(f: ToolFacts): NativeToolView {
 		sections.push(
 			keyed(
 				col(
-					[
+					compact<NativeChild>([
 						fileRow(display, {
 							chip: { text: String(marks), title: formatCount("match", marks) },
 							href: fileTarget(resolved, firstMatch),
 							key: "file",
 						}),
-						...numberedCode(sorted, { lang: getLanguageFromPath(display) }),
-					],
+						numberedCode(sorted, { path: display }),
+					]),
 					{ gap: "xs", role: "omp.tool.search.file" },
 				),
 				`f:${display}`,
