@@ -49,6 +49,9 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Fixed
 
+- Timeouts, closed openers and unclassified failures of passive node inspections
+  (`node.capabilities.get`, `node.runtime.features`, `node.host.info`) are
+  retry-safe unavailable reads, not uncertain mutations.
 - Register controller and named-node provider check/import handlers in the RPC
   method registry so clients can discover and invoke model-readiness capabilities.
 

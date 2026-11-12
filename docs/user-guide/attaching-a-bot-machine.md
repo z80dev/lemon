@@ -606,6 +606,15 @@ permission checks, including ACLs. Terminal inspection checks the actual shell
 and Python installation. Browser inspection uses its owning backend's status
 and the built-in tool catalog; it does not launch a browser.
 
+The worker runs at most one capability probe per connection, outside its message
+loop. Reads that arrive while a probe runs share the next probe, so every answer
+is measured after its request and nothing is cached between probes. A failed
+probe returns `UNAVAILABLE` with reason `capability_inspection_unavailable`,
+never a partial or empty snapshot. An unanswered `node.capabilities.get`,
+`node.runtime.features` or `node.host.info` (timeout, disconnect or unclassified
+failure) is an `UNAVAILABLE` read with `retrySafe:true` and
+`mutationMayHaveApplied:false`.
+
 On macOS, the worker's configured `LEMON_TCC_PROBE` helper runs
 `--status --json` to measure permissions without requesting them. The Mac app
 can supply its signed **Lemon Bot Worker** helper; without a usable helper,

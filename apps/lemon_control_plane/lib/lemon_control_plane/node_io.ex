@@ -3,6 +3,11 @@ defmodule LemonControlPlane.NodeIO do
   require Logger
   alias LemonControlPlane.Protocol.Errors
 
+  # Passive destination inspections never change destination state. A timeout,
+  # closed opener or unclassified failure is an unavailable read, not a mutation
+  # whose outcome may be unknown.
+  @inspection_methods ["node.capabilities.get", "node.runtime.features", "node.host.info"]
+
   def invoke(node_id, method, args, ctx, opts \\ [])
 
   def invoke(node_id, method, args, ctx, opts) when is_binary(node_id) and is_map(args) do
@@ -31,7 +36,7 @@ defmodule LemonControlPlane.NodeIO do
                    required_process_execution: opts[:required_process_execution]
                  ) do
               {:ok, invoke_id} ->
-                await(invoke_id, ref, owner, timeout_ms + 1_000)
+                await(method, invoke_id, ref, owner, timeout_ms + 1_000)
 
               {:error, {:node_connection_changed, _}} ->
                 {:error,
@@ -88,7 +93,7 @@ defmodule LemonControlPlane.NodeIO do
   def invoke(_node_id, _method, _args, _ctx, _opts),
     do: {:error, Errors.invalid_request("nodeId must be a string")}
 
-  defp await(invoke_id, ref, owner, wait_ms) do
+  defp await(method, invoke_id, ref, owner, wait_ms) do
     receive do
       {:lemon_node_result, ^invoke_id, {:ok, result}} ->
         {:ok, result}
@@ -214,32 +219,31 @@ defmodule LemonControlPlane.NodeIO do
          })}
 
       {:lemon_node_result, ^invoke_id, {:error, _}} ->
-        {:error,
-         Errors.error(
-           :unavailable,
-           "Destination operation failed; mutation outcome may be unknown",
-           %{"preDispatch" => false, "retrySafe" => false, "mutationMayHaveApplied" => true}
-         )}
+        {:error, unresolved(method, "Destination operation failed")}
 
       {:DOWN, ^ref, :process, ^owner, _} ->
         LemonCore.NodeRegistry.cancel(invoke_id, :connection_closed)
-
-        {:error,
-         Errors.error(
-           :unavailable,
-           "Opening connection closed; mutation outcome may be unknown",
-           %{"preDispatch" => false, "retrySafe" => false, "mutationMayHaveApplied" => true}
-         )}
+        {:error, unresolved(method, "Opening connection closed")}
     after
       wait_ms ->
         LemonCore.NodeRegistry.cancel(invoke_id, :timeout)
-
-        {:error,
-         Errors.error(
-           :unavailable,
-           "Destination operation timed out; mutation outcome may be unknown",
-           %{"preDispatch" => false, "retrySafe" => false, "mutationMayHaveApplied" => true}
-         )}
+        {:error, unresolved(method, "Destination operation timed out")}
     end
+  end
+
+  defp unresolved(method, message) when method in @inspection_methods do
+    Errors.error(:unavailable, message, %{
+      "preDispatch" => false,
+      "retrySafe" => true,
+      "mutationMayHaveApplied" => false
+    })
+  end
+
+  defp unresolved(_method, message) do
+    Errors.error(:unavailable, message <> "; mutation outcome may be unknown", %{
+      "preDispatch" => false,
+      "retrySafe" => false,
+      "mutationMayHaveApplied" => true
+    })
   end
 end
