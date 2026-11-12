@@ -10,9 +10,15 @@ defmodule CodingAgent.ExecutionNode.Worker do
   Incoming execution capabilities are intersected with the destination-local
   `:execution_capabilities` ceiling before a session starts.
 
-  Immutable service adapters live in `services`, separate from per-connection and
-  per-invocation state, so state transitions share their configuration and keep
-  the worker struct within the BEAM's small-map representation.
+  Passive capability inspection runs as at most one supervised probe per
+  connection. Reads arriving while it runs share the next probe, so concurrent
+  controller reads never serialize in this mailbox and no answer is measured
+  before its request arrived.
+
+  Immutable service adapters and the destination-local execution ceiling live in
+  `services`, separate from per-connection and per-invocation state, so state
+  transitions share their configuration and keep the worker struct within the
+  BEAM's small-map representation.
   """
 
   use GenServer
@@ -30,6 +36,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
   @execution_protocol_version 2
   @max_control_text_bytes 16 * 1_024
   @max_pending_events 64
+  @max_capability_waiters 64
   @approval_decisions %{
     "approve_once" => :approve_once,
     "approve_session" => :approve_session,
@@ -153,7 +160,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     link_state: :connecting,
     shells: %{},
     process_tasks: %{},
-    execution_capabilities: :all,
+    capability_probe: nil,
     invocations: %{},
     run_refs: %{}
   ]
@@ -207,13 +214,15 @@ defmodule CodingAgent.ExecutionNode.Worker do
          memory_ingest_server: Keyword.get(opts, :memory_ingest_server, Ingest),
          token_store_module: Keyword.get(opts, :token_store_module, TokenStore),
          token_store_opts: Keyword.get(opts, :token_store_opts, []),
-         status_writer: Keyword.get(opts, :status_writer)
+         status_writer: Keyword.get(opts, :status_writer),
+         capabilities_module:
+           Keyword.get(opts, :capabilities_module, CodingAgent.ExecutionNode.Capabilities),
+         execution_capabilities: Keyword.get(opts, :execution_capabilities, :all)
        },
        notify_pid: Keyword.get(opts, :notify_pid),
        requested_node_id: Keyword.get(opts, :node_id),
        repair: Keyword.get(opts, :repair, false),
        max_payload_bytes: LemonCore.JSONPayload.default_max_bytes(),
-       execution_capabilities: Keyword.get(opts, :execution_capabilities, :all),
        token_opt: Keyword.get(opts, :token),
        watch_interval_ms: Keyword.get(opts, :watch_interval_ms),
        probe_interval_ms: Keyword.get(opts, :probe_interval_ms),
@@ -643,6 +652,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
     end
   end
 
+  def handle_info(
+        {monitor_ref, result},
+        %{capability_probe: %{task: %{ref: monitor_ref}}} = state
+      ),
+      do: {:noreply, finish_capability_probe(state, result)}
+
   def handle_info({monitor_ref, result}, state) when is_reference(monitor_ref) do
     case Enum.find(state.invocations, fn {_id, invocation} ->
            Map.get(invocation, :service_task) != nil and invocation.monitor_ref == monitor_ref
@@ -654,6 +669,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
         {:noreply, state}
     end
   end
+
+  def handle_info(
+        {:DOWN, monitor_ref, :process, _pid, _reason},
+        %{capability_probe: %{task: %{ref: monitor_ref}}} = state
+      ),
+      do: {:noreply, finish_capability_probe(state, :down)}
 
   def handle_info({:DOWN, monitor_ref, :process, _pid, reason}, state) do
     case Enum.find(state.process_tasks, fn {_, task} -> task.monitor_ref == monitor_ref end) do
@@ -897,8 +918,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
         not is_binary(invoke_id) or invoke_id == "" ->
           {:noreply, state}
 
-        Map.has_key?(state.invocations, invoke_id) or Map.has_key?(state.shells, invoke_id) or
-            Map.has_key?(state.process_tasks, invoke_id) ->
+        known_invocation?(state, invoke_id) ->
           {:noreply, state}
 
         not is_map(args) ->
@@ -978,8 +998,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
           {:noreply, send_host_io_result(state, invoke_id, {:ok, runtime_features()})}
 
         method == "node.capabilities.get" ->
-          result = CodingAgent.ExecutionNode.Capabilities.get(host_io_opts(state))
-          {:noreply, send_host_io_result(state, invoke_id, result)}
+          {:noreply, request_capabilities(state, invoke_id)}
 
         method in @host_io_methods ->
           result = CodingAgent.ExecutionNode.HostIO.handle(method, args, host_io_opts(state))
@@ -1004,6 +1023,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
         if is_binary(state.node_id) and payload["nodeId"] == state.node_id,
           do: cancel_process_task(state, invoke_id, payload["nodeGeneration"]),
           else: state
+
+      state = cancel_capability_waiter(state, invoke_id)
 
       case state.shells[invoke_id] do
         %{pid: pid} ->
@@ -1340,6 +1361,101 @@ defmodule CodingAgent.ExecutionNode.Worker do
     state |> send_invoke_error(invoke_id, failure_reason) |> remove_invocation(invoke_id)
   end
 
+  defp known_invocation?(state, invoke_id) do
+    Map.has_key?(state.invocations, invoke_id) or Map.has_key?(state.shells, invoke_id) or
+      Map.has_key?(state.process_tasks, invoke_id) or capability_waiter?(state, invoke_id)
+  end
+
+  # Capability inspection runs bounded host probes for seconds, so it never runs
+  # in this mailbox. One probe runs at a time. Reads arriving while it runs wait
+  # for the next probe rather than joining it: every answer is measured after its
+  # request arrived, and nothing (including OS grants) is kept between probes.
+  defp request_capabilities(%{capability_probe: nil} = state, invoke_id),
+    do: start_capability_probe(state, [invoke_id])
+
+  defp request_capabilities(%{capability_probe: probe} = state, invoke_id) do
+    if length(probe.waiters) + length(probe.queued) >= @max_capability_waiters do
+      send_invoke_error(state, invoke_id, :capability_inspection_unavailable)
+    else
+      %{state | capability_probe: %{probe | queued: [invoke_id | probe.queued]}}
+    end
+  end
+
+  defp start_capability_probe(state, waiters) do
+    capabilities = state.services.capabilities_module
+    opts = host_io_opts(state)
+
+    task =
+      Task.Supervisor.async(state.services.task_supervisor, fn ->
+        try do
+          capabilities.get(opts)
+        rescue
+          _ -> {:error, :capability_inspection_unavailable}
+        catch
+          _, _ -> {:error, :capability_inspection_unavailable}
+        end
+      end)
+
+    %{state | capability_probe: %{task: task, waiters: waiters, queued: []}}
+  rescue
+    _ -> reply_capability_waiters(state, waiters, :unavailable)
+  catch
+    _, _ -> reply_capability_waiters(state, waiters, :unavailable)
+  end
+
+  defp finish_capability_probe(state, result) do
+    %{task: task, waiters: waiters, queued: queued} = state.capability_probe
+    Process.demonitor(task.ref, [:flush])
+
+    %{state | capability_probe: nil}
+    |> reply_capability_waiters(waiters, result)
+    |> next_capability_probe(queued)
+  end
+
+  # Only a measured snapshot is a capability answer. Probe failure, crash or an
+  # unexpected result stays an error for every waiter, never an empty snapshot.
+  defp reply_capability_waiters(state, waiters, result) do
+    reply =
+      case result do
+        {:ok, snapshot} when is_map(snapshot) -> {:ok, snapshot}
+        _ -> {:error, :capability_inspection_unavailable}
+      end
+
+    Enum.reduce(waiters, state, &send_host_io_result(&2, &1, reply))
+  end
+
+  defp next_capability_probe(state, []), do: state
+
+  defp next_capability_probe(state, queued),
+    do: start_capability_probe(state, Enum.reverse(queued))
+
+  defp cancel_capability_waiter(%{capability_probe: nil} = state, _invoke_id), do: state
+
+  defp cancel_capability_waiter(%{capability_probe: probe} = state, invoke_id) do
+    queued = List.delete(probe.queued, invoke_id)
+
+    case List.delete(probe.waiters, invoke_id) do
+      [] ->
+        state |> stop_capability_probe() |> next_capability_probe(queued)
+
+      waiters ->
+        %{state | capability_probe: %{probe | waiters: waiters, queued: queued}}
+    end
+  end
+
+  defp stop_capability_probe(%{capability_probe: nil} = state), do: state
+
+  defp stop_capability_probe(%{capability_probe: %{task: task}} = state) do
+    Process.demonitor(task.ref, [:flush])
+    Process.exit(task.pid, :kill)
+    %{state | capability_probe: nil}
+  end
+
+  defp capability_waiter?(%{capability_probe: %{waiters: waiters, queued: queued}}, invoke_id),
+    do: invoke_id in waiters or invoke_id in queued
+
+  defp capability_waiter?(_state, _invoke_id), do: false
+
   defp start_invocation(state, invoke_id, args) do
     with {:ok, request, run_opts} <- execution_request(args, state, invoke_id),
          true <- is_nil(invocation_for_run(state, request.run_id)),
@@ -1486,7 +1602,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
          {:ok, execution_context} <- ExecutionContext.decode(value(args, "executionContext")),
          :ok <- validate_context_run_id(execution_context, run_id),
          {:ok, execution_context} <-
-           ExecutionContext.restrict_capabilities(execution_context, state.execution_capabilities),
+           ExecutionContext.restrict_capabilities(
+             execution_context,
+             state.services.execution_capabilities
+           ),
          {:ok, execution_context} <- ExecutionContext.bind_workspace(execution_context, cwd),
          {:ok, requested_policy} <-
            ToolPolicy.resolve(value(args, "toolPolicy"), execution_context.tool_policy),
@@ -2186,6 +2305,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp cancel_all_invocations(state) do
     _ = CodingAgent.ExecutionNode.ProcessService.cancel_owner(self())
+    state = stop_capability_probe(state)
 
     Enum.each(state.process_tasks, fn {invoke_id, task} ->
       _ = cancel_process_receipt(task, invoke_id)

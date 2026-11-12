@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- Named-node `node.capabilities.get` no longer runs its multi-second host probes
+  inside the worker mailbox. At most one supervised probe runs per connection;
+  reads that arrive during it share the next probe, so concurrent controller
+  reads cannot serialize past the invoke deadline or delay chat dispatch, and no
+  answer (including OS grants) is measured before its request or cached.
+  Cancellation, disconnect and probe failure end waiters without stale answers.
 - Native task children preserve their parent's chat/coding session mode instead
   of silently switching profile conversations to coding disclosure. Subagent
   persona and private-memory bootstrap restrictions remain unchanged.

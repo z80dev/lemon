@@ -178,6 +178,19 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     end
   end
 
+  defmodule FakeCapabilities do
+    def get(opts) do
+      send(
+        Process.whereis(:execution_node_worker_test),
+        {:capability_probe_started, self(), opts}
+      )
+
+      receive do
+        {:finish, result} -> result
+      end
+    end
+  end
+
   setup do
     Process.register(self(), :execution_node_worker_test)
 
@@ -1612,6 +1625,184 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     GenServer.stop(worker)
   end
 
+  @tag :tmp_dir
+  test "concurrent capability reads run off the worker mailbox in fresh coalesced probes", %{
+    tmp_dir: tmp_dir
+  } do
+    {worker, socket} = start_service_worker(tmp_dir)
+
+    capability_invoke(worker, socket, "caps-1")
+    assert_receive {:capability_probe_started, first_probe, opts}
+    assert opts[:node_id] == "node-1"
+
+    # Reads arriving during a probe wait for one shared next probe; a duplicate
+    # invoke ID is not admitted twice.
+    capability_invoke(worker, socket, "caps-2")
+    capability_invoke(worker, socket, "caps-3")
+    capability_invoke(worker, socket, "caps-2")
+
+    # The blocked probe does not hold the mailbox: unrelated reads, link state and
+    # ordinary chat dispatch proceed immediately.
+    service_invoke(worker, socket, "features", "node-1", "node.runtime.features", %{})
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "features", "result" => %{}}, _, _}
+
+    assert Worker.link_state(worker) == :online
+
+    invoke(worker, socket, "chat-during-probe", "node-1", %{
+      "version" => 1,
+      "runId" => "run-during-probe",
+      "sessionKey" => "session-during-probe",
+      "prompt" => "keep working",
+      "images" => [],
+      "cwd" => tmp_dir,
+      "resume" => nil,
+      "lane" => nil,
+      "toolPolicy" => nil,
+      "meta" => %{"node" => "newphy", "agent_id" => "main"}
+    })
+
+    assert_receive {:executor_started, request, _run_opts, ^worker, _run_ref, context}
+    assert request.prompt == "keep working"
+    refute_received {:capability_probe_started, _, _}
+
+    first = capability_snapshot(1)
+    send(first_probe, {:finish, {:ok, first}})
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "caps-1", "result" => ^first}, {:invoke_result, "caps-1"}, _}
+
+    assert_receive {:capability_probe_started, second_probe, _opts}
+    refute second_probe == first_probe
+    refute_received {:socket_request, ^socket, _method, %{"invokeId" => "caps-2"}, _, _}
+
+    second = capability_snapshot(2)
+    send(second_probe, {:finish, {:ok, second}})
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "caps-2", "result" => ^second}, _, _}
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "caps-3", "result" => ^second}, _, _}
+
+    refute_receive {:capability_probe_started, _, _}, 100
+    refute_received {:socket_request, ^socket, _method, %{"invokeId" => "caps-2"}, _, _}
+
+    # Nothing is kept between probes: a later read is measured again.
+    capability_invoke(worker, socket, "caps-4")
+    assert_receive {:capability_probe_started, third_probe, _opts}
+    third = capability_snapshot(3)
+    send(third_probe, {:finish, {:ok, third}})
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "caps-4", "result" => ^third}, _, _}
+
+    Process.exit(context.runner_pid, :kill)
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "capability probe failures answer every waiter with an error, never a snapshot", %{
+    tmp_dir: tmp_dir
+  } do
+    {worker, socket} = start_service_worker(tmp_dir)
+    unavailable = "capability_inspection_unavailable"
+
+    capability_invoke(worker, socket, "caps-a")
+    assert_receive {:capability_probe_started, first_probe, _opts}
+    capability_invoke(worker, socket, "caps-b")
+    capability_invoke(worker, socket, "caps-c")
+    send(first_probe, {:finish, {:error, :capability_inspection_unavailable}})
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "caps-a", "error" => ^unavailable}, _, _}
+
+    # A crashed probe fails all of its waiters instead of leaving them to time out.
+    assert_receive {:capability_probe_started, second_probe, _opts}
+    Process.exit(second_probe, :kill)
+
+    for invoke_id <- ["caps-b", "caps-c"] do
+      assert_receive {:socket_request, ^socket, "node.invoke.result",
+                      %{"invokeId" => ^invoke_id, "error" => ^unavailable}, _, _}
+    end
+
+    capability_invoke(worker, socket, "caps-d")
+    assert_receive {:capability_probe_started, third_probe, _opts}
+    send(third_probe, {:finish, {:ok, :not_a_snapshot}})
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "caps-d", "error" => ^unavailable}, _, _}
+
+    # Waiting reads are bounded; overflow is refused at once, not queued.
+    capability_invoke(worker, socket, "caps-held")
+    assert_receive {:capability_probe_started, held_probe, _opts}
+    for index <- 1..63, do: capability_invoke(worker, socket, "caps-queued-#{index}")
+    capability_invoke(worker, socket, "caps-overflow")
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "caps-overflow", "error" => ^unavailable}, _, _}
+
+    refute_received {:socket_request, ^socket, "node.invoke.result", %{"result" => _}, _, _}
+    send(held_probe, {:finish, {:ok, capability_snapshot(4)}})
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "caps-held", "result" => %{}}, _, _}
+
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "cancellation and reconnect stop obsolete capability probes without leaking answers", %{
+    tmp_dir: tmp_dir
+  } do
+    {worker, socket} = start_service_worker(tmp_dir)
+
+    capability_invoke(worker, socket, "caps-1")
+    assert_receive {:capability_probe_started, first_probe, _opts}
+    first_monitor = Process.monitor(first_probe)
+
+    # Cancelling a queued read leaves the running probe to its own reader.
+    capability_invoke(worker, socket, "caps-2")
+    capability_cancel(worker, socket, "caps-2")
+    assert Worker.link_state(worker) == :online
+    assert Process.alive?(first_probe)
+
+    # Cancelling the running probe's last reader stops it; later readers get a
+    # probe that starts after their request.
+    capability_invoke(worker, socket, "caps-3")
+    capability_cancel(worker, socket, "caps-1")
+    assert_receive {:DOWN, ^first_monitor, :process, ^first_probe, :killed}
+    assert_receive {:capability_probe_started, second_probe, _opts}
+    second_monitor = Process.monitor(second_probe)
+
+    # A disconnect drops the probe and its readers; the next session starts clean.
+    send(worker, {:execution_node_socket, socket, {:disconnected, :closed}})
+    assert_receive {:DOWN, ^second_monitor, :process, ^second_probe, :killed}
+
+    send(
+      worker,
+      {:execution_node_socket, socket, {:connected, %{"auth" => %{"clientId" => "node-1"}}}}
+    )
+
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, "node-1"}}
+
+    capability_invoke(worker, socket, "caps-3")
+    assert_receive {:capability_probe_started, third_probe, _opts}
+    snapshot = capability_snapshot(5)
+    send(third_probe, {:finish, {:ok, snapshot}})
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "caps-3", "result" => ^snapshot}, _, _}
+
+    for invoke_id <- ["caps-1", "caps-2", "caps-3"] do
+      refute_received {:socket_request, ^socket, _method, %{"invokeId" => ^invoke_id}, _, _}
+    end
+
+    refute_received {:capability_probe_started, _, _}
+    GenServer.stop(worker)
+  end
+
   defp start_service_worker(tmp_dir) do
     supervisor = start_supervised!({Task.Supervisor, []}, id: make_ref())
 
@@ -1620,6 +1811,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
         token: "node-token",
         mcp_discovery_module: FakeDiscovery,
         profile_sync_module: FakeProfileSync,
+        capabilities_module: FakeCapabilities,
         task_supervisor: supervisor
       )
 
@@ -1641,6 +1833,27 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
        {:event, "node.invoke.request",
         %{"invokeId" => invoke_id, "nodeId" => node_id, "method" => method, "args" => args}}}
     )
+  end
+
+  defp capability_invoke(worker, socket, invoke_id),
+    do: service_invoke(worker, socket, invoke_id, "node-1", "node.capabilities.get", %{})
+
+  defp capability_cancel(worker, socket, invoke_id) do
+    send(
+      worker,
+      {:execution_node_socket, socket,
+       {:event, "node.invoke.cancel",
+        %{"invokeId" => invoke_id, "nodeId" => "node-1", "nodeGeneration" => 0}}}
+    )
+  end
+
+  defp capability_snapshot(index) do
+    %{
+      "os" => "darwin",
+      "measuredAtMs" => index,
+      "stale" => false,
+      "items" => [%{"id" => "terminal", "osGrant" => "not_required", "measuredAtMs" => index}]
+    }
   end
 
   defp discovery_server do
