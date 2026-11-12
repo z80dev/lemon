@@ -316,6 +316,24 @@ admission has the same default); setting either list replaces it. HTTPS is
 required except explicitly allowlisted HTTP on literal loopback IPs; userinfo,
 query strings, fragments, redirects and automatic retries are not allowed.
 
+Admin `profile.followup.admission.get` accepts exactly `{"profileId": "..."}`.
+It returns `profileId` and `configured: false` when no issuer is configured, or
+`configured: true`, `url`, and `tokenSha256` (lowercase hex SHA-256 of the token's
+UTF-8 bytes). It never returns the token or its secret name; unknown profiles
+return `NOT_FOUND`. Use this read-only receipt to reconcile an uncertain setter
+response against the intended URL and token digest before deciding to retry.
+The receipt remains readable if the callback's origin is later removed from
+the allowlist; execution still fails closed against the current allowlist.
+
+Native issuer and cron callback configuration reject malformed URLs with
+`invalid_callback_url`, remote HTTP with `callback_requires_https`, and
+non-allowlisted origins with `callback_origin_not_allowed`. Only the last adds
+`details: {"origin": "https://host:8443"}`: a canonical origin, never the URL's
+path, query, credentials or token. These are definite pre-mutation rejections.
+Add the origin to `LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS` and, for routines,
+`LEMON_CRON_ADMISSION_ALLOWED_ORIGINS`; `lemon doctor` checks both when
+`LEMON_BOT_PUBLIC_URL` is set.
+
 The existing **current target profile's `mcpServers`** is the operator-authored
 identity/origin/tool ceiling. For managed contexts, register credential-free
 templates with `headers: {}`: current Core/connector name and URL, allowed origins,

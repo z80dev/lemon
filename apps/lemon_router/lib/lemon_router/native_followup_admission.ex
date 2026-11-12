@@ -5,7 +5,8 @@ defmodule LemonRouter.NativeFollowupAdmission do
   `configure/3` accepts an existing profile, an explicitly allowed callback URL,
   and a bearer credential. Configuration lives in an owner-only Store table,
   outside profile/config/history projections; credentials use encrypted Secrets.
-  There is no management getter. `fetch_config/1` is an execution-owner API.
+  `receipt/1` exposes only configuration presence, URL and a token SHA-256 digest.
+  `fetch_config/1` remains a private execution-owner API.
 
   Callback origins are exact scheme/host/effective-port matches from
   `LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS` (when set), otherwise
@@ -22,7 +23,7 @@ defmodule LemonRouter.NativeFollowupAdmission do
   DNS pinning must run before resolving any execution secret.
   """
 
-  alias LemonCore.{InvocationProof, ProfileStore, RunRequest, Secrets, ToolPolicy}
+  alias LemonCore.{Env, InvocationProof, ProfileStore, RunRequest, Secrets, ToolPolicy}
   alias LemonRouter.NativeFollowupAdmissionStore
   alias LemonMCP.HTTP.OriginPolicy
 
@@ -38,7 +39,8 @@ defmodule LemonRouter.NativeFollowupAdmission do
   @type outcome :: {:ok, map()} | {:error, :denied | :admission_unavailable}
 
   @doc "Provision write-only private admission configuration for an existing profile."
-  @spec configure(term(), term(), term()) :: {:ok, String.t()} | {:error, atom()}
+  @spec configure(term(), term(), term()) ::
+          {:ok, String.t()} | {:error, atom() | {:callback_origin_not_allowed, String.t()}}
   def configure(profile_id, url, token) do
     with true <- valid_token?(token),
          {:ok, _uri} <- allowed_callback(url),
@@ -61,13 +63,59 @@ defmodule LemonRouter.NativeFollowupAdmission do
         _ -> {:error, :admission_unavailable}
       end
     else
-      {:error, :not_found} -> {:error, :profile_not_found}
-      _ -> {:error, :invalid_request}
+      {:error, :not_found} ->
+        {:error, :profile_not_found}
+
+      {:error, {:callback_origin_not_allowed, _} = reason} ->
+        {:error, reason}
+
+      {:error, reason} when reason in [:callback_requires_https, :invalid_callback_url] ->
+        {:error, reason}
+
+      _ ->
+        {:error, :invalid_request}
     end
   rescue
     _ -> {:error, :admission_unavailable}
   catch
     _, _ -> {:error, :admission_unavailable}
+  end
+
+  @doc "Read a configuration receipt without exposing its bearer token or secret reference."
+  @spec receipt(term()) :: {:ok, map()} | {:error, atom()}
+  def receipt(profile_id) do
+    with {:ok, _profile} <- ProfileStore.get(profile_id),
+         {:ok, config} <- NativeFollowupAdmissionStore.fetch(profile_id) do
+      configuration_receipt(config, profile_id)
+    else
+      {:error, :not_found} -> {:error, :profile_not_found}
+      {:error, :invalid_id} -> {:error, :invalid_request}
+      _ -> {:error, :admission_unavailable}
+    end
+  rescue
+    _ -> {:error, :admission_unavailable}
+  catch
+    _, _ -> {:error, :admission_unavailable}
+  end
+
+  defp configuration_receipt(nil, profile_id),
+    do: {:ok, %{"profileId" => profile_id, "configured" => false}}
+
+  defp configuration_receipt(config, profile_id) do
+    with true <- valid_config?(config, profile_id),
+         {:ok, _uri} <- callback_uri(config.url),
+         {:ok, token} <- Secrets.get(config.token_secret),
+         true <- valid_token?(token) do
+      {:ok,
+       %{
+         "profileId" => profile_id,
+         "configured" => true,
+         "url" => config.url,
+         "tokenSha256" => Base.encode16(:crypto.hash(:sha256, token), case: :lower)
+       }}
+    else
+      _ -> {:error, :admission_unavailable}
+    end
   end
 
   @doc "Fetch current private execution configuration, never a profile fallback."
@@ -479,28 +527,43 @@ defmodule LemonRouter.NativeFollowupAdmission do
 
   defp allowed_callback(url) do
     with {:ok, uri} <- callback_uri(url),
-         origins when is_list(origins) <- allowed_origins(),
-         true <-
-           Enum.any?(origins, fn origin ->
-             case callback_uri(origin) do
+         {:ok, origin} <- OriginPolicy.canonical_origin(url) do
+      origins = allowed_origins()
+
+      if is_list(origins) and
+           Enum.any?(origins, fn configured_origin ->
+             case callback_uri(configured_origin) do
                {:ok, configured} ->
-                 is_nil(configured.path) and configured.scheme == uri.scheme and
-                   configured.host == uri.host and configured.port == uri.port
+                 is_nil(configured.path) and
+                   OriginPolicy.canonical_origin(configured_origin) == {:ok, origin}
 
                _ ->
                  false
              end
            end) do
-      {:ok, uri}
+        {:ok, uri}
+      else
+        {:error, {:callback_origin_not_allowed, origin}}
+      end
     else
-      _ -> {:error, :invalid_request}
+      {:error, :invalid_url} -> {:error, :invalid_callback_url}
+      error -> error
     end
   end
 
   defp allowed_origins do
-    case System.get_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS") do
-      nil -> Application.get_env(:lemon_router, :native_followup_allowed_origins, [])
-      value -> value |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+    case Env.get(:lemon_native_followup_allowed_origins) do
+      nil ->
+        case System.get_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS") do
+          nil -> Application.get_env(:lemon_router, :native_followup_allowed_origins, [])
+          _ -> []
+        end
+
+      value when is_binary(value) ->
+        value |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+
+      _ ->
+        []
     end
   end
 
@@ -509,13 +572,15 @@ defmodule LemonRouter.NativeFollowupAdmission do
          false <- Regex.match?(~r/[\s\\\x00-\x1F\x7F]|%(?![0-9a-fA-F]{2})/, url),
          {:ok, %URI{host: host, port: port} = uri} <- URI.new(url),
          true <- valid_host?(host),
-         true <- uri.scheme == "https" or (uri.scheme == "http" and host in ["127.0.0.1", "::1"]),
+         true <- uri.scheme in ["http", "https"],
          true <- is_integer(port) and port in 1..65_535,
          true <- is_nil(uri.userinfo) and is_nil(uri.fragment) and is_nil(uri.query),
          false <- Regex.match?(~r/\Ahttps?:\/\/[^\/?#]*:(?:[\/?#]|\z)/i, url) do
-      {:ok, uri}
+      if uri.scheme == "https" or host in ["127.0.0.1", "::1"],
+        do: {:ok, uri},
+        else: {:error, :callback_requires_https}
     else
-      _ -> {:error, :invalid_request}
+      _ -> {:error, :invalid_callback_url}
     end
   end
 

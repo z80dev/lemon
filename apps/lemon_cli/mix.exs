@@ -32,6 +32,7 @@ defmodule LemonCli.MixProject do
       {:exqlite, "~> 0.34.0"},
       {:yaml_elixir, "~> 2.9"},
       {:lemon_core, in_umbrella: true},
+      {:lemon_mcp, in_umbrella: true, runtime: false},
       {:lemon_agent, in_umbrella: true},
       {:lemon_memory, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},

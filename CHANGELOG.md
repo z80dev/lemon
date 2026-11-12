@@ -19,6 +19,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Lemon Bot backend tests and the web build/tests now gate CI and run in the
   changed-file/premerge lane. Web tests run in separate processes so module
   mocks cannot leak between suites.
+- Native follow-up admission exposes an admin-only reconciliation receipt with a
+  token SHA-256 digest, never the token or secret reference. Callback rejections
+  distinguish malformed URLs, HTTPS requirements and non-allowlisted origins.
+  `LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS` is declared in the environment registry;
+  `lemon doctor` checks both admission allowlists for `LEMON_BOT_PUBLIC_URL`.
 - **Tern media previews.** In a Tern pane, a whole-file `read` of an image,
   SVG, PDF, audio/video file or 3D model, and a saved browser screenshot, shows
   the file in its tool card through Tern's media viewer, as omp's does. The

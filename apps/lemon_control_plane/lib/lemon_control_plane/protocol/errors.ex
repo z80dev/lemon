@@ -42,6 +42,9 @@ defmodule LemonControlPlane.Protocol.Errors do
           | :handshake_required
           | :already_connected
           | :unavailable
+          | :callback_origin_not_allowed
+          | :callback_requires_https
+          | :invalid_callback_url
 
   @type error :: {error_code(), String.t()} | {error_code(), String.t(), term()}
 
@@ -66,7 +69,10 @@ defmodule LemonControlPlane.Protocol.Errors do
     not_implemented: "NOT_IMPLEMENTED",
     handshake_required: "HANDSHAKE_REQUIRED",
     already_connected: "ALREADY_CONNECTED",
-    unavailable: "UNAVAILABLE"
+    unavailable: "UNAVAILABLE",
+    callback_origin_not_allowed: "callback_origin_not_allowed",
+    callback_requires_https: "callback_requires_https",
+    invalid_callback_url: "invalid_callback_url"
   }
 
   @doc """
