@@ -9,6 +9,8 @@ defmodule LemonRouter.NativeFollowupAdmissionTest do
   @run_id "native-followup-fixed"
   @fixture [plug: {Req.Test, __MODULE__}]
 
+  @moduletag :tmp_dir
+
   defmodule HTTPFixture do
     @behaviour Plug
     def init(opts), do: opts
@@ -30,9 +32,8 @@ defmodule LemonRouter.NativeFollowupAdmissionTest do
     end
   end
 
-  setup do
+  setup %{tmp_dir: root} do
     suffix = Integer.to_string(System.unique_integer([:positive, :monotonic]))
-    root = Path.join(System.tmp_dir!(), "native-admission-" <> suffix)
     state = Path.join(root, "state")
     File.mkdir_p!(state)
     previous_paths = Application.fetch_env(:lemon_core, :paths)
@@ -126,6 +127,47 @@ defmodule LemonRouter.NativeFollowupAdmissionTest do
     refute exported =~ ctx.secret_name
   end
 
+  test "receipt reports only presence, URL and the digest of the current token", ctx do
+    url = ctx.config.url
+    digest = Base.encode16(:crypto.hash(:sha256, @token), case: :lower)
+    assert {:ok, receipt} = NativeFollowupAdmission.receipt(ctx.profile_id)
+
+    assert receipt == %{
+             "profileId" => ctx.profile_id,
+             "configured" => true,
+             "url" => url,
+             "tokenSha256" => digest
+           }
+
+    refute inspect(receipt) =~ @token
+    refute inspect(receipt) =~ ctx.secret_name
+
+    token = "replacement-credential-🍋"
+    assert {:ok, _} = NativeFollowupAdmission.configure(ctx.profile_id, url, token)
+    assert {:ok, rotated} = NativeFollowupAdmission.receipt(ctx.profile_id)
+    assert rotated["tokenSha256"] == Base.encode16(:crypto.hash(:sha256, token), case: :lower)
+    refute rotated["tokenSha256"] == digest
+    Application.put_env(:lemon_router, :native_followup_allowed_origins, [])
+    assert {:ok, ^rotated} = NativeFollowupAdmission.receipt(ctx.profile_id)
+  end
+
+  test "receipt distinguishes absent configuration, unknown profile and invalid profile", ctx do
+    Store.delete(:native_followup_admission_configs, ctx.profile_id)
+
+    assert {:ok, %{"profileId" => id, "configured" => false} = receipt} =
+             NativeFollowupAdmission.receipt(ctx.profile_id)
+
+    assert id == ctx.profile_id
+    assert map_size(receipt) == 2
+    assert {:error, :profile_not_found} = NativeFollowupAdmission.receipt("missing-profile")
+    assert {:error, :invalid_request} = NativeFollowupAdmission.receipt("../escape")
+  end
+
+  test "receipt fails closed for an unreadable credential, not unconfigured", ctx do
+    assert :ok = Secrets.delete(ctx.secret_name)
+    assert {:error, :admission_unavailable} = NativeFollowupAdmission.receipt(ctx.profile_id)
+  end
+
   test "rejects unknown profiles, strict invalid IDs and unsafe or unbounded tokens", ctx do
     assert {:error, :profile_not_found} =
              NativeFollowupAdmission.configure("does-not-exist", @origin <> "/check", @token)
@@ -170,10 +212,24 @@ defmodule LemonRouter.NativeFollowupAdmissionTest do
 
   test "exact origin, HTTPS, URL syntax and environment precedence fail closed", ctx do
     for url <- [
-          "http://native-admission.example.test/check",
           "https://sub.native-admission.example.test/check",
           "https://native-admission.example.test.evil/check",
-          @origin <> ":8443/check",
+          @origin <> ":8443/check"
+        ] do
+      assert {:ok, origin} = LemonMCP.HTTP.OriginPolicy.canonical_origin(url)
+
+      assert {:error, {:callback_origin_not_allowed, ^origin}} =
+               NativeFollowupAdmission.configure(ctx.profile_id, url, @token)
+    end
+
+    assert {:error, :callback_requires_https} =
+             NativeFollowupAdmission.configure(
+               ctx.profile_id,
+               "http://native-admission.example.test/check",
+               @token
+             )
+
+    for url <- [
           "https://user:secret@native-admission.example.test/check",
           @origin <> "/check?token=secret",
           @origin <> "/check#fragment",
@@ -182,7 +238,7 @@ defmodule LemonRouter.NativeFollowupAdmissionTest do
           @origin <> "/check\r\n",
           @origin <> "/" <> String.duplicate("x", 2048)
         ] do
-      assert {:error, :invalid_request} =
+      assert {:error, :invalid_callback_url} =
                NativeFollowupAdmission.configure(ctx.profile_id, url, @token)
     end
 
@@ -199,7 +255,7 @@ defmodule LemonRouter.NativeFollowupAdmissionTest do
         ] do
       Application.put_env(:lemon_router, :native_followup_allowed_origins, origins)
 
-      assert {:error, :invalid_request} =
+      assert {:error, {:callback_origin_not_allowed, @origin}} =
                NativeFollowupAdmission.configure(ctx.profile_id, @origin <> "/check", @token)
     end
 
@@ -222,7 +278,7 @@ defmodule LemonRouter.NativeFollowupAdmissionTest do
       assert {:ok, _} =
                NativeFollowupAdmission.configure(ctx.profile_id, origin <> "/check", @token)
 
-      assert {:error, :invalid_request} =
+      assert {:error, {:callback_origin_not_allowed, _}} =
                NativeFollowupAdmission.configure(
                  ctx.profile_id,
                  String.replace(origin, ":8123", ":8124") <> "/check",
@@ -240,7 +296,7 @@ defmodule LemonRouter.NativeFollowupAdmissionTest do
         ] do
       Application.put_env(:lemon_router, :native_followup_allowed_origins, [origin])
 
-      assert {:error, :invalid_request} =
+      assert {:error, :callback_requires_https} =
                NativeFollowupAdmission.configure(ctx.profile_id, origin <> "/check", @token)
     end
   end
@@ -596,7 +652,9 @@ defmodule LemonRouter.NativeFollowupAdmissionTest do
                 }},
              ip: {127, 0, 0, 1},
              port: 0,
-             startup_log: false}, id: id)
+             startup_log: false},
+            id: id
+          )
         )
 
       assert {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(bandit)

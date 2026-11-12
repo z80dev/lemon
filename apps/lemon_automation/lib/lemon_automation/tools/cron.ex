@@ -318,7 +318,7 @@ defmodule LemonAutomation.Tools.Cron do
             {:error, "Invalid schedule: #{reason}"}
 
           {:ok, {:error, {:invalid_target, reason}}} ->
-            {:error, "Invalid job: #{reason}"}
+            {:error, "Invalid job: #{invalid_target_message(reason)}"}
 
           {:ok, {:error, reason}} ->
             {:error, "Failed to add cron job: #{inspect(reason)}"}
@@ -413,7 +413,7 @@ defmodule LemonAutomation.Tools.Cron do
           {:error, "Cron job not found: #{job_id}"}
 
         {:ok, {:error, {:invalid_target, reason}}} ->
-          {:error, "Invalid job: #{reason}"}
+          {:error, "Invalid job: #{invalid_target_message(reason)}"}
 
         {:ok, {:error, reason}} ->
           {:error, "Failed to update cron job: #{inspect(reason)}"}
@@ -921,5 +921,13 @@ defmodule LemonAutomation.Tools.Cron do
   defp resolved_memory_file(%CronJob{} = job), do: CronMemory.memory_file(job)
   defp resolved_memory_file(job), do: Map.get(job, :memory_file)
 
+  defp invalid_target_message({:callback_origin_not_allowed, origin}),
+    do: "callback_origin_not_allowed: " <> origin
+
+  defp invalid_target_message(reason)
+       when reason in [:callback_requires_https, :invalid_callback_url],
+       do: Atom.to_string(reason)
+
+  defp invalid_target_message(reason) when is_binary(reason), do: reason
   defp truthy?(value), do: value not in [false, nil]
 end

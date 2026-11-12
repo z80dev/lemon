@@ -3,7 +3,7 @@ defmodule LemonRouter.NativeFollowupAdmissionStore do
 
   alias LemonCore.Store
 
-  # No profile/config/history/management projection reads this owner-only table.
+  # Only the admission owner reads this table; management gets a digest-only receipt.
   @table :native_followup_admission_configs
 
   def fetch(profile_id) do

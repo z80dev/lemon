@@ -3,7 +3,7 @@ import { afterEach, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
 import { refreshEffectivePolicy } from '../../src/enterprise/enforcement';
 import { productBotTools } from '../../src/core/bots';
-import { nativeFollowupAdmissionPath } from '../../src/runtime/admission';
+import { nativeFollowupAdmissionPath } from '../../src/core/bot-lifecycle';
 import type { BackendServices, Principal } from '../../src/core/services';
 import { closeFixture, fixture as ownerFixture } from '../integrations/channels-fixture';
 

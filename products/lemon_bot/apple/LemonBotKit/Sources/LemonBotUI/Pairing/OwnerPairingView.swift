@@ -17,6 +17,7 @@ public struct OwnerPairingView: View {
     @State private var lastChecked: Date?
     @State private var renderedQR: NSImage?
     @State private var comparedRequests: Set<String> = []
+    @State private var simulatorOnly = false
     private static let qrContext = CIContext()
     public init(store: LemonBotStore) { self.store = store }
 
@@ -30,9 +31,22 @@ public struct OwnerPairingView: View {
                         Text("Workspace: \(store.workspace?.name ?? account.workspaceID)").textSelection(.enabled)
                     }
                     Text("Read the advertised HTTPS address from your already configured backend, then verify that it serves the same Lemon Bot instance and workspace. No backend or account is replaced.")
+                    if store.ownerPairingPreflight == nil {
+                        Label("An HTTPS address is needed for your iPhone", systemImage: "network.slash")
+                            .font(.headline)
+                        Text("The default local address only reaches this Mac. Configure a reachable, trusted HTTPS address and set LEMON_BOT_PUBLIC_URL on this backend. This window checks for the updated address while open; you don't need to restart the app.")
+                        Link("Set up Lemon Bot's HTTPS address", destination: URL(string: "https://lemon.food/getting-started/lemon-bot#give-lemon-bot-an-https-address")!)
+                        Text("Follow the HTTPS routing and controller allowlist steps in the guide. HTTPS setup is not automatic.").font(.caption)
+                    }
+                    #if DEBUG
+                    Toggle("Pair with the iOS Simulator on this Mac only", isOn: $simulatorOnly)
+                    if simulatorOnly {
+                        Text("Development only: HTTP localhost, 127.0.0.1 or [::1] works with a Debug iOS Simulator build, never a physical iPhone.").font(.caption)
+                    }
+                    #endif
                     HStack {
                         Button("Check connection readiness") {
-                            perform("readiness") { try await store.verifyOwnerPairingOrigin(); try await store.refreshPairings(); lastChecked = Date() }
+                            perform("readiness") { try await checkReadiness() }
                         }.disabled(busy || observing)
                         if busy && errorPlace == "readiness" { ProgressView().controlSize(.small) }
                     }
@@ -42,7 +56,7 @@ public struct OwnerPairingView: View {
                         Text(ready.origin).font(.headline.monospaced()).textSelection(.enabled)
                         Text("Backend: \(ready.setup.instanceId)").font(LBFont.meta).textSelection(.enabled)
                         Text("Workspace: \(ready.identity?.workspaceId ?? "Unavailable")").font(LBFont.meta).textSelection(.enabled)
-                        Text("This exact address will be advertised in the QR. Your iPhone still needs its own Tailscale reachability.").font(.caption)
+                        Text(OwnerPairingAddress.isSimulatorOrigin(ready.origin) ? "Simulator only — this address cannot connect a physical iPhone." : "This exact address will be advertised in the QR. Your iPhone still needs its own Tailscale reachability.").font(.caption)
                     }
                 }
                 Section("3. Scan and request connection") {
@@ -84,7 +98,7 @@ public struct OwnerPairingView: View {
                 }
             }.formStyle(.grouped).navigationTitle("Connect iPhone")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-                .task(id: "\(store.account?.id ?? "")|\(scenePhase == .active)") { await observeRequests() }
+                .task(id: "\(store.account?.id ?? "")|\(scenePhase == .active)|\(simulatorOnly)") { await observeRequests() }
                 .onAppear { renderedQR = store.pairingURL.flatMap(makeQRImage) }
                 .onChange(of: store.pairingURL) { _, link in renderedQR = link.flatMap(makeQRImage) }
         }.frame(minWidth: 540, minHeight: 680)
@@ -129,22 +143,37 @@ public struct OwnerPairingView: View {
     }
     private func comparisonKey(_ pairing: Pairing) -> String { "\(pairing.id)|\(pairing.revision)|\(pairing.deviceName ?? "")|\(pairing.verificationCode ?? "")" }
     private func activeLink(at now: Date) -> String? {
-        guard store.ownerPairingPreflight != nil, let link = store.pairingURL,
-              let parsed = try? PairingLink.parse(link),
-              let pairing = store.issuedPairing, pairing.status == "waiting",
-              pairing.expiresAtMs > now.timeIntervalSince1970 * 1000, pairing.backendUrl == parsed.origin else { return nil }
-        return link
+        OwnerPairingProgress.activeLink(store.pairingURL, pairing: store.issuedPairing, verifiedOrigin: store.ownerPairingPreflight?.origin, now: now)
+    }
+    private func checkReadiness() async throws {
+        try await store.verifyOwnerPairingOrigin(forSimulator: simulatorOnly)
+        try await store.refreshPairings()
+        lastChecked = Date()
     }
     private func observeRequests() async {
         guard scenePhase == .active else { return }
+        // Readiness discovery is GET-only. QR creation and unknown-outcome reconciliation stay explicit.
+        var firstCheck = true
         while !Task.isCancelled {
-            do { try await Task.sleep(for: .seconds(2)) } catch { return }
-            guard !busy, !observing, store.ownerPairingPreflight != nil,
-                  OwnerPairingProgress.shouldObserve(store.pairings) else { continue }
-            observing = true
-            do { try await store.refreshOwnerPairingStatus(); lastChecked = Date(); if errorPlace == "requests" { error = nil } }
-            catch { if !Task.isCancelled { self.error = humanErrorText(error); errorPlace = "requests" } }
-            observing = false
+            if !busy && !observing {
+                let needsReadiness = firstCheck || store.ownerPairingPreflight == nil
+                if needsReadiness || OwnerPairingProgress.shouldObserve(store.pairings) {
+                    observing = true
+                    do {
+                        if needsReadiness { try await checkReadiness() }
+                        else { try await store.refreshOwnerPairingStatus(); lastChecked = Date() }
+                        if errorPlace == "readiness" || errorPlace == "requests" { error = nil }
+                    } catch {
+                        if !Task.isCancelled {
+                            self.error = humanErrorText(error)
+                            errorPlace = needsReadiness ? "readiness" : "requests"
+                        }
+                    }
+                    observing = false
+                }
+                firstCheck = false
+            }
+            do { try await Task.sleep(for: .seconds(store.ownerPairingPreflight == nil ? 5 : 2)) } catch { return }
         }
     }
     private func fenced(_ id: ID) -> Bool {

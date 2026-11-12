@@ -38,9 +38,28 @@ final class TestHTTPProtocol: URLProtocol {
     }
 }
 
+@MainActor private struct ActorDecodedResponse: @MainActor Decodable {
+    let value: Int
+    private enum CodingKeys: String, CodingKey { case value }
+    init(from decoder: any Decoder) throws {
+        MainActor.preconditionIsolated()
+        value = try decoder.container(keyedBy: CodingKeys.self).decode(Int.self, forKey: .value)
+    }
+}
+
 final class TransportTests: XCTestCase {
     override func setUp() { TestHTTPProtocol.requests = []; TestHTTPProtocol.handler = nil }
     override func tearDown() { TestHTTPProtocol.handler = nil; TestHTTPProtocol.requests = [] }
+    @MainActor func testGenericResponsesDecodeOnTheCallingActorWithoutReplaying() async throws {
+        TestHTTPProtocol.handler = { _ in (200, [:], Data(#"{"value":42}"#.utf8)) }
+        let transport = try HTTPTransport(baseURL: URL(string: "http://127.0.0.1:4100")!, session: TestHTTPProtocol.session())
+        let read: ActorDecodedResponse = try await transport.read("/setup")
+        let mutation: ActorDecodedResponse = try await transport.mutate("POST", "/bots", body: ["clientNonce": .string("one-attempt")])
+        XCTAssertEqual(read.value, 42)
+        XCTAssertEqual(mutation.value, 42)
+        XCTAssertEqual(TestHTTPProtocol.requests.map(\.httpMethod), ["GET", "POST"])
+        XCTAssertEqual(try JSONDecoder().decode(JSONObject.self, from: TestHTTPProtocol.body(TestHTTPProtocol.requests[1]))["clientNonce"]?.stringValue, "one-attempt")
+    }
     func testRemoteTLSAndURLInjectionRules() throws {
         XCTAssertThrowsError(try HTTPTransport(baseURL: XCTUnwrap(URL(string: "http://example.org"))))
         XCTAssertThrowsError(try HTTPTransport(baseURL: XCTUnwrap(URL(string: "https://user:token@example.org"))))

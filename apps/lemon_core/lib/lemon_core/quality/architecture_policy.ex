@@ -30,7 +30,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_platform_test,
       :lemon_skills
     ],
-    lemon_automation: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_router, :lemon_skills],
+    lemon_automation: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_mcp, :lemon_router, :lemon_skills],
     lemon_channels: [:lemon_agent, :lemon_core, :lemon_media],
     lemon_control_plane: [
       :lemon_ai,
@@ -46,7 +46,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_router,
       :lemon_skills
     ],
-    lemon_cli: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_memory, :lemon_skills],
+    lemon_cli: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_mcp, :lemon_memory, :lemon_skills],
     lemon_browser: [:lemon_core],
     lemon_core: [],
     lemon_memory: [:lemon_core],

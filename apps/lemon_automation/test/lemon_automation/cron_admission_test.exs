@@ -130,6 +130,29 @@ defmodule LemonAutomation.CronAdmissionTest do
       end
     end
 
+    test "returns distinct safe callback reasons", %{admission: admission} do
+      assert {:error, {:callback_origin_not_allowed, "https://unlisted.example.test"}} =
+               CronAdmission.validate(
+                 %{admission | url: "https://UNLISTED.example.test:443/private"},
+                 @profile_id
+               )
+
+      assert {:error, :callback_requires_https} =
+               CronAdmission.validate(
+                 %{admission | url: "http://admission.example.test/private"},
+                 @profile_id
+               )
+
+      for url <- [
+            "https://user:password@admission.example.test/private",
+            @origin <> "/private?token=secret",
+            "/relative"
+          ] do
+        assert {:error, :invalid_callback_url} =
+                 CronAdmission.validate(%{admission | url: url}, @profile_id)
+      end
+    end
+
     test "rejects userinfo, fragments, malformed URLs and non-HTTPS remote callbacks", %{
       admission: admission
     } do
@@ -1310,10 +1333,13 @@ defmodule LemonAutomation.CronAdmissionTest do
     }
   end
 
-  defp assert_invalid(result) do
-    assert {:error, reason} = result
-    assert is_binary(reason)
-    assert byte_size(reason) <= 64
+  defp assert_invalid({:error, {:callback_origin_not_allowed, origin}}) do
+    assert {:ok, ^origin} = LemonMCP.HTTP.OriginPolicy.canonical_origin(origin)
+    assert URI.new!(origin).path == nil
+  end
+
+  defp assert_invalid({:error, reason}) do
+    assert reason in ["invalid_admission", :invalid_callback_url, :callback_requires_https]
   end
 
   defp restore_env(app, key, {:ok, value}), do: Application.put_env(app, key, value)

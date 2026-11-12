@@ -63,7 +63,7 @@ defmodule LemonControlPlane.Methods.CronAdd do
         {:error, {:invalid_request, "Invalid cron schedule: #{reason}", nil}}
 
       {:error, {:invalid_target, reason}} ->
-        {:error, {:invalid_request, reason, nil}}
+        LemonControlPlane.Methods.AdmissionErrors.error(reason)
 
       {:error, reason} ->
         Logger.warning("Could not add cron job: #{inspect(reason)}")

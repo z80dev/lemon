@@ -10,6 +10,19 @@ defmodule LemonRouter.Env do
 
   @declarations [
     %{
+      name: :lemon_native_followup_allowed_origins,
+      env_var: "LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "Comma-separated exact origins allowed for private native follow-up admission callbacks; HTTPS or literal-loopback HTTP only.",
+      secret?: false,
+      required?: false,
+      area: :automation,
+      apps: [:lemon_router]
+    },
+    %{
       name: :lemon_agent_profiles_cwd,
       env_var: "LEMON_AGENT_PROFILES_CWD",
       aliases: [],

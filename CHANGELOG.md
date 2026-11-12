@@ -42,6 +42,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   reacts to the conversation from behind a turning lemon slice. Sections rise
   in on scroll and the terminal, browser and chat mocks play out. Reduced-motion
   visitors see each conversation's final state without animation.
+- Native follow-up admission exposes an admin-only reconciliation receipt with a
+  token SHA-256 digest, never the token or secret reference. Callback rejections
+  distinguish malformed URLs, HTTPS requirements and non-allowlisted origins.
+  `LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS` is declared in the environment registry;
+  `lemon doctor` checks both admission allowlists for `LEMON_BOT_PUBLIC_URL`.
 - **Tern media previews.** In a Tern pane, a whole-file `read` of an image,
   SVG, PDF, audio/video file or 3D model, and a saved browser screenshot, shows
   the file in its tool card through Tern's media viewer, as omp's does. The
@@ -75,6 +80,40 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - The TUI uses pi-tui 18.18.9 (native buttons, path-based syntax highlighting
   in Tern) and source development now needs Bun 1.4.4+.
+
+### Fixed
+
+- Product release preparation now works with stock macOS/BSD sed and restores
+  every changed version file and the changelog if any preparation step fails.
+- Lemon Bot's Mac **Connect iPhone** window explains missing HTTPS setup, links
+  to the routing/allowlist guide and observes updated advertised addresses without
+  an app restart. Debug-only local pairing is limited to the iOS Simulator and
+  the browser's exact loopback hosts; Release and physical-device checks stay strict.
+- Apple onboarding response decoding no longer inherits main-actor isolation
+  across the HTTP transport boundary.
+- Lemon Bot can finish interrupted creation/import in place, showing the failed
+  step and checking owning receipts before continuing. Existing Bots can update
+  their callback/tool address after `LEMON_BOT_PUBLIC_URL` changes, without
+  replacing their identity or conversation. Rejected callback origins name the
+  controller allowlist to fix; interrupted deletions offer a receipt-checked
+  Delete action again. Recovery actions survive sync/overview refreshes, imported
+  resources retain their owning reservations, and address migration refreshes
+  the matching tool permissions under one exclusive lifecycle owner. Resumed
+  imports preserve disabled-skill selections, including when an older import
+  stopped between installation and disabling the copied skill.
+- The Tern palette's **Focus existing session** finds Lemon panes by program,
+  not only by the old `Lemon · ` title prefix.
+- Kimi Code omp authentication fails closed at the model-request boundary,
+  normalizes auth-source spelling consistently for status and logout, and
+  serializes access-token cache refreshes so stale fetches cannot replace them.
+- Every Kimi Code request now sends one consistent Kimi CLI fingerprint (the
+  catalog's stale `KimiCLI/1.0` user agent is gone), and the device id is
+  persisted in `~/.lemon/kimi-device-id` so a host rename no longer changes it.
+  `lemon doctor --live` checks Kimi Code with bearer authentication and the
+  fingerprint. A refresh that loses to another Lemon process adopts that
+  process's fresh token instead of failing.
+
+---
 
 ## [2026.11.6]
 

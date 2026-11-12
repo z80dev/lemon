@@ -48,6 +48,241 @@ type RoutineRow = P.Routine & { conversationId: string };
 type Operation = { state: 'pending' | 'outcome_unknown'; revision: number; action: string };
 type HostPath = { machineId:string; nodeId:string; path:string; profileId?:string; mtimeMs?:number };
 type CronAdmission = { digest:string; secretName:string };
+export interface ImportedSkillReservation { skill:P.Skill; operationId:string }
+export interface ImportedRoutineReservation { routine:P.Routine & {conversationId:string}; conversation:P.Conversation; operationId:string }
+type ImportedSkillWrite = HostPath & { contentDigest:string; expectedModifiedAtMs:number; state:'reserved'|'pending'|'acknowledged' };
+type ImportedSkillOperation = { reservationDigest:string; state:'pending'|'complete'; receiptOnly?:boolean; writes?:ImportedSkillWrite[] };
+const importedResumes = new WeakMap<BackendServices,Set<string>>();
+
+function skillResource(services:BackendServices,user:Principal,input:Pick<P.Skill,'name'|'description'|'markdown'|'machineIds'> & {botId?:string},enabled=true):P.Skill {
+  return services.resource('skill',{ownerUserId:user.userId,botId:input.botId??null,name:input.name,description:input.description,markdown:input.markdown,enabled,machineIds:[...new Set(input.machineIds)],provenance:{sourceUrl:null,publisher:services.auth.user(user.userId).displayName,trusted:false}});
+}
+function routineResources(services:BackendServices,user:Principal,bot:P.Bot,input:P.RoutineSpec):{routine:RoutineRow;conversation:P.Conversation} {
+  const conversation:P.Conversation=services.resource('conversation',{kind:'task',name:input.name,botIds:[bot.id],ownerUserId:user.userId,parentConversationId:null,leadBotId:null,channelBindingId:null,lastEntryId:null,unreadCount:0,lastReadSeq:0,activity:[]});
+  const routine:RoutineRow=services.resource('routine',{botId:bot.id,ownerUserId:user.userId,name:input.name,instruction:input.instruction,trigger:input.trigger,enabled:input.enabled,nextRunAtMs:null,scheduleDescription:input.trigger.kind==='schedule'?`${input.trigger.cron} (${input.trigger.timezone})`:input.trigger.kind,lastRunId:null,webhookUrl:null,cronJobId:null,conversationId:conversation.id});
+  if(routine.trigger.kind==='webhook')routine.webhookUrl=`${services.config.publicUrl}/hooks/${encodeURIComponent(routine.id)}`;
+  return {routine,conversation};
+}
+async function validateRoutineTrigger(services:BackendServices,u:Principal,bot:P.Bot,value:P.RoutineTrigger):Promise<void> {
+  if(value.kind==='schedule'){validateSchedule(value.cron,value.timezone);assertAvailable(services,'cron.add');}
+  if(value.kind==='channel_event'){
+    const binding=services.store.require<P.ChannelBinding>('channelBindings',value.channelBindingId);
+    if(binding.botId!==bot.id||!services.auth.canRead(u,'channelBindings',binding))fail('forbidden','Channel event binding is not accessible to this bot.');
+    if(!binding.enabled||binding.state!=='connected'||!binding.capabilities.inbound||!binding.capabilities.events.includes(value.event))fail('capability_unavailable','This channel does not advertise the requested event.');
+  }
+  if(value.kind==='external_event'){
+    const sources=await services.invoke<P.ExternalSource[]>(u,'GET','/v1/event-sources');
+    const source=sources.find(item=>item.source===value.source&&item.configured);
+    if(!source||value.eventNames.some(name=>!source.events.includes(name)))fail('capability_unavailable','External source does not advertise the requested events.');
+  }
+}
+function routineCapacity(services:BackendServices,botId:string):void {
+  if(services.store.list<P.Routine>('routines',item=>item.botId===botId).length>=50)fail('conflict','A bot may have at most 50 routines.');
+}
+function skillBytes(skill:P.Skill):Buffer {
+  return Buffer.from(`---\nname: ${JSON.stringify(skill.name)}\ndescription: ${JSON.stringify(skill.description)}\n---\n\n${skill.markdown}\n`);
+}
+async function importedResume<T>(services:BackendServices,operationId:string,operation:()=>Promise<T>):Promise<T> {
+  let active=importedResumes.get(services);
+  if(!active){active=new Set();importedResumes.set(services,active);}
+  if(active.has(operationId))fail('conflict','Imported resource recovery is already in progress.');
+  active.add(operationId);
+  try{return await operation();}finally{active.delete(operationId);}
+}
+
+/** Pure local reservation: the caller must durably save this envelope before resume. */
+export function reserveImportedSkill(services:BackendServices,user:Principal,bot:P.Bot,spec:P.TemplateContent['skills'][number],enabled=true):ImportedSkillReservation {
+  requireOwn(user,routineBot(services,user,bot.id).ownerUserId);
+  const input=parse(skillCreate.omit({clientNonce:true}),{...spec,botId:bot.id,machineIds:[bot.machineId]});
+  return {skill:skillResource(services,user,input,enabled),operationId:services.id('operation')};
+}
+/** Disabled copies have no external cron until explicitly enabled through the ordinary route. */
+export function reserveImportedRoutine(services:BackendServices,user:Principal,bot:P.Bot,spec:P.RoutineSpec):ImportedRoutineReservation {
+  routineBot(services,user,bot.id);
+  const input=parse(routineCreate.omit({clientNonce:true}),{...spec,botId:bot.id,enabled:false});
+  if(input.trigger.kind==='schedule')validateSchedule(input.trigger.cron,input.trigger.timezone);
+  routineCapacity(services,bot.id);
+  return {...routineResources(services,user,bot,input),operationId:services.id('operation')};
+}
+export async function resumeImportedRoutine(services:BackendServices,user:Principal,reservation:ImportedRoutineReservation):Promise<P.Routine> {
+  return importedResume(services,reservation.operationId,async()=>{
+    const {routine,conversation,operationId}=reservation,bot=routineBot(services,user,routine.botId);
+    requireOwn(user,routine.ownerUserId);requireOwn(user,conversation.ownerUserId);
+    if(routine.enabled||routine.conversationId!==conversation.id||conversation.botIds.length!==1||conversation.botIds[0]!==bot.id)fail('conflict','Imported routine reservation does not match its Bot.');
+    const key=`importedRoutineOperation:${operationId}`,reservationDigest=services.mutations.digest(reservation);
+    const prior=services.store.metadata<{reservationDigest:string}>(key);
+    if(prior){
+      if(prior.reservationDigest!==reservationDigest)fail('conflict','Imported operation is bound to another reservation.');
+      return publicRoutine(services.store.require<RoutineRow>('routines',routine.id));
+    }
+    const existing=services.store.get<RoutineRow>('routines',routine.id),existingConversation=services.store.get<P.Conversation>('conversations',conversation.id);
+    if(existing||existingConversation){
+      if(!existing||!existingConversation||services.mutations.digest(existing)!==services.mutations.digest(routine)||services.mutations.digest(existingConversation)!==services.mutations.digest(conversation))fail('conflict','Imported resource identity is already in use.');
+      if(services.store.metadata(`resourceOperation:${routine.id}`))fail('outcome_unknown','Legacy imported routine has unresolved external work.',false,{resourceId:routine.id,operationId});
+      services.store.setMetadata(key,{reservationDigest,state:'complete'});
+      return publicRoutine(existing);
+    }
+    await validateRoutineTrigger(services,user,bot,routine.trigger);
+    services.store.transaction(()=>{
+      if(services.store.get('routines',routine.id)||services.store.get('conversations',conversation.id))fail('conflict','Imported resource identity is already in use.');
+      routineCapacity(services,bot.id);
+      services.store.put('conversations',conversation);services.store.put('routines',routine);
+      services.store.setMetadata(key,{reservationDigest,state:'complete'});
+      services.events.emit('conversation.upserted',conversation,{userIds:[user.userId]});
+      services.events.emit('routine.upserted',publicRoutine(routine),{userIds:[user.userId]});
+    });
+    return publicRoutine(routine);
+  });
+}
+/**
+ * Recover only from the owning node's exact, stable file receipt. A pending write
+ * is never replayed unless that node proves the reserved create path is absent.
+ */
+export async function resumeImportedSkill(services:BackendServices,user:Principal,reservation:ImportedSkillReservation):Promise<P.Skill> {
+  return importedResume(services,reservation.operationId,async()=>{
+    const {skill,operationId}=reservation;
+    requireOwn(user,skill.ownerUserId);
+    if(!skill.botId)fail('conflict','Imported skill requires a Bot.');
+    const bot=routineBot(services,user,skill.botId);
+    if(skill.machineIds.length!==1||skill.machineIds[0]!==bot.machineId)fail('conflict','Imported skill destination no longer matches its Bot.');
+    const key=`importedSkillOperation:${operationId}`,reservationDigest=services.mutations.digest(reservation);
+    let operation=services.store.metadata<ImportedSkillOperation>(key);
+    if(operation&&operation.reservationDigest!==reservationDigest)fail('conflict','Imported operation is bound to another reservation.');
+    if(operation?.state==='complete')return services.store.require<P.Skill>('skills',skill.id);
+    if(!operation){
+      const existing=services.store.get<P.Skill>('skills',skill.id);
+      if(existing&&services.mutations.digest(existing)!==services.mutations.digest(skill))fail('conflict','Imported resource identity is already in use.');
+      const fence=services.store.metadata<Operation>(`resourceOperation:${skill.id}`);
+      if(existing&&fence&&fence.action!=='skill.create'&&fence.action!=='skill.import')fail('outcome_unknown','Legacy imported skill has unrelated unresolved host work.',false,{resourceId:skill.id,operationId});
+      if(existing&&!skill.enabled&&services.store.metadata(`resourceOperation:${skill.id}`))fail('outcome_unknown','Disabled imported skill has unresolved host work.',false,{resourceId:skill.id,operationId});
+      // Legacy imports may already have dispatched without a per-write journal.
+      // They can only be adopted from evidence, never turned into a fresh write.
+      operation={reservationDigest,state:'pending',...(existing?{receiptOnly:true}:{})};
+      services.store.transaction(()=>{
+        if(!existing)services.store.put('skills',skill);
+        services.store.setMetadata(key,operation);
+        if(!fence)services.store.setMetadata(`resourceOperation:${skill.id}`,{state:'pending',revision:skill.revision,action:'skill.import',operationId});
+      });
+    }
+    const bytes=skillBytes(skill),contentDigest=createHash('sha256').update(bytes).digest('hex');
+    if(!operation.writes){
+      let destinations:HostPath[];
+      try{destinations=skill.enabled?await skillDestinations(services,user,skill,skill.machineIds,bot.profileId,operation.receiptOnly):[];}
+      catch(error){
+        if(operation.receiptOnly)fail('outcome_unknown','Legacy imported skill requires a conclusive owning-node receipt.',false,{resourceId:skill.id,operationId});
+        throw error;
+      }
+      operation={...operation,writes:destinations.map(host=>({...host,contentDigest,expectedModifiedAtMs:operation!.receiptOnly?0:host.mtimeMs??0,state:operation!.receiptOnly?'pending':'reserved'}))};
+      // Every exact node/path/digest/CAS precondition is durable before dispatch.
+      services.store.setMetadata(key,operation);
+    }
+    const save=()=>services.store.setMetadata(key,operation);
+    const acknowledge=(write:ImportedSkillWrite,mtimeMs:number)=>{
+      write.state='acknowledged';write.mtimeMs=mtimeMs;
+      const host:HostPath={machineId:write.machineId,nodeId:write.nodeId,path:write.path,mtimeMs,...(write.profileId?{profileId:write.profileId}:{})};
+      services.store.transaction(()=>{
+        const prior=services.store.metadata<HostPath[]>(`skillHostPaths:${skill.id}`)??[];
+        services.store.setMetadata(`skillHostPaths:${skill.id}`,[...prior.filter(item=>item.nodeId!==host.nodeId||item.path!==host.path),host]);
+        save();
+      });
+    };
+    for(const write of operation.writes!){
+      if(write.state==='acknowledged')continue;
+      const machine=skillDestination(services,user,skill,write);
+      if(machine.status!=='online'||machine.nodeId!==write.nodeId)fail('machine_offline','Reserved skill destination is unavailable.');
+      if(write.contentDigest!==contentDigest)fail('conflict','Imported skill content no longer matches its reservation.');
+      if(write.state==='pending'){
+        try{
+          assertAvailable(services,'node.fs.stat');
+          const statSchema=z.object({path:z.literal(write.path),type:z.literal('regular'),size:timestamp,mtimeMs:timestamp});
+          let before:z.infer<typeof statSchema>|null=null;
+          try{before=ack(statSchema,await services.lemon.call('node.fs.stat',{nodeId:write.nodeId,path:write.path}));}
+          catch(error){if(!(error instanceof ApiError)||error.code!=='not_found')throw error;}
+          if(before){
+            assertAvailable(services,'node.fs.read');
+            const chunk=ack(z.object({path:z.literal(write.path),offset:z.literal(0),dataBase64:z.string(),size:z.literal(bytes.length),eof:z.literal(true)}),await services.lemon.call('node.fs.read',{nodeId:write.nodeId,path:write.path,offset:0,length:bytes.length}));
+            const actual=Buffer.from(chunk.dataBase64,'base64');
+            const after=ack(statSchema,await services.lemon.call('node.fs.stat',{nodeId:write.nodeId,path:write.path}));
+            if(before.size!==bytes.length||after.size!==before.size||after.mtimeMs!==before.mtimeMs||actual.length!==bytes.length||createHash('sha256').update(actual).digest('hex')!==write.contentDigest)fail('outcome_unknown','Reserved skill file does not have a stable matching receipt.',false);
+            acknowledge(write,after.mtimeMs);
+            continue;
+          }
+          if(operation.receiptOnly||write.expectedModifiedAtMs!==0)fail('outcome_unknown','Previously reserved skill file is missing.',false);
+          write.state='reserved';save();
+        }catch{
+          fail('outcome_unknown','Imported skill write requires a conclusive owning-node receipt.',false,{resourceId:skill.id,operationId});
+        }
+      }
+      assertAvailable(services,'node.fs.write');
+      write.state='pending';save();
+      try{
+        const result=ack(z.object({path:z.literal(write.path),bytesWritten:z.literal(bytes.length),size:z.literal(bytes.length),mtimeMs:timestamp}),await services.lemon.call('node.fs.write',{nodeId:write.nodeId,path:write.path,dataBase64:bytes.toString('base64'),truncate:true,mkdirs:true,expectedModifiedAtMs:write.expectedModifiedAtMs},{mutation:true,resourceIds:[skill.id]}));
+        acknowledge(write,result.mtimeMs);
+      }catch{
+        services.store.setMetadata(`resourceOperation:${skill.id}`,{state:'outcome_unknown',revision:skill.revision,action:'skill.import',operationId});
+        fail('outcome_unknown','Imported skill write may have taken effect; recover this reservation.',false,{resourceId:skill.id,operationId});
+      }
+    }
+    services.store.transaction(()=>{
+      operation!.state='complete';save();
+      services.store.setMetadata(`resourceOperation:${skill.id}`,null);
+      services.events.emit('skill.upserted',skill,{userIds:[user.userId]});
+    });
+    return services.store.require<P.Skill>('skills',skill.id);
+  });
+}
+
+/** Apply a copied skill's disabled intent only after its original install has been reconciled. */
+export async function disableImportedSkill(services:BackendServices,user:Principal,reservation:ImportedSkillReservation):Promise<P.Skill> {
+  return importedResume(services,reservation.operationId,async()=>{
+    const {operationId}=reservation,skill=services.store.require<P.Skill>('skills',reservation.skill.id);
+    requireOwn(user,skill.ownerUserId);
+    if(!skill.botId||skill.botId!==reservation.skill.botId)fail('conflict','Imported skill disable is not bound to its Bot.');
+    routineBot(services,user,skill.botId);
+    const key=`importedSkillDisable:${operationId}`,reservationDigest=services.mutations.digest(reservation);
+    let operation=services.store.metadata<{reservationDigest:string;revision:number;state:'pending'|'complete';paths:HostPath[]}>(key);
+    if(operation&&operation.reservationDigest!==reservationDigest)fail('conflict','Imported disable is bound to another reservation.');
+    const fence=services.store.metadata<Operation>(`resourceOperation:${skill.id}`);
+    if(fence&&fence.action!=='skill.import.disable')fail('outcome_unknown','Reconcile the imported skill install before disabling it.',false,{resourceId:skill.id,operationId});
+    if(operation?.state==='complete'||!operation&&!skill.enabled)return skill;
+    if(!operation){
+      operation={reservationDigest,revision:skill.revision,state:'pending',paths:services.store.metadata<HostPath[]>(`skillHostPaths:${skill.id}`)??[]};
+      services.store.transaction(()=>{
+        services.store.setMetadata(key,operation);
+        services.store.setMetadata(`resourceOperation:${skill.id}`,{state:'pending',revision:skill.revision,action:'skill.import.disable',operationId});
+      });
+    }
+    if(skill.revision!==operation.revision)fail('conflict','The imported skill changed before its disable completed.');
+    try{
+      const tracked=services.store.metadata<HostPath[]>(`skillHostPaths:${skill.id}`)??[],remaining:HostPath[]=[];
+      for(const host of tracked){
+        const reserved=operation.paths.find(path=>path.nodeId===host.nodeId&&path.path===host.path);
+        if(!reserved||reserved.mtimeMs===undefined||reserved.mtimeMs!==host.mtimeMs||!host.path.endsWith(`/${skill.id}/SKILL.md`))fail('outcome_unknown','The imported skill disable lacks an exact owning file receipt.',false);
+        const machine=skillDestination(services,user,skill,host);
+        if(machine.status!=='online'||machine.nodeId!==host.nodeId)fail('machine_offline','Reserved skill destination is unavailable.');
+        assertAvailable(services,'node.fs.stat');
+        try{
+          ack(z.object({path:z.literal(host.path),type:z.literal('regular'),mtimeMs:z.literal(reserved.mtimeMs)}),await services.lemon.call('node.fs.stat',{nodeId:host.nodeId,path:host.path},{mutation:false}));
+          remaining.push(host);
+        }catch(error){if(!(error instanceof ApiError)||error.code!=='not_found')throw error;}
+      }
+      // Missing files confirm prior deletes; unchanged files permit fresh exact previews.
+      services.store.setMetadata(`skillHostPaths:${skill.id}`,remaining);
+      await provisionSkill(services,user,{...skill,enabled:false},[]);
+      const disabled=services.update(skill,{enabled:false});
+      services.store.transaction(()=>{
+        services.store.put('skills',disabled);
+        services.store.setMetadata(key,{...operation,state:'complete'});
+        services.store.setMetadata(`resourceOperation:${skill.id}`,null);
+        services.events.emit('skill.upserted',disabled,{userIds:[user.userId]});
+      });
+      return disabled;
+    }catch(error){
+      services.store.setMetadata(`resourceOperation:${skill.id}`,{state:'outcome_unknown',revision:skill.revision,action:'skill.import.disable',operationId});
+      throw error;
+    }
+  });
+}
 const admissionContext = z.object({jobId:id,profileId:id,routineId:id,creatorId:id,workspaceId:id,cronRunId:id,routerRunId:id,triggeredBy:text(64),scheduledForMs:timestamp.nullable()}).strict();
 const pageQuery = z.object({limit:z.coerce.number().int().min(1).max(200).optional(),cursor:text(12000).optional()}).strict();
 const emptyQuery = z.object({}).strict();
@@ -230,24 +465,19 @@ export function validateSchedule(cron: string, timezone: string): void {
 }
 
 /** Destination paths come from measured host cwd, never client-supplied paths. */
-export async function provisionSkill(services: BackendServices, user: Principal, skill: P.Skill, machineIds = skill.machineIds, preserveExisting = false, profileId?:string): Promise<void> {
+async function skillDestinations(services:BackendServices,user:Principal,skill:P.Skill,machineIds:string[],profileId?:string,receiptOnly=false):Promise<HostPath[]> {
   requireOwn(user,skill.ownerUserId);
   if(skill.botId)requireOwn(user,services.auth.bot(user,skill.botId).ownerUserId);
   for(const bot of services.store.list<P.Bot>('bots',row=>row.skillIds.includes(skill.id)))requireOwn(user,bot.ownerUserId);
-  if (!/^[A-Za-z0-9_-]+$/.test(skill.id)) fail('invalid_request', 'Skill ID cannot form a managed host path.');
-  const previous = services.store.metadata<HostPath[]>(`skillHostPaths:${skill.id}`) ?? [];
-  const desired: HostPath[] = [];
-  function destination(machineId:string,selectedProfile?:string):P.Machine {
-    const bot=selectedProfile?services.store.list<P.Bot>('bots',row=>row.profileId===selectedProfile&&row.machineId===machineId)[0]:null;
-    if(bot&&bot.id===skill.botId&&bot.ownerUserId===user.userId){services.auth.bot(user,bot.id,true);return services.store.require<P.Machine>('machines',machineId);}
-    return services.auth.machine(user,machineId,true);
-  }
+  if(!/^[A-Za-z0-9_-]+$/.test(skill.id))fail('invalid_request','Skill ID cannot form a managed host path.');
+  const previous=services.store.metadata<HostPath[]>(`skillHostPaths:${skill.id}`)??[];
+  const desired:HostPath[]=[];
   for (const machineId of [...new Set(machineIds)]) {
     const bound=services.store.list<P.Bot>('bots',bot=>bot.machineId===machineId&&(bot.skillIds.includes(skill.id)||bot.id===skill.botId)).map(bot=>bot.profileId);
     const profiles=profileId?[profileId]:[...new Set([...previous.filter(host=>host.machineId===machineId).map(host=>host.profileId),...bound])];
     if(!profiles.length)profiles.push(undefined);
     for(const selectedProfile of profiles) {
-      const machine=destination(machineId,selectedProfile);
+      const machine=skillDestination(services,user,skill,{machineId,profileId:selectedProfile});
       if(machine.status!=='online'||!machine.nodeId)fail('machine_offline','Skill destination is offline.');
       let root:string;
       if(selectedProfile){
@@ -267,14 +497,28 @@ export async function provisionSkill(services: BackendServices, user: Principal,
       try{measured=parse(z.object({path:text(4096),type:z.string(),mtimeMs:timestamp}),await services.lemon.call('node.fs.stat',{nodeId:machine.nodeId,path:candidate}));}
       catch(error){if(!(error instanceof ApiError)||error.code!=='not_found')throw error;}
       const tracked=previous.find(host=>host.nodeId===machine.nodeId&&host.path===(measured?.path??candidate));
-      if(measured&&(measured.type!=='regular'||!tracked||tracked.mtimeMs!==measured.mtimeMs))fail('revision_conflict','Managed skill file changed outside this revision.');
-      if(!measured&&tracked)fail('revision_conflict','Previously installed skill file is missing.');
+      if(receiptOnly){
+        if(measured&&(measured.type!=='regular'||measured.path!==candidate))fail('outcome_unknown','Legacy imported skill path cannot be conclusively identified.',false);
+      }else{
+        if(measured&&(measured.type!=='regular'||!tracked||tracked.mtimeMs!==measured.mtimeMs))fail('revision_conflict','Managed skill file changed outside this revision.');
+        if(!measured&&tracked)fail('revision_conflict','Previously installed skill file is missing.');
+      }
       desired.push({machineId,nodeId:machine.nodeId,path:measured?.path??candidate,mtimeMs:measured?.mtimeMs??0,...(selectedProfile?{profileId:selectedProfile}:{})});
     }
   }
+  return desired;
+}
+function skillDestination(services:BackendServices,user:Principal,skill:P.Skill,host:Pick<HostPath,'machineId'|'profileId'>):P.Machine {
+  const bot=host.profileId?services.store.list<P.Bot>('bots',row=>row.profileId===host.profileId&&row.machineId===host.machineId)[0]:null;
+  if(bot&&bot.id===skill.botId&&bot.ownerUserId===user.userId){services.auth.bot(user,bot.id,true);return services.store.require<P.Machine>('machines',host.machineId);}
+  return services.auth.machine(user,host.machineId,true);
+}
+export async function provisionSkill(services:BackendServices,user:Principal,skill:P.Skill,machineIds=skill.machineIds,preserveExisting=false,profileId?:string):Promise<void> {
+  const desired=await skillDestinations(services,user,skill,machineIds,profileId);
+  const previous=services.store.metadata<HostPath[]>(`skillHostPaths:${skill.id}`)??[];
   const paths = skill.enabled ? desired : [];
   for (const host of (preserveExisting?[]:previous.filter(old => !paths.some(next => next.nodeId===old.nodeId && next.path===old.path)))) {
-    const machine = destination(host.machineId,host.profileId);
+    const machine=skillDestination(services,user,skill,host);
     if (machine.status !== 'online' || machine.nodeId !== host.nodeId) fail('machine_offline', 'Previous skill destination is unavailable.');
     assertAvailable(services,'node.fs.delete.preview');assertAvailable(services,'node.fs.delete');
     const preview=parse(z.object({path:text(4096),stat:z.object({mtimeMs:timestamp}),confirmationToken:text(256),expiresAtMs:timestamp}),await services.lemon.call('node.fs.delete.preview',{nodeId:host.nodeId,path:host.path,recursive:false}));
@@ -285,7 +529,7 @@ export async function provisionSkill(services: BackendServices, user: Principal,
     const remaining=services.store.metadata<HostPath[]>(`skillHostPaths:${skill.id}`)??[];
     services.store.setMetadata(`skillHostPaths:${skill.id}`,remaining.filter(item => item.path!==host.path || item.nodeId!==host.nodeId));
   }
-  const bytes = Buffer.from(`---\nname: ${JSON.stringify(skill.name)}\ndescription: ${JSON.stringify(skill.description)}\n---\n\n${skill.markdown}\n`);
+  const bytes=skillBytes(skill);
   for (const host of paths) {
     assertAvailable(services, 'node.fs.write');
     const result = ack(z.object({ path:text(4096), bytesWritten:z.number().int(), size:z.number().int(),mtimeMs:timestamp }), await services.lemon.call('node.fs.write', { nodeId:host.nodeId, path:host.path, dataBase64:bytes.toString('base64'), truncate:true, mkdirs:true,expectedModifiedAtMs:host.mtimeMs }, { mutation:true, resourceIds:[skill.id] }));
@@ -460,19 +704,6 @@ export function createResourceRoutes(services: BackendServices): Route[] {
     } while (cursor);
     return output;
   }
-  async function validateTrigger(u:Principal,bot:P.Bot,value:P.RoutineTrigger):Promise<void> {
-    if (value.kind==='schedule') { validateSchedule(value.cron,value.timezone); assertAvailable(services,'cron.add'); }
-    if (value.kind==='channel_event') {
-      const binding = services.store.require<P.ChannelBinding>('channelBindings',value.channelBindingId);
-      if (binding.botId!==bot.id || !services.auth.canRead(u,'channelBindings',binding)) fail('forbidden','Channel event binding is not accessible to this bot.');
-      if (!binding.enabled || binding.state!=='connected' || !binding.capabilities.inbound || !binding.capabilities.events.includes(value.event)) fail('capability_unavailable','This channel does not advertise the requested event.');
-    }
-    if (value.kind==='external_event') {
-      const sources = await services.invoke<P.ExternalSource[]>(u,'GET','/v1/event-sources');
-      const source = sources.find(item=>item.source===value.source && item.configured);
-      if (!source || value.eventNames.some(name=>!source.events.includes(name))) fail('capability_unavailable','External source does not advertise the requested events.');
-    }
-  }
   async function provisionCronAdmission(row:RoutineRow) {
     const url=new URL('/internal/cron/admission',services.config.publicUrl);
     if(url.protocol!=='https:' && !(url.protocol==='http:' && ['127.0.0.1','[::1]'].includes(url.hostname)))fail('capability_unavailable','Scheduled routines require HTTPS or explicitly allowlisted literal-loopback admission.');
@@ -572,7 +803,7 @@ export function createResourceRoutes(services: BackendServices): Route[] {
     const input = parse(skillCreate,c.body); const u=user(c);
     if(input.botId)requireOwn(u,services.auth.bot(u,input.botId).ownerUserId);
     if(input.botId)botWritable(services,input.botId,c);
-    const skill:P.Skill=services.resource('skill',{ownerUserId:u.userId,botId:input.botId??null,name:input.name,description:input.description,markdown:input.markdown,enabled:true,machineIds:[...new Set(input.machineIds)],provenance:{sourceUrl:null,publisher:services.auth.user(u.userId).displayName,trusted:false}});
+    const skill=skillResource(services,u,input);
     services.store.put('skills',skill);
     try {return await fenced(services,c,skill,'skill.create',async()=>{await provisionSkill(services,u,skill);services.events.emit('skill.upserted',skill,{userIds:[u.userId]});return skill;});}
     catch(error) {if(!services.store.metadata(`resourceOperation:${skill.id}`))services.store.remove('skills',skill.id);throw error;}
@@ -608,12 +839,10 @@ export function createResourceRoutes(services: BackendServices): Route[] {
   route('GET','/v1/routines/:id',c=>publicRoutine(ownRoutine(c)));
   route('POST','/v1/routines',c=>{
     const input=parse(routineCreate,c.body);return locked(`routineBot:${input.botId}`,async()=>{
-      const u=user(c);const bot=routineBot(services,u,input.botId);botWritable(services,bot.id,c);await validateTrigger(u,bot,input.trigger);
-      if(services.store.list<P.Routine>('routines',item=>item.botId===bot.id).length>=50)fail('conflict','A bot may have at most 50 routines.');
-      const conversation:P.Conversation=services.resource('conversation',{kind:'task',name:input.name,botIds:[bot.id],ownerUserId:u.userId,parentConversationId:null,leadBotId:null,channelBindingId:null,lastEntryId:null,unreadCount:0,lastReadSeq:0,activity:[]});
-      const row:RoutineRow=services.resource('routine',{botId:bot.id,ownerUserId:u.userId,name:input.name,instruction:input.instruction,trigger:input.trigger,enabled:input.enabled,nextRunAtMs:null,scheduleDescription:input.trigger.kind==='schedule'?`${input.trigger.cron} (${input.trigger.timezone})`:input.trigger.kind,lastRunId:null,webhookUrl:null,cronJobId:null,conversationId:conversation.id});
+      const u=user(c);const bot=routineBot(services,u,input.botId);botWritable(services,bot.id,c);await validateRoutineTrigger(services,u,bot,input.trigger);
+      routineCapacity(services,bot.id);
+      const {conversation,routine:row}=routineResources(services,u,bot,input);
       listenerConsent(c,row,input.trigger.kind==='channel_event'&&input.trigger.noisyListenerConsent===true);
-      if(row.trigger.kind==='webhook')row.webhookUrl=`${services.config.publicUrl}/hooks/${encodeURIComponent(row.id)}`;
       services.store.put('conversations',conversation); services.store.put('routines',row);
       try{return await fenced(services,c,row,'routine.create',async()=>{const saved=await cronAdd(c,row);services.store.put('routines',saved);services.events.emit('conversation.upserted',conversation,{userIds:[u.userId]});services.events.emit('routine.upserted',publicRoutine(saved),{userIds:[u.userId]});return publicRoutine(saved);});}
       catch(error){if(!services.store.metadata(`resourceOperation:${row.id}`)){services.store.remove('routines',row.id);services.store.remove('conversations',conversation.id);}throw error;}
@@ -623,7 +852,7 @@ export function createResourceRoutes(services: BackendServices): Route[] {
     const input=parse(routineUpdate,c.body);const row=ownRoutine(c);services.mutations.checkRevision(row,input.revision);
     botWritable(services,row.botId,c);
     const {clientNonce:_nonce,revision:_revision,...changes}=input;let next=services.update(row,changes);
-    if(input.enabled!==false||input.trigger!==undefined)await validateTrigger(user(c),services.auth.bot(user(c),row.botId),next.trigger);
+    if(input.enabled!==false||input.trigger!==undefined)await validateRoutineTrigger(services,user(c),services.auth.bot(user(c),row.botId),next.trigger);
     return fenced(services,c,row,'routine.update',async()=>{
       listenerConsent(c,next,input.trigger?.kind==='channel_event'&&input.trigger.noisyListenerConsent===true);
       if(row.enabled&&!next.enabled){next={...next,nextRunAtMs:null};services.store.put('routines',next);markApplied(services,row.id);}

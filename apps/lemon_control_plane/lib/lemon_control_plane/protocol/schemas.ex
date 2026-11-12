@@ -145,6 +145,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
       required: %{"profileId" => :string, "url" => :string, "token" => :string},
       optional: %{}
     },
+    "profile.followup.admission.get" => %{
+      required: %{"profileId" => :string},
+      optional: %{}
+    },
     "learning.timeline" => %{
       optional: %{"profileId" => :string, "kind" => :string, "limit" => :integer}
     },

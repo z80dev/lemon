@@ -29,6 +29,7 @@ struct SidebarView: View {
     @State private var previews: [ID: (version: String, text: String?)] = [:]
     @State private var action = UIActionState()
     @State private var showConnection = false
+    @State private var lifecycleBot: Bot?
     @FocusState private var filterFocused: Bool
     @Environment(\.lbReduceMotion) private var reduceMotion
     @Environment(\.lbBottomAccessoryInset) private var bottomAccessoryInset
@@ -90,6 +91,7 @@ struct SidebarView: View {
         .toolbar { phoneToolbar }
         #endif
         .task(id: store.sidebarPreviewKey) { await loadPreviews() }
+        .sheet(item: $lifecycleBot) { BotLifecycleView(store: store, bot: $0) }
         #if os(macOS)
         .task(id: store.hostSetupTrigger) { Task { await store.automaticallySetUpHostMachine() } }
         .popover(isPresented: $showConnection) { ScrollView { ConnectionStatusView(store: store).padding(12) }.frame(width: 440, height: 520) }
@@ -220,7 +222,7 @@ struct SidebarView: View {
                 .textFieldStyle(.plain).font(LBFont.rowSubtitle)
                 .focused($filterFocused)
                 .autocorrectionDisabled()
-                .onSubmit { if let first = listBots.first { openConversation(first.mainConversationId) } }
+                .onSubmit { if let first = listBots.first { openBot(first) } }
                 .onKeyPress(.escape) { query = ""; unreadOnly = false; searching = false; return .handled }
             if !query.isEmpty {
                 Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(LB.faint) }.buttonStyle(.plain).accessibilityLabel("Clear search")
@@ -242,7 +244,7 @@ struct SidebarView: View {
             HStack(spacing: 6) {
                 ForEach(pinned) { bot in
                     let selected = bot.id == selectedBotID
-                    Button { openConversation(bot.mainConversationId) } label: {
+                    Button { openBot(bot) } label: {
                         VStack(spacing: 6) {
                             BotBadgedAvatar(store: store, bot: bot, size: 56, presence: presence(bot), unread: bot.sidebar.unread, ring: LB.sidebar)
                             Text(bot.name).font(LBFont.meta).foregroundStyle(LB.ink).lineLimit(1).truncationMode(.tail)
@@ -394,10 +396,15 @@ struct SidebarView: View {
             .sidebarRow()
     }
 
+    private func openBot(_ bot: Bot) {
+        if bot.lifecycle != nil { lifecycleBot = bot }
+        else { openConversation(bot.mainConversationId) }
+    }
+
     private func botRow(_ bot: Bot) -> some View {
         let selected = bot.id == selectedBotID
         let step = store.currentStep(in: bot.mainConversationId)
-        return Button { openConversation(bot.mainConversationId) } label: {
+        return Button { openBot(bot) } label: {
             HStack(spacing: 12) {
                 BotBadgedAvatar(store: store, bot: bot, size: 40, presence: presence(bot), ring: LB.sidebar)
                 VStack(alignment: .leading, spacing: 2) {
@@ -440,7 +447,10 @@ struct SidebarView: View {
     }
 
     @ViewBuilder private func previewLine(bot: Bot, step: LiveStep?) -> some View {
-        if let step {
+        if let lifecycle = bot.lifecycle {
+            Text(verbatim: BotLifecyclePresentation.status(lifecycle) + " · " + BotLifecyclePresentation.step(lifecycle))
+                .font(LBFont.rowSubtitle).foregroundStyle(LB.warning).lineLimit(1)
+        } else if let step {
             HStack(spacing: 4) {
                 Image(systemName: step.needsInput ? "hand.raised.fill" : "ellipsis").font(.system(size: 10, weight: .bold))
                 Text(step.needsInput ? "Needs you" : step.title + "…").lineLimit(1)
@@ -455,6 +465,7 @@ struct SidebarView: View {
         Button("Open chat", systemImage: "bubble.left") { openConversation(bot.mainConversationId) }
         Button("Bot details", systemImage: "info.circle") { openConversation(bot.mainConversationId); inspector.show(.details) }
         Button("Activity", systemImage: "waveform.path.ecg") { openConversation(bot.mainConversationId); inspector.show(.activity) }
+        Button("Manage Bot…", systemImage: "wrench.and.screwdriver") { lifecycleBot = bot }
         Divider()
         Group {
             Button(bot.sidebar.pinned ? "Unpin" : "Pin", systemImage: bot.sidebar.pinned ? "pin.slash" : "pin") { Task { await sidebar(bot, ["pinned": .bool(!bot.sidebar.pinned)]) } }

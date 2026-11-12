@@ -17,7 +17,7 @@ export interface Deleted { id: ID; deleted: true }
 export interface Empty { ok: true }
 export type BinaryBody = Uint8Array;
 export interface OAuthCallbackQuery { state: string; code?: string; error?: string }
-export type ErrorCode = 'invalid_request' | 'unauthenticated' | 'forbidden' | 'not_found' | 'conflict' | 'nonce_conflict' | 'revision_conflict' | 'confirmation_required' | 'expired' | 'too_large' | 'unsupported_media' | 'rate_limited' | 'machine_offline' | 'upstream_unavailable' | 'capability_unavailable' | 'policy_denied' | 'outcome_unknown' | 'cursor_expired' | 'internal_error';
+export type ErrorCode = 'invalid_request' | 'callback_origin_not_allowed' | 'callback_requires_https' | 'invalid_callback_url' | 'unauthenticated' | 'forbidden' | 'not_found' | 'conflict' | 'nonce_conflict' | 'revision_conflict' | 'confirmation_required' | 'expired' | 'too_large' | 'unsupported_media' | 'rate_limited' | 'machine_offline' | 'upstream_unavailable' | 'capability_unavailable' | 'policy_denied' | 'outcome_unknown' | 'cursor_expired' | 'internal_error';
 export interface ErrorEnvelope { error: { code: ErrorCode; message: string; requestId: string; retrySafe: boolean; details?: JSONObject } }
 export interface VoiceSettings { voiceId: string; speed: number; language: string | null }
 export interface Preferences { appearance: 'system' | 'light' | 'dark'; language: string | null; timezone: string; botColors: boolean; threadsBesideChat: boolean; voice: VoiceSettings; celebrationsEnabled: boolean }
@@ -208,7 +208,8 @@ export type AgentMessageStatus = 'accepted' | 'completed' | 'failed' | 'outcome_
 export interface AgentMessageReceipt { messageId: ID; sourceId: ID; targetId: ID; status: AgentMessageStatus; runId: ID | null; response: string | null }
 export interface AgentMessageSend extends Mutation { target: string; text: string; conversationId?: ID }
 export interface MessageAgentInput extends Mutation { target: string; text: string }
-export interface Bot extends Resource { ownerUserId: ID; machineId: ID; profileId: string; name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; language: string | null; skillIds: ID[]; referenceAttachmentIds: ID[]; mainConversationId: ID; sidebar: SidebarState; activity: BotPresence['status']; activeRunIds: ID[]; agentHandle?: string | null; agentAddress?: ID; approvalReview?: ApprovalReviewMode }
+export interface BotLifecycle { action: string; status: 'running' | 'failed' | 'outcome_unknown'; step: string; message: string; canFinishSetup: boolean; canReaddress: boolean; canDelete: boolean }
+export interface Bot extends Resource { ownerUserId: ID; machineId: ID; profileId: string; name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; language: string | null; skillIds: ID[]; referenceAttachmentIds: ID[]; mainConversationId: ID; sidebar: SidebarState; activity: BotPresence['status']; activeRunIds: ID[]; agentHandle?: string | null; agentAddress?: ID; approvalReview?: ApprovalReviewMode; lifecycle?: BotLifecycle }
 export interface BotCreate extends Mutation { name: string; machineId: ID; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; skillIds?: ID[]; templateId?: ID; access?: 'standard' | 'none' }
 export interface BotUpdate extends Update { name?: string; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; skillIds?: ID[]; referenceAttachmentIds?: ID[] }
 export interface BotDuplicate extends Mutation { name: string; machineId: ID; includeSkills: boolean; includeRoutines: boolean; access?: 'standard' | 'none' }
@@ -820,6 +821,8 @@ export interface RestEndpoints {
   'POST /bots': Endpoint<BotCreate, Bot>;
   'GET /bots/:id': Endpoint<undefined, Bot>;
   'PATCH /bots/:id': Endpoint<BotUpdate, Bot>;
+  'POST /bots/:id/finish-setup': Endpoint<Update, Bot>;
+  'POST /bots/:id/readdress': Endpoint<Update, Bot>;
   'GET /bots/:id/agent-identity': Endpoint<undefined, { agent: AgentIdentity }>;
   'PATCH /bots/:id/agent-identity': Endpoint<AgentIdentityUpdate, { agent: AgentIdentity }>;
   'GET /bots/:id/agents': Endpoint<undefined, { agents: AgentIdentity[] }, AgentListQuery>;

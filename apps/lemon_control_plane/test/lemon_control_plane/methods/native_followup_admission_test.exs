@@ -4,6 +4,7 @@ defmodule LemonControlPlane.Methods.NativeFollowupAdmissionTest do
   alias LemonControlPlane.Auth.Authorize
 
   alias LemonControlPlane.Methods.{
+    ProfileFollowupAdmissionGet,
     ProfileFollowupAdmissionSet,
     ProfilesGet,
     ProfilesList,
@@ -83,6 +84,8 @@ defmodule LemonControlPlane.Methods.NativeFollowupAdmissionTest do
   test "real registered admin setter writes encrypted credential and returns no private data",
        ctx do
     assert {:ok, ProfileFollowupAdmissionSet} = Registry.lookup("profile.followup.admission.set")
+    assert {:ok, ProfileFollowupAdmissionGet} = Registry.lookup("profile.followup.admission.get")
+    assert ProfileFollowupAdmissionGet.scopes() == [:admin]
     assert {:ok, RunsFollowupLineageGet} = Registry.lookup("runs.followup.lineage.get")
     assert ProfileFollowupAdmissionSet.scopes() == [:admin]
     assert RunsFollowupLineageGet.scopes() == [:admin]
@@ -117,12 +120,22 @@ defmodule LemonControlPlane.Methods.NativeFollowupAdmissionTest do
       refute inspect(projection) =~ config.token_secret
     end
 
-    assert {:error, {:method_not_found, _}} =
+    assert {:ok, receipt} =
              Registry.dispatch(
                "profile.followup.admission.get",
                %{"profileId" => ctx.id},
                auth_context([:admin])
              )
+
+    assert receipt == %{
+             "profileId" => ctx.id,
+             "configured" => true,
+             "url" => ctx.params["url"],
+             "tokenSha256" => Base.encode16(:crypto.hash(:sha256, @token), case: :lower)
+           }
+
+    refute inspect(receipt) =~ @token
+    refute inspect(receipt) =~ config.token_secret
   end
 
   test "nonadmin and paired-node auth cannot configure or read sealed followup lineage", ctx do
@@ -131,6 +144,13 @@ defmodule LemonControlPlane.Methods.NativeFollowupAdmissionTest do
                Registry.dispatch(
                  "profile.followup.admission.set",
                  ctx.params,
+                 auth_context(scopes)
+               )
+
+      assert {:error, _} =
+               Registry.dispatch(
+                 "profile.followup.admission.get",
+                 %{"profileId" => ctx.id},
                  auth_context(scopes)
                )
 
@@ -155,6 +175,13 @@ defmodule LemonControlPlane.Methods.NativeFollowupAdmissionTest do
                node,
                ProfileFollowupAdmissionSet.name(),
                ProfileFollowupAdmissionSet.scopes()
+             )
+
+    assert {:error, _} =
+             Authorize.authorize(
+               node,
+               ProfileFollowupAdmissionGet.name(),
+               ProfileFollowupAdmissionGet.scopes()
              )
 
     assert {:error, _} =
@@ -187,6 +214,121 @@ defmodule LemonControlPlane.Methods.NativeFollowupAdmissionTest do
                %{ctx.params | "profileId" => "missing-profile"},
                %{}
              )
+  end
+
+  test "getter exposes absent configuration and rejects unknown or malformed profiles", ctx do
+    assert {:ok, %{"profileId" => id, "configured" => false} = receipt} =
+             Registry.dispatch(
+               "profile.followup.admission.get",
+               %{"profileId" => ctx.id},
+               auth_context([:admin])
+             )
+
+    assert id == ctx.id
+    assert map_size(receipt) == 2
+
+    assert {:error, {:not_found, _}} =
+             ProfileFollowupAdmissionGet.handle(%{"profileId" => "missing-profile"}, %{})
+
+    for params <- [
+          nil,
+          [],
+          %{},
+          %{"profileId" => "../escape"},
+          %{"profileId" => ctx.id, "token" => @token},
+          %{"profileId" => ctx.id, :profileId => ctx.id}
+        ] do
+      assert {:error, {:invalid_request, _}} = ProfileFollowupAdmissionGet.handle(params, %{})
+    end
+  end
+
+  test "callback errors serialize definite safe codes and canonical origins", ctx do
+    for {url, code, details} <- [
+          {"https://UNLISTED.example.test:443/private", "callback_origin_not_allowed",
+           %{"origin" => "https://unlisted.example.test"}},
+          {"http://unlisted.example.test/private", "callback_requires_https", nil},
+          {"https://user:private@unlisted.example.test/private?token=secret",
+           "invalid_callback_url", nil}
+        ] do
+      assert {:error, error} =
+               Registry.dispatch(
+                 "profile.followup.admission.set",
+                 %{ctx.params | "url" => url},
+                 auth_context([:admin])
+               )
+
+      payload = LemonControlPlane.Protocol.Errors.to_payload(error)
+      assert payload["code"] == code
+      assert payload["details"] == details
+
+      for private <- [@token, "/private", "user:", "token=secret"] do
+        refute inspect(payload) =~ private
+      end
+
+      assert {:ok, %{"configured" => false}} = NativeFollowupAdmission.receipt(ctx.id)
+    end
+  end
+
+  test "cron add and update preserve safe callback reasons without mutating jobs", ctx do
+    previous = Application.fetch_env(:lemon_automation, :cron_admission_allowed_origins)
+    previous_env = System.get_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS")
+    System.delete_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS")
+    Application.put_env(:lemon_automation, :cron_admission_allowed_origins, [@origin])
+
+    on_exit(fn ->
+      restore_env(:lemon_automation, :cron_admission_allowed_origins, previous)
+
+      if is_nil(previous_env),
+        do: System.delete_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS"),
+        else: System.put_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS", previous_env)
+    end)
+
+    admission = %{
+      "url" => @origin <> "/check",
+      "token_secret" => "private-secret-name",
+      "routine_id" => "routine",
+      "creator_id" => "creator",
+      "workspace_id" => "workspace"
+    }
+
+    params = %{
+      "name" => ctx.id,
+      "schedule" => "0 0 1 1 *",
+      "enabled" => false,
+      "agentId" => ctx.id,
+      "profileId" => ctx.id,
+      "sessionKey" => "agent:" <> ctx.id <> ":main",
+      "prompt" => "run",
+      "admission" => admission
+    }
+
+    assert {:ok, %{"id" => job_id}} = LemonControlPlane.Methods.CronAdd.handle(params, %{})
+    on_exit(fn -> LemonAutomation.CronManager.remove(job_id) end)
+
+    for {url, code, details} <- [
+          {"https://UNLISTED.example.test:443/private", "callback_origin_not_allowed",
+           %{"origin" => "https://unlisted.example.test"}},
+          {"http://unlisted.example.test/private", "callback_requires_https", nil},
+          {"https://user:password@unlisted.example.test/private?token=secret",
+           "invalid_callback_url", nil}
+        ] do
+      changed = %{admission | "url" => url}
+
+      for {method, input} <- [
+            {LemonControlPlane.Methods.CronAdd, %{params | "admission" => changed}},
+            {LemonControlPlane.Methods.CronUpdate, %{"id" => job_id, "admission" => changed}}
+          ] do
+        assert {:error, error} = method.handle(input, %{})
+        payload = LemonControlPlane.Protocol.Errors.to_payload(error)
+        assert payload["code"] == code
+        assert payload["details"] == details
+
+        for secret <- ["private-secret-name", "/private", "user:", "password", "token=secret"],
+            do: refute(inspect(payload) =~ secret)
+      end
+
+      assert LemonAutomation.CronStore.get_job(job_id).admission.url == admission["url"]
+    end
   end
 
   test "readonly lineage getter accepts only actual reserved F, never parent or principal claims" do

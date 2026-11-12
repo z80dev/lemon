@@ -27,6 +27,7 @@ defmodule LemonAutomation.CronAdmission do
   """
 
   alias LemonCore.{Env, InvocationProof, ProfileStore, RunRequest, Secrets, ToolPolicy}
+  alias LemonMCP.HTTP.OriginPolicy
 
   @fields [:url, :token_secret, :routine_id, :creator_id, :workspace_id]
   @string_fields Enum.map(@fields, &Atom.to_string/1)
@@ -60,9 +61,12 @@ defmodule LemonAutomation.CronAdmission do
   Canonicalizes an atom- or string-keyed admission map, rejecting unknown fields,
   ambiguous duplicate keys, invalid identities, and callbacks outside the exact
   HTTPS or literal-loopback HTTP origin allowlist. `nil` means no external hook.
-  Errors are bounded classifications without caller-controlled values.
+  Errors are bounded classifications; only an origin rejection includes the
+  canonical non-secret origin, never a callback path or credential.
   """
-  @spec validate(term(), term()) :: {:ok, nil | admission()} | {:error, String.t()}
+  @spec validate(term(), term()) ::
+          {:ok, nil | admission()}
+          | {:error, String.t() | atom() | {:callback_origin_not_allowed, String.t()}}
   def validate(nil, _profile_id), do: {:ok, nil}
 
   def validate(admission, profile_id) when is_map(admission) do
@@ -377,11 +381,17 @@ defmodule LemonAutomation.CronAdmission do
 
   defp allowed_callback(url) do
     with {:ok, uri} <- callback_uri(url),
-         origins when is_list(origins) <- allowed_origins(),
-         true <- Enum.any?(origins, &allowed_origin?(&1, uri)) do
-      {:ok, uri}
+         {:ok, origin} <- OriginPolicy.canonical_origin(url) do
+      origins = allowed_origins()
+
+      if is_list(origins) and Enum.any?(origins, &allowed_origin?(&1, origin)) do
+        {:ok, uri}
+      else
+        {:error, {:callback_origin_not_allowed, origin}}
+      end
     else
-      _ -> {:error, "admission_origin_not_allowed"}
+      {:error, :invalid_url} -> {:error, :invalid_callback_url}
+      error -> error
     end
   end
 
@@ -401,12 +411,11 @@ defmodule LemonAutomation.CronAdmission do
     end
   end
 
-  defp allowed_origin?(origin, callback) do
+  defp allowed_origin?(origin, callback_origin) do
     case callback_uri(origin) do
       {:ok, uri} ->
-        is_nil(uri.path) and is_nil(uri.query) and
-          uri.scheme == callback.scheme and uri.host == callback.host and
-          uri.port == callback.port
+        is_nil(uri.path) and
+          OriginPolicy.canonical_origin(origin) == {:ok, callback_origin}
 
       _ ->
         false
@@ -418,15 +427,17 @@ defmodule LemonAutomation.CronAdmission do
          false <- Regex.match?(~r/[\s\\\x00-\x1F\x7F]|%(?![0-9a-fA-F]{2})/, url),
          {:ok, %URI{host: host, port: port} = uri} <- URI.new(url),
          true <- valid_host?(host),
-         true <- uri.scheme == "https" or (uri.scheme == "http" and host in ["127.0.0.1", "::1"]),
+         true <- uri.scheme in ["http", "https"],
          true <- is_integer(port) and port in 1..65_535,
          true <- is_nil(uri.userinfo) and is_nil(uri.fragment) and is_nil(uri.query),
          # URI.new/1 leaves the deprecated authority field nil. Check the
          # original authority syntax instead, preserving rejection of empty ports.
          false <- Regex.match?(~r/\Ahttps?:\/\/[^\/?#]*:(?:[\/?#]|\z)/i, url) do
-      {:ok, uri}
+      if uri.scheme == "https" or host in ["127.0.0.1", "::1"],
+        do: {:ok, uri},
+        else: {:error, :callback_requires_https}
     else
-      _ -> {:error, "invalid_admission_url"}
+      _ -> {:error, :invalid_callback_url}
     end
   end
 
