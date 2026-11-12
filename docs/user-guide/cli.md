@@ -1363,7 +1363,9 @@ updates and failure handling; the registry's restart advice is outdated.
 
 ### `lemon doctor`
 
-Run diagnostics or write a support bundle.
+Run diagnostics or write a support bundle. The `runtime.elixir` check fails on
+Elixir older than 1.20.5 and reports upgrade guidance. Source development requires
+Elixir 1.20.5+ with OTP 29.1.2+.
 
 ```text
 lemon doctor [options]

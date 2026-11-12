@@ -3,10 +3,13 @@ defmodule LemonCore.Redact do
   Shared credential redaction for text and nested data.
 
   `text/1` removes credential assignments, authorization values, common provider
-  keys, JWTs, and PEM private keys (including an unfinished PEM block). `map/1`
-  additionally masks values under sensitive atom/string keys, traversing maps,
-  structs, lists, keyword lists, and tuples. Structs become plain maps; other
-  scalar values and map keys are preserved. Repeated redaction is idempotent.
+  keys, JWTs, and PEM private keys (including an unfinished PEM block). Credential
+  names match complete names or separator-bounded components, not substrings:
+  `tokens` and `TokenKind` are ordinary content. Explicit secret fields still
+  mask short values; guessing entropy must not expose passwords or local tokens.
+  `map/1` additionally masks values under sensitive atom/string keys, traversing
+  maps, structs, lists, keyword lists, and tuples. Structs become plain maps;
+  other scalar values and map keys are preserved. Redaction is idempotent.
 
   This is a credential filter, not an export policy or a guarantee that arbitrary
   text is public. Callers must retain their content allowlists, URL/path omission,
@@ -74,8 +77,8 @@ defmodule LemonCore.Redact do
   """
 
   @marker "[REDACTED]"
-  @key_pattern "(?:pairing[_-]?codes?|access[_-]?key|api[_-]?key|auth(?:orization|[_-]?token)|bearer|cookie|credential|master[_-]?key|oauth|passw(?:or)?d|private[_-]?key|secret|token|wallet[_-]?key)"
-  @sensitive_key Regex.compile!(@key_pattern, "i")
+  @key_pattern "(?:pairing[_-]?codes?|access[_-]?key|api[_-]?key|(?:access|refresh|id|api|bot|session)[_-]?token|auth(?:orization|[_-]?token)|bearer(?:[_-]?token)?|cookie|credentials?|master[_-]?key|oauth(?:[_-]?token)?|client[_-]?secret|passw(?:or)?d|private[_-]?key|secret[_-]?access[_-]?key|secret|token|wallet[_-]?key)"
+  @sensitive_key Regex.compile!("(?<![A-Za-z0-9])#{@key_pattern}(?![A-Za-z0-9])", "i")
   @private_key ~r/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\z)/s
   @credentials ~r/(?:sk-[A-Za-z0-9_-]{8,}|(?i:(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}|xox[a-z]-[A-Za-z0-9-]{8,})|AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35}|\beyJ(?:[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|[A-Za-z0-9+\/_-]{30,}(?:\.[A-Za-z0-9+\/_-]+)*=*))/
   @authorization ~r/\bbearer\s+[A-Za-z0-9._~+\/=:-]+/i

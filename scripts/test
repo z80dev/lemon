@@ -101,7 +101,28 @@ EOF
 }
 
 ensure_repo_root() {
+  # Reject unsupported regex engines before compilation, test setup or selection.
+  ensure_toolchain
   cd "$ROOT"
+}
+
+ensure_toolchain() {
+  if ! command -v elixir >/dev/null 2>&1; then
+    echo "error: scripts/test requires Elixir 1.20.5 or newer (with OTP 29.1.2+)." >&2
+    exit 1
+  fi
+  elixir --eval '
+    version = System.get_env("LEMON_TEST_ELIXIR_VERSION") || System.version()
+    supported? =
+      case Version.parse(version) do
+        {:ok, parsed} -> Version.compare(parsed, "1.20.5") != :lt
+        :error -> false
+      end
+    unless supported? do
+      IO.puts(:stderr, "error: scripts/test requires Elixir 1.20.5 or newer; found #{version}. Upgrade Elixir (with OTP 29.1.2+) before running tests.")
+      System.halt(1)
+    end
+  '
 }
 
 setup_test_env() {
