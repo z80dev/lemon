@@ -227,6 +227,20 @@ Bun.serve({
 			}
 			const outHeaders = new Headers(response.headers);
 			for (const name of ["content-encoding", "content-length", "transfer-encoding", "connection"]) outHeaders.delete(name);
+			if (response.status >= 400 && response.body) {
+				// Provider error bodies are small JSON; keep only their type/code/message (no request content).
+				const text = await response.text();
+				let error: unknown = text.slice(0, 300);
+				try {
+					const parsed = JSON.parse(text);
+					const detail = parsed.error ?? parsed;
+					error = { type: detail.type, code: detail.code, message: String(detail.message ?? "").slice(0, 300) };
+				} catch {
+					// Non-JSON error bodies are logged truncated.
+				}
+				log({ trial, method: req.method, path: url.pathname, ...shape, status: response.status, retried, ttfb_ms: Date.now() - started, upstream_error: error });
+				return new Response(text, { status: response.status, headers: outHeaders });
+			}
 			// The request record is written at response headers so an aborted stream still counts.
 			log({ trial, method: req.method, path: url.pathname, ...shape, status: response.status, retried, ttfb_ms: Date.now() - started });
 			if (!response.body) return new Response(null, { status: response.status, headers: outHeaders });
