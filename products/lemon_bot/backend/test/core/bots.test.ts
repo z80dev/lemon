@@ -37,7 +37,7 @@ function fixture(items: P.MachineCapabilities['items'] = [], acknowledgedWorking
   const preferences = { entries: [] as string[], revision: 1 };
   const preferenceId = (entry: string) => `pref_user_${entry}.${preferences.revision}`;
   const methods = ['profiles.create', 'profiles.update', 'profiles.get', 'profiles.sync', 'profiles.sync.status', 'profiles.delete', 'mcp.execution_names', 'profile.followup.admission.set', 'profile.followup.admission.get', 'runs.followup.lineage.get', 'runs.active.list', 'memory.transfer', 'memory.transfer.status', 'memory.list', 'memory.get', 'memory.delete', 'memory.add', 'nodes.list', 'node.capabilities.get', 'node.secrets.set', 'node.secrets.receipt', 'node.secrets.list', 'node.secrets.delete', 'node.host.info', 'node.profile.paths', 'node.fs.stat', 'node.fs.write', 'node.fs.delete', 'cron.pause', 'cron.resume', 'cron.add', 'cron.remove', 'cron.list', 'sessions.delete', 'sessions.get'];
-  methods.push('node.fs.read');
+  methods.push('node.fs.read', 'node.fs.delete.preview');
   f.services.lemon = {
     connected: true, methods,
     controller: { url: 'ws://127.0.0.1:4040/ws', state: 'connected', connectedAtMs: 1, lastDisconnectedAtMs: null, lastError: null, nextRetryAtMs: null, methodCount: 0 }, reconnect() {},
@@ -97,6 +97,10 @@ function fixture(items: P.MachineCapabilities['items'] = [], acknowledgedWorking
         if (params.expectedModifiedAtMs !== (previous?.mtimeMs ?? 0)) throw new ApiError('revision_conflict', 'Managed file changed before write.');
         const size = Buffer.from(String(params.dataBase64), 'base64').length, mtimeMs = f.services.now() + ++hostRevision;
         hostFiles.set(key, { size, mtimeMs, dataBase64: String(params.dataBase64) }); value = { path: params.path, bytesWritten: size, size, mtimeMs };
+      } else if (method === 'node.fs.delete.preview') {
+        const file = hostFiles.get(`${params.nodeId}:${params.path}`);
+        if (!file) throw new ApiError('not_found', 'Managed file does not exist.');
+        value = { path: params.path, stat: { mtimeMs: file.mtimeMs }, confirmationToken: 'skill_delete_confirmation_token', expiresAtMs: f.services.now() + 60000 };
       } else if (method === 'node.fs.delete') { hostFiles.delete(`${params.nodeId}:${params.path}`); value = { path: params.path, deleted: true }; }
       else if (method === 'memory.transfer') {
         const identity = { profileId: params.profileId, nodeId: params.nodeId, mutationId: params.mutationId, sourceNodeId: 'node-source', snapshotDigest: 'b'.repeat(64) };
@@ -1402,4 +1406,41 @@ describe('production Router imported resource recovery', () => {
       expect(f.calls.some(call => call.method === 'node.fs.read')).toBe(true);
     } finally { f.store.close(); }
   });
+  for (const interruption of ['none', 'delete_ack', 'install_receipt'] as const) {
+    test(`an adopted legacy skill preserves disabled intent after receipt reconciliation (${interruption})`, async () => {
+      const f = fixture();
+      try {
+        f.failAfter(method => { if (method === 'node.fs.write') throw new ApiError('outcome_unknown', 'Install acknowledgement lost.', false); });
+        await expect(f.request('POST', '/v1/bots/import', { clientNonce: nonce(`disabled_legacy_start_${interruption}`), name: content.name, machineId: 'machine', content, acceptedTerms: true })).rejects.toMatchObject({ code: 'outcome_unknown' });
+        const bot=f.store.list<P.Bot>('bots')[0]!,skill=f.store.list<P.Skill>('skills')[0]!,plan=f.store.metadata<ImportPlan>(`botSetup:${bot.id}`)!;
+        expect(skill.enabled).toBe(true);
+        // The older importer persisted its disabled selection but had not reached the disable step.
+        f.store.setMetadata(`botSetup:${bot.id}`,{...plan,imported:{content,disabledSkillIndexes:[0],skillIds:[],routineIds:[]}});
+        f.failAfter(interruption==='delete_ack'?method=>{if(method==='node.fs.delete')throw new ApiError('outcome_unknown','Disable acknowledgement lost.',false);}:null);
+        if(interruption==='install_receipt')f.fail(method=>{if(method==='node.fs.read')throw new ApiError('upstream_unavailable','Install receipt unavailable.');});
+        const finish=()=>f.request<P.Bot>('POST',`/v1/bots/${bot.id}/finish-setup`,{clientNonce:nonce(`disabled_legacy_finish_${interruption}`),revision:bot.revision});
+        if(interruption==='install_receipt'){
+          await expect(finish()).rejects.toMatchObject({code:'outcome_unknown'});
+          expect(f.store.require<P.Skill>('skills',skill.id).enabled).toBe(true);
+          expect(f.calls.filter(call=>call.method==='node.fs.delete')).toHaveLength(0);
+        }else{
+          let completed:P.Bot;
+          if(interruption==='delete_ack'){
+            await expect(finish()).rejects.toMatchObject({code:'outcome_unknown'});
+            expect(f.store.require<P.Skill>('skills',skill.id).enabled).toBe(true);
+            f.failAfter(null);
+            completed=await f.request<P.Bot>('POST',`/v1/bots/${bot.id}/finish-setup`,{clientNonce:nonce('disabled_legacy_disable_resume'),revision:bot.revision});
+          }else completed=await finish();
+          expect(completed.skillIds).toEqual([skill.id]);
+          expect(completed.lifecycle).toBeUndefined();
+          expect(f.store.require<P.Skill>('skills',skill.id).enabled).toBe(false);
+          expect(f.store.metadata(`skillHostPaths:${skill.id}`)).toEqual([]);
+          expect(f.calls.filter(call=>call.method==='node.fs.delete')).toHaveLength(1);
+          expect(f.calls.findIndex(call=>call.method==='node.fs.read')).toBeLessThan(f.calls.findIndex(call=>call.method==='node.fs.delete'));
+        }
+        expect(f.store.list<P.Skill>('skills')).toHaveLength(1);
+        expect(f.calls.filter(call=>call.method==='node.fs.write')).toHaveLength(1);
+      }finally{f.store.close();}
+    });
+  }
 });
