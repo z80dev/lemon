@@ -578,12 +578,16 @@ defmodule LemonBrowser.TernSession do
     type = if args["type"] == "jpeg", do: "jpeg", else: "png"
     fields = %{"format" => type, "full" => args["fullPage"] == true}
 
-    with {:ok, %{"data" => data}} when is_binary(data) <- op(state, "capture", fields) do
-      # The tool layer owns saving, retention, includeImage, and channel delivery.
-      {:ok, %{"base64" => data, "contentType" => "image/" <> type}}
-    else
-      {:ok, _} -> {:error, {:protocol, "Tern capture answered without image data"}}
-      {:error, _} = error -> error
+    case op(state, "capture", fields) do
+      {:ok, %{"data" => data}} when is_binary(data) ->
+        # The tool layer owns saving, retention, includeImage, and channel delivery.
+        {:ok, %{"base64" => data, "contentType" => "image/" <> type}}
+
+      {:ok, _} ->
+        {:error, {:protocol, "Tern capture answered without image data"}}
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -988,10 +992,8 @@ defmodule LemonBrowser.TernSession do
   end
 
   defp evaluate(state, source, args, world) do
-    with {:ok, %{"value" => value}} <-
-           op(state, "eval", %{"function" => source, "args" => args, "world" => world}) do
-      {:ok, value}
-    else
+    case op(state, "eval", %{"function" => source, "args" => args, "world" => world}) do
+      {:ok, %{"value" => value}} -> {:ok, value}
       {:ok, answer} when is_map(answer) -> {:ok, nil}
       {:error, _} = error -> error
     end
