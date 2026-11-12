@@ -558,7 +558,11 @@ class Scheduler:
         self.usage_checked, self.kimi_accepts_new = 0.0, True
         self.retries = {}
         self.model_running = {}  # model -> trials in flight
-        self.caps = {args.fallback_model: args.fallback_concurrency} if args.fallback_model else {}
+        # Each model has its own concurrency budget: --concurrency for the primary, --fallback-concurrency for
+        # the fallback (Z.AI throttles concurrent requests; the budget shrinks to 2 while its 429s continue).
+        self.caps = {args.model: args.concurrency}
+        if args.fallback_model:
+            self.caps[args.fallback_model] = args.fallback_concurrency
         self.finished = 0
 
     def save_groups(self):
@@ -685,6 +689,9 @@ class Scheduler:
             elif row.get('rate_limited'):
                 self.mark_unavailable(model)
                 self.pending.insert(0, trial)
+                if model != self.args.model and self.caps[model] > 2:
+                    self.caps[model] -= 1
+                    print(f'{model} concurrency lowered to {self.caps[model]} after a 429', flush=True)
             elif self.retries.get(trial['id'], 0) < 2:
                 self.retries[trial['id']] = self.retries.get(trial['id'], 0) + 1
                 self.pending.append(trial)
@@ -713,7 +720,7 @@ def cmd_run(args):
     pending = [trial for trial in plan_trials(tasks, agents, args.repetitions, args.seed) if trial['id'] not in done]
     print(f'{len(pending)} trials pending ({len(done)} already recorded)', flush=True)
     scheduler = Scheduler(args, out, pending, by_id)
-    workers = [threading.Thread(target=scheduler.worker) for _ in range(args.concurrency)]
+    workers = [threading.Thread(target=scheduler.worker) for _ in range(sum(scheduler.caps.values()))]
     for thread in workers:
         thread.start()
     for thread in workers:
@@ -959,7 +966,7 @@ def main():
     run.add_argument('--thinking', default='high')
     run.add_argument('--repetitions', type=int, default=3)
     run.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT)
-    run.add_argument('--concurrency', type=int, default=6)
+    run.add_argument('--concurrency', type=int, default=6, help='trials in flight on the primary model')
     run.add_argument('--cpus', default='2')
     run.add_argument('--memory', default='3g')
     run.add_argument('--seed', type=int, default=20261111)

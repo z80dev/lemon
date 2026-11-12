@@ -291,9 +291,10 @@ The unit of comparison is a (task, repetition) group holding every agent arm,
 and a group always runs on one model. `groups.json` records each group's model,
 chosen when its first arm starts: the primary model while it has quota (for
 Kimi, until its 5-hour window reaches `--kimi-usage-limit`), otherwise
-`--fallback-model`. At most `--fallback-concurrency` trials run on the fallback
-at once (Z.AI throttles concurrent requests with 429 code 1302). Every arm and
-every retry of a group runs on the group's
+`--fallback-model`. Concurrency is per model: up to `--concurrency` trials on
+the primary and `--fallback-concurrency` on the fallback (Z.AI throttles
+concurrent requests with 429 code 1302; each such 429 lowers the fallback
+budget, down to 2). Every arm and every retry of a group runs on the group's
 model. A trial that saw an upstream 429 is recorded as an infrastructure
 failure, the model pauses until a tiny probe request succeeds, and the trial
 is retried on the same model. A group whose model is out of quota waits for it;
