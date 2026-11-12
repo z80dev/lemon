@@ -19,6 +19,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - On macOS, `lemon service install` no longer leaves a changed service stopped
   ("blocked", `service_command_failed`): it waits for launchd to finish
   removing the old unit before loading the new one.
+- Bot runs no longer fail intermittently ("The runtime reported that this run
+  failed") while Lemon Bot is busy: the worker's same-user check on a local
+  Lemon Bot connection ran before Lemon Bot had accepted the connection, found
+  no owner, and refused it. It now waits briefly for the accept, still failing
+  closed without positive ownership evidence.
 
 ---
 

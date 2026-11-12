@@ -159,6 +159,35 @@ defmodule LemonCore.LoopbackListenerTest do
     assert :owned = LoopbackListener.peer_owned_by_self?(client, :tcp)
   end
 
+  test "a busy server's not-yet-accepted connection is owned once accepted" do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, ip: @v4, active: false])
+    {:ok, {_, port}} = :inet.sockname(listener)
+    {:ok, client} = :gen_tcp.connect(@v4, port, [:binary, active: false])
+    parent = self()
+
+    acceptor =
+      spawn_link(fn ->
+        Process.sleep(150)
+        {:ok, server} = :gen_tcp.accept(listener)
+        :ok = :gen_tcp.controlling_process(server, parent)
+        send(parent, {:accepted, server})
+      end)
+
+    on_exit(fn -> Enum.each([listener, client], &:gen_tcp.close/1) end)
+    assert :owned = LoopbackListener.peer_owned_by_self?(client, :tcp)
+    assert_receive {:accepted, _server}
+    refute Process.alive?(acceptor)
+  end
+
+  test "a connection never accepted within the wait fails closed" do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, ip: @v4, active: false])
+    {:ok, {_, port}} = :inet.sockname(listener)
+    {:ok, client} = :gen_tcp.connect(@v4, port, [:binary, active: false])
+    on_exit(fn -> Enum.each([listener, client], &:gen_tcp.close/1) end)
+
+    refute :owned == LoopbackListener.peer_owned_by_self?(client, :tcp, accept_wait_ms: 100)
+  end
+
   test "literal loopback detection never resolves DNS" do
     for host <- ["127.0.0.1", "127.9.8.7", "::1", "[::1]", "::ffff:127.0.0.1"],
         do: assert(LoopbackListener.literal_loopback?(host))

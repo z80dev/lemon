@@ -18,14 +18,22 @@ defmodule LemonCore.LoopbackListener do
     inspect_owner(destination, nil, opts)
   end
 
-  @doc "Checks the server side of an established TCP/TLS socket, never its listener."
+  @doc """
+  Checks the server side of an established TCP/TLS socket, never its listener.
+
+  A just-connected socket can still sit in the server's accept queue, where it
+  belongs to no process and inspection finds no owner; a busy server would then
+  be refused. Inspection is retried until the socket is accepted, for at most
+  `:accept_wait_ms` (default 1000). Only positive evidence yields `:owned`.
+  """
   @spec peer_owned_by_self?(term(), :tcp | :ssl, keyword()) :: ownership()
   def peer_owned_by_self?(socket, transport, opts \\ []) do
     module = if transport == :ssl, do: :ssl, else: :inet
 
     with {:ok, local} <- module.sockname(socket),
          {:ok, remote} <- module.peername(socket) do
-      connection_owned_by_self?(local, remote, opts)
+      deadline = System.monotonic_time(:millisecond) + Keyword.get(opts, :accept_wait_ms, 1_000)
+      await_owned(local, remote, opts, deadline, 10)
     else
       _ -> :unverifiable
     end
@@ -33,6 +41,21 @@ defmodule LemonCore.LoopbackListener do
     _ -> :unverifiable
   catch
     _, _ -> :unverifiable
+  end
+
+  defp await_owned(local, remote, opts, deadline, delay) do
+    case connection_owned_by_self?(local, remote, opts) do
+      :owned ->
+        :owned
+
+      result ->
+        if System.monotonic_time(:millisecond) + delay > deadline do
+          result
+        else
+          Process.sleep(delay)
+          await_owned(local, remote, opts, deadline, min(delay * 2, 100))
+        end
+    end
   end
 
   @doc false
