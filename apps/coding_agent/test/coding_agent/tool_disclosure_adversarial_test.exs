@@ -1251,7 +1251,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
       send(first, :finish)
       assert_receive {:target_started, "second", second}, 1_000
       send(second, :finish)
-      {results, [], _context, _messages} = Task.await(runner, 5_000)
+      {results, _context, _messages} = Task.await(runner, 5_000)
       assert Enum.all?(results, &(not &1.is_error))
       LemonAgent.EventStream.complete(stream, [])
 

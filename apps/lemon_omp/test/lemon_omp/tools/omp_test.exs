@@ -137,7 +137,7 @@ defmodule LemonOmp.Tools.OmpTest do
 
     assert Task.yield(runner, 100) == nil
     assert {:ok, _} = LemonOmp.send_message(id, "finish after generic deadline", :steer)
-    {[message], _, _, _} = Task.await(runner, 2_000)
+    {[message], _, _} = Task.await(runner, 2_000)
     refute message.is_error
     assert Enum.any?(message.content, &(&1.text =~ "finish after generic deadline"))
     LemonAgent.EventStream.complete(stream, [])

@@ -15,15 +15,111 @@ defmodule CodingAgent.Tools.TaskFamilyMessagingTest do
       {:reply, CodingAgent.Tools.Task.Control.cancel_owned(id), owner}
     end
 
-    def handle_call({:steer, text, false}, _from, owner) do
+    def handle_cast({:steer, text, false, reply_to, token}, owner) do
       send(owner, {:peer_message, self(), text})
-      {:reply, :ok, owner}
+      send(reply_to, {:session_steering_reply, token, :ok})
+      {:noreply, owner}
     end
 
     def handle_cast(:abort, owner) do
       send(owner, {:peer_abort, self()})
       {:noreply, owner}
     end
+  end
+
+  defmodule DeliveryMailbox do
+    use GenServer
+    def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
+    def init(opts), do: {:ok, opts}
+
+    def handle_cast({:steer, text, false, reply_to, token}, opts) do
+      send(opts[:owner], {:delivery_entered, self(), text})
+
+      case opts[:mode] do
+        :busy ->
+          receive do
+            :accept ->
+              send(reply_to, {:session_steering_reply, token, :ok})
+              {:noreply, opts}
+          end
+
+        :exit ->
+          {:stop, :normal, opts}
+      end
+    end
+
+    def handle_cast(:abort, opts), do: {:noreply, opts}
+  end
+
+  test "a busy peer leaves Control responsive and ordered deliveries cannot overtake", %{
+    parent: parent,
+    opts: opts
+  } do
+    {busy, _, _} = child(opts, parent, "busy", false)
+    {healthy, _, _} = child(opts, parent, "healthy")
+    recipient = delivery_mailbox(:busy)
+    :ok = Control.attach_session(busy, recipient, unique_id())
+    control = Process.whereis(Control)
+
+    sending = Task.async(fn -> Control.send_message(busy, "queued while busy", opts) end)
+    assert_receive {:delivery_entered, ^recipient, _}, 1_000
+    reading = Task.async(fn -> Control.roster(opts) end)
+    assert {:ok, roster} = Task.await(reading, 1_000)
+    assert Enum.any?(roster, &(&1[:task_id] == healthy))
+    assert Process.whereis(Control) == control
+    second = Task.async(fn -> Control.send_message(busy, "second delivery", opts) end)
+
+    CodingAgent.AsyncHelpers.assert_eventually(fn ->
+      {:messages, messages} = Process.info(recipient, :messages)
+
+      Enum.any?(messages, fn
+        {:"$gen_cast", {:steer, text, false, _, _}} -> String.contains?(text, "second delivery")
+        _ -> false
+      end)
+    end)
+
+    send(recipient, :accept)
+
+    assert {:ok, %{recipients: [%{task_id: ^busy, delivery: :injected}]}} =
+             Task.await(sending, 1_000)
+
+    assert_receive {:delivery_entered, ^recipient, second_text}, 1_000
+    assert second_text =~ "second delivery"
+    send(recipient, :accept)
+
+    assert {:ok, %{recipients: [%{task_id: ^busy, delivery: :injected}]}} =
+             Task.await(second, 1_000)
+  end
+
+  test "a peer exit yields an uncertain receipt without restarting Control or retrying", %{
+    parent: parent,
+    opts: opts
+  } do
+    {exiting, _, _} = child(opts, parent, "exiting", false)
+    {healthy, healthy_pid, _} = child(opts, parent, "healthy")
+    recipient = delivery_mailbox(:exit)
+    :ok = Control.attach_session(exiting, recipient, unique_id())
+    control = Process.whereis(Control)
+
+    assert {:ok, %{recipients: receipts}} = Control.send_message("all", "deliver once", opts)
+    assert Enum.find(receipts, &(&1[:task_id] == exiting)).delivery == :outcome_unknown
+    assert Enum.find(receipts, &(&1[:task_id] == healthy)).delivery == :injected
+    assert_receive {:delivery_entered, ^recipient, _}
+    refute_receive {:delivery_entered, ^recipient, _}
+    assert message(healthy_pid)["body"] == "deliver once"
+    assert Process.whereis(Control) == control
+    assert {:ok, roster} = Control.roster(opts)
+    assert Enum.any?(roster, &(&1[:task_id] == healthy))
+    assert {:ok, _} = Control.send_message(healthy, "still registered", opts)
+    assert message(healthy_pid)["body"] == "still registered"
+  end
+
+  defp delivery_mailbox(mode) do
+    start_supervised!(%{
+      id: make_ref(),
+      start: {DeliveryMailbox, :start_link, [[owner: self(), mode: mode]]},
+      restart: :temporary
+    })
   end
 
   setup do

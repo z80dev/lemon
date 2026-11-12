@@ -116,7 +116,7 @@ defmodule LemonAgent.ToolIntentTest do
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
     context = AgentContext.new(tools: [tool], messages: [message])
 
-    {[result], [], updated, [^message, _result]} =
+    {[result], updated, [^message, _result]} =
       ToolCalls.execute_and_collect_tools(
         context,
         [message],
@@ -141,7 +141,7 @@ defmodule LemonAgent.ToolIntentTest do
     context = AgentContext.new(tools: [tool])
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
 
-    {[result], _, _, _} =
+    {[result], _, _} =
       ToolCalls.execute_and_collect_tools(context, [], [call], %AgentLoopConfig{}, nil, stream)
 
     refute result.is_error

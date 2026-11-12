@@ -781,6 +781,111 @@ defmodule LemonAgent.AgentQueueTest do
   # Steering vs Follow-up Message Interaction
   # ============================================================================
 
+  test "turn input arriving between the final steering drain and follow-up poll continues the run" do
+    owner = self()
+    signal = LemonAgent.AbortSignal.new()
+    {:ok, queue_owner} = start_agent()
+    :sys.replace_state(queue_owner, &%{&1 | abort_ref: signal})
+
+    on_exit(fn ->
+      LemonAgent.AbortSignal.clear(signal)
+      if Process.alive?(queue_owner), do: GenServer.stop(queue_owner)
+    end)
+
+    # Drive the loop against the real Agent queue handlers. Inject precisely
+    # after its last steering drain, before entering the final follow-up poll.
+    config = %LemonAgent.Types.AgentLoopConfig{
+      model: Mocks.mock_model(),
+      convert_to_llm: Mocks.simple_convert_to_llm(),
+      get_steering_messages: fn ->
+        GenServer.call(queue_owner, {:get_steering_messages, signal})
+      end,
+      get_follow_up_messages: fn ->
+        unless Process.get(:late_input_injected) do
+          Process.put(:late_input_injected, true)
+
+          :ok =
+            CoreAgent.steer(queue_owner, Mocks.user_message("Late completion"), preempt: false)
+        end
+
+        GenServer.call(queue_owner, {:get_follow_up_messages, signal})
+      end
+    }
+
+    stream_fn = fn model, context, options ->
+      send(owner, {:late_request, context.messages})
+      Mocks.mock_stream_fn_single(Mocks.assistant_message("Done")).(model, context, options)
+    end
+
+    stream =
+      LemonAgent.Loop.agent_loop(
+        [Mocks.user_message("Start")],
+        LemonAgent.Types.AgentContext.new(),
+        config,
+        signal,
+        stream_fn
+      )
+
+    events = Task.async(fn -> Enum.to_list(LemonAgent.EventStream.events(stream)) end)
+    assert_receive {:late_request, [_initial]}, 2_000
+    assert_receive {:late_request, continued}, 2_000
+
+    assert Enum.any?(
+             continued,
+             &match?(%LemonAi.Types.UserMessage{content: "Late completion"}, &1)
+           )
+
+    assert Enum.count(Task.await(events, 2_000), &match?({:agent_end, _}, &1)) == 1
+    assert :sys.get_state(queue_owner).steering_queue == []
+  end
+
+  test "a finite tool-turn budget leaves unprocessed turn input queued for the next prompt" do
+    owner = self()
+
+    tool = %LemonAgent.Types.AgentTool{
+      name: "budget_gate",
+      description: "Gates the final allowed tool batch",
+      parameters: %{"type" => "object", "properties" => %{}},
+      execute: fn _, _, _, _ ->
+        send(owner, {:budget_tool, self()})
+
+        receive do
+          :release -> %LemonAgent.Types.AgentToolResult{content: []}
+        end
+      end
+    }
+
+    batch = Mocks.assistant_message_with_tool_calls([Mocks.tool_call("budget_gate", %{})])
+    responses = Mocks.mock_stream_fn([batch, Mocks.assistant_message("Continued")])
+
+    stream_fn = fn model, context, options ->
+      send(owner, {:budget_request, context.messages})
+      responses.(model, context, options)
+    end
+
+    {:ok, agent} = start_agent(tools: [tool], max_tool_turns: 1, stream_fn: stream_fn)
+    on_exit(fn -> if Process.alive?(agent), do: GenServer.stop(agent) end)
+    :ok = CoreAgent.prompt(agent, "Start")
+    assert_receive {:budget_request, _}
+    assert_receive {:budget_tool, tool_pid}, 2_000
+    :ok = CoreAgent.steer(agent, Mocks.user_message("Deferred completion"), preempt: false)
+    send(tool_pid, :release)
+    assert :ok = CoreAgent.wait_for_idle(agent)
+    assert [%{preempt: false}] = :sys.get_state(agent).steering_queue
+    refute_receive {:budget_request, _}
+
+    assert :ok = CoreAgent.prompt(agent, "Resume")
+    assert_receive {:budget_request, continued}, 2_000
+
+    assert Enum.any?(
+             continued,
+             &match?(%LemonAi.Types.UserMessage{content: "Deferred completion"}, &1)
+           )
+
+    assert :ok = CoreAgent.wait_for_idle(agent)
+    assert :sys.get_state(agent).steering_queue == []
+  end
+
   test "human steering overtakes queued non-preempting input and still skips pending tools" do
     owner = self()
 

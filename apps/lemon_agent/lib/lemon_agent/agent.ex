@@ -866,32 +866,38 @@ defmodule LemonAgent.Agent do
 
   def handle_call({:get_follow_up_messages, abort_ref}, from, state) do
     if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
-      if state.follow_up_queue != [] do
-        {messages, new_queue} = consume_queue(state.follow_up_queue, state.follow_up_mode)
-        {:reply, messages, %{state | follow_up_queue: new_queue}}
-      else
-        # Long-poll briefly to close the race where a follow-up is enqueued right
-        # as the loop is finishing. This keeps follow-ups inside the same run.
-        poll_ref = make_ref()
+      cond do
+        state.steering_queue != [] ->
+          {messages, queue} = consume_steering_queue(state.steering_queue, state.steering_mode)
+          {:reply, messages, %{state | steering_queue: queue}}
 
-        timer_ref =
-          Process.send_after(
-            self(),
-            {:follow_up_poll_timeout, poll_ref},
-            @follow_up_poll_timeout_ms
-          )
+        state.follow_up_queue != [] ->
+          {messages, queue} = consume_queue(state.follow_up_queue, state.follow_up_mode)
+          {:reply, messages, %{state | follow_up_queue: queue}}
 
-        state = %{
-          state
-          | follow_up_poll: %{
-              from: from,
-              abort_ref: abort_ref,
-              poll_ref: poll_ref,
-              timer_ref: timer_ref
-            }
-        }
+        true ->
+          # Long-poll briefly to close the race where a follow-up is enqueued right
+          # as the loop is finishing. This keeps follow-ups inside the same run.
+          poll_ref = make_ref()
 
-        {:noreply, state}
+          timer_ref =
+            Process.send_after(
+              self(),
+              {:follow_up_poll_timeout, poll_ref},
+              @follow_up_poll_timeout_ms
+            )
+
+          state = %{
+            state
+            | follow_up_poll: %{
+                from: from,
+                abort_ref: abort_ref,
+                poll_ref: poll_ref,
+                timer_ref: timer_ref
+              }
+          }
+
+          {:noreply, state}
       end
     else
       {:reply, [], state}
@@ -1001,9 +1007,17 @@ defmodule LemonAgent.Agent do
 
   def handle_info({:follow_up_poll_timeout, poll_ref}, state) do
     case state.follow_up_poll do
-      %{poll_ref: ^poll_ref, from: from} ->
-        GenServer.reply(from, [])
-        {:noreply, %{state | follow_up_poll: nil}}
+      %{poll_ref: ^poll_ref, from: from, abort_ref: abort_ref} ->
+        state = %{state | follow_up_poll: nil}
+
+        if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
+          {messages, queue} = consume_steering_queue(state.steering_queue, state.steering_mode)
+          GenServer.reply(from, messages)
+          {:noreply, %{state | steering_queue: queue}}
+        else
+          GenServer.reply(from, [])
+          {:noreply, state}
+        end
 
       _ ->
         {:noreply, state}

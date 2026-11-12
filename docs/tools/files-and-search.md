@@ -37,11 +37,15 @@ characters and tagged untrusted. Expired TaskStore entries are unavailable.
 
 `read agent://` lists the scoped native task family, including idle and parked
 children. `write agent://<task-id-or-name>` sends peer content: running children
-receive non-preempting input after their issued tool batch (`delivery: injected`), completed live children begin
-a new turn (`woken`), and parked children reload their saved conversation
-(`revived`). Replies arrive through task async auto-delivery, not in the write
-receipt. Failed worker admission reports `failed`. Cancelled/killed children
-and removed workspaces cannot revive; their error points to `history://<id>`.
+receive non-preempting input after their issued tool batch (`delivery: injected`),
+completed live children begin a new turn (`woken`), and parked children reload
+their saved conversation (`revived`). Replies arrive through task async
+auto-delivery, not in the write receipt. Messages retain their per-recipient
+dispatch order, even while that session is busy. A proven failed delivery or
+failed worker admission reports `failed`; a recipient exit or missing
+acknowledgement after dispatch reports `outcome_unknown`, without automatic
+redelivery. Cancelled/killed children and removed workspaces cannot revive;
+their error points to `history://<id>`.
 See [native task settings](../config.md#native-task-subagents-runtimetask) for
 the idle TTL and retention rules. Each woken/revived run receives a fresh
 assistant request budget (default 200, task `request_budget` overrides it,

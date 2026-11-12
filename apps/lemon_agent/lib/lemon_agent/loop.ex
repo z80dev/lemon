@@ -452,7 +452,6 @@ defmodule LemonAgent.Loop do
         pending_messages,
         first_turn,
         _has_more_tool_calls = true,
-        _steering_after_tools = nil,
         _tool_turn_count = 0
       )
 
@@ -502,7 +501,6 @@ defmodule LemonAgent.Loop do
          pending_messages,
          _first_turn,
          false = _has_more_tool_calls,
-         _steering_after_tools,
          _tool_turn_count
        )
        when pending_messages == [] do
@@ -521,7 +519,6 @@ defmodule LemonAgent.Loop do
          pending_messages,
          first_turn,
          _has_more_tool_calls,
-         _steering_after_tools,
          tool_turn_count
        ) do
     # Emit turn_start if not first turn
@@ -611,7 +608,6 @@ defmodule LemonAgent.Loop do
                 pending_messages,
                 false,
                 false,
-                nil,
                 tool_turn_count
               )
             end
@@ -645,7 +641,7 @@ defmodule LemonAgent.Loop do
             tool_calls = get_tool_calls(message)
             has_more_tool_calls = tool_calls != []
 
-            {tool_results, steering_after_tools, context, new_messages} =
+            {tool_results, context, new_messages} =
               if has_more_tool_calls do
                 transition_loop_state(stream, :executing_tools, %{
                   tool_call_count: length(tool_calls)
@@ -667,7 +663,7 @@ defmodule LemonAgent.Loop do
                   result
                 end)
               else
-                {[], nil, context, new_messages}
+                {[], context, new_messages}
               end
 
             EventStream.push(stream, {:turn_end, message, tool_results})
@@ -678,16 +674,10 @@ defmodule LemonAgent.Loop do
             if max_tool_turns_exhausted?(config, has_more_tool_calls, tool_turn_count) do
               complete_tool_loop_budget(context, new_messages, config, stream, tool_turn_count)
             else
-              # Get steering messages after turn completes. Flag-clear-before-
-              # drain, same reasoning as in run_loop/6: when steering_after_tools
-              # is non-empty the clear already happened before ToolCalls' drain.
-              pending_messages =
-                if steering_after_tools && steering_after_tools != [] do
-                  steering_after_tools
-                else
-                  AbortSignal.clear_redirect(signal)
-                  get_steering_messages(config, signal)
-                end
+              # Consume turn input only after the continuation decision. Clear
+              # redirect before draining, for the same reason as in run_loop/6.
+              AbortSignal.clear_redirect(signal)
+              pending_messages = get_steering_messages(config, signal)
 
               if aborted?(signal) do
                 transition_loop_state(stream, :aborted, %{reason: :assistant_aborted})
@@ -705,7 +695,6 @@ defmodule LemonAgent.Loop do
                   pending_messages,
                   false,
                   has_more_tool_calls,
-                  nil,
                   tool_turn_count
                 )
               end

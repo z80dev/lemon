@@ -469,6 +469,36 @@ defmodule CodingAgent.Session do
     end
   end
 
+  @doc false
+  # Control sends ordered requests without waiting on a busy recipient. The
+  # caller owns the reply alias and waits outside Control's critical path.
+  def request_steering(session, text, reply_to) when is_pid(session) do
+    if Process.alive?(session) do
+      token = make_ref()
+      GenServer.cast(session, {:steer, text, false, reply_to, token})
+      {:pending, session, token, System.monotonic_time(:millisecond) + 5_000}
+    else
+      :failed
+    end
+  end
+
+  @doc false
+  def await_steering({:pending, session, token, deadline}) do
+    monitor = Process.monitor(session)
+    timeout = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    try do
+      receive do
+        {:session_steering_reply, ^token, :ok} -> :injected
+        {:DOWN, ^monitor, :process, ^session, _reason} -> :outcome_unknown
+      after
+        timeout -> :outcome_unknown
+      end
+    after
+      Process.demonitor(monitor, [:flush])
+    end
+  end
+
   @doc """
   Redirect the agent mid-run: cancel only the in-flight model request (keeping
   completed tool results), append this correction, and retry.
@@ -1427,6 +1457,12 @@ defmodule CodingAgent.Session do
   @impl true
   def handle_cast({:steer, text}, state) do
     {:noreply, enqueue_steering(state, text, true)}
+  end
+
+  def handle_cast({:steer, text, false, reply_to, token}, state) do
+    state = enqueue_steering(state, text, false)
+    send(reply_to, {:session_steering_reply, token, :ok})
+    {:noreply, state}
   end
 
   def handle_cast({:redirect, text}, state) do

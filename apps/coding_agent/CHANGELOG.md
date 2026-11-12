@@ -209,6 +209,9 @@
   model request without skipping calls. Human steering still preempts pending
   calls. Async completion defaults to `followup`; `steer`/`steer_backlog` also
   use non-preempting delivery rather than masquerading as human input.
+  Peer delivery acknowledgements no longer block the global task control server;
+  recipient death or timeout yields a bounded `failed`/`outcome_unknown` receipt
+  without losing family registrations or retrying uncertain delivery.
 - Named-node request decoding recognizes optional `cwdMode` and canonical
   `:cwd_mode` without crashing legacy requests that omit the field.
 - Native session ledgers, descendant scopes, and explicit run-tree budgets retain

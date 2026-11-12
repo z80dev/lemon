@@ -55,6 +55,31 @@ defmodule CodingAgent.SessionAsyncDeliveryTest do
   end
 
   @tag :tmp_dir
+  test "ordered peer requests acknowledge acceptance without preempting issued tools", %{
+    tmp_dir: cwd
+  } do
+    session = start_session(cwd)
+    :ok = Session.prompt(session, "Do the batch")
+    running = await_tools(8)
+    reply_to = :erlang.alias()
+
+    try do
+      pending = Session.request_steering(session, "Peer result", reply_to)
+      assert Session.await_steering(pending) == :injected
+      await_turn_input(session)
+    after
+      :erlang.unalias(reply_to)
+    end
+
+    release_tools(running)
+    release_tools(await_tools(2))
+    assert_receive {:model_request, 2, messages}, 2_000
+    assert Enum.count(messages, &match?(%ToolResultMessage{is_error: false}, &1)) == 10
+    assert Enum.any?(messages, &(message_text(&1) == "Peer result"))
+    assert :ok = LemonAgent.Agent.wait_for_idle(Session.get_state(session).agent)
+  end
+
+  @tag :tmp_dir
   test "human steering still skips calls that have not started", %{tmp_dir: cwd} do
     session = start_session(cwd)
     :ok = Session.prompt(session, "Do the batch")
