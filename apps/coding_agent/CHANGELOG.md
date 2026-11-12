@@ -35,6 +35,9 @@
   `agent_message`, task messaging and `write agent://` preserve uncertain
   delivery as `outcome_unknown` (not accepted), retain every recipient's outcome
   and explicitly warn against automatically resending the message.
+  Parent-question integration coverage observes that next-request delivery while
+  retaining the enqueue-acknowledgement join gate and checking issued siblings
+  finish before the question reaches the model.
 - Named-node request decoding recognizes optional `cwdMode` and canonical
   `:cwd_mode` without crashing legacy requests that omit the field.
 - Native session ledgers, descendant scopes, and explicit run-tree budgets retain

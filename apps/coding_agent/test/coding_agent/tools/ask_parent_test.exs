@@ -332,13 +332,18 @@ defmodule CodingAgent.Tools.AskParentTest do
       TaskStore.new_task(%{run_id: run_id, status: :running, description: "blocked child"})
 
     join_call = Mocks.tool_call("task", %{"action" => "join", "task_ids" => [task_id]})
+    observer = self()
 
-    stream_fn =
+    responses =
       Mocks.mock_stream_fn([
         Mocks.assistant_message_with_tool_calls([join_call]),
-        Mocks.assistant_message("The join yielded for clarification."),
         Mocks.assistant_message("I can now address the child's question.")
       ])
+
+    stream_fn = fn model, context, options ->
+      send(observer, {:join_model_context, context.messages})
+      responses.(model, context, options)
+    end
 
     {:ok, parent_session} =
       Session.start_link(
@@ -355,6 +360,7 @@ defmodule CodingAgent.Tools.AskParentTest do
     join_call_id = join_call.id
 
     :ok = Session.prompt(parent_session, "Wait for the child")
+    assert_receive {:join_model_context, _initial}, 2_000
 
     assert_receive {:session_event, _session_id,
                     {:tool_execution_start, ^join_call_id, "task", _args}},
@@ -377,6 +383,9 @@ defmodule CodingAgent.Tools.AskParentTest do
           task_id: task_id
         )
       end)
+
+    assert_receive {:join_model_context, question_context}, 2_000
+    assert Enum.any?(question_context, &(message_text(&1) =~ "Which boundary?"))
 
     assert_receive {:session_event, _session_id, {:agent_end, messages}}, 2_000
     assert Enum.any?(messages, &(message_text(&1) =~ "address the child's question"))
@@ -412,6 +421,18 @@ defmodule CodingAgent.Tools.AskParentTest do
         end
     }
 
+    sibling = %LemonAgent.Types.AgentTool{
+      name: "sibling",
+      description: "Finish the issued batch",
+      parameters: %{"type" => "object", "properties" => %{}},
+      execute: fn _id, _args, _signal, _update ->
+        send(observer, :sibling_finished)
+        %AgentToolResult{content: [%LemonAi.Types.TextContent{text: "Sibling finished"}]}
+      end
+    }
+
+    sibling_call = Mocks.tool_call("sibling", %{}, id: "question-sibling")
+
     stream_fn = fn model, context, options ->
       send(observer, {:model_request, self(), context})
 
@@ -428,7 +449,7 @@ defmodule CodingAgent.Tools.AskParentTest do
          model: Mocks.mock_model(),
          session_key: "agent:main:main",
          agent_id: "main",
-         tools: [gated_tool],
+         tools: [gated_tool, sibling],
          stream_fn: stream_fn}
       )
 
@@ -436,7 +457,12 @@ defmodule CodingAgent.Tools.AskParentTest do
     on_exit(unsubscribe)
     :ok = Session.prompt(parent_session, "Wait for the child")
     assert_receive {:model_request, first_model, _context}, 2_000
-    send(first_model, {:respond, Mocks.assistant_message_with_tool_calls([join_call])})
+
+    send(
+      first_model,
+      {:respond, Mocks.assistant_message_with_tool_calls([join_call, sibling_call])}
+    )
+
     assert_receive {:join_started, joiner}, 2_000
     agent = Session.get_state(parent_session).agent
 
@@ -473,18 +499,21 @@ defmodule CodingAgent.Tools.AskParentTest do
         assert {:error, :not_found} = ParentQuestions.waiting_for_task_ids([task_id])
         assert LemonAgent.Agent.get_state(agent).is_streaming
         refute_received {:model_request, _model, _context}
+        refute_received :sibling_finished
         {child, sender, ref, delivery}
       after
         :ok = :sys.resume(parent_session)
       end
 
     assert {:reply, :ok} = :gen_server.receive_response(delivery, 2_000)
-    assert [%{message: %{content: queued_text}}] = :sys.get_state(agent).follow_up_queue
+
+    assert [%{preempt: false, message: %{content: queued_text}}] =
+             :sys.get_state(agent).steering_queue
+
     assert queued_text =~ "Which boundary?"
     send(sender, {ref, :ok})
 
-    assert_receive {:model_request, second_model, _context}, 2_000
-    send(second_model, {:respond, Mocks.assistant_message("The join yielded for clarification.")})
+    assert_receive :sibling_finished, 2_000
 
     assert_receive {:session_event, _session_id,
                     {:tool_execution_end, _call_id, "task",
@@ -495,6 +524,12 @@ defmodule CodingAgent.Tools.AskParentTest do
 
     assert_receive {:model_request, question_model, context}, 2_000
     assert Enum.any?(context.messages, &(message_text(&1) =~ "Which boundary?"))
+
+    assert Enum.any?(
+             context.messages,
+             &match?(%{tool_call_id: "question-sibling", is_error: false}, &1)
+           )
+
     assert_receive {:session_event, _session_id, {:agent_start}}, 2_000
     refute_received {:session_event, _session_id, {:agent_end, _messages}}
     assert Session.get_state(parent_session).is_streaming
@@ -506,7 +541,7 @@ defmodule CodingAgent.Tools.AskParentTest do
 
     assert_receive {:session_event, _session_id, {:agent_end, messages}}, 2_000
     assert Enum.any?(messages, &(message_text(&1) =~ "address the child's question"))
-    assert Enum.any?(messages, &(message_text(&1) =~ "join yielded for clarification"))
+    assert Enum.count(messages, &match?(%LemonAi.Types.AssistantMessage{}, &1)) == 2
     refute_received {:session_event, _session_id, {:agent_end, _messages}}
     refute Session.get_state(parent_session).is_streaming
 

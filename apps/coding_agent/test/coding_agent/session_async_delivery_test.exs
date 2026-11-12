@@ -1,5 +1,7 @@
 defmodule CodingAgent.SessionAsyncDeliveryTest do
-  use ExUnit.Case, async: true
+  # Runner cleanup uses the application-wide SessionSupervisor, as do the
+  # request-budget tests. Keep it out of concurrent session teardown traffic.
+  use ExUnit.Case, async: false
 
   import CodingAgent.AsyncHelpers
 
@@ -134,7 +136,11 @@ defmodule CodingAgent.SessionAsyncDeliveryTest do
     assert Enum.count(messages, &match?(%ToolResultMessage{is_error: false}, &1)) == 10
     assert Enum.any?(messages, &(message_text(&1) =~ "You have reached your request budget (1)"))
     refute Enum.any?(messages, &match?(%ToolResultMessage{is_error: true}, &1))
-    assert %AgentToolResult{} = Task.await(runner, 5_000)
+
+    assert %AgentToolResult{
+             is_error: false,
+             details: %{budget_exhausted: true, request_count: 2, request_budget: 1}
+           } = Task.await(runner, 5_000)
   end
 
   defp start_session(cwd) do
