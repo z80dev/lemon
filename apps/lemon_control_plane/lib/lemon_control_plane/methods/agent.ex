@@ -17,6 +17,7 @@ defmodule LemonControlPlane.Methods.Agent do
         "queue_mode" => "collect",                    # Optional: queue mode (collect, followup, steer, interrupt)
         "cwd" => "/path/to/project",                  # Optional: working directory
         "tool_policy" => %{...},                      # Optional: tool policy overrides
+        "project_memory_capture" => false,            # Optional: skip auxiliary extraction for this invocation
         "idempotency_key" => "unique-key"             # Optional: for deduplication
       }
 
@@ -119,7 +120,8 @@ defmodule LemonControlPlane.Methods.Agent do
         {:error, Errors.invalid_params("prompt is required")}
 
       prompt when is_binary(prompt) and byte_size(prompt) > 0 ->
-        with {:ok, tool_policy} <- parse_optional_tool_policy(Map.get(params, "tool_policy")) do
+        with {:ok, tool_policy} <- parse_optional_tool_policy(Map.get(params, "tool_policy")),
+             :ok <- validate_project_memory_capture(params) do
           {:ok,
            %{
              prompt: prompt,
@@ -129,6 +131,7 @@ defmodule LemonControlPlane.Methods.Agent do
              queue_mode: parse_queue_mode(Map.get(params, "queue_mode")),
              cwd: Map.get(params, "cwd"),
              tool_policy: tool_policy,
+             project_memory_capture: Map.get(params, "project_memory_capture", true),
              idempotency_key: Map.get(params, "idempotency_key")
            }}
         end
@@ -140,6 +143,12 @@ defmodule LemonControlPlane.Methods.Agent do
 
   defp validate_params(_) do
     {:error, Errors.invalid_params("params must be an object")}
+  end
+
+  defp validate_project_memory_capture(params) do
+    if is_boolean(Map.get(params, "project_memory_capture", true)),
+      do: :ok,
+      else: {:error, Errors.invalid_params("project_memory_capture must be a boolean")}
   end
 
   defp parse_optional_tool_policy(nil), do: {:ok, nil}
@@ -211,6 +220,7 @@ defmodule LemonControlPlane.Methods.Agent do
         tool_policy: params.tool_policy,
         meta: %{
           origin: :control_plane,
+          project_memory_capture: params.project_memory_capture,
           conn_id: ctx[:conn_id],
           conn_pid: ctx[:conn_pid]
         }

@@ -1,6 +1,5 @@
 defmodule LemonCli.PrintCommand do
   @moduledoc "Non-interactive, daemon-backed coding runs with machine-readable output."
-  alias LemonCli.ControlPlaneClient, as: Client
   alias LemonCli.CLI.Error
 
   def run(args) do
@@ -8,6 +7,7 @@ defmodule LemonCli.PrintCommand do
       OptionParser.parse(args,
         strict: [
           output: :string,
+          max_time: :integer,
           model: :string,
           cwd: :string,
           session: :string,
@@ -20,6 +20,12 @@ defmodule LemonCli.PrintCommand do
 
     output = opts[:output] || "text"
     approval = opts[:approval_policy] || "deny"
+
+    max_time = opts[:max_time] || 600
+
+    if max_time <= 0 or Enum.any?(invalid, fn {key, _} -> key == "--max-time" end) do
+      raise Error, message: "--max-time must be a positive integer in seconds", exit_code: 2
+    end
 
     unless invalid == [] and output in ["text", "json", "stream-json"] and
              approval in ["deny", "allow"] do
@@ -42,7 +48,7 @@ defmodule LemonCli.PrintCommand do
     unless File.dir?(cwd),
       do: raise(Error, message: "--cwd must name an existing directory", exit_code: 2)
 
-    with :ok <- LemonCli.LocalRuntime.ensure_running(), {:ok, conn} <- Client.open() do
+    with :ok <- LemonCli.LocalRuntime.ensure_running(), {:ok, conn} <- client().open() do
       try do
         session = session(conn, opts, cwd)
         policy = %{} |> tools("allow", opts[:allowed_tools]) |> tools("deny", opts[:denied_tools])
@@ -51,17 +57,24 @@ defmodule LemonCli.PrintCommand do
           "prompt" => prompt,
           "session_key" => session,
           "cwd" => cwd,
-          "tool_policy" => policy
+          "tool_policy" => policy,
+          "project_memory_capture" => false
         }
 
         params = if opts[:model], do: Map.put(params, "model", opts[:model]), else: params
 
-        case Client.call(conn, "agent", params) do
+        case client().call(conn, "agent", params) do
           {:ok, %{"run_id" => run_id}} when is_binary(run_id) and run_id != "" ->
             emit(output, %{"type" => "init", "run_id" => run_id, "session_key" => session})
 
             result =
-              drain(conn, run_id, output, approval, System.monotonic_time(:millisecond) + 600_000)
+              drain(
+                conn,
+                run_id,
+                output,
+                approval,
+                System.monotonic_time(:millisecond) + max_time * 1_000
+              )
 
             result =
               Map.merge(result, %{
@@ -90,7 +103,7 @@ defmodule LemonCli.PrintCommand do
             failure(output, "Run submission returned no run ID")
         end
       after
-        Client.close(conn)
+        client().close(conn)
       end
     else
       _ -> failure(output, "Cannot connect to the Lemon runtime")
@@ -117,7 +130,7 @@ defmodule LemonCli.PrintCommand do
   end
 
   defp latest_session(conn, prefix, offset, best) do
-    case Client.call(conn, "sessions.list", %{
+    case client().call(conn, "sessions.list", %{
            "agentId" => "default",
            "limit" => 100,
            "offset" => offset,
@@ -156,7 +169,7 @@ defmodule LemonCli.PrintCommand do
   defp drain(conn, run_id, output, approval, deadline) do
     remaining = max(deadline - System.monotonic_time(:millisecond), 0)
 
-    case Client.next_event(conn, remaining) do
+    case client().next_event(conn, remaining) do
       {:ok, frame} ->
         payload = frame["payload"] || %{}
 
@@ -167,7 +180,7 @@ defmodule LemonCli.PrintCommand do
             frame["event"] == "exec.approval.requested" ->
               decision = if approval == "allow", do: "approve_once", else: "deny"
 
-              case Client.call(conn, "exec.approval.resolve", %{
+              case client().call(conn, "exec.approval.resolve", %{
                      "approvalId" => payload["approvalId"],
                      "decision" => decision
                    }) do
@@ -175,12 +188,12 @@ defmodule LemonCli.PrintCommand do
                   drain(conn, run_id, output, approval, deadline)
 
                 _ ->
-                  _ = Client.call(conn, "chat.abort", %{"runId" => run_id})
+                  _ = client().call(conn, "chat.abort", %{"runId" => run_id})
                   %{"ok" => false, "error" => "Could not resolve tool approval"}
               end
 
             payload["type"] == "completed" ->
-              case Client.call(conn, "agent.wait", %{"runId" => run_id, "timeoutMs" => 1000}) do
+              case client().call(conn, "agent.wait", %{"runId" => run_id, "timeoutMs" => 1000}) do
                 {:ok, result} ->
                   # agent.wait retains the internal usage detail shape. The
                   # completed event is the canonical, normalized wire projection.
@@ -205,10 +218,13 @@ defmodule LemonCli.PrintCommand do
         end
 
       {:error, reason} ->
-        _ = Client.call(conn, "chat.abort", %{"runId" => run_id})
+        _ = client().call(conn, "chat.abort", %{"runId" => run_id})
         %{"ok" => false, "error" => to_string(reason)}
     end
   end
+
+  defp client,
+    do: Application.get_env(:lemon_cli, :control_plane_client, LemonCli.ControlPlaneClient)
 
   defp emit("stream-json", event), do: IO.puts(Jason.encode!(event))
   defp emit(_, _), do: :ok

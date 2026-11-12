@@ -17,7 +17,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
   @execution_meta_keys ~w(model model_explicit thinking_level system_prompt profile_id profile_instructions
                           mcp_servers invocation_mcp_servers invocation_context_key
                           native_lineage_handle native_lineage_run_id
-                          agent_id async_followups resume_source acp_session_id
+                          agent_id async_followups resume_source acp_session_id project_memory_capture
                           acp_mcp_session_id acp_client_terminal acp_client_elicitation_form
                           acp_client_fs_read_text_file acp_client_fs_write_text_file)a
 
@@ -64,6 +64,15 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
 
   def normalize_meta(_), do: %{}
 
+  @doc false
+  def validate_project_memory_capture(meta) when is_map(meta) do
+    if is_boolean(field(meta, "project_memory_capture")) or
+         not (Map.has_key?(meta, :project_memory_capture) or
+                Map.has_key?(meta, "project_memory_capture")),
+       do: :ok,
+       else: {:error, {:invalid_request_payload, :invalid_project_memory_capture}}
+  end
+
   @spec encode(ExecutionRequest.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def encode(request, opts \\ [])
 
@@ -72,6 +81,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
     native_images = if is_nil(request.images), do: [], else: request.images
 
     with {:ok, source_meta} <- normalize_source_meta(request.meta),
+         :ok <- validate_project_memory_capture(source_meta),
          {:ok, images} <- LemonAi.ImageInputs.encode(native_images),
          {:ok, remote_context} <- ExecutionContext.for_remote(request.execution_context, cwd),
          :ok <- validate_context_run_id(remote_context, request.run_id),

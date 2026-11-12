@@ -703,6 +703,7 @@ lemon run "Fix the failing parser" --cwd ./project --model openai-codex:gpt-6.1-
   --approval-policy allow --output json | jq .
 lemon run "Continue the fix" --continue
 lemon run "Review the changes" --session agent:default:cli-SESSION
+lemon -p "Implement the migration" --max-time 1200
 ```
 
 With no prompt argument, `run` reads stdin to EOF. A prompt argument is used
@@ -718,10 +719,16 @@ result document with `ok`, `answer`, `error`, `run_id`, and `session_key`.
 `result` record. Stdout and stderr use UTF-8 even under an ASCII shell locale,
 so non-ASCII JSON strings remain valid. Startup diagnostics stay on stderr. Runs exit 0 only when the
 agent reports success; submission, connection, provider, and execution failures
-exit 1. Runs are bounded to ten minutes; timeout cancels the submitted run.
+exit 1. Runs default to a 600-second (ten-minute) limit. Set `--max-time SECONDS`
+to a positive integer to change it (for example, `1200` allows twenty minutes).
+Timeout cancels the submitted run and reports failure.
 Protocol keepalive pings keep long-running tools connected without adding records
 to stdout. A lost connection produces a failed result, not a successful fallback
 or an automatic re-submission of the prompt.
+
+Print runs read existing project memory, but skip auxiliary project-memory fact
+extraction after turns and compactions. A one-shot task does not need a maintenance
+request at teardown; interactive sessions retain their usual capture behavior.
 
 ### Token and estimated-spend stops
 
@@ -1239,6 +1246,7 @@ lemon run [PROMPT] [--output text|json|stream-json] [options]
 | `--approval-policy deny\|allow` | Deny or allow approval requests |
 | `--allowed-tools LIST` | Comma-separated tool allowlist |
 | `--denied-tools LIST` | Comma-separated tool denylist |
+| `--max-time SECONDS` | Run timeout, positive integer seconds (default 600) |
 
 ### `lemon setup`
 

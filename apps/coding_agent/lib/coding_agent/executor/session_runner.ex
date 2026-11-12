@@ -233,6 +233,7 @@ defmodule CodingAgent.Executor.SessionRunner do
         thinking_level: get_in(meta, [:thinking_level]),
         system_prompt: get_in(meta, [:system_prompt]),
         profile_instructions: get_in(meta, [:profile_instructions]),
+        project_memory_capture: Map.get(meta, :project_memory_capture, true),
         stream_fn: stream_fn,
         tool_policy: tool_policy,
         bot_folder_root: get_opt(run_opts, :bot_folder_root),

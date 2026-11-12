@@ -37,6 +37,15 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
       assert Agent.scopes() == [:write]
     end
 
+    test "project-memory capture rejects nonboolean invocation options" do
+      for invalid <- [nil, "false", 0, %{}] do
+        assert {:error, error} =
+                 Agent.handle(%{"prompt" => "hello", "project_memory_capture" => invalid}, %{})
+
+        assert inspect(error) =~ "project_memory_capture must be a boolean"
+      end
+    end
+
     test "handle/2 returns idempotent submission with prompt cleanup summary" do
       key = "agent-submit-#{System.unique_integer([:positive, :monotonic])}"
 
@@ -54,6 +63,7 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
             "agent_id" => "builder",
             "queue_mode" => "steer",
             "model" => "openai:gpt-4.1",
+            "project_memory_capture" => false,
             "idempotency_key" => key
           },
           %{}

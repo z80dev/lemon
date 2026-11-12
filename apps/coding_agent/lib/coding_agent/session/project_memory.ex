@@ -11,6 +11,8 @@ defmodule CodingAgent.Session.ProjectMemory do
   Exited workers release capacity even while registry entries await pruning.
   Input excludes tools/thinking and is redacted before truncation. Only validated
   extracted facts reach `LemonMemory.Project.capture/3`, never a transcript.
+  One-shot callers can set the session option `:project_memory_capture` to
+  `false` to skip auxiliary extraction without disabling project-memory recall.
   """
 
   alias LemonAi.Types.{AssistantMessage, Context, TextContent, UserMessage}
@@ -125,7 +127,8 @@ defmodule CodingAgent.Session.ProjectMemory do
   defp enqueue(state, input, opts) do
     context = Map.take(state, @context_keys)
 
-    with false <- input == "",
+    with true <- Map.get(state, :project_memory_capture, true) != false,
+         false <- input == "",
          {:ok, scope} <- Project.scope(context),
          key when is_binary(key) and key != "" <- Map.get(context, :session_key),
          true <- enabled?(context.cwd) do
