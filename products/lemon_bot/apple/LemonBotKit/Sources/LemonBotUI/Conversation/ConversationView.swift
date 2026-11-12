@@ -25,8 +25,8 @@ public struct ConversationView: View {
     @State private var loadedRuns: [Run] = []
     @State private var runsError: String?
     @State private var unreadFromSeq: Int?
-    @State private var atBottom = true
-    @State private var leftBottomAt = Date.distantPast
+    @State private var following = TranscriptFollow()
+    @State private var keepEntryID: ID?
     @State private var hasNewBelow = false
     @State private var settled = false
     @State private var toast: StatusToast?
@@ -155,16 +155,13 @@ public struct ConversationView: View {
         let last = entries.last
         let tail = TailSignature(rowID: rows.last?.id, revision: last?.revision ?? 0, textCount: last?.text?.count ?? 0, typing: typing)
         ScrollViewReader { proxy in
-            ScrollView {
+            trackingScroll(ScrollView {
                 LazyVStack(spacing: 0) {
                     if olderCursor != nil {
                         Button("Load older messages") {
-                            Task {
-                                let first = rows.first?.id
-                                await loadOlder()
-                                await Task.yield()
-                                if let first { proxy.scrollTo(first, anchor: .top) }
-                            }
+                            // Rows are rebuilt around the merged page (separators and tool groups change identity); keep an entry instead.
+                            let keep = rows.first { !$0.entryIDs.isEmpty }?.entryIDs.first
+                            Task { await loadOlder(keeping: keep) }
                         }.buttonStyle(.pill(.secondary, compact: true)).disabled(action.busy)
                             .frame(maxWidth: .infinity).padding(.bottom, 12)
                     }
@@ -179,8 +176,8 @@ public struct ConversationView: View {
                             .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .bottom)))
                     }
                     Color.clear.frame(height: 1).id(Self.bottomID)
-                        .onAppear { atBottom = true; hasNewBelow = false }
-                        .onDisappear { leftBottomAt = .now; atBottom = false }
+                        .onAppear { if !TranscriptFollow.tracksScrollGeometry { updateFollowing { $0.observeBottomMarker(visible: true) } } }
+                        .onDisappear { if !TranscriptFollow.tracksScrollGeometry { updateFollowing { $0.observeBottomMarker(visible: false) } } }
                 }
                 .frame(maxWidth: LBMetric.transcriptMaxWidth)
                 .padding(.horizontal, 20).padding(.top, Self.topInset)
@@ -190,27 +187,37 @@ public struct ConversationView: View {
                 .padding(.bottom, 12)
                 #endif
                 .frame(maxWidth: .infinity)
-                .animation(settled && !reduceMotion ? LBMotion.spring : nil, value: rows.map(\.id) + [typing ? "typing" : ""])
-            }
+                // Animate only arrivals at the tail; prepending older history must not slide the whole stack.
+                .animation(settled && !reduceMotion ? LBMotion.spring : nil, value: [rows.last?.id ?? "", typing ? "typing" : ""])
+            })
             #if os(iOS)
             .scrollDismissesKeyboard(.interactively)
             .onGeometryChange(for: CGFloat.self) { $0.size.height - $0.safeAreaInsets.top - $0.safeAreaInsets.bottom } action: { _ in
-                follow(proxy, animated: false, force: false)
+                follow(proxy, animated: false, newContent: false)
             }
             #endif
             .overlay(alignment: .bottom) {
-                if !atBottom && !rows.isEmpty {
+                if following.showsJumpToLatest && !rows.isEmpty {
                     JumpToLatestPill(hasNew: hasNewBelow, tint: palette) {
                         hasNewBelow = false
+                        updateFollowing { $0.pin() }
                         withAnimation(reduceMotion ? nil : LBMotion.spring) { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
                     }.padding(.bottom, 10).transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
             }
-            .lbAnimation(LBMotion.snappy, value: atBottom)
+            .lbAnimation(LBMotion.snappy, value: following.showsJumpToLatest)
             .overlay { if rows.isEmpty && !typing && !action.inFlight { emptyHint } }
             .onChange(of: tail) { old, new in
                 let mineArrived = old.rowID != new.rowID && last.map(isMine) == true
                 follow(proxy, animated: old.rowID != new.rowID || old.typing != new.typing, force: mineArrived)
+            }
+            .onChange(of: keepEntryID) { _, id in
+                guard let id else { return }
+                keepEntryID = nil
+                // Same update as the merged page: the previously first entry stays at the top instead of the view showing the new page's start.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { proxy.scrollTo(anchors[id] ?? id, anchor: .top) }
             }
             .onChange(of: jumpTick) { _, _ in
                 guard let id = jumpID else { return }
@@ -245,17 +252,41 @@ public struct ConversationView: View {
         }
     }
 
+    /// Scroll geometry and phase (iOS 18, macOS 15) tell reading history apart from content growth and keyboard resizing.
+    /// Earlier systems fall back to the lazy bottom marker.
+    @ViewBuilder private func trackingScroll(_ scroll: some View) -> some View {
+        if #available(iOS 18, macOS 15, *) {
+            scroll
+                .onScrollGeometryChange(for: TranscriptFollow.Edge.self) { TranscriptFollow.Edge($0) } action: { old, new in
+                    updateFollowing { $0.observe(from: old, to: new) }
+                }
+                .onScrollPhaseChange { _, phase in updateFollowing { $0.observeScrolling(phase.isUserDriven) } }
+        } else {
+            scroll
+        }
+    }
+
+    /// Writes follow state only when it changes; geometry reports arrive every scroll frame.
+    private func updateFollowing(_ change: (inout TranscriptFollow) -> Void) {
+        var next = following
+        change(&next)
+        if next != following { following = next }
+        if next.nearBottom && hasNewBelow { hasNewBelow = false }
+    }
+
     private func isMine(_ entry: TranscriptEntry) -> Bool {
         entry.actor.kind == "user" && (entry.actor.id == nil || entry.actor.id == store.user?.id || store.user == nil)
     }
 
-    private func follow(_ proxy: ScrollViewProxy, animated: Bool, force: Bool) {
-        let following = force || atBottom || Date().timeIntervalSince(leftBottomAt) < 0.2
-        guard following else { if settled { hasNewBelow = true }; return }
+    /// Keeps the latest message in view while the reader follows it. `force` is an intentional send and re-pins;
+    /// otherwise a reader reading history or dragging is never moved. Only new content marks "New messages".
+    private func follow(_ proxy: ScrollViewProxy, animated: Bool, force: Bool = false, newContent: Bool = true) {
+        if force { updateFollowing { $0.pin() } }
+        guard force || following.shouldFollow() else { if newContent && settled { hasNewBelow = true }; return }
         let pendingJump = jumpTick
         Task { @MainActor in
             await Task.yield()
-            guard jumpTick == pendingJump else { return }
+            guard jumpTick == pendingJump, force || following.shouldFollow() else { return }
             if animated && settled && !reduceMotion { withAnimation(LBMotion.spring) { proxy.scrollTo(Self.bottomID, anchor: .bottom) } }
             else { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
         }
@@ -477,7 +508,7 @@ public struct ConversationView: View {
         findIndex = ((min(max(findIndex, 0), matches.count - 1) + delta) % matches.count + matches.count) % matches.count
         jump(to: matches[findIndex])
     }
-    private func jump(to id: ID) { jumpID = id; jumpTick += 1 }
+    private func jump(to id: ID) { updateFollowing { $0.release() }; jumpID = id; jumpTick += 1 }
     private func focusComposer() {
         NotificationCenter.default.post(name: Notification.Name("LemonBot.focusComposer"), object: nil, userInfo: ["conversationID": conversationID])
     }
@@ -485,7 +516,8 @@ public struct ConversationView: View {
     // MARK: Loading
 
     private func open() async {
-        settled = false; atBottom = true; hasNewBelow = false; renderedReadSeq = 0; readTarget = 0; loadedRuns = []; runsError = nil
+        settled = false; hasNewBelow = false; renderedReadSeq = 0; readTarget = 0; loadedRuns = []; runsError = nil
+        updateFollowing { $0.pin() }
         if let conversation, conversation.unreadCount > 0 { unreadFromSeq = conversation.lastReadSeq + 1 } else { unreadFromSeq = nil }
         // Explicit pins avoid bottom-anchor feedback as the lazy stack refines its measured height.
         // Pin cached content before loading, including the reconnect-required early return.
@@ -552,7 +584,21 @@ public struct ConversationView: View {
         for entry in page where entry.revision >= (keyed[entry.id]?.revision ?? 0) { keyed[entry.id] = entry }
         store.entries[conversationID] = keyed.values.sorted { $0.seq < $1.seq }
     }
-    private func loadOlder() async { await action.perform { guard let olderCursor else { return }; let page: Page<TranscriptEntry> = try await store.read(resourcePath("conversations", conversationID, "/entries"), query: ["cursor": olderCursor]); merge(page.items); self.olderCursor = page.nextCursor } }
+    /// Merges the older page without animation and keeps `entryID` where the reader left it.
+    private func loadOlder(keeping entryID: ID?) async {
+        updateFollowing { $0.release() }
+        await action.perform {
+            guard let olderCursor else { return }
+            let page: Page<TranscriptEntry> = try await store.read(resourcePath("conversations", conversationID, "/entries"), query: ["cursor": olderCursor])
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                merge(page.items)
+                self.olderCursor = page.nextCursor
+                keepEntryID = entryID
+            }
+        }
+    }
 
     // MARK: Actions
 
