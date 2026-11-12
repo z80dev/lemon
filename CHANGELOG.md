@@ -50,6 +50,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   fenced before dispatch (it never ran and never will) instead of
   `outcome_unknown` forever, and run presence no longer counts such a claim as
   unknown work. Clients can now settle Stop pressed during submission.
+- Lemon Bot in the browser: Settings scrolls again on small windows, and a Bot
+  left "Working" after a restart or lost run settles on its own instead of
+  staying stuck. Tool steps finish (or show as stopped) when a run ends,
+  instead of spinning forever, and show the real tool name. Run failures say
+  what went wrong instead of a generic error. Activity names the Bot, unread
+  notices clear when read, and allowing a tool for a chat no longer counts as
+  an unknown outcome. See the
+  [Lemon Bot changelog](products/lemon_bot/backend/CHANGELOG.md) for the full
+  list.
 - Docs: [Lemon Bot in 3 minutes](https://lemon.food/getting-started/lemon-bot)
   now explains how to give Lemon Bot an HTTPS address for iPhone, another
   browser or a remote worker. That includes the controller allowlists
