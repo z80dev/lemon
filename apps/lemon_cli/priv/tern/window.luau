@@ -8,11 +8,18 @@ local function can_launch(cx)
 end
 
 local function is_lemon(pane)
-	-- Both shell terminals and native agent surfaces can host the Lemon TUI.
-	-- ACP panes are not native TUI sessions and do not publish this title prefix.
-	return (pane.kind == "terminal" or pane.kind == "agent")
-		and string.sub(pane.title, 1, #"Lemon · ") == "Lemon · "
-		and pane.exited == nil
+	-- A custom card-form session title need not contain the Lemon brand.
+	-- Program identity also handles renamed installed launchers.
+	if (pane.kind ~= "terminal" and pane.kind ~= "agent") or pane.exited ~= nil then
+		return false
+	end
+	local program = pane.program or ""
+	local basename = string.match(program, "([^/]+)$") or program
+	return basename == "lemon"
+		or basename == "lemon-tui"
+		or program == config.launcher
+		or string.sub(pane.title, 1, #"🍋 LEMON: ") == "🍋 LEMON: "
+		or string.sub(pane.title, 1, #"Lemon · ") == "Lemon · "
 end
 
 tern.command({

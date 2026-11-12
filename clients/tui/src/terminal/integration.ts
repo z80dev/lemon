@@ -1,12 +1,16 @@
 import { hostname } from "node:os";
 import { pathToFileURL } from "node:url";
+import { onNativeRenderingChange } from "@oh-my-pi/pi-tui/native/state";
 import type { Terminal } from "@oh-my-pi/pi-tui/terminal";
 import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import type { ControlPlaneClient } from "../protocol/client.ts";
+import { PROPOSE_PLAN_TOOL } from "../protocol/types.ts";
 import type { AppStore } from "../store/app-store.ts";
+import { describeAction, planTitle } from "../ui/components/approval-panel.ts";
 import { detectTerminalCapabilities, oscText, type TerminalCapabilities } from "./capabilities.ts";
+import { encodeProgramStatusMessage, sessionTerminalTitle } from "./signals.ts";
 
-/** Interactive-only side channels. Never sends prompts, answers, or tool arguments. */
+/** Interactive-only side channels; Tern status includes pending questions and action summaries. */
 export class TerminalIntegration {
 	readonly capabilities: TerminalCapabilities;
 	readonly #terminal: Terminal;
@@ -16,7 +20,7 @@ export class TerminalIntegration {
 	readonly #runs = new Set<string>();
 	readonly #approvals = new Set<string>();
 	readonly #questions = new Set<string>();
-	readonly #outcomes = new Map<string, "done" | "error" | "idle">();
+	readonly #outcomes = new Map<string, { state: "done" | "error" | "idle"; msg?: string }>();
 	readonly #cwd: string;
 	readonly #beforeStatusChange: (() => void) | undefined;
 	#updateQueued = false;
@@ -51,6 +55,13 @@ export class TerminalIntegration {
 	start(): void {
 		if (!this.capabilities.enabled || this.#disposers.length > 0) return;
 		this.#disposers.push(
+			onNativeRenderingChange((on) => {
+				if (!on || !this.capabilities.tern) return;
+				// Tern discards the old title when the first TSP surface opens.
+				// pi-tui announces native rendering after that open, including resume.
+				this.#title = "";
+				this.update();
+			}),
 			this.#store.events.on("session-changed", () => this.update()),
 			this.#store.events.on("conn-changed", () => this.update()),
 			this.#store.events.on("blocks-changed", () => this.update()),
@@ -83,10 +94,15 @@ export class TerminalIntegration {
 					this.#outcomes.delete(session);
 				}
 				if (event.type === "completed" && this.#runs.delete(event.runId)) {
-					this.#outcomes.set(
-						session,
-						event.cancelled === true ? "idle" : event.ok === false ? "error" : "done",
-					);
+					this.#outcomes.set(session, {
+						state: event.cancelled === true ? "idle" : event.ok === false ? "error" : "done",
+						msg:
+							event.ok === false && event.error != null
+								? typeof event.error === "string"
+									? event.error
+									: JSON.stringify(event.error)
+								: undefined,
+					});
 					this.#notify(
 						event.cancelled === true
 							? "Turn interrupted"
@@ -169,8 +185,11 @@ export class TerminalIntegration {
 							: "ready";
 		if (status !== this.#status) this.#beforeStatusChange?.();
 		const session = oscText(store.focusedKey);
-		const name = oscText(store.focused.title ?? store.focusedKey);
-		const title = `Lemon · ${name} · ${status}`;
+		const title = sessionTerminalTitle(
+			store.focused.title || store.focusedKey,
+			status,
+			this.capabilities.tern,
+		);
 		if (title !== this.#title) {
 			this.#terminal.setTitle(title);
 			this.#title = title;
@@ -184,6 +203,14 @@ export class TerminalIntegration {
 			this.#status = status;
 		}
 		if (this.capabilities.tern) {
+			const approval =
+				[...store.approvals.values()].find(
+					({ event }) => !event.sessionKey || event.sessionKey === store.focusedKey,
+				) ?? store.approvals.values().next().value;
+			const prompt =
+				[...store.userPrompts.values()].find((event) => event.sessionKey === store.focusedKey) ??
+				store.userPrompts.values().next().value;
+			const outcome = this.#outcomes.get(store.focusedKey);
 			const state =
 				status === "approval needed"
 					? "blocked:kind=permission"
@@ -192,9 +219,23 @@ export class TerminalIntegration {
 						: status === "working"
 							? "working"
 							: status === "ready"
-								? (this.#outcomes.get(store.focusedKey) ?? "idle")
+								? (outcome?.state ?? "idle")
 								: "idle";
-			const programStatus = `state=${state}:app=lemon`;
+			const action = approval?.event.action;
+			const message =
+				status === "approval needed"
+					? approval?.event.tool === PROPOSE_PLAN_TOOL
+						? planTitle(action)
+						: typeof action?.title === "string"
+							? action.title
+							: describeAction(action)
+					: status === "question waiting"
+						? prompt?.questions.map(({ question }) => question).join(" ")
+						: state === "error"
+							? outcome?.msg
+							: undefined;
+			const msg = encodeProgramStatusMessage(message);
+			const programStatus = `state=${state}:app=lemon${msg ? `:msg=${msg}` : ""}`;
 			if (programStatus !== this.#programStatus) {
 				this.#terminal.write(`\x1b]7501;${programStatus}\x1b\\`);
 				this.#programStatus = programStatus;
