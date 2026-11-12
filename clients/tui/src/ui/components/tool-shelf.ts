@@ -26,6 +26,7 @@
 
 import { col } from "@oh-my-pi/pi-tui/native/describe";
 import {
+	type DescribeContext,
 	leafKey,
 	type NativeChild,
 	type NativeNode,
@@ -210,15 +211,16 @@ export class ToolShelfComponent implements Component {
 	 * read group does. Cards keep their identity; a group node is rebuilt only
 	 * when one of its reads or its open state changes.
 	 */
-	describe(): NativeNode {
+	describe(context?: DescribeContext): NativeNode {
 		const runs = this.#readRuns();
-		const signature = this.#entries
+		const mediaSupported = context?.supports("media") ?? false;
+		const signature = `${mediaSupported}|${this.#entries
 			.map((card) => {
 				const run = runs.get(card);
 				if (!run) return card.block.id;
 				return `${card.block.id}@${card.getTranscriptBlockVersion()}${this.#readGroupOpen(run[0]!.block.id) ? "+" : ""}`;
 			})
-			.join("|");
+			.join("|")}`;
 		if (this.#native && this.#nativeSignature === signature) return this.#native;
 		const children: NativeChild[] = [];
 		const groups = new Map<string, { key: string; node: NativeNode }>();
@@ -231,7 +233,7 @@ export class ToolShelfComponent implements Component {
 			if (run[0] !== card) continue;
 			const firstId = card.block.id;
 			const open = this.#readGroupOpen(firstId);
-			const key = `${run.map((read) => `${read.block.id}@${read.getTranscriptBlockVersion()}`).join(",")}|${open}`;
+			const key = `${run.map((read) => `${read.block.id}@${read.getTranscriptBlockVersion()}`).join(",")}|${open}|${mediaSupported}`;
 			const cached = this.#readGroups.get(firstId);
 			const group =
 				cached?.key === key
@@ -241,6 +243,7 @@ export class ToolShelfComponent implements Component {
 							node: nativeReadGroup(
 								run.map((read) => ({ block: read.block, view: read.view })),
 								open,
+								context,
 							),
 						};
 			groups.set(firstId, group);

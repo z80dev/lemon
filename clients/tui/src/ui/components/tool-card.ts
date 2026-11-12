@@ -28,6 +28,7 @@
  */
 
 import {
+	type DescribeContext,
 	type NativeNode,
 	type NativeUiEvent,
 	rootToggleExpanded,
@@ -162,6 +163,7 @@ export class ToolCardComponent implements ToolBlockComponent {
 	#cached: readonly string[] = [];
 	#native: NativeNode | undefined;
 	#nativeVersion = -1;
+	#nativeMediaSupported = false;
 
 	constructor(block: ToolBlock, options: ToolCardOptions = {}) {
 		this.#block = block;
@@ -281,17 +283,24 @@ export class ToolCardComponent implements ToolBlockComponent {
 		return !this.#open && accordionSettings.override !== "expanded";
 	}
 
-	describe(): NativeNode {
+	describe(context?: DescribeContext): NativeNode {
 		this.#syncAnimation();
 		const version = this.getTranscriptBlockVersion();
-		if (!this.#native || this.#nativeVersion !== version) {
+		const mediaSupported = context?.supports("media") ?? false;
+		if (
+			!this.#native ||
+			this.#nativeVersion !== version ||
+			this.#nativeMediaSupported !== mediaSupported
+		) {
 			this.#native = nativeTool(
 				this.#block,
 				this.#view,
 				this.#nativeCollapsed(),
 				this.#elapsedMs(),
+				context,
 			);
 			this.#nativeVersion = version;
+			this.#nativeMediaSupported = mediaSupported;
 		}
 		return this.#native;
 	}

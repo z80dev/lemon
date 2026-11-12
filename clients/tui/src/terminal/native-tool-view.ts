@@ -17,8 +17,10 @@
  * Pure: the same block and options always describe the same view.
  */
 
+import { existsSync } from "node:fs";
 import { basename, isAbsolute, join } from "node:path";
 import { nativeDiff } from "@oh-my-pi/pi-tui/chrome/diff";
+import { nativeMediaNode } from "@oh-my-pi/pi-tui/native/blobs";
 import {
 	code,
 	col,
@@ -30,7 +32,7 @@ import {
 	span,
 	text,
 } from "@oh-my-pi/pi-tui/native/describe";
-import type { NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import type { DescribeContext, NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { getDiffStats, getDomain } from "@oh-my-pi/pi-tui/render/render-utils";
 import { type BashToolDetails, bashToolRenderer } from "@oh-my-pi/pi-tui/tools/bash";
@@ -77,6 +79,8 @@ export interface NativeToolViewOptions {
 	expanded: boolean;
 	/** Milliseconds run so far (live) or in total (settled). */
 	elapsedMs: number | undefined;
+	/** Negotiated host capabilities; absent outside native describe(). */
+	context?: DescribeContext;
 }
 
 /** Everything a per-tool view reads from one block, resolved once. */
@@ -293,6 +297,8 @@ export function nativeToolView(
 			return taskView(f);
 		case "omp":
 			return ompView(f);
+		case "browser_screenshot":
+			return screenshotView(f);
 		default:
 			return defaultView(f, view.toolName);
 	}
@@ -322,6 +328,26 @@ function defaultView(f: ToolFacts, name: string): NativeToolView {
 			? { output, isError: f.failed, skipped: f.view.state === "cancelled" }
 			: undefined;
 	return describeDefaultToolExecution({ label: toolLabel(name), args: f.args, result, options });
+}
+
+/** Only local, successful receipts can hand a path to the terminal's media viewer. */
+function mediaNode(f: ToolFacts, path: string | undefined): NativeNode | undefined {
+	if (
+		f.view.state !== "success" ||
+		!f.options.context?.supports("media") ||
+		!path ||
+		!isAbsolute(path) ||
+		!existsSync(path)
+	) {
+		return undefined;
+	}
+	return nativeMediaNode(path, `${f.block.id}:media`);
+}
+
+function screenshotView(f: ToolFacts): NativeToolView {
+	const view = defaultView(f, "browser_screenshot");
+	const media = mediaNode(f, str(f.details.path));
+	return media ? { ...view, body: [...(view.body ?? []), media] } : view;
 }
 
 // -- bash ----------------------------------------------------------------------
@@ -423,7 +449,9 @@ function readView(f: ToolFacts): NativeToolView {
 	const path = str(f.details.path) ?? str(f.args.path) ?? str(f.args.file_path);
 	const head = readHead(f, path);
 	if (f.failed) return inlineErrorView(head, failureMessage(f));
-	if (!f.settled || !f.output) return { tool: head, inline: true };
+	if (!f.settled) return { tool: head, inline: true };
+	const media = mediaNode(f, str(f.details.media_path));
+	if (!f.output) return { tool: head, inline: true, body: compact([media]) };
 	const parsed = parseRead(f.output);
 	const start = parsed.numbers?.[0] ?? num(f.details.start_line) ?? num(f.args.offset) ?? 1;
 	return {
@@ -432,6 +460,7 @@ function readView(f: ToolFacts): NativeToolView {
 		body: compact<NativeChild>([
 			...readContentCode(parsed.text, start, parsed.numbers, path),
 			footnoteText(compact([parsed.trailer])),
+			media,
 		]),
 	};
 }

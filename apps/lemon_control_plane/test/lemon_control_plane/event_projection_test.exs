@@ -84,6 +84,25 @@ defmodule LemonControlPlane.EventProjectionTest do
     assert EventProjection.tool_result(%URI{}) == %{}
   end
 
+  test "display media paths survive typed and operator result projections" do
+    result = %AgentToolResult{
+      content: [%TextContent{text: "model-visible content"}],
+      details: %{media_path: "/repo/drawing.svg", path: "/repo/drawing.svg"}
+    }
+
+    projected = EventProjection.tool_result(result)
+    assert projected["details"]["media_path"] == "/repo/drawing.svg"
+    assert projected["content"] == [%{"type" => "text", "text" => "model-visible content"}]
+
+    operator =
+      %{result: "model-visible content"}
+      |> CodingAgent.Session.Presentation.put_operator_result(result)
+      |> EventProjection.action_detail()
+
+    assert operator.details.media_path == "/repo/drawing.svg"
+    assert operator.result == "model-visible content"
+  end
+
   test "bounds JSON bytes, entries, nesting and UTF-8 without exposing a clipped credential" do
     nested = Enum.reduce(1..50, "hidden-at-depth", fn _, acc -> %{"child" => acc} end)
 
