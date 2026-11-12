@@ -38,7 +38,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 TASKS_DIR = HERE.parent / 'coding_tasks'
 IMAGES = {'base': 'lemon-arena-base', 'lemon': 'lemon-arena-lemon', 'lemon-coding': 'lemon-arena-lemon',
-          'omp': 'lemon-arena-omp'}
+          'lemon-legacy': 'lemon-arena-lemon', 'omp': 'lemon-arena-omp'}
 LANGUAGES = {'python', 'javascript', 'typescript', 'go', 'rust', 'bash', 'c', 'sql', 'mixed'}
 CATEGORIES = {'bug_fix', 'feature', 'refactor', 'debugging', 'performance', 'concurrency',
               'read_only', 'test_writing', 'migration', 'cli', 'data', 'parsing', 'api_design'}
@@ -487,9 +487,13 @@ def parse_lemon(output):
     return result
 
 
-# `lemon-coding` is Lemon with the opt-in `coding` tool-disclosure profile (see docs/config.md).
+# `lemon` runs the release defaults; `lemon-coding` and `lemon-legacy` pin the
+# tool-disclosure profile explicitly (see docs/config.md), so the pair stays a
+# distinct treatment whatever the release default is.
 AGENTS = {'lemon': (prepare_lemon, lemon_argv, parse_lemon),
           'lemon-coding': (lambda container, args, token, model: prepare_lemon(container, args, token, model, 'coding'),
+                           lemon_argv, parse_lemon),
+          'lemon-legacy': (lambda container, args, token, model: prepare_lemon(container, args, token, model, 'legacy'),
                            lemon_argv, parse_lemon),
           'omp': (prepare_omp, omp_argv, parse_omp)}
 

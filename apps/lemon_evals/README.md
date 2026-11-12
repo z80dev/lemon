@@ -375,17 +375,18 @@ Record these choices with results; do not interpret a harness comparison as a
 controlled model-only ranking.
 
 The arena supplies the isolated paired-outcome runner needed by #107:
-`--agents lemon,lemon-coding` groups both Lemon arms by task, repetition and
+`--agents lemon-legacy,lemon-coding` groups two Lemon arms that pin
+`LEMON_TOOL_DISCLOSURE_PROFILE=legacy` and `=coding` by task, repetition and
 model, with identical fixtures, late-injected verifiers and shared wire
-accounting. Adding `omp` supplies an external comparator. However, it is **not
-a drop-in replacement** for `coding_benchmark_paired.py` or the canonical
+accounting. The plain `lemon` arm runs the release defaults (since #518, the
+`auto` profile resolves to `coding` for `lemon -p`), and adding `omp` supplies
+an external comparator. However, it is **not a drop-in replacement** for
+`coding_benchmark_paired.py` or the canonical
 [paired-disclosure workflow](../../docs/benchmarks/paired-disclosure.md):
 
-- `lemon-coding` explicitly sets `LEMON_TOOL_DISCLOSURE_PROFILE=coding`;
-  `lemon` inherits the release's default. It does not explicitly pin `legacy`.
-  Once coding is the default, these arms are not distinct disclosure treatments.
-  A #107 experiment must pin and observe the baseline profile, not infer it
-  from the arm label or compare two coding arms.
+- The arms pin the profile through the environment but do not observe it: a
+  #107 experiment must still verify the effective profile per trial rather
+  than infer it from the arm label.
 - The paired runner's `paired_configuration()` pins legacy/coding, and
   `execute_trial()` verifies the observed disclosure profile. It also collects
   catalog digests, schema/discovery diagnostics and cache-write usage. Arena
