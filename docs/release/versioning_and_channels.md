@@ -79,6 +79,32 @@ remain supported for externally prepared releases. Ordinary releases should
 use the `main` dispatch so version metadata, changelog, commit, tag, artifacts,
 and container promotion stay one operation.
 
+### Local direct-tag releases
+
+Use a clean, up-to-date `main` checkout with the intended notes under
+`## [Unreleased]`. Release preparation supports stock macOS/BSD tools and Linux;
+Python 3 is required. It changes only the changelog and product version metadata,
+never commits or tags. If any preparation step fails, all touched files are
+restored to their pre-command contents, including existing local edits.
+
+```bash
+git switch main
+git pull --ff-only origin main
+scripts/prepare_product_release --auto
+VERSION=$(sed -n 's/^ *version: "\([0-9.]*\)",$/\1/p' mix.exs | head -1)
+git diff
+git add CHANGELOG.md mix.exs clients/tui/package.json \
+  clients/lemon-browser-node/package.json clients/lemon-browser-node/package-lock.json
+git commit -m "chore(release): prepare v$VERSION"
+git tag -a "v$VERSION" -m "Release v$VERSION"
+git push --atomic origin main "v$VERSION"
+```
+
+An explicit version can replace `--auto`. Review the complete cut before
+committing; the atomic push publishes the branch and annotated tag together or
+neither. Do not push the tag alone or tag a partially prepared tree.
+
+
 ## Platform tags
 
 Artifact names carry a runner-agnostic platform tag derived from `uname`:

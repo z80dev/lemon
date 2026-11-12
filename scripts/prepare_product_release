@@ -59,6 +59,45 @@ if git show-ref --verify --quiet "refs/tags/v$VERSION"; then
   exit 65
 fi
 
+# Keep this list aligned with bump_version.sh's product metadata. Snapshot the
+# working files, not HEAD, so a failed cut also preserves uncommitted edits.
+RELEASE_FILES=(
+  CHANGELOG.md
+  mix.exs
+  clients/tui/package.json
+  clients/lemon-browser-node/package.json
+  clients/lemon-browser-node/package-lock.json
+)
+BACKUP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/lemon-release.XXXXXX")"
+MUTATING=false
+cleanup() {
+  local status=$?
+  trap - EXIT
+  if [ "$status" -ne 0 ] && [ "$MUTATING" = true ]; then
+    local file
+    for file in "${RELEASE_FILES[@]}"; do
+      if [ -f "$BACKUP_DIR/$file" ]; then
+        if ! cp -p "$BACKUP_DIR/$file" "$file"; then
+          echo "ERROR: rollback failed for $file; originals retained in $BACKUP_DIR" >&2
+          exit 1
+        fi
+      fi
+    done
+  fi
+  rm -rf "$BACKUP_DIR"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+for file in "${RELEASE_FILES[@]}"; do
+  if [ -f "$file" ]; then
+    mkdir -p "$BACKUP_DIR/$(dirname "$file")"
+    cp -p "$file" "$BACKUP_DIR/$file"
+  fi
+done
+MUTATING=true
+
 python3 - "$CURRENT_VERSION" "$VERSION" CHANGELOG.md <<'PYEOF'
 import re
 import sys

@@ -46,6 +46,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Product release preparation now works with stock macOS/BSD sed and restores
+  every changed version file and the changelog if any preparation step fails.
 - The Tern palette's **Focus existing session** finds Lemon panes by program,
   not only by the old `Lemon · ` title prefix.
 - Kimi Code omp authentication fails closed at the model-request boundary,
