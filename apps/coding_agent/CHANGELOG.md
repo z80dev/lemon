@@ -212,6 +212,9 @@
   Peer delivery acknowledgements no longer block the global task control server;
   recipient death or timeout yields a bounded `failed`/`outcome_unknown` receipt
   without losing family registrations or retrying uncertain delivery.
+  `agent_message`, task messaging and `write agent://` preserve uncertain
+  delivery as `outcome_unknown` (not accepted), retain every recipient's outcome
+  and explicitly warn against automatically resending the message.
 - Named-node request decoding recognizes optional `cwdMode` and canonical
   `:cwd_mode` without crashing legacy requests that omit the field.
 - Native session ledgers, descendant scopes, and explicit run-tree budgets retain

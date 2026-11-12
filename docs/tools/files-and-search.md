@@ -44,8 +44,11 @@ auto-delivery, not in the write receipt. Messages retain their per-recipient
 dispatch order, even while that session is busy. A proven failed delivery or
 failed worker admission reports `failed`; a recipient exit or missing
 acknowledgement after dispatch reports `outcome_unknown`, without automatic
-redelivery. Cancelled/killed children and removed workspaces cannot revive;
-their error points to `history://<id>`.
+redelivery. An uncertain recipient makes the overall tool result
+`outcome_unknown`, distinct from accepted or failed; details retain each
+recipient's outcome. The message may or may not have been delivered and must
+not be resent automatically. Cancelled/killed children and removed workspaces
+cannot revive; their error points to `history://<id>`.
 See [native task settings](../config.md#native-task-subagents-runtimetask) for
 the idle TTL and retention rules. Each woken/revived run receives a fresh
 assistant request budget (default 200, task `request_budget` overrides it,

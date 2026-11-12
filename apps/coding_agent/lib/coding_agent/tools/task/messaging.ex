@@ -118,24 +118,36 @@ defmodule CodingAgent.Tools.Task.Messaging do
     case Control.send_message(target, content, opts) do
       {:ok, receipt} ->
         names = Enum.map_join(receipt.recipients, ", ", &display_name/1)
+        delivery = delivery_summary(receipt)
 
         status =
-          if Enum.any?(receipt.recipients, &(&1.delivery == :failed)),
-            do: "failed",
-            else: "accepted"
+          cond do
+            Enum.any?(receipt.recipients, &(&1.delivery == :outcome_unknown)) -> "outcome_unknown"
+            Enum.any?(receipt.recipients, &(&1.delivery == :failed)) -> "failed"
+            true -> "accepted"
+          end
+
+        notice =
+          case status do
+            "accepted" ->
+              "Peer message accepted for #{names} (#{delivery}). Replies arrive asynchronously."
+
+            "failed" ->
+              "Peer message failed for #{names} (#{delivery}). Do not automatically resend."
+
+            "outcome_unknown" ->
+              "Peer message outcome unknown for #{names} (#{delivery}). " <>
+                "The message may or may not have been delivered to recipients marked outcome_unknown. " <>
+                "Do not automatically resend."
+          end
 
         %AgentToolResult{
-          is_error: status == "failed",
-          content: [
-            %TextContent{
-              text:
-                "Peer message #{status} for #{names} (#{delivery_summary(receipt)}). Replies arrive asynchronously."
-            }
-          ],
+          is_error: status != "accepted",
+          content: [%TextContent{text: notice}],
           details:
             receipt
             |> Map.put(:status, status)
-            |> Map.put(:delivery, delivery_summary(receipt))
+            |> Map.put(:delivery, delivery)
         }
 
       {:error, reason} ->

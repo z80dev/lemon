@@ -114,6 +114,67 @@ defmodule CodingAgent.Tools.TaskFamilyMessagingTest do
     assert message(healthy_pid)["body"] == "still registered"
   end
 
+  for consumer <- [:agent_message, :task, :write] do
+    @tag :tmp_dir
+    test "#{consumer} preserves uncertain peer delivery in its tool result", %{
+      parent: parent,
+      opts: opts,
+      tmp_dir: cwd
+    } do
+      {exiting, _, _} = child(opts, parent, "exiting", false)
+      {healthy, healthy_pid, _} = child(opts, parent, "healthy")
+      recipient = delivery_mailbox(:exit)
+      :ok = Control.attach_session(exiting, recipient, unique_id())
+
+      result = send_via(unquote(consumer), cwd, opts)
+      assert %LemonAgent.Types.AgentToolResult{is_error: true} = result
+      assert result.details.status == "outcome_unknown"
+      assert length(result.details.recipients) == 2
+
+      assert Enum.find(result.details.recipients, &(&1[:task_id] == exiting)).delivery ==
+               :outcome_unknown
+
+      assert Enum.find(result.details.recipients, &(&1[:task_id] == healthy)).delivery ==
+               :injected
+
+      text = Enum.map_join(result.content, "\n", & &1.text)
+      assert text =~ "may or may not have been delivered"
+      assert text =~ "Do not automatically resend"
+      refute text =~ "Peer message accepted"
+      assert_receive {:delivery_entered, ^recipient, _}
+      refute_receive {:delivery_entered, ^recipient, _}
+      assert message(healthy_pid)["body"] == "deliver once"
+      assert File.ls!(cwd) == []
+    end
+  end
+
+  defp send_via(:agent_message, cwd, opts) do
+    tool = CodingAgent.Tools.Task.Messaging.tool(cwd, opts)
+    tool.execute.("uncertain", %{"to" => "agent://all", "message" => "deliver once"}, nil, nil)
+  end
+
+  defp send_via(:task, cwd, opts) do
+    CodingAgent.Tools.Task.execute(
+      "uncertain",
+      %{"action" => "message", "to" => "agent://all", "message" => "deliver once"},
+      nil,
+      nil,
+      cwd,
+      opts
+    )
+  end
+
+  defp send_via(:write, cwd, opts) do
+    CodingAgent.Tools.Write.execute(
+      "uncertain",
+      %{"path" => "agent://all", "content" => "deliver once"},
+      nil,
+      nil,
+      cwd,
+      opts
+    )
+  end
+
   defp delivery_mailbox(mode) do
     start_supervised!(%{
       id: make_ref(),
