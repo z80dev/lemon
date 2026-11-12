@@ -388,7 +388,7 @@ defmodule CodingAgent.Tools.Bash do
       end)
 
     executor_opts =
-      Keyword.merge(executor_opts, Keyword.take(opts, [:session_id, :session_pid]))
+      Keyword.merge(executor_opts, Keyword.take(opts, [:session_id, :session_pid, :before_start]))
 
     # Client terminals need not share the Lemon host's capture filesystem.
     {command, capture} =
@@ -431,6 +431,28 @@ defmodule CodingAgent.Tools.Bash do
               background: true,
               timed_out: true
             }
+          }
+
+        {:uncertain, id, snapshot, output} ->
+          if capture, do: Capture.detach(capture, id)
+
+          %AgentToolResult{
+            content: [
+              %TextContent{
+                text:
+                  output <>
+                    "\n\nLaunch outcome unknown for #{id}. Reconcile with bash_output; " <>
+                    "do not rerun the command."
+              }
+            ],
+            details: %{
+              process_id: id,
+              status: snapshot.status,
+              classification: :outcome_unknown,
+              exit_code: nil,
+              background: true
+            },
+            is_error: true
           }
 
         {:error, reason} ->

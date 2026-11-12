@@ -842,12 +842,15 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     end
 
     test "high contention does not cause race conditions" do
-      # Start and stop many sessions rapidly with high concurrency
+      parent = self()
+
+      # Admit the whole wave before releasing concurrent stop operations.
       tasks =
         for i <- 1..50 do
           async(fn ->
             {:ok, pid} = start_test_session()
-            Process.sleep(:rand.uniform(10))
+            send(parent, {:ready_to_contend, self()})
+            receive do: (:contend -> :ok)
 
             if rem(i, 2) == 0 do
               SessionSupervisor.stop_session(pid)
@@ -857,6 +860,14 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
             end
           end)
         end
+
+      ready =
+        for _ <- tasks do
+          assert_receive {:ready_to_contend, task_pid}, 10_000
+          task_pid
+        end
+
+      Enum.each(ready, &send(&1, :contend))
 
       results = Task.await_many(tasks, 60_000)
 
@@ -1100,9 +1111,15 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
   describe "stress tests" do
     @tag :stress
     test "can handle rapid session lifecycle operations" do
-      for _ <- 1..100 do
+      # Exercise repeated cleanup, not a 100-session wall-clock benchmark.
+      for _ <- 1..20 do
         {:ok, pid} = start_test_session()
+        state = Session.get_state(pid)
+        agent_ref = Process.monitor(state.agent)
         :ok = SessionSupervisor.stop_session(pid)
+        assert_receive {:DOWN, ^agent_ref, :process, _, _}, 5_000
+        assert :ok = wait_for_registry_cleanup(state.session_manager.header.id)
+        assert SessionSupervisor.list_sessions() == []
       end
 
       # Supervisor should still be functional
