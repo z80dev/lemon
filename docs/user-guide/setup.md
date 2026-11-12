@@ -418,7 +418,7 @@ are unchanged.
 
 A source checkout is for development, unsupported platforms, and release work.
 Only this path needs the development toolchain (Elixir 1.20.5+, Erlang/OTP
-29.1.2+, Bun 1.3.14+, and Node.js 24 LTS+ for the web client); see
+29.1.2+, Bun 1.4.4+, and Node.js 24 LTS+ for the web client); see
 [Install: source development](../install.md#source-development).
 
 ```bash

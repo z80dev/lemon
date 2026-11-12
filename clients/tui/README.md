@@ -683,7 +683,7 @@ still controls the shared connection.
 
 ## Development
 
-Requires Bun >= 1.3.14 (pinned in `.bun-version`).
+Requires Bun >= 1.4.4 (pinned in `.bun-version`; the pi packages require it).
 
 ```sh
 bun install               # exact-pinned @oh-my-pi/{pi-tui,pi-utils,pi-natives}
@@ -794,7 +794,7 @@ and keep to the house rules: return the same array reference from
 still change; animate via `requestComponentRender` only; `initTheme()`
 before constructing any component.
 
-All three pi packages are pinned to 18.10.3. The product frame provider owns the
+All three pi packages are pinned to 18.18.9. The product frame provider owns the
 row renderer's main/dock split and semantic retirement; Tern's native backend
 uses `describeSurface()` and the same component tree. Native descriptions must
 retain stable node references while unchanged. Chat roles `omp.user`,

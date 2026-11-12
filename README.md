@@ -290,7 +290,7 @@ See [LemonSim](apps/lemon_sim/README.md) and the
 ## Develop from source
 
 Source development requires Erlang/OTP 29.1.2+, Elixir 1.20.5+, and a C
-toolchain. JavaScript toolchains are pinned per subtree: Bun 1.3.14+ for
+toolchain. JavaScript toolchains are pinned per subtree: Bun 1.4.4+ for
 `clients/tui`, Bun 1.4.2 for `products/lemon_bot`, and Node.js 24 LTS+ for the
 browser client and documentation.
 

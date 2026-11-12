@@ -326,7 +326,7 @@ Use a source checkout to develop Lemon, run on an unsupported platform, or build
 release artifacts. These requirements apply only to source installs:
 
 - Elixir 1.20.5+ and Erlang/OTP 29.1.2+
-- Bun 1.3.14+ for the terminal client
+- Bun 1.4.4+ for the terminal client
 - Node.js 24 LTS+ for the browser client and this documentation site
 
 ```bash

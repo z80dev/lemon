@@ -41,6 +41,18 @@ That setting only decides whether typing Tern's built-in agent CLIs (`claude`,
 versions turned it on; turn it off in **Settings → Agents** if you prefer those
 CLIs' own interfaces.
 
+To make Tern's **New agent block** open Lemon's TUI instead of omp, opt in:
+
+```bash
+lemon tern install --agent-block
+```
+
+This sets Tern's `agent_command` to the same quoted launcher the palette plugin
+uses (`'/path/to/lemon' tui`), so agent blocks get Tern's Agent chip and Carly
+can find and prompt them. Without the flag an existing `agent_command` is left
+as is. Revert in **Settings → Agents**, or remove `agent_command` from
+`settings.json` to restore Tern's default.
+
 ## Native ACP chat
 
 After registration, open Lemon as a Tern-rendered ACP chat with:
@@ -88,6 +100,15 @@ For an explicit command, use `tern open --split right path/to/file:42`.
 
 Use `/name <title>` to name a conversation. Its saved name is restored on the next
 launch and appears in the Tern pane title and the plugin's session picker.
+
+In Tern the pane title is a card, the form Tern heads parked panes with:
+`🍋 LEMON: <session name or key>`. A card-form name such as
+`/name 🧪 FLAKY: Fix flaky tests` (an emoji or other non-ASCII icon, a code of
+one to six capitals or digits, a colon) is kept as the pane's own card. Run
+state is not repeated in the title: Lemon reports it through Tern's program
+status (OSC 7501), and approval, question and failure states carry a one-line
+summary of the pending action, question or error for Tern's inbox and banners.
+Other terminals keep the `Lemon · <name> · <status>` title.
 
 ## Manual registration
 
