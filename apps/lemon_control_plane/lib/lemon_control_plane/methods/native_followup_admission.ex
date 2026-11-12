@@ -51,25 +51,24 @@ defmodule LemonControlPlane.Methods.ProfileFollowupAdmissionGet do
   def scopes, do: [:admin]
 
   @impl true
-  def handle(params, _ctx) do
-    with %{"profileId" => profile_id} when map_size(params) == 1 <- params do
-      case NativeFollowupAdmission.receipt(profile_id) do
-        {:ok, receipt} ->
-          {:ok, receipt}
+  def handle(%{"profileId" => profile_id} = params, _ctx) when map_size(params) == 1 do
+    case NativeFollowupAdmission.receipt(profile_id) do
+      {:ok, receipt} ->
+        {:ok, receipt}
 
-        {:error, :profile_not_found} ->
-          {:error, Errors.error(:not_found, "Profile not found")}
+      {:error, :profile_not_found} ->
+        {:error, Errors.error(:not_found, "Profile not found")}
 
-        {:error, :invalid_request} ->
-          {:error, Errors.invalid_request("Invalid follow-up admission profile")}
+      {:error, :invalid_request} ->
+        {:error, Errors.invalid_request("Invalid follow-up admission profile")}
 
-        {:error, _} ->
-          {:error, Errors.error(:unavailable, "Follow-up admission receipt unavailable")}
-      end
-    else
-      _ -> {:error, Errors.invalid_request("Invalid follow-up admission profile")}
+      {:error, _} ->
+        {:error, Errors.error(:unavailable, "Follow-up admission receipt unavailable")}
     end
   end
+
+  def handle(_params, _ctx),
+    do: {:error, Errors.invalid_request("Invalid follow-up admission profile")}
 end
 
 defmodule LemonControlPlane.Methods.AdmissionErrors do
