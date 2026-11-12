@@ -616,6 +616,109 @@ defmodule LemonAi.ErrorProviderTest do
       assert Error.suggested_retry_delay_from_error(result) == 3_500
     end
 
+    test "Google minute quotas and ambiguous quota messages remain transient across boundaries" do
+      for message <- [
+            "Quota exhausted for this project",
+            "You exceeded your current quota, please check your plan and billing details.",
+            "Quota exceeded for requests per minute"
+          ],
+          quota_id <- [nil, "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"],
+          status <- [400, 429] do
+        body = %{
+          "error" => %{
+            "message" => message,
+            "status" => "RESOURCE_EXHAUSTED",
+            "details" => [
+              %{
+                "@type" => "type.googleapis.com/google.rpc.QuotaFailure",
+                "violations" => if(quota_id, do: [%{"quotaId" => quota_id}], else: [])
+              },
+              %{
+                "@type" => "type.googleapis.com/google.rpc.RetryInfo",
+                "retryDelay" => "3.5s"
+              }
+            ]
+          }
+        }
+
+        for encoded_body <- [body, Jason.encode!(body)] do
+          result = Error.parse_http_error(status, encoded_body)
+
+          assert result.category == :rate_limit
+          assert result.retryable
+          assert Error.retryable?(result)
+          assert Error.retryable?(result.message)
+          assert Error.retryable?(Jason.decode!(Jason.encode!(result)))
+          refute Error.quota_exhausted?(result)
+          assert result.rate_limit_info.retry_after == 3_500
+        end
+      end
+    end
+
+    test "Google daily QuotaFailure overrides RetryInfo even alongside a minute violation" do
+      body = %{
+        "error" => %{
+          "message" => "Quota exceeded for quota metric",
+          "status" => "RESOURCE_EXHAUSTED",
+          "details" => [
+            %{
+              "@type" => "type.googleapis.com/google.rpc.RetryInfo",
+              "retryDelay" => "3.5s"
+            },
+            %{
+              "@type" => "type.googleapis.com/google.rpc.QuotaFailure",
+              "violations" => [
+                %{"quotaId" => "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"},
+                %{"quotaId" => "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}
+              ]
+            }
+          ]
+        }
+      }
+
+      for status <- [400, 429], encoded_body <- [body, Jason.encode!(body)] do
+        result = Error.parse_http_error(status, encoded_body, [{"retry-after", "5"}])
+
+        assert result.category == :rate_limit
+        refute result.retryable
+        refute Error.retryable?(result)
+        refute Error.retryable?(result.message)
+        refute Error.retryable?(Jason.decode!(Jason.encode!(result)))
+        assert Error.quota_exhausted?(result)
+        assert result.provider_message =~ "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+        assert result.rate_limit_info.retry_after == 5_000
+      end
+    end
+
+    test "Google explicit billing and plan exhaustion still fail fast despite RetryInfo" do
+      for message <- [
+            "Billing quota exhausted",
+            "Plan quota exceeded",
+            "Insufficient credits",
+            "Daily quota exhausted"
+          ] do
+        body = %{
+          "error" => %{
+            "message" => message,
+            "status" => "RESOURCE_EXHAUSTED",
+            "details" => [
+              %{
+                "@type" => "type.googleapis.com/google.rpc.RetryInfo",
+                "retryDelay" => "2s"
+              }
+            ]
+          }
+        }
+
+        result = Error.parse_http_error(429, body)
+        assert result.category == :rate_limit
+        refute result.retryable
+        refute Error.retryable?(result.message)
+        assert Error.quota_exhausted?(result)
+        assert result.rate_limit_info.retry_after == 2_000
+      end
+    end
+
     test "retry-after header takes precedence over Google RetryInfo body" do
       body = %{
         "error" => %{
@@ -656,7 +759,7 @@ defmodule LemonAi.ErrorProviderTest do
       result = Error.parse_http_error(400, body, [])
 
       assert result.category == :rate_limit
-      assert result.retryable == false
+      assert result.retryable == true
       assert result.rate_limit_info.retry_after == 2_000
     end
   end

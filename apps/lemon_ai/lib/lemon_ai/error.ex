@@ -15,6 +15,8 @@ defmodule LemonAi.Error do
   must not contribute to the provider-wide circuit breaker.
   Account quota/credit/spend exhaustion is classified as `:rate_limit` for
   credential failover, but is not retryable against the same credential.
+  Google `RESOURCE_EXHAUSTED` is throttling unless the body positively identifies
+  a persistent quota (such as a per-day QuotaFailure or exhausted billing/plan).
   Retry timing metadata is a hint, not permission to retry.
   Free-form classification and structured marker scans inspect at most 8,192
   characters; context/transport phrases use bounded gaps to avoid regex exhaustion.
@@ -824,20 +826,24 @@ defmodule LemonAi.Error do
     transient_interval? =
       Regex.match?(~r/per[ _](?:second|minute)|requests?\/min|tokens?\/min/i, message)
 
+    google_resource_exhausted? = Regex.match?(~r/resource[ _]exhausted/i, message)
+
     dashscope_throttle? =
       String.contains?(message, "#token-limit") and
         String.contains?(String.downcase(message), "you exceeded your current quota")
 
     not dashscope_throttle? and
       (Regex.match?(
-         ~r/insufficient_quota|quota_exhausted|usage_limit_reached|usage_not_included|insufficient_g1_credits_balance|spend(?:ing)?[ _-]limit|monthly spend|(?:insufficient|not enough|out of|run out of|exceed.{0,40}available)[ _]credits?|credits?.{0,40}(?:exhausted|depleted)|insufficient[ _]balance|quota will reset|exhausted your capacity|(?:hit|reached) your .{0,80}usage limit|(?:daily|weekly|monthly|5.hour).{0,80}(?:quota|usage limit)|quota.{0,40}(?:exhausted|depleted)|(?:额度|配额)已?(?:用|耗)(?:完|尽)|余额不足/i,
+         ~r/insufficient_quota|quota_exhausted|usage_limit_reached|usage_not_included|insufficient_g1_credits_balance|spend(?:ing)?[ _-]limit|monthly spend|(?:insufficient|not enough|out of|run out of|exceed.{0,40}available)[ _]credits?|credits?.{0,40}(?:exhausted|depleted)|insufficient[ _]balance|exhausted your capacity|(?:hit|reached) your .{0,80}usage limit|(?:daily|weekly|monthly|5.hour).{0,80}(?:quota|usage limit)|(?:billing|(?:subscription|plan)[ _](?:quota|limit|credits?)).{0,40}(?:exhausted|depleted|exceeded)|(?:额度|配额)已?(?:用|耗)(?:完|尽)|余额不足/i,
          message
        ) or
-         (not transient_interval? and
-            Regex.match?(
-              ~r/account(?:'s)?.{0,80}rate.?limit|rate.?limit.{0,80}account|(?:subscription|plan|membership).{0,80}(?:quota|cap|rate.?limit)|quota.{0,40}exceeded|exceeded your current quota/i,
-              message
-            )))
+         (not google_resource_exhausted? and
+            (Regex.match?(~r/quota will reset|quota.{0,40}(?:exhausted|depleted)/i, message) or
+               (not transient_interval? and
+                  Regex.match?(
+                    ~r/account(?:'s)?.{0,80}rate.?limit|rate.?limit.{0,80}account|(?:subscription|plan|membership).{0,80}(?:quota|cap|rate.?limit)|quota.{0,40}exceeded|exceeded your current quota/i,
+                    message
+                  )))))
   end
 
   defp quota_exhausted_message?(_), do: false
@@ -868,6 +874,23 @@ defmodule LemonAi.Error do
     end
   end
 
+  defp find_error_marker(%{
+         "@type" => "type.googleapis.com/google.rpc.QuotaFailure",
+         "violations" => violations
+       })
+       when is_list(violations) do
+    Enum.find_value(violations, fn
+      %{"quotaId" => quota_id} when is_binary(quota_id) ->
+        quota_id = truncate_message(quota_id, 8_192)
+
+        if Regex.match?(~r/per[ _-]?day|daily/i, quota_id),
+          do: "Daily quota exhausted (#{quota_id})"
+
+      _ ->
+        nil
+    end)
+  end
+
   defp find_error_marker(body) when is_map(body) do
     Enum.find_value(["code", "type", "reason"], fn key ->
       value =
@@ -880,7 +903,8 @@ defmodule LemonAi.Error do
            (quota_exhausted_message?(value) or context_length_error_string?(nil, value) or
               auth_message?(value)),
          do: value
-    end) || Enum.find_value(Map.values(body), &find_error_marker/1)
+    end) || Enum.find_value(Map.values(body), &find_error_marker/1) ||
+      if(body["status"] == "RESOURCE_EXHAUSTED", do: "RESOURCE_EXHAUSTED")
   end
 
   defp find_error_marker(body) when is_list(body), do: Enum.find_value(body, &find_error_marker/1)

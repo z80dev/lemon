@@ -41,6 +41,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   `Retry-After` and structured body hints with a 10-second minimum plus jitter.
   Kimi quota exhaustion and Codex usage limits stop retries immediately and
   surface provider reset timestamps. Stream idle timeouts are transient.
+- Google `RESOURCE_EXHAUSTED` quota responses remain retryable within the shared
+  retry budget, honoring `RetryInfo`/`Retry-After` and the throttle floor. Only
+  positive persistent-quota evidence, including per-day `QuotaFailure` violations
+  or explicit billing/plan exhaustion, stops retries immediately.
 - Anthropic requests use the full declared output-token budget instead of one
   third, preserving explicit limits. Older first-party Claude catalog models add
   the context-window-overflow beta alongside existing OAuth/effort/caller betas;

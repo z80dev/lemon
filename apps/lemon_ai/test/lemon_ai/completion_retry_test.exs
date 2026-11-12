@@ -151,6 +151,44 @@ defmodule LemonAi.CompletionRetryTest do
     refute_received {:sleep, _}
   end
 
+  test "Google RESOURCE_EXHAUSTED shares the completion budget and honors RetryInfo" do
+    for {retry_delay, expected_delay} <- [{"3.5s", 10_500}, {"20s", 20_000}] do
+      error =
+        {:http_error, 429,
+         %{
+           "error" => %{
+             "status" => "RESOURCE_EXHAUSTED",
+             "message" => "Quota exceeded for quota metric",
+             "details" => [
+               %{
+                 "@type" => "type.googleapis.com/google.rpc.RetryInfo",
+                 "retryDelay" => retry_delay
+               }
+             ]
+           }
+         }}
+
+      {model, context, options} =
+        invocation([{:request_error, error}], :oneshot_google_budget_test)
+
+      options = %{
+        options
+        | retry:
+            Keyword.merge(options.retry,
+              max_attempts: 3,
+              jitter_fun: fn 5_000 -> 500 end
+            )
+      }
+
+      assert LemonAi.complete(model, context, options) == {:error, error}
+
+      for _ <- 1..3, do: assert_receive(:http_request)
+      refute_received :http_request
+      for _ <- 1..2, do: assert_receive({:sleep, ^expected_delay})
+      refute_received {:sleep, _}
+    end
+  end
+
   test "public complete does not retry a nonretryable 400" do
     error = {:http_error, 400, "Invalid request"}
     {model, context, options} = invocation([{:request_error, error}], :oneshot_client_test)
