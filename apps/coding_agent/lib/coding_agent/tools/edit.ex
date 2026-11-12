@@ -80,28 +80,39 @@ defmodule CodingAgent.Tools.Edit do
           "every edit uses the ORIGINAL read snapshot. operation is replace (default), insert_before, " <>
           "insert_after, or delete. No old text is needed, including for lines omitted from read. " <>
           "Stale refusals include a fresh snapshot and current context for retry. " <>
-          "Alternatively supply only unique old_text and new_text for text matching; never mix modes.",
+          "Alternatively use mode=text with only old_text and new_text; mode=anchored uses only snapshot and edits. Never mix these fields.",
       label: "Edit File",
       parameters: %{
         "type" => "object",
         "properties" => %{
           "path" => %{"type" => "string", "description" => "The path to the file to edit"},
+          "mode" => %{
+            "type" => "string",
+            "enum" => ["anchored", "text"],
+            "description" =>
+              "Choose anchored (snapshot + edits; omit old_text/new_text) or text (old_text + new_text; omit snapshot/edits). Inferred when omitted."
+          },
           "old_text" => %{
             "type" => "string",
-            "description" => "The exact text to find and replace (must be unique in the file)"
+            "description" =>
+              "Text mode only: unique text to replace. Omit in anchored mode; never combine with snapshot/edits."
           },
-          "new_text" => %{"type" => "string", "description" => "The replacement text"},
+          "new_text" => %{
+            "type" => "string",
+            "description" =>
+              "Text mode only: replacement text. In anchored mode omit this top-level field and put new_text inside each edit."
+          },
           "snapshot" => %{
             "type" => "string",
             "description" =>
-              "The 16-character file tag from read, optionally copied as [path#TAG] or [TAG]"
+              "Anchored mode only: the 16-character tag, [TAG], or [path#TAG] naming this target. Omit old_text and top-level new_text."
           },
           "edits" => %{
             "type" => "array",
             "minItems" => 1,
             "maxItems" => 100,
             "description" =>
-              "Non-overlapping edits using original read line numbers. Replacement/insertion new_text contains whole lines; a final newline is optional. Original file line endings/final newline are preserved.",
+              "Anchored mode only: non-overlapping original line edits. Omit top-level old_text/new_text; each edit contains its own whole-line new_text. A final newline is optional.",
             "items" => %{
               "type" => "object",
               "properties" => %{
@@ -136,17 +147,7 @@ defmodule CodingAgent.Tools.Edit do
               "Whether to run language diagnostics after editing and report newly introduced issues"
           }
         },
-        "required" => ["path"],
-        "oneOf" => [
-          %{
-            "required" => ["snapshot", "edits"],
-            "not" => %{"anyOf" => [%{"required" => ["old_text"]}, %{"required" => ["new_text"]}]}
-          },
-          %{
-            "required" => ["old_text", "new_text"],
-            "not" => %{"anyOf" => [%{"required" => ["snapshot"]}, %{"required" => ["edits"]}]}
-          }
-        ]
+        "required" => ["path"]
       },
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
@@ -174,7 +175,8 @@ defmodule CodingAgent.Tools.Edit do
       # Parameter validation
       result =
         with :ok <- validate_required_param(path, "path"),
-             {:ok, edit_spec} <- build_edit_spec(params),
+             :ok <- validate_edit_mode(params),
+             {:ok, edit_spec} <- build_edit_spec(params, cwd, opts),
              {:ok, diagnostics?} <- LspDiagnostics.option(params, opts),
              {:ok, format?} <- LspFormatter.option(params, opts) do
           do_execute(
@@ -249,12 +251,13 @@ defmodule CodingAgent.Tools.Edit do
     baseline = LspDiagnostics.baseline(resolved_path, cwd, diagnostics?, opts)
 
     with :ok <- check_aborted(signal),
+         {:ok, identity} <- FileValidation.regular_file_identity(resolved_path, opts),
          :ok <-
            FileValidation.check_mutation_target(
              resolved_path,
              Keyword.put(opts, :mutation_root, cwd)
            ),
-         {:ok, raw_content} <- File.read(resolved_path),
+         {:ok, raw_content} <- FileValidation.read_regular_file(resolved_path, identity),
          :ok <- FileValidation.check_text_content(raw_content, path),
          :ok <- check_read_tracker(opts, resolved_path, raw_content, edit_spec),
          {bom, content} <- FileFormatHelpers.strip_bom(raw_content),
@@ -271,8 +274,8 @@ defmodule CodingAgent.Tools.Edit do
              action: "replace",
              path: resolved_path
            }),
-         :ok <- verify_source_unchanged(resolved_path, raw_content, opts, edit_spec),
-         :ok <- File.write(resolved_path, final_content) do
+         :ok <- verify_source_unchanged(resolved_path, identity, raw_content, opts, edit_spec),
+         :ok <- FileValidation.write_regular_file(resolved_path, identity, final_content) do
       {formatted, format_error} =
         LspFormatter.after_write(resolved_path, Keyword.get(opts, :format, false), cwd, opts)
 
@@ -313,13 +316,15 @@ defmodule CodingAgent.Tools.Edit do
     end
   end
 
-  defp build_edit_spec(params) do
-    if not is_nil(params["snapshot"]) or not is_nil(params["edits"]) do
+  defp build_edit_spec(params, cwd, opts) do
+    if params["mode"] == "anchored" or not is_nil(params["snapshot"]) or
+         not is_nil(params["edits"]) do
       if not is_nil(params["old_text"]) or not is_nil(params["new_text"]) do
         {:error,
-         "Choose snapshot + edits OR old_text + new_text; anchored replacements put new_text inside each edit."}
+         "Choose one edit mode: drop top-level old_text and new_text for anchored edits; put new_text inside each edit. For text mode, drop snapshot and edits."}
       else
-        with {:ok, tag} <- AnchoredEdit.normalize_snapshot(params["snapshot"]),
+        with {:ok, tag, header_path} <- AnchoredEdit.normalize_snapshot(params["snapshot"]),
+             :ok <- validate_snapshot_path(header_path, params["path"], cwd, opts),
              :ok <- AnchoredEdit.validate(tag, params["edits"]) do
           {:ok, {:anchored, tag, params["edits"]}}
         end
@@ -330,6 +335,38 @@ defmodule CodingAgent.Tools.Edit do
            :ok <- validate_old_text(params["old_text"]) do
         {:ok, {:text, params["old_text"], params["new_text"]}}
       end
+    end
+  end
+
+  defp validate_snapshot_path(nil, _target, _cwd, _opts), do: :ok
+
+  defp validate_snapshot_path(header, target, cwd, opts) do
+    if resolve_path(header, cwd, opts) == resolve_path(target, cwd, opts),
+      do: :ok,
+      else:
+        {:error,
+         "Snapshot header path does not name the requested target; use that target's [path#TAG] header or a bare tag."}
+  end
+
+  defp validate_edit_mode(params) do
+    case params["mode"] do
+      nil ->
+        :ok
+
+      "anchored" ->
+        if not is_nil(params["old_text"]) or not is_nil(params["new_text"]),
+          do:
+            {:error,
+             "mode=anchored: drop top-level old_text and new_text; put new_text inside each edit."},
+          else: :ok
+
+      "text" ->
+        if not is_nil(params["snapshot"]) or not is_nil(params["edits"]),
+          do: {:error, "mode=text: drop snapshot and edits; supply only old_text and new_text."},
+          else: :ok
+
+      _ ->
+        {:error, "mode must be anchored or text"}
     end
   end
 
@@ -352,8 +389,8 @@ defmodule CodingAgent.Tools.Edit do
     end
   end
 
-  defp verify_source_unchanged(path, expected, opts, spec) do
-    case File.read(path) do
+  defp verify_source_unchanged(path, identity, expected, opts, spec) do
+    case FileValidation.read_regular_file(path, identity) do
       {:ok, ^expected} ->
         :ok
 

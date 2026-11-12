@@ -1012,6 +1012,7 @@ defmodule CodingAgent.Tools.Patch do
        original_content: nil,
        new_content: content,
        mode: nil,
+       identity: nil,
        additions: count_lines(content),
        removals: 0
      }}
@@ -1020,7 +1021,7 @@ defmodule CodingAgent.Tools.Patch do
   defp prepare_operation(%{type: :delete, path: path} = operation, cwd, signal, opts) do
     source = resolve_path(path, cwd)
 
-    with {:ok, content, mode} <- source_data(source, opts, []),
+    with {:ok, content, mode, identity} <- source_data(source, opts, []),
          :ok <- validate_deleted_content(content, operation, signal) do
       {:ok,
        %{
@@ -1030,6 +1031,7 @@ defmodule CodingAgent.Tools.Patch do
          original_content: content,
          new_content: nil,
          mode: mode,
+         identity: identity,
          additions: 0,
          removals: count_lines(content)
        }}
@@ -1049,7 +1051,7 @@ defmodule CodingAgent.Tools.Patch do
 
     needles = for hunk <- hunks, change <- hunk.changes, change.type != :add, do: change.content
 
-    with {:ok, content, mode} <- source_data(source, opts, needles),
+    with {:ok, content, mode, identity} <- source_data(source, opts, needles),
          {:ok, new_content, additions, removals} <- apply_hunks(content, hunks, signal) do
       {:ok,
        %{
@@ -1059,6 +1061,7 @@ defmodule CodingAgent.Tools.Patch do
          original_content: content,
          new_content: new_content,
          mode: mode,
+         identity: identity,
          additions: additions,
          removals: removals
        }}
@@ -1083,13 +1086,13 @@ defmodule CodingAgent.Tools.Patch do
         {:error, :enoent}
 
       {:ok, %{content: content, mode: mode}} ->
-        {:ok, content, mode}
+        {:ok, content, mode, nil}
 
       :error ->
-        with {:ok, content} <- safe_read_file(path),
-             :ok <- check_source_snapshot(path, content, opts, needles),
-             {:ok, stat} <- File.stat(path) do
-          {:ok, content, stat.mode}
+        with {:ok, identity} <- FileValidation.regular_file_identity(path, opts),
+             {:ok, content} <- FileValidation.read_regular_file(path, identity),
+             :ok <- check_source_snapshot(path, content, opts, needles) do
+          {:ok, content, identity.mode, identity}
         end
     end
   end
@@ -1124,8 +1127,11 @@ defmodule CodingAgent.Tools.Patch do
 
   defp verify_prepared_operation(prepared, opts), do: verify_source_unchanged(prepared, opts)
 
-  defp verify_source_unchanged(%{source: source, original_content: expected}, opts) do
-    case File.read(source) do
+  defp verify_source_unchanged(
+         %{source: source, original_content: expected, identity: identity},
+         opts
+       ) do
+    case FileValidation.read_regular_file(source, identity) do
       {:ok, ^expected} ->
         :ok
 
@@ -1153,16 +1159,21 @@ defmodule CodingAgent.Tools.Patch do
   end
 
   defp commit_prepared_operations(prepared_operations, signal, opts) do
-    initial = %{changed: [], additions: 0, removals: 0}
+    initial = %{changed: [], additions: 0, removals: 0, identities: %{}}
 
     result =
       Enum.reduce_while(prepared_operations, initial, fn prepared, acc ->
+        prepared = %{
+          prepared
+          | identity: Map.get(acc.identities, prepared.source, prepared.identity)
+        }
+
         if aborted?(signal) do
           {:halt, {:error, partial_commit_error("Operation aborted", acc.changed)}}
         else
           case verify_prepared_operation(prepared, opts) do
             :ok ->
-              commit_verified_operation(prepared, signal, acc)
+              commit_verified_operation(prepared, signal, acc, opts)
 
             {:error, reason} ->
               {:halt, {:error, partial_commit_error(reason, acc.changed)}}
@@ -1203,15 +1214,36 @@ defmodule CodingAgent.Tools.Patch do
     |> Kernel.<>("; the current operation may also have changed: #{Enum.join(current, ", ")}")
   end
 
-  defp commit_verified_operation(prepared, signal, acc) do
+  defp commit_verified_operation(prepared, signal, acc, opts) do
     case commit_prepared_operation(prepared, signal) do
       :ok ->
-        {:cont,
-         %{
-           changed: Enum.uniq(acc.changed ++ [prepared.target]),
-           additions: acc.additions + prepared.additions,
-           removals: acc.removals + prepared.removals
-         }}
+        identity =
+          if prepared.type == :delete,
+            do: {:ok, nil},
+            else: FileValidation.regular_file_identity(prepared.target, opts)
+
+        case identity do
+          {:ok, identity} ->
+            identities =
+              acc.identities
+              |> Map.delete(prepared.source)
+              |> Map.put(prepared.target, identity)
+
+            {:cont,
+             %{
+               changed: Enum.uniq(acc.changed ++ [prepared.target]),
+               additions: acc.additions + prepared.additions,
+               removals: acc.removals + prepared.removals,
+               identities: identities
+             }}
+
+          {:error, reason} ->
+            {:halt,
+             {:error,
+              partial_commit_error(format_error(reason, prepared.target), acc.changed, [
+                prepared.target
+              ])}}
+        end
 
       {:error, reason} ->
         current = current_operation_changes(prepared)
@@ -1272,7 +1304,7 @@ defmodule CodingAgent.Tools.Patch do
   end
 
   defp commit_prepared_operation(%{type: :update} = prepared, signal) do
-    safe_write_file(prepared.target, prepared.new_content, signal)
+    safe_write_file(prepared.target, prepared.identity, prepared.new_content, signal)
   end
 
   defp commit_prepared_operation(%{type: :move} = prepared, signal) do
@@ -1534,31 +1566,12 @@ defmodule CodingAgent.Tools.Patch do
 
   # Safe file operations with better error handling
 
-  defp safe_read_file(path) do
-    case File.read(path) do
-      {:ok, content} ->
-        {:ok, content}
-
-      {:error, :enoent} ->
-        {:error, :enoent}
-
-      {:error, :eacces} ->
-        {:error, "Permission denied: #{path}"}
-
-      {:error, :eisdir} ->
-        {:error, "Cannot read directory as file: #{path}"}
-
-      {:error, reason} ->
-        {:error, format_error(reason, path)}
-    end
-  end
-
-  defp safe_write_file(path, content, signal) do
+  defp safe_write_file(path, identity, content, signal) do
     # Check abort before write
     if aborted?(signal) do
       {:error, "Operation aborted"}
     else
-      case File.write(path, content) do
+      case FileValidation.write_regular_file(path, identity, content) do
         :ok ->
           :ok
 
@@ -1647,9 +1660,11 @@ defmodule CodingAgent.Tools.Patch do
         last = hunk.changes |> Enum.reject(&(&1.type == :remove)) |> List.last()
 
         final_newline? =
-          if at_end?,
-            do: last != nil and not Map.get(last, :no_newline, false),
-            else: final_newline?
+          cond do
+            not at_end? -> final_newline?
+            last == nil -> updated != []
+            true -> not Map.get(last, :no_newline, false)
+          end
 
         {:cont, {:ok, updated, adds + added, removes + removed, final_newline?}}
       else
@@ -1698,12 +1713,36 @@ defmodule CodingAgent.Tools.Patch do
   defp check_unified_newline(hunk, index, lines, final_newline?) do
     old = Enum.reject(hunk.changes, &(&1.type == :add))
     last = List.last(old)
+    old_total = length(lines)
+    new_total = old_total - hunk.old_count + hunk.new_count
 
-    if last && index + length(old) == length(lines) &&
-         Map.get(last, :no_newline, false) == final_newline? do
-      {:error, "Unified hunk final-newline marker does not match the current file"}
-    else
-      :ok
+    markers =
+      Enum.reduce_while(hunk.changes, {index + 1, index + 1}, fn change, {old_line, new_line} ->
+        invalid? =
+          Map.get(change, :no_newline, false) and
+            ((change.type != :add and (old_line != old_total or final_newline?)) or
+               (change.type != :remove and new_line != new_total))
+
+        if invalid? do
+          {:halt,
+           {:error, "Unified no-newline marker is interior or does not match the current file"}}
+        else
+          {:cont,
+           {old_line + if(change.type != :add, do: 1, else: 0),
+            new_line + if(change.type != :remove, do: 1, else: 0)}}
+        end
+      end)
+
+    cond do
+      match?({:error, _}, markers) ->
+        markers
+
+      last && index + length(old) == old_total &&
+          Map.get(last, :no_newline, false) == final_newline? ->
+        {:error, "Unified hunk final-newline marker does not match the current file"}
+
+      true ->
+        :ok
     end
   end
 

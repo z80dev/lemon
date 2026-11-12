@@ -23,22 +23,23 @@ defmodule CodingAgent.Tools.AnchoredEdit do
   def normalize_snapshot(value) when is_binary(value) do
     value = String.trim(value)
 
-    tag =
-      case Regex.run(
-             ~r/\A(?:([0-9a-fA-F]{16})|\[\s*([0-9a-fA-F]{16})\s*\]|\[?[^#\[\]\r\n]+#([0-9a-fA-F]{16})\]?)\z/,
-             value
-           ) do
-        nil -> nil
-        captures -> captures |> tl() |> Enum.find(&(&1 != ""))
-      end
+    value =
+      if String.starts_with?(value, "[") and String.ends_with?(value, "]"),
+        do: value |> String.slice(1..-2//1) |> String.trim(),
+        else: value
 
-    if tag,
-      do: {:ok, String.upcase(tag)},
-      else:
-        {:error, "snapshot must be a 16-character file tag or a single [path#TAG] read header."}
+    case Regex.named_captures(~r/\A(?:(?<path>[^#\[\]\r\n]+)#)?(?<tag>[0-9a-fA-F]{16})\z/, value) do
+      %{"path" => path, "tag" => tag} ->
+        {:ok, String.upcase(tag), if(path != "", do: String.trim(path))}
+
+      _ ->
+        invalid_snapshot()
+    end
   end
 
-  def normalize_snapshot(_value),
+  def normalize_snapshot(_value), do: invalid_snapshot()
+
+  defp invalid_snapshot,
     do: {:error, "snapshot must be a 16-character file tag or a single [path#TAG] read header."}
 
   @doc "Return a bounded fresh snapshot and numbered context for a refused mutation."

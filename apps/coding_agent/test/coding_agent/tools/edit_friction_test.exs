@@ -2,7 +2,7 @@ defmodule CodingAgent.Tools.EditFrictionTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.FileReadTracker
-  alias CodingAgent.Tools.{AnchoredEdit, Edit, Patch, Read}
+  alias CodingAgent.Tools.{AnchoredEdit, Edit, FileValidation, Patch, Read}
   alias CodingAgent.Tools.Task.StructuredOutput
   alias LemonAgent.Types.AgentToolResult
 
@@ -15,8 +15,13 @@ defmodule CodingAgent.Tools.EditFrictionTest do
     %{cwd: cwd, path: path, opts: [session_id: cwd, filesystem_checkpoints: false]}
   end
 
-  test "schema accepts each complete mode and rejects every mixed or incomplete mode", ctx do
+  test "provider-valid schema describes both modes; runtime rejects mixed or incomplete calls",
+       ctx do
     schema = Edit.tool(ctx.cwd).parameters
+    refute Map.has_key?(schema, "oneOf")
+    refute Map.has_key?(schema, "anyOf")
+    refute Map.has_key?(schema, "allOf")
+    assert schema["properties"]["mode"]["enum"] == ["anchored", "text"]
 
     anchored = %{
       "path" => ctx.path,
@@ -26,7 +31,12 @@ defmodule CodingAgent.Tools.EditFrictionTest do
 
     text = %{"path" => ctx.path, "old_text" => "original", "new_text" => "changed"}
 
-    for params <- [anchored, text] do
+    for params <- [
+          anchored,
+          text,
+          Map.put(anchored, "mode", "anchored"),
+          Map.put(text, "mode", "text")
+        ] do
       assert {:ok, ^params} = StructuredOutput.decode(Jason.encode!(params), schema)
     end
 
@@ -39,9 +49,66 @@ defmodule CodingAgent.Tools.EditFrictionTest do
           Map.delete(anchored, "snapshot"),
           Map.delete(text, "new_text")
         ] do
-      assert {:error, _} = StructuredOutput.decode(Jason.encode!(params), schema)
       assert {:error, _} = Edit.execute("edit", params, nil, nil, ctx.cwd, ctx.opts)
       assert File.read!(ctx.path) == "first\noriginal\nlast\n"
+    end
+  end
+
+  test "explicit modes reject conflicting fields with actionable drop instructions", ctx do
+    for {mode, fields, drop} <- [
+          {"anchored", %{"old_text" => "original", "new_text" => "unsafe"},
+           "drop top-level old_text and new_text"},
+          {"text",
+           %{
+             "snapshot" => AnchoredEdit.snapshot(File.read!(ctx.path)),
+             "edits" => [%{"start_line" => 2, "new_text" => "unsafe"}]
+           }, "drop snapshot and edits"}
+        ] do
+      params = Map.merge(%{"path" => ctx.path, "mode" => mode}, fields)
+      assert {:error, message} = Edit.execute("edit", params, nil, nil, ctx.cwd, ctx.opts)
+      assert message =~ drop
+      assert File.read!(ctx.path) == "first\noriginal\nlast\n"
+    end
+  end
+
+  test "copied headers bind the tag to their named target even for identical bytes", ctx do
+    other = Path.join(ctx.cwd, "other.txt")
+    File.write!(other, File.read!(ctx.path))
+    read = Read.execute("read", %{"path" => other}, nil, nil, ctx.cwd, ctx.opts)
+
+    for header <- ["[#{other}##{read.details.snapshot}]", "[other.txt##{read.details.snapshot}]"] do
+      assert {:error, message} = anchored(ctx, header, 2, "unsafe")
+      assert message =~ "header path does not name"
+      assert File.read!(ctx.path) == "first\noriginal\nlast\n"
+      assert File.read!(other) == "first\noriginal\nlast\n"
+    end
+
+    assert %AgentToolResult{} =
+             anchored(ctx, "[./file.txt##{read.details.snapshot}]", 2, "same target")
+  end
+
+  test "pinned mutation reads and writes refuse swapped symlinks and replacement inodes", ctx do
+    secret = Path.join(ctx.cwd, "private.txt")
+    File.write!(secret, "private content must not be disclosed")
+
+    for replacement <- [:symlink, :regular] do
+      {:ok, identity} = FileValidation.regular_file_identity(ctx.path)
+      original = ctx.path <> ".original"
+      File.rename!(ctx.path, original)
+
+      if replacement == :symlink,
+        do: File.ln_s!(secret, ctx.path),
+        else: File.write!(ctx.path, "replacement contents")
+
+      assert {:error, message} = FileValidation.read_regular_file(ctx.path, identity)
+      assert message =~ "identity changed"
+      refute message =~ "private content"
+      refute message =~ "replacement contents"
+      assert {:error, _} = FileValidation.write_regular_file(ctx.path, identity, "unsafe")
+      assert File.read!(secret) == "private content must not be disclosed"
+      assert File.read!(original) == "first\noriginal\nlast\n"
+      File.rm!(ctx.path)
+      File.rename!(original, ctx.path)
     end
   end
 
@@ -221,6 +288,36 @@ defmodule CodingAgent.Tools.EditFrictionTest do
              )
 
     assert File.read!(ctx.path) == "newline\n"
+  end
+
+  test "removal-only EOF hunks preserve the surviving line terminator", ctx do
+    for {old, expected} <- [
+          {"first\nlast\n", "first\n"},
+          {"first\r\nlast\r\n", "first\r\n"},
+          {"first\nlast", "first\n"}
+        ] do
+      File.write!(ctx.path, old)
+      FileReadTracker.record(ctx.opts, ctx.path, old)
+      marker = if String.ends_with?(old, "\n"), do: "", else: "\\ No newline at end of file\n"
+
+      assert %AgentToolResult{} =
+               patch(ctx, "--- file.txt\n+++ file.txt\n@@ -2 +1,0 @@\n-last\n" <> marker)
+
+      assert File.read!(ctx.path) == expected
+    end
+  end
+
+  test "no-newline markers reject interior old, added, and kept lines", ctx do
+    for body <- [
+          "@@ -2 +2 @@\n-original\n\\ No newline at end of file\n+changed\n",
+          "@@ -2 +2 @@\n-original\n+changed\n\\ No newline at end of file\n",
+          "@@ -2,2 +2,2 @@\n original\n\\ No newline at end of file\n-last\n+changed\n",
+          "@@ -2,2 +2,2 @@\n-original\n+changed\n\\ No newline at end of file\n last\n"
+        ] do
+      assert {:error, message} = patch(ctx, "--- file.txt\n+++ file.txt\n" <> body)
+      assert message =~ "no-newline marker"
+      assert File.read!(ctx.path) == "first\noriginal\nlast\n"
+    end
   end
 
   test "unified additions, insertions, deletions and repeated paths preflight together", ctx do

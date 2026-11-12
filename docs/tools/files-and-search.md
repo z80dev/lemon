@@ -187,10 +187,13 @@ snapshots per path, each at most 256 KiB and 10,000 lines; larger files still
 support fresh-tag edits, but not historical recovery.
 
 A tag matching the current complete file permits any in-range line, including
-lines omitted by a ranged read or output budget. The schema accepts exactly one
-mode: `snapshot` + `edits`, or `old_text` + `new_text`, never a mixture. Tags may
-be bare hexadecimal, `[TAG]`, or a copied `[path#TAG]` header (whitespace is ignored
-around the value).
+lines omitted by a ranged read or output budget. Choose `mode: "anchored"` with
+`snapshot` + `edits`, or `mode: "text"` with `old_text` + `new_text`, never a mixture.
+The discriminator is optional and inferred when omitted. Provider-valid object
+schemas describe the mutually exclusive fields; runtime errors name fields to
+drop from mixed calls. Tags may be bare hexadecimal, `[TAG]`, or a copied
+`[path#TAG]` header. A header's path must resolve to the requested target, even
+when another file has identical bytes. Whitespace around the value is ignored.
 
 Seen-line enforcement is on by default **for historical recovery only**: every
 original replaced/deleted line and insertion anchor must have appeared in a
@@ -205,6 +208,10 @@ numbered current context near the requested ranges (or matching text/context).
 This response updates the session's tracked view, so retry with its tag and
 current coordinates without another read. Context is capped at 40 lines / 8 KiB;
 read additional ranges when the displayed context is insufficient.
+
+Local edit/patch source reads and update writes pin the validated file's device,
+inode and type through checked file handles. A replaced path or swapped symlink
+is refused without returning the replacement's retry context.
 
 Local `write`, `edit`, and `patch` accept `"format": true` (default false, unless
 enabled in tool options) to run an available formatter after writing. An explicit
@@ -227,9 +234,10 @@ normalized matches are rejected. Unchanged context keeps its original text.
 `patch` accepts both `*** Update/Add/Delete File` patches and ordinary unified
 diffs with `---` / `+++` paths and counted `@@ -old,count +new,count @@` hunks,
 including Git `diff --git` / `index` headers and `/dev/null` additions/deletions.
-Unified diffs support final-newline markers; quoted paths and binary diffs are
-rejected. Line numbers never choose between repeated context matches. Ambiguous
-errors list candidate line numbers and nearby numbered source.
+Unified diffs preserve surviving line terminators after removal-only EOF hunks.
+No-newline markers must name the actual old/new EOF; interior markers, quoted
+paths and binary diffs are rejected. Line numbers never choose between repeated
+context matches. Ambiguous errors list candidate line numbers and nearby numbered source.
 
 Several operations may target the same path: they apply in input order, with
 every operation preflighted against the preceding virtual result before any
