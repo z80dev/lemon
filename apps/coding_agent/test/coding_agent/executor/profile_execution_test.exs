@@ -416,6 +416,7 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
       assert prompt =~ "private-profile-job"
       runner_state = :sys.get_state(runner)
       session_state = Session.get_state(runner_state.session)
+      assert session_state.tool_opts[:session_mode] == :chat
 
       assert session_state.workspace_dir ==
                Path.join([root, "destination-state", "profiles", profile_id, "workspace"])
@@ -462,6 +463,7 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
 
       try do
         child_state = Session.get_state(child)
+        assert child_state.tool_opts[:session_mode] == :chat
         child_tool = Enum.find(child_state.base_tools, &(&1.name == tool.name))
         assert {:ok, child_result} = child_tool.execute.("child-profile-tool", %{}, nil, nil)
         assert Enum.map_join(child_result.content, "", & &1.text) == "profile-tool-result"

@@ -242,12 +242,14 @@ defmodule CodingAgent.SessionMemoryRecallTest do
                "Priya birthday gift shared budget is forty."
              )
 
-    for {key, owned, foreign, history, foreign_history} <- [
+    for mode <- [:chat, :coding],
+        {key, owned, foreign, history, foreign_history} <- [
           {"private-actor-a", "cedar", "copper", "saffron", "graphite"},
           {"private-actor-b", "copper", "cedar", "graphite", "saffron"}
         ] do
       session =
         start_session(agent_id, cwd,
+          session_mode: mode,
           invocation_context_key: "invocation-epoch-2",
           memory_context_key: key,
           memory_context_verified: true,
@@ -266,7 +268,12 @@ defmodule CodingAgent.SessionMemoryRecallTest do
       for excluded <- [foreign, foreign_history, "March 14th", "obsidian"],
           do: refute(text =~ excluded)
 
-      assert system_prompt =~ "forty"
+      if mode == :chat do
+        assert system_prompt =~ "forty"
+      else
+        refute system_prompt =~ "forty"
+        refute system_prompt =~ "## Workspace Files (injected)"
+      end
 
       for excluded <- ["cedar", "copper", "saffron", "graphite", "obsidian"],
           do: refute(system_prompt =~ excluded)
