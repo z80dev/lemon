@@ -54,7 +54,8 @@ export interface ManagedRuntimeService extends RuntimeService { close(): void; p
 interface SubmissionContext { returnConversationId?: string; sourceEntryId?: string; noHandoff?: boolean; parentRunId?: string; sourceBotId?: string }
 const receiptSchema = z.object({ runId: id, sessionKey: z.string(), effectiveMode: z.enum(['new_run', 'queued', 'merged', 'steer_pending', 'steer', 'steer_backlog_pending', 'steer_backlog', 'redirect_pending', 'redirect', 'interrupt']), targetRunId: id.nullable() }).passthrough();
 const finalSchema = z.object({ runId: z.string().nullable().optional(), ok: z.boolean(), answer: z.string().nullable(), error: z.unknown().optional(), cancelled: z.boolean() }).passthrough();
-const eventSchema = z.object({ runId: id, sessionKey: z.string(), type: z.string(), seq: z.number().int().nonnegative().optional(), text: z.string().optional(), action: z.object({ id: z.string(), kind: z.string().nullable().optional(), title: z.string().nullable().optional() }).passthrough().optional(), phase: z.string().optional(), ok: z.boolean().optional(), cancelled: z.boolean().optional() }).passthrough();
+// Started/updated actions carry `ok: null`; rejecting that would drop every in-progress tool row.
+const eventSchema = z.object({ runId: id, sessionKey: z.string(), type: z.string(), seq: z.number().int().nonnegative().optional(), text: z.string().optional(), action: z.object({ id: z.string(), kind: z.string().nullable().optional(), title: z.string().nullable().optional() }).passthrough().optional(), phase: z.string().optional(), ok: z.boolean().nullable().optional(), cancelled: z.boolean().optional() }).passthrough();
 const approvalSchema = z.object({ approvalId: id, runId: id, sessionKey: z.string(), tool: z.string().nullable().optional(), action: z.record(z.string(), z.unknown()), expiresAtMs: z.number().int().nonnegative(), nodeId: z.string().nullable().optional(), invokeId: z.string().nullable().optional() }).passthrough();
 const cronSchema = z.object({ type: z.enum(['started', 'completed']), runId: id.nullable(), cronRunId: id, jobId: id, sessionKey: z.string().nullable(), status: z.string().optional(), startedAtMs: z.number().int().nonnegative().nullable().optional() }).passthrough();
 const terminalStatuses: P.Run['status'][] = ['succeeded', 'failed', 'cancelled'];
@@ -68,6 +69,22 @@ function completion(raw: unknown, executionRunId: string): RuntimeCompletion {
   if (result.runId != null && result.runId !== executionRunId) fail('upstream_unavailable', 'The completion receipt belongs to another native execution.');
   return result;
 }
+/** Only exact content-free runtime failure codes are explained; free-form errors can carry prompts, paths or credentials. */
+const runtimeFailures: Record<string, string> = {
+  empty_assistant_response: 'The model returned an empty reply, even after retrying. Try again or rephrase the request.',
+  malformed_tool_arguments: 'The model kept producing invalid tool arguments, even after retrying. Try again or rephrase the request.',
+};
+export function runtimeFailureMessage(error: unknown): string {
+  return typeof error === 'string' && Object.hasOwn(runtimeFailures, error) ? runtimeFailures[error]! : 'The runtime reported that this run failed.';
+}
+/** Engine actions that are tool calls; model turns, reasoning, notes, approvals and compaction are not. */
+const toolActionKinds: Record<string, true> = { tool: true, command: true, file_change: true, web_search: true, subagent: true };
+const toolNamePattern = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+/** The tool's own name from action detail, e.g. `bash` for a `command` action. */
+function toolActionName(action: Record<string, unknown>): string | null {
+  const detail = action.detail !== null && typeof action.detail === 'object' && !Array.isArray(action.detail) ? action.detail as Record<string, unknown> : {};
+  return typeof detail.name === 'string' && toolNamePattern.test(detail.name) ? detail.name : null;
+}
 
 function sessionBaseKey(services: BackendServices, conversation: P.Conversation, bot: P.Bot) {
   if (conversation.id === bot.mainConversationId && conversation.kind === 'dm') {
@@ -78,10 +95,15 @@ function sessionBaseKey(services: BackendServices, conversation: P.Conversation,
   return `agent:${bot.profileId}:${conversation.kind === 'group' ? 'group' : conversation.kind === 'channel' ? 'channel' : 'task'}-${conversation.id}`;
 }
 export function botSessionKeys(services: BackendServices, conversation: P.Conversation, bot: P.Bot): string[] {
-  const base = sessionBaseKey(services, conversation, bot);
-  const epoch = services.store.metadata<number>(`botPlacementEpoch:${bot.id}`) ?? 0;
-  const keys = new Set<string>([base]);
-  for (let value = 1; value <= epoch; value++) keys.add(`${base}:placement-${value}`);
+  // A main DM whose canonical session was never acknowledged (unfinished create) never ran under it; only run-bound keys can exist.
+  const unacknowledged = conversation.id === bot.mainConversationId && conversation.kind === 'dm' && !services.store.metadata<string>(`profileCanonicalSession:${bot.id}`);
+  const keys = new Set<string>();
+  if (!unacknowledged) {
+    const base = sessionBaseKey(services, conversation, bot);
+    const epoch = services.store.metadata<number>(`botPlacementEpoch:${bot.id}`) ?? 0;
+    keys.add(base);
+    for (let value = 1; value <= epoch; value++) keys.add(`${base}:placement-${value}`);
+  }
   for (const run of services.store.list<P.Run>('runs', run => run.botId === bot.id && run.conversationId === conversation.id)) {
     const bound = services.store.metadata<RuntimeMapping>(`runtimeRun:${run.id}`); if (bound) keys.add(bound.sessionKey);
   }
@@ -259,12 +281,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
     const next = { ...current, ...patch };
     services.store.setMetadata(`runtimeRun:${runId}`, next); return next;
   }
-  function closeStreaming(run: P.Run) {
-    for (const entry of services.store.list<P.TranscriptEntry>('entries', value => value.kind === 'message' && value.runId === run.id && value.streaming)) {
-      const next = services.update(entry, { streaming: false });
-      services.store.put('entries', next); services.events.emit('entry.upserted', next, { conversationId: next.conversationId, botId: run.botId });
-    }
-  }
+  function closeStreaming(run: P.Run) { closeRunEntries(services, run); }
   function actor(runId: string) {
     const value = services.store.metadata<Principal>(`runPrincipal:${runId}`);
     if (!value) fail('forbidden', 'This run has no retained initiating authority.');
@@ -326,18 +343,19 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
     const status: P.Run['status'] = result.cancelled ? 'cancelled' : result.ok ? 'succeeded' : 'failed';
     services.store.transaction(() => {
       const current = services.store.require<P.Run>('runs', runId); if (terminalStatuses.includes(current.status) && services.store.metadata<boolean>(`runtimeTerminalProjectionPending:${runId}`) !== true) return;
-      if (bound.upstreamRunId === bound.executionRunId && (result.answer !== null || bound.assistantEntryId)) {
+      // An empty final answer is no reply; the failure notice below explains it instead of an empty bubble.
+      if (bound.upstreamRunId === bound.executionRunId && (result.answer || bound.assistantEntryId)) {
         const entry = assistant(current, bound, principal);
-        const final = services.update(entry, { text: result.answer ?? entry.text, streaming: false }); services.store.put('entries', final); services.events.emit('entry.upserted', final, { conversationId: final.conversationId, botId: run.botId });
+        const final = services.update(entry, { text: result.answer || entry.text, streaming: false }); services.store.put('entries', final); services.events.emit('entry.upserted', final, { conversationId: final.conversationId, botId: run.botId });
       }
-      const error = status === 'failed' ? errorEnvelope(new ApiError('upstream_unavailable', 'The runtime reported that this run failed.', false), services.id('req')).error : null;
+      const error = status === 'failed' ? errorEnvelope(new ApiError('upstream_unavailable', runtimeFailureMessage(result.error), false), services.id('req')).error : null;
       emitRun(services.update(current, { status, completedAtMs: services.now(), error }));
       services.store.setMetadata(`runtimeTerminalProjectionPending:${runId}`, false);
     });
     const returned = services.store.metadata<string>(`runReturnConversation:${runId}`);
     if (returned && services.integrations.returnChannelHandoff && bound.upstreamRunId === bound.executionRunId) await services.integrations.returnChannelHandoff(principal, returned, result.answer ?? '', run.id);
     if (bound.upstreamRunId !== bound.executionRunId) return;
-    const entryId = bound.assistantEntryId ?? services.entry(principal, outputConversation(run, principal), { kind: 'notice', severity: status === 'failed' ? 'error' : 'info', text: status === 'succeeded' ? 'Run completed.' : status === 'cancelled' ? 'Run stopped. Completed effects were not rolled back.' : 'The runtime reported a failed run.', requestId: null, runId: run.id, actor: { kind: 'system', id: null, displayName: 'System' } }).id;
+    const entryId = bound.assistantEntryId ?? services.entry(principal, outputConversation(run, principal), { kind: 'notice', severity: status === 'failed' ? 'error' : 'info', text: status === 'succeeded' ? 'Run completed.' : status === 'cancelled' ? run.startedAtMs === null ? 'Run stopped before it started.' : 'Run stopped. Completed effects were not rolled back.' : runtimeFailureMessage(result.error), requestId: null, runId: run.id, actor: { kind: 'system', id: null, displayName: 'System' } }).id;
     services.notify(principal, { kind: status === 'succeeded' ? 'result' : 'error', botId: run.botId, conversationId: outputConversation(run, principal), entryId, title: status === 'succeeded' ? 'Bot finished' : status === 'cancelled' ? 'Bot stopped' : 'Bot run failed', body: '', userId: principal.userId });
   }
   async function queryFinal(run: P.Run, bound: RuntimeMapping) {
@@ -476,12 +494,13 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
           services.events.emit('entry.delta', { conversationId: entry.conversationId, entryId: entry.id, runId: run.id, offset, text: data.text }, { conversationId: entry.conversationId, botId: run.botId });
         }
         patchMapping(run.id, { deltaSeq, deltaGap });
-      } else if (bound.upstreamRunId === data.runId && event === 'agent' && data.type === 'tool_use' && data.action) {
+      } else if (bound.upstreamRunId === data.runId && event === 'agent' && data.type === 'tool_use' && data.action && Object.hasOwn(toolActionKinds, data.action.kind ?? '')) {
         const key = `runtimeTool:${run.id}:${data.action.id}`;
         const existingId = services.store.metadata<string>(key);
         const existing = existingId ? services.store.get<P.TranscriptEntry>('entries', existingId) : null;
         const status: 'started' | 'completed' | 'failed' = data.phase === 'completed' ? data.ok === false ? 'failed' : 'completed' : 'started';
-        const tool = data.action.kind && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(data.action.kind) ? data.action.kind : 'tool';
+        // A later phase without the tool's name keeps the name its start reported.
+        const tool = toolActionName(data.action) ?? (existing?.kind === 'tool_call' ? existing.tool : data.action.kind!);
         // Raw arguments, action detail, tool stdout and terminal bytes never enter activity/audit.
         const fields = { tool, title: `${tool} ${status === 'started' ? 'working' : status}`, status, detail: null };
         if (existing?.kind === 'tool_call') { const next = services.update(existing, fields); services.store.put('entries', next); services.events.emit('entry.upserted', next, { conversationId: next.conversationId, botId: run.botId }); }
@@ -650,18 +669,24 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
           if (run.status === 'reserved') emitRun(services.update(run, { status: 'outcome_unknown', error: errorEnvelope(new ApiError('outcome_unknown', 'A reserved submission needs reconciliation after interruption.', false, { resourceIds: [run.id], runId: run.id }), services.id('req')).error }));
           if (bound.dispatched || services.store.metadata<{ allow: boolean }>(`nativeFollowupAdmissionReceipt:${bound.upstreamRunId}`)?.allow === true) {
             try {
-              const response = upstream(z.object({ receipt: z.object({ runId: id, sessionKey: z.string(), state: z.enum(['accepted', 'outcome_unknown']), effectiveMode: receiptSchema.shape.effectiveMode.nullable(), targetRunId: id.nullable() }).passthrough() }).passthrough(), await services.lemon.call('runs.receipt.get', { runId: bound.upstreamRunId }));
+              const response = upstream(z.object({ receipt: z.object({ runId: id, sessionKey: z.string().nullable(), state: z.enum(['accepted', 'outcome_unknown', 'aborted']), effectiveMode: receiptSchema.shape.effectiveMode.nullable(), targetRunId: id.nullable() }).passthrough() }).passthrough(), await services.lemon.call('runs.receipt.get', { runId: bound.upstreamRunId }));
               const receipt = response.receipt;
-              if (receipt.runId !== bound.upstreamRunId || receipt.sessionKey !== bound.sessionKey || receipt.state !== 'accepted' || receipt.effectiveMode === null || receipt.effectiveMode.endsWith('_pending')) continue;
-              const target = receipt.effectiveMode === 'interrupt' ? bound.upstreamRunId : receipt.targetRunId ?? bound.upstreamRunId;
-              const retained = actor(run.id);
-              if (target !== bound.upstreamRunId && !ownMappings(target, bound.sessionKey).some(value => value.run.initiatorUserId === retained.userId)) continue;
-              patchMapping(run.id, { executionRunId: target });
-              const effectiveMode: P.MessageReceipt['delivery'][number]['effectiveMode'] = receipt.effectiveMode === 'new_run' ? 'started' : receipt.effectiveMode === 'steer' || receipt.effectiveMode === 'redirect' || receipt.effectiveMode === 'steer_backlog' ? 'steering' : receipt.effectiveMode === 'interrupt' ? 'interrupting' : 'queued';
-              const delivery = services.store.metadata<P.MessageReceipt['delivery'][number]>(`runDelivery:${run.id}`);
-              services.store.setMetadata(`runDelivery:${run.id}`, { botId: run.botId, requestedMode: delivery?.requestedMode ?? 'followup', effectiveMode, targetRunId: receipt.targetRunId === null || receipt.targetRunId === run.id ? null : ownTargetMapping(receipt.targetRunId, bound.sessionKey)?.run.id ?? null, runId: run.id } satisfies P.MessageReceipt['delivery'][number]);
-              const current = services.store.require<P.Run>('runs', run.id);
-              if (current.status === 'outcome_unknown' || current.status === 'queued') emitRun(services.update(current, { status: effectiveMode === 'queued' ? 'queued' : 'running', error: null, startedAtMs: effectiveMode === 'queued' ? current.startedAtMs : current.startedAtMs ?? services.now() }));
+              if (receipt.runId !== bound.upstreamRunId) continue;
+              // A Stop that reached the controller first permanently fences this fixed ID: it never ran and never will.
+              if (receipt.state === 'aborted') { if (receipt.sessionKey === null || receipt.sessionKey === bound.sessionKey) await finalize(run.id, { ok: false, answer: null, cancelled: true }); continue; }
+              // An ambiguous admission falls through to the read-only completion query below.
+              if (receipt.state === 'accepted') {
+                if (receipt.sessionKey !== bound.sessionKey || receipt.effectiveMode === null || receipt.effectiveMode.endsWith('_pending')) continue;
+                const target = receipt.effectiveMode === 'interrupt' ? bound.upstreamRunId : receipt.targetRunId ?? bound.upstreamRunId;
+                const retained = actor(run.id);
+                if (target !== bound.upstreamRunId && !ownMappings(target, bound.sessionKey).some(value => value.run.initiatorUserId === retained.userId)) continue;
+                patchMapping(run.id, { executionRunId: target });
+                const effectiveMode: P.MessageReceipt['delivery'][number]['effectiveMode'] = receipt.effectiveMode === 'new_run' ? 'started' : receipt.effectiveMode === 'steer' || receipt.effectiveMode === 'redirect' || receipt.effectiveMode === 'steer_backlog' ? 'steering' : receipt.effectiveMode === 'interrupt' ? 'interrupting' : 'queued';
+                const delivery = services.store.metadata<P.MessageReceipt['delivery'][number]>(`runDelivery:${run.id}`);
+                services.store.setMetadata(`runDelivery:${run.id}`, { botId: run.botId, requestedMode: delivery?.requestedMode ?? 'followup', effectiveMode, targetRunId: receipt.targetRunId === null || receipt.targetRunId === run.id ? null : ownTargetMapping(receipt.targetRunId, bound.sessionKey)?.run.id ?? null, runId: run.id } satisfies P.MessageReceipt['delivery'][number]);
+                const current = services.store.require<P.Run>('runs', run.id);
+                if (current.status === 'outcome_unknown' || current.status === 'queued') emitRun(services.update(current, { status: effectiveMode === 'queued' ? 'queued' : 'running', error: null, startedAtMs: effectiveMode === 'queued' ? current.startedAtMs : current.startedAtMs ?? services.now() }));
+              }
             } catch (error) { if (!(error instanceof ApiError)) throw error; services.store.setMetadata(`runtimeReconciliation:${run.id}`, { pending: true, code: error.code, measuredAtMs: services.now() }); }
             await queryFinal(services.store.require<P.Run>('runs', run.id), mapping(run.id) ?? bound);
           }
@@ -792,12 +817,28 @@ async function stopInvocationResources(services: BackendServices, runs: P.Run[],
       const status: P.Run['status'] = result.cancelled ? 'cancelled' : result.ok ? 'succeeded' : 'failed';
       const closed = services.update(services.store.require<P.Run>('runs', run.id), { status, completedAtMs: services.now() });
       services.store.put('runs', closed); services.events.emit('run.upserted', closed, { conversationId: run.conversationId, botId: run.botId });
-      for (const entry of services.store.list<P.TranscriptEntry>('entries', entry => entry.runId === run.id && entry.kind === 'message' && entry.streaming)) {
-        if (entry.kind === 'message') { const final = services.update(entry, { streaming: false }); services.store.put('entries', final); services.events.emit('entry.upserted', final, { conversationId: final.conversationId, botId: run.botId }); }
-      }
+      closeRunEntries(services, closed);
     } catch { uncertain = true; }
   }
   return uncertain ? 'outcome_unknown' : 'cancelled';
+}
+
+/**
+ * A terminal run can't still be streaming or running a tool. Ends streaming
+ * replies and any tool row whose end event never arrived, so clients don't
+ * show a permanent spinner: completed only when the run succeeded, otherwise
+ * failed (titled "stopped" for a cancelled run).
+ */
+function closeRunEntries(services: BackendServices, run: P.Run) {
+  const status = run.status === 'succeeded' ? 'completed' as const : 'failed' as const;
+  for (const entry of services.store.list<P.TranscriptEntry>('entries', value => value.runId === run.id && (value.kind === 'message' && value.streaming || value.kind === 'tool_call' && value.status === 'started'))) {
+    const next = entry.kind === 'message'
+      ? services.update(entry, { streaming: false })
+      : entry.kind === 'tool_call'
+        ? services.update(entry, { status, title: `${entry.tool} ${run.status === 'cancelled' ? 'stopped' : status}` })
+        : entry;
+    services.store.put('entries', next); services.events.emit('entry.upserted', next, { conversationId: next.conversationId, botId: run.botId });
+  }
 }
 
 

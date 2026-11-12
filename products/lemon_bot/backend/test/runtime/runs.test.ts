@@ -317,6 +317,118 @@ describe('owned placed runtime', () => {
     } finally { runtime.close(); f.store.close(); }
   });
 
+  test('tool rows carry the tool’s own name; model turns, reasoning and notes are not tools', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'tool_names_status_0001', text: 'work' });
+      const sessionKey = f.store.metadata<RuntimeMapping>(`runtimeRun:${run.id}`)!.sessionKey;
+      // Payload shapes as projected by the controller's event bridge.
+      const action = (value: Record<string, unknown>, phase: string, ok: boolean | null) => runtime.project('agent', { type: 'tool_use', runId: run.id, sessionKey, action: value, phase, ok, message: null });
+      await action({ id: `model_${run.id}_1`, kind: null, title: 'Model: provider:model', detail: { model: 'model', provider: 'provider' } }, 'completed', true);
+      await action({ id: 'lemon.reasoning.0.1', kind: 'reasoning', title: 'reasoning', detail: {} }, 'completed', true);
+      await action({ id: 'provider_retry_1', kind: 'note', title: 'Provider request failed; retrying', detail: {} }, 'started', null);
+      await action({ id: 'tool_call_shell', kind: 'command', title: '`echo private-argument`', detail: { name: 'bash', args: { command: 'echo private-argument' } } }, 'started', null);
+      const working = f.store.list<P.TranscriptEntry>('entries', entry => entry.kind === 'tool_call' && entry.runId === run.id);
+      expect(working).toMatchObject([{ tool: 'bash', title: 'bash working', status: 'started' }]);
+      await action({ id: 'tool_call_shell', kind: 'command', title: '`echo private-argument`', detail: { result: 'private-output' } }, 'completed', true);
+      await action({ id: 'tool_call_read', kind: 'tool', title: 'Read: notes.md', detail: { name: 'read' } }, 'completed', false);
+      const tools = f.store.list<P.TranscriptEntry>('entries', entry => entry.kind === 'tool_call' && entry.runId === run.id).sort((a, b) => a.seq - b.seq);
+      expect(tools).toMatchObject([{ tool: 'bash', title: 'bash completed', status: 'completed', detail: null }, { tool: 'read', title: 'read failed', status: 'failed' }]);
+      expect(JSON.stringify(tools)).not.toContain('private-');
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('a tool still running when its run is cancelled ends as stopped, not a permanent spinner', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    try {
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'tool_closed_on_cancel_01', text: 'work' });
+      const sessionKey = f.store.metadata<RuntimeMapping>(`runtimeRun:${run.id}`)!.sessionKey;
+      await runtime.project('agent', { type: 'tool_use', runId: run.id, sessionKey, action: { id: 'tool_call_shell', kind: 'command', title: 'sleep', detail: { name: 'bash' } }, phase: 'started', ok: null, message: null });
+      const original = f.rpc;
+      f.rpc = async (method, params) => method === 'agent.wait' ? { runId: run.id, ok: false, cancelled: true, answer: null } : original(method, params);
+      await runtime.project('agent', { type: 'completed', runId: run.id, sessionKey });
+      expect(f.store.require<P.Run>('runs', run.id).status).toBe('cancelled');
+      expect(f.store.list<P.TranscriptEntry>('entries', entry => entry.kind === 'tool_call' && entry.runId === run.id)).toMatchObject([{ tool: 'bash', title: 'bash stopped', status: 'failed' }]);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('a submission its Stop fenced at the controller reconciles to stopped, not unknown forever', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const original = f.rpc;
+    try {
+      // The controller refused the fixed ID after the earlier Stop; the backend cannot tell that from a lost reply.
+      f.rpc = async (method, params) => { if (method === 'chat.send') throw new ApiError('outcome_unknown', 'The runtime may have applied this operation.', false); return original(method, params); };
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'stopped_submit_status_01', text: 'work' });
+      expect(run.status).toBe('outcome_unknown');
+      f.rpc = async (method, params) => {
+        if (method === 'runs.receipt.get') return { receipt: { runId: run.id, sessionKey: null, state: 'aborted', effectiveMode: null, targetRunId: null, retrySafe: false } };
+        if (method === 'agent.wait') throw new ApiError('upstream_unavailable', 'Run did not complete within timeout.');
+        return original(method, params);
+      };
+      await runtime.reconcile();
+      expect(f.store.require<P.Run>('runs', run.id)).toMatchObject({ status: 'cancelled', error: null });
+      expect(f.store.list<P.TranscriptEntry>('entries', entry => entry.kind === 'notice' && entry.runId === run.id)).toMatchObject([{ text: 'Run stopped before it started.' }]);
+      expect(f.calls.filter(call => call.method === 'chat.send')).toHaveLength(1);
+      expect(f.calls.filter(call => call.method === 'agent.wait')).toHaveLength(0);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('an ambiguous receipt keeps the run unknown and still reads completion', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const original = f.rpc;
+    try {
+      f.rpc = async (method, params) => { if (method === 'chat.send') throw new ApiError('outcome_unknown', 'Lost reply.', false); return original(method, params); };
+      const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'ambiguous_receipt_status1', text: 'work' });
+      f.rpc = async (method, params) => {
+        if (method === 'runs.receipt.get') return { receipt: { runId: run.id, sessionKey: null, state: 'outcome_unknown', effectiveMode: null, targetRunId: null, retrySafe: false } };
+        if (method === 'agent.wait') throw new ApiError('upstream_unavailable', 'Run did not complete within timeout.');
+        return original(method, params);
+      };
+      await runtime.reconcile();
+      expect(f.store.require<P.Run>('runs', run.id).status).toBe('outcome_unknown');
+      expect(f.calls.filter(call => call.method === 'agent.wait')).toHaveLength(1);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('a known empty model reply is explained; free-form runtime errors are not projected', async () => {
+    for (const [error, expected] of [['empty_assistant_response', 'The model returned an empty reply'], ['provider said: /private/path token=secret', 'The runtime reported that this run failed.']] as const) {
+      const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+      try {
+        const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: `failure_reason_${error.length}_status`, text: 'work' });
+        const sessionKey = f.store.metadata<RuntimeMapping>(`runtimeRun:${run.id}`)!.sessionKey;
+        const original = f.rpc;
+        f.rpc = async (method, params) => method === 'agent.wait' ? { runId: run.id, ok: false, cancelled: false, answer: '', error } : original(method, params);
+        await runtime.project('agent', { type: 'completed', runId: run.id, sessionKey, ok: false, cancelled: false });
+        const failed = f.store.require<P.Run>('runs', run.id);
+        expect(failed.status).toBe('failed');
+        expect(failed.error?.message).toStartWith(expected);
+        // No empty reply bubble; the failure notice carries the explanation.
+        expect(f.store.list<P.TranscriptEntry>('entries', entry => entry.kind === 'message' && entry.runId === run.id)).toHaveLength(0);
+        const notice = f.store.list<P.TranscriptEntry>('entries', entry => entry.kind === 'notice' && entry.runId === run.id)[0];
+        expect(notice?.kind === 'notice' && notice.text.startsWith(expected)).toBe(true);
+        expect(JSON.stringify(f.store.list('entries'))).not.toContain('secret');
+      } finally { runtime.close(); f.store.close(); }
+    }
+  });
+
+  test('an outcome landing in the conversation its owner is watching does not pile up unread in the Inbox', async () => {
+    for (const watching of [true, false]) {
+      const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+      try {
+        const device = f.services.resource('device', { userId: f.alice.userId }); f.store.put('devices', device);
+        f.store.setMetadata(`presence:${device.id}`, { userId: f.alice.userId, foreground: true, conversationId: watching ? f.conversation.id : 'another_room', updatedAtMs: f.services.now() });
+        const { run } = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: `inbox_presence_${watching}_status`, text: 'work' });
+        const sessionKey = f.store.metadata<RuntimeMapping>(`runtimeRun:${run.id}`)!.sessionKey;
+        const original = f.rpc;
+        f.rpc = async (method, params) => method === 'agent.wait' ? { runId: run.id, ok: true, cancelled: false, answer: 'done' } : original(method, params);
+        await runtime.project('agent', { type: 'completed', runId: run.id, sessionKey });
+        const notices = f.store.list<P.Notification>('notifications', notice => notice.kind === 'result');
+        expect(notices).toHaveLength(1);
+        expect(notices[0]!.readAtMs !== null).toBe(watching);
+      } finally { runtime.close(); f.store.close(); }
+    }
+  });
+
 
   test('private native memory identity does not require a surviving main conversation', () => {
     const f = fixture();

@@ -706,6 +706,9 @@ test('activity projects wire fields only and excludes unproven or foreign-key me
     const result = await f.request<P.Page<P.ActivityItem>>('GET', '/activity', undefined, {});
     expect(result.items).toHaveLength(3);
     expect(result.items.filter(value => value.kind === 'memory').map(value => value.status)).toEqual(['outcome_unknown']);
+    // One shared timeline: every row names its Bot.
+    const botName = f.store.require<P.Bot>('bots', 'bot').name;
+    expect(result.items.every(value => value.title.startsWith(`${botName}: `))).toBe(true);
     const wire = JSON.stringify(result);
     for (const forbidden of [memory.text, tool.tool, tool.title, tool.detail!, nonce, memoryContextKey, 'runtimeMemoryId', 'memoryContextKey', 'foreign-key-memory', 'unproven-memory']) expect(wire).not.toContain(forbidden);
   } finally { f.close(); }

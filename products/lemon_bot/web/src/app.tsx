@@ -2,7 +2,7 @@ import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useSta
 import { LemonBotClient, nonce, type Bot, type Conversation, type Device, type InstanceStatus, type RealtimeConnection, type RealtimeEvent, type RealtimeState, type Resource, type Run, type Snapshot } from '@lemon-bot/sdk';
 import { AuthScreen, savedAccounts, type WebSession } from './auth';
 import { ArrowDown, ChevronRight, GitBranch, History, Inbox, LayoutGrid, ListFilter, Menu, MoreHorizontal, Plus, Search, SquarePen } from 'lucide-react';
-import { AccountAvatar, BotAvatar, ConfirmDialog, EmptyState, ErrorNotice, LemonFace, LemonMark, Loading, useAction } from './ui';
+import { AccountAvatar, BotAvatar, ConfirmDialog, EmptyState, ErrorNotice, LemonFace, LemonMark, Loading, ScreenBoundary, useAction } from './ui';
 import { currentStep, previewText, staleLiveRuns, stoppableRunStatuses } from './live';
 import { SettingsRoute, isSettingsScreen } from './settings-shell';
 import { BotsScreen, ConversationScreen, FileViewer, ModelStatusLine, SettingsScreen } from './route-components';
@@ -17,7 +17,7 @@ const pendingTicket = takeSignInTicket();
 let pendingTicketConsumed = false;
 
 export interface Route { screen: string; id?: string; botId?: string; tab?: string; entryId?: string; conversationId?: string; taskConversationId?: string; machineId?: string }
-export interface AppContextValue { client: LemonBotClient; realtime: RealtimeConnection | null; snapshot: Snapshot; device: Device | null; online: boolean; navigate: (route: Route) => void; refresh: () => Promise<void>; updateInstance: (status: InstanceStatus) => void; reportError: (error: unknown) => void; draftPrompt: (conversationId: string, text: string) => void; logout: () => Promise<void>; forgetConversation: (conversationId: string) => void }
+export interface AppContextValue { client: LemonBotClient; realtime: RealtimeConnection | null; snapshot: Snapshot; device: Device | null; /** Lemon Bot and its Lemon link are both live: required for Bot work. */ online: boolean; /** Lemon Bot itself is live, even if its Lemon link is down: enough for product-local settings. */ reachable: boolean; navigate: (route: Route) => void; refresh: () => Promise<void>; updateInstance: (status: InstanceStatus) => void; reportError: (error: unknown) => void; draftPrompt: (conversationId: string, text: string) => void; logout: () => Promise<void>; forgetConversation: (conversationId: string) => void }
 const AppContext = createContext<AppContextValue | null>(null);
 export function useApp() { const value = useContext(AppContext); if (!value) throw new Error('Lemon Bot workspace context is not mounted.'); return value; }
 
@@ -76,6 +76,8 @@ function applySnapshotEvent(snapshot: Snapshot, event: RealtimeEvent, knownRuns:
     case 'machine.upserted': return { ...snapshot, machines: upsert(snapshot.machines, event.payload) };
     case 'machine.deleted': return { ...snapshot, machines: snapshot.machines.filter(machine => machine.id !== event.payload.id) };
     case 'conversation.upserted': return { ...snapshot, conversations: upsert(snapshot.conversations, event.payload) };
+    // Reading a room in this or another tab clears its sidebar dot; Mark unread keeps one.
+    case 'conversation.read': return event.payload.userId !== snapshot.user.id ? snapshot : { ...snapshot, conversations: snapshot.conversations.map(room => room.id !== event.payload.conversationId ? room : { ...room, lastReadSeq: event.payload.throughSeq, unreadCount: event.payload.unread ? Math.max(1, room.unreadCount) : event.payload.throughSeq >= room.lastReadSeq ? 0 : room.unreadCount }) };
     case 'conversation.deleted': return { ...snapshot, conversations: snapshot.conversations.filter(room => room.id !== event.payload.id) };
     case 'section.upserted': return { ...snapshot, sections: upsert(snapshot.sections, event.payload) };
     case 'section.deleted': return { ...snapshot, sections: snapshot.sections.filter(section => section.id !== event.payload.id) };
@@ -214,6 +216,8 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reas
     return () => { disposed = true; socket?.close(); };
   }, [client, attempt]);
   useEffect(() => { const change = () => setRoute(initialRoute()); const online = () => setBrowserOnline(navigator.onLine); window.addEventListener('hashchange', change); window.addEventListener('online', online); window.addEventListener('offline', online); return () => { window.removeEventListener('hashchange', change); window.removeEventListener('online', online); window.removeEventListener('offline', online); }; }, []);
+  // `.main-content` is one scroller shared by every screen; a new screen starts at its top, not at the previous one's offset.
+  useEffect(() => { document.getElementById('main-content')?.scrollTo({ top: 0 }); }, [route.screen, route.id, route.tab]);
   useEffect(() => {
     if (!snapshot || connection !== 'live') return;
     let disposed = false;
@@ -259,7 +263,7 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reas
   if (updateRequired) return <main className="boot stack"><div className="brand"><LemonMark/>Lemon Bot</div><h1>This app needs an update</h1><p>Reload to get the latest available version. Your Bots and work are unaffected.</p><button className="primary" onClick={() => location.reload()}>Reload</button><details><summary>Details for your administrator</summary><p>This web client is {appVersion}; the service requires {requiredVersion}. Build and deploy matching web assets if reloading doesn’t update the app.</p></details><button onClick={() => void logout()}>Sign out</button></main>;
   const activeBot = snapshot.bots.find(bot => bot.id === (route.botId || (route.screen.startsWith('bot.') || route.screen === 'memory' ? route.id : undefined))) || (route.screen === 'conversation' ? snapshot.bots.find(bot => bot.mainConversationId === route.id || snapshot.conversations.find(room => room.id === route.id)?.botIds.includes(bot.id)) : undefined);
   const appearance = snapshot.user.preferences.appearance;
-  const context: AppContextValue = { client, realtime, snapshot, device, online: browserOnline && connection === 'live' && snapshot.capabilities.controlConnected !== false, navigate, refresh, updateInstance: applyInstance, reportError, logout, forgetConversation, draftPrompt: (conversationId, text) => {
+  const context: AppContextValue = { client, realtime, snapshot, device, online: browserOnline && connection === 'live' && snapshot.capabilities.controlConnected !== false, reachable: browserOnline && connection === 'live', navigate, refresh, updateInstance: applyInstance, reportError, logout, forgetConversation, draftPrompt: (conversationId, text) => {
     sessionStorage.setItem(`lemonbot.prompt:${snapshot.workspace.id}:${snapshot.user.id}:${conversationId}`, text);
     window.dispatchEvent(new CustomEvent('lemonbot:draft-prompt', { detail: { conversationId, text } })); navigate({ screen: 'conversation', id: conversationId, botId: snapshot.conversations.find(room => room.id === conversationId)?.botIds[0] });
   } };
@@ -271,7 +275,7 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: (reas
   return <AppContext.Provider value={context}><div className={`workspace ${sidebar ? 'sidebar-open' : ''} ${conversationScreen ? 'in-conversation' : ''} ${settingsScreen ? 'in-settings' : ''} ${atHome ? 'at-home' : ''} ${connected ? '' : 'disconnected'}`} data-theme={appearance}><a className="skip-link" href="#main-content">Skip to workspace content</a><Roster route={route} close={() => setSidebar(false)} openPalette={() => setPalette(true)} unreadInbox={unreadInbox} connection={connected ? null : connectionLabel(connection, browserOnline, snapshot.capabilities.controlConnected)} reconnect={retry} recovery={(!connected || runtimeRunning) && phone && atHome ? recoveryPanel : undefined}/><div className="workspace-main">{!conversationScreen && !atHome && !settingsScreen && <header className="workspace-bar"><button className="icon-button mobile-menu" aria-label="Open Bot list" onClick={() => setSidebar(value => !value)}><Menu size={20}/></button>{activeBot ? <button className="companion-anchor" onClick={() => navigate({ screen: 'conversation', id: activeBot.mainConversationId, botId: activeBot.id })}><BotAvatar bot={activeBot} size={22}/><strong>{activeBot.name}</strong></button> : <span/>}<div className="row workspace-tools"><button className="ghost-circle" aria-label="Search everything" title={`Search (${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'}K)`} onClick={() => setPalette(true)}><Search size={15}/></button></div></header>}<main id="main-content" className="main-content" tabIndex={-1}><UnlockedNotice/>{!!error && <div className="global-error"><ErrorNotice error={error}/><button onClick={() => setError(undefined)}>Dismiss</button></div>}{(!connected || runtimeRunning) && !(phone && atHome) && route.screen !== 'settings.instance' && recoveryPanel}<Destination route={route} activeBot={activeBot}/></main></div>{palette && <Palette close={() => setPalette(false)}/>}<VoiceOverlay/></div></AppContext.Provider>;
 }
 function Destination({ route, activeBot }: { route: Route; activeBot?: Bot }) {
-  return <Suspense fallback={<Loading label="Loading screen…"/>}><DestinationContent route={route} activeBot={activeBot}/></Suspense>;
+  return <ScreenBoundary key={route.screen}><Suspense fallback={<Loading label="Loading screen…"/>}><DestinationContent route={route} activeBot={activeBot}/></Suspense></ScreenBoundary>;
 }
 function DestinationContent({ route, activeBot }: { route: Route; activeBot?: Bot }) {
   const { snapshot, navigate } = useApp();

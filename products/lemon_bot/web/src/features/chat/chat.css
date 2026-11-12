@@ -51,7 +51,8 @@
 .chat-user-entry .chat-bubble a { color: inherit; }
 .chat-bubble > :first-child, .chat-bubble > :first-child > :first-child { margin-top: 0; }
 .chat-bubble > :last-child, .chat-bubble > :first-child > :last-child { margin-bottom: 0; }
-.chat-bubble p { margin: 0 0 8px; line-height: 1.45; }
+/* Single line breaks are kept, as in the Mac and iPhone transcripts (lists of lines, poems, addresses). */
+.chat-bubble p { margin: 0 0 8px; line-height: 1.45; white-space: pre-line; }
 .chat-bubble ul, .chat-bubble ol { margin: 4px 0 8px; padding-left: 22px; }
 .chat-bubble code { font-size: 13px; background: color-mix(in srgb, var(--ink) 6%, transparent); padding: 1px 5px; border-radius: 6px; }
 .chat-bubble pre { font-size: 13px; background: color-mix(in srgb, var(--ink) 6%, transparent); border-radius: 10px; padding: 10px 12px; margin: 8px 0; overflow-x: auto; }

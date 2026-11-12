@@ -1015,6 +1015,21 @@ describe('routes: stop, review mode, and bot-wide preview/confirm', () => {
     expect(audit[0]!.outcome).toBe('succeeded');
   });
 
+  test('Stop allowing completes when dispatched the way the router dispatches it', async () => {
+    const { services, store, owner, bot, room } = fixture();
+    const allowance = services.resource('allowance', {
+      scope: 'chat' as const, botId: bot.id, conversationId: room.id, ownerUserId: owner.userId, toolGroups: ['terminal' as const], label: 'Terminal',
+      state: 'active' as const, endedReason: null, endedAtMs: null, endedByUserId: null, sourceApprovalId: null, createdByUserId: owner.userId, useCount: 0, lastUsedAtMs: null,
+    });
+    store.put('approvalAllowances', allowance);
+    const route = createApprovalAllowanceRoutes(services).find(r => r.method === 'POST' && r.path === '/v1/approval-allowances/:id/stop')!;
+    const c = context(services, owner, 'POST', '/v1/approval-allowances/:id/stop', { clientNonce: 'client_nonce_stop_router', revision: 1 }, { id: allowance.id });
+    // Mirrors Router: undeclared non-GET routes are wrapped in mutations.execute. Double wrapping awaited its own pending promise forever (test timeout).
+    const mutating = route.mutation ?? route.method !== 'GET';
+    const stopped = await (mutating ? services.mutations.execute(c, () => route.handler(c)) : route.handler(c)) as P.ApprovalAllowance;
+    expect(stopped.state).toBe('ended');
+  }, 2000);
+
   test('PATCH /v1/bots/:id/approval-review updates review mode and ends allowances accordingly', async () => {
     const { services, store, owner, otherUser, bot, room } = fixture();
     const chatAllowance = services.resource('allowance', {

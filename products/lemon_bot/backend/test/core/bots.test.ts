@@ -585,6 +585,53 @@ describe('fresh native follow-up readiness fence', () => {
   });
 });
 
+describe('unfinished Bot creation recovery', () => {
+  test('a create stopped by a definite refusal stays fenced, explains itself, and deletes through the product path', async () => {
+    const f = fixture(); const gates = createGateService(f.services); f.services.gates = gates;
+    try {
+      f.fail(method => { if (method === 'profile.followup.admission.set') throw new ApiError('invalid_request', 'Admission callback origin refused.'); });
+      await expect(f.request('POST', '/v1/bots', { clientNonce: nonce('refused_issuer'), name: 'Probe', machineId: 'machine' })).rejects.toMatchObject({ code: 'invalid_request' });
+      f.fail(null);
+      const bot = f.store.list<P.Bot>('bots')[0]!;
+      await createBotService(f.services).reconcile();
+      expect(f.store.metadata(`botLifecycle:${bot.id}`)).toMatchObject({ action: 'create', status: 'failed' });
+      expect(f.calls.filter(call => call.method === 'profile.followup.admission.set')).toHaveLength(1);
+      await expect(f.request('POST', `/v1/conversations/${bot.mainConversationId}/messages`, { clientNonce: nonce('setup_message'), text: 'hello' })).rejects.toMatchObject({ code: 'conflict', retrySafe: true, message: expect.stringContaining('setup didn’t finish') });
+      const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('unfinished_preview'), action: 'delete' });
+      await f.request('DELETE', `/v1/bots/${bot.id}`, confirmed(preview, { clientNonce: nonce('unfinished_delete') }));
+      expect(f.store.get('bots', bot.id)).toBeNull();
+      expect(f.store.metadata(`botLifecycle:${bot.id}`)).toBeNull();
+      expect(f.calls.some(call => call.method === 'profiles.delete' && call.params.id === bot.profileId)).toBe(true);
+    } finally { gates.close(); }
+  });
+  test('a create that never reached profiles.create deletes once the controller proves the profile absent', async () => {
+    const f = fixture(); const gates = createGateService(f.services); f.services.gates = gates;
+    try {
+      f.fail(method => { if (method === 'profiles.create') throw new ApiError('invalid_request', 'Profile refused.'); });
+      await expect(f.request('POST', '/v1/bots', { clientNonce: nonce('refused_profile'), name: 'Pip', machineId: 'machine' })).rejects.toMatchObject({ code: 'invalid_request' });
+      const bot = f.store.list<P.Bot>('bots')[0]!;
+      f.fail(method => { if (method === 'memory.list' || method === 'profiles.delete') throw new ApiError('not_found', 'Profile absent.'); });
+      const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('absent_preview'), action: 'delete' });
+      await f.request('DELETE', `/v1/bots/${bot.id}`, confirmed(preview, { clientNonce: nonce('absent_delete') }));
+      expect(f.store.get('bots', bot.id)).toBeNull();
+    } finally { gates.close(); }
+  });
+  test('an interrupted create whose every effect the controller acknowledges becomes ready without replay', async () => {
+    const f = fixture();
+    const created = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce('interrupted_create'), name: 'Kiwi', machineId: 'machine' });
+    // The process died after the last acknowledged effect, before it marked the Bot ready.
+    const desired = f.store.metadata<{ lifecycleId: string }>(`botDesiredProfile:${created.id}`)!;
+    f.store.put('bots', { ...f.store.require<P.Bot>('bots', created.id), activity: 'offline' });
+    f.store.setMetadata(`botLifecycle:${created.id}`, { id: desired.lifecycleId, action: 'create', userId: 'alice', revision: 1, status: 'running', resourceIds: [created.id] });
+    const mutations = f.calls.filter(call => call.mutation).length;
+    await createBotService(f.services).reconcile();
+    expect(f.store.metadata(`botLifecycle:${created.id}`)).toBeNull();
+    expect(f.store.require<P.Bot>('bots', created.id).activity).toBe('idle');
+    expect(f.store.require<P.Machine>('machines', 'machine').botIds).toContain(created.id);
+    expect(f.calls.filter(call => call.mutation)).toHaveLength(mutations);
+  });
+});
+
 describe('credential-free public native MCP ceiling', () => {
   test('profile rebuild consumes every declared template without querying owner/account credential configuration', async () => {
     const f = fixture(), bot = f.bot();

@@ -65,6 +65,8 @@ export function useInventory<T extends { id: string }>(key: string, load: (query
 
 
 export function QueryState({ query, children }: { query: { loading: boolean; error: unknown; data: unknown; reload?: () => Promise<void> }; children: ReactNode }) {
+  // A workspace policy switch is a settled state, not a failure to retry or a missing personal permission.
+  if (query.error instanceof LemonBotError && query.error.code === 'policy_denied') return <p className="muted" role="status">Turned off for this workspace by its access policy.</p>;
   return <><ErrorNotice error={query.error}/>{query.loading && <Loading/>}{!!query.error && query.reload && <button type="button" disabled={query.loading} onClick={() => void query.reload?.()}>Try again</button>}{query.data !== undefined && <div hidden={!!query.error} aria-busy={query.loading}>{children}</div>}</>;
 }
 

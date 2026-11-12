@@ -4,6 +4,32 @@
 
 ### Fixed
 
+- A Bot whose creation stopped partway no longer stays stuck: reconciliation
+  marks it ready once the controller acknowledges every create effect, and an
+  interrupted (`running`) lifecycle fence becomes `outcome_unknown` instead of
+  "in progress" forever. A never-ready Bot can be previewed and deleted (also a
+  never-created profile or main session), and messages to it explain that its
+  setup didn't finish. No uncertain step is replayed.
+- Stop pressed while a message was still submitting no longer leaves the run
+  `outcome_unknown` forever: a controller receipt of `aborted` reconciles it to
+  stopped ("Run stopped before it started"). Ambiguous receipts with a null
+  session key no longer fail schema validation.
+- Tool rows show the tool's own name (for example `bash`, `read`) and in-progress
+  rows appear; model turns, reasoning, notes and approvals are no longer recorded
+  as nameless "tool" rows. A tool still running when its run ends now finishes
+  (completed, or stopped/failed) instead of spinning forever.
+- File paths outside a machine's allowed folders return `invalid_request` with
+  an explanation naming `--allowed-root`, not a generic 403 that told the owner
+  to ask a workspace owner. Off-host Bot placement is `invalid_request` with its
+  explanation.
+- Failed runs explain a known empty model reply instead of a generic upstream
+  failure and an empty reply bubble; free-form runtime errors stay unprojected.
+- Run outcomes landing in the conversation its owner is watching are created
+  read, so "Bot finished" notices no longer pile up in the Inbox. Activity rows
+  name their Bot.
+- Stop allowing, Bot approval review mode and Bot-wide allowance confirmation
+  no longer hang forever: their handlers own nonce idempotency, so the router no
+  longer wraps them in a second mutation that awaited its own pending reservation.
 - External-trigger provenance remains untrusted across native continuations.
   Concurrent remembered approvals recheck revocation, policy and pending state,
   persist decisions before dispatch, and reconcile uncertain outcomes.

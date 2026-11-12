@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type KeyboardEvent } from 'react';
+import { Component, useCallback, useEffect, useId, useRef, useState, type ReactNode, type KeyboardEvent } from 'react';
 import { LemonBotError, type Bot, type Confirmation, type Confirm } from '@lemon-bot/sdk';
 import { useApp } from './app';
 import { errorSummary } from './error-copy';
@@ -51,6 +51,15 @@ export function ErrorNotice({ error, uncertain = false }: { error: unknown; unce
   const detail = [error instanceof Error ? error.message : 'No usable response was received.', ...(known ? [`Code: ${error.code}`, `Request ID: ${error.requestId || 'Not provided'}`, error.clientNonce ? `Reference: ${error.clientNonce}` : '', error.resourceIds.length ? `Resources: ${error.resourceIds.join(', ')}` : '', error.currentRevision ? `Revision: ${error.currentRevision}` : ''] : [])].filter(Boolean).join('\n');
   return <div className="error-notice" role="alert"><strong>{uncertain || (known && error.outcomeUnknown) ? 'Couldn’t confirm' : 'Couldn’t finish this'}</strong><p>{uncertain ? 'We couldn’t confirm this went through. Your input is kept. Check its current status before trying again so you don’t duplicate it.' : errorSummary(error)}</p><details><summary>Details</summary><pre>{detail}</pre><button onClick={() => void navigator.clipboard.writeText(detail).then(() => setCopied(true)).catch(() => setCopied(false))}>Copy details</button>{copied && <span role="status">Details copied.</span>}</details></div>;
 }
+/** A screen that throws or whose code chunk is gone (Lemon Bot updated while this tab was open) shows a reload card instead of blanking the app. */
+export class ScreenBoundary extends Component<{ children: ReactNode }, { error: unknown }> {
+  state: { error: unknown } = { error: undefined };
+  static getDerivedStateFromError(error: unknown) { return { error: error ?? new Error('Unknown screen error.') }; }
+  render() {
+    if (this.state.error === undefined) return this.props.children;
+    return <section className="panel stack screen-error" role="alert"><h2>This screen couldn’t load</h2><p>Lemon Bot may have been updated since this page opened. Reload to get the current version. Your Bots keep working.</p><div className="row"><button className="primary" onClick={() => location.reload()}>Reload</button></div><details><summary>Details</summary><pre>{this.state.error instanceof Error ? this.state.error.message : String(this.state.error)}</pre></details></section>;
+  }
+}
 /** Consistent read-only recovery copy; callers retain their own mutation fences. */
 export function RecoveryNotice({ error, uncertain, busy, onCheck, available = true, reviewed = false, onResume }: { error: unknown; uncertain: boolean; busy: boolean; onCheck?: () => Promise<unknown>; available?: boolean; reviewed?: boolean; onResume?: () => void }) {
   return <><ErrorNotice error={error} uncertain={uncertain}/>{uncertain && !error && <p role="status">We couldn’t confirm this went through. Your input is kept. Check the current status before trying again so you don’t duplicate it.</p>}{(!!error || uncertain) && onCheck && <button disabled={busy || !available} onClick={() => void onCheck()}>{uncertain ? 'Check status' : 'Refresh and check again'}</button>}{uncertain && reviewed && onResume && <><p>Status refreshed. If your change is shown, you’re done. Otherwise, check the affected service or computer before starting a new change.</p><button disabled={busy || !available} onClick={onResume}>I’ve checked — start a new change</button></>}</>;
@@ -60,6 +69,8 @@ export function EmptyState({ title, children, action }: { title: string; childre
 export function PageHeader({ title, eyebrow, children }: { title: string; eyebrow?: string; children?: ReactNode }) { return <header className="page-header"><div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}<h1>{title}</h1></div><div className="row">{children}</div></header>; }
 export function Badge({ children, tone = 'muted' }: { children: ReactNode; tone?: 'good' | 'warning' | 'danger' | 'muted' }) { return <span className={`badge ${tone}`}>{children}</span>; }
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) { return <label className="field"><span>{label}</span>{children}{hint && <small>{hint}</small>}</label>; }
+/** Plain notice text whose `backticked` spans are commands; renders them as code instead of literal backticks. */
+export function CommandText({ text }: { text: string }) { return <>{text.split('`').map((part, index) => index % 2 ? <code key={index}>{part}</code> : part)}</>; }
 export function trapDialogFocus(event: KeyboardEvent<HTMLElement>) {
   if (event.key !== 'Tab') return;
   const controls = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),a[href],[tabindex]:not([tabindex="-1"])')].filter(element => element.getClientRects().length > 0);

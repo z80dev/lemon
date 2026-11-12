@@ -17,7 +17,7 @@ let savedMicrophone = '';
 const context = {
   client: { call: async () => { throw new Error('Rendering must not call the server'); } },
   snapshot: { workspace: { id: 'workspace', name: 'Test workspace', ownerUserId: 'owner' }, user, bots: [] },
-  device: null, online: true, refresh: async () => undefined, navigate: () => undefined,
+  device: null, online: true, reachable: true, refresh: async () => undefined, navigate: () => undefined,
 };
 mock.module('../src/app', () => ({ ...originalApp, useApp: () => context }));
 mock.module('../src/ui', () => ({ ...originalUi, useQuery: (key: string) => ({ loading: false, ...queries.get(key), reload: async () => undefined, setData: () => undefined }) }));
@@ -101,4 +101,16 @@ test('owner navigation and usage agree on simple settings names', () => {
   expect(navigation).not.toMatch(/measured enforcement|Network &amp; egress|Reviewed host setup|Advanced owner settings/);
   expect(renderToStaticMarkup(<UsageSettings />)).toContain('>Spend limits</button>');
   expect(renderToStaticMarkup(<SpendScreen />)).toContain('<h2>Spend limits</h2>');
+});
+
+test('settings stay editable when only the Lemon link is down', () => {
+  queries.set('settings:push-capabilities', { data: { webPush: false, apns: false } });
+  queries.set('settings:push-device:none', { data: null });
+  const offline = 'You’re offline. Changes can’t be saved right now.';
+  try {
+    Object.assign(context, { online: false, reachable: true });
+    expect(renderToStaticMarkup(<NotificationSettings />)).not.toContain(offline);
+    Object.assign(context, { online: false, reachable: false });
+    expect(renderToStaticMarkup(<NotificationSettings />)).toContain(offline);
+  } finally { Object.assign(context, { online: true, reachable: true }); }
 });

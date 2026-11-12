@@ -11,7 +11,7 @@
   height: 100%;
   object-fit: cover;
 }
-.page .preserve-lines {
+.preserve-lines {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

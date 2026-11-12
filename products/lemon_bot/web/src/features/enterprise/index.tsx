@@ -14,7 +14,7 @@ const destinations = [
 ];
 
 export function OwnerControlsScreen({ route }: { route: Route }) {
-  const { navigate, online } = useApp();
+  const { navigate, reachable: online } = useApp();
   const destination = destinations.find(item => item.screen === route.screen);
   return <main className="page enterprise-page"><PageHeader title={destination?.title ?? 'Owner settings'} eyebrow="Your workspace"><p className="muted">{destination?.description ?? 'Choose an owner control. No enterprise setup is required.'}</p></PageHeader><nav className="tabs enterprise-tabs" aria-label="Owner settings">{destinations.map(item => <button type="button" className={route.screen === item.screen ? 'selected' : ''} aria-current={route.screen === item.screen ? 'page' : undefined} key={item.screen} onClick={() => navigate({ screen: item.screen })}>{item.title}</button>)}</nav>{!online && <aside className="error-notice" role="status">Offline. Displayed records may be stale. Reads report errors rather than empty state; mutations are never queued.</aside>}
     {route.screen === 'settings.identity' && <IdentityScreen />}

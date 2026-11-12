@@ -1195,6 +1195,75 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert %{active: 0} = DynamicSupervisor.count_children(run_supervisor)
     end
 
+    test "a run fenced by its abort before dispatch reads back as aborted, not unknown work" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: BlockingRunProcess
+        )
+
+      run_id = "run_fenced_receipt_#{System.unique_integer([:positive])}"
+      session_key = "agent:fenced-receipt:test:#{System.unique_integer([:positive])}"
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+        LemonCore.Store.delete(RunOrchestrator.abort_tombstone_table(), run_id)
+        LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id)
+      end)
+
+      # Stop reached the router before the submission it raced.
+      assert :ok = RunOrchestrator.register_abort(orchestrator_pid, run_id, :user_requested)
+      assert {:ok, %{state: :aborted, session_key: nil}} = RunOrchestrator.run_receipt(run_id)
+
+      assert {:error, {:run_aborted, :user_requested}} =
+               RunOrchestrator.submit_with_receipt(
+                 orchestrator_pid,
+                 request(%{
+                   run_id: run_id,
+                   session_key: session_key,
+                   agent_id: "test",
+                   prompt: "stopped while submitting"
+                 })
+               )
+
+      assert %{state: "claimed"} =
+               LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+
+      assert {:ok,
+              %{
+                run_id: ^run_id,
+                state: :aborted,
+                session_key: ^session_key,
+                effective_mode: nil,
+                target_run_id: nil
+              }} = RunOrchestrator.run_receipt(run_id)
+
+      assert {:ok, %{presence: %{unknown: 0, idle: true}}} =
+               LemonRouter.RunPresence.query(%{session_key: session_key})
+
+      refute_receive {:bridge_subscribed, ^run_id}, 100
+    end
+
+    test "a claim without an abort tombstone stays outcome_unknown" do
+      run_id = "run_unfenced_receipt_#{System.unique_integer([:positive])}"
+      on_exit(fn -> LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id) end)
+
+      :ok =
+        LemonCore.Store.put(RunOrchestrator.admission_table(), run_id, %{
+          state: "claimed",
+          identity: "identity",
+          scope: %{session_key: "agent:unfenced:test", agent_id: "test", profile_id: nil}
+        })
+
+      assert {:ok, %{state: :outcome_unknown, session_key: nil}} =
+               RunOrchestrator.run_receipt(run_id)
+
+      assert {:error, :not_found} = RunOrchestrator.run_receipt("#{run_id}_missing")
+    end
+
     test "an abort tombstone survives orchestrator restart until its durable expiry" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       run_id = "run_durable_tombstone_#{System.unique_integer([:positive])}"

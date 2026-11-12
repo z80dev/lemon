@@ -271,7 +271,9 @@ typed `includeAnswer: false` for uniform status-only clients; receipts never
 include an answer, even when the boolean is true, and invalid flag types fail
 before the receipt query. It does not read private run history. An ambiguous
 admission fence returns `state: "outcome_unknown"` with nullable `sessionKey`,
-`effectiveMode` and `targetRunId`. Missing IDs return `NOT_FOUND`; query failures
+`effectiveMode` and `targetRunId`. A run ID that an abort fenced before dispatch
+returns `state: "aborted"`: it never ran and never will, and `agent.wait` has no
+completion for it. Missing IDs return `NOT_FOUND`; query failures
 remain `UNAVAILABLE`, not missing or idle. Use `agent.wait` for final answer,
 success/error and explicit `cancelled` proof, following `targetRunId` for merged
 or steered work. `includeAnswer: false` provides status-only completion: `answer`

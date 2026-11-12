@@ -462,7 +462,7 @@ export function createApprovalAllowanceRoutes(services: BackendServices): Route[
       method: 'POST',
       path: '/v1/approval-allowances/:id/stop',
       auth: 'member',
-      mutation: true,
+      mutation: false, // The handler owns nonce idempotency; router wrapping would await its own pending promise.
       status: 200,
       handler(context) {
         const input = parse(update, context.body);
@@ -496,7 +496,7 @@ export function createApprovalAllowanceRoutes(services: BackendServices): Route[
       method: 'PATCH',
       path: '/v1/bots/:id/approval-review',
       auth: 'member',
-      mutation: true,
+      mutation: false,
       status: 200,
       handler(context) {
         const input = parse(reviewUpdate, context.body);
@@ -562,7 +562,7 @@ export function createApprovalAllowanceRoutes(services: BackendServices): Route[
       method: 'POST',
       path: '/v1/bots/:id/approval-allowances',
       auth: 'member',
-      mutation: true,
+      mutation: false,
       status: 201,
       async handler(context) {
         const input = parse(confirm, context.body);

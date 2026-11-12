@@ -22,6 +22,32 @@
 - Load feature screens on demand instead of bundling all routes into the initial client chunk.
 
 ### Fixed
+- Settings panes scroll again: the Account password form and every long pane
+  were unreachable because the settings shell clipped the workspace scroller.
+  The pane list stays pinned while the pane scrolls, and switching screens starts
+  at the top instead of the previous screen's offset.
+- When only the Lemon link is down, settings stored by Lemon Bot (email and
+  password, profile, notifications, policies, devices, owner controls) stay
+  editable and no longer show "You're offline"; the Lemon-link card no longer
+  claims to be trying to reach Lemon Bot's own address.
+- A screen whose code can't load (Lemon Bot updated while the tab was open)
+  shows a Reload card instead of blanking the whole app.
+- Chat: a stopped or failed run that already wrote text shows "Stopped." /
+  "Couldn't finish this." under its reply; single line breaks in replies are kept
+  as on Mac and iPhone; the Unread marker no longer appears above your own
+  message or replies that arrive while you watch; "/" or "@" inside a word (paths,
+  email addresses) no longer opens the reference picker, which also closes after
+  sending; no delivery warning flashes while a message is still sending; group
+  rooms clear their unread dot when read; an online computer no longer shows a
+  stale "seen 9 minutes ago"; long agent IDs wrap in the inspector.
+- Email and X panes say they are turned off by workspace policy instead of
+  reporting a permission error with Try again; the add-password form and
+  password change use "At least 12 characters" instead of UTF-8 byte jargon, hide
+  the duplicate Add button while open and render `lemon-bot open` as code; the
+  identity-provider card is hidden when no provider exists; the empty profile
+  avatar shows initials; Create Bot access radios sit at the card edge; the Bot
+  overview shows Reload only after a failed read; approval times match other
+  times; the Mac-login unlock notice has page margins.
 - After first-password creation replaces a local placeholder address, the profile
   editor adopts the saved email so a later preferences change cannot restore the
   placeholder.

@@ -36,7 +36,7 @@ export class IntentInputError extends Error {}
 // A transport-uncertain mutation is fenced until an explicit read and human review.
 // Reconciliation is never a repeat of the mutation, and never announces success.
 export function useIntent() {
-  const { online } = useApp();
+  const { reachable: online } = useApp();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>();
   const [uncertain, setUncertain] = useState(false);

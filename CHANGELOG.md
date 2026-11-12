@@ -24,6 +24,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Lemon Bot connection ran before Lemon Bot had accepted the connection, found
   no owner, and refused it. It now waits briefly for the accept, still failing
   closed without positive ownership evidence.
+- `runs.receipt.get` reports `state: "aborted"` for a fixed run ID that an abort
+  fenced before dispatch (it never ran and never will) instead of
+  `outcome_unknown` forever, and run presence no longer counts such a claim as
+  unknown work. Clients can now settle Stop pressed during submission.
 
 ---
 

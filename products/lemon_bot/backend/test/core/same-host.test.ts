@@ -49,6 +49,9 @@ describe('loopback Bot endpoint', () => {
     const f = await fixture('http://127.0.0.1:4100', 'elsewhere');
     await proveSameHost(f.services, f.machine);
     expect(() => baseBotMcpTemplate(f.services, f.machine)).toThrow(/only reachable on its own computer/);
+    // A code the client explains as "review your choice" rather than "ask your administrator".
+    let refusal: unknown; try { baseBotMcpTemplate(f.services, f.machine); } catch (error) { refusal = error; }
+    expect(refusal).toMatchObject({ code: 'invalid_request' });
     const g = await fixture('http://127.0.0.1:4100', 'same-host');
     await proveSameHost(g.services, g.machine);
     expect(() => baseBotMcpTemplate(g.services, { ...g.machine, nodeId: 'node-2' })).toThrow(ApiError);

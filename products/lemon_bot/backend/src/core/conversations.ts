@@ -69,6 +69,8 @@ function lifecycleWrite(services: BackendServices, actor: Principal, botId: stri
   if (!fence) return;
   const capability = context?.internalBotLifecycle;
   if (fence.status === 'running' && capability?.botId === botId && capability.userId === actor.userId && fence.userId === actor.userId && capability.action === fence.action && (capability.action === 'delete' || capability.action === 'reset' || capability.action === 'create')) return;
+  // The refused write itself had no effect; deleting the never-ready Bot is its recovery.
+  if ((fence.action === 'create' || fence.action === 'import') && fence.status !== 'running') fail('conflict', 'This Bot’s setup didn’t finish, so it can’t take messages or changes. Delete it from its settings, then create it again.', true, { resourceIds: [botId] });
   fail(fence.status === 'outcome_unknown' ? 'outcome_unknown' : 'conflict', 'The bot lifecycle is not ready for conversation changes.', fence.status !== 'outcome_unknown', { resourceIds: [botId] });
 }
 function bindCanonical(services: BackendServices, actor: Principal, room: P.Conversation, context?: RequestContext): void {
