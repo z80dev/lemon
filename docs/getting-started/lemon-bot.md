@@ -8,13 +8,13 @@ from the coding dashboard opened by `lemon web`.
 
 ## Before you start
 
-- **Mac:** macOS 14 or newer on Apple Silicon. The packaged Mac app needs no
-  Xcode, Command Line Tools or separately installed Python.
+- **Mac:** macOS 14 or newer on Apple Silicon. The native Mac and iPhone apps
+  are built from source today (Xcode 26.3+ and XcodeGen); no signed DMG or
+  TestFlight build is published yet. Path B needs no Xcode.
 - **Linux:** x86_64 or ARM64 with **glibc 2.39+** (not an Alpine/musl binary).
 - **Terminal installation:** `curl`, `tar` and working `python3`; on macOS,
-  `xcode-select --install` supplies Python. This is an installer prerequisite,
-  not a prerequisite for opening the packaged Mac app. Linux workers also use
-  Python 3.9+ for file and terminal tools; macOS runtime artifacts bundle it.
+  `xcode-select --install` supplies Python. Linux workers also use Python 3.9+
+  for file and terminal tools; macOS runtime artifacts bundle it.
 - A model-provider account, API key, or configured local model server. Existing
   credentials are offered first; copying another CLI's login or saving a shell
   key requires your choice. Credentials belong on the machine that runs the Bot.
@@ -32,9 +32,8 @@ to build and launch the app. For a published Terminal installation instead, use
    are not already installed, then open your source-built **Lemon Bot** app.
 2. In **This Mac**, choose **Connect**. It starts Lemon Bot if needed and signs
    you in with this Mac's private local key: no owner form or setup-code
-   copy/paste. A packaged app with pinned installation assets can instead show
-   **Set up Lemon Bot on this Mac** when components are missing; this is not a
-   signed download available today.
+   copy/paste. (A release-packaged app can instead offer **Set up Lemon Bot on
+   this Mac** to install missing components; none is published yet.)
 3. Choose **Create a Bot**. In its model step, connect a model on the selected
    Mac, or explicitly skip for now. A skipped model leaves a reminder: the Bot
    cannot reply until you connect one. See [Model readiness](#model-readiness).
@@ -78,11 +77,12 @@ Follow the terminal prompts:
    **Skip — set it up in the browser**.
 2. Pick a model. Lemon performs a live, non-generating readiness check; it does
    not send a chat message.
-3. Setup hands off to `lemon-bot up --this-machine`, which uses the Lemon on this
-   computer, installs controller/backend/worker user services, creates the
-   owner without a form, and enrolls this computer as a supervised worker. On
-   macOS, persistence is **login**, not boot.
-4. Optionally connect Telegram or Discord.
+3. Optionally connect Telegram or Discord.
+4. After the last question, setup continues in the same terminal with
+   `lemon-bot up --this-machine`, which uses the Lemon on this computer,
+   installs controller/backend/worker user services, creates the owner without
+   a form, and enrolls this computer as a supervised worker. On macOS,
+   persistence is **login**, not boot.
 
 The browser opens already signed in. On a Mac the notice is **Unlocked by your
 Mac login**. At **Create your first Bot**, choose **Create a Bot** and enter a
@@ -160,9 +160,9 @@ bulk-copied to it.
    loopback **This computer** means the controller host, not your browser.
    Follow [Prepare the controller](../user-guide/attaching-a-bot-machine.md#prepare-the-controller)
    to expose the node-only port 4044 through TLS, not the operator port 4040.
-   Also configure a reachable HTTPS `LEMON_BOT_PUBLIC_URL` for the product
-   backend's MCP/attachments (normally proxied to 4100); the node endpoint alone
-   is not sufficient.
+   Also [give Lemon Bot an HTTPS address](#give-lemon-bot-an-https-address)
+   for the product backend's MCP/attachments, including the controller
+   allowlist; the node endpoint alone is not sufficient.
 3. Copy the exact generated command to a terminal on the destination. Enter its
    separate one-use code at the hidden prompt. The version-pinned script installs
    a compatible worker and a user service, then exits when online. It reports
@@ -242,11 +242,52 @@ follow [Update, roll back, and uninstall](../user-guide/updates.md).
 
 ## Optional: another browser or iPhone
 
-For access without an SSH forward, configure a reachable HTTPS product origin
-(`LEMON_BOT_PUBLIC_URL`), typically Tailscale Serve to the Bot backend's port
-4100. This is separate from exposing the node gateway for execution machines.
-Use the owner's email/password or configured SSO to sign in from another browser;
-network/tailnet access alone is not sign-in authority.
+Another browser, an iPhone, or an execution machine on another host needs a
+reachable HTTPS address for Lemon Bot (its public origin,
+`LEMON_BOT_PUBLIC_URL`). This is separate from exposing the node gateway for
+execution machines. Use the owner's email/password or configured SSO to sign in
+from another browser; network/tailnet access alone is not sign-in authority.
+
+### Give Lemon Bot an HTTPS address
+
+Do all three steps on the computer that runs Lemon Bot. The examples use
+`https://mac.example.ts.net:8443`; use your own machine's exact origin.
+
+1. **Route HTTPS to the backend.** With Tailscale, inspect existing routes first
+   and pick an unused HTTPS port. Keep existing routes; never use Funnel or route
+   to the controller port 4040.
+
+   ```bash
+   tailscale serve status
+   tailscale serve --bg --https=8443 http://127.0.0.1:4100
+   ```
+
+2. **Tell the backend its origin.** The backend service keeps the environment it
+   was installed with, so reinstall its unit with the origin set. Data and
+   credentials are kept.
+
+   ```bash
+   lemon service uninstall backend
+   LEMON_BOT_PUBLIC_URL=https://mac.example.ts.net:8443 lemon service install backend
+   ```
+
+3. **Allow that origin on the controller.** The controller accepts Bot callbacks
+   only from `http://127.0.0.1:4100` by default. Until the new origin is allowed,
+   creating a Bot (and scheduling a routine) fails with a generic error. Add both
+   allowlists to `~/.lemon/env`, which the `lemon` launcher and its controller
+   service read, then restart:
+
+   ```bash
+   cat >> "$HOME/.lemon/env" <<'EOF'
+   export LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS=https://mac.example.ts.net:8443,http://127.0.0.1:4100
+   export LEMON_CRON_ADMISSION_ALLOWED_ORIGINS=https://mac.example.ts.net:8443,http://127.0.0.1:4100
+   EOF
+   lemon restart
+   ```
+
+   Each entry is an exact origin: scheme, host and port, with no path or
+   trailing slash. Setting a variable replaces the default, so keep
+   `http://127.0.0.1:4100` for Bots created before the change.
 
 If an operator is deliberately bootstrapping an unconfigured remote workspace
 instead of using local sign-in, `lemon-bot setup` verifies its configured tailnet
@@ -254,14 +295,24 @@ HTTPS origin and privately prints a five-minute owner setup proof. Use that proo
 in the owner form. It does not start services or connect a model, and cannot
 re-bootstrap an existing owner. `lemon-bot setup --print-origin` is read-only.
 
-For an iPhone, first verify **Connect iPhone → Check connection readiness** on
-the signed-in desktop. Create a fresh QR/link, scan or paste it in the phone app,
-review the destination and request connection. Compare the phone's device name
-and six-digit code with the desktop before approving that exact request. Wait
-for the phone to finish connecting, not merely for desktop approval. The phone
-gets its own revocable product session; it is not another execution machine.
-Revoke it in **Settings → Account → Devices/Sessions**. The desktop backend and
-host must remain available even when the desktop UI is closed.
+### Connect an iPhone
 
-For terminal-assisted pairing and its HTTPS prerequisites, see
+The iPhone app is built from source with Xcode and needs your own Apple signing
+team for a physical device; see the
+[Apple build guide](https://github.com/z80dev/lemon/blob/main/products/lemon_bot/apple/README.md#generate-build-and-launch).
+Both devices must reach the HTTPS address above (for Tailscale, both on the
+same tailnet).
+
+In the signed-in browser, open **Settings → Devices · Connect iPhone**; in the
+Mac app, open **Connect iPhone** in Settings and first choose **Check connection
+readiness**. Create a fresh QR code,
+scan or paste it in the phone app, review the destination and request
+connection. Compare the phone's device name and six-digit code with the desktop
+before approving that exact request. Wait for the phone to finish connecting, not
+merely for desktop approval. The phone gets its own revocable product session;
+it is not another execution machine. Revoke it with **Revoke this iPhone** or in
+**Settings → Account → Sessions & devices**. The desktop backend and host must
+remain available even when the desktop UI is closed.
+
+For terminal-assisted pairing, see
 [`lemon connect iphone`](../user-guide/cli.md#connect-an-iphone-to-lemon-bot).

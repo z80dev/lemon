@@ -13,7 +13,7 @@ verified private actor partitions plus explicitly authorized shared facts. They
 never infer sharing authority from old files or unproven run metadata.
 
 
-### Browse and scroll conversations
+## Browse and scroll conversations
 
 Call `recall` with no query to browse recent sessions (first prompt, timestamp,
 and run count). Search hits include session key, document ID, and run ID. Pass

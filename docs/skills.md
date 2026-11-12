@@ -23,7 +23,7 @@ Project skills override global skills with the same key. The exact precedence, t
 
 Each skill must have a `SKILL.md` file with YAML frontmatter:
 
-```markdown
+````markdown
 ---
 name: bun-file-io
 description: Use this when working on file operations like reading, writing, or scanning files.
@@ -55,7 +55,7 @@ if (await file.exists()) {
 ```javascript
 await Bun.write("./output.txt", "Hello, World!");
 ```
-```
+````
 
 ### Frontmatter Fields
 
@@ -244,7 +244,7 @@ mkdir -p ~/.lemon/agent/skill/my-skill
 
 ### 2. Create SKILL.md
 
-```bash
+````bash
 cat > .lemon/skill/my-skill/SKILL.md << 'EOF'
 ---
 name: my-skill
@@ -264,13 +264,13 @@ Brief description of what this skill covers.
 
 ### Pattern 1
 
-```code
+```text
 example code
 ```
 
 ### Pattern 2
 
-```code
+```text
 example code
 ```
 
@@ -279,7 +279,7 @@ example code
 - Practice 1
 - Practice 2
 EOF
-```
+````
 
 ### 3. Test the skill
 
@@ -295,7 +295,7 @@ iex> LemonSkills.find_relevant("working on X", cwd: "/path/to/project")
 
 ### Database Operations
 
-```markdown
+````markdown
 ---
 name: database
 description: Use for database queries, migrations, and data modeling.
@@ -320,11 +320,11 @@ WHERE o.created_at > NOW() - INTERVAL '30 days';
 ## Migrations
 
 Always create reversible migrations with `up` and `down` methods.
-```
+````
 
 ### React Components
 
-```markdown
+````markdown
 ---
 name: react-components
 description: Use when building React components, hooks, or managing state.
@@ -357,7 +357,7 @@ export function MyComponent({ title, onSubmit }: Props) {
 - Use `useState` for local state
 - Use `useEffect` for side effects
 - Create custom hooks for reusable logic
-```
+````
 
 ### API Design
 

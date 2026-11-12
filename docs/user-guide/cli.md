@@ -225,7 +225,10 @@ the backend, not the CLI, chooses the QR origin. Loopback and HTTPS aliases must
 prove the same instance and workspace identity. The examples are illustrative,
 not a claim that a live origin has been provisioned or verified.
 
-Configure Tailscale HTTPS for the Bot public origin first. The client reuses the
+Configure Tailscale HTTPS for the Bot public origin first, including the
+controller allowlist: see
+[Give Lemon Bot an HTTPS address](../getting-started/lemon-bot.md#give-lemon-bot-an-https-address).
+The client reuses the
 product's HTTPS/public-origin preflight before issuing a link; fix any reported
 DNS, certificate, routing, or backend-identity mismatch rather than bypassing
 preflight. This command neither configures Tailscale nor starts the Lemon daemon.
@@ -1181,7 +1184,7 @@ Run `lemon help <command>` for the same data on your installed version.
 Launcher lifecycle commands (`tui`, `web`, `start`, `daemon`, `stop`, `restart`,
 `status`) are described under [Launcher lifecycle commands](#launcher-lifecycle-commands).
 
-#### `lemon acp`
+### `lemon acp`
 
 Serve ACP over stdio using the local runtime.
 
@@ -1189,7 +1192,7 @@ Serve ACP over stdio using the local runtime.
 lemon acp
 ```
 
-#### `lemon tern`
+### `lemon tern`
 
 Install Lemon's Tern palette plugin and ACP agent.
 
@@ -1205,7 +1208,7 @@ lemon tern install [--config-dir PATH]
 | --- | --- |
 | `--config-dir PATH` | Tern configuration directory (not a config file) |
 
-#### `lemon connect`
+### `lemon connect`
 
 Pair an iPhone with an already-running Lemon Bot backend.
 
@@ -1218,7 +1221,7 @@ lemon connect iphone --backend ORIGIN [--origin HTTPS_ORIGIN]
 HTTPS origin, defaulting to the backend's `publicUrl`. See
 [iPhone pairing](#connect-an-iphone-to-lemon-bot) for credential handling.
 
-#### `lemon run`
+### `lemon run`
 
 Run a prompt non-interactively (-p, --print).
 
@@ -1237,7 +1240,7 @@ lemon run [PROMPT] [--output text|json|stream-json] [options]
 | `--allowed-tools LIST` | Comma-separated tool allowlist |
 | `--denied-tools LIST` | Comma-separated tool denylist |
 
-#### `lemon setup`
+### `lemon setup`
 
 Run first-time setup and configuration.
 
@@ -1289,7 +1292,7 @@ The `model` subcommand accepts `--provider`, `--config-path`, `--cwd`,
 not `setup model`. Without `--offline`, a JSON report performs a non-generating
 provider check. **Saved** is not a successful live request.
 
-#### `lemon model`
+### `lemon model`
 
 Configure an AI provider.
 
@@ -1317,7 +1320,7 @@ Without a provider, Lemon displays an interactive picker. Credentials are stored
 
 `lemon model openai-codex --auth device` signs in to ChatGPT with a device code (no local callback); `openrouter`, `xai`, `kimi_coding` and `zai` also offer subscription sign-in.
 
-#### `lemon gateway`
+### `lemon gateway`
 
 Configure a gateway adapter.
 
@@ -1339,7 +1342,7 @@ lemon gateway setup [--transport NAME] [options]
 
 Telegram setup pairs the bot with your chat: send /start to the bot when prompted, or pass --chat-id. An unpaired bot ignores every chat.
 
-#### `lemon pairing`
+### `lemon pairing`
 
 Review and approve channel pairing requests.
 
@@ -1358,7 +1361,7 @@ lemon pairing revoke <telegram|discord> <CHAT_ID>
 Local operator only. See [channel pairing](#channel-pairing) for live adapter
 updates and failure handling; the registry's restart advice is outdated.
 
-#### `lemon doctor`
+### `lemon doctor`
 
 Run diagnostics or write a support bundle.
 
@@ -1376,7 +1379,7 @@ lemon doctor [options]
 | `--bundle [PATH]` | Write a redacted support bundle |
 | `--bundle-path PATH` | Set the support bundle path |
 
-#### `lemon config`
+### `lemon config`
 
 Validate, show or migrate configuration.
 
@@ -1395,7 +1398,7 @@ lemon config [validate|show|migrate] [options]
 | `--verbose, -v` | Verbose output |
 | `--project-dir, -p PATH` | Project directory for project config |
 
-#### `lemon mcp`
+### `lemon mcp`
 
 Manage and test named MCP servers.
 
@@ -1427,7 +1430,7 @@ lemon mcp list [--all]|remove NAME|test NAME|enable NAME|disable NAME [options]
 | `--replace` | Replace a unique existing name, preserving extensions |
 | `--json` | Emit redacted JSON |
 
-#### `lemon secrets`
+### `lemon secrets`
 
 Manage encrypted secrets.
 
@@ -1461,7 +1464,7 @@ lemon secrets <command> [args]
 
 rotate-key previews by default and changes nothing. Applying requires the exact preview token, refuses while a Lemon runtime is running, and re-encrypts every stored secret under a new master key written to the Keychain entry or key file that supplied the current one.
 
-#### `lemon channels`
+### `lemon channels`
 
 Inspect channel configuration.
 
@@ -1474,7 +1477,7 @@ lemon channels [options]
 | `--project-dir PATH` | Project root to read config from |
 | `--json` | Emit redacted channel diagnostics JSON |
 
-#### `lemon providers`
+### `lemon providers`
 
 Inspect provider readiness and manage routing.
 
@@ -1507,7 +1510,7 @@ Pool commands: list, set POOL, delete POOL, and credential add/remove/clear. Cre
 
 Mutations preserve comments, preview safely, and require the exact confirmation value when removing configured routing state.
 
-#### `lemon blueprints`
+### `lemon blueprints`
 
 Review and activate cataloged skill automation blueprints.
 
@@ -1533,7 +1536,7 @@ With no arguments, the command lists the local catalog. A bundle ID plus --profi
 
 Activation accepts catalog IDs only and requires the exact confirmation digest from a fresh plan. Bundle paths, archives, commands, environment overrides, and secret values are not CLI inputs.
 
-#### `lemon profile`
+### `lemon profile`
 
 Manage isolated agent profiles.
 
@@ -1565,7 +1568,7 @@ lemon profile <command> [options]
 
 Lifecycle commands keep profiles under the canonical Lemon home. Exports are selected-file snapshots that never include sessions, memory, or artifacts. Selected files (profile `config.toml`, designated workspace Markdown, allowlisted skill text) and the profile name, description, and system prompt go through credential redaction before export, so inline credential values are not preserved. Redaction is not exhaustive; review an export before sharing it.
 
-#### `lemon backup`
+### `lemon backup`
 
 Back up or restore durable user state.
 
@@ -1595,7 +1598,7 @@ Restore verifies before mutation. The only credential-specific exclusions are th
 
 Exit codes: 0 success; 1 verification or operational failure; 2 invalid command or options.
 
-#### `lemon context`
+### `lemon context`
 
 Preview or resolve bounded context references.
 
@@ -1618,7 +1621,7 @@ lemon context <preview|resolve> <reference>... [options]
 | `--max-pages N` | Bound document pages |
 | `--timeout-ms N` | Bound external resolution time |
 
-#### `lemon sessions`
+### `lemon sessions`
 
 Inspect and manage durable sessions.
 
@@ -1666,7 +1669,7 @@ Stats returns exact aggregate counts with bounded, redacted agent and origin dim
 
 Context shows a native session's context-window usage by category (system prompt, tools, skills, context files, memory, messages, free space); splits are estimates scaled to the provider-reported total.
 
-#### `lemon runs`
+### `lemon runs`
 
 Inspect runtime runs and per-run timelines.
 
@@ -1691,7 +1694,7 @@ lemon runs [list|active] [options] | lemon runs show <runId> [--json]
 
 Requires a running runtime; never starts one. Recent filters inspect at most 200 returned history rows. Active lists in-flight sessions. Show renders a redacted per-run timeline with relative times, tool outcomes, subagents and usage (latest 500 entries).
 
-#### `lemon cron`
+### `lemon cron`
 
 Manage cron jobs and inspect run history.
 
@@ -1720,7 +1723,7 @@ lemon cron list [--failing] [--json] | pause|resume|run <id|name> | pause|resume
 | `--limit N` | Return 1..200 rows (default 50) |
 | `--json` | Emit JSON without job prompts or run output |
 
-#### `lemon logs`
+### `lemon logs`
 
 Tail redacted runtime or offline launcher logs.
 
@@ -1737,7 +1740,7 @@ lemon logs [-n 50] [--level info|warning|error] [--follow] [--json]
 
 Reads logs.tail while online, otherwise the launcher log. File reads are bounded to the last 1 MiB; unknown-level file lines are excluded with --level.
 
-#### `lemon omp`
+### `lemon omp`
 
 Start, watch, and steer omp coding-agent sessions.
 
@@ -1783,7 +1786,7 @@ omp runs inside the Lemon runtime, which starts first when needed. Without a sub
 
 Leaving watch (including Ctrl-C) never cancels the omp turn. A send or cancel reported as not retry-safe may already have taken effect; check `lemon omp show ID` before retrying.
 
-#### `lemon learning`
+### `lemon learning`
 
 Browse the current profile's learning timeline.
 
@@ -1802,7 +1805,7 @@ Newest first. Existing creation/latest-update timestamps only, not a complete hi
 
 Use the existing memory management and skill commands to edit/delete; this command never mutates state.
 
-#### `lemon learn`
+### `lemon learn`
 
 Review and confirm bounded learning from sources.
 
@@ -1828,7 +1831,7 @@ Review is the default and never writes state. Confirm re-resolves every source a
 
 Output contains hashes, counts, audit codes, and conflict state only; source text, prompts, paths, URLs, secret names, and secret values are omitted.
 
-#### `lemon update`
+### `lemon update`
 
 Safely plan, apply, inspect, or roll back Lemon releases.
 
@@ -1857,7 +1860,7 @@ Planning is non-mutating. Managed-release apply requires the exact digest from a
 
 Source checkouts support read-only check/history. Plan, apply, and rollback fail closed because source updates belong to the operator's reviewed git workflow.
 
-#### `lemon completion`
+### `lemon completion`
 
 Generate shell completion scripts.
 
@@ -1873,7 +1876,7 @@ lemon completion <bash|zsh|fish>
 
 The generated script matches the invoking launcher. Release VM tools (remote, eval, rpc) are only advertised by packaged installs.
 
-#### `lemon migrate`
+### `lemon migrate`
 
 Import user data from a Hermes home.
 
@@ -1902,7 +1905,7 @@ lemon migrate hermes [audit] [options]
 
 Migration always previews first and refuses conflicts unless --overwrite is set. Without --yes it asks before writing. Secret values are never printed or written to reports.
 
-#### `lemon node`
+### `lemon node`
 
 Inspect worker compatibility or join a named execution node.
 
@@ -1954,7 +1957,7 @@ status worker --name NAME` for code 3. There is no automatic foreground fallback
 Signal exits are 129 (HUP), 130 (INT), and 143 (TERM).
 
 
-#### `lemon service`
+### `lemon service`
 
 Manage background system service units for Lemon roles.
 
@@ -1992,7 +1995,7 @@ lemon service uninstall ROLE... [options]
 | `--enable-linger` | Enable systemd user linger for persistence after logout (Linux) |
 | `--json` | Emit one sanitized schema 1 JSON document |
 
-#### `lemon uninstall`
+### `lemon uninstall`
 
 Remove Lemon service units, paths, and environment changes.
 
@@ -2006,7 +2009,7 @@ lemon uninstall [--purge] [--confirm DIGEST] [--json]
 | `--confirm DIGEST` | Exact confirmation digest from a fresh preview |
 | `--json` | Emit preview or result as JSON |
 
-#### `lemon version`
+### `lemon version`
 
 Print the Lemon version (--version includes build identity).
 
@@ -2018,7 +2021,7 @@ lemon version [--verbose]
 | --- | --- |
 | `--verbose` | Show source/release, commit, and channel |
 
-#### `lemon send`
+### `lemon send`
 
 Send a Telegram or Discord notification.
 
@@ -2040,7 +2043,7 @@ lemon send --to TARGET [options] [message]
 | `--quiet` | Suppress normal output |
 | `--json` | Emit JSON |
 
-#### `lemon media`
+### `lemon media`
 
 Inspect media generation diagnostics.
 
@@ -2054,7 +2057,7 @@ lemon media [options]
 | `--limit N` | Recent jobs to show |
 | `--json` | Emit redacted JSON |
 
-#### `lemon models`
+### `lemon models`
 
 List the model catalog.
 
@@ -2072,7 +2075,7 @@ lemon models [options]
 | `--discover` | Query a preset provider endpoint for its models |
 | `--base-url URL` | Endpoint for --discover |
 
-#### `lemon policy`
+### `lemon policy`
 
 Manage model policies.
 
@@ -2097,7 +2100,7 @@ lemon policy <list|set|get|clear> [channel] [options]
 | `--reason TEXT`, `-r TEXT` | Policy metadata reason |
 | `--all` | Clear all policies for the channel |
 
-#### `lemon skill`
+### `lemon skill`
 
 Manage installed skills.
 
@@ -2132,7 +2135,7 @@ lemon skill <command> [args]
 | `--not-ready` | Browse skills missing dependencies |
 | `--all` | Include hidden skills when browsing |
 
-#### `lemon usage`
+### `lemon usage`
 
 Inspect usage diagnostics.
 

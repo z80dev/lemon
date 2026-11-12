@@ -38,7 +38,7 @@ After the model step, a packaged install asks one question:
 | Choice | What setup does next |
 | --- | --- |
 | **Terminal** (default) | Asks **Keep Lemon running in the background? [y/N]**; yes runs `lemon service install controller`. Then offers the TUI. |
-| **Browser** | Downloads the Lemon Bot backend for your installed version, verifies its size and SHA-256 against that release's manifest, links `~/.local/bin/lemon-bot`, then runs `lemon-bot up --this-machine`: services, local owner, this computer as a worker, and a signed-in browser. The model you just connected is reused. |
+| **Browser** | Downloads the Lemon Bot backend for your installed version, verifies its size and SHA-256 against that release's manifest, links `~/.local/bin/lemon-bot`, then, after setup's last question, runs `lemon-bot up --this-machine` in the same terminal: services, local owner, this computer as a worker, and a signed-in browser. The model you just connected is reused. |
 | **Both** | Browser's steps, then offers the TUI. |
 
 Every choice then offers **Connect Telegram or Discord now? [y/N]**. Pre-answer
@@ -91,6 +91,16 @@ Units use stable launchers and never store invite codes or operator/encryption
 secrets. Existing Lemon worker agents are adopted under the same name. A
 verified detached controller/backend can be taken over once, with brief downtime;
 foreign or unverified processes are never killed.
+
+Services do not see variables exported in your shell. On a packaged install,
+put controller settings (for example `LEMON_CONTROL_PLANE_PUBLIC_WS_URL` or the
+callback-origin allowlists) in `~/.lemon/env` as `export NAME=value` lines; the
+`lemon` launcher reads that file every time it starts the controller, so apply
+changes with `lemon restart`. A backend unit records `LEMON_BOT_PORT`,
+`LEMON_BOT_HOST`, `LEMON_BOT_DATA_DIR`, `LEMON_BOT_PUBLIC_URL` and
+`LEMON_BOT_TRUSTED_OVERLAY` from the shell that installs it; to change one,
+uninstall and reinstall the backend unit with the new value set. See
+[Give Lemon Bot an HTTPS address](../getting-started/lemon-bot.md#give-lemon-bot-an-https-address).
 
 `lemon service uninstall ROLE...` removes only the units and keeps data and
 credentials. Remove a worker's machine entry in Lemon Bot separately to revoke

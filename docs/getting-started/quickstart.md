@@ -52,9 +52,13 @@ Setup ends with the state of your model, never a guess:
   message).** — the credential resolves, but the provider has no quick live
   check, was unreachable, or the check failed for a non-authentication reason.
 
-Both paths offer **Open Lemon now? [Y/n]**. Explicit `--skip-verify` instead
-reports a saved, skipped check and does not offer to launch. Missing, expired
-or rejected credentials require action rather than claiming readiness.
+Setup then asks **How will you use Lemon?** Choose **Terminal** for this guide.
+It asks whether to keep Lemon running in the background (it then starts when
+you log in; **No** is fine for trying it out) and whether to connect Telegram
+or Discord now (that can wait), then offers **Open Lemon now? [Y/n]**. An
+explicit `--skip-verify` instead reports a saved, skipped check and does not
+offer to launch. Missing, expired or rejected credentials require action
+rather than claiming readiness.
 To connect or re-check a model later, run `lemon setup model` (or
 `lemon setup model --json` for a non-interactive readiness check;
 add `--offline` to avoid provider requests).

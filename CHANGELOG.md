@@ -28,6 +28,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   fenced before dispatch (it never ran and never will) instead of
   `outcome_unknown` forever, and run presence no longer counts such a claim as
   unknown work. Clients can now settle Stop pressed during submission.
+- Docs: [Lemon Bot in 3 minutes](https://lemon.food/getting-started/lemon-bot)
+  now explains how to give Lemon Bot an HTTPS address for iPhone, another
+  browser or a remote worker. That includes the controller allowlists
+  (`LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS`, `LEMON_CRON_ADMISSION_ALLOWED_ORIGINS`
+  in `~/.lemon/env`); without them, creating a Bot fails with a generic error.
+  The install, quickstart and setup guides describe the **How will you use
+  Lemon?** step and state that the Mac and iPhone apps are built from source
+  for now.
+- lemon.food: the home page shows both install commands in full instead of
+  clipping the flags that tell them apart. Secondary text meets WCAG AA
+  contrast, and the skill examples on the Skills page render as single code
+  blocks.
 
 ---
 
