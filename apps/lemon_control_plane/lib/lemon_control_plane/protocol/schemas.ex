@@ -24,7 +24,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "status" => %{optional: %{}},
     "system.restart" => %{optional: %{}},
     "system.stop" => %{optional: %{}},
-    "doctor.run" => %{optional: %{}},
+    "doctor.run" => %{optional: %{"botPublicUrl" => :string}},
     "setup.status" => %{optional: %{}},
     "logs.tail" => %{
       optional: %{

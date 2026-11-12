@@ -44,6 +44,83 @@ defmodule LemonCli.ServiceCommandTest do
     {:ok, opts: opts}
   end
 
+  test "install planning uses the installer's exact environment projection and precedence", %{
+    opts: opts
+  } do
+    bot = Path.join(opts[:home], ".local/bin/lemon-bot")
+    File.mkdir_p!(Path.dirname(bot))
+    File.write!(bot, "#!/bin/sh\nexit 0\n")
+    File.chmod!(bot, 0o700)
+
+    invoking = %{
+      "LEMON_BOT_CONFIG_FILE" => Path.join(opts[:home], "invoking.json"),
+      "LEMON_CONTROL_PLANE_PORT" => "5050"
+    }
+
+    options = Keyword.merge(opts, bot: bot, env: invoking)
+    assert {:ok, first} = LemonCore.Service.install_spec("backend", options)
+    assert first.env["LEMON_BOT_CONFIG_FILE"] == invoking["LEMON_BOT_CONFIG_FILE"]
+    assert first.env["LEMON_CONTROL_PLANE_PORT"] == "5050"
+
+    assert :ok =
+             Unit.write(
+               %{
+                 first
+                 | env:
+                     Map.merge(first.env, %{
+                       "LEMON_BOT_CONFIG_FILE" => Path.join(opts[:home], "saved.json"),
+                       "LEMON_CONTROL_PLANE_PORT" => "4040"
+                     })
+               },
+               "launchd"
+             )
+
+    assert {:ok, saved} = LemonCore.Service.install_spec("backend", options)
+    assert saved.env["LEMON_BOT_CONFIG_FILE"] == Path.join(opts[:home], "saved.json")
+    assert saved.env["LEMON_CONTROL_PLANE_PORT"] == "5050"
+  end
+
+  test "explicit Bot URL override replaces or removes saved environment without changing default precedence",
+       %{opts: opts} do
+    bot = Path.join(opts[:home], ".local/bin/lemon-bot")
+    File.mkdir_p!(Path.dirname(bot))
+    File.write!(bot, "#!/bin/sh\nexit 0\n")
+    File.chmod!(bot, 0o700)
+
+    env = %{
+      "LEMON_BOT_PUBLIC_URL" => "https://old.example",
+      "LEMON_BOT_CONFIG_FILE" => Path.join(opts[:home], "operator.json"),
+      "LEMON_BOT_CONTROL_URL" => "ws://127.0.0.1:4040/ws"
+    }
+
+    {:ok, saved} = Role.build("backend", "launchd", Keyword.put(opts, :env, env))
+    :ok = Unit.write(saved, "launchd")
+
+    for {override, expected} <- [
+          {{:set, "https://new.example"}, "https://new.example"},
+          {{:set, nil}, nil},
+          {:absent, "https://old.example"}
+        ] do
+      :ok = Unit.write(saved, "launchd")
+      options = Keyword.merge(opts, bot: bot, wait: 0, http_get: fn _ -> {:error, :offline} end)
+
+      options =
+        case override do
+          {:set, value} ->
+            Keyword.put(options, :bot_public_url, value)
+
+          :absent ->
+            Keyword.put(options, :env, %{"LEMON_BOT_PUBLIC_URL" => "https://ignored.example"})
+        end
+
+      assert {:ok, _} = LemonCore.Service.install(["backend"], options)
+      assert {:ok, parsed} = Unit.read(saved.path, "launchd")
+      assert parsed.env["LEMON_BOT_PUBLIC_URL"] == expected
+      assert parsed.env["LEMON_BOT_CONFIG_FILE"] == env["LEMON_BOT_CONFIG_FILE"]
+      assert parsed.env["LEMON_BOT_CONTROL_URL"] == env["LEMON_BOT_CONTROL_URL"]
+    end
+  end
+
   test "invalid commands, names, roles and flags are usage failures" do
     args = [
       [],

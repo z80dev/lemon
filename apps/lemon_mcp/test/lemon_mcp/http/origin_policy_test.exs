@@ -11,6 +11,29 @@ defmodule LemonMCP.HTTP.OriginPolicyTest do
   defp policy(origins \\ [@origin]), do: %{allowed_origins: origins}
   defp resolver(addresses), do: [resolver: fn _host -> {:ok, addresses} end]
 
+  test "canonical_https_origin accepts origins only, without unsafe syntax" do
+    assert {:ok, "https://mcp.example"} =
+             OriginPolicy.canonical_https_origin("HTTPS://MCP.Example.:443/")
+
+    assert {:ok, "https://xn--bcher-kva.example"} =
+             OriginPolicy.canonical_https_origin("https://BÜCHER.example")
+
+    for value <- [
+          nil,
+          42,
+          "http://mcp.example",
+          "https://user:secret@mcp.example",
+          "https://mcp.example/mcp",
+          "https://mcp.example?secret",
+          "https://mcp.example#secret",
+          "https://mcp.example:",
+          "https://mcp.example:65536",
+          "https://bad host"
+        ] do
+      assert {:error, :invalid_url} = OriginPolicy.canonical_https_origin(value)
+    end
+  end
+
   describe "canonical_origin/1" do
     test "normalizes scheme, DNS case, root dot and default ports without losing URL identity" do
       assert {:ok, "https://mcp.example"} =

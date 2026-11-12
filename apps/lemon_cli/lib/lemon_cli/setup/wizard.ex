@@ -135,8 +135,8 @@ defmodule LemonCli.Setup.Wizard do
   7. Print completion after a passing live check or a saved provider without a live check.
   8. Ask how Lemon will be used — terminal, Lemon Bot in the browser, or both —
      on a packaged install (`--use` pre-answers it). Browser installs the
-     Lemon Bot backend for the running version and hands off to
-     `lemon-bot up --this-machine`; terminal-only offers background services.
+     Lemon Bot backend for the running version, offers opt-in HTTPS, and hands
+     off to `lemon-bot up --this-machine`; terminal-only offers background services.
   9. Offer Telegram/Discord setup, then offer to open the terminal UI.
 
   The runtime profile is not part of first-run setup: the installer chooses it.
@@ -154,7 +154,8 @@ defmodule LemonCli.Setup.Wizard do
     * `:port_free?`, `:lemon_running?`, `:ports_path` - injectable port probes
       and port file (testing)
     * `:packaged?`, `:bot_installed?`, `:install_bot`, `:bot_runner`,
-      `:install_service`, `:gateway_setup` - injectable component steps (testing)
+      `:bot_https_command`, `:install_service`, `:gateway_setup` - injectable
+      component steps (testing); `:bot_https_command` accepts the command argument list
     * `:launch` - offer to open Lemon and ask steps 8–9 (default: true; false
       for the launcher's setup gate and `lemon-bot up`)
   """
@@ -1032,12 +1033,62 @@ defmodule LemonCli.Setup.Wizard do
     case install.([]) do
       {:ok, %{version: version, launcher: launcher}} ->
         io.info.("Lemon Bot #{version} is installed.")
-        run_bot_up(io, launcher, interactive?, explicit?, opts)
+
+        with :ok <- step_bot_https(io, interactive?, opts) do
+          run_bot_up(io, launcher, interactive?, explicit?, opts)
+        end
 
       {:error, reason} ->
         io.error.("Could not install Lemon Bot: #{bot_install_error(reason)}.")
         io.info.("Lemon still works in the terminal. Retry with `lemon setup --use browser`.")
         {:error, {:bot_install_failed, reason}}
+    end
+  end
+
+  defp step_bot_https(io, true, opts) do
+    io.info.("Lemon Bot stays on loopback by default; HTTPS is optional.")
+
+    options = [
+      %{label: "Keep local access only — enable HTTPS later", value: :skip},
+      %{label: "Enable HTTPS with Tailscale Serve (tailnet only, not public)", value: :tailscale},
+      %{label: "Use an existing HTTPS URL (reverse proxy already configured)", value: :url}
+    ]
+
+    case select_option(io, "Give Lemon Bot an HTTPS address?", options) do
+      {:ok, :tailscale} ->
+        enable_bot_https(["enable", "--tailscale"], io, opts)
+
+      {:ok, :url} ->
+        case normalize_input(io.prompt.("Existing HTTPS URL (blank to skip): ")) do
+          "" -> skip_bot_https(io)
+          url -> enable_bot_https(["enable", "--url", url], io, opts)
+        end
+
+      _ ->
+        skip_bot_https(io)
+    end
+  end
+
+  defp step_bot_https(io, false, _opts), do: skip_bot_https(io)
+
+  defp skip_bot_https(io) do
+    io.info.(
+      "HTTPS unchanged. Enable later with `lemon bot https enable --tailscale` or `--url`."
+    )
+
+    :ok
+  end
+
+  defp enable_bot_https(args, io, opts) do
+    command = Keyword.get(opts, :bot_https_command, &LemonCli.BotHttpsCommand.run/1)
+
+    case command.(args) do
+      :ok ->
+        :ok
+
+      {:error, message} ->
+        io.error.("Could not enable Lemon Bot HTTPS: #{message}")
+        {:error, {:bot_https_failed, message}}
     end
   end
 

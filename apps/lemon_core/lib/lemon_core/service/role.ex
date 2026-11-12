@@ -4,7 +4,7 @@ defmodule LemonCore.Service.Role do
   alias LemonCore.Service.Command
 
   @roles ~w(controller backend worker tunnel)
-  @backend_env ~w(LEMON_BOT_PORT LEMON_BOT_HOST LEMON_BOT_DATA_DIR LEMON_BOT_PUBLIC_URL LEMON_BOT_TRUSTED_OVERLAY)
+  @backend_env ~w(LEMON_BOT_PORT LEMON_BOT_HOST LEMON_BOT_DATA_DIR LEMON_BOT_CONFIG_FILE LEMON_BOT_CONTROL_URL LEMON_BOT_PUBLIC_URL LEMON_BOT_TRUSTED_OVERLAY)
 
   def roles, do: @roles
   def fetch(role) when role in @roles, do: {:ok, role}
@@ -306,7 +306,14 @@ defmodule LemonCore.Service.Role do
           else: worker
 
       "backend" ->
-        Map.merge(base, Map.take(source, @backend_env))
+        public_env =
+          case Keyword.fetch(opts, :bot_public_url) do
+            {:ok, nil} -> Map.delete(source, "LEMON_BOT_PUBLIC_URL")
+            {:ok, url} -> Map.put(source, "LEMON_BOT_PUBLIC_URL", url)
+            :error -> source
+          end
+
+        Map.merge(base, Map.take(public_env, @backend_env))
         |> Map.put("LEMON_BOT_PORT", to_string(port(role, opts)))
         |> Map.put(
           "LEMON_CONTROL_PLANE_PORT",

@@ -22,12 +22,12 @@ describe('Bot product identity and shared preflight', () => {
   test('public descriptor is minimal; authenticated workspace identity is stable across restart, URL aliases and controller changes', async () => {
     const f = await fixture();
     const first = await json<SetupStatus>(f.fetch('GET', '/v1/setup', undefined, null));
-    expect(Object.keys(first).sort()).toEqual(['apiVersion', 'capabilities', 'instanceId', 'product', 'publicUrl', 'setupRequired', 'version']);
-    expect(first).toMatchObject({ product: 'lemon_bot', apiVersion: 1, setupRequired: false, capabilities: { pairing: true } });
+    expect(Object.keys(first).sort()).toEqual(['apiVersion', 'capabilities', 'firstPartyMcpApproved', 'instanceId', 'product', 'publicUrl', 'setupRequired', 'version']);
+    expect(first).toMatchObject({ product: 'lemon_bot', apiVersion: 1, setupRequired: false, capabilities: { pairing: true }, firstPartyMcpApproved: false });
     expect(first.instanceId).toMatch(/^[0-9a-f-]{36}$/);
     expect(first).not.toHaveProperty('workspaceId'); expect(first).not.toHaveProperty('clusterName');
     const baseline = await json<BackendIdentity>(f.fetch('GET', '/v1/identity'));
-    expect(baseline).toEqual({ product: first.product, apiVersion: 1, version: first.version, instanceId: first.instanceId, publicUrl: first.publicUrl, capabilities: first.capabilities, workspaceId: f.workspace.id });
+    expect(baseline).toEqual({ product: first.product, apiVersion: 1, version: first.version, instanceId: first.instanceId, publicUrl: first.publicUrl, capabilities: first.capabilities, workspaceId: f.workspace.id, firstPartyMcpApproved: first.firstPartyMcpApproved });
     const rejected = await f.fetch('GET', '/v1/identity', undefined, null);
     expect(rejected.status).toBe(401);
     f.restart();

@@ -9,5 +9,8 @@ export function backendDescriptor(services: BackendServices): BackendDescriptor 
   if (typeof instanceId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(instanceId)) {
     fail('internal_error', 'The stored Bot backend identity is invalid.', false);
   }
-  return { product: 'lemon_bot', apiVersion: 1, version: productVersion, instanceId, publicUrl: services.config.publicUrl, capabilities: { pairing: true } };
+  const url = new URL(services.config.publicUrl);
+  const firstPartyMcpApproved = (services.config.operator.approvedPrivateMcpOrigins ?? []).includes(url.origin)
+    || url.protocol === 'http:' && (url.hostname === '127.0.0.1' || url.hostname === '[::1]');
+  return { product: 'lemon_bot', apiVersion: 1, version: productVersion, instanceId, publicUrl: services.config.publicUrl, capabilities: { pairing: true }, firstPartyMcpApproved };
 }

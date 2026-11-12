@@ -97,6 +97,22 @@ defmodule LemonMCP.HTTP.OriginPolicy do
     with {:ok, destination} <- parse_destination(url), do: {:ok, destination.origin}
   end
 
+  @doc "Canonicalizes an HTTPS origin only, without a path, query or fragment."
+  def canonical_https_origin(value) when is_binary(value) do
+    with {:ok, origin} <- canonical_origin(value),
+         uri <- URI.parse(value),
+         true <- String.downcase(uri.scheme || "") == "https",
+         true <- uri.path in [nil, "/"],
+         nil <- uri.query,
+         nil <- uri.fragment do
+      {:ok, origin}
+    else
+      _ -> {:error, :invalid_url}
+    end
+  end
+
+  def canonical_https_origin(_), do: {:error, :invalid_url}
+
   defp require_owned_loopback(destination, approved, opts) do
     if Application.get_env(:lemon_core, :require_owned_loopback, false) == true and
          destination.origin in approved and

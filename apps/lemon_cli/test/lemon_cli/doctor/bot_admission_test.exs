@@ -51,6 +51,22 @@ defmodule LemonCli.Doctor.BotAdmissionTest do
     assert check.message =~ @public_url
   end
 
+  test "an explicit doctor origin checks controller allowlists without changing environment" do
+    System.put_env(@native, "https://bot.example")
+    System.put_env(@cron, "https://BOT.example:443")
+    assert [check] = BotAdmission.run(bot_public_url: "https://bot.example")
+    assert check.status == :pass
+    assert System.get_env(@public_url) == nil
+  end
+
+  test "explicit doctor origins reject paths and loopback HTTP" do
+    for url <- ["http://127.0.0.1:4100", "https://bot.example/path", "https://u:p@bot.example"] do
+      assert [check] = BotAdmission.run(bot_public_url: url)
+      assert check.status == :fail
+      refute inspect(check) =~ url
+    end
+  end
+
   test "both missing allowlists are named without disclosing URLs" do
     System.put_env(@public_url, "https://private-bot.example/private-callback")
     System.put_env(@native, "https://private-native.example")

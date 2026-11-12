@@ -8,6 +8,9 @@ defmodule LemonCore.Service do
   `install/2` accepts `:restart_backend` to reload a changed controller choice:
   an unchanged running backend is restarted once; a newly started or rewritten
   backend is not restarted again. Its action is `"restarted"`.
+
+  `:bot_public_url` explicitly replaces the backend unit's saved public URL;
+  `nil` removes it. Without this option, saved environment precedence is unchanged.
   """
   alias LemonCore.Service.{
     Command,
@@ -27,6 +30,27 @@ defmodule LemonCore.Service do
   def status(roles \\ [], opts \\ []), do: perform(:status, roles, opts)
   def repair(roles \\ [], opts \\ []), do: perform(:repair, roles, opts)
   def uninstall(roles, opts \\ []), do: perform(:uninstall, roles, opts)
+
+  @doc false
+  def install_spec(role, opts \\ []) do
+    {manager, _, _} = manager(opts)
+
+    with true <- role in Role.roles(),
+         {:ok, spec, existing} <- resolve(role, manager, opts, :install),
+         true <- spec.argv != [] do
+      # The desired process environment is not caller context or proof of the
+      # controller used by an already installed process.
+      installed_env =
+        case existing do
+          {:ok, parsed} -> parsed.env
+          _ -> nil
+        end
+
+      {:ok, Map.put(spec, :installed_env, installed_env)}
+    else
+      _ -> {:error, :service_spec_unavailable}
+    end
+  end
 
   def running_units(opts \\ []) do
     {selected, _, blocked} = manager(opts)

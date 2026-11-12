@@ -65,6 +65,22 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- **Lemon Bot HTTPS setup (#530).** `lemon bot https enable --tailscale` sets
+  up private tailnet HTTPS, or `--url` registers an existing HTTPS reverse proxy.
+  `status` reports readiness; `disable` removes only tool-owned configuration
+  and routes while preserving other origins. Browser setup offers HTTPS as an
+  explicit opt-in and keeps local-only access by default.
+  Managed HTTPS refuses source startup and remote-controller configurations
+  rather than checking the wrong runtime. It owns only its exact private MCP
+  approval, restores adopted public URLs, retains pending receipts after failed
+  reconfiguration, and preserves existing env-file permissions.
+  Backend configuration changes force the existing service restart path and
+  verification observes its loaded approval, not only the config file. Planning
+  shares the service installer's backend projection while retaining caller XDG
+  paths and callback allowlists. Credential-port checks use the saved endpoint
+  before the installer's desired-port override and fail before mutation.
+  Installed and desired controller endpoints must match; HTTPS setup never
+  changes the controller as a side effect of reinstalling the backend.
 - Lemon Bot backend tests and the web build/tests now gate CI and run in the
   changed-file/premerge lane. Web tests run in separate processes so module
   mocks cannot leak between suites.

@@ -77,8 +77,11 @@ Follow the terminal prompts:
    **Skip — set it up in the browser**.
 2. Pick a model. Lemon performs a live, non-generating readiness check; it does
    not send a chat message.
-3. Optionally connect Telegram or Discord.
-4. After the last question, setup continues in the same terminal with
+3. Optionally enable HTTPS with Tailscale Serve, or supply an HTTPS URL whose
+   reverse proxy you already configured. **Keep local access only** is the
+   default; skipping leaves your network configuration unchanged.
+4. Optionally connect Telegram or Discord.
+5. After the last question, setup continues in the same terminal with
    `lemon-bot up --this-machine`, which uses the Lemon on this computer,
    installs controller/backend/worker user services, creates the owner without
    a form, and enrolls this computer as a supervised worker. On macOS,
@@ -275,51 +278,76 @@ from another browser; network/tailnet access alone is not sign-in authority.
 
 ### Give Lemon Bot an HTTPS address
 
-Do all three steps on the computer that runs Lemon Bot. The examples use
-`https://mac.example.ts.net:8443`; use your own machine's exact origin.
+Managed HTTPS requires an **installed release and a local controller**. Source
+startup does not load `~/.lemon/env`, and a backend's saved remote controller
+cannot be configured from this machine; those cases refuse without changing
+configuration. Use the [manual appendix](#appendix-manual-https-setup) instead.
 
-1. **Route HTTPS to the backend.** With Tailscale, inspect existing routes first
-   and pick an unused HTTPS port. Keep existing routes; never use Funnel or route
-   to the controller port 4040.
+Run on the computer that runs Lemon Bot:
 
-   ```bash
-   tailscale serve status
-   tailscale serve --bg --https=8443 http://127.0.0.1:4100
-   ```
+```bash
+lemon bot https enable --tailscale
+```
 
-2. **Tell the backend its origin.** The backend service keeps the environment it
-   was installed with, so reinstall its unit with the origin set. Data and
-   credentials are kept.
+This configures Tailscale Serve for the loopback Bot backend, saves its HTTPS
+origin, updates both controller callback allowlists, approves exactly that origin
+for the backend's first-party private MCP tools in its existing operator
+configuration, and restarts the backend when its effective configuration changes.
+It resolves the backend's process environment without dropping the caller's
+service paths or existing callback allowlists, verifies instance identity,
+controller admission, execution's MCP destination policy and the running backend's
+loaded approval before marking the receipt active. A controller/launcher credential
+port mismatch is checked against the saved backend endpoint before any desired
+port override or settings change; select that controller's port with
+`LEMON_CONTROL_PLANE_PORT` when invoking the command.
 
-   ```bash
-   lemon service uninstall backend
-   LEMON_BOT_PUBLIC_URL=https://mac.example.ts.net:8443 lemon service install backend
-   ```
+The command also refuses any difference between installed and desired controller
+endpoints: `lemon bot https` does not change the controller. Change it with
+`lemon service install` first, then enable HTTPS with the matching controller port.
 
-3. **Allow that origin on the controller.** The controller accepts Bot callbacks
-   only from explicitly allowed origins (literal-loopback HTTP is supported for
-   development). A rejected Bot callback names its origin and the allowlist to
-   fix. Add both allowlists to `~/.lemon/env`, which the `lemon` launcher and its
-   controller service read, then restart:
+Tailscale must already be installed and connected. It uses private
+tailnet access, **not Funnel**; it does not expose the controller operator port
+4040. Devices still need to sign in to Lemon Bot.
 
-   ```bash
-   cat >> "$HOME/.lemon/env" <<'EOF'
-   export LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS=https://mac.example.ts.net:8443,http://127.0.0.1:4100
-   export LEMON_CRON_ADMISSION_ALLOWED_ORIGINS=https://mac.example.ts.net:8443,http://127.0.0.1:4100
-   EOF
-   lemon restart
-   ```
+If you already operate a TLS reverse proxy, route your chosen HTTPS origin to
+the loopback Bot backend (normally `http://127.0.0.1:4100`), then register it:
 
-   Each entry is an exact origin: scheme, host and port, with no path or
-   trailing slash. Setting a variable replaces its previous value; retain any
-   other origins still in use.
+```bash
+lemon bot https enable --url https://bot.example.com
+```
 
-4. **Update existing Bots.** Open each Bot's settings and choose **Update address**.
-   The notice names the old and new origin. Lemon Bot prepares a new private
-   callback credential, keeps the old issuer until the controller acknowledges
-   the replacement, then updates and syncs the Bot's tool address. This keeps the
-   same Bot and conversation. If interrupted, choose **Update address** again:
-   its read-only receipt check must resolve before another mutation is allowed.
+`--url` does not create the reverse proxy; you control who can reach that
+address. Use an exact HTTPS origin (scheme, host and optional port), with no
+path or trailing slash. There is **no public exposure by default**: setup
+defaults to local-only access, never enables HTTPS unattended, and Tailscale
+mode is tailnet-only.
+
+Inspect or undo the managed configuration:
+
+```bash
+lemon bot https status
+lemon bot https disable
+```
+
+Disable removes only entries and routes owned by this tool; it preserves other
+configured origins and unrelated Tailscale routes, and restores a public URL that
+was already configured before enable. It preserves existing env-file permissions
+and does not tear down an independently configured reverse proxy.
+
+**Bots created before the address changed will not reply at the new URL until
+their addresses are updated.** The enable summary and `lemon bot https status`
+list affected Bots by name. Each Bot's actual owner must open **Bot → Settings
+→ lifecycle panel → Update address** to move its callbacks to the current
+origin. Changing the backend's public URL alone does not update stored Bot
+callback addresses. If earlier work has an uncertain outcome, choose **Check
+status** first; never repeat a mutation whose outcome is unknown.
+
+Keep the old origin allowed until affected Bots have moved; CLI-managed
+allowlist changes preserve other configured origins. This is separate from
+connecting an iPhone or advertising a node gateway.
+
+For the previous operator-managed procedure, see the
+[manual HTTPS appendix](#appendix-manual-https-setup).
 
 If an operator is deliberately bootstrapping an unconfigured remote workspace
 instead of using local sign-in, `lemon-bot setup` verifies its configured tailnet
@@ -358,3 +386,74 @@ route or bypasses identity/TLS checks.
 
 For terminal-assisted pairing, see
 [`lemon connect iphone`](../user-guide/cli.md#connect-an-iphone-to-lemon-bot).
+
+## Appendix: manual HTTPS setup
+
+The CLI above is the recommended workflow. The original manual procedure is
+retained below for operators managing the route and services themselves.
+
+Apply these five steps to the backend and its actual controller. The examples use
+`https://mac.example.ts.net:8443`; use your own machine's exact origin.
+
+1. **Route HTTPS to the backend.** With Tailscale, inspect existing routes first
+   and pick an unused HTTPS port. Keep existing routes; never use Funnel or route
+   to the controller port 4040.
+
+   ```bash
+   tailscale serve status
+   tailscale serve --bg --https=8443 http://127.0.0.1:4100
+   ```
+
+2. **Tell the backend its origin.** The backend service keeps the environment it
+   was installed with, so reinstall its unit with the origin set. Data and
+   credentials are kept.
+
+   ```bash
+   lemon service uninstall backend
+   LEMON_BOT_PUBLIC_URL=https://mac.example.ts.net:8443 lemon service install backend
+   ```
+
+3. **Allow that origin on the controller.** The controller accepts Bot callbacks
+   only from explicitly allowed origins (literal-loopback HTTP is supported for
+   development). A rejected Bot callback names its origin and the allowlist to
+   fix. Add both allowlists to `~/.lemon/env`, which the `lemon` launcher and its
+   controller service read, then restart:
+
+   This file is loaded by the **installed-release launcher**, not source mode.
+   For a source controller, put these variables in its existing
+   `$LEMON_DOTENV_DIR/.env` (default: the startup working directory's `.env`),
+   or explicitly export them in the environment that starts that controller.
+   If the Bot uses a remote controller, configure and restart **that controller**,
+   not a different local instance.
+
+   ```bash
+   cat >> "$HOME/.lemon/env" <<'EOF'
+   export LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS=https://mac.example.ts.net:8443,http://127.0.0.1:4100
+   export LEMON_CRON_ADMISSION_ALLOWED_ORIGINS=https://mac.example.ts.net:8443,http://127.0.0.1:4100
+   EOF
+   lemon restart
+   ```
+
+   Each entry is an exact origin: scheme, host and port, with no path or
+   trailing slash. Setting a variable replaces its previous value; retain any
+   other origins still in use.
+
+4. **Approve the private MCP destination on the backend.** Add the exact HTTPS
+   origin to `approvedPrivateMcpOrigins` in its existing operator config
+   (`LEMON_BOT_CONFIG_FILE`, or `~/.lemon/lemon_bot/config.json` under the selected
+   `LEMON_BOT_DATA_DIR`). Preserve every other field and approval. For a new file:
+
+   ```json
+   {"version":1,"approvedPrivateMcpOrigins":["https://mac.example.ts.net:8443"]}
+   ```
+
+   Then restart Lemon Bot with `lemon service install backend --restart-backend`.
+   HTTPS identity and callback admission alone do not approve private MCP tool
+   connections; this exact-origin approval is also required for tailnet access.
+
+5. **Update existing Bots.** Open each Bot's settings and choose **Update address**.
+   The notice names the old and new origin. Lemon Bot prepares a new private
+   callback credential, keeps the old issuer until the controller acknowledges
+   the replacement, then updates and syncs the Bot's tool address. This keeps the
+   same Bot and conversation. If interrupted, choose **Update address** again:
+   its read-only receipt check must resolve before another mutation is allowed.

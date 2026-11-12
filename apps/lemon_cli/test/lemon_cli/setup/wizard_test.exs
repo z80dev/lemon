@@ -670,6 +670,7 @@ defmodule LemonCli.Setup.WizardTest do
           bot_installed?: false,
           install_bot: fn _ -> flunk("Lemon Bot must not be installed") end,
           bot_runner: fn _, _, _ -> flunk("lemon-bot must not run") end,
+          bot_https_command: fn _ -> flunk("HTTPS must not be enabled without opt-in") end,
           install_service: fn -> flunk("no service must be installed") end,
           gateway_setup: fn _ -> flunk("gateway setup must not run") end,
           launcher: fn -> flunk("the TUI must not open") end
@@ -715,6 +716,97 @@ defmodule LemonCli.Setup.WizardTest do
       assert "Connect Telegram or Discord now? [y/N]: " in prompts
       refute Enum.any?(prompts, &String.contains?(&1, "Open Lemon"))
       refute Enum.any?(prompts, &String.contains?(&1, "background"))
+    end
+
+    test "--use browser enables Tailscale HTTPS only after an explicit choice", %{
+      config_path: path
+    } do
+      configure_ready_provider(path)
+
+      assert :ok =
+               Wizard.run_full(
+                 [],
+                 tty(recording_io(["2", ""])),
+                 component_opts(path,
+                   use: "browser",
+                   install_bot: installed_bot(),
+                   bot_runner: bot_runner(),
+                   bot_https_command: fn args ->
+                     send(self(), {:bot_https, args})
+                     :ok
+                   end
+                 )
+               )
+
+      assert_received {:bot_https, ["enable", "--tailscale"]}
+      refute_received {:bot_https, _}
+      assert_received {:bot_up, _launcher, ["up", "--this-machine"], true}
+    end
+
+    test "Browser can opt into an existing HTTPS URL", %{config_path: path} do
+      configure_ready_provider(path)
+
+      assert :ok =
+               Wizard.run_full(
+                 [],
+                 tty(recording_io(["3", " https://bot.example.test:8443 ", ""])),
+                 component_opts(path,
+                   use: "browser",
+                   install_bot: installed_bot(),
+                   bot_runner: bot_runner(),
+                   bot_https_command: fn args ->
+                     send(self(), {:bot_https, args})
+                     :ok
+                   end
+                 )
+               )
+
+      assert_received {:bot_https, ["enable", "--url", "https://bot.example.test:8443"]}
+      refute_received {:bot_https, _}
+    end
+
+    test "HTTPS stays opt-in when skipped, cancelled, or given no manual URL", %{
+      config_path: path
+    } do
+      configure_ready_provider(path)
+
+      for answers <- [["", ""], ["1", ""], ["q", ""], ["3", "", ""]] do
+        assert :ok =
+                 Wizard.run_full(
+                   [],
+                   tty(recording_io(answers)),
+                   component_opts(path,
+                     use: "browser",
+                     install_bot: installed_bot(),
+                     bot_runner: bot_runner()
+                   )
+                 )
+
+        assert_received {:bot_up, _launcher, ["up", "--this-machine"], true}
+        assert info_event?(drain_events([]), &String.contains?(&1, "lemon bot https enable"))
+      end
+    end
+
+    test "HTTPS command errors are reported without claiming setup finished", %{config_path: path} do
+      configure_ready_provider(path)
+
+      assert {:error, {:bot_https_failed, "Tailscale is not connected."}} =
+               Wizard.run_full(
+                 [],
+                 tty(recording_io(["2"])),
+                 component_opts(path,
+                   use: "browser",
+                   install_bot: installed_bot(),
+                   bot_https_command: fn ["enable", "--tailscale"] ->
+                     {:error, "Tailscale is not connected."}
+                   end
+                 )
+               )
+
+      assert error_event?(
+               drain_events([]),
+               &String.contains?(&1, "Tailscale is not connected.")
+             )
     end
 
     test "Both sets up Lemon Bot and still offers the TUI", %{config_path: path} do
