@@ -5,8 +5,8 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
   This module normalizes caller-provided stream options and resolves provider-
   specific runtime inputs before `LemonAi.stream/3` or `LemonAi.complete/3` is invoked.
 
-  Selected OAuth credentials are resolved by the per-request credential callback,
-  not fetched again here. Its concrete key must be applied before calling
+  Selected OAuth and omp credentials are resolved by the per-request credential
+  callback, not fetched again here. Its concrete key must be applied before calling
   `LemonAi`; `api_key_authoritative` prevents lower layers from substituting
   static, environment or encoded secret values when that callback refuses.
   """
@@ -131,7 +131,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
       end
 
     base_opts =
-      if Credentials.oauth_selected?(provider_cfg) do
+      if Credentials.authoritative_selected?(provider_cfg) do
         %{base_opts | api_key: nil, api_key_authoritative: true}
       else
         base_opts

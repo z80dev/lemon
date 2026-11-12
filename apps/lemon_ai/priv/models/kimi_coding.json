@@ -16,7 +16,11 @@
       "cache_write": 0.0
     },
     "context_window": 262144,
-    "max_tokens": 32768
+    "max_tokens": 32768,
+    "compat": {
+      "anthropic_default_max_output": true,
+      "anthropic_session_user_id": true
+    }
   },
   "kimi-k2.5-coding": {
     "id": "kimi-k2.5-coding",
@@ -26,7 +30,8 @@
     "base_url": "https://api.kimi.com/coding",
     "reasoning": true,
     "input": [
-      "text"
+      "text",
+      "image"
     ],
     "cost": {
       "input": 0.0,
@@ -35,7 +40,11 @@
       "cache_write": 0.0
     },
     "context_window": 262144,
-    "max_tokens": 32768
+    "max_tokens": 32768,
+    "compat": {
+      "anthropic_default_max_output": true,
+      "anthropic_session_user_id": true
+    }
   },
   "k3": {
     "id": "k3",
@@ -44,6 +53,7 @@
     "provider": "kimi_coding",
     "base_url": "https://api.kimi.com/coding",
     "reasoning": true,
+    "adaptive_thinking": true,
     "input": [
       "text",
       "image"
@@ -61,12 +71,9 @@
       "high",
       "max"
     ],
-    "headers": {
-      "User-Agent": "KimiCLI/1.0",
-      "X-Msh-Platform": "kimi_cli"
-    },
     "compat": {
-      "anthropic_effort_only": true
+      "anthropic_default_max_output": true,
+      "anthropic_session_user_id": true
     }
   },
   "k3-256k": {
@@ -76,6 +83,7 @@
     "provider": "kimi_coding",
     "base_url": "https://api.kimi.com/coding",
     "reasoning": true,
+    "adaptive_thinking": true,
     "input": [
       "text",
       "image"
@@ -93,12 +101,9 @@
       "high",
       "max"
     ],
-    "headers": {
-      "User-Agent": "KimiCLI/1.0",
-      "X-Msh-Platform": "kimi_cli"
-    },
     "compat": {
-      "anthropic_effort_only": true
+      "anthropic_default_max_output": true,
+      "anthropic_session_user_id": true
     }
   },
   "kimi-for-coding": {
@@ -108,6 +113,7 @@
     "provider": "kimi_coding",
     "base_url": "https://api.kimi.com/coding",
     "reasoning": true,
+    "adaptive_thinking": true,
     "reasoning_efforts": [
       "low",
       "high",
@@ -125,12 +131,9 @@
     },
     "context_window": 1048576,
     "max_tokens": 32768,
-    "headers": {
-      "User-Agent": "KimiCLI/1.0",
-      "X-Msh-Platform": "kimi_cli"
-    },
     "compat": {
-      "anthropic_effort_only": true
+      "anthropic_default_max_output": true,
+      "anthropic_session_user_id": true
     }
   },
   "kimi-for-coding-highspeed": {
@@ -152,9 +155,9 @@
     },
     "context_window": 262144,
     "max_tokens": 32768,
-    "headers": {
-      "User-Agent": "KimiCLI/1.0",
-      "X-Msh-Platform": "kimi_cli"
+    "compat": {
+      "anthropic_default_max_output": true,
+      "anthropic_session_user_id": true
     }
   },
   "k3.1-pro-highspeed": {
@@ -164,6 +167,7 @@
     "provider": "kimi_coding",
     "base_url": "https://api.kimi.com/coding",
     "reasoning": true,
+    "adaptive_thinking": true,
     "input": [
       "text",
       "image"
@@ -181,12 +185,9 @@
       "high",
       "max"
     ],
-    "headers": {
-      "User-Agent": "KimiCLI/1.0",
-      "X-Msh-Platform": "kimi_cli"
-    },
     "compat": {
-      "anthropic_effort_only": true
+      "anthropic_default_max_output": true,
+      "anthropic_session_user_id": true
     }
   },
   "k3.1-pro": {
@@ -196,6 +197,7 @@
     "provider": "kimi_coding",
     "base_url": "https://api.kimi.com/coding",
     "reasoning": true,
+    "adaptive_thinking": true,
     "input": [
       "text",
       "image"
@@ -213,12 +215,9 @@
       "high",
       "max"
     ],
-    "headers": {
-      "User-Agent": "KimiCLI/1.0",
-      "X-Msh-Platform": "kimi_cli"
-    },
     "compat": {
-      "anthropic_effort_only": true
+      "anthropic_default_max_output": true,
+      "anthropic_session_user_id": true
     }
   }
 }

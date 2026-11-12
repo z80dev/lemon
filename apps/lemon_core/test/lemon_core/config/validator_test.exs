@@ -576,6 +576,125 @@ defmodule LemonCore.Config.ValidatorTest do
 
       assert Enum.any?(errors, &String.contains?(&1, "anthropic.auth_source"))
     end
+
+    test "kimi_coding auth_source is optional and accepts OAuth, API keys, and omp" do
+      for name <- [:kimi_coding, "kimi_coding", "kimi-coding", "kimi-for-coding"],
+          source <- [nil, "oauth", "api_key", "omp", " OMP "] do
+        assert Validator.validate_providers(
+                 %{providers: %{name => %{auth_source: source}}},
+                 []
+               ) == []
+      end
+    end
+
+    test "validates kimi_coding auth_source without exposing invalid values" do
+      secret = "private-auth-source-value"
+
+      for source <- ["", secret, 123, true, [secret], %{"token" => secret}] do
+        errors =
+          Validator.validate_providers(
+            %{providers: %{"kimi_coding" => %{auth_source: source}}},
+            []
+          )
+
+        assert Enum.any?(errors, &String.starts_with?(&1, "providers.kimi_coding.auth_source:"))
+        refute Enum.any?(errors, &String.contains?(&1, secret))
+      end
+    end
+
+    test "rejects omp for other providers, including the onboarding-only kimi-code alias" do
+      for name <- [
+            "anthropic",
+            "openai-codex",
+            "openai_codex",
+            "openai",
+            "xai",
+            "kimi",
+            "kimi-code",
+            "custom"
+          ],
+          source <- ["omp", " OMP "] do
+        errors =
+          Validator.validate_providers(
+            %{providers: %{name => %{auth_source: source}}},
+            []
+          )
+
+        assert Enum.any?(errors, &String.starts_with?(&1, "providers.#{name}.auth_source:"))
+      end
+    end
+
+    test "accepts optional absolute omp paths without checking filesystem existence" do
+      for path <- [nil, "/not-installed/lemon-test/omp", "/opt/My Tools/omp"] do
+        assert Validator.validate_providers(
+                 %{providers: %{kimi_coding: %{auth_source: "omp", omp_path: path}}},
+                 []
+               ) == []
+      end
+    end
+
+    test "rejects malformed omp paths without exposing their values" do
+      secret = "private-omp-path"
+
+      for path <- [
+            "",
+            " ",
+            "omp",
+            "./omp",
+            "~/.bun/bin/omp",
+            "/",
+            "/opt/bin/",
+            "/#{secret}\0/omp",
+            <<"/opt/", 255>>,
+            123,
+            true,
+            [secret],
+            %{"path" => secret}
+          ] do
+        errors =
+          Validator.validate_providers(
+            %{providers: %{kimi_coding: %{auth_source: "omp", omp_path: path}}},
+            []
+          )
+
+        assert Enum.any?(errors, &String.starts_with?(&1, "providers.kimi_coding.omp_path:"))
+        refute Enum.any?(errors, &String.contains?(&1, secret))
+      end
+    end
+
+    test "validates configured omp_path even when another Kimi auth mode is selected" do
+      errors =
+        Validator.validate_providers(
+          %{providers: %{kimi_coding: %{auth_source: "oauth", omp_path: "relative/omp"}}},
+          []
+        )
+
+      assert Enum.any?(errors, &String.starts_with?(&1, "providers.kimi_coding.omp_path:"))
+    end
+
+    test "validates string-keyed auth_source and omp_path in legacy provider maps" do
+      assert Validator.validate_legacy_providers(
+               %{"kimi_coding" => %{"auth_source" => "omp", "omp_path" => "/opt/bin/omp"}},
+               []
+             ) == []
+
+      errors =
+        Validator.validate_legacy_providers(
+          %{
+            "kimi_coding" => %{"auth_source" => "invalid", "omp_path" => "relative/omp"},
+            "openai" => %{"auth_source" => "omp"}
+          },
+          []
+        )
+
+      for path <- [
+            "providers.kimi_coding.auth_source:",
+            "providers.kimi_coding.omp_path:",
+            "providers.openai.auth_source:"
+          ] do
+        assert Enum.any?(errors, &String.starts_with?(&1, path))
+      end
+    end
   end
 
   describe "validate_tools/2" do

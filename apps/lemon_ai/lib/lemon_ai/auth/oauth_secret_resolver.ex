@@ -4,6 +4,12 @@ defmodule LemonAi.Auth.OAuthSecretResolver do
 
   Dispatches provider-specific OAuth secret payloads to the matching auth helper
   and returns a usable API key value.
+
+  A refresh whose conditional write loses to another writer (`:persist_secret`
+  returns `{:error, :stale_revision}`, for example a second Lemon process that
+  refreshed the same login) does not fail outright: `resolve_with/4` reloads
+  the stored login and adopts it when it carries a different, unexpired access
+  token. Otherwise the result stays `{:error, :oauth_secret_changed}`.
   """
 
   @resolvers [
@@ -23,7 +29,7 @@ defmodule LemonAi.Auth.OAuthSecretResolver do
   def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
     Enum.reduce_while(@resolvers, :ignore, fn resolver, _acc ->
-      case resolver.resolve_api_key_from_secret(secret_name, secret_value, opts) do
+      case resolve_with(resolver, secret_name, secret_value, opts) do
         :ignore ->
           {:cont, :ignore}
 
@@ -37,6 +43,53 @@ defmodule LemonAi.Auth.OAuthSecretResolver do
   end
 
   def resolve_api_key_from_secret(_, _, _), do: {:error, :invalid_secret_value}
+
+  @doc """
+  Resolve `secret_value` with one OAuth helper module, adopting a login another
+  writer stored when this caller's refresh loses the revision check.
+  """
+  @spec resolve_with(module(), String.t(), String.t(), keyword()) ::
+          {:ok, String.t()} | :ignore | {:error, term()}
+  def resolve_with(resolver, secret_name, secret_value, opts) do
+    case resolver.resolve_api_key_from_secret(secret_name, secret_value, opts) do
+      {:error, :oauth_secret_changed} = lost ->
+        adopt_stored_login(resolver, secret_name, secret_value, opts) || lost
+
+      result ->
+        result
+    end
+  end
+
+  # The winner's login is used only when it is not the token this caller held
+  # (which may have been rejected) and has not expired; the helper then
+  # resolves it without forcing another refresh. No retry loop: a second loss
+  # is returned as is.
+  defp adopt_stored_login(resolver, secret_name, secret_value, opts) do
+    with {:ok, stale} <- resolver.decode_secret(secret_value),
+         {:ok, latest, _opts} <- reload_secret(resolver, secret_name, stale, opts),
+         true <- adoptable?(latest, stale),
+         {:ok, _api_key} = ok <-
+           resolver.resolve_api_key_from_secret(
+             secret_name,
+             resolver.encode_secret(latest),
+             Keyword.put(opts, :force_refresh, false)
+           ) do
+      ok
+    else
+      _ -> nil
+    end
+  end
+
+  defp adoptable?(latest, stale) do
+    access_token = latest["access_token"]
+    now = System.system_time(:millisecond)
+
+    is_binary(access_token) and access_token != "" and access_token != stale["access_token"] and
+      case LemonAi.Auth.OAuthFlow.parse_integer(latest["expires_at_ms"]) do
+        expires_at_ms when is_integer(expires_at_ms) -> expires_at_ms > now
+        _ -> false
+      end
+  end
 
   @doc false
   def with_refresh_lock(resolver, secret_name, secret, opts, resolve) do

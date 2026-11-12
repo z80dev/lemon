@@ -56,6 +56,13 @@ defmodule LemonCli.Setup.ProviderManagement do
   @max_key_bytes 16_384
   @credential_keys ~w(api_key api_key_env api_key_secret oauth_secret auth_source auth)
 
+  @doc false
+  def credential_ready?(provider, provider_cfg) do
+    LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(provider, %{
+      provider => provider_cfg
+    })
+  end
+
   def list(opts \\ []) do
     with {:ok, target} <- target(opts) do
       locked(path(opts), fn -> listing(target, opts) end)
@@ -780,7 +787,7 @@ defmodule LemonCli.Setup.ProviderManagement do
 
   defp default_model(_, _), do: nil
   defp display_name(id), do: id |> String.replace("_", " ") |> String.capitalize()
-  defp oauth_selected?(cfg), do: String.downcase(to_string(cfg["auth_source"] || "")) == "oauth"
+  defp oauth_selected?(cfg), do: LemonAgent.ModelRuntime.Credentials.oauth_selected?(cfg)
   defp present?(value), do: is_binary(value) and String.trim(value) != ""
   defp path(opts), do: Path.expand(Keyword.get(opts, :config_path, Config.global_path()))
 

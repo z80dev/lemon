@@ -176,10 +176,6 @@
       "high",
       "max"
     ],
-    "headers": {
-      "User-Agent": "KimiCLI/1.0",
-      "X-Msh-Platform": "kimi_cli"
-    },
     "compat": {
       "anthropic_effort_only": true
     }
@@ -208,10 +204,6 @@
       "high",
       "max"
     ],
-    "headers": {
-      "User-Agent": "KimiCLI/1.0",
-      "X-Msh-Platform": "kimi_cli"
-    },
     "compat": {
       "anthropic_effort_only": true
     }
@@ -240,10 +232,6 @@
       "high",
       "max"
     ],
-    "headers": {
-      "User-Agent": "KimiCLI/1.0",
-      "X-Msh-Platform": "kimi_cli"
-    },
     "compat": {
       "anthropic_effort_only": true
     }
@@ -272,10 +260,6 @@
       "high",
       "max"
     ],
-    "headers": {
-      "User-Agent": "KimiCLI/1.0",
-      "X-Msh-Platform": "kimi_cli"
-    },
     "compat": {
       "anthropic_effort_only": true
     }
@@ -298,10 +282,6 @@
       "cache_write": 0.0
     },
     "context_window": 262144,
-    "max_tokens": 32768,
-    "headers": {
-      "User-Agent": "KimiCLI/1.0",
-      "X-Msh-Platform": "kimi_cli"
-    }
+    "max_tokens": 32768
   }
 }

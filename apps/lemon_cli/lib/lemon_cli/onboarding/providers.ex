@@ -287,20 +287,20 @@ defmodule LemonCli.Onboarding.Providers do
     %Provider{
       id: "kimi_coding",
       display_name: "Kimi Code",
-      description: "Kimi Code subscription device sign-in or API key",
+      description: "Kimi Code subscription device sign-in, omp login, or API key",
       provider_table: "providers.kimi_coding",
       default_secret_name: "llm_kimi_coding_api_key",
       api_key_secret_provider: "onboarding_kimi_coding",
       oauth_secret_provider: "onboarding_kimi_coding_oauth",
       oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :KimiCodeOAuth]),
-      auth_modes: [:oauth, :api_key],
+      auth_modes: [:oauth, :api_key, :omp],
       default_auth_mode: :oauth,
       preferred_models: ["k3", "kimi-for-coding", "kimi-k2.5-coding"],
       api_key_prompt: "Enter your Kimi Code API key: ",
       api_key_choice_label: "Paste API key",
       oauth_choice_label: "Sign in with Kimi Code (device code)",
       oauth_failure_label: "Kimi Code sign-in failed",
-      auth_source_by_mode: %{api_key: "api_key", oauth: "oauth"},
+      auth_source_by_mode: %{api_key: "api_key", oauth: "oauth", omp: "omp"},
       secret_config_key_by_mode: %{api_key: "api_key_secret", oauth: "api_key_secret"}
     }
   ]
@@ -421,11 +421,12 @@ defmodule LemonCli.Onboarding.Providers do
     auth_source =
       provider_cfg
       |> Map.get("auth_source")
-      |> normalize_optional_string()
+      |> LemonCore.Config.Providers.normalize_auth_source()
 
     cond do
       auth_source == "oauth" -> "oauth configured"
       auth_source == "api_key" -> "api key configured"
+      auth_source == "omp" -> "omp login configured"
       is_binary(Map.get(provider_cfg, "oauth_secret")) -> "oauth configured"
       is_binary(Map.get(provider_cfg, "api_key_secret")) -> "configured"
       true -> "configured"
@@ -444,13 +445,6 @@ defmodule LemonCli.Onboarding.Providers do
       _ -> %{}
     end
   end
-
-  defp normalize_optional_string(value) when is_binary(value) do
-    value = String.trim(value)
-    if value == "", do: nil, else: String.downcase(value)
-  end
-
-  defp normalize_optional_string(_), do: nil
 
   defp normalize_name(value) do
     value
@@ -482,5 +476,6 @@ defmodule LemonCli.Onboarding.Providers do
   defp auth_mode_label(:oauth), do: "OAuth"
   defp auth_mode_label(:device), do: "device code"
   defp auth_mode_label(:codex_cli), do: "Codex CLI login import"
+  defp auth_mode_label(:omp), do: "omp Kimi Code login"
   defp auth_mode_label(:api_key), do: "API key"
 end

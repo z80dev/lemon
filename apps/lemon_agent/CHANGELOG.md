@@ -8,6 +8,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `kimi_coding` can select `auth_source = "omp"` to reuse omp's subscription
+  login instead of environment or inline API keys, including forced refresh
+  after credential rejection and redacted readiness status.
 - Opt-in automatic model routing via `[model_routing]` (ordered rules with
   `contains`/`min_chars`/`max_chars`, per-request catalog-projected
   `max_cost_usd` cap that fails closed on unknown pricing, including configured
@@ -37,6 +40,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- OAuth credential resolution, including the Anthropic and Codex paths, adopts
+  a login refreshed concurrently by another process instead of returning
+  `:oauth_secret_changed` when that login is still fresh.
 - Run/session usage budgets fail closed when capped token totals or accumulated
   or projected dollar spend are unknown. Partial provider reports retain their
   nullable telemetry; unknown enforcement totals survive later reports, native

@@ -24,6 +24,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   require Logger
 
   alias LemonAi.Auth.OAuthSecretResolver
+  alias LemonAi.Auth.OmpToken
   alias LemonAgent.ModelRuntime.CredentialHealth
   alias LemonAgent.ModelRuntime.CustomProviders
   alias LemonAgent.ModelRuntime.ProviderNames
@@ -83,12 +84,19 @@ defmodule LemonAgent.ModelRuntime.Credentials do
           {:ok, String.t()} | {:error, atom()}
   def refresh_provider_api_key(config, provider, credential_ref, previous_key)
       when is_binary(credential_ref) do
-    case refresh_target(config, provider, credential_ref) do
-      {:ok, secret_name, resolver} ->
-        force_refresh_secret(secret_name, resolver, previous_key)
+    provider_cfg = provider_config(config, provider, [])
 
-      {:error, _} = error ->
-        error
+    if credential_ref == "default" and ProviderNames.canonical_name(provider) == "kimi_coding" and
+         normalize_auth_source(provider_cfg) == :omp do
+      OmpToken.resolve(provider_config_value(provider_cfg, :omp_path), force_refresh: true)
+    else
+      case refresh_target(config, provider, credential_ref) do
+        {:ok, secret_name, resolver} ->
+          force_refresh_secret(secret_name, resolver, previous_key)
+
+        {:error, _} = error ->
+          error
+      end
     end
   end
 
@@ -199,7 +207,8 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   end
 
   defp oauth_resolve(:anthropic, secret_name, value, opts) do
-    LemonAi.Auth.AnthropicOAuth.resolve_api_key_from_secret(
+    OAuthSecretResolver.resolve_with(
+      LemonAi.Auth.AnthropicOAuth,
       secret_name,
       value,
       [
@@ -210,7 +219,8 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   end
 
   defp oauth_resolve(:openai_codex, secret_name, value, opts) do
-    LemonAi.Auth.OpenAICodexOAuth.resolve_api_key_from_secret(
+    OAuthSecretResolver.resolve_with(
+      LemonAi.Auth.OpenAICodexOAuth,
       secret_name,
       value,
       [
@@ -256,17 +266,34 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   @spec oauth_selected?(map() | nil) :: boolean()
   def oauth_selected?(provider_cfg), do: normalize_auth_source(provider_cfg) == :oauth
 
+  @doc "Whether the provider config explicitly selects OAuth or omp credential authority."
+  @spec authoritative_selected?(map() | nil) :: boolean()
+  def authoritative_selected?(provider_cfg),
+    do: normalize_auth_source(provider_cfg) in [:oauth, :omp]
+
   @spec resolve_provider_api_key(atom() | String.t(), map() | nil, keyword()) :: String.t() | nil
   def resolve_provider_api_key(provider, providers_or_cfg, opts \\ []) do
     provider_cfg = provider_config(providers_or_cfg, provider, opts)
 
     case ProviderNames.canonical_name(provider) do
-      "openai_codex" -> resolve_openai_codex_api_key(provider_cfg)
-      "anthropic" -> resolve_anthropic_api_key(provider_cfg)
-      canonical when is_binary(canonical) -> resolve_generic_api_key(canonical, provider_cfg)
+      "openai_codex" ->
+        resolve_openai_codex_api_key(provider_cfg)
+
+      "anthropic" ->
+        resolve_anthropic_api_key(provider_cfg)
+
+      "kimi_coding" ->
+        if normalize_auth_source(provider_cfg) == :omp,
+          do: resolve_omp_api_key(provider_cfg),
+          else: resolve_generic_api_key("kimi_coding", provider_cfg)
+
+      canonical when is_binary(canonical) ->
+        resolve_generic_api_key(canonical, provider_cfg)
+
       # Not a ProviderNames provider: custom `[providers.<id>]` entries resolve
       # only their own configured credential, never another provider's env key.
-      _ -> resolve_custom_api_key(provider_cfg)
+      _ ->
+        resolve_custom_api_key(provider_cfg)
     end
   end
 
@@ -516,6 +543,17 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
   defp map_value(_, _), do: nil
 
+  defp resolve_omp_api_key(provider_cfg) do
+    case OmpToken.resolve(provider_config_value(provider_cfg, :omp_path)) do
+      {:ok, token} ->
+        token
+
+      {:error, reason} ->
+        Logger.warning(OmpToken.error_message(reason))
+        ""
+    end
+  end
+
   # `auth_source = "oauth"` makes the selected stored sign-in authoritative:
   # oauth_secret > api_key_secret > default, never ambient env or inline keys.
   defp resolve_generic_api_key(provider, provider_cfg) do
@@ -631,7 +669,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   defp resolve_openai_codex_oauth_secret(secret_name) do
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
       {:ok, value, _source} ->
-        case LemonAi.Auth.OpenAICodexOAuth.resolve_api_key_from_secret(secret_name, value,
+        case OAuthSecretResolver.resolve_with(
+               LemonAi.Auth.OpenAICodexOAuth,
+               secret_name,
+               value,
                persist_secret: &persist_openai_codex_secret/3,
                reload_secret: &reload_secret/1
              ) do
@@ -737,7 +778,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   defp resolve_anthropic_oauth_secret(secret_name) do
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
       {:ok, value, _source} ->
-        case LemonAi.Auth.AnthropicOAuth.resolve_api_key_from_secret(secret_name, value,
+        case OAuthSecretResolver.resolve_with(
+               LemonAi.Auth.AnthropicOAuth,
+               secret_name,
+               value,
                persist_secret: &persist_anthropic_secret/3,
                reload_secret: &reload_secret/1
              ) do
@@ -974,19 +1018,15 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   end
 
   defp normalize_auth_source(provider_cfg) do
-    source =
-      provider_cfg
-      |> provider_config_value(:auth_source)
-      |> case do
-        value when is_binary(value) -> String.trim(value)
-        _ -> nil
-      end
-
-    cond do
-      source in [nil, ""] -> :missing
-      String.downcase(source) == "oauth" -> :oauth
-      String.downcase(source) == "api_key" -> :api_key
-      true -> {:invalid, source}
+    provider_cfg
+    |> provider_config_value(:auth_source)
+    |> LemonCore.Config.Providers.normalize_auth_source()
+    |> case do
+      nil -> :missing
+      "oauth" -> :oauth
+      "api_key" -> :api_key
+      "omp" -> :omp
+      source -> {:invalid, source}
     end
   end
 

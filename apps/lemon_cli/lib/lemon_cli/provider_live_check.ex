@@ -1,6 +1,8 @@
 defmodule LemonCli.ProviderLiveCheck do
   @moduledoc "Shared, non-generating provider connectivity check for setup and doctor."
 
+  alias LemonAgent.ModelRuntime.ProviderNames
+  alias LemonAi.Auth.KimiCodeOAuth
   alias LemonAi.Providers.RequestHeaders
   alias LemonCore.Doctor.Connectivity
 
@@ -87,7 +89,7 @@ defmodule LemonCli.ProviderLiveCheck do
   defp endpoint(%{api: :anthropic_messages} = input, true) do
     base = String.trim_trailing(input.base_url, "/")
     base = if String.ends_with?(base, "/v1"), do: base, else: base <> "/v1"
-    {:ok, models_url(base), %{"x-api-key" => input.api_key, "anthropic-version" => "2023-06-01"}}
+    {:ok, models_url(base), anthropic_auth(input)}
   end
 
   defp endpoint(%{api: :google_generative_ai} = input, true) do
@@ -95,6 +97,27 @@ defmodule LemonCli.ProviderLiveCheck do
   end
 
   defp endpoint(%{api: api}, _), do: {:skip, {:unsupported_api, api}}
+
+  # Kimi Code authenticates as model requests do: a subscription token (JWT)
+  # as a bearer, an API key as x-api-key, and always the Kimi CLI fingerprint.
+  defp anthropic_auth(input) do
+    cond do
+      ProviderNames.canonical_name(Map.get(input, :provider)) != "kimi_coding" ->
+        %{"x-api-key" => input.api_key, "anthropic-version" => "2023-06-01"}
+
+      KimiCodeOAuth.oauth_token?(input.api_key) ->
+        RequestHeaders.merge(
+          %{"authorization" => "Bearer " <> input.api_key},
+          KimiCodeOAuth.request_headers()
+        )
+
+      true ->
+        RequestHeaders.merge(
+          %{"x-api-key" => input.api_key, "anthropic-version" => "2023-06-01"},
+          KimiCodeOAuth.request_headers()
+        )
+    end
+  end
 
   defp models_url(base_url), do: String.trim_trailing(base_url, "/") <> "/models"
 

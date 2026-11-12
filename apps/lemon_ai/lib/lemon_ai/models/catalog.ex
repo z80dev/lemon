@@ -95,6 +95,8 @@ defmodule LemonAi.Models.Catalog do
     "openai_temperature_requires_none" => :openai_temperature_requires_none,
     "bedrock_reasoning_config" => :bedrock_reasoning_config,
     "anthropic_effort_only" => :anthropic_effort_only,
+    "anthropic_default_max_output" => :anthropic_default_max_output,
+    "anthropic_session_user_id" => :anthropic_session_user_id,
     "supports_store" => :supports_store,
     "supports_developer_role" => :supports_developer_role,
     "supports_reasoning_effort" => :supports_reasoning_effort,

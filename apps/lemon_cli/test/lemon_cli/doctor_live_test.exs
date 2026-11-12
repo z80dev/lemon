@@ -29,6 +29,37 @@ defmodule LemonCli.DoctorLiveTest do
     end
   end
 
+  test "kimi_coding checks /coding/v1/models with Kimi auth and fingerprint" do
+    claims = Base.url_encode64(~s({"user_id":"u"}), padding: false)
+    jwt = "eyJhbGciOiJub25lIn0.#{claims}.sig"
+
+    for {key, auth_header, auth_value} <- [
+          {jwt, "authorization", "Bearer " <> jwt},
+          {"sk-kimi-key", "x-api-key", "sk-kimi-key"}
+        ] do
+      input = %{
+        provider: "kimi_coding",
+        api: :anthropic_messages,
+        base_url: "https://api.kimi.com/coding",
+        api_key: key,
+        headers: %{}
+      }
+
+      assert {:ok, %{http_status: 200}} =
+               ProviderLiveCheck.check(input,
+                 extended: true,
+                 http_get: fn :get, {url, headers}, _, _ ->
+                   assert to_string(url) == "https://api.kimi.com/coding/v1/models"
+                   headers = Map.new(headers, fn {k, v} -> {to_string(k), to_string(v)} end)
+                   assert headers[auth_header] == auth_value
+                   assert headers["x-msh-platform"] == "kimi_cli"
+                   assert headers["user-agent"] == "KimiCLI/" <> headers["x-msh-version"]
+                   {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], "{\"data\":[]}"}}
+                 end
+               )
+    end
+  end
+
   test "setup retains its OpenAI-only live policy" do
     input = %{
       api: :anthropic_messages,
