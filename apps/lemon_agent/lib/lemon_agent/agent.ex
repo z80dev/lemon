@@ -393,10 +393,23 @@ defmodule LemonAgent.Agent do
   skipping remaining tool calls. Use this for "steering" the agent while it's working.
   Pass `system_prompt: prompt` to apply a per-turn prompt refresh when the queued
   message is consumed by an already-running loop.
+
+  Pass `preempt: false` for agent-originated input: already-issued tool calls
+  finish before delivery at the next turn boundary. This variant acknowledges
+  enqueueing synchronously. Human steering retains its preempting default.
   """
   @spec steer(GenServer.server(), Types.agent_message(), keyword()) :: :ok
   def steer(agent, message, opts \\ []) do
-    GenServer.cast(agent, {:steer, queued_message(message, opts)})
+    queued = queued_message(message, opts)
+
+    if Keyword.get(opts, :preempt, true) do
+      GenServer.cast(agent, {:steer, queued})
+    else
+      queued =
+        if is_map(queued) and Map.has_key?(queued, :message), do: queued, else: %{message: queued}
+
+      GenServer.call(agent, {:steer, Map.put(queued, :preempt, false)})
+    end
   end
 
   @doc """
@@ -814,7 +827,7 @@ defmodule LemonAgent.Agent do
   # Handle steering/follow-up message requests from the loop task
   def handle_call({:get_steering_messages, abort_ref}, _from, state) do
     if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
-      {messages, new_queue} = consume_queue(state.steering_queue, state.steering_mode)
+      {messages, new_queue} = consume_steering_queue(state.steering_queue, state.steering_mode)
       {:reply, messages, %{state | steering_queue: new_queue}}
     else
       {:reply, [], state}
@@ -822,7 +835,33 @@ defmodule LemonAgent.Agent do
   end
 
   def handle_call({:has_steering_messages, abort_ref}, _from, state) do
-    {:reply, state.abort_ref == abort_ref and state.steering_queue != [], state}
+    {:reply,
+     state.abort_ref == abort_ref and Enum.any?(state.steering_queue, &preempting_message?/1),
+     state}
+  end
+
+  def handle_call({:steer, message}, _from, state) do
+    state = %{state | steering_queue: state.steering_queue ++ [message]}
+
+    # The loop may already be in its final follow-up poll. Wake that poll rather
+    # than leaving accepted turn input stranded until another prompt.
+    state =
+      case state.follow_up_poll do
+        %{from: from, abort_ref: abort_ref} = poll ->
+          if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
+            Process.cancel_timer(poll.timer_ref)
+            {messages, queue} = consume_steering_queue(state.steering_queue, state.steering_mode)
+            GenServer.reply(from, messages)
+            %{state | steering_queue: queue, follow_up_poll: nil}
+          else
+            state
+          end
+
+        nil ->
+          state
+      end
+
+    {:reply, :ok, state}
   end
 
   def handle_call({:get_follow_up_messages, abort_ref}, from, state) do
@@ -974,6 +1013,14 @@ defmodule LemonAgent.Agent do
   def handle_info(_msg, state) do
     {:noreply, state}
   end
+
+  defp consume_steering_queue(queue, mode) do
+    {preempting, deferred} = Enum.split_with(queue, &preempting_message?/1)
+    consume_queue(preempting ++ deferred, mode)
+  end
+
+  defp preempting_message?(%{preempt: false}), do: false
+  defp preempting_message?(_message), do: true
 
   defp queued_message(message, opts) do
     case Keyword.get(opts, :system_prompt) do

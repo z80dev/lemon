@@ -781,6 +781,81 @@ defmodule LemonAgent.AgentQueueTest do
   # Steering vs Follow-up Message Interaction
   # ============================================================================
 
+  test "human steering overtakes queued non-preempting input and still skips pending tools" do
+    owner = self()
+
+    tool = %LemonAgent.Types.AgentTool{
+      name: "gated",
+      description: "Gated operation",
+      parameters: %{"type" => "object", "properties" => %{}},
+      execute: fn id, _params, _signal, _update ->
+        send(owner, {:gated_tool, self(), id})
+
+        receive do
+          :release -> %LemonAgent.Types.AgentToolResult{content: []}
+        end
+      end
+    }
+
+    batch =
+      Mocks.assistant_message_with_tool_calls([
+        Mocks.tool_call("gated", %{}, id: "first"),
+        Mocks.tool_call("gated", %{}, id: "pending")
+      ])
+
+    responses =
+      Mocks.mock_stream_fn([
+        batch,
+        Mocks.assistant_message("Human"),
+        Mocks.assistant_message("Machine")
+      ])
+
+    stream_fn = fn model, context, options ->
+      send(owner, {:request_messages, context.messages})
+      responses.(model, context, options)
+    end
+
+    {:ok, agent} =
+      start_agent(tools: [tool], max_tool_concurrency: 1, stream_fn: stream_fn)
+
+    on_exit(fn -> if Process.alive?(agent), do: GenServer.stop(agent) end)
+    :ok = CoreAgent.prompt(agent, "Start")
+    assert_receive {:request_messages, _initial}
+    assert_receive {:gated_tool, worker, "first"}
+    :ok = CoreAgent.steer(agent, Mocks.user_message("Machine completion"), preempt: false)
+    :ok = CoreAgent.steer(agent, Mocks.user_message("Human correction"))
+    assert length(:sys.get_state(agent).steering_queue) == 2
+    send(worker, :release)
+
+    assert_receive {:request_messages, human_turn}, 2_000
+
+    assert Enum.any?(
+             human_turn,
+             &match?(%LemonAi.Types.UserMessage{content: "Human correction"}, &1)
+           )
+
+    refute Enum.any?(
+             human_turn,
+             &match?(%LemonAi.Types.UserMessage{content: "Machine completion"}, &1)
+           )
+
+    assert [%LemonAi.Types.ToolResultMessage{is_error: true, tool_call_id: "pending"}] =
+             Enum.filter(
+               human_turn,
+               &match?(%LemonAi.Types.ToolResultMessage{is_error: true}, &1)
+             )
+
+    assert_receive {:request_messages, machine_turn}, 2_000
+
+    assert Enum.any?(
+             machine_turn,
+             &match?(%LemonAi.Types.UserMessage{content: "Machine completion"}, &1)
+           )
+
+    refute_receive {:gated_tool, _, "pending"}
+    assert :ok = CoreAgent.wait_for_idle(agent)
+  end
+
   describe "steering vs follow-up message interaction" do
     test "steering messages have priority over follow-up" do
       # Steering messages are consumed during tool execution

@@ -6,10 +6,11 @@ defmodule CodingAgent.Tools.Task.Control do
 
   Family messaging authenticates callers from captured session options, never
   message parameters. It exposes only immediate relatives and public identities.
-  Running peers receive steering input. Completed children remain idle until
-  their configured TTL parks the live session; a direct message starts a new
-  turn, restoring the persisted session when parked. Unattached children retain
-  FIFO messages (64 messages / 256 KiB); bodies are limited to 32 KiB.
+  Running peers receive non-preempting input at the next turn boundary. Completed
+  children remain idle until their configured TTL parks the live session; a
+  direct message starts a new turn, restoring the persisted session when parked.
+  Unattached children retain FIFO messages (64 messages / 256 KiB); bodies are
+  limited to 32 KiB.
   """
   use GenServer
 
@@ -158,7 +159,7 @@ defmodule CodingAgent.Tools.Task.Control do
           Session.abort(session)
           {:reply, {:error, "Task aborted"}, state}
         else
-          Enum.each(Enum.reverse(entry.messages), &Session.steer(session, &1))
+          Enum.each(Enum.reverse(entry.messages), &Session.steer(session, &1, preempt: false))
 
           entry = %{
             entry
@@ -615,7 +616,7 @@ defmodule CodingAgent.Tools.Task.Control do
   end
 
   defp deliver(%{session: session} = entry, text) when is_pid(session) do
-    Session.steer(session, text)
+    Session.steer(session, text, preempt: false)
     {:ok, entry}
   end
 

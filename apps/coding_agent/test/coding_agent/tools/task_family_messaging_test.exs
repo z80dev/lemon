@@ -15,9 +15,9 @@ defmodule CodingAgent.Tools.TaskFamilyMessagingTest do
       {:reply, CodingAgent.Tools.Task.Control.cancel_owned(id), owner}
     end
 
-    def handle_cast({:steer, text}, owner) do
+    def handle_call({:steer, text, false}, _from, owner) do
       send(owner, {:peer_message, self(), text})
-      {:noreply, owner}
+      {:reply, :ok, owner}
     end
 
     def handle_cast(:abort, owner) do

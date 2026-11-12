@@ -50,7 +50,7 @@ config :coding_agent, :lane_caps,
   subagent: 16,
   background_exec: 8
 
-config :coding_agent, :async_followups, default_queue_mode: :steer_backlog
+config :coding_agent, :async_followups, default_queue_mode: :followup
 
 # The native executor is owned by coding_agent. The gateway looks this up
 # dynamically through LemonGateway.Executor, so this wiring creates no gateway

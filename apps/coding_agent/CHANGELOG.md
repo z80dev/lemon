@@ -204,6 +204,11 @@
 
 ### Fixed
 
+- Async task/agent completions, child questions, peer messages and task
+  request-budget notices now wait for the issued tool batch, then reach the next
+  model request without skipping calls. Human steering still preempts pending
+  calls. Async completion defaults to `followup`; `steer`/`steer_backlog` also
+  use non-preempting delivery rather than masquerading as human input.
 - Named-node request decoding recognizes optional `cwdMode` and canonical
   `:cwd_mode` without crashing legacy requests that omit the field.
 - Native session ledgers, descendant scopes, and explicit run-tree budgets retain

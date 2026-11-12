@@ -135,9 +135,9 @@ defmodule CodingAgent.Tools.TaskNamedMessagingTest do
     def start_link(owner), do: GenServer.start_link(__MODULE__, owner)
     def init(owner), do: {:ok, owner}
 
-    def handle_cast({:steer, text}, owner) do
+    def handle_call({:steer, text, false}, _from, owner) do
       send(owner, {:family_message, text})
-      {:noreply, owner}
+      {:reply, :ok, owner}
     end
   end
 

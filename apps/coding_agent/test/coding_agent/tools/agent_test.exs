@@ -709,7 +709,7 @@ defmodule CodingAgent.Tools.AgentTest do
     refute_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 150
   end
 
-  test "followup_queue_mode steer uses health_check streaming checks for live delivery" do
+  test "followup_queue_mode steer delivers non-preempting input to health-check-only sessions" do
     result =
       AgentTool.execute(
         "call_1",
@@ -742,11 +742,11 @@ defmodule CodingAgent.Tools.AgentTest do
     assert_receive {:session_async_followup, %CustomMessage{} = message}, 2_000
     assert message.content =~ "oracle update"
     assert message.details.source == :agent
-    assert message.details.delivery == :steer
+    assert message.details.delivery == :followup
     refute_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 150
   end
 
-  test "followup_queue_mode steer falls back to router followup when the parent is idle" do
+  test "followup_queue_mode steer falls back to router followup when the parent is unavailable" do
     result =
       AgentTool.execute(
         "call_1",
@@ -762,7 +762,7 @@ defmodule CodingAgent.Tools.AgentTest do
         "/tmp",
         run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
         session_module: __MODULE__.AgentTestIdleSessionSpy,
-        session_pid: self(),
+        session_pid: nil,
         session_key: "agent:main:main",
         session_id: "sess_main",
         agent_id: "main"
@@ -868,7 +868,7 @@ defmodule CodingAgent.Tools.AgentTest do
            ]
   end
 
-  test "followup_queue_mode steer_backlog uses live steer delivery when the parent is streaming" do
+  test "followup_queue_mode steer_backlog uses live followup delivery when the parent is streaming" do
     result =
       AgentTool.execute(
         "call_1",
@@ -899,7 +899,7 @@ defmodule CodingAgent.Tools.AgentTest do
       )
 
     assert_receive {:session_async_followup, %CustomMessage{} = message}, 2_000
-    assert message.details.delivery == :steer
+    assert message.details.delivery == :followup
     assert message.content =~ "oracle update"
     refute_receive {:router_submit, %RunRequest{}, 2}, 150
   end
@@ -1042,7 +1042,7 @@ defmodule CodingAgent.Tools.AgentTest do
       )
 
     assert_receive {:session_async_followup, %CustomMessage{} = message}, 2_000
-    assert message.details.delivery == :steer
+    assert message.details.delivery == :followup
     assert message.content =~ "oracle update"
     refute_receive {:router_submit, %RunRequest{}, 2}, 150
   end

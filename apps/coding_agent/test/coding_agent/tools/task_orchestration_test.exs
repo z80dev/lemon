@@ -20,9 +20,9 @@ defmodule CodingAgent.Tools.TaskOrchestrationTest do
     def start_link(owner), do: GenServer.start_link(__MODULE__, owner)
     def init(owner), do: {:ok, owner}
 
-    def handle_cast({:steer, text}, owner) do
+    def handle_call({:steer, text, false}, _from, owner) do
       send(owner, {:child_message, text})
-      {:noreply, owner}
+      {:reply, :ok, owner}
     end
 
     def handle_cast(:abort, owner), do: {:noreply, owner}
