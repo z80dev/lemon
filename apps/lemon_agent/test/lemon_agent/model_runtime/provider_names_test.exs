@@ -50,7 +50,10 @@ defmodule LemonAgent.ModelRuntime.ProviderNamesTest do
                CustomProviders.lookup(providers, name, "private-model")
 
       assert Credentials.resolve_provider_api_key(name, providers) == "private-key"
-      assert Credentials.resolve_provider_api_key(canonical, providers) == "builtin-key"
+      # Host env/secret credentials legitimately outrank the configured key, so
+      # assert the invariant (no borrowing of the custom identity's key) without
+      # comparing against, or printing, whatever the host resolves.
+      refute Credentials.resolve_provider_api_key(canonical, providers) == "private-key"
       assert ProviderNames.provider_config(%{name => custom}, canonical) == nil
     end
   end
