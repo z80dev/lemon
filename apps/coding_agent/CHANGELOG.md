@@ -18,6 +18,190 @@
 - Edit/patch retry reads and writes pin file identities to prevent symlink swaps
   from disclosing or modifying another file. Unified diffs retain a surviving
   EOF line's terminator and reject interior no-newline markers.
+- Foreground Bash calls now reconcile delayed admission through their actual
+  foreground deadline instead of reporting a spurious 120-second timeout after
+  the shorter admission wait. The same launch remains tracked without retries,
+  successful commands retain shell state, and lost ownership is reported as
+  `outcome_unknown` rather than completion.
+
+- Async task/agent completions, child questions, peer messages and task
+  request-budget notices now wait for the issued tool batch, then reach the next
+  model request without skipping calls. Human steering still preempts pending
+  calls. Async completion defaults to `followup`; `steer`/`steer_backlog` also
+  use non-preempting delivery rather than masquerading as human input.
+  Peer delivery acknowledgements no longer block the global task control server;
+  recipient death or timeout yields a bounded `failed`/`outcome_unknown` receipt
+  without losing family registrations or retrying uncertain delivery.
+  `agent_message`, task messaging and `write agent://` preserve uncertain
+  delivery as `outcome_unknown` (not accepted), retain every recipient's outcome
+  and explicitly warn against automatically resending the message.
+- Named-node request decoding recognizes optional `cwdMode` and canonical
+  `:cwd_mode` without crashing legacy requests that omit the field.
+- Native session ledgers, descendant scopes, and explicit run-tree budgets retain
+  unknown token and dollar totals instead of charging zero. Relevant caps block
+  further model requests and child launches; repeated reports, stale snapshots,
+  session restoration, and usage projections cannot erase the incompleteness.
+- Clearing terminal background processes tolerates sessions that exit concurrently,
+  including canceled queued launches. Cleanup resolves the session once, preserves
+  failures against a still-live session, and logs unexpected concurrent exits
+  without exposing process data.
+
+- Interrupted LSP server-requested edits retain captured paths in `affected_paths`
+  and warn when a checkpoint's edit outcome is unknown, while preserving confirmed
+  `changed_files` and merging affected paths across batches.
+- Workspace-level LSP requests and symbol searches rebind handed-off clients to
+  the current session owner before use, so owner death releases their leases.
+- LSP workspace-edit failure receipts retain mutations made by the failing
+  operation itself, including created parent directories, leftover temporary
+  files, failed writes and partially deleted trees.
+
+- Disclosure telemetry coverage isolates the initializing process and exercises
+  a foreign initialization deterministically, preventing unrelated sessions from
+  substituting their measurements in the once-per-initialize assertion.
+- Shared `webfetch` requests detach cancelled callers independently; when every
+  caller aborts, provider requests and PDF extraction stop without paid fallback
+  or cache publication. Provider admission and cache publication refresh caller
+  cancellation even before the next abort poll; publication is atomic with its
+  live-flight authorization, so cancellation cannot detach a flight mid-write.
+  Persistence runs outside the shared server so stalled writes cannot block
+  unrelated search/fetch admission, cancellation or completion. The original
+  flight deadline stops stalled publication; already-completed writes are not
+  rolled back. Replacement requests keep their own flight lifecycle.
+
+- Document backend guardians retain a witnessed process-group leader until
+  cleanup, so timeout, abort and caller death stop even redirected descendants
+  of immediately exiting converters without signaling unrelated processes.
+
+- Native-followup context tests restore their global coordinator even when setup
+  fails, preventing foreign submissions and later cron cancellation tests from
+  inheriting a fixture dispatcher.
+
+- Native `eval` binds the kernel's reported pid and process group as a
+  `ps`-verified witness at startup and, on reset, abort, owner loss, idle
+  disposal and crash, stops that group including children reparented after
+  their launcher exits. A ready frame naming a foreign group is refused and
+  never signalled; unrelated processes are untouched.
+- Child clarification requests release a matching task join only after the parent
+  acknowledges enqueueing the question. A slow or suspended Session can no longer
+  strand the question in an idle Agent or complete the caller before its answer;
+  question errors, cancellation and context-overflow recovery retain the normal
+  single-invocation lifecycle.
+- Managed process capture attachments validate the exact launch owner and
+  fingerprint without resetting output or logs. Cleared launches retain durable
+  receipts and reject late capture writes; failed accounting or capture cleanup
+  releases lifetime capacity once without dropping unreclaimed artifact charges.
+  Clearing a process now leaves its reconciliation session alive when the Store
+  refuses deletion.
+- Sessions retain current-turn error/cancellation terminals until the next turn;
+  fenced subscribers classify aborted, failed and length-limited answers truthfully.
+  Tagged direct subscriptions fence stale unsubscribe closures by generation.
+- Native session death expires pending execution approvals even when the session
+  is forcibly killed, including approvals without run IDs or time limits. Late
+  answers cannot grant access after the owner dies.
+  Ownership survives expiry-worker restarts before the first approval, including
+  unregistered sessions and sessions using custom registries.
+
+- Session subscriptions start with a targeted selected-branch journal todo
+  snapshot, without emitting empty events for pristine branches or duplicate
+  events for unchanged plans. Unsupported or unreadable journal entries report
+  unavailable rather than an empty plan; recovery excludes task-child owners and
+  fails closed on ambiguity, unavailable registered-owner inspection, or
+  unreadable process receipts. Compaction still accepts directly registered
+  session owners, and context accounting retains its saved-state fallback when
+  a live session retires during the read.
+
+- Patch hunks retry whitespace and typographic-punctuation normalization only
+  after an exact miss, reject ambiguous matches, and preserve original context.
+
+- Local overwrite format detection reads only a 64 KiB leading window rather
+  than loading the entire existing file.
+
+- Local patches refuse stale updates, deletes, and move sources before writing
+  any operation; filesystem errors now use actionable messages without raw terms.
+
+- Grep pages are sorted by path and line across both engines. Partial ripgrep
+  errors preserve matches with warnings, and lookaround/backreferences select
+  PCRE2 or explain the unsupported Rust-regex construct. The Elixir fallback
+  now has a 30-second deadline, a 4 MiB leading-file window with oversized-file
+  counts, and stops once the requested page is filled.
+- File overwrites reject truncated read output and preserve existing UTF-8 BOMs
+  and dominant CRLF endings, including ACP writes with available prior content.
+
+- Named-node file requests no longer return `filesystem_failed` when a parent
+  symlink is swapped back to a directory while the path resolves. Each component
+  is classified with one descriptor-relative `readlinkat`, so concurrent
+  replacement yields `not_found`, `path_not_allowed` or `not_directory`, or acts
+  on the directory actually present inside the root; nothing is written outside
+  it.
+- Swarm nodes inherit the execution context captured when the swarm launched
+  instead of re-reading parent session state per node, and persona `spawns`
+  keeps its `task` grant under preset tool-policy floors while other
+  leaf-worker denials remain.
+- Session rewind ignores checkpoint inspection IDs as restore sources and refuses
+  filesystem restoration across manual, unknown, or interrupted checkpoint
+  restores, including bridged and historical filesystem-checkpoint calls.
+  Persisted conversation-only `checkpoint(goal)` calls remain safe to rewind,
+  including direct, bridged, and interrupted calls following recoverable edits.
+- Rewind regression workspaces resolve trusted temporary-directory aliases before
+  deriving checkpoint paths, so macOS exercises recursive capture/restore and
+  symlink-parent refusal rather than failing on the system temporary-directory alias.
+- Native executor turns retain `eval`, debugger and language-server resources
+  across successful save/stop/resume boundaries. Durable session registry keys
+  remain the owner; reset/delete, explicit abort/stop, unexpected owner death and
+  idle expiry still dispose of them.
+- Native tool-resource handoff requires a successful save; uncertain handoffs
+  explicitly dispose resources. Abort signals blocked tools before disposal,
+  and reset rebuilds tool closures and approval/hook contexts for the fresh ID.
+- Debug servers stop when their owner exits during adapter disposal, including
+  teardown with child sessions. WASM host-call cancellation is invocation-local:
+  a timed-out sibling does not abort the parent, while parent abort cancels all
+  outstanding calls.
+- Debug adapter waits also observe the originating invocation worker's lifetime,
+  so a cancelled WASM host call releases the debug server even after its local
+  abort signal has been reclaimed; the parent and sibling calls remain usable.
+- Eval cleanup retains the exited kernel's process-group identity so crashed
+  roots cannot orphan subprocesses; JavaScript uses a detached group host with
+  pipe-EOF teardown. Kernel input preserves UTF-8 across reads and output spills
+  become private before content is written.
+- Debugpy port attach connects to the existing DAP endpoint instead of starting
+  another local adapter; attached targets are disconnected without being killed.
+- Filesystem rewind refuses arbitrary `eval` and executing or unknown `debug`
+  effects even after errors or interruption; shell-only partial consent cannot
+  claim those effects were restored. Explicit debug inspection stays read-only.
+- Rewind consumes all chronological LSP checkpoint receipts, including failed
+  batches, in reverse order so overlapping file/directory edits restore correctly.
+- SQLite regression coverage separates fragment rejection from real-engine
+  readonly/query-only CTE write refusal; text primary keys preserve leading zeros.
+- Rich `read` line selectors honor `:raw`, grep byte-capped pages advance only
+  past emitted matches, and fallback searches honor hierarchical `.ignore` rules.
+- Bash approval and operator action projections omit all env values, including
+  malformed data and bridged `tool_invoke` arguments, without changing execution.
+- PDF `webfetch` no longer probes or executes automatically discovered project
+  or ancestor read-format virtual environments. It uses system backends or an
+  explicitly operator-trusted `:pdf_python`, rejecting relative/project PATH
+  resolution and project symlink targets, with isolated Python imports;
+  extracted page text remains untrusted web content.
+- Bridged tool invocation retains its outer transcript identity while rewind
+  classifies the actual target's mutations and shell commands.
+- `BashExecutor` keeps output that races an abort or timeout: a chunk that
+  arrives after the abort flag is set, or is already in the mailbox when the
+  process tree is killed, is now part of the partial result instead of being
+  dropped.
+- Tool approval requests now fail closed on exceptions, exits, throws,
+  malformed responses, and unsupported scopes instead of auto-authorizing
+  execution. Raw service error payloads are excluded from results and logs.
+  Explicit supported approvals still execute exactly once; errors raised by
+  the approved tool remain outside the approval failure boundary.
+- Approval timeout results no longer raise when the configured wait is infinite.
+- Restricted tool profiles deny `hashline_edit`, `remember`, and `task`,
+  closing alternate editor, memory mutation, and child-delegation gaps.
+  Full-access and orchestrator profiles are unchanged. These remain tool-name
+  restrictions, not a sandbox or classification of arbitrary extension tools.
+- Bash streaming previews now retain only the most recent 50,000 output bytes
+  plus a fixed omission marker, rather than growing an unbounded duplicate of
+  all command output. UTF-8 boundaries and small-binary ownership are preserved.
+  Final results and full-output files are unchanged; this does not implement
+  end-to-end mailbox or Port backpressure.
 
 ### Added
 
@@ -227,190 +411,3 @@
 - Consolidate memory tools as `remember` (compact USER.md/MEMORY.md facts) and
   `recall` (past conversations and longer workspace notes); remove the former
   search, topic, and session-browse tool surfaces.
-
-### Fixed
-
-- Foreground Bash calls now reconcile delayed admission through their actual
-  foreground deadline instead of reporting a spurious 120-second timeout after
-  the shorter admission wait. The same launch remains tracked without retries,
-  successful commands retain shell state, and lost ownership is reported as
-  `outcome_unknown` rather than completion.
-
-- Async task/agent completions, child questions, peer messages and task
-  request-budget notices now wait for the issued tool batch, then reach the next
-  model request without skipping calls. Human steering still preempts pending
-  calls. Async completion defaults to `followup`; `steer`/`steer_backlog` also
-  use non-preempting delivery rather than masquerading as human input.
-  Peer delivery acknowledgements no longer block the global task control server;
-  recipient death or timeout yields a bounded `failed`/`outcome_unknown` receipt
-  without losing family registrations or retrying uncertain delivery.
-  `agent_message`, task messaging and `write agent://` preserve uncertain
-  delivery as `outcome_unknown` (not accepted), retain every recipient's outcome
-  and explicitly warn against automatically resending the message.
-- Named-node request decoding recognizes optional `cwdMode` and canonical
-  `:cwd_mode` without crashing legacy requests that omit the field.
-- Native session ledgers, descendant scopes, and explicit run-tree budgets retain
-  unknown token and dollar totals instead of charging zero. Relevant caps block
-  further model requests and child launches; repeated reports, stale snapshots,
-  session restoration, and usage projections cannot erase the incompleteness.
-- Clearing terminal background processes tolerates sessions that exit concurrently,
-  including canceled queued launches. Cleanup resolves the session once, preserves
-  failures against a still-live session, and logs unexpected concurrent exits
-  without exposing process data.
-
-- Interrupted LSP server-requested edits retain captured paths in `affected_paths`
-  and warn when a checkpoint's edit outcome is unknown, while preserving confirmed
-  `changed_files` and merging affected paths across batches.
-- Workspace-level LSP requests and symbol searches rebind handed-off clients to
-  the current session owner before use, so owner death releases their leases.
-- LSP workspace-edit failure receipts retain mutations made by the failing
-  operation itself, including created parent directories, leftover temporary
-  files, failed writes and partially deleted trees.
-
-- Disclosure telemetry coverage isolates the initializing process and exercises
-  a foreign initialization deterministically, preventing unrelated sessions from
-  substituting their measurements in the once-per-initialize assertion.
-- Shared `webfetch` requests detach cancelled callers independently; when every
-  caller aborts, provider requests and PDF extraction stop without paid fallback
-  or cache publication. Provider admission and cache publication refresh caller
-  cancellation even before the next abort poll; publication is atomic with its
-  live-flight authorization, so cancellation cannot detach a flight mid-write.
-  Persistence runs outside the shared server so stalled writes cannot block
-  unrelated search/fetch admission, cancellation or completion. The original
-  flight deadline stops stalled publication; already-completed writes are not
-  rolled back. Replacement requests keep their own flight lifecycle.
-
-- Document backend guardians retain a witnessed process-group leader until
-  cleanup, so timeout, abort and caller death stop even redirected descendants
-  of immediately exiting converters without signaling unrelated processes.
-
-- Native-followup context tests restore their global coordinator even when setup
-  fails, preventing foreign submissions and later cron cancellation tests from
-  inheriting a fixture dispatcher.
-
-- Native `eval` binds the kernel's reported pid and process group as a
-  `ps`-verified witness at startup and, on reset, abort, owner loss, idle
-  disposal and crash, stops that group including children reparented after
-  their launcher exits. A ready frame naming a foreign group is refused and
-  never signalled; unrelated processes are untouched.
-- Child clarification requests release a matching task join only after the parent
-  acknowledges enqueueing the question. A slow or suspended Session can no longer
-  strand the question in an idle Agent or complete the caller before its answer;
-  question errors, cancellation and context-overflow recovery retain the normal
-  single-invocation lifecycle.
-- Managed process capture attachments validate the exact launch owner and
-  fingerprint without resetting output or logs. Cleared launches retain durable
-  receipts and reject late capture writes; failed accounting or capture cleanup
-  releases lifetime capacity once without dropping unreclaimed artifact charges.
-  Clearing a process now leaves its reconciliation session alive when the Store
-  refuses deletion.
-- Sessions retain current-turn error/cancellation terminals until the next turn;
-  fenced subscribers classify aborted, failed and length-limited answers truthfully.
-  Tagged direct subscriptions fence stale unsubscribe closures by generation.
-- Native session death expires pending execution approvals even when the session
-  is forcibly killed, including approvals without run IDs or time limits. Late
-  answers cannot grant access after the owner dies.
-  Ownership survives expiry-worker restarts before the first approval, including
-  unregistered sessions and sessions using custom registries.
-
-- Session subscriptions start with a targeted selected-branch journal todo
-  snapshot, without emitting empty events for pristine branches or duplicate
-  events for unchanged plans. Unsupported or unreadable journal entries report
-  unavailable rather than an empty plan; recovery excludes task-child owners and
-  fails closed on ambiguity, unavailable registered-owner inspection, or
-  unreadable process receipts. Compaction still accepts directly registered
-  session owners, and context accounting retains its saved-state fallback when
-  a live session retires during the read.
-
-- Patch hunks retry whitespace and typographic-punctuation normalization only
-  after an exact miss, reject ambiguous matches, and preserve original context.
-
-- Local overwrite format detection reads only a 64 KiB leading window rather
-  than loading the entire existing file.
-
-- Local patches refuse stale updates, deletes, and move sources before writing
-  any operation; filesystem errors now use actionable messages without raw terms.
-
-- Grep pages are sorted by path and line across both engines. Partial ripgrep
-  errors preserve matches with warnings, and lookaround/backreferences select
-  PCRE2 or explain the unsupported Rust-regex construct. The Elixir fallback
-  now has a 30-second deadline, a 4 MiB leading-file window with oversized-file
-  counts, and stops once the requested page is filled.
-- File overwrites reject truncated read output and preserve existing UTF-8 BOMs
-  and dominant CRLF endings, including ACP writes with available prior content.
-
-- Named-node file requests no longer return `filesystem_failed` when a parent
-  symlink is swapped back to a directory while the path resolves. Each component
-  is classified with one descriptor-relative `readlinkat`, so concurrent
-  replacement yields `not_found`, `path_not_allowed` or `not_directory`, or acts
-  on the directory actually present inside the root; nothing is written outside
-  it.
-- Swarm nodes inherit the execution context captured when the swarm launched
-  instead of re-reading parent session state per node, and persona `spawns`
-  keeps its `task` grant under preset tool-policy floors while other
-  leaf-worker denials remain.
-- Session rewind ignores checkpoint inspection IDs as restore sources and refuses
-  filesystem restoration across manual, unknown, or interrupted checkpoint
-  restores, including bridged and historical filesystem-checkpoint calls.
-  Persisted conversation-only `checkpoint(goal)` calls remain safe to rewind,
-  including direct, bridged, and interrupted calls following recoverable edits.
-- Rewind regression workspaces resolve trusted temporary-directory aliases before
-  deriving checkpoint paths, so macOS exercises recursive capture/restore and
-  symlink-parent refusal rather than failing on the system temporary-directory alias.
-- Native executor turns retain `eval`, debugger and language-server resources
-  across successful save/stop/resume boundaries. Durable session registry keys
-  remain the owner; reset/delete, explicit abort/stop, unexpected owner death and
-  idle expiry still dispose of them.
-- Native tool-resource handoff requires a successful save; uncertain handoffs
-  explicitly dispose resources. Abort signals blocked tools before disposal,
-  and reset rebuilds tool closures and approval/hook contexts for the fresh ID.
-- Debug servers stop when their owner exits during adapter disposal, including
-  teardown with child sessions. WASM host-call cancellation is invocation-local:
-  a timed-out sibling does not abort the parent, while parent abort cancels all
-  outstanding calls.
-- Debug adapter waits also observe the originating invocation worker's lifetime,
-  so a cancelled WASM host call releases the debug server even after its local
-  abort signal has been reclaimed; the parent and sibling calls remain usable.
-- Eval cleanup retains the exited kernel's process-group identity so crashed
-  roots cannot orphan subprocesses; JavaScript uses a detached group host with
-  pipe-EOF teardown. Kernel input preserves UTF-8 across reads and output spills
-  become private before content is written.
-- Debugpy port attach connects to the existing DAP endpoint instead of starting
-  another local adapter; attached targets are disconnected without being killed.
-- Filesystem rewind refuses arbitrary `eval` and executing or unknown `debug`
-  effects even after errors or interruption; shell-only partial consent cannot
-  claim those effects were restored. Explicit debug inspection stays read-only.
-- Rewind consumes all chronological LSP checkpoint receipts, including failed
-  batches, in reverse order so overlapping file/directory edits restore correctly.
-- SQLite regression coverage separates fragment rejection from real-engine
-  readonly/query-only CTE write refusal; text primary keys preserve leading zeros.
-- Rich `read` line selectors honor `:raw`, grep byte-capped pages advance only
-  past emitted matches, and fallback searches honor hierarchical `.ignore` rules.
-- Bash approval and operator action projections omit all env values, including
-  malformed data and bridged `tool_invoke` arguments, without changing execution.
-- PDF `webfetch` no longer probes or executes automatically discovered project
-  or ancestor read-format virtual environments. It uses system backends or an
-  explicitly operator-trusted `:pdf_python`, rejecting relative/project PATH
-  resolution and project symlink targets, with isolated Python imports;
-  extracted page text remains untrusted web content.
-- Bridged tool invocation retains its outer transcript identity while rewind
-  classifies the actual target's mutations and shell commands.
-- `BashExecutor` keeps output that races an abort or timeout: a chunk that
-  arrives after the abort flag is set, or is already in the mailbox when the
-  process tree is killed, is now part of the partial result instead of being
-  dropped.
-- Tool approval requests now fail closed on exceptions, exits, throws,
-  malformed responses, and unsupported scopes instead of auto-authorizing
-  execution. Raw service error payloads are excluded from results and logs.
-  Explicit supported approvals still execute exactly once; errors raised by
-  the approved tool remain outside the approval failure boundary.
-- Approval timeout results no longer raise when the configured wait is infinite.
-- Restricted tool profiles deny `hashline_edit`, `remember`, and `task`,
-  closing alternate editor, memory mutation, and child-delegation gaps.
-  Full-access and orchestrator profiles are unchanged. These remain tool-name
-  restrictions, not a sandbox or classification of arbitrary extension tools.
-- Bash streaming previews now retain only the most recent 50,000 output bytes
-  plus a fixed omission marker, rather than growing an unbounded duplicate of
-  all command output. UTF-8 boundaries and small-binary ownership are preserved.
-  Final results and full-output files are unchanged; this does not implement
-  end-to-end mailbox or Port backpressure.

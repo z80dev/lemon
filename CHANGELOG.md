@@ -13,6 +13,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Lemon Bot marks interrupted, never-dispatched messages “Not sent” and permits explicit resend; uncertain dispatched messages remain fenced.
 - Apple push registration accepts bounded variable-length hexadecimal device tokens.
 - Connect iPhone shows a copyable single-use pairing link alongside its QR, with the same expiry and usage state.
+- Product release preparation now works with stock macOS/BSD sed and restores
+  every changed version file and the changelog if any preparation step fails.
+- The Tern palette's **Focus existing session** finds Lemon panes by program,
+  not only by the old `Lemon · ` title prefix.
+- Kimi Code omp authentication fails closed at the model-request boundary,
+  normalizes auth-source spelling consistently for status and logout, and
+  serializes access-token cache refreshes so stale fetches cannot replace them.
+- Every Kimi Code request now sends one consistent Kimi CLI fingerprint (the
+  catalog's stale `KimiCLI/1.0` user agent is gone), and the device id is
+  persisted in `~/.lemon/kimi-device-id` so a host rename no longer changes it.
+  `lemon doctor --live` checks Kimi Code with bearer authentication and the
+  fingerprint. A refresh that loses to another Lemon process adopts that
+  process's fresh token instead of failing.
+
+---
 
 ### Added
 
@@ -60,24 +75,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - The TUI uses pi-tui 18.18.9 (native buttons, path-based syntax highlighting
   in Tern) and source development now needs Bun 1.4.4+.
-
-### Fixed
-
-- Product release preparation now works with stock macOS/BSD sed and restores
-  every changed version file and the changelog if any preparation step fails.
-- The Tern palette's **Focus existing session** finds Lemon panes by program,
-  not only by the old `Lemon · ` title prefix.
-- Kimi Code omp authentication fails closed at the model-request boundary,
-  normalizes auth-source spelling consistently for status and logout, and
-  serializes access-token cache refreshes so stale fetches cannot replace them.
-- Every Kimi Code request now sends one consistent Kimi CLI fingerprint (the
-  catalog's stale `KimiCLI/1.0` user agent is gone), and the device id is
-  persisted in `~/.lemon/kimi-device-id` so a host rename no longer changes it.
-  `lemon doctor --live` checks Kimi Code with bearer authentication and the
-  fingerprint. A refresh that loses to another Lemon process adopts that
-  process's fresh token instead of failing.
-
----
 
 ## [2026.11.6]
 

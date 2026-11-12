@@ -11,6 +11,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - Tool disclosure defaults to `profile = "auto"`: coding for cwd-scoped native
   coding sessions, legacy for assistant chat. Explicit legacy/coding config and
   environment overrides retain precedence.
+- **Breaking update-order change:** updates and rollbacks stop running local
+  managed workers before restarting the controller and restart them only after
+  controller health is established. Managed backend co-artifacts follow the
+  runtime version and the previously running backend restarts last. Remote
+  workers are never silently updated by another host.
 
 ### Security
 
@@ -123,14 +128,6 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   (including identical plaintext), deletion/recreation and storage restart
   invalidate it. Conditional saves share the existing secrets/key-rotation
   mutation lease and use Store's atomic compare-and-swap.
-
-### Changed
-
-- **Breaking update-order change:** updates and rollbacks stop running local
-  managed workers before restarting the controller and restart them only after
-  controller health is established. Managed backend co-artifacts follow the
-  runtime version and the previously running backend restarts last. Remote
-  workers are never silently updated by another host.
 
 ### Fixed
 
