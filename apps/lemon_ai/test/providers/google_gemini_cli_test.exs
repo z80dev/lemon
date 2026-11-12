@@ -315,7 +315,7 @@ defmodule LemonAi.Providers.GoogleGeminiCliTest do
   # ============================================================================
 
   describe "generation config" do
-    test "defaults generationConfig to the model output budget" do
+    test "omits generationConfig when no options provided" do
       test_pid = self()
 
       Req.Test.stub(__MODULE__, fn conn ->
@@ -327,7 +327,7 @@ defmodule LemonAi.Providers.GoogleGeminiCliTest do
       {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
 
       assert_receive {:request_body, body}, 1000
-      assert body["request"]["generationConfig"] == %{"maxOutputTokens" => 8192}
+      refute Map.has_key?(body["request"], "generationConfig")
       assert {:error, _} = EventStream.result(stream, 1000)
     end
 

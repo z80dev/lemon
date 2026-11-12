@@ -323,8 +323,12 @@ defmodule LemonAi.Providers.GoogleVertex do
         config
       end
 
-    max_tokens = opts.max_tokens || if(model.max_tokens > 0, do: model.max_tokens)
-    config = if max_tokens, do: Map.put(config, "maxOutputTokens", max_tokens), else: config
+    config =
+      if opts.max_tokens do
+        Map.put(config, "maxOutputTokens", opts.max_tokens)
+      else
+        config
+      end
 
     GoogleShared.put_thinking_config(config, model, opts)
   end

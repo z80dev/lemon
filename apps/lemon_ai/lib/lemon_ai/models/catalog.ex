@@ -96,6 +96,7 @@ defmodule LemonAi.Models.Catalog do
     "bedrock_reasoning_config" => :bedrock_reasoning_config,
     "anthropic_effort_only" => :anthropic_effort_only,
     "anthropic_session_user_id" => :anthropic_session_user_id,
+    "anthropic_context_window_overflow" => :anthropic_context_window_overflow,
     "supports_store" => :supports_store,
     "supports_developer_role" => :supports_developer_role,
     "supports_reasoning_effort" => :supports_reasoning_effort,

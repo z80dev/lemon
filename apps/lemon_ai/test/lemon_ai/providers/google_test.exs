@@ -453,12 +453,12 @@ defmodule LemonAi.Providers.GoogleTest do
       EventStream.result(stream, 5_000)
     end
 
-    test "request body defaults to the model output budget when no options set" do
+    test "request body omits generation config when no options set" do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
 
-        assert decoded["generationConfig"] == %{"maxOutputTokens" => 65_536}
+        refute Map.has_key?(decoded, "generationConfig")
 
         conn
         |> Plug.Conn.put_resp_content_type("text/event-stream")

@@ -261,11 +261,10 @@ defmodule LemonAi.Providers.Bedrock do
         LemonAi.Models.reasoning_effort_for(model, opts.reasoning) == :high
 
     config = %{}
-    max_tokens = opts.max_tokens || if(model.max_tokens > 0, do: model.max_tokens)
 
     config =
-      if max_tokens && not nova_high?,
-        do: Map.put(config, "maxTokens", max_tokens),
+      if opts.max_tokens && not nova_high?,
+        do: Map.put(config, "maxTokens", opts.max_tokens),
         else: config
 
     config =

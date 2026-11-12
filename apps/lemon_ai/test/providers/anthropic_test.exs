@@ -50,6 +50,116 @@ defmodule LemonAi.Providers.AnthropicTest do
     struct(Model, Map.merge(defaults, overrides))
   end
 
+  test "legacy first-party Claude catalog models opt into context-window truncation" do
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(test_pid, {:request_headers, Map.new(conn.req_headers)})
+      Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+    end)
+
+    legacy_ids =
+      ~w(claude-3-5-haiku-20241022 claude-3-5-haiku-latest
+         claude-3-5-sonnet-20240620 claude-3-5-sonnet-20241022
+         claude-3-7-sonnet-20250219 claude-3-7-sonnet-latest
+         claude-3-haiku-20240307 claude-3-opus-20240229 claude-3-sonnet-20240229
+         claude-opus-4-0 claude-opus-4-1 claude-opus-4-1-20250805
+         claude-opus-4-20250514 claude-sonnet-4-0 claude-sonnet-4-20250514)
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    for id <- legacy_ids, key <- ["test-api-key", "sk-ant-oat01-test-token"] do
+      model = LemonAi.Models.get_model(:anthropic, id)
+      assert model.compat.anthropic_context_window_overflow
+      opts = %StreamOptions{api_key: key, headers: %{"Anthropic-Beta" => "caller-beta"}}
+      assert {:ok, stream} = Anthropic.stream(model, context, opts)
+      assert_receive {:request_headers, headers}, 1000
+      betas = String.split(headers["anthropic-beta"], ",")
+      assert "model-context-window-exceeded-2025-08-26" in betas
+      assert "interleaved-thinking-2025-05-14" in betas
+      assert "caller-beta" in betas
+      if key == "sk-ant-oat01-test-token", do: assert("oauth-2025-04-20" in betas)
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+  end
+
+  test "overflow beta composes with effort and OAuth betas but stays first-party only" do
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(test_pid, {:request_headers, Map.new(conn.req_headers)})
+      Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+    end)
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    for {provider, compat, overflow?} <- [
+          {:anthropic, %{anthropic_context_window_overflow: true}, true},
+          {:minimax, %{anthropic_context_window_overflow: true}, false},
+          {:anthropic, %{}, false}
+        ] do
+      model =
+        model(%{
+          provider: provider,
+          adaptive_thinking: true,
+          reasoning_efforts: [:low, :high, :max],
+          compat: compat
+        })
+
+      opts = %StreamOptions{
+        api_key: "sk-ant-oat01-test-token",
+        reasoning: :high,
+        headers: %{"Anthropic-Beta" => "caller-beta,effort-2025-11-24"}
+      }
+
+      assert {:ok, stream} = Anthropic.stream(model, context, opts)
+      assert_receive {:request_headers, headers}, 1000
+      betas = String.split(headers["anthropic-beta"], ",")
+      assert "model-context-window-exceeded-2025-08-26" in betas == overflow?
+      assert "effort-2025-11-24" in betas
+      assert "caller-beta" in betas
+      assert Enum.count(betas, &(&1 == "effort-2025-11-24")) == 1
+      if provider == :anthropic, do: assert("oauth-2025-04-20" in betas)
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+
+    for id <- ~w(claude-haiku-4-5 claude-sonnet-4-5 claude-opus-4-5 claude-opus-4-6) do
+      refute Map.get(
+               LemonAi.Models.get_model(:anthropic, id).compat || %{},
+               :anthropic_context_window_overflow,
+               false
+             )
+    end
+  end
+
+  test "context-window exhaustion is a successful truncated completion" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      sse = """
+      event: content_block_start
+      data: {"index":0,"content_block":{"type":"text","text":"Partial answer"}}
+
+      event: content_block_stop
+      data: {"index":0}
+
+      event: message_delta
+      data: {"delta":{"stop_reason":"model_context_window_exceeded"},"usage":{}}
+
+      event: message_stop
+      data: {}
+
+      """
+
+      Plug.Conn.send_resp(conn, 200, sse)
+    end)
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+    model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-0")
+    assert {:ok, stream} = Anthropic.stream(model, context, %StreamOptions{api_key: "test-key"})
+    assert {:ok, result} = EventStream.result(stream, 1000)
+    assert result.stop_reason == :length
+    assert LemonAi.get_text(result) == "Partial answer"
+  end
+
   describe "provider config resolution" do
     test "uses resolved provider_options api_key and base_url for minimax" do
       test_pid = self()

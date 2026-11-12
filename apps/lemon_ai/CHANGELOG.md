@@ -31,14 +31,17 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
-- Provider requests use the full declared output-token budget by default rather
-  than Anthropic's one-third budget or smaller server defaults. Explicit limits
-  still apply; Codex and Bedrock Nova high-effort endpoint constraints are preserved.
+- Anthropic requests use the full declared output-token budget instead of one
+  third, preserving explicit limits. Older first-party Claude catalog models add
+  the context-window-overflow beta alongside existing OAuth/effort/caller betas;
+  `model_context_window_exceeded` is reported as normal `:length` truncation.
+  Other transports retain server-default output limits unless explicitly set,
+  except Z.AI, avoiding local context-fit and OpenRouter preauthorization errors.
 - Z.AI coding Chat Completions sends `max_tokens` and the documented top-level
   `reasoning_effort` for GLM-5.2/5.3 models, including supported effort mapping
   and required thinking on GLM-5.3. Older GLM models do not receive unsupported
   effort fields. The now-redundant `anthropic_default_max_output` catalog flag
-  is removed; full output budgets are the generic default.
+  is removed; full output budgets are the Anthropic default.
 - Validate OAuth callback ports in the original authority before URI normalization,
   rejecting out-of-range ports even when Elixir 1.20 discards them during parsing.
   Apply the same validation to Anthropic, Google Antigravity, Gemini CLI and Codex

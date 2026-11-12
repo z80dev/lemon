@@ -375,7 +375,11 @@ defmodule LemonAi.Providers.OpenAICompletions do
   defp maybe_add_store(params, _compat), do: params
 
   defp maybe_add_max_tokens(params, model, opts, %{max_tokens_field: field}) do
-    max_tokens = opts.max_tokens || model.max_tokens
+    default_max_tokens =
+      if model.provider in [:zai, "zai"] or String.contains?(model.base_url || "", "api.z.ai"),
+        do: model.max_tokens
+
+    max_tokens = opts.max_tokens || default_max_tokens
 
     if max_tokens && max_tokens > 0,
       do: Map.put(params, field, max_tokens),

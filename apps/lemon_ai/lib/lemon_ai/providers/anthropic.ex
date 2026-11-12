@@ -1023,6 +1023,14 @@ defmodule LemonAi.Providers.Anthropic do
         beta_features
       end
 
+    beta_features =
+      if anthropic_oauth_provider?(provider) and
+           compat_flag?(model.compat || %{}, :anthropic_context_window_overflow) do
+        beta_features ++ ["model-context-window-exceeded-2025-08-26"]
+      else
+        beta_features
+      end
+
     base_headers = [
       {"content-type", "application/json"},
       {"accept", "text/event-stream"},
@@ -1653,6 +1661,7 @@ defmodule LemonAi.Providers.Anthropic do
 
   defp map_stop_reason("end_turn"), do: :stop
   defp map_stop_reason("max_tokens"), do: :length
+  defp map_stop_reason("model_context_window_exceeded"), do: :length
   defp map_stop_reason("tool_use"), do: :tool_use
   defp map_stop_reason("refusal"), do: :error
   defp map_stop_reason("pause_turn"), do: :stop

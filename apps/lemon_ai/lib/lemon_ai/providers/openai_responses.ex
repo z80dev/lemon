@@ -248,8 +248,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
 
     params = add_cache_retention(params, model)
 
-    max_tokens = opts.max_tokens || if(model.max_tokens > 0, do: model.max_tokens)
-    params = maybe_add_param(params, "max_output_tokens", max_tokens)
+    params = maybe_add_param(params, "max_output_tokens", opts.max_tokens)
 
     params =
       maybe_add_param(params, "temperature", OpenAIResponsesShared.temperature_for(model, opts))

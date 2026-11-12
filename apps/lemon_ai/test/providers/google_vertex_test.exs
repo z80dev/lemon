@@ -379,7 +379,7 @@ defmodule LemonAi.Providers.GoogleVertexTest do
   end
 
   describe "request formatting - generation config" do
-    test "defaults generationConfig to the model output budget" do
+    test "omits generationConfig when no options provided" do
       test_pid = self()
 
       Req.Test.stub(__MODULE__, fn conn ->
@@ -400,7 +400,7 @@ defmodule LemonAi.Providers.GoogleVertexTest do
       {:ok, stream} = GoogleVertex.stream(model, context, opts)
 
       assert_receive {:request_body, body}, 1000
-      assert body["generationConfig"] == %{"maxOutputTokens" => 8192}
+      refute Map.has_key?(body, "generationConfig")
       EventStream.result(stream, 1000)
     end
   end
@@ -629,7 +629,7 @@ defmodule LemonAi.Providers.GoogleVertexTest do
       {:ok, stream} = GoogleVertex.stream(model, context, opts)
 
       assert_receive {:request_body, body}, 1000
-      assert body["generationConfig"] == %{"maxOutputTokens" => 8192}
+      refute Map.has_key?(body, "generationConfig")
       EventStream.result(stream, 1000)
     end
 
@@ -654,7 +654,7 @@ defmodule LemonAi.Providers.GoogleVertexTest do
       {:ok, stream} = GoogleVertex.stream(model, context, opts)
 
       assert_receive {:request_body, body}, 1000
-      assert body["generationConfig"] == %{"maxOutputTokens" => 8192}
+      refute Map.has_key?(body, "generationConfig")
       EventStream.result(stream, 1000)
     end
   end

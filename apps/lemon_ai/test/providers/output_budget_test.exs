@@ -44,7 +44,7 @@ defmodule LemonAi.Providers.OutputBudgetTest do
   ]
 
   for {provider_module, api, provider, field_path} <- @families do
-    test "#{api} sends the full output budget and respects explicit overrides" do
+    test "#{api} preserves endpoint defaults and respects explicit overrides" do
       model = %Model{
         id: "budget-test-model",
         api: unquote(api),
@@ -53,7 +53,9 @@ defmodule LemonAi.Providers.OutputBudgetTest do
         max_tokens: 131_072
       }
 
-      for {requested, expected} <- [{nil, 131_072}, {4_096, 4_096}] do
+      default = if unquote(api) == :anthropic_messages, do: 131_072
+
+      for {requested, expected} <- [{nil, default}, {4_096, 4_096}] do
         opts = options(unquote(api), max_tokens: requested)
         body = capture(unquote(provider_module), model, opts)
         assert get_in(body, unquote(field_path)) == expected
@@ -166,8 +168,24 @@ defmodule LemonAi.Providers.OutputBudgetTest do
     body =
       capture(Providers.OpenAICompletions, model, options(:openai_completions, reasoning: :high))
 
-    assert body["max_tokens"] == model.max_tokens
+    refute Map.has_key?(body, "max_tokens")
     refute Map.has_key?(body, "reasoning_effort")
+  end
+
+  test "non-ZAI chat providers leave output budgets to their servers" do
+    for provider <- [:openrouter, :deepseek, :groq, :xai, :ollama, :vllm, :lm_studio, :custom] do
+      model = %Model{
+        id: "budget-test-model",
+        api: :openai_completions,
+        provider: provider,
+        base_url: "https://example.test/v1",
+        max_tokens: 131_072
+      }
+
+      body = capture(Providers.OpenAICompletions, model, options(:openai_completions, []))
+      refute Map.has_key?(body, "max_tokens")
+      refute Map.has_key?(body, "max_completion_tokens")
+    end
   end
 
   test "Bedrock Nova high effort keeps the provider-required omission of maxTokens" do

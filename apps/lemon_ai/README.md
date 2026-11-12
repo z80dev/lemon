@@ -202,15 +202,22 @@ LemonAi.Models.supports_xhigh(model)
 
 ### Provider request controls
 
-Anthropic, OpenAI Chat Completions/Responses, Azure Responses, Google (including
-Vertex and Gemini CLI), and Bedrock requests default to the model's full declared
-output budget, not a fraction of it. Set `max_tokens` in stream options to choose
-a smaller budget; reasoning tokens count against the provider's output limit.
-Anthropic clamps the limit to the model maximum and reserves room for manual
-thinking. A model without a declared positive limit leaves the provider default
-unchanged on transports where the field is optional. Codex subscription requests
-omit output limits, and Bedrock Nova high-effort reasoning omits `maxTokens` as
-required by those endpoints.
+Anthropic requests default the required `max_tokens` field to the model's full
+output budget rather than a fraction of it. An explicit `max_tokens` overrides
+that default (clamped to the model maximum, with room reserved for manual thinking).
+First-party Claude models older than 4.5 declare
+`compat.anthropic_context_window_overflow`, enabling the
+`model-context-window-exceeded-2025-08-26` beta so input plus the output budget can
+exceed the context window without a validation error. The beta composes with
+OAuth, effort, and caller betas. A `model_context_window_exceeded` stop is normal
+truncation (`:length`), just like `max_tokens`; see Anthropic's
+[context-window documentation](https://platform.claude.com/docs/en/build-with-claude/context-windows).
+
+Other transports leave optional output limits unset unless `max_tokens` is
+explicitly supplied, retaining server defaults and avoiding context-fit errors
+on local servers or excessive credit preauthorization on OpenRouter. Z.AI is the
+exception described below. Codex subscription requests omit output limits, and
+Bedrock Nova high-effort reasoning omits `maxTokens` as required by those endpoints.
 
 Z.AI keeps the coding-plan Chat Completions endpoint
 (`/api/coding/paas/v4/chat/completions`), sends `max_tokens` (131,072 for GLM-5.x),
