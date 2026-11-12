@@ -14,6 +14,9 @@ defmodule LemonAi.OneshotRetry do
     * `:base_delay_ms` — initial jittered backoff (default 500).
     * `:max_delay_ms` — maximum single wait (default 30,000). Longer server
       hints surface the failure unchanged, never retry earlier than requested.
+    * `:jitter_fun` — injected one-argument random upper bound for throttle jitter.
+      Rate/concurrency throttles wait at least 10 seconds plus jitter; shorter
+      server hints never override this floor.
     * `:sleep_fun` — injected one-argument wait, returning `:ok` or
       `{:error, cancellation_reason}`. Custom waits own their responsiveness.
     * `:cancelled?` — zero-argument cancellation predicate (default false).
@@ -36,7 +39,8 @@ defmodule LemonAi.OneshotRetry do
     policy = %{
       max_attempts: integer_option(options, :max_attempts, 3, 1),
       base_delay_ms: integer_option(options, :base_delay_ms, 500, 1),
-      max_delay_ms: integer_option(options, :max_delay_ms, 30_000, 0)
+      max_delay_ms: integer_option(options, :max_delay_ms, 30_000, 0),
+      jitter_fun: Map.get(options, :jitter_fun, &:rand.uniform/1)
     }
 
     attempt(complete, options, policy, 1)
@@ -68,15 +72,11 @@ defmodule LemonAi.OneshotRetry do
               result
 
             true ->
-              case RetryHelper.error_retry_after_ms(error) do
-                hint when is_integer(hint) and hint > policy.max_delay_ms ->
+              case RetryHelper.retry_delay_ms(error, number - 1, policy) do
+                :give_up ->
                   result
 
-                hint ->
-                  delay =
-                    hint ||
-                      min(RetryHelper.backoff_delay_ms(number - 1, policy), policy.max_delay_ms)
-
+                delay ->
                   case sleep(delay, options) do
                     :ok -> attempt(complete, options, policy, number + 1)
                     {:error, _reason} = canceled -> canceled

@@ -78,6 +78,37 @@ defmodule LemonAi.Providers.OpenAICodexResponsesTest do
     }
   end
 
+  test "usage limit bodies stop immediately and preserve exact reset metadata" do
+    parent = self()
+    reset_at = ~U[2026-11-13 12:00:00Z]
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(parent, :quota_request)
+
+      Req.Test.json(%{conn | status: 429}, %{
+        "error" => %{
+          "type" => "usage_limit_reached",
+          "message" => "Try again later",
+          "plan_type" => "pro",
+          "resets_at" => DateTime.to_unix(reset_at)
+        }
+      })
+    end)
+
+    assert {:ok, stream} =
+             OpenAICodexResponses.stream(make_model(), Context.new(), %StreamOptions{
+               api_key: make_jwt()
+             })
+
+    assert {:error, terminal} = EventStream.result(stream, 1_000)
+    assert_receive :quota_request
+    refute_received :quota_request
+    refute LemonAi.Error.retryable?(terminal)
+    assert terminal.error_message =~ "Quota exhausted"
+    assert terminal.error_message =~ DateTime.to_iso8601(reset_at)
+    assert terminal.error_details.rate_limit_info.reset_at == reset_at
+  end
+
   test "cache keys and all affinity headers stay bounded and stable across turns" do
     test_pid = self()
     session_id = String.duplicate("long-session:", 12) <> "one"

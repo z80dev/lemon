@@ -203,13 +203,14 @@ defmodule LemonAi.Providers.Anthropic do
               converted_messages: length(messages)
             })
 
-            error_msg = extract_error_message(body, status)
+            error = LemonAi.Error.parse_http_error(status, body, response_headers, model.provider)
 
             error_output = %{
               output
               | stop_reason: :error,
-                error_message: error_msg,
-                retry_after_ms: RetryHelper.retry_after_ms(response_headers)
+                error_message: error.message,
+                error_details: error,
+                retry_after_ms: RetryHelper.error_retry_after_ms(error)
             }
 
             EventStream.error(stream, error_output)
@@ -1791,24 +1792,6 @@ defmodule LemonAi.Providers.Anthropic do
       _ -> %{}
     end
   end
-
-  defp extract_error_message(body, status) when is_binary(body) do
-    case Jason.decode(body) do
-      {:ok, %{"error" => %{"message" => msg}}} -> msg
-      {:ok, %{"error" => error}} when is_binary(error) -> error
-      _ -> "HTTP #{status}: #{body}"
-    end
-  end
-
-  defp extract_error_message(body, status) when is_map(body) do
-    case body do
-      %{"error" => %{"message" => msg}} -> msg
-      %{"error" => error} when is_binary(error) -> error
-      _ -> "HTTP #{status}"
-    end
-  end
-
-  defp extract_error_message(_, status), do: "HTTP #{status}"
 
   # ============================================================================
   # Provider Registration

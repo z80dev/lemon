@@ -22,6 +22,14 @@ defmodule LemonAi.Providers.RetryHelper do
   Per-request `provider_retry: %{alternate_available: true}` surfaces rate limits
   immediately for caller-owned rotation. It does not change transport or server
   retries. Without that signal, the configured retry policy is unchanged.
+
+  The agent response loop owns its retry budget and sets `max_attempts: 1`
+  for every provider request, as does `LemonAi.complete/3`. Direct streaming
+  callers retain the bounded provider policy. Rate/concurrency throttles wait
+  at least 10 seconds plus up to 5 seconds of jitter; server hints are lower
+  bounds, never shortened. Quota exhaustion is not retryable.
+  Per-request `:jitter_fun` (one-argument random upper bound) and `:sleep_fun`
+  in `provider_retry` support deterministic caller-owned retry tests.
   """
 
   @default_max_attempts 4
@@ -63,6 +71,7 @@ defmodule LemonAi.Providers.RetryHelper do
       value = Map.get(overrides, key, default)
       Map.put(acc, key, if(is_integer(value) and value > 0, do: value, else: default))
     end)
+    |> Map.merge(Map.take(overrides, [:jitter_fun, :sleep_fun]))
     |> Map.put(:alternate_available, Map.get(overrides, :alternate_available) == true)
   end
 
@@ -107,7 +116,7 @@ defmodule LemonAi.Providers.RetryHelper do
     if rotate_rate_limit?(policy, error) do
       :give_up
     else
-      http_backoff_delay_ms(attempt, headers, policy)
+      retry_delay_ms(error, attempt, policy, retry_after_ms(headers))
     end
   end
 
@@ -118,11 +127,36 @@ defmodule LemonAi.Providers.RetryHelper do
       LemonAi.Error.classify(error) == :rate_limit
   end
 
-  defp http_backoff_delay_ms(attempt, headers, policy) do
-    case retry_after_ms(headers) do
-      nil -> backoff_delay_ms(attempt, policy)
-      ms when ms > policy.max_retry_after_ms -> :give_up
-      ms -> ms
+  @doc """
+  Shared retry timing for provider, completion and agent-response owners.
+  Rate limits have a 10s floor plus jitter even with shorter server hints.
+  Hints beyond the configured wait ceiling surface unchanged.
+  """
+  def retry_delay_ms(error, attempt, policy, hint \\ nil) do
+    hint = hint || error_retry_after_ms(error)
+    ceiling = Map.get(policy, :max_retry_after_ms, policy.max_delay_ms)
+
+    cond do
+      is_integer(hint) and hint > ceiling ->
+        :give_up
+
+      LemonAi.Error.classify(error) == :rate_limit ->
+        jitter = Map.get(policy, :jitter_fun, &:rand.uniform/1)
+
+        delay =
+          max(
+            10_000,
+            min(policy.base_delay_ms * Integer.pow(2, min(attempt, 30)), policy.max_delay_ms)
+          )
+
+        delay = max(hint || 0, delay + jitter.(5_000))
+        if delay > ceiling, do: :give_up, else: delay
+
+      is_integer(hint) ->
+        hint
+
+      true ->
+        min(backoff_delay_ms(attempt, policy), policy.max_delay_ms)
     end
   end
 

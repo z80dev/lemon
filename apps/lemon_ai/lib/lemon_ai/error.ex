@@ -87,6 +87,7 @@ defmodule LemonAi.Error do
     category = classify_error(status, body, provider_message)
 
     info = extract_rate_limit_info(headers, body)
+    quota_exhausted = quota_exhausted_message?(provider_message)
 
     rate_limit_info =
       if category == :rate_limit or Enum.any?(info, fn {_key, value} -> not is_nil(value) end),
@@ -96,12 +97,21 @@ defmodule LemonAi.Error do
     %{
       category: category,
       status: status,
-      message: build_error_message(status, provider_message, category, provider),
+      message:
+        build_error_message(status, provider_message, category, provider)
+        |> quota_reset_message(quota_exhausted, info.reset_at),
       provider_message: provider_message,
       rate_limit_info: rate_limit_info,
-      retryable: retryable_category?(category) and not quota_exhausted_message?(provider_message)
+      retryable: retryable_category?(category) and not quota_exhausted
     }
   end
+
+  defp quota_reset_message(message, true, reset_at) do
+    reset = if reset_at, do: " Resets at #{DateTime.to_iso8601(reset_at)}.", else: ""
+    message <> " Quota exhausted; automatic retry stopped." <> reset
+  end
+
+  defp quota_reset_message(message, false, _reset_at), do: message
 
   @doc """
   Extract rate limit information from response headers.
@@ -162,6 +172,10 @@ defmodule LemonAi.Error do
 
   def format_error(:max_concurrency, _provider),
     do: "Too many concurrent requests. Please try again shortly."
+
+  def format_error(reason, _provider)
+      when reason in [:stream_idle_timeout, :dispatcher_stream_idle_timeout],
+      do: "Model response stream was idle for too long. Please try again."
 
   def format_error(reason, provider)
       when reason in [:timeout, :closed, :econnrefused, :econnreset, :nxdomain] do
@@ -510,6 +524,10 @@ defmodule LemonAi.Error do
       when module in [Req.TransportError, Finch.TransportError, Mint.TransportError],
       do: classify(reason)
 
+  def classify({:canceled, reason})
+      when reason in [:stream_idle_timeout, :dispatcher_stream_idle_timeout],
+      do: :transient
+
   def classify({:closed, _}), do: :transient
 
   def classify({:tls_alert, {alert, detail}}) do
@@ -524,6 +542,8 @@ defmodule LemonAi.Error do
   def classify(reason)
       when reason in [
              :timeout,
+             :stream_idle_timeout,
+             :dispatcher_stream_idle_timeout,
              :closed,
              :econnrefused,
              :econnreset,
@@ -602,6 +622,11 @@ defmodule LemonAi.Error do
   end
 
   def circuit_breaker_failure?(:timeout), do: true
+
+  def circuit_breaker_failure?(reason)
+      when reason in [:stream_idle_timeout, :dispatcher_stream_idle_timeout],
+      do: true
+
   def circuit_breaker_failure?(:closed), do: true
   def circuit_breaker_failure?(:econnrefused), do: true
   def circuit_breaker_failure?(:econnreset), do: true
@@ -805,12 +830,12 @@ defmodule LemonAi.Error do
 
     not dashscope_throttle? and
       (Regex.match?(
-         ~r/insufficient_quota|quota_exhausted|usage_limit_reached|usage_not_included|insufficient_g1_credits_balance|spend(?:ing)?[ _-]limit|monthly spend|(?:insufficient|not enough|out of|run out of|exceed.{0,40}available)[ _]credits?|credits?.{0,40}(?:exhausted|depleted)|insufficient[ _]balance|quota will reset|exhausted your capacity|hit your .*usage limit|(?:额度|配额)已?(?:用|耗)(?:完|尽)|余额不足/i,
+         ~r/insufficient_quota|quota_exhausted|usage_limit_reached|usage_not_included|insufficient_g1_credits_balance|spend(?:ing)?[ _-]limit|monthly spend|(?:insufficient|not enough|out of|run out of|exceed.{0,40}available)[ _]credits?|credits?.{0,40}(?:exhausted|depleted)|insufficient[ _]balance|quota will reset|exhausted your capacity|(?:hit|reached) your .{0,80}usage limit|(?:daily|weekly|monthly|5.hour).{0,80}(?:quota|usage limit)|quota.{0,40}(?:exhausted|depleted)|(?:额度|配额)已?(?:用|耗)(?:完|尽)|余额不足/i,
          message
        ) or
          (not transient_interval? and
             Regex.match?(
-              ~r/account(?:'s)?.{0,80}rate.?limit|rate.?limit.{0,80}account|(?:subscription|plan|membership).{0,80}(?:quota|cap|rate.?limit)|quota (?:exhausted|depleted)|exceeded your current quota/i,
+              ~r/account(?:'s)?.{0,80}rate.?limit|rate.?limit.{0,80}account|(?:subscription|plan|membership).{0,80}(?:quota|cap|rate.?limit)|quota.{0,40}exceeded|exceeded your current quota/i,
               message
             )))
   end
@@ -1363,9 +1388,25 @@ defmodule LemonAi.Error do
 
   defp merge_body_rate_limit_info(info, body) do
     retry_after = info.retry_after || extract_body_retry_after(body)
-
-    %{info | retry_after: retry_after}
+    reset_at = info.reset_at || find_body_reset(body)
+    %{info | retry_after: retry_after, reset_at: reset_at}
   end
+
+  defp find_body_reset(body) when is_map(body) do
+    Enum.find_value(
+      ["resets_at", "reset_at", "reset_time", "resetTime", "quota_reset_at"],
+      fn key ->
+        case Map.get(body, key) do
+          value when is_integer(value) -> parse_reset_time(Integer.to_string(value))
+          value when is_binary(value) -> parse_reset_time(value)
+          _ -> nil
+        end
+      end
+    ) || Enum.find_value(Map.values(body), &find_body_reset/1)
+  end
+
+  defp find_body_reset(body) when is_list(body), do: Enum.find_value(body, &find_body_reset/1)
+  defp find_body_reset(_body), do: nil
 
   defp extract_body_retry_after(body) do
     body

@@ -552,7 +552,7 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
       :ok
     end
 
-    test "429 with retry-after waits that long, then retries and succeeds" do
+    test "429 retry-after remains a lower bound alongside the throttle floor" do
       {:ok, attempts} = Agent.start_link(fn -> 0 end)
 
       body =
@@ -578,7 +578,8 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
       assert {:ok, result} = EventStream.result(stream, 2_000)
       assert result.stop_reason == :stop
       assert Agent.get(attempts, & &1) == 2
-      assert_received {:slept, 7_000}
+      assert_received {:slept, delay}
+      assert delay in 10_001..15_000
       refute_received {:slept, _}
     end
 
@@ -1179,7 +1180,13 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
 
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
       {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
-      assert {:error, %{error_message: "prompt is too long"}} = EventStream.result(stream, 1_000)
+
+      assert {:error, %{error_message: message, error_details: details}} =
+               EventStream.result(stream, 1_000)
+
+      assert message =~ "prompt is too long"
+      assert details.category == :context_length
+      refute details.retryable
       assert_received :http_attempt
       refute_received :http_attempt
     end

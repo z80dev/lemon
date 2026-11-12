@@ -162,8 +162,10 @@ defmodule LemonAgent.Agent do
   - `:max_tool_turns` - Max assistant tool-use turns before terminal fallback, or `:infinity`
     (default: 25; `CodingAgent.Session` passes `:infinity` unless `[runtime] max_tool_turns` is set)
   - `:max_tool_concurrency` - Maximum overlapping calls for `parallel_safe` tools (default 8; `:infinity` opts out)
-  - `:max_retries` - Transient provider retries per response (default: 3; 0 disables)
-  - `:retry_base_delay_ms` - Initial exponential retry delay (default: 2,000ms)
+  - `:max_retries` - Single transient retry budget per response (default: 3; 0 disables);
+    the loop owns retries and disables nested provider attempts
+  - `:retry_base_delay_ms` - Initial exponential retry delay (default: 2,000ms);
+    concurrency/rate throttles wait at least 10s plus jitter
   - `:retry_max_delay_ms` - Backoff cap (default: 30,000ms; explicit retry-after honored up to 120s)
   - `:tool_timeout_ms` - Per-tool task deadline (default 300,000 ms; `:infinity` opts out; tools can override)
   - `:intent_tracing` - Include optional provider-only tool intent (default true)

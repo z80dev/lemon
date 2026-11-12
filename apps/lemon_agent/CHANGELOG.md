@@ -19,6 +19,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- The response loop owns one retry budget (three retries by default), disabling
+  nested provider retries so a response makes at most four upstream attempts.
+  Rate/concurrency throttles wait at least 10 seconds plus jitter and honor
+  server hints; quota exhaustion fails fast with reset details. Idle stream
+  timeouts consume the same budget, while abort interrupts retry backoff.
 - Tool registrations expose explicit `{name, module, native_process_ownership}`
   provenance. Unknown contributed tools durably fence module loading,
   construction and execution when native evaluation tracking is enabled;

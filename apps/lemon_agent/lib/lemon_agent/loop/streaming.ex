@@ -275,7 +275,7 @@ defmodule LemonAgent.Loop.Streaming do
        }}
     )
 
-    case wait_for_retry(signal, System.monotonic_time(:millisecond) + delay_ms) do
+    case wait_for_retry(signal, delay_ms, config.stream_options) do
       :ok ->
         retry_response(context, config, signal, stream_fn, stream, attempt)
 
@@ -304,17 +304,38 @@ defmodule LemonAgent.Loop.Streaming do
           :stop
 
         delay when is_integer(delay) and delay >= 0 ->
-          {:ok, delay}
+          throttle_delay(error, config, retries_done, delay)
 
         _ ->
-          {:ok,
-           min(
-             config.retry_base_delay_ms * Integer.pow(2, min(retries_done, 30)),
-             config.retry_max_delay_ms
-           )}
+          delay =
+            min(
+              config.retry_base_delay_ms * Integer.pow(2, min(retries_done, 30)),
+              config.retry_max_delay_ms
+            )
+
+          throttle_delay(error, config, retries_done, delay)
       end
     else
       :stop
+    end
+  end
+
+  defp throttle_delay(error, config, retries_done, delay) do
+    if LemonAi.Error.classify(error) == :rate_limit do
+      policy =
+        RetryHelper.policy(config.stream_options)
+        |> Map.merge(%{
+          base_delay_ms: config.retry_base_delay_ms,
+          max_delay_ms: config.retry_max_delay_ms,
+          max_retry_after_ms: @max_retry_after_ms
+        })
+
+      case RetryHelper.retry_delay_ms(error, retries_done, policy, retry_after_ms(error)) do
+        :give_up -> :stop
+        delay -> {:ok, delay}
+      end
+    else
+      {:ok, delay}
     end
   end
 
@@ -323,6 +344,26 @@ defmodule LemonAgent.Loop.Streaming do
 
   defp retry_after_ms(error),
     do: RetryHelper.error_retry_after_ms(error)
+
+  defp wait_for_retry(signal, delay_ms, options) do
+    case RetryHelper.policy(options) do
+      %{sleep_fun: sleep_fun} ->
+        cond do
+          aborted?(signal) ->
+            :aborted
+
+          redirect_requested?(signal) ->
+            :redirected
+
+          true ->
+            sleep_fun.(delay_ms)
+            wait_for_retry(signal, System.monotonic_time(:millisecond))
+        end
+
+      _ ->
+        wait_for_retry(signal, System.monotonic_time(:millisecond) + delay_ms)
+    end
+  end
 
   defp wait_for_retry(signal, deadline) do
     cond do
@@ -405,7 +446,10 @@ defmodule LemonAgent.Loop.Streaming do
                   else: resolved_key || config.stream_options.api_key
             end
 
-          options = %{config.stream_options | api_key: api_key}
+          # The response loop is the sole retry owner. Every provider invocation
+          # gets one upstream attempt, including when retries are disabled.
+          provider_retry = Map.put(config.stream_options.provider_retry || %{}, :max_attempts, 1)
+          options = %{config.stream_options | api_key: api_key, provider_retry: provider_retry}
 
           # Call the stream function (support {:ok, stream} or direct stream pid)
           case request_with_budget(config, llm_context, options, stream_function, stream) do
@@ -670,6 +714,21 @@ defmodule LemonAgent.Loop.Streaming do
     final_message = %{final_message | stop_reason: :error}
     Loop.record_budget_usage(config, final_message, stream)
     {:failed, final_message, context, added}
+  end
+
+  defp process_stream_event({:canceled, reason}, partial, context, added, stream, config)
+       when reason in [:stream_idle_timeout, :dispatcher_stream_idle_timeout] do
+    message = partial || build_error_message(config, :error, nil)
+
+    message = %{
+      message
+      | stop_reason: :error,
+        error_message: LemonAi.Error.format_error(reason),
+        error_details: LemonAi.Error.to_error_details(reason)
+    }
+
+    Loop.record_budget_usage(config, message, stream)
+    {:failed, message, context, added}
   end
 
   defp process_stream_event({:canceled, reason}, partial, context, added, stream, config) do

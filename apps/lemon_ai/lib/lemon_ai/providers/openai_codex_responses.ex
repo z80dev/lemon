@@ -393,7 +393,8 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
         case retry_delay do
           :give_up ->
-            {:error, parse_error_response(status, error_text),
+            {:error,
+             LemonAi.Error.parse_http_error(status, error_text, response_headers, :openai_codex),
              RetryHelper.retry_after_ms(response_headers)}
 
           delay_ms ->
@@ -410,41 +411,6 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
           true ->
             {:error, reason, nil}
         end
-    end
-  end
-
-  defp parse_error_response(status, raw) do
-    case Jason.decode(raw) do
-      {:ok, %{"error" => error}} when is_map(error) ->
-        code = error["code"] || error["type"] || ""
-
-        friendly_message =
-          if Regex.match?(~r/usage_limit_reached|usage_not_included/i, code) do
-            plan =
-              if error["plan_type"],
-                do: " (#{String.downcase(error["plan_type"])} plan)",
-                else: ""
-
-            resets_at = error["resets_at"]
-
-            when_str =
-              if resets_at do
-                now = System.system_time(:millisecond)
-                mins = max(0, round((resets_at * 1000 - now) / 60_000))
-                " Try again in ~#{mins} min."
-              else
-                ""
-              end
-
-            "HTTP #{status}: #{code}: You have hit your ChatGPT usage limit#{plan}.#{when_str}"
-          else
-            nil
-          end
-
-        friendly_message || "HTTP #{status}: #{code}: #{error["message"] || raw}"
-
-      _ ->
-        "HTTP #{status}: #{raw}"
     end
   end
 

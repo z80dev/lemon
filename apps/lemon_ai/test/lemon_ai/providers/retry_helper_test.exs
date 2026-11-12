@@ -47,9 +47,9 @@ defmodule LemonAi.Providers.RetryHelperTest do
         {:http_error, 429, "rate limited"}
       )
 
-    assert delay == 2_000
+    assert delay in 10_001..15_000
     RetryHelper.sleep(delay)
-    assert_receive {:sleep, 2_000}
+    assert_receive {:sleep, ^delay}
   end
 
   test "quota exhaustion classification remains rate_limit and exposes exhaustion" do
@@ -224,6 +224,59 @@ defmodule LemonAi.Providers.RetryHelperTest do
 
       assert RetryHelper.error_retry_after_ms({:http_error, 429, %{"retry_after_ms" => 5000}, []}) ==
                5000
+    end
+  end
+
+  describe "throttle and quota policy" do
+    test "Z.AI 1302 uses a throttle floor with injectable jitter and body/header hints" do
+      policy = Map.put(RetryHelper.policy(), :jitter_fun, fn 5_000 -> 1_234 end)
+
+      error =
+        {:http_error, 429,
+         %{"error" => %{"code" => "1302", "message" => "Rate limit reached for requests"}}}
+
+      assert RetryHelper.http_retry_delay_ms(0, [], policy, error) == 11_234
+      assert RetryHelper.http_retry_delay_ms(0, [{"retry-after", "1"}], policy, error) == 11_234
+      assert RetryHelper.http_retry_delay_ms(0, [{"retry-after", "20"}], policy, error) == 20_000
+
+      assert RetryHelper.http_retry_delay_ms(0, [{"retry-after", "61"}], policy, error) ==
+               :give_up
+
+      assert RetryHelper.http_retry_delay_ms(
+               0,
+               [],
+               policy,
+               {:http_error, 429, %{"error" => %{"message" => "throttled", "retry_after" => 25}}}
+             ) == 25_000
+    end
+
+    test "Kimi quota and Codex usage windows surface exact reset times without retrying" do
+      reset_at = ~U[2026-11-13 12:00:00Z]
+
+      for body <- [
+            %{
+              "error" => %{
+                "type" => "rate_limit_error",
+                "message" => "Your subscription quota exceeded",
+                "reset_at" => DateTime.to_iso8601(reset_at)
+              }
+            },
+            %{
+              "error" => %{
+                "type" => "usage_limit_reached",
+                "message" => "Try again later",
+                "resets_at" => DateTime.to_unix(reset_at)
+              }
+            }
+          ] do
+        details = LemonAi.Error.parse_http_error(429, Jason.encode!(body))
+        assert details.category == :rate_limit
+        refute details.retryable
+        assert details.rate_limit_info.reset_at == reset_at
+        assert details.message =~ "Quota exhausted"
+        assert details.message =~ DateTime.to_iso8601(reset_at)
+        refute LemonAi.Error.retryable?(details)
+      end
     end
   end
 

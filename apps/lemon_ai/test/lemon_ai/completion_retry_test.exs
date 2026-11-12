@@ -108,7 +108,8 @@ defmodule LemonAi.CompletionRetryTest do
     {model, context, options} = invocation([failed, success], :oneshot_hint_test)
 
     assert LemonAi.complete(model, context, options) == {:ok, success}
-    assert_receive {:sleep, 1234}
+    assert_receive {:sleep, delay}
+    assert delay in 10_001..15_000
     assert_receive :http_request
     assert_receive :http_request
     refute_received :http_request

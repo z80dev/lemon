@@ -32,6 +32,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- Share rate-limit timing across provider and completion retry owners: honor
+  `Retry-After` and structured body hints with a 10-second minimum plus jitter.
+  Kimi quota exhaustion and Codex usage limits stop retries immediately and
+  surface provider reset timestamps. Stream idle timeouts are transient.
 - Validate OAuth callback ports in the original authority before URI normalization,
   rejecting out-of-range ports even when Elixir 1.20 discards them during parsing.
   Apply the same validation to Anthropic, Google Antigravity, Gemini CLI and Codex

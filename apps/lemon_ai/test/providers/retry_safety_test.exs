@@ -120,6 +120,84 @@ defmodule LemonAi.Providers.RetrySafetyTest do
     end
   end
 
+  test "provider 429 loops honor Retry-After and preserve structured body hints" do
+    parent = self()
+
+    for {api, provider} <- [
+          {:anthropic_messages, :retry_throttle_anthropic},
+          {:openai_completions, :retry_throttle_completions},
+          {:openai_responses, :retry_throttle_responses}
+        ] do
+      Req.default_options(
+        adapter: fn request ->
+          send(parent, :provider_request)
+
+          {request,
+           %Req.Response{
+             status: 429,
+             headers: %{"retry-after" => ["20"]},
+             body: %{
+               "error" => %{
+                 "code" => "1302",
+                 "message" => "Rate limit reached for requests",
+                 "retry_after" => 1
+               }
+             }
+           }}
+        end
+      )
+
+      CircuitBreaker.reset(provider)
+      assert {:ok, stream} = LemonAi.stream(model(api, provider), context(), options())
+      assert {:error, terminal} = EventStream.result(stream, 1_000)
+      assert LemonAi.Error.classify(terminal) == :rate_limit
+      assert_receive :provider_request
+      assert_receive :provider_request
+      refute_received :provider_request
+      assert_receive {:provider_sleep, 20_000}
+      refute_received {:provider_sleep, _}
+    end
+  end
+
+  test "provider quota windows fail fast and expose reset timestamps" do
+    parent = self()
+    reset = "2026-11-13T12:00:00Z"
+
+    Req.default_options(
+      adapter: fn request ->
+        send(parent, :provider_request)
+
+        {request,
+         %Req.Response{
+           status: 429,
+           body: %{
+             "error" => %{
+               "type" => "rate_limit_error",
+               "message" => "Your subscription quota exceeded",
+               "reset_at" => reset
+             }
+           }
+         }}
+      end
+    )
+
+    for {api, provider} <- [
+          {:anthropic_messages, :retry_quota_anthropic},
+          {:openai_completions, :retry_quota_completions},
+          {:openai_responses, :retry_quota_responses}
+        ] do
+      CircuitBreaker.reset(provider)
+      assert {:ok, stream} = LemonAi.stream(model(api, provider), context(), options())
+      assert {:error, terminal} = EventStream.result(stream, 1_000)
+      refute LemonAi.Error.retryable?(terminal)
+      assert terminal.error_message =~ reset
+      assert terminal.error_message =~ "Quota exhausted"
+      assert_receive :provider_request
+      refute_received :provider_request
+      refute_received {:provider_sleep, _}
+    end
+  end
+
   test "Anthropic never retries transport failures after output starts or whitespace" do
     for {block, delta, expected_event, provider} <- [
           {%{"type" => "text"}, %{"type" => "text_delta", "text" => " "}, :text_delta,

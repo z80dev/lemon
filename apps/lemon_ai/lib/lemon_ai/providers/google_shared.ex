@@ -752,7 +752,9 @@ defmodule LemonAi.Providers.GoogleShared do
           "Invalid request; check the model and request parameters."
 
         :rate_limit when not details.retryable ->
-          "Account quota exhausted; check billing or credentials."
+          reset_at = details.rate_limit_info && details.rate_limit_info.reset_at
+          reset = if reset_at, do: " Resets at #{DateTime.to_iso8601(reset_at)}.", else: ""
+          "Account quota exhausted; automatic retry stopped." <> reset
 
         :rate_limit ->
           "Rate limit exceeded; wait before retrying."
