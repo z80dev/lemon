@@ -227,11 +227,6 @@ defmodule CodingAgent.ExecutorTest do
       assert_receive {:session_event, ^session_id, {:agent_end, messages}}, 5_000
       assert List.last(messages) |> LemonAi.get_text() == answer
 
-      assert Enum.any?(messages, fn
-               %AssistantMessage{} = message -> LemonAi.get_text(message) == run.join_answer
-               _ -> false
-             end)
-
       assert_question_run_stopped(run)
       refute_receive {:session_event, ^session_id, {:agent_end, _}}, 0
       refute_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 0
@@ -1317,7 +1312,6 @@ defmodule CodingAgent.ExecutorTest do
     task_id = TaskStore.new_task(%{run_id: child_run_id, status: :running})
     child_scope_id = "executor-question-#{task_id}"
     question = "Which boundary should the blocked child keep?"
-    join_answer = "The join yielded for clarification; this is not the final answer."
     gate = make_ref()
     join_gate = :atomics.new(1, [])
 
@@ -1501,7 +1495,11 @@ defmodule CodingAgent.ExecutorTest do
       end
 
     assert {:reply, :ok} = :gen_server.receive_response(delivery, 5_000)
-    assert [_question] = :sys.get_state(agent).follow_up_queue
+
+    assert [%{preempt: false, message: %{content: queued_question}}] =
+             :sys.get_state(agent).steering_queue
+
+    assert queued_question =~ question
     assert {:ok, %{delivery_pending: true}, _events} = ParentQuestions.get(request_id)
     assert {:error, :not_found} = ParentQuestions.waiting_for_task_ids([task_id])
     send(sender, {delivery_ref, :ok})
@@ -1514,8 +1512,6 @@ defmodule CodingAgent.ExecutorTest do
                    5_000
 
     assert {:ok, %{delivery_pending: false}, _events} = ParentQuestions.get(request_id)
-    assert_receive {:question_provider, after_join_provider, _context}, 5_000
-    send(after_join_provider, {:respond, assistant_message(join_answer)})
     assert_receive {:question_provider, question_provider, context}, 5_000
     assert List.last(context.messages).role == :user
     assert List.last(context.messages).content =~ question
@@ -1534,8 +1530,7 @@ defmodule CodingAgent.ExecutorTest do
       task_id: task_id,
       request_id: request_id,
       session_key: req.session_key,
-      question: question,
-      join_answer: join_answer
+      question: question
     }
   end
 

@@ -164,8 +164,9 @@ Parent question submitted as request <request_id>. Waiting for answer.
 3. Lemon persists a parent-question request record with delivery pending and
    emits `:parent_question_requested` to child and parent run topics and introspection.
 4. Lemon calls `Session.deliver_parent_question/2`. An idle parent starts a
-   turn; a streaming parent receives the same visible follow-up. Agent follow-up
-   enqueueing is acknowledged synchronously.
+   turn; a streaming parent synchronously enqueues non-preempting steering
+   (`preempt: false`). Every issued tool finishes, and the question is included
+   in the next model request, without an extra post-join model request first.
 5. Only after that acknowledgement does `ask_parent` mark the request delivered.
    A parent blocked in a matching `task` or `agent` join yields
    `needs_parent_answer` only for a delivered request. While Session notification
@@ -255,7 +256,7 @@ Phase 1 should deliver the question into the parent using the existing live-sess
 
 ### Parent delivery format
 
-Use `CodingAgent.Session.follow_up/2` on the parent session with a stable, structured message:
+Use `CodingAgent.Session.deliver_parent_question/2` on the parent session with a stable, structured message:
 
 ```text
 [subagent question <request_id>]
