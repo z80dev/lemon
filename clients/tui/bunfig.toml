@@ -4,3 +4,4 @@
 
 [test]
 coverage = false
+preload = ["./test/helpers/terminal-env.ts"]
