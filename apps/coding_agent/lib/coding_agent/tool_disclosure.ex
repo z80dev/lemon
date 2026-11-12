@@ -10,9 +10,9 @@ defmodule CodingAgent.ToolDisclosure do
   description and JSON schema sit in the tool array of each model call. A
   handful of MCP servers can easily add tens of thousands of tokens of schema
   that the model reads on every turn and almost never calls. This module keeps
-  built-in tools fully disclosed under the default legacy profile and replaces
-  the MCP/extension/WASM long tail with two bridge tools. An opt-in coding
-  profile also defers optional built-in capabilities:
+  built-in tools fully disclosed under the legacy chat profile and replaces
+  the MCP/extension/WASM long tail with two bridge tools. Cwd-scoped coding
+  sessions default to the coding profile, which also defers optional capabilities:
 
     * `tool_search` — query a frozen per-session catalog, get back names,
       descriptions and full schemas.
@@ -45,10 +45,10 @@ defmodule CodingAgent.ToolDisclosure do
 
   The `profile` setting decides which tools are eligible for deferral:
 
-    * `:legacy` (default) — the behaviour described above: built-ins stay
+    * `:legacy` (chat default) — the behaviour described above: built-ins stay
       disclosed, the MCP/extension/WASM long tail is deferred only once the
       estimated schema cost exceeds `budget_tokens`.
-    * `:coding` — an opt-in experiment. Only the coding core (`coding_core/0`)
+    * `:coding` (coding default) — only the coding core (`coding_core/0`)
       and explicitly `pinned` names stay disclosed; every other tool the
       registry resolved — optional built-ins such as browser, media and
       automation tools included — is deferred behind the bridge whenever there
@@ -188,15 +188,24 @@ defmodule CodingAgent.ToolDisclosure do
   manager < `override` (the session's `:tool_disclosure` opt). Both atom and
   string keys are tolerated at every level, since settings reach here from TOML,
   from `LemonCore.Config`, and from hand-built test maps.
+  `auto` (the canonical config default) selects coding for `:coding` sessions
+  and legacy for `:chat`. Explicit config/env and session overrides still win.
 
   Out-of-contract values are repaired rather than raised on: a session must
   start even if someone wrote `budget_tokens = "lots"` in their config.
   """
-  @spec config(term(), keyword() | map() | nil) :: config()
-  def config(settings_manager, override \\ nil) do
+  @spec config(term(), keyword() | map() | nil, :coding | :chat) :: config()
+  def config(settings_manager, override \\ nil, session_mode \\ :chat) do
+    profile = if session_mode == :coding, do: :coding, else: :legacy
+
     @defaults
+    |> Map.put(:profile, profile)
     |> merge_section(settings_disclosure(settings_manager))
     |> merge_section(override)
+    |> Map.update!(:profile, fn
+      value when value in [:auto, "auto"] -> profile
+      value -> value
+    end)
     |> sanitize()
   end
 
@@ -369,8 +378,7 @@ defmodule CodingAgent.ToolDisclosure do
       not cfg.enabled ->
         passthrough(tool_tuples, extra_tools, :disabled, estimated, cfg, authority)
 
-      # The coding profile is an explicit opt-in to deferral, so the budget
-      # (the legacy profile's only trigger) does not gate it.
+      # Coding defers optional tools regardless of the legacy budget trigger.
       cfg.profile == :legacy and estimated <= cfg.budget_tokens ->
         passthrough(tool_tuples, extra_tools, :under_budget, estimated, cfg, authority)
 

@@ -12,6 +12,7 @@ defmodule LemonCli.PrintCommand do
           cwd: :string,
           session: :string,
           continue: :boolean,
+          persona: :boolean,
           approval_policy: :string,
           allowed_tools: :string,
           denied_tools: :string
@@ -57,6 +58,8 @@ defmodule LemonCli.PrintCommand do
           "prompt" => prompt,
           "session_key" => session,
           "cwd" => cwd,
+          "session_mode" => "coding",
+          "persona" => opts[:persona],
           "tool_policy" => policy,
           "project_memory_capture" => false
         }

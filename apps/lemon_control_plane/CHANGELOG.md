@@ -8,6 +8,9 @@ All notable changes to `lemon_control_plane` are documented here.
 
 - `agent` accepts a validated per-invocation `project_memory_capture` boolean;
   one-shot print clients disable auxiliary extraction without changing recall.
+- Agent submissions accept validated `session_mode` and `persona` options,
+  allowing one-shot coding clients to omit assistant-home bootstrap while
+  assistant/chat clients retain their existing context.
 - Admin-only controller and named-node Codex device login start/poll/cancel plus
   internal challenge/completion/settlement RPCs, with complete binding schemas and
   fixed identities. Completion carries the exact destination-generated nonce,

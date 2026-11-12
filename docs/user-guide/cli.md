@@ -712,6 +712,21 @@ run creates a durable, isolated session. `--continue` resumes the most recently
 updated CLI session for the current `--cwd`; `--session` selects an explicit
 session key. The two flags are mutually exclusive.
 
+Coding runs use the `coding` tool-disclosure profile by default: optional tools
+remain discoverable through `tool_search` and callable through `tool_invoke`.
+Set `[runtime.tools.disclosure] profile = "legacy"` in your existing global or
+project config to restore the full built-in tool list, or launch the daemon with
+`LEMON_TOOL_DISCLOSURE_PROFILE=legacy`. `enabled = false` disables disclosure
+entirely. Environment overrides belong on the daemon when reusing a running one.
+
+Assistant-home persona/bootstrap files (`AGENTS.md`, `SOUL.md`, `USER.md`,
+`MEMORY.md`, and related identity/heartbeat files) are omitted from coding
+contexts; repository `AGENTS.md` and rules still apply. `--no-persona` explicitly
+enforces this behavior; `--persona` opts into assistant-home context for this
+run. Main assistant/chat sessions retain their bootstrap. Coding prompts also
+omit assistant-only memory/learning reminders and use compact skill discovery
+descriptions; `read_skill` still provides full metadata and instructions.
+
 `--output text` (default) prints only the final answer. `json` prints one
 result document with `ok`, `answer`, `error`, `run_id`, and `session_key`.
 `stream-json` prints newline-delimited JSON: an `init` record, run-scoped

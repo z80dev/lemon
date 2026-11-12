@@ -20,6 +20,8 @@ defmodule CodingAgent.SystemPrompt do
           optional(:profile_instructions) => %{String.t() => String.t()} | nil,
           optional(:bootstrap_max_chars) => pos_integer(),
           optional(:session_scope) => :main | :subagent | String.t(),
+          optional(:session_mode) => :coding | :chat,
+          optional(:persona) => boolean(),
           optional(:skill_context) => String.t(),
           optional(:max_relevant_skills) => pos_integer(),
           optional(:run_id) => String.t(),
@@ -84,6 +86,8 @@ defmodule CodingAgent.SystemPrompt do
     workspace_dir = Map.get(opts, :workspace_dir, Workspace.workspace_dir())
     max_chars = Map.get(opts, :bootstrap_max_chars, Workspace.default_max_chars())
     session_scope = normalize_session_scope(Map.get(opts, :session_scope, :main))
+    session_mode = Map.get(opts, :session_mode, :chat)
+    persona = Map.get(opts, :persona, session_mode != :coding)
     skill_context = Map.get(opts, :skill_context, "")
     skill_trace_opts = skill_trace_opts(opts)
     available_tools = MapSet.new(Map.get(opts, :tool_names) || @default_tool_names)
@@ -95,6 +99,7 @@ defmodule CodingAgent.SystemPrompt do
         max_chars: max_chars,
         profile_instructions: Map.get(opts, :profile_instructions),
         session_scope: session_scope,
+        persona: persona,
         cwd: cwd,
         agent_id: Map.get(opts, :agent_id),
         session_key: Map.get(opts, :session_key),
@@ -119,17 +124,23 @@ defmodule CodingAgent.SystemPrompt do
       section(
         :skills,
         "Available skills",
-        build_skills_section(skill_cwd, skill_trace_opts, available_tools)
+        build_skills_section(skill_cwd, skill_trace_opts, available_tools, session_mode)
       ),
       section(
         :system_prompt,
         "Memory guidance",
-        build_memory_workflow_section(session_scope, available_tools)
+        if(session_mode == :chat,
+          do: build_memory_workflow_section(session_scope, available_tools),
+          else: ""
+        )
       ),
       section(
         :system_prompt,
         "Learning workflow",
-        build_learning_workflow_section(session_scope, available_tools)
+        if(session_mode == :chat,
+          do: build_learning_workflow_section(session_scope, available_tools),
+          else: ""
+        )
       ),
       # Contributed context lands after the workflow sections and before the
       # boundaries: what a satellite contributes is background about the user and
@@ -139,7 +150,7 @@ defmodule CodingAgent.SystemPrompt do
       section(
         :system_prompt,
         "Workspace boundaries",
-        build_workspace_section(cwd, workspace_dir)
+        build_workspace_section(cwd, workspace_dir, session_mode)
       ),
       workspace_context_sections(bootstrap_files)
     ]
@@ -283,13 +294,27 @@ defmodule CodingAgent.SystemPrompt do
     Enum.join(["## Working on code" | rules], "\n")
   end
 
-  defp build_skills_section(cwd, trace_opts, available) do
+  defp build_skills_section(cwd, trace_opts, available, session_mode) do
+    trace_opts =
+      if session_mode == :coding,
+        do: Keyword.put(trace_opts, :description_max_chars, 96),
+        else: trace_opts
+
     if MapSet.member?(available, "read_skill"),
       do: PromptView.render_for_prompt(cwd, trace_opts),
       else: ""
   end
 
-  defp build_workspace_section(cwd, workspace_dir) do
+  defp build_workspace_section(cwd, _workspace_dir, :coding) do
+    """
+    ## Boundaries
+    Working directory: #{cwd}
+    Resolve project paths and shell commands from this directory; the git repository root may differ.
+    """
+    |> String.trim()
+  end
+
+  defp build_workspace_section(cwd, workspace_dir, _session_mode) do
     """
     ## Boundaries
     Assistant home: #{workspace_dir}

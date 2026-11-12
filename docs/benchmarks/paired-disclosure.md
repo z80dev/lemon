@@ -7,17 +7,40 @@ single-trial lane, separate omp comparison, and payload profiling.
 
 ## Decision and evidence status
 
-**Keep current defaults; keep the coding disclosure profile opt-in.** No
-operator-authorized live paired run or sanitized outcome report is recorded by
-this change. The runner can be delivered without paid evidence, but the rollout
-decision remains **pending** an explicitly approved, bounded live experiment and
-review of its sanitized report. There is no performance claim here.
+**Promote `coding` for cwd-scoped coding sessions; keep `legacy` for chat.**
+The November 2026 isolated coding arena supplies the rollout evidence for
+[#518](https://github.com/z80dev/lemon/issues/518) and the disclosure question in
+[#107](https://github.com/z80dev/lemon/issues/107): 216 same-model paired cells
+across Kimi k3.1-pro, Codex gpt-6.1-terra and GLM-5.3. Coding disclosure passed
+206/216 versus legacy's 204/216 (McNemar p = 0.73); median input-token use fell
+41% on Kimi and 32% on Codex. This supports an efficiency rollout, not a claim of
+improved task success; the suite is near ceiling on Kimi and Codex.
 
-A negative or inconclusive experiment is a valid outcome. Smaller tool schemas
-alone are not evidence of improved coding outcomes and cannot justify promotion.
-Promotion requires useful measured task-level benefit without unacceptable
-verified-success or security regression. Do not block unrelated correctness
-fixes on this experiment.
+`profile = "auto"` selects the context-specific default. Explicit `legacy` config
+or `LEMON_TOOL_DISCLOSURE_PROFILE=legacy` restores the previous coding inventory;
+`enabled = false` disables disclosure. Tool policy/approval authority is unchanged.
+The runner below remains a separately authorized experiment path; this decision
+does not imply that its live plan gate has been exercised or authorize paid runs.
+
+### Local prompt accounting after rollout
+
+A native print-equivalent fixture (empty repository, fresh template workspace,
+the same installed skill catalog, no extension/MCP additions, and the CLI's four
+SMS addon tools) measured the following assembled system prompt and disclosed
+tool counts:
+
+| Context | System prompt characters | Disclosed tools |
+| --- | ---: | ---: |
+| Previous defaults: legacy disclosure + original persona bootstrap | 23,976 | 68 |
+| Coding defaults | 11,012 | 28 |
+
+The control explicitly restored the pre-change workspace template and previous
+context/disclosure settings. Coding skill discovery metadata fell from 11,121
+to 4,635 characters; every skill key remained discoverable. This is local prompt
+accounting, not a new wire-level arena or token-use result. Prompt lengths vary
+with installed skills, repository instructions, paths and runtime environment.
+No model requests were made; the throwaway measurement helper was removed.
+
 
 ## CLI contract
 
@@ -60,10 +83,9 @@ and rejected by both entrypoints before any model call, with or without
 `budget_tokens`, so those budget variants would have identical effective
 treatments; different labels/configuration digests would not measure a threshold
 effect. This is not a negative experiment result. Additional thresholds are not
-needed while the first authorized baseline/coding comparison remains pending.
-Any later threshold experiment would first need a supported exposure control
-that changes actual runtime disclosure. No production disclosure behavior or
-default is changed here.
+needed for the current rollout. Any later threshold experiment would first need
+a supported exposure control that changes actual runtime disclosure. The
+production default decision above comes from the separate coding arena.
 
 ## Plan-only preparation: no paid calls
 

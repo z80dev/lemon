@@ -42,13 +42,13 @@ defmodule LemonCore.Config.Tools do
 
       # Hide the MCP/extension/WASM long tail behind tool_search/tool_invoke
       # once the catalog's estimated schema cost exceeds budget_tokens.
-      # profile = "coding" opts into also deferring optional built-ins.
+      # profile = "auto" uses coding for cwd-scoped sessions, legacy for chat.
       [runtime.tools.disclosure]
       enabled = true
       budget_tokens = 40000
       catalog_tokens = 2000
       max_results = 5
-      profile = "legacy"
+      profile = "auto"
       pinned = []
 
   Environment variables override file configuration:
@@ -531,8 +531,8 @@ defmodule LemonCore.Config.Tools do
   # because the budget is the real gate: the built-in set is far under it, so a
   # setup without a large MCP catalog never activates disclosure and sees no
   # change at all. `enabled = false` is the kill switch for setups that would
-  # otherwise activate it. `profile = "coding"` is the opt-in experiment that
-  # also defers optional built-ins; `pinned` names stay disclosed in any profile.
+  # otherwise activate it. `profile = "auto"` uses coding for cwd-scoped sessions
+  # and legacy for chat; explicit profile/pinned settings override that default.
   # Values are carried as written; `CodingAgent.ToolDisclosure` sanitizes them.
   defp resolve_disclosure(settings) do
     disclosure = settings["disclosure"] || %{}
@@ -551,8 +551,7 @@ defmodule LemonCore.Config.Tools do
           default: disclosure["catalog_tokens"] || 2_000
         ),
       max_results: disclosure["max_results"] || 5,
-      profile:
-        Env.get(:lemon_tool_disclosure_profile, default: disclosure["profile"] || "legacy"),
+      profile: Env.get(:lemon_tool_disclosure_profile, default: disclosure["profile"] || "auto"),
       pinned: disclosure["pinned"] || []
     }
   end
@@ -638,7 +637,7 @@ defmodule LemonCore.Config.Tools do
         "budget_tokens" => 40_000,
         "catalog_tokens" => 2_000,
         "max_results" => 5,
-        "profile" => "legacy",
+        "profile" => "auto",
         "pinned" => []
       }
     }

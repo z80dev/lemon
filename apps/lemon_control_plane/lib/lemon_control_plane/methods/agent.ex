@@ -120,7 +120,8 @@ defmodule LemonControlPlane.Methods.Agent do
         {:error, Errors.invalid_params("prompt is required")}
 
       prompt when is_binary(prompt) and byte_size(prompt) > 0 ->
-        with {:ok, tool_policy} <- parse_optional_tool_policy(Map.get(params, "tool_policy")),
+        with :ok <- validate_context_options(params),
+             {:ok, tool_policy} <- parse_optional_tool_policy(Map.get(params, "tool_policy")),
              :ok <- validate_project_memory_capture(params) do
           {:ok,
            %{
@@ -132,6 +133,8 @@ defmodule LemonControlPlane.Methods.Agent do
              cwd: Map.get(params, "cwd"),
              tool_policy: tool_policy,
              project_memory_capture: Map.get(params, "project_memory_capture", true),
+             session_mode: Map.get(params, "session_mode"),
+             persona: Map.get(params, "persona"),
              idempotency_key: Map.get(params, "idempotency_key")
            }}
         end
@@ -149,6 +152,14 @@ defmodule LemonControlPlane.Methods.Agent do
     if is_boolean(Map.get(params, "project_memory_capture", true)),
       do: :ok,
       else: {:error, Errors.invalid_params("project_memory_capture must be a boolean")}
+  end
+
+  defp validate_context_options(params) do
+    if Map.get(params, "session_mode") in [nil, "coding", "chat"] and
+         Map.get(params, "persona") in [nil, true, false],
+       do: :ok,
+       else:
+         {:error, Errors.invalid_params("session_mode must be coding|chat and persona a boolean")}
   end
 
   defp parse_optional_tool_policy(nil), do: {:ok, nil}
@@ -222,7 +233,9 @@ defmodule LemonControlPlane.Methods.Agent do
           origin: :control_plane,
           project_memory_capture: params.project_memory_capture,
           conn_id: ctx[:conn_id],
-          conn_pid: ctx[:conn_pid]
+          conn_pid: ctx[:conn_pid],
+          session_mode: params.session_mode,
+          persona: params.persona
         }
       })
 

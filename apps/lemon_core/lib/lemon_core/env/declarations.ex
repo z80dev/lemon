@@ -916,9 +916,9 @@ defmodule LemonCore.Env.Declarations do
       env_var: "LEMON_TOOL_DISCLOSURE_PROFILE",
       aliases: [],
       type: :string,
-      default: "legacy",
+      default: "auto",
       doc:
-        "Tool disclosure profile: legacy defers only the MCP/extension/WASM long tail over budget; coding also defers optional built-ins outside the coding core.",
+        "Tool disclosure profile: auto selects coding for cwd-scoped sessions and legacy for chat; legacy defers the over-budget long tail; coding also defers optional built-ins.",
       secret?: false,
       required?: false,
       area: :tools_disclosure,

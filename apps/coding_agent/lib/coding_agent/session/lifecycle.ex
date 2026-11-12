@@ -61,6 +61,10 @@ defmodule CodingAgent.Session.Lifecycle do
     extra_tools = State.normalize_extra_tools(Keyword.get(opts, :extra_tools, []))
     workspace_dir = Keyword.get(opts, :workspace_dir, CodingAgent.Config.workspace_dir())
     profile_instructions = Keyword.get(opts, :profile_instructions)
+    session_mode = PromptComposer.resolve_session_mode(opts)
+    persona = Keyword.get(opts, :persona)
+    persona = if is_boolean(persona), do: persona, else: session_mode == :chat
+    opts = opts |> Keyword.put(:session_mode, session_mode) |> Keyword.put(:persona, persona)
     register_session = Keyword.get(opts, :register, false)
     session_registry = Keyword.get(opts, :registry, CodingAgent.SessionRegistry)
 
@@ -316,6 +320,8 @@ defmodule CodingAgent.Session.Lifecycle do
               agent_id: agent_id,
               tool_names: tool_names,
               profile_instructions: profile_instructions,
+              session_mode: session_mode,
+              persona: persona,
               invocation_context_key: (approval_context || %{})[:invocation_context_key],
               channel_identity: (approval_context || %{})[:channel_identity],
               memory_context_key: (approval_context || %{})[:memory_context_key],
@@ -616,6 +622,7 @@ defmodule CodingAgent.Session.Lifecycle do
         mcp_session_id: state.mcp_session_id,
         acp_mcp_session_id: state.acp_mcp_session_id,
         session_scope: state.session_scope,
+        session_mode: Keyword.get(state.tool_opts, :session_mode, :chat),
         task_child: state.task_child,
         task_depth: state.task_depth,
         task_allowed_agents: state.task_allowed_agents,

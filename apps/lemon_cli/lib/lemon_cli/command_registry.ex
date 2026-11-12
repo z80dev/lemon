@@ -123,6 +123,11 @@ defmodule LemonCli.CommandRegistry do
         option("--output FORMAT", ["--output"], "text, json, or stream-json"),
         option("--model MODEL", ["--model"], "Provider:model override"),
         option("--cwd PATH", ["--cwd"], "Working directory"),
+        option(
+          "--persona, --no-persona",
+          ["--persona", "--no-persona"],
+          "Include or omit assistant-home bootstrap (coding defaults to omit)"
+        ),
         option("--session KEY", ["--session"], "Resume a session"),
         option("--continue", ["--continue"], "Continue the latest CLI session"),
         option(

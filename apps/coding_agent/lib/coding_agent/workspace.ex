@@ -151,6 +151,7 @@ defmodule CodingAgent.Workspace do
     - :workspace_dir (override default workspace)
     - :max_chars (truncate long files; default #{@default_max_chars})
     - :session_scope (:main or :subagent; default inferred from :parent_session)
+    - :persona (false skips all assistant-home bootstrap reads)
     - :profile_instructions (persona-only controller snapshot; never written to disk)
     - :parent_session (when present, inferred as :subagent)
     - :invocation_context_key / :memory_context_key / :memory_context_verified
@@ -161,6 +162,10 @@ defmodule CodingAgent.Workspace do
   """
   @spec load_bootstrap_files(keyword()) :: [bootstrap_file()]
   def load_bootstrap_files(opts \\ []) do
+    if Keyword.get(opts, :persona, true), do: do_load_bootstrap_files(opts), else: []
+  end
+
+  defp do_load_bootstrap_files(opts) do
     dir = Keyword.get(opts, :workspace_dir, workspace_dir())
     max_chars = Keyword.get(opts, :max_chars, @default_max_chars)
     session_scope = resolve_session_scope(opts)

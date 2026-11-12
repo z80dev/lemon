@@ -6,6 +6,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Changed
+
+- Tool disclosure defaults to `profile = "auto"`: coding for cwd-scoped native
+  coding sessions, legacy for assistant chat. Explicit legacy/coding config and
+  environment overrides retain precedence.
+
 ### Security
 
 - Process-group signalling accepts a durability callback after final ownership

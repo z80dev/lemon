@@ -2419,22 +2419,26 @@ enabled = true           # false keeps every tool directly exposed
 budget_tokens = 40000    # legacy profile: defer only above this estimate
 catalog_tokens = 2000    # size of the deferred-tool list in tool_search's description
 max_results = 5          # default tool_search result count
-profile = "legacy"       # "legacy" (default) or "coding" (opt-in experiment)
+profile = "auto"         # coding for cwd-scoped sessions; legacy for assistant chat
 pinned = []              # tool names that always stay directly exposed
 ```
 
-- **`legacy`** (default): built-in tools stay exposed. The MCP, extension and
-  WASM tools are deferred only when the estimated schema cost of the whole
-  catalog exceeds `budget_tokens`; below it the tool list is unchanged.
-- **`coding`**: an experiment for coding sessions. Only the coding core stays
+- **`auto`** (default): selects `coding` for cwd-scoped coding sessions (including
+  local TUI, ACP, and `lemon -p`/`run`) and `legacy` for main assistant and messaging
+  sessions. Explicit profile settings retain precedence over this inference.
+- **`legacy`**: built-in tools stay exposed. The MCP, extension and WASM tools
+  are deferred only when the estimated schema cost of the whole catalog exceeds
+  `budget_tokens`; below it the tool list is unchanged.
+- **`coding`**: only the coding core stays
   directly exposed — `read`, `write`, `edit`, `patch`, `ls`, `find`, `grep`,
   `ast_grep`, `lsp_diagnostics`, `fs_checkpoint`, `bash`, `bash_output`,
   `kill_process`, `websearch`, `webfetch`, `read_skill`, `recall`, `todo`,
   `ask`, enabled `checkpoint` / `rewind`, `task`, `wait`, `agent_message` and `parent_question` — plus `pinned`
   names. Every other resolved tool, including browser, media, automation and
   other optional built-ins, is deferred whenever there is one to defer;
-  `budget_tokens` is not consulted. Whether this improves cost, latency or task
-  success is not established, so it is not the default.
+  `budget_tokens` is not consulted. The November 2026 coding arena motivated this
+  default: lower input-token use without a measured pass-rate loss. See the
+  [rollout evidence](benchmarks/paired-disclosure.md#decision-and-evidence-status).
 
 Tools the session policy denies are never searchable or invokable. Tools passed
 as `extra_tools` always stay exposed, and sessions started with an explicit
@@ -2480,6 +2484,20 @@ global config: put the section in the benchmark project's `.lemon/config.toml`
 `LEMON_TOOL_DISCLOSURE_PROFILE=coding` on a separately launched runtime (it
 overrides file config for that process only), or start sessions
 programmatically with `CodingAgent.Session.start_link(tool_disclosure: [profile: :coding])`.
+
+To opt out of the coding default, set `profile = "legacy"` in the existing
+global/project section or `LEMON_TOOL_DISCLOSURE_PROFILE=legacy` on the runtime.
+`enabled = false` / `LEMON_TOOL_DISCLOSURE_ENABLED=false` disables disclosure
+entirely. Since the CLI reuses a daemon, environment overrides must be applied to
+that runtime, not only to an already-attached client.
+
+Coding sessions omit assistant-home persona/bootstrap files and assistant-only
+memory/learning workflow reminders, retain repository instructions and skills,
+and shorten skill discovery descriptions to 96 characters (full metadata and
+instructions remain behind `read_skill`). Main/chat sessions keep their current
+bootstrap and full descriptions. Native callers can set `session_mode: :chat`
+or explicitly set `persona: true|false`; `lemon -p --no-persona` explicitly
+suppresses bootstrap even when resuming an assistant session.
 
 ## Sections
 

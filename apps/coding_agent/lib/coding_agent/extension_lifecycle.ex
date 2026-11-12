@@ -82,7 +82,11 @@ defmodule CodingAgent.ExtensionLifecycle do
       |> ToolRegistry.put_browser_provider_resolution()
 
     disclosure_cfg =
-      ToolDisclosure.config(settings_manager, Keyword.get(tool_opts, :tool_disclosure))
+      ToolDisclosure.config(
+        settings_manager,
+        Keyword.get(tool_opts, :tool_disclosure),
+        Keyword.get(tool_opts, :session_mode, :chat)
+      )
 
     {tools, tool_catalog, disclosure_report} =
       build_tools(
@@ -175,7 +179,11 @@ defmodule CodingAgent.ExtensionLifecycle do
       |> ToolRegistry.put_browser_provider_resolution()
 
     disclosure_cfg =
-      ToolDisclosure.config(settings_manager, Keyword.get(tool_opts, :tool_disclosure))
+      ToolDisclosure.config(
+        settings_manager,
+        Keyword.get(tool_opts, :tool_disclosure),
+        Keyword.get(tool_opts, :session_mode, :chat)
+      )
 
     hook_context = tool_hook_context(cwd, tool_opts)
     obfuscator = Keyword.get(opts, :secret_obfuscator)
@@ -256,7 +264,11 @@ defmodule CodingAgent.ExtensionLifecycle do
       |> ToolRegistry.put_browser_provider_resolution()
 
     disclosure_cfg =
-      ToolDisclosure.config(settings_manager, Keyword.get(tool_opts, :tool_disclosure))
+      ToolDisclosure.config(
+        settings_manager,
+        Keyword.get(tool_opts, :tool_disclosure),
+        Keyword.get(tool_opts, :session_mode, :chat)
+      )
 
     {tools, tool_catalog, disclosure_report} =
       build_tools(

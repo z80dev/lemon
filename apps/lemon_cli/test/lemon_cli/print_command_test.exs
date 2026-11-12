@@ -113,6 +113,18 @@ defmodule LemonCli.PrintCommandTest do
     end)
   end
 
+  test "--no-persona is accepted before validating the required prompt" do
+    capture_io([input: "\n"], fn ->
+      error =
+        capture_io(:stderr, fn ->
+          assert LemonCli.CLI.run(["-p", "--no-persona"]) == 2
+        end)
+
+      assert error =~ "prompt argument or stdin is required"
+      refute error =~ "Invalid run options"
+    end)
+  end
+
   test "print aliases reject incompatible resume selectors" do
     error =
       capture_io(:stderr, fn ->
