@@ -31,16 +31,14 @@ final class AppleSpeechCapture {
                 SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0 == .authorized) }
             }
             guard speechAllowed else { throw CaptureError.message("Apple Speech permission is denied or restricted. Enable Speech Recognition for Lemon Bot in iOS Settings.") }
-            let micAllowed = await withCheckedContinuation { continuation in
-                AVAudioSession.sharedInstance().requestRecordPermission { continuation.resume(returning: $0) }
-            }
+            let micAllowed = await AVAudioApplication.requestRecordPermission()
             guard micAllowed else { throw CaptureError.message("Microphone permission is denied. Enable Microphone for Lemon Bot in iOS Settings.") }
             guard generation == current else { return }
             guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: language ?? Locale.current.identifier)), recognizer.isAvailable else {
                 throw CaptureError.message("Apple Speech recognition is unavailable for this language or device. Check connectivity and the selected language.")
             }
             let audio = AVAudioSession.sharedInstance()
-            try audio.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+            try audio.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothHFP])
             try audio.setActive(true)
             let request = SFSpeechAudioBufferRecognitionRequest()
             request.shouldReportPartialResults = true

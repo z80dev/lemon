@@ -125,6 +125,7 @@ class SelectorTest(unittest.TestCase):
                 result = self.selection()
                 self.assertEqual(result["scope"], "full")
                 self.assertTrue(result["lanes"]["clients"])
+                self.assertTrue(result["lanes"]["apple"])
                 self.assertTrue(any(path in reason for reason in result["reasons"]))
                 # Each case starts from the same content, not the previous full trigger.
                 self.commit()
@@ -145,6 +146,17 @@ class SelectorTest(unittest.TestCase):
         result = self.selection()
         self.assertEqual(result["apps"], ["lemon_control_plane"])
         self.assertTrue(result["lanes"]["clients"])
+
+    def test_apple_app_lane(self):
+        self.put("products/lemon_bot/apple/LemonBotiOS/LemonBotiOSApp.swift")
+        result = self.selection()
+        self.assertTrue(result["lanes"]["apple"])
+        self.assertFalse(result["lanes"]["clients"])
+        self.put("products/lemon_bot/backend/src/server.ts")
+        self.commit()
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.put("products/lemon_bot/backend/src/server.ts", "// changed\n")
+        self.assertFalse(self.selection()["lanes"]["apple"])
 
     def test_bare_directory_is_not_reference_pattern(self):
         self.put("apps/lemon_router/test/not_a_reader.exs", '"docs"\n')
@@ -204,7 +216,7 @@ class SelectorTest(unittest.TestCase):
         output.write_text("existing=value\n")
         with patch.dict(os.environ, GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=str(summary)):
             selector.github(self.selection())
-        self.assertEqual(output.read_text(), "existing=value\nscope=none\napps=\ntest_paths=\nclients=false\nwasm=false\ndocs=false\n")
+        self.assertEqual(output.read_text(), "existing=value\nscope=none\napps=\ntest_paths=\nclients=false\nwasm=false\ndocs=false\napple=false\n")
         self.assertIn("**none**", summary.read_text())
 
     def run_lane(self, *args, fail_command=""):

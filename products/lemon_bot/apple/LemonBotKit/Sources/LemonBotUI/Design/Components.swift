@@ -49,10 +49,13 @@ struct PillButtonStyle: ButtonStyle {
         let minimumTouchSize: CGFloat
         @State private var hovering = false
         @Environment(\.isEnabled) private var enabled
+        @Environment(\.dynamicTypeSize) private var dynamicTypeSize
         var body: some View {
             configuration.label
                 .font(compact ? LBFont.metaEmphasis : LBFont.sectionTitle)
-                .lineLimit(1)
+                // Accessibility text sizes wrap rather than truncate labels such as "Allow Terminal for this chat".
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
+                .multilineTextAlignment(.center)
                 .foregroundStyle(foreground)
                 .padding(.horizontal, compact ? 11 : 14)
                 .padding(.vertical, compact ? 5 : 7)
@@ -148,6 +151,15 @@ extension View {
     /// Reserve nonoverlapping iPhone touch space without enlarging the icon artwork.
     func composerTouchTarget() -> some View {
         frame(minWidth: LBMetric.composerHitSize, minHeight: LBMetric.composerHitSize).contentShape(Rectangle())
+    }
+    /// iPhone: a compact inline text button label (Details, Retry) gets a ≥ 44 pt touch area without changing the row's
+    /// layout — the padding is taken back outside the hit shape. Apply to the button's label, not the button.
+    func inlineTouchTarget() -> some View {
+        #if os(iOS)
+        padding(.vertical, 15).padding(.horizontal, 4).contentShape(Rectangle()).padding(.vertical, -15).padding(.horizontal, -4)
+        #else
+        self
+        #endif
     }
 }
 

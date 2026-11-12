@@ -92,7 +92,8 @@ struct BotInspectorView: View {
         }
         .background(LB.sidebar)
         .lbAnimation(LBMotion.spring, value: presentation.tab)
-        .task(id: "\(botID):\(store.eventVersion):\(preview == nil)") { await load() }
+        // Include online state: a load attempted during launch/reconnect must retry once the connection is back.
+        .task(id: "\(botID):\(store.eventVersion):\(preview == nil):\(store.isOnline)") { await load() }
         .sheet(item: $destination) { sheet(for: $0) }
     }
 

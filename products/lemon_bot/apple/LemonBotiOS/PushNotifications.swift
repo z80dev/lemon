@@ -50,8 +50,11 @@ final class LemonBotAppDelegate: NSObject, UIApplicationDelegate, UNUserNotifica
         self.error = error.localizedDescription
     }
 
-    func register() async {
-        guard let store, store.account != nil, let token else { return }
+    /// Automatic registration (launch, token refresh) waits until the backend reports APNs delivery is configured;
+    /// otherwise every launch against a backend without Apple push would raise a registration error banner.
+    /// The explicit "Register current APNs token" action always tries and reports the backend's answer.
+    func register(explicit: Bool = false) async {
+        guard let store, store.account != nil, let token, explicit || store.capabilities?.apns == true else { return }
         do {
             guard let topic = Bundle.main.bundleIdentifier else { throw CaptureError.message("The signed application has no bundle identifier for its APNs topic.") }
             let configured = Bundle.main.object(forInfoDictionaryKey: "LemonBotAPNSEnvironment") as? String

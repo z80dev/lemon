@@ -39,6 +39,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   step that failed; the shortcut recorder says why a key was refused.
 - The Lemon Bot iPhone app compiles again: a macOS-only home-directory
   initializer in `LemonBotKit` is no longer built for iOS.
+- Lemon Bot for iPhone and iPad: a saved session signs in on launch instead of
+  asking again; pairing explains reused, denied, expired and unreachable links;
+  shared photos land in the composer and close the share sheet. Text and
+  status colours meet WCAG AA contrast in light and dark mode, small buttons
+  have 44 pt touch targets, and the composer, live status, approval buttons
+  and Settings wrap instead of truncating at the largest text sizes.
+  **Unread only** with nothing unread offers a way back instead of a blank
+  list. Attached files keep their own name on iPhone too.
+- CI builds the Mac and iPhone apps and runs the shared `LemonBotKit` tests on
+  every change that touches them.
 - Lemon Bot replies again. Since 2026.11.3, every Bot run failed before
   reaching the model ("The runtime reported that this run failed"): MCP
   requests to a local or private Lemon Bot address carried two

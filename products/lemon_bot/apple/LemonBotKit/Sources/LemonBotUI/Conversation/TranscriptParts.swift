@@ -326,12 +326,12 @@ struct IssueRow: View {
                 Image(systemName: "exclamationmark.circle").foregroundStyle(tint).accessibilityHidden(true)
                 Text(title).foregroundStyle(LB.muted).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 if let retry {
-                    Button("Retry", action: retry).buttonStyle(.plain).fontWeight(.semibold).foregroundStyle(LB.ink)
+                    Button(action: retry) { Text("Retry").inlineTouchTarget() }.buttonStyle(.plain).fontWeight(.semibold).foregroundStyle(LB.ink)
                         .accessibilityHint(retryExplanation ?? "Try again")
                 }
                 if detail != nil {
                     if retry != nil { Text("·").foregroundStyle(LB.faint).accessibilityHidden(true) }
-                    Button(expanded ? "Hide details" : "Details") { lbWithAnimation(reduceMotion, LBMotion.snappy) { expanded.toggle() } }
+                    Button { lbWithAnimation(reduceMotion, LBMotion.snappy) { expanded.toggle() } } label: { Text(expanded ? "Hide details" : "Details").inlineTouchTarget() }
                         .buttonStyle(.plain).fontWeight(.semibold).foregroundStyle(LB.ink)
                 }
             }.font(LBFont.meta)
@@ -473,19 +473,25 @@ struct LiveWorkingRow: View {
     var stopping: Bool
     var onStop: () -> Void
     var onOpen: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var body: some View {
+        // At accessibility text sizes the step title may wrap and Stop becomes icon-only (still labelled "Stop"),
+        // so neither truncates to "Waitin…" / "St…".
+        let large = dynamicTypeSize.isAccessibilitySize
         HStack(spacing: 8) {
             if step.needsInput { Image(systemName: step.symbol).font(LBFont.metaEmphasis).foregroundStyle(LB.warning) }
             else { TypingDots(color: LB.muted, dot: 4) }
-            Text(step.title).font(LBFont.metaEmphasis).foregroundStyle(step.needsInput ? LB.warning : LB.ink).lineLimit(1)
+            Text(step.title).font(LBFont.metaEmphasis).foregroundStyle(step.needsInput ? LB.warning : LB.ink).lineLimit(large ? 3 : 1)
             if let since = step.since {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     Text(compactDuration(from: since, to: context.date)).font(LBFont.meta).monospacedDigit().foregroundStyle(LB.faint)
-                }
+                }.fixedSize()
             }
             if canStop {
-                Button(action: onStop) { Label("Stop", systemImage: "stop.fill").labelStyle(.titleAndIcon) }
-                    .buttonStyle(PillButtonStyle(kind: .quiet, compact: true, minimumTouchSize: LBMetric.composerHitSize)).disabled(stopping).accessibilityLabel("Stop")
+                Button(action: onStop) {
+                    if large { Image(systemName: "stop.fill") } else { Label("Stop", systemImage: "stop.fill").labelStyle(.titleAndIcon) }
+                }
+                .buttonStyle(PillButtonStyle(kind: .quiet, compact: true, minimumTouchSize: LBMetric.composerHitSize)).disabled(stopping).accessibilityLabel("Stop")
             }
         }
         .padding(.leading, 14).padding(.trailing, canStop ? 5 : 14).padding(.vertical, 5)

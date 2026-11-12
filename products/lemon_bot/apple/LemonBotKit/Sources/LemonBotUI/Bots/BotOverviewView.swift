@@ -253,10 +253,10 @@ struct BotApprovalsView: View {
             ForEach(allowances.filter { $0.scope == "chat" && $0.state == "active" }) { allowance in
                 HStack {
                     Text(allowance.label)
-                    Button("Stop allowing") { Task { await action.perform {
+                    Button { Task { await action.perform {
                         let _: ApprovalAllowance = try await store.mutate("POST", resourcePath("approval-allowances", allowance.id, "/stop"), body: ["revision": .number(Double(allowance.revision))])
                         try await load()
-                    } } }
+                    } } } label: { Text("Stop allowing").inlineTouchTarget() }
                 }
             }
             Text("Stopping applies to future actions; an already approved command is not recalled.").font(LBFont.meta)
@@ -301,10 +301,10 @@ struct ChatApprovalAllowancesView: View {
             ForEach(allowances.filter { $0.state == "active" }) { allowance in
                 HStack {
                     Text(allowance.label)
-                    Button("Stop allowing") { Task { await action.perform {
+                    Button { Task { await action.perform {
                         let _: ApprovalAllowance = try await store.mutate("POST", resourcePath("approval-allowances", allowance.id, "/stop"), body: ["revision": .number(Double(allowance.revision))])
                         try await load()
-                    } } }.disabled(action.busy || !store.isOnline)
+                    } } } label: { Text("Stop allowing").inlineTouchTarget() }.disabled(action.busy || !store.isOnline)
                 }.font(LBFont.meta)
             }
             ActionErrorView(message: action.error)

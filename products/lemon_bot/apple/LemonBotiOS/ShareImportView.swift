@@ -36,14 +36,16 @@ final class ShareImportModel {
         } catch { self.error = error.localizedDescription }
     }
 
-    func attach(_ id: String) async {
-        guard !busy, var capture = captures.first(where: { $0.id == id }) else { return }
-        guard store.connectionState == "online" else { error = "Reconnect before uploading selected files. Local staged content is retained; nothing is queued or sent."; return }
-        guard let account = store.account, let user = store.user, let workspace = store.workspace else { error = "Sign in and choose an account before importing."; return }
-        guard let conversationID = capture.conversationID ?? chosenConversation[id], !conversationID.isEmpty else { error = "Explicitly select the conversation that will receive this unsent draft."; return }
+    /// Returns true when the capture was uploaded and fully added to its conversation's unsent draft.
+    @discardableResult
+    func attach(_ id: String) async -> Bool {
+        guard !busy, var capture = captures.first(where: { $0.id == id }) else { return false }
+        guard store.connectionState == "online" else { error = "Reconnect before uploading selected files. Local staged content is retained; nothing is queued or sent."; return false }
+        guard let account = store.account, let user = store.user, let workspace = store.workspace else { error = "Sign in and choose an account before importing."; return false }
+        guard let conversationID = capture.conversationID ?? chosenConversation[id], !conversationID.isEmpty else { error = "Explicitly select the conversation that will receive this unsent draft."; return false }
         if let boundAccount = capture.accountID, boundAccount != account.id || capture.workspaceID != workspace.id || capture.userID != user.id {
             error = "This capture is bound to another account. Switch back to that account to attach it; it will not be moved or uploaded elsewhere."
-            return
+            return false
         }
         busy = true
         error = nil
@@ -105,11 +107,13 @@ final class ShareImportModel {
                 capture.textApplied = true
                 try ShareInbox.save(capture)
             }
+            return true
         } catch {
             capture.error = error.localizedDescription
             self.error = error.localizedDescription
             do { try ShareInbox.save(capture) }
             catch { self.error = (self.error ?? "") + "\nCould not save import status: " + error.localizedDescription }
+            return false
         }
     }
 
@@ -121,6 +125,12 @@ final class ShareImportModel {
     private func reloadPreservingError() {
         do { captures = try ShareInbox.captures() }
         catch { self.error = error.localizedDescription }
+    }
+}
+
+private extension SharedCapture {
+    var attachedToDraft: Bool {
+        conversationID != nil && error == nil && files.allSatisfy { $0.attachmentID != nil && $0.error == nil } && (text.isEmpty || textApplied)
     }
 }
 
@@ -175,7 +185,12 @@ struct ShareImportView: View {
                             }
                         }
                         if let error = capture.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
-                        Button("Attach to unsent composer") { Task { await model.attach(capture.id) } }
+                        Button("Attach to unsent composer") {
+                            Task {
+                                // Back to the chat once nothing else here awaits a decision; the draft is reviewed and sent there.
+                                if await model.attach(capture.id), model.captures.allSatisfy(\.attachedToDraft) { dismiss() }
+                            }
+                        }
                             .disabled(model.busy || model.store.connectionState != "online" || model.store.account == nil || (capture.conversationID == nil && (model.chosenConversation[capture.id] ?? "").isEmpty))
                         Button("Discard local staged content", role: .destructive) { discard = capture }.disabled(model.busy)
                     }

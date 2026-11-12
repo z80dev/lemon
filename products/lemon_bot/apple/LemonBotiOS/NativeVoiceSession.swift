@@ -74,7 +74,7 @@ final class NativeVoiceSession: NSObject, AVSpeechSynthesizerDelegate, AVAudioPl
         let conversation: Conversation
         do {
             conversation = try await store.read("/conversations/\(pathID(conversationID))")
-            try await resetSpeechBaseline(conversationID: conversationID)
+            try await resetSpeechBaseline(lastEntryID: conversation.lastEntryId)
         }
         catch { self.error = error.localizedDescription; return }
         guard conversation.ownerUserId == user.id, ["dm", "task"].contains(conversation.kind) else {
@@ -276,9 +276,18 @@ final class NativeVoiceSession: NSObject, AVSpeechSynthesizerDelegate, AVAudioPl
     }
 
     private func resetSpeechBaseline(conversationID: ID) async throws {
+        let conversation: Conversation = try await store.read("/conversations/\(pathID(conversationID))")
+        try await resetSpeechBaseline(lastEntryID: conversation.lastEntryId)
+    }
+
+    /// Entry pages are oldest-first, so a `limit=1` page is the first message and would make the
+    /// call read out the whole history. Only entries after the conversation's newest one are spoken.
+    private func resetSpeechBaseline(lastEntryID: ID?) async throws {
         minimumSpeechSeq = Int.max
-        let page: Page<TranscriptEntry> = try await store.read("/conversations/\(pathID(conversationID))/entries", query: ["limit": "1"])
-        minimumSpeechSeq = page.items.last?.seq ?? 0
+        if let lastEntryID {
+            let last: TranscriptEntry = try await store.read("/entries/\(pathID(lastEntryID))")
+            minimumSpeechSeq = last.seq
+        } else { minimumSpeechSeq = 0 }
         spoken = [:]
     }
 
@@ -312,10 +321,11 @@ struct NativeVoiceView: View {
                             Button(session.muted ? "Unmute" : "Mute") { Task { await voice.update(["muted": .bool(!session.muted)]) } }
                             Button("Hang up", role: .destructive) { Task { await voice.end() } }
                         } else {
-                            HStack {
+                            // Borderless: two default-style buttons sharing a Form row would act as one row tap.
+                            HStack(spacing: 20) {
                                 Button("Good call") { Task { await voice.update(["feedback": .string("good")]) } }
                                 Button("Bad call") { Task { await voice.update(["feedback": .string("bad")]) } }
-                            }
+                            }.buttonStyle(.borderless)
                             Text("Work already sent continues in chat after the call ends.")
                         }
                     }
@@ -352,7 +362,7 @@ struct NativeVoiceView: View {
                     }
                     Section("Conversation transcript") {
                         ForEach(store.entries[session.conversationId] ?? []) { entry in
-                            if let text = entry.text { VStack(alignment: .leading) { Text(entry.actor.displayName).font(.caption); Text(text).textSelection(.enabled) } }
+                            if let text = entry.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { VStack(alignment: .leading) { Text(entry.actor.displayName).font(.caption); Text(text).textSelection(.enabled) } }
                         }
                     }
                 }
@@ -366,7 +376,7 @@ struct NativeVoiceView: View {
                 }
             }
             .navigationTitle("Voice")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Keep call visible in chat") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button(voice.active ? "Keep call visible in chat" : "Done") { dismiss() } } }
             .onAppear {
                 language = voice.session?.settings.language ?? ""
                 voiceID = voice.session?.settings.voiceId ?? "default"

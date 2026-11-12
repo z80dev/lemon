@@ -113,13 +113,14 @@ final class ShareReviewModel: ObservableObject {
     }
 
     private func copyRepresentation(_ provider: NSItemProvider, type: String, into capture: SharedCapture) async throws -> SharedFile {
-        try await withCheckedThrowingContinuation { continuation in
+        let suggestedName = provider.suggestedName
+        return try await withCheckedThrowingContinuation { continuation in
             provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
                 do {
                     if let error { throw error }
                     guard let url else { throw CaptureError.message("The selected file could not be loaded from its source app.") }
                     // Provider URLs cease to exist when this callback returns.
-                    let file = try ShareInbox.copy(url, filename: provider.suggestedName ?? url.lastPathComponent, mime: UTType(type)?.preferredMIMEType, into: capture)
+                    let file = try ShareInbox.copy(url, filename: suggestedName ?? url.lastPathComponent, mime: UTType(type)?.preferredMIMEType, into: capture)
                     continuation.resume(returning: file)
                 } catch { continuation.resume(throwing: error) }
             }

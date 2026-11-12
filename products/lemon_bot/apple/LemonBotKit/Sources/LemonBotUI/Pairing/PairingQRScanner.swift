@@ -26,8 +26,12 @@ final class PairingScannerController: UIViewController, AVCaptureMetadataOutputO
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
-        let cancel = UIButton(type: .system)
-        cancel.setTitle("Cancel scan", for: .normal)
+        var style = UIButton.Configuration.filled()
+        style.title = "Cancel scan"
+        style.cornerStyle = .capsule
+        style.baseBackgroundColor = .white
+        style.baseForegroundColor = .black
+        let cancel = UIButton(configuration: style)
         cancel.addTarget(self, action: #selector(cancelScan), for: .touchUpInside)
         cancel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(cancel)

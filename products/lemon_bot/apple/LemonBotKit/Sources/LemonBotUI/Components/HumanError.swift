@@ -43,7 +43,7 @@ func pairingStatusLabel(_ state: String) -> String {
     case "previewing": return "Checking the QR backend and workspace"
     case "preview_ready": return "Ready to request connection"
     case "claiming": return "Requesting connection"
-    case "pending_approval": return "Waiting for approval on your Mac"
+    case "pending_approval": return "Waiting for approval"
     case "claim_unknown": return "Request not confirmed. Check your request before trying again."
     case "completion_unknown": return "Connection not confirmed. Check your request."
     case "completing": return "Finishing connection"

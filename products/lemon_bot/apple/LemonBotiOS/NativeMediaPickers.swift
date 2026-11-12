@@ -33,12 +33,13 @@ struct SelectedPhotoPicker: UIViewControllerRepresentable {
                             guard let type = UTType($0) else { return false }
                             return type.conforms(to: .image) || type.conforms(to: .movie)
                         }) else { throw CaptureError.message("The selected photo or video has no readable media representation.") }
+                        let suggestedName = provider.suggestedName
                         let file: SharedFile = try await withCheckedThrowingContinuation { continuation in
                             provider.loadFileRepresentation(forTypeIdentifier: identifier) { url, error in
                                 do {
                                     if let error { throw error }
                                     guard let url else { throw CaptureError.message("The selected photo or video could not be downloaded from Photos.") }
-                                    let copied = try ShareInbox.copy(url, filename: provider.suggestedName ?? url.lastPathComponent, mime: UTType(identifier)?.preferredMIMEType, into: capture)
+                                    let copied = try ShareInbox.copy(url, filename: suggestedName ?? url.lastPathComponent, mime: UTType(identifier)?.preferredMIMEType, into: capture)
                                     continuation.resume(returning: copied)
                                 } catch { continuation.resume(throwing: error) }
                             }

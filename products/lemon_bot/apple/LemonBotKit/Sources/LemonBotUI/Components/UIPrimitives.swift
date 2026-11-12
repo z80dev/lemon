@@ -126,10 +126,11 @@ struct ActionErrorView: View {
                 if let diagnosticStart {
                     DisclosureGroup("Details") {
                         Text(String(message[diagnosticStart...]).trimmingCharacters(in: .whitespacesAndNewlines)).textSelection(.enabled)
-                        Button("Copy") { copyText(message) }.buttonStyle(.pill(.quiet, compact: true))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Copy") { copyText(message) }.buttonStyle(PillButtonStyle(kind: .quiet, compact: true, minimumTouchSize: LBMetric.composerHitSize))
                     }
                 } else {
-                    Button("Copy") { copyText(message) }.buttonStyle(.pill(.quiet, compact: true))
+                    Button("Copy") { copyText(message) }.buttonStyle(PillButtonStyle(kind: .quiet, compact: true, minimumTouchSize: LBMetric.composerHitSize))
                 }
             }.font(LBFont.rowSubtitle).padding(.horizontal, 12).padding(.vertical, 8)
                 .background(RoundedRectangle(cornerRadius: LBMetric.rowRadius, style: .continuous).fill(LB.danger.opacity(0.09)))

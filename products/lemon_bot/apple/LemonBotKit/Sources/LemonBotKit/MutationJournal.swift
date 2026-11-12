@@ -80,7 +80,7 @@ extension LemonBotStore {
         return nil
     }
     func journaledMutate<T: Decodable>(_ method: String, _ path: String, body: JSONObject, as responseType: T.Type, reconcilingProviderNonce: String? = nil) async throws -> T {
-        let client = try activeTransport()
+        let client = try await activeTransport()
         var payload = body
         let handle: (String, String)?
         if let nonce = reconcilingProviderNonce {
@@ -137,7 +137,7 @@ extension LemonBotStore {
         }
     }
     func journaledUpload(fileURL: URL, filename: String?, mime: String, metadata: JSONObject) async throws -> Attachment {
-        let client = try activeTransport()
+        let client = try await activeTransport()
         var payload = metadata
         let handle = try beginIntent("POST", "/attachments", payload: &payload)
         do {

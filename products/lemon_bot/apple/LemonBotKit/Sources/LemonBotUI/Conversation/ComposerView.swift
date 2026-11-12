@@ -110,7 +110,9 @@ public struct ComposerView: View {
     }
     private var draftIsEmpty: Bool { draft.text.isEmpty && draft.attachmentIDs.isEmpty && draft.fileURLs.isEmpty && stagedFilenames.isEmpty }
     private var sendDisabled: Bool {
-        !online || action.inFlight || unresolvedAction || pendingMessageNonce != nil || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.attachmentIDs.isEmpty && draft.fileURLs.isEmpty)
+        // Selected local files must be uploaded (or removed) first; send() would only reject them.
+        !online || action.inFlight || unresolvedAction || pendingMessageNonce != nil || !draft.fileURLs.isEmpty
+            || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.attachmentIDs.isEmpty)
     }
     private var compactKeyboardLayout: Bool {
         #if os(iOS)
@@ -276,6 +278,10 @@ public struct ComposerView: View {
                 AttachmentView(store: store, attachmentID: id).frame(maxHeight: 40).clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 Button { store.setLocalDraft(conversationID: conversationID, text: draft.text, attachmentIDs: draft.attachmentIDs.filter { $0 != id }, replyTo: draft.replyToEntryID) } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(LB.muted)
+                        #if os(iOS)
+                        // 44 pt touch area around the 17 pt glyph without growing the chip.
+                        .frame(width: 44, height: 44).contentShape(Rectangle()).padding(-13)
+                        #endif
                 }.buttonStyle(.plain).accessibilityLabel("Remove attachment")
             }
             .padding(4).background(LB.fill, in: Capsule())
@@ -299,13 +305,17 @@ public struct ComposerView: View {
 
     @ViewBuilder private var messageInput: some View {
         #if os(iOS)
-        IOSComposerInput(text: text, focused: $focused, maximumLines: verticalSizeClass == .compact ? 2 : compact ? 4 : 8)
-            .overlay(alignment: .topLeading) {
-                if draft.text.isEmpty {
-                    Text(placeholder).font(LBFont.body).foregroundStyle(LB.faint)
-                        .allowsHitTesting(false).accessibilityHidden(true)
-                }
+        // The placeholder sits beside (not over) the one-line editor so a long Bot name at large Dynamic Type wraps
+        // and grows the field instead of truncating to "Message K…".
+        ZStack(alignment: .topLeading) {
+            if draft.text.isEmpty {
+                Text(placeholder).font(LBFont.body).foregroundStyle(LB.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentShape(Rectangle()).onTapGesture { focused = true }
+                    .accessibilityHidden(true)
             }
+            IOSComposerInput(text: text, focused: $focused, maximumLines: verticalSizeClass == .compact ? 2 : compact ? 4 : 8)
+        }
         #else
         TextField(placeholder, text: text, axis: .vertical)
             .lineLimit(compact ? 1...4 : 1...8)
@@ -378,7 +388,7 @@ public struct ComposerView: View {
                 }
                 if receipt.status == "outcome_unknown" { Text("Not confirmed yet. Check the conversation before sending again.").foregroundStyle(LB.warning).font(LBFont.meta) }
                 if !compactKeyboardLayout {
-                    DisclosureGroup("Details") {
+                    DisclosureGroup("Delivery details") {
                         VStack(alignment: .leading, spacing: 2) { receiptDetails(receipt) }
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }.font(LBFont.meta).foregroundStyle(LB.muted)
@@ -388,7 +398,7 @@ public struct ComposerView: View {
                 if let error = run.error { ActionErrorView(message: humanErrorText(BackendError(status: 0, failure: ErrorEnvelopeError(code: error.code, message: error.message, requestId: error.requestId, retrySafe: error.retrySafe, details: error.details)))) }
             }
             if !reconciledRuns.isEmpty && !compactKeyboardLayout {
-                DisclosureGroup("Details") {
+                DisclosureGroup("Delivery details") {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(reconciledRuns) { run in runDeliveryDetails(run) }
                     }.frame(maxWidth: .infinity, alignment: .leading)

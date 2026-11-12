@@ -69,6 +69,7 @@ struct NativeLemonBotView: View {
     @State private var localError: String?
     @State private var handlingNativeRequest = false
     @State private var showPairing = false
+    @State private var accessoryHeight: CGFloat = 0
 
     init(store: LemonBotStore, delegate: LemonBotAppDelegate) {
         self.store = store
@@ -88,6 +89,8 @@ struct NativeLemonBotView: View {
                 permissionSections
             }
         }
+            // The split view's sidebar column ignores this inset; its footer pads itself by the measured height.
+            .environment(\.lbBottomAccessoryInset, accessoryHeight)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 // Only what needs attention: an active voice chat, staged shares, or a platform error.
                 VStack(spacing: 6) {
@@ -112,21 +115,26 @@ struct NativeLemonBotView: View {
                         .buttonStyle(.bordered).buttonBorderShape(.capsule)
                     }
                     if let error = localError ?? delegate.error ?? voice.error {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
-                            Text(error).font(.footnote).textSelection(.enabled).lineLimit(3)
+                        HStack(spacing: 4) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+                                Text(error).font(.footnote).textSelection(.enabled).lineLimit(3)
+                            }.padding(.vertical, 8)
                             Spacer(minLength: 4)
+                            // 44 pt hit areas: the visible glyphs are small, the tap targets must not be.
                             Button("Details") { sheet = NativeSheet(action: "permissions") }.font(.footnote.weight(.semibold))
+                                .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                             Button {
                                 localError = nil; delegate.error = nil; voice.error = nil
-                            } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)) }
+                            } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle()) }
                             .accessibilityLabel("Dismiss error")
                         }
-                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .padding(.leading, 14).padding(.trailing, 4).padding(.vertical, 2)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
                 }
                 .padding(.horizontal, 12)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { accessoryHeight = $0 }
             }
             .sheet(item: $sheet, onDismiss: { reloadShares() }) { request in
                 switch request.action {
@@ -194,6 +202,7 @@ struct NativeLemonBotView: View {
                 }
             }
             .onChange(of: store.voiceSession) { _, _ in voice.observeSessionState() }
+            .onChange(of: store.capabilities?.apns) { _, ready in if ready == true { Task { await delegate.register() } } }
             .onChange(of: store.connectionState) { _, state in
                 if state == "online" {
                     Task {
@@ -258,7 +267,7 @@ struct NativeLemonBotView: View {
                     Text(delegate.registered ? "Actual APNs device token registered with this backend account." : "No confirmed APNs registration for this account.")
                     Text("Backend APNs configured: \(store.capabilities?.apns == true ? "Yes" : "No")")
                     Button("Request notification permission") { Task { await delegate.requestPermission() } }
-                    Button("Register current APNs token") { Task { await delegate.register() } }.disabled(store.account == nil)
+                    Button("Register current APNs token") { Task { await delegate.register(explicit: true) } }.disabled(store.account == nil)
                     Text("APNs delivery requires the operator's key ID, team ID, private .p8 key and allowlisted bundle topic. Backend registration errors below report the actual missing prerequisite.").font(.caption)
                 }
                 Section("Explicit photo, camera and voice access") {
@@ -285,7 +294,7 @@ struct NativeLemonBotView: View {
         }
     }
     private var microphonePermission: String {
-        switch AVAudioSession.sharedInstance().recordPermission {
+        switch AVAudioApplication.shared.recordPermission {
         case .granted: return "Allowed"
         case .denied: return "Denied"
         case .undetermined: return "Not requested"
@@ -313,7 +322,8 @@ struct NativeLemonBotView: View {
                 sheet = NativeSheet(action: "dictation", conversationID: conversationID, accountID: store.account?.id)
             case "voice":
                 await voice.start(conversationID: conversationID)
-                sheet = NativeSheet(action: "voice")
+                // A refused start keeps its error in the bottom banner; there is no live call to show.
+                if voice.active { sheet = NativeSheet(action: "voice") }
             case "shares":
                 sheet = NativeSheet(action: "shares")
             case "camera", "photos", "files":

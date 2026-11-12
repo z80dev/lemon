@@ -10,6 +10,7 @@ name: CI
 #   dialyzer     full advisory run + allowlist gate (scripts/dialyzer_gate.sh)
 #   install      scripts/verify_source_install + scripts/verify_install_script
 #   clients      scripts/test clients (TUI + lemon-browser-node)
+#   apple        Lemon Bot iOS Simulator build + share-extension tests (macOS)
 #   wasm-runtime cargo tests + WASM integration test
 #   history      pull requests only: reject unrelated Git history
 #   result       single required status; fails if any job failed or was cancelled,
@@ -69,6 +70,7 @@ jobs:
       matrix: ${{ github.event_name != 'pull_request' && '[1,2,3,4]' || steps.shards.outputs.matrix }}
       clients: ${{ github.event_name != 'pull_request' || steps.select.outputs.clients == 'true' }}
       wasm: ${{ github.event_name != 'pull_request' || steps.select.outputs.wasm == 'true' }}
+      apple: ${{ github.event_name != 'pull_request' || steps.select.outputs.apple == 'true' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -302,6 +304,62 @@ jobs:
       - name: scripts/test clients
         run: scripts/test clients
 
+  # The Lemon Bot Apple apps are built nowhere else before release, so an iOS
+  # compile break used to ship unnoticed. Credential-free: unsigned Simulator
+  # build of the app and share extension, then the share-review unit tests on
+  # a Simulator. Toolchain pins mirror release.yml's build-mac-app job.
+  apple:
+    needs: changes
+    if: needs.changes.outputs.apple == 'true'
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      XCODEGEN_VERSION: 2.46.0
+      XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+    defaults:
+      run:
+        working-directory: products/lemon_bot/apple
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install checksum-pinned XcodeGen
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip" -o "$RUNNER_TEMP/xcodegen.zip"
+          echo "$XCODEGEN_SHA256  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP/xcodegen"
+          echo "$RUNNER_TEMP/xcodegen/xcodegen/bin" >> "$GITHUB_PATH"
+
+      # SwiftTerm (a LemonBotKit dependency) compiles Metal shaders.
+      - name: Download Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Build iOS app and share extension (Simulator, unsigned)
+        run: |
+          xcodebuild -project LemonBot.xcodeproj -scheme LemonBotiOS \
+            -configuration Debug -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/lemonbot-dd" CODE_SIGNING_ALLOWED=NO build
+
+      - name: Share-extension review tests (Simulator)
+        run: |
+          set -euo pipefail
+          udid=$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          ids = [d["udid"] for runtime, entries in sorted(devices.items(), reverse=True)
+                 if ".SimRuntime.iOS-" in runtime for d in entries if d["name"].startswith("iPhone")]
+          print(ids[0] if ids else "")')
+          if [ -z "$udid" ]; then echo "::error::No available iPhone Simulator on this runner"; exit 1; fi
+          xcodebuild -project LemonBot.xcodeproj -scheme LemonBotShareReview \
+            -destination "platform=iOS Simulator,id=$udid" \
+            -derivedDataPath "$RUNNER_TEMP/lemonbot-dd" CODE_SIGNING_ALLOWED=NO \
+            test -only-testing:LemonBotShareTests
+
   wasm-runtime:
     needs: changes
     if: needs.changes.outputs.wasm == 'true'
@@ -390,7 +448,7 @@ jobs:
   result:
     name: CI result
     if: always()
-    needs: [changes, check, test, dialyzer, install, clients, wasm-runtime, history]
+    needs: [changes, check, test, dialyzer, install, clients, apple, wasm-runtime, history]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

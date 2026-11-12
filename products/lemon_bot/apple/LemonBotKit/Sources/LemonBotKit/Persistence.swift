@@ -23,8 +23,9 @@ public struct StoredAccount: Codable, Hashable, Identifiable {
         self.deviceID = deviceID; self.sessionID = sessionID; self.sessionExpiresAtMs = sessionExpiresAtMs; self.installationID = installationID
         self.instanceID = instanceID; self.route = route
     }
-    /// Where this account lives, for account lists and menus.
-    public var location: String { route?.title ?? baseURL.host ?? baseURL.absoluteString }
+    /// Where this account lives, for account lists and menus. An explicit port is kept: two backends on one host
+    /// (127.0.0.1:4100 and :4200) must stay distinguishable.
+    public var location: String { route?.title ?? baseURL.host.map { host in baseURL.port.map { "\(host):\($0)" } ?? host } ?? baseURL.absoluteString }
 }
 
 /// Session credentials have one secure production implementation. Injection keeps

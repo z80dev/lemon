@@ -48,7 +48,7 @@ public enum WorkspaceCursor {
 
 public enum ClientError: Error, LocalizedError, CustomStringConvertible {
     case signedOut, insecureEndpoint, invalidPath, invalidCursor, invalidDeepLink, foreignWorkspace
-    case accountChanged, offline, invalidBinary, invalidFrame, keychain(OSStatus), http(Int), outcomeUnknown(String)
+    case accountChanged, offline, notConnected, invalidBinary, invalidFrame, keychain(OSStatus), http(Int), outcomeUnknown(String)
     case unresolvedMutation(MutationIntent)
     case invalidNonce
     case reauthenticationUnconfirmed
@@ -63,6 +63,7 @@ public enum ClientError: Error, LocalizedError, CustomStringConvertible {
         case .foreignWorkspace: return "Sign in to the saved account for this workspace before opening the link."
         case .accountChanged: return "The active account changed while the request was in flight."
         case .offline: return "Reconnect before authorizing this action. No action has been queued."
+        case .notConnected: return "Not connected to this backend yet. Lemon Bot keeps retrying; try again once it's back online."
         case .invalidBinary: return "The authorized attachment download was incomplete or invalid."
         case .invalidFrame: return "The realtime server sent an invalid frame."
         case .keychain(let status): return "Keychain could not access the saved account (\(status))."

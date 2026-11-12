@@ -273,8 +273,9 @@ private struct SettingsAccountHeader: View {
                 .overlay(Text(initials).font(LBFont.bodyEmphasis).foregroundStyle(LB.lemonInk))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
-                Text(name).font(LBFont.rowTitle).foregroundStyle(LB.ink).lineLimit(1)
-                if let email { Text(email).font(LBFont.meta).foregroundStyle(LB.muted).lineLimit(1).truncationMode(.middle) }
+                // Two lines so a full email address survives large Dynamic Type instead of "owner…ple.com".
+                Text(name).font(LBFont.rowTitle).foregroundStyle(LB.ink).lineLimit(2)
+                if let email { Text(email).font(LBFont.meta).foregroundStyle(LB.muted).lineLimit(2).truncationMode(.middle) }
             }
             Spacer(minLength: 0)
         }
@@ -287,12 +288,14 @@ private struct SettingsAccountHeader: View {
 struct SettingsPaneIcon: View {
     let pane: SettingsPane
     var size: CGFloat = 22
+    /// The tile grows with Dynamic Type so its glyph (a text style) is never clipped by a fixed 22 pt frame.
+    @ScaledMetric(relativeTo: .caption) private var scale: CGFloat = 1
     var body: some View {
         Image(systemName: pane.symbol)
             .font(LBFont.metaEmphasis)
             .foregroundStyle(.white)
-            .frame(width: size, height: size)
-            .background(RoundedRectangle(cornerRadius: size * 0.27, style: .continuous).fill(pane.tint.gradient))
+            .frame(width: size * scale, height: size * scale)
+            .background(RoundedRectangle(cornerRadius: size * scale * 0.27, style: .continuous).fill(pane.tint.gradient))
             .accessibilityHidden(true)
     }
 }
@@ -411,7 +414,7 @@ private struct DevicesPane: View {
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
                         Label("Reconnect to your desktop", systemImage: "desktopcomputer").font(LBFont.bodyEmphasis).foregroundStyle(LB.ink)
-                        Text("Scan the one-use QR from Connect iPhone on your Mac, check the backend, then request the connection. No desktop password is needed.")
+                        Text("Scan the one-use QR from Settings → Devices → Connect iPhone on your Mac or in Lemon Bot on the web, check the backend, then request the connection. No desktop password is needed.")
                             .font(LBFont.rowSubtitle).foregroundStyle(LB.muted).fixedSize(horizontal: false, vertical: true)
                         Button("Reconnect to your desktop") { showPairing = true }.buttonStyle(.lemonPrimary)
                     }.padding(.vertical, 6)
