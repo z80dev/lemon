@@ -176,6 +176,22 @@ private final class OwnerPairingCredentials: AccountCredentialStore {
         consumed.status = "consumed"
         XCTAssertNil(OwnerPairingProgress.activeLink(link, pairing: consumed, verifiedOrigin: receipt.backendUrl, now: now))
     }
+    func testSinglePairActionRequiresLiveRequestShowingExactDeviceAndSixDigitCode() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let live = pairing(status: "pending_approval", expiresAt: 1_100_000)
+        XCTAssertTrue(OwnerPairingProgress.canConfirmAndPair(live, now: now))
+        XCTAssertFalse(OwnerPairingProgress.canConfirmAndPair(live, now: Date(timeIntervalSince1970: 1_100)))
+        for status in ["waiting", "approved", "consumed", "denied", "expired", "revoked"] {
+            var other = live; other.status = status
+            XCTAssertFalse(OwnerPairingProgress.canConfirmAndPair(other, now: now), status)
+        }
+        var noDevice = live; noDevice.deviceName = "  "
+        XCTAssertFalse(OwnerPairingProgress.canConfirmAndPair(noDevice, now: now))
+        for code in [nil, "12345", "1234567", "12345a", "١٢٣٤٥٦"] as [String?] {
+            var bad = live; bad.verificationCode = code
+            XCTAssertFalse(OwnerPairingProgress.canConfirmAndPair(bad, now: now), code ?? "nil")
+        }
+    }
     func testExplicitApprovalUsesExactCodeAndRevisionThenReadsCompletionWithoutReplay() async throws {
         let (store, _) = try store()
         var request = pairing(status: "pending_approval"), approvalCount = 0

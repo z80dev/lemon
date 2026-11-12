@@ -68,7 +68,7 @@ public struct PhonePairingView: View {
                             Text("This device: \(deviceName)").textSelection(.enabled)
                         }
                         Text(code).font(.largeTitle.monospaced()).textSelection(.enabled).privacySensitive()
-                        Text("Compare this exact six-digit code and device name with the request on your desktop. Approve this device there only if both match; deny any mismatch.")
+                        Text("On your desktop, compare this six-digit code and device name. Click “Codes match — Pair iPhone” there only if both match exactly; otherwise choose Deny.")
                     }
                 }
             }
