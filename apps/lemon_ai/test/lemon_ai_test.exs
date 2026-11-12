@@ -263,7 +263,8 @@ defmodule AiTest do
       assert_receive {:received_opts,
                       %StreamOptions{
                         temperature: 0.5,
-                        stream_timeout: 300_000,
+                        stream_timeout: 1_800_000,
+                        stream_idle_timeout: 300_000,
                         headers: %{},
                         thinking_budgets: %{}
                       }},
@@ -272,7 +273,7 @@ defmodule AiTest do
       EventStream.cancel(stream, :test_cleanup)
     end
 
-    test "propagates stream_timeout to providers" do
+    test "propagates both stream timeouts to providers and dispatch tracking" do
       ProviderRegistry.register(:stream_timeout_test, StreamTimeoutProvider)
       on_exit(fn -> ProviderRegistry.unregister(:stream_timeout_test) end)
 
@@ -286,9 +287,16 @@ defmodule AiTest do
 
       context = Context.new()
 
-      {:ok, stream} = LemonAi.stream(model, context, %{stream_timeout: 12_345})
+      {:ok, stream} =
+        LemonAi.stream(model, context, %{stream_timeout: 12_345, stream_idle_timeout: 678})
 
-      assert_receive {:received_opts, %StreamOptions{stream_timeout: 12_345}}, 1000
+      assert_receive {:received_opts,
+                      %StreamOptions{stream_timeout: 12_345, stream_idle_timeout: 678}},
+                     1000
+
+      state = :sys.get_state(stream)
+      assert state.timeout == 12_345
+      assert state.idle_timeout == 678
 
       EventStream.cancel(stream, :test_cleanup)
     end

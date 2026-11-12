@@ -24,6 +24,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   Rate/concurrency throttles wait at least 10 seconds plus jitter and honor
   server hints; quota exhaustion fails fast with reset details. Idle stream
   timeouts consume the same budget, while abort interrupts retry backoff.
+- Provider response options retain `stream_idle_timeout` (300,000 ms silence)
+  alongside `stream_timeout` (1,800,000 ms hard ceiling). Standalone event streams
+  reset idle expiry on every event; whole-run streams disable both limits so
+  long-running tools do not cancel a healthy run.
+
 - Tool registrations expose explicit `{name, module, native_process_ownership}`
   provenance. Unknown contributed tools durably fence module loading,
   construction and execution when native evaluation tracking is enabled;

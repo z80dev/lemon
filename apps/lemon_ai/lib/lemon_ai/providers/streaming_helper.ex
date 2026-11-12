@@ -11,7 +11,8 @@ defmodule LemonAi.Providers.StreamingHelper do
   alias LemonAi.EventStream
   alias LemonAi.Types.AssistantMessage
 
-  @default_stream_timeout 300_000
+  @default_stream_timeout 1_800_000
+  @default_stream_idle_timeout 300_000
   @default_max_queue 10_000
 
   @doc """
@@ -28,7 +29,8 @@ defmodule LemonAi.Providers.StreamingHelper do
       EventStream.start_link(
         owner: owner,
         max_queue: @default_max_queue,
-        timeout: stream_timeout
+        timeout: stream_timeout,
+        idle_timeout: opts.stream_idle_timeout || @default_stream_idle_timeout
       )
 
     {:ok, task_pid} =

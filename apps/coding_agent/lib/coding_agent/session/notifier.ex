@@ -15,7 +15,10 @@ defmodule CodingAgent.Session.Notifier do
         overflow_event:
           {:session_event, state.session_manager.header.id,
            {:stream_resync, %{reason: :overflow}}},
-        timeout: timeout
+        timeout: timeout,
+        # This is a session subscription, not a provider response. Quiet sessions
+        # and tools may outlive the provider inactivity window.
+        idle_timeout: :infinity
       )
 
     mon_ref = Process.monitor(pid)

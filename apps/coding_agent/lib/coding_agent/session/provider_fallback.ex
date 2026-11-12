@@ -86,9 +86,10 @@ defmodule CodingAgent.Session.ProviderFallback do
     # credential attempts share one turn, so a fixed deadline would kill a
     # healthy committed fallback just because earlier attempts were slow.
     # Per-attempt liveness is enforced by each inner provider stream's own
-    # stream_timeout, and pre-commit {:canceled, :timeout} terminals walk the
-    # candidate chain (see failover_action/1 below).
-    {:ok, output_stream} = LemonAi.EventStream.start_link(timeout: :infinity)
+    # hard and idle timeouts. Pre-commit timeout terminals walk the candidate
+    # chain (see failover_action/1 below).
+    {:ok, output_stream} =
+      LemonAi.EventStream.start_link(timeout: :infinity, idle_timeout: :infinity)
 
     {:ok, task_pid} =
       Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->

@@ -788,7 +788,8 @@ defmodule LemonAgent.TypesPropertyTest do
       assert opts.headers == %{}
       assert is_nil(opts.reasoning)
       assert opts.thinking_budgets == %{}
-      assert opts.stream_timeout == 300_000
+      assert opts.stream_timeout == 1_800_000
+      assert opts.stream_idle_timeout == 300_000
       assert is_nil(opts.tool_choice)
     end
 

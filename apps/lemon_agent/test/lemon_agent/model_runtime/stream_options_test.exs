@@ -57,6 +57,21 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
     %{cwd: tmp_home}
   end
 
+  test "caller config maps retain both stream timeouts when resolved", %{cwd: cwd} do
+    model = %Model{provider: :openai, api: :openai_responses, id: "test", name: "Test"}
+
+    opts =
+      LemonAgent.ModelRuntime.StreamOptions.build_stream_options(
+        model,
+        %{},
+        %{"stream_timeout" => 1_234, "stream_idle_timeout" => 567},
+        cwd
+      )
+
+    assert opts.stream_timeout == 1_234
+    assert opts.stream_idle_timeout == 567
+  end
+
   test "provider switch sanitation removes credentials and non-portable effort settings" do
     options = %LemonAi.Types.StreamOptions{
       temperature: 0.2,
@@ -65,6 +80,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
       session_id: "session",
       cwd: "/fake/workspace",
       stream_timeout: 123,
+      stream_idle_timeout: 45,
       tool_choice: :auto,
       api_key: "fake-key",
       api_key_authoritative: true,
@@ -100,6 +116,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
     assert clean.thinking_budgets == %{"medium" => 8_000, low: 0, high: 16_000}
     assert clean.max_tokens == 321
     assert clean.stream_timeout == 123
+    assert clean.stream_idle_timeout == 45
   end
 
   test "provider switch sanitation normalizes maps without retaining string credentials" do

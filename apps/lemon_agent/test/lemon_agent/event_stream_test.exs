@@ -5,6 +5,38 @@ defmodule LemonAgent.EventStreamTest do
   alias LemonAgent.EventStream
   alias LemonAgent.Test.Mocks
 
+  describe "inactivity timeout" do
+    test "every event resets idle expiry and stale timer messages are ignored" do
+      {:ok, stream} = EventStream.start_link(timeout: :infinity, idle_timeout: 1_000)
+
+      for event <- [{:thinking, "x"}, {:text_delta, "x"}, {:tool_call_delta, "x"}, :heartbeat] do
+        old_ref = :sys.get_state(stream).idle_timeout_ref
+        assert :ok = EventStream.push(stream, event)
+        refute :sys.get_state(stream).idle_timeout_ref == old_ref
+        send(stream, {:timeout, old_ref, :stream_idle_timeout})
+      end
+
+      ref = :sys.get_state(stream).idle_timeout_ref
+      Process.send_after(stream, {:timeout, ref, :stream_idle_timeout}, 10)
+      assert EventStream.result(stream) == {:error, {:canceled, :stream_idle_timeout}}
+    end
+
+    test "hard timeout remains independent of activity" do
+      {:ok, stream} = EventStream.start_link(timeout: 80, idle_timeout: 1_000)
+      assert :ok = EventStream.push(stream, :heartbeat)
+      assert EventStream.result(stream) == {:error, {:canceled, :timeout}}
+    end
+
+    test "completion disarms idle expiry and ignores an already queued timer" do
+      {:ok, stream} = EventStream.start_link(timeout: :infinity, idle_timeout: 1_000)
+      ref = :sys.get_state(stream).idle_timeout_ref
+      EventStream.complete(stream, [])
+      send(stream, {:timeout, ref, :stream_idle_timeout})
+      assert EventStream.result(stream) == {:ok, []}
+      assert Process.read_timer(ref) == false
+    end
+  end
+
   # ============================================================================
   # Pushing Events
   # ============================================================================

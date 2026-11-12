@@ -364,7 +364,7 @@ defmodule LemonAi.CallDispatcherTest do
       Application.put_env(
         :lemon_ai,
         CallDispatcher,
-        Keyword.put(previous_dispatcher_config, :stream_result_timeout_ms, 500)
+        Keyword.put(previous_dispatcher_config, :stream_timeout, 100)
       )
 
       on_exit(fn ->
@@ -377,6 +377,9 @@ defmodule LemonAi.CallDispatcherTest do
         end)
 
       wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
+
+      assert EventStream.result(stream, 1_000) ==
+               {:error, {:canceled, :dispatcher_stream_timeout}}
 
       wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end, 5_000)
 

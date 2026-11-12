@@ -128,9 +128,9 @@ defmodule LemonAgent.Loop do
   def agent_loop(prompts, context, config, signal, stream_fn, owner) do
     {:ok, stream} =
       if owner do
-        EventStream.start_link(owner: owner, timeout: :infinity)
+        EventStream.start_link(owner: owner, timeout: :infinity, idle_timeout: :infinity)
       else
-        EventStream.start_link(timeout: :infinity)
+        EventStream.start_link(timeout: :infinity, idle_timeout: :infinity)
       end
 
     # Run the loop in a supervised task
@@ -241,9 +241,9 @@ defmodule LemonAgent.Loop do
 
     {:ok, stream} =
       if owner do
-        EventStream.start_link(owner: owner, timeout: :infinity)
+        EventStream.start_link(owner: owner, timeout: :infinity, idle_timeout: :infinity)
       else
-        EventStream.start_link(timeout: :infinity)
+        EventStream.start_link(timeout: :infinity, idle_timeout: :infinity)
       end
 
     case Task.Supervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->

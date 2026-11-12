@@ -4,6 +4,15 @@ defmodule CodingAgent.Session.NotifierBackpressureTest do
   alias CodingAgent.Session.Notifier
   alias LemonAgent.EventStream
 
+  test "quiet session subscriptions do not inherit a provider inactivity timer" do
+    {:ok, stream, _state} = Notifier.subscribe_stream(state(), self(), timeout: 5_000)
+    timers = :sys.get_state(stream)
+    assert timers.idle_timeout == :infinity
+    assert timers.idle_timeout_ref == nil
+    assert Process.read_timer(timers.timeout_ref) > 0
+    EventStream.cancel(stream, :test_cleanup)
+  end
+
   test "noisy tool progress fences a slow direct subscriber but reserves terminal truth once" do
     consumer = frozen_consumer()
     {_unsubscribe, state} = Notifier.subscribe_direct(state(), consumer, self(), max_queue: 8)

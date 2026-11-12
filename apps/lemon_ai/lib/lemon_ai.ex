@@ -68,6 +68,9 @@ defmodule LemonAi do
     * `:api_key` - Override the default API key
     * `:headers` - Additional HTTP headers
     * `:reasoning` - Thinking level (:none, :minimal, :low, :medium, :high, :xhigh, :max)
+    * `:stream_idle_timeout` - Maximum silence between events (default 300,000 ms)
+    * `:stream_timeout` - Hard response ceiling (default 1,800,000 ms).
+      Either timeout accepts `:infinity`.
 
   ## Examples
 
@@ -80,13 +83,16 @@ defmodule LemonAi do
   @spec stream(Model.t(), Context.t(), StreamOptions.t() | map()) ::
           {:ok, EventStream.t()} | {:error, term()}
   def stream(%Model{} = model, %Context{} = context, opts \\ %{}) do
+    dispatch_opts = stream_timeout_options(opts)
     opts = normalize_options(opts)
 
     case ProviderRegistry.get(model.api) do
       {:ok, provider_module} ->
-        LemonAi.CallDispatcher.dispatch(model.provider, fn ->
-          provider_module.stream(model, context, opts)
-        end)
+        LemonAi.CallDispatcher.dispatch(
+          model.provider,
+          fn -> provider_module.stream(model, context, opts) end,
+          dispatch_opts
+        )
 
       {:error, :not_found} ->
         {:error, {:unknown_api, model.api}}
@@ -251,6 +257,18 @@ defmodule LemonAi do
   # ============================================================================
   # Private Helpers
   # ============================================================================
+
+  defp stream_timeout_options(%StreamOptions{} = opts) do
+    stream_timeout_options(Map.from_struct(opts))
+  end
+
+  defp stream_timeout_options(opts) when is_map(opts) do
+    opts |> Map.take([:stream_timeout, :stream_idle_timeout]) |> Map.to_list()
+  end
+
+  defp stream_timeout_options(opts) when is_list(opts) do
+    Keyword.take(opts, [:stream_timeout, :stream_idle_timeout])
+  end
 
   defp normalize_options(%StreamOptions{} = opts), do: opts
 
