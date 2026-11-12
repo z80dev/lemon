@@ -27,6 +27,8 @@ public struct ConversationView: View {
     @State private var unreadFromSeq: Int?
     @State private var following = TranscriptFollow()
     @State private var keepEntryID: ID?
+    /// iOS 17 and macOS 14: the transcript's bottom safe-area inset (keyboard, composer), which content measurement cannot see.
+    @State private var scrollBottomInset: CGFloat = 0
     @State private var hasNewBelow = false
     @State private var settled = false
     @State private var toast: StatusToast?
@@ -155,7 +157,7 @@ public struct ConversationView: View {
         let last = entries.last
         let tail = TailSignature(rowID: rows.last?.id, revision: last?.revision ?? 0, textCount: last?.text?.count ?? 0, typing: typing)
         ScrollViewReader { proxy in
-            trackingScroll(ScrollView {
+            trackedScrollView {
                 LazyVStack(spacing: 0) {
                     if olderCursor != nil {
                         Button("Load older messages") {
@@ -176,8 +178,6 @@ public struct ConversationView: View {
                             .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .bottom)))
                     }
                     Color.clear.frame(height: 1).id(Self.bottomID)
-                        .onAppear { if !TranscriptFollow.tracksScrollGeometry { updateFollowing { $0.observeBottomMarker(visible: true) } } }
-                        .onDisappear { if !TranscriptFollow.tracksScrollGeometry { updateFollowing { $0.observeBottomMarker(visible: false) } } }
                 }
                 .frame(maxWidth: LBMetric.transcriptMaxWidth)
                 .padding(.horizontal, 20).padding(.top, Self.topInset)
@@ -189,7 +189,7 @@ public struct ConversationView: View {
                 .frame(maxWidth: .infinity)
                 // Animate only arrivals at the tail; prepending older history must not slide the whole stack.
                 .animation(settled && !reduceMotion ? LBMotion.spring : nil, value: [rows.last?.id ?? "", typing ? "typing" : ""])
-            })
+            }
             #if os(iOS)
             .scrollDismissesKeyboard(.interactively)
             .onGeometryChange(for: CGFloat.self) { $0.size.height - $0.safeAreaInsets.top - $0.safeAreaInsets.bottom } action: { _ in
@@ -252,17 +252,25 @@ public struct ConversationView: View {
         }
     }
 
-    /// Scroll geometry and phase (iOS 18, macOS 15) tell reading history apart from content growth and keyboard resizing.
-    /// Earlier systems fall back to the lazy bottom marker.
-    @ViewBuilder private func trackingScroll(_ scroll: some View) -> some View {
+    /// Scroll geometry tells reading history apart from content growth and keyboard resizing. iOS 18 and macOS 15 report it,
+    /// with scroll phase, directly; earlier systems measure the content against the scroll view's bounds and bottom inset.
+    @ViewBuilder private func trackedScrollView<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         if #available(iOS 18, macOS 15, *) {
-            scroll
+            ScrollView { content() }
                 .onScrollGeometryChange(for: TranscriptFollow.Edge.self) { TranscriptFollow.Edge($0) } action: { old, new in
                     updateFollowing { $0.observe(from: old, to: new) }
                 }
                 .onScrollPhaseChange { _, phase in updateFollowing { $0.observeScrolling(phase.isUserDriven) } }
         } else {
-            scroll
+            ScrollView {
+                content().onGeometryChange(for: TranscriptFollow.Edge.self) { proxy in
+                    TranscriptFollow.Edge(contentHeight: proxy.size.height, scrollBounds: proxy.bounds(of: .scrollView) ?? CGRect(origin: .zero, size: proxy.size))
+                } action: { old, new in
+                    let inset = scrollBottomInset
+                    updateFollowing { $0.observe(from: old.covered(byBottomInset: inset), to: new.covered(byBottomInset: inset)) }
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { scrollBottomInset = $0 }
         }
     }
 
@@ -282,11 +290,11 @@ public struct ConversationView: View {
     /// otherwise a reader reading history or dragging is never moved. Only new content marks "New messages".
     private func follow(_ proxy: ScrollViewProxy, animated: Bool, force: Bool = false, newContent: Bool = true) {
         if force { updateFollowing { $0.pin() } }
-        guard force || following.shouldFollow() else { if newContent && settled { hasNewBelow = true }; return }
+        guard force || following.shouldFollow else { if newContent && settled { hasNewBelow = true }; return }
         let pendingJump = jumpTick
         Task { @MainActor in
             await Task.yield()
-            guard jumpTick == pendingJump, force || following.shouldFollow() else { return }
+            guard jumpTick == pendingJump, force || following.shouldFollow else { return }
             if animated && settled && !reduceMotion { withAnimation(LBMotion.spring) { proxy.scrollTo(Self.bottomID, anchor: .bottom) } }
             else { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
         }
