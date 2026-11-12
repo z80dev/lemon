@@ -6,6 +6,7 @@ import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { fixtureBlock, fixtureByName } from "../src/dev/fixtures/tool-fixtures.ts";
 import type { ToolBlock } from "../src/store/transcript-model.ts";
 import { fileTarget, toolLocation } from "../src/terminal/links.ts";
+import { diffNode } from "../src/terminal/native-tool-view.ts";
 import { accordionSettings } from "../src/ui/components/accordion.ts";
 import { ToolCardComponent } from "../src/ui/components/tool-card.ts";
 import { ToolShelfComponent } from "../src/ui/components/tool-shelf.ts";
@@ -264,6 +265,40 @@ test("grep output groups matches by file, marking match lines and linking each f
 	const code = nodes(files[0]!).find((n) => n.k === "code");
 	expect(code?.p).toMatchObject({ start: 11, marks: [{ line: 12, tone: "accent" }] });
 	expect(JSON.stringify(files[0])).toContain(String(fileTarget("src/store/a.ts", 12)));
+});
+
+test("gapped grep matches keep the file grammar and one horizontally scrolling code block", () => {
+	const native = new ToolCardComponent(
+		settled("grep", {
+			args: { pattern: "entry", path: "/repo" },
+			result: "Found 2 matches.\n\nkernel.ptx:2: .entry first()\nkernel.ptx:17: .entry second()",
+			details: { match_count: 2 },
+		}),
+	).describe();
+	const code = nodes(native).filter((child) => child.k === "code");
+	expect(code).toHaveLength(1);
+	expect(code[0]?.p).toMatchObject({ path: "kernel.ptx", nums: [2, 17] });
+	expect(prop(code[0], "lang")).toBeUndefined();
+});
+
+test("read, write and diff send the file path without overriding Tern's grammar", () => {
+	for (const tool of [
+		settled("read", {
+			args: { path: "kernel.ptx" },
+			result: "7: .entry main()",
+			details: { start_line: 7 },
+		}),
+		settled("write", { args: { path: "kernel.ptx", content: ".entry main()" } }),
+	]) {
+		const code = nodes(new ToolCardComponent(tool).describe()).find((child) => child.k === "code");
+		expect(prop(code, "path")).toBe("kernel.ptx");
+		expect(prop(code, "lang")).toBeUndefined();
+	}
+	for (const rows of ["-7|old\n+7|new", "-old\n+new"]) {
+		const diff = diffNode(rows, "kernel.ptx");
+		expect(prop(diff, "path")).toBe("kernel.ptx");
+		expect(prop(diff, "lang")).toBeUndefined();
+	}
 });
 
 test("Tern's disclosure opens a native card; nested disclosures keep their own state", () => {

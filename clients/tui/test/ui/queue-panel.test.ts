@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { setNativeButtons } from "@oh-my-pi/pi-tui/native/state";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import type { QueueItem } from "../../src/store/queue-store.ts";
 import { QUEUE_WINDOW, QueuePanelComponent } from "../../src/ui/components/queue-panel.ts";
@@ -11,6 +12,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	setNativeButtons(false);
 	resetTheme();
 	invalidateThemeAdapters();
 });
@@ -135,19 +137,32 @@ describe("QueuePanelComponent", () => {
 });
 
 describe("native description", () => {
-	test("an Edit click pulls back the clicked item; offline items offer no Edit", () => {
-		const list: QueueItem[] = [
-			...items("first", "second"),
-			{ id: "offline:1", text: "parked", state: "waiting-connection", at: 0 },
-		];
-		const { panel, edited } = build(list);
-		const pills = panel.describe().c ?? [];
-		const edits = pills.map((pill) =>
-			"k" in pill ? (pill.c ?? []).some((child) => "key" in child && child.key === "edit") : false,
-		);
-		expect(edits).toEqual([true, true, false]);
-		panel.handleNativeEvent({ type: "action", key: "q-1/edit", act: "queue.edit", mods: [] });
-		expect(edited.map((item) => item.id)).toEqual(["q-1"]);
-		expect(panel.describe()).toBe(panel.describe());
-	});
+	test.each([false, true])(
+		"Edit routes the clicked item with native buttons=%s; offline items offer none",
+		(buttons) => {
+			setNativeButtons(buttons);
+			const list: QueueItem[] = [
+				...items("first", "second"),
+				{ id: "offline:1", text: "parked", state: "waiting-connection", at: 0 },
+			];
+			const { panel, edited } = build(list);
+			const pills = panel.describe().c ?? [];
+			const edits = pills.map((pill) =>
+				"k" in pill
+					? (pill.c ?? []).some((child) => "key" in child && child.key === "edit")
+					: false,
+			);
+			expect(edits).toEqual([true, true, false]);
+			const edit = pills[0];
+			if (!edit || !("k" in edit)) throw new Error("expected queue item");
+			const control = edit.c?.find((child) => "key" in child && child.key === "edit");
+			expect(control).toMatchObject({
+				k: buttons ? "button" : "row",
+				p: { role: "omp.queue.edit", actions: { click: "queue.edit" } },
+			});
+			panel.handleNativeEvent({ type: "action", key: "q-1/edit", act: "queue.edit", mods: [] });
+			expect(edited.map((item) => item.id)).toEqual(["q-1"]);
+			expect(panel.describe()).toBe(panel.describe());
+		},
+	);
 });

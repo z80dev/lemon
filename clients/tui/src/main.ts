@@ -17,7 +17,7 @@ import { consumeForkHandoff } from "./terminal/fork.ts";
 declare const LEMON_TUI_VERSION: string | undefined;
 
 const FALLBACK_VERSION = "2026.8.0";
-const MIN_BUN_VERSION = "1.3.14";
+const MIN_BUN_VERSION = "1.4.4";
 
 export interface CliOptions {
 	url: string;

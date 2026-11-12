@@ -4,8 +4,10 @@
  */
 
 import { hasTranscriptActions } from "@oh-my-pi/pi-tui/chat/transcript-actions";
-import { card, kbd, node, span, text } from "@oh-my-pi/pi-tui/native/describe";
+import type { KeyName } from "@oh-my-pi/pi-tui/key-hint-format";
+import { card, node, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import { actionButton } from "@oh-my-pi/pi-tui/native/overlay";
 
 /** One control in an error frame's action row; the click comes back as `act`. */
 export interface ErrorFrameAction {
@@ -13,7 +15,7 @@ export interface ErrorFrameAction {
 	readonly label: string;
 	readonly title: string;
 	/** Key id of the keyboard path the control mirrors, drawn as a keycap. */
-	readonly keys?: string;
+	readonly keys?: KeyName;
 }
 
 /**
@@ -35,14 +37,11 @@ export function describeErrorFrame(
 			node(
 				"row",
 				{ gap: "sm", role: "omp.error.actions" },
-				actions.map(({ act, label, title, keys }) =>
-					node(
-						"row",
-						{ gap: "xs", role: "omp.error.action", actions: { click: act }, title },
-						keys ? [text(label), kbd(keys)] : [text(label)],
-						act,
-					),
-				),
+				actions.map(({ act, label, title, keys }) => {
+					const button = actionButton(label, act, { title, keys });
+					button.p!.role = "omp.error.action";
+					return button;
+				}),
 				"actions",
 			),
 		);
