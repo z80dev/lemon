@@ -6,20 +6,18 @@ summary: "Workspace template for AGENTS.md"
 
 This folder is home. Treat it that way.
 
-## First Run
+## Assistant Chat Bootstrap
 
-If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out who you are, then delete it.
+This bootstrap applies only to main assistant/chat sessions, not cwd-scoped coding
+sessions, one-shot coding runs, or delegated subagents.
 
-## Every Session
+On the first assistant chat, if `BOOTSTRAP.md` exists, follow it to establish your
+identity, then delete it.
 
-Before doing anything else:
-
-1. Read `SOUL.md` - this is who you are
-2. Read `USER.md` - this is who you're helping
-3. **If in MAIN SESSION** (direct chat with your human): Read `MEMORY.md` first (this is your curated index)
-4. In MAIN SESSION, use `recall` to search relevant past conversations and notes under `memory/` when needed
-
-Don't ask permission. Just do it.
+For assistant chat sessions, use the injected `SOUL.md` persona and `USER.md`
+preferences. In a direct main chat, use the injected `MEMORY.md` index and `recall`
+for relevant past conversations and notes under `memory/` when needed. These files
+are already injected; do not reread them merely to bootstrap the session.
 
 ## Memory
 

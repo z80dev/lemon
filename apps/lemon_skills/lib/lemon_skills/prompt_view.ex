@@ -50,6 +50,8 @@ defmodule LemonSkills.PromptView do
   ## Options
 
   - `:cwd` — project working directory
+  - `:description_max_chars` — compact discovery descriptions (default 1,024);
+    full metadata and instructions remain available through `read_skill`.
   """
   @spec render_for_prompt(String.t() | nil, keyword()) :: String.t()
   def render_for_prompt(cwd, opts \\ []) do
@@ -62,7 +64,7 @@ defmodule LemonSkills.PromptView do
     if views == [] do
       ""
     else
-      block = render_skill_list(views)
+      block = render_skill_list(views, opts)
       emit_prompt_render(:available, views, all_opts)
 
       """
@@ -112,13 +114,14 @@ defmodule LemonSkills.PromptView do
 
   Returns an empty string when `views` is empty.
   """
-  @spec render_skill_list([SkillView.t()]) :: String.t()
-  def render_skill_list([]), do: ""
+  @spec render_skill_list([SkillView.t()], keyword()) :: String.t()
+  def render_skill_list(views, opts \\ [])
+  def render_skill_list([], _opts), do: ""
 
-  def render_skill_list(views) when is_list(views) do
+  def render_skill_list(views, opts) when is_list(views) do
     inner =
       views
-      |> Enum.map(&render_entry/1)
+      |> Enum.map(&render_entry(&1, opts))
       |> Enum.join("\n")
 
     "<available_skills>\n#{inner}\n</available_skills>"
@@ -127,12 +130,16 @@ defmodule LemonSkills.PromptView do
   @doc """
   Render a single `<skill>` XML element from a `SkillView`.
   """
-  @spec render_entry(SkillView.t()) :: String.t()
-  def render_entry(%SkillView{} = view) do
+  @spec render_entry(SkillView.t(), keyword()) :: String.t()
+  def render_entry(view, opts \\ [])
+
+  def render_entry(%SkillView{} = view, opts) do
     readiness = if view.activation_state == :not_ready, do: "<not_ready/>", else: ""
+    description_limit = Keyword.get(opts, :description_max_chars, @field_limits.description)
+    description = safe_text(view.description || "", description_limit)
 
     "  <skill><key>#{escape(view.key, :key)}</key>" <>
-      "<description>#{escape(view.description, :description)}</description>#{readiness}</skill>"
+      "<description>#{escape(description, :description)}</description>#{readiness}</skill>"
   end
 
   # ============================================================================

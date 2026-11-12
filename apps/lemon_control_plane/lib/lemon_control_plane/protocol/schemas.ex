@@ -199,7 +199,9 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "sessionKey" => :string,
         "agentId" => :string,
         "queueMode" => :string,
-        "model" => :string
+        "model" => :string,
+        "session_mode" => :string,
+        "persona" => :boolean
       }
     },
     "agent.wait" => %{

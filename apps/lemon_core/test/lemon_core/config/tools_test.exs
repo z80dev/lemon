@@ -570,6 +570,14 @@ defmodule LemonCore.Config.ToolsTest do
   end
 
   describe "tool disclosure configuration" do
+    test "auto defaults preserve an explicit legacy opt-out" do
+      assert Tools.resolve(%{}).disclosure.profile == "auto"
+      settings = %{"tools" => %{"disclosure" => %{"profile" => "legacy"}}}
+      assert Tools.resolve(settings).disclosure.profile == "legacy"
+      System.put_env("LEMON_TOOL_DISCLOSURE_PROFILE", "legacy")
+      assert Tools.resolve(%{}).disclosure.profile == "legacy"
+    end
+
     test "environment variables override disclosure settings" do
       System.put_env("LEMON_TOOL_DISCLOSURE_ENABLED", "false")
       System.put_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS", "9999")

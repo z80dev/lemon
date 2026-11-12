@@ -40,6 +40,15 @@ This directory is the assistant's persistent home for identity and long-lived no
 It is distinct from the active project root / `cwd` used for repo-local config discovery,
 shell execution, and session persistence.
 
+Assistant-home bootstrap is injected by default only in assistant/chat sessions.
+Cwd-scoped coding sessions (local TUI, ACP, CLI print/run, or direct native
+sessions without a chat key) omit it, including assistant-home `AGENTS.md`, so
+legacy persona read imperatives cannot leak into coding runs. Repository
+instructions and rules are unaffected. Canonical main and messaging keys infer
+chat mode; explicit `session_mode: :coding|:chat` overrides inference.
+`persona: false` (`lemon -p --no-persona`) suppresses bootstrap explicitly;
+`persona: true` opts in. The choice persists across prompt refresh.
+
 Canonical files:
 
 - `AGENTS.md`

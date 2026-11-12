@@ -190,6 +190,7 @@ defmodule CodingAgent.SessionTest do
       [
         cwd: session_cwd(),
         workspace_dir: workspace_dir(),
+        session_mode: :chat,
         tools: [],
         extension_inventory: {[], []},
         mcp_tools: [],

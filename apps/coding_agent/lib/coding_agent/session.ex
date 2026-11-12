@@ -278,6 +278,11 @@ defmodule CodingAgent.Session do
     * `:profile_instructions` - JSON-safe bootstrap filename/text snapshot. Overrides
       matching assistant-home instruction files for this session without writing
       destination files; local memory and credentials are not transferred.
+    * `:session_mode` - `:coding` for cwd-scoped coding (the default), or `:chat`
+      for assistant context. Canonical main and messaging keys infer `:chat`;
+      local TUI/ACP/CLI sessions infer `:coding`.
+    * `:persona` - Include assistant-home bootstrap files. Defaults to false for
+      coding and true for chat; false explicitly suppresses bootstrap in either.
     * `:prompt_template` - Name of a prompt template to load via ResourceLoader.
       Templates are searched in `.lemon/prompts/`, `.claude/prompts/`, and
       `~/.lemon/agent/prompts/`.
@@ -2190,6 +2195,8 @@ defmodule CodingAgent.Session do
              contributed_sections: system_sections,
              tool_names: Enum.map(state.tools || [], & &1.name),
              profile_instructions: state.profile_instructions,
+             session_mode: Keyword.get(state.tool_opts, :session_mode, :chat),
+             persona: Keyword.get(state.tool_opts, :persona, true),
              environment: state.prompt_environment
            }
            |> Map.merge(trusted_memory_context(state))

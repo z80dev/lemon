@@ -145,6 +145,28 @@ defmodule CodingAgent.Session.PromptComposer do
   defp top_level(_category, _label, text) when text in [nil, ""], do: []
   defp top_level(category, label, text), do: [%{category: category, label: label, text: text}]
 
+  @doc """
+  Classify native sessions without treating every session with a cwd as chat.
+  Main/profile and messaging sessions retain assistant context; local TUI, ACP,
+  CLI and direct cwd-scoped sessions default to coding. Explicit mode wins.
+  """
+  def resolve_session_mode(opts) do
+    case Keyword.get(opts, :session_mode) do
+      mode when mode in [:coding, "coding"] ->
+        :coding
+
+      mode when mode in [:chat, "chat"] ->
+        :chat
+
+      _ ->
+        case LemonCore.SessionKey.parse(Keyword.get(opts, :session_key) || "") do
+          %{kind: :main} -> :chat
+          %{channel_id: channel} when channel not in ["tui", "acp", "cli"] -> :chat
+          _ -> :coding
+        end
+    end
+  end
+
   # ============================================================================
   # Session Scope Resolution
   # ============================================================================

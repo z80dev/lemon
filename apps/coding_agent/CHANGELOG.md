@@ -4,6 +4,12 @@
 
 ### Added
 
+- Cwd-scoped coding sessions now omit assistant-home persona bootstrap and
+  assistant-only memory/learning reminders. Main/chat sessions retain them;
+  native `session_mode` and `persona` options survive prompt refresh.
+- Coding sessions default to coding tool disclosure, with existing explicit
+  config/env/session opt-outs. Skill discovery descriptions are compact (96
+  characters); full metadata and instructions remain available via `read_skill`.
 - Per-Bot folder reads can skip human approval only when effective policy sets
   `workspace_read_exempt == true` and the trusted worker folder, bound execution
   scope and canonical `ProfileStore.paths(profile_id)["files"]` resolve to the
