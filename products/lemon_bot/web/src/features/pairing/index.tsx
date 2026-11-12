@@ -98,7 +98,7 @@ export function PairingScreen() {
     if (result.pairing.status === 'waiting' && result.pairing.expiresAtMs > Date.now()) {
       setIssued(result); setNotice('Scan this one-use QR with Lemon Bot on your iPhone, then compare the verification code below.');
     } else {
-      setIssued(null); setNotice(`${pairingLabels[result.pairing.status]}. Used or expired QR codes can’t be reused.`);
+      setIssued(null); setNotice(`${pairingLabels[result.pairing.status]}. Used or expired QR codes and links can’t be reused.`);
     }
   }
 
@@ -125,7 +125,7 @@ export function PairingScreen() {
       setError(failure);
       if (failure instanceof LemonBotError && failure.code === 'expired') {
         sessionStorage.removeItem(storageKey); intentRef.current = null; setIntent(null);
-        setNotice('This QR has expired. Create a new QR code to pair your iPhone.');
+        setNotice('This QR code and pairing link have expired. Create a new QR code to pair your iPhone.');
       }
     } finally { busyRef.current = false; setBusy(false); }
     void query.reload().catch(() => undefined);
@@ -172,7 +172,7 @@ export function PairingScreen() {
     <ErrorNotice error={error}/><ErrorNotice error={query.error}/>
     {notice && <p className="panel" role="status">{notice}</p>}
     {intent && !busy && <section className="error-notice stack" role="alert"><h2>{intent.kind === 'create' ? 'We couldn’t confirm the QR was created.' : 'We couldn’t confirm this change.'}</h2><p>Nothing was sent again or approved automatically. Check the current status before trying again.</p>{intent.kind === 'create' && <><p>You can check the QR you started during its original five-minute lifetime. This does not create another QR or extend its expiry.</p><button disabled={!online || busy} onClick={() => void recoverIssuance()}>Check the QR I started</button></>}<button disabled={query.loading} onClick={() => void query.reload().catch(() => undefined)}>Check status</button><details><summary>Details</summary><p>Reference: <code>{intent.clientNonce}</code>{intent.resourceId && <> · Resource: <code>{intent.resourceId}</code></>}</p><button onClick={() => void navigator.clipboard.writeText(intent.clientNonce)}>Copy reference</button></details></section>}
-    {issued && showQr && <section className="panel pairing-issued stack"><h2>On your iPhone, choose “Scan QR code”</h2><div className="pairing-qr"><QRCodeSVG value={issued.pairUrl} size={256} level="M" marginSize={4} title="Lemon Bot iPhone pairing QR code"/></div><dl><dt>Workspace</dt><dd>{issued.pairing.clusterName}</dd><dt>Lemon Bot address</dt><dd><code>{issued.pairing.backendUrl}</code></dd><dt>Expires</dt><dd>{formatTime(issued.pairing.expiresAtMs)} · {Math.max(0, Math.ceil((issued.pairing.expiresAtMs - now) / 1000))} seconds left</dd></dl>{loopback && <p className="error-notice">This address only works on this computer or the iOS Simulator, not a physical iPhone. Ask your administrator for a reachable HTTPS address.</p>}<p className="muted small">This QR code works once and expires after five minutes. Compare the code shown on both devices before approving.</p></section>}
+    {issued && showQr && <section className="panel pairing-issued stack"><h2>On your iPhone, choose “Scan QR code”</h2><div className="pairing-qr"><QRCodeSVG value={issued.pairUrl} size={256} level="M" marginSize={4} title="Lemon Bot iPhone pairing QR code"/></div><div className="stack pairing-link"><Field label="Pairing link"><input readOnly value={issued.pairUrl} aria-label="Pairing link"/></Field><button onClick={() => { if (issued.pairing.expiresAtMs <= Date.now()) { setIssued(null); setNotice('This QR code and pairing link have expired. Create a new one to pair.'); return; } void navigator.clipboard.writeText(issued.pairUrl).then(() => setNotice('Pairing link copied. Paste it into Lemon Bot on your iPhone.'), () => setNotice('Couldn’t copy the link. Select and copy it manually.')); }}>Copy link</button></div><dl><dt>Workspace</dt><dd>{issued.pairing.clusterName}</dd><dt>Lemon Bot address</dt><dd><code>{issued.pairing.backendUrl}</code></dd><dt>Expires</dt><dd>{formatTime(issued.pairing.expiresAtMs)} · {Math.max(0, Math.ceil((issued.pairing.expiresAtMs - now) / 1000))} seconds left</dd></dl>{loopback && <p className="error-notice">This address only works on this computer or the iOS Simulator, not a physical iPhone. Ask your administrator for a reachable HTTPS address.</p>}<p className="muted small">This QR code and pairing link are single-use and expire after five minutes. Compare the code shown on both devices before approving.</p></section>}
     {query.loading && !query.data && <Loading/>}
     {query.data && <section className="stack"><h2>Pairing requests</h2>{query.data.pairings.length ? query.data.pairings.map(pairing => <PairingRequest key={pairing.id} pairing={pairing} now={now} disabled={disabled} decide={decide} create={create}/>) : <EmptyState title="No pending pairing requests">Create a QR code, scan it in Lemon Bot for iOS, then return here to compare the code and approve your iPhone.</EmptyState>}</section>}
     {query.data && <section className="panel stack"><h2>Your iPhones</h2>{query.data.devices.filter(device => device.platform === 'ios').map(device => {
@@ -201,8 +201,8 @@ function PairingRequest({ pairing, now, disabled, decide, create }: { pairing: P
     </>}
     {pairing.status === 'waiting' && !expired && <p>The unused QR expires automatically. Once your iPhone requests connection, you can approve or deny that device.</p>}
     {pairing.status === 'approved' && <p>The device is approved. The phone must complete before this request expires; approval is not proof that the phone received its credential.</p>}
-    {pairing.status === 'consumed' && <p>The phone completed this pairing. Its device-bound session remains valid until revoked.</p>}
+    {pairing.status === 'consumed' && <p>This QR code and pairing link have been used and can’t be reused. The phone’s device-bound session remains valid until revoked.</p>}
     {pairing.status === 'denied' && <p>This request was denied and cannot connect.</p>}
-    {(expired || pairing.status === 'expired') && pairing.status !== 'consumed' && pairing.status !== 'denied' && <><p>This QR code has expired. Create a new one to pair.</p><button disabled={disabled} onClick={() => void create()}>Create a new QR code</button></>}
+    {(expired || pairing.status === 'expired') && pairing.status !== 'consumed' && pairing.status !== 'denied' && <><p>This QR code and pairing link have expired. Create a new one to pair.</p><button disabled={disabled} onClick={() => void create()}>Create a new QR code</button></>}
   </article>;
 }

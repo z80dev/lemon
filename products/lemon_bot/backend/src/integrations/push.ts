@@ -59,7 +59,7 @@ export async function validatePushRegistration(registration: P.PushRegistration,
   if (registration.kind === 'apns') {
     const topics = env.LEMON_BOT_APNS_TOPICS?.split(',').map(s => s.trim()).filter(Boolean) ?? [];
     const environments = env.LEMON_BOT_APNS_ENVIRONMENTS?.split(',').map(s => s.trim()) ?? ['sandbox', 'production'];
-    if (!/^[a-fA-F0-9]{64}$/.test(registration.token) || !APNS_TOPIC.test(registration.topic) || !topics.includes(registration.topic) || !environments.includes(registration.environment) || !['sandbox', 'production'].includes(registration.environment)) {
+    if (!/^(?:[a-fA-F0-9]{2}){32,256}$/.test(registration.token) || !APNS_TOPIC.test(registration.topic) || !topics.includes(registration.topic) || !environments.includes(registration.environment) || !['sandbox', 'production'].includes(registration.environment)) {
       process.stderr.write('APNs registration rejected: check token validity, LEMON_BOT_APNS_TOPICS and LEMON_BOT_APNS_ENVIRONMENTS.\n');
       fail('invalid_request', 'This device could not register for push notifications. Ask the operator to check the server’s Apple push setup.');
     }

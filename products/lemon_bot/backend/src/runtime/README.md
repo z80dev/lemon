@@ -15,7 +15,7 @@ Shutdown must unsubscribe runtime consumers, dispose terminal buffers, and close
 
 ## Fixed execution identity and authority
 
-A product Run, upstream run ID, session mapping and actual initiating Principal are persisted before chat dispatch. No dispatched mutation is automatically retried. A disconnect/deadline produces `outcome_unknown`, `retrySafe:false`, and reserved resource IDs. Definitive pre-dispatch rejections remain safe failures. Repeating a runtime nonce returns the reservation/receipt and rejects a different intent.
+A product Run, upstream run ID, session mapping and actual initiating Principal are persisted before chat dispatch. No dispatched mutation is automatically retried. A disconnect/deadline produces `outcome_unknown`, `retrySafe:false`, and reserved resource IDs. Definitive pre-dispatch rejections remain safe failures. After restart, a reserved/unknown run with no dispatch or admission is marked retry-safe failed (“Not sent”); Retry restores the draft for an explicit new-nonce send. Inert worker attachment uploads do not count as dispatch. Repeating a runtime nonce returns the reservation/receipt and rejects a different intent.
 
 Controller error `details` may be any JSON value. A scalar or array diagnostic rejects only its correlated call; it does not disconnect unrelated host reads. Only structured, allowlisted fields can establish classified no-effect evidence, and raw diagnostics never enter product errors.
 

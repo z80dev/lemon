@@ -167,3 +167,5 @@ allowlisted native-image diagnostic classifications. It never prints raw backend
 errors, private logs, setup codes, session tokens or filesystem paths.
 
 Live verification requires an enrolled machine and real provider configuration for the integrations being exercised.
+
+APNs registrations accept even-length hexadecimal device tokens from 64 to 512 characters; configured topic and environment restrictions still apply.
