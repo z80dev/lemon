@@ -41,7 +41,7 @@ calver_auto() {
 
   # Find the highest PATCH already used for this year.month in mix.exs
   local current
-  current=$(grep -E '^\s+version:' "$REPO_ROOT/mix.exs" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "0.0.0")
+  current=$(grep -E '^[[:space:]]+version:' "$REPO_ROOT/mix.exs" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "0.0.0")
   local cur_prefix cur_patch
   cur_prefix=$(echo "$current" | cut -d. -f1-2)
   cur_patch=$(echo "$current" | cut -d. -f3)
@@ -64,7 +64,17 @@ bump_mix() {
     return
   fi
 
-  sed -i "s/version: \"${old_ver}\"/version: \"${new_ver}\"/" "$file"
+  # Both BSD and GNU sed support output redirection; neither needs an -i dialect.
+  local temporary
+  temporary="$(mktemp "${file}.XXXXXX")"
+  if cp -p "$file" "$temporary" &&
+    sed "s/version: \"${old_ver}\"/version: \"${new_ver}\"/" "$file" > "$temporary" &&
+    mv -f "$temporary" "$file"; then
+    :
+  else
+    rm -f "$temporary"
+    return 1
+  fi
   echo "  mix.exs: $old_ver → $new_ver"
 }
 
@@ -170,6 +180,6 @@ done
 echo ""
 echo "Done. Next steps:"
 echo "  1. Review the diff: git diff"
-echo "  2. Commit: git commit -am 'chore: bump version to $NEW_VERSION'"
-echo "  3. Tag:    git tag v$NEW_VERSION"
-echo "  4. Push:   git push origin main v$NEW_VERSION"
+echo "  2. Commit the metadata and release changelog together."
+echo "  3. Use an annotated tag and atomic push; see"
+echo "     docs/release/versioning_and_channels.md"

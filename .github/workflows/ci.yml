@@ -324,6 +324,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Dry-run product release preparation (scratch clones, no commit or tag)
+        working-directory: .
+        run: PATH="/usr/bin:/bin:$PATH" python3 scripts/test_prepare_product_release.py
+
       - name: Install checksum-pinned XcodeGen
         run: |
           set -euo pipefail
