@@ -11,6 +11,13 @@ same process continues capturing output. Use `bash_output` to retrieve it; do no
 rerun the command. Abort signals before detachment still stop the workload.
 Session exit stops its owned jobs, including detached commands.
 
+The foreground deadline includes queued admission and shell startup. A shorter
+admission wait yielding an uncertain launch does not end that foreground wait:
+Lemon reconciles the same process ID without launching the command again, and a
+command that finishes before the deadline still updates its session's shell state.
+If workload ownership is lost, the result instead reports `outcome_unknown`,
+not a timeout or successful completion; reconcile the returned ID without rerunning.
+
 PTY and ACP-client terminals are exceptions: their existing executor owns the
 terminal protocol/handle, not a local process-manager backend. They still kill
 on timeout. A local port cannot adopt an ACP client's remote terminal handle;

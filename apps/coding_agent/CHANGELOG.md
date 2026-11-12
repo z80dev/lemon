@@ -213,6 +213,12 @@
 
 ### Fixed
 
+- Foreground Bash calls now reconcile delayed admission through their actual
+  foreground deadline instead of reporting a spurious 120-second timeout after
+  the shorter admission wait. The same launch remains tracked without retries,
+  successful commands retain shell state, and lost ownership is reported as
+  `outcome_unknown` rather than completion.
+
 - Named-node request decoding recognizes optional `cwdMode` and canonical
   `:cwd_mode` without crashing legacy requests that omit the field.
 - Native session ledgers, descendant scopes, and explicit run-tree budgets retain

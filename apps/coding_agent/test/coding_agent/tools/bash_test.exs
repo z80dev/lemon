@@ -286,7 +286,10 @@ defmodule CodingAgent.Tools.BashTest do
         Task.async(fn ->
           Bash.execute(
             "call_1",
-            %{"command" => "echo 'started'; touch started.marker; sleep 10; echo 'finished'"},
+            %{
+              "command" =>
+                "echo 'started'; touch started.marker; read -r release; echo 'finished'"
+            },
             signal,
             nil,
             tmp_dir,
@@ -294,17 +297,7 @@ defmodule CodingAgent.Tools.BashTest do
           )
         end)
 
-      started =
-        Enum.reduce_while(1..100, false, fn _, _ ->
-          if File.exists?(marker) do
-            {:halt, true}
-          else
-            Process.sleep(20)
-            {:cont, false}
-          end
-        end)
-
-      assert started
+      assert_eventually(fn -> File.exists?(marker) end)
 
       # Abort the execution
       AbortSignal.abort(signal)
@@ -327,7 +320,7 @@ defmodule CodingAgent.Tools.BashTest do
           "call_1",
           %{
             "command" =>
-              "echo once >> count; printf 'started\\n'; sleep 0.3; printf 'finished\\n'"
+              "echo once >> count; printf 'started\\n'; read -r release; printf 'finished\\n'"
           },
           nil,
           nil,
@@ -341,6 +334,7 @@ defmodule CodingAgent.Tools.BashTest do
       assert details.background
       assert details.timed_out
       assert is_binary(details.process_id)
+      assert :ok = CodingAgent.ProcessManager.write(details.process_id, "finish\n")
 
       assert_eventually(fn ->
         {:ok, state} = CodingAgent.ProcessManager.poll(details.process_id)
@@ -354,30 +348,37 @@ defmodule CodingAgent.Tools.BashTest do
     end
 
     test "cleanup after abort does not leak resources", %{tmp_dir: tmp_dir} do
-      signal = AbortSignal.new()
+      parent = self()
 
-      # Run multiple aborted commands to check for resource leaks
-      for _ <- 1..5 do
+      for _ <- 1..3 do
+        signal = AbortSignal.new()
+        started = make_ref()
+        on_update = fn _ -> send(parent, started) end
+
         task =
           Task.async(fn ->
-            Bash.execute("call_1", %{"command" => "sleep 5"}, signal, nil, tmp_dir, [])
+            Bash.execute(
+              "call_1",
+              %{"command" => "echo started; read -r release"},
+              signal,
+              on_update,
+              tmp_dir,
+              session_id: tmp_dir,
+              session_pid: parent
+            )
           end)
 
-        Process.sleep(50)
+        assert_receive ^started, 5_000
         AbortSignal.abort(signal)
-        Task.await(task, 5_000)
+        assert %AgentToolResult{details: %{exit_code: nil}, is_error: true} = Task.await(task)
+        AbortSignal.clear(signal)
 
-        # Reset signal for next iteration
-        AbortSignal.clear(signal)
-        signal_new = AbortSignal.new()
-        AbortSignal.clear(signal)
-        # Use new signal
-        AbortSignal.abort(signal_new)
-        AbortSignal.clear(signal_new)
+        assert_eventually(fn ->
+          processes = CodingAgent.ProcessManager.list()
+          owned = Enum.filter(processes, fn {_, record} -> record.owner == tmp_dir end)
+          owned != [] and Enum.all?(owned, fn {_, record} -> record.status == :killed end)
+        end)
       end
-
-      # If we got here without hanging or crashing, resources are being cleaned up
-      assert true
     end
 
     test "abort with streaming callback works correctly", %{tmp_dir: tmp_dir} do
@@ -677,14 +678,13 @@ defmodule CodingAgent.Tools.BashTest do
     end
 
     test "can use standard Unix utilities", %{tmp_dir: tmp_dir} do
-      # These should be available in PATH
-      commands = ["ls", "cat", "echo", "grep"]
+      command = "command -v ls && command -v cat && command -v echo && command -v grep"
+      result = Bash.execute("call_1", %{"command" => command}, nil, nil, tmp_dir, [])
 
-      for cmd <- commands do
-        result = Bash.execute("call_1", %{"command" => "which #{cmd}"}, nil, nil, tmp_dir, [])
-        assert %AgentToolResult{details: details} = result
-        assert details.exit_code == 0, "Expected #{cmd} to be available"
-      end
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: %{exit_code: 0}} =
+               result
+
+      assert text |> String.split() |> Enum.map(&Path.basename/1) == ["ls", "cat", "echo", "grep"]
     end
 
     test "shell environment variables work", %{tmp_dir: tmp_dir} do

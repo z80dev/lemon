@@ -12,12 +12,111 @@ defmodule CodingAgent.Tools.BashShellStateTest do
 
   defp run(ws, sid, params, owner_pid \\ self()) do
     tool = Bash.tool(ws, session_id: sid, session_pid: owner_pid)
-    assert %AgentToolResult{} = result = tool.execute.("id", params, nil, nil)
+
+    assert %AgentToolResult{is_error: false} = result = tool.execute.("id", params, nil, nil)
+    assert Map.get(result.details, :exit_code) in [0, nil]
+    refute Map.get(result.details, :timed_out, false)
     text = result.content |> Enum.map_join("", & &1.text)
     {text, result}
   end
 
   defp sid, do: "shell-state-#{System.unique_integer([:positive])}"
+
+  test "starting admission uncertainty waits for completion and captures state", %{tmp_dir: ws} do
+    File.mkdir_p!(Path.join(ws, "sub"))
+    a = sid()
+
+    {task, starter, id} =
+      delayed_launch(ws, a, %{
+        "command" => "printf 'once\\n' >> count; cd sub; export LEMON_SS_DELAYED=kept"
+      })
+
+    yield_admission(id)
+    send(starter, :start)
+
+    assert %AgentToolResult{is_error: false, details: %{exit_code: 0}} =
+             Task.await(task, 10_000)
+
+    assert File.read!(Path.join(ws, "count")) == "once\n"
+    {out, result} = run(ws, a, %{"command" => "printf '%s\\n' \"$LEMON_SS_DELAYED\"; pwd -P"})
+    refute result.is_error
+    assert out =~ "kept\n"
+    assert String.trim(out) |> String.ends_with?("/sub")
+    assert {:ok, %{status: :completed, exit_code: 0}} = ProcessManager.poll(id)
+  end
+
+  test "actual foreground expiry during startup detaches the same tracked launch", %{tmp_dir: ws} do
+    {task, starter, id} =
+      delayed_launch(ws, sid(), %{
+        "command" => "printf 'once\\n' >> count; printf 'late output\\n'",
+        "timeout" => 100
+      })
+
+    yield_admission(id)
+
+    assert %AgentToolResult{is_error: false, details: details, content: content} =
+             Task.await(task, 10_000)
+
+    assert details.process_id == id
+    assert details.background
+    assert details.timed_out
+    assert Enum.map_join(content, "", & &1.text) =~ "Foreground wait timed out after 100 ms"
+    refute File.exists?(Path.join(ws, "count"))
+
+    send(starter, :start)
+
+    assert_eventually(fn ->
+      match?({:ok, %{status: :completed, exit_code: 0}}, ProcessManager.poll(id))
+    end)
+
+    assert File.read!(Path.join(ws, "count")) == "once\n"
+    assert {:ok, %{logs: ["late output"]}} = ProcessManager.poll(id)
+  end
+
+  defp delayed_launch(ws, session_id, params) do
+    parent = self()
+
+    tool =
+      Bash.tool(ws,
+        session_id: session_id,
+        session_pid: parent,
+        before_start: fn ->
+          send(parent, {:starting, self()})
+
+          receive do
+            :start -> :ok
+          after
+            10_000 -> raise "startup fixture was not released"
+          end
+        end
+      )
+
+    task = Task.async(fn -> tool.execute.("delayed", params, nil, nil) end)
+    assert_receive {:starting, starter}, 5_000
+
+    on_exit(fn ->
+      send(starter, :start)
+
+      for {id, %{owner: ^session_id}} <- ProcessManager.list() do
+        ProcessManager.kill(id, :sigkill)
+      end
+    end)
+
+    assert {id, %{status: :starting}} =
+             Enum.find(ProcessManager.list(), fn {_id, record} -> record.owner == session_id end)
+
+    {task, starter, id}
+  end
+
+  defp yield_admission(id) do
+    # Deliver the existing admission timer explicitly, while startup is gated.
+    # The server barrier proves it replied with outcome_unknown before release.
+    send(CodingAgent.LaneQueue, {:background_yield, id})
+    state = :sys.get_state(CodingAgent.LaneQueue)
+
+    assert {_job_id, %{from: nil}} =
+             Enum.find(state.jobs, fn {_, job} -> Map.get(job.meta, :identity) == id end)
+  end
 
   test "cwd and env persist within a session, not across sessions", %{tmp_dir: ws} do
     File.mkdir_p!(Path.join(ws, "sub"))
