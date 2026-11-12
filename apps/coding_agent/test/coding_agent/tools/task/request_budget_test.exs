@@ -43,12 +43,12 @@ defmodule CodingAgent.Tools.Task.RequestBudgetTest do
       {:reply, :ok, %{state | is_streaming: true}}
     end
 
-    @impl true
-    def handle_cast({:steer, text}, state) do
+    def handle_call({:steer, text, false}, _from, state) do
       send(state.owner, {:notice, state.count, text})
-      {:noreply, state}
+      {:reply, :ok, state}
     end
 
+    @impl true
     def handle_cast(:abort, state) do
       send(state.owner, {:budget_abort, state.count})
 
@@ -86,7 +86,7 @@ defmodule CodingAgent.Tools.Task.RequestBudgetTest do
     end
   end
 
-  test "steers once at the soft budget and gracefully returns the hard-limit partial" do
+  test "queues one non-preempting soft-budget notice and returns the hard-limit partial" do
     result = run(20, request_budget: 2)
     assert_receive {:notice, 2, text}
     assert text =~ "Wrap up"

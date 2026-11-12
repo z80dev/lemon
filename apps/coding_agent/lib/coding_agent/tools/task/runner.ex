@@ -477,7 +477,8 @@ defmodule CodingAgent.Tools.Task.Runner do
             Session.steer(
               session,
               "You have reached your request budget (#{budget.limit}). Wrap up now: " <>
-                "summarize your findings and return your final answer; avoid further exploration."
+                "summarize your findings and return your final answer; avoid further exploration.",
+              preempt: false
             )
           end
 

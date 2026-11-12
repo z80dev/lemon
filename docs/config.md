@@ -545,7 +545,7 @@ max_depth = 2              # -1 unlimited; 0 = the main session cannot delegate
 max_runtime_ms = 0         # per-child wall-clock limit; 0 disables it
 idle_ttl_ms = 300000       # park a completed live child after 5 min; 0 keeps it idle
 request_budget = 200       # soft assistant-request budget per run; 0 disables it
-request_budget_notice = true # send one wrap-up steer at the soft budget
+request_budget_notice = true # send one non-preempting wrap-up notice at the soft budget
 worktree_merge = "none"    # default merge for worktree: true tasks: none | patch | branch
 disabled_agents = ["sonic"]
 
@@ -560,7 +560,8 @@ reviewer = "@slow"         # model or @role per persona ID
   with a timeout error when it is exceeded.
 - `request_budget`: completed assistant requests per child run, including schema
   correction requests. At the soft limit, the child receives one concise wrap-up
-  steering message (unless `request_budget_notice = false`). At `ceil(1.5 × budget)`
+  notice after its already-issued tool batch, before its next model request
+  (unless `request_budget_notice = false`). At `ceil(1.5 × budget)`
   it is gracefully stopped and returns its latest visible output as partial,
   with `details.budget_exhausted = true`, `request_count`, and a stop annotation.
   `0` disables both thresholds. The task's optional `request_budget` parameter
@@ -1007,8 +1008,14 @@ prompt_history = false
 
 Async followup queue defaults for background `task` completions and delegated `agent`
 completions are currently umbrella app config, not TOML. The default lives in
-`config/config.exs` as `config :coding_agent, :async_followups, default_queue_mode: :steer_backlog`.
+`config/config.exs` as `config :coding_agent, :async_followups, default_queue_mode: :followup`.
 Per-call tool inputs still override it: `task.queue_mode` and `agent.followup_queue_mode`.
+For async completions, `followup`, `steer`, and `steer_backlog` all deliver
+non-preempting input: a live parent's already-issued tool batch finishes, then
+the completion arrives before its next model request (not only when the whole
+run ends). An unavailable parent falls back to a router `followup`.
+`collect` retains router backlog delivery; explicit `interrupt` retains router
+interruption. Human steering still skips calls that have not started.
 
 ### Background process output capture
 

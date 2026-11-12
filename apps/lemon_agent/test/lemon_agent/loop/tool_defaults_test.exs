@@ -27,7 +27,7 @@ defmodule LemonAgent.Loop.ToolDefaultsTest do
       execute: fn _, _, _, _ -> Process.sleep(:infinity) end
     }
 
-    {[message], _, _, _} = run(tool, 1, %AgentLoopConfig{tool_timeout_ms: 200})
+    {[message], _, _} = run(tool, 1, %AgentLoopConfig{tool_timeout_ms: 200})
     assert message.is_error
     assert message.details == %{error_type: :tool_task_timeout, timeout_ms: 15}
     assert [%TextContent{text: "Tool task timed out after 15ms"}] = message.content
@@ -44,7 +44,7 @@ defmodule LemonAgent.Loop.ToolDefaultsTest do
         end
       }
 
-      {[message], _, _, _} = run(tool, 1, %AgentLoopConfig{tool_timeout_ms: config})
+      {[message], _, _} = run(tool, 1, %AgentLoopConfig{tool_timeout_ms: config})
       refute message.is_error
     end
   end
@@ -88,7 +88,7 @@ defmodule LemonAgent.Loop.ToolDefaultsTest do
       send(worker, :finish)
     end
 
-    {messages, _, _, _} = Task.await(runner, 2_000)
+    {messages, _, _} = Task.await(runner, 2_000)
     assert length(messages) == 12
     assert Enum.all?(messages, &(not &1.is_error))
   end

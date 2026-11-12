@@ -127,7 +127,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert record.description == "Default async task"
     end
 
-    test "queue_mode steer falls back to router followup when the parent is idle" do
+    test "queue_mode steer falls back to router followup when the parent is unavailable" do
       result =
         Task.execute(
           "call_idle_steer",
@@ -156,7 +156,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             }
           end,
           session_module: __MODULE__.TaskAsyncIdleSessionSpy,
-          session_pid: self(),
+          session_pid: nil,
           session_key: "agent:main:main",
           agent_id: "main",
           invocation_context_key: "task-followup-client",
@@ -249,7 +249,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
 
-    test "queue_mode steer uses the live session when the parent is streaming" do
+    test "queue_mode steer uses non-preempting live followup delivery" do
       result =
         Task.execute(
           "call_live_steer",
@@ -279,7 +279,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert %LemonAgent.Types.AgentToolResult{} = result
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
-      assert message.details.delivery == :steer
+      assert message.details.delivery == :followup
       assert message.content =~ "steer output"
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
@@ -416,7 +416,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
 
-    test "queue_mode steer_backlog uses live steer delivery when the parent session is streaming" do
+    test "queue_mode steer_backlog uses live followup delivery when the parent is streaming" do
       result =
         Task.execute(
           "call_router_backlog",
@@ -447,7 +447,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert result.details.status == "queued"
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
-      assert message.details.delivery == :steer
+      assert message.details.delivery == :followup
       assert message.content == "override output"
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end

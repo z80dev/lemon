@@ -103,10 +103,9 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     tool_call = Mocks.tool_call("slow_tool", %{}, id: "call_abort_test")
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
 
-    {results, steering_messages, updated_context, updated_new_messages} =
+    {results, updated_context, updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
-    assert steering_messages == []
     assert Agent.get(steering_queue, & &1) == [steering_message]
     assert length(results) == 1
 
@@ -197,10 +196,9 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     Agent.update(steering_queue, fn _ -> [steering_message] end)
     :ok = AbortSignal.abort(signal)
 
-    {results, steering_messages, updated_context, updated_new_messages} =
+    {results, updated_context, updated_new_messages} =
       Task.await(runner, 5_000)
 
-    assert steering_messages == []
     assert Agent.get(steering_queue, & &1) == [steering_message]
 
     refute_received {:queued_tool_started, "call_abort_queued"}
@@ -257,10 +255,9 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     tool_call = Mocks.tool_call("failing_tool", %{}, id: "call_tool_error")
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
 
-    {results, steering_messages, updated_context, updated_new_messages} =
+    {results, updated_context, updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
-    assert steering_messages == []
     assert length(results) == 1
 
     [tool_result_message] = results
@@ -308,7 +305,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     tool_call = Mocks.tool_call("denied_tool", %{}, id: "call_denied")
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
 
-    {[tool_result_message], _steering, _context, _new_messages} =
+    {[tool_result_message], _context, _new_messages} =
       ToolCalls.execute_and_collect_tools(
         context,
         [],
@@ -346,11 +343,10 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     tool_call = Mocks.tool_call("startup_failure_tool", %{}, id: "call_start_failure")
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
 
-    {results, steering_messages, updated_context, updated_new_messages} =
+    {results, updated_context, updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
     refute_received :unexpected_tool_execution
-    assert steering_messages == []
     assert length(results) == 1
 
     [tool_result_message] = results
@@ -392,10 +388,9 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     tool_call = Mocks.tool_call("crashing_tool", %{}, id: "call_task_crash")
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
 
-    {results, steering_messages, updated_context, updated_new_messages} =
+    {results, updated_context, updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
-    assert steering_messages == []
     assert length(results) == 1
 
     [tool_result_message] = results
@@ -438,7 +433,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     tool_call = Mocks.tool_call("raising_tool", %{}, id: "call_tool_exception")
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
 
-    {results, _steering_messages, updated_context, updated_new_messages} =
+    {results, updated_context, updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
     assert [tool_result_message] = results
@@ -473,7 +468,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     tool_call = Mocks.tool_call("weird_tool", %{}, id: "call_unexpected_result")
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
 
-    {results, _steering_messages, _updated_context, _updated_new_messages} =
+    {results, _updated_context, _updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
     assert [tool_result_message] = results
@@ -510,7 +505,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     tool_call = Mocks.tool_call("timeout_tool", %{}, id: "call_tool_timeout")
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
 
-    {results, _steering_messages, updated_context, updated_new_messages} =
+    {results, updated_context, updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
     assert_receive {:timeout_tool_started, "call_tool_timeout"}, 5_000
@@ -567,7 +562,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
         Mocks.tool_call("controlled_tool", %{}, id: "call_concurrency_#{i}")
       end
 
-    {results, _steering_messages, _context, _new_messages} =
+    {results, _context, _new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], tool_calls, config, signal, stream)
 
     assert length(results) == 4
@@ -604,7 +599,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
       Mocks.tool_call("ordered_tool", %{"delay_ms" => 5}, id: "call_order_2")
     ]
 
-    {results, _steering_messages, updated_context, updated_new_messages} =
+    {results, updated_context, updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], tool_calls, config, signal, stream)
 
     assert Enum.map(results, & &1.tool_call_id) == ["call_order_1", "call_order_2"]
@@ -654,7 +649,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     assert_receive {:tool_started, "call_abort_queue_1"}, 1_000
     :ok = AbortSignal.abort(signal)
 
-    {results, _steering_messages, _updated_context, _updated_new_messages} =
+    {results, _updated_context, _updated_new_messages} =
       Task.await(runner, 5_000)
 
     assert length(results) == 3
@@ -684,7 +679,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     # Tool call with leading/trailing whitespace
     tool_call = Mocks.tool_call("  read_file  ", %{}, id: "call_whitespace")
 
-    {results, _steering_messages, _updated_context, _updated_new_messages} =
+    {results, _updated_context, _updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
     assert length(results) == 1
@@ -720,7 +715,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     # Tool call with tabs instead of spaces - should normalize to match
     tool_call = Mocks.tool_call("write\t\t\tfile", %{}, id: "call_internal_ws")
 
-    {results, _steering_messages, _updated_context, _updated_new_messages} =
+    {results, _updated_context, _updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
     assert length(results) == 1
@@ -750,7 +745,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     # Tool call that won't match even after normalization
     tool_call = Mocks.tool_call("nonexistent_tool", %{}, id: "call_not_found")
 
-    {results, _steering_messages, _updated_context, _updated_new_messages} =
+    {results, _updated_context, _updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
     assert length(results) == 1
@@ -818,7 +813,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
         id: "call_schema_coerce"
       )
 
-    {results, _steering_messages, _updated_context, _updated_new_messages} =
+    {results, _updated_context, _updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
     assert_receive {:coerced_params,
@@ -870,7 +865,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
         id: "call_schema_invalid"
       )
 
-    {results, _steering_messages, updated_context, updated_new_messages} =
+    {results, updated_context, updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
     refute_received :unexpected_schema_tool_execution
@@ -923,7 +918,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
         id: "call_schema_nullable"
       )
 
-    {results, _steering_messages, _updated_context, _updated_new_messages} =
+    {results, _updated_context, _updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
     assert_receive {:nullable_params, %{"setting" => nil, "stages" => nil}}
@@ -968,7 +963,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
         id: "call_schema_union"
       )
 
-    {results, _steering_messages, _updated_context, _updated_new_messages} =
+    {results, _updated_context, _updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
     assert_receive {:union_params, %{"limit" => 42, "label" => "hello", "maybe" => nil}}
@@ -1029,7 +1024,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     assert_receive {:tool_started, "read_5", read_5}, 1_000
     send(read_5, :finish)
 
-    {results, [], updated_context, updated_new_messages} = Task.await(runner, 5_000)
+    {results, updated_context, updated_new_messages} = Task.await(runner, 5_000)
     expected_ids = Enum.map(tool_calls, & &1.id)
 
     assert Enum.all?(results, &(&1.is_error == false))
@@ -1074,7 +1069,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     send(third, :finish)
     send(first, :finish)
 
-    {results, [], _, _} = Task.await(runner, 5_000)
+    {results, _, _} = Task.await(runner, 5_000)
     assert Enum.map(results, & &1.tool_call_id) == Enum.map(calls, & &1.id)
     assert Enum.all?(results, &(&1.is_error == false))
   end
@@ -1123,7 +1118,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
       Mocks.tool_call("mutate", %{}, id: "superseded_mutation")
     ]
 
-    {results, steering, updated_context, updated_new_messages} =
+    {results, updated_context, updated_new_messages} =
       ToolCalls.execute_and_collect_tools(
         simple_context(tools: [first_tool, mutating_tool]),
         [],
@@ -1134,7 +1129,8 @@ defmodule LemonAgent.Loop.ToolCallsTest do
       )
 
     refute_received :mutation_applied
-    assert steering == [steering_message]
+    assert Agent.get(steering_queue, & &1) == [steering_message]
+    assert config.get_steering_messages.() == [steering_message]
     assert Agent.get(steering_queue, & &1) == []
     assert [completed, skipped] = results
     assert completed.is_error == false
@@ -1206,10 +1202,12 @@ defmodule LemonAgent.Loop.ToolCallsTest do
 
     send(second, :finish)
     send(first, :finish)
-    {results, steering, context, messages} = Task.await(runner, 5_000)
+    {results, context, messages} = Task.await(runner, 5_000)
 
+    refute_received :steering_drained
+    assert Agent.get(steering_queue, & &1) == [steering_message]
+    assert config.get_steering_messages.() == [steering_message]
     assert_receive :steering_drained
-    assert steering == [steering_message]
     assert [first_result, second_result, skipped] = results
     assert first_result.is_error == false
     assert second_result.is_error == false
@@ -1263,7 +1261,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     second_monitor = Process.monitor(second)
     AbortSignal.abort(signal)
 
-    assert_receive {:aborted_batch_finished, {results, [], _, _}}, 1_000
+    assert_receive {:aborted_batch_finished, {results, _, _}}, 1_000
     assert Enum.all?(results, &(&1.details.error_type == :aborted and &1.details.cancelled))
     assert_receive {:DOWN, ^first_monitor, :process, ^first, _}, 1_000
     assert_receive {:DOWN, ^second_monitor, :process, ^second, _}, 1_000
@@ -1304,7 +1302,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
 
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
 
-    {results, [], context, messages} =
+    {results, context, messages} =
       ToolCalls.execute_and_collect_tools(
         simple_context(tools: [tool]),
         [],
@@ -1417,7 +1415,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     send(worker, :finish_cleanup)
     assert_receive {:resource_cleanup_finished, true}, 5_000
 
-    assert {[%{is_error: true, details: %{error_type: :tool_error, cancelled: true}}], [], _, _} =
+    assert {[%{is_error: true, details: %{error_type: :tool_error, cancelled: true}}], _, _} =
              Task.await(runner, 5_000)
 
     assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 5_000

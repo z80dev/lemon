@@ -8,6 +8,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `Agent.steer/3` accepts `preempt: false` for synchronous acceptance of
+  agent-originated messages at the next turn boundary without skipping issued
+  tool calls. Human steering takes priority and keeps its preemption semantics.
+  Accepted turn input also survives the final follow-up polling race and remains
+  queued when a finite tool-turn budget stops before its delivery.
 - `kimi_coding` can select `auth_source = "omp"` to reuse omp's subscription
   login instead of environment or inline API keys, including forced refresh
   after credential rejection and redacted readiness status.

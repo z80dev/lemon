@@ -100,7 +100,7 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
       context = LemonAgent.Types.AgentContext.new(tools: [tool])
       {:ok, stream} = LemonAgent.EventStream.start_link(timeout: :infinity)
 
-      {[message], [], updated_context, [message]} =
+      {[message], updated_context, [message]} =
         LemonAgent.Loop.ToolCalls.execute_and_collect_tools(
           context,
           [],

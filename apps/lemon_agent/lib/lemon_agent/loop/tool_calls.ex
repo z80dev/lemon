@@ -41,30 +41,12 @@ defmodule LemonAgent.Loop.ToolCalls do
           reference() | nil,
           EventStream.t()
         ) ::
-          {[ToolResultMessage.t()], [LemonAgent.Types.agent_message()],
-           LemonAgent.Types.AgentContext.t(), [LemonAgent.Types.agent_message()]}
+          {[ToolResultMessage.t()], LemonAgent.Types.AgentContext.t(),
+           [LemonAgent.Types.agent_message()]}
   def execute_and_collect_tools(context, new_messages, tool_calls, config, signal, stream) do
-    {results, steering_messages, context, new_messages} =
-      execute_tool_calls(context, new_messages, tool_calls, config, signal, stream)
-
-    {results, steering_messages, context, new_messages}
-  end
-
-  defp execute_tool_calls(context, new_messages, tool_calls, config, signal, stream) do
-    {results, context, new_messages} =
-      execute_tool_calls_parallel(context, new_messages, tool_calls, config, signal, stream)
-
-    steering_messages =
-      if aborted?(signal) do
-        []
-      else
-        # Clear before draining so a redirect received during this batch does
-        # not cancel the next model call after its correction is consumed.
-        AbortSignal.clear_redirect(signal)
-        get_steering_messages(config)
-      end
-
-    {results, steering_messages, context, new_messages}
+    # Queue consumption belongs to the loop, after it decides whether another
+    # turn is allowed. A terminal tool-turn budget must not discard queued input.
+    execute_tool_calls_parallel(context, new_messages, tool_calls, config, signal, stream)
   end
 
   defp execute_tool_calls_parallel(context, new_messages, tool_calls, config, signal, stream) do
@@ -1224,12 +1206,6 @@ defmodule LemonAgent.Loop.ToolCalls do
 
   defp has_steering_messages?(%AgentLoopConfig{has_steering_messages: has_fn}) do
     has_fn.() == true
-  end
-
-  defp get_steering_messages(%AgentLoopConfig{get_steering_messages: nil}), do: []
-
-  defp get_steering_messages(%AgentLoopConfig{get_steering_messages: get_fn}) do
-    get_fn.() || []
   end
 
   defp normalize_trust(:untrusted), do: :untrusted

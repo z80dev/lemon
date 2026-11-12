@@ -42,7 +42,7 @@ defmodule CodingAgent.ToolIntentTest do
 
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
 
-    {[result], [], updated, _} =
+    {[result], updated, _} =
       ToolCalls.execute_and_collect_tools(
         AgentContext.new(tools: [wrapped], messages: [message]),
         [message],

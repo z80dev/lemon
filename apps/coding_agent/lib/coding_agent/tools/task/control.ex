@@ -6,10 +6,14 @@ defmodule CodingAgent.Tools.Task.Control do
 
   Family messaging authenticates callers from captured session options, never
   message parameters. It exposes only immediate relatives and public identities.
-  Running peers receive steering input. Completed children remain idle until
-  their configured TTL parks the live session; a direct message starts a new
-  turn, restoring the persisted session when parked. Unattached children retain
-  FIFO messages (64 messages / 256 KiB); bodies are limited to 32 KiB.
+  Running peers receive non-preempting input at the next turn boundary. Completed
+  children remain idle until their configured TTL parks the live session; a
+  direct message starts a new turn, restoring the persisted session when parked.
+  Unattached children retain FIFO messages (64 messages / 256 KiB); bodies are
+  limited to 32 KiB.
+  Live deliveries are emitted in order here, but their acknowledgements are
+  awaited by callers outside the control server. A missing acknowledgement is
+  `:outcome_unknown` and never automatically redelivered.
   """
   use GenServer
 
@@ -50,8 +54,22 @@ defmodule CodingAgent.Tools.Task.Control do
 
   def attach_worker(task_id), do: GenServer.call(__MODULE__, {:worker, task_id, self()})
 
-  def attach_session(task_id, session, session_id \\ nil),
-    do: GenServer.call(__MODULE__, {:session, task_id, session, session_id})
+  def attach_session(task_id, session, session_id \\ nil) do
+    with_delivery_reply(fn reply_to ->
+      case GenServer.call(__MODULE__, {:session, task_id, session, session_id, reply_to}) do
+        {:deliver_pending, deliveries} ->
+          Enum.reduce_while(deliveries, :ok, fn delivery, :ok ->
+            case resolve_delivery(delivery) do
+              :injected -> {:cont, :ok}
+              outcome -> {:halt, {:error, outcome}}
+            end
+          end)
+
+        reply ->
+          reply
+      end
+    end)
+  end
 
   def configure(task_id, context),
     do: GenServer.call(__MODULE__, {:configure, task_id, context})
@@ -62,7 +80,20 @@ defmodule CodingAgent.Tools.Task.Control do
   @doc "Send peer content to a task ID, unique name, parent, or all immediate relatives."
   def send_message(target, text, opts) do
     with :ok <- validate_message(text) do
-      GenServer.call(__MODULE__, {:send_message, target, text, opts})
+      with_delivery_reply(fn reply_to ->
+        case GenServer.call(__MODULE__, {:send_message, target, text, opts, reply_to}) do
+          {:ok, reply} ->
+            recipients =
+              Enum.map(reply.recipients, fn recipient ->
+                %{recipient | delivery: resolve_delivery(recipient.delivery)}
+              end)
+
+            {:ok, %{reply | recipients: recipients}}
+
+          error ->
+            error
+        end
+      end)
     end
   end
 
@@ -78,7 +109,18 @@ defmodule CodingAgent.Tools.Task.Control do
 
   def command(task_id, action, text, opts) do
     with :ok <- authorize(task_id, opts) do
-      GenServer.call(__MODULE__, {:command, task_id, action, text})
+      with_delivery_reply(fn reply_to ->
+        case GenServer.call(__MODULE__, {:command, task_id, action, text, reply_to}) do
+          {:delivery, pending} ->
+            case resolve_delivery(pending) do
+              :injected -> :ok
+              outcome -> {:error, outcome}
+            end
+
+          reply ->
+            reply
+        end
+      end)
     end
   end
 
@@ -147,7 +189,7 @@ defmodule CodingAgent.Tools.Task.Control do
     end
   end
 
-  def handle_call({:session, id, session, session_id}, _from, state) do
+  def handle_call({:session, id, session, session_id, reply_to}, _from, state) do
     case state[id] do
       nil ->
         Session.abort(session)
@@ -158,7 +200,10 @@ defmodule CodingAgent.Tools.Task.Control do
           Session.abort(session)
           {:reply, {:error, "Task aborted"}, state}
         else
-          Enum.each(Enum.reverse(entry.messages), &Session.steer(session, &1))
+          deliveries =
+            entry.messages
+            |> Enum.reverse()
+            |> Enum.map(&Session.request_steering(session, &1, reply_to))
 
           entry = %{
             entry
@@ -169,7 +214,7 @@ defmodule CodingAgent.Tools.Task.Control do
               message_bytes: 0
           }
 
-          {:reply, :ok, Map.put(state, id, entry)}
+          {:reply, {:deliver_pending, deliveries}, Map.put(state, id, entry)}
         end
     end
   end
@@ -227,7 +272,7 @@ defmodule CodingAgent.Tools.Task.Control do
     {:reply, :ok, state}
   end
 
-  def handle_call({:command, id, action, text}, _from, state) do
+  def handle_call({:command, id, action, text, reply_to}, _from, state) do
     case state[id] do
       nil ->
         {:reply, {:error, "Task is no longer running"}, state}
@@ -239,8 +284,9 @@ defmodule CodingAgent.Tools.Task.Control do
         {:reply, {:error, "Task is being cancelled"}, state}
 
       entry ->
-        case enqueue(entry, id, text) do
+        case enqueue(entry, id, text, reply_to) do
           {:ok, entry} -> {:reply, :ok, Map.put(state, id, entry)}
+          {:delivery, pending} -> {:reply, {:delivery, pending}, state}
           {:error, reason} -> {:reply, {:error, reason}, state}
         end
     end
@@ -255,14 +301,14 @@ defmodule CodingAgent.Tools.Task.Control do
     {:reply, reply, state}
   end
 
-  def handle_call({:send_message, target, text, opts}, _from, state) do
+  def handle_call({:send_message, target, text, opts, reply_to}, _from, state) do
     with {:ok, caller, family} <- family(state, opts),
          {:ok, recipients} <- resolve_target(target, family),
          envelope = peer_envelope(caller, text),
          :ok <- prepare_delivery(recipients, envelope) do
       {state, deliveries} =
         Enum.reduce(recipients, {state, []}, fn recipient, {acc, receipts} ->
-          {entry, delivery} = deliver_recipient(recipient, envelope)
+          {entry, delivery} = deliver_recipient(recipient, envelope, reply_to)
           acc = if recipient.id, do: Map.put(acc, recipient.id, entry), else: acc
           receipt = Map.put(public_identity(recipient), :delivery, delivery)
           {acc, [receipt | receipts]}
@@ -533,11 +579,11 @@ defmodule CodingAgent.Tools.Task.Control do
 
   defp validate_message(_), do: {:error, "Message must be a string"}
 
-  defp enqueue(entry, id, text) do
+  defp enqueue(entry, id, text, reply_to) do
     with :ok <- validate_message(text),
          nil <- unavailable(entry, id),
          :ok <- queue_capacity(entry, text) do
-      deliver(entry, text)
+      deliver(entry, text, reply_to)
     else
       {:error, _} = error -> error
       reason -> {:error, "Task is #{reason}"}
@@ -572,7 +618,7 @@ defmodule CodingAgent.Tools.Task.Control do
     end
   end
 
-  defp deliver_recipient(%{id: id, entry: entry, status: phase}, text)
+  defp deliver_recipient(%{id: id, entry: entry, status: phase}, text, _reply_to)
        when phase in [:idle, :parked] do
     case TaskStore.begin_agent_turn(id) do
       :ok ->
@@ -609,17 +655,18 @@ defmodule CodingAgent.Tools.Task.Control do
     end
   end
 
-  defp deliver_recipient(%{entry: entry}, text) do
-    {:ok, entry} = deliver(entry, text)
-    {entry, :injected}
+  defp deliver_recipient(%{entry: entry}, text, reply_to) do
+    case deliver(entry, text, reply_to) do
+      {:ok, entry} -> {entry, :injected}
+      {:delivery, pending} -> {entry, pending}
+    end
   end
 
-  defp deliver(%{session: session} = entry, text) when is_pid(session) do
-    Session.steer(session, text)
-    {:ok, entry}
+  defp deliver(%{session: session}, text, reply_to) when is_pid(session) do
+    {:delivery, Session.request_steering(session, text, reply_to)}
   end
 
-  defp deliver(entry, text) do
+  defp deliver(entry, text, _reply_to) do
     {:ok,
      %{
        entry
@@ -627,6 +674,19 @@ defmodule CodingAgent.Tools.Task.Control do
          message_count: entry.message_count + 1,
          message_bytes: entry.message_bytes + byte_size(text)
      }}
+  end
+
+  defp resolve_delivery({:pending, _, _, _} = pending), do: Session.await_steering(pending)
+  defp resolve_delivery(delivery), do: delivery
+
+  defp with_delivery_reply(fun) do
+    reply_to = :erlang.alias()
+
+    try do
+      fun.(reply_to)
+    after
+      :erlang.unalias(reply_to)
+    end
   end
 
   defp unavailable(entry, id) do

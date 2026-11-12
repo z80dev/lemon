@@ -47,7 +47,6 @@ defmodule CodingAgent.Session do
   @reset_abort_wait_ms 5_000
   @todo_call_timeout_ms 30_000
 
-  alias CodingAgent.AsyncFollowups
   alias CodingAgent.Extensions
   alias CodingAgent.Extensions.AdditionalContext
   alias CodingAgent.Extensions.SessionHooks
@@ -465,10 +464,46 @@ defmodule CodingAgent.Session do
 
   Steering messages are delivered after the current tool execution completes,
   potentially skipping remaining tool calls.
+  Pass `preempt: false` for agent-originated messages that must wait for the
+  entire issued tool batch, then arrive before the next model request.
   """
-  @spec steer(GenServer.server(), String.t()) :: :ok
-  def steer(session, text) do
-    GenServer.cast(session, {:steer, text})
+  @spec steer(GenServer.server(), String.t(), keyword()) :: :ok
+  def steer(session, text, opts \\ []) do
+    if Keyword.get(opts, :preempt, true) do
+      GenServer.cast(session, {:steer, text})
+    else
+      GenServer.call(session, {:steer, text, false})
+    end
+  end
+
+  @doc false
+  # Control sends ordered requests without waiting on a busy recipient. The
+  # caller owns the reply alias and waits outside Control's critical path.
+  def request_steering(session, text, reply_to) when is_pid(session) do
+    if Process.alive?(session) do
+      token = make_ref()
+      GenServer.cast(session, {:steer, text, false, reply_to, token})
+      {:pending, session, token, System.monotonic_time(:millisecond) + 5_000}
+    else
+      :failed
+    end
+  end
+
+  @doc false
+  def await_steering({:pending, session, token, deadline}) do
+    monitor = Process.monitor(session)
+    timeout = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    try do
+      receive do
+        {:session_steering_reply, ^token, :ok} -> :injected
+        {:DOWN, ^monitor, :process, ^session, _reason} -> :outcome_unknown
+      after
+        timeout -> :outcome_unknown
+      end
+    after
+      Process.demonitor(monitor, [:flush])
+    end
   end
 
   @doc """
@@ -499,8 +534,8 @@ defmodule CodingAgent.Session do
   Deliver a child clarification question to its parent session.
 
   Unlike a normal follow-up cast, an idle parent immediately starts a turn.
-  A streaming parent receives the question as a follow-up; join tools also
-  observe the persisted request and return so the follow-up can be processed.
+  A streaming parent receives the question after its current tool batch, before
+  the next model request; join tools also observe the persisted request and yield.
   """
   @spec deliver_parent_question(GenServer.server(), String.t()) ::
           :ok | {:error, :session_unavailable}
@@ -512,6 +547,10 @@ defmodule CodingAgent.Session do
 
   @doc """
   Add a structured async follow-up message to the session.
+
+  A streaming parent finishes its issued tool batch, then receives the message
+  before its next model request. This never preempts tools, even when restored
+  delivery metadata says `steer`. An idle parent immediately starts a turn.
   """
   @spec handle_async_followup(GenServer.server(), CustomMessage.t() | String.t() | map()) :: :ok
   def handle_async_followup(session, message_or_attrs) do
@@ -999,23 +1038,23 @@ defmodule CodingAgent.Session do
     outgoing = attach_recalled_context(message, recalled)
 
     if state.is_streaming do
-      case AsyncFollowups.live_delivery_mode(message) do
-        :steer ->
-          LemonAgent.Agent.steer(state.agent, outgoing, system_prompt: state.system_prompt)
-          queue = :queue.in(message, state.steering_queue)
-          {:reply, :ok, %{state | steering_queue: queue}}
+      LemonAgent.Agent.steer(state.agent, outgoing,
+        system_prompt: state.system_prompt,
+        preempt: false
+      )
 
-        :followup ->
-          LemonAgent.Agent.follow_up(state.agent, outgoing, system_prompt: state.system_prompt)
-          queue = :queue.in(message, state.follow_up_queue)
-          {:reply, :ok, %{state | follow_up_queue: queue}}
-      end
+      queue = :queue.in(message, state.follow_up_queue)
+      {:reply, :ok, %{state | follow_up_queue: queue}}
     else
       timer_ref =
         Process.send_after(self(), {:do_prompt, outgoing, state.system_prompt}, @prompt_defer_ms)
 
       {:reply, :ok, State.begin_prompt(state, timer_ref)}
     end
+  end
+
+  def handle_call({:steer, text, false}, _from, state) do
+    {:reply, :ok, enqueue_steering(state, text, false)}
   end
 
   def handle_call({:deliver_parent_question, text}, _from, state) do
@@ -1030,7 +1069,11 @@ defmodule CodingAgent.Session do
     outgoing = attach_recalled_context(message, recalled)
 
     if state.is_streaming do
-      LemonAgent.Agent.follow_up(state.agent, outgoing, system_prompt: state.system_prompt)
+      LemonAgent.Agent.steer(state.agent, outgoing,
+        system_prompt: state.system_prompt,
+        preempt: false
+      )
+
       queue = :queue.in(message, state.follow_up_queue)
       {:reply, :ok, %{state | follow_up_queue: queue}}
     else
@@ -1420,20 +1463,13 @@ defmodule CodingAgent.Session do
   @spec handle_cast(term(), t()) :: {:noreply, t()}
   @impl true
   def handle_cast({:steer, text}, state) do
-    {state, recalled} = refresh_turn_context(state, text)
+    {:noreply, enqueue_steering(state, text, true)}
+  end
 
-    message = %LemonAi.Types.UserMessage{
-      role: :user,
-      content: text,
-      timestamp: System.system_time(:millisecond)
-    }
-
-    outgoing = attach_recalled_context(message, recalled)
-
-    LemonAgent.Agent.steer(state.agent, outgoing, system_prompt: state.system_prompt)
-    queue = :queue.in(message, state.steering_queue)
-
-    {:noreply, %{state | steering_queue: queue}}
+  def handle_cast({:steer, text, false, reply_to, token}, state) do
+    state = enqueue_steering(state, text, false)
+    send(reply_to, {:session_steering_reply, token, :ok})
+    {:noreply, state}
   end
 
   def handle_cast({:redirect, text}, state) do
@@ -1513,6 +1549,24 @@ defmodule CodingAgent.Session do
 
   def handle_cast({:unsubscribe, pid}, state) do
     {:noreply, Notifier.unsubscribe_direct(state, pid)}
+  end
+
+  defp enqueue_steering(state, text, preempt) do
+    {state, recalled} = refresh_turn_context(state, text, preempt)
+
+    message = %LemonAi.Types.UserMessage{
+      role: :user,
+      content: text,
+      timestamp: System.system_time(:millisecond)
+    }
+
+    LemonAgent.Agent.steer(state.agent, attach_recalled_context(message, recalled),
+      system_prompt: state.system_prompt,
+      preempt: preempt
+    )
+
+    key = if preempt, do: :steering_queue, else: :follow_up_queue
+    Map.update!(state, key, &:queue.in(message, &1))
   end
 
   @spec handle_info(term(), t()) :: {:noreply, t()}
