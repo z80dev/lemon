@@ -66,6 +66,8 @@ defmodule CodingAgent.Compaction do
   Compaction is triggered when the context tokens exceed `context_threshold/2`:
   the context window minus the reserve tokens (space for the model's response),
   optionally lowered by `:threshold_tokens` / `:threshold_percent`.
+  An unknown or non-positive context window disables token-based automatic
+  compaction; explicit compaction and overflow recovery remain available.
 
   ## Parameters
 
@@ -81,12 +83,17 @@ defmodule CodingAgent.Compaction do
 
   `true` if compaction should be triggered, `false` otherwise.
   """
-  @spec should_compact?(non_neg_integer(), non_neg_integer(), map()) :: boolean()
-  def should_compact?(context_tokens, context_window, settings \\ %{}) do
+  @spec should_compact?(non_neg_integer(), integer() | nil, map()) :: boolean()
+  def should_compact?(context_tokens, context_window, settings \\ %{})
+
+  def should_compact?(context_tokens, context_window, settings)
+      when is_integer(context_window) and context_window > 0 do
     enabled = Map.get(settings, :enabled, true)
 
     enabled && context_tokens > context_threshold(context_window, settings)
   end
+
+  def should_compact?(_context_tokens, _context_window, _settings), do: false
 
   @doc """
   Return the context-window threshold above which automatic compaction runs.
@@ -95,9 +102,13 @@ defmodule CodingAgent.Compaction do
   `:reserve_tokens` is absent) is always the ceiling. An optional
   `:threshold_tokens` (fixed count) or, when absent, `:threshold_percent`
   (1..100 of the window) lowers it, never raises it. Invalid values are ignored.
+  Returns `nil` when the window is unknown or non-positive.
   """
-  @spec context_threshold(non_neg_integer(), map()) :: integer()
-  def context_threshold(context_window, settings \\ %{}) do
+  @spec context_threshold(integer() | nil, map()) :: integer() | nil
+  def context_threshold(context_window, settings \\ %{})
+
+  def context_threshold(context_window, settings)
+      when is_integer(context_window) and context_window > 0 do
     ceiling = context_window - Map.get(settings, :reserve_tokens, @default_reserve_tokens)
 
     case configured_threshold(context_window, settings) do
@@ -105,6 +116,8 @@ defmodule CodingAgent.Compaction do
       configured -> min(configured, ceiling)
     end
   end
+
+  def context_threshold(_context_window, _settings), do: nil
 
   defp configured_threshold(context_window, settings) do
     tokens = Map.get(settings, :threshold_tokens)

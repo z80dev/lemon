@@ -4,6 +4,28 @@ defmodule CodingAgent.Session.ContextBudgetTest do
   alias CodingAgent.Session.{ContextBudget, Planning}
   alias LemonAi.Types.{AssistantMessage, Model, TextContent, Usage}
 
+  test "unknown model windows report usage without fabricated capacity or compaction" do
+    settings = %{SettingsManager.load(System.tmp_dir!()) | compaction_enabled: true}
+    agent = %{messages: [], system_prompt: "current system prompt", tools: []}
+
+    for window <- [nil, 0, -1] do
+      state = %{
+        session_manager: SessionManager.new(System.tmp_dir!()),
+        settings_manager: settings,
+        model: %Model{context_window: window}
+      }
+
+      budget = ContextBudget.measure(state, agent)
+      assert budget.tokens > 0
+      assert budget.source == "estimate"
+      assert budget.window == nil
+      assert budget.reserve_tokens == nil
+      assert budget.threshold_tokens == nil
+      assert budget.headroom_tokens == nil
+      assert budget.enabled == false
+    end
+  end
+
   test "budget uses latest request usage, configured reserve, and invalidates changed plan context" do
     settings = %{
       SettingsManager.load(System.tmp_dir!())

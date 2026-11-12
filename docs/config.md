@@ -2520,7 +2520,10 @@ suppresses bootstrap even when resuming an assistant session.
   exceeds the context window minus `reserve_tokens`. Optional `threshold_percent` (integer 1–100,
   percent of the window) or `threshold_tokens` (positive integer; wins over the percent) lower that
   threshold; they never raise it above the reserve limit. Invalid values fail config validation.
-  `/context` and `sessions.context` report the effective threshold.
+  `/context` and `sessions.context` report the effective threshold. Models with an
+  unknown or non-positive context window skip token-based automatic compaction
+  and report unknown capacity as null; explicit compaction and provider overflow
+  recovery remain available.
 - `runtime.retry`: session retry of transient provider failures (backoff + retry-after).
 - `runtime.max_tool_turns`: optional per-prompt cap on tool-using turns (default unlimited).
 - `runtime.secret_obfuscation`: opt-in placeholder obfuscation of secrets in provider-visible text ([details](security/secret-obfuscation.md)).

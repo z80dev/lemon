@@ -223,6 +223,15 @@ defmodule CodingAgent.CompactionTest do
       end
     end
 
+    test "unknown and non-positive windows never trigger token-based automatic compaction" do
+      for window <- [nil, 0, -1],
+          settings <- [%{}, %{threshold_tokens: 1}, %{threshold_percent: 50}] do
+        assert Compaction.context_threshold(window, settings) == nil
+        refute Compaction.should_compact?(0, window, settings)
+        refute Compaction.should_compact?(1_000_000, window, settings)
+      end
+    end
+
     test "threshold_tokens overrides threshold_percent and both only lower the reserve ceiling" do
       window = 100_000
       # Default reserve ceiling: 83_616.

@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Models with an unknown or non-positive context window no longer trigger
+  automatic token-based compaction on every turn. Context budgets report unknown
+  capacity as null; explicit compaction and overflow recovery remain available.
 - Reduced edit/patch retry friction: current full-file snapshot tags permit omitted
   lines, an optional edit-mode discriminator and provider-visible field guidance
   distinguish modes, copied/bracketed tags are accepted, and stale refusals include
