@@ -674,6 +674,8 @@ export class AppShell {
 		setTranscriptActionHandler((action) => this.#runTranscriptAction(action));
 		this.#disposers.push(() => setTranscriptActionHandler(undefined));
 		this.tui.start();
+		this.#banner.playIntro(() => this.tui.requestRender());
+		this.#disposers.push(() => this.#banner.stopIntro());
 		this.#registerTerminalCleanup();
 		this.#terminalIntegration.start();
 		// After tui.start(), so the terminal is listening when pi-tui's OSC 11

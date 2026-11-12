@@ -400,6 +400,12 @@ export class Theme {
 		return this.#chalk.hex(color)(text);
 	}
 
+	/** Background counterpart of {@link hex}; returns `text` unstyled without color. */
+	hexBg(color: string, text: string): string {
+		const open = bgOpenSequence(color, this.#chalk.level);
+		return open ? `${open}${text}${ESC}49m` : text;
+	}
+
 	/**
 	 * Raw ANSI opening sequence for a slot — pi-natives' syntax highlighter takes
 	 * colors as escape strings rather than functions.

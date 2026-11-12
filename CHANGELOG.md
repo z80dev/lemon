@@ -8,6 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Changed
+
+- The TUI startup banner has a new pixel-art lemon with a half-block `lemon`
+  wordmark, and a highlight sweeps across the logo once on startup.
+
 ### Fixed
 
 - Lemon Bot for Mac: the sidebar's Search and New Bot buttons work again on
