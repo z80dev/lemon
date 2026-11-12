@@ -70,7 +70,6 @@ public enum ClientError: Error, LocalizedError, CustomStringConvertible {
         case .http(let code): return "The backend returned HTTP \(code) without a valid product error."
         case .outcomeUnknown(let nonce): return "outcome_unknown: The action's outcome is not confirmed. Do not resend it. Reconcile the original intent using clientNonce \(nonce)."
         case .unresolvedMutation(let intent):
-            if intent.state == "recorded_refusal" { return "The previous message was recorded with rejected targets. Reconcile its saved entries and runs before another submission. Original clientNonce: \(intent.clientNonce). No action was replayed." }
             return "outcome_unknown: Reconcile the previous \(intent.method) \(intent.path) before creating another intent. Original clientNonce: \(intent.clientNonce). No action was replayed."
         case .invalidNonce: return "clientNonce must be a string; the supplied intent identifier was not replaced."
         case .reauthenticationUnconfirmed: return "Reauthentication was not confirmed. No password was automatically retried; request reauthentication explicitly before deleting the account."

@@ -63,6 +63,31 @@ describe('read-only message submission receipts', () => {
       expect(f.calls.filter(call => call.method === 'chat.send')).toHaveLength(1);
     } finally { runtime.close(); f.store.close(); }
   });
+  test('a timed-out pre-dispatch capability read is an unsent refusal, never an unknown receipt', async () => {
+    const f = fixture(), runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    // The controller reports a timed-out read as not retry-safe; it still stopped the submission before chat.send.
+    const original = f.rpc; f.rpc = async (method, params) => { if (method === 'node.capabilities.get') throw new ApiError('upstream_unavailable', 'The runtime rejected or could not complete this operation.', false, { resourceIds: [] }); return original(method, params); };
+    try {
+      await expect(sendMessage(f.services, f.alice, f.conversation.id, { clientNonce: nonce, text: 'Probe timed out' })).rejects.toMatchObject({ code: 'upstream_unavailable', retrySafe: true, details: { clientNonce: nonce } });
+      const receipt = await lookup(f);
+      expect(receipt.status).toBe('accepted'); expect(receipt.entries).toHaveLength(1); expect(receipt.delivery[0]?.effectiveMode).toBe('rejected');
+      expect(receipt.runs[0]).toMatchObject({ status: 'failed', startedAtMs: null, error: { code: 'upstream_unavailable', retrySafe: true } });
+      expect(f.calls.filter(call => call.method === 'chat.send')).toHaveLength(0);
+    } finally { runtime.close(); f.store.close(); }
+  });
+  test('an unknown reservation that finished without dispatch settles on lookup; dispatch stays unknown', async () => {
+    const f = fixture(), runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const original = f.rpc; f.rpc = async (method, params) => { if (method === 'node.secrets.set') throw new ApiError('outcome_unknown', 'Provisioning acknowledgement lost.', false); return original(method, params); };
+    try {
+      expect((await sendMessage(f.services, f.alice, f.conversation.id, { clientNonce: nonce, text: 'Stopped before dispatch' })).status).toBe('outcome_unknown');
+      expect((await lookup(f)).status).toBe('outcome_unknown');
+      f.rpc = original; await runtime.reconcile();
+      const receipt = await lookup(f);
+      expect(receipt.status).toBe('accepted'); expect(receipt.delivery[0]?.effectiveMode).toBe('rejected');
+      expect(receipt.runs[0]).toMatchObject({ status: 'failed', startedAtMs: null, error: { retrySafe: true } });
+      expect(f.calls.filter(call => call.method === 'chat.send' || call.method === 'runs.receipt.get')).toHaveLength(0);
+    } finally { runtime.close(); f.store.close(); }
+  });
   test('missing, foreign and wrong-conversation receipts are private 404s', async () => {
     const f = fixture(), runtime = createRuntimeService(f.services); f.services.runtime = runtime;
     try {

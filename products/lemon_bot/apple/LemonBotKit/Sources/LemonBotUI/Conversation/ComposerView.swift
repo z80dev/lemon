@@ -20,7 +20,6 @@ public struct ComposerView: View {
     @State private var connectors: [Connector] = []
     @State private var pastedFiles: [URL] = []
     @State private var receipt: MessageReceipt?
-    @State private var unconfirmedDraft: LocalComposerDraft?
     @State private var messageNonce: String?
     @State private var reconciledRuns: [Run] = []
     @State private var stagedFilenames: [String] = []
@@ -59,12 +58,16 @@ public struct ComposerView: View {
         get { draft.references }
         nonmutating set { store.setLocalComposerRouting(conversationID: conversationID, references: newValue, mentions: mentions.sorted(), everyone: everyone) }
     }
-    private var pendingMessageNonce: String? {
-        store.pendingIntents.first { $0.method == "POST" && $0.path == resourcePath("conversations", conversationID, "/messages") }?.clientNonce
-    }
+    private var messagePath: String { resourcePath("conversations", conversationID, "/messages") }
+    /// This conversation's unsettled messages. The store's journal keeps them across views and launches.
+    private var messageIntents: [MutationIntent] { store.pendingIntents.filter { $0.method == "POST" && $0.path == messagePath } }
+    /// A message the server has not been seen to record holds Send: another Send could duplicate it.
+    private var unrecordedMessage: MutationIntent? { messageIntents.first { !$0.messageRecorded } }
+    /// Recorded messages whose Bot delivery is unconfirmed. They are in the transcript and don't hold the next message.
+    private var undeliveredMessages: [MutationIntent] { messageIntents.filter(\.messageRecorded) }
     private var resolvedMessage: MessageReceipt? { messageNonce.flatMap { store.reconciledMessageReceipts[$0] } }
-    private var unresolvedAction: Bool { action.uncertain && (action.uncertainNonce != messageNonce || resolvedMessage == nil) }
-    private var messageUncertain: Bool { pendingMessageNonce != nil || (unresolvedAction && unconfirmedDraft != nil) }
+    /// Message uncertainty lives in the journal, so view state fences only uploads.
+    private var unresolvedUpload: Bool { action.uncertain }
     private var actionError: String? { action.errorNonce == messageNonce && resolvedMessage != nil ? nil : action.error }
     public var body: some View {
         composerContent
@@ -95,7 +98,6 @@ public struct ComposerView: View {
             }
             .onDisappear(perform: retainDepartingDraft)
             .onChange(of: resolvedMessage) { _, _ in applyMessageReconciliation() }
-            .onChange(of: action.uncertainNonce) { _, _ in applyMessageReconciliation() }
     }
 
     @Environment(\.colorScheme) private var scheme
@@ -111,7 +113,7 @@ public struct ComposerView: View {
     private var draftIsEmpty: Bool { draft.text.isEmpty && draft.attachmentIDs.isEmpty && draft.fileURLs.isEmpty && stagedFilenames.isEmpty }
     private var sendDisabled: Bool {
         // Selected local files must be uploaded (or removed) first; send() would only reject them.
-        !online || action.inFlight || unresolvedAction || pendingMessageNonce != nil || !draft.fileURLs.isEmpty
+        !online || action.inFlight || unresolvedUpload || unrecordedMessage != nil || !draft.fileURLs.isEmpty
             || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.attachmentIDs.isEmpty)
     }
     private var compactKeyboardLayout: Bool {
@@ -122,7 +124,7 @@ public struct ComposerView: View {
         #endif
     }
     private var hasDeliveryStatus: Bool {
-        !online || !draft.fileURLs.isEmpty || mode != "followup" || messageUncertain || actionError != nil || unresolvedAction || action.receipt != nil
+        !online || !draft.fileURLs.isEmpty || mode != "followup" || unrecordedMessage != nil || !undeliveredMessages.isEmpty || actionError != nil || unresolvedUpload
             || (receipt != nil && !compactKeyboardLayout) || receipt?.status == "outcome_unknown"
             || receipt?.runs.contains(where: { $0.error != nil }) == true
             || (!reconciledRuns.isEmpty && !compactKeyboardLayout) || reconciledRuns.contains(where: { $0.error != nil })
@@ -293,7 +295,7 @@ public struct ComposerView: View {
         }
         if !draft.fileURLs.isEmpty {
             Button("Upload") { Task { await uploadSelectedFiles() } }
-                .buttonStyle(.pill(.quiet, compact: true)).disabled(!online || action.inFlight || unresolvedAction)
+                .buttonStyle(.pill(.quiet, compact: true)).disabled(!online || action.inFlight || unresolvedUpload)
                 .help("Upload selected files to this conversation. Reconnecting never uploads or sends these files automatically.")
         }
         if !stagedFilenames.isEmpty {
@@ -333,7 +335,7 @@ public struct ComposerView: View {
     #if os(macOS)
     private func handleComposerKeyPress(_ press: KeyPress) -> KeyPress.Result {
         if press.modifiers.contains(.shift) { return .ignored }
-        guard online, !action.inFlight, !unresolvedAction, pendingMessageNonce == nil, draft.fileURLs.isEmpty,
+        guard online, !action.inFlight, !unresolvedUpload, unrecordedMessage == nil, draft.fileURLs.isEmpty,
               !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.attachmentIDs.isEmpty else { return .handled }
         Task { await send() }
         return .handled
@@ -368,17 +370,29 @@ public struct ComposerView: View {
             if mode != "followup" {
                 Text(mode == "steer" ? "Updates the running task if the Bot can accept it; otherwise sends a follow-up." : "Asks the Bot to stop and start your message next. Work already done isn't undone.").font(LBFont.meta).foregroundStyle(LB.muted)
             }
-            if messageUncertain {
+            if let unrecorded = unrecordedMessage {
+                if unrecorded.state == "in_flight" {
+                    Label("Sending…", systemImage: "arrow.up.circle").font(LBFont.meta).foregroundStyle(LB.muted)
+                } else {
+                    HStack(spacing: 8) {
+                        Label("Checking whether your last message was sent", systemImage: "exclamationmark.triangle.fill")
+                            .font(LBFont.chip).foregroundStyle(LB.warning)
+                        Button("Check status") { Task { await reconcile() } }.buttonStyle(.pill(.quiet, compact: true)).disabled(!online || action.inFlight)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 5).background(LB.warning.opacity(0.12), in: Capsule())
+                    .help("This message is held until its exact submission is confirmed. Nothing is resent.")
+                    Text("Your draft stays here until the server confirms it. Lemon Bot keeps checking and never resends it.").font(LBFont.meta).foregroundStyle(LB.muted)
+                    Button("Reload conversation") { Task { await action.perform { try await store.openConversation(conversationID, select: false) } } }
+                        .buttonStyle(.pill(.quiet, compact: true)).disabled(!online || action.inFlight)
+                }
+            }
+            if !undeliveredMessages.isEmpty {
                 HStack(spacing: 8) {
-                    Label("Checking whether your last message was sent", systemImage: "exclamationmark.triangle.fill")
-                        .font(LBFont.chip).foregroundStyle(LB.warning)
+                    Label("Saved · waiting for \(conversation?.kind == "group" ? "the Bots" : composerBot?.name ?? "the Bot") to confirm", systemImage: "clock")
+                        .font(LBFont.chip).foregroundStyle(LB.muted)
                     Button("Check status") { Task { await reconcile() } }.buttonStyle(.pill(.quiet, compact: true)).disabled(!online || action.inFlight)
                 }
-                .padding(.horizontal, 10).padding(.vertical, 5).background(LB.warning.opacity(0.12), in: Capsule())
-                .help("This message is held until its exact submission is confirmed. Nothing is resent.")
-                Text("Checking your last message first. Send is available once it's confirmed. Nothing is resent.").font(LBFont.meta).foregroundStyle(LB.muted)
-                Button("Reload conversation") { Task { await action.perform { try await store.openConversation(conversationID, select: false) } } }
-                    .buttonStyle(.pill(.quiet, compact: true)).disabled(!online || action.inFlight)
+                .help("Your message is in the conversation and is never resent. You can keep writing and send another message.")
             }
             if let receipt {
                 ForEach(Array(receipt.delivery.enumerated()), id: \.offset) { _, delivery in
@@ -386,7 +400,6 @@ public struct ComposerView: View {
                         ActionErrorView(message: humanErrorText(BackendError(status: 0, failure: ErrorEnvelopeError(code: error.code, message: error.message, requestId: error.requestId, retrySafe: error.retrySafe, details: error.details))))
                     }
                 }
-                if receipt.status == "outcome_unknown" { Text("Not confirmed yet. Check the conversation before sending again.").foregroundStyle(LB.warning).font(LBFont.meta) }
                 if !compactKeyboardLayout {
                     DisclosureGroup("Delivery details") {
                         VStack(alignment: .leading, spacing: 2) { receiptDetails(receipt) }
@@ -405,8 +418,7 @@ public struct ComposerView: View {
                 }.font(LBFont.meta).foregroundStyle(LB.muted)
             }
             ActionErrorView(message: actionError)
-            if unresolvedAction && !messageUncertain { Text("An upload isn't confirmed. Nothing is retried automatically — check your files before trying again.").font(LBFont.meta).foregroundStyle(LB.warning) }
-            if let receipt = action.receipt { Text(receipt).font(LBFont.meta).foregroundStyle(LB.muted) }
+            if unresolvedUpload { Text("An upload isn't confirmed. Nothing is retried automatically — check your files before trying again.").font(LBFont.meta).foregroundStyle(LB.warning) }
         }.padding(.horizontal, 8)
     }
 
@@ -500,73 +512,52 @@ public struct ComposerView: View {
             }
         }
     }
-    private func matchesDraft(_ captured: LocalComposerDraft) -> Bool {
-        draft.text == captured.text && draft.attachmentIDs == captured.attachmentIDs && draft.replyToEntryID == captured.replyToEntryID && draft.references == captured.references && Set(draft.mentions) == Set(captured.mentions) && draft.everyone == captured.everyone && draft.fileURLs == captured.fileURLs
-    }
     private func send() async {
+        let nonce = UUID().uuidString
         await action.perform {
             guard online else { throw ClientError.offline }
-            guard pendingMessageNonce == nil && !unresolvedAction else { throw ComposerError.message("Checking your last message first. Send is available once it's confirmed.") }
+            guard unrecordedMessage == nil else { throw ComposerError.message("Checking your last message first. Send is available once it's confirmed.") }
             let captured = draft
             guard captured.fileURLs.isEmpty else { throw ComposerError.message("Upload or remove the selected files to send.") }
             guard !captured.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !captured.attachmentIDs.isEmpty else { throw ComposerError.message("Write a message or attach a ready file before Send.") }
-            unconfirmedDraft = captured
-            let nonce = UUID().uuidString
-            messageNonce = nonce
+            messageNonce = nonce; receipt = nil; reconciledRuns = []
+            // The store clears this draft once the server records the message, keeping any edits made since Send.
             let result = try await store.send(conversationID: conversationID, text: captured.text, attachmentIDs: captured.attachmentIDs, replyTo: captured.replyToEntryID, mode: mode, mentions: captured.mentions, everyone: captured.everyone, references: captured.references, clientNonce: nonce)
             guard store.account?.id == owningAccountID else { return }
             receipt = result
-            if result.status == "outcome_unknown" { action.uncertain = true; action.uncertainNonce = result.clientNonce }
-            if result.status != "outcome_unknown" {
-                if matchesDraft(captured) {
-                    store.setLocalDraft(conversationID: conversationID, text: "", attachmentIDs: [], replyTo: nil)
-                    store.setLocalComposerRouting(conversationID: conversationID, references: [], mentions: [], everyone: false)
-                }
-                unconfirmedDraft = nil
-            }
         }
-        if action.uncertain {
-            if let original = action.uncertainNonce, original != messageNonce { unconfirmedDraft = nil; messageNonce = original }
-            if action.uncertainNonce == nil { action.uncertainNonce = messageNonce }
-            if action.error != nil { action.errorNonce = messageNonce }
+        releaseMessageUncertainty()
+        applyMessageReconciliation()
+    }
+    /// The journal, not this view, owns an unconfirmed message; it outlives the view and drives the status rows.
+    /// A generic "couldn't confirm" error would repeat that status, so it is dropped; actual refusal reasons stay.
+    private func releaseMessageUncertainty() {
+        guard let nonce = action.uncertainNonce ?? action.errorNonce,
+              nonce == messageNonce || messageIntents.contains(where: { $0.clientNonce == nonce }) else { return }
+        if action.uncertainNonce == nonce { action.uncertain = false; action.uncertainNonce = nil; action.uncertainRunID = nil }
+        let pending = messageIntents.first { $0.clientNonce == nonce }
+        if action.errorNonce == nonce, pending.map({ $0.state != "recorded_refusal" }) ?? (store.reconciledMessageReceipts[nonce] != nil) {
+            action.error = nil; action.errorNonce = nil
+        }
+    }
+    /// Reads each unsettled message's exact receipt for this conversation. Nothing is resent.
+    private func reconcile() async {
+        let nonces = messageIntents.map(\.clientNonce)
+        await action.perform {
+            guard online else { throw ClientError.offline }
+            for nonce in nonces { _ = try await store.reconcileMutation(nonce) }
+            guard store.account?.id == owningAccountID else { return }
+            let unsettled = Set(messageIntents.map(\.clientNonce))
+            reconciledRuns = store.runs.filter { $0.conversationId == conversationID && unsettled.contains($0.clientNonce) }
         }
         applyMessageReconciliation()
     }
-    private func reconcile() async {
-        var checkedNonce = pendingMessageNonce ?? action.uncertainNonce ?? receipt?.clientNonce
-        await action.perform {
-            guard online else { throw ClientError.offline }
-            var nonce = checkedNonce
-            if nonce == nil, let id = action.uncertainRunID {
-                let run: Run = try await store.read(resourcePath("runs", id))
-                guard run.conversationId == conversationID else { return }
-                nonce = run.clientNonce
-            }
-            guard let nonce else {
-                action.receipt = "We couldn't check your last message automatically. Reload the conversation to see whether it was sent. Your draft is kept."
-                return
-            }
-            checkedNonce = nonce
-            let settled = try await store.reconcileMutation(nonce)
-            guard store.account?.id == owningAccountID else { return }
-            reconciledRuns = store.runs.filter { $0.conversationId == conversationID && $0.clientNonce == nonce }
-            guard settled else { return }
-            applyMessageReconciliation(nonce)
-        }
-        if action.error != nil { action.errorNonce = checkedNonce }
-        applyMessageReconciliation(checkedNonce)
-    }
-    private func applyMessageReconciliation(_ nonce: String? = nil) {
-        guard store.account?.id == owningAccountID, let nonce = nonce ?? messageNonce,
+    private func applyMessageReconciliation() {
+        guard store.account?.id == owningAccountID, let nonce = messageNonce,
               let recorded = store.reconciledMessageReceipts[nonce] else { return }
-        if let captured = unconfirmedDraft, matchesDraft(captured) {
-            store.setLocalDraft(conversationID: conversationID, text: "", attachmentIDs: [], replyTo: nil)
-            store.setLocalComposerRouting(conversationID: conversationID, references: [], mentions: [], everyone: false)
-        }
-        reconciledRuns = []
         action.resolveUncertainty(nonce)
-        receipt = recorded; unconfirmedDraft = nil
-        action.receipt = nil
+        receipt = recorded
+        reconciledRuns.removeAll { $0.clientNonce == nonce }
     }
 }
 

@@ -85,6 +85,12 @@ import Observation
     @ObservationIgnored var socketTask: Task<Void, Never>?
     @ObservationIgnored var messageReconciliationTask: Task<Void, Never>?
     @ObservationIgnored var messageReconciliationRequested = false
+    /// Nonces whose recorded authored message already released its composer draft; a later identical draft is new work.
+    @ObservationIgnored var releasedMessageDrafts: Set<String> = []
+    @ObservationIgnored var messageRecheckTask: Task<Void, Never>?
+    @ObservationIgnored var messageRecheckAttempt = 0
+    /// Delays between bounded read-only receipt rechecks for an unsettled message.
+    @ObservationIgnored var messageRecheckDelays: [Duration] = [.seconds(3), .seconds(10), .seconds(30), .seconds(60), .seconds(120), .seconds(300)]
     @ObservationIgnored var terminalSequences: [ID: Int] = [:]
     @ObservationIgnored var terminalSubscriptions: Set<ID> = []
     @ObservationIgnored var generation = UUID()
@@ -259,6 +265,7 @@ import Observation
             if value.state == "in_flight" { value.state = "outcome_unknown" }
             return value
         }
+        releasedMessageDrafts = Set(pendingIntents.filter { $0.state == "message_recorded" }.map(\.clientNonce))
         if let cache = try persistence.loadCache(saved.id) {
             guard cache.snapshot.user.id == saved.userID, cache.snapshot.workspace.id == saved.workspaceID else { throw ClientError.accountChanged }
             install(cache.snapshot)
@@ -456,7 +463,8 @@ import Observation
         visibleConversationID = nil
         pendingIntents = []
         messageReconciliationTask?.cancel(); messageReconciliationTask = nil; messageReconciliationRequested = false
-        reconciledMessageReceipts = [:]
+        messageRecheckTask?.cancel(); messageRecheckTask = nil; messageRecheckAttempt = 0
+        reconciledMessageReceipts = [:]; releasedMessageDrafts = []
         pairings = []; pairingURL = nil; pairingQRID = nil
         ownerPairingPreflight = nil
         typingByConversation = [:]
@@ -509,6 +517,8 @@ import Observation
             if let recorded = reconciledMessageReceipts[nonce] { receipt = recorded }
         }
         for entry in receipt.entries { upsertEntry(entry) }; for run in receipt.runs { upsert(&runs, run, id: { $0.id }, revision: { $0.revision }) }
+        // A receipt with authored entries is an accepted message even when its delivery is still unknown.
+        releaseRecordedDraft(receipt, conversationID: conversationID)
         do { try persistCache() } catch { errorMessage = error.localizedDescription }
         return receipt
     }

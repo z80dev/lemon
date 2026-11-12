@@ -28,13 +28,16 @@ public struct MutationIntent: Codable, Hashable, Identifiable {
         guard !encoded.isEmpty, !encoded.contains("/") else { return nil }
         return String(encoded).removingPercentEncoding
     }
+    /// The exact authored message is durably recorded under this nonce; only its target delivery is unconfirmed.
+    /// A new message has a new nonce and cannot duplicate it, so it no longer fences the conversation's composer.
+    public var messageRecorded: Bool { messageConversationID != nil && ["message_recorded", "recorded_refusal"].contains(state) }
 }
 
 extension LemonBotStore {
     func beginIntent(_ method: String, _ path: String, payload: inout JSONObject) throws -> (String, String)? {
         guard let account else { throw ClientError.signedOut }
         if path == "/auth/reauth" || path.hasSuffix("/preview") { return nil }
-        if let existing = pendingIntents.first(where: { $0.method == method && $0.path == path }) { throw ClientError.unresolvedMutation(existing) }
+        if let existing = pendingIntents.first(where: { $0.method == method && $0.path == path && !$0.messageRecorded }) { throw ClientError.unresolvedMutation(existing) }
         let nonce: String
         if let provided = payload["clientNonce"] {
             guard let value = provided.stringValue else { throw ClientError.invalidNonce }
@@ -58,8 +61,10 @@ extension LemonBotStore {
             if account?.id == accountID { values = pendingIntents }
             else { values = try persistence.loadMutationIntents(accountID: accountID) }
             if let unknown, let index = values.firstIndex(where: { $0.clientNonce == nonce }) {
-                values[index].state = state
-                if !isProviderManagementPath(values[index].path) {
+                // A lost acknowledgement after an observed authored entry cannot unrecord that message.
+                let keepsRecord = values[index].messageRecorded && state == "outcome_unknown"
+                if !keepsRecord { values[index].state = state }
+                if !isProviderManagementPath(values[index].path), !(keepsRecord && unknown.0.isEmpty) {
                     values[index].resourceIDs = unknown.0; values[index].runID = unknown.1
                 }
             } else { values.removeAll { $0.clientNonce == nonce } }
@@ -135,7 +140,9 @@ extension LemonBotStore {
                     }
                 } catch { throw ClientError.outcomeUnknown(payload["clientNonce"]?.stringValue ?? "") }
             }
-            finishIntent(handle, unknown: unknownResources(value))
+            // The authored entries in an unknown message receipt are recorded; only target delivery is unconfirmed.
+            let recorded = (value as? MessageReceipt).map { !$0.entries.isEmpty } == true
+            finishIntent(handle, unknown: unknownResources(value), state: recorded ? "message_recorded" : "outcome_unknown")
             return value
         } catch {
             if reconcilingProviderNonce != nil {
@@ -181,7 +188,7 @@ extension LemonBotStore {
         let current = generation
         let parts = intent.path.split(separator: "/").map(String.init)
         var resolved = false
-        var messageReceipt: MessageReceipt?
+        var messageReceipt: MessageReceipt?, recordedMessage: MessageReceipt?
         if let conversationID = intent.messageConversationID {
             let receipt = try await self.messageReceipt(conversationID: conversationID, clientNonce: clientNonce)
             guard receipt.clientNonce == clientNonce,
@@ -195,6 +202,7 @@ extension LemonBotStore {
                 && receipt.delivery.count == runIDs.count && Set(receipt.delivery.map(\.runId)) == runIDs
                 && receipt.delivery.allSatisfy { delivery in delivery.effectiveMode != "outcome_unknown" && receipt.runs.contains { $0.id == delivery.runId && $0.botId == delivery.botId } }
             if resolved { messageReceipt = receipt }
+            if !receipt.entries.isEmpty { recordedMessage = receipt }
         } else if isProviderManagementPath(intent.path), let index = parts.firstIndex(of: "providers") {
             let _: ProviderManagement = try await read("/" + parts.prefix(index + 1).joined(separator: "/"))
             // Generic status is useful for review, never an exact mutation receipt.
@@ -239,6 +247,10 @@ extension LemonBotStore {
             resolved = inspected
         }
         try assertGeneration(current)
+        if let recordedMessage, let conversationID = intent.messageConversationID {
+            if !resolved { recordMessage(clientNonce) }
+            releaseRecordedDraft(recordedMessage, conversationID: conversationID)
+        }
         if resolved {
             try persistCache(); finishIntent((account.id, clientNonce))
             guard !pendingIntents.contains(where: { $0.clientNonce == clientNonce }) else { return false }
@@ -272,7 +284,51 @@ extension LemonBotStore {
                     }
                 }
             } while self.messageReconciliationRequested
+            self.scheduleMessageRecheck(current)
         }
+    }
+    /// Bounded read-only follow-ups while connected: a receipt can settle without any realtime event for it.
+    /// Offline, the reconnect's caught-up frame and foreground already recheck.
+    private func scheduleMessageRecheck(_ current: UUID) {
+        messageRecheckTask?.cancel(); messageRecheckTask = nil
+        guard generation == current, connectionState == "online", socket != nil,
+              pendingIntents.contains(where: { $0.messageConversationID != nil && $0.state != "in_flight" }) else { messageRecheckAttempt = 0; return }
+        guard messageRecheckAttempt < messageRecheckDelays.count else { return }
+        let delay = messageRecheckDelays[messageRecheckAttempt]
+        messageRecheckAttempt += 1
+        messageRecheckTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard let self, !Task.isCancelled, self.generation == current else { return }
+            self.messageRecheckTask = nil
+            self.scheduleMessageReconciliation()
+        }
+    }
+    /// The exact receipt shows the authored message, so only its delivery is unconfirmed.
+    func recordMessage(_ clientNonce: String) {
+        guard let account, let index = pendingIntents.firstIndex(where: { $0.clientNonce == clientNonce }),
+              pendingIntents[index].messageConversationID != nil, !pendingIntents[index].messageRecorded else { return }
+        var values = pendingIntents
+        values[index].state = "message_recorded"
+        do { try persistence.saveMutationIntents(values, accountID: account.id); pendingIntents = values }
+        catch { errorMessage = error.localizedDescription }
+    }
+    /// Once per nonce, clears a composer draft that still holds exactly the recorded authored message: it is
+    /// in the transcript now. Edits made since Send, another reply target or unsent local files stay.
+    func releaseRecordedDraft(_ receipt: MessageReceipt, conversationID: ID) {
+        let authored = receipt.entries.lazy.compactMap { entry -> MessageEntry? in
+            guard case .message(let value) = entry, value.clientNonce == receipt.clientNonce, value.conversationId == conversationID else { return nil }
+            return value
+        }.first
+        guard let account, let authored, releasedMessageDrafts.insert(receipt.clientNonce).inserted else { return }
+        if drafts[conversationID] == nil {
+            do { drafts[conversationID] = try persistence.loadDraft(conversationID: conversationID, accountID: account.id) }
+            catch { errorMessage = error.localizedDescription; return }
+        }
+        let current = draft(for: conversationID)
+        guard current.text == authored.text, current.attachmentIDs == authored.attachmentIds,
+              current.replyToEntryID == authored.replyToEntryId, current.fileURLs.isEmpty else { return }
+        setLocalDraft(conversationID: conversationID, text: "", attachmentIDs: [], replyTo: nil)
+        setLocalComposerRouting(conversationID: conversationID, references: [], mentions: [], everyone: false)
     }
     private func settledGate(_ gate: Gate) -> Bool { !["pending", "submitted", "outcome_unknown"].contains(gate.state) }
     @discardableResult public func setLocalComposerRouting(conversationID: ID, references: [Reference], mentions: [ID], everyone: Bool) -> Bool {

@@ -69,6 +69,21 @@ function completion(raw: unknown, executionRunId: string): RuntimeCompletion {
   if (result.runId != null && result.runId !== executionRunId) fail('upstream_unavailable', 'The completion receipt belongs to another native execution.');
   return result;
 }
+/** Native follow-up or cron admission can execute a fixed run ID that chat.send never carried. */
+function nativelyAdmitted(services: BackendServices, runId: string, bound: RuntimeMapping): boolean {
+  const cronId = services.store.metadata<string>(`runCron:${runId}`);
+  return services.store.metadata<{ allow: boolean }>(`nativeFollowupAdmissionReceipt:${bound.upstreamRunId}`)?.allow === true
+    || (cronId !== null && services.store.metadata<{ allow: boolean }>(`cronAdmissionReceipt:${cronId}`)?.allow === true);
+}
+/**
+ * A terminal product run whose fixed ID never reached chat.send or native admission. Attachment copies and
+ * invocation proofs are inert, so nothing can execute its message: an unknown delivery for it is a refusal.
+ */
+export function terminalUndispatchedRun(services: BackendServices, run: P.Run): boolean {
+  if (!terminalStatuses.includes(run.status)) return false;
+  const bound = services.store.metadata<RuntimeMapping>(`runtimeRun:${run.id}`);
+  return bound !== null && bound.dispatched !== true && !nativelyAdmitted(services, run.id, bound);
+}
 /** Only exact content-free runtime failure codes are explained; free-form errors can carry prompts, paths or credentials. */
 const runtimeFailures: Record<string, string> = {
   empty_assistant_response: 'The model returned an empty reply, even after retrying. Try again or rephrase the request.',
@@ -622,7 +637,10 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
         const next = terminalStatuses.includes(latest.status) ? latest : emitRun(services.update(latest, { status: effectiveMode === 'queued' ? 'queued' : 'running', startedAtMs: effectiveMode === 'queued' ? latest.startedAtMs : latest.startedAtMs ?? services.now() }));
         return { run: next, delivery };
       } catch (error) {
-        const known = error instanceof ApiError ? error : new ApiError(bound.dispatched ? 'outcome_unknown' : 'internal_error', 'The runtime operation could not be confirmed.', !bound.dispatched, { resourceIds: [run.id], runId: run.id });
+        const thrown = error instanceof ApiError ? error : new ApiError(bound.dispatched ? 'outcome_unknown' : 'internal_error', 'The runtime operation could not be confirmed.', !bound.dispatched, { resourceIds: [run.id], runId: run.id });
+        // Before chat.send nothing can execute this message. A failed read (for example a timed-out
+        // capability probe) may call itself unsafe to repeat; the submission it stopped was not sent.
+        const known = !bound.dispatched && thrown.code !== 'outcome_unknown' && !thrown.retrySafe ? new ApiError(thrown.code, thrown.message, true, thrown.details) : thrown;
         const unknown = known.code === 'outcome_unknown';
         const latest = services.store.require<P.Run>('runs', run.id);
         const next = terminalStatuses.includes(latest.status) ? latest : emitRun(services.update(latest, { status: unknown ? 'outcome_unknown' : 'failed', completedAtMs: unknown ? null : services.now(), error: errorEnvelope(known, context?.requestId ?? services.id('req')).error }));
@@ -666,10 +684,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
           if (terminalStatuses.includes(run.status) && services.store.metadata<boolean>(`runtimeTerminalProjectionPending:${run.id}`) !== true) continue;
           const bound = mapping(run.id); if (!bound) continue;
           try { actor(run.id); } catch { services.store.setMetadata(`runtimeReconciliation:${run.id}`, { pending: true, code: 'forbidden', measuredAtMs: services.now() }); continue; }
-          const cronId = services.store.metadata<string>(`runCron:${run.id}`);
-          const admitted = services.store.metadata<{ allow: boolean }>(`nativeFollowupAdmissionReceipt:${bound.upstreamRunId}`)?.allow === true
-            || (cronId !== null && services.store.metadata<{ allow: boolean }>(`cronAdmissionReceipt:${cronId}`)?.allow === true);
-          if ((run.status === 'reserved' || run.status === 'outcome_unknown') && bound.dispatched !== true && !admitted) {
+          if ((run.status === 'reserved' || run.status === 'outcome_unknown') && bound.dispatched !== true && !nativelyAdmitted(services, run.id, bound)) {
             // Worker attachment uploads are inert; only dispatch/admission can execute this message.
             emitRun(services.update(run, { status: 'failed', completedAtMs: services.now(), error: errorEnvelope(new ApiError('upstream_unavailable', 'Not sent: Lemon restarted before this message was sent. Send it again.', true), services.id('req')).error }));
             closeStreaming(run);

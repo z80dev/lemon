@@ -3,6 +3,7 @@ import type { BackendServices, Principal, RequestContext, Route } from './servic
 import { ApiError, fail } from './errors';
 import { z, parse, principal, id, mutation, update, confirm, boundedText, queryObject } from './validation';
 import { cancelConversationGates } from './gates';
+import { terminalUndispatchedRun } from '../runtime/runs';
 
 export interface EntryAuthority { kind: 'human' | 'external' | 'bot'; userId: string; conversationId: string }
 interface StoredComposer extends P.ComposerDraft { id: string; userId: string; createdAtMs: number }
@@ -222,7 +223,9 @@ function readMessageReceipt(services: BackendServices, actor: Principal, convers
   });
   const delivery = runs.flatMap(run => {
     const value = services.store.metadata<P.MessageReceipt['delivery'][number]>(`runDelivery:${run.id}`) ?? stored.receipt.delivery.find(value => value.runId === run.id);
-    return value && value.botId === run.botId && value.runId === run.id ? [value] : [];
+    if (!value || value.botId !== run.botId || value.runId !== run.id) return [];
+    // A finished run the runtime never received settles its reservation as a refusal; possibly dispatched work stays unknown.
+    return [value.effectiveMode === 'outcome_unknown' && terminalUndispatchedRun(services, run) ? { ...value, effectiveMode: 'rejected' as const } : value];
   });
   // Older completed receipts already prove their full target set. An older partial reservation does not.
   const targets = stored.targetBotIds ?? (stored.receipt.status !== 'outcome_unknown' ? stored.receipt.delivery.map(value => value.botId) : null);
