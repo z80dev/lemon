@@ -250,6 +250,32 @@ defmodule LemonAi.Providers.RetryHelperTest do
              ) == 25_000
     end
 
+    test "Google RetryInfo and Retry-After use the throttle floor and bounded wait policy" do
+      policy = Map.put(RetryHelper.policy(), :jitter_fun, fn 5_000 -> 1_234 end)
+
+      for {retry_delay, expected} <- [{"3.5s", 11_234}, {"20s", 20_000}, {"61s", :give_up}] do
+        body = %{
+          "error" => %{
+            "status" => "RESOURCE_EXHAUSTED",
+            "message" => "Quota exceeded for quota metric",
+            "details" => [
+              %{
+                "@type" => "type.googleapis.com/google.rpc.RetryInfo",
+                "retryDelay" => retry_delay
+              }
+            ]
+          }
+        }
+
+        error = {:http_error, 429, body}
+        assert RetryHelper.retryable_http_error?(429, body)
+        assert RetryHelper.http_retry_delay_ms(0, [], policy, error) == expected
+
+        assert RetryHelper.http_retry_delay_ms(0, [{"retry-after", "25"}], policy, error) ==
+                 25_000
+      end
+    end
+
     test "Kimi quota and Codex usage windows surface exact reset times without retrying" do
       reset_at = ~U[2026-11-13 12:00:00Z]
 
