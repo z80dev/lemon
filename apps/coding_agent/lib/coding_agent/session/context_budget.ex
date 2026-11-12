@@ -3,6 +3,8 @@ defmodule CodingAgent.Session.ContextBudget do
   Current request context, not cumulative run spending. Uses exactly the same
   estimator and reserve threshold as automatic compaction. Headroom is the
   remaining token budget before that threshold, not the model's output limit.
+  An unknown model window leaves capacity fields `nil` and disables token-based
+  automatic compaction while still reporting the estimated/measured token usage.
   """
 
   alias CodingAgent.Compaction
@@ -23,11 +25,11 @@ defmodule CodingAgent.Session.ContextBudget do
       )
 
     Map.merge(usage, %{
-      window: window,
-      reserve_tokens: window - threshold,
+      window: if(threshold, do: window),
+      reserve_tokens: if(threshold, do: window - threshold),
       threshold_tokens: threshold,
-      headroom_tokens: max(threshold - usage.tokens, 0),
-      enabled: Map.get(settings, :enabled, true),
+      headroom_tokens: if(threshold, do: max(threshold - usage.tokens, 0)),
+      enabled: not is_nil(threshold) and Map.get(settings, :enabled, true),
       usage_after: usage_after
     })
   end

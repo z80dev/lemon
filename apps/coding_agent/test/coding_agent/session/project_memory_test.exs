@@ -21,8 +21,13 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
     def api_id, do: :print_memory_extraction_test
     def provider_id, do: :openai
 
-    def stream(model, _context, _opts) do
-      send(model.compat.test_owner, :unexpected_print_extraction)
+    def stream(model, context, _opts) do
+      kind =
+        if String.contains?(context.system_prompt || "", "Extract durable repository facts"),
+          do: :project_memory,
+          else: :other_completion
+
+      send(model.compat.test_owner, {:unexpected_print_auxiliary_request, kind})
       {:ok, stream} = LemonAi.EventStream.start_link()
 
       message = %AssistantMessage{
@@ -77,7 +82,16 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
     owner = self()
     LemonAi.ProviderRegistry.register(:print_memory_extraction_test, PrintExtractionProvider)
     on_exit(fn -> LemonAi.ProviderRegistry.unregister(:print_memory_extraction_test) end)
-    model = %{state.model | api: :print_memory_extraction_test, compat: %{test_owner: owner}}
+    # The runner includes real tool schemas. A zero-window Model default makes
+    # even this short turn trigger legitimate compaction, not memory extraction.
+    model = %{
+      state.model
+      | api: :print_memory_extraction_test,
+        context_window: 128_000,
+        max_tokens: 4_096,
+        compat: %{test_owner: owner}
+    }
+
     run_ref = make_ref()
 
     stream_fn = fn _, _, _ ->
@@ -112,7 +126,7 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
     assert_receive {:engine_event, ^run_ref, %{__event__: :completed, ok: true}}, 5_000
     assert_receive {:DOWN, ^session_monitor, :process, ^session, _}, 1_000
     assert :ok = ProjectMemory.flush(session_state, 1_000)
-    refute_received :unexpected_print_extraction
+    refute_received {:unexpected_print_auxiliary_request, _kind}
   end
 
   test "one-shot teardown never starts a turn or compaction extraction", %{
