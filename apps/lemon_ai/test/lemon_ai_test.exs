@@ -264,7 +264,7 @@ defmodule AiTest do
                       %StreamOptions{
                         temperature: 0.5,
                         stream_timeout: 1_800_000,
-                        stream_idle_timeout: 180_000,
+                        stream_idle_timeout: 300_000,
                         headers: %{},
                         thinking_budgets: %{}
                       }},

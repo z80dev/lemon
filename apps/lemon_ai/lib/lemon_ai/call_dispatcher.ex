@@ -98,7 +98,7 @@ defmodule LemonAi.CallDispatcher do
       provider is at its cap. `0` fails fast. Defaults to the
       `:queue_timeout_ms` application config, or 120 seconds.
     * `:stream_idle_timeout` - Maximum silence between stream events, in ms
-      (default 180,000). Also configurable under this module's application config.
+      (default 300,000). Also configurable under this module's application config.
     * `:stream_timeout` - Independent hard stream ceiling, in ms (default
       1,800,000). Also configurable under this module's application config.
       Both limits accept `:infinity`; per-call values override application config.

@@ -23,7 +23,7 @@ defmodule LemonAgent.EventStream do
         owner: self(),
         max_queue: 1000,
         timeout: 1_800_000,
-        idle_timeout: 180_000
+        idle_timeout: 300_000
       )
 
       # Producer pushes events (with backpressure)
@@ -77,7 +77,7 @@ defmodule LemonAgent.EventStream do
 
   @default_max_queue 10_000
   @default_timeout 1_800_000
-  @default_idle_timeout 180_000
+  @default_idle_timeout 300_000
   @default_task_shutdown_grace_ms 100
   @resync_retention_ms 30_000
 

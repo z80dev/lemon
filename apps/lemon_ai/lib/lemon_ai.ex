@@ -68,7 +68,7 @@ defmodule LemonAi do
     * `:api_key` - Override the default API key
     * `:headers` - Additional HTTP headers
     * `:reasoning` - Thinking level (:none, :minimal, :low, :medium, :high, :xhigh, :max)
-    * `:stream_idle_timeout` - Maximum silence between events (default 180,000 ms)
+    * `:stream_idle_timeout` - Maximum silence between events (default 300,000 ms)
     * `:stream_timeout` - Hard response ceiling (default 1,800,000 ms).
       Either timeout accepts `:infinity`.
 

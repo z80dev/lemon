@@ -457,7 +457,7 @@ runners and no `[runtime.cli.*]` configuration.
 
 ### Model response timeouts
 
-Model responses allow 180,000 ms of inactivity and a separate 1,800,000 ms hard
+Model responses allow 300,000 ms of inactivity and a separate 1,800,000 ms hard
 ceiling. Every provider event (thinking, text, tool arguments or other activity)
 resets inactivity, not the hard ceiling. Idle expiry reports
 `:stream_idle_timeout` directly or `:dispatcher_stream_idle_timeout` through the
@@ -471,7 +471,7 @@ Dispatcher application defaults (replacing `stream_result_timeout_ms`) are:
 
 ```elixir
 config :lemon_ai, LemonAi.CallDispatcher,
-  stream_idle_timeout: 180_000,
+  stream_idle_timeout: 300_000,
   stream_timeout: 1_800_000
 ```
 

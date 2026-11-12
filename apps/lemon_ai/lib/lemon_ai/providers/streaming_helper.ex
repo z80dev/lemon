@@ -12,7 +12,7 @@ defmodule LemonAi.Providers.StreamingHelper do
   alias LemonAi.Types.AssistantMessage
 
   @default_stream_timeout 1_800_000
-  @default_stream_idle_timeout 180_000
+  @default_stream_idle_timeout 300_000
   @default_max_queue 10_000
 
   @doc """

@@ -525,7 +525,7 @@ registry is a convenience, not a requirement.
 
 ```elixir
 config :lemon_ai, LemonAi.CallDispatcher,
-  stream_idle_timeout: 180_000,      # silence between provider events
+  stream_idle_timeout: 300_000,      # silence between provider events
   stream_timeout: 1_800_000          # independent hard response ceiling
 ```
 
@@ -571,7 +571,7 @@ All defined in `LemonAi.Types`:
   headers: map(),
   reasoning: :none | :minimal | :low | :medium | :high | :xhigh | :max | nil,
   stream_timeout: timeout(),        # hard ceiling; default 1_800_000ms
-  stream_idle_timeout: timeout(),   # silence window; default 180_000ms
+  stream_idle_timeout: timeout(),   # silence window; default 300_000ms
   tool_choice: atom() | String.t() | nil
   # ...plus Vertex/OAuth fields: project, location, access_token, service_account_json
 }

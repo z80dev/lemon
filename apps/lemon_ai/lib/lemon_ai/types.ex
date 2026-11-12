@@ -324,7 +324,7 @@ defmodule LemonAi.Types do
     @moduledoc """
     Options for streaming requests.
 
-    `stream_idle_timeout` cancels after 180,000 ms without any stream event.
+    `stream_idle_timeout` cancels after 300,000 ms without any stream event.
     Every event (including thinking and tool-argument deltas) resets this window.
     `stream_timeout` is an independent hard ceiling, defaulting to 1,800,000 ms.
     Either accepts `:infinity` to disable that limit.
@@ -386,7 +386,7 @@ defmodule LemonAi.Types do
               reasoning: nil,
               thinking_budgets: %{},
               stream_timeout: 1_800_000,
-              stream_idle_timeout: 180_000,
+              stream_idle_timeout: 300_000,
               tool_choice: nil,
               project: nil,
               location: nil,

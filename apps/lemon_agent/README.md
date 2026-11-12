@@ -322,7 +322,7 @@ config = %Types.AgentLoopConfig{
   convert_to_llm: &my_convert/1,
   stream_options: %LemonAi.Types.StreamOptions{
     max_tokens: 4000,
-    stream_idle_timeout: 180_000,
+    stream_idle_timeout: 300_000,
     stream_timeout: 1_800_000
   }
 }

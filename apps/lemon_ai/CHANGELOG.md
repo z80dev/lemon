@@ -8,7 +8,7 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
-- Streaming responses default to a reset-on-every-event 180,000 ms inactivity
+- Streaming responses default to a reset-on-every-event 300,000 ms inactivity
   limit and an independent configurable 1,800,000 ms hard ceiling. Direct and
   dispatched calls share stream-owned timers and distinct idle cancellation
   reasons. Dispatcher config replaces `stream_result_timeout_ms` with
