@@ -38,6 +38,10 @@ defmodule LemonCore.RedactTest do
           "stripeSecretKey",
           "my_token",
           "HTTPAuthorization",
+          "authorization_url",
+          "providerAuthorizationUrl",
+          "auth_url",
+          "oauth_url",
           "X-API-Key",
           "gateway.auth_token",
           "password",
@@ -71,7 +75,9 @@ defmodule LemonCore.RedactTest do
           "secretary",
           "credentialCount",
           "access_token_expires_at",
-          "accessTokenExpiresAt"
+          "accessTokenExpiresAt",
+          "authorization_url_count",
+          "authorUrl"
         ] do
       refute Redact.sensitive_key?(key)
       data = %{key => "ordinary-value"}

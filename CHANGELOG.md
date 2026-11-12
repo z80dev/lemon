@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Credential redaction protects bounded auth/authorization/OAuth URL fields again,
+  preventing embedded URL credentials from leaking through execution approvals
+  while preserving validated, usable OAuth links and ordinary parser token text.
 - Lemon Bot marks interrupted, never-dispatched messages “Not sent” and permits explicit resend; uncertain dispatched messages remain fenced.
 - Apple push registration accepts bounded variable-length hexadecimal device tokens.
 - Connect iPhone shows a copyable single-use pairing link alongside its QR, with the same expiry and usage state.

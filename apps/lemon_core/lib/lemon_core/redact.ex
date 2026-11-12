@@ -78,7 +78,7 @@ defmodule LemonCore.Redact do
   """
 
   @marker "[REDACTED]"
-  @key_pattern "(?:pairing[_-]?codes?|access[_-]?key|api[_-]?key|(?:access|refresh|id|api|bot|session)[_-]?token|auth(?:orization|[_-]?token)|bearer(?:[_-]?token)?|cookie|credentials?|master[_-]?key|oauth(?:[_-]?token)?|client[_-]?secret|passw(?:or)?d|private[_-]?key|secret[_-]?access[_-]?key|secret|token|wallet[_-]?key)"
+  @key_pattern "(?:pairing[_-]?codes?|access[_-]?key|api[_-]?key|(?:access|refresh|id|api|bot|session)[_-]?token|auth(?:orization|[_-]?token)?|bearer(?:[_-]?token)?|cookie|credentials?|master[_-]?key|oauth(?:[_-]?token)?|client[_-]?secret|passw(?:or)?d|private[_-]?key|secret[_-]?access[_-]?key|secret|token|wallet[_-]?key)"
   @key_components ~r/[_.%-]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/
   @assignment_key ~r/([A-Za-z0-9_.%-]+)["']?[ \t]*[:=][ \t]*\z/
   @private_key ~r/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\z)/s
@@ -200,6 +200,12 @@ defmodule LemonCore.Redact do
 
   defp credential_components?(["key", kind | _])
        when kind in ["api", "access", "private", "secret", "master", "wallet"],
+       do: true
+
+  # Authorization URLs can embed credentials. Consumers that expose usable OAuth
+  # links must explicitly validate them before bypassing this conservative mask.
+  defp credential_components?(["url", kind | _])
+       when kind in ["auth", "authorization", "oauth"],
        do: true
 
   defp credential_components?([code, "pairing" | _]) when code in ["code", "codes"], do: true
