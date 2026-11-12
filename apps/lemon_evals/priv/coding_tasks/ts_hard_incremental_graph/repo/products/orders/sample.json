@@ -1,0 +1,14 @@
+[
+  {
+    "orders_id": "x",
+    "orders_needs": [],
+    "orders_op": "input"
+  },
+  {
+    "orders_id": "y",
+    "orders_needs": [
+      "x"
+    ],
+    "orders_op": "sum"
+  }
+]

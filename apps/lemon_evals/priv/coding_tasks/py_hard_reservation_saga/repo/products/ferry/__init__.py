@@ -1,0 +1,1 @@
+"""Ferry booking boundary."""

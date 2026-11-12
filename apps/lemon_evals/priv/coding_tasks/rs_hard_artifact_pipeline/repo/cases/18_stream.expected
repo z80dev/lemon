@@ -1,0 +1,11 @@
+run=1
+roots=preview,release
+built|empty|a6a2d31f9155f3b6|
+built|metadata|5e7e33e3a46d9113|frame02
+built|raw|3decc8795646f00e|frame01
+built|joined|6872b8693a9dcd63|frame01 / frame02
+built|normalized|b6691349b83df88a|STREAM / frame02
+built|preview|d256a2ccd8336255|STR
+built|release|2551b64e838720d2|STREAM / frame02 :: STR :: 
+output|preview|STR
+output|release|STREAM / frame02 :: STR :: 

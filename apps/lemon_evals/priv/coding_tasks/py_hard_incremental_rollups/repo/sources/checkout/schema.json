@@ -1,0 +1,8 @@
+{
+  "id": "checkout_id",
+  "tenant": "checkout_tenant",
+  "revision": "checkout_revision",
+  "day": "checkout_day",
+  "value": "checkout_value",
+  "deleted": "checkout_deleted"
+}

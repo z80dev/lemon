@@ -1,0 +1,1 @@
+"""Query analytics wire boundary."""

@@ -1,0 +1,8 @@
+{
+  "id": "shipment_id",
+  "tenant": "shipment_tenant",
+  "revision": "shipment_revision",
+  "day": "shipment_day",
+  "value": "shipment_value",
+  "deleted": "shipment_deleted"
+}

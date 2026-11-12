@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Eight long-horizon coding-arena tasks across Python, TypeScript, Go and Rust,
+  with 80–200-file fixtures, complete reference overlays and collision-proof
+  hidden behavioral verifiers. Arena documentation describes host-only
+  validation limits, transport/provider caveats and the concrete gaps between
+  arena paired outcomes and #107's approved disclosure experiment runner.
+
 ### Fixed
 
 - Isolated paired runtimes allocate ephemeral gateway/router health listeners,

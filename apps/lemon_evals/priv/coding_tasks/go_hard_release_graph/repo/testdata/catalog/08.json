@@ -1,0 +1,22 @@
+{
+  "name": "component_08",
+  "version": {
+    "major": 1,
+    "minor": 2,
+    "patch": 3
+  },
+  "group": "train_2",
+  "private": false,
+  "dependencies": [
+    {
+      "name": "component_07",
+      "kind": "dev",
+      "policy": "any"
+    },
+    {
+      "name": "component_00",
+      "kind": "runtime",
+      "policy": "any"
+    }
+  ]
+}

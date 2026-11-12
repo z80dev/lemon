@@ -1,0 +1,9 @@
+run=1
+roots=metadata,preview
+built|metadata|176f7b2d9dd57622|thumbnail-override
+built|raw|f9ef82cfab692035|rgba
+built|joined|7c5e1c8866ae964b|rgba / thumbnail-override
+built|normalized|445422bfb65f5e95|IMAGE / thumbnail-override
+built|preview|0ff1b59d05c3f395|IMA
+output|metadata|thumbnail-override
+output|preview|IMA

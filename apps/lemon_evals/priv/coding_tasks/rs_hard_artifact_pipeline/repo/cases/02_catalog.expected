@@ -1,0 +1,9 @@
+run=1
+roots=metadata,preview
+built|metadata|175c0ef0ab7e5d82|fresh
+built|raw|56c5492d002ef506|pear pear
+built|joined|af15c66c020ea737|pear pear / fresh
+built|normalized|1a00cd904bcae998|CATALOG CATALOG / fresh
+built|preview|17969ff88e7b1966|CAT
+output|metadata|fresh
+output|preview|CAT

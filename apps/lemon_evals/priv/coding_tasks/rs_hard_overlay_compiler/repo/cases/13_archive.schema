@@ -1,0 +1,12 @@
+service.name|nonempty|required|public
+service.port|int:1:65535|required|public
+service.enabled|bool|required|public
+service.tags|list:1:6|required|public
+service.url|text|required|public
+auth.token|text|optional|secret
+auth.header|text|optional|secret
+cache.ttl|int:0:3600|optional|public
+cache.note|text|optional|public
+cachex|text|optional|public
+meta.literal|text|optional|public
+!requires|auth.header|auth.token

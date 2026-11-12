@@ -1,0 +1,1 @@
+"""Render analytics wire boundary."""

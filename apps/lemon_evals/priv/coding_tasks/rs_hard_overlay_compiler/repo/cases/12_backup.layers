@@ -1,0 +1,30 @@
+# backup service deployment: common base, regional routing, security policy
+[base]
+set|service.name|backup.base
+set|service.port|8080
+set|service.enabled|false
+list|service.tags|base,common,base
+set|service.url|https://${service.name}:${service.port}
+set|auth.token|initial-backup
+set|auth.header|Bearer ${auth.token}
+set|cache.ttl|300
+set|cache.note|base cache
+set|cachex|prefix lookalike survives
+set|meta.literal|$${service.name} $$ ${service.name}
+[regional]
+parents=base
+append|service.tags|common,us-west,common
+set|service.port|008900
+set|cache.note|regional cache
+[security]
+parents=base
+append|service.tags|secure,common
+set|auth.token|rotated-backup
+delete|cache
+[release]
+parents=regional,security
+append|service.tags|us-west,release,common
+remove|service.tags|common
+set|service.name|backup.final
+append|service.tags|release,${service.name},backup.final
+set|cache.ttl|90

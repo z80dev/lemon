@@ -1,0 +1,1 @@
+"""Camp booking boundary."""

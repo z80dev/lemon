@@ -1,0 +1,6 @@
+{
+  "sku_field": "hotel_code",
+  "quantity_field": "hotel_count",
+  "prefix": "hotel:",
+  "limit": 10
+}

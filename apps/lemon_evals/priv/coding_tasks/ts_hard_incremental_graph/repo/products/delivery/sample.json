@@ -1,0 +1,14 @@
+[
+  {
+    "delivery_id": "x",
+    "delivery_needs": [],
+    "delivery_op": "input"
+  },
+  {
+    "delivery_id": "y",
+    "delivery_needs": [
+      "x"
+    ],
+    "delivery_op": "sum"
+  }
+]

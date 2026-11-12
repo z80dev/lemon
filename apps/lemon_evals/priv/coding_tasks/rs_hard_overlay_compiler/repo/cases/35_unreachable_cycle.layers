@@ -1,0 +1,6 @@
+[release]
+set|a|ok
+[x]
+parents=y
+[y]
+parents=x

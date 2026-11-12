@@ -1,0 +1,14 @@
+{
+  "billing_layer": "billing-base",
+  "billing_rules": [
+    {
+      "billing_id": "reader",
+      "billing_effect": "allow",
+      "billing_path": "billing/items",
+      "billing_actions": [
+        "read"
+      ],
+      "billing_priority": 0
+    }
+  ]
+}

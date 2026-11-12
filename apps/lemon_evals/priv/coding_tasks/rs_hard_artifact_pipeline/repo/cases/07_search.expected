@@ -1,0 +1,9 @@
+run=1
+roots=release
+built|metadata|0ed987932a44f37a|index
+built|raw|998fc185738f2cbe|rust rust
+built|joined|9592d33b25561ecc|rust rust / index
+built|normalized|6c9758a454efcddb|SEARCH SEARCH / index
+built|preview|d26837ca1ca586df|SEA
+built|release|f5b3e56db258b6f9|SEARCH SEARCH / index :: SEA
+output|release|SEARCH SEARCH / index :: SEA

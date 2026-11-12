@@ -1,0 +1,14 @@
+[
+  {
+    "metrics_id": "x",
+    "metrics_needs": [],
+    "metrics_op": "input"
+  },
+  {
+    "metrics_id": "y",
+    "metrics_needs": [
+      "x"
+    ],
+    "metrics_op": "sum"
+  }
+]

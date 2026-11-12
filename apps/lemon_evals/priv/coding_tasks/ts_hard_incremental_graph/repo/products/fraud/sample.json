@@ -1,0 +1,14 @@
+[
+  {
+    "fraud_id": "x",
+    "fraud_needs": [],
+    "fraud_op": "input"
+  },
+  {
+    "fraud_id": "y",
+    "fraud_needs": [
+      "x"
+    ],
+    "fraud_op": "sum"
+  }
+]

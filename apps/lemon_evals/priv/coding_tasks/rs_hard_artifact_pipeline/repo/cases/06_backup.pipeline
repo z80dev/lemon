@@ -1,0 +1,8 @@
+empty|join::|
+raw|source:chunk-aa|
+metadata|source:chunk-bb|
+joined|join: / |raw,metadata
+normalized|replace:chunk-aa=>BACKUP|joined
+preview|slice:0:3|normalized
+release|join: :: |normalized,preview,empty
+unselected|fail:not a release dependency|

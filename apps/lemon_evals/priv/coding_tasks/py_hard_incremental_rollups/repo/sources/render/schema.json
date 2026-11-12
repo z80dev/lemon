@@ -1,0 +1,8 @@
+{
+  "id": "render_id",
+  "tenant": "render_tenant",
+  "revision": "render_revision",
+  "day": "render_day",
+  "value": "render_value",
+  "deleted": "render_deleted"
+}

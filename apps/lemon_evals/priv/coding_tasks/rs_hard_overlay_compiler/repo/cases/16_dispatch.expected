@@ -1,0 +1,12 @@
+layers=base,regional,security,release
+value|auth.header|text|[REDACTED]|base:6|refs=auth.token
+value|auth.token|text|[REDACTED]|security:1|refs=
+value|cache.ttl|int|90|release:4|refs=
+value|cachex|text|prefix lookalike survives|base:9|refs=
+value|meta.literal|text|${service.name} $ dispatch.final|base:10|refs=service.name
+value|service.enabled|bool|true|base:2|refs=
+value|service.name|text|dispatch.final|release:2|refs=
+value|service.port|int|8700|regional:1|refs=
+value|service.tags|list|base,eu-central,secure,release,dispatch.final|release:3|refs=service.name
+value|service.url|text|https://dispatch.final:008700|base:4|refs=service.name,service.port
+deleted|cache|security:2

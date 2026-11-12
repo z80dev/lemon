@@ -1,0 +1,1 @@
+"""Rail booking boundary."""

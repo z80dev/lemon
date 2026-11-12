@@ -1,0 +1,1 @@
+"""Shuttle booking boundary."""

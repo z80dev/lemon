@@ -1,0 +1,9 @@
+run=1
+roots=metadata,preview
+built|metadata|8b0664da70decb9c|subject
+built|raw|b1f6bd86ef5decc0|hello team!
+built|joined|774b714bf7cf92b6|hello team! / subject
+built|normalized|3e9884d2059d6cfd|MAIL team! / subject
+built|preview|567c86dd65603e87|MAI
+output|metadata|subject
+output|preview|MAI

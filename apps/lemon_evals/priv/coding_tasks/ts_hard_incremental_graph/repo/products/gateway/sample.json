@@ -1,0 +1,14 @@
+[
+  {
+    "gateway_id": "x",
+    "gateway_needs": [],
+    "gateway_op": "input"
+  },
+  {
+    "gateway_id": "y",
+    "gateway_needs": [
+      "x"
+    ],
+    "gateway_op": "sum"
+  }
+]

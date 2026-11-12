@@ -1,0 +1,14 @@
+{
+  "delivery_layer": "delivery-base",
+  "delivery_rules": [
+    {
+      "delivery_id": "reader",
+      "delivery_effect": "allow",
+      "delivery_path": "delivery/items",
+      "delivery_actions": [
+        "read"
+      ],
+      "delivery_priority": 0
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "sku_field": "tour_code",
+  "quantity_field": "tour_count",
+  "prefix": "tour:",
+  "limit": 13
+}

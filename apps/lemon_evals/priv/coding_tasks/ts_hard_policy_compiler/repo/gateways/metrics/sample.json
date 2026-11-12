@@ -1,0 +1,14 @@
+{
+  "metrics_layer": "metrics-base",
+  "metrics_rules": [
+    {
+      "metrics_id": "reader",
+      "metrics_effect": "allow",
+      "metrics_path": "metrics/items",
+      "metrics_actions": [
+        "read"
+      ],
+      "metrics_priority": 0
+    }
+  ]
+}

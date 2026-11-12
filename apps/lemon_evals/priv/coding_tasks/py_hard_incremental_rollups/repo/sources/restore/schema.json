@@ -1,0 +1,8 @@
+{
+  "id": "restore_id",
+  "tenant": "restore_tenant",
+  "revision": "restore_revision",
+  "day": "restore_day",
+  "value": "restore_value",
+  "deleted": "restore_deleted"
+}

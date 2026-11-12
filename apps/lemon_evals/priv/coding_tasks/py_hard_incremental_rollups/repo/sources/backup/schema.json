@@ -1,0 +1,8 @@
+{
+  "id": "backup_id",
+  "tenant": "backup_tenant",
+  "revision": "backup_revision",
+  "day": "backup_day",
+  "value": "backup_value",
+  "deleted": "backup_deleted"
+}

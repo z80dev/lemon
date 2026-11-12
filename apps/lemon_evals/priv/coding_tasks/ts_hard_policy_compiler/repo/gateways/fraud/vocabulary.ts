@@ -1,0 +1,1 @@
+export const vocabulary = {"layer": "fraud_layer", "rules": "fraud_rules", "remove": "fraud_remove", "id": "fraud_id", "effect": "fraud_effect", "path": "fraud_path", "actions": "fraud_actions", "priority": "fraud_priority", "conditions": "fraud_conditions", "action": "fraud_action", "attributes": "fraud_attributes", "defaultResource": "fraud/items"} as const;

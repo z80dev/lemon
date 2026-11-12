@@ -1,0 +1,7 @@
+raw|source:csv|
+metadata|source:tenant|
+joined|join: / |raw,metadata
+normalized|replace:csv=>EXPORT|joined
+preview|slice:0:3|normalized
+release|join: :: |normalized,preview
+unselected|fail:not a release dependency|

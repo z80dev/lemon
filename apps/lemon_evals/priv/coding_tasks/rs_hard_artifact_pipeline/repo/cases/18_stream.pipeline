@@ -1,0 +1,8 @@
+empty|join::|
+raw|source:frame01|
+metadata|source:frame02|
+joined|join: / |raw,metadata
+normalized|replace:frame01=>STREAM|joined
+preview|slice:0:3|normalized
+release|join: :: |normalized,preview,empty
+unselected|fail:not a release dependency|

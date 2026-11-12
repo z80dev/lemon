@@ -1,0 +1,6 @@
+{
+  "sku_field": "car_code",
+  "quantity_field": "car_count",
+  "prefix": "car:",
+  "limit": 11
+}

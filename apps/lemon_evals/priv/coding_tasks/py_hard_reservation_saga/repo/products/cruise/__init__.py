@@ -1,0 +1,1 @@
+"""Cruise booking boundary."""

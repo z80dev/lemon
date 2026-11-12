@@ -1,0 +1,6 @@
+{
+  "sku_field": "bike_code",
+  "quantity_field": "bike_count",
+  "prefix": "bike:",
+  "limit": 19
+}

@@ -1,0 +1,14 @@
+{
+  "catalog_layer": "catalog-base",
+  "catalog_rules": [
+    {
+      "catalog_id": "reader",
+      "catalog_effect": "allow",
+      "catalog_path": "catalog/items",
+      "catalog_actions": [
+        "read"
+      ],
+      "catalog_priority": 0
+    }
+  ]
+}

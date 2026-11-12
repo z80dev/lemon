@@ -1,0 +1,22 @@
+{
+  "name": "component_27",
+  "version": {
+    "major": 1,
+    "minor": 2,
+    "patch": 3
+  },
+  "group": "",
+  "private": false,
+  "dependencies": [
+    {
+      "name": "component_26",
+      "kind": "runtime",
+      "policy": "pin"
+    },
+    {
+      "name": "component_19",
+      "kind": "runtime",
+      "policy": "pin"
+    }
+  ]
+}

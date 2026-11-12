@@ -1,0 +1,14 @@
+[
+  {
+    "notices_id": "x",
+    "notices_needs": [],
+    "notices_op": "input"
+  },
+  {
+    "notices_id": "y",
+    "notices_needs": [
+      "x"
+    ],
+    "notices_op": "sum"
+  }
+]

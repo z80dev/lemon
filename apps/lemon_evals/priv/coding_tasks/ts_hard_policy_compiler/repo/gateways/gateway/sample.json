@@ -1,0 +1,14 @@
+{
+  "gateway_layer": "gateway-base",
+  "gateway_rules": [
+    {
+      "gateway_id": "reader",
+      "gateway_effect": "allow",
+      "gateway_path": "gateway/items",
+      "gateway_actions": [
+        "read"
+      ],
+      "gateway_priority": 0
+    }
+  ]
+}

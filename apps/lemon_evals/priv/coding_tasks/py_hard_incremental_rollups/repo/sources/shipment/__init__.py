@@ -1,0 +1,1 @@
+"""Shipment analytics wire boundary."""

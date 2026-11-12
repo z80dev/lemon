@@ -1,0 +1,17 @@
+{
+  "name": "component_02",
+  "version": {
+    "major": 1,
+    "minor": 2,
+    "patch": 3
+  },
+  "group": "",
+  "private": false,
+  "dependencies": [
+    {
+      "name": "component_01",
+      "kind": "dev",
+      "policy": "any"
+    }
+  ]
+}

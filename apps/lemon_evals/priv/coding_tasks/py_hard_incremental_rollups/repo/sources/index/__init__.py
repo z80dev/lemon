@@ -1,0 +1,1 @@
+"""Index analytics wire boundary."""

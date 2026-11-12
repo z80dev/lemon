@@ -1,0 +1,6 @@
+{
+  "sku_field": "lounge_code",
+  "quantity_field": "lounge_count",
+  "prefix": "lounge:",
+  "limit": 21
+}

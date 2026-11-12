@@ -1,0 +1,1 @@
+"""Lounge booking boundary."""

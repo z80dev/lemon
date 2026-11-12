@@ -1,0 +1,8 @@
+{
+  "id": "query_id",
+  "tenant": "query_tenant",
+  "revision": "query_revision",
+  "day": "query_day",
+  "value": "query_value",
+  "deleted": "query_deleted"
+}

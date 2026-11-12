@@ -1,0 +1,14 @@
+{
+  "identity_layer": "identity-base",
+  "identity_rules": [
+    {
+      "identity_id": "reader",
+      "identity_effect": "allow",
+      "identity_path": "identity/items",
+      "identity_actions": [
+        "read"
+      ],
+      "identity_priority": 0
+    }
+  ]
+}

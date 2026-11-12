@@ -1,0 +1,8 @@
+{
+  "id": "index_id",
+  "tenant": "index_tenant",
+  "revision": "index_revision",
+  "day": "index_day",
+  "value": "index_value",
+  "deleted": "index_deleted"
+}

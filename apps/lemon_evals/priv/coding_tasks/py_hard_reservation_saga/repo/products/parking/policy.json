@@ -1,0 +1,6 @@
+{
+  "sku_field": "parking_code",
+  "quantity_field": "parking_count",
+  "prefix": "parking:",
+  "limit": 16
+}

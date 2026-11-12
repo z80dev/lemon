@@ -1,0 +1,8 @@
+{
+  "id": "refund_id",
+  "tenant": "refund_tenant",
+  "revision": "refund_revision",
+  "day": "refund_day",
+  "value": "refund_value",
+  "deleted": "refund_deleted"
+}

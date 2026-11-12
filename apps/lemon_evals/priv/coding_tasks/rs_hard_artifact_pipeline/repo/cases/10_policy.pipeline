@@ -1,0 +1,7 @@
+raw|source:read read|
+metadata|source:scope|
+joined|join: / |raw,metadata
+normalized|replace:read=>POLICY|joined
+preview|slice:0:3|normalized
+release|join: :: |normalized,preview
+unselected|fail:not a release dependency|

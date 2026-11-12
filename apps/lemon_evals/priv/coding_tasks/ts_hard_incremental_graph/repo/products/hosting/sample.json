@@ -1,0 +1,14 @@
+[
+  {
+    "hosting_id": "x",
+    "hosting_needs": [],
+    "hosting_op": "input"
+  },
+  {
+    "hosting_id": "y",
+    "hosting_needs": [
+      "x"
+    ],
+    "hosting_op": "sum"
+  }
+]

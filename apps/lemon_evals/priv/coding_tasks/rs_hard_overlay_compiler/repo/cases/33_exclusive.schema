@@ -1,0 +1,3 @@
+a|text|optional|public
+b|text|optional|public
+!exclusive|b,a

@@ -1,0 +1,9 @@
+run=1
+roots=metadata,preview
+built|metadata|99875507758b8df5|tenant
+built|raw|fd932fcdfe554ce0|csv
+built|joined|e44578a6a80b7c43|csv / tenant
+built|normalized|7b1bebe9775a72cd|EXPORT / tenant
+built|preview|03fea1a485db07fe|EXP
+output|metadata|tenant
+output|preview|EXP

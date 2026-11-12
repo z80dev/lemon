@@ -1,0 +1,12 @@
+layers=base,regional,security,release
+value|auth.header|text|[REDACTED]|base:6|refs=auth.token
+value|auth.token|text|[REDACTED]|security:1|refs=
+value|cache.ttl|int|90|release:4|refs=
+value|cachex|text|prefix lookalike survives|base:9|refs=
+value|meta.literal|text|${service.name} $ images.final|base:10|refs=service.name
+value|service.enabled|bool|true|base:2|refs=
+value|service.name|text|images.final|release:2|refs=
+value|service.port|int|8181|regional:1|refs=
+value|service.tags|list|base,eu-central,secure,release,images.final|release:3|refs=service.name
+value|service.url|text|https://images.final:008181|base:4|refs=service.name,service.port
+deleted|cache|security:2

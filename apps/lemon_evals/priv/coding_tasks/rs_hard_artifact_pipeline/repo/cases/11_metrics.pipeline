@@ -1,0 +1,7 @@
+unselected|fail:not a release dependency|
+release|join: :: |normalized,preview
+preview|slice:0:3|normalized
+normalized|replace:p95=18=>METRICS|joined
+joined|join: / |raw,metadata
+metadata|source:p99=24|
+raw|source:p95=18|

@@ -1,0 +1,14 @@
+[
+  {
+    "payments_id": "x",
+    "payments_needs": [],
+    "payments_op": "input"
+  },
+  {
+    "payments_id": "y",
+    "payments_needs": [
+      "x"
+    ],
+    "payments_op": "sum"
+  }
+]

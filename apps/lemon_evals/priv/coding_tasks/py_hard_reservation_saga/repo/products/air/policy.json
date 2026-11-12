@@ -1,0 +1,6 @@
+{
+  "sku_field": "air_code",
+  "quantity_field": "air_count",
+  "prefix": "air:",
+  "limit": 8
+}

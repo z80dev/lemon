@@ -1,0 +1,26 @@
+[
+  {
+    "sequence": 65,
+    "kind": "begin",
+    "tx": "settlement_16"
+  },
+  {
+    "sequence": 66,
+    "kind": "post",
+    "tx": "settlement_16",
+    "account": "merchant_16",
+    "amount": -17
+  },
+  {
+    "sequence": 67,
+    "kind": "post",
+    "tx": "settlement_16",
+    "account": "merchant_17",
+    "amount": 17
+  },
+  {
+    "sequence": 68,
+    "kind": "commit",
+    "tx": "settlement_16"
+  }
+]
