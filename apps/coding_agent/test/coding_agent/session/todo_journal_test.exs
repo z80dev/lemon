@@ -358,6 +358,9 @@ defmodule CodingAgent.Session.TodoJournalTest do
     session =
       start_session(root,
         settings_manager: settings,
+        # This case invokes the optional sidecar tool directly rather than via
+        # tool_invoke; keep its schema disclosed under the coding default.
+        tool_disclosure: [pinned: ["todo_host_bridge"]],
         tool_policy:
           ToolPolicy.custom(allow: ["todo", "todo_host_bridge"], require_approval: ["todo"]),
         approval_context: %{

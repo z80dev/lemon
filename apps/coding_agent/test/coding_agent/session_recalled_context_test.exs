@@ -145,6 +145,9 @@ defmodule CodingAgent.SessionRecalledContextTest do
     defaults = [
       cwd: cwd,
       workspace_dir: Path.join(cwd, "workspace"),
+      # These fixtures model main assistant memory integration. Keep that mode
+      # explicit now that unkeyed cwd-scoped sessions default to coding.
+      session_mode: :chat,
       model: Mocks.mock_model(),
       stream_fn: capturing_stream_fn(self(), Mocks.assistant_message("ok"))
     ]
@@ -729,35 +732,45 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
   describe "the error event" do
     test "carries the partial state with the attachment taken off" do
-      Contributor.answer([@stable, @volatile])
-      session = start_session()
-      unsubscribe = Session.subscribe(session)
-
-      :ok = Session.prompt(session, "why is the build slow?")
-      await_sent()
-
-      assert_receive {:session_event, _id,
-                      {:message_end, %UserMessage{content: "why is the build slow?"}}},
-                     2_000
-
-      # The agent's own list keeps the attachment on purpose — this is the state
-      # a failed turn hands back, and it is broadcast and pushed into
-      # `LemonAgent.EventStream.error/3`.
-      partial = agent_state(session)
-      assert Enum.any?(partial.messages, &(inspect(&1) =~ @volatile.body))
-
-      send(session, {:agent_event, {:error, :boom, partial}})
-
-      assert_receive {:session_event, _id, {:error, :boom, broadcast}}, 2_000
-      refute Enum.any?(broadcast.messages, &(inspect(&1) =~ @volatile.body))
-
-      assert Enum.any?(
-               broadcast.messages,
-               &match?(%UserMessage{content: "why is the build slow?"}, &1)
-             )
-
-      unsubscribe.()
+      assert_stripped_error_event(:chat, & &1)
     end
+
+    test "coding mode delivers the provider's messages-only partial state" do
+      assert_stripped_error_event(:coding, &Map.take(&1, [:messages, :stream_message]))
+    end
+  end
+
+  defp assert_stripped_error_event(mode, partial_state) do
+    Contributor.answer([@stable, @volatile])
+    session = start_session(session_mode: mode)
+    unsubscribe = Session.subscribe(session)
+
+    :ok = Session.prompt(session, "why is the build slow?")
+    await_sent()
+
+    assert_receive {:session_event, _id,
+                    {:message_end, %UserMessage{content: "why is the build slow?"}}},
+                   2_000
+
+    # The runtime agent state retains the attachment. Real provider/loop errors
+    # carry messages, not executable tools: serializing coding bridge closures
+    # in a synthetic full-state event would exceed bounded delivery's byte limit.
+    # Retain the original full-state shape coverage in the assistant-mode case.
+    partial = partial_state.(agent_state(session))
+    assert Enum.any?(partial.messages, &(inspect(&1) =~ @volatile.body))
+
+    send(session, {:agent_event, {:error, :boom, partial}})
+
+    assert_receive {:session_event, _id, {:error, :boom, broadcast}}, 2_000
+    refute Enum.any?(broadcast.messages, &(inspect(&1) =~ @volatile.body))
+    refute_receive {:session_event, _id, {:stream_resync, _}}
+
+    assert Enum.any?(
+             broadcast.messages,
+             &match?(%UserMessage{content: "why is the build slow?"}, &1)
+           )
+
+    unsubscribe.()
   end
 
   defp eventually_idle(session, attempts \\ 1000)
