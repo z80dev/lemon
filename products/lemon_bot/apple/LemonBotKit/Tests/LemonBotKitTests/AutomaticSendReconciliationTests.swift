@@ -296,4 +296,30 @@ private final class ReconciliationCredentials: AccountCredentialStore {
         XCTAssertEqual(store.reconciledMessageReceipts[nonce]?.status, "accepted")
         XCTAssertTrue(TestHTTPProtocol.requests.allSatisfy { $0.httpMethod == "GET" })
     }
+    func testFinishedRunEventRestartsBoundedRechecksUntilItsDeliverySettles() async throws {
+        let store = try store(), realtime = URLSession(configuration: .ephemeral)
+        defer { realtime.invalidateAndCancel() }
+        store.socket = realtime.webSocketTask(with: URL(string: "ws://127.0.0.1:9/realtime")!)
+        store.messageRecheckDelays = [.milliseconds(20)]
+        store.pendingIntents = [MutationIntent(clientNonce: nonce, method: "POST", path: "/conversations/chat/messages", state: "outcome_unknown")]
+        // The reply finished, but the backend has not yet read the lost acknowledgement's admission receipt.
+        let finished = receipt(status: "outcome_unknown", runStatus: "succeeded", effectiveMode: "outcome_unknown")
+        var reads = 0
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            reads += 1
+            return (200, [:], try JSONEncoder().encode(reads < 4 ? finished : self.receipt(runStatus: "succeeded")))
+        }
+        await store.reconcilePendingMessages()
+        await waitUntil { reads == 2 }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(reads, 2, "Rechecks are bounded; a terminal run with unknown delivery never settles the fence by itself.")
+        XCTAssertEqual(store.pendingIntents.map(\.state), ["message_recorded"])
+        try await store.apply(RealtimeEvent(seq: "1", payload: .runUpserted(finished.runs[0]), timestampMs: 1))
+        await waitUntil { store.pendingIntents.isEmpty }
+        XCTAssertTrue(store.pendingIntents.isEmpty, "New run evidence restarts rechecks until the backend settles the delivery.")
+        XCTAssertEqual(reads, 4)
+        XCTAssertEqual(store.reconciledMessageReceipts[nonce]?.delivery.first?.effectiveMode, "started")
+        XCTAssertTrue(TestHTTPProtocol.requests.allSatisfy { $0.httpMethod == "GET" })
+    }
 }

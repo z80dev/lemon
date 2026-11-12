@@ -63,6 +63,32 @@ describe('read-only message submission receipts', () => {
       expect(f.calls.filter(call => call.method === 'chat.send')).toHaveLength(1);
     } finally { runtime.close(); f.store.close(); }
   });
+  test('a reply that finished before its lost chat.send acknowledgement settles only from the exact admission receipt', async () => {
+    const f = fixture(), runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const original = f.rpc; f.rpc = async (method, params) => { if (method === 'chat.send') throw new ApiError('outcome_unknown', 'Controller acknowledgement lost.', false); return original(method, params); };
+    const admission = (state: string, sessionKey: string | null, effectiveMode: string | null) => { f.rpc = async (method, params) => method === 'runs.receipt.get' ? { receipt: { runId: params.runId, sessionKey, state, effectiveMode, targetRunId: null, retrySafe: false } } : original(method, params); };
+    try {
+      const sent = await sendMessage(f.services, f.alice, f.conversation.id, { clientNonce: nonce, text: 'Quick question' });
+      const run = sent.runs[0]!, sessionKey = runtime.sessionKey(f.conversation, f.bot);
+      // The runtime ran the fixed ID and finished between reconciliation ticks.
+      f.rpc = async (method, params) => method === 'agent.wait' ? { runId: run.id, ok: true, answer: 'Fine, thanks.', cancelled: false } : original(method, params);
+      await runtime.project('agent', { type: 'started', runId: run.id, sessionKey });
+      await runtime.project('agent', { type: 'completed', runId: run.id, sessionKey });
+      expect(f.store.require<P.Run>('runs', run.id).status).toBe('succeeded');
+      expect((await lookup(f)).status).toBe('outcome_unknown');
+      // A terminal run, an undecided receipt or one for another session proves nothing about this delivery.
+      admission('outcome_unknown', null, null); await runtime.reconcile();
+      expect((await lookup(f)).status).toBe('outcome_unknown');
+      admission('accepted', 'agent:another-session', 'new_run'); await runtime.reconcile();
+      expect((await lookup(f)).status).toBe('outcome_unknown');
+      admission('accepted', sessionKey, 'new_run'); await runtime.reconcile();
+      const receipt = await lookup(f);
+      expect(receipt.status).toBe('accepted'); expect(receipt.delivery[0]?.effectiveMode).toBe('started');
+      expect(receipt.runs[0]).toMatchObject({ id: run.id, status: 'succeeded' });
+      expect(f.calls.filter(call => call.method === 'runs.receipt.get').every(call => call.params.runId === run.id)).toBe(true);
+      expect(f.calls.filter(call => call.method === 'chat.send')).toHaveLength(1);
+    } finally { runtime.close(); f.store.close(); }
+  });
   test('a timed-out pre-dispatch capability read is an unsent refusal, never an unknown receipt', async () => {
     const f = fixture(), runtime = createRuntimeService(f.services); f.services.runtime = runtime;
     // The controller reports a timed-out read as not retry-safe; it still stopped the submission before chat.send.

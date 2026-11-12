@@ -53,6 +53,16 @@ export interface RuntimeMapping {
 export interface ManagedRuntimeService extends RuntimeService { close(): void; project(event: string, payload: unknown): Promise<void> }
 interface SubmissionContext { returnConversationId?: string; sourceEntryId?: string; noHandoff?: boolean; parentRunId?: string; sourceBotId?: string }
 const receiptSchema = z.object({ runId: id, sessionKey: z.string(), effectiveMode: z.enum(['new_run', 'queued', 'merged', 'steer_pending', 'steer', 'steer_backlog_pending', 'steer_backlog', 'redirect_pending', 'redirect', 'interrupt']), targetRunId: id.nullable() }).passthrough();
+/** The router's read-only admission receipt for one fixed run ID; reading it never dispatches. */
+const admissionReceiptSchema = z.object({ receipt: z.object({ runId: id, sessionKey: z.string().nullable(), state: z.enum(['accepted', 'outcome_unknown', 'aborted']), effectiveMode: receiptSchema.shape.effectiveMode.nullable(), targetRunId: id.nullable() }).passthrough() }).passthrough();
+type AdmissionReceipt = z.infer<typeof admissionReceiptSchema>['receipt'];
+type Delivery = P.MessageReceipt['delivery'][number];
+/** How long a finished run whose chat.send acknowledgement was lost keeps reading its admission receipt. */
+const terminalDeliveryWindowMs = 86_400_000;
+/** Submission, reconciliation and finished-run settlement must map router modes identically. */
+function admittedMode(mode: z.infer<typeof receiptSchema>['effectiveMode']): Delivery['effectiveMode'] {
+  return mode === 'new_run' ? 'started' : mode === 'steer' || mode === 'redirect' || mode === 'steer_backlog' ? 'steering' : mode === 'interrupt' ? 'interrupting' : 'queued';
+}
 const finalSchema = z.object({ runId: z.string().nullable().optional(), ok: z.boolean(), answer: z.string().nullable(), error: z.unknown().optional(), cancelled: z.boolean() }).passthrough();
 // Started/updated actions carry `ok: null`; rejecting that would drop every in-progress tool row.
 const eventSchema = z.object({ runId: id, sessionKey: z.string(), type: z.string(), seq: z.number().int().nonnegative().optional(), text: z.string().optional(), action: z.object({ id: z.string(), kind: z.string().nullable().optional(), title: z.string().nullable().optional() }).passthrough().optional(), phase: z.string().optional(), ok: z.boolean().nullable().optional(), cancelled: z.boolean().optional() }).passthrough();
@@ -384,6 +394,21 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
       services.store.setMetadata(`runtimeReconciliation:${run.id}`, { pending: true, code: error.code, measuredAtMs: services.now() });
     }
   }
+  /**
+   * Delivery proven by a finished run's exact admission receipt: same fixed ID, same session, a settled mode and a
+   * target this initiator owns. Null keeps the delivery unknown; the run's terminal status alone proves nothing.
+   */
+  function terminalDelivery(run: P.Run, bound: RuntimeMapping, receipt: AdmissionReceipt): Delivery | null {
+    if (receipt.runId !== bound.upstreamRunId) return null;
+    const requestedMode = services.store.metadata<Delivery>(`runDelivery:${run.id}`)?.requestedMode ?? 'followup';
+    // A Stop that reached the controller first fenced this fixed ID before it ever started.
+    if (receipt.state === 'aborted') return receipt.sessionKey === null || receipt.sessionKey === bound.sessionKey ? { botId: run.botId, requestedMode, effectiveMode: 'rejected', targetRunId: null, runId: run.id } : null;
+    if (receipt.state !== 'accepted' || receipt.sessionKey !== bound.sessionKey || receipt.effectiveMode === null || receipt.effectiveMode.endsWith('_pending')) return null;
+    const target = receipt.effectiveMode === 'interrupt' ? bound.upstreamRunId : receipt.targetRunId ?? bound.upstreamRunId;
+    if (target !== bound.upstreamRunId && !ownMappings(target, bound.sessionKey).some(value => value.run.initiatorUserId === run.initiatorUserId)) return null;
+    const targetRunId = receipt.targetRunId === null || receipt.targetRunId === run.id ? null : ownTargetMapping(receipt.targetRunId, bound.sessionKey)?.run.id ?? null;
+    return { botId: run.botId, requestedMode, effectiveMode: admittedMode(receipt.effectiveMode), targetRunId, runId: run.id };
+  }
   async function projectCron(payload: unknown) {
     const parsed = cronSchema.safeParse(payload); if (!parsed.success) return;
     const event = parsed.data;
@@ -630,7 +655,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
         if (targetId !== run.id && !ownMappings(targetId, bound.sessionKey).some(target => target.run.initiatorUserId === principal.userId)) fail('outcome_unknown', 'The runtime target does not belong to this initiating principal’s product invocation.', false, { resourceIds: [run.id], runId: run.id });
         const executionRunId = receipt.effectiveMode === 'interrupt' || receipt.effectiveMode.endsWith('_pending') ? run.id : targetId;
         patchMapping(run.id, { executionRunId }); Object.assign(bound, mapping(run.id));
-        const effectiveMode: P.MessageReceipt['delivery'][number]['effectiveMode'] = receipt.effectiveMode === 'new_run' ? 'started' : receipt.effectiveMode === 'steer' || receipt.effectiveMode === 'redirect' || receipt.effectiveMode === 'steer_backlog' ? 'steering' : receipt.effectiveMode === 'interrupt' ? 'interrupting' : 'queued';
+        const effectiveMode = admittedMode(receipt.effectiveMode);
         const delivery: P.MessageReceipt['delivery'][number] = { botId: bot.id, requestedMode, effectiveMode, targetRunId: targetId === run.id ? null : ownTargetMapping(targetId, bound.sessionKey)!.run.id, runId: run.id };
         services.store.setMetadata(`runDelivery:${run.id}`, delivery);
         const latest = services.store.require<P.Run>('runs', run.id);
@@ -677,6 +702,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
           const result = upstream(z.object({ runs: z.array(z.object({ id, routerRunId: id.nullable(), jobId: id, status: z.string(), sessionKey: z.string().nullable(), startedAtMs: z.number().int().nullable() }).passthrough()) }).passthrough(), await services.lemon.call('cron.runs', { id: routine.cronJobId!, limit: 20, includeOutput: true, includeMeta: false }));
           for (const record of result.runs) await projectCron({ type: record.status === 'running' ? 'started' : 'completed', runId: record.routerRunId, cronRunId: record.id, jobId: record.jobId, sessionKey: record.sessionKey, startedAtMs: record.startedAtMs, status: record.status });
         }
+        const receiptsRead = new Set<string>();
         for (const candidate of services.store.list<P.Run>('runs', value => !terminalStatuses.includes(value.status) || services.store.metadata<boolean>(`runtimeTerminalProjectionPending:${value.id}`) === true)) {
           if (submitting.has(candidate.id)) continue;
           // Earlier receipt reads yield to completion projection for later candidates.
@@ -693,7 +719,8 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
           if (run.status === 'reserved') emitRun(services.update(run, { status: 'outcome_unknown', error: errorEnvelope(new ApiError('outcome_unknown', 'A reserved submission needs reconciliation after interruption.', false, { resourceIds: [run.id], runId: run.id }), services.id('req')).error }));
           if (bound.dispatched || services.store.metadata<{ allow: boolean }>(`nativeFollowupAdmissionReceipt:${bound.upstreamRunId}`)?.allow === true) {
             try {
-              const response = upstream(z.object({ receipt: z.object({ runId: id, sessionKey: z.string().nullable(), state: z.enum(['accepted', 'outcome_unknown', 'aborted']), effectiveMode: receiptSchema.shape.effectiveMode.nullable(), targetRunId: id.nullable() }).passthrough() }).passthrough(), await services.lemon.call('runs.receipt.get', { runId: bound.upstreamRunId }));
+              receiptsRead.add(run.id);
+              const response = upstream(admissionReceiptSchema, await services.lemon.call('runs.receipt.get', { runId: bound.upstreamRunId }));
               const receipt = response.receipt;
               if (receipt.runId !== bound.upstreamRunId) continue;
               // A Stop that reached the controller first permanently fences this fixed ID: it never ran and never will.
@@ -705,7 +732,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
                 const retained = actor(run.id);
                 if (target !== bound.upstreamRunId && !ownMappings(target, bound.sessionKey).some(value => value.run.initiatorUserId === retained.userId)) continue;
                 patchMapping(run.id, { executionRunId: target });
-                const effectiveMode: P.MessageReceipt['delivery'][number]['effectiveMode'] = receipt.effectiveMode === 'new_run' ? 'started' : receipt.effectiveMode === 'steer' || receipt.effectiveMode === 'redirect' || receipt.effectiveMode === 'steer_backlog' ? 'steering' : receipt.effectiveMode === 'interrupt' ? 'interrupting' : 'queued';
+                const effectiveMode = admittedMode(receipt.effectiveMode);
                 const delivery = services.store.metadata<P.MessageReceipt['delivery'][number]>(`runDelivery:${run.id}`);
                 services.store.setMetadata(`runDelivery:${run.id}`, { botId: run.botId, requestedMode: delivery?.requestedMode ?? 'followup', effectiveMode, targetRunId: receipt.targetRunId === null || receipt.targetRunId === run.id ? null : ownTargetMapping(receipt.targetRunId, bound.sessionKey)?.run.id ?? null, runId: run.id } satisfies P.MessageReceipt['delivery'][number]);
                 const current = services.store.require<P.Run>('runs', run.id);
@@ -714,6 +741,16 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
             } catch (error) { if (!(error instanceof ApiError)) throw error; services.store.setMetadata(`runtimeReconciliation:${run.id}`, { pending: true, code: error.code, measuredAtMs: services.now() }); }
             await queryFinal(services.store.require<P.Run>('runs', run.id), mapping(run.id) ?? bound);
           }
+        }
+        // A run can finish between ticks while its chat.send acknowledgement is still lost: its own events
+        // completed it, but only the exact admission receipt (read, never resent) settles the message delivery.
+        for (const run of services.store.list<P.Run>('runs', value => terminalStatuses.includes(value.status) && services.store.metadata<Delivery>(`runDelivery:${value.id}`)?.effectiveMode === 'outcome_unknown')) {
+          const bound = mapping(run.id);
+          if (!bound?.dispatched || submitting.has(run.id) || receiptsRead.has(run.id) || services.now() - (run.completedAtMs ?? run.updatedAtMs) > terminalDeliveryWindowMs) continue;
+          try {
+            const delivery = terminalDelivery(run, bound, upstream(admissionReceiptSchema, await services.lemon.call('runs.receipt.get', { runId: bound.upstreamRunId })).receipt);
+            if (delivery) services.store.setMetadata(`runDelivery:${run.id}`, delivery);
+          } catch (error) { if (!(error instanceof ApiError)) throw error; services.store.setMetadata(`runtimeReconciliation:${run.id}`, { pending: true, code: error.code, measuredAtMs: services.now() }); }
         }
         await services.access?.reconcileAll();
       })().finally(() => { reconciliation = null; });

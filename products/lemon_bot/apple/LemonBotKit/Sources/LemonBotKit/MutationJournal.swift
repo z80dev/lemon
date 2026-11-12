@@ -263,9 +263,12 @@ extension LemonBotStore {
         scheduleMessageReconciliation()
         await messageReconciliationTask?.value
     }
-    func scheduleMessageReconciliation(clientNonce: String? = nil) {
+    /// Event, foreground and send triggers restart the bounded recheck backoff: a run that just finished can
+    /// settle its delivery on the backend's next tick, long after earlier rechecks ran out.
+    func scheduleMessageReconciliation(clientNonce: String? = nil, fromRecheck: Bool = false) {
         guard account != nil, connectionState != "reconnect_required",
               pendingIntents.contains(where: { $0.messageConversationID != nil && (clientNonce == nil || $0.clientNonce == clientNonce) }) else { return }
+        if !fromRecheck { messageRecheckAttempt = 0 }
         messageReconciliationRequested = true
         guard messageReconciliationTask == nil else { return }
         let current = generation
@@ -300,7 +303,7 @@ extension LemonBotStore {
             try? await Task.sleep(for: delay)
             guard let self, !Task.isCancelled, self.generation == current else { return }
             self.messageRecheckTask = nil
-            self.scheduleMessageReconciliation()
+            self.scheduleMessageReconciliation(fromRecheck: true)
         }
     }
     /// The exact receipt shows the authored message, so only its delivery is unconfirmed.
