@@ -8,12 +8,12 @@ import (
 	"testing"
 )
 
-var readFailure = errors.New("manifest device failed")
+var arenaHiddenReadFailure = errors.New("manifest device failed")
 
-type failReader struct{}
+type arenaHiddenFailReader struct{}
 
-func (failReader) Read([]byte) (int, error) { return 0, readFailure }
-func TestManifestGrammar(t *testing.T) {
+func (arenaHiddenFailReader) Read([]byte) (int, error) { return 0, arenaHiddenReadFailure }
+func TestArenaHiddenManifestGrammar(t *testing.T) {
 	text := "# release\r\n\t\r\nimage = registry/app:12 # ignored\r\nnote=\"snowman ☃ # yes \\n\\t\\\"\\\\\"#end\r\nempty=\"\"\r\nmode = fast"
 	want := []Entry{{"image", "registry/app:12"}, {"note", "snowman ☃ # yes \n\t\"\\"}, {"empty", ""}, {"mode", "fast"}}
 	got, err := Parse(strings.NewReader(text))
@@ -44,8 +44,8 @@ func TestManifestGrammar(t *testing.T) {
 	if got != nil || !errors.As(err, &pe) || pe.Line != 3 {
 		t.Fatal("duplicate line")
 	}
-	got, err = Parse(io.MultiReader(strings.NewReader("a=ok\n"), failReader{}))
-	if got != nil || !errors.Is(err, readFailure) {
+	got, err = Parse(io.MultiReader(strings.NewReader("a=ok\n"), arenaHiddenFailReader{}))
+	if got != nil || !errors.Is(err, arenaHiddenReadFailure) {
 		t.Fatalf("reader failure %v %v", got, err)
 	}
 }

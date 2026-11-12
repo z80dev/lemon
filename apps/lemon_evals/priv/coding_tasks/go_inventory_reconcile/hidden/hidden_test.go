@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestReconciliation(t *testing.T) {
+func TestArenaHiddenReconciliation(t *testing.T) {
 	open := map[string]int64{"tea": 4, "zero": 0}
 	events := []Event{{ID: "c", Kind: "cancel", Ref: "r"}, {ID: "s", Kind: "ship", SKU: "tea", Quantity: 10}, {ID: "r", Kind: "receive", SKU: "canceled", Quantity: 7}, {ID: "r2", Kind: "receive", SKU: "tea", Quantity: 8}}
 	want := []Balance{{"canceled", 0}, {"tea", 2}, {"zero", 0}}

@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-func TestSharedBehavior(t *testing.T) {
+func TestArenaHiddenSharedBehavior(t *testing.T) {
 	for _, load := range []func(string) (config.Settings, error){config.Parse, batch.Load, server.Load} {
 		for _, c := range []struct {
 			text string
@@ -40,7 +40,7 @@ func TestSharedBehavior(t *testing.T) {
 		t.Fatal("callers not migrated")
 	}
 }
-func TestNoDuplicateParsers(t *testing.T) {
+func TestArenaHiddenNoDuplicateParsers(t *testing.T) {
 	for _, dir := range []string{"batch", "server"} {
 		entries, err := os.ReadDir(dir)
 		if err != nil {

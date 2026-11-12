@@ -9,14 +9,14 @@ import (
 	"testing"
 )
 
-type brokenReader struct{}
+type arenaHiddenBrokenReader struct{}
 
-func (brokenReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+func (arenaHiddenBrokenReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
 
-type brokenWriter struct{}
+type arenaHiddenBrokenWriter struct{}
 
-func (brokenWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
-func TestCLIContract(t *testing.T) {
+func (arenaHiddenBrokenWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
+func TestArenaHiddenCLIContract(t *testing.T) {
 	cases := []struct {
 		args       []string
 		text, want string
@@ -44,11 +44,11 @@ func TestCLIContract(t *testing.T) {
 		}
 	}
 	var out, diag bytes.Buffer
-	if Run(nil, io.MultiReader(strings.NewReader("sku,quantity\n"), brokenReader{}), &out, &diag) != 1 || out.Len() != 0 {
+	if Run(nil, io.MultiReader(strings.NewReader("sku,quantity\n"), arenaHiddenBrokenReader{}), &out, &diag) != 1 || out.Len() != 0 {
 		t.Fatal("read error")
 	}
 	diag.Reset()
-	if Run(nil, strings.NewReader("sku,quantity\nA,2\n"), brokenWriter{}, &diag) != 1 || diag.Len() == 0 {
+	if Run(nil, strings.NewReader("sku,quantity\nA,2\n"), arenaHiddenBrokenWriter{}, &diag) != 1 || diag.Len() == 0 {
 		t.Fatal("write error")
 	}
 	cmd := exec.Command("go", "build", "-o", t.TempDir()+"/stocksum", "../cmd/stocksum")

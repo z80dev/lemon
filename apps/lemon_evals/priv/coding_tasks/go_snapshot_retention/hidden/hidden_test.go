@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func reference(in []Snapshot, p Policy) []string {
+func arenaHiddenReference(in []Snapshot, p Policy) []string {
 	var out []string
 	for _, s := range in {
 		if s.Pinned || s.Created >= p.Cutoff {
@@ -28,12 +28,12 @@ func reference(in []Snapshot, p Policy) []string {
 	sort.Strings(out)
 	return out
 }
-func TestPlanContract(t *testing.T) {
+func TestArenaHiddenPlanContract(t *testing.T) {
 	in := []Snapshot{{"old", "a", 1, false}, {"new", "a", 8, false}, {"pin", "a", 10, true}, {"tie-b", "b", 4, false}, {"tie-a", "b", 4, false}, {"recent", "c", 9, false}, {"extreme", "d", math.MinInt64, false}}
 	for _, p := range []Policy{{0, 9}, {1, 9}, {2, math.MaxInt64}, {100, 0}} {
 		before := append([]Snapshot(nil), in...)
 		got, err := Plan(in, p)
-		want := reference(in, p)
+		want := arenaHiddenReference(in, p)
 		if err != nil || !reflect.DeepEqual(got, want) || !reflect.DeepEqual(in, before) {
 			t.Fatalf("policy %v: %v %v want %v", p, got, err, want)
 		}
@@ -55,7 +55,7 @@ func TestPlanContract(t *testing.T) {
 		}
 		p := Policy{r.Intn(5), int64(r.Intn(9) - 4)}
 		got, err := Plan(data, p)
-		if err != nil || !reflect.DeepEqual(got, reference(data, p)) {
+		if err != nil || !reflect.DeepEqual(got, arenaHiddenReference(data, p)) {
 			t.Fatalf("random policy %v: %v %v", p, got, err)
 		}
 	}

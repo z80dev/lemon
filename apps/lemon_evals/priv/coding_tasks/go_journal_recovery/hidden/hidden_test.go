@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func frame(t *testing.T, s uint64, p string) []byte {
+func arenaHiddenFrame(t *testing.T, s uint64, p string) []byte {
 	t.Helper()
 	b, e := Encode(Record{s, []byte(p)})
 	if e != nil {
@@ -19,8 +19,8 @@ func frame(t *testing.T, s uint64, p string) []byte {
 	}
 	return b
 }
-func TestJournalContract(t *testing.T) {
-	a, b := frame(t, 4, "first"), frame(t, 9, "second")
+func TestArenaHiddenJournalContract(t *testing.T) {
+	a, b := arenaHiddenFrame(t, 4, "first"), arenaHiddenFrame(t, 9, "second")
 	full := append(append([]byte{}, a...), b...)
 	for n := 0; n < len(b); n++ {
 		records, valid, err := Scan(full[:len(a)+n])
@@ -44,11 +44,11 @@ func TestJournalContract(t *testing.T) {
 		t.Fatal("empty")
 	}
 	bads := [][]byte{}
-	checksum := frame(t, 5, "broken")
+	checksum := arenaHiddenFrame(t, 5, "broken")
 	checksum[12] ^= 1
 	bads = append(bads, checksum)
 	for _, seq := range []uint64{0, 3, 4} {
-		bad := frame(t, 5, "s")
+		bad := arenaHiddenFrame(t, 5, "s")
 		binary.BigEndian.PutUint64(bad[4:12], seq)
 		binary.BigEndian.PutUint32(bad[len(bad)-4:], crc32.ChecksumIEEE(bad[4:len(bad)-4]))
 		bads = append(bads, bad)
@@ -73,10 +73,10 @@ func TestJournalContract(t *testing.T) {
 		t.Fatal("max payload")
 	}
 }
-func TestAppendRecovery(t *testing.T) {
+func TestArenaHiddenAppendRecovery(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.bin")
-	a := frame(t, 17, "committed")
-	tail := frame(t, 20, "partial")[:13]
+	a := arenaHiddenFrame(t, 17, "committed")
+	tail := arenaHiddenFrame(t, 20, "partial")[:13]
 	initial := append(append([]byte{}, a...), tail...)
 	if err := os.WriteFile(path, initial, 0600); err != nil {
 		t.Fatal(err)
@@ -97,10 +97,10 @@ func TestAppendRecovery(t *testing.T) {
 	if !bytes.Equal(data, a) {
 		t.Fatal("empty batch did not repair")
 	}
-	for _, original := range [][]byte{initial, frame(t, math.MaxUint64, "last")} {
+	for _, original := range [][]byte{initial, arenaHiddenFrame(t, math.MaxUint64, "last")} {
 		os.WriteFile(path, original, 0600)
 		payloads := [][]byte{[]byte("valid"), make([]byte, MaxPayload+1)}
-		if len(original) == len(frame(t, math.MaxUint64, "last")) {
+		if len(original) == len(arenaHiddenFrame(t, math.MaxUint64, "last")) {
 			payloads = [][]byte{[]byte("x")}
 		}
 		if err := AppendFile(path, payloads); !errors.Is(err, ErrInvalid) {
@@ -111,7 +111,7 @@ func TestAppendRecovery(t *testing.T) {
 			t.Fatal("validation changed existing file")
 		}
 	}
-	corrupt := frame(t, 2, "bad")
+	corrupt := arenaHiddenFrame(t, 2, "bad")
 	corrupt[12] ^= 1
 	os.WriteFile(path, corrupt, 0600)
 	var ce *CorruptionError

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestContract(t *testing.T) {
+func TestArenaHiddenContract(t *testing.T) {
 	cases := []struct{ in, want []Window }{
 		{nil, nil}, {[]Window{}, nil},
 		{[]Window{{9, 12}, {1, 5}, {5, 9}, {2, 3}}, []Window{{1, 12}}},

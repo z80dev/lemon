@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestRouteSemantics(t *testing.T) {
+func TestArenaHiddenRouteSemantics(t *testing.T) {
 	rules := []Rule{{"/", "root", 100}, {"/a//b/", "first", 2}, {"/a/c/../b", "tie", 2}, {"/a/b", "winner", 3}, {"/a/b/c", "deep", -9}, {"/a", "short", 1000}, {"/A", "upper", 0}, {"/%61", "literal", 0}}
 	tab, err := New(rules)
 	if err != nil {
@@ -57,7 +57,7 @@ func TestRouteSemantics(t *testing.T) {
 	}
 	wg.Wait()
 }
-func TestScaleIndex(t *testing.T) {
+func TestArenaHiddenScaleIndex(t *testing.T) {
 	const count = 200000
 	rules := make([]Rule, 0, count+1)
 	rules = append(rules, Rule{"/", "fallback", 0})

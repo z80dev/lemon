@@ -217,6 +217,65 @@ def cmd_validate(args):
     return 1 if failures else 0
 
 
+# ── reverify ───────────────────────────────────────────────────────────────
+
+def reverify_one(row, task, out):
+    """Replay a recorded trial's diff onto a fresh fixture and run the task's current hidden verifier."""
+    trial_dir = out / 'trials' / row['id']
+    container = Container(IMAGES['base'], f'arena-reverify-{row["id"][:40]}-{secrets.token_hex(3)}', 2, '3g')
+    try:
+        init_repo(container, task)
+        diff = (trial_dir / 'changes.diff').read_text()
+        if diff.strip():
+            applied = container.exec(['git', 'apply', '--whitespace=nowarn'], input=diff, timeout=120)
+            if applied.returncode != 0:
+                raise RuntimeError('git apply failed: ' + applied.stderr[-500:])
+        stdout = (trial_dir / 'agent.stdout').read_text()
+        answer = (AGENTS[row['agent']][2](stdout) if stdout.strip() else {}).get('answer') or ''
+        passed, verification = run_verifier(container, task, answer)
+    finally:
+        container.remove()
+    (trial_dir / 'reverify.log').write_text(verification.stdout[-200_000:] + '\n--- stderr ---\n' + verification.stderr[-200_000:])
+    failure = None if passed else (row['failure'] if row['failure'] not in (None, 'verifier_failed') else 'verifier_failed')
+    return {**row, 'passed': passed, 'verifier_passed': passed, 'failure': failure,
+            'original_passed': row['passed'], 'original_failure': row['failure'],
+            'reverified_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+
+
+def cmd_reverify(args):
+    """Re-score recorded trials of --tasks against their current hidden verifiers (after a verifier fix).
+
+    Every scored trial of each named task is replayed, whatever its arm, so a verifier change applies
+    to all arms alike. The re-scored row is appended to results.jsonl (latest row wins) and keeps the
+    original outcome in original_passed/original_failure.
+    """
+    out = Path(args.output_dir)
+    names = args.tasks.split(',')
+    by_id = {task['id']: task for task in load_tasks(args.tasks_dir, names)}
+    latest = {}
+    for row in read_rows(out / 'results.jsonl'):
+        latest[row['id']] = row
+    rows = [row for row in latest.values() if row['task'] in by_id and row['failure'] != 'infrastructure']
+    print(f're-verifying {len(rows)} trials of {len(by_id)} tasks', flush=True)
+    changed = 0
+    with ThreadPoolExecutor(max_workers=args.concurrency) as pool, (out / 'results.jsonl').open('a') as handle:
+        futures = {pool.submit(reverify_one, row, by_id[row['task']], out): row for row in rows}
+        for future in as_completed(futures):
+            row = futures[future]
+            try:
+                new = future.result()
+            except Exception as error:  # noqa: BLE001 - keep the original row when replay itself fails
+                print(f'SKIP {row["id"]}: {error}', flush=True)
+                continue
+            handle.write(json.dumps(new) + '\n')
+            handle.flush()
+            if new['passed'] != row['passed']:
+                changed += 1
+                print(f'CHANGED {row["id"]} ({row["model"]}): {row["passed"]} -> {new["passed"]}', flush=True)
+    print(f'{changed} outcomes changed', flush=True)
+    return 0
+
+
 # ── agents ─────────────────────────────────────────────────────────────────
 
 def trial_token(secret, trial_id, claims=None):
@@ -1014,9 +1073,15 @@ def main():
     report = sub.add_parser('report')
     report.add_argument('--output-dir', required=True)
     report.add_argument('--proxy-log')
+    reverify = sub.add_parser('reverify', help='re-score recorded trials of tasks whose hidden verifier changed')
+    reverify.add_argument('--output-dir', required=True)
+    reverify.add_argument('--tasks', required=True)
+    reverify.add_argument('--concurrency', type=int, default=4)
     args = parser.parse_args()
     if args.command == 'validate':
         return cmd_validate(args)
+    if args.command == 'reverify':
+        return cmd_reverify(args)
     if args.command == 'run':
         args.proxy_secret = os.environ.get('ARENA_PROXY_SECRET') or sys.exit('ARENA_PROXY_SECRET must match the running proxy')
         return cmd_run(args)

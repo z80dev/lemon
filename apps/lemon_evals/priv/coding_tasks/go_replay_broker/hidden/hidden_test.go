@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func recv(t *testing.T, s *Subscription) Message {
+func arenaHiddenRecv(t *testing.T, s *Subscription) Message {
 	t.Helper()
 	select {
 	case m, ok := <-s.C:
@@ -21,7 +21,7 @@ func recv(t *testing.T, s *Subscription) Message {
 		return Message{}
 	}
 }
-func ended(t *testing.T, s *Subscription, want error) {
+func arenaHiddenEnded(t *testing.T, s *Subscription, want error) {
 	t.Helper()
 	select {
 	case _, ok := <-s.C:
@@ -35,7 +35,7 @@ func ended(t *testing.T, s *Subscription, want error) {
 		t.Fatalf("termination %v want %v", s.Err(), want)
 	}
 }
-func TestReplayAndOwnership(t *testing.T) {
+func TestArenaHiddenReplayAndOwnership(t *testing.T) {
 	b, _ := New(3)
 	defer b.Close()
 	a, _ := b.Subscribe("a", 0, 8)
@@ -43,7 +43,7 @@ func TestReplayAndOwnership(t *testing.T) {
 	p := []byte("one")
 	b.Publish("a", p)
 	p[0] = 'X'
-	ma, mc := recv(t, a), recv(t, c)
+	ma, mc := arenaHiddenRecv(t, a), arenaHiddenRecv(t, c)
 	if string(ma.Payload) != "one" || string(mc.Payload) != "one" {
 		t.Fatal("publisher aliases")
 	}
@@ -71,17 +71,17 @@ func TestReplayAndOwnership(t *testing.T) {
 		t.Fatal(e)
 	}
 	for n := uint64(3); n <= 5; n++ {
-		if m := recv(t, replay); m.Sequence != n {
+		if m := arenaHiddenRecv(t, replay); m.Sequence != n {
 			t.Fatal("replay order")
 		}
 	}
 	b.Publish("a", []byte("six"))
-	if m := recv(t, replay); m.Sequence != 6 {
+	if m := arenaHiddenRecv(t, replay); m.Sequence != 6 {
 		t.Fatal("live after replay")
 	}
 	b.Publish("b", nil)
 	other, e := b.Subscribe("b", 0, 2)
-	if e != nil || recv(t, other).Sequence != 1 {
+	if e != nil || arenaHiddenRecv(t, other).Sequence != 1 {
 		t.Fatal("topic isolation")
 	}
 	zero, _ := New(0)
@@ -94,12 +94,12 @@ func TestReplayAndOwnership(t *testing.T) {
 		t.Fatal(e)
 	}
 	zero.Publish("z", []byte("new"))
-	if recv(t, s).Sequence != 2 {
+	if arenaHiddenRecv(t, s).Sequence != 2 {
 		t.Fatal("zero retention live")
 	}
 	zero.Close()
 }
-func TestSlowCancelAndClose(t *testing.T) {
+func TestArenaHiddenSlowCancelAndClose(t *testing.T) {
 	b, _ := New(3)
 	slow, _ := b.Subscribe("t", 0, 1)
 	fast, _ := b.Subscribe("t", 0, 8)
@@ -113,20 +113,20 @@ func TestSlowCancelAndClose(t *testing.T) {
 	if !errors.Is(slow.Err(), ErrSlow) {
 		t.Fatal("missing slow reason")
 	}
-	if recv(t, slow).Sequence != 1 {
+	if arenaHiddenRecv(t, slow).Sequence != 1 {
 		t.Fatal("queued value lost")
 	}
-	ended(t, slow, ErrSlow)
+	arenaHiddenEnded(t, slow, ErrSlow)
 	slow.Cancel()
 	if !errors.Is(slow.Err(), ErrSlow) {
 		t.Fatal("reason overwritten")
 	}
-	if recv(t, fast).Sequence != 1 || recv(t, fast).Sequence != 2 {
+	if arenaHiddenRecv(t, fast).Sequence != 1 || arenaHiddenRecv(t, fast).Sequence != 2 {
 		t.Fatal("healthy subscriber")
 	}
 	fast.Cancel()
 	fast.Cancel()
-	ended(t, fast, nil)
+	arenaHiddenEnded(t, fast, nil)
 	b.Publish("t", nil)
 	active, _ := b.Subscribe("t", 3, 2)
 	b.Publish("t", []byte("last"))
@@ -134,10 +134,10 @@ func TestSlowCancelAndClose(t *testing.T) {
 		t.Fatal(e)
 	}
 	b.Close()
-	if recv(t, active).Sequence != 4 {
+	if arenaHiddenRecv(t, active).Sequence != 4 {
 		t.Fatal("close dropped queue")
 	}
-	ended(t, active, ErrClosed)
+	arenaHiddenEnded(t, active, ErrClosed)
 	active.Cancel()
 	if !errors.Is(active.Err(), ErrClosed) {
 		t.Fatal("close reason lost")
@@ -158,7 +158,7 @@ func TestSlowCancelAndClose(t *testing.T) {
 		t.Fatal("negative retain")
 	}
 }
-func TestConcurrentLifecycle(t *testing.T) {
+func TestArenaHiddenConcurrentLifecycle(t *testing.T) {
 	b, _ := New(32)
 	var wg sync.WaitGroup
 	for worker := 0; worker < 12; worker++ {
@@ -199,7 +199,7 @@ func TestConcurrentLifecycle(t *testing.T) {
 	wg.Wait()
 	b.Close()
 }
-func TestAtomicReplayJoin(t *testing.T) {
+func TestArenaHiddenAtomicReplayJoin(t *testing.T) {
 	b, _ := New(2048)
 	defer b.Close()
 	start := make(chan struct{})
