@@ -292,6 +292,13 @@ skip recorded trials (`--retry-infrastructure` re-runs container/harness
 failures). Per-trial `agent.stdout`, `changes.diff` and `verify.log` stay in the
 operator-chosen run directory and may contain model output.
 
+After fixing a task's hidden verifier, `arena.py reverify --output-dir RUN
+--tasks a,b` replays every recorded trial of those tasks (all arms) from its
+`changes.diff` onto a fresh fixture, runs the current verifier, and appends the
+re-scored row with `original_passed`/`original_failure` kept. Go hidden tests
+prefix their identifiers with `ArenaHidden`/`arenaHidden` so they cannot collide
+with tests the agent adds to the same package.
+
 The unit of comparison is a (task, repetition) group holding every agent arm,
 and a group always runs on one model. `--models` lists model pools in
 preference order, each with its own concurrency budget; all pools run at once.
