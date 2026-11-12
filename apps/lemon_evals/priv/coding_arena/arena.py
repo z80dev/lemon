@@ -232,12 +232,14 @@ def trial_token(secret, trial_id):
 MODELS = {
     'k3.1-pro': {'provider': 'kimi', 'lemon_provider': 'kimi_coding', 'lemon_env': 'KIMI_API_KEY',
                  'lemon_base': '/coding', 'omp_provider': 'kimi-code', 'omp_env': 'KIMI_API_KEY',
-                 'omp_base': '/coding/v1'},
+                 'omp_base': '/coding/v1', 'probe_interval': 300},
     # Lemon's catalog serves glm-5.3 over Z.AI's coding-plan chat-completions endpoint; omp's over
     # Z.AI's Anthropic-compatible endpoint. Same model, quota and credential.
     'glm-5.3': {'provider': 'zai', 'lemon_provider': 'zai', 'lemon_env': 'ZAI_API_KEY',
                 'lemon_base': '/zai/api/coding/paas/v4', 'omp_provider': 'zai', 'omp_env': 'ZAI_API_KEY',
-                'omp_base': '/zai/api/anthropic'},
+                'omp_base': '/zai/api/anthropic',
+                # Z.AI answers 1302 "Rate limit reached for requests" (a concurrency throttle) briefly.
+                'probe_interval': 60},
 }
 
 
@@ -555,6 +557,8 @@ class Scheduler:
         self.unavailable = {}  # model -> monotonic time it became unavailable
         self.usage_checked, self.kimi_accepts_new = 0.0, True
         self.retries = {}
+        self.model_running = {}  # model -> trials in flight
+        self.caps = {args.fallback_model: args.fallback_concurrency} if args.fallback_model else {}
         self.finished = 0
 
     def save_groups(self):
@@ -602,15 +606,19 @@ class Scheduler:
             if trial['id'] not in queued:
                 self.pending.insert(0, trial)
 
+    def has_room(self, model):
+        cap = self.caps.get(model)
+        return cap is None or self.model_running.get(model, 0) < cap
+
     def choose(self, trial):
         """The model to run this trial on now, or None to leave it pending. Caller holds the lock."""
         key = group_key(trial['task'], trial['rep'])
         pinned = self.groups.get(key, {}).get('model')
         if pinned and self.available(pinned):
-            return pinned
+            return pinned if self.has_room(pinned) else None
         if self.running.get(key):
             return None  # arms in flight pin the group to its model
-        fresh = [model for model in self.models if self.accepts_new_groups(model)]
+        fresh = [model for model in self.models if self.has_room(model) and self.accepts_new_groups(model)]
         if not pinned:
             if fresh:
                 self.assign(key, fresh[0], 'first arm')
@@ -638,6 +646,7 @@ class Scheduler:
                         self.pending.remove(trial)
                         key = group_key(trial['task'], trial['rep'])
                         self.running[key] = self.running.get(key, 0) + 1
+                        self.model_running[model] = self.model_running.get(model, 0) + 1
                         return trial, model
                 if not self.pending and not any(self.running.values()):
                     return None
@@ -652,7 +661,7 @@ class Scheduler:
 
     def probe_until_available(self, model):
         while True:
-            time.sleep(self.args.probe_interval)
+            time.sleep(MODELS[model]['probe_interval'])
             if model_responds(self.args, model):
                 with self.cv:
                     self.unavailable.pop(model, None)
@@ -664,6 +673,7 @@ class Scheduler:
         key = group_key(trial['task'], trial['rep'])
         with self.cv:
             self.running[key] -= 1
+            self.model_running[model] -= 1
             with self.results_path.open('a') as handle:
                 handle.write(json.dumps({**row, 'group_model': self.groups[key]['model']}) + '\n')
             self.finished += 1
@@ -944,7 +954,8 @@ def main():
                      help='stop starting new groups on Kimi once its 5-hour window reaches this used ratio')
     run.add_argument('--reassign-after', type=int, default=6 * 3600,
                      help='seconds a pinned model may stay unavailable before its unfinished groups move models')
-    run.add_argument('--probe-interval', type=int, default=300, help='seconds between quota probes')
+    run.add_argument('--fallback-concurrency', type=int, default=3,
+                     help='most trials in flight on the fallback model (Z.AI throttles concurrent requests)')
     run.add_argument('--thinking', default='high')
     run.add_argument('--repetitions', type=int, default=3)
     run.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT)
