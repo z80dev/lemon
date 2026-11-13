@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.11.9]
+
 ### Security
 
 - Updated HTTP dependencies past published advisories: Bandit 1.14.1 (HTTP/1,
