@@ -37,9 +37,6 @@ defmodule CodingAgent.Tools.Agent do
     agent_id_property = build_agent_id_property(config_cwd, opts)
     role_property = build_role_property(config_cwd)
 
-    model_description =
-      Params.per_call_model_descriptions(cwd, opts, "omit to use the delegated defaults").model
-
     %AgentTool{
       name: "agent",
       timeout_ms: :infinity,
@@ -89,10 +86,6 @@ defmodule CodingAgent.Tools.Agent do
             "enum" => @valid_queue_modes,
             "description" => "Completion queue; default configured mode or followup"
           },
-          "model" => %{
-            "type" => "string",
-            "description" => model_description
-          },
           "tool_policy" => %{
             "type" => "object",
             "description" => "Delegated tool policy"
@@ -134,6 +127,13 @@ defmodule CodingAgent.Tools.Agent do
       },
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
+    # Present only while [runtime.task].per_call_model is on.
+    |> Params.put_per_call_model_params(
+      cwd,
+      opts,
+      ["model"],
+      "omit to use the delegated defaults"
+    )
   end
 
   @doc """

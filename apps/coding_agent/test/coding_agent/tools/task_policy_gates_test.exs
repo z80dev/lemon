@@ -230,8 +230,16 @@ defmodule CodingAgent.Tools.TaskPolicyGatesTest do
       assert %AgentToolResult{} =
                execute(cwd, opts, %{"prompt" => "x", "model" => " ", "auto_followup" => false})
 
-      tool = TaskTool.tool(cwd, opts)
-      assert tool.parameters["properties"]["model"]["description"] =~ "Disabled by operator"
+      # Gated fields are not advertised while the gate is off.
+      properties = TaskTool.tool(cwd, opts).parameters["properties"]
+      item = properties["tasks"]["items"]["properties"]
+
+      for name <- ["model", "thinking_level"] do
+        refute Map.has_key?(properties, name)
+        refute Map.has_key?(item, name)
+      end
+
+      assert Map.has_key?(item, "prompt")
     end
 
     @tag :tmp_dir
@@ -262,8 +270,13 @@ defmodule CodingAgent.Tools.TaskPolicyGatesTest do
                  "auto_followup" => false
                })
 
-      description = TaskTool.tool(cwd, opts).parameters["properties"]["model"]["description"]
-      assert description =~ "One of openai/gpt-4o, @smol"
+      properties = TaskTool.tool(cwd, opts).parameters["properties"]
+      assert properties["model"]["description"] =~ "One of openai/gpt-4o, @smol"
+
+      assert properties["tasks"]["items"]["properties"]["model"]["description"] =~
+               "One of openai/gpt-4o, @smol"
+
+      assert properties["thinking_level"]["type"] == "string"
 
       unrestricted = [
         parent_session: unique_id(),
@@ -356,8 +369,12 @@ defmodule CodingAgent.Tools.TaskPolicyGatesTest do
 
       assert message =~ "per_call_model = \"off\""
 
-      assert DelegateTool.tool(cwd, opts).parameters["properties"]["model"]["description"] =~
-               "Disabled by operator"
+      refute Map.has_key?(DelegateTool.tool(cwd, opts).parameters["properties"], "model")
+
+      enabled = [settings_manager: gate_settings("on", ["openai/gpt-4o"])]
+
+      assert DelegateTool.tool(cwd, enabled).parameters["properties"]["model"]["description"] =~
+               "One of openai/gpt-4o"
     end
   end
 

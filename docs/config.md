@@ -596,8 +596,11 @@ reviewer = "@slow"         # model or @role per persona ID
   `agent`, and a task child's `thinking_level`. The default `off` refuses such a
   call before any child starts; persona `model`/`role`, `agent_models` and
   `model_roles.task` still route children because they are operator and persona
-  configuration, not model choices. `on` accepts the parameters. The tool schema
-  description states the setting and lists the allowlist, if any.
+  configuration, not model choices. While `off`, the `task` schema (top level,
+  `tasks[]` items and swarm nodes) omits `model` and `thinking_level` and the
+  `agent` schema omits `model`; a call that sends them anyway is still refused.
+  `on` adds the parameters, and the `model` description lists the allowlist, if
+  any.
 - `per_call_model_allow`: with `per_call_model = "on"`, the only accepted
   `model` values, each `"provider/model"` or `"@role"`. A `@role` request must
   match an entry literally; any other request matches an entry literally or

@@ -575,40 +575,43 @@ defmodule CodingAgent.Tools.Task.Params do
   end
 
   @doc """
-  Schema descriptions for the model-facing `model` and `thinking_level`
-  parameters, stating the `[runtime.task].per_call_model` gate and, when
-  enabled with an allowlist, the allowed values.
+  Adds the model-facing per-call selection parameters to `tool`'s schema when
+  `[runtime.task].per_call_model = "on"`, describing the allowlist if one is
+  set. When the gate is off the parameters are omitted rather than advertised
+  only to fail; `check_per_call_model/3` still refuses hand-written calls.
+
+  `params` lists the parameters to add (`"model"`, `"thinking_level"`);
+  `default_note` says what an omitted `model` falls back to.
   """
-  @spec per_call_model_descriptions(String.t(), keyword(), String.t()) :: %{
-          model: String.t(),
-          thinking_level: String.t()
-        }
-  def per_call_model_descriptions(
+  @spec put_per_call_model_params(AgentTool.t(), String.t(), keyword(), [String.t()], String.t()) ::
+          AgentTool.t()
+  def put_per_call_model_params(
+        %AgentTool{} = tool,
         cwd,
         opts,
+        params,
         default_note \\ "omitted uses persona/task defaults, then parent"
       ) do
     settings = task_settings(cwd, opts)
-    off = "Disabled by operator ([runtime.task].per_call_model = off); omit"
 
-    case {settings.per_call_model, settings.per_call_model_allow} do
-      {"on", nil} ->
-        %{model: "Model or @role; " <> default_note, thinking_level: "Thinking level override"}
+    model =
+      case settings.per_call_model_allow do
+        nil -> "Model or @role; " <> default_note
+        [] -> "No model is allowed ([runtime.task].per_call_model_allow = []); omit"
+        allow -> "One of #{Enum.join(allow, ", ")} (operator allowlist); " <> default_note
+      end
 
-      {"on", []} ->
-        %{
-          model: "No model is allowed ([runtime.task].per_call_model_allow = []); omit",
-          thinking_level: "Thinking level override"
-        }
+    descriptions = %{"model" => model, "thinking_level" => "Thinking level override"}
 
-      {"on", allow} ->
-        %{
-          model: "One of #{Enum.join(allow, ", ")} (operator allowlist); " <> default_note,
-          thinking_level: "Thinking level override"
-        }
+    if settings.per_call_model == "on" do
+      properties =
+        Enum.reduce(params, tool.parameters["properties"], fn name, acc ->
+          Map.put(acc, name, %{"type" => "string", "description" => descriptions[name]})
+        end)
 
-      _ ->
-        %{model: off <> "; " <> default_note, thinking_level: off}
+      %{tool | parameters: Map.put(tool.parameters, "properties", properties)}
+    else
+      tool
     end
   end
 

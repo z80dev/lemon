@@ -17,7 +17,6 @@ defmodule CodingAgent.Tools.Task do
   def tool(cwd, opts \\ []) do
     description = Params.build_description(cwd, opts)
     agent_enum = Params.build_agent_enum(cwd, opts)
-    model_gate = Params.per_call_model_descriptions(cwd, opts)
 
     %AgentTool{
       name: "task",
@@ -100,14 +99,6 @@ defmodule CodingAgent.Tools.Task do
             "enum" => ["wait_all", "wait_any"],
             "description" => "Join mode; default wait_all"
           },
-          "model" => %{
-            "type" => "string",
-            "description" => model_gate.model
-          },
-          "thinking_level" => %{
-            "type" => "string",
-            "description" => model_gate.thinking_level
-          },
           "agent" => %{
             "type" => "string",
             "description" =>
@@ -170,6 +161,8 @@ defmodule CodingAgent.Tools.Task do
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
     |> Params.maybe_add_enum(agent_enum)
+    # Present only while [runtime.task].per_call_model is on; tasks[] items copy them.
+    |> Params.put_per_call_model_params(cwd, opts, ["model", "thinking_level"])
     |> add_batch_schema()
   end
 

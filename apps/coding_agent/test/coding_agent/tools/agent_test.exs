@@ -112,7 +112,8 @@ defmodule CodingAgent.Tools.AgentTest do
     assert tool.label == "Delegate To Agent"
     assert is_function(tool.execute, 4)
     assert tool.parameters["properties"]["action"]["enum"] == ["run", "poll", "join"]
-    assert Map.has_key?(tool.parameters["properties"], "model")
+    # `model` is advertised only while [runtime.task].per_call_model is on.
+    refute Map.has_key?(tool.parameters["properties"], "model")
     assert Map.has_key?(tool.parameters["properties"], "role")
     assert Map.has_key?(tool.parameters["properties"], "task_ids")
     assert Map.has_key?(tool.parameters["properties"], "mode")
