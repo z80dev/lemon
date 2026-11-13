@@ -8,9 +8,16 @@ defmodule CodingAgent.Tools.Task.Speculation do
   child parameters (`CodingAgent.Tools.Task.batch_child/2` over the top-level
   members already complete, after the loop's argument preparation), validation,
   depth, parent restriction, budget/policy check and `Execution.run/6`.
-  `worktree` items are left for dispatch. Launches are recorded here, keyed by
-  the caller's task owner and tool call id, and monitored through the loop
-  process.
+
+  Only read-only launches start early: a read-only persona, or an effective
+  tool policy (after parent restriction) allowing nothing beyond the read-only
+  persona tools. Items inherit top-level options, and one written after `tasks`
+  could otherwise isolate or narrow a child (`worktree`, `tool_policy`, `cwd`)
+  that already started editing. A read-only child cannot write, so a later
+  option at most changes what it reads, and the mismatch below cancels it.
+  Every other item, including `worktree` items, launches at dispatch. Launches
+  are recorded here, keyed by the caller's task owner and tool call id, and
+  monitored through the loop process.
 
   When the call executes, `adopt/3` returns the receipts of launches whose child
   parameters equal the finished call's at the same index, and dispatch starts the
@@ -31,7 +38,7 @@ defmodule CodingAgent.Tools.Task.Speculation do
 
   require Logger
 
-  alias CodingAgent.{BudgetEnforcer, TaskStore}
+  alias CodingAgent.{BudgetEnforcer, Subagents, TaskStore}
   alias CodingAgent.Tools.Task, as: TaskTool
   alias CodingAgent.Tools.Task.{Control, Execution, Params, StreamItems}
   alias LemonAgent.AbortSignal
@@ -135,10 +142,11 @@ defmodule CodingAgent.Tools.Task.Speculation do
   defp claim_name(names, name),
     do: if(MapSet.member?(names, name), do: :duplicate, else: {:ok, MapSet.put(names, name)})
 
-  # Per-item refusals (policy, budget, launch failure) are left for dispatch to
-  # report; the item simply is not adopted.
+  # Per-item refusals (policy, budget, launch failure) and write-capable
+  # children are left for dispatch; the item simply is not adopted.
   defp start(index, child, validated, key, %{id: id, signal: signal}, cwd, opts) do
     with {:ok, validated} <- Params.restrict_to_parent(validated, cwd, opts),
+         true <- read_only?(validated),
          :ok <- Params.check_budget_and_policy(validated, opts),
          %AgentToolResult{details: %{task_id: task_id} = details} = result <-
            Execution.run(id, %{validated | async: true}, signal, nil, cwd, opts) do
@@ -155,6 +163,11 @@ defmodule CodingAgent.Tools.Task.Speculation do
 
     :ok
   end
+
+  defp read_only?(validated),
+    do:
+      Subagents.read_only?(validated.persona) or
+        Subagents.read_only_policy?(validated.tool_policy)
 
   # ── Registry ─────────────────────────────────────────────────────────────
 

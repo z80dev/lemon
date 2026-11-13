@@ -20,7 +20,7 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 
-  @batch ~s({"context":"shared","auto_followup":false,"tasks":[) <>
+  @batch ~s({"agent":"scout","context":"shared","auto_followup":false,"tasks":[) <>
            ~s({"description":"one","prompt":"first"},) <>
            ~s({"description":"two","prompt":"second"}]})
 
@@ -98,7 +98,7 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
     tool = task_tool()
 
     json =
-      ~s({"tasks":[{"name":"Same","prompt":"first"},{"name":"Same","prompt":"second"}]})
+      ~s({"agent":"scout","tasks":[{"name":"Same","prompt":"first"},{"name":"Same","prompt":"second"}]})
 
     stream(tool, "call-invalid", json)
     assert_receive {:started, first, _}, 2_000
@@ -175,7 +175,7 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
     stream(
       tool,
       "call-worktree",
-      ~s({"tasks":[{"prompt":"isolated","worktree":true},{"prompt":"shared"}]})
+      ~s({"agent":"scout","tasks":[{"prompt":"isolated","worktree":true},{"prompt":"shared"}]})
     )
 
     assert_receive {:started, shared, prompt}, 2_000
@@ -186,6 +186,32 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
 
     stream(tool, "call-swarm", ~s({"action":"swarm","tasks":[{"name":"A","prompt":"x"}]}))
     refute_receive {:started, _, _}, 100
+  end
+
+  test "only read-only items start before the call finishes streaming" do
+    tool = task_tool()
+
+    # A write-capable item could otherwise edit the checkout before a later
+    # top-level option (here worktree) isolates it; it waits for dispatch.
+    json =
+      ~s({"tasks":[{"prompt":"edit"},{"agent":"scout","prompt":"look"},) <>
+        ~s({"prompt":"inspect","tool_policy":{"allow":["read","grep"]}}]})
+
+    stream(tool, "call-mixed", json)
+    started = for _ <- 1..2, do: assert_receive({:started, _, _} = message, 2_000)
+    refute_receive {:started, _, _}, 100
+
+    assert [{_, reader, inspect}, {_, scout, look}] =
+             Enum.sort_by(started, fn {_, _, prompt} -> prompt end)
+
+    assert inspect =~ "inspect" and look =~ "look"
+
+    result = dispatch(tool, "call-mixed", json)
+    assert_receive {:started, editor, prompt}, 2_000
+    assert prompt =~ "edit"
+    assert result.details.task_ids == [editor, scout, reader]
+    refute_receive {:started, _, _}, 100
+    cancel(tool, [editor, scout, reader])
   end
 
   @tag :tmp_dir
