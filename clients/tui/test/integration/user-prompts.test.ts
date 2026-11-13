@@ -58,6 +58,8 @@ async function boot(notifications?: NotificationMode) {
 			client,
 			"/repo",
 			detectTerminalCapabilities({ TERM_PROGRAM: "iTerm.app" }, true, notifications),
+			undefined,
+			{ env: {}, route: () => false, desktop: () => {} },
 		);
 		integration.start();
 		teardown.push(() => integration.stop());
