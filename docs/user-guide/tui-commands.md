@@ -171,6 +171,11 @@ The ↑ / ↓ prompt recall persists across sessions in
 Transactions retain at most 100 prompts and 256 KiB of encoded prompt content;
 SQLite pages and its temporary rollback journal need additional disk space.
 
+- **Ctrl+R** opens a filterable list of saved prompts, newest first, with each
+  prompt's age and the folder it was submitted from. Enter fills the composer
+  (nothing is sent); Esc closes it. Prompts saved by older versions show the time
+  they were first migrated and no folder. With persistence off it lists this
+  session's prompts. Rebind via `lemon.history.search` in `[tui.keys]`.
 - `/clear-history` forgets remembered prompts, clears saved rows and removes legacy sources.
 - Set `prompt_history = false` under `[tui]` in user or project config to stop
   saving and loading history. Existing history remains until `/clear-history`.
@@ -194,7 +199,8 @@ Overlays own their keys; picker-local shortcuts are not configurable here.
 | lemon.editor.external | ctrl+g | Edit the draft in $EDITOR |
 | lemon.transcript.clear | ctrl+l | Clear the transcript |
 | lemon.queue.focus | ctrl+q | Edit the queued prompts |
-| lemon.transcript.toggleLatest | ctrl+r | Expand/collapse the latest tool card or thinking block |
+| lemon.history.search | ctrl+r | Search past prompts and fill the draft |
+| lemon.transcript.toggleLatest | alt+e | Expand/collapse the latest tool card or thinking block |
 | lemon.transcript.cycleDetail | ctrl+t | Cycle detail for every card: collapsed → expanded → default |
 | lemon.palette.open | ctrl+p | Search commands, skills and prompts |
 | lemon.tasks.toggle | alt+a | Show/hide live subagent tree |

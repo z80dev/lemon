@@ -121,6 +121,7 @@ import {
 import { TaskTreeController } from "./ui/controllers/task-tree-controller.ts";
 import { ToolInspector } from "./ui/controllers/tool-inspector.ts";
 import { UserPromptController } from "./ui/controllers/user-prompt-controller.ts";
+import { createHistorySearch, createHistorySource } from "./ui/history-search.ts";
 import { RowFrameProvider } from "./ui/row-frame-provider.ts";
 import { AppearanceController, type ThemePreference } from "./ui/theme/appearance.ts";
 import { getTheme } from "./ui/theme/theme.ts";
@@ -213,6 +214,7 @@ export class AppShell {
 
 	readonly #onExit: ((code: number) => void) | undefined;
 	readonly #cwd: string;
+	readonly #promptHistory: PromptHistoryStore | undefined;
 	readonly #forkConnection: Pick<ForkLaunch, "url" | "operatorToken">;
 	readonly #terminalIntegration: TerminalIntegration;
 
@@ -240,6 +242,7 @@ export class AppShell {
 		this.#banner = new Banner(options.version ?? "dev");
 		this.#onExit = options.onExit;
 		this.#cwd = options.cwd ?? process.cwd();
+		this.#promptHistory = options.promptHistory;
 		this.#forkConnection = { url: options.url, operatorToken: options.operatorToken };
 		this.client =
 			options.client ?? new ControlPlaneClient({ url: options.url, token: options.operatorToken });
@@ -494,6 +497,7 @@ export class AppShell {
 			openExternalEditor: () => this.openExternalEditor(),
 			clearTranscript: () => this.#host.clearTranscript(),
 			focusQueue: () => this.focusQueue(),
+			openHistorySearch: () => this.#openHistorySearch(),
 			toggleLatest: () => this.events.toggleLatestBlock(),
 			cycleDetail: () => this.events.cycleAccordionOverride(),
 			openCommandPalette: (mode) => this.#palette.open(undefined, mode),
@@ -975,6 +979,32 @@ export class AppShell {
 		this.#queueFocused = false;
 		this.#queuePanel.focused = false;
 		this.#focusEditor();
+	}
+
+	/** Ctrl+R: search past prompts; Enter fills the draft, Esc leaves it untouched. */
+	#openHistorySearch(): void {
+		const source = createHistorySource({
+			store: this.#promptHistory,
+			memory: () => this.#editor.history,
+			onStorageError: (error) =>
+				this.events.notice(
+					`prompt history search fell back to this session's prompts (${describeError(error)})`,
+					"warning",
+				),
+		});
+		let close = () => {};
+		close = this.selectors.open(
+			createHistorySearch({
+				source,
+				onSelect: (prompt) => {
+					close();
+					this.#editor.setText(prompt);
+					this.tui.requestRender();
+				},
+				onCancel: () => close(),
+				repaint: () => this.selectors.repaint(),
+			}),
+		);
 	}
 
 	#toggleTaskTree(): void {

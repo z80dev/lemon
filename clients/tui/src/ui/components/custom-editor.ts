@@ -288,7 +288,7 @@ export class CustomEditor extends Editor {
 		if (/^\s*\/clear-history(?:\s|$)/i.test(text)) return;
 		this.#rememberPrompt(text);
 		try {
-			this.#options.promptHistory?.append(text);
+			this.#options.promptHistory?.append(text, this.#options.composer?.cwd?.() ?? process.cwd());
 		} catch (error) {
 			if (this.#historyWarned) return;
 			this.#historyWarned = true;

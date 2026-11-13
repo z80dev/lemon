@@ -36,7 +36,7 @@ afterEach(() => {
 	invalidateThemeAdapters();
 });
 
-const CTRL_R = "\x12";
+const ALT_E = "\x1be";
 const CTRL_T = "\x14";
 
 async function boot() {
@@ -407,7 +407,7 @@ describe("action kinds", () => {
 });
 
 describe("expand/collapse keys", () => {
-	test("ctrl+r expands the latest reasoning block and collapses it again", async () => {
+	test("alt+e expands the latest reasoning block and collapses it again", async () => {
 		const { app, server, terminal } = await boot();
 		tool(server, {
 			id: "r1",
@@ -420,16 +420,16 @@ describe("expand/collapse keys", () => {
 		await waitFor(() => transcript(app).includes("weighing"), { what: "the thought" });
 		expect(transcript(app)).not.toContain("second option");
 
-		terminal.sendInput(CTRL_R);
+		terminal.sendInput(ALT_E);
 		await waitFor(() => transcript(app).includes("second option"), {
 			what: "the expanded thought",
 		});
 
-		terminal.sendInput(CTRL_R);
+		terminal.sendInput(ALT_E);
 		await waitFor(() => !transcript(app).includes("second option"), { what: "the collapse" });
 	});
 
-	test("ctrl+r opens the latest merged shelf line into a full card", async () => {
+	test("alt+e opens the latest merged shelf line into a full card", async () => {
 		const { app, server, terminal } = await boot();
 		for (const [id, command, output] of [
 			["t1", "ls", "biome.json"],
@@ -449,7 +449,7 @@ describe("expand/collapse keys", () => {
 		await waitFor(() => transcript(app).includes("`pwd`"), { what: "the shelf" });
 		const merged = transcript(app).split("\n").length;
 
-		terminal.sendInput(CTRL_R);
+		terminal.sendInput(ALT_E);
 		await waitFor(() => transcript(app).split("\n").length > merged, { what: "the open card" });
 		expect(transcript(app)).toContain("/home/z80/dev/lemon");
 	});

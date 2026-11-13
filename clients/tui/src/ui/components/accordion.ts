@@ -6,7 +6,7 @@
  *   expanded   every line
  *
  * Defaults are per action kind — tools expand (their output is the point),
- * reasoning collapses (it is context, not the answer). Ctrl+R toggles the latest
+ * reasoning collapses (it is context, not the answer). Alt+E toggles the latest
  * card or reasoning block ({@link nextAccordionState}); Ctrl+T cycles a global
  * override carried by {@link accordionSettings}: components read
  * {@link resolveAccordionState} at construction, and the event controller
