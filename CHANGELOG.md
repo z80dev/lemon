@@ -11,11 +11,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 ### Added
 
 - `task` gains a bundled read-only `seance` persona: `agent: "seance"` with
-  `source_session` (a session id or journal path of the current project)
-  forks that past transcript, compaction included, into a fresh child that
-  answers questions about it. The source journal is never modified; foreign,
-  missing or renamed sessions are refused before launch, and the child defaults
-  to the source's model.
+  `source_session` (a session id or journal path of the caller's own
+  conversation: its lineage, its task children, or runs recorded under its
+  session key) forks that past transcript, compaction included, into a fresh
+  child that answers questions about it. The source journal is never modified,
+  its historical spend does not count against the consult, unused forks are
+  deleted, other conversations and unscoped callers are refused before launch,
+  and the child defaults to the source's model.
 
 ---
 

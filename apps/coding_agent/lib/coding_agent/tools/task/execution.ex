@@ -14,6 +14,7 @@ defmodule CodingAgent.Tools.Task.Execution do
     Params,
     Result,
     Runner,
+    Seance,
     StructuredOutput,
     Worktree
   }
@@ -241,7 +242,8 @@ defmodule CodingAgent.Tools.Task.Execution do
 
           true ->
             with {:ok, workspace} <- prepare_workspace(execution, opts),
-                 {:ok, validated} <- workspace_execution_context(execution.validated, workspace) do
+                 {:ok, validated} <- workspace_execution_context(execution.validated, workspace),
+                 {:ok, validated} <- Seance.fork(validated, opts) do
               CodingAgent.TaskStoreServer.update_record(execution.task_id, fn record ->
                 Map.put(record, :workspace, workspace)
               end)
@@ -258,25 +260,29 @@ defmodule CodingAgent.Tools.Task.Execution do
               end
 
               result =
-                Runner.start_session_with_prompt(
-                  Params.build_session_opts(
-                    workspace.cwd,
-                    build_child_session_opts(opts, execution),
-                    validated
-                  ),
-                  execution.prompt,
-                  execution.description,
-                  signal,
-                  on_update_safe,
-                  execution.role_id,
-                  [
-                    task_id: execution.task_id,
-                    request_budget: validated.request_budget,
-                    request_budget_notice: validated.request_budget_notice
-                  ] ++
-                    output_validator_opts(execution.validated) ++
-                    runner_timeout_opts(execution.effective_cwd, opts)
-                )
+                try do
+                  Runner.start_session_with_prompt(
+                    Params.build_session_opts(
+                      workspace.cwd,
+                      build_child_session_opts(opts, execution),
+                      validated
+                    ),
+                    execution.prompt,
+                    execution.description,
+                    signal,
+                    on_update_safe,
+                    execution.role_id,
+                    [
+                      task_id: execution.task_id,
+                      request_budget: validated.request_budget,
+                      request_budget_notice: validated.request_budget_notice
+                    ] ++
+                      output_validator_opts(execution.validated) ++
+                      runner_timeout_opts(execution.effective_cwd, opts)
+                  )
+                after
+                  Seance.discard_unused(validated)
+                end
 
               result =
                 case result do
