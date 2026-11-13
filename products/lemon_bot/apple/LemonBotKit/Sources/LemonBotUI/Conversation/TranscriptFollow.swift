@@ -80,17 +80,19 @@ struct TranscriptFollow: Equatable {
     mutating func release() { pinned = false; nearBottom = false }
 
     /// Returning to the bottom pins. Only the reader moving toward older content unpins: the offset
-    /// decreases and the bottom gets farther away. Layout moving the offset with the limit (lazy rows
-    /// measured above, clamping as content shrinks) or growing the limit (content, keyboard, composer)
-    /// is not reading history.
+    /// decreases and the bottom gets farther away, either while the reader drives the scroll (iOS 18,
+    /// macOS 15 scroll phase) or with the limit unchanged, which only scrolling produces. Layout that
+    /// changes the limit is not reading history, even when it also lowers the offset: focusing the
+    /// composer shifts the offset a few points in the same update as the keyboard inset grows.
     ///
     /// Returns whether layout pushed the bottom away from a pinned reader, who should be returned there.
     @discardableResult
     mutating func observe(from old: Edge, to new: Edge) -> Bool {
+        let layoutChanged = new.limit != old.limit
         nearBottom = new.distance <= Self.nearBottomTolerance
         if nearBottom { pinned = true }
-        else if new.offset < old.offset && new.distance > old.distance { pinned = false }
-        return new.limit != old.limit && pinned && !nearBottom && !userScrolling
+        else if new.offset < old.offset && new.distance > old.distance && (userScrolling || !layoutChanged) { pinned = false }
+        return layoutChanged && pinned && !nearBottom && !userScrolling
     }
 
     /// iOS 18 and macOS 15 scroll phase: the reader is touching, dragging or flinging the transcript.

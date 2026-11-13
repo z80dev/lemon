@@ -25,6 +25,18 @@ final class TranscriptFollowTests: XCTestCase {
         XCTAssertFalse(follow.observe(from: edge(offset: 600, content: 1200), to: edge(offset: 600, content: 1200, inset: 20)))
     }
 
+    func testFocusingTheComposerLowersTheOffsetWithTheKeyboardInsetWithoutUnpinning() {
+        // Recorded on iPhone: focusing the composer shifts the transcript down a few points in the
+        // same update as the keyboard inset grows, while nobody touches the transcript.
+        var follow = TranscriptFollow()
+        let bottom = edge(offset: 490, content: 1000, inset: 90)
+        XCTAssertEqual(bottom.distance, 0)
+        XCTAssertTrue(follow.observe(from: bottom, to: edge(offset: 483, content: 1000, inset: 419)))
+        XCTAssertTrue(follow.pinned)
+        XCTAssertFalse(follow.showsJumpToLatest)
+        XCTAssertTrue(follow.shouldFollow)
+    }
+
     func testScrollingTowardOlderContentStopsFollowingUntilTheBottomReturns() {
         var follow = TranscriptFollow()
         XCTAssertFalse(follow.observe(from: edge(offset: 400, content: 1000), to: edge(offset: 300, content: 1000)))
@@ -38,9 +50,12 @@ final class TranscriptFollowTests: XCTestCase {
         XCTAssertTrue(follow.nearBottom)
         XCTAssertTrue(follow.shouldFollow)
         XCTAssertFalse(follow.showsJumpToLatest)
-        // Scrolling up in the same frame as a streamed token is still reading history.
+        // Dragging up in the same update as a streamed token is still reading history.
+        follow.observeScrolling(true)
         XCTAssertFalse(follow.observe(from: edge(offset: 780, content: 1400), to: edge(offset: 700, content: 1450)))
+        follow.observeScrolling(false)
         XCTAssertFalse(follow.shouldFollow)
+        XCTAssertTrue(follow.showsJumpToLatest)
     }
 
     func testSmallDragWithinToleranceStaysPinnedButNeverScrollsDuringTheDrag() {
