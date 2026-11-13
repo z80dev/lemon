@@ -419,7 +419,8 @@ and control plane authoritative:
 | `/reset` | Reset the current session through `sessions.reset` and clear its local transcript. |
 | `/reasoning [level]` | Alias for Lemon's `/think` reasoning-effort control. |
 | `/stop` | Alias for `/abort`; partial output remains visible and is marked interrupted. |
-| `/status`, `/usage` | Show control-plane health/runtime and usage/quota summaries. |
+| `/status` | Show control-plane health/runtime summaries. |
+| `/usage [text]` | Open the fullscreen usage dashboard: provider cards (the daemon's configured daily limits from `usage.status` as quota bars, plus each provider's spend and requests today) above a year-long daily activity heatmap built from the `dailyUsage` ledger series of `usage.cost`. Enter/Tab switches to the full report (today's status plus a year of ledger totals by provider, model, session and day), `r` refreshes, Esc goes back and then closes. With no limits or providers reported the cards say so; nothing is estimated. Ledger days are UTC dates laid onto the local calendar. `/usage text` prints the report inline instead, as does a host without overlay support. |
 | `/think`, `/reasoning`, Shift+Tab | Pick a thinking level without losing the current draft; an explicit level still applies directly. |
 | `/agents [query]` | Discover addressable agents in your authorized scope, including handles, stable IDs, and availability. |
 | `/agent-name <handle>\|--clear` | Set or clear the focused conversation's handle without changing its title or stable ID. |
