@@ -10,13 +10,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
-- `task` batches start each `tasks[]` item while the model is still streaming
-  the call (`[runtime.task].speculative_launch`, default on). Dispatch adopts
-  children whose parameters match the finished call; a differing, invalid,
-  aborted or unexecuted call cancels them, terminalized without followups and
-  with budget reservations released. Calls that need approval, extension tool
-  hooks and plan mode never speculate. Tools can observe streaming arguments
-  through `AgentTool.on_stream`.
+- `task` batches start each read-only `tasks[]` item (read-only persona or a
+  tool policy limited to read tools) while the model is still streaming the
+  call (`[runtime.task].speculative_launch`, default on); write-capable and
+  worktree items still launch at dispatch, so top-level options written after
+  `tasks` can never reach a child that already edited the checkout. Dispatch
+  adopts children whose parameters match the finished call; a differing,
+  invalid, aborted or unexecuted call cancels them, terminalized without
+  followups and with budget reservations released. Calls that need approval,
+  extension tool hooks and plan mode never speculate. Tools can observe
+  streaming arguments through `AgentTool.on_stream`.
 
 ---
 

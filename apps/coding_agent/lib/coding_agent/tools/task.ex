@@ -277,7 +277,7 @@ defmodule CodingAgent.Tools.Task do
       "minItems" => 1,
       "maxItems" => 32,
       "description" =>
-        "Children inherit top-level options; write those before tasks, whose items may start while still streaming (context is top-level only). Swarm nodes require unique names; depends_on defines their DAG.",
+        "Children inherit top-level options (context is top-level only); read-only items (scout/reviewer or a read-only tool_policy) may start while the call still streams. Swarm nodes require unique names; depends_on defines their DAG.",
       "items" => %{"type" => "object", "properties" => child_properties, "required" => ["prompt"]}
     }
 

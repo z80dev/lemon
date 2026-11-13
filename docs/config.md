@@ -546,7 +546,7 @@ max_runtime_ms = 0         # per-child wall-clock limit; 0 disables it
 idle_ttl_ms = 300000       # park a completed live child after 5 min; 0 keeps it idle
 request_budget = 200       # soft assistant-request budget per run; 0 disables it
 request_budget_notice = true # send one non-preempting wrap-up notice at the soft budget
-speculative_launch = true  # start tasks[] items while the model is still streaming the call
+speculative_launch = true  # start read-only tasks[] items while the call is still streaming
 worktree_merge = "none"    # default merge for worktree: true tasks: none | patch | branch
 disabled_agents = ["sonic"]
 
@@ -582,16 +582,19 @@ reviewer = "@slow"         # model or @role per persona ID
   Cancelled/killed children, failed children, and children whose cwd/worktree or
   transcript was removed refuse revival and point to `history://<id>`.
   Revival is scoped to the existing parent task family, not daemon restart.
-- `speculative_launch`: start each `tasks[]` item as soon as its object has
-  streamed, instead of when the whole call has. Dispatch adopts children whose
+- `speculative_launch`: start each read-only `tasks[]` item as soon as its
+  object has streamed, instead of when the whole call has. Only a read-only
+  persona or an effective tool policy limited to `read`/`grep`/`find`/`ls`/
+  `agent_message` starts early: items inherit top-level options, and one
+  written after `tasks` (`worktree`, `tool_policy`, `cwd`) must never reach a
+  child that could already have edited the shared checkout, so write-capable and
+  `worktree: true` items launch at dispatch. Dispatch adopts children whose
   parameters match the finished call and cancels every speculative child
   otherwise (also when the call is never executed); cancelled children are
   terminalized without followups and release their budget reservations. Only
   calls that would run without review speculate: an approval requirement for
   `task` (for example `approval_mode = "write"`), extension tool hooks or plan
-  mode disable it. Items inherit only top-level options streamed before
-  `tasks`, so a later option cancels and relaunches the batch. `false` launches
-  every item at dispatch.
+  mode disable it. `false` launches every item at dispatch.
 - `worktree_merge`: what a successful `worktree: true` child does when the call
   omits `merge`: `none` keeps the worktree, `patch` applies the child's changes
   to the parent checkout, `branch` commits them to a kept review branch.

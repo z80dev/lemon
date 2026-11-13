@@ -152,6 +152,15 @@ defmodule CodingAgent.Subagents do
   def read_only?(nil), do: false
   def read_only?(persona), do: persona[:read_only] == true or persona[:id] in @read_only_ids
 
+  @doc "Whether `policy` allows nothing beyond the read-only persona tool set."
+  @spec read_only_policy?(term()) :: boolean()
+  def read_only_policy?(policy) do
+    case ToolPolicy.parse(policy) do
+      {:ok, %{allow: allow}} when is_list(allow) -> Enum.all?(allow, &(&1 in @read_only_tools))
+      _ -> false
+    end
+  end
+
   @doc """
   Intersects a persona's tools with the requested policy (default: leaf worker).
 
