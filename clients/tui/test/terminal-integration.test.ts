@@ -217,7 +217,10 @@ describe("notification routing", () => {
 			undefined,
 			{
 				env: { TMUX: "1" },
-				route: (request) => (routed.push(request), true),
+				route: (request) => {
+					routed.push(request);
+					return true;
+				},
 				desktop: () => routed.push("d"),
 			},
 		);
