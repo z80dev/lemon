@@ -37,7 +37,10 @@ defmodule CodingAgent.Session.Jobs do
     with {:ok, owners} <- owners(session_key),
          {:ok, records} <- records(owners) do
       sorted = Enum.sort_by(records, fn {id, record} -> {-sort_time(record), id} end)
-      jobs = sorted |> Enum.take(@max_jobs) |> Enum.map(fn {id, record} -> summary(id, record) end)
+
+      jobs =
+        sorted |> Enum.take(@max_jobs) |> Enum.map(fn {id, record} -> summary(id, record) end)
+
       owning = jobs |> Enum.map(& &1.owner_id) |> MapSet.new()
 
       {:ok,
@@ -294,14 +297,29 @@ defmodule CodingAgent.Session.Jobs do
   defp tail(_logs, 0), do: {"", false}
 
   defp tail(logs, max_bytes) do
-    {text, truncated, _info} =
+    lines =
       logs
       |> Enum.join("\n")
       |> BashExecutor.sanitize_output()
       |> Redact.text()
-      |> BashExecutor.truncate_tail(max_bytes: max_bytes, max_lines: @max_tail_lines)
+      |> String.split("\n")
 
-    {text, truncated}
+    kept = Enum.take(lines, -@max_tail_lines)
+    text = Enum.join(kept, "\n")
+    cut = length(kept) < length(lines)
+
+    # The tail itself never exceeds max_bytes: no marker is prepended.
+    if byte_size(text) > max_bytes do
+      {text |> binary_part(byte_size(text) - max_bytes, max_bytes) |> trim_leading_utf8(), true}
+    else
+      {text, cut}
+    end
+  end
+
+  defp trim_leading_utf8(binary) do
+    if String.valid?(binary) or binary == "",
+      do: binary,
+      else: binary |> binary_part(1, byte_size(binary) - 1) |> trim_leading_utf8()
   end
 
   defp pids(record, status) when status in [:running, :killing] do

@@ -60,7 +60,8 @@ defmodule LemonControlPlane.Methods.ProcessJobsTest do
          command: "make",
          cwd: "/work",
          pids: [10, -3, "x"],
-         output: String.duplicate("o", 100_000) <> "\nAuthorization: Bearer abcdef123456789012345",
+         output:
+           String.duplicate("o", 100_000) <> "\nAuthorization: Bearer abcdef123456789012345",
          output_truncated: true,
          output_bytes: 100_042
        }}
@@ -127,10 +128,14 @@ defmodule LemonControlPlane.Methods.ProcessJobsTest do
     assert job["launch"] == "accepted"
     assert byte_size(job["command"]) <= 2_048
     refute job["command"] =~ "sk-private-token-123456"
+
     assert Map.keys(job) |> Enum.sort() ==
              ~w(command endedAt exitCode id launch ownerId startedAt status)
 
-    assert result["agents"] == [%{"id" => "child-1", "parentId" => "root-1", "name" => "reviewer"}]
+    assert result["agents"] == [
+             %{"id" => "child-1", "parentId" => "root-1", "name" => "reviewer"}
+           ]
+
     refute inspect(result) =~ "must-not-leak"
     refute inspect(result) =~ "/Users/alice"
   end

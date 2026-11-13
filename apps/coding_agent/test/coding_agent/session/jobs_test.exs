@@ -37,21 +37,24 @@ defmodule CodingAgent.Session.JobsTest do
     key = "agent:jobs-#{suffix}:main"
     root = "root-#{suffix}"
     child = "child-#{suffix}"
-    ids = Agent.start_link(fn -> [] end) |> elem(1)
 
+    # Job ids embed the suffix, so cleanup needs no state held by the test process.
     on_exit(fn ->
-      for id <- Agent.get(ids, & &1), do: :ets.delete(:coding_agent_processes, id)
+      marker = "-#{suffix}-"
+
+      for {id, _record, _logs} <- :ets.tab2list(:coding_agent_processes),
+          String.contains?(id, marker),
+          do: :ets.delete(:coding_agent_processes, id)
     end)
 
-    {:ok, key: key, root: root, child: child, suffix: suffix, ids: ids}
+    {:ok, key: key, root: root, child: child, suffix: suffix}
   end
 
   defp session(attrs),
     do: start_supervised!(Supervisor.child_spec({FakeSession, attrs}, id: make_ref()))
 
-  defp job(%{ids: ids}, name, attrs) do
-    id = "#{name}-#{System.unique_integer([:positive])}"
-    Agent.update(ids, &[id | &1])
+  defp job(%{suffix: suffix}, name, attrs) do
+    id = "#{name}-#{suffix}-#{System.unique_integer([:positive])}"
     ^id = ProcessStore.new_process(Map.merge(%{id: id, status: :running}, attrs))
     id
   end
