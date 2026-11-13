@@ -328,6 +328,8 @@ defmodule LemonCore.Config.Validator do
     merge = Map.get(task, :worktree_merge)
     disabled = Map.get(task, :disabled_agents)
     models = Map.get(task, :agent_models)
+    per_call_model = Map.get(task, :per_call_model, "off")
+    per_call_allow = Map.get(task, :per_call_model_allow)
 
     [
       {is_integer(max_depth) and max_depth >= -1,
@@ -347,7 +349,11 @@ defmodule LemonCore.Config.Validator do
       {is_map(models) and
          Enum.all?(models, fn {id, model} ->
            is_binary(id) and is_binary(model) and String.trim(model) != ""
-         end), "runtime.task.agent_models: must map persona IDs to model strings"}
+         end), "runtime.task.agent_models: must map persona IDs to model strings"},
+      {per_call_model in ["off", "on"], "runtime.task.per_call_model: must be off or on"},
+      {is_nil(per_call_allow) or
+         (is_list(per_call_allow) and Enum.all?(per_call_allow, &per_call_model_selector?/1)),
+       "runtime.task.per_call_model_allow: must be a list of \"provider/model\" or \"@role\" strings"}
     ]
     |> Enum.reduce(errors, fn
       {true, _message}, acc -> acc
@@ -356,6 +362,11 @@ defmodule LemonCore.Config.Validator do
   end
 
   defp validate_task_config(errors, _task), do: ["runtime.task: must be a table" | errors]
+
+  defp per_call_model_selector?(value) when is_binary(value),
+    do: Regex.match?(~r{\A(@[^@\s/]+|[^\s/@]+/\S+)\z}u, String.trim(value))
+
+  defp per_call_model_selector?(_value), do: false
 
   @doc """
   Validates gateway configuration.

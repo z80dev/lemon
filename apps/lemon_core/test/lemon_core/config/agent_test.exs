@@ -113,6 +113,8 @@ defmodule LemonCore.Config.AgentTest do
     test "defaults to 200 requests and an enabled wrap-up notice" do
       assert Agent.resolve(%{}).task.request_budget == 200
       assert Agent.resolve(%{}).task.request_budget_notice
+      assert Agent.resolve(%{}).task.per_call_model == "off"
+      assert Agent.resolve(%{}).task.per_call_model_allow == nil
     end
 
     test "reads [runtime.task]" do
@@ -127,7 +129,9 @@ defmodule LemonCore.Config.AgentTest do
               "request_budget_notice" => false,
               "worktree_merge" => "patch",
               "disabled_agents" => ["reviewer"],
-              "agent_models" => %{"scout" => "@smol"}
+              "agent_models" => %{"scout" => "@smol"},
+              "per_call_model" => "on",
+              "per_call_model_allow" => ["openai/gpt-4o", "@smol"]
             }
           }
         })
@@ -140,7 +144,9 @@ defmodule LemonCore.Config.AgentTest do
                request_budget_notice: false,
                worktree_merge: "patch",
                disabled_agents: ["reviewer"],
-               agent_models: %{"scout" => "@smol"}
+               agent_models: %{"scout" => "@smol"},
+               per_call_model: "on",
+               per_call_model_allow: ["openai/gpt-4o", "@smol"]
              }
     end
   end

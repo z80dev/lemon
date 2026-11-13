@@ -37,6 +37,9 @@ defmodule CodingAgent.Tools.Agent do
     agent_id_property = build_agent_id_property(config_cwd, opts)
     role_property = build_role_property(config_cwd)
 
+    model_description =
+      Params.per_call_model_descriptions(cwd, opts, "omit to use the delegated defaults").model
+
     %AgentTool{
       name: "agent",
       timeout_ms: :infinity,
@@ -88,7 +91,7 @@ defmodule CodingAgent.Tools.Agent do
           },
           "model" => %{
             "type" => "string",
-            "description" => "Model override"
+            "description" => model_description
           },
           "tool_policy" => %{
             "type" => "object",
@@ -164,7 +167,8 @@ defmodule CodingAgent.Tools.Agent do
         Map.to_list(Params.inherited_execution_context(opts))
       )
 
-    with {:ok, validated} <- validate_run_params(params, cwd, opts),
+    with :ok <- Params.check_per_call_model(Map.take(params, ["model"]), cwd, opts),
+         {:ok, validated} <- validate_run_params(params, cwd, opts),
          {:ok, delegated_session_key} <- resolve_delegated_session_key(validated, opts),
          {:ok, request} <- build_run_request(validated, delegated_session_key, cwd, opts),
          {:ok, run_id} <- submit_run(request, opts) do

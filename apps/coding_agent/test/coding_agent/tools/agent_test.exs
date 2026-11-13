@@ -267,6 +267,7 @@ defmodule CodingAgent.Tools.AgentTest do
         nil,
         "/tmp",
         run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        settings_manager: per_call_model_settings(),
         session_key: "agent:main:main",
         session_id: "sess_main",
         agent_id: "main",
@@ -515,6 +516,7 @@ defmodule CodingAgent.Tools.AgentTest do
             nil,
             cwd,
             run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+            settings_manager: per_call_model_settings(),
             session_key: "agent:main:main",
             model_explicit: inherited_explicit
           )
@@ -1394,4 +1396,10 @@ defmodule CodingAgent.Tools.AgentTest do
 
   defp strip_events({:ok, record, _events}), do: {:ok, record}
   defp strip_events(other), do: other
+
+  # Explicit delegated models are per-call selections; the operator enables them.
+  defp per_call_model_settings do
+    defaults = %CodingAgent.SettingsManager{}
+    %{defaults | task: %{defaults.task | per_call_model: "on"}}
+  end
 end

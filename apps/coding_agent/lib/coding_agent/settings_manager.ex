@@ -27,7 +27,9 @@ defmodule CodingAgent.SettingsManager do
           request_budget_notice: boolean(),
           worktree_merge: String.t(),
           disabled_agents: [String.t()],
-          agent_models: %{optional(String.t()) => String.t()}
+          agent_models: %{optional(String.t()) => String.t()},
+          per_call_model: String.t(),
+          per_call_model_allow: [String.t()] | nil
         }
 
   @type t :: %__MODULE__{
@@ -139,7 +141,11 @@ defmodule CodingAgent.SettingsManager do
       request_budget_notice: true,
       worktree_merge: "none",
       disabled_agents: [],
-      agent_models: %{}
+      agent_models: %{},
+      # Model-chosen child models: "off" (default) or "on"; an allowlist of
+      # "provider/model" and "@role" values narrows "on" (nil = no list).
+      per_call_model: "off",
+      per_call_model_allow: nil
     }
   ]
 
@@ -267,6 +273,24 @@ defmodule CodingAgent.SettingsManager do
 
           _ ->
             defaults.agent_models
+        end,
+      # Fail closed: anything but "on" disables per-call model selection, and a
+      # malformed allowlist allows nothing.
+      per_call_model: if(Map.get(task, :per_call_model) == "on", do: "on", else: "off"),
+      per_call_model_allow:
+        case Map.get(task, :per_call_model_allow) do
+          nil ->
+            nil
+
+          values when is_list(values) ->
+            for value <- values,
+                is_binary(value),
+                value = String.trim(value),
+                value != "",
+                do: value
+
+          _ ->
+            []
         end
     }
   end

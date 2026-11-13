@@ -8,7 +8,22 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Plan mode can delegate read-only exploration: `task` runs, batches and swarms
+  launch children limited to read/search/web tools with no further spawning.
+  Worktrees, merge-back, write-capable personas and child messaging are refused
+  while planning; `poll`, `get`, `join`, `wait` and `cancel` keep working.
+
+### Changed
+
+- **Breaking:** the model can no longer choose a child's model by default. A
+  `model` or `thinking_level` on `task` (including `tasks[]` items and swarm
+  nodes), or a `model` on `agent`, now fails before any child starts unless the
+  operator sets `[runtime.task] per_call_model = "on"`; the optional
+  `per_call_model_allow` list restricts which `provider/model` or `@role` values
+  are accepted. Project `.lemon/config.toml` files can only narrow this gate.
+  Persona models and `[runtime.task].agent_models` are unaffected.
 
 ---
 

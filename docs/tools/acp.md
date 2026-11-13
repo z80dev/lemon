@@ -95,6 +95,19 @@ directory outside the project—the only place `write`/`edit` may change, always
 on the Lemon host rather than through client filesystem methods—and calls
 `propose_plan` when the plan is decision-complete.
 
+The `task` tool stays available for read-only exploration. Every child launched
+in plan mode (`run`, `tasks[]` and `swarm` nodes) is limited to `read`, `grep`,
+`find`, `ls`, `websearch`, `webfetch` and `ask_parent`, whatever its persona or
+`tool_policy` asks for, and cannot spawn further children. A named persona must
+be read-only (`scout`, `reviewer`, `security-reviewer`, a `read_only: true`
+definition, or one whose `tools` are all read-only); omitting `agent` launches a
+coerced read-only child. `worktree: true`, `merge: patch|branch` and write-capable
+personas such as `task-executor` or `sonic` are refused before anything starts.
+`poll`, `get`, `join`, `wait` and `cancel` keep working on owned children, as
+does the `wait` tool; `message`/`steer` are refused, because they could direct a
+child launched before plan mode to change files. The check runs when the tool
+executes, so a mid-run approval or exit takes effect on the next call.
+
 The proposal arrives as a `session/request_permission` card titled
 **Approve plan: …** showing the plan Markdown (Tern shows it as a dialog), with two
 options: **Approve and execute** turns plan mode off, restores full tool access

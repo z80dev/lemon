@@ -349,7 +349,9 @@ defmodule CodingAgent.SettingsManagerTest do
             request_budget_notice: "yes",
             worktree_merge: "patch",
             disabled_agents: ["reviewer", 7],
-            agent_models: %{"scout" => " @smol ", "reviewer" => ""}
+            agent_models: %{"scout" => " @smol ", "reviewer" => ""},
+            per_call_model: "always",
+            per_call_model_allow: [" openai/gpt-4o ", 7, ""]
           }
         },
         tui: %{},
@@ -366,8 +368,15 @@ defmodule CodingAgent.SettingsManagerTest do
                request_budget_notice: true,
                worktree_merge: "patch",
                disabled_agents: ["reviewer"],
-               agent_models: %{"scout" => "@smol"}
+               agent_models: %{"scout" => "@smol"},
+               per_call_model: "off",
+               per_call_model_allow: ["openai/gpt-4o"]
              }
+
+      config = put_in(config.agent.task.per_call_model, "on")
+      config = put_in(config.agent.task.per_call_model_allow, "openai/gpt-4o")
+      task = SettingsManager.from_config(config).task
+      assert {task.per_call_model, task.per_call_model_allow} == {"on", []}
     end
 
     test "handles nil provider and model" do

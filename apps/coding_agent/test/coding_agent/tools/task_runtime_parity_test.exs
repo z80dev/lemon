@@ -99,6 +99,8 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
 
       opts =
         base_opts(
+          # Per-item thinking levels are per-call selections; the operator enables them.
+          settings_manager: settings(%{per_call_model: "on"}),
           run_override: fn _, _, context ->
             send(owner, {:started, context.description, self()})
 
