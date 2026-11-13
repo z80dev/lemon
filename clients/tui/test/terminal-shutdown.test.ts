@@ -48,11 +48,11 @@ try:
     for _ in range(12):
         os.write(master, b'\x1b[200~/help\x1b[201~\r')
     time.sleep(0.35)
-    began = time.monotonic()
     child.send_signal(signal.SIGTERM)
-    code = child.wait(timeout=3)
-    print(json.dumps({'exit': code, 'elapsedMs': (time.monotonic()-began)*1000,
-                      'restored': termios.tcgetattr(slave) == original,
+    # Let wait enforce the shutdown deadline. A second wall-clock measurement
+    # also counts the driver being descheduled after the child already exited.
+    code = child.wait(timeout=2.5)
+    print(json.dumps({'exit': code, 'restored': termios.tcgetattr(slave) == original,
                       'rawAfterRestart': raw_after_restart}))
 finally:
     if child.poll() is None:
@@ -78,12 +78,10 @@ finally:
 		expect(code, errors).toBe(0);
 		const result = JSON.parse(output) as {
 			exit: number;
-			elapsedMs: number;
 			restored: boolean;
 			rawAfterRestart: boolean;
 		};
 		expect(result.exit).toBe(0);
-		expect(result.elapsedMs).toBeLessThan(2500);
 		expect(result.restored).toBe(true);
 		expect(result.rawAfterRestart).toBe(true);
 	},
