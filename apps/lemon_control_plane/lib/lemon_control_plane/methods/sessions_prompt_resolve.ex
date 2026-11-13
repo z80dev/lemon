@@ -20,7 +20,7 @@ defmodule LemonControlPlane.Methods.SessionsPromptResolve do
         {:error, {:invalid_request, "Valid promptId, sessionKey and runId are required", nil}}
 
       action not in ["accept", "decline", "cancel"] or not valid_content?(content) or
-          not valid_records?(params["answers"], ["name", "question", "answer"]) or
+        not valid_records?(params["answers"], ["name", "question", "answer"]) or
           not valid_records?(params["notes"], ["name", "question", "option", "value", "text"]) ->
         {:error,
          {:invalid_request, "A valid prompt action and bounded answer content are required", nil}}

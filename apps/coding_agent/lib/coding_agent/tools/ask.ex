@@ -137,10 +137,17 @@ defmodule CodingAgent.Tools.Ask do
 
   defp validate_html(html) when is_binary(html) do
     cond do
-      not String.valid?(html) -> {:error, "html must be UTF-8"}
-      byte_size(html) > @max_html_bytes -> {:error, "html must be at most #{@max_html_bytes} bytes"}
-      String.trim(html) == "" -> {:error, "html must contain a <form>"}
-      true -> validate_form(html)
+      not String.valid?(html) ->
+        {:error, "html must be UTF-8"}
+
+      byte_size(html) > @max_html_bytes ->
+        {:error, "html must be at most #{@max_html_bytes} bytes"}
+
+      String.trim(html) == "" ->
+        {:error, "html must contain a <form>"}
+
+      true ->
+        validate_form(html)
     end
   end
 
@@ -470,7 +477,8 @@ defmodule CodingAgent.Tools.Ask do
     end
   end
 
-  defp valid_form_content?(content) when is_map(content) and map_size(content) <= @max_form_fields do
+  defp valid_form_content?(content)
+       when is_map(content) and map_size(content) <= @max_form_fields do
     Enum.all?(content, fn {key, value} ->
       is_binary(key) and byte_size(key) <= 256 and
         (is_number(value) or form_text?(value, @answer_bytes) or
@@ -481,7 +489,8 @@ defmodule CodingAgent.Tools.Ask do
 
   defp valid_form_content?(_content), do: false
 
-  defp form_text?(value, max), do: is_binary(value) and byte_size(value) <= max and String.valid?(value)
+  defp form_text?(value, max),
+    do: is_binary(value) and byte_size(value) <= max and String.valid?(value)
 
   defp form_answers(nil, content) do
     {:ok,
@@ -492,7 +501,8 @@ defmodule CodingAgent.Tools.Ask do
      end)}
   end
 
-  defp form_answers(answers, _content) when is_list(answers) and length(answers) <= @max_form_fields do
+  defp form_answers(answers, _content)
+       when is_list(answers) and length(answers) <= @max_form_fields do
     answers
     |> Enum.reduce_while({:ok, []}, fn answer, {:ok, acc} ->
       with true <- is_map(answer),

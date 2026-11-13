@@ -18,8 +18,7 @@ defmodule LemonControlPlane.Methods.SessionsPromptBind do
     cond do
       not is_binary(key) or byte_size(key) not in 1..1024 or not is_boolean(enabled) or
           not is_boolean(html_forms) ->
-        {:error,
-         {:invalid_request, "sessionKey and boolean enabled/htmlForms are required", nil}}
+        {:error, {:invalid_request, "sessionKey and boolean enabled/htmlForms are required", nil}}
 
       not is_pid(connection) or not Process.alive?(connection) ->
         {:error, {:invalid_request, "A live WebSocket connection is required", nil}}

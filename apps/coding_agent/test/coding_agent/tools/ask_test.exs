@@ -506,7 +506,9 @@ defmodule CodingAgent.Tools.AskTest do
 
       ask = fn response ->
         task =
-          Task.async(fn -> Ask.execute("call", %{"html" => @form}, nil, nil, session_key: key) end)
+          Task.async(fn ->
+            Ask.execute("call", %{"html" => @form}, nil, nil, session_key: key)
+          end)
 
         assert_receive %LemonCore.Event{
           type: :user_prompt_requested,
