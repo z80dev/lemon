@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.11.8]
+
 ### Added
 
 - TUI: assistant replies draw ```mermaid fences as ASCII diagrams, and, in
