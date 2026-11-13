@@ -159,6 +159,20 @@ on reconnect and when opening or changing models. Older daemons without
   composer without sending, Esc closes and leaves the draft untouched. It searches
   the saved history; with `[tui] prompt_history = false` it lists this session's
   prompts. Rebind it with `lemon.history.search` under `[tui.keys]`.
+  Alt+L opens omp's keyboard link browser: the transcript replayed fullscreen with a
+  hint tag drawn over every link (`http(s)` URLs, local `file:` links the replayed
+  tool cards and messages draw, and bare URLs in text, including ones scrolled far into the
+  terminal's scrollback). Type a tag, or click a link, to open it; PgUp/PgDn/Home/End
+  and the wheel scroll, Esc closes. `http(s)` links open through the OS opener
+  (`open` / `xdg-open` / `rundll32`) and local files open in the OS's default
+  application for that file; the opener runs with an argv, never a shell, and every
+  other scheme (`javascript:`, `vscode:`, `ssh:`, remote `file:` hosts …) is refused
+  with a footer message. A bare URL the renderer wrapped across rows is not offered
+  (half a URL would open the wrong page). The browser is a snapshot of the focused
+  transcript taken when it opens. omp's own hint key (Alt+O) is Lemon's tool-output
+  toggle, so the key is `lemon.links.browse` (default Alt+L, remappable under
+  `[tui.keys]`). omp's second mode, live hints over the visible composer viewport,
+  is not ported: it lives in omp's composer, which Lemon's editor does not use.
   Ctrl+V accepts clipboard images where the platform provides them, and pasted
   or dragged local image paths attach actual PNG, JPEG, GIF, or WebP bytes.
   Up to five images totaling 10 MiB may accompany a prompt, including an image-only
