@@ -370,8 +370,9 @@ checks the backend's advertised address while the window is active. After setup,
 readiness updates without restarting the app; **Check connection readiness**
 also makes an immediate check. Choose **Create QR code** once verified,
 scan or paste it in the phone app, review the destination and request
-connection. Compare the phone's device name and six-digit code with the desktop
-before approving that exact request. Wait for the phone to finish connecting, not
+connection. Compare the phone's device name and six-digit code with the desktop,
+then choose **Codes match — Pair iPhone** only if both match exactly; otherwise
+choose **Doesn't match — Deny**. Wait for the phone to finish connecting, not
 merely for desktop approval. The phone gets its own revocable product session;
 it is not another execution machine. Revoke it with **Revoke this iPhone** or in
 **Settings → Account → Sessions & devices**. The desktop backend and host must

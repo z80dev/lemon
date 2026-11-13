@@ -104,6 +104,15 @@ final class FixtureURLProtocol: URLProtocol {
         guard method == "GET" else { return failure(409, code: "conflict", message: "This fixture workspace is read-only.") }
 
         switch parts {
+        case ["setup"], ["identity"]:
+            var descriptor: FixtureJSON = [
+                "product": "lemon_bot", "apiVersion": 1, "version": "1.0.0",
+                "instanceId": "instance_FixtureWorkspace", "publicUrl": baseURL.absoluteString,
+                "capabilities": ["pairing": true]
+            ]
+            if parts == ["setup"] { descriptor["setupRequired"] = false }
+            else { descriptor["workspaceId"] = LemonBotFixtureID.workspace }
+            return found(descriptor)
         case ["sync"]: return found(world.snapshot)
         case ["instance"]: return found(world.instance(controllerDown: request.value(forHTTPHeaderField: "X-LB-Fixture-Controller-Down") == "true", runtimeRunning: request.value(forHTTPHeaderField: "X-LB-Fixture-Runtime-Running") == "true"))
         case ["audio", "voices"]: return found(["provider": "openai", "configured": true, "voices": [

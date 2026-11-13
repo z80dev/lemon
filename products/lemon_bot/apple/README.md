@@ -374,11 +374,18 @@ Drag the transcript downward to dismiss the keyboard interactively. A transcript
 already at the latest message stays there when the keyboard or composer resizes;
 reading older messages does not force a jump to the bottom.
 
-The transcript is a `LazyVStack` positioned with explicit `ScrollViewReader`
-bottom requests (initial open, follow), not `.defaultScrollAnchor(.bottom)`: that
-anchor re-adjusts the offset as lazy rows refine their measured heights and can
-spin the main thread in an endless layout loop. Entry navigation takes priority
-over the initial bottom request.
+The transcript follows new content only while following the latest message.
+Scrolling toward older messages, Find, linked-message navigation and loading
+older entries pause following; sending or **Jump to latest** resumes it.
+Streaming and keyboard/composer resizing do not steal the reader's position.
+On iOS 18/macOS 15 and newer, automatic following also pauses during a drag
+or deceleration. Loading older entries preserves the previously first message
+rather than a transient date separator. Resizing alone does not show **New messages**.
+
+The transcript remains a `LazyVStack` positioned with explicit
+`ScrollViewReader` bottom requests, not `.defaultScrollAnchor(.bottom)`: that
+anchor can repeatedly readjust as lazy rows refine their heights. Following
+uses measured scroll position, not lazy-row appearance.
 
 Groups have one human owner and two to six Bots owned by that person. There are no human invitations, successor transfer or Group Leave. Deletion uses the existing exact preview/confirmation and verified active/unknown-work lifecycle. Authoritative conversation deletion removes only this account's room draft and copied staging files, not selected originals or another account's cache. Legacy cached foreign live Bots/rooms do not regain visibility during offline restoration.
 
@@ -386,9 +393,14 @@ The transcript renders the declared entry/card families with attributable actors
 
 A saved authored message does not mean every target admitted work. Per-target **Rejected** delivery retains the matching failed run's actual refusal reason, with no fabricated start or blanket unknown result; mixed group receipts keep admitted work independent. Message reconciliation reads the original actor/conversation/nonce receipt rather than dispatching another message.
 
-After a lost/late HTTP acknowledgement or an envelope-less relay 502/504, native clients automatically read that receipt. Matching realtime entry/run observations, a caught-up reconnect and app foreground also recheck pending messages. A complete receipt clears the composer fence/error and only the unchanged captured draft; a partial group, missing reservation or unavailable read stays uncertain. Rejected/failed targets retain their actual errors. No message POST is automatically replayed.
+A terminal failure confirmed to precede runtime dispatch is **Rejected**, not an
+indefinitely uncertain send. The authored message can remain in the transcript
+while its failed execution is reported separately. Only a genuinely uncertain
+dispatch remains fenced; receipt checks never repeat the message.
 
-Selected local files show **Not sent** until you choose **Upload**; the composer explains that they must be uploaded or removed before sending. An unconfirmed message shows **Check status** and **Reload conversation**, keeps the draft, and never treats a reload as permission to resend. Offline drafts stay local until you reconnect and choose Send. Delivery choices are **Send as follow-up**, **Update running task**, and **Stop and send now**, with an explanation beside the composer.
+After a lost/late HTTP acknowledgement or an envelope-less relay 502/504, native clients read the exact receipt. Matching realtime entry/run observations, reconnect, foreground and bounded connected-session checks also reconcile pending messages. Once the original authored message is recorded, the unchanged submitted draft clears once and the composer unlocks, even if execution admission is still being checked. Later edits or an identical newly typed draft are not cleared. **Saved · waiting for confirmation** is distinct from an unconfirmed message reservation. Real rejection reasons remain visible; no message POST is automatically replayed.
+
+Selected local files show **Not sent** until you choose **Upload**; upload or remove them before sending. A message whose reservation is still unconfirmed retains **Check status** and **Reload conversation**, preserves its draft, and never treats reload as permission to resend. Offline drafts stay local until you reconnect and choose Send. Delivery choices are **Send as follow-up**, **Update running task**, and **Stop and send now**, with an explanation beside the composer.
 
 Composer icon controls reserve at least 44 × 44 points on iPhone without enlarging
 their artwork. The composer keeps a fixed corner radius while typing. Pasted-file

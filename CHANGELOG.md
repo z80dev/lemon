@@ -10,6 +10,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Lemon Bot's desktop iPhone pairing uses one explicit **Codes match — Pair
+  iPhone** action instead of a comparison toggle followed by a separate button.
+- Native Bot transcripts use measured scroll position to follow replies without
+  snapping readers away from history; loading older messages preserves the
+  message anchor, and keyboard resizing no longer creates a new-message badge.
+- Bot capability inspection no longer serializes slow probes in the worker's
+  mailbox. Concurrent reads share one fresh probe without retaining stale grants.
+- Messages confirmed to fail before runtime dispatch settle as rejected instead
+  of keeping Mac/iPhone composers trapped in “Checking whether your last message
+  was sent”; uncertain dispatched work is never automatically repeated.
+- JavaScript-only client and Bot test lanes no longer require an installed
+  Elixir toolchain; release-gate cleanup handles Tern lifecycle return values
+  explicitly.
+- The Bot web type checker uses the same SDK source alias as Vite, so copied
+  local SDK dependencies no longer lose their sibling contract imports.
 - Credential redaction protects bounded auth/authorization/OAuth URL fields again,
   preventing embedded URL credentials from leaking through execution approvals
   while preserving validated, usable OAuth links and ordinary parser token text.
