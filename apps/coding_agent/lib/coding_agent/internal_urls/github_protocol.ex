@@ -194,9 +194,15 @@ defmodule CodingAgent.InternalUrls.GitHubProtocol do
         fetch = Keyword.get(opts, :github_http_fn, &http/1)
 
         case fetch.(url) do
-          {:ok, body} when is_binary(body) -> decode(body)
-          {:ok, body} when is_map(body) or is_list(body) -> {:ok, body}
-          _ -> {:error, "GitHub request failed; install and authenticate the gh CLI (gh auth login) for private repositories or rate-limited access"}
+          {:ok, body} when is_binary(body) ->
+            decode(body)
+
+          {:ok, body} when is_map(body) or is_list(body) ->
+            {:ok, body}
+
+          _ ->
+            {:error,
+             "GitHub request failed; install and authenticate the gh CLI (gh auth login) for private repositories or rate-limited access"}
         end
     end
   end

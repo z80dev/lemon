@@ -381,7 +381,9 @@ defmodule CodingAgent.SystemPromptTest do
   test "terminal visuals guidance appears only for TUI sessions", %{tmp_dir: tmp_dir} do
     opts = %{workspace_dir: Path.join(tmp_dir, "workspace"), contributed_sections: []}
 
-    tui = SystemPrompt.build(tmp_dir, Map.put(opts, :session_key, "agent:default:tui:local:dm:abc"))
+    tui =
+      SystemPrompt.build(tmp_dir, Map.put(opts, :session_key, "agent:default:tui:local:dm:abc"))
+
     assert tui =~ "## Terminal visuals"
     assert tui =~ "```mermaid"
     assert tui =~ "var(--accent)"
