@@ -390,3 +390,39 @@ describe("ApprovalPanelComponent native buttons", () => {
 		expect(JSON.stringify(approved.describe())).toContain("Plan approved — executing");
 	});
 });
+
+describe("plan review key", () => {
+	const proposal = request({
+		approvalId: "ap-plan",
+		tool: "propose_plan",
+		action: { title: "Fix the API", path: "/plans/fix-api-plan.md", plan: "# Fix the API\n" },
+		expiresAtMs: null,
+	});
+
+	function wired(event: ApprovalRequestedEvent) {
+		const reviewed: string[] = [];
+		const decisions: string[] = [];
+		const panel = new ApprovalPanelComponent({
+			onDecide: (decision) => decisions.push(decision),
+			onReviewPlan: (reviewing) => reviewed.push(reviewing.approvalId),
+			now: () => NOW,
+		});
+		panel.show(event);
+		return { panel, reviewed, decisions };
+	}
+
+	test("v opens the review without deciding, and the hint says so", () => {
+		const { panel, reviewed, decisions } = wired(proposal);
+		expect(renderPlain(panel.render(80))).toContain("v reviews");
+		panel.handleInput("v");
+		expect(reviewed).toEqual(["ap-plan"]);
+		expect(decisions).toEqual([]);
+	});
+
+	test("an ordinary approval has no review key", () => {
+		const { panel, reviewed } = wired(request());
+		panel.handleInput("v");
+		expect(reviewed).toEqual([]);
+		expect(renderPlain(panel.render(80))).not.toContain("reviews");
+	});
+});

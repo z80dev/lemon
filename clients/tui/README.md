@@ -665,6 +665,21 @@ the row renderer, clickable buttons in Tern's native approval chrome:
 - **Refine plan** (`deny`, also Esc) keeps plan mode on; the agent ends its turn
   and waits for your feedback, which you send as a normal prompt.
 
+**Fullscreen plan review.** `v` (or the native **Review plan** button) opens
+omp's plan-review overlay over the proposal: the plan in scrollable Markdown
+sections, a Contents sidebar on wide terminals (jump, `a` annotate, `e` edit an
+annotation, `d` delete a section, `u` undo), `c` to copy the plan, and the same
+two choices beneath. It opens by itself when the terminal is at least 30 rows
+tall; a shorter one keeps the compact panel until you press `v`. Choosing
+**Approve and execute** or **Refine plan** resolves the request exactly as the
+panel's keys do. **Esc closes the review without answering** and returns to the
+compact panel, still pending. Because `deny` carries no text, annotations and
+removed sections from a Refine are staged as a markdown note in the composer
+(appended to any draft) for you to edit and send. Sections cannot be removed
+from the daemon-owned plan file, so **Approve and execute** is refused while
+removals are pending (the review reopens on Refine, where they travel as
+feedback).
+
 No session, agent or global scope applies to a plan proposal, and `/approve`
 refuses one. Running `/plan` while plan mode is on exits it without approving
 or executing anything; when the plan file already has content a cancel-default

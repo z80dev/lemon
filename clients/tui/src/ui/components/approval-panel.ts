@@ -44,6 +44,10 @@ export const APPROVAL_OPTIONS: readonly ApprovalOption[] = [
 	{ key: "4", label: "deny", decision: "deny" },
 ];
 
+/** The panel key and native action that open the fullscreen plan review. */
+const REVIEW_KEY = "v";
+const REVIEW_ACT = "review";
+
 /** Rows of plan Markdown shown before the rest is counted. */
 export const PLAN_PREVIEW_ROWS = 12;
 
@@ -66,6 +70,12 @@ export function approvalOptions(
 export interface ApprovalPanelOptions {
 	/** A decision the user made here. */
 	onDecide: (decision: string, event: ApprovalRequestedEvent) => void;
+	/**
+	 * Open the fullscreen plan review for a plan proposal (`v`, or the native
+	 * Review button). Unset, the panel is the only view of the plan and offers
+	 * no review key.
+	 */
+	onReviewPlan?: (event: ApprovalRequestedEvent) => void;
 	/** Called when a key moved the selection and the row needs a repaint. */
 	requestRender?: () => void;
 	/** Clock seam for the countdown. */
@@ -132,6 +142,10 @@ export class ApprovalPanelComponent implements Component {
 		// "I did not answer" is not one of the answers the daemon accepts.
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
 			this.#options.onDecide("deny", event);
+			return;
+		}
+		if (data === REVIEW_KEY && this.#canReview(event)) {
+			this.#options.onReviewPlan?.(event);
 			return;
 		}
 		const quick = approvalOptions(event).find((option) => option.key === data);
@@ -256,7 +270,10 @@ export class ApprovalPanelComponent implements Component {
 					"expires",
 				)
 			: undefined;
-		children.push(actionBar([...(countdown ? [countdown] : []), null, ...buttons]));
+		const review = this.#canReview(event)
+			? [actionButton("Review plan", REVIEW_ACT, { keys: REVIEW_KEY })]
+			: [];
+		children.push(actionBar([...(countdown ? [countdown] : []), null, ...review, ...buttons]));
 		const described = col(children, { role: "omp.editor.ask.approval", gap: "md" });
 		this.#native = { event, selected: this.#selected, node: described };
 		return described;
@@ -266,11 +283,19 @@ export class ApprovalPanelComponent implements Component {
 	handleNativeEvent(event: NativeUiEvent): void {
 		const pending = this.#event;
 		if (!pending || event.type !== "action") return;
+		if (event.act === REVIEW_ACT && this.#canReview(pending)) {
+			this.#options.onReviewPlan?.(pending);
+			return;
+		}
 		const option = approvalOptions(pending).find((candidate) => candidate.decision === event.act);
 		if (option) this.#options.onDecide(option.decision, pending);
 	}
 
 	// -- internals -----------------------------------------------------------
+
+	#canReview(event: ApprovalRequestedEvent): boolean {
+		return event.tool === PROPOSE_PLAN_TOOL && this.#options.onReviewPlan !== undefined;
+	}
 
 	#move(direction: -1 | 1): void {
 		const next = this.#selected + direction;
@@ -360,7 +385,7 @@ export class ApprovalPanelComponent implements Component {
 		}
 
 		const hint = truncateToWidth(
-			`1-${options.length} picks · ↑↓ then enter · esc ${plan ? "refines" : "denies"}`,
+			`1-${options.length} picks · ↑↓ then enter${this.#canReview(event) ? ` · ${REVIEW_KEY} reviews` : ""} · esc ${plan ? "refines" : "denies"}`,
 			inner,
 		);
 		line(hint, theme.fg("dim", hint));

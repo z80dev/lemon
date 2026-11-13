@@ -32,7 +32,7 @@ import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { CLOSE_ACTION, pickerAction } from "@oh-my-pi/pi-tui/native/picker";
 import { expandEmoticons } from "@oh-my-pi/pi-tui/prompt/emoji-autocomplete";
 import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
-import { Container, TUI } from "@oh-my-pi/pi-tui/tui";
+import { type Component, Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
 import { type CommandHost, type CommandRegistry, createCommandRegistry } from "./commands/index.ts";
@@ -43,7 +43,7 @@ import {
 	type PaletteSourceOptions,
 } from "./commands/palette-source.ts";
 import { parsePlanReceipt } from "./commands/plan.ts";
-import { SUBMISSION_MODES } from "./commands/registry.ts";
+import { type OverlayHost, SUBMISSION_MODES } from "./commands/registry.ts";
 import {
 	ComposerDrafts,
 	type ComposerSubmission,
@@ -339,6 +339,14 @@ export class AppShell {
 			notice: (text, level) => this.events.notice(text, level),
 			focusEditor: () => this.#restoreFocus(),
 			refreshStatus: () => this.#renderStatus(),
+			presentOverlay: (build) => this.#presentOverlay(build),
+			isOverlayOpen: () => this.selectors.isOpen,
+			copyText: (text) => void this.#copyText(text),
+			stageDraft: (text) => {
+				const draft = this.#editor.getExpandedText();
+				this.#editor.setText(draft.trim() === "" ? text : `${draft}\n\n${text}`);
+				this.tui.requestRender();
+			},
 		});
 		this.userPrompts = new UserPromptController({
 			client: this.client,
@@ -1745,18 +1753,7 @@ export class AppShell {
 					}),
 				);
 			},
-			presentOverlay: (build) => {
-				let close = () => {};
-				close = this.selectors.open(
-					build({
-						close: () => close(),
-						repaint: () => this.selectors.repaint(),
-						rows: () => this.tui.terminal.rows,
-						columns: () => this.tui.terminal.columns,
-						tui: this.tui,
-					}),
-				);
-			},
+			presentOverlay: (build) => this.#presentOverlay(build),
 			themeChanged: () => this.#themeChanged(),
 			setThemePreference: (preference: ThemePreference) =>
 				this.appearance.setPreference(preference),
@@ -1771,6 +1768,20 @@ export class AppShell {
 						: "your setting",
 			}),
 		};
+	}
+
+	/** The `presentOverlay` seam: `build`'s component as the one fullscreen overlay. */
+	#presentOverlay(build: (host: OverlayHost) => Component): void {
+		let close = () => {};
+		close = this.selectors.open(
+			build({
+				close: () => close(),
+				repaint: () => this.selectors.repaint(),
+				rows: () => this.tui.terminal.rows,
+				columns: () => this.tui.terminal.columns,
+				tui: this.tui,
+			}),
+		);
 	}
 
 	/**
