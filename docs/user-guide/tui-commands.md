@@ -71,7 +71,7 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | Command | Aliases | Arguments | Description |
 | --- | --- | --- | --- |
 | /status | — | — | daemon status and health |
-| /usage | — | — | token and quota usage |
+| /usage | — | [text] | usage dashboard: quota cards and daily activity heatmap |
 | /cost | — | [range] [--by day&#124;provider&#124;model&#124;session] | spend breakdown |
 | /logs | — | [count] [level] | tail the daemon log |
 
