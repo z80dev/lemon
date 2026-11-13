@@ -1,3 +1,4 @@
+import { RewindSelectorComponent } from "@oh-my-pi/pi-tui/overlays/rewind-selector";
 import { ControlPlaneError, NotConnectedError } from "../protocol/errors.ts";
 import { METHOD } from "../protocol/methods.ts";
 import type {
@@ -6,6 +7,9 @@ import type {
 	SessionRewindTarget,
 	SessionTreeEntry,
 } from "../protocol/session-tree.ts";
+import type { Block } from "../store/transcript-model.ts";
+import { closeReplay, replayDeps } from "../ui/replay-overlays.ts";
+import { blocksToTranscriptEntries, entryBlockId } from "../ui/transcript-entries.ts";
 import { forkSession } from "./fork.ts";
 import type { CommandContext, PickerChoice, SlashCommand } from "./registry.ts";
 
@@ -36,7 +40,8 @@ export const treeCommand: SlashCommand = {
 
 export const rewindCommand: SlashCommand = {
 	name: "rewind",
-	summary: "rewind before an earlier prompt after an exact preview and confirmation",
+	summary:
+		"pick a turn on the replayed transcript and rewind before it after an exact preview and confirmation",
 	usage: "[--files]",
 	group: "sessions",
 	methods: [METHOD.sessionsTree, METHOD.sessionsRewind, METHOD.chatHistory],
@@ -50,9 +55,143 @@ export const rewindCommand: SlashCommand = {
 			ctx.ui.notice("this client cannot reload a rewound session", "error");
 			return;
 		}
-		await openTree(ctx, "rewind", argv.includes("--files"), 0);
+		const restoreFiles = argv.includes("--files");
+		if (await openRewindSelector(ctx, restoreFiles)) return;
+		await openTree(ctx, "rewind", restoreFiles, 0);
 	},
 };
+
+/** Most pages of the session tree one rewind will read to find the active prompts. */
+const MAX_TREE_PAGES = 50;
+
+/**
+ * The branch's user prompts as the daemon journals them, oldest first: the
+ * active path from the leaf to the root when the tree names one, else the
+ * active prompts in receipt order. Includes prompts that cannot be rewound, so
+ * alignment with the transcript's own prompts never skips one.
+ */
+export async function activeServerPrompts(ctx: CommandContext): Promise<SessionTreeEntry[]> {
+	const entries: SessionTreeEntry[] = [];
+	let leafId: string | null = null;
+	for (let page = 0, offset = 0; page < MAX_TREE_PAGES; page++, offset += PAGE_SIZE) {
+		const tree = await ctx.methods.sessionsTree({
+			sessionKey: ctx.session.key,
+			cwd: ctx.cwd ?? process.cwd(),
+			limit: PAGE_SIZE,
+			offset,
+		});
+		if (tree.sessionKey !== ctx.session.key || !Array.isArray(tree.entries)) {
+			throw new Error("unexpected session tree receipt");
+		}
+		entries.push(...tree.entries);
+		leafId = tree.leafId;
+		if (!tree.hasMore) break;
+	}
+	const byId = new Map(entries.map((entry) => [entry.id, entry]));
+	const path: SessionTreeEntry[] = [];
+	const seen = new Set<string>();
+	for (let cursor = leafId ? byId.get(leafId) : undefined; cursor && !seen.has(cursor.id); ) {
+		seen.add(cursor.id);
+		path.push(cursor);
+		cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined;
+	}
+	const active = path.length > 0 ? path.reverse() : entries.filter((entry) => entry.isActive);
+	return active.filter((entry) => entry.role === "user");
+}
+
+function sameText(a: string, b: string | null | undefined): boolean {
+	const left = a.replace(/\s+/g, " ").trim();
+	const right = (b ?? "").replace(/\s+/g, " ").trim();
+	// The tree's text is a bounded preview, and an empty one says nothing either way.
+	return left.startsWith(right) || right.startsWith(left);
+}
+
+/**
+ * Pair the transcript's user blocks with the daemon's journal entries for them
+ * (blocks carry no server ids), keyed by block id. Both lists are chronological
+ * and the client may hold only a recent tail, so pairing runs newest first; a
+ * block no remaining prompt can be told apart from stays unpaired.
+ */
+export function pairPromptsWithServerEntries(
+	blocks: readonly Block[],
+	prompts: readonly SessionTreeEntry[],
+): Map<string, SessionTreeEntry> {
+	const paired = new Map<string, SessionTreeEntry>();
+	let cursor = prompts.length - 1;
+	for (let i = blocks.length - 1; i >= 0; i--) {
+		const block = blocks[i]!;
+		if (block.kind !== "user") continue;
+		for (let j = cursor; j >= 0; j--) {
+			if (!sameText(block.text, prompts[j]!.text)) continue;
+			paired.set(block.id, prompts[j]!);
+			cursor = j - 1;
+			break;
+		}
+	}
+	return paired;
+}
+
+/**
+ * The prompt a replayed entry rewinds to. A user turn rewinds before its own
+ * prompt; any other turn means "continue from here", which the daemon expresses
+ * as rewinding before the next prompt. `undefined` when there is no such prompt
+ * or the daemon has no entry for it.
+ */
+export function rewindTargetForEntry(
+	blocks: readonly Block[],
+	paired: ReadonlyMap<string, SessionTreeEntry>,
+	entryId: string,
+): SessionTreeEntry | undefined {
+	const blockId = entryBlockId(entryId);
+	const at = blocks.findIndex((block) => block.id === blockId);
+	if (at < 0) return undefined;
+	const prompt =
+		blocks[at]!.kind === "user"
+			? blocks[at]
+			: blocks.slice(at + 1).find((block) => block.kind === "user");
+	return prompt ? paired.get(prompt.id) : undefined;
+}
+
+/**
+ * Esc-Esc / `/rewind`: pick the turn to rewind on the replayed transcript, then
+ * hand it to the same preview and confirmation as the list picker. Returns
+ * false, having done nothing, when this client cannot present the picker or no
+ * transcript turn can be matched to a daemon prompt, so the caller falls back.
+ */
+async function openRewindSelector(ctx: CommandContext, restoreFiles: boolean): Promise<boolean> {
+	if (!ctx.ui.presentOverlay) return false;
+	const blocks = [...ctx.session.blocks];
+	if (!blocks.some((block) => block.kind === "user")) return false;
+	let paired: Map<string, SessionTreeEntry>;
+	try {
+		paired = pairPromptsWithServerEntries(blocks, await activeServerPrompts(ctx));
+	} catch (error) {
+		failure(ctx, "tree", error);
+		return true;
+	}
+	if (ctx.store.focusedKey !== ctx.session.key) return true;
+	if (![...paired.values()].some((entry) => entry.rewindable)) return false;
+	const entries = blocksToTranscriptEntries(blocks);
+	ctx.ui.presentOverlay((host) => {
+		const selector: RewindSelectorComponent = new RewindSelectorComponent(entries, {
+			...replayDeps(host, ctx.cwd ?? process.cwd()),
+			onSelect: (entryId) => {
+				closeReplay(host, selector);
+				const target = rewindTargetForEntry(blocks, paired, entryId);
+				if (!target) {
+					ctx.ui.notice("nothing after that turn can be rewound to", "warning");
+				} else if (!target.rewindable) {
+					ctx.ui.notice("the daemon cannot rewind to that prompt", "warning");
+				} else {
+					void previewRewind(ctx, target, restoreFiles);
+				}
+			},
+			onCancel: () => closeReplay(host, selector),
+		});
+		return selector;
+	});
+	return true;
+}
 
 async function openTree(
 	ctx: CommandContext,

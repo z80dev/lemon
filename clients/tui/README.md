@@ -147,6 +147,8 @@ on reconnect and when opening or changing models. Older daemons without
   as interrupted, not as a generic failed run; real failures retain their error.
   The busy status line shows `enter:<mode>` and `esc:stop`; Escape interrupts
   without discarding a correction in the editor (autocomplete gets Escape first).
+  While idle, Esc Esc discards a non-empty draft (recoverable with Up) and, on an
+  empty composer, opens the rewind picker (same as `/rewind`).
   Shift+Enter inserts a newline. Up/Down recall prompts (kept across sessions in
   `~/.lemon/tui-history/history.sqlite3`, mode `0600` in a private `0700` directory;
   `/clear-history` clears saved prompts and `[tui] prompt_history = false` turns it off;
@@ -198,9 +200,14 @@ on reconnect and when opening or changing models. Older daemons without
   as `[label]` in `/tree`; `/tree label <entryId> <text>` and
   `/tree unlabel <entryId>` set them directly. The abandoned-branch summary is
   generated in the background by a loaded session only; a stopped session just
-  switches. `/rewind` picks an earlier
-  active user prompt, previews the change, then requires confirmation bound to
-  that exact preview. History-only rewind leaves files untouched and does not
+  switches. `/rewind` (also Esc Esc on an empty composer) opens a fullscreen picker
+  over the replayed transcript: Up/Down move a dotted outline over turns,
+  Left/Right jump between prompts, `f` filters, Enter picks, Esc cancels. Picking
+  a prompt rewinds before it; picking any other turn continues from there by
+  rewinding before the next prompt. The pick then goes through the same preview
+  and requires confirmation bound to that exact preview. Where the transcript
+  cannot be matched to the daemon's prompts, `/rewind` falls back to a list of the
+  active user prompts. History-only rewind leaves files untouched and does not
   list files as restoration targets. `--files` requests checkpoint restoration;
   non-restorable effects block confirmation by default. When the daemon permits
   partial restoration, explicitly choosing “Allow partial restoration” obtains
@@ -410,7 +417,7 @@ and control plane authoritative:
 
 | Command | Lemon behavior |
 | --- | --- |
-| `/copy` | Copy the focused session's latest assistant reply (all text segments, including a partial reply). Alt+Shift+C does the same without changing the draft. |
+| `/copy` | Open a fullscreen picker over the replayed transcript: Up/Down move a dotted outline over turns, Right descends into a turn's fenced code, quotes, commands and tool output, Left/Esc ascends or closes, Enter copies the outlined turn or block. Alt+Shift+C copies the focused session's latest assistant reply (all text segments, including a partial reply) without changing the draft, and is what `/copy` did before the picker. |
 | `/copy code [n]` | Copy the nth fenced code block of that reply, numbered from 1; omitted `n` means **first**. Backtick and tilde fences, including nested ones, use the renderer's Markdown parsing. |
 | `/copy prompt` | Copy the latest submitted user prompt, not the current draft. |
 | `/queue [prompt]`, `/q [prompt]` | With a prompt, use queue mode for that submission; without one, inspect and edit the pending queue. `/q` is intentionally queue, not quit. |

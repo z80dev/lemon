@@ -283,6 +283,10 @@ export class AppShell {
 			},
 			onAbort: () => this.#abortActiveRun(),
 			onQuit: (code) => this.requestExit(code),
+			// Esc Esc on an empty composer opens the rewind picker, as /rewind does.
+			onRewind: () => {
+				if (!this.#hasOverlay()) void this.submit("/rewind");
+			},
 			onCycleMode: () => this.cycleSubmissionMode(),
 			notice: (text, level) => this.events.notice(text, level),
 			requestRender: () => this.tui.requestRender(),
