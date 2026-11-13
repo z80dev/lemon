@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.11.7]
+
 ### Fixed
 
 - OpenAI-compatible streams that report an upstream failure as a mid-stream
@@ -164,6 +170,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - The TUI uses pi-tui 18.18.9 (native buttons, path-based syntax highlighting
   in Tern) and source development now needs Bun 1.4.4+.
+
+---
 
 ## [2026.11.6]
 
