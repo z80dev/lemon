@@ -38,6 +38,22 @@ defmodule LemonCore.AgentRuntime.Provider do
   @callback get_task(task_id()) :: {:ok, map(), [map()]} | term()
 
   @doc """
+  Agent Hub roster of a root session's task subagents (nested included):
+  `{:ok, [agent]}` with bounded display fields and no prompts or paths.
+  """
+  @callback subagents_list(session_key()) :: {:ok, [map()]} | {:error, atom()}
+
+  @doc "Bounded visible transcript of one subagent; `{:error, :not_found}` for foreign IDs."
+  @callback subagent_transcript(session_key(), task_id()) :: {:ok, map()} | {:error, atom()}
+
+  @doc "Operator steer/follow-up/revive of one subagent: `{:ok, delivery}`."
+  @callback subagent_send(session_key(), task_id(), String.t()) ::
+              {:ok, atom()} | {:error, atom()}
+
+  @doc "Operator cancellation of one subagent."
+  @callback subagent_cancel(session_key(), task_id()) :: :ok | {:error, atom()}
+
+  @doc """
   Task-list progress for a session, including an `:actionable_count` key.
 
   Returns `nil` when the session has no task-list state.
@@ -219,6 +235,10 @@ defmodule LemonCore.AgentRuntime.Provider do
                       user_prompt_bind: 4,
                       user_prompt_resolve: 5,
                       get_task: 1,
+                      subagents_list: 1,
+                      subagent_transcript: 2,
+                      subagent_send: 3,
+                      subagent_cancel: 2,
                       todo_progress: 1,
                       feature_progress: 1,
                       compact_session: 2,

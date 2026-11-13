@@ -1,9 +1,12 @@
+import type { SubagentUsage } from "../protocol/subagents.ts";
 import { Emitter } from "./events.ts";
 
 export type TaskStatus =
 	| "queued"
 	| "running"
 	| "cancelling"
+	| "idle"
+	| "parked"
 	| "completed"
 	| "error"
 	| "aborted"
@@ -16,16 +19,28 @@ export interface TaskUpdate {
 	sessionId?: string;
 	parentRunId?: string;
 	parentSessionId?: string;
+	/** Daemon-reported lineage (`subagents.list`); wins over run/session matching. */
+	parentTaskId?: string;
 	launchActionId?: string;
+	name?: string;
 	description?: string;
 	agent?: string;
+	model?: string;
 	status?: TaskStatus;
 	progress?: string;
+	usage?: SubagentUsage;
+	contextPercent?: number;
+	/** Whether the daemon accepts a message (steer, wake or revive) for this child. */
+	messaging?: boolean;
+	cancellable?: boolean;
+	/** Daemon clock: when the child started and when its latest turn ended. */
+	startedAt?: number;
+	completedAt?: number;
 }
 
 export interface TaskRecord extends TaskUpdate {
 	status: TaskStatus;
-	/** Arrival time, not an invented server start time. */
+	/** Arrival time, or the daemon's start time once the roster reported it. */
 	observedAt: number;
 	updatedAt: number;
 	finishedAt?: number;
@@ -67,7 +82,18 @@ export class TaskStore {
 		return this.#sessions.get(sessionKey)?.get(taskId);
 	}
 
-	upsert(sessionKey: string, updates: readonly TaskUpdate[], now: number): void {
+	/**
+	 * Merge child updates. Event updates never rewind a child (a delayed launch
+	 * receipt or stale progress after a terminal result); `authoritative` daemon
+	 * roster reads replace the lifecycle, so an idle child woken for a new turn
+	 * runs again and its clock follows the daemon's timestamps.
+	 */
+	upsert(
+		sessionKey: string,
+		updates: readonly TaskUpdate[],
+		now: number,
+		options: { authoritative?: boolean } = {},
+	): void {
 		if (!sessionKey || updates.length === 0) return;
 		let tasks = this.#sessions.get(sessionKey);
 		if (!tasks) {
@@ -77,22 +103,28 @@ export class TaskStore {
 		for (const update of updates) {
 			const previous = tasks.get(update.taskId);
 			const status = update.status ?? previous?.status ?? "unknown";
-			// Launch receipts can arrive after real progress, and delayed progress
-			// can arrive after a terminal result. Neither may rewind the child.
 			const stale =
+				!options.authoritative &&
 				previous &&
 				((isTaskTerminal(previous.status) && !isTaskTerminal(update.status ?? "unknown")) ||
 					(previous.status === "running" && status === "queued") ||
 					(previous.status === "cancelling" && (status === "queued" || status === "running")));
+			const settled = isTaskTerminal(status) || status === "idle" || status === "parked";
+			const finishedAt = options.authoritative
+				? settled
+					? (update.completedAt ?? previous?.finishedAt ?? now)
+					: undefined
+				: (previous?.finishedAt ?? (isTaskTerminal(status) ? now : undefined));
 			const next: TaskRecord = {
 				...previous,
 				...update,
 				launchActionId: previous?.launchActionId ?? update.launchActionId,
 				status: stale ? previous.status : status,
 				progress: stale ? previous.progress : (update.progress ?? previous?.progress),
-				observedAt: previous?.observedAt ?? now,
+				observedAt:
+					(options.authoritative ? update.startedAt : undefined) ?? previous?.observedAt ?? now,
 				updatedAt: stale ? previous.updatedAt : now,
-				finishedAt: previous?.finishedAt ?? (isTaskTerminal(status) ? now : undefined),
+				finishedAt,
 			};
 			tasks.set(update.taskId, next);
 		}
@@ -106,6 +138,7 @@ export class TaskStore {
 	/** Opaque IDs are never split. Late parent metadata reparents on the next read. */
 	tree(sessionKey: string): readonly TaskTreeRow[] {
 		const tasks = this.items(sessionKey);
+		const byTask = this.#sessions.get(sessionKey);
 		const byRun = new Map<string, TaskRecord>();
 		const bySession = new Map<string, TaskRecord>();
 		for (const task of tasks) {
@@ -116,6 +149,7 @@ export class TaskStore {
 		const parents = new Map<string, string>();
 		for (const task of tasks) {
 			const parent =
+				(task.parentTaskId ? byTask?.get(task.parentTaskId) : undefined) ??
 				(task.parentRunId ? byRun.get(task.parentRunId) : undefined) ??
 				(task.parentSessionId ? bySession.get(task.parentSessionId) : undefined);
 			if (!parent || parent === task) continue;

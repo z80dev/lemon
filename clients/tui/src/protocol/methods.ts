@@ -56,6 +56,14 @@ import type {
 	SessionTreeParams,
 	SessionTreeResult,
 } from "./session-tree.ts";
+import {
+	parseSubagentSend,
+	parseSubagents,
+	parseSubagentTranscript,
+	type Subagent,
+	type SubagentSendResult,
+	type SubagentTranscript,
+} from "./subagents.ts";
 import type {
 	ApprovalResolveParams,
 	BlueprintActivationResult,
@@ -180,6 +188,10 @@ export const METHOD = {
 	runsTimelineGet: "runs.timeline.get",
 	tasksActiveList: "tasks.active.list",
 	tasksRecentList: "tasks.recent.list",
+	subagentsList: "subagents.list",
+	subagentsTranscript: "subagents.transcript",
+	subagentsSend: "subagents.send",
+	subagentsCancel: "subagents.cancel",
 	goalSet: "goal.set",
 	goalStatus: "goal.status",
 	goalPause: "goal.pause",
@@ -722,6 +734,47 @@ export class ControlPlaneMethods {
 
 	tasksRecentList(params?: Record<string, unknown>, options?: RequestOptions): Promise<unknown> {
 		return this.#call(METHOD.tasksRecentList, params, options);
+	}
+
+	// -- agent hub ----------------------------------------------------------
+
+	async subagentsList(
+		params: { sessionKey: string },
+		options?: RequestOptions,
+	): Promise<Subagent[]> {
+		return parseSubagents(await this.#call(METHOD.subagentsList, params, options));
+	}
+
+	async subagentsTranscript(
+		params: { sessionKey: string; taskId: string },
+		options?: RequestOptions,
+	): Promise<SubagentTranscript> {
+		return parseSubagentTranscript(
+			await this.#call(METHOD.subagentsTranscript, params, options),
+			params.taskId,
+		);
+	}
+
+	/** Never queued offline: a delayed steer could land on a different turn. */
+	async subagentsSend(
+		params: { sessionKey: string; taskId: string; message: string },
+		options?: RequestOptions,
+	): Promise<SubagentSendResult> {
+		return parseSubagentSend(
+			await this.#call(METHOD.subagentsSend, params, { ...options, queueIfOffline: false }),
+			params.taskId,
+		);
+	}
+
+	async subagentsCancel(
+		params: { sessionKey: string; taskId: string },
+		options?: RequestOptions,
+	): Promise<{ cancelled: boolean }> {
+		const result = await this.#call<{ cancelled?: unknown }>(METHOD.subagentsCancel, params, {
+			...options,
+			queueIfOffline: false,
+		});
+		return { cancelled: result?.cancelled === true };
 	}
 
 	// -- goals --------------------------------------------------------------

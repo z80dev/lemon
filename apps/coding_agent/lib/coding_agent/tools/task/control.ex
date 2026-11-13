@@ -124,6 +124,36 @@ defmodule CodingAgent.Tools.Task.Control do
     end
   end
 
+  @doc """
+  Live phase, child session and retained model of the given tasks, for the
+  operator Agent Hub. Tasks without a control entry are omitted.
+  """
+  def hub_state(task_ids) when is_list(task_ids),
+    do: GenServer.call(__MODULE__, {:hub_state, task_ids})
+
+  @doc """
+  Deliver a human operator's message to one task, using the family delivery
+  path without a peer envelope: steer a running child, queue for an unattached
+  one, or wake/revive an idle or parked child. The caller (the operator Agent
+  Hub) has already proven the task belongs to its session. Returns
+  `{:ok, delivery}` where delivery is `:injected | :woken | :revived | :failed |
+  :outcome_unknown`, or `{:error, reason}` when the task cannot be messaged.
+  """
+  def operator_send(task_id, text) do
+    with :ok <- validate_message(text) do
+      with_delivery_reply(fn reply_to ->
+        case GenServer.call(__MODULE__, {:operator_send, task_id, text, reply_to}) do
+          {:ok, delivery} -> {:ok, resolve_delivery(delivery)}
+          error -> error
+        end
+      end)
+    end
+  end
+
+  @doc "Cancel a task the operator Agent Hub has already proven it owns."
+  def operator_cancel(task_id),
+    do: GenServer.call(__MODULE__, {:command, task_id, "cancel", nil, nil})
+
   @impl true
   def init(_opts) do
     Process.send_after(self(), :check_signals, 50)
@@ -299,6 +329,37 @@ defmodule CodingAgent.Tools.Task.Control do
       end
 
     {:reply, reply, state}
+  end
+
+  def handle_call({:hub_state, ids}, _from, state) do
+    reply =
+      for id <- ids, Map.has_key?(state, id), into: %{} do
+        entry = state[id]
+
+        {id,
+         %{
+           status: status(entry, id),
+           session:
+             if(is_pid(entry.session) and Process.alive?(entry.session), do: entry.session),
+           session_id: entry.session_id,
+           model: entry.resume && entry.resume.start_opts[:model],
+           messaging: entry.metadata[:orchestration_worker] != true
+         }}
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:operator_send, id, text, reply_to}, _from, state) do
+    with entry when not is_nil(entry) <- state[id],
+         recipient = member(id, entry, :child),
+         :ok <- prepare_delivery([recipient], text) do
+      {entry, delivery} = deliver_recipient(recipient, text, reply_to)
+      {:reply, {:ok, delivery}, Map.put(state, id, entry)}
+    else
+      nil -> {:reply, {:error, "Unknown or unavailable agent target: #{id}"}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
   end
 
   def handle_call({:send_message, target, text, opts, reply_to}, _from, state) do

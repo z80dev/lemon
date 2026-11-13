@@ -165,6 +165,11 @@ defmodule LemonControlPlane.Methods.Registry do
     # Tasks
     LemonControlPlane.Methods.TasksActiveList,
     LemonControlPlane.Methods.TasksRecentList,
+    # Agent Hub (session-scoped task subagents)
+    LemonControlPlane.Methods.SubagentsList,
+    LemonControlPlane.Methods.SubagentsTranscript,
+    LemonControlPlane.Methods.SubagentsSend,
+    LemonControlPlane.Methods.SubagentsCancel,
     # Cron
     LemonControlPlane.Methods.CronList,
     LemonControlPlane.Methods.CronAdd,
