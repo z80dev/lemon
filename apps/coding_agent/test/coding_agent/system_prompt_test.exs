@@ -376,4 +376,21 @@ defmodule CodingAgent.SystemPromptTest do
     assert after_delete_prompt =~ "controller-persona"
     assert {:error, :not_found} = LemonSkills.WorkspacePreferences.get(workspace_dir, id)
   end
+
+  @tag :tmp_dir
+  test "terminal visuals guidance appears only for TUI sessions", %{tmp_dir: tmp_dir} do
+    opts = %{workspace_dir: Path.join(tmp_dir, "workspace"), contributed_sections: []}
+
+    tui = SystemPrompt.build(tmp_dir, Map.put(opts, :session_key, "agent:default:tui:local:dm:abc"))
+    assert tui =~ "## Terminal visuals"
+    assert tui =~ "```mermaid"
+    assert tui =~ "var(--accent)"
+    assert tui =~ "one visual form per idea"
+
+    for key <- [nil, "agent:default:main", "agent:default:telegram:bot:dm:123", "not-a-key"] do
+      refute SystemPrompt.build(tmp_dir, Map.put(opts, :session_key, key)) =~ "Terminal visuals"
+    end
+
+    refute SystemPrompt.build(tmp_dir, opts) =~ "Terminal visuals"
+  end
 end

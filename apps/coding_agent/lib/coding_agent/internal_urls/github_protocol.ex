@@ -79,7 +79,52 @@ defmodule CodingAgent.InternalUrls.GitHubProtocol do
   defp valid_repo_part?(part),
     do: Regex.match?(~r/\A[A-Za-z0-9_.-]+\z/, part) and part not in [".", ".."]
 
-  defp render(_kind, owner, repo, number, :issue, cwd, opts) do
+  defp render("pr", owner, repo, number, :issue, cwd, opts) do
+    with {:ok, summary} <- render_issue("pr", owner, repo, number, cwd, opts) do
+      endpoint = "https://api.github.com/repos/#{owner}/#{repo}/pulls/#{number}/files"
+
+      # The file list is supplementary; a failure must not hide the PR summary.
+      case files(endpoint, 1, [], cwd, opts) do
+        {:ok, [], _capped?} ->
+          {:ok, summary}
+
+        {:ok, files, capped?} ->
+          note = if capped?, do: "\n[File list capped at 1000 files.]", else: ""
+          heading = "\n\n## Changed files (#{length(files)})\n\n"
+          {:ok, summary <> heading <> file_lines(files) <> note}
+
+        _ ->
+          {:ok, summary}
+      end
+    end
+  end
+
+  defp render(kind, owner, repo, number, :issue, cwd, opts),
+    do: render_issue(kind, owner, repo, number, cwd, opts)
+
+  defp render("pr", owner, repo, number, view, cwd, opts) do
+    endpoint = "https://api.github.com/repos/#{owner}/#{repo}/pulls/#{number}/files"
+
+    with {:ok, files, capped?} <- files(endpoint, 1, [], cwd, opts) do
+      note = if capped?, do: "\n[File list capped at 1000 files.]", else: ""
+
+      case view do
+        :files ->
+          {:ok, file_lines(files) <> note}
+
+        :all ->
+          {:ok, Enum.map_join(files, "\n\n", &patch/1) <> note}
+
+        {:file, index} ->
+          case Enum.at(files, index) do
+            nil -> {:error, "Diff file index is out of range"}
+            file -> {:ok, patch(file)}
+          end
+      end
+    end
+  end
+
+  defp render_issue(_kind, owner, repo, number, cwd, opts) do
     {issue_url, comments_url} = WebFetchGitHub.issue_api_urls(owner, repo, number)
 
     with {:ok, issue} when is_map(issue) <- api(issue_url, cwd, opts),
@@ -92,29 +137,10 @@ defmodule CodingAgent.InternalUrls.GitHubProtocol do
     end
   end
 
-  defp render("pr", owner, repo, number, view, cwd, opts) do
-    endpoint = "https://api.github.com/repos/#{owner}/#{repo}/pulls/#{number}/files"
-
-    with {:ok, files, capped?} <- files(endpoint, 1, [], cwd, opts) do
-      note = if capped?, do: "\n[File list capped at 1000 files.]", else: ""
-
-      case view do
-        :files ->
-          {:ok,
-           Enum.map_join(Enum.with_index(files), "\n", fn {file, i} ->
-             "#{i}: #{file["filename"]} (#{file["status"]}, +#{file["additions"]}/-#{file["deletions"]})"
-           end) <> note}
-
-        :all ->
-          {:ok, Enum.map_join(files, "\n\n", &patch/1) <> note}
-
-        {:file, index} ->
-          case Enum.at(files, index) do
-            nil -> {:error, "Diff file index is out of range"}
-            file -> {:ok, patch(file)}
-          end
-      end
-    end
+  defp file_lines(files) do
+    Enum.map_join(Enum.with_index(files), "\n", fn {file, i} ->
+      "#{i}: #{file["filename"]} (#{file["status"]}, +#{file["additions"]}/-#{file["deletions"]})"
+    end)
   end
 
   defp patch(file),
@@ -170,7 +196,7 @@ defmodule CodingAgent.InternalUrls.GitHubProtocol do
         case fetch.(url) do
           {:ok, body} when is_binary(body) -> decode(body)
           {:ok, body} when is_map(body) or is_list(body) -> {:ok, body}
-          _ -> {:error, "GitHub request failed; authenticate gh for private repositories"}
+          _ -> {:error, "GitHub request failed; install and authenticate the gh CLI (gh auth login) for private repositories or rate-limited access"}
         end
     end
   end
