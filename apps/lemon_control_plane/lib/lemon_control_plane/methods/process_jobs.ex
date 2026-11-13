@@ -146,14 +146,16 @@ defmodule LemonControlPlane.Methods.ProcessJobsSupport do
   end
 
   defp project_agent(agent) do
-    with id when is_binary(id) <- identifier(fetch(agent, :id)) do
-      %{
-        "id" => id,
-        "parentId" => identifier(fetch(agent, :parent_id)),
-        "name" => text(fetch(agent, :name), @max_name_bytes)
-      }
-    else
-      _ -> nil
+    case identifier(fetch(agent, :id)) do
+      id when is_binary(id) ->
+        %{
+          "id" => id,
+          "parentId" => identifier(fetch(agent, :parent_id)),
+          "name" => text(fetch(agent, :name), @max_name_bytes)
+        }
+
+      _ ->
+        nil
     end
   end
 

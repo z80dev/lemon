@@ -44,6 +44,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `CircuitBreaker` no longer stores its default clock as a closure, so a
+  running breaker survives a reload of its module (cover compilation or hot
+  upgrade) instead of crashing with `BadFunctionError`.
 - `OpenAICompletions` fails the response on a mid-stream `{"error": ...}` chunk.
 - Share rate-limit timing across provider and completion retry owners: honor
   `Retry-After` and structured body hints with a 10-second minimum plus jitter.

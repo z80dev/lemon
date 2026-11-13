@@ -53,7 +53,7 @@ defmodule LemonAi.CircuitBreaker do
           failure_count: non_neg_integer(),
           failure_threshold: pos_integer(),
           recovery_timeout: pos_integer(),
-          monotonic_time: (-> integer()),
+          monotonic_time: (-> integer()) | nil,
           last_failure_time: integer() | nil,
           last_failure_reason: term() | nil,
           success_count_in_half_open: non_neg_integer()
@@ -216,8 +216,10 @@ defmodule LemonAi.CircuitBreaker do
     failure_threshold = Keyword.get(opts, :failure_threshold, 5)
     recovery_timeout = Keyword.get(opts, :recovery_timeout, 30_000)
 
-    monotonic_time =
-      Keyword.get(opts, :monotonic_time, fn -> System.monotonic_time(:millisecond) end)
+    # Absent means the system clock. A default closure would be stored in this
+    # long-lived state and go stale when the module is reloaded (cover, hot
+    # upgrade), crashing the breaker with BadFunctionError.
+    monotonic_time = Keyword.get(opts, :monotonic_time)
 
     state = %{
       provider: provider,
@@ -433,7 +435,8 @@ defmodule LemonAi.CircuitBreaker do
 
   defp maybe_transition_to_half_open(state), do: state
 
-  defp monotonic_time(state), do: state.monotonic_time.()
+  defp monotonic_time(%{monotonic_time: nil}), do: System.monotonic_time(:millisecond)
+  defp monotonic_time(%{monotonic_time: clock}), do: clock.()
 
   defp via_tuple(provider) do
     {:via, Registry, {LemonAi.CircuitBreakerRegistry, provider}}

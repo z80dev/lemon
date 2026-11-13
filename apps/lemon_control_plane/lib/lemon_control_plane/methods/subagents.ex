@@ -22,9 +22,8 @@ defmodule LemonControlPlane.Methods.SubagentSupport do
   def task_id(params), do: NativeSessions.string(params || %{}, "taskId", @max_id_bytes)
 
   def message(params) do
-    with {:ok, message} <- NativeSessions.string(params || %{}, "message", @max_message_bytes) do
-      {:ok, message}
-    else
+    case NativeSessions.string(params || %{}, "message", @max_message_bytes) do
+      {:ok, message} -> {:ok, message}
       _ -> NativeSessions.invalid("message must be non-empty text of at most 32 KiB")
     end
   end
