@@ -7,11 +7,16 @@ export interface UserQuestion {
 	recommended?: number;
 }
 
+/** Largest agent-written form the daemon sends (`ask` html); mirrors the tool's bound. */
+export const MAX_USER_PROMPT_HTML_BYTES = 65_536;
+
 export interface UserPromptRequested {
 	promptId: string;
 	sessionKey: string;
 	runId?: string | null;
+	/** Empty when `html` carries an agent-written `<form>` instead. */
 	questions: UserQuestion[];
+	html?: string;
 	expiresAtMs?: number | null;
 }
 
@@ -22,9 +27,31 @@ export interface UserPromptResolved {
 	status: string;
 }
 
+/** One submitted control: text, a number for number/range inputs, or checked values. */
+export type UserPromptValue = string | number | string[];
+
+/** A form field as a readable question/answer pair (`formAnswers`). */
+export interface UserPromptFormAnswer {
+	name: string;
+	question: string;
+	answer: string;
+}
+
+/** A note attached to a selected form option. */
+export interface UserPromptFormNote {
+	name: string;
+	question: string;
+	option: string;
+	value: string;
+	text: string;
+}
+
 export interface UserPromptAnswer {
 	action: "accept" | "decline" | "cancel";
-	content?: Record<string, string | string[]>;
+	content?: Record<string, UserPromptValue>;
+	/** Form submissions only: the readable listing the model's tool result echoes. */
+	answers?: UserPromptFormAnswer[];
+	notes?: UserPromptFormNote[];
 }
 
 export type UserPromptResolveParams = UserPromptAnswer & {
@@ -39,6 +66,18 @@ export function parseUserPrompt(value: unknown): UserPromptRequested | undefined
 		return undefined;
 	if (value.runId != null && typeof value.runId !== "string") return undefined;
 	if (value.expiresAtMs != null && typeof value.expiresAtMs !== "number") return undefined;
+	if (value.html != null) {
+		// A form request carries markup and no questions; anything else is not renderable.
+		if (
+			typeof value.html !== "string" ||
+			value.html.trim() === "" ||
+			Buffer.byteLength(value.html, "utf8") > MAX_USER_PROMPT_HTML_BYTES
+		)
+			return undefined;
+		if (value.questions != null && (!Array.isArray(value.questions) || value.questions.length > 0))
+			return undefined;
+		return { ...value, questions: [] } as unknown as UserPromptRequested;
+	}
 	if (!Array.isArray(value.questions) || value.questions.length < 1 || value.questions.length > 8)
 		return undefined;
 	for (const question of value.questions) {

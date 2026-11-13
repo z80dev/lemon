@@ -376,7 +376,8 @@ export class ControlPlaneMethods {
 	): Promise<{ sessionKey: string; bound: boolean }> {
 		const result = await this.#call<{ sessionKey: string; bound: boolean }>(
 			METHOD.userPromptBind,
-			{ sessionKey, enabled },
+			// htmlForms declares this client renders agent-written `ask` forms.
+			enabled ? { sessionKey, enabled, htmlForms: true } : { sessionKey, enabled },
 			{ queueIfOffline: false },
 		);
 		if (result?.sessionKey !== sessionKey || result.bound !== enabled)

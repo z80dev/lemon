@@ -30,7 +30,22 @@ defmodule CodingAgent.Session.UserPrompt do
 
   def bound?(_), do: false
 
-  @doc "Request questions and wait for a real answer; timeout_ms defaults to :infinity."
+  @doc "Whether the bound surface declared it can render HTML forms (`html_forms: true` at bind)."
+  def html_forms?(session_key) when is_binary(session_key) do
+    GenServer.call(__MODULE__, {:html_forms, session_key})
+  catch
+    :exit, _ -> false
+  end
+
+  def html_forms?(_), do: false
+
+  @doc """
+  Request questions and wait for a real answer; timeout_ms defaults to :infinity.
+
+  `html: markup` requests an HTML form instead (pass `[]` for questions). It
+  returns `{:error, :html_unsupported}` unless the bound surface declared
+  `html_forms: true`, so a surface that cannot render forms never waits on one.
+  """
   def request(session_key, run_id, questions, opts \\ []) do
     GenServer.call(__MODULE__, {:request, session_key, run_id, questions, opts}, :infinity)
   catch
@@ -51,7 +66,8 @@ defmodule CodingAgent.Session.UserPrompt do
     surface = %{
       pid: connection,
       monitor: Process.monitor(connection),
-      max_timeout_ms: Keyword.get(opts, :max_timeout_ms, :infinity)
+      max_timeout_ms: Keyword.get(opts, :max_timeout_ms, :infinity),
+      html_forms: Keyword.get(opts, :html_forms, false) == true
     }
 
     state = put_in(state.surfaces[key], surface)
@@ -76,8 +92,17 @@ defmodule CodingAgent.Session.UserPrompt do
     {:reply, is_pid(pid) and Process.alive?(pid), state}
   end
 
+  def handle_call({:html_forms, key}, _from, state) do
+    pid = get_in(state.surfaces, [key, :pid])
+
+    {:reply,
+     is_pid(pid) and Process.alive?(pid) and get_in(state.surfaces, [key, :html_forms]) == true,
+     state}
+  end
+
   def handle_call({:request, key, run_id, questions, opts}, from, state) do
     pid = get_in(state.surfaces, [key, :pid])
+    html = Keyword.get(opts, :html)
     timeout = Keyword.get(opts, :timeout_ms, :infinity)
     maximum = get_in(state.surfaces, [key, :max_timeout_ms]) || :infinity
 
@@ -93,6 +118,9 @@ defmodule CodingAgent.Session.UserPrompt do
     cond do
       not is_pid(pid) or not Process.alive?(pid) ->
         {:reply, {:error, :no_client}, state}
+
+      is_binary(html) and get_in(state.surfaces, [key, :html_forms]) != true ->
+        {:reply, {:error, :html_unsupported}, state}
 
       not (timeout == :infinity or (is_integer(timeout) and timeout > 0)) ->
         {:reply, {:error, :invalid_timeout}, state}
@@ -115,6 +143,8 @@ defmodule CodingAgent.Session.UserPrompt do
           "requestedAtMs" => now,
           "expiresAtMs" => if(timeout == :infinity, do: nil, else: now + timeout)
         }
+
+        public = if is_binary(html), do: Map.put(public, "html", html), else: public
 
         pending = %{
           session_key: key,

@@ -34,6 +34,7 @@ export class UserPromptController {
 				void this.resolve(event, answer);
 			},
 			() => options.tui.requestRender(),
+			{ tui: options.tui, notice: options.notice },
 		);
 	}
 
