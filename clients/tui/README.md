@@ -91,7 +91,7 @@ on reconnect and when opening or changing models. Older daemons without
   first line (up to 16 KB of reasoning is available when expanded).
   Native Tern rendering uses a semantic thinking block and Markdown body, not
   a row-fallback badge; collapsed/expanded/hidden state stays intact.
-- Ctrl+R expands/collapses the latest tool card or thinking block (a merged
+- Alt+E expands/collapses the latest tool card or thinking block (a merged
   shelf line opens into a full card); Ctrl+T cycles detail for the whole
   transcript: collapsed → expanded → per-kind default.
   Alt+O toggles all tool output between collapsed and expanded without changing
@@ -151,7 +151,12 @@ on reconnect and when opening or changing models. Older daemons without
   `~/.lemon/tui-history/history.sqlite3`, mode `0600` in a private `0700` directory;
   `/clear-history` clears saved prompts and `[tui] prompt_history = false` turns it off;
   see [prompt history](../../docs/config.md#tui-prompt-history)), and discarded large
-  pastes remain recoverable after later submissions.
+  pastes remain recoverable after later submissions. Ctrl+R opens omp's prompt-history
+  search: type to filter past prompts (every word must match, newest first, each row
+  shows its age and the folder it was typed in), Up/Down select, Enter fills the
+  composer without sending, Esc closes and leaves the draft untouched. It searches
+  the saved history; with `[tui] prompt_history = false` it lists this session's
+  prompts. Rebind it with `lemon.history.search` under `[tui.keys]`.
   Ctrl+V accepts clipboard images where the platform provides them, and pasted
   or dragged local image paths attach actual PNG, JPEG, GIF, or WebP bytes.
   Up to five images totaling 10 MiB may accompany a prompt, including an image-only
@@ -332,7 +337,7 @@ are run boxes (command, tail-following output, `Done`/`exit N` foot), edits and
 patches are native diffs with `+N −M` stats, reads are numbered code, grep,
 find and ls are file rows, web searches list linked sources, todos are a
 checklist and tasks are subagent rows. Cards fold to a short preview; open one
-from its head (or Ctrl+R), or all with Alt+O or Ctrl+T. Consecutive reads
+from its head (or Alt+E), or all with Alt+O or Ctrl+T. Consecutive reads
 fold into one `Read N files` row group whose files open at the read offset.
 A whole-file read of media Tern can show (images, SVG, PDF, audio/video, 3D
 models) and a saved browser screenshot add a native media node with the file,

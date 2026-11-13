@@ -23,8 +23,12 @@ export const LEMON_KEYBINDINGS = {
 	"lemon.editor.external": { defaultKeys: "ctrl+g", description: "Edit the draft in $EDITOR" },
 	"lemon.transcript.clear": { defaultKeys: "ctrl+l", description: "Clear the transcript" },
 	"lemon.queue.focus": { defaultKeys: "ctrl+q", description: "Edit the queued prompts" },
-	"lemon.transcript.toggleLatest": {
+	"lemon.history.search": {
 		defaultKeys: "ctrl+r",
+		description: "Search past prompts and fill the draft",
+	},
+	"lemon.transcript.toggleLatest": {
+		defaultKeys: "alt+e",
 		description: "Expand/collapse the latest tool card or thinking block",
 	},
 	"lemon.transcript.cycleDetail": {
@@ -61,6 +65,8 @@ export interface InputControllerOptions {
 	clearTranscript?: () => void;
 	/** Focus the queue panel. False when there is nothing queued to focus. */
 	focusQueue?: () => boolean;
+	/** Open the prompt-history search overlay. */
+	openHistorySearch?: () => void | Promise<void>;
 	/** Toggle the latest tool card or reasoning block. False when there is none. */
 	toggleLatest?: () => boolean;
 	/** Cycle the global accordion override and apply it to the transcript. */
@@ -164,6 +170,10 @@ export class InputController {
 				if (this.#options.focusQueue?.() === false) {
 					this.#options.notice?.("nothing is queued");
 				}
+				return { consume: true };
+			}
+			if (this.#matches(data, "lemon.history.search")) {
+				void this.#options.openHistorySearch?.();
 				return { consume: true };
 			}
 			if (this.#matches(data, "lemon.transcript.toggleLatest")) {
