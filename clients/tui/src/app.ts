@@ -32,7 +32,11 @@ import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { CLOSE_ACTION, pickerAction } from "@oh-my-pi/pi-tui/native/picker";
 import { expandEmoticons } from "@oh-my-pi/pi-tui/prompt/emoji-autocomplete";
 import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
-import { getCurrentThemeName, setTheme as setPiTheme } from "@oh-my-pi/pi-tui/theme/theme";
+import {
+	ensureThemeSync as ensurePiThemeSync,
+	getCurrentThemeName,
+	setTheme as setPiTheme,
+} from "@oh-my-pi/pi-tui/theme/theme";
 import { type Component, Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
@@ -1838,6 +1842,8 @@ export class AppShell {
 	 * palette: keep its built-in dark/light theme on Lemon's appearance.
 	 */
 	#syncPiTheme(): void {
+		// Components built before the async load below still find a theme.
+		ensurePiThemeSync();
 		const name = this.appearance.appearance;
 		if (getCurrentThemeName() === name) return;
 		void setPiTheme(name).then(() => {
