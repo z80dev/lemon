@@ -15,53 +15,54 @@ struct TranscriptFollow: Equatable {
 
     /// Scroll geometry reduced to what following needs, rounded so sub-point jitter is not a change.
     struct Edge: Equatable {
-        /// Top of the scroll view's bounds in content coordinates; it decreases toward older content.
+        /// Top of the visible region (inside the navigation bar, composer and keyboard insets), measured
+        /// from the top of the content; it decreases toward older content.
         var offset: CGFloat
-        /// Largest offset: content plus the bottom inset (keyboard, composer) minus the container.
-        /// It changes with content and viewport layout, never with scrolling.
+        /// Largest offset: content height minus visible height. It changes with content and viewport
+        /// layout, never with scrolling.
         var limit: CGFloat
-        /// Content still below the visible region, past the bottom inset.
+        /// Content still below the visible region.
         var distance: CGFloat { limit - offset }
-        init(offset: CGFloat, contentHeight: CGFloat, bottomInset: CGFloat, containerHeight: CGFloat) {
+        init(offset: CGFloat, limit: CGFloat) {
             self.offset = offset.rounded()
-            self.limit = (contentHeight + bottomInset - containerHeight).rounded()
+            self.limit = limit.rounded()
         }
+        /// SwiftUI reports `containerSize` inside the content insets and `contentOffset` from the outer
+        /// edge (−top inset at the top). An iPhone trace showed it: the offset at the top was −116 (status
+        /// and navigation bars); adding `contentInsets.bottom` to the limit left a settled bottom 224 points
+        /// (both bars plus the composer) short, and the keyboard grew that limit by twice its height.
         @available(iOS 18, macOS 15, *)
         init(_ geometry: ScrollGeometry) {
-            self.init(offset: geometry.contentOffset.y, contentHeight: geometry.contentSize.height,
-                      bottomInset: geometry.contentInsets.bottom, containerHeight: geometry.containerSize.height)
+            self.init(offset: geometry.contentOffset.y + geometry.contentInsets.top,
+                      limit: geometry.contentSize.height - geometry.containerSize.height)
         }
-        /// iOS 17 and macOS 14: the content's own size and the scroll view's bounds in its coordinates
-        /// (`GeometryProxy.bounds(of: .scrollView)`), measured as the reader scrolls.
-        init(contentHeight: CGFloat, scrollBounds: CGRect) {
-            self.init(offset: scrollBounds.minY, contentHeight: contentHeight, bottomInset: 0, containerHeight: scrollBounds.height)
-        }
-        /// Applies the scroll view's bottom safe-area inset, which content-side measurement cannot see.
-        func covered(byBottomInset inset: CGFloat) -> Edge {
-            var edge = self
-            edge.limit = (limit + inset).rounded()
-            return edge
+        /// iOS 17 and macOS 14: the content's frame and the scroll view's frame inside its safe-area
+        /// insets, both in one coordinate space, so no scroll-view inset convention is assumed.
+        init(content: CGRect, visible: CGRect) {
+            self.init(offset: visible.minY - content.minY, limit: content.height - visible.height)
         }
     }
 
-    /// iOS 17 and macOS 14: the content-side measurement and the scroll view's bottom inset arrive in
-    /// separate single-value geometry actions; this keeps the previous edge to compare against.
-    /// A reference so recording every scroll frame does not invalidate the view that owns it.
+    /// iOS 17 and macOS 14: the content frame and the visible region arrive in separate single-value
+    /// geometry actions; this keeps both and the previous edge to compare against. A reference so
+    /// recording every scroll frame does not invalidate the view that owns it.
     final class EdgeHistory {
-        private var measured: Edge?
-        private var inset: CGFloat = 0
+        private var content: CGRect?
+        private var visible: CGRect?
+        private var last: Edge?
 
-        /// Records a measurement or bottom inset; returns the previous and current edges once content was measured.
-        func record(measured: Edge? = nil, inset: CGFloat? = nil) -> (old: Edge, new: Edge)? {
-            let old = self.measured?.covered(byBottomInset: self.inset)
-            if let measured { self.measured = measured }
-            if let inset { self.inset = inset }
-            guard let new = self.measured?.covered(byBottomInset: self.inset) else { return nil }
-            return (old ?? new, new)
+        /// Records a content frame or visible region; returns the previous and current edges once both were measured.
+        func record(content: CGRect? = nil, visible: CGRect? = nil) -> (old: Edge, new: Edge)? {
+            if let content { self.content = content }
+            if let visible { self.visible = visible }
+            guard let measuredContent = self.content, let measuredVisible = self.visible else { return nil }
+            let new = Edge(content: measuredContent, visible: measuredVisible)
+            defer { last = new }
+            return (last ?? new, new)
         }
 
-        /// Forgets the previous transcript's measurement; the viewport inset still applies.
-        func reset() { measured = nil }
+        /// Forgets the previous transcript's measurement; the visible region still applies.
+        func reset() { content = nil; last = nil }
     }
 
     private(set) var pinned = true

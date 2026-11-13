@@ -1,40 +1,55 @@
 import XCTest
+import SwiftUI
 @testable import LemonBotUI
 
 final class TranscriptFollowTests: XCTestCase {
-    private func edge(offset: CGFloat, content: CGFloat, container: CGFloat = 600, inset: CGFloat = 0) -> TranscriptFollow.Edge {
-        TranscriptFollow.Edge(offset: offset, contentHeight: content, bottomInset: inset, containerHeight: container)
+    /// `visible` is the scroll view's height inside its navigation bar, composer and keyboard insets.
+    private func edge(offset: CGFloat, content: CGFloat, visible: CGFloat = 600) -> TranscriptFollow.Edge {
+        TranscriptFollow.Edge(offset: offset, limit: content - visible)
+    }
+
+    func testRecordedIPhoneScrollGeometryKeepsFollowingThroughComposerFocusAndKeyboard() throws {
+        guard #available(iOS 18, macOS 15, *) else { throw XCTSkip("ScrollGeometry needs iOS 18 or macOS 15") }
+        // Raw values traced on iPhone: the container already excludes the top and bottom insets.
+        func geometry(offset: CGFloat, container: CGFloat, bottom: CGFloat) -> ScrollGeometry {
+            ScrollGeometry(contentOffset: CGPoint(x: 0, y: offset), contentSize: CGSize(width: 402, height: 1734),
+                           contentInsets: EdgeInsets(top: 116, leading: 0, bottom: bottom, trailing: 0), containerSize: CGSize(width: 402, height: container))
+        }
+        XCTAssertEqual(TranscriptFollow.Edge(geometry(offset: -116, container: 650, bottom: 108)).offset, 0, "The top of the content")
+        let settled = TranscriptFollow.Edge(geometry(offset: 955.6667, container: 650, bottom: 108))
+        XCTAssertEqual(settled.distance, 12, "The scroll view's bottom, above the stack's bottom padding")
+        var follow = TranscriptFollow()
+        XCTAssertFalse(follow.observe(from: settled, to: settled))
+        XCTAssertTrue(follow.nearBottom)
+        // Focusing the composer lowers the offset and the limit together, with nobody touching the transcript.
+        let focused = TranscriptFollow.Edge(geometry(offset: 945.6667, container: 660, bottom: 98))
+        XCTAssertFalse(follow.observe(from: settled, to: focused))
+        XCTAssertTrue(follow.pinned)
+        XCTAssertFalse(follow.showsJumpToLatest)
+        // The keyboard hides the latest content; following returns there.
+        let keyboard = TranscriptFollow.Edge(geometry(offset: 945.6667, container: 359, bottom: 399))
+        XCTAssertEqual(keyboard.distance, 313)
+        XCTAssertTrue(follow.observe(from: focused, to: keyboard))
+        XCTAssertTrue(follow.pinned)
+        XCTAssertFalse(follow.showsJumpToLatest)
     }
 
     func testLayoutThatPushesThePinnedBottomAwayReturnsThereWithoutUnpinning() {
         var follow = TranscriptFollow()
-        let bottom = edge(offset: 400, content: 1000)
         // A streamed reply grows the content past the tolerance without moving the offset.
-        XCTAssertTrue(follow.observe(from: bottom, to: edge(offset: 400, content: 1200)))
+        XCTAssertTrue(follow.observe(from: edge(offset: 400, content: 1000), to: edge(offset: 400, content: 1200)))
         XCTAssertFalse(follow.nearBottom)
         XCTAssertTrue(follow.shouldFollow)
         XCTAssertFalse(follow.showsJumpToLatest)
-        // The keyboard and composer add a bottom inset and shrink the container.
-        XCTAssertTrue(follow.observe(from: edge(offset: 600, content: 1200), to: edge(offset: 600, content: 1200, container: 300, inset: 336)))
-        XCTAssertTrue(follow.shouldFollow)
-        // Lazy rows measured above the viewport move the offset with the limit; clamping as the inset shrinks lowers both.
+        // Layout that lowers the offset while the limit grows is still not reading history.
+        XCTAssertTrue(follow.observe(from: edge(offset: 600, content: 1200), to: edge(offset: 590, content: 1200, visible: 300)))
+        XCTAssertTrue(follow.pinned)
+        // Lazy rows measured above the viewport, and the keyboard closing, move the offset with the limit.
         XCTAssertFalse(follow.observe(from: edge(offset: 600, content: 1200), to: edge(offset: 560, content: 1160)))
-        XCTAssertTrue(follow.observe(from: edge(offset: 936, content: 1200, container: 300, inset: 336), to: edge(offset: 880, content: 1200, container: 300, inset: 200)))
+        XCTAssertFalse(follow.observe(from: edge(offset: 900, content: 1200, visible: 300), to: edge(offset: 600, content: 1200)))
         XCTAssertTrue(follow.pinned)
-        // An inset change that keeps the bottom in view needs no scroll.
-        XCTAssertFalse(follow.observe(from: edge(offset: 600, content: 1200), to: edge(offset: 600, content: 1200, inset: 20)))
-    }
-
-    func testFocusingTheComposerLowersTheOffsetWithTheKeyboardInsetWithoutUnpinning() {
-        // Recorded on iPhone: focusing the composer shifts the transcript down a few points in the
-        // same update as the keyboard inset grows, while nobody touches the transcript.
-        var follow = TranscriptFollow()
-        let bottom = edge(offset: 490, content: 1000, inset: 90)
-        XCTAssertEqual(bottom.distance, 0)
-        XCTAssertTrue(follow.observe(from: bottom, to: edge(offset: 483, content: 1000, inset: 419)))
-        XCTAssertTrue(follow.pinned)
-        XCTAssertFalse(follow.showsJumpToLatest)
-        XCTAssertTrue(follow.shouldFollow)
+        // A viewport change that keeps the bottom in view needs no scroll.
+        XCTAssertFalse(follow.observe(from: edge(offset: 600, content: 1200), to: edge(offset: 600, content: 1200, visible: 580)))
     }
 
     func testScrollingTowardOlderContentStopsFollowingUntilTheBottomReturns() {
@@ -78,33 +93,24 @@ final class TranscriptFollowTests: XCTestCase {
         XCTAssertFalse(follow.showsJumpToLatest)
     }
 
-    func testContentSideMeasurementMatchesScrollGeometryIncludingTheBottomInset() {
-        // iOS 17 and macOS 14 see the scroll view's full bounds from the content; the composer and keyboard inset is added separately.
-        let atBottom = TranscriptFollow.Edge(contentHeight: 1000, scrollBounds: CGRect(x: 0, y: 500, width: 390, height: 600)).covered(byBottomInset: 100)
-        XCTAssertEqual(atBottom, edge(offset: 500, content: 1000, inset: 100))
-        XCTAssertEqual(atBottom.distance, 0)
-
-        var follow = TranscriptFollow()
-        // Reading 300 points up with the keyboard open is not "near the bottom" even though the inset region still shows content.
-        let reading = TranscriptFollow.Edge(contentHeight: 1000, scrollBounds: CGRect(x: 0, y: 500, width: 390, height: 600)).covered(byBottomInset: 400)
-        follow.observe(from: edge(offset: 800, content: 1000, inset: 400), to: reading)
-        XCTAssertFalse(follow.nearBottom)
-        XCTAssertFalse(follow.shouldFollow)
-    }
-
-    func testFallbackKeyboardInsetAloneReturnsAPinnedReaderToTheBottom() throws {
+    func testFallbackFramesKeepFollowingWhenTheKeyboardShrinksTheVisibleRegion() throws {
+        // iOS 17 and macOS 14 compare global frames: the content, and the scroll view inside its safe-area insets.
         let history = TranscriptFollow.EdgeHistory()
-        XCTAssertNil(history.record(inset: 80), "No comparison before the content is measured")
-        let measured = TranscriptFollow.Edge(contentHeight: 1000, scrollBounds: CGRect(x: 0, y: 480, width: 390, height: 600))
-        let first = try XCTUnwrap(history.record(measured: measured))
+        XCTAssertNil(history.record(visible: CGRect(x: 0, y: 116, width: 402, height: 650)), "No comparison before the content is measured")
+        let first = try XCTUnwrap(history.record(content: CGRect(x: 0, y: -956, width: 402, height: 1734)))
         XCTAssertEqual(first.old, first.new)
-        XCTAssertEqual(first.new.distance, 0)
-        // The keyboard raises the inset; the content measurement does not change.
-        let keyboard = try XCTUnwrap(history.record(inset: 380))
+        XCTAssertEqual(first.new.distance, 12)
         var follow = TranscriptFollow()
+        // The keyboard shrinks the visible region; the content does not move.
+        let keyboard = try XCTUnwrap(history.record(visible: CGRect(x: 0, y: 116, width: 402, height: 359)))
+        XCTAssertEqual(keyboard.new.distance, 303)
         XCTAssertTrue(follow.observe(from: keyboard.old, to: keyboard.new))
         XCTAssertTrue(follow.pinned)
+        // Scrolling moves the content frame down: reading history.
+        let reading = try XCTUnwrap(history.record(content: CGRect(x: 0, y: -656, width: 402, height: 1734)))
+        XCTAssertFalse(follow.observe(from: reading.old, to: reading.new))
+        XCTAssertFalse(follow.shouldFollow)
         history.reset()
-        XCTAssertNil(history.record(inset: 380), "A reopened transcript is never compared with the previous one")
+        XCTAssertNil(history.record(visible: CGRect(x: 0, y: 116, width: 402, height: 359)), "A reopened transcript is never compared with the previous one")
     }
 }

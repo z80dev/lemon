@@ -251,8 +251,8 @@ public struct ConversationView: View {
     }
 
     /// Scroll geometry tells reading history apart from layout: content growth, lazy row measurement and keyboard or composer
-    /// resizing. iOS 18 and macOS 15 report it, with scroll phase, directly; earlier systems measure the content against the
-    /// scroll view's bounds and add its bottom inset. A pinned reader whom layout left above the latest message returns there.
+    /// resizing. iOS 18 and macOS 15 report it, with scroll phase, directly; earlier systems compare the content's frame with
+    /// the scroll view's frame inside its safe-area insets. A pinned reader whom layout left above the latest message returns there.
     @ViewBuilder private func trackedScrollView<Content: View>(_ reader: ScrollViewProxy, @ViewBuilder _ content: () -> Content) -> some View {
         if #available(iOS 18, macOS 15, *) {
             ScrollView { content() }
@@ -263,14 +263,15 @@ public struct ConversationView: View {
         } else {
             ScrollView {
                 // Old/new geometry actions need iOS 18 and macOS 15; the single-value action is back-deployed, so keep the previous edge here.
-                content().onGeometryChange(for: TranscriptFollow.Edge.self) { geometry in
-                    TranscriptFollow.Edge(contentHeight: geometry.size.height, scrollBounds: geometry.bounds(of: .scrollView) ?? CGRect(origin: .zero, size: geometry.size))
-                } action: { measured in
-                    if let change = edgeHistory.record(measured: measured) { observeEdge(from: change.old, to: change.new, reader) }
+                content().onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                    if let change = edgeHistory.record(content: frame) { observeEdge(from: change.old, to: change.new, reader) }
                 }
             }
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { inset in
-                if let change = edgeHistory.record(inset: inset) { observeEdge(from: change.old, to: change.new, reader) }
+            .onGeometryChange(for: CGRect.self) { geometry in
+                let frame = geometry.frame(in: .global), insets = geometry.safeAreaInsets
+                return CGRect(x: frame.minX, y: frame.minY + insets.top, width: frame.width, height: max(frame.height - insets.top - insets.bottom, 0))
+            } action: { visible in
+                if let change = edgeHistory.record(visible: visible) { observeEdge(from: change.old, to: change.new, reader) }
             }
         }
     }
