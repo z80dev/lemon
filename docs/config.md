@@ -203,6 +203,7 @@ theme = "lemon"
 debug = false
 notifications = "auto" # auto | osc | bell | off (Bun terminal client)
 prompt_history = true # persist ↑ prompt recall to ~/.lemon/tui-history/history.sqlite3 (Bun terminal client)
+vim_mode = false # start the Bun terminal client's composer in Vim-style modal editing
 
 [logging]
 # Optional: write logs to a file for later analysis.

@@ -36,6 +36,11 @@ export function resolvePromptHistory(configured: unknown): boolean {
 	return (configured ?? true) === true;
 }
 
+/** `[tui] vim_mode`: off unless the setting is exactly `true`. */
+export function resolveVimMode(configured: unknown): boolean {
+	return configured === true;
+}
+
 /**
  * Whether to persist history given what `loadConfig` produced. A failed load
  * may be hiding an explicit opt-out (a broken project file next to a global
@@ -67,6 +72,8 @@ export interface LemonConfig {
 		notifications?: NotificationMode;
 		/** Persist ↑ recall to `~/.lemon/tui-history/history.sqlite3`; `false` turns it off (default on). */
 		prompt_history?: boolean;
+		/** Start the composer in Vim-style modal editing (default off). */
+		vim_mode?: boolean;
 		keys?: unknown;
 	};
 }

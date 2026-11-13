@@ -12,6 +12,7 @@ import {
 	parseDottedKey,
 	promptHistoryEnabled,
 	resolvePromptHistory,
+	resolveVimMode,
 	saveDefaultModel,
 	saveTheme,
 	upsertTomlString,
@@ -35,6 +36,17 @@ afterEach(() => {
 function configPath(): string {
 	return join(home, ".lemon", "config.toml");
 }
+
+describe("vim mode setting", () => {
+	test("is off by default and only an explicit true turns it on", async () => {
+		expect(resolveVimMode((await loadConfig()).tui?.vim_mode)).toBe(false);
+		writeConfig("[tui]\nvim_mode = true\n");
+		expect(resolveVimMode((await loadConfig()).tui?.vim_mode)).toBe(true);
+		for (const value of ["true", "on", 1, false, undefined]) {
+			expect(resolveVimMode(value)).toBe(false);
+		}
+	});
+});
 
 describe("prompt history setting", () => {
 	test("is on by default and by explicit true", async () => {
