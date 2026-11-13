@@ -57,6 +57,14 @@ defmodule LemonCore.AgentRuntime.Provider do
   @callback session_history(session_key(), Path.t()) :: {:ok, [map()]} | {:error, term()}
 
   @doc """
+  Loads a delegated child's persisted native branch by its native session id.
+  Succeeds only when `child_session_id` belongs to a task launched under
+  `session_key`; anything else is `{:error, :session_not_found}`.
+  """
+  @callback child_session_history(session_key(), String.t()) ::
+              {:ok, [map()]} | {:error, term()}
+
+  @doc """
   Materializes the selected native branch's complete todo list, never its cache.
   The revision is `{branch_generation, governing_entry_id}`; stopped sessions
   have generation zero. It is not a cross-session identity or replay cursor.
@@ -85,6 +93,24 @@ defmodule LemonCore.AgentRuntime.Provider do
 
   @doc "Read redacted process receipts for an exact native session owner."
   @callback session_process_receipts(String.t()) :: {:ok, [map()]} | {:error, term()}
+
+  @doc """
+  Bounded summaries of the background processes a session and its live subagents
+  own. A session with no live owner has none.
+  """
+  @callback session_jobs(session_key()) :: {:ok, map()} | {:error, term()}
+
+  @doc """
+  One scoped background process with a redacted output tail (`:tail_bytes`).
+  Reading must not consume output the owning agent has yet to read.
+  """
+  @callback session_job(session_key(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+
+  @doc """
+  Cancel a background process the session itself owns. `{:error, :outcome_unknown}`
+  means termination was not confirmed and must not be retried automatically.
+  """
+  @callback session_job_cancel(session_key(), String.t()) :: {:ok, map()} | {:error, term()}
 
   @doc "Forks native session state into an independent destination resume mapping."
   @callback session_fork(session_key(), Path.t(), session_key()) :: :ok | {:error, term()}
@@ -224,10 +250,14 @@ defmodule LemonCore.AgentRuntime.Provider do
                       compact_session: 2,
                       native_session_owner: 1,
                       session_history: 2,
+                      child_session_history: 2,
                       session_todos: 2,
                       session_recovery_snapshot: 2,
                       session_addressing_context: 1,
                       session_process_receipts: 1,
+                      session_jobs: 1,
+                      session_job: 3,
+                      session_job_cancel: 2,
                       session_fork: 3,
                       session_fork: 4,
                       session_tree: 3,

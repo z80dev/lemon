@@ -56,6 +56,15 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "background.status" => %{required: %{"id" => :string}, optional: %{}},
     "background.result" => %{required: %{"id" => :string}, optional: %{}},
     "background.cancel" => %{required: %{"id" => :string}, optional: %{}},
+    "process.jobs.list" => %{required: %{"sessionKey" => :string}, optional: %{}},
+    "process.jobs.inspect" => %{
+      required: %{"sessionKey" => :string, "jobId" => :string},
+      optional: %{"tailBytes" => :integer}
+    },
+    "process.jobs.cancel" => %{
+      required: %{"sessionKey" => :string, "jobId" => :string},
+      optional: %{}
+    },
     "session.btw" => %{
       required: %{"question" => :string},
       required_any: [["sessionId", "sessionKey"]],
@@ -680,7 +689,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "cwd" => :string,
         "limit" => :integer,
         "beforeId" => :string,
-        "includeFullText" => :boolean
+        "includeFullText" => :boolean,
+        "childSessionId" => :string
       }
     },
     "chat.send" => %{
@@ -728,11 +738,16 @@ defmodule LemonControlPlane.Protocol.Schemas do
     },
     "sessions.prompt.bind" => %{
       required: %{"sessionKey" => :string},
-      optional: %{"enabled" => :boolean}
+      optional: %{"enabled" => :boolean, "htmlForms" => :boolean}
     },
     "sessions.prompt.resolve" => %{
       required: %{"promptId" => :string, "sessionKey" => :string, "action" => :string},
-      optional: %{"runId" => :string, "content" => :map}
+      optional: %{
+        "runId" => :string,
+        "content" => :map,
+        "answers" => :list,
+        "notes" => :list
+      }
     },
 
     # Execution/approval methods
@@ -1168,7 +1183,12 @@ defmodule LemonControlPlane.Protocol.Schemas do
   @event_schemas %{
     "session.prompt.requested" => %{
       required: %{"promptId" => :string, "sessionKey" => :string, "questions" => :list},
-      optional: %{"runId" => :string, "requestedAtMs" => :integer, "expiresAtMs" => :integer}
+      optional: %{
+        "runId" => :string,
+        "html" => :string,
+        "requestedAtMs" => :integer,
+        "expiresAtMs" => :integer
+      }
     },
     "session.prompt.resolved" => %{
       required: %{"promptId" => :string, "sessionKey" => :string, "status" => :string},

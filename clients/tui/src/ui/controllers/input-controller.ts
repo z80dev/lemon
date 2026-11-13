@@ -23,19 +23,31 @@ export const LEMON_KEYBINDINGS = {
 	"lemon.editor.external": { defaultKeys: "ctrl+g", description: "Edit the draft in $EDITOR" },
 	"lemon.transcript.clear": { defaultKeys: "ctrl+l", description: "Clear the transcript" },
 	"lemon.queue.focus": { defaultKeys: "ctrl+q", description: "Edit the queued prompts" },
-	"lemon.transcript.toggleLatest": {
+	"lemon.history.search": {
 		defaultKeys: "ctrl+r",
+		description: "Search past prompts and fill the draft",
+	},
+	"lemon.transcript.toggleLatest": {
+		defaultKeys: "alt+e",
 		description: "Expand/collapse the latest tool card or thinking block",
 	},
 	"lemon.transcript.cycleDetail": {
 		defaultKeys: "ctrl+t",
 		description: "Cycle detail for every card: collapsed → expanded → default",
 	},
+	"lemon.links.browse": {
+		defaultKeys: "alt+l",
+		description: "Browse the transcript's links and open one by its hint tag",
+	},
 	"lemon.palette.open": {
 		defaultKeys: "ctrl+p",
 		description: "Search commands, skills and prompts",
 	},
 	"lemon.tasks.toggle": { defaultKeys: "alt+a", description: "Show/hide live subagent tree" },
+	"lemon.agents.hub": {
+		defaultKeys: "ctrl+s",
+		description: "Open the agent hub: every subagent and its transcript",
+	},
 	"lemon.omp.toggle": { defaultKeys: "alt+m", description: "Show/hide omp delegate sessions" },
 	"lemon.tools.toggle": { defaultKeys: "alt+o", description: "Collapse/expand all tool output" },
 	"lemon.tools.diff": { defaultKeys: "alt+d", description: "Inspect the latest edit diff" },
@@ -61,6 +73,10 @@ export interface InputControllerOptions {
 	clearTranscript?: () => void;
 	/** Focus the queue panel. False when there is nothing queued to focus. */
 	focusQueue?: () => boolean;
+	/** Open the prompt-history search overlay. */
+	openHistorySearch?: () => void | Promise<void>;
+	/** Open the fullscreen link browser over the transcript. */
+	openLinkBrowser?: () => void;
 	/** Toggle the latest tool card or reasoning block. False when there is none. */
 	toggleLatest?: () => boolean;
 	/** Cycle the global accordion override and apply it to the transcript. */
@@ -71,6 +87,7 @@ export interface InputControllerOptions {
 	toggleOmpPanel?: () => void;
 	toggleToolOutputs?: () => void;
 	openDiff?: () => void;
+	openAgentHub?: () => void | Promise<void>;
 	copyLastReply?: () => void | Promise<void>;
 	togglePlan?: () => void | Promise<void>;
 	cycleModel?: () => void | Promise<void>;
@@ -119,6 +136,10 @@ export class InputController {
 				this.#options.toggleTaskTree?.();
 				return { consume: true };
 			}
+			if (this.#matches(data, "lemon.agents.hub")) {
+				void this.#options.openAgentHub?.();
+				return { consume: true };
+			}
 			if (this.#matches(data, "lemon.omp.toggle")) {
 				this.#options.toggleOmpPanel?.();
 				return { consume: true };
@@ -164,6 +185,14 @@ export class InputController {
 				if (this.#options.focusQueue?.() === false) {
 					this.#options.notice?.("nothing is queued");
 				}
+				return { consume: true };
+			}
+			if (this.#matches(data, "lemon.history.search")) {
+				void this.#options.openHistorySearch?.();
+				return { consume: true };
+			}
+			if (this.#matches(data, "lemon.links.browse")) {
+				this.#options.openLinkBrowser?.();
 				return { consume: true };
 			}
 			if (this.#matches(data, "lemon.transcript.toggleLatest")) {

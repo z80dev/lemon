@@ -523,6 +523,7 @@ defmodule LemonControlPlane.EventBridge do
          "sessionKey",
          "runId",
          "questions",
+         "html",
          "requestedAtMs",
          "expiresAtMs"
        ])}

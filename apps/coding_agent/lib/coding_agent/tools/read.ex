@@ -101,7 +101,8 @@ defmodule CodingAgent.Tools.Read do
           "uses configured model_roles.vision or the active image-capable model and returns text. " <>
           "Prefer a bare image path when the active model supports images. " <>
           "Text output is capped at 2000 lines / 50KB. PDF page/page_limit and notebook cell/cell_limit select source units. " <>
-          "Returned skill:// and artifact:// references are readable paths.",
+          "Returned skill:// and artifact:// references are readable paths. " <>
+          "issue://<N> and pr://<N> (or <owner>/<repo>/<N>) fetch a GitHub issue/PR via gh; pr://<N>/diff lists changed files, /diff/<index> and /diff/all show patches.",
       label: "Read File",
       parallel_safe: true,
       parameters: %{
@@ -110,7 +111,7 @@ defmodule CodingAgent.Tools.Read do
           "path" => %{
             "type" => "string",
             "description" =>
-              "A local path, skill://<key>[/relative-path], returned artifact://<id> handle, agent:// live roster, or agent://<task-id-or-name>[/json/path] owned task status/output. May end with a line selector such as :50-80, :5,19-25, :50+20, :50, :-30 or :raw"
+              "A local path, skill://<key>[/relative-path], returned artifact://<id> handle, agent:// live roster, or agent://<task-id-or-name>[/json/path] owned task status/output, issue://<N>, pr://<N>[/diff[/<index>|/all]]. May end with a line selector such as :50-80, :5,19-25, :50+20, :50, :-30 or :raw"
           },
           "summary" => %{
             "type" => "boolean",

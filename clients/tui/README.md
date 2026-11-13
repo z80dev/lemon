@@ -91,7 +91,7 @@ on reconnect and when opening or changing models. Older daemons without
   first line (up to 16 KB of reasoning is available when expanded).
   Native Tern rendering uses a semantic thinking block and Markdown body, not
   a row-fallback badge; collapsed/expanded/hidden state stays intact.
-- Ctrl+R expands/collapses the latest tool card or thinking block (a merged
+- Alt+E expands/collapses the latest tool card or thinking block (a merged
   shelf line opens into a full card); Ctrl+T cycles detail for the whole
   transcript: collapsed → expanded → per-kind default.
   Alt+O toggles all tool output between collapsed and expanded without changing
@@ -103,6 +103,21 @@ on reconnect and when opening or changing models. Older daemons without
   lineage, role, current activity, elapsed time, and independent terminal states.
   Arrow keys scroll the bounded panel; Escape returns to the draft. Completed
   launch receipts never imply that their children have finished.
+- Ctrl+S or `/hub` (alias `/subagents`) opens the agent hub, omp's Agent Hub for
+  Lemon's subagents: a fullscreen table of every child of the focused session
+  (status, age, persona, task, latest progress, with parent/child indentation)
+  that updates live as children launch, progress and finish. `↑↓`/`PgUp`/`PgDn`
+  select, `g`/`G` jump, Enter opens the child's transcript, Esc/`q` closes.
+  The transcript is the child's own journal, read with `chat.history` and
+  `childSessionId` under the focused session's key (the daemon only serves
+  children of tasks that session launched; messages, assistant Markdown,
+  tool calls paired with their results), scrolls with `↑↓`/`PgUp`/`PgDn`/`g`/`G`,
+  follows the newest line until you scroll up, and refreshes every ~1.5 s only
+  while the child runs (one last read when it ends; three failed reads stop the
+  polling and `r` retries). Esc returns to the table. A child that has not
+  reported a session yet says so instead of showing the parent's text. Rebind
+  with `lemon.agents.hub` under `[tui.keys]`; Alt+A (`/tasktree`) stays the
+  compact in-chat panel.
 - Alt+M or `/omp` opens the omp delegate panel: live and recent omp (oh-my-pi)
   processes the daemon runs, with status, activity, tools, todos, subagents,
   usage/cost/context and their latest text; Enter shows detail, `s`/`f` steer or
@@ -116,8 +131,11 @@ on reconnect and when opening or changing models. Older daemons without
   a custom answer; free-text questions open an input directly. Escape declines
   the entire form. Optional deadlines and disconnects never auto-select choices.
   Answers are not execution approvals and grant no future tool permissions.
-  The TUI binds its live prompt surface before submitting a chat; see
-  [user questions](../../docs/tools/ask.md).
+  The TUI binds its live prompt surface before submitting a chat (declaring
+  `htmlForms: true`); see [user questions](../../docs/tools/ask.md).
+  When the model sends an `html` `<form>` instead of `questions`, the panel is
+  pi-tui's form dialog (pages, dropdowns, text areas, option notes, Review
+  tabs in Tern): Submit sends the form data, Esc/Cancel declines.
 - Exec approval panel (allow once / session / always / deny, number
   quick-pick, wrapped command preview, expiry countdown). Recovery preserves
   each pending request's server ID, so multiple approvals remain independently
@@ -147,11 +165,32 @@ on reconnect and when opening or changing models. Older daemons without
   as interrupted, not as a generic failed run; real failures retain their error.
   The busy status line shows `enter:<mode>` and `esc:stop`; Escape interrupts
   without discarding a correction in the editor (autocomplete gets Escape first).
+  While idle, Esc Esc discards a non-empty draft (recoverable with Up) and, on an
+  empty composer, opens the rewind picker (same as `/rewind`).
   Shift+Enter inserts a newline. Up/Down recall prompts (kept across sessions in
   `~/.lemon/tui-history/history.sqlite3`, mode `0600` in a private `0700` directory;
   `/clear-history` clears saved prompts and `[tui] prompt_history = false` turns it off;
   see [prompt history](../../docs/config.md#tui-prompt-history)), and discarded large
-  pastes remain recoverable after later submissions.
+  pastes remain recoverable after later submissions. Ctrl+R opens omp's prompt-history
+  search: type to filter past prompts (every word must match, newest first, each row
+  shows its age and the folder it was typed in), Up/Down select, Enter fills the
+  composer without sending, Esc closes and leaves the draft untouched. It searches
+  the saved history; with `[tui] prompt_history = false` it lists this session's
+  prompts. Rebind it with `lemon.history.search` under `[tui.keys]`.
+  Alt+L opens omp's keyboard link browser: the transcript replayed fullscreen with a
+  hint tag drawn over every link (`http(s)` URLs, local `file:` links the replayed
+  tool cards and messages draw, and bare URLs in text, including ones scrolled far into the
+  terminal's scrollback). Type a tag, or click a link, to open it; PgUp/PgDn/Home/End
+  and the wheel scroll, Esc closes. `http(s)` links open through the OS opener
+  (`open` / `xdg-open` / `rundll32`) and local files open in the OS's default
+  application for that file; the opener runs with an argv, never a shell, and every
+  other scheme (`javascript:`, `vscode:`, `ssh:`, remote `file:` hosts …) is refused
+  with a footer message. A bare URL the renderer wrapped across rows is not offered
+  (half a URL would open the wrong page). The browser is a snapshot of the focused
+  transcript taken when it opens. omp's own hint key (Alt+O) is Lemon's tool-output
+  toggle, so the key is `lemon.links.browse` (default Alt+L, remappable under
+  `[tui.keys]`). omp's second mode, live hints over the visible composer viewport,
+  is not ported: it lives in omp's composer, which Lemon's editor does not use.
   Ctrl+V accepts clipboard images where the platform provides them, and pasted
   or dragged local image paths attach actual PNG, JPEG, GIF, or WebP bytes.
   Up to five images totaling 10 MiB may accompany a prompt, including an image-only
@@ -167,6 +206,18 @@ on reconnect and when opening or changing models. Older daemons without
   Repeated terminal snapshots never advance the next prompt; unknown owners, stale
   selections, unproven branch/attempt continuity and uncertain send receipts do not
   authorize replay.
+- Composer completion beyond slash commands and `@file`: `:sm` offers emoji
+  (`:smile:` and emoticons like `;)` also rewrite inline as you type, and
+  emoticons left at the end of a prompt expand on submit); `^` lists the models
+  the daemon reports (`models.list`, cached 60 s) and accepts `^provider:id`;
+  `#12` offers `pr://12` / `issue://12` (type `pr #12` or `issue #12` to pick
+  one kind; the token is rewritten on accept). Submitting a prompt that contains
+  a resolvable `^provider:id` (or omp-style `^provider/id`) mention switches the
+  focused session to that model with the same `sessions.patch` as Ctrl+O and
+  strips the mention from the prompt; unknown `^words` stay literal and slash
+  commands/shell lines are never rewritten. Inside a slash command's arguments
+  the command's own completion wins. `[tui] vim_mode = true` starts the
+  composer in Vim-style modal editing (default `false`; global or project config).
 - Multi-session: Ctrl+X switcher (live + recent, debounced server-side search
   across stored sessions, new-with-prompt, close), per-session drafts, unread
   badges, history hydration. Search results are not restricted to the initially
@@ -198,9 +249,14 @@ on reconnect and when opening or changing models. Older daemons without
   as `[label]` in `/tree`; `/tree label <entryId> <text>` and
   `/tree unlabel <entryId>` set them directly. The abandoned-branch summary is
   generated in the background by a loaded session only; a stopped session just
-  switches. `/rewind` picks an earlier
-  active user prompt, previews the change, then requires confirmation bound to
-  that exact preview. History-only rewind leaves files untouched and does not
+  switches. `/rewind` (also Esc Esc on an empty composer) opens a fullscreen picker
+  over the replayed transcript: Up/Down move a dotted outline over turns,
+  Left/Right jump between prompts, `f` filters, Enter picks, Esc cancels. Picking
+  a prompt rewinds before it; picking any other turn continues from there by
+  rewinding before the next prompt. The pick then goes through the same preview
+  and requires confirmation bound to that exact preview. Where the transcript
+  cannot be matched to the daemon's prompts, `/rewind` falls back to a list of the
+  active user prompts. History-only rewind leaves files untouched and does not
   list files as restoration targets. `--files` requests checkpoint restoration;
   non-restorable effects block confirmation by default. When the daemon permits
   partial restoration, explicitly choosing “Allow partial restoration” obtains
@@ -259,7 +315,9 @@ on reconnect and when opening or changing models. Older daemons without
   Partial provider counters stay unknown in `/context` usage summaries; a missing
   cache component is not treated as zero or used as a context measurement.
 - `/context` (or `/ctx`) opens a scrollable breakdown of the focused session's
-  context window: a 100-cell usage grid colored per category with free space dimmed,
+  context window: omp's occupancy map (pi-tui `planContextMap`: 100 cells, one per
+  percent of the window, in category order then free space, colored like the table
+  rows; free space and cells a category covers less than 70% of are dimmed),
   per-category tokens and share of the window (system prompt, tools, skills, context
   files, memory, messages, tool results, summaries), free space, auto-compaction
   headroom, the largest contributors, and how the figures were measured. Splits
@@ -332,7 +390,7 @@ are run boxes (command, tail-following output, `Done`/`exit N` foot), edits and
 patches are native diffs with `+N −M` stats, reads are numbered code, grep,
 find and ls are file rows, web searches list linked sources, todos are a
 checklist and tasks are subagent rows. Cards fold to a short preview; open one
-from its head (or Ctrl+R), or all with Alt+O or Ctrl+T. Consecutive reads
+from its head (or Alt+E), or all with Alt+O or Ctrl+T. Consecutive reads
 fold into one `Read N files` row group whose files open at the read offset.
 A whole-file read of media Tern can show (images, SVG, PDF, audio/video, 3D
 models) and a saved browser screenshot add a native media node with the file,
@@ -389,8 +447,14 @@ notifications = "auto" # auto | osc | bell | off
 ```
 
 `auto` (default) uses OSC notifications on recognized terminals and BEL (`\x07`)
-otherwise; Terminal.app therefore gets a bell. `osc` forces OSC 9/777 without
-a bell fallback; `bell` always rings BEL; `off` emits neither OSC notifications
+otherwise; Terminal.app therefore gets a bell. In `auto`, notifications are first
+offered to the active terminal multiplexer (tmux, screen, zellij, cmux, herdr,
+orca, wmux; innermost first), the way omp does: inside tmux an approval is wrapped
+in tmux passthrough so the host terminal's toast still arrives and tmux flags the
+pane. A bell-only terminal on Linux with a session bus also gets a desktop toast
+through `notify-send` (or `gdbus`); set `PI_NO_DESKTOP_NOTIFY=1` to skip it. `osc` forces OSC 9/777 without
+a bell fallback and no multiplexer or desktop routing; `bell` always rings BEL
+only; `off` emits neither OSC notifications
 nor BEL. The same mode applies to pending questions, approvals, and completed,
 failed, or interrupted turns. Bell visibility/sound depends on terminal settings.
 `LEMON_TUI_NOTIFICATIONS=auto|osc|bell|off` overrides the file; legacy `0` means
@@ -410,7 +474,7 @@ and control plane authoritative:
 
 | Command | Lemon behavior |
 | --- | --- |
-| `/copy` | Copy the focused session's latest assistant reply (all text segments, including a partial reply). Alt+Shift+C does the same without changing the draft. |
+| `/copy` | Open a fullscreen picker over the replayed transcript: Up/Down move a dotted outline over turns, Right descends into a turn's fenced code, quotes, commands and tool output, Left/Esc ascends or closes, Enter copies the outlined turn or block. Alt+Shift+C copies the focused session's latest assistant reply (all text segments, including a partial reply) without changing the draft, and is what `/copy` did before the picker. |
 | `/copy code [n]` | Copy the nth fenced code block of that reply, numbered from 1; omitted `n` means **first**. Backtick and tilde fences, including nested ones, use the renderer's Markdown parsing. |
 | `/copy prompt` | Copy the latest submitted user prompt, not the current draft. |
 | `/queue [prompt]`, `/q [prompt]` | With a prompt, use queue mode for that submission; without one, inspect and edit the pending queue. `/q` is intentionally queue, not quit. |
@@ -419,7 +483,8 @@ and control plane authoritative:
 | `/reset` | Reset the current session through `sessions.reset` and clear its local transcript. |
 | `/reasoning [level]` | Alias for Lemon's `/think` reasoning-effort control. |
 | `/stop` | Alias for `/abort`; partial output remains visible and is marked interrupted. |
-| `/status`, `/usage` | Show control-plane health/runtime and usage/quota summaries. |
+| `/status` | Show control-plane health/runtime summaries. |
+| `/usage [text]` | Open the fullscreen usage dashboard: provider cards (the daemon's configured daily limits from `usage.status` as quota bars, plus each provider's spend and requests today) above a year-long daily activity heatmap built from the `dailyUsage` ledger series of `usage.cost`. Enter/Tab switches to the full report (today's status plus a year of ledger totals by provider, model, session and day), `r` refreshes, Esc goes back and then closes. With no limits or providers reported the cards say so; nothing is estimated. Ledger days are UTC dates laid onto the local calendar. `/usage text` prints the report inline instead, as does a host without overlay support. |
 | `/think`, `/reasoning`, Shift+Tab | Pick a thinking level without losing the current draft; an explicit level still applies directly. |
 | `/agents [query]` | Discover addressable agents in your authorized scope, including handles, stable IDs, and availability. |
 | `/agent-name <handle>\|--clear` | Set or clear the focused conversation's handle without changing its title or stable ID. |
@@ -434,6 +499,7 @@ and control plane authoritative:
 | `/bg status <id>` | Inspect one background run without truncating its id. |
 | `/bg result <id>` | Fetch the completed answer, or report that it is not ready yet. |
 | `/bg cancel <id>` | Cancel a queued or running background task. |
+| `/jobs` | Open omp's jobs sheet for the focused session's background processes (the ones its `bash` tool starts with `run_in_background`), polled live through `process.jobs.list` / `process.jobs.inspect`. Subagent-owned jobs nest under their agent. ↑/↓ select; the detail shows status, command, cwd, pids, exit code and a redacted output tail that never consumes the agent's own `bash_output` cursor. `X` cancels the selected job through `process.jobs.cancel` — only jobs the focused session itself owns, sent once, never queued offline and never retried: an unconfirmed kill is reported as unknown. A daemon without `process.jobs.cancel` gets a read-only sheet; a failed poll keeps the last listing marked stale rather than showing it as empty. Esc closes. |
 | `/btw <question>` | Ask an isolated side question through `session.btw` when advertised. |
 | `/commands [command]` | Prefer the daemon's `commands.catalog`; fall back to the TUI's local registry during rolling upgrades. |
 | `/help [command]` | Show the local TUI command and key reference, including unavailable capability annotations. |
@@ -643,6 +709,21 @@ the row renderer, clickable buttons in Tern's native approval chrome:
   full tool set and lets the agent implement the plan in the same run.
 - **Refine plan** (`deny`, also Esc) keeps plan mode on; the agent ends its turn
   and waits for your feedback, which you send as a normal prompt.
+
+**Fullscreen plan review.** `v` (or the native **Review plan** button) opens
+omp's plan-review overlay over the proposal: the plan in scrollable Markdown
+sections, a Contents sidebar on wide terminals (jump, `a` annotate, `e` edit an
+annotation, `d` delete a section, `u` undo), `c` to copy the plan, and the same
+two choices beneath. It opens by itself when the terminal is at least 30 rows
+tall; a shorter one keeps the compact panel until you press `v`. Choosing
+**Approve and execute** or **Refine plan** resolves the request exactly as the
+panel's keys do. **Esc closes the review without answering** and returns to the
+compact panel, still pending. Because `deny` carries no text, annotations and
+removed sections from a Refine are staged as a markdown note in the composer
+(appended to any draft) for you to edit and send. Sections cannot be removed
+from the daemon-owned plan file, so **Approve and execute** is refused while
+removals are pending (the review reopens on Refine, where they travel as
+feedback).
 
 No session, agent or global scope applies to a plan proposal, and `/approve`
 refuses one. Running `/plan` while plan mode is on exits it without approving

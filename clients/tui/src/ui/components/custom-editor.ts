@@ -11,7 +11,8 @@
  *   Ctrl+D   quits on an empty draft, deletes forward otherwise.
  *   Ctrl+G   hands the draft to $EDITOR.
  *   Esc      aborts the live run without discarding the draft; while idle,
- *            Esc Esc discards the draft (recoverable with ↑).
+ *            Esc Esc discards a non-empty draft (recoverable with ↑) and
+ *            opens the rewind picker on an empty one.
  *   ↑ / ↓    recall sent prompts while the draft is empty.
  *   Alt+↵    cycle the submission mode for the next submission only.
  *
@@ -24,7 +25,6 @@
  * effort chips, the status facts, usage, and Send (Stop while a run is live).
  */
 
-import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
 import { BracketedPasteHandler } from "@oh-my-pi/pi-tui/bracketed-paste";
 import {
 	Editor,
@@ -42,6 +42,7 @@ import type {
 	TspSpan,
 } from "@oh-my-pi/pi-tui/native/node";
 import { AttachmentList } from "../../composer/attachment-list.ts";
+import { createComposerAutocompleteProvider } from "../../composer/autocomplete.ts";
 import type {
 	ComposerDrafts,
 	ComposerSubmission,
@@ -49,6 +50,7 @@ import type {
 } from "../../composer/drafts.ts";
 import type { PendingImage } from "../../composer/images.ts";
 import { type ComposerIO, ComposerMedia } from "../../composer/media.ts";
+import type { ModelMentionSource } from "../../composer/model-mentions.ts";
 import { IMAGE_PATH, parsePastedPaths } from "../../composer/paths.ts";
 import type { PromptHistoryStore } from "../../composer/prompt-history.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
@@ -56,7 +58,7 @@ import type { ComposerFacts, ComposerFactsSource } from "./status-bar.ts";
 
 /** Window in which a second Ctrl+C quits. */
 export const EXIT_CONFIRM_MS = 2000;
-/** Window in which a second Esc discards the draft. */
+/** Window in which a second Esc discards the draft or opens the rewind picker. */
 export const ESC_DISCARD_MS = 800;
 /** How many sent prompts ↑ can walk back through. */
 export const HISTORY_LIMIT = 100;
@@ -112,6 +114,8 @@ export interface CustomEditorOptions {
 	/** Abort the run in flight. Return true when there was one. */
 	onAbort?: () => boolean;
 	onQuit?: (code: number) => void;
+	/** Idle Esc Esc on an empty draft: open the rewind picker. */
+	onRewind?: () => void;
 	/** Ctrl+G / `/editor`. */
 	onExternalEdit?: () => void | Promise<void>;
 	/**
@@ -138,6 +142,10 @@ export interface CustomEditorOptions {
 	controlKeys?: { model?: string; thinking?: string };
 	/** Where sent prompts persist across sessions; unset keeps the recall ring in memory only. */
 	promptHistory?: PromptHistoryStore;
+	/** `[tui] vim_mode`: start the composer with Vim-style modal editing. */
+	vimMode?: boolean;
+	/** Models offered by `^` mention completion; unset leaves `^` as plain text. */
+	modelMentions?: ModelMentionSource;
 }
 
 /** The bar's controls, rebuilt only when what they show changes. */
@@ -199,6 +207,7 @@ export class CustomEditor extends Editor {
 		this.#now = options.now ?? Date.now;
 		// Base Editor exposes submission as a property; ours is the only writer.
 		this.onSubmit = (text: string) => this.#submit(text);
+		if (options.vimMode) this.setVimMode(true);
 		if (options.onCycleMode) {
 			// Installing the hook is what stops Alt+Enter inserting a newline.
 			this.onAltEnter = () => options.onCycleMode?.();
@@ -243,21 +252,22 @@ export class CustomEditor extends Editor {
 		return this.#history;
 	}
 
-	/** Install slash-command and file-path completion. */
+	/** Install the composer's completion: slash commands, `@file`, `^model`, `#N` refs and emoji. */
 	setCommands(
 		commands: Array<{ name: string; description?: string; argumentHint?: string }>,
 		basePath = process.cwd(),
 	): void {
 		this.setAutocompleteProvider(
-			new CombinedAutocompleteProvider(
-				commands.map((command) => ({
+			createComposerAutocompleteProvider({
+				commands: commands.map((command) => ({
 					name: command.name,
 					description: command.description,
 					argumentHint: command.argumentHint,
 					allowArgs: true,
 				})),
 				basePath,
-			),
+				models: this.#options.modelMentions,
+			}),
 		);
 	}
 
@@ -281,7 +291,7 @@ export class CustomEditor extends Editor {
 		if (/^\s*\/clear-history(?:\s|$)/i.test(text)) return;
 		this.#rememberPrompt(text);
 		try {
-			this.#options.promptHistory?.append(text);
+			this.#options.promptHistory?.append(text, this.#options.composer?.cwd?.() ?? process.cwd());
 		} catch (error) {
 			if (this.#historyWarned) return;
 			this.#historyWarned = true;
@@ -808,13 +818,20 @@ export class CustomEditor extends Editor {
 			return true;
 		}
 		const now = this.#now();
-		if (now - this.#escapeAt < ESC_DISCARD_MS && this.getText().length > 0) {
-			this.#rememberPrompt(this.getExpandedText());
-			this.setText("");
-			this.#historyIndex = undefined;
-			this.#escapeAt = 0;
-			this.#options.notice?.("draft discarded (↑ to bring it back)");
-			return true;
+		if (now - this.#escapeAt < ESC_DISCARD_MS) {
+			if (this.getText().length > 0) {
+				this.#rememberPrompt(this.getExpandedText());
+				this.setText("");
+				this.#historyIndex = undefined;
+				this.#escapeAt = 0;
+				this.#options.notice?.("draft discarded (↑ to bring it back)");
+				return true;
+			}
+			if (this.#options.onRewind && this.pendingAttachments.length === 0) {
+				this.#escapeAt = 0;
+				this.#options.onRewind();
+				return true;
+			}
 		}
 		this.#escapeAt = now;
 		return false;

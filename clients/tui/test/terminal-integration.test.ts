@@ -1,9 +1,10 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
+import { routeTerminalMultiplexerNotification } from "@oh-my-pi/pi-tui/terminal-multiplexer";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { PromptHistoryStore } from "../src/composer/prompt-history.ts";
 import { resolveNotifications } from "../src/config.ts";
@@ -11,7 +12,7 @@ import { FakeControlPlane } from "../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../src/protocol/client.ts";
 import { AppStore } from "../src/store/app-store.ts";
 import { detectTerminalCapabilities } from "../src/terminal/capabilities.ts";
-import { TerminalIntegration } from "../src/terminal/integration.ts";
+import { deliverNotification, TerminalIntegration } from "../src/terminal/integration.ts";
 import { codeLink, fileTarget, hyperlink } from "../src/terminal/links.ts";
 import { TranscriptMarks } from "../src/terminal/marks.ts";
 import { encodeProgramStatusMessage } from "../src/terminal/signals.ts";
@@ -24,6 +25,7 @@ test("Tern detection respects non-TTY, dumb, hyperlink and notification opt-outs
 		tern: true,
 		hyperlinks: true,
 		notifications: "osc9",
+		routeNotifications: true,
 	});
 	expect(detectTerminalCapabilities({ TERM_PROGRAM: "Tern" }, true).tern).toBe(true);
 	expect(detectTerminalCapabilities(env, false).enabled).toBe(false);
@@ -94,6 +96,145 @@ test.each(["bell", "off"] as const)("approvals and run completion share %s mode"
 		integration.stop();
 		client.close();
 	}
+});
+
+describe("notification routing", () => {
+	type Routing = Parameters<typeof deliverNotification>[4];
+	function run(
+		env: Record<string, string>,
+		program: Record<string, string>,
+		mode: "auto" | "osc" | "bell" | "off",
+		options: { platform?: NodeJS.Platform; deliver?: boolean } = {},
+	) {
+		const writes: string[] = [];
+		const desktop: unknown[] = [];
+		const routed: unknown[] = [];
+		const routing: NonNullable<Routing> = {
+			env,
+			platform: options.platform ?? "linux",
+			route: (request) => {
+				routed.push(request.sequence);
+				return routeTerminalMultiplexerNotification(request);
+			},
+			desktop: (message) => desktop.push(message),
+		};
+		deliverNotification(
+			detectTerminalCapabilities(program, true, mode),
+			"Approval needed",
+			"A tool is waiting",
+			(data) => writes.push(data),
+			routing,
+		);
+		return { writes, desktop, routed };
+	}
+
+	test("auto inside tmux wraps the terminal sequence in tmux passthrough", () => {
+		const { writes, desktop } = run(
+			{ TMUX: "/tmp/tmux-1/default,1,0" },
+			{ TERM_PROGRAM: "iTerm.app" },
+			"auto",
+			{
+				platform: "darwin",
+			},
+		);
+		expect(writes).toEqual([
+			"\x1bPtmux;\x1b\x1b]9;Lemon: Approval needed — A tool is waiting\x07\x1b\\\x07",
+		]);
+		expect(desktop).toEqual([]);
+	});
+
+	test("auto outside a multiplexer writes the terminal's own OSC and no desktop toast", () => {
+		const { writes, desktop } = run(
+			{ DBUS_SESSION_BUS_ADDRESS: "unix:path=/x" },
+			{ TERM_PROGRAM: "foot" },
+			"auto",
+		);
+		expect(writes).toEqual(["\x1b]777;notify;Lemon: Approval needed;A tool is waiting\x07"]);
+		expect(desktop).toEqual([]);
+	});
+
+	test("auto on a bell-only Linux terminal rings and fires the desktop notifier", () => {
+		const { writes, desktop } = run({ DBUS_SESSION_BUS_ADDRESS: "unix:path=/x" }, {}, "auto");
+		expect(writes).toEqual(["\x07"]);
+		expect(desktop).toEqual([{ title: "Lemon: Approval needed", body: "A tool is waiting" }]);
+	});
+
+	test("desktop notify needs a Linux session bus and honors PI_NO_DESKTOP_NOTIFY", () => {
+		for (const [env, platform] of [
+			[{}, "linux"],
+			[{ DBUS_SESSION_BUS_ADDRESS: "unix:path=/x" }, "darwin"],
+			[{ DBUS_SESSION_BUS_ADDRESS: "unix:path=/x", PI_NO_DESKTOP_NOTIFY: "1" }, "linux"],
+		] as const) {
+			const { writes, desktop } = run({ ...env }, {}, "auto", { platform });
+			expect(writes).toEqual(["\x07"]);
+			expect(desktop).toEqual([]);
+		}
+	});
+
+	test("a bell-only terminal inside tmux rings instead of passing a sequence through", () => {
+		const { writes, routed } = run({ TMUX: "1" }, {}, "auto", { platform: "darwin" });
+		expect(routed).toEqual([null]);
+		expect(writes).toEqual(["\x07"]);
+	});
+
+	test.each(["bell", "osc"] as const)(
+		"%s mode never routes or fires the desktop notifier",
+		(mode) => {
+			const { writes, desktop, routed } = run(
+				{ TMUX: "1", DBUS_SESSION_BUS_ADDRESS: "unix:path=/x" },
+				{},
+				mode,
+			);
+			expect(routed).toEqual([]);
+			expect(desktop).toEqual([]);
+			expect(writes).toEqual([
+				mode === "bell" ? "\x07" : "\x1b]777;notify;Lemon: Approval needed;A tool is waiting\x07",
+			]);
+		},
+	);
+
+	test("off is silent", () => {
+		const { writes, desktop, routed } = run(
+			{ TMUX: "1", DBUS_SESSION_BUS_ADDRESS: "x" },
+			{},
+			"off",
+		);
+		expect([writes, desktop, routed]).toEqual([[], [], []]);
+	});
+
+	test("Tern keeps its program-status path: no OSC and no routing in auto", () => {
+		const terminal = new MemoryTerminal();
+		const store = new AppStore("tern-notify");
+		store.setConnection("online");
+		const client = new ControlPlaneClient({ url: "ws://127.0.0.1:1/ws" });
+		const routed: unknown[] = [];
+		const integration = new TerminalIntegration(
+			terminal,
+			store,
+			client,
+			"/repo",
+			detectTerminalCapabilities({ TERM_PROGRAM: "Tern", TMUX: "1" }, true),
+			undefined,
+			{
+				env: { TMUX: "1" },
+				route: (request) => {
+					routed.push(request);
+					return true;
+				},
+				desktop: () => routed.push("d"),
+			},
+		);
+		try {
+			integration.start();
+			terminal.writes.length = 0;
+			store.addUserPrompt({ promptId: "q", sessionKey: "tern-notify", questions: [] });
+			expect(routed).toEqual([]);
+			expect(terminal.writes.join("")).not.toContain("]9;");
+		} finally {
+			integration.stop();
+			client.close();
+		}
+	});
 });
 
 test("transcript marks preserve width, cached rows, and completion marks", () => {

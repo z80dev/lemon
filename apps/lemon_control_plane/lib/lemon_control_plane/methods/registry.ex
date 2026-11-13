@@ -63,6 +63,9 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.BackgroundResult,
     LemonControlPlane.Methods.BackgroundCancel,
     LemonControlPlane.Methods.SessionBtw,
+    LemonControlPlane.Methods.ProcessJobsList,
+    LemonControlPlane.Methods.ProcessJobsInspect,
+    LemonControlPlane.Methods.ProcessJobsCancel,
     # Models
     LemonControlPlane.Methods.ModelsList,
     LemonControlPlane.Methods.ProvidersManagementList,

@@ -83,7 +83,7 @@ test.each([
 		// A recalled discarded draft becomes durable only when submitted.
 		editor.handleInput(ENTER);
 		expect(append).toHaveBeenCalledTimes(1);
-		expect(append).toHaveBeenCalledWith("half-typed");
+		expect(append).toHaveBeenCalledWith("half-typed", process.cwd());
 		expect(new PromptHistoryStore(file).load()).toEqual(["already submitted", "half-typed"]);
 	} finally {
 		append.mockRestore();

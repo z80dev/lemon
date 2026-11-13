@@ -19,17 +19,26 @@
  * resolve puts the panel back rather than leaving a tool silently blocked.
  */
 
-import type { Container, TUI } from "@oh-my-pi/pi-tui/tui";
+import type { Component, Container, TUI } from "@oh-my-pi/pi-tui/tui";
+import type { OverlayHost } from "../../commands/registry.ts";
 import { isExpiredApprovalError } from "../../protocol/errors.ts";
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
 import { type ApprovalRequestedEvent, PROPOSE_PLAN_TOOL } from "../../protocol/types.ts";
 import type { AppStore, PendingApproval } from "../../store/app-store.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
-import { ApprovalPanelComponent, humanDecision } from "../components/approval-panel.ts";
+import { ApprovalPanelComponent, humanDecision, planTitle } from "../components/approval-panel.ts";
+import { PlanReviewFlow } from "../plan-review.ts";
 import type { EventController } from "./event-controller.ts";
 
 /** How often the countdown is re-read. */
 export const APPROVAL_TICK_MS = 1000;
+
+/**
+ * A plan proposal opens its fullscreen review on its own only on a terminal at
+ * least this tall: shorter, the compact panel is the better first view and
+ * `v` opens the review on demand.
+ */
+export const PLAN_REVIEW_AUTO_MIN_ROWS = 30;
 
 export interface ApprovalControllerOptions {
 	store: AppStore;
@@ -42,6 +51,20 @@ export interface ApprovalControllerOptions {
 	/** Focused again when the panel goes away. */
 	focusEditor: () => void;
 	refreshStatus: () => void;
+	/**
+	 * Mount a fullscreen overlay (the app's `presentOverlay` seam). Unset, a plan
+	 * proposal has only the compact panel: no review key is offered.
+	 */
+	presentOverlay?: (build: (host: OverlayHost) => Component) => void;
+	/** True while some overlay is up; the automatic plan review never replaces one. */
+	isOverlayOpen?: () => boolean;
+	/** Copy plan text to the clipboard from the review. */
+	copyText?: (text: string) => void;
+	/**
+	 * Put text in the composer. `deny` carries none, so a Refine from the plan
+	 * review stages its annotations here for the user to send.
+	 */
+	stageDraft?: (text: string) => void;
 	tickMs?: number;
 	now?: () => number;
 }
@@ -55,6 +78,9 @@ export class ApprovalController {
 	readonly #disposers: Array<() => void> = [];
 
 	#mounted = false;
+	/** The plan review on screen, and the requests whose automatic review already ran. */
+	#review: { approvalId: string; flow: PlanReviewFlow } | undefined;
+	readonly #autoReviewed = new Set<string>();
 	#timer: ReturnType<typeof setInterval> | undefined;
 
 	constructor(options: ApprovalControllerOptions) {
@@ -63,6 +89,7 @@ export class ApprovalController {
 			onDecide: (decision, event) => {
 				void this.resolve(event.approvalId, decision);
 			},
+			onReviewPlan: options.presentOverlay ? (event) => this.reviewPlan(event) : undefined,
 			requestRender: () => this.#options.tui.requestRender(),
 			now: options.now,
 		});
@@ -82,7 +109,57 @@ export class ApprovalController {
 	dispose(): void {
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.#stopTicker();
+		this.#closeReview();
 		this.#unmount();
+	}
+
+	/**
+	 * Open the fullscreen review of a plan proposal. Approve and Refine resolve
+	 * through {@link resolve}, exactly as the panel's keys do; Esc closes the
+	 * review and gives the keyboard back to the still-pending panel.
+	 */
+	reviewPlan(event: ApprovalRequestedEvent): void {
+		const { presentOverlay, notice } = this.#options;
+		if (!presentOverlay || event.tool !== PROPOSE_PLAN_TOOL) return;
+		this.#closeReview();
+		const flow = new PlanReviewFlow(
+			typeof event.action?.plan === "string" ? event.action.plan : "",
+			planTitle(event.action),
+			{
+				present: (build) => {
+					presentOverlay((host) =>
+						build({
+							...host,
+							close: () => {
+								host.close();
+								// The overlay's close hands focus to the editor; the panel is
+								// still the thing waiting on an answer.
+								if (this.#review?.flow === flow && this.panel.visible) {
+									this.#options.tui.setFocus(this.panel);
+								}
+							},
+						}),
+					);
+				},
+				decide: (decision, feedback) => {
+					this.#review = undefined;
+					if (feedback) {
+						this.#options.stageDraft?.(feedback);
+						notice("plan feedback staged in the composer — edit it and send it");
+					}
+					void this.resolve(event.approvalId, decision);
+				},
+				dismiss: () => {
+					this.#review = undefined;
+					this.#options.tui.setFocus(this.panel);
+					this.#options.tui.requestRender();
+				},
+				copy: this.#options.copyText,
+				notice,
+			},
+		);
+		this.#review = { approvalId: event.approvalId, flow };
+		flow.open();
 	}
 
 	/** Pending requests belonging to the session on screen, oldest first. */
@@ -100,6 +177,7 @@ export class ApprovalController {
 	/** Mount, dismiss or re-target the panel to match the store. */
 	present(): void {
 		const next = this.pendingForFocused()[0]?.event;
+		if (this.#review && this.#review.approvalId !== next?.approvalId) this.#closeReview();
 		if (!next) {
 			this.#unmount();
 			return;
@@ -108,6 +186,7 @@ export class ApprovalController {
 		this.#mount();
 		this.#syncTicker(next);
 		this.#options.tui.requestRender();
+		this.#autoReview(next);
 	}
 
 	/**
@@ -158,6 +237,23 @@ export class ApprovalController {
 	}
 
 	// -- internals -----------------------------------------------------------
+
+	/** Once per request, on a tall terminal, when nothing else is on screen. */
+	#autoReview(event: ApprovalRequestedEvent): void {
+		const { presentOverlay, isOverlayOpen, tui } = this.#options;
+		if (event.tool !== PROPOSE_PLAN_TOOL || !presentOverlay) return;
+		if (this.#review || this.#autoReviewed.has(event.approvalId)) return;
+		if (tui.terminal.rows < PLAN_REVIEW_AUTO_MIN_ROWS || isOverlayOpen?.()) return;
+		this.#autoReviewed.add(event.approvalId);
+		this.reviewPlan(event);
+	}
+
+	/** Close the review without resolving or dismissing anything. */
+	#closeReview(): void {
+		const review = this.#review;
+		this.#review = undefined;
+		review?.flow.close();
+	}
 
 	#mount(): void {
 		if (this.#mounted) return;

@@ -7,6 +7,7 @@
  */
 
 import { METHOD } from "../protocol/methods.ts";
+import { buildUsageDashboard, usageStatusLines } from "../ui/usage-dashboard.ts";
 import {
 	asArray,
 	asRecord,
@@ -18,7 +19,7 @@ import {
 	pickNumber,
 	pickString,
 } from "./format.ts";
-import type { SlashCommand } from "./registry.ts";
+import type { OverlayHost, SlashCommand } from "./registry.ts";
 
 export const statusCommand: SlashCommand = {
 	name: "status",
@@ -113,39 +114,42 @@ export const statusCommand: SlashCommand = {
 
 export const usageCommand: SlashCommand = {
 	name: "usage",
-	summary: "token and quota usage",
+	summary: "usage dashboard: quota cards and daily activity heatmap",
+	usage: "[text]",
 	group: "diagnostics",
 	methods: [METHOD.usageStatus],
-	async run(ctx) {
-		const usage = await ctx.methods.usageStatus();
-		ctx.store.usage = usage as Record<string, unknown>;
-		ctx.ui.refreshStatus();
-		const input = pickNumber(usage, "tokens.input") ?? 0;
-		const output = pickNumber(usage, "tokens.output") ?? 0;
-		const lines = [
-			`usage — ${pickString(usage, "period") ?? "today"}`,
-			...keyValueLines([
-				["runs", pickNumber(usage, "runs")],
-				[
-					"tokens",
-					`${humanNumber(input)} in · ${humanNumber(output)} out · ${humanNumber(input + output)} total`,
-				],
-				["cost", humanCost(pickNumber(usage, "cost"))],
-				["status", pickString(usage, "summary.status")],
-				["remaining runs", pickNumber(usage, "summary.remainingRuns")],
-				["remaining tokens", pickNumber(usage, "summary.remainingTokens")],
-			]),
-		];
-		const providers = asArray(usage.providers);
-		if (providers.length > 0) {
-			lines.push("providers:");
-			for (const provider of providers) {
-				lines.push(
-					`  ${pickString(provider, "provider") ?? "?"} · ${pickNumber(provider, "requests") ?? 0} req · ${humanCost(pickNumber(provider, "cost")) ?? "$0"}`,
-				);
-			}
+	async run(ctx, argv) {
+		if (argv.length > 1 || (argv[0] !== undefined && argv[0] !== "text")) {
+			ctx.ui.noticeBlock(["usage: /usage [text]"]);
+			return;
 		}
-		ctx.ui.noticeBlock(lines);
+		const remember = (usage: Record<string, unknown>) => {
+			ctx.store.usage = usage;
+			ctx.ui.refreshStatus();
+		};
+		// `/usage text`, or a host with no overlay surface, prints the report inline.
+		if (argv[0] === "text" || !ctx.ui.presentOverlay) {
+			const usage = (await ctx.methods.usageStatus()) as Record<string, unknown>;
+			remember(usage);
+			ctx.ui.noticeBlock(usageStatusLines(usage));
+			return;
+		}
+		let host: OverlayHost | undefined;
+		// Built before mounting so a daemon error surfaces as the command's error
+		// instead of an empty overlay.
+		const dashboard = await buildUsageDashboard({
+			status: async () => (await ctx.methods.usageStatus()) as Record<string, unknown>,
+			cost: ctx.methods.supports(METHOD.usageCost)
+				? async (params) => (await ctx.methods.usageCost(params)) as Record<string, unknown>
+				: undefined,
+			onStatus: remember,
+			requestRender: () => host?.repaint(),
+			onClose: () => host?.close(),
+		});
+		ctx.ui.presentOverlay?.((h) => {
+			host = h;
+			return dashboard;
+		});
 	},
 };
 

@@ -36,6 +36,18 @@ export function getPromptHistoryPath(): string {
 	return path.join(getConfigDir(), "tui-history", PROMPT_HISTORY_FILE);
 }
 
+/** A saved prompt as the Ctrl+R search overlay lists it. */
+export interface PromptHistoryEntry {
+	prompt: string;
+	/** Unix seconds. Prompts saved before timestamps existed carry the time they were first migrated. */
+	created_at: number;
+	/** Directory the prompt was submitted from; absent for imported legacy prompts. */
+	cwd?: string;
+}
+
+/** Longest working directory kept next to a prompt. */
+const MAX_CWD_CHARS = 1024;
+
 export interface PromptHistoryLimits {
 	maxBytes?: number;
 	maxEntries?: number;
@@ -75,17 +87,65 @@ export class PromptHistoryStore {
 		});
 	}
 
-	/** Called for submitted prompts only, never for edits or discarded drafts. */
-	append(prompt: string): void {
+	/** False when `[tui] prompt_history = false`: no load, append or search touches disk. */
+	get enabled(): boolean {
+		return this.#enabled;
+	}
+
+	/**
+	 * Called for submitted prompts only, never for edits or discarded drafts.
+	 * `cwd` is the directory the prompt was submitted from, kept for the search overlay.
+	 */
+	append(prompt: string, cwd?: string): void {
 		if (!this.#enabled || prompt.trim().length === 0) return;
 		const bytes = encodedBytes(prompt);
 		// Oversized prompts remain available in the editor's in-memory recall ring.
 		if (bytes > this.#maxBytes || this.#maxEntries === 0) return;
 		this.#withDatabase("save", (db) => {
 			this.#migrate(db);
-			this.#insert(db, prompt, bytes);
+			this.#insert(db, prompt, bytes, cwd);
 			this.#prune(db);
 		});
+	}
+
+	/** Newest saved prompts first. Opens, reads and closes its own connection. */
+	recent(limit: number): PromptHistoryEntry[] {
+		if (!this.#enabled || limit <= 0) return [];
+		return this.#withDatabase("read", (db) => this.#select(db).slice(0, limit));
+	}
+
+	/**
+	 * Saved prompts containing every query token (case-insensitive, tokens split on
+	 * anything that is not a letter or digit), newest first. An empty query is
+	 * {@link recent}. History is bounded (100 entries, 256 KiB), so filtering here
+	 * is cheaper than teaching SQLite Unicode case folding.
+	 */
+	search(query: string, limit: number): PromptHistoryEntry[] {
+		const tokens = tokenize(query);
+		if (tokens.length === 0) return this.recent(limit);
+		if (!this.#enabled || limit <= 0) return [];
+		return this.#withDatabase("search", (db) => {
+			const matches: PromptHistoryEntry[] = [];
+			for (const entry of this.#select(db)) {
+				const text = entry.prompt.toLowerCase();
+				if (tokens.every((token) => text.includes(token))) matches.push(entry);
+				if (matches.length >= limit) break;
+			}
+			return matches;
+		});
+	}
+
+	#select(db: Database): PromptHistoryEntry[] {
+		return db
+			.query<{ prompt: string; created_at: number; cwd: string | null }, []>(
+				"SELECT prompt, created_at, cwd FROM prompts ORDER BY id DESC",
+			)
+			.all()
+			.map((row) => ({
+				prompt: row.prompt,
+				created_at: row.created_at,
+				...(row.cwd ? { cwd: row.cwd } : {}),
+			}));
 	}
 
 	/** Keep the DB inode: unlinking a live SQLite database splits writers. */
@@ -125,6 +185,7 @@ export class PromptHistoryStore {
 					db!.exec(
 						"CREATE TABLE IF NOT EXISTS prompts (id INTEGER PRIMARY KEY, prompt TEXT NOT NULL, bytes INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
 					);
+					addColumns(db!);
 					return run(db!);
 				})
 				.immediate();
@@ -141,13 +202,18 @@ export class PromptHistoryStore {
 		}
 	}
 
-	#insert(db: Database, prompt: string, bytes = encodedBytes(prompt)): void {
+	#insert(db: Database, prompt: string, bytes = encodedBytes(prompt), cwd?: string): void {
 		if (bytes > this.#maxBytes || this.#maxEntries === 0) return;
 		const last = db
 			.query<{ prompt: string }, []>("SELECT prompt FROM prompts ORDER BY id DESC LIMIT 1")
 			.get();
 		if (last?.prompt !== prompt) {
-			db.run("INSERT INTO prompts(prompt, bytes) VALUES (?, ?)", [prompt, bytes]);
+			db.run("INSERT INTO prompts(prompt, bytes, created_at, cwd) VALUES (?, ?, ?, ?)", [
+				prompt,
+				bytes,
+				Math.floor(Date.now() / 1000),
+				cwd ? cwd.slice(0, MAX_CWD_CHARS) : null,
+			]);
 		}
 	}
 
@@ -218,6 +284,31 @@ export class PromptHistoryStore {
 		}
 		if (failure !== undefined) throw failure;
 	}
+}
+
+/**
+ * Databases created before the search overlay lack `created_at` and `cwd`.
+ * Runs inside the same IMMEDIATE transaction as every operation, so concurrent
+ * TUIs cannot both add a column. Existing prompts have no real timestamp; they
+ * take the migration time so they sort (by id) and age sensibly.
+ */
+function addColumns(db: Database): void {
+	const columns = db.query<{ name: string }, []>("PRAGMA table_info(prompts)").all();
+	if (!columns.some((column) => column.name === "created_at")) {
+		db.exec("ALTER TABLE prompts ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0");
+		db.run("UPDATE prompts SET created_at = ?", [Math.floor(Date.now() / 1000)]);
+	}
+	if (!columns.some((column) => column.name === "cwd")) {
+		db.exec("ALTER TABLE prompts ADD COLUMN cwd TEXT");
+	}
+}
+
+/** Query tokens, split the way the overlay highlights them. */
+function tokenize(query: string): string[] {
+	return query
+		.toLowerCase()
+		.split(/[^\p{L}\p{N}]+/u)
+		.filter((token) => token.length > 0);
 }
 
 function encodedBytes(prompt: string): number {

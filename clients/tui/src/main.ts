@@ -8,7 +8,7 @@
  */
 
 import { PromptHistoryStore } from "./composer/prompt-history.ts";
-import { loadConfig, promptHistoryEnabled } from "./config.ts";
+import { loadConfig, promptHistoryEnabled, resolveVimMode } from "./config.ts";
 import { DEFAULT_WS_URL } from "./protocol/client.ts";
 import type { StartupRequest } from "./startup-session.ts";
 import { consumeForkHandoff } from "./terminal/fork.ts";
@@ -290,6 +290,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 			themePreference: theme.preference,
 			promptHistory: new PromptHistoryStore(undefined, { enabled: persistHistory }),
 			notifications: config?.tui?.notifications,
+			vimMode: resolveVimMode(config?.tui?.vim_mode),
 			keybindings: config?.tui?.keys,
 			onExit: (code) => resolve(code),
 		});

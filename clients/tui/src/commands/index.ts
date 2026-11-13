@@ -7,6 +7,7 @@
  */
 
 import { agentNameCommand, agentsCommand, tellCommand } from "./agent-addressing.ts";
+import { agentHubCommand } from "./agent-hub.ts";
 import { approvalsCommand, approveCommand, denyCommand } from "./approvals.ts";
 import { blueprintCommand, blueprintsCommand } from "./blueprints.ts";
 import { contextCommand } from "./context.ts";
@@ -33,6 +34,7 @@ import {
 	heartbeatCommand,
 	tasksCommand,
 } from "./hermes.ts";
+import { jobsCommand } from "./jobs.ts";
 import { modelCommand, thinkCommand, toolPolicyCommand } from "./model.ts";
 import { ompCommand } from "./omp.ts";
 import { planCommand } from "./plan.ts";
@@ -73,6 +75,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		commandsCommand,
 		paletteCommand,
 		taskTreeCommand,
+		agentHubCommand,
 		outputCommand,
 		diffCommand,
 		copyCommand,
@@ -116,6 +119,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		backgroundCommand,
 		btwCommand,
 		runsCommand,
+		jobsCommand,
 		agentsCommand,
 		tellCommand,
 		tasksCommand,

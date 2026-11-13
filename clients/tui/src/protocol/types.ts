@@ -613,6 +613,12 @@ export interface ChatHistoryParams {
 	limit?: number;
 	beforeId?: string;
 	includeFullText?: boolean;
+	/**
+	 * A delegated child's native session id (a task's `sessionId`). Returns that
+	 * child's transcript, but only if it belongs to a task launched under
+	 * `sessionKey`; any other id is NOT_FOUND.
+	 */
+	childSessionId?: string;
 }
 
 export interface ChatHistoryMessage {
@@ -637,6 +643,8 @@ export interface ChatHistoryMessage {
 
 export interface ChatHistoryResult {
 	sessionKey: string;
+	/** Echo of the request's `childSessionId`; absent from daemons that ignore the parameter. */
+	childSessionId?: string;
 	messages: ChatHistoryMessage[];
 	summary?: Record<string, unknown>;
 }
@@ -985,4 +993,80 @@ export interface ConfigSetParams {
 	key: string;
 	value: unknown;
 	[key: string]: unknown;
+}
+
+// -- process jobs --------------------------------------------------------------
+
+/** One background process a session or its live subagents own (`process.jobs.*`). */
+export interface ProcessJobSummary {
+	id: string;
+	/** Store lifecycle label: queued, starting, running, killing, completed, error, killed, lost, rejected, expired, canceled or unknown. */
+	status: string;
+	/** Native session id that owns the job; the session's `rootId` for its own jobs. */
+	ownerId: string | null;
+	/** Redacted, bounded command line. */
+	command: string | null;
+	startedAt: number | null;
+	endedAt: number | null;
+	exitCode: number | null;
+	/** Launch admission classification (accepted, queued, outcome_unknown, ...). */
+	launch: string | null;
+}
+
+/** A live subagent that owns listed jobs, or an ancestor linking one to the root. */
+export interface ProcessJobAgent {
+	id: string;
+	parentId: string | null;
+	name: string | null;
+}
+
+export interface ProcessJobsListParams {
+	sessionKey: string;
+}
+
+export interface ProcessJobsListResult {
+	sessionKey: string;
+	/** False when no live native session owns this key: it has no jobs to show. */
+	live: boolean;
+	rootId: string | null;
+	/** The daemon's clock (ms) when it answered, to correct job times for clock skew. */
+	at: number | null;
+	jobs: ProcessJobSummary[];
+	agents: ProcessJobAgent[];
+	total: number;
+	truncated: boolean;
+}
+
+export interface ProcessJobsInspectParams {
+	sessionKey: string;
+	jobId: string;
+	/** Bytes of output tail; the daemon defaults to 16 KiB and caps at 64 KiB. */
+	tailBytes?: number;
+}
+
+export interface ProcessJobDetail extends ProcessJobSummary {
+	cwd: string | null;
+	backend: string | null;
+	pids: number[];
+	/** Redacted output tail; reading it never consumes the agent's own `bash_output` cursor. */
+	output: string;
+	outputTruncated: boolean;
+	outputBytes: number | null;
+}
+
+export interface ProcessJobsInspectResult {
+	sessionKey: string;
+	job: ProcessJobDetail;
+}
+
+export interface ProcessJobsCancelParams {
+	sessionKey: string;
+	jobId: string;
+}
+
+export interface ProcessJobsCancelResult {
+	sessionKey: string;
+	jobId: string;
+	cancelled: boolean;
+	job: ProcessJobSummary;
 }

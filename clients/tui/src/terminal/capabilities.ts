@@ -6,6 +6,8 @@ export interface TerminalCapabilities {
 	tern: boolean;
 	hyperlinks: boolean;
 	notifications: "osc9" | "osc777" | "bell" | false;
+	/** `auto` mode: offer notifications to multiplexers and the desktop before the terminal fallback. */
+	routeNotifications: boolean;
 }
 
 /** Environment identity selects side channels; keyboard support is probed by pi-tui. */
@@ -37,6 +39,7 @@ export function detectTerminalCapabilities(
 				: notificationMode === "bell"
 					? "bell"
 					: (osc ?? (notificationMode === "osc" ? "osc777" : "bell")),
+		routeNotifications: enabled && notificationMode === "auto",
 	};
 }
 

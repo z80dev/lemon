@@ -6,8 +6,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { ControlPlaneError } from "../src/protocol/errors.ts";
 import { ControlPlaneClient } from "../src/protocol/client.ts";
+import { ControlPlaneError } from "../src/protocol/errors.ts";
 import { ControlPlaneMethods } from "../src/protocol/methods.ts";
 
 const [url, token, pruneKey, deleteKey, keepKey, cutoffRaw, secret] = process.argv.slice(2);

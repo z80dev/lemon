@@ -203,6 +203,7 @@ theme = "lemon"
 debug = false
 notifications = "auto" # auto | osc | bell | off (Bun terminal client)
 prompt_history = true # persist ↑ prompt recall to ~/.lemon/tui-history/history.sqlite3 (Bun terminal client)
+vim_mode = false # start the Bun terminal client's composer in Vim-style modal editing
 
 [logging]
 # Optional: write logs to a file for later analysis.
@@ -994,6 +995,11 @@ snapshots or previously deleted blocks.
   failures report an error, never a successful clear; a failed legacy cleanup
   may leave source files on disk, but the committed migration fence prevents
   reimport. Retry `/clear-history` after fixing the reported problem.
+- Each row stores `created_at` (Unix seconds) and the submitting working directory
+  (`cwd`, at most 1024 characters) next to the prompt for the Ctrl+R search
+  overlay. Databases from earlier versions gain both columns in place, inside the
+  same exclusive transaction as any other operation; existing prompts take the
+  migration time and no `cwd`. `/clear-history` deletes them with the prompt.
 - `[tui] prompt_history = false` (global or project config) turns persistence off:
   load and append do no history I/O, and recall lasts for the current session
   only. Any other non-`true` value also turns it off. Existing history remains

@@ -2,8 +2,8 @@
  * `/context`: where the focused session's context window goes.
  *
  * A dismissible overlay over one immutable `sessions.context` receipt. The row
- * renderer draws a 100-cell grid (one cell per percent of the window, colored
- * per category, free space dimmed), a per-category table whose rows sum to the
+ * renderer draws omp's occupancy map (pi-tui `planContextMap`: 100 cells, one per
+ * percent of the window, colored per category, free space and part-covered cells dimmed), a per-category table whose rows sum to the
  * measured total, compaction headroom, the largest contributors and the
  * measurement caveats. Tern's native backend gets the same facts as semantic
  * nodes instead: a stacked `meter`, `table`s and notes inside a glass sheet.
@@ -12,6 +12,11 @@
  * panel only lays them out and says which parts were estimated.
  */
 
+import {
+	type ContextMapCell,
+	type ContextMapSegment,
+	planContextMap,
+} from "@oh-my-pi/pi-tui/chrome/context-map";
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { col, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type {
@@ -28,8 +33,10 @@ import type { ContextCategoryId, SessionsContextResult } from "../../protocol/ty
 import { type ColorSlot, getTheme } from "../theme/theme.ts";
 import { contextMeterProps } from "./status-bar.ts";
 
-/** One cell per percent of the window. */
-export const CONTEXT_GRID_CELLS = 100;
+/** The occupancy map is planned as 25 × 4 cells: one per percent of the window. */
+const CONTEXT_GRID_COLUMNS = 25;
+const CONTEXT_GRID_ROWS = 4;
+export const CONTEXT_GRID_CELLS = CONTEXT_GRID_COLUMNS * CONTEXT_GRID_ROWS;
 
 /**
  * Category colors. The slot names double as Tern theme tokens, so both
@@ -295,11 +302,12 @@ function grid(usage: SessionsContextResult, width: number, glyph: Glyphs): strin
 		rows.push(
 			cells
 				.slice(start, start + columns)
-				.map((cell) =>
-					cell === "free"
-						? theme.fg("dim", glyph.free)
-						: theme.fg(CATEGORY_SLOTS[cell], glyph.used),
-				)
+				.map((cell) => {
+					if (cell.id === "free") return theme.fg("dim", glyph.free);
+					const painted = theme.fg(CATEGORY_SLOTS[cell.id], glyph.used);
+					// Like omp's map, a cell its category covers less than 70% is dimmed.
+					return cell.full ? painted : `\x1b[2m${painted}\x1b[22m`;
+				})
 				.join(""),
 		);
 	}
@@ -307,36 +315,24 @@ function grid(usage: SessionsContextResult, width: number, glyph: Glyphs): strin
 }
 
 /**
- * Assign the grid's cells by largest remainder, so the colored cells add up to
- * the rounded share of the window that is used. Without a window, or past it,
- * the grid shows only the composition of what is used.
+ * Lay the window out as omp's occupancy map does: the categories in contract
+ * order, then free space, over a `CONTEXT_GRID_CELLS`-cell grid (one cell per
+ * percent), each cell taking the segment covering most of it. Without a window,
+ * or past it, the grid spans only what is used and shows its composition.
  */
-export function gridCells(usage: SessionsContextResult): Array<Slice["key"] | "free"> {
-	const slices = slicesOf(usage).filter((slice) => slice.tokens > 0);
+export function gridCells(usage: SessionsContextResult): ContextMapCell<Slice["key"] | "free">[] {
+	const segments: ContextMapSegment<Slice["key"] | "free">[] = slicesOf(usage).map((slice) => ({
+		id: slice.key,
+		tokens: slice.tokens,
+	}));
 	const window = usage.window;
-	const base = window === null || usage.usedTokens > window ? usage.usedTokens : window;
-	if (base <= 0) return Array<"free">(CONTEXT_GRID_CELLS).fill("free");
-	const usedCells = Math.min(
-		CONTEXT_GRID_CELLS,
-		Math.round((usage.usedTokens / base) * CONTEXT_GRID_CELLS),
-	);
-	const exactShares = slices.map((slice) => (slice.tokens / base) * CONTEXT_GRID_CELLS);
-	const counts = exactShares.map(Math.floor);
-	let remaining = usedCells - counts.reduce((sum, value) => sum + value, 0);
-	const order = exactShares
-		.map((share, index) => ({ index, remainder: share - Math.floor(share) }))
-		.sort((a, b) => b.remainder - a.remainder);
-	for (const { index } of order) {
-		if (remaining <= 0) break;
-		counts[index] = (counts[index] ?? 0) + 1;
-		remaining--;
+	const bounded = window !== null && usage.usedTokens <= window;
+	if (bounded && usage.freeTokens !== null) {
+		segments.push({ id: "free", tokens: usage.freeTokens });
 	}
-	const cells: Array<Slice["key"] | "free"> = [];
-	slices.forEach((slice, index) => {
-		for (let i = 0; i < (counts[index] ?? 0) && cells.length < usedCells; i++)
-			cells.push(slice.key);
-	});
-	while (cells.length < CONTEXT_GRID_CELLS) cells.push("free");
+	const base = bounded ? window : usage.usedTokens;
+	const cells = planContextMap(segments, base, CONTEXT_GRID_COLUMNS, CONTEXT_GRID_ROWS);
+	while (cells.length < CONTEXT_GRID_CELLS) cells.push({ id: "free", full: true });
 	return cells;
 }
 

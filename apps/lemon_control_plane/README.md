@@ -507,6 +507,30 @@ Job events, management projections, audit records, run history, and router
 requests never include its token or secret reference.
 
 
+## Background process jobs
+
+`process.jobs.list`, `process.jobs.inspect` (read) and `process.jobs.cancel`
+(write) expose the background processes a native session's `bash` tool started
+with `run_in_background`, for the TUI's `/jobs` sheet. All three take the
+logical `sessionKey`; the runtime resolves it to the live root session and its
+live task children, and a job is visible only when one of those sessions owns
+it. Anything else is `NOT_FOUND`, and a key with no live root answers
+`live: false` with no jobs. An ambiguous or unreadable owner is `UNAVAILABLE`,
+never an empty list.
+
+- `list` returns at most the newest 100 jobs (`total`/`truncated` report the
+  rest) with redacted commands of at most 2,048 bytes, the root session id,
+  owning subagents, and the daemon clock (`at`).
+- `inspect` adds cwd, live pid, and a redacted output tail of `tailBytes`
+  (default 16 KiB, at most 64 KiB). It reads the store directly and never
+  advances the agent's `bash_output` cursor.
+- `cancel` is limited to jobs the root session itself owns and delegates to
+  `ProcessManager.kill/2` (queued launches are cancelled, started ones
+  signalled). A settled job is `CONFLICT`. An unconfirmed termination, or a
+  provider call that failed mid-flight, is `UNAVAILABLE` with
+  `reason: "outcome_unknown"` and `retrySafe: false`; the control plane never
+  retries it.
+
 ## Session snapshot and reconciliation
 
 `sessions.snapshot` is the read-scoped recovery authority used by TUI and
@@ -758,6 +782,13 @@ It persists an empty native journal and zero-run session index; it does not send
 a prompt, enter plan mode, or manufacture history. Existing native sessions
 return `created: false`; a mismatched workspace or non-native identity is not
 silently rebound. Metadata patches still refuse unknown session IDs by default.
+
+To read a delegated task child's transcript, pass the parent's `sessionKey` and
+the child's native `sessionId` (from task details) as `childSessionId`. The
+daemon resolves it only against tasks launched under that `sessionKey` and reads
+the journal from the task's own recorded working directory; any other id is
+`NOT_FOUND`, and the response echoes `childSessionId` (a daemon that ignores the
+parameter answers with the parent's history and no echo).
 
 When reopening native conversations, pass `cwd` to `chat.history`. Its
 successful native response is authoritative, including an empty active branch

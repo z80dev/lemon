@@ -17,6 +17,7 @@ import type {
 	SettingsListTheme,
 	SymbolTheme,
 } from "@oh-my-pi/pi-tui";
+import { resolveMermaidAscii } from "@oh-my-pi/pi-tui/theme/mermaid-cache";
 import { codeLink } from "../../terminal/links.ts";
 import { ASCII_BOX, peekTheme, type Theme } from "./theme.ts";
 
@@ -142,6 +143,21 @@ export function getMarkdownTheme(): MarkdownTheme {
 			strikethrough: (text) => theme.strikethrough(text),
 			underline: (text) => theme.underline(text),
 			symbols: getSymbolTheme(),
+			// ```mermaid fences render as ASCII diagrams; strokes stay on the
+			// readable muted foreground, arrows on the accent.
+			resolveMermaidAscii: (source, maxWidth) =>
+				resolveMermaidAscii(source, {
+					maxWidth,
+					theme: {
+						fg: theme.getColorHex("text"),
+						border: theme.getColorHex("muted"),
+						line: theme.getColorHex("muted"),
+						arrow: theme.getColorHex("accent"),
+						corner: theme.getColorHex("muted"),
+						junction: theme.getColorHex("muted"),
+					},
+					colorMode: theme.colorLevel >= 3 ? "truecolor" : "ansi256",
+				}),
 			highlightCode: (code: string, lang?: string): string[] => {
 				const highlighted = highlightWithTheme(code, lang, theme);
 				if (highlighted !== null) return highlighted.split("\n");

@@ -154,4 +154,60 @@ defmodule LemonControlPlane.Methods.SessionsPromptTest do
 
     assert {:ok, %{"action" => "decline", "content" => %{}}} = Task.await(task)
   end
+
+  test "html forms need an htmlForms bind and resolve admits numeric form data", %{
+    key: key,
+    ctx: ctx
+  } do
+    html = ~s(<form><input type="number" name="n" value="2"></form>)
+    assert {:ok, _} = SessionsPromptBind.handle(%{"sessionKey" => key}, ctx)
+    refute UserPrompt.html_forms?(key)
+    assert {:error, :html_unsupported} = UserPrompt.request(key, "run", [], html: html)
+
+    assert {:ok, %{"bound" => true}} =
+             SessionsPromptBind.handle(%{"sessionKey" => key, "htmlForms" => true}, ctx)
+
+    assert UserPrompt.html_forms?(key)
+
+    assert {:error, {:invalid_request, _, nil}} =
+             SessionsPromptBind.handle(%{"sessionKey" => key, "htmlForms" => "yes"}, ctx)
+
+    task = Task.async(fn -> UserPrompt.request(key, "run", [], html: html) end)
+
+    assert_receive %Event{type: :user_prompt_requested, payload: %{"promptId" => id}} = event
+    assert {"session.prompt.requested", wire} = EventBridge.project(event)
+    assert wire["html"] == html
+    assert wire["questions"] == []
+    assert :ok = Schemas.validate_event("session.prompt.requested", wire)
+
+    base = %{
+      "promptId" => id,
+      "sessionKey" => key,
+      "runId" => "run",
+      "action" => "accept"
+    }
+
+    assert {:error, {:invalid_request, _, nil}} =
+             SessionsPromptResolve.handle(
+               Map.put(base, "content", %{"n" => %{"nested" => 1}}),
+               ctx
+             )
+
+    assert {:error, {:invalid_request, _, nil}} =
+             SessionsPromptResolve.handle(
+               base |> Map.put("content", %{"n" => 3}) |> Map.put("answers", [%{"name" => "n"}]),
+               ctx
+             )
+
+    params =
+      base
+      |> Map.put("content", %{"n" => 3, "tags" => ["a", "b"]})
+      |> Map.put("answers", [%{"name" => "n", "question" => "Count", "answer" => "3"}])
+
+    assert :ok = Schemas.validate("sessions.prompt.resolve", params)
+    assert {:ok, %{"resolved" => true}} = SessionsPromptResolve.handle(params, ctx)
+
+    assert {:ok, %{"action" => "accept", "content" => %{"n" => 3}, "answers" => [_]}} =
+             Task.await(task)
+  end
 end

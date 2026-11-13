@@ -19,6 +19,12 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | /agents | — | [query] | discover existing addressable agents and their stable IDs |
 | /tell | — | &lt;@handle&#124;stable-id&gt; &lt;message&gt; &#124; --status &lt;message-id&gt; | message an existing agent or inspect a message receipt |
 
+## agent-hub
+
+| Command | Aliases | Arguments | Description |
+| --- | --- | --- | --- |
+| /hub | /subagents | — | open the live subagent hub: status table and child transcripts |
+
 ## approvals
 
 | Command | Aliases | Arguments | Description |
@@ -44,7 +50,7 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 
 | Command | Aliases | Arguments | Description |
 | --- | --- | --- | --- |
-| /copy | — | [prompt &#124; code [n]] | Copy the last reply, a fenced code block, or the last user prompt |
+| /copy | — | [prompt &#124; code [n]] | Pick a turn or block to copy, or copy the last reply, a fenced code block, or the last user prompt |
 
 ## core
 
@@ -71,7 +77,7 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | Command | Aliases | Arguments | Description |
 | --- | --- | --- | --- |
 | /status | — | — | daemon status and health |
-| /usage | — | — | token and quota usage |
+| /usage | — | [text] | usage dashboard: quota cards and daily activity heatmap |
 | /cost | — | [range] [--by day&#124;provider&#124;model&#124;session] | spend breakdown |
 | /logs | — | [count] [level] | tail the daemon log |
 
@@ -91,6 +97,12 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | /bg | — | &lt;prompt&gt; &#124; start &lt;prompt&gt; &#124; list [status] &#124; status &lt;id&gt; &#124; result &lt;id&gt; &#124; cancel &lt;id&gt; | start and manage background tasks |
 | /btw | — | &lt;question&gt; | ask a quick side question without changing the main turn |
 | /tasks | — | [count] | list active and recent subagent tasks |
+
+## jobs
+
+| Command | Aliases | Arguments | Description |
+| --- | --- | --- | --- |
+| /jobs | — | — | show the focused session's background processes: inspect output, cancel |
 
 ## model
 
@@ -147,7 +159,7 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | Command | Aliases | Arguments | Description |
 | --- | --- | --- | --- |
 | /tree | — | [label &lt;entryId&gt; &lt;text&gt; &#124; unlabel &lt;entryId&gt;] | browse this session's message tree: switch branch, label entries, fork from one |
-| /rewind | — | [--files] | rewind before an earlier prompt after an exact preview and confirmation |
+| /rewind | — | [--files] | pick a turn on the replayed transcript and rewind before it after an exact preview and confirmation |
 
 ## skills
 
@@ -171,6 +183,11 @@ The ↑ / ↓ prompt recall persists across sessions in
 Transactions retain at most 100 prompts and 256 KiB of encoded prompt content;
 SQLite pages and its temporary rollback journal need additional disk space.
 
+- **Ctrl+R** opens a filterable list of saved prompts, newest first, with each
+  prompt's age and the folder it was submitted from. Enter fills the composer
+  (nothing is sent); Esc closes it. Prompts saved by older versions show the time
+  they were first migrated and no folder. With persistence off it lists this
+  session's prompts. Rebind via `lemon.history.search` in `[tui.keys]`.
 - `/clear-history` forgets remembered prompts, clears saved rows and removes legacy sources.
 - Set `prompt_history = false` under `[tui]` in user or project config to stop
   saving and loading history. Existing history remains until `/clear-history`.
@@ -194,10 +211,13 @@ Overlays own their keys; picker-local shortcuts are not configurable here.
 | lemon.editor.external | ctrl+g | Edit the draft in $EDITOR |
 | lemon.transcript.clear | ctrl+l | Clear the transcript |
 | lemon.queue.focus | ctrl+q | Edit the queued prompts |
-| lemon.transcript.toggleLatest | ctrl+r | Expand/collapse the latest tool card or thinking block |
+| lemon.history.search | ctrl+r | Search past prompts and fill the draft |
+| lemon.transcript.toggleLatest | alt+e | Expand/collapse the latest tool card or thinking block |
 | lemon.transcript.cycleDetail | ctrl+t | Cycle detail for every card: collapsed → expanded → default |
+| lemon.links.browse | alt+l | Browse the transcript's links and open one by its hint tag |
 | lemon.palette.open | ctrl+p | Search commands, skills and prompts |
 | lemon.tasks.toggle | alt+a | Show/hide live subagent tree |
+| lemon.agents.hub | ctrl+s | Open the agent hub: every subagent and its transcript |
 | lemon.omp.toggle | alt+m | Show/hide omp delegate sessions |
 | lemon.tools.toggle | alt+o | Collapse/expand all tool output |
 | lemon.tools.diff | alt+d | Inspect the latest edit diff |

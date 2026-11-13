@@ -22,6 +22,7 @@
  *   - nothing here calls `process.exit`; `onExit` hands that to main.ts
  */
 
+import { setTableCharts } from "@oh-my-pi/pi-tui/chat/table-chart";
 import {
 	setTranscriptActionHandler,
 	type TranscriptAction,
@@ -29,8 +30,14 @@ import {
 import { setKeybindings } from "@oh-my-pi/pi-tui/keybindings";
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { CLOSE_ACTION, pickerAction } from "@oh-my-pi/pi-tui/native/picker";
+import { expandEmoticons } from "@oh-my-pi/pi-tui/prompt/emoji-autocomplete";
 import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
-import { Container, TUI } from "@oh-my-pi/pi-tui/tui";
+import {
+	ensureThemeSync as ensurePiThemeSync,
+	getCurrentThemeName,
+	setTheme as setPiTheme,
+} from "@oh-my-pi/pi-tui/theme/theme";
+import { type Component, Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
 import { type CommandHost, type CommandRegistry, createCommandRegistry } from "./commands/index.ts";
@@ -41,12 +48,19 @@ import {
 	type PaletteSourceOptions,
 } from "./commands/palette-source.ts";
 import { parsePlanReceipt } from "./commands/plan.ts";
-import { SUBMISSION_MODES } from "./commands/registry.ts";
+import { type OverlayHost, SUBMISSION_MODES } from "./commands/registry.ts";
 import {
 	ComposerDrafts,
 	type ComposerSubmission,
 	type SubmissionDisposition,
 } from "./composer/drafts.ts";
+import {
+	createModelMentionSource,
+	type ModelMentionSource,
+	mayContainModelMention,
+	resolveModelMentions,
+	switchToMentionedModel,
+} from "./composer/model-mentions.ts";
 import type { PromptHistoryStore } from "./composer/prompt-history.ts";
 import { type NotificationMode, resolveNotifications } from "./config.ts";
 import { editInExternalEditor } from "./external-editor.ts";
@@ -79,6 +93,7 @@ import { detectTerminalCapabilities } from "./terminal/capabilities.ts";
 import { copyNotice, copyText } from "./terminal/clipboard.ts";
 import { type ForkLaunch, openForkSession } from "./terminal/fork.ts";
 import { TerminalIntegration } from "./terminal/integration.ts";
+import { openLink } from "./terminal/open-link.ts";
 import { isApprovedDecision } from "./ui/components/approval-panel.ts";
 import { Banner } from "./ui/components/banner.ts";
 import { ContextPanelComponent } from "./ui/components/context-panel.ts";
@@ -112,10 +127,13 @@ import {
 import { TaskTreeController } from "./ui/controllers/task-tree-controller.ts";
 import { ToolInspector } from "./ui/controllers/tool-inspector.ts";
 import { UserPromptController } from "./ui/controllers/user-prompt-controller.ts";
+import { createHistorySearch, createHistorySource } from "./ui/history-search.ts";
+import { createLinkBrowser } from "./ui/link-browser.ts";
 import { RowFrameProvider } from "./ui/row-frame-provider.ts";
 import { AppearanceController, type ThemePreference } from "./ui/theme/appearance.ts";
 import { getTheme } from "./ui/theme/theme.ts";
 import { getEditorTheme } from "./ui/theme/tui-adapters.ts";
+import { blocksToTranscriptEntries } from "./ui/transcript-entries.ts";
 
 export interface AppShellOptions {
 	url: string;
@@ -146,6 +164,8 @@ export interface AppShellOptions {
 	/** Where sent prompts persist across sessions; unset keeps ↑ recall in memory only. */
 	promptHistory?: PromptHistoryStore;
 	notifications?: NotificationMode;
+	/** `[tui] vim_mode`: start the composer in Vim-style modal editing. */
+	vimMode?: boolean;
 	keybindings?: unknown;
 	/** Local roots for skills, prompts and file commands; tests inject a fixture home. */
 	resources?: Omit<PaletteSourceOptions, "cwd">;
@@ -184,6 +204,7 @@ export class AppShell {
 	readonly #statusBar: StatusBar;
 	readonly #editor: CustomEditor;
 	readonly #modelPicker: ModelPicker;
+	readonly #modelMentions: ModelMentionSource;
 	readonly #switcher: SessionSwitcher;
 	readonly #queuePanel: QueuePanelComponent;
 	readonly #host: CommandHost;
@@ -201,6 +222,7 @@ export class AppShell {
 
 	readonly #onExit: ((code: number) => void) | undefined;
 	readonly #cwd: string;
+	readonly #promptHistory: PromptHistoryStore | undefined;
 	readonly #forkConnection: Pick<ForkLaunch, "url" | "operatorToken">;
 	readonly #terminalIntegration: TerminalIntegration;
 
@@ -228,6 +250,7 @@ export class AppShell {
 		this.#banner = new Banner(options.version ?? "dev");
 		this.#onExit = options.onExit;
 		this.#cwd = options.cwd ?? process.cwd();
+		this.#promptHistory = options.promptHistory;
 		this.#forkConnection = { url: options.url, operatorToken: options.operatorToken };
 		this.client =
 			options.client ?? new ControlPlaneClient({ url: options.url, token: options.operatorToken });
@@ -249,10 +272,13 @@ export class AppShell {
 				if (this.tui.nativeRendering) this.tui.renderNow();
 			},
 		);
+		this.#modelMentions = createModelMentionSource({ store: this.store, methods: this.methods });
 		// Editor construction needs a theme: pi-tui ships no defaults.
 		const controlKeys: { model?: string; thinking?: string } = {};
 		this.#editor = new CustomEditor({
 			promptHistory: options.promptHistory,
+			vimMode: options.vimMode,
+			modelMentions: this.#modelMentions,
 			theme: getEditorTheme(),
 			onSubmit: async (text) => {
 				const sessionKey = this.store.focusedKey;
@@ -282,6 +308,10 @@ export class AppShell {
 			},
 			onAbort: () => this.#abortActiveRun(),
 			onQuit: (code) => this.requestExit(code),
+			// Esc Esc on an empty composer opens the rewind picker, as /rewind does.
+			onRewind: () => {
+				if (!this.#hasOverlay()) void this.submit("/rewind");
+			},
 			onCycleMode: () => this.cycleSubmissionMode(),
 			notice: (text, level) => this.events.notice(text, level),
 			requestRender: () => this.tui.requestRender(),
@@ -324,6 +354,14 @@ export class AppShell {
 			notice: (text, level) => this.events.notice(text, level),
 			focusEditor: () => this.#restoreFocus(),
 			refreshStatus: () => this.#renderStatus(),
+			presentOverlay: (build) => this.#presentOverlay(build),
+			isOverlayOpen: () => this.selectors.isOpen,
+			copyText: (text) => void this.#copyText(text),
+			stageDraft: (text) => {
+				const draft = this.#editor.getExpandedText();
+				this.#editor.setText(draft.trim() === "" ? text : `${draft}\n\n${text}`);
+				this.tui.requestRender();
+			},
 		});
 		this.userPrompts = new UserPromptController({
 			client: this.client,
@@ -417,6 +455,9 @@ export class AppShell {
 			preference: options.themePreference,
 			onChange: () => this.#themeChanged(),
 		});
+		// Numeric Markdown tables in replies get a chart drawn under them where
+		// the terminal shows images (omp's `tui.autoGraph`, without its LLM planner).
+		setTableCharts("always");
 		this.#host = this.#buildHost();
 		this.commands = createCommandRegistry({
 			openExternalEditor: () => this.openExternalEditor(),
@@ -468,6 +509,8 @@ export class AppShell {
 			openExternalEditor: () => this.openExternalEditor(),
 			clearTranscript: () => this.#host.clearTranscript(),
 			focusQueue: () => this.focusQueue(),
+			openHistorySearch: () => this.#openHistorySearch(),
+			openLinkBrowser: () => this.#openLinkBrowser(),
 			toggleLatest: () => this.events.toggleLatestBlock(),
 			cycleDetail: () => this.events.cycleAccordionOverride(),
 			openCommandPalette: (mode) => this.#palette.open(undefined, mode),
@@ -478,6 +521,9 @@ export class AppShell {
 				this.events.toggleToolOutputs();
 			},
 			openDiff: () => this.#toolInspector.open("diff"),
+			openAgentHub: async () => {
+				await this.submit("/hub");
+			},
 			copyLastReply: async () => {
 				await this.submit("/copy");
 			},
@@ -681,6 +727,7 @@ export class AppShell {
 		// After tui.start(), so the terminal is listening when pi-tui's OSC 11
 		// query comes back with the background color.
 		this.appearance.start();
+		this.#syncPiTheme();
 		this.#statusBar.start();
 		this.#renderStatus();
 		try {
@@ -951,6 +998,62 @@ export class AppShell {
 		this.#focusEditor();
 	}
 
+	/** Ctrl+R: search past prompts; Enter fills the draft, Esc leaves it untouched. */
+	#openHistorySearch(): void {
+		const source = createHistorySource({
+			store: this.#promptHistory,
+			memory: () => this.#editor.history,
+			onStorageError: (error) =>
+				this.events.notice(
+					`prompt history search fell back to this session's prompts (${describeError(error)})`,
+					"warning",
+				),
+		});
+		let close = () => {};
+		close = this.selectors.open(
+			createHistorySearch({
+				source,
+				onSelect: (prompt) => {
+					close();
+					this.#editor.setText(prompt);
+					this.tui.requestRender();
+				},
+				onCancel: () => close(),
+				repaint: () => this.selectors.repaint(),
+			}),
+		);
+	}
+
+	/**
+	 * Alt+L: fullscreen link browser over the focused transcript. Every `http(s)` and local file
+	 * link is tagged; typing a tag (or clicking a label) opens it, Esc closes.
+	 */
+	#openLinkBrowser(): void {
+		const blocks = this.store.focused.blocks;
+		if (blocks.length === 0) {
+			this.events.notice("no links yet — the transcript is empty");
+			return;
+		}
+		let close = () => {};
+		const browser = createLinkBrowser({
+			entries: blocksToTranscriptEntries(blocks),
+			ui: this.tui,
+			cwd: this.#cwd,
+			requestRender: () => this.tui.requestRender(),
+			onActivate: (url) =>
+				void openLink(url).then((result) => browser.setStatus(result.message, result.ok)),
+			onClose: () => close(),
+		});
+		if (!browser.hasLinks(this.tui.terminal.columns)) {
+			browser.dispose();
+			this.events.notice("no links in this transcript");
+			return;
+		}
+		// The selector controller's close hook, not the component's own Esc path, disposes the
+		// browser: another overlay may replace it, and the registered link schemes must not leak.
+		close = this.selectors.open(browser, {}, () => browser.dispose());
+	}
+
 	#toggleTaskTree(): void {
 		this.#taskTree.toggle();
 		this.#taskTree.panel.focused = this.#taskTree.panel.visible;
@@ -1169,7 +1272,37 @@ export class AppShell {
 	 * remains reaches {@link sendPrompt}.
 	 */
 	async submit(value: string): Promise<SubmissionDisposition> {
-		return await this.commandController.handleSubmit(value);
+		const prompt = await this.#applyPromptMarkup(value);
+		if (prompt === undefined) return "rejected";
+		if (prompt.trim().length === 0 && prompt !== value) return "accepted";
+		return await this.commandController.handleSubmit(prompt);
+	}
+
+	/**
+	 * Submit-time composer markup, for model prompts only: emoticons typed without
+	 * a trailing space become emoji, and a `^provider:model` mention switches the
+	 * focused session to that model and leaves the prompt. Undefined means the
+	 * switch failed and the draft must stay as typed.
+	 */
+	async #applyPromptMarkup(value: string): Promise<string | undefined> {
+		if (/^\s*[!/]/.test(value)) return value;
+		let text = expandEmoticons(value);
+		if (!mayContainModelMention(text)) return text;
+		const entries = await this.#modelMentions.load();
+		const mentions = resolveModelMentions(text, entries);
+		if (!mentions.model) return text;
+		const switched = await switchToMentionedModel(
+			{
+				methods: this.methods,
+				session: this.store.focused,
+				refreshStatus: () => this.#renderStatus(),
+				notice: (message, level) => this.events.notice(message, level),
+			},
+			mentions.model,
+		);
+		if (!switched) return undefined;
+		text = mentions.text;
+		return text;
 	}
 
 	async #submitAttachments(
@@ -1685,6 +1818,7 @@ export class AppShell {
 			openModelPicker: () => this.#modelPicker.open(),
 			openCommandPalette: (query) => this.#palette.open(query),
 			toggleTaskTree: () => this.#toggleTaskTree(),
+			taskFeed: (sessionKey) => this.#taskTree.feed(sessionKey),
 			openOmpPanel: () => this.#openOmpPanel(),
 			openToolOutput: (mode) => this.#toolInspector.open(mode),
 			openContextPanel: (usage) => {
@@ -1697,6 +1831,7 @@ export class AppShell {
 					}),
 				);
 			},
+			presentOverlay: (build) => this.#presentOverlay(build),
 			themeChanged: () => this.#themeChanged(),
 			setThemePreference: (preference: ThemePreference) =>
 				this.appearance.setPreference(preference),
@@ -1713,6 +1848,21 @@ export class AppShell {
 		};
 	}
 
+	/** The `presentOverlay` seam: `build`'s component as the one fullscreen overlay. */
+	#presentOverlay(build: (host: OverlayHost) => Component): void {
+		let close = () => {};
+		const component = build({
+			close: () => close(),
+			repaint: () => this.selectors.repaint(),
+			rows: () => this.tui.terminal.rows,
+			columns: () => this.tui.terminal.columns,
+			tui: this.tui,
+		});
+		// Overlays holding timers or subscriptions release them on any close,
+		// including another overlay replacing this one.
+		close = this.selectors.open(component, {}, () => component.dispose?.());
+	}
+
 	/**
 	 * Repaint everything in the new palette. The theme object is mutated rather
 	 * than replaced, so the style functions components captured keep working —
@@ -1720,8 +1870,25 @@ export class AppShell {
 	 * the tree-wide invalidate and the forced redraw.
 	 */
 	#themeChanged(): void {
+		this.#syncPiTheme();
 		this.tui.invalidate();
 		this.tui.requestRender(true);
+	}
+
+	/**
+	 * pi-tui overlays (history search, plan review, replay pickers, usage
+	 * dashboard, svg figures) read pi-tui's own theme singleton, not Lemon's
+	 * palette: keep its built-in dark/light theme on Lemon's appearance.
+	 */
+	#syncPiTheme(): void {
+		// Components built before the async load below still find a theme.
+		ensurePiThemeSync();
+		const name = this.appearance.appearance;
+		if (getCurrentThemeName() === name) return;
+		void setPiTheme(name).then(() => {
+			this.tui.invalidate();
+			this.tui.requestRender(true);
+		});
 	}
 
 	/** A two-option overlay for a decision that cannot be undone. */

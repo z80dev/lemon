@@ -10,6 +10,11 @@ import {
 } from "@oh-my-pi/pi-tui/keybindings";
 import { Key, type KeyId, parseKey } from "@oh-my-pi/pi-tui/keys";
 
+/**
+ * `off` is silent; `bell` rings BEL only; `osc` writes the terminal's OSC
+ * notification only; `auto` also routes through terminal multiplexers and, for
+ * terminals that can only bell, the Linux desktop notification service.
+ */
 export type NotificationMode = "auto" | "osc" | "bell" | "off";
 
 /** Environment wins over the global TUI setting; retain the original 0/1 switch. */
@@ -29,6 +34,11 @@ export function resolveNotifications(
  */
 export function resolvePromptHistory(configured: unknown): boolean {
 	return (configured ?? true) === true;
+}
+
+/** `[tui] vim_mode`: off unless the setting is exactly `true`. */
+export function resolveVimMode(configured: unknown): boolean {
+	return configured === true;
 }
 
 /**
@@ -62,6 +72,8 @@ export interface LemonConfig {
 		notifications?: NotificationMode;
 		/** Persist ↑ recall to `~/.lemon/tui-history/history.sqlite3`; `false` turns it off (default on). */
 		prompt_history?: boolean;
+		/** Start the composer in Vim-style modal editing (default off). */
+		vim_mode?: boolean;
 		keys?: unknown;
 	};
 }

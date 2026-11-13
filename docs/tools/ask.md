@@ -18,6 +18,29 @@ still connected. Headless sessions do not silently choose an answer.
 }
 ```
 
+Instead of `questions`, a call may pass `html`: one agent-written `<form>` (at
+most 64 KiB, at least one input/select/textarea, no `type="password"`). Exactly
+one of `html` or `questions` is required; both or neither is an argument error.
+Use `questions` for quick choices or free text, and `html` for several related
+answers, typed fields (number, date, textarea) or richer context. Radios,
+checkboxes, `<select>`, `<input>`, `<textarea>` with `name` attributes,
+`<fieldset>`/`<legend>` and paragraphs are rendered; scripts, styles and
+buttons are ignored (the UI adds Submit and Cancel).
+
+```json
+{"html": "<form><fieldset><legend>Database</legend><label><input type=\"radio\" name=\"db\" value=\"sqlite\" checked> SQLite</label><label><input type=\"radio\" name=\"db\" value=\"pg\"> Postgres</label></fieldset></form>"}
+```
+
+A form result's text lists each field as `question: answer` (plus any notes the
+user attached to selected options) followed by `Raw form data: {json}`;
+`details` carries `status: "answered"`, `answers`, `notes` and `data` (the form
+data: text, numbers for number/range inputs, arrays for checkbox groups).
+
+Forms are only rendered by surfaces that declare support: the TUI binds with
+`htmlForms: true`. ACP elicitation and Telegram/Discord surfaces cannot render
+them, so an `html` call there fails immediately with
+`error_type: "unsupported_surface"` (retry with `questions`) rather than waiting.
+
 A call accepts 1–8 questions with unique IDs. Each question has `id`, `question`
 and `options` (at most 20, with unique labels). An empty options list requests
 free text. Optional `header` and option `description` supply explanatory text.
@@ -62,7 +85,11 @@ transitions. Repeated or stale answers cannot consume another prompt. This
 state is volatile; it is neither a second session journal nor an approval store.
 
 The authenticated WebSocket methods are `sessions.prompt.bind` (optional
-`enabled: false` unbinds) and `sessions.prompt.resolve`. Both require operator
+`enabled: false` unbinds; `htmlForms: true` declares form support, which
+`UserPrompt.bind(..., html_forms: true)` records) and `sessions.prompt.resolve`
+(`content` admits numbers; form clients also send readable `answers` and `notes`
+listings). A form request is `session.prompt.requested` with `html` and an empty
+`questions` list. Both methods require operator
 write authority and use the actual `ctx.conn_pid`, never a request-supplied PID.
 `session.prompt.requested` and `session.prompt.resolved` use the normal event
 bridge, like execution approval events. Requested events include the question

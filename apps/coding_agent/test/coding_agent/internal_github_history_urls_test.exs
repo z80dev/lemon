@@ -52,13 +52,67 @@ defmodule CodingAgent.InternalGitHubHistoryUrlsTest do
     end
 
     result =
-      read("pr://a/b/42", cwd,
+      read("issue://a/b/42", cwd,
         github_gh: "gh-test",
         github_command_fn: fn _, _, _ -> {"not authenticated", 1} end,
         github_http_fn: http
       )
 
     assert text(result) =~ "Description"
+  end
+
+  test "pr summary includes state, author, body and changed files via gh", %{tmp_dir: cwd} do
+    pr = Map.put(issue(), "pull_request", %{"url" => "x"})
+
+    cmd = fn
+      "gh-test", ["api", "--hostname", "github.com", "repos/a/b/issues/123"], options ->
+        assert options[:cd] == cwd
+        {Jason.encode!(pr), 0}
+
+      "gh-test", ["api", "--hostname", "github.com", "repos/a/b/issues/123/comments" <> _], _ ->
+        {"[]", 0}
+
+      "gh-test", ["api", "--hostname", "github.com", "repos/a/b/pulls/123/files" <> _], _ ->
+        {Jason.encode!([
+           %{"filename" => "lib/x.ex", "status" => "modified", "additions" => 2, "deletions" => 1}
+         ]), 0}
+    end
+
+    result =
+      read("pr://a/b/123", cwd,
+        github_gh: "gh-test",
+        github_command_fn: cmd,
+        github_http_fn: fn _ -> flunk("unexpected HTTP") end
+      )
+
+    assert result.trust == :untrusted
+    body = text(result)
+    assert body =~ "Pull request"
+    assert body =~ "@author"
+    assert body =~ "Description"
+    assert body =~ "## Changed files (1)"
+    assert body =~ "0: lib/x.ex (modified, +2/-1)"
+  end
+
+  test "pr summary survives a failing file list", %{tmp_dir: cwd} do
+    http = fn url ->
+      cond do
+        String.contains?(url, "/pulls/") -> {:error, :nope}
+        String.contains?(url, "/comments") -> {:ok, []}
+        true -> {:ok, issue()}
+      end
+    end
+
+    body = text(read("pr://a/b/42", cwd, github_gh: nil, github_http_fn: http))
+    assert body =~ "Description"
+    refute body =~ "Changed files"
+  end
+
+  test "missing gh and failed HTTP yield an actionable error", %{tmp_dir: cwd} do
+    assert {:error, message} =
+             read("pr://a/b/42", cwd, github_gh: nil, github_http_fn: fn _ -> {:error, :down} end)
+
+    assert message =~ "gh"
   end
 
   test "lists zero-based diff files and renders single and all patches", %{tmp_dir: cwd} do
