@@ -38,8 +38,12 @@ defmodule CodingAgent.Session.Planning do
   @plan_write_tools ["write", "edit"]
   # Tools that cannot change the working tree or system. Everything else is
   # blocked at execution time while plan mode is on. `tool_search` only reads the
-  # session's frozen tool catalog.
-  @read_only_tools ~w(read read_skill recall grep find ls websearch webfetch ask tool_search)
+  # session's frozen tool catalog; `wait` only observes owned task children.
+  @read_only_tools ~w(read read_skill recall grep find ls websearch webfetch ask tool_search wait)
+  # Tools that read this gate (passed as the `:plan_gate` tool option) and
+  # enforce plan mode themselves: `task` launches only read-only children and
+  # refuses messaging, worktrees and merge-back while the gate is set.
+  @self_gated_tools ~w(task)
   @resolve_timeout_ms 30_000
 
   def context_boundary?(%SessionEntry{type: :custom, custom_type: @entry_type}), do: true
@@ -47,6 +51,11 @@ defmodule CodingAgent.Session.Planning do
 
   @doc "Shared gate read by plan-mode tool wrappers (1 = plan mode active)."
   def new_gate, do: :atomics.new(1, signed: false)
+
+  @doc "Whether the plan-mode `gate` is set; a missing gate is never active."
+  @spec active?(:atomics.atomics_ref() | nil) :: boolean()
+  def active?(nil), do: false
+  def active?(gate), do: planning?(gate)
 
   defp empty,
     do: %{"mode" => "code", "path" => nil, "approved" => nil, "execution_model" => nil}
@@ -440,7 +449,9 @@ defmodule CodingAgent.Session.Planning do
     guarded ++ plan_only ++ [intercept_private_tool(propose_tool(context), context)]
   end
 
-  defp guard(%AgentTool{name: name} = tool, _context) when name in @read_only_tools, do: tool
+  defp guard(%AgentTool{name: name} = tool, _context)
+       when name in @read_only_tools or name in @self_gated_tools,
+       do: tool
 
   # The disclosure bridge is judged by the tool it reaches, never by its own
   # name: a bridged read stays allowed, a bridged mutation is blocked under its
@@ -456,7 +467,7 @@ defmodule CodingAgent.Session.Planning do
         not planning?(context.gate) ->
           execute.(id, params, signal, on_update)
 
-        target in @read_only_tools or todo_read?(target, args) ->
+        target in @read_only_tools or target in @self_gated_tools or todo_read?(target, args) ->
           execute.(id, params, signal, on_update)
 
         target in @plan_write_tools and Map.has_key?(private_writes, target) ->
@@ -489,7 +500,7 @@ defmodule CodingAgent.Session.Planning do
       end
     end
 
-    %{tool | execute: wrapped}
+    %{tool | execute: wrapped, on_stream: nil}
   end
 
   defp todo_read?("todo", %{"action" => action}),
@@ -720,7 +731,7 @@ defmodule CodingAgent.Session.Planning do
     """
     ## Plan mode (read-only)
     Plan mode is active. The working tree and system are read-only:
-    - NEVER create, edit, delete, or rename working-tree files, run state-changing commands, or delegate execution. Only read-only tools run; any other tool returns a plan-mode error.
+    - NEVER create, edit, delete, or rename working-tree files, run state-changing commands, or delegate execution. Only read-only tools run; any other tool returns a plan-mode error. When available, `task` may still launch read-only exploration children (for example `scout`); they get read-only tools and cannot spawn, use worktrees or merge.
     - The plan directory `#{context.plan_dir}` is the only writable location. Create the plan as `#{context.plan_dir}/<slug>-plan.md` with `write` (`<slug>`: short kebab-case task name, e.g. `auth-token-refresh`) and refine it with `edit`. Record findings as you learn them instead of writing everything at the end.
     #{existing}- When the plan is decision-complete, call `#{@propose_tool}` with its path and a short title. The user then approves it (plan mode ends and you execute it with full tool access) or asks for refinement.
     - NEVER ask the user in prose to approve the plan or leave plan mode; approval happens only through `#{@propose_tool}`.

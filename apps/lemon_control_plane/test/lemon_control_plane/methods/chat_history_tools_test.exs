@@ -6,15 +6,6 @@ defmodule LemonControlPlane.Methods.ChatHistoryToolsTest do
 
   defmodule Provider do
     def session_history(_key, _cwd), do: {:ok, Process.get(:native_history_entries, [])}
-
-    def child_session_history(key, child_id) do
-      send(Process.get(:history_observer), {:child_history, key, child_id})
-
-      case Process.get(:child_history) do
-        {^key, ^child_id, entries} -> {:ok, entries}
-        _ -> {:error, :session_not_found}
-      end
-    end
   end
 
   setup do
@@ -127,88 +118,5 @@ defmodule LemonControlPlane.Methods.ChatHistoryToolsTest do
     assert bash["cancelled"]
     assert bash["content"] == "STARTED\n"
     assert bash["details"]["outcome"] == "unknown"
-  end
-
-  describe "childSessionId" do
-    setup do
-      Process.put(:history_observer, self())
-
-      Process.put(
-        :child_history,
-        {"agent:default:parent", "child-native-id",
-         [
-           %{
-             type: :message,
-             id: "child-user",
-             message: %{"role" => "user", "content" => "child prompt", "timestamp" => 1}
-           },
-           %{
-             type: :message,
-             id: "child-answer",
-             message: %{"role" => "assistant", "content" => "child answer", "timestamp" => 2}
-           }
-         ]}
-      )
-
-      :ok
-    end
-
-    test "returns the delegated child's transcript scoped to the caller's session" do
-      assert {:ok,
-              %{
-                "sessionKey" => "agent:default:parent",
-                "childSessionId" => "child-native-id",
-                "messages" => messages
-              }} =
-               ChatHistory.handle(
-                 %{
-                   "sessionKey" => "agent:default:parent",
-                   "childSessionId" => "child-native-id",
-                   "cwd" => File.cwd!()
-                 },
-                 %{}
-               )
-
-      assert_received {:child_history, "agent:default:parent", "child-native-id"}
-      assert Enum.map(messages, & &1["role"]) == ["user", "assistant"]
-      assert Enum.map(messages, & &1["content"]) == ["child prompt", "child answer"]
-    end
-
-    test "pages like the owned history" do
-      assert {:ok, %{"messages" => [last]}} =
-               ChatHistory.handle(
-                 %{
-                   "sessionKey" => "agent:default:parent",
-                   "childSessionId" => "child-native-id",
-                   "limit" => 1
-                 },
-                 %{}
-               )
-
-      assert last["content"] == "child answer"
-    end
-
-    test "another session's key or an unknown child is not found, never a fallback read" do
-      for params <- [
-            %{"sessionKey" => "agent:default:stranger", "childSessionId" => "child-native-id"},
-            %{"sessionKey" => "agent:default:parent", "childSessionId" => "other-child"}
-          ] do
-        assert {:error, {:not_found, _message, _details}} = ChatHistory.handle(params, %{})
-      end
-    end
-
-    test "rejects a non-string childSessionId" do
-      assert {:error, {:invalid_params, _message, _}} =
-               ChatHistory.handle(
-                 %{"sessionKey" => "agent:default:parent", "childSessionId" => 7},
-                 %{}
-               )
-
-      assert {:error, {:invalid_params, _message, _}} =
-               ChatHistory.handle(
-                 %{"sessionKey" => "agent:default:parent", "childSessionId" => ""},
-                 %{}
-               )
-    end
   end
 end

@@ -99,25 +99,12 @@ on reconnect and when opening or changing models. Older daemons without
   Alt+D or `/diff` opens the latest edit diff. Use arrows, Page Up/Down, or Home/End
   (`g`/`G`) to navigate and `d` to switch between diff and raw output. The viewer
   preserves the daemon's bounded receipt rather than silently stopping at card height.
-- Alt+A or `/tasktree` opens session-scoped child progress with real parent/child
-  lineage, role, current activity, elapsed time, and independent terminal states.
-  Arrow keys scroll the bounded panel; Escape returns to the draft. Completed
-  launch receipts never imply that their children have finished.
-- Ctrl+S or `/hub` (alias `/subagents`) opens the agent hub, omp's Agent Hub for
-  Lemon's subagents: a fullscreen table of every child of the focused session
-  (status, age, persona, task, latest progress, with parent/child indentation)
-  that updates live as children launch, progress and finish. `↑↓`/`PgUp`/`PgDn`
-  select, `g`/`G` jump, Enter opens the child's transcript, Esc/`q` closes.
-  The transcript is the child's own journal, read with `chat.history` and
-  `childSessionId` under the focused session's key (the daemon only serves
-  children of tasks that session launched; messages, assistant Markdown,
-  tool calls paired with their results), scrolls with `↑↓`/`PgUp`/`PgDn`/`g`/`G`,
-  follows the newest line until you scroll up, and refreshes every ~1.5 s only
-  while the child runs (one last read when it ends; three failed reads stop the
-  polling and `r` retries). Esc returns to the table. A child that has not
-  reported a session yet says so instead of showing the parent's text. Rebind
-  with `lemon.agents.hub` under `[tui.keys]`; Alt+A (`/tasktree`) stays the
-  compact in-chat panel.
+- Alt+A or `/hub` (aliases `/tasktree`, `/subagents`) opens the Agent Hub: the
+  focused session's `task` subagents, nested children included, with status,
+  name/persona, model, clock, current activity and usage. Enter opens an agent's
+  transcript with a message line that steers, follows up or revives it; `x`
+  cancels. See [Agent Hub](#agent-hub). Completed launch receipts never imply
+  that their children have finished.
 - Alt+M or `/omp` opens the omp delegate panel: live and recent omp (oh-my-pi)
   processes the daemon runs, with status, activity, tools, todos, subagents,
   usage/cost/context and their latest text; Enter shows detail, `s`/`f` steer or
@@ -382,7 +369,7 @@ for runs). Thinking is a live spinner section that folds to "Thought for Ns".
 Compaction results render as a compaction divider. While a run works, the dock
 shows a working row whose **Stop** takes Esc's abort path. Queued prompts are
 pills with an **Edit** control, and approvals offer clickable decision buttons
-with the full action and a countdown. The Alt+A task tree is a card of subagent
+with the full action and a countdown. The Alt+A Agent Hub is a card of subagent
 nodes. Copy uses the same clipboard path as `/copy` below.
 
 Tool calls are omp's semantic tool cards rather than painted text: shell calls
@@ -667,6 +654,51 @@ Unrecognized inference prompts fail instead of contacting a provider. Send
 SIGTERM to the PID in the private state file when finished; the launcher removes
 temporary state. Manual UI observations are separate evidence from smoke output.
 
+### Agent Hub
+
+Alt+A (configurable as `lemon.tasks.toggle` under `[tui.keys]`) or `/hub`
+(aliases `/tasktree`, `/subagents`)
+opens and closes the hub above the editor. It lists the focused session's
+native `task` subagents, including children those agents launched. Rows show
+status (`queued`, `running`, `idle`, `parked`, `completed`, `failed`,
+`cancelled`), name and `@persona`, model, a clock (running time; time since the
+last turn for idle and parked agents; duration once finished), the current
+activity and usage (`tok`, `$`, `req`) where the daemon measured it. The header
+sums status and usage. Unmeasured usage is omitted, never shown as zero.
+
+| Key | Roster | Transcript |
+| --- | --- | --- |
+| ↑ / ↓, Page Up / Down (`j` / `k` in the roster) | Select an agent | Scroll |
+| `g` / `G`, Home / End | First / last agent | Home / End: top / bottom |
+| Enter | Open the transcript and message line | Send the typed message |
+| `t` | Toggle parent/child tree and flat order (running first) | — |
+| `/` | Filter by task ID, name, persona or assignment | — |
+| `x` | Cancel the selected agent (press twice) | — |
+| `r` | Refresh now | — |
+| `q` | Close the hub | — |
+| Esc | Clear the filter, then close the hub | Clear the message, then return |
+
+The transcript is the same bounded visible history the parent agent reads
+through `history://<task_id>` (status, assignment, the latest updates and the
+result; never hidden reasoning), rendered as inert text. Typing in it messages
+the agent with the task tool's own delivery: a running agent is steered at its
+next turn boundary, an idle agent starts a follow-up turn, and a parked agent is
+revived from its saved session. Its reply still reaches the parent session as a
+follow-up. A message whose outcome is unknown stays on the line with a warning
+and is never resent automatically. Cancellation is final: the agent and its
+children stop and cannot be revived, but the transcript stays readable.
+
+The transcript follows its newest line until you scroll up, and again once you
+scroll back to the bottom. While open, the hub re-reads the daemon's
+`subagents.list` roster every few seconds, and the open transcript with it until
+the agent reports a final status (one last read) or three reads in a row fail
+(the error stays next to the text last loaded; reopen the transcript to retry).
+Streamed task events update activity in between. Messages and
+cancellation are never queued offline. Against a daemon without the
+`subagents.*` methods the hub shows streamed task progress only. The methods are
+scoped to the session key: another session's task IDs are not found. See
+[the control-plane reference](../../docs/reference/control-plane.md#subagentslist-subagentstranscript-subagentssend-subagentscancel).
+
 ### Startup session flags
 
 | Flag | Behavior |
@@ -815,15 +847,17 @@ This is a prepared smoke entrypoint, not a claim that it has been executed.
 
 
 The fake control plane (`src/dev/fake-server.ts`) powers the tests and the
-gallery; no daemon or credentials are needed for either. Profile and session
-lifecycle verticals also have authenticated real-Bandit proofs that launch the
-production typed Bun client against isolated server-owned state:
+gallery; no daemon or credentials are needed for either. Profile, session
+lifecycle, blueprint and Agent Hub verticals also have authenticated real-Bandit
+proofs that launch the production typed Bun client against isolated server-owned
+state (the Agent Hub proof uses the real coding-agent task runtime):
 
 ```sh
 cd ../..
 MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_profiles_wire_e2e_test.exs --seed 1
 MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_sessions_wire_e2e_test.exs --seed 1
 MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_blueprints_wire_e2e_test.exs --seed 1
+MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_subagents_wire_e2e_test.exs --seed 1
 ```
 
 The standalone retry smoke drives the actual AppShell with a memory terminal.

@@ -38,6 +38,22 @@ defmodule LemonCore.AgentRuntime.Provider do
   @callback get_task(task_id()) :: {:ok, map(), [map()]} | term()
 
   @doc """
+  Agent Hub roster of a root session's task subagents (nested included):
+  `{:ok, [agent]}` with bounded display fields and no prompts or paths.
+  """
+  @callback subagents_list(session_key()) :: {:ok, [map()]} | {:error, atom()}
+
+  @doc "Bounded visible transcript of one subagent; `{:error, :not_found}` for foreign IDs."
+  @callback subagent_transcript(session_key(), task_id()) :: {:ok, map()} | {:error, atom()}
+
+  @doc "Operator steer/follow-up/revive of one subagent: `{:ok, delivery}`."
+  @callback subagent_send(session_key(), task_id(), String.t()) ::
+              {:ok, atom()} | {:error, atom()}
+
+  @doc "Operator cancellation of one subagent."
+  @callback subagent_cancel(session_key(), task_id()) :: :ok | {:error, atom()}
+
+  @doc """
   Task-list progress for a session, including an `:actionable_count` key.
 
   Returns `nil` when the session has no task-list state.
@@ -55,14 +71,6 @@ defmodule LemonCore.AgentRuntime.Provider do
 
   @doc "Loads persisted native session messages for replay."
   @callback session_history(session_key(), Path.t()) :: {:ok, [map()]} | {:error, term()}
-
-  @doc """
-  Loads a delegated child's persisted native branch by its native session id.
-  Succeeds only when `child_session_id` belongs to a task launched under
-  `session_key`; anything else is `{:error, :session_not_found}`.
-  """
-  @callback child_session_history(session_key(), String.t()) ::
-              {:ok, [map()]} | {:error, term()}
 
   @doc """
   Materializes the selected native branch's complete todo list, never its cache.
@@ -245,12 +253,15 @@ defmodule LemonCore.AgentRuntime.Provider do
                       user_prompt_bind: 4,
                       user_prompt_resolve: 5,
                       get_task: 1,
+                      subagents_list: 1,
+                      subagent_transcript: 2,
+                      subagent_send: 3,
+                      subagent_cancel: 2,
                       todo_progress: 1,
                       feature_progress: 1,
                       compact_session: 2,
                       native_session_owner: 1,
                       session_history: 2,
-                      child_session_history: 2,
                       session_todos: 2,
                       session_recovery_snapshot: 2,
                       session_addressing_context: 1,

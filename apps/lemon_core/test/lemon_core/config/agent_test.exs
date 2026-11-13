@@ -110,9 +110,12 @@ defmodule LemonCore.Config.AgentTest do
   end
 
   describe "task configuration" do
-    test "defaults to 200 requests and an enabled wrap-up notice" do
+    test "defaults to 200 requests, an enabled wrap-up notice and speculative launch" do
       assert Agent.resolve(%{}).task.request_budget == 200
       assert Agent.resolve(%{}).task.request_budget_notice
+      assert Agent.resolve(%{}).task.per_call_model == "off"
+      assert Agent.resolve(%{}).task.per_call_model_allow == nil
+      assert Agent.resolve(%{}).task.speculative_launch
     end
 
     test "reads [runtime.task]" do
@@ -125,9 +128,12 @@ defmodule LemonCore.Config.AgentTest do
               "idle_ttl_ms" => 5_000,
               "request_budget" => 12,
               "request_budget_notice" => false,
+              "speculative_launch" => false,
               "worktree_merge" => "patch",
               "disabled_agents" => ["reviewer"],
-              "agent_models" => %{"scout" => "@smol"}
+              "agent_models" => %{"scout" => "@smol"},
+              "per_call_model" => "on",
+              "per_call_model_allow" => ["openai/gpt-4o", "@smol"]
             }
           }
         })
@@ -138,9 +144,12 @@ defmodule LemonCore.Config.AgentTest do
                idle_ttl_ms: 5_000,
                request_budget: 12,
                request_budget_notice: false,
+               speculative_launch: false,
                worktree_merge: "patch",
                disabled_agents: ["reviewer"],
-               agent_models: %{"scout" => "@smol"}
+               agent_models: %{"scout" => "@smol"},
+               per_call_model: "on",
+               per_call_model_allow: ["openai/gpt-4o", "@smol"]
              }
     end
   end

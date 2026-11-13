@@ -17,6 +17,10 @@ defmodule LemonCore.Config.Modular do
 
   Both config locations are configurable; see `LemonCore.Paths`.
 
+  Exception: `[runtime.task].per_call_model` and `per_call_model_allow` are
+  operator authority. A project file can only lower the mode and intersect the
+  allowlist, never widen them.
+
   ## Example Usage
 
       # Load full configuration using modular approach
@@ -400,8 +404,90 @@ defmodule LemonCore.Config.Modular do
         end
       end)
 
-    {settings, sources}
+    {narrow_per_call_model(settings, sources), sources}
   end
+
+  # `[runtime.task].per_call_model` lets the model choose a child's model, so it
+  # is operator authority: the global file sets it and a project file can only
+  # narrow it. The mode takes the lower of the layers (`on` > `off`, unset is
+  # `off`) and allowlists intersect; a project list never replaces the
+  # operator's. Invalid project values pass through so the validator reports them.
+  @per_call_mode_rank %{"off" => 0, "on" => 1}
+
+  defp narrow_per_call_model(
+         %{} = settings,
+         [{_path, operator} | [_ | _] = projects]
+       ) do
+    {operator_mode, operator_allow} = per_call_model_layer(operator)
+
+    {mode, allow} =
+      Enum.reduce(projects, {operator_mode || "off", operator_allow}, fn {_path, project},
+                                                                         {mode, allow} ->
+        {project_mode, project_allow} = per_call_model_layer(project)
+        {lower_per_call_mode(mode, project_mode), narrow_allowlist(allow, project_allow)}
+      end)
+
+    runtime = settings["runtime"] || %{}
+    task = if is_map(runtime), do: runtime["task"] || %{}
+
+    # A malformed section is left for the validator to report.
+    if is_map(task) do
+      task =
+        if is_nil(allow),
+          do: Map.delete(task, "per_call_model_allow"),
+          else: Map.put(task, "per_call_model_allow", allow)
+
+      settings
+      |> Map.put("runtime", Map.put(runtime, "task", Map.put(task, "per_call_model", mode)))
+      |> strip_legacy_per_call_model()
+    else
+      settings
+    end
+  end
+
+  defp narrow_per_call_model(settings, _sources), do: settings
+
+  defp per_call_model_layer(raw) do
+    task =
+      ensure_table(ensure_table(LegacyAgentMigration.migrate_settings(raw)["runtime"])["task"])
+
+    {task["per_call_model"], task["per_call_model_allow"]}
+  end
+
+  defp lower_per_call_mode(mode, nil), do: mode
+
+  defp lower_per_call_mode(mode, project) do
+    case {@per_call_mode_rank[mode], @per_call_mode_rank[project]} do
+      {nil, _} -> mode
+      {_, nil} -> project
+      {left, right} when right < left -> project
+      _ -> mode
+    end
+  end
+
+  defp narrow_allowlist(allow, nil), do: allow
+  defp narrow_allowlist(nil, project), do: project
+
+  defp narrow_allowlist(allow, project) when is_list(allow) and is_list(project) do
+    trimmed = MapSet.new(project, &trim_selector/1)
+    Enum.filter(allow, &MapSet.member?(trimmed, trim_selector(&1)))
+  end
+
+  defp narrow_allowlist(allow, project), do: if(is_list(allow), do: project, else: allow)
+
+  defp trim_selector(value) when is_binary(value), do: String.trim(value)
+  defp trim_selector(value), do: value
+
+  # Legacy `[agent.task]` would otherwise be migrated over the narrowed values.
+  defp strip_legacy_per_call_model(%{"agent" => %{"task" => %{} = task} = agent} = settings) do
+    task = Map.drop(task, ["per_call_model", "per_call_model_allow"])
+    Map.put(settings, "agent", Map.put(agent, "task", task))
+  end
+
+  defp strip_legacy_per_call_model(settings), do: settings
+
+  defp ensure_table(value) when is_map(value), do: value
+  defp ensure_table(_value), do: %{}
 
   defp load_toml_file(path) do
     path = Path.expand(path)

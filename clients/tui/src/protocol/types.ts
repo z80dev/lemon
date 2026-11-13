@@ -613,12 +613,6 @@ export interface ChatHistoryParams {
 	limit?: number;
 	beforeId?: string;
 	includeFullText?: boolean;
-	/**
-	 * A delegated child's native session id (a task's `sessionId`). Returns that
-	 * child's transcript, but only if it belongs to a task launched under
-	 * `sessionKey`; any other id is NOT_FOUND.
-	 */
-	childSessionId?: string;
 }
 
 export interface ChatHistoryMessage {
@@ -643,8 +637,6 @@ export interface ChatHistoryMessage {
 
 export interface ChatHistoryResult {
 	sessionKey: string;
-	/** Echo of the request's `childSessionId`; absent from daemons that ignore the parameter. */
-	childSessionId?: string;
 	messages: ChatHistoryMessage[];
 	summary?: Record<string, unknown>;
 }

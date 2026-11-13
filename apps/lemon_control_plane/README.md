@@ -783,13 +783,6 @@ a prompt, enter plan mode, or manufacture history. Existing native sessions
 return `created: false`; a mismatched workspace or non-native identity is not
 silently rebound. Metadata patches still refuse unknown session IDs by default.
 
-To read a delegated task child's transcript, pass the parent's `sessionKey` and
-the child's native `sessionId` (from task details) as `childSessionId`. The
-daemon resolves it only against tasks launched under that `sessionKey` and reads
-the journal from the task's own recorded working directory; any other id is
-`NOT_FOUND`, and the response echoes `childSessionId` (a daemon that ignores the
-parameter answers with the parent's history and no echo).
-
 When reopening native conversations, pass `cwd` to `chat.history`. Its
 successful native response is authoritative, including an empty active branch
 after rewind. Visible user/assistant text and sanitized native tool calls/results

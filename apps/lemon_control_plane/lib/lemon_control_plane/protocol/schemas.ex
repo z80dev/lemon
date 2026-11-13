@@ -578,6 +578,12 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "eventLimit" => :integer
       }
     },
+    "subagents.list" => %{required: %{"sessionKey" => :string}},
+    "subagents.transcript" => %{required: %{"sessionKey" => :string, "taskId" => :string}},
+    "subagents.send" => %{
+      required: %{"sessionKey" => :string, "taskId" => :string, "message" => :string}
+    },
+    "subagents.cancel" => %{required: %{"sessionKey" => :string, "taskId" => :string}},
 
     # Cron methods
     "cron.list" => %{
@@ -689,8 +695,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "cwd" => :string,
         "limit" => :integer,
         "beforeId" => :string,
-        "includeFullText" => :boolean,
-        "childSessionId" => :string
+        "includeFullText" => :boolean
       }
     },
     "chat.send" => %{

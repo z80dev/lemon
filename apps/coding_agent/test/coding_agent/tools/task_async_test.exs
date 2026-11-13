@@ -232,7 +232,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
       assert message.custom_type == "async_followup"
-      assert message.content == "task output"
+      assert message.content == "Task #{result.details.task_id} completed.\n\ntask output"
       assert message.details.source == :task
       assert message.details.task_id == result.details.task_id
       assert message.details.run_id == result.details.run_id
@@ -376,7 +376,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert %LemonAgent.Types.AgentToolResult{} = result
 
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
-      assert followup.prompt == long_output
+      assert followup.prompt == "Task #{result.details.task_id} completed.\n\n" <> long_output
       assert String.length(followup.prompt) > 2_000
     end
 
@@ -412,7 +412,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
       assert message.details.delivery == :followup
-      assert message.content == "idle output"
+      assert message.content == "Task #{result.details.task_id} completed.\n\nidle output"
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
 
@@ -448,7 +448,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
       assert message.details.delivery == :followup
-      assert message.content == "override output"
+      assert message.content == "Task #{result.details.task_id} completed.\n\noverride output"
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
 
@@ -484,7 +484,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
       assert message.details.delivery == :followup
-      assert message.content == "idle backlog output"
+      assert message.content == "Task #{result.details.task_id} completed.\n\nidle backlog output"
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
 
@@ -1190,7 +1190,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
                )
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
-      assert message.content == "Recovered final answer"
+      assert message.content == "Task #{task_id} completed.\n\nRecovered final answer"
 
       assert {:ok, %{status: :completed, result: task_result}, _events} = TaskStore.get(task_id)
       assert [%LemonAi.Types.TextContent{text: "Recovered final answer"}] = task_result.content
@@ -1234,7 +1234,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert %LemonAgent.Types.AgentToolResult{} = result
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
-      assert message.content == long_output
+      assert message.content == "Task #{result.details.task_id} completed.\n\n" <> long_output
       assert String.length(message.content) > 2_000
     end
 
@@ -1262,10 +1262,9 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      _task_id = result.details.task_id
-
+      task_id = result.details.task_id
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
-      assert message.content == "Task failed: connection refused"
+      assert message.content == "Task #{task_id} failed: connection refused"
     end
 
     test "formats completion with empty answer" do
@@ -1295,10 +1294,9 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      _task_id = result.details.task_id
-
+      task_id = result.details.task_id
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
-      assert message.content == "Task completed."
+      assert message.content == "Task #{task_id} completed."
     end
 
     test "formats failure with partial output" do
@@ -1328,10 +1326,9 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      _task_id = result.details.task_id
-
+      task_id = result.details.task_id
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
-      assert message.content == "Got halfway done"
+      assert message.content == "Task #{task_id} failed: timeout\n\nGot halfway done"
     end
   end
 

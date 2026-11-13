@@ -396,6 +396,9 @@ export class AppShell {
 		this.#taskTree = new TaskTreeController({
 			requestRender: () => this.tui.requestRender(),
 			onBlur: () => this.#focusEditor(),
+			methods: this.methods,
+			online: () => this.client.online,
+			notice: (text, level) => this.events.notice(text, level),
 		});
 		this.#taskTree.setSession(this.store.focusedKey);
 		this.#omp = new OmpController({
@@ -521,9 +524,6 @@ export class AppShell {
 				this.events.toggleToolOutputs();
 			},
 			openDiff: () => this.#toolInspector.open("diff"),
-			openAgentHub: async () => {
-				await this.submit("/hub");
-			},
 			copyLastReply: async () => {
 				await this.submit("/copy");
 			},
@@ -1818,7 +1818,6 @@ export class AppShell {
 			openModelPicker: () => this.#modelPicker.open(),
 			openCommandPalette: (query) => this.#palette.open(query),
 			toggleTaskTree: () => this.#toggleTaskTree(),
-			taskFeed: (sessionKey) => this.#taskTree.feed(sessionKey),
 			openOmpPanel: () => this.#openOmpPanel(),
 			openToolOutput: (mode) => this.#toolInspector.open(mode),
 			openContextPanel: (usage) => {

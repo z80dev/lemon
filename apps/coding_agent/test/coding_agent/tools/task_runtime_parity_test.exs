@@ -99,6 +99,8 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
 
       opts =
         base_opts(
+          # Per-item thinking levels are per-call selections; the operator enables them.
+          settings_manager: settings(%{per_call_model: "on"}),
           run_override: fn _, _, context ->
             send(owner, {:started, context.description, self()})
 
@@ -150,7 +152,7 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
     end
 
     test "item async is present in schema and validated rather than overwritten" do
-      tool = TaskTool.tool("/tmp", base_opts([]))
+      tool = TaskTool.tool("/tmp", base_opts(settings_manager: settings(%{per_call_model: "on"})))
       item = tool.parameters["properties"]["tasks"]["items"]["properties"]
       assert item["async"]["type"] == "boolean"
       assert item["thinking_level"]["type"] == "string"

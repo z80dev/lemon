@@ -234,11 +234,34 @@ defmodule CodingAgent.Security.SecretObfuscator do
       tool
       | execute: fn tool_call_id, params, signal, on_update ->
           execute.(tool_call_id, restore_tool_args(obfuscator, params), signal, on_update)
-        end
+        end,
+        on_stream: restore_stream(tool.on_stream, obfuscator)
     }
   end
 
   defp wrap_tool(tool, _obfuscator), do: tool
+
+  # Streamed arguments must match what `execute` receives after restoration.
+  defp restore_stream(nil, _obfuscator), do: nil
+
+  defp restore_stream(on_stream, obfuscator) do
+    fn
+      {:args, %{prepare: prepare} = args} ->
+        on_stream.(
+          {:args,
+           %{
+             args
+             | prepare: fn arguments ->
+                 with {:ok, prepared} <- prepare.(arguments),
+                      do: {:ok, restore_tool_args(obfuscator, prepared)}
+               end
+           }}
+        )
+
+      event ->
+        on_stream.(event)
+    end
+  end
 
   # ── Messages ──────────────────────────────────────────────────────────────
 

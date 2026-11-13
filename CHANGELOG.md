@@ -30,11 +30,69 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   activity heatmap; `/usage text` keeps the text report.
 - `/jobs` lists the session's background processes with live output and
   cancel, backed by new `process.jobs.list|inspect|cancel` control-plane methods.
-- `/hub` (Ctrl+S) lists subagents live and opens each child's transcript;
-  `chat.history` accepts `childSessionId` scoped to the parent session.
 - `ask` accepts an agent-written HTML `<form>`, rendered as a form in the TUI;
   surfaces that cannot render forms fail with `unsupported_surface`.
 - `read pr://N` includes the pull request's changed-files list.
+- The `task` tool accepts `steps` (up to four prompts) instead of `prompt` to
+  run staged work in one child session; the last step's answer is the result.
+- `task` gains a bundled read-only `seance` persona: `agent: "seance"` with
+  `source_session` (a session id or journal path of the caller's own
+  conversation: its lineage, its task children, or runs recorded under its
+  session key) forks that past transcript, compaction included, into a fresh
+  child that answers questions about it. The source journal is never modified,
+  its historical spend does not count against the consult, unused forks are
+  deleted, other conversations and unscoped callers are refused before launch,
+  and the child defaults to the source's model.
+- TUI Agent Hub (Alt+A or `/hub`; `/tasktree` and `/subagents` are aliases):
+  the focused session's `task` subagents, nested children included, with status
+  (queued/running/idle/parked/completed/failed/cancelled), name and persona,
+  model, clock, current activity and usage, a parent/child tree or flat
+  roster, and a filter. Enter opens an agent's bounded transcript, which
+  follows its newest line until scrolled up and stops re-reading once the
+  agent is final or after three failed reads, with a message line that steers
+  a running agent, follows up an idle one or revives a parked one through the
+  task tool's own delivery; `x` cancels. Backed by new session-scoped
+  control-plane methods `subagents.list`, `subagents.transcript`,
+  `subagents.send` and `subagents.cancel`; another session's task IDs are not
+  found.
+
+### Changed
+
+- Async task completions name the child (`Task <name> (<id>) [<persona>]`) and
+  state whether it completed or failed. A failed child's partial answer is no
+  longer delivered as if it had succeeded. Answers over 12,000 characters are
+  cut to a preview that points at `read agent://<task_id>`.
+- The `task` tool description now tells the model how to write self-contained
+  assignments, when to fan out or sequence work, and how to continue a
+  finished child.
+- Plan mode can delegate read-only exploration: `task` runs, batches and swarms
+  launch children limited to read/search/web tools with no further spawning.
+  Worktrees, merge-back, write-capable personas and child messaging are refused
+  while planning; `poll`, `get`, `join`, `wait` and `cancel` keep working.
+- **Breaking:** the model can no longer choose a child's model by default. A
+  `model` or `thinking_level` on `task` (including `tasks[]` items and swarm
+  nodes), or a `model` on `agent`, now fails before any child starts unless the
+  operator sets `[runtime.task] per_call_model = "on"`; the optional
+  `per_call_model_allow` list restricts which `provider/model` or `@role` values
+  are accepted. Project `.lemon/config.toml` files can only narrow this gate.
+  Persona models and `[runtime.task].agent_models` are unaffected.
+- `task` batches start each `tasks[]` item while the model is still streaming
+  the call (`[runtime.task].speculative_launch`, default on). Dispatch adopts
+  children whose parameters match the finished call; a differing, invalid,
+  aborted or unexecuted call cancels them, terminalized without followups and
+  with budget reservations released. Calls that need approval, extension tool
+  hooks and plan mode never speculate. Tools can observe streaming arguments
+  through `AgentTool.on_stream`.
+- `task` batches start each read-only `tasks[]` item (read-only persona or a
+  tool policy limited to read tools) while the model is still streaming the
+  call (`[runtime.task].speculative_launch`, default on); write-capable and
+  worktree items still launch at dispatch, so top-level options written after
+  `tasks` can never reach a child that already edited the checkout. Dispatch
+  adopts children whose parameters match the finished call; a differing,
+  invalid, aborted or unexecuted call cancels them, terminalized without
+  followups and with budget reservations released. Calls that need approval,
+  extension tool hooks and plan mode never speculate. Tools can observe
+  streaming arguments through `AgentTool.on_stream`.
 
 ---
 

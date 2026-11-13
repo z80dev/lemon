@@ -59,7 +59,7 @@ import {
 } from "./session.ts";
 import { rewindCommand, treeCommand } from "./session-tree.ts";
 import { skillsCommand } from "./skills.ts";
-import { diffCommand, outputCommand, paletteCommand, taskTreeCommand } from "./views.ts";
+import { diffCommand, outputCommand, paletteCommand } from "./views.ts";
 
 export interface RegistryOptions {
 	/** Opens $EDITOR on the draft. Defaults to a notice that it is unavailable. */
@@ -74,7 +74,6 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		helpCommand,
 		commandsCommand,
 		paletteCommand,
-		taskTreeCommand,
 		agentHubCommand,
 		outputCommand,
 		diffCommand,

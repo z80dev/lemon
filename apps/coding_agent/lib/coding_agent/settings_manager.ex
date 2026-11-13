@@ -25,9 +25,12 @@ defmodule CodingAgent.SettingsManager do
           idle_ttl_ms: non_neg_integer(),
           request_budget: non_neg_integer(),
           request_budget_notice: boolean(),
+          speculative_launch: boolean(),
           worktree_merge: String.t(),
           disabled_agents: [String.t()],
-          agent_models: %{optional(String.t()) => String.t()}
+          agent_models: %{optional(String.t()) => String.t()},
+          per_call_model: String.t(),
+          per_call_model_allow: [String.t()] | nil
         }
 
   @type t :: %__MODULE__{
@@ -137,9 +140,14 @@ defmodule CodingAgent.SettingsManager do
       idle_ttl_ms: 300_000,
       request_budget: 200,
       request_budget_notice: true,
+      speculative_launch: true,
       worktree_merge: "none",
       disabled_agents: [],
-      agent_models: %{}
+      agent_models: %{},
+      # Model-chosen child models: "off" (default) or "on"; an allowlist of
+      # "provider/model" and "@role" values narrows "on" (nil = no list).
+      per_call_model: "off",
+      per_call_model_allow: nil
     }
   ]
 
@@ -247,6 +255,11 @@ defmodule CodingAgent.SettingsManager do
           notice when is_boolean(notice) -> notice
           _ -> defaults.request_budget_notice
         end,
+      speculative_launch:
+        case Map.get(task, :speculative_launch) do
+          speculative when is_boolean(speculative) -> speculative
+          _ -> defaults.speculative_launch
+        end,
       worktree_merge:
         case Map.get(task, :worktree_merge) do
           mode when mode in ["none", "patch", "branch"] -> mode
@@ -267,6 +280,24 @@ defmodule CodingAgent.SettingsManager do
 
           _ ->
             defaults.agent_models
+        end,
+      # Fail closed: anything but "on" disables per-call model selection, and a
+      # malformed allowlist allows nothing.
+      per_call_model: if(Map.get(task, :per_call_model) == "on", do: "on", else: "off"),
+      per_call_model_allow:
+        case Map.get(task, :per_call_model_allow) do
+          nil ->
+            nil
+
+          values when is_list(values) ->
+            for value <- values,
+                is_binary(value),
+                value = String.trim(value),
+                value != "",
+                do: value
+
+          _ ->
+            []
         end
     }
   end

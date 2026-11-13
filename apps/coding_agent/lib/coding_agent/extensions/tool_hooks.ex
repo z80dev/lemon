@@ -8,7 +8,8 @@ defmodule CodingAgent.Extensions.ToolHooks do
   hidden behind the `tool_invoke` disclosure bridge) after approval wrapping.
   The resulting order, outermost first, is: secret placeholder restore →
   extension tool hooks → approval → tool. Tools are returned unchanged when no
-  extension registers either hook.
+  extension registers either hook; wrapped tools drop `on_stream`, since a hook
+  may block or rewrite the call after its arguments streamed.
 
   ## `:on_tool_call`
 
@@ -149,7 +150,8 @@ defmodule CodingAgent.Extensions.ToolHooks do
       end
     end
 
-    %{tool | execute: wrapped_execute}
+    # Hooks may block or rewrite the call, so streamed arguments are not authoritative.
+    %{tool | execute: wrapped_execute, on_stream: nil}
   end
 
   # ── on_tool_call ──────────────────────────────────────────────────────────

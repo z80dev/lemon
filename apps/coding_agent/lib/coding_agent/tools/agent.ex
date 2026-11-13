@@ -86,10 +86,6 @@ defmodule CodingAgent.Tools.Agent do
             "enum" => @valid_queue_modes,
             "description" => "Completion queue; default configured mode or followup"
           },
-          "model" => %{
-            "type" => "string",
-            "description" => "Model override"
-          },
           "tool_policy" => %{
             "type" => "object",
             "description" => "Delegated tool policy"
@@ -131,6 +127,13 @@ defmodule CodingAgent.Tools.Agent do
       },
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
+    # Present only while [runtime.task].per_call_model is on.
+    |> Params.put_per_call_model_params(
+      cwd,
+      opts,
+      ["model"],
+      "omit to use the delegated defaults"
+    )
   end
 
   @doc """
@@ -164,7 +167,8 @@ defmodule CodingAgent.Tools.Agent do
         Map.to_list(Params.inherited_execution_context(opts))
       )
 
-    with {:ok, validated} <- validate_run_params(params, cwd, opts),
+    with :ok <- Params.check_per_call_model(Map.take(params, ["model"]), cwd, opts),
+         {:ok, validated} <- validate_run_params(params, cwd, opts),
          {:ok, delegated_session_key} <- resolve_delegated_session_key(validated, opts),
          {:ok, request} <- build_run_request(validated, delegated_session_key, cwd, opts),
          {:ok, run_id} <- submit_run(request, opts) do

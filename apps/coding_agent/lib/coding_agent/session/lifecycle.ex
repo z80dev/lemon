@@ -215,6 +215,10 @@ defmodule CodingAgent.Session.Lifecycle do
         config_cwd
       )
 
+    # The plan gate is also a tool option so self-gated tools (`task`) can
+    # enforce plan mode at execution time.
+    plan_gate = Planning.new_gate()
+
     tool_opts =
       opts
       |> Keyword.put(:model, model)
@@ -250,6 +254,7 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.put(:native_managed_context, Params.named_messaging_managed?(opts))
       |> Keyword.put(:wasm_tools, wasm_boot.wasm_tools)
       |> Keyword.put(:wasm_status, wasm_boot.wasm_status)
+      |> Keyword.put(:plan_gate, plan_gate)
 
     lifecycle =
       ExtensionLifecycle.initialize(
@@ -265,8 +270,6 @@ defmodule CodingAgent.Session.Lifecycle do
         approval_context: approval_context,
         secret_obfuscator: secret_obfuscator
       )
-
-    plan_gate = Planning.new_gate()
 
     tools =
       Planning.tools(
@@ -642,7 +645,8 @@ defmodule CodingAgent.Session.Lifecycle do
         tool_disclosure: state.tool_disclosure,
         bot_folder_root: state.bot_folder_root,
         config_cwd: state.config_cwd,
-        native_source_profile_id: state.native_source_profile_id
+        native_source_profile_id: state.native_source_profile_id,
+        plan_gate: state.plan_gate
       ]
       |> Keyword.merge(private_native_opts(state.approval_context))
       |> Keyword.put(

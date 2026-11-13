@@ -1,629 +1,664 @@
 /**
- * The agent hub: every subagent of the focused session in one live table, and a
- * scrollable transcript for the one you open.
+ * The Agent Hub (Alt+A, `/hub`): the focused session's task subagents, nested
+ * children included. Mounted in the dock outside the transcript, so live
+ * updates never enter scrollback.
  *
- * omp's hub (pi-tui `overlays/agent-hub`) reads an in-process agent registry and
- * tails session JSONL files; Lemon's children live in the daemon, so this is the
- * same UX built on Lemon's data. The table is the {@link TaskFeed} (rows from the
- * task tree, refreshed on every change); a transcript is the child's
- * `chat.history`, re-read on a bounded timer while the child is still active.
+ *   roster      status, name/persona, model, clock, activity and usage per
+ *               agent; `t` toggles parent/child tree and the operational flat
+ *               order, `/` filters, Enter opens the transcript, `x` cancels
+ *               (pressed twice), `r` refreshes, `g`/`G` jump, `q` closes,
+ *               Escape clears the filter first and then closes the hub
+ *   transcript  the agent's bounded visible transcript with an input line:
+ *               typing steers a running agent, follows up an idle one or
+ *               revives a parked one; it follows the newest line until you
+ *               scroll up; Escape clears the line, then returns
  *
- * Nothing here estimates anything: a child with no recorded session says so
- * rather than showing the parent's text, and a failed read stays visible next to
- * whatever was last loaded.
+ * The component holds view state only; the controller performs requests and
+ * reports outcomes with {@link setFlash}. Row facts come from
+ * `agent-hub-rows.ts`. Every agent string is child output and reaches the
+ * screen only through safeLine/safeText.
  */
 
-import { Markdown } from "@oh-my-pi/pi-tui/components/markdown";
-import { renderTableRow, type TableColumn } from "@oh-my-pi/pi-tui/components/table";
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
+import { card, EMPTY_NODE, node, span, text } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
-import { sanitizeText } from "@oh-my-pi/pi-utils/sanitize-text";
-import { describeError } from "../../protocol/errors.ts";
-import type { ChatHistoryMessage } from "../../protocol/types.ts";
+import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
+import { safeLine, safeText } from "../../formatters/base.ts";
 import {
-	type AgentHubRow,
-	formatElapsed,
-	projectAgentHubRows,
-	summarizeAgentHubRows,
+	isTaskActive,
+	isTaskTerminal,
+	type TaskRecord,
+	type TaskStatus,
+	type TaskTreeRow,
+} from "../../store/task-store.ts";
+import type { NoticeLevel } from "../../store/transcript-model.ts";
+import {
+	canMessage,
+	type HubLayout,
+	hubClockMs,
+	hubClockText,
+	hubHeadline,
+	hubIdentity,
+	hubInspector,
+	hubLabel,
+	STATUS_LABEL,
+	sendVerb,
+	shownHubRows,
+	usageText,
 } from "../agent-hub-rows.ts";
-import type { TaskFeed } from "../controllers/task-tree-controller.ts";
 import { type ColorSlot, getTheme } from "../theme/theme.ts";
-import { getMarkdownTheme } from "../theme/tui-adapters.ts";
+import { isPrintable } from "./pickers.ts";
 
-/** Refresh cadence for an open transcript whose child is still running. */
-export const AGENT_HUB_POLL_MS = 1500;
-/** Consecutive failed reads before polling stops (`r` retries). */
-export const AGENT_HUB_MAX_FAILURES = 3;
-/** Table rows that are chrome: title, column header, footer. */
-const TABLE_CHROME = 3;
-/** Selected-child detail under the table: rule, identity, two lines of progress. */
-const DETAIL_ROWS = 4;
-const TRANSCRIPT_CHROME = 3;
+/** The `agent` node's props, via pi-tui's node type (pi-wire is not a direct dependency). */
+type AgentProps = NonNullable<Extract<NativeNode, { k: "agent" }>["p"]>;
 
-export interface AgentHubOptions {
-	feed: TaskFeed;
-	/** The child's messages, oldest first. Absent when the daemon cannot serve history. */
-	loadTranscript?: (row: AgentHubRow) => Promise<readonly ChatHistoryMessage[]>;
-	rows: () => number;
-	close: () => void;
-	repaint: () => void;
-	now?: () => number;
-	pollMs?: number;
-	tickMs?: number;
-}
+/** Roster rows the row renderer shows at once; the selection scrolls the rest into view. */
+export const HUB_ROSTER_WINDOW = 8;
+/** Transcript rows the row renderer shows at once. */
+export const HUB_TRANSCRIPT_WINDOW = 14;
 
-interface TranscriptState {
-	taskId: string;
-	messages: readonly ChatHistoryMessage[] | undefined;
-	error: string | undefined;
-	loading: boolean;
-	failures: number;
-	version: number;
-	offset: number;
-	/** Stay pinned to the newest line until the reader scrolls up. */
-	follow: boolean;
-	timer: ReturnType<typeof setTimeout> | undefined;
-	/** The fetch that observed the child already finished; nothing newer can arrive. */
-	settled: boolean;
-	lines: { key: string; rows: readonly string[] } | undefined;
-	total: number;
-	page: number;
-}
+export type HubView = "roster" | "transcript";
 
-const STATUS_SLOT: Record<AgentHubRow["status"], ColorSlot> = {
-	queued: "muted",
-	running: "toolRunning",
+const AGENT_STATUS: Record<TaskStatus, AgentProps["status"]> = {
+	queued: "pending",
+	running: "running",
+	cancelling: "running",
+	idle: "idle",
+	parked: "parked",
+	completed: "done",
+	error: "failed",
+	aborted: "aborted",
+	unknown: "idle",
+};
+
+const STATUS_SLOT: Record<TaskStatus, ColorSlot> = {
+	queued: "text",
+	running: "text",
 	cancelling: "warning",
+	idle: "info",
+	parked: "muted",
 	completed: "success",
 	error: "error",
 	aborted: "warning",
-	unknown: "muted",
+	unknown: "warning",
 };
 
-const GLYPHS: Record<"unicode" | "ascii", Record<AgentHubRow["status"], string>> = {
-	unicode: {
-		queued: "○",
-		running: "●",
-		cancelling: "◐",
-		completed: "✓",
-		error: "✗",
-		aborted: "■",
-		unknown: "?",
-	},
-	ascii: {
-		queued: "o",
-		running: "*",
-		cancelling: "~",
-		completed: "+",
-		error: "x",
-		aborted: "-",
-		unknown: "?",
-	},
-};
-
-function glyph(status: AgentHubRow["status"]): string {
-	return GLYPHS[getTheme().getSymbolPreset()][status];
+export interface HubFlash {
+	text: string;
+	level: NoticeLevel;
 }
 
-/** First non-blank line of untrusted transcript text, escape-free via `sanitizeText`. */
-function firstLine(text: string): string {
-	return (
-		sanitizeText(text)
-			.split("\n")
-			.find((line) => line.trim() !== "")
-			?.trim() ?? ""
-	);
+export interface HubTranscript {
+	taskId: string;
+	loading: boolean;
+	text?: string;
+	truncated?: boolean;
+	/** The latest read failed; shown next to whatever was last loaded. */
+	error?: string;
+}
+
+export interface AgentHubHost {
+	requestRender(): void;
+	/** Escape out of the hub; the host hides it and restores editor focus. */
+	onBlur(): void;
+	/** Load (or reload) the transcript of one agent; report it with {@link AgentHubComponent.setTranscript}. */
+	onOpen(taskId: string): void;
+	/** Resolves true when the daemon accepted the message; the line is then cleared. */
+	onSend(taskId: string, message: string): Promise<boolean>;
+	onCancel(taskId: string): void;
+	onRefresh(): void;
+	now?: () => number;
 }
 
 export class AgentHubComponent implements Component {
-	readonly #options: AgentHubOptions;
-	readonly #unsubscribe: () => void;
-	readonly #tick: ReturnType<typeof setInterval>;
-	#rows: AgentHubRow[] = [];
-	#selected = 0;
-	#offset = 0;
-	#view: "table" | "transcript" = "table";
-	#transcript: TranscriptState | undefined;
-	#disposed = false;
+	focused = false;
+	readonly #host: AgentHubHost;
+	#visible = false;
+	#rows: readonly TaskTreeRow[] = [];
+	#layout: HubLayout = "tree";
+	#filter = "";
+	#filtering = false;
+	#selectedId: string | undefined;
+	#view: HubView = "roster";
+	#transcript: HubTranscript | undefined;
+	/** Top transcript line; +Infinity follows the newest line. */
+	#transcriptScroll = Number.POSITIVE_INFINITY;
+	#input = "";
+	#sending = false;
+	#armedCancel: string | undefined;
+	#flash: HubFlash | undefined;
+	#revision = 0;
+	#native: { revision: number; node: NativeNode } | undefined;
 
-	constructor(options: AgentHubOptions) {
-		this.#options = options;
-		this.#project();
-		this.#unsubscribe = options.feed.subscribe(() => this.#changed());
-		this.#tick = setInterval(() => {
-			if (this.#rows.some((row) => row.active)) options.repaint();
-		}, options.tickMs ?? 1000);
-		this.#tick.unref?.();
+	constructor(host: AgentHubHost) {
+		this.#host = host;
 	}
 
-	get view(): "table" | "transcript" {
+	get visible(): boolean {
+		return this.#visible;
+	}
+
+	get view(): HubView {
 		return this.#view;
 	}
 
-	get rows(): readonly AgentHubRow[] {
-		return this.#rows;
+	get layout(): HubLayout {
+		return this.#layout;
 	}
 
-	get selected(): AgentHubRow | undefined {
-		return this.#rows[this.#selected];
+	get filter(): string {
+		return this.#filter;
 	}
 
-	/** Releases the feed subscription and every timer; the host calls it when the overlay goes away. */
-	dispose(): void {
-		if (this.#disposed) return;
-		this.#disposed = true;
-		this.#unsubscribe();
-		clearInterval(this.#tick);
-		this.#stopPolling();
+	get flash(): HubFlash | undefined {
+		return this.#flash;
+	}
+
+	/** The selected agent among the rows currently shown (filter and layout applied). */
+	get selected(): TaskRecord | undefined {
+		const rows = this.#shown();
+		return (rows.find((row) => row.task.taskId === this.#selectedId) ?? rows[0])?.task;
+	}
+
+	/** The agent whose transcript is open, if any. */
+	get openTaskId(): string | undefined {
+		return this.#view === "transcript" ? this.#transcript?.taskId : undefined;
+	}
+
+	setVisible(visible: boolean): void {
+		if (this.#visible === visible) return;
+		this.#visible = visible;
+		if (!visible) this.resetView();
+		this.#changed();
+	}
+
+	/** Back to the roster with no open transcript, draft message, filter edit or flash. */
+	resetView(): void {
+		this.#view = "roster";
+		this.#transcript = undefined;
+		this.#input = "";
+		this.#filtering = false;
+		this.#armedCancel = undefined;
+		this.#flash = undefined;
+		this.#changed();
+	}
+
+	/** Rows in parent/child tree order; the selection follows its agent, not its index. */
+	update(rows: readonly TaskTreeRow[]): void {
+		this.#rows = rows;
+		this.#changed();
+	}
+
+	/** A failed re-read keeps the text already shown and adds the error next to it. */
+	setTranscript(transcript: HubTranscript): void {
+		const current = this.#transcript;
+		if (current && current.taskId !== transcript.taskId) return;
+		const text = transcript.text ?? current?.text;
+		const truncated = transcript.text === undefined ? current?.truncated : transcript.truncated;
+		this.#transcript = {
+			...transcript,
+			...(text === undefined ? {} : { text }),
+			...(truncated === undefined ? {} : { truncated }),
+		};
+		this.#changed();
+		this.#host.requestRender();
+	}
+
+	setFlash(flash: HubFlash | undefined): void {
+		this.#flash = flash;
+		this.#changed();
+		this.#host.requestRender();
 	}
 
 	invalidate(): void {
-		if (this.#transcript) this.#transcript.lines = undefined;
+		// Nothing cached in row form: theme, focus and clocks are read at render time.
 	}
+
+	// -- input -----------------------------------------------------------------
 
 	handleInput(data: string): void {
-		if (this.#disposed) return;
-		if (matchesKey(data, "ctrl+c")) {
-			this.#options.close();
-			return;
-		}
 		if (this.#view === "transcript") this.#transcriptKey(data);
-		else this.#tableKey(data);
+		else if (this.#filtering) this.#filterKey(data);
+		else this.#rosterKey(data);
+		this.#changed();
+		this.#host.requestRender();
 	}
 
-	render(width: number): readonly string[] {
-		if (width < 1) return [];
-		return this.#view === "transcript" ? this.#renderTranscript(width) : this.#renderTable(width);
-	}
-
-	// -- table ----------------------------------------------------------------
-
-	#tableKey(data: string): void {
-		if (matchesKey(data, "escape") || data === "q") {
-			this.#options.close();
+	#rosterKey(data: string): void {
+		const armed = this.#armedCancel;
+		this.#armedCancel = undefined;
+		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+			if (this.#filter) this.#filter = "";
+			else this.#host.onBlur();
 			return;
 		}
+		if (data === "q") {
+			this.#host.onBlur();
+			return;
+		}
+		if (matchesKey(data, "home") || data === "g") {
+			this.#move(Number.NEGATIVE_INFINITY);
+			return;
+		}
+		if (matchesKey(data, "end") || data === "G") {
+			this.#move(Number.POSITIVE_INFINITY);
+			return;
+		}
+		const delta = data === "k" ? -1 : data === "j" ? 1 : navigationDelta(data, HUB_ROSTER_WINDOW);
+		if (delta !== 0) {
+			this.#move(delta);
+			return;
+		}
+		const agent = this.selected;
 		if (matchesKey(data, "enter")) {
-			const row = this.selected;
-			if (row) this.#openTranscript(row);
+			if (!agent) return;
+			this.#view = "transcript";
+			this.#transcript = { taskId: agent.taskId, loading: true };
+			this.#transcriptScroll = Number.POSITIVE_INFINITY;
+			this.#input = "";
+			this.#flash = undefined;
+			this.#host.onOpen(agent.taskId);
 			return;
 		}
-		const page = this.#tablePage();
-		let selected = this.#selected;
-		if (matchesKey(data, "up") || matchesKey(data, "ctrl+p") || data === "k") selected--;
-		else if (matchesKey(data, "down") || matchesKey(data, "ctrl+n") || data === "j") selected++;
-		else if (matchesKey(data, "pageUp")) selected -= page;
-		else if (matchesKey(data, "pageDown")) selected += page;
-		else if (matchesKey(data, "home") || data === "g") selected = 0;
-		else if (matchesKey(data, "end") || data === "G") selected = this.#rows.length - 1;
-		else return;
-		this.#selected = Math.max(0, Math.min(selected, this.#rows.length - 1));
-		this.#options.repaint();
-	}
-
-	#tablePage(): number {
-		return Math.max(1, this.#options.rows() - TABLE_CHROME - DETAIL_ROWS);
-	}
-
-	#renderTable(width: number): readonly string[] {
-		const theme = getTheme();
-		const clamp = (text: string) => truncateToWidth(text, width);
-		const summary = summarizeAgentHubRows(this.#rows);
-		const noun = summary.total === 1 ? "agent" : "agents";
-		const failed = summary.failed > 0 ? ` · ${summary.failed} failed` : "";
-		const lines: string[] = [
-			clamp(
-				theme.fg("accent", theme.bold("Agent hub")) +
-					theme.fg("dim", ` · ${summary.total} ${noun} · ${summary.active} running${failed}`),
-			),
-		];
-		const page = this.#tablePage();
-		if (this.#rows.length === 0) {
-			lines.push("");
-			lines.push(clamp(theme.fg("muted", "No subagents in this session yet.")));
-			lines.push(
-				...wrapTextWithAnsi(
-					theme.fg("dim", "Children appear here, live, as the task tool launches them."),
-					width,
-				),
-			);
-		} else {
-			if (this.#selected < this.#offset) this.#offset = this.#selected;
-			if (this.#selected >= this.#offset + page) this.#offset = this.#selected - page + 1;
-			this.#offset = Math.max(0, Math.min(this.#offset, this.#rows.length - page));
-			const columns = this.#columns(width);
-			lines.push(
-				clamp(
-					theme.fg(
-						"dim",
-						renderTableRow(
-							["status", "age", "agent", "task", "latest"].map((text) => ({ text })),
-							columns,
-							width,
-							{ indent: "  ", gap: "  " },
-						),
-					),
-				),
-			);
-			const end = Math.min(this.#rows.length, this.#offset + page);
-			for (let index = this.#offset; index < end; index++) {
-				lines.push(this.#tableRow(this.#rows[index]!, index === this.#selected, columns, width));
-			}
+		switch (data) {
+			case "t":
+				this.#layout = this.#layout === "tree" ? "flat" : "tree";
+				return;
+			case "/":
+				this.#filtering = true;
+				return;
+			case "r":
+				this.#host.onRefresh();
+				return;
+			case "x":
+				if (!agent) return;
+				if (agent.cancellable === false || isTaskTerminal(agent.status)) {
+					this.#flash = { text: `${hubLabel(agent)} has already finished`, level: "warning" };
+				} else if (armed === agent.taskId) {
+					this.#host.onCancel(agent.taskId);
+				} else {
+					this.#armedCancel = agent.taskId;
+					this.#flash = {
+						text: `press x again to cancel ${hubLabel(agent)} — cancellation is final`,
+						level: "warning",
+					};
+				}
+				return;
 		}
-		// Pin the detail and footer to the bottom of the overlay.
-		const bodyEnd = TABLE_CHROME - 1 + page;
-		while (lines.length < bodyEnd) lines.push("");
-		lines.push(...this.#detail(width));
-		const position = this.#rows.length ? `${this.#selected + 1}/${this.#rows.length} · ` : "";
-		const keys =
-			width >= 64
-				? "↑↓/pgup/pgdn select · enter transcript · g/G first/last · esc close"
-				: "↑↓ select · enter open · esc close";
-		lines.push(clamp(theme.fg("dim", `${position}${keys}`)));
-		return lines;
 	}
 
-	#columns(width: number): TableColumn[] {
-		// The task and latest columns share what the fixed ones leave; `latest` yields first.
-		const fixed = 2 + 11 + 7 + 14 + 4 * 2;
-		const flexible = Math.max(10, width - fixed);
-		const task = Math.max(8, Math.floor(flexible * 0.45));
-		return [
-			{ width: 11, align: "left", overflow: "truncate", priority: 4 },
-			{ width: 7, align: "right", overflow: "truncate", priority: 4 },
-			{ width: 14, align: "left", overflow: "truncate", priority: 1 },
-			{ width: task, align: "left", overflow: "truncate", priority: 3, minWidth: 8 },
-			{ width: Math.max(8, flexible - task), align: "left", overflow: "truncate", priority: 0 },
-		];
-	}
-
-	#tableRow(row: AgentHubRow, selected: boolean, columns: TableColumn[], width: number): string {
-		const theme = getTheme();
-		const status = `${glyph(row.status)} ${row.status}`;
-		const age = formatElapsed(row.elapsedMs ?? undefined);
-		const indent = "  ".repeat(Math.min(row.depth, 4)) + (row.depth > 0 ? "└ " : "");
-		const style = (slot: ColorSlot) =>
-			selected ? undefined : (text: string) => theme.fg(slot, text);
-		const cells = [
-			{ text: status, style: style(STATUS_SLOT[row.status]) },
-			{ text: age, style: style("dim") },
-			{ text: row.agent ? `@${row.agent}` : "", style: style("muted") },
-			{ text: `${indent}${row.label}`, style: style("text") },
-			{ text: row.progress ?? "", style: style("muted") },
-		];
-		const marker = selected ? theme.cursor : " ";
-		const line = `${marker} ${renderTableRow(cells, columns, width - 2, { gap: "  " })}`;
-		const clipped = truncateToWidth(line, width);
-		if (!selected) return clipped;
-		const pad = Math.max(0, width - visibleWidth(clipped));
-		return theme.bg("selectedBg", theme.fg("accent", clipped + " ".repeat(pad)));
-	}
-
-	/** The selected child: identity and its latest progress, wrapped rather than cut. */
-	#detail(width: number): string[] {
-		const theme = getTheme();
-		const lines = [truncateToWidth(theme.fg("border", theme.hrChar.repeat(width)), width)];
-		const row = this.selected;
-		if (!row) {
-			while (lines.length < DETAIL_ROWS) lines.push("");
-			return lines;
+	#filterKey(data: string): void {
+		if (matchesKey(data, "escape")) {
+			this.#filter = "";
+			this.#filtering = false;
+		} else if (matchesKey(data, "enter") || matchesKey(data, "down") || matchesKey(data, "up")) {
+			this.#filtering = false;
+		} else if (matchesKey(data, "backspace")) {
+			this.#filter = this.#filter.slice(0, -1);
+		} else if (matchesKey(data, "ctrl+u")) {
+			this.#filter = "";
+		} else if (isPrintable(data)) {
+			this.#filter += data;
 		}
-		const identity = [
-			`task ${row.taskId}`,
-			row.sessionId ? `session ${row.sessionId}` : "no session yet",
-		];
-		lines.push(truncateToWidth(theme.fg("dim", identity.join(" · ")), width));
-		const progress = row.progress
-			? wrapTextWithAnsi(theme.fg("muted", row.progress), width).slice(0, DETAIL_ROWS - 2)
-			: [theme.fg("dim", "No progress reported yet.")];
-		lines.push(...progress.map((line) => truncateToWidth(line, width)));
-		while (lines.length < DETAIL_ROWS) lines.push("");
-		return lines;
-	}
-
-	// -- data -----------------------------------------------------------------
-
-	#project(): void {
-		const selectedId = this.selected?.taskId;
-		this.#rows = projectAgentHubRows(
-			this.#options.feed.rows(),
-			this.#options.now?.() ?? Date.now(),
-		);
-		const index = selectedId ? this.#rows.findIndex((row) => row.taskId === selectedId) : -1;
-		this.#selected =
-			index >= 0 ? index : Math.max(0, Math.min(this.#selected, this.#rows.length - 1));
-	}
-
-	#changed(): void {
-		if (this.#disposed) return;
-		this.#project();
-		const state = this.#transcript;
-		if (state && this.#view === "transcript") {
-			const row = this.#rows.find((candidate) => candidate.taskId === state.taskId);
-			// A session id that just arrived, or a child that just finished and owes one last read.
-			if (row && !state.timer && this.#wantsRead(state, row)) this.#fetch(state, row);
-		}
-		this.#options.repaint();
-	}
-
-	// -- transcript -----------------------------------------------------------
-
-	#openTranscript(row: AgentHubRow): void {
-		this.#stopPolling();
-		const state: TranscriptState = {
-			taskId: row.taskId,
-			messages: undefined,
-			error: undefined,
-			loading: false,
-			failures: 0,
-			version: 0,
-			offset: 0,
-			follow: true,
-			timer: undefined,
-			settled: false,
-			lines: undefined,
-			total: 0,
-			page: 1,
-		};
-		this.#transcript = state;
-		this.#view = "transcript";
-		this.#fetch(state, row);
-		this.#options.repaint();
-	}
-
-	#closeTranscript(): void {
-		this.#stopPolling();
-		this.#transcript = undefined;
-		this.#view = "table";
-		this.#options.repaint();
-	}
-
-	#stopPolling(): void {
-		const state = this.#transcript;
-		if (!state) return;
-		clearTimeout(state.timer);
-		state.timer = undefined;
-	}
-
-	#fetch(state: TranscriptState, row: AgentHubRow): void {
-		const load = this.#options.loadTranscript;
-		if (!load || !row.sessionId || state.loading) return;
-		state.loading = true;
-		// Whether the child had already finished when this read began decides if it can still grow.
-		const finished = !row.active;
-		void Promise.resolve()
-			.then(() => load(row))
-			.then(
-				(messages) => {
-					if (this.#transcript !== state || this.#disposed) return;
-					state.messages = messages;
-					state.error = undefined;
-					state.failures = 0;
-					state.version++;
-					if (finished) state.settled = true;
-				},
-				(error: unknown) => {
-					if (this.#transcript !== state || this.#disposed) return;
-					state.error = describeError(error);
-					state.failures++;
-				},
-			)
-			.finally(() => {
-				state.loading = false;
-				if (this.#transcript !== state || this.#disposed) return;
-				this.#schedule(state);
-				this.#options.repaint();
-			});
-	}
-
-	/** Whether another read can add something: first load, a live child, or one last read after it ends. */
-	#wantsRead(state: TranscriptState, row: AgentHubRow): boolean {
-		return (
-			this.#options.loadTranscript !== undefined &&
-			row.sessionId !== undefined &&
-			state.failures < AGENT_HUB_MAX_FAILURES &&
-			(state.messages === undefined || row.active || !state.settled)
-		);
-	}
-
-	/** Poll only while a read can still add messages and reads keep working. */
-	#schedule(state: TranscriptState): void {
-		clearTimeout(state.timer);
-		state.timer = undefined;
-		const row = this.#rows.find((candidate) => candidate.taskId === state.taskId);
-		if (!row || !this.#wantsRead(state, row)) return;
-		state.timer = setTimeout(() => {
-			state.timer = undefined;
-			if (this.#transcript !== state || this.#disposed) return;
-			const current = this.#rows.find((candidate) => candidate.taskId === state.taskId);
-			if (current) this.#fetch(state, current);
-		}, this.#options.pollMs ?? AGENT_HUB_POLL_MS);
-		state.timer.unref?.();
 	}
 
 	#transcriptKey(data: string): void {
-		const state = this.#transcript;
-		if (!state) return;
-		if (
-			matchesKey(data, "escape") ||
-			matchesKey(data, "backspace") ||
-			matchesKey(data, "left") ||
-			data === "q"
-		) {
-			this.#closeTranscript();
+		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+			if (this.#input && !this.#sending) this.#input = "";
+			else {
+				this.#view = "roster";
+				this.#transcript = undefined;
+				this.#flash = undefined;
+			}
 			return;
 		}
-		if (data === "r") {
-			state.failures = 0;
-			const row = this.#rows.find((candidate) => candidate.taskId === state.taskId);
-			if (row) this.#fetch(state, row);
-			this.#options.repaint();
+		// Printable keys belong to the message line, so only non-printing keys scroll.
+		const lines = this.#transcriptLines().length;
+		const max = Math.max(0, lines - HUB_TRANSCRIPT_WINDOW);
+		let top: number | undefined;
+		if (matchesKey(data, "home")) top = 0;
+		else if (matchesKey(data, "end")) top = max;
+		else {
+			const delta = navigationDelta(data, HUB_TRANSCRIPT_WINDOW);
+			if (delta !== 0) top = Math.max(0, Math.min(max, this.#scrollTop(lines) + delta));
+		}
+		if (top !== undefined) {
+			// Back at the bottom: follow new lines again.
+			this.#transcriptScroll = top >= max ? Number.POSITIVE_INFINITY : top;
 			return;
 		}
-		const max = Math.max(0, state.total - state.page);
-		let offset = state.follow ? max : state.offset;
-		if (matchesKey(data, "down") || data === "j") offset++;
-		else if (matchesKey(data, "up") || data === "k") offset--;
-		else if (matchesKey(data, "pageDown") || data === " ") offset += state.page;
-		else if (matchesKey(data, "pageUp")) offset -= state.page;
-		else if (matchesKey(data, "home") || data === "g") offset = 0;
-		else if (matchesKey(data, "end") || data === "G") offset = max;
-		else return;
-		state.offset = Math.max(0, Math.min(offset, max));
-		state.follow = state.offset >= max;
-		this.#options.repaint();
-	}
-
-	#renderTranscript(width: number): readonly string[] {
-		const state = this.#transcript;
-		const row = state && this.#rows.find((candidate) => candidate.taskId === state.taskId);
-		if (!state || !row) return this.#renderMissing(width);
-		const theme = getTheme();
-		const clamp = (text: string) => truncateToWidth(text, width);
-		const elapsed = formatElapsed(row.elapsedMs ?? undefined);
-		const mark = theme.fg(STATUS_SLOT[row.status], glyph(row.status));
-		const identity = [
-			row.agent ? `@${row.agent}` : "",
-			`task ${row.taskId}`,
-			row.sessionId ? `session ${row.sessionId}` : "",
-		];
-		const head = [
-			clamp(
-				`${mark} ${theme.fg("accent", theme.bold(row.label))}` +
-					theme.fg("dim", ` · ${row.status}${elapsed ? ` · ${elapsed}` : ""}`),
-			),
-			clamp(theme.fg("dim", identity.filter(Boolean).join(" · "))),
-		];
-		const page = Math.max(1, this.#options.rows() - TRANSCRIPT_CHROME);
-		const key = [
-			width,
-			state.version,
-			state.error,
-			state.loading,
-			row.progress,
-			row.sessionId,
-		].join("|");
-		if (state.lines?.key !== key) {
-			state.lines = { key, rows: this.#transcriptBody(state, row, width) };
+		if (this.#sending) return;
+		const agent = this.#openAgent();
+		if (matchesKey(data, "enter")) {
+			const message = this.#input.trim();
+			if (message && agent) void this.#send(agent, message);
+			return;
 		}
-		const body = state.lines.rows;
-		const max = Math.max(0, body.length - page);
-		state.total = body.length;
-		state.page = page;
-		state.offset = state.follow ? max : Math.max(0, Math.min(state.offset, max));
-		const shown = body.slice(state.offset, state.offset + page);
-		while (shown.length < page) shown.push("");
-		const last = state.offset + Math.min(page, body.length);
-		const where = body.length ? `${state.offset + 1}–${last}/${body.length}` : "0/0";
-		const live = row.active
-			? state.failures >= AGENT_HUB_MAX_FAILURES
-				? "stalled — r retries"
-				: state.follow
-					? "live"
-					: "live (scrolled)"
-			: "finished";
-		const keys =
-			width >= 72
-				? "↑↓/pgup/pgdn scroll · g/G top/bottom · r refresh · esc back"
-				: "↑↓ scroll · esc back";
-		return [...head, ...shown, clamp(theme.fg("dim", `${where} · ${live} · ${keys}`))];
-	}
-
-	/** The child vanished from the tree while its transcript was open (session reset). */
-	#renderMissing(width: number): readonly string[] {
-		const theme = getTheme();
-		return [
-			truncateToWidth(theme.fg("warning", "This agent is no longer in the session."), width),
-			truncateToWidth(theme.fg("dim", "esc back"), width),
-		];
-	}
-
-	#transcriptBody(state: TranscriptState, row: AgentHubRow, width: number): string[] {
-		const theme = getTheme();
-		const lines: string[] = [""];
-		const note = (text: string, slot: ColorSlot = "muted") => {
-			for (const line of wrapTextWithAnsi(theme.fg(slot, text), width)) lines.push(line);
-		};
-		if (!this.#options.loadTranscript) {
-			note("This daemon does not serve session history, so the transcript is unavailable.");
-		} else if (!row.sessionId) {
-			note("This child has not reported a session yet; its transcript starts once it does.");
-		} else if (state.messages === undefined && !state.error) {
-			note("Loading transcript…", "dim");
+		if (matchesKey(data, "backspace")) this.#input = this.#input.slice(0, -1);
+		else if (matchesKey(data, "ctrl+u")) this.#input = "";
+		else if (isPrintable(data)) {
+			if (agent && canMessage(agent)) this.#input += data;
+			else
+				this.#flash = {
+					text: `${agent ? hubLabel(agent) : "this agent"} can no longer be messaged`,
+					level: "warning",
+				};
 		}
-		if (state.error) note(`Could not read the transcript: ${state.error}`, "warning");
-		if (state.messages !== undefined) {
-			const rendered = transcriptLines(state.messages, width);
-			if (rendered.length === 0) {
-				note("No transcript recorded for this child yet.", "dim");
-			} else {
-				lines.push(...rendered);
+	}
+
+	async #send(agent: TaskRecord, message: string): Promise<void> {
+		this.#sending = true;
+		this.#changed();
+		this.#host.requestRender();
+		const accepted = await this.#host.onSend(agent.taskId, message);
+		this.#sending = false;
+		// A refused or unacknowledged message stays on the line for review.
+		if (accepted) this.#input = "";
+		this.#changed();
+		this.#host.requestRender();
+	}
+
+	/** Moves the selection by `delta` rows, clamped; ±Infinity jumps to the first/last row. */
+	#move(delta: number): void {
+		const rows = this.#shown();
+		if (rows.length === 0) return;
+		const current = Math.max(
+			0,
+			rows.findIndex((row) => row.task.taskId === this.selected?.taskId),
+		);
+		const next = Math.max(0, Math.min(rows.length - 1, current + delta));
+		this.#selectedId = rows[next]!.task.taskId;
+	}
+
+	#openAgent(): TaskRecord | undefined {
+		const id = this.#transcript?.taskId;
+		return id ? this.#rows.find((row) => row.task.taskId === id)?.task : undefined;
+	}
+
+	// -- derived state -----------------------------------------------------------
+
+	#shown(): readonly TaskTreeRow[] {
+		return shownHubRows(this.#rows, this.#filter, this.#layout);
+	}
+
+	#transcriptLines(): string[] {
+		const transcript = this.#transcript;
+		if (!transcript?.text) return [];
+		return safeText(transcript.text).replace(/\s+$/, "").split("\n");
+	}
+
+	#scrollTop(lines: number): number {
+		const max = Math.max(0, lines - HUB_TRANSCRIPT_WINDOW);
+		return Math.min(this.#transcriptScroll, max);
+	}
+
+	#changed(): void {
+		this.#revision += 1;
+	}
+
+	// -- rows ------------------------------------------------------------------
+
+	render(width: number): readonly string[] {
+		if (!this.#visible || width <= 0) return EMPTY;
+		const theme = getTheme();
+		const clamp = (line: string) => truncateToWidth(line, width);
+		const now = this.#host.now?.() ?? Date.now();
+		const lines =
+			this.#view === "transcript" ? this.#transcriptRows(now, clamp) : this.#rosterRows(now, clamp);
+		if (this.#flash) lines.push(theme.fg(slotFor(this.#flash.level), clamp(this.#flash.text)));
+		if (this.focused) lines.push(theme.fg("dim", clamp(this.#hint())));
+		return lines;
+	}
+
+	#rosterRows(now: number, clamp: (line: string) => string): string[] {
+		const theme = getTheme();
+		const view = [
+			this.#layout,
+			this.#filter || this.#filtering ? `/${this.#filter}${this.#filtering ? "▏" : ""}` : "",
+		]
+			.filter(Boolean)
+			.join(" · ");
+		const headline = hubHeadline(this.#rows.map((row) => row.task));
+		const lines = [theme.fg("accent", clamp(`agents · ${headline} · ${view}`))];
+		const rows = this.#shown();
+		if (rows.length === 0) {
+			const empty = this.#rows.length === 0 ? "No subagents in this session." : "No agents match.";
+			lines.push(theme.fg("dim", clamp(empty)));
+			return lines;
+		}
+		const selectedId = this.selected?.taskId;
+		const index = Math.max(
+			0,
+			rows.findIndex((row) => row.task.taskId === selectedId),
+		);
+		const start = Math.max(
+			0,
+			Math.min(index - HUB_ROSTER_WINDOW + 1, rows.length - HUB_ROSTER_WINDOW),
+		);
+		const end = Math.min(start + HUB_ROSTER_WINDOW, rows.length);
+		for (let at = start; at < end; at++) {
+			const { task, depth } = rows[at]!;
+			const selected = this.focused && at === index;
+			// Bound indentation even if the wire contains a very deep hierarchy.
+			const indent = "  ".repeat(Math.min(depth, 5));
+			const branch = depth > 0 ? "└─ " : "";
+			const marker = selected ? theme.cursor : " ";
+			const clock = hubClockText(task, now);
+			const facts = [
+				task.model ? safeLine(task.model, 40) : undefined,
+				usageText(task.usage),
+			].filter(Boolean);
+			const row = `${marker} ${indent}${branch}${STATUS_LABEL[task.status]}${clock ? ` ${clock}` : ""} · ${hubIdentity(task)}${facts.length > 0 ? ` · ${facts.join(" · ")}` : ""}`;
+			lines.push(theme.fg(selected ? "accent" : STATUS_SLOT[task.status], clamp(row)));
+			if (task.progress) {
+				lines.push(theme.fg("muted", clamp(`    ${indent}${safeLine(task.progress, 400)}`)));
 			}
 		}
-		if (row.progress) {
-			lines.push("");
-			note(`latest: ${row.progress}`, "dim");
+		const hidden = rows.length - (end - start);
+		if (hidden > 0) lines.push(theme.fg("dim", clamp(`  …${hidden} more · ↑↓ browse`)));
+		const agent = this.selected;
+		if (this.focused && agent) lines.push(theme.fg("dim", clamp(`  ${hubInspector(agent)}`)));
+		return lines;
+	}
+
+	#transcriptRows(now: number, clamp: (line: string) => string): string[] {
+		const theme = getTheme();
+		const transcript = this.#transcript;
+		const agent = this.#openAgent();
+		const title = agent ? hubIdentity(agent) : safeLine(transcript?.taskId ?? "", 80);
+		const clock = agent ? hubClockText(agent, now) : "";
+		const status = agent ? `${STATUS_LABEL[agent.status]}${clock ? ` ${clock}` : ""}` : "";
+		const lines = [
+			theme.fg("accent", clamp(`agents › ${title}${status ? ` · ${status}` : ""} · transcript`)),
+		];
+		if (!transcript || (transcript.text === undefined && !transcript.error)) {
+			lines.push(theme.fg("dim", clamp("loading transcript…")));
+		} else if (transcript.text === undefined) {
+			lines.push(theme.fg("error", clamp(`transcript unavailable: ${transcript.error}`)));
+		} else {
+			const all = this.#transcriptLines();
+			const top = this.#scrollTop(all.length);
+			for (const line of all.slice(top, top + HUB_TRANSCRIPT_WINDOW)) {
+				lines.push(clamp(`  ${line}`));
+			}
+			const below = Math.max(0, all.length - top - HUB_TRANSCRIPT_WINDOW);
+			if (top > 0 || below > 0 || transcript.truncated) {
+				const cut = transcript.truncated ? " · older history truncated" : "";
+				const live = Number.isFinite(this.#transcriptScroll) ? "" : " · following";
+				lines.push(
+					theme.fg("dim", clamp(`  ${top} above · ${below} below · ↑↓ scroll${live}${cut}`)),
+				);
+			}
+			if (transcript.error) {
+				lines.push(theme.fg("warning", clamp(`  transcript refresh failed: ${transcript.error}`)));
+			}
+		}
+		if (agent && canMessage(agent)) {
+			const cursor = this.#sending ? "" : "▏";
+			const sending = this.#sending ? " (sending…)" : "";
+			lines.push(
+				clamp(`${theme.fg("muted", `${sendVerb(agent)}${sending} › `)}${this.#input}${cursor}`),
+			);
+		} else {
+			lines.push(theme.fg("dim", clamp("this agent can no longer be messaged")));
 		}
 		return lines;
 	}
+
+	#hint(): string {
+		if (this.#view === "transcript") {
+			return "type a message · enter send · ↑↓/pgup/pgdn/home/end scroll · esc clear/back";
+		}
+		if (this.#filtering) return "type to filter by id or name · enter keep · esc clear";
+		const close = this.#filter ? "esc clear filter · q close" : "esc close";
+		return `↑↓ select · g/G first/last · enter transcript & message · t ${this.#layout === "tree" ? "flat" : "tree"} · / filter · x cancel · r refresh · ${close}`;
+	}
+
+	// -- native (TSP) --------------------------------------------------------------
+
+	/**
+	 * omp's task card (`omp.tool.task`) holding one `agent` node per child at its
+	 * lineage depth, or the open agent's transcript and message line.
+	 */
+	describe(): NativeNode {
+		if (!this.#visible) return EMPTY_NODE;
+		if (this.#native?.revision === this.#revision) return this.#native.node;
+		const now = this.#host.now?.() ?? Date.now();
+		const body: NativeChild[] = [];
+		if (this.#view === "transcript") {
+			const agent = this.#openAgent();
+			if (agent) body.push(agentNode(agent, 0, now, false));
+			const transcript = this.#transcript;
+			if (transcript?.text !== undefined) {
+				body.push(text([span(safeText(transcript.text))], { wrap: "word", key: "transcript" }));
+				if (transcript.error) {
+					body.push(
+						text([span(`transcript refresh failed: ${transcript.error}`, "warning")], {
+							wrap: "word",
+							key: "transcript-error",
+						}),
+					);
+				}
+			} else {
+				body.push(
+					text(
+						[
+							span(
+								transcript?.error
+									? `transcript unavailable: ${transcript.error}`
+									: "loading transcript…",
+								"dim",
+							),
+						],
+						{
+							key: "transcript",
+						},
+					),
+				);
+			}
+			if (agent && canMessage(agent)) {
+				body.push(
+					text([span(`${sendVerb(agent)} › `, "muted"), span(this.#input)], { key: "input" }),
+				);
+			}
+		} else {
+			const rows = this.#shown();
+			const selectedId = this.selected?.taskId;
+			for (const { task, depth } of rows) {
+				body.push(agentNode(task, depth, now, this.focused && task.taskId === selectedId));
+			}
+			if (rows.length === 0) {
+				body.push(
+					text(
+						[
+							span(
+								this.#rows.length === 0 ? "No subagents in this session." : "No agents match.",
+								"dim",
+							),
+						],
+						{
+							key: "empty",
+						},
+					),
+				);
+			}
+		}
+		if (this.#flash) {
+			body.push(
+				text([span(this.#flash.text, toneFor(this.#flash.level))], { wrap: "word", key: "flash" }),
+			);
+		}
+		if (this.focused) body.push(text([span(this.#hint(), "dim")], { key: "hint" }));
+		const active = this.#rows.some((row) => isTaskActive(row.task.status));
+		const described = card(
+			{
+				role: "omp.tool.task",
+				head: [
+					span("Agents", "strong"),
+					span(` · ${hubHeadline(this.#rows.map((row) => row.task))}`, "muted"),
+				],
+				status: active ? "running" : "done",
+			},
+			body,
+		);
+		this.#native = { revision: this.#revision, node: described };
+		return described;
+	}
 }
 
-/**
- * Messages to terminal rows at `width`. A tool call and its result (same
- * `toolCallId`) collapse into the result's single line; text is escaped,
- * assistant text is Markdown. Never wider than `width`.
- */
-export function transcriptLines(messages: readonly ChatHistoryMessage[], width: number): string[] {
-	const theme = getTheme();
-	const answered = new Set<string>();
-	for (const message of messages) {
-		if (message.role === "tool_result" && message.toolCallId) answered.add(message.toolCallId);
-	}
-	const indent = "  ";
-	const inner = Math.max(1, width - indent.length);
-	const out: string[] = [];
-	const block = (label: string, slot: ColorSlot, body: readonly string[]) => {
-		if (out.length > 0) out.push("");
-		out.push(truncateToWidth(theme.fg(slot, theme.bold(label)), width));
-		for (const line of body) out.push(truncateToWidth(`${indent}${line}`, width));
+const EMPTY: readonly string[] = Object.freeze([]);
+
+function agentNode(task: TaskRecord, depth: number, now: number, selected: boolean): NativeNode {
+	const ms = hubClockMs(task, now);
+	const usage = task.usage;
+	const props: AgentProps = {
+		name: hubLabel(task),
+		status: AGENT_STATUS[task.status],
+		role: "omp.task.agent",
+		...(task.agent ? { agent: safeLine(task.agent, 40) } : {}),
+		...(task.description ? { task: safeLine(task.description) } : {}),
+		...(task.model ? { model: safeLine(task.model, 60) } : {}),
+		stats: {
+			...(usage?.tokens !== undefined ? { tokens: usage.tokens } : {}),
+			...(usage?.requests !== undefined ? { requests: usage.requests } : {}),
+			...(usage?.costUsd !== undefined ? { cost: usage.costUsd } : {}),
+			...(task.contextPercent !== undefined
+				? { context: Math.min(1, Math.max(0, task.contextPercent / 100)) }
+				: {}),
+			...(ms === undefined ? {} : isTaskTerminal(task.status) ? { took: ms } : { age: ms }),
+		},
+		badges: [
+			...(selected ? [{ text: "selected", tone: "accent" as const }] : []),
+			...(task.status === "unknown"
+				? [{ text: "outcome unknown", tone: "warning" as const }]
+				: task.status === "cancelling"
+					? [{ text: "cancelling", tone: "warning" as const }]
+					: []),
+		],
+		...(depth > 0 ? { depth } : {}),
+		...(task.progress ? { collapsible: true, collapsed: false } : {}),
 	};
-	for (const message of messages) {
-		const role = message.role;
-		if (role === "tool_use" && message.toolCallId && answered.has(message.toolCallId)) continue;
-		const text = typeof message.content === "string" ? message.content : "";
-		const suffix = message.truncated ? [theme.fg("dim", "… (truncated)")] : [];
-		if (role === "user") {
-			block("you", "userPrefix", [
-				...wrapTextWithAnsi(theme.fg("userText", sanitizeText(text)), inner),
-				...suffix,
-			]);
-		} else if (role === "assistant") {
-			if (sanitizeText(text).trim() === "") continue;
-			const markdown = new Markdown(sanitizeText(text), 0, 0, getMarkdownTheme(), {
-				color: (value) => theme.fg("assistantText", value),
-			});
-			block("assistant", "accent", [...markdown.render(inner), ...suffix]);
-		} else if (role === "tool_use" || role === "tool_result") {
-			const name = typeof message.toolName === "string" ? sanitizeText(message.toolName) : "tool";
-			const title = typeof message.title === "string" ? sanitizeText(message.title) : "";
-			const mark =
-				role === "tool_use"
-					? theme.fg("toolRunning", "…")
-					: message.cancelled
-						? theme.fg("warning", "■")
-						: message.ok === false
-							? theme.fg("toolError", "✗")
-							: theme.fg("toolSuccess", "✓");
-			const label = title && title !== name ? `${name} — ${title}` : name;
-			out.push(truncateToWidth(`${indent}${mark} ${theme.fg("toolTitle", label)}`, width));
-			const detail = role === "tool_result" ? firstLine(text) : "";
-			if (detail) out.push(truncateToWidth(`${indent}  ${theme.fg("toolDetail", detail)}`, width));
-		} else if (sanitizeText(text).trim() !== "") {
-			block(sanitizeText(String(role)), "muted", [
-				...wrapTextWithAnsi(theme.fg("muted", firstLine(text)), inner),
-			]);
-		}
-	}
-	return out;
+	return node(
+		"agent",
+		props,
+		task.progress ? [text([span(safeLine(task.progress, 400), "muted")], { wrap: "word" })] : [],
+		task.taskId,
+	);
+}
+
+function navigationDelta(data: string, page: number): number {
+	if (matchesKey(data, "up") || matchesKey(data, "ctrl+p")) return -1;
+	if (matchesKey(data, "down") || matchesKey(data, "ctrl+n")) return 1;
+	if (matchesKey(data, "pageUp")) return -page;
+	if (matchesKey(data, "pageDown")) return page;
+	return 0;
+}
+
+function slotFor(level: NoticeLevel): ColorSlot {
+	return level === "error" ? "error" : level === "warning" ? "warning" : "muted";
+}
+
+function toneFor(level: NoticeLevel): string {
+	return level === "error" ? "error" : level === "warning" ? "warning" : "muted";
 }

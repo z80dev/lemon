@@ -22,6 +22,9 @@ See [README](README.md) for usage and [BEAM invariants](../../docs/beam_agents.m
 
 - Agent loops and tools run under `LoopTaskSupervisor` and `ToolTaskSupervisor`.
   Tool crashes become tool errors, not agent-loop crashes or implicit retries.
+- `AgentTool.on_stream` runs synchronously in the loop process while arguments
+  stream. Every observed call is settled once after it executes or is discarded,
+  including before the loop cancels its own event stream (which kills the task).
 - Abort is cooperative: tools check `AbortSignal.aborted?/1`; loops check before
   model calls and tool batches. Cleanup must account for external work that can
   briefly outlive the signal.

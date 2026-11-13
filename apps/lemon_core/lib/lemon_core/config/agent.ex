@@ -61,9 +61,15 @@ defmodule LemonCore.Config.Agent do
       idle_ttl_ms = 300000          # 0 keeps completed children live until their parent ends
       request_budget = 200          # 0 disables the per-child assistant request budget
       request_budget_notice = true  # steer once at the soft budget before stopping at 1.5x
+      speculative_launch = true     # start tasks[] items while the call is still streaming
       worktree_merge = "none"       # none | patch | branch, used by worktree = true tasks
       disabled_agents = []          # persona IDs hidden from the task tool
       agent_models = {}             # persona ID => model or @role override
+      per_call_model = "off"        # off | on: may task/agent calls pick a child model?
+      # per_call_model_allow = ["anthropic/claude-sonnet-4-5", "@smol"]  # unset: any model
+
+  A project `.lemon/config.toml` can only narrow `per_call_model` (lower the
+  mode, intersect the allowlist); see `LemonCore.Config.Modular`.
 
   Environment variables override file configuration:
   - `LEMON_DEFAULT_PROVIDER`
@@ -130,9 +136,12 @@ defmodule LemonCore.Config.Agent do
             idle_ttl_ms: non_neg_integer(),
             request_budget: non_neg_integer(),
             request_budget_notice: boolean(),
+            speculative_launch: boolean(),
             worktree_merge: String.t(),
             disabled_agents: [String.t()],
-            agent_models: %{optional(String.t()) => String.t()}
+            agent_models: %{optional(String.t()) => String.t()},
+            per_call_model: String.t(),
+            per_call_model_allow: [String.t()] | nil
           }
         }
 
@@ -373,9 +382,12 @@ defmodule LemonCore.Config.Agent do
       idle_ttl_ms: Map.get(task, "idle_ttl_ms", 300_000),
       request_budget: Map.get(task, "request_budget", 200),
       request_budget_notice: Map.get(task, "request_budget_notice", true),
+      speculative_launch: Map.get(task, "speculative_launch", true),
       worktree_merge: Map.get(task, "worktree_merge", "none"),
       disabled_agents: Map.get(task, "disabled_agents", []),
-      agent_models: Map.get(task, "agent_models", %{})
+      agent_models: Map.get(task, "agent_models", %{}),
+      per_call_model: Map.get(task, "per_call_model", "off"),
+      per_call_model_allow: Map.get(task, "per_call_model_allow")
     }
   end
 

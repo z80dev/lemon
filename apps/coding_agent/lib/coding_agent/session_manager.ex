@@ -421,6 +421,10 @@ defmodule CodingAgent.SessionManager do
   thinking level and compaction history. A separate cumulative-spend snapshot
   includes off-branch usage so forking cannot reset budget caps; it does not add
   model-visible conversation messages. The source file is never modified.
+
+  `fresh_budget: true` starts the fork's spend ledger at zero instead (for
+  delegated forks whose spend reports to a parent budget scope); the copied
+  messages keep their recorded usage.
   """
   @spec fork_file(String.t(), String.t(), keyword()) :: {:ok, Session.t()} | {:error, term()}
   def fork_file(source_path, destination_path, opts \\ []) do
@@ -433,7 +437,10 @@ defmodule CodingAgent.SessionManager do
         branch = get_branch(source, leaf_id)
 
         child =
-          new(source.header.cwd, id: Keyword.get(opts, :id), parent_session: source.header.id)
+          new(source.header.cwd,
+            id: Keyword.get(opts, :id),
+            parent_session: Keyword.get(opts, :parent_session, source.header.id)
+          )
 
         child = %{
           child
@@ -445,9 +452,12 @@ defmodule CodingAgent.SessionManager do
 
         # Forks inherit all source spend, including off-branch and interrupted
         # requests; copying only the selected branch could otherwise evade caps.
-        child =
-          BudgetLedger.append(child, BudgetLedger.restore(source))
-          |> BudgetLedger.append_children(BudgetLedger.restore_children(source))
+        {usage, child_usage} =
+          if Keyword.get(opts, :fresh_budget, false),
+            do: {nil, nil},
+            else: {BudgetLedger.restore(source), BudgetLedger.restore_children(source)}
+
+        child = child |> BudgetLedger.append(usage) |> BudgetLedger.append_children(child_usage)
 
         with {:ok, context} <- execution_context(source),
              {:ok, child} <- inherit_fork_execution_context(child, context),

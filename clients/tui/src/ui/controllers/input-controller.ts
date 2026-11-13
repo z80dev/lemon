@@ -43,10 +43,9 @@ export const LEMON_KEYBINDINGS = {
 		defaultKeys: "ctrl+p",
 		description: "Search commands, skills and prompts",
 	},
-	"lemon.tasks.toggle": { defaultKeys: "alt+a", description: "Show/hide live subagent tree" },
-	"lemon.agents.hub": {
-		defaultKeys: "ctrl+s",
-		description: "Open the agent hub: every subagent and its transcript",
+	"lemon.tasks.toggle": {
+		defaultKeys: "alt+a",
+		description: "Open/close the Agent Hub (subagents)",
 	},
 	"lemon.omp.toggle": { defaultKeys: "alt+m", description: "Show/hide omp delegate sessions" },
 	"lemon.tools.toggle": { defaultKeys: "alt+o", description: "Collapse/expand all tool output" },
@@ -87,7 +86,6 @@ export interface InputControllerOptions {
 	toggleOmpPanel?: () => void;
 	toggleToolOutputs?: () => void;
 	openDiff?: () => void;
-	openAgentHub?: () => void | Promise<void>;
 	copyLastReply?: () => void | Promise<void>;
 	togglePlan?: () => void | Promise<void>;
 	cycleModel?: () => void | Promise<void>;
@@ -134,10 +132,6 @@ export class InputController {
 			}
 			if (this.#matches(data, "lemon.tasks.toggle")) {
 				this.#options.toggleTaskTree?.();
-				return { consume: true };
-			}
-			if (this.#matches(data, "lemon.agents.hub")) {
-				void this.#options.openAgentHub?.();
 				return { consume: true };
 			}
 			if (this.#matches(data, "lemon.omp.toggle")) {

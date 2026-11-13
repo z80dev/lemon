@@ -576,3 +576,101 @@ export function installOmpFixtures(
 		});
 	return { sessions, update };
 }
+
+/** Default methods plus the Agent Hub's `subagents.*` surface. */
+export const SUBAGENT_FAKE_METHODS: readonly string[] = [
+	...DEFAULT_METHODS,
+	"subagents.list",
+	"subagents.transcript",
+	"subagents.send",
+	"subagents.cancel",
+];
+
+/** A `subagents.list` agent row as the daemon sends it. */
+export type SubagentWire = Record<string, unknown> & { taskId: string; status: string };
+
+export interface SubagentFake {
+	/** Rows per session key; mutate to change what the next roster read returns. */
+	readonly sessions: Map<string, SubagentWire[]>;
+	/** `{sessionKey, taskId, message}` of every accepted message. */
+	readonly sent: Array<{ sessionKey: string; taskId: string; message: string }>;
+}
+
+/**
+ * Script `subagents.*` against an in-memory roster with the daemon's semantics:
+ * IDs outside the given session are NOT_FOUND; sending wakes idle and revives
+ * parked agents; cancellation is terminal.
+ */
+export function installSubagentFixtures(
+	server: FakeControlPlane,
+	roster: Record<string, SubagentWire[]>,
+): SubagentFake {
+	const sessions = new Map(
+		Object.entries(roster).map(([key, rows]) => [key, rows.map((row) => ({ ...row }))]),
+	);
+	const sent: SubagentFake["sent"] = [];
+	const live = (status: unknown) =>
+		status === "queued" || status === "running" || status === "idle" || status === "parked";
+	const find = (params: { sessionKey?: string; taskId?: string }) =>
+		sessions.get(params?.sessionKey ?? "")?.find((row) => row.taskId === params?.taskId);
+	const notFound = () =>
+		errorResult("NOT_FOUND", "Subagent not found", { code: "SUBAGENT_NOT_FOUND" });
+	server
+		.onMethod("subagents.list", (params: { sessionKey?: string }) => {
+			const agents = sessions.get(params?.sessionKey ?? "") ?? [];
+			return { sessionKey: params?.sessionKey, agents, total: agents.length };
+		})
+		.onMethod("subagents.transcript", (params: { sessionKey?: string; taskId?: string }) => {
+			const row = find(params);
+			if (!row) return notFound();
+			const replies = sent
+				.filter((entry) => entry.taskId === row.taskId)
+				.map((entry) => `operator: ${entry.message}`);
+			return {
+				taskId: row.taskId,
+				status: row.status,
+				text: [
+					`# Task ${row.taskId}`,
+					`Status: ${row.status}`,
+					`Assignment: ${row.description ?? ""}`,
+					"",
+					String(row.transcript ?? "Working on it."),
+					...replies,
+				].join("\n"),
+				truncated: false,
+			};
+		})
+		.onMethod(
+			"subagents.send",
+			(params: { sessionKey?: string; taskId?: string; message?: string }) => {
+				const row = find(params);
+				if (!row) return notFound();
+				if (!live(row.status))
+					return errorResult("CONFLICT", "Subagent is not running, idle or parked", {
+						code: "SUBAGENT_NOT_ACTIVE",
+					});
+				const delivery =
+					row.status === "idle" ? "woken" : row.status === "parked" ? "revived" : "injected";
+				sent.push({
+					sessionKey: params.sessionKey!,
+					taskId: row.taskId,
+					message: String(params.message),
+				});
+				row.status = "running";
+				return { taskId: row.taskId, accepted: true, delivery, retrySafe: true };
+			},
+		)
+		.onMethod("subagents.cancel", (params: { sessionKey?: string; taskId?: string }) => {
+			const row = find(params);
+			if (!row) return notFound();
+			if (!live(row.status))
+				return errorResult("CONFLICT", "Subagent is not running, idle or parked", {
+					code: "SUBAGENT_NOT_ACTIVE",
+				});
+			row.status = "cancelled";
+			row.messaging = false;
+			row.cancellable = false;
+			return { taskId: row.taskId, cancelled: true };
+		});
+	return { sessions, sent };
+}

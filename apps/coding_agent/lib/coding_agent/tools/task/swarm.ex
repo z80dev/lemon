@@ -54,7 +54,8 @@ defmodule CodingAgent.Tools.Task.Swarm do
       "worktree",
       "merge",
       "tool_policy",
-      "context"
+      "context",
+      "steps"
     ])
     |> Map.put("prompt", "Coordinate the native task dependency graph: " <> names)
     |> Map.put_new("description", "Swarm: " <> names)

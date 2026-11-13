@@ -9,14 +9,6 @@ export const paletteCommand: SlashCommand = {
 	run: (ctx) => ctx.ui.openCommandPalette!(ctx.rest.trim() || undefined),
 };
 
-export const taskTreeCommand: SlashCommand = {
-	name: "tasktree",
-	summary: "show or hide the live subagent tree",
-	group: "interface",
-	availableWhen: (ctx) => (ctx.ui.toggleTaskTree ? true : "no task panel in this client"),
-	run: (ctx) => ctx.ui.toggleTaskTree!(),
-};
-
 export const outputCommand: SlashCommand = {
 	name: "output",
 	summary: "browse complete tool output receipts",

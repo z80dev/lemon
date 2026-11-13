@@ -23,7 +23,7 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 
 | Command | Aliases | Arguments | Description |
 | --- | --- | --- | --- |
-| /hub | /subagents | — | open the live subagent hub: status table and child transcripts |
+| /hub | /tasktree, /subagents | — | open or close the Agent Hub: subagents, transcripts, steer and cancel |
 
 ## approvals
 
@@ -172,7 +172,6 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | Command | Aliases | Arguments | Description |
 | --- | --- | --- | --- |
 | /palette | — | [query] | search commands, local skills and prompt templates |
-| /tasktree | — | — | show or hide the live subagent tree |
 | /output | — | — | browse complete tool output receipts |
 | /diff | — | — | inspect the latest edit diff without card truncation |
 
@@ -216,8 +215,7 @@ Overlays own their keys; picker-local shortcuts are not configurable here.
 | lemon.transcript.cycleDetail | ctrl+t | Cycle detail for every card: collapsed → expanded → default |
 | lemon.links.browse | alt+l | Browse the transcript's links and open one by its hint tag |
 | lemon.palette.open | ctrl+p | Search commands, skills and prompts |
-| lemon.tasks.toggle | alt+a | Show/hide live subagent tree |
-| lemon.agents.hub | ctrl+s | Open the agent hub: every subagent and its transcript |
+| lemon.tasks.toggle | alt+a | Open/close the Agent Hub (subagents) |
 | lemon.omp.toggle | alt+m | Show/hide omp delegate sessions |
 | lemon.tools.toggle | alt+o | Collapse/expand all tool output |
 | lemon.tools.diff | alt+d | Inspect the latest edit diff |

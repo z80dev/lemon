@@ -6,7 +6,17 @@ defmodule CodingAgent.Tools.Task do
   final assistant response.
   """
 
-  alias CodingAgent.Tools.Task.{Control, Execution, Messaging, Params, Result, Swarm, Wait}
+  alias CodingAgent.Tools.Task.{
+    Control,
+    Execution,
+    Messaging,
+    Params,
+    Result,
+    Speculation,
+    Swarm,
+    Wait
+  }
+
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
 
@@ -62,7 +72,15 @@ defmodule CodingAgent.Tools.Task do
           },
           "prompt" => %{
             "type" => "string",
-            "description" => "Child assignment"
+            "description" => "Child assignment (or use steps)"
+          },
+          "steps" => %{
+            "type" => "array",
+            "minItems" => 1,
+            "maxItems" => 4,
+            "items" => %{"type" => "string"},
+            "description" =>
+              "Instead of prompt: ordered stages for ONE child session; each later stage is sent after the previous answer, the last answer is the result"
           },
           "context" => %{
             "type" => "string",
@@ -99,18 +117,15 @@ defmodule CodingAgent.Tools.Task do
             "enum" => ["wait_all", "wait_any"],
             "description" => "Join mode; default wait_all"
           },
-          "model" => %{
-            "type" => "string",
-            "description" => "Model or @role; omitted uses persona/task defaults, then parent"
-          },
-          "thinking_level" => %{
-            "type" => "string",
-            "description" => "Thinking level override"
-          },
           "agent" => %{
             "type" => "string",
             "description" =>
               "Persona: scout/reviewer are read-only; task-executor or discovered definitions"
+          },
+          "source_session" => %{
+            "type" => "string",
+            "description" =>
+              "Required for agent=seance: id or journal path of a past session of this project to consult (forked read-only)"
           },
           "output_schema" => %{
             "type" => ["object", "boolean"],
@@ -166,9 +181,12 @@ defmodule CodingAgent.Tools.Task do
         },
         "required" => []
       },
-      execute: &execute(&1, &2, &3, &4, cwd, opts)
+      execute: &execute(&1, &2, &3, &4, cwd, opts),
+      on_stream: &Speculation.on_stream(&1, cwd, opts)
     }
     |> Params.maybe_add_enum(agent_enum)
+    # Present only while [runtime.task].per_call_model is on; tasks[] items copy them.
+    |> Params.put_per_call_model_params(cwd, opts, ["model", "thinking_level"])
     |> add_batch_schema()
   end
 
@@ -189,9 +207,10 @@ defmodule CodingAgent.Tools.Task do
     else
       case Params.normalize_action(Map.get(params, "action")) do
         "swarm" ->
-          opts = Params.with_settings(cwd, opts)
+          opts = Params.launch_opts(cwd, opts)
 
-          with :ok <- Params.check_spawn_depth(cwd, opts) do
+          with :ok <- Params.check_spawn_depth(cwd, opts),
+               :ok <- Params.check_per_call_model(params, cwd, opts) do
             Swarm.execute(tool_call_id, params, signal, on_update, cwd, opts)
           end
 
@@ -199,7 +218,12 @@ defmodule CodingAgent.Tools.Task do
           Wait.execute(params, signal, opts)
 
         action when action in ["message", "steer"] ->
-          Messaging.send(params["to"] || params["task_id"], params["message"], opts)
+          if Params.plan_mode?(opts),
+            do:
+              {:error,
+               "Plan mode is active: task #{action} is blocked because it can direct a child " <>
+                 "to change the working tree. Use poll, get, join, wait or cancel."},
+            else: Messaging.send(params["to"] || params["task_id"], params["message"], opts)
 
         action when action in ["poll", "join", "get", "cancel"] ->
           with :ok <- authorize_action(action, params, opts) do
@@ -212,9 +236,10 @@ defmodule CodingAgent.Tools.Task do
           end
 
         "run" ->
-          opts = Params.with_settings(cwd, opts)
+          opts = Params.launch_opts(cwd, opts)
 
-          with :ok <- Params.check_spawn_depth(cwd, opts) do
+          with :ok <- Params.check_spawn_depth(cwd, opts),
+               :ok <- Params.check_per_call_model(params, cwd, opts) do
             if Map.has_key?(params, "tasks"),
               do: run_batch(tool_call_id, params, signal, on_update, cwd, opts),
               else: do_execute(tool_call_id, params, signal, on_update, cwd, opts)
@@ -224,6 +249,9 @@ defmodule CodingAgent.Tools.Task do
           {:error, "Unknown task action"}
       end
     end
+  after
+    # Speculative launches the call did not adopt never became part of it.
+    Speculation.discard(tool_call_id, opts)
   end
 
   defp do_execute(tool_call_id, params, signal, on_update, cwd, opts) do
@@ -241,8 +269,10 @@ defmodule CodingAgent.Tools.Task do
         "name",
         "prompt",
         "agent",
+        "source_session",
         "output_schema",
         "schema_mode",
+        "steps",
         "request_budget",
         "model",
         "thinking_level",
@@ -263,8 +293,8 @@ defmodule CodingAgent.Tools.Task do
       "minItems" => 1,
       "maxItems" => 32,
       "description" =>
-        "Children inherit top-level options (context is top-level only). Swarm nodes require unique names; depends_on defines their DAG.",
-      "items" => %{"type" => "object", "properties" => child_properties, "required" => ["prompt"]}
+        "Children inherit top-level options (context is top-level only); read-only items (scout/reviewer or a read-only tool_policy) may start while the call still streams. Swarm nodes require unique names; depends_on defines their DAG.",
+      "items" => %{"type" => "object", "properties" => child_properties}
     }
 
     %{tool | parameters: put_in(tool.parameters, ["properties", "tasks"], tasks)}
@@ -323,27 +353,23 @@ defmodule CodingAgent.Tools.Task do
 
   defp launch_batch(tool_call_id, tasks, params, signal, on_update, cwd, opts) do
     defaults = Map.drop(params, ["tasks", "action"])
-
-    validated =
-      Enum.map(tasks, fn task ->
-        child = Map.merge(defaults, task)
-
-        child =
-          if Map.get(child, "async", true) == false,
-            do: Map.put(child, "auto_followup", false),
-            else: child
-
-        Params.validate_run_params(child, cwd, opts)
-      end)
+    children = Enum.map(tasks, &batch_child(defaults, &1))
+    validated = Enum.map(children, &Params.validate_run_params(&1, cwd, opts))
 
     with nil <- Enum.find(validated, &match?({:error, _}, &1)),
          :ok <- unique_task_names(validated) do
+      adopted = Speculation.adopt(tool_call_id, opts, children)
+
       results =
-        Enum.map(validated, fn {:ok, child} ->
-          with {:ok, child} <- Params.restrict_to_parent(child, cwd, opts),
-               :ok <- Params.check_budget_and_policy(child, opts) do
-            Execution.run(tool_call_id, %{child | async: true}, signal, on_update, cwd, opts)
-          end
+        validated
+        |> Enum.with_index()
+        |> Enum.map(fn {{:ok, child}, index} ->
+          Map.get_lazy(adopted, index, fn ->
+            with {:ok, child} <- Params.restrict_to_parent(child, cwd, opts),
+                 :ok <- Params.check_budget_and_policy(child, opts) do
+              Execution.run(tool_call_id, %{child | async: true}, signal, on_update, cwd, opts)
+            end
+          end)
         end)
 
       receipts =
@@ -394,6 +420,16 @@ defmodule CodingAgent.Tools.Task do
     else
       {:error, _} = error -> error
     end
+  end
+
+  @doc false
+  # One batch item's parameters: top-level options under the item's own.
+  def batch_child(defaults, task) do
+    child = Map.merge(defaults, task)
+
+    if Map.get(child, "async", true) == false,
+      do: Map.put(child, "auto_followup", false),
+      else: child
   end
 
   defp unique_task_names(validated) do

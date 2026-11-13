@@ -27,6 +27,7 @@ defmodule CodingAgent.ControlPlaneProvider do
   alias CodingAgent.Session.Todos
   alias CodingAgent.Session.UserPrompt
   alias CodingAgent.Tools.FeatureRequirements
+  alias CodingAgent.Tools.Task.Hub
   alias CodingAgent.Tools.TodoStore
 
   def user_prompt_bind(session_key, connection, enabled, opts \\ []) do
@@ -41,6 +42,39 @@ defmodule CodingAgent.ControlPlaneProvider do
   def list_tasks, do: CodingAgent.TaskStore.list(:all)
 
   def get_task(task_id), do: CodingAgent.TaskStore.get(task_id)
+
+  @doc "Agent Hub roster: the root session's native task children, nested included."
+  def subagents_list(session_key) when is_binary(session_key),
+    do: Hub.list(session_key, hub_roots(session_key))
+
+  @doc "Bounded `history://` transcript of one of the root session's task children."
+  def subagent_transcript(session_key, task_id) when is_binary(session_key),
+    do: Hub.transcript(session_key, hub_roots(session_key), task_id)
+
+  @doc "Operator steer/follow-up/revive of one of the root session's task children."
+  def subagent_send(session_key, task_id, message) when is_binary(session_key),
+    do: Hub.send(session_key, hub_roots(session_key), task_id, message)
+
+  @doc "Operator cancellation of one of the root session's task children."
+  def subagent_cancel(session_key, task_id) when is_binary(session_key),
+    do: Hub.cancel(session_key, hub_roots(session_key), task_id)
+
+  # The routing key's root native sessions: live roots (never task children, which
+  # share the key) plus the journal the key last resumed.
+  defp hub_roots(session_key) do
+    live =
+      for {native_id, pid} <- registered_sessions(session_key),
+          root_session_owner?(pid, native_id, session_key) == true,
+          do: native_id
+
+    resumed =
+      case LemonCore.ChatStateStore.get(session_key) do
+        %{} = state -> Map.get(state, :last_resume_token) || Map.get(state, "last_resume_token")
+        _ -> nil
+      end
+
+    Enum.uniq(live ++ if(is_binary(resumed), do: [resumed], else: []))
+  end
 
   def todo_progress(session_key) do
     case session_todos(session_key, nil) do
@@ -193,40 +227,6 @@ defmodule CodingAgent.ControlPlaneProvider do
          {:ok, session} <- CodingAgent.SessionManager.load_from_file(path) do
       {:ok, CodingAgent.SessionManager.get_branch(session)}
     end
-  end
-
-  @doc """
-  Return a delegated child's durable native branch by its native session id.
-
-  The id is only a lookup key: it must match a task record launched under
-  `parent_key`, and the journal path is derived from that record's own working
-  directory, never from caller input. Unknown ids, ids of other sessions' tasks,
-  and children that never persisted a journal are all `:session_not_found`.
-  """
-  def child_session_history(parent_key, child_id)
-      when is_binary(parent_key) and parent_key != "" and is_binary(child_id) and child_id != "" do
-    with {:ok, %{cwd: cwd}} when is_binary(cwd) <- owned_child_task(parent_key, child_id),
-         path = CodingAgent.SessionManager.session_file_path(cwd, child_id),
-         {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
-         true <- session.header.id == child_id do
-      {:ok, CodingAgent.SessionManager.get_branch(session)}
-    else
-      _ -> {:error, :session_not_found}
-    end
-  end
-
-  def child_session_history(_parent_key, _child_id), do: {:error, :session_not_found}
-
-  # Same ownership rule as the `sessions.snapshot` children list: a task belongs
-  # to the session that launched it.
-  defp owned_child_task(parent_key, child_id) do
-    CodingAgent.TaskStore.list(:all)
-    |> Enum.find_value(:error, fn {_id, record} ->
-      if Map.get(record, :session_id) == child_id and
-           (Map.get(record, :session_key) == parent_key or
-              Map.get(record, :parent_session_key) == parent_key),
-         do: {:ok, record}
-    end)
   end
 
   @doc "Read the current native branch, including offline rewind, without starting a session."

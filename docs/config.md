@@ -538,7 +538,8 @@ summary credential/stream-option overrides are retained.
 ### Native Task Subagents (`[runtime.task]`)
 
 `[runtime.task]` tunes the native `task` tool. Like other sections it layers
-global → project; every key is optional:
+global → project (except `per_call_model*`, which a project can only narrow);
+every key is optional:
 
 ```toml
 [runtime.task]
@@ -547,8 +548,11 @@ max_runtime_ms = 0         # per-child wall-clock limit; 0 disables it
 idle_ttl_ms = 300000       # park a completed live child after 5 min; 0 keeps it idle
 request_budget = 200       # soft assistant-request budget per run; 0 disables it
 request_budget_notice = true # send one non-preempting wrap-up notice at the soft budget
+speculative_launch = true  # start read-only tasks[] items while the call is still streaming
 worktree_merge = "none"    # default merge for worktree: true tasks: none | patch | branch
 disabled_agents = ["sonic"]
+per_call_model = "on"      # off (default) | on: may task/agent calls choose a model?
+per_call_model_allow = ["anthropic/claude-sonnet-4-5", "@smol"] # optional allowlist
 
 [runtime.task.agent_models]
 reviewer = "@slow"         # model or @role per persona ID
@@ -582,13 +586,49 @@ reviewer = "@slow"         # model or @role per persona ID
   Cancelled/killed children, failed children, and children whose cwd/worktree or
   transcript was removed refuse revival and point to `history://<id>`.
   Revival is scoped to the existing parent task family, not daemon restart.
+- `speculative_launch`: start each read-only `tasks[]` item as soon as its
+  object has streamed, instead of when the whole call has. Only a read-only
+  persona or an effective tool policy limited to `read`/`grep`/`find`/`ls`/
+  `agent_message` starts early: items inherit top-level options, and one
+  written after `tasks` (`worktree`, `tool_policy`, `cwd`) must never reach a
+  child that could already have edited the shared checkout, so write-capable and
+  `worktree: true` items launch at dispatch. Dispatch adopts children whose
+  parameters match the finished call and cancels every speculative child
+  otherwise (also when the call is never executed); cancelled children are
+  terminalized without followups and release their budget reservations. Only
+  calls that would run without review speculate: an approval requirement for
+  `task` (for example `approval_mode = "write"`), extension tool hooks or plan
+  mode disable it. `false` launches every item at dispatch.
 - `worktree_merge`: what a successful `worktree: true` child does when the call
   omits `merge`: `none` keeps the worktree, `patch` applies the child's changes
   to the parent checkout, `branch` commits them to a kept review branch.
 - `disabled_agents`: persona IDs hidden from the tool's agent list and refused
   at launch.
 - `agent_models`: per-persona model or `@role` that replaces the persona's own
-  `model`/`role`; an explicit task `model` still wins.
+  `model`/`role`; an approved per-call task `model` still wins.
+- `per_call_model`: whether the model may choose a child's model through the
+  `model` parameter of `task` (including `tasks[]` items and swarm nodes) and
+  `agent`, and a task child's `thinking_level`. The default `off` refuses such a
+  call before any child starts; persona `model`/`role`, `agent_models` and
+  `model_roles.task` still route children because they are operator and persona
+  configuration, not model choices. While `off`, the `task` schema (top level,
+  `tasks[]` items and swarm nodes) omits `model` and `thinking_level` and the
+  `agent` schema omits `model`; a call that sends them anyway is still refused.
+  `on` adds the parameters, and the `model` description lists the allowlist, if
+  any.
+- `per_call_model_allow`: with `per_call_model = "on"`, the only accepted
+  `model` values, each `"provider/model"` or `"@role"`. A `@role` request must
+  match an entry literally; any other request matches an entry literally or
+  through the `provider/model` it resolves to (`openai:gpt-4o` matches
+  `openai/gpt-4o`). Unset accepts any model; `[]` accepts none.
+  `on` with no allowlist was not made the default because it lets the model pick
+  any configured model, including expensive ones.
+
+These two keys are operator authority. A project `.lemon/config.toml` may lower
+`per_call_model` (`on` → `off`) and intersect `per_call_model_allow` with the
+global list (a project list alone narrows an unrestricted global `on`), but it
+can never turn the gate on or add a model. Invalid values fail configuration
+validation.
 
 ### Automatic Thinking
 

@@ -47,7 +47,7 @@ defmodule CodingAgent.Subagents do
       properties; `ref` and `definitions` are unsupported.
 
   Model, role, thinking_level, spawns, and output_schema default to nil, tools to
-  nil (inherit), and read_only to false. Scout, reviewer, and security-reviewer
+  nil (inherit), and read_only to false. Scout, reviewer, security-reviewer, and seance
   identities are always read-only, and read-only personas never spawn.
 
   IDs are lowercase ASCII names of at most 64 bytes. Definitions are bounded to
@@ -65,7 +65,7 @@ defmodule CodingAgent.Subagents do
   @thinking_keys ~w(thinkingLevel thinking-level thinking_level thinking)
   @fields ~w(name description model role tools read_only spawns output) ++ @thinking_keys
   @read_only_tools ~w(read grep find ls agent_message)
-  @read_only_ids ~w(scout reviewer security-reviewer)
+  @read_only_ids ~w(scout reviewer security-reviewer seance)
   @thinking_levels ~w(off minimal low medium high xhigh)
   @tool_aliases %{
     "glob" => "find",
@@ -152,10 +152,19 @@ defmodule CodingAgent.Subagents do
   def read_only?(nil), do: false
   def read_only?(persona), do: persona[:read_only] == true or persona[:id] in @read_only_ids
 
+  @doc "Whether `policy` allows nothing beyond the read-only persona tool set."
+  @spec read_only_policy?(term()) :: boolean()
+  def read_only_policy?(policy) do
+    case ToolPolicy.parse(policy) do
+      {:ok, %{allow: allow}} when is_list(allow) -> Enum.all?(allow, &(&1 in @read_only_tools))
+      _ -> false
+    end
+  end
+
   @doc """
   Intersects a persona's tools with the requested policy (default: leaf worker).
 
-  Read-only personas, including any override named scout, reviewer, or
+  Read-only personas, including any override named scout, reviewer, seance, or
   security-reviewer, are restricted to read, grep, find, ls, and agent_message.
   Caller denies, blocked tools, approvals, and no_reply are preserved; no persona
   can broaden caller permissions.

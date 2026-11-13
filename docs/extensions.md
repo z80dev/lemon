@@ -178,7 +178,9 @@ Two hooks can change what a tool does. They wrap every session tool —
 built-in, extension, MCP, WASM and custom tools, in main and subagent
 sessions, including tools reached through `tool_invoke` — outside approval
 checks, so a blocked call never asks for approval. Sessions with no
-`on_tool_call`/`on_tool_result` hook leave tools unwrapped.
+`on_tool_call`/`on_tool_result` hook leave tools unwrapped. Wrapped tools no
+longer observe arguments while they stream, so `task` batches launch their
+children only at dispatch while such a hook is loaded (no speculative launch).
 Private plan-mode `write`/`edit` tools and `propose_plan` are intercepted too.
 Secret placeholders are restored before interception; the private file tools
 check the plan-directory boundary after any hook argument replacement.

@@ -11,6 +11,8 @@ defmodule CodingAgent.Tools.Task.Followup do
   alias LemonCore.{RunRequest, SessionKey}
 
   @default_run_orchestrator_parts ["LemonRouter", "RunOrchestrator"]
+  @max_inline_followup_chars 12_000
+  @followup_preview_chars 10_000
 
   @spec default_run_orchestrator() :: module()
   def default_run_orchestrator do
@@ -75,35 +77,66 @@ defmodule CodingAgent.Tools.Task.Followup do
   def maybe_send_async_followup(_followup_context, _task_id, _run_id, _outcome), do: :ok
 
   @spec task_auto_followup_text(map(), String.t() | nil, String.t() | nil, term()) :: String.t()
-  def task_auto_followup_text(_followup_context, _task_id, _run_id, outcome) do
+  def task_auto_followup_text(_followup_context, task_id, _run_id, outcome) do
+    task = task_label(task_id)
+
     case normalize_followup_outcome(outcome) do
       %{ok: true, answer: answer} when is_binary(answer) ->
-        answer
-        |> normalize_followup_text()
-        |> empty_followup_fallback("Task completed.")
+        with_answer("#{task} completed.", answer, task_id)
 
       %{ok: false, error: error, answer: answer} ->
-        answer
-        |> normalize_followup_text()
-        |> empty_followup_fallback("Task failed: #{format_error(error)}")
+        with_answer("#{task} failed: #{format_error(error)}", answer, task_id)
+    end
+  end
+
+  # Names the child so a parent with several children in flight can attribute
+  # each completion: `Task <name> (<id>) [<persona>]`.
+  defp task_label(task_id) when is_binary(task_id) and task_id != "" do
+    record =
+      case TaskStore.get_record(task_id) do
+        {:ok, record} -> record
+        _ -> %{}
+      end
+
+    name = if present?(record[:name]), do: "#{record[:name]} (#{task_id})", else: task_id
+    if present?(record[:role]), do: "Task #{name} [#{record[:role]}]", else: "Task #{name}"
+  end
+
+  defp task_label(_task_id), do: "Task"
+
+  defp present?(value), do: is_binary(value) and value != ""
+
+  defp with_answer(header, answer, task_id) do
+    case normalize_followup_text(answer) do
+      "" -> header
+      text -> header <> "\n\n" <> bound_followup_text(text, task_id)
+    end
+  end
+
+  # Completions enter the parent's context as a message, outside tool-result
+  # bounding; long answers keep a head preview and point at the full output.
+  defp bound_followup_text(text, task_id) do
+    total = String.length(text)
+
+    if total <= @max_inline_followup_chars do
+      text
+    else
+      full = if present?(task_id), do: " Read agent://#{task_id} for the full output.", else: ""
+
+      String.slice(text, 0, @followup_preview_chars) <>
+        "\n\n[Output truncated: first #{@followup_preview_chars} of #{total} characters shown.#{full}]"
     end
   end
 
   defp normalize_followup_text(text) when is_binary(text) do
-    trimmed =
-      try do
-        String.trim(text)
-      rescue
-        ArgumentError -> inspect(text, limit: 200)
-      end
-
-    trimmed
+    try do
+      String.trim(text)
+    rescue
+      ArgumentError -> inspect(text, limit: 200)
+    end
   end
 
   defp normalize_followup_text(_), do: ""
-
-  defp empty_followup_fallback("", fallback), do: fallback
-  defp empty_followup_fallback(text, _fallback), do: text
 
   defp ensure_terminal_state(task_id, run_id, outcome) do
     case outcome do

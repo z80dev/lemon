@@ -5,7 +5,7 @@ defmodule CodingAgent.SubagentsTest do
   alias CodingAgent.Tools.Task.StructuredOutput
 
   @moduletag :tmp_dir
-  @builtin_ids ~w(reviewer scout security-reviewer sonic task-executor)
+  @builtin_ids ~w(reviewer scout seance security-reviewer sonic task-executor)
   @read_tools ~w(read grep find ls agent_message)
 
   setup %{tmp_dir: tmp_dir} do
@@ -38,6 +38,10 @@ defmodule CodingAgent.SubagentsTest do
       assert persona.read_only
       assert persona.tools == @read_tools
     end
+
+    seance = Subagents.get(cwd, "seance")
+    assert seance.read_only
+    assert seance.tools == ~w(read grep find ls)
 
     refute Subagents.get(cwd, "task-executor").read_only
     sonic = Subagents.get(cwd, "sonic")
