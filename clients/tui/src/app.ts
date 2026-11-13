@@ -32,6 +32,7 @@ import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { CLOSE_ACTION, pickerAction } from "@oh-my-pi/pi-tui/native/picker";
 import { expandEmoticons } from "@oh-my-pi/pi-tui/prompt/emoji-autocomplete";
 import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
+import { getCurrentThemeName, setTheme as setPiTheme } from "@oh-my-pi/pi-tui/theme/theme";
 import { type Component, Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
@@ -715,6 +716,7 @@ export class AppShell {
 		// After tui.start(), so the terminal is listening when pi-tui's OSC 11
 		// query comes back with the background color.
 		this.appearance.start();
+		this.#syncPiTheme();
 		this.#statusBar.start();
 		this.#renderStatus();
 		try {
@@ -1825,8 +1827,23 @@ export class AppShell {
 	 * the tree-wide invalidate and the forced redraw.
 	 */
 	#themeChanged(): void {
+		this.#syncPiTheme();
 		this.tui.invalidate();
 		this.tui.requestRender(true);
+	}
+
+	/**
+	 * pi-tui overlays (history search, plan review, replay pickers, usage
+	 * dashboard, svg figures) read pi-tui's own theme singleton, not Lemon's
+	 * palette: keep its built-in dark/light theme on Lemon's appearance.
+	 */
+	#syncPiTheme(): void {
+		const name = this.appearance.appearance;
+		if (getCurrentThemeName() === name) return;
+		void setPiTheme(name).then(() => {
+			this.tui.invalidate();
+			this.tui.requestRender(true);
+		});
 	}
 
 	/** A two-option overlay for a decision that cannot be undone. */
