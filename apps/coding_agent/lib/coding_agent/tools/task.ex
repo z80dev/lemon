@@ -120,6 +120,11 @@ defmodule CodingAgent.Tools.Task do
             "description" =>
               "Persona: scout/reviewer are read-only; task-executor or discovered definitions"
           },
+          "source_session" => %{
+            "type" => "string",
+            "description" =>
+              "Required for agent=seance: id or journal path of a past session of this project to consult (forked read-only)"
+          },
           "output_schema" => %{
             "type" => ["object", "boolean"],
             "description" =>
@@ -249,6 +254,7 @@ defmodule CodingAgent.Tools.Task do
         "name",
         "prompt",
         "agent",
+        "source_session",
         "output_schema",
         "schema_mode",
         "steps",

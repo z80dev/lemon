@@ -433,7 +433,10 @@ defmodule CodingAgent.SessionManager do
         branch = get_branch(source, leaf_id)
 
         child =
-          new(source.header.cwd, id: Keyword.get(opts, :id), parent_session: source.header.id)
+          new(source.header.cwd,
+            id: Keyword.get(opts, :id),
+            parent_session: Keyword.get(opts, :parent_session, source.header.id)
+          )
 
         child = %{
           child
