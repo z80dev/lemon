@@ -120,6 +120,7 @@ defmodule CodingAgent.SystemPrompt do
           "Prioritize correctness, maintainability, and minimal scoped changes."
       ),
       section(:system_prompt, "Coding guidance", build_coding_section(available_tools)),
+      section(:system_prompt, "Terminal visuals", build_visuals_section(opts)),
       section(:system_prompt, "Runtime", build_runtime_section(session_scope)),
       section(
         :skills,
@@ -285,6 +286,20 @@ defmodule CodingAgent.SystemPrompt do
        "to the user's message as \"Relevant memory\"; use `recall` to look further."}
   ]
 
+  @visuals_section Enum.join(
+                     [
+                       "## Terminal visuals",
+                       "The terminal client renders rich Markdown; use a visual only when it clarifies the answer.",
+                       "- Markdown tables render as grids; tables of numeric data also render as charts.",
+                       "- ```mermaid fences render as diagrams; ```svg fences render as inline images.",
+                       "- LaTeX math (`$...$`, `$$...$$`) renders as typeset math.",
+                       "- Use one visual form per idea; do not repeat the same data as a table, chart, and diagram.",
+                       "- SVG colors: use `currentColor` or `var(--fg)`, `var(--muted)`, `var(--accent)`, `var(--c1)`..`var(--c6)` so it matches the theme.",
+                       "- SVG must be static: no scripts, event handlers, or external references."
+                     ],
+                     "\n"
+                   )
+
   defp build_coding_section(available) do
     rules =
       for {required, rule} <- @coding_rules,
@@ -293,6 +308,18 @@ defmodule CodingAgent.SystemPrompt do
 
     Enum.join(["## Working on code" | rules], "\n")
   end
+
+  # Only Lemon's TUI renders these forms; other surfaces would show raw source.
+  # The surface is read from the session key's channel (`agent:<id>:tui:...`).
+  defp build_visuals_section(opts) do
+    if tui_session?(Map.get(opts, :session_key)), do: @visuals_section, else: ""
+  end
+
+  defp tui_session?(key) when is_binary(key) do
+    match?(%{channel_id: "tui"}, LemonCore.SessionKey.parse(key))
+  end
+
+  defp tui_session?(_), do: false
 
   defp build_skills_section(cwd, trace_opts, available, session_mode) do
     trace_opts =

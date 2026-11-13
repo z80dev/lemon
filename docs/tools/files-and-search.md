@@ -24,7 +24,8 @@ git `origin` remote (HTTPS or SSH). Explicit forms such as
 `issue://owner/repo/42` and `pr://owner/repo/42` work outside a checkout.
 Lemon prefers an installed, authenticated `gh` CLI; if unavailable or unsuccessful,
 it uses public GitHub REST without handling tokens itself. Issue/PR descriptions
-include the first 100 comments. `pr://42/diff` lists files with zero-based indexes,
+include the first 100 comments; `pr://42` also lists changed files (zero-based
+indexes, best effort). `pr://42/diff` lists files with zero-based indexes,
 `pr://42/diff/0` shows one patch, and `pr://42/diff/all` shows all returned patches.
 Diff enumeration is capped at 1000 files; GitHub may omit large or binary patches.
 Views are capped at 50 KB and marked untrusted.
