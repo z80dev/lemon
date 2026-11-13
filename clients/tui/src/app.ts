@@ -30,6 +30,7 @@ import {
 import { setKeybindings } from "@oh-my-pi/pi-tui/keybindings";
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { CLOSE_ACTION, pickerAction } from "@oh-my-pi/pi-tui/native/picker";
+import { expandEmoticons } from "@oh-my-pi/pi-tui/prompt/emoji-autocomplete";
 import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
 import { Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
@@ -48,6 +49,13 @@ import {
 	type ComposerSubmission,
 	type SubmissionDisposition,
 } from "./composer/drafts.ts";
+import {
+	createModelMentionSource,
+	type ModelMentionSource,
+	mayContainModelMention,
+	resolveModelMentions,
+	switchToMentionedModel,
+} from "./composer/model-mentions.ts";
 import type { PromptHistoryStore } from "./composer/prompt-history.ts";
 import { type NotificationMode, resolveNotifications } from "./config.ts";
 import { editInExternalEditor } from "./external-editor.ts";
@@ -147,6 +155,8 @@ export interface AppShellOptions {
 	/** Where sent prompts persist across sessions; unset keeps ↑ recall in memory only. */
 	promptHistory?: PromptHistoryStore;
 	notifications?: NotificationMode;
+	/** `[tui] vim_mode`: start the composer in Vim-style modal editing. */
+	vimMode?: boolean;
 	keybindings?: unknown;
 	/** Local roots for skills, prompts and file commands; tests inject a fixture home. */
 	resources?: Omit<PaletteSourceOptions, "cwd">;
@@ -185,6 +195,7 @@ export class AppShell {
 	readonly #statusBar: StatusBar;
 	readonly #editor: CustomEditor;
 	readonly #modelPicker: ModelPicker;
+	readonly #modelMentions: ModelMentionSource;
 	readonly #switcher: SessionSwitcher;
 	readonly #queuePanel: QueuePanelComponent;
 	readonly #host: CommandHost;
@@ -250,10 +261,13 @@ export class AppShell {
 				if (this.tui.nativeRendering) this.tui.renderNow();
 			},
 		);
+		this.#modelMentions = createModelMentionSource({ store: this.store, methods: this.methods });
 		// Editor construction needs a theme: pi-tui ships no defaults.
 		const controlKeys: { model?: string; thinking?: string } = {};
 		this.#editor = new CustomEditor({
 			promptHistory: options.promptHistory,
+			vimMode: options.vimMode,
+			modelMentions: this.#modelMentions,
 			theme: getEditorTheme(),
 			onSubmit: async (text) => {
 				const sessionKey = this.store.focusedKey;
@@ -1173,7 +1187,37 @@ export class AppShell {
 	 * remains reaches {@link sendPrompt}.
 	 */
 	async submit(value: string): Promise<SubmissionDisposition> {
-		return await this.commandController.handleSubmit(value);
+		const prompt = await this.#applyPromptMarkup(value);
+		if (prompt === undefined) return "rejected";
+		if (prompt.trim().length === 0 && prompt !== value) return "accepted";
+		return await this.commandController.handleSubmit(prompt);
+	}
+
+	/**
+	 * Submit-time composer markup, for model prompts only: emoticons typed without
+	 * a trailing space become emoji, and a `^provider:model` mention switches the
+	 * focused session to that model and leaves the prompt. Undefined means the
+	 * switch failed and the draft must stay as typed.
+	 */
+	async #applyPromptMarkup(value: string): Promise<string | undefined> {
+		if (/^\s*[!/]/.test(value)) return value;
+		let text = expandEmoticons(value);
+		if (!mayContainModelMention(text)) return text;
+		const entries = await this.#modelMentions.load();
+		const mentions = resolveModelMentions(text, entries);
+		if (!mentions.model) return text;
+		const switched = await switchToMentionedModel(
+			{
+				methods: this.methods,
+				session: this.store.focused,
+				refreshStatus: () => this.#renderStatus(),
+				notice: (message, level) => this.events.notice(message, level),
+			},
+			mentions.model,
+		);
+		if (!switched) return undefined;
+		text = mentions.text;
+		return text;
 	}
 
 	async #submitAttachments(

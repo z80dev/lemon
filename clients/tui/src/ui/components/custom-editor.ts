@@ -24,7 +24,6 @@
  * effort chips, the status facts, usage, and Send (Stop while a run is live).
  */
 
-import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
 import { BracketedPasteHandler } from "@oh-my-pi/pi-tui/bracketed-paste";
 import {
 	Editor,
@@ -42,6 +41,7 @@ import type {
 	TspSpan,
 } from "@oh-my-pi/pi-tui/native/node";
 import { AttachmentList } from "../../composer/attachment-list.ts";
+import { createComposerAutocompleteProvider } from "../../composer/autocomplete.ts";
 import type {
 	ComposerDrafts,
 	ComposerSubmission,
@@ -49,6 +49,7 @@ import type {
 } from "../../composer/drafts.ts";
 import type { PendingImage } from "../../composer/images.ts";
 import { type ComposerIO, ComposerMedia } from "../../composer/media.ts";
+import type { ModelMentionSource } from "../../composer/model-mentions.ts";
 import { IMAGE_PATH, parsePastedPaths } from "../../composer/paths.ts";
 import type { PromptHistoryStore } from "../../composer/prompt-history.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
@@ -138,6 +139,10 @@ export interface CustomEditorOptions {
 	controlKeys?: { model?: string; thinking?: string };
 	/** Where sent prompts persist across sessions; unset keeps the recall ring in memory only. */
 	promptHistory?: PromptHistoryStore;
+	/** `[tui] vim_mode`: start the composer with Vim-style modal editing. */
+	vimMode?: boolean;
+	/** Models offered by `^` mention completion; unset leaves `^` as plain text. */
+	modelMentions?: ModelMentionSource;
 }
 
 /** The bar's controls, rebuilt only when what they show changes. */
@@ -199,6 +204,7 @@ export class CustomEditor extends Editor {
 		this.#now = options.now ?? Date.now;
 		// Base Editor exposes submission as a property; ours is the only writer.
 		this.onSubmit = (text: string) => this.#submit(text);
+		if (options.vimMode) this.setVimMode(true);
 		if (options.onCycleMode) {
 			// Installing the hook is what stops Alt+Enter inserting a newline.
 			this.onAltEnter = () => options.onCycleMode?.();
@@ -243,21 +249,22 @@ export class CustomEditor extends Editor {
 		return this.#history;
 	}
 
-	/** Install slash-command and file-path completion. */
+	/** Install the composer's completion: slash commands, `@file`, `^model`, `#N` refs and emoji. */
 	setCommands(
 		commands: Array<{ name: string; description?: string; argumentHint?: string }>,
 		basePath = process.cwd(),
 	): void {
 		this.setAutocompleteProvider(
-			new CombinedAutocompleteProvider(
-				commands.map((command) => ({
+			createComposerAutocompleteProvider({
+				commands: commands.map((command) => ({
 					name: command.name,
 					description: command.description,
 					argumentHint: command.argumentHint,
 					allowArgs: true,
 				})),
 				basePath,
-			),
+				models: this.#options.modelMentions,
+			}),
 		);
 	}
 

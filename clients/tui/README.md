@@ -167,6 +167,18 @@ on reconnect and when opening or changing models. Older daemons without
   Repeated terminal snapshots never advance the next prompt; unknown owners, stale
   selections, unproven branch/attempt continuity and uncertain send receipts do not
   authorize replay.
+- Composer completion beyond slash commands and `@file`: `:sm` offers emoji
+  (`:smile:` and emoticons like `;)` also rewrite inline as you type, and
+  emoticons left at the end of a prompt expand on submit); `^` lists the models
+  the daemon reports (`models.list`, cached 60 s) and accepts `^provider:id`;
+  `#12` offers `pr://12` / `issue://12` (type `pr #12` or `issue #12` to pick
+  one kind; the token is rewritten on accept). Submitting a prompt that contains
+  a resolvable `^provider:id` (or omp-style `^provider/id`) mention switches the
+  focused session to that model with the same `sessions.patch` as Ctrl+O and
+  strips the mention from the prompt; unknown `^words` stay literal and slash
+  commands/shell lines are never rewritten. Inside a slash command's arguments
+  the command's own completion wins. `[tui] vim_mode = true` starts the
+  composer in Vim-style modal editing (default `false`; global or project config).
 - Multi-session: Ctrl+X switcher (live + recent, debounced server-side search
   across stored sessions, new-with-prompt, close), per-session drafts, unread
   badges, history hydration. Search results are not restricted to the initially
