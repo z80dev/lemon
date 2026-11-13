@@ -92,6 +92,12 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | /btw | — | &lt;question&gt; | ask a quick side question without changing the main turn |
 | /tasks | — | [count] | list active and recent subagent tasks |
 
+## jobs
+
+| Command | Aliases | Arguments | Description |
+| --- | --- | --- | --- |
+| /jobs | — | — | show the focused session's background processes: inspect output, cancel |
+
 ## model
 
 | Command | Aliases | Arguments | Description |

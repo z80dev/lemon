@@ -434,6 +434,7 @@ and control plane authoritative:
 | `/bg status <id>` | Inspect one background run without truncating its id. |
 | `/bg result <id>` | Fetch the completed answer, or report that it is not ready yet. |
 | `/bg cancel <id>` | Cancel a queued or running background task. |
+| `/jobs` | Open omp's jobs sheet for the focused session's background processes (the ones its `bash` tool starts with `run_in_background`), polled live through `process.jobs.list` / `process.jobs.inspect`. Subagent-owned jobs nest under their agent. ↑/↓ select; the detail shows status, command, cwd, pids, exit code and a redacted output tail that never consumes the agent's own `bash_output` cursor. `X` cancels the selected job through `process.jobs.cancel` — only jobs the focused session itself owns, sent once, never queued offline and never retried: an unconfirmed kill is reported as unknown. A daemon without `process.jobs.cancel` gets a read-only sheet; a failed poll keeps the last listing marked stale rather than showing it as empty. Esc closes. |
 | `/btw <question>` | Ask an isolated side question through `session.btw` when advertised. |
 | `/commands [command]` | Prefer the daemon's `commands.catalog`; fall back to the TUI's local registry during rolling upgrades. |
 | `/help [command]` | Show the local TUI command and key reference, including unavailable capability annotations. |

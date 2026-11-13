@@ -86,6 +86,24 @@ defmodule LemonCore.AgentRuntime.Provider do
   @doc "Read redacted process receipts for an exact native session owner."
   @callback session_process_receipts(String.t()) :: {:ok, [map()]} | {:error, term()}
 
+  @doc """
+  Bounded summaries of the background processes a session and its live subagents
+  own. A session with no live owner has none.
+  """
+  @callback session_jobs(session_key()) :: {:ok, map()} | {:error, term()}
+
+  @doc """
+  One scoped background process with a redacted output tail (`:tail_bytes`).
+  Reading must not consume output the owning agent has yet to read.
+  """
+  @callback session_job(session_key(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+
+  @doc """
+  Cancel a background process the session itself owns. `{:error, :outcome_unknown}`
+  means termination was not confirmed and must not be retried automatically.
+  """
+  @callback session_job_cancel(session_key(), String.t()) :: {:ok, map()} | {:error, term()}
+
   @doc "Forks native session state into an independent destination resume mapping."
   @callback session_fork(session_key(), Path.t(), session_key()) :: :ok | {:error, term()}
 
@@ -228,6 +246,9 @@ defmodule LemonCore.AgentRuntime.Provider do
                       session_recovery_snapshot: 2,
                       session_addressing_context: 1,
                       session_process_receipts: 1,
+                      session_jobs: 1,
+                      session_job: 3,
+                      session_job_cancel: 2,
                       session_fork: 3,
                       session_fork: 4,
                       session_tree: 3,
