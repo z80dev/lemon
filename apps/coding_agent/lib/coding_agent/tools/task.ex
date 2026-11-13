@@ -6,7 +6,17 @@ defmodule CodingAgent.Tools.Task do
   final assistant response.
   """
 
-  alias CodingAgent.Tools.Task.{Control, Execution, Messaging, Params, Result, Swarm, Wait}
+  alias CodingAgent.Tools.Task.{
+    Control,
+    Execution,
+    Messaging,
+    Params,
+    Result,
+    Speculation,
+    Swarm,
+    Wait
+  }
+
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
 
@@ -171,7 +181,8 @@ defmodule CodingAgent.Tools.Task do
         },
         "required" => []
       },
-      execute: &execute(&1, &2, &3, &4, cwd, opts)
+      execute: &execute(&1, &2, &3, &4, cwd, opts),
+      on_stream: &Speculation.on_stream(&1, cwd, opts)
     }
     |> Params.maybe_add_enum(agent_enum)
     # Present only while [runtime.task].per_call_model is on; tasks[] items copy them.
@@ -238,6 +249,9 @@ defmodule CodingAgent.Tools.Task do
           {:error, "Unknown task action"}
       end
     end
+  after
+    # Speculative launches the call did not adopt never became part of it.
+    Speculation.discard(tool_call_id, opts)
   end
 
   defp do_execute(tool_call_id, params, signal, on_update, cwd, opts) do
@@ -339,27 +353,23 @@ defmodule CodingAgent.Tools.Task do
 
   defp launch_batch(tool_call_id, tasks, params, signal, on_update, cwd, opts) do
     defaults = Map.drop(params, ["tasks", "action"])
-
-    validated =
-      Enum.map(tasks, fn task ->
-        child = Map.merge(defaults, task)
-
-        child =
-          if Map.get(child, "async", true) == false,
-            do: Map.put(child, "auto_followup", false),
-            else: child
-
-        Params.validate_run_params(child, cwd, opts)
-      end)
+    children = Enum.map(tasks, &batch_child(defaults, &1))
+    validated = Enum.map(children, &Params.validate_run_params(&1, cwd, opts))
 
     with nil <- Enum.find(validated, &match?({:error, _}, &1)),
          :ok <- unique_task_names(validated) do
+      adopted = Speculation.adopt(tool_call_id, opts, children)
+
       results =
-        Enum.map(validated, fn {:ok, child} ->
-          with {:ok, child} <- Params.restrict_to_parent(child, cwd, opts),
-               :ok <- Params.check_budget_and_policy(child, opts) do
-            Execution.run(tool_call_id, %{child | async: true}, signal, on_update, cwd, opts)
-          end
+        validated
+        |> Enum.with_index()
+        |> Enum.map(fn {{:ok, child}, index} ->
+          Map.get_lazy(adopted, index, fn ->
+            with {:ok, child} <- Params.restrict_to_parent(child, cwd, opts),
+                 :ok <- Params.check_budget_and_policy(child, opts) do
+              Execution.run(tool_call_id, %{child | async: true}, signal, on_update, cwd, opts)
+            end
+          end)
         end)
 
       receipts =
@@ -410,6 +420,16 @@ defmodule CodingAgent.Tools.Task do
     else
       {:error, _} = error -> error
     end
+  end
+
+  @doc false
+  # One batch item's parameters: top-level options under the item's own.
+  def batch_child(defaults, task) do
+    child = Map.merge(defaults, task)
+
+    if Map.get(child, "async", true) == false,
+      do: Map.put(child, "auto_followup", false),
+      else: child
   end
 
   defp unique_task_names(validated) do

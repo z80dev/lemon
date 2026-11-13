@@ -33,6 +33,8 @@ history, compaction and supervised delegation. The loop/model runtime comes from
   belong in `lemon_skills`. Reuse common tool/result types and abort signals.
 - Policy/approval checks run before execution. Tool precedence and extension
   conflict behavior belong to the registry, not per-tool fallback logic.
+  `on_stream` acts before both, so wrappers that can review, block or rewrite a
+  call drop it (or transform its `prepare` like their arguments).
 - Pre-LLM composition is guardrails → untrusted boundary → custom transform.
   Bound oversized output with stable spill references, fence external/file/shell/
   community-skill data, strip unsafe controls, and keep the entire envelope inside

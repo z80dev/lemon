@@ -500,7 +500,7 @@ defmodule CodingAgent.Session.Planning do
       end
     end
 
-    %{tool | execute: wrapped}
+    %{tool | execute: wrapped, on_stream: nil}
   end
 
   defp todo_read?("todo", %{"action" => action}),

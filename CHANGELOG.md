@@ -51,6 +51,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `per_call_model_allow` list restricts which `provider/model` or `@role` values
   are accepted. Project `.lemon/config.toml` files can only narrow this gate.
   Persona models and `[runtime.task].agent_models` are unaffected.
+- `task` batches start each `tasks[]` item while the model is still streaming
+  the call (`[runtime.task].speculative_launch`, default on). Dispatch adopts
+  children whose parameters match the finished call; a differing, invalid,
+  aborted or unexecuted call cancels them, terminalized without followups and
+  with budget reservations released. Calls that need approval, extension tool
+  hooks and plan mode never speculate. Tools can observe streaming arguments
+  through `AgentTool.on_stream`.
 
 ---
 

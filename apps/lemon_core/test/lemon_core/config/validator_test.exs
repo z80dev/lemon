@@ -333,6 +333,7 @@ defmodule LemonCore.Config.ValidatorTest do
         idle_ttl_ms: 0,
         request_budget: 0,
         request_budget_notice: false,
+        speculative_launch: true,
         worktree_merge: "patch",
         disabled_agents: ["scout"],
         agent_models: %{"scout" => "@smol"},
@@ -351,6 +352,7 @@ defmodule LemonCore.Config.ValidatorTest do
               idle_ttl_ms: -1,
               request_budget: -1,
               request_budget_notice: "yes",
+              speculative_launch: "sometimes",
               worktree_merge: "rebase",
               disabled_agents: "scout",
               agent_models: %{"scout" => ""},
@@ -362,7 +364,7 @@ defmodule LemonCore.Config.ValidatorTest do
         )
 
       for key <-
-            ~w(max_depth max_runtime_ms idle_ttl_ms request_budget request_budget_notice worktree_merge disabled_agents agent_models per_call_model per_call_model_allow) do
+            ~w(max_depth max_runtime_ms idle_ttl_ms request_budget request_budget_notice speculative_launch worktree_merge disabled_agents agent_models per_call_model per_call_model_allow) do
         assert Enum.any?(errors, &String.starts_with?(&1, "runtime.task.#{key}:"))
       end
     end
