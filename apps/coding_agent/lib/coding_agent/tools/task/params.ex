@@ -11,6 +11,7 @@ defmodule CodingAgent.Tools.Task.Params do
   alias CodingAgent.Subagents
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools.AskParent
+  alias CodingAgent.Tools.Task.Seance
   alias CodingAgent.Tools.Task.StructuredOutput
   alias CodingAgent.WorkspaceReads
   alias LemonAgent.Types.AgentTool
@@ -243,7 +244,7 @@ defmodule CodingAgent.Tools.Task.Params do
         with {:ok, persona} <- resolve_persona(role_cwd, role_id),
              :ok <- check_agent_enabled(persona, task_settings),
              :ok <- check_allowed_agent(persona, opts),
-             {:ok, source_session_file} <- resolve_source_session(cwd, source_session),
+             {:ok, source_session_file} <- Seance.resolve(cwd, source_session, opts),
              launch = persona_launch(persona, explicit, task_settings, current_task_depth(opts)),
              :ok <- StructuredOutput.validate_schema(launch.output_schema) do
           followup_queue_mode =
@@ -508,42 +509,6 @@ defmodule CodingAgent.Tools.Task.Params do
   defp resolve_persona(_cwd, nil), do: {:ok, nil}
   defp resolve_persona(cwd, name), do: Subagents.fetch(cwd, name)
 
-  # A seance source must be a native session journal of this project: a bare id
-  # or a path directly inside the caller's project sessions directory, whose name
-  # matches its header id. Other projects, profiles and symlinks are refused.
-  defp resolve_source_session(_cwd, nil), do: {:ok, nil}
-
-  defp resolve_source_session(cwd, source) do
-    source = String.trim(source)
-    sessions_dir = Path.expand(CodingAgent.SessionManager.get_session_dir(cwd))
-
-    path =
-      if String.contains?(source, "/") or String.ends_with?(source, ".jsonl"),
-        do: Path.expand(source, cwd),
-        else: Path.expand(CodingAgent.SessionManager.session_file_path(cwd, source))
-
-    with true <- Path.dirname(path) == sessions_dir,
-         {:ok, %File.Stat{type: :regular}} <- File.lstat(path),
-         {:ok, id} <- read_session_id(path),
-         true <- Path.expand(CodingAgent.SessionManager.session_file_path(cwd, id)) == path do
-      {:ok, path}
-    else
-      _ -> {:error, "source_session #{inspect(source)} is not a session of the current project"}
-    end
-  end
-
-  defp read_session_id(path) do
-    with {:ok, file} <- File.open(path, [:read, :utf8]) do
-      line = IO.read(file, :line)
-      File.close(file)
-
-      case is_binary(line) && Jason.decode(line) do
-        {:ok, %{"type" => "session", "id" => id}} when is_binary(id) -> {:ok, id}
-        _ -> {:error, :invalid_session}
-      end
-    end
-  end
-
   defp persona_model(%{model: model}) when is_binary(model), do: model
 
   defp persona_model(%{role: role}) when is_binary(role),
@@ -788,7 +753,7 @@ defmodule CodingAgent.Tools.Task.Params do
       |> maybe_put_kw(:agent_id, validated[:agent_id])
       |> maybe_put_kw(:extra_tools, child_extra_tools_if_present(child_extra_tools))
       |> maybe_put_kw(:workspace_read_fenced, if(parent_fenced?, do: true, else: nil))
-      |> maybe_put_kw(:session_file, seance_session_file(validated, opts))
+      |> maybe_put_kw(:session_file, validated[:seance_session_file])
 
     [
       {:cwd, cwd},
@@ -797,23 +762,6 @@ defmodule CodingAgent.Tools.Task.Params do
       {:session_scope, :subagent} | Keyword.merge(base_opts, override_opts)
     ]
   end
-
-  # A seance child runs on a fresh fork of the source's active branch; the
-  # source journal is only read. Without an explicit model the child restores
-  # the source's model from the forked transcript.
-  defp seance_session_file(%{source_session_file: source}, opts) when is_binary(source) do
-    id = LemonCore.Id.uuid()
-    destination = Path.join(Path.dirname(source), id <> ".jsonl")
-    parent = Keyword.get(opts, :parent_session)
-    fork_opts = if is_binary(parent), do: [id: id, parent_session: parent], else: [id: id]
-
-    case CodingAgent.SessionManager.fork_file(source, destination, fork_opts) do
-      {:ok, _session} -> destination
-      {:error, reason} -> raise ArgumentError, "Cannot fork seance source: #{inspect(reason)}"
-    end
-  end
-
-  defp seance_session_file(_validated, _opts), do: nil
 
   @doc false
   def inherited_model_explicit(opts, parent_state \\ nil) do
