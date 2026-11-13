@@ -107,14 +107,6 @@ defmodule CodingAgent.Tools.Task do
             "enum" => ["wait_all", "wait_any"],
             "description" => "Join mode; default wait_all"
           },
-          "model" => %{
-            "type" => "string",
-            "description" => "Model or @role; omitted uses persona/task defaults, then parent"
-          },
-          "thinking_level" => %{
-            "type" => "string",
-            "description" => "Thinking level override"
-          },
           "agent" => %{
             "type" => "string",
             "description" =>
@@ -182,6 +174,8 @@ defmodule CodingAgent.Tools.Task do
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
     |> Params.maybe_add_enum(agent_enum)
+    # Present only while [runtime.task].per_call_model is on; tasks[] items copy them.
+    |> Params.put_per_call_model_params(cwd, opts, ["model", "thinking_level"])
     |> add_batch_schema()
   end
 
@@ -202,9 +196,10 @@ defmodule CodingAgent.Tools.Task do
     else
       case Params.normalize_action(Map.get(params, "action")) do
         "swarm" ->
-          opts = Params.with_settings(cwd, opts)
+          opts = Params.launch_opts(cwd, opts)
 
-          with :ok <- Params.check_spawn_depth(cwd, opts) do
+          with :ok <- Params.check_spawn_depth(cwd, opts),
+               :ok <- Params.check_per_call_model(params, cwd, opts) do
             Swarm.execute(tool_call_id, params, signal, on_update, cwd, opts)
           end
 
@@ -212,7 +207,12 @@ defmodule CodingAgent.Tools.Task do
           Wait.execute(params, signal, opts)
 
         action when action in ["message", "steer"] ->
-          Messaging.send(params["to"] || params["task_id"], params["message"], opts)
+          if Params.plan_mode?(opts),
+            do:
+              {:error,
+               "Plan mode is active: task #{action} is blocked because it can direct a child " <>
+                 "to change the working tree. Use poll, get, join, wait or cancel."},
+            else: Messaging.send(params["to"] || params["task_id"], params["message"], opts)
 
         action when action in ["poll", "join", "get", "cancel"] ->
           with :ok <- authorize_action(action, params, opts) do
@@ -225,9 +225,10 @@ defmodule CodingAgent.Tools.Task do
           end
 
         "run" ->
-          opts = Params.with_settings(cwd, opts)
+          opts = Params.launch_opts(cwd, opts)
 
-          with :ok <- Params.check_spawn_depth(cwd, opts) do
+          with :ok <- Params.check_spawn_depth(cwd, opts),
+               :ok <- Params.check_per_call_model(params, cwd, opts) do
             if Map.has_key?(params, "tasks"),
               do: run_batch(tool_call_id, params, signal, on_update, cwd, opts),
               else: do_execute(tool_call_id, params, signal, on_update, cwd, opts)

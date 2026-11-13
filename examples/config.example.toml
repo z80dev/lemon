@@ -183,6 +183,10 @@ enabled = false
 # max_runtime_ms = 0        # per-child wall-clock limit; 0 disables it
 # worktree_merge = "none"   # none | patch | branch for worktree = true tasks
 # disabled_agents = ["sonic"]
+# Let task/agent calls choose a child model (default "off"). Global config only:
+# a project file can lower the mode or narrow the allowlist, never widen them.
+# per_call_model = "on"
+# per_call_model_allow = ["anthropic/claude-sonnet-4-5", "@smol"]  # unset = any model
 #
 # [runtime.task.agent_models]
 # reviewer = "@slow"        # persona ID => model or @role

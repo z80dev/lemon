@@ -230,7 +230,11 @@ defmodule CodingAgent.Session.ModelRolesTest do
       result =
         CodingAgent.Tools.Task.execute("role_task", params, nil, nil, cwd,
           model: parent_model,
-          settings_manager: task_settings,
+          # Explicit child selectors are per-call selections; the operator enables them.
+          settings_manager: %{
+            task_settings
+            | task: %{task_settings.task | per_call_model: "on"}
+          },
           stream_fn: stream_fn,
           task_session_timeout_ms: 5_000
         )

@@ -112,7 +112,8 @@ defmodule CodingAgent.Tools.AgentTest do
     assert tool.label == "Delegate To Agent"
     assert is_function(tool.execute, 4)
     assert tool.parameters["properties"]["action"]["enum"] == ["run", "poll", "join"]
-    assert Map.has_key?(tool.parameters["properties"], "model")
+    # `model` is advertised only while [runtime.task].per_call_model is on.
+    refute Map.has_key?(tool.parameters["properties"], "model")
     assert Map.has_key?(tool.parameters["properties"], "role")
     assert Map.has_key?(tool.parameters["properties"], "task_ids")
     assert Map.has_key?(tool.parameters["properties"], "mode")
@@ -267,6 +268,7 @@ defmodule CodingAgent.Tools.AgentTest do
         nil,
         "/tmp",
         run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        settings_manager: per_call_model_settings(),
         session_key: "agent:main:main",
         session_id: "sess_main",
         agent_id: "main",
@@ -515,6 +517,7 @@ defmodule CodingAgent.Tools.AgentTest do
             nil,
             cwd,
             run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+            settings_manager: per_call_model_settings(),
             session_key: "agent:main:main",
             model_explicit: inherited_explicit
           )
@@ -1394,4 +1397,10 @@ defmodule CodingAgent.Tools.AgentTest do
 
   defp strip_events({:ok, record, _events}), do: {:ok, record}
   defp strip_events(other), do: other
+
+  # Explicit delegated models are per-call selections; the operator enables them.
+  defp per_call_model_settings do
+    defaults = %CodingAgent.SettingsManager{}
+    %{defaults | task: %{defaults.task | per_call_model: "on"}}
+  end
 end

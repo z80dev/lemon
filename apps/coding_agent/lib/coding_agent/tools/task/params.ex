@@ -22,6 +22,13 @@ defmodule CodingAgent.Tools.Task.Params do
   @max_context_bytes 64 * 1024
   @max_steps 4
   @seance_agent "seance"
+  # Plan mode (the parent's): children run with at most these read-only tools,
+  # never spawn, and get no worktree or merge-back. Mirrors omp's plan-mode
+  # subagent policy (read, grep, glob, web search).
+  @plan_child_tools ~w(read grep find ls websearch webfetch ask_parent)
+  @plan_child_prompt "Plan mode is active in the parent session. You are a read-only " <>
+                       "exploration child: do not try to change files, run state-changing " <>
+                       "commands or delegate; report findings for the plan."
 
   @tool_only_guardrail_known_tools [
     "bash",
@@ -245,7 +252,11 @@ defmodule CodingAgent.Tools.Task.Params do
              :ok <- check_agent_enabled(persona, task_settings),
              :ok <- check_allowed_agent(persona, opts),
              {:ok, source_session_file} <- Seance.resolve(cwd, source_session, opts),
-             launch = persona_launch(persona, explicit, task_settings, current_task_depth(opts)),
+             :ok <- check_plan_mode(persona, worktree, merge, opts),
+             launch =
+               persona
+               |> persona_launch(explicit, task_settings, current_task_depth(opts))
+               |> restrict_for_plan_mode(opts),
              :ok <- StructuredOutput.validate_schema(launch.output_schema) do
           followup_queue_mode =
             if is_nil(queue_mode), do: nil, else: normalize_queue_mode(queue_mode)
@@ -253,6 +264,7 @@ defmodule CodingAgent.Tools.Task.Params do
           Map.merge(launch, %{
             description: description,
             model_explicit: not is_nil(model),
+            plan_mode: plan_mode?(opts),
             name: name,
             prompt: wrap_context(guarded_prompt, context),
             role_id: role_id,
@@ -359,6 +371,23 @@ defmodule CodingAgent.Tools.Task.Params do
   end
 
   @doc """
+  Options for a run/swarm launch: a loaded settings manager plus `:plan_mode`
+  when the parent's plan gate (`:plan_gate`) is set at call time.
+  """
+  @spec launch_opts(String.t(), keyword()) :: keyword()
+  def launch_opts(cwd, opts) do
+    opts = with_settings(cwd, opts)
+    if plan_mode?(opts), do: Keyword.put(opts, :plan_mode, true), else: opts
+  end
+
+  @doc "Whether the calling session is in plan mode."
+  @spec plan_mode?(keyword()) :: boolean()
+  def plan_mode?(opts) do
+    Keyword.get(opts, :plan_mode) == true or
+      CodingAgent.Session.Planning.active?(Keyword.get(opts, :plan_gate))
+  end
+
+  @doc """
   Effective `[runtime.task]` settings from the session's settings manager, loading
   them for `cwd` when the caller did not supply one.
   """
@@ -461,6 +490,173 @@ defmodule CodingAgent.Tools.Task.Params do
     end
   end
 
+  # The parent is in plan mode: children are read-only exploration workers.
+  defp check_plan_mode(persona, worktree, merge, opts) do
+    cond do
+      not plan_mode?(opts) ->
+        :ok
+
+      worktree == true or merge in ["patch", "branch"] ->
+        {:error,
+         "Plan mode is active: task worktree and merge are unavailable; " <>
+           "children run read-only in this checkout."}
+
+      not plan_safe_persona?(persona) ->
+        {:error,
+         "Plan mode is active: subagent '#{persona.id}' can change files. Use a read-only " <>
+           "persona such as scout or reviewer, or omit agent for a read-only child."}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp plan_safe_persona?(nil), do: true
+
+  defp plan_safe_persona?(persona) do
+    read_only_persona?(persona) or
+      (is_list(persona[:tools]) and
+         Enum.all?(persona.tools, &(&1 in @plan_child_tools or &1 == "agent_message")))
+  end
+
+  # Coerce every plan-mode child to the read-only allowlist and strip spawns,
+  # whatever its persona, explicit tool_policy or prompt guardrail requested.
+  defp restrict_for_plan_mode(launch, opts) do
+    if plan_mode?(opts) do
+      plan_policy = %{
+        ToolPolicy.from_profile(:custom)
+        | allow: @plan_child_tools,
+          deny: ["task", "agent"]
+      }
+
+      policy =
+        case ToolPolicy.restrict(launch.tool_policy, plan_policy) do
+          {:ok, policy} -> policy
+          {:error, _reason} -> ToolPolicy.deny_all()
+        end
+
+      %{launch | tool_policy: policy, task_allowed_agents: []}
+    else
+      launch
+    end
+  end
+
+  @doc """
+  Preflight for model-chosen child models on a task call (top level and every
+  `tasks[]` item), before any child starts.
+
+  `[runtime.task].per_call_model = "off"` (the default) refuses `model` and
+  `thinking_level`; `"on"` accepts them, with `model` limited to
+  `per_call_model_allow` when that list is set. An allowlist entry matches the
+  request literally (`@role`) or the canonical `provider/model` it resolves to.
+  Persona and `[runtime.task].agent_models` models are operator configuration
+  and are never gated.
+  """
+  @spec check_per_call_model(map(), String.t(), keyword()) :: :ok | {:error, String.t()}
+  def check_per_call_model(params, cwd, opts) when is_map(params) do
+    items =
+      case params["tasks"] do
+        tasks when is_list(tasks) -> [params | Enum.filter(tasks, &is_map/1)]
+        _ -> [params]
+      end
+
+    task_settings = task_settings(cwd, opts)
+
+    Enum.find_value(items, :ok, fn item ->
+      case per_call_model_error(item, task_settings, cwd, opts) do
+        nil -> nil
+        message -> {:error, message}
+      end
+    end)
+  end
+
+  def check_per_call_model(_params, _cwd, _opts), do: :ok
+
+  defp per_call_model_error(item, task_settings, cwd, opts) do
+    model = normalize_optional_string(item["model"])
+    thinking_level = normalize_optional_string(item["thinking_level"])
+    allow = task_settings.per_call_model_allow
+
+    cond do
+      task_settings.per_call_model != "on" and is_binary(model) ->
+        "Per-call model selection is disabled by [runtime.task].per_call_model = \"off\"; " <>
+          "omit model so the persona, [runtime.task].agent_models or the parent model applies."
+
+      task_settings.per_call_model != "on" and is_binary(thinking_level) ->
+        "Per-call thinking_level is disabled by [runtime.task].per_call_model = \"off\"; " <>
+          "omit thinking_level so the persona or parent setting applies."
+
+      is_binary(model) and not per_call_model_allowed?(model, allow, cwd, opts) ->
+        "Model #{inspect(model)} is not in [runtime.task].per_call_model_allow " <>
+          "(#{if allow == [], do: "empty", else: Enum.join(allow, ", ")}); " <>
+          "omit model or choose an allowed one."
+
+      true ->
+        nil
+    end
+  end
+
+  defp per_call_model_allowed?(_model, nil, _cwd, _opts), do: true
+
+  defp per_call_model_allowed?(model, allow, cwd, opts) do
+    model in allow or
+      (not String.starts_with?(model, "@") and canonical_model(model, cwd, opts) in allow)
+  end
+
+  defp canonical_model(model, cwd, opts) do
+    settings =
+      Keyword.get(opts, :settings_manager) ||
+        SettingsManager.load(Keyword.get(opts, :config_cwd) || cwd)
+
+    case ModelResolver.resolve_session_model(model, settings) do
+      %LemonAi.Types.Model{provider: provider, id: id} -> "#{provider}/#{id}"
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  @doc """
+  Adds the model-facing per-call selection parameters to `tool`'s schema when
+  `[runtime.task].per_call_model = "on"`, describing the allowlist if one is
+  set. When the gate is off the parameters are omitted rather than advertised
+  only to fail; `check_per_call_model/3` still refuses hand-written calls.
+
+  `params` lists the parameters to add (`"model"`, `"thinking_level"`);
+  `default_note` says what an omitted `model` falls back to.
+  """
+  @spec put_per_call_model_params(AgentTool.t(), String.t(), keyword(), [String.t()], String.t()) ::
+          AgentTool.t()
+  def put_per_call_model_params(
+        %AgentTool{} = tool,
+        cwd,
+        opts,
+        params,
+        default_note \\ "omitted uses persona/task defaults, then parent"
+      ) do
+    settings = task_settings(cwd, opts)
+
+    model =
+      case settings.per_call_model_allow do
+        nil -> "Model or @role; " <> default_note
+        [] -> "No model is allowed ([runtime.task].per_call_model_allow = []); omit"
+        allow -> "One of #{Enum.join(allow, ", ")} (operator allowlist); " <> default_note
+      end
+
+    descriptions = %{"model" => model, "thinking_level" => "Thinking level override"}
+
+    if settings.per_call_model == "on" do
+      properties =
+        Enum.reduce(params, tool.parameters["properties"], fn name, acc ->
+          Map.put(acc, name, %{"type" => "string", "description" => descriptions[name]})
+        end)
+
+      %{tool | parameters: Map.put(tool.parameters, "properties", properties)}
+    else
+      tool
+    end
+  end
+
   # Explicit values (including `false`) win; nil falls back to the persona default.
   defp explicit_or_persona(nil, nil, _key), do: nil
   defp explicit_or_persona(nil, persona, key), do: Map.get(persona, key)
@@ -521,6 +717,7 @@ defmodule CodingAgent.Tools.Task.Params do
       Keyword.get(opts, :system_prompt),
       validated[:persona] && validated.persona.prompt,
       StructuredOutput.instruction(validated[:output_schema]),
+      if(validated[:plan_mode], do: @plan_child_prompt),
       communication_instructions(opts, validated)
     ]
     |> Enum.filter(&(is_binary(&1) and &1 != ""))

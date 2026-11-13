@@ -64,6 +64,11 @@ defmodule LemonCore.Config.Agent do
       worktree_merge = "none"       # none | patch | branch, used by worktree = true tasks
       disabled_agents = []          # persona IDs hidden from the task tool
       agent_models = {}             # persona ID => model or @role override
+      per_call_model = "off"        # off | on: may task/agent calls pick a child model?
+      # per_call_model_allow = ["anthropic/claude-sonnet-4-5", "@smol"]  # unset: any model
+
+  A project `.lemon/config.toml` can only narrow `per_call_model` (lower the
+  mode, intersect the allowlist); see `LemonCore.Config.Modular`.
 
   Environment variables override file configuration:
   - `LEMON_DEFAULT_PROVIDER`
@@ -132,7 +137,9 @@ defmodule LemonCore.Config.Agent do
             request_budget_notice: boolean(),
             worktree_merge: String.t(),
             disabled_agents: [String.t()],
-            agent_models: %{optional(String.t()) => String.t()}
+            agent_models: %{optional(String.t()) => String.t()},
+            per_call_model: String.t(),
+            per_call_model_allow: [String.t()] | nil
           }
         }
 
@@ -375,7 +382,9 @@ defmodule LemonCore.Config.Agent do
       request_budget_notice: Map.get(task, "request_budget_notice", true),
       worktree_merge: Map.get(task, "worktree_merge", "none"),
       disabled_agents: Map.get(task, "disabled_agents", []),
-      agent_models: Map.get(task, "agent_models", %{})
+      agent_models: Map.get(task, "agent_models", %{}),
+      per_call_model: Map.get(task, "per_call_model", "off"),
+      per_call_model_allow: Map.get(task, "per_call_model_allow")
     }
   end
 

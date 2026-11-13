@@ -343,4 +343,80 @@ defmodule LemonCore.Config.ModularTest do
              )
     end
   end
+
+  describe "per-call model gate layering" do
+    setup do
+      root = Path.join(System.tmp_dir!(), "config_gate_#{System.unique_integer([:positive])}")
+      global = Path.join(root, "home/.lemon/config.toml")
+      project = Path.join(root, "project")
+      File.mkdir_p!(Path.dirname(global))
+      File.mkdir_p!(Path.join(project, ".lemon"))
+      saved_paths = Application.get_env(:lemon_core, :paths)
+      Application.put_env(:lemon_core, :paths, global_config: global)
+
+      on_exit(fn ->
+        if saved_paths,
+          do: Application.put_env(:lemon_core, :paths, saved_paths),
+          else: Application.delete_env(:lemon_core, :paths)
+
+        File.rm_rf!(root)
+      end)
+
+      write = fn path, body -> File.write!(path, "[runtime.task]\n" <> body) end
+
+      load = fn ->
+        task = Modular.load(project_dir: project).agent.task
+        {task.per_call_model, task.per_call_model_allow}
+      end
+
+      %{
+        global: global,
+        project: Path.join(project, ".lemon/config.toml"),
+        write: write,
+        load: load
+      }
+    end
+
+    test "defaults off and a project file cannot turn it on", ctx do
+      assert ctx.load.() == {"off", nil}
+
+      ctx.write.(ctx.project, ~s(per_call_model = "on"\nper_call_model_allow = ["a/b"]\n))
+      assert ctx.load.() == {"off", ["a/b"]}
+
+      ctx.write.(ctx.global, ~s(per_call_model = "off"\n))
+      ctx.write.(ctx.project, ~s([agent.task]\nper_call_model = "on"\n))
+      assert ctx.load.() == {"off", nil}
+    end
+
+    test "a project file can lower the mode and only intersect the allowlist", ctx do
+      ctx.write.(ctx.global, ~s(per_call_model = "on"\nper_call_model_allow = ["a/b", "@smol"]\n))
+      assert ctx.load.() == {"on", ["a/b", "@smol"]}
+
+      ctx.write.(ctx.project, ~s(per_call_model_allow = ["@smol", "c/d"]\n))
+      assert ctx.load.() == {"on", ["@smol"]}
+
+      ctx.write.(ctx.project, ~s(per_call_model_allow = []\n))
+      assert ctx.load.() == {"on", []}
+
+      ctx.write.(ctx.project, ~s(per_call_model = "off"\n))
+      assert ctx.load.() == {"off", ["a/b", "@smol"]}
+
+      # Without an operator allowlist, a project list narrows "any model".
+      ctx.write.(ctx.global, ~s(per_call_model = "on"\n))
+      ctx.write.(ctx.project, ~s(per_call_model_allow = ["c/d"]\n))
+      assert ctx.load.() == {"on", ["c/d"]}
+    end
+
+    test "invalid project values are reported, not silently widened", ctx do
+      ctx.write.(ctx.global, ~s(per_call_model = "on"\n))
+      ctx.write.(ctx.project, ~s(per_call_model = "always"\n))
+
+      error =
+        assert_raise ValidationError, fn ->
+          Modular.load(project_dir: Path.dirname(Path.dirname(ctx.project)))
+        end
+
+      assert Exception.message(error) =~ "per_call_model"
+    end
+  end
 end

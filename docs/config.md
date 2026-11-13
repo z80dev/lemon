@@ -537,7 +537,8 @@ summary credential/stream-option overrides are retained.
 ### Native Task Subagents (`[runtime.task]`)
 
 `[runtime.task]` tunes the native `task` tool. Like other sections it layers
-global → project; every key is optional:
+global → project (except `per_call_model*`, which a project can only narrow);
+every key is optional:
 
 ```toml
 [runtime.task]
@@ -548,6 +549,8 @@ request_budget = 200       # soft assistant-request budget per run; 0 disables i
 request_budget_notice = true # send one non-preempting wrap-up notice at the soft budget
 worktree_merge = "none"    # default merge for worktree: true tasks: none | patch | branch
 disabled_agents = ["sonic"]
+per_call_model = "on"      # off (default) | on: may task/agent calls choose a model?
+per_call_model_allow = ["anthropic/claude-sonnet-4-5", "@smol"] # optional allowlist
 
 [runtime.task.agent_models]
 reviewer = "@slow"         # model or @role per persona ID
@@ -587,7 +590,30 @@ reviewer = "@slow"         # model or @role per persona ID
 - `disabled_agents`: persona IDs hidden from the tool's agent list and refused
   at launch.
 - `agent_models`: per-persona model or `@role` that replaces the persona's own
-  `model`/`role`; an explicit task `model` still wins.
+  `model`/`role`; an approved per-call task `model` still wins.
+- `per_call_model`: whether the model may choose a child's model through the
+  `model` parameter of `task` (including `tasks[]` items and swarm nodes) and
+  `agent`, and a task child's `thinking_level`. The default `off` refuses such a
+  call before any child starts; persona `model`/`role`, `agent_models` and
+  `model_roles.task` still route children because they are operator and persona
+  configuration, not model choices. While `off`, the `task` schema (top level,
+  `tasks[]` items and swarm nodes) omits `model` and `thinking_level` and the
+  `agent` schema omits `model`; a call that sends them anyway is still refused.
+  `on` adds the parameters, and the `model` description lists the allowlist, if
+  any.
+- `per_call_model_allow`: with `per_call_model = "on"`, the only accepted
+  `model` values, each `"provider/model"` or `"@role"`. A `@role` request must
+  match an entry literally; any other request matches an entry literally or
+  through the `provider/model` it resolves to (`openai:gpt-4o` matches
+  `openai/gpt-4o`). Unset accepts any model; `[]` accepts none.
+  `on` with no allowlist was not made the default because it lets the model pick
+  any configured model, including expensive ones.
+
+These two keys are operator authority. A project `.lemon/config.toml` may lower
+`per_call_model` (`on` → `off`) and intersect `per_call_model_allow` with the
+global list (a project list alone narrows an unrestricted global `on`), but it
+can never turn the gate on or add a model. Invalid values fail configuration
+validation.
 
 ### Automatic Thinking
 
