@@ -8,7 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- TUI: assistant replies draw ```mermaid fences as ASCII diagrams, and, in
+  terminals with inline images, ```svg fences as images and a chart under each
+  numeric Markdown table.
 
 ---
 

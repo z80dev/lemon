@@ -6,6 +6,10 @@
  * prefix at every width; pi-tui retires only publications above the live tail.
  */
 
+import { FigureMarkdown } from "@oh-my-pi/pi-tui/chat/figure-markdown";
+import { svgFigureRendering } from "@oh-my-pi/pi-tui/chat/svg-figure";
+import { hasSvgFence } from "@oh-my-pi/pi-tui/chat/svg-source";
+import { hasChartTable } from "@oh-my-pi/pi-tui/chat/table-chart";
 import {
 	hasTranscriptActions,
 	runTranscriptAction,
@@ -22,6 +26,7 @@ import type { NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/na
 import { iconButton } from "@oh-my-pi/pi-tui/native/overlay";
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { formatTurnUsage } from "@oh-my-pi/pi-tui/overlays/usage-row";
+import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { Container } from "@oh-my-pi/pi-tui/tui";
 import { formatDuration } from "@oh-my-pi/pi-utils";
 import type { TurnSummary } from "../../store/transcript-model.ts";
@@ -45,8 +50,20 @@ export interface AssistantFinalizeOptions {
 	turn?: TurnSummary;
 }
 
+export interface AssistantMessageOptions {
+	/** A figure's rows changed outside a text update (a raster or chart landed). */
+	onFigureChange?: () => void;
+}
+
 export class AssistantMessageComponent extends Container {
 	readonly #markdown: Markdown;
+	/**
+	 * Replaces {@link #markdown} once the reply holds a ```svg fence or a
+	 * chartable table and the terminal can show images; kept from then on so
+	 * its rasters survive further deltas.
+	 */
+	#figures: FigureMarkdown | undefined;
+	readonly #onFigureChange: (() => void) | undefined;
 	/** Holds the post-run error line, if any. Empty renders zero rows. */
 	readonly #footer = new Container();
 	readonly #clamp = new WidthClamp();
@@ -72,8 +89,9 @@ export class AssistantMessageComponent extends Container {
 	#stableRows: TranscriptStableRow[] = [];
 	#stableRender: { width: number; count: number; rows: readonly string[] } | undefined;
 
-	constructor(text = "") {
+	constructor(text = "", options: AssistantMessageOptions = {}) {
 		super();
+		this.#onFigureChange = options.onFigureChange;
 		const theme = getTheme();
 		this.#markdown = new Markdown(text, 1, 0, getMarkdownTheme(), {
 			color: (value) => theme.fg("assistantText", value),
@@ -89,6 +107,34 @@ export class AssistantMessageComponent extends Container {
 		this.#answer = text;
 		this.addChild(this.#markdown);
 		this.addChild(this.#footer);
+		this.#liftFigures(text);
+	}
+
+	/** The component drawing the reply body. */
+	get #body(): Markdown | FigureMarkdown {
+		return this.#figures ?? this.#markdown;
+	}
+
+	/** Switch the body to {@link FigureMarkdown} the first time `text` holds a figure this terminal can draw. */
+	#liftFigures(text: string): void {
+		if (this.#figures || TERMINAL.imageProtocol === null) return;
+		if (!((svgFigureRendering() && hasSvgFence(text)) || hasChartTable(text))) return;
+		const theme = getTheme();
+		const figures = new FigureMarkdown(text, {
+			markdown: (value) =>
+				new Markdown(value, 1, 0, getMarkdownTheme(), {
+					color: (styled) => theme.fg("assistantText", styled),
+				}),
+			charts: true,
+			onChange: () => {
+				this.#version++;
+				this.#onFigureChange?.();
+			},
+		});
+		figures.transientRenderCache = this.#transient;
+		this.#figures = figures;
+		this.removeChild(this.#markdown);
+		this.children.unshift(figures);
 	}
 
 	get text(): string {
@@ -107,9 +153,10 @@ export class AssistantMessageComponent extends Container {
 		this.#answer = fullText;
 		if (this.#transient !== transient) {
 			this.#transient = transient;
-			this.#markdown.transientRenderCache = transient;
+			this.#body.transientRenderCache = transient;
 		}
-		this.#markdown.setText(fullText);
+		this.#liftFigures(fullText);
+		this.#body.setText(fullText);
 	}
 
 	/**
@@ -221,7 +268,9 @@ export class AssistantMessageComponent extends Container {
 		// renders would otherwise emit rows wider than requested.
 		const rows = this.#marks.apply(this.#clamp.apply(super.render(width), width), this.#phase);
 		if (!this.#finalized && this.#transient) {
-			const text = this.#markdown.getLastRenderStableText();
+			const body = this.#body;
+			const text =
+				body instanceof FigureMarkdown ? body.leadingProse : body.getLastRenderStableText();
 			if (text.length > this.#stableText.length && text.startsWith(this.#stableText)) {
 				const previous = this.renderTranscriptStableRows(this.#stableEnds.length, width);
 				this.#prefixMarkdown.setText(text);

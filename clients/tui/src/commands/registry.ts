@@ -13,6 +13,7 @@
  * the host has not implemented says so in a notice instead of throwing.
  */
 
+import type { Component, TUI } from "@oh-my-pi/pi-tui/tui";
 import type { SubmissionDisposition } from "../composer/drafts.ts";
 import type { ControlPlaneClient } from "../protocol/client.ts";
 import { describeError } from "../protocol/errors.ts";
@@ -140,6 +141,22 @@ export interface CommandHost {
 	openToolOutput?(mode: "output" | "diff"): void;
 	/** Show one `sessions.context` breakdown in a dismissible panel. */
 	openContextPanel?(usage: SessionsContextResult): void;
+	/**
+	 * Mount a dismissable fullscreen overlay built by `build`. `close` unmounts
+	 * it (idempotent); `repaint` redraws it; `rows`/`columns` read the terminal
+	 * size on every call. Opening another overlay closes this one.
+	 */
+	presentOverlay?(build: (host: OverlayHost) => Component): void;
+}
+
+/** What a {@link CommandHost.presentOverlay} builder gets from the host. */
+export interface OverlayHost {
+	close(): void;
+	repaint(): void;
+	rows(): number;
+	columns(): number;
+	/** The pi-tui instance, for components that need `requestRender` or overlays of their own. */
+	tui: TUI;
 }
 
 export interface CommandContext {

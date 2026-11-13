@@ -22,6 +22,7 @@
  *   - nothing here calls `process.exit`; `onExit` hands that to main.ts
  */
 
+import { setTableCharts } from "@oh-my-pi/pi-tui/chat/table-chart";
 import {
 	setTranscriptActionHandler,
 	type TranscriptAction,
@@ -417,6 +418,9 @@ export class AppShell {
 			preference: options.themePreference,
 			onChange: () => this.#themeChanged(),
 		});
+		// Numeric Markdown tables in replies get a chart drawn under them where
+		// the terminal shows images (omp's `tui.autoGraph`, without its LLM planner).
+		setTableCharts("always");
 		this.#host = this.#buildHost();
 		this.commands = createCommandRegistry({
 			openExternalEditor: () => this.openExternalEditor(),
@@ -1694,6 +1698,18 @@ export class AppShell {
 						rows: () => this.tui.terminal.rows,
 						close: () => close(),
 						repaint: () => this.selectors.repaint(),
+					}),
+				);
+			},
+			presentOverlay: (build) => {
+				let close = () => {};
+				close = this.selectors.open(
+					build({
+						close: () => close(),
+						repaint: () => this.selectors.repaint(),
+						rows: () => this.tui.terminal.rows,
+						columns: () => this.tui.terminal.columns,
+						tui: this.tui,
 					}),
 				);
 			},

@@ -586,7 +586,9 @@ export class EventController {
 			case "user":
 				return new UserMessageComponent(block.text, block);
 			case "assistant": {
-				const component = new AssistantMessageComponent(block.text);
+				const component: AssistantMessageComponent = new AssistantMessageComponent(block.text, {
+					onFigureChange: () => this.#tui.requestComponentRender(component),
+				});
 				// A rebuilt session (or a block created straight from `completed`)
 				// carries finished runs. Constructing them in the streaming state
 				// would leave the transcript reporting a live region that never
