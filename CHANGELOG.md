@@ -20,6 +20,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   its historical spend does not count against the consult, unused forks are
   deleted, other conversations and unscoped callers are refused before launch,
   and the child defaults to the source's model.
+- TUI Agent Hub (Alt+A or `/hub`; `/tasktree` remains an alias): the focused
+  session's `task` subagents, nested children included, with status
+  (queued/running/idle/parked/completed/failed/cancelled), name and persona,
+  model, clock, current activity and usage, a parent/child tree or flat
+  roster, and a filter. Enter opens an agent's bounded transcript with a
+  message line that steers a running agent, follows up an idle one or revives
+  a parked one through the task tool's own delivery; `x` cancels. Backed by
+  new session-scoped control-plane methods `subagents.list`,
+  `subagents.transcript`, `subagents.send` and `subagents.cancel`; another
+  session's task IDs are not found.
 
 ### Changed
 
@@ -41,16 +51,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `per_call_model_allow` list restricts which `provider/model` or `@role` values
   are accepted. Project `.lemon/config.toml` files can only narrow this gate.
   Persona models and `[runtime.task].agent_models` are unaffected.
-- TUI Agent Hub (Alt+A or `/hub`; `/tasktree` remains an alias): the focused
-  session's `task` subagents, nested children included, with status
-  (queued/running/idle/parked/completed/failed/cancelled), name and persona,
-  model, clock, current activity and usage, a parent/child tree or flat
-  roster, and a filter. Enter opens an agent's bounded transcript with a
-  message line that steers a running agent, follows up an idle one or revives
-  a parked one through the task tool's own delivery; `x` cancels. Backed by
-  new session-scoped control-plane methods `subagents.list`,
-  `subagents.transcript`, `subagents.send` and `subagents.cancel`; another
-  session's task IDs are not found.
 
 ---
 
