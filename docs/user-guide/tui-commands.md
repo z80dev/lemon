@@ -44,7 +44,7 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 
 | Command | Aliases | Arguments | Description |
 | --- | --- | --- | --- |
-| /copy | — | [prompt &#124; code [n]] | Copy the last reply, a fenced code block, or the last user prompt |
+| /copy | — | [prompt &#124; code [n]] | Pick a turn or block to copy, or copy the last reply, a fenced code block, or the last user prompt |
 
 ## core
 
@@ -147,7 +147,7 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | Command | Aliases | Arguments | Description |
 | --- | --- | --- | --- |
 | /tree | — | [label &lt;entryId&gt; &lt;text&gt; &#124; unlabel &lt;entryId&gt;] | browse this session's message tree: switch branch, label entries, fork from one |
-| /rewind | — | [--files] | rewind before an earlier prompt after an exact preview and confirmation |
+| /rewind | — | [--files] | pick a turn on the replayed transcript and rewind before it after an exact preview and confirmation |
 
 ## skills
 

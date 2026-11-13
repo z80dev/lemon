@@ -1,7 +1,11 @@
 import { lexDocument } from "@oh-my-pi/pi-tui/components/markdown";
+import { CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
 import type { Token } from "@oh-my-pi/pi-utils/marked";
+import { describeError } from "../protocol/errors.ts";
 import type { Block } from "../store/transcript-model.ts";
-import type { SlashCommand } from "./registry.ts";
+import { closeReplay, replayDeps } from "../ui/replay-overlays.ts";
+import { blocksToTranscriptEntries } from "../ui/transcript-entries.ts";
+import type { CommandContext, SlashCommand } from "./registry.ts";
 
 /** Use the assistant renderer's lexer, including nested lists/quotes and tilde fences. */
 export function fencedCodeBlocks(text: string): string[] {
@@ -54,12 +58,45 @@ export function selectCopyText(blocks: readonly Block[], argv: string[]): string
 	return code[selected - 1]!;
 }
 
+/**
+ * Fullscreen `/copy` picker over the replayed transcript: Up/Down move the
+ * outline over turns, Right descends into a turn's code, quotes, commands and
+ * links, Enter copies, Esc closes.
+ */
+function openCopySelector(ctx: CommandContext, copyText: (text: string) => Promise<void>): void {
+	const entries = blocksToTranscriptEntries(ctx.session.blocks);
+	ctx.ui.presentOverlay!((host) => {
+		const selector: CopySelectorComponent = new CopySelectorComponent(entries, {
+			...replayDeps(host, ctx.cwd ?? process.cwd()),
+			onPick: (content, label) => {
+				closeReplay(host, selector);
+				copyText(content).then(
+					() => ctx.ui.notice(`copied ${label}`),
+					(error) => ctx.ui.notice(`copy failed: ${describeError(error)}`, "error"),
+				);
+			},
+			onCancel: () => closeReplay(host, selector),
+		});
+		return selector;
+	});
+}
+
 export const copyCommand: SlashCommand = {
 	name: "copy",
-	summary: "Copy the last reply, a fenced code block, or the last user prompt",
+	summary:
+		"Pick a turn or block to copy, or copy the last reply, a fenced code block, or the last user prompt",
 	usage: "[prompt | code [n]]",
 	group: "general",
 	async run(ctx, argv) {
+		if (
+			argv.length === 0 &&
+			ctx.ui.presentOverlay &&
+			ctx.ui.copyText &&
+			ctx.session.blocks.length > 0
+		) {
+			openCopySelector(ctx, (text) => ctx.ui.copyText!(text));
+			return;
+		}
 		const text = selectCopyText(ctx.session.blocks, argv);
 		if (!ctx.ui.copyText) throw new Error("Clipboard is unavailable in this client.");
 		await ctx.ui.copyText(text);

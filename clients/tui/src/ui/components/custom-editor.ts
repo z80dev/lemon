@@ -11,7 +11,8 @@
  *   Ctrl+D   quits on an empty draft, deletes forward otherwise.
  *   Ctrl+G   hands the draft to $EDITOR.
  *   Esc      aborts the live run without discarding the draft; while idle,
- *            Esc Esc discards the draft (recoverable with ↑).
+ *            Esc Esc discards a non-empty draft (recoverable with ↑) and
+ *            opens the rewind picker on an empty one.
  *   ↑ / ↓    recall sent prompts while the draft is empty.
  *   Alt+↵    cycle the submission mode for the next submission only.
  *
@@ -57,7 +58,7 @@ import type { ComposerFacts, ComposerFactsSource } from "./status-bar.ts";
 
 /** Window in which a second Ctrl+C quits. */
 export const EXIT_CONFIRM_MS = 2000;
-/** Window in which a second Esc discards the draft. */
+/** Window in which a second Esc discards the draft or opens the rewind picker. */
 export const ESC_DISCARD_MS = 800;
 /** How many sent prompts ↑ can walk back through. */
 export const HISTORY_LIMIT = 100;
@@ -113,6 +114,8 @@ export interface CustomEditorOptions {
 	/** Abort the run in flight. Return true when there was one. */
 	onAbort?: () => boolean;
 	onQuit?: (code: number) => void;
+	/** Idle Esc Esc on an empty draft: open the rewind picker. */
+	onRewind?: () => void;
 	/** Ctrl+G / `/editor`. */
 	onExternalEdit?: () => void | Promise<void>;
 	/**
@@ -815,13 +818,20 @@ export class CustomEditor extends Editor {
 			return true;
 		}
 		const now = this.#now();
-		if (now - this.#escapeAt < ESC_DISCARD_MS && this.getText().length > 0) {
-			this.#rememberPrompt(this.getExpandedText());
-			this.setText("");
-			this.#historyIndex = undefined;
-			this.#escapeAt = 0;
-			this.#options.notice?.("draft discarded (↑ to bring it back)");
-			return true;
+		if (now - this.#escapeAt < ESC_DISCARD_MS) {
+			if (this.getText().length > 0) {
+				this.#rememberPrompt(this.getExpandedText());
+				this.setText("");
+				this.#historyIndex = undefined;
+				this.#escapeAt = 0;
+				this.#options.notice?.("draft discarded (↑ to bring it back)");
+				return true;
+			}
+			if (this.#options.onRewind && this.pendingAttachments.length === 0) {
+				this.#escapeAt = 0;
+				this.#options.onRewind();
+				return true;
+			}
 		}
 		this.#escapeAt = now;
 		return false;
