@@ -19,6 +19,7 @@ defmodule CodingAgent.Tools.Task.Params do
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
   @schema_modes ["strict", "permissive"]
   @max_context_bytes 64 * 1024
+  @max_steps 4
 
   @tool_only_guardrail_known_tools [
     "bash",
@@ -83,6 +84,32 @@ defmodule CodingAgent.Tools.Task.Params do
 
   @spec validate_run_params(map(), String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def validate_run_params(params, cwd, opts \\ []) do
+    with {:ok, params, later_steps} <- split_steps(params),
+         {:ok, validated} <- validate_prompt_params(params, cwd, opts) do
+      {:ok, Map.put(validated, :steps, later_steps)}
+    end
+  end
+
+  # `steps` replaces `prompt`: the first stage is the child's initial prompt and
+  # each later stage is sent to the same session after the previous one answers.
+  defp split_steps(params) when is_map_key(params, "steps") and is_map_key(params, "prompt"),
+    do: {:error, "Provide either prompt or steps, not both"}
+
+  defp split_steps(%{"steps" => [_ | _] = steps} = params) when length(steps) <= @max_steps do
+    if Enum.all?(steps, &(is_binary(&1) and String.trim(&1) != "")) do
+      [first | rest] = steps
+      {:ok, params |> Map.delete("steps") |> Map.put("prompt", first), rest}
+    else
+      {:error, "steps must be non-empty strings"}
+    end
+  end
+
+  defp split_steps(params) when is_map_key(params, "steps"),
+    do: {:error, "steps must be a list of 1 to #{@max_steps} non-empty strings"}
+
+  defp split_steps(params), do: {:ok, params, []}
+
+  defp validate_prompt_params(params, cwd, opts) do
     prompt = Map.get(params, "prompt")
     description = normalize_task_description(Map.get(params, "description"), prompt)
     role_id = normalize_optional_string(Map.get(params, "agent"))
@@ -555,7 +582,14 @@ defmodule CodingAgent.Tools.Task.Params do
         "Message via agent_message or write agent://<name-or-id>, agent://parent, agent://all; " <>
         "read agent:// for the roster, agent://<id> for an owned child's status/output, " <>
         "agent://<id>/<key>/... for a structured_output field. wait returns the first unobserved native child result, " <>
-        "not shell jobs. Parent cancellation propagates. Personas supply system prompts, models and tool restrictions."
+        "not shell jobs. Parent cancellation propagates. Personas supply system prompts, models and tool restrictions.\n" <>
+        "Assignments: children start without this conversation, so each prompt must stand alone: target " <>
+        "files/symbols and non-goals, the change or question, and observable acceptance (what to verify " <>
+        "and report). Put shared background once in context. Fan out independent work in one tasks[] call; " <>
+        "sequence only true dependencies (swarm depends_on), and use steps for staged work in one child. " <>
+        "Give each editing child its own files or a worktree. Keep the decisions you own: scout/reviewer " <>
+        "gather evidence, you reason. Completions arrive as messages naming the task; long ones are cut " <>
+        "with an agent://<id> pointer. A finished child keeps its history: message agent://<id> to continue it."
 
     agents =
       cwd

@@ -62,7 +62,15 @@ defmodule CodingAgent.Tools.Task do
           },
           "prompt" => %{
             "type" => "string",
-            "description" => "Child assignment"
+            "description" => "Child assignment (or use steps)"
+          },
+          "steps" => %{
+            "type" => "array",
+            "minItems" => 1,
+            "maxItems" => 4,
+            "items" => %{"type" => "string"},
+            "description" =>
+              "Instead of prompt: ordered stages for ONE child session; each later stage is sent after the previous answer, the last answer is the result"
           },
           "context" => %{
             "type" => "string",
@@ -243,6 +251,7 @@ defmodule CodingAgent.Tools.Task do
         "agent",
         "output_schema",
         "schema_mode",
+        "steps",
         "request_budget",
         "model",
         "thinking_level",
@@ -264,7 +273,7 @@ defmodule CodingAgent.Tools.Task do
       "maxItems" => 32,
       "description" =>
         "Children inherit top-level options (context is top-level only). Swarm nodes require unique names; depends_on defines their DAG.",
-      "items" => %{"type" => "object", "properties" => child_properties, "required" => ["prompt"]}
+      "items" => %{"type" => "object", "properties" => child_properties}
     }
 
     %{tool | parameters: put_in(tool.parameters, ["properties", "tasks"], tasks)}

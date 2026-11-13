@@ -8,7 +8,20 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- The `task` tool accepts `steps` (up to four prompts) instead of `prompt` to
+  run staged work in one child session; the last step's answer is the result.
+
+### Changed
+
+- Async task completions name the child (`Task <name> (<id>) [<persona>]`) and
+  state whether it completed or failed. A failed child's partial answer is no
+  longer delivered as if it had succeeded. Answers over 12,000 characters are
+  cut to a preview that points at `read agent://<task_id>`.
+- The `task` tool description now tells the model how to write self-contained
+  assignments, when to fan out or sequence work, and how to continue a
+  finished child.
 
 ---
 

@@ -120,12 +120,11 @@ defmodule CodingAgent.Tools.Task.Runner do
             count: 0
           }
 
-          await_valid_result(
+          run_steps(
             await,
-            prompt,
+            [prompt | Keyword.get(opts, :steps, [])],
             details,
             opts[:validate_output],
-            @output_retries,
             budget
           )
         end
@@ -155,7 +154,7 @@ defmodule CodingAgent.Tools.Task.Runner do
           |> Keyword.put(:thinking_level, state.thinking_level),
         description: description,
         role_id: role_id,
-        opts: opts
+        opts: Keyword.delete(opts, :steps)
       }
 
       Control.retain_session(opts[:task_id], session, resume) == :ok
@@ -167,9 +166,31 @@ defmodule CodingAgent.Tools.Task.Runner do
   defp retain_session(_result, _session, _start_opts, _description, _role_id, _opts),
     do: false
 
+  # Sends each stage to the same child session in order. Only the last stage's
+  # answer is the task result and faces the caller's validator; an error, an
+  # abort or an exhausted request budget ends the chain with that outcome.
+  defp run_steps(await, [prompt | rest], details, validator, budget) do
+    step_validator = if rest == [], do: validator
+
+    case await_valid_result(await, prompt, details, step_validator, @output_retries, budget) do
+      {%AgentToolResult{} = result, _budget} when rest == [] ->
+        result
+
+      {%AgentToolResult{details: %{budget_exhausted: true}} = result, _budget} ->
+        result
+
+      {%AgentToolResult{}, budget} ->
+        run_steps(await, rest, details, validator, budget)
+
+      error ->
+        error
+    end
+  end
+
   # Re-prompts the same child session when its final output fails the caller's
   # validator. After the retries are spent, the last result is returned and the
-  # caller decides whether invalid output fails the task.
+  # caller decides whether invalid output fails the task. Empty assistant turns
+  # never get here: the loop turns them into provider errors.
   defp await_valid_result(await, prompt, details, validator, retries_left, budget) do
     with {:ok, %{text: text, thinking: thinking} = payload, budget} <- await.(prompt, budget) do
       result = %AgentToolResult{
@@ -179,17 +200,11 @@ defmodule CodingAgent.Tools.Task.Runner do
 
       case {result.details[:budget_exhausted], validate_result(validator, result)} do
         {exhausted, {:error, reason}} when exhausted != true and retries_left > 0 ->
-          await_valid_result(
-            await,
-            correction_prompt(reason),
-            details,
-            validator,
-            retries_left - 1,
-            budget
-          )
+          prompt = correction_prompt(reason)
+          await_valid_result(await, prompt, details, validator, retries_left - 1, budget)
 
         _ ->
-          result
+          {result, budget}
       end
     end
   end

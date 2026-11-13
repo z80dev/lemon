@@ -272,7 +272,8 @@ defmodule CodingAgent.Tools.Task.Execution do
                   [
                     task_id: execution.task_id,
                     request_budget: validated.request_budget,
-                    request_budget_notice: validated.request_budget_notice
+                    request_budget_notice: validated.request_budget_notice,
+                    steps: Map.get(validated, :steps, [])
                   ] ++
                     output_validator_opts(execution.validated) ++
                     runner_timeout_opts(execution.effective_cwd, opts)
