@@ -8,7 +8,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Security
+
+- Updated HTTP dependencies past published advisories: Bandit 1.14.1 (HTTP/1,
+  HTTP/2 and WebSocket resource-exhaustion, smuggling and host-spoofing fixes),
+  cowlib 2.22.0, hackney 4.10.2 (pinned-CA trust, redirect credential leak,
+  unbounded body buffering), ssl_verify_fun 1.1.9 (wildcard hostname matching),
+  phoenix_html 4.4.0 and plug_crypto 2.2.1. `mix hex.audit` reports no
+  advisories.
 
 ---
 
