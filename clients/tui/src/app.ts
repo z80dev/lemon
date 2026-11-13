@@ -93,6 +93,7 @@ import { detectTerminalCapabilities } from "./terminal/capabilities.ts";
 import { copyNotice, copyText } from "./terminal/clipboard.ts";
 import { type ForkLaunch, openForkSession } from "./terminal/fork.ts";
 import { TerminalIntegration } from "./terminal/integration.ts";
+import { openLink } from "./terminal/open-link.ts";
 import { isApprovedDecision } from "./ui/components/approval-panel.ts";
 import { Banner } from "./ui/components/banner.ts";
 import { ContextPanelComponent } from "./ui/components/context-panel.ts";
@@ -127,10 +128,12 @@ import { TaskTreeController } from "./ui/controllers/task-tree-controller.ts";
 import { ToolInspector } from "./ui/controllers/tool-inspector.ts";
 import { UserPromptController } from "./ui/controllers/user-prompt-controller.ts";
 import { createHistorySearch, createHistorySource } from "./ui/history-search.ts";
+import { createLinkBrowser } from "./ui/link-browser.ts";
 import { RowFrameProvider } from "./ui/row-frame-provider.ts";
 import { AppearanceController, type ThemePreference } from "./ui/theme/appearance.ts";
 import { getTheme } from "./ui/theme/theme.ts";
 import { getEditorTheme } from "./ui/theme/tui-adapters.ts";
+import { blocksToTranscriptEntries } from "./ui/transcript-entries.ts";
 
 export interface AppShellOptions {
 	url: string;
@@ -507,6 +510,7 @@ export class AppShell {
 			clearTranscript: () => this.#host.clearTranscript(),
 			focusQueue: () => this.focusQueue(),
 			openHistorySearch: () => this.#openHistorySearch(),
+			openLinkBrowser: () => this.#openLinkBrowser(),
 			toggleLatest: () => this.events.toggleLatestBlock(),
 			cycleDetail: () => this.events.cycleAccordionOverride(),
 			openCommandPalette: (mode) => this.#palette.open(undefined, mode),
@@ -1018,6 +1022,36 @@ export class AppShell {
 				repaint: () => this.selectors.repaint(),
 			}),
 		);
+	}
+
+	/**
+	 * Alt+L: fullscreen link browser over the focused transcript. Every `http(s)` and local file
+	 * link is tagged; typing a tag (or clicking a label) opens it, Esc closes.
+	 */
+	#openLinkBrowser(): void {
+		const blocks = this.store.focused.blocks;
+		if (blocks.length === 0) {
+			this.events.notice("no links yet — the transcript is empty");
+			return;
+		}
+		let close = () => {};
+		const browser = createLinkBrowser({
+			entries: blocksToTranscriptEntries(blocks),
+			ui: this.tui,
+			cwd: this.#cwd,
+			requestRender: () => this.tui.requestRender(),
+			onActivate: (url) =>
+				void openLink(url).then((result) => browser.setStatus(result.message, result.ok)),
+			onClose: () => close(),
+		});
+		if (!browser.hasLinks(this.tui.terminal.columns)) {
+			browser.dispose();
+			this.events.notice("no links in this transcript");
+			return;
+		}
+		// The selector controller's close hook, not the component's own Esc path, disposes the
+		// browser: another overlay may replace it, and the registered link schemes must not leak.
+		close = this.selectors.open(browser, {}, () => browser.dispose());
 	}
 
 	#toggleTaskTree(): void {

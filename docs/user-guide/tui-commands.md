@@ -214,6 +214,7 @@ Overlays own their keys; picker-local shortcuts are not configurable here.
 | lemon.history.search | ctrl+r | Search past prompts and fill the draft |
 | lemon.transcript.toggleLatest | alt+e | Expand/collapse the latest tool card or thinking block |
 | lemon.transcript.cycleDetail | ctrl+t | Cycle detail for every card: collapsed → expanded → default |
+| lemon.links.browse | alt+l | Browse the transcript's links and open one by its hint tag |
 | lemon.palette.open | ctrl+p | Search commands, skills and prompts |
 | lemon.tasks.toggle | alt+a | Show/hide live subagent tree |
 | lemon.agents.hub | ctrl+s | Open the agent hub: every subagent and its transcript |

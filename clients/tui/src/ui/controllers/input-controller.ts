@@ -35,6 +35,10 @@ export const LEMON_KEYBINDINGS = {
 		defaultKeys: "ctrl+t",
 		description: "Cycle detail for every card: collapsed → expanded → default",
 	},
+	"lemon.links.browse": {
+		defaultKeys: "alt+l",
+		description: "Browse the transcript's links and open one by its hint tag",
+	},
 	"lemon.palette.open": {
 		defaultKeys: "ctrl+p",
 		description: "Search commands, skills and prompts",
@@ -71,6 +75,8 @@ export interface InputControllerOptions {
 	focusQueue?: () => boolean;
 	/** Open the prompt-history search overlay. */
 	openHistorySearch?: () => void | Promise<void>;
+	/** Open the fullscreen link browser over the transcript. */
+	openLinkBrowser?: () => void;
 	/** Toggle the latest tool card or reasoning block. False when there is none. */
 	toggleLatest?: () => boolean;
 	/** Cycle the global accordion override and apply it to the transcript. */
@@ -183,6 +189,10 @@ export class InputController {
 			}
 			if (this.#matches(data, "lemon.history.search")) {
 				void this.#options.openHistorySearch?.();
+				return { consume: true };
+			}
+			if (this.#matches(data, "lemon.links.browse")) {
+				this.#options.openLinkBrowser?.();
 				return { consume: true };
 			}
 			if (this.#matches(data, "lemon.transcript.toggleLatest")) {
