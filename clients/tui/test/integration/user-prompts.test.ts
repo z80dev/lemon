@@ -125,6 +125,7 @@ test("binds the live TUI surface before submitting a chat", async () => {
 	expect(server.requestsFor("sessions.prompt.bind")[0]!.params).toEqual({
 		sessionKey: SESSION,
 		enabled: true,
+		htmlForms: true,
 	});
 });
 
@@ -194,6 +195,31 @@ test("multiple questions preserve multi-select and custom text answers", async (
 		action: "accept",
 		content: { q0: ["A", "B"], q1__other: "Actual explanation" },
 	});
+});
+
+test("an agent-written form renders in the dialog and Escape declines it", async () => {
+	const { app, server, terminal } = await boot();
+	server.pushEvent("session.prompt.requested", {
+		promptId: "prompt-form",
+		sessionKey: SESSION,
+		runId: "run-1",
+		questions: [],
+		html: '<form><fieldset><legend>Database</legend><label><input type="radio" name="db" value="sqlite" checked> SQLite</label><label><input type="radio" name="db" value="pg"> Postgres</label></fieldset></form>',
+	});
+	await waitFor(() => app.userPrompts.panel.visible);
+	const text = renderPlain(app.userPromptContainer.render(80));
+	expect(text).toContain("Database");
+	expect(text).toContain("Postgres");
+	expect(app.tui.getFocused()).toBe(app.userPrompts.panel);
+	terminal.sendInput("\x1b");
+	const answer = await server.waitForRequest("sessions.prompt.resolve");
+	expect(answer.params).toEqual({
+		promptId: "prompt-form",
+		sessionKey: SESSION,
+		runId: "run-1",
+		action: "decline",
+	});
+	await waitFor(() => !app.userPrompts.panel.visible);
 });
 
 test("Escape declines without choosing a recommendation", async () => {

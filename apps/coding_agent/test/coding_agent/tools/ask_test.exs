@@ -389,4 +389,146 @@ defmodule CodingAgent.Tools.AskTest do
     assert :ok = UserPrompt.unbind(key, self())
     refute UserPrompt.bound?(key)
   end
+
+  describe "html forms" do
+    @form ~s(<form><fieldset><legend>Database</legend>
+      <label><input type="radio" name="db" value="sqlite" checked> SQLite</label>
+      <label><input type="radio" name="db" value="pg"> Postgres</label></fieldset>
+      <p>Replicas</p><input type="number" name="replicas" value="2"></form>)
+
+    test "html xor questions" do
+      key = "html-xor-#{System.unique_integer([:positive])}"
+      :ok = UserPrompt.bind(key, self(), html_forms: true)
+      questions = [%{"id" => "q", "question" => "Choose", "options" => []}]
+      opts = [session_key: key]
+
+      both = Ask.execute("call", %{"html" => @form, "questions" => questions}, nil, nil, opts)
+      assert both.is_error
+      assert both.details.error_type == "invalid_arguments"
+      assert hd(both.content).text =~ "not both"
+
+      neither = Ask.execute("call", %{}, nil, nil, opts)
+      assert neither.is_error
+      assert neither.details.error_type == "invalid_arguments"
+    end
+
+    test "html is bounded and must be a form with answerable, non-secret fields" do
+      key = "html-bounds-#{System.unique_integer([:positive])}"
+      :ok = UserPrompt.bind(key, self(), html_forms: true)
+      opts = [session_key: key]
+
+      oversized = "<form><input name=\"a\">" <> String.duplicate("x", 70_000) <> "</form>"
+
+      for html <- [
+            oversized,
+            "   ",
+            "<p>no form</p>",
+            "<form><p>no fields</p><input type=\"hidden\" name=\"h\"></form>",
+            "<form><input type=\"password\" name=\"pw\"></form>",
+            42
+          ] do
+        result = Ask.execute("call", %{"html" => html}, nil, nil, opts)
+        assert result.is_error, "expected rejection of #{inspect(html, limit: 40)}"
+        assert result.details.error_type == "invalid_arguments"
+      end
+    end
+
+    test "surfaces that cannot render forms fail clearly instead of hanging", %{opts: acp_opts} do
+      # ACP elicitation has no form-html mode.
+      result = Ask.execute("call", %{"html" => @form}, nil, nil, acp_opts)
+      assert result.is_error
+      assert result.details.error_type == "unsupported_surface"
+
+      # A prompt surface that did not declare html_forms (chat channels) is refused up front.
+      key = "html-unsupported-#{System.unique_integer([:positive])}"
+      :ok = UserPrompt.bind(key, self())
+      refute UserPrompt.html_forms?(key)
+      result = Ask.execute("call", %{"html" => @form}, nil, nil, session_key: key)
+      assert result.is_error
+      assert result.details.error_type == "unsupported_surface"
+      assert {:error, :html_unsupported} = UserPrompt.request(key, nil, [], html: @form)
+    end
+
+    test "a form-capable surface receives html and its answers become readable lines plus JSON" do
+      key = "html-ok-#{System.unique_integer([:positive])}"
+      :ok = LemonCore.Bus.subscribe("user_prompts")
+      :ok = UserPrompt.bind(key, self(), html_forms: true)
+      assert UserPrompt.html_forms?(key)
+
+      task =
+        Task.async(fn ->
+          Ask.execute("call", %{"html" => @form}, nil, nil, session_key: key, run_id: "run")
+        end)
+
+      assert_receive %LemonCore.Event{
+        type: :user_prompt_requested,
+        payload: %{"sessionKey" => ^key, "promptId" => id} = pending
+      }
+
+      assert pending["html"] == @form
+      assert pending["questions"] == []
+
+      response = %{
+        "action" => "accept",
+        "content" => %{"db" => "pg", "replicas" => 3},
+        "answers" => [
+          %{"name" => "db", "question" => "Database", "answer" => "Postgres"},
+          %{"name" => "replicas", "question" => "Replicas", "answer" => "3"}
+        ],
+        "notes" => [
+          %{
+            "name" => "db",
+            "question" => "Database",
+            "option" => "Postgres",
+            "value" => "pg",
+            "text" => "managed"
+          }
+        ]
+      }
+
+      assert :ok = UserPrompt.resolve(id, key, "run", response, self())
+      result = Task.await(task)
+      refute result.is_error
+      text = hd(result.content).text
+      assert text =~ "Database: Postgres"
+      assert text =~ "Replicas: 3"
+      assert text =~ "Database / Postgres: managed"
+      assert text =~ ~s(Raw form data: {"db":"pg","replicas":3})
+      assert result.details.status == "answered"
+      assert result.details.data == %{"db" => "pg", "replicas" => 3}
+      assert [%{"name" => "db"} | _] = result.details.answers
+    end
+
+    test "answers fall back to name/value lines and malformed submissions are rejected" do
+      key = "html-fallback-#{System.unique_integer([:positive])}"
+      :ok = LemonCore.Bus.subscribe("user_prompts")
+      :ok = UserPrompt.bind(key, self(), html_forms: true)
+
+      ask = fn response ->
+        task =
+          Task.async(fn -> Ask.execute("call", %{"html" => @form}, nil, nil, session_key: key) end)
+
+        assert_receive %LemonCore.Event{
+          type: :user_prompt_requested,
+          payload: %{"sessionKey" => ^key, "promptId" => id}
+        }
+
+        assert :ok = UserPrompt.resolve(id, key, nil, response, self())
+        Task.await(task)
+      end
+
+      ok = ask.(%{"action" => "accept", "content" => %{"db" => "sqlite", "tags" => ["a", "b"]}})
+      refute ok.is_error
+      assert hd(ok.content).text =~ "db: sqlite"
+      assert hd(ok.content).text =~ "tags: a, b"
+
+      bad = ask.(%{"action" => "accept", "content" => %{"db" => %{"nested" => 1}}})
+      assert bad.is_error
+      assert bad.details.error_type == "invalid_client_response"
+
+      declined = ask.(%{"action" => "decline"})
+      assert declined.is_error
+      assert declined.details.status == "declined"
+    end
+  end
 end

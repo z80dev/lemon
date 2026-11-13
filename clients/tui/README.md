@@ -116,8 +116,11 @@ on reconnect and when opening or changing models. Older daemons without
   a custom answer; free-text questions open an input directly. Escape declines
   the entire form. Optional deadlines and disconnects never auto-select choices.
   Answers are not execution approvals and grant no future tool permissions.
-  The TUI binds its live prompt surface before submitting a chat; see
-  [user questions](../../docs/tools/ask.md).
+  The TUI binds its live prompt surface before submitting a chat (declaring
+  `htmlForms: true`); see [user questions](../../docs/tools/ask.md).
+  When the model sends an `html` `<form>` instead of `questions`, the panel is
+  pi-tui's form dialog (pages, dropdowns, text areas, option notes, Review
+  tabs in Tern): Submit sends the form data, Esc/Cancel declines.
 - Exec approval panel (allow once / session / always / deny, number
   quick-pick, wrapped command preview, expiry countdown). Recovery preserves
   each pending request's server ID, so multiple approvals remain independently
