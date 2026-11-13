@@ -56,6 +56,15 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "background.status" => %{required: %{"id" => :string}, optional: %{}},
     "background.result" => %{required: %{"id" => :string}, optional: %{}},
     "background.cancel" => %{required: %{"id" => :string}, optional: %{}},
+    "process.jobs.list" => %{required: %{"sessionKey" => :string}, optional: %{}},
+    "process.jobs.inspect" => %{
+      required: %{"sessionKey" => :string, "jobId" => :string},
+      optional: %{"tailBytes" => :integer}
+    },
+    "process.jobs.cancel" => %{
+      required: %{"sessionKey" => :string, "jobId" => :string},
+      optional: %{}
+    },
     "session.btw" => %{
       required: %{"question" => :string},
       required_any: [["sessionId", "sessionKey"]],

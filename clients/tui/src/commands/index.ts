@@ -33,6 +33,7 @@ import {
 	heartbeatCommand,
 	tasksCommand,
 } from "./hermes.ts";
+import { jobsCommand } from "./jobs.ts";
 import { modelCommand, thinkCommand, toolPolicyCommand } from "./model.ts";
 import { ompCommand } from "./omp.ts";
 import { planCommand } from "./plan.ts";
@@ -116,6 +117,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		backgroundCommand,
 		btwCommand,
 		runsCommand,
+		jobsCommand,
 		agentsCommand,
 		tellCommand,
 		tasksCommand,

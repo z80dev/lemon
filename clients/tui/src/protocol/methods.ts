@@ -20,6 +20,7 @@ import {
 import type { ControlPlaneClient, RequestOptions } from "./client.ts";
 import { parseSessionsContext } from "./context-usage.ts";
 import { MethodUnavailableError, NotConnectedError } from "./errors.ts";
+import { parseProcessJobsCancel, parseProcessJobsInspect, parseProcessJobsList } from "./jobs.ts";
 import {
 	type OmpCancelResult,
 	type OmpConfigureParams,
@@ -74,6 +75,12 @@ import type {
 	HealthResult,
 	LogsTailParams,
 	ModelsListResult,
+	ProcessJobsCancelParams,
+	ProcessJobsCancelResult,
+	ProcessJobsInspectParams,
+	ProcessJobsInspectResult,
+	ProcessJobsListParams,
+	ProcessJobsListResult,
 	ProfileChatParams,
 	ProfileChatResult,
 	ProfileCloneParams,
@@ -167,6 +174,9 @@ export const METHOD = {
 	backgroundResult: "background.result",
 	backgroundCancel: "background.cancel",
 	sessionBtw: "session.btw",
+	processJobsList: "process.jobs.list",
+	processJobsInspect: "process.jobs.inspect",
+	processJobsCancel: "process.jobs.cancel",
 	modelsList: "models.list",
 	approvalResolve: "exec.approval.resolve",
 	approvalsGet: "exec.approvals.get",
@@ -654,6 +664,43 @@ export class ControlPlaneMethods {
 		options?: RequestOptions,
 	): Promise<Record<string, unknown>> {
 		return this.#call<Record<string, unknown>>(METHOD.sessionBtw, params, options);
+	}
+
+	// -- process jobs -------------------------------------------------------
+
+	/** Read-only, never parked offline: a stale queued listing is worthless. */
+	async processJobsList(
+		params: ProcessJobsListParams,
+		options?: RequestOptions,
+	): Promise<ProcessJobsListResult> {
+		const raw = await this.#call<unknown>(METHOD.processJobsList, params, {
+			...options,
+			queueIfOffline: false,
+		});
+		return parseProcessJobsList(raw);
+	}
+
+	async processJobsInspect(
+		params: ProcessJobsInspectParams,
+		options?: RequestOptions,
+	): Promise<ProcessJobsInspectResult> {
+		const raw = await this.#call<unknown>(METHOD.processJobsInspect, params, {
+			...options,
+			queueIfOffline: false,
+		});
+		return parseProcessJobsInspect(raw);
+	}
+
+	/** Never parked offline and never retried: an unknown outcome may already have killed the job. */
+	async processJobsCancel(
+		params: ProcessJobsCancelParams,
+		options?: RequestOptions,
+	): Promise<ProcessJobsCancelResult> {
+		const raw = await this.#call<unknown>(METHOD.processJobsCancel, params, {
+			...options,
+			queueIfOffline: false,
+		});
+		return parseProcessJobsCancel(raw);
 	}
 
 	// -- approvals ----------------------------------------------------------

@@ -288,6 +288,17 @@ defmodule CodingAgent.ControlPlaneProvider do
 
   def session_process_receipts(_owner), do: {:error, :unavailable}
 
+  @doc "Bounded background-process summaries for a session and its live subagents."
+  def session_jobs(session_key), do: CodingAgent.Session.Jobs.list(session_key)
+
+  @doc "One scoped background process with a redacted output tail; never consumes agent output."
+  def session_job(session_key, job_id, opts),
+    do: CodingAgent.Session.Jobs.inspect_job(session_key, job_id, opts)
+
+  @doc "Cancel a background process owned by the session itself; unknown outcomes are not retried."
+  def session_job_cancel(session_key, job_id),
+    do: CodingAgent.Session.Jobs.cancel(session_key, job_id)
+
   def session_tree(session_key, cwd, opts) do
     case live_session(session_key) do
       nil ->
