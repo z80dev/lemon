@@ -12,7 +12,29 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - TUI: assistant replies draw ```mermaid fences as ASCII diagrams, and, in
   terminals with inline images, ```svg fences as images and a chart under each
-  numeric Markdown table.
+  numeric Markdown table. The coding agent's system prompt tells the model
+  about these visuals in TUI sessions only.
+- TUI: Ctrl+R searches saved prompts (stored with time and folder). The
+  transcript "expand latest" key moves from Ctrl+R to Alt+E.
+- TUI: `[tui] vim_mode = true` starts the composer in vim mode; the composer
+  completes `:emoji:`, `^provider:model` mentions (submitting one switches the
+  session model) and `#123` GitHub references to `pr://`/`issue://`.
+- TUI: `/copy` without arguments opens a fullscreen transcript picker; `/rewind`
+  and Esc-Esc on an empty composer open a fullscreen rewind picker.
+- TUI: Alt+L opens a fullscreen link browser with keyboard hint tags.
+- TUI: `/context` shows an occupancy map; notifications route through tmux,
+  screen, zellij and other multiplexers, with a Linux desktop fallback.
+- TUI: plan approvals open a fullscreen sectioned plan review (`v` from the
+  panel); refine feedback is staged in the composer.
+- TUI: `/usage` opens a dashboard with limits, per-provider cards and a daily
+  activity heatmap; `/usage text` keeps the text report.
+- `/jobs` lists the session's background processes with live output and
+  cancel, backed by new `process.jobs.list|inspect|cancel` control-plane methods.
+- `/hub` (Ctrl+S) lists subagents live and opens each child's transcript;
+  `chat.history` accepts `childSessionId` scoped to the parent session.
+- `ask` accepts an agent-written HTML `<form>`, rendered as a form in the TUI;
+  surfaces that cannot render forms fail with `unsupported_surface`.
+- `read pr://N` includes the pull request's changed-files list.
 
 ---
 
