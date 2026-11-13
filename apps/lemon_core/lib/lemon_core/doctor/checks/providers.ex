@@ -87,29 +87,59 @@ defmodule LemonCore.Doctor.Checks.Providers do
           entry.ambient.provider_env_configured
       end)
 
-    if LemonCore.Config.Providers.normalize_auth_source(
-         Map.get(provider_config, :auth_source) || Map.get(provider_config, "auth_source")
-       ) == "omp" do
-      if provider_ready?(status, provider) do
+    auth_source =
+      LemonCore.Config.Providers.normalize_auth_source(
+        Map.get(provider_config, :auth_source) || Map.get(provider_config, "auth_source")
+      )
+
+    cond do
+      auth_source == "omp_broker" and provider_ready?(status, provider) ->
+        Check.pass(
+          "providers.credentials",
+          "omp_broker (reads omp's auth broker): credential usable."
+        )
+
+      auth_source == "omp_broker" ->
+        Check.fail(
+          "providers.credentials",
+          "omp's auth broker could not provide a usable credential.",
+          "Check `omp auth-broker status`, OMP_AUTH_BROKER_URL/OMP_AUTH_BROKER_TOKEN, " <>
+            "omp_provider/omp_account, and `omp auth-broker login <provider>`."
+        )
+
+      normalize_provider(provider) in ["omp_gateway", "omp_auth_gateway"] and
+          provider_ready?(status, provider) ->
+        Check.pass("providers.credentials", "omp auth gateway bearer is available.")
+
+      normalize_provider(provider) in ["omp_gateway", "omp_auth_gateway"] ->
+        Check.fail(
+          "providers.credentials",
+          "No omp auth gateway bearer is available.",
+          "Set OMP_AUTH_GATEWAY_TOKEN or providers.omp_gateway.api_key_secret, or run " <>
+            "`omp auth-gateway token` on this host."
+        )
+
+      auth_source == "omp" and provider_ready?(status, provider) ->
         Check.pass(
           "providers.credentials",
           "omp (reuses omp's Kimi Code login): credentials usable."
         )
-      else
+
+      auth_source == "omp" ->
         Check.fail(
           "providers.credentials",
           "omp could not provide a usable Kimi Code token.",
           "Check providers.kimi_coding.omp_path; run `omp` and `/login kimi-code`."
         )
-      end
-    else
-      if Readiness.keyless_provider?(provider, provider_config) or
-           provider_has_credential?(provider_config) or ambient? do
+
+      Readiness.keyless_provider?(provider, provider_config) or
+        provider_has_credential?(provider_config) or ambient? ->
         Check.pass(
           "providers.credentials",
           "Default provider credential is usable (offline check)."
         )
-      else
+
+      true ->
         Check.fail(
           "providers.credentials",
           "Default provider credential is missing or cannot be decrypted.",
@@ -117,7 +147,6 @@ defmodule LemonCore.Doctor.Checks.Providers do
             "`lemon setup --provider openai-codex`. Restore the original secrets master key " <>
             "if existing encrypted credentials cannot be read."
         )
-      end
     end
   end
 

@@ -44,6 +44,57 @@ defmodule LemonAgent.Env do
       required?: false,
       area: :provider_secrets,
       apps: [:lemon_core, :lemon_agent]
+    },
+    %{
+      name: :omp_auth_broker_url,
+      env_var: "OMP_AUTH_BROKER_URL",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "omp auth broker base URL for `auth_source = \"omp_broker\"` providers (default http://127.0.0.1:8765); a same-named Lemon secret also works.",
+      secret?: false,
+      required?: false,
+      area: :provider_secrets,
+      apps: [:lemon_agent]
+    },
+    %{
+      name: :omp_auth_broker_token,
+      env_var: "OMP_AUTH_BROKER_TOKEN",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "omp auth broker bearer token; defaults to omp's `auth-broker.token`. A same-named Lemon secret also works.",
+      secret?: true,
+      required?: false,
+      area: :provider_secrets,
+      apps: [:lemon_agent]
+    },
+    %{
+      name: :omp_auth_gateway_token,
+      env_var: "OMP_AUTH_GATEWAY_TOKEN",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "Bearer for the `omp_gateway` provider; defaults to omp's `auth-gateway.token`.",
+      secret?: true,
+      required?: false,
+      area: :provider_secrets,
+      apps: [:lemon_agent]
+    },
+    %{
+      name: :omp_auth_gateway_url,
+      env_var: "OMP_AUTH_GATEWAY_URL",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "Base URL (`/v1` root) of the omp auth gateway used by the `omp_gateway` provider (default http://127.0.0.1:4000/v1).",
+      secret?: false,
+      required?: false,
+      area: :provider_secrets,
+      apps: [:lemon_agent]
     }
   ]
 end

@@ -1152,6 +1152,7 @@ defmodule LemonCore.Config.Validator do
     |> validate_provider_secret_refs(name, config, "providers")
     |> validate_provider_auth_source(name, config, "providers")
     |> validate_provider_omp_path(name, config, "providers")
+    |> validate_provider_omp_broker(name, config, "providers")
     |> validate_custom_provider(name, config, "providers")
   end
 
@@ -1339,13 +1340,13 @@ defmodule LemonCore.Config.Validator do
     choices =
       case provider do
         "openai-codex" ->
-          ["oauth", "api_key"]
+          ["oauth", "api_key", "omp_broker"]
 
         "anthropic" ->
-          ["oauth", "api_key"]
+          ["oauth", "api_key", "omp_broker"]
 
         kimi when kimi in ["kimi_coding", "kimi-coding", "kimi-for-coding"] ->
-          ["oauth", "api_key", "omp"]
+          ["oauth", "api_key", "omp", "omp_broker"]
 
         _ ->
           nil
@@ -1378,6 +1379,34 @@ defmodule LemonCore.Config.Validator do
       _other ->
         errors
     end
+  end
+
+  # `omp_provider` / `omp_account` select the broker credential and mean nothing
+  # under another credential source.
+  defp validate_provider_omp_broker(errors, name, config, path_prefix) do
+    broker? =
+      LemonCore.Config.Providers.normalize_auth_source(
+        Map.get(config, :auth_source, Map.get(config, "auth_source"))
+      ) == "omp_broker"
+
+    Enum.reduce([:omp_provider, :omp_account], errors, fn field, acc ->
+      path = "#{path_prefix}.#{name}.#{field}"
+
+      case Map.get(config, field, Map.get(config, Atom.to_string(field))) do
+        nil ->
+          acc
+
+        value when is_binary(value) ->
+          cond do
+            String.trim(value) == "" -> ["#{path}: cannot be empty" | acc]
+            not broker? -> [~s(#{path}: requires auth_source = "omp_broker") | acc]
+            true -> acc
+          end
+
+        other ->
+          ["#{path}: must be a string (got #{describe_type(other)})" | acc]
+      end
+    end)
   end
 
   defp validate_provider_omp_path(errors, name, config, path_prefix) do

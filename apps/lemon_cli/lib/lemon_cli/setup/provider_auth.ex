@@ -355,7 +355,7 @@ defmodule LemonCli.Setup.ProviderAuth do
     |> ProviderNames.env_vars()
     |> Enum.filter(&present?(System.get_env(&1)))
     |> Enum.map(fn env_var ->
-      if auth_source in ["oauth", "omp"],
+      if auth_source in ["oauth", "omp", "omp_broker"],
         do: "#{env_var}: set, ignored while auth_source = \"#{auth_source}\"",
         else: "#{env_var}: set, used for API-key authentication"
     end)
@@ -363,6 +363,7 @@ defmodule LemonCli.Setup.ProviderAuth do
 
   defp auth_source_label("oauth"), do: "oauth (subscription login)"
   defp auth_source_label("omp"), do: "omp (reuses omp's Kimi Code login)"
+  defp auth_source_label("omp_broker"), do: "omp_broker (omp auth broker credential)"
   defp auth_source_label("api_key"), do: "api_key"
   defp auth_source_label(nil), do: "not set (API key)"
   defp auth_source_label(other), do: "#{other} (invalid)"

@@ -8,6 +8,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `auth_source = "omp_broker"` resolves any provider's credential from omp's
+  auth broker (`LemonAgent.ModelRuntime.OmpBroker`), authoritative and
+  fail-closed, with broker-side auth recovery after a rejected token. The
+  `omp_gateway` provider falls back to omp's `auth-gateway.token`.
 - `Agent.steer/3` accepts `preempt: false` for synchronous acceptance of
   agent-originated messages at the next turn boundary without skipping issued
   tool calls. Human steering takes priority and keeps its preemption semantics.

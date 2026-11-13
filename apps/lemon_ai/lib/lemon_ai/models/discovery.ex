@@ -15,6 +15,10 @@ defmodule LemonAi.Models.Discovery do
       for context length and `thinking`/`vision` capabilities. When the native
       listing fails, falls back to `GET {root}/v1/models`. Models use the
       OpenAI-compatible `{root}/v1` base URL.
+    * `:omp_gateway` - an omp auth gateway's `GET {base_url}/models`. Each chat
+      row becomes a model through `LemonAi.Models.OmpGateway`, which picks the
+      row's wire API and reuses Lemon catalog metadata; `:api` and
+      `:model_defaults` do not apply, and `:headers` also become model headers.
 
   Results are cached in `LemonAi.ModelCache` by discovery kind, provider, base
   URL, wire API and a digest of the credentials, request headers and model
@@ -39,9 +43,9 @@ defmodule LemonAi.Models.Discovery do
   alias LemonAi.ModelCache
   alias LemonAi.Types.{Model, ModelCost}
 
-  @type kind :: :openai_models | :ollama
+  @type kind :: :openai_models | :ollama | :omp_gateway
 
-  @kinds [:openai_models, :ollama]
+  @kinds [:openai_models, :ollama, :omp_gateway]
   @apis [:openai_completions, :openai_responses]
   @ttl_ms 300_000
   @timeout_ms 5_000
@@ -111,6 +115,14 @@ defmodule LemonAi.Models.Discovery do
     with {:ok, body} <- get_json(base_url <> "/models", opts),
          {:ok, entries} <- openai_entries(body) do
       {:ok, build_models(entries, base_url, opts)}
+    end
+  end
+
+  defp fetch(:omp_gateway, base_url, opts) do
+    with {:ok, body} <- get_json(base_url <> "/models", opts) do
+      LemonAi.Models.OmpGateway.models_from_listing(body, base_url, %{
+        headers: Map.new(Keyword.get(opts, :headers, %{}), fn {k, v} -> {to_string(k), v} end)
+      })
     end
   end
 

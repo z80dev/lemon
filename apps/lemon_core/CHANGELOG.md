@@ -47,6 +47,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- Provider config keeps `omp_provider`/`omp_account`; validation accepts
+  `auth_source = "omp_broker"` and scopes those keys to it. Readiness and doctor
+  treat broker-backed providers and `omp_gateway` as externally managed.
 - Provider config accepts `auth_source = "omp"` for Kimi Code and its runtime
   aliases only. Optional `omp_path` values must be absolute executable paths;
   validation is syntactic and does not require a local installation.

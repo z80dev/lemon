@@ -121,7 +121,9 @@ defmodule LemonCore.Doctor.ProviderDiagnostics do
       known: provider in @known_providers or config_name in @known_providers,
       configured: map_size(provider_config) > 0,
       credential_ready:
-        if(safe_auth_source(provider_config) == "omp",
+        if(
+          safe_auth_source(provider_config) in ["omp", "omp_broker"] or
+            normalize_provider(provider) in ["omp-gateway", "omp-auth-gateway"],
           do: LemonCore.ProviderManagement.credential_ready?(provider, provider_config),
           else:
             ambient_configured or Enum.any?(secret_references, & &1.present) or
@@ -270,7 +272,7 @@ defmodule LemonCore.Doctor.ProviderDiagnostics do
     case LemonCore.Config.Providers.normalize_auth_source(
            map_value(provider_config, :auth_source)
          ) do
-      value when value in ["api_key", "oauth", "omp"] -> value
+      value when value in ["api_key", "oauth", "omp", "omp_broker"] -> value
       _ -> nil
     end
   end

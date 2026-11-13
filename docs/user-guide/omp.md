@@ -22,6 +22,11 @@ RPC protocol (`omp --mode rpc`).
 `lemon omp status` (or `omp.status` in the control plane) reports whether omp
 was found and its version.
 
+Separately from delegation, Lemon's own model requests can use omp's
+credentials: `auth_source = "omp_broker"` reads a provider's credential from
+omp's auth broker, and the `omp_gateway` provider sends requests through omp's
+auth gateway. See [omp auth broker and auth gateway](../config.md#omp-auth-broker-and-auth-gateway).
+
 ## From chat
 
 Ask in plain words; Lemon uses its `omp` tool:

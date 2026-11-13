@@ -962,6 +962,8 @@ defmodule LemonAi.Providers.Anthropic do
 
   @copilot_providers [:github_copilot, :"github-copilot"]
   @kimi_providers [:kimi, :kimi_coding, "kimi", "kimi_coding"]
+  # The omp auth gateway authenticates every route with `Authorization: Bearer`.
+  @bearer_providers [:omp_gateway, "omp_gateway"]
   @common_beta_features [
     "interleaved-thinking-2025-05-14",
     "fine-grained-tool-streaming-2025-05-14"
@@ -995,7 +997,7 @@ defmodule LemonAi.Providers.Anthropic do
         api_key == "" ->
           []
 
-        is_copilot or is_anthropic_oauth or is_kimi_oauth ->
+        is_copilot or is_anthropic_oauth or is_kimi_oauth or provider in @bearer_providers ->
           [{"authorization", "Bearer #{api_key}"}]
 
         true ->

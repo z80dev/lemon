@@ -8,6 +8,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonAi.Auth.OmpAuthBroker` reads omp auth broker snapshots (cached per
+  endpoint, single-flight), selects credentials by provider/identity and
+  rate-limit blocks, and asks the broker to refresh expiring or rejected access
+  tokens. `LemonAi.Auth.OmpConfig` locates omp's broker/gateway token files.
+- The `omp_gateway` preset and `LemonAi.Models.OmpGateway` serve omp auth
+  gateway models with per-model wire APIs, Lemon catalog metadata and usage
+  attribution headers; the Anthropic wire authenticates to it with a bearer.
 - Streaming responses default to a reset-on-every-event 300,000 ms inactivity
   limit and an independent configurable 1,800,000 ms hard ceiling. Direct and
   dispatched calls share stream-owned timers and distinct idle cancellation
@@ -37,6 +44,7 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `OpenAICompletions` fails the response on a mid-stream `{"error": ...}` chunk.
 - Share rate-limit timing across provider and completion retry owners: honor
   `Retry-After` and structured body hints with a 10-second minimum plus jitter.
   Kimi quota exhaustion and Codex usage limits stop retries immediately and

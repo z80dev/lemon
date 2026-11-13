@@ -19,6 +19,14 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   resolution as a final `"default"` entry, and `build_get_api_key/1` picks the
   first credential not in cooldown (`CredentialHealth`). With no pools
   configured, behavior is identical to plain single-credential resolution.
+
+  ## omp
+
+  `auth_source = "omp_broker"` reads the provider's credential from omp's auth
+  broker (`LemonAgent.ModelRuntime.OmpBroker`) on any provider, built-in or
+  custom; it is authoritative and fails closed like a selected OAuth login. The
+  `omp_gateway` provider falls back to omp's `auth-gateway.token` after its
+  environment, inline and secret-store keys.
   """
 
   require Logger
@@ -27,6 +35,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   alias LemonAi.Auth.OmpToken
   alias LemonAgent.ModelRuntime.CredentialHealth
   alias LemonAgent.ModelRuntime.CustomProviders
+  alias LemonAgent.ModelRuntime.OmpBroker
   alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonAgent.ProviderConfigResolver
   alias LemonCore.Secrets
@@ -85,18 +94,24 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   def refresh_provider_api_key(config, provider, credential_ref, previous_key)
       when is_binary(credential_ref) do
     provider_cfg = provider_config(config, provider, [])
+    auth_source = normalize_auth_source(provider_cfg)
 
-    if credential_ref == "default" and ProviderNames.canonical_name(provider) == "kimi_coding" and
-         normalize_auth_source(provider_cfg) == :omp do
-      OmpToken.resolve(provider_config_value(provider_cfg, :omp_path), force_refresh: true)
-    else
-      case refresh_target(config, provider, credential_ref) do
-        {:ok, secret_name, resolver} ->
-          force_refresh_secret(secret_name, resolver, previous_key)
+    cond do
+      credential_ref == "default" and auth_source == :omp_broker ->
+        OmpBroker.recover(provider, provider_cfg, previous_key)
 
-        {:error, _} = error ->
-          error
-      end
+      credential_ref == "default" and ProviderNames.canonical_name(provider) == "kimi_coding" and
+          auth_source == :omp ->
+        OmpToken.resolve(provider_config_value(provider_cfg, :omp_path), force_refresh: true)
+
+      true ->
+        case refresh_target(config, provider, credential_ref) do
+          {:ok, secret_name, resolver} ->
+            force_refresh_secret(secret_name, resolver, previous_key)
+
+          {:error, _} = error ->
+            error
+        end
     end
   end
 
@@ -269,12 +284,20 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   @doc "Whether the provider config explicitly selects OAuth or omp credential authority."
   @spec authoritative_selected?(map() | nil) :: boolean()
   def authoritative_selected?(provider_cfg),
-    do: normalize_auth_source(provider_cfg) in [:oauth, :omp]
+    do: normalize_auth_source(provider_cfg) in [:oauth, :omp, :omp_broker]
 
   @spec resolve_provider_api_key(atom() | String.t(), map() | nil, keyword()) :: String.t() | nil
   def resolve_provider_api_key(provider, providers_or_cfg, opts \\ []) do
     provider_cfg = provider_config(providers_or_cfg, provider, opts)
 
+    if normalize_auth_source(provider_cfg) == :omp_broker do
+      resolve_omp_broker_api_key(provider, provider_cfg)
+    else
+      resolve_configured_api_key(provider, provider_cfg)
+    end
+  end
+
+  defp resolve_configured_api_key(provider, provider_cfg) do
     case ProviderNames.canonical_name(provider) do
       "openai_codex" ->
         resolve_openai_codex_api_key(provider_cfg)
@@ -286,6 +309,13 @@ defmodule LemonAgent.ModelRuntime.Credentials do
         if normalize_auth_source(provider_cfg) == :omp,
           do: resolve_omp_api_key(provider_cfg),
           else: resolve_generic_api_key("kimi_coding", provider_cfg)
+
+      # The gateway bearer omp itself stores is the last resort.
+      "omp_gateway" ->
+        case resolve_generic_api_key("omp_gateway", provider_cfg) do
+          key when is_binary(key) and key != "" -> key
+          _ -> LemonAi.Auth.OmpConfig.read_token(:gateway)
+        end
 
       canonical when is_binary(canonical) ->
         resolve_generic_api_key(canonical, provider_cfg)
@@ -543,6 +573,18 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
   defp map_value(_, _), do: nil
 
+  # A broker failure returns "" so no other credential replaces the selection.
+  defp resolve_omp_broker_api_key(provider, provider_cfg) do
+    case OmpBroker.api_key(provider, provider_cfg) do
+      {:ok, key} ->
+        key
+
+      {:error, reason} ->
+        OmpBroker.log_failure(provider, reason)
+        ""
+    end
+  end
+
   defp resolve_omp_api_key(provider_cfg) do
     case OmpToken.resolve(provider_config_value(provider_cfg, :omp_path)) do
       {:ok, token} ->
@@ -637,14 +679,14 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
         :missing ->
           Logger.warning(
-            "providers.openai-codex.auth_source is required and must be one of: oauth, api_key"
+            "providers.openai-codex.auth_source is required and must be one of: oauth, api_key, omp_broker"
           )
 
           nil
 
         {:invalid, value} ->
           Logger.warning(
-            "providers.openai-codex.auth_source=#{inspect(value)} is invalid; expected oauth or api_key"
+            "providers.openai-codex.auth_source=#{inspect(value)} is invalid; expected oauth, api_key or omp_broker"
           )
 
           nil
@@ -733,7 +775,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
       {:invalid, value} ->
         Logger.warning(
-          "providers.anthropic.auth_source=#{inspect(value)} is invalid; expected oauth or api_key when set"
+          "providers.anthropic.auth_source=#{inspect(value)} is invalid; expected oauth, api_key or omp_broker when set"
         )
 
         ""
@@ -1026,6 +1068,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
       "oauth" -> :oauth
       "api_key" -> :api_key
       "omp" -> :omp
+      "omp_broker" -> :omp_broker
       source -> {:invalid, source}
     end
   end

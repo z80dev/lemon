@@ -43,7 +43,9 @@ defmodule LemonAi.Application do
       # Central call dispatcher
       {LemonAi.CallDispatcher, []},
       # Model availability cache (ETS-backed)
-      LemonAi.ModelCache
+      LemonAi.ModelCache,
+      # omp auth broker snapshot cache (ETS-backed)
+      LemonAi.Auth.OmpAuthBroker
     ]
 
     opts = [strategy: :one_for_one, name: LemonAi.Supervisor]

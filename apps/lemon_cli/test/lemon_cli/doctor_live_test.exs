@@ -60,6 +60,44 @@ defmodule LemonCli.DoctorLiveTest do
     end
   end
 
+  test "omp gateway Anthropic models check the gateway models route with a bearer" do
+    input = %{
+      provider: "omp_gateway",
+      api: :anthropic_messages,
+      base_url: "http://gateway.test:4000",
+      api_key: "gateway-bearer",
+      headers: %{}
+    }
+
+    assert {:ok, %{http_status: 200}} =
+             ProviderLiveCheck.check(input,
+               extended: true,
+               http_get: fn :get, {url, headers}, _, _ ->
+                 assert to_string(url) == "http://gateway.test:4000/v1/models"
+                 headers = Map.new(headers, fn {k, v} -> {to_string(k), to_string(v)} end)
+                 assert headers["authorization"] == "Bearer gateway-bearer"
+                 refute Map.has_key?(headers, "x-api-key")
+                 {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], "{\"data\":[]}"}}
+               end
+             )
+  end
+
+  test "a Claude subscription token from any source skips the API-key models check" do
+    input = %{
+      provider: "anthropic",
+      api: :anthropic_messages,
+      base_url: "https://api.anthropic.com",
+      api_key: "sk-ant-oat01-from-omp-broker",
+      headers: %{}
+    }
+
+    assert {:skip, {:unsupported_api, :anthropic_messages}} =
+             ProviderLiveCheck.check(input,
+               extended: true,
+               http_get: fn _, _, _, _ -> flunk("no HTTP request expected") end
+             )
+  end
+
   test "setup retains its OpenAI-only live policy" do
     input = %{
       api: :anthropic_messages,

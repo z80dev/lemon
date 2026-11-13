@@ -4,8 +4,10 @@ defmodule LemonCore.Setup.Readiness do
 
   Readiness inspects the resolved global config, secrets backend and configured
   default provider/model without starting a runtime or making a model request.
-  Externally managed omp credentials are checked through the registered provider
-  management service; omp may refresh its own access token.
+  Externally managed omp credentials (`auth_source = "omp"` for Kimi Code,
+  `auth_source = "omp_broker"` on any provider, and the `omp_gateway` provider)
+  are checked through the registered provider management service; omp may
+  refresh its own access token.
 
   This module reports three stable steps:
 
@@ -183,10 +185,16 @@ defmodule LemonCore.Setup.Readiness do
   end
 
   defp omp_provider?(provider, cfg) do
-    normalize_provider_name(provider) in ["kimi-coding", "kimi-for-coding"] and
+    auth_source =
       LemonCore.Config.Providers.normalize_auth_source(
         Map.get(cfg, :auth_source) || Map.get(cfg, "auth_source")
-      ) == "omp"
+      )
+
+    name = normalize_provider_name(provider)
+
+    auth_source == "omp_broker" or
+      (name in ["kimi-coding", "kimi-for-coding"] and auth_source == "omp") or
+      name in ["omp-gateway", "omp-auth-gateway"]
   end
 
   # A referenced credential is usable when the encrypted store can decrypt it,

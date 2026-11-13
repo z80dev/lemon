@@ -545,6 +545,36 @@ defmodule LemonCore.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "openai-codex.auth_source"))
     end
 
+    test "accepts omp_broker on any provider and scopes omp_provider/omp_account to it" do
+      errors =
+        Validator.validate_providers(
+          %{
+            providers: %{
+              "openai-codex" => %{auth_source: "omp_broker", omp_account: "account:a"},
+              "anthropic" => %{auth_source: "omp_broker"},
+              "my-xai" => %{auth_source: "omp_broker", omp_provider: "xai-oauth"}
+            }
+          },
+          []
+        )
+
+      assert errors == []
+
+      errors =
+        Validator.validate_providers(
+          %{
+            providers: %{
+              "anthropic" => %{auth_source: "oauth", omp_account: "account:a"},
+              "openrouter" => %{omp_provider: 42}
+            }
+          },
+          []
+        )
+
+      assert ~s(providers.anthropic.omp_account: requires auth_source = "omp_broker") in errors
+      assert "providers.openrouter.omp_provider: must be a string (got integer)" in errors
+    end
+
     test "anthropic auth_source is optional" do
       errors = Validator.validate_providers(%{providers: %{"anthropic" => %{}}}, [])
       refute Enum.any?(errors, &String.contains?(&1, "anthropic.auth_source"))

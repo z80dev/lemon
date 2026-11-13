@@ -257,7 +257,7 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
     case LemonCore.Config.Providers.normalize_auth_source(
            provider_config_value(provider_cfg, :auth_source)
          ) do
-      value when value in ["api_key", "oauth", "omp"] -> value
+      value when value in ["api_key", "oauth", "omp", "omp_broker"] -> value
       _ -> nil
     end
   end

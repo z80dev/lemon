@@ -23,7 +23,7 @@ defmodule LemonAi.Models.Presets do
 
   alias LemonAi.Types.{Model, ModelCost}
 
-  @type discovery_kind :: :openai_models | :ollama
+  @type discovery_kind :: :openai_models | :ollama | :omp_gateway
 
   @type t :: %{
           id: atom(),
@@ -234,6 +234,19 @@ defmodule LemonAi.Models.Presets do
       base_url: "https://api.kilo.ai/api/gateway",
       env_vars: ["KILO_API_KEY"],
       aliases: ["kilo-gateway"]
+    },
+    # ---- omp auth gateway (`omp auth-gateway serve`) ----
+    # Per-model wire APIs and catalog metadata come from
+    # `LemonAi.Models.OmpGateway`; the bearer may also come from omp's
+    # `auth-gateway.token` (resolved by Lemon's credential layer).
+    %{
+      id: :omp_gateway,
+      name: "omp auth gateway",
+      base_url: "http://127.0.0.1:4000/v1",
+      discovery: :omp_gateway,
+      env_vars: ["OMP_AUTH_GATEWAY_TOKEN"],
+      base_url_env: ["OMP_AUTH_GATEWAY_URL"],
+      aliases: ["omp-gateway", "omp-auth-gateway", "omp_auth_gateway"]
     }
   ]
 
@@ -399,7 +412,8 @@ defmodule LemonAi.Models.Presets do
 
   @doc """
   Synthesize a model for a preset provider with the preset API and conservative
-  defaults. `overrides` may replace any `LemonAi.Types.Model` field.
+  defaults. `overrides` may replace any `LemonAi.Types.Model` field. omp gateway
+  ids build through `LemonAi.Models.OmpGateway.model/4` (per-model wire API).
   """
   @spec model(atom(), String.t(), map()) :: Model.t() | nil
   def model(provider, model_id, overrides \\ %{})
@@ -407,6 +421,14 @@ defmodule LemonAi.Models.Presets do
     case get(provider) do
       nil ->
         nil
+
+      %{id: :omp_gateway} when model_id != "" ->
+        LemonAi.Models.OmpGateway.model(
+          model_id,
+          nil,
+          Map.get(overrides, :base_url) || base_url(provider),
+          overrides
+        )
 
       preset ->
         compat = if preset.keyless, do: @local_compat, else: @base_compat

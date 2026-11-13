@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- OpenAI-compatible streams that report an upstream failure as a mid-stream
+  `{"error": ...}` chunk (OpenRouter, omp's auth gateway) now fail the response
+  instead of completing with empty output.
 - Lemon Bot's desktop iPhone pairing uses one explicit **Codes match — Pair
   iPhone** action instead of a comparison toggle followed by a separate button.
 - Native Bot transcripts use measured scroll position to follow replies without
@@ -80,6 +83,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Lemon integrates with omp's auth broker and auth gateway:
+  `auth_source = "omp_broker"` reads any provider's credential from
+  `omp auth-broker serve` (refresh stays with the broker; optional
+  `omp_provider`/`omp_account`), and the `omp_gateway` provider routes models
+  through `omp auth-gateway serve` with per-model Anthropic Messages, Responses
+  or Chat Completions wires. Readiness, doctor and provider status understand
+  both. See [configuration](docs/config.md#omp-auth-broker-and-auth-gateway).
 - **Lemon Bot HTTPS setup (#530).** `lemon bot https enable --tailscale` sets
   up private tailnet HTTPS, or `--url` registers an existing HTTPS reverse proxy.
   `status` reports readiness; `disable` removes only tool-owned configuration

@@ -1531,6 +1531,109 @@ custom `base_url`. Hosted provider ids with bundled catalogs (`opencode`,
 `qwen`, ...) take the same `[providers.<id>]` table with `api_key_secret` and
 optional `base_url`.
 
+## omp auth broker and auth gateway
+
+[omp](user-guide/omp.md) can centralize provider credentials in an auth broker
+(`omp auth-broker serve`) and expose them through a credential-holding proxy
+(`omp auth-gateway serve`). Lemon integrates with both; pick per provider.
+
+| | Broker: `auth_source = "omp_broker"` | Gateway: `omp_gateway` provider |
+| --- | --- | --- |
+| Lemon holds | the broker bearer; reads access tokens and API keys | only the gateway bearer |
+| Requests go | straight to the provider through Lemon's own provider modules | to the gateway, which calls the provider |
+| Models | Lemon's catalog for that provider | everything the gateway serves (`GET /v1/models`) |
+| Refresh | performed by the broker | performed by the broker, behind the gateway |
+
+### Broker-backed credentials
+
+Set `auth_source = "omp_broker"` on any provider, built-in or custom:
+
+```toml
+[providers.anthropic]
+auth_source = "omp_broker"
+
+[providers.openai-codex]
+auth_source = "omp_broker"
+omp_account = "email:me@example.com|org:org-123"  # optional OAuth identityKey
+
+[providers.team-router]        # custom endpoint using omp's OpenRouter key
+api = "openai_completions"
+base_url = "https://openrouter.ai/api/v1"
+auth_source = "omp_broker"
+omp_provider = "openrouter"
+```
+
+The broker endpoint is resolved like omp's own client (Lemon does not read
+omp's `config.yml`):
+
+- URL: `OMP_AUTH_BROKER_URL` (environment, else a Lemon secret of that name),
+  default `http://127.0.0.1:8765`.
+- Token: `OMP_AUTH_BROKER_TOKEN` (environment, else a Lemon secret), else omp's
+  `auth-broker.token` under `~/<PI_CONFIG_DIR or .omp>` (or
+  `profiles/<OMP_PROFILE>`), as written by `omp auth-broker token` / `serve`.
+
+`omp_provider` defaults to the Lemon provider id with dashes (`openai_codex` →
+`openai-codex`, `google_gemini_cli` → `google-gemini-cli`), except
+`kimi_coding` → `kimi-code`, `kimi` → `moonshot` and `opencode` →
+`opencode-zen`; custom providers must set it. Without `omp_account`, OAuth
+sign-ins win over login API keys over other API keys (omp's order), accounts
+without an active rate-limit block first. With `omp_account` only that identity
+is used and API keys never are; `omp usage accounts` lists identity keys.
+
+The selection is authoritative: environment keys, inline keys and Lemon
+secrets do not replace it, and a broker failure resolves no credential instead
+of falling back. Lemon never receives or stores refresh tokens. It caches the
+broker snapshot per endpoint for 15 seconds (a failed fetch for 5 seconds),
+asks the broker to refresh an access token within a minute of expiry, and after
+a provider rejects a token re-reads the broker, then requests
+`POST /v1/credential/:id/refresh?reason=auth-recovery`. If the broker hands
+back the rejected token again the refresh fails rather than retrying it. Gemini
+CLI and Antigravity receive `{"token","projectId"}`; GitHub Copilot sign-ins
+are not supported through the broker. `lemon doctor`, setup readiness and
+provider status check the broker credential without a local secret store; as
+with a Lemon Claude login, a Claude subscription token has no non-generating
+live check.
+
+The broker bearer can read every credential the broker holds. Keep the broker
+on loopback or an encrypted overlay (Tailscale, WireGuard) and use `https://`
+across untrusted networks.
+
+### The `omp_gateway` provider
+
+`omp_gateway` (aliases `omp-gateway`, `omp-auth-gateway`) sends requests to an
+omp auth gateway, which resolves the provider credential itself. Lemon only
+holds the gateway bearer:
+
+```toml
+[providers.omp_gateway]
+base_url = "http://gateway.tailnet:4000/v1"  # default http://127.0.0.1:4000/v1
+
+[defaults]
+provider = "omp_gateway"
+model = "omp_gateway:anthropic/claude-sonnet-4-5"
+```
+
+The bearer resolves from `OMP_AUTH_GATEWAY_TOKEN`, `api_key`,
+`api_key_secret`, the secret `llm_omp_gateway_api_key`, then omp's
+`auth-gateway.token`. A client token from the gateway's `--clients` file works
+the same way and limits Lemon to that client's models and accounts. For a
+`--no-auth` gateway set any placeholder `api_key`. `OMP_AUTH_GATEWAY_URL` sets
+the base URL when the config does not.
+
+Model ids are the gateway's `provider/id` pairs. Each model uses the wire
+closest to its native API so provider features survive translation: Anthropic
+Messages models use `/v1/messages`, OpenAI/Codex/Azure Responses models use
+`/v1/responses`, everything else uses `/v1/chat/completions`. Reasoning
+support, pricing and limits come from Lemon's catalog entry for the same
+provider and id when one exists; the gateway listing supplies names, limits and
+input modalities. The `/model` picker lists every chat model the gateway
+serves once a bearer resolves; judge, image, speech, embedding, rerank and
+video models are skipped. Requests carry `x-omp-app: lemon` and
+`x-omp-hostname` for the gateway's usage attribution.
+
+`omp auth-gateway stdio` is not used: it returns a streamed response only after
+the stream ends, which would defeat incremental output.
+
 ## Custom Providers and Models
 
 A `[providers.<id>]` table whose id is not a built-in provider defines a custom

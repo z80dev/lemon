@@ -1254,6 +1254,18 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
   defp retryable_stream_output_error?(_), do: false
 
+  # OpenAI-compatible routers (OpenRouter, the omp auth gateway) report an
+  # upstream failure after the response started as a `{"error": ...}` chunk.
+  defp process_event_data(_stream, state, %{"error" => error}) when is_map(error) do
+    message =
+      case error["message"] do
+        message when is_binary(message) and message != "" -> message
+        _ -> "Unknown error"
+      end
+
+    %{state | output: %{state.output | stop_reason: :error, error_message: message}}
+  end
+
   defp process_event_data(stream, state, data) do
     state = process_usage(state, data)
     state = process_choice(stream, state, data)

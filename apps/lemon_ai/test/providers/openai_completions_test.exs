@@ -353,6 +353,34 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
     assert result.error_message =~ "maximum context length"
   end
 
+  test "fails the response on a mid-stream upstream error chunk" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      Plug.Conn.send_resp(
+        conn,
+        200,
+        sse_body([
+          %{"choices" => [%{"delta" => %{"role" => "assistant"}, "finish_reason" => nil}]},
+          %{"error" => %{"message" => "403 Blocked by upstream", "type" => "upstream_error"}}
+        ])
+      )
+    end)
+
+    model = %Model{
+      id: "router/model:free",
+      name: "Router model",
+      api: :openai_completions,
+      provider: :openrouter,
+      base_url: "https://example.test/v1"
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+    {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+    assert {:error, %AssistantMessage{} = result} = EventStream.result(stream, 1000)
+    assert result.stop_reason == :error
+    assert result.error_message == "403 Blocked by upstream"
+  end
+
   test "merges headers with opts overriding model headers" do
     test_pid = self()
 

@@ -346,6 +346,10 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `GOOGLE_GENERATIVE_AI_API_KEY` | string | _(none)_ | yes | `lemon_ai` | Google Generative AI API key (primary name). |
 | `LEMON_GEMINI_PROJECT_ID` | string | _(none)_ |  | `lemon_ai`, `lemon_cli`, `lemon_core` | Lemon-specific override for the Gemini/Vertex project id, checked before the GOOGLE_CLOUD_* names. |
 | `MISTRAL_API_KEY` | string | _(none)_ | yes | `lemon_ai` | Mistral API key. |
+| `OMP_AUTH_BROKER_TOKEN` | string | _(none)_ | yes | `lemon_agent` | omp auth broker bearer token; defaults to omp's `auth-broker.token`. A same-named Lemon secret also works. |
+| `OMP_AUTH_BROKER_URL` | string | _(none)_ |  | `lemon_agent` | omp auth broker base URL for `auth_source = "omp_broker"` providers (default http://127.0.0.1:8765); a same-named Lemon secret also works. |
+| `OMP_AUTH_GATEWAY_TOKEN` | string | _(none)_ | yes | `lemon_agent` | Bearer for the `omp_gateway` provider; defaults to omp's `auth-gateway.token`. |
+| `OMP_AUTH_GATEWAY_URL` | string | _(none)_ |  | `lemon_agent` | Base URL (`/v1` root) of the omp auth gateway used by the `omp_gateway` provider (default http://127.0.0.1:4000/v1). |
 | `OPENAI_API_KEY` | string | _(none)_ | yes | `lemon_ai` | OpenAI API key. |
 | `OPENAI_CODEX_API_KEY` | string | _(none)_ | yes | `lemon_ai` | OpenAI Codex API key. |
 | `OPENAI_CODEX_OAUTH_CLIENT_ID` | string | _(none)_ |  | `lemon_ai` | OpenAI Codex OAuth client id override. |
@@ -425,7 +429,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS` | integer | `40000` |  | `lemon_core` | Estimated tool-schema token total above which long-tail tools are hidden behind tool_search/tool_invoke. |
 | `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS` | integer | `2000` |  | `lemon_core` | Token budget for the hidden-tool catalog digest embedded in the tool_search description. |
 | `LEMON_TOOL_DISCLOSURE_ENABLED` | boolean | `true` |  | `lemon_core` | Whether tool-schema progressive disclosure may activate under the selected profile. |
-| `LEMON_TOOL_DISCLOSURE_PROFILE` | string | `legacy` |  | `lemon_core` | Tool disclosure profile: legacy defers only the MCP/extension/WASM long tail over budget; coding also defers optional built-ins outside the coding core. |
+| `LEMON_TOOL_DISCLOSURE_PROFILE` | string | `auto` |  | `lemon_core` | Tool disclosure profile: auto selects coding for cwd-scoped sessions and legacy for chat; legacy defers the over-budget long tail; coding also defers optional built-ins. |
 
 ### Tools wasm
 

@@ -433,12 +433,22 @@ defmodule CodingAgent.Session.ModelResolver do
     base_url =
       provider_cfg && (Map.get(provider_cfg, :base_url) || Map.get(provider_cfg, "base_url"))
 
-    if is_binary(base_url) and base_url != "" and base_url != model.base_url do
-      %{model | base_url: base_url}
-    else
-      model
-    end
+    model =
+      if is_binary(base_url) and base_url != "" and base_url != model.base_url do
+        %{model | base_url: base_url}
+      else
+        model
+      end
+
+    gateway_wire_base_url(model)
   end
+
+  # The omp gateway's configured base URL is its `/v1` root; Anthropic Messages
+  # models need the server root because that wire appends `/v1/messages`.
+  defp gateway_wire_base_url(%LemonAi.Types.Model{provider: :omp_gateway} = model),
+    do: %{model | base_url: LemonAi.Models.OmpGateway.wire_base_url(model.api, model.base_url)}
+
+  defp gateway_wire_base_url(model), do: model
 
   @spec build_get_api_key(CodingAgent.SettingsManager.t()) :: (atom() -> String.t() | nil)
   def build_get_api_key(%CodingAgent.SettingsManager{} = settings) do

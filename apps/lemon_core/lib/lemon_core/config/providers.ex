@@ -45,6 +45,19 @@ defmodule LemonCore.Config.Providers do
   stores its OAuth payload in `api_key_secret` because the runtime provider
   expects a JSON `{"token","projectId"}` value.
 
+  ## omp auth broker
+
+  Any provider (built-in or custom) can read its credential from omp's auth
+  broker instead of Lemon's secret store:
+
+      [providers.anthropic]
+      auth_source = "omp_broker"
+      omp_account = "email:me@example.com"   # optional OAuth identityKey
+      # omp_provider = "anthropic"           # defaults from the provider name
+
+  The broker endpoint comes from `OMP_AUTH_BROKER_URL` / `OMP_AUTH_BROKER_TOKEN`
+  and omp's `auth-broker.token` (see `LemonAgent.ModelRuntime.OmpBroker`).
+
   ## Custom providers
 
   A provider id that is not a built-in provider defines a custom endpoint
@@ -81,6 +94,8 @@ defmodule LemonCore.Config.Providers do
           api_key_secret: String.t() | nil,
           auth_source: String.t() | nil,
           omp_path: String.t() | nil,
+          omp_provider: String.t() | nil,
+          omp_account: String.t() | nil,
           oauth_secret: String.t() | nil,
           project: String.t() | nil,
           project_id: String.t() | nil,
@@ -175,6 +190,8 @@ defmodule LemonCore.Config.Providers do
       api_key_secret: normalize_optional_string(config["api_key_secret"]),
       auth_source: normalize_enum(config["auth_source"], &normalize_auth_source/1),
       omp_path: normalize_optional_string(config["omp_path"]),
+      omp_provider: normalize_optional_string(config["omp_provider"]),
+      omp_account: normalize_optional_string(config["omp_account"]),
       oauth_secret: normalize_optional_string(config["oauth_secret"]),
       project: normalize_optional_string(config["project"]),
       project_id: normalize_optional_string(config["project_id"] || config["projectId"]),
