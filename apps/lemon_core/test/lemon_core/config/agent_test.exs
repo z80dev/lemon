@@ -110,9 +110,10 @@ defmodule LemonCore.Config.AgentTest do
   end
 
   describe "task configuration" do
-    test "defaults to 200 requests and an enabled wrap-up notice" do
+    test "defaults to 200 requests, an enabled wrap-up notice and speculative launch" do
       assert Agent.resolve(%{}).task.request_budget == 200
       assert Agent.resolve(%{}).task.request_budget_notice
+      assert Agent.resolve(%{}).task.speculative_launch
     end
 
     test "reads [runtime.task]" do
@@ -125,6 +126,7 @@ defmodule LemonCore.Config.AgentTest do
               "idle_ttl_ms" => 5_000,
               "request_budget" => 12,
               "request_budget_notice" => false,
+              "speculative_launch" => false,
               "worktree_merge" => "patch",
               "disabled_agents" => ["reviewer"],
               "agent_models" => %{"scout" => "@smol"}
@@ -138,6 +140,7 @@ defmodule LemonCore.Config.AgentTest do
                idle_ttl_ms: 5_000,
                request_budget: 12,
                request_budget_notice: false,
+               speculative_launch: false,
                worktree_merge: "patch",
                disabled_agents: ["reviewer"],
                agent_models: %{"scout" => "@smol"}

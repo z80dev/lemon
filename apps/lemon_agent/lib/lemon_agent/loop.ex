@@ -55,7 +55,7 @@ defmodule LemonAgent.Loop do
   require Logger
 
   alias LemonAgent.{AbortSignal, AutoThinking, Budget, EventStream}
-  alias LemonAgent.Loop.{StateMachine, Streaming, ToolCalls}
+  alias LemonAgent.Loop.{StateMachine, Streaming, ToolCalls, ToolStream}
   alias LemonAgent.ModelRuntime.StreamOptions
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentToolResult, ToolSchemaSnapshot}
 
@@ -143,6 +143,8 @@ defmodule LemonAgent.Loop do
            catch
              kind, value ->
                EventStream.error(stream, {kind, value}, nil)
+           after
+             ToolStream.settle()
            end
          end) do
       {:ok, pid} ->
@@ -255,6 +257,8 @@ defmodule LemonAgent.Loop do
            catch
              kind, value ->
                EventStream.error(stream, {kind, value}, nil)
+           after
+             ToolStream.settle()
            end
          end) do
       {:ok, pid} ->
@@ -578,6 +582,8 @@ defmodule LemonAgent.Loop do
             Logger.info("LemonAgent.Loop turn aborted")
             transition_loop_state(stream, :aborted, %{reason: :assistant_aborted})
             EventStream.push(stream, {:turn_end, message, []})
+            # Cancelling the stream shuts this task down; settle first.
+            ToolStream.settle()
             EventStream.cancel(stream, :assistant_aborted)
             {context, new_messages, [], false}
 
@@ -595,6 +601,7 @@ defmodule LemonAgent.Loop do
 
             if aborted?(signal) do
               transition_loop_state(stream, :aborted, %{reason: :assistant_aborted})
+              ToolStream.settle()
               EventStream.cancel(stream, :assistant_aborted)
               {context, new_messages, [], false}
             else
@@ -665,6 +672,9 @@ defmodule LemonAgent.Loop do
               else
                 {[], context, new_messages}
               end
+
+            # Every call streamed this turn has now been executed or skipped.
+            ToolStream.settle()
 
             EventStream.push(stream, {:turn_end, message, tool_results})
 

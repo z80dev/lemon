@@ -325,6 +325,7 @@ defmodule LemonCore.Config.Validator do
     idle_ttl_ms = Map.get(task, :idle_ttl_ms)
     request_budget = Map.get(task, :request_budget)
     request_budget_notice = Map.get(task, :request_budget_notice)
+    speculative_launch = Map.get(task, :speculative_launch)
     merge = Map.get(task, :worktree_merge)
     disabled = Map.get(task, :disabled_agents)
     models = Map.get(task, :agent_models)
@@ -340,6 +341,7 @@ defmodule LemonCore.Config.Validator do
        "runtime.task.request_budget: must be a nonnegative integer"},
       {is_boolean(request_budget_notice),
        "runtime.task.request_budget_notice: must be a boolean"},
+      {is_boolean(speculative_launch), "runtime.task.speculative_launch: must be a boolean"},
       {merge in ["none", "patch", "branch"],
        "runtime.task.worktree_merge: must be one of none, patch, branch"},
       {is_list(disabled) and Enum.all?(disabled, &(is_binary(&1) and &1 != "")),

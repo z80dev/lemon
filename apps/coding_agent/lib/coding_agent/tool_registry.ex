@@ -1110,8 +1110,27 @@ defmodule CodingAgent.ToolRegistry do
         end
       end
 
-      {name, %{tool | execute: execute}, source}
+      {name,
+       %{tool | execute: execute, on_stream: unreviewed_stream(tool, name, source, tool_policy)},
+       source}
     end)
+  end
+
+  # Streamed arguments act before dispatch, so only a tool that would run
+  # without any review keeps its stream callback. This mirrors the execution
+  # gate above for argument-free tiers; web tools stay gated by the dynamic fence.
+  defp unreviewed_stream(%AgentTool{on_stream: nil}, _name, _source, _tool_policy), do: nil
+
+  defp unreviewed_stream(%AgentTool{on_stream: on_stream}, name, source, tool_policy) do
+    tier = if source == :builtin, do: ToolPolicy.tier(name, %{}), else: :exec
+
+    reviewed? =
+      name in ["webfetch", "websearch"] or
+        ToolPolicy.requires_approval?(tool_policy, name, %{}, tier) or
+        wasm_default_requires_approval?(tool_policy, name, source) or
+        mcp_requires_approval?(source)
+
+    if reviewed?, do: nil, else: on_stream
   end
 
   defp mcp_requires_approval?({:mcp, %{approval: :always}}), do: true

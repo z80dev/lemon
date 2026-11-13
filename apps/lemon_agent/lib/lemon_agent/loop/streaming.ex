@@ -5,6 +5,7 @@ defmodule LemonAgent.Loop.Streaming do
   alias LemonAgent.EventStream
   alias LemonAgent.Loop
   alias LemonAgent.Loop.ToolCalls
+  alias LemonAgent.Loop.ToolStream
   alias LemonAgent.Loop.TranscriptValidator
   alias LemonAgent.Types.{AgentLoopConfig, AgentTool}
 
@@ -395,6 +396,9 @@ defmodule LemonAgent.Loop.Streaming do
   end
 
   defp stream_once(context, config, signal, stream_fn, stream) do
+    # Calls streamed by an earlier attempt or turn will never execute now.
+    ToolStream.settle()
+
     if aborted?(signal) do
       abort_message = build_error_message(config, :aborted, "Request was aborted")
       {abort_message, context} = finalize_message(abort_message, context, false, stream)
@@ -588,6 +592,7 @@ defmodule LemonAgent.Loop.Streaming do
               case process_stream_event(event, partial, ctx, added, stream, config) do
                 {:continue, new_partial, new_ctx, new_added} ->
                   committed = committed or output_event?(event)
+                  ToolStream.observe(event, raw_arguments, new_ctx.tools, signal)
                   {:cont, {new_partial, new_ctx, new_added, committed, raw_arguments}}
 
                 {:done, final_message, final_ctx} ->

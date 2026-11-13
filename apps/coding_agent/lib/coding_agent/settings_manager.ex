@@ -25,6 +25,7 @@ defmodule CodingAgent.SettingsManager do
           idle_ttl_ms: non_neg_integer(),
           request_budget: non_neg_integer(),
           request_budget_notice: boolean(),
+          speculative_launch: boolean(),
           worktree_merge: String.t(),
           disabled_agents: [String.t()],
           agent_models: %{optional(String.t()) => String.t()}
@@ -137,6 +138,7 @@ defmodule CodingAgent.SettingsManager do
       idle_ttl_ms: 300_000,
       request_budget: 200,
       request_budget_notice: true,
+      speculative_launch: true,
       worktree_merge: "none",
       disabled_agents: [],
       agent_models: %{}
@@ -246,6 +248,11 @@ defmodule CodingAgent.SettingsManager do
         case Map.get(task, :request_budget_notice) do
           notice when is_boolean(notice) -> notice
           _ -> defaults.request_budget_notice
+        end,
+      speculative_launch:
+        case Map.get(task, :speculative_launch) do
+          speculative when is_boolean(speculative) -> speculative
+          _ -> defaults.speculative_launch
         end,
       worktree_merge:
         case Map.get(task, :worktree_merge) do

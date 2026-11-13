@@ -820,6 +820,19 @@ defmodule LemonAgent.Loop.ToolCalls do
     end
   end
 
+  @doc """
+  Prepares decoded model arguments exactly as dispatch does before `execute`:
+  removes the provider-only intent field and coerces values to the tool schema.
+  Streaming tools use it (via `on_stream`'s `prepare`) to see what `execute`
+  will receive.
+  """
+  @spec prepare_arguments(LemonAgent.Types.AgentTool.t(), map()) ::
+          {:ok, map()} | {:error, [String.t()]}
+  def prepare_arguments(tool, arguments) when is_map(arguments) do
+    {_intent, arguments} = LemonAgent.ToolIntent.extract(tool.parameters, arguments)
+    coerce_tool_arguments(tool.parameters, arguments)
+  end
+
   defp coerce_tool_arguments(schema, arguments) do
     case coerce_value(%{"type" => "object"} |> Map.merge(schema || %{}), arguments) do
       {:ok, coerced} -> {:ok, coerced}

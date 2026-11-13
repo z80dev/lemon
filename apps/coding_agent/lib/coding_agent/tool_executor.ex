@@ -183,7 +183,8 @@ defmodule CodingAgent.ToolExecutor do
       end
     end
 
-    %{tool | execute: wrapped_execute}
+    # Streamed arguments would act before the approval gate decides.
+    %{tool | execute: wrapped_execute, on_stream: nil}
   end
 
   defp request_approval(

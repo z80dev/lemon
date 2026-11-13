@@ -51,6 +51,7 @@ defmodule CodingAgent.Application do
       {Task.Supervisor, name: CodingAgent.TaskSupervisor},
       {CodingAgent.TaskStoreServer, name: CodingAgent.TaskStoreServer},
       CodingAgent.Tools.Task.Control,
+      CodingAgent.Tools.Task.Speculation,
       {CodingAgent.TaskProgressBindingServer, name: CodingAgent.TaskProgressBindingServer},
       {CodingAgent.ParentQuestionStoreServer, name: CodingAgent.ParentQuestionStoreServer},
       {CodingAgent.RunGraphServer, name: CodingAgent.RunGraphServer},
