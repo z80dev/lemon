@@ -8,7 +8,7 @@ import type {
 	SessionTreeEntry,
 } from "../protocol/session-tree.ts";
 import type { Block } from "../store/transcript-model.ts";
-import { closeReplay, replayDeps } from "../ui/replay-overlays.ts";
+import { replayDeps } from "../ui/replay-overlays.ts";
 import { blocksToTranscriptEntries, entryBlockId } from "../ui/transcript-entries.ts";
 import { forkSession } from "./fork.ts";
 import type { CommandContext, PickerChoice, SlashCommand } from "./registry.ts";
@@ -176,7 +176,7 @@ async function openRewindSelector(ctx: CommandContext, restoreFiles: boolean): P
 		const selector: RewindSelectorComponent = new RewindSelectorComponent(entries, {
 			...replayDeps(host, ctx.cwd ?? process.cwd()),
 			onSelect: (entryId) => {
-				closeReplay(host, selector);
+				host.close();
 				const target = rewindTargetForEntry(blocks, paired, entryId);
 				if (!target) {
 					ctx.ui.notice("nothing after that turn can be rewound to", "warning");
@@ -186,7 +186,7 @@ async function openRewindSelector(ctx: CommandContext, restoreFiles: boolean): P
 					void previewRewind(ctx, target, restoreFiles);
 				}
 			},
-			onCancel: () => closeReplay(host, selector),
+			onCancel: () => host.close(),
 		});
 		return selector;
 	});

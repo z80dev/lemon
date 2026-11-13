@@ -689,7 +689,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "cwd" => :string,
         "limit" => :integer,
         "beforeId" => :string,
-        "includeFullText" => :boolean
+        "includeFullText" => :boolean,
+        "childSessionId" => :string
       }
     },
     "chat.send" => %{

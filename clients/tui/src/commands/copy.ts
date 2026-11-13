@@ -3,7 +3,7 @@ import { CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
 import type { Token } from "@oh-my-pi/pi-utils/marked";
 import { describeError } from "../protocol/errors.ts";
 import type { Block } from "../store/transcript-model.ts";
-import { closeReplay, replayDeps } from "../ui/replay-overlays.ts";
+import { replayDeps } from "../ui/replay-overlays.ts";
 import { blocksToTranscriptEntries } from "../ui/transcript-entries.ts";
 import type { CommandContext, SlashCommand } from "./registry.ts";
 
@@ -69,13 +69,13 @@ function openCopySelector(ctx: CommandContext, copyText: (text: string) => Promi
 		const selector: CopySelectorComponent = new CopySelectorComponent(entries, {
 			...replayDeps(host, ctx.cwd ?? process.cwd()),
 			onPick: (content, label) => {
-				closeReplay(host, selector);
+				host.close();
 				copyText(content).then(
 					() => ctx.ui.notice(`copied ${label}`),
 					(error) => ctx.ui.notice(`copy failed: ${describeError(error)}`, "error"),
 				);
 			},
-			onCancel: () => closeReplay(host, selector),
+			onCancel: () => host.close(),
 		});
 		return selector;
 	});

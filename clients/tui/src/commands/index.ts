@@ -7,6 +7,7 @@
  */
 
 import { agentNameCommand, agentsCommand, tellCommand } from "./agent-addressing.ts";
+import { agentHubCommand } from "./agent-hub.ts";
 import { approvalsCommand, approveCommand, denyCommand } from "./approvals.ts";
 import { blueprintCommand, blueprintsCommand } from "./blueprints.ts";
 import { contextCommand } from "./context.ts";
@@ -74,6 +75,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		commandsCommand,
 		paletteCommand,
 		taskTreeCommand,
+		agentHubCommand,
 		outputCommand,
 		diffCommand,
 		copyCommand,

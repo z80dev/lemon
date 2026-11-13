@@ -8,7 +8,6 @@
  */
 
 import { ensureThemeSync } from "@oh-my-pi/pi-tui/theme/theme";
-import type { Component } from "@oh-my-pi/pi-tui/tui";
 import type { OverlayHost } from "../commands/registry.ts";
 
 /** What every replay selector takes besides its own callbacks. */
@@ -22,13 +21,4 @@ export interface ReplayDeps {
 export function replayDeps(host: OverlayHost, cwd: string): ReplayDeps {
 	ensureThemeSync();
 	return { ui: host.tui, cwd, requestRender: () => host.tui.requestRender() };
-}
-
-/**
- * Close a replay overlay and tear down its transcript builder. The host's close
- * only unmounts; the component owns spinners and image state that outlive it.
- */
-export function closeReplay(host: OverlayHost, component: Component & { dispose(): void }): void {
-	host.close();
-	component.dispose();
 }

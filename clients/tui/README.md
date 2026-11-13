@@ -103,6 +103,21 @@ on reconnect and when opening or changing models. Older daemons without
   lineage, role, current activity, elapsed time, and independent terminal states.
   Arrow keys scroll the bounded panel; Escape returns to the draft. Completed
   launch receipts never imply that their children have finished.
+- Ctrl+S or `/hub` (alias `/subagents`) opens the agent hub, omp's Agent Hub for
+  Lemon's subagents: a fullscreen table of every child of the focused session
+  (status, age, persona, task, latest progress, with parent/child indentation)
+  that updates live as children launch, progress and finish. `↑↓`/`PgUp`/`PgDn`
+  select, `g`/`G` jump, Enter opens the child's transcript, Esc/`q` closes.
+  The transcript is the child's own journal, read with `chat.history` and
+  `childSessionId` under the focused session's key (the daemon only serves
+  children of tasks that session launched; messages, assistant Markdown,
+  tool calls paired with their results), scrolls with `↑↓`/`PgUp`/`PgDn`/`g`/`G`,
+  follows the newest line until you scroll up, and refreshes every ~1.5 s only
+  while the child runs (one last read when it ends; three failed reads stop the
+  polling and `r` retries). Esc returns to the table. A child that has not
+  reported a session yet says so instead of showing the parent's text. Rebind
+  with `lemon.agents.hub` under `[tui.keys]`; Alt+A (`/tasktree`) stays the
+  compact in-chat panel.
 - Alt+M or `/omp` opens the omp delegate panel: live and recent omp (oh-my-pi)
   processes the daemon runs, with status, activity, tools, todos, subagents,
   usage/cost/context and their latest text; Enter shows detail, `s`/`f` steer or

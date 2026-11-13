@@ -124,6 +124,92 @@ defmodule CodingAgent.ControlPlaneProviderTest do
     end
   end
 
+  describe "delegated child history" do
+    @describetag :tmp_dir
+
+    setup %{tmp_dir: cwd} do
+      parent = "agent:child-history-#{System.unique_integer([:positive])}:main"
+      id = "child-#{System.unique_integer([:positive])}"
+      session = CodingAgent.SessionManager.new(cwd, id: id)
+      path = CodingAgent.SessionManager.session_file_path(cwd, session.header.id)
+
+      session =
+        session
+        |> CodingAgent.SessionManager.append_message(%{
+          "role" => "user",
+          "content" => "child task"
+        })
+        |> CodingAgent.SessionManager.append_message(%{
+          "role" => "assistant",
+          "content" => "child answer"
+        })
+
+      :ok = CodingAgent.SessionManager.save_to_file(path, session)
+
+      task_id =
+        CodingAgent.TaskStore.new_task(%{
+          session_key: parent,
+          session_id: session.header.id,
+          cwd: cwd,
+          status: :running
+        })
+
+      on_exit(fn -> CodingAgent.TaskStore.delete_task(task_id) end)
+      %{parent: parent, child: session.header.id, cwd: cwd}
+    end
+
+    test "returns the child's branch to the session that launched it", context do
+      assert {:ok, entries} =
+               ControlPlaneProvider.child_session_history(context.parent, context.child)
+
+      assert [%{message: %{"role" => "user"}}, %{message: %{"role" => "assistant"}}] = entries
+    end
+
+    test "also accepts the parent recorded as parent_session_key", context do
+      other = "agent:other-parent-#{System.unique_integer([:positive])}:main"
+
+      task_id =
+        CodingAgent.TaskStore.new_task(%{
+          parent_session_key: other,
+          session_id: context.child,
+          cwd: context.cwd
+        })
+
+      on_exit(fn -> CodingAgent.TaskStore.delete_task(task_id) end)
+      assert {:ok, [_, _]} = ControlPlaneProvider.child_session_history(other, context.child)
+    end
+
+    test "refuses another session's key, unknown ids and ids that are not tasks", context do
+      assert {:error, :session_not_found} =
+               ControlPlaneProvider.child_session_history("agent:stranger:main", context.child)
+
+      assert {:error, :session_not_found} =
+               ControlPlaneProvider.child_session_history(context.parent, "nope")
+
+      # A real persisted session that no task of this parent owns is unreadable.
+      stray_id = "stray-#{System.unique_integer([:positive])}"
+      stray = CodingAgent.SessionManager.new(context.cwd, id: stray_id)
+
+      :ok =
+        CodingAgent.SessionManager.save_to_file(
+          CodingAgent.SessionManager.session_file_path(context.cwd, stray.header.id),
+          stray
+        )
+
+      assert {:error, :session_not_found} =
+               ControlPlaneProvider.child_session_history(context.parent, stray.header.id)
+
+      assert {:error, :session_not_found} = ControlPlaneProvider.child_session_history("", "x")
+    end
+
+    test "a task whose journal is gone is not found", context do
+      File.rm!(CodingAgent.SessionManager.session_file_path(context.cwd, context.child))
+
+      assert {:error, :session_not_found} =
+               ControlPlaneProvider.child_session_history(context.parent, context.child)
+    end
+  end
+
   describe "trusted addressing context" do
     @describetag :tmp_dir
 

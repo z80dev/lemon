@@ -517,6 +517,9 @@ export class AppShell {
 				this.events.toggleToolOutputs();
 			},
 			openDiff: () => this.#toolInspector.open("diff"),
+			openAgentHub: async () => {
+				await this.submit("/hub");
+			},
 			copyLastReply: async () => {
 				await this.submit("/copy");
 			},
@@ -1781,6 +1784,7 @@ export class AppShell {
 			openModelPicker: () => this.#modelPicker.open(),
 			openCommandPalette: (query) => this.#palette.open(query),
 			toggleTaskTree: () => this.#toggleTaskTree(),
+			taskFeed: (sessionKey) => this.#taskTree.feed(sessionKey),
 			openOmpPanel: () => this.#openOmpPanel(),
 			openToolOutput: (mode) => this.#toolInspector.open(mode),
 			openContextPanel: (usage) => {
@@ -1813,15 +1817,16 @@ export class AppShell {
 	/** The `presentOverlay` seam: `build`'s component as the one fullscreen overlay. */
 	#presentOverlay(build: (host: OverlayHost) => Component): void {
 		let close = () => {};
-		close = this.selectors.open(
-			build({
-				close: () => close(),
-				repaint: () => this.selectors.repaint(),
-				rows: () => this.tui.terminal.rows,
-				columns: () => this.tui.terminal.columns,
-				tui: this.tui,
-			}),
-		);
+		const component = build({
+			close: () => close(),
+			repaint: () => this.selectors.repaint(),
+			rows: () => this.tui.terminal.rows,
+			columns: () => this.tui.terminal.columns,
+			tui: this.tui,
+		});
+		// Overlays holding timers or subscriptions release them on any close,
+		// including another overlay replacing this one.
+		close = this.selectors.open(component, {}, () => component.dispose?.());
 	}
 
 	/**

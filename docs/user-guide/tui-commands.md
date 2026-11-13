@@ -19,6 +19,12 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | /agents | — | [query] | discover existing addressable agents and their stable IDs |
 | /tell | — | &lt;@handle&#124;stable-id&gt; &lt;message&gt; &#124; --status &lt;message-id&gt; | message an existing agent or inspect a message receipt |
 
+## agent-hub
+
+| Command | Aliases | Arguments | Description |
+| --- | --- | --- | --- |
+| /hub | /subagents | — | open the live subagent hub: status table and child transcripts |
+
 ## approvals
 
 | Command | Aliases | Arguments | Description |
@@ -210,6 +216,7 @@ Overlays own their keys; picker-local shortcuts are not configurable here.
 | lemon.transcript.cycleDetail | ctrl+t | Cycle detail for every card: collapsed → expanded → default |
 | lemon.palette.open | ctrl+p | Search commands, skills and prompts |
 | lemon.tasks.toggle | alt+a | Show/hide live subagent tree |
+| lemon.agents.hub | ctrl+s | Open the agent hub: every subagent and its transcript |
 | lemon.omp.toggle | alt+m | Show/hide omp delegate sessions |
 | lemon.tools.toggle | alt+o | Collapse/expand all tool output |
 | lemon.tools.diff | alt+d | Inspect the latest edit diff |

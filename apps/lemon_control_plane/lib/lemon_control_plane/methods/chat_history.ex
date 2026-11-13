@@ -3,6 +3,12 @@ defmodule LemonControlPlane.Methods.ChatHistory do
   Handler for the chat.history method.
 
   Returns the conversation history for a session.
+
+  With `childSessionId` (the native session id a task tool reports for a delegated
+  child) it returns that child's transcript instead, but only when the child
+  belongs to a task launched under `sessionKey`. The caller's key is the
+  authorization scope: an id that is unknown, or owned by another session, is
+  indistinguishable from a missing session.
   """
 
   @behaviour LemonControlPlane.Method
@@ -33,17 +39,62 @@ defmodule LemonControlPlane.Methods.ChatHistory do
       {:error, {:invalid_request, "sessionKey is required", nil}}
     else
       with {:ok, history} <- history(params, session_key, limit, before_id, include_full_text) do
-        {:ok,
-         %{
-           "sessionKey" => session_key,
-           "messages" => history,
-           "summary" => summary(history, limit, before_id, include_full_text)
-         }}
+        result = %{
+          "sessionKey" => session_key,
+          "messages" => history,
+          "summary" => summary(history, limit, before_id, include_full_text)
+        }
+
+        # Echoed so a client can tell a child transcript from a daemon that
+        # predates the parameter and answered with the parent's history.
+        case get_param(params, "childSessionId") do
+          child_id when is_binary(child_id) -> {:ok, Map.put(result, "childSessionId", child_id)}
+          _ -> {:ok, result}
+        end
       end
     end
   end
 
   defp history(params, session_key, limit, before_id, full_text) do
+    case get_param(params, "childSessionId") do
+      nil ->
+        owned_history(params, session_key, limit, before_id, full_text)
+
+      child_id when is_binary(child_id) and child_id != "" ->
+        child_history(session_key, child_id, limit, before_id, full_text)
+
+      _ ->
+        NativeSessions.invalid("childSessionId must be a non-empty string")
+    end
+  end
+
+  defp child_history(session_key, child_id, limit, before_id, full_text) do
+    case AgentRuntime.call(
+           :child_session_history,
+           [session_key, child_id],
+           {:error, :unavailable}
+         ) do
+      {:ok, entries} when is_list(entries) ->
+        {:ok, entries |> native_messages(full_text) |> page(limit, before_id)}
+
+      {:error, reason} when reason in [:session_not_found, :unavailable] ->
+        NativeSessions.failure(:session_not_found)
+
+      {:error, reason} ->
+        NativeSessions.failure(reason)
+
+      _ ->
+        NativeSessions.failure(:invalid_response)
+    end
+  end
+
+  defp page(messages, limit, before_id) do
+    if before_id in [nil, ""],
+      do: Enum.take(messages, -limit),
+      else: messages |> apply_before_id(before_id) |> Enum.take(limit)
+  end
+
+  defp owned_history(params, session_key, limit, before_id, full_text) do
     if Map.has_key?(params, "cwd") do
       with {:ok, _key, cwd} <- NativeSessions.target(params) do
         case AgentRuntime.call(:session_history, [session_key, cwd], {:error, :unavailable}) do
@@ -54,14 +105,7 @@ defmodule LemonControlPlane.Methods.ChatHistory do
                 LemonCore.RunStore.history(session_key, limit: 200)
               )
 
-            messages = native_messages(entries, full_text)
-
-            page =
-              if before_id in [nil, ""],
-                do: Enum.take(messages, -limit),
-                else: messages |> apply_before_id(before_id) |> Enum.take(limit)
-
-            {:ok, page}
+            {:ok, entries |> native_messages(full_text) |> page(limit, before_id)}
 
           {:error, reason}
           when reason in [:session_not_found, :unsupported_session, :unavailable] ->
