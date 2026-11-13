@@ -22,6 +22,7 @@ import type { ChatHistoryMessage, SessionsContextResult } from "../protocol/type
 import type { AppStore, SubmissionMode } from "../store/app-store.ts";
 import type { SessionStore } from "../store/session-store.ts";
 import type { CompactionDetails, NoticeLevel } from "../store/transcript-model.ts";
+import type { TaskFeed } from "../ui/controllers/task-tree-controller.ts";
 import type { ThemePreference } from "../ui/theme/appearance.ts";
 
 /** One entry in a picker overlay opened from a command. */
@@ -136,6 +137,8 @@ export interface CommandHost {
 	openModelPicker?(): void | Promise<void>;
 	openCommandPalette?(query?: string): void | Promise<void>;
 	toggleTaskTree?(): void;
+	/** Live read-only view of `sessionKey`'s subagent task tree (`/hub`). */
+	taskFeed?(sessionKey: string): TaskFeed;
 	/** Open (and focus) the omp delegate panel. */
 	openOmpPanel?(): void;
 	openToolOutput?(mode: "output" | "diff"): void;

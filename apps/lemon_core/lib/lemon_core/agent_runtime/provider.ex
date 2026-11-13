@@ -57,6 +57,14 @@ defmodule LemonCore.AgentRuntime.Provider do
   @callback session_history(session_key(), Path.t()) :: {:ok, [map()]} | {:error, term()}
 
   @doc """
+  Loads a delegated child's persisted native branch by its native session id.
+  Succeeds only when `child_session_id` belongs to a task launched under
+  `session_key`; anything else is `{:error, :session_not_found}`.
+  """
+  @callback child_session_history(session_key(), String.t()) ::
+              {:ok, [map()]} | {:error, term()}
+
+  @doc """
   Materializes the selected native branch's complete todo list, never its cache.
   The revision is `{branch_generation, governing_entry_id}`; stopped sessions
   have generation zero. It is not a cross-session identity or replay cursor.
@@ -224,6 +232,7 @@ defmodule LemonCore.AgentRuntime.Provider do
                       compact_session: 2,
                       native_session_owner: 1,
                       session_history: 2,
+                      child_session_history: 2,
                       session_todos: 2,
                       session_recovery_snapshot: 2,
                       session_addressing_context: 1,

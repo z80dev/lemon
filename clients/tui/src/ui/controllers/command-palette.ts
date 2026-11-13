@@ -52,6 +52,7 @@ const COMMAND_KEYS: Record<string, LemonKeybinding> = {
 	clear: "lemon.transcript.clear",
 	palette: "lemon.palette.open",
 	tasktree: "lemon.tasks.toggle",
+	hub: "lemon.agents.hub",
 	omp: "lemon.omp.toggle",
 	diff: "lemon.tools.diff",
 	copy: "lemon.clipboard.copyLast",

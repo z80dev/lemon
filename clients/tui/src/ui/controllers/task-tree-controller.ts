@@ -1,5 +1,10 @@
 import type { AgentEvent, SnapshotItems } from "../../protocol/types.ts";
-import { isTaskActive, TaskStore, type TaskUpdate } from "../../store/task-store.ts";
+import {
+	isTaskActive,
+	TaskStore,
+	type TaskTreeRow,
+	type TaskUpdate,
+} from "../../store/task-store.ts";
 import { TaskTreeComponent } from "../components/task-tree.ts";
 import { taskDisplayText, taskUpdatesFromEvent } from "../task-progress.ts";
 
@@ -10,6 +15,14 @@ export interface TaskTreeControllerOptions {
 	store?: TaskStore;
 	now?: () => number;
 	tickMs?: number;
+}
+
+/** Read-only, session-pinned view of the child task tree, for surfaces that outlive the panel. */
+export interface TaskFeed {
+	/** The session's current tree rows, in lineage order. */
+	rows(): readonly TaskTreeRow[];
+	/** `listener` runs after every change to that session's tasks; returns the unsubscriber. */
+	subscribe(listener: () => void): () => void;
 }
 
 /**
@@ -89,6 +102,17 @@ export class TaskTreeController {
 		this.#sessionKey = sessionKey;
 		this.panel.update([]);
 		this.#present();
+	}
+
+	/** Pinned to `sessionKey`, so a focus switch never repoints an open view. */
+	feed(sessionKey: string): TaskFeed {
+		return {
+			rows: () => this.store.tree(sessionKey),
+			subscribe: (listener) =>
+				this.store.events.on("changed", (change) => {
+					if (change.sessionKey === sessionKey) listener();
+				}),
+		};
 	}
 
 	/** Returns the new visibility; the host may focus panel when it opens. */

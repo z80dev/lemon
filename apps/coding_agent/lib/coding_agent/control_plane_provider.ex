@@ -195,6 +195,40 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
+  @doc """
+  Return a delegated child's durable native branch by its native session id.
+
+  The id is only a lookup key: it must match a task record launched under
+  `parent_key`, and the journal path is derived from that record's own working
+  directory, never from caller input. Unknown ids, ids of other sessions' tasks,
+  and children that never persisted a journal are all `:session_not_found`.
+  """
+  def child_session_history(parent_key, child_id)
+      when is_binary(parent_key) and parent_key != "" and is_binary(child_id) and child_id != "" do
+    with {:ok, %{cwd: cwd}} when is_binary(cwd) <- owned_child_task(parent_key, child_id),
+         path = CodingAgent.SessionManager.session_file_path(cwd, child_id),
+         {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
+         true <- session.header.id == child_id do
+      {:ok, CodingAgent.SessionManager.get_branch(session)}
+    else
+      _ -> {:error, :session_not_found}
+    end
+  end
+
+  def child_session_history(_parent_key, _child_id), do: {:error, :session_not_found}
+
+  # Same ownership rule as the `sessions.snapshot` children list: a task belongs
+  # to the session that launched it.
+  defp owned_child_task(parent_key, child_id) do
+    CodingAgent.TaskStore.list(:all)
+    |> Enum.find_value(:error, fn {_id, record} ->
+      if Map.get(record, :session_id) == child_id and
+           (Map.get(record, :session_key) == parent_key or
+              Map.get(record, :parent_session_key) == parent_key),
+         do: {:ok, record}
+    end)
+  end
+
   @doc "Read the current native branch, including offline rewind, without starting a session."
   def session_recovery_snapshot(session_key, cwd) do
     case live_sessions(session_key) do
