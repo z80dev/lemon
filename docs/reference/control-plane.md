@@ -89,7 +89,46 @@ An unknown or expired run returns `NOT_FOUND`, not a successful empty timeline.
 Introspection, task lookup or usage storage failures return `INTERNAL_ERROR`
 with “Run timeline is unavailable”, never an empty result. No provider is called.
 
+## `subagents.list`, `subagents.transcript`, `subagents.send`, `subagents.cancel`
 
+The TUI Agent Hub's session-scoped view of native `task` subagents. Every method
+takes `{"sessionKey":"..."}` (≤1,024 bytes); the per-agent methods add
+`"taskId"` (≤256 bytes). Membership is lineage, decided by the runtime: a direct
+child was launched by one of the key's root native sessions under the same key,
+and a nested child by an included child. Another session's task, an `agent`
+delegation or a background run returns `NOT_FOUND` (`SUBAGENT_NOT_FOUND`) for
+every per-agent method, exactly as an unknown ID does.
+
+- `subagents.list` (`operator.read`) returns `{"sessionKey","agents","total"}`.
+  Each agent has `taskId`, `status` (`queued`, `running`, `idle`, `parked`,
+  `completed`, `failed`, `cancelled`), `depth`, `messaging`, `cancellable` and,
+  when known, `parentTaskId`, `name`, `agent` (persona), `description`,
+  `model`, `activity`, `createdAtMs`, `startedAtMs`, `completedAtMs`,
+  `updatedAtMs`, `contextPercent` and `usage` (`tokens`, `costUsd`, `requests`,
+  `input`, `output`). Live children report their session's cumulative usage;
+  finished ones only what their result recorded. Labels are single-line and
+  bounded; prompts, workspace and transcript paths are never included.
+- `subagents.transcript` (`operator.read`) returns
+  `{"taskId","status","text","truncated"}`: the bounded visible transcript that
+  `history://<task_id>` gives the parent agent (status, assignment, the last ten
+  visible updates and the result; no hidden reasoning). The text is untrusted
+  child output.
+- `subagents.send` (`operator.write`) takes `"message"` (non-blank, ≤32 KiB)
+  and uses the task tool's delivery path: a running child is steered at its next
+  turn boundary, an idle child is woken and a parked child revived from its
+  persisted session; the reply follows up into the parent session as usual.
+  Returns `{"taskId","accepted","delivery","retrySafe"}` with `delivery` one of
+  `injected`, `woken`, `revived`, `failed` or `outcome_unknown`. An unknown
+  outcome (including a runtime that failed mid-call) may already have been
+  delivered and has `retrySafe: false`. Finished or untracked children return
+  `CONFLICT` with `SUBAGENT_NOT_ACTIVE`, `SUBAGENT_NOT_RESUMABLE`,
+  `SUBAGENT_NOT_MESSAGEABLE` or `SUBAGENT_QUEUE_FULL`.
+- `subagents.cancel` (`operator.write`) returns `{"taskId","cancelled":true}`.
+  Cancellation is terminal: the child stops (with its descendants) and cannot be
+  revived; its transcript stays readable. A finished child returns
+  `SUBAGENT_NOT_ACTIVE`.
+
+A missing runtime is `UNAVAILABLE`, never an empty roster.
 
 ## `status`
 

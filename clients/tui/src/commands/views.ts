@@ -9,11 +9,12 @@ export const paletteCommand: SlashCommand = {
 	run: (ctx) => ctx.ui.openCommandPalette!(ctx.rest.trim() || undefined),
 };
 
-export const taskTreeCommand: SlashCommand = {
-	name: "tasktree",
-	summary: "show or hide the live subagent tree",
+export const hubCommand: SlashCommand = {
+	name: "hub",
+	aliases: ["tasktree"],
+	summary: "open or close the Agent Hub: subagents, transcripts, steer and cancel",
 	group: "interface",
-	availableWhen: (ctx) => (ctx.ui.toggleTaskTree ? true : "no task panel in this client"),
+	availableWhen: (ctx) => (ctx.ui.toggleTaskTree ? true : "no agent hub in this client"),
 	run: (ctx) => ctx.ui.toggleTaskTree!(),
 };
 

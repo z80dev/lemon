@@ -72,6 +72,10 @@ history, compaction and supervised delegation. The loop/model runtime comes from
   than deadlock parent and child. Only the authorized parent can answer.
 - Public task results contain visible assistant output and safe metadata, not
   hidden thinking, raw event history or tool-call internals.
+- The operator Agent Hub (`Tools.Task.Hub`) scopes task IDs by lineage from the
+  session key's root native sessions, never by caller-supplied parentage; foreign
+  IDs are not found. It messages and cancels through `Control`'s delivery and
+  cancellation paths and reads the same bounded projection as `history://`.
 
 ## Named execution nodes
 

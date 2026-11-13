@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import type { AgentToolUseEvent } from "../../src/protocol/types.ts";
-import { TASK_TREE_WINDOW } from "../../src/ui/components/task-tree.ts";
+import { HUB_ROSTER_WINDOW } from "../../src/ui/components/agent-hub.ts";
 import { TaskTreeController } from "../../src/ui/controllers/task-tree-controller.ts";
 import { TASK_PROGRESS_LIMIT, taskUpdatesFromEvent } from "../../src/ui/task-progress.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
@@ -79,7 +79,7 @@ test("panel shows three children, latest interleaved progress, persona and obser
 	setNow(4000);
 	tree.ingest(progress("two", "running", { current_action: { title: "editing two" } }));
 	const text = tree.panel.render(160).join("\n");
-	expect(text).toContain("3 children · 3 active");
+	expect(text).toContain("agents · 3 running · tree");
 	expect(text).toContain("running 3s · Work one @researcher · one");
 	expect(text).toContain("reading one");
 	expect(text).toContain("editing two");
@@ -177,7 +177,7 @@ test("session switching keeps background and late results with the original owne
 	tree.toggle();
 	tree.ingest(progress("same", "running", { description: "First chat" }));
 	tree.setSession("other");
-	expect(tree.panel.render(120).join("\n")).toContain("No child task updates");
+	expect(tree.panel.render(120).join("\n")).toContain("No subagents in this session.");
 	expect(tree.ticking).toBe(false);
 	tree.ingest(progress("same", "running", { description: "Other chat" }, "other"));
 	tree.ingest(
@@ -245,15 +245,15 @@ test("windowed navigation retains selected identity across nested reparenting", 
 	const { tree, blurred } = controller();
 	tree.toggle();
 	tree.panel.focused = true;
-	for (let index = 0; index < TASK_TREE_WINDOW + 2; index++)
+	for (let index = 0; index < HUB_ROSTER_WINDOW + 2; index++)
 		tree.ingest(progress(`child-${index}`, "running"));
-	for (let index = 0; index < TASK_TREE_WINDOW + 1; index++) tree.panel.handleInput("\u001b[B");
-	expect(tree.panel.selected?.task.taskId).toBe(`child-${TASK_TREE_WINDOW + 1}`);
-	expect(tree.panel.render(140).join("\n")).toContain(`child-${TASK_TREE_WINDOW + 1}`);
+	for (let index = 0; index < HUB_ROSTER_WINDOW + 1; index++) tree.panel.handleInput("\u001b[B");
+	expect(tree.panel.selected?.taskId).toBe(`child-${HUB_ROSTER_WINDOW + 1}`);
+	expect(tree.panel.render(140).join("\n")).toContain(`child-${HUB_ROSTER_WINDOW + 1}`);
 	expect(tree.panel.render(140).join("\n")).toContain("…2 more");
-	tree.ingest(progress(`child-${TASK_TREE_WINDOW + 1}`, "running", { parent_run_id: "parent" }));
+	tree.ingest(progress(`child-${HUB_ROSTER_WINDOW + 1}`, "running", { parent_run_id: "parent" }));
 	tree.ingest(progress("child-0", "running", { run_id: "parent" }));
-	expect(tree.panel.selected?.task.taskId).toBe(`child-${TASK_TREE_WINDOW + 1}`);
+	expect(tree.panel.selected?.taskId).toBe(`child-${HUB_ROSTER_WINDOW + 1}`);
 	tree.panel.handleInput("\u001b");
 	expect(blurred()).toBe(1);
 	expect(tree.panel.visible).toBe(false);
@@ -342,7 +342,7 @@ test("snapshot replacement converges child terminal and unknown identities witho
 		["lost", "unknown"],
 	]);
 	expect(tree.ticking).toBe(false);
-	expect(tree.panel.render(120).join("\n")).toContain("0 active");
+	expect(tree.panel.render(120).join("\n")).toContain("1 unknown · 1 done");
 	expect(tree.store.find("chat", "lost")?.sessionId).toBe("child-session");
 	expect(tree.store.find("chat", "lost")?.progress?.length).toBe(TASK_PROGRESS_LIMIT);
 	expect(tree.store.find("chat", "lost")?.progress).not.toContain("\u001b");

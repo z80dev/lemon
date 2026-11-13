@@ -358,6 +358,9 @@ export class AppShell {
 		this.#taskTree = new TaskTreeController({
 			requestRender: () => this.tui.requestRender(),
 			onBlur: () => this.#focusEditor(),
+			methods: this.methods,
+			online: () => this.client.online,
+			notice: (text, level) => this.events.notice(text, level),
 		});
 		this.#taskTree.setSession(this.store.focusedKey);
 		this.#omp = new OmpController({

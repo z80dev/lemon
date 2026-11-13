@@ -27,6 +27,7 @@ defmodule CodingAgent.ControlPlaneProvider do
   alias CodingAgent.Session.Todos
   alias CodingAgent.Session.UserPrompt
   alias CodingAgent.Tools.FeatureRequirements
+  alias CodingAgent.Tools.Task.Hub
   alias CodingAgent.Tools.TodoStore
 
   def user_prompt_bind(session_key, connection, enabled, opts \\ []) do
@@ -41,6 +42,39 @@ defmodule CodingAgent.ControlPlaneProvider do
   def list_tasks, do: CodingAgent.TaskStore.list(:all)
 
   def get_task(task_id), do: CodingAgent.TaskStore.get(task_id)
+
+  @doc "Agent Hub roster: the root session's native task children, nested included."
+  def subagents_list(session_key) when is_binary(session_key),
+    do: Hub.list(session_key, hub_roots(session_key))
+
+  @doc "Bounded `history://` transcript of one of the root session's task children."
+  def subagent_transcript(session_key, task_id) when is_binary(session_key),
+    do: Hub.transcript(session_key, hub_roots(session_key), task_id)
+
+  @doc "Operator steer/follow-up/revive of one of the root session's task children."
+  def subagent_send(session_key, task_id, message) when is_binary(session_key),
+    do: Hub.send(session_key, hub_roots(session_key), task_id, message)
+
+  @doc "Operator cancellation of one of the root session's task children."
+  def subagent_cancel(session_key, task_id) when is_binary(session_key),
+    do: Hub.cancel(session_key, hub_roots(session_key), task_id)
+
+  # The routing key's root native sessions: live roots (never task children, which
+  # share the key) plus the journal the key last resumed.
+  defp hub_roots(session_key) do
+    live =
+      for {native_id, pid} <- registered_sessions(session_key),
+          root_session_owner?(pid, native_id, session_key) == true,
+          do: native_id
+
+    resumed =
+      case LemonCore.ChatStateStore.get(session_key) do
+        %{} = state -> Map.get(state, :last_resume_token) || Map.get(state, "last_resume_token")
+        _ -> nil
+      end
+
+    Enum.uniq(live ++ if(is_binary(resumed), do: [resumed], else: []))
+  end
 
   def todo_progress(session_key) do
     case session_todos(session_key, nil) do
