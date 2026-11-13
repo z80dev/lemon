@@ -10,6 +10,11 @@ import {
 } from "@oh-my-pi/pi-tui/keybindings";
 import { Key, type KeyId, parseKey } from "@oh-my-pi/pi-tui/keys";
 
+/**
+ * `off` is silent; `bell` rings BEL only; `osc` writes the terminal's OSC
+ * notification only; `auto` also routes through terminal multiplexers and, for
+ * terminals that can only bell, the Linux desktop notification service.
+ */
 export type NotificationMode = "auto" | "osc" | "bell" | "off";
 
 /** Environment wins over the global TUI setting; retain the original 0/1 switch. */

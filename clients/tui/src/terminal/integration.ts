@@ -1,14 +1,76 @@
 import { hostname } from "node:os";
 import { pathToFileURL } from "node:url";
+import {
+	sendDesktopNotification,
+	shouldDeliverDesktopNotification,
+} from "@oh-my-pi/pi-tui/desktop-notify";
 import { onNativeRenderingChange } from "@oh-my-pi/pi-tui/native/state";
 import type { Terminal } from "@oh-my-pi/pi-tui/terminal";
-import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
+import { TERMINAL, type TerminalNotification } from "@oh-my-pi/pi-tui/terminal-capabilities";
+import { routeTerminalMultiplexerNotification } from "@oh-my-pi/pi-tui/terminal-multiplexer";
 import type { ControlPlaneClient } from "../protocol/client.ts";
 import { PROPOSE_PLAN_TOOL } from "../protocol/types.ts";
 import type { AppStore } from "../store/app-store.ts";
 import { describeAction, planTitle } from "../ui/components/approval-panel.ts";
 import { detectTerminalCapabilities, oscText, type TerminalCapabilities } from "./capabilities.ts";
 import { encodeProgramStatusMessage, sessionTerminalTitle } from "./signals.ts";
+
+/** Environment and effects behind notification routing, injectable for tests. */
+export interface NotificationRouting {
+	env: NodeJS.ProcessEnv;
+	platform: NodeJS.Platform;
+	route: typeof routeTerminalMultiplexerNotification;
+	desktop: (message: TerminalNotification) => void;
+}
+
+const DEFAULT_ROUTING: NotificationRouting = {
+	env: process.env,
+	platform: process.platform,
+	route: routeTerminalMultiplexerNotification,
+	desktop: sendDesktopNotification,
+};
+
+/**
+ * Deliver one notification in omp's `sendNotification()` order:
+ *
+ * - `bell` mode (or a non-routing capability set) writes BEL or the terminal's
+ *   OSC sequence and nothing else.
+ * - `auto` first offers the notification to every active multiplexer
+ *   (tmux, screen, zellij, cmux, herdr, orca, wmux), innermost target first; one
+ *   that delivers ends the walk. Otherwise the terminal sequence is written.
+ *   A terminal that can only bell then also gets the Linux D-Bus toast.
+ *
+ * Tern is handled by the caller: its program-status path owns its notifications.
+ */
+export function deliverNotification(
+	capabilities: TerminalCapabilities,
+	title: string,
+	body: string,
+	write: (data: string) => void,
+	routing: NotificationRouting = DEFAULT_ROUTING,
+): void {
+	const mode = capabilities.notifications;
+	if (mode === false) return;
+	const sequence =
+		mode === "osc9"
+			? `\x1b]9;Lemon: ${title} — ${body}\x07`
+			: mode === "osc777"
+				? `\x1b]777;notify;Lemon: ${title};${body}\x07`
+				: null;
+	const message: TerminalNotification = { title: `Lemon: ${title}`, body };
+	if (capabilities.routeNotifications) {
+		const routed = routing.route({ message, env: routing.env, sequence, write });
+		if (routed) return;
+	}
+	write(sequence ?? "\x07");
+	if (
+		capabilities.routeNotifications &&
+		sequence === null &&
+		shouldDeliverDesktopNotification("base", true, routing.platform, routing.env)
+	) {
+		routing.desktop(message);
+	}
+}
 
 /** Interactive-only side channels; Tern status includes pending questions and action summaries. */
 export class TerminalIntegration {
@@ -23,6 +85,7 @@ export class TerminalIntegration {
 	readonly #outcomes = new Map<string, { state: "done" | "error" | "idle"; msg?: string }>();
 	readonly #cwd: string;
 	readonly #beforeStatusChange: (() => void) | undefined;
+	readonly #routing: NotificationRouting;
 	#updateQueued = false;
 	#programStatus = "";
 	#active = false;
@@ -39,7 +102,9 @@ export class TerminalIntegration {
 		cwd = process.cwd(),
 		capabilities = detectTerminalCapabilities(),
 		beforeStatusChange?: () => void,
+		routing: Partial<NotificationRouting> = {},
 	) {
+		this.#routing = { ...DEFAULT_ROUTING, ...routing };
 		this.#terminal = terminal;
 		this.#store = store;
 		this.#client = client;
@@ -266,16 +331,15 @@ export class TerminalIntegration {
 
 	#notify(title: string, body: string): void {
 		if (!this.#active) return;
-		if (this.capabilities.notifications === "bell") {
-			this.#terminal.write("\x07");
-			return;
-		}
-		// Tern's program-status protocol already owns the inbox and banners.
-		if (this.capabilities.tern) return;
-		if (this.capabilities.notifications === "osc9") {
-			this.#terminal.write(`\x1b]9;Lemon: ${title} — ${body}\x07`);
-		} else if (this.capabilities.notifications === "osc777") {
-			this.#terminal.write(`\x1b]777;notify;Lemon: ${title};${body}\x07`);
-		}
+		// Tern's program-status protocol already owns the inbox and banners; only
+		// bell mode still rings.
+		if (this.capabilities.tern && this.capabilities.notifications !== "bell") return;
+		deliverNotification(
+			this.capabilities,
+			title,
+			body,
+			(data) => this.#terminal.write(data),
+			this.#routing,
+		);
 	}
 }

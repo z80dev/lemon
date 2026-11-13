@@ -111,10 +111,22 @@ describe("row rendering", () => {
 	test("the grid colors exactly the used share of the window, one cell per percent", () => {
 		const reported = gridCells(parseSessionsContext(reportedContextFixture("s1")));
 		expect(reported).toHaveLength(CONTEXT_GRID_CELLS);
-		expect(reported.filter((cell) => cell !== "free")).toHaveLength(23);
+		expect(reported.filter((cell) => cell.id !== "free")).toHaveLength(23);
 		const estimated = gridCells(parseSessionsContext(estimatedContextFixture("s2")));
-		expect(estimated.filter((cell) => cell !== "free")).toHaveLength(81);
-		expect(estimated.filter((cell) => cell === "tool_results")).toHaveLength(40);
+		expect(estimated.filter((cell) => cell.id !== "free")).toHaveLength(81);
+		expect(estimated.filter((cell) => cell.id === "tool_results")).toHaveLength(40);
+	});
+
+	test("the grid follows category shares in order and dims part-covered cells", () => {
+		const cells = gridCells(parseSessionsContext(estimatedContextFixture("s2")));
+		const order = cells.filter((cell) => cell.id !== "free").map((cell) => cell.id);
+		expect(order[0]).toBe("user_messages");
+		expect(order.filter((id) => id === "assistant_messages")).toHaveLength(22);
+		expect(order.at(-1)).toBe("unattributed");
+		// The cell where the last category ends is shared with free space.
+		expect(cells.filter((cell) => !cell.full).length).toBeGreaterThan(0);
+		const rows = panel(estimatedContextFixture("s2")).component.render(100);
+		expect(rows.some((row) => row.includes("\x1b[2m"))).toBe(true);
 	});
 
 	test("with no known window the grid shows only composition and no free row", () => {
@@ -125,7 +137,7 @@ describe("row rendering", () => {
 			percentUsed: null,
 		};
 		const usage = parseSessionsContext(raw);
-		expect(gridCells(usage).filter((cell) => cell === "free")).toHaveLength(0);
+		expect(gridCells(usage).filter((cell) => cell.id === "free")).toHaveLength(0);
 		const text = renderPlain(panel(raw).component.render(80));
 		expect(text).toContain("window unknown");
 		expect(text).not.toContain("Free space");

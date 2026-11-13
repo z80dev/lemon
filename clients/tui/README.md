@@ -259,7 +259,9 @@ on reconnect and when opening or changing models. Older daemons without
   Partial provider counters stay unknown in `/context` usage summaries; a missing
   cache component is not treated as zero or used as a context measurement.
 - `/context` (or `/ctx`) opens a scrollable breakdown of the focused session's
-  context window: a 100-cell usage grid colored per category with free space dimmed,
+  context window: omp's occupancy map (pi-tui `planContextMap`: 100 cells, one per
+  percent of the window, in category order then free space, colored like the table
+  rows; free space and cells a category covers less than 70% of are dimmed),
   per-category tokens and share of the window (system prompt, tools, skills, context
   files, memory, messages, tool results, summaries), free space, auto-compaction
   headroom, the largest contributors, and how the figures were measured. Splits
@@ -389,8 +391,14 @@ notifications = "auto" # auto | osc | bell | off
 ```
 
 `auto` (default) uses OSC notifications on recognized terminals and BEL (`\x07`)
-otherwise; Terminal.app therefore gets a bell. `osc` forces OSC 9/777 without
-a bell fallback; `bell` always rings BEL; `off` emits neither OSC notifications
+otherwise; Terminal.app therefore gets a bell. In `auto`, notifications are first
+offered to the active terminal multiplexer (tmux, screen, zellij, cmux, herdr,
+orca, wmux; innermost first), the way omp does: inside tmux an approval is wrapped
+in tmux passthrough so the host terminal's toast still arrives and tmux flags the
+pane. A bell-only terminal on Linux with a session bus also gets a desktop toast
+through `notify-send` (or `gdbus`); set `PI_NO_DESKTOP_NOTIFY=1` to skip it. `osc` forces OSC 9/777 without
+a bell fallback and no multiplexer or desktop routing; `bell` always rings BEL
+only; `off` emits neither OSC notifications
 nor BEL. The same mode applies to pending questions, approvals, and completed,
 failed, or interrupted turns. Bell visibility/sound depends on terminal settings.
 `LEMON_TUI_NOTIFICATIONS=auto|osc|bell|off` overrides the file; legacy `0` means
