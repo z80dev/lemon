@@ -76,43 +76,6 @@ defmodule CodingAgent.Session.ModelRoutingTest do
     assert_receive {:provider_call, :openai, "gpt-4o-mini", _}
   end
 
-  for provenance <- [:omitted, nil] do
-    @provenance provenance
-    test "parentless Coordinator preserves explicit models with #{@provenance} provenance",
-         context do
-      settings = %{
-        context.settings
-        | model_routing: %{
-            "enabled" => true,
-            "max_cost_usd" => 0,
-            "rules" => [%{"model" => "openai:gpt-4o-mini", "contains" => "hi"}]
-          }
-      }
-
-      opts = [cwd: context.cwd, model: "openai:gpt-4o", settings_manager: settings]
-      opts = if @provenance == :omitted, do: opts, else: Keyword.put(opts, :model_explicit, nil)
-      coordinator = start_supervised!({CodingAgent.Coordinator, opts})
-      owner = self()
-
-      :sys.replace_state(coordinator, fn state ->
-        %{
-          state
-          | session_starter: fn child_opts ->
-              send(owner, {:child_opts, child_opts})
-              {:error, :admission_failed}
-            end
-        }
-      end)
-
-      CodingAgent.Coordinator.run_subagents(coordinator, [%{prompt: "hi"}])
-      assert_receive {:child_opts, child_opts}
-      assert child_opts[:model_explicit]
-      child = session(context, Keyword.put(child_opts, :register, false))
-      assert turn(child, "hi").model == "gpt-4o"
-      assert_receive {:provider_call, :openai, "gpt-4o", _}
-    end
-  end
-
   test "router-resolved defaults do not masquerade as explicit selections", context do
     session = session(context, model: "openai:gpt-4o", model_explicit: false)
     assert turn(session, "hi").model == "gpt-4o-mini"

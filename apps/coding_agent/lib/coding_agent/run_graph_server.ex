@@ -167,7 +167,6 @@ defmodule CodingAgent.RunGraphServer do
       ets_initialized: false,
       dets_initialized: false,
       loaded_from_dets: false,
-      loading: false,
       cleanup_ref: nil,
       before_dets_load: Keyword.get(opts, :before_dets_load)
     }
@@ -277,10 +276,6 @@ defmodule CodingAgent.RunGraphServer do
     end
 
     {:reply, :ok, state}
-  end
-
-  def handle_call(:loading?, _from, state) do
-    {:reply, state.loading, state}
   end
 
   def handle_call(:clear, _from, state) do
@@ -422,12 +417,9 @@ defmodule CodingAgent.RunGraphServer do
   defp maybe_load_from_dets(%{loaded_from_dets: true} = state), do: state
 
   defp maybe_load_from_dets(state) do
-    # The async load was started during init. If it hasn't completed yet
-    # and someone explicitly calls ensure_tables, trigger a synchronous load
-    # as a fallback to guarantee data availability.
     if state.dets_initialized and state.ets_initialized do
       do_sync_dets_load(state)
-      %{state | loaded_from_dets: true, loading: false}
+      %{state | loaded_from_dets: true}
     else
       state
     end

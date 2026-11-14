@@ -15,7 +15,8 @@ defmodule LemonControlPlane.Methods.ChatSend do
 
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.{ChatSubmission, ImageInputs}
+  alias LemonControlPlane.ChatSubmission
+  alias LemonAi.ImageInputs
 
   @impl true
   def name, do: "chat.send"

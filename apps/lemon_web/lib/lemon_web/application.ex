@@ -18,7 +18,6 @@ defmodule LemonWeb.Application do
     LemonWeb.ShellLive.RunEvents.attach()
 
     children = [
-      LemonWeb.Telemetry,
       LemonWeb.LoginThrottle,
       LemonWeb.Endpoint
     ]

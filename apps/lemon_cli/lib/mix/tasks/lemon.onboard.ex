@@ -1,7 +1,8 @@
 defmodule Mix.Tasks.Lemon.Onboard do
+  import LemonCli.Onboarding.PromptUI, only: [normalize_input: 1, interactive_prompt_session?: 1]
   use Mix.Task
 
-  alias LemonCli.Onboarding.{LogSilencer, PromptUI, Providers, Runner}
+  alias LemonCli.Onboarding.{LogSilencer, Providers, Runner}
 
   @shortdoc "Top-level interactive provider onboarding"
   @moduledoc """
@@ -189,12 +190,6 @@ defmodule Mix.Tasks.Lemon.Onboard do
     end) || LemonCore.Config.global_path()
   end
 
-  defp normalize_input(nil), do: ""
-  defp normalize_input(:eof), do: ""
-  defp normalize_input(value) when is_binary(value), do: String.trim(value)
-  defp normalize_input(value) when is_list(value), do: value |> List.to_string() |> String.trim()
-  defp normalize_input(value), do: value |> to_string() |> String.trim()
-
   defp select_value(io, params) do
     case Map.get(io, :select) do
       select when is_function(select, 1) ->
@@ -219,10 +214,6 @@ defmodule Mix.Tasks.Lemon.Onboard do
       _ ->
         :fallback
     end
-  end
-
-  defp interactive_prompt_session?(io) when is_map(io) do
-    is_function(Map.get(io, :select), 1) and PromptUI.available?()
   end
 
   defp format_selector_error(:not_available), do: "no interactive terminal detected"

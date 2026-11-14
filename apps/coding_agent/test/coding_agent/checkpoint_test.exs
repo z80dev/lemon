@@ -6,7 +6,6 @@ defmodule CodingAgent.CheckpointTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Checkpoint
-  alias CodingAgent.Tools.TodoStore
   alias LemonCore.Introspection
 
   setup do
@@ -14,54 +13,6 @@ defmodule CodingAgent.CheckpointTest do
     Application.put_env(:lemon_core, :introspection, Keyword.put(original, :enabled, true))
     on_exit(fn -> Application.put_env(:lemon_core, :introspection, original) end)
     :ok
-  end
-
-  describe "create/2 and resume/1" do
-    test "creates and resumes a checkpoint" do
-      session_id = unique_session("create-resume")
-
-      on_exit(fn ->
-        Checkpoint.delete_all(session_id)
-        TodoStore.put(session_id, [])
-      end)
-
-      # Create some todos
-      TodoStore.put(session_id, [
-        %{id: "1", content: "Task 1", status: :completed, dependencies: [], priority: :high},
-        %{id: "2", content: "Task 2", status: :in_progress, dependencies: [], priority: :medium}
-      ])
-
-      # Create checkpoint
-      {:ok, checkpoint} =
-        Checkpoint.create(session_id,
-          context: %{step: 5},
-          metadata: %{tag: "test"}
-        )
-
-      assert is_binary(checkpoint.id)
-      assert checkpoint.session_id == session_id
-      assert checkpoint.context.step == 5
-      assert checkpoint.metadata.tag == "test"
-      assert length(checkpoint.todos) == 2
-
-      TodoStore.put(session_id, [])
-
-      # Resume from checkpoint
-      {:ok, state} = Checkpoint.resume(checkpoint.id)
-
-      assert state.session_id == session_id
-      assert state.context.step == 5
-      assert state.resumed_from == checkpoint.id
-      assert length(state.todos) == 2
-
-      # A session-global checkpoint is data only; it is never copied onto the
-      # session's selected-branch todo projection.
-      assert TodoStore.get(session_id) == []
-    end
-
-    test "returns error for non-existent checkpoint" do
-      assert {:error, :not_found} = Checkpoint.resume("chk_nonexistent")
-    end
   end
 
   describe "checkpoint audit events" do
@@ -72,7 +23,7 @@ defmodule CodingAgent.CheckpointTest do
       path = Path.join(tmp_dir, "audit.txt")
       File.write!(path, "before\n")
 
-      on_exit(fn -> Checkpoint.delete_all(session_key) end)
+      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_key) end)
 
       :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(run_id))
 
@@ -143,15 +94,15 @@ defmodule CodingAgent.CheckpointTest do
   describe "list/1" do
     test "returns checkpoints sorted by timestamp" do
       session_id = unique_session("list-sorted")
-      on_exit(fn -> Checkpoint.delete_all(session_id) end)
+      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
 
       # Create multiple checkpoints
-      {:ok, _cp1} = Checkpoint.create(session_id, metadata: %{order: 1})
+      {:ok, _cp1} = LemonCore.Checkpoint.create(session_id, metadata: %{order: 1})
       :timer.sleep(10)
       # Ensure different timestamps
-      {:ok, _cp2} = Checkpoint.create(session_id, metadata: %{order: 2})
+      {:ok, _cp2} = LemonCore.Checkpoint.create(session_id, metadata: %{order: 2})
       :timer.sleep(10)
-      {:ok, _cp3} = Checkpoint.create(session_id, metadata: %{order: 3})
+      {:ok, _cp3} = LemonCore.Checkpoint.create(session_id, metadata: %{order: 3})
 
       checkpoints = Checkpoint.list(session_id)
 
@@ -170,12 +121,12 @@ defmodule CodingAgent.CheckpointTest do
       session_b = unique_session("session-b")
 
       on_exit(fn ->
-        Checkpoint.delete_all(session_a)
-        Checkpoint.delete_all(session_b)
+        LemonCore.Checkpoint.delete_all(session_a)
+        LemonCore.Checkpoint.delete_all(session_b)
       end)
 
-      {:ok, _} = Checkpoint.create(session_a, metadata: %{session: "a"})
-      {:ok, _} = Checkpoint.create(session_b, metadata: %{session: "b"})
+      {:ok, _} = LemonCore.Checkpoint.create(session_a, metadata: %{session: "a"})
+      {:ok, _} = LemonCore.Checkpoint.create(session_b, metadata: %{session: "b"})
 
       a_checkpoints = Checkpoint.list(session_a)
       assert length(a_checkpoints) == 1
@@ -183,35 +134,16 @@ defmodule CodingAgent.CheckpointTest do
     end
   end
 
-  describe "get_latest/1" do
-    test "returns the most recent checkpoint" do
-      session_id = unique_session("get-latest")
-      on_exit(fn -> Checkpoint.delete_all(session_id) end)
-
-      {:ok, _} = Checkpoint.create(session_id, metadata: %{n: 1})
-      :timer.sleep(10)
-      {:ok, cp2} = Checkpoint.create(session_id, metadata: %{n: 2})
-
-      assert {:ok, latest} = Checkpoint.get_latest(session_id)
-      assert latest.metadata.n == 2
-      assert latest.id == cp2.id
-    end
-
-    test "returns error when no checkpoints exist" do
-      assert {:error, :not_found} = Checkpoint.get_latest(unique_session("no-checkpoints"))
-    end
-  end
-
   describe "delete/1" do
     test "deletes a checkpoint" do
       session_id = unique_session("delete")
-      on_exit(fn -> Checkpoint.delete_all(session_id) end)
+      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
 
-      {:ok, checkpoint} = Checkpoint.create(session_id)
+      {:ok, checkpoint} = LemonCore.Checkpoint.create(session_id)
 
-      assert Checkpoint.exists?(checkpoint.id)
+      assert LemonCore.Checkpoint.exists?(checkpoint.id)
       assert :ok = Checkpoint.delete(checkpoint.id)
-      refute Checkpoint.exists?(checkpoint.id)
+      refute LemonCore.Checkpoint.exists?(checkpoint.id)
     end
 
     test "returns ok for non-existent checkpoint" do
@@ -219,37 +151,14 @@ defmodule CodingAgent.CheckpointTest do
     end
   end
 
-  describe "delete_all/1" do
-    test "deletes all checkpoints for a session" do
-      session_id = unique_session("delete-all")
-
-      {:ok, cp1} = Checkpoint.create(session_id)
-      {:ok, cp2} = Checkpoint.create(session_id)
-      {:ok, cp3} = Checkpoint.create(session_id)
-
-      assert length(Checkpoint.list(session_id)) == 3
-
-      assert {:ok, 3} = Checkpoint.delete_all(session_id)
-
-      assert Checkpoint.list(session_id) == []
-      refute Checkpoint.exists?(cp1.id)
-      refute Checkpoint.exists?(cp2.id)
-      refute Checkpoint.exists?(cp3.id)
-    end
-
-    test "returns 0 when no checkpoints exist" do
-      assert {:ok, 0} = Checkpoint.delete_all(unique_session("no-checkpoints"))
-    end
-  end
-
   describe "stats/1" do
     test "returns checkpoint statistics" do
       session_id = unique_session("stats")
-      on_exit(fn -> Checkpoint.delete_all(session_id) end)
+      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
 
-      {:ok, cp1} = Checkpoint.create(session_id)
+      {:ok, cp1} = LemonCore.Checkpoint.create(session_id)
       :timer.sleep(10)
-      {:ok, cp2} = Checkpoint.create(session_id)
+      {:ok, cp2} = LemonCore.Checkpoint.create(session_id)
 
       stats = Checkpoint.stats(session_id)
 
@@ -267,53 +176,6 @@ defmodule CodingAgent.CheckpointTest do
     end
   end
 
-  describe "exists?/1" do
-    test "returns true for existing checkpoint" do
-      session_id = unique_session("exists")
-      on_exit(fn -> Checkpoint.delete_all(session_id) end)
-
-      {:ok, checkpoint} = Checkpoint.create(session_id)
-      assert Checkpoint.exists?(checkpoint.id)
-    end
-
-    test "returns false for non-existent checkpoint" do
-      refute Checkpoint.exists?("chk_nonexistent")
-    end
-  end
-
-  describe "prune/2" do
-    test "keeps only specified number of checkpoints" do
-      session_id = unique_session("prune")
-      on_exit(fn -> Checkpoint.delete_all(session_id) end)
-
-      # Create 5 checkpoints
-      for i <- 1..5 do
-        {:ok, _} = Checkpoint.create(session_id, metadata: %{n: i})
-        :timer.sleep(10)
-      end
-
-      assert length(Checkpoint.list(session_id)) == 5
-
-      # Keep only 2
-      assert {:ok, 3} = Checkpoint.prune(session_id, 2)
-
-      remaining = Checkpoint.list(session_id)
-      assert length(remaining) == 2
-      # Should keep the most recent (5 and 4)
-      assert hd(remaining).metadata.n == 5
-    end
-
-    test "returns 0 when nothing to prune" do
-      session_id = unique_session("prune-empty")
-
-      {:ok, _} = Checkpoint.create(session_id)
-      assert {:ok, 0} = Checkpoint.prune(session_id, 5)
-      assert length(Checkpoint.list(session_id)) == 1
-
-      Checkpoint.delete_all(session_id)
-    end
-  end
-
   describe "filesystem checkpoints" do
     @tag :tmp_dir
     test "diffs and restores changed and newly-created files", %{tmp_dir: tmp_dir} do
@@ -322,7 +184,7 @@ defmodule CodingAgent.CheckpointTest do
       created = Path.join(tmp_dir, "created.txt")
       File.write!(existing, "before\n")
 
-      on_exit(fn -> Checkpoint.delete_all(session_id) end)
+      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
 
       {:ok, checkpoint} =
         Checkpoint.create_filesystem(session_id, [existing, created],
@@ -355,7 +217,7 @@ defmodule CodingAgent.CheckpointTest do
       File.write!(first, "one\n")
       File.write!(second, "two\n")
 
-      on_exit(fn -> Checkpoint.delete_all(session_id) end)
+      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
 
       {:ok, checkpoint} = Checkpoint.create_filesystem(session_id, [first, second], cwd: tmp_dir)
 

@@ -50,7 +50,7 @@ Older `ChatState.last_engine` values remain stored as historical/native
 discriminators and are quarantined from resumption when they are not native.
 
 Delegated tasks run as native in-process subagent sessions (`CodingAgent.Session`
-via `CodingAgent.Coordinator`) and record their own task provenance, but cannot
+via the task lifecycle) and record their own task provenance, but cannot
 affect a product run's executor.
 
 ### 4) API/tool surface updates

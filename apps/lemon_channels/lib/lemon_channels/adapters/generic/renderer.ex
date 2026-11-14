@@ -3,7 +3,7 @@ defmodule LemonChannels.Adapters.Generic.Renderer do
   Generic channels renderer for semantic delivery intents.
   """
 
-  alias LemonChannels.{CapabilityQuery, OutboundPayload, Outbox, PresentationState}
+  alias LemonChannels.{Registry, OutboundPayload, Outbox, PresentationState}
   alias LemonCore.{DeliveryIntent, DeliveryRoute}
 
   @spec dispatch(DeliveryIntent.t()) :: :ok | {:error, term()}
@@ -46,7 +46,7 @@ defmodule LemonChannels.Adapters.Generic.Renderer do
   end
 
   defp send_text(intent, route, state, surface, seq, text_hash, text) do
-    supports_edit? = CapabilityQuery.supports?(route.channel_id, :edit)
+    supports_edit? = Registry.supports?(route.channel_id, :edit)
     meta = intent_meta(intent)
 
     cond do

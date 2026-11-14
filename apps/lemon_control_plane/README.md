@@ -25,6 +25,10 @@ compatibility, and serves only `GET /ws` and `GET /healthz` to remote peers.
 OpenAI/ACP HTTP APIs require bearer authentication even locally (their dedicated
 token, or the operator token when unset). Remote HTTP additionally requires
 `LEMON_CONTROL_PLANE_REMOTE_HTTP=openai,acp` and each enabled API's dedicated token.
+Dedicated tokens are resolved through `LemonCore.Env`: `LEMON_OPENAI_COMPAT_API_TOKEN`
+(with `LEMON_OPENAI_COMPAT_TOKEN` as an alias) and `LEMON_ACP_API_TOKEN`.
+RPC image arrays are validated directly by `LemonAi.ImageInputs`; usage records
+and summaries are owned by `LemonCore.UsageStore`.
 
 Expose **4044**, not 4040, for remote execution nodes. This gateway serves only
 `/ws` (node/enrollment credentials; never operators or tokenless access) and

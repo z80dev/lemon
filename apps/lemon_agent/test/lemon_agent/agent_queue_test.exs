@@ -1,10 +1,9 @@
 defmodule LemonAgent.AgentQueueTest do
   @moduledoc """
-  Comprehensive tests for queue mode handling in LemonAgent.Agent.
+  Comprehensive tests for queue handling in LemonAgent.Agent.
 
   These tests cover:
-  - Queue mode switching mid-run
-  - Error state propagation in queue mode
+  - Error state propagation
   - Waiter timeout behavior
   - Task supervision integration
   - Concurrent prompt submissions
@@ -84,102 +83,14 @@ defmodule LemonAgent.AgentQueueTest do
     worker
   end
 
-  # ============================================================================
-  # Queue Mode Switching Mid-Run
-  # ============================================================================
-
-  describe "queue mode switching mid-run" do
-    test "switching steering mode from :one_at_a_time to :all during streaming" do
-      parent = self()
-      response = Mocks.assistant_message("Response")
-
-      # Create a stream that gives time to switch modes
-      stream_fn = fn _model, _context, _options ->
-        {:ok, stream} = LemonAi.EventStream.start_link()
-
-        Task.start(fn ->
-          LemonAi.EventStream.push(stream, {:start, response})
-          # Notify parent that streaming started
-          send(parent, :stream_started)
-          # Wait for mode switch signal
-          receive do
-            :continue -> :ok
-          after
-            500 -> :ok
-          end
-
-          LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
-          LemonAi.EventStream.complete(stream, response)
-        end)
-
-        {:ok, stream}
-      end
-
-      {:ok, agent} = start_agent(steering_mode: :one_at_a_time, stream_fn: stream_fn)
-
-      :ok = CoreAgent.prompt(agent, "Start")
-
-      # Wait for streaming to start
-      assert_receive :stream_started, 1000
-
-      # Switch mode while streaming
-      :ok = CoreAgent.set_steering_mode(agent, :all)
-      assert CoreAgent.get_steering_mode(agent) == :all
-
-      # Signal to continue
-      send(agent, :continue)
-
-      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 5000)
-    end
-
-    test "switching follow-up mode from :one_at_a_time to :all during streaming" do
-      parent = self()
-      response = Mocks.assistant_message("Response")
-
-      stream_fn = fn _model, _context, _options ->
-        {:ok, stream} = LemonAi.EventStream.start_link()
-
-        Task.start(fn ->
-          LemonAi.EventStream.push(stream, {:start, response})
-          send(parent, :stream_started)
-
-          receive do
-            :continue -> :ok
-          after
-            500 -> :ok
-          end
-
-          LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
-          LemonAi.EventStream.complete(stream, response)
-        end)
-
-        {:ok, stream}
-      end
-
-      {:ok, agent} = start_agent(follow_up_mode: :one_at_a_time, stream_fn: stream_fn)
-
-      :ok = CoreAgent.prompt(agent, "Start")
-      assert_receive :stream_started, 1000
-
-      # Switch mode during streaming
-      :ok = CoreAgent.set_follow_up_mode(agent, :all)
-      assert CoreAgent.get_follow_up_mode(agent) == :all
-
-      send(agent, :continue)
-      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2000)
-    end
-
-    test "mode switch affects next queue consumption, not current" do
-      # This tests that mode changes don't affect in-flight queue consumption
+  describe "queue consumption" do
+    test "consumes steering messages one at a time" do
       response1 = Mocks.assistant_message("First")
       response2 = Mocks.assistant_message("Second")
       response3 = Mocks.assistant_message("Third")
 
       {:ok, agent} =
-        start_agent(
-          steering_mode: :one_at_a_time,
-          stream_fn: Mocks.mock_stream_fn([response1, response2, response3])
-        )
+        start_agent(stream_fn: Mocks.mock_stream_fn([response1, response2, response3]))
 
       # Queue multiple steering messages before starting
       msg1 = Mocks.user_message("Steer 1")
@@ -693,27 +604,6 @@ defmodule LemonAgent.AgentQueueTest do
       assert length(internal_state.follow_up_queue) == 100
     end
 
-    test "clearing full queues works correctly" do
-      {:ok, agent} = start_agent()
-
-      # Fill both queues
-      for i <- 1..50 do
-        :ok = CoreAgent.steer(agent, Mocks.user_message("Steer #{i}"))
-        :ok = CoreAgent.follow_up(agent, Mocks.user_message("Follow #{i}"))
-      end
-
-      internal_state = :sys.get_state(agent)
-      assert length(internal_state.steering_queue) == 50
-      assert length(internal_state.follow_up_queue) == 50
-
-      # Clear all
-      :ok = CoreAgent.clear_all_queues(agent)
-
-      internal_state = :sys.get_state(agent)
-      assert internal_state.steering_queue == []
-      assert internal_state.follow_up_queue == []
-    end
-
     test "queue order is preserved (FIFO)" do
       {:ok, agent} = start_agent()
 
@@ -729,14 +619,11 @@ defmodule LemonAgent.AgentQueueTest do
       assert contents == expected
     end
 
-    test "one_at_a_time mode only consumes first message" do
+    test "consumes one message per turn" do
       response = Mocks.assistant_message("Response")
 
       {:ok, agent} =
-        start_agent(
-          steering_mode: :one_at_a_time,
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
+        start_agent(stream_fn: Mocks.mock_stream_fn_single(response))
 
       # Queue multiple messages
       :ok = CoreAgent.steer(agent, Mocks.user_message("First"))
@@ -751,29 +638,6 @@ defmodule LemonAgent.AgentQueueTest do
       internal_state = :sys.get_state(agent)
       # At least some messages should remain (depends on loop iterations)
       assert is_list(internal_state.steering_queue)
-    end
-
-    test "all mode consumes entire queue at once" do
-      response = Mocks.assistant_message("Response")
-
-      {:ok, agent} =
-        start_agent(
-          steering_mode: :all,
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
-
-      # Queue multiple messages
-      :ok = CoreAgent.steer(agent, Mocks.user_message("First"))
-      :ok = CoreAgent.steer(agent, Mocks.user_message("Second"))
-      :ok = CoreAgent.steer(agent, Mocks.user_message("Third"))
-
-      :ok = CoreAgent.prompt(agent, "Trigger")
-      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2000)
-
-      # With :all mode, all messages should be consumed in first call
-      internal_state = :sys.get_state(agent)
-      # Queue should be empty after consumption
-      assert internal_state.steering_queue == []
     end
   end
 
@@ -1024,50 +888,6 @@ defmodule LemonAgent.AgentQueueTest do
       state = CoreAgent.get_state(agent)
       # Should have processed messages
       assert state.messages != []
-    end
-
-    test "clearing steering queue doesn't affect follow-up queue" do
-      {:ok, agent} = start_agent()
-
-      :ok = CoreAgent.steer(agent, Mocks.user_message("Steer"))
-      :ok = CoreAgent.follow_up(agent, Mocks.user_message("Follow"))
-
-      :ok = CoreAgent.clear_steering_queue(agent)
-
-      internal_state = :sys.get_state(agent)
-      assert internal_state.steering_queue == []
-      assert length(internal_state.follow_up_queue) == 1
-    end
-
-    test "clearing follow-up queue doesn't affect steering queue" do
-      {:ok, agent} = start_agent()
-
-      :ok = CoreAgent.steer(agent, Mocks.user_message("Steer"))
-      :ok = CoreAgent.follow_up(agent, Mocks.user_message("Follow"))
-
-      :ok = CoreAgent.clear_follow_up_queue(agent)
-
-      internal_state = :sys.get_state(agent)
-      assert length(internal_state.steering_queue) == 1
-      assert internal_state.follow_up_queue == []
-    end
-
-    test "different modes for each queue type" do
-      {:ok, agent} =
-        start_agent(
-          steering_mode: :all,
-          follow_up_mode: :one_at_a_time
-        )
-
-      assert CoreAgent.get_steering_mode(agent) == :all
-      assert CoreAgent.get_follow_up_mode(agent) == :one_at_a_time
-
-      # Switch modes independently
-      :ok = CoreAgent.set_steering_mode(agent, :one_at_a_time)
-      :ok = CoreAgent.set_follow_up_mode(agent, :all)
-
-      assert CoreAgent.get_steering_mode(agent) == :one_at_a_time
-      assert CoreAgent.get_follow_up_mode(agent) == :all
     end
 
     test "messages queued during streaming are available after" do

@@ -205,8 +205,7 @@ defmodule LemonGateway.Run do
       })
 
     renderer_state = state.renderer.init(%{engine: @engine_provenance})
-    {renderer_state, render_action} = state.renderer.apply_event(renderer_state, completed)
-    maybe_update_progress(state, render_action)
+    {renderer_state, _render_action} = state.renderer.apply_event(renderer_state, completed)
     state = %{state | renderer_state: renderer_state}
 
     finalize(state, completed)
@@ -331,8 +330,7 @@ defmodule LemonGateway.Run do
         session_key: state.session_key
       })
 
-    {renderer_state, render_action} = state.renderer.apply_event(renderer_state, completed)
-    maybe_update_progress(state, render_action)
+    {renderer_state, _render_action} = state.renderer.apply_event(renderer_state, completed)
     state = %{state | renderer_state: renderer_state}
 
     finalize(state, completed)
@@ -417,9 +415,8 @@ defmodule LemonGateway.Run do
     emit_engine_event_to_bus(state, event)
 
     # Update renderer state for answer tracking (but no rendering)
-    {renderer_state, render_action} = state.renderer.apply_event(state.renderer_state, event)
+    {renderer_state, _render_action} = state.renderer.apply_event(state.renderer_state, event)
     state = %{state | renderer_state: renderer_state}
-    maybe_update_progress(state, render_action)
 
     cond do
       is_started(event) ->
@@ -860,14 +857,12 @@ defmodule LemonGateway.Run do
     end
   end
 
-  # Emit events to the LemonCore.Bus via DependencyManager
+  # Emit events to the LemonCore.Bus.
   defp emit_to_bus(run_id, event_type, payload, extra_meta) do
-    alias LemonGateway.DependencyManager
-
     topic = "run:#{run_id}"
     meta = Map.merge(%{run_id: run_id}, extra_meta)
-    event = DependencyManager.build_event(event_type, payload, meta)
-    DependencyManager.broadcast(topic, event)
+    event = LemonCore.Event.new(event_type, payload, meta)
+    LemonCore.Bus.broadcast(topic, event)
   end
 
   # Tracks the run's phase and validates each transition, but does not publish it.
@@ -1057,28 +1052,26 @@ defmodule LemonGateway.Run do
     end
   end
 
-  defp maybe_update_progress(_state, _render_action), do: :ok
-
   # Telemetry emission helpers for run lifecycle events
   # Uses LemonCore.Telemetry for consistent event naming across the umbrella
 
   defp emit_telemetry_start(run_id, meta) do
-    LemonGateway.DependencyManager.emit_telemetry(:run_start, [
+    LemonCore.Telemetry.run_start(
       run_id,
       %{
         session_key: meta[:session_key],
         engine: meta[:engine],
         origin: meta[:origin]
       }
-    ])
+    )
   end
 
   defp emit_telemetry_first_token(run_id, _meta, latency_ms) do
     start_ts_ms = System.system_time(:millisecond) - latency_ms
-    LemonGateway.DependencyManager.emit_telemetry(:run_first_token, [run_id, start_ts_ms])
+    LemonCore.Telemetry.run_first_token(run_id, start_ts_ms)
   end
 
   defp emit_telemetry_stop(run_id, _meta, duration_ms, ok?) do
-    LemonGateway.DependencyManager.emit_telemetry(:run_stop, [run_id, duration_ms, ok?])
+    LemonCore.Telemetry.run_stop(run_id, duration_ms, ok?)
   end
 end

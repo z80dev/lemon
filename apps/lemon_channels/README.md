@@ -548,14 +548,14 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `Telegram.Transport.Commands` | Pure functions for command detection, scope keys, message joining |
 | `Telegram.Transport.FileOperations` | `/file put`/`get` commands, auto-put for document uploads, media group file handling |
 | `Telegram.Transport.InboundActions` | Router submission path for normal inbound messages, including progress reactions and session metadata |
-| `Telegram.Transport.InboundContext` | Normalized transport event context shared across normalize/pipeline/action-runner |
+| `Telegram.Transport.InboundContext` | Normalized transport event context shared across normalization and the pipeline |
 | `Telegram.Transport.MediaGroups` | Media group coalescence with debounce timer |
 | `Telegram.Transport.MemoryReflection` | `/new` memory-reflection transcript assembly and prompt generation |
 | `Telegram.Transport.MessageBuffer` | Debounce buffering for rapid-fire user messages |
 | `Telegram.Transport.ModelPicker` | `/model` picker flow, provider/model pagination, and selection-state transitions |
 | `Telegram.Transport.Normalize` | Raw update/timer normalization into Telegram-local inbound context |
 | `Telegram.Transport.PerChatState` | Telegram per-thread state, generation bookkeeping, and native resume helpers |
-| `Telegram.Transport.Pipeline` | Telegram-local ingress coordinator for normalized events and emitted actions |
+| `Telegram.Transport.Pipeline` | Telegram-local ingress coordinator invoking transport callbacks for normalized events |
 | `Telegram.Transport.RuntimeState` | Helper for adapter-owned runtime state without a dedicated struct migration |
 | `Telegram.Transport.SessionRouting` | Session-key derivation, reply routing, and parallel-session bookkeeping |
 | `Telegram.Transport.TopicCommand` | `/topic` command handler extracted from the transport shell |
@@ -788,16 +788,14 @@ Web3 messaging adapter. Supports threads only (no edit, delete, voice, images, f
 | `XMTP` (plugin) | Plugin behaviour implementation |
 | `XMTP.Transport` | GenServer for message send/receive, `normalize_inbound_message/1`, `deliver/1`, and acceptance-aware inbound acknowledgement |
 | `XMTP.Bridge` | Communication with the Node.js bridge (connect, poll, send_message, ack_inbound) |
-| `XMTP.PortServer` | XMTP-specific public GenServer identity around the shared Node.js port lifecycle |
+| `LemonChannels.PortBridge` | Shared GenServer managing the XMTP Node.js port lifecycle |
 
 XMTP uses a Node.js bridge process managed via an Erlang Port. The bridge
 emits an inbound dedupe key without committing it. Elixir acknowledges that key
 after router acceptance, or after an ambiguous outcome where retrying could
 duplicate a run. A definite router rejection is left unacknowledged so polling
-can redeliver it. `XMTP.PortServer` remains the public GenServer
-callback/process and warning-log module while supplying the XMTP script name,
-event tag, and log label to the shared `LemonChannels.PortBridge` callback
-implementation.
+can redeliver it. `XMTP.Transport` supplies the script name, event tag, and log
+label directly to the shared `LemonChannels.PortBridge` GenServer.
 
 #### Configuration
 
@@ -817,7 +815,7 @@ The WhatsApp adapter uses its own Node.js bridge script and event tag behind the
 | `WhatsApp.Supervisor` | Starts the async supervisor and transport when credentials are configured |
 | `WhatsApp.Transport` | GenServer for message send/receive and bridge event handling with provisional dedupe and acceptance-only typing |
 | `WhatsApp.Bridge` | Communication with the Node.js bridge |
-| `WhatsApp.PortServer` | WhatsApp-specific public GenServer identity around `LemonChannels.PortBridge` |
+| `LemonChannels.PortBridge` | Shared GenServer managing the WhatsApp Node.js port lifecycle |
 
 WhatsApp rolls back provisional message dedupe after a definite router
 rejection so the platform event can be retried. Ambiguous submission outcomes
@@ -937,15 +935,15 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `LemonChannels.Application` | OTP application, supervision tree, adapter lifecycle |
 | `LemonChannels.Dispatcher` | Router-facing semantic delivery entrypoint |
 | `LemonChannels.Plugin` | Behaviour definition (6 callbacks) |
-| `LemonChannels.Registry` | GenServer plugin registry with status tracking |
+| `LemonChannels.Registry` | GenServer plugin registry with status tracking and capability queries |
 | `LemonChannels.Capabilities` | Capability type definitions and defaults |
 | `LemonChannels.PresentationState` | Channels-owned message-id/send-vs-edit state per `{route, run, surface}` |
 | `LemonChannels.OutboundPayload` | Core delivery struct with constructors |
-| `LemonChannels.PortBridge` (internal) | Shared line-delimited JSON port lifecycle used by the XMTP and WhatsApp public PortServer wrappers |
+| `LemonChannels.PortBridge` (internal) | Shared line-delimited JSON port lifecycle used directly by the XMTP and WhatsApp transports |
 | `LemonChannels.BindingResolver` | Chat scope to project/agent/cwd/queue binding resolution (delegates to LemonCore) |
 | `LemonChannels.GatewayConfig` | Thin delegation to `LemonCore.GatewayConfig` |
 | LemonChannels.Runtime (internal) | Runtime bridge for session/run cancel, keepalive, and busy checks via `LemonCore.RouterBridge` |
-| LemonChannels.Cwd (internal) | Working directory resolution |
+| `LemonCore.Cwd.channel_default_cwd/0` | Shared channel working-directory resolution |
 | `LemonChannels.Types` | ChatScope and other shared type definitions |
 
 ### Outbox
@@ -1007,7 +1005,7 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `Adapters.XMTP` | Plugin behaviour implementation |
 | `XMTP.Transport` | Message send/receive GenServer |
 | `XMTP.Bridge` | Node.js bridge communication |
-| `XMTP.PortServer` | XMTP-specific public wrapper around `LemonChannels.PortBridge` |
+| `LemonChannels.PortBridge` | Shared Node.js port lifecycle |
 
 ### WhatsApp
 
@@ -1017,7 +1015,7 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `WhatsApp.Supervisor` | Credentials-gated adapter supervisor |
 | `WhatsApp.Transport` | Message send/receive GenServer |
 | `WhatsApp.Bridge` | Node.js bridge communication |
-| `WhatsApp.PortServer` | WhatsApp-specific public wrapper around `LemonChannels.PortBridge` |
+| `LemonChannels.PortBridge` | Shared Node.js port lifecycle |
 
 ## Testing
 
@@ -1051,7 +1049,7 @@ mix test apps/lemon_channels/test/lemon_channels/outbox_test.exs
 | `telegram/file_transfer_test.exs` | File handling |
 | `media_status_message_test.exs` | Telegram `/media` command recognition and redacted status formatting |
 | `capabilities_test.exs` | Includes X adapter capability lookup |
-| `port_bridge_contract_test.exs` | Shared XMTP/WhatsApp PortServer API, parser, event-tag, and reconnect contract |
+| `port_bridge_contract_test.exs` | Shared XMTP/WhatsApp bridge API, parser, event-tag, and reconnect contract |
 | `outbox_adapter_contract_test.exs` | Every built-in adapter's `deliver/1` against fake transports: ambiguous sends normalize to outcome-unknown, definite failures stay terminal |
 | `adapters/whatsapp/bridge_script_test.exs` | Runs `whatsapp_bridge.mjs` under Node with a fake Baileys package: send exceptions flag `outcome_unknown` |
 

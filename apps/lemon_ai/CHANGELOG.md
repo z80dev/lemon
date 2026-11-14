@@ -6,6 +6,24 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Changed
+
+- Share OAuth secret codecs, resolution, refresh locking and persistence across
+  provider helpers while retaining provider-specific expiry and project rules.
+- Start the named `LemonAi.ProviderSupervisor` directly with `DynamicSupervisor`;
+  the registered process name and supervision child ID are unchanged.
+- Provider registry reads fetch their persistent map once, retaining lazy
+  initialization and serialized runtime registration and removal.
+
+### Removed
+
+- Unused `LemonAi.Models.supports_xhigh?/1`, `models_equal?/2`,
+  `adjust_max_tokens_for_thinking/3,4` and `get_model_ids/1` helpers. Use
+  `supports_xhigh/1` and `get_models/1` for supported model queries.
+- Unused `RetryHelper.retryable_transport_reason?/1`,
+  `OpenCodeGoSession.header_name/0` and the `LemonAi.ProviderSupervisor` wrapper
+  module.
+
 ### Added
 
 - `LemonAi.Auth.OmpAuthBroker` gains `credentials/3` (every account for a

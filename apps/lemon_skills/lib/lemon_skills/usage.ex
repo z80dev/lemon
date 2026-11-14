@@ -9,8 +9,6 @@ defmodule LemonSkills.Usage do
   alias LemonSkills.Config
 
   @states ~w(active stale archived pinned)
-  @lock_retries 50
-  @lock_sleep_ms 10
   @default_stale_after_days 30
   @default_archive_after_days 90
 
@@ -319,28 +317,7 @@ defmodule LemonSkills.Usage do
     lock_path = path <> ".lock"
 
     with :ok <- File.mkdir_p(Path.dirname(lock_path)) do
-      acquire_lock(to_charlist(lock_path), fun, @lock_retries)
-    end
-  end
-
-  defp acquire_lock(_lock_path, _fun, 0), do: {:error, :lock_timeout}
-
-  defp acquire_lock(lock_path, fun, retries) do
-    case :file.open(lock_path, [:write, :exclusive]) do
-      {:ok, fd} ->
-        try do
-          fun.()
-        after
-          :file.close(fd)
-          :file.delete(lock_path)
-        end
-
-      {:error, :eexist} ->
-        Process.sleep(@lock_sleep_ms)
-        acquire_lock(lock_path, fun, retries - 1)
-
-      {:error, reason} ->
-        {:error, {:lock_failed, reason}}
+      LemonSkills.FileLock.with_lock(lock_path, fun, 50)
     end
   end
 

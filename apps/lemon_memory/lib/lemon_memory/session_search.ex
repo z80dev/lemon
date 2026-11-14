@@ -73,7 +73,7 @@ defmodule LemonMemory.SessionSearch do
        Enum.map(Enum.reverse(rows), fn {doc, count} ->
          %{
            session: doc.session_key,
-           title: clip(doc.prompt_summary, 512),
+           title: LemonMemory.Text.clip_bytes(doc.prompt_summary, 512, :grapheme),
            timestamp: doc.ingested_at_ms,
            run_count: count
          }
@@ -87,7 +87,7 @@ defmodule LemonMemory.SessionSearch do
     |> Enum.map_join("\n\n", fn item ->
       "session: #{item.session} | #{format_timestamp(item.timestamp)} | #{item.run_count} runs\n#{item.title}"
     end)
-    |> clip(65_536)
+    |> LemonMemory.Text.clip_bytes(65_536, :grapheme)
   end
 
   defp history(context, opts) do
@@ -125,21 +125,9 @@ defmodule LemonMemory.SessionSearch do
     Enum.map(docs, fn doc ->
       %{
         doc
-        | prompt_summary: clip(doc.prompt_summary, 1024),
-          answer_summary: clip(doc.answer_summary, 2048)
+        | prompt_summary: LemonMemory.Text.clip_bytes(doc.prompt_summary, 1024, :grapheme),
+          answer_summary: LemonMemory.Text.clip_bytes(doc.answer_summary, 2048, :grapheme)
       }
-    end)
-  end
-
-  defp clip(nil, _), do: ""
-
-  defp clip(text, bytes) do
-    text
-    |> String.graphemes()
-    |> Enum.reduce_while("", fn grapheme, acc ->
-      if byte_size(acc) + byte_size(grapheme) <= bytes,
-        do: {:cont, acc <> grapheme},
-        else: {:halt, acc}
     end)
   end
 
@@ -164,7 +152,7 @@ defmodule LemonMemory.SessionSearch do
       |> String.trim()
     end)
     |> Enum.join("\n\n")
-    |> clip(65_536)
+    |> LemonMemory.Text.clip_bytes(65_536, :grapheme)
   end
 
   @doc "Whether local history search is enabled by the owning feature policy."

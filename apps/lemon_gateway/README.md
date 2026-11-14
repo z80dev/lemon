@@ -169,7 +169,7 @@ with `retry_safe: false` and never submit another run.
 |--------|------|---------|
 | `LemonGateway` | `lemon_gateway.ex` | Public API entry point for `submit_execution/1` and health helpers |
 | `LemonGateway.Application` | `application.ex` | Execution runtime supervision tree with optional health and explicit legacy ingress children |
-| `LemonGateway.IngressSupervisor` | `ingress_supervisor.ex` | Supervisor for gateway-owned transport, command, SMS, and voice startup |
+| `LemonGateway.IngressSupervisor` | `ingress_supervisor.ex` | Supervisor for gateway-owned transport, SMS, and voice startup |
 | `LemonGateway.Runtime` | `runtime.ex` | Execution submission and cancellation API |
 | `LemonGateway.Config` | `config.ex` | TOML-backed runtime configuration GenServer |
 | `LemonGateway.ConfigLoader` | `config_loader.ex` | Loads and parses TOML config into typed structs |
@@ -179,7 +179,6 @@ with `retry_safe: false` and never submit another run.
 | `LemonCore.ChatState` | `../lemon_core/lib/lemon_core/chat_state.ex` | Session state struct for auto-resume tracking |
 | `LemonGateway.Cwd` | `cwd.ex` | Default working directory resolver |
 | `LemonGateway.Project` | `project.ex` | Project configuration struct (`id`, `root`) |
-| `LemonGateway.DependencyManager` | `dependency_manager.ex` | Centralized app startup, module availability checks, safe bus/telemetry |
 | `LemonGateway.AI` | `ai.ex` | Direct HTTP chat completions for OpenAI and Anthropic APIs |
 
 ### Scheduling and Run Execution
@@ -234,14 +233,6 @@ in-process subagents.
 | `LemonGateway.BindingResolver` | `binding_resolver.ex` | Resolves cwd, agent_id, and queue_mode from `ChatScope` |
 
 | `LemonGateway.Renderers.Basic` | `renderers/basic.ex` | Plain-text renderer with action lists and resume info |
-
-### Command System
-
-| Module | File | Purpose |
-|--------|------|---------|
-| `LemonGateway.Command` | `command.ex` | Behaviour for slash command plugins |
-| `LemonGateway.CommandRegistry` | `command_registry.ex` | Command registration and lookup |
-| `LemonGateway.Commands.Cancel` | `commands/cancel.ex` | Built-in `/cancel` command |
 
 ### SMS
 
@@ -390,7 +381,7 @@ Configuration loads from `~/.lemon/config.toml` (the `[gateway]` section) via `L
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `gateway_ingress_enabled` | `false` | Start gateway-owned transports, command registry, SMS inbox/webhook server, and voice supervisors. Default gateway startup is execution-only. |
+| `gateway_ingress_enabled` | `false` | Start gateway-owned transports, SMS inbox/webhook server, and voice supervisors. Default gateway startup is execution-only. |
 
 ### Transport Enable Flags
 

@@ -7,11 +7,9 @@ defmodule LemonAutomation.CronCommandRunner do
 
   @max_output_bytes 12_000
 
-  @spec submit(CronJob.t(), CronRun.t(), keyword()) ::
+  @spec submit(CronJob.t(), CronRun.t()) ::
           {:ok, binary()} | {:error, binary()} | :timeout
-  def submit(job, run, opts \\ [])
-
-  def submit(%CronJob{command: command} = job, %CronRun{}, _opts) when is_binary(command) do
+  def submit(%CronJob{command: command} = job, %CronRun{}) when is_binary(command) do
     command = String.trim(command)
 
     with :ok <- validate_command(command),
@@ -22,7 +20,7 @@ defmodule LemonAutomation.CronCommandRunner do
     end
   end
 
-  def submit(_job, _run, _opts), do: {:error, "command is required"}
+  def submit(_job, _run), do: {:error, "command is required"}
 
   defp validate_command(""), do: {:error, "command is required"}
   defp validate_command(_command), do: :ok

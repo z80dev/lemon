@@ -5,30 +5,18 @@ defmodule LemonGateway.Transports.Webhook.Config do
 
   alias LemonGateway.Transports.Webhook.Request
 
-  @default_port if(Code.ensure_loaded?(Mix) and Mix.env() == :test, do: 0, else: 4046)
+  @default_port 4046
 
   @spec enabled?() :: boolean()
   def enabled? do
-    if is_pid(Process.whereis(LemonGateway.Config)) do
-      LemonGateway.Config.get(:enable_webhook) == true
-    else
-      fallback = Application.get_env(:lemon_gateway, :enable_webhook, false)
-      (resolve_from_app_config(:enable_webhook) || fallback) == true
-    end
+    LemonGateway.Config.get_or_env(:enable_webhook, false) == true
   rescue
     _ -> false
   end
 
   @spec config() :: map()
   def config do
-    cfg =
-      if is_pid(Process.whereis(LemonGateway.Config)) do
-        LemonGateway.Config.get(:webhook) || %{}
-      else
-        resolve_from_app_config(:webhook) || Application.get_env(:lemon_gateway, :webhook, %{})
-      end
-
-    normalize_map(cfg)
+    LemonGateway.Config.get_or_env(:webhook, %{}) |> normalize_map()
   rescue
     _ -> %{}
   end
@@ -50,32 +38,13 @@ defmodule LemonGateway.Transports.Webhook.Config do
 
   @spec bind_ip(map()) :: :loopback | :any | tuple()
   def bind_ip(cfg) do
-    case Request.normalize_blank(Request.fetch(cfg, :bind)) do
-      nil -> :loopback
-      "127.0.0.1" -> :loopback
-      "localhost" -> :loopback
-      "0.0.0.0" -> :any
-      "any" -> :any
-      other -> parse_ip(other) || :loopback
-    end
+    cfg |> Request.fetch(:bind) |> LemonGateway.BindAddress.parse()
   end
 
   @spec port(map()) :: non_neg_integer()
   def port(cfg) do
     Request.int_value(Request.fetch(cfg, :port), @default_port)
   end
-
-  defp parse_ip(value) when is_binary(value) do
-    value
-    |> String.to_charlist()
-    |> :inet.parse_address()
-    |> case do
-      {:ok, ip} -> ip
-      _ -> nil
-    end
-  end
-
-  defp parse_ip(_), do: nil
 
   defp normalize_map(map) when is_map(map), do: map
 
@@ -84,14 +53,4 @@ defmodule LemonGateway.Transports.Webhook.Config do
   end
 
   defp normalize_map(_), do: %{}
-
-  defp resolve_from_app_config(key) do
-    cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
-
-    cond do
-      is_list(cfg) and Keyword.keyword?(cfg) -> Keyword.get(cfg, key)
-      is_map(cfg) -> Request.fetch(cfg, key)
-      true -> nil
-    end
-  end
 end

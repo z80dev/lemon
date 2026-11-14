@@ -79,9 +79,12 @@ defmodule LemonControlPlane.ACPTest do
   def pause_permission_resolution(_event, _measurements, _metadata, _config), do: :ok
 
   setup do
+    previous_token = System.get_env("LEMON_ACP_API_TOKEN")
+    System.delete_env("LEMON_ACP_API_TOKEN")
+
     keys =
       Enum.map(
-        [:acp_submitter, :acp_waiter, :acp_canceller, :acp_api_token],
+        [:acp_submitter, :acp_waiter, :acp_canceller],
         &{:lemon_control_plane, &1}
       ) ++ [{:lemon_core, :agent_runtime_provider}]
 
@@ -91,6 +94,10 @@ defmodule LemonControlPlane.ACPTest do
     clear_exec_approvals()
 
     on_exit(fn ->
+      if previous_token,
+        do: System.put_env("LEMON_ACP_API_TOKEN", previous_token),
+        else: System.delete_env("LEMON_ACP_API_TOKEN")
+
       for {{app, key}, value} <- previous do
         if is_nil(value) do
           Application.delete_env(app, key)
@@ -453,7 +460,7 @@ defmodule LemonControlPlane.ACPTest do
   end
 
   test "serves ACP JSON-RPC over HTTP with optional bearer auth" do
-    Application.put_env(:lemon_control_plane, :acp_api_token, "acp-secret")
+    System.put_env("LEMON_ACP_API_TOKEN", "acp-secret")
 
     missing =
       :post

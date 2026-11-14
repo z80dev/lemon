@@ -42,6 +42,10 @@ defmodule LemonHoncho do
   @spec config() :: Config.t()
   def config, do: Config.load()
 
+  @doc "The configured HTTP client module."
+  @spec client() :: module()
+  def client, do: Application.get_env(:lemon_honcho, :client, LemonHoncho.Client)
+
   @doc """
   Whether the integration has credentials (or a base URL) and is switched on.
 

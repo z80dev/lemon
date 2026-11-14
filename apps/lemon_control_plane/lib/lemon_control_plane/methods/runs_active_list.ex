@@ -5,6 +5,8 @@ defmodule LemonControlPlane.Methods.RunsActiveList do
   Lists all currently active runs through the `LemonRouter` facade.
   """
 
+  import LemonControlPlane.Methods.Params, only: [get_param: 2, blank?: 1, normalize_limit: 3]
+
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Protocol.Errors
@@ -122,32 +124,4 @@ defmodule LemonControlPlane.Methods.RunsActiveList do
 
   defp max_or_nil([]), do: nil
   defp max_or_nil(values), do: Enum.max(values)
-
-  defp blank?(nil), do: true
-  defp blank?(""), do: true
-  defp blank?(_), do: false
-
-  defp normalize_limit(limit, _default, max) when is_integer(limit) and limit > 0,
-    do: min(limit, max)
-
-  defp normalize_limit(limit, default, max) when is_binary(limit) do
-    case Integer.parse(limit) do
-      {parsed, _} when parsed > 0 -> min(parsed, max)
-      _ -> default
-    end
-  end
-
-  defp normalize_limit(_, default, _), do: default
-
-  defp get_param(params, key) when is_map(params) and is_binary(key) do
-    underscored = Macro.underscore(key)
-
-    cond do
-      Map.has_key?(params, key) -> Map.get(params, key)
-      Map.has_key?(params, underscored) -> Map.get(params, underscored)
-      true -> nil
-    end
-  end
-
-  defp get_param(_params, _key), do: nil
 end

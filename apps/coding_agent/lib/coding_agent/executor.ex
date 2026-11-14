@@ -144,12 +144,13 @@ defmodule CodingAgent.Executor do
     end
   end
 
-  defp normalize_resume(%ResumeToken{engine: @engine} = token), do: token
+  @doc false
+  def normalize_resume(%ResumeToken{engine: @engine} = token), do: token
 
-  defp normalize_resume(%{engine: @engine, value: value}) when is_binary(value),
+  def normalize_resume(%{engine: @engine, value: value}) when is_binary(value),
     do: ResumeToken.new(@engine, value)
 
-  defp normalize_resume(_), do: nil
+  def normalize_resume(_), do: nil
 
   defp get_resume_source(request) do
     meta = request.meta || %{}
@@ -174,9 +175,10 @@ defmodule CodingAgent.Executor do
     end
   end
 
-  defp get_opt(opts, key) when is_map(opts), do: Map.get(opts, key)
-  defp get_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key)
-  defp get_opt(_opts, _key), do: nil
+  @doc false
+  def get_opt(opts, key) when is_map(opts), do: Map.get(opts, key)
+  def get_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key)
+  def get_opt(_opts, _key), do: nil
 
   defp instrument_stream_options(run_id, opts) do
     case Application.get_env(:coding_agent, :executor_stream_options_hook) do

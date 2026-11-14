@@ -10,7 +10,7 @@ conflicts without returning source text, prompts, paths, URLs, or secrets.
 from the fresh review. It writes to `LemonMemory.Store` and
 `LemonSkills.Synthesis.DraftStore`; there is no separate learning database and
 the resulting skill remains a draft until the existing promotion flow reviews
-it. The service disables optional LLM audit for selected source content,
+it. The service uses deterministic audit checks for selected source content,
 atomically creates exact memory/draft destinations, and stores only hashed
 source provenance plus the exact source-memory ID and audited bundle digest in
 ordinary records removable through the existing store APIs.
@@ -406,7 +406,7 @@ Agent-authored skill writes use the same bundle audit path through `skill_manage
 1. The package computes a deterministic bundle hash across `SKILL.md` plus supported files under `references/`, `templates/`, `scripts/`, and `assets/`. Symlinked bundle entries are rejected so the audit payload cannot escape the skill root.
 2. `LemonSkills.Audit.BundleAudit` reuses cached results from `skills.audit.json` only when the bundle hash and audit fingerprint still match.
 3. `LemonSkills.Audit.Engine` runs deterministic checks for destructive commands, remote execution, exfiltration, traversal, and escape patterns across all auditable text files in the bundle. Backslash-escaped Markdown operators are treated as prose, while real unescaped download-to-interpreter pipelines remain hard blocks.
-4. If configured, `LemonSkills.Audit.LlmReviewer` reviews a bundle payload and classifies the skill as `pass`, `warn`, or `block`.
+4. If configured, `LemonSkills.Audit.BundleAudit` runs one `LemonSkills.Audit.LlmReviewer` pass over the bundle payload, classifying the skill as `pass`, `warn`, or `block`. Per-call `:llm` options override application configuration; direct `Engine` calls remain deterministic.
 5. The installer enforces the verdict:
    - `:pass` continues
    - `:warn` requires explicit approval before the install/update completes

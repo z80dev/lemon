@@ -22,7 +22,7 @@ defmodule LemonCore.Dedupe.EtsTest do
     {:ok, table: table_name}
   end
 
-  describe "init/2" do
+  describe "init/1" do
     test "creates a new ETS table", %{table: table} do
       assert :ok = Ets.init(table)
       assert :ets.info(table) != :undefined
@@ -38,18 +38,6 @@ defmodule LemonCore.Dedupe.EtsTest do
       assert :ok = Ets.init(table)
       info = :ets.info(table)
       assert info[:named_table] == true
-    end
-
-    test "accepts protection option", %{table: table} do
-      assert :ok = Ets.init(table, protection: :protected)
-      info = :ets.info(table)
-      assert info[:protection] == :protected
-    end
-
-    test "accepts type option", %{table: table} do
-      assert :ok = Ets.init(table, type: :ordered_set)
-      info = :ets.info(table)
-      assert info[:type] == :ordered_set
     end
 
     test "sets concurrency options by default", %{table: table} do

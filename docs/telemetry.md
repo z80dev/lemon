@@ -105,10 +105,8 @@ sequenceDiagram
 
 **The end-to-end run span is emitted from the gateway run process.**
 `[:lemon, :run, :start]`, `[:lemon, :run, :first_token]`, and `[:lemon, :run, :stop]` all
-fire from `LemonGateway.Run`, dispatched through `LemonGateway.DependencyManager.emit_telemetry/2`
-(an `apply/3` on `LemonCore.Telemetry`). Because that dispatch is dynamic, a literal-name grep
-for the helpers turns up no callers even though the span fires — this is why an earlier
-revision of this file wrongly listed them as dead. `[:lemon, :run, :stop]` carries
+fire directly from `LemonGateway.Run` through the matching `LemonCore.Telemetry`
+helpers. `[:lemon, :run, :stop]` carries
 `duration_ms` and an `ok` boolean, so whole-run latency and success/failure are both readable
 from telemetry alone. The introspection layer's `:run_started` / `:run_completed` records
 remain available as a persisted, queryable alternative.
@@ -219,8 +217,6 @@ ownership changes only on explicit release or confirmed owner death.
 | `[:lemon_agent, :context, :size]` | `char_count`, `message_count` | `has_system_prompt` | [`context.ex:113`](../apps/lemon_agent/lib/lemon_agent/context.ex), on every `estimate_size/2` call |
 | `[:lemon_agent, :context, :warning]` | `char_count`, `threshold` | `level` (`:warning` \| `:critical`) | [`context.ex:206`](../apps/lemon_agent/lib/lemon_agent/context.ex) (critical) and `:222` (warning) |
 | `[:lemon_agent, :context, :truncated]` | `dropped_count`, `remaining_count` | `strategy` | [`context.ex:287`](../apps/lemon_agent/lib/lemon_agent/context.ex) |
-| `[:lemon_agent, :subagent, :spawn]` | `system_time` | `pid`, `registry_key`, `has_registry_key` | [`subagent_supervisor.ex:99`](../apps/lemon_agent/lib/lemon_agent/subagent_supervisor.ex) |
-| `[:lemon_agent, :subagent, :end]` | `system_time` | `pid`, `reason: :stopped` | [`subagent_supervisor.ex:150`](../apps/lemon_agent/lib/lemon_agent/subagent_supervisor.ex). Only fires on explicit stop — a crashed subagent emits nothing |
 
 ### Providers — `[:lemon_ai, ...]`
 

@@ -11,12 +11,13 @@ defmodule LemonCore.Doctor do
 
       config :lemon_core, :doctor_checks, [MyApp.Doctor.Checks.Widgets]
 
-  A check module only has to export `run/1` returning a list of
-  `LemonCore.Doctor.Check` structs. Modules that cannot be loaded are skipped,
-  so a registration left behind by a removed dependency is not fatal.
+  A check module may export `run/1` returning a list of
+  `LemonCore.Doctor.Check` structs, `live_checks/1`, or both. Modules that cannot
+  be loaded are skipped, so a registration left behind by a removed dependency
+  is not fatal.
 
-  Modules may also export `live_checks/1`, returning `{name, zero_arity_fun}`
-  jobs. These run only with `live: true`, concurrently under a shared deadline.
+  `live_checks/1` returns `{name, zero_arity_fun}` jobs, which run only with
+  `live: true`, concurrently under a shared deadline.
   Jobs must return a Check and must never generate completions or send messages.
 
   ## Runtime scope
@@ -60,7 +61,10 @@ defmodule LemonCore.Doctor do
     :lemon_core
     |> Application.get_env(:doctor_checks, [])
     |> List.wrap()
-    |> Enum.filter(&(Code.ensure_loaded?(&1) and function_exported?(&1, :run, 1)))
+    |> Enum.filter(
+      &(Code.ensure_loaded?(&1) and
+          (function_exported?(&1, :run, 1) or function_exported?(&1, :live_checks, 1)))
+    )
   end
 
   @spec checks(keyword()) :: [Check.t()]
@@ -90,7 +94,9 @@ defmodule LemonCore.Doctor do
   end
 
   defp run_checks(module, opts) do
-    module.run(opts)
+    if Code.ensure_loaded?(module) and function_exported?(module, :run, 1),
+      do: module.run(opts),
+      else: []
   rescue
     _error ->
       [

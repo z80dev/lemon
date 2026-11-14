@@ -31,7 +31,6 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
 
   ## Optional callbacks
 
-  - `session_delete/1` — for channels that support clearing session overrides
   - `legacy_model_fallback/3` — for channels with pre-ModelPolicy data
   - `legacy_thinking_fallback/3` — for channels with pre-ModelPolicy thinking data
   - `chat_id_guard/1` — override the default guard type check
@@ -50,11 +49,9 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
   @callback session_put(session_key :: String.t(), model :: String.t()) :: :ok
   @callback format_source_labels() :: %{topic: String.t(), chat: String.t()}
 
-  @optional_callbacks session_delete: 1,
-                      legacy_model_fallback: 3,
+  @optional_callbacks legacy_model_fallback: 3,
                       legacy_thinking_fallback: 3,
                       clear_legacy_thinking: 1
-  @callback session_delete(session_key :: String.t()) :: :ok
   @callback legacy_model_fallback(
               account_id :: String.t(),
               chat_id :: term(),
@@ -250,10 +247,6 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
 
       def default_thinking_preference(_account_id, _chat_id, _thread_id), do: nil
 
-      # Arity-4 variant accepted by transport delegates (ignores _levels)
-      def default_thinking_preference(account_id, chat_id, thread_id, _levels),
-        do: default_thinking_preference(account_id, chat_id, thread_id)
-
       @spec put_default_thinking_preference(binary() | nil, term(), term(), term()) :: :ok
       def put_default_thinking_preference(account_id, chat_id, thread_id, level)
           when is_binary(level) do
@@ -286,10 +279,6 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
       end
 
       def put_default_thinking_preference(_account_id, _chat_id, _thread_id, _level), do: :ok
-
-      # Arity-5 variant accepted by transport delegates (ignores _levels)
-      def put_default_thinking_preference(account_id, chat_id, thread_id, level, _levels),
-        do: put_default_thinking_preference(account_id, chat_id, thread_id, level)
 
       @spec clear_default_thinking_preference(binary() | nil, term(), term()) :: boolean()
       def clear_default_thinking_preference(account_id, chat_id, thread_id)
@@ -324,10 +313,6 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
 
       def clear_default_thinking_preference(_account_id, _chat_id, _thread_id), do: false
 
-      # Arity-4 variant accepted by transport delegates (ignores _levels)
-      def clear_default_thinking_preference(account_id, chat_id, thread_id, _levels),
-        do: clear_default_thinking_preference(account_id, chat_id, thread_id)
-
       # ======================================================================
       # Route helpers
       # ======================================================================
@@ -348,18 +333,6 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
       defp has_thread?(thread_id) when is_integer(thread_id), do: true
       defp has_thread?(thread_id) when is_binary(thread_id) and thread_id != "", do: true
       defp has_thread?(_), do: false
-
-      defoverridable resolve_model_hint: 4,
-                     resolve_thinking_hint: 3,
-                     default_model_preference: 3,
-                     put_default_model_preference: 4,
-                     default_thinking_preference: 3,
-                     put_default_thinking_preference: 4,
-                     clear_default_thinking_preference: 3,
-                     format_thinking_line: 2,
-                     session_model_override: 1,
-                     put_session_model_override: 2,
-                     route_for: 3
     end
   end
 

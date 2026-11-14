@@ -94,26 +94,6 @@ defmodule CodingAgent.Tools.FileValidation do
   end
 
   @doc """
-  Checks that `path` exists and is writable.
-
-  Returns `:ok` if the file has write access, or `{:error, reason_atom}` matching
-  the contract expected by the Edit tool.
-  """
-  @spec check_write_access(String.t()) :: :ok | {:error, atom()}
-  def check_write_access(path) do
-    case File.stat(path) do
-      {:ok, %File.Stat{access: access}} when access in [:read_write, :write] ->
-        :ok
-
-      {:ok, %File.Stat{}} ->
-        {:error, :eacces}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  @doc """
   Validates a local filesystem target before a tool creates or overwrites it.
 
   Existing targets must be writable regular files. New targets are allowed only

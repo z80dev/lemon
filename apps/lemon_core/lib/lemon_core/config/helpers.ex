@@ -18,9 +18,6 @@ defmodule LemonCore.Config.Helpers do
 
       # Parse boolean
       debug = Helpers.get_env_bool("DEBUG", false)
-
-      # Get required var (raises if missing)
-      database_url = Helpers.require_env!("DATABASE_URL")
   """
 
   @doc """
@@ -158,25 +155,6 @@ defmodule LemonCore.Config.Helpers do
   end
 
   @doc """
-  Gets an environment variable as an atom.
-
-  The value is converted to a snake_case atom. Returns the default if not set.
-
-  ## Examples
-
-      iex> System.put_env("LOG_LEVEL", "debug")
-      iex> Helpers.get_env_atom("LOG_LEVEL", :info)
-      :debug
-  """
-  @spec get_env_atom(String.t(), atom()) :: atom()
-  def get_env_atom(key, default) do
-    case get_env(key) do
-      nil -> default
-      value -> String.to_atom(Macro.underscore(String.trim(value)))
-    end
-  end
-
-  @doc """
   Gets an environment variable as a list of strings.
 
   Values are split by the given delimiter (default: ",").
@@ -200,139 +178,6 @@ defmodule LemonCore.Config.Helpers do
         |> Enum.map(&String.trim/1)
         |> Enum.reject(&(&1 == ""))
     end
-  end
-
-  @doc """
-  Requires an environment variable to be set.
-
-  Raises an ArgumentError if the variable is not set or empty.
-
-  ## Examples
-
-      iex> System.put_env("REQUIRED", "value")
-      iex> Helpers.require_env!("REQUIRED")
-      "value"
-
-      iex> Helpers.require_env!("NONEXISTENT")
-      ** (ArgumentError) Missing required environment variable: NONEXISTENT
-  """
-  @spec require_env!(String.t()) :: String.t()
-  def require_env!(key) do
-    case get_env(key) do
-      nil ->
-        raise ArgumentError, "Missing required environment variable: #{key}"
-
-      value ->
-        value
-    end
-  end
-
-  @doc """
-  Requires an environment variable to be set with a custom error message.
-
-  ## Examples
-
-      iex> System.put_env("API_KEY", "secret")
-      iex> Helpers.require_env!("API_KEY", "Please set API_KEY in your environment")
-      "secret"
-  """
-  @spec require_env!(String.t(), String.t()) :: String.t()
-  def require_env!(key, hint) do
-    case get_env(key) do
-      nil ->
-        raise ArgumentError, "Missing required environment variable: #{key}. #{hint}"
-
-      value ->
-        value
-    end
-  end
-
-  @doc """
-  Conditionally gets an environment variable based on a feature flag.
-
-  If the feature flag is enabled, returns the value (or default if not set).
-  If disabled, returns nil.
-
-  ## Examples
-
-      iex> System.put_env("FEATURE_X", "true")
-      iex> System.put_env("FEATURE_X_API_KEY", "secret")
-      iex> Helpers.get_feature_env("FEATURE_X", "FEATURE_X_API_KEY")
-      "secret"
-
-      iex> Helpers.get_feature_env("DISABLED_FEATURE", "SOME_KEY")
-      nil
-  """
-  @spec get_feature_env(String.t(), String.t(), String.t() | nil) :: String.t() | nil
-  def get_feature_env(feature_flag, key, default \\ nil) do
-    if get_env_bool(feature_flag, false) do
-      get_env(key, default)
-    else
-      nil
-    end
-  end
-
-  @doc """
-  Parses a duration string into milliseconds.
-
-  Supports: ms, s, m, h, d (milliseconds, seconds, minutes, hours, days)
-  Returns the default if parsing fails.
-
-  ## Examples
-
-      iex> Helpers.parse_duration("30s", 0)
-      30000
-
-      iex> Helpers.parse_duration("5m", 0)
-      300000
-
-      iex> Helpers.parse_duration("invalid", 1000)
-      1000
-  """
-  @spec parse_duration(String.t() | nil, integer()) :: integer()
-  def parse_duration(nil, default), do: default
-
-  def parse_duration(value, default) when is_binary(value) do
-    value = String.trim(value)
-
-    case Regex.run(~r/^(\d+)\s*([a-z]*)$/i, value) do
-      [_, num_str, unit] ->
-        case Integer.parse(num_str) do
-          {num, ""} ->
-            multiplier =
-              case String.downcase(unit) do
-                "ms" -> 1
-                "s" -> 1000
-                "m" -> 60_000
-                "h" -> 3_600_000
-                "d" -> 86_400_000
-                "" -> 1
-                _ -> nil
-              end
-
-            if multiplier, do: num * multiplier, else: default
-
-          _ ->
-            default
-        end
-
-      _ ->
-        default
-    end
-  end
-
-  @doc """
-  Gets an environment variable as a duration in milliseconds.
-
-  ## Examples
-
-      iex> System.put_env("TIMEOUT", "30s")
-      iex> Helpers.get_env_duration("TIMEOUT", 5000)
-      30000
-  """
-  @spec get_env_duration(String.t(), integer()) :: integer()
-  def get_env_duration(key, default) do
-    get_env(key) |> parse_duration(default)
   end
 
   @doc """

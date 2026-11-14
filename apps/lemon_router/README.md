@@ -52,10 +52,13 @@ Channel transport or gateway-native ingress
 | `LemonRouter.ToolStatusCoalescer` | Semantic tool-status coalescing that emits `DeliveryIntent` snapshots/finalization; chat surfaces hide reasoning-only actions and fixed engine provenance while operator surfaces retain structured reasoning |
 | `LemonRouter.PendingCompaction` | Shared pending-compaction preparation, injection-safe JSONL history envelopes, whole-entry truncation, and post-submit marker consumption |
 | `LemonRouter.PendingCompactionStore` | Router-owned typed wrapper for pending-compaction markers |
-| `LemonRouter.AgentEndpointStore` | Router-owned typed wrapper for persistent endpoint aliases |
-| `LemonRouter.AgentInbox` | BEAM-local send API with selectors, fanout, and queue-mode selection |
 | `LemonRouter.AgentDirectory` | Active/durable session discovery |
-| `LemonRouter.AgentEndpoints` | Persistent route aliases |
+
+Agent profile configuration uses `:agent_profiles_cwd` from the `:lemon_router`
+application environment, then the declared `LEMON_AGENT_PROFILES_CWD` environment
+variable, falling back to the process working directory. Health extensions accept
+a list of `{name, zero_arity_function}` checks. Delivery metadata must specify a
+supported peer kind (`dm`, `group`, or `channel`); unknown kinds are not DM routes.
 
 `SurfaceManager.finalize_answer/3` dispatches `:stream_finalize` first for runs that already
 streamed answer deltas, then finalizes `StreamCoalescer` state so late flushes cannot overwrite

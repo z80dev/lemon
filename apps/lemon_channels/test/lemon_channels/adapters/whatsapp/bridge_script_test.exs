@@ -8,12 +8,18 @@ defmodule LemonChannels.Adapters.WhatsApp.BridgeScriptTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonChannels.Adapters.WhatsApp.{Bridge, PortServer}
+  alias LemonChannels.Adapters.WhatsApp.Bridge
+  alias LemonChannels.PortBridge
 
   @moduletag :tmp_dir
   @moduletag :node
   @boot_timeout 30_000
   @jid "15551234567@s.whatsapp.net"
+  @bridge_spec %{
+    label: "whatsapp",
+    event_tag: :whatsapp_bridge_event,
+    script_filename: "whatsapp_bridge.mjs"
+  }
 
   # `sendMessage` throws when the text, caption or reaction asks for it, like a
   # socket that closes while the message is in flight.
@@ -55,7 +61,9 @@ defmodule LemonChannels.Adapters.WhatsApp.BridgeScriptTest do
     File.write!(Path.join(baileys, "index.js"), @fake_baileys)
 
     {:ok, port_server} =
-      PortServer.start_link(config: %{bridge_script: script}, notify_pid: self())
+      PortBridge.start_link(
+        {@bridge_spec, [config: %{bridge_script: script}, notify_pid: self()]}
+      )
 
     on_exit(fn -> if Process.alive?(port_server), do: GenServer.stop(port_server) end)
 

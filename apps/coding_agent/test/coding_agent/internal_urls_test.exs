@@ -51,52 +51,6 @@ defmodule CodingAgent.InternalUrlsTest do
   # parse/1
   # ============================================================================
 
-  describe "parse/1" do
-    test "parses notes:// URL with simple filename" do
-      assert {:ok, %{scheme: "notes", path: "plan.md"}} =
-               InternalUrls.parse("notes://plan.md")
-    end
-
-    test "parses notes:// URL with nested path" do
-      assert {:ok, %{scheme: "notes", path: "subdir/artifact.md"}} =
-               InternalUrls.parse("notes://subdir/artifact.md")
-    end
-
-    test "normalizes leading slashes in path" do
-      assert {:ok, %{scheme: "notes", path: "plan.md"}} =
-               InternalUrls.parse("notes:///plan.md")
-    end
-
-    test "normalizes trailing slashes in path" do
-      assert {:ok, %{scheme: "notes", path: "subdir/artifact.md"}} =
-               InternalUrls.parse("notes://subdir/artifact.md/")
-    end
-
-    test "returns error for notes:// with empty path" do
-      assert {:error, :empty_path} = InternalUrls.parse("notes://")
-    end
-
-    test "returns error for notes:// with only slashes" do
-      assert {:error, :empty_path} = InternalUrls.parse("notes:///")
-    end
-
-    test "returns error for http:// URL" do
-      assert {:error, :unknown_protocol} = InternalUrls.parse("http://example.com")
-    end
-
-    test "returns error for plain string" do
-      assert {:error, :unknown_protocol} = InternalUrls.parse("no-scheme-here")
-    end
-
-    test "returns error for empty string" do
-      assert {:error, :unknown_protocol} = InternalUrls.parse("")
-    end
-
-    test "returns error for nil" do
-      assert {:error, :unknown_protocol} = InternalUrls.parse(nil)
-    end
-  end
-
   # ============================================================================
   # resolve/2
   # ============================================================================

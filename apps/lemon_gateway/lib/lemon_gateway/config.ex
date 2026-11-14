@@ -48,6 +48,25 @@ defmodule LemonGateway.Config do
   @spec get(atom()) :: term()
   def get(key), do: GenServer.call(__MODULE__, {:get, key})
 
+  @doc "Reads runtime config, falling back to application environment before startup."
+  @spec get_or_env(atom(), term()) :: term()
+  def get_or_env(key, default \\ nil) do
+    if is_pid(Process.whereis(__MODULE__)) do
+      case get(key) do
+        nil -> default
+        value -> value
+      end
+    else
+      fallback = Application.get_env(:lemon_gateway, key, default)
+
+      case replacement_config() do
+        cfg when is_map(cfg) -> LemonCore.GatewayConfig.fetch(cfg, key, fallback)
+        cfg when is_list(cfg) -> Keyword.get(cfg, key, fallback)
+        _ -> fallback
+      end
+    end
+  end
+
   @doc """
   Returns all configured projects as a map of project_id => Project struct.
   """

@@ -416,7 +416,7 @@ defmodule CodingAgent.SessionBranchTest do
       # Add orphan to entries
       sm = %{
         sm
-        | entries: SessionManager.entries(sm) ++ [orphan],
+        | entries_rev: [orphan | sm.entries_rev],
           by_id: Map.put(sm.by_id, orphan.id, orphan)
       }
 
@@ -479,7 +479,7 @@ defmodule CodingAgent.SessionBranchTest do
 
       sm = %{
         sm
-        | entries: [entry1, entry2, entry3],
+        | entries_rev: [entry3, entry2, entry1],
           by_id: %{"entry1" => entry1, "entry2" => entry2, "entry3" => entry3},
           leaf_id: "entry3"
       }
@@ -691,7 +691,7 @@ defmodule CodingAgent.SessionBranchTest do
       end
 
       # Session should still be healthy
-      health = Session.health_check(session)
+      health = Session.diagnostics(session)
       assert health.status == :healthy
       assert_messages_match_branch(session)
     end
@@ -860,7 +860,7 @@ defmodule CodingAgent.SessionBranchTest do
       :erlang.garbage_collect(session)
 
       # Session should still be healthy
-      health = Session.health_check(session)
+      health = Session.diagnostics(session)
       assert health.status == :healthy
     end
   end
@@ -954,7 +954,10 @@ defmodule CodingAgent.SessionBranchTest do
 
       sm = %{
         sm
-        | entries: List.replace_at(SessionManager.entries(sm), 2, corrupted_entry),
+        | entries_rev:
+            Enum.map(sm.entries_rev, fn entry ->
+              if entry.id == corrupted_entry.id, do: corrupted_entry, else: entry
+            end),
           by_id: Map.put(sm.by_id, corrupted_entry.id, corrupted_entry)
       }
 
@@ -1251,7 +1254,7 @@ defmodule CodingAgent.SessionBranchTest do
       end
 
       # Should still be healthy
-      health = Session.health_check(session)
+      health = Session.diagnostics(session)
       assert health.status == :healthy
 
       assert_messages_match_branch(session)

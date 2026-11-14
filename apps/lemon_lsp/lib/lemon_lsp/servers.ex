@@ -16,8 +16,7 @@ defmodule LemonLsp.Servers do
       extensions: [".ex", ".exs", ".heex"],
       language_ids: %{".ex" => "elixir", ".exs" => "elixir", ".heex" => "phoenix-heex"},
       root_markers: ["mix.exs"],
-      install_hint: "Install ElixirLS and put elixir-ls or launch.sh on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install ElixirLS and put elixir-ls or launch.sh on PATH."
     },
     %{
       id: :typescript_language_server,
@@ -37,8 +36,7 @@ defmodule LemonLsp.Servers do
         ".cjs" => "javascript"
       },
       root_markers: ["tsconfig.json", "package.json"],
-      install_hint: "Install with npm install -g typescript typescript-language-server.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g typescript typescript-language-server."
     },
     %{
       id: :pyright,
@@ -51,8 +49,7 @@ defmodule LemonLsp.Servers do
       extensions: [".py"],
       language_ids: %{".py" => "python"},
       root_markers: ["pyproject.toml", "setup.py", "requirements.txt"],
-      install_hint: "Install with npm install -g pyright.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g pyright."
     },
     %{
       id: :rust_analyzer,
@@ -65,8 +62,7 @@ defmodule LemonLsp.Servers do
       extensions: [".rs"],
       language_ids: %{".rs" => "rust"},
       root_markers: ["Cargo.toml"],
-      install_hint: "Install rust-analyzer and put it on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install rust-analyzer and put it on PATH."
     },
     %{
       id: :gopls,
@@ -79,8 +75,7 @@ defmodule LemonLsp.Servers do
       extensions: [".go"],
       language_ids: %{".go" => "go"},
       root_markers: ["go.mod"],
-      install_hint: "Install with go install golang.org/x/tools/gopls@latest.",
-      protocol: :lsp_stdio
+      install_hint: "Install with go install golang.org/x/tools/gopls@latest."
     },
     %{
       id: :clangd,
@@ -102,8 +97,7 @@ defmodule LemonLsp.Servers do
         ".hxx" => "cpp"
       },
       root_markers: ["compile_commands.json", "compile_flags.txt"],
-      install_hint: "Install clangd and put it on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install clangd and put it on PATH."
     },
     %{
       id: :tlaplus,
@@ -116,8 +110,7 @@ defmodule LemonLsp.Servers do
       extensions: [".tla", ".tlaplus"],
       language_ids: %{".tla" => "tla", ".tlaplus" => "tla"},
       root_markers: [],
-      install_hint: "Install TLAPM and put tlapm_lsp on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install TLAPM and put tlapm_lsp on PATH."
     },
     %{
       id: :zls,
@@ -130,8 +123,7 @@ defmodule LemonLsp.Servers do
       extensions: [".zig"],
       language_ids: %{".zig" => "zig"},
       root_markers: ["build.zig", "build.zig.zon", "zls.json"],
-      install_hint: "Install ZLS and put zls on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install ZLS and put zls on PATH."
     },
     %{
       id: :vscode_html_language_server,
@@ -144,8 +136,7 @@ defmodule LemonLsp.Servers do
       extensions: [".html", ".htm"],
       language_ids: %{".html" => "html", ".htm" => "html"},
       root_markers: ["package.json", ".git"],
-      install_hint: "Install with npm install -g vscode-langservers-extracted.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g vscode-langservers-extracted."
     },
     %{
       id: :vscode_css_language_server,
@@ -158,8 +149,7 @@ defmodule LemonLsp.Servers do
       extensions: [".css", ".scss", ".sass", ".less"],
       language_ids: %{".css" => "css", ".scss" => "scss", ".sass" => "sass", ".less" => "less"},
       root_markers: ["package.json", ".git"],
-      install_hint: "Install with npm install -g vscode-langservers-extracted.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g vscode-langservers-extracted."
     },
     %{
       id: :vscode_json_language_server,
@@ -172,8 +162,7 @@ defmodule LemonLsp.Servers do
       extensions: [".json", ".jsonc"],
       language_ids: %{".json" => "json", ".jsonc" => "jsonc"},
       root_markers: ["package.json", ".git"],
-      install_hint: "Install with npm install -g vscode-langservers-extracted.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g vscode-langservers-extracted."
     },
     %{
       id: :svelte,
@@ -186,8 +175,7 @@ defmodule LemonLsp.Servers do
       extensions: [".svelte"],
       language_ids: %{".svelte" => "svelte"},
       root_markers: ["svelte.config.js", "svelte.config.mjs", "package.json"],
-      install_hint: "Install with npm install -g svelte-language-server.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g svelte-language-server."
     },
     %{
       id: :vue_language_server,
@@ -200,8 +188,7 @@ defmodule LemonLsp.Servers do
       extensions: [".vue"],
       language_ids: %{".vue" => "vue"},
       root_markers: ["vue.config.js", "nuxt.config.js", "nuxt.config.ts", "package.json"],
-      install_hint: "Install with npm install -g @vue/language-server.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g @vue/language-server."
     },
     %{
       id: :astro,
@@ -214,8 +201,7 @@ defmodule LemonLsp.Servers do
       extensions: [".astro"],
       language_ids: %{".astro" => "astro"},
       root_markers: ["astro.config.mjs", "astro.config.js", "astro.config.ts"],
-      install_hint: "Install with npm install -g @astrojs/language-server.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g @astrojs/language-server."
     },
     %{
       id: :jdtls,
@@ -228,8 +214,7 @@ defmodule LemonLsp.Servers do
       extensions: [".java"],
       language_ids: %{".java" => "java"},
       root_markers: ["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", ".project"],
-      install_hint: "Install Eclipse JDT LS and put jdtls on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install Eclipse JDT LS and put jdtls on PATH."
     },
     %{
       id: :kotlin_lsp,
@@ -248,8 +233,7 @@ defmodule LemonLsp.Servers do
         "settings.gradle",
         "settings.gradle.kts"
       ],
-      install_hint: "Install JetBrains kotlin-lsp and put kotlin-lsp on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install JetBrains kotlin-lsp and put kotlin-lsp on PATH."
     },
     %{
       id: :metals,
@@ -262,8 +246,7 @@ defmodule LemonLsp.Servers do
       extensions: [".scala", ".sbt", ".sc"],
       language_ids: %{".scala" => "scala", ".sbt" => "scala", ".sc" => "scala"},
       root_markers: ["build.sbt", "build.sc", "build.gradle", "pom.xml"],
-      install_hint: "Install Metals with Coursier: cs install metals.",
-      protocol: :lsp_stdio
+      install_hint: "Install Metals with Coursier: cs install metals."
     },
     %{
       id: :hls,
@@ -276,8 +259,7 @@ defmodule LemonLsp.Servers do
       extensions: [".hs", ".lhs"],
       language_ids: %{".hs" => "haskell", ".lhs" => "literate haskell"},
       root_markers: ["stack.yaml", "cabal.project", "hie.yaml", "package.yaml"],
-      install_hint: "Install Haskell Language Server with ghcup install hls.",
-      protocol: :lsp_stdio
+      install_hint: "Install Haskell Language Server with ghcup install hls."
     },
     %{
       id: :ocamllsp,
@@ -295,8 +277,7 @@ defmodule LemonLsp.Servers do
         ".mly" => "menhir"
       },
       root_markers: ["dune-project", "dune-workspace", ".ocamlformat"],
-      install_hint: "Install with opam install ocaml-lsp-server.",
-      protocol: :lsp_stdio
+      install_hint: "Install with opam install ocaml-lsp-server."
     },
     %{
       id: :erlangls,
@@ -309,8 +290,7 @@ defmodule LemonLsp.Servers do
       extensions: [".erl", ".hrl"],
       language_ids: %{".erl" => "erlang", ".hrl" => "erlang"},
       root_markers: ["rebar.config", "erlang.mk", "rebar.lock"],
-      install_hint: "Install Erlang LS and put erlang_ls on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install Erlang LS and put erlang_ls on PATH."
     },
     %{
       id: :gleam,
@@ -323,8 +303,7 @@ defmodule LemonLsp.Servers do
       extensions: [".gleam"],
       language_ids: %{".gleam" => "gleam"},
       root_markers: ["gleam.toml"],
-      install_hint: "Install Gleam and put gleam on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install Gleam and put gleam on PATH."
     },
     %{
       id: :ruby_lsp,
@@ -337,8 +316,7 @@ defmodule LemonLsp.Servers do
       extensions: [".rb", ".rake", ".gemspec", ".erb"],
       language_ids: %{".rb" => "ruby", ".rake" => "ruby", ".gemspec" => "ruby", ".erb" => "erb"},
       root_markers: ["Gemfile", ".ruby-version", ".ruby-gemset"],
-      install_hint: "Install with gem install ruby-lsp.",
-      protocol: :lsp_stdio
+      install_hint: "Install with gem install ruby-lsp."
     },
     %{
       id: :bashls,
@@ -351,8 +329,7 @@ defmodule LemonLsp.Servers do
       extensions: [".sh", ".bash", ".zsh"],
       language_ids: %{".sh" => "shellscript", ".bash" => "shellscript", ".zsh" => "shellscript"},
       root_markers: [".git"],
-      install_hint: "Install with npm install -g bash-language-server.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g bash-language-server."
     },
     %{
       id: :lua_language_server,
@@ -365,8 +342,7 @@ defmodule LemonLsp.Servers do
       extensions: [".lua"],
       language_ids: %{".lua" => "lua"},
       root_markers: [".luarc.json", ".luarc.jsonc", ".luacheckrc", ".stylua.toml", "stylua.toml"],
-      install_hint: "Install lua-language-server and put it on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install lua-language-server and put it on PATH."
     },
     %{
       id: :intelephense,
@@ -379,8 +355,7 @@ defmodule LemonLsp.Servers do
       extensions: [".php", ".phtml"],
       language_ids: %{".php" => "php", ".phtml" => "php"},
       root_markers: ["composer.json", "composer.lock", ".git"],
-      install_hint: "Install with npm install -g intelephense.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g intelephense."
     },
     %{
       id: :yamlls,
@@ -393,8 +368,7 @@ defmodule LemonLsp.Servers do
       extensions: [".yaml", ".yml"],
       language_ids: %{".yaml" => "yaml", ".yml" => "yaml"},
       root_markers: [".git"],
-      install_hint: "Install with npm install -g yaml-language-server.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g yaml-language-server."
     },
     %{
       id: :terraformls,
@@ -407,8 +381,7 @@ defmodule LemonLsp.Servers do
       extensions: [".tf", ".tfvars"],
       language_ids: %{".tf" => "terraform", ".tfvars" => "terraform-vars"},
       root_markers: [".terraform", "terraform.tfstate"],
-      install_hint: "Install HashiCorp terraform-ls and put it on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install HashiCorp terraform-ls and put it on PATH."
     },
     %{
       id: :dockerls,
@@ -421,8 +394,7 @@ defmodule LemonLsp.Servers do
       extensions: [".dockerfile"],
       language_ids: %{".dockerfile" => "dockerfile"},
       root_markers: ["Dockerfile", "docker-compose.yml", "docker-compose.yaml", ".dockerignore"],
-      install_hint: "Install with npm install -g dockerfile-language-server-nodejs.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g dockerfile-language-server-nodejs."
     },
     %{
       id: :nixd,
@@ -435,8 +407,7 @@ defmodule LemonLsp.Servers do
       extensions: [".nix"],
       language_ids: %{".nix" => "nix"},
       root_markers: ["flake.nix", "default.nix", "shell.nix"],
-      install_hint: "Install with nix profile install nixpkgs#nixd.",
-      protocol: :lsp_stdio
+      install_hint: "Install with nix profile install nixpkgs#nixd."
     },
     %{
       id: :ols,
@@ -449,8 +420,7 @@ defmodule LemonLsp.Servers do
       extensions: [".odin"],
       language_ids: %{".odin" => "odin"},
       root_markers: ["ols.json", ".git"],
-      install_hint: "Install OLS and put ols on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install OLS and put ols on PATH."
     },
     %{
       id: :dartls,
@@ -463,8 +433,7 @@ defmodule LemonLsp.Servers do
       extensions: [".dart"],
       language_ids: %{".dart" => "dart"},
       root_markers: ["pubspec.yaml", "pubspec.lock"],
-      install_hint: "Install the Dart SDK and put dart on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install the Dart SDK and put dart on PATH."
     },
     %{
       id: :marksman,
@@ -477,8 +446,7 @@ defmodule LemonLsp.Servers do
       extensions: [".md", ".markdown"],
       language_ids: %{".md" => "markdown", ".markdown" => "markdown"},
       root_markers: [".marksman.toml", ".git"],
-      install_hint: "Install Marksman and put marksman on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install Marksman and put marksman on PATH."
     },
     %{
       id: :texlab,
@@ -491,8 +459,7 @@ defmodule LemonLsp.Servers do
       extensions: [".tex", ".bib", ".sty", ".cls"],
       language_ids: %{".tex" => "latex", ".bib" => "bibtex", ".sty" => "latex", ".cls" => "latex"},
       root_markers: [".latexmkrc", "latexmkrc", ".texlabroot", "texlabroot", "Tectonic.toml"],
-      install_hint: "Install Texlab and put texlab on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install Texlab and put texlab on PATH."
     },
     %{
       id: :graphql,
@@ -511,8 +478,7 @@ defmodule LemonLsp.Servers do
         ".graphqlrc.yaml",
         "graphql.config.js"
       ],
-      install_hint: "Install with npm install -g graphql-language-service-cli.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g graphql-language-service-cli."
     },
     %{
       id: :prismals,
@@ -525,8 +491,7 @@ defmodule LemonLsp.Servers do
       extensions: [".prisma"],
       language_ids: %{".prisma" => "prisma"},
       root_markers: ["schema.prisma", "prisma/schema.prisma"],
-      install_hint: "Install with npm install -g @prisma/language-server.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g @prisma/language-server."
     },
     %{
       id: :vimls,
@@ -539,8 +504,7 @@ defmodule LemonLsp.Servers do
       extensions: [".vim", ".vimrc"],
       language_ids: %{".vim" => "vim", ".vimrc" => "vim"},
       root_markers: [".git"],
-      install_hint: "Install with npm install -g vim-language-server.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g vim-language-server."
     },
     %{
       id: :sourcekit_lsp,
@@ -553,8 +517,7 @@ defmodule LemonLsp.Servers do
       extensions: [".swift"],
       language_ids: %{".swift" => "swift"},
       root_markers: ["Package.swift", "project.yml", ".swiftpm"],
-      install_hint: "Install the Swift toolchain and put sourcekit-lsp on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install the Swift toolchain and put sourcekit-lsp on PATH."
     },
     %{
       id: :csharp_ls,
@@ -567,8 +530,7 @@ defmodule LemonLsp.Servers do
       extensions: [".cs", ".csx"],
       language_ids: %{".cs" => "csharp", ".csx" => "csharp"},
       root_markers: [".git"],
-      install_hint: "Install with dotnet tool install --global csharp-ls.",
-      protocol: :lsp_stdio
+      install_hint: "Install with dotnet tool install --global csharp-ls."
     },
     %{
       id: :taplo,
@@ -581,8 +543,7 @@ defmodule LemonLsp.Servers do
       extensions: [".toml"],
       language_ids: %{".toml" => "toml"},
       root_markers: ["taplo.toml", ".taplo.toml", ".git"],
-      install_hint: "Install with cargo install taplo-cli --locked --features lsp.",
-      protocol: :lsp_stdio
+      install_hint: "Install with cargo install taplo-cli --locked --features lsp."
     },
     %{
       id: :elm,
@@ -595,8 +556,7 @@ defmodule LemonLsp.Servers do
       extensions: [".elm"],
       language_ids: %{".elm" => "elm"},
       root_markers: ["elm.json"],
-      install_hint: "Install with npm install -g @elm-tooling/elm-language-server.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g @elm-tooling/elm-language-server."
     },
     %{
       id: :clojure_lsp,
@@ -614,8 +574,7 @@ defmodule LemonLsp.Servers do
         ".edn" => "clojure"
       },
       root_markers: ["deps.edn", "project.clj", "bb.edn"],
-      install_hint: "Install clojure-lsp and put it on PATH.",
-      protocol: :lsp_stdio
+      install_hint: "Install clojure-lsp and put it on PATH."
     },
     %{
       id: :solidity,
@@ -628,8 +587,7 @@ defmodule LemonLsp.Servers do
       extensions: [".sol"],
       language_ids: %{".sol" => "solidity"},
       root_markers: ["foundry.toml", "hardhat.config.js", "hardhat.config.ts"],
-      install_hint: "Install with npm install -g @nomicfoundation/solidity-language-server.",
-      protocol: :lsp_stdio
+      install_hint: "Install with npm install -g @nomicfoundation/solidity-language-server."
     }
   ]
 
@@ -693,8 +651,8 @@ defmodule LemonLsp.Servers do
       count: length(servers),
       available_count: Enum.count(servers, & &1.available),
       missing_count: Enum.count(servers, &(not &1.available)),
-      protocol: :lsp_stdio,
       mode: :registry_only,
+      protocol: :lsp_stdio,
       cleanup: %{
         includes_executable_paths: false,
         includes_workspace_roots: false,
@@ -747,7 +705,7 @@ defmodule LemonLsp.Servers do
       language_ids: server.language_ids,
       root_markers: server.root_markers,
       install_hint: server.install_hint,
-      protocol: server.protocol,
+      protocol: :lsp_stdio,
       supervised: true,
       running: false,
       status: if(available?, do: :available, else: :missing)
@@ -787,8 +745,7 @@ defmodule LemonLsp.Servers do
       extensions: [],
       language_ids: %{},
       root_markers: [],
-      install_hint: "Configure runtime.tools.lsp.servers.#{id}.command.",
-      protocol: :lsp_stdio
+      install_hint: "Configure runtime.tools.lsp.servers.#{id}.command."
     }
   end
 

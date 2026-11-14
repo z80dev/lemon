@@ -54,7 +54,7 @@ provenance, not an engine selector. Historical vendor resume tokens remain
 readable but cannot select or resume top-level execution.
 
 `task` and `@name` personas spawn native in-process child sessions through
-`CodingAgent.Coordinator`. `agent` delegates through router and can name a live
+the task lifecycle. `agent` delegates through router and can name a live
 execution node. Omitted node or `"local"` stays local. A named node runs the same
 native executor on its destination through an authenticated control-plane socket.
 

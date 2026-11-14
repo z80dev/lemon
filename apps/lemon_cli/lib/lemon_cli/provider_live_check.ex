@@ -134,90 +134,82 @@ defmodule LemonCli.ProviderLiveCheck do
 
   defp models_url(base_url), do: String.trim_trailing(base_url, "/") <> "/models"
 
-  @doc "Setup recovery text shared with doctor; arbitrary provider errors are never interpolated."
-  @spec failure_message(term()) :: String.t()
-  def failure_message({:unauthorized, :openai_codex}) do
-    "Your ChatGPT login was rejected. Run `lemon setup model` to sign in again."
+  @doc "Recovery text for setup or doctor; arbitrary provider errors are never interpolated."
+  @spec failure_message(term(), :setup | :doctor) :: String.t()
+  def failure_message(reason, scope \\ :setup) do
+    case reason do
+      {:unauthorized, :openai_codex} ->
+        "Your ChatGPT login was rejected. Run `lemon setup model` to sign in again."
+
+      {:model_unavailable, ids} ->
+        "Your ChatGPT account doesn't offer the configured model. Available: #{available(ids)}. " <>
+          "Run `lemon setup model` to pick one."
+
+      {:unauthorized, _} ->
+        recovery_message(:unauthorized, scope)
+
+      :timeout ->
+        "The provider's models endpoint timed out. Check your network and retry."
+
+      _ ->
+        recovery_message(reason, scope)
+    end
   end
 
-  def failure_message(:unauthorized) do
-    "The provider rejected the credential (HTTP 401/403). Re-run `lemon setup provider` " <>
-      "to store a valid credential, or use --skip-verify to defer this check."
+  defp recovery_message(:unauthorized, scope) do
+    if scope == :doctor do
+      "The provider rejected the credential (HTTP 401/403). Re-run `lemon setup provider`."
+    else
+      "The provider rejected the credential (HTTP 401/403). Re-run `lemon setup provider` " <>
+        "to store a valid credential, or use --skip-verify to defer this check."
+    end
   end
 
-  def failure_message({:unauthorized, _}) do
-    "The provider rejected the credential (HTTP 401/403). Re-run `lemon setup provider` " <>
-      "to store a valid credential, or use --skip-verify to defer this check."
+  defp recovery_message({:check_failed, reason}, scope) do
+    if scope == :doctor do
+      "Provider check failed (#{format_reason(reason)}). Re-run `lemon setup provider`."
+    else
+      "Provider verification failed: check failed (#{format_reason(reason)}). " <>
+        "Re-run `lemon setup provider` to fix the configuration, or use --skip-verify to defer."
+    end
   end
 
-  def failure_message({:model_unavailable, ids}) do
-    "Your ChatGPT account doesn't offer the configured model. Available: #{available(ids)}. " <>
-      "Run `lemon setup model` to pick one."
-  end
-
-  def failure_message({:check_failed, reason}) do
-    "Provider verification failed: check failed (#{format_reason(reason)}). " <>
-      "Re-run `lemon setup provider` to fix the configuration, or use --skip-verify to defer."
-  end
-
-  def failure_message(:credential_not_usable) do
-    "Provider verification failed: the provider credential is not usable. " <>
-      "Re-run `lemon setup provider` to fix the configuration, or use --skip-verify to defer."
-  end
-
-  def failure_message(:unreachable) do
-    "Could not reach the provider's models endpoint. Check your network and retry, " <>
-      "or re-run with --skip-verify when offline."
-  end
-
-  def failure_message(:timeout),
-    do: "The provider's models endpoint timed out. Check your network and retry."
-
-  def failure_message({:http_status, status}) do
-    "The provider's models endpoint returned HTTP #{status}. Check the provider status " <>
-      "and your credential, or re-run with --skip-verify to defer this check."
-  end
-
-  def failure_message(reason) do
-    "Provider verification failed: #{format_reason(reason)}. " <>
-      "Re-run `lemon setup provider` to fix the configuration, or use --skip-verify to defer."
-  end
-
-  @doc "Doctor recovery text for the same failure kinds as setup."
-  @spec doctor_failure_message(term()) :: String.t()
-  def doctor_failure_message({:unauthorized, :openai_codex}),
-    do: "Your ChatGPT login was rejected. Run `lemon setup model` to sign in again."
-
-  def doctor_failure_message(:unauthorized),
-    do: "The provider rejected the credential (HTTP 401/403). Re-run `lemon setup provider`."
-
-  def doctor_failure_message({:unauthorized, _}),
-    do: "The provider rejected the credential (HTTP 401/403). Re-run `lemon setup provider`."
-
-  def doctor_failure_message({:model_unavailable, ids}),
-    do:
-      "Your ChatGPT account doesn't offer the configured model. Available: #{available(ids)}. " <>
-        "Run `lemon setup model` to pick one."
-
-  def doctor_failure_message({:check_failed, reason}),
-    do: "Provider check failed (#{format_reason(reason)}). Re-run `lemon setup provider`."
-
-  def doctor_failure_message(:credential_not_usable),
-    do:
+  defp recovery_message(:credential_not_usable, scope) do
+    if scope == :doctor do
       "Provider verification failed: the provider credential is not usable. " <>
         "Re-run `lemon setup provider`."
+    else
+      "Provider verification failed: the provider credential is not usable. " <>
+        "Re-run `lemon setup provider` to fix the configuration, or use --skip-verify to defer."
+    end
+  end
 
-  def doctor_failure_message(:unreachable),
-    do: "Could not reach the provider's models endpoint. Check your network and retry."
+  defp recovery_message(:unreachable, scope) do
+    if scope == :doctor do
+      "Could not reach the provider's models endpoint. Check your network and retry."
+    else
+      "Could not reach the provider's models endpoint. Check your network and retry, " <>
+        "or re-run with --skip-verify when offline."
+    end
+  end
 
-  def doctor_failure_message(:timeout), do: failure_message(:timeout)
-
-  def doctor_failure_message({:http_status, status}),
-    do:
+  defp recovery_message({:http_status, status}, scope) do
+    if scope == :doctor do
       "The provider's models endpoint returned HTTP #{status}. Check provider status and credentials."
+    else
+      "The provider's models endpoint returned HTTP #{status}. Check the provider status " <>
+        "and your credential, or re-run with --skip-verify to defer this check."
+    end
+  end
 
-  def doctor_failure_message(_),
-    do: "Provider verification failed. Re-run `lemon setup provider`."
+  defp recovery_message(reason, scope) do
+    if scope == :doctor do
+      "Provider verification failed. Re-run `lemon setup provider`."
+    else
+      "Provider verification failed: #{format_reason(reason)}. " <>
+        "Re-run `lemon setup provider` to fix the configuration, or use --skip-verify to defer."
+    end
+  end
 
   @doc false
   @spec format_reason(term()) :: String.t()

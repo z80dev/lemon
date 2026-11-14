@@ -4,7 +4,7 @@ defmodule LemonControlPlane.RemoteImageExecutionTest do
   alias CodingAgent.ExecutionNode.Worker
   alias CodingAgent.Executor.RemoteRequestCodec
   alias LemonAi.Types.{ImageContent, TextContent}
-  alias LemonControlPlane.ImageInputs
+  alias LemonAi.ImageInputs
   alias LemonCore.ExecutionContext
   alias LemonGateway.ExecutionRequest
 

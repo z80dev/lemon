@@ -8,7 +8,9 @@ defmodule LemonControlPlane.Methods.NodeInvokeEvent do
 
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.Auth.TokenStore
+  import LemonControlPlane.Methods.NodeSession,
+    only: [session_generation: 1, current_session?: 2, get_field: 2]
+
   alias LemonControlPlane.Protocol.Errors
   alias LemonCore.NodeRegistry
 
@@ -39,7 +41,7 @@ defmodule LemonControlPlane.Methods.NodeInvokeEvent do
       not is_pid(connection_pid) ->
         {:error, Errors.forbidden("Authenticated node connection is required")}
 
-      not current_session?(node_id, generation) ->
+      not (is_integer(generation) and generation >= 0 and current_session?(node_id, generation)) ->
         {:error, Errors.forbidden("Node session has been superseded")}
 
       not is_binary(invoke_id) or String.trim(invoke_id) == "" ->
@@ -92,27 +94,5 @@ defmodule LemonControlPlane.Methods.NodeInvokeEvent do
       {:error, {:invalid_payload, kind}} ->
         {:error, Errors.error(:invalid_request, "event violates JSON payload policy", kind)}
     end
-  end
-
-  defp session_generation(auth) do
-    auth
-    |> get_field(:identity)
-    |> case do
-      identity when is_map(identity) -> get_field(identity, :sessionGeneration) || 0
-      _ -> 0
-    end
-  end
-
-  defp current_session?(node_id, generation) when is_integer(generation) and generation >= 0 do
-    case TokenStore.current_node_generation(node_id) do
-      nil -> generation == 0
-      current -> current == generation
-    end
-  end
-
-  defp current_session?(_node_id, _generation), do: false
-
-  defp get_field(map, key) when is_map(map) and is_atom(key) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
   end
 end

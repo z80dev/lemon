@@ -1,4 +1,6 @@
 defmodule LemonCli.Setup.Gateway.Telegram do
+  import LemonCli.Onboarding.PromptUI, only: [normalize_input: 1]
+
   @moduledoc """
   Gateway setup adapter for the Telegram transport, with owner pairing.
 
@@ -446,10 +448,4 @@ defmodule LemonCli.Setup.Gateway.Telegram do
       ssl_opts
     end
   end
-
-  defp normalize_input(nil), do: ""
-  defp normalize_input(:eof), do: ""
-  defp normalize_input(value) when is_binary(value), do: String.trim(value)
-  defp normalize_input(value) when is_list(value), do: value |> List.to_string() |> String.trim()
-  defp normalize_input(value), do: value |> to_string() |> String.trim()
 end

@@ -1,4 +1,7 @@
 defmodule LemonCli.Setup.Provider do
+  import LemonCli.Onboarding.PromptUI,
+    only: [normalize_input!: 1, select_value: 2, interactive_prompt_session?: 1]
+
   @moduledoc """
   Provider setup for `mix lemon.setup provider` and the packaged `lemon model`
   command.
@@ -21,7 +24,7 @@ defmodule LemonCli.Setup.Provider do
   `LemonCli.Setup.ProviderAuth` instead.
   """
 
-  alias LemonCli.Onboarding.{LogSilencer, PromptUI, Providers, Runner}
+  alias LemonCli.Onboarding.{LogSilencer, Providers, Runner}
   alias LemonCli.Onboarding.Provider, as: ProviderSpec
   alias LemonCli.Setup.{ProviderAuth, Scaffold, Verification}
   alias LemonCore.Secrets
@@ -395,7 +398,7 @@ defmodule LemonCli.Setup.Provider do
   end
 
   defp parse_provider_choice(choice, providers, default_index, io) do
-    trimmed = normalize_input(choice)
+    trimmed = normalize_input!(choice)
 
     cond do
       trimmed == "" ->
@@ -506,46 +509,4 @@ defmodule LemonCli.Setup.Provider do
   # ──────────────────────────────────────────────────────────────────────────
   # IO helpers
   # ──────────────────────────────────────────────────────────────────────────
-
-  defp normalize_input(nil), do: Runner.no_terminal!()
-  defp normalize_input(:eof), do: Runner.no_terminal!()
-  defp normalize_input(value) when is_binary(value), do: String.trim(value)
-  defp normalize_input(value) when is_list(value), do: value |> List.to_string() |> String.trim()
-  defp normalize_input(value), do: value |> to_string() |> String.trim()
-
-  defp select_value(io, params) do
-    case Map.get(io, :select) do
-      select when is_function(select, 1) ->
-        case select.(params) do
-          {:ok, value} ->
-            {:ok, value}
-
-          :cancel ->
-            :cancel
-
-          {:error, reason} ->
-            if reason == :end_of_input, do: Runner.no_terminal!()
-
-            io.error.(
-              "Interactive onboarding UI unavailable (#{format_selector_error(reason)}). Falling back to prompt mode."
-            )
-
-            :fallback
-
-          value ->
-            {:ok, value}
-        end
-
-      _ ->
-        :fallback
-    end
-  end
-
-  defp interactive_prompt_session?(io) when is_map(io) do
-    is_function(Map.get(io, :select), 1) and PromptUI.available?()
-  end
-
-  defp format_selector_error(:no_selection), do: "selector exited before a choice was made"
-  defp format_selector_error(:invalid_selector_params), do: "invalid selector parameters"
-  defp format_selector_error(_reason), do: "the selector could not be started"
 end

@@ -34,21 +34,8 @@ defmodule CodingAgent.Tools.PathHelpers do
       String.starts_with?(path, ".\\") or String.starts_with?(path, "..\\")
   end
 
-  @doc """
-  Returns true if `path` should resolve against `workspace_dir` rather than
-  the current working directory.
-
-  This is the case for memory-related paths (`MEMORY.md`, `USER.md`, `memory/`,
-  and optionally the bare `memory` directory) when a non-empty workspace
-  directory is provided and the path is not explicitly relative.
-
-  ## Options
-
-    * `:include_bare_memory` - when `true`, also matches the bare string
-      `"memory"` (used by grep to search the memory directory). Defaults to `false`.
-  """
   @spec prefer_workspace_for_path?(String.t(), String.t() | nil, keyword()) :: boolean()
-  def prefer_workspace_for_path?(path, workspace_dir, opts \\ []) do
+  defp prefer_workspace_for_path?(path, workspace_dir, opts) do
     include_bare = Keyword.get(opts, :include_bare_memory, false)
 
     is_binary(workspace_dir) and String.trim(workspace_dir) != "" and
@@ -68,15 +55,13 @@ defmodule CodingAgent.Tools.PathHelpers do
   ## Options
 
     * `:workspace_dir` - the workspace directory for memory-path resolution
-    * `:include_bare_memory` - passed through to `prefer_workspace_for_path?/3`
-    * `:expand` - when `true` (default), calls `Path.expand/1` on the joined result.
-      Set to `false` to skip expansion (e.g. when the caller handles it separately).
+    * `:include_bare_memory` - when `true`, also resolves the bare string
+      `"memory"` against the workspace directory. Defaults to `false`.
   """
   @spec resolve_path(String.t(), String.t(), keyword()) :: String.t()
   def resolve_path(path, cwd, opts \\ []) do
     expanded = expand_home(path)
     workspace_dir = Keyword.get(opts, :workspace_dir)
-    should_expand = Keyword.get(opts, :expand, true)
 
     if Path.type(expanded) == :absolute do
       expanded
@@ -88,13 +73,7 @@ defmodule CodingAgent.Tools.PathHelpers do
           cwd
         end
 
-      joined = Path.join(base, expanded)
-
-      if should_expand do
-        Path.expand(joined)
-      else
-        joined
-      end
+      Path.expand(Path.join(base, expanded))
     end
   end
 

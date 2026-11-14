@@ -611,8 +611,8 @@ defmodule LemonWeb.UI do
   # ── Overlays ─────────────────────────────────────────────────────────────
 
   @doc """
-  Modal dialog. Render conditionally (`:if`) or keep mounted and toggle with
-  `show_modal/1`/`hide_modal/1`. `on_cancel` runs on Esc, backdrop and close.
+  Modal dialog. Render conditionally (`:if`) with `show` to open it.
+  `on_cancel` runs on Esc, backdrop and close.
   """
   attr(:id, :string, required: true)
   attr(:show, :boolean, default: false)
@@ -684,13 +684,13 @@ defmodule LemonWeb.UI do
   defp modal_width("xl"), do: "max-w-4xl"
   defp modal_width(_), do: "max-w-lg"
 
-  def show_modal(js \\ %JS{}, id) when is_binary(id) do
+  defp show_modal(js \\ %JS{}, id) when is_binary(id) do
     js
     |> JS.show(to: "##{id}")
     |> JS.focus_first(to: "##{id}-container")
   end
 
-  def hide_modal(js \\ %JS{}, id) do
+  defp hide_modal(js \\ %JS{}, id) do
     js
     |> JS.hide(to: "##{id}", transition: {"ease-in duration-100", "opacity-100", "opacity-0"})
     |> JS.pop_focus()
@@ -698,8 +698,7 @@ defmodule LemonWeb.UI do
 
   @doc """
   Right-side drawer (sheet) for details. Same lifecycle as `modal/1`: render
-  with `:if` + `show`, or keep mounted and toggle with `show_modal/1` /
-  `hide_modal/1`. Full-width below 640px.
+  with `:if` + `show`. Full-width below 640px.
   """
   attr(:id, :string, required: true)
   attr(:show, :boolean, default: false)

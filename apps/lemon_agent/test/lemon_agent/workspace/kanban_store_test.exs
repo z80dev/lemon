@@ -160,7 +160,13 @@ defmodule LemonAgent.Workspace.KanbanStoreTest do
     assert {:ok, leased_again} = KanbanStore.lease_task(board.id, "worker-b")
     assert leased_again.id == dependency.id
 
-    assert {:ok, completed} = KanbanStore.complete_task(dependency.id, run_id: "run_done")
+    assert {:ok, completed} =
+             KanbanStore.complete_leased_task(
+               dependency.id,
+               leased_again.meta["kanbanLease"]["id"],
+               run_id: "run_done"
+             )
+
     assert completed.status == "done"
     assert completed.run_id == "run_done"
     refute Map.has_key?(completed.meta, "kanbanLease")
@@ -169,7 +175,12 @@ defmodule LemonAgent.Workspace.KanbanStoreTest do
     assert next.id == dependent.id
 
     assert {:ok, failed} =
-             KanbanStore.fail_task(dependent.id, "needs human", worker_id: "worker-c")
+             KanbanStore.fail_leased_task(
+               dependent.id,
+               next.meta["kanbanLease"]["id"],
+               "needs human",
+               worker_id: "worker-c"
+             )
 
     assert failed.status == "blocked"
     assert failed.meta["lastFailure"]["reason"] == "needs human"

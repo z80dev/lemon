@@ -49,7 +49,7 @@ history, compaction and supervised delegation. The loop/model runtime comes from
 
 ## Tasks and background work
 
-- `task`/`@name` personas launch native in-process sessions via `Coordinator`;
+- `task`/`@name` personas launch native in-process sessions via the task lifecycle;
   `agent` delegates through router and can choose a named node. Do not restore
   vendor CLI runners or another agent engine.
 - Async launch receipts are not completed answers. Explicit joins suppress the

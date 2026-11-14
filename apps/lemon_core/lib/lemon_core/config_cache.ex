@@ -16,13 +16,9 @@ defmodule LemonCore.ConfigCache do
   - Provide consistent semantics: cached reads by default + explicit reload.
   - Detect on-disk changes via periodic (TTL) file fingerprint checks (mtime/size).
 
-  ## Instances
-
-  The cache is named (default `LemonCore.ConfigCache`) and every public function
-  takes an optional leading server argument. A second instance gets its own ETS
-  table, derived from its name, so several caches can coexist in one node.
+  The cache is registered as `LemonCore.ConfigCache`.
   Options come from `start_link/1` first, falling back to
-  `Application.get_env(:lemon_core, name)`.
+  `Application.get_env(:lemon_core, LemonCore.ConfigCache)`.
   """
 
   use GenServer
@@ -34,47 +30,20 @@ defmodule LemonCore.ConfigCache do
   @default_mtime_check_interval_ms 1_000
   @default_call_timeout_ms 5_000
 
-  @typedoc "A running config cache, addressed by its registered name."
-  @type server :: atom()
-
   # Row format: {key, base_config, fingerprint, loaded_at_ms, checked_at_ms}
   # Fingerprint is a list of {path, {mtime, size} | :missing}.
 
   def start_link(opts \\ []) do
-    {name, opts} = Keyword.pop(opts, :name, __MODULE__)
-
-    unless is_atom(name) and not is_nil(name) do
-      raise ArgumentError, "LemonCore.ConfigCache :name must be an atom, got: #{inspect(name)}"
-    end
-
-    GenServer.start_link(__MODULE__, Keyword.put(opts, :name, name), name: name)
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc """
   Returns true if the cache is running and its ETS table exists.
   """
-  @spec available?(server()) :: boolean()
-  def available?(server \\ __MODULE__) do
-    is_pid(whereis(server)) and :ets.whereis(table_for(server)) != :undefined
+  @spec available?() :: boolean()
+  def available? do
+    is_pid(Process.whereis(__MODULE__)) and :ets.whereis(@table) != :undefined
   end
-
-  @doc """
-  Return the ETS table name backing a cache instance.
-  """
-  @spec table_for(server()) :: atom()
-  def table_for(__MODULE__), do: @table
-
-  def table_for(server) when is_atom(server) and not is_nil(server) do
-    suffix =
-      case Atom.to_string(server) do
-        "Elixir." <> rest -> rest |> String.replace(".", "_") |> Macro.underscore()
-        other -> other
-      end
-
-    :"lemon_core_config_cache_#{suffix}"
-  end
-
-  defp whereis(server) when is_atom(server), do: Process.whereis(server)
 
   @doc """
   Get the cached *base* config for `cwd` (merged global + project TOML, no env/overrides).
@@ -86,27 +55,19 @@ defmodule LemonCore.ConfigCache do
   important for tests, where `HOME` may change between cases.
   """
   @spec get(String.t() | nil, keyword()) :: LemonCore.Config.t()
-  def get(cwd \\ nil, opts \\ []), do: get(__MODULE__, cwd, opts)
-
-  @doc """
-  Get the cached base config for `cwd` from a specific cache instance.
-  """
-  @spec get(server(), String.t() | nil, keyword()) :: LemonCore.Config.t()
-  def get(server, cwd, opts) do
-    ensure_available!(server)
-
-    table = table_for(server)
+  def get(cwd \\ nil, opts \\ []) do
+    ensure_available!()
     paths = config_paths(cwd)
     key = cache_key(paths)
     now = now_ms()
 
     interval =
-      Keyword.get(opts, :mtime_check_interval_ms) || defaults(server).mtime_check_interval_ms
+      Keyword.get(opts, :mtime_check_interval_ms) || defaults().mtime_check_interval_ms
 
-    case :ets.lookup(table, key) do
+    case :ets.lookup(@table, key) do
       [] ->
-        server
-        |> GenServer.call({:load, cwd}, call_timeout(server, opts))
+        __MODULE__
+        |> GenServer.call({:load, cwd}, call_timeout(opts))
         |> reply_or_raise()
 
       [{^key, base, fingerprint, _loaded_at, checked_at}] ->
@@ -116,11 +77,11 @@ defmodule LemonCore.ConfigCache do
           new_fp = fingerprint(paths)
 
           if new_fp == fingerprint do
-            _ = :ets.update_element(table, key, {5, now})
+            _ = :ets.update_element(@table, key, {5, now})
             base
           else
-            server
-            |> GenServer.call({:reload, cwd}, call_timeout(server, opts))
+            __MODULE__
+            |> GenServer.call({:reload, cwd}, call_timeout(opts))
             |> reply_or_raise()
           end
         end
@@ -138,17 +99,11 @@ defmodule LemonCore.ConfigCache do
       LemonCore.ConfigCache.reload()
   """
   @spec reload(String.t() | nil, keyword()) :: LemonCore.Config.t()
-  def reload(cwd \\ nil, opts \\ []), do: reload(__MODULE__, cwd, opts)
+  def reload(cwd \\ nil, opts \\ []) do
+    ensure_available!()
 
-  @doc """
-  Force reload the cached base config for `cwd` in a specific cache instance.
-  """
-  @spec reload(server(), String.t() | nil, keyword()) :: LemonCore.Config.t()
-  def reload(server, cwd, opts) do
-    ensure_available!(server)
-
-    server
-    |> GenServer.call({:reload, cwd}, call_timeout(server, opts))
+    __MODULE__
+    |> GenServer.call({:reload, cwd}, call_timeout(opts))
     |> reply_or_raise()
   end
 
@@ -156,15 +111,9 @@ defmodule LemonCore.ConfigCache do
   Drop the cached entry for `cwd`.
   """
   @spec invalidate(String.t() | nil) :: :ok
-  def invalidate(cwd \\ nil), do: invalidate(__MODULE__, cwd)
-
-  @doc """
-  Drop the cached entry for `cwd` in a specific cache instance.
-  """
-  @spec invalidate(server(), String.t() | nil) :: :ok
-  def invalidate(server, cwd) do
-    if available?(server) do
-      _ = :ets.delete(table_for(server), cache_key(config_paths(cwd)))
+  def invalidate(cwd \\ nil) do
+    if available?() do
+      _ = :ets.delete(@table, cache_key(config_paths(cwd)))
     end
 
     :ok
@@ -176,22 +125,16 @@ defmodule LemonCore.ConfigCache do
   A no-op when the cache is not running. Used when config files or environment
   variables change at runtime, so entries resolved under the old rules are not
   served.
-  """
-  @spec clear() :: :ok
-  def clear, do: clear(__MODULE__)
-
-  @doc """
-  Drop every cached entry in a specific cache instance.
 
   Routed through the cache server rather than deleting from the caller's
   process, so a clear queues behind in-flight loads: a load that read the
   world (e.g. the resolver set) before the clear cannot insert its stale row
   after the table was wiped and have it served for the node's lifetime.
   """
-  @spec clear(server()) :: :ok
-  def clear(server) do
-    if available?(server) do
-      _ = GenServer.call(server, :clear, call_timeout(server, []))
+  @spec clear() :: :ok
+  def clear do
+    if available?() do
+      _ = GenServer.call(__MODULE__, :clear, call_timeout([]))
     end
 
     :ok
@@ -204,14 +147,12 @@ defmodule LemonCore.ConfigCache do
 
   @impl true
   def init(opts) do
-    name = Keyword.get(opts, :name, __MODULE__)
-
     opts =
       :lemon_core
-      |> Application.get_env(name, [])
+      |> Application.get_env(__MODULE__, [])
       |> Keyword.merge(Keyword.take(opts, [:mtime_check_interval_ms, :call_timeout_ms]))
 
-    _ = new_table!(name)
+    _ = new_table!()
 
     defaults = %{
       mtime_check_interval_ms:
@@ -219,20 +160,18 @@ defmodule LemonCore.ConfigCache do
       call_timeout_ms: Keyword.get(opts, :call_timeout_ms, @default_call_timeout_ms)
     }
 
-    :persistent_term.put(defaults_key(name), defaults)
+    :persistent_term.put({__MODULE__, :defaults}, defaults)
 
-    {:ok, %{name: name, table: table_for(name), defaults: defaults}}
+    {:ok, %{table: @table}}
   end
 
   # A live table under our name belongs to someone else — two caches sharing one
   # table would serve each other's parsed config. Raising `CollisionError` says
   # so; a bare `:ets.new/2` badarg here would not.
-  defp new_table!(name) do
-    table = table_for(name)
-
-    case :ets.whereis(table) do
+  defp new_table! do
+    case :ets.whereis(@table) do
       :undefined ->
-        :ets.new(table, [
+        :ets.new(@table, [
           :named_table,
           :set,
           :public,
@@ -243,9 +182,8 @@ defmodule LemonCore.ConfigCache do
       tid ->
         raise CollisionError,
           message:
-            "ConfigCache ETS table #{inspect(table)} for #{inspect(name)} already exists and is " <>
-              "owned by #{inspect(:ets.info(tid, :owner))}. Give the cache a distinct :name so " <>
-              "it gets its own table."
+            "ConfigCache ETS table #{inspect(@table)} already exists and is " <>
+              "owned by #{inspect(:ets.info(tid, :owner))}."
     end
   end
 
@@ -337,8 +275,8 @@ defmodule LemonCore.ConfigCache do
 
   defp now_ms, do: System.monotonic_time(:millisecond)
 
-  defp ensure_available!(server) do
-    if available?(server) do
+  defp ensure_available! do
+    if available?() do
       :ok
     else
       raise LemonCore.ConfigCacheError,
@@ -347,10 +285,8 @@ defmodule LemonCore.ConfigCache do
     end
   end
 
-  defp defaults_key(server), do: {__MODULE__, server, :defaults}
-
-  defp defaults(server) do
-    case :persistent_term.get(defaults_key(server), nil) do
+  defp defaults do
+    case :persistent_term.get({__MODULE__, :defaults}, nil) do
       nil ->
         %{
           mtime_check_interval_ms: @default_mtime_check_interval_ms,
@@ -362,7 +298,7 @@ defmodule LemonCore.ConfigCache do
     end
   end
 
-  defp call_timeout(server, opts) do
-    Keyword.get(opts, :call_timeout_ms) || defaults(server).call_timeout_ms
+  defp call_timeout(opts) do
+    Keyword.get(opts, :call_timeout_ms) || defaults().call_timeout_ms
   end
 end

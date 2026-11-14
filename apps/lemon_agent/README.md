@@ -38,7 +38,6 @@ LemonAgent sits between application code and the low-level `LemonAi` library. Ap
 LemonAgent.Supervisor (:one_for_one)
 |-- LemonAgent.AbortSignal.TableOwner   (GenServer, owns the abort ETS table)
 |-- LemonAgent.AgentRegistry            (Registry, :unique keys)
-|-- LemonAgent.SubagentSupervisor       (DynamicSupervisor, :temporary children)
 |-- LemonAgent.LoopTaskSupervisor       (Task.Supervisor for loop tasks)
 +-- LemonAgent.ToolTaskSupervisor       (Task.Supervisor for tool execution)
 ```
@@ -47,7 +46,6 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 
 - **AbortSignal.TableOwner** -- A long-lived GenServer that owns the `:agent_core_abort_signals` ETS table and acts as heir so the table survives process restarts.
 - **AgentRegistry** -- An Elixir `Registry` with `:unique` keys. Agents register under `{session_id, role, index}` tuples.
-- **SubagentSupervisor** -- A `DynamicSupervisor` for spawning subagent `LemonAgent.Agent` processes as `:temporary` children.
 - **LoopTaskSupervisor** -- A `Task.Supervisor` for spawning agent loop tasks via `Task.Supervisor.async_nolink/2`.
 - **ToolTaskSupervisor** -- A `Task.Supervisor` for spawning concurrent tool execution tasks.
 
@@ -59,8 +57,7 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 |--------|------|---------|
 | `LemonAgent` | `lib/agent_core.ex` | Top-level API facade. Delegates to `Agent` for lifecycle operations (`new_agent/1`, `prompt/2`, `abort/1`, `wait_for_idle/2`, `get_state/1`). Provides convenience constructors (`new_tool/1`, `new_tool_result/1`, `text_content/1`, `image_content/2`, `get_text/1`). Wraps `Loop.stream/4` and `Loop.stream_continue/3` as `agent_loop/4` and `agent_loop_continue/3`. |
 | `LemonAgent.Agent` | `lib/agent_core/agent.ex` | GenServer for stateful agent management. Handles prompts, streaming, subscriber broadcasting, steering/follow-up queues, abort signals, and waiter notification. |
-| `LemonAgent.AgentRegistry` | `lib/agent_core/agent_registry.ex` | Registry wrapper for agent lookup by `{session_id, role, index}` keys. Supports `via/1` tuples, `lookup/1`, `list_by_session/1`, `list_by_role/1`. |
-| `LemonAgent.SubagentSupervisor` | `lib/agent_core/subagent_supervisor.ex` | DynamicSupervisor for spawning subagent processes. `start_subagent/1`, `stop_subagent/1`, `stop_subagent_by_key/1`, `list_subagents/0`, `stop_all/0`. |
+| `LemonAgent.AgentRegistry` | `lib/agent_core/agent_registry.ex` | Registry wrapper for agent lookup by `{session_id, role, index}` keys. Supports `via/1` tuples, `lookup/1`, `list/0`, and `count/0`. |
 | `LemonAgent.Application` | `lib/agent_core/application.ex` | OTP application with the supervision tree above. |
 
 ### Loop and Execution
@@ -157,7 +154,7 @@ The Agent GenServer provides two message queues:
 - **Steering** (`steer/2`): Messages injected mid-run. Already-started tools finish, but queued calls are skipped with error results before another model turn. All calls receive paired results before the steering message enters context.
 - **Follow-up** (`follow_up/2`): Messages queued for after the agent would naturally stop (no more tool calls). A 50ms long-poll closes the race where a follow-up is enqueued just as the run ends.
 
-Both queues support two consumption modes: `:one_at_a_time` (default) or `:all`.
+Both queues consume one message per turn.
 
 ### Provider Recovery
 
@@ -209,8 +206,7 @@ Agents register in `LemonAgent.AgentRegistry` under `{session_id, role, index}` 
 
 ```elixir
 LemonAgent.AgentRegistry.lookup({session_id, :research, 0})
-LemonAgent.AgentRegistry.list_by_session(session_id)
-LemonAgent.AgentRegistry.list_by_role(:research)
+LemonAgent.AgentRegistry.list()
 ```
 
 ### Backpressure
@@ -229,7 +225,6 @@ The library emits telemetry events under the `[:lemon_agent, ...]` prefix:
 - `[:lemon_agent, :tool_task, :start]` / `[:lemon_agent, :tool_task, :end]` / `[:lemon_agent, :tool_task, :error]` -- Individual tool execution.
 - `[:lemon_agent, :tool_result, :emit]` -- Tool result emission.
 - `[:lemon_agent, :context, :size]` / `[:lemon_agent, :context, :warning]` / `[:lemon_agent, :context, :truncated]` -- Context management.
-- `[:lemon_agent, :subagent, :spawn]` / `[:lemon_agent, :subagent, :end]` -- Subagent lifecycle.
 
 ## Configuration
 
@@ -345,22 +340,6 @@ streams disable both timers so a long-running tool is not mistaken for a stalled
 provider. Standalone `LemonAgent.EventStream` instances expose these as
 `:idle_timeout` and `:timeout` with the same defaults.
 
-### Spawning Subagents
-
-```elixir
-{:ok, pid} = LemonAgent.SubagentSupervisor.start_subagent(
-  registry_key: {session_id, :research, 0},
-  model: model,
-  system_prompt: "Research assistant",
-  convert_to_llm: &my_convert/1
-)
-
-LemonAgent.Agent.prompt(pid, "Research this topic")
-:ok = LemonAgent.Agent.wait_for_idle(pid)
-state = LemonAgent.Agent.get_state(pid)
-LemonAgent.SubagentSupervisor.stop_subagent(pid)
-```
-
 ### Context Management
 
 ```elixir
@@ -447,7 +426,6 @@ apps/lemon_agent/test/
 |-- agent_core_test.exs               Top-level module tests
 |-- agent_core_module_test.exs         Module-level tests
 |-- agent_registry_test.exs            Registry tests
-|-- subagent_supervisor_test.exs       Subagent supervisor tests
 |-- agent_core/
 |   |-- agent_test.exs                Agent GenServer tests
 |   |-- agent_queue_test.exs          Steering/follow-up queue tests

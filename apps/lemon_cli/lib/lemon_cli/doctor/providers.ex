@@ -30,9 +30,6 @@ defmodule LemonCli.Doctor.Providers do
   @max_providers 8
   @max_name 48
 
-  @spec run(keyword()) :: [Check.t()]
-  def run(_opts), do: []
-
   @spec live_checks(keyword()) :: [LemonCore.Doctor.LiveChecks.job()]
   def live_checks(opts) do
     case Keyword.get(opts, :live_provider) do
@@ -276,7 +273,7 @@ defmodule LemonCli.Doctor.Providers do
         Check.skip(name, "Skipped (no usable provider credential).")
 
       {:error, reason} ->
-        Check.fail(name, prefixed(entry, ProviderLiveCheck.doctor_failure_message(reason)))
+        Check.fail(name, prefixed(entry, ProviderLiveCheck.failure_message(reason, :doctor)))
     end
   rescue
     _ -> Check.fail(name_for(entry), "Provider live check could not complete.")

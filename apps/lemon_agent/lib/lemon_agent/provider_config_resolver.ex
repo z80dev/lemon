@@ -96,27 +96,27 @@ defmodule LemonAgent.ProviderConfigResolver do
 
   def resolve_for_provider(:azure_openai_responses, opts) do
     config = get_provider_config("azure_openai_responses", opts)
-    azure_opts = Map.get(opts, :thinking_budgets, %{})
+    azure_opts = Map.get(opts, :azure, %{})
 
     api_key = resolve_api_key(:azure_openai_responses, opts, config)
 
     base_url =
       first_non_empty_binary([
-        Map.get(azure_opts, :azure_base_url),
+        Map.get(azure_opts, :base_url),
         config[:base_url],
         System.get_env("AZURE_OPENAI_BASE_URL")
       ])
 
     resource_name =
       first_non_empty_binary([
-        Map.get(azure_opts, :azure_resource_name),
+        Map.get(azure_opts, :resource_name),
         config[:resource_name],
         System.get_env("AZURE_OPENAI_RESOURCE_NAME")
       ])
 
     api_version =
       first_non_empty_binary([
-        Map.get(azure_opts, :azure_api_version),
+        Map.get(azure_opts, :api_version),
         config[:api_version],
         System.get_env("AZURE_OPENAI_API_VERSION")
       ])
@@ -126,7 +126,7 @@ defmodule LemonAgent.ProviderConfigResolver do
         parse_deployment_name_map(System.get_env("AZURE_OPENAI_DEPLOYMENT_NAME_MAP")),
         Map.get(config, :deployment_name_map, %{})
       )
-      |> Map.merge(Map.get(azure_opts, :azure_deployment_name_map, %{}))
+      |> Map.merge(Map.get(azure_opts, :deployment_name_map, %{}))
 
     %{
       api_key: api_key,

@@ -1,7 +1,7 @@
 defmodule LemonChannels.Adapters.Xmtp.Bridge do
   @moduledoc false
 
-  alias LemonChannels.Adapters.Xmtp.PortServer
+  alias LemonChannels.PortBridge
 
   @spec connect(pid(), map()) :: :ok
   def connect(port_server, cfg) when is_pid(port_server) and is_map(cfg) do
@@ -20,18 +20,18 @@ defmodule LemonChannels.Adapters.Xmtp.Bridge do
       }
       |> drop_nil_values()
 
-    PortServer.command(port_server, payload)
+    PortBridge.command(port_server, payload)
   end
 
   @spec poll(pid()) :: :ok
   def poll(port_server) when is_pid(port_server) do
-    PortServer.command(port_server, %{"op" => "poll"})
+    PortBridge.command(port_server, %{"op" => "poll"})
   end
 
   @spec acknowledge_inbound(pid(), binary()) :: :ok
   def acknowledge_inbound(port_server, dedupe_key)
       when is_pid(port_server) and is_binary(dedupe_key) do
-    PortServer.command(port_server, %{"op" => "ack_inbound", "dedupe_key" => dedupe_key})
+    PortBridge.command(port_server, %{"op" => "ack_inbound", "dedupe_key" => dedupe_key})
   end
 
   def acknowledge_inbound(_port_server, _dedupe_key), do: :ok
@@ -43,7 +43,7 @@ defmodule LemonChannels.Adapters.Xmtp.Bridge do
       |> Map.put("op", "send")
       |> drop_nil_values()
 
-    PortServer.command(port_server, command)
+    PortBridge.command(port_server, command)
   end
 
   defp cfg_value(cfg, key) when is_map(cfg) do

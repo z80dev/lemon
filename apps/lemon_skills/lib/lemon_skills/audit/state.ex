@@ -7,8 +7,6 @@ defmodule LemonSkills.Audit.State do
 
   @state_filename "skills.audit.json"
   @current_version 1
-  @lock_retries 100
-  @lock_sleep_ms 10
 
   @type scope :: :global | {:project, String.t()}
   @type entity_kind :: :skill | :draft
@@ -84,27 +82,6 @@ defmodule LemonSkills.Audit.State do
   defp with_file_lock(scope, fun) do
     lock_path = path(scope) <> ".lock"
     File.mkdir_p!(Path.dirname(lock_path))
-    acquire_lock(to_charlist(lock_path), fun, @lock_retries)
-  end
-
-  defp acquire_lock(_lock_path, _fun, 0), do: {:error, :lock_timeout}
-
-  defp acquire_lock(lock_path, fun, retries) do
-    case :file.open(lock_path, [:write, :exclusive]) do
-      {:ok, fd} ->
-        try do
-          fun.()
-        after
-          :file.close(fd)
-          :file.delete(lock_path)
-        end
-
-      {:error, :eexist} ->
-        Process.sleep(@lock_sleep_ms)
-        acquire_lock(lock_path, fun, retries - 1)
-
-      {:error, reason} ->
-        {:error, {:lock_failed, reason}}
-    end
+    LemonSkills.FileLock.with_lock(lock_path, fun)
   end
 end

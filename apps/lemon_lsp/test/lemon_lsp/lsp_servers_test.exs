@@ -24,7 +24,6 @@ defmodule LemonLsp.ServersTest do
       assert Enum.any?(servers, &(&1.id == :clangd))
 
       for server <- servers do
-        assert server.protocol == :lsp_stdio
         assert server.supervised == true
         assert server.running == false
         assert is_boolean(server.available)

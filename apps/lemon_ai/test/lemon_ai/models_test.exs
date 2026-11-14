@@ -128,33 +128,6 @@ defmodule LemonAi.ModelsTest do
   end
 
   # ============================================================================
-  # get_model_ids/1
-  # ============================================================================
-
-  describe "get_model_ids/1" do
-    test "returns model ID strings for a known provider" do
-      ids = Models.get_model_ids(:anthropic)
-      assert is_list(ids)
-      assert ids != []
-      assert Enum.all?(ids, &is_binary/1)
-      assert "claude-sonnet-4-20250514" in ids
-    end
-
-    test "returns an empty list for an unknown provider" do
-      assert Models.get_model_ids(:unknown_provider) == []
-    end
-
-    test "every ID resolves to a model via get_model" do
-      ids = Models.get_model_ids(:openai)
-
-      for id <- ids do
-        assert %Model{} = Models.get_model(:openai, id),
-               "get_model_ids returned #{id} but get_model(:openai, #{inspect(id)}) is nil"
-      end
-    end
-  end
-
-  # ============================================================================
   # supports_vision?/1
   # ============================================================================
 
@@ -230,38 +203,6 @@ defmodule LemonAi.ModelsTest do
   end
 
   # ============================================================================
-  # models_equal?/2
-  # ============================================================================
-
-  describe "models_equal?/2" do
-    test "returns true for the same model" do
-      model1 = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      model2 = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      assert Models.models_equal?(model1, model2) == true
-    end
-
-    test "returns false for different models" do
-      model1 = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      model2 = Models.get_model(:openai, "gpt-4o")
-      assert Models.models_equal?(model1, model2) == false
-    end
-
-    test "returns false when first argument is nil" do
-      model = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      assert Models.models_equal?(nil, model) == false
-    end
-
-    test "returns false when second argument is nil" do
-      model = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      assert Models.models_equal?(model, nil) == false
-    end
-
-    test "returns false when both arguments are nil" do
-      assert Models.models_equal?(nil, nil) == false
-    end
-  end
-
-  # ============================================================================
   # clamp_reasoning/1
   # ============================================================================
 
@@ -292,85 +233,6 @@ defmodule LemonAi.ModelsTest do
 
     test "returns nil for unknown level" do
       assert Models.clamp_reasoning(:unknown_level) == nil
-    end
-  end
-
-  # ============================================================================
-  # adjust_max_tokens_for_thinking/4
-  # ============================================================================
-
-  describe "adjust_max_tokens_for_thinking/4" do
-    test "adjusts tokens for :high reasoning level" do
-      {max_tokens, thinking_budget} =
-        Models.adjust_max_tokens_for_thinking(8192, 200_000, :high)
-
-      assert thinking_budget == 16_384
-      assert max_tokens == 8192 + 16_384
-    end
-
-    test "adjusts tokens for :medium reasoning level" do
-      {max_tokens, thinking_budget} =
-        Models.adjust_max_tokens_for_thinking(8192, 200_000, :medium)
-
-      assert thinking_budget == 8192
-      assert max_tokens == 8192 + 8192
-    end
-
-    test "adjusts tokens for :low reasoning level" do
-      {max_tokens, thinking_budget} =
-        Models.adjust_max_tokens_for_thinking(8192, 200_000, :low)
-
-      assert thinking_budget == 2048
-      assert max_tokens == 8192 + 2048
-    end
-
-    test "adjusts tokens for :minimal reasoning level" do
-      {max_tokens, thinking_budget} =
-        Models.adjust_max_tokens_for_thinking(8192, 200_000, :minimal)
-
-      assert thinking_budget == 1024
-      assert max_tokens == 8192 + 1024
-    end
-
-    test "clamps max_tokens to model_max_tokens" do
-      {max_tokens, thinking_budget} =
-        Models.adjust_max_tokens_for_thinking(190_000, 200_000, :high)
-
-      assert max_tokens == 200_000
-      assert thinking_budget == 16_384
-    end
-
-    test "reduces thinking budget when constrained by model max" do
-      # When base + budget > model_max, and model_max <= budget
-      {max_tokens, thinking_budget} =
-        Models.adjust_max_tokens_for_thinking(500, 1500, :high)
-
-      # max_tokens = min(500 + 16384, 1500) = 1500
-      # Since 1500 <= 16384, thinking_budget = max(0, 1500 - 1024) = 476
-      assert max_tokens == 1500
-      assert thinking_budget == 476
-    end
-
-    test "supports custom budgets override" do
-      {max_tokens, thinking_budget} =
-        Models.adjust_max_tokens_for_thinking(8192, 200_000, :medium, %{medium: 4096})
-
-      assert thinking_budget == 4096
-      assert max_tokens == 8192 + 4096
-    end
-
-    test "xhigh is clamped to high" do
-      result_xhigh = Models.adjust_max_tokens_for_thinking(8192, 200_000, :xhigh)
-      result_high = Models.adjust_max_tokens_for_thinking(8192, 200_000, :high)
-      assert result_xhigh == result_high
-    end
-
-    test "nil reasoning level returns zero thinking budget" do
-      {max_tokens, thinking_budget} =
-        Models.adjust_max_tokens_for_thinking(8192, 200_000, nil)
-
-      assert thinking_budget == 0
-      assert max_tokens == 8192
     end
   end
 

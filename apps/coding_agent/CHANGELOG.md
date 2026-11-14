@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the unused `CodingAgent.Coordinator` and `ProcessManager.exec_sync/1`
+  APIs. Native task execution and background `exec/1` with `poll/2` remain.
+
 ### Fixed
 
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
@@ -398,6 +403,13 @@
   elision markers rather than copying omitted content into existing files.
 
 ### Changed
+
+- Removed the unused compaction hook service, aggregate session-health APIs and
+  scoped session-supervisor APIs. Session diagnostics remain available through
+  `CodingAgent.Session.diagnostics/1`.
+- Session transcripts now use only reverse-ordered internal storage; access them
+  through `SessionManager.entries/1`. Automatic compaction capacity calculations
+  share one implementation, and provider message budgets use fixed defaults.
 
 - Keep immutable execution-node service adapters separate from mutable worker
   state so connection and invocation updates retain the BEAM's small-map layout.

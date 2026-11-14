@@ -1042,12 +1042,6 @@ defmodule LemonCli.CommandRegistry do
   @spec commands() :: [map()]
   def commands, do: @commands
 
-  @spec names() :: [String.t()]
-  def names, do: Enum.map(@commands, & &1.name)
-
-  @spec command?(String.t()) :: boolean()
-  def command?(name) when is_binary(name), do: name in names()
-
   @doc "Whether `name` is a lifecycle command handled by the launcher shell."
   @spec lifecycle?(String.t()) :: boolean()
   def lifecycle?(name) when is_binary(name),

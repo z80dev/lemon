@@ -1,7 +1,8 @@
 import Config
 
 # Which model the agent runs. `LemonAi.Models` knows several hundred across roughly
-# twenty providers; `LemonAi.Models.get_model_ids(:anthropic)` lists one provider's.
+# twenty providers. List a provider's IDs with:
+# `LemonAi.Models.get_models(:anthropic) |> Enum.map(& &1.id)`.
 config :<%= @app %>,
   provider: :anthropic,
   model: "claude-sonnet-4-5"

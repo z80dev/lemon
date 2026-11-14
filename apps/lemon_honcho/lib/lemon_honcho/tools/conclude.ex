@@ -68,7 +68,6 @@ defmodule LemonHoncho.Tools.Conclude do
   @max_conclusion_chars 2_000
   @default_top_k 10
   @max_top_k 50
-  @excerpt_max_chars 1_000
 
   # A phrase describing the idea to look for, matched semantically — the same
   # figure the other Honcho search paths allow their query.
@@ -140,12 +139,6 @@ defmodule LemonHoncho.Tools.Conclude do
   @doc "The tool definition for a run rooted at `cwd`."
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts), do: tool(Keyword.put(opts, :cwd, cwd))
-
-  @doc "Runs `honcho_conclude` with no session options; see `execute/5`."
-  @spec execute(String.t(), map(), reference() | nil, function() | nil) :: AgentToolResult.t()
-  def execute(tool_call_id, params, signal, on_update) do
-    execute(tool_call_id, params, signal, on_update, [])
-  end
 
   @doc """
   Runs `honcho_conclude`, scoped to the session named in `opts`.
@@ -355,30 +348,9 @@ defmodule LemonHoncho.Tools.Conclude do
   # The id is what makes a result actionable — it is the only way back to a
   # delete — so it leads the excerpt, and a hit whose id Honcho spells under a
   # key this does not know is still shown rather than dropped.
-  defp excerpt(hit) when is_map(hit) do
-    id = first_string(hit, ["id", "conclusion_id", "public_id"])
-    stamp = first_string(hit, ["created_at", "createdAt", "timestamp"])
-    text = hit |> first_string(["content", "conclusion", "text"]) |> clip()
-
-    case Enum.reject([id, stamp], &is_nil/1) do
-      [] -> text || inspect(hit)
-      parts -> Enum.join(parts, " · ") <> "\n" <> (text || inspect(hit))
-    end
+  defp excerpt(hit) do
+    Common.excerpt(hit, {["content", "conclusion", "text"], ["id", "conclusion_id", "public_id"]})
   end
-
-  defp excerpt(hit), do: inspect(hit)
-
-  defp first_string(hit, keys) do
-    Enum.find_value(keys, fn key ->
-      case Map.get(hit, key) do
-        value when is_binary(value) -> if String.trim(value) == "", do: nil, else: value
-        _other -> nil
-      end
-    end)
-  end
-
-  defp clip(nil), do: nil
-  defp clip(text), do: String.slice(text, 0, @excerpt_max_chars)
 
   defp result(text, request, scope, extra) do
     details = %{

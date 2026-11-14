@@ -353,36 +353,6 @@ defmodule CodingAgent.SettingsManager do
     }
   end
 
-  @doc """
-  Get model settings as a map.
-  """
-  @spec get_model_settings(t()) :: %{
-          default_model: model_config() | String.t() | nil,
-          model_roles: ModelRoles.roles(),
-          default_thinking_level: thinking_level()
-        }
-  def get_model_settings(%__MODULE__{} = settings) do
-    %{
-      default_model: settings.default_model,
-      model_roles: settings.model_roles,
-      default_thinking_level: settings.default_thinking_level
-    }
-  end
-
-  @doc """
-  Get shell settings as a map.
-  """
-  @spec get_shell_settings(t()) :: %{
-          shell_path: String.t() | nil,
-          command_prefix: String.t() | nil
-        }
-  def get_shell_settings(%__MODULE__{} = settings) do
-    %{
-      shell_path: settings.shell_path,
-      command_prefix: settings.command_prefix
-    }
-  end
-
   # ============================================================================
   # Helpers
   # ============================================================================

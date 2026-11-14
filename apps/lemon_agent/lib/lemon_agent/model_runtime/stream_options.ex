@@ -238,32 +238,22 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
   end
 
   defp azure_input(base_opts, provider_cfg) do
-    thinking_budgets =
-      base_opts.thinking_budgets
-      |> maybe_put(
-        :azure_base_url,
-        provider_config_value(provider_cfg, :base_url)
-      )
-      |> maybe_put(
-        :azure_resource_name,
-        provider_config_value(provider_cfg, :resource_name)
-      )
-      |> maybe_put(
-        :azure_api_version,
-        provider_config_value(provider_cfg, :api_version)
-      )
-      |> maybe_put(
-        :azure_deployment_name_map,
-        provider_config_value(provider_cfg, :deployment_name_map)
-      )
+    azure_opts =
+      [
+        base_url: :azure_base_url,
+        resource_name: :azure_resource_name,
+        api_version: :azure_api_version,
+        deployment_name_map: :azure_deployment_name_map
+      ]
+      |> Map.new(fn {key, wire_key} ->
+        {key, provider_config_value(provider_cfg, key) || base_opts.thinking_budgets[wire_key]}
+      end)
+      |> Map.reject(fn {_key, value} -> is_nil(value) end)
 
     stream_options_to_map(base_opts)
-    |> Map.put(:thinking_budgets, thinking_budgets)
+    |> Map.put(:azure, azure_opts)
     |> Map.put(:provider_config, provider_cfg)
-    |> maybe_put(
-      :api_key,
-      configured_api_key(base_opts, provider_cfg)
-    )
+    |> maybe_put(:api_key, configured_api_key(base_opts, provider_cfg))
   end
 
   defp bedrock_input(base_opts, provider_cfg) do

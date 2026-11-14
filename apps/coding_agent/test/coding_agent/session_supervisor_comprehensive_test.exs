@@ -23,8 +23,14 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
   # Neither these adapters nor the test touch the application's session tree.
   defmodule IsolatedRegistry do
     def lookup(id) do
-      scope = CodingAgent.SessionSupervisorComprehensiveTest.IsolatedSupervisor.scope()
-      CodingAgent.SessionSupervisor.lookup(id, scope)
+      registry =
+        CodingAgent.SessionSupervisorComprehensiveTest.IsolatedSupervisor.scope()
+        |> Keyword.fetch!(:registry)
+
+      case Registry.lookup(registry, id) do
+        [{pid, _}] -> {:ok, pid}
+        [] -> :error
+      end
     end
   end
 
@@ -34,12 +40,35 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     def scope, do: Process.get(@scope_key)
     def put_scope(scope), do: Process.put(@scope_key, scope)
     def pid, do: Process.whereis(Keyword.fetch!(scope(), :supervisor))
-    def start_session(opts), do: CodingAgent.SessionSupervisor.start_session(opts, scope())
-    def stop_session(session), do: CodingAgent.SessionSupervisor.stop_session(session, scope())
-    def lookup(id), do: CodingAgent.SessionSupervisor.lookup(id, scope())
-    def list_sessions, do: CodingAgent.SessionSupervisor.list_sessions(scope())
-    def health_all, do: CodingAgent.SessionSupervisor.health_all(scope())
-    def health_summary, do: CodingAgent.SessionSupervisor.health_summary(scope())
+
+    def start_session(opts) do
+      opts =
+        opts
+        |> Keyword.put_new(:register, true)
+        |> Keyword.put_new(:registry, Keyword.fetch!(scope(), :registry))
+
+      child_spec = Supervisor.child_spec({CodingAgent.Session, opts}, restart: :temporary)
+      DynamicSupervisor.start_child(pid(), child_spec)
+    end
+
+    def stop_session(session) when is_pid(session) do
+      DynamicSupervisor.terminate_child(pid(), session)
+    end
+
+    def stop_session(id) when is_binary(id) do
+      case lookup(id) do
+        {:ok, session} -> stop_session(session)
+        :error -> {:error, :not_found}
+      end
+    end
+
+    def lookup(id), do: CodingAgent.SessionSupervisorComprehensiveTest.IsolatedRegistry.lookup(id)
+
+    def list_sessions do
+      for {_, child, :worker, _} <- DynamicSupervisor.which_children(pid()),
+          is_pid(child),
+          do: child
+    end
   end
 
   import CodingAgent.AsyncHelpers
@@ -237,43 +266,6 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
   # ============================================================================
 
   describe "multi-session management" do
-    test "scoped admission, lookup, health and termination stay inside their tree" do
-      unique = System.unique_integer([:positive])
-      registry = :"#{__MODULE__}.OtherRegistry.#{unique}"
-      supervisor_name = :"#{__MODULE__}.OtherSupervisor.#{unique}"
-      start_supervised!({Registry, keys: :unique, name: registry})
-
-      supervisor =
-        start_supervised!(
-          Supervisor.child_spec(
-            {CodingAgent.SessionSupervisor, name: supervisor_name},
-            id: supervisor_name
-          )
-        )
-
-      scope = [supervisor: supervisor, registry: registry]
-      {:ok, primary} = start_test_session()
-      primary_id = Session.get_stats(primary).session_id
-
-      {:ok, other} =
-        CodingAgent.SessionSupervisor.start_session(default_session_opts([]), scope)
-
-      other_id = Session.get_stats(other).session_id
-      assert CodingAgent.SessionSupervisor.list_sessions(scope) == [other]
-      assert SessionSupervisor.list_sessions() == [primary]
-      assert CodingAgent.SessionSupervisor.lookup(primary_id, scope) == :error
-      assert SessionSupervisor.lookup(other_id) == :error
-      assert CodingAgent.SessionRegistry.lookup(other_id, registry) == {:ok, other}
-      assert CodingAgent.SessionSupervisor.health_summary(scope).total == 1
-      assert SessionSupervisor.health_summary().total == 1
-
-      assert CodingAgent.SessionSupervisor.stop_session(primary_id, scope) == {:error, :not_found}
-      assert Process.alive?(primary)
-      assert :ok = CodingAgent.SessionSupervisor.stop_session(other_id, scope)
-      assert CodingAgent.SessionSupervisor.health_all(scope) == []
-      assert SessionSupervisor.list_sessions() == [primary]
-    end
-
     test "can start multiple sessions simultaneously" do
       {:ok, pid1} = start_test_session()
       {:ok, pid2} = start_test_session()
@@ -556,38 +548,9 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       state = Session.get_state(pid)
       make_agent_dead(pid, state.agent)
 
-      health = Session.health_check(pid)
+      health = Session.diagnostics(pid)
       assert health.status == :unhealthy
       assert health.agent_alive == false
-    end
-
-    test "health_all includes unhealthy sessions first" do
-      {:ok, pid1} = start_test_session()
-      {:ok, _pid2} = start_test_session()
-
-      # Kill agent of first session
-      state = Session.get_state(pid1)
-      make_agent_dead(pid1, state.agent)
-
-      health_results = SessionSupervisor.health_all()
-
-      # First result should be unhealthy
-      first_result = List.first(health_results)
-      assert first_result.status == :unhealthy
-    end
-
-    test "health_summary reflects unhealthy sessions" do
-      {:ok, pid1} = start_test_session()
-      {:ok, _pid2} = start_test_session()
-
-      # Kill agent of first session
-      state = Session.get_state(pid1)
-      make_agent_dead(pid1, state.agent)
-
-      summary = SessionSupervisor.health_summary()
-
-      assert summary.unhealthy >= 1
-      assert summary.overall == :unhealthy
     end
   end
 
@@ -942,83 +905,6 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
   end
 
   # ============================================================================
-  # Health Monitoring Tests
-  # ============================================================================
-
-  describe "health monitoring across sessions" do
-    test "health_all returns empty list when no sessions" do
-      assert SessionSupervisor.health_all() == []
-    end
-
-    test "health_all returns health for all sessions" do
-      {:ok, _pid1} = start_test_session()
-      {:ok, _pid2} = start_test_session()
-      {:ok, _pid3} = start_test_session()
-
-      health_results = SessionSupervisor.health_all()
-
-      assert length(health_results) >= 3
-      assert Enum.all?(health_results, &Map.has_key?(&1, :status))
-    end
-
-    test "health_all sorts by status (unhealthy first, then degraded, then healthy)" do
-      {:ok, pid1} = start_test_session()
-      {:ok, _pid2} = start_test_session()
-
-      # Make one session unhealthy
-      state = Session.get_state(pid1)
-      make_agent_dead(pid1, state.agent)
-
-      health_results = SessionSupervisor.health_all()
-
-      # Verify sorting
-      statuses = Enum.map(health_results, & &1.status)
-      unhealthy_idx = Enum.find_index(statuses, &(&1 == :unhealthy))
-      healthy_idx = Enum.find_index(statuses, &(&1 == :healthy))
-
-      if unhealthy_idx && healthy_idx do
-        assert unhealthy_idx < healthy_idx
-      end
-    end
-
-    test "health_summary provides aggregate counts" do
-      {:ok, _pid1} = start_test_session()
-      {:ok, _pid2} = start_test_session()
-      {:ok, _pid3} = start_test_session()
-
-      summary = SessionSupervisor.health_summary()
-
-      assert summary.total >= 3
-      assert summary.healthy + summary.degraded + summary.unhealthy == summary.total
-      assert summary.overall in [:healthy, :degraded, :unhealthy]
-    end
-
-    test "health_summary returns :no_sessions when empty" do
-      summary = SessionSupervisor.health_summary()
-
-      assert summary.total == 0
-      assert summary.overall == :no_sessions
-    end
-
-    test "health_summary reflects overall system health" do
-      {:ok, _pid1} = start_test_session()
-      {:ok, _pid2} = start_test_session()
-
-      # All healthy
-      summary1 = SessionSupervisor.health_summary()
-      assert summary1.overall == :healthy
-
-      # Make one unhealthy
-      {:ok, pid3} = start_test_session()
-      state = Session.get_state(pid3)
-      make_agent_dead(pid3, state.agent)
-
-      summary2 = SessionSupervisor.health_summary()
-      assert summary2.overall == :unhealthy
-    end
-  end
-
-  # ============================================================================
   # Lookup Tests
   # ============================================================================
 
@@ -1139,21 +1025,24 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     end
 
     @tag :stress
-    test "concurrent health checks do not cause issues" do
-      {:ok, _pid1} = start_test_session()
-      {:ok, _pid2} = start_test_session()
-      {:ok, _pid3} = start_test_session()
+    test "concurrent diagnostics do not cause issues" do
+      {:ok, pid1} = start_test_session()
+      {:ok, pid2} = start_test_session()
+      {:ok, pid3} = start_test_session()
 
       tasks =
         for _ <- 1..50 do
           async(fn ->
-            SessionSupervisor.health_all()
-            SessionSupervisor.health_summary()
+            Enum.map([pid1, pid2, pid3], &Session.diagnostics/1)
           end)
         end
 
       results = Task.await_many(tasks, 10_000)
       assert length(results) == 50
+
+      assert Enum.all?(results, fn diagnostics ->
+               length(diagnostics) == 3 and Enum.all?(diagnostics, & &1.agent_alive)
+             end)
     end
   end
 end

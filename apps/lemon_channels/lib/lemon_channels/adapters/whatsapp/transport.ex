@@ -10,8 +10,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     Bridge,
     Dedupe,
     Inbound,
-    ModelPolicyAdapter,
-    PortServer
+    ModelPolicyAdapter
   }
 
   alias LemonChannels.Adapters.WhatsApp.Transport.{
@@ -20,7 +19,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     SessionRouting
   }
 
-  alias LemonChannels.{BindingResolver, GatewayConfig, SubmissionOutcome}
+  alias LemonChannels.{BindingResolver, GatewayConfig, PortBridge, SubmissionOutcome}
   alias LemonCore.ChatScope
   alias LemonCore.{InboundMessage, RouterBridge}
 
@@ -31,6 +30,12 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   @reconnect_jitter 0.25
   @reconnect_max_attempts 12
   @command_timeout_ms 30_000
+
+  @bridge_spec %{
+    label: "whatsapp",
+    event_tag: :whatsapp_bridge_event,
+    script_filename: "whatsapp_bridge.mjs"
+  }
 
   # ============================================================================
   # Public API
@@ -79,7 +84,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     :ok = Dedupe.init()
     ModelPolicyAdapter.ensure_session_table()
 
-    {:ok, port_server} = PortServer.start_link(config: cfg, notify_pid: self())
+    {:ok, port_server} = PortBridge.start_link({@bridge_spec, [config: cfg, notify_pid: self()]})
 
     Bridge.connect(port_server, cfg)
 

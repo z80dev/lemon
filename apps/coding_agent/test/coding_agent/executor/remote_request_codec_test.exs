@@ -5,6 +5,33 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
   alias LemonCore.ExecutionContext
   alias LemonGateway.ExecutionRequest
 
+  test "protected metadata detects canonical and JSON aliases by presence" do
+    for key <- [
+          :invocation_context_key,
+          "invocation_context_key",
+          :invocationContextKey,
+          "invocationContextKey",
+          :memory_context_key,
+          "memoryContextVerified",
+          :sharedMemoryGrant,
+          "invocationProof",
+          :invocation_proof_verified,
+          "nativeLineageHandle",
+          :native_lineage_run_id
+        ],
+        value <- [nil, false, "scoped"] do
+      assert RemoteRequestCodec.protected_meta?(%{key => value})
+    end
+
+    for key <- [:profile_id, "profile_id", :mcp_servers, "mcp_servers"] do
+      refute RemoteRequestCodec.protected_meta?(%{key => nil})
+      assert RemoteRequestCodec.protected_meta?(%{key => []})
+    end
+
+    refute RemoteRequestCodec.protected_meta?(%{})
+    refute RemoteRequestCodec.protected_meta?(%{model: "default"})
+  end
+
   @tag :tmp_dir
   test "project-memory capture stays false across named-node transport", %{tmp_dir: cwd} do
     for meta <- [%{project_memory_capture: false}, %{"project_memory_capture" => false}] do

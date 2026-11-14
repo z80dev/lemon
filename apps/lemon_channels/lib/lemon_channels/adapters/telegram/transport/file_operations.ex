@@ -10,7 +10,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
   require Logger
 
   alias LemonChannels.BindingResolver
-  alias LemonChannels.Cwd
+  alias LemonCore.Cwd
   alias LemonCore.ChatScope
   alias LemonChannels.Adapters.Telegram.Transport.Commands
 
@@ -514,7 +514,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
     do: {:ok, Path.expand(root)}
 
   def ensure_project_root(_) do
-    case Cwd.default_cwd() do
+    case Cwd.channel_default_cwd() do
       cwd when is_binary(cwd) and byte_size(cwd) > 0 -> {:ok, Path.expand(cwd)}
       _ -> {:error, "No accessible working directory configured."}
     end

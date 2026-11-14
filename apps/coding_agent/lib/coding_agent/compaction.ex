@@ -119,6 +119,25 @@ defmodule CodingAgent.Compaction do
 
   def context_threshold(_context_window, _settings), do: nil
 
+  @doc """
+  Return automatic compaction capacity for the current request usage.
+
+  Unknown or non-positive windows leave capacity fields `nil` and disable
+  token-based automatic compaction.
+  """
+  @spec context_budget(integer() | nil, non_neg_integer(), map()) :: map()
+  def context_budget(context_window, used_tokens, settings) do
+    threshold = context_threshold(context_window, settings)
+
+    %{
+      window: if(threshold, do: context_window),
+      reserve_tokens: if(threshold, do: context_window - threshold),
+      threshold_tokens: threshold,
+      headroom_tokens: if(threshold, do: max(threshold - used_tokens, 0)),
+      enabled: not is_nil(threshold) and Map.get(settings, :enabled, true)
+    }
+  end
+
   defp configured_threshold(context_window, settings) do
     tokens = Map.get(settings, :threshold_tokens)
     percent = Map.get(settings, :threshold_percent)
@@ -137,28 +156,14 @@ defmodule CodingAgent.Compaction do
   known, this returns thresholds that can trigger compaction before provider
   trimming starts dropping early context.
   """
-  @spec message_budget(LemonAi.Types.Model.t() | map(), map()) :: message_budget() | nil
-  def message_budget(model, settings \\ %{}) do
+  @spec message_budget(LemonAi.Types.Model.t() | map()) :: message_budget() | nil
+  def message_budget(model) do
     case provider_request_message_limit(model) do
       limit when is_integer(limit) and limit > 1 ->
-        trigger_ratio =
-          ratio_or(
-            Map.get(settings, :message_limit_trigger_ratio),
-            @default_message_limit_trigger_ratio
-          )
-
-        keep_ratio =
-          ratio_or(
-            Map.get(settings, :message_limit_keep_ratio),
-            @default_message_limit_keep_ratio
-          )
-
-        trigger_count =
-          floor(limit * trigger_ratio)
-          |> clamp_int(1, max(limit - 1, 1))
+        trigger_count = floor(limit * @default_message_limit_trigger_ratio)
 
         keep_recent_messages =
-          floor(limit * keep_ratio)
+          floor(limit * @default_message_limit_keep_ratio)
           |> max(@default_message_limit_min_keep_messages)
           |> min(max(trigger_count - 1, 1))
 
@@ -1359,30 +1364,6 @@ defmodule CodingAgent.Compaction do
     end
   rescue
     _ -> nil
-  end
-
-  defp ratio_or(value, default) when is_number(value) do
-    if value > 0 and value <= 1 do
-      value
-    else
-      default
-    end
-  end
-
-  defp ratio_or(value, default) when is_binary(value) do
-    case Float.parse(String.trim(value)) do
-      {parsed, ""} -> ratio_or(parsed, default)
-      _ -> default
-    end
-  end
-
-  defp ratio_or(_value, default), do: default
-
-  defp clamp_int(value, min_value, max_value)
-       when is_integer(value) and is_integer(min_value) and is_integer(max_value) do
-    value
-    |> max(min_value)
-    |> min(max_value)
   end
 
   # ============================================================================

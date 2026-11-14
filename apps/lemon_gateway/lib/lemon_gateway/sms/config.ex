@@ -40,25 +40,7 @@ defmodule LemonGateway.Sms.Config do
       normalize_blank(System.get_env("LEMON_SMS_WEBHOOK_BIND")) ||
         normalize_blank(sms_cfg(:webhook_bind))
 
-    case bind do
-      nil ->
-        :loopback
-
-      "127.0.0.1" ->
-        :loopback
-
-      "localhost" ->
-        :loopback
-
-      "0.0.0.0" ->
-        :any
-
-      "any" ->
-        :any
-
-      other ->
-        parse_ip(other) || :loopback
-    end
+    LemonGateway.BindAddress.parse(bind)
   end
 
   def inbox_number do
@@ -163,26 +145,4 @@ defmodule LemonGateway.Sms.Config do
   end
 
   defp normalize_blank(_), do: nil
-
-  defp parse_ip(str) when is_binary(str) do
-    # IPv4: "1.2.3.4"
-    case String.split(str, ".", parts: 8) do
-      [a, b, c, d] ->
-        with {a, ""} <- Integer.parse(a),
-             {b, ""} <- Integer.parse(b),
-             {c, ""} <- Integer.parse(c),
-             {d, ""} <- Integer.parse(d),
-             true <- Enum.all?([a, b, c, d], &(&1 >= 0 and &1 <= 255)) do
-          {a, b, c, d}
-        else
-          _ -> nil
-        end
-
-      _ ->
-        # IPv6 is rarely needed here; keep it simple unless demanded.
-        nil
-    end
-  end
-
-  defp parse_ip(_), do: nil
 end

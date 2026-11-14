@@ -837,73 +837,6 @@ defmodule CodingAgent.SettingsManagerTest do
   end
 
   # ============================================================================
-  # get_model_settings/1 Tests
-  # ============================================================================
-
-  describe "get_model_settings/1" do
-    test "returns model settings with default_model and thinking_level" do
-      default_model = %{provider: "anthropic", model_id: "claude-3-opus", base_url: nil}
-
-      settings = %SettingsManager{
-        default_model: default_model,
-        default_thinking_level: :high
-      }
-
-      result = SettingsManager.get_model_settings(settings)
-
-      assert result == %{
-               default_model: default_model,
-               model_roles: %{},
-               default_thinking_level: :high
-             }
-    end
-
-    test "returns nil for default_model when not set" do
-      settings = %SettingsManager{
-        default_model: nil,
-        default_thinking_level: :medium
-      }
-
-      result = SettingsManager.get_model_settings(settings)
-
-      assert result.default_model == nil
-      assert result.default_thinking_level == :medium
-    end
-  end
-
-  # ============================================================================
-  # get_shell_settings/1 Tests
-  # ============================================================================
-
-  describe "get_shell_settings/1" do
-    test "returns shell settings as a map" do
-      settings = %SettingsManager{
-        shell_path: "/bin/zsh",
-        command_prefix: "source ~/.zshrc &&"
-      }
-
-      result = SettingsManager.get_shell_settings(settings)
-
-      assert result == %{
-               shell_path: "/bin/zsh",
-               command_prefix: "source ~/.zshrc &&"
-             }
-    end
-
-    test "returns nil values when shell settings are not configured" do
-      settings = %SettingsManager{
-        shell_path: nil,
-        command_prefix: nil
-      }
-
-      result = SettingsManager.get_shell_settings(settings)
-
-      assert result.shell_path == nil
-      assert result.command_prefix == nil
-    end
-  end
-
-  # ============================================================================
   # Integration Tests
   # ============================================================================
 
@@ -946,9 +879,8 @@ defmodule CodingAgent.SettingsManagerTest do
       settings = SettingsManager.from_config(config)
 
       # Verify all component settings can be extracted
-      model_settings = SettingsManager.get_model_settings(settings)
-      assert model_settings.default_model.provider == :anthropic
-      assert model_settings.default_thinking_level == :medium
+      assert settings.default_model.provider == :anthropic
+      assert settings.default_thinking_level == :medium
       assert settings.provider_routing.fallback_providers == ["azure_openai_responses"]
 
       compaction_settings = SettingsManager.get_compaction_settings(settings)
@@ -959,8 +891,7 @@ defmodule CodingAgent.SettingsManagerTest do
       assert retry_settings.enabled == true
       assert retry_settings.max_retries == 3
 
-      shell_settings = SettingsManager.get_shell_settings(settings)
-      assert shell_settings.shell_path == "/bin/bash"
+      assert settings.shell_path == "/bin/bash"
     end
 
     test "parse_model_spec handles various model specification formats" do

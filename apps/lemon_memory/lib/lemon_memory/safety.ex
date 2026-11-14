@@ -139,15 +139,6 @@ defmodule LemonMemory.Safety do
   defp truncate_utf8(text, max_bytes) when byte_size(text) <= max_bytes, do: text
 
   defp truncate_utf8(text, max_bytes) do
-    boundary = utf8_boundary(text, max_bytes)
-    binary_part(text, 0, boundary) <> "…"
+    LemonMemory.Text.clip_bytes(text, max_bytes) <> "…"
   end
-
-  defp utf8_boundary(text, position) when position > 0 do
-    if String.valid?(binary_part(text, 0, position)),
-      do: position,
-      else: utf8_boundary(text, position - 1)
-  end
-
-  defp utf8_boundary(_text, 0), do: 0
 end

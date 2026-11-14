@@ -14,7 +14,7 @@ defmodule Mix.Tasks.Lemon.Secrets.Delete do
 
   @impl true
   def run(args) do
-    start_lemon_core!()
+    Mix.Tasks.Lemon.Secrets.ensure_started!()
 
     {opts, positional, _invalid} =
       OptionParser.parse(args, switches: [name: :string], aliases: [n: :name])
@@ -28,15 +28,6 @@ defmodule Mix.Tasks.Lemon.Secrets.Delete do
     case Secrets.delete(name) do
       :ok -> Mix.shell().info("Deleted secret #{String.trim(name)}")
       {:error, reason} -> Mix.raise("Failed to delete secret: #{inspect(reason)}")
-    end
-  end
-
-  defp start_lemon_core! do
-    Mix.Task.run("loadpaths")
-
-    case Application.ensure_all_started(:lemon_core) do
-      {:ok, _} -> :ok
-      {:error, {app, reason}} -> Mix.raise("Failed to start #{app}: #{inspect(reason)}")
     end
   end
 end

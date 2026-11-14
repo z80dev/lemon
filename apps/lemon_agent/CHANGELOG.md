@@ -32,6 +32,14 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- Queues always consume one message per turn; removed queue mode options,
+  mode accessors, queue-clearing helpers, and `Agent.set_session_id/2`.
+- Removed the unused `SubagentSupervisor`, registry metadata/session/role
+  query helpers, and unguarded `KanbanStore.complete_task/2` and `fail_task/3`.
+  Task terminalization uses the lease-guarded APIs.
+- Centralized provider ID normalization and passed Azure resolver settings
+  explicitly, retaining the provider's existing wire options.
+- Unified tool abort checks on `AbortHelpers.check_abort/1`.
 - The response loop owns one retry budget (three retries by default), disabling
   nested provider retries so a response makes at most four upstream attempts.
   Rate/concurrency throttles wait at least 10 seconds plus jitter and honor

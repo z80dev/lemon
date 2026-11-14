@@ -10,7 +10,10 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.NodeStore
-  alias LemonControlPlane.Auth.TokenStore
+
+  import LemonControlPlane.Methods.NodeSession,
+    only: [session_generation: 1, current_session?: 2, get_field: 2]
+
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -238,31 +241,9 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
 
   defp pending?(invocation), do: get_field(invocation, :status) in [:pending, "pending"]
 
-  defp session_generation(auth) do
-    auth
-    |> get_field(:identity)
-    |> case do
-      identity when is_map(identity) -> get_field(identity, :sessionGeneration) || 0
-      _ -> 0
-    end
-  end
-
-  defp current_session?(node_id, generation) when is_integer(generation) do
-    case TokenStore.current_node_generation(node_id) do
-      nil -> generation == 0
-      current -> current == generation
-    end
-  end
-
-  defp current_session?(_node_id, _generation), do: false
-
   defp payload_error_kind({kind, _detail})
        when kind in [:max_bytes, :max_depth, :max_items, :not_json_safe],
        do: kind
 
   defp payload_error_kind(_reason), do: :invalid
-
-  defp get_field(map, key) when is_map(map) and is_atom(key) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  end
 end

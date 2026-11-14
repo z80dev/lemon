@@ -7,7 +7,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportUpdateProcessorTest do
   alias LemonCore.Store
 
   setup do
-    :ok = TransportShared.init_dedupe(:channels)
+    :ok = TransportShared.init_dedupe()
     clear_known_targets()
     :ok
   end

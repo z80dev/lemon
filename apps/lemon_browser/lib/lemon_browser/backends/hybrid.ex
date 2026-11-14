@@ -76,13 +76,7 @@ defmodule LemonBrowser.Backends.Hybrid do
   defp backend_for_route("public", opts), do: backend(opts, :hybrid_public_backend, nil)
 
   defp backend(opts, key, default) do
-    env_name =
-      case key do
-        :hybrid_local_backend -> "LEMON_BROWSER_HYBRID_LOCAL_BACKEND"
-        :hybrid_public_backend -> "LEMON_BROWSER_HYBRID_PUBLIC_BACKEND"
-      end
-
-    case Keyword.get(opts, key) || System.get_env(env_name) || default do
+    case resolve_option(opts, key, default) do
       nil ->
         {:error, {:missing_hybrid_browser_backend, key}}
 
@@ -124,16 +118,17 @@ defmodule LemonBrowser.Backends.Hybrid do
   defp maybe_clear_route(result, _method, _scope), do: result
 
   defp safe_backend_id(opts, key, default) do
-    env_name =
-      case key do
-        :hybrid_local_backend -> "LEMON_BROWSER_HYBRID_LOCAL_BACKEND"
-        :hybrid_public_backend -> "LEMON_BROWSER_HYBRID_PUBLIC_BACKEND"
-      end
-
-    case Keyword.get(opts, key) || System.get_env(env_name) || default do
+    case resolve_option(opts, key, default) do
       value when is_atom(value) -> value
       value when is_binary(value) -> value
       _ -> nil
     end
   end
+
+  defp resolve_option(opts, key, default) do
+    Keyword.get(opts, key) || System.get_env(env_name(key)) || default
+  end
+
+  defp env_name(:hybrid_local_backend), do: "LEMON_BROWSER_HYBRID_LOCAL_BACKEND"
+  defp env_name(:hybrid_public_backend), do: "LEMON_BROWSER_HYBRID_PUBLIC_BACKEND"
 end

@@ -27,7 +27,15 @@ defmodule LemonControlPlane.HTTP.RouterTest do
     previous_waiter = Application.get_env(:lemon_control_plane, :openai_compat_waiter)
     previous_run_getter = Application.get_env(:lemon_control_plane, :openai_compat_run_getter)
     previous_canceller = Application.get_env(:lemon_control_plane, :openai_compat_canceller)
-    previous_token = Application.get_env(:lemon_control_plane, :openai_compat_api_token)
+
+    token_env = [
+      "LEMON_OPENAI_COMPAT_API_TOKEN",
+      "LEMON_OPENAI_COMPAT_TOKEN",
+      "LEMON_ACP_API_TOKEN"
+    ]
+
+    previous_tokens = Map.new(token_env, &{&1, System.get_env(&1)})
+    Enum.each(token_env, &System.delete_env/1)
     previous_catalog = Application.fetch_env(:lemon_control_plane, :model_catalog)
     Application.put_env(:lemon_control_plane, :model_catalog, fn _opts -> [@available_model] end)
 
@@ -65,10 +73,8 @@ defmodule LemonControlPlane.HTTP.RouterTest do
         Application.delete_env(:lemon_control_plane, :openai_compat_canceller)
       end
 
-      if previous_token do
-        Application.put_env(:lemon_control_plane, :openai_compat_api_token, previous_token)
-      else
-        Application.delete_env(:lemon_control_plane, :openai_compat_api_token)
+      for {key, value} <- previous_tokens do
+        if value, do: System.put_env(key, value), else: System.delete_env(key)
       end
 
       restore_env(:openai_compat_image_url_fetch, previous_image_url_fetch)
@@ -85,9 +91,7 @@ defmodule LemonControlPlane.HTTP.RouterTest do
     assert missing.status == 404
     assert missing.body == %{"error" => %{"code" => "NOT_FOUND", "message" => "Not found"}}
 
-    previous = Application.fetch_env(:lemon_control_plane, :acp_api_token)
-    Application.put_env(:lemon_control_plane, :acp_api_token, "private-acp-test-token")
-    on_exit(fn -> restore_env(:acp_api_token, previous) end)
+    System.put_env("LEMON_ACP_API_TOKEN", "private-acp-test-token")
 
     for {headers, status, code} <- [
           {[], 401, "UNAUTHORIZED"},
@@ -214,7 +218,7 @@ defmodule LemonControlPlane.HTTP.RouterTest do
   end
 
   test "OpenAI-compatible endpoints can require bearer auth" do
-    Application.put_env(:lemon_control_plane, :openai_compat_api_token, "secret-token")
+    System.put_env("LEMON_OPENAI_COMPAT_API_TOKEN", "secret-token")
 
     missing =
       :get
@@ -252,7 +256,7 @@ defmodule LemonControlPlane.HTTP.RouterTest do
   end
 
   test "OpenAI-compatible endpoints accept x-api-key auth" do
-    Application.put_env(:lemon_control_plane, :openai_compat_api_token, "secret-token")
+    System.put_env("LEMON_OPENAI_COMPAT_API_TOKEN", "secret-token")
 
     response =
       :get

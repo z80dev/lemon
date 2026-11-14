@@ -10,6 +10,8 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
 
   use GenServer
 
+  import CodingAgent.Executor, only: [get_opt: 2]
+
   alias CodingAgent.Executor.{RemoteEventCodec, RemoteRequestCodec}
   alias LemonCore.NodeRegistry
   alias LemonGateway.Event
@@ -131,45 +133,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
   defp privacy_destination(request, selector) do
     meta = request.meta || %{}
 
-    private_fields = [
-      :invocation_context_key,
-      "invocation_context_key",
-      :invocationContextKey,
-      "invocationContextKey",
-      :memory_context_key,
-      "memory_context_key",
-      :memoryContextKey,
-      "memoryContextKey",
-      :memory_context_verified,
-      "memory_context_verified",
-      :memoryContextVerified,
-      "memoryContextVerified",
-      :shared_memory_grant,
-      "shared_memory_grant",
-      :sharedMemoryGrant,
-      "sharedMemoryGrant",
-      :invocation_proof,
-      "invocation_proof",
-      :invocationProof,
-      "invocationProof",
-      :invocation_proof_verified,
-      "invocation_proof_verified",
-      :invocationProofVerified,
-      "invocationProofVerified",
-      :native_lineage_handle,
-      "native_lineage_handle",
-      :nativeLineageHandle,
-      "nativeLineageHandle",
-      :native_lineage_run_id,
-      "native_lineage_run_id",
-      :nativeLineageRunId,
-      "nativeLineageRunId"
-    ]
-
-    protected? =
-      Enum.any?(private_fields, &Map.has_key?(meta, &1)) ||
-        not is_nil(Map.get(meta, :profile_id, Map.get(meta, "profile_id"))) ||
-        not is_nil(Map.get(meta, :mcp_servers, Map.get(meta, "mcp_servers")))
+    protected? = RemoteRequestCodec.protected_meta?(meta)
 
     if protected? do
       resolved = NodeRegistry.resolve_id(selector)
@@ -458,10 +422,6 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
   end
 
   defp merge_node_meta(_meta, node), do: %{node: node}
-
-  defp get_opt(opts, key) when is_map(opts), do: Map.get(opts, key)
-  defp get_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key)
-  defp get_opt(_opts, _key), do: nil
 
   defp protocol_max_payload do
     case Application.get_env(:lemon_control_plane, :max_payload) do

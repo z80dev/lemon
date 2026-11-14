@@ -339,11 +339,11 @@ defmodule LemonRouter.ToolStatusCoalescer do
             flush_timer: nil,
             seq: 0,
             finalized: false,
-            meta: compact_meta(meta),
+            meta: ChannelContext.compact_meta(meta),
             run_started_at: now
         }
       else
-        %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
+        %{state | meta: Map.merge(state.meta || %{}, ChannelContext.compact_meta(meta))}
       end
 
     if state.finalized == true and state.run_id == run_id do
@@ -391,7 +391,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
     state =
       cond do
         state.run_id == nil ->
-          %{state | run_id: run_id, meta: compact_meta(meta)}
+          %{state | run_id: run_id, meta: ChannelContext.compact_meta(meta)}
 
         state.run_id != run_id ->
           cancel_timer(state.flush_timer)
@@ -407,12 +407,12 @@ defmodule LemonRouter.ToolStatusCoalescer do
               first_event_ts: nil,
               flush_timer: nil,
               finalized: false,
-              meta: compact_meta(meta),
+              meta: ChannelContext.compact_meta(meta),
               run_started_at: nil
           }
 
         true ->
-          %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
+          %{state | meta: Map.merge(state.meta || %{}, ChannelContext.compact_meta(meta))}
       end
 
     state =
@@ -431,7 +431,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
     state =
       if state.run_id == run_id do
         state
-        |> Map.put(:meta, Map.merge(state.meta || %{}, compact_meta(meta)))
+        |> Map.put(:meta, Map.merge(state.meta || %{}, ChannelContext.compact_meta(meta)))
         |> finalize_segment()
         |> reset_segment()
       else
@@ -461,7 +461,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
           %{
             state
             | run_id: run_id,
-              meta: compact_meta(meta),
+              meta: ChannelContext.compact_meta(meta),
               actions: %{},
               order: [],
               prefix_text: nil,
@@ -489,12 +489,12 @@ defmodule LemonRouter.ToolStatusCoalescer do
               flush_timer: nil,
               seq: 0,
               finalized: false,
-              meta: compact_meta(meta),
+              meta: ChannelContext.compact_meta(meta),
               run_started_at: nil
           }
 
         true ->
-          %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
+          %{state | meta: Map.merge(state.meta || %{}, ChannelContext.compact_meta(meta))}
       end
 
     state =
@@ -540,8 +540,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
   def handle_info(_msg, state), do: {:noreply, state}
 
   # ---- Internal ----
-
-  defp compact_meta(meta), do: ChannelContext.compact_meta(meta)
 
   defp dispatcher do
     Application.get_env(:lemon_router, :dispatcher, Dispatcher)

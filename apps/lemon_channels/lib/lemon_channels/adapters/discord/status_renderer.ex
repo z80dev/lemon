@@ -67,56 +67,20 @@ defmodule LemonChannels.Adapters.Discord.StatusRenderer do
         _ -> 2
       end
 
-    btn = %{type: 2, style: style, label: label, custom_id: custom_id}
-
-    if Keyword.has_key?(opts, :disabled) do
-      Map.put(btn, :disabled, Keyword.get(opts, :disabled))
-    else
-      btn
-    end
+    %{type: 2, style: style, label: label, custom_id: custom_id}
+    |> Map.merge(Map.new(Keyword.take(opts, [:disabled])))
   end
 
   @doc "Build a string select menu component."
   def select_menu(custom_id, options, opts \\ []) do
-    menu = %{
-      type: 3,
-      custom_id: custom_id,
-      options: options
-    }
-
-    menu =
-      if Keyword.has_key?(opts, :placeholder),
-        do: Map.put(menu, :placeholder, Keyword.get(opts, :placeholder)),
-        else: menu
-
-    menu =
-      if Keyword.has_key?(opts, :min_values),
-        do: Map.put(menu, :min_values, Keyword.get(opts, :min_values)),
-        else: menu
-
-    menu =
-      if Keyword.has_key?(opts, :max_values),
-        do: Map.put(menu, :max_values, Keyword.get(opts, :max_values)),
-        else: menu
-
-    menu
+    %{type: 3, custom_id: custom_id, options: options}
+    |> Map.merge(Map.new(Keyword.take(opts, [:placeholder, :min_values, :max_values])))
   end
 
   @doc "Build a select menu option."
   def select_option(label, value, opts \\ []) do
-    opt = %{label: label, value: value}
-
-    opt =
-      if Keyword.has_key?(opts, :description),
-        do: Map.put(opt, :description, Keyword.get(opts, :description)),
-        else: opt
-
-    opt =
-      if Keyword.has_key?(opts, :default),
-        do: Map.put(opt, :default, Keyword.get(opts, :default)),
-        else: opt
-
-    opt
+    %{label: label, value: value}
+    |> Map.merge(Map.new(Keyword.take(opts, [:description, :default])))
   end
 
   defp allow_cancel?(controls) when is_map(controls) do

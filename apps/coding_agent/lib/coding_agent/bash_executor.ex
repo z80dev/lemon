@@ -374,7 +374,8 @@ defmodule CodingAgent.BashExecutor do
 
   defp wrap_command_with_cwd(command, _cwd), do: command
 
-  defp shell_escape(path) do
+  @doc false
+  def shell_escape(path) do
     "'" <> String.replace(path, "'", "'\"'\"'") <> "'"
   end
 

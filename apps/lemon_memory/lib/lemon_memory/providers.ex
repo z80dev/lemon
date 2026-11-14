@@ -73,7 +73,6 @@ defmodule LemonMemory.Providers do
           required(:id) => String.t(),
           required(:module) => module(),
           optional(:enabled) => boolean(),
-          optional(:label) => String.t(),
           optional(:source) => String.t(),
           optional(:scopes) => [atom()],
           optional(:timeout_ms) => non_neg_integer()
@@ -203,7 +202,6 @@ defmodule LemonMemory.Providers do
         id: @local_id,
         module: Local,
         enabled: true,
-        label: "Local SQLite memory",
         source: "builtin",
         scopes: [:session, :agent, :workspace, :all],
         timeout_ms: @default_timeout_ms
@@ -406,19 +404,16 @@ defmodule LemonMemory.Providers do
   defp normalize_spec(spec) when is_list(spec), do: spec |> Map.new() |> normalize_spec()
 
   defp normalize_spec(spec) when is_map(spec) do
-    with {:ok, id} <- normalize_id(Map.get(spec, :id) || Map.get(spec, "id")),
-         {:ok, module} <- normalize_module(Map.get(spec, :module) || Map.get(spec, "module")) do
+    with {:ok, id} <- normalize_id(Map.get(spec, :id)),
+         {:ok, module} <- normalize_module(Map.get(spec, :module)) do
       {:ok,
        %{
          id: id,
          module: module,
-         enabled: Map.get(spec, :enabled, Map.get(spec, "enabled", true)) != false,
-         label: normalize_optional_string(Map.get(spec, :label) || Map.get(spec, "label")),
-         source:
-           normalize_optional_string(Map.get(spec, :source) || Map.get(spec, "source")) ||
-             "runtime",
-         scopes: normalize_scopes(Map.get(spec, :scopes) || Map.get(spec, "scopes")),
-         timeout_ms: normalize_timeout(Map.get(spec, :timeout_ms) || Map.get(spec, "timeout_ms"))
+         enabled: Map.get(spec, :enabled, true) != false,
+         source: normalize_optional_string(Map.get(spec, :source)) || "runtime",
+         scopes: normalize_scopes(Map.get(spec, :scopes)),
+         timeout_ms: normalize_timeout(Map.get(spec, :timeout_ms))
        }}
     end
   end

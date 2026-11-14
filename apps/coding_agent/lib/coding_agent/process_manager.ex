@@ -388,50 +388,6 @@ defmodule CodingAgent.ProcessManager do
   end
 
   @doc """
-  Execute a command synchronously with optional timeout.
-
-  If yield_ms is specified, the command will run in background after
-  the yield time expires.
-  """
-  @spec exec_sync(keyword()) ::
-          {:ok, map() | String.t()} | {:queued, String.t()} | {:error, term()}
-  def exec_sync(opts) do
-    yield_ms = Keyword.get(opts, :yield_ms)
-    # Tool calls should not enforce timeouts by default.
-    # Allow callers to override, but default is no timeout.
-    timeout_ms = Keyword.get(opts, :timeout_ms, :infinity)
-
-    if yield_ms do
-      # Start in background and return immediately
-      exec(opts)
-    else
-      # Run synchronously
-      case exec(opts) do
-        {:ok, process_id} ->
-          # Wait for completion with timeout
-          sync_result(process_id, timeout_ms)
-
-        {:queued, process_id} ->
-          {:queued, process_id}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
-  end
-
-  defp sync_result(process_id, timeout_ms) do
-    case wait_for_completion(process_id, timeout_ms) do
-      {:error, :timeout} -> {:error, {:outcome_unknown, process_id}}
-      result -> result
-    end
-  rescue
-    _ -> {:error, {:outcome_unknown, process_id}}
-  catch
-    :exit, _ -> {:error, {:outcome_unknown, process_id}}
-  end
-
-  @doc """
   Poll a process for status and logs.
 
   Options:
@@ -767,70 +723,6 @@ defmodule CodingAgent.ProcessManager do
   end
 
   # Private Functions
-
-  defp wait_for_completion(process_id, timeout_ms) do
-    case timeout_ms do
-      :infinity ->
-        do_wait(process_id, :infinity)
-
-      nil ->
-        do_wait(process_id, :infinity)
-
-      ms when is_integer(ms) and ms >= 0 ->
-        deadline = System.monotonic_time(:millisecond) + ms
-        do_wait(process_id, deadline)
-
-      _ ->
-        # Be conservative: invalid values fall back to no timeout.
-        do_wait(process_id, :infinity)
-    end
-  end
-
-  defp do_wait(process_id, :infinity) do
-    case poll(process_id, lines: 0) do
-      {:ok, %{status: status} = result} when status in [:completed, :error, :killed] ->
-        case poll(process_id, lines: 1000) do
-          {:ok, result_with_logs} -> {:ok, result_with_logs}
-          _ -> {:ok, result}
-        end
-
-      {:ok, %{status: :lost}} ->
-        {:error, {:outcome_unknown, process_id}}
-
-      {:ok, _} ->
-        Process.sleep(100)
-        do_wait(process_id, :infinity)
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp do_wait(process_id, deadline) do
-    now = System.monotonic_time(:millisecond)
-
-    if now >= deadline do
-      {:error, :timeout}
-    else
-      case poll(process_id, lines: 0) do
-        {:ok, %{status: status} = result} when status in [:completed, :error, :killed] ->
-          case poll(process_id, lines: 1000) do
-            {:ok, result_with_logs} -> {:ok, result_with_logs}
-            _ -> {:ok, result}
-          end
-
-        {:ok, %{status: :lost}} ->
-          {:error, {:outcome_unknown, process_id}}
-
-        {:ok, _} ->
-          Process.sleep(100)
-          do_wait(process_id, deadline)
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
-  end
 
   defp generate_id do
     :crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)

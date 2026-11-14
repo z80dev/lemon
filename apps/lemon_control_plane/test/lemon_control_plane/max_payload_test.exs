@@ -1,7 +1,8 @@
 defmodule LemonControlPlane.MaxPayloadTest do
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.{ImageInputs, Protocol.Frames}
+  alias LemonAi.ImageInputs
+  alias LemonControlPlane.Protocol.Frames
 
   setup do
     previous = Application.fetch_env(:lemon_control_plane, :max_payload)

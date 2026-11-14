@@ -7,7 +7,7 @@ defmodule CodingAgent.Tools.BashStreamingPreviewTest do
   alias LemonAi.Types.TextContent
 
   test "small replacement snapshots retain the original accumulated output" do
-    state = StreamingPreview.new(16)
+    state = StreamingPreview.new()
     assert StreamingPreview.render(state) == ""
 
     state = state |> StreamingPreview.append("hello ") |> StreamingPreview.append("world")
@@ -17,50 +17,45 @@ defmodule CodingAgent.Tools.BashStreamingPreviewTest do
   end
 
   test "exactly filling the budget does not mark the preview truncated" do
-    state = StreamingPreview.new(4) |> StreamingPreview.append("1234")
+    text = String.duplicate("x", 50_000)
+    state = StreamingPreview.new() |> StreamingPreview.append(text)
 
-    assert StreamingPreview.render(state) == "1234"
+    assert StreamingPreview.render(state) == text
     refute state.truncated
   end
 
   test "many chunks remain bounded and preserve the most recent output" do
     final =
-      Enum.reduce(1..1000, StreamingPreview.new(32), fn index, state ->
+      Enum.reduce(1..10_000, StreamingPreview.new(), fn index, state ->
         next = StreamingPreview.append(state, "chunk-#{index}\n")
-        assert byte_size(next.text) <= 32
+        assert byte_size(next.text) <= 50_000
         assert String.valid?(next.text)
         next
       end)
 
     assert final.truncated
-    assert String.ends_with?(StreamingPreview.render(final), "chunk-1000\n")
+    assert String.ends_with?(StreamingPreview.render(final), "chunk-10000\n")
     assert StreamingPreview.render(final) =~ "Earlier output omitted"
   end
 
   test "a large source binary is not retained by the bounded tail" do
-    state = StreamingPreview.new(64) |> StreamingPreview.append(String.duplicate("x", 1_000_000))
+    state = StreamingPreview.new() |> StreamingPreview.append(String.duplicate("x", 1_000_000))
 
-    assert state.text == String.duplicate("x", 64)
+    assert state.text == String.duplicate("x", 50_000)
     assert :binary.referenced_byte_size(state.text) == byte_size(state.text)
   end
 
   test "truncation never leaves a UTF-8 continuation byte at the start" do
-    for budget <- 1..12 do
+    for prefix_bytes <- 0..11 do
       state =
-        StreamingPreview.new(budget)
-        |> StreamingPreview.append("start 🦁🍋 café")
+        StreamingPreview.new()
+        |> StreamingPreview.append("🦁🍋 café" <> String.duplicate("x", 49_988 + prefix_bytes))
         |> StreamingPreview.append(" 🍋!")
 
-      assert byte_size(state.text) <= budget
+      assert byte_size(state.text) <= 50_000
       assert String.valid?(state.text)
       assert String.valid?(StreamingPreview.render(state))
       assert String.ends_with?(state.text, "!")
-    end
-  end
-
-  test "invalid byte limits are rejected" do
-    for budget <- [0, -1, nil, :infinity] do
-      assert_raise ArgumentError, fn -> StreamingPreview.new(budget) end
     end
   end
 

@@ -21,8 +21,8 @@ defmodule LemonAgent.AgentRegistry do
       # Look up an agent
       {:ok, pid} = LemonAgent.AgentRegistry.lookup({session_id, :research, 0})
 
-      # List all agents for a session
-      agents = LemonAgent.AgentRegistry.list_by_session(session_id)
+      # List all agents
+      agents = LemonAgent.AgentRegistry.list()
   """
 
   @registry_name __MODULE__
@@ -112,23 +112,6 @@ defmodule LemonAgent.AgentRegistry do
   end
 
   @doc """
-  Look up a process and its metadata by key.
-
-  Returns `{:ok, pid, metadata}` if found, or `:error` if not registered.
-
-  ## Examples
-
-      {:ok, pid, %{model: "claude-3"}} = AgentRegistry.lookup_with_metadata({session_id, :research, 0})
-  """
-  @spec lookup_with_metadata(key()) :: {:ok, pid(), term()} | :error
-  def lookup_with_metadata(key) do
-    case Registry.lookup(@registry_name, key) do
-      [{pid, metadata}] -> {:ok, pid, metadata}
-      [] -> :error
-    end
-  end
-
-  @doc """
   List all registered keys and their PIDs.
 
   ## Examples
@@ -141,54 +124,10 @@ defmodule LemonAgent.AgentRegistry do
   end
 
   @doc """
-  List all agents for a specific session.
-
-  Returns a list of `{role, index, pid}` tuples for all agents
-  belonging to the given session.
-
-  ## Examples
-
-      [{:main, 0, pid1}, {:research, 0, pid2}] = AgentRegistry.list_by_session(session_id)
-  """
-  @spec list_by_session(String.t()) :: [{atom(), non_neg_integer(), pid()}]
-  def list_by_session(session_id) do
-    # Use match spec to find all entries where the first element of the key matches session_id
-    Registry.select(@registry_name, [
-      {{{session_id, :"$1", :"$2"}, :"$3", :_}, [], [{{:"$1", :"$2", :"$3"}}]}
-    ])
-  end
-
-  @doc """
-  List all agents with a specific role across all sessions.
-
-  Returns a list of `{session_id, index, pid}` tuples.
-
-  ## Examples
-
-      [{session1, 0, pid1}, {session2, 0, pid2}] = AgentRegistry.list_by_role(:research)
-  """
-  @spec list_by_role(atom()) :: [{String.t(), non_neg_integer(), pid()}]
-  def list_by_role(role) do
-    Registry.select(@registry_name, [
-      {{{:"$1", role, :"$2"}, :"$3", :_}, [], [{{:"$1", :"$2", :"$3"}}]}
-    ])
-  end
-
-  @doc """
   Count the number of registered agents.
   """
   @spec count() :: non_neg_integer()
   def count do
     Registry.count(@registry_name)
-  end
-
-  @doc """
-  Count agents for a specific session.
-  """
-  @spec count_by_session(String.t()) :: non_neg_integer()
-  def count_by_session(session_id) do
-    session_id
-    |> list_by_session()
-    |> length()
   end
 end

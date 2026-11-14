@@ -20,6 +20,8 @@ defmodule LemonWeb.ManagementLive do
   alias LemonCore.{SessionKey, SessionLifecycle}
   alias LemonWeb.{ManagementText, Rpc, SessionCwd}
 
+  import LemonWeb.Rpc, only: [put_present: 3]
+
   @max_sessions 200
   @max_history 100
   @max_active_runs 40
@@ -1895,9 +1897,6 @@ defmodule LemonWeb.ManagementLive do
   end
 
   defp bounded(_value, _max), do: ""
-
-  defp put_present(map, _key, value) when value in [nil, ""], do: map
-  defp put_present(map, key, value), do: Map.put(map, key, value)
 
   # ── Display helpers ──────────────────────────────────────────────────────
 

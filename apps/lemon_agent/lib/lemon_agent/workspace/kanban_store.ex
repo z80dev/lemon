@@ -269,36 +269,6 @@ defmodule LemonAgent.Workspace.KanbanStore do
     end)
   end
 
-  @spec complete_task(binary(), keyword()) :: {:ok, map()} | {:error, term()}
-  def complete_task(task_id, opts \\ []) when is_binary(task_id) do
-    with_task_board_lock(task_id, fn ->
-      case get_task(task_id) do
-        %{} = task when map_size(task) == 0 ->
-          {:error, :not_found}
-
-        task ->
-          with {:ok, board} <- fetch_board(task.board_id) do
-            complete_task_unlocked(task, board, opts)
-          end
-      end
-    end)
-  end
-
-  @spec fail_task(binary(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
-  def fail_task(task_id, reason, opts \\ []) when is_binary(task_id) and is_binary(reason) do
-    with_task_board_lock(task_id, fn ->
-      case get_task(task_id) do
-        %{} = task when map_size(task) == 0 ->
-          {:error, :not_found}
-
-        task ->
-          with {:ok, board} <- fetch_board(task.board_id) do
-            fail_task_unlocked(task, board, reason, opts)
-          end
-      end
-    end)
-  end
-
   @spec reclaim_expired_leases(binary(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def reclaim_expired_leases(board_id, opts \\ []) when is_binary(board_id) do
     with_board_lock(board_id, fn ->

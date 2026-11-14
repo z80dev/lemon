@@ -92,26 +92,6 @@ defmodule LemonAi.Auth.OAuthSecretResolver do
   end
 
   @doc false
-  def with_refresh_lock(resolver, secret_name, secret, opts, resolve) do
-    :global.trans(
-      {{__MODULE__, resolver, secret_name}, self()},
-      fn ->
-        with {:ok, latest, opts} <- reload_secret(resolver, secret_name, secret, opts) do
-          # The caller may have waited while another session rotated this login.
-          # Its earlier rejection does not apply to the replacement token.
-          opts =
-            if latest["access_token"] != secret["access_token"],
-              do: Keyword.put(opts, :force_refresh, false),
-              else: opts
-
-          resolve.(latest, opts)
-        end
-      end,
-      [node()]
-    )
-  end
-
-  @doc false
   def reload_secret(resolver, secret_name, stale, opts) do
     reload_secret(secret_name, stale, opts, &resolver.decode_secret/1, &resolver.encode_secret/1)
   end

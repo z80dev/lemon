@@ -2,7 +2,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.Adapters.Telegram.Transport.{
-    ActionRunner,
+    InboundContext,
     Normalize,
     Pipeline,
     UpdateProcessor
@@ -16,7 +16,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
     :ok
   end
 
-  test "callback queries refresh known targets through pipeline actions" do
+  test "callback queries refresh known targets before handling the callback" do
     state = %{
       account_id: "default",
       allowed_chat_ids: nil,
@@ -51,27 +51,18 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
              })
 
     assert {:ok, context} = Normalize.event(state, update, 101)
-    {state, actions} = Pipeline.run(context, state)
 
-    assert [
-             {:index_known_target, ^update},
-             {:handle_callback_query, callback_query}
-           ] = actions
-
-    assert callback_query["id"] == "cb-1"
-    assert state.account_id == "default"
-
-    _ =
-      ActionRunner.run(state, actions, %{
-        execute_inbound_message: fn st, _inbound -> st end,
-        handle_callback_query: fn _st, _callback_query -> :ok end,
-        index_known_target: &UpdateProcessor.maybe_index_known_target/2,
-        maybe_log_drop: fn _st, _inbound, _reason -> :ok end,
-        process_media_group: fn _st, _group -> :ok end,
-        send_approval_request: fn _st, _payload -> :ok end,
-        start_async_task: fn _st, fun -> fun.() end,
-        submit_buffer: fn st, _buffer -> st end
+    state =
+      Pipeline.run(context, state, %{
+        handle_callback_query: fn _st, callback_query ->
+          assert KnownTargetStore.get(key)[:updated_at_ms] > stale_ts
+          send(self(), {:callback, callback_query})
+        end,
+        index_known_target: &UpdateProcessor.maybe_index_known_target/2
       })
+
+    assert_receive {:callback, %{"id" => "cb-1"}}
+    assert state.account_id == "default"
 
     refreshed = KnownTargetStore.get(key)
     assert refreshed[:updated_at_ms] > stale_ts
@@ -101,8 +92,16 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
     refute first_timer_ref == current_timer_ref
 
     assert {:ok, stale_context} = Normalize.event(state, {:debounce_flush, key, first_ref})
-    {state_after_stale, stale_actions} = Pipeline.run(stale_context, state)
-    assert stale_actions == []
+
+    callbacks = %{
+      submit_buffer: fn st, buffer ->
+        send(self(), {:submitted, buffer})
+        Map.put(st, :submitted?, true)
+      end
+    }
+
+    state_after_stale = Pipeline.run(stale_context, state, callbacks)
+    refute_receive {:submitted, _}
     assert Map.has_key?(state_after_stale.buffers, key)
     assert state_after_stale.buffers[key].debounce_ref == current_ref
     assert :erlang.read_timer(current_timer_ref) > 0
@@ -110,10 +109,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
     assert {:ok, current_context} =
              Normalize.event(state_after_stale, {:debounce_flush, key, current_ref})
 
-    {state_after_current, current_actions} = Pipeline.run(current_context, state_after_stale)
+    state_after_current = Pipeline.run(current_context, state_after_stale, callbacks)
 
     refute Map.has_key?(state_after_current.buffers, key)
-    assert [{:submit_buffer, buffer}] = current_actions
+    assert state_after_current.submitted?
+    assert_receive {:submitted, buffer}
     assert buffer.inbound.message.id == "62"
   end
 
@@ -132,10 +132,45 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
     assert {:ok, context} =
              Normalize.event(%{state | buffers: %{}, media_groups: %{}}, update, 102)
 
-    {state_after, actions} = Pipeline.run(context, state)
+    state_after =
+      Pipeline.run(context, state, %{
+        index_known_target: fn st, update ->
+          send(self(), {:indexed, update})
+          st
+        end,
+        handle_callback_query: fn _st, query -> send(self(), {:callback, query}) end
+      })
 
     assert state_after == state
-    assert actions == [{:index_known_target, update}]
+    assert_receive {:indexed, ^update}
+    refute_receive {:callback, _}
+  end
+
+  test "approval requests run through the async callback without replacing state" do
+    state = %{account_id: "default"}
+    payload = %{approval_id: "approval-1"}
+    context = %InboundContext{kind: :approval_requested, raw_update: payload}
+
+    assert Pipeline.run(context, state, %{
+             start_async_task: fn st, fun ->
+               assert st == state
+               send(self(), :async_started)
+               fun.()
+             end,
+             send_approval_request: fn st, request ->
+               assert st == state
+               send(self(), {:approval, request})
+               :ignored_callback_result
+             end
+           }) == state
+
+    assert_receive :async_started
+    assert_receive {:approval, ^payload}
+  end
+
+  test "unknown events leave state untouched" do
+    state = %{account_id: "default"}
+    assert Pipeline.run(:unknown, state, %{}) == state
   end
 
   defp callback_update(chat_id, callback_id, data) do

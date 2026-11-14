@@ -8,7 +8,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
   alias LemonChannels.Adapters.Telegram.Inbound
 
   alias LemonChannels.Adapters.Telegram.Transport.{
-    ActionRunner,
     Normalize,
     Pipeline,
     UpdateProcessor
@@ -79,8 +78,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
       {:ok, normalized} ->
         case maybe_transcribe_event(state, normalized, callbacks) do
           {:ok, normalized} ->
-            {state, actions} = Pipeline.run(normalized, state)
-            ActionRunner.run(state, actions, callbacks)
+            Pipeline.run(normalized, state, callbacks)
 
           {:skip, new_state} ->
             new_state

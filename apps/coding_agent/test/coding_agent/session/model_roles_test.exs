@@ -94,7 +94,6 @@ defmodule CodingAgent.Session.ModelRolesTest do
     settings = SettingsManager.from_config(config)
     assert settings.default_model == "@default"
     assert settings.model_roles == config.model_roles
-    assert SettingsManager.get_model_settings(settings).model_roles == config.model_roles
 
     session =
       start_supervised!({Session, [cwd: cwd, settings_manager: settings, register: false]})
@@ -260,46 +259,6 @@ defmodule CodingAgent.Session.ModelRolesTest do
       else
         assert result.details.status == "completed"
       end
-    end
-  end
-
-  test "direct coordinator children honor task defaults without changing unconfigured inheritance",
-       %{cwd: cwd, settings: settings} do
-    parent_model = ModelResolver.resolve_session_model("openai:gpt-4o", settings)
-    selected_model = ModelResolver.resolve_session_model("openai:gpt-4o-mini", settings)
-    apis = Enum.uniq([parent_model.api, selected_model.api])
-    previous = Map.new(apis, &{&1, LemonAi.ProviderRegistry.get(&1)})
-    Enum.each(apis, &LemonAi.ProviderRegistry.register(&1, ChildRoleProvider))
-
-    on_exit(fn ->
-      Enum.each(previous, fn
-        {api, {:ok, module}} -> LemonAi.ProviderRegistry.register(api, module)
-        {api, {:error, :not_found}} -> LemonAi.ProviderRegistry.unregister(api)
-      end)
-    end)
-
-    configured = %{settings | model_roles: %{"task" => "@smol", "smol" => "openai:gpt-4o-mini"}}
-
-    for {task_settings, expected_id} <- [{settings, "gpt-4o"}, {configured, "gpt-4o-mini"}] do
-      coordinator =
-        start_supervised!(
-          {CodingAgent.Coordinator,
-           [
-             cwd: cwd,
-             model: parent_model,
-             settings_manager: task_settings,
-             default_timeout: 5_000
-           ]},
-          id: make_ref()
-        )
-
-      assert {:ok, text} =
-               CodingAgent.Coordinator.run_subagent(coordinator,
-                 prompt: "Complete the focused task.",
-                 timeout: 5_000
-               )
-
-      assert text == expected_id <> "|synthetic-openai-key"
     end
   end
 end

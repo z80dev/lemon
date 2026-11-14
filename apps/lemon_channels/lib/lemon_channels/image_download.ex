@@ -25,22 +25,12 @@ defmodule LemonChannels.ImageDownload do
 
   def merge(inbound, previous) do
     images = Map.get(previous.message, :images, []) ++ Map.get(inbound.message, :images, [])
-    text = inbound.message.text
-
-    text =
-      if length(images) > @max_images,
-        do: text <> "\n[Image unavailable: image limit exceeded.]",
-        else: text
 
     if images == [] do
       inbound
     else
-      message =
-        inbound.message
-        |> Map.put(:images, Enum.take(images, @max_images))
-        |> Map.put(:text, text)
-
-      %{inbound | message: message}
+      reason = if length(images) > @max_images, do: :limit, else: nil
+      put_images(inbound, Enum.take(images, @max_images), reason)
     end
   end
 
@@ -96,15 +86,24 @@ defmodule LemonChannels.ImageDownload do
     text = inbound.message.text
     text = if String.trim(text) == "" and candidates != [], do: "[image]", else: text
 
-    text =
-      if failed?,
-        do: text <> "\n[Image unavailable: download failed or image limit exceeded.]",
-        else: text
-
-    message = inbound.message |> Map.put(:text, text) |> Map.put(:images, Enum.reverse(images))
-    %{inbound | message: message}
+    inbound = %{inbound | message: Map.put(inbound.message, :text, text)}
+    reason = if failed?, do: :download_or_limit, else: nil
+    put_images(inbound, Enum.reverse(images), reason)
   rescue
-    _ ->
-      %{inbound | message: Map.update!(inbound.message, :text, &(&1 <> "\n[Image unavailable.]"))}
+    _ -> put_images(inbound, :keep, :unavailable)
+  end
+
+  defp put_images(inbound, images, reason) do
+    suffix =
+      case reason do
+        nil -> ""
+        :limit -> "\n[Image unavailable: image limit exceeded.]"
+        :download_or_limit -> "\n[Image unavailable: download failed or image limit exceeded.]"
+        :unavailable -> "\n[Image unavailable.]"
+      end
+
+    message = Map.update!(inbound.message, :text, &(&1 <> suffix))
+    message = if images == :keep, do: message, else: Map.put(message, :images, images)
+    %{inbound | message: message}
   end
 end

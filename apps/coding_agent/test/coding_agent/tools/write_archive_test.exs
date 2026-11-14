@@ -89,7 +89,7 @@ defmodule CodingAgent.Tools.WriteArchiveTest do
     path = Path.join(dir, "bundle.zip")
     assert %AgentToolResult{} = write(dir, path <> ":file", "before")
     session = "archive-write-#{System.unique_integer([:positive])}"
-    on_exit(fn -> CodingAgent.Checkpoint.delete_all(session) end)
+    on_exit(fn -> LemonCore.Checkpoint.delete_all(session) end)
 
     assert %AgentToolResult{details: %{checkpoint_id: id}} =
              write(dir, path <> ":file", "after", session_id: session)

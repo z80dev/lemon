@@ -1,6 +1,6 @@
 defmodule LemonSkills.Audit.Engine do
   @moduledoc """
-  Audits a skill bundle for security and safety concerns.
+  Deterministically audits a skill bundle for security and safety concerns.
 
   Scans the SKILL.md content (and any listed scripts) for patterns that are
   known to be destructive, suspicious, or exploitable.  Each rule returns zero
@@ -17,6 +17,7 @@ defmodule LemonSkills.Audit.Engine do
   The overall verdict is the worst finding: block > warn > pass.
   A rule that exhausts the regex match budget produces a blocking
   `audit_match_limit` finding; incomplete screening never counts as a pass.
+  Optional model review is owned by `LemonSkills.Audit.BundleAudit`, not this engine.
 
   ## Rules
 
@@ -43,10 +44,9 @@ defmodule LemonSkills.Audit.Engine do
   alias LemonSkills.Audit.Finding
   alias LemonSkills.Bundle
   alias LemonSkills.Entry
-  alias LemonSkills.Audit.LlmReviewer
 
   @type verdict :: :pass | :warn | :block
-  @version 4
+  @version 5
 
   @doc "Version tag for cache invalidation when deterministic audit rules change."
   @spec version() :: pos_integer()
@@ -61,17 +61,6 @@ defmodule LemonSkills.Audit.Engine do
   """
   @spec audit_content(String.t()) :: {verdict(), [Finding.t()]}
   def audit_content(content) when is_binary(content) do
-    audit_content(content, [])
-  end
-
-  @doc """
-  Audit the raw SKILL.md content string with optional overrides.
-
-  Supported options:
-  - `:llm` — keyword list with `:enabled`, `:model`, `:reviewer`, and `:runner`
-  """
-  @spec audit_content(String.t(), keyword()) :: {verdict(), [Finding.t()]}
-  def audit_content(content, opts) when is_binary(content) and is_list(opts) do
     findings =
       []
       |> run_rule(&check_destructive_commands/1, content)
@@ -79,7 +68,6 @@ defmodule LemonSkills.Audit.Engine do
       |> run_rule(&check_exfiltration/1, content)
       |> run_rule(&check_path_traversal/1, content)
       |> run_rule(&check_symlink_escape/1, content)
-      |> Kernel.++(run_llm_review(content, opts))
 
     {overall_verdict(findings), findings}
   end
@@ -92,19 +80,14 @@ defmodule LemonSkills.Audit.Engine do
   """
   @spec audit_entry(Entry.t()) :: {verdict(), [Finding.t()]}
   def audit_entry(%Entry{} = entry) do
-    audit_entry(entry, [])
-  end
-
-  @spec audit_entry(Entry.t(), keyword()) :: {verdict(), [Finding.t()]}
-  def audit_entry(%Entry{} = entry, opts) when is_list(opts) do
-    audit_bundle(entry.path, opts)
+    audit_bundle(entry.path)
   end
 
   @doc """
   Audit all auditable text files in a skill bundle.
   """
-  @spec audit_bundle(String.t(), keyword()) :: {verdict(), [Finding.t()]}
-  def audit_bundle(skill_dir, opts \\ []) when is_binary(skill_dir) and is_list(opts) do
+  @spec audit_bundle(String.t()) :: {verdict(), [Finding.t()]}
+  def audit_bundle(skill_dir) when is_binary(skill_dir) do
     case Bundle.files(skill_dir) do
       {:ok, files} ->
         content =
@@ -120,7 +103,7 @@ defmodule LemonSkills.Audit.Engine do
         if String.trim(content) == "" do
           {:pass, []}
         else
-          audit_content(content, opts)
+          audit_content(content)
         end
 
       {:error, reason} ->
@@ -161,60 +144,6 @@ defmodule LemonSkills.Audit.Engine do
       acc ++
         [Finding.block("audit_match_limit", "Security screening exceeded its match budget")]
   end
-
-  defp run_llm_review(content, opts) do
-    llm_opts = Keyword.get(opts, :llm, [])
-    enabled = Keyword.get(llm_opts, :enabled, audit_llm_enabled?())
-
-    if enabled do
-      reviewer = Keyword.get(llm_opts, :reviewer, configured_llm_reviewer())
-
-      review_opts =
-        llm_opts
-        |> Keyword.put_new(:model, configured_llm_model())
-
-      case reviewer.review(content, review_opts) do
-        {:ok, {_verdict, findings}} ->
-          findings
-
-        {:error, reason} ->
-          [
-            Finding.warn(
-              "llm_audit_unavailable",
-              "LLM audit enabled but could not complete: #{format_review_error(reason)}",
-              nil
-            )
-          ]
-      end
-    else
-      []
-    end
-  end
-
-  defp audit_llm_enabled? do
-    Application.get_env(:lemon_skills, :audit_llm, [])
-    |> Keyword.get(:enabled, false)
-  end
-
-  defp configured_llm_model do
-    Application.get_env(:lemon_skills, :audit_llm, [])
-    |> Keyword.get(:model)
-  end
-
-  defp configured_llm_reviewer do
-    Application.get_env(:lemon_skills, :audit_llm_reviewer, LlmReviewer)
-  end
-
-  defp format_review_error({:unknown_model, model}), do: "unknown model #{inspect(model)}"
-
-  defp format_review_error({:unknown_provider, provider}),
-    do: "unknown provider #{inspect(provider)}"
-
-  defp format_review_error({:invalid_json, _reason}), do: "reviewer did not return valid JSON"
-  defp format_review_error(:missing_model), do: "no audit_llm model configured"
-  defp format_review_error(:invalid_payload), do: "reviewer returned an invalid payload"
-  defp format_review_error(reason) when is_binary(reason), do: reason
-  defp format_review_error(reason), do: inspect(reason)
 
   # ── Rule: destructive_commands ───────────────────────────────────────────────
 

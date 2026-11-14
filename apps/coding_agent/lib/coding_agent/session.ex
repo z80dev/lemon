@@ -26,7 +26,7 @@ defmodule CodingAgent.Session do
   and the caller gets `{:error, :aborted}`), mutating calls that report busy during
   a stream (`prompt/3`, `compact/2`, `summarize_current_branch/2`, `rewind`,
   navigation, `plan/3`, `reload_extensions/1`) report busy instead of racing it, and
-  read-only calls (`get_stats/1`, `health_check/1`, `diagnostics/1`, subscribe, ...)
+  read-only calls (`get_stats/1`, `diagnostics/1`, subscribe, ...)
   keep being served. A result is applied inside the session only if the session
   signature is unchanged (otherwise the caller gets `{:error, :stale_session}`); a
   task crash replies `{:error, {:task_exit, reason}}`, a task that outlives the
@@ -685,14 +685,6 @@ defmodule CodingAgent.Session do
   end
 
   @doc """
-  Perform a lightweight health check for the session.
-  """
-  @spec health_check(GenServer.server()) :: map()
-  def health_check(session) do
-    GenServer.call(session, :health_check)
-  end
-
-  @doc """
   Return detailed diagnostics for the session.
   """
   @spec diagnostics(GenServer.server()) :: map()
@@ -1195,20 +1187,6 @@ defmodule CodingAgent.Session do
     }
 
     {:reply, stats, state}
-  end
-
-  def handle_call(:health_check, _from, state) do
-    diag = State.build_diagnostics(state)
-
-    health = %{
-      status: diag.status,
-      session_id: diag.session_id,
-      uptime_ms: diag.uptime_ms,
-      is_streaming: diag.is_streaming,
-      agent_alive: diag.agent_alive
-    }
-
-    {:reply, health, state}
   end
 
   def handle_call(:diagnostics, _from, state) do

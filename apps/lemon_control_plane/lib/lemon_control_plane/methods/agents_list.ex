@@ -38,9 +38,5 @@ defmodule LemonControlPlane.Methods.AgentsList do
       error ->
         error
     end
-  rescue
-    _ -> {:ok, %{"agents" => []}}
-  catch
-    :exit, _ -> {:ok, %{"agents" => []}}
   end
 end

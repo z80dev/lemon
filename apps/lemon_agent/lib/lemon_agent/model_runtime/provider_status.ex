@@ -282,17 +282,7 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
     end
   end
 
-  defp normalize_provider(value) when is_atom(value),
-    do: value |> Atom.to_string() |> normalize_provider()
-
-  defp normalize_provider(value) when is_binary(value) do
-    value
-    |> String.trim()
-    |> String.downcase()
-    |> String.replace("-", "_")
-  end
-
-  defp normalize_provider(_), do: "unknown"
+  defp normalize_provider(value), do: ProviderNames.normalize(value) || "unknown"
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(value), do: not is_nil(value)

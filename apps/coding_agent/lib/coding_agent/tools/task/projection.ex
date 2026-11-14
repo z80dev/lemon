@@ -7,17 +7,6 @@ defmodule CodingAgent.Tools.Task.Projection do
   alias LemonCore.Event
   alias LemonCore.TaskSurface.Projection, as: CoreProjection
 
-  @terminal_event_types [
-    :run_completed,
-    :task_completed,
-    :task_error,
-    :task_timeout,
-    :task_aborted
-  ]
-
-  @doc "Returns true if the given event type is a terminal lifecycle event."
-  def terminal_event_type?(type), do: type in @terminal_event_types
-
   @doc """
   Build an `:engine_action` payload from an `AgentToolResult` update
   that contains a `current_action` or `reasoning` entry in its details.
