@@ -6,7 +6,7 @@ defmodule LemonMCP.TestSupport.FixtureServer do
   @spec response_for(map(), String.t()) :: map() | nil
   def response_for(%{"method" => "initialize", "id" => id}, server_name) do
     result(id, %{
-      "protocolVersion" => LemonMCP.protocol_version(),
+      "protocolVersion" => LemonMCP.Protocol.protocol_version(),
       "capabilities" => %{"tools" => %{}, "resources" => %{}, "prompts" => %{}},
       "serverInfo" => %{"name" => server_name, "version" => "1.0.0"}
     })

@@ -131,13 +131,19 @@ defmodule LemonComputerUse.Config do
   @doc false
   @spec origin_of(term()) :: [String.t()]
   def origin_of(value) when is_binary(value) do
-    case URI.parse(String.trim(value)) do
+    uri = URI.parse(String.trim(value))
+    host = if is_binary(uri.host), do: String.downcase(uri.host), else: uri.host
+    origin_of(%{uri | host: host})
+  end
+
+  def origin_of(%URI{} = uri) do
+    case uri do
       %URI{scheme: scheme, host: host, port: port}
       when scheme in ["http", "https"] and is_binary(host) and host != "" ->
         bracketed = if String.contains?(host, ":"), do: "[" <> host <> "]", else: host
         default = if scheme == "https", do: 443, else: 80
         suffix = if port in [nil, default], do: "", else: ":" <> Integer.to_string(port)
-        [scheme <> "://" <> String.downcase(bracketed) <> suffix]
+        [scheme <> "://" <> bracketed <> suffix]
 
       _ ->
         []

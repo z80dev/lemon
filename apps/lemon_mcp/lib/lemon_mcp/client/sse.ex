@@ -83,7 +83,7 @@ defmodule LemonMCP.Client.SSE do
       stream_socket: nil,
       post_url: nil,
       sse_buffer: "",
-      sse_event: new_event(),
+      sse_event: LemonMCP.Client.SSE.Stream.new_event(),
       server_info: nil,
       server_capabilities: nil
     }
@@ -508,9 +508,7 @@ defmodule LemonMCP.Client.SSE do
     buffer = List.last(lines) || ""
 
     {events, event} =
-      Enum.reduce(complete_lines, {[], state.sse_event}, fn line, {events, event} ->
-        parse_sse_line(String.trim_trailing(line, "\r"), events, event)
-      end)
+      LemonMCP.Client.SSE.Stream.parse_lines(complete_lines, state.sse_event)
 
     Enum.each(events, fn
       %{event: "message", data: data} ->
@@ -528,26 +526,6 @@ defmodule LemonMCP.Client.SSE do
 
     {Enum.reverse(events), %{state | sse_buffer: buffer, sse_event: event}}
   end
-
-  defp parse_sse_line("", events, %{data: data} = event) when data != [] do
-    {[%{event: event.event || "message", data: Enum.reverse(data) |> Enum.join("\n")} | events],
-     new_event()}
-  end
-
-  defp parse_sse_line("", events, _event), do: {events, new_event()}
-  defp parse_sse_line(":" <> _comment, events, event), do: {events, event}
-
-  defp parse_sse_line("event:" <> value, events, event) do
-    {events, %{event | event: trim_sse_value(value)}}
-  end
-
-  defp parse_sse_line("data:" <> value, events, event) do
-    {events, %{event | data: [trim_sse_value(value) | event.data]}}
-  end
-
-  defp parse_sse_line(_line, events, event), do: {events, event}
-
-  defp new_event, do: %{event: "message", data: []}
 
   defp post_raw(message, state) do
     with {:ok, body} <- Protocol.encode(message),
@@ -596,9 +574,6 @@ defmodule LemonMCP.Client.SSE do
       |> URI.to_string()
     end
   end
-
-  defp trim_sse_value(" " <> value), do: value
-  defp trim_sse_value(value), do: value
 
   defp deadline(timeout_ms), do: System.monotonic_time(:millisecond) + timeout_ms
 

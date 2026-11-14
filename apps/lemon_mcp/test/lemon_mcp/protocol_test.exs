@@ -5,7 +5,7 @@ defmodule LemonMCP.ProtocolTest do
 
   describe "protocol_version/0" do
     test "returns expected version" do
-      assert LemonMCP.protocol_version() == "2024-11-05"
+      assert LemonMCP.Protocol.protocol_version() == "2024-11-05"
     end
   end
 

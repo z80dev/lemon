@@ -1,6 +1,21 @@
 defmodule LemonBrowser.Backends.Hosted do
   @moduledoc false
 
+  defmacro __using__(opts) do
+    provider = Keyword.fetch!(opts, :provider)
+
+    quote bind_quoted: [provider: provider] do
+      @behaviour LemonBrowser.Backend
+      @provider provider
+      def id, do: @provider
+      def available?, do: LemonBrowser.Backends.Hosted.available?(@provider)
+      def available?(opts), do: LemonBrowser.Backends.Hosted.available?(@provider, opts)
+      def request(method, args, timeout_ms, opts),
+        do: LemonBrowser.Backends.Hosted.request(@provider, method, args, timeout_ms, opts)
+      def status(opts), do: LemonBrowser.Backends.Hosted.status(@provider, opts)
+    end
+  end
+
   alias LemonBrowser.CloudSession
   alias LemonBrowser.SessionProviderRegistry
 
@@ -34,10 +49,12 @@ defmodule LemonBrowser.Backends.Hosted do
         :error -> %{provider: provider, configured: false, error: "unknown provider"}
       end
 
+    sessions = CloudSession.status(provider)
+
     Map.merge(provider_status, %{
       available: available?(provider),
-      sessions: CloudSession.status(provider),
-      session_count: length(CloudSession.status(provider))
+      sessions: sessions,
+      session_count: length(sessions)
     })
   end
 
@@ -48,33 +65,15 @@ end
 
 defmodule LemonBrowser.Backends.Browserbase do
   @moduledoc "Browserbase hosted-CDP backend."
-  @behaviour LemonBrowser.Backend
-  alias LemonBrowser.Backends.Hosted
-  def id, do: :browserbase
-  def available?, do: Hosted.available?(:browserbase)
-  def available?(opts), do: Hosted.available?(:browserbase, opts)
-  def request(method, args, timeout_ms, opts), do: Hosted.request(:browserbase, method, args, timeout_ms, opts)
-  def status(opts), do: Hosted.status(:browserbase, opts)
+  use LemonBrowser.Backends.Hosted, provider: :browserbase
 end
 
 defmodule LemonBrowser.Backends.BrowserUse do
   @moduledoc "Browser Use Cloud hosted-CDP backend."
-  @behaviour LemonBrowser.Backend
-  alias LemonBrowser.Backends.Hosted
-  def id, do: :browser_use
-  def available?, do: Hosted.available?(:browser_use)
-  def available?(opts), do: Hosted.available?(:browser_use, opts)
-  def request(method, args, timeout_ms, opts), do: Hosted.request(:browser_use, method, args, timeout_ms, opts)
-  def status(opts), do: Hosted.status(:browser_use, opts)
+  use LemonBrowser.Backends.Hosted, provider: :browser_use
 end
 
 defmodule LemonBrowser.Backends.Firecrawl do
   @moduledoc "Firecrawl hosted-CDP backend."
-  @behaviour LemonBrowser.Backend
-  alias LemonBrowser.Backends.Hosted
-  def id, do: :firecrawl
-  def available?, do: Hosted.available?(:firecrawl)
-  def available?(opts), do: Hosted.available?(:firecrawl, opts)
-  def request(method, args, timeout_ms, opts), do: Hosted.request(:firecrawl, method, args, timeout_ms, opts)
-  def status(opts), do: Hosted.status(:firecrawl, opts)
+  use LemonBrowser.Backends.Hosted, provider: :firecrawl
 end

@@ -431,47 +431,11 @@ defmodule LemonMCP.Client.HTTP do
   end
 
   defp parse_sse_events(body) do
-    {events, event} =
-      body
-      |> String.split("\n")
-      |> Enum.reduce({[], new_event()}, fn line, {events, event} ->
-        parse_sse_line(String.trim_trailing(line, "\r"), events, event)
-      end)
-
-    events =
-      if event.data == [] do
-        events
-      else
-        [
-          %{event: event.event || "message", data: Enum.reverse(event.data) |> Enum.join("\n")}
-          | events
-        ]
-      end
-
-    Enum.reverse(events)
+    body
+    |> String.split("\n")
+    |> LemonMCP.Client.SSE.Stream.parse_lines(LemonMCP.Client.SSE.Stream.new_event())
+    |> LemonMCP.Client.SSE.Stream.finalize()
   end
-
-  defp parse_sse_line("", events, %{data: data} = event) when data != [] do
-    {[%{event: event.event || "message", data: Enum.reverse(data) |> Enum.join("\n")} | events],
-     new_event()}
-  end
-
-  defp parse_sse_line("", events, _event), do: {events, new_event()}
-  defp parse_sse_line(":" <> _comment, events, event), do: {events, event}
-
-  defp parse_sse_line("event:" <> value, events, event) do
-    {events, %{event | event: trim_sse_value(value)}}
-  end
-
-  defp parse_sse_line("data:" <> value, events, event) do
-    {events, %{event | data: [trim_sse_value(value) | event.data]}}
-  end
-
-  defp parse_sse_line(_line, events, event), do: {events, event}
-
-  defp new_event, do: %{event: "message", data: []}
-  defp trim_sse_value(" " <> value), do: value
-  defp trim_sse_value(value), do: value
 
   defp normalize_reply({:error, {:rpc_error, _error}} = error), do: error
 
