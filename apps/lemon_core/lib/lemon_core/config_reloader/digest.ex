@@ -5,7 +5,7 @@ defmodule LemonCore.ConfigReloader.Digest do
   Computes and compares digests for config sources (files, env, secrets)
   to determine whether a reload is necessary.
 
-  File fingerprints combine mtime and size, matching the config cache.
+  File fingerprints combine mtime + size + content hash for reliable detection.
   Secret digests use metadata only (owner, name, updated_at, version) — never values.
   """
 
@@ -15,6 +15,7 @@ defmodule LemonCore.ConfigReloader.Digest do
           path: String.t(),
           mtime: tuple() | nil,
           size: non_neg_integer() | nil,
+          hash: binary() | nil,
           status: :ok | :missing | :error
         }
 
@@ -33,7 +34,8 @@ defmodule LemonCore.ConfigReloader.Digest do
   @doc """
   Compute a fingerprint for a single file path.
 
-  Returns mtime and size. Missing files are represented with status `:missing`.
+  Returns mtime, size, and a SHA-256 content hash.
+  Missing or unreadable files are represented with status `:missing` or `:error`.
   """
   @spec file_fingerprint(String.t()) :: file_fingerprint()
   def file_fingerprint(path) do
@@ -41,10 +43,13 @@ defmodule LemonCore.ConfigReloader.Digest do
 
     case File.stat(expanded) do
       {:ok, %File.Stat{mtime: mtime, size: size}} ->
+        hash = content_hash(expanded)
+
         %{
           path: expanded,
           mtime: mtime,
           size: size,
+          hash: hash,
           status: :ok
         }
 
@@ -53,6 +58,7 @@ defmodule LemonCore.ConfigReloader.Digest do
           path: expanded,
           mtime: nil,
           size: nil,
+          hash: nil,
           status: :missing
         }
     end
@@ -166,6 +172,13 @@ defmodule LemonCore.ConfigReloader.Digest do
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
+
+  defp content_hash(path) do
+    case File.read(path) do
+      {:ok, content} -> :crypto.hash(:sha256, content)
+      {:error, _} -> nil
+    end
+  end
 
   defp now_ms, do: System.system_time(:millisecond)
 end

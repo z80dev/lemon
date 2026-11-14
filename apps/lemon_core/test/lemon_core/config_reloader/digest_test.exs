@@ -34,6 +34,7 @@ defmodule LemonCore.ConfigReloader.DigestTest do
       assert is_tuple(fp.mtime)
       assert is_integer(fp.size)
       assert fp.size > 0
+      assert is_binary(fp.hash)
     end
 
     test "returns missing status for non-existent file" do
@@ -42,18 +43,22 @@ defmodule LemonCore.ConfigReloader.DigestTest do
       assert fp.status == :missing
       assert is_nil(fp.mtime)
       assert is_nil(fp.size)
+      assert is_nil(fp.hash)
     end
 
-    test "detects size changes", %{tmp_dir: tmp_dir} do
+    test "detects same-size changes with unchanged mtime via hash", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "changing.toml")
 
       File.write!(path, "version = 1")
       fp1 = Digest.file_fingerprint(path)
 
-      File.write!(path, "version = 200")
+      File.write!(path, "version = 2")
+      File.touch!(path, fp1.mtime)
       fp2 = Digest.file_fingerprint(path)
 
-      assert fp1.size != fp2.size
+      assert fp1.size == fp2.size
+      assert fp1.mtime == fp2.mtime
+      assert fp1.hash != fp2.hash
     end
   end
 
@@ -135,7 +140,7 @@ defmodule LemonCore.ConfigReloader.DigestTest do
       File.write!(path, "v1")
       old_digests = %{files: Digest.files_digest([path])}
 
-      File.write!(path, "version 2")
+      File.write!(path, "v2")
       new_digests = %{files: Digest.files_digest([path])}
 
       {changed, _merged} = Digest.compare(old_digests, new_digests)
