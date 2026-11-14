@@ -894,6 +894,38 @@ defmodule CodingAgent.Session do
   def recovery_snapshot(session), do: GenServer.call(session, :recovery_snapshot, 5_000)
 
   @doc """
+  Resolve a session tool for the `eval` code-mode bridge (`tools.<name>(...)`).
+
+  The tool comes from the session's frozen, policy/approval/hook-wrapped
+  catalog, with the current plan gate applied, so a cell can reach exactly what
+  the model could call. `eval` itself and the disclosure bridge tools are
+  refused. An unavailable session yields `{:error, "session unavailable"}`.
+  """
+  @spec bridge_tool(GenServer.server(), String.t()) :: {:ok, AgentTool.t()} | {:error, String.t()}
+  def bridge_tool(session, name) when is_binary(name) do
+    GenServer.call(session, {:eval_bridge_tool, name}, 5_000)
+  catch
+    :exit, _reason -> {:error, "session unavailable"}
+  end
+
+  @doc false
+  @spec lookup_bridge_tool(map(), String.t(), pid()) ::
+          {:ok, AgentTool.t()} | {:error, String.t()}
+  def lookup_bridge_tool(state, name, session_pid) do
+    with false <- name == "eval" or name in CodingAgent.ToolDisclosure.bridge_names(),
+         %{tool: %AgentTool{} = tool} <- Map.get(state.tool_catalog || %{}, name) do
+      {:ok,
+       Planning.host_tool(
+         tool,
+         state.session_manager,
+         Planning.runtime_context(state, session_pid)
+       )}
+    else
+      _ -> {:error, "unknown or unavailable tool: #{name}"}
+    end
+  end
+
+  @doc """
   Save the session to disk.
   """
   @spec save(GenServer.server()) :: :ok | {:error, term()}
@@ -1210,6 +1242,10 @@ defmodule CodingAgent.Session do
   def handle_call({:wasm_host_tool_invoke, tool_name, params_json, context}, from, state)
       when is_map(context) do
     WasmBridge.start_host_call(state, from, tool_name, params_json, context)
+  end
+
+  def handle_call({:eval_bridge_tool, name}, _from, state) do
+    {:reply, lookup_bridge_tool(state, name, self()), state}
   end
 
   def handle_call(:reload_extensions, _from, state) do

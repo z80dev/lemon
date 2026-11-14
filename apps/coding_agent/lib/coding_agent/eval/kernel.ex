@@ -33,8 +33,18 @@ defmodule CodingAgent.Eval.Kernel do
   Caller messages for an accepted run `ref`:
 
     * `{:lemon_eval, ref, {:output, binary}}` - raw user output bytes
+    * `{:lemon_eval, ref, {:tool_call, call, tool, args}}` - the cell asked to
+      run session tool `tool` (call number `call`, unique within the cell);
+      answer with `tool_reply/4` while the cell runs
     * `{:lemon_eval, ref, {:result, map}}` - the driver's result frame
     * `{:lemon_eval, ref, {:exited, status}}` - the kernel process exited
+
+  Tool bridge frames: the driver emits
+  `{"type":"tool_call","id":<cell id>,"call":<int>,"tool":<name>,"args":<any>}`
+  and the slot relays only frames naming the busy cell. Replies go to the
+  driver's stdin as `{"op":"tool_result","id":<cell id>,"call":<int>,"result":{...}}`
+  or `{"op":"tool_error","id":<cell id>,"call":<int>,"message":<string>}`, and
+  are written only while the run they answer is still busy.
   """
 
   use GenServer
@@ -95,12 +105,13 @@ defmodule CodingAgent.Eval.Kernel do
   Runs `code`, starting a kernel first when the slot has none. With `reset:
   true` an existing kernel is killed first.
 
-  Returns `{:ok, %{ref: ref, restarted: nil | lost_reason}}`, where `restarted`
-  names why a previous kernel in this slot ended when this run had to start a
-  fresh one.
+  Returns `{:ok, %{ref: ref, cell: id, restarted: nil | lost_reason}}`, where
+  `cell` is the driver's cell id and `restarted` names why a previous kernel in
+  this slot ended when this run had to start a fresh one.
   """
   @spec run(GenServer.server(), String.t(), keyword()) ::
-          {:ok, %{ref: reference(), restarted: lost_reason() | nil}} | {:error, term()}
+          {:ok, %{ref: reference(), cell: pos_integer(), restarted: lost_reason() | nil}}
+          | {:error, term()}
   def run(slot, code, opts \\ []) do
     GenServer.call(
       slot,
@@ -119,6 +130,21 @@ defmodule CodingAgent.Eval.Kernel do
   catch
     :exit, _ -> :killed
   end
+
+  @doc """
+  Answers tool call `call` of run `ref` with `{:ok, result_map}` (resolved in
+  the cell) or `{:error, message}` (rejected/raised in the cell). Dropped
+  unless `ref` is still the busy run, so late replies are harmless.
+  """
+  @spec tool_reply(
+          GenServer.server(),
+          reference(),
+          pos_integer(),
+          {:ok, map()} | {:error, String.t()}
+        ) ::
+          :ok
+  def tool_reply(slot, ref, call, payload),
+    do: GenServer.cast(slot, {:tool_reply, ref, call, payload})
 
   @doc "OS pid of the running kernel process, if any."
   @spec os_pid(GenServer.server()) :: integer() | nil
@@ -172,7 +198,7 @@ defmodule CodingAgent.Eval.Kernel do
         ref = make_ref()
         busy = %{ref: ref, caller: caller, monitor: Process.monitor(caller), id: id}
         state = cancel_idle(%{state | busy: busy, next_id: id + 1})
-        {:reply, {:ok, %{ref: ref, restarted: restarted}}, state}
+        {:reply, {:ok, %{ref: ref, cell: id, restarted: restarted}}, state}
 
       {:error, reason, state} ->
         {:reply, {:error, reason}, arm_idle(state)}
@@ -212,6 +238,41 @@ defmodule CodingAgent.Eval.Kernel do
   def handle_call({:interrupt, _ref, _reason}, _from, state), do: {:reply, :preserved, state}
 
   def handle_call(:os_pid, _from, state), do: {:reply, state.os_pid, state}
+
+  @impl true
+  def handle_cast(
+        {:tool_reply, ref, call, payload},
+        %{busy: %{ref: ref, id: id}, port: port} = state
+      )
+      when port != nil do
+    frame =
+      with {:ok, result} <- payload,
+           {:ok, json} <- Jason.encode(%{op: "tool_result", id: id, call: call, result: result}) do
+        json
+      else
+        {:error, message} when is_binary(message) ->
+          Jason.encode!(%{op: "tool_error", id: id, call: call, message: message})
+
+        _ ->
+          Jason.encode!(%{
+            op: "tool_error",
+            id: id,
+            call: call,
+            message: "unencodable tool result"
+          })
+      end
+
+    try do
+      Port.command(port, [frame, "\n"])
+    rescue
+      # The kernel exited; its exit_status message follows.
+      ArgumentError -> :ok
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_cast({:tool_reply, _ref, _call, _payload}, state), do: {:noreply, state}
 
   @impl true
   def handle_info({port, {:data, data}}, %{port: port} = state) do
@@ -514,6 +575,15 @@ defmodule CodingAgent.Eval.Kernel do
   defp flush_buffer(state) do
     notify(state, {:output, state.buffer})
     %{state | buffer: ""}
+  end
+
+  defp handle_frame(
+         %{"type" => "tool_call", "id" => id, "call" => call, "tool" => tool} = frame,
+         %{busy: %{id: id}} = state
+       )
+       when is_integer(call) and is_binary(tool) do
+    notify(state, {:tool_call, call, tool, Map.get(frame, "args")})
+    state
   end
 
   defp handle_frame(%{"type" => "result", "id" => id} = frame, %{busy: %{id: id}} = state) do

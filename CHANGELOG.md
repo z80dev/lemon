@@ -8,7 +8,26 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Run tools on other machines: with the new `nodes` tool allowed, `bash`,
+  `bash_output`, `kill_process`, `process_input`, `read`, `write`, `edit`, `ls`,
+  `grep`, `find` and `eval` take a `node` argument that runs that one call on a
+  connected named node, with its files, shell and network, while the model loop
+  and provider credentials stay on the controller. `nodes` lists connected
+  machines with a live host summary. Nodes keep per-session shell state,
+  background processes and kernels for 30 idle minutes. A call cut off by a
+  dropped connection, deadline or cancel is reported as an unknown outcome and
+  is never retried or moved to another machine; the node aborts it.
+  See [run tools on other machines](docs/tools/nodes.md).
+
+- `eval` code mode: cells call session tools through a global `tools` object
+  (`await tools.bash({command: "uptime", node: "build-box"})` in JavaScript,
+  `await tools.bash(command="uptime")` in Python, or `tools.call(name, args)`),
+  fanning out concurrently with `Promise.all` / `asyncio.gather`. Calls resolve
+  through the session's policy- and approval-wrapped catalog, run at most 16 at
+  a time, inherit the cell's session mutation lock and are aborted with the
+  cell; only what the cell prints or returns reaches the model.
 
 ---
 

@@ -519,6 +519,16 @@ defmodule CodingAgent.Session.Presentation do
   def tool_title(name, args) do
     a = stringify_keys(args)
 
+    case a["node"] do
+      node when is_binary(node) and node not in ["", "local"] ->
+        "#{base_tool_title(name, a)} on #{node}"
+
+      _ ->
+        base_tool_title(name, a)
+    end
+  end
+
+  defp base_tool_title(name, a) do
     case String.downcase(name || "") do
       "bash" ->
         cmd = a["command"] || ""

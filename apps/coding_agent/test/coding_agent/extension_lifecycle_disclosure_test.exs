@@ -308,7 +308,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
 
       kept =
         MapSet.new(
-          ~w(read write edit patch ls find grep ast_grep lsp_diagnostics fs_checkpoint bash bash_output kill_process process_input websearch webfetch read_skill recall todo ask checkpoint rewind task wait agent_message parent_question) ++
+          ~w(read write edit patch ls find grep ast_grep lsp_diagnostics fs_checkpoint bash bash_output kill_process process_input websearch webfetch read_skill recall todo ask checkpoint rewind task wait agent_message parent_question nodes) ++
             ["browser_tabs", "caller_extra"]
         )
 

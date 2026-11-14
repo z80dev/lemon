@@ -28,6 +28,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
   alias CodingAgent.ExecutionNode.{Codec, ConnectFailure, Socket, TokenStore}
   alias CodingAgent.Executor.RemoteEventCodec
   alias CodingAgent.StatePaths
+  alias LemonAgent.AbortSignal
   alias LemonCore.{Bus, ExecApprovals, ExecutionContext, ToolPolicy}
   alias LemonGateway.ExecutionRequest
   alias LemonMemory.{ContextScope, Document, Ingest, Project}
@@ -117,6 +118,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
       )
     )
     |> Map.merge(Map.new(@process_methods, &{&1, @process_capability}))
+    |> Map.put(CodingAgent.NodeTools.method(), CodingAgent.NodeTools.capability())
   end
 
   @doc "Live runtime compatibility, without asserting provider login or OS grants."
@@ -963,6 +965,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
         method == "coding_agent.run" ->
           {:noreply, start_invocation(state, invoke_id, args)}
 
+        method == CodingAgent.NodeTools.method() ->
+          {:noreply, start_tool_call(state, invoke_id, args)}
+
         method in @process_methods and
             (not is_binary(state.node_id) or payload["nodeId"] != state.node_id) ->
           {:noreply, send_invoke_error(state, invoke_id, :node_mismatch)}
@@ -1300,6 +1305,60 @@ defmodule CodingAgent.ExecutionNode.Worker do
     _, _ -> send_invoke_error(state, invoke_id, :runtime_unavailable)
   end
 
+  # A routed tool call runs as a service task that also owns an abort signal:
+  # cancellation asks the tool to stop (killing its process tree) before the
+  # task is killed, so a cancelled shell command does not outlive its call.
+  defp start_tool_call(state, invoke_id, args) do
+    signal = AbortSignal.new()
+
+    opts = [
+      default_cwd: state.default_cwd,
+      execution_capabilities: state.services.execution_capabilities,
+      node_name: state.name,
+      signal: signal
+    ]
+
+    state =
+      start_service_task(state, invoke_id, :tool_failed, fn ->
+        CodingAgent.ExecutionNode.ToolService.run(args, opts)
+      end)
+
+    case Map.fetch(state.invocations, invoke_id) do
+      {:ok, invocation} -> put_invocation(state, invoke_id, Map.put(invocation, :signal, signal))
+      :error -> tap(state, fn _ -> AbortSignal.clear(signal) end)
+    end
+  end
+
+  @tool_abort_grace_ms 2_000
+
+  defp stop_service_task(%{service_task: task} = invocation) do
+    case Map.get(invocation, :signal) do
+      nil ->
+        if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+
+      signal ->
+        if Process.alive?(task.pid) do
+          AbortSignal.abort(signal)
+
+          spawn(fn ->
+            ref = Process.monitor(task.pid)
+
+            receive do
+              {:DOWN, ^ref, :process, _, _} -> :ok
+            after
+              @tool_abort_grace_ms -> Process.exit(task.pid, :kill)
+            end
+
+            AbortSignal.clear(signal)
+          end)
+        else
+          AbortSignal.clear(signal)
+        end
+    end
+
+    :ok
+  end
+
   defp complete_service_task(state, invoke_id, {:ok, result}) when is_map(result) do
     params = %{"invokeId" => invoke_id, "result" => result}
 
@@ -1351,7 +1410,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
               :invalid_dns_answer,
               :too_many_dns_addresses,
               :destination_not_public,
-              :destination_not_allowed
+              :destination_not_allowed,
+              :unsupported_tool,
+              :invalid_tool_request,
+              :invalid_execution_context,
+              :tool_session_unavailable
             ] do
     state |> send_invoke_error(invoke_id, reason) |> remove_invocation(invoke_id)
   end
@@ -1891,8 +1954,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
         state
 
       {invocation, invocations} ->
-        if task = Map.get(invocation, :service_task) do
-          if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+        if Map.has_key?(invocation, :service_task) do
+          stop_service_task(invocation)
         else
           Bus.unsubscribe(Bus.run_topic(invocation.run_id))
           Enum.each(invocation.approvals, &ExecApprovals.cancel(&1, "remote invocation ended"))
@@ -2402,10 +2465,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
     state |> send_invoke_error(invoke_id, reason) |> remove_invocation(invoke_id)
   end
 
-  defp cancel_invocation_execution(_state, %{service_task: task}) do
-    if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
-    :ok
-  end
+  defp cancel_invocation_execution(_state, %{service_task: _task} = invocation),
+    do: stop_service_task(invocation)
 
   # Completed native runners have already stopped. Their remaining invocation
   # state owns only transport draining and approval cleanup, not live execution.

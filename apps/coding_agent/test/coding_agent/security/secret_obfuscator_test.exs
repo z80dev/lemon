@@ -211,6 +211,33 @@ defmodule CodingAgent.Security.SecretObfuscatorTest do
     assert restored["unknown"] == args["unknown"]
   end
 
+  test "a call routed to another machine keeps its placeholders", ctx do
+    secret = "sup3r-s3cret-value"
+    obfuscator = build(ctx, %{"API_KEY" => secret})
+    placeholder = SecretObfuscator.obfuscate(obfuscator, secret)
+    parent = self()
+
+    [tool] =
+      SecretObfuscator.wrap_tools(
+        [
+          %LemonAgent.Types.AgentTool{
+            name: "bash",
+            description: "",
+            parameters: %{},
+            label: "bash",
+            execute: fn _id, args, _signal, _on_update -> send(parent, {:args, args}) end
+          }
+        ],
+        obfuscator
+      )
+
+    tool.execute.("1", %{"command" => "echo #{placeholder}"}, nil, nil)
+    assert_receive {:args, %{"command" => "echo " <> ^secret}}
+
+    tool.execute.("2", %{"command" => "echo #{placeholder}", "node" => "build-box"}, nil, nil)
+    assert_receive {:args, %{"command" => "echo " <> ^placeholder, "node" => "build-box"}}
+  end
+
   test "overlapping literal and regex secrets are redacted without exposing fragments", ctx do
     token = "ghp_" <> String.duplicate("abc123def4", 4)
     fragment = "abc123def4"

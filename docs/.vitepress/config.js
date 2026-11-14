@@ -136,6 +136,7 @@ export default {
               { text: "Browser", link: "/tools/browser" },
               { text: "LSP", link: "/tools/lsp" },
               { text: "Eval", link: "/tools/eval" },
+              { text: "Other machines (nodes)", link: "/tools/nodes" },
               { text: "Debugger", link: "/tools/debug" },
               { text: "omp delegate", link: "/tools/omp" },
               { text: "Computer use", link: "/tools/computer-use" },
