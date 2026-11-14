@@ -233,7 +233,6 @@ Implement `LemonMemory.Provider` and register it at boot:
 LemonMemory.Providers.register_provider(%{
   id: "vector",
   module: MyApp.VectorMemory,
-  label: "Vector store",
   timeout_ms: 2_000
 })
 ```

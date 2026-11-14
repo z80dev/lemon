@@ -21,22 +21,17 @@ defmodule LemonChannels.Telegram.TriggerMode do
   def resolve(account_id, chat_id, topic_id)
       when is_binary(account_id) and is_integer(chat_id) do
     topic_mode =
-      if is_integer(topic_id), do: get_topic_mode(account_id, chat_id, topic_id), else: nil
+      if is_integer(topic_id),
+        do: get_mode(@topic_table, {account_id, chat_id, topic_id}),
+        else: nil
 
-    chat_mode = get_chat_mode(account_id, chat_id)
+    chat_mode = get_mode(@chat_table, {account_id, chat_id})
 
-    mode =
+    {mode, source} =
       cond do
-        topic_mode in [:all, :mentions] -> topic_mode
-        chat_mode in [:all, :mentions] -> chat_mode
-        true -> @default_mode
-      end
-
-    source =
-      cond do
-        topic_mode in [:all, :mentions] -> :topic
-        chat_mode in [:all, :mentions] -> :chat
-        true -> :default
+        topic_mode in [:all, :mentions] -> {topic_mode, :topic}
+        chat_mode in [:all, :mentions] -> {chat_mode, :chat}
+        true -> {@default_mode, :default}
       end
 
     %{
@@ -68,16 +63,8 @@ defmodule LemonChannels.Telegram.TriggerMode do
     Store.delete(@topic_table, {account_id, chat_id, topic_id})
   end
 
-  defp get_chat_mode(account_id, chat_id) do
-    case Store.get(@chat_table, {account_id, chat_id}) do
-      %{mode: mode} when mode in [:all, :mentions] -> mode
-      mode when mode in [:all, :mentions] -> mode
-      _ -> nil
-    end
-  end
-
-  defp get_topic_mode(account_id, chat_id, topic_id) do
-    case Store.get(@topic_table, {account_id, chat_id, topic_id}) do
+  defp get_mode(table, key) do
+    case Store.get(table, key) do
       %{mode: mode} when mode in [:all, :mentions] -> mode
       mode when mode in [:all, :mentions] -> mode
       _ -> nil

@@ -12,7 +12,7 @@ defmodule Mix.Tasks.Lemon.Secrets.List do
 
   @impl true
   def run(_args) do
-    start_lemon_core!()
+    Mix.Tasks.Lemon.Secrets.ensure_started!()
 
     {:ok, entries} = Secrets.list()
 
@@ -36,13 +36,4 @@ defmodule Mix.Tasks.Lemon.Secrets.List do
 
   defp format_optional(nil), do: "never"
   defp format_optional(value), do: to_string(value)
-
-  defp start_lemon_core! do
-    Mix.Task.run("loadpaths")
-
-    case Application.ensure_all_started(:lemon_core) do
-      {:ok, _} -> :ok
-      {:error, {app, reason}} -> Mix.raise("Failed to start #{app}: #{inspect(reason)}")
-    end
-  end
 end

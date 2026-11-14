@@ -15,7 +15,7 @@ defmodule Mix.Tasks.Lemon.Secrets.Set do
 
   @impl true
   def run(args) do
-    start_lemon_core!()
+    Mix.Tasks.Lemon.Secrets.ensure_started!()
 
     {opts, positional, _invalid} =
       OptionParser.parse(args,
@@ -72,13 +72,4 @@ defmodule Mix.Tasks.Lemon.Secrets.Set do
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
-
-  defp start_lemon_core! do
-    Mix.Task.run("loadpaths")
-
-    case Application.ensure_all_started(:lemon_core) do
-      {:ok, _} -> :ok
-      {:error, {app, reason}} -> Mix.raise("Failed to start #{app}: #{inspect(reason)}")
-    end
-  end
 end

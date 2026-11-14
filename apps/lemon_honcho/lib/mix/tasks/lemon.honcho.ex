@@ -104,7 +104,6 @@ defmodule Mix.Tasks.Lemon.Honcho do
   install fails it like any other unreachable endpoint.
   """
 
-  alias LemonHoncho.Client
   alias LemonHoncho.Config
   alias LemonHoncho.SessionManager
 
@@ -315,7 +314,7 @@ defmodule Mix.Tasks.Lemon.Honcho do
     Mix.Task.run("app.start")
 
     config = LemonHoncho.config()
-    session_key = opts[:session] || latest_session_key()
+    session_key = opts[:session] || LemonHoncho.Tools.Common.latest_session_key(include_pending: true)
     live? = opts[:live] == true
 
     header("Honcho Context")
@@ -487,19 +486,6 @@ defmodule Mix.Tasks.Lemon.Honcho do
     end
   end
 
-  # "Most recent" is the session Honcho answered for last, which is the one an
-  # operator is nearly always asking about. A session that has never been
-  # refreshed sorts last rather than being skipped.
-  defp latest_session_key do
-    case known_sessions() do
-      [] ->
-        nil
-
-      sessions ->
-        sessions |> Enum.max_by(&(&1.last_context_at_ms || 0)) |> Map.get(:session_key)
-    end
-  end
-
   defp known_sessions do
     if manager_running?(), do: SessionManager.sessions(), else: []
   end
@@ -543,7 +529,7 @@ defmodule Mix.Tasks.Lemon.Honcho do
     end
   end
 
-  defp client, do: Application.get_env(:lemon_honcho, :client, Client)
+  defp client, do: LemonHoncho.client()
 
   defp manager_running?, do: is_pid(Process.whereis(SessionManager))
 

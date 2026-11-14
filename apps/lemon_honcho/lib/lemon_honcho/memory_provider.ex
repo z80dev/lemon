@@ -242,7 +242,7 @@ defmodule LemonHoncho.MemoryProvider do
     client().workspace_search(config, query, limit: limit(opts))
   end
 
-  defp client, do: Application.get_env(:lemon_honcho, :client, LemonHoncho.Client)
+  defp client, do: LemonHoncho.client()
 
   # The clip and the credential check are one operation, applied in that order:
   # what is screened is the text that would actually be sent, not the longer

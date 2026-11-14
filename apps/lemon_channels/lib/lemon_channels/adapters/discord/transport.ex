@@ -25,7 +25,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   alias LemonChannels.Adapters.Telegram.Transport.MemoryReflection
   alias LemonChannels.Adapters.Telegram.Transport.ResumeSelection
   alias LemonChannels.BindingResolver
-  alias LemonChannels.Cwd
+  alias LemonCore.Cwd
   alias LemonChannels.Discord.KnownTargetStore
   alias LemonChannels.ImageDownload
   alias LemonChannels.SubmissionOutcome
@@ -2339,7 +2339,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         Path.expand(cwd)
 
       _ ->
-        case Cwd.default_cwd() do
+        case Cwd.channel_default_cwd() do
           cwd when is_binary(cwd) and cwd != "" -> Path.expand(cwd)
           _ -> "(not configured)"
         end
@@ -2404,7 +2404,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         base =
           case BindingResolver.resolve_cwd(scope) do
             cwd when is_binary(cwd) and byte_size(cwd) > 0 -> cwd
-            _ -> Cwd.default_cwd()
+            _ -> Cwd.channel_default_cwd()
           end
 
         expanded =

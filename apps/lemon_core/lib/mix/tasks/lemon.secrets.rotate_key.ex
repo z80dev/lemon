@@ -28,7 +28,7 @@ defmodule Mix.Tasks.Lemon.Secrets.RotateKey do
       Mix.raise("Usage: mix lemon.secrets.rotate_key [--confirm <token>]")
     end
 
-    start_lemon_core!()
+    Mix.Tasks.Lemon.Secrets.ensure_started!()
 
     case parsed[:confirm] do
       nil -> preview()
@@ -77,13 +77,4 @@ defmodule Mix.Tasks.Lemon.Secrets.RotateKey do
 
   defp error_message(reason),
     do: "Secrets key rotation failed: " <> KeyRotation.describe_error(reason)
-
-  defp start_lemon_core! do
-    Mix.Task.run("loadpaths")
-
-    case Application.ensure_all_started(:lemon_core) do
-      {:ok, _} -> :ok
-      {:error, {app, reason}} -> Mix.raise("Failed to start #{app}: #{inspect(reason)}")
-    end
-  end
 end

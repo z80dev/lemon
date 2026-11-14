@@ -1,8 +1,6 @@
 defmodule LemonRouter.Health do
   @moduledoc false
 
-  @default_custom_check_name "custom"
-
   @type check_response :: :ok | true | false | {:ok, term()} | {:error, term()}
   @type check_fun :: (-> check_response())
 
@@ -29,34 +27,7 @@ defmodule LemonRouter.Health do
   end
 
   defp custom_checks do
-    checks = Application.get_env(:lemon_router, :health_checks, [])
-
-    checks
-    |> List.wrap()
-    |> Enum.with_index()
-    |> Enum.map(fn {check, idx} -> normalize_custom_check(check, idx) end)
-  end
-
-  defp normalize_custom_check({name, fun}, _idx) when is_function(fun, 0) do
-    {name, fun}
-  end
-
-  defp normalize_custom_check({name, {module, function, args}}, _idx)
-       when is_atom(module) and is_atom(function) and is_list(args) do
-    {name, fn -> apply(module, function, args) end}
-  end
-
-  defp normalize_custom_check({module, function, args}, idx)
-       when is_atom(module) and is_atom(function) and is_list(args) do
-    {"#{@default_custom_check_name}_#{idx}", fn -> apply(module, function, args) end}
-  end
-
-  defp normalize_custom_check(fun, idx) when is_function(fun, 0) do
-    {"#{@default_custom_check_name}_#{idx}", fun}
-  end
-
-  defp normalize_custom_check(other, idx) do
-    {"#{@default_custom_check_name}_#{idx}", fn -> {:error, {:invalid_check, other}} end}
+    Application.get_env(:lemon_router, :health_checks, [])
   end
 
   defp run_check({name, fun}) do

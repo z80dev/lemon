@@ -15,11 +15,8 @@ defmodule LemonChannels.Telegram.Truncate do
      - If no word boundary, hard-split at 99% of the limit
   3. Preserve resume lines on the **last** chunk
 
-  ## Legacy Truncation
-
-  `truncate_for_telegram/1` still exists for simple truncation use-cases
-  such as status messages. New outbound text flows should prefer
-  `split_messages/1`.
+  `truncate_for_telegram/1` keeps status messages in one message, retaining
+  trailing resume lines and an ellipsis when content is omitted.
   """
 
   alias LemonCore.ResumeToken
@@ -208,10 +205,6 @@ defmodule LemonChannels.Telegram.Truncate do
     end
   end
 
-  # ---------------------------------------------------------------------------
-  # Legacy truncation API (preserved for backward-compat)
-  # ---------------------------------------------------------------------------
-
   @ellipsis "..."
 
   @doc """
@@ -249,31 +242,7 @@ defmodule LemonChannels.Telegram.Truncate do
   def truncate_for_telegram(text), do: text
 
   defp do_truncate(text) do
-    lines = String.split(text, "\n")
-    {content_lines, resume_lines} = split_trailing_resume_lines(lines)
-
-    {content_lines, resume_lines} =
-      case resume_lines do
-        [] ->
-          case extract_trailing_resume_line(text) do
-            nil ->
-              {content_lines, resume_lines}
-
-            resume_line ->
-              content_text = strip_trailing_line(text, resume_line)
-
-              content_lines =
-                case content_text do
-                  "" -> []
-                  _ -> String.split(content_text, "\n")
-                end
-
-              {content_lines, [resume_line]}
-          end
-
-        _ ->
-          {content_lines, resume_lines}
-      end
+    {content, resume_lines} = extract_resume(text)
 
     # Calculate space budget
     resume_text = Enum.join(resume_lines, "\n")
@@ -290,14 +259,14 @@ defmodule LemonChannels.Telegram.Truncate do
     if available_for_content < 0 do
       truncate_plain(text)
     else
-      truncated_content = truncate_content(content_lines, available_for_content)
+      truncated_content = truncate_to_length(content, available_for_content)
 
       cond do
         # Content fits without truncation
-        truncated_content == Enum.join(content_lines, "\n") && resume_lines == [] ->
+        truncated_content == content && resume_lines == [] ->
           text
 
-        truncated_content == Enum.join(content_lines, "\n") ->
+        truncated_content == content ->
           # No content truncation needed, just rebuild
           if resume_lines == [] do
             truncated_content
@@ -365,20 +334,6 @@ defmodule LemonChannels.Telegram.Truncate do
     |> case do
       [last | _] -> if resume_line?(last), do: String.trim(last), else: nil
       [] -> nil
-    end
-  end
-
-  # Truncate content lines to fit within the budget
-  defp truncate_content([], _budget), do: ""
-
-  defp truncate_content(lines, budget) do
-    full_content = Enum.join(lines, "\n")
-
-    if String.length(full_content) <= budget do
-      full_content
-    else
-      # Binary search for the right amount of content
-      truncate_to_length(full_content, budget)
     end
   end
 

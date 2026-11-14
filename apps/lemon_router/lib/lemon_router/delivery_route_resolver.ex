@@ -43,7 +43,7 @@ defmodule LemonRouter.DeliveryRouteResolver do
         peer_kind = normalize_peer_kind(peer[:kind] || peer["kind"])
         peer_id = peer[:id] || peer["id"]
 
-        if peer_kind in [:dm, :group, :channel] and is_binary(peer_id) and peer_id != "" do
+        if not is_nil(peer_kind) and is_binary(peer_id) and peer_id != "" do
           {:ok,
            %DeliveryRoute{
              channel_id: channel_id,
@@ -65,9 +65,10 @@ defmodule LemonRouter.DeliveryRouteResolver do
 
   defp from_meta(_channel_id, _meta), do: :error
 
-  defp normalize_peer_kind(kind) when kind in [:dm, :group, :channel], do: kind
-  defp normalize_peer_kind("dm"), do: :dm
-  defp normalize_peer_kind("group"), do: :group
-  defp normalize_peer_kind("channel"), do: :channel
-  defp normalize_peer_kind(_), do: :dm
+  defp normalize_peer_kind(kind) do
+    Map.get(
+      %{"dm" => :dm, "group" => :group, "channel" => :channel, dm: :dm, group: :group, channel: :channel},
+      kind
+    )
+  end
 end

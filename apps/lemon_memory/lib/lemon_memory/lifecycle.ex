@@ -666,7 +666,7 @@ defmodule LemonMemory.Lifecycle do
   defp excerpt(text) when is_binary(text) do
     if byte_size(text) <= 180,
       do: text,
-      else: binary_part(text, 0, utf8_boundary(text, 180)) <> "…"
+      else: LemonMemory.Text.clip_bytes(text, 180) <> "…"
   end
 
   defp validate_doc_id(doc_id)
@@ -736,14 +736,6 @@ defmodule LemonMemory.Lifecycle do
   defp secure_equal?(_, _), do: false
 
   defp sha256(value), do: :crypto.hash(:sha256, value) |> Base.encode16(case: :lower)
-
-  defp utf8_boundary(text, position) when position > 0 do
-    if String.valid?(binary_part(text, 0, position)),
-      do: position,
-      else: utf8_boundary(text, position - 1)
-  end
-
-  defp utf8_boundary(_text, 0), do: 0
 
   defp store(opts), do: Keyword.get(opts, :store, Store)
   defp server(opts), do: Keyword.get(opts, :server, Store)

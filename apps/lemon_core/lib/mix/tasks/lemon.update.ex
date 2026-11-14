@@ -63,7 +63,7 @@ defmodule Mix.Tasks.Lemon.Update do
         aliases: [c: :check, v: :verbose]
       )
 
-    start_apps!(opts)
+    Mix.Tasks.Lemon.Secrets.ensure_started!()
 
     check_only? = opts[:check] || false
     verbose? = opts[:verbose] || false
@@ -212,19 +212,4 @@ defmodule Mix.Tasks.Lemon.Update do
     end
   end
 
-  # ──────────────────────────────────────────────────────────────────────────
-  # Private helpers
-  # ──────────────────────────────────────────────────────────────────────────
-
-  defp start_apps!(_opts) do
-    Mix.Task.run("loadpaths")
-
-    case Application.ensure_all_started(:lemon_core) do
-      {:ok, _} ->
-        :ok
-
-      {:error, {app, reason}} ->
-        Mix.raise("Failed to start #{app}: #{inspect(reason)}")
-    end
-  end
 end

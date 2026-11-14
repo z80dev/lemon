@@ -9,7 +9,7 @@ defmodule LemonChannels.VoiceReplyDelivery do
   use GenServer
 
   alias LemonChannels.{
-    CapabilityQuery,
+    Registry,
     GatewayConfig,
     OutboundPayload,
     Outbox,
@@ -31,7 +31,7 @@ defmodule LemonChannels.VoiceReplyDelivery do
 
     supported? =
       Keyword.get_lazy(opts, :supported?, fn ->
-        CapabilityQuery.supports?(intent.route.channel_id, :voice)
+        Registry.supports?(intent.route.channel_id, :voice)
       end)
 
     if eligible?(intent, config, supported?) do

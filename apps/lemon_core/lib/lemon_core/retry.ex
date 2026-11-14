@@ -21,21 +21,6 @@ defmodule LemonCore.Retry do
   end
 
   @doc """
-  Exponential backoff with a configurable multiplier (factor).
-
-  Useful when the growth factor is not 2 (e.g. a reconnect loop using 1.8).
-
-  ## Examples
-
-      iex> LemonCore.Retry.exponential_backoff(2000, 0, 1.8)
-      2000
-  """
-  @spec exponential_backoff(pos_integer(), non_neg_integer(), number()) :: pos_integer()
-  def exponential_backoff(base_ms, attempt, factor) do
-    round(base_ms * :math.pow(factor, attempt))
-  end
-
-  @doc """
   Adds symmetric jitter to a delay value.
 
   Returns a value in the range `[delay * (1 - jitter_fraction), delay * (1 + jitter_fraction)]`.

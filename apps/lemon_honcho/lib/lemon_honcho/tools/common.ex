@@ -161,10 +161,13 @@ defmodule LemonHoncho.Tools.Common do
   change later. The scan itself is a single pass rather than a sort, since only
   the maximum is wanted.
   """
-  @spec latest_session_key() :: String.t() | nil
-  def latest_session_key do
+  # CLI context selection also includes sessions still awaiting remote initialization.
+  @spec latest_session_key(keyword()) :: String.t() | nil
+  def latest_session_key(opts \\ []) do
+    include_pending? = Keyword.get(opts, :include_pending, false)
+
     SessionManager.sessions()
-    |> Enum.filter(&is_binary(&1.honcho_session_id))
+    |> Enum.filter(&(include_pending? or is_binary(&1.honcho_session_id)))
     |> case do
       [] -> nil
       tracked -> tracked |> Enum.max_by(&(&1.last_context_at_ms || 0)) |> Map.fetch!(:session_key)
@@ -202,6 +205,33 @@ defmodule LemonHoncho.Tools.Common do
     end
   end
 
+  @doc "Renders a search hit using the supplied text and label key candidates."
+  @spec excerpt(term(), {list(String.t()), list(String.t())}) :: String.t()
+  def excerpt(hit, {text_keys, label_keys}) when is_map(hit) do
+    text = hit |> first_string(text_keys) |> clip()
+    label = first_string(hit, label_keys)
+    stamp = first_string(hit, ["created_at", "createdAt", "timestamp"])
+
+    case Enum.reject([label, stamp], &is_nil/1) do
+      [] -> text || inspect(hit)
+      parts -> Enum.join(parts, " · ") <> "\n" <> (text || inspect(hit))
+    end
+  end
+
+  def excerpt(hit, _keys), do: inspect(hit)
+
+  defp first_string(hit, keys) do
+    Enum.find_value(keys, fn key ->
+      case Map.get(hit, key) do
+        value when is_binary(value) -> if String.trim(value) == "", do: nil, else: value
+        _other -> nil
+      end
+    end)
+  end
+
+  defp clip(nil), do: nil
+  defp clip(text), do: String.slice(text, 0, 1_000)
+
   @doc """
   The Honcho client module.
 
@@ -210,7 +240,7 @@ defmodule LemonHoncho.Tools.Common do
   `LemonHoncho.SessionManager` resolves its client through.
   """
   @spec client() :: module()
-  def client, do: Application.get_env(:lemon_honcho, :client, LemonHoncho.Client)
+  def client, do: LemonHoncho.client()
 
   @doc """
   Whether `value` is a binary with something in it.

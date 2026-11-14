@@ -39,9 +39,9 @@ defmodule LemonCore.TaskSurface.Projection do
     "taskproj:" <> child_run_id <> ":" <> child_action_id
   end
 
-  def projected_action_id(child_run_id, kind, title_kind, title) do
-    normalized_kind = kind |> to_string()
-    normalized_title = (title || title_kind || "") |> to_string()
+  def projected_action_id(child_run_id, _child_action_id, kind, title) do
+    normalized_kind = to_string(kind)
+    normalized_title = to_string(title || "")
 
     short_hash =
       :crypto.hash(:sha256, normalized_title) |> Base.encode16(case: :lower) |> binary_part(0, 12)

@@ -196,85 +196,6 @@ defmodule LemonChannels.Capabilities.Capability do
   defp mime_match?(_, _), do: false
 end
 
-defmodule LemonChannels.Capabilities.Registry do
-  @moduledoc """
-  Registry for capability sets and lookups.
-  """
-
-  alias LemonChannels.Capabilities.Capability
-
-  @doc """
-  Returns a predefined capability set.
-  """
-  @spec get_set(atom()) :: [Capability.t()]
-  def get_set(name) when is_atom(name) do
-    case Process.get({:capability_set, name}) do
-      nil -> get_builtin_set(name)
-      capabilities -> capabilities
-    end
-  end
-
-  defp get_builtin_set(:messaging) do
-    [
-      Capability.new(:threads, enabled: true),
-      Capability.new(:reactions, enabled: true),
-      Capability.new(:edit, enabled: true),
-      Capability.new(:delete, enabled: true)
-    ]
-  end
-
-  defp get_builtin_set(:rich_content) do
-    [
-      Capability.new(:attachments,
-        enabled: true,
-        max_size: 50_000_000,
-        allowed_mimes: ["image/*", "video/*", "application/pdf"]
-      ),
-      Capability.new(:rich_blocks,
-        enabled: true,
-        features: [:markdown, :buttons, :sections, :divider, :header, :image]
-      )
-    ]
-  end
-
-  defp get_builtin_set(:realtime) do
-    [
-      Capability.new(:streaming,
-        enabled: true,
-        mode: :realtime,
-        max_latency_ms: 500,
-        supports_interruption: true
-      ),
-      Capability.new(:voice, enabled: true)
-    ]
-  end
-
-  defp get_builtin_set(:full) do
-    get_set(:messaging) ++ get_set(:rich_content) ++ get_set(:realtime)
-  end
-
-  defp get_builtin_set(:minimal) do
-    [
-      Capability.new(:chunk_limit, enabled: true, value: 2000)
-    ]
-  end
-
-  defp get_builtin_set(_) do
-    []
-  end
-
-  @doc """
-  Registers a custom capability set.
-
-  Note: Custom sets are not persisted and only exist for the current process.
-  """
-  @spec register_set(atom(), [Capability.t()]) :: :ok
-  def register_set(name, capabilities) when is_atom(name) and is_list(capabilities) do
-    Process.put({:capability_set, name}, capabilities)
-    :ok
-  end
-end
-
 defmodule LemonChannels.Capabilities do
   @moduledoc """
   Channel capability definitions and registry.
@@ -315,7 +236,7 @@ defmodule LemonChannels.Capabilities do
       # => :ok
   """
 
-  alias __MODULE__.{Capability, Registry}
+  alias __MODULE__.Capability
 
   @typedoc "A capabilities map"
   @type t :: %{atom() => Capability.t()}
@@ -342,14 +263,6 @@ defmodule LemonChannels.Capabilities do
     |> Enum.reject(&is_nil/1)
     |> Map.new(fn cap -> {cap.type, cap} end)
     |> then(&Map.merge(default_capabilities(), &1))
-  end
-
-  @doc """
-  Returns an empty capabilities map.
-  """
-  @spec empty() :: t()
-  def empty do
-    %{}
   end
 
   @doc """
@@ -505,26 +418,6 @@ defmodule LemonChannels.Capabilities do
   end
 
   @doc """
-  Creates a capability set for common channel types.
-
-  ## Predefined Sets
-
-  - `:messaging` - Basic messaging (threads, reactions, edit, delete)
-  - `:rich_content` - Rich content support (attachments, rich_blocks)
-  - `:realtime` - Real-time features (streaming, voice)
-  - `:full` - All capabilities
-
-  ## Examples
-
-      Capabilities.set(:messaging)
-      # => [%Capability{type: :threads}, %Capability{type: :reactions}, ...]
-  """
-  @spec set(atom()) :: [Capability.t()]
-  def set(name) when is_atom(name) do
-    Registry.get_set(name)
-  end
-
-  @doc """
   Returns the default capabilities that all channels should have.
   """
   @spec default_capabilities() :: t()
@@ -534,26 +427,6 @@ defmodule LemonChannels.Capabilities do
       delete: Capability.new(:delete, enabled: false),
       chunk_limit: Capability.new(:chunk_limit, enabled: true, value: 4096),
       rate_limit: Capability.new(:rate_limit, enabled: false)
-    }
-  end
-
-  @doc """
-  Converts new capability format to legacy format.
-
-  This is a temporary function for migration purposes.
-  """
-  @spec to_legacy(t()) :: map()
-  def to_legacy(caps) when is_map(caps) do
-    %{
-      edit_support: supports?(caps, :edit),
-      delete_support: supports?(caps, :delete),
-      chunk_limit: get_chunk_limit(caps),
-      rate_limit: get_rate_limit(caps),
-      voice_support: supports?(caps, :voice),
-      image_support: supports_feature?(caps, :attachments, :images),
-      file_support: supports?(caps, :attachments),
-      reaction_support: supports?(caps, :reactions),
-      thread_support: supports?(caps, :threads)
     }
   end
 
@@ -607,22 +480,6 @@ defmodule LemonChannels.Capabilities do
   end
 
   # Helper functions
-
-  defp get_chunk_limit(caps) do
-    case get(caps, :chunk_limit) do
-      %Capability{config: %{value: value}} -> value
-      %{config: %{value: value}} -> value
-      _ -> 4096
-    end
-  end
-
-  defp get_rate_limit(caps) do
-    case get(caps, :rate_limit) do
-      %Capability{enabled: true, config: %{value: value}} -> value
-      %{enabled: true, config: %{value: value}} -> value
-      _ -> nil
-    end
-  end
 
   defp maybe_add(list, true, capability), do: [capability | list]
   defp maybe_add(list, _, _), do: list

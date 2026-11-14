@@ -262,5 +262,15 @@ defmodule LemonChannels.Telegram.TruncateTest do
       assert String.length(result) <= @max_length
       assert String.ends_with?(result, "...")
     end
+
+    test "retains resume lines and ellipsis in a single status message" do
+      resume = "lemon resume abc123"
+      text = String.duplicate("x", 5000) <> "\n" <> resume <> "\n  "
+      result = Truncate.truncate_for_telegram(text)
+
+      assert String.length(result) == @max_length
+      assert String.ends_with?(result, "...\n" <> resume)
+      assert length(Regex.scan(~r/lemon resume abc123/, result)) == 1
+    end
   end
 end
