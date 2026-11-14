@@ -112,22 +112,22 @@ defmodule CodingAgent.SessionAutoCompactionAsyncTest do
     refute auto_compaction_in_progress?(state_after)
   end
 
-  test "session remains responsive to get_stats and health_check while auto compaction is in progress" do
+  test "session remains responsive to get_stats and diagnostics while auto compaction is in progress" do
     session = start_session()
     mark_auto_compaction_in_progress(session, "sig-in-progress")
 
     stats_task = Task.async(fn -> Session.get_stats(session) end)
-    health_task = Task.async(fn -> Session.health_check(session) end)
+    diagnostics_task = Task.async(fn -> Session.diagnostics(session) end)
 
     stats = Task.await(stats_task, 200)
-    health = Task.await(health_task, 200)
+    diagnostics = Task.await(diagnostics_task, 200)
 
     assert is_map(stats)
     assert Map.has_key?(stats, :session_id)
 
-    assert is_map(health)
-    assert Map.has_key?(health, :status)
-    assert Map.has_key?(health, :session_id)
+    assert is_map(diagnostics)
+    assert Map.has_key?(diagnostics, :status)
+    assert Map.has_key?(diagnostics, :session_id)
   end
 
   test "auto compaction timeout clears in-progress state and task tracking" do

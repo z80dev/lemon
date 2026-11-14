@@ -118,7 +118,7 @@ defmodule CodingAgent.Session.CompactionLifecycle do
     context_message_count = length(context_messages)
     context_window = state.model.context_window
     compaction_settings = CompactionManager.get_compaction_settings(state.settings_manager)
-    message_budget = CodingAgent.Compaction.message_budget(state.model, compaction_settings)
+    message_budget = CodingAgent.Compaction.message_budget(state.model)
 
     should_compact_by_tokens =
       CodingAgent.Compaction.should_compact?(context_tokens, context_window, compaction_settings)

@@ -92,7 +92,6 @@ CodingAgent.Supervisor (one_for_one)
   +-- ProcessManager (DynamicSupervisor for exec processes)
   +-- LaneQueue (concurrency-capped lane FIFO)
   +-- Parallel.Semaphore (task concurrency limit)
-  +-- CompactionHooks
 ```
 
 ## Module Inventory
@@ -439,7 +438,6 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | Module | Description |
 |--------|-------------|
 | `CodingAgent.Compaction` | Context compaction engine -- finds valid cut points, generates LLM summaries, preserves file context |
-| `CodingAgent.CompactionHooks` | Hooks for compaction lifecycle events |
 | `CodingAgent.Workspace` | Loads bootstrap files (AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md, USER.md, HEARTBEAT.md, BOOTSTRAP.md, MEMORY.md) from the assistant home at `~/.lemon/agent/workspace/` |
 | `CodingAgent.SystemPrompt` | Builds coding-first, tool-aware working rules, skills and memory guidance, and existing assistant-home context; omitted or empty bootstrap files are not injected |
 | `CodingAgent.ResourceLoader` | Loads global then ancestor root→cwd instruction files (CLAUDE.md, AGENTS.md, GEMINI.md, CLAUDE.local.md, `.github/copilot-instructions.md` and other agents' config dirs) with directory scope, local precedence and `@path` imports; physical-file aliases appear once. Also loads prompts, themes, and skills |
@@ -943,7 +941,7 @@ terminal and ACP clients.
 
 The model call for `Session.compact/2` and `Session.summarize_current_branch/2`
 runs in a supervised background task, not inside the session's `handle_call`: the
-session keeps serving read-only calls (`get_stats/1`, `health_check/1`,
+session keeps serving read-only calls (`get_stats/1`, `diagnostics/1`,
 subscribe, ...) and `Session.abort/1` cancels the call and replies
 `{:error, :aborted}`. While it is in flight, prompt, compact, summarize, rewind,
 navigation, plan and extension reload report busy. The task is bounded by the

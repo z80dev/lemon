@@ -1584,10 +1584,10 @@ defmodule CodingAgent.SessionTest do
   # Health Monitoring Tests
   # ============================================================================
 
-  describe "health_check/1" do
+  describe "diagnostic health fields" do
     test "returns healthy status for new session" do
       session = start_session()
-      health = Session.health_check(session)
+      health = Session.diagnostics(session)
 
       assert health.status == :healthy
       assert is_binary(health.session_id)
@@ -1596,19 +1596,19 @@ defmodule CodingAgent.SessionTest do
       assert health.agent_alive == true
     end
 
-    test "includes session_id in health check" do
+    test "includes session_id in diagnostics" do
       session = start_session()
       state = Session.get_state(session)
-      health = Session.health_check(session)
+      health = Session.diagnostics(session)
 
       assert health.session_id == state.session_manager.header.id
     end
 
     test "uptime increases over time" do
       session = start_session()
-      health1 = Session.health_check(session)
+      health1 = Session.diagnostics(session)
       Process.sleep(50)
-      health2 = Session.health_check(session)
+      health2 = Session.diagnostics(session)
 
       assert health2.uptime_ms > health1.uptime_ms
     end
@@ -1631,19 +1631,19 @@ defmodule CodingAgent.SessionTest do
 
       session = start_session(stream_fn: slow_stream_fn)
 
-      health_before = Session.health_check(session)
+      health_before = Session.diagnostics(session)
       assert health_before.is_streaming == false
 
       :ok = Session.prompt(session, "Hello!")
       assert_receive {:stream_called, stream_pid}, 2_000
 
-      health_during = Session.health_check(session)
+      health_during = Session.diagnostics(session)
       assert health_during.is_streaming == true
 
       send(stream_pid, :release)
       wait_for_streaming_complete(session)
 
-      health_after = Session.health_check(session)
+      health_after = Session.diagnostics(session)
       assert health_after.is_streaming == false
     end
   end
@@ -1773,7 +1773,7 @@ defmodule CodingAgent.SessionTest do
   describe "health status determination" do
     test "new session is healthy" do
       session = start_session()
-      health = Session.health_check(session)
+      health = Session.diagnostics(session)
 
       assert health.status == :healthy
     end
@@ -1789,7 +1789,7 @@ defmodule CodingAgent.SessionTest do
       :sys.replace_state(session, fn state -> %{state | agent: dead} end)
       GenServer.stop(agent)
 
-      health = Session.health_check(session)
+      health = Session.diagnostics(session)
       assert health.status == :unhealthy
       assert health.agent_alive == false
     end
@@ -1823,7 +1823,7 @@ defmodule CodingAgent.SessionTest do
       session = start_session()
       send(session, {:EXIT, spawn(fn -> :ok end), :boom})
 
-      assert Session.health_check(session).status == :healthy
+      assert Session.diagnostics(session).status == :healthy
     end
   end
 

@@ -646,8 +646,7 @@ defmodule CodingAgent.SessionManagerTest do
 
       session = %{
         session
-        | entries: nil,
-          entries_rev: [entry | session.entries_rev],
+        | entries_rev: [entry | session.entries_rev],
           by_id: Map.put(session.by_id, entry.id || "temp", entry)
       }
 
@@ -1038,12 +1037,6 @@ defmodule CodingAgent.SessionManagerTest do
       assert length(entries) == 3
       assert Enum.map(entries, & &1.message.content) == ["first", "second", "third"]
     end
-
-    test "returns ordered entries from loaded session" do
-      session = SessionManager.new("/tmp")
-      # Loaded sessions have entries populated, not entries_rev only
-      assert SessionManager.entries(session) == []
-    end
   end
 
   describe "entry_count/1" do
@@ -1141,23 +1134,6 @@ defmodule CodingAgent.SessionManagerTest do
       [newest, oldest] = session.entries_rev
       assert newest.message.content == "second"
       assert oldest.message.content == "first"
-    end
-
-    test "entries is nil after append (lazy materialization)" do
-      session =
-        SessionManager.new("/tmp")
-        |> SessionManager.append_message(%{role: "user", content: "test"})
-
-      # entries is nil after append; use entries/1 to get ordered
-      assert session.entries == nil
-      assert length(SessionManager.entries(session)) == 1
-    end
-
-    test "entries is populated after load_from_file" do
-      # new sessions with no appends still have entries == []
-      session = SessionManager.new("/tmp")
-      assert session.entries == []
-      assert session.entries_rev == []
     end
   end
 end

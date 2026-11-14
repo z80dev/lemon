@@ -6,6 +6,14 @@
 
 - Removed the unused `CodingAgent.Coordinator` and `ProcessManager.exec_sync/1`
   APIs. Native task execution and background `exec/1` with `poll/2` remain.
+### Changed
+
+- Removed the unused compaction hook service, aggregate session-health APIs and
+  scoped session-supervisor APIs. Session diagnostics remain available through
+  `CodingAgent.Session.diagnostics/1`.
+- Session transcripts now use only reverse-ordered internal storage; access them
+  through `SessionManager.entries/1`. Automatic compaction capacity calculations
+  share one implementation, and provider message budgets use fixed defaults.
 
 ### Fixed
 

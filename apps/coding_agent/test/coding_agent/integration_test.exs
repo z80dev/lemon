@@ -458,8 +458,7 @@ defmodule CodingAgent.IntegrationTest do
 
       session_manager = %{
         session_manager
-        | entries: nil,
-          entries_rev: [branch_b_entry | session_manager.entries_rev],
+        | entries_rev: [branch_b_entry | session_manager.entries_rev],
           by_id: Map.put(session_manager.by_id, branch_b_entry.id, branch_b_entry),
           leaf_id: branch_b_entry.id
       }

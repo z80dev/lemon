@@ -264,20 +264,16 @@ defmodule CodingAgent.SessionManager do
 
     Entries are stored internally in reverse chronological order in `entries_rev`
     (newest first) for O(1) append performance. Use `SessionManager.entries/1`
-    to obtain entries in chronological order. The `entries` field is kept in sync
-    for backward compatibility but may be `nil` when freshly appended; callers
-    should prefer `SessionManager.entries/1`.
+    to obtain entries in chronological order.
     """
     @type t :: %__MODULE__{
             header: SessionHeader.t(),
-            entries: [SessionEntry.t()] | nil,
             entries_rev: [SessionEntry.t()],
             by_id: %{String.t() => SessionEntry.t()},
             leaf_id: String.t() | nil,
             file_path: String.t() | nil
           }
     defstruct header: %SessionHeader{},
-              entries: [],
               entries_rev: [],
               by_id: %{},
               leaf_id: nil,
@@ -309,7 +305,6 @@ defmodule CodingAgent.SessionManager do
 
     %Session{
       header: header,
-      entries: [],
       entries_rev: [],
       by_id: %{},
       leaf_id: nil
@@ -336,7 +331,6 @@ defmodule CodingAgent.SessionManager do
       {:ok,
        %Session{
          header: %{header | version: @current_version},
-         entries: migrated_entries,
          entries_rev: Enum.reverse(migrated_entries),
          by_id: by_id,
          leaf_id: leaf_id
@@ -444,8 +438,7 @@ defmodule CodingAgent.SessionManager do
 
         child = %{
           child
-          | entries: branch,
-            entries_rev: Enum.reverse(branch),
+          | entries_rev: Enum.reverse(branch),
             by_id: Map.new(branch, &{&1.id, &1}),
             leaf_id: leaf_id
         }
@@ -510,16 +503,12 @@ defmodule CodingAgent.SessionManager do
   reverse order for O(1) append; this function materializes the forward list.
   """
   @spec entries(Session.t()) :: [SessionEntry.t()]
-  def entries(%Session{entries: entries}) when is_list(entries), do: entries
   def entries(%Session{entries_rev: rev}), do: Enum.reverse(rev)
 
   @doc """
   Return the number of entries in the session efficiently.
-
-  Works regardless of whether `entries` or `entries_rev` is the canonical store.
   """
   @spec entry_count(Session.t()) :: non_neg_integer()
-  def entry_count(%Session{entries: entries}) when is_list(entries), do: length(entries)
   def entry_count(%Session{entries_rev: rev}), do: length(rev)
 
   @doc """
@@ -545,8 +534,7 @@ defmodule CodingAgent.SessionManager do
 
     %{
       session
-      | entries: nil,
-        entries_rev: [entry | session.entries_rev],
+      | entries_rev: [entry | session.entries_rev],
         by_id: Map.put(session.by_id, new_id, entry),
         leaf_id: new_id
     }

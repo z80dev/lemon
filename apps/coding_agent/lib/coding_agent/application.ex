@@ -60,8 +60,7 @@ defmodule CodingAgent.Application do
       {CodingAgent.LaneQueue,
        name: CodingAgent.LaneQueue, caps: lane_caps, task_supervisor: CodingAgent.TaskSupervisor},
       {CodingAgent.Parallel.Semaphore,
-       max: task_max_concurrency, name: CodingAgent.TaskSemaphore},
-      {CodingAgent.CompactionHooks, name: CodingAgent.CompactionHooks}
+       max: task_max_concurrency, name: CodingAgent.TaskSemaphore}
     ]
 
     opts = [strategy: :one_for_one, name: CodingAgent.Supervisor]

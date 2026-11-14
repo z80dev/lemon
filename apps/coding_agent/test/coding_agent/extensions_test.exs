@@ -120,7 +120,6 @@ defmodule CodingAgent.ExtensionsTest do
       in_native_vm(
         peer,
         quote do
-          {:ok, _} = CodingAgent.CompactionHooks.start_link()
           owner = self()
 
           observe = fn label ->
@@ -170,18 +169,8 @@ defmodule CodingAgent.ExtensionsTest do
           assert_received {:hook_ownership, :call, 3}
           assert_received {:hook_ownership, :result, 4}
 
-          session = "native-hook-#{System.unique_integer([:positive])}"
-
-          try do
-            CodingAgent.CompactionHooks.register_hook(session, fn -> observe.(:compaction) end)
-            assert %{succeeded: 1} = CodingAgent.CompactionHooks.execute_hooks(session)
-            assert_received {:hook_ownership, :compaction, 5}
-          after
-            CodingAgent.CompactionHooks.unregister_all_hooks(session)
-          end
-
           records = LemonCore.NativeProcess.snapshot()
-          assert length(records) == 5
+          assert length(records) == 4
 
           assert Enum.all?(records, fn
                    {_, %{backend: :unsupported, capacity_held: true}, _} -> true

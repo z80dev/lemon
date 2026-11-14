@@ -269,7 +269,7 @@ defmodule CodingAgent.Session.CompactionManager do
   @spec normalize_compaction_opts(map(), keyword()) :: keyword()
   def normalize_compaction_opts(state, opts) do
     compaction_settings = get_compaction_settings(state.settings_manager)
-    message_budget = CodingAgent.Compaction.message_budget(state.model, compaction_settings)
+    message_budget = CodingAgent.Compaction.message_budget(state.model)
 
     opts
     |> maybe_put_keep_recent_tokens(compaction_settings)

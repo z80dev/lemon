@@ -13,7 +13,6 @@ defmodule CodingAgent.Session.ContextBudget do
   def measure(state, agent_state, messages \\ nil) do
     settings = CompactionManager.get_compaction_settings(state.settings_manager)
     window = state.model.context_window
-    threshold = Compaction.context_threshold(window, settings)
     usage_after = usage_boundary(state.session_manager)
 
     usage =
@@ -24,14 +23,9 @@ defmodule CodingAgent.Session.ContextBudget do
         usage_after
       )
 
-    Map.merge(usage, %{
-      window: if(threshold, do: window),
-      reserve_tokens: if(threshold, do: window - threshold),
-      threshold_tokens: threshold,
-      headroom_tokens: if(threshold, do: max(threshold - usage.tokens, 0)),
-      enabled: not is_nil(threshold) and Map.get(settings, :enabled, true),
-      usage_after: usage_after
-    })
+    usage
+    |> Map.merge(Compaction.context_budget(window, usage.tokens, settings))
+    |> Map.put(:usage_after, usage_after)
   end
 
   @doc """

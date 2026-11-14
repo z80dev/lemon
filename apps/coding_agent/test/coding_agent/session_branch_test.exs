@@ -691,7 +691,7 @@ defmodule CodingAgent.SessionBranchTest do
       end
 
       # Session should still be healthy
-      health = Session.health_check(session)
+      health = Session.diagnostics(session)
       assert health.status == :healthy
       assert_messages_match_branch(session)
     end
@@ -860,7 +860,7 @@ defmodule CodingAgent.SessionBranchTest do
       :erlang.garbage_collect(session)
 
       # Session should still be healthy
-      health = Session.health_check(session)
+      health = Session.diagnostics(session)
       assert health.status == :healthy
     end
   end
@@ -1251,7 +1251,7 @@ defmodule CodingAgent.SessionBranchTest do
       end
 
       # Should still be healthy
-      health = Session.health_check(session)
+      health = Session.diagnostics(session)
       assert health.status == :healthy
 
       assert_messages_match_branch(session)
