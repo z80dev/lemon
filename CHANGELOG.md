@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.11.11]
+
 ### Added
 
 - Run tools on other machines: with the new `nodes` tool allowed, `bash`,
