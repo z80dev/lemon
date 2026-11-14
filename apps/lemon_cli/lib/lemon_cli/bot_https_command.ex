@@ -9,41 +9,54 @@ defmodule LemonCli.BotHttpsCommand do
   @state_file "bot-https.json"
 
   def cli(args) do
-    if Enum.any?(args, &(&1 in ["--help", "-h", "help"])) do
-      :ok = run(args)
-      0
-    else
-      case parse(args) do
-        {:error, message} ->
-          IO.puts(:stderr, "Error: #{message}")
-          2
-
-        {:ok, _} ->
-          if(run(args) == :ok, do: 0, else: 1)
-      end
+    case dispatch(args, []) do
+      :ok -> 0
+      {:error, :usage, message} ->
+        IO.puts(:stderr, "Error: #{message}")
+        2
+      {:error, message} ->
+        IO.puts(:stderr, "Error: #{message}")
+        1
     end
   end
 
   def run(args, opts \\ []) do
+    case dispatch(args, opts) do
+      :ok -> :ok
+      {:error, :usage, message} -> report_error(message)
+      {:error, message} -> report_error(message)
+    end
+  end
+
+  defp report_error(message) do
+    IO.puts(:stderr, "Error: #{message}")
+    {:error, message}
+  end
+
+  defp dispatch(args, opts) do
     if Enum.any?(args, &(&1 in ["--help", "-h", "help"])) do
       IO.write(LemonCli.CommandRegistry.help("bot"))
       :ok
     else
-      case execute(args, opts) do
-        {:ok, result} ->
-          render(result)
-          :ok
-
-        {:error, message} ->
-          IO.puts(:stderr, "Error: #{message}")
-          {:error, message}
+      case parse(args) do
+        {:ok, operation} ->
+          case execute_operation(operation, opts) do
+            {:ok, result} ->
+              render(result)
+              :ok
+            error -> error
+          end
+        {:error, message} -> {:error, :usage, message}
       end
     end
   end
 
   def execute(args, opts \\ []) do
-    with {:ok, operation} <- parse(args),
-         :ok <- supported_launcher(operation, opts) do
+    with {:ok, operation} <- parse(args), do: execute_operation(operation, opts)
+  end
+
+  defp execute_operation(operation, opts) do
+    with :ok <- supported_launcher(operation, opts) do
       if operation == :status do
         status(opts)
       else
@@ -51,18 +64,11 @@ defmodule LemonCli.BotHttpsCommand do
 
         case lock.(fn -> change(operation, opts) end) do
           {:error, message} when not is_binary(message) ->
-            {:error,
-             "HTTPS settings are locked or unavailable; no concurrent changes are allowed."}
-
-          result ->
-            result
+            {:error, "HTTPS settings are locked or unavailable; no concurrent changes are allowed."}
+          result -> result
         end
       end
     end
-  rescue
-    _ ->
-      {:error,
-       "HTTPS configuration failed. Run lemon bot https status before trying again; no credentials were displayed."}
   end
 
   defp parse(["status"]), do: {:ok, :status}

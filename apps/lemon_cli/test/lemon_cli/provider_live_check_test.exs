@@ -182,11 +182,11 @@ defmodule LemonCli.ProviderLiveCheckTest do
       assert ProviderLiveCheck.failure_message({:unauthorized, :openai_codex}) =~
                "Your ChatGPT login was rejected. Run `lemon setup model` to sign in again."
 
-      assert ProviderLiveCheck.doctor_failure_message({:unauthorized, :openai_codex}) =~
+      assert ProviderLiveCheck.failure_message({:unauthorized, :openai_codex}, :doctor) =~
                "Your ChatGPT login was rejected. Run `lemon setup model` to sign in again."
 
       assert ProviderLiveCheck.failure_message(:unauthorized) =~ "HTTP 401/403"
-      assert ProviderLiveCheck.doctor_failure_message(:unauthorized) =~ "HTTP 401/403"
+      assert ProviderLiveCheck.failure_message(:unauthorized, :doctor) =~ "HTTP 401/403"
     end
 
     test "formats model_unavailable" do
@@ -197,7 +197,7 @@ defmodule LemonCli.ProviderLiveCheckTest do
       assert msg =~ "Available: gpt-5.1-codex, gpt-5.2-codex"
       assert msg =~ "Run `lemon setup model` to pick one."
 
-      doc_msg = ProviderLiveCheck.doctor_failure_message({:model_unavailable, ids})
+      doc_msg = ProviderLiveCheck.failure_message({:model_unavailable, ids}, :doctor)
       assert doc_msg =~ "Available: gpt-5.1-codex, gpt-5.2-codex"
     end
 
@@ -205,7 +205,7 @@ defmodule LemonCli.ProviderLiveCheckTest do
       msg = ProviderLiveCheck.failure_message({:check_failed, {:http_error, 503}})
       assert msg =~ "Provider verification failed: check failed (HTTP 503)."
 
-      doc_msg = ProviderLiveCheck.doctor_failure_message({:check_failed, {:http_error, 503}})
+      doc_msg = ProviderLiveCheck.failure_message({:check_failed, {:http_error, 503}}, :doctor)
       assert doc_msg =~ "Provider check failed (HTTP 503)."
     end
   end

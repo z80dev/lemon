@@ -135,9 +135,104 @@ defmodule LemonCli.Onboarding.PromptUI do
     }
   end
 
-  defp normalize_input(value) when is_binary(value), do: String.trim(value)
-  defp normalize_input(value) when is_list(value), do: value |> List.to_string() |> String.trim()
-  defp normalize_input(value), do: value |> to_string() |> String.trim()
+  def normalize_input(nil), do: ""
+  def normalize_input(:eof), do: ""
+  def normalize_input(value) when is_binary(value), do: String.trim(value)
+  def normalize_input(value) when is_list(value), do: value |> List.to_string() |> String.trim()
+  def normalize_input(value), do: value |> to_string() |> String.trim()
+
+  def select_value(io, params) do
+    case Map.get(io, :select) do
+      select when is_function(select, 1) ->
+        case select.(params) do
+          {:ok, value} ->
+            {:ok, value}
+
+          :cancel ->
+            :cancel
+
+          # Non-interactive runs install a selector that always asks for the
+          # prompt path; it must not be mistaken for a selected value.
+          :fallback ->
+            :fallback
+
+          {:error, reason} ->
+            if reason == :end_of_input, do: LemonCli.Onboarding.Runner.no_terminal!()
+
+            io.error.(
+              "Interactive onboarding UI unavailable (#{format_selector_error(reason)}). Falling back to prompt mode."
+            )
+
+            :fallback
+
+          value ->
+            {:ok, value}
+        end
+
+      _ ->
+        :fallback
+    end
+  end
+
+  defp format_selector_error(:no_selection), do: "selector exited before a choice was made"
+  defp format_selector_error(:invalid_selector_params), do: "invalid selector parameters"
+  defp format_selector_error(_reason), do: "the selector could not be started"
+
+  def yes_no(message, io, default \\ true) do
+    prompt_yes_no(message, io, default, fn -> yes_no(message, io, default) end)
+  end
+
+  defp prompt_yes_no(message, io, default, retry) do
+    suffix = if default, do: " [Y/n]: ", else: " [y/N]: "
+
+    answer =
+      io.prompt.(message <> suffix)
+      |> normalize_input!()
+      |> String.downcase()
+
+    case answer do
+      "" -> default
+      "y" -> true
+      "yes" -> true
+      "n" -> false
+      "no" -> false
+      _ -> retry.()
+    end
+  end
+
+  def select_yes_no(message, default, io) do
+    options = [
+      %{label: "Yes", value: true},
+      %{label: "No", value: false}
+    ]
+
+    default_index = if default, do: 0, else: 1
+
+    case select_value(io, %{
+           title: message,
+           subtitle: "Use Enter to confirm.",
+           options: options,
+           default_index: default_index
+         }) do
+      {:ok, value} ->
+        value
+
+      :cancel ->
+        default
+
+      :fallback ->
+        prompt_yes_no(message, io, default, fn -> select_yes_no(message, default, io) end)
+    end
+  end
+
+  def normalize_input!(value) when value in [nil, :eof],
+    do: LemonCli.Onboarding.Runner.no_terminal!()
+
+  def normalize_input!(value), do: normalize_input(value)
+
+  def interactive_prompt_session?(io) when is_map(io) do
+    is_function(Map.get(io, :select), 1) and available?()
+  end
 
   defp test_env?,
     do: Code.ensure_loaded?(Mix) and function_exported?(Mix, :env, 0) and Mix.env() == :test

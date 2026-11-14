@@ -1,4 +1,5 @@
 defmodule LemonCli.Setup.Gateway do
+  import LemonCli.Onboarding.PromptUI, only: [normalize_input: 1]
   @moduledoc """
   Gateway setup dispatcher for `lemon gateway setup`.
 
@@ -114,9 +115,4 @@ defmodule LemonCli.Setup.Gateway do
   # IO helpers
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp normalize_input(nil), do: ""
-  defp normalize_input(:eof), do: ""
-  defp normalize_input(value) when is_binary(value), do: String.trim(value)
-  defp normalize_input(value) when is_list(value), do: value |> List.to_string() |> String.trim()
-  defp normalize_input(value), do: value |> to_string() |> String.trim()
 end
