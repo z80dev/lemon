@@ -652,6 +652,7 @@ defmodule LemonLsp.Servers do
       available_count: Enum.count(servers, & &1.available),
       missing_count: Enum.count(servers, &(not &1.available)),
       mode: :registry_only,
+      protocol: :lsp_stdio,
       cleanup: %{
         includes_executable_paths: false,
         includes_workspace_roots: false,
