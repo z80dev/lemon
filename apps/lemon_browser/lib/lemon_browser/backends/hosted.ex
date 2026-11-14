@@ -10,8 +10,10 @@ defmodule LemonBrowser.Backends.Hosted do
       def id, do: @provider
       def available?, do: LemonBrowser.Backends.Hosted.available?(@provider)
       def available?(opts), do: LemonBrowser.Backends.Hosted.available?(@provider, opts)
+
       def request(method, args, timeout_ms, opts),
         do: LemonBrowser.Backends.Hosted.request(@provider, method, args, timeout_ms, opts)
+
       def status(opts), do: LemonBrowser.Backends.Hosted.status(@provider, opts)
     end
   end

@@ -140,13 +140,17 @@ defmodule LemonCli.ProviderLiveCheck do
     case reason do
       {:unauthorized, :openai_codex} ->
         "Your ChatGPT login was rejected. Run `lemon setup model` to sign in again."
+
       {:model_unavailable, ids} ->
         "Your ChatGPT account doesn't offer the configured model. Available: #{available(ids)}. " <>
           "Run `lemon setup model` to pick one."
+
       {:unauthorized, _} ->
         recovery_message(:unauthorized, scope)
+
       :timeout ->
         "The provider's models endpoint timed out. Check your network and retry."
+
       _ ->
         recovery_message(reason, scope)
     end
@@ -157,17 +161,16 @@ defmodule LemonCli.ProviderLiveCheck do
       "The provider rejected the credential (HTTP 401/403). Re-run `lemon setup provider`."
     else
       "The provider rejected the credential (HTTP 401/403). Re-run `lemon setup provider` " <>
-      "to store a valid credential, or use --skip-verify to defer this check."
+        "to store a valid credential, or use --skip-verify to defer this check."
     end
   end
-
 
   defp recovery_message({:check_failed, reason}, scope) do
     if scope == :doctor do
       "Provider check failed (#{format_reason(reason)}). Re-run `lemon setup provider`."
     else
       "Provider verification failed: check failed (#{format_reason(reason)}). " <>
-      "Re-run `lemon setup provider` to fix the configuration, or use --skip-verify to defer."
+        "Re-run `lemon setup provider` to fix the configuration, or use --skip-verify to defer."
     end
   end
 
@@ -177,7 +180,7 @@ defmodule LemonCli.ProviderLiveCheck do
         "Re-run `lemon setup provider`."
     else
       "Provider verification failed: the provider credential is not usable. " <>
-      "Re-run `lemon setup provider` to fix the configuration, or use --skip-verify to defer."
+        "Re-run `lemon setup provider` to fix the configuration, or use --skip-verify to defer."
     end
   end
 
@@ -186,7 +189,7 @@ defmodule LemonCli.ProviderLiveCheck do
       "Could not reach the provider's models endpoint. Check your network and retry."
     else
       "Could not reach the provider's models endpoint. Check your network and retry, " <>
-      "or re-run with --skip-verify when offline."
+        "or re-run with --skip-verify when offline."
     end
   end
 
@@ -195,7 +198,7 @@ defmodule LemonCli.ProviderLiveCheck do
       "The provider's models endpoint returned HTTP #{status}. Check provider status and credentials."
     else
       "The provider's models endpoint returned HTTP #{status}. Check the provider status " <>
-      "and your credential, or re-run with --skip-verify to defer this check."
+        "and your credential, or re-run with --skip-verify to defer this check."
     end
   end
 
@@ -204,7 +207,7 @@ defmodule LemonCli.ProviderLiveCheck do
       "Provider verification failed. Re-run `lemon setup provider`."
     else
       "Provider verification failed: #{format_reason(reason)}. " <>
-      "Re-run `lemon setup provider` to fix the configuration, or use --skip-verify to defer."
+        "Re-run `lemon setup provider` to fix the configuration, or use --skip-verify to defer."
     end
   end
 

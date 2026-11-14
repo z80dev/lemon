@@ -33,5 +33,4 @@ defmodule LemonMCP do
 
   This implementation targets MCP protocol version "2024-11-05".
   """
-
 end

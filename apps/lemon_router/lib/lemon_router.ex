@@ -234,5 +234,4 @@ defmodule LemonRouter do
   def list_agent_sessions(opts \\ []) do
     LemonRouter.AgentDirectory.list_sessions(opts)
   end
-
 end

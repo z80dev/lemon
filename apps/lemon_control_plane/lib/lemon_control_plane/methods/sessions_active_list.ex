@@ -407,5 +407,4 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
   end
 
   defp map_get(_, _), do: nil
-
 end

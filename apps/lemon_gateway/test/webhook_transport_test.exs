@@ -86,7 +86,15 @@ defmodule LemonGateway.WebhookTransportTest do
 
   alias LemonCore.Store
   alias LemonGateway.Transports.Webhook
-  alias LemonGateway.Transports.Webhook.{Config, Idempotency, InvocationDispatch, Request, Response}
+
+  alias LemonGateway.Transports.Webhook.{
+    Config,
+    Idempotency,
+    InvocationDispatch,
+    Request,
+    Response
+  }
+
   alias Plug.Conn
   alias Plug.Test
 
@@ -1126,16 +1134,26 @@ defmodule LemonGateway.WebhookTransportTest do
              )
 
     assert :ok =
-             Request.authorize_request(query_conn, %{}, %{
-               "token" => "secret-token",
-               "allow_query_token" => true
-             }, Config.config())
+             Request.authorize_request(
+               query_conn,
+               %{},
+               %{
+                 "token" => "secret-token",
+                 "allow_query_token" => true
+               },
+               Config.config()
+             )
 
     assert :ok =
-             Request.authorize_request(payload_conn, %{"token" => "secret-token"}, %{
-               "token" => "secret-token",
-               "allow_payload_token" => true
-             }, Config.config())
+             Request.authorize_request(
+               payload_conn,
+               %{"token" => "secret-token"},
+               %{
+                 "token" => "secret-token",
+                 "allow_payload_token" => true
+               },
+               Config.config()
+             )
   end
 
   test "idempotency helper returns duplicate response for existing key and supports payload opt-in" do
@@ -1172,9 +1190,15 @@ defmodule LemonGateway.WebhookTransportTest do
              Idempotency.context(payload_conn, %{}, integration_id, %{}, Config.config())
 
     assert {:ok, %{idempotency_digest: digest} = payload_ctx} =
-             Idempotency.context(payload_conn, %{}, integration_id, %{
-               "allow_payload_idempotency_key" => true
-             }, Config.config())
+             Idempotency.context(
+               payload_conn,
+               %{},
+               integration_id,
+               %{
+                 "allow_payload_idempotency_key" => true
+               },
+               Config.config()
+             )
 
     assert is_binary(digest)
     refute Map.has_key?(payload_ctx, :idempotency_key)

@@ -10,6 +10,7 @@ defmodule LemonControlPlane.Methods.NodeInvokeEvent do
 
   import LemonControlPlane.Methods.NodeSession,
     only: [session_generation: 1, current_session?: 2, get_field: 2]
+
   alias LemonControlPlane.Protocol.Errors
   alias LemonCore.NodeRegistry
 
@@ -94,5 +95,4 @@ defmodule LemonControlPlane.Methods.NodeInvokeEvent do
         {:error, Errors.error(:invalid_request, "event violates JSON payload policy", kind)}
     end
   end
-
 end

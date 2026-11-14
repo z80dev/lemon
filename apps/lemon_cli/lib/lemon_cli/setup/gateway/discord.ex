@@ -1,5 +1,6 @@
 defmodule LemonCli.Setup.Gateway.Discord do
   import LemonCli.Onboarding.PromptUI, only: [normalize_input: 1]
+
   @moduledoc """
   Gateway setup adapter for Discord.
 
@@ -342,5 +343,4 @@ defmodule LemonCli.Setup.Gateway.Discord do
       ssl_opts
     end
   end
-
 end

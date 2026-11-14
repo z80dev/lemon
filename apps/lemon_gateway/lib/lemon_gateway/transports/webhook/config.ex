@@ -53,5 +53,4 @@ defmodule LemonGateway.Transports.Webhook.Config do
   end
 
   defp normalize_map(_), do: %{}
-
 end

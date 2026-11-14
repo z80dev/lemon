@@ -20,7 +20,7 @@ defmodule LemonBrowser.Registry do
           end)
         end
       end
-    
+
       @spec unregister(atom() | String.t()) :: :ok | {:error, term()}
       def unregister(id) do
         with {:ok, id} <- normalize_id(id) do
@@ -34,7 +34,7 @@ defmodule LemonBrowser.Registry do
           end)
         end
       end
-    
+
       @spec fetch(atom() | String.t()) :: {:ok, module()} | :error
       def fetch(id) do
         case normalize_id(id) do
@@ -42,20 +42,18 @@ defmodule LemonBrowser.Registry do
           _error -> :error
         end
       end
-    
+
       @spec all() :: %{atom() => module()}
       def all, do: Map.merge(runtime(), @registry_builtins)
-    
+
       @spec reset() :: :ok
       def reset do
         :persistent_term.erase(@registry_key)
         :ok
       end
-    
+
       defp runtime, do: :persistent_term.get(@registry_key, %{})
       defp put_runtime(backends), do: :persistent_term.put(@registry_key, backends)
-    
-    
     end
   end
 end

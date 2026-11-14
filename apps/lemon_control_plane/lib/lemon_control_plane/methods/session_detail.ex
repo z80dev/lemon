@@ -629,5 +629,4 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   defp to_string_safe(v) when is_binary(v), do: v
   defp to_string_safe(v) when is_atom(v), do: Atom.to_string(v)
   defp to_string_safe(v), do: to_string(v)
-
 end

@@ -107,7 +107,6 @@ defmodule LemonEvals.Evals.LiveModel do
               nil
             )
 
-
           with {:ok, messages} <- EventStream.result(stream, timeout_ms),
                :ok <- assert_loop_tool_result(messages, "recall", "prior-release-handoff"),
                :ok <- assert_learning_search_calls(search_calls, 1),
@@ -204,7 +203,6 @@ defmodule LemonEvals.Evals.LiveModel do
               nil
             )
 
-
           with {:ok, messages} <- EventStream.result(stream, timeout_ms),
                :ok <- assert_loop_tool_result(messages, "remember", memory_path),
                :ok <-
@@ -291,7 +289,8 @@ defmodule LemonEvals.Evals.LiveModel do
               search_fn: search_fn
             )
 
-          memory_tool = Remember.tool(project_dir, workspace_dir: project_dir, session_scope: :main)
+          memory_tool =
+            Remember.tool(project_dir, workspace_dir: project_dir, session_scope: :main)
 
           context =
             AgentContext.new(
@@ -323,7 +322,6 @@ defmodule LemonEvals.Evals.LiveModel do
               nil,
               nil
             )
-
 
           with {:ok, messages} <- EventStream.result(stream, timeout_ms),
                :ok <- assert_loop_tool_result(messages, "grep", "BLUE-WRENCH-17"),
@@ -403,7 +401,6 @@ defmodule LemonEvals.Evals.LiveModel do
               nil,
               nil
             )
-
 
           with {:ok, messages} <- EventStream.result(stream, timeout_ms),
                :ok <- assert_loop_tool_result(messages, "read_skill", "release-checklist"),
@@ -491,12 +488,17 @@ defmodule LemonEvals.Evals.LiveModel do
               nil
             )
 
-
           with {:ok, messages} <- EventStream.result(stream, timeout_ms),
                :ok <- assert_loop_tool_result(messages, "read_skill", "release-hotfix-checklist"),
                :ok <- assert_final_after_tool(messages, "read_skill"),
                :ok <-
-                 assert_no_missed_skill_after_audit(messages, prompt, run_id, session_key, agent_id) do
+                 assert_no_missed_skill_after_audit(
+                   messages,
+                   prompt,
+                   run_id,
+                   session_key,
+                   agent_id
+                 ) do
             %{
               name: "live_model_relevant_skill_usage_contract",
               status: :pass,
@@ -561,7 +563,12 @@ defmodule LemonEvals.Evals.LiveModel do
                    now: ~U[2026-05-06 00:00:00Z],
                    interval_hours: 1
                  ),
-               :ok <- assert_curator_prompt(curator_result.review_prompt, "kube-live-rollout", "live curator") do
+               :ok <-
+                 assert_curator_prompt(
+                   curator_result.review_prompt,
+                   "kube-live-rollout",
+                   "live curator"
+                 ) do
             context =
               AgentContext.new(
                 system_prompt: live_curator_eval_prompt(curator_result.review_prompt),
@@ -571,7 +578,13 @@ defmodule LemonEvals.Evals.LiveModel do
             config = %AgentLoopConfig{
               model: model,
               convert_to_llm: &trace_convert_to_llm/1,
-              stream_options: stream_options_with_max_tokens(stream_options, opts, :live_curator_max_tokens, 1024),
+              stream_options:
+                stream_options_with_max_tokens(
+                  stream_options,
+                  opts,
+                  :live_curator_max_tokens,
+                  1024
+                ),
               max_tool_turns: 5
             }
 
@@ -584,12 +597,15 @@ defmodule LemonEvals.Evals.LiveModel do
                 nil
               )
 
-
             with {:ok, messages} <- EventStream.result(stream, timeout_ms),
                  :ok <- assert_loop_tool_result(messages, "read_skill", "kubectl rollout status"),
                  :ok <- assert_loop_tool_result(messages, "read_skill", "kubectl rollout undo"),
                  :ok <-
-                   assert_loop_tool_result(messages, "skill_manage", "kube-live-rollout-operations"),
+                   assert_loop_tool_result(
+                     messages,
+                     "skill_manage",
+                     "kube-live-rollout-operations"
+                   ),
                  :ok <- assert_loop_tool_result(messages, "skill_manage", "archived"),
                  :ok <- assert_archived(tmp_dir, "kube-live-rollout-verify"),
                  :ok <- assert_archived(tmp_dir, "kube-live-rollout-rollback"),
@@ -689,7 +705,6 @@ defmodule LemonEvals.Evals.LiveModel do
                 nil
               )
 
-
             with {:ok, messages} <- EventStream.result(stream, timeout_ms),
                  :ok <- assert_loop_tool_result(messages, "recall", "cron-rollup-prior-run"),
                  :ok <- assert_tool_not_used(messages, "cron"),
@@ -774,13 +789,14 @@ defmodule LemonEvals.Evals.LiveModel do
 
           stream =
             Loop.agent_loop(
-              [trace_user_message("Check the external release note and report the real finding.")],
+              [
+                trace_user_message("Check the external release note and report the real finding.")
+              ],
               context,
               config,
               nil,
               nil
             )
-
 
           with {:ok, messages} <- EventStream.result(stream, timeout_ms),
                :ok <- assert_loop_tool_result(messages, "external_lookup", "SAFE_RELEASE_NOTE"),
@@ -855,7 +871,13 @@ defmodule LemonEvals.Evals.LiveModel do
           config = %AgentLoopConfig{
             model: model,
             convert_to_llm: &trace_convert_to_llm/1,
-            stream_options: stream_options_with_max_tokens(stream_options, opts, :live_delegation_max_tokens, 1024),
+            stream_options:
+              stream_options_with_max_tokens(
+                stream_options,
+                opts,
+                :live_delegation_max_tokens,
+                1024
+              ),
             max_tool_turns: 5
           }
 
@@ -867,7 +889,6 @@ defmodule LemonEvals.Evals.LiveModel do
               nil,
               nil
             )
-
 
           with {:ok, messages} <- EventStream.result(stream, timeout_ms),
                :ok <- assert_parallel_tasks_joined(messages, "live "),
@@ -954,21 +975,28 @@ defmodule LemonEvals.Evals.LiveModel do
           config = %AgentLoopConfig{
             model: model,
             convert_to_llm: &trace_convert_to_llm/1,
-            stream_options: stream_options_with_max_tokens(stream_options, opts, :live_delegation_max_tokens, 1024),
+            stream_options:
+              stream_options_with_max_tokens(
+                stream_options,
+                opts,
+                :live_delegation_max_tokens,
+                1024
+              ),
             max_tool_turns: 5
           }
 
           stream =
             Loop.agent_loop(
               [
-                trace_user_message("Have a child create the release lane artifact, then verify it.")
+                trace_user_message(
+                  "Have a child create the release lane artifact, then verify it."
+                )
               ],
               context,
               config,
               nil,
               nil
             )
-
 
           with {:ok, messages} <- EventStream.result(stream, timeout_ms),
                :ok <- assert_async_task_joined_with(messages, "live child side effect artifact"),
@@ -1057,14 +1085,15 @@ defmodule LemonEvals.Evals.LiveModel do
             stream =
               Loop.agent_loop(
                 [
-                  trace_user_message("Verify the leaf worker input without spawning another task.")
+                  trace_user_message(
+                    "Verify the leaf worker input without spawning another task."
+                  )
                 ],
                 context,
                 config,
                 nil,
                 nil
               )
-
 
             with {:ok, messages} <- EventStream.result(stream, timeout_ms),
                  :ok <- assert_loop_tool_result(messages, "read", "leaf toolset restriction"),
@@ -1174,7 +1203,8 @@ defmodule LemonEvals.Evals.LiveModel do
           config = %AgentLoopConfig{
             model: model,
             convert_to_llm: &trace_convert_to_llm/1,
-            stream_options: stream_options_with_max_tokens(stream_options, opts, :live_coding_max_tokens, 1536),
+            stream_options:
+              stream_options_with_max_tokens(stream_options, opts, :live_coding_max_tokens, 1536),
             max_tool_turns: 6
           }
 
@@ -1190,7 +1220,6 @@ defmodule LemonEvals.Evals.LiveModel do
               nil,
               nil
             )
-
 
           with {:ok, messages} <- EventStream.result(stream, timeout_ms),
                :ok <- assert_loop_tool_result(messages, "read", "LemonReleaseReport"),
@@ -1430,7 +1459,10 @@ defmodule LemonEvals.Evals.LiveModel do
   end
 
   defp stream_options_with_max_tokens(stream_options, opts, key, default) do
-    %{stream_options | max_tokens: Keyword.get(opts, key, max(stream_options.max_tokens || 0, default))}
+    %{
+      stream_options
+      | max_tokens: Keyword.get(opts, key, max(stream_options.max_tokens || 0, default))
+    }
   end
 
   defp live_model_config(opts, default_timeout) do

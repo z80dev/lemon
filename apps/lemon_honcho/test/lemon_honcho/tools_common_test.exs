@@ -305,6 +305,7 @@ defmodule LemonHoncho.ToolsCommonTest do
     hit = %{"content" => " ", "text" => "hello", "author" => "user", "timestamp" => "today"}
 
     assert Common.excerpt(hit, keys) == "user · today\nhello"
+
     assert Common.excerpt(%{"content" => String.duplicate("é", 1_001)}, keys) ==
              String.duplicate("é", 1_000)
 

@@ -34,6 +34,4 @@ defmodule LemonMCP.Client.SSE.Stream do
   def new_event, do: %{event: "message", data: []}
   defp trim_sse_value(" " <> value), do: value
   defp trim_sse_value(value), do: value
-
-
 end

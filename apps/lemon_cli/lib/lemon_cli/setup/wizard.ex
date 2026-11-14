@@ -1,5 +1,7 @@
 defmodule LemonCli.Setup.Wizard do
-  import LemonCli.Onboarding.PromptUI, only: [normalize_input!: 1, select_value: 2, yes_no: 2, yes_no: 3]
+  import LemonCli.Onboarding.PromptUI,
+    only: [normalize_input!: 1, select_value: 2, yes_no: 2, yes_no: 3]
+
   @moduledoc """
   Interactive setup wizard for `mix lemon.setup` and the packaged `lemon setup`
   command.
@@ -1411,6 +1413,4 @@ defmodule LemonCli.Setup.Wizard do
   # ──────────────────────────────────────────────────────────────────────────
   # IO helpers
   # ──────────────────────────────────────────────────────────────────────────
-
-
 end

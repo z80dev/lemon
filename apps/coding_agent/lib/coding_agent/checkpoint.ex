@@ -32,5 +32,4 @@ defmodule CodingAgent.Checkpoint do
 
   @spec stats(String.t()) :: map()
   def stats(session_id) when is_binary(session_id), do: CoreCheckpoint.stats(session_id)
-
 end

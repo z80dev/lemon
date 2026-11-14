@@ -166,6 +166,7 @@ defmodule LemonAgent.Workspace.KanbanStoreTest do
                leased_again.meta["kanbanLease"]["id"],
                run_id: "run_done"
              )
+
     assert completed.status == "done"
     assert completed.run_id == "run_done"
     refute Map.has_key?(completed.meta, "kanbanLease")

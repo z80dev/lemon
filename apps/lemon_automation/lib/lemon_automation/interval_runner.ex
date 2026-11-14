@@ -55,9 +55,14 @@ defmodule LemonAutomation.IntervalRunner do
 
       if runner.should_run_now?(opts) do
         case start_background_task(fn -> runner.run_once(opts) end) do
-          {:ok, pid} -> %{state | in_flight_ref: Process.monitor(pid)}
+          {:ok, pid} ->
+            %{state | in_flight_ref: Process.monitor(pid)}
+
           {:error, reason} ->
-            Logger.warning("[#{inspect(runner)}] Failed to start supervised task: #{inspect(reason)}")
+            Logger.warning(
+              "[#{inspect(runner)}] Failed to start supervised task: #{inspect(reason)}"
+            )
+
             state
         end
       else

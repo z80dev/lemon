@@ -30,6 +30,7 @@ defmodule LemonCore.Dedupe.Ets do
             read_concurrency: true,
             write_concurrency: true
           ])
+
         :ok
 
       _info ->
@@ -124,4 +125,3 @@ defmodule LemonCore.Dedupe.Ets do
     System.monotonic_time(:millisecond)
   end
 end
-

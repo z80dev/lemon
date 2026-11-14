@@ -14,8 +14,6 @@ defmodule CodingAgent.BudgetEnforcerTest do
     :ok
   end
 
-
-
   # ============================================================================
   # check_subagent_spawn/2 Tests
   # ============================================================================
@@ -32,7 +30,6 @@ defmodule CodingAgent.BudgetEnforcerTest do
 
       assert BudgetTracker.get_usage(run_id) == %{tokens: 5, cost: 0.25}
     end
-
   end
 
   describe "check_subagent_spawn/2" do
@@ -44,8 +41,6 @@ defmodule CodingAgent.BudgetEnforcerTest do
       assert :ok = BudgetEnforcer.check_subagent_spawn(parent_id, [])
     end
   end
-
-
 
   # ============================================================================
   # handle_budget_exceeded/3 Tests
@@ -80,8 +75,6 @@ defmodule CodingAgent.BudgetEnforcerTest do
       assert is_binary(message)
     end
   end
-
-
 
   # ============================================================================
   # Error Message Formatting Tests

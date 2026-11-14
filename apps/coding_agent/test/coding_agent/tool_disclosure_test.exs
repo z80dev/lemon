@@ -738,6 +738,7 @@ defmodule CodingAgent.ToolDisclosureTest do
                ToolDisclosure.validate_args(["a"], %{"type" => "object"})
     end
   end
+
   # ==========================================================================
   # skipped_report/1
   # ==========================================================================

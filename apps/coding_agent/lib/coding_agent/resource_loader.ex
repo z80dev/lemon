@@ -331,5 +331,4 @@ defmodule CodingAgent.ResourceLoader do
       {:error, _} -> ""
     end
   end
-
 end

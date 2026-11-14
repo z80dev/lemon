@@ -32,7 +32,6 @@ defmodule CodingAgent.ResourceLoaderTest do
     {:ok, home: home}
   end
 
-
   describe "instruction_sections/1" do
     test "loads CLAUDE.md from cwd", %{tmp_dir: tmp_dir} do
       claude_path = Path.join(tmp_dir, "CLAUDE.md")
@@ -70,7 +69,6 @@ defmodule CodingAgent.ResourceLoaderTest do
       assert result =~ "Root config"
       assert result =~ "Agent config"
     end
-
   end
 
   describe "multi-tool instruction files" do
@@ -87,11 +85,13 @@ defmodule CodingAgent.ResourceLoaderTest do
 
       paths |> Enum.with_index() |> Enum.each(fn {path, i} -> write!(path, "directive-#{i}") end)
 
-
       sections = ResourceLoader.instruction_sections(cwd)
-      offsets = Enum.map(paths, fn path ->
-        Enum.find_index(sections, &String.contains?(&1.text, "<!-- From: #{path} -->"))
-      end)
+
+      offsets =
+        Enum.map(paths, fn path ->
+          Enum.find_index(sections, &String.contains?(&1.text, "<!-- From: #{path} -->"))
+        end)
+
       assert Enum.all?(offsets, &is_integer/1)
       assert offsets == Enum.sort(offsets)
       copilot = Enum.find(sections, &(&1.text =~ "directive-12"))
@@ -110,7 +110,8 @@ defmodule CodingAgent.ResourceLoaderTest do
         write!(Path.join(cwd, rel), "stray-#{rel}")
       end
 
-      refute Enum.map_join(ResourceLoader.instruction_sections(cwd), "\n\n", & &1.text) =~ "stray-"
+      refute Enum.map_join(ResourceLoader.instruction_sections(cwd), "\n\n", & &1.text) =~
+               "stray-"
     end
 
     test "ancestor config subdirectories scope to their parent directory", %{tmp_dir: tmp_dir} do
@@ -147,7 +148,6 @@ defmodule CodingAgent.ResourceLoaderTest do
         )
 
       globals |> Enum.with_index() |> Enum.each(fn {path, i} -> write!(path, "global-#{i}") end)
-
 
       sections = ResourceLoader.instruction_sections(cwd)
 
@@ -187,7 +187,6 @@ defmodule CodingAgent.ResourceLoaderTest do
       refute rendered =~ "inline-code-must-not-expand"
       assert rendered =~ "Personal: imported-home-note"
       assert rendered =~ "`@style.md` stays"
-
     end
   end
 
@@ -211,9 +210,6 @@ defmodule CodingAgent.ResourceLoaderTest do
 
   defp offset(text, marker), do: elem(:binary.match(text, marker), 0)
 
-
-
-
   describe "load_prompt/2" do
     test "returns error when prompt doesn't exist", %{tmp_dir: tmp_dir} do
       result = ResourceLoader.load_prompt(tmp_dir, "nonexistent")
@@ -230,13 +226,9 @@ defmodule CodingAgent.ResourceLoaderTest do
     end
   end
 
-
-
   defp restore_env(key, nil), do: System.delete_env(key)
   defp restore_env(key, value), do: System.put_env(key, value)
 
   defp restore_app_env(app, key, nil), do: Application.delete_env(app, key)
   defp restore_app_env(app, key, value), do: Application.put_env(app, key, value)
-
-
 end

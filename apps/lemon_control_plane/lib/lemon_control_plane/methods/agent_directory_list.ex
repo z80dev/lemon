@@ -165,5 +165,4 @@ defmodule LemonControlPlane.Methods.AgentDirectoryList do
   end
 
   defp normalize_limit(_), do: nil
-
 end

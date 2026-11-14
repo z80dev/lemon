@@ -182,5 +182,4 @@ defmodule LemonControlPlane.Methods.SessionsList do
   end
 
   defp normalize_non_negative(_value, default), do: default
-
 end

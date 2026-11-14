@@ -145,5 +145,4 @@ defmodule LemonGateway.Sms.Config do
   end
 
   defp normalize_blank(_), do: nil
-
 end

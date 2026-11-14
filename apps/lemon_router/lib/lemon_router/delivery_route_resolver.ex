@@ -67,7 +67,14 @@ defmodule LemonRouter.DeliveryRouteResolver do
 
   defp normalize_peer_kind(kind) do
     Map.get(
-      %{"dm" => :dm, "group" => :group, "channel" => :channel, dm: :dm, group: :group, channel: :channel},
+      %{
+        "dm" => :dm,
+        "group" => :group,
+        "channel" => :channel,
+        dm: :dm,
+        group: :group,
+        channel: :channel
+      },
       kind
     )
   end

@@ -29,7 +29,9 @@ defmodule LemonAi.Auth.OAuthSecretTest do
   end
 
   test "project keys use trimmed tokens and preserve provider-specific errors" do
-    assert {:ok, encoded} = OAuthSecret.project_key(%{"access_token" => " token "}, "project", :bad)
+    assert {:ok, encoded} =
+             OAuthSecret.project_key(%{"access_token" => " token "}, "project", :bad)
+
     assert Jason.decode!(encoded) == %{"token" => "token", "projectId" => "project"}
     assert {:error, :bad} = OAuthSecret.project_key(%{}, "project", :bad)
     assert {:error, :bad} = OAuthSecret.project_key(%{"access_token" => "token"}, nil, :bad)
@@ -46,10 +48,12 @@ defmodule LemonAi.Auth.OAuthSecretTest do
     assert token.expires_at_ms <= after_parse + 3_300_000
 
     assert {:error, :invalid_token_response} = OAuthSecret.parse_token_response(%{})
+
     assert {:error, {:invalid_token_response, %{}}} =
              OAuthSecret.parse_token_response(%{}, 300_000, true)
 
     invalid_expiry = %{"access_token" => "token", "expires_in" => 0}
+
     assert {:error, {:invalid_expiry, ^invalid_expiry}} =
              OAuthSecret.parse_token_response(invalid_expiry, 300_000, true)
   end
@@ -76,7 +80,13 @@ defmodule LemonAi.Auth.OAuthSecretTest do
     }
 
     assert {:ok, encoded} =
-             OAuthSecret.resolve(Resolver, "project-login", OAuthSecret.encode(secret), opts, spec)
+             OAuthSecret.resolve(
+               Resolver,
+               "project-login",
+               OAuthSecret.encode(secret),
+               opts,
+               spec
+             )
 
     assert Jason.decode!(encoded) == %{"token" => "token", "projectId" => "project"}
     assert_received {:persisted, %{"project_id" => "project"}}
@@ -105,7 +115,13 @@ defmodule LemonAi.Auth.OAuthSecretTest do
     }
 
     assert {:ok, "replacement"} =
-             OAuthSecret.resolve(Resolver, "fallback-login", OAuthSecret.encode(stale), opts, spec)
+             OAuthSecret.resolve(
+               Resolver,
+               "fallback-login",
+               OAuthSecret.encode(stale),
+               opts,
+               spec
+             )
 
     assert Process.get(:reload_count) == 2
   end
@@ -125,7 +141,13 @@ defmodule LemonAi.Auth.OAuthSecretTest do
     }
 
     assert {:ok, "replacement"} =
-             OAuthSecret.resolve(Resolver, "replacement-login", OAuthSecret.encode(stale), opts, spec)
+             OAuthSecret.resolve(
+               Resolver,
+               "replacement-login",
+               OAuthSecret.encode(stale),
+               opts,
+               spec
+             )
 
     refute_received {:refreshed, _}
 

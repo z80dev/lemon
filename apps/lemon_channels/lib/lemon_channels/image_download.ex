@@ -25,6 +25,7 @@ defmodule LemonChannels.ImageDownload do
 
   def merge(inbound, previous) do
     images = Map.get(previous.message, :images, []) ++ Map.get(inbound.message, :images, [])
+
     if images == [] do
       inbound
     else

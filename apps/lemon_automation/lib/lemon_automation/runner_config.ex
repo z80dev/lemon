@@ -38,14 +38,17 @@ defmodule LemonAutomation.RunnerConfig do
 
   def positive_integer(cfg, key, default) do
     case Keyword.get(cfg, key, default) do
-      value when is_integer(value) and value > 0 -> value
+      value when is_integer(value) and value > 0 ->
+        value
+
       value when is_binary(value) ->
         case Integer.parse(value) do
           {parsed, ""} when parsed > 0 -> parsed
           _ -> default
         end
 
-      _ -> default
+      _ ->
+        default
     end
   end
 

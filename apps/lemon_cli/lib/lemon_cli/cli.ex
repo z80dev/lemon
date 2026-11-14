@@ -1313,7 +1313,6 @@ defmodule LemonCli.CLI do
       else: :ok
   end
 
-
   defp run_backup_operation(operation, json?, fun) do
     result =
       try do

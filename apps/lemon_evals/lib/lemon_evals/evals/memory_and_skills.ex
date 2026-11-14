@@ -41,7 +41,8 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
           search_fn: search_fn
         )
 
-      agent_result = tool.execute.("eval-recall-agent", %{"query" => "deployment notes"}, nil, nil)
+      agent_result =
+        tool.execute.("eval-recall-agent", %{"query" => "deployment notes"}, nil, nil)
 
       project_result =
         tool.execute.(

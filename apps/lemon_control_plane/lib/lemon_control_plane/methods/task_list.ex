@@ -24,7 +24,16 @@ defmodule LemonControlPlane.Methods.TaskList do
       normalize_limit(get_param(params, "eventLimit"), @default_event_limit, @max_event_limit)
 
     tasks =
-      fetch_tasks(run_id, agent_id, limit, include_events, include_record, event_limit, status_filter, mode)
+      fetch_tasks(
+        run_id,
+        agent_id,
+        limit,
+        include_events,
+        include_record,
+        event_limit,
+        status_filter,
+        mode
+      )
 
     filters = %{
       "runId" => run_id,
@@ -86,19 +95,32 @@ defmodule LemonControlPlane.Methods.TaskList do
   defp maybe_add_average(summary, _tasks, :active), do: summary
 
   defp maybe_add_average(summary, tasks, :recent) do
-    durations = tasks |> Enum.map(& &1["durationMs"]) |> Enum.filter(&(is_integer(&1) and &1 >= 0))
+    durations =
+      tasks |> Enum.map(& &1["durationMs"]) |> Enum.filter(&(is_integer(&1) and &1 >= 0))
+
     average = if durations == [], do: nil, else: div(Enum.sum(durations), length(durations))
     Map.put(summary, "averageDurationMs", average)
   end
 
-  defp fetch_tasks(run_id, agent_id, limit, include_events, include_record, event_limit, status_filter, mode) do
+  defp fetch_tasks(
+         run_id,
+         agent_id,
+         limit,
+         include_events,
+         include_record,
+         event_limit,
+         status_filter,
+         mode
+       ) do
     AgentRuntime.call(:list_tasks, [], [])
     |> Enum.map(fn {task_id, _record} ->
       task_from_store(task_id, include_events, include_record, event_limit, mode)
     end)
     |> Enum.reject(&is_nil/1)
     |> Enum.filter(&(active_status?(&1) == (mode == :active)))
-    |> Enum.filter(&(mode == :active or status_filter in [nil, ""] or &1["status"] == status_filter))
+    |> Enum.filter(
+      &(mode == :active or status_filter in [nil, ""] or &1["status"] == status_filter)
+    )
     |> Enum.filter(&filter_by_run(&1, run_id))
     |> Enum.filter(&filter_by_agent(&1, agent_id))
     |> Enum.sort_by(&task_sort_key(&1, mode), :desc)
@@ -396,5 +418,4 @@ defmodule LemonControlPlane.Methods.TaskList do
   defp key_to_string(key) when is_binary(key), do: key
   defp key_to_string(key) when is_atom(key), do: Atom.to_string(key)
   defp key_to_string(key), do: to_string(key)
-
 end

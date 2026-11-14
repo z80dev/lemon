@@ -242,7 +242,6 @@ defmodule CodingAgent.Search.DispatcherTest do
     refute_received {:fallback_started, _}
   end
 
-
   defp new_signal do
     signal = AbortSignal.new()
     on_exit(fn -> AbortSignal.clear(signal) end)

@@ -220,5 +220,4 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
 
   defp maybe_add_opt(opts, _key, nil), do: opts
   defp maybe_add_opt(opts, key, value), do: Keyword.put(opts, key, value)
-
 end

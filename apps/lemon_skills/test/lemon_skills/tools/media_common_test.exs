@@ -53,6 +53,7 @@ defmodule LemonSkills.Tools.MediaCommonTest do
     assert payload["prompt_hash"] == "hash"
     assert payload["prompt_chars"] == 12
     refute Map.has_key?(payload, "input_hash")
+
     assert payload["artifact"] == %{
              "path" => path,
              "filename" => "public.png",
@@ -61,6 +62,7 @@ defmodule LemonSkills.Tools.MediaCommonTest do
            }
 
     assert MediaCommon.maybe_auto_send(payload, %{}, "caption") == payload
+
     assert MediaCommon.maybe_auto_send(payload, %{"sendToChannel" => "true"}, "caption") ==
              payload
 
@@ -87,16 +89,20 @@ defmodule LemonSkills.Tools.MediaCommonTest do
     for {default, maximum} <- [{5_000, 30_000}, {10_000, 120_000}, {20_000, 300_000}] do
       assert MediaCommon.timeout_ms(%{}, default, maximum) == {:ok, default}
       assert MediaCommon.timeout_ms(%{"timeoutMs" => 1}, default, maximum) == {:ok, 100}
+
       assert MediaCommon.timeout_ms(%{"timeoutMs" => "999999"}, default, maximum) ==
                {:ok, maximum}
 
       assert MediaCommon.timeout_ms(%{"timeoutMs" => "1250"}, default, maximum) == {:ok, 1250}
+
       assert MediaCommon.timeout_ms(%{"timeoutMs" => "1250ms"}, default, maximum) ==
                {:error, "timeoutMs must be an integer"}
     end
   end
 
-  test "artifact paths preserve per-tool filename prefixes and sanitize names", %{tmp_dir: tmp_dir} do
+  test "artifact paths preserve per-tool filename prefixes and sanitize names", %{
+    tmp_dir: tmp_dir
+  } do
     for prefix <- ~w(media-preview media-speech media-video media-analysis media-transcript) do
       assert {:ok, path} = MediaCommon.artifact_path(%{}, tmp_dir, [], "json", prefix)
       assert Path.basename(path) =~ ~r/^#{prefix}-\d+\.json$/
@@ -125,6 +131,7 @@ defmodule LemonSkills.Tools.MediaCommonTest do
 
   test "reports failed and timed-out jobs" do
     send(self(), {:media_job, :failed, %{job_id: "job-1", error_kind: "safe_failure"}})
+
     assert MediaCommon.wait_for_job("job-1", 100, nil) ==
              {:error, "media job failed: safe_failure"}
 

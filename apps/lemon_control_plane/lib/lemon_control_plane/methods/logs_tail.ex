@@ -113,5 +113,4 @@ defmodule LemonControlPlane.Methods.LogsTail do
     do: level |> Atom.to_string() |> String.downcase()
 
   defp normalize_level(_), do: nil
-
 end

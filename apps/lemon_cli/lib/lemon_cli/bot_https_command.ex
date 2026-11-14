@@ -10,10 +10,13 @@ defmodule LemonCli.BotHttpsCommand do
 
   def cli(args) do
     case dispatch(args, []) do
-      :ok -> 0
+      :ok ->
+        0
+
       {:error, :usage, message} ->
         IO.puts(:stderr, "Error: #{message}")
         2
+
       {:error, message} ->
         IO.puts(:stderr, "Error: #{message}")
         1
@@ -44,9 +47,13 @@ defmodule LemonCli.BotHttpsCommand do
             {:ok, result} ->
               render(result)
               :ok
-            error -> error
+
+            error ->
+              error
           end
-        {:error, message} -> {:error, :usage, message}
+
+        {:error, message} ->
+          {:error, :usage, message}
       end
     end
   end
@@ -64,8 +71,11 @@ defmodule LemonCli.BotHttpsCommand do
 
         case lock.(fn -> change(operation, opts) end) do
           {:error, message} when not is_binary(message) ->
-            {:error, "HTTPS settings are locked or unavailable; no concurrent changes are allowed."}
-          result -> result
+            {:error,
+             "HTTPS settings are locked or unavailable; no concurrent changes are allowed."}
+
+          result ->
+            result
         end
       end
     end

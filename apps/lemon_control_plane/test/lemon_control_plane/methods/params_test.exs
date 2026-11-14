@@ -4,7 +4,11 @@ defmodule LemonControlPlane.Methods.ParamsTest do
   alias LemonControlPlane.Methods.{Params, TasksActiveList, TasksRecentList}
 
   test "exact parameter keys take precedence even for false and nil" do
-    assert Params.get_param(%{"includeEvents" => false, "include_events" => true}, "includeEvents") == false
+    assert Params.get_param(
+             %{"includeEvents" => false, "include_events" => true},
+             "includeEvents"
+           ) == false
+
     assert Params.get_param(%{"runId" => nil, "run_id" => "fallback"}, "runId") == nil
     assert Params.get_param(%{"run_id" => "run"}, "runId") == "run"
     assert Params.get_param(nil, "runId") == nil

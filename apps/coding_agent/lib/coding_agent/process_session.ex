@@ -944,6 +944,7 @@ defmodule CodingAgent.ProcessSession do
 
   defp command_with_cwd(command, nil), do: command
   defp command_with_cwd(command, ""), do: command
+
   defp command_with_cwd(command, cwd),
     do: "cd #{CodingAgent.BashExecutor.shell_escape(cwd)} && #{command}"
 

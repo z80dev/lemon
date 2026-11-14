@@ -498,5 +498,4 @@ defmodule LemonControlPlane.Methods.ChatHistory do
   end
 
   defp normalize_limit(_), do: @default_limit
-
 end

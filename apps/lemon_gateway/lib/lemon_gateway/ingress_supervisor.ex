@@ -67,5 +67,4 @@ defmodule LemonGateway.IngressSupervisor do
       type: :supervisor
     }
   end
-
 end

@@ -49,13 +49,16 @@ defmodule LemonCore.TaskSurface.ProjectionTest do
 
   test "fallback ids retain kind for nil and empty child action ids" do
     for child_action_id <- [nil, ""] do
-      tool_id = Projection.projected_action_id("run-child", child_action_id, :tool, "Read AGENTS.md")
+      tool_id =
+        Projection.projected_action_id("run-child", child_action_id, :tool, "Read AGENTS.md")
+
       command_id =
         Projection.projected_action_id("run-child", child_action_id, :command, "Read AGENTS.md")
 
       assert tool_id == "taskproj:run-child:tool:afc9a777c159"
       assert command_id == "taskproj:run-child:command:afc9a777c159"
       refute tool_id == command_id
+
       assert Projection.projected_action_id("run-child", child_action_id, :tool, nil) ==
                "taskproj:run-child:tool:e3b0c44298fc"
     end

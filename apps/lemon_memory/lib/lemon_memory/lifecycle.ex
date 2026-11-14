@@ -82,13 +82,19 @@ defmodule LemonMemory.Lifecycle do
                  query,
                  identity.agent_id,
                  identity.home_digest,
-                 selector, limit: @max_scan, history_only: false),
+                 selector,
+                 limit: @max_scan,
+                 history_only: false
+               ),
              {:ok, preferences} <-
                store(opts).list_owned_recent(
                  server(opts),
                  identity.agent_id,
                  identity.home_digest,
-                 selector, preferences_only: true, limit: @max_scan + 1),
+                 selector,
+                 preferences_only: true,
+                 limit: @max_scan + 1
+               ),
              true <- length(preferences) <= @max_scan do
           terms = Query.terms(query)
 

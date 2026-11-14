@@ -190,7 +190,6 @@ defmodule Mix.Tasks.Lemon.Onboard do
     end) || LemonCore.Config.global_path()
   end
 
-
   defp select_value(io, params) do
     case Map.get(io, :select) do
       select when is_function(select, 1) ->
@@ -216,7 +215,6 @@ defmodule Mix.Tasks.Lemon.Onboard do
         :fallback
     end
   end
-
 
   defp format_selector_error(:not_available), do: "no interactive terminal detected"
   defp format_selector_error(:no_selection), do: "selector exited before a choice was made"

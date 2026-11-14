@@ -77,9 +77,7 @@ defmodule LemonEvals.Evals.AgentLoop do
       stream =
         Loop.agent_loop(
           [
-            trace_user_message(
-              "Use the release checklist and save the reusable hotfix workflow."
-            )
+            trace_user_message("Use the release checklist and save the reusable hotfix workflow.")
           ],
           context,
           config,
@@ -147,8 +145,7 @@ defmodule LemonEvals.Evals.AgentLoop do
               "name" => "release-hotfix-checklist",
               "scope" => "project",
               "old_string" => "3. Record the result and rollback note.",
-              "new_string" =>
-                "3. Record the result, rollback note, and exact follow-up owner."
+              "new_string" => "3. Record the result, rollback note, and exact follow-up owner."
             },
             id: "call-patch-existing-skill"
           )
@@ -652,9 +649,7 @@ defmodule LemonEvals.Evals.AgentLoop do
         stream =
           Loop.agent_loop(
             [
-              trace_user_message(
-                "Have a child create the release lane artifact, then verify it."
-              )
+              trace_user_message("Have a child create the release lane artifact, then verify it.")
             ],
             context,
             config,

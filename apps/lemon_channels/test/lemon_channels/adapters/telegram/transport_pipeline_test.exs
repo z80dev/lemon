@@ -51,6 +51,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
              })
 
     assert {:ok, context} = Normalize.event(state, update, 101)
+
     state =
       Pipeline.run(context, state, %{
         handle_callback_query: fn _st, callback_query ->
@@ -91,6 +92,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
     refute first_timer_ref == current_timer_ref
 
     assert {:ok, stale_context} = Normalize.event(state, {:debounce_flush, key, first_ref})
+
     callbacks = %{
       submit_buffer: fn st, buffer ->
         send(self(), {:submitted, buffer})

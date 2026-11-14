@@ -155,7 +155,9 @@ defmodule LemonAgent.AgentRegistryTest do
 
       # Verify both have their correct metadata
       assert [{_, ^main_metadata}] = Registry.lookup(AgentRegistry.registry_name(), main_key)
-      assert [{^pid, ^research_metadata}] = Registry.lookup(AgentRegistry.registry_name(), research_key)
+
+      assert [{^pid, ^research_metadata}] =
+               Registry.lookup(AgentRegistry.registry_name(), research_key)
 
       send(pid, :done)
     end

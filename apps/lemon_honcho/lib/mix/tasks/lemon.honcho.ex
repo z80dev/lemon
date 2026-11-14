@@ -314,7 +314,10 @@ defmodule Mix.Tasks.Lemon.Honcho do
     Mix.Task.run("app.start")
 
     config = LemonHoncho.config()
-    session_key = opts[:session] || LemonHoncho.Tools.Common.latest_session_key(include_pending: true)
+
+    session_key =
+      opts[:session] || LemonHoncho.Tools.Common.latest_session_key(include_pending: true)
+
     live? = opts[:live] == true
 
     header("Honcho Context")

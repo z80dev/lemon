@@ -65,8 +65,9 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     def lookup(id), do: CodingAgent.SessionSupervisorComprehensiveTest.IsolatedRegistry.lookup(id)
 
     def list_sessions do
-      for {_, child, :worker, _} <- DynamicSupervisor.which_children(pid()), is_pid(child),
-        do: child
+      for {_, child, :worker, _} <- DynamicSupervisor.which_children(pid()),
+          is_pid(child),
+          do: child
     end
   end
 
@@ -1038,6 +1039,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       results = Task.await_many(tasks, 10_000)
       assert length(results) == 50
+
       assert Enum.all?(results, fn diagnostics ->
                length(diagnostics) == 3 and Enum.all?(diagnostics, & &1.agent_alive)
              end)

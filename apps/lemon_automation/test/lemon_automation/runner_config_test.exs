@@ -26,7 +26,8 @@ defmodule LemonAutomation.RunnerConfigTest do
       extra: :preserved
     })
 
-    cfg = RunnerConfig.config(:runner_config_test, [enabled: true, interval_hours: 6], enabled: true)
+    cfg =
+      RunnerConfig.config(:runner_config_test, [enabled: true, interval_hours: 6], enabled: true)
 
     assert cfg[:enabled] == true
     assert cfg[:interval_hours] == "12"

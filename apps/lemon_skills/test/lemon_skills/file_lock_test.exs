@@ -10,6 +10,7 @@ defmodule LemonSkills.FileLockTest do
 
     assert FileLock.with_lock(path, fn ->
              assert File.exists?(path)
+
              assert FileLock.with_lock(path, fn -> flunk("lock is already held") end, 1) ==
                       {:error, :lock_timeout}
 
@@ -32,6 +33,7 @@ defmodule LemonSkills.FileLockTest do
 
   test "returns timeout when the supplied retry budget is exhausted", %{tmp_dir: tmp_dir} do
     path = Path.join(tmp_dir, "state.lock")
+
     assert FileLock.with_lock(path, fn -> flunk("no retries remain") end, 0) ==
              {:error, :lock_timeout}
 
@@ -40,6 +42,7 @@ defmodule LemonSkills.FileLockTest do
 
   test "returns file errors without invoking the callback", %{tmp_dir: tmp_dir} do
     path = Path.join([tmp_dir, "missing", "state.lock"])
+
     assert FileLock.with_lock(path, fn -> flunk("lock could not be acquired") end) ==
              {:error, {:lock_failed, :enoent}}
   end

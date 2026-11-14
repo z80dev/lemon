@@ -1,5 +1,6 @@
 defmodule LemonCli.Setup.Gateway do
   import LemonCli.Onboarding.PromptUI, only: [normalize_input: 1]
+
   @moduledoc """
   Gateway setup dispatcher for `lemon gateway setup`.
 
@@ -114,5 +115,4 @@ defmodule LemonCli.Setup.Gateway do
   # ──────────────────────────────────────────────────────────────────────────
   # IO helpers
   # ──────────────────────────────────────────────────────────────────────────
-
 end

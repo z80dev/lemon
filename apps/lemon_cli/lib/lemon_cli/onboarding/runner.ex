@@ -1,5 +1,7 @@
 defmodule LemonCli.Onboarding.Runner do
-  import LemonCli.Onboarding.PromptUI, only: [normalize_input!: 1, select_value: 2, select_yes_no: 3, interactive_prompt_session?: 1]
+  import LemonCli.Onboarding.PromptUI,
+    only: [normalize_input!: 1, select_value: 2, select_yes_no: 3, interactive_prompt_session?: 1]
+
   @moduledoc false
 
   alias LemonAgent.ModelRuntime.Credentials
@@ -285,7 +287,6 @@ defmodule LemonCli.Onboarding.Runner do
   defp error_module do
     if Code.ensure_loaded?(Mix.Error), do: Mix.Error, else: CLI.Error
   end
-
 
   defp ensure_secrets_ready! do
     status = Secrets.status()
@@ -1045,7 +1046,6 @@ defmodule LemonCli.Onboarding.Runner do
         )
     end
   end
-
 
   defp maybe_open_url(url, io) do
     if select_yes_no("Open this URL in your default browser now?", false, io) do

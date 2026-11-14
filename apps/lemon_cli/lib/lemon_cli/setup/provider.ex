@@ -1,5 +1,7 @@
 defmodule LemonCli.Setup.Provider do
-  import LemonCli.Onboarding.PromptUI, only: [normalize_input!: 1, select_value: 2, interactive_prompt_session?: 1]
+  import LemonCli.Onboarding.PromptUI,
+    only: [normalize_input!: 1, select_value: 2, interactive_prompt_session?: 1]
+
   @moduledoc """
   Provider setup for `mix lemon.setup provider` and the packaged `lemon model`
   command.
@@ -507,7 +509,4 @@ defmodule LemonCli.Setup.Provider do
   # ──────────────────────────────────────────────────────────────────────────
   # IO helpers
   # ──────────────────────────────────────────────────────────────────────────
-
-
-
 end

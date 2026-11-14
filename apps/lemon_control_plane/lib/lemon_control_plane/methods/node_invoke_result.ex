@@ -10,8 +10,10 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.NodeStore
+
   import LemonControlPlane.Methods.NodeSession,
     only: [session_generation: 1, current_session?: 2, get_field: 2]
+
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -244,5 +246,4 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
        do: kind
 
   defp payload_error_kind(_reason), do: :invalid
-
 end

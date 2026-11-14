@@ -124,5 +124,4 @@ defmodule LemonControlPlane.Methods.RunsActiveList do
 
   defp max_or_nil([]), do: nil
   defp max_or_nil(values), do: Enum.max(values)
-
 end

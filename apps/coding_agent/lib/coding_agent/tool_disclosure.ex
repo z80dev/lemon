@@ -1142,5 +1142,4 @@ defmodule CodingAgent.ToolDisclosure do
   end
 
   defp enum_problem(_key, _value, _allowed), do: []
-
 end

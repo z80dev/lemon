@@ -90,9 +90,7 @@ defmodule LemonAgent.AgentQueueTest do
       response3 = Mocks.assistant_message("Third")
 
       {:ok, agent} =
-        start_agent(
-          stream_fn: Mocks.mock_stream_fn([response1, response2, response3])
-        )
+        start_agent(stream_fn: Mocks.mock_stream_fn([response1, response2, response3]))
 
       # Queue multiple steering messages before starting
       msg1 = Mocks.user_message("Steer 1")
@@ -625,9 +623,7 @@ defmodule LemonAgent.AgentQueueTest do
       response = Mocks.assistant_message("Response")
 
       {:ok, agent} =
-        start_agent(
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
+        start_agent(stream_fn: Mocks.mock_stream_fn_single(response))
 
       # Queue multiple messages
       :ok = CoreAgent.steer(agent, Mocks.user_message("First"))

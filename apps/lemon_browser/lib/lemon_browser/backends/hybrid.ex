@@ -124,6 +124,7 @@ defmodule LemonBrowser.Backends.Hybrid do
       _ -> nil
     end
   end
+
   defp resolve_option(opts, key, default) do
     Keyword.get(opts, key) || System.get_env(env_name(key)) || default
   end

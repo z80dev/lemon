@@ -352,7 +352,6 @@ defmodule LemonGateway.ApplicationTest do
 
       refute "telegram" in enabled_ids
     end
-
   end
 
   # ---------------------------------------------------------------------
@@ -479,7 +478,6 @@ defmodule LemonGateway.ApplicationTest do
       assert {:error, _} = Application.ensure_all_started(:lemon_gateway)
       refute Process.whereis(Elixir.LemonGateway.Supervisor)
     end
-
   end
 
   # ---------------------------------------------------------------------

@@ -1,5 +1,6 @@
 defmodule LemonCli.Setup.Gateway.Telegram do
   import LemonCli.Onboarding.PromptUI, only: [normalize_input: 1]
+
   @moduledoc """
   Gateway setup adapter for the Telegram transport, with owner pairing.
 
@@ -447,5 +448,4 @@ defmodule LemonCli.Setup.Gateway.Telegram do
       ssl_opts
     end
   end
-
 end

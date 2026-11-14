@@ -333,7 +333,6 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
       defp has_thread?(thread_id) when is_integer(thread_id), do: true
       defp has_thread?(thread_id) when is_binary(thread_id) and thread_id != "", do: true
       defp has_thread?(_), do: false
-
     end
   end
 

@@ -86,5 +86,4 @@ defmodule LemonGateway.Application do
   defp gateway_ingress_enabled? do
     Application.get_env(:lemon_gateway, :gateway_ingress_enabled, false)
   end
-
 end

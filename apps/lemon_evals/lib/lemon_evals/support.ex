@@ -667,7 +667,8 @@ defmodule LemonEvals.Support do
   end
 
   def assert_final_after_join(messages) do
-    predicate = &match?(%{role: :tool_result, tool_name: "task", details: %{mode: "wait_all"}}, &1)
+    predicate =
+      &match?(%{role: :tool_result, tool_name: "task", details: %{mode: "wait_all"}}, &1)
 
     with :ok <- assert_final_after(messages, predicate, "join") do
       if String.contains?(final_stop_text(messages), "child task output") do
@@ -1077,6 +1078,7 @@ defmodule LemonEvals.Support do
 
   def format_reason(reason) when is_binary(reason), do: reason
   def format_reason(reason), do: inspect(reason)
+
   def run_contract(name, fun) when is_function(fun, 0) do
     case fun.() do
       {:error, reason} -> contract_fail(name, format_reason(reason), %{})

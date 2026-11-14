@@ -15,7 +15,6 @@ defmodule CodingAgent.CheckpointTest do
     :ok
   end
 
-
   describe "checkpoint audit events" do
     @tag :tmp_dir
     test "filesystem checkpoints emit introspection and run events", %{tmp_dir: tmp_dir} do
@@ -135,7 +134,6 @@ defmodule CodingAgent.CheckpointTest do
     end
   end
 
-
   describe "delete/1" do
     test "deletes a checkpoint" do
       session_id = unique_session("delete")
@@ -152,7 +150,6 @@ defmodule CodingAgent.CheckpointTest do
       assert :ok = Checkpoint.delete("chk_nonexistent")
     end
   end
-
 
   describe "stats/1" do
     test "returns checkpoint statistics" do
@@ -178,8 +175,6 @@ defmodule CodingAgent.CheckpointTest do
       assert stats.oldest == nil
     end
   end
-
-
 
   describe "filesystem checkpoints" do
     @tag :tmp_dir

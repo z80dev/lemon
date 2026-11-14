@@ -27,7 +27,13 @@ defmodule LemonControlPlane.HTTP.RouterTest do
     previous_waiter = Application.get_env(:lemon_control_plane, :openai_compat_waiter)
     previous_run_getter = Application.get_env(:lemon_control_plane, :openai_compat_run_getter)
     previous_canceller = Application.get_env(:lemon_control_plane, :openai_compat_canceller)
-    token_env = ["LEMON_OPENAI_COMPAT_API_TOKEN", "LEMON_OPENAI_COMPAT_TOKEN", "LEMON_ACP_API_TOKEN"]
+
+    token_env = [
+      "LEMON_OPENAI_COMPAT_API_TOKEN",
+      "LEMON_OPENAI_COMPAT_TOKEN",
+      "LEMON_ACP_API_TOKEN"
+    ]
+
     previous_tokens = Map.new(token_env, &{&1, System.get_env(&1)})
     Enum.each(token_env, &System.delete_env/1)
     previous_catalog = Application.fetch_env(:lemon_control_plane, :model_catalog)

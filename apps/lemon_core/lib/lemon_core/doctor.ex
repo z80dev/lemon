@@ -60,7 +60,10 @@ defmodule LemonCore.Doctor do
     :lemon_core
     |> Application.get_env(:doctor_checks, [])
     |> List.wrap()
-    |> Enum.filter(&(Code.ensure_loaded?(&1) and (function_exported?(&1, :run, 1) or function_exported?(&1, :live_checks, 1))))
+    |> Enum.filter(
+      &(Code.ensure_loaded?(&1) and
+          (function_exported?(&1, :run, 1) or function_exported?(&1, :live_checks, 1)))
+    )
   end
 
   @spec checks(keyword()) :: [Check.t()]

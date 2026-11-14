@@ -56,7 +56,10 @@ defmodule LemonAutomation.IntervalRunnerTest do
     refute_receive {:runner_started, _}
 
     assert {:noreply, cleared} =
-             IntervalRunner.handle_info({:DOWN, running.in_flight_ref, :process, self(), :normal}, running)
+             IntervalRunner.handle_info(
+               {:DOWN, running.in_flight_ref, :process, self(), :normal},
+               running
+             )
 
     assert is_nil(cleared.in_flight_ref)
   end

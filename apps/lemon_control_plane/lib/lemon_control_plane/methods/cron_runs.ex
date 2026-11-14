@@ -6,7 +6,8 @@ defmodule LemonControlPlane.Methods.CronRuns do
   internals, and introspection timeline.
   """
 
-  import LemonControlPlane.Methods.Params, only: [truthy?: 2, normalize_limit: 3, get_map: 2, get_map: 3]
+  import LemonControlPlane.Methods.Params,
+    only: [truthy?: 2, normalize_limit: 3, get_map: 2, get_map: 3]
 
   @behaviour LemonControlPlane.Method
 

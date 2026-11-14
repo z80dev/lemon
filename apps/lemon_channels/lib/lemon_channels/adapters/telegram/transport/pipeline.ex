@@ -35,7 +35,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
         callbacks
       ) do
     case RuntimeState.take_current_media_group(state, scope_key, debounce_ref) do
-      {state, nil} -> state
+      {state, nil} ->
+        state
+
       {state, group} ->
         callbacks.process_media_group.(state, group)
         state
@@ -64,7 +66,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
     state
   end
 
-  def run(%InboundContext{kind: :message, raw_update: update, inbound: inbound} = ctx, state, callbacks)
+  def run(
+        %InboundContext{kind: :message, raw_update: update, inbound: inbound} = ctx,
+        state,
+        callbacks
+      )
       when is_map(update) and is_map(inbound) do
     # /whoami is answered before authorization: it is how an owner discovers
     # the chat id to pair, and it only echoes the requester's own ids.
