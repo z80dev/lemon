@@ -3,6 +3,12 @@ defmodule LemonCore.ProcessGroup do
   Birth-bound local process-group ownership. An empty observation proves exit only
   for a complete captured witness; missing, recycled or lost ownership is unknown.
   This observes local groups, not escaped sessions, containers or remote work.
+
+  Separately, `signal_group/2`, `signal_pids/2` and `terminate/2` are unverified
+  helpers for a group the caller itself just created as the leader of its own
+  process group (an Erlang Port child, whose group id is its OS pid): they signal
+  the whole group (SIGTERM, bounded grace, SIGKILL) with no birth witness, so
+  they must run promptly around the leader's exit, never against a stored id.
   """
 
   def valid_identity?(%{
@@ -119,6 +125,119 @@ defmodule LemonCore.ProcessGroup do
     end
   catch
     _, _ -> {:error, :workload_unobservable, identity}
+  end
+
+  @default_grace_ms 500
+  @poll_ms 20
+  @kill_attempts 50
+
+  @doc """
+  Signals every member of the local process group `pgid`, without ownership
+  verification. Returns `:ok` when the signal reached at least one member,
+  `:gone` when the group is empty, and `:error` when no `kill` binary exists.
+  `signal` is `:sigterm`, `:sigkill`, or `:probe` (signal 0: liveness only).
+
+  Use this only for a group Lemon itself just created as the leader of its own
+  process group (for example an Erlang Port child, which `erl_child_setup`
+  starts as a session/group leader, so its group id is its OS pid). Group ids
+  are not recycled while any member lives; an unverified signal to an
+  already-empty group could hit a recycled id, so callers must signal promptly
+  after the leader's exit rather than long after. Ids `<= 1` are refused.
+  """
+  @spec signal_group(pos_integer(), :sigterm | :sigkill | :probe) :: :ok | :gone | :error
+  def signal_group(pgid, signal)
+      when is_integer(pgid) and pgid > 1 and signal in [:sigterm, :sigkill, :probe],
+      do: run_kill(signal, ["-#{pgid}"])
+
+  def signal_group(_pgid, _signal), do: :gone
+
+  @doc """
+  Signals individual OS pids (those that deliberately left the group). Pids
+  `<= 1` are dropped. Returns like `signal_group/2`.
+  """
+  @spec signal_pids([integer()], :sigterm | :sigkill) :: :ok | :gone | :error
+  def signal_pids(pids, signal) when is_list(pids) and signal in [:sigterm, :sigkill] do
+    case for(pid <- pids, is_integer(pid) and pid > 1, do: Integer.to_string(pid)) do
+      [] -> :gone
+      targets -> run_kill(signal, targets)
+    end
+  end
+
+  @doc """
+  Terminates a group this process owns: SIGTERM to `-pgid`, poll up to
+  `:grace_ms` (default #{@default_grace_ms}) for the group to empty, then SIGKILL
+  the group, repeating until it is empty or the bounded attempts run out. The
+  group is signalled as a whole, so descendants reparented to init after their
+  parent exited (and anything forked during the grace) are still members.
+  Returns `:ok` once the group is empty and `:alive` if members survived SIGKILL.
+  """
+  @spec terminate(pos_integer(), keyword()) :: :ok | :alive | :error
+  def terminate(pgid, opts \\ []) when is_integer(pgid) do
+    grace_ms = Keyword.get(opts, :grace_ms, @default_grace_ms)
+
+    case signal_group(pgid, :sigterm) do
+      :gone ->
+        :ok
+
+      :error ->
+        :error
+
+      :ok ->
+        deadline = System.monotonic_time(:millisecond) + grace_ms
+        if wait_gone(pgid, deadline), do: :ok, else: kill_until_gone(pgid, @kill_attempts)
+    end
+  end
+
+  defp wait_gone(pgid, deadline) do
+    cond do
+      signal_group(pgid, :probe) != :ok ->
+        true
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        false
+
+      true ->
+        Process.sleep(@poll_ms)
+        wait_gone(pgid, deadline)
+    end
+  end
+
+  defp kill_until_gone(_pgid, 0), do: :alive
+
+  defp kill_until_gone(pgid, attempts) do
+    case signal_group(pgid, :sigkill) do
+      :ok ->
+        Process.sleep(@poll_ms)
+        if signal_group(pgid, :probe) == :ok, do: kill_until_gone(pgid, attempts - 1), else: :ok
+
+      :gone ->
+        :ok
+
+      :error ->
+        :error
+    end
+  end
+
+  defp run_kill(signal, targets) do
+    case Enum.find(["/bin/kill", "/usr/bin/kill"], &File.regular?/1) do
+      nil ->
+        :error
+
+      executable ->
+        number =
+          case signal do
+            :probe -> "-0"
+            :sigterm -> "-15"
+            :sigkill -> "-9"
+          end
+
+        case System.cmd(executable, [number, "--" | targets], stderr_to_stdout: true) do
+          {_output, 0} -> :ok
+          {_output, _status} -> :gone
+        end
+    end
+  rescue
+    _ -> :error
   end
 
   # Signals the whole verified group through an OS-owned absolute `kill`, with

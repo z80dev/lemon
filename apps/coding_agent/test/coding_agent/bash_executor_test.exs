@@ -484,3 +484,113 @@ defmodule CodingAgent.BashExecutorTrackingTest do
            end)
   end
 end
+
+if match?({:unix, _}, :os.type()) do
+  defmodule CodingAgent.BashExecutorProcessGroupTest do
+    # Process-group cleanup: a backgrounded child whose parent shell already
+    # exited is reparented to init, so a `pgrep -P` walk cannot find it, but it
+    # still belongs to the shell's process group.
+    use ExUnit.Case, async: true
+
+    alias CodingAgent.BashExecutor
+    alias LemonAgent.AbortSignal
+
+    @moduletag :tmp_dir
+
+    # The inner `sh` records the child's pid and exits at once, orphaning the
+    # `sleep`; the outer shell stays alive so the command is still running.
+    defp orphaning_command(pid_file, outer \\ "sleep 300") do
+      "sh -c 'sleep 300 & echo $! > \"$0\"' '#{pid_file}'; #{outer}"
+    end
+
+    defp await_pid(pid_file) do
+      wait_until("pid file", fn ->
+        with {:ok, content} <- File.read(pid_file),
+             {pid, ""} <- Integer.parse(String.trim(content)) do
+          pid
+        else
+          _ -> nil
+        end
+      end)
+    end
+
+    defp wait_until(label, fun, attempts \\ 400) do
+      cond do
+        value = fun.() ->
+          value
+
+        attempts == 0 ->
+          flunk("timed out waiting for #{label}")
+
+        true ->
+          Process.sleep(25)
+          wait_until(label, fun, attempts - 1)
+      end
+    end
+
+    # `kill -0` succeeds for zombies, which are already dead for our purposes.
+    defp os_alive?(pid) do
+      pid = Integer.to_string(pid)
+
+      case System.cmd("kill", ["-0", pid], stderr_to_stdout: true) do
+        {_, 0} ->
+          {stat, _} = System.cmd("ps", ["-o", "stat=", "-p", pid], stderr_to_stdout: true)
+          not String.starts_with?(String.trim(stat), "Z")
+
+        _ ->
+          false
+      end
+    end
+
+    defp await_gone(pid), do: wait_until("pid #{pid} to exit", fn -> not os_alive?(pid) end)
+
+    test "abort stops a backgrounded child that outlived its parent shell", %{tmp_dir: dir} do
+      pid_file = Path.join(dir, "child.pid")
+      signal = AbortSignal.new()
+
+      task =
+        Task.async(fn ->
+          BashExecutor.execute(orphaning_command(pid_file), dir, signal: signal)
+        end)
+
+      child = await_pid(pid_file)
+      assert os_alive?(child)
+
+      AbortSignal.abort(signal)
+      assert {:ok, result} = Task.await(task, 10_000)
+      assert result.cancelled == true
+
+      await_gone(child)
+      AbortSignal.clear(signal)
+    end
+
+    test "killing the tool worker stops a backgrounded child that outlived its parent shell",
+         %{tmp_dir: dir} do
+      pid_file = Path.join(dir, "child.pid")
+      worker = spawn(fn -> BashExecutor.execute(orphaning_command(pid_file), dir) end)
+
+      child = await_pid(pid_file)
+      assert os_alive?(child)
+
+      Process.exit(worker, :kill)
+      await_gone(child)
+    end
+
+    test "timeout escalates to SIGKILL for a group that ignores SIGTERM", %{tmp_dir: dir} do
+      pid_file = Path.join(dir, "child.pid")
+
+      command =
+        "trap '' TERM; sh -c 'trap \"\" TERM; sleep 300 & echo $! > \"$0\"' '#{pid_file}'; " <>
+          "while :; do sleep 1; done"
+
+      task = Task.async(fn -> BashExecutor.execute(command, dir, timeout: 1_000) end)
+
+      child = await_pid(pid_file)
+      assert {:ok, result} = Task.await(task, 15_000)
+      assert result.cancelled == true
+      assert result.timed_out == true
+
+      await_gone(child)
+    end
+  end
+end

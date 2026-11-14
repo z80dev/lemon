@@ -26,11 +26,25 @@ defmodule LemonMCP.Transport.Stdio do
   Messages are sent as newline-delimited JSON:
 
       {"jsonrpc":"2.0","id":"1","method":"initialize","params":{...}}\n
+
+  ## Cleanup
+
+  The server is spawned through an Erlang Port, which starts it as the leader of
+  its own process group. Closing the Port only delivers stdin EOF, which a server
+  or its children may ignore, so `close/1` and `terminate/2` (also reached when
+  the owner exits, because the transport traps exits) first terminate the whole
+  group: SIGTERM, a bounded grace period, then SIGKILL until the group is empty
+  (`LemonCore.ProcessGroup.terminate/2`). Children that deliberately left the
+  group (their own `setsid`) are outside this guarantee, and a brutal kill of the
+  transport process itself cannot run cleanup.
   """
 
   use GenServer
 
   require Logger
+
+  # Grace between SIGTERM and SIGKILL when stopping the server's process group.
+  @term_grace_ms 1_000
 
   # ============================================================================
   # Types
@@ -45,6 +59,7 @@ defmodule LemonMCP.Transport.Stdio do
           port_open: (term(), list() -> port()),
           message_handler: (String.t() -> any()) | nil,
           buffer: String.t(),
+          os_pid: pos_integer() | nil,
           pending: map()
         }
 
@@ -125,13 +140,18 @@ defmodule LemonMCP.Transport.Stdio do
       port_open: Keyword.get(opts, :port_open, &Port.open/2),
       message_handler: message_handler,
       buffer: "",
+      os_pid: nil,
       pending: %{}
     }
+
+    # Trap exits so `terminate/2` runs (and stops the server's process group)
+    # when the owner exits or the supervisor shuts the transport down.
+    Process.flag(:trap_exit, true)
 
     # Start the port
     case spawn_server(state) do
       {:ok, port} ->
-        {:ok, %{state | port: port}}
+        {:ok, %{state | port: port, os_pid: os_pid(port)}}
 
       {:error, reason} ->
         {:stop, reason}
@@ -160,9 +180,9 @@ defmodule LemonMCP.Transport.Stdio do
   end
 
   @impl true
-  def handle_call(:close, _from, %{port: port} = state) do
-    Port.close(port)
-    {:reply, :ok, %{state | port: nil}}
+  def handle_call(:close, _from, state) do
+    stop_server(state)
+    {:reply, :ok, %{state | port: nil, os_pid: nil}}
   end
 
   @impl true
@@ -195,12 +215,9 @@ defmodule LemonMCP.Transport.Stdio do
   end
 
   @impl true
-  def terminate(_reason, %{port: port}) when port != nil do
-    Port.close(port)
-    :ok
+  def terminate(_reason, state) do
+    stop_server(state)
   end
-
-  def terminate(_reason, _state), do: :ok
 
   # ============================================================================
   # Private Functions
@@ -238,6 +255,33 @@ defmodule LemonMCP.Transport.Stdio do
   rescue
     e ->
       {:error, {:spawn_failed, Exception.message(e)}}
+  end
+
+  defp stop_server(state) do
+    os_pid = Map.get(state, :os_pid)
+
+    if is_integer(os_pid) and match?({:unix, _}, :os.type()),
+      do: LemonCore.ProcessGroup.terminate(os_pid, grace_ms: @term_grace_ms)
+
+    close_port(Map.get(state, :port))
+    :ok
+  end
+
+  defp close_port(port) when is_port(port) do
+    Port.close(port)
+  rescue
+    ArgumentError -> :ok
+  end
+
+  defp close_port(_port), do: :ok
+
+  defp os_pid(port) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, pid} when is_integer(pid) -> pid
+      _ -> nil
+    end
+  rescue
+    ArgumentError -> nil
   end
 
   defp find_executable(command) do

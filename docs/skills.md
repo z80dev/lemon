@@ -517,7 +517,11 @@ Repeat `--env KEY=VALUE`, `--header KEY=VALUE`, and
 `--tool-approval TOOL=always|never` as needed. Environment options are stdio-only,
 headers are HTTP-only. Pass all stdio subprocess arguments after `--`; they are
 an argument vector, never a shell command. Stdio subprocesses default to the
-requesting project's working directory. Shell history may retain credential
+requesting project's working directory. Each server runs as the leader of its own
+process group; closing or terminating the transport (including owner death)
+signals that whole group (SIGTERM, a bounded grace, then SIGKILL), so a server or
+its children that ignore stdin EOF do not outlive the transport. Children that
+call `setsid` are outside this guarantee. Shell history may retain credential
 arguments: avoid literal secrets in shared terminals and do not commit these
 configuration files.
 
