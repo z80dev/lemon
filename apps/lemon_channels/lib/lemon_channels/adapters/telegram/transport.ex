@@ -171,7 +171,26 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     {:reply, :ok, LemonChannels.Pairing.put_allowlist("telegram", state, chat_id, op)}
   end
 
+  # Runtime drain: hand every debounced message and media group to the router
+  # now, then stop fetching. Updates not yet fetched stay unconfirmed at
+  # Telegram, so the next runtime receives them from the persisted offset.
+  def handle_call(:drain_pause, _from, state) do
+    state =
+      Enum.reduce(state.buffers, state, fn {key, buffer}, acc ->
+        dispatch_transport_event({:debounce_flush, key, buffer.debounce_ref}, acc)
+      end)
+
+    state =
+      Enum.reduce(state.media_groups, state, fn {key, group}, acc ->
+        dispatch_transport_event({:media_group_flush, key, group.debounce_ref}, acc)
+      end)
+
+    {:reply, :ok, Map.put(state, :drain_paused?, true)}
+  end
+
   @impl true
+  def handle_info(:poll, %{drain_paused?: true} = state), do: {:noreply, state}
+
   def handle_info(:poll, state) do
     state = poll_updates(state)
     Process.send_after(self(), :poll, state.poll_interval_ms)

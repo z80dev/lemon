@@ -54,6 +54,9 @@ defmodule LemonRouter.RunProcess.RetryHandler do
   @spec format_run_error(term()) :: String.t()
   def format_run_error(nil), do: "unknown error"
 
+  def format_run_error(:runtime_restart),
+    do: "Paused for a Lemon restart. It continues automatically once Lemon is back."
+
   def format_run_error({:assistant_error, msg}) when is_binary(msg),
     do: format_assistant_error(msg)
 
@@ -181,7 +184,7 @@ defmodule LemonRouter.RunProcess.RetryHandler do
   defp empty_answer?(_), do: true
 
   defp retryable_zero_answer_error?(error)
-       when error in [:user_requested, :interrupted, :new_session, :timeout],
+       when error in [:user_requested, :interrupted, :new_session, :timeout, :runtime_restart],
        do: false
 
   defp retryable_zero_answer_error?({:assistant_error, reason}) do

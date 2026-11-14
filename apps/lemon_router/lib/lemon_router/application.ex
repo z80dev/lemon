@@ -47,7 +47,9 @@ defmodule LemonRouter.Application do
         LemonRouter.RoutingFeedbackStore,
         # Run orchestrator
         LemonRouter.RunOrchestrator,
-        LemonRouter.AgentMessaging
+        LemonRouter.AgentMessaging,
+        # Resubmits work carried across the previous graceful restart.
+        LemonRouter.RestartCarryover.Replayer
       ] ++ maybe_health_server_child()
 
     opts = [strategy: :one_for_one, name: LemonRouter.Supervisor]
@@ -56,6 +58,7 @@ defmodule LemonRouter.Application do
       {:ok, pid} ->
         configure_router_bridge()
         :ok = LemonCore.AgentMessaging.configure(LemonRouter.AgentMessaging)
+        :ok = LemonCore.Drain.register(:router, LemonRouter.RestartCarryover, order: 50)
         {:ok, pid}
 
       other ->

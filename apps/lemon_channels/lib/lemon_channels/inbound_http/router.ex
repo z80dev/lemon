@@ -38,6 +38,7 @@ defmodule LemonChannels.InboundHttp.Router do
 
   alias LemonChannels.InboundHttp
 
+  plug(:refuse_while_draining)
   plug(:match)
   plug(:authorize)
   plug(:parse_body)
@@ -51,6 +52,18 @@ defmodule LemonChannels.InboundHttp.Router do
     case conn.path_info do
       [segment | _rest] -> dispatch_to_handler(conn, segment)
       [] -> send_resp(conn, 404, "not found")
+    end
+  end
+
+  # A draining runtime answers 503 + Retry-After rather than accepting work it
+  # might not carry across the restart (see LemonCore.Drain). Health stays up.
+  defp refuse_while_draining(%Plug.Conn{path_info: ["health"]} = conn, _opts), do: conn
+
+  defp refuse_while_draining(conn, _opts) do
+    if LemonCore.Drain.draining?() do
+      conn |> put_resp_header("retry-after", "30") |> send_resp(503, "restarting") |> halt()
+    else
+      conn
     end
   end
 

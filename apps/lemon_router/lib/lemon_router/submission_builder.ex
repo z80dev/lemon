@@ -172,7 +172,8 @@ defmodule LemonRouter.SubmissionBuilder do
          run_process_module: MapHelpers.get_key(opts, :run_process_module),
          run_process_opts: MapHelpers.get_key(opts, :run_process_opts),
          pending_compaction_marker: pending_compaction_marker,
-         meta: LemonCore.RunStore.execution_projection(enriched_meta)
+         meta: LemonCore.RunStore.execution_projection(enriched_meta),
+         request: params
        })}
     end
   end

@@ -6,9 +6,11 @@ defmodule LemonRouter.Submission do
   `LemonCore.ExecutionCommand` is the runtime-facing execution contract.
   This struct owns the normalized router handoff in between, including the
   pending-compaction marker that may be consumed after coordinator acceptance.
+  `request` keeps the original `RunRequest` so a drain can carry queued and
+  interrupted work across a restart (`LemonRouter.RestartCarryover`).
   """
 
-  alias LemonCore.{ExecutionCommand, MapHelpers, RunPhase}
+  alias LemonCore.{ExecutionCommand, MapHelpers, RunPhase, RunRequest}
 
   @enforce_keys [:run_id, :session_key, :conversation_key, :queue_mode, :execution_request]
   defstruct [
@@ -22,7 +24,8 @@ defmodule LemonRouter.Submission do
     run_process_opts: %{},
     pending_compaction_marker: nil,
     meta: %{},
-    current_phase: nil
+    current_phase: nil,
+    request: nil
   ]
 
   @type t :: %__MODULE__{
@@ -36,7 +39,8 @@ defmodule LemonRouter.Submission do
           run_process_opts: map(),
           pending_compaction_marker: map() | nil,
           meta: map(),
-          current_phase: RunPhase.t() | nil
+          current_phase: RunPhase.t() | nil,
+          request: RunRequest.t() | nil
         }
 
   @spec new!(t() | map() | keyword()) :: t()
@@ -93,7 +97,8 @@ defmodule LemonRouter.Submission do
       run_process_opts: normalize_run_process_opts(MapHelpers.get_key(attrs, :run_process_opts)),
       pending_compaction_marker: MapHelpers.get_key(attrs, :pending_compaction_marker),
       meta: normalize_meta(MapHelpers.get_key(attrs, :meta)),
-      current_phase: current_phase
+      current_phase: current_phase,
+      request: normalize_request(MapHelpers.get_key(attrs, :request))
     }
   end
 
@@ -112,6 +117,9 @@ defmodule LemonRouter.Submission do
 
   defp normalize_meta(meta) when is_map(meta), do: meta
   defp normalize_meta(_), do: %{}
+
+  defp normalize_request(%RunRequest{} = request), do: request
+  defp normalize_request(_), do: nil
 
   defp normalize_current_phase(nil), do: nil
 

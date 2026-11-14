@@ -803,7 +803,7 @@ defmodule LemonGateway.Run do
     error_text = format_error_for_log(Map.get(completed, :error))
 
     level =
-      if Map.get(completed, :error) in [:user_requested, :interrupted, :new_session],
+      if Map.get(completed, :error) in [:user_requested, :interrupted, :new_session, :runtime_restart],
         do: :warning,
         else: :error
 
@@ -911,7 +911,13 @@ defmodule LemonGateway.Run do
       Map.get(completed, :ok) == true ->
         :completed
 
-      Map.get(completed, :error) in [:user_requested, :interrupted, :new_session, :aborted] ->
+      Map.get(completed, :error) in [
+        :user_requested,
+        :interrupted,
+        :new_session,
+        :aborted,
+        :runtime_restart
+      ] ->
         :aborted
 
       true ->

@@ -26,6 +26,7 @@ defmodule LemonRouter.SessionCoordinator do
   alias LemonRouter.{
     PhasePublisher,
     QueueEffect,
+    RestartCarryover,
     RunReceiptStore,
     RunStarter,
     SessionState,
@@ -262,6 +263,35 @@ defmodule LemonRouter.SessionCoordinator do
     :exit, _ -> {:error, :unavailable}
   end
 
+  @doc """
+  Drain snapshots of every live coordinator: `%{conversation_key, active, queued}`.
+  A coordinator that does not answer is skipped and counted in `unavailable`.
+  """
+  @spec restart_snapshots() :: %{snapshots: [map()], unavailable: non_neg_integer()}
+  def restart_snapshots do
+    LemonRouter.SessionCoordinatorSupervisor
+    |> DynamicSupervisor.which_children()
+    |> Enum.reduce(%{snapshots: [], unavailable: 0}, fn {_id, pid, _type, _modules}, acc ->
+      try do
+        %{acc | snapshots: [GenServer.call(pid, :restart_snapshot, 5_000) | acc.snapshots]}
+      catch
+        :exit, _ -> %{acc | unavailable: acc.unavailable + 1}
+      end
+    end)
+  catch
+    :exit, _ -> %{snapshots: [], unavailable: 0}
+  end
+
+  @doc false
+  # Re-kick queued work after a hold is lifted (tests; a drained VM stops instead).
+  def resume_all do
+    LemonRouter.SessionCoordinatorSupervisor
+    |> DynamicSupervisor.which_children()
+    |> Enum.each(fn {_id, pid, _type, _modules} -> send(pid, :maybe_start_next) end)
+  catch
+    :exit, _ -> :ok
+  end
+
   def start_link(opts) do
     key = Keyword.fetch!(opts, :conversation_key)
     name = {:via, Registry, {LemonRouter.ConversationRegistry, key}}
@@ -327,16 +357,44 @@ defmodule LemonRouter.SessionCoordinator do
     {:reply, active ++ queued ++ pending ++ unresolved, state}
   end
 
+  # Drain snapshot: the active run and everything still waiting behind it,
+  # including steers the active run never accepted.
+  def handle_call(:restart_snapshot, _from, state) do
+    active =
+      case state.active do
+        %{run_id: run_id} = active when is_binary(run_id) ->
+          %{run_id: run_id, pid: Map.get(active, :pid), submission: Map.get(active, :submission)}
+
+        _ ->
+          nil
+      end
+
+    pending =
+      Enum.flat_map(state.pending_steers, fn {_target, entries} ->
+        Enum.map(entries, fn {submission, _mode} -> submission end)
+      end)
+
+    {:reply,
+     %{conversation_key: state.conversation_key, active: active, queued: state.queue ++ pending},
+     state}
+  end
+
   def handle_call({:submit_with_receipt, submission}, _from, state) do
     case RunReceiptStore.fetch(state.receipt_store, submission.run_id) do
       {:ok, %{} = receipt} ->
         {:reply, replay_receipt(submission, receipt), state}
 
       {:ok, nil} ->
-        if Map.has_key?(state.unpersisted_receipts, submission.run_id) do
-          {:reply, {:error, :outcome_unknown}, state}
-        else
-          admit_submission(state, submission)
+        cond do
+          Map.has_key?(state.unpersisted_receipts, submission.run_id) ->
+            {:reply, {:error, :outcome_unknown}, state}
+
+          # The restart carryover is already persisted: new work would be lost.
+          RestartCarryover.sealed?() ->
+            {:reply, {:error, :runtime_stopping}, state}
+
+          true ->
+            admit_submission(state, submission)
         end
 
       {:error, {:sync_failed, _reason}} ->
@@ -912,7 +970,15 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp put_active_submission_phase(state, _run_id, _phase), do: state
 
-  defp maybe_start_next(%SessionState{active: nil, queue: [next | rest]} = state, opts) do
+  # A draining runtime keeps queued work queued so RestartCarryover can carry it
+  # across the restart instead of starting a run that would be cut short.
+  defp maybe_start_next(%SessionState{active: nil, queue: [_ | _]} = state, opts) do
+    if RestartCarryover.holding?(), do: {state, :noop}, else: start_next(state, opts)
+  end
+
+  defp maybe_start_next(state, _opts), do: {state, :noop}
+
+  defp start_next(%SessionState{queue: [next | rest]} = state, opts) do
     next = refresh_queued_resume(next)
 
     start_result =
@@ -954,8 +1020,6 @@ defmodule LemonRouter.SessionCoordinator do
         end
     end
   end
-
-  defp maybe_start_next(state, _opts), do: {state, :noop}
 
   defp refresh_queued_resume(%Submission{} = submission) do
     request = submission.execution_request

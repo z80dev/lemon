@@ -16,6 +16,7 @@ defmodule LemonGateway.Voice.WebhookRouter do
   alias LemonGateway.Voice.RecordingDownloader
 
   plug(Plug.Logger, log: :debug)
+  plug(LemonGateway.DrainGuard)
 
   plug(Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],

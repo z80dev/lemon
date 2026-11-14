@@ -31,7 +31,8 @@ defmodule LemonControlPlane.Lifecycle.Driver do
     end
   end
 
-  def stop, do: System.stop(0)
+  # Drain active runs and carry queued work across the restart before stopping.
+  def stop, do: LemonCore.Drain.request_stop(reason: :system_stop)
 
   @doc false
   def restart_command(env \\ System.get_env(), distribution \\ distribution_args()) do

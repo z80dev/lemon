@@ -157,6 +157,10 @@ config :lemon_core, :paths,
   state_dir: ".lemon",
   config_file: "config.toml"
 
+# SIGTERM (launcher stop/restart/update, launchd, systemd) drains active runs
+# before the VM stops; see LemonCore.Drain for the phases and deadlines.
+config :lemon_core, LemonCore.Drain, signal_trap: true
+
 # Master key providers for encrypted secrets, tried in order. `:keychain` is
 # macOS-only and skips itself elsewhere; see LemonCore.Secrets.KeyProvider.
 config :lemon_core, LemonCore.Secrets,

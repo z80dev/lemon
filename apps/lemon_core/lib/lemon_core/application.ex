@@ -19,6 +19,8 @@ defmodule LemonCore.Application do
   - LemonCore.RunHistoryStore - Per-session run history (separate SQLite DB)
   - LemonCore.ConfigReloader - Runtime config reload orchestrator
   - LemonCore.ConfigReloader.Watcher - File-system watcher for config changes
+  - `LemonCore.Drain` - Coordinated drain of registered participants before a
+    graceful stop (installs the SIGTERM trap when configured)
 
   The supervisor uses a :one_for_one strategy, meaning if a child process
   crashes, only that process will be restarted.
@@ -67,6 +69,7 @@ defmodule LemonCore.Application do
     children =
       [
         LemonCore.Bus.child_spec_for_backend(),
+        LemonCore.Drain,
         LemonCore.ACPClientBridge,
         LemonCore.NodeRegistry,
         {LemonCore.ConfigCache, config_cache_opts},
@@ -83,7 +86,10 @@ defmodule LemonCore.Application do
         ]
 
     opts = [strategy: :one_for_one, name: LemonCore.Supervisor]
-    Supervisor.start_link(children, opts)
+    with {:ok, pid} <- Supervisor.start_link(children, opts) do
+      :ok = LemonCore.Drain.maybe_install_signal_trap()
+      {:ok, pid}
+    end
   end
 
   # RunHistoryStore needs the SQLite NIF. `:exqlite` is an optional dependency,

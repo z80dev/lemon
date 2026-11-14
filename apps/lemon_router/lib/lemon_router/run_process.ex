@@ -103,6 +103,19 @@ defmodule LemonRouter.RunProcess do
     end
   end
 
+  @doc """
+  Ask the run to stop for a runtime restart. It replies to `reply_to` with
+  `{:restart_suspended, run_id, outcome, in_flight_titles}` when it aborts:
+  `:clean` (no effectful action was executing), `:uncertain` (`mode: :now`
+  interrupted one), `:not_started` (the runtime never started it) or
+  `:not_running`. With `:boundary` it waits for executing actions to finish.
+  """
+  @spec suspend_for_restart(pid(), pid(), :boundary | :now) :: :ok
+  def suspend_for_restart(pid, reply_to, mode \\ :boundary)
+      when is_pid(pid) and is_pid(reply_to) and mode in [:boundary, :now] do
+    GenServer.cast(pid, {:suspend_for_restart, reply_to, mode})
+  end
+
   @doc false
   defdelegate estimate_input_tokens_from_prompt(state),
     to: CompactionTrigger
@@ -180,7 +193,9 @@ defmodule LemonRouter.RunProcess do
         requested_send_files: [],
         task_status_surfaces: %{},
         task_status_refs: %{},
-        artifact_tracker: opts[:artifact_tracker] || ArtifactTracker
+        artifact_tracker: opts[:artifact_tracker] || ArtifactTracker,
+        effectful_actions: %{},
+        restart_suspend: nil
       }
 
       Logger.debug(
@@ -453,6 +468,11 @@ defmodule LemonRouter.RunProcess do
     state = artifact_tracker(state).track_generated_images(state, action_ev)
     state = artifact_tracker(state).track_requested_send_files(state, action_ev)
 
+    state =
+      state
+      |> track_effectful_action(action_ev)
+      |> maybe_finish_restart_suspend()
+
     {:noreply, state}
   end
 
@@ -670,21 +690,28 @@ defmodule LemonRouter.RunProcess do
   end
 
   @impl true
-  def handle_cast({:abort, reason}, state) do
-    if state.aborted or state.completed do
-      {:noreply, state}
-    else
-      Logger.debug("RunProcess #{state.run_id} aborting: #{inspect(reason)}")
+  def handle_cast({:abort, reason}, state), do: {:noreply, do_abort(state, reason)}
 
-      # Best-effort cancel of the gateway run. This does not currently remove
-      # queued jobs for the same session_key; it only cancels the in-flight run.
-      cancel_runtime_run(state.engine_runtime, state.run_id, reason)
+  # Drain: stop at the next point where no effectful action is executing, so the
+  # journal never holds a tool call whose outcome is unknown. `:now` stops even
+  # mid-tool and reports the in-flight actions as uncertain.
+  def handle_cast({:suspend_for_restart, reply_to, mode}, state) do
+    cond do
+      state.aborted or state.completed ->
+        send(reply_to, {:restart_suspended, state.run_id, :not_running, []})
+        {:noreply, state}
 
-      if is_nil(state.gateway_run_pid) do
-        Process.send_after(self(), {:finalize_aborted_run, reason}, @abort_completion_grace_ms)
-      end
+      is_nil(state.run_started_at_ms) ->
+        {:noreply, abort_for_restart(state, reply_to, :not_started)}
 
-      {:noreply, %{state | aborted: true}}
+      map_size(state.effectful_actions) == 0 ->
+        {:noreply, abort_for_restart(state, reply_to, :clean)}
+
+      mode == :now ->
+        {:noreply, abort_for_restart(state, reply_to, :uncertain)}
+
+      true ->
+        {:noreply, %{state | restart_suspend: reply_to}}
     end
   end
 
@@ -719,6 +746,58 @@ defmodule LemonRouter.RunProcess do
         {:noreply, state}
     end
   end
+
+  defp do_abort(state, reason) do
+    if state.aborted or state.completed do
+      state
+    else
+      Logger.debug("RunProcess #{state.run_id} aborting: #{inspect(reason)}")
+
+      # Best-effort cancel of the gateway run. This does not currently remove
+      # queued jobs for the same session_key; it only cancels the in-flight run.
+      cancel_runtime_run(state.engine_runtime, state.run_id, reason)
+
+      if is_nil(state.gateway_run_pid) do
+        Process.send_after(self(), {:finalize_aborted_run, reason}, @abort_completion_grace_ms)
+      end
+
+      %{state | aborted: true}
+    end
+  end
+
+  defp abort_for_restart(state, reply_to, outcome) do
+    titles = state.effectful_actions |> Map.values() |> Enum.take(5)
+    send(reply_to, {:restart_suspended, state.run_id, outcome, titles})
+    do_abort(%{state | restart_suspend: nil}, :runtime_restart)
+  end
+
+  @effectful_action_kinds [:tool, :command, :file_change, :web_search, :subagent]
+
+  defp track_effectful_action(state, %{action: %{id: id, kind: kind} = action, phase: phase})
+       when is_binary(id) and kind in @effectful_action_kinds do
+    in_flight = Map.get(state, :effectful_actions, %{})
+
+    case phase do
+      :started ->
+        title = action |> Map.get(:title) |> to_string() |> String.slice(0, 120)
+        Map.put(state, :effectful_actions, Map.put(in_flight, id, title))
+
+      :completed ->
+        Map.put(state, :effectful_actions, Map.delete(in_flight, id))
+
+      _ ->
+        state
+    end
+  end
+
+  defp track_effectful_action(state, _action_ev), do: state
+
+  defp maybe_finish_restart_suspend(%{restart_suspend: reply_to, effectful_actions: in_flight} = state)
+       when is_pid(reply_to) and map_size(in_flight) == 0 do
+    abort_for_restart(state, reply_to, :clean)
+  end
+
+  defp maybe_finish_restart_suspend(state), do: state
 
   @impl true
   def terminate(reason, state) do

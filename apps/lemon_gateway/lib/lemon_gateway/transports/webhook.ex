@@ -25,6 +25,7 @@ defmodule LemonGateway.Transports.Webhook do
   @callback_waiter_ready_timeout_ms 1_000
 
   plug(Plug.Logger, log: :debug)
+  plug(LemonGateway.DrainGuard)
 
   plug(Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],

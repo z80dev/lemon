@@ -36,7 +36,7 @@ defmodule LemonGateway.Renderers.Basic do
   end
 
   def apply_event(state, %{__event__: :completed, ok: false, error: error} = completed)
-      when error in [:user_requested, :interrupted] do
+      when error in [:user_requested, :interrupted, :runtime_restart] do
     state = maybe_apply_resume_from_completed(state, completed)
     render(state, :cancelled, nil)
   end

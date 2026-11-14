@@ -42,6 +42,9 @@ config :lemon_core, LemonCore.Store,
 # Enable test-mode gateway config path (full-replacement via app env).
 config :lemon_core, config_test_mode: true
 
+# A test VM must stop on SIGTERM without draining.
+config :lemon_core, LemonCore.Drain, signal_trap: false
+
 # Tests opt into channel adapters explicitly.
 config :lemon_channels, adapters: []
 

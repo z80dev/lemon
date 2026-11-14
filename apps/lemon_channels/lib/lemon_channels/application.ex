@@ -55,6 +55,7 @@ defmodule LemonChannels.Application do
 
         # Register and start built-in adapters after startup
         register_and_start_adapters()
+        :ok = LemonCore.Drain.register(:channels, LemonChannels.Drain, order: 10)
         {:ok, pid}
 
       error ->

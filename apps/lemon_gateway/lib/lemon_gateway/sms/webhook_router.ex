@@ -14,6 +14,7 @@ defmodule LemonGateway.Sms.WebhookRouter do
   alias LemonGateway.Sms.TwilioSignature
 
   plug(Plug.Logger, log: :debug)
+  plug(LemonGateway.DrainGuard)
 
   plug(Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
