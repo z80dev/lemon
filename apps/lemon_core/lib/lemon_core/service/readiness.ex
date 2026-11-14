@@ -2,6 +2,9 @@ defmodule LemonCore.Service.Readiness do
   @moduledoc "Readiness is application health plus supervisor/process identity, never log scraping."
   alias LemonCore.Service.{Command, Identity, Role}
 
+  @worker_states ~w(starting online reconnecting needs_reauthorization needs_enrollment conflict)
+  @worker_reasons ~w(session_expired session_invalid node_not_found credential_rejected credential_missing credential_unreadable controller_mismatch node_name_conflict node_identity_mismatch)
+
   def probe(%{role: "controller"} = spec, manager, opts) do
     healthy =
       match?({:ok, %{"ok" => true}}, http_json("http://127.0.0.1:#{spec.port}/healthz", opts))
@@ -42,8 +45,9 @@ defmodule LemonCore.Service.Readiness do
 
   def probe(%{role: "worker", name: name}, manager, opts) do
     case worker_status(name, opts) do
-      {:ok, %{"state" => state, "osPid" => pid} = status} ->
-        detail = status["reason"]
+      {:ok, %{"state" => state, "osPid" => pid} = status} when state in @worker_states ->
+        reason = status["reason"]
+        detail = if reason in @worker_reasons, do: reason, else: nil
 
         cond do
           pid == manager.pid and is_integer(pid) -> {state, detail}
