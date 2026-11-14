@@ -211,3 +211,6 @@ config :lemon_web, LemonWeb.Endpoint,
   secret_key_base:
     "test_secret_key_base_test_secret_key_base_test_secret_key_base_test_secret_key_base",
   server: false
+
+# Tests stub the omp auth broker; opt in to the snapshot long-poll per call.
+config :lemon_ai, omp_broker_watch: false

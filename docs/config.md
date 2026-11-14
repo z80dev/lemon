@@ -1621,24 +1621,38 @@ omp's `config.yml`):
 `omp_provider` defaults to the Lemon provider id with dashes (`openai_codex` →
 `openai-codex`, `google_gemini_cli` → `google-gemini-cli`), except
 `kimi_coding` → `kimi-code`, `kimi` → `moonshot` and `opencode` →
-`opencode-zen`; custom providers must set it. Without `omp_account`, OAuth
-sign-ins win over login API keys over other API keys (omp's order), accounts
-without an active rate-limit block first. With `omp_account` only that identity
-is used and API keys never are; `omp usage accounts` lists identity keys.
+`opencode-zen`; custom providers must set it. Lemon lists every broker account
+for the provider in omp's order: OAuth sign-ins win over login API keys over
+other API keys, accounts without an active rate-limit block first. With
+`omp_account` only that identity is used and API keys never are; `omp usage
+accounts` lists identity keys.
 
 The selection is authoritative: environment keys, inline keys and Lemon
 secrets do not replace it, and a broker failure resolves no credential instead
-of falling back. Lemon never receives or stores refresh tokens. It caches the
-broker snapshot per endpoint for 15 seconds (a failed fetch for 5 seconds),
-asks the broker to refresh an access token within a minute of expiry, and after
-a provider rejects a token re-reads the broker, then requests
-`POST /v1/credential/:id/refresh?reason=auth-recovery`. If the broker hands
-back the rejected token again the refresh fails rather than retrying it. Gemini
+of falling back. Lemon never receives or stores refresh tokens. After the first
+fetch it keeps the broker snapshot per endpoint current with a long-poll
+(`GET /v1/snapshot?wait=…` with `If-None-Match`), so rotations, revocations and
+blocks apply immediately. If the long-poll fails it falls back to a 15 second
+cache (5 seconds after a failed fetch), and an endpoint unused for about 10
+minutes stops being polled. Lemon asks the broker to refresh an access token
+within a minute of expiry, and after a provider rejects a token re-reads the
+broker, then requests `POST /v1/credential/:id/refresh?reason=auth-recovery`.
+If the broker hands back the rejected token again the refresh fails rather than
+retrying it. Gemini
 CLI and Antigravity receive `{"token","projectId"}`; GitHub Copilot sign-ins
 are not supported through the broker. `lemon doctor`, setup readiness and
 provider status check the broker credential without a local secret store; as
 with a Lemon Claude login, a Claude subscription token has no non-generating
 live check.
+
+When a provider rate-limits a broker credential (429 or quota exhaustion),
+Lemon posts a catch-all rate-limit block for it to the broker
+(`POST /v1/credential/:id/block`, scope `""`, until Lemon's cooldown or the
+provider's retry-after), so omp and other broker clients avoid that account
+too, and retries the same turn on the next broker account before falling back
+to another provider. Block reporting is asynchronous and best-effort. For
+`openai-codex` the catch-all block covers both the chat and spark meters. This
+is the only write Lemon makes to the broker; it never writes credentials.
 
 The broker bearer can read every credential the broker holds. Keep the broker
 on loopback or an encrypted overlay (Tailscale, WireGuard) and use `https://`

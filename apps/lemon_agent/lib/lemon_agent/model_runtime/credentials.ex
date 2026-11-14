@@ -24,7 +24,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
   `auth_source = "omp_broker"` reads the provider's credential from omp's auth
   broker (`LemonAgent.ModelRuntime.OmpBroker`) on any provider, built-in or
-  custom; it is authoritative and fails closed like a selected OAuth login. The
+  custom; it is authoritative and fails closed like a selected OAuth login.
+  `list_provider_api_keys/3` lists every broker account as an
+  `"omp_broker:<id>"` entry so a rate-limited account rotates to the next one;
+  `report_rate_limit/4` tells the broker to block it. The
   `omp_gateway` provider falls back to omp's `auth-gateway.token` after its
   environment, inline and secret-store keys.
   """
@@ -41,6 +44,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   alias LemonCore.Secrets
 
   @raw_anthropic_secret "llm_anthropic_api_key_raw"
+  @omp_broker_ref_prefix "omp_broker:"
 
   @type credential_entry :: %{ref: String.t(), api_key: String.t()}
 
@@ -55,7 +59,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   Pool credentials come first (pool selection follows the same
   default_pool/profile precedence as the routing plan: `opts[:pool]` >
   profile `credential_pool` > routing `default_pool`), then the existing
-  single-credential resolution as a final `%{ref: "default"}` entry. Entries
+  single-credential resolution as a final `%{ref: "default"}` entry. For
+  `auth_source = "omp_broker"` providers that final part is instead one
+  `%{ref: "omp_broker:<id>"}` entry per broker account in the broker's order
+  (none when the broker is unavailable). Entries
   whose secret/env fails to resolve are skipped. `config` may be a bare
   providers map or any map carrying `:providers` and `:provider_routing`
   (e.g. a settings struct or `LemonCore.Config`).
@@ -64,7 +71,18 @@ defmodule LemonAgent.ModelRuntime.Credentials do
           credential_entry()
         ]
   def list_provider_api_keys(config, provider, opts \\ []) do
-    default_entry =
+    pool_credential_entries(config, provider, opts) ++
+      default_credential_entries(config, provider, opts)
+  end
+
+  # An omp-broker provider lists one entry per broker account; a broker
+  # failure yields none, so no other credential replaces the selection.
+  defp default_credential_entries(config, provider, opts) do
+    provider_cfg = provider_config(config, provider, opts)
+
+    if normalize_auth_source(provider_cfg) == :omp_broker do
+      omp_broker_entries(provider, provider_cfg)
+    else
       case resolve_provider_api_key(provider, config, opts) do
         api_key when is_binary(api_key) ->
           if present_value?(api_key), do: [%{ref: "default", api_key: api_key}], else: []
@@ -72,16 +90,60 @@ defmodule LemonAgent.ModelRuntime.Credentials do
         _ ->
           []
       end
-
-    pool_credential_entries(config, provider, opts) ++ default_entry
+    end
   end
+
+  defp omp_broker_entries(provider, provider_cfg) do
+    case OmpBroker.api_keys(provider, provider_cfg) do
+      {:ok, keys} ->
+        for {id, api_key} <- keys, present_value?(api_key) do
+          %{ref: "#{@omp_broker_ref_prefix}#{id}", api_key: api_key}
+        end
+
+      {:error, reason} ->
+        OmpBroker.log_failure(provider, reason)
+        []
+    end
+  end
+
+  @doc """
+  Reports that the provider rate-limited a credential until the wall-clock
+  `blocked_until_ms` (epoch milliseconds).
+
+  For an `"omp_broker:<id>"` ref the omp auth broker is told asynchronously so
+  it steers every client to its next account; the call never waits on the
+  broker. Every other ref is a no-op.
+  """
+  @spec report_rate_limit(map() | nil, atom() | String.t(), String.t(), integer()) :: :ok
+  def report_rate_limit(config, provider, credential_ref, blocked_until_ms)
+      when is_binary(credential_ref) and is_integer(blocked_until_ms) do
+    with {:ok, id} <- omp_broker_ref_id(credential_ref),
+         provider_cfg = provider_config(config, provider, []),
+         :omp_broker <- normalize_auth_source(provider_cfg) do
+      OmpBroker.report_block(provider, provider_cfg, id, blocked_until_ms)
+    else
+      _ -> :ok
+    end
+  end
+
+  def report_rate_limit(_config, _provider, _credential_ref, _blocked_until_ms), do: :ok
+
+  defp omp_broker_ref_id(@omp_broker_ref_prefix <> id) do
+    case Integer.parse(id) do
+      {id, ""} -> {:ok, id}
+      _ -> :error
+    end
+  end
+
+  defp omp_broker_ref_id(_), do: :error
 
   @doc """
   Force-refreshes the OAuth credential behind one `list_provider_api_keys/3`
   entry after the provider rejected `previous_key` (for example an HTTP 401).
 
-  `credential_ref` is the entry's `:ref`: `"default"`, `"secret:NAME"` or
-  `"env:VAR"`. Environment variables, inline keys and plain API-key secrets
+  `credential_ref` is the entry's `:ref`: `"default"`, `"secret:NAME"`,
+  `"env:VAR"` or `"omp_broker:ID"` (recovers that exact omp broker
+  credential). Environment variables, inline keys and plain API-key secrets
   cannot be refreshed and return `{:error, :not_refreshable}`. When the
   credential currently resolves to a key other than `previous_key` (another
   caller already refreshed it), that key is returned without a token request.
@@ -99,6 +161,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     cond do
       credential_ref == "default" and auth_source == :omp_broker ->
         OmpBroker.recover(provider, provider_cfg, previous_key)
+
+      auth_source == :omp_broker and match?({:ok, _}, omp_broker_ref_id(credential_ref)) ->
+        {:ok, id} = omp_broker_ref_id(credential_ref)
+        OmpBroker.recover(provider, provider_cfg, previous_key, id: id)
 
       credential_ref == "default" and ProviderNames.canonical_name(provider) == "kimi_coding" and
           auth_source == :omp ->

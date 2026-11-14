@@ -177,6 +177,72 @@ defmodule LemonAgent.ModelRuntime.OmpBrokerTest do
              )
   end
 
+  test "every broker account is a ref'd entry, recovery targets that id, and blocks are reported" do
+    cfg = %{"kimi_coding" => %{auth_source: "omp_broker"}}
+    owner = self()
+
+    accounts = [
+      oauth(7, "kimi-code", "token-7", "account:a"),
+      oauth(8, "kimi-code", "token-8", "account:b")
+    ]
+
+    serve(accounts, fn 8, "reason=auth-recovery" ->
+      oauth(8, "kimi-code", "token-8b", "account:b")
+    end)
+
+    assert [
+             %{ref: "omp_broker:7", api_key: "token-7"},
+             %{ref: "omp_broker:8", api_key: "token-8"}
+           ] = Credentials.list_provider_api_keys(cfg, :kimi_coding)
+
+    # Recovery refreshes exactly the referenced credential.
+    assert {:ok, "token-8b"} =
+             Credentials.refresh_provider_api_key(cfg, :kimi_coding, "omp_broker:8", "token-8")
+
+    assert_receive {:broker, "POST", "/v1/credential/8/refresh", "reason=auth-recovery"}
+    refute_receive {:broker, "POST", "/v1/credential/7/refresh", _}, 50
+
+    # Rate limits are reported asynchronously with the broker's provider key.
+    Req.Test.stub(__MODULE__, fn conn ->
+      case {conn.method, conn.request_path} do
+        {"GET", "/v1/snapshot"} ->
+          Req.Test.json(conn, %{
+            "generation" => 1,
+            "generatedAt" => now_ms(),
+            "serverNowMs" => now_ms(),
+            "refresher" => %{
+              "enabled" => true,
+              "intervalMs" => 60_000,
+              "skewMs" => 300_000,
+              "nextSweepInMs" => 1_000
+            },
+            "credentials" => Enum.map(accounts, &Map.put_new(&1, "rotatesInMs", nil))
+          })
+
+        {"POST", "/v1/credential/" <> _ = path} ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          send(owner, {:broker_block, path, Jason.decode!(body)})
+          Req.Test.json(conn, %{"ok" => true})
+      end
+    end)
+
+    until_ms = now_ms() + 60_000
+    assert :ok = Credentials.report_rate_limit(cfg, :kimi_coding, "omp_broker:7", until_ms)
+
+    assert_receive {:broker_block, "/v1/credential/7/block",
+                    %{
+                      "providerKey" => "kimi-code:oauth",
+                      "blockScope" => "",
+                      "blockedUntilMs" => ^until_ms
+                    }},
+                   2_000
+
+    # Non-broker refs never reach the broker.
+    assert :ok = Credentials.report_rate_limit(cfg, :kimi_coding, "default", until_ms)
+    assert :ok = Credentials.report_rate_limit(%{}, :kimi_coding, "omp_broker:7", until_ms)
+    refute_receive {:broker_block, _, _}, 100
+  end
+
   test "the omp_gateway provider falls back to omp's gateway token file" do
     home = Path.join(System.tmp_dir!(), "omp_home_#{System.unique_integer([:positive])}")
     on_exit(fn -> File.rm_rf!(home) end)

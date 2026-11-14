@@ -234,6 +234,9 @@ defmodule CodingAgent.Session.ProviderFallback do
         quota_exhausted: LemonAi.Error.quota_exhausted?(details)
       )
 
+      if details.category == :rate_limit,
+        do: report_rate_limit(model, entry, retry_after_hint(reason), ctx)
+
       maybe_clear_pin(model, entry, ctx)
     end
 
@@ -247,6 +250,20 @@ defmodule CodingAgent.Session.ProviderFallback do
       _ ->
         push_last_error(ctx.output_stream, terminal)
     end
+  end
+
+  # A rate-limited omp-broker account is blocked at the broker until the
+  # longer of the local cooldown and the provider's retry-after hint, as a
+  # wall-clock deadline. Other credentials are unaffected (no-op).
+  defp report_rate_limit(model, entry, retry_after_ms, ctx) do
+    remaining =
+      case CredentialHealth.cooldown_until(model.provider, entry.ref) do
+        nil -> 0
+        until_ms -> max(until_ms - System.monotonic_time(:millisecond), 0)
+      end
+
+    until_ms = System.system_time(:millisecond) + max(remaining, retry_after_ms || 0)
+    Credentials.report_rate_limit(ctx.settings, model.provider, entry.ref, until_ms)
   end
 
   defp error_details({:error, _reason, message}), do: error_details(message)

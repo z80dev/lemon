@@ -8,6 +8,15 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonAi.Auth.OmpAuthBroker` gains `credentials/3` (every account for a
+  provider in selection order), an `id:` option on `credential/3`, `block/5`
+  (catch-all rate-limit block via `POST /v1/credential/:id/block`, also applied
+  to the cached snapshot) and `provider_key/1`.
+- The broker snapshot is kept current by a background long-poll
+  (`GET /v1/snapshot?wait=…` with `If-None-Match`); the 15 second TTL cache (5
+  seconds after failures) remains as the fallback, and an endpoint unused for
+  about 10 minutes stops being polled.
+
 - `LemonAi.Auth.OmpAuthBroker` reads omp auth broker snapshots (cached per
   endpoint, single-flight), selects credentials by provider/identity and
   rate-limit blocks, and asks the broker to refresh expiring or rejected access

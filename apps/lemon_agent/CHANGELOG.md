@@ -12,6 +12,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   auth broker (`LemonAgent.ModelRuntime.OmpBroker`), authoritative and
   fail-closed, with broker-side auth recovery after a rejected token. The
   `omp_gateway` provider falls back to omp's `auth-gateway.token`.
+- Broker-backed credentials rotate across all of a provider's broker accounts:
+  a provider rate limit (429/quota) is reported to the broker as a catch-all
+  block (asynchronous, best-effort) and the same turn retries on the next
+  broker account before failing over to another provider.
 - `Agent.steer/3` accepts `preempt: false` for synchronous acceptance of
   agent-originated messages at the next turn boundary without skipping issued
   tool calls. Human steering takes priority and keeps its preemption semantics.

@@ -8,7 +8,23 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- omp auth broker: Lemon now lists every broker account for a broker-backed
+  provider (omp's selection order; `omp_account` still pins one identity). When
+  a provider rate-limits an account (429/quota), Lemon reports a catch-all
+  rate-limit block to the broker (`POST /v1/credential/:id/block`) so omp and
+  other broker clients avoid it too, and retries the same turn on the next
+  broker account before falling back to another provider. Reporting is
+  asynchronous and best-effort.
+
+### Changed
+
+- The broker snapshot is kept current by a background long-poll
+  (`GET /v1/snapshot?wait=…` with `If-None-Match`) instead of 15 second TTL
+  polling, so rotations, revocations and blocks apply immediately. Failed
+  long-polls fall back to the TTL cache; endpoints unused for about 10 minutes
+  stop being polled.
 
 ---
 

@@ -31,6 +31,14 @@ defmodule LemonAgent.ModelRuntime.OmpBroker do
   access token or API key. GitHub Copilot OAuth credentials are not supported
   (omp stores the GitHub token, Lemon's Copilot provider expects its own
   exchange) and fail closed.
+
+  ## Accounts and rate limits
+
+  `api_keys/3` lists every broker account for the provider so Lemon can rotate
+  between them. When a provider rate-limits one, `report_block/4` tells the
+  broker (`POST /v1/credential/:id/block`, catch-all scope) so every client
+  moves to the next account; Lemon retries the same turn on the next account
+  instead of failing over to another provider.
   """
 
   require Logger
@@ -99,7 +107,8 @@ defmodule LemonAgent.ModelRuntime.OmpBroker do
   Re-reads a fresh snapshot first, so a token the broker already rotated is
   adopted without a refresh; otherwise asks the broker to refresh the selected
   OAuth credential with `reason=auth-recovery`. API keys are not refreshable,
-  and a refresh that returns the rejected key again fails.
+  and a refresh that returns the rejected key again fails. Pass `id: id` to
+  recover exactly that broker credential instead of the selected one.
   """
   @spec recover(atom() | String.t(), map() | nil, String.t() | nil, keyword()) ::
           {:ok, String.t()} | {:error, atom()}
@@ -118,7 +127,8 @@ defmodule LemonAgent.ModelRuntime.OmpBroker do
           {:error, :not_refreshable}
 
         true ->
-          refresh_opts = Keyword.put(broker_opts, :reason, "auth-recovery")
+          refresh_opts =
+            broker_opts |> Keyword.delete(:id) |> Keyword.put(:reason, "auth-recovery")
 
           with {:ok, refreshed} <- OmpAuthBroker.refresh(endpoint, entry.id, refresh_opts),
                {:ok, fresh} <- shape(provider, refreshed) do
@@ -126,6 +136,99 @@ defmodule LemonAgent.ModelRuntime.OmpBroker do
           end
       end
     end
+  end
+
+  @doc """
+  Every broker credential for `provider` as `{id, key}`, in the broker's
+  selection order (`OmpAuthBroker.credentials/3`: OAuth before API keys,
+  unblocked before rate-limit-blocked, then id), honouring `omp_account`.
+
+  Each is freshened and shaped like `api_key/3`. A credential that cannot be
+  freshened or shaped (for example an unsupported OAuth type) is skipped;
+  when none succeed the last error is returned.
+  """
+  @spec api_keys(atom() | String.t(), map() | nil, keyword()) ::
+          {:ok, [{integer(), String.t()}]} | {:error, atom()}
+  def api_keys(provider, provider_cfg, opts \\ []) do
+    broker_opts = broker_opts(provider_cfg, opts)
+
+    with {:ok, omp_provider} <- require_omp_provider(provider, provider_cfg),
+         {:ok, endpoint} <- endpoint(),
+         {:ok, entries} <- OmpAuthBroker.credentials(endpoint, omp_provider, broker_opts) do
+      {keys, errors} =
+        Enum.reduce(entries, {[], []}, fn entry, {keys, errors} ->
+          with {:ok, fresh} <-
+                 OmpAuthBroker.credential(
+                   endpoint,
+                   omp_provider,
+                   Keyword.put(broker_opts, :id, entry.id)
+                 ),
+               {:ok, key} <- shape(provider, fresh) do
+            {[{entry.id, key} | keys], errors}
+          else
+            {:error, reason} -> {keys, [reason | errors]}
+          end
+        end)
+
+      case {Enum.reverse(keys), errors} do
+        {[], []} -> {:error, :no_credential}
+        {[], [reason | _]} -> {:error, reason}
+        {keys, _} -> {:ok, keys}
+      end
+    end
+  end
+
+  @doc """
+  Reports to the broker that credential `id` is rate-limited until the
+  wall-clock `blocked_until_ms` (epoch milliseconds), so the broker steers
+  every client to its next account.
+
+  Asynchronous: returns `:ok` immediately so failover never waits on the
+  broker. A failure logs a credential-free warning.
+  """
+  @spec report_block(atom() | String.t(), map() | nil, integer(), integer()) :: :ok
+  def report_block(provider, provider_cfg, id, blocked_until_ms)
+      when is_integer(id) and is_integer(blocked_until_ms) do
+    start = fn ->
+      Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
+        case block(provider, provider_cfg, id, blocked_until_ms) do
+          :ok -> :ok
+          {:error, reason} -> log_block_failure(provider, reason)
+        end
+      end)
+    end
+
+    try do
+      start.()
+    catch
+      :exit, _ -> log_block_failure(provider, :broker_unreachable)
+    end
+
+    :ok
+  end
+
+  defp block(provider, provider_cfg, id, blocked_until_ms) do
+    broker_opts = broker_opts(provider_cfg, [])
+
+    with {:ok, omp_provider} <- require_omp_provider(provider, provider_cfg),
+         {:ok, endpoint} <- endpoint(),
+         {:ok, entries} <- OmpAuthBroker.credentials(endpoint, omp_provider, broker_opts),
+         %{} = entry <- Enum.find(entries, &(&1.id == id)) || {:error, :no_credential} do
+      OmpAuthBroker.block(
+        endpoint,
+        id,
+        OmpAuthBroker.provider_key(entry),
+        blocked_until_ms,
+        broker_opts
+      )
+    end
+  end
+
+  defp log_block_failure(provider, reason) do
+    Logger.warning(
+      "omp auth broker rate-limit block for #{ProviderNames.canonical_name(provider) || to_string(provider)} " <>
+        "not reported: " <> error_message(reason)
+    )
   end
 
   @doc "Credential-free operator guidance for an error from this module."

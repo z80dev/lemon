@@ -552,6 +552,121 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
     end
   end
 
+  describe "omp broker accounts" do
+    setup do
+      {:ok, _} = Application.ensure_all_started(:lemon_ai)
+      LemonAgent.ModelRuntime.CredentialHealth.reset()
+      LemonAgent.ModelRuntime.SessionPins.reset()
+      LemonAi.Auth.OmpAuthBroker.invalidate_all()
+
+      saved = Map.new(~w(OMP_AUTH_BROKER_URL OMP_AUTH_BROKER_TOKEN), &{&1, System.get_env(&1)})
+      previous = Req.default_options()
+      Req.default_options(plug: {Req.Test, __MODULE__})
+      Req.Test.set_req_test_to_shared(%{})
+      System.put_env("OMP_AUTH_BROKER_URL", "http://broker.test:8765")
+      System.put_env("OMP_AUTH_BROKER_TOKEN", "broker-bearer")
+
+      on_exit(fn ->
+        Enum.each(saved, fn
+          {key, nil} -> System.delete_env(key)
+          {key, value} -> System.put_env(key, value)
+        end)
+
+        Req.default_options(previous)
+        Req.Test.set_req_test_to_private(%{})
+        LemonAi.Auth.OmpAuthBroker.invalidate_all()
+        LemonAgent.ModelRuntime.CredentialHealth.reset()
+        LemonAgent.ModelRuntime.SessionPins.reset()
+      end)
+
+      :ok
+    end
+
+    test "a 429 blocks the account at the broker and retries on the next broker account" do
+      owner = self()
+      now = System.system_time(:millisecond)
+
+      credentials =
+        for {id, key} <- [{1, "broker-key-1"}, {2, "broker-key-2"}] do
+          %{
+            "id" => id,
+            "provider" => "openai",
+            "identityKey" => nil,
+            "rotatesInMs" => nil,
+            "credential" => %{"type" => "api_key", "key" => key}
+          }
+        end
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/v1/snapshot"} ->
+            Req.Test.json(conn, %{
+              "generation" => 1,
+              "generatedAt" => now,
+              "serverNowMs" => now,
+              "refresher" => %{
+                "enabled" => true,
+                "intervalMs" => 60_000,
+                "skewMs" => 300_000,
+                "nextSweepInMs" => 1_000
+              },
+              "credentials" => credentials
+            })
+
+          {"POST", "/v1/credential/" <> _ = path} ->
+            {:ok, body, conn} = Plug.Conn.read_body(conn)
+            send(owner, {:broker_block, path, Jason.decode!(body)})
+            Req.Test.json(conn, %{"ok" => true})
+        end
+      end)
+
+      primary = LemonAi.Models.get_model(:openai, "gpt-4")
+
+      settings = %SettingsManager{
+        default_model: %{provider: :openai, model_id: "gpt-4", base_url: nil},
+        providers: %{"openai" => %{auth_source: "omp_broker"}},
+        provider_routing: %{enabled: true, fallback_providers: [], require_credentials: true}
+      }
+
+      stream_fn = fn model, _context, options ->
+        send(owner, {:attempt, model.provider, options.api_key})
+
+        case options.api_key do
+          "broker-key-1" ->
+            {:ok, error_stream(model, "Rate limit exceeded (HTTP 429): too many requests")}
+
+          "broker-key-2" ->
+            {:ok, success_stream(model, "second account response")}
+        end
+      end
+
+      wrapped = ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!())
+      {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
+
+      assert {:ok, message} = LemonAi.EventStream.result(stream, 2_000)
+      assert message.provider == :openai
+      assert [%TextContent{text: "second account response"}] = message.content
+
+      assert_receive {:attempt, :openai, "broker-key-1"}
+      assert_receive {:attempt, :openai, "broker-key-2"}
+
+      assert_receive {:broker_block, "/v1/credential/1/block", body}, 2_000
+
+      assert %{
+               "providerKey" => "openai:api_key",
+               "blockScope" => "",
+               "blockedUntilMs" => until_ms
+             } =
+               body
+
+      assert until_ms > System.system_time(:millisecond)
+      refute_receive {:broker_block, "/v1/credential/2/block", _}, 100
+
+      assert LemonAgent.ModelRuntime.CredentialHealth.in_cooldown?(:openai, "omp_broker:1")
+      refute LemonAgent.ModelRuntime.CredentialHealth.in_cooldown?(:openai, "omp_broker:2")
+    end
+  end
+
   describe "cancellation, hangs, and model switches" do
     test "canceling the wrapped output stream tears down the provider-side task" do
       primary = LemonAi.Models.get_model(:openai, "gpt-4")
