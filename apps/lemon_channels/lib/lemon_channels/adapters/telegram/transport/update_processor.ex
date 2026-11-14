@@ -30,7 +30,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
     key = TransportShared.inbound_message_dedupe_key(inbound)
 
     with :ok <- authorized_inbound_reason(state, inbound),
-         :new <- TransportShared.check_and_mark_dedupe(:channels, key, state.dedupe_ttl_ms) do
+         :new <- TransportShared.check_and_mark_dedupe(key, state.dedupe_ttl_ms) do
       meta = inbound.meta || %{}
       refs = [key | List.wrap(meta[:transport_dedupe_refs])]
       {:ok, %{inbound | meta: Map.put(meta, :transport_dedupe_refs, refs)}}

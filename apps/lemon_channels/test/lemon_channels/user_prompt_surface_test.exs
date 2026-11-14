@@ -97,8 +97,15 @@ defmodule LemonChannels.UserPromptSurfaceTest do
     reply = %{inbound | message: %{id: "new-reply", text: "My actual answer"}}
     ctx = %InboundContext{kind: :message, raw_update: %{"message" => %{}}, inbound: reply}
     state = telegram_state() |> Map.merge(%{dedupe_ttl_ms: 60_000, allow_queue_override: false})
-    {_state, actions} = Pipeline.run(ctx, state)
-    refute Enum.any?(actions, &match?({:execute_inbound_message, _}, &1))
+    Pipeline.run(ctx, state, %{
+      index_known_target: fn st, _update -> st end,
+      execute_inbound_message: fn st, _inbound ->
+        send(self(), :submitted)
+        st
+      end
+    })
+
+    refute_receive :submitted
     assert hd(Task.await(task).details.results)["customInput"] == "My actual answer"
     finish(request)
   end

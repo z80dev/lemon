@@ -4,7 +4,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportSharedDedupeTest do
   alias LemonChannels.Telegram.TransportShared
 
   setup do
-    :ok = TransportShared.init_dedupe(:channels)
+    :ok = TransportShared.init_dedupe()
     :ok
   end
 
@@ -23,8 +23,15 @@ defmodule LemonChannels.Adapters.Telegram.TransportSharedDedupeTest do
     key_a = {"chat-" <> uniq, "topic-a", "42"}
     key_b = {"chat-" <> uniq, "topic-b", "42"}
 
-    assert :new == TransportShared.check_and_mark_dedupe(:channels, key_a, 60_000)
-    assert :seen == TransportShared.check_and_mark_dedupe(:channels, key_a, 60_000)
-    assert :new == TransportShared.check_and_mark_dedupe(:channels, key_b, 60_000)
+    assert :new == TransportShared.check_and_mark_dedupe(key_a, 60_000)
+    assert :seen == TransportShared.check_and_mark_dedupe(key_a, 60_000)
+    assert :new == TransportShared.check_and_mark_dedupe(key_b, 60_000)
+  end
+
+  test "forgetting a dedupe key allows redelivery" do
+    key = {"chat", nil, "retry"}
+    assert :new == TransportShared.check_and_mark_dedupe(key, 60_000)
+    assert :ok == TransportShared.forget_dedupe(key)
+    assert :new == TransportShared.check_and_mark_dedupe(key, 60_000)
   end
 end
