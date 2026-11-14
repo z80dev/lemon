@@ -6,6 +6,8 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   optional raw run event payloads.
   """
 
+  import LemonControlPlane.Methods.Params, only: [get_param: 2, truthy?: 2, normalize_limit: 3]
+
   @behaviour LemonControlPlane.Method
 
   @default_limit 20
@@ -628,33 +630,4 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   defp to_string_safe(v) when is_atom(v), do: Atom.to_string(v)
   defp to_string_safe(v), do: to_string(v)
 
-  defp truthy?(value, _default) when is_boolean(value), do: value
-
-  defp truthy?(value, _default) when value in [1, "1", "true", "TRUE", "yes", "on"], do: true
-  defp truthy?(value, _default) when value in [0, "0", "false", "FALSE", "no", "off"], do: false
-  defp truthy?(_value, default), do: default
-
-  defp normalize_limit(limit, _default, max) when is_integer(limit) and limit > 0,
-    do: min(limit, max)
-
-  defp normalize_limit(limit, default, max) when is_binary(limit) do
-    case Integer.parse(limit) do
-      {parsed, _} when parsed > 0 -> min(parsed, max)
-      _ -> default
-    end
-  end
-
-  defp normalize_limit(_, default, _), do: default
-
-  defp get_param(params, key) when is_map(params) and is_binary(key) do
-    underscored = Macro.underscore(key)
-
-    cond do
-      Map.has_key?(params, key) -> Map.get(params, key)
-      Map.has_key?(params, underscored) -> Map.get(params, underscored)
-      true -> nil
-    end
-  end
-
-  defp get_param(_params, _key), do: nil
 end

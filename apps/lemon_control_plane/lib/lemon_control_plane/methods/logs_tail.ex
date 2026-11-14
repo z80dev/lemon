@@ -5,6 +5,8 @@ defmodule LemonControlPlane.Methods.LogsTail do
   Returns recent log entries from the system.
   """
 
+  import LemonControlPlane.Methods.Params, only: [get_param: 2]
+
   @behaviour LemonControlPlane.Method
 
   @default_limit 100
@@ -112,15 +114,4 @@ defmodule LemonControlPlane.Methods.LogsTail do
 
   defp normalize_level(_), do: nil
 
-  defp get_param(params, key) when is_map(params) and is_binary(key) do
-    underscored = Macro.underscore(key)
-
-    cond do
-      Map.has_key?(params, key) -> Map.get(params, key)
-      Map.has_key?(params, underscored) -> Map.get(params, underscored)
-      true -> nil
-    end
-  end
-
-  defp get_param(_params, _key), do: nil
 end

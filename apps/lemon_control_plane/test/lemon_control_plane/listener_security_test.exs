@@ -19,8 +19,6 @@ defmodule LemonControlPlane.ListenerSecurityTest do
     :operator_token,
     :allow_unauthenticated_loopback_operator,
     :remote_http_apis,
-    :openai_compat_api_token,
-    :acp_api_token,
     :model_catalog,
     :public_ws_url,
     :node_source_checkout
@@ -55,6 +53,15 @@ defmodule LemonControlPlane.ListenerSecurityTest do
     :ok
   end
 
+  test "dedicated tokens use canonical environment names and the OpenAI alias" do
+    System.put_env("LEMON_OPENAI_COMPAT_TOKEN", " alias-secret ")
+    assert ListenerPolicy.api_token(:openai) == "alias-secret"
+    System.put_env("LEMON_OPENAI_COMPAT_API_TOKEN", " primary-secret ")
+    assert ListenerPolicy.api_token(:openai) == "primary-secret"
+    System.put_env("LEMON_ACP_API_TOKEN", " acp-secret ")
+    assert ListenerPolicy.api_token(:acp) == "acp-secret"
+  end
+
   test "off-loopback main listener only exposes websocket and health by default" do
     for {method, path} <- [
           {:get, "/v1/models"},
@@ -73,7 +80,7 @@ defmodule LemonControlPlane.ListenerSecurityTest do
 
   test "remote API opt-in still requires its bearer and is path-segment limited" do
     Application.put_env(:lemon_control_plane, :remote_http_apis, [:openai])
-    Application.put_env(:lemon_control_plane, :openai_compat_api_token, "api-secret")
+    System.put_env("LEMON_OPENAI_COMPAT_API_TOKEN", "api-secret")
     assert (remote(:get, "/v1/models") |> Router.call([])).status == 401
 
     assert (remote(:get, "/v1/models")
@@ -142,7 +149,7 @@ defmodule LemonControlPlane.ListenerSecurityTest do
     Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, false)
     Application.put_env(:lemon_control_plane, :remote_http_apis, [:openai])
     assert {:error, _} = ListenerPolicy.validate()
-    Application.put_env(:lemon_control_plane, :openai_compat_api_token, "api-secret")
+    System.put_env("LEMON_OPENAI_COMPAT_API_TOKEN", "api-secret")
     assert :ok = ListenerPolicy.validate()
   end
 

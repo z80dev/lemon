@@ -381,7 +381,8 @@ end
 defmodule LemonControlPlane.Methods.ProfileChat do
   @moduledoc false
   @behaviour LemonControlPlane.Method
-  alias LemonControlPlane.{ChatSubmission, ImageInputs}
+  alias LemonControlPlane.ChatSubmission
+  alias LemonAi.ImageInputs
   alias LemonControlPlane.Methods.ProfilesSupport
 
   @impl true

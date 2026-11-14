@@ -5,6 +5,8 @@ defmodule LemonControlPlane.Methods.ChatHistory do
   Returns the conversation history for a session.
   """
 
+  import LemonControlPlane.Methods.Params, only: [get_param: 2, truthy?: 2]
+
   @behaviour LemonControlPlane.Method
 
   alias LemonCore.AgentRuntime
@@ -497,20 +499,4 @@ defmodule LemonControlPlane.Methods.ChatHistory do
 
   defp normalize_limit(_), do: @default_limit
 
-  defp truthy?(value, _default) when is_boolean(value), do: value
-  defp truthy?(value, _default) when value in [1, "1", "true", "TRUE", "yes", "on"], do: true
-  defp truthy?(value, _default) when value in [0, "0", "false", "FALSE", "no", "off"], do: false
-  defp truthy?(_value, default), do: default
-
-  defp get_param(params, key) when is_map(params) and is_binary(key) do
-    underscored = Macro.underscore(key)
-
-    cond do
-      Map.has_key?(params, key) -> Map.get(params, key)
-      Map.has_key?(params, underscored) -> Map.get(params, underscored)
-      true -> nil
-    end
-  end
-
-  defp get_param(_params, _key), do: nil
 end

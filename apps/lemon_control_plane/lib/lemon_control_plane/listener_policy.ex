@@ -5,16 +5,8 @@ defmodule LemonControlPlane.ListenerPolicy do
 
   def remote_http_apis, do: Application.get_env(:lemon_control_plane, :remote_http_apis, [])
 
-  def api_token(:openai) do
-    normalize(Application.get_env(:lemon_control_plane, :openai_compat_api_token)) ||
-      normalize(System.get_env("LEMON_OPENAI_COMPAT_API_TOKEN")) ||
-      normalize(System.get_env("LEMON_OPENAI_COMPAT_TOKEN"))
-  end
-
-  def api_token(:acp) do
-    normalize(Application.get_env(:lemon_control_plane, :acp_api_token)) ||
-      normalize(System.get_env("LEMON_ACP_API_TOKEN"))
-  end
+  def api_token(:openai), do: normalize(LemonCore.Env.get(:lemon_openai_compat_api_token))
+  def api_token(:acp), do: normalize(LemonCore.Env.get(:lemon_acp_api_token))
 
   def validate do
     ip = Application.get_env(:lemon_control_plane, :ip, {127, 0, 0, 1})
