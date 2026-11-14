@@ -171,6 +171,17 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     :ok
   end
 
+  # A killed agent now stops its session, so an "unhealthy" session is simulated by
+  # pointing the live session at an already-dead agent.
+  defp make_agent_dead(session, agent) do
+    dead = spawn(fn -> :ok end)
+    ref = Process.monitor(dead)
+    assert_receive {:DOWN, ^ref, :process, ^dead, _}, 2_000
+    :sys.replace_state(session, fn state -> %{state | agent: dead} end)
+    GenServer.stop(agent)
+    :ok
+  end
+
   # Waits until the supervisor has processed the child's exit.
   defp await_session_removed(pid) do
     assert_eventually(fn -> pid not in SessionSupervisor.list_sessions() end,
@@ -543,7 +554,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       {:ok, pid} = start_test_session()
 
       state = Session.get_state(pid)
-      kill_and_await(state.agent)
+      make_agent_dead(pid, state.agent)
 
       health = Session.health_check(pid)
       assert health.status == :unhealthy
@@ -556,7 +567,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       # Kill agent of first session
       state = Session.get_state(pid1)
-      kill_and_await(state.agent)
+      make_agent_dead(pid1, state.agent)
 
       health_results = SessionSupervisor.health_all()
 
@@ -571,7 +582,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       # Kill agent of first session
       state = Session.get_state(pid1)
-      kill_and_await(state.agent)
+      make_agent_dead(pid1, state.agent)
 
       summary = SessionSupervisor.health_summary()
 
@@ -956,7 +967,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       # Make one session unhealthy
       state = Session.get_state(pid1)
-      kill_and_await(state.agent)
+      make_agent_dead(pid1, state.agent)
 
       health_results = SessionSupervisor.health_all()
 
@@ -1000,7 +1011,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       # Make one unhealthy
       {:ok, pid3} = start_test_session()
       state = Session.get_state(pid3)
-      kill_and_await(state.agent)
+      make_agent_dead(pid3, state.agent)
 
       summary2 = SessionSupervisor.health_summary()
       assert summary2.overall == :unhealthy

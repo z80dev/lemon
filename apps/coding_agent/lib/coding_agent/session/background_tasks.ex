@@ -139,31 +139,32 @@ defmodule CodingAgent.Session.BackgroundTasks do
     %{state | session_manager: session_manager}
   end
 
-  @spec summarize_branch(map(), keyword(), callbacks(map())) ::
-          {:ok, map()} | {:error, term(), map()}
-  def summarize_branch(%{is_streaming: true} = state, _opts, _callbacks),
-    do: {:error, :busy, state}
+  @doc """
+  Validate and snapshot a manual branch-summary request.
 
-  def summarize_branch(state, opts, callbacks) do
+  The model call itself is made off the session process by
+  `CodingAgent.Session.ManualOperation`.
+  """
+  @spec branch_summary_request(map(), keyword()) ::
+          {:ok, %{branch_entries: [SessionEntry.t()], opts: keyword(), from_id: String.t() | nil}}
+          | {:error, :busy | :empty_branch}
+  def branch_summary_request(%{is_streaming: true}, _opts), do: {:error, :busy}
+
+  def branch_summary_request(state, opts) do
     branch_entries = SessionManager.get_branch(state.session_manager)
-    opts = CompactionManager.summary_options(opts, state)
 
-    message_entries =
-      Enum.filter(branch_entries, fn entry ->
-        entry.type == :message and entry.message != nil
-      end)
-
-    if Enum.empty?(message_entries) do
-      {:error, :empty_branch, state}
+    if summarizable_any?(branch_entries) do
+      {:ok,
+       %{
+         branch_entries: branch_entries,
+         opts: CompactionManager.summary_options(opts, state),
+         from_id: SessionManager.get_leaf_id(state.session_manager)
+       }}
     else
-      case CodingAgent.Compaction.generate_branch_summary(branch_entries, state.model, opts) do
-        {:ok, summary} ->
-          from_id = SessionManager.get_leaf_id(state.session_manager)
-          {:ok, store_branch_summary(state, from_id, summary, callbacks)}
-
-        {:error, reason} ->
-          {:error, reason, state}
-      end
+      {:error, :empty_branch}
     end
   end
+
+  defp summarizable_any?(branch_entries),
+    do: Enum.any?(branch_entries, &(&1.type == :message and &1.message != nil))
 end

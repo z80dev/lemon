@@ -1777,18 +1777,52 @@ defmodule CodingAgent.SessionTest do
       assert health.status == :healthy
     end
 
-    test "session with dead agent is unhealthy" do
+    test "session pointing at a dead agent is unhealthy" do
       session = start_session()
-      state = Session.get_state(session)
+      agent = Session.get_state(session).agent
 
-      # Kill the agent
-      ref = Process.monitor(state.agent)
-      Process.exit(state.agent, :kill)
-      assert_receive {:DOWN, ^ref, :process, _, _}, 2_000
+      # A killed agent stops the session, so simulate a stale agent reference.
+      dead = spawn(fn -> :ok end)
+      ref = Process.monitor(dead)
+      assert_receive {:DOWN, ^ref, :process, ^dead, _}, 2_000
+      :sys.replace_state(session, fn state -> %{state | agent: dead} end)
+      GenServer.stop(agent)
 
       health = Session.health_check(session)
       assert health.status == :unhealthy
       assert health.agent_alive == false
+    end
+
+    test "killing the agent stops the session and notifies subscribers with a terminal event" do
+      session = start_session()
+      agent = Session.get_state(session).agent
+      Session.subscribe(session)
+
+      session_ref = Process.monitor(session)
+      Process.exit(agent, :kill)
+
+      assert_receive {:session_event, _, {:error, {:agent_exit, :killed}, _partial}}, 2_000
+      assert_receive {:DOWN, ^session_ref, :process, ^session, {:agent_exit, :killed}}, 2_000
+      refute Process.alive?(agent)
+    end
+
+    test "an agent that exits normally stops the session without a crash reason" do
+      session = start_session()
+      agent = Session.get_state(session).agent
+
+      session_ref = Process.monitor(session)
+      GenServer.stop(agent, :normal)
+
+      assert_receive {:DOWN, ^session_ref, :process, ^session,
+                      {:shutdown, {:agent_exit, :normal}}},
+                     2_000
+    end
+
+    test "an EXIT from a process other than the agent does not stop the session" do
+      session = start_session()
+      send(session, {:EXIT, spawn(fn -> :ok end), :boom})
+
+      assert Session.health_check(session).status == :healthy
     end
   end
 

@@ -942,6 +942,21 @@ streaming returns `{:error, :busy}`. Summaries use the session's configured
 provider credentials. Compaction start/completion events are forwarded to
 terminal and ACP clients.
 
+The model call for `Session.compact/2` and `Session.summarize_current_branch/2`
+runs in a supervised background task, not inside the session's `handle_call`: the
+session keeps serving read-only calls (`get_stats/1`, `health_check/1`,
+subscribe, ...) and `Session.abort/1` cancels the call and replies
+`{:error, :aborted}`. While it is in flight, prompt, compact, summarize, rewind,
+navigation, plan and extension reload report busy. The task is bounded by the
+auto-compaction task timeout (`{:error, :timeout}`), a crashed task replies
+`{:error, {:task_exit, reason}}`, and a result whose session revision changed
+is discarded with `{:error, :stale_session}`.
+
+If the session's `LemonAgent.Agent` process exits, the session does not linger
+with a dead agent: it publishes `{:error, {:agent_exit, reason}, _}` to
+subscribers and stops with `{:agent_exit, reason}`. Sessions are `:temporary`,
+so the next run resumes from the JSONL journal.
+
 Settings: `compaction_enabled` (default: true), `reserve_tokens` (default: 16,384), `keep_recent_tokens` (default: 20,000).
 
 ### Budget Tracking

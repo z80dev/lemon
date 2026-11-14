@@ -73,7 +73,7 @@ defmodule CodingAgent.Session.BackgroundTasksTest do
     end
 
     busy = %{state | is_streaming: true}
-    assert {:error, :busy, ^busy} = BackgroundTasks.summarize_branch(busy, [], callbacks)
+    assert {:error, :busy} = BackgroundTasks.branch_summary_request(busy, [])
 
     next =
       BackgroundTasks.complete_branch_summary(state, signature, "source", "summary", callbacks)

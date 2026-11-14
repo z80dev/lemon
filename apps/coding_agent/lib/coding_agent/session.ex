@@ -15,6 +15,37 @@ defmodule CodingAgent.Session do
   idle prompt also cancels any background auto-compaction snapshot before
   dispatch, so stale compaction cannot delay or mutate the new turn.
 
+  ## Non-blocking model calls
+
+  The session process never waits on a model call inside `handle_call`. Manual
+  compaction (`compact/2`) and branch summaries (`summarize_current_branch/2`) run
+  in a supervised background task tracked by
+  `CodingAgent.Session.ManualOperation`; the waiting caller is answered with
+  `GenServer.reply/2` when the result arrives, with the same `:ok | {:error, reason}`
+  values as before. While one is in flight `abort/1` cancels it (the task is killed
+  and the caller gets `{:error, :aborted}`), mutating calls that report busy during
+  a stream (`prompt/3`, `compact/2`, `summarize_current_branch/2`, `rewind`,
+  navigation, `plan/3`, `reload_extensions/1`) report busy instead of racing it, and
+  read-only calls (`get_stats/1`, `health_check/1`, `diagnostics/1`, subscribe, ...)
+  keep being served. A result is applied inside the session only if the session
+  signature is unchanged (otherwise the caller gets `{:error, :stale_session}`); a
+  task crash replies `{:error, {:task_exit, reason}}`, a task that outlives the
+  auto-compaction task timeout replies `{:error, :timeout}`, and termination
+  kills the task and replies `{:error, :session_terminated}`.
+
+  ## Agent process death
+
+  The `LemonAgent.Agent` is linked to the session and is never replaced in place.
+  When it exits for any reason the session does not keep a dead agent: it
+  broadcasts the terminal event `{:error, {:agent_exit, reason}, %{messages: []}}`
+  to direct listeners and event streams, then stops with `{:agent_exit, reason}`
+  (`{:shutdown, {:agent_exit, reason}}` when the agent exited `:normal` or
+  `:shutdown`, so it is not logged as a crash). Sessions are `:temporary`; the next
+  run rehydrates from the JSONL journal through the resume path. Callers that
+  monitor the session (`Executor.SessionRunner`, the task runner) see the terminal
+  event and then the `:DOWN` and turn it into a run error. EXIT signals from other
+  processes are ignored.
+
   ## Usage
 
       {:ok, session} = CodingAgent.Session.start_link(
@@ -47,6 +78,15 @@ defmodule CodingAgent.Session do
   @reset_abort_wait_ms 5_000
   @todo_call_timeout_ms 30_000
 
+  # Calls that report `{:error, :busy}` while a manual compaction/summary runs.
+  @manual_operation_busy_calls [
+    :compact,
+    :summarize_branch,
+    :rewind,
+    :navigate_tree,
+    :navigate_entry
+  ]
+
   alias CodingAgent.Extensions
   alias CodingAgent.Extensions.AdditionalContext
   alias CodingAgent.Extensions.SessionHooks
@@ -62,6 +102,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.Session.EventHandler
   alias CodingAgent.Session.LearningReview
   alias CodingAgent.Session.Lifecycle
+  alias CodingAgent.Session.ManualOperation
   alias CodingAgent.Session.ModelResolver
   alias CodingAgent.Session.Notifier
   alias CodingAgent.Session.OverflowRecovery
@@ -161,6 +202,7 @@ defmodule CodingAgent.Session do
     tool_started_at: %{},
     wasm_host_calls: %{},
     auto_compaction: %CompactionLifecycle.State{},
+    manual_operation: nil,
     overflow_recovery: %OverflowRecovery.State{},
     tool_resources_handed_off: false
   ]
@@ -245,6 +287,7 @@ defmodule CodingAgent.Session do
           tool_started_at: %{String.t() => integer()},
           wasm_host_calls: %{reference() => map()},
           auto_compaction: CompactionLifecycle.State.t(),
+          manual_operation: ManualOperation.State.t() | nil,
           overflow_recovery: OverflowRecovery.State.t()
         }
 
@@ -735,6 +778,12 @@ defmodule CodingAgent.Session do
 
     * `:force` - Force compaction even if not needed
     * `:summary` - Custom summary text (otherwise auto-generated)
+
+  The model call runs in a background task, so the session stays responsive
+  (`abort/1` cancels it and the caller gets `{:error, :aborted}`). The call waits
+  with an `:infinity` client timeout because the server-side task is bounded by the
+  auto-compaction task timeout (`{:error, :timeout}`); `{:error, :busy}` is returned
+  while streaming or while another compaction/summary is in flight.
   """
   @spec compact(GenServer.server(), keyword()) :: :ok | {:error, term()}
   def compact(session, opts \\ []) do
@@ -875,6 +924,10 @@ defmodule CodingAgent.Session do
     * `:ok` - Summary was created and stored
     * `{:error, :empty_branch}` - Branch has no messages to summarize
     * `{:error, reason}` - If summarization fails
+
+  Runs off the session process like `compact/2`: `{:error, :busy}` while streaming or
+  another compaction/summary is in flight, `{:error, :aborted}` after `abort/1`,
+  `{:error, :timeout}` past the auto-compaction task timeout.
   """
   @spec summarize_current_branch(GenServer.server(), keyword()) :: :ok | {:error, term()}
   def summarize_current_branch(session, opts \\ []) do
@@ -933,8 +986,12 @@ defmodule CodingAgent.Session do
     {:ok, state}
   end
 
-  @spec handle_call(term(), GenServer.from(), t()) :: {:reply, term(), t()}
+  @spec handle_call(term(), GenServer.from(), t()) :: {:reply, term(), t()} | {:noreply, t()}
   @impl true
+  def handle_call(request, _from, %{manual_operation: %ManualOperation.State{}} = state)
+      when is_tuple(request) and elem(request, 0) in @manual_operation_busy_calls,
+      do: {:reply, {:error, :busy}, state}
+
   def handle_call(:context_budget, _from, state) do
     budget =
       ContextBudget.measure(state, LemonAgent.Agent.get_state(state.agent))
@@ -943,7 +1000,9 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call({:plan, action, opts}, _from, state) do
-    if action != :status and (state.is_streaming or state.auto_compaction.in_progress) do
+    if action != :status and
+         (state.is_streaming or state.auto_compaction.in_progress or
+            ManualOperation.in_flight?(state)) do
       {:reply, {:error, :busy}, state}
     else
       case Planning.transition_session(state, action, opts) do
@@ -994,7 +1053,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call({:prompt, text, opts}, _from, state) do
-    if state.is_streaming do
+    if state.is_streaming or ManualOperation.in_flight?(state) do
       {:reply, {:error, :already_streaming}, state}
     else
       state = CompactionLifecycle.cancel_for_new_prompt(state)
@@ -1176,7 +1235,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call(:reload_extensions, _from, state) do
-    if state.is_streaming do
+    if state.is_streaming or ManualOperation.in_flight?(state) do
       {:reply, {:error, :already_streaming}, state}
     else
       {:ok, extension_status_report, new_state} = Lifecycle.reload_extensions(state)
@@ -1185,7 +1244,10 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call(:reset, _from, state) do
-    state = WasmBridge.cancel_host_calls(state, :aborted)
+    state =
+      state
+      |> ManualOperation.cancel(:aborted)
+      |> WasmBridge.cancel_host_calls(:aborted)
 
     case Lifecycle.reset(state, @reset_abort_wait_ms) do
       {:ok, new_state} ->
@@ -1232,24 +1294,14 @@ defmodule CodingAgent.Session do
   def handle_call({:compact, _opts}, _from, %{is_streaming: true} = state),
     do: {:reply, {:error, :busy}, state}
 
-  def handle_call({:compact, opts}, _from, state) do
+  def handle_call({:compact, opts}, from, state) do
     state = CompactionManager.cancel_compaction_tasks(state, :manual_compaction)
-
-    custom_summary = Keyword.get(opts, :summary)
-
-    compaction_opts =
-      CompactionManager.normalize_compaction_opts(state, Keyword.put_new(opts, :force, true))
 
     Notifier.broadcast_event(state, {:compaction_start, %{reason: :manual}})
 
-    result = CodingAgent.Compaction.compact(state.session_manager, state.model, compaction_opts)
-
-    case apply_compaction_result(state, result, custom_summary) do
-      {:ok, new_state} ->
-        {:reply, :ok, new_state}
-
-      {:error, reason, new_state} ->
-        {:reply, {:error, reason}, new_state}
+    case ManualOperation.start_compaction(state, from, opts) do
+      {:ok, new_state} -> {:noreply, new_state}
+      {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
     end
   end
 
@@ -1453,10 +1505,10 @@ defmodule CodingAgent.Session do
     {:reply, {:ok, usage}, state}
   end
 
-  def handle_call({:summarize_branch, opts}, _from, state) do
-    case BackgroundTasks.summarize_branch(state, opts, branch_summary_callbacks()) do
-      {:ok, new_state} -> {:reply, :ok, new_state}
-      {:error, reason, unchanged_state} -> {:reply, {:error, reason}, unchanged_state}
+  def handle_call({:summarize_branch, opts}, from, state) do
+    case ManualOperation.start_branch_summary(state, from, opts) do
+      {:ok, new_state} -> {:noreply, new_state}
+      {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
     end
   end
 
@@ -1511,6 +1563,7 @@ defmodule CodingAgent.Session do
 
     state =
       state
+      |> ManualOperation.cancel(:aborted)
       |> WasmBridge.cancel_host_calls(:aborted)
       |> cancel_pending_prompt()
       |> CompactionLifecycle.cancel_for_new_prompt()
@@ -1569,7 +1622,7 @@ defmodule CodingAgent.Session do
     Map.update!(state, key, &:queue.in(message, &1))
   end
 
-  @spec handle_info(term(), t()) :: {:noreply, t()}
+  @spec handle_info(term(), t()) :: {:noreply, t()} | {:stop, term(), t()}
   @impl true
   def handle_info({:task_progress, tool_call_id, result}, state) do
     Notifier.broadcast_event(state, {:tool_execution_update, tool_call_id, "task", %{}, result})
@@ -1657,6 +1710,10 @@ defmodule CodingAgent.Session do
   def handle_info({:EXIT, pid, reason}, state) when pid == state.agent do
     Logger.warning("Agent process exited: #{inspect(reason)}")
 
+    # Let it crash: a dead agent cannot serve this session any more. Tell
+    # subscribers the run failed, then stop; the next run resumes from the journal.
+    event = {:error, {:agent_exit, reason}, %{messages: []}}
+
     state =
       state
       |> Map.put(:is_streaming, false)
@@ -1664,8 +1721,23 @@ defmodule CodingAgent.Session do
       |> CompactionManager.clear_overflow_recovery_state()
       |> Map.put(:steering_queue, :queue.new())
       |> Map.put(:follow_up_queue, :queue.new())
+      |> Map.put(:terminal_event, event)
 
-    {:noreply, state}
+    Notifier.broadcast_event(state, event)
+    Notifier.complete_event_streams(state, event)
+
+    {:stop, agent_exit_stop_reason(reason), %{state | event_streams: %{}}}
+  end
+
+  def handle_info({:manual_operation_result, ref, result}, state) do
+    {:noreply, ManualOperation.handle_result(state, ref, result, session_callbacks())}
+  end
+
+  def handle_info({:manual_operation_timeout, monitor_ref}, state) do
+    case ManualOperation.handle_timeout(state, monitor_ref) do
+      {:handled, new_state} -> {:noreply, new_state}
+      :stale -> {:noreply, state}
+    end
   end
 
   def handle_info({:store_branch_summary, signature, from_id, summary}, state) do
@@ -1813,6 +1885,7 @@ defmodule CodingAgent.Session do
   def terminate(reason, state) do
     _ = WasmBridge.cancel_host_calls(state, :session_unavailable)
     _ = CompactionManager.cancel_compaction_tasks(state, :session_terminated)
+    _ = ManualOperation.cancel(state, :session_terminated)
     close_browser_session(state.tool_opts || [])
 
     # Approvals this session still has pending can never be used once it is
@@ -1901,7 +1974,20 @@ defmodule CodingAgent.Session do
     end
   end
 
-  defp handle_session_down(ref, pid, _reason, state) do
+  defp agent_exit_stop_reason(reason) when reason in [:normal, :shutdown],
+    do: {:shutdown, {:agent_exit, reason}}
+
+  defp agent_exit_stop_reason({:shutdown, _} = reason), do: {:shutdown, {:agent_exit, reason}}
+  defp agent_exit_stop_reason(reason), do: {:agent_exit, reason}
+
+  defp handle_session_down(ref, pid, reason, state) do
+    case ManualOperation.handle_task_down(state, ref, reason) do
+      {:handled, new_state} -> {:noreply, new_state}
+      :unhandled -> handle_session_down_unmatched(ref, pid, state)
+    end
+  end
+
+  defp handle_session_down_unmatched(ref, pid, state) do
     cond do
       state.auto_compaction.task_monitor_ref == ref ->
         {:noreply, CompactionManager.handle_auto_compaction_task_down(state)}
@@ -2621,11 +2707,6 @@ defmodule CodingAgent.Session do
   @spec maybe_start_overflow_recovery(t(), term(), term()) :: {:ok, t()} | :no_recovery
   defp maybe_start_overflow_recovery(state, reason, partial_state),
     do: OverflowRecovery.maybe_start(state, reason, partial_state, self())
-
-  @spec apply_compaction_result(t(), {:ok, map()} | {:error, term()}, String.t() | nil) ::
-          {:ok, t()} | {:error, term(), t()}
-  defp apply_compaction_result(state, result, custom_summary),
-    do: CompactionLifecycle.apply_result(state, result, custom_summary, session_callbacks())
 
   defp maybe_trigger_compaction(
          %__MODULE__{auto_compaction: %CompactionLifecycle.State{in_progress: true}} = state
