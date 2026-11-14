@@ -161,7 +161,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
 
       {:error, _} = error ->
         if SubmissionOutcome.retry_safe?(error) do
-          Enum.each(dedupe_refs, &TransportShared.forget_dedupe(:channels, &1))
+          Enum.each(dedupe_refs, &TransportShared.forget_dedupe/1)
         end
 
         report_submission_failure(

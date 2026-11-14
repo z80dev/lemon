@@ -268,11 +268,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
               _ = Outbound.create_reaction(channel_id, user_msg_id, reaction_emoji)
             end)
 
-          if Code.ensure_loaded?(LemonCore.Bus) and
-               function_exported?(LemonCore.Bus, :unsubscribe, 1) do
-            topic = LemonCore.Bus.session_topic(matched_sk)
-            _ = LemonCore.Bus.unsubscribe(topic)
-          end
+          topic = LemonCore.Bus.session_topic(matched_sk)
+          _ = LemonCore.Bus.unsubscribe(topic)
 
           %{state | reaction_runs: Map.delete(state.reaction_runs, matched_sk)}
 
@@ -2757,16 +2754,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp maybe_subscribe_to_session(session_key) when is_binary(session_key) do
-    if Code.ensure_loaded?(LemonCore.Bus) and function_exported?(LemonCore.Bus, :subscribe, 1) do
-      topic = LemonCore.Bus.session_topic(session_key)
-      _ = LemonCore.Bus.subscribe(topic)
-    end
+    topic = LemonCore.Bus.session_topic(session_key)
+    _ = LemonCore.Bus.subscribe(topic)
   end
 
   defp maybe_subscribe_exec_approvals do
-    if Code.ensure_loaded?(LemonCore.Bus) and function_exported?(LemonCore.Bus, :subscribe, 1) do
-      _ = LemonCore.Bus.subscribe("exec_approvals")
-    end
+    _ = LemonCore.Bus.subscribe("exec_approvals")
 
     :ok
   end

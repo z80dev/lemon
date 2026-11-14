@@ -2,9 +2,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
   @moduledoc """
   Telegram-local inbound pipeline coordinator.
 
-  This module coordinates normalized Telegram ingress handling and returns
-  adapter-local actions for side effects. It is intentionally Telegram-specific
-  and is not yet a shared cross-channel abstraction.
+  Coordinates normalized Telegram ingress handling and invokes transport-local
+  callbacks for side effects.
   """
 
   alias LemonChannels.Adapters.Telegram.Transport.{
@@ -14,26 +13,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
     UpdateProcessor
   }
 
-  @type action ::
-          {:index_known_target, map()}
-          | {:execute_inbound_message, map()}
-          | {:handle_callback_query, map()}
-          | {:submit_buffer, map()}
-          | {:process_media_group, map()}
-          | {:send_approval_request, map()}
-          | {:log_drop, map(), term()}
-          | {:reply_whoami, map()}
-          | {:send_unpaired_notice, map()}
-          | :noop
-
-  @spec run(InboundContext.t(), map()) :: {map(), [action()]}
+  @spec run(InboundContext.t(), map(), map()) :: map()
   def run(
         %InboundContext{kind: :buffer_flush, scope_key: scope_key, debounce_ref: debounce_ref},
-        state
+        state,
+        callbacks
       ) do
     case RuntimeState.take_current_buffer(state, scope_key, debounce_ref) do
-      {state, nil} -> {state, []}
-      {state, buffer} -> {state, [{:submit_buffer, buffer}]}
+      {state, nil} -> state
+      {state, buffer} -> callbacks.submit_buffer.(state, buffer)
     end
   end
 
@@ -43,63 +31,78 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
           scope_key: scope_key,
           debounce_ref: debounce_ref
         },
-        state
+        state,
+        callbacks
       ) do
     case RuntimeState.take_current_media_group(state, scope_key, debounce_ref) do
-      {state, nil} -> {state, []}
-      {state, group} -> {state, [{:process_media_group, group}]}
+      {state, nil} -> state
+      {state, group} ->
+        callbacks.process_media_group.(state, group)
+        state
     end
   end
 
-  def run(%InboundContext{kind: :approval_requested, raw_update: payload}, state)
+  def run(%InboundContext{kind: :approval_requested, raw_update: payload}, state, callbacks)
       when is_map(payload) do
-    {state, [{:send_approval_request, payload}]}
+    callbacks.start_async_task.(state, fn ->
+      callbacks.send_approval_request.(state, payload)
+    end)
+
+    state
   end
 
-  def run(%InboundContext{kind: :callback_query, raw_update: update}, state)
+  def run(%InboundContext{kind: :callback_query, raw_update: update}, state, callbacks)
       when is_map(update) do
     callback_query = update["callback_query"] || %{}
+    authorized? = UpdateProcessor.authorized_callback_query?(state, callback_query)
+    state = callbacks.index_known_target.(state, update)
 
-    if UpdateProcessor.authorized_callback_query?(state, callback_query) do
-      {state, [{:index_known_target, update}, {:handle_callback_query, callback_query}]}
-    else
-      {state, [{:index_known_target, update}]}
+    if authorized? do
+      callbacks.handle_callback_query.(state, callback_query)
     end
+
+    state
   end
 
-  def run(%InboundContext{kind: :message, raw_update: update, inbound: inbound} = ctx, state)
+  def run(%InboundContext{kind: :message, raw_update: update, inbound: inbound} = ctx, state, callbacks)
       when is_map(update) and is_map(inbound) do
     # /whoami is answered before authorization: it is how an owner discovers
     # the chat id to pair, and it only echoes the requester's own ids.
     if Commands.whoami_command?(inbound.message[:text], Map.get(state, :bot_username)) do
-      {state, [{:index_known_target, update}, {:reply_whoami, inbound}]}
+      state = callbacks.index_known_target.(state, update)
+      callbacks.reply_whoami.(state, inbound)
+      state
     else
-      route_message(state, update, inbound, ctx.chat_id || inbound_chat_id(inbound))
+      route_message(state, update, inbound, ctx.chat_id || inbound_chat_id(inbound), callbacks)
     end
   end
 
-  def run(_event, state), do: {state, [:noop]}
+  def run(_event, state, _callbacks), do: state
 
-  defp route_message(state, update, inbound, chat_id) do
+  defp route_message(state, update, inbound, chat_id, callbacks) do
     original_inbound = inbound
 
     case UpdateProcessor.route_authorized_inbound_action(state, inbound) do
       {:ok, inbound} ->
-        actions =
-          if LemonChannels.UserPromptSurface.capture(original_inbound) == true,
-            do: [{:index_known_target, update}],
-            else: [{:index_known_target, update}, {:execute_inbound_message, inbound}]
+        captured? = LemonChannels.UserPromptSurface.capture(original_inbound) == true
+        state = callbacks.index_known_target.(state, update)
 
-        {state, actions}
+        if captured?,
+          do: state,
+          else: callbacks.execute_inbound_message.(state, inbound)
 
       {:drop, reason, inbound} when reason in [:unpaired, :chat_not_allowed] ->
-        unauthorized_message(state, inbound, chat_id, reason)
+        unauthorized_message(state, inbound, chat_id, reason, callbacks)
 
       {:drop, reason, inbound} ->
-        {state, [{:index_known_target, update}, {:log_drop, inbound, reason}]}
+        state = callbacks.index_known_target.(state, update)
+        callbacks.maybe_log_drop.(state, inbound, reason)
+        state
 
       {:seen, inbound} ->
-        {state, [{:index_known_target, update}, {:log_drop, inbound, :dedupe}]}
+        state = callbacks.index_known_target.(state, update)
+        callbacks.maybe_log_drop.(state, inbound, :dedupe)
+        state
     end
   end
 
@@ -107,22 +110,27 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
          %{unauthorized_dm_behavior: "pair"} = state,
          inbound,
          _chat_id,
-         reason
+         reason,
+         callbacks
        ) do
-    notice = if inbound.peer.kind == :dm, do: [{:send_unpaired_notice, inbound}], else: []
-    {state, [{:log_drop, inbound, reason} | notice]}
+    callbacks.maybe_log_drop.(state, inbound, reason)
+    if inbound.peer.kind == :dm, do: callbacks.send_unpaired_notice.(state, inbound)
+    state
   end
 
-  defp unauthorized_message(state, inbound, chat_id, :unpaired) do
+  defp unauthorized_message(state, inbound, chat_id, :unpaired, callbacks) do
     {state, notify?} =
       RuntimeState.claim_unpaired_notice(state, chat_id, System.monotonic_time(:millisecond))
 
-    notice = if notify?, do: [{:send_unpaired_notice, inbound}], else: []
-    {state, [{:log_drop, inbound, :unpaired} | notice]}
+    callbacks.maybe_log_drop.(state, inbound, :unpaired)
+    if notify?, do: callbacks.send_unpaired_notice.(state, inbound)
+    state
   end
 
-  defp unauthorized_message(state, inbound, _chat_id, reason),
-    do: {state, [{:log_drop, inbound, reason}]}
+  defp unauthorized_message(state, inbound, _chat_id, reason, callbacks) do
+    callbacks.maybe_log_drop.(state, inbound, reason)
+    state
+  end
 
   defp inbound_chat_id(inbound) do
     case (inbound.meta || %{})[:chat_id] || inbound.peer.id do

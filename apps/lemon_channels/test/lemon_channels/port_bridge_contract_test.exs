@@ -1,8 +1,7 @@
 defmodule LemonChannels.PortBridgeContractTest do
   use ExUnit.Case, async: false
 
-  alias LemonChannels.Adapters.WhatsApp.PortServer, as: WhatsAppPortServer
-  alias LemonChannels.Adapters.Xmtp.PortServer, as: XmtpPortServer
+  alias LemonChannels.PortBridge
 
   @moduletag :tmp_dir
   @fixture_start_timeout 30_000
@@ -10,26 +9,24 @@ defmodule LemonChannels.PortBridgeContractTest do
   @bridges [
     %{
       label: "xmtp",
-      module: XmtpPortServer,
       event_tag: :xmtp_bridge_event,
       script_filename: "xmtp_bridge.mjs"
     },
     %{
       label: "whatsapp",
-      module: WhatsAppPortServer,
       event_tag: :whatsapp_bridge_event,
       script_filename: "whatsapp_bridge.mjs"
     }
   ]
 
-  test "adapter wrappers preserve event tags, labels, and configured script paths", %{
+  test "adapter specs preserve event tags, labels, and configured script paths", %{
     tmp_dir: tmp_dir
   } do
     Enum.each(@bridges, fn bridge ->
       missing_script = Path.join(tmp_dir, "missing_#{bridge.script_filename}")
 
       with_bridge(bridge, missing_script, fn pid ->
-        assert :proc_lib.translate_initial_call(pid) == {bridge.module, :init, 1}
+        assert :proc_lib.translate_initial_call(pid) == {PortBridge, :init, 1}
 
         assert_receive {event_tag,
                         %{
@@ -43,7 +40,7 @@ defmodule LemonChannels.PortBridgeContractTest do
         assert message == "failed to start #{bridge.label} bridge"
         assert reason =~ missing_script or reason =~ "node executable not found"
 
-        bridge.module.command(pid, %{"op" => "connect"})
+        PortBridge.command(pid, %{"op" => "connect"})
 
         assert_receive {event_tag,
                         %{
@@ -63,9 +60,9 @@ defmodule LemonChannels.PortBridgeContractTest do
     end)
   end
 
-  test "without a configured bridge_script both wrappers run the script shipped in lemon_channels/priv" do
+  test "without a configured bridge_script both adapters run the script shipped in lemon_channels/priv" do
     Enum.each(@bridges, fn bridge ->
-      {:ok, pid} = bridge.module.start_link(config: %{}, notify_pid: self())
+      {:ok, pid} = PortBridge.start_link({bridge, [config: %{}, notify_pid: self()]})
 
       try do
         expected = Application.app_dir(:lemon_channels, "priv/#{bridge.script_filename}")
@@ -91,7 +88,7 @@ defmodule LemonChannels.PortBridgeContractTest do
 
           assert ready_event_tag == bridge.event_tag
 
-          bridge.module.command(pid, %{op: "contract_probe", adapter: bridge.label})
+          PortBridge.command(pid, %{op: "contract_probe", adapter: bridge.label})
 
           assert_receive {event_tag,
                           %{
@@ -132,7 +129,7 @@ defmodule LemonChannels.PortBridgeContractTest do
     end
   end
 
-  test "both wrappers replay the remembered connect command after a port restart", %{
+  test "both adapters replay the remembered connect command after a port restart", %{
     tmp_dir: tmp_dir
   } do
     if System.find_executable("node") do
@@ -151,7 +148,7 @@ defmodule LemonChannels.PortBridgeContractTest do
           File.write(script_path, restart_fixture_script(counter_path, startup_delay_ms))
 
         with_bridge(bridge, script_path, fn pid ->
-          bridge.module.command(pid, %{
+          PortBridge.command(pid, %{
             "op" => "connect",
             "identity" => "test-#{bridge.label}"
           })
@@ -207,7 +204,7 @@ defmodule LemonChannels.PortBridgeContractTest do
 
   defp with_bridge(bridge, script_path, fun) do
     {:ok, pid} =
-      bridge.module.start_link(config: %{bridge_script: script_path}, notify_pid: self())
+      PortBridge.start_link({bridge, [config: %{bridge_script: script_path}, notify_pid: self()]})
 
     try do
       fun.(pid)

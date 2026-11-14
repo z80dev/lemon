@@ -5,8 +5,8 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
 
   require Logger
 
-  alias LemonChannels.Adapters.Xmtp.{Bridge, PortServer}
-  alias LemonChannels.{BindingResolver, GatewayConfig, SubmissionOutcome}
+  alias LemonChannels.Adapters.Xmtp.Bridge
+  alias LemonChannels.{BindingResolver, GatewayConfig, PortBridge, SubmissionOutcome}
   alias LemonChannels.OutboundPayload
   alias LemonCore.ChatScope
   alias LemonCore.{InboundMessage, SessionKey}
@@ -20,6 +20,12 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   @max_placeholder_detail_len 80
   @max_placeholder_response_len 220
   @wallet_regex ~r/^(0x)?[0-9a-fA-F]{40}$/
+
+  @bridge_spec %{
+    label: "xmtp",
+    event_tag: :xmtp_bridge_event,
+    script_filename: "xmtp_bridge.mjs"
+  }
 
   def start_link(opts) do
     cond do
@@ -39,7 +45,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
       |> merge_config(Keyword.get(opts, :config))
       |> merge_config(Keyword.drop(opts, [:config]))
 
-    {:ok, port_server} = PortServer.start_link(config: cfg, notify_pid: self())
+    {:ok, port_server} = PortBridge.start_link({@bridge_spec, [config: cfg, notify_pid: self()]})
 
     Bridge.connect(port_server, cfg)
 

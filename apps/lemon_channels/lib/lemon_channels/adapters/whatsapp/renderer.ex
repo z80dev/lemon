@@ -11,7 +11,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Renderer do
   - No inline keyboards.
   """
 
-  alias LemonChannels.Adapters.WhatsApp.StatusRenderer
   alias LemonChannels.{GatewayConfig, OutboundPayload, Outbox, PresentationState}
   alias LemonCore.{DeliveryIntent, DeliveryRoute}
 
@@ -165,8 +164,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Renderer do
       session_key: intent.session_key,
       intent_kind: intent.kind,
       controls: intent.controls,
-      intent_meta: intent.meta,
-      reply_markup: StatusRenderer.reply_markup(intent)
+      intent_meta: intent.meta
     }
   end
 

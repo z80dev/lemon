@@ -12,7 +12,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   require Logger
 
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
-  alias LemonChannels.Adapters.Telegram.Transport.ActionRunner
   alias LemonChannels.Adapters.Telegram.Transport.ApprovalRequest
   alias LemonChannels.Adapters.Telegram.Transport.CallbackHandler
   alias LemonChannels.Adapters.Telegram.Transport.ChatPreferences
@@ -68,7 +67,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       case PollerLock.acquire(account_id, token) do
         :ok ->
-          :ok = TransportShared.init_dedupe(:channels)
+          :ok = TransportShared.init_dedupe()
 
           config_offset = cfg_get(config, :offset)
           stored_offset = OffsetStore.get(account_id, token)
@@ -305,11 +304,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             end)
 
           # Unsubscribe from session topic and remove from tracking
-          if Code.ensure_loaded?(LemonCore.Bus) and
-               function_exported?(LemonCore.Bus, :unsubscribe, 1) do
-            topic = LemonCore.Bus.session_topic(session_key)
-            _ = LemonCore.Bus.unsubscribe(topic)
-          end
+          topic = LemonCore.Bus.session_topic(session_key)
+          _ = LemonCore.Bus.unsubscribe(topic)
 
           %{state | reaction_runs: Map.delete(state.reaction_runs, session_key)}
 
@@ -329,26 +325,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp poll_updates(state) do
-    Poller.poll_updates(state, %{
-      handle_callback_query: &handle_callback_query/2,
-      execute_inbound_message: &execute_inbound_message/2,
-      index_known_target: &index_known_target/2,
-      maybe_log_drop: &maybe_log_drop/3,
-      maybe_transcribe_voice: &maybe_transcribe_voice/2,
-      process_media_group: &process_media_group/2,
-      persist_offset: &persist_offset/2,
-      reply_whoami: &reply_whoami/2,
-      send_approval_request: &send_approval_request/2,
-      send_unpaired_notice: &send_unpaired_notice/2,
-      start_async_task: &start_async_task/2,
-      submit_buffer: &submit_buffer/2
-    })
+    Poller.poll_updates(state, pipeline_callbacks())
   end
 
   defp dispatch_transport_event(event, state) do
-    with {:ok, normalized} <- Normalize.event(state, event),
-         {state, actions} <- Pipeline.run(normalized, state) do
-      ActionRunner.run(state, actions, pipeline_callbacks())
+    with {:ok, normalized} <- Normalize.event(state, event) do
+      Pipeline.run(normalized, state, pipeline_callbacks())
     else
       {:error, _reason} -> state
     end
@@ -360,7 +342,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       execute_inbound_message: &execute_inbound_message/2,
       index_known_target: &index_known_target/2,
       maybe_log_drop: &maybe_log_drop/3,
+      maybe_transcribe_voice: &maybe_transcribe_voice/2,
       process_media_group: &process_media_group/2,
+      persist_offset: &persist_offset/2,
       reply_whoami: &reply_whoami/2,
       send_approval_request: &send_approval_request/2,
       send_unpaired_notice: &send_unpaired_notice/2,
@@ -870,19 +854,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp maybe_subscribe_to_session(session_key) when is_binary(session_key) do
-    if Code.ensure_loaded?(LemonCore.Bus) and
-         function_exported?(LemonCore.Bus, :subscribe, 1) do
-      topic = LemonCore.Bus.session_topic(session_key)
-      _ = LemonCore.Bus.subscribe(topic)
-    end
+    topic = LemonCore.Bus.session_topic(session_key)
+    _ = LemonCore.Bus.subscribe(topic)
   end
 
   defp maybe_subscribe_to_run(run_id) do
-    if Code.ensure_loaded?(LemonCore.Bus) and
-         function_exported?(LemonCore.Bus, :subscribe, 1) do
-      topic = LemonCore.Bus.run_topic(run_id)
-      _ = LemonCore.Bus.subscribe(topic)
-    end
+    topic = LemonCore.Bus.run_topic(run_id)
+    _ = LemonCore.Bus.subscribe(topic)
   end
 
   defp started_new_session_message(
@@ -1045,7 +1023,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       (inbound.meta || %{})
       |> Map.get(:transport_dedupe_refs, [])
       |> List.wrap()
-      |> Enum.each(&TransportShared.forget_dedupe(:channels, &1))
+      |> Enum.each(&TransportShared.forget_dedupe/1)
     end
 
     :ok
@@ -1566,11 +1544,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp maybe_subscribe_exec_approvals do
-    if Code.ensure_loaded?(LemonCore.Bus) and function_exported?(LemonCore.Bus, :subscribe, 1) do
-      case LemonCore.Bus.subscribe("exec_approvals") do
-        :ok -> :ok
-        other -> Logger.warning("Telegram exec approvals subscription returned #{inspect(other)}")
-      end
+    case LemonCore.Bus.subscribe("exec_approvals") do
+      :ok -> :ok
+      other -> Logger.warning("Telegram exec approvals subscription returned #{inspect(other)}")
     end
 
     :ok

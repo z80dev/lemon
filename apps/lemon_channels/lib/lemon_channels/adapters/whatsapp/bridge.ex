@@ -1,6 +1,6 @@
 defmodule LemonChannels.Adapters.WhatsApp.Bridge do
   @moduledoc false
-  alias LemonChannels.Adapters.WhatsApp.PortServer
+  alias LemonChannels.PortBridge
 
   def connect(port_server, cfg) do
     payload =
@@ -12,7 +12,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Bridge do
       }
       |> drop_nil_values()
 
-    PortServer.command(port_server, payload)
+    PortBridge.command(port_server, payload)
   end
 
   def send_text(port_server, params) do
@@ -27,7 +27,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Bridge do
       }
       |> drop_nil_values()
 
-    PortServer.command(port_server, payload)
+    PortBridge.command(port_server, payload)
   end
 
   def send_media(port_server, params) do
@@ -48,7 +48,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Bridge do
       }
       |> drop_nil_values()
 
-    PortServer.command(port_server, payload)
+    PortBridge.command(port_server, payload)
   end
 
   def send_reaction(port_server, params) do
@@ -63,24 +63,24 @@ defmodule LemonChannels.Adapters.WhatsApp.Bridge do
       }
       |> drop_nil_values()
 
-    PortServer.command(port_server, payload)
+    PortBridge.command(port_server, payload)
   end
 
   def typing(port_server, jid, composing \\ true) do
-    PortServer.command(port_server, %{"op" => "typing", "jid" => jid, "composing" => composing})
+    PortBridge.command(port_server, %{"op" => "typing", "jid" => jid, "composing" => composing})
   end
 
   def read(port_server, keys) when is_list(keys) do
-    PortServer.command(port_server, %{"op" => "read", "keys" => keys})
+    PortBridge.command(port_server, %{"op" => "read", "keys" => keys})
   end
 
   def group_metadata(port_server, params) do
     payload = %{"op" => "group_metadata", "id" => params.id, "jid" => params.jid}
-    PortServer.command(port_server, payload)
+    PortBridge.command(port_server, payload)
   end
 
   def disconnect(port_server) do
-    PortServer.command(port_server, %{"op" => "disconnect"})
+    PortBridge.command(port_server, %{"op" => "disconnect"})
   end
 
   # private helpers (same as XMTP)
