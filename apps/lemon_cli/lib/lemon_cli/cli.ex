@@ -241,6 +241,7 @@ defmodule LemonCli.CLI do
   defp run_command("runs", args), do: LemonCli.RunsCommand.run(args)
   defp run_command("cron", args), do: LemonCli.RunsCommand.run_cron(args)
   defp run_command("logs", args), do: LemonCli.LogsCommand.run(args)
+  defp run_command("reload", args), do: LemonCli.ReloadCommand.run(args)
   defp run_command("omp", args), do: LemonCli.OmpCommand.run(args)
   defp run_command("learn", args), do: LemonCli.LearnCommand.run(args)
   defp run_command("learning", args), do: LemonCli.LearningCommand.run(args)

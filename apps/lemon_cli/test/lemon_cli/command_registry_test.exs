@@ -8,11 +8,12 @@ defmodule LemonCli.CommandRegistryTest do
   @runtime_families ~w(setup model gateway doctor config mcp secrets channels providers connect blueprints profile backup context sessions runs cron logs omp learn update completion migrate node service version send media models policy skill usage)
   @lifecycle ~w(tui web start run daemon stop restart status uninstall)
   @release_only ~w(remote eval rpc)
+  @source_only ~w(reload)
 
   test "help lists exactly the commands the invoking launcher can run" do
     for {launcher, present, absent} <- [
-          {:source, @runtime_families ++ @lifecycle, @release_only},
-          {:release, @runtime_families ++ @lifecycle ++ @release_only, []}
+          {:source, @runtime_families ++ @lifecycle ++ @source_only, @release_only},
+          {:release, @runtime_families ++ @lifecycle ++ @release_only, @source_only}
         ] do
       help = CommandRegistry.overview(launcher)
 
@@ -117,6 +118,11 @@ defmodule LemonCli.CommandRegistryTest do
     for name <- @release_only do
       assert name in release
       refute name in source
+    end
+
+    for name <- @source_only do
+      assert name in source
+      refute name in release
     end
   end
 
