@@ -200,7 +200,7 @@ defmodule LemonCore.Drain do
 
   def handle_call({:begin, ctx}, _from, state) do
     put_phase(:draining)
-    Logger.warning("Runtime drain started", reason: ctx.reason)
+    Logger.warning("Runtime drain started: reason=#{inspect(ctx.reason)}")
 
     participants =
       state.participants

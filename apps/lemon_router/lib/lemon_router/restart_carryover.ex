@@ -283,8 +283,7 @@ defmodule LemonRouter.RestartCarryover do
       path ->
         Logger.warning(
           "Restart carryover skipped a request holding a process-bound term at " <>
-            inspect(path, limit: 8),
-          session_key: request.session_key
+            "#{inspect(path, limit: 8)} session_key=#{inspect(request.session_key)}"
         )
 
         :skipped
@@ -422,8 +421,9 @@ defmodule LemonRouter.RestartCarryover do
             {[item | remaining], %{acc | pending: acc.pending + 1}}
 
           {:error, reason} ->
-            Logger.warning("Restart carryover item rejected: #{inspect(reason, limit: 5)}",
-              session_key: item.request.session_key
+            Logger.warning(
+              "Restart carryover item rejected: #{inspect(reason, limit: 5)} " <>
+                "session_key=#{inspect(item.request.session_key)}"
             )
 
             {remaining, %{acc | rejected: acc.rejected + 1}}
