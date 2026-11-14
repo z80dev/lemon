@@ -1,24 +1,32 @@
 # Lemon platform split — status
 
-Status as of 2026-09-27. This page replaced the August 2026 plan of record, which
+Status as of 2026-11-13. This page replaced the August 2026 plan of record, which
 aimed to publish a dozen Hex packages and move the products into their own
-repositories. The boundary work survived; the package set was cut to five, and
-the product extraction was abandoned. Git history has the full plan.
+repositories. The boundary work survived and the package set was cut to five.
+The general product extraction was abandoned (D18); LemonSim alone later moved
+to its own repository (D19). Git history has the full plan.
 
 ## Published packages
 
 | Package | What it is | In repo | On Hex |
 |---|---|---|---|
-| `lemon_ai` | Provider-agnostic LLM client: providers, model registry, streaming, rate limiting, circuit breaking | 0.2.0 | 0.1.0 (uninstallable) |
-| `lemon_core` | Bus and event envelope, pluggable Store, secrets, config, paths, boundary contracts | 0.2.0 | 0.1.0 (uninstallable) |
-| `lemon_agent` | Agent loop, tool registry, subagents, model runtime, workspace stores | 0.2.0 | 0.1.0 (uninstallable) |
-| `lemon_memory` | Durable memory: document schema, SQLite store, provider behaviour, ingest, search | 0.2.0 | 0.1.0 (uninstallable) |
-| `lemon_platform_test` | Contract-test kit: `BackendCase`, `EventsCase`, `ProviderCase`, `FakeLLM` (and `PluginCase`, which needs the unpublished `lemon_channels`) | 0.2.0 | 0.1.0 (uninstallable) |
+| `lemon_ai` | Provider-agnostic LLM client: providers, model registry, streaming, rate limiting, circuit breaking | 0.2.1 | 0.2.1 |
+| `lemon_core` | Bus and event envelope, pluggable Store, secrets, config, paths, boundary contracts | 0.2.0 | 0.2.0 |
+| `lemon_agent` | Agent loop, tool registry, subagents, model runtime, workspace stores | 0.2.0 | 0.2.0 |
+| `lemon_memory` | Durable memory: document schema, SQLite store, provider behaviour, ingest, search | 0.2.0 | 0.2.0 |
+| `lemon_platform_test` | Contract-test kit: `BackendCase`, `EventsCase`, `ProviderCase`, `FakeLLM` (and `PluginCase`, which needs the unpublished `lemon_channels`) | 0.2.0 | 0.2.0 |
 
-These are exactly what `mix lemon.new` generates against. `0.2.0` is the first
-installable line; it has not been published yet. The mechanics of publishing,
-proving the tarballs, and retiring 0.1.0 are in
+These are exactly what `mix lemon.new` generates against. The 0.2 line is the
+first installable one: `lemon_core`, `lemon_agent`, `lemon_memory` and
+`lemon_platform_test` are published at 0.2.0 and `lemon_ai` at 0.2.1. Every
+0.1.0 release is retired on Hex as uninstallable. The mechanics of publishing
+and proving the tarballs are in
 [`docs/release/hex-packages.md`](release/hex-packages.md).
+
+The packages have one external consumer:
+[LemonSim](https://github.com/z80dev/lemon-sim) (D19); its CI builds against the
+Hex releases and, daily, against Lemon main, so a platform change that would
+break it shows up before it is released.
 
 ## In the repository only
 
@@ -27,7 +35,9 @@ together as the umbrella (CalVer), not as packages: `lemon_router`,
 `lemon_gateway`, `lemon_channels`, `lemon_media`, `lemon_skills`, `lemon_browser`,
 `lemon_control_plane`, `lemon_automation`, `lemon_cli`, `lemon_web`,
 `lemon_lsp`, `lemon_mcp`, `lemon_honcho`, `lemon_evals`, `coding_agent`,
-`lemon_sim`, `lemon_sim_ui`, plus the TypeScript clients under `clients/`.
+plus the TypeScript clients under `clients/`. LemonSim (`lemon_sim`,
+`lemon_sim_ui`) is no longer here; it lives in
+[z80dev/lemon-sim](https://github.com/z80dev/lemon-sim).
 
 What still holds from the split, and is worth keeping whether or not anything is
 published:
@@ -43,10 +53,10 @@ published:
 - **Typed bus events** — [`platform/bus-events.md`](platform/bus-events.md).
 - **The contract-test kit** and **the generator** (`installer/`), both verified
   against the unpacked tarballs by `scripts/verify_packages`.
-- **The sim seam.** `lemon_sim` depends only on core, agent and ai. Its wiring
-  outside `apps/lemon_sim*` is marked `lemon-sim product block` (`config/*.exs`,
-  `lemon.help`, the runtime profile, the architecture check's namespace table)
-  so the seam stays visible; nothing is going to move it.
+- **The sim seam is now a repository boundary.** LemonSim depends only on the
+  published `lemon_core`, `lemon_agent` and `lemon_ai` packages and lives in
+  [z80dev/lemon-sim](https://github.com/z80dev/lemon-sim); this umbrella has no
+  sim wiring left (no sim UI port, release or config blocks).
 
 ## Decision log
 
@@ -70,6 +80,7 @@ published:
 | D16 | 08-21 | `lemon_cli_runners` deleted; subagents are native-only `CodingAgent.Session`s. |
 | D17 | 09-01 | X/Twitter integration removed from the harness. |
 | D18 | 09-27 | **Five packages, no extraction.** Publish only `lemon_ai`, `lemon_core`, `lemon_agent`, `lemon_memory`, `lemon_platform_test` — what the generator uses. Abandon Phase 5 (product repos, cross-repo CI) and D14. |
+| D19 | 11-13 | LemonSim moves to z80dev/lemon-sim as an application on the published lemon_core/lemon_agent/lemon_ai packages; partially reverses D18. It is the packages' first external consumer; its CI builds against the Hex releases and, daily, against Lemon main, so a platform change that would break it shows up before it is released. |
 
 **Why D18.** The 0.1.0 releases of 2026-08-11 could not be installed: each shipped
 a `mix.exs` that required `../../hex_package.exs`, a file outside the tarball, and

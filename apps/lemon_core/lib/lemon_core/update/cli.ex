@@ -1,7 +1,7 @@
 defmodule LemonCore.Update.CLI do
   @moduledoc """
-  Core-only update CLI used by packaged profiles that do not assemble
-  `lemon_cli` (currently the simulation release).
+  Core-only update CLI for packaged profiles that do not assemble
+  `lemon_cli`.
 
   Managed releases expose the same safe update lifecycle as the shared CLI:
   `check`, `plan`, `apply`, `history`, and `rollback`. Planning never mutates

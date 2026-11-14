@@ -16,7 +16,7 @@ defmodule LemonCore.Events do
   `exec_approvals`, `cron`, `system`, `goals`, `routing_feedback`, `channels`.
 
   Topics whose publisher and every subscriber live in one app (`nodes`, `presence`,
-  `run_graph:*`, `parent_question:*`, and the sim/arena family) are deliberately absent.
+  `run_graph:*`, `parent_question:*`) are deliberately absent.
   Their shapes are documented in their owning app; giving them core structs would push
   domain types back into `lemon_core`.
 

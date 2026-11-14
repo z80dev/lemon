@@ -163,7 +163,7 @@ defmodule LemonControlPlane.Methods.Status do
 
   defp runtime_profile do
     case System.get_env("LEMON_RUNTIME_PROFILE") do
-      profile when profile in ["runtime_min", "runtime_full", "sim_broadcast_platform"] -> profile
+      profile when profile in ["runtime_min", "runtime_full"] -> profile
       _ -> nil
     end
   end

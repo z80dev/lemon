@@ -277,7 +277,7 @@ defmodule LemonCore.Env.Declarations do
       secret?: false,
       required?: false,
       area: :endpoints,
-      apps: [:lemon_web, :lemon_sim_ui]
+      apps: [:lemon_web]
     },
     %{
       name: :sentry_dsn,
@@ -445,11 +445,11 @@ defmodule LemonCore.Env.Declarations do
       aliases: [],
       type: :string,
       default: "/bin/sh",
-      doc: "Standard POSIX shell path, used as a fallback shell for the external decider.",
+      doc: "Standard POSIX shell path, used as the shell for PTY sessions and capability probes.",
       secret?: false,
       required?: false,
       area: :platform,
-      apps: [:lemon_sim]
+      apps: [:coding_agent]
     },
     %{
       name: :term,
@@ -698,8 +698,7 @@ defmodule LemonCore.Env.Declarations do
       aliases: [],
       type: :string,
       default: nil,
-      doc:
-        "Override path for the primary JSONL/SQLite data store; required and absolute for the production sim UI.",
+      doc: "Override path for the primary JSONL/SQLite data store.",
       secret?: false,
       required?: false,
       area: :store,

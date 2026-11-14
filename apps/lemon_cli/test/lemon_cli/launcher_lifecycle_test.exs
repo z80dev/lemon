@@ -34,7 +34,7 @@ defmodule LemonCli.LauncherLifecycleTest do
 
     overrides =
       ~w(LEMON_CONTROL_PLANE_OPERATOR_TOKEN LEMON_RUNTIME_PID_FILE LEMON_RUNTIME_LOG_FILE
-      LEMON_CONTROL_PLANE_PORT LEMON_WEB_PORT LEMON_SIM_UI_PORT RELEASE_TMP RELEASE_COOKIE
+      LEMON_CONTROL_PLANE_PORT LEMON_WEB_PORT RELEASE_TMP RELEASE_COOKIE
       RELEASE_DISTRIBUTION NODE_MODE XDG_CONFIG_HOME)
 
     env =
@@ -44,7 +44,6 @@ defmodule LemonCli.LauncherLifecycleTest do
           {"PATH", tools <> ":" <> System.get_env("PATH")},
           {"LEMON_CONTROL_PLANE_PORT", Integer.to_string(free_port())},
           {"LEMON_WEB_PORT", "49180"},
-          {"LEMON_SIM_UI_PORT", "49190"},
           {"LEMON_SECRETS_MASTER_KEY", String.duplicate("a", 64)},
           {"RELEASE_COOKIE", "isolated-launcher-test"},
           {"LEMON_WEB_SECRET_KEY_BASE", String.duplicate("b", 64)},
@@ -132,7 +131,7 @@ defmodule LemonCli.LauncherLifecycleTest do
 
   test "source validates every lifecycle port flag before probes or mutation", ctx do
     for command <- ~w(start daemon status stop restart),
-        flag <- ~w(--port --web-port --sim-port),
+        flag <- ~w(--port --web-port),
         value <- ~w(abc 0 65536 999999 12345678901234567890 -1) do
       assert {output, 2} = launch(ctx.source, [command, flag, value], ctx.env)
       assert output =~ "invalid port value: #{value} (expected 1-65535)"
@@ -142,20 +141,19 @@ defmodule LemonCli.LauncherLifecycleTest do
 
   test "both launchers reject invalid environment ports", ctx do
     for root <- [ctx.source, ctx.release],
-        name <- ~w(LEMON_CONTROL_PLANE_PORT LEMON_WEB_PORT LEMON_SIM_UI_PORT),
+        name <- ~w(LEMON_CONTROL_PLANE_PORT LEMON_WEB_PORT),
         value <- ~w(abc 0 65536 999999) do
       assert {output, 2} = launch(root, ["status"], put(ctx.env, name, value))
       assert output =~ "invalid port value: #{value} (expected 1-65535)"
     end
   end
 
-  test "both statuses show selected home, web, sim, logs and fail when stopped", ctx do
+  test "both statuses show selected home, web, logs and fail when stopped", ctx do
     for root <- [ctx.source, ctx.release] do
       assert {output, 1} = launch(root, ["status"], ctx.env)
       assert output =~ "no Lemon runtime answers on port"
       assert output =~ "home: #{ctx.home}/.lemon"
       assert output =~ "web: port 49180"
-      assert output =~ "sim: port 49190"
       assert output =~ "log: "
       refute output =~ "pid record"
     end

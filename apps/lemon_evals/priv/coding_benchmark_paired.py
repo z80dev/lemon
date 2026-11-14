@@ -87,7 +87,7 @@ def isolated_environment(root, config, variant, credentials, ports):
                 'TMPDIR': str(root / 'tmp'),
                 'LEMON_CONTROL_PLANE_PORT': str(ports[0]), 'LEMON_WEB_PORT': str(ports[1]),
                 'LEMON_GATEWAY_HEALTH_PORT': '0', 'LEMON_ROUTER_HEALTH_PORT': '0',
-                'LEMON_SIM_UI_PORT': str(ports[2]), 'LEMON_CONTROL_PLANE_OPERATOR_TOKEN': secrets.token_hex(32),
+                'LEMON_CONTROL_PLANE_OPERATOR_TOKEN': secrets.token_hex(32),
                 'LEMON_TOOL_DISCLOSURE_PROFILE': 'legacy' if variant == 'baseline' else 'coding',
                 'LEMON_SECRETS_MASTER_KEY': secrets.token_hex(32), 'MIX_ENV': 'dev'})
     return env
@@ -428,7 +428,7 @@ def trial_state():
 def runtime_ports():
     sockets = []
     try:
-        for _ in range(3):
+        for _ in range(2):
             sock = socket.socket()
             sock.bind(('127.0.0.1', 0))
             sockets.append(sock)

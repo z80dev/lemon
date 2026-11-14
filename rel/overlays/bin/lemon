@@ -35,7 +35,7 @@ case "${1:-}" in
 esac
 
 PROFILE=""
-for candidate in lemon_runtime_full lemon_runtime_min sim_broadcast_platform; do
+for candidate in lemon_runtime_full lemon_runtime_min; do
   if [ -x "$LEMON_ROOT/bin/$candidate" ]; then
     PROFILE="$candidate"
     break
@@ -59,7 +59,7 @@ load_port_settings() {
   [ -f "$1" ] || return 0
   while IFS='=' read -r key value || [ -n "$key" ]; do
     case "$key" in
-      LEMON_CONTROL_PLANE_PORT | LEMON_CONTROL_PLANE_NODE_PORT | LEMON_WEB_PORT | LEMON_SIM_UI_PORT)
+      LEMON_CONTROL_PLANE_PORT | LEMON_CONTROL_PLANE_NODE_PORT | LEMON_WEB_PORT)
         if [[ "$value" =~ ^[0-9]{1,5}$ && -z "${!key:-}" ]]; then
           export "$key=$value"
         fi
@@ -71,7 +71,6 @@ load_port_settings "$LEMON_HOME_DIR/ports.env"
 
 PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
 WEB_PORT="${LEMON_WEB_PORT:-4080}"
-SIM_PORT="${LEMON_SIM_UI_PORT:-4090}"
 LOG_PATH="${RELEASE_TMP:-$LEMON_ROOT/tmp}/log"
 export LEMON_RUNTIME_LOG_DIR="$LOG_PATH"
 PIDFILE="${LEMON_RUNTIME_PID_FILE:-$STATE_DIR/lemon-$PORT.pid}"
@@ -81,13 +80,13 @@ LOCK_DIR="$STATE_DIR/lemon-$PORT.lock"
 export LEMON_CLI_LAUNCHER=release LEMON_LAUNCHER="$SCRIPT_DIR/lemon"
 export LEMON_RUNTIME_PROFILE="${PROFILE#lemon_}"
 
-for port in "$PORT" "$WEB_PORT" "$SIM_PORT"; do
+for port in "$PORT" "$WEB_PORT"; do
   if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || ((10#$port < 1 || 10#$port > 65535)); then
     error "invalid port value: $port (expected 1-65535)"
     exit 2
   fi
 done
-export LEMON_CONTROL_PLANE_PORT="$PORT" LEMON_WEB_PORT="$WEB_PORT" LEMON_SIM_UI_PORT="$SIM_PORT"
+export LEMON_CONTROL_PLANE_PORT="$PORT" LEMON_WEB_PORT="$WEB_PORT"
 
 require_curl() {
   command -v curl >/dev/null 2>&1 || {
@@ -195,7 +194,7 @@ controller_unit() {
 controller_log() { printf '%s\n' "$LEMON_HOME_DIR/logs/controller.log"; }
 
 status_context() {
-  printf '  web: port %s\n  sim: port %s\n  log: %s (foreground output stays in its terminal)\n' "$WEB_PORT" "$SIM_PORT" "$LOG_PATH"
+  printf '  web: port %s\n  log: %s (foreground output stays in its terminal)\n' "$WEB_PORT" "$LOG_PATH"
   local cunit mgr label log_file
   if cunit="$(controller_unit 2>/dev/null)" && [ -n "$cunit" ]; then
     mgr="${cunit%% *}"
@@ -407,7 +406,7 @@ check_runtime_stopped() {
       return 1
     fi
   done
-  if [ "$PROFILE" != sim_broadcast_platform ] && control_port_in_use; then
+  if control_port_in_use; then
     error "port $PORT is occupied but does not answer Lemon health checks; free it or choose another port with 'lemon setup runtime --control-port PORT'"
     return 1
   fi
@@ -571,30 +570,7 @@ setup_environment() {
   fi
 }
 
-# The sim-only release bundles no lemon_cli; keep its few commands CLI-free.
-sim_command() {
-  case "${1:-}" in
-    --version) exec "$RELEASE_BIN" eval 'IO.puts(LemonCore.Update.Version.describe())' ;;
-    version) exec "$RELEASE_BIN" eval 'IO.puts(LemonCore.Update.Version.current())' ;;
-    update) shift && exec "$RELEASE_BIN" eval 'LemonCore.Update.CLI.main(System.argv())' "$@" ;;
-    doctor)
-      if [ "${2:-}" = "--bundle" ] && [ "$#" -le 3 ]; then
-        export LEMON_DOCTOR_BUNDLE_PATH="${3:-$LEMON_HOME_DIR/support-bundle-$(date -u +%Y%m%dT%H%M%SZ).zip}"
-        mkdir -p "$(dirname "$LEMON_DOCTOR_BUNDLE_PATH")"
-        exec "$RELEASE_BIN" eval 'LemonCore.Doctor.CLI.bundle!(bundle_path: System.fetch_env!("LEMON_DOCTOR_BUNDLE_PATH"))'
-      fi
-      ;;
-  esac
-  local usage="Usage: lemon <start|daemon|stop|restart|status|remote|eval|rpc|version|update|doctor --bundle [PATH]>
-The sim_broadcast_platform release has no runtime CLI; use lemon_runtime_min or lemon_runtime_full."
-  case "${1:-}" in
-    -h|--help|help) echo "$usage" && exit 0 ;;
-    *) echo "$usage" >&2 && exit 2 ;;
-  esac
-}
-
 run_cli() {
-  [ "$PROFILE" != "sim_broadcast_platform" ] || sim_command "$@"
   # Operator follow must exit on Ctrl-C instead of opening the BEAM break menu.
   if [ "${1:-}" = logs ]; then export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-} +Bd"; fi
   exec "$RELEASE_BIN" eval "$CLI_EXPR" "$@"
@@ -608,7 +584,6 @@ run_cli() {
 # passes as stdin.
 run_setup() {
   local handoff status=0 steps step device
-  [ "$PROFILE" != "sim_broadcast_platform" ] || sim_command "$@"
   handoff="$(mktemp "${TMPDIR:-/tmp}/lemon-setup.XXXXXX")" || exit 1
   LEMON_SETUP_HANDOFF="$handoff" "$RELEASE_BIN" eval "$CLI_EXPR" "$@" || status=$?
   steps="$(cat "$handoff")"
@@ -644,7 +619,7 @@ run_cli_unconfigured() {
 # the control plane.
 start_daemon() {
   local pid="" born attempt reuse="${1:-1}" configure="${2:-0}"
-  if [ "$PROFILE" != "sim_broadcast_platform" ] && control_plane_healthy; then
+  if control_plane_healthy; then
     [ "$reuse" = 1 ] || { error "another runtime is serving port $PORT; restart did not replace it; stop it where it runs, then retry"; return 1; }
     info "a healthy Lemon runtime is already running on port $PORT; reusing it"
     return 0
@@ -676,7 +651,7 @@ start_daemon() {
   check_runtime_stopped || return
   acquire_start_lock || return
   # Another launcher may have completed while this one waited.
-  if [ "$PROFILE" != "sim_broadcast_platform" ] && control_plane_healthy; then
+  if control_plane_healthy; then
     release_start_lock
     [ "$reuse" = 1 ] || { error "another runtime is serving port $PORT; restart did not replace it; stop it where it runs, then retry"; return 1; }
     info "a healthy Lemon runtime is already running on port $PORT; reusing it"
@@ -711,7 +686,7 @@ start_daemon() {
   printf '%s\n' "$pid" > "$PIDFILE"
   printf '%s\n' "$LEMON_ROOT" > "$ROOTFILE"
   info "started (pid $pid)"
-  if [ "$PROFILE" != "sim_broadcast_platform" ] && ! wait_until control_plane_healthy 60; then
+  if ! wait_until control_plane_healthy 60; then
     error "runtime did not become healthy on port $PORT within 60s; see $LOG_PATH"
     # This pid came from this launch; bind signals to its observed start time.
     if [ -n "$born" ] && [ "$(process_identity "$pid" || true)" = "$born" ]; then
@@ -789,13 +764,11 @@ update_daemon_snapshot() {
   # runtime.exs sets the port only from LEMON_CONTROL_PLANE_PORT; a daemon
   # started without it serves LemonControlPlane's default, 4040 (as $PORT does).
   local port_expr='Application.get_env(:lemon_control_plane, :port, 4040)'
-  [ "$PROFILE" != sim_broadcast_platform ] || port_expr='""'
   actual="$(release_command "$recorded" rpc "IO.puts(\"#{System.pid()}:#{$port_expr}\")" 2>/dev/null)" || {
     error "cannot authenticate the recorded daemon; no process was signalled"
     return 1
   }
-  if { [ "$PROFILE" != sim_broadcast_platform ] && [ "$actual" != "$pid:$PORT" ]; } ||
-     { [ "$PROFILE" = sim_broadcast_platform ] && [ "$actual" != "$pid:" ]; }; then
+  if [ "$actual" != "$pid:$PORT" ]; then
     error "recorded PID/control port does not match the authenticated daemon; no process was signalled"
     return 1
   fi
@@ -1017,8 +990,8 @@ case "$COMMAND" in
     ;;
   tui)
     shift
-    if [ "$PROFILE" = "sim_broadcast_platform" ] || [ ! -x "$TUI_BIN" ]; then
-      error "TUI not installed at $TUI_BIN (sim-only release, or installed with LEMON_NO_TUI=1)"
+    if [ ! -x "$TUI_BIN" ]; then
+      error "TUI not installed at $TUI_BIN (installed with LEMON_NO_TUI=1)"
       exit 1
     fi
     status=0
@@ -1066,13 +1039,13 @@ case "$COMMAND" in
   start)
     shift
     # Reuse guard before the release registers its Erlang node name.
-    if [ "$PROFILE" != "sim_broadcast_platform" ] && control_plane_healthy; then
+    if control_plane_healthy; then
       info "a healthy Lemon runtime is already running on port $PORT; reusing it"
       exit 0
     fi
     check_runtime_stopped || exit 1
     acquire_start_lock || exit 1
-    if [ "$PROFILE" != "sim_broadcast_platform" ] && control_plane_healthy; then
+    if control_plane_healthy; then
       info "a healthy Lemon runtime is already running on port $PORT; reusing it"
       exit 0
     fi

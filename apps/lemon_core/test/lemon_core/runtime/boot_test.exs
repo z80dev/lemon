@@ -6,7 +6,6 @@ defmodule LemonCore.Runtime.BootTest do
   @base_env %Env{
     control_port: 19_980,
     web_port: 19_981,
-    sim_port: 19_982,
     dotenv_dir: nil
   }
 
@@ -34,7 +33,7 @@ defmodule LemonCore.Runtime.BootTest do
       System.delete_env("LEMON_GATEWAY_NODE_COOKIE")
       System.delete_env("LEMON_GATEWAY_COOKIE")
 
-      env = %Env{control_port: 19_989, web_port: 19_990, sim_port: 19_991, dotenv_dir: nil}
+      env = %Env{control_port: 19_989, web_port: 19_990, dotenv_dir: nil}
 
       assert_raise RuntimeError, ~r/production.*cookie/i, fn ->
         Boot.start(:runtime_min, env: env, check_running: false)

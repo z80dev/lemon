@@ -249,9 +249,9 @@ wait_for_health() {
   return 1
 }
 
-# lemon_runtime_full bundles both lemon_web (digest-only, no asset pipeline)
-# and lemon_sim_ui (npm build + digest); both must have produced a
-# cache_manifest.json or the release serves undigested/missing assets.
+# lemon_runtime_full bundles lemon_web (digest-only, no asset pipeline); it
+# must have produced a cache_manifest.json or the release serves
+# undigested/missing assets.
 assert_full_profile_static_files() {
   local profile="$1"
   local extract_dir="$2"
@@ -263,11 +263,6 @@ assert_full_profile_static_files() {
 
   if ! compgen -G "$extract_dir/lib/lemon_web-*/priv/static/assets/app*.css" > /dev/null; then
     echo "$profile: missing bundled lemon_web CSS (runtime CDN fallback is forbidden)" >&2
-    exit 1
-  fi
-
-  if ! compgen -G "$extract_dir/lib/lemon_sim_ui-*/priv/static/cache_manifest.json" > /dev/null; then
-    echo "$profile: missing lemon_sim_ui cache_manifest.json (asset digest step likely skipped)" >&2
     exit 1
   fi
 }
@@ -648,10 +643,9 @@ boot_one_profile() {
   local home_dir="$profile_dir/home"
   local store_dir="$profile_dir/store"
   local bundle_path="$profile_dir/support-bundle.zip"
-  local control_port web_port sim_port
+  local control_port web_port
   control_port="$(free_port)"
   web_port="$(free_port)"
-  sim_port="$(free_port)"
 
   mkdir -p "$extract_dir" "$store_dir"
   write_fixture_config "$home_dir"
@@ -693,7 +687,6 @@ boot_one_profile() {
     "LEMON_SECRETS_MASTER_KEY=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
     "LEMON_CONTROL_PLANE_PORT=$control_port"
     "LEMON_WEB_PORT=$web_port"
-    "LEMON_SIM_UI_PORT=$sim_port"
     "LEMON_ROUTER_HEALTH_PORT=0"
     "LEMON_GATEWAY_HEALTH_PORT=0"
     "RELEASE_NODE=lemon_release_boot_$control_port"

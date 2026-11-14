@@ -195,17 +195,6 @@ config :lemon_gateway, :executor, CodingAgent.Executor
 
 config :lemon_gateway, :telegram, nil
 
-# ── lemon-sim product block — sim wiring outside apps/lemon_sim* (docs/platform-split.md) ──
-config :lemon_sim_ui, LemonSimUi.Endpoint,
-  http: [ip: {127, 0, 0, 1}, port: 4092],
-  secret_key_base:
-    "test_sim_ui_secret_key_base_test_sim_ui_secret_key_base_test_sim_ui_secret_key_base",
-  server: false
-
-config :lemon_sim_ui, :hosted_rooms_enabled, true
-config :lemon_sim_ui, :allow_insecure_admin, true
-# ── end lemon-sim product block ──
-
 config :lemon_web, LemonWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4082],
   secret_key_base:

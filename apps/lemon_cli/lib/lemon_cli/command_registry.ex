@@ -947,7 +947,7 @@ defmodule LemonCli.CommandRegistry do
 
   @both_launchers [:source, :release]
 
-  @runtime_options_detail "Source checkouts accept --debug, --port N, --web-port N, --sim-port N, --name NAME@HOST or --sname NAME, --cookie COOKIE, and --no-distribution. Packaged installs read LEMON_CONTROL_PLANE_PORT, LEMON_WEB_PORT, and LEMON_SIM_UI_PORT. A healthy runtime already answering on the control-plane port is reused instead of starting a second node."
+  @runtime_options_detail "Source checkouts accept --debug, --port N, --web-port N, --name NAME@HOST or --sname NAME, --cookie COOKIE, and --no-distribution. Packaged installs read LEMON_CONTROL_PLANE_PORT and LEMON_WEB_PORT. A healthy runtime already answering on the control-plane port is reused instead of starting a second node."
 
   @lifecycle_commands [
     lifecycle(

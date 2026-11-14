@@ -47,7 +47,7 @@ load_port_settings() {
   [ -f "$1" ] || return 0
   while IFS='=' read -r key value || [ -n "$key" ]; do
     case "$key" in
-      LEMON_CONTROL_PLANE_PORT | LEMON_CONTROL_PLANE_NODE_PORT | LEMON_WEB_PORT | LEMON_SIM_UI_PORT)
+      LEMON_CONTROL_PLANE_PORT | LEMON_CONTROL_PLANE_NODE_PORT | LEMON_WEB_PORT)
         if [[ "$value" =~ ^[0-9]{1,5}$ && -z "${!key:-}" ]]; then
           export "$key=$value"
         fi
@@ -85,8 +85,7 @@ load_environment
 
 PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
 WEB_PORT="${LEMON_WEB_PORT:-4080}"
-SIM_PORT="${LEMON_SIM_UI_PORT:-4090}"
-export LEMON_CONTROL_PLANE_PORT="$PORT" LEMON_WEB_PORT="$WEB_PORT" LEMON_SIM_UI_PORT="$SIM_PORT"
+export LEMON_CONTROL_PLANE_PORT="$PORT" LEMON_WEB_PORT="$WEB_PORT"
 NODE_MODE=""
 NODE_NAME="${LEMON_GATEWAY_NODE_NAME:-lemon}"
 NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-}}"
@@ -178,7 +177,7 @@ runtime_paths
 
 validate_runtime_ports() {
   local port
-  for port in "$PORT" "$WEB_PORT" "$SIM_PORT"; do
+  for port in "$PORT" "$WEB_PORT"; do
     if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || ((10#$port < 1 || 10#$port > 65535)); then
       error "invalid port value: $port (expected 1-65535)"
       exit 2
@@ -515,12 +514,11 @@ parse_runtime_options() {
     case "$1" in
       --debug) DEBUG=1 ;;
       --no-distribution) DISTRIBUTED=0 ;;
-      --port|--web-port|--sim-port|--name|--sname|--cookie)
+      --port|--web-port|--name|--sname|--cookie)
         [ -n "${2:-}" ] || { error "missing value for $1"; exit 2; }
         case "$1" in
           --port) PORT="$2" ;;
           --web-port) WEB_PORT="$2" ;;
-          --sim-port) SIM_PORT="$2" ;;
           --name) NODE_MODE="name" NODE_NAME="$2" ;;
           --sname) NODE_MODE="sname" NODE_NAME="$2" ;;
           --cookie) NODE_COOKIE="$2" ;;
@@ -616,7 +614,7 @@ start_runtime() {
   fi
   ensure_managed_token || exit 1
   export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}" LEMON_CONTROL_PLANE_PORT="$PORT"
-  export LEMON_WEB_PORT="$WEB_PORT" LEMON_SIM_UI_PORT="$SIM_PORT"
+  export LEMON_WEB_PORT="$WEB_PORT"
   export LEMON_RUNTIME_PROFILE=runtime_full
   [ -z "$DEBUG" ] || export LEMON_DEBUG=1 LEMON_LOG_LEVEL=debug
   load_secrets_master_key
@@ -625,7 +623,6 @@ start_runtime() {
   compile_source
   info "Control plane: ws://localhost:$PORT/ws"
   info "Web UI:        http://localhost:$WEB_PORT/"
-  info "Sim UI:        http://localhost:$SIM_PORT/"
   info "Dotenv dir:    $LEMON_DOTENV_DIR"
   [ "$DISTRIBUTED" = "1" ] || warn "Distribution disabled (--no-distribution); remote attach is unavailable."
 
@@ -772,7 +769,7 @@ controller_unit() {
 controller_log() { printf '%s\n' "$LEMON_HOME_DIR/logs/controller.log"; }
 
 status_context() {
-  printf '  web: port %s\n  sim: port %s\n  log: %s (foreground output stays in its terminal)\n' "$WEB_PORT" "$SIM_PORT" "$LOG_FILE"
+  printf '  web: port %s\n  log: %s (foreground output stays in its terminal)\n' "$WEB_PORT" "$LOG_FILE"
   local cunit mgr label log_file
   if cunit="$(controller_unit 2>/dev/null)" && [ -n "$cunit" ]; then
     mgr="${cunit%% *}"

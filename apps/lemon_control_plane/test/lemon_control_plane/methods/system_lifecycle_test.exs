@@ -26,7 +26,7 @@ defmodule LemonControlPlane.Methods.SystemLifecycleTest do
 
   setup do
     keys =
-      ~w(LEMON_LAUNCHER LEMON_CLI_LAUNCHER LEMON_CONTROL_PLANE_PORT LEMON_WEB_PORT LEMON_SIM_UI_PORT)
+      ~w(LEMON_LAUNCHER LEMON_CLI_LAUNCHER LEMON_CONTROL_PLANE_PORT LEMON_WEB_PORT)
 
     previous = Map.new(keys, &{&1, System.get_env(&1)})
     old_driver = Application.get_env(:lemon_control_plane, :lifecycle_driver)
@@ -101,7 +101,6 @@ defmodule LemonControlPlane.Methods.SystemLifecycleTest do
     System.put_env("LEMON_CLI_LAUNCHER", "source")
     System.put_env("LEMON_CONTROL_PLANE_PORT", "49040")
     System.put_env("LEMON_WEB_PORT", "49080")
-    System.put_env("LEMON_SIM_UI_PORT", "49090")
 
     assert {:ok, %{"accepted" => true, "action" => "restart", "acceptedAtMs" => at}} =
              Registry.dispatch("system.restart", %{}, context())
@@ -116,7 +115,6 @@ defmodule LemonControlPlane.Methods.SystemLifecycleTest do
     assert command.args == ["restart", "--no-distribution"]
     assert Map.new(command.env)["LEMON_CONTROL_PLANE_PORT"] == "49040"
     assert Map.new(command.env)["LEMON_WEB_PORT"] == "49080"
-    assert Map.new(command.env)["LEMON_SIM_UI_PORT"] == "49090"
     assert command.log_file =~ "lemon-49040.log"
     assert {:error, {:conflict, _}} = SystemStop.handle(%{}, context())
   end
@@ -170,7 +168,7 @@ defmodule LemonControlPlane.Methods.SystemLifecycleTest do
     done
     # Publish atomically: a plain `>` redirect creates the file before printf writes it,
     # so the test could observe an existing-but-empty output file.
-    printf '%s\\n' "$@" "$LEMON_CONTROL_PLANE_PORT" "$LEMON_WEB_PORT" "$LEMON_SIM_UI_PORT" > "$LB_OUTPUT_FILE.tmp"
+    printf '%s\\n' "$@" "$LEMON_CONTROL_PLANE_PORT" "$LEMON_WEB_PORT" > "$LB_OUTPUT_FILE.tmp"
     mv "$LB_OUTPUT_FILE.tmp" "$LB_OUTPUT_FILE"
     echo launcher-output
     """)
@@ -190,8 +188,7 @@ defmodule LemonControlPlane.Methods.SystemLifecycleTest do
         {"LB_RELEASE_FILE", release},
         {"LB_OUTPUT_FILE", output},
         {"LEMON_CONTROL_PLANE_PORT", "49240"},
-        {"LEMON_WEB_PORT", "49280"},
-        {"LEMON_SIM_UI_PORT", "49290"}
+        {"LEMON_WEB_PORT", "49280"}
       ]
     }
 
@@ -208,7 +205,7 @@ defmodule LemonControlPlane.Methods.SystemLifecycleTest do
     refute File.exists?(output)
     File.write!(release, "parent exited")
     assert eventually(fn -> File.exists?(output) end)
-    assert File.read!(output) == "restart\n--no-distribution\n49240\n49280\n49290\n"
+    assert File.read!(output) == "restart\n--no-distribution\n49240\n49280\n"
 
     assert eventually(fn ->
              File.exists?(log) and String.contains?(File.read!(log), "launcher-output")

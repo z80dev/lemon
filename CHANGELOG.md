@@ -49,6 +49,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   stops, instead of staying registered with a dead agent. The next run resumes
   from the session journal.
 
+### Removed
+
+- LemonSim (`lemon_sim`, `lemon_sim_ui`) moved to its own repository,
+  [z80dev/lemon-sim](https://github.com/z80dev/lemon-sim), where it builds on
+  the published `lemon_core`, `lemon_agent` and `lemon_ai` packages. Lemon no
+  longer ships the `sim_broadcast_platform` release, the launchers' `--sim-port`
+  flag, `LEMON_SIM_UI_PORT` or any `LEMON_SIM_UI_*` handling, and
+  `lemon_runtime_full` no longer bundles the sim UI.
+
 ---
 
 ## [2026.11.9]

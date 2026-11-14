@@ -234,6 +234,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 - `LemonCore.Config.Automation` no longer has `daily_brief` or `parse_time/1`;
   `[automation] daily_brief` is no longer recognized.
+- **Breaking:** `LemonCore.Runtime.Env` no longer has a sim UI port: the
+  `sim_port` struct field, `sim_port/0` and `LEMON_SIM_UI_PORT` resolution are
+  gone, and `:runtime_full` no longer lists `:lemon_sim_ui`. LemonSim lives in
+  [z80dev/lemon-sim](https://github.com/z80dev/lemon-sim).
 
 ## [0.2.0] - 2026-10-13
 

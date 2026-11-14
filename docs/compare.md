@@ -16,7 +16,7 @@ calls for them.
 | Reach your assistant from chat | Telegram and Discord adapters connected to the native runtime | [Setup](user-guide/setup.md#optional-telegram-or-discord), [Channel support](support.md#channel-support) |
 | Run work on another machine | Authenticated named execution nodes using destination-local workspaces and credentials | [Architecture](architecture/overview.md) |
 | Operate your own assistant | Diagnostics, backups, update plans, and receipt-bound rollback | [Support](support.md), [Backups](user-guide/backups.md), [Updates](user-guide/updates.md) |
-| Study how agents behave | LemonSim event-sourced worlds and deterministic replay verification | [Benchmark quickstart](benchmarks/quickstart.md) |
+| Study how agents behave | LemonSim event-sourced worlds and deterministic replay verification, in a separate application built on Lemon's packages | [z80dev/lemon-sim](https://github.com/z80dev/lemon-sim) |
 
 ## What you take on
 
@@ -36,8 +36,7 @@ channel interfaces connect to shared routing and agent execution. Native
 subagents reuse the same model and tool stack. Durable sessions let you return
 to previous work, while the control plane exposes runtime operations to clients.
 
-Underneath, Elixir/OTP supplies process isolation and supervision. LemonSim uses
-the stack for a separate purpose: repeatable model-vs-model simulations. See the
+Underneath, Elixir/OTP supplies process isolation and supervision. See the
 [architecture overview](architecture/overview.md) for the technical map.
 
 ## Check these boundaries before choosing

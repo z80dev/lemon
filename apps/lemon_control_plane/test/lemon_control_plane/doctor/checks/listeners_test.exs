@@ -17,9 +17,6 @@ defmodule LemonControlPlane.Doctor.Checks.ListenersTest do
     web_configured: true,
     web_ip: {127, 0, 0, 1},
     web_port: 4080,
-    sim_ui_configured: true,
-    sim_ui_ip: {127, 0, 0, 1},
-    sim_ui_port: 4090,
     a2a_enabled: false,
     epmd_status: :loopback,
     distribution_status: :not_active
@@ -50,8 +47,7 @@ defmodule LemonControlPlane.Doctor.Checks.ListenersTest do
       end)
 
       for {field, omitted, name, port} <- [
-            {:web_port, [:web_configured, :web_ip, :web_port], "listeners.web", 4500},
-            {:sim_port, [:sim_ui_configured, :sim_ui_ip, :sim_ui_port], "listeners.sim_ui", 4501}
+            {:web_port, [:web_configured, :web_ip, :web_port], "listeners.web", 4500}
           ] do
         Application.put_env(:lemon_core, :runtime_endpoints, [
           {field, :lemon_control_plane, EndpointFixture}
@@ -79,7 +75,6 @@ defmodule LemonControlPlane.Doctor.Checks.ListenersTest do
                "listeners.control_plane",
                "listeners.node_gateway",
                "listeners.web",
-               "listeners.sim_ui",
                "listeners.a2a",
                "listeners.epmd",
                "listeners.distribution"
@@ -96,7 +91,6 @@ defmodule LemonControlPlane.Doctor.Checks.ListenersTest do
                "Node gateway is configured to bind loopback (127.0.0.1:4044)."
 
       assert check([], "listeners.web").message =~ "127.0.0.1:4080"
-      assert check([], "listeners.sim_ui").message =~ "127.0.0.1:4090"
     end
 
     test "an exposed running listener overrides new loopback configuration" do
@@ -127,10 +121,6 @@ defmodule LemonControlPlane.Doctor.Checks.ListenersTest do
       web = check([web_ip: {192, 168, 1, 10}], "listeners.web")
       assert web.status == :warn
       assert web.message =~ "Web UI is configured to bind 192.168.1.10:4080"
-
-      sim = check([sim_ui_ip: "0.0.0.0"], "listeners.sim_ui")
-      assert sim.status == :warn
-      assert sim.message =~ "Sim UI is configured to bind 0.0.0.0:4090"
     end
 
     test "a node gateway disabled with port 0 binds nothing" do
@@ -143,7 +133,6 @@ defmodule LemonControlPlane.Doctor.Checks.ListenersTest do
 
     test "unconfigured optional listeners are skipped" do
       assert check([web_configured: false], "listeners.web").status == :skip
-      assert check([sim_ui_configured: false], "listeners.sim_ui").status == :skip
       assert check([], "listeners.a2a").status == :skip
       assert check([], "listeners.a2a").message =~ "disabled"
     end

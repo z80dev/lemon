@@ -46,7 +46,6 @@ lemon doctor
 The installed `lemon` runtime CLI is included in the minimal and full release
 profiles. It returns `0` for success, `1` for command failures, and `2` for
 usage errors; command-specific help returns `0` without running the command.
-The simulation release does not include this runtime CLI.
 
 ---
 
@@ -139,69 +138,9 @@ Durable state and outbound notifications.
 
 | Task | Purpose |
 | --- | --- |
-| `mix lemon.bench` | Run the platform microbenchmark suites. See [`benchmarks/quickstart.md`](benchmarks/quickstart.md). |
+| `mix lemon.bench` | Run the platform microbenchmark suites. See [`benchmarks/platform-microbenchmarks.md`](benchmarks/platform-microbenchmarks.md). |
 
-## Sim & arena
-
-`lemon_sim` contributes **11** tasks, and `lemon_sim_ui` adds `mix lemon.sim.demo`. They fall into five sub-groups.
-
-### Scenario runners (self-play)
-
-Each runs one scenario's self-play example. All share the common flags
-`--seed`, `--max-turns`, `--offline-strategy`, `--no-persist`, and `--sim-id`
-(run `mix help lemon.sim.<scenario>` for scenario-specific options).
-
-`poker`, `tic_tac_toe`, `vending_bench`, `werewolf` (4).
-
-```bash
-mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
-mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci
-```
-
-### Demo
-
-| Task | Purpose |
-| --- | --- |
-| `mix lemon.sim.demo` | Boot the sim UI and watch a keyless offline Werewolf game. |
-
-### Replay renderers
-
-| Task | Purpose |
-| --- | --- |
-| `mix lemon.sim.replay <scenario> <log>` | Render any scenario's JSONL game log into a video. |
-| `mix lemon.sim.vending_bench_replay DIR` | Build a static HTML replay browser from a VendingBench artifact directory (not a video). |
-
-`mix lemon.sim.replay` handles every video scenario through one task, backed by
-each scenario's shared `VideoGenerator`. Scenarios: `poker`, `werewolf`. Both
-the scenario and the log path are required.
-
-```bash
-mix lemon.sim.replay poker apps/lemon_sim/priv/game_logs/poker/abc.jsonl
-mix lemon.sim.replay werewolf werewolf.jsonl --fps 3 --output werewolf.mp4
-```
-
-VendingBench keeps a separate task because its replay is a static HTML browser,
-not a video. `tic_tac_toe` has no replay renderer.
-
-### Scoring & verification
-
-| Task | Purpose |
-| --- | --- |
-| `mix lemon.sim.score PATH` | Print the scorecard for a run artifact bundle. |
-| `mix lemon.sim.verify PATH` | Verify a run artifact bundle: hashes, event replay (VendingBench, Werewolf, Poker), and scorecard recompute. Exits non-zero on failure. |
-
-```bash
-mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
-mix lemon.sim.score  apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
-```
-
-### Suites, leaderboards & ratings
-
-| Task | Purpose |
-| --- | --- |
-| `mix lemon.sim.suite` | Run a benchmark suite and write a leaderboard (`--scenario`, `--preset`, `--seeds`, `--offline`, `--external-cmd`, `--out`). |
-| `mix lemon.sim.leaderboard PATH` | Print and rewrite a suite leaderboard (`--recompute`). |
-| `mix lemon.sim.ratings` | Aggregate suite leaderboards into cross-suite model ratings (`--root`/`--suites`, `--out`). |
+LemonSim's `mix lemon.sim.*` tasks live in [z80dev/lemon-sim](https://github.com/z80dev/lemon-sim).
 
 ## Not a mix task
 
@@ -234,21 +173,3 @@ exist.
 Non-loopback controllers require `wss://` by default. Plaintext `ws://` needs
 `--allow-insecure-controller` and is acceptable only for development or across
 a verified encrypted overlay such as Tailscale.
-
----
-
-## Sim task consolidation notes
-
-**Done — replay renderers.** The 15 per-scenario `*_replay` tasks were folded
-into the single parameterized `mix lemon.sim.replay <scenario> <log>`. They were
-near-identical thin wrappers over each scenario's shared `VideoGenerator`
-(`LemonSim.Examples.Rendering.DomainVideoGenerator`), so one registry-backed task
-covers them all. `vending_bench_replay` stayed separate (it builds a static HTML
-browser, not a video). Net: 15 tasks removed with no loss of capability.
-
-**Scenario runners remain separate.** The four retained runners have distinct
-switch sets and example entrypoints: `werewolf` supports per-seat models,
-`vending_bench` has benchmark presets, and `tic_tac_toe` exposes kernel-level
-offline strategies. A shared dispatcher would not remove those differences.
-VendingBench is also called directly by `scripts/sim_bench.sh` and
-`scripts/generate_sim_demo_bundles.sh`.

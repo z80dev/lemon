@@ -76,7 +76,6 @@ require_or_generate() {
 export LEMON_CONTROL_PLANE_BIND_IP="${LEMON_CONTROL_PLANE_BIND_IP:-0.0.0.0}"
 export LEMON_CONTROL_PLANE_NODE_BIND_IP="${LEMON_CONTROL_PLANE_NODE_BIND_IP:-0.0.0.0}"
 export LEMON_WEB_BIND_IP="${LEMON_WEB_BIND_IP:-0.0.0.0}"
-export LEMON_SIM_UI_BIND_IP="${LEMON_SIM_UI_BIND_IP:-0.0.0.0}"
 
 # Erlang distribution and epmd keep the release's loopback defaults from
 # releases/<vsn>/env.sh (rel/env.sh.eex); nothing to set here.

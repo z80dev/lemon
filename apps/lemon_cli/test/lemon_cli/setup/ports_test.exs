@@ -35,19 +35,17 @@ defmodule LemonCli.Setup.PortsTest do
     assert Ports.label(:control) == "control plane"
     assert Ports.label(:node) == "node gateway"
     assert Ports.label(:web) == "web UI"
-    assert Ports.label(:sim) == "sim UI"
   end
 
   test "save persists default ports without LEMON_CONTROL_PLANE_NODE_PORT", %{test: test} do
     tmp = Path.join(System.tmp_dir!(), "ports_test_#{test}_default.env")
     on_exit(fn -> File.rm(tmp) end)
 
-    assert {:ok, ^tmp} = Ports.save(%{control: 4040, web: 4080, sim: 4090}, ports_path: tmp)
+    assert {:ok, ^tmp} = Ports.save(%{control: 4040, web: 4080}, ports_path: tmp)
     content = File.read!(tmp)
 
     assert content =~ "LEMON_CONTROL_PLANE_PORT=4040\n"
     assert content =~ "LEMON_WEB_PORT=4080\n"
-    assert content =~ "LEMON_SIM_UI_PORT=4090\n"
     refute content =~ "LEMON_CONTROL_PLANE_NODE_PORT"
   end
 
@@ -58,7 +56,7 @@ defmodule LemonCli.Setup.PortsTest do
     on_exit(fn -> File.rm(tmp) end)
 
     assert {:ok, ^tmp} =
-             Ports.save(%{control: 4040, node: 4044, web: 4080, sim: 4090}, ports_path: tmp)
+             Ports.save(%{control: 4040, node: 4044, web: 4080}, ports_path: tmp)
 
     content = File.read!(tmp)
     refute content =~ "LEMON_CONTROL_PLANE_NODE_PORT"
@@ -75,7 +73,7 @@ defmodule LemonCli.Setup.PortsTest do
     end)
 
     assert {:ok, ^tmp} =
-             Ports.save(%{control: 4040, node: 4045, web: 4080, sim: 4090}, ports_path: tmp)
+             Ports.save(%{control: 4040, node: 4045, web: 4080}, ports_path: tmp)
 
     content = File.read!(tmp)
     assert content =~ "LEMON_CONTROL_PLANE_NODE_PORT=4045\n"
@@ -91,7 +89,7 @@ defmodule LemonCli.Setup.PortsTest do
     end)
 
     assert {:ok, ^tmp} =
-             Ports.save(%{control: 4040, node: 0, web: 4080, sim: 4090}, ports_path: tmp)
+             Ports.save(%{control: 4040, node: 0, web: 4080}, ports_path: tmp)
 
     assert File.read!(tmp) =~ "LEMON_CONTROL_PLANE_NODE_PORT=0\n"
     assert System.get_env("LEMON_CONTROL_PLANE_NODE_PORT") == "0"

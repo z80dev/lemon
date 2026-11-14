@@ -1,8 +1,11 @@
 # Lemon contributor guide
 
-Lemon is an Elixir/OTP umbrella with two products: a self-hosted assistant and
-LemonSim, an event-sourced simulation and benchmark arena. The assistant runs
-native coding sessions through `coding_agent` → `lemon_agent` → `lemon_ai`.
+Lemon is an Elixir/OTP umbrella for a self-hosted assistant platform. The
+assistant runs native coding sessions through `coding_agent` → `lemon_agent` →
+`lemon_ai`. LemonSim, the simulation and benchmark arena, is an external
+application in [z80dev/lemon-sim](https://github.com/z80dev/lemon-sim) built on
+the published `lemon_core`, `lemon_agent` and `lemon_ai` packages; changes to
+those packages' public APIs reach it through Hex.
 
 ## Working safely
 
@@ -45,10 +48,6 @@ the other Dialyxir formatters do not handle OTP 28.5's `:exact_compare` tag.
 See [testing](docs/testing.md) for lane ownership and integration requirements.
 Do not run overlapping umbrella builds from concurrent workers; integrate first.
 
-For LemonSim UI assets, use `mix sim_ui.assets.build` in development or
-`MIX_ENV=prod mix sim_ui.assets.deploy` for release assets. The simulation kernel
-is independent of its Phoenix dashboard; keep game rules in `lemon_sim`.
-
 ## Ownership and app guides
 
 | Area | Guide |
@@ -73,8 +72,6 @@ is independent of its Phoenix dashboard; keep game rules in `lemon_sim`.
 | omp delegate driver (external agent sessions) | [lemon_omp](apps/lemon_omp/AGENTS.md) |
 | Native app control through LCU (`cua_js`) | [lemon_computer_use](apps/lemon_computer_use/AGENTS.md) |
 | Assistant Phoenix interface | [lemon_web](apps/lemon_web/AGENTS.md) |
-| Simulation kernel, scenarios and benchmark artifacts | [lemon_sim](apps/lemon_sim/AGENTS.md) |
-| Simulation dashboard and hosted rooms | [lemon_sim_ui](apps/lemon_sim_ui/AGENTS.md) |
 | Deterministic evaluation harness | [lemon_evals](apps/lemon_evals/README.md) |
 | Extension contract-test kit | [lemon_platform_test](apps/lemon_platform_test/README.md) |
 | Terminal client | [TUI](clients/tui/README.md) |

@@ -59,7 +59,6 @@ defmodule LemonScripts.LiveCronRuntimeRestartSmoke do
   defp run(tmp_dir, timeout_ms) do
     control_port = free_port()
     web_port = free_port()
-    sim_port = free_port()
     gateway_health_port = free_port()
     router_health_port = free_port()
     store_path = Path.join(tmp_dir, "store")
@@ -83,7 +82,6 @@ defmodule LemonScripts.LiveCronRuntimeRestartSmoke do
         dotenv_dir: dotenv_dir,
         control_port: control_port,
         web_port: web_port,
-        sim_port: sim_port,
         gateway_health_port: gateway_health_port,
         router_health_port: router_health_port
       })
@@ -378,7 +376,6 @@ defmodule LemonScripts.LiveCronRuntimeRestartSmoke do
       "LEMON_STORE_PATH" => values.store_path,
       "LEMON_CONTROL_PLANE_PORT" => Integer.to_string(values.control_port),
       "LEMON_WEB_PORT" => Integer.to_string(values.web_port),
-      "LEMON_SIM_UI_PORT" => Integer.to_string(values.sim_port),
       "LEMON_GATEWAY_HEALTH_PORT" => Integer.to_string(values.gateway_health_port),
       "LEMON_ROUTER_HEALTH_PORT" => Integer.to_string(values.router_health_port),
       "LEMON_GATEWAY_ENABLE_TELEGRAM" => "false",

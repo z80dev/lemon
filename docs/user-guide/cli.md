@@ -280,14 +280,14 @@ The registry defines their help and completion; the launcher executes them:
 | `remote`, `eval EXPR`, `rpc EXPR` | No | Yes | Use release VM remote/eval/RPC tools. |
 
 Source runtime options go after `start`, `daemon`, or `restart`:
-`--debug`, `--port N`, `--web-port N`, `--sim-port N`, `--name name@host`,
+`--debug`, `--port N`, `--web-port N`, `--name name@host`,
 `--sname name`, `--cookie C`, and `--no-distribution`. For example,
 `./bin/lemon start --no-distribution`. Runtime options are accepted after the
 relevant lifecycle command, not as bare launcher flags.
 
-All three ports must be integers from 1 through 65535. Environment defaults are
-`LEMON_CONTROL_PLANE_PORT=4040`, `LEMON_WEB_PORT=4080`, and
-`LEMON_SIM_UI_PORT=4090`; source `status` and `stop` also accept the port flags.
+Both ports must be integers from 1 through 65535. Environment defaults are
+`LEMON_CONTROL_PLANE_PORT=4040` and `LEMON_WEB_PORT=4080`; source `status` and
+`stop` also accept the port flags.
 The launcher fills unset port variables from `~/.lemon/ports.env`, which
 `lemon setup` writes when a default port is taken and `lemon setup runtime`
 writes on request. Select the same control port and HOME for every lifecycle

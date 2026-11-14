@@ -18,7 +18,6 @@
   {"lib/lemon_core/oauth/local_callback_listener.ex", :call_without_opaque},
   {"lib/lemon_router/tool_status_renderer.ex", :call_without_opaque},
   {"lib/lemon_router/tool_status_renderer.ex", :call_with_opaque},
-  {"lib/lemon_sim/examples/werewolf/frame_renderer.ex", :call_without_opaque},
 
   # ── unknown_function: IEx.Helpers.recompile/0 ───────────────────────────
   #

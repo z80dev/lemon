@@ -37,16 +37,7 @@ defmodule Mix.Tasks.Lemon.Help do
     {"Data, stores & messaging",
      ~w(lemon.store.migrate_jsonl_to_sqlite lemon.memory lemon.policy lemon.send)},
     {"Skills", ~w(lemon.skill lemon.skill.lint)},
-    {"Benchmarks (platform)", ~w(lemon.bench)},
-    # ── lemon-sim product block: these three groups and the lemon.sim.* entries
-    # in @fallback (docs/platform-split.md).
-    # Task names only — no compile-time reference to any sim module. ──
-    {"Sim: scenario runners",
-     ~w(lemon.sim.poker lemon.sim.tic_tac_toe lemon.sim.vending_bench lemon.sim.werewolf)},
-    {"Sim: replay renderers", ~w(lemon.sim.replay lemon.sim.vending_bench_replay)},
-    {"Sim: scoring, suites & ratings",
-     ~w(lemon.sim.score lemon.sim.verify lemon.sim.suite lemon.sim.leaderboard lemon.sim.ratings)}
-    # ── end lemon-sim product block ──
+    {"Benchmarks (platform)", ~w(lemon.bench)}
   ]
 
   @fallback %{
@@ -56,16 +47,7 @@ defmodule Mix.Tasks.Lemon.Help do
     "lemon.config" => "Validate and inspect Lemon configuration",
     "lemon.usage" => "Show redacted usage, cost, token, and quota diagnostics",
     "lemon.media" => "Show redacted generated-media job diagnostics",
-    "lemon.skill" => "Manage Lemon skills (discover/install/update/remove)",
-    # ── lemon-sim product block ──
-    "lemon.sim.leaderboard" => "Print and rewrite a suite leaderboard",
-    "lemon.sim.ratings" => "Aggregate suite leaderboards into cross-suite model ratings",
-    "lemon.sim.score" => "Print the scorecard for a run artifact bundle",
-    "lemon.sim.suite" => "Run a benchmark suite and write a leaderboard",
-    "lemon.sim.verify" => "Verify a LemonSim run artifact bundle",
-    "lemon.sim.vending_bench" => "Run the Vending Bench simulation",
-    "lemon.sim.vending_bench_replay" =>
-      "Build a static replay browser from a VendingBench artifact dir"
+    "lemon.skill" => "Manage Lemon skills (discover/install/update/remove)"
   }
 
   @impl true

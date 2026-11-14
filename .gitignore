@@ -101,9 +101,6 @@ skills-lock.json
 # Test artifact temp directories
 apps/*/tmp/
 
-# Game logs (generated simulation artifacts)
-priv/game_logs/
-
 # lemon_web commits only undigested assets; phx.digest output is build state.
 apps/lemon_web/priv/static/cache_manifest.json
 apps/lemon_web/priv/static/**/*.gz

@@ -1,9 +1,10 @@
 # Lemon Documentation
 
-Lemon is a self-hosted assistant and a deterministic simulation platform. This
-index follows the site navigation: Getting started, User guides, Configuration
-& CLI reference, Integrations & channels, and Developers & contributors, plus
-LemonSim & benchmarks. Source modules and tests define implementation APIs.
+Lemon is a self-hosted assistant platform. This index follows the site
+navigation: Getting started, User guides, Configuration & CLI reference,
+Integrations & channels, and Developers & contributors, plus Benchmarks.
+Source modules and tests define implementation APIs. LemonSim lives in
+[z80dev/lemon-sim](https://github.com/z80dev/lemon-sim).
 
 ## Getting started
 
@@ -19,7 +20,6 @@ LemonSim & benchmarks. Source modules and tests define implementation APIs.
 | Upgrade an existing installation to the new local-first defaults | [November 2026 upgrade notes](release/upgrade-2026-11.md) |
 | Understand current limits | [Capabilities](compare.md) and [support](support.md) |
 | Understand why Lemon runs on the BEAM | [Why BEAM for agents](why-beam-for-agents.md) |
-| Watch a keyless simulation | [LemonSim UI](../apps/lemon_sim_ui/README.md#keyless-demo) |
 
 ## User guides
 
@@ -88,13 +88,10 @@ overview and the app guides below, rather than keeping a second runtime catalog.
   — 0.2.0 is published; 0.1.0 is retired
 - [Root contributor/app guide index](../AGENTS.md#ownership-and-app-guides)
 
-## LemonSim and benchmarks
+## Benchmarks
 
-- [Benchmark quickstart](benchmarks/quickstart.md) and [platform guarantees](benchmarks/platform.md)
-- [VendingBench](benchmarks/vending-bench.md), [run your model](benchmarks/run-your-model.md),
-  [platform microbenchmarks](benchmarks/platform-microbenchmarks.md)
+- [Platform microbenchmarks](benchmarks/platform-microbenchmarks.md)
   and [paired disclosure protocol](benchmarks/paired-disclosure.md)
-- [Simulation harness](../apps/lemon_sim/README.md) and [control room](../apps/lemon_sim_ui/README.md)
 
 ## Documentation site
 
@@ -124,8 +121,8 @@ the client lane. Install TUI dependencies with
 The same gate checks every Markdown page against the actual VitePress sidebar.
 Add user-facing pages to the matching section of the sidebar in
 `docs/.vitepress/config.js` (Getting started, User guides, Configuration & CLI
-reference, Integrations & channels, Developers & contributors, or LemonSim &
-benchmarks); intentionally unlisted
+reference, Integrations & channels, Developers & contributors, or
+Benchmarks); intentionally unlisted
 contributor/internal pages need a reason in `scripts/check_docs_navigation.mjs`.
 Hidden directories, `generated`, `node_modules`, and `public` are excluded.
 

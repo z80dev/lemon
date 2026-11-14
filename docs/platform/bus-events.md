@@ -324,7 +324,6 @@ topic subscriptions.
 | `sessions:lifecycle` | `LemonCore.RunStore.delete_history/1` → `CodingAgent.ToolResources` | tuple `{:session_history_deleted, session_key, cutoff}` |
 | `a2a:task:<id>` | `LemonControlPlane.A2A.Runner` → A2A runner/router | tuple `{:a2a_task_terminal, task_id}` |
 | `lemon_web:runs` | `LemonWeb.ShellLive.RunEvents` → `ShellLive` | tuple `{:lemon_web_run, phase, info}` |
-| `sim:*`, `arena:*`, hosted-game topics | `lemon_sim` / `lemon_sim_ui` | matched pair shipped together; payloads can embed a whole `%LemonSim.State{}` |
 
 The `kanban*` broadcasts were deleted (zero subscribers; durable record is the
 `Introspection.record/3` call), and `logs` has never had a publisher.

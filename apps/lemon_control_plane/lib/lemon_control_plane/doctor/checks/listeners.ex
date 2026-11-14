@@ -3,8 +3,8 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
   Doctor diagnostics for Lemon's network listener binds.
 
   HTTP listeners are inspected with `lsof` or `/proc/net/tcp{,6}` where available:
-  `listeners.control_plane`, `listeners.node_gateway`, `listeners.web`,
-  `listeners.sim_ui` and `listeners.a2a`. Otherwise their configured bind is
+  `listeners.control_plane`, `listeners.node_gateway`, `listeners.web` and
+  `listeners.a2a`. Otherwise their configured bind is
   reported explicitly as configured. Non-loopback binds warn; a bind alone
   cannot prove whether TLS or an encrypted overlay fronts it.
 
@@ -26,7 +26,6 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
   @default_control_port 4040
   @default_node_port 4044
   @default_web_port 4080
-  @default_sim_port 4090
   @default_a2a_port 9901
   @default_loopback {127, 0, 0, 1}
 
@@ -37,7 +36,6 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
       check_control_plane(opts),
       check_node_gateway(opts),
       check_web(opts),
-      check_sim_ui(opts),
       check_a2a(opts),
       check_epmd(opts),
       check_distribution(opts)
@@ -110,33 +108,6 @@ defmodule LemonControlPlane.Doctor.Checks.Listeners do
           @default_web_port
 
       evaluate_listener("listeners.web", "Web UI", ip, port, opts)
-    end
-  end
-
-  defp check_sim_ui(opts) do
-    {endpoint_available?, endpoint_opts} = endpoint_config(:sim_port)
-
-    configured? =
-      Keyword.get(opts, :sim_ui_configured, endpoint_available?)
-
-    if not configured? do
-      Check.skip("listeners.sim_ui", "Sim UI is not configured.")
-    else
-      http_opts = Keyword.get(endpoint_opts, :http, [])
-
-      ip =
-        opts[:sim_ui_ip] ||
-          Keyword.get(http_opts, :ip) ||
-          parse_ip_env("LEMON_SIM_UI_BIND_IP") ||
-          @default_loopback
-
-      port =
-        opts[:sim_ui_port] ||
-          Keyword.get(http_opts, :port) ||
-          parse_port_env("LEMON_SIM_UI_PORT") ||
-          @default_sim_port
-
-      evaluate_listener("listeners.sim_ui", "Sim UI", ip, port, opts)
     end
   end
 

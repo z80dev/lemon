@@ -18,8 +18,8 @@ defmodule LemonCore.Env do
 
       # Look up a declared variable by name, applying its declared type,
       # aliases, and default:
-      LemonCore.Env.get(:lemon_arena_poker_models)
-      #=> ["anthropic:claude-sonnet-4-20250514", "openai:gpt-5"]
+      LemonCore.Env.get(:lemon_provider_fallback_providers)
+      #=> ["anthropic", "openai"]
 
       LemonCore.Env.get(:lemon_web_port)
       #=> 4080
@@ -109,7 +109,7 @@ defmodule LemonCore.Env do
 
   @doc """
   Returns the declarations for a single `:area` (e.g. `:agent`, `:gateway`,
-  `:arena`). See `all_declared/0` for the full list of areas in use.
+  `:store`). See `all_declared/0` for the full list of areas in use.
   """
   @spec by_area(atom()) :: [declaration()]
   def by_area(area), do: Enum.filter(all_declared(), &(&1.area == area))
@@ -139,9 +139,9 @@ defmodule LemonCore.Env do
       iex> LemonCore.Env.get(:lemon_web_port)
       4080
 
-      iex> System.put_env("LEMON_ARENA_POKER_MODELS", "anthropic:claude-sonnet-4-20250514")
-      iex> LemonCore.Env.get(:lemon_arena_poker_models)
-      ["anthropic:claude-sonnet-4-20250514"]
+      iex> System.put_env("LEMON_PROVIDER_FALLBACK_PROVIDERS", "anthropic")
+      iex> LemonCore.Env.get(:lemon_provider_fallback_providers)
+      ["anthropic"]
   """
   @spec get(atom(), keyword()) :: term()
   def get(name, opts \\ []) do

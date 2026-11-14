@@ -19,7 +19,6 @@ config :phoenix, :filter_parameters, [
   "token",
   "credential_ref",
   "credentialRef",
-  "hosted_werewolf_",
   "params",
   # Private conversation and automation content typed into Lemon Web forms.
   "prompt",
@@ -134,9 +133,7 @@ config :lemon_core, :env_registries, [
   LemonOmp.Env,
   LemonRouter.Env,
   LemonSkills.Env,
-  LemonWeb.Env,
-  # lemon-sim product block — sim wiring outside apps/lemon_sim* (docs/platform-split.md)
-  LemonSimUi.Env
+  LemonWeb.Env
 ]
 
 config :lemon_channels,
@@ -201,42 +198,8 @@ config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads
 # at boot, as {port_field_on_the_Env_struct, otp_app, endpoint_module}. Declared
 # here rather than in lemon_core so the platform never names a product's module.
 config :lemon_core, :runtime_endpoints, [
-  {:web_port, :lemon_web, LemonWeb.Endpoint},
-  # lemon-sim product block — sim wiring outside apps/lemon_sim* (docs/platform-split.md)
-  {:sim_port, :lemon_sim_ui, LemonSimUi.Endpoint}
+  {:web_port, :lemon_web, LemonWeb.Endpoint}
 ]
-
-# ── lemon-sim product block — sim wiring outside apps/lemon_sim* (docs/platform-split.md) ──
-config :lemon_sim_ui, LemonSimUi.Endpoint,
-  adapter: Bandit.PhoenixAdapter,
-  url: [host: "localhost"],
-  render_errors: [
-    formats: [html: LemonSimUi.ErrorHTML, json: LemonSimUi.ErrorJSON],
-    layout: false
-  ],
-  pubsub_server: LemonCore.PubSub,
-  live_view: [signing_salt: "lemonsimuilv"]
-
-config :lemon_sim_ui, :access_token, nil
-config :lemon_sim_ui, :allow_insecure_admin, false
-config :lemon_sim_ui, :admin_session_ttl_seconds, 28_800
-config :lemon_sim_ui, :public_vending_launcher, false
-config :lemon_sim_ui, :max_concurrent_runners, 8
-config :lemon_sim_ui, :max_stored_simulations, 500
-config :lemon_sim_ui, :hosted_rooms_enabled, false
-config :lemon_sim_ui, :hosted_room_create_token, nil
-config :lemon_sim_ui, :hosted_room_limit, 100
-config :lemon_sim_ui, :hosted_room_retention, 500
-config :lemon_sim_ui, :hosted_lobby_ttl_seconds, 86_400
-config :lemon_sim_ui, :hosted_inactive_ttl_seconds, 604_800
-config :lemon_sim_ui, :hosted_ai_model, nil
-config :lemon_sim_ui, :hosted_ai_concurrency, 4
-
-# Always-on model arenas (leagues). Each domain stays disabled unless its
-# LEMON_ARENA_<DOMAIN>_MODELS env is provided at runtime; see config/runtime.exs.
-config :lemon_sim_ui, :arenas, []
-
-# ── end lemon-sim product block ──
 
 # Sample configuration:
 #

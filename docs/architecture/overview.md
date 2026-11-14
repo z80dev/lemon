@@ -1,7 +1,7 @@
 # Architecture Overview
 
-Lemon has two products in one Elixir umbrella: a multi-channel assistant and
-LemonSim. Both use `lemon_agent` and `lemon_ai`; shared config, storage and
+Lemon is a multi-channel assistant platform in one Elixir umbrella. It uses
+`lemon_agent` and `lemon_ai`; shared config, storage and
 boundary contracts live in `lemon_core`. A session is a durable conversation;
 a run is one submitted unit of work. A conversation key identifies work that
 must be serialized, including requests resuming the same native session.
@@ -93,7 +93,6 @@ operator sockets. See [A2A](../user-guide/a2a-peers.md).
 | `lemon_computer_use` | Native app control through LCU (`cua_js` tools): transport, approval routing, lifecycle |
 | `lemon_honcho` | Optional satellite registering external memory/context/tools |
 | `lemon_evals`, `lemon_platform_test` | Evaluation harness and extension contract tests |
-| `lemon_sim`, `lemon_sim_ui` | Simulation kernel/scenarios/artifacts and Phoenix control room |
 
 The Bun TUI and browser automation node live under `clients/`. The assistant Web
 interface is Phoenix; it is not a separate React workspace.
@@ -135,11 +134,9 @@ idempotency/lease boundaries for mutations. Direct event fanout is fire-and-forg
 bounded streams provide explicit overflow/timeout behavior. See
 [BEAM invariants](../beam_agents.md) and [telemetry](../telemetry.md).
 
-LemonSim keeps deterministic event updaters and RNG separate from LLM decisions.
-Replay-verified bundles record setup/seed, input batches, events and final state.
-The control room owns runner capacity, hosted-room privacy and presentation,
-not game rules. Hosted ownership is single-node, not a horizontally replicated
-service. Start with [benchmarks](../benchmarks/quickstart.md).
+LemonSim, the simulation and benchmark arena, is a separate application in
+[z80dev/lemon-sim](https://github.com/z80dev/lemon-sim) built on the published
+`lemon_core`, `lemon_agent` and `lemon_ai` packages.
 
 ## Further reading
 

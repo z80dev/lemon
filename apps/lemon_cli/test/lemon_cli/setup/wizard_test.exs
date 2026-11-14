@@ -69,8 +69,7 @@ defmodule LemonCli.Setup.WizardTest do
   @port_vars [
     "LEMON_CONTROL_PLANE_PORT",
     "LEMON_CONTROL_PLANE_NODE_PORT",
-    "LEMON_WEB_PORT",
-    "LEMON_SIM_UI_PORT"
+    "LEMON_WEB_PORT"
   ]
 
   setup do
@@ -144,7 +143,7 @@ defmodule LemonCli.Setup.WizardTest do
     end
 
     test "invalid port flags fail instead of silently using defaults" do
-      for flag <- ["--control-port", "--web-port", "--sim-port"],
+      for flag <- ["--control-port", "--web-port"],
           value <- ["0", "-1", "65536", "abc"] do
         io = recording_io()
 
@@ -198,8 +197,7 @@ defmodule LemonCli.Setup.WizardTest do
              )
 
       assert File.read!(Path.join(ctx.home, ".lemon/ports.env")) ==
-               "LEMON_CONTROL_PLANE_PORT=4042\nLEMON_WEB_PORT=4080\nLEMON_SIM_UI_PORT=" <>
-                 "#{System.get_env("LEMON_SIM_UI_PORT")}\n"
+               "LEMON_CONTROL_PLANE_PORT=4042\nLEMON_WEB_PORT=4080\n"
 
       assert System.get_env("LEMON_CONTROL_PLANE_PORT") == "4042"
     end

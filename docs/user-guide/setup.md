@@ -327,8 +327,8 @@ lets you enter a port; non-interactive setup takes the suggestion
 automatically. Ports held by an already running Lemon are left alone.
 
 The choice is saved to `~/.lemon/ports.env`. The `lemon` launcher loads that
-file into any of `LEMON_CONTROL_PLANE_PORT`, `LEMON_WEB_PORT` and
-`LEMON_SIM_UI_PORT` that are unset, so the daemon, TUI, `lemon web` and CLI
+file into either of `LEMON_CONTROL_PLANE_PORT` and `LEMON_WEB_PORT`
+that are unset, so the daemon, TUI, `lemon web` and CLI
 commands all use it. A port exported in your shell still wins.
 
 To change ports later, run `lemon setup runtime`, which saves them to the same
@@ -338,7 +338,7 @@ an invalid flag is an error, not a fallback. Ports must be integers from 1 to
 
 ```bash
 lemon setup runtime --non-interactive --profile runtime_min \
-  --control-port 5050 --web-port 5080 --sim-port 5090
+  --control-port 5050 --web-port 5080
 ```
 
 ## Verify and recover

@@ -773,7 +773,6 @@ verify_boot() (
   verify_launcher="${1:-$BIN_DIR/lemon}"
   control_port="$(free_port)"
   web_port="$(free_port)"
-  sim_port="$(free_port)"
   gateway_health_port="$(free_port)"
   router_health_port="$(free_port)"
   verify_node="lemon_install_verify_$$_$control_port"
@@ -793,7 +792,6 @@ verify_boot() (
 
   if ! LEMON_CONTROL_PLANE_PORT="$control_port" \
     LEMON_WEB_PORT="$web_port" \
-    LEMON_SIM_UI_PORT="$sim_port" \
     LEMON_GATEWAY_HEALTH_PORT="$gateway_health_port" \
     LEMON_ROUTER_HEALTH_PORT="$router_health_port" \
     RELEASE_NODE="$verify_node" \

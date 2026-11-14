@@ -47,8 +47,7 @@ defmodule LemonEvals.PairedRuntimeOffline do
             {:control, LemonControlPlane.Supervisor},
             {:gateway, LemonGateway.Supervisor},
             {:router, LemonRouter.Supervisor},
-            {:web, LemonWeb.Endpoint},
-            {:sim, LemonSimUi.Endpoint}
+            {:web, LemonWeb.Endpoint}
           ],
           into: %{} do
         sockets =

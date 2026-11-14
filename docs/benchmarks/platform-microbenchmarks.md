@@ -3,9 +3,9 @@
 Numbers for the primitives every agent run goes through: the store, the event
 bus, the streaming coalescers, and the per-conversation process lifecycle.
 
-These measure **infrastructure, not intelligence**. For model behaviour see
-[the simulation arenas](quickstart.md); for the artifact and verification
-guarantees those arenas provide, see [platform.md](platform.md). Nothing here
+These measure **infrastructure, not intelligence**. For model behaviour and the
+simulation arenas' artifact and verification guarantees, see
+[LemonSim](https://github.com/z80dev/lemon-sim). Nothing here
 calls a model or touches a network.
 
 Everything below is reproducible with `mix lemon.bench`. The suites live in

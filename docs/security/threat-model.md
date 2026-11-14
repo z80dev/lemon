@@ -39,7 +39,6 @@ cryptographic, network, and boundary machinery those docs assume.
 | LemonWeb | `127.0.0.1:4080` | Operator login; non-loopback startup requires an operator token |
 | Lemon Bot | `127.0.0.1:4100` | Product sessions; private same-user proof for local owner sign-in |
 | A2A (optional) | `127.0.0.1:9901` | Peer tokens; tokenless local fallback requires explicit compatibility opt-in |
-| LemonSim UI (optional) | `127.0.0.1:4090` | Existing simulation access-token policy; public lobby/health remain public |
 | epmd / distribution | Loopback | Launcher defaults; explicit cross-host distribution is an operator choice |
 
 **Breaking change:** LAN clients that relied on wildcard binds must explicitly

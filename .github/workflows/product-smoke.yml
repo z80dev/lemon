@@ -35,7 +35,6 @@ env:
   LEMON_SECRETS_MASTER_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
   LEMON_CONTROL_PLANE_PORT: "14040"
   LEMON_WEB_PORT: "14080"
-  LEMON_SIM_UI_PORT: "14090"
   LEMON_GATEWAY_NODE_COOKIE: "product-smoke-cookie"
   LEMON_CONTROL_PLANE_OPERATOR_TOKEN: "product-smoke-control-plane-operator-token"
   OPENAI_API_KEY: "product-smoke-local-provider-key"
@@ -85,7 +84,6 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: |
-            apps/lemon_sim_ui/assets/package-lock.json
             clients/lemon-browser-node/package-lock.json
 
       - name: Cache Mix deps and build
@@ -105,19 +103,11 @@ jobs:
       - name: Install deps
         run: mix deps.get --only prod
 
-      - name: Build Sim UI assets
-        if: matrix.profile != 'lemon_runtime_min'
-        run: mix sim_ui.assets.deploy
-
       - name: Digest lemon_web assets
         if: matrix.profile == 'lemon_runtime_full'
         run: |
           mix 'do' --app lemon_web phx.digest
           test -f apps/lemon_web/priv/static/cache_manifest.json
-
-      - name: Assert Sim UI digest manifest
-        if: matrix.profile != 'lemon_runtime_min'
-        run: test -f apps/lemon_sim_ui/priv/static/cache_manifest.json
 
       - name: Compile (prod)
         run: mix compile

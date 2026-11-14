@@ -8,7 +8,7 @@ defmodule Mix.Tasks.Lemon.Bench do
 
   These measure platform primitives — store throughput, bus fanout, coalescer
   burst absorption, per-conversation process lifecycle — not model quality.
-  For model behaviour see the simulation arenas (`mix sim.bench`).
+  For model behaviour see LemonSim (https://github.com/z80dev/lemon-sim).
 
   ## Usage
 
@@ -30,7 +30,7 @@ defmodule Mix.Tasks.Lemon.Bench do
   suite inherits another's leftover processes.
 
   Results are written to stdout. Published numbers, with the caveats that
-  belong next to them, live in `docs/benchmarks/platform.md`.
+  belong next to them, live in `docs/benchmarks/platform-microbenchmarks.md`.
 
   These are deliberately **not** part of any CI lane — see the rationale in
   that document.

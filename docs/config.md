@@ -20,7 +20,7 @@ backup directories or credential-inclusion settings in `config.toml`. See
 
 ## Listener exposure (breaking default change)
 
-The control plane (`4040`), LemonWeb (`4080`), LemonSim UI (`4090`, when enabled),
+The control plane (`4040`), LemonWeb (`4080`),
 and node gateway (`4044`) bind **127.0.0.1 by default**, including releases.
 Existing LAN clients must explicitly opt in and restart:
 
@@ -28,7 +28,6 @@ Existing LAN clients must explicitly opt in and restart:
 | --- | --- | --- |
 | `LEMON_CONTROL_PLANE_BIND_IP` | `127.0.0.1` | Main operator WebSocket / HTTP listener |
 | `LEMON_WEB_BIND_IP` | `127.0.0.1` | Operator browser interface |
-| `LEMON_SIM_UI_BIND_IP` | `127.0.0.1` | Simulation interface (retains its own access-token policy) |
 | `LEMON_CONTROL_PLANE_NODE_BIND_IP` | `127.0.0.1` | Node-only gateway |
 | `LEMON_CONTROL_PLANE_NODE_PORT` | `4044` | Node-only port; `0` disables it |
 | `LEMON_CONTROL_PLANE_REMOTE_HTTP` | empty | Comma-separated subset of `openai,acp` |

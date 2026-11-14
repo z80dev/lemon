@@ -12,7 +12,7 @@ The initial stable 1.0 release artifact support target is:
 | Area | Supported for 1.0 | Notes |
 | --- | --- | --- |
 | Release artifacts | `linux-x86_64`, `linux-arm64`, `darwin-arm64` tarballs | Built by `.github/workflows/release.yml` on pinned `ubuntu-24.04`, `ubuntu-24.04-arm`, and `macos-15` runners; Linux artifacts carry a glibc 2.39 baseline |
-| Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, `lemon_tui`, and the standalone `lemon_bot` backend on all platforms | 12 tarballs total. All BEAM runtime artifacts must boot from extracted tarballs; the three `lemon_tui` artifacts are Bun binaries verified on native runners; each `lemon_bot` artifact is a compiled Bun backend boot-verified on its native runner. `sim_broadcast_platform` is not published; it is built from source or `apps/lemon_sim_ui/Dockerfile` for sim deploys |
+| Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, `lemon_tui`, and the standalone `lemon_bot` backend on all platforms | 12 tarballs total. All BEAM runtime artifacts must boot from extracted tarballs; the three `lemon_tui` artifacts are Bun binaries verified on native runners; each `lemon_bot` artifact is a compiled Bun backend boot-verified on its native runner |
 | Source install | Linux and macOS, best effort | Requires Elixir 1.20.5+ and Erlang/OTP 29.1.2+ |
 | Windows and macOS `x86_64` | Not supported for 1.0 | Use WSL, the container image, or source-level experimentation |
 | Install script | Supported with scope | `install.sh` on the `stable` channel for the three platform tags; `preview`/`nightly` require a pinned `LEMON_VERSION` |
@@ -31,7 +31,7 @@ a version, it requires a green `ci.yml` run on the exact source commit (reused
 through `scripts/ci_verified_commit`, otherwise by calling `ci.yml`, which runs
 `scripts/test fast`, `quality`, `eval-fast` and `clients`,
 `scripts/verify_source_install` and `scripts/verify_install_script`, the
-Dialyzer gate, sim bench and the WASM runtime lane). It validates
+Dialyzer gate and the WASM runtime lane). It validates
 version/changelog consistency and release notes, then builds and boot-verifies
 the published artifacts on native runners and re-verifies the assembled
 manifest. Do not repeat these manually for an ordinary release.

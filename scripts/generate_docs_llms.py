@@ -65,7 +65,7 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             ("architecture/overview.md", "System architecture and message flow."),
             ("beam_agents.md", "BEAM-native agent processes, supervision, and coordination."),
-            ("platform-split.md", "Current five-package release boundary and unpublished package status."),
+            ("platform-split.md", "Current five-package release boundary and Hex package status."),
             ("context.md", "Context assembly, compaction, and overflow behavior."),
             ("model-selection-decoupling.md", "Provider and model selection design."),
             ("security/safety.md", "Approval, redaction, and execution safety boundaries."),
@@ -77,8 +77,7 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     (
         "Benchmarks",
         (
-            ("benchmarks/quickstart.md", "Run a LemonSim benchmark locally."),
-            ("benchmarks/platform.md", "Determinism, replay, and benchmark guarantees."),
+            ("benchmarks/platform-microbenchmarks.md", "Store, bus, coalescer, and process microbenchmarks."),
         ),
     ),
 )
@@ -139,7 +138,7 @@ def render_index() -> str:
     lines = [
         "# Lemon",
         "",
-        "> Lemon is a local-first, BEAM-native AI agent runtime with durable sessions, memory, skills, supervised tools, automation, channels, and deterministic simulation.",
+        "> Lemon is a local-first, BEAM-native AI agent runtime with durable sessions, memory, skills, supervised tools, automation, and channels.",
         "",
         f"- [Complete machine-readable documentation]({SITE}/llms-full.txt)",
         f"- [Source repository](https://github.com/z80dev/lemon)",

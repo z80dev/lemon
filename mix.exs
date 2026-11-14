@@ -8,7 +8,6 @@ defmodule Lemon.MixProject do
       start_permanent: Mix.env() == :prod,
       # Coverage thresholds are enforced per app; see each app's mix.exs.
       deps: deps(),
-      aliases: aliases(),
       releases: releases(),
       dialyzer: dialyzer()
     ]
@@ -22,20 +21,6 @@ defmodule Lemon.MixProject do
       {:benchee, "~> 1.3", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
-    ]
-  end
-
-  defp aliases do
-    [
-      "sim_ui.assets.setup": [
-        "do --app lemon_sim_ui cmd --cd assets npm ci --cache /tmp/lemon-sim-ui-npm-cache"
-      ],
-      "sim_ui.assets.build": ["do --app lemon_sim_ui cmd --cd assets npm run build"],
-      "sim_ui.assets.deploy": [
-        "sim_ui.assets.setup",
-        "sim_ui.assets.build",
-        "do --app lemon_sim_ui phx.digest"
-      ]
     ]
   end
 
@@ -120,21 +105,10 @@ defmodule Lemon.MixProject do
           lemon_control_plane: :permanent,
           lemon_automation: :permanent,
           lemon_skills: :permanent,
-          lemon_web: :permanent,
-          lemon_sim_ui: :permanent
+          lemon_web: :permanent
         ],
         include_executables_for: [:unix],
         steps: [:assemble, &bundle_python/1, &bundle_browser_driver/1, &stamp_build/1, :tar]
-      ],
-      sim_broadcast_platform: [
-        applications: [
-          exqlite: :permanent,
-          lemon_core: :permanent,
-          lemon_sim: :permanent,
-          lemon_sim_ui: :permanent
-        ],
-        include_executables_for: [:unix],
-        steps: [:assemble, &stamp_build/1, :tar]
       ]
     ]
   end

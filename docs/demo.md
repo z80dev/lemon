@@ -4,24 +4,6 @@ A good first task is small enough to inspect and useful enough to keep. Explore
 a repository, ask a follow-up, then return to the conversation from your session
 list. These walkthroughs show what to look for at each step.
 
-## Keyless LemonSim demo
-
-To try the simulation product without configuring a provider, use a source
-checkout with dependencies installed:
-
-```bash
-mix sim_ui.assets.setup
-mix sim_ui.assets.build
-mix lemon.sim.demo --seed 42
-```
-
-Open the printed spectator URL. This is a deterministic heuristic Werewolf game,
-not a model-backed agent run; no API keys are required. The server stays up until
-Ctrl+C twice. If its port is occupied, set `LEMON_SIM_UI_PORT` or start the game
-inside the existing UI node. See the [control room guide](../apps/lemon_sim_ui/README.md#keyless-demo)
-and [benchmark quickstart](benchmarks/quickstart.md) for replay-verifiable offline
-bundles and model-backed runs.
-
 ## Before you begin
 
 Complete the [quickstart](getting-started/quickstart.md) to install Lemon and
@@ -104,7 +86,7 @@ quickstart separately checks provider access and the chat path.
 | [Add a skill](user-guide/skills.md) | Reuse instructions for a recurring task |
 | [Review a source for learning](user-guide/learn-from-sources.md) | Turn selected context into reviewed memory or skill drafts |
 | [Connect Telegram or Discord](user-guide/setup.md#optional-telegram-or-discord) | Reach your runtime from a messaging app |
-| [Explore LemonSim](benchmarks/quickstart.md) | Evaluate agents in replay-verifiable simulation worlds |
+| [Explore LemonSim](https://github.com/z80dev/lemon-sim) | Evaluate agents in replay-verifiable simulation worlds (separate repository) |
 
 ## If something fails
 

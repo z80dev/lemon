@@ -14,7 +14,7 @@ export function loopbackOrigin(host:string,port:number):string|null {
   if(host==='::1'||host==='[::1]')return `http://[::1]:${port}`;
   return null;
 }
-/** Product listener default. Lemon's own runtime owns 4040 (control plane), 4080 (Web) and 4090 (simulation UI). */
+/** Product listener default. Lemon's own runtime owns 4040 (control plane) and 4080 (Web). */
 export const defaultBotPort=4100;
 type Environment=Record<string,string|undefined>;
 function lemonHome(environment:Environment):string { return join(environment.HOME||homedir(),'.lemon'); }

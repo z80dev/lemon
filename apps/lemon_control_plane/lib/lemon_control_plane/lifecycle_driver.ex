@@ -57,7 +57,7 @@ defmodule LemonControlPlane.Lifecycle.Driver do
         Map.to_list(
           Map.take(
             env,
-            ~w(HOME LEMON_CONTROL_PLANE_PORT LEMON_WEB_PORT LEMON_SIM_UI_PORT LEMON_RUNTIME_PID_FILE LEMON_RUNTIME_LOG_FILE)
+            ~w(HOME LEMON_CONTROL_PLANE_PORT LEMON_WEB_PORT LEMON_RUNTIME_PID_FILE LEMON_RUNTIME_LOG_FILE)
           )
         )
     }

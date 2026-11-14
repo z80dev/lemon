@@ -120,15 +120,15 @@ const provider = Bun.serve({
 		);
 	},
 });
-const reservations = Array.from({ length: 3 }, () =>
+const reservations = Array.from({ length: 2 }, () =>
 	Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
 		fetch: () => new Response("reserved", { status: 503 }),
 	}),
 );
-const [controlPort, webPort, simPort] = reservations.map((server) => server.port);
-check(controlPort && webPort && simPort, "could not reserve isolated runtime ports");
+const [controlPort, webPort] = reservations.map((server) => server.port);
+check(controlPort && webPort, "could not reserve isolated runtime ports");
 const url = `ws://127.0.0.1:${controlPort}/ws`;
 const sessionKey = `agent:default:tui:main:unknown:recovery-queue-${crypto.randomUUID()}`;
 const config = `[defaults]\nprovider = "openai"\nmodel = "gpt-4o-mini"\n\n[providers.openai]\nbase_url = "http://127.0.0.1:${provider.port}/v1"\napi_key_secret = "OPENAI_API_KEY"\n\n[gateway]\nmax_concurrent_runs = 1\nauto_resume = false\nenable_telegram = false\n\n[features]\nrouting_feedback = "opt-in"\nskill_synthesis_drafts = "opt-in"\n`;
@@ -152,7 +152,6 @@ Object.assign(env, {
 	LEMON_DOTENV_DIR: resolve(root, "dotenv"),
 	LEMON_CONTROL_PLANE_PORT: String(controlPort),
 	LEMON_WEB_PORT: String(webPort),
-	LEMON_SIM_UI_PORT: String(simPort),
 	LEMON_GATEWAY_HEALTH_PORT: "0",
 	LEMON_ROUTER_HEALTH_PORT: "0",
 	LEMON_CONTROL_PLANE_OPERATOR_TOKEN: credential,

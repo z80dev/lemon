@@ -98,7 +98,7 @@ defmodule LemonCli.LauncherSupervisionTest do
 
     overrides =
       ~w(LEMON_CONTROL_PLANE_OPERATOR_TOKEN LEMON_RUNTIME_PID_FILE LEMON_RUNTIME_LOG_FILE
-      LEMON_CONTROL_PLANE_PORT LEMON_WEB_PORT LEMON_SIM_UI_PORT RELEASE_TMP RELEASE_COOKIE
+      LEMON_CONTROL_PLANE_PORT LEMON_WEB_PORT RELEASE_TMP RELEASE_COOKIE
       TEST_LAUNCHD_LOADED TEST_SYSTEMD_ENABLED TEST_MANIFEST_BODY TEST_CLI_STATUS TEST_RPC_PID)
 
     port = free_port()
@@ -111,7 +111,6 @@ defmodule LemonCli.LauncherSupervisionTest do
           {"PATH", tools <> ":" <> System.get_env("PATH")},
           {"LEMON_CONTROL_PLANE_PORT", Integer.to_string(port)},
           {"LEMON_WEB_PORT", "49180"},
-          {"LEMON_SIM_UI_PORT", "49190"},
           {"LEMON_SECRETS_MASTER_KEY", String.duplicate("a", 64)},
           {"RELEASE_COOKIE", "isolated-launcher-test"},
           {"LEMON_WEB_SECRET_KEY_BASE", String.duplicate("b", 64)},

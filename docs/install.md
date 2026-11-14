@@ -136,7 +136,7 @@ model and manifest schema.
 
 | Profile | Contains | Notes |
 | --- | --- | --- |
-| `full` (`lemon_runtime_full`) | Runtime, local Web UI, simulation dashboard assets, TUI | Default. `lemon web` needs this profile. |
+| `full` (`lemon_runtime_full`) | Runtime, local Web UI, TUI | Default. `lemon web` needs this profile. |
 | `min` (`lemon_runtime_min`) | Runtime and TUI | No Web UI. |
 | `bot` | Full runtime, TUI, and Lemon Bot backend at one manifest version | Runtime must pass the bot capability/version gate. `LEMON_NO_TUI=1` skips the TUI. Setup runs as `lemon setup --use browser`. |
 | `lemon_bot` | Standalone [Lemon Bot](../products/lemon_bot/README.md) backend only | Independent pointer under `~/.lemon/lemon_bot`; launcher `~/.local/bin/lemon-bot`. For remote controllers, containers, or manual supervision; does not install a runtime or services. |
@@ -217,8 +217,8 @@ add `--skip-verify` to defer it. See [Set up Lemon](user-guide/setup.md#automate
 service. For OS-managed startup, use
 [`lemon service install controller`](user-guide/cli.md#user-services).
 Check runtime health with `lemon status` and stop it with `lemon stop`.
-A packaged install reads `LEMON_CONTROL_PLANE_PORT` (default 4040),
-`LEMON_WEB_PORT` (4080) and `LEMON_SIM_UI_PORT` (4090); setup saves chosen ports
+A packaged install reads `LEMON_CONTROL_PLANE_PORT` (default 4040) and
+`LEMON_WEB_PORT` (4080); setup saves chosen ports
 to `~/.lemon/ports.env`, filling in values not already exported.
 
 ## Optional Telegram or Discord
@@ -255,11 +255,11 @@ runtime to `ghcr.io/z80dev/lemon`, tagged by exact version, by channel (`stable`
 `preview`, `nightly`), and `latest` for stable
 (`.github/workflows/release.yml`, `docker/Dockerfile.runtime`). The image runs
 as a non-root user, keeps all state on the `/data` volume (`HOME=/data`), exposes
-ports 4040 (control plane), 4044 (node gateway), 4080 (Web) and 4090 (simulation UI),
+ports 4040 (control plane), 4044 (node gateway) and 4080 (Web),
 and has a `/healthz` health check.
 
-The container explicitly binds control plane, node gateway, Web, and simulation
-UI listeners to `0.0.0.0` so published host ports (`-p`) are reachable. Because
+The container explicitly binds control plane, node gateway, and Web
+listeners to `0.0.0.0` so published host ports (`-p`) are reachable. Because
 non-loopback exposure requires authentication, `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`
 must be configured in the container environment on every start; the token is
 never written to the storage volume, and the entrypoint exits with a readable
@@ -358,7 +358,7 @@ Differences:
 - The first `./bin/lemon` TUI launch installs the TUI's dependencies with
   `bun install --frozen-lockfile` if `clients/tui/node_modules` is missing, and
   compiles the project when needed.
-- `./bin/lemon start` accepts `--port`, `--web-port`, `--sim-port`, `--name`,
+- `./bin/lemon start` accepts `--port`, `--web-port`, `--name`,
   `--sname`, `--cookie`, `--debug` and `--no-distribution`; see
   `./bin/lemon start --help`.
 - `./bin/lemon update plan|apply|rollback` fail closed; update with your Git

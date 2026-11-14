@@ -263,7 +263,6 @@ sh "$ENTRYPOINT" env > "$env_capture"
 grep -Fq "LEMON_CONTROL_PLANE_BIND_IP=0.0.0.0" "$env_capture"
 grep -Fq "LEMON_CONTROL_PLANE_NODE_BIND_IP=0.0.0.0" "$env_capture"
 grep -Fq "LEMON_WEB_BIND_IP=0.0.0.0" "$env_capture"
-grep -Fq "LEMON_SIM_UI_BIND_IP=0.0.0.0" "$env_capture"
 grep -Fq "LEMON_CONTROL_PLANE_OPERATOR_TOKEN=test_operator_token_12345678901234567890" "$env_capture"
 
 # Assert operator token was NEVER written to $ENV_FILE
@@ -309,12 +308,11 @@ echo "[test] Verifying Dockerfile.runtime and release.yml assertions..."
 grep -Fq "ENV LEMON_CONTROL_PLANE_BIND_IP=0.0.0.0" "$ROOT/docker/Dockerfile.runtime"
 grep -Fq "ENV LEMON_CONTROL_PLANE_NODE_BIND_IP=0.0.0.0" "$ROOT/docker/Dockerfile.runtime"
 grep -Fq "ENV LEMON_WEB_BIND_IP=0.0.0.0" "$ROOT/docker/Dockerfile.runtime"
-grep -Fq "ENV LEMON_SIM_UI_BIND_IP=0.0.0.0" "$ROOT/docker/Dockerfile.runtime"
 if grep -q "ELIXIR_ERL_OPTIONS" "$ROOT/docker/Dockerfile.runtime"; then
   echo "FAIL: Dockerfile must not hard-set ELIXIR_ERL_OPTIONS; env.sh owns it" >&2
   exit 1
 fi
-grep -Fq "EXPOSE 4040 4044 4080 4090" "$ROOT/docker/Dockerfile.runtime"
+grep -Fq "EXPOSE 4040 4044 4080" "$ROOT/docker/Dockerfile.runtime"
 
 grep -Fq "LEMON_CONTROL_PLANE_OPERATOR_TOKEN=" "$ROOT/.github/workflows/release.yml"
 

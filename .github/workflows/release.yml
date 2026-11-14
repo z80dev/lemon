@@ -303,16 +303,14 @@ jobs:
             https://builds.hex.pm
             https://cdn.jsdelivr.net/hex
 
-      # lemon_runtime_full bundles lemon_sim_ui, so it needs its npm-built,
-      # digested assets. Both runtime profiles also build and bundle
-      # clients/lemon-browser-node during `mix release`.
+      # Both runtime profiles build and bundle clients/lemon-browser-node
+      # during `mix release`.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: |
-            apps/lemon_sim_ui/assets/package-lock.json
             clients/lemon-browser-node/package-lock.json
 
       - name: Cache Mix deps and build
@@ -329,10 +327,6 @@ jobs:
       - name: Install deps
         run: mix deps.get --only prod
 
-      - name: Build Sim UI assets
-        if: matrix.profile == 'lemon_runtime_full'
-        run: mix sim_ui.assets.deploy
-
       # lemon_web ships its static assets checked into priv/static with no
       # npm/esbuild pipeline of its own; it only needs a checksum digest so
       # cache_static_manifest (config/prod.exs) has a manifest to read.
@@ -345,10 +339,6 @@ jobs:
         run: |
           mix 'do' --app lemon_web phx.digest
           test -f apps/lemon_web/priv/static/cache_manifest.json
-
-      - name: Assert Sim UI digest manifest
-        if: matrix.profile == 'lemon_runtime_full'
-        run: test -f apps/lemon_sim_ui/priv/static/cache_manifest.json
 
       - name: Compile (prod)
         run: mix compile
@@ -665,8 +655,6 @@ jobs:
       # generate the two secrets below, but passing them explicitly keeps them in
       # the container config so `docker exec` sees them too (config/runtime.exs
       # calls System.fetch_env! for LEMON_WEB_SECRET_KEY_BASE on every entry).
-      # Sim-UI vars are deliberately absent: setting LEMON_SIM_UI_SECRET_KEY_BASE
-      # switches that endpoint on and drags in its whole required env block.
       - name: Container smoke (amd64)
         if: matrix.arch == 'amd64'
         env:

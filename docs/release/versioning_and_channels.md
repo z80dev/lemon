@@ -146,8 +146,7 @@ The runtime matrix is `lemon_runtime_min`, `lemon_runtime_full` and
 one tarball on each platform, for **12 tarballs total**. It contains
 `bot/bin/lemon-bot`, the complete built browser client in `bot/web`, and the
 host-native Sharp addon and libvips dependencies under `bot/node_modules`.
-It requires neither BEAM, the TUI, nor an installed Bun/Node runtime. The
-`sim_broadcast_platform` release is not published.
+It requires neither BEAM, the TUI, nor an installed Bun/Node runtime.
 
 The release workflow calls the single canonical builder on each native host:
 

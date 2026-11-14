@@ -11,10 +11,10 @@ declaration metadata only, never environment values or secret stores.
 
 ## Naming convention
 
-- **New variables MUST be named `LEMON_<AREA>_<NAME>`** (e.g. `LEMON_GATEWAY_MAX_CONCURRENT_RUNS`, `LEMON_ARENA_<DOMAIN>_MODELS`). This keeps `LEMON_`-prefixed variables greppable and namespaced away from third-party tooling.
+- **New variables MUST be named `LEMON_<AREA>_<NAME>`** (e.g. `LEMON_GATEWAY_MAX_CONCURRENT_RUNS`). This keeps `LEMON_`-prefixed variables greppable and namespaced away from third-party tooling.
 - **Provider/vendor credentials keep their ecosystem-standard names** and are not renamed to the `LEMON_` scheme -- e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AWS_ACCESS_KEY_ID`, `GOOGLE_APPLICATION_CREDENTIALS`, `TWILIO_ACCOUNT_SID`. Renaming these would break compatibility with the SDKs/CLIs/docs the ecosystem already documents them against.
 - **Standard platform/BEAM release variables are never renamed** -- `HOME`, `SHELL`, `TERM`, `MIX_ENV`, `RELEASE_NAME`, `RELEASE_NODE`, `RELEASE_VSN`, `PHX_SERVER`.
-- Every other pre-existing non-conforming name below is **grandfathered** and listed with its conforming replacement (if one exists) as an `aliases:` entry in its `LemonCore.Env` declaration -- the conforming name is checked first, then the legacy name, so existing deployments keep working. Grandfathered names in this registry: `VOICE_PUBLIC_URL`, `VOICE_RECORDINGS_DIR`, `WEREWOLF_ARENA_MODELS` / `WEREWOLF_ARENA_ENABLED` / `WEREWOLF_ARENA_PLAYER_COUNT` / `WEREWOLF_ARENA_GAME_DELAY_MS` / `WEREWOLF_LEAGUE_DIR` (superseded by the generalized `LEMON_ARENA_WEREWOLF_*` names), `LEMON_OPENAI_COMPAT_TOKEN` (superseded by `LEMON_OPENAI_COMPAT_API_TOKEN`), `LEMON_OPENAI_COMPAT_IMAGE_HOST_ALLOWLIST` (superseded by `LEMON_OPENAI_COMPAT_IMAGE_URL_ALLOWED_HOSTS`), `LEMON_GATEWAY_COOKIE` (superseded by `LEMON_GATEWAY_NODE_COOKIE`), and the `INTEGRATION_*` / legacy `ANTHROPIC_API_KEY` fallbacks for the `LEMON_EVAL_*` family.
+- Every other pre-existing non-conforming name below is **grandfathered** and listed with its conforming replacement (if one exists) as an `aliases:` entry in its `LemonCore.Env` declaration -- the conforming name is checked first, then the legacy name, so existing deployments keep working. Grandfathered names in this registry: `VOICE_PUBLIC_URL`, `VOICE_RECORDINGS_DIR`, `LEMON_OPENAI_COMPAT_TOKEN` (superseded by `LEMON_OPENAI_COMPAT_API_TOKEN`), `LEMON_OPENAI_COMPAT_IMAGE_HOST_ALLOWLIST` (superseded by `LEMON_OPENAI_COMPAT_IMAGE_URL_ALLOWED_HOSTS`), `LEMON_GATEWAY_COOKIE` (superseded by `LEMON_GATEWAY_NODE_COOKIE`), and the `INTEGRATION_*` / legacy `ANTHROPIC_API_KEY` fallbacks for the `LEMON_EVAL_*` family.
 
 ## Secrets
 
@@ -26,7 +26,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 
 1. `LemonCore.Config.*` modules (`Agent`, `Tools`, `Gateway`, `Logging`, `TUI`) -- already funnel through `LemonCore.Config.Helpers`, so swapping the call site is mechanical and low-risk.
 2. Single-app leaf config (`lemon_browser`, `lemon_skills`, `lemon_evals`, terminal backends) -- self-contained modules with few callers.
-3. `config/runtime.exs` -- the always-on arena block and prod endpoint block are dynamic (`LEMON_ARENA_<DOMAIN>_<SUFFIX>`, `<PREFIX>_{HOST,PORT,SECRET_KEY_BASE}`); migrate once `LemonCore.Env` gets a documented pattern for iterating a family of declared names.
+3. `config/runtime.exs` -- the prod endpoint block is dynamic (`<PREFIX>_{HOST,PORT,SECRET_KEY_BASE}`); migrate once `LemonCore.Env` gets a documented pattern for iterating a family of declared names.
 4. Provider credential resolution (`LemonAgent.ProviderConfigResolver`, `LemonAgent.ModelRuntime.Credentials`) -- highest blast radius (every provider call), migrate last and behind the existing `architecture_rules_check.ex` boundary tests.
 
 ## Variables by area
@@ -74,20 +74,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
-| `LEMON_ARENA_LEAGUE_ROOT` | string | _(none)_ |  | `lemon_sim_ui` | Root directory under which each arena domain's league dir defaults to `<domain>_league`; must be absolute for the production sim UI. |
-| `LEMON_ARENA_POKER_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the poker arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_POKER_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the poker arena. |
-| `LEMON_ARENA_POKER_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the poker arena. |
-| `LEMON_ARENA_POKER_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the poker arena. |
-| `LEMON_ARENA_POKER_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the poker arena. |
-| `LEMON_ARENA_WEREWOLF_ENABLED`<br>_(alias: `WEREWOLF_ARENA_ENABLED`)_ | boolean | `true` |  | `lemon_sim_ui` | Whether the werewolf arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_WEREWOLF_GAME_DELAY_MS`<br>_(alias: `WEREWOLF_ARENA_GAME_DELAY_MS`)_ | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the werewolf arena. |
-| `LEMON_ARENA_WEREWOLF_LEAGUE_DIR`<br>_(alias: `WEREWOLF_LEAGUE_DIR`)_ | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the werewolf arena. |
-| `LEMON_ARENA_WEREWOLF_MODELS`<br>_(alias: `WEREWOLF_ARENA_MODELS`)_ | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the werewolf arena. |
-| `LEMON_ARENA_WEREWOLF_PLAYER_COUNT`<br>_(alias: `WEREWOLF_ARENA_PLAYER_COUNT`)_ | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the werewolf arena. |
 | `LEMON_GOAL_JUDGE_MODEL` | string | _(none)_ |  | `lemon_automation` | Model id used to judge automation goal completion. |
-| `LEMON_SIM_AUTO_LOOP` | boolean | `false` |  | `lemon_sim_ui` | Whether the werewolf auto-loop starts automatically on boot. |
-| `LEMON_SIM_WEREWOLF_PLAYERS` | integer | `6` |  | `lemon_sim_ui` | Player count for the werewolf auto-loop. |
 
 ### Automation
 
@@ -152,15 +139,6 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_OPENAI_COMPAT_IMAGE_URL_ALLOWED_HOSTS`<br>_(alias: `LEMON_OPENAI_COMPAT_IMAGE_HOST_ALLOWLIST`)_ | list (comma-separated) | `[]` |  | `lemon_control_plane` | Comma-separated hostname allowlist for OpenAI-compat image URL fetch. |
 | `LEMON_OPENAI_COMPAT_IMAGE_URL_FETCH` | boolean | `false` |  | `lemon_control_plane` | Whether the OpenAI-compat endpoint is allowed to fetch image URLs from messages. |
 | `LEMON_ROUTER_HEALTH_PORT` | integer | _(none)_ |  | `lemon_router` | Port the router health-check endpoint listens on. |
-| `LEMON_SIM_UI_ACCESS_TOKEN` | string | _(none)_ | yes | `lemon_sim_ui` | Admin token; required with at least 32 bytes for a production Sim UI endpoint. |
-| `LEMON_SIM_UI_BIND_IP` | string | `127.0.0.1` |  | `lemon_sim_ui` | Bind IP address for the LemonSimUi endpoint in development and releases. |
-| `LEMON_SIM_UI_HOST` | string | `localhost` |  | `lemon_sim_ui` | Public hostname for the LemonSimUi prod endpoint; explicit in production. |
-| `LEMON_SIM_UI_PORT` | integer | `4090` |  | `lemon_sim_ui` | Port LemonSimUi listens on. |
-| `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER` | boolean | `false` |  | `lemon_sim_ui` | Whether the public VendingBench launcher page is exposed. |
-| `LEMON_SIM_UI_SECRET_KEY_BASE` | string | _(none)_ | yes | `lemon_sim_ui` | Phoenix secret_key_base; required with at least 64 bytes for a production Sim UI endpoint. |
-| `LEMON_SIM_UI_SUITE_ROOTS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Colon-separated extra suite root directories for LemonSimUi. |
-| `LEMON_SIM_UI_URL_PORT` | integer | `443` |  | `lemon_sim_ui` | Public URL port for generated LemonSimUi links. |
-| `LEMON_SIM_UI_URL_SCHEME` | string | `https` |  | `lemon_sim_ui` | Public URL scheme for generated LemonSimUi links (http or https). |
 | `LEMON_WEB_BIND_IP` | string | `127.0.0.1` |  | `lemon_web` | LemonWeb bind address; non-loopback requires an operator token and TLS should terminate in front. |
 | `LEMON_WEB_HOST` | string | `localhost` |  | `lemon_web` | Public hostname for the LemonWeb prod endpoint. |
 | `LEMON_WEB_PORT` | integer | `4080` |  | `lemon_web` | Port LemonWeb listens on. |
@@ -168,7 +146,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_WEB_UPLOADS_DIR` | string | _(none)_ |  | `lemon_web` | Directory used for LemonWeb file uploads. |
 | `LEMON_WEB_URL_PORT` | integer | `443` |  | `lemon_web` | Public URL port for generated LemonWeb links. |
 | `LEMON_WEB_URL_SCHEME` | string | `https` |  | `lemon_web` | Public URL scheme for generated LemonWeb links (http or https). |
-| `PHX_SERVER` | boolean | `false` |  | `lemon_web`, `lemon_sim_ui` | Standard Phoenix flag to start the HTTP server in a release (ecosystem-standard name). |
+| `PHX_SERVER` | boolean | `false` |  | `lemon_web` | Standard Phoenix flag to start the HTTP server in a release (ecosystem-standard name). |
 
 ### Error reporting
 
@@ -306,7 +284,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `RELEASE_NAME` | string | _(none)_ |  | `lemon_core` | Standard Elixir release name; selects which endpoint(s) boot in a multi-app release. |
 | `RELEASE_NODE` | string | _(none)_ |  | `lemon_core` | Standard Elixir release node name; presence indicates a running release (vs. `mix`). |
 | `RELEASE_VSN` | string | _(none)_ |  | `lemon_core` | Standard Elixir release version. |
-| `SHELL` | string | `/bin/sh` |  | `lemon_sim` | Standard POSIX shell path, used as a fallback shell for the external decider. |
+| `SHELL` | string | `/bin/sh` |  | `coding_agent` | Standard POSIX shell path, used as the shell for PTY sessions and capability probes. |
 | `TERM` | string | _(none)_ |  | `lemon_cli` | Standard terminal type variable; used to detect non-interactive/dumb terminals. |
 
 ### Provider
@@ -389,7 +367,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
 | `LEMON_STORE_DB_PATH` | string | _(none)_ |  | `lemon_core` | Override path for the SQLite store database file. |
-| `LEMON_STORE_PATH` | string | _(none)_ |  | `lemon_core` | Override path for the primary JSONL/SQLite data store; required and absolute for the production sim UI. |
+| `LEMON_STORE_PATH` | string | _(none)_ |  | `lemon_core` | Override path for the primary JSONL/SQLite data store. |
 
 ### Terminal docker
 

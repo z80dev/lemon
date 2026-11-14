@@ -235,7 +235,7 @@ detached `nohup`, with stdin closed and stdout/stderr redirected to
 parent shell exits before the launcher stops the old VM, so the restart child
 survives VM termination. The source and packaged launchers both implement
 `restart`. Environment is inherited, including `HOME`,
-`LEMON_CONTROL_PLANE_PORT`, `LEMON_WEB_PORT`, `LEMON_SIM_UI_PORT`, pid/log overrides,
+`LEMON_CONTROL_PLANE_PORT`, `LEMON_WEB_PORT`, pid/log overrides,
 and release selection settings.
 
 For the source launcher (`LEMON_CLI_LAUNCHER=source`), effective `--name` or

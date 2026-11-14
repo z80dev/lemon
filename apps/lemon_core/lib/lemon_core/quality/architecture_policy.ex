@@ -103,8 +103,6 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_media,
       :lemon_memory
     ],
-    lemon_sim: [:lemon_agent, :lemon_ai, :lemon_core],
-    lemon_sim_ui: [:lemon_ai, :lemon_core, :lemon_sim],
     lemon_skills: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_media, :lemon_memory],
     # The web UI is an in-process client of the control-plane method registry
     # and event projection (the same contract as the TUI), and consumes

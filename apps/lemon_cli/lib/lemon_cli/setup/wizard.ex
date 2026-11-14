@@ -252,7 +252,6 @@ defmodule LemonCli.Setup.Wizard do
           profile: :string,
           control_port: :integer,
           web_port: :integer,
-          sim_port: :integer,
           non_interactive: :boolean
         ],
         aliases: [n: :non_interactive]
@@ -818,8 +817,7 @@ defmodule LemonCli.Setup.Wizard do
       current = %{
         control: env.control_port,
         node: resolve_node_port(),
-        web: env.web_port,
-        sim: env.sim_port
+        web: env.web_port
       }
 
       chosen =
@@ -1365,11 +1363,10 @@ defmodule LemonCli.Setup.Wizard do
     current = %{
       control: env.control_port,
       node: resolve_node_port(),
-      web: env.web_port,
-      sim: env.sim_port
+      web: env.web_port
     }
 
-    flags = [control_port: :control, web_port: :web, sim_port: :sim]
+    flags = [control_port: :control, web_port: :web]
 
     invalid =
       Enum.find(flags, fn {flag, _key} ->
@@ -1399,8 +1396,7 @@ defmodule LemonCli.Setup.Wizard do
          %{
            control: prompt_port("control-plane", current.control, io),
            node: current.node,
-           web: prompt_port("web", current.web, io),
-           sim: prompt_port("sim-ui", current.sim, io)
+           web: prompt_port("web", current.web, io)
          }}
     end
   end
@@ -1453,7 +1449,6 @@ defmodule LemonCli.Setup.Wizard do
     end
 
     io.info.("  web           : #{ports.web}")
-    io.info.("  sim-ui        : #{ports.sim}")
     io.info.("")
     save_ports(ports, io, opts)
     io.info.("")

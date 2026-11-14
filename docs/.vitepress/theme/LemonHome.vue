@@ -26,7 +26,7 @@ async function copyInstall(command) {
   }
 }
 
-const ticker = ['Durable sessions', 'Native subagents', 'Memory & recall', 'Reusable skills', 'Your models, your keys', 'Terminal', 'Browser', 'Telegram & Discord', 'MCP tools', 'Supervised on the BEAM', 'LemonSim arenas']
+const ticker = ['Durable sessions', 'Native subagents', 'Memory & recall', 'Reusable skills', 'Your models, your keys', 'Terminal', 'Browser', 'Telegram & Discord', 'MCP tools', 'Supervised on the BEAM']
 const tickerColors = ['yellow', 'green', 'blue', 'pink', 'purple', 'orange', 'red']
 
 const features = [
@@ -46,7 +46,6 @@ const workers = [
 const paths = [
   { color: 'yellow', mood: 'happy', leaf: true, tag: 'Use Lemon Bot', title: 'Your first useful Bot.', text: 'Install, connect a model, and create a Bot in your browser. Review commands before they run.', link: '/getting-started/lemon-bot', label: 'Set up Lemon Bot' },
   { color: 'green', mood: 'joy', tag: 'Build with Lemon', title: 'Make it your own.', text: 'Explore the agent stack, write reusable skills, and build on the control plane.', link: '/getting-started/build-your-first-agent', label: 'Build your first agent' },
-  { color: 'red', mood: 'derp', tag: 'Explore LemonSim', title: 'Put agents to the test.', text: 'Run deterministic, event-sourced simulation worlds with replay verification.', link: '/benchmarks/quickstart', label: 'Enter the arena' },
 ]
 
 const choir = ['green', 'blue', 'pink', 'yellow', 'purple', 'orange', 'red']

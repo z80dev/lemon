@@ -234,7 +234,7 @@ auto_approve = true
                 root = Path(directory) / str(index)
                 config = paired.paired_configuration(self.base, variant)
                 env = paired.isolated_environment(root, config, variant, credentials,
-                                                  [4200 + index, 4300 + index, 4400 + index])
+                                                  [4200 + index, 4300 + index])
                 environments.append(env)
                 home = Path(env['HOME'])
                 config_file = home / '.lemon' / 'config.toml'
@@ -252,7 +252,6 @@ auto_approve = true
                                  'legacy' if variant == 'baseline' else 'coding')
                 self.assertEqual(env['LEMON_CONTROL_PLANE_PORT'], str(4200 + index))
                 self.assertEqual(env['LEMON_WEB_PORT'], str(4300 + index))
-                self.assertEqual(env['LEMON_SIM_UI_PORT'], str(4400 + index))
                 self.assertEqual(env['LEMON_GATEWAY_HEALTH_PORT'], '0')
                 self.assertEqual(env['LEMON_ROUTER_HEALTH_PORT'], '0')
                 self.assertEqual(env['BENCHMARK_PROVIDER_API_KEY'], credentials['BENCHMARK_PROVIDER_API_KEY'])
@@ -278,7 +277,7 @@ auto_approve = true
                 ambient = {'HOME': str(original_home), **overrides}
                 with self.subTest(overrides=overrides), patch.dict(os.environ, ambient, clear=True):
                     environment = paired.isolated_environment(
-                        Path(directory) / str(index), self.base, 'baseline', {}, [4201, 4301, 4401])
+                        Path(directory) / str(index), self.base, 'baseline', {}, [4201, 4301])
                     expected_mix = original_home / ('installed-mix' if overrides else '.mix')
                     expected_hex = (Path.cwd() / overrides['HEX_HOME']
                                     if overrides else original_home / '.hex')
@@ -756,7 +755,7 @@ class FixtureAssertionSafetyTests(unittest.TestCase):
             return True
 
         result = unittest.TestResult()
-        with patch.object(native.paired, 'runtime_ports', return_value=[4201, 4301, 4401]), \
+        with patch.object(native.paired, 'runtime_ports', return_value=[4201, 4301]), \
                 patch.object(native.paired, 'isolated_environment', return_value={}), \
                 patch.object(native.subprocess, 'Popen', side_effect=launch), \
                 patch.object(native, 'group_rows', return_value=[witness]), \
@@ -859,7 +858,7 @@ class ProcessCleanupTests(unittest.TestCase):
             root = Path(directory)
             environment = paired.isolated_environment(
                 root / 'state', ConfigurationIsolationTests.base, 'coding',
-                {'BENCHMARK_PROVIDER_API_KEY': 'private-approved-credential'}, [4201, 4301, 4401])
+                {'BENCHMARK_PROVIDER_API_KEY': 'private-approved-credential'}, [4201, 4301])
             environment.update({'ERL_FLAGS': '+S 2:2', 'HTTPS_PROXY': 'private-proxy',
                                 'OPENAI_API_KEY': 'private-unapproved-credential'})
             ebins = [root / '_build' / environment.get('MIX_ENV', 'dev') / 'lib' / app / 'ebin'
@@ -1186,7 +1185,7 @@ class RealFixtureExecutionTests(unittest.TestCase):
             Path(self.directory.name) / 'runtime',
             paired.paired_configuration(ConfigurationIsolationTests.base, 'coding'),
             'coding', {'BENCHMARK_PROVIDER_API_KEY': 'explicit-offline-secret'},
-            [4201, 4301, 4401],
+            [4201, 4301],
         )
         self.cli.write_text('#!' + sys.executable + '\n' + textwrap.dedent('''\
             import json, os, pathlib, sys, time

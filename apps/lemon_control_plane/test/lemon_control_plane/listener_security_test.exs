@@ -224,8 +224,7 @@ defmodule LemonControlPlane.ListenerSecurityTest do
     for name <- [
           "LEMON_CONTROL_PLANE_BIND_IP",
           "LEMON_CONTROL_PLANE_NODE_BIND_IP",
-          "LEMON_WEB_BIND_IP",
-          "LEMON_SIM_UI_BIND_IP"
+          "LEMON_WEB_BIND_IP"
         ] do
       previous = System.get_env(name)
       System.put_env(name, "invalid-address")

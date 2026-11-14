@@ -139,7 +139,7 @@ def referencing_tests(root, app, modules):
     return sorted(matches)
 
 
-def select(root, base="origin/main", focused=False, narrow=False, all_apps=False, exclude=()):
+def select(root, base="origin/main", focused=False, narrow=False, all_apps=False):
     files, base_reason = ([], None) if all_apps else changed_files(root, base)
     graph = umbrella_graph(root)
     touched, readers = set(), set()
@@ -178,10 +178,7 @@ def select(root, base="origin/main", focused=False, narrow=False, all_apps=False
     lanes["clients"] |= full
     lanes["apple"] |= full
     lanes["lemon_bot"] |= full
-    excluded = sorted(affected & set(exclude))
-    if excluded:
-        reasons.append(f"excluded by --exclude-app: {' '.join(excluded)}")
-    apps = sorted(affected - set(exclude))
+    apps = sorted(affected)
     test_paths = [f"apps/{app}/test" for app in apps]
 
     # --narrow (local premerge only): touched apps and data readers run whole;
@@ -216,9 +213,7 @@ def select(root, base="origin/main", focused=False, narrow=False, all_apps=False
         "lanes": lanes,
         "reasons": reasons,
         "changed_files": files,
-        "focused_test_files": [
-            path for path in focused_tests(root, files) if PurePosixPath(path).parts[1] not in exclude
-        ] if focused else [],
+        "focused_test_files": focused_tests(root, files) if focused else [],
     }
 
 
@@ -256,10 +251,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="origin/main")
     parser.add_argument("--all", action="store_true", help="select every app without diffing (full scope)")
-    parser.add_argument(
-        "--exclude-app", action="append", default=[], metavar="APP",
-        help="drop APP from the selected apps and test paths (repeatable)",
-    )
     parser.add_argument("--format", choices=("human", "github", "json"), default="human")
     parser.add_argument("--focused", action="store_true")
     parser.add_argument(
@@ -269,7 +260,7 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     try:
-        selection = select(root, args.base, args.focused, args.narrow, args.all, args.exclude_app)
+        selection = select(root, args.base, args.focused, args.narrow, args.all)
         if args.format == "json":
             print(json.dumps(selection))
         else:

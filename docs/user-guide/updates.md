@@ -1,6 +1,6 @@
 # Update, roll back, and uninstall Lemon
 
-Installer-managed `lemon_runtime_min`, `lemon_runtime_full`, and simulation
+Installer-managed `lemon_runtime_min` and `lemon_runtime_full`
 releases expose a preview-confirm update lifecycle. Lemon stages verified
 artifacts and moves the active pointers. It restarts verified own processes
 that were running before the update; a stopped installation stays stopped.

@@ -39,8 +39,8 @@ class SelectorTest(unittest.TestCase):
         self.git("config", "user.email", "selector@example.invalid")
         self.git("config", "user.name", "Selector fixture")
         dependencies = {
-            "lemon_core": [], "lemon_sim": ["lemon_core"],
-            "lemon_sim_ui": ["lemon_sim"], "lemon_honcho": ["lemon_core"],
+            "lemon_core": [], "lemon_skills": ["lemon_core"],
+            "lemon_web": ["lemon_skills"], "lemon_honcho": ["lemon_core"],
             "lemon_router": ["lemon_core"], "lemon_control_plane": ["lemon_router"],
             "lemon_channels": ["lemon_core"], "lemon_platform_test": ["lemon_channels"],
             "coding_agent": ["lemon_platform_test"],
@@ -51,7 +51,7 @@ class SelectorTest(unittest.TestCase):
             self.put(f"apps/{app}/lib/sample.ex", "# fixture\n")
         self.put("apps/lemon_core/test/env_test.exs", 'File.read!("docs/config-registry.md")\n')
         self.put("apps/lemon_control_plane/test/tui_test.exs", 'Path.join(root, "clients/tui")\n')
-        self.put("apps/lemon_sim/test/sample_test.exs", "# fixture test\n")
+        self.put("apps/lemon_skills/test/sample_test.exs", "# fixture test\n")
         self.put("docs/config-registry.md", "registry\n")
         self.put("docs/unreferenced.md", "guide\n")
         self.put("clients/tui/src/index.ts", "// fixture\n")
@@ -87,24 +87,13 @@ class SelectorTest(unittest.TestCase):
         self.assertEqual(result["changed_files"], [])
 
     def test_app_reverse_dependencies(self):
-        self.put("apps/lemon_sim/lib/sample.ex")
-        self.assertEqual(self.selection()["apps"], ["lemon_sim", "lemon_sim_ui"])
-
-    def test_excluded_apps_leave_selection_and_can_empty_it(self):
-        exclude = ("lemon_sim", "lemon_sim_ui")
-        self.put("apps/lemon_sim/lib/sample.ex")
-        result = self.selection(exclude=exclude)
-        self.assertEqual((result["scope"], result["apps"], result["test_paths"]), ("none", [], []))
-        self.put("apps/lemon_core/lib/sample.ex")
-        result = self.selection(exclude=exclude)
-        self.assertEqual(len(result["apps"]), 7)
-        self.assertFalse(set(exclude) & set(result["apps"]))
+        self.put("apps/lemon_skills/lib/sample.ex")
+        self.assertEqual(self.selection()["apps"], ["lemon_skills", "lemon_web"])
 
     def test_all_selects_every_app_without_a_diff(self):
-        result = self.selection(base="no-such-ref", all_apps=True, exclude=("lemon_sim_ui",))
+        result = self.selection(base="no-such-ref", all_apps=True)
         self.assertEqual(result["scope"], "full")
-        self.assertEqual(len(result["test_paths"]), 8)
-        self.assertNotIn("apps/lemon_sim_ui/test", result["test_paths"])
+        self.assertEqual(len(result["test_paths"]), 9)
         self.assertTrue(result["lanes"]["lemon_bot"])
 
     def test_core_includes_transitive_and_test_only_dependencies(self):
@@ -120,7 +109,7 @@ class SelectorTest(unittest.TestCase):
         self.assertEqual(self.selection()["apps"], ["coding_agent", "lemon_channels", "lemon_platform_test"])
 
     def test_shared_and_unknown_paths_are_full(self):
-        for path in ("mix.lock", "unexpected.txt", "scripts/new_tool", "apps/lemon_sim/config/test.exs", "apps/lemon_sim/mix.exs", "apps/lemon_sim/.formatter.exs", ".github/workflows/example.yml"):
+        for path in ("mix.lock", "unexpected.txt", "scripts/new_tool", "apps/lemon_skills/config/test.exs", "apps/lemon_skills/mix.exs", "apps/lemon_skills/.formatter.exs", ".github/workflows/example.yml"):
             with self.subTest(path=path):
                 self.put(path)
                 result = self.selection()
@@ -186,11 +175,11 @@ class SelectorTest(unittest.TestCase):
         self.assertEqual(self.selection()["scope"], "none")
 
     def test_committed_staged_unstaged_deleted_and_untracked_paths(self):
-        self.put("apps/lemon_sim/lib/committed.ex")
+        self.put("apps/lemon_skills/lib/committed.ex")
         self.commit()
-        self.put("apps/lemon_sim/lib/staged.ex")
-        self.git("add", "apps/lemon_sim/lib/staged.ex")
-        self.put("apps/lemon_sim/lib/sample.ex")
+        self.put("apps/lemon_skills/lib/staged.ex")
+        self.git("add", "apps/lemon_skills/lib/staged.ex")
+        self.put("apps/lemon_skills/lib/sample.ex")
         (self.root / "apps/lemon_honcho/lib/sample.ex").unlink()
         self.put("apps/lemon_router/lib/untracked.ex")
         result = self.selection()
@@ -205,8 +194,8 @@ class SelectorTest(unittest.TestCase):
         self.commit()
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
         self.git("checkout", "-qb", "topic", base)
-        self.put("apps/lemon_sim/lib/sample.ex")
-        self.assertEqual(self.selection()["apps"], ["lemon_sim", "lemon_sim_ui"])
+        self.put("apps/lemon_skills/lib/sample.ex")
+        self.assertEqual(self.selection()["apps"], ["lemon_skills", "lemon_web"])
 
     def test_missing_base_falls_back_to_full(self):
         result = self.selection(base="no-such-ref")
@@ -222,13 +211,13 @@ class SelectorTest(unittest.TestCase):
         self.assertEqual(result["scope"], "full")
 
     def test_focused_paths_exist_and_handle_spaces(self):
-        self.put("apps/lemon_sim/lib/sample.ex")
-        self.put("apps/lemon_sim/test/space name_test.exs")
-        self.put("apps/lemon_sim/test/deleted_test.exs")
+        self.put("apps/lemon_skills/lib/sample.ex")
+        self.put("apps/lemon_skills/test/space name_test.exs")
+        self.put("apps/lemon_skills/test/deleted_test.exs")
         self.commit()
-        (self.root / "apps/lemon_sim/test/deleted_test.exs").unlink()
+        (self.root / "apps/lemon_skills/test/deleted_test.exs").unlink()
         result = self.selection(focused=True)
-        self.assertEqual(result["focused_test_files"], ["apps/lemon_sim/test/sample_test.exs", "apps/lemon_sim/test/space name_test.exs"])
+        self.assertEqual(result["focused_test_files"], ["apps/lemon_skills/test/sample_test.exs", "apps/lemon_skills/test/space name_test.exs"])
 
     def test_github_outputs_append_exact_keys_and_summary(self):
         output = Path(self.temp.name) / "output"
@@ -261,16 +250,16 @@ class SelectorTest(unittest.TestCase):
         return result, calls
 
     def test_changed_runner_scopes_and_preserves_arguments(self):
-        self.put("apps/lemon_sim/lib/sample.ex")
+        self.put("apps/lemon_skills/lib/sample.ex")
         result, calls = self.run_lane("changed", "--seed", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(calls, [["compile", "--warnings-as-errors"], ["test", "--exclude", "integration", "apps/lemon_sim/test", "apps/lemon_sim_ui/test", "--seed", "1"]])
+        self.assertEqual(calls, [["compile", "--warnings-as-errors"], ["test", "--exclude", "integration", "apps/lemon_skills/test", "apps/lemon_web/test", "--seed", "1"]])
 
     def test_focused_runner_does_not_run_app_paths(self):
-        self.put("apps/lemon_sim/lib/sample.ex")
+        self.put("apps/lemon_skills/lib/sample.ex")
         result, calls = self.run_lane("changed", "--focused")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(calls[-1], ["test", "--exclude", "integration", "apps/lemon_sim/test/sample_test.exs"])
+        self.assertEqual(calls[-1], ["test", "--exclude", "integration", "apps/lemon_skills/test/sample_test.exs"])
         self.assertIn("NOT a substitute", result.stdout)
 
     def test_empty_runner_skips_exunit(self):
@@ -280,21 +269,21 @@ class SelectorTest(unittest.TestCase):
         self.assertIn("skipping ExUnit", result.stdout)
 
     def test_premerge_order_and_failure_stops_before_tests(self):
-        self.put("apps/lemon_sim/lib/sample.ex")
+        self.put("apps/lemon_skills/lib/sample.ex")
         result, calls = self.run_lane("premerge", fail_command="credo")
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertEqual([call[0] for call in calls], ["format", "credo"])
         self.assertIn("premerge credo failed", result.stderr)
 
     def test_premerge_compile_failure_stops_before_exunit(self):
-        self.put("apps/lemon_sim/lib/sample.ex")
+        self.put("apps/lemon_skills/lib/sample.ex")
         result, calls = self.run_lane("premerge", fail_command="compile")
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertEqual([call[0] for call in calls], ["format", "credo", "compile"])
         self.assertIn("premerge changed failed", result.stderr)
 
     def test_premerge_end_to_end_command_order(self):
-        self.put("apps/lemon_sim/lib/sample.ex")
+        self.put("apps/lemon_skills/lib/sample.ex")
         result, calls = self.run_lane("premerge")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([call[0] for call in calls], ["format", "credo", "compile", "test"])
@@ -340,7 +329,7 @@ class SelectorTest(unittest.TestCase):
         self.assertNotIn("apps/lemon_router/test", result["test_paths"])
         # Shared test support naming the module runs the whole app.
         self.assertIn("apps/lemon_channels/test", result["test_paths"])
-        self.assertNotIn("apps/lemon_sim/test", result["test_paths"])
+        self.assertNotIn("apps/lemon_skills/test", result["test_paths"])
         # Without --narrow (PR CI) every affected app still runs whole.
         self.assertIn("apps/lemon_router/test", self.selection()["test_paths"])
 

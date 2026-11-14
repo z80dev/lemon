@@ -22,7 +22,7 @@
 #     pinned to the real cache dirs first, so builds stay warm)
 #   - unique node name product_smoke_$$ + random cookie: cannot join or attach
 #     to any other Erlang node
-#   - control-plane / web / sim-UI ports are free ports chosen at runtime
+#   - control-plane / web ports are free ports chosen at runtime
 #   - LEMON_GATEWAY_HEALTH_PORT=0 / LEMON_ROUTER_HEALTH_PORT=0: the fixed-port
 #     health listeners (4042/…) bind an ephemeral port instead of colliding
 #     with a running instance (documented port-collision override)
@@ -108,12 +108,12 @@ done
 SNAME="product_smoke_$$"
 COOKIE="$(python3 -c 'import secrets; print("product_smoke_" + secrets.token_hex(16))')"
 
-# Four distinct free ports, held simultaneously while chosen.
-read -r CONTROL_PORT WEB_PORT SIM_PORT PROVIDER_PORT < <(python3 - <<'PY'
+# Three distinct free ports, held simultaneously while chosen.
+read -r CONTROL_PORT WEB_PORT PROVIDER_PORT < <(python3 - <<'PY'
 import socket
 
 socks = []
-for _ in range(4):
+for _ in range(3):
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
     socks.append(s)
@@ -127,7 +127,6 @@ PY
 
 export LEMON_CONTROL_PLANE_PORT="$CONTROL_PORT"
 export LEMON_WEB_PORT="$WEB_PORT"
-export LEMON_SIM_UI_PORT="$SIM_PORT"
 # Documented port-collision override: the gateway/router health listeners
 # default to fixed ports; 0 = bind an ephemeral port so a running instance's
 # listeners are never contended.
@@ -308,7 +307,6 @@ echo "[smoke] Workdir:       $WORK"
 echo "[smoke] Node:          $SNAME (random cookie)"
 echo "[smoke] Control plane: 127.0.0.1:$CONTROL_PORT"
 echo "[smoke] Web:           127.0.0.1:$WEB_PORT"
-echo "[smoke] Sim UI:        127.0.0.1:$SIM_PORT"
 
 START_EPOCH="$(date +%s)"
 
@@ -320,9 +318,7 @@ if [ "$MODE" = "release" ]; then
 
   echo "[smoke] Building release $RELEASE_PROFILE (MIX_ENV=prod)..."
   mix deps.get --only prod
-  mix sim_ui.assets.deploy
   mix 'do' --app lemon_web phx.digest
-  test -f apps/lemon_sim_ui/priv/static/cache_manifest.json
   test -f apps/lemon_web/priv/static/cache_manifest.json
   mix compile
   mix release "$RELEASE_PROFILE" --overwrite
@@ -337,7 +333,6 @@ else
     --cookie "$COOKIE" \
     --port "$CONTROL_PORT" \
     --web-port "$WEB_PORT" \
-    --sim-port "$SIM_PORT" \
     > "$WORK/runtime.log" 2>&1 &
   RUNTIME_PID=$!
 fi

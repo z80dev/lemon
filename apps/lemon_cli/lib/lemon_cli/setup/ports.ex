@@ -2,8 +2,8 @@ defmodule LemonCli.Setup.Ports do
   @moduledoc """
   Runtime port selection and persistence for `lemon setup`.
 
-  The runtime reads its ports from `LEMON_CONTROL_PLANE_PORT`, `LEMON_WEB_PORT`,
-  `LEMON_SIM_UI_PORT` and `LEMON_CONTROL_PLANE_NODE_PORT`. Launchers load
+  The runtime reads its ports from `LEMON_CONTROL_PLANE_PORT`, `LEMON_WEB_PORT`
+  and `LEMON_CONTROL_PLANE_NODE_PORT`. Launchers load
   `~/.lemon/ports.env` into whichever of those are unset and export them, so a
   port chosen here reaches the daemon, the TUI and one-shot CLI commands, while
   an explicit environment value still wins.
@@ -17,19 +17,18 @@ defmodule LemonCli.Setup.Ports do
   alias LemonCore.Paths
   alias LemonCore.Runtime.Profile
 
-  @type key :: :control | :web | :sim | :node
+  @type key :: :control | :web | :node
   @type ports :: %{
           optional(:control) => pos_integer(),
           optional(:node) => non_neg_integer(),
-          optional(:web) => pos_integer(),
-          optional(:sim) => pos_integer()
+          optional(:web) => pos_integer()
         }
 
   @file_name "ports.env"
   @search_span 100
   @default_node_port 4044
   @node_var "LEMON_CONTROL_PLANE_NODE_PORT"
-  @vars [control: "LEMON_CONTROL_PLANE_PORT", web: "LEMON_WEB_PORT", sim: "LEMON_SIM_UI_PORT"]
+  @vars [control: "LEMON_CONTROL_PLANE_PORT", web: "LEMON_WEB_PORT"]
 
   @doc "Default port for the node gateway (4044)."
   @spec default_node_port() :: pos_integer()
@@ -56,7 +55,6 @@ defmodule LemonCli.Setup.Ports do
   def label(:control), do: "control plane"
   def label(:node), do: "node gateway"
   def label(:web), do: "web UI"
-  def label(:sim), do: "sim UI"
 
   @doc """
   Whether nothing listens on `port` on loopback and Lemon could bind it there.

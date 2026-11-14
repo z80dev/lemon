@@ -88,7 +88,6 @@ web_output="$TEST_DIR/web-output"
 for command in daemon start; do
   LEMON_CONTROL_PLANE_PORT="$CONTROL_PORT" \
   LEMON_WEB_PORT="$WEB_PORT" \
-  LEMON_SIM_UI_PORT=1 \
     "$ROOT/bin/lemon" "$command" --no-distribution >"$launcher_output" 2>&1
 
   grep -Fq "a healthy Lemon runtime is already running on port $CONTROL_PORT; reusing it" \

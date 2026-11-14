@@ -232,8 +232,8 @@ local-only: your configured providers receive the data their requests need.
 ## Network security
 
 Lemon binds its listeners to `127.0.0.1` by default: the controller on `4040`,
-the node-only gateway on `4044`, the web UI on `4080`, the optional simulation
-UI on `4090`, Lemon Bot on `4100`, and the optional A2A endpoint on `9901`.
+the node-only gateway on `4044`, the web UI on `4080`, Lemon Bot on `4100`, and
+the optional A2A endpoint on `9901`.
 Erlang distribution and epmd also stay on loopback. Lemon Bot's local owner
 sign-in requires proof from the same OS user on the same machine; network or
 tailnet reachability alone never grants sign-in.
@@ -278,17 +278,9 @@ checkpoints, media generation, ACP, goals, kanban, and cron are previews.
 
 ## LemonSim
 
-The repository also contains **LemonSim**: deterministic, event-sourced worlds
-where models play each other. Use it to watch agents and to benchmark model
-behavior with replay-verifiable results. Try it with no API keys:
-
-```bash
-mix sim_ui.assets.setup && mix sim_ui.assets.build
-mix lemon.sim.demo --seed 42
-```
-
-See [LemonSim](apps/lemon_sim/README.md) and the
-[benchmark quickstart](docs/benchmarks/quickstart.md).
+**LemonSim**, deterministic event-sourced worlds where models play each other,
+lives in its own repository: [z80dev/lemon-sim](https://github.com/z80dev/lemon-sim).
+It is built on the published `lemon_core`, `lemon_agent` and `lemon_ai` packages.
 
 ## Develop from source
 

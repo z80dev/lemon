@@ -61,11 +61,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_platform_test: ["LemonPlatformTest"],
     lemon_router: ["LemonRouter"],
     lemon_skills: ["LemonSkills"],
-    lemon_web: ["LemonWeb"],
-    # lemon-sim product block (docs/platform-split.md). Namespace strings only:
-    # this table is a lint inventory of the apps in *this* repo, not a dependency.
-    lemon_sim: ["LemonSim"],
-    lemon_sim_ui: ["LemonSimUi"]
+    lemon_web: ["LemonWeb"]
   }
 
   @namespace_prefix_owners @app_namespaces
