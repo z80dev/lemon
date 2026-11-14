@@ -149,7 +149,7 @@ defmodule LemonGateway.WebhookTransportTest do
     assert {:ok, run_ctx} = dispatch_webhook(run_id, nil)
     assert_receive {:webhook_submit, %{run_id: ^run_id}}
 
-    assert {:ok, 200, payload} = Response.response_for_run(run_ctx)
+    assert {:ok, 200, payload} = Response.response_for_run(run_ctx, [])
     assert payload.run_id == run_id
     assert payload.status == "outcome_unknown"
     assert payload.retry_safe == false
@@ -177,7 +177,7 @@ defmodule LemonGateway.WebhookTransportTest do
 
     assert {:ok, run_ctx} = dispatch_webhook(run_id, idempotency_ctx, integration_id)
     assert_receive {:webhook_submit, %{run_id: ^run_id}}
-    assert {:ok, 200, payload} = Response.response_for_run(run_ctx)
+    assert {:ok, 200, payload} = Response.response_for_run(run_ctx, [])
 
     assert {:duplicate, 202, pending_payload} =
              Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
@@ -207,7 +207,7 @@ defmodule LemonGateway.WebhookTransportTest do
     log =
       capture_log(fn ->
         assert {:ok, run_ctx} = dispatch_webhook(run_id, nil)
-        assert {:ok, 200, payload} = Response.response_for_run(run_ctx)
+        assert {:ok, 200, payload} = Response.response_for_run(run_ctx, [])
         assert payload.status == "outcome_unknown"
         refute inspect(payload) =~ secret
       end)
