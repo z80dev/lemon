@@ -386,19 +386,19 @@ defmodule LemonEvals.Support do
     })
   end
 
-  def assert_curator_prompt(prompt) do
+  def assert_curator_prompt(prompt, key_prefix \\ "kube-rollout", label \\ "curator") do
     cond do
       not String.contains?(prompt, "Use read_skill") ->
-        {:error, "curator prompt does not require read_skill"}
+        {:error, "#{label} prompt does not require read_skill"}
 
       not String.contains?(prompt, "skill_manage") ->
-        {:error, "curator prompt does not mention skill_manage"}
+        {:error, "#{label} prompt does not mention skill_manage"}
 
-      not String.contains?(prompt, "kube-rollout-verify") ->
-        {:error, "curator prompt missing kube-rollout-verify"}
+      not String.contains?(prompt, "#{key_prefix}-verify") ->
+        {:error, "#{label} prompt missing #{key_prefix}-verify"}
 
-      not String.contains?(prompt, "kube-rollout-rollback") ->
-        {:error, "curator prompt missing kube-rollout-rollback"}
+      not String.contains?(prompt, "#{key_prefix}-rollback") ->
+        {:error, "#{label} prompt missing #{key_prefix}-rollback"}
 
       true ->
         :ok
@@ -667,80 +667,45 @@ defmodule LemonEvals.Support do
   end
 
   def assert_final_after_join(messages) do
-    final_index =
-      Enum.find_index(messages, fn
-        %AssistantMessage{stop_reason: :stop} -> true
-        _ -> false
-      end)
+    predicate = &match?(%{role: :tool_result, tool_name: "task", details: %{mode: "wait_all"}}, &1)
 
-    join_index =
-      Enum.find_index(messages, fn
-        %{role: :tool_result, tool_name: "task", details: %{mode: "wait_all"}} -> true
-        _ -> false
-      end)
-
-    final_text =
-      messages
-      |> Enum.reverse()
-      |> Enum.find_value("", fn
-        %AssistantMessage{stop_reason: :stop} = message -> stringify_content(message.content)
-        _ -> nil
-      end)
-
-    cond do
-      is_nil(join_index) ->
-        {:error, "join result missing"}
-
-      is_nil(final_index) ->
-        {:error, "final answer missing"}
-
-      join_index > final_index ->
-        {:error, "final answer appeared before join result"}
-
-      not String.contains?(final_text, "child task output") ->
-        {:error, "final answer did not include joined task output"}
-
-      true ->
+    with :ok <- assert_final_after(messages, predicate, "join") do
+      if String.contains?(final_stop_text(messages), "child task output") do
         :ok
+      else
+        {:error, "final answer did not include joined task output"}
+      end
     end
   end
 
   def assert_final_after_tool(messages, tool_name) do
-    final_index =
-      Enum.find_index(messages, fn
-        %AssistantMessage{stop_reason: :stop} -> true
-        _ -> false
-      end)
+    predicate = &match?(%{role: :tool_result, tool_name: ^tool_name}, &1)
+    assert_final_after(messages, predicate, tool_name)
+  end
 
-    tool_index =
-      Enum.find_index(messages, fn
-        %{role: :tool_result, tool_name: ^tool_name} -> true
-        _ -> false
-      end)
+  defp assert_final_after(messages, predicate, label) do
+    final_index = Enum.find_index(messages, &match?(%AssistantMessage{stop_reason: :stop}, &1))
+    tool_index = Enum.find_index(messages, predicate)
 
     cond do
-      is_nil(tool_index) ->
-        {:error, "#{tool_name} result missing"}
-
-      is_nil(final_index) ->
-        {:error, "final answer missing"}
-
-      tool_index > final_index ->
-        {:error, "final answer appeared before #{tool_name} result"}
-
-      true ->
-        :ok
+      is_nil(tool_index) -> {:error, "#{label} result missing"}
+      is_nil(final_index) -> {:error, "final answer missing"}
+      tool_index > final_index -> {:error, "final answer appeared before #{label} result"}
+      true -> :ok
     end
   end
 
+  defp final_stop_text(messages) do
+    messages
+    |> Enum.reverse()
+    |> Enum.find_value("", fn
+      %AssistantMessage{stop_reason: :stop} = message -> stringify_content(message.content)
+      _ -> nil
+    end)
+  end
+
   def assert_final_contains(messages, expected_texts) do
-    final_text =
-      messages
-      |> Enum.reverse()
-      |> Enum.find_value("", fn
-        %AssistantMessage{stop_reason: :stop} = message -> stringify_content(message.content)
-        _ -> nil
-      end)
+    final_text = final_stop_text(messages)
 
     missing = Enum.reject(expected_texts, &String.contains?(final_text, &1))
 
@@ -752,13 +717,7 @@ defmodule LemonEvals.Support do
   end
 
   def assert_final_excludes(messages, forbidden_texts) do
-    final_text =
-      messages
-      |> Enum.reverse()
-      |> Enum.find_value("", fn
-        %AssistantMessage{stop_reason: :stop} = message -> stringify_content(message.content)
-        _ -> nil
-      end)
+    final_text = final_stop_text(messages)
 
     normalized_final = String.downcase(final_text)
 
@@ -774,7 +733,7 @@ defmodule LemonEvals.Support do
     end
   end
 
-  def assert_parallel_tasks_joined(messages) do
+  def assert_parallel_tasks_joined(messages, marker_prefix \\ "") do
     task_results =
       Enum.filter(messages, &match?(%{role: :tool_result, tool_name: "task"}, &1))
 
@@ -793,16 +752,16 @@ defmodule LemonEvals.Support do
 
     cond do
       queued_count != 2 ->
-        {:error, "expected two queued task results, got #{inspect(task_results)}"}
+        {:error, "expected two queued #{marker_prefix}task results, got #{inspect(task_results)}"}
 
       is_nil(join_result) ->
-        {:error, "expected wait_all join result for two tasks"}
+        {:error, "expected #{marker_prefix}wait_all join result for two tasks"}
 
-      not String.contains?(join_text, "child output 1") ->
-        {:error, "join result missing child output 1"}
+      not String.contains?(join_text, "#{marker_prefix}child output 1") ->
+        {:error, "#{marker_prefix}join result missing child output 1"}
 
-      not String.contains?(join_text, "child output 2") ->
-        {:error, "join result missing child output 2"}
+      not String.contains?(join_text, "#{marker_prefix}child output 2") ->
+        {:error, "#{marker_prefix}join result missing child output 2"}
 
       true ->
         :ok
@@ -1118,4 +1077,24 @@ defmodule LemonEvals.Support do
 
   def format_reason(reason) when is_binary(reason), do: reason
   def format_reason(reason), do: inspect(reason)
+  def run_contract(name, fun) when is_function(fun, 0) do
+    case fun.() do
+      {:error, reason} -> contract_fail(name, format_reason(reason), %{})
+      result -> result
+    end
+  rescue
+    e -> contract_fail(name, Exception.message(e), %{})
+  end
+
+  def run_contract(name, fun) when is_function(fun, 1) do
+    run_contract(name, fn ->
+      with {:ok, tmp_dir} <- create_tmp_dir() do
+        try do
+          fun.(tmp_dir)
+        after
+          File.rm_rf(tmp_dir)
+        end
+      end
+    end)
+  end
 end
