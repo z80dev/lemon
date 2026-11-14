@@ -135,7 +135,6 @@ defmodule LemonCore.Service.Role do
            filename
          ) do
       [_, kind, name] when kind in ["node", "tunnel"] -> named(kind, name)
-      [_, kind, name, "", ""] when kind in ["node", "tunnel"] -> named(kind, name)
       [_, "", "", kind, name] -> named(kind, name)
       _ -> nil
     end

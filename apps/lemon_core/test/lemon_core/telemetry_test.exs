@@ -80,30 +80,4 @@ defmodule LemonCore.TelemetryTest do
                       run_id: "run_1"
                     }}
   end
-
-  test "span/3 emits start and stop events via :telemetry.span" do
-    attach_handler([
-      [:lemon, :channels, :deliver, :start],
-      [:lemon, :channels, :deliver, :stop]
-    ])
-
-    trace_id = "trace_#{System.unique_integer([:positive, :monotonic])}"
-
-    result =
-      Telemetry.span([:lemon, :channels, :deliver], %{trace_id: trace_id}, fn ->
-        :ok
-      end)
-
-    assert result == :ok
-
-    assert_receive {:telemetry_event, [:lemon, :channels, :deliver, :start], start_measurements,
-                    %{trace_id: ^trace_id}}
-
-    assert is_integer(start_measurements.system_time)
-
-    assert_receive {:telemetry_event, [:lemon, :channels, :deliver, :stop], stop_measurements,
-                    %{trace_id: ^trace_id}}
-
-    assert is_integer(stop_measurements.duration)
-  end
 end

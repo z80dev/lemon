@@ -17,7 +17,7 @@ defmodule Mix.Tasks.Lemon.Secrets.Check do
 
   @impl true
   def run(_args) do
-    start_lemon_core!()
+    Mix.Tasks.Lemon.Secrets.ensure_started!()
 
     # Find the longest name for column alignment
     max_name_len =
@@ -68,13 +68,4 @@ defmodule Mix.Tasks.Lemon.Secrets.Check do
     do: String.starts_with?(source, "external:")
 
   defp external_source?(_source), do: false
-
-  defp start_lemon_core! do
-    Mix.Task.run("loadpaths")
-
-    case Application.ensure_all_started(:lemon_core) do
-      {:ok, _} -> :ok
-      {:error, {app, reason}} -> Mix.raise("Failed to start #{app}: #{inspect(reason)}")
-    end
-  end
 end

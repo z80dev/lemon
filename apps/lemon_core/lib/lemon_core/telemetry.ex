@@ -66,18 +66,6 @@ defmodule LemonCore.Telemetry do
   """
 
   @doc """
-  Execute a function and emit start/stop/exception telemetry.
-  """
-  @spec span(event_prefix :: [atom()], metadata :: map(), fun :: (-> result)) :: result
-        when result: term()
-  def span(event_prefix, metadata, fun) do
-    :telemetry.span(event_prefix, metadata, fn ->
-      result = fun.()
-      {result, metadata}
-    end)
-  end
-
-  @doc """
   Emit a telemetry event.
   """
   @spec emit(event :: [atom()], measurements :: map(), metadata :: map()) :: :ok

@@ -2,8 +2,6 @@ defmodule LemonCore.Events.RunPhaseChanged do
   @moduledoc """
   A run moved between lifecycle phases. Published on `run:<run_id>` by both the gateway
   run process and the router's phase publisher.
-
-  Replaces `LemonCore.RunPhaseEvent.build/1`, which was this struct written as a map.
   """
 
   use LemonCore.Events.Payload,

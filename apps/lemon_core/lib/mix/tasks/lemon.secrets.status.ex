@@ -12,7 +12,7 @@ defmodule Mix.Tasks.Lemon.Secrets.Status do
 
   @impl true
   def run(_args) do
-    start_lemon_core!()
+    Mix.Tasks.Lemon.Secrets.ensure_started!()
 
     status = Secrets.status()
 
@@ -27,14 +27,5 @@ defmodule Mix.Tasks.Lemon.Secrets.Status do
 
     Mix.shell().info("owner: #{status.owner}")
     Mix.shell().info("count: #{status.count}")
-  end
-
-  defp start_lemon_core! do
-    Mix.Task.run("loadpaths")
-
-    case Application.ensure_all_started(:lemon_core) do
-      {:ok, _} -> :ok
-      {:error, {app, reason}} -> Mix.raise("Failed to start #{app}: #{inspect(reason)}")
-    end
   end
 end
