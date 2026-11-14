@@ -24,6 +24,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
       provider_config_value: 2,
       provider_error_kind: 1,
       reject_blank_values: 1,
+      stringify_atoms: 1,
       transient_status?: 1,
       wait_for_job: 3
     ]
