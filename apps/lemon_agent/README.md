@@ -225,7 +225,6 @@ The library emits telemetry events under the `[:lemon_agent, ...]` prefix:
 - `[:lemon_agent, :tool_task, :start]` / `[:lemon_agent, :tool_task, :end]` / `[:lemon_agent, :tool_task, :error]` -- Individual tool execution.
 - `[:lemon_agent, :tool_result, :emit]` -- Tool result emission.
 - `[:lemon_agent, :context, :size]` / `[:lemon_agent, :context, :warning]` / `[:lemon_agent, :context, :truncated]` -- Context management.
-- `[:lemon_agent, :subagent, :spawn]` / `[:lemon_agent, :subagent, :end]` -- Subagent lifecycle.
 
 ## Configuration
 
@@ -427,7 +426,6 @@ apps/lemon_agent/test/
 |-- agent_core_test.exs               Top-level module tests
 |-- agent_core_module_test.exs         Module-level tests
 |-- agent_registry_test.exs            Registry tests
-|-- subagent_supervisor_test.exs       Subagent supervisor tests
 |-- agent_core/
 |   |-- agent_test.exs                Agent GenServer tests
 |   |-- agent_queue_test.exs          Steering/follow-up queue tests
