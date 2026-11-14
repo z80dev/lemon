@@ -165,10 +165,7 @@ defmodule LemonAgent.ModelRuntime.CredentialHealth do
     {normalize_provider(provider), to_string(ref)}
   end
 
-  defp normalize_provider(provider) do
-    ProviderNames.canonical_name(provider) ||
-      provider |> to_string() |> String.trim() |> String.downcase() |> String.replace("-", "_")
-  end
+  defp normalize_provider(provider), do: ProviderNames.normalize(provider)
 
   defp now_ms, do: System.monotonic_time(:millisecond)
 

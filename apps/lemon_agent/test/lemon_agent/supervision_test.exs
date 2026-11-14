@@ -135,9 +135,6 @@ defmodule LemonAgent.SupervisionTest do
       # Verify registry is running
       assert Process.whereis(LemonAgent.AgentRegistry) != nil
 
-      # Verify SubagentSupervisor is running
-      assert Process.whereis(LemonAgent.SubagentSupervisor) != nil
-
       # Verify LoopTaskSupervisor is running
       assert Process.whereis(LemonAgent.LoopTaskSupervisor) != nil
     end

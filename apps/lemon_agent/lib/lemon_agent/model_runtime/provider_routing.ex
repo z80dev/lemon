@@ -470,23 +470,7 @@ defmodule LemonAgent.ModelRuntime.ProviderRouting do
   defp normalize_list(value) when is_binary(value), do: normalize_list(String.split(value, ","))
   defp normalize_list(_), do: []
 
-  defp normalize_provider(value) when is_atom(value) and not is_nil(value),
-    do: value |> Atom.to_string() |> normalize_provider()
-
-  defp normalize_provider(value) when is_binary(value) do
-    case ProviderNames.canonical_name(value) do
-      nil ->
-        value
-        |> String.trim()
-        |> String.downcase()
-        |> String.replace("-", "_")
-
-      canonical ->
-        canonical
-    end
-  end
-
-  defp normalize_provider(_), do: nil
+  defp normalize_provider(value), do: ProviderNames.normalize(value)
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(value), do: not is_nil(value)
