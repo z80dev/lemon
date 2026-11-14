@@ -4,6 +4,11 @@ Protocol (owned by CodingAgent.Eval.Kernel):
 
 * Commands arrive on the original stdin, one JSON object per line:
   {"op": "execute", "id": <int>, "code": <str>}.
+* Tool bridge: awaiting `tools.<name>(...)` emits a
+  {"type": "tool_call", "id": <cell>, "call": <int>, "tool": <name>, "args": {...}}
+  frame; the reader thread settles it from a later
+  {"op": "tool_result" | "tool_error", "id": <cell>, "call": <int>, ...} line
+  on the event loop that awaits it, so replies arrive while a cell runs.
 * User code keeps the real stdout/stderr (fd 1/2, merged by the host), so
   prints, C extensions and subprocesses all stream as raw output.
 * Protocol frames are written to stdout as single lines prefixed with
@@ -81,12 +86,20 @@ def main():
                 written = os.write(1, view)
                 view = view[written:]
 
+    tools = ToolBridge(send)
     commands = queue.Queue()
 
     def read_commands():
         with os.fdopen(command_fd, "rb") as source:
             for line in source:
-                commands.put(line)
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(message, dict) and message.get("op") in ("tool_result", "tool_error"):
+                    tools._dispatch(message)
+                else:
+                    commands.put(message)
         # The host closed the pipe: nothing can read results any more.
         if group_leader:
             os.killpg(os.getpgrp(), signal.SIGKILL)
@@ -150,6 +163,7 @@ def main():
         display_count += 1
 
     namespace["display"] = display
+    namespace["tools"] = tools
 
     def run_magic(code):
         words = shlex.split(code.strip())
@@ -182,11 +196,7 @@ def main():
 
     cell = 0
     while True:
-        line = commands.get()
-        try:
-            message = json.loads(line)
-        except ValueError:
-            continue
+        message = commands.get()
         if not isinstance(message, dict) or message.get("op") != "execute":
             continue
 
@@ -194,6 +204,7 @@ def main():
         display_bytes = 0
         display_count = 0
         code = str(message.get("code", ""))
+        tools._start_cell(message.get("id"))
         try:
             executing = True
             if code.lstrip().startswith("%"):
@@ -205,9 +216,114 @@ def main():
             result = {"status": "error", "error": format_user_exception(exc)}
         finally:
             executing = False
+            tools._end_cell()
         result["type"] = "result"
         result["id"] = message.get("id")
         send(result)
+
+
+class ToolError(Exception):
+    """A session tool call the host refused (unknown tool, invalid arguments)."""
+
+
+class ToolBridge:
+    """Awaitable session tool calls from a cell.
+
+    `await tools.bash(command="ls")`, `await tools.bash({"command": "ls"})` or
+    `await tools.call("bash", {...})` return the result dict
+    {"ok", "text", "details", "images"}; `asyncio.gather` runs calls concurrently.
+    Calls run only while the cell that made them is executing.
+    """
+
+    def __init__(self, send):
+        self._send = send
+        self._lock = threading.Lock()
+        self._pending = {}
+        self._cell = None
+        self._counter = 0
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+
+        def invoke(args=None, /, **kwargs):
+            return self.call(name, args, **kwargs)
+
+        invoke.__name__ = invoke.__qualname__ = name
+        return invoke
+
+    def __repr__(self):
+        return "<session tools: await tools.<name>(**args) or tools.call(name, args)>"
+
+    def call(self, name, args=None, /, **kwargs):
+        return self._call(name, args, kwargs)
+
+    async def _call(self, name, args, kwargs):
+        if not isinstance(name, str) or not name:
+            raise TypeError("tools.call: tool name must be a non-empty string")
+        if args is None:
+            params = dict(kwargs)
+        elif isinstance(args, dict):
+            params = {**args, **kwargs}
+        else:
+            raise TypeError("tools.%s: arguments must be a dict or keyword arguments" % name)
+
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        with self._lock:
+            if self._cell is None:
+                raise ToolError("tools.%s: session tools are only available while a cell runs" % name)
+            self._counter += 1
+            call, cell = self._counter, self._cell
+            self._pending[call] = (cell, name, loop, future)
+
+        try:
+            self._send({"type": "tool_call", "id": cell, "call": call, "tool": name, "args": params})
+            return await future
+        finally:
+            with self._lock:
+                if call in self._pending and self._pending[call][3] is future:
+                    del self._pending[call]
+
+    def _start_cell(self, cell):
+        with self._lock:
+            stale = list(self._pending.values())
+            self._pending.clear()
+            self._cell = cell
+            self._counter = 0
+        # Calls left by an interrupted cell are never answered.
+        for _cell, _name, _loop, future in stale:
+            try:
+                future.cancel()
+            except RuntimeError:
+                pass
+
+    def _end_cell(self):
+        with self._lock:
+            self._cell = None
+
+    def _dispatch(self, message):
+        """Runs on the reader thread."""
+        call = message.get("call")
+        with self._lock:
+            entry = self._pending.get(call) if isinstance(call, int) else None
+            if entry is None or entry[0] != message.get("id"):
+                return
+            del self._pending[call]
+        _cell, name, loop, future = entry
+
+        def settle():
+            if future.done():
+                return
+            if message.get("op") == "tool_result":
+                future.set_result(message.get("result"))
+            else:
+                future.set_exception(ToolError("tools.%s: %s" % (name, message.get("message"))))
+
+        try:
+            loop.call_soon_threadsafe(settle)
+        except RuntimeError:
+            pass  # The awaiting loop has closed.
 
 
 def run_cell(namespace, loop, code, filename):

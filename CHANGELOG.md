@@ -8,7 +8,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- `eval` code mode: cells call session tools through a global `tools` object
+  (`await tools.bash({command: "uptime", node: "build-box"})` in JavaScript,
+  `await tools.bash(command="uptime")` in Python, or `tools.call(name, args)`),
+  fanning out concurrently with `Promise.all` / `asyncio.gather`. Calls resolve
+  through the session's policy- and approval-wrapped catalog, run at most 16 at
+  a time, inherit the cell's session mutation lock and are aborted with the
+  cell; only what the cell prints or returns reaches the model.
 
 ---
 

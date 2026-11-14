@@ -22,9 +22,16 @@ defmodule CodingAgent.Tools.Eval do
   `:eval_idle_timeout_ms` (default 30 minutes) kills idle kernels, and
   `:eval_runtimes` (`%{"py" => exe, "js" => exe}`) overrides the runtime
   executables.
+
+  Cells reach session tools through a global `tools` object
+  (`CodingAgent.Eval.Bridge`). `:tool_resolver` (`name -> {:ok, AgentTool} |
+  {:error, message}`) supplies the wrapped tool to run; without it a
+  `:session_pid` resolves through `CodingAgent.Session.bridge_tool/2`, and with
+  neither, tool calls fail in the cell. Inner results stay inside the cell: only
+  what it prints, displays or returns reaches the model.
   """
 
-  alias CodingAgent.Eval.{Kernel, KernelSupervisor, Output}
+  alias CodingAgent.Eval.{Bridge, Kernel, KernelSupervisor, Output}
   alias CodingAgent.Tools.Bash.StreamingPreview
   alias LemonAgent.AbortSignal
   alias LemonAgent.Security.ToolResultTrust
@@ -49,6 +56,11 @@ defmodule CodingAgent.Tools.Eval do
           "Top-level `await` works in both languages. Code runs in the project root; JS has " <>
           "`require` and `import` resolved from there. Use display(value) for PNG/JPEG bytes, " <>
           "markdown or JSON. Python supports standalone %pip install and %load magics. " <>
+          "Session tools are callable from a cell: JS `await tools.bash({command: \"ls\"})`, " <>
+          "Python `await tools.bash(command=\"ls\")`, or `tools.call(name, args)`; each resolves " <>
+          "to {ok, text, details, images}. Calls may carry `node` to run on a named node and run " <>
+          "concurrently with Promise.all / asyncio.gather. Only what the cell prints, displays " <>
+          "or returns reaches you, so filter and summarize inner results in code. " <>
           "Timeout first interrupts with a two-second grace to preserve state; abort or an " <>
           "unresponsive interrupt kills the kernel. `reset: true` starts that language fresh.",
       label: "Eval",
@@ -159,7 +171,7 @@ defmodule CodingAgent.Tools.Eval do
              pip_command: Keyword.get(opts, :eval_pip_command),
              idle_timeout_ms: Keyword.get(opts, :eval_idle_timeout_ms)
            ),
-         {:ok, %{ref: ref, restarted: restarted}} <-
+         {:ok, %{ref: ref, cell: cell, restarted: restarted}} <-
            start_cell(slot, request) do
       monitor = Process.monitor(slot)
 
@@ -175,8 +187,12 @@ defmodule CodingAgent.Tools.Eval do
         on_update: on_update
       }
 
+      bridge = Bridge.new(slot, ref, "#{request.language}#{cell}", tool_resolver(opts))
       preview = if is_function(on_update, 1), do: StreamingPreview.new()
-      {status, acc} = collect(ctx, Output.new(), preview)
+      {status, acc, bridge} = collect(ctx, Output.new(), preview, bridge)
+      # Every inner call has exited before this returns (and so before a held
+      # session lock they inherited can be released).
+      Bridge.shutdown(bridge)
 
       if deadline, do: Process.cancel_timer(deadline)
       Process.demonitor(monitor, [:flush])
@@ -188,6 +204,14 @@ defmodule CodingAgent.Tools.Eval do
       end
 
       finish(request, status, acc, restarted, started)
+    end
+  end
+
+  defp tool_resolver(opts) do
+    case {Keyword.get(opts, :tool_resolver), Keyword.get(opts, :session_pid)} do
+      {resolver, _pid} when is_function(resolver, 1) -> resolver
+      {nil, pid} when is_pid(pid) -> &CodingAgent.Session.bridge_tool(pid, &1)
+      _ -> nil
     end
   end
 
@@ -230,40 +254,51 @@ defmodule CodingAgent.Tools.Eval do
 
   # ── Cell collection ──────────────────────────────────────────────────────
 
-  defp collect(%{ref: ref, monitor: monitor} = ctx, acc, preview) do
+  defp collect(%{ref: ref, monitor: monitor} = ctx, acc, preview, bridge) do
+    running = bridge.running
+
     receive do
       {:lemon_eval, ^ref, {:output, data}} ->
         {acc, text} = Output.append(acc, data)
-        preview = stream(ctx, preview, text)
+        preview = stream(ctx, preview, text, bridge)
+        continue(ctx, acc, preview, bridge)
 
-        if AbortSignal.aborted?(ctx.signal),
-          do: interrupt(ctx, :aborted, acc),
-          else: collect(ctx, acc, preview)
+      {:lemon_eval, ^ref, {:tool_call, call, tool, args}} ->
+        continue(ctx, acc, preview, Bridge.request(bridge, call, tool, args))
+
+      {:DOWN, task, :process, _pid, reason} when is_map_key(running, task) ->
+        continue(ctx, acc, preview, Bridge.task_down(bridge, task, reason))
 
       {:lemon_eval, ^ref, {:result, frame}} ->
-        {{:result, frame}, acc}
+        {{:result, frame}, acc, bridge}
 
       {:lemon_eval, ^ref, {:exited, status}} ->
-        {{:exited, status}, acc}
+        {{:exited, status}, acc, bridge}
 
       {:lemon_eval_deadline, ^ref} ->
-        interrupt(ctx, :timeout, acc)
+        interrupt(ctx, :timeout, acc, bridge)
 
       {:DOWN, ^monitor, :process, _pid, reason} ->
-        {{:slot_down, reason}, drain(ref, acc)}
+        {{:slot_down, reason}, drain(ref, acc), bridge}
     after
-      100 ->
-        if AbortSignal.aborted?(ctx.signal),
-          do: interrupt(ctx, :aborted, acc),
-          else: collect(ctx, acc, preview)
+      100 -> continue(ctx, acc, preview, bridge)
     end
   end
 
-  # The slot relays output and the interrupted result ahead of its reply.
-  defp interrupt(ctx, reason, acc) do
+  defp continue(ctx, acc, preview, bridge) do
+    if AbortSignal.aborted?(ctx.signal),
+      do: interrupt(ctx, :aborted, acc, bridge),
+      else: collect(ctx, acc, preview, bridge)
+  end
+
+  # Inner calls are told to abort first, so a cell awaiting them can unwind
+  # within the interrupt grace. The slot relays output and the interrupted
+  # result ahead of its reply.
+  defp interrupt(ctx, reason, acc, bridge) do
+    bridge = Bridge.abort(bridge)
     outcome = Kernel.interrupt(ctx.slot, ctx.ref, reason)
     status = if reason == :timeout, do: {:timeout, outcome}, else: reason
-    {status, drain(ctx.ref, acc)}
+    {status, drain(ctx.ref, acc), bridge}
   end
 
   defp drain(ref, acc) do
@@ -282,10 +317,10 @@ defmodule CodingAgent.Tools.Eval do
     end
   end
 
-  defp stream(_ctx, nil, _text), do: nil
-  defp stream(_ctx, preview, ""), do: preview
+  defp stream(_ctx, nil, _text, _bridge), do: nil
+  defp stream(_ctx, preview, "", _bridge), do: preview
 
-  defp stream(ctx, preview, text) do
+  defp stream(ctx, preview, text, bridge) do
     preview = StreamingPreview.append(preview, text)
 
     ctx.on_update.(
@@ -296,6 +331,11 @@ defmodule CodingAgent.Tools.Eval do
     )
 
     preview
+  catch
+    # A raising update callback must not leave inner calls running.
+    kind, reason ->
+      Bridge.shutdown(bridge)
+      :erlang.raise(kind, reason, __STACKTRACE__)
   end
 
   # ── Result ───────────────────────────────────────────────────────────────
