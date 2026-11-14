@@ -1299,10 +1299,8 @@ defmodule CodingAgent.Session do
 
     Notifier.broadcast_event(state, {:compaction_start, %{reason: :manual}})
 
-    case ManualOperation.start_compaction(state, from, opts) do
-      {:ok, new_state} -> {:noreply, new_state}
-      {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
-    end
+    {:ok, new_state} = ManualOperation.start_compaction(state, from, opts)
+    {:noreply, new_state}
   end
 
   def handle_call({:tree, opts}, _from, state) do

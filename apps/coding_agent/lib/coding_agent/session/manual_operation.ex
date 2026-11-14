@@ -80,10 +80,9 @@ defmodule CodingAgent.Session.ManualOperation do
   Start a manual compaction in a background task.
 
   Returns `{:ok, state}` once the task is tracked; the caller in `from` is
-  answered when it finishes. `{:error, reason, state}` means nothing started.
+  answered when it finishes.
   """
-  @spec start_compaction(map(), GenServer.from(), keyword()) ::
-          {:ok, map()} | {:error, term(), map()}
+  @spec start_compaction(map(), GenServer.from(), keyword()) :: {:ok, map()}
   def start_compaction(state, from, opts) do
     signal = LemonAgent.AbortSignal.new()
 
@@ -200,33 +199,30 @@ defmodule CodingAgent.Session.ManualOperation do
 
     task = fn -> send(session_pid, {:manual_operation_result, ref, run.()}) end
 
-    case CompactionManager.start_tracked_background_task(
-           task,
-           CompactionManager.auto_compaction_task_timeout_ms(),
-           :manual_operation_timeout
-         ) do
-      {:ok, meta} ->
-        op =
-          struct!(
-            State,
-            Map.merge(fields, %{
-              kind: kind,
-              from: from,
-              ref: ref,
-              signature: CompactionManager.session_signature(state),
-              signal: signal,
-              task_pid: meta.pid,
-              monitor_ref: meta.monitor_ref,
-              timeout_ref: meta.timeout_ref
-            })
-          )
+    # Falls back to an unsupervised Task.start/1, so it cannot fail to start.
+    {:ok, meta} =
+      CompactionManager.start_tracked_background_task(
+        task,
+        CompactionManager.auto_compaction_task_timeout_ms(),
+        :manual_operation_timeout
+      )
 
-        {:ok, %{state | manual_operation: op}}
+    op =
+      struct!(
+        State,
+        Map.merge(fields, %{
+          kind: kind,
+          from: from,
+          ref: ref,
+          signature: CompactionManager.session_signature(state),
+          signal: signal,
+          task_pid: meta.pid,
+          monitor_ref: meta.monitor_ref,
+          timeout_ref: meta.timeout_ref
+        })
+      )
 
-      {:error, reason} ->
-        LemonAgent.AbortSignal.clear(signal)
-        {:error, reason, state}
-    end
+    {:ok, %{state | manual_operation: op}}
   end
 
   defp apply_result(state, %State{kind: :compact} = op, result, callbacks) do
