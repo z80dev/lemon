@@ -292,11 +292,36 @@ defmodule CodingAgent.NodeTools do
     case decode_result(result) do
       {:ok, %AgentToolResult{} = decoded} ->
         decoded
+        |> note_node_paths(node.name)
         |> put_details(%{node: node.name, node_id: node.id, outcome: "completed"})
         |> ToolResultTrust.untrusted(source(tool))
 
       {:error, _} ->
         unknown(node.name, "the node returned a malformed result")
+    end
+  end
+
+  # Spilled output (artifact handles, saved full-output files) lives on the
+  # node; say so, or a later `read` without `node` looks on the controller.
+  defp note_node_paths(%AgentToolResult{content: content} = result, node) do
+    spilled? =
+      Enum.any?(content, fn
+        %TextContent{text: text} ->
+          String.contains?(text, "artifact://") or String.contains?(text, "Full output saved to")
+
+        _ ->
+          false
+      end)
+
+    if spilled? do
+      note = %TextContent{
+        text:
+          "[Saved output and artifact:// handles above are on node \"#{node}\"; read them with node: \"#{node}\".]"
+      }
+
+      %{result | content: content ++ [note]}
+    else
+      result
     end
   end
 
@@ -336,6 +361,9 @@ defmodule CodingAgent.NodeTools do
     do: remote_reason(error["code"] || error["reason"] || error["message"] || "error")
 
   defp remote_reason(error), do: inspect(error, limit: 5)
+
+  defp format_reason({:invalid_payload, {:max_bytes, _}}),
+    do: "its arguments exceed the 1 MiB transport limit; split the content into smaller calls"
 
   defp format_reason({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
   defp format_reason(reason) when is_atom(reason), do: Atom.to_string(reason)

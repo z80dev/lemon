@@ -468,6 +468,10 @@ shapes, path policy and exact deletion confirmation. Secret listings return
 names only; configure the destination's encrypted master key before setting
 secrets. Values are never returned or logged.
 
+Agent sessions on the controller can also run individual tool calls on an
+attached machine with a `node` argument, keeping the model and provider
+credentials on the controller. See [run tools on other machines](../tools/nodes.md).
+
 For a real terminal, keep the opening operator connection alive:
 
 ```json

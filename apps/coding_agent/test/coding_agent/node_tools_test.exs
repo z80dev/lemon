@@ -64,6 +64,29 @@ defmodule CodingAgent.NodeToolsTest do
     assert File.read!(Path.join(ctx.remote, "a.txt")) == "one\nthree\n"
   end
 
+  test "a routed eval cell runs on the node and its tool calls stay there", ctx do
+    start_hand("hand-1", "box", ctx.remote)
+
+    code = """
+    const here = await tools.bash({command: "pwd"});
+    const same = await tools.bash({command: "pwd", node: "box"});
+    const other = await tools.bash({command: "pwd", node: "elsewhere"});
+    console.log(JSON.stringify({here: here.text.trim(), same: same.text.trim(), other: other.ok, why: other.text, cwd: process.cwd()}));
+    """
+
+    result =
+      run(tool(ctx.local, "eval"), %{"language" => "js", "code" => code, "node" => "box"})
+
+    refute result.is_error, text(result)
+    [json] = Regex.run(~r/\{.*\}/, text(result))
+    out = Jason.decode!(json)
+    assert out["here"] =~ Path.basename(ctx.remote)
+    assert out["same"] == out["here"]
+    assert out["cwd"] =~ Path.basename(ctx.remote)
+    refute out["other"]
+    assert out["why"] =~ "can only call its own tools"
+  end
+
   test "an unknown node fails without running and names the connected nodes", ctx do
     start_hand("hand-1", "box", ctx.remote)
 

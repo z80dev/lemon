@@ -15,6 +15,7 @@ then definitions, then use.
 | `title` | string | Short label for the step (for example `"load config"`). |
 | `timeout` | number | Cell deadline in seconds. Default 30, maximum 600. `0` disables the deadline; the cell can still be cancelled. |
 | `reset` | boolean | Discard that language's kernel state before running. The other language's kernel is untouched. |
+| `node` | string | Run the cell in a kernel on that named node instead (requires the `nodes` tool; see [other machines](nodes.md)). Its `tools.*` calls then run on the same node. |
 
 ```json
 {"language": "py", "title": "load", "code": "import json\nrows = json.load(open('data.json'))\nlen(rows)"}
@@ -106,7 +107,7 @@ print([r["ok"] for r in rs])
   Both accept `tools.call(name, args)`. Every call is asynchronous: `await` it,
   and use `Promise.all` / `asyncio.gather` to run calls concurrently. Arguments
   are passed to the tool unchanged, including `node` to run it on a named
-  execution node.
+  execution node ([run tools on other machines](nodes.md)).
 - **Results.** Each call resolves to `{ok, text, details, images}` (a plain dict
   in Python): `ok` is false when the tool failed, `text` joins its text blocks
   (truncated above 1 MiB), `details` is a JSON projection of the tool's details

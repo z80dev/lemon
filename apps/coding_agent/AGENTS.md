@@ -101,6 +101,12 @@ history, compaction and supervised delegation. The loop/model runtime comes from
 - Respect payload/depth/item limits and bounded streaming accumulation. Preserve
   protocol ping/idle-timeout compatibility without another session-liveness API.
   See [CLI](../../docs/user-guide/cli.md) for launch commands.
+- Routed tool calls (`coding_agent.tool`, `CodingAgent.NodeTools`) are gated by the
+  `nodes` tool being allowed; without it routable tools refuse a `node` argument.
+  The destination (`ExecutionNode.ToolService`) admits like the native run method,
+  never re-asks approval, and keys per-session tool state to a `ToolSession` owner.
+  A dispatched call without a result is an unknown outcome: never retry or fall
+  back to another machine. See [run tools on other machines](../../docs/tools/nodes.md).
 
 ## Verification
 
