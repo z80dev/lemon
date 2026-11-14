@@ -69,13 +69,13 @@ defmodule CodingAgent.ProcessManagerTest do
   end
 
   describe "exec/1" do
-    test "fails closed when admission is absent, including sync and direct options" do
+    test "fails closed when admission is absent, including direct options" do
       counter =
         Path.join(System.tmp_dir!(), "lemon-no-start-#{System.unique_integer([:positive])}")
 
       on_exit(fn -> File.rm(counter) end)
 
-      for {call, extra} <- [{:exec, []}, {:exec_sync, []}, {:exec, [use_lane_queue: false]}] do
+      for {call, extra} <- [{:exec, []}, {:exec, [use_lane_queue: false]}] do
         identity = "absent-#{System.unique_integer([:positive])}"
 
         assert {:error, {:rejected, ^identity, :admission_unavailable}} =
@@ -161,68 +161,6 @@ defmodule CodingAgent.ProcessManagerTest do
 
       assert {:ok, record, _} = ProcessStore.get(process_id)
       assert record.env == %{"TEST_VAR" => "test_value"}
-
-      # Clean up
-      ProcessManager.kill(process_id, :sigkill)
-    end
-  end
-
-  describe "exec_sync/1" do
-    test "runs command synchronously and returns result" do
-      assert {:ok, result} = ProcessManager.exec_sync(command: "echo hello world")
-
-      assert result.status in [:completed, :error]
-      assert is_list(result.logs)
-
-      # Should contain our output
-      output = Enum.join(result.logs, "\n")
-      assert output =~ "hello world"
-    end
-
-    test "captures exit code" do
-      assert {:ok, result} = ProcessManager.exec_sync(command: "exit 42")
-      assert result.exit_code == 42
-      assert result.status == :error
-    end
-
-    test "timeout retains the accepted identity instead of implying no launch" do
-      identity = "sync-timeout-#{System.unique_integer([:positive])}"
-      parent = self()
-
-      result =
-        ProcessManager.exec_sync(
-          command: "sleep 10",
-          launch_id: identity,
-          timeout_ms: 100,
-          on_exit: fn _ -> send(parent, {:sync_terminated, identity}) end
-        )
-
-      case result do
-        {:error, {:outcome_unknown, ^identity}} -> :ok
-        {:ok, %{process_id: ^identity, status: :error}} -> :ok
-        other -> flunk("timeout lost the launch receipt: #{inspect(other)}")
-      end
-
-      assert_receive {:sync_terminated, ^identity}, 5_000
-
-      assert {:ok, %{identity: ^identity, classification: :accepted, status: :error}} =
-               ProcessManager.receipt(identity)
-    end
-
-    test "background mode returns immediately" do
-      assert {:ok, process_id} =
-               ProcessManager.exec_sync(
-                 command: "sleep 5",
-                 yield_ms: 100
-               )
-
-      assert is_binary(process_id)
-
-      await_running(process_id)
-
-      # Should be running
-      assert {:ok, record, _} = ProcessStore.get(process_id)
-      assert record.status == :running
 
       # Clean up
       ProcessManager.kill(process_id, :sigkill)

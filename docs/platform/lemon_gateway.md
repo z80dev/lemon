@@ -12,7 +12,7 @@ runtime plugin registry; custom and selectable top-level engines are unsupported
 
 Subagents run natively in-process: when the native agent invokes its `task`
 tool, the delegated work executes as another `CodingAgent.Session` coordinated
-by `CodingAgent.Coordinator`. Subagents do not consume Gateway top-level
+by the task lifecycle. Subagents do not consume Gateway top-level
 execution slots, and there are no vendor CLI subprocess runners.
 
 Gateway-native webhook, SMS, and voice transport glue remains alongside the

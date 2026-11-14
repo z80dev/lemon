@@ -45,6 +45,15 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
   ]
 
   @doc false
+  def protected_meta?(meta) do
+    Enum.any?(@private_meta_aliases, fn {key, aliases} ->
+      Map.has_key?(meta, key) or Enum.any?(aliases, &Map.has_key?(meta, &1))
+    end) or
+      not is_nil(Map.get(meta, :profile_id, Map.get(meta, "profile_id"))) or
+      not is_nil(Map.get(meta, :mcp_servers, Map.get(meta, "mcp_servers")))
+  end
+
+  @doc false
   def normalize_meta(meta) when is_map(meta) do
     Enum.reduce(@execution_meta_keys, meta, fn key, acc ->
       string_key = Atom.to_string(key)

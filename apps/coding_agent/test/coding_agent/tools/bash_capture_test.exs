@@ -130,7 +130,7 @@ defmodule CodingAgent.Tools.BashCaptureTest do
       end)
 
       assert {:queued, ^id} =
-               ProcessManager.exec_sync(
+               ProcessManager.exec(
                  command: "touch '#{marker}'",
                  cwd: ws,
                  launch_id: id,

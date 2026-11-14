@@ -11,7 +11,7 @@ CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns 
 - **Context compaction** -- Automatic summarization when conversations exceed the model's context window, with overflow recovery
 - **Budget enforcement** -- Token and cost tracking per run with parent/child inheritance via a persistent run graph
 - **Extension system** -- Dynamic tool and hook injection from Elixir modules or WASM sidecars
-- **Subagent orchestration** -- Concurrent subagent sessions via a Coordinator with timeout management
+- **Subagent orchestration** -- Concurrent native subagent sessions via the task tool with timeout management
 - **Named execution nodes** -- Native delegated sessions can run on an authenticated destination selected by name, with destination-local credentials and working-directory defaults
 - **Workspace and prompt composition** -- Layered system prompt from bootstrap files, skills, commands, and project-local CLAUDE.md/AGENTS.md
 - **Provider routing** -- Default model resolution can select a ready configured fallback before starting the agent loop; explicit model specs are not rewritten at resolution. Both default and explicit sessions can then walk configured provider/model and credential candidates before output commits, including a single refresh of the selected OAuth account on 401. Committed terminal text, thinking, or tool content prevents replay even when returned as a direct provider error.
@@ -467,7 +467,6 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.LaneQueue` | Lane-aware FIFO queue with per-lane concurrency caps (default: main=4, subagent=8, background_exec=2) |
 | `CodingAgent.BackgroundRun` | Durable `/bg` lifecycle facade (`start`, `list`, `status`, `result`, `cancel`) for isolated full-tool sessions |
 | `CodingAgent.SideQuery` | Bounded `/btw` query facade using an immutable live snapshot or durable session-key history with tools disabled |
-| `CodingAgent.Coordinator` | GenServer orchestrating concurrent subagent sessions with timeout management |
 | `CodingAgent.Parallel` | Semaphore-based concurrency control and `map_with_concurrency_limit` |
 | `CodingAgent.ProcessManager` | DynamicSupervisor for background processes started by `bash` with `run_in_background`, read with `bash_output`, stopped with `kill_process` |
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
@@ -1138,20 +1137,6 @@ policy = CodingAgent.ToolPolicy.custom(
   model: model,
   tool_policy: policy
 )
-```
-
-### Running Subagents
-
-```elixir
-{:ok, coordinator} = CodingAgent.Coordinator.start_link(
-  cwd: "/path/to/project",
-  model: model
-)
-
-results = CodingAgent.Coordinator.run_subagents(coordinator, [
-  %{prompt: "Analyze the code", subagent: "scout"},
-  %{prompt: "Review for bugs", subagent: "reviewer"}
-], timeout: 60_000)
 ```
 
 ### Running on a Named Execution Node
