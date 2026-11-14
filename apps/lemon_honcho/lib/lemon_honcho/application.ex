@@ -86,7 +86,6 @@ defmodule LemonHoncho.Application do
     %{
       id: @provider_id,
       module: LemonHoncho.MemoryProvider,
-      label: "Honcho",
       source: "satellite",
       scopes: @provider_scopes,
       timeout_ms: min(config.timeout_ms, @provider_timeout_cap_ms)

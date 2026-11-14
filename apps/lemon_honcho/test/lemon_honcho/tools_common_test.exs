@@ -300,6 +300,18 @@ defmodule LemonHoncho.ToolsCommonTest do
     end
   end
 
+  test "excerpt rendering shares fallback fields, labels, and clipping" do
+    keys = {["content", "text"], ["peer_id", "author"]}
+    hit = %{"content" => " ", "text" => "hello", "author" => "user", "timestamp" => "today"}
+
+    assert Common.excerpt(hit, keys) == "user · today\nhello"
+    assert Common.excerpt(%{"content" => String.duplicate("é", 1_001)}, keys) ==
+             String.duplicate("é", 1_000)
+
+    assert Common.excerpt(%{"unknown" => true}, keys) == inspect(%{"unknown" => true})
+    assert Common.excerpt("raw", keys) == inspect("raw")
+  end
+
   ## Helpers
 
   defp serve(key, cwd) do

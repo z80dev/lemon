@@ -125,21 +125,9 @@ defmodule LemonMemory.SessionSearch do
     Enum.map(docs, fn doc ->
       %{
         doc
-        | prompt_summary: clip(doc.prompt_summary, 1024),
-          answer_summary: clip(doc.answer_summary, 2048)
+        | prompt_summary: LemonMemory.Text.clip_bytes(doc.prompt_summary, 1024, :grapheme),
+          answer_summary: LemonMemory.Text.clip_bytes(doc.answer_summary, 2048, :grapheme)
       }
-    end)
-  end
-
-  defp clip(nil, _), do: ""
-
-  defp clip(text, bytes) do
-    text
-    |> String.graphemes()
-    |> Enum.reduce_while("", fn grapheme, acc ->
-      if byte_size(acc) + byte_size(grapheme) <= bytes,
-        do: {:cont, acc <> grapheme},
-        else: {:halt, acc}
     end)
   end
 

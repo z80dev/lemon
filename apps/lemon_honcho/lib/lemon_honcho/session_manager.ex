@@ -709,9 +709,7 @@ defmodule LemonHoncho.SessionManager do
       :unavailable
   end
 
-  defp configured_client do
-    Application.get_env(:lemon_honcho, :client, LemonHoncho.Client)
-  end
+  defp configured_client, do: LemonHoncho.client()
 
   # The live configuration, re-read on every path that acts on it.
   #

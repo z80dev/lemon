@@ -97,13 +97,6 @@ defmodule LemonMemory.ContextScope do
 
   def matches?(_, _), do: false
 
-  def private_metadata(context) do
-    case scope(context) do
-      {:ok, {:private, key}} -> {:ok, metadata({:private, key})}
-      _ -> {:error, :unproven_context}
-    end
-  end
-
   @doc "Canonical stamps for an owning writer's already validated selection."
   def metadata({:private, key}) do
     %{"memory_scope" => "private", "memory_context_key" => key, "memory_context_verified" => true}

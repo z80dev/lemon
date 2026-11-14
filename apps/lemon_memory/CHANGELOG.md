@@ -6,6 +6,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Changed
+
+- Remove unused `ContextScope.private_metadata/1` and atom-key provider specifications' unused label field.
+- Consolidate byte-budget text clipping while preserving session-search grapheme boundaries.
+
 ### Fixed
 
 - Apply new backdoor/exfiltration screening only to new text and patched results,

@@ -110,12 +110,6 @@ defmodule LemonHoncho.Tools.Profile do
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts), do: tool(Keyword.put(opts, :cwd, cwd))
 
-  @doc "Runs `honcho_profile` with no session options; see `execute/5`."
-  @spec execute(String.t(), map(), reference() | nil, function() | nil) :: AgentToolResult.t()
-  def execute(tool_call_id, params, signal, on_update) do
-    execute(tool_call_id, params, signal, on_update, [])
-  end
-
   @doc """
   Runs `honcho_profile`, against the user peer of the session named in `opts`.
 

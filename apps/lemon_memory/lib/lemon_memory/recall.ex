@@ -190,7 +190,7 @@ defmodule LemonMemory.Recall do
 
     case Regex.run(pattern, text, return: :index) do
       [{position, _} | _] when position > @user_snippet_bytes ->
-        start = utf8_boundary(text, max(position - 80, 0))
+        start = LemonMemory.Text.boundary(text, max(position - 80, 0))
         "… " <> snippet(binary_part(text, start, byte_size(text) - start), @user_snippet_bytes)
 
       _ ->
@@ -204,7 +204,8 @@ defmodule LemonMemory.Recall do
         try do
           case IO.binread(file, 65_537) do
             content when is_binary(content) and byte_size(content) <= 65_536 ->
-              content = binary_part(content, 0, utf8_boundary(content, byte_size(content)))
+              content =
+                binary_part(content, 0, LemonMemory.Text.boundary(content, byte_size(content)))
 
               if String.trim(content) != "",
                 do:
@@ -246,19 +247,13 @@ defmodule LemonMemory.Recall do
       text
     else
       text
-      |> binary_part(0, utf8_boundary(text, max_bytes))
+      |> LemonMemory.Text.clip_bytes(max_bytes)
       |> String.replace(~r/\s+\S*$/u, "")
       |> Kernel.<>(" …")
     end
   end
 
   defp snippet(_text, _max_bytes), do: ""
-
-  defp utf8_boundary(text, pos) when pos > 0 do
-    if String.valid?(binary_part(text, 0, pos)), do: pos, else: utf8_boundary(text, pos - 1)
-  end
-
-  defp utf8_boundary(_text, 0), do: 0
 
   defp present?(value), do: is_binary(value) and String.trim(value) != ""
 end
