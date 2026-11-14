@@ -17,6 +17,26 @@ defmodule LemonAi.ProviderRegistryTest do
       assert ProviderRegistry.initialized?()
     end
 
+    test "read paths lazily initialize an absent registry" do
+      key = {ProviderRegistry, :providers}
+      original = :persistent_term.get(key)
+
+      try do
+        for {read, expected} <- [
+              {fn -> ProviderRegistry.get(:missing) end, {:error, :not_found}},
+              {fn -> ProviderRegistry.list() end, []},
+              {fn -> ProviderRegistry.registered?(:missing) end, false}
+            ] do
+          :persistent_term.erase(key)
+          refute ProviderRegistry.initialized?()
+          assert read.() == expected
+          assert ProviderRegistry.initialized?()
+        end
+      after
+        :persistent_term.put(key, original)
+      end
+    end
+
     test "register/2 registers a provider", %{test_id: test_id} do
       api_id = :"test_api_#{test_id}"
       assert :ok = ProviderRegistry.register(api_id, TestProvider)

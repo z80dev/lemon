@@ -7,9 +7,7 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
   secret payloads, and API-key resolution for the `google_gemini_cli` provider.
   """
 
-  require Logger
-
-  alias LemonAi.Auth.OAuthPKCE
+  alias LemonAi.Auth.{OAuthFlow, OAuthPKCE, OAuthSecret}
 
   @authorize_url "https://accounts.google.com/o/oauth2/v2/auth"
   @token_url "https://oauth2.googleapis.com/token"
@@ -207,8 +205,8 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
       "code_verifier" => code_verifier
     }
 
-    with {:ok, data} <- post_form(@token_url, body),
-         {:ok, token_data} <- parse_token_response(data),
+    with {:ok, data} <- OAuthFlow.post_form(@token_url, body),
+         {:ok, token_data} <- OAuthSecret.parse_token_response(data, @near_expiry_ms, true),
          {:ok, email} <- fetch_user_email(token_data.access_token),
          {:ok, secret} <-
            build_oauth_secret(token_data, email, redirect_uri, configured_project_id),
@@ -223,27 +221,13 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
   Encode OAuth secret payload for storage by the caller.
   """
   @spec encode_secret(oauth_secret()) :: String.t()
-  def encode_secret(secret) when is_map(secret), do: Jason.encode!(secret)
+  defdelegate encode_secret(secret), to: OAuthSecret, as: :encode
 
   @doc """
   Decode OAuth secret payload.
   """
   @spec decode_secret(String.t()) :: {:ok, oauth_secret()} | :not_oauth
-  def decode_secret(secret_value) when is_binary(secret_value) do
-    case Jason.decode(secret_value) do
-      {:ok, decoded} when is_map(decoded) ->
-        if decoded["type"] == @secret_type do
-          {:ok, decoded}
-        else
-          :not_oauth
-        end
-
-      _ ->
-        :not_oauth
-    end
-  end
-
-  def decode_secret(_), do: :not_oauth
+  def decode_secret(value), do: OAuthSecret.decode(value, [@secret_type])
 
   @doc """
   Resolve a usable Gemini CLI credential JSON string (`{"token","projectId"}`)
@@ -253,153 +237,36 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
   """
   @spec resolve_api_key_from_secret(String.t(), String.t()) ::
           {:ok, String.t()} | :ignore | {:error, term()}
-  def resolve_api_key_from_secret(secret_name, secret_value, opts \\ [])
-
-  def resolve_api_key_from_secret(secret_name, secret_value, opts)
-      when is_binary(secret_name) and is_binary(secret_value) do
-    case decode_secret(secret_value) do
-      {:ok, secret} ->
-        LemonAi.Auth.OAuthSecretResolver.with_refresh_lock(
-          __MODULE__,
-          secret_name,
-          secret,
-          opts,
-          fn latest, opts ->
-            with {:ok, refreshed_secret, changed?} <-
-                   ensure_fresh_secret(
-                     latest,
-                     Keyword.get(opts, :force_refresh, false) == true,
-                     secret_name,
-                     opts
-                   ),
-                 access_token when is_binary(access_token) and access_token != "" <-
-                   non_empty_binary(refreshed_secret["access_token"]),
-                 project_id when is_binary(project_id) and project_id != "" <-
-                   project_id_from_secret(refreshed_secret),
-                 :ok <-
-                   if(changed?,
-                     do:
-                       LemonAi.Auth.OAuthSecretResolver.persist_secret(
-                         secret_name,
-                         encode_secret(refreshed_secret),
-                         opts
-                       ),
-                     else: :ok
-                   ) do
-              {:ok, Jason.encode!(%{"token" => access_token, "projectId" => project_id})}
-            else
-              nil -> {:error, :missing_gemini_project}
-              {:error, reason} -> {:error, reason}
-            end
-          end
-        )
-
-      :not_oauth ->
-        :ignore
-    end
+  def resolve_api_key_from_secret(secret_name, secret_value, opts \\ []) do
+    OAuthSecret.resolve(__MODULE__, secret_name, secret_value, opts, %{
+      refresh: &refresh_secret/1,
+      skew_ms: @near_expiry_ms,
+      always_reload: true,
+      refresh_replaced: true,
+      usable: &OAuthSecret.usable/1,
+      prepare: &maybe_ensure_project_context(&1, project_id_from_secret(&1)),
+      resolve: &OAuthSecret.project_key(&1, project_id_from_secret(&1), :missing_gemini_project)
+    })
   end
 
-  def resolve_api_key_from_secret(_, _, _), do: {:error, :invalid_secret_value}
-
-  # A forced refresh (the provider rejected the access token) never falls back
-  # to the rejected token.
-  defp ensure_fresh_secret(secret, force?, secret_name, opts) when is_map(secret) do
-    access_token = non_empty_binary(secret["access_token"])
+  defp refresh_secret(secret) do
     refresh_token = non_empty_binary(secret["refresh_token"])
-    expires_at_ms = parse_integer(secret["expires_at_ms"])
 
-    should_refresh? =
-      cond do
-        is_nil(refresh_token) -> false
-        force? -> true
-        is_nil(access_token) -> true
-        is_nil(expires_at_ms) -> false
-        true -> near_expiry?(expires_at_ms)
-      end
+    body = %{
+      "client_id" => oauth_client_id(),
+      "client_secret" => oauth_client_secret(),
+      "refresh_token" => refresh_token,
+      "grant_type" => "refresh_token"
+    }
 
-    if force? and is_nil(refresh_token) do
-      {:error, :not_refreshable}
-    else
-      with {:ok, refreshed_secret, changed?} <-
-             maybe_refresh_secret(
-               secret,
-               should_refresh?,
-               refresh_token,
-               access_token,
-               force?,
-               secret_name,
-               opts
-             ),
-           {:ok, final_secret, project_changed?} <-
-             maybe_ensure_project_context(
-               refreshed_secret,
-               project_id_from_secret(refreshed_secret)
-             ) do
-        {:ok, final_secret, changed? or project_changed?}
-      else
-        # A transient fallback selects the owning login without enriching or
-        # persisting it using the revision captured before the failed request.
-        {:fallback, latest} -> {:ok, latest, false}
-        {:error, _} = error -> error
-      end
-    end
-  end
-
-  defp maybe_refresh_secret(
-         secret,
-         false,
-         _refresh_token,
-         _access_token,
-         _force?,
-         _secret_name,
-         _opts
-       ) do
-    if unexpired?(secret["expires_at_ms"]),
-      do: {:ok, secret, false},
-      else: {:error, :expired_access_token}
-  end
-
-  defp maybe_refresh_secret(secret, true, refresh_token, access_token, force?, secret_name, opts) do
-    case refresh_access_token(secret, refresh_token) do
-      {:ok, refreshed} ->
-        updated =
-          secret
-          |> Map.put("access_token", refreshed.access_token)
-          |> Map.put("refresh_token", refreshed.refresh_token)
-          |> Map.put("expires_at_ms", refreshed.expires_at_ms)
-          |> Map.put("updated_at_ms", System.system_time(:millisecond))
-
-        {:ok, updated, true}
-
-      {:error, :reauth_required} = error ->
-        error
-
-      {:error, reason} ->
-        if not force? and is_binary(access_token) and access_token != "" and
-             unexpired?(secret["expires_at_ms"]) do
-          Logger.debug("Google Gemini CLI OAuth refresh failed; reloading the unexpired token")
-
-          with {:ok, latest, _opts} <-
-                 LemonAi.Auth.OAuthSecretResolver.reload_secret(
-                   __MODULE__,
-                   secret_name,
-                   secret,
-                   opts
-                 ) do
-            if unexpired?(latest["expires_at_ms"]),
-              do: {:fallback, latest},
-              else: {:error, :expired_access_token}
-          end
-        else
-          {:error, reason}
-        end
-    end
-  end
-
-  defp unexpired?(expires_at_ms) do
-    case parse_integer(expires_at_ms) do
-      ms when is_integer(ms) -> ms > System.system_time(:millisecond)
-      _ -> true
+    with {:ok, data} <- OAuthFlow.post_form(@token_url, body),
+         {:ok, token} <- OAuthSecret.parse_token_response(data, @near_expiry_ms, true) do
+      {:ok,
+       secret
+       |> Map.put("access_token", token.access_token)
+       |> Map.put("refresh_token", token.refresh_token || refresh_token)
+       |> Map.put("expires_at_ms", token.expires_at_ms)
+       |> Map.put("updated_at_ms", System.system_time(:millisecond))}
     end
   end
 
@@ -409,28 +276,6 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
   end
 
   defp maybe_ensure_project_context(secret, _project_id), do: ensure_project_context(secret)
-
-  defp refresh_access_token(secret, refresh_token)
-       when is_map(secret) and is_binary(refresh_token) and refresh_token != "" do
-    body = %{
-      "client_id" => oauth_client_id(),
-      "client_secret" => oauth_client_secret(),
-      "refresh_token" => refresh_token,
-      "grant_type" => "refresh_token"
-    }
-
-    with {:ok, data} <- post_form(@token_url, body),
-         {:ok, token_data} <- parse_token_response(data) do
-      {:ok,
-       %{
-         access_token: token_data.access_token,
-         refresh_token: token_data.refresh_token || refresh_token,
-         expires_at_ms: token_data.expires_at_ms
-       }}
-    end
-  end
-
-  defp refresh_access_token(_, _), do: {:error, :missing_refresh_token}
 
   defp ensure_project_context(secret) when is_map(secret) do
     access_token = non_empty_binary(secret["access_token"])
@@ -603,52 +448,13 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
   defp wait_for_operation(_, payload) when is_map(payload), do: {:ok, payload}
 
   defp build_oauth_secret(token_data, email, redirect_uri, configured_project_id) do
-    now = System.system_time(:millisecond)
-
     {:ok,
-     %{
-       "type" => @secret_type,
-       "access_token" => token_data.access_token,
-       "refresh_token" => token_data.refresh_token,
-       "expires_at_ms" => token_data.expires_at_ms,
+     OAuthSecret.build(@secret_type, token_data, %{
        "configured_project_id" => configured_project_id,
        "email" => non_empty_binary(email),
-       "redirect_uri" => non_empty_binary(redirect_uri),
-       "created_at_ms" => now,
-       "updated_at_ms" => now
-     }}
+       "redirect_uri" => non_empty_binary(redirect_uri)
+     })}
   end
-
-  defp parse_token_response(data) when is_map(data) do
-    access_token = non_empty_binary(data["access_token"])
-    refresh_token = non_empty_binary(data["refresh_token"])
-    expires_in = parse_integer(data["expires_in"])
-
-    cond do
-      is_nil(access_token) ->
-        {:error, {:invalid_token_response, data}}
-
-      is_nil(expires_in) or expires_in <= 0 ->
-        {:error, {:invalid_expiry, data}}
-
-      true ->
-        {:ok,
-         %{
-           access_token: access_token,
-           refresh_token: refresh_token,
-           expires_at_ms: System.system_time(:millisecond) + expires_in * 1000 - @near_expiry_ms
-         }}
-    end
-  end
-
-  defp parse_token_response(data) when is_binary(data) do
-    case Jason.decode(data) do
-      {:ok, decoded} when is_map(decoded) -> parse_token_response(decoded)
-      _ -> {:error, {:invalid_token_response, data}}
-    end
-  end
-
-  defp parse_token_response(other), do: {:error, {:invalid_token_response, other}}
 
   defp fetch_user_email(access_token) when is_binary(access_token) and access_token != "" do
     headers = %{"authorization" => "Bearer #{access_token}"}
@@ -672,22 +478,6 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
   end
 
   defp fetch_user_email(_), do: {:ok, nil}
-
-  defp post_form(url, body) when is_map(body) do
-    case LemonAi.Auth.OAuthFlow.request(url, form: body) do
-      {:ok, %{status: status, body: response_body}} when status in 200..299 ->
-        {:ok, response_body}
-
-      {:ok, %{status: status, body: %{"error" => "invalid_grant"}}} when status in [400, 401] ->
-        {:error, :reauth_required}
-
-      {:ok, %{status: status, body: response_body}} ->
-        {:error, LemonAi.Auth.OAuthFlow.http_error(status, response_body)}
-
-      {:error, _} = error ->
-        error
-    end
-  end
 
   defp post_code_assist(url, access_token, body) when is_binary(url) and is_map(body) do
     headers =
@@ -875,22 +665,6 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
         %{code: nil, state: nil}
     end
   end
-
-  defp near_expiry?(expires_at_ms) when is_integer(expires_at_ms) do
-    System.system_time(:millisecond) + @near_expiry_ms >= expires_at_ms
-  end
-
-  defp parse_integer(value) when is_integer(value), do: value
-  defp parse_integer(value) when is_float(value), do: trunc(value)
-
-  defp parse_integer(value) when is_binary(value) do
-    case Integer.parse(String.trim(value)) do
-      {parsed, ""} -> parsed
-      _ -> nil
-    end
-  end
-
-  defp parse_integer(_), do: nil
 
   defp normalize_project_id(value) when is_binary(value) do
     trimmed = String.trim(value)

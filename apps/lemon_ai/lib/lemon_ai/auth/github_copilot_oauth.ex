@@ -8,7 +8,7 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
   - Secret payload encoding/decoding
   """
 
-  require Logger
+  alias LemonAi.Auth.OAuthSecret
 
   @default_client_id_b64 "SXYxLmI1MDdhMDhjODdlY2ZlOTg="
   @default_domain "github.com"
@@ -86,9 +86,7 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
   Encode OAuth secret payload to JSON.
   """
   @spec encode_secret(oauth_secret()) :: String.t()
-  def encode_secret(secret) when is_map(secret) do
-    Jason.encode!(secret)
-  end
+  defdelegate encode_secret(secret), to: OAuthSecret, as: :encode
 
   @doc """
   Resolve a usable Copilot API key from a secret value.
@@ -100,42 +98,15 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
   @spec resolve_api_key_from_secret(String.t(), String.t()) ::
           {:ok, String.t()} | :ignore | {:error, term()}
   def resolve_api_key_from_secret(secret_name, secret_value, opts \\ [])
-
-  def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
-    case decode_secret(secret_value) do
-      {:ok, secret} ->
-        LemonAi.Auth.OAuthSecretResolver.with_refresh_lock(
-          __MODULE__,
-          secret_name,
-          secret,
-          opts,
-          fn latest, opts ->
-            with {:ok, refreshed_secret, changed?} <-
-                   ensure_fresh_secret(latest, force_refresh?(opts), secret_name, opts),
-                 access_token when is_binary(access_token) and access_token != "" <-
-                   non_empty_binary(refreshed_secret["access_token"]),
-                 :ok <-
-                   if(changed?,
-                     do:
-                       LemonAi.Auth.OAuthSecretResolver.persist_secret(
-                         secret_name,
-                         encode_secret(refreshed_secret),
-                         opts
-                       ),
-                     else: :ok
-                   ) do
-              {:ok, access_token}
-            else
-              nil -> {:error, :missing_access_token}
-              {:error, reason} -> {:error, reason}
-            end
-          end
-        )
-
-      :not_oauth ->
-        :ignore
-    end
+    OAuthSecret.resolve(__MODULE__, secret_name, secret_value, opts, %{
+      refresh: &refresh_secret/1,
+      skew_ms: @near_expiry_ms,
+      always_reload: true,
+      refresh_replaced: true,
+      usable: &OAuthSecret.usable/1,
+      resolve: &OAuthSecret.access_token/1
+    })
   end
 
   @doc """
@@ -241,93 +212,20 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
 
   @doc "Decode a stored Copilot OAuth payload; `:not_oauth` for other values."
   @spec decode_secret(term()) :: {:ok, oauth_secret()} | :not_oauth
-  def decode_secret(secret_value) when is_binary(secret_value) do
-    with {:ok, decoded} <- Jason.decode(secret_value),
-         true <- is_map(decoded),
-         true <- decoded["type"] == @secret_type do
-      {:ok, decoded}
-    else
-      _ -> :not_oauth
-    end
-  end
+  def decode_secret(value), do: OAuthSecret.decode(value, [@secret_type])
 
-  def decode_secret(_), do: :not_oauth
-
-  defp force_refresh?(opts), do: Keyword.get(opts, :force_refresh, false) == true
-
-  # A forced refresh (the provider rejected the Copilot token) never falls back
-  # to the rejected token.
-  defp ensure_fresh_secret(secret, force?, secret_name, opts) when is_map(secret) do
-    access_token = non_empty_binary(secret["access_token"])
-    refresh_token = non_empty_binary(secret["refresh_token"])
-    expires_at_ms = parse_integer(secret["expires_at_ms"])
-
-    should_refresh? =
-      cond do
-        is_nil(refresh_token) -> false
-        force? -> true
-        is_nil(access_token) -> true
-        is_nil(expires_at_ms) -> false
-        true -> near_expiry?(expires_at_ms)
-      end
-
-    cond do
-      force? and is_nil(refresh_token) ->
-        {:error, :not_refreshable}
-
-      should_refresh? ->
-        refresh_copilot_secret(secret, refresh_token, access_token, force?, secret_name, opts)
-
-      not unexpired?(expires_at_ms) ->
-        {:error, :expired_access_token}
-
-      true ->
-        {:ok, secret, false}
-    end
-  end
-
-  defp refresh_copilot_secret(secret, refresh_token, access_token, force?, secret_name, opts) do
-    case fetch_copilot_token(refresh_token, non_empty_binary(secret["enterprise_domain"])) do
-      {:ok, %{token: token, expires_at_ms: refreshed_expires_at_ms}} ->
-        updated =
-          secret
-          |> Map.put("access_token", token)
-          |> Map.put("expires_at_ms", refreshed_expires_at_ms)
-          |> Map.put("base_url", copilot_base_url(token, secret["enterprise_domain"]))
-          |> Map.put("updated_at_ms", System.system_time(:millisecond))
-
-        {:ok, updated, true}
-
-      {:error, :reauth_required} = error ->
-        error
-
-      {:error, reason} ->
-        if not force? and is_binary(access_token) and access_token != "" and
-             unexpired?(secret["expires_at_ms"]) do
-          Logger.debug("GitHub Copilot refresh failed; reloading the unexpired token")
-
-          with {:ok, latest, _opts} <-
-                 LemonAi.Auth.OAuthSecretResolver.reload_secret(
-                   __MODULE__,
-                   secret_name,
-                   secret,
-                   opts
-                 ) do
-            if unexpired?(latest["expires_at_ms"]),
-              do: {:ok, latest, false},
-              else: {:error, :expired_access_token}
-          end
-        else
-          {:error, reason}
-        end
-    end
-  end
-
-  # A token without a recorded expiry is treated as still usable.
-  defp unexpired?(expires_at_ms) do
-    case parse_integer(expires_at_ms) do
-      ms when is_integer(ms) -> ms > System.system_time(:millisecond)
-      _ -> true
+  defp refresh_secret(secret) do
+    with {:ok, %{token: token, expires_at_ms: expires_at_ms}} <-
+           fetch_copilot_token(
+             non_empty_binary(secret["refresh_token"]),
+             non_empty_binary(secret["enterprise_domain"])
+           ) do
+      {:ok,
+       secret
+       |> Map.put("access_token", token)
+       |> Map.put("expires_at_ms", expires_at_ms)
+       |> Map.put("base_url", copilot_base_url(token, secret["enterprise_domain"]))
+       |> Map.put("updated_at_ms", System.system_time(:millisecond))}
     end
   end
 
@@ -498,10 +396,6 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
   end
 
   defp normalize_enterprise_domain(_), do: {:error, :invalid_enterprise_domain}
-
-  defp near_expiry?(expires_at_ms) when is_integer(expires_at_ms) do
-    System.system_time(:millisecond) + @near_expiry_ms >= expires_at_ms
-  end
 
   defp github_urls(domain) do
     %{

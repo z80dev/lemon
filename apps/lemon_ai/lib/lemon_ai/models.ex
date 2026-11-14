@@ -412,10 +412,6 @@ defmodule LemonAi.Models do
   @spec supports_xhigh(Model.t()) :: boolean()
   def supports_xhigh(%Model{reasoning_efforts: efforts}), do: :xhigh in efforts
 
-  @doc false
-  @spec supports_xhigh?(Model.t()) :: boolean()
-  def supports_xhigh?(model), do: supports_xhigh(model)
-
   @reasoning_levels [:none, :minimal, :low, :medium, :high, :xhigh, :max]
 
   @doc """
@@ -462,70 +458,6 @@ defmodule LemonAi.Models do
 
   def reasoning_effort_for(%Model{}, level), do: level
 
-  @default_thinking_budgets %{
-    minimal: 1024,
-    low: 2048,
-    medium: 8192,
-    high: 16_384
-  }
-
-  @doc """
-  Adjust max tokens to accommodate a thinking budget for a given reasoning level.
-
-  Computes the thinking token budget for the requested level (clamping xhigh/max
-  to high), then increases `base_max_tokens` by that amount without exceeding
-  `model_max_tokens`. If the resulting max is smaller than the budget, the
-  budget is reduced to leave at least 1024 output tokens.
-
-  Ported from Pi's adjustMaxTokensForThinking.
-
-  ## Parameters
-
-    - `base_max_tokens` - The base output token limit before thinking
-    - `model_max_tokens` - The model's hard maximum token limit
-    - `reasoning_level` - One of `:none`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`
-    - `custom_budgets` - Optional map overriding default budgets per level
-
-  ## Returns
-
-  A tuple `{max_tokens, thinking_budget}`.
-
-  ## Examples
-
-      iex> LemonAi.Models.adjust_max_tokens_for_thinking(8192, 200_000, :high)
-      {24576, 16384}
-
-      iex> LemonAi.Models.adjust_max_tokens_for_thinking(8192, 200_000, :medium, %{medium: 4096})
-      {12288, 4096}
-  """
-  @spec adjust_max_tokens_for_thinking(
-          non_neg_integer(),
-          non_neg_integer(),
-          atom(),
-          map()
-        ) :: {non_neg_integer(), non_neg_integer()}
-  def adjust_max_tokens_for_thinking(
-        base_max_tokens,
-        model_max_tokens,
-        reasoning_level,
-        custom_budgets \\ %{}
-      ) do
-    min_output_tokens = 1024
-    level = clamp_reasoning(reasoning_level)
-    budgets = Map.merge(@default_thinking_budgets, custom_budgets)
-    thinking_budget = Map.get(budgets, level, 0)
-    max_tokens = min(base_max_tokens + thinking_budget, model_max_tokens)
-
-    thinking_budget =
-      if max_tokens <= thinking_budget do
-        max(0, max_tokens - min_output_tokens)
-      else
-        thinking_budget
-      end
-
-    {max_tokens, thinking_budget}
-  end
-
   @doc """
   Clamp a reasoning level, mapping `:xhigh` and `:max` to `:high` for budget-based
   providers and `:none` to no thinking budget.
@@ -567,54 +499,6 @@ defmodule LemonAi.Models do
     Enum.find_value(@providers, fn provider ->
       get_model(provider, model_id)
     end)
-  end
-
-  @doc """
-  Check if two models are equal by comparing both their id and provider.
-  Returns false if either model is nil.
-
-  Ported from Pi's modelsAreEqual.
-
-  ## Examples
-
-      iex> model1 = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
-      iex> model2 = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
-      iex> LemonAi.Models.models_equal?(model1, model2)
-      true
-
-      iex> model1 = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
-      iex> model2 = LemonAi.Models.get_model(:openai, "gpt-4o")
-      iex> LemonAi.Models.models_equal?(model1, model2)
-      false
-
-      iex> LemonAi.Models.models_equal?(nil, model1)
-      false
-
-  """
-  @spec models_equal?(Model.t() | nil, Model.t() | nil) :: boolean()
-  def models_equal?(nil, _b), do: false
-  def models_equal?(_a, nil), do: false
-
-  def models_equal?(%Model{id: id_a, provider: provider_a}, %Model{id: id_b, provider: provider_b}) do
-    id_a == id_b and provider_a == provider_b
-  end
-
-  @doc """
-  Get model IDs for a provider.
-
-  ## Examples
-
-      iex> ids = LemonAi.Models.get_model_ids(:anthropic)
-      iex> "claude-sonnet-5" in ids
-      true
-
-  """
-  @spec get_model_ids(atom()) :: [String.t()]
-  def get_model_ids(provider) when is_atom(provider) do
-    case Map.get(@models, provider) do
-      nil -> provider |> get_models() |> Enum.map(& &1.id)
-      provider_models -> Map.keys(provider_models)
-    end
   end
 
   # Always fetched fresh for this account, independent of cached picker listings.

@@ -1,8 +1,7 @@
 defmodule LemonAi.ModelsCoreTest do
   @moduledoc """
   Tests for LemonAi.Models core API: get_model, get_models, get_providers,
-  list_models, find_by_id, supports_vision?, supports_reasoning?,
-  and get_model_ids.
+  list_models, find_by_id, supports_vision? and supports_reasoning?.
   """
   use ExUnit.Case, async: true
 
@@ -188,28 +187,6 @@ defmodule LemonAi.ModelsCoreTest do
       }
 
       refute Models.supports_reasoning?(model)
-    end
-  end
-
-  # ============================================================================
-  # get_model_ids/1
-  # ============================================================================
-
-  describe "get_model_ids/1" do
-    test "returns list of string IDs for known provider" do
-      ids = Models.get_model_ids(:anthropic)
-      assert is_list(ids)
-      assert ids != []
-      assert Enum.all?(ids, &is_binary/1)
-    end
-
-    test "includes known model IDs" do
-      ids = Models.get_model_ids(:anthropic)
-      assert "claude-sonnet-4-20250514" in ids
-    end
-
-    test "returns empty list for unknown provider" do
-      assert [] == Models.get_model_ids(:nonexistent_provider)
     end
   end
 

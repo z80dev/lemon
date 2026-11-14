@@ -14,7 +14,6 @@ defmodule LemonAi.ModelsNewProvidersTest do
       assert models != []
       assert Enum.all?(models, &match?(%Model{provider: ^provider}, &1))
       assert Enum.all?(models, &(&1 in all_models))
-      assert Enum.sort(Models.get_model_ids(provider)) == Enum.sort(Enum.map(models, & &1.id))
     end
   end
 

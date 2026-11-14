@@ -34,7 +34,7 @@ defmodule LemonAi.Auth.AnthropicOAuth do
 
   require Logger
 
-  alias LemonAi.Auth.OAuthPKCE
+  alias LemonAi.Auth.{OAuthFlow, OAuthPKCE, OAuthSecret}
 
   # Public client id, kept base64 so secret scanners do not flag it.
   @client_id Base.decode64!("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl")
@@ -211,7 +211,7 @@ defmodule LemonAi.Auth.AnthropicOAuth do
       |> maybe_put("state", Keyword.get(opts, :state))
 
     with {:ok, response} <- post_token(body, :authorization_code_rejected),
-         {:ok, token} <- parse_token_response(response) do
+         {:ok, token} <- OAuthFlow.parse_token_response(response) do
       now = System.system_time(:millisecond)
 
       {:ok,
@@ -235,21 +235,10 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   def exchange_code_for_secret(_, _, _), do: {:error, :invalid_authorization_input}
 
   @spec encode_secret(oauth_secret()) :: String.t()
-  def encode_secret(secret) when is_map(secret), do: Jason.encode!(secret)
+  defdelegate encode_secret(secret), to: OAuthSecret, as: :encode
 
   @spec decode_secret(String.t()) :: {:ok, oauth_secret()} | :not_oauth
-  def decode_secret(secret_value) when is_binary(secret_value) do
-    case Jason.decode(secret_value) do
-      {:ok, %{"type" => type} = decoded}
-      when type == @secret_type or type in @legacy_secret_types ->
-        {:ok, decoded}
-
-      _ ->
-        :not_oauth
-    end
-  end
-
-  def decode_secret(_), do: :not_oauth
+  def decode_secret(value), do: OAuthSecret.decode(value, [@secret_type | @legacy_secret_types])
 
   @doc """
   Redacted login summary for status displays. Never includes tokens.
@@ -284,36 +273,9 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   """
   @spec resolve_api_key_from_secret(String.t(), String.t(), [resolve_opt()]) ::
           {:ok, String.t()} | :ignore | {:error, term()}
-  def resolve_api_key_from_secret(secret_name, secret_value, opts \\ [])
-
-  def resolve_api_key_from_secret(secret_name, secret_value, opts)
-      when is_binary(secret_name) and is_binary(secret_value) do
-    case decode_secret(secret_value) do
-      {:ok, secret} ->
-        reload = fn ->
-          LemonAi.Auth.OAuthSecretResolver.reload_secret(__MODULE__, secret_name, secret, opts)
-        end
-
-        persist = fn refreshed, captured_opts ->
-          LemonAi.Auth.OAuthSecretResolver.persist_secret(
-            secret_name,
-            encode_secret(refreshed),
-            captured_opts
-          )
-        end
-
-        force? = Keyword.get(opts, :force_refresh, false) == true
-
-        with {:ok, fresh} <- ensure_fresh(secret_name, secret, reload, persist, force?) do
-          access_token(fresh)
-        end
-
-      :not_oauth ->
-        :ignore
-    end
+  def resolve_api_key_from_secret(secret_name, secret_value, opts \\ []) do
+    OAuthSecret.resolve(__MODULE__, secret_name, secret_value, opts, refresh_spec())
   end
-
-  def resolve_api_key_from_secret(_, _, _), do: {:error, :invalid_secret_value}
 
   @doc """
   Resolve an ambient Claude Code token: refreshable credentials from
@@ -486,98 +448,14 @@ defmodule LemonAi.Auth.AnthropicOAuth do
 
   # ── Freshness and single-flight refresh ────────────────────────────────────
 
-  # `reload` returns the latest map and captured revision opts (or an error).
-  # `persist` receives that map's opts, not the caller's original opts. Both run
-  # under the lock so a queued caller sees what the previous holder stored.
-  #
-  # A forced refresh (the provider rejected the access token) refreshes only
-  # when the stored token is still the rejected one; a concurrent caller that
-  # already rotated it wins. A forced refresh never falls back to the rejected
-  # token.
-  defp ensure_fresh(lock_name, secret, reload, persist, force?) do
-    if force? or refresh_due?(secret) do
-      :global.trans(
-        {{__MODULE__, :refresh, lock_name}, self()},
-        fn ->
-          with {:ok, latest, captured_opts} <- reload.() do
-            persist_latest = fn refreshed -> persist.(refreshed, captured_opts) end
-
-            cond do
-              force? and latest["access_token"] == secret["access_token"] ->
-                force_refresh_and_persist(latest, persist_latest)
-
-              refresh_due?(latest) ->
-                refresh_and_persist(latest, persist_latest, reload)
-
-              true ->
-                usable(latest)
-            end
-          end
-        end,
-        [node()]
-      )
-    else
-      usable(secret)
-    end
-  end
-
-  defp force_refresh_and_persist(secret, persist) do
-    if non_empty_binary(secret["refresh_token"]) do
-      with {:ok, refreshed} <- refresh_secret(secret),
-           :ok <- persist.(refreshed) do
-        {:ok, refreshed}
-      end
-    else
-      {:error, :not_refreshable}
-    end
-  end
-
-  defp usable(secret) do
-    if expired?(secret), do: {:error, :expired_access_token}, else: {:ok, secret}
-  end
-
-  defp refresh_and_persist(secret, persist, reload) do
-    case refresh_secret(secret) do
-      {:ok, refreshed} ->
-        case persist.(refreshed) do
-          :ok -> {:ok, refreshed}
-          {:error, _} = error -> error
-        end
-
-      {:error, :reauth_required} = error ->
-        error
-
-      {:error, reason} ->
-        if expired?(secret) or is_nil(non_empty_binary(secret["access_token"])) do
-          {:error, reason}
-        else
-          Logger.debug("Anthropic OAuth refresh failed; reloading the unexpired access token")
-
-          with {:ok, latest, _opts} <- reload.(), do: usable(latest)
-        end
-    end
-  end
-
-  defp refresh_due?(secret) do
-    refresh_token = non_empty_binary(secret["refresh_token"])
-    expires_at_ms = parse_integer(secret["expires_at_ms"])
-
-    cond do
-      is_nil(refresh_token) -> false
-      is_nil(non_empty_binary(secret["access_token"])) -> true
-      is_nil(expires_at_ms) -> false
-      true -> expires_at_ms - System.system_time(:millisecond) <= @refresh_skew_ms
-    end
-  end
-
-  defp expired?(secret) do
-    case parse_integer(secret["expires_at_ms"]) do
-      expires_at_ms when is_integer(expires_at_ms) ->
-        expires_at_ms <= System.system_time(:millisecond)
-
-      _ ->
-        false
-    end
+  defp refresh_spec do
+    %{
+      refresh: &refresh_secret/1,
+      skew_ms: @refresh_skew_ms,
+      usable: &OAuthSecret.usable/1,
+      resolve: &OAuthSecret.access_token/1,
+      refresh_replaced: true
+    }
   end
 
   defp refresh_secret(secret) do
@@ -590,7 +468,7 @@ defmodule LemonAi.Auth.AnthropicOAuth do
     }
 
     with {:ok, response} <- post_token(body, :reauth_required),
-         {:ok, token} <- parse_token_response(response) do
+         {:ok, token} <- OAuthFlow.parse_token_response(response) do
       {:ok,
        secret
        |> Map.put("type", @secret_type)
@@ -598,13 +476,6 @@ defmodule LemonAi.Auth.AnthropicOAuth do
        |> Map.put("refresh_token", token.refresh_token || refresh_token)
        |> Map.put("expires_at_ms", token.expires_at_ms)
        |> Map.put("updated_at_ms", System.system_time(:millisecond))}
-    end
-  end
-
-  defp access_token(secret) do
-    case non_empty_binary(secret["access_token"]) do
-      nil -> {:error, :missing_access_token}
-      token -> {:ok, token}
     end
   end
 
@@ -652,27 +523,6 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   defp transport_reason(%{reason: reason}) when is_atom(reason), do: reason
   defp transport_reason(_), do: :unknown
 
-  defp parse_token_response(response) when is_map(response) do
-    access_token = non_empty_binary(response["access_token"])
-    expires_in = parse_integer(response["expires_in"])
-
-    cond do
-      is_nil(access_token) ->
-        {:error, :missing_access_token}
-
-      not is_integer(expires_in) or expires_in <= 0 ->
-        {:error, :invalid_expiry}
-
-      true ->
-        {:ok,
-         %{
-           access_token: access_token,
-           refresh_token: non_empty_binary(response["refresh_token"]),
-           expires_at_ms: System.system_time(:millisecond) + expires_in * 1000
-         }}
-    end
-  end
-
   # ── Ambient Claude Code credentials ────────────────────────────────────────
 
   defp resolve_env_token(claude_code_secret) do
@@ -702,17 +552,28 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   defp prefer_refreshable_claude_code_token(_env_token, _claude_code_secret), do: nil
 
   defp current_claude_code_secret do
+    opts = [
+      reload_secret: fn _ ->
+        with {:ok, latest} <- read_claude_code_credentials() do
+          {:ok, encode_secret(latest), :claude_code_file}
+        end
+      end,
+      persist_secret: fn _, encoded, _ ->
+        with {:ok, refreshed} <- decode_secret(encoded) do
+          persist_claude_code_credentials(refreshed)
+        end
+      end
+    ]
+
+    spec =
+      Map.merge(refresh_spec(), %{
+        lock: __MODULE__,
+        decode: &decode_secret/1,
+        encode: &encode_secret/1
+      })
+
     with {:ok, secret} <- read_claude_code_credentials(),
-         {:ok, fresh} <-
-           ensure_fresh(
-             @claude_code_file_lock,
-             secret,
-             fn ->
-               with {:ok, latest} <- read_claude_code_credentials(), do: {:ok, latest, []}
-             end,
-             fn refreshed, _opts -> persist_claude_code_credentials(refreshed) end,
-             false
-           ) do
+         {:ok, fresh} <- OAuthFlow.ensure_fresh(@claude_code_file_lock, secret, opts, spec) do
       fresh
     else
       _ -> nil

@@ -19,7 +19,7 @@ defmodule LemonAi.Auth.XAIOAuth do
   `:req_options`.
   """
 
-  alias LemonAi.Auth.OAuthFlow
+  alias LemonAi.Auth.{OAuthFlow, OAuthSecret}
 
   @client_id "b1a00492-073a-47ea-816f-4c329264a828"
   @scopes ~w(openid profile email offline_access grok-cli:access api:access)
@@ -108,18 +108,11 @@ defmodule LemonAi.Auth.XAIOAuth do
 
   @doc "Encode a secret payload for storage."
   @spec encode_secret(oauth_secret()) :: String.t()
-  def encode_secret(secret) when is_map(secret), do: Jason.encode!(secret)
+  defdelegate encode_secret(secret), to: OAuthSecret, as: :encode
 
   @doc "Decode a stored xAI OAuth payload."
   @spec decode_secret(term()) :: {:ok, oauth_secret()} | :not_oauth
-  def decode_secret(value) when is_binary(value) do
-    case Jason.decode(value) do
-      {:ok, %{"type" => @secret_type} = secret} -> {:ok, secret}
-      _ -> :not_oauth
-    end
-  end
-
-  def decode_secret(_), do: :not_oauth
+  def decode_secret(value), do: OAuthSecret.decode(value, [@secret_type])
 
   @doc "Redacted login summary for status displays. Never includes tokens."
   @spec describe_secret(oauth_secret()) :: map()
@@ -147,30 +140,12 @@ defmodule LemonAi.Auth.XAIOAuth do
   """
   @spec resolve_api_key_from_secret(String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | :ignore | {:error, term()}
-  def resolve_api_key_from_secret(secret_name, secret_value, opts \\ [])
-
-  def resolve_api_key_from_secret(secret_name, secret_value, opts)
-      when is_binary(secret_name) and is_binary(secret_value) do
-    case decode_secret(secret_value) do
-      {:ok, secret} ->
-        spec = %{
-          lock: __MODULE__,
-          decode: &decode_secret/1,
-          encode: &encode_secret/1,
-          refresh: &refresh_secret(&1, opts),
-          skew_ms: @refresh_skew_ms
-        }
-
-        with {:ok, fresh} <- OAuthFlow.ensure_fresh(secret_name, secret, opts, spec) do
-          {:ok, fresh["access_token"]}
-        end
-
-      :not_oauth ->
-        :ignore
-    end
+  def resolve_api_key_from_secret(secret_name, secret_value, opts \\ []) do
+    OAuthSecret.resolve(__MODULE__, secret_name, secret_value, opts, %{
+      refresh: &refresh_secret(&1, opts),
+      skew_ms: @refresh_skew_ms
+    })
   end
-
-  def resolve_api_key_from_secret(_, _, _), do: {:error, :invalid_secret_value}
 
   @doc """
   Validate an HTTPS x.ai endpoint on port 443 without URL credentials or a fragment.

@@ -110,8 +110,8 @@ defmodule <%= @app_module %>.Agent do
       raise """
       Unknown model #{inspect(provider)} / #{inspect(id)}.
 
-      Check config/config.exs. `LemonAi.Models.get_model_ids(#{inspect(provider)})`
-      lists what this provider offers.
+      Check config/config.exs. List this provider's model IDs with:
+      `LemonAi.Models.get_models(#{inspect(provider)}) |> Enum.map(& &1.id)`.
       """
   end
 

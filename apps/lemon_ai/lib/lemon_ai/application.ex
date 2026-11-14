@@ -39,7 +39,10 @@ defmodule LemonAi.Application do
       # Registry for per-provider circuit breakers
       {Registry, keys: :unique, name: LemonAi.CircuitBreakerRegistry},
       # Dynamic supervisor for per-provider services
-      LemonAi.ProviderSupervisor,
+      Supervisor.child_spec(
+        {DynamicSupervisor, name: LemonAi.ProviderSupervisor, strategy: :one_for_one},
+        id: LemonAi.ProviderSupervisor
+      ),
       # Central call dispatcher
       {LemonAi.CallDispatcher, []},
       # Model availability cache (ETS-backed)

@@ -12,8 +12,6 @@ defmodule LemonAi.ProviderSupervisorTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonAi.ProviderSupervisor
-
   # Test GenServer for simulating provider processes
   defmodule TestWorker do
     use GenServer
@@ -144,32 +142,9 @@ defmodule LemonAi.ProviderSupervisorTest do
   # Supervisor Startup Tests
   # ============================================================================
 
-  describe "supervisor startup" do
-    test "supervisor can be started with custom name" do
-      custom_name = :"custom_supervisor_#{System.unique_integer([:positive])}"
-      {:ok, pid} = ProviderSupervisor.start_link(name: custom_name)
-
-      assert Process.whereis(custom_name) == pid
-      assert Process.alive?(pid)
-
-      # Cleanup
-      GenServer.stop(pid)
-    end
-
-    test "supervisor starts with no children" do
-      custom_name = :"empty_supervisor_#{System.unique_integer([:positive])}"
-      {:ok, pid} = ProviderSupervisor.start_link(name: custom_name)
-
-      children = DynamicSupervisor.which_children(pid)
-      assert children == []
-
-      # Cleanup
-      GenServer.stop(pid)
-    end
-
+  describe "supervisor strategy" do
     test "supervisor uses one_for_one strategy" do
-      # The strategy is set in init/1 - we verify by behavior
-      # Start two children, crash one, verify the other survives
+      # Start two children, crash one, verify the other survives.
       name1 = unique_name()
       name2 = unique_name()
 
