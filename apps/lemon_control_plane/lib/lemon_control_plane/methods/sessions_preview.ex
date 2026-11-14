@@ -5,6 +5,8 @@ defmodule LemonControlPlane.Methods.SessionsPreview do
   Returns a preview of session history.
   """
 
+  import LemonControlPlane.Methods.Params, only: [get_param: 2]
+
   @behaviour LemonControlPlane.Method
 
   @default_limit 10
@@ -121,15 +123,4 @@ defmodule LemonControlPlane.Methods.SessionsPreview do
 
   defp normalize_limit(_), do: @default_limit
 
-  defp get_param(params, key) when is_map(params) and is_binary(key) do
-    underscored = Macro.underscore(key)
-
-    cond do
-      Map.has_key?(params, key) -> Map.get(params, key)
-      Map.has_key?(params, underscored) -> Map.get(params, underscored)
-      true -> nil
-    end
-  end
-
-  defp get_param(_params, _key), do: nil
 end

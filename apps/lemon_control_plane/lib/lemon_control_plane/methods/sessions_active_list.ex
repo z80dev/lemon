@@ -5,6 +5,8 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
   Lists active (in-flight) sessions with optional agent/route filtering.
   """
 
+  import LemonControlPlane.Methods.Params, only: [get_param: 2, blank?: 1]
+
   @behaviour LemonControlPlane.Method
 
   alias LemonCore.AgentRuntime
@@ -395,18 +397,6 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
 
   defp normalize_optional_binary(_), do: nil
 
-  defp get_param(params, key) when is_map(params) and is_binary(key) do
-    underscored = Macro.underscore(key)
-
-    cond do
-      Map.has_key?(params, key) -> Map.get(params, key)
-      Map.has_key?(params, underscored) -> Map.get(params, underscored)
-      true -> nil
-    end
-  end
-
-  defp get_param(_params, _key), do: nil
-
   defp map_get(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))
   end
@@ -418,7 +408,4 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
 
   defp map_get(_, _), do: nil
 
-  defp blank?(nil), do: true
-  defp blank?(""), do: true
-  defp blank?(_), do: false
 end

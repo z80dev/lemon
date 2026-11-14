@@ -6,6 +6,8 @@ defmodule LemonControlPlane.Methods.CronRuns do
   internals, and introspection timeline.
   """
 
+  import LemonControlPlane.Methods.Params, only: [truthy?: 2, normalize_limit: 3, get_map: 2, get_map: 3]
+
   @behaviour LemonControlPlane.Method
 
   @default_limit 100
@@ -324,23 +326,6 @@ defmodule LemonControlPlane.Methods.CronRuns do
 
   defp normalize_optional_integer(_), do: nil
 
-  defp normalize_limit(limit, _default, max) when is_integer(limit) and limit > 0,
-    do: min(limit, max)
-
-  defp normalize_limit(limit, default, max) when is_binary(limit) do
-    case Integer.parse(limit) do
-      {parsed, _} when parsed > 0 -> min(parsed, max)
-      _ -> default
-    end
-  end
-
-  defp normalize_limit(_, default, _), do: default
-
-  defp truthy?(value, _default) when is_boolean(value), do: value
-  defp truthy?(value, _default) when value in ["true", "TRUE", "1", 1, "yes", "on"], do: true
-  defp truthy?(value, _default) when value in ["false", "FALSE", "0", 0, "no", "off"], do: false
-  defp truthy?(_value, default), do: default
-
   defp serialize_term(value, depth \\ 0)
   defp serialize_term(_value, depth) when depth >= 7, do: "[max_depth]"
 
@@ -381,26 +366,6 @@ defmodule LemonControlPlane.Methods.CronRuns do
   defp key_to_string(key) when is_binary(key), do: key
   defp key_to_string(key) when is_atom(key), do: Atom.to_string(key)
   defp key_to_string(key), do: to_string(key)
-
-  defp get_map(nil, _key, default), do: default
-
-  defp get_map(map, key, default) when is_map(map) do
-    cond do
-      Map.has_key?(map, key) ->
-        Map.get(map, key)
-
-      is_atom(key) and Map.has_key?(map, Atom.to_string(key)) ->
-        Map.get(map, Atom.to_string(key))
-
-      true ->
-        default
-    end
-  rescue
-    _ -> default
-  end
-
-  defp get_map(_map, _key, default), do: default
-  defp get_map(map, key), do: get_map(map, key, nil)
 
   defp normalize_string(nil), do: nil
   defp normalize_string(value) when is_binary(value), do: value
