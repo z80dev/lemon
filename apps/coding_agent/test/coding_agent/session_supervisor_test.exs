@@ -23,6 +23,17 @@ defmodule CodingAgent.SessionSupervisorTest do
     :ok
   end
 
+  # A killed agent now stops its session, so an "unhealthy" session is simulated by
+  # pointing the live session at an already-dead agent.
+  defp make_agent_dead(session, agent) do
+    dead = spawn(fn -> :ok end)
+    ref = Process.monitor(dead)
+    assert_receive {:DOWN, ^ref, :process, ^dead, _}, 2_000
+    :sys.replace_state(session, fn state -> %{state | agent: dead} end)
+    GenServer.stop(agent)
+    :ok
+  end
+
   setup_all do
     cwd =
       Path.join(System.tmp_dir!(), "session_supervisor_#{System.unique_integer([:positive])}")
@@ -231,7 +242,7 @@ defmodule CodingAgent.SessionSupervisorTest do
 
       # Kill the agent of the first session to make it unhealthy
       state = CodingAgent.Session.get_state(pid1)
-      kill_and_await(state.agent)
+      make_agent_dead(pid1, state.agent)
 
       health_results = SessionSupervisor.health_all()
 
@@ -276,7 +287,7 @@ defmodule CodingAgent.SessionSupervisorTest do
 
       # Kill the agent of the first session to make it unhealthy
       state = CodingAgent.Session.get_state(pid1)
-      kill_and_await(state.agent)
+      make_agent_dead(pid1, state.agent)
 
       summary = SessionSupervisor.health_summary()
 

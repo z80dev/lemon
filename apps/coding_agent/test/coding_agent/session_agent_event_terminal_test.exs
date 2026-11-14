@@ -31,7 +31,10 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
       stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("ok"))
     ]
 
-    session = start_supervised!({Session, Keyword.merge(defaults, opts)})
+    session =
+      start_supervised!(
+        Supervisor.child_spec({Session, Keyword.merge(defaults, opts)}, restart: :temporary)
+      )
 
     on_exit(fn ->
       File.rm_rf!(cwd)
@@ -469,14 +472,16 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     assert Session.diagnostics(session).follow_up_queue_size == 0
   end
 
-  test "agent exit clears the session follow-up diagnostic mirror" do
+  test "agent exit publishes a terminal error and stops the session (no zombie)" do
     session = start_session()
+    Session.subscribe(session)
     queue_diagnostic_follow_up(session)
     state = Session.get_state(session)
+    ref = Process.monitor(session)
 
     send(session, {:EXIT, state.agent, :provider_crash})
 
-    assert Session.diagnostics(session).follow_up_queue_size == 0
-    assert :queue.len(Session.get_state(session).steering_queue) == 0
+    assert_receive {:session_event, _, {:error, {:agent_exit, :provider_crash}, _partial}}, 2_000
+    assert_receive {:DOWN, ^ref, :process, ^session, {:agent_exit, :provider_crash}}, 2_000
   end
 end
