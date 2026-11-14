@@ -16,7 +16,7 @@ defmodule LemonWeb.Rpc do
       exception text); other details are kept only when they are maps.
 
   Methods whose handler declares `dispatch_mode/0 == :async` can block on slow
-  work; call them from `Phoenix.LiveView.start_async/3` (see `async?/1`). A
+  work; call them from `Phoenix.LiveView.start_async/3`. A
   result with `"retrySafe" => false` (or `:outcome_unknown`) may already have
   taken effect: never retry it automatically.
   """
@@ -44,17 +44,9 @@ defmodule LemonWeb.Rpc do
       {:error, %{code: :unavailable, message: "Lemon runtime is unavailable", details: nil}}
   end
 
-  @doc "Whether `method` must run outside the LiveView process (`start_async`)."
-  @spec async?(String.t()) :: boolean()
-  def async?(method), do: Registry.dispatch_mode(method) == :async
-
-  @doc "Whether `method` is registered in the running control plane."
-  @spec available?(String.t()) :: boolean()
-  def available?(method) do
-    match?({:ok, _}, Registry.lookup(method))
-  rescue
-    ArgumentError -> false
-  end
+  @doc false
+  def put_present(map, _key, value) when value in [nil, ""], do: map
+  def put_present(map, key, value), do: Map.put(map, key, value)
 
   @doc "Human-readable message for an error returned by `call/2`."
   @spec message(error() | term()) :: String.t()

@@ -83,8 +83,5 @@ defmodule LemonWeb.SessionCwd do
     _ -> File.cwd!()
   end
 
-  defp field(map, key) when is_map(map),
-    do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
-
-  defp field(_value, _key), do: nil
+  defp field(map, key), do: LemonCore.MapHelpers.get_key(map, key)
 end

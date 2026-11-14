@@ -27,6 +27,8 @@ defmodule LemonWeb.OmpLive do
 
   use LemonWeb, :live_view
 
+  import LemonWeb.Rpc, only: [put_present: 3]
+
   alias LemonControlPlane.EventBridge
   alias LemonWeb.Chat.Backend
   alias LemonWeb.Rpc
@@ -1440,9 +1442,6 @@ defmodule LemonWeb.OmpLive do
       )
     )
   end
-
-  defp put_present(map, _key, value) when value in [nil, ""], do: map
-  defp put_present(map, key, value), do: Map.put(map, key, value)
 
   defp resume_state(socket, id) do
     base = %{

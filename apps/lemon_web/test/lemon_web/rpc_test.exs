@@ -6,8 +6,6 @@ defmodule LemonWeb.RpcTest do
   test "dispatches registered methods in-process as the web operator" do
     assert {:ok, payload} = Rpc.call("health")
     assert is_map(payload)
-    assert Rpc.available?("sessions.context")
-    refute Rpc.available?("no.such.method")
   end
 
   test "unknown methods and invalid params return safe wire errors" do
@@ -28,8 +26,10 @@ defmodule LemonWeb.RpcTest do
     assert Rpc.message(%{message: ""}) == "The request could not be completed."
   end
 
-  test "async handlers are reported" do
-    assert Rpc.async?("sessions.compact")
-    refute Rpc.async?("health")
+  test "optional params omit only nil and empty strings" do
+    assert Rpc.put_present(%{}, "key", nil) == %{}
+    assert Rpc.put_present(%{}, "key", "") == %{}
+    assert Rpc.put_present(%{}, "key", false) == %{"key" => false}
+    assert Rpc.put_present(%{}, "key", 0) == %{"key" => 0}
   end
 end

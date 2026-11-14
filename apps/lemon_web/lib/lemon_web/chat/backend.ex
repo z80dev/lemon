@@ -16,6 +16,8 @@ defmodule LemonWeb.Chat.Backend do
 
   alias LemonWeb.Rpc
 
+  import LemonWeb.Rpc, only: [put_present: 3]
+
   @type error :: %{code: atom(), message: String.t(), details: map() | nil}
 
   @doc "Raw RPC call honoring the test stub."
@@ -420,10 +422,6 @@ defmodule LemonWeb.Chat.Backend do
   defp unavailable,
     do: %{code: :unavailable, message: "Lemon returned an unexpected response.", details: nil}
 
-  defp put_present(map, _key, nil), do: map
-  defp put_present(map, _key, ""), do: map
-  defp put_present(map, key, value), do: Map.put(map, key, value)
-
   defp string(value) when is_binary(value) and value != "", do: value
 
   defp string(value) when is_atom(value) and value not in [nil, true, false],
@@ -434,8 +432,5 @@ defmodule LemonWeb.Chat.Backend do
   defp integer(value) when is_integer(value), do: value
   defp integer(_), do: nil
 
-  defp field(map, key) when is_map(map),
-    do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
-
-  defp field(_, _), do: nil
+  defp field(map, key), do: LemonCore.MapHelpers.get_key(map, key)
 end
