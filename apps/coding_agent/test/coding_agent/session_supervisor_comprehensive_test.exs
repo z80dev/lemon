@@ -1024,21 +1024,23 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     end
 
     @tag :stress
-    test "concurrent health checks do not cause issues" do
-      {:ok, _pid1} = start_test_session()
-      {:ok, _pid2} = start_test_session()
-      {:ok, _pid3} = start_test_session()
+    test "concurrent diagnostics do not cause issues" do
+      {:ok, pid1} = start_test_session()
+      {:ok, pid2} = start_test_session()
+      {:ok, pid3} = start_test_session()
 
       tasks =
         for _ <- 1..50 do
           async(fn ->
-            SessionSupervisor.health_all()
-            SessionSupervisor.health_summary()
+            Enum.map([pid1, pid2, pid3], &Session.diagnostics/1)
           end)
         end
 
       results = Task.await_many(tasks, 10_000)
       assert length(results) == 50
+      assert Enum.all?(results, fn diagnostics ->
+               length(diagnostics) == 3 and Enum.all?(diagnostics, & &1.agent_alive)
+             end)
     end
   end
 end
