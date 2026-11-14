@@ -339,10 +339,7 @@ defmodule CodingAgent.Tools.EvalBridgeTest do
       assert MutationLock.held() == []
     end
 
-    @tag skip:
-           if(!System.find_executable("python3") && !System.find_executable("python"),
-             do: "python not on PATH"
-           )
+    @tag :python3
     test "a bridged mutating call does not deadlock under the cell's session lock", ctx do
       key = {:session, ctx.session_id}
       test_pid = self()
@@ -420,10 +417,7 @@ defmodule CodingAgent.Tools.EvalBridgeTest do
       assert Session.bridge_tool(dead, "read") == {:error, "session unavailable"}
     end
 
-    @tag skip:
-           if(!System.find_executable("python3") && !System.find_executable("python"),
-             do: "python not on PATH"
-           )
+    @tag :python3
     test "the session's own eval reaches bash through the bridge under its lock", %{
       session: session,
       session_cwd: cwd
