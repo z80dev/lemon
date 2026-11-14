@@ -83,7 +83,17 @@ defmodule LemonAi do
   @spec stream(Model.t(), Context.t(), StreamOptions.t() | map()) ::
           {:ok, EventStream.t()} | {:error, term()}
   def stream(%Model{} = model, %Context{} = context, opts \\ %{}) do
-    dispatch_opts = stream_timeout_options(opts)
+    dispatch_stream(model, context, opts, :stream)
+  end
+
+  defp dispatch_stream(%Model{} = model, %Context{} = context, opts, call_kind) do
+    dispatch_opts =
+      Keyword.put(stream_timeout_options(opts), :model_call, %{
+        model: model.id,
+        api: model.api,
+        call_kind: call_kind
+      })
+
     opts = normalize_options(opts)
 
     case ProviderRegistry.get(model.api) do
@@ -137,7 +147,7 @@ defmodule LemonAi do
   end
 
   defp complete_once(model, context, opts) do
-    with {:ok, stream} <- stream(model, context, opts) do
+    with {:ok, stream} <- dispatch_stream(model, context, opts, :complete) do
       try do
         case EventStream.result(stream) do
           {:ok, %AssistantMessage{} = msg} = ok ->

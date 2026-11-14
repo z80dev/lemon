@@ -48,6 +48,13 @@ defmodule LemonAi.CallDispatcher do
   - `[:lemon_ai, :dispatcher, :queued]` - the caller had to wait for a slot
   - `[:lemon_ai, :dispatcher, :rejected]` - rejected with `reason:`
     `:circuit_open`, `:rate_limited`, or `:max_concurrency` (queue wait timed out)
+  - `[:lemon_ai, :model_call, :start | :stop | :exception]` - one span per
+    admitted model call (rejected dispatches never start one). Streaming calls
+    stop when the stream reaches its terminal state, not when `dispatch/3`
+    returns. See `LemonAi.ModelCallTelemetry` for measurements and metadata.
+
+  Callers may pass `model_call: %{model: id, api: api, call_kind: :stream | :complete}`
+  in the dispatch options to label the span; only those keys are read.
   """
 
   use GenServer
@@ -102,6 +109,8 @@ defmodule LemonAi.CallDispatcher do
     * `:stream_timeout` - Independent hard stream ceiling, in ms (default
       1,800,000). Also configurable under this module's application config.
       Both limits accept `:infinity`; per-call values override application config.
+    * `:model_call` - optional `%{model: id, api: api, call_kind: kind}` labels
+      for the `[:lemon_ai, :model_call, _]` telemetry span.
 
   ## Examples
 
@@ -148,9 +157,12 @@ defmodule LemonAi.CallDispatcher do
         {:ok, slot_ref} ->
           case LemonAi.RateLimiter.acquire(provider) do
             :ok ->
+              span = LemonAi.ModelCallTelemetry.start(provider, opts)
+
               try do
-                callback.()
-                |> handle_dispatch_result(provider, slot_ref, opts)
+                callback
+                |> invoke_callback(span)
+                |> handle_dispatch_result(provider, slot_ref, opts, span)
               rescue
                 error ->
                   record_last_error(provider, error)
@@ -378,9 +390,9 @@ defmodule LemonAi.CallDispatcher do
     :exit, {:noproc, _} -> :ok
   end
 
-  defp handle_dispatch_result({:ok, stream_pid} = result, provider, slot_ref, opts)
+  defp handle_dispatch_result({:ok, stream_pid} = result, provider, slot_ref, opts, span)
        when is_pid(stream_pid) do
-    case start_stream_tracking(provider, slot_ref, stream_pid, opts) do
+    case start_stream_tracking(provider, slot_ref, stream_pid, opts, span) do
       :ok ->
         result
 
@@ -389,26 +401,40 @@ defmodule LemonAi.CallDispatcher do
           "CallDispatcher failed to start stream tracking for #{inspect(provider)}: #{inspect(reason)}"
         )
 
+        LemonAi.ModelCallTelemetry.stop_failure(span, :error, :stream_tracking_failed)
         release_slot(slot_ref)
         LemonAi.CircuitBreaker.record_failure(provider, {:stream_tracking_start_failed, reason})
         result
     end
   end
 
-  defp handle_dispatch_result(result, provider, slot_ref, _opts) do
+  defp handle_dispatch_result(result, provider, slot_ref, _opts, span) do
+    # Stop first: nothing below may leave the span open.
+    LemonAi.ModelCallTelemetry.stop_result(span, result)
     record_result(provider, result)
     release_slot(slot_ref)
     result
   end
 
-  defp start_stream_tracking(provider, slot_ref, stream_pid, opts) do
+  # Wraps only the model callback so a raise, throw or exit closes the span
+  # exactly once; the original failure is re-raised untouched.
+  defp invoke_callback(callback, span) do
+    callback.()
+  catch
+    kind, reason ->
+      LemonAi.ModelCallTelemetry.exception(span, kind, reason)
+      :erlang.raise(kind, reason, __STACKTRACE__)
+  end
+
+  defp start_stream_tracking(provider, slot_ref, stream_pid, opts, span) do
     case Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
-           track_stream_result(provider, slot_ref, stream_pid)
+           track_stream_result(provider, slot_ref, stream_pid, span)
          end) do
       {:ok, tracker_pid} ->
         with :ok <-
                LemonAi.EventStream.configure_timeouts(stream_pid, stream_timeout_options(opts)),
-             {:ok, result_ref} <- LemonAi.EventStream.subscribe_result(stream_pid, tracker_pid) do
+             {:ok, result_ref} <-
+               LemonAi.EventStream.subscribe_result(stream_pid, tracker_pid, first_event: true) do
           send(tracker_pid, {:track_stream_result, result_ref})
           :ok
         else
@@ -424,9 +450,13 @@ defmodule LemonAi.CallDispatcher do
     :exit, reason -> {:error, reason}
   end
 
-  defp track_stream_result(provider, slot_ref, stream_pid) do
-    terminal_result = await_stream_terminal_result(stream_pid)
+  # The tracker owns the model-call span once tracking started: every path
+  # below emits exactly one `:stop`, and only as its last step (after the
+  # breaker bookkeeping), so a failure while recording is still reported once.
+  defp track_stream_result(provider, slot_ref, stream_pid, span) do
+    {terminal_result, first_event_at, ended_at} = await_stream_terminal_result(stream_pid)
     record_stream_terminal_result(provider, terminal_result)
+    LemonAi.ModelCallTelemetry.stop_stream(span, terminal_result, first_event_at, ended_at)
   rescue
     error ->
       Logger.warning(
@@ -437,19 +467,21 @@ defmodule LemonAi.CallDispatcher do
         provider,
         {:stream_tracking_exception, Exception.message(error)}
       )
+
+      LemonAi.ModelCallTelemetry.stop_failure(span, :error, :stream_tracking_exit)
   catch
     # A :shutdown exit of the tracked stream is a deliberate teardown — a
     # consumer cancel propagated through a link cascade (e.g. the fallback
     # wrapper's relay task being shut down), not a provider failure. Record
     # neither success nor failure.
     :exit, :shutdown ->
-      :ok
+      LemonAi.ModelCallTelemetry.stop_failure(span, :canceled, :shutdown)
 
     :exit, {:shutdown, _} ->
-      :ok
+      LemonAi.ModelCallTelemetry.stop_failure(span, :canceled, :shutdown)
 
     :exit, {{:shutdown, _}, _} ->
-      :ok
+      LemonAi.ModelCallTelemetry.stop_failure(span, :canceled, :shutdown)
 
     :exit, reason ->
       Logger.warning(
@@ -457,6 +489,7 @@ defmodule LemonAi.CallDispatcher do
       )
 
       LemonAi.CircuitBreaker.record_failure(provider, {:stream_tracking_exit, reason})
+      LemonAi.ModelCallTelemetry.stop_failure(span, :error, :stream_tracking_exit)
   after
     release_slot(slot_ref)
   end
@@ -467,15 +500,25 @@ defmodule LemonAi.CallDispatcher do
     receive do
       {:track_stream_result, result_ref} ->
         stream_ref = Process.monitor(stream_pid)
+        await_terminal_loop(stream_pid, stream_ref, result_ref, nil)
+    end
+  end
 
-        receive do
-          {:event_stream_result, ^result_ref, terminal_result} ->
-            Process.demonitor(stream_ref, [:flush])
-            terminal_result
+  # The stream sends `:event_stream_first_event` (at most once) before the
+  # result message, so the first-event time is always known by the time the
+  # terminal result arrives.
+  defp await_terminal_loop(stream_pid, stream_ref, result_ref, first_event_at) do
+    receive do
+      {:event_stream_first_event, ^result_ref, at} ->
+        await_terminal_loop(stream_pid, stream_ref, result_ref, first_event_at || at)
 
-          {:DOWN, ^stream_ref, :process, ^stream_pid, reason} ->
-            {:error, {:stream_exit, reason}}
-        end
+      {:event_stream_result, ^result_ref, terminal_result} ->
+        ended_at = System.monotonic_time()
+        Process.demonitor(stream_ref, [:flush])
+        {terminal_result, first_event_at, ended_at}
+
+      {:DOWN, ^stream_ref, :process, ^stream_pid, reason} ->
+        {{:error, {:stream_exit, reason}}, first_event_at, System.monotonic_time()}
     end
   end
 

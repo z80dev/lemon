@@ -249,12 +249,22 @@ defmodule LemonAi.EventStream do
   The subscriber receives `{:event_stream_result, reference, result}` exactly
   once. Registration is synchronous, so a cancellation issued after this
   function returns cannot race ahead of the result subscription.
-  """
-  @spec subscribe_result(t(), pid()) :: {:ok, reference()} | {:error, :stream_not_found}
-  def subscribe_result(stream, subscriber \\ self()) when is_pid(subscriber) do
-    reference = make_ref()
 
-    case GenServer.call(stream, {:subscribe_result, subscriber, reference}) do
+  ## Options
+
+    * `:first_event` - when `true`, the subscriber also receives
+      `{:event_stream_first_event, reference, monotonic_native_time}` at most
+      once, before the result message, when the first content delta (text,
+      thinking or tool-call) is pushed. Defaults to `false`.
+  """
+  @spec subscribe_result(t(), pid(), keyword()) ::
+          {:ok, reference()} | {:error, :stream_not_found}
+  def subscribe_result(stream, subscriber \\ self(), opts \\ [])
+      when is_pid(subscriber) and is_list(opts) do
+    reference = make_ref()
+    first_event? = Keyword.get(opts, :first_event, false) == true
+
+    case GenServer.call(stream, {:subscribe_result, subscriber, reference, first_event?}) do
       :ok -> {:ok, reference}
     end
   catch
@@ -345,7 +355,8 @@ defmodule LemonAi.EventStream do
       timeout_reason: :timeout,
       idle_timeout_reason: :stream_idle_timeout,
       timeout_ref: timeout_ref,
-      idle_timeout_ref: idle_timeout_ref
+      idle_timeout_ref: idle_timeout_ref,
+      first_event_at: nil
     }
 
     {:ok, state}
@@ -391,8 +402,14 @@ defmodule LemonAi.EventStream do
     end
   end
 
-  def handle_call({:subscribe_result, subscriber, reference}, _from, state) do
-    waiter = {:subscriber, subscriber, reference}
+  def handle_call({:subscribe_result, subscriber, reference, first_event?}, _from, state) do
+    waiter = {:subscriber, subscriber, reference, first_event?}
+
+    # A subscriber that joins after the first content event still learns when
+    # it happened; the message always precedes the result message.
+    if first_event? and state.first_event_at do
+      send(subscriber, {:event_stream_first_event, reference, state.first_event_at})
+    end
 
     if state.done do
       notify_result_waiter(waiter, state.result)
@@ -654,7 +671,7 @@ defmodule LemonAi.EventStream do
 
   defp handle_push(event, state, opts) do
     log_on_overflow = Keyword.get(opts, :log_on_overflow, false)
-    state = reset_idle_timeout(state)
+    state = state |> reset_idle_timeout() |> note_first_event(event)
 
     if state.queue_size >= state.max_queue do
       handle_overflow(event, state, log_on_overflow)
@@ -662,6 +679,32 @@ defmodule LemonAi.EventStream do
       state = deliver_or_buffer(event, state)
       {:ok, state}
     end
+  end
+
+  # Time to the first content event (any delta). Recorded once, in native
+  # monotonic units, and forwarded to result subscribers that asked for it.
+  defp note_first_event(%{first_event_at: nil} = state, event) when is_tuple(event) do
+    if content_event?(event) do
+      at = System.monotonic_time()
+
+      Enum.each(:queue.to_list(state.result_waiters), fn
+        {:subscriber, subscriber, reference, true} ->
+          send(subscriber, {:event_stream_first_event, reference, at})
+
+        _waiter ->
+          :ok
+      end)
+
+      %{state | first_event_at: at}
+    else
+      state
+    end
+  end
+
+  defp note_first_event(state, _event), do: state
+
+  defp content_event?(event) do
+    tuple_size(event) > 0 and elem(event, 0) in [:text_delta, :thinking_delta, :tool_call_delta]
   end
 
   defp push_terminal(event, state) do
@@ -752,7 +795,7 @@ defmodule LemonAi.EventStream do
 
   defp notify_result_waiter({:caller, from}, result), do: GenServer.reply(from, result)
 
-  defp notify_result_waiter({:subscriber, subscriber, reference}, result) do
+  defp notify_result_waiter({:subscriber, subscriber, reference, _first_event?}, result) do
     send(subscriber, {:event_stream_result, reference, result})
   end
 

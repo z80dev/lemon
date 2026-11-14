@@ -34,6 +34,11 @@ resolution belong in `lemon_agent`, not provider implementations.
 - Admission must be released after streaming completion or owner failure, not
   merely when a stream handle is returned. Circuit success/failure reflects the
   completed stream.
+- Every admitted model call emits one `[:lemon_ai, :model_call, :start]` and exactly
+  one `:stop` or `:exception` (`LemonAi.ModelCallTelemetry`; catalogue in
+  `docs/telemetry.md`). Streams stop from the existing `track_stream_result`
+  tracker, never a second watcher. Keep prompts, messages, credentials, URLs and
+  raw error terms out of its metadata; use bounded category atoms.
 - Retry only the classified transient errors under `RetryHelper`'s bounded
   policy. Respect capped server retry hints; longer waits surface to the session
   rather than creating an unbounded provider sleep. Never retry tool side effects
