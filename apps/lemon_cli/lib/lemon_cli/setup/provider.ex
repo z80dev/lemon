@@ -22,7 +22,7 @@ defmodule LemonCli.Setup.Provider do
   `LemonCli.Setup.ProviderAuth` instead.
   """
 
-  alias LemonCli.Onboarding.{LogSilencer, PromptUI, Providers, Runner}
+  alias LemonCli.Onboarding.{LogSilencer, Providers, Runner}
   alias LemonCli.Onboarding.Provider, as: ProviderSpec
   alias LemonCli.Setup.{ProviderAuth, Scaffold, Verification}
   alias LemonCore.Secrets
