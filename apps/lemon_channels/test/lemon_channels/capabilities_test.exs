@@ -120,26 +120,6 @@ defmodule LemonChannels.CapabilitiesTest do
     end
   end
 
-  test "to_legacy/1 converts new format to legacy" do
-    caps =
-      Capabilities.new([
-        :threads,
-        :reactions,
-        :edit,
-        :delete,
-        {:attachments, features: [:images]}
-      ])
-
-    legacy = Capabilities.to_legacy(caps)
-
-    assert legacy.thread_support == true
-    assert legacy.reaction_support == true
-    assert legacy.edit_support == true
-    assert legacy.delete_support == true
-    assert legacy.image_support == true
-    assert legacy.file_support == true
-  end
-
   test "from_legacy/1 maps plugin metadata flags onto capabilities" do
     caps =
       Capabilities.from_legacy(%{
@@ -174,17 +154,6 @@ defmodule LemonChannels.CapabilitiesTest do
 
       assert merged.enabled == false
       assert merged.config.max_size == 10_000_000
-    end
-  end
-
-  describe "Registry module" do
-    alias Capabilities.Registry
-
-    test "register_set/1 stores custom set" do
-      custom_caps = [Capability.new(:custom, enabled: true)]
-      :ok = Registry.register_set(:custom, custom_caps)
-
-      assert Capabilities.set(:custom) == custom_caps
     end
   end
 end

@@ -34,7 +34,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonChannels.Adapters.Telegram.Transport.UpdateProcessor
   alias LemonChannels.Adapters.Telegram.Transport.VoiceHandler
   alias LemonChannels.BindingResolver
-  alias LemonChannels.Cwd
+  alias LemonCore.Cwd
   alias LemonChannels.SubmissionOutcome
   alias LemonChannels.Telegram.Delivery
   alias LemonChannels.Telegram.{OffsetStore, PollerLock}
@@ -646,7 +646,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         base =
           case BindingResolver.resolve_cwd(scope) do
             cwd when is_binary(cwd) and byte_size(cwd) > 0 -> cwd
-            _ -> Cwd.default_cwd()
+            _ -> Cwd.channel_default_cwd()
           end
 
         expanded =
@@ -969,7 +969,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         Path.expand(cwd)
 
       _ ->
-        case Cwd.default_cwd() do
+        case Cwd.channel_default_cwd() do
           cwd when is_binary(cwd) and cwd != "" -> Path.expand(cwd)
           _ -> "(not configured)"
         end
