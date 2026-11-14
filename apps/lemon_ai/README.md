@@ -664,7 +664,7 @@ LemonAi.Supervisor (one_for_one)
   ├── Task.Supervisor (LemonAi.StreamTaskSupervisor)
   ├── Registry (LemonAi.RateLimiterRegistry)
   ├── Registry (LemonAi.CircuitBreakerRegistry)
-  ├── LemonAi.ProviderSupervisor  -- DynamicSupervisor for per-provider breakers/limiters
+  ├── DynamicSupervisor (LemonAi.ProviderSupervisor) -- per-provider breakers/limiters
   ├── LemonAi.CallDispatcher
   └── LemonAi.ModelCache
 ```

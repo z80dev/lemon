@@ -338,20 +338,6 @@ defmodule LemonAi.ModelsLegacyTest do
     end
   end
 
-  describe "get_model_ids/1" do
-    test "returns model ids for provider" do
-      ids = Models.get_model_ids(:anthropic)
-
-      assert is_list(ids)
-      assert "claude-sonnet-4-20250514" in ids
-      assert "claude-opus-4-5-20251101" in ids
-    end
-
-    test "returns empty list for unknown provider" do
-      assert Models.get_model_ids(:unknown_provider) == []
-    end
-  end
-
   describe "2026 frontier catalog entries" do
     test "the retired duplicate-id pseudo model is gone" do
       assert Models.get_model(:anthropic, "claude-opus-4-6-thinking") == nil
@@ -697,53 +683,6 @@ defmodule LemonAi.ModelsLegacyTest do
     end
   end
 
-  describe "adjust_max_tokens_for_thinking/4" do
-    test "adds thinking budget to base max tokens" do
-      {max, budget} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :high)
-      assert budget == 16_384
-      assert max == 8192 + 16_384
-    end
-
-    test "respects model max token limit" do
-      {max, _budget} = Models.adjust_max_tokens_for_thinking(8192, 10_000, :high)
-      assert max == 10_000
-    end
-
-    test "reduces budget when model max is too small" do
-      {max, budget} = Models.adjust_max_tokens_for_thinking(8192, 1500, :high)
-      assert max == 1500
-      # Budget reduced to leave 1024 for output
-      assert budget == max(0, 1500 - 1024)
-    end
-
-    test "uses default budgets per level" do
-      {_, budget_min} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :minimal)
-      {_, budget_low} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :low)
-      {_, budget_med} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :medium)
-      {_, budget_high} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :high)
-
-      assert budget_min == 1024
-      assert budget_low == 2048
-      assert budget_med == 8192
-      assert budget_high == 16_384
-    end
-
-    test "accepts custom budgets" do
-      {max, budget} =
-        Models.adjust_max_tokens_for_thinking(8192, 200_000, :medium, %{medium: 4096})
-
-      assert budget == 4096
-      assert max == 8192 + 4096
-    end
-
-    test "clamps xhigh to high" do
-      {max_xhigh, budget_xhigh} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :xhigh)
-      {max_high, budget_high} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :high)
-      assert max_xhigh == max_high
-      assert budget_xhigh == budget_high
-    end
-  end
-
   describe "clamp_reasoning/1" do
     test "maps xhigh to high" do
       assert Models.clamp_reasoning(:xhigh) == :high
@@ -763,53 +702,6 @@ defmodule LemonAi.ModelsLegacyTest do
     test "returns nil for unknown levels" do
       assert Models.clamp_reasoning(:unknown) == nil
       assert Models.clamp_reasoning(:turbo) == nil
-    end
-  end
-
-  describe "models_equal?/2 (ported from Pi)" do
-    test "returns true for identical models" do
-      model1 = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      model2 = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      assert Models.models_equal?(model1, model2) == true
-    end
-
-    test "returns false for different models from same provider" do
-      model1 = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      model2 = Models.get_model(:anthropic, "claude-opus-4-20250514")
-      assert Models.models_equal?(model1, model2) == false
-    end
-
-    test "returns false for same model id from different providers" do
-      # This scenario shouldn't happen in practice but test the logic
-      model1 = Models.get_model(:openai, "gpt-4o")
-      model2 = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      assert Models.models_equal?(model1, model2) == false
-    end
-
-    test "returns false when first model is nil" do
-      model = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      assert Models.models_equal?(nil, model) == false
-    end
-
-    test "returns false when second model is nil" do
-      model = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      assert Models.models_equal?(model, nil) == false
-    end
-
-    test "returns false when both models are nil" do
-      assert Models.models_equal?(nil, nil) == false
-    end
-
-    test "works with openai models" do
-      model1 = Models.get_model(:openai, "gpt-4o")
-      model2 = Models.get_model(:openai, "gpt-4o")
-      assert Models.models_equal?(model1, model2) == true
-    end
-
-    test "works with google models" do
-      model1 = Models.get_model(:google, "gemini-2.5-pro")
-      model2 = Models.get_model(:google, "gemini-2.5-pro")
-      assert Models.models_equal?(model1, model2) == true
     end
   end
 end

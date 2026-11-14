@@ -21,10 +21,6 @@ defmodule LemonAi.Providers.OpenCodeGoSession do
   @providers [:opencode_go, "opencode_go"]
   @user_agent "lemon_ai"
 
-  @doc "Name of the session header."
-  @spec header_name() :: String.t()
-  def header_name, do: @header
-
   @doc """
   Returns the extra request headers required by `model`'s provider.
 

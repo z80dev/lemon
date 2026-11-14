@@ -37,7 +37,13 @@ defmodule LemonAi.Auth.OAuthFlow do
           required(:decode) => (String.t() -> {:ok, map()} | :not_oauth),
           required(:encode) => (map() -> String.t()),
           required(:refresh) => (map() -> {:ok, map()} | {:error, term()}),
-          required(:skew_ms) => non_neg_integer()
+          required(:skew_ms) => non_neg_integer(),
+          optional(:refresh_due) => (map() -> boolean()),
+          optional(:usable) => (map() -> {:ok, map()} | {:error, term()}),
+          optional(:fallback) => (map() -> boolean()),
+          optional(:prepare) => (map() -> {:ok, map(), boolean()} | {:error, term()}),
+          optional(:always_reload) => boolean(),
+          optional(:refresh_replaced) => boolean()
         }
 
   # ── HTTP ───────────────────────────────────────────────────────────────────
@@ -151,6 +157,23 @@ defmodule LemonAi.Auth.OAuthFlow do
       do: {:error, :reauth_required}
 
   def refresh_response(%{status: status, body: body}, _), do: {:error, http_error(status, body)}
+
+  @doc false
+  def post_form(url, body, opts \\ []) when is_map(body) do
+    case request(url, [form: body], opts) do
+      {:ok, %{status: status, body: response_body}} when status in 200..299 ->
+        {:ok, response_body}
+
+      {:ok, %{status: status, body: %{"error" => "invalid_grant"}}} when status in [400, 401] ->
+        {:error, :reauth_required}
+
+      {:ok, %{status: status, body: response_body}} ->
+        {:error, http_error(status, response_body)}
+
+      {:error, _} = error ->
+        error
+    end
+  end
 
   @doc "Credential-free error term; only standard OAuth error codes are retained."
   @spec http_error(non_neg_integer(), term()) :: tuple()
@@ -296,13 +319,19 @@ defmodule LemonAi.Auth.OAuthFlow do
   Return a usable secret map for `secret`, refreshing it when it is within
   `spec.skew_ms` of expiry or when `opts[:force_refresh]` is true. See the
   module documentation for locking, persistence and fallback rules.
+
+  Providers can override `:refresh_due`, `:usable` and `:fallback` for their
+  expiry rules. `:always_reload` also checks stored logins on fresh-token reads;
+  `:refresh_replaced` checks a replacement token's ordinary expiry after a
+  forced caller reloads it. `:prepare` enriches a selected secret before
+  conditional persistence, but never runs on a transient fallback.
   """
   @spec ensure_fresh(String.t(), map(), keyword(), refresh_spec()) ::
           {:ok, map()} | {:error, term()}
   def ensure_fresh(secret_name, secret, opts, spec) do
     force? = Keyword.get(opts, :force_refresh, false) == true
 
-    if force? or refresh_due?(secret, spec.skew_ms) do
+    if Map.get(spec, :always_reload, false) or force? or refresh_due?(secret, spec) do
       :global.trans(
         {{spec.lock, :refresh, secret_name}, self()},
         fn ->
@@ -311,22 +340,27 @@ defmodule LemonAi.Auth.OAuthFlow do
               force? and latest["access_token"] == secret["access_token"] ->
                 refresh_and_persist(secret_name, latest, true, opts, spec)
 
-              not force? and refresh_due?(latest, spec.skew_ms) ->
+              (not force? or Map.get(spec, :refresh_replaced, false)) and
+                  refresh_due?(latest, spec) ->
                 refresh_and_persist(secret_name, latest, false, opts, spec)
 
               true ->
-                usable(latest)
+                with {:ok, usable} <- usable(latest, spec) do
+                  prepare_and_persist(secret_name, usable, opts, spec, false)
+                end
             end
           end
         end,
         [node()]
       )
     else
-      usable(secret)
+      usable(secret, spec)
     end
   end
 
-  defp refresh_due?(secret, skew_ms) do
+  defp refresh_due?(secret, %{refresh_due: due}), do: due.(secret)
+
+  defp refresh_due?(secret, %{skew_ms: skew_ms}) do
     expires_at_ms = parse_integer(secret["expires_at_ms"])
 
     cond do
@@ -337,7 +371,9 @@ defmodule LemonAi.Auth.OAuthFlow do
     end
   end
 
-  defp usable(secret) do
+  defp usable(secret, %{usable: usable}), do: usable.(secret)
+
+  defp usable(secret, _spec) do
     cond do
       is_nil(non_empty_binary(secret["access_token"])) -> {:error, :missing_access_token}
       expired?(secret) -> {:error, :expired_access_token}
@@ -373,23 +409,46 @@ defmodule LemonAi.Auth.OAuthFlow do
     else
       case spec.refresh.(secret) do
         {:ok, refreshed} ->
-          with :ok <- persist(secret_name, refreshed, opts, spec), do: {:ok, refreshed}
+          prepare_and_persist(secret_name, refreshed, opts, spec, true)
 
         {:error, :reauth_required} = error ->
           error
 
         {:error, reason} ->
-          if not force? and non_empty_binary(secret["access_token"]) != nil and
-               not expired?(secret) do
+          if not force? and fallback?(secret, spec) do
             Logger.debug("OAuth refresh failed; checking the current unexpired access token")
 
             with {:ok, latest, _opts} <- reload(secret_name, secret, opts, spec) do
-              usable(latest)
+              usable(latest, spec)
             end
           else
             {:error, reason}
           end
       end
+    end
+  end
+
+  defp fallback?(secret, %{fallback: fallback}), do: fallback.(secret)
+
+  defp fallback?(secret, _spec),
+    do: non_empty_binary(secret["access_token"]) != nil and not expired?(secret)
+
+  # Gemini may need to discover project context even without a token refresh.
+  # Do not enrich or persist a transient fallback using an earlier revision.
+  defp prepare_and_persist(name, secret, opts, spec, refreshed?) do
+    prepared =
+      case Map.get(spec, :prepare) do
+        nil -> {:ok, secret, false}
+        prepare -> prepare.(secret)
+      end
+
+    with {:ok, prepared, changed?} <- prepared,
+         :ok <-
+           if(refreshed? or changed?,
+             do: persist(name, prepared, opts, spec),
+             else: :ok
+           ) do
+      {:ok, prepared}
     end
   end
 

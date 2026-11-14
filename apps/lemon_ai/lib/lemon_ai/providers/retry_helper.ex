@@ -327,12 +327,6 @@ defmodule LemonAi.Providers.RetryHelper do
   def retryable_transport_error?(reason), do: LemonAi.Error.retryable?(reason)
 
   @doc """
-  Check whether a transport reason term is retryable.
-  """
-  @spec retryable_transport_reason?(term()) :: boolean()
-  def retryable_transport_reason?(reason), do: LemonAi.Error.retryable?(reason)
-
-  @doc """
   Check whether error text is retryable using the common public classifier.
 
   Persistent quota limits and permanent auth/client/context errors take

@@ -11,9 +11,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   persistence through `:persist_secret`.
   """
 
-  require Logger
-
-  alias LemonAi.Auth.OAuthPKCE
+  alias LemonAi.Auth.{OAuthFlow, OAuthPKCE, OAuthSecret}
 
   @client_id "app_EMoamEEZ73f0CkXaXp7hrann"
   @authorize_url "https://auth.openai.com/oauth/authorize"
@@ -481,23 +479,15 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
       "redirect_uri" => redirect_uri
     }
 
-    with {:ok, data} <- post_form(Keyword.get(opts, :token_url, @token_url), body, opts),
-         {:ok, token_data} <- parse_token_response(data),
+    with {:ok, data} <- OAuthFlow.post_form(Keyword.get(opts, :token_url, @token_url), body, opts),
+         {:ok, token_data} <- OAuthSecret.parse_token_response(data),
          account_id when is_binary(account_id) and account_id != "" <-
            extract_account_id(token_data.access_token) do
-      now = System.system_time(:millisecond)
-
       {:ok,
-       %{
-         "type" => @secret_type,
-         "access_token" => token_data.access_token,
-         "refresh_token" => token_data.refresh_token,
-         "expires_at_ms" => token_data.expires_at_ms,
+       OAuthSecret.build(@secret_type, token_data, %{
          "account_id" => account_id,
-         "redirect_uri" => redirect_uri,
-         "created_at_ms" => now,
-         "updated_at_ms" => now
-       }}
+         "redirect_uri" => redirect_uri
+       })}
     else
       nil -> {:error, :missing_account_id}
       {:error, reason} -> {:error, reason}
@@ -510,27 +500,13 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   Encode OAuth secret payload for storage by the caller.
   """
   @spec encode_secret(oauth_secret()) :: String.t()
-  def encode_secret(secret) when is_map(secret), do: Jason.encode!(secret)
+  defdelegate encode_secret(secret), to: OAuthSecret, as: :encode
 
   @doc """
   Decode OAuth secret payload.
   """
   @spec decode_secret(String.t()) :: {:ok, oauth_secret()} | :not_oauth
-  def decode_secret(secret_value) when is_binary(secret_value) do
-    case Jason.decode(secret_value) do
-      {:ok, decoded} when is_map(decoded) ->
-        if oauth_secret_type?(decoded["type"]) do
-          {:ok, decoded}
-        else
-          :not_oauth
-        end
-
-      _ ->
-        :not_oauth
-    end
-  end
-
-  def decode_secret(_), do: :not_oauth
+  def decode_secret(value), do: OAuthSecret.decode(value, [@secret_type | @legacy_secret_types])
 
   @doc """
   Resolve a usable Codex access token from an OAuth secret.
@@ -546,25 +522,16 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   """
   @spec resolve_api_key_from_secret(String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | :ignore | {:error, term()}
-  def resolve_api_key_from_secret(secret_name, secret_value, opts \\ [])
-
-  def resolve_api_key_from_secret(secret_name, secret_value, opts)
-      when is_binary(secret_name) and is_binary(secret_value) do
-    force? = Keyword.get(opts, :force_refresh, false) == true
-
-    with {:ok, secret} <- decode_secret(secret_value),
-         {:ok, fresh_secret} <- ensure_fresh(secret_name, secret, force?, opts),
-         access_token when is_binary(access_token) and access_token != "" <-
-           non_empty_binary(fresh_secret["access_token"]) do
-      {:ok, access_token}
-    else
-      :not_oauth -> :ignore
-      nil -> {:error, :missing_access_token}
-      {:error, reason} -> {:error, reason}
-    end
+  def resolve_api_key_from_secret(secret_name, secret_value, opts \\ []) do
+    OAuthSecret.resolve(__MODULE__, secret_name, secret_value, opts, %{
+      refresh: &refresh_secret(&1, opts),
+      skew_ms: @near_expiry_ms,
+      refresh_due: &refresh_due?/1,
+      usable: &usable/1,
+      fallback: &refresh_fallback?/1,
+      resolve: &OAuthSecret.access_token/1
+    })
   end
-
-  def resolve_api_key_from_secret(_, _, _), do: {:error, :invalid_secret_value}
 
   @doc """
   Resolve a Codex access token from process environment values.
@@ -577,37 +544,6 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   def resolve_access_token do
     non_empty_binary(System.get_env("OPENAI_CODEX_API_KEY")) ||
       non_empty_binary(System.get_env("CHATGPT_TOKEN"))
-  end
-
-  defp ensure_fresh(secret_name, secret, force?, opts) do
-    if force? or refresh_due?(secret) do
-      :global.trans(
-        {{__MODULE__, :refresh, secret_name}, self()},
-        fn ->
-          with {:ok, latest, opts} <-
-                 LemonAi.Auth.OAuthSecretResolver.reload_secret(
-                   __MODULE__,
-                   secret_name,
-                   secret,
-                   opts
-                 ) do
-            cond do
-              force? and latest["access_token"] == secret["access_token"] ->
-                refresh_and_persist(secret_name, latest, true, opts)
-
-              not force? and refresh_due?(latest) ->
-                refresh_and_persist(secret_name, latest, false, opts)
-
-              true ->
-                usable(latest)
-            end
-          end
-        end,
-        [node()]
-      )
-    else
-      usable(secret)
-    end
   end
 
   defp refresh_due?(secret) do
@@ -633,124 +569,32 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
     end
   end
 
-  defp refresh_and_persist(secret_name, secret, force?, opts) do
+  defp refresh_fallback?(secret) do
     access_token = non_empty_binary(secret["access_token"])
     expires_at_ms = token_expiry_ms(access_token, parse_integer(secret["expires_at_ms"]))
 
-    case non_empty_binary(secret["refresh_token"]) do
-      nil ->
-        {:error, :not_refreshable}
-
-      refresh_token ->
-        case refresh_access_token(refresh_token, refresh_token, opts) do
-          {:ok, refreshed} ->
-            account_id = extract_account_id(refreshed.access_token)
-
-            updated =
-              secret
-              |> Map.put("access_token", refreshed.access_token)
-              |> Map.put("refresh_token", refreshed.refresh_token)
-              |> Map.put("expires_at_ms", refreshed.expires_at_ms)
-              |> maybe_put("account_id", account_id)
-              |> Map.put("updated_at_ms", System.system_time(:millisecond))
-
-            with :ok <-
-                   LemonAi.Auth.OAuthSecretResolver.persist_secret(
-                     secret_name,
-                     encode_secret(updated),
-                     opts
-                   ),
-                 do: {:ok, updated}
-
-          {:error, :reauth_required} = error ->
-            error
-
-          {:error, reason} ->
-            if not force? and is_binary(access_token) and is_integer(expires_at_ms) and
-                 expires_at_ms > System.system_time(:millisecond) do
-              Logger.debug("OpenAI Codex OAuth refresh failed; reloading the unexpired token")
-
-              with {:ok, latest, _opts} <-
-                     LemonAi.Auth.OAuthSecretResolver.reload_secret(
-                       __MODULE__,
-                       secret_name,
-                       secret,
-                       opts
-                     ),
-                   do: usable(latest)
-            else
-              {:error, reason}
-            end
-        end
-    end
+    is_binary(access_token) and is_integer(expires_at_ms) and
+      expires_at_ms > System.system_time(:millisecond)
   end
 
-  defp refresh_access_token(refresh_token, fallback_refresh_token, opts)
-       when is_binary(refresh_token) and refresh_token != "" do
+  defp refresh_secret(secret, opts) do
+    refresh_token = non_empty_binary(secret["refresh_token"])
+
     body = %{
       "grant_type" => "refresh_token",
       "refresh_token" => refresh_token,
       "client_id" => oauth_client_id()
     }
 
-    with {:ok, data} <- post_form(Keyword.get(opts, :token_url, @token_url), body, opts),
-         {:ok, token_data} <- parse_token_response(data) do
+    with {:ok, data} <- OAuthFlow.post_form(Keyword.get(opts, :token_url, @token_url), body, opts),
+         {:ok, token} <- OAuthSecret.parse_token_response(data) do
       {:ok,
-       %{
-         access_token: token_data.access_token,
-         refresh_token: token_data.refresh_token || fallback_refresh_token,
-         expires_at_ms: token_data.expires_at_ms
-       }}
-    end
-  end
-
-  defp refresh_access_token(_, _, _), do: {:error, :missing_refresh_token}
-
-  defp parse_token_response(data) when is_map(data) do
-    access_token = non_empty_binary(data["access_token"])
-    refresh_token = non_empty_binary(data["refresh_token"])
-    expires_in = parse_integer(data["expires_in"])
-
-    cond do
-      is_nil(access_token) ->
-        {:error, :invalid_token_response}
-
-      is_nil(expires_in) or expires_in <= 0 ->
-        {:error, :invalid_expiry}
-
-      true ->
-        {:ok,
-         %{
-           access_token: access_token,
-           refresh_token: refresh_token,
-           expires_at_ms: System.system_time(:millisecond) + expires_in * 1000
-         }}
-    end
-  end
-
-  defp parse_token_response(data) when is_binary(data) do
-    case Jason.decode(data) do
-      {:ok, decoded} when is_map(decoded) -> parse_token_response(decoded)
-      _ -> {:error, :invalid_token_response}
-    end
-  end
-
-  defp parse_token_response(_), do: {:error, :invalid_token_response}
-
-  defp post_form(url, body, opts) when is_map(body) do
-    case LemonAi.Auth.OAuthFlow.request(url, [form: body], opts) do
-      {:ok, %{status: status, body: response_body}} when status in 200..299 ->
-        {:ok, response_body}
-
-      {:ok, %{status: status, body: %{"error" => "invalid_grant"}}}
-      when status in [400, 401] ->
-        {:error, :reauth_required}
-
-      {:ok, %{status: status, body: response_body}} ->
-        {:error, LemonAi.Auth.OAuthFlow.http_error(status, response_body)}
-
-      {:error, _} = error ->
-        error
+       secret
+       |> Map.put("access_token", token.access_token)
+       |> Map.put("refresh_token", token.refresh_token || refresh_token)
+       |> Map.put("expires_at_ms", token.expires_at_ms)
+       |> maybe_put("account_id", extract_account_id(token.access_token))
+       |> Map.put("updated_at_ms", System.system_time(:millisecond))}
     end
   end
 
@@ -794,10 +638,6 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
     |> pad_base64()
     |> Base.decode64()
   end
-
-  defp oauth_secret_type?(type) when type == @secret_type, do: true
-  defp oauth_secret_type?(type) when type in @legacy_secret_types, do: true
-  defp oauth_secret_type?(_type), do: false
 
   defp pad_base64(str) do
     case rem(String.length(str), 4) do

@@ -6,9 +6,7 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
   token exchange + refresh, encoded secret payloads, and API-key resolution.
   """
 
-  require Logger
-
-  alias LemonAi.Auth.OAuthPKCE
+  alias LemonAi.Auth.{OAuthFlow, OAuthPKCE, OAuthSecret}
 
   @authorize_url "https://accounts.google.com/o/oauth2/v2/auth"
   @token_url "https://oauth2.googleapis.com/token"
@@ -204,8 +202,8 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
       "code_verifier" => code_verifier
     }
 
-    with {:ok, data} <- post_form(@token_url, body),
-         {:ok, token_data} <- parse_token_response(data),
+    with {:ok, data} <- OAuthFlow.post_form(@token_url, body),
+         {:ok, token_data} <- OAuthSecret.parse_token_response(data, @near_expiry_ms, true),
          {:ok, secret} <-
            build_oauth_secret(token_data, project_id, Keyword.get(opts, :email), redirect_uri) do
       {:ok, secret}
@@ -218,30 +216,13 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
   Encode OAuth secret payload for storage by the caller.
   """
   @spec encode_secret(oauth_secret()) :: String.t()
-  def encode_secret(secret) when is_map(secret), do: Jason.encode!(secret)
+  defdelegate encode_secret(secret), to: OAuthSecret, as: :encode
 
   @doc """
   Decode OAuth secret payload.
   """
   @spec decode_secret(String.t()) :: {:ok, oauth_secret()} | :not_oauth
-  def decode_secret(secret_value) when is_binary(secret_value) do
-    case Jason.decode(secret_value) do
-      {:ok, decoded} when is_map(decoded) ->
-        if decoded["type"] == @secret_type do
-          {:ok, decoded}
-        else
-          :not_oauth
-        end
-
-      {:ok, _decoded} ->
-        :not_oauth
-
-      {:error, _reason} ->
-        :not_oauth
-    end
-  end
-
-  def decode_secret(_), do: :not_oauth
+  def decode_secret(value), do: OAuthSecret.decode(value, [@secret_type])
 
   @doc """
   Resolve a usable Google Antigravity API key JSON string (`{"token","projectId"}`)
@@ -251,187 +232,57 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
   """
   @spec resolve_api_key_from_secret(String.t(), String.t()) ::
           {:ok, String.t()} | :ignore | {:error, term()}
-  def resolve_api_key_from_secret(secret_name, secret_value, opts \\ [])
-
-  def resolve_api_key_from_secret(secret_name, secret_value, opts)
-      when is_binary(secret_name) and is_binary(secret_value) do
-    case decode_secret(secret_value) do
-      {:ok, secret} ->
-        LemonAi.Auth.OAuthSecretResolver.with_refresh_lock(
-          __MODULE__,
-          secret_name,
-          secret,
-          opts,
-          fn latest, opts ->
-            with {:ok, refreshed_secret, changed?} <-
-                   ensure_fresh_secret(
-                     latest,
-                     Keyword.get(opts, :force_refresh, false) == true,
-                     secret_name,
-                     opts
-                   ),
-                 access_token when is_binary(access_token) and access_token != "" <-
-                   non_empty_binary(refreshed_secret["access_token"]),
-                 project_id when is_binary(project_id) and project_id != "" <-
-                   project_id_from_secret(refreshed_secret),
-                 :ok <-
-                   if(changed?,
-                     do:
-                       LemonAi.Auth.OAuthSecretResolver.persist_secret(
-                         secret_name,
-                         encode_secret(refreshed_secret),
-                         opts
-                       ),
-                     else: :ok
-                   ) do
-              {:ok, Jason.encode!(%{"token" => access_token, "projectId" => project_id})}
-            else
-              nil -> {:error, :invalid_antigravity_secret}
-              {:error, reason} -> {:error, reason}
-            end
-          end
-        )
-
-      :not_oauth ->
-        :ignore
-    end
+  def resolve_api_key_from_secret(secret_name, secret_value, opts \\ []) do
+    OAuthSecret.resolve(__MODULE__, secret_name, secret_value, opts, %{
+      refresh: &refresh_secret/1,
+      skew_ms: @near_expiry_ms,
+      refresh_due: &refresh_due?/1,
+      always_reload: true,
+      refresh_replaced: true,
+      usable: &OAuthSecret.usable/1,
+      resolve:
+        &OAuthSecret.project_key(&1, project_id_from_secret(&1), :invalid_antigravity_secret)
+    })
   end
 
-  def resolve_api_key_from_secret(_, _, _), do: {:error, :invalid_secret_value}
-
-  # A forced refresh (the provider rejected the access token) never falls back
-  # to the rejected token.
-  defp ensure_fresh_secret(secret, force?, secret_name, opts) when is_map(secret) do
+  defp refresh_due?(secret) do
     access_token = non_empty_binary(secret["access_token"])
     refresh_token = non_empty_binary(secret["refresh_token"])
     expires_at_ms = parse_integer(secret["expires_at_ms"])
+
+    refresh_token != nil and project_id_from_secret(secret) != nil and
+      (is_nil(access_token) or
+         (is_integer(expires_at_ms) and
+            System.system_time(:millisecond) + @near_expiry_ms >= expires_at_ms))
+  end
+
+  defp refresh_secret(secret) do
+    refresh_token = non_empty_binary(secret["refresh_token"])
     project_id = project_id_from_secret(secret)
 
-    should_refresh? =
-      cond do
-        is_nil(refresh_token) -> false
-        is_nil(project_id) -> false
-        force? -> true
-        is_nil(access_token) -> true
-        is_nil(expires_at_ms) -> false
-        true -> near_expiry?(expires_at_ms)
-      end
+    if is_nil(project_id) do
+      {:error, :not_refreshable}
+    else
+      body = %{
+        "client_id" => oauth_client_id(),
+        "client_secret" => oauth_client_secret(),
+        "refresh_token" => refresh_token,
+        "grant_type" => "refresh_token"
+      }
 
-    cond do
-      force? and not should_refresh? ->
-        {:error, :not_refreshable}
-
-      should_refresh? ->
-        refresh_secret(secret, refresh_token, project_id, access_token, force?, secret_name, opts)
-
-      not unexpired?(expires_at_ms) ->
-        {:error, :expired_access_token}
-
-      true ->
-        {:ok, secret, false}
-    end
-  end
-
-  defp refresh_secret(secret, refresh_token, project_id, access_token, force?, secret_name, opts) do
-    case refresh_access_token(refresh_token, project_id) do
-      {:ok, refreshed} ->
-        updated =
-          secret
-          |> Map.put("access_token", refreshed.access_token)
-          |> Map.put("refresh_token", refreshed.refresh_token)
-          |> Map.put("expires_at_ms", refreshed.expires_at_ms)
-          |> Map.put("project_id", refreshed.project_id)
-          |> Map.put("projectId", refreshed.project_id)
-          |> Map.put("updated_at_ms", System.system_time(:millisecond))
-
-        {:ok, updated, true}
-
-      {:error, :reauth_required} = error ->
-        error
-
-      {:error, reason} ->
-        if not force? and is_binary(access_token) and access_token != "" and
-             unexpired?(secret["expires_at_ms"]) do
-          Logger.debug("Google Antigravity OAuth refresh failed; reloading the unexpired token")
-
-          with {:ok, latest, _opts} <-
-                 LemonAi.Auth.OAuthSecretResolver.reload_secret(
-                   __MODULE__,
-                   secret_name,
-                   secret,
-                   opts
-                 ) do
-            if unexpired?(latest["expires_at_ms"]),
-              do: {:ok, latest, false},
-              else: {:error, :expired_access_token}
-          end
-        else
-          {:error, reason}
-        end
-    end
-  end
-
-  defp unexpired?(expires_at_ms) do
-    case parse_integer(expires_at_ms) do
-      ms when is_integer(ms) -> ms > System.system_time(:millisecond)
-      _ -> true
-    end
-  end
-
-  defp refresh_access_token(refresh_token, project_id)
-       when is_binary(refresh_token) and refresh_token != "" and is_binary(project_id) and
-              project_id != "" do
-    body = %{
-      "client_id" => oauth_client_id(),
-      "client_secret" => oauth_client_secret(),
-      "refresh_token" => refresh_token,
-      "grant_type" => "refresh_token"
-    }
-
-    with {:ok, data} <- post_form(@token_url, body),
-         {:ok, token_data} <- parse_token_response(data) do
-      {:ok,
-       %{
-         access_token: token_data.access_token,
-         refresh_token: token_data.refresh_token || refresh_token,
-         expires_at_ms: token_data.expires_at_ms,
-         project_id: project_id
-       }}
-    end
-  end
-
-  defp refresh_access_token(_, _), do: {:error, :missing_refresh_token}
-
-  defp parse_token_response(data) when is_map(data) do
-    access_token = non_empty_binary(data["access_token"])
-    refresh_token = non_empty_binary(data["refresh_token"])
-    expires_in = parse_integer(data["expires_in"])
-
-    cond do
-      is_nil(access_token) ->
-        {:error, {:invalid_token_response, data}}
-
-      is_nil(expires_in) or expires_in <= 0 ->
-        {:error, {:invalid_expiry, data}}
-
-      true ->
+      with {:ok, data} <- OAuthFlow.post_form(@token_url, body),
+           {:ok, token} <- OAuthSecret.parse_token_response(data, @near_expiry_ms, true) do
         {:ok,
-         %{
-           access_token: access_token,
-           refresh_token: refresh_token,
-           expires_at_ms: System.system_time(:millisecond) + expires_in * 1000 - @near_expiry_ms
-         }}
+         secret
+         |> Map.put("access_token", token.access_token)
+         |> Map.put("refresh_token", token.refresh_token || refresh_token)
+         |> Map.put("expires_at_ms", token.expires_at_ms)
+         |> Map.put("project_id", project_id)
+         |> Map.put("projectId", project_id)
+         |> Map.put("updated_at_ms", System.system_time(:millisecond))}
+      end
     end
   end
-
-  defp parse_token_response(data) when is_binary(data) do
-    case Jason.decode(data) do
-      {:ok, decoded} when is_map(decoded) -> parse_token_response(decoded)
-      _ -> {:error, {:invalid_token_response, data}}
-    end
-  end
-
-  defp parse_token_response(other), do: {:error, {:invalid_token_response, other}}
 
   defp build_oauth_secret(token_data, project_id, email, redirect_uri) do
     project_id = non_empty_binary(project_id) || @default_project_id
@@ -439,37 +290,13 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
     if project_id == "" do
       {:error, :missing_project_id}
     else
-      now = System.system_time(:millisecond)
-
       {:ok,
-       %{
-         "type" => @secret_type,
-         "access_token" => token_data.access_token,
-         "refresh_token" => token_data.refresh_token,
-         "expires_at_ms" => token_data.expires_at_ms,
+       OAuthSecret.build(@secret_type, token_data, %{
          "project_id" => project_id,
          "projectId" => project_id,
          "email" => non_empty_binary(email),
-         "redirect_uri" => non_empty_binary(redirect_uri),
-         "created_at_ms" => now,
-         "updated_at_ms" => now
-       }}
-    end
-  end
-
-  defp post_form(url, body) when is_map(body) do
-    case LemonAi.Auth.OAuthFlow.request(url, form: body) do
-      {:ok, %{status: status, body: response_body}} when status in 200..299 ->
-        {:ok, response_body}
-
-      {:ok, %{status: status, body: %{"error" => "invalid_grant"}}} when status in [400, 401] ->
-        {:error, :reauth_required}
-
-      {:ok, %{status: status, body: response_body}} ->
-        {:error, LemonAi.Auth.OAuthFlow.http_error(status, response_body)}
-
-      {:error, _} = error ->
-        error
+         "redirect_uri" => non_empty_binary(redirect_uri)
+       })}
     end
   end
 
@@ -486,10 +313,6 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
 
   defp project_id_from_secret(secret) when is_map(secret) do
     non_empty_binary(secret["project_id"]) || non_empty_binary(secret["projectId"])
-  end
-
-  defp near_expiry?(expires_at_ms) when is_integer(expires_at_ms) do
-    System.system_time(:millisecond) + @near_expiry_ms >= expires_at_ms
   end
 
   defp parse_integer(value) when is_integer(value), do: value

@@ -172,7 +172,7 @@ MY_AGENT_PROVIDER=openai MY_AGENT_MODEL=gpt-5 OPENAI_API_KEY=sk-... \
   mix run --no-halt -e "MyAgent.Console.start()"
 ```
 
-`LemonAi.Models.get_model_ids(:openai)` lists what a provider offers.
+`LemonAi.Models.get_models(:openai) |> Enum.map(& &1.id)` lists what a provider offers.
 
 ## 5. How the tests run without a key
 

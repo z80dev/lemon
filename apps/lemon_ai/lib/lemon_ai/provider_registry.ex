@@ -68,10 +68,7 @@ defmodule LemonAi.ProviderRegistry do
   """
   @spec get(atom()) :: {:ok, module()} | {:error, :not_found}
   def get(api_id) when is_atom(api_id) do
-    ensure_initialized()
-    providers = :persistent_term.get(@persistent_term_key)
-
-    case Map.fetch(providers, api_id) do
+    case Map.fetch(providers(), api_id) do
       {:ok, module} -> {:ok, module}
       :error -> {:error, :not_found}
     end
@@ -93,9 +90,7 @@ defmodule LemonAi.ProviderRegistry do
   """
   @spec list() :: [atom()]
   def list do
-    ensure_initialized()
-    providers = :persistent_term.get(@persistent_term_key)
-    Map.keys(providers)
+    Map.keys(providers())
   end
 
   @doc """
@@ -103,9 +98,7 @@ defmodule LemonAi.ProviderRegistry do
   """
   @spec registered?(atom()) :: boolean()
   def registered?(api_id) when is_atom(api_id) do
-    ensure_initialized()
-    providers = :persistent_term.get(@persistent_term_key)
-    Map.has_key?(providers, api_id)
+    Map.has_key?(providers(), api_id)
   end
 
   @doc """
@@ -130,33 +123,26 @@ defmodule LemonAi.ProviderRegistry do
   Check if the registry has been initialized.
   """
   @spec initialized?() :: boolean()
-  def initialized? do
-    try do
-      :persistent_term.get(@persistent_term_key)
-      true
-    rescue
-      ArgumentError -> false
-    end
-  end
+  def initialized?, do: :persistent_term.get(@persistent_term_key, nil) != nil
 
   # ============================================================================
   # Private Helpers
   # ============================================================================
 
-  defp ensure_initialized do
-    unless initialized?() do
-      init()
+  defp providers do
+    case :persistent_term.get(@persistent_term_key, nil) do
+      nil ->
+        init()
+        :persistent_term.get(@persistent_term_key)
+
+      providers ->
+        providers
     end
   end
 
   defp mutate_providers(update_fun) do
     with_mutation_lock(fn ->
-      providers =
-        if initialized?() do
-          :persistent_term.get(@persistent_term_key)
-        else
-          %{}
-        end
+      providers = :persistent_term.get(@persistent_term_key, %{})
 
       :persistent_term.put(@persistent_term_key, update_fun.(providers))
       :ok
