@@ -34,6 +34,26 @@ defmodule LemonCli.Setup.Ports do
   @spec default_node_port() :: pos_integer()
   def default_node_port, do: @default_node_port
 
+  @doc "Current runtime ports, including the environment-only node port (0 disables it)."
+  @spec current_ports(map()) :: ports()
+  def current_ports(env) do
+    %{control: env.control_port, node: resolve_node_port(), web: env.web_port}
+  end
+
+  # The node gateway port comes from the environment only; `0` disables it.
+  defp resolve_node_port do
+    case System.get_env("LEMON_CONTROL_PLANE_NODE_PORT") do
+      nil ->
+        default_node_port()
+
+      val ->
+        case Integer.parse(String.trim(val)) do
+          {port, ""} when port >= 0 and port <= 65_535 -> port
+          _ -> default_node_port()
+        end
+    end
+  end
+
   @doc "Path of the persisted port file, `~/.lemon/ports.env` by default."
   @spec path(keyword()) :: String.t()
   def path(opts \\ []) do

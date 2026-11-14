@@ -1,4 +1,5 @@
 defmodule LemonCli.Onboarding.Runner do
+  import LemonCli.Onboarding.PromptUI, only: [normalize_input!: 1, select_value: 2, select_yes_no: 3, interactive_prompt_session?: 1]
   @moduledoc false
 
   alias LemonAgent.ModelRuntime.Credentials
@@ -126,7 +127,7 @@ defmodule LemonCli.Onboarding.Runner do
       normalize_optional_string(cli_opts[:token]) ||
         if cli_opts[:non_interactive] != true do
           io.secret.("API key (optional; Enter for no key): ")
-          |> normalize_prompt_input()
+          |> normalize_input!()
           |> normalize_optional_string()
         end
 
@@ -285,9 +286,6 @@ defmodule LemonCli.Onboarding.Runner do
     if Code.ensure_loaded?(Mix.Error), do: Mix.Error, else: CLI.Error
   end
 
-  defp interactive_prompt_session?(io) when is_map(io) do
-    is_function(Map.get(io, :select), 1) and PromptUI.available?()
-  end
 
   defp ensure_secrets_ready! do
     status = Secrets.status()
@@ -416,7 +414,7 @@ defmodule LemonCli.Onboarding.Runner do
   end
 
   defp parse_auth_mode_choice(choice, %Provider{} = spec, io, default_mode) do
-    trimmed = normalize_prompt_input(choice)
+    trimmed = normalize_input!(choice)
 
     cond do
       trimmed == "" ->
@@ -467,7 +465,7 @@ defmodule LemonCli.Onboarding.Runner do
 
         secret_value =
           io.secret.(prompt)
-          |> normalize_prompt_input()
+          |> normalize_input!()
           |> require_non_empty!("Credential cannot be empty.")
 
         {secret_value, secret_provider_for_auth(spec, :api_key)}
@@ -623,7 +621,7 @@ defmodule LemonCli.Onboarding.Runner do
   defp resolve_set_default?(value, _spec, _io) when is_boolean(value), do: value
 
   defp resolve_set_default?(_value, %Provider{} = spec, io) do
-    prompt_yes_no?("Set #{spec.display_name} as your default provider?", false, io)
+    select_yes_no("Set #{spec.display_name} as your default provider?", false, io)
   end
 
   # Preset providers (`LemonAi.Models.Presets`) serve an open model set: any
@@ -693,7 +691,7 @@ defmodule LemonCli.Onboarding.Runner do
   defp configure_local_endpoint(%Provider{custom: true}, _config_path, io) do
     id =
       io.prompt.("Provider name (letters, numbers, underscores or hyphens): ")
-      |> normalize_prompt_input()
+      |> normalize_input!()
 
     unless String.match?(id, ~r/^[a-z][a-z0-9_-]*$/) and
              is_nil(Providers.find(id)) and
@@ -705,7 +703,7 @@ defmodule LemonCli.Onboarding.Runner do
 
     base_url =
       io.prompt.("OpenAI-compatible base URL (including /v1): ")
-      |> normalize_prompt_input()
+      |> normalize_input!()
       |> String.trim_trailing("/")
 
     case URI.parse(base_url) do
@@ -738,7 +736,7 @@ defmodule LemonCli.Onboarding.Runner do
       nil ->
         available =
           if cli_opts[:non_interactive] != true and
-               prompt_yes_no?("Probe #{spec.base_url}/models for model IDs?", false, io) do
+               select_yes_no("Probe #{spec.base_url}/models for model IDs?", false, io) do
             discovery = Keyword.get(opts, :discovery, &Discovery.discover/3)
 
             case discovery.(:openai_models, spec.base_url,
@@ -760,7 +758,7 @@ defmodule LemonCli.Onboarding.Runner do
 
         if available == [] do
           require_non_empty!(
-            io.prompt.("Model ID: ") |> normalize_prompt_input(),
+            io.prompt.("Model ID: ") |> normalize_input!(),
             "No model selected. Pass --model MODEL to choose one by id."
           )
         else
@@ -809,7 +807,7 @@ defmodule LemonCli.Onboarding.Runner do
   end
 
   defp parse_model_choice(choice, available, default_model, io) do
-    trimmed = normalize_prompt_input(choice)
+    trimmed = normalize_input!(choice)
 
     cond do
       trimmed == "" ->
@@ -1048,47 +1046,9 @@ defmodule LemonCli.Onboarding.Runner do
     end
   end
 
-  defp prompt_yes_no?(message, default, io) do
-    options = [
-      %{label: "Yes", value: true},
-      %{label: "No", value: false}
-    ]
-
-    default_index = if default, do: 0, else: 1
-
-    case select_value(io, %{
-           title: message,
-           subtitle: "Use Enter to confirm.",
-           options: options,
-           default_index: default_index
-         }) do
-      {:ok, value} ->
-        value
-
-      :cancel ->
-        default
-
-      :fallback ->
-        suffix = if default, do: " [Y/n]: ", else: " [y/N]: "
-
-        answer =
-          io.prompt.(message <> suffix)
-          |> normalize_prompt_input()
-          |> String.downcase()
-
-        case answer do
-          "" -> default
-          "y" -> true
-          "yes" -> true
-          "n" -> false
-          "no" -> false
-          _ -> prompt_yes_no?(message, default, io)
-        end
-    end
-  end
 
   defp maybe_open_url(url, io) do
-    if prompt_yes_no?("Open this URL in your default browser now?", false, io) do
+    if select_yes_no("Open this URL in your default browser now?", false, io) do
       case open_url_in_browser(url) do
         :ok ->
           io.info.("Opened browser.")
@@ -1199,43 +1159,6 @@ defmodule LemonCli.Onboarding.Runner do
     end
   end
 
-  defp select_value(io, params) do
-    case Map.get(io, :select) do
-      select when is_function(select, 1) ->
-        case select.(params) do
-          {:ok, value} ->
-            {:ok, value}
-
-          :cancel ->
-            :cancel
-
-          # Non-interactive runs install a selector that always asks for the
-          # prompt path; it must not be mistaken for a selected value.
-          :fallback ->
-            :fallback
-
-          {:error, reason} ->
-            if reason == :end_of_input, do: no_terminal!()
-
-            io.error.(
-              "Interactive onboarding UI unavailable (#{format_selector_error(reason)}). Falling back to prompt mode."
-            )
-
-            :fallback
-
-          value ->
-            {:ok, value}
-        end
-
-      _ ->
-        :fallback
-    end
-  end
-
-  defp format_selector_error(:no_selection), do: "selector exited before a choice was made"
-  defp format_selector_error(:invalid_selector_params), do: "invalid selector parameters"
-  defp format_selector_error(_reason), do: "the selector could not be started"
-
   defp auth_mode_choice_label(%Provider{} = spec, :oauth) do
     spec.oauth_choice_label || "Browser sign-in (OAuth)"
   end
@@ -1270,21 +1193,6 @@ defmodule LemonCli.Onboarding.Runner do
   end
 
   defp normalize_optional_string(_), do: nil
-
-  defp normalize_prompt_input(nil), do: no_terminal!()
-  defp normalize_prompt_input(:eof), do: no_terminal!()
-
-  defp normalize_prompt_input(value) when is_binary(value) do
-    String.trim(value)
-  end
-
-  defp normalize_prompt_input(value) when is_list(value) do
-    value |> List.to_string() |> String.trim()
-  end
-
-  defp normalize_prompt_input(value) do
-    value |> to_string() |> String.trim()
-  end
 
   defp normalize_provider_name(value) do
     value

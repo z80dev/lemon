@@ -1,4 +1,5 @@
 defmodule LemonCli.Setup.Wizard do
+  import LemonCli.Onboarding.PromptUI, only: [normalize_input!: 1, select_value: 2, yes_no: 2, yes_no: 3]
   @moduledoc """
   Interactive setup wizard for `mix lemon.setup` and the packaged `lemon setup`
   command.
@@ -719,7 +720,7 @@ defmodule LemonCli.Setup.Wizard do
     case io.prompt.("Select [default: #{default_index + 1}, q to cancel]: ") do
       nil -> Runner.no_terminal!()
       :eof -> Runner.no_terminal!()
-      input -> parse_connect_choice(normalize_input(input), options, default_index, io)
+      input -> parse_connect_choice(normalize_input!(input), options, default_index, io)
     end
   end
 
@@ -756,38 +757,6 @@ defmodule LemonCli.Setup.Wizard do
     end
   end
 
-  defp select_value(io, params) do
-    case Map.get(io, :select) do
-      select when is_function(select, 1) ->
-        case select.(params) do
-          {:ok, value} ->
-            {:ok, value}
-
-          :cancel ->
-            :cancel
-
-          {:error, reason} ->
-            if reason == :end_of_input, do: Runner.no_terminal!()
-
-            io.error.(
-              "Interactive onboarding UI unavailable (#{format_selector_error(reason)}). Falling back to prompt mode."
-            )
-
-            :fallback
-
-          value ->
-            {:ok, value}
-        end
-
-      _ ->
-        :fallback
-    end
-  end
-
-  defp format_selector_error(:no_selection), do: "selector exited before a choice was made"
-  defp format_selector_error(:invalid_selector_params), do: "invalid selector parameters"
-  defp format_selector_error(_reason), do: "the selector could not be started"
-
   # Setup-journey callers opt into the live credential check; direct
   # `lemon model` onboarding (LemonCli.CLI) stays offline-strong only.
   defp setup_verify_opts(opts) do
@@ -814,11 +783,7 @@ defmodule LemonCli.Setup.Wizard do
     unless running?.(env.control_port) do
       free? = Keyword.get(opts, :port_free?, &Ports.free?/1)
 
-      current = %{
-        control: env.control_port,
-        node: resolve_node_port(),
-        web: env.web_port
-      }
+      current = Ports.current_ports(env)
 
       chosen =
         Enum.reduce(Ports.required(Profile.default_name()), current, fn key, ports ->
@@ -862,7 +827,7 @@ defmodule LemonCli.Setup.Wizard do
         suggestion
 
       suggestion &&
-          prompt_yes?(
+          yes_no(
             "Port #{port} for the #{label} is already in use. Use #{suggestion} instead?",
             io
           ) ->
@@ -874,7 +839,7 @@ defmodule LemonCli.Setup.Wizard do
   end
 
   defp prompt_free_port(label, reserved, free?, io) do
-    case Integer.parse(normalize_input(io.prompt.("Port for the #{label}: "))) do
+    case Integer.parse(normalize_input!(io.prompt.("Port for the #{label}: "))) do
       {port, ""} when port > 0 and port <= 65_535 ->
         if port not in reserved and free?.(port) do
           port
@@ -909,7 +874,7 @@ defmodule LemonCli.Setup.Wizard do
   defp step_offer_launch(io, state, result, non_interactive?, opts) do
     if interactive?(io, non_interactive?) and Keyword.get(opts, :launch, true) and
          Verification.pending_steps(state) == [] and launch_ready?(result) and
-         prompt_yes?("Open Lemon now?", io) do
+         yes_no("Open Lemon now?", io) do
       launcher = Keyword.get(opts, :launcher, fn -> handoff("tui", opts) end)
 
       case launcher.() do
@@ -1057,7 +1022,7 @@ defmodule LemonCli.Setup.Wizard do
         enable_bot_https(["enable", "--tailscale"], io, opts)
 
       {:ok, :url} ->
-        case normalize_input(io.prompt.("Existing HTTPS URL (blank to skip): ")) do
+        case normalize_input!(io.prompt.("Existing HTTPS URL (blank to skip): ")) do
           "" -> skip_bot_https(io)
           url -> enable_bot_https(["enable", "--url", url], io, opts)
         end
@@ -1160,7 +1125,7 @@ defmodule LemonCli.Setup.Wizard do
 
         :error ->
           packaged? and interactive? and
-            prompt_yes?(
+            yes_no(
               "Keep Lemon running in the background? It starts when you log in.",
               io,
               false
@@ -1190,7 +1155,7 @@ defmodule LemonCli.Setup.Wizard do
 
   defp step_gateway(io, non_interactive?, opts) do
     if interactive?(io, non_interactive?) and
-         prompt_yes?("Connect Telegram or Discord now?", io, false) do
+         yes_no("Connect Telegram or Discord now?", io, false) do
       setup = Keyword.get(opts, :gateway_setup, &Gateway.run([], &1))
 
       case setup.(io) do
@@ -1338,7 +1303,7 @@ defmodule LemonCli.Setup.Wizard do
   end
 
   defp prompt_profile(names, default, io) do
-    choice = normalize_input(io.prompt.("Choose profile [default: #{default}]: "))
+    choice = normalize_input!(io.prompt.("Choose profile [default: #{default}]: "))
 
     profile =
       case Integer.parse(choice) do
@@ -1360,11 +1325,7 @@ defmodule LemonCli.Setup.Wizard do
   end
 
   defp resolve_ports(cli_opts, env, io, non_interactive?) do
-    current = %{
-      control: env.control_port,
-      node: resolve_node_port(),
-      web: env.web_port
-    }
+    current = Ports.current_ports(env)
 
     flags = [control_port: :control, web_port: :web]
 
@@ -1402,7 +1363,7 @@ defmodule LemonCli.Setup.Wizard do
   end
 
   defp prompt_port(label, default, io) do
-    case normalize_input(io.prompt.("#{label} port [#{default}]: ")) do
+    case normalize_input!(io.prompt.("#{label} port [#{default}]: ")) do
       "" ->
         default
 
@@ -1419,20 +1380,6 @@ defmodule LemonCli.Setup.Wizard do
   end
 
   defp valid_port?(port), do: is_integer(port) and port > 0 and port <= 65_535
-
-  # The node gateway port comes from the environment only; `0` disables it.
-  defp resolve_node_port do
-    case System.get_env("LEMON_CONTROL_PLANE_NODE_PORT") do
-      nil ->
-        Ports.default_node_port()
-
-      val ->
-        case Integer.parse(String.trim(val)) do
-          {port, ""} when port >= 0 and port <= 65_535 -> port
-          _ -> Ports.default_node_port()
-        end
-    end
-  end
 
   defp print_runtime_summary(profile_name, ports, io, opts) do
     profile = Profile.get(profile_name)
@@ -1465,27 +1412,5 @@ defmodule LemonCli.Setup.Wizard do
   # IO helpers
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp prompt_yes?(message, io, default \\ true) do
-    suffix = if default, do: " [Y/n]: ", else: " [y/N]: "
 
-    answer =
-      io.prompt.(message <> suffix)
-      |> normalize_input()
-      |> String.downcase()
-
-    case answer do
-      "" -> default
-      "y" -> true
-      "yes" -> true
-      "n" -> false
-      "no" -> false
-      _ -> prompt_yes?(message, io, default)
-    end
-  end
-
-  defp normalize_input(nil), do: Runner.no_terminal!()
-  defp normalize_input(:eof), do: Runner.no_terminal!()
-  defp normalize_input(value) when is_binary(value), do: String.trim(value)
-  defp normalize_input(value) when is_list(value), do: value |> List.to_string() |> String.trim()
-  defp normalize_input(value), do: value |> to_string() |> String.trim()
 end

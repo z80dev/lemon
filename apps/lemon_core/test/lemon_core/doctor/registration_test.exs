@@ -17,6 +17,12 @@ defmodule LemonCore.Doctor.RegistrationTest do
     end
   end
 
+  defmodule LiveOnlyCheck do
+    def live_checks(_opts) do
+      [{"extra.live", fn -> LemonCore.Doctor.Check.pass("extra.live", "live only") end}]
+    end
+  end
+
   defmodule NotACheck do
     def something_else, do: :ok
   end
@@ -67,6 +73,17 @@ defmodule LemonCore.Doctor.RegistrationTest do
 
       names = Doctor.checks(project_dir: File.cwd!()) |> Enum.map(& &1.name)
       assert "extra.registered" in names
+    end
+
+    test "live-only modules register without an offline stub" do
+      put_env(:doctor_checks, [LiveOnlyCheck])
+
+      assert Doctor.registered_checks() == [LiveOnlyCheck]
+      offline = Doctor.checks(project_dir: File.cwd!())
+      refute Enum.any?(offline, &(&1.name in ["extra.live", "doctor.check_failed"]))
+
+      live = Doctor.checks(project_dir: File.cwd!(), live: true)
+      assert Enum.any?(live, &(&1.name == "extra.live" and &1.status == :pass))
     end
 
     test "registered checks run after the built-ins" do

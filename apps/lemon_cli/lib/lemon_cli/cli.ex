@@ -1231,7 +1231,7 @@ defmodule LemonCli.CLI do
          :ok <- require_backup_positionals(opts, []) do
       backup_opts =
         []
-        |> maybe_put_backup_opt(:output, opts.options[:output])
+        |> maybe_put(:output, opts.options[:output])
         |> Keyword.put(:include_credentials, opts.options[:include_credentials] == true)
 
       run_backup_operation("create", opts.options[:json] == true, fn ->
@@ -1245,7 +1245,7 @@ defmodule LemonCli.CLI do
   defp run_backup(["list" | args]) do
     with {:ok, opts} <- parse_backup_options(args, root: :string, json: :boolean),
          :ok <- require_backup_positionals(opts, []) do
-      backup_opts = maybe_put_backup_opt([], :backup_root, opts.options[:root])
+      backup_opts = maybe_put([], :backup_root, opts.options[:root])
 
       run_backup_operation("list", opts.options[:json] == true, fn ->
         Backup.list(backup_opts)
@@ -1258,7 +1258,7 @@ defmodule LemonCli.CLI do
   defp run_backup(["verify" | args]) do
     with {:ok, opts} <- parse_backup_options(args, target: :string, json: :boolean),
          [bundle] <- opts.positionals do
-      backup_opts = maybe_put_backup_opt([], :target, opts.options[:target])
+      backup_opts = maybe_put([], :target, opts.options[:target])
 
       run_backup_operation("verify", opts.options[:json] == true, fn ->
         Backup.verify(bundle, backup_opts)
@@ -1280,9 +1280,9 @@ defmodule LemonCli.CLI do
          :ok <- validate_restore_cli_options(opts.options) do
       backup_opts =
         []
-        |> maybe_put_backup_opt(:target, opts.options[:target])
+        |> maybe_put(:target, opts.options[:target])
         |> Keyword.put(:overwrite, opts.options[:overwrite] == true)
-        |> maybe_put_backup_opt(:confirmation, opts.options[:confirm])
+        |> maybe_put(:confirmation, opts.options[:confirm])
 
       run_backup_operation("restore", opts.options[:json] == true, fn ->
         Backup.restore(bundle, backup_opts)
@@ -1313,8 +1313,6 @@ defmodule LemonCli.CLI do
       else: :ok
   end
 
-  defp maybe_put_backup_opt(opts, _key, nil), do: opts
-  defp maybe_put_backup_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp run_backup_operation(operation, json?, fun) do
     result =
