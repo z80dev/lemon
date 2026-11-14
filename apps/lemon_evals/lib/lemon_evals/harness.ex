@@ -7,9 +7,8 @@ defmodule LemonEvals.Harness do
   - statistical stability checks
   - workflow scenario checks
 
-  This module is a thin facade: `run/1` orchestrates the eval suite, and
-  every individual `*_eval` function is delegated to the module that owns
-  that concern so external callers and tests keep working unchanged.
+  `run/1` orchestrates the suite; individual non-live checks live in their
+  owning modules. Live-model checks are also exposed here for callers.
 
     * `LemonEvals.Evals.Foundational` - deterministic/statistical/read-edit checks
     * `LemonEvals.Evals.MemoryAndSkills` - memory and skill contract checks
@@ -24,6 +23,29 @@ defmodule LemonEvals.Harness do
   @type eval_result :: Types.eval_result()
   @type run_report :: Types.run_report()
 
+  @evals [
+    {Foundational, :deterministic_contract_eval, 1},
+    {Foundational, :statistical_stability_eval, 2},
+    {Foundational, :read_edit_workflow_eval, 1},
+    {MemoryAndSkills, :memory_scope_contract_eval, 1},
+    {MemoryAndSkills, :remember_contract_eval, 1},
+    {MemoryAndSkills, :auto_skill_prompt_contract_eval, 1},
+    {MemoryAndSkills, :dedicated_tool_preference_contract_eval, 1},
+    {MemoryAndSkills, :skill_curator_behavior_contract_eval, 1},
+    {MemoryAndSkills, :learning_tool_trace_contract_eval, 1},
+    {MemoryAndSkills, :tool_use_claim_contract_eval, 1},
+    {MemoryAndSkills, :untrusted_prompt_injection_contract_eval, 1},
+    {AgentLoop, :agent_loop_learning_trace_contract_eval, 1},
+    {AgentLoop, :agent_loop_skill_refinement_trace_contract_eval, 1},
+    {AgentLoop, :agent_loop_memory_trace_contract_eval, 1},
+    {AgentLoop, :agent_loop_workspace_memory_file_contract_eval, 1},
+    {AgentLoop, :agent_loop_workspace_memory_update_contract_eval, 1},
+    {AgentLoop, :agent_loop_async_join_trace_contract_eval, 1},
+    {AgentLoop, :agent_loop_parallel_join_trace_contract_eval, 1},
+    {AgentLoop, :agent_loop_delegation_artifact_trace_contract_eval, 1},
+    {AgentLoop, :delegation_toolset_contract_eval, 1}
+  ]
+
   @spec run(keyword()) :: run_report()
   def run(opts \\ []) do
     cwd = Keyword.get(opts, :cwd, File.cwd!())
@@ -34,28 +56,10 @@ defmodule LemonEvals.Harness do
     end
 
     results =
-      [
-        Foundational.deterministic_contract_eval(cwd),
-        Foundational.statistical_stability_eval(cwd, iterations),
-        Foundational.read_edit_workflow_eval(cwd),
-        MemoryAndSkills.memory_scope_contract_eval(cwd),
-        MemoryAndSkills.remember_contract_eval(cwd),
-        MemoryAndSkills.auto_skill_prompt_contract_eval(cwd),
-        MemoryAndSkills.dedicated_tool_preference_contract_eval(cwd),
-        MemoryAndSkills.skill_curator_behavior_contract_eval(cwd),
-        MemoryAndSkills.learning_tool_trace_contract_eval(cwd),
-        MemoryAndSkills.tool_use_claim_contract_eval(cwd),
-        MemoryAndSkills.untrusted_prompt_injection_contract_eval(cwd),
-        AgentLoop.agent_loop_learning_trace_contract_eval(cwd),
-        AgentLoop.agent_loop_skill_refinement_trace_contract_eval(cwd),
-        AgentLoop.agent_loop_memory_trace_contract_eval(cwd),
-        AgentLoop.agent_loop_workspace_memory_file_contract_eval(cwd),
-        AgentLoop.agent_loop_workspace_memory_update_contract_eval(cwd),
-        AgentLoop.agent_loop_async_join_trace_contract_eval(cwd),
-        AgentLoop.agent_loop_parallel_join_trace_contract_eval(cwd),
-        AgentLoop.agent_loop_delegation_artifact_trace_contract_eval(cwd),
-        AgentLoop.delegation_toolset_contract_eval(cwd)
-      ] ++ LiveModel.results(cwd, opts)
+      Enum.map(@evals, fn {module, function, arity} ->
+        args = if arity == 2, do: [cwd, iterations], else: [cwd]
+        apply(module, function, args)
+      end) ++ LiveModel.results(cwd, opts)
 
     passed = Enum.count(results, &(&1.status == :pass))
     failed = Enum.count(results, &(&1.status == :fail))
@@ -66,110 +70,12 @@ defmodule LemonEvals.Harness do
     }
   end
 
-  # -- LemonEvals.Evals.Foundational -----------------------------------------
+  for contract <- LiveModel.contracts() do
+    function = :"#{contract}_eval"
 
-  @spec deterministic_contract_eval(String.t()) :: eval_result()
-  defdelegate deterministic_contract_eval(cwd), to: Foundational
-
-  @spec statistical_stability_eval(String.t(), pos_integer()) :: eval_result()
-  defdelegate statistical_stability_eval(cwd, iterations), to: Foundational
-
-  @spec read_edit_workflow_eval(String.t()) :: eval_result()
-  defdelegate read_edit_workflow_eval(cwd), to: Foundational
-
-  # -- LemonEvals.Evals.MemoryAndSkills ---------------------------------------
-
-  @spec memory_scope_contract_eval(String.t()) :: eval_result()
-  defdelegate memory_scope_contract_eval(cwd), to: MemoryAndSkills
-
-  @spec remember_contract_eval(String.t()) :: eval_result()
-  defdelegate remember_contract_eval(cwd), to: MemoryAndSkills
-
-  @spec auto_skill_prompt_contract_eval(String.t()) :: eval_result()
-  defdelegate auto_skill_prompt_contract_eval(cwd), to: MemoryAndSkills
-
-  @spec dedicated_tool_preference_contract_eval(String.t()) :: eval_result()
-  defdelegate dedicated_tool_preference_contract_eval(cwd), to: MemoryAndSkills
-
-  @spec skill_curator_behavior_contract_eval(String.t()) :: eval_result()
-  defdelegate skill_curator_behavior_contract_eval(cwd), to: MemoryAndSkills
-
-  @spec learning_tool_trace_contract_eval(String.t()) :: eval_result()
-  defdelegate learning_tool_trace_contract_eval(cwd), to: MemoryAndSkills
-
-  @spec tool_use_claim_contract_eval(String.t()) :: eval_result()
-  defdelegate tool_use_claim_contract_eval(cwd), to: MemoryAndSkills
-
-  @spec untrusted_prompt_injection_contract_eval(String.t()) :: eval_result()
-  defdelegate untrusted_prompt_injection_contract_eval(cwd), to: MemoryAndSkills
-
-  # -- LemonEvals.Evals.AgentLoop ---------------------------------------------
-
-  @spec agent_loop_learning_trace_contract_eval(String.t()) :: eval_result()
-  defdelegate agent_loop_learning_trace_contract_eval(cwd), to: AgentLoop
-
-  @spec agent_loop_skill_refinement_trace_contract_eval(String.t()) :: eval_result()
-  defdelegate agent_loop_skill_refinement_trace_contract_eval(cwd), to: AgentLoop
-
-  @spec agent_loop_memory_trace_contract_eval(String.t()) :: eval_result()
-  defdelegate agent_loop_memory_trace_contract_eval(cwd), to: AgentLoop
-
-  @spec agent_loop_workspace_memory_file_contract_eval(String.t()) :: eval_result()
-  defdelegate agent_loop_workspace_memory_file_contract_eval(cwd), to: AgentLoop
-
-  @spec agent_loop_workspace_memory_update_contract_eval(String.t()) :: eval_result()
-  defdelegate agent_loop_workspace_memory_update_contract_eval(cwd), to: AgentLoop
-
-  @spec agent_loop_async_join_trace_contract_eval(String.t()) :: eval_result()
-  defdelegate agent_loop_async_join_trace_contract_eval(cwd), to: AgentLoop
-
-  @spec agent_loop_parallel_join_trace_contract_eval(String.t()) :: eval_result()
-  defdelegate agent_loop_parallel_join_trace_contract_eval(cwd), to: AgentLoop
-
-  @spec agent_loop_delegation_artifact_trace_contract_eval(String.t()) :: eval_result()
-  defdelegate agent_loop_delegation_artifact_trace_contract_eval(cwd), to: AgentLoop
-
-  @spec delegation_toolset_contract_eval(String.t()) :: eval_result()
-  defdelegate delegation_toolset_contract_eval(cwd), to: AgentLoop
-
-  # -- LemonEvals.Evals.LiveModel ----------------------------------------------
-
-  @spec live_model_memory_trace_contract_eval(String.t(), keyword()) :: eval_result()
-  defdelegate live_model_memory_trace_contract_eval(cwd, opts \\ []), to: LiveModel
-
-  @spec live_model_remember_contract_eval(String.t(), keyword()) :: eval_result()
-  defdelegate live_model_remember_contract_eval(cwd, opts \\ []), to: LiveModel
-
-  @spec live_model_workspace_memory_file_contract_eval(String.t(), keyword()) :: eval_result()
-  defdelegate live_model_workspace_memory_file_contract_eval(cwd, opts \\ []), to: LiveModel
-
-  @spec live_model_skill_learning_contract_eval(String.t(), keyword()) :: eval_result()
-  defdelegate live_model_skill_learning_contract_eval(cwd, opts \\ []), to: LiveModel
-
-  @spec live_model_relevant_skill_usage_contract_eval(String.t(), keyword()) :: eval_result()
-  defdelegate live_model_relevant_skill_usage_contract_eval(cwd, opts \\ []), to: LiveModel
-
-  @spec live_model_skill_curator_contract_eval(String.t(), keyword()) :: eval_result()
-  defdelegate live_model_skill_curator_contract_eval(cwd, opts \\ []), to: LiveModel
-
-  @spec live_model_cron_block_contract_eval(String.t(), keyword()) :: eval_result()
-  defdelegate live_model_cron_block_contract_eval(cwd, opts \\ []), to: LiveModel
-
-  @spec live_model_untrusted_prompt_injection_contract_eval(String.t(), keyword()) ::
-          eval_result()
-  defdelegate live_model_untrusted_prompt_injection_contract_eval(cwd, opts \\ []), to: LiveModel
-
-  @spec live_model_parallel_delegation_contract_eval(String.t(), keyword()) :: eval_result()
-  defdelegate live_model_parallel_delegation_contract_eval(cwd, opts \\ []), to: LiveModel
-
-  @spec live_model_delegation_artifact_contract_eval(String.t(), keyword()) :: eval_result()
-  defdelegate live_model_delegation_artifact_contract_eval(cwd, opts \\ []), to: LiveModel
-
-  @spec live_model_leaf_toolset_contract_eval(String.t(), keyword()) :: eval_result()
-  defdelegate live_model_leaf_toolset_contract_eval(cwd, opts \\ []), to: LiveModel
-
-  @spec live_model_coding_repair_contract_eval(String.t(), keyword()) :: eval_result()
-  defdelegate live_model_coding_repair_contract_eval(cwd, opts \\ []), to: LiveModel
+    @spec unquote(function)(String.t(), keyword()) :: eval_result()
+    defdelegate unquote(function)(cwd, opts \\ []), to: LiveModel
+  end
 
   @spec live_model_api_key(keyword()) :: String.t() | nil
   defdelegate live_model_api_key(opts \\ []), to: LiveModel

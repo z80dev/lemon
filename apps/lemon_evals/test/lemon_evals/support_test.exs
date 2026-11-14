@@ -3,6 +3,36 @@ defmodule LemonEvals.SupportTest do
 
   alias LemonEvals.Support
 
+  describe "run_contract/2" do
+    test "normalizes errors and exceptions" do
+      assert %{name: "error", status: :fail, details: %{reason: ":boom"}} =
+               Support.run_contract("error", fn -> {:error, :boom} end)
+
+      assert %{name: "exception", status: :fail, details: %{reason: "boom"}} =
+               Support.run_contract("exception", fn -> raise "boom" end)
+    end
+
+    test "removes temporary directories after success, errors, and exceptions" do
+      for outcome <- [:pass, :error, :raise] do
+        result =
+          Support.run_contract("cleanup", fn tmp_dir ->
+            send(self(), {:tmp_dir, tmp_dir})
+            File.write!(Path.join(tmp_dir, "evidence"), "created")
+
+            case outcome do
+              :pass -> %{name: "cleanup", status: :pass, details: %{}}
+              :error -> {:error, :failed}
+              :raise -> raise "failed"
+            end
+          end)
+
+        assert_receive {:tmp_dir, tmp_dir}
+        refute File.exists?(tmp_dir)
+        assert result.status == if(outcome == :pass, do: :pass, else: :fail)
+      end
+    end
+  end
+
   describe "assert_contains/2" do
     test "passes when the expected substring is present" do
       assert Support.assert_contains("hello world", "world") == :ok
