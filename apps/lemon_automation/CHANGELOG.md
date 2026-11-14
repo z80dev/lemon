@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Curator and synthesis schedulers share interval execution and runner config
+  handling. A missing task supervisor defers a pass instead of crashing the manager.
 - Cron admission rejects invalid callback URLs, remote HTTP callbacks and
   non-allowlisted origins distinctly, returning only a canonical origin for
   origin rejection. Cron RPCs and tool errors preserve these safe classifications.
@@ -15,6 +17,9 @@
 
 ### Removed
 
+- Unused top-level `LemonAutomation` delegates and the `LemonAutomation.Wake`
+  wrapper/batch API. Call `LemonAutomation.CronManager` directly.
+- The ignored third argument to `CronCommandRunner.submit`; use `submit/2`.
 - The `[automation] daily_brief` boot sync and `LemonAutomation.Heartbeat`'s
   `sync_daily_brief`, `daily_brief_params` and `daily_brief_id`. A brief is now an
   ordinary user-created cron job.

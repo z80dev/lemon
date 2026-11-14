@@ -45,6 +45,8 @@ defmodule LemonAutomation.SynthesisRunner do
   """
 
   alias LemonAutomation.SynthesisMetrics
+  import LemonAutomation.RunnerConfig, only: [enabled?: 1, positive_integer: 3]
+
   alias LemonCore.Store
 
   require Logger
@@ -112,38 +114,10 @@ defmodule LemonAutomation.SynthesisRunner do
     _ -> false
   end
 
-  @doc """
-  Return true when the router reports active sessions (defer synthesis work).
-  """
-  @spec active_sessions?(keyword()) :: boolean()
-  def active_sessions?(opts \\ []) do
-    sessions_fun = Keyword.get(opts, :active_sessions_fun)
-
-    sessions =
-      cond do
-        is_function(sessions_fun, 0) ->
-          sessions_fun.()
-
-        router_mod = Keyword.get(opts, :active_sessions_mod, LemonRouter.Router) ->
-          router_mod.list_active_sessions()
-      end
-
-    match?([_ | _], sessions) or match?({:error, _reason}, sessions)
-  rescue
-    _ -> true
-  catch
-    _kind, _reason -> true
-  end
-
   @doc false
   @spec config(keyword()) :: keyword()
   def config(opts \\ []) do
-    app_cfg =
-      :lemon_automation
-      |> Application.get_env(:synthesis_runner, [])
-      |> normalize_config()
-
-    Keyword.merge(default_config(), Keyword.merge(app_cfg, opts))
+    LemonAutomation.RunnerConfig.config(:synthesis_runner, default_config(), opts)
   end
 
   @doc """
@@ -279,8 +253,6 @@ defmodule LemonAutomation.SynthesisRunner do
   defp max_non_nil(a, b) when is_integer(a) and is_integer(b), do: max(a, b)
   defp max_non_nil(a, _b), do: a
 
-  defp enabled?(cfg), do: Keyword.get(cfg, :enabled, true) == true
-
   defp agent_id(cfg), do: to_string(Keyword.get(cfg, :agent_id, @default_agent_id))
 
   defp state_key(agent_id), do: "agent:" <> to_string(agent_id)
@@ -300,47 +272,6 @@ defmodule LemonAutomation.SynthesisRunner do
       global: true,
       cwd: nil
     ]
-  end
-
-  defp normalize_config(config) when is_map(config) do
-    Enum.flat_map(config, fn {key, value} ->
-      case normalize_key(key) do
-        key when is_atom(key) -> [{key, value}]
-        _ -> []
-      end
-    end)
-  end
-
-  defp normalize_config(config) when is_list(config), do: config
-  defp normalize_config(_), do: []
-
-  defp normalize_key(key) when is_atom(key), do: key
-
-  defp normalize_key(key) when is_binary(key) do
-    case key do
-      "enabled" -> :enabled
-      "agent_id" -> :agent_id
-      "interval_hours" -> :interval_hours
-      "max_docs" -> :max_docs
-      "global" -> :global
-      "cwd" -> :cwd
-      _ -> key
-    end
-  end
-
-  defp positive_integer(cfg, key, default) do
-    case Keyword.get(cfg, key, default) do
-      value when is_integer(value) and value > 0 -> value
-      value when is_binary(value) -> parse_positive_integer(value, default)
-      _ -> default
-    end
-  end
-
-  defp parse_positive_integer(value, default) do
-    case Integer.parse(value) do
-      {parsed, ""} when parsed > 0 -> parsed
-      _ -> default
-    end
   end
 
   defp optional_integer(map, key) do

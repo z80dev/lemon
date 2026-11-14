@@ -1536,7 +1536,7 @@ defmodule LemonAutomation.CronManager do
                      {:claim_submission, run.id, run.run_id, job.session_key},
                      @call_timeout_ms
                    ) do
-              command_runner().submit(job, run, run_id: run.run_id)
+              command_runner().submit(job, run)
             end
 
           :agent ->

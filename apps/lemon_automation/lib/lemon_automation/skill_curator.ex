@@ -7,6 +7,8 @@ defmodule LemonAutomation.SkillCurator do
   when review work is due.
   """
 
+  import LemonAutomation.RunnerConfig, only: [enabled?: 1, positive_integer: 3]
+
   @default_interval_hours 24 * 7
   @default_min_idle_hours 2
   @default_stale_after_days 30
@@ -67,41 +69,7 @@ defmodule LemonAutomation.SkillCurator do
   @doc false
   @spec config(keyword()) :: keyword()
   def config(opts \\ []) do
-    app_cfg =
-      :lemon_automation
-      |> Application.get_env(:skill_curator, [])
-      |> normalize_config()
-
-    Keyword.merge(default_config(), Keyword.merge(app_cfg, opts))
-  end
-
-  @doc false
-  @spec idle_for_seconds(keyword()) :: non_neg_integer()
-  def idle_for_seconds(opts \\ []) do
-    now_ms = Keyword.get(opts, :now_ms, LemonCore.Clock.now_ms())
-    last_busy_at_ms = Keyword.get(opts, :last_busy_at_ms, now_ms)
-    max(0, div(now_ms - last_busy_at_ms, 1000))
-  end
-
-  @doc false
-  @spec active_sessions?(keyword()) :: boolean()
-  def active_sessions?(opts \\ []) do
-    sessions_fun = Keyword.get(opts, :active_sessions_fun)
-
-    sessions =
-      cond do
-        is_function(sessions_fun, 0) ->
-          sessions_fun.()
-
-        router_mod = Keyword.get(opts, :active_sessions_mod, LemonRouter.Router) ->
-          router_mod.list_active_sessions()
-      end
-
-    match?([_ | _], sessions) or match?({:error, _reason}, sessions)
-  rescue
-    _ -> true
-  catch
-    _kind, _reason -> true
+    LemonAutomation.RunnerConfig.config(:skill_curator, default_config(), opts)
   end
 
   defp submit_review(prompt, result, cfg, opts) do
@@ -159,8 +127,6 @@ defmodule LemonAutomation.SkillCurator do
   defp maybe_put_report_error(result, {:error, reason}),
     do: Map.put(result, :review_report_error, reason)
 
-  defp enabled?(cfg), do: Keyword.get(cfg, :enabled, true) == true
-
   defp idle_enough?(cfg, opts) do
     case Keyword.get(opts, :idle_for_seconds) do
       nil ->
@@ -209,55 +175,10 @@ defmodule LemonAutomation.SkillCurator do
     end
   end
 
-  defp normalize_config(config) when is_map(config) do
-    Enum.flat_map(config, fn {key, value} ->
-      case normalize_key(key) do
-        key when is_atom(key) -> [{key, value}]
-        _ -> []
-      end
-    end)
-  end
-
-  defp normalize_config(config) when is_list(config), do: config
-  defp normalize_config(_), do: []
-
-  defp normalize_key(key) when is_atom(key), do: key
-
-  defp normalize_key(key) when is_binary(key) do
-    case key do
-      "enabled" -> :enabled
-      "scope" -> :scope
-      "cwd" -> :cwd
-      "interval_hours" -> :interval_hours
-      "min_idle_hours" -> :min_idle_hours
-      "stale_after_days" -> :stale_after_days
-      "archive_after_days" -> :archive_after_days
-      "tool_policy" -> :tool_policy
-      "agent_id" -> :agent_id
-      "session_key" -> :session_key
-      _ -> key
-    end
-  end
-
-  defp positive_integer(cfg, key, default) do
-    case Keyword.get(cfg, key, default) do
-      value when is_integer(value) and value > 0 -> value
-      value when is_binary(value) -> parse_positive_integer(value, default)
-      _ -> default
-    end
-  end
-
   defp positive_number(cfg, key, default) do
     case Keyword.get(cfg, key, default) do
       value when is_number(value) and value > 0 -> value
       value when is_binary(value) -> parse_positive_float(value, default)
-      _ -> default
-    end
-  end
-
-  defp parse_positive_integer(value, default) do
-    case Integer.parse(value) do
-      {parsed, ""} when parsed > 0 -> parsed
       _ -> default
     end
   end
