@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.11.10]
+
 ### Added
 
 - Graceful restarts and updates: `lemon stop`, `lemon restart`, `lemon update`,
