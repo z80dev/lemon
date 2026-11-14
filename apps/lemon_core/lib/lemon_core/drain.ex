@@ -156,6 +156,10 @@ defmodule LemonCore.Drain do
   # Returns the coordinator to `:serving` without touching participants; tests only.
   def reset, do: GenServer.call(__MODULE__, :reset)
 
+  @doc false
+  # `[{name, module, order}]`, so tests can isolate the coordinator.
+  def participants, do: GenServer.call(__MODULE__, :participants)
+
   # ── GenServer ────────────────────────────────────────────────────────────
 
   @impl true
@@ -200,6 +204,10 @@ defmodule LemonCore.Drain do
   def handle_call(:reset, _from, state) do
     put_phase(:serving)
     {:reply, :ok, %{state | phase: :serving, stop_requested?: false, last_report: nil}}
+  end
+
+  def handle_call(:participants, _from, state) do
+    {:reply, Enum.map(state.participants, fn {name, p} -> {name, p.module, p.order} end), state}
   end
 
   @impl true

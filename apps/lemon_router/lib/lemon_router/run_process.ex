@@ -792,7 +792,9 @@ defmodule LemonRouter.RunProcess do
 
   defp track_effectful_action(state, _action_ev), do: state
 
-  defp maybe_finish_restart_suspend(%{restart_suspend: reply_to, effectful_actions: in_flight} = state)
+  defp maybe_finish_restart_suspend(
+         %{restart_suspend: reply_to, effectful_actions: in_flight} = state
+       )
        when is_pid(reply_to) and map_size(in_flight) == 0 do
     abort_for_restart(state, reply_to, :clean)
   end

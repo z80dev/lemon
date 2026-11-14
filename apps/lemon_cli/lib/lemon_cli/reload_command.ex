@@ -4,7 +4,9 @@ defmodule LemonCli.ReloadCommand do
   def run(args) do
     case OptionParser.parse(args, strict: [sessions: :boolean, json: :boolean]) do
       {opts, [], []} ->
-        client = Application.get_env(:lemon_cli, :control_plane_client, LemonCli.ControlPlaneClient)
+        client =
+          Application.get_env(:lemon_cli, :control_plane_client, LemonCli.ControlPlaneClient)
+
         params = %{"sessions" => Keyword.get(opts, :sessions, true)}
 
         case client.request("system.reload_code", params, timeout_ms: 60_000) do
@@ -40,7 +42,9 @@ defmodule LemonCli.ReloadCommand do
     end)
 
     if result["inUseCount"] > 0 do
-      IO.puts("Still in use: #{Enum.map_join(result["inUse"], ", ", &clean/1)}. Restart required.")
+      IO.puts(
+        "Still in use: #{Enum.map_join(result["inUse"], ", ", &clean/1)}. Restart required."
+      )
     end
   end
 
@@ -57,16 +61,24 @@ defmodule LemonCli.ReloadCommand do
   end
 
   defp error_message({:control_plane_unavailable, _}),
-    do: {"runtime_not_running", "Runtime not running or unreachable; start it with `lemon daemon` first."}
+    do:
+      {"runtime_not_running",
+       "Runtime not running or unreachable; start it with `lemon daemon` first."}
 
   defp error_message({:control_plane, _}),
-    do: {"reload_refused", "Runtime refused code reload; use an authorized source-development runtime."}
+    do:
+      {"reload_refused",
+       "Runtime refused code reload; use an authorized source-development runtime."}
 
   defp error_message(:control_plane_timeout),
-    do: {"reload_timeout", "Code reload timed out; its outcome is unknown. Inspect the runtime before retrying."}
+    do:
+      {"reload_timeout",
+       "Code reload timed out; its outcome is unknown. Inspect the runtime before retrying."}
 
   defp error_message(_),
-    do: {"reload_unavailable", "Code reload unavailable; check the running runtime and its operator credentials."}
+    do:
+      {"reload_unavailable",
+       "Code reload unavailable; check the running runtime and its operator credentials."}
 
   defp clean(value) do
     value

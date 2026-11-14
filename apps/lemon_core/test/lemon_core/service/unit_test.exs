@@ -35,10 +35,12 @@ defmodule LemonCore.Service.UnitTest do
         assert body =~ "<key>SuccessfulExit</key><false/>"
         assert body =~ "<key>RunAtLoad</key><true/>"
         assert body =~ "<integer>10</integer>"
+        # SIGTERM drains active runs (LemonCore.Drain, 20 s) before the VM stops.
+        assert body =~ "<key>ExitTimeOut</key><integer>45</integer>"
       else
         assert body =~ "Restart=on-failure"
         assert body =~ "RestartPreventExitStatus=2"
-        assert body =~ "TimeoutStopSec=30"
+        assert body =~ "TimeoutStopSec=45"
       end
 
       assert {:ok, parsed} = Unit.parse(body, manager)

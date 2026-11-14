@@ -29,6 +29,7 @@ defmodule LemonCore.Service.Unit do
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
     <key>ThrottleInterval</key><integer>10</integer>
+    <key>ExitTimeOut</key><integer>45</integer>
     <key>ProcessType</key><string>Standard</string>
     <key>WorkingDirectory</key><string>#{xml(spec.home)}</string>
     <key>StandardOutPath</key><string>#{xml(spec.log)}</string>
@@ -59,7 +60,7 @@ defmodule LemonCore.Service.Unit do
     Restart=on-failure
     RestartPreventExitStatus=2
     RestartSec=5
-    TimeoutStopSec=30
+    TimeoutStopSec=45
     StandardOutput=#{quote_systemd("append:" <> spec.log, false)}
     StandardError=#{quote_systemd("append:" <> spec.log, false)}
     [Install]

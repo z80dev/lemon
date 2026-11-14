@@ -9,7 +9,12 @@ defmodule LemonControlPlane.Methods.SystemReloadCodeTest do
     def reload_modified(opts) do
       if Process.get(:reload_raise), do: raise("private failure /private/secret.beam")
       send(self(), {:reload_modified, opts})
-      Process.get(:reload_initial, %{reloaded: [Initial], in_use: [Retried, Busy, Failed], failed: []})
+
+      Process.get(:reload_initial, %{
+        reloaded: [Initial],
+        in_use: [Retried, Busy, Failed],
+        failed: []
+      })
     end
 
     def retry_in_use(modules) do

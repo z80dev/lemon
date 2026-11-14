@@ -148,7 +148,9 @@ defmodule LemonRouter.RestartCarryover do
         {Process.monitor(pid), run_id}
       end
 
-    outcomes = Map.new(pids, fn {run_id, pid} -> {run_id, if(is_pid(pid), do: nil, else: :not_running)} end)
+    outcomes =
+      Map.new(pids, fn {run_id, pid} -> {run_id, if(is_pid(pid), do: nil, else: :not_running)} end)
+
     outcomes = collect(outcomes, monitors, deadline_ms - @force_margin_ms)
 
     for {run_id, nil} <- outcomes, pid = pids[run_id], Process.alive?(pid) do
@@ -166,7 +168,9 @@ defmodule LemonRouter.RestartCarryover do
     else
       receive do
         {:restart_suspended, run_id, outcome, titles} when is_map_key(outcomes, run_id) ->
-          outcome = if titles == [] or outcome != :uncertain, do: outcome, else: {:uncertain, titles}
+          outcome =
+            if titles == [] or outcome != :uncertain, do: outcome, else: {:uncertain, titles}
+
           collect(Map.put(outcomes, run_id, outcome), monitors, deadline_ms)
 
         {:DOWN, monitor, :process, _pid, _reason} when is_map_key(monitors, monitor) ->

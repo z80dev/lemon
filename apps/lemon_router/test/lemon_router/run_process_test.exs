@@ -576,6 +576,97 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
+  describe "suspend_for_restart/3" do
+    test "waits for an executing tool to finish, then stops cleanly" do
+      {run_id, session_key, pid} = start_started_run()
+
+      broadcast_action(run_id, session_key, "tool-1", :started)
+      :ok = RunProcess.suspend_for_restart(pid, self(), :boundary)
+      refute_receive {:restart_suspended, ^run_id, _, _}, 200
+
+      broadcast_action(run_id, session_key, "tool-1", :completed)
+      assert_receive {:restart_suspended, ^run_id, :clean, []}, 1_000
+
+      assert_receive %LemonCore.Event{
+                       type: :run_completed,
+                       payload: %{completed: %{ok: false, error: :runtime_restart}}
+                     },
+                     2_500
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
+
+    test "forced suspension mid-tool reports the action as uncertain" do
+      {run_id, session_key, pid} = start_started_run()
+
+      broadcast_action(run_id, session_key, "tool-1", :started)
+      broadcast_action(run_id, session_key, "note-1", :started, :note)
+      :ok = RunProcess.suspend_for_restart(pid, self(), :now)
+
+      assert_receive {:restart_suspended, ^run_id, :uncertain, ["bash: sleep 60"]}, 1_000
+    end
+
+    test "a run the runtime never started reports :not_started" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 execution_request: make_test_request(run_id),
+                 submit_to_gateway?: false
+               })
+
+      :ok = RunProcess.suspend_for_restart(pid, self())
+      assert_receive {:restart_suspended, ^run_id, :not_started, []}, 1_000
+    end
+  end
+
+  defp start_started_run do
+    run_id = "run_#{System.unique_integer([:positive])}"
+    session_key = SessionKey.main("test-agent")
+    LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+
+    assert {:ok, pid} =
+             RunProcess.start_link(%{
+               run_id: run_id,
+               session_key: session_key,
+               execution_request: make_test_request(run_id),
+               submit_to_gateway?: false
+             })
+
+    :ok =
+      LemonCore.Bus.broadcast(
+        LemonCore.Bus.run_topic(run_id),
+        LemonCore.Event.new(:run_started, %{run_id: run_id}, %{
+          run_id: run_id,
+          session_key: session_key
+        })
+      )
+
+    assert_receive %LemonCore.Event{type: :run_started}, 1_000
+    {run_id, session_key, pid}
+  end
+
+  defp broadcast_action(run_id, session_key, id, phase, kind \\ :tool) do
+    payload =
+      LemonCore.Events.EngineAction.from_map(%{
+        action: %{id: id, kind: kind, title: "bash: sleep 60"},
+        phase: phase,
+        ok: if(phase == :completed, do: true)
+      })
+
+    :ok =
+      LemonCore.Bus.broadcast(
+        LemonCore.Bus.run_topic(run_id),
+        LemonCore.Event.new(:engine_action, payload, %{run_id: run_id, session_key: session_key})
+      )
+
+    # Session subscribers see the forwarded event once RunProcess handled it.
+    assert_receive %LemonCore.Event{type: :engine_action, payload: %{phase: ^phase}}, 1_000
+  end
+
   describe ":submit_to_gateway retry/backoff" do
     test "treats an {:ok, term} runtime response as an accepted submission" do
       run_id = "run_#{System.unique_integer([:positive])}"

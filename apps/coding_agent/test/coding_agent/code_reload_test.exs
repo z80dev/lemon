@@ -10,31 +10,39 @@ defmodule CodingAgent.CodeReloadTest do
     parent = self()
 
     pids =
-      for {id, response} <- [{"reload-idle", {:ok, %{}}}, {"reload-busy", {:error, :already_streaming}}, {"reload-exit", :exit}] do
-        pid = spawn(fn ->
-          {:ok, _} = Registry.register(CodingAgent.SessionRegistry, id, nil)
-          send(parent, {:registered, self()})
+      for {id, response} <- [
+            {"reload-idle", {:ok, %{}}},
+            {"reload-busy", {:error, :already_streaming}},
+            {"reload-exit", :exit}
+          ] do
+        pid =
+          spawn(fn ->
+            {:ok, _} = Registry.register(CodingAgent.SessionRegistry, id, nil)
+            send(parent, {:registered, self()})
 
-          receive do
-            {:"$gen_call", from, :reload_extensions} ->
-              if response == :exit do
-                exit(:normal)
-              else
-                GenServer.reply(from, response)
-                receive do
-                  :stop -> :ok
+            receive do
+              {:"$gen_call", from, :reload_extensions} ->
+                if response == :exit do
+                  exit(:normal)
+                else
+                  GenServer.reply(from, response)
+
+                  receive do
+                    :stop -> :ok
+                  end
                 end
-              end
-          end
-        end)
+            end
+          end)
 
         assert_receive {:registered, ^pid}
         pid
       end
+
     on_exit(fn ->
       Enum.each(pids, fn pid ->
         ref = Process.monitor(pid)
         Process.exit(pid, :kill)
+
         receive do
           {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
         end

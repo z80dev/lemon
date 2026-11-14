@@ -32,7 +32,11 @@ defmodule LemonRouter.RestartCarryover.Replayer do
   end
 
   defp after_apps,
-    do: Application.get_env(:lemon_router, :restart_replay_after, [:lemon_channels, :lemon_control_plane])
+    do:
+      Application.get_env(:lemon_router, :restart_replay_after, [
+        :lemon_channels,
+        :lemon_control_plane
+      ])
 
   defp await_apps(apps, deadline) do
     started = MapSet.new(Application.started_applications(), &elem(&1, 0))

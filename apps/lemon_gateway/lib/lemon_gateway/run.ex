@@ -803,9 +803,14 @@ defmodule LemonGateway.Run do
     error_text = format_error_for_log(Map.get(completed, :error))
 
     level =
-      if Map.get(completed, :error) in [:user_requested, :interrupted, :new_session, :runtime_restart],
-        do: :warning,
-        else: :error
+      if Map.get(completed, :error) in [
+           :user_requested,
+           :interrupted,
+           :new_session,
+           :runtime_restart
+         ],
+         do: :warning,
+         else: :error
 
     message =
       "Gateway run failed " <>

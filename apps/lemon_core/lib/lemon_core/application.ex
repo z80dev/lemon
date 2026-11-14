@@ -86,6 +86,7 @@ defmodule LemonCore.Application do
         ]
 
     opts = [strategy: :one_for_one, name: LemonCore.Supervisor]
+
     with {:ok, pid} <- Supervisor.start_link(children, opts) do
       :ok = LemonCore.Drain.maybe_install_signal_trap()
       {:ok, pid}

@@ -27,6 +27,7 @@ defmodule LemonCore.CodeReloadTest do
     write_beam(module, dir, 2)
 
     assert CodeReload.reload_modified(only_under: [dir <> "-other"]).reloaded == []
+
     assert %{reloaded: [^module], in_use: [], failed: []} =
              CodeReload.reload_modified(only_under: [dir])
 

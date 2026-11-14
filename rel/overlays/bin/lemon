@@ -784,9 +784,11 @@ stop_recorded_runtime() {
     error "daemon changed before stop; no process was signalled"
     return 1
   fi
+  # Drain active runs before stopping. A runtime from before LemonCore.Drain
+  # existed (the old side of an update) stops directly.
   release_command "$root" rpc \
-    "if System.pid() == \"$pid\", do: System.stop(), else: raise(\"daemon changed before stop\")" || return
-  for ((attempt = 0; attempt < 100; attempt++)); do
+    "if System.pid() == \"$pid\" do if Code.ensure_loaded?(LemonCore.Drain), do: LemonCore.Drain.request_stop(reason: :launcher_stop), else: System.stop() else raise(\"daemon changed before stop\") end" || return
+  for ((attempt = 0; attempt < 450; attempt++)); do
     [ "$(process_identity "$pid" || true)" = "$born" ] || break
     sleep 0.1
   done

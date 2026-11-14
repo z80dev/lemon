@@ -33,14 +33,19 @@ defmodule LemonControlPlane.Methods.SystemReloadCode do
   end
 
   defp invalid_params do
-    {:error, {:invalid_request, "system.reload_code expects an object with optional boolean sessions."}}
+    {:error,
+     {:invalid_request, "system.reload_code expects an object with optional boolean sessions."}}
   end
 
   defp reload(refresh_sessions?) do
     reloader = Application.get_env(:lemon_control_plane, :code_reloader, LemonCore.CodeReload)
 
     refresher =
-      Application.get_env(:lemon_control_plane, :code_reload_session_refresher, CodingAgent.CodeReload)
+      Application.get_env(
+        :lemon_control_plane,
+        :code_reload_session_refresher,
+        CodingAgent.CodeReload
+      )
 
     initial = reloader.reload_modified([])
 
@@ -72,9 +77,11 @@ defmodule LemonControlPlane.Methods.SystemReloadCode do
        }
      }}
   rescue
-    _ -> {:error, {:unavailable, "Code reload failed; some changes may already have been applied."}}
+    _ ->
+      {:error, {:unavailable, "Code reload failed; some changes may already have been applied."}}
   catch
-    _, _ -> {:error, {:unavailable, "Code reload failed; some changes may already have been applied."}}
+    _, _ ->
+      {:error, {:unavailable, "Code reload failed; some changes may already have been applied."}}
   end
 
   defp module_names(modules) do

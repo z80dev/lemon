@@ -664,8 +664,9 @@ stop_runtime() {
     fi
     return 1
   fi
+  # SIGTERM drains active runs first (LemonCore.Drain, 20 s by default).
   kill -TERM "$pid"
-  for ((attempt = 0; attempt < 30; attempt++)); do
+  for ((attempt = 0; attempt < 45; attempt++)); do
     [ "$(owned_runtime_pid "$file" || true)" = "$pid" ] || break
     sleep 1
   done
@@ -877,8 +878,9 @@ stop_recorded_runtime() {
     error "daemon changed before stop; no process was signalled"
     return 1
   fi
+  # SIGTERM drains active runs first (LemonCore.Drain, 20 s by default).
   kill -TERM "$pid" || return 1
-  for ((attempt = 0; attempt < 300; attempt++)); do
+  for ((attempt = 0; attempt < 450; attempt++)); do
     [ "$(process_identity "$pid" || true)" = "$born" ] || break
     sleep 0.1
   done
