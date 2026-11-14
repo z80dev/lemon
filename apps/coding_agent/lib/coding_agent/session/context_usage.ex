@@ -492,13 +492,8 @@ defmodule CodingAgent.Session.ContextUsage do
   defp auto_compaction(nil, _used, _settings), do: nil
 
   defp auto_compaction(window, used, settings) do
-    threshold = Compaction.context_threshold(window, settings)
-
-    %{
-      enabled: Map.get(settings, :enabled, true),
-      threshold_tokens: threshold,
-      reserve_tokens: window - threshold,
-      headroom_tokens: max(threshold - used, 0)
-    }
+    window
+    |> Compaction.context_budget(used, settings)
+    |> Map.delete(:window)
   end
 end

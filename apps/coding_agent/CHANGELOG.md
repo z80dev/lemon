@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Removed the unused compaction hook service, aggregate session-health APIs and
+  scoped session-supervisor APIs. Session diagnostics remain available through
+  `CodingAgent.Session.diagnostics/1`.
+- Session transcripts now use only reverse-ordered internal storage; access them
+  through `SessionManager.entries/1`. Automatic compaction capacity calculations
+  share one implementation, and provider message budgets use fixed defaults.
+
 ### Fixed
 
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes

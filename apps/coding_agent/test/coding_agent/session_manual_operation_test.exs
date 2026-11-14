@@ -100,7 +100,6 @@ defmodule CodingAgent.SessionManualOperationTest do
 
   defp assert_responsive(session) do
     assert %{session_id: _} = Session.get_stats(session)
-    assert %{status: _} = Session.health_check(session)
     assert %{session_id: _} = Session.diagnostics(session)
   end
 

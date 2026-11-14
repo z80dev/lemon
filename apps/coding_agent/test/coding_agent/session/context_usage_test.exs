@@ -2,7 +2,7 @@ defmodule CodingAgent.Session.ContextUsageTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.{Compaction, SessionManager, SettingsManager}
-  alias CodingAgent.Session.{ContextUsage, Persistence, PromptComposer}
+  alias CodingAgent.Session.{ContextBudget, ContextUsage, Persistence, PromptComposer}
   alias LemonAgent.Types.AgentTool
 
   alias LemonAi.Types.{
@@ -161,6 +161,46 @@ defmodule CodingAgent.Session.ContextUsageTest do
     assert sum(plus) == 43_407
   end
 
+  test "context reports and budgets share compaction thresholds", %{
+    tmp_dir: tmp_dir,
+    settings: settings
+  } do
+    state = live_state(tmp_dir, settings, 10_000)
+    agent = %{system_prompt: "current prompt", tools: [], messages: []}
+
+    for {settings, threshold} <- [
+          {settings, 9_000},
+          {%{settings | compaction_threshold_percent: 50}, 5_000},
+          {%{
+             settings
+             | compaction_threshold_percent: 50,
+               compaction_threshold_tokens: 6_000
+           }, 6_000},
+          {%{settings | compaction_threshold_tokens: 20_000}, 9_000},
+          {%{settings | reserve_tokens: 12_000}, -2_000},
+          {%{settings | compaction_enabled: false}, 9_000}
+        ] do
+      state = %{state | settings_manager: settings}
+      budget = ContextBudget.measure(state, agent)
+      report = ContextUsage.measure(state, agent)
+
+      assert budget.tokens == report.used_tokens
+      assert budget.window == 10_000
+      assert budget.threshold_tokens == threshold
+      assert budget.reserve_tokens == 10_000 - threshold
+      assert budget.headroom_tokens == max(threshold - budget.tokens, 0)
+      assert budget.enabled == settings.compaction_enabled
+
+      assert report.auto_compaction ==
+               Map.take(budget, [
+                 :enabled,
+                 :threshold_tokens,
+                 :reserve_tokens,
+                 :headroom_tokens
+               ])
+    end
+  end
+
   test "window and percent boundaries", %{tmp_dir: tmp_dir, settings: settings} do
     agent = %{system_prompt: nil, tools: [], messages: transcript(usage: %Usage{input: 5_000})}
     state = live_state(tmp_dir, settings, 5_000)
@@ -175,13 +215,15 @@ defmodule CodingAgent.Session.ContextUsageTest do
     assert over.percent_used == 125.0
     assert over.auto_compaction.headroom_tokens == 0
 
-    unknown = ContextUsage.measure(%{state | model: model(nil)}, agent)
-    assert unknown.window == nil
-    assert unknown.free_tokens == nil
-    assert unknown.percent_used == nil
-    assert unknown.auto_compaction == nil
-    assert Enum.all?(unknown.categories, &is_nil(&1.percent))
-    assert sum(unknown) == 5_000
+    for window <- [nil, 0, -1] do
+      unknown = ContextUsage.measure(%{state | model: model(window)}, agent)
+      assert unknown.window == nil
+      assert unknown.free_tokens == nil
+      assert unknown.percent_used == nil
+      assert unknown.auto_compaction == nil
+      assert Enum.all?(unknown.categories, &is_nil(&1.percent))
+      assert sum(unknown) == 5_000
+    end
 
     empty = ContextUsage.measure(state, %{system_prompt: nil, tools: [], messages: []})
     assert empty.used_tokens == 0

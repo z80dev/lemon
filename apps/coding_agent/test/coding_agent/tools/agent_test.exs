@@ -67,7 +67,7 @@ defmodule CodingAgent.Tools.AgentTest do
     end
   end
 
-  defmodule AgentTestHealthCheckSessionSpy do
+  defmodule AgentTestFollowupOnlySessionSpy do
     def handle_async_followup(pid, message) do
       send(
         pid,
@@ -75,10 +75,6 @@ defmodule CodingAgent.Tools.AgentTest do
       )
 
       :ok
-    end
-
-    def health_check(_pid) do
-      %{is_streaming: true}
     end
   end
 
@@ -712,7 +708,7 @@ defmodule CodingAgent.Tools.AgentTest do
     refute_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 150
   end
 
-  test "followup_queue_mode steer delivers non-preempting input to health-check-only sessions" do
+  test "followup_queue_mode steer delivers non-preempting input to followup-only sessions" do
     result =
       AgentTool.execute(
         "call_1",
@@ -727,7 +723,7 @@ defmodule CodingAgent.Tools.AgentTest do
         nil,
         "/tmp",
         run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
-        session_module: __MODULE__.AgentTestHealthCheckSessionSpy,
+        session_module: __MODULE__.AgentTestFollowupOnlySessionSpy,
         session_pid: self(),
         session_key: "agent:main:main",
         session_id: "sess_main",

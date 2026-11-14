@@ -549,7 +549,7 @@ defmodule CodingAgent.CompactionTest do
   describe "message window compaction" do
     test "returns false when there is no provider message budget" do
       model = %LemonAi.Types.Model{provider: :openai}
-      assert Compaction.message_budget(model, %{}) == nil
+      assert Compaction.message_budget(model) == nil
     end
 
     test "triggers when message count reaches provider threshold" do
