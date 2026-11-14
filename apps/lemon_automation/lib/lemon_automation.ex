@@ -39,7 +39,7 @@ defmodule LemonAutomation do
 
   Wake allows triggering any cron job to run immediately:
 
-      LemonAutomation.Wake.trigger("cron_abc123")
+      LemonAutomation.CronManager.wake("cron_abc123")
 
   ## Events
 
@@ -61,44 +61,4 @@ defmodule LemonAutomation do
   [Events] --> [Bus]
   ```
   """
-
-  @doc """
-  List all cron jobs.
-  """
-  defdelegate list_jobs(), to: LemonAutomation.CronManager, as: :list
-
-  @doc """
-  Add a new cron job.
-  """
-  defdelegate add_job(params), to: LemonAutomation.CronManager, as: :add
-
-  @doc """
-  Update an existing cron job.
-  """
-  defdelegate update_job(id, params), to: LemonAutomation.CronManager, as: :update
-
-  @doc """
-  Remove a cron job.
-  """
-  defdelegate remove_job(id), to: LemonAutomation.CronManager, as: :remove
-
-  @doc """
-  Trigger a job to run immediately.
-  """
-  defdelegate run_now(id), to: LemonAutomation.CronManager
-
-  @doc """
-  Abort an active cron run by cron run ID.
-  """
-  defdelegate abort_run(run_id), to: LemonAutomation.CronManager
-
-  @doc """
-  Get run history for a job.
-  """
-  defdelegate runs(job_id, opts \\ []), to: LemonAutomation.CronManager
-
-  @doc """
-  Wake/trigger a job immediately.
-  """
-  defdelegate wake(job_id), to: LemonAutomation.Wake, as: :trigger
 end

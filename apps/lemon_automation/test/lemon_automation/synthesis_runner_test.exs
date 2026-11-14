@@ -63,12 +63,6 @@ defmodule LemonAutomation.SynthesisRunnerTest do
       assert {:skip, :pipeline_unavailable} =
                SynthesisRunner.run_once(opts(agent_id, pipeline_mod: NoSuch.Pipeline.Module))
     end
-
-    test "active sessions block the scheduled path" do
-      assert SynthesisRunner.active_sessions?(active_sessions_fun: fn -> [:a_session] end)
-      refute SynthesisRunner.active_sessions?(active_sessions_fun: fn -> [] end)
-      assert SynthesisRunner.active_sessions?(active_sessions_fun: fn -> raise "boom" end)
-    end
   end
 
   describe "successful passes" do

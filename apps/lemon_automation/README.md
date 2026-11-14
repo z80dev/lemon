@@ -92,7 +92,7 @@ scheduled-run claim/suppression decisions. Operator APIs can read raw IDs from
 `CronStore.list_audit_events/1`; support diagnostics redact audit IDs, job/run
 IDs, and reasons.
 
-**Wake** provides immediate out-of-schedule triggering. It creates runs with
+**CronManager.wake/2** provides immediate out-of-schedule triggering. It creates runs with
 `triggered_by: :wake`, submits through the same configured
 `:cron_run_submitter` used by CronManager (normally RunSubmitter ->
 LemonRouter), and routes completion back through CronManager.
@@ -361,10 +361,11 @@ and the harmless disabled example under
 | `LemonAutomation.GoalLoopManager` | `lib/lemon_automation/goal_loop_manager.ex` | Supervised goal-loop entrypoint with opt-in persisted auto scheduling |
 | `LemonAutomation.SkillCurator` | `lib/lemon_automation/skill_curator.ex` | Applies idle/config gates and submits learned-skill curator prompts |
 | `LemonAutomation.SkillCuratorManager` | `lib/lemon_automation/skill_curator_manager.ex` | Periodic idle scheduler for background skill curation |
+| `LemonAutomation.IntervalRunner` | `lib/lemon_automation/interval_runner.ex` | Shared interval scheduler, idle tracking, and supervised single-flight execution for curator and synthesis managers |
+| `LemonAutomation.RunnerConfig` | `lib/lemon_automation/runner_config.ex` | Shared runner config normalization, positive integers, and active-session checks |
 | `LemonAutomation.KanbanDispatcher` | `lib/lemon_automation/kanban_dispatcher.ex` | Supervised durable-board task leasing, execution, completion, and failure marking |
 | `LemonAutomation.KanbanRunWorker` | `lib/lemon_automation/kanban_run_worker.ex` | Converts leased kanban tasks into router runs with board/task provenance and recursive-kanban blocking |
 | `LemonAutomation.KanbanWorktree` | `lib/lemon_automation/kanban_worktree.ex` | Creates per-task git worktrees under `.worktrees/` for isolated kanban worker execution |
-| `LemonAutomation.Wake` | `lib/lemon_automation/wake.ex` | Manual immediate job triggering with batch and pattern-matching support |
 | `LemonAutomation.RunSubmitter` | `lib/lemon_automation/run_submitter.ex` | Builds run params, pre-subscribes to bus, submits to LemonRouter, appends to CronMemory |
 | `LemonAutomation.RunCompletionWaiter` | `lib/lemon_automation/run_completion_waiter.ex` | Owns fixed-id pre-subscribe/submit/wait cleanup and parses terminal events |
 | `LemonAutomation.Events` | `lib/lemon_automation/events.ex` | Event emission helpers for all automation events |
@@ -388,7 +389,7 @@ LemonAutomation behavior is controlled through cron job fields plus a small appl
 ### Creating a Cron Job
 
 ```elixir
-{:ok, job} = LemonAutomation.add_job(%{
+{:ok, job} = LemonAutomation.CronManager.add(%{
   name: "Daily Report",
   schedule: "0 9 * * *",
   agent_id: "agent_abc",
@@ -400,7 +401,7 @@ LemonAutomation behavior is controlled through cron job fields plus a small appl
 ### With Local Time, Jitter, and Retries
 
 ```elixir
-{:ok, job} = LemonAutomation.add_job(%{
+{:ok, job} = LemonAutomation.CronManager.add(%{
   name: "Morning Check",
   schedule: "0 9 * * 1-5",
   agent_id: "agent_abc",
@@ -424,7 +425,7 @@ their first occurrence; next-run values are UTC instants. See the
 
 ```elixir
 # Fires once at 14:30 local time on 28 September, then is deleted.
-{:ok, job} = LemonAutomation.add_job(%{
+{:ok, job} = LemonAutomation.CronManager.add(%{
   name: "Reminder: call the bank",
   schedule: "30 14 28 9 *",
   timezone: "local",
@@ -451,7 +452,7 @@ not create LemonRouter runs. They are delivered to chat only when they set an
 explicit `deliver_to` target; otherwise `CronDelivery` resolves them to nowhere.
 
 ```elixir
-{:ok, job} = LemonAutomation.add_job(%{
+{:ok, job} = LemonAutomation.CronManager.add(%{
   name: "Disk Usage Snapshot",
   schedule: "hourly",
   command: "df -h /",
@@ -523,40 +524,34 @@ intervals divide 60 and hour intervals divide 24:
 
 ```elixir
 # List all jobs (sorted by created_at_ms descending)
-LemonAutomation.list_jobs()
+LemonAutomation.CronManager.list()
 
 # Update a job (agent_id and session_key are immutable)
-LemonAutomation.update_job(job.id, %{enabled: false})
+LemonAutomation.CronManager.update(job.id, %{enabled: false})
 
 # Remove a job
-LemonAutomation.remove_job(job.id)
+LemonAutomation.CronManager.remove(job.id)
 
 # Run a job immediately (manual trigger)
-LemonAutomation.run_now(job.id)
+LemonAutomation.CronManager.run_now(job.id)
 
 # Get run history (opts: limit, status, since_ms)
-LemonAutomation.runs(job.id, limit: 10)
+LemonAutomation.CronManager.runs(job.id, limit: 10)
 ```
 
 ### Wake (Immediate Triggering)
 
 ```elixir
 # Trigger a single job (must be enabled)
-{:ok, run} = LemonAutomation.Wake.trigger("cron_abc123")
+{:ok, run} = LemonAutomation.CronManager.wake("cron_abc123")
 
 # Trigger with context metadata
-{:ok, run} = LemonAutomation.Wake.trigger("cron_abc123",
+{:ok, run} = LemonAutomation.CronManager.wake("cron_abc123",
   context: %{reason: "incident response"})
 
 # Skip if already running
-{:ok, run} = LemonAutomation.Wake.trigger("cron_abc123",
+{:ok, run} = LemonAutomation.CronManager.wake("cron_abc123",
   skip_if_running: true)
-
-# Trigger by name pattern (case-insensitive)
-results = LemonAutomation.Wake.trigger_matching("heartbeat")
-
-# Trigger all enabled jobs for an agent
-results = LemonAutomation.Wake.trigger_for_agent("agent_abc")
 ```
 
 ### Heartbeats
@@ -567,7 +562,7 @@ delivered by `CronDelivery`. Schedules are cron schedules, so intervals must be
 cron-exact (`every 30m`, `every 2h`, `daily at 8am`, ...).
 
 ```elixir
-{:ok, job} = LemonAutomation.add_job(%{
+{:ok, job} = LemonAutomation.CronManager.add(%{
   name: "heartbeat-agent_abc",
   schedule: "every 30m",
   timezone: "local",

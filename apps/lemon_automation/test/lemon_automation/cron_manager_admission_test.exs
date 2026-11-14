@@ -1,7 +1,7 @@
 defmodule LemonAutomation.CronManagerAdmissionTest do
   use ExUnit.Case, async: false
 
-  alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore, RunSubmitter, Wake}
+  alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore, RunSubmitter}
   alias LemonCore.{Bus, Event, ProfileStore, SessionKey, ToolPolicy}
 
   @moduletag :tmp_dir
@@ -792,7 +792,7 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
   end
 
   defp dispatch(job, :wake) do
-    assert {:ok, %CronRun{id: run_id, triggered_by: :wake}} = Wake.trigger(job.id)
+    assert {:ok, %CronRun{id: run_id, triggered_by: :wake}} = CronManager.wake(job.id)
     {run_id, [run_id]}
   end
 
