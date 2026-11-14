@@ -4,16 +4,6 @@ All notable changes to `lemon_cli` are documented here.
 
 ## [Unreleased]
 
-### Changed
-
-- Consolidate onboarding prompt handling, runtime port resolution, and setup/doctor
-  provider recovery text. Doctor providers now register live checks without an
-  empty offline adapter.
-- Remove unused `CommandRegistry.names/0` and `command?/1`; provider recovery
-  text uses `ProviderLiveCheck.failure_message/2` with `:doctor` for doctor output.
-- Bot HTTPS commands parse once and no longer hide unexpected exceptions behind
-  a generic configuration error.
-
 ### Added
 
 - Source-only `lemon reload [--no-sessions] [--json]` loads compiled code changes
@@ -103,6 +93,14 @@ All notable changes to `lemon_cli` are documented here.
   target's global configuration.
 
 ### Changed
+
+- Consolidate onboarding prompt handling, runtime port resolution, and setup/doctor
+  provider recovery text. Doctor providers now register live checks without an
+  empty offline adapter.
+- Remove unused `CommandRegistry.names/0` and `command?/1`; provider recovery
+  text uses `ProviderLiveCheck.failure_message/2` with `:doctor` for doctor output.
+- Bot HTTPS commands parse once and no longer hide unexpected exceptions behind
+  a generic configuration error.
 
 - Setup replaces "Onboard an AI provider now?" with **Connect a model**, listing
   detected Codex CLI ChatGPT logins and shell-exported provider keys first.
