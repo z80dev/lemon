@@ -329,9 +329,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp dispatch_transport_event(event, state) do
-    with {:ok, normalized} <- Normalize.event(state, event) do
-      Pipeline.run(normalized, state, pipeline_callbacks())
-    else
+    case Normalize.event(state, event) do
+      {:ok, normalized} -> Pipeline.run(normalized, state, pipeline_callbacks())
       {:error, _reason} -> state
     end
   end
