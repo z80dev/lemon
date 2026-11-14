@@ -7,14 +7,25 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   prediction (Google service-account credentials).
   """
 
-  alias LemonAgent.ModelRuntime.{Credentials, ProviderNames}
+  alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonAgent.ProviderConfigResolver
   alias LemonAgent.Tools.AbortHelpers
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias LemonCore.Config
-  alias LemonMedia.MediaJobs
+  alias LemonSkills.Tools.MediaCommon
   alias LemonMedia.MediaJobSupervisor
+
+  import LemonSkills.Tools.MediaCommon,
+    only: [
+      bounded_integer: 3,
+      optional_string: 1,
+      provider_config_value: 2,
+      provider_error_kind: 1,
+      reject_blank_values: 1,
+      transient_status?: 1,
+      wait_for_job: 3
+    ]
 
   @topic "media_jobs"
   @default_timeout_ms 20_000
@@ -149,8 +160,9 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
          {:ok, prompt} <- required_prompt(params),
          {:ok, provider} <- provider(params),
          {:ok, generation} <- generation(provider, params),
-         {:ok, timeout_ms} <- timeout_ms(params),
-         {:ok, artifact_path} <- artifact_path(params, cwd, opts, generation.format),
+         {:ok, timeout_ms} <- MediaCommon.timeout_ms(params, @default_timeout_ms, @max_timeout_ms),
+         {:ok, artifact_path} <-
+           MediaCommon.artifact_path(params, cwd, opts, generation.format, "media-video"),
          :ok <- Phoenix.PubSub.subscribe(LemonCore.PubSub, @topic),
          {:ok, _pid, queued_job} <-
            MediaJobSupervisor.start_job(
@@ -162,7 +174,12 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
                artifact_name: Path.basename(artifact_path),
                mime_type: generation.mime_type
              },
-             media_job_opts(cwd, opts, artifact_path, generation)
+             MediaCommon.media_job_opts(
+               cwd,
+               opts,
+               artifact_path,
+               runner(cwd, opts, artifact_path, generation)
+             )
            ),
          :ok <- AbortHelpers.check_abort(signal),
          {:ok, completed_job} <- wait_for_job(queued_job.job_id, timeout_ms, signal) do
@@ -233,80 +250,6 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
      }}
   end
 
-  defp timeout_ms(params) do
-    value = Map.get(params, "timeoutMs", @default_timeout_ms)
-
-    cond do
-      is_integer(value) -> {:ok, value |> max(100) |> min(@max_timeout_ms)}
-      is_binary(value) -> parse_timeout(value)
-      true -> {:error, "timeoutMs must be an integer"}
-    end
-  end
-
-  defp parse_timeout(value) do
-    case Integer.parse(value) do
-      {int, ""} -> {:ok, int |> max(100) |> min(@max_timeout_ms)}
-      _ -> {:error, "timeoutMs must be an integer"}
-    end
-  end
-
-  defp artifact_path(params, cwd, opts, format) do
-    artifacts_dir =
-      opts
-      |> Keyword.get(:media_artifacts_dir, MediaJobs.default_artifacts_dir(cwd))
-      |> Path.expand()
-
-    name =
-      params
-      |> Map.get("filename")
-      |> sanitize_filename(format)
-
-    path = Path.join(artifacts_dir, name)
-
-    if String.starts_with?(Path.expand(path), artifacts_dir) do
-      {:ok, path}
-    else
-      {:error, "artifact path escaped media artifact directory"}
-    end
-  end
-
-  defp sanitize_filename(nil, format), do: default_filename(format)
-
-  defp sanitize_filename(value, format) when is_binary(value) do
-    value
-    |> Path.basename()
-    |> String.trim()
-    |> String.replace(~r/[^A-Za-z0-9_.-]/, "_")
-    |> String.slice(0, 96)
-    |> case do
-      "" -> default_filename(format)
-      name -> ensure_extension(name, format)
-    end
-  end
-
-  defp sanitize_filename(_value, format), do: default_filename(format)
-
-  defp default_filename(format) do
-    "media-video-#{System.unique_integer([:positive])}.#{format}"
-  end
-
-  defp ensure_extension(name, format) do
-    if String.downcase(Path.extname(name)) == ".#{format}" do
-      name
-    else
-      "#{Path.rootname(name)}.#{format}"
-    end
-  end
-
-  defp media_job_opts(cwd, opts, artifact_path, generation) do
-    [
-      project_dir: cwd,
-      dir: Keyword.get(opts, :media_jobs_dir),
-      artifacts_dir: Path.dirname(artifact_path),
-      runner: runner(cwd, opts, artifact_path, generation)
-    ]
-  end
-
   defp runner(_cwd, _opts, artifact_path, %{provider: @local_provider}) do
     &run_local_video(&1, artifact_path)
   end
@@ -335,7 +278,7 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   end
 
   defp run_openai_video(attrs, artifact_path, generation, runtime) do
-    with {:ok, api_key} <- openai_api_key(runtime),
+    with {:ok, api_key} <- MediaCommon.provider_api_key(runtime, :missing_openai_video_api_key),
          {:ok, video} <- create_openai_video(attrs, generation, runtime, api_key),
          {:ok, completed} <- wait_openai_video(video, generation, runtime, api_key),
          {:ok, bytes} <- download_openai_video(completed, generation, runtime, api_key),
@@ -384,15 +327,6 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
       http_post: Keyword.get(opts, :media_video_http_post, &Req.post/2),
       http_get: Keyword.get(opts, :media_video_http_get, &Req.get/2)
     }
-  end
-
-  defp openai_api_key(%{api_key: key}) when is_binary(key) and key != "", do: {:ok, key}
-
-  defp openai_api_key(%{provider_cfg: provider_cfg}) do
-    case Credentials.resolve_provider_api_key(:openai, provider_cfg, provider_cfg: true) do
-      key when is_binary(key) and key != "" -> {:ok, key}
-      _ -> {:error, :missing_openai_video_api_key}
-    end
   end
 
   defp vertex_runtime(cwd, opts) do
@@ -731,103 +665,15 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
     end
   end
 
-  defp transient_status?(status) when status in [408, 409, 425, 429], do: true
-  defp transient_status?(status) when is_integer(status) and status >= 500, do: true
-  defp transient_status?(_status), do: false
-
-  defp wait_for_job(job_id, timeout_ms, signal) do
-    receive do
-      {:media_job, :completed, %{job_id: ^job_id} = job} ->
-        {:ok, job}
-
-      {:media_job, :failed, %{job_id: ^job_id} = job} ->
-        {:error, "media job failed: #{Map.get(job, :error_kind, "unknown")}"}
-
-      {:media_job, _event, %{job_id: ^job_id}} ->
-        case AbortHelpers.check_abort(signal) do
-          :ok -> wait_for_job(job_id, timeout_ms, signal)
-          {:error, reason} -> {:error, reason}
-        end
-
-      _other ->
-        wait_for_job(job_id, timeout_ms, signal)
-    after
-      timeout_ms -> {:error, "media job timed out after #{timeout_ms}ms"}
-    end
-  end
-
   defp payload(job, artifact_path, params) do
-    artifact_name = get_in(job, [:artifact, :name]) || Path.basename(artifact_path)
-    mime_type = get_in(job, [:artifact, :mime_type]) || mime_type_from_path(artifact_path)
-
-    artifact = %{
-      "path" => artifact_path,
-      "filename" => artifact_name,
-      "mime_type" => mime_type,
-      "bytes" => artifact_bytes(artifact_path)
-    }
-
-    %{
-      "job_id" => job.job_id,
-      "status" => Atom.to_string(job.status),
-      "type" => Atom.to_string(job.type),
-      "provider" => job.provider,
-      "model" => job.model,
-      "prompt_hash" => job.prompt_hash,
-      "prompt_chars" => job.prompt_chars,
-      "artifact" => artifact,
-      "media_job" => redacted_job(job)
-    }
-    |> maybe_auto_send(artifact_path, artifact_name, Map.get(params, "sendToChannel") == true)
-  end
-
-  defp redacted_job(job) do
     job
-    |> Map.take([
-      :job_id,
-      :type,
-      :status,
-      :provider,
-      :model,
-      :artifact,
-      :prompt_hash,
-      :prompt_chars,
-      :created_at,
-      :updated_at
-    ])
-    |> stringify_atoms()
-  end
-
-  defp stringify_atoms(value) when is_map(value) do
-    Map.new(value, fn {key, value} -> {to_string(key), stringify_atoms(value)} end)
-  end
-
-  defp stringify_atoms(value) when is_atom(value), do: Atom.to_string(value)
-  defp stringify_atoms(value), do: value
-
-  defp maybe_auto_send(payload, _artifact_path, _artifact_name, false), do: payload
-
-  defp maybe_auto_send(payload, artifact_path, artifact_name, true) do
-    Map.put(payload, "auto_send_files", [
-      %{
-        "path" => artifact_path,
-        "filename" => artifact_name,
-        "caption" => "generated video preview",
-        "source" => "generated"
-      }
-    ])
+    |> MediaCommon.payload(artifact_path, mime_type_from_path(artifact_path), "prompt")
+    |> MediaCommon.maybe_auto_send(params, "generated video preview")
   end
 
   defp write_file(path, bytes) when is_binary(bytes) do
     with :ok <- File.mkdir_p(Path.dirname(path)) do
       File.write(path, bytes)
-    end
-  end
-
-  defp artifact_bytes(path) do
-    case File.stat(path) do
-      {:ok, stat} -> stat.size
-      {:error, _reason} -> nil
     end
   end
 
@@ -956,63 +802,6 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
       value -> bounded_integer(value, 1, 60)
     end
   end
-
-  defp optional_string(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      trimmed -> trimmed
-    end
-  end
-
-  defp optional_string(_value), do: nil
-
-  defp provider_config_value(cfg, key) when is_map(cfg) do
-    Map.get(cfg, key) || Map.get(cfg, Atom.to_string(key))
-  end
-
-  defp bounded_integer(value, min, max) when is_integer(value), do: value |> max(min) |> min(max)
-
-  defp bounded_integer(value, min, max) when is_binary(value) do
-    case Integer.parse(value) do
-      {int, ""} -> bounded_integer(int, min, max)
-      _ -> min
-    end
-  end
-
-  defp bounded_integer(_value, min, _max), do: min
-
-  defp reject_blank_values(map) do
-    Map.reject(map, fn {_key, value} -> is_nil(value) or value == "" end)
-  end
-
-  defp provider_error_kind(%{"error" => error}) when is_map(error) do
-    {:safe_error_kind,
-     optional_string(error["type"]) || optional_string(error["status"]) ||
-       optional_string(error["code"]) || "provider_error"}
-  end
-
-  defp provider_error_kind(%{error: error}) when is_map(error) do
-    provider_error_kind(%{
-      "error" => %{"type" => error[:type], "status" => error[:status], "code" => error[:code]}
-    })
-  end
-
-  defp provider_error_kind(%{"detail" => detail}) when is_map(detail) do
-    {:safe_error_kind,
-     optional_string(detail["status"]) || optional_string(detail["type"]) ||
-       optional_string(detail["code"]) || "provider_error"}
-  end
-
-  defp provider_error_kind(%{detail: detail}) when is_map(detail) do
-    provider_error_kind(%{
-      "detail" => %{"status" => detail[:status], "type" => detail[:type], "code" => detail[:code]}
-    })
-  end
-
-  defp provider_error_kind(reason) when is_atom(reason),
-    do: {:safe_error_kind, Atom.to_string(reason)}
-
-  defp provider_error_kind(_reason), do: {:safe_error_kind, "provider_error"}
 
   defp mime_type_from_path(path) do
     case String.downcase(Path.extname(path)) do

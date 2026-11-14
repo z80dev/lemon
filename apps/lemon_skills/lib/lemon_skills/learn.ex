@@ -73,7 +73,7 @@ defmodule LemonSkills.Learn do
          {:ok, source_text, redaction_count} <- sanitized_source_text(context),
          {:ok, doc, draft} <- proposals(source_text, context, opts),
          {audit_verdict, findings} <-
-           audit_mod(opts).audit_content(draft.content, llm: [enabled: false]),
+           audit_mod(opts).audit_content(draft.content),
          {:ok, memory_action} <- memory_action(doc, opts),
          {:ok, skill_action} <- skill_action(draft, opts) do
       source_digest = sha256(source_text)

@@ -21,14 +21,4 @@ defmodule LemonSkills.HttpClient do
   def impl do
     Application.get_env(:lemon_skills, :http_client, LemonSkills.HttpClient.Httpc)
   end
-
-  @doc """
-  Convenience wrapper: fetch a URL with no extra headers.
-
-  Delegates to `impl().fetch/2` using an empty header list.
-  """
-  @spec get(String.t()) :: {:ok, String.t()} | {:error, term()}
-  def get(url) when is_binary(url) do
-    impl().fetch(url, [])
-  end
 end
