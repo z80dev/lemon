@@ -229,11 +229,18 @@ defmodule CodingAgent.Security.SecretObfuscator do
     end)
   end
 
+  # A call routed to a named node keeps its placeholders: controller secrets
+  # never cross to another machine (see `CodingAgent.NodeTools`).
   defp wrap_tool(%AgentTool{execute: execute} = tool, obfuscator) when is_function(execute, 4) do
     %{
       tool
       | execute: fn tool_call_id, params, signal, on_update ->
-          execute.(tool_call_id, restore_tool_args(obfuscator, params), signal, on_update)
+          params =
+            if CodingAgent.NodeTools.remote_call?(params),
+              do: params,
+              else: restore_tool_args(obfuscator, params)
+
+          execute.(tool_call_id, params, signal, on_update)
         end,
         on_stream: restore_stream(tool.on_stream, obfuscator)
     }

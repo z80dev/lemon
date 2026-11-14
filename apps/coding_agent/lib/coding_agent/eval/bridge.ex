@@ -17,9 +17,10 @@ defmodule CodingAgent.Eval.Bridge do
 
   Mutation locks: `eval` runs under the session mutation lock, and inner
   mutating tools take that same lock from their task. Tasks therefore inherit
-  the caller's `{:session, _}` keys (`CodingAgent.MutationLock.inherit/1`),
-  which is sound because `shutdown/1` returns only after every task has exited,
-  before the caller's lock is released.
+  the caller's `{:session, _}` keys (`CodingAgent.MutationLock.inherit/2`): inner
+  mutations still run one at a time among themselves, without waiting on the
+  cell's own lock. This is sound because `shutdown/1` returns only after every
+  task has exited, before the caller's lock is released.
 
   Each call resolves in the cell to `%{ok, text, details, images}`: `text` joins
   the result's text blocks (bounded to 1 MiB), `details` is a JSON-safe
@@ -198,8 +199,8 @@ defmodule CodingAgent.Eval.Bridge do
     owner = self()
 
     task = fn ->
-      die_with(owner)
-      MutationLock.inherit(locks)
+      die_with(owner, signal)
+      MutationLock.inherit(locks, owner)
       Kernel.tool_reply(slot, ref, call, run_call(resolver, tool, tool_call_id, args, signal))
     end
 
@@ -215,8 +216,9 @@ defmodule CodingAgent.Eval.Bridge do
   end
 
   # Inherited locks are only valid while their holder lives: kill this task if
-  # the `eval` process dies without running `shutdown/1`.
-  defp die_with(owner) do
+  # the `eval` process dies without running `shutdown/1`, and clear the call's
+  # abort signal, which only the dead holder would otherwise have cleared.
+  defp die_with(owner, signal) do
     task = self()
 
     spawn(fn ->
@@ -224,8 +226,15 @@ defmodule CodingAgent.Eval.Bridge do
       task_monitor = Process.monitor(task)
 
       receive do
-        {:DOWN, ^owner_monitor, :process, _, _} -> Process.exit(task, :kill)
-        {:DOWN, ^task_monitor, :process, _, _} -> :ok
+        {:DOWN, ^owner_monitor, :process, _, _} ->
+          Process.exit(task, :kill)
+
+          receive do
+            {:DOWN, ^task_monitor, :process, _, _} -> AbortSignal.clear(signal)
+          end
+
+        {:DOWN, ^task_monitor, :process, _, _} ->
+          :ok
       end
     end)
   end

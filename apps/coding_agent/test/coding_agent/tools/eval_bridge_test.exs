@@ -312,30 +312,30 @@ defmodule CodingAgent.Tools.EvalBridgeTest do
   end
 
   describe "mutation lock inheritance" do
-    test "held/inherit track keys and inherited keys run without acquiring" do
+    test "inheritors run under the holder's lock without waiting and exclude each other" do
       key = {:session, "inherit-#{System.unique_integer([:positive])}"}
-      path = MutationLock.path_key("/tmp/lemon-inherit-#{System.unique_integer([:positive])}")
-      test_pid = self()
+      holder = self()
 
       MutationLock.with_lock(key, fn ->
-        MutationLock.with_lock(path, fn ->
-          assert Enum.sort(MutationLock.held()) == Enum.sort([key, path])
-        end)
-
         assert MutationLock.held() == [key]
 
-        Task.async(fn ->
-          MutationLock.inherit([key])
-          # Not inherited: the path lock is acquired normally.
-          MutationLock.with_lock(key, fn ->
-            MutationLock.with_lock(path, fn -> send(test_pid, {:held, MutationLock.held()}) end)
+        for i <- 1..2 do
+          Task.async(fn ->
+            MutationLock.inherit([key], holder)
+
+            MutationLock.with_lock(key, fn ->
+              send(holder, {:enter, i})
+              Process.sleep(150)
+              send(holder, {:leave, i})
+            end)
           end)
-        end)
-        |> Task.await(5_000)
+        end
+        |> Task.await_many(5_000)
       end)
 
-      assert_received {:held, held}
-      assert Enum.sort(held) == Enum.sort([key, path])
+      events = for _ <- 1..4, do: assert_receive({kind, _} = event when kind in [:enter, :leave])
+      assert [{:enter, a}, {:leave, a}, {:enter, b}, {:leave, b}] = events
+      assert a != b
       assert MutationLock.held() == []
     end
 

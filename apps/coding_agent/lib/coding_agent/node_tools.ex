@@ -34,6 +34,8 @@ defmodule CodingAgent.NodeTools do
   @default_timeout_ms 300_000
   @max_timeout_ms 1_800_000
   @margin_ms 60_000
+  # Backstop for a lost broker deadline; the broker's own timeout fires first.
+  @await_grace_ms 15_000
 
   @node_parameter %{
     "type" => "string",
@@ -237,53 +239,97 @@ defmodule CodingAgent.NodeTools do
     end
   end
 
+  # Only a definite admission refusal means nothing ran. A broker call that
+  # exits after it may have dispatched, a broker restart, a lost deadline or a
+  # cancellation are all unknown outcomes.
   defp dispatch(node, tool, args, signal) do
     timeout_ms = timeout_ms(tool, args["arguments"])
 
-    case NodeRegistry.invoke_node(node.id, @method, args,
-           timeout_ms: timeout_ms,
-           expected_pid: node.pid,
-           expected_generation: node.generation
-         ) do
-      {:ok, invoke_id} ->
-        await(invoke_id, node, tool, signal)
+    case invoke(node, args, timeout_ms) do
+      {:ok, invoke_id, monitor} ->
+        deadline = System.monotonic_time(:millisecond) + timeout_ms + @await_grace_ms
+
+        try do
+          await(%{id: invoke_id, monitor: monitor, deadline: deadline}, node, tool, signal)
+        after
+          Process.demonitor(monitor, [:flush])
+        end
 
       {:error, reason} ->
         not_run(node.name, "the node could not accept it (#{format_reason(reason)})")
+
+      :unknown ->
+        unknown(node.name, "the routing service did not confirm whether it dispatched the call")
     end
-  catch
-    :exit, _ -> not_run(node.name, "node routing is unavailable")
   end
 
-  defp await(invoke_id, node, tool, signal) do
+  defp invoke(node, args, timeout_ms) do
+    case Process.whereis(NodeRegistry) do
+      nil ->
+        {:error, :routing_unavailable}
+
+      registry ->
+        monitor = Process.monitor(registry)
+
+        case NodeRegistry.invoke_node(node.id, @method, args,
+               timeout_ms: timeout_ms,
+               expected_pid: node.pid,
+               expected_generation: node.generation
+             ) do
+          {:ok, invoke_id} ->
+            {:ok, invoke_id, monitor}
+
+          {:error, reason} ->
+            Process.demonitor(monitor, [:flush])
+            {:error, reason}
+        end
+    end
+  catch
+    :exit, {:noproc, _} -> {:error, :routing_unavailable}
+    :exit, _ -> :unknown
+  end
+
+  defp await(%{id: invoke_id, monitor: monitor} = pending, node, tool, signal) do
     receive do
       {:lemon_node_result, ^invoke_id, {:ok, result}} ->
         completed(result, node, tool)
 
       {:lemon_node_result, ^invoke_id, {:error, reason}} ->
         failed(reason, node, tool)
+
+      {:DOWN, ^monitor, :process, _pid, _reason} ->
+        unknown(node.name, "the routing service restarted while the call was running")
     after
       100 ->
-        if AbortSignal.aborted?(signal) do
-          NodeRegistry.cancel(invoke_id, :aborted)
-          flush(invoke_id)
+        cond do
+          AbortSignal.aborted?(signal) ->
+            cancel(invoke_id)
 
-          unknown(
-            node.name,
-            "the call was cancelled while it ran on the node; it may have partly taken effect"
-          )
-        else
-          await(invoke_id, node, tool, signal)
+            unknown(
+              node.name,
+              "the call was cancelled while it ran on the node; it may have partly taken effect"
+            )
+
+          System.monotonic_time(:millisecond) > pending.deadline ->
+            cancel(invoke_id)
+            unknown(node.name, "no result arrived before the routing deadline; it was cancelled")
+
+          true ->
+            await(pending, node, tool, signal)
         end
     end
   end
 
-  defp flush(invoke_id) do
+  defp cancel(invoke_id) do
+    NodeRegistry.cancel(invoke_id, :aborted)
+
     receive do
       {:lemon_node_result, ^invoke_id, _} -> :ok
     after
       0 -> :ok
     end
+  catch
+    :exit, _ -> :ok
   end
 
   defp completed(result, node, tool) do

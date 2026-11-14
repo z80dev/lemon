@@ -150,9 +150,12 @@ defmodule CodingAgent.ExecutionNode.ToolService do
     Keyword.put(base, :tool_resolver, resolver(available, opts[:default_cwd], base, opts))
   end
 
-  # Cells running on this node reach only this node's tools.
+  # Cells running on this node reach only this node's tools. Nothing here can
+  # ask the session for approval, so a call the session policy would review is
+  # refused rather than run unreviewed.
   defp resolver(available, cwd, base_opts, opts) do
     node = Keyword.get(opts, :node_name)
+    policy = Keyword.fetch!(base_opts, :tool_policy)
 
     fn name ->
       cond do
@@ -164,34 +167,43 @@ defmodule CodingAgent.ExecutionNode.ToolService do
 
         true ->
           {:ok, tool} = build(name, cwd, base_opts)
-          {:ok, local_only(tool, node)}
+          {:ok, local_only(tool, node, policy)}
       end
     end
   end
 
-  defp local_only(%AgentTool{execute: execute} = tool, node) do
+  defp local_only(%AgentTool{execute: execute, name: name} = tool, node, policy) do
     %{
       tool
       | execute: fn id, params, signal, on_update ->
-          case Map.get(params, "node") do
-            target when target in [nil, "", "local"] or target == node ->
-              execute.(id, Map.delete(params, "node"), signal, on_update)
+          target = Map.get(params, "node")
+          params = Map.delete(params, "node")
 
-            target ->
-              %AgentToolResult{
-                content: [
-                  %TextContent{
-                    text:
-                      "Not run: this cell runs on node #{inspect(node)} and can only call its " <>
-                        "own tools, not node #{inspect(target)}. Run the cell without node to " <>
-                        "reach several machines."
-                  }
-                ],
-                details: %{outcome: "not_run"},
-                is_error: true
-              }
+          cond do
+            target not in [nil, "", "local"] and target != node ->
+              refused(
+                "this cell runs on node #{inspect(node)} and can only call its own tools, not " <>
+                  "node #{inspect(target)}. Run the cell without node to reach several machines."
+              )
+
+            ToolPolicy.requires_approval?(policy, name, params, ToolPolicy.tier(name, params)) ->
+              refused(
+                "#{name} needs approval under this session's policy, and a cell running on " <>
+                  "node #{inspect(node)} cannot request it. Call #{name} from the controller instead."
+              )
+
+            true ->
+              execute.(id, params, signal, on_update)
           end
         end
+    }
+  end
+
+  defp refused(why) do
+    %AgentToolResult{
+      content: [%TextContent{text: "Not run: " <> why}],
+      details: %{outcome: "not_run"},
+      is_error: true
     }
   end
 

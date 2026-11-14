@@ -179,6 +179,22 @@ defmodule CodingAgent.NodeToolsTest do
       assert {:error, :unsupported_tool} =
                ToolService.run(request("agent", %{}), default_cwd: ctx.remote)
     end
+
+    test "a cell on the node cannot run a call the session would have reviewed", ctx do
+      code = """
+      const r = await tools.bash({command: "touch reviewed-call-ran"});
+      console.log(JSON.stringify({ok: r.ok, text: r.text}));
+      """
+
+      args =
+        request("eval", %{"language" => "js", "code" => code}, %{approval_mode: :write})
+
+      assert {:ok, result} = ToolService.run(args, default_cwd: ctx.remote, node_name: "box")
+      [text] = for %{"type" => "text", "text" => t} <- result["content"], do: t
+      assert text =~ ~s("ok":false)
+      assert text =~ "needs approval"
+      refute File.exists?(Path.join(ctx.remote, "reviewed-call-ran"))
+    end
   end
 
   test "results round-trip through the transport codec without trust metadata" do
@@ -213,8 +229,8 @@ defmodule CodingAgent.NodeToolsTest do
   defp text(%AgentToolResult{content: content}),
     do: Enum.map_join(content, "", &Map.get(&1, :text, ""))
 
-  defp request(tool, arguments) do
-    {:ok, context} = ExecutionContext.new(run_id: "run-1")
+  defp request(tool, arguments, policy \\ nil) do
+    {:ok, context} = ExecutionContext.new(run_id: "run-1", tool_policy: policy)
     {:ok, context} = ExecutionContext.for_remote(context, nil)
     {:ok, encoded} = ExecutionContext.encode(context)
 
