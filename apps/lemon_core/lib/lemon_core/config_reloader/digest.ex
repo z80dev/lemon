@@ -5,7 +5,7 @@ defmodule LemonCore.ConfigReloader.Digest do
   Computes and compares digests for config sources (files, env, secrets)
   to determine whether a reload is necessary.
 
-  File fingerprints combine mtime + size + content hash for reliable detection.
+  File fingerprints combine mtime and size, matching the config cache.
   Secret digests use metadata only (owner, name, updated_at, version) — never values.
   """
 
@@ -15,7 +15,6 @@ defmodule LemonCore.ConfigReloader.Digest do
           path: String.t(),
           mtime: tuple() | nil,
           size: non_neg_integer() | nil,
-          hash: binary() | nil,
           status: :ok | :missing | :error
         }
 
@@ -34,8 +33,7 @@ defmodule LemonCore.ConfigReloader.Digest do
   @doc """
   Compute a fingerprint for a single file path.
 
-  Returns mtime, size, and a SHA-256 content hash.
-  Missing or unreadable files are represented with status `:missing` or `:error`.
+  Returns mtime and size. Missing files are represented with status `:missing`.
   """
   @spec file_fingerprint(String.t()) :: file_fingerprint()
   def file_fingerprint(path) do
@@ -43,13 +41,10 @@ defmodule LemonCore.ConfigReloader.Digest do
 
     case File.stat(expanded) do
       {:ok, %File.Stat{mtime: mtime, size: size}} ->
-        hash = content_hash(expanded)
-
         %{
           path: expanded,
           mtime: mtime,
           size: size,
-          hash: hash,
           status: :ok
         }
 
@@ -58,17 +53,13 @@ defmodule LemonCore.ConfigReloader.Digest do
           path: expanded,
           mtime: nil,
           size: nil,
-          hash: nil,
           status: :missing
         }
     end
   end
 
-  @doc """
-  Compute fingerprints for a list of file paths.
-  """
   @spec file_fingerprints([String.t()]) :: [file_fingerprint()]
-  def file_fingerprints(paths) when is_list(paths) do
+  defp file_fingerprints(paths) when is_list(paths) do
     Enum.map(paths, &file_fingerprint/1)
   end
 
@@ -163,37 +154,18 @@ defmodule LemonCore.ConfigReloader.Digest do
     {changed, new}
   end
 
-  @doc """
-  Check whether a single source digest changed.
-  """
   @spec source_changed?(source_digest() | nil, source_digest() | nil) :: boolean()
-  def source_changed?(nil, nil), do: false
-  def source_changed?(nil, _new), do: true
-  def source_changed?(_old, nil), do: true
+  defp source_changed?(nil, nil), do: false
+  defp source_changed?(nil, _new), do: true
+  defp source_changed?(_old, nil), do: true
 
-  def source_changed?(old, new) do
-    normalize_fingerprints(old.fingerprints) != normalize_fingerprints(new.fingerprints)
+  defp source_changed?(old, new) do
+    old.fingerprints != new.fingerprints
   end
 
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
-
-  defp content_hash(path) do
-    case File.read(path) do
-      {:ok, content} -> :crypto.hash(:sha256, content)
-      {:error, _} -> nil
-    end
-  end
-
-  defp normalize_fingerprints(fingerprints) when is_list(fingerprints) do
-    Enum.map(fingerprints, fn fp ->
-      # Drop computed_at_ms and other transient fields for comparison
-      Map.drop(fp, [:computed_at_ms])
-    end)
-  end
-
-  defp normalize_fingerprints(_), do: []
 
   defp now_ms, do: System.system_time(:millisecond)
 end

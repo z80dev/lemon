@@ -8,6 +8,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- Removed unused gateway merge/normalization, environment parsing, and clock APIs.
+  ConfigCache now has one registered instance, and Dedupe.Ets.init/1 uses fixed
+  named-table options. Config reloader file fingerprints use mtime and size
+  without reading file contents; internal comparison helpers are private.
 - Tool disclosure defaults to `profile = "auto"`: coding for cwd-scoped native
   coding sessions, legacy for assistant chat. Explicit legacy/coding config and
   environment overrides retain precedence.

@@ -255,20 +255,6 @@ defmodule LemonCore.StoreInstanceTest do
     end
   end
 
-  describe "ConfigCache instances" do
-    test "get their own ETS table and answer independently" do
-      name = :config_cache_instance_test
-
-      start_supervised!(Supervisor.child_spec({LemonCore.ConfigCache, name: name}, id: name))
-
-      assert LemonCore.ConfigCache.available?(name)
-      assert %LemonCore.Config{} = LemonCore.ConfigCache.get(name, nil, [])
-
-      assert :ok = LemonCore.ConfigCache.invalidate(name, nil)
-      assert %LemonCore.Config{} = LemonCore.ConfigCache.get(name, nil, [])
-    end
-  end
-
   describe "read cache collisions" do
     test "reusing another owner's table raises instead of silently sharing" do
       name = :store_instance_collision

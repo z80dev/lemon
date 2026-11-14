@@ -130,11 +130,8 @@ Environment variable parsing utilities:
 - `get_env_int/2` - Parse integers
 - `get_env_float/2` - Parse floats
 - `get_env_bool/2` - Parse booleans
-- `get_env_atom/2` - Parse atoms
 - `get_env_list/2` - Parse comma-separated lists
-- `get_env_duration/2` - Parse durations (e.g., "30s", "5m")
 - `get_env_bytes/2` - Parse byte sizes (e.g., "10MB", "1GB")
-- `require_env!/1,2` - Require environment variables
 
 ### Config.Agent
 
