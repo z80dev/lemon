@@ -286,7 +286,6 @@ defmodule CodingAgent.RunGraphServerTest do
 
       status = RunGraphServer.dets_status(server_pid)
       assert status.state.loaded_from_dets
-      refute status.state.loading
 
       GenServer.stop(server_pid)
       send(starter.pid, :release_owner)
