@@ -42,6 +42,12 @@ config :lemon_core, LemonCore.Store,
 # Enable test-mode gateway config path (full-replacement via app env).
 config :lemon_core, config_test_mode: true
 
+# Listener defaults apply before every umbrella app starts, not just gateway tests.
+config :lemon_gateway,
+  health_port: 0,
+  voice_websocket_port: 0,
+  webhook: %{port: 0}
+
 # A test VM must stop on SIGTERM without draining.
 config :lemon_core, LemonCore.Drain, signal_trap: false
 
@@ -177,6 +183,7 @@ System.put_env(
 config :lemon_gateway, LemonGateway.Config,
   enable_telegram: false,
   max_concurrent_runs: 1,
+  webhook: %{port: 0},
   bindings: [],
   projects: %{}
 

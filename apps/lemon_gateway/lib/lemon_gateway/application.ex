@@ -5,7 +5,7 @@ defmodule LemonGateway.Application do
   Starts the execution supervision tree: configuration, the singleton executor,
   schedulers, run supervisors, and the health check server.
 
-  Gateway-owned ingress (transport, command, SMS, voice) is off by default and
+  Gateway-owned ingress (transport, SMS, voice) is off by default and
   starts only when `:gateway_ingress_enabled` is set for `:lemon_gateway`. See
   `LemonGateway.IngressSupervisor`.
   """
@@ -59,7 +59,7 @@ defmodule LemonGateway.Application do
   end
 
   defp health_server_child_spec do
-    port = Application.get_env(:lemon_gateway, :health_port, default_health_port())
+    port = Application.get_env(:lemon_gateway, :health_port, 4042)
     ip = Application.get_env(:lemon_gateway, :health_ip, :loopback)
 
     %{
@@ -87,11 +87,4 @@ defmodule LemonGateway.Application do
     Application.get_env(:lemon_gateway, :gateway_ingress_enabled, false)
   end
 
-  defp default_health_port do
-    if Code.ensure_loaded?(Mix) and Mix.env() == :test do
-      0
-    else
-      4042
-    end
-  end
 end

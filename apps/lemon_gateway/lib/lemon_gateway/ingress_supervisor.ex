@@ -3,7 +3,7 @@ defmodule LemonGateway.IngressSupervisor do
   Supervisor for gateway-owned ingress children.
 
   Default `LemonGateway.Application` startup is execution-only; this supervisor
-  starts transport, command, SMS, and voice children only when
+  starts transport, SMS, and voice children only when
   `:gateway_ingress_enabled` is set.
 
   These surfaces are gateway-owned **by design**, not pending migration. SMS is
@@ -29,7 +29,6 @@ defmodule LemonGateway.IngressSupervisor do
       [
         LemonGateway.TransportRegistry,
         LemonGateway.TransportSupervisor,
-        LemonGateway.CommandRegistry,
         LemonGateway.Sms.Inbox,
         LemonGateway.Sms.WebhookServer,
         {Registry, keys: :unique, name: LemonGateway.Voice.CallRegistry},
@@ -57,7 +56,7 @@ defmodule LemonGateway.IngressSupervisor do
   #
   #     config :lemon_gateway, :voice_ip, {0, 0, 0, 0}
   defp voice_server_child_spec do
-    port = LemonGateway.Voice.Config.websocket_port() |> maybe_test_voice_port()
+    port = LemonGateway.Voice.Config.websocket_port()
     ip = Application.get_env(:lemon_gateway, :voice_ip, :loopback)
 
     %{
@@ -69,13 +68,4 @@ defmodule LemonGateway.IngressSupervisor do
     }
   end
 
-  defp maybe_test_voice_port(4047) do
-    if test_env?(), do: 0, else: 4047
-  end
-
-  defp maybe_test_voice_port(port), do: port
-
-  defp test_env? do
-    Code.ensure_loaded?(Mix) and Mix.env() == :test
-  end
 end

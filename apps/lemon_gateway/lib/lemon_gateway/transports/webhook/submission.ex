@@ -91,11 +91,6 @@ defmodule LemonGateway.Transports.Webhook.Submission do
     end
   end
 
-  @spec resolve_callback_wait_timeout_ms(map(), map(), pos_integer()) :: pos_integer()
-  def resolve_callback_wait_timeout_ms(integration, webhook_config, default_timeout_ms) do
-    Request.resolve_callback_wait_timeout_ms(integration, webhook_config, default_timeout_ms)
-  end
-
   defp integration_metadata(integration, webhook_config) do
     callback_retry = callback_retry_config(integration, webhook_config)
 
