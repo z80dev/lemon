@@ -9,7 +9,7 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 ### Changed
 
 - Removed unused `RunPhaseEvent`, `Retry.exponential_backoff/3`, and `Telemetry.span/3` APIs.
-- Consolidated Mix task startup and simplified validated worker readiness and service identity matching.
+- Consolidated Mix task startup and simplified service identity matching.
 - Fixed task projection fallback action IDs to include their action kind.
 
 - Tool disclosure defaults to `profile = "auto"`: coding for cwd-scoped native
