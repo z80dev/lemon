@@ -86,7 +86,7 @@ defmodule LemonGateway.WebhookTransportTest do
 
   alias LemonCore.Store
   alias LemonGateway.Transports.Webhook
-  alias LemonGateway.Transports.Webhook.{Idempotency, InvocationDispatch, ResponseBuilder}
+  alias LemonGateway.Transports.Webhook.{Config, Idempotency, InvocationDispatch, Request, Response}
   alias Plug.Conn
   alias Plug.Test
 
@@ -149,7 +149,7 @@ defmodule LemonGateway.WebhookTransportTest do
     assert {:ok, run_ctx} = dispatch_webhook(run_id, nil)
     assert_receive {:webhook_submit, %{run_id: ^run_id}}
 
-    assert {:ok, 200, payload} = ResponseBuilder.response_for_run(run_ctx)
+    assert {:ok, 200, payload} = Response.response_for_run(run_ctx)
     assert payload.run_id == run_id
     assert payload.status == "outcome_unknown"
     assert payload.retry_safe == false
@@ -167,7 +167,7 @@ defmodule LemonGateway.WebhookTransportTest do
       |> Conn.put_req_header("idempotency-key", idempotency_key)
 
     assert {:ok, idempotency_ctx} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
     Application.put_env(
       :lemon_gateway,
@@ -177,10 +177,10 @@ defmodule LemonGateway.WebhookTransportTest do
 
     assert {:ok, run_ctx} = dispatch_webhook(run_id, idempotency_ctx, integration_id)
     assert_receive {:webhook_submit, %{run_id: ^run_id}}
-    assert {:ok, 200, payload} = ResponseBuilder.response_for_run(run_ctx)
+    assert {:ok, 200, payload} = Response.response_for_run(run_ctx)
 
     assert {:duplicate, 202, pending_payload} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
     assert pending_payload.run_id == run_id
     assert pending_payload.status == "outcome_unknown"
@@ -189,7 +189,7 @@ defmodule LemonGateway.WebhookTransportTest do
     assert :ok = Idempotency.store_response(idempotency_ctx, 200, payload)
 
     assert {:duplicate, 200, ^payload} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
     refute_receive {:webhook_submit, _request}
   end
@@ -207,7 +207,7 @@ defmodule LemonGateway.WebhookTransportTest do
     log =
       capture_log(fn ->
         assert {:ok, run_ctx} = dispatch_webhook(run_id, nil)
-        assert {:ok, 200, payload} = ResponseBuilder.response_for_run(run_ctx)
+        assert {:ok, 200, payload} = Response.response_for_run(run_ctx)
         assert payload.status == "outcome_unknown"
         refute inspect(payload) =~ secret
       end)
@@ -236,17 +236,17 @@ defmodule LemonGateway.WebhookTransportTest do
       |> Conn.put_req_header("idempotency-key", idempotency_key)
 
     assert {:ok, %{store_key: store_key, idempotency_digest: digest} = ctx} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
     assert {:v1, ^digest} = store_key
-    stored = Store.get(Webhook.idempotency_table_for_test(), store_key)
+    stored = Store.get(Idempotency.table(), store_key)
     assert stored.idempotency_digest == digest
     refute Map.has_key?(ctx, :idempotency_key)
     refute Map.has_key?(stored, :idempotency_key)
     refute inspect({store_key, stored, ctx}) =~ idempotency_key
 
     assert {:duplicate, 503, response_payload} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
     assert response_payload.status == "reservation_pending"
     assert response_payload.retry_safe == true
@@ -283,13 +283,13 @@ defmodule LemonGateway.WebhookTransportTest do
         response_payload: if(state == "completed", do: %{run_id: run_id, status: "complete"})
       }
 
-      assert :ok = Store.put(Webhook.idempotency_table_for_test(), raw_key, legacy)
+      assert :ok = Store.put(Idempotency.table(), raw_key, legacy)
 
       conn =
         Test.conn(:post, "/webhooks/#{integration_id}", "")
         |> Conn.put_req_header("idempotency-key", idempotency_key)
 
-      result = Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+      result = Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
       case expectation do
         :retry ->
@@ -301,10 +301,10 @@ defmodule LemonGateway.WebhookTransportTest do
           assert payload.status == receipt_state
       end
 
-      assert Store.get(Webhook.idempotency_table_for_test(), raw_key) == nil
+      assert Store.get(Idempotency.table(), raw_key) == nil
 
       assert [{hashed_key, migrated}] =
-               Webhook.idempotency_table_for_test()
+               Idempotency.table()
                |> Store.list()
                |> Enum.filter(fn {_key, entry} -> entry[:run_id] == run_id end)
 
@@ -330,14 +330,14 @@ defmodule LemonGateway.WebhookTransportTest do
       updated_at_ms: 1
     }
 
-    assert :ok = Store.put(Webhook.idempotency_table_for_test(), raw_key, legacy)
+    assert :ok = Store.put(Idempotency.table(), raw_key, legacy)
 
     conn =
       Test.conn(:post, "/webhooks/#{integration_id}", "")
       |> Conn.put_req_header("idempotency-key", idempotency_key)
 
     assert {:duplicate, 200, ambiguity} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
     assert ambiguity == %{
              status: "legacy_outcome_unknown",
@@ -345,10 +345,10 @@ defmodule LemonGateway.WebhookTransportTest do
              retry_safe: false
            }
 
-    assert Store.get(Webhook.idempotency_table_for_test(), raw_key) == nil
+    assert Store.get(Idempotency.table(), raw_key) == nil
 
     assert [{{:v1, _digest} = hashed_key, migrated}] =
-             Store.list(Webhook.idempotency_table_for_test())
+             Store.list(Idempotency.table())
 
     assert migrated.state == "legacy_pending_unknown"
     refute Map.has_key?(migrated, :run_id)
@@ -359,9 +359,9 @@ defmodule LemonGateway.WebhookTransportTest do
     # A later process/version sees the same durable ambiguity and never
     # manufactures a new run ID from the old acceptance window.
     assert {:duplicate, 200, ^ambiguity} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
-    assert Store.get(Webhook.idempotency_table_for_test(), hashed_key) == migrated
+    assert Store.get(Idempotency.table(), hashed_key) == migrated
     refute_receive {:webhook_submit, _request}
   end
 
@@ -372,7 +372,7 @@ defmodule LemonGateway.WebhookTransportTest do
     raw_key = {integration_id, idempotency_key}
 
     assert :ok =
-             Store.put(Webhook.idempotency_table_for_test(), raw_key, %{
+             Store.put(Idempotency.table(), raw_key, %{
                idempotency_key: idempotency_key,
                integration_id: integration_id,
                state: "pending",
@@ -446,7 +446,7 @@ defmodule LemonGateway.WebhookTransportTest do
       stored_at_ms: now_ms
     }
 
-    assert :ok = Store.put(Webhook.idempotency_table_for_test(), raw_key, legacy)
+    assert :ok = Store.put(Idempotency.table(), raw_key, legacy)
     assert :ok = Store.put(Idempotency.response_table(), {raw_key, reservation_id}, receipt)
 
     conn =
@@ -454,9 +454,9 @@ defmodule LemonGateway.WebhookTransportTest do
       |> Conn.put_req_header("idempotency-key", idempotency_key)
 
     assert {:duplicate, 200, %{run_id: ^run_id, exact: true}} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
-    assert Store.get(Webhook.idempotency_table_for_test(), raw_key) == nil
+    assert Store.get(Idempotency.table(), raw_key) == nil
     assert Store.get(Idempotency.response_table(), {raw_key, reservation_id}) == nil
 
     assert [{{{:v1, _digest}, ^reservation_id}, ^receipt}] =
@@ -471,7 +471,7 @@ defmodule LemonGateway.WebhookTransportTest do
     raw_key = {integration_id, idempotency_key}
 
     assert :ok =
-             Store.put(Webhook.idempotency_table_for_test(), raw_key, %{
+             Store.put(Idempotency.table(), raw_key, %{
                idempotency_key: idempotency_key,
                integration_id: integration_id,
                run_id: run_id,
@@ -490,16 +490,16 @@ defmodule LemonGateway.WebhookTransportTest do
       1..12
       |> Enum.map(fn _ ->
         Task.async(fn ->
-          Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+          Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
         end)
       end)
       |> Enum.map(&Task.await(&1, 2_000))
 
     assert Enum.all?(results, &match?({:duplicate, 202, %{run_id: ^run_id}}, &1))
-    assert Store.get(Webhook.idempotency_table_for_test(), raw_key) == nil
+    assert Store.get(Idempotency.table(), raw_key) == nil
 
     assert 1 ==
-             Webhook.idempotency_table_for_test()
+             Idempotency.table()
              |> Store.list()
              |> Enum.count(fn {_key, entry} -> entry[:run_id] == run_id end)
   end
@@ -522,7 +522,7 @@ defmodule LemonGateway.WebhookTransportTest do
     }
 
     backend_state = %{
-      data: %{{Webhook.idempotency_table_for_test(), raw_key} => legacy},
+      data: %{{Idempotency.table(), raw_key} => legacy},
       delete_count: 1
     }
 
@@ -545,15 +545,15 @@ defmodule LemonGateway.WebhookTransportTest do
     log =
       capture_log(fn ->
         assert {:error, :idempotency_unavailable} =
-                 Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+                 Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
       end)
 
     refute log =~ idempotency_key
 
-    assert Store.get(Webhook.idempotency_table_for_test(), raw_key) == legacy
+    assert Store.get(Idempotency.table(), raw_key) == legacy
 
     assert [{{:v1, _digest}, hashed}] =
-             Webhook.idempotency_table_for_test()
+             Idempotency.table()
              |> Store.list()
              |> Enum.reject(fn {key, _entry} -> key == raw_key end)
 
@@ -571,7 +571,7 @@ defmodule LemonGateway.WebhookTransportTest do
         raw_key = {integration_id, idempotency_key}
 
         assert :ok =
-                 Store.put(Webhook.idempotency_table_for_test(), raw_key, %{
+                 Store.put(Idempotency.table(), raw_key, %{
                    idempotency_key: idempotency_key,
                    integration_id: integration_id,
                    run_id: "legacy-sweep-run-#{state}-#{suffix}",
@@ -585,10 +585,10 @@ defmodule LemonGateway.WebhookTransportTest do
       end)
 
     assert :ok = Idempotency.sweep_expired(1_000, 10_000)
-    assert Enum.all?(raw_keys, &(Store.get(Webhook.idempotency_table_for_test(), &1) == nil))
+    assert Enum.all?(raw_keys, &(Store.get(Idempotency.table(), &1) == nil))
 
     assert 5 ==
-             Webhook.idempotency_table_for_test()
+             Idempotency.table()
              |> Store.list()
              |> Enum.count(fn {key, _entry} -> match?({:v1, _digest}, key) end)
   end
@@ -604,7 +604,7 @@ defmodule LemonGateway.WebhookTransportTest do
       }
 
       assert {:error, :invalid_idempotency_key} =
-               Webhook.idempotency_context_for_test(conn, %{}, integration_id, integration)
+               Idempotency.context(conn, %{}, integration_id, integration, Config.config())
     end
 
     valid_conn = %{
@@ -613,7 +613,7 @@ defmodule LemonGateway.WebhookTransportTest do
     }
 
     assert {:ok, %{run_id: run_id}} =
-             Webhook.idempotency_context_for_test(valid_conn, %{}, integration_id, integration)
+             Idempotency.context(valid_conn, %{}, integration_id, integration, Config.config())
 
     assert is_binary(run_id)
   end
@@ -631,7 +631,7 @@ defmodule LemonGateway.WebhookTransportTest do
     end)
 
     Enum.each(
-      [Idempotency.response_table(), Webhook.idempotency_table_for_test()],
+      [Idempotency.response_table(), Idempotency.table()],
       fn fail_table ->
         :sys.replace_state(Store, fn state ->
           %{
@@ -646,7 +646,7 @@ defmodule LemonGateway.WebhookTransportTest do
     )
 
     conn = Test.conn(:post, "/webhooks/no-idempotency", "")
-    assert {:ok, nil} = Webhook.idempotency_context_for_test(conn, %{}, "no-idempotency", %{})
+    assert {:ok, nil} = Idempotency.context(conn, %{}, "no-idempotency", %{}, Config.config())
     assert :persistent_term.get(sweep_key) == 0
   end
 
@@ -659,19 +659,19 @@ defmodule LemonGateway.WebhookTransportTest do
       |> Conn.put_req_header("idempotency-key", idempotency_key)
 
     assert {:ok, first_ctx} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
-    entry = Store.get(Webhook.idempotency_table_for_test(), first_ctx.store_key)
+    entry = Store.get(Idempotency.table(), first_ctx.store_key)
 
     assert :ok =
              Store.put(
-               Webhook.idempotency_table_for_test(),
+               Idempotency.table(),
                first_ctx.store_key,
                Map.put(entry, :lease_expires_at_ms, 0)
              )
 
     assert {:ok, reclaimed_ctx} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
     assert reclaimed_ctx.run_id == first_ctx.run_id
     refute reclaimed_ctx.reservation_id == first_ctx.reservation_id
@@ -686,7 +686,7 @@ defmodule LemonGateway.WebhookTransportTest do
       |> Conn.put_req_header("idempotency-key", idempotency_key)
 
     assert {:ok, ctx} =
-             Webhook.idempotency_context_for_test(base_conn, %{}, integration_id, %{})
+             Idempotency.context(base_conn, %{}, integration_id, %{}, Config.config())
 
     Application.put_env(:lemon_gateway, :webhook_transport_submit_result, {:ok, ctx.run_id})
 
@@ -719,7 +719,7 @@ defmodule LemonGateway.WebhookTransportTest do
     refute inspect(first_request) =~ idempotency_key
     refute inspect(second_request) =~ idempotency_key
 
-    refute inspect(Store.list(Webhook.idempotency_table_for_test())) =~ idempotency_key
+    refute inspect(Store.list(Idempotency.table())) =~ idempotency_key
     refute inspect(Store.list(Idempotency.response_table())) =~ idempotency_key
     refute Jason.encode!(first_request.meta) =~ idempotency_key
   end
@@ -731,8 +731,8 @@ defmodule LemonGateway.WebhookTransportTest do
       Test.conn(:post, "/webhooks/#{integration_id}", "")
       |> Conn.put_req_header("idempotency-key", "response-store")
 
-    assert {:ok, ctx} = Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
-    assert :ok = Store.delete(Webhook.idempotency_table_for_test(), ctx.store_key)
+    assert {:ok, ctx} = Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
+    assert :ok = Store.delete(Idempotency.table(), ctx.store_key)
 
     assert {:error, :idempotency_unavailable} =
              Idempotency.store_response(ctx, 202, %{run_id: ctx.run_id})
@@ -746,7 +746,7 @@ defmodule LemonGateway.WebhookTransportTest do
       Test.conn(:post, "/webhooks/#{integration_id}", "")
       |> Conn.put_req_header("idempotency-key", idempotency_key)
 
-    assert {:ok, ctx} = Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+    assert {:ok, ctx} = Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
     assert :ok = Idempotency.store_submission(ctx, ctx.run_id, "agent:sync:main", :sync)
 
     exact_payload = %{
@@ -761,11 +761,11 @@ defmodule LemonGateway.WebhookTransportTest do
 
     # This is the durable shape left when the independent response receipt commits
     # but the primary idempotency-row completion update does not.
-    primary = Store.get(Webhook.idempotency_table_for_test(), ctx.store_key)
+    primary = Store.get(Idempotency.table(), ctx.store_key)
 
     assert :ok =
              Store.put(
-               Webhook.idempotency_table_for_test(),
+               Idempotency.table(),
                ctx.store_key,
                primary
                |> Map.drop([:response_status, :response_payload])
@@ -773,7 +773,7 @@ defmodule LemonGateway.WebhookTransportTest do
              )
 
     assert {:duplicate, 200, ^exact_payload} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
   end
 
   test "expired exact response receipts are swept with their primary reservation" do
@@ -784,22 +784,22 @@ defmodule LemonGateway.WebhookTransportTest do
       Test.conn(:post, "/webhooks/#{integration_id}", "")
       |> Conn.put_req_header("idempotency-key", idempotency_key)
 
-    assert {:ok, ctx} = Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+    assert {:ok, ctx} = Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
     assert :ok = Idempotency.store_response(ctx, 200, %{run_id: ctx.run_id, exact: true})
 
     receipt_key = {ctx.store_key, ctx.reservation_id}
     receipt = Store.get(Idempotency.response_table(), receipt_key)
 
-    primary = Store.get(Webhook.idempotency_table_for_test(), ctx.store_key)
+    primary = Store.get(Idempotency.table(), ctx.store_key)
 
     assert :ok =
-             Store.put(Webhook.idempotency_table_for_test(), ctx.store_key, %{
+             Store.put(Idempotency.table(), ctx.store_key, %{
                primary
                | updated_at_ms: 0
              })
 
     assert :ok = Idempotency.sweep_expired(10, 1)
-    assert Store.get(Webhook.idempotency_table_for_test(), ctx.store_key) != nil
+    assert Store.get(Idempotency.table(), ctx.store_key) != nil
     assert Store.get(Idempotency.response_table(), receipt_key) == receipt
 
     assert :ok =
@@ -807,10 +807,10 @@ defmodule LemonGateway.WebhookTransportTest do
 
     assert :ok = Idempotency.sweep_expired(10, 1)
     assert Store.get(Idempotency.response_table(), receipt_key) == nil
-    assert Store.get(Webhook.idempotency_table_for_test(), ctx.store_key) == nil
+    assert Store.get(Idempotency.table(), ctx.store_key) == nil
 
     assert {:ok, replacement_ctx} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
     refute replacement_ctx.reservation_id == ctx.reservation_id
   end
@@ -823,13 +823,13 @@ defmodule LemonGateway.WebhookTransportTest do
       Test.conn(:post, "/webhooks/#{integration_id}", "")
       |> Conn.put_req_header("idempotency-key", idempotency_key)
 
-    assert {:ok, ctx} = Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+    assert {:ok, ctx} = Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
     assert :ok = Idempotency.store_submission(ctx, ctx.run_id, "agent:sweep-fault:main", :sync)
     assert :ok = Idempotency.store_response(ctx, 200, %{run_id: ctx.run_id, exact: true})
 
     receipt_key = {ctx.store_key, ctx.reservation_id}
     receipt = Store.get(Idempotency.response_table(), receipt_key)
-    primary = Store.get(Webhook.idempotency_table_for_test(), ctx.store_key)
+    primary = Store.get(Idempotency.table(), ctx.store_key)
 
     expired_receipt = %{receipt | stored_at_ms: 0}
     expired_primary = %{primary | updated_at_ms: 0}
@@ -837,7 +837,7 @@ defmodule LemonGateway.WebhookTransportTest do
     backend_state = %{
       data: %{
         {Idempotency.response_table(), receipt_key} => expired_receipt,
-        {Webhook.idempotency_table_for_test(), ctx.store_key} => expired_primary
+        {Idempotency.table(), ctx.store_key} => expired_primary
       },
       delete_count: 0
     }
@@ -857,10 +857,10 @@ defmodule LemonGateway.WebhookTransportTest do
     assert {:error, :idempotency_unavailable} = Idempotency.sweep_expired(10, 1)
     assert Store.get(Idempotency.response_table(), receipt_key) == nil
 
-    assert Store.get(Webhook.idempotency_table_for_test(), ctx.store_key) == expired_primary
+    assert Store.get(Idempotency.table(), ctx.store_key) == expired_primary
 
     assert {:duplicate, 200, replay} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
     assert replay.run_id == ctx.run_id
     assert replay.exact == true
@@ -873,11 +873,11 @@ defmodule LemonGateway.WebhookTransportTest do
       Test.conn(:post, "/webhooks/#{integration_id}", "")
       |> Conn.put_req_header("idempotency-key", "sync-unavailable")
 
-    assert {:ok, ctx} = Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+    assert {:ok, ctx} = Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
     assert :ok = Idempotency.store_submission(ctx, ctx.run_id, "agent:sync:main", :sync)
 
     assert {:duplicate, 503, payload} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
     assert payload.run_id == ctx.run_id
     assert payload.status == "response_persistence_unknown"
@@ -891,8 +891,8 @@ defmodule LemonGateway.WebhookTransportTest do
       Test.conn(:post, "/webhooks/#{integration_id}", "")
       |> Conn.put_req_header("idempotency-key", "submission-store")
 
-    assert {:ok, ctx} = Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
-    assert :ok = Store.delete(Webhook.idempotency_table_for_test(), ctx.store_key)
+    assert {:ok, ctx} = Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
+    assert :ok = Store.delete(Idempotency.table(), ctx.store_key)
 
     Application.put_env(
       :lemon_gateway,
@@ -916,17 +916,17 @@ defmodule LemonGateway.WebhookTransportTest do
       |> Conn.put_req_header("idempotency-key", idempotency_key)
 
     assert {:ok, ctx} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
     assert :ok =
-             Store.put(Webhook.idempotency_table_for_test(), ctx.store_key, %{
+             Store.put(Idempotency.table(), ctx.store_key, %{
                integration_id: integration_id,
                idempotency_digest: ctx.idempotency_digest,
                state: "completed"
              })
 
     assert {:error, :idempotency_unavailable} =
-             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+             Idempotency.context(conn, %{}, integration_id, %{}, Config.config())
 
     refute_receive {:webhook_submit, _request}
   end
@@ -939,7 +939,7 @@ defmodule LemonGateway.WebhookTransportTest do
       "metadata" => %{"source" => "zapier", "workflow_id" => "wf_123"}
     }
 
-    assert {:ok, normalized} = Webhook.normalize_payload_for_test(payload)
+    assert {:ok, normalized} = Request.normalize_payload(payload)
     assert normalized.prompt =~ "Ship this"
     assert normalized.prompt =~ "Attachments:"
     assert normalized.prompt =~ "https://example.test/spec.txt"
@@ -950,46 +950,46 @@ defmodule LemonGateway.WebhookTransportTest do
   end
 
   test "secure token compare accepts exact match and rejects mismatches" do
-    assert Webhook.secure_compare_for_test("secret-token", "secret-token")
-    refute Webhook.secure_compare_for_test("secret-token", "secret-token-2")
-    refute Webhook.secure_compare_for_test("secret-token", nil)
-    refute Webhook.secure_compare_for_test(nil, "secret-token")
+    assert Request.secure_compare("secret-token", "secret-token")
+    refute Request.secure_compare("secret-token", "secret-token-2")
+    refute Request.secure_compare("secret-token", nil)
+    refute Request.secure_compare(nil, "secret-token")
   end
 
   test "callback success status only accepts HTTP 2xx" do
-    assert Webhook.callback_success_status_for_test(200)
-    assert Webhook.callback_success_status_for_test(204)
-    assert Webhook.callback_success_status_for_test(299)
+    assert Response.callback_success_status?(200)
+    assert Response.callback_success_status?(204)
+    assert Response.callback_success_status?(299)
 
-    refute Webhook.callback_success_status_for_test(199)
-    refute Webhook.callback_success_status_for_test(300)
-    refute Webhook.callback_success_status_for_test(500)
+    refute Response.callback_success_status?(199)
+    refute Response.callback_success_status?(300)
+    refute Response.callback_success_status?(500)
   end
 
   test "callback URL validation enforces canonicalization, scheme, and private host policy" do
     public_dns = fn _host -> [] end
 
     assert {:ok, "https://example.test/callback"} =
-             Webhook.validate_callback_url_for_test("https://EXAMPLE.TEST./callback", false,
+             Request.validate_callback_url("https://EXAMPLE.TEST./callback", false,
                dns_resolver: public_dns
              )
 
     assert {:error, :invalid_callback_url} =
-             Webhook.validate_callback_url_for_test("ftp://example.test/callback", false,
+             Request.validate_callback_url("ftp://example.test/callback", false,
                dns_resolver: public_dns
              )
 
     assert {:error, :invalid_callback_url} =
-             Webhook.validate_callback_url_for_test("http://localhost./callback", false)
+             Request.validate_callback_url("http://localhost./callback", false)
 
     assert {:error, :invalid_callback_url} =
-             Webhook.validate_callback_url_for_test("http://127.0.0.1/callback", false)
+             Request.validate_callback_url("http://127.0.0.1/callback", false)
 
     assert {:error, :invalid_callback_url} =
-             Webhook.validate_callback_url_for_test("http://[::ffff:127.0.0.1]/callback", false)
+             Request.validate_callback_url("http://[::ffff:127.0.0.1]/callback", false)
 
     assert {:ok, "http://127.0.0.1/callback"} =
-             Webhook.validate_callback_url_for_test("http://127.0.0.1/callback", true)
+             Request.validate_callback_url("http://127.0.0.1/callback", true)
 
     private_dns = fn
       "internal.example" -> [{10, 1, 2, 3}, {93, 184, 216, 34}]
@@ -997,12 +997,12 @@ defmodule LemonGateway.WebhookTransportTest do
     end
 
     assert {:error, :invalid_callback_url} =
-             Webhook.validate_callback_url_for_test("https://INTERNAL.EXAMPLE./callback", false,
+             Request.validate_callback_url("https://INTERNAL.EXAMPLE./callback", false,
                dns_resolver: private_dns
              )
 
     assert {:ok, "https://internal.example/callback"} =
-             Webhook.validate_callback_url_for_test("https://INTERNAL.EXAMPLE./callback", true,
+             Request.validate_callback_url("https://INTERNAL.EXAMPLE./callback", true,
                dns_resolver: private_dns
              )
   end
@@ -1011,7 +1011,7 @@ defmodule LemonGateway.WebhookTransportTest do
     for port <- ["65536", "99999", "100000", "00065536"],
         allow_private <- [false, true] do
       assert {:error, :invalid_callback_url} =
-               Webhook.validate_callback_url_for_test(
+               Request.validate_callback_url(
                  "https://example.test:#{port}/callback",
                  allow_private,
                  dns_resolver: fn _ -> flunk("invalid callback port reached DNS") end
@@ -1021,7 +1021,7 @@ defmodule LemonGateway.WebhookTransportTest do
 
   test "request metadata redacts query secrets" do
     conn = Test.conn(:post, "/webhooks/demo?token=topsecret&foo=bar&api_key=abc123", "")
-    metadata = Webhook.request_metadata_for_test(conn)
+    metadata = Request.request_metadata(conn)
 
     assert is_binary(metadata.query)
     redacted_query = URI.decode_query(metadata.query)
@@ -1061,7 +1061,7 @@ defmodule LemonGateway.WebhookTransportTest do
         publish.(publish)
       end)
 
-    assert {:ok, payload} = Webhook.wait_for_run_completion_for_test(run_id, 5_000)
+    assert {:ok, payload} = Response.wait_for_run_completion(run_id, 5_000)
     send(publisher, :stop)
     assert payload.completed.ok == true
     assert payload.completed.answer == "done"
@@ -1071,23 +1071,25 @@ defmodule LemonGateway.WebhookTransportTest do
   test "wait helper times out when no run completion event is received" do
     run_id = "run_webhook_timeout_#{System.unique_integer([:positive])}"
 
-    assert {:error, :timeout} = Webhook.wait_for_run_completion_for_test(run_id, 25)
+    assert {:error, :timeout} = Response.wait_for_run_completion(run_id, 25)
   end
 
   test "callback waiter timeout resolves per integration, global, then default" do
     assert 300_000 ==
-             Webhook.resolve_callback_wait_timeout_ms_for_test(
+             Request.resolve_callback_wait_timeout_ms(
                %{callback_wait_timeout_ms: 300_000},
-               %{callback_wait_timeout_ms: 120_000}
+               %{callback_wait_timeout_ms: 120_000},
+               600_000
              )
 
     assert 120_000 ==
-             Webhook.resolve_callback_wait_timeout_ms_for_test(
+             Request.resolve_callback_wait_timeout_ms(
                %{},
-               %{callback_wait_timeout_ms: 120_000}
+               %{callback_wait_timeout_ms: 120_000},
+               600_000
              )
 
-    assert 600_000 == Webhook.resolve_callback_wait_timeout_ms_for_test(%{}, %{})
+    assert 600_000 == Request.resolve_callback_wait_timeout_ms(%{}, %{}, 600_000)
   end
 
   test "auth accepts headers by default and query/payload only when explicitly enabled" do
@@ -1097,18 +1099,18 @@ defmodule LemonGateway.WebhookTransportTest do
       Test.conn(:post, "/webhooks/demo", "")
       |> Conn.put_req_header("authorization", "Bearer secret-token")
 
-    assert :ok = Webhook.authorize_request_for_test(header_conn, %{}, integration)
+    assert :ok = Request.authorize_request(header_conn, %{}, integration, Config.config())
 
     webhook_header_conn =
       Test.conn(:post, "/webhooks/demo", "")
       |> Conn.put_req_header("x-webhook-token", "secret-token")
 
-    assert :ok = Webhook.authorize_request_for_test(webhook_header_conn, %{}, integration)
+    assert :ok = Request.authorize_request(webhook_header_conn, %{}, integration, Config.config())
 
     query_conn = Test.conn(:post, "/webhooks/demo?token=secret-token", "")
 
     assert {:error, :unauthorized} =
-             Webhook.authorize_request_for_test(query_conn, %{}, integration)
+             Request.authorize_request(query_conn, %{}, integration, Config.config())
 
     payload_conn = %{
       Test.conn(:post, "/webhooks/demo", "")
@@ -1116,23 +1118,24 @@ defmodule LemonGateway.WebhookTransportTest do
     }
 
     assert {:error, :unauthorized} =
-             Webhook.authorize_request_for_test(
+             Request.authorize_request(
                payload_conn,
                %{"token" => "secret-token"},
-               integration
+               integration,
+               Config.config()
              )
 
     assert :ok =
-             Webhook.authorize_request_for_test(query_conn, %{}, %{
+             Request.authorize_request(query_conn, %{}, %{
                "token" => "secret-token",
                "allow_query_token" => true
-             })
+             }, Config.config())
 
     assert :ok =
-             Webhook.authorize_request_for_test(payload_conn, %{"token" => "secret-token"}, %{
+             Request.authorize_request(payload_conn, %{"token" => "secret-token"}, %{
                "token" => "secret-token",
                "allow_payload_token" => true
-             })
+             }, Config.config())
   end
 
   test "idempotency helper returns duplicate response for existing key and supports payload opt-in" do
@@ -1144,17 +1147,17 @@ defmodule LemonGateway.WebhookTransportTest do
       |> Conn.put_req_header("idempotency-key", idempotency_key)
 
     assert {:ok, idempotency_ctx} =
-             Webhook.idempotency_context_for_test(header_conn, %{}, integration_id, %{})
+             Idempotency.context(header_conn, %{}, integration_id, %{}, Config.config())
 
     assert :ok =
-             Store.put(Webhook.idempotency_table_for_test(), idempotency_ctx.store_key, %{
+             Store.put(Idempotency.table(), idempotency_ctx.store_key, %{
                run_id: "run-123",
                session_key: "agent:demo:main",
                mode: "async"
              })
 
     assert {:duplicate, 202, response_payload} =
-             Webhook.idempotency_context_for_test(header_conn, %{}, integration_id, %{})
+             Idempotency.context(header_conn, %{}, integration_id, %{}, Config.config())
 
     assert response_payload.run_id == "run-123"
     assert response_payload.session_key == "agent:demo:main"
@@ -1166,12 +1169,12 @@ defmodule LemonGateway.WebhookTransportTest do
     }
 
     assert {:ok, nil} =
-             Webhook.idempotency_context_for_test(payload_conn, %{}, integration_id, %{})
+             Idempotency.context(payload_conn, %{}, integration_id, %{}, Config.config())
 
     assert {:ok, %{idempotency_digest: digest} = payload_ctx} =
-             Webhook.idempotency_context_for_test(payload_conn, %{}, integration_id, %{
+             Idempotency.context(payload_conn, %{}, integration_id, %{
                "allow_payload_idempotency_key" => true
-             })
+             }, Config.config())
 
     assert is_binary(digest)
     refute Map.has_key?(payload_ctx, :idempotency_key)
@@ -1179,10 +1182,10 @@ defmodule LemonGateway.WebhookTransportTest do
   end
 
   defp clear_idempotency_table do
-    Webhook.idempotency_table_for_test()
+    Idempotency.table()
     |> Store.list()
     |> Enum.each(fn {key, _value} ->
-      Store.delete(Webhook.idempotency_table_for_test(), key)
+      Store.delete(Idempotency.table(), key)
     end)
 
     Idempotency.response_table()
@@ -1212,7 +1215,7 @@ defmodule LemonGateway.WebhookTransportTest do
       callback_waiter_ready_timeout_ms: 100,
       run_id: run_id,
       validate_callback_url: fn _url, _allow_private, _opts -> {:ok, nil} end,
-      request_metadata_fun: &Webhook.request_metadata_for_test/1
+      request_metadata_fun: &Request.request_metadata/1
     )
   end
 

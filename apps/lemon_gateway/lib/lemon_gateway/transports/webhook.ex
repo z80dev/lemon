@@ -14,10 +14,8 @@ defmodule LemonGateway.Transports.Webhook do
     Config,
     Idempotency,
     InvocationDispatch,
-    RequestNormalization,
-    ResponseBuilder,
-    SignatureValidation,
-    Submission
+    Request,
+    Response
   }
 
   @default_timeout_ms 30_000
@@ -69,8 +67,8 @@ defmodule LemonGateway.Transports.Webhook do
     payload = Map.drop(conn.params || %{}, ["integration_id"])
 
     with %{} = integration <- Config.integration_config(integration_id),
-         :ok <- SignatureValidation.authorize_request(conn, payload, integration, Config.config()),
-         {:ok, normalized} <- RequestNormalization.normalize_payload(payload),
+         :ok <- Request.authorize_request(conn, payload, integration, Config.config()),
+         {:ok, normalized} <- Request.normalize_payload(payload),
          {:ok, idempotency_ctx} <-
            Idempotency.context(conn, payload, integration_id, integration, Config.config()),
          {:ok, run_ctx} <-
@@ -86,10 +84,10 @@ defmodule LemonGateway.Transports.Webhook do
              default_callback_wait_timeout_ms: @default_callback_wait_timeout_ms,
              callback_waiter_ready_timeout_ms: @callback_waiter_ready_timeout_ms,
              run_id: idempotency_run_id(idempotency_ctx),
-             validate_callback_url: &RequestNormalization.validate_callback_url/3,
-             request_metadata_fun: &RequestNormalization.request_metadata/1
+             validate_callback_url: &Request.validate_callback_url/3,
+             request_metadata_fun: &Request.request_metadata/1
            ),
-         {:ok, status, response_payload} <- ResponseBuilder.response_for_run(run_ctx, []),
+         {:ok, status, response_payload} <- Response.response_for_run(run_ctx, []),
          :ok <- Idempotency.store_response(idempotency_ctx, status, response_payload) do
       json(conn, status, response_payload)
     else
@@ -126,58 +124,6 @@ defmodule LemonGateway.Transports.Webhook do
   match _ do
     json_error(conn, 404, "not found")
   end
-
-  @doc false
-  def normalize_payload_for_test(payload), do: RequestNormalization.normalize_payload(payload)
-
-  @doc false
-  def secure_compare_for_test(expected, provided),
-    do: RequestNormalization.secure_compare(expected, provided)
-
-  @doc false
-  def wait_for_run_completion_for_test(run_id, timeout_ms) do
-    ResponseBuilder.wait_for_run_completion(run_id, timeout_ms)
-  end
-
-  @doc false
-  def callback_success_status_for_test(status),
-    do: ResponseBuilder.callback_success_status?(status)
-
-  @doc false
-  def validate_callback_url_for_test(callback_url, allow_private_hosts) do
-    RequestNormalization.validate_callback_url(callback_url, allow_private_hosts, [])
-  end
-
-  @doc false
-  def validate_callback_url_for_test(callback_url, allow_private_hosts, opts)
-      when is_list(opts) do
-    RequestNormalization.validate_callback_url(callback_url, allow_private_hosts, opts)
-  end
-
-  @doc false
-  def request_metadata_for_test(conn), do: RequestNormalization.request_metadata(conn)
-
-  @doc false
-  def resolve_callback_wait_timeout_ms_for_test(integration, webhook_config \\ %{}) do
-    Submission.resolve_callback_wait_timeout_ms(
-      integration,
-      webhook_config,
-      @default_callback_wait_timeout_ms
-    )
-  end
-
-  @doc false
-  def authorize_request_for_test(conn, payload, integration) do
-    SignatureValidation.authorize_request(conn, payload, integration, Config.config())
-  end
-
-  @doc false
-  def idempotency_context_for_test(conn, payload, integration_id, integration) do
-    Idempotency.context(conn, payload, integration_id, integration, Config.config())
-  end
-
-  @doc false
-  def idempotency_table_for_test, do: Idempotency.table()
 
   defp idempotency_run_id(%{run_id: run_id}) when is_binary(run_id), do: run_id
   defp idempotency_run_id(_idempotency_ctx), do: Id.run_id()

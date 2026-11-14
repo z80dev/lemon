@@ -114,17 +114,7 @@ defmodule LemonGateway.TransportRegistry do
   # Primary source of truth: LemonGateway.Config (TOML-backed GenServer).
   # Fallback: application env override (used in tests).
   defp get_config_boolean(key) do
-    if is_pid(Process.whereis(LemonGateway.Config)) do
-      LemonGateway.Config.get(key) == true
-    else
-      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
-
-      if is_list(cfg) do
-        Keyword.get(cfg, key, false)
-      else
-        Map.get(cfg, key, false)
-      end
-    end
+    LemonGateway.Config.get_or_env(key, false) == true
   end
 
   defp transport_enabled?("telegram"), do: get_config_boolean(:enable_telegram)

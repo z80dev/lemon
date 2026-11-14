@@ -20,7 +20,6 @@ defmodule LemonGateway.ApplicationTest do
   @gateway_ingress_children [
     Elixir.LemonGateway.TransportRegistry,
     Elixir.LemonGateway.TransportSupervisor,
-    Elixir.LemonGateway.CommandRegistry,
     Elixir.LemonGateway.Sms.Inbox,
     Elixir.LemonGateway.Sms.WebhookServer,
     Elixir.LemonGateway.Voice.CallRegistry,
@@ -71,14 +70,12 @@ defmodule LemonGateway.ApplicationTest do
     })
 
     Application.put_env(:lemon_gateway, :transports, [])
-    Application.put_env(:lemon_gateway, :commands, [])
     Application.put_env(:lemon_gateway, :executor, ApplicationValidExecutor)
   end
 
   defp cleanup_config do
     Application.delete_env(:lemon_gateway, Elixir.LemonGateway.Config)
     Application.delete_env(:lemon_gateway, :transports)
-    Application.delete_env(:lemon_gateway, :commands)
     Application.delete_env(:lemon_gateway, :config_path)
     Application.delete_env(:lemon_gateway, :gateway_ingress_enabled)
     restore_executor_config()
@@ -301,7 +298,6 @@ defmodule LemonGateway.ApplicationTest do
     test "Config.get/1 returns defaults and configured overrides" do
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{})
       Application.put_env(:lemon_gateway, :transports, [])
-      Application.put_env(:lemon_gateway, :commands, [])
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       assert Elixir.LemonGateway.Config.get(:max_concurrent_runs) == 2
@@ -357,22 +353,6 @@ defmodule LemonGateway.ApplicationTest do
       refute "telegram" in enabled_ids
     end
 
-    test "empty commands list is handled" do
-      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
-
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 1,
-        enable_telegram: false
-      })
-
-      Application.put_env(:lemon_gateway, :transports, [])
-      Application.put_env(:lemon_gateway, :commands, [])
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      commands = Elixir.LemonGateway.CommandRegistry.list_commands()
-      assert commands == []
-    end
   end
 
   # ---------------------------------------------------------------------
@@ -500,28 +480,6 @@ defmodule LemonGateway.ApplicationTest do
       refute Process.whereis(Elixir.LemonGateway.Supervisor)
     end
 
-    test "startup fails with reserved command name" do
-      defmodule InvalidCommand do
-        @behaviour Elixir.LemonGateway.Command
-
-        @impl true
-        def name, do: "help"
-        @impl true
-        def handle(_args, _job, _meta), do: {:ok, "help"}
-      end
-
-      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
-
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 1,
-        enable_telegram: false
-      })
-
-      Application.put_env(:lemon_gateway, :transports, [])
-      Application.put_env(:lemon_gateway, :commands, [InvalidCommand])
-
-      assert {:error, _} = Application.ensure_all_started(:lemon_gateway)
-    end
   end
 
   # ---------------------------------------------------------------------

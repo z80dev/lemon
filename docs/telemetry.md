@@ -105,10 +105,8 @@ sequenceDiagram
 
 **The end-to-end run span is emitted from the gateway run process.**
 `[:lemon, :run, :start]`, `[:lemon, :run, :first_token]`, and `[:lemon, :run, :stop]` all
-fire from `LemonGateway.Run`, dispatched through `LemonGateway.DependencyManager.emit_telemetry/2`
-(an `apply/3` on `LemonCore.Telemetry`). Because that dispatch is dynamic, a literal-name grep
-for the helpers turns up no callers even though the span fires — this is why an earlier
-revision of this file wrongly listed them as dead. `[:lemon, :run, :stop]` carries
+fire directly from `LemonGateway.Run` through the matching `LemonCore.Telemetry`
+helpers. `[:lemon, :run, :stop]` carries
 `duration_ms` and an `ok` boolean, so whole-run latency and success/failure are both readable
 from telemetry alone. The introspection layer's `:run_started` / `:run_completed` records
 remain available as a persisted, queryable alternative.

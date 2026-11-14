@@ -217,17 +217,7 @@ defmodule LemonGateway.Health do
   end
 
   defp xmtp_enabled? do
-    if is_pid(Process.whereis(LemonGateway.Config)) do
-      LemonGateway.Config.get(:enable_xmtp) == true
-    else
-      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
-
-      if is_list(cfg) do
-        Keyword.get(cfg, :enable_xmtp, false)
-      else
-        Map.get(cfg, :enable_xmtp, false)
-      end
-    end
+    LemonGateway.Config.get_or_env(:enable_xmtp, false) == true
   rescue
     _ -> false
   end
