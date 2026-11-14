@@ -666,6 +666,9 @@ defmodule CodingAgent.BashExecutor do
 
       {:unix, _} ->
         escapees = descendant_pids(os_pid)
+        # Signal the group first, in one kill(2): TERMing a child alone lets the
+        # shell reap it and run the next command before its own signal arrives.
+        LemonCore.ProcessGroup.signal_group(os_pid, :sigterm)
         LemonCore.ProcessGroup.signal_pids(escapees, :sigterm)
         LemonCore.ProcessGroup.terminate(os_pid, grace_ms: grace_ms)
         LemonCore.ProcessGroup.signal_pids(escapees, :sigkill)
