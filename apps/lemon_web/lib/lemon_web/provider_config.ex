@@ -45,7 +45,6 @@ defmodule LemonWeb.ProviderConfig do
 
     if is_function(fun, 0) do
       case fun.() do
-        {:ok, routing} when is_map(routing) -> {:ok, routing, nil}
         routing when is_map(routing) -> {:ok, routing, nil}
         _ -> {:error, :unavailable}
       end

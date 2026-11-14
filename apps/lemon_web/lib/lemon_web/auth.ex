@@ -26,17 +26,9 @@ defmodule LemonWeb.Auth do
   @spec session_key() :: String.t()
   def session_key, do: @session_key
 
-  @doc """
-  How a request from `peer` may be admitted right now:
-
-    * `{:login, :token}` — a token is configured; the browser must log in.
-    * `{:ok, :tokenless_loopback}` — no token configured, explicit loopback
-      compatibility is on and `peer` is loopback.
-    * `{:error, :not_configured}` — no token configured and tokenless access
-      does not apply; the UI fails closed.
-  """
+  # How a request from `peer` may be admitted right now:
   @spec mode(peer()) :: {:login, :token} | {:ok, :tokenless_loopback} | {:error, :not_configured}
-  def mode(peer) do
+  defp mode(peer) do
     cond do
       is_binary(Authorize.configured_operator_token()) -> {:login, :token}
       Authorize.tokenless_loopback_allowed?(peer) -> {:ok, :tokenless_loopback}
