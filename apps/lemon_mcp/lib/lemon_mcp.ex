@@ -34,40 +34,4 @@ defmodule LemonMCP do
   This implementation targets MCP protocol version "2024-11-05".
   """
 
-  alias LemonMCP.Protocol
-
-  @doc """
-  Returns the supported MCP protocol version.
-  """
-  @spec protocol_version() :: String.t()
-  def protocol_version, do: Protocol.protocol_version()
-
-  @doc """
-  Creates a JSON-RPC success response.
-
-  ## Examples
-
-      iex> LemonMCP.create_response("1", %{tools: []})
-      %LemonMCP.Protocol.JSONRPCResponse{...}
-
-  """
-  @spec create_response(Protocol.request_id(), any()) :: Protocol.JSONRPCResponse.t()
-  def create_response(id, result) do
-    Protocol.create_response(id, result)
-  end
-
-  @doc """
-  Encodes an MCP message to JSON string.
-
-  ## Examples
-
-      iex> response = LemonMCP.create_response("1", %{tools: []})
-      iex> LemonMCP.encode!(response)
-      ~s|{"jsonrpc":"2.0","id":"1","result":{"tools":[]}}|
-
-  """
-  @spec encode!(struct()) :: String.t()
-  def encode!(message) do
-    Protocol.encode!(message)
-  end
 end

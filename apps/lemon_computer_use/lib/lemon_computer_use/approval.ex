@@ -143,18 +143,11 @@ defmodule LemonComputerUse.Approval do
     case URI.parse(origin) do
       %URI{scheme: scheme, host: host, userinfo: nil, query: nil, fragment: nil, path: path} = uri
       when scheme in ["http", "https"] and is_binary(host) and host != "" and path in [nil, ""] ->
-        origin == serialize_origin(uri)
+        LemonComputerUse.Config.origin_of(uri) == [origin]
 
       _ ->
         false
     end
-  end
-
-  defp serialize_origin(%URI{scheme: scheme, host: host, port: port}) do
-    host = if String.contains?(host, ":"), do: "[" <> host <> "]", else: host
-    default = if scheme == "https", do: 443, else: 80
-    port = if port in [nil, default], do: "", else: ":" <> Integer.to_string(port)
-    scheme <> "://" <> host <> port
   end
 
   @doc false

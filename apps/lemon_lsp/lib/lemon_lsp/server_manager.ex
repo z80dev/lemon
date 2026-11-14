@@ -831,8 +831,7 @@ defmodule LemonLsp.ServerManager do
        args_count: length(command.args),
        cwd_hash: hash_value(cwd),
        started_at: now_iso8601(),
-       status: :running,
-       protocol: command.server.protocol
+       status: :running
      }}
   end
 
@@ -1670,7 +1669,6 @@ defmodule LemonLsp.ServerManager do
         :stopped_at,
         :status,
         :exit_status,
-        :protocol,
         :initialized,
         :initialized_at
       ])
