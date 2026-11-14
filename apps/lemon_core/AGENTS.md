@@ -99,6 +99,12 @@ apps; optional consumers register at runtime. See [README](README.md),
   commands or prompt text.
 - Bus envelopes use millisecond wall-clock timestamps. In-memory dedupe TTL uses
   monotonic time; durable idempotency uses wall-clock time. Do not mix clocks.
+- `LemonCore.Drain` runs participants' `drain(:ingress, ctx)` then
+  `drain(:work, ctx)` before a graceful stop, bounded by one deadline. A
+  participant must finish within `ctx.deadline_ms`, return a small summary and
+  tolerate the VM stopping right after. Stop paths go through
+  `Drain.request_stop/1` (or SIGTERM when `signal_trap` is enabled), never a
+  bare `System.stop/1`.
 
 ## Verification and packaging
 

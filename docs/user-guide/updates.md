@@ -71,8 +71,11 @@ of the exact current launcher. It then:
 6. stops the Lemon-owned worker units that were running before the
    transaction;
 7. if a managed daemon was running before the transaction, re-verifies its
-   ownership and process identity, stops that exact daemon, and starts the new
-   selected release, waiting for readiness;
+   ownership and process identity, drains and stops that exact daemon (see
+   [Stopping and restarting drain active work](cli.md#stopping-and-restarting-drain-active-work)),
+   and starts the new selected release, waiting for readiness. The new release
+   resubmits the queued messages and paused runs the old one saved. A daemon
+   from a release older than the drain stops without draining;
 8. starts those worker units again, then restarts the Lemon Bot backend unit
    when it was running.
 

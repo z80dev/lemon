@@ -10,6 +10,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Graceful restarts and updates: `lemon stop`, `lemon restart`, `lemon update`,
+  `system.stop`/`system.restart` and service-manager stops now drain first.
+  Telegram stops fetching (unfetched updates wait at Telegram), webhooks answer
+  503 with `Retry-After`, active runs get 5 s to finish and are then paused at
+  the next point where no tool is executing (forced, and marked uncertain,
+  shortly before the 20 s deadline). Queued messages and paused runs are
+  persisted and resubmitted after the restart: a paused run continues its
+  session, and one cut off mid-tool is told the outcome is unknown so it checks
+  state and asks before repeating anything. Chats see "Paused for a Lemon
+  restart" instead of a failure.
+
+- Source checkouts: `lemon reload` hot-loads recompiled modules into the
+  running runtime and refreshes idle sessions' tools; changes that need a
+  restart are reported.
+
 - TUI: `/new [key] [first prompt…]` is now a shorthand for `/session new`.
 
 - omp auth broker: Lemon now lists every broker account for a broker-backed

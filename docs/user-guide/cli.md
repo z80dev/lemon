@@ -4,24 +4,52 @@ The source checkout (`./bin/lemon`) and packaged releases (`lemon`) share the
 same command surface. The launcher handles lifecycle commands; all other
 commands are dispatched by the CLI registry.
 
+## Stopping and restarting drain active work
+
+`lemon stop`, `lemon restart`, `lemon update apply`, the `system.stop` and
+`system.restart` control-plane methods, and launchd/systemd stops all drain the
+runtime before it exits:
+
+1. Telegram stops fetching updates; anything not yet fetched waits at Telegram
+   and reaches the next runtime. Webhook endpoints answer `503` with
+   `Retry-After: 30`.
+2. Active runs get 5 seconds to finish. The rest are paused at the next point
+   where no tool, command, file change, web search or subagent is executing.
+   Shortly before the 20-second deadline a run still inside one is stopped
+   anyway and marked uncertain.
+3. Queued messages and paused runs are saved and resubmitted once the runtime
+   is back. A paused run continues its session; one cut off mid-tool is told
+   the outcome is unknown, checks state and asks before repeating anything.
+   Chats show "Paused for a Lemon restart" rather than a failure, and the
+   final notices are delivered before the VM stops.
+
+Launchers wait up to 45 seconds for the runtime to exit. A second stop request
+during a drain stops at once. Clients reconnect on their own: the TUI resyncs
+its session, and `lemon -p` reports the session in which a paused run
+continues. A hard kill or crash skips the drain; queued work is then lost and
+in-flight runs end interrupted.
+
 ## Source-development reload
 
-After editing source, compile it and reload the already-running development runtime:
+After editing source in a checkout whose runtime is running:
 
 ```bash
-mix compile
 ./bin/lemon reload
 ./bin/lemon reload --no-sessions --json
 ```
 
-`reload` is source-only and never starts a runtime. It requests code reload over
-the authenticated control plane with a 60-second timeout. By default it also
-refreshes idle coding sessions; busy sessions are skipped. `--no-sessions` skips
-that refresh. Human output reports module and session counts, failures, and
-modules still in use that require a restart. JSON preserves `reloaded`, `inUse`,
-`failed` (module/reason), their `reloadedCount`, `inUseCount`, `failedCount`
-totals, and `sessions` (`refreshed`, `busy`, `failed`). Module lists are bounded;
-counts are exact.
+The launcher compiles the checkout, then `reload` asks the running runtime over
+the authenticated control plane (60-second timeout) to load every module whose
+compiled file changed. It is source-only and never starts a runtime. Old code
+is soft-purged, so processes are never killed; a module whose previous version
+is still in use is reported instead of loaded. Calls already in progress finish
+on the old code. By default it then refreshes idle coding sessions so their
+tool closures run the new code; busy sessions are skipped. `--no-sessions`
+skips that refresh. Human output reports module and session counts, failures,
+and modules still in use that require a restart. JSON preserves `reloaded`,
+`inUse`, `failed` (module/reason), their `reloadedCount`, `inUseCount`,
+`failedCount` totals, and `sessions` (`refreshed`, `busy`, `failed`). Module
+lists are bounded; counts are exact.
 
 Restart for config, dependency, application, supervision, or incompatible
 process-state-shape changes; this is not a release upgrade or state migration.

@@ -49,6 +49,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 - `LemonCore.CodeReload` soft-loads modified BEAM files for source development,
   reports modules still in use without killing processes, and supports one retry.
+- `LemonCore.Drain` coordinates a bounded two-phase drain (`:ingress`, then
+  `:work`) of registered participants before a graceful stop.
+  `request_stop/1` drains and then stops the VM, with a failsafe stop after the
+  deadline; a second request stops at once. With
+  `config :lemon_core, LemonCore.Drain, signal_trap: true`, SIGTERM drains
+  first: OTP's `:erl_signal_handler` is swapped for a handler that keeps every
+  other signal's default. Service units allow 45 s for the drain on stop.
 
 - Provider config keeps `omp_provider`/`omp_account`; validation accepts
   `auth_source = "omp_broker"` and scopes those keys to it. Readiness and doctor

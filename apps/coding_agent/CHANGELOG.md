@@ -217,6 +217,8 @@
 
 ### Added
 
+- `CodingAgent.CodeReload.refresh_sessions/0` rebuilds idle sessions' tools
+  after a source code reload so their closures run the new code.
 - Per-invocation `project_memory_capture: false` skips automatic fact extraction
   after successful turns and compactions without disabling project-memory recall.
   Print runs use this option; other sessions retain capture by default.

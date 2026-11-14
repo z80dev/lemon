@@ -44,6 +44,13 @@ See [README](README.md) and [architecture](../../docs/architecture/overview.md).
 - On lost gateway process, allow the bounded completion grace window for a real
   late bus event to win before synthesizing failure. Idle timeout `0` explicitly
   disables the watchdog; cancellation still works.
+- Restart drain (`RestartCarryover`, a `LemonCore.Drain` participant): while
+  draining, coordinators keep queued work queued; after sealing they refuse new
+  submissions. A run is paused cleanly only when no effectful action (tool,
+  command, file change, web search, subagent) is executing; a forced pause is
+  carried as uncertain and its continuation must tell the model not to repeat
+  the cut-off action. Carried items get fixed run IDs when persisted so a
+  repeated replay is idempotent; never resubmit them under fresh IDs.
 
 ## Output and compaction
 

@@ -6,6 +6,8 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Added
 
+- `system.stop` drains active runs and carries queued work across the restart
+  (`LemonCore.Drain`) before the VM stops.
 - Admin-only `system.reload_code` soft-loads changed code in launcher-managed
   interactive source runtimes, optionally refreshes idle session tools, and
   retries modules still in use once. Bounded module lists retain exact counts;
