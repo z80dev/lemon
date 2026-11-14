@@ -51,4 +51,33 @@ defmodule LemonChannels.Adapters.Telegram.TransportOffsetTest do
     state = :sys.get_state(LemonChannels.Adapters.Telegram.Transport)
     assert state.offset == 123
   end
+
+  defmodule CountingUpdatesAPI do
+    def get_updates(_token, _offset, _timeout_ms) do
+      :counters.add(:persistent_term.get({__MODULE__, :calls}), 1, 1)
+      {:ok, %{"ok" => true, "result" => []}}
+    end
+  end
+
+  test "a drain pause stops fetching so unfetched updates stay at Telegram" do
+    calls = :counters.new(1, [])
+    :persistent_term.put({CountingUpdatesAPI, :calls}, calls)
+    on_exit(fn -> :persistent_term.erase({CountingUpdatesAPI, :calls}) end)
+    token = "test_token_" <> Integer.to_string(System.unique_integer([:positive]))
+
+    {:ok, pid} =
+      LemonChannels.Adapters.Telegram.Transport.start_link(
+        config: %{bot_token: token, api_mod: CountingUpdatesAPI, poll_interval_ms: 10, offset: 7}
+      )
+
+    Process.sleep(60)
+    assert :counters.get(calls, 1) > 0
+
+    assert :ok = GenServer.call(pid, :drain_pause)
+    paused_at = :counters.get(calls, 1)
+    Process.sleep(100)
+
+    assert :counters.get(calls, 1) == paused_at
+    assert :sys.get_state(pid).offset == 7
+  end
 end

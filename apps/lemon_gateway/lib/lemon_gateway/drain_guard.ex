@@ -14,11 +14,11 @@ defmodule LemonGateway.DrainGuard do
   @retry_after_s "30"
 
   @impl true
-  def init(opts), do: opts
+  def init(opts), do: Keyword.get(opts, :draining?, &LemonCore.Drain.draining?/0)
 
   @impl true
-  def call(conn, _opts) do
-    if LemonCore.Drain.draining?() do
+  def call(conn, draining?) do
+    if draining?.() do
       conn
       |> put_resp_header("retry-after", @retry_after_s)
       |> send_resp(503, "restarting")
