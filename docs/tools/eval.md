@@ -81,6 +81,48 @@ then definitions, then use.
 `aborted`), `duration_ms`, `kernel_restarted`, `truncated` and
 `full_output_path`.
 
+## Session tools
+
+A cell can call the session's own tools through the global `tools` object and
+keep their results in code; only what the cell prints, displays or returns
+reaches the model.
+
+```js
+const [local, remote] = await Promise.all([
+  tools.bash({command: "uptime"}),
+  tools.bash({command: "uptime", node: "build-box"}),
+]);
+console.log(local.text.trim(), "|", remote.text.trim());
+```
+
+```python
+import asyncio
+rs = await asyncio.gather(*(tools.bash(command="uptime", node=n) for n in ["a", "b"]))
+print([r["ok"] for r in rs])
+```
+
+- **Calling.** Any property is a tool name: JavaScript `tools.<name>(args)`
+  takes one object; Python `tools.<name>(**kwargs)` or `tools.<name>({...})`.
+  Both accept `tools.call(name, args)`. Every call is asynchronous: `await` it,
+  and use `Promise.all` / `asyncio.gather` to run calls concurrently. Arguments
+  are passed to the tool unchanged, including `node` to run it on a named
+  execution node.
+- **Results.** Each call resolves to `{ok, text, details, images}` (a plain dict
+  in Python): `ok` is false when the tool failed, `text` joins its text blocks
+  (truncated above 1 MiB), `details` is a JSON projection of the tool's details
+  (`null` above 64 KiB) and `images` holds `{mimeType, data}` base64 blocks
+  (4 MiB per call). An unknown or unavailable tool, or non-object arguments,
+  rejects the promise / raises instead.
+- **Authority.** Tools resolve from the session's own frozen catalog with its
+  policy, approval, hook and plan-mode wrappers, so a cell reaches exactly the
+  tools the model could call. `eval` itself and the disclosure bridge tools
+  (`tool_search`, `tool_invoke`) are not callable. Inner mutating calls inherit
+  the cell's session mutation lock instead of deadlocking on it.
+- **Limits.** At most 16 calls run at once (later ones queue) and 1,000 per
+  cell. When the cell finishes, times out or is cancelled, outstanding calls
+  are aborted and killed after a two-second grace; a timeout aborts them before
+  interrupting the kernel so an awaiting cell can still unwind.
+
 ## Requirements
 
 | Language | Runtime | Notes |
@@ -110,8 +152,9 @@ fenced as untrusted shell output before it reaches the model.
 ## Limits
 
 Stdin is not available to cells (Python's `input()` raises `EOFError`). Cells
-run one at a time per kernel. There are no `tool.*` callbacks, subagent or
-completion bridges, or browser integration. JavaScript `%bun add` / `%npm`
-magics are intentionally not provided: JS resolves the project's `node_modules`,
-not a separate kernel package environment. Use the normal approved package-manager
-workflow for project dependencies, then import them without resetting the kernel.
+run one at a time per kernel. Beyond the session tools above there are no
+subagent or completion bridges and no browser integration. JavaScript
+`%bun add` / `%npm` magics are intentionally not provided: JS resolves the
+project's `node_modules`, not a separate kernel package environment. Use the
+normal approved package-manager workflow for project dependencies, then import
+them without resetting the kernel.

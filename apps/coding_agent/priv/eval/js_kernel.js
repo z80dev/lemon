@@ -7,6 +7,11 @@
 //   {"op": "execute", "id": <int>, "code": <string>}. A worker thread owns
 //   stdin so that EOF (the host went away) kills the kernel even while a cell
 //   is stuck in a synchronous loop.
+// * Tool bridge: `tools.<name>(args)` emits a
+//   {"type": "tool_call", "id": <cell>, "call": <int>, "tool": <name>, "args": {...}}
+//   frame and returns a promise settled by a later
+//   {"op": "tool_result" | "tool_error", "id": <cell>, "call": <int>, ...} line.
+//   Replies are handled as they arrive, even while a cell is awaiting.
 // * User output goes to the real stdout/stderr (merged by the host). Console
 //   and process.stdout/stderr writes are synchronous so they stay ordered with
 //   protocol frames.
@@ -128,6 +133,54 @@ globalThis.console = new Console({ stdout: fdWritable(1), stderr: fdWritable(2) 
 function send(message) {
   writeAll(1, MARKER + JSON.stringify(message) + "\n");
 }
+
+// ---------------------------------------------------------------------------
+// Session tool bridge: `await tools.bash({command: "ls"})`, `tools.call(name, args)`
+// ---------------------------------------------------------------------------
+
+const pendingToolCalls = new Map();
+let toolCell = null;
+let toolCallCounter = 0;
+
+function callTool(name, args) {
+  if (typeof name !== "string" || name === "") {
+    return Promise.reject(new TypeError("tools.call: tool name must be a non-empty string"));
+  }
+  if (args === undefined) args = {};
+  if (args === null || typeof args !== "object" || Array.isArray(args)) {
+    return Promise.reject(new TypeError("tools." + name + ": arguments must be an object"));
+  }
+  if (toolCell === null) {
+    return Promise.reject(new Error("tools." + name + ": session tools are only available while a cell runs"));
+  }
+  const call = ++toolCallCounter;
+  let frame;
+  try {
+    frame = JSON.stringify({ type: "tool_call", id: toolCell, call, tool: name, args });
+  } catch (error) {
+    return Promise.reject(new TypeError("tools." + name + ": arguments must be JSON-serializable: " + error.message));
+  }
+  return new Promise((resolve, reject) => {
+    pendingToolCalls.set(call, { cell: toolCell, name, resolve, reject });
+    writeAll(1, MARKER + frame + "\n");
+  });
+}
+
+function settleToolCall(message) {
+  const pending = pendingToolCalls.get(message.call);
+  if (!pending || pending.cell !== message.id) return;
+  pendingToolCalls.delete(message.call);
+  if (message.op === "tool_result") pending.resolve(message.result);
+  else pending.reject(new Error("tools." + pending.name + ": " + String(message.message)));
+}
+
+globalThis.tools = new Proxy(Object.create(null), {
+  get(_target, prop) {
+    if (typeof prop !== "string" || prop === "then") return undefined;
+    if (prop === "call") return callTool;
+    return (args) => callTool(prop, args);
+  },
+});
 
 process.on("uncaughtException", (error) => {
   writeAll(2, "Uncaught " + formatError(error) + "\n");
@@ -727,18 +780,16 @@ async function drain() {
   if (running) return;
   running = true;
   while (queue.length > 0) {
-    const line = queue.shift();
-    let message;
-    try {
-      message = JSON.parse(line);
-    } catch (_error) {
-      continue;
-    }
-    if (!message || message.op !== "execute") continue;
+    const message = queue.shift();
     cellCounter++;
     displayBytes = 0;
     displayCount = 0;
+    // Calls left pending by an earlier cell are never answered; drop them.
+    pendingToolCalls.clear();
+    toolCallCounter = 0;
+    toolCell = message.id;
     const result = await runCell(String(message.code || ""), cellCounter);
+    toolCell = null;
     send(Object.assign({ type: "result", id: message.id }, result));
   }
   running = false;
@@ -746,8 +797,20 @@ async function drain() {
 
 const reader = new Worker(READER_SOURCE, { eval: true });
 reader.on("message", (line) => {
-  queue.push(line);
-  drain();
+  let message;
+  try {
+    message = JSON.parse(line);
+  } catch (_error) {
+    return;
+  }
+  if (!message) return;
+  // Tool replies settle promises of the running cell, so they bypass the queue.
+  if (message.op === "tool_result" || message.op === "tool_error") {
+    settleToolCall(message);
+  } else if (message.op === "execute") {
+    queue.push(message);
+    drain();
+  }
 });
 reader.on("error", (error) => {
   writeAll(2, "eval kernel command reader failed: " + formatError(error) + "\n");

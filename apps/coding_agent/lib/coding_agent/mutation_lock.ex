@@ -16,28 +16,69 @@ defmodule CodingAgent.MutationLock do
   released automatically when the holder exits (for example when an aborted
   tool task is killed). Callers that need several locks must take them through
   `with_locks/2`, which acquires in sorted order to avoid lock-order deadlocks.
+
+  ## Inheritance
+
+  A holder that runs work in helper processes and waits for them (the `eval`
+  tool bridge, whose cell holds `{:session, id}` while its inner tool calls run
+  in tasks) would deadlock if those helpers took the same lock. `held/0` names
+  the keys the calling process holds and `inherit/1` lets a helper treat them as
+  its own: `with_lock/2` on an inherited key runs `fun` directly. This is only
+  sound while the holder outlives every inheritor, so a holder MUST wait for or
+  kill each helper before its own `with_lock/2` returns. Keys that were not
+  inherited (for example `{:path, _}` taken by an inner file tool) are acquired
+  normally.
   """
 
   use GenServer
 
   @type key :: term()
 
+  @held_key {__MODULE__, :held}
+  @inherited_key {__MODULE__, :inherited}
+
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, :ok, name: Keyword.get(opts, :name, __MODULE__))
   end
 
   @doc """
-  Run `fun` while holding `key`. Blocks until the lock is available.
+  Run `fun` while holding `key`. Blocks until the lock is available. A key
+  inherited through `inherit/1` is already held on this process's behalf, so
+  `fun` runs directly.
   """
   @spec with_lock(key(), (-> result)) :: result when result: var
   def with_lock(key, fun) when is_function(fun, 0) do
-    :ok = GenServer.call(__MODULE__, {:acquire, key, self()}, :infinity)
-
-    try do
+    if key in Process.get(@inherited_key, []) do
       fun.()
-    after
-      GenServer.call(__MODULE__, {:release, key, self()}, :infinity)
+    else
+      :ok = GenServer.call(__MODULE__, {:acquire, key, self()}, :infinity)
+      Process.put(@held_key, [key | Process.get(@held_key, [])])
+
+      try do
+        fun.()
+      after
+        Process.put(@held_key, List.delete(Process.get(@held_key, []), key))
+        GenServer.call(__MODULE__, {:release, key, self()}, :infinity)
+      end
     end
+  end
+
+  @doc """
+  Keys the calling process currently holds, including inherited ones.
+  """
+  @spec held() :: [key()]
+  def held do
+    Enum.uniq(Process.get(@held_key, []) ++ Process.get(@inherited_key, []))
+  end
+
+  @doc """
+  Treat `keys`, held by a process that outlives the caller, as held by the
+  caller. See "Inheritance" above for the lifetime obligation on the holder.
+  """
+  @spec inherit([key()]) :: :ok
+  def inherit(keys) when is_list(keys) do
+    Process.put(@inherited_key, Enum.uniq(keys ++ Process.get(@inherited_key, [])))
+    :ok
   end
 
   @doc """
