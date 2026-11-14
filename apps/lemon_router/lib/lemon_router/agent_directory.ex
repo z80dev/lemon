@@ -12,6 +12,7 @@ defmodule LemonRouter.AgentDirectory do
 
   alias LemonChannels.TargetDirectory
   alias LemonCore.SessionKey
+  alias LemonRouter.ChannelContext
 
   @peer_kind_map %{
     "dm" => :dm,
@@ -241,8 +242,8 @@ defmodule LemonRouter.AgentDirectory do
         peer_username: peer_username,
         topic_name: topic_name,
         chat_type: map_get(route, :chat_type),
-        chat_id: parse_int(route.peer_id),
-        topic_id: parse_int(route.thread_id),
+        chat_id: ChannelContext.parse_int(route.peer_id),
+        topic_id: ChannelContext.parse_int(route.thread_id),
         session_count: map_get(stats, :session_count) || 0,
         active_session_count: map_get(stats, :active_session_count) || 0,
         latest_session_key: map_get(stats, :latest_session_key),
@@ -598,18 +599,6 @@ defmodule LemonRouter.AgentDirectory do
   end
 
   defp normalize_int(_), do: nil
-
-  defp parse_int(nil), do: nil
-  defp parse_int(i) when is_integer(i), do: i
-
-  defp parse_int(v) when is_binary(v) do
-    case Integer.parse(v) do
-      {parsed, _rest} -> parsed
-      :error -> nil
-    end
-  end
-
-  defp parse_int(_), do: nil
 
   defp route_from_signature({channel_id, account_id, peer_kind, peer_id, thread_id}) do
     %{

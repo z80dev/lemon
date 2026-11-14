@@ -3,6 +3,36 @@ defmodule LemonRouter.ChannelContextTest do
 
   alias LemonRouter.ChannelContext
 
+  describe "delivery route metadata" do
+    test "rejects missing or unknown peer kinds instead of assuming a DM" do
+      for kind <- [nil, :unknown, "unsupported"] do
+        assert :error =
+                 LemonRouter.DeliveryRouteResolver.resolve("agent:a1:main", "telegram", %{
+                   peer: %{kind: kind, id: "42"}
+                 })
+      end
+    end
+
+    test "accepts supported atom and string peer kinds" do
+      for {kind, expected} <- [
+            {:dm, :dm},
+            {:group, :group},
+            {:channel, :channel},
+            {"dm", :dm},
+            {"group", :group},
+            {"channel", :channel}
+          ] do
+        assert {:ok, route} =
+                 LemonRouter.DeliveryRouteResolver.resolve("agent:a1:main", "telegram", %{
+                   peer: %{kind: kind, id: "42"}
+                 })
+
+        assert route.peer_kind == expected
+        assert route.peer_id == "42"
+      end
+    end
+  end
+
   describe "parse_session_key/1" do
     test "parses canonical channel session keys" do
       parsed = ChannelContext.parse_session_key("agent:a1:telegram:bot:group:123:thread:77")

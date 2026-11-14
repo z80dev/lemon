@@ -13,12 +13,7 @@ defmodule LemonRouter.ToolPreview do
 
   def to_text(text) when is_binary(text) do
     # Best-effort cleanup when we already have an inspected struct string.
-    cleaned = extract_text_from_inspected_struct(text)
-
-    cond do
-      is_binary(cleaned) and cleaned != "" -> cleaned
-      true -> text
-    end
+    extract_text_from_inspected_struct(text) || text
   end
 
   def to_text(%LemonAgent.Types.AgentToolResult{} = result) do

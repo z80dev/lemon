@@ -316,13 +316,13 @@ defmodule LemonRouter.StreamCoalescer do
             last_seq: 0,
             first_delta_ts: nil,
             flush_timer: nil,
-            meta: compact_meta(meta),
+            meta: ChannelContext.compact_meta(meta),
             last_sent_text: nil,
             finalized: false,
             pending_clear: false
         }
       else
-        %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
+        %{state | meta: Map.merge(state.meta || %{}, ChannelContext.compact_meta(meta))}
       end
 
     # If we've already finalized this run, ignore late deltas.
@@ -454,7 +454,7 @@ defmodule LemonRouter.StreamCoalescer do
           %{
             state
             | run_id: run_id,
-              meta: compact_meta(meta),
+              meta: ChannelContext.compact_meta(meta),
               finalized: false
           }
 
@@ -469,13 +469,13 @@ defmodule LemonRouter.StreamCoalescer do
               last_seq: 0,
               first_delta_ts: nil,
               flush_timer: nil,
-              meta: compact_meta(meta),
+              meta: ChannelContext.compact_meta(meta),
               last_sent_text: nil,
               finalized: false
           }
 
         true ->
-          %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
+          %{state | meta: Map.merge(state.meta || %{}, ChannelContext.compact_meta(meta))}
       end
 
     state = LemonRouter.CoalescerIngress.observe_overflow(state)
@@ -526,8 +526,6 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   # ---- Internal ----
-
-  defp compact_meta(meta), do: ChannelContext.compact_meta(meta)
 
   defp maybe_flush(state, now) do
     buffer_len = String.length(state.buffer)
