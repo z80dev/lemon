@@ -6,6 +6,10 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Added
 
+- Admin-only `system.reload_code` soft-loads changed code in launcher-managed
+  interactive source runtimes, optionally refreshes idle session tools, and
+  retries modules still in use once. Bounded module lists retain exact counts;
+  failure reasons never expose paths or raw runtime terms.
 - `agent` accepts a validated per-invocation `project_memory_capture` boolean;
   one-shot print clients disable auxiliary extraction without changing recall.
 - Agent submissions accept validated `session_mode` and `persona` options,
