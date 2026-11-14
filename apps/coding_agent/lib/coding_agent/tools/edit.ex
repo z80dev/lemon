@@ -58,7 +58,7 @@ defmodule CodingAgent.Tools.Edit do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
 
-  import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_aborted: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
   @doc """
   Returns the tool definition for the edit tool.
@@ -189,10 +189,7 @@ defmodule CodingAgent.Tools.Edit do
           )
         end
 
-      case result do
-        {:error, :aborted} -> {:error, "Operation aborted"}
-        other -> ToolResultTrust.untrusted(other, :local_file)
-      end
+      ToolResultTrust.untrusted(result, :local_file)
     end
   end
 
@@ -207,7 +204,7 @@ defmodule CodingAgent.Tools.Edit do
   end
 
   defp do_execute_acp(path, resolved_path, edit_spec, signal, opts) do
-    with :ok <- check_aborted(signal),
+    with :ok <- check_abort(signal),
          {:ok, raw_content} <- ACPFileBridge.read_text_file(resolved_path, nil, nil, opts),
          :ok <- FileValidation.check_text_content(raw_content, path),
          {bom, content} <- FileFormatHelpers.strip_bom(raw_content),
@@ -216,7 +213,7 @@ defmodule CodingAgent.Tools.Edit do
          {:ok, new_content} <-
            perform_local_edit(raw_content, normalized_content, edit_spec, opts, resolved_path),
          :ok <- check_content_changed(normalized_content, new_content),
-         :ok <- check_aborted(signal),
+         :ok <- check_abort(signal),
          final_content <- FileFormatHelpers.finalize_content(new_content, line_ending, bom),
          :ok <- ACPFileBridge.write_text_file(resolved_path, final_content, opts) do
       diff = generate_diff(normalized_content, new_content)
@@ -250,7 +247,7 @@ defmodule CodingAgent.Tools.Edit do
   defp edit_local(path, resolved_path, edit_spec, diagnostics?, signal, cwd, opts) do
     baseline = LspDiagnostics.baseline(resolved_path, cwd, diagnostics?, opts)
 
-    with :ok <- check_aborted(signal),
+    with :ok <- check_abort(signal),
          {:ok, identity} <- FileValidation.regular_file_identity(resolved_path, opts),
          :ok <-
            FileValidation.check_mutation_target(
@@ -266,7 +263,7 @@ defmodule CodingAgent.Tools.Edit do
          {:ok, new_content} <-
            perform_local_edit(raw_content, normalized_content, edit_spec, opts, resolved_path),
          :ok <- check_content_changed(normalized_content, new_content),
-         :ok <- check_aborted(signal),
+         :ok <- check_abort(signal),
          final_content <- FileFormatHelpers.finalize_content(new_content, line_ending, bom),
          {:ok, checkpoint} <-
            CheckpointGuard.before_mutation([resolved_path], cwd, opts, %{
@@ -511,7 +508,6 @@ defmodule CodingAgent.Tools.Edit do
   defp format_error({:error, :no_change}, _path),
     do: {:error, "No changes made. The replacement produces identical content."}
 
-  defp format_error({:error, :aborted}, _path), do: {:error, "Operation aborted"}
   defp format_error({:error, reason}, _path) when is_binary(reason), do: {:error, reason}
 
   defp format_error({:error, reason}, _path) do

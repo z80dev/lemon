@@ -57,8 +57,6 @@ defmodule LemonAgent.Agent do
   # Types
   # ============================================================================
 
-  @type queue_mode :: :all | :one_at_a_time
-
   @type convert_to_llm_fn ::
           (list(Types.agent_message()) ->
              list(LemonAi.Types.message()) | {:ok, list(LemonAi.Types.message())})
@@ -82,8 +80,6 @@ defmodule LemonAgent.Agent do
           running_task: Task.t() | nil,
           steering_queue: list(Types.agent_message()),
           follow_up_queue: list(Types.agent_message()),
-          steering_mode: queue_mode(),
-          follow_up_mode: queue_mode(),
           convert_to_llm: convert_to_llm_fn(),
           transform_context: transform_context_fn() | nil,
           stream_fn: stream_fn() | nil,
@@ -113,8 +109,6 @@ defmodule LemonAgent.Agent do
           convert_to_llm: convert_to_llm_fn(),
           transform_context: transform_context_fn(),
           stream_fn: stream_fn() | nil,
-          steering_mode: queue_mode(),
-          follow_up_mode: queue_mode(),
           session_id: String.t(),
           get_api_key: get_api_key_fn(),
           resolve_stream_options: AgentLoopConfig.resolve_stream_options_fn(),
@@ -148,8 +142,6 @@ defmodule LemonAgent.Agent do
   - `:convert_to_llm` - Function to convert agent messages to LLM messages (required)
   - `:transform_context` - Optional function to transform context before conversion
   - `:stream_fn` - Custom stream function (defaults to Loop's `LemonAi.stream/3`)
-  - `:steering_mode` - How to consume steering queue: `:all` or `:one_at_a_time` (default)
-  - `:follow_up_mode` - How to consume follow-up queue: `:all` or `:one_at_a_time` (default)
   - `:session_id` - Optional session identifier for provider caching
   - `:get_api_key` - Function to dynamically resolve API keys
   - `:resolve_stream_options` - Rebuilds options for idle/live model switches in the loop task
@@ -449,52 +441,6 @@ defmodule LemonAgent.Agent do
     GenServer.call(agent, {:follow_up, queued_message(message, opts)})
   end
 
-  @doc """
-  Clears all pending steering messages.
-  """
-  @spec clear_steering_queue(GenServer.server()) :: :ok
-  def clear_steering_queue(agent) do
-    GenServer.call(agent, :clear_steering_queue)
-  end
-
-  @doc """
-  Clears all pending follow-up messages.
-  """
-  @spec clear_follow_up_queue(GenServer.server()) :: :ok
-  def clear_follow_up_queue(agent) do
-    GenServer.call(agent, :clear_follow_up_queue)
-  end
-
-  @doc """
-  Clears all pending steering and follow-up messages.
-  """
-  @spec clear_all_queues(GenServer.server()) :: :ok
-  def clear_all_queues(agent) do
-    GenServer.call(agent, :clear_all_queues)
-  end
-
-  @doc """
-  Sets the steering queue consumption mode.
-
-  - `:all` - Send all steering messages at once
-  - `:one_at_a_time` - Send one steering message per turn
-  """
-  @spec set_steering_mode(GenServer.server(), queue_mode()) :: :ok
-  def set_steering_mode(agent, mode) when mode in [:all, :one_at_a_time] do
-    GenServer.call(agent, {:set_steering_mode, mode})
-  end
-
-  @doc """
-  Sets the follow-up queue consumption mode.
-
-  - `:all` - Send all follow-up messages at once
-  - `:one_at_a_time` - Send one follow-up message per turn
-  """
-  @spec set_follow_up_mode(GenServer.server(), queue_mode()) :: :ok
-  def set_follow_up_mode(agent, mode) when mode in [:all, :one_at_a_time] do
-    GenServer.call(agent, {:set_follow_up_mode, mode})
-  end
-
   # ============================================================================
   # Getters
   # ============================================================================
@@ -519,30 +465,6 @@ defmodule LemonAgent.Agent do
   @spec get_session_id(GenServer.server()) :: String.t() | nil
   def get_session_id(agent) do
     GenServer.call(agent, :get_session_id)
-  end
-
-  @doc """
-  Sets the session ID for provider caching.
-  """
-  @spec set_session_id(GenServer.server(), String.t() | nil) :: :ok
-  def set_session_id(agent, session_id) do
-    GenServer.call(agent, {:set_session_id, session_id})
-  end
-
-  @doc """
-  Gets the steering queue mode.
-  """
-  @spec get_steering_mode(GenServer.server()) :: queue_mode()
-  def get_steering_mode(agent) do
-    GenServer.call(agent, :get_steering_mode)
-  end
-
-  @doc """
-  Gets the follow-up queue mode.
-  """
-  @spec get_follow_up_mode(GenServer.server()) :: queue_mode()
-  def get_follow_up_mode(agent) do
-    GenServer.call(agent, :get_follow_up_mode)
   end
 
   # ============================================================================
@@ -586,8 +508,6 @@ defmodule LemonAgent.Agent do
       steering_queue: [],
       follow_up_queue: [],
       follow_up_poll: nil,
-      steering_mode: Keyword.get(opts, :steering_mode, :one_at_a_time),
-      follow_up_mode: Keyword.get(opts, :follow_up_mode, :one_at_a_time),
       convert_to_llm: convert_to_llm,
       transform_context: transform_context,
       stream_fn: stream_fn,
@@ -740,26 +660,6 @@ defmodule LemonAgent.Agent do
     {:reply, :ok, %{state | agent_state: new_agent_state}}
   end
 
-  def handle_call(:clear_steering_queue, _from, state) do
-    {:reply, :ok, %{state | steering_queue: []}}
-  end
-
-  def handle_call(:clear_follow_up_queue, _from, state) do
-    {:reply, :ok, %{state | follow_up_queue: []}}
-  end
-
-  def handle_call(:clear_all_queues, _from, state) do
-    {:reply, :ok, %{state | steering_queue: [], follow_up_queue: []}}
-  end
-
-  def handle_call({:set_steering_mode, mode}, _from, state) do
-    {:reply, :ok, %{state | steering_mode: mode}}
-  end
-
-  def handle_call({:set_follow_up_mode, mode}, _from, state) do
-    {:reply, :ok, %{state | follow_up_mode: mode}}
-  end
-
   def handle_call({:redirect, message}, _from, state) do
     {:reply, :ok, apply_redirect(state, message)}
   end
@@ -814,22 +714,10 @@ defmodule LemonAgent.Agent do
     {:reply, state.session_id, state}
   end
 
-  def handle_call({:set_session_id, session_id}, _from, state) do
-    {:reply, :ok, %{state | session_id: session_id}}
-  end
-
-  def handle_call(:get_steering_mode, _from, state) do
-    {:reply, state.steering_mode, state}
-  end
-
-  def handle_call(:get_follow_up_mode, _from, state) do
-    {:reply, state.follow_up_mode, state}
-  end
-
   # Handle steering/follow-up message requests from the loop task
   def handle_call({:get_steering_messages, abort_ref}, _from, state) do
     if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
-      {messages, new_queue} = consume_steering_queue(state.steering_queue, state.steering_mode)
+      {messages, new_queue} = consume_steering_queue(state.steering_queue)
       {:reply, messages, %{state | steering_queue: new_queue}}
     else
       {:reply, [], state}
@@ -852,7 +740,7 @@ defmodule LemonAgent.Agent do
         %{from: from, abort_ref: abort_ref} = poll ->
           if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
             Process.cancel_timer(poll.timer_ref)
-            {messages, queue} = consume_steering_queue(state.steering_queue, state.steering_mode)
+            {messages, queue} = consume_steering_queue(state.steering_queue)
             GenServer.reply(from, messages)
             %{state | steering_queue: queue, follow_up_poll: nil}
           else
@@ -870,11 +758,11 @@ defmodule LemonAgent.Agent do
     if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
       cond do
         state.steering_queue != [] ->
-          {messages, queue} = consume_steering_queue(state.steering_queue, state.steering_mode)
+          {messages, queue} = consume_steering_queue(state.steering_queue)
           {:reply, messages, %{state | steering_queue: queue}}
 
         state.follow_up_queue != [] ->
-          {messages, queue} = consume_queue(state.follow_up_queue, state.follow_up_mode)
+          {messages, queue} = consume_queue(state.follow_up_queue)
           {:reply, messages, %{state | follow_up_queue: queue}}
 
         true ->
@@ -1013,7 +901,7 @@ defmodule LemonAgent.Agent do
         state = %{state | follow_up_poll: nil}
 
         if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
-          {messages, queue} = consume_steering_queue(state.steering_queue, state.steering_mode)
+          {messages, queue} = consume_steering_queue(state.steering_queue)
           GenServer.reply(from, messages)
           {:noreply, %{state | steering_queue: queue}}
         else
@@ -1030,9 +918,9 @@ defmodule LemonAgent.Agent do
     {:noreply, state}
   end
 
-  defp consume_steering_queue(queue, mode) do
+  defp consume_steering_queue(queue) do
     {preempting, deferred} = Enum.split_with(queue, &preempting_message?/1)
-    consume_queue(preempting ++ deferred, mode)
+    consume_queue(preempting ++ deferred)
   end
 
   defp preempting_message?(%{preempt: false}), do: false
@@ -1521,8 +1409,6 @@ defmodule LemonAgent.Agent do
     }
   end
 
-  @spec consume_queue(list(Types.agent_message()), queue_mode()) ::
-          {list(Types.agent_message()), list(Types.agent_message())}
   defp apply_redirect(state, message) do
     case {state.running_task, state.abort_ref} do
       {task, abort_ref} when not is_nil(task) and is_reference(abort_ref) ->
@@ -1549,7 +1435,7 @@ defmodule LemonAgent.Agent do
       %{from: from, abort_ref: poll_abort_ref} = poll ->
         if state.abort_ref == poll_abort_ref and not AbortSignal.aborted?(poll_abort_ref) do
           if poll[:timer_ref], do: Process.cancel_timer(poll.timer_ref)
-          {messages, new_queue} = consume_queue(state.follow_up_queue, state.follow_up_mode)
+          {messages, new_queue} = consume_queue(state.follow_up_queue)
           GenServer.reply(from, messages)
           %{state | follow_up_queue: new_queue, follow_up_poll: nil}
         else
@@ -1561,16 +1447,10 @@ defmodule LemonAgent.Agent do
     end
   end
 
-  defp consume_queue([], _mode), do: {[], []}
-
-  defp consume_queue(queue, :one_at_a_time) do
-    [first | rest] = queue
-    {[first], rest}
-  end
-
-  defp consume_queue(queue, :all) do
-    {queue, []}
-  end
+  @spec consume_queue(list(Types.agent_message())) ::
+          {list(Types.agent_message()), list(Types.agent_message())}
+  defp consume_queue([]), do: {[], []}
+  defp consume_queue([first | rest]), do: {[first], rest}
 
   defp normalize_error_reason({:budget_exceeded, %{message: message}}), do: message
   defp normalize_error_reason(reason) when is_binary(reason), do: reason

@@ -65,10 +65,7 @@ defmodule LemonAgent.ModelRuntime.SessionPins do
 
   def matches?(_, _, _), do: false
 
-  defp normalize_provider(provider) do
-    LemonAgent.ModelRuntime.ProviderNames.canonical_name(provider) ||
-      provider |> to_string() |> String.downcase() |> String.replace("-", "_")
-  end
+  defp normalize_provider(provider), do: LemonAgent.ModelRuntime.ProviderNames.normalize(provider)
 
   @spec get(term()) ::
           %{provider: String.t(), model_id: String.t() | nil, credential_ref: String.t() | nil}

@@ -100,7 +100,7 @@ defmodule LemonAgent.AgentRegistryTest do
       metadata = %{model: "claude-3-opus", temperature: 0.7}
 
       assert :ok = AgentRegistry.register(key, metadata)
-      assert {:ok, pid, ^metadata} = AgentRegistry.lookup_with_metadata(key)
+      assert [{pid, ^metadata}] = Registry.lookup(AgentRegistry.registry_name(), key)
       assert pid == self()
     end
 
@@ -118,14 +118,14 @@ defmodule LemonAgent.AgentRegistryTest do
       }
 
       assert :ok = AgentRegistry.register(key, metadata)
-      assert {:ok, _pid, ^metadata} = AgentRegistry.lookup_with_metadata(key)
+      assert [{_pid, ^metadata}] = Registry.lookup(AgentRegistry.registry_name(), key)
     end
 
     test "registers with nil metadata" do
       key = {unique_session_id(), :main, 0}
 
       assert :ok = AgentRegistry.register(key, nil)
-      assert {:ok, _pid, nil} = AgentRegistry.lookup_with_metadata(key)
+      assert [{_pid, nil}] = Registry.lookup(AgentRegistry.registry_name(), key)
     end
 
     test "different agents can have different metadata" do
@@ -154,8 +154,8 @@ defmodule LemonAgent.AgentRegistryTest do
       assert_receive :registered
 
       # Verify both have their correct metadata
-      assert {:ok, _, ^main_metadata} = AgentRegistry.lookup_with_metadata(main_key)
-      assert {:ok, ^pid, ^research_metadata} = AgentRegistry.lookup_with_metadata(research_key)
+      assert [{_, ^main_metadata}] = Registry.lookup(AgentRegistry.registry_name(), main_key)
+      assert [{^pid, ^research_metadata}] = Registry.lookup(AgentRegistry.registry_name(), research_key)
 
       send(pid, :done)
     end
@@ -234,31 +234,6 @@ defmodule LemonAgent.AgentRegistryTest do
       assert other_pid == pid2
 
       send(pid2, :done)
-    end
-  end
-
-  describe "lookup_with_metadata/1" do
-    test "returns {:ok, pid, metadata} for registered key with metadata" do
-      key = {unique_session_id(), :agent, 0}
-      metadata = %{test: true}
-      :ok = AgentRegistry.register(key, metadata)
-
-      assert {:ok, pid, ^metadata} = AgentRegistry.lookup_with_metadata(key)
-      assert pid == self()
-    end
-
-    test "returns {:ok, pid, nil} for registered key without explicit metadata" do
-      key = {unique_session_id(), :agent, 0}
-      :ok = AgentRegistry.register(key)
-
-      assert {:ok, pid, nil} = AgentRegistry.lookup_with_metadata(key)
-      assert pid == self()
-    end
-
-    test "returns :error for unregistered key" do
-      key = {"nonexistent_#{System.unique_integer()}", :unknown, 0}
-
-      assert :error = AgentRegistry.lookup_with_metadata(key)
     end
   end
 
@@ -518,11 +493,6 @@ defmodule LemonAgent.AgentRegistryTest do
       assert :error = AgentRegistry.lookup(key)
     end
 
-    test "lookup_with_metadata returns :error for never-registered key" do
-      key = {"never_registered_#{System.unique_integer()}", :phantom, 0}
-      assert :error = AgentRegistry.lookup_with_metadata(key)
-    end
-
     test "lookup returns :error after process crash" do
       key = {unique_session_id(), :crasher, 0}
       parent = self()
@@ -582,188 +552,14 @@ defmodule LemonAgent.AgentRegistryTest do
     end
   end
 
-  describe "list_by_session/1" do
-    test "returns empty list for non-existent session" do
-      session_id = "nonexistent_session_#{System.unique_integer()}"
-      assert [] = AgentRegistry.list_by_session(session_id)
-    end
-
-    test "returns all agents for a session" do
-      session_id = unique_session_id()
-      parent = self()
-
-      # Register multiple agents from different processes
-      pids =
-        for {role, _i} <- Enum.with_index([:main, :research, :implement]) do
-          spawn(fn ->
-            key = {session_id, role, 0}
-            :ok = AgentRegistry.register(key)
-            send(parent, {:registered, role, self()})
-
-            receive do
-              :done -> :ok
-            end
-          end)
-        end
-
-      # Wait for all registrations
-      registered =
-        for _ <- 1..3 do
-          receive do
-            {:registered, role, pid} -> {role, pid}
-          after
-            5000 -> flunk("Timeout")
-          end
-        end
-
-      agents = AgentRegistry.list_by_session(session_id)
-      assert length(agents) == 3
-
-      # Verify each agent is in the list
-      for {role, expected_pid} <- registered do
-        entry = Enum.find(agents, fn {r, _index, _pid} -> r == role end)
-        assert entry != nil, "Expected to find role #{role}"
-        {^role, 0, pid} = entry
-        assert pid == expected_pid
-      end
-
-      # Cleanup
-      for pid <- pids, do: send(pid, :done)
-    end
-
-    test "does not return agents from other sessions" do
-      session1 = unique_session_id()
-      session2 = unique_session_id()
-
-      :ok = AgentRegistry.register({session1, :main, 0})
-
-      parent = self()
-
-      pid2 =
-        spawn(fn ->
-          :ok = AgentRegistry.register({session2, :main, 0})
-          send(parent, :registered)
-
-          receive do
-            :done -> :ok
-          end
-        end)
-
-      assert_receive :registered
-
-      agents1 = AgentRegistry.list_by_session(session1)
-      agents2 = AgentRegistry.list_by_session(session2)
-
-      # session1 should only have one agent (self)
-      assert length(agents1) == 1
-      [{:main, 0, pid1}] = agents1
-      assert pid1 == self()
-
-      # session2 should only have one agent (pid2)
-      assert length(agents2) == 1
-      [{:main, 0, ^pid2}] = agents2
-
-      send(pid2, :done)
-    end
-  end
-
-  describe "list_by_role/1" do
-    test "returns empty list for non-existent role" do
-      assert [] = AgentRegistry.list_by_role(:nonexistent_role_xyz)
-    end
-
-    test "returns all agents with specific role across sessions" do
-      session1 = unique_session_id()
-      session2 = unique_session_id()
-      role = :special_test_role
-      parent = self()
-
-      # Register same role in two different sessions
-      :ok = AgentRegistry.register({session1, role, 0})
-
-      pid2 =
-        spawn(fn ->
-          :ok = AgentRegistry.register({session2, role, 0})
-          send(parent, :registered)
-
-          receive do
-            :done -> :ok
-          end
-        end)
-
-      assert_receive :registered
-
-      agents = AgentRegistry.list_by_role(role)
-
-      # Should have at least 2 (there might be more from other tests)
-      assert length(agents) >= 2
-
-      # Find our registrations
-      entry1 = Enum.find(agents, fn {sid, _idx, _pid} -> sid == session1 end)
-      entry2 = Enum.find(agents, fn {sid, _idx, _pid} -> sid == session2 end)
-
-      assert entry1 != nil
-      assert entry2 != nil
-
-      {^session1, 0, self_pid} = entry1
-      assert self_pid == self()
-
-      {^session2, 0, ^pid2} = entry2
-
-      send(pid2, :done)
-    end
-  end
-
   describe "count/0" do
     test "returns the number of registered agents" do
       session_id = unique_session_id()
       :ok = AgentRegistry.register({session_id, :counter_test, 0})
 
-      assert AgentRegistry.count_by_session(session_id) == 1
       assert is_integer(AgentRegistry.count())
 
       :ok = AgentRegistry.unregister({session_id, :counter_test, 0})
-
-      assert AgentRegistry.count_by_session(session_id) == 0
-    end
-
-    test "count increases with each registration" do
-      session_id = unique_session_id()
-
-      for i <- 0..4 do
-        :ok = AgentRegistry.register({session_id, :sequential, i})
-        assert AgentRegistry.count_by_session(session_id) == i + 1
-      end
-    end
-  end
-
-  describe "count_by_session/1" do
-    test "returns 0 for non-existent session" do
-      assert 0 = AgentRegistry.count_by_session("nonexistent_#{System.unique_integer()}")
-    end
-
-    test "returns correct count for session" do
-      session_id = unique_session_id()
-      parent = self()
-
-      pids =
-        for role <- [:main, :research, :implement] do
-          spawn(fn ->
-            :ok = AgentRegistry.register({session_id, role, 0})
-            send(parent, :registered)
-
-            receive do
-              :done -> :ok
-            end
-          end)
-        end
-
-      for _ <- 1..3, do: assert_receive(:registered)
-
-      assert AgentRegistry.count_by_session(session_id) == 3
-
-      # Cleanup
-      for pid <- pids, do: send(pid, :done)
     end
   end
 

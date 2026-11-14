@@ -260,6 +260,18 @@ defmodule LemonAgent.ModelRuntime.ProviderNames do
 
   def canonical_name(_), do: nil
 
+  @doc "Normalizes a built-in alias or custom provider ID."
+  @spec normalize(atom() | String.t() | nil) :: String.t() | nil
+  def normalize(provider) when is_atom(provider) and not is_nil(provider),
+    do: provider |> Atom.to_string() |> normalize()
+
+  def normalize(provider) when is_binary(provider) do
+    canonical_name(provider) ||
+      provider |> String.trim() |> String.downcase() |> String.replace("-", "_")
+  end
+
+  def normalize(_), do: nil
+
   @spec config_name(atom() | String.t() | nil) :: String.t() | nil
   def config_name(provider) do
     case canonical_name(provider) do

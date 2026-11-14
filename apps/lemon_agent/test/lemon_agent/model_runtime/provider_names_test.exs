@@ -74,6 +74,16 @@ defmodule LemonAgent.ModelRuntime.ProviderNamesTest do
     end
   end
 
+  test "normalization handles aliases, custom IDs, and absent providers" do
+    assert ProviderNames.normalize(" GEMINI-CLI ") == "google_gemini_cli"
+    assert ProviderNames.normalize(:moonshot) == "kimi"
+    assert ProviderNames.normalize(" Private-Cloud ") == "private_cloud"
+    assert ProviderNames.normalize(:private_cloud) == "private_cloud"
+    assert ProviderNames.normalize("") == ""
+    assert ProviderNames.normalize(nil) == nil
+    assert ProviderNames.normalize(%{}) == nil
+  end
+
   test "qualified and custom model selectors are not provider aliases" do
     for name <- ["zhipu/glm-5", "zhipu:glm-5", "gemini-api:custom:model", "kimi-k2.7-code"] do
       assert ProviderNames.canonical_name(name) == nil

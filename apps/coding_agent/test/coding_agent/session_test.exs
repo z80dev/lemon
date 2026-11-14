@@ -1536,16 +1536,17 @@ defmodule CodingAgent.SessionTest do
       end)
     end
 
-    test "list_by_session includes main agent" do
+    test "registry list includes main agent" do
       session = start_session()
       state = Session.get_state(session)
       session_id = state.session_manager.header.id
 
-      agents = LemonAgent.AgentRegistry.list_by_session(session_id)
+      agents = LemonAgent.AgentRegistry.list()
 
-      # Should have at least the main agent
-      assert agents != []
-      assert Enum.any?(agents, fn {role, _index, _pid} -> role == :main end)
+      assert Enum.any?(agents, fn
+               {{^session_id, :main, _index}, _pid} -> true
+               _ -> false
+             end)
     end
 
     test "multiple sessions have separate main agents in registry" do

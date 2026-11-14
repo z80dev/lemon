@@ -5,7 +5,6 @@ defmodule LemonAgent.Application do
   This application starts the core BEAM infrastructure for agent management:
 
   - `LemonAgent.AgentRegistry` - Registry for agent process lookup
-  - `LemonAgent.SubagentSupervisor` - DynamicSupervisor for subagent processes
   - `LemonAgent.LoopTaskSupervisor` - Task.Supervisor for agent loop tasks
   - `LemonAgent.ToolTaskSupervisor` - Task.Supervisor for tool execution tasks
   - `LemonAgent.ModelRuntime.ProviderPoolRotator` - Round-robin state for provider credential pools
@@ -17,7 +16,6 @@ defmodule LemonAgent.Application do
   ```
   LemonAgent.Supervisor (:one_for_one)
   ├── LemonAgent.AgentRegistry (Registry)
-  ├── LemonAgent.SubagentSupervisor (DynamicSupervisor)
   ├── LemonAgent.LoopTaskSupervisor (Task.Supervisor)
   ├── LemonAgent.ToolTaskSupervisor (Task.Supervisor)
   ├── LemonAgent.ModelRuntime.ProviderPoolRotator (GenServer)
@@ -35,8 +33,6 @@ defmodule LemonAgent.Application do
       LemonAgent.AbortSignal.TableOwner,
       # Registry for agent process lookup and discovery
       {Registry, keys: :unique, name: LemonAgent.AgentRegistry},
-      # DynamicSupervisor for subagent processes
-      {LemonAgent.SubagentSupervisor, name: LemonAgent.SubagentSupervisor},
       # Task.Supervisor for agent loop tasks
       {Task.Supervisor, name: LemonAgent.LoopTaskSupervisor},
       # Task.Supervisor for tool execution tasks

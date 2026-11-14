@@ -125,18 +125,6 @@ defmodule LemonAgent.AgentTest do
       assert_receive {:converted_messages, ^converted}
     end
 
-    test "starts with custom steering_mode" do
-      {:ok, agent} = start_agent(steering_mode: :all)
-
-      assert Agent.get_steering_mode(agent) == :all
-    end
-
-    test "starts with custom follow_up_mode" do
-      {:ok, agent} = start_agent(follow_up_mode: :all)
-
-      assert Agent.get_follow_up_mode(agent) == :all
-    end
-
     test "starts with session_id" do
       {:ok, agent} = start_agent(session_id: "session-abc-123")
 
@@ -265,22 +253,6 @@ defmodule LemonAgent.AgentTest do
       {:ok, agent} = start_agent(session_id: "test-session")
 
       assert Agent.get_session_id(agent) == "test-session"
-    end
-  end
-
-  describe "get_steering_mode/1" do
-    test "returns default mode" do
-      {:ok, agent} = start_agent()
-
-      assert Agent.get_steering_mode(agent) == :one_at_a_time
-    end
-  end
-
-  describe "get_follow_up_mode/1" do
-    test "returns default mode" do
-      {:ok, agent} = start_agent()
-
-      assert Agent.get_follow_up_mode(agent) == :one_at_a_time
     end
   end
 
@@ -452,60 +424,6 @@ defmodule LemonAgent.AgentTest do
     end
   end
 
-  describe "set_session_id/2" do
-    test "sets the session ID" do
-      {:ok, agent} = start_agent()
-
-      :ok = Agent.set_session_id(agent, "new-session-id")
-
-      assert Agent.get_session_id(agent) == "new-session-id"
-    end
-
-    test "can set session ID to nil" do
-      {:ok, agent} = start_agent(session_id: "existing")
-
-      :ok = Agent.set_session_id(agent, nil)
-
-      assert Agent.get_session_id(agent) == nil
-    end
-  end
-
-  describe "set_steering_mode/2" do
-    test "sets steering mode to :all" do
-      {:ok, agent} = start_agent()
-
-      :ok = Agent.set_steering_mode(agent, :all)
-
-      assert Agent.get_steering_mode(agent) == :all
-    end
-
-    test "sets steering mode to :one_at_a_time" do
-      {:ok, agent} = start_agent(steering_mode: :all)
-
-      :ok = Agent.set_steering_mode(agent, :one_at_a_time)
-
-      assert Agent.get_steering_mode(agent) == :one_at_a_time
-    end
-  end
-
-  describe "set_follow_up_mode/2" do
-    test "sets follow-up mode to :all" do
-      {:ok, agent} = start_agent()
-
-      :ok = Agent.set_follow_up_mode(agent, :all)
-
-      assert Agent.get_follow_up_mode(agent) == :all
-    end
-
-    test "sets follow-up mode to :one_at_a_time" do
-      {:ok, agent} = start_agent(follow_up_mode: :all)
-
-      :ok = Agent.set_follow_up_mode(agent, :one_at_a_time)
-
-      assert Agent.get_follow_up_mode(agent) == :one_at_a_time
-    end
-  end
-
   # ============================================================================
   # Subscribe/Unsubscribe
   # ============================================================================
@@ -592,41 +510,6 @@ defmodule LemonAgent.AgentTest do
       :ok = Agent.follow_up(agent, Mocks.user_message("Follow 2"))
 
       # Messages should be queued
-    end
-  end
-
-  describe "clear_steering_queue/1" do
-    test "clears the steering queue" do
-      {:ok, agent} = start_agent()
-
-      Agent.steer(agent, Mocks.user_message("Will be cleared"))
-      :ok = Agent.clear_steering_queue(agent)
-
-      # Queue should be empty
-    end
-  end
-
-  describe "clear_follow_up_queue/1" do
-    test "clears the follow-up queue" do
-      {:ok, agent} = start_agent()
-
-      Agent.follow_up(agent, Mocks.user_message("Will be cleared"))
-      :ok = Agent.clear_follow_up_queue(agent)
-
-      assert :sys.get_state(agent).follow_up_queue == []
-    end
-  end
-
-  describe "clear_all_queues/1" do
-    test "clears both queues" do
-      {:ok, agent} = start_agent()
-
-      Agent.steer(agent, Mocks.user_message("Steering"))
-      Agent.follow_up(agent, Mocks.user_message("Follow-up"))
-
-      :ok = Agent.clear_all_queues(agent)
-
-      # Both queues should be empty
     end
   end
 
@@ -1079,12 +962,12 @@ defmodule LemonAgent.AgentTest do
   end
 
   # ============================================================================
-  # Follow-up Queue Mode Tests
+  # Follow-up Queue Tests
   # ============================================================================
 
-  describe "follow-up queue mode consumption" do
-    test "one_at_a_time mode returns one message per call" do
-      {:ok, agent} = start_agent(follow_up_mode: :one_at_a_time)
+  describe "follow-up queue consumption" do
+    test "returns one message per call" do
+      {:ok, agent} = start_agent()
 
       state = :sys.get_state(agent)
 
@@ -1114,61 +997,6 @@ defmodule LemonAgent.AgentTest do
       result3 = GenServer.call(agent, {:get_follow_up_messages, abort_ref})
       assert length(result3) == 1
       assert hd(result3).content == "Follow 3"
-    end
-
-    test "all mode returns all messages in single call" do
-      {:ok, agent} = start_agent(follow_up_mode: :all)
-
-      state = :sys.get_state(agent)
-
-      abort_ref =
-        case state.abort_ref do
-          {:aborted, ref} -> ref
-          ref -> ref
-        end
-
-      # Queue 3 follow-ups
-      Agent.follow_up(agent, Mocks.user_message("Follow A"))
-      Agent.follow_up(agent, Mocks.user_message("Follow B"))
-      Agent.follow_up(agent, Mocks.user_message("Follow C"))
-      Agent.get_state(agent)
-
-      # Should return all 3 messages at once
-      result = GenServer.call(agent, {:get_follow_up_messages, abort_ref})
-      assert length(result) == 3
-      texts = Enum.map(result, & &1.content)
-      assert texts == ["Follow A", "Follow B", "Follow C"]
-    end
-
-    test "mode change takes effect on next consumption" do
-      {:ok, agent} = start_agent(follow_up_mode: :one_at_a_time)
-
-      state = :sys.get_state(agent)
-
-      abort_ref =
-        case state.abort_ref do
-          {:aborted, ref} -> ref
-          ref -> ref
-        end
-
-      # Queue messages
-      Agent.follow_up(agent, Mocks.user_message("Msg 1"))
-      Agent.follow_up(agent, Mocks.user_message("Msg 2"))
-      Agent.follow_up(agent, Mocks.user_message("Msg 3"))
-      Agent.get_state(agent)
-
-      # Consume one
-      result1 = GenServer.call(agent, {:get_follow_up_messages, abort_ref})
-      assert length(result1) == 1
-
-      # Switch to :all mode
-      Agent.set_follow_up_mode(agent, :all)
-
-      # Should now return remaining 2 at once
-      result2 = GenServer.call(agent, {:get_follow_up_messages, abort_ref})
-      assert length(result2) == 2
-      texts = Enum.map(result2, & &1.content)
-      assert texts == ["Msg 2", "Msg 3"]
     end
   end
 end

@@ -652,10 +652,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
 
   defp normalize_optional_name(_), do: nil
 
-  defp normalize_provider(value) do
-    ProviderNames.canonical_name(value) ||
-      value |> to_string() |> String.trim() |> String.downcase() |> String.replace("-", "_")
-  end
+  defp normalize_provider(value), do: ProviderNames.normalize(value)
 
   defp map_value(map, key) when is_map(map) do
     cond do

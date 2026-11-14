@@ -233,6 +233,29 @@ defmodule LemonAgent.ProviderConfigResolverTest do
 
       assert result.api_key == "opts-key"
     end
+
+    test "explicit Azure options override config and merge deployment maps" do
+      result =
+        ProviderConfigResolver.resolve_for_provider(:azure_openai_responses, %{
+          provider_config: %{
+            base_url: "https://config.invalid",
+            resource_name: "config-resource",
+            api_version: "config-version",
+            deployment_name_map: %{"shared" => "config", "config" => "deployment"}
+          },
+          azure: %{
+            base_url: "https://opts.invalid",
+            resource_name: "opts-resource",
+            api_version: "opts-version",
+            deployment_name_map: %{"shared" => "override"}
+          }
+        })
+
+      assert result.base_url == "https://opts.invalid"
+      assert result.resource_name == "opts-resource"
+      assert result.api_version == "opts-version"
+      assert result.deployment_name_map == %{"shared" => "override", "config" => "deployment"}
+    end
   end
 
   # ============================================================================
