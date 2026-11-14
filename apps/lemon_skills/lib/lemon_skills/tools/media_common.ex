@@ -151,13 +151,13 @@ defmodule LemonSkills.Tools.MediaCommon do
     |> stringify_atoms()
   end
 
-  defp stringify_atoms(value) when is_map(value) do
+  def stringify_atoms(value) when is_map(value) do
     Map.new(value, fn {key, value} -> {to_string(key), stringify_atoms(value)} end)
   end
 
-  defp stringify_atoms(value) when is_atom(value), do: Atom.to_string(value)
-  defp stringify_atoms(value) when is_list(value), do: Enum.map(value, &stringify_atoms/1)
-  defp stringify_atoms(value), do: value
+  def stringify_atoms(value) when is_atom(value), do: Atom.to_string(value)
+  def stringify_atoms(value) when is_list(value), do: Enum.map(value, &stringify_atoms/1)
+  def stringify_atoms(value), do: value
 
   def maybe_auto_send(payload, params, caption) do
     if Map.get(params, "sendToChannel") == true do
