@@ -532,6 +532,12 @@ defmodule CodingAgent.ProcessSession do
     {:stop, :normal, state}
   end
 
+  # Exits are trapped for cleanup; an abnormal Port failure must still end the
+  # session (as the link did before) so terminate/2 stops the workload.
+  def handle_info({:EXIT, port, reason}, %{port: port} = state) when reason != :normal do
+    {:stop, {:port_exit, reason}, state}
+  end
+
   def handle_info(_msg, state) do
     {:noreply, state}
   end

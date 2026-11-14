@@ -29,7 +29,10 @@ defmodule LemonMCP.Transport.StdioTest do
 
   test "refused port opens keep failing startup without falling back to Port.open/2" do
     assert {:error, :boom} =
-             GenServer.start(Stdio, command: "sh", port_open: fn _spec, _opts -> {:error, :boom} end)
+             GenServer.start(Stdio,
+               command: "sh",
+               port_open: fn _spec, _opts -> {:error, :boom} end
+             )
 
     assert {:error, :invalid_port_open} =
              GenServer.start(Stdio, command: "sh", port_open: fn _spec -> :nope end)

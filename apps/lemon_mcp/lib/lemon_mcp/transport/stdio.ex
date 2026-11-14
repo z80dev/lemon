@@ -209,6 +209,12 @@ defmodule LemonMCP.Transport.Stdio do
     {:stop, :normal, %{state | port: nil}}
   end
 
+  # Exits are trapped for cleanup; an abnormal Port failure must still stop the
+  # transport (as the link did before) so terminate/2 stops the server group.
+  def handle_info({:EXIT, port, reason}, %{port: port} = state) when reason != :normal do
+    {:stop, {:port_exit, reason}, state}
+  end
+
   @impl true
   def handle_info(_msg, state) do
     {:noreply, state}
