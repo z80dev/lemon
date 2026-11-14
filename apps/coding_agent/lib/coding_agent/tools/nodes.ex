@@ -27,7 +27,8 @@ defmodule CodingAgent.Tools.Nodes do
           Enum.join(NodeTools.routable(), ", ") <>
           ") accept `node: \"<name>\"` to run that one call on the machine, with its files, " <>
           "shell and network; omit `node` to run here. In eval, `tools.<name>({..., node})` " <>
-          "inside one cell fans calls out to several machines at once.",
+          "inside one cell fans calls out to several machines at once. A call cut off by a " <>
+          "dropped connection is reported as an unknown outcome and never retried.",
       parameters: %{"type" => "object", "properties" => %{}, "required" => []},
       execute: &execute/4
     }

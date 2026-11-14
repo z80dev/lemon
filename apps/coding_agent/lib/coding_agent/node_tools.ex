@@ -38,9 +38,7 @@ defmodule CodingAgent.NodeTools do
   @node_parameter %{
     "type" => "string",
     "description" =>
-      "Named node to run this call on (see the nodes tool); omit or \"local\" to run here. " <>
-        "The node uses its own files, shell and working directory. A dropped call is " <>
-        "reported as an unknown outcome and never retried."
+      "Run this call on a connected machine (see nodes), with its files and shell; omit to run here."
   }
 
   @doc "Wire method for one routed tool call."
