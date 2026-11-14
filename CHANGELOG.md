@@ -18,6 +18,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   broker account before falling back to another provider. Reporting is
   asynchronous and best-effort.
 
+- `lemon_ai` emits a `[:lemon_ai, :model_call, :start | :stop | :exception]`
+  telemetry span for every admitted model call. The stop carries the duration,
+  time to first content event, token usage, outcome and a bounded error
+  category; streaming calls stop when the stream ends, not when dispatch
+  returns. Rejected dispatches emit no span. See `docs/telemetry.md`.
+
 ### Changed
 
 - The broker snapshot is kept current by a background long-poll
@@ -25,6 +31,23 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   polling, so rotations, revocations and blocks apply immediately. Failed
   long-polls fall back to the TTL cache; endpoints unused for about 10 minutes
   stop being polled.
+
+- Bash commands and MCP stdio servers are now stopped by process group
+  (SIGTERM, a bounded grace period, then SIGKILL) instead of a `pgrep` child
+  walk, so backgrounded children whose parent shell already exited no longer
+  survive an abort, timeout or owner exit, and an MCP server that ignores stdin
+  EOF is killed when its transport closes. Background process sessions also
+  kill their process group when the session terminates while the command runs.
+
+### Fixed
+
+- Manual `/compact` and branch summaries no longer run their model call inside
+  the session process. The session keeps serving status and abort while they
+  run; abort cancels them with `{:error, :aborted}`, and conflicting operations
+  report busy.
+- A native session whose agent process dies now reports a terminal error and
+  stops, instead of staying registered with a dead agent. The next run resumes
+  from the session journal.
 
 ---
 
