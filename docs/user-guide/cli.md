@@ -4,6 +4,31 @@ The source checkout (`./bin/lemon`) and packaged releases (`lemon`) share the
 same command surface. The launcher handles lifecycle commands; all other
 commands are dispatched by the CLI registry.
 
+## Source-development reload
+
+After editing source, compile it and reload the already-running development runtime:
+
+```bash
+mix compile
+./bin/lemon reload
+./bin/lemon reload --no-sessions --json
+```
+
+`reload` is source-only and never starts a runtime. It requests code reload over
+the authenticated control plane with a 60-second timeout. By default it also
+refreshes idle coding sessions; busy sessions are skipped. `--no-sessions` skips
+that refresh. Human output reports module and session counts, failures, and
+modules still in use that require a restart. JSON preserves `reloaded`, `inUse`,
+`failed` (module/reason), their `reloadedCount`, `inUseCount`, `failedCount`
+totals, and `sessions` (`refreshed`, `busy`, `failed`). Module lists are bounded;
+counts are exact.
+
+Restart for config, dependency, application, supervision, or incompatible
+process-state-shape changes; this is not a release upgrade or state migration.
+Exit codes: `0` for a completed reload report (inspect failure/in-use counts),
+`1` for an unavailable or refused RPC, and `2` for invalid usage. If no runtime
+is reachable, start it explicitly with `./bin/lemon daemon`.
+
 ## Inspect a named worker
 
 `lemon node status --name NAME [--json]` reads the local worker status without

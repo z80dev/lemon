@@ -6,6 +6,9 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Added
 
+- Source-only `lemon reload [--no-sessions] [--json]` loads compiled code changes
+  into an existing development runtime and reports idle-session refreshes,
+  busy sessions, failures, and modules requiring a restart without starting a daemon.
 - `lemon doctor` reports the Elixir 1.20.5 minimum as `runtime.elixir`, with
   actionable upgrade guidance for unsupported toolchains.
 

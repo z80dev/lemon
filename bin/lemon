@@ -1054,7 +1054,7 @@ done
 case "$COMMAND" in --version|version|backup) run_cli "$@" ;; esac
 validate_runtime_ports
 case "$COMMAND" in
-  tui|web|start|daemon|stop|restart|status|__update-daemon|acp|run|-p|--print) require_curl ;;
+  tui|web|start|daemon|stop|restart|status|__update-daemon|acp|run|-p|--print|reload) require_curl ;;
 esac
 
 case "$COMMAND" in
@@ -1191,7 +1191,7 @@ case "$COMMAND" in
 
   *)
     case "$COMMAND" in
-      run|-p|--print) prepare_runtime_credential || exit 1 ;;
+      run|-p|--print|reload) prepare_runtime_credential || exit 1 ;;
       *) ensure_managed_token || exit 1 ;;
     esac
     run_cli "$@"

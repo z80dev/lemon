@@ -569,6 +569,22 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
+      name: "reload",
+      summary: "Reload changed code in a running source-development runtime",
+      usage: "lemon reload [--no-sessions] [--json]",
+      launchers: [:source],
+      subcommands: [],
+      options: [
+        option("--no-sessions", ["--no-sessions"], "Skip refreshing idle coding sessions"),
+        option("--json", ["--json"], "Emit the reload result as JSON")
+      ],
+      details: [
+        "Source development only. Compile changes first with mix compile; reload never starts a runtime.",
+        "Busy sessions are skipped. Modules still in use require a restart.",
+        "Config, dependencies, applications, supervision changes, and incompatible state shapes require a restart."
+      ]
+    },
+    %{
       name: "logs",
       summary: "Tail redacted runtime or offline launcher logs",
       usage: "lemon logs [-n 50] [--level info|warning|error] [--follow] [--json]",

@@ -364,6 +364,7 @@ defmodule LemonControlPlane.Auth.Authorize do
       method in [
         "system.restart",
         "system.stop",
+        "system.reload_code",
         "skills.install",
         "node.mcp.discover",
         "profiles.sync",
