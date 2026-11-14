@@ -14,7 +14,7 @@ defmodule Mix.Tasks.Lemon.Update do
   checkouts.
 
   On an installed release, `lemon update` (the overlay shim, backed by
-  `LemonCore.Update.CLI`/`LemonCore.Update.Remote`) performs the actual
+  `LemonCli.CLI` and `LemonCore.Update.Remote`) performs the actual
   self-update: check the published manifest, download, verify, and stage a
   new version. This task never downloads or applies anything — a source
   checkout updates via `git pull`. `--check` does query `Remote.check/1` to

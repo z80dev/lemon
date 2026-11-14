@@ -43,63 +43,59 @@ defmodule LemonCli.UpdateCommandTest do
     assert error =~ "Usage: lemon update"
   end
 
-  test "both update CLIs report committed rollback restart failure with exit one and a receipt",
-       %{
-         tmp_dir: tmp_dir
-       } do
-    preserve_release_env()
-
-    for {cli, prefix} <- [{CLI, ["update"]}, {LemonCore.Update.CLI, []}] do
-      dir = Path.join(tmp_dir, inspect(cli))
-      receipt = rollback_fixture(dir, String.duplicate("a", 64), 1)
-
-      args =
-        prefix ++
-          [
-            "rollback",
-            "--receipt",
-            receipt["id"],
-            "--confirm",
-            receipt["rollback_digest"],
-            "--json"
-          ]
-
-      stdout =
-        capture_io(fn ->
-          stderr = capture_io(:stderr, fn -> assert cli.run(args) == 1 end)
-          error = Jason.decode!(stderr)
-          assert error["ok"] == false
-          assert error["error"]["kind"] == "daemon_restart_failed"
-          assert error["error"]["message"] =~ "were committed"
-          result = error["error"]["result"]
-          assert result["active"] == "1900.01.0"
-          assert result["restart_required"] == true
-          assert result["restart"] == "failed"
-          assert result["receipt"]["status"] == "rolled_back"
-          refute stderr =~ dir
-        end)
-
-      assert stdout == ""
-      assert ManagedInstall.active([]) == "1900.01.0"
-    end
-  end
-
-  test "a stopped rollback reports no daemon started and succeeds in both CLIs", %{
+  test "update reports committed rollback restart failure with exit one and a receipt", %{
     tmp_dir: tmp_dir
   } do
     preserve_release_env()
 
-    for {cli, prefix} <- [{CLI, ["update"]}, {LemonCore.Update.CLI, []}] do
-      receipt = rollback_fixture(Path.join(tmp_dir, inspect(cli)), "stopped", 1)
+    receipt = rollback_fixture(tmp_dir, String.duplicate("a", 64), 1)
 
-      args =
-        prefix ++
-          ["rollback", "--receipt", receipt["id"], "--confirm", receipt["rollback_digest"]]
+    args = [
+      "update",
+      "rollback",
+      "--receipt",
+      receipt["id"],
+      "--confirm",
+      receipt["rollback_digest"],
+      "--json"
+    ]
 
-      output = capture_io(fn -> assert cli.run(args) == 0 end)
-      assert output =~ "No daemon was running; none was started."
-      refute output =~ "Managed daemon restarted."
-    end
+    stdout =
+      capture_io(fn ->
+        stderr = capture_io(:stderr, fn -> assert CLI.run(args) == 1 end)
+        error = Jason.decode!(stderr)
+        assert error["ok"] == false
+        assert error["error"]["kind"] == "daemon_restart_failed"
+        assert error["error"]["message"] =~ "were committed"
+        result = error["error"]["result"]
+        assert result["active"] == "1900.01.0"
+        assert result["restart_required"] == true
+        assert result["restart"] == "failed"
+        assert result["receipt"]["status"] == "rolled_back"
+        refute stderr =~ tmp_dir
+      end)
+
+    assert stdout == ""
+    assert ManagedInstall.active([]) == "1900.01.0"
+  end
+
+  test "a stopped rollback reports no daemon started and succeeds", %{tmp_dir: tmp_dir} do
+    preserve_release_env()
+
+    receipt = rollback_fixture(tmp_dir, "stopped", 1)
+
+    args = [
+      "update",
+      "rollback",
+      "--receipt",
+      receipt["id"],
+      "--confirm",
+      receipt["rollback_digest"]
+    ]
+
+    output = capture_io(fn -> assert CLI.run(args) == 0 end)
+    assert output =~ "No daemon was running; none was started."
+    refute output =~ "Managed daemon restarted."
   end
 
   defp preserve_release_env do

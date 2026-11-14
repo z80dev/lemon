@@ -41,7 +41,7 @@ defmodule Lemon.MixProject do
     ]
   end
 
-  # Release configuration for games.zeebot.xyz
+  # Runtime release configuration
   #
   # lemon_core carries :exqlite, :sentry and :finch as optional deps (see
   # apps/lemon_core/mix.exs), so the runtime releases name them explicitly:
