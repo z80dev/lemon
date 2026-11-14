@@ -85,8 +85,8 @@ defmodule LemonCore.Drain do
         }
 
         report = Map.put(report, :duration_ms, now() - ctx.started_at_ms)
-        GenServer.cast(__MODULE__, {:finished, report})
-        Logger.warning("Runtime drain finished: #{inspect(summary(report))}")
+        _ = safe_call({:finished, report})
+        Logger.warning("Runtime drain finished: #{inspect(report)}")
         {:ok, report}
 
       {:error, _} = error ->
@@ -227,10 +227,9 @@ defmodule LemonCore.Drain do
     {:reply, Enum.map(state.participants, fn {name, p} -> {name, p.module, p.order} end), state}
   end
 
-  @impl true
-  def handle_cast({:finished, report}, state) do
+  def handle_call({:finished, report}, _from, state) do
     put_phase(:stopping)
-    {:noreply, %{state | phase: :stopping, last_report: report}}
+    {:reply, :ok, %{state | phase: :stopping, last_report: report}}
   end
 
   @impl true
@@ -251,7 +250,9 @@ defmodule LemonCore.Drain do
 
   defp run_phase(phase, participants, ctx) do
     Map.new(participants, fn {name, module} ->
-      {name, run_participant(phase, name, module, ctx)}
+      started = now()
+      result = run_participant(phase, name, module, ctx)
+      {name, Map.put(result, :duration_ms, now() - started)}
     end)
   end
 
@@ -306,8 +307,6 @@ defmodule LemonCore.Drain do
 
   defp ingress_ctx(ctx),
     do: %{ctx | deadline_ms: min(ctx.deadline_ms, ctx.started_at_ms + @ingress_budget_ms)}
-
-  defp summary(report), do: Map.take(report, [:reason, :duration_ms, :work])
 
   defp put_phase(phase), do: :persistent_term.put(@phase_key, phase)
 

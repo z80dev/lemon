@@ -5,9 +5,33 @@ defmodule LemonCore.CodeReload do
   Added modules load on demand in interactive mode. Configuration, mix.exs,
   dependencies, new applications, supervision trees and GenServer state-shape
   changes still require a runtime restart.
+
+  Closures created before a reload keep running the old code. The runtime
+  wires a refresher that rebuilds them for live sessions:
+  `config :lemon_core, LemonCore.CodeReload, session_refresher: Module`, where
+  `Module.refresh_sessions/0` returns `%{refreshed:, busy:, failed:}` counts.
   """
 
   @type result :: %{reloaded: [module()], in_use: [module()], failed: [{module(), term()}]}
+  @type session_counts :: %{
+          refreshed: non_neg_integer(),
+          busy: non_neg_integer(),
+          failed: non_neg_integer()
+        }
+
+  @doc "Runs the configured session refresher; zero counts when none is wired."
+  @spec refresh_sessions() :: session_counts()
+  def refresh_sessions do
+    refresher =
+      :lemon_core |> Application.get_env(__MODULE__, []) |> Keyword.get(:session_refresher)
+
+    if is_atom(refresher) and not is_nil(refresher) and Code.ensure_loaded?(refresher) and
+         function_exported?(refresher, :refresh_sessions, 0) do
+      refresher.refresh_sessions()
+    else
+      %{refreshed: 0, busy: 0, failed: 0}
+    end
+  end
 
   @doc "Reloads modified loaded modules, optionally restricted to `:only_under` directories."
   @spec reload_modified(keyword()) :: result()

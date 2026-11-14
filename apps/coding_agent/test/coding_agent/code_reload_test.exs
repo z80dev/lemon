@@ -6,7 +6,6 @@ defmodule CodingAgent.CodeReloadTest do
       start_supervised!({Registry, keys: :unique, name: CodingAgent.SessionRegistry})
     end
 
-    assert CodingAgent.SessionRegistry.list_ids() == []
     parent = self()
 
     pids =
@@ -49,6 +48,8 @@ defmodule CodingAgent.CodeReloadTest do
       end)
     end)
 
-    assert CodingAgent.CodeReload.refresh_sessions() == %{refreshed: 1, busy: 1, failed: 1}
+    # Other suites' live sessions share the registry; count only this test's.
+    assert CodingAgent.CodeReload.refresh_sessions(["reload-idle", "reload-busy", "reload-exit"]) ==
+             %{refreshed: 1, busy: 1, failed: 1}
   end
 end

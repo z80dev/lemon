@@ -44,7 +44,7 @@ defmodule LemonControlPlane.Methods.SystemReloadCode do
       Application.get_env(
         :lemon_control_plane,
         :code_reload_session_refresher,
-        CodingAgent.CodeReload
+        LemonCore.CodeReload
       )
 
     initial = reloader.reload_modified([])
