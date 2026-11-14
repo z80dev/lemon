@@ -14,6 +14,7 @@ defmodule CodingAgent.ToolRegistry do
 
   alias CodingAgent.Extensions
   alias CodingAgent.MutationLock
+  alias CodingAgent.NodeTools
   alias CodingAgent.ToolExecutor
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools
@@ -102,6 +103,7 @@ defmodule CodingAgent.ToolRegistry do
     {:agent_message, Tools.Task.Messaging},
     {:wait, Tools.Task.Wait},
     {:agent, Tools.Agent},
+    {:nodes, Tools.Nodes},
     {:parent_question, Tools.ParentQuestion},
     {:tool_auth, Tools.ToolAuth},
     {:extensions_status, Tools.ExtensionsStatus}
@@ -239,6 +241,7 @@ defmodule CodingAgent.ToolRegistry do
     |> filter_tools(disabled, enabled_only)
     |> filter_policy_blocked(tool_policy)
     |> configure_bash(cwd, opts)
+    |> NodeTools.wrap_tuples(Keyword.put(opts, :cwd, cwd))
     |> maybe_wrap_approval(tool_policy, approval_ctx)
   end
 
@@ -1071,8 +1074,12 @@ defmodule CodingAgent.ToolRegistry do
       original_execute = tool.execute
 
       execute = fn tool_call_id, params, signal, on_update ->
+        remote? = NodeTools.remote_call?(params)
+
+        # Routed calls name paths on another machine: never resolve them
+        # against this workspace or grant them local folder-read exemptions.
         params =
-          if source == :builtin,
+          if source == :builtin and not remote?,
             do: WorkspaceReads.resolve_params(name, params, approval_context),
             else: params
 
@@ -1090,7 +1097,8 @@ defmodule CodingAgent.ToolRegistry do
             name in ["webfetch", "websearch"] and WorkspaceReads.fenced?(approval_context) ->
               true
 
-            source == :builtin and name in ["read", "ls", "grep"] and policy_required ->
+            source == :builtin and name in ["read", "ls", "grep"] and policy_required and
+                not remote? ->
               not (WorkspaceReads.exempt?(tool_policy, name, params, approval_context) and
                      WorkspaceReads.fence!(approval_context) == :ok)
 

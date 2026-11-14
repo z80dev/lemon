@@ -108,7 +108,8 @@ defmodule CodingAgent.ToolDisclosure do
     shell: ~w(bash bash_output kill_process process_input),
     research: ~w(websearch webfetch read_skill recall),
     planning: ~w(todo ask checkpoint rewind),
-    delegation: ~w(task wait agent_message parent_question)
+    delegation: ~w(task wait agent_message parent_question),
+    machines: ~w(nodes)
   }
 
   @coding_core_names @coding_core |> Map.values() |> List.flatten() |> Enum.sort()
