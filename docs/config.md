@@ -802,7 +802,7 @@ SSH connect timeouts, and unsupported strict-host-key values fail closed at the
 policy boundary instead of reaching Docker or OpenSSH.
 
 Background `exec` launches fail closed when admission is unavailable: there is
-no direct-execution fallback, including `exec_sync` or internal callers passing
+no direct-execution fallback, including internal callers passing
 `use_lane_queue: false`. Each logical launch has a fixed identity, bound to its
 session owner and a validated request fingerprint. Reusing that identity with
 the same request reconciles the original receipt; changing the request or owner

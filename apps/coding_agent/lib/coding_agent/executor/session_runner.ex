@@ -3,11 +3,12 @@ defmodule CodingAgent.Executor.SessionRunner do
 
   use GenServer
 
+  import CodingAgent.Executor, only: [get_opt: 2, normalize_resume: 1]
+
   alias CodingAgent.Executor.RemoteRequestCodec
   alias CodingAgent.Session.Presentation
   alias CodingAgent.Session.RunTranslator
   alias CodingAgent.Tools.Task.Params
-  alias LemonCore.ResumeToken
   alias LemonGateway.ExecutionRequest
   alias LemonGateway.Tools.DiscordSendFile
   alias LemonGateway.Tools.SmsClaimMessage
@@ -514,13 +515,6 @@ defmodule CodingAgent.Executor.SessionRunner do
     end
   end
 
-  defp normalize_resume(%ResumeToken{engine: @engine} = token), do: token
-
-  defp normalize_resume(%{engine: @engine, value: value}) when is_binary(value),
-    do: ResumeToken.new(@engine, value)
-
-  defp normalize_resume(_), do: nil
-
   defp extra_tools(%ExecutionRequest{} = request, opts) do
     cwd = request.cwd || get_opt(opts, :cwd) || File.cwd!()
 
@@ -648,10 +642,6 @@ defmodule CodingAgent.Executor.SessionRunner do
   end
 
   def profile_workspace(_), do: CodingAgent.Config.workspace_dir()
-
-  defp get_opt(opts, key) when is_map(opts), do: Map.get(opts, key)
-  defp get_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key)
-  defp get_opt(_opts, _key), do: nil
 
   # Missing flag stays nil so direct paths keep "nonnil model means explicit".
   defp model_explicit_from_meta(meta) do

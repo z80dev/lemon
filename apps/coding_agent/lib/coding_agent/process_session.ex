@@ -804,7 +804,7 @@ defmodule CodingAgent.ProcessSession do
   end
 
   defp start_port(command, cwd, env, backend) do
-    {shell_path, shell_args} = get_shell_config()
+    {shell_path, shell_args} = CodingAgent.BashExecutor.get_shell_config()
 
     {executable, args, stderr_to_stdout?} =
       case backend do
@@ -944,7 +944,8 @@ defmodule CodingAgent.ProcessSession do
 
   defp command_with_cwd(command, nil), do: command
   defp command_with_cwd(command, ""), do: command
-  defp command_with_cwd(command, cwd), do: "cd #{shell_escape(cwd)} && #{command}"
+  defp command_with_cwd(command, cwd),
+    do: "cd #{CodingAgent.BashExecutor.shell_escape(cwd)} && #{command}"
 
   defp get_os_pid(port) do
     case Port.info(port, :os_pid) do
@@ -1250,32 +1251,6 @@ defmodule CodingAgent.ProcessSession do
       artifact_size_unknown: state.artifact_size_unknown,
       artifact_reclaimed: false
     }
-  end
-
-  defp get_shell_config do
-    case :os.type() do
-      {:unix, _} ->
-        cond do
-          File.exists?("/bin/bash") -> {"/bin/bash", ["-c"]}
-          File.exists?("/bin/sh") -> {"/bin/sh", ["-c"]}
-          true -> {System.find_executable("sh") || "/bin/sh", ["-c"]}
-        end
-
-      {:win32, _} ->
-        git_bash_paths = [
-          "C:\\Program Files\\Git\\bin\\bash.exe",
-          "C:\\Program Files (x86)\\Git\\bin\\bash.exe"
-        ]
-
-        case Enum.find(git_bash_paths, &File.exists?/1) do
-          nil -> {System.find_executable("cmd.exe") || "cmd.exe", ["/C"]}
-          path -> {path, ["-c"]}
-        end
-    end
-  end
-
-  defp shell_escape(path) do
-    "'" <> String.replace(path, "'", "'\"'\"'") <> "'"
   end
 
   defp generate_id do

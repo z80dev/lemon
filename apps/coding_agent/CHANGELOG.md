@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the unused `CodingAgent.Coordinator` and `ProcessManager.exec_sync/1`
+  APIs. Native task execution and background `exec/1` with `poll/2` remain.
+
 ### Fixed
 
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes

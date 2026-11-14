@@ -256,12 +256,6 @@ must not poison another case or a repeated run.
 Approval fixtures read pending requests through `LemonCore.ExecApprovalStore`;
 the underlying table also retains terminal resolution receipts.
 
-Coordinator cancellation fixtures wait for tracked admission guardians and sessions
-to exit before asserting an empty active set: a bounded batch result is not a
-synchronous shutdown receipt.
-
-Coordinator timeout/abort protocol fixtures use controlled sessions, wait for
-prompt acknowledgements, deliver timeout messages explicitly and monitor cleanup.
 Terminal-event fixtures supply empty tools, extension inventory and MCP tools;
 they exercise event handling rather than unrelated resource discovery.
 Delegated completion fixtures finalize the durable run summary before publishing

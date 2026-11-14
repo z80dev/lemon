@@ -26,7 +26,7 @@ add a top-level executor or vendor CLI to Gateway.
 | Add a store or memory backend | `LemonCore.Store.Backend` or `LemonMemory.Provider` |
 
 Delegated tasks run natively in-process: a subagent is a child
-`CodingAgent.Session` coordinated by `CodingAgent.Coordinator`, and there are no
+`CodingAgent.Session` coordinated by the task lifecycle, and there are no
 vendor CLI runners (Claude Code, Codex, Kimi, OpenCode, and Pi were removed).
 Top-level `engine: "lemon"` is fixed compatibility provenance, while a
 delegated task retains its own task identity. Neither is a direct Gateway
