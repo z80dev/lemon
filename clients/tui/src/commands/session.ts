@@ -987,6 +987,17 @@ function safeSessionFailure(ctx: CommandContext, action: string, error: unknown)
 	);
 }
 
+/** Shorthand for `/session new`, sharing its argument and failure handling. */
+export const newCommand: SlashCommand = {
+	name: "new",
+	summary: "start a new session (shorthand for /session new)",
+	usage: "[key] [first prompt…]",
+	group: "sessions",
+	async run(ctx, argv) {
+		await sessionCommand.run(ctx, ["new", ...argv]);
+	},
+};
+
 /** Hermes-compatible shorthand for `/session reset`. */
 export const resetCommand: SlashCommand = {
 	name: "reset",

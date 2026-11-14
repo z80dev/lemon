@@ -98,6 +98,30 @@ describe("session commands with the switcher mounted", () => {
 		expect(spy.created).toEqual([{ key: undefined, prompt: undefined }]);
 	});
 
+	test("/new with no arguments lets the host mint the key", async () => {
+		expect(await runWired("/new")).toBe(true);
+		expect(spy.created).toEqual([{ key: undefined, prompt: undefined }]);
+	});
+
+	test("/new passes an explicit key without a prompt", async () => {
+		await runWired("/new review-branch");
+		expect(spy.created).toEqual([{ key: "review-branch", prompt: undefined }]);
+	});
+
+	test("/new passes the key and first prompt just like /session new", async () => {
+		await runWired('/new review-branch "look at" the diff');
+		expect(spy.created).toEqual([{ key: "review-branch", prompt: "look at the diff" }]);
+	});
+
+	test("/new warns when the host cannot create sessions", async () => {
+		const context = harness.context();
+		await harness.registry.dispatch("/new", {
+			...context,
+			ui: Object.assign(Object.create(context.ui), { createSession: undefined }),
+		});
+		expect(harness.host.text).toContain("this build cannot create sessions");
+	});
+
 	test("/session reset clears both copies", async () => {
 		harness.server.respondWith("sessions.reset", { ok: true });
 		await runWired("/session reset");

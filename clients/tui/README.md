@@ -493,6 +493,7 @@ and control plane authoritative:
 | `/profiles` | Browse the live node-aware profile roster and open the selected `agent:<id>:main` chat. |
 | `/profile [current|show|open|chat|create|clone|rename|export|delete] …` | Inspect or manage profiles through the authenticated `profile.*` / `profiles.*` APIs. Create/clone accept only server-supported profile fields such as `--model` and `--node`; delete requires `--confirm <same-id>`. |
 | `/sessions [query…] [--pinned\|--unpinned] [--archived\|--active] [--agent <id>] [--limit <n>]` | Search and filter the durable server roster, then type to refine in the accessible picker. With no arguments, open the merged live/recent session switcher. |
+| `/new [key] [first prompt…]` | Start a new session; shorthand for `/session new` with the same optional key and first prompt. With no arguments, generate a fresh session key. |
 | `/session current\|show\|search\|open\|resume\|title\|pin\|unpin\|archive\|unarchive …` | Inspect safe lifecycle metadata, resume durable history, open an exact key, or update title/pin/archive state without a client-side metadata store. |
 | `/session preview\|export …` | Read a bounded redacted preview or write a digest-verified JSON/Markdown export through a private atomic file operation. Use `/session help` for exact syntax. |
 | `/session prune --older-than <cutoff> …` | Preview the complete exact candidate set and receive its confirmation token; repeat with `--confirm <token>` to prune only an unchanged set. Archived, unpinned sessions are the safe default. |

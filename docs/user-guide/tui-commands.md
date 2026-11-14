@@ -149,6 +149,7 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 | --- | --- | --- | --- |
 | /sessions | — | [query…] [--pinned&#124;--unpinned] [--archived&#124;--active] [--agent &lt;id&gt;] [--limit &lt;n&gt;] | browse or safely search durable sessions (also Ctrl+X) |
 | /session | — | [help&#124;current&#124;show&#124;search&#124;open&#124;resume&#124;title&#124;pin&#124;unpin&#124;archive&#124;unarchive&#124;preview&#124;export&#124;prune&#124;delete&#124;new&#124;reset] … | inspect, resume, annotate, export, or safely remove sessions |
+| /new | — | [key] [first prompt…] | start a new session (shorthand for /session new) |
 | /name | — | &lt;title…&gt; &#124; --clear | name the current session for later search and resume |
 | /reset | — | — | reset the current session and clear its visible transcript |
 | /resume | — | [key] [count] | replay a session's stored history into the transcript |

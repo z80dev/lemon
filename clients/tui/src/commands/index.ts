@@ -52,6 +52,7 @@ import {
 import {
 	historyCommand,
 	nameCommand,
+	newCommand,
 	resetCommand,
 	resumeCommand,
 	sessionCommand,
@@ -87,6 +88,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 
 		sessionsCommand,
 		sessionCommand,
+		newCommand,
 		forkCommand,
 		nameCommand,
 		agentNameCommand,

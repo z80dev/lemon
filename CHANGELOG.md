@@ -10,6 +10,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- TUI: `/new [key] [first prompt…]` is now a shorthand for `/session new`.
+
 - omp auth broker: Lemon now lists every broker account for a broker-backed
   provider (omp's selection order; `omp_account` still pins one identity). When
   a provider rate-limits an account (429/quota), Lemon reports a catch-all
