@@ -155,6 +155,7 @@ defmodule LemonAi.ModelCallTelemetry do
   defp describe_result(_other), do: {:ok, nil, nil}
 
   defp describe_terminal({:ok, message}), do: describe_message(:ok, message)
+
   defp describe_terminal({:error, {:canceled, reason}}),
     do: {:canceled, cancel_category(reason), nil}
 

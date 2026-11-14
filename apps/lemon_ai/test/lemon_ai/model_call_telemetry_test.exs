@@ -49,7 +49,10 @@ defmodule LemonAi.ModelCallTelemetryTest do
       handler,
       @events,
       fn event, measurements, metadata, _config ->
-        send(parent, {:model_call, List.last(event), measurements, metadata})
+        # Other suites dispatch concurrently; only forward this test's provider.
+        if metadata.provider == provider do
+          send(parent, {:model_call, List.last(event), measurements, metadata})
+        end
       end,
       nil
     )
@@ -222,6 +225,7 @@ defmodule LemonAi.ModelCallTelemetryTest do
     _ = :sys.get_state(stream)
     Process.exit(producer, :kill)
 
+    assert_receive {:model_call, :start, _, _}, 1_000
     assert_receive {:model_call, :stop, _, metadata}, 1_000
     assert metadata.outcome == :error
     assert is_atom(metadata.error_category)
@@ -309,11 +313,9 @@ defmodule LemonAi.ModelCallTelemetryTest do
   end
 
   describe "public API labels" do
-    setup do
+    setup %{provider: provider} do
       ProviderRegistry.register(:model_call_telemetry_test, FakeProvider)
       on_exit(fn -> ProviderRegistry.unregister(:model_call_telemetry_test) end)
-
-      provider = :"model_call_api_#{System.unique_integer([:positive])}"
 
       model = %Model{
         id: "fake-model",
