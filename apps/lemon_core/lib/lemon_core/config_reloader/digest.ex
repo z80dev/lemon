@@ -64,11 +64,8 @@ defmodule LemonCore.ConfigReloader.Digest do
     end
   end
 
-  @doc """
-  Compute fingerprints for a list of file paths.
-  """
   @spec file_fingerprints([String.t()]) :: [file_fingerprint()]
-  def file_fingerprints(paths) when is_list(paths) do
+  defp file_fingerprints(paths) when is_list(paths) do
     Enum.map(paths, &file_fingerprint/1)
   end
 
@@ -163,16 +160,13 @@ defmodule LemonCore.ConfigReloader.Digest do
     {changed, new}
   end
 
-  @doc """
-  Check whether a single source digest changed.
-  """
   @spec source_changed?(source_digest() | nil, source_digest() | nil) :: boolean()
-  def source_changed?(nil, nil), do: false
-  def source_changed?(nil, _new), do: true
-  def source_changed?(_old, nil), do: true
+  defp source_changed?(nil, nil), do: false
+  defp source_changed?(nil, _new), do: true
+  defp source_changed?(_old, nil), do: true
 
-  def source_changed?(old, new) do
-    normalize_fingerprints(old.fingerprints) != normalize_fingerprints(new.fingerprints)
+  defp source_changed?(old, new) do
+    old.fingerprints != new.fingerprints
   end
 
   # ---------------------------------------------------------------------------
@@ -185,15 +179,6 @@ defmodule LemonCore.ConfigReloader.Digest do
       {:error, _} -> nil
     end
   end
-
-  defp normalize_fingerprints(fingerprints) when is_list(fingerprints) do
-    Enum.map(fingerprints, fn fp ->
-      # Drop computed_at_ms and other transient fields for comparison
-      Map.drop(fp, [:computed_at_ms])
-    end)
-  end
-
-  defp normalize_fingerprints(_), do: []
 
   defp now_ms, do: System.system_time(:millisecond)
 end

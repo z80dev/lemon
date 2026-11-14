@@ -16,28 +16,20 @@ defmodule LemonCore.Dedupe.Ets do
   @doc """
   Ensure the ETS table exists.
 
-  If `table` is an atom, a named table is created.
+  Creates a public named set with concurrent reads and writes.
   """
-  @spec init(table(), keyword()) :: :ok
-  def init(table, opts \\ []) do
+  @spec init(atom()) :: :ok
+  def init(table) do
     case :ets.info(table) do
       :undefined ->
-        protection = Keyword.get(opts, :protection, :public)
-        type = Keyword.get(opts, :type, :set)
-
-        base =
-          case table do
-            name when is_atom(name) -> [type, protection, :named_table]
-            _tid -> [type, protection]
-          end
-
-        # Concurrency flags are safe defaults for this use-case.
-        extra =
-          opts
-          |> Keyword.get(:ets_opts, [])
-          |> Kernel.++([read_concurrency: true, write_concurrency: true])
-
-        _ = :ets.new(table, base ++ extra)
+        _ =
+          :ets.new(table, [
+            :set,
+            :public,
+            :named_table,
+            read_concurrency: true,
+            write_concurrency: true
+          ])
         :ok
 
       _info ->

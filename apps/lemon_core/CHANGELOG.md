@@ -12,6 +12,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - Consolidated Mix task startup and simplified validated worker readiness and service identity matching.
 - Fixed task projection fallback action IDs to include their action kind.
 
+- Removed unused gateway merge/normalization, environment parsing, and clock APIs.
+  ConfigCache now has one registered instance, and Dedupe.Ets.init/1 uses fixed
+  named-table options. Config reloader fingerprint and comparison helpers are
+  private, with content hashing retained for same-size file changes.
 - Tool disclosure defaults to `profile = "auto"`: coding for cwd-scoped native
   coding sessions, legacy for assistant chat. Explicit legacy/coding config and
   environment overrides retain precedence.

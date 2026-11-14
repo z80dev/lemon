@@ -46,27 +46,30 @@ defmodule LemonCore.ConfigReloader.DigestTest do
       assert is_nil(fp.hash)
     end
 
-    test "detects content changes via hash", %{tmp_dir: tmp_dir} do
+    test "detects same-size changes with unchanged mtime via hash", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "changing.toml")
 
       File.write!(path, "version = 1")
       fp1 = Digest.file_fingerprint(path)
 
       File.write!(path, "version = 2")
+      File.touch!(path, fp1.mtime)
       fp2 = Digest.file_fingerprint(path)
 
+      assert fp1.size == fp2.size
+      assert fp1.mtime == fp2.mtime
       assert fp1.hash != fp2.hash
     end
   end
 
-  describe "file_fingerprints/1" do
+  describe "files_digest/1 with multiple paths" do
     test "returns fingerprints for multiple paths", %{tmp_dir: tmp_dir} do
       path1 = Path.join(tmp_dir, "a.toml")
       path2 = Path.join(tmp_dir, "b.toml")
       File.write!(path1, "a")
       File.write!(path2, "b")
 
-      fps = Digest.file_fingerprints([path1, path2])
+      fps = Digest.files_digest([path1, path2]).fingerprints
 
       assert length(fps) == 2
       assert Enum.all?(fps, &(&1.status == :ok))
@@ -151,7 +154,7 @@ defmodule LemonCore.ConfigReloader.DigestTest do
 
       digest = Digest.files_digest([path])
       old = %{files: digest}
-      new = %{files: digest}
+      new = %{files: %{digest | computed_at_ms: digest.computed_at_ms + 1}}
 
       {changed, _merged} = Digest.compare(old, new)
 
@@ -183,19 +186,19 @@ defmodule LemonCore.ConfigReloader.DigestTest do
     end
   end
 
-  describe "source_changed?/2" do
+  describe "compare/2 with missing sources" do
     test "nil to something is a change" do
       digest = Digest.secrets_digest([])
-      assert Digest.source_changed?(nil, digest) == true
+      assert {[:secrets], _} = Digest.compare(%{}, %{secrets: digest})
     end
 
     test "something to nil is a change" do
       digest = Digest.secrets_digest([])
-      assert Digest.source_changed?(digest, nil) == true
+      assert {[:secrets], %{}} = Digest.compare(%{secrets: digest}, %{})
     end
 
     test "nil to nil is not a change" do
-      assert Digest.source_changed?(nil, nil) == false
+      assert {[], %{}} = Digest.compare(%{}, %{})
     end
   end
 end

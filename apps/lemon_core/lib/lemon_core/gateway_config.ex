@@ -75,42 +75,6 @@ defmodule LemonCore.GatewayConfig do
   end
 
   # ---------------------------------------------------------------------------
-  # Deep merge (kept public @doc false for downstream use)
-  # ---------------------------------------------------------------------------
-
-  @doc false
-  def deep_merge(left, right) when is_map(left) and is_map(right) do
-    Enum.reduce(right, left, fn {right_key, right_value}, acc ->
-      target_key = equivalent_key(acc, right_key) || right_key
-      left_value = Map.get(acc, target_key)
-      merged_value = deep_merge(left_value, right_value)
-      Map.put(acc, target_key, merged_value)
-    end)
-  end
-
-  def deep_merge(_left, right), do: right
-
-  @doc false
-  def equivalent_key(map, key) when is_map(map) and is_binary(key) do
-    Enum.find(Map.keys(map), fn
-      existing when is_atom(existing) -> Atom.to_string(existing) == key
-      _ -> false
-    end)
-  end
-
-  def equivalent_key(map, key) when is_map(map) and is_atom(key) do
-    string_key = Atom.to_string(key)
-
-    if Map.has_key?(map, string_key) do
-      string_key
-    else
-      nil
-    end
-  end
-
-  def equivalent_key(_map, _key), do: nil
-
-  # ---------------------------------------------------------------------------
   # Key fetch helpers (atom/string agnostic)
   # ---------------------------------------------------------------------------
 
@@ -126,13 +90,4 @@ defmodule LemonCore.GatewayConfig do
   end
 
   def fetch(_map, _key, default), do: default
-
-  @doc false
-  def normalize_map(config) when is_map(config), do: config
-
-  def normalize_map(config) when is_list(config) do
-    if Keyword.keyword?(config), do: Enum.into(config, %{}), else: %{}
-  end
-
-  def normalize_map(_), do: %{}
 end
