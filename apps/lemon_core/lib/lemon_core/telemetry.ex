@@ -24,10 +24,8 @@ defmodule LemonCore.Telemetry do
   - `[:lemon, :run, :first_token]` - measurements: `%{latency_ms: ...}` meta: `%{run_id}`
   - `[:lemon, :run, :stop]` - measurements: `%{duration_ms: ..., ok: boolean()}` meta: `%{run_id}`
 
-  `:start` / `:first_token` / `:stop` are emitted from the gateway run process
-  (`LemonGateway.Run`) via `LemonGateway.DependencyManager.emit_telemetry/2`, which dispatches
-  here with `apply/3`. Because the dispatch is dynamic, a literal-name grep for the helpers
-  finds no callers even though the run span fires end-to-end.
+  `:start` / `:first_token` / `:stop` are emitted directly from the gateway run process
+  (`LemonGateway.Run`).
 
   ### Channels
   - `[:lemon, :channels, :dispatch]` - measurements: `%{count: 1, duration: native}` meta:
