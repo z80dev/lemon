@@ -293,7 +293,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
              )
 
     {:ok, checkpoint} =
-      CodingAgent.Checkpoint.create(session_key,
+      LemonCore.Checkpoint.create(session_key,
         todos: [%{"id" => "todo-introspection-1", "content" => "verify harness projection"}],
         metadata: %{source: "introspection-methods-test"}
       )

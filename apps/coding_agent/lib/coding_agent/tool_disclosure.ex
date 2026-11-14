@@ -48,7 +48,7 @@ defmodule CodingAgent.ToolDisclosure do
     * `:legacy` (chat default) — the behaviour described above: built-ins stay
       disclosed, the MCP/extension/WASM long tail is deferred only once the
       estimated schema cost exceeds `budget_tokens`.
-    * `:coding` (coding default) — only the coding core (`coding_core/0`)
+    * `:coding` (coding default) — only the coding core tools
       and explicitly `pinned` names stay disclosed; every other tool the
       registry resolved — optional built-ins such as browser, media and
       automation tools included — is deferred behind the bridge whenever there
@@ -170,12 +170,6 @@ defmodule CodingAgent.ToolDisclosure do
   """
   @spec bridge_names() :: [String.t()]
   def bridge_names, do: @bridge_names
-
-  @doc """
-  Tool names the `:coding` profile keeps disclosed (before `pinned`), sorted.
-  """
-  @spec coding_core() :: [String.t()]
-  def coding_core, do: @coding_core_names
 
   # ============================================================================
   # Configuration
@@ -1148,4 +1142,5 @@ defmodule CodingAgent.ToolDisclosure do
   end
 
   defp enum_problem(_key, _value, _allowed), do: []
+
 end

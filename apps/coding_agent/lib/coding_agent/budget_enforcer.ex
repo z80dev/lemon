@@ -3,8 +3,6 @@ defmodule CodingAgent.BudgetEnforcer do
   Budget enforcement hooks for the agent lifecycle.
 
   Integrates with Session to enforce budget limits at key points:
-  - Before starting a new run
-  - Before making API calls
   - When spawning subagents
   - During compaction (if budget exceeded)
 
@@ -32,82 +30,6 @@ defmodule CodingAgent.BudgetEnforcer do
   # ============================================================================
   # Pre-flight Checks
   # ============================================================================
-
-  @doc """
-  Check if a run can start with the given budget.
-
-  Called before starting a new run to verify budget availability.
-
-  ## Examples
-
-      BudgetEnforcer.check_run_start(session_id, max_tokens: 50000)
-      # => :ok
-      # => {:error, :budget_exceeded, %{reason: :token_limit_exceeded, ...}}
-  """
-  @spec check_run_start(String.t(), keyword()) :: enforcement_result()
-  def check_run_start(run_id, opts \\ []) do
-    # Create budget if not exists
-    _budget = BudgetTracker.get_budget(run_id) || create_budget_for_run(run_id, opts)
-
-    case BudgetTracker.check_budget(run_id) do
-      {:ok, remaining} ->
-        Logger.debug("Run #{run_id} has budget: #{inspect(remaining)}")
-        :ok
-
-      {:error, reason, details} ->
-        Logger.warning("Run #{run_id} budget exceeded: #{reason} - #{inspect(details)}")
-        {:error, :budget_exceeded, Map.put(details, :run_id, run_id)}
-    end
-  end
-
-  @doc """
-  Check if an API call can be made.
-
-  Called before making an AI API call to ensure sufficient budget.
-
-  ## Options
-
-  - `:estimated_tokens` - Estimated tokens for this call (default: 4000)
-  - `:estimated_cost` - Caller-supplied estimated cost (default: 0.0)
-
-  Caller-supplied estimates remain separate from nullable provider telemetry.
-  A configured cap fails closed if accumulated usage or its requested estimate
-  is unknown; omitting a cap leaves the corresponding metric unrestricted.
-  """
-  @spec check_api_call(String.t(), keyword()) :: enforcement_result()
-  def check_api_call(run_id, opts \\ []) do
-    estimated_tokens = Keyword.get(opts, :estimated_tokens, 4000)
-    estimated_cost = Keyword.get(opts, :estimated_cost, 0.0)
-
-    case BudgetTracker.get_budget(run_id) do
-      nil ->
-        :ok
-
-      budget ->
-        cond do
-          exceeds?(budget.used_tokens, estimated_tokens, budget.max_tokens) ->
-            {:error, :budget_exceeded,
-             %{
-               type: :token_limit_would_exceed,
-               limit: budget.max_tokens,
-               used: budget.used_tokens,
-               estimated: estimated_tokens
-             }}
-
-          exceeds?(budget.used_cost, estimated_cost, budget.max_cost) ->
-            {:error, :budget_exceeded,
-             %{
-               type: :cost_limit_would_exceed,
-               limit: budget.max_cost,
-               used: budget.used_cost,
-               estimated: estimated_cost
-             }}
-
-          true ->
-            :ok
-        end
-    end
-  end
 
   @doc """
   Check if a subagent can be spawned.
@@ -205,17 +127,6 @@ defmodule CodingAgent.BudgetEnforcer do
     end
   end
 
-  @doc """
-  Hook called when an API response is received.
-
-  Records the token/cost usage from the response.
-  """
-  @spec on_api_response(String.t(), map()) :: :ok
-  def on_api_response(run_id, response) do
-    BudgetTracker.record_response_usage(run_id, response)
-    :ok
-  end
-
   # ============================================================================
   # Budget Exceeded Handling
   # ============================================================================
@@ -263,63 +174,9 @@ defmodule CodingAgent.BudgetEnforcer do
     end
   end
 
-  @doc """
-  Get a summary of budget status for a run.
-
-  Returns a human-readable summary of budget usage.
-  """
-  @spec budget_summary(String.t()) :: map()
-  def budget_summary(run_id) do
-    case BudgetTracker.get_budget(run_id) do
-      nil ->
-        %{status: :no_budget}
-
-      budget ->
-        token_pct =
-          if is_number(budget.used_tokens) and is_number(budget.max_tokens) and
-               budget.max_tokens > 0 do
-            Float.round(budget.used_tokens / budget.max_tokens * 100, 1)
-          else
-            nil
-          end
-
-        cost_pct =
-          if is_number(budget.used_cost) and is_number(budget.max_cost) and budget.max_cost > 0 do
-            Float.round(budget.used_cost / budget.max_cost * 100, 1)
-          else
-            nil
-          end
-
-        %{
-          status: :active,
-          tokens: %{
-            used: budget.used_tokens,
-            limit: budget.max_tokens,
-            percentage: token_pct
-          },
-          cost: %{
-            used: budget.used_cost,
-            limit: budget.max_cost,
-            percentage: cost_pct
-          },
-          children: %{
-            active: budget.active_children,
-            limit: budget.max_children
-          }
-        }
-    end
-  end
-
   # ============================================================================
   # Private Functions
   # ============================================================================
-
-  defp exceeds?(_used, _estimated, nil), do: false
-
-  defp exceeds?(used, estimated, limit) when is_number(used) and is_number(estimated),
-    do: used + estimated > limit
-
-  defp exceeds?(_used, _estimated, _limit), do: true
 
   defp create_budget_for_run(run_id, opts) do
     # Application test overrides precede canonical configured tree defaults.

@@ -112,7 +112,7 @@ defmodule CodingAgent.Tools.WriteSqliteTest do
 
   test "checkpoints the physical database and honors abort", %{tmp_dir: dir, db: db} do
     session = "sqlite-write-#{System.unique_integer([:positive])}"
-    on_exit(fn -> CodingAgent.Checkpoint.delete_all(session) end)
+    on_exit(fn -> LemonCore.Checkpoint.delete_all(session) end)
 
     assert %AgentToolResult{details: %{checkpoint_id: id}} =
              write(dir, "app.db:users:1", ~s({"name":"changed"}), session_id: session)

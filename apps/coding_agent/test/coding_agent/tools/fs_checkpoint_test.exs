@@ -14,7 +14,7 @@ defmodule CodingAgent.Tools.FsCheckpointTest do
     path = Path.join(tmp_dir, "file.txt")
     File.write!(path, "before\n")
 
-    on_exit(fn -> Checkpoint.delete_all(session_id) end)
+    on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
 
     {:ok, checkpoint} =
       Checkpoint.create_filesystem(session_id, [path], cwd: tmp_dir, tool: "test")
@@ -35,7 +35,7 @@ defmodule CodingAgent.Tools.FsCheckpointTest do
 
     delete = execute(tmp_dir, %{"action" => "delete", "checkpoint_id" => checkpoint.id})
     assert delete.details.deleted
-    refute Checkpoint.exists?(checkpoint.id)
+    refute LemonCore.Checkpoint.exists?(checkpoint.id)
   end
 
   test "edit creates a restorable filesystem checkpoint when session opts are present", %{
@@ -45,7 +45,7 @@ defmodule CodingAgent.Tools.FsCheckpointTest do
     path = Path.join(tmp_dir, "edit.txt")
     File.write!(path, "alpha\nbeta\n")
 
-    on_exit(fn -> Checkpoint.delete_all(session_id) end)
+    on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
 
     result =
       Edit.execute(
@@ -69,7 +69,7 @@ defmodule CodingAgent.Tools.FsCheckpointTest do
     path = Path.join(tmp_dir, "patch.txt")
     File.write!(path, "before\n")
 
-    on_exit(fn -> Checkpoint.delete_all(session_id) end)
+    on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
 
     patch = "*** Begin Patch\n*** Update File: patch.txt\n@@\n-before\n+after\n*** End Patch\n"
 

@@ -111,7 +111,6 @@ defmodule CodingAgent.ToolDisclosureTest do
   # ==========================================================================
   # config/2
   # ==========================================================================
-
   describe "config/2" do
     test "defaults when the settings manager has no tools section" do
       assert ToolDisclosure.config(%{extension_paths: []}) == ToolDisclosure.defaults()
@@ -739,7 +738,6 @@ defmodule CodingAgent.ToolDisclosureTest do
                ToolDisclosure.validate_args(["a"], %{"type" => "object"})
     end
   end
-
   # ==========================================================================
   # skipped_report/1
   # ==========================================================================
