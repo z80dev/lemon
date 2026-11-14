@@ -94,7 +94,9 @@ defmodule LemonRouter.RestartCarryoverTest do
              Store.fetch_all(RestartCarryover.table())
 
     assert %{kind: :continue, outcome: :clean, interrupted_run_id: ^active_id} = continue
-    assert continue.request.prompt == RestartCarryover.continue_prompt(:clean)
+    assert continue.request.prompt =~ "Continue the task from where you stopped"
+    # Quoted in case the run stopped before the journal recorded the request.
+    assert continue.request.prompt =~ "The interrupted request was:\n> Fix the bug"
     assert continue.request.meta.restart_continuation == true
     refute Map.has_key?(continue.request.meta, :disable_auto_resume)
     refute continue.request.run_id == active_id
@@ -132,6 +134,7 @@ defmodule LemonRouter.RestartCarryoverTest do
     assert continue.outcome == :uncertain
     assert continue.request.prompt =~ "`bash: make deploy` was still running"
     assert continue.request.prompt =~ "Do not repeat it automatically"
+    assert continue.request.prompt =~ "> Deploy it"
   end
 
   test "a run the runtime never started is replayed with its original prompt", ctx do

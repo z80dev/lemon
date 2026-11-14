@@ -130,20 +130,37 @@ defmodule LemonCore.Drain do
   end
 
   @doc """
-  Install a SIGTERM trap that drains before stopping, when
+  Make SIGTERM drain before stopping, when
   `config :lemon_core, LemonCore.Drain, signal_trap: true`.
+
+  OTP's `:erl_signal_handler` stops the VM on SIGTERM no matter what other
+  handlers (including `System.trap_signal/3`) do, so it is swapped for
+  `LemonCore.Drain.SignalHandler`, which keeps its behaviour for every other
+  signal.
   """
   @spec maybe_install_signal_trap() :: :ok
   def maybe_install_signal_trap do
     if config(:signal_trap, false) do
-      case System.trap_signal(:sigterm, __MODULE__, fn ->
-             request_stop(reason: :sigterm)
-             :ok
-           end) do
-        {:ok, _id} -> :ok
-        {:error, :already_registered} -> :ok
-        {:error, reason} -> Logger.warning("SIGTERM drain trap unavailable: #{inspect(reason)}")
-      end
+      handlers = :gen_event.which_handlers(:erl_signal_server)
+
+      result =
+        cond do
+          LemonCore.Drain.SignalHandler in handlers ->
+            :ok
+
+          :erl_signal_handler in handlers ->
+            :gen_event.swap_handler(
+              :erl_signal_server,
+              {:erl_signal_handler, :swap},
+              {LemonCore.Drain.SignalHandler, []}
+            )
+
+          true ->
+            :gen_event.add_handler(:erl_signal_server, LemonCore.Drain.SignalHandler, [])
+        end
+
+      if result != :ok,
+        do: Logger.warning("SIGTERM drain handler unavailable: #{inspect(result)}")
     end
 
     :ok

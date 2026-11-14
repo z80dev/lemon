@@ -208,6 +208,8 @@ defmodule LemonRouter.SurfaceManager do
 
             _ ->
               case CompactionTrigger.extract_completed_ok_and_error(event) do
+                # A drain pause is not a failure; the run continues after the restart.
+                {false, :runtime_restart} -> RetryHandler.format_run_error(:runtime_restart)
                 {false, err} -> "Run failed: #{RetryHandler.format_run_error(err)}"
                 _ -> nil
               end

@@ -232,28 +232,30 @@ defmodule LemonRouter.RestartCarryover do
   defp still_active_item(_active, _known), do: []
 
   defp interrupted_item(%Submission{} = submission, :clean),
-    do: [continue_item(submission, continue_prompt(:clean), :clean)]
+    do: [continue_item(submission, :clean)]
 
   defp interrupted_item(%Submission{} = submission, {:uncertain, _titles} = outcome),
-    do: [continue_item(submission, continue_prompt(outcome), :uncertain)]
+    do: [continue_item(submission, outcome)]
 
   defp interrupted_item(%Submission{} = submission, :not_started), do: [replay_item(submission)]
   defp interrupted_item(_submission, _finished_or_unknown), do: []
 
-  defp continue_item(%Submission{request: %RunRequest{} = request} = submission, prompt, outcome) do
+  defp continue_item(%Submission{request: %RunRequest{} = request} = submission, outcome) do
     meta =
       (request.meta || %{})
       |> Map.drop([:disable_auto_resume, "disable_auto_resume"])
       |> Map.put(:restart_continuation, true)
 
+    prompt = continue_prompt(outcome, request.prompt)
+
     carry(%RunRequest{request | prompt: prompt, images: [], queue_mode: :collect, meta: meta},
       kind: :continue,
-      outcome: outcome,
+      outcome: outcome_kind(outcome),
       interrupted_run_id: submission.run_id
     )
   end
 
-  defp continue_item(_submission, _prompt, _outcome), do: :skipped
+  defp continue_item(_submission, _outcome), do: :skipped
 
   defp replay_item(%Submission{request: %RunRequest{} = request} = submission),
     do: carry(request, kind: :replay, outcome: :queued, interrupted_run_id: submission.run_id)
@@ -276,25 +278,44 @@ defmodule LemonRouter.RestartCarryover do
     end
   end
 
+  @quoted_request_bytes 2_000
+
   @doc false
-  def continue_prompt(:clean) do
-    "[Lemon restarted while you were working on this request. Your progress in this " <>
-      "conversation was saved. Continue the task from where you stopped and do not " <>
-      "redo steps that already finished.]"
+  # The interrupted request is quoted because a run stopped during its first
+  # model call may not have written it to the session journal yet.
+  def continue_prompt(outcome, original_prompt) do
+    notice(outcome) <> "\n\nThe interrupted request was:\n" <> quote_request(original_prompt)
   end
 
-  def continue_prompt({:uncertain, titles}) do
+  defp notice(:clean) do
+    "[Lemon restarted while you were working on the request below. Your progress in this " <>
+      "conversation was saved. Continue the task from where you stopped and do not redo " <>
+      "steps that already finished.]"
+  end
+
+  defp notice({:uncertain, titles}) do
     listed =
       case titles do
         [] -> "an action"
         titles -> Enum.map_join(titles, "; ", &"`#{&1}`")
       end
 
-    "[Lemon restarted while #{listed} was still running. Its outcome is unknown: it " <>
-      "may have finished, partly run, or not run at all. Do not repeat it automatically. " <>
-      "Check the current state where you can, tell the user what was interrupted, and " <>
-      "ask before redoing anything that changes state.]"
+    "[Lemon restarted while #{listed} was still running for the request below. Its " <>
+      "outcome is unknown: it may have finished, partly run, or not run at all. Do not " <>
+      "repeat it automatically. Check the current state where you can, tell the user what " <>
+      "was interrupted, and ask before redoing anything that changes state.]"
   end
+
+  defp quote_request(prompt) when is_binary(prompt) and prompt != "" do
+    text =
+      if byte_size(prompt) > @quoted_request_bytes,
+        do: String.slice(prompt, 0, @quoted_request_bytes) <> "…",
+        else: prompt
+
+    text |> String.split("\n") |> Enum.map_join("\n", &("> " <> &1))
+  end
+
+  defp quote_request(_prompt), do: "> (no text)"
 
   defp vm_independent?(term) when is_pid(term) or is_reference(term) or is_port(term),
     do: false
