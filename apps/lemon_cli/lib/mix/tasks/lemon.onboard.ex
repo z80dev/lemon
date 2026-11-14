@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Lemon.Onboard do
   import LemonCli.Onboarding.PromptUI, only: [normalize_input: 1, interactive_prompt_session?: 1]
   use Mix.Task
 
-  alias LemonCli.Onboarding.{LogSilencer, PromptUI, Providers, Runner}
+  alias LemonCli.Onboarding.{LogSilencer, Providers, Runner}
 
   @shortdoc "Top-level interactive provider onboarding"
   @moduledoc """
