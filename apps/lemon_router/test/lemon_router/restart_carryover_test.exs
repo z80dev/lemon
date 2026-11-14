@@ -154,17 +154,20 @@ defmodule LemonRouter.RestartCarryoverTest do
     assert item.request.prompt == "Summarize"
   end
 
-  test "requests holding process-bound terms are skipped, not persisted", ctx do
+  test "meta process handles are dropped; other process-bound terms skip the item", ctx do
     key = conversation()
+    outcomes = %{boundary: :clean, now: :clean}
+
+    :ok = submit(key, "Reply to me", outcomes, ctx.run_supervisor, meta: %{conn_pid: self()})
+    assert_receive {:started, _run_id}
 
     :ok =
-      submit(key, "Reply to me", %{boundary: :clean, now: :clean}, ctx.run_supervisor,
-        meta: %{reply_to: self()}
-      )
+      submit(key, "Call me back", outcomes, ctx.run_supervisor, meta: %{callback: fn -> :ok end})
 
-    assert_receive {:started, _run_id}
-    assert {:ok, %{skipped: 1, carried: 0}} = RestartCarryover.drain(:work, drain_ctx(0, 2_000))
-    assert {:ok, []} = Store.fetch_all(RestartCarryover.table())
+    assert {:ok, %{skipped: 1, carried: 1}} = RestartCarryover.drain(:work, drain_ctx(0, 2_000))
+    assert {:ok, [{_key, %{items: [continue]}}]} = Store.fetch_all(RestartCarryover.table())
+    assert continue.request.prompt =~ "> Reply to me"
+    refute Map.has_key?(continue.request.meta, :conn_pid)
   end
 
   test "an unknown replay outcome keeps the item under its fixed run ID for the next boot" do

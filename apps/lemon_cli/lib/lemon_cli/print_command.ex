@@ -90,8 +90,21 @@ defmodule LemonCli.PrintCommand do
               "text" ->
                 if is_binary(result["answer"]), do: IO.puts(result["answer"])
 
-                if result["ok"] != true,
-                  do: IO.puts(:stderr, "Error: #{result["error"] || "Agent run failed"}")
+                cond do
+                  result["ok"] == true ->
+                    :ok
+
+                  # LemonCore.Drain paused the run; the restarted runtime continues it.
+                  result["error"] in ["runtime_restart", ":runtime_restart"] ->
+                    IO.puts(
+                      :stderr,
+                      "Lemon restarted during this run; it continues in session #{session}. " <>
+                        "Follow it with `lemon tui --session #{session}`."
+                    )
+
+                  true ->
+                    IO.puts(:stderr, "Error: #{result["error"] || "Agent run failed"}")
+                end
 
               _ ->
                 IO.puts(Jason.encode!(result))

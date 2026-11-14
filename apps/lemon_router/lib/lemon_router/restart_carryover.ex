@@ -20,8 +20,10 @@ defmodule LemonRouter.RestartCarryover do
   Each item gets its run ID when it is persisted. `replay/0` runs after the
   next boot and submits every item under that fixed ID, so a crash during
   replay can never start the same item twice; a record is deleted once all of
-  its items are settled. Requests holding process-bound terms (pids,
-  references, ports, funs) cannot outlive the VM and are skipped and counted.
+  its items are settled. Pids, references and ports at the top level of request
+  meta (an originating connection, a reply target) are dropped: nothing is
+  behind them after the restart. A request holding any other process-bound
+  term (including funs) cannot outlive the VM and is skipped and counted.
   """
 
   @behaviour LemonCore.Drain
@@ -263,18 +265,29 @@ defmodule LemonRouter.RestartCarryover do
   defp replay_item(_submission), do: :skipped
 
   defp carry(%RunRequest{} = request, fields) do
-    meta = Map.drop(request.meta || %{}, @identity_meta_keys)
+    # Meta pids/refs/ports (an originating connection, a reply target) name
+    # processes of this VM; after the restart there is nobody behind them.
+    meta =
+      (request.meta || %{})
+      |> Map.drop(@identity_meta_keys)
+      |> Map.reject(fn {_key, value} ->
+        is_pid(value) or is_reference(value) or is_port(value)
+      end)
+
     request = %RunRequest{request | run_id: LemonCore.Id.run_id(), meta: meta}
 
-    if vm_independent?(request) do
-      Map.new(fields) |> Map.put(:request, request)
-    else
-      Logger.warning(
-        "Restart carryover skipped a request holding process-bound terms",
-        session_key: request.session_key
-      )
+    case bound_path(request) do
+      nil ->
+        Map.new(fields) |> Map.put(:request, request)
 
-      :skipped
+      path ->
+        Logger.warning(
+          "Restart carryover skipped a request holding a process-bound term at " <>
+            inspect(path, limit: 8),
+          session_key: request.session_key
+        )
+
+        :skipped
     end
   end
 
@@ -317,26 +330,43 @@ defmodule LemonRouter.RestartCarryover do
 
   defp quote_request(_prompt), do: "> (no text)"
 
-  defp vm_independent?(term) when is_pid(term) or is_reference(term) or is_port(term),
-    do: false
+  # nil when `term` survives a VM restart; otherwise the key path (keys and list
+  # indexes only) to the first pid, reference, port or fun.
+  defp bound_path(term)
+       when is_pid(term) or is_reference(term) or is_port(term) or is_function(term),
+       do: []
 
-  defp vm_independent?(term) when is_function(term), do: false
-  defp vm_independent?(%_{} = struct), do: struct |> Map.from_struct() |> vm_independent?()
+  defp bound_path(%_{} = struct), do: struct |> Map.from_struct() |> bound_path()
 
-  defp vm_independent?(term) when is_map(term),
-    do: Enum.all?(term, fn {k, v} -> vm_independent?(k) and vm_independent?(v) end)
+  defp bound_path(term) when is_map(term) do
+    Enum.find_value(term, fn {key, value} ->
+      with nil <- bound_path(key),
+           nil <- bound_path(value) do
+        nil
+      else
+        path -> [path_key(key) | path]
+      end
+    end)
+  end
 
-  defp vm_independent?(term) when is_list(term), do: list_independent?(term)
-
-  defp vm_independent?(term) when is_tuple(term),
-    do: term |> Tuple.to_list() |> vm_independent?()
-
-  defp vm_independent?(_term), do: true
+  defp bound_path(term) when is_tuple(term), do: term |> Tuple.to_list() |> list_path(0)
+  defp bound_path(term) when is_list(term), do: list_path(term, 0)
+  defp bound_path(_term), do: nil
 
   # Improper lists (iodata) are valid terms too.
-  defp list_independent?([]), do: true
-  defp list_independent?([head | tail]), do: vm_independent?(head) and list_independent?(tail)
-  defp list_independent?(tail), do: vm_independent?(tail)
+  defp list_path([], _index), do: nil
+
+  defp list_path([head | tail], index) do
+    case bound_path(head) do
+      nil -> list_path(tail, index + 1)
+      path -> [index | path]
+    end
+  end
+
+  defp list_path(tail, index), do: if(bound_path(tail), do: [index])
+
+  defp path_key(key) when is_atom(key) or is_binary(key) or is_integer(key), do: key
+  defp path_key(_key), do: :key
 
   defp persist(records) do
     recorded_at = System.system_time(:millisecond)
