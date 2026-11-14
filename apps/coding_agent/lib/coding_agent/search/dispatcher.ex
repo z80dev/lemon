@@ -3,8 +3,7 @@ defmodule CodingAgent.Search.Dispatcher do
   Capability-aware provider selection with bounded, deterministic fallback.
 
   The optional `:signal` aborts provider work without attempting fallback and is
-  passed to providers as `context.abort_signal`. With `:single_flight_key`, each
-  caller can leave independently; providers receive the shared flight signal.
+  passed to providers as `context.abort_signal`.
   Blocked callbacks get a short cooperative cleanup window before they are
   killed; provider termination is confirmed before the dispatcher returns.
 
@@ -16,7 +15,6 @@ defmodule CodingAgent.Search.Dispatcher do
   import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
   alias CodingAgent.Search.Registry
-  alias CodingAgent.Search.SingleFlight
 
   @default_timeout_ms 30_000
   @abort_poll_ms 50
@@ -28,29 +26,16 @@ defmodule CodingAgent.Search.Dispatcher do
           attempts: [map()]
         }
 
-  @spec run(:search | :extract, map(), keyword()) ::
+  @spec run(:extract, map(), keyword()) ::
           {:ok, map(), metadata()}
           | {:error, {:all_providers_failed, [map()]}}
           | {:error, {:provider_terminal, String.t(), term(), [map()]}}
           | {:error, String.t()}
-  def run(capability, request, opts \\ []) when capability in [:search, :extract] do
+  def run(:extract = capability, request, opts \\ []) do
     signal = Keyword.get(opts, :signal)
 
     with :ok <- check_abort(signal) do
-      case Keyword.get(opts, :single_flight_key) do
-        nil ->
-          do_run(capability, request, opts)
-
-        key ->
-          SingleFlight.run(
-            {capability, key},
-            fn flight_signal ->
-              do_run(capability, request, Keyword.put(opts, :signal, flight_signal))
-            end,
-            timeout_ms(opts),
-            signal: signal
-          )
-      end
+      do_run(capability, request, opts)
     end
   end
 

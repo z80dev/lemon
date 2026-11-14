@@ -31,25 +31,13 @@ defmodule CodingAgent.ResourceLoader do
   loaded once, including symlink or hard-link aliases. `@path` imports are
   expanded by `CodingAgent.ResourceLoader.AtImports`.
 
-  ## Resource Priorities
-
-  For prompts, themes and skills, the following priority order is used:
-  1. Project-local files (`.claude/`, `.lemon/`, or root)
-  2. Parent directories walking up to filesystem root
-  3. Home directory files (`~/.claude/`, `~/.lemon/agent/`)
-
   ## Example
 
-      # Load all instruction files for a project
-      instructions = CodingAgent.ResourceLoader.load_instructions("/path/to/project")
-
-      # Load agent definitions
-      agents = CodingAgent.ResourceLoader.load_agents("/path/to/project")
+      sections = CodingAgent.ResourceLoader.instruction_sections("/path/to/project")
   """
 
   alias CodingAgent.Config
   alias CodingAgent.ResourceLoader.AtImports
-  alias LemonSkills.Config, as: SkillConfig
 
   # Instruction file names read from each directory itself
   @root_instruction_files ["CLAUDE.md", "AGENTS.md", "GEMINI.md", "CLAUDE.local.md"]
@@ -73,42 +61,7 @@ defmodule CodingAgent.ResourceLoader do
   # ============================================================================
 
   @doc """
-  Load CLAUDE.md, AGENTS.md and the other instruction files.
-
-  Searches global home locations first, then ancestors from filesystem root
-  to cwd. Each ancestor includes its root instruction files and those in its
-  config subdirectories (see the module documentation).
-
-  Files are combined from general to specific, with source and scope headers
-  and an explicit scoped-precedence rule. Duplicate physical files appear once.
-
-  ## Parameters
-
-    * `cwd` - The current working directory
-
-  ## Returns
-
-  A string containing the combined content of all found instruction files,
-  with file headers indicating the source of each section.
-
-  ## Examples
-
-      instructions = CodingAgent.ResourceLoader.load_instructions("/home/user/project")
-      # Returns combined content with headers like:
-      # <!-- From: /home/user/.claude/CLAUDE.md -->
-      # ... global content ...
-      # <!-- From: /home/user/project/CLAUDE.md -->
-      # ... project content ...
-  """
-  @spec load_instructions(String.t()) :: String.t()
-  def load_instructions(cwd) do
-    cwd
-    |> instruction_sections()
-    |> Enum.map_join("\n\n", & &1.text)
-  end
-
-  @doc """
-  The pieces `load_instructions/1` joins with blank lines, each labelled for
+  Instruction sections, each labelled for
   context-usage accounting: the precedence header (category `:system_prompt`)
   followed by one `:context_files` section per instruction file. Labels carry
   only the file name and a coarse scope (`global`, `project`, `parent`), never
@@ -121,39 +74,6 @@ defmodule CodingAgent.ResourceLoader do
     cwd
     |> find_instruction_files()
     |> combined_sections(Path.expand(cwd))
-  end
-
-  @doc """
-  Load instruction files and return as a list with metadata.
-
-  Similar to `load_instructions/1` but returns structured data
-  instead of combined content.
-
-  ## Parameters
-
-    * `cwd` - The current working directory
-
-  ## Returns
-
-  A list of maps with `:path` and `:content` keys, in the same global-first,
-  ancestor-root-to-cwd order as `load_instructions/1`, deduplicated by file
-  identity. Content has `@path` imports expanded.
-
-  ## Examples
-
-      files = CodingAgent.ResourceLoader.load_instructions_list("/home/user/project")
-      # => [%{path: "/home/user/project/CLAUDE.md", content: "..."}]
-  """
-  @spec load_instructions_list(String.t()) :: [%{path: String.t(), content: String.t()}]
-  def load_instructions_list(cwd) do
-    home = Config.home_dir()
-
-    cwd
-    |> find_instruction_files()
-    |> Enum.map(fn path ->
-      %{path: path, content: read_instruction_file(path, home)}
-    end)
-    |> Enum.reject(fn %{content: content} -> content == "" end)
   end
 
   @doc """
@@ -170,81 +90,6 @@ defmodule CodingAgent.ResourceLoader do
       Enum.any?(@subdir_instruction_files, fn {subdir, names} ->
         name in names and Path.basename(Path.dirname(path)) == subdir
       end)
-  end
-
-  # ============================================================================
-  # Agent Definitions
-  # ============================================================================
-
-  @doc """
-  Load AGENTS.md for agent definitions.
-
-  AGENTS.md files can define custom agent personas, tool configurations,
-  and workflow instructions.
-
-  ## Parameters
-
-    * `cwd` - The current working directory
-
-  ## Returns
-
-  A string containing all found AGENTS.md files, global first and then
-  ancestors from root to cwd, with the same scope and deduplication semantics
-  as `load_instructions/1`.
-
-  ## Examples
-
-      agents = CodingAgent.ResourceLoader.load_agents("/home/user/project")
-  """
-  @spec load_agents(String.t()) :: String.t()
-  def load_agents(cwd) do
-    cwd
-    |> find_specific_files(["AGENTS.md"])
-    |> combined_sections(Path.expand(cwd))
-    |> Enum.map_join("\n\n", & &1.text)
-  end
-
-  # ============================================================================
-  # Prompt Loading
-  # ============================================================================
-
-  @doc """
-  Load prompt files from standard locations.
-
-  Prompts are loaded from:
-  - Project-local prompts (`.lemon/prompts/`)
-  - Global prompts (`~/.lemon/agent/prompts/`)
-
-  ## Parameters
-
-    * `cwd` - The current working directory
-
-  ## Returns
-
-  A map where keys are prompt names (filename without extension)
-  and values are the prompt content.
-
-  ## Examples
-
-      prompts = CodingAgent.ResourceLoader.load_prompts("/home/user/project")
-      # => %{"review" => "...", "refactor" => "..."}
-  """
-  @spec load_prompts(String.t()) :: %{String.t() => String.t()}
-  def load_prompts(cwd) do
-    prompt_dirs = [
-      Path.join([cwd, ".lemon", "prompts"]),
-      Path.join([cwd, ".claude", "prompts"]),
-      Config.prompts_dir()
-    ]
-
-    prompt_dirs
-    |> Enum.filter(&File.dir?/1)
-    |> Enum.flat_map(&list_prompt_files/1)
-    |> Enum.reduce(%{}, fn path, acc ->
-      name = Path.basename(path, Path.extname(path))
-      # First found wins (project-local takes precedence)
-      Map.put_new(acc, name, read_file_safe(path))
-    end)
   end
 
   @doc """
@@ -294,164 +139,6 @@ defmodule CodingAgent.ResourceLoader do
   end
 
   # ============================================================================
-  # Theme Loading
-  # ============================================================================
-
-  @doc """
-  Load theme configuration by name.
-
-  Themes define UI colors and styling. They are loaded from:
-  - Project-local themes (`.lemon/themes/`)
-  - Global themes (`~/.lemon/agent/themes/`)
-
-  ## Parameters
-
-    * `name` - The theme name
-
-  ## Returns
-
-    * `{:ok, theme_config}` - The parsed theme configuration
-    * `{:error, :not_found}` - If the theme doesn't exist
-    * `{:error, reason}` - If parsing fails
-
-  ## Examples
-
-      {:ok, theme} = CodingAgent.ResourceLoader.load_theme("dark")
-  """
-  @spec load_theme(String.t()) :: {:ok, map()} | {:error, :not_found | term()}
-  def load_theme(name) do
-    theme_dirs = [
-      Path.join(Config.agent_dir(), "themes")
-    ]
-
-    result =
-      for dir <- theme_dirs,
-          path = Path.join(dir, "#{name}.json"),
-          File.regular?(path) do
-        path
-      end
-      |> List.first()
-
-    case result do
-      nil ->
-        {:error, :not_found}
-
-      path ->
-        case File.read(path) do
-          {:ok, content} ->
-            case Jason.decode(content) do
-              {:ok, theme} -> {:ok, theme}
-              {:error, reason} -> {:error, {:parse_error, reason}}
-            end
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-    end
-  end
-
-  # ============================================================================
-  # Skills Loading
-  # ============================================================================
-
-  @doc """
-  Load skill definitions from standard locations.
-
-  Skills are reusable agent capabilities defined in markdown files.
-  They are loaded from:
-  - Project-local skills (`.lemon/skill/*/SKILL.md`)
-  - Global skills (`~/.lemon/agent/skill/*/SKILL.md`)
-  - Harness-compatible global skills (`~/.agents/skills/*/SKILL.md`)
-
-  ## Parameters
-
-    * `cwd` - The current working directory
-
-  ## Returns
-
-  A map where keys are skill names and values are skill content.
-
-  ## Examples
-
-      skills = CodingAgent.ResourceLoader.load_skills("/home/user/project")
-      # => %{"commit" => "...", "review-pr" => "..."}
-  """
-  @spec load_skills(String.t()) :: %{String.t() => String.t()}
-  def load_skills(cwd) do
-    cwd
-    |> skill_dirs()
-    |> Enum.filter(&File.dir?/1)
-    |> Enum.flat_map(fn dir ->
-      dir
-      |> File.ls!()
-      |> Enum.map(&Path.join(dir, &1))
-      |> Enum.filter(&File.dir?/1)
-      |> Enum.map(&Path.join(&1, "SKILL.md"))
-      |> Enum.filter(&File.regular?/1)
-    end)
-    |> Enum.reduce(%{}, fn path, acc ->
-      key = Path.basename(Path.dirname(path))
-      Map.put_new(acc, key, read_file_safe(path))
-    end)
-  end
-
-  @doc """
-  Load a specific skill by name.
-
-  ## Parameters
-
-    * `cwd` - The current working directory
-    * `name` - The skill name
-
-  ## Returns
-
-    * `{:ok, content}` - The skill content if found
-    * `{:error, :not_found}` - If the skill doesn't exist
-
-  ## Examples
-
-      {:ok, skill} = CodingAgent.ResourceLoader.load_skill("/path/to/project", "commit")
-  """
-  @spec load_skill(String.t(), String.t()) :: {:ok, String.t()} | {:error, :not_found}
-  def load_skill(cwd, name) do
-    result =
-      for dir <- skill_dirs(cwd),
-          path = Path.join([dir, name, "SKILL.md"]),
-          File.regular?(path) do
-        path
-      end
-      |> List.first()
-
-    case result do
-      nil -> {:error, :not_found}
-      path -> {:ok, read_file_safe(path)}
-    end
-  end
-
-  # ============================================================================
-  # Utility Functions
-  # ============================================================================
-
-  @doc """
-  Check if a resource file exists.
-
-  ## Parameters
-
-    * `cwd` - The current working directory
-    * `filename` - The filename to look for
-
-  ## Returns
-
-  `true` if the file exists in any of the searched locations.
-  """
-  @spec resource_exists?(String.t(), String.t()) :: boolean()
-  def resource_exists?(cwd, filename) do
-    cwd
-    |> find_specific_files([filename])
-    |> Enum.any?()
-  end
-
-  # ============================================================================
   # Private Functions
   # ============================================================================
 
@@ -459,12 +146,6 @@ defmodule CodingAgent.ResourceLoader do
   @spec find_instruction_files(String.t()) :: [String.t()]
   defp find_instruction_files(cwd) do
     find_files(cwd, @root_instruction_files, nil)
-  end
-
-  # Find specific file names in all search locations
-  @spec find_specific_files(String.t(), [String.t()]) :: [String.t()]
-  defp find_specific_files(cwd, filenames) do
-    find_files(cwd, filenames, filenames)
   end
 
   # Global sources first, then each ancestor from root to cwd: its root files,
@@ -651,27 +332,4 @@ defmodule CodingAgent.ResourceLoader do
     end
   end
 
-  # Skill directories in precedence order.
-  @spec skill_dirs(String.t()) :: [String.t()]
-  defp skill_dirs(cwd) do
-    [
-      Path.join([cwd, ".lemon", "skill"]),
-      Path.join([Config.agent_dir(), "skill"]),
-      SkillConfig.harness_global_skills_dir()
-    ]
-    |> Enum.uniq()
-  end
-
-  # List prompt files in a directory
-  @spec list_prompt_files(String.t()) :: [String.t()]
-  defp list_prompt_files(dir) do
-    patterns = [
-      Path.join(dir, "*.md"),
-      Path.join(dir, "*.txt")
-    ]
-
-    patterns
-    |> Enum.flat_map(&Path.wildcard/1)
-    |> Enum.filter(&File.regular?/1)
-  end
 end

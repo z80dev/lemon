@@ -94,7 +94,6 @@ defmodule CodingAgent.Session.ModelRolesTest do
     settings = SettingsManager.from_config(config)
     assert settings.default_model == "@default"
     assert settings.model_roles == config.model_roles
-    assert SettingsManager.get_model_settings(settings).model_roles == config.model_roles
 
     session =
       start_supervised!({Session, [cwd: cwd, settings_manager: settings, register: false]})

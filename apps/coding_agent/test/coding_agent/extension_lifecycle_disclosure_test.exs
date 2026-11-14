@@ -306,7 +306,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
       assert "media_status" in names(legacy.tools)
       refute legacy.tool_disclosure.active
 
-      kept = MapSet.new(ToolDisclosure.coding_core() ++ ["browser_tabs", "caller_extra"])
+      kept = MapSet.new(~w(read write edit patch ls find grep ast_grep lsp_diagnostics fs_checkpoint bash bash_output kill_process process_input websearch webfetch read_skill recall todo ask checkpoint rewind task wait agent_message parent_question) ++ ["browser_tabs", "caller_extra"])
       {exposed, deferred} = Enum.split_with(legacy.tools, &MapSet.member?(kept, &1.name))
 
       # The kept tools are exactly the legacy ones, same order, same schemas;

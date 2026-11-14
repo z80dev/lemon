@@ -76,14 +76,6 @@ defmodule CodingAgent.InternalUrls do
     end
   end
 
-  @doc "Parses a notes URL using the notes protocol handler."
-  @spec parse(String.t()) :: {:ok, map()} | {:error, atom()}
-  def parse("notes://" <> _ = uri) do
-    NotesProtocol.parse_notes_url(uri)
-  end
-
-  def parse(_), do: {:error, :unknown_protocol}
-
   defp skill_reference(reference) do
     with true <- String.valid?(reference),
          false <- Regex.match?(~r/[\p{Cc}\p{Cf}?#]/u, reference),

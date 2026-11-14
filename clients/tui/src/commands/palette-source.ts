@@ -1,6 +1,6 @@
 /**
  * Palette data comes from the live command registry and native Lemon resources.
- * Prompt precedence/extensions mirror CodingAgent.ResourceLoader.load_prompts;
+ * Prompt precedence/extensions mirror CodingAgent.ResourceLoader.load_prompt;
  * skill roots mirror LemonSkills.Config (including its isolation overrides);
  * file command roots mirror CodingAgent.Commands.
  * Files are local to the TUI, not an assertion about a remote daemon's readiness.
