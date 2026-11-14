@@ -8,7 +8,8 @@ defmodule CodingAgent.ProcessSession do
     process exits)
   - Incremental reads (`read_output/1`) with a per-process read cursor
   - Stdin writing support
-  - Process kill support
+  - Process kill support; the owned process group is also SIGKILLed when the
+    session terminates while its root is still running (owner death does the same)
   - Exit status tracking
   - Integration with ProcessStore for persistence
 
@@ -172,6 +173,9 @@ defmodule CodingAgent.ProcessSession do
 
   @impl true
   def init({process_id, opts}) do
+    # Trap exits so `terminate/2` runs on supervisor shutdown and stops the group.
+    Process.flag(:trap_exit, true)
+
     case Keyword.get(opts, :launch_fingerprint) do
       nil ->
         init_process(process_id, opts)
@@ -570,6 +574,10 @@ defmodule CodingAgent.ProcessSession do
       end
     end
 
+    # A live workload must not outlive its session (supervisor shutdown, crash
+    # unwinding or an explicit stop). Port.close below only closes the pipes.
+    stop_live_workload(state)
+
     # Ensure port is closed
     if state.port do
       try do
@@ -584,6 +592,17 @@ defmodule CodingAgent.ProcessSession do
 
     :ok
   end
+
+  # Signals the verified, owned group only while its root still runs. After root
+  # exit, surviving members are deliberately retained as an outcome-unknown
+  # witness for later cancellation rather than silently killed here.
+  defp stop_live_workload(%{status: status, root_exited: false, workload_identity: identity})
+       when status in [:running, :killing] and is_map(identity) do
+    LemonCore.ProcessGroup.signal_workload_group(identity, :sigkill, false)
+    :ok
+  end
+
+  defp stop_live_workload(_state), do: :ok
 
   # Private Functions
 

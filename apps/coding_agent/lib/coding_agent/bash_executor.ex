@@ -1,8 +1,13 @@
 defmodule CodingAgent.BashExecutor do
   @moduledoc """
   Handles streaming shell command execution with output sanitization,
-  truncation, and abort signal support. A Port-owning guardian kills shell
-  descendants if the tool worker exits, including forced cancellation/crashes.
+  truncation, and abort signal support. The shell runs as leader of its own
+  process group (an Erlang Port child is a group leader). A Port-owning guardian
+  stops that whole group (SIGTERM, bounded grace, SIGKILL) if the tool worker
+  exits, including forced cancellation/crashes, and the same group stop serves
+  abort and timeout. Descendants reparented to init stay in the group and are
+  reached; a `pgrep -P` descendant walk remains only as a fallback for processes
+  that deliberately left the group (for example behind a PTY wrapper's session).
   UTF-8 is decoded across stream chunks; invalid bytes do not discard later
   output. Large output is archived privately, and only bounded head and tail
   windows are read back into memory when execution completes.
@@ -44,6 +49,8 @@ defmodule CodingAgent.BashExecutor do
   # explicitly (or abort via AbortSignal).
   @default_timeout :infinity
   @default_max_lines 2000
+  # Grace between SIGTERM and SIGKILL when stopping a command's process group.
+  @term_grace_ms 500
 
   # ANSI escape sequence pattern
   @ansi_regex ~r/\e\[[0-9;]*[a-zA-Z]/
@@ -156,8 +163,11 @@ defmodule CodingAgent.BashExecutor do
   end
 
   # The guardian, not the killable tool worker, owns the Port. If the worker
-  # disappears, the shell is still alive while we enumerate/kill descendants.
-  # Closing a worker-owned Port first would orphan them before we could find them.
+  # disappears, the shell may still be alive while its process group is
+  # signalled. The shell is the leader of its own process group, so the group
+  # (SIGTERM, bounded grace, SIGKILL) reaches backgrounded children that were
+  # reparented to init, which a parent-child walk cannot see. Closing a
+  # worker-owned Port first would orphan them before we could signal.
   defp start_guarded_port(path, opts, use_pty) do
     caller = self()
     ref = make_ref()
@@ -200,12 +210,12 @@ defmodule CodingAgent.BashExecutor do
         Process.demonitor(monitor, [:flush])
 
       {:DOWN, ^monitor, :process, ^caller, _reason} ->
-        if Port.info(port) && os_pid, do: kill_process_tree(os_pid)
+        if Port.info(port) && os_pid, do: terminate_process_tree(os_pid)
         safe_close_port(port)
 
       :finish ->
         Process.demonitor(monitor, [:flush])
-        if Port.info(port) && os_pid, do: kill_process_tree(os_pid)
+        if Port.info(port) && os_pid, do: terminate_process_tree(os_pid)
         safe_close_port(port)
 
       {:EXIT, ^port, reason} ->
@@ -307,7 +317,7 @@ defmodule CodingAgent.BashExecutor do
   # Kill the process tree, keep any output already delivered to the mailbox
   # (partial output is part of an aborted/timed-out result), then close the port.
   defp stop_process(state) do
-    if state.os_pid, do: kill_process_tree(state.os_pid)
+    if state.os_pid, do: terminate_process_tree(state.os_pid)
     state = drain_output(state)
 
     try do
@@ -612,44 +622,70 @@ defmodule CodingAgent.BashExecutor do
   end
 
   @doc """
-  Kill a process and all of its descendants.
+  Kill a process and all of its descendants immediately.
 
-  On Unix, the descendant tree is collected with `pgrep -P` before signalling,
-  so children of `bash -c` (a `sleep`, a test runner) do not outlive the
-  shell. The process group is signalled as well. `signal` is `:sigkill`
-  (default) or `:sigterm`. On Windows, uses `taskkill /T` to kill the tree.
+  On Unix the process is the leader of its own process group (an Erlang Port
+  child is started as a group leader), so the whole group `-os_pid` is
+  signalled. That covers descendants reparented to init after their parent exited
+  and processes forked while we were signalling, neither of which a recursive
+  `pgrep -P` walk can see. The walk is kept only as a fallback for descendants
+  that deliberately left the group (for example behind a PTY wrapper's session);
+  it is collected before signalling. `signal` is `:sigkill` (default) or
+  `:sigterm`. On Windows, uses `taskkill /T` to kill the tree.
   """
   @spec kill_process_tree(os_pid :: integer(), signal :: :sigkill | :sigterm) :: :ok
   def kill_process_tree(os_pid, signal \\ :sigkill) when is_integer(os_pid) do
     case :os.type() do
+      {:unix, _} when os_pid <= 1 ->
+        :ok
+
       {:unix, _} ->
-        signal_number = if signal == :sigterm, do: 15, else: 9
-        pids = [os_pid | descendant_pids(os_pid)] |> Enum.map_join(" ", &Integer.to_string/1)
-
-        command =
-          "kill -#{signal_number} -#{os_pid} 2>/dev/null; kill -#{signal_number} #{pids} 2>/dev/null"
-
-        try do
-          # Every pid is an integer (guard + pgrep parse); shell kill syntax is deliberate.
-          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
-          :os.cmd(String.to_charlist(command))
-        catch
-          _, _ -> :ok
-        end
-
+        escapees = descendant_pids(os_pid)
+        LemonCore.ProcessGroup.signal_group(os_pid, signal)
+        LemonCore.ProcessGroup.signal_pids(escapees, signal)
         :ok
 
       {:win32, _} ->
-        try do
-          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
-          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
-          :os.cmd(~c"taskkill /F /T /PID #{os_pid}")
-        catch
-          _, _ -> :ok
-        end
-
-        :ok
+        taskkill_tree(os_pid)
     end
+  end
+
+  @doc """
+  Gracefully stop a process and all of its descendants.
+
+  On Unix: SIGTERM to the process group (and to descendants that left it), a
+  bounded grace period (`grace_ms`, default #{@term_grace_ms}) polling for the group to
+  empty, then SIGKILL to the group until it is empty. On Windows this is
+  `kill_process_tree/1`.
+  """
+  @spec terminate_process_tree(os_pid :: integer(), grace_ms :: non_neg_integer()) :: :ok
+  def terminate_process_tree(os_pid, grace_ms \\ @term_grace_ms) when is_integer(os_pid) do
+    case :os.type() do
+      {:unix, _} when os_pid <= 1 ->
+        :ok
+
+      {:unix, _} ->
+        escapees = descendant_pids(os_pid)
+        LemonCore.ProcessGroup.signal_pids(escapees, :sigterm)
+        LemonCore.ProcessGroup.terminate(os_pid, grace_ms: grace_ms)
+        LemonCore.ProcessGroup.signal_pids(escapees, :sigkill)
+        :ok
+
+      {:win32, _} ->
+        taskkill_tree(os_pid)
+    end
+  end
+
+  defp taskkill_tree(os_pid) do
+    try do
+      # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+      # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
+      :os.cmd(~c"taskkill /F /T /PID #{os_pid}")
+    catch
+      _, _ -> :ok
+    end
+
+    :ok
   end
 
   defp descendant_pids(os_pid) do

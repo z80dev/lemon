@@ -679,6 +679,90 @@ defmodule CodingAgent.ProcessSessionTest do
     end
   end
 
+  if match?({:unix, _}, :os.type()) do
+    describe "process group cleanup" do
+      # The inner `sh` records the child's pid and exits at once, orphaning the
+      # `sleep`; the outer shell stays alive so the session is still running.
+      defp orphaning_command(pid_file),
+        do: "sh -c 'sleep 300 & echo $! > \"$0\"' '#{pid_file}'; sleep 300"
+
+      defp await_child_pid(pid_file) do
+        assert_eventually(
+          fn ->
+            with {:ok, content} <- File.read(pid_file),
+                 {pid, ""} <- Integer.parse(String.trim(content)) do
+              pid
+            else
+              _ -> false
+            end
+          end,
+          timeout: 5_000,
+          message: "child pid was never recorded"
+        )
+
+        pid_file |> File.read!() |> String.trim() |> String.to_integer()
+      end
+
+      # `kill -0` succeeds for zombies, which are already dead for our purposes.
+      defp os_alive?(pid) do
+        pid = Integer.to_string(pid)
+
+        case System.cmd("kill", ["-0", pid], stderr_to_stdout: true) do
+          {_, 0} ->
+            {stat, _} = System.cmd("ps", ["-o", "stat=", "-p", pid], stderr_to_stdout: true)
+            not String.starts_with?(String.trim(stat), "Z")
+
+          _ ->
+            false
+        end
+      end
+
+      defp await_gone(pid) do
+        assert_eventually(fn -> not os_alive?(pid) end,
+          timeout: 5_000,
+          message: "pid #{pid} survived"
+        )
+      end
+
+      @tag :tmp_dir
+      test "stopping a running session kills reparented children", %{
+        process_id: process_id,
+        tmp_dir: dir
+      } do
+        pid_file = Path.join(dir, "child.pid")
+
+        {:ok, _pid} =
+          ProcessSession.start_link(command: orphaning_command(pid_file), process_id: process_id)
+
+        child = await_child_pid(pid_file)
+        assert os_alive?(child)
+
+        assert :ok = ProcessSession.stop(process_id)
+        await_gone(child)
+      end
+
+      @tag :tmp_dir
+      test "owner death kills reparented children", %{process_id: process_id, tmp_dir: dir} do
+        pid_file = Path.join(dir, "child.pid")
+        owner = spawn(fn -> Process.sleep(:infinity) end)
+
+        {:ok, _pid} =
+          ProcessSession.start_link(
+            command: orphaning_command(pid_file),
+            process_id: process_id,
+            owner_pid: owner
+          )
+
+        child = await_child_pid(pid_file)
+        assert os_alive?(child)
+
+        Process.exit(owner, :kill)
+        await_status(process_id, [:killed])
+        await_gone(child)
+      end
+    end
+  end
+
   # ============================================================================
   # Working directory
   # ============================================================================
