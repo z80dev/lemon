@@ -38,6 +38,27 @@ defmodule LemonAi.ProviderRegistryComprehensiveTest do
     :ok
   end
 
+  test "contended mutation raises instead of reporting a registration that never happened" do
+    lock = {{ProviderRegistry, :mutation_lock}, self()}
+    assert :global.set_lock(lock, [node()], 0)
+
+    try do
+      contender =
+        Task.async(fn ->
+          assert_raise RuntimeError, "Provider registry lock unavailable", fn ->
+            ProviderRegistry.register(:test_api, TestProvider1)
+          end
+        end)
+
+      Task.await(contender, 10_000)
+      assert ProviderRegistry.get(:test_api) == {:error, :not_found}
+    after
+      :global.del_lock(lock, [node()])
+    end
+
+    assert :ok = ProviderRegistry.register(:test_api, TestProvider1)
+  end
+
   defp snapshot_registry do
     ProviderRegistry.list()
     |> Enum.reduce(%{}, fn api_id, acc ->

@@ -88,6 +88,7 @@ defmodule LemonAi.Auth.OmpAuthBroker do
           :invalid_broker_url
           | :missing_broker_token
           | :broker_unreachable
+          | :broker_unavailable
           | :broker_unauthorized
           | :broker_not_found
           | :broker_http_error
@@ -504,7 +505,10 @@ defmodule LemonAi.Auth.OmpAuthBroker do
     do: {endpoint.url, :crypto.hash(:sha256, endpoint.token)}
 
   defp single_flight(key, fun) do
-    :global.trans({{__MODULE__, key}, self()}, fun, [node()])
+    case :global.trans({{__MODULE__, key}, self()}, fun, [node()], 3) do
+      :aborted -> {:error, :broker_unavailable}
+      result -> result
+    end
   end
 
   # ---------------------------------------------------------------------------

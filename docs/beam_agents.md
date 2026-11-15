@@ -65,6 +65,39 @@ recovers a process, not arbitrary in-flight remote effects. Durable lifecycle
 stores and explicit idempotency/lease contracts provide those guarantees where
 implemented.
 
+## Lock conventions
+
+An in-VM mutex uses
+`:global.trans({resource_key, self()}, callback, [node()], retries)`. The first
+element is the shared resource; the second is the requesting process, not a
+constant or a path. Otherwise independent callers can be mistaken for one
+reentrant requester. These locks coordinate only this VM, never named execution
+nodes or independent runtimes sharing files.
+
+All source calls specify `[node()]` and finite non-negative integer retries.
+The ordinary caller policy is three acquisition retries, matching the existing
+provider-management configuration lock. This is a bounded contention policy,
+not a measured latency target or a callback execution deadline. The webhook
+maintenance sweep uses zero retries because another sweep already doing the
+work is sufficient; it must not delay ingress waiting for that owner.
+`Lemon.Reload` also defaults to zero (fail fast), but callers may explicitly
+choose another finite non-negative retry count.
+
+Exhaustion returns `:aborted` before the callback runs. Translate it at the owning
+boundary into its existing safe error shape (`:lock_aborted` for kanban,
+`:idempotency_unavailable` for webhook admission, or the service's unavailable
+error). Registry APIs whose contract is `:ok` raise on failed acquisition rather
+than claim registration succeeded. Do not run the callback without the lock,
+fabricate success, or retry a callback's `:outcome_unknown` result. Retrying lock
+acquisition is not permission to repeat a side effect.
+
+`LemonCore.MutationLock` owns reentrant multi-key in-VM mutations; callers use
+its bounded acquisition and sorted key ordering rather than composing ad-hoc
+nested locks. Cross-process file mutations use `LemonCore.Service.Lock`;
+`LemonCore.Secrets.Lock` retains the secret-store transaction boundary.
+The source rule is checked structurally, including macro-generated calls, by
+`apps/lemon_core/test/lemon_core/quality/global_trans_contract_test.exs`.
+
 ## Verification
 
 Use [the canonical test lanes](testing.md) from the umbrella root. For runtime

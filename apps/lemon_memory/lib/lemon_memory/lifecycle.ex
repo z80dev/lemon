@@ -159,27 +159,36 @@ defmodule LemonMemory.Lifecycle do
     with :ok <- validate_digest(confirmation_digest),
          {:ok, identity} <- Project.scope(context),
          {:ok, selector} <- profile_selection(opts) do
-      :global.trans({{__MODULE__, server(opts), doc_id}, self()}, fn ->
-        with {:ok, doc} <- profile_document(context, doc_id, opts),
-             revision = store(opts).document_revision(doc),
-             true <-
-               secure_equal?(
-                 confirmation_digest,
-                 profile_confirmation(identity, doc_id, revision, selector)
-               ),
-             {:ok, status} <-
-               store(opts).delete_document_if_unchanged(server(opts), doc.doc_id, revision) do
-          case status do
-            :deleted -> {:ok, %{"deleted" => true, "id" => doc_id}}
-            :stale -> {:error, :stale}
-            :not_found -> {:error, :not_found}
+      :global.trans(
+        {{__MODULE__, server(opts), doc_id}, self()},
+        fn ->
+          with {:ok, doc} <- profile_document(context, doc_id, opts),
+               revision = store(opts).document_revision(doc),
+               true <-
+                 secure_equal?(
+                   confirmation_digest,
+                   profile_confirmation(identity, doc_id, revision, selector)
+                 ),
+               {:ok, status} <-
+                 store(opts).delete_document_if_unchanged(server(opts), doc.doc_id, revision) do
+            case status do
+              :deleted -> {:ok, %{"deleted" => true, "id" => doc_id}}
+              :stale -> {:error, :stale}
+              :not_found -> {:error, :not_found}
+            end
+          else
+            false -> {:error, :confirmation_mismatch}
+            {:error, reason} when is_atom(reason) -> {:error, reason}
+            _ -> {:error, :memory_unavailable}
           end
-        else
-          false -> {:error, :confirmation_mismatch}
-          {:error, reason} when is_atom(reason) -> {:error, reason}
-          _ -> {:error, :memory_unavailable}
-        end
-      end)
+        end,
+        [node()],
+        3
+      )
+      |> case do
+        :aborted -> {:error, :memory_unavailable}
+        result -> result
+      end
     end
   rescue
     _ -> {:error, :memory_unavailable}
@@ -405,27 +414,36 @@ defmodule LemonMemory.Lifecycle do
   def delete(doc_id, confirmation_digest, opts \\ []) do
     with :ok <- validate_doc_id(doc_id),
          :ok <- validate_digest(confirmation_digest) do
-      lock = {__MODULE__, doc_id}
+      lock = {__MODULE__, server(opts), doc_id}
 
-      :global.trans(lock, fn ->
-        with {:ok, doc} <- store(opts).get_document(server(opts), doc_id),
-             revision = store(opts).document_revision(doc),
-             expected = delete_confirmation(doc_id, revision),
-             true <- secure_equal?(expected, confirmation_digest),
-             {:ok, status} <-
-               store(opts).delete_document_if_unchanged(server(opts), doc_id, revision) do
-          case status do
-            :deleted -> {:ok, %{status: :deleted, document_id: doc_id}}
-            :not_found -> {:error, :not_found}
-            :stale -> {:error, :stale}
+      :global.trans(
+        {lock, self()},
+        fn ->
+          with {:ok, doc} <- store(opts).get_document(server(opts), doc_id),
+               revision = store(opts).document_revision(doc),
+               expected = delete_confirmation(doc_id, revision),
+               true <- secure_equal?(expected, confirmation_digest),
+               {:ok, status} <-
+                 store(opts).delete_document_if_unchanged(server(opts), doc_id, revision) do
+            case status do
+              :deleted -> {:ok, %{status: :deleted, document_id: doc_id}}
+              :not_found -> {:error, :not_found}
+              :stale -> {:error, :stale}
+            end
+          else
+            false -> {:error, :confirmation_mismatch}
+            {:error, :not_found} -> {:error, :not_found}
+            {:error, _} -> {:error, :memory_unavailable}
+            _ -> {:error, :memory_unavailable}
           end
-        else
-          false -> {:error, :confirmation_mismatch}
-          {:error, :not_found} -> {:error, :not_found}
-          {:error, _} -> {:error, :memory_unavailable}
-          _ -> {:error, :memory_unavailable}
-        end
-      end)
+        end,
+        [node()],
+        3
+      )
+      |> case do
+        :aborted -> {:error, :memory_unavailable}
+        result -> result
+      end
     end
   rescue
     _ -> {:error, :memory_unavailable}

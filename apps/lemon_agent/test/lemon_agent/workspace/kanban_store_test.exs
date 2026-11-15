@@ -12,6 +12,24 @@ defmodule LemonAgent.Workspace.KanbanStoreTest do
     :ok
   end
 
+  test "exhausted board acquisition preserves the lock error and does not lease a task" do
+    assert {:ok, board} = KanbanStore.create_board("Contended board")
+    assert {:ok, task} = KanbanStore.create_task(board.id, "Must not be leased")
+    lock = {{KanbanStore, board.id}, self()}
+    assert :global.set_lock(lock, [node()], 0)
+
+    try do
+      contender = Task.async(fn -> KanbanStore.lease_task(board.id, "contending-worker") end)
+      assert {:error, :lock_aborted} = Task.await(contender, 10_000)
+      assert KanbanStore.get_task(task.id) == task
+    after
+      :global.del_lock(lock, [node()])
+    end
+
+    assert {:ok, leased} = KanbanStore.lease_task(board.id, "successful-worker")
+    assert leased.id == task.id
+  end
+
   test "workflow checkpoint is lease-bound and cancellation cannot be cleared by late writes" do
     {:ok, board} = KanbanStore.create_board("Review gate", meta: %{"codingWorkflow" => %{}})
     {:ok, task} = KanbanStore.create_task(board.id, "Reviewed change")

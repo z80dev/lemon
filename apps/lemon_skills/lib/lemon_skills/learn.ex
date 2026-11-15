@@ -42,29 +42,38 @@ defmodule LemonSkills.Learn do
          :ok <- validate_digest(confirmation_digest) do
       lock = {__MODULE__, session_key(opts) <> "\0" <> draft_scope_key(opts)}
 
-      :global.trans(lock, fn ->
-        with {:ok, public, internal} <- build_plan(references, opts),
-             :ok <- require_digest(public, confirmation_digest),
-             :ok <- require_committable(public),
-             {:ok, skill_status, created_draft?} <- write_draft(internal, opts),
-             :ok <- write_memory(internal, created_draft?, opts) do
-          {:ok,
-           public
-           |> Map.put("status", "confirmed")
-           |> put_in(["memory", "status"], action_status(public["memory"]["action"]))
-           |> put_in(["skill", "status"], skill_status)}
-        else
-          {:memory_error, reason, true, draft_key} ->
-            _ = safe_draft_call(fn -> draft_store(opts).delete(draft_key, draft_opts(opts)) end)
-            safe_error(:memory_write_failed, reason)
+      :global.trans(
+        {lock, self()},
+        fn ->
+          with {:ok, public, internal} <- build_plan(references, opts),
+               :ok <- require_digest(public, confirmation_digest),
+               :ok <- require_committable(public),
+               {:ok, skill_status, created_draft?} <- write_draft(internal, opts),
+               :ok <- write_memory(internal, created_draft?, opts) do
+            {:ok,
+             public
+             |> Map.put("status", "confirmed")
+             |> put_in(["memory", "status"], action_status(public["memory"]["action"]))
+             |> put_in(["skill", "status"], skill_status)}
+          else
+            {:memory_error, reason, true, draft_key} ->
+              _ = safe_draft_call(fn -> draft_store(opts).delete(draft_key, draft_opts(opts)) end)
+              safe_error(:memory_write_failed, reason)
 
-          {:memory_error, reason, false, _draft_key} ->
-            safe_error(:memory_write_failed, reason)
+            {:memory_error, reason, false, _draft_key} ->
+              safe_error(:memory_write_failed, reason)
 
-          {:error, _} = error ->
-            error
-        end
-      end)
+            {:error, _} = error ->
+              error
+          end
+        end,
+        [node()],
+        3
+      )
+      |> case do
+        :aborted -> safe_error(:learn_unavailable, "Learning confirmation is already in progress")
+        result -> result
+      end
     end
   end
 

@@ -37,7 +37,16 @@ defmodule LemonAi.Auth.OmpToken do
         Enum.map(~w(HOME XDG_CONFIG_HOME PI_CODING_AGENT_DIR OMP_PROFILE), &System.get_env/1)
 
       key = {__MODULE__, executable, scope}
-      :global.trans({key, self()}, fn -> resolve_cached(key, executable, opts) end, [node()])
+
+      case :global.trans(
+             {key, self()},
+             fn -> resolve_cached(key, executable, opts) end,
+             [node()],
+             3
+           ) do
+        :aborted -> {:error, :omp_timeout}
+        result -> result
+      end
     end
   end
 
