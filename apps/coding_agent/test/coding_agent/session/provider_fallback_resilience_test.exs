@@ -91,6 +91,52 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
     refute_receive {:attempt, _}, 0
   end
 
+  test "committed output overflow stops the current provider without trying a fallback" do
+    parent = self()
+    primary = primary()
+
+    stream_fn = fn model, _, _ ->
+      send(parent, {:attempt_waiting, model.id, self()})
+
+      receive do
+        {:provider_stream, stream} -> {:ok, stream}
+      end
+    end
+
+    wrapped = wrap(stream_fn, model_settings())
+    {:ok, output} = wrapped.(primary, %Context{}, %StreamOptions{})
+    assert_receive {:attempt_waiting, "gpt-4", relay}, 1_000
+    capacity = LemonAi.EventStream.stats(output).max_queue
+
+    {:ok, provider} =
+      LemonAi.EventStream.start_link(max_queue: capacity + 1, timeout: :infinity)
+
+    {:ok, producer} =
+      Task.start(fn ->
+        receive do
+          :finish -> :ok
+        end
+      end)
+
+    monitor = Process.monitor(producer)
+    LemonAi.EventStream.attach_task(provider, producer)
+    on_exit(fn -> Process.exit(producer, :kill) end)
+    partial = message(primary, :stop, [%TextContent{text: "partial"}])
+
+    for _ <- 1..(capacity + 1) do
+      assert :ok = LemonAi.EventStream.push(provider, {:text_delta, 0, "partial", partial})
+    end
+
+    send(relay, {:provider_stream, provider})
+
+    assert {:error, %AssistantMessage{stop_reason: :error}} =
+             LemonAi.EventStream.result(output, 5_000)
+
+    assert_receive {:DOWN, ^monitor, :process, ^producer, _}, 1_000
+    refute_received {:attempt_waiting, _, _}
+    assert LemonAi.EventStream.stats(output).dropped > 0
+  end
+
   test "request-level cancellation is terminal even when its reason is timeout" do
     parent = self()
     primary = primary()

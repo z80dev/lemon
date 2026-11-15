@@ -672,6 +672,32 @@ rate-limit permit, and enforces the concurrency cap before invoking the provider
 Streaming responses come back through an `LemonAi.EventStream` GenServer with a bounded
 queue, backpressure, owner monitoring, and timeouts.
 
+This is also the implementation behind the published `LemonAgent.EventStream`
+facade; there is only one queue/lifecycle implementation. Provider completion
+uses `{:done, stop_reason, message}`, while list completion uses
+`{:agent_end, messages}`. `error/2` retains provider message results and `error/3`
+retains agent reason/partial-state results. Runner monitoring and `:resync`
+overflow fencing are supported alongside owner monitoring and result subscriptions.
+
+Synchronous `push/2` waits without a call timeout and returns
+`:ok | {:error, :overflow | :canceled}`; callers must handle rejection.
+`push!/2` finishes overflow with a terminal error and throws
+`{:event_stream_push_failed, reason}` to an explicit producer failure boundary.
+Async pushes retain their documented drop policy.
+
+The phase-2 direct-mailbox replacement is not implemented. The opt-in benchmark
+under `apps/lemon_ai/bench` compares one/two queue hops with a direct-send baseline.
+Record measurements and the #546 context before choosing a replacement; no
+latency gain or phase-2 decision is claimed by consolidation alone.
+
+```bash
+LEMON_EVENT_STREAM_BENCH=1 LEMON_BENCH_REVISION=<revision> MIX_ENV=test \
+  mix run --no-start apps/lemon_ai/bench/event_stream.exs
+```
+
+The benchmark prints runtime metadata and p50/p95 batch and per-event costs.
+Its direct-send baseline deliberately does not implement the lifecycle contract.
+
 ```
 LemonAi.stream/3  or  LemonAi.complete/3
   → LemonAi.ProviderRegistry          -- O(1) :persistent_term lookup by api_id
