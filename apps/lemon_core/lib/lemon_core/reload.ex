@@ -1,22 +1,67 @@
 defmodule Lemon.Reload do
   @moduledoc """
-  Runtime hot-reload helpers built on BEAM code loading primitives.
+  Low-level BEAM and extension reload API shipped in the `lemon_core` Hex package.
 
-  This module provides two distinct reload paths:
+  This is separate from `LemonCore.CodeReload`, which implements the
+  source-development `lemon reload` control-plane workflow. These functions do
+  not enforce that workflow's source-launcher or admin authorization checks.
+  Only invoke them with trusted modules, application names and source paths.
 
-  - beam-based reload (`reload_module/1`, `reload_app/1`) for modules with `.beam`
-    artifacts already on the code path
-  - source-based reload (`reload_extension/1`) for extension `.ex/.exs` files loaded
-    at runtime
+  ## Public entry points
 
-  It also exposes `reload_system/1` for orchestrated reload workflows under one
-  global lock: app reloads, extension reloads, and `code_change/3` callbacks for
-  live OTP processes.
+  All options default to `[]`; the corresponding lower arities remain public.
 
-  When callers pass `compile: true`, source-based runtimes first run `mix compile`
-  inside the live node before reloading modules from disk. Releases still support
-  BEAM reload, but explicit source compilation is unavailable there because Mix is
-  not running.
+  - `reload_module/2` soft-purges old code, then loads one module's BEAM from the
+    code path. It does not check whether the artifact changed.
+  - `soft_purge_module/2` only attempts to purge old code. It neither loads nor
+    deletes the current module. Extension-cache cleanup uses this operation.
+  - `reload_extension/2` compiles and loads an `.ex/.exs` source file, then
+    soft-purges its compiled modules. The extension loader uses this operation.
+  - `reload_app/2` attempts a BEAM reload of every module in an application's
+    loaded specification, not just changed modules. It does not restart the app.
+  - `reload_system/1` composes application reloads, extension compilation and
+    explicitly requested `:sys.change_code/4` calls.
+
+  `reload_module/2`, `reload_app/2` and `reload_system/1` retain their existing
+  documented package contract even though the umbrella's operator reload path
+  does not call them. They are not a release-upgrade or automatic state-migration
+  mechanism.
+
+  ## Results and safety
+
+  A completed attempt returns `{:ok, result}` even when `result.status` is
+  `:partial` or `:error`. Inspect `reloaded`, `skipped` and `errors`; errors take
+  precedence over skips when aggregating status. `duration_ms` is elapsed time
+  and `metadata` holds operation-specific details. Lock or orchestration failures
+  can instead return `{:error, reason}`.
+
+  BEAM reload skips modules with old code still in use (`reason: :in_use`); no
+  function hard-purges code or deliberately kills its users. Source compilation,
+  however, loads modules and runs arbitrary top-level code before checking old
+  code usage. An extension error or skip does not mean nothing changed. Operations
+  are not transactional and do not roll back earlier loads or side effects.
+  Existing closures may retain old code; these helpers do not rebuild sessions.
+  Configuration, dependencies, application/supervision changes and incompatible
+  process-state changes still need an explicit lifecycle or upgrade plan.
+
+  ## Common options
+
+  Each entry point uses `:global.trans/4` with `:lock_nodes` (default `[node()]`)
+  and `:lock_retries` (default `0`). An aborted lock returns
+  `{:error, :reload_in_progress}`.
+
+  For `reload_module/2`, `reload_app/2` and `reload_system/1`, `compile: true`
+  first runs `Mix.Task.run("compile", args)` inside the calling node.
+  `:compile_force` (falling back to `:force`, default `false`) adds `--force`.
+  This requires Mix to be available, otherwise it returns
+  `{:error, :mix_unavailable}`. A zero-arity `:compile_fn` may replace Mix and must
+  return `:ok` or `{:error, reason}`. Compilation failures return
+  `{:error, {:compile_failed, reason}}`; successful compilation adds `:compile`
+  metadata. The operator CLI instead compiles outside the live runtime.
+
+  Operations emit `[:lemon, :reload, :start]`, `:stop` or `:exception` telemetry.
+  Targets, exception terms and stacktraces can contain sensitive source details;
+  these events are not a redacted management projection.
   """
 
   @lock_key {__MODULE__, :reload_lock}
@@ -43,6 +88,12 @@ defmodule Lemon.Reload do
           metadata: map()
         }
 
+  @doc """
+  Soft-purges old code and loads `module` from its BEAM on the code path.
+
+  Supports the common lock and compilation options. Old code still in use is
+  reported in `skipped`; a load failure is reported in `errors`.
+  """
   @spec reload_module(module(), keyword()) :: {:ok, result()} | {:error, term()}
   def reload_module(module, opts \\ []) when is_atom(module) do
     with_reload_lock(opts, fn ->
@@ -55,6 +106,13 @@ defmodule Lemon.Reload do
     end)
   end
 
+  @doc """
+  Attempts to soft-purge `module` without loading or deleting its current code.
+
+  Supports only the common lock options. A successful purge reports the module
+  in `reloaded` with `metadata.operation == :soft_purge`; old code still in use
+  yields `status: :partial` and a skipped item with `reason: :in_use`.
+  """
   @spec soft_purge_module(module(), keyword()) :: {:ok, result()} | {:error, term()}
   def soft_purge_module(module, opts \\ []) when is_atom(module) do
     with_reload_lock(opts, fn ->
@@ -80,6 +138,15 @@ defmodule Lemon.Reload do
     end)
   end
 
+  @doc """
+  Compiles and loads a trusted extension source file, then soft-purges old code.
+
+  Supports only the common lock options; source compilation always runs.
+  `metadata.compiled_modules` lists modules on success. Empty or missing paths
+  and compilation exceptions produce an error-status result with
+  `metadata.error_message`. Compiler options are restored after compilation,
+  but loaded modules and top-level side effects are not rolled back on failure.
+  """
   @spec reload_extension(String.t(), keyword()) :: {:ok, result()} | {:error, term()}
   def reload_extension(path, opts \\ []) when is_binary(path) do
     with_reload_lock(opts, fn ->
@@ -89,6 +156,14 @@ defmodule Lemon.Reload do
     end)
   end
 
+  @doc """
+  Reloads every module in `Application.spec(app, :modules)` from the code path.
+
+  Supports the common lock and compilation options. Missing applications produce
+  an error-status result with `reason: :app_not_found`. Results aggregate module
+  loads, skips and errors; `metadata.module_count` records the specification's
+  module count. This does not reload application configuration or supervision.
+  """
   @spec reload_app(atom(), keyword()) :: {:ok, result()} | {:error, term()}
   def reload_app(app, opts \\ []) when is_atom(app) do
     with_reload_lock(opts, fn ->
@@ -102,7 +177,17 @@ defmodule Lemon.Reload do
   end
 
   @doc """
-  Orchestrate a full runtime reload under one global lock.
+  Composes application, extension and explicit process code-change attempts.
+
+  Supports the common lock and compilation options. Compilation runs once before
+  the individual operations. `metadata.results` contains their individual
+  reports; the top-level result aggregates loads, skips and errors.
+
+  Code-change targets must identify a local registered name or PID. The caller
+  is responsible for suspending/resuming the process and supplying compatible
+  state-upgrade arguments; this function does neither and discovers no targets
+  automatically. Non-running targets are skipped, and invalid targets or returned
+  code-change errors are reported. This is not used by `lemon reload`.
 
   ## Options
 
