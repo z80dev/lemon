@@ -532,6 +532,7 @@ defmodule CodingAgent.ProcessStore do
         :ok = :dets.insert(@dets_table, {process_id, tombstone, []})
         :ok = :dets.sync(@dets_table)
         :ets.insert(@table, {process_id, tombstone, []})
+        notify_change(process_id)
         :ok
       end
     end
@@ -541,6 +542,7 @@ defmodule CodingAgent.ProcessStore do
     with :ok <- remove_output(record) do
       :ets.delete(@table, process_id)
       if dets_open?(), do: :dets.delete(@dets_table, process_id)
+      notify_change(process_id)
       :ok
     end
   end
@@ -585,6 +587,8 @@ defmodule CodingAgent.ProcessStore do
           if dets_open?() do
             :ok = :dets.insert(@dets_table, {process_id, record, logs})
           end
+
+          notify_change(process_id)
 
           :ok
       end
@@ -661,6 +665,7 @@ defmodule CodingAgent.ProcessStore do
             :ok = :dets.insert(@dets_table, {process_id, updated, logs})
             :ok = :dets.sync(@dets_table)
             :ets.insert(@table, {process_id, updated, logs})
+            notify_change(process_id)
           else
             insert_record(process_id, updated, logs)
           end
@@ -671,6 +676,12 @@ defmodule CodingAgent.ProcessStore do
           :ok
       end
     end)
+  end
+
+  @doc false
+  def notify_change(process_id) do
+    LemonCore.Bus.broadcast("process_state:#{process_id}", {:process_state, :changed, process_id})
+    :ok
   end
 
   defp capture_open?(process_id, record) do

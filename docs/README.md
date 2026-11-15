@@ -76,6 +76,7 @@ overview and the app guides below, rather than keeping a second runtime catalog.
 - Architecture: [overview](architecture/overview.md), [app boundaries](architecture_boundaries.md),
   [BEAM lifecycle invariants](beam_agents.md), [bus events](platform/bus-events.md),
   [model selection](model-selection-decoupling.md) and [execution policy](execution-policy.md)
+- [omp port ledger](omp-port-ledger.md): upstream origins, native trust boundaries and package ownership
 - [Context](context.md), [bootstrap](assistant_bootstrap_contract.md),
   [long-running harnesses](long-running-agent-harnesses.md) and [parent questions](subagent-parent-questions.md)
 - [Hot reload](runtime-hot-reload.md), [telemetry](telemetry.md) and [error reporting](error-reporting.md)

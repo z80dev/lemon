@@ -39,6 +39,8 @@ defmodule LemonChannels.Application do
       LemonChannels.UserPromptSurface,
       LemonChannels.ApprovalPromptTracker,
       LemonChannels.Pairing,
+      # Volatile WhatsApp session overrides outlive command/transport callers
+      LemonChannels.Adapters.WhatsApp.ModelPolicyAdapter,
       # Adapter supervisor for channel adapters
       {DynamicSupervisor, strategy: :one_for_one, name: LemonChannels.AdapterSupervisor},
       # Optional inbound HTTP listener; binds a port only when configured

@@ -32,6 +32,23 @@ The suites test a contract, never an implementation's internals, and are safe by
 default: nothing makes a network call, delivers a message, or starts a real task
 unless you pass an explicit probe.
 
+## Store durability extensions
+
+`BackendCase` discovers optional callbacks from `LemonCore.Store.Backend`;
+extensions do not have to implement `confirm_durable/1` or `with_durability/2`.
+If exported, the suite checks that confirmation preserves data and usable state,
+and that a durability scope invokes its mutation once, preserves its return
+value and failures, and leaves the backend usable afterward.
+
+`with_durability/2` supplies the transaction-level barrier for Store mutations
+using `durable: true`; otherwise Store writes and then calls `sync/1`.
+`confirm_durable/1` confirms visible authority without an extra barrier on
+transaction-durable backends, or Store falls back to `sync/1` when it is absent.
+A failed durable mutation/barrier is `:outcome_unknown`, not permission to retry
+automatically. `sync/1` remains the explicit drain seal. The kit cannot simulate
+power loss: implementations must separately test their real durability barrier
+and restoration of ordinary write settings after success and failure.
+
 ## Gateway executor cutover
 
 Gateway no longer accepts extension-provided engines. Its engine behaviour, registry,

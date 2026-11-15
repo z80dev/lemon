@@ -646,19 +646,19 @@ defmodule LemonAi.Auth.AnthropicOAuth do
 
   # ── Claude Code fingerprint ────────────────────────────────────────────────
 
-  # Detected once per PATH: the newer of the installed Claude Code CLI and the
-  # pinned floor, so a stale local install cannot pin a rejected version.
+  # Detected once per PATH and auth cache lifetime: the newer of the installed
+  # Claude Code CLI and the pinned floor, so a stale install cannot pin a rejected version.
   defp claude_code_version do
     key = {__MODULE__, :claude_code_version, System.get_env("PATH")}
 
-    case :persistent_term.get(key, nil) do
+    case LemonAi.Auth.Cache.get(key) do
       nil ->
         version =
           ["claude", "claude-code"]
           |> Enum.find_value(&installed_claude_code_version/1)
           |> newer_version(@claude_code_version_floor)
 
-        :persistent_term.put(key, version)
+        LemonAi.Auth.Cache.put(key, version)
         version
 
       version ->

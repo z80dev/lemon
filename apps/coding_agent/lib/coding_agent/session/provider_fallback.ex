@@ -112,7 +112,12 @@ defmodule CodingAgent.Session.ProviderFallback do
           refresh_api_key: refresh_api_key
         }
 
-        run_candidates(candidates, ctx, nil)
+        try do
+          run_candidates(candidates, ctx, nil)
+        catch
+          :throw, {:event_stream_push_failed, _reason} ->
+            :ok
+        end
       end)
 
     LemonAi.EventStream.attach_task(output_stream, task_pid)
@@ -438,6 +443,10 @@ defmodule CodingAgent.Session.ProviderFallback do
       other ->
         other
     end
+  catch
+    :throw, {:event_stream_push_failed, reason} = failure ->
+      LemonAi.EventStream.cancel(response_stream, reason)
+      throw(failure)
   end
 
   # Only pre-commit credential/provider errors and provider stream timeouts
@@ -495,7 +504,7 @@ defmodule CodingAgent.Session.ProviderFallback do
   defp emit_event(output_stream, {:canceled, reason}),
     do: LemonAi.EventStream.cancel(output_stream, reason)
 
-  defp emit_event(output_stream, event), do: LemonAi.EventStream.push(output_stream, event)
+  defp emit_event(output_stream, event), do: LemonAi.EventStream.push!(output_stream, event)
 
   defp push_last_error(output_stream, {:provider_error, {:error, reason, message}}) do
     LemonAi.EventStream.error(output_stream, %{message | stop_reason: reason || :error})
