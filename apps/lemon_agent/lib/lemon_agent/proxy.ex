@@ -213,8 +213,13 @@ defmodule LemonAgent.Proxy do
   end
 
   defp process_sse_stream(stream, state, signal) do
-    buffer = ""
-    do_process_sse_stream(stream, state, signal, buffer)
+    AbortSignal.subscribe(signal)
+
+    try do
+      do_process_sse_stream(stream, state, signal, "")
+    after
+      AbortSignal.unsubscribe(signal)
+    end
   end
 
   defp do_process_sse_stream(stream, state, signal, buffer) do
@@ -248,20 +253,9 @@ defmodule LemonAgent.Proxy do
         {:DOWN, _ref, :process, _pid, _reason} ->
           # Request process died
           :ok
-      after
-        # Timeout for checking abort signal
-        100 ->
-          if AbortSignal.aborted?(signal) do
-            error_partial = %{
-              state.partial
-              | stop_reason: :aborted,
-                error_message: "Request aborted by user"
-            }
 
-            EventStream.error(stream, error_partial)
-          else
-            do_process_sse_stream(stream, state, signal, buffer)
-          end
+        {:lemon_abort, ^signal, :abort} ->
+          do_process_sse_stream(stream, state, signal, buffer)
       end
     end
   end

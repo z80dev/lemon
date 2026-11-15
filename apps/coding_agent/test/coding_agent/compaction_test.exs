@@ -2554,8 +2554,6 @@ defmodule CodingAgent.CompactionTest do
 
       result = Compaction.generate_summary(messages, model, signal: signal)
       assert {:error, :aborted} = result
-
-      LemonAgent.AbortSignal.clear(signal)
     end
 
     test "returns :aborted when signal is aborted before generate_branch_summary" do
@@ -2579,8 +2577,6 @@ defmodule CodingAgent.CompactionTest do
 
       result = Compaction.generate_branch_summary(branch_entries, model, signal: signal)
       assert {:error, :aborted} = result
-
-      LemonAgent.AbortSignal.clear(signal)
     end
 
     test "generates summary with nil signal (default behavior)" do
@@ -2627,8 +2623,6 @@ defmodule CodingAgent.CompactionTest do
         )
 
       assert {:ok, "Pre-generated summary"} = result
-
-      LemonAgent.AbortSignal.clear(signal)
     end
 
     test "accepts pre-generated branch summary via opts and skips abort check" do
@@ -2657,8 +2651,6 @@ defmodule CodingAgent.CompactionTest do
         )
 
       assert {:ok, "Branch summary"} = result
-
-      LemonAgent.AbortSignal.clear(signal)
     end
 
     test "ignores empty string summary in opts" do
@@ -2677,8 +2669,6 @@ defmodule CodingAgent.CompactionTest do
       # Empty string summary should be ignored and proceed to abort check
       result = Compaction.generate_summary(messages, model, signal: signal, summary: "")
       assert {:error, :aborted} = result
-
-      LemonAgent.AbortSignal.clear(signal)
     end
   end
 

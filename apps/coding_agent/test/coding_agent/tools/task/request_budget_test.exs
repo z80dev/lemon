@@ -210,7 +210,7 @@ defmodule CodingAgent.Tools.Task.RequestBudgetTest do
       start_opts: [],
       description: "Budget child",
       role_id: nil,
-      opts: Keyword.merge([task_session_timeout_ms: 2_000, task_session_poll_ms: 5], opts)
+      opts: Keyword.merge([task_session_timeout_ms: 2_000], opts)
     }
 
     Runner.resume_session(session, resume, "Work", nil, nil)

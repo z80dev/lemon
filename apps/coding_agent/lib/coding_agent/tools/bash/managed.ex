@@ -32,6 +32,8 @@ defmodule CodingAgent.Tools.Bash.Managed do
 
   defp await_owned(id, deadline, opts) do
     caller = self()
+    signal = Keyword.get(opts, :signal)
+    AbortSignal.subscribe(signal)
 
     guard =
       spawn(fn ->
@@ -47,6 +49,7 @@ defmodule CodingAgent.Tools.Bash.Managed do
       await(id, deadline, opts, 0)
     after
       send(guard, :release)
+      AbortSignal.unsubscribe(signal)
     end
   end
 
@@ -70,20 +73,35 @@ defmodule CodingAgent.Tools.Bash.Managed do
             {:detached, id, snapshot, output}
 
           true ->
-            Process.sleep(20)
-            await(id, deadline, opts, offset)
+            wait_for_output(id, deadline, opts, offset)
         end
 
       {:error, :not_found} ->
-        if System.monotonic_time(:millisecond) >= deadline do
-          {:detached, id, %{status: :queued}, ""}
-        else
-          Process.sleep(20)
-          await(id, deadline, opts, offset)
+        cond do
+          AbortSignal.aborted?(Keyword.get(opts, :signal)) ->
+            ProcessManager.kill(id)
+            {:ok, result(%{}, "", true)}
+
+          System.monotonic_time(:millisecond) >= deadline ->
+            {:detached, id, %{status: :queued}, ""}
+
+          true ->
+            wait_for_output(id, deadline, opts, offset)
         end
 
       error ->
         error
+    end
+  end
+
+  defp wait_for_output(id, deadline, opts, offset) do
+    signal = Keyword.get(opts, :signal)
+    # Output/store refresh is still needed, but abort delivery never waits for it.
+    receive do
+      {:lemon_abort, ^signal, _kind} -> await(id, deadline, opts, offset)
+    after
+      min(20, max(0, deadline - System.monotonic_time(:millisecond))) ->
+        await(id, deadline, opts, offset)
     end
   end
 

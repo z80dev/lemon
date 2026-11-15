@@ -182,7 +182,6 @@ defmodule CodingAgent.Session.TodoJournalTest do
 
       owner_monitor = Process.monitor(owner)
       signal = LemonAgent.AbortSignal.new()
-      on_exit(fn -> LemonAgent.AbortSignal.clear(signal) end)
 
       context = %{
         owner: owner,
@@ -267,7 +266,6 @@ defmodule CodingAgent.Session.TodoJournalTest do
         )
 
       parent_signal = LemonAgent.AbortSignal.new()
-      on_exit(fn -> LemonAgent.AbortSignal.clear(parent_signal) end)
 
       context = %{
         owner: self(),
@@ -381,7 +379,6 @@ defmodule CodingAgent.Session.TodoJournalTest do
 
     bridge = tool(session, "todo_host_bridge")
     signal = LemonAgent.AbortSignal.new()
-    on_exit(fn -> LemonAgent.AbortSignal.clear(signal) end)
     params = %{"action" => "write", "todos" => pending()}
     caller = Task.async(fn -> bridge.execute.("cancel-host", params, signal, nil) end)
     caller_pid = caller.pid

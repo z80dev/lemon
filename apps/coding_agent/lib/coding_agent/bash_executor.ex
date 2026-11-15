@@ -108,6 +108,8 @@ defmodule CodingAgent.BashExecutor do
         {:args, spawn_args}
       ] ++ port_env(env)
 
+    AbortSignal.subscribe(signal)
+
     try do
       {port, os_pid, guardian} = start_guarded_port(spawn_path, port_opts, use_pty)
 
@@ -146,7 +148,8 @@ defmodule CodingAgent.BashExecutor do
           timeout_ref: timeout_ref
         }
 
-        result = collect_output(state)
+        result =
+          if AbortSignal.aborted?(signal), do: handle_abort(state), else: collect_output(state)
 
         # Cancel timeout if still pending
         if timeout_ref, do: Process.cancel_timer(timeout_ref)
@@ -159,6 +162,8 @@ defmodule CodingAgent.BashExecutor do
       e -> {:error, e}
     catch
       :exit, reason -> {:error, {:exit, reason}}
+    after
+      AbortSignal.unsubscribe(signal)
     end
   end
 
@@ -249,16 +254,11 @@ defmodule CodingAgent.BashExecutor do
       {:timeout, port} when port == state.port ->
         handle_timeout(state)
 
+      {:lemon_abort, signal, _kind} when signal == state.signal ->
+        handle_abort(state)
+
       _other ->
         collect_output(state)
-    after
-      100 ->
-        # Periodic check for abort signal
-        if state.signal && AbortSignal.aborted?(state.signal) do
-          handle_abort(state)
-        else
-          collect_output(state)
-        end
     end
   end
 

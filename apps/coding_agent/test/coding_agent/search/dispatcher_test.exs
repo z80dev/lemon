@@ -91,7 +91,10 @@ defmodule CodingAgent.Search.DispatcherTest do
     :ok = Registry.register("unavailable", UnavailableProvider)
     :ok = Registry.register("successful", SuccessfulProvider)
     :ok = Registry.register("slow", SlowProvider)
-    :ok = Registry.register("blocking", BlockingProvider, config: %{abort_signal: make_ref()})
+
+    :ok =
+      Registry.register("blocking", BlockingProvider, config: %{abort_signal: AbortSignal.new()})
+
     :ok = Registry.register("recording", RecordingProvider)
     on_exit(&Registry.reset/0)
     :ok
@@ -157,8 +160,8 @@ defmodule CodingAgent.Search.DispatcherTest do
 
       task =
         start_dispatch(capability, signal,
-          context: %{test_pid: self(), abort_signal: make_ref()},
-          provider_contexts: %{"blocking" => %{abort_signal: make_ref()}}
+          context: %{test_pid: self(), abort_signal: AbortSignal.new()},
+          provider_contexts: %{"blocking" => %{abort_signal: AbortSignal.new()}}
         )
 
       {provider, ^signal} = await_provider(capability)
@@ -244,7 +247,6 @@ defmodule CodingAgent.Search.DispatcherTest do
 
   defp new_signal do
     signal = AbortSignal.new()
-    on_exit(fn -> AbortSignal.clear(signal) end)
     signal
   end
 

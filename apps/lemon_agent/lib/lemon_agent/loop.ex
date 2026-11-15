@@ -49,7 +49,8 @@ defmodule LemonAgent.Loop do
   ## Abort Handling
 
   The `signal` parameter is a reference that can be used for abort handling.
-  Check for abort by monitoring the signal or using Process messages.
+  Subscribe with `AbortSignal.subscribe/1` and check `AbortSignal.aborted?/1`
+  before waiting for cancellation messages.
   """
 
   require Logger
@@ -66,7 +67,6 @@ defmodule LemonAgent.Loop do
     ToolResultMessage
   }
 
-  @loop_abort_signal_pd_key :agent_abort_signal
   @loop_state_pd_key :agent_loop_state
   @usage_budget_pd_key :agent_usage_budget
 
@@ -128,9 +128,18 @@ defmodule LemonAgent.Loop do
   def agent_loop(prompts, context, config, signal, stream_fn, owner) do
     {:ok, stream} =
       if owner do
-        EventStream.start_link(owner: owner, timeout: :infinity, idle_timeout: :infinity)
+        EventStream.start_link(
+          owner: owner,
+          timeout: :infinity,
+          idle_timeout: :infinity,
+          abort_signal: signal
+        )
       else
-        EventStream.start_link(timeout: :infinity, idle_timeout: :infinity)
+        EventStream.start_link(
+          timeout: :infinity,
+          idle_timeout: :infinity,
+          abort_signal: signal
+        )
       end
 
     # Run the loop in a supervised task
@@ -243,9 +252,18 @@ defmodule LemonAgent.Loop do
 
     {:ok, stream} =
       if owner do
-        EventStream.start_link(owner: owner, timeout: :infinity, idle_timeout: :infinity)
+        EventStream.start_link(
+          owner: owner,
+          timeout: :infinity,
+          idle_timeout: :infinity,
+          abort_signal: signal
+        )
       else
-        EventStream.start_link(timeout: :infinity, idle_timeout: :infinity)
+        EventStream.start_link(
+          timeout: :infinity,
+          idle_timeout: :infinity,
+          abort_signal: signal
+        )
       end
 
     case Task.Supervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
@@ -307,7 +325,6 @@ defmodule LemonAgent.Loop do
   defp run_agent_loop(prompts, context, config, signal, stream_fn, stream) do
     # Store start time for duration calculation in telemetry
     Process.put(:agent_loop_start_time, System.monotonic_time())
-    maybe_put_loop_abort_signal(signal)
 
     Logger.info(
       "LemonAgent.Loop starting prompt_count=#{length(prompts)} message_count=#{length(context.messages)} " <>
@@ -356,7 +373,6 @@ defmodule LemonAgent.Loop do
   defp run_continue_loop(context, config, signal, stream_fn, stream) do
     # Store start time for duration calculation in telemetry
     Process.put(:agent_loop_start_time, System.monotonic_time())
-    maybe_put_loop_abort_signal(signal)
 
     Logger.info(
       "LemonAgent.Loop continuing message_count=#{length(context.messages)} " <>
@@ -990,12 +1006,6 @@ defmodule LemonAgent.Loop do
   # ============================================================================
   # Private: Helpers
   # ============================================================================
-
-  defp maybe_put_loop_abort_signal(signal) when is_reference(signal) do
-    Process.put(@loop_abort_signal_pd_key, signal)
-  end
-
-  defp maybe_put_loop_abort_signal(_signal), do: :ok
 
   defp reset_loop_state do
     Process.delete(@loop_state_pd_key)

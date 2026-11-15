@@ -82,6 +82,7 @@ defmodule CodingAgent.Tools.Task.Swarm do
       |> Keyword.put(:root_action_id, context.root_action_id)
       |> Keyword.put(:surface, context.surface)
 
+    AbortSignal.subscribe(signal)
     state = %{pending: graph.nodes, active: %{}, completed: %{}}
 
     try do
@@ -89,6 +90,7 @@ defmodule CodingAgent.Tools.Task.Swarm do
       completed = schedule(graph, state, signal, on_update, cwd, child_opts)
       Graph.report(graph.nodes, completed)
     after
+      AbortSignal.unsubscribe(signal)
       # Covers normal cancellation and unexpected scheduler failure. Control's
       # independent owner monitor also covers an untrappable coordinator death.
       Control.cancel_owned()
@@ -111,7 +113,12 @@ defmodule CodingAgent.Tools.Task.Swarm do
     if state.pending == [] and map_size(state.active) == 0 do
       state.completed
     else
-      Process.sleep(@poll_ms)
+      receive do
+        {:lemon_abort, ^signal, _kind} -> :ok
+      after
+        @poll_ms -> :ok
+      end
+
       schedule(graph, state, signal, update, cwd, opts)
     end
   end

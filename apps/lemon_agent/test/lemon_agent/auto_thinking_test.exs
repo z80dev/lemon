@@ -185,7 +185,6 @@ defmodule LemonAgent.AutoThinkingTest do
   test "credential/completion deadlines terminate workers while user abort remains cancellation" do
     parent = self()
     signal = AbortSignal.new()
-    on_exit(fn -> AbortSignal.clear(signal) end)
 
     for stage <- [:resolver_timeout, :completion_timeout, :abort] do
       blocked = fn ->

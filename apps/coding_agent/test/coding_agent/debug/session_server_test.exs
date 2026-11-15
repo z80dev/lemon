@@ -404,6 +404,59 @@ defmodule CodingAgent.Debug.SessionServerTest do
              call(ctx.key, %{action: "status"})
   end
 
+  test "an abort notification wakes the DAP wait without waiting for its deadline", ctx do
+    assert {:ok, %{state: :stopped}} = launch(ctx, %{"fakeMode" => "hang"})
+    signal = AbortSignal.new()
+    server = SessionServer.whereis(ctx.key)
+    :erlang.trace(server, true, [:receive, {:tracer, self()}])
+
+    task =
+      Task.async(fn ->
+        call(ctx.key, %{action: "continue"}, timeout_ms: 30_000, signal: signal)
+      end)
+
+    assert_receive {:trace, ^server, :receive,
+                    {:dap, _client, {:response, _seq, %{"command" => "continue"}}}},
+                   5_000
+
+    :erlang.trace(server, false, [:receive])
+    send(server, {:lemon_abort, signal, :abort})
+
+    assert {:aborted, _message} = Task.await(task, 5_000)
+    refute AbortSignal.aborted?(signal)
+    assert {:ok, %{snapshot: %{status: :running}}} = call(ctx.key, %{action: "status"})
+  end
+
+  test "the invocation caller is monitored until its blocked operation ends", ctx do
+    assert {:ok, %{state: :stopped}} = launch(ctx, %{"fakeMode" => "hang"})
+    server = SessionServer.whereis(ctx.key)
+    :erlang.trace(server, true, [:receive, {:tracer, self()}])
+
+    caller =
+      spawn(fn ->
+        call(ctx.key, %{action: "continue"}, timeout_ms: 30_000)
+      end)
+
+    on_exit(fn -> if Process.alive?(caller), do: Process.exit(caller, :kill) end)
+
+    assert_receive {:trace, ^server, :receive,
+                    {:dap, _client, {:response, _seq, %{"command" => "continue"}}}},
+                   5_000
+
+    :erlang.trace(server, false, [:receive])
+    assert {:monitors, monitors} = Process.info(server, :monitors)
+    assert {:process, caller} in monitors
+
+    Process.exit(caller, :kill)
+
+    assert {:ok, %{snapshot: %{status: :running}}} =
+             call(ctx.key, %{action: "status"}, timeout_ms: 500)
+
+    assert {:monitors, monitors} = Process.info(server, :monitors)
+    refute {:process, caller} in monitors
+    assert {:ok, %{state: :stopped}} = call(ctx.key, %{action: "pause"})
+  end
+
   test "a WASM host deadline releases a blocked debug server without cancelling siblings", ctx do
     alias CodingAgent.Session.WasmBridge
     alias LemonAgent.Types.AgentTool
@@ -413,7 +466,6 @@ defmodule CodingAgent.Debug.SessionServerTest do
 
     assert {:ok, %{state: :stopped}} = launch(ctx, %{"fakeMode" => "hang"})
     parent = AbortSignal.new()
-    on_exit(fn -> AbortSignal.clear(parent) end)
     test_pid = self()
 
     tool = %AgentTool{
@@ -460,10 +512,10 @@ defmodule CodingAgent.Debug.SessionServerTest do
     assert calls == %{}
     assert_receive {^tag, {:error, :timeout}}, 1_000
     refute AbortSignal.aborted?(parent)
-    refute AbortSignal.aborted?(signal)
+    assert AbortSignal.aborted?(signal)
 
     # The independently supervised server must not keep waiting for 30 seconds
-    # after the host worker and its transient cancellation flag are gone.
+    # after the host worker exits and its invocation signal is cancelled.
     assert {:ok, %{snapshot: %{status: :running}}} =
              call(ctx.key, %{action: "status"}, timeout_ms: 500, signal: parent)
 

@@ -20,9 +20,13 @@ defmodule LemonAi.OneshotRetry do
     * `:sleep_fun` — injected one-argument wait, returning `:ok` or
       `{:error, cancellation_reason}`. Custom waits own their responsiveness.
     * `:cancelled?` — zero-argument cancellation predicate (default false).
-      The default wait polls it every 50ms. Cancellation already visible when
-      an attempt settles preserves its result; cancellation during a wait
-      returns `{:error, :aborted}` (or the injected wait's cancellation reason).
+      Cancellation already visible when an attempt settles preserves its result;
+      cancellation during a wait returns `{:error, :aborted}`.
+    * `:subscribe_cancel` — optional zero-argument callback returning
+      `{:message, cancellation_message, unsubscribe_fun}`. It subscribes before
+      the first level check; the default backoff receives that exact message.
+      The zero-argument cleanup runs on every exit. Without a subscription,
+      predicates are checked at attempt boundaries, not polled during backoff.
 
   In-flight cancellation belongs to the completion callback: construct any
   per-attempt deadline inside it rather than sharing an expired deadline.
@@ -43,7 +47,19 @@ defmodule LemonAi.OneshotRetry do
       jitter_fun: Map.get(options, :jitter_fun, &:rand.uniform/1)
     }
 
-    attempt(complete, options, policy, 1)
+    case Map.get(options, :subscribe_cancel) do
+      nil ->
+        attempt(complete, options, policy, 1)
+
+      subscribe ->
+        {:message, message, unsubscribe} = subscribe.()
+
+        try do
+          attempt(complete, Map.put(options, :cancel_message, message), policy, 1)
+        after
+          unsubscribe.()
+        end
+    end
   end
 
   defp integer_option(options, key, default, minimum) do
@@ -125,9 +141,18 @@ defmodule LemonAi.OneshotRetry do
       remaining <= 0 ->
         :ok
 
+      Map.has_key?(options, :cancel_message) ->
+        message = Map.fetch!(options, :cancel_message)
+
+        receive do
+          ^message -> {:error, :aborted}
+        after
+          remaining -> :ok
+        end
+
       true ->
-        Process.sleep(min(remaining, 50))
-        wait(deadline, options)
+        Process.sleep(remaining)
+        if cancelled?(options), do: {:error, :aborted}, else: :ok
     end
   end
 end

@@ -652,7 +652,6 @@ defmodule LemonAgent.AgentQueueTest do
     :sys.replace_state(queue_owner, &%{&1 | abort_ref: signal})
 
     on_exit(fn ->
-      LemonAgent.AbortSignal.clear(signal)
       if Process.alive?(queue_owner), do: GenServer.stop(queue_owner)
     end)
 

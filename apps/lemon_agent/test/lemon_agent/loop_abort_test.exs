@@ -409,7 +409,6 @@ defmodule LemonAgent.LoopAbortTest do
 
       config = %{config | tool_task_supervisor: tool_supervisor}
       signal = AbortSignal.new()
-      on_exit(fn -> AbortSignal.clear(signal) end)
 
       stream = Loop.agent_loop([user_message("Run")], context, config, signal, nil)
       on_exit(fn -> EventStream.cancel(stream, :test_cleanup) end)
@@ -445,7 +444,6 @@ defmodule LemonAgent.LoopAbortTest do
 
         Process.demonitor(tool_ref, [:flush])
         Task.shutdown(events_task, :brutal_kill)
-        AbortSignal.clear(signal)
       end
     end
 

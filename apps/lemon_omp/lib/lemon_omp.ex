@@ -390,6 +390,7 @@ defmodule LemonOmp do
   def wait(id, timeout_ms, opts \\ []) do
     topic = bus_topic()
     LemonCore.Bus.subscribe(topic)
+    LemonAgent.AbortSignal.subscribe(opts[:signal])
 
     try do
       with {:ok, wire} <- get(id, opts) do
@@ -403,6 +404,7 @@ defmodule LemonOmp do
         end
       end
     after
+      LemonAgent.AbortSignal.unsubscribe(opts[:signal])
       LemonCore.Bus.unsubscribe(topic)
       flush_events()
     end
@@ -418,6 +420,7 @@ defmodule LemonOmp do
   def wait_many(ids, timeout_ms, opts \\ []) do
     topic = bus_topic()
     LemonCore.Bus.subscribe(topic)
+    LemonAgent.AbortSignal.subscribe(opts[:signal])
 
     try do
       with {:ok, wires} <- fetch_many(ids, opts) do
@@ -432,6 +435,7 @@ defmodule LemonOmp do
         wait_many_loop(state, opts)
       end
     after
+      LemonAgent.AbortSignal.unsubscribe(opts[:signal])
       LemonCore.Bus.unsubscribe(topic)
       flush_events()
     end
@@ -477,18 +481,32 @@ defmodule LemonOmp do
           state
         end
 
+      signal = opts[:signal]
+
+      timeout =
+        if state.dirty do
+          min(max(300 - (now - state.last_update), 0), max(state.deadline - now, 0))
+        else
+          max(state.deadline - now, 0)
+        end
+
       receive do
         %LemonCore.Event{type: :omp_session, payload: %{"session" => %{"id" => id} = next}}
         when is_map_key(state.wires, id) ->
           wait_many_loop(%{state | wires: Map.put(state.wires, id, next), dirty: true}, opts)
+
+        {:lemon_abort, ^signal, kind} when kind in [:abort, :redirect] ->
+          notify(opts[:on_update], wires)
+          {:ok, wires, :aborted}
       after
-        min(100, max(state.deadline - now, 0)) -> wait_many_loop(state, opts)
+        timeout -> wait_many_loop(state, opts)
       end
     end
   end
 
   defp wait_loop(id, wire, deadline, opts) do
     remaining = deadline - System.monotonic_time(:millisecond)
+    signal = opts[:signal]
 
     cond do
       aborted?(opts[:signal]) ->
@@ -508,8 +526,11 @@ defmodule LemonOmp do
             else
               wait_loop(id, next, deadline, opts)
             end
+
+          {:lemon_abort, ^signal, kind} when kind in [:abort, :redirect] ->
+            {:ok, wire, :aborted}
         after
-          min(remaining, 500) -> wait_loop(id, wire, deadline, opts)
+          remaining -> {:ok, wire, :timeout}
         end
     end
   end

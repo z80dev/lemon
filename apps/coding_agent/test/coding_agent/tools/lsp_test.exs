@@ -264,7 +264,6 @@ defmodule CodingAgent.Tools.LspTest do
     ctx = checkpoint_context(ctx)
     parent = self()
     signal = LemonAgent.AbortSignal.new()
-    on_exit(fn -> LemonAgent.AbortSignal.clear(signal) end)
 
     opts =
       Keyword.put(ctx.opts, :on_checkpoint, fn checkpoint ->

@@ -166,6 +166,60 @@ defmodule LemonAi.OneshotRetryTest do
     refute_received {:sleep, _}
   end
 
+  test "backoff receives cancellation and always releases its subscription" do
+    parent = self()
+    message = {:cancel_retry, make_ref()}
+
+    task =
+      Task.async(fn ->
+        OneshotRetry.run(
+          fn attempt ->
+            send(parent, {:retry_attempt, attempt})
+            {:error, :timeout}
+          end,
+          base_delay_ms: 30_000,
+          max_delay_ms: 30_000,
+          jitter_fun: fn upper -> upper end,
+          subscribe_cancel: fn ->
+            send(parent, :subscribed)
+            {:message, message, fn -> send(parent, :unsubscribed) end}
+          end,
+          cancelled?: fn ->
+            send(parent, :checked)
+            false
+          end
+        )
+      end)
+
+    assert_receive :subscribed
+    assert_receive :checked
+    assert_receive {:retry_attempt, 1}
+    send(task.pid, message)
+    assert Task.await(task) == {:error, :aborted}
+    assert_receive :unsubscribed
+    refute_received {:retry_attempt, 2}
+  end
+
+  test "subscription precedes the initial cancellation check and cleans up on failure" do
+    key = make_ref()
+
+    assert_raise RuntimeError, "completion failed", fn ->
+      OneshotRetry.run(
+        fn _ -> raise "completion failed" end,
+        subscribe_cancel: fn ->
+          Process.put(key, :subscribed)
+          {:message, :cancel_retry, fn -> Process.delete(key) end}
+        end,
+        cancelled?: fn ->
+          assert Process.get(key) == :subscribed
+          false
+        end
+      )
+    end
+
+    assert Process.get(key) == nil
+  end
+
   test "aborted and redirected messages never replay despite transient error metadata" do
     for reason <- [:aborted, :redirected] do
       message = %{failure(:timeout) | stop_reason: reason}
