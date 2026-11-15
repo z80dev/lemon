@@ -1,17 +1,41 @@
 defmodule LemonControlPlane.EventBridgeBackpressureTest do
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.{EventBridge, Presence}
+  alias LemonControlPlane.{EventBridge, Connections}
   alias LemonControlPlane.WS.Connection
   alias LemonCore.{Bus, Event}
   alias LemonCore.Bus.Delivery
 
   setup do
-    for module <- [Presence, EventBridge] do
+    for module <- [Connections, EventBridge] do
       unless Process.whereis(module), do: start_supervised!(module)
     end
 
     :ok
+  end
+
+  test "fanout works while the Registry supervisor is suspended without a presence call" do
+    conn_id = "dispatch-only-#{System.unique_integer([:positive])}"
+    :ok = Connections.register(conn_id, %{role: :operator, pid: self()})
+    state = :sys.get_state(EventBridge)
+    registry = Process.whereis(Connections)
+    :ok = :sys.suspend(registry)
+
+    try do
+      task =
+        Task.async(fn ->
+          EventBridge.handle_info(
+            Event.new(:delta, %{run_id: "dispatch-only", seq: 1, text: "registry dispatch"}),
+            state
+          )
+        end)
+
+      assert {:noreply, _} = Task.await(task, 1000)
+      assert_receive {:event, "chat", %{"text" => "registry dispatch"}, _}
+    after
+      :sys.resume(registry)
+      Connections.unregister(conn_id)
+    end
   end
 
   test "inline fanout bounds a frozen socket and does not delay another client" do
@@ -22,7 +46,7 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
     healthy_id = "pressure-healthy-#{suffix}"
 
     :ok =
-      Presence.register(slow_id, %{
+      Connections.register(slow_id, %{
         role: :operator,
         client_id: "slow",
         pid: slow,
@@ -30,7 +54,7 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
       })
 
     :ok =
-      Presence.register(healthy_id, %{
+      Connections.register(healthy_id, %{
         role: :operator,
         client_id: "healthy",
         pid: healthy,
@@ -38,9 +62,9 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
       })
 
     on_exit(fn ->
-      if Process.whereis(Presence) do
-        Presence.unregister(slow_id)
-        Presence.unregister(healthy_id)
+      if Process.whereis(Connections) do
+        Connections.unregister(slow_id)
+        Connections.unregister(healthy_id)
       end
     end)
 
@@ -71,7 +95,7 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
     sockets = for n <- 1..2, do: {"concurrent-bridge-#{suffix}-#{n}", frozen_consumer()}
 
     for {id, socket} <- sockets do
-      :ok = Presence.register(id, %{role: :operator, client_id: id, pid: socket})
+      :ok = Connections.register(id, %{role: :operator, client_id: id, pid: socket})
     end
 
     EventBridge.subscribe_run(run_id)
@@ -80,8 +104,8 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
     parent = self()
 
     on_exit(fn ->
-      if Process.whereis(Presence) do
-        for {id, _socket} <- sockets, do: Presence.unregister(id)
+      if Process.whereis(Connections) do
+        for {id, _socket} <- sockets, do: Connections.unregister(id)
       end
 
       if Process.whereis(EventBridge), do: EventBridge.unsubscribe_run(run_id)
@@ -140,7 +164,7 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
     refute Delivery.closed?(current)
 
     for {id, socket} <- sockets do
-      refute Delivery.closed?(Presence.get(id).delivery)
+      refute Delivery.closed?(Connections.get(id).delivery)
       events = drain(socket)
       refute {:stream_resync, :overflow} in events
 
@@ -159,13 +183,13 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
     suffix = System.unique_integer([:positive])
     conn_id = "bridge-pressure-#{suffix}"
     run_id = "bridge-pressure-run-#{suffix}"
-    :ok = Presence.register(conn_id, %{role: :operator, client_id: "pressure", pid: socket})
+    :ok = Connections.register(conn_id, %{role: :operator, client_id: "pressure", pid: socket})
     EventBridge.subscribe_run(run_id)
     bridge = Process.whereis(EventBridge)
     before = :sys.get_state(bridge)
 
     on_exit(fn ->
-      if Process.whereis(Presence), do: Presence.unregister(conn_id)
+      if Process.whereis(Connections), do: Connections.unregister(conn_id)
       if Process.whereis(EventBridge), do: EventBridge.unsubscribe_run(run_id)
     end)
 
@@ -189,8 +213,8 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
     # Old data and even its overflow marker cannot fence a fresh recipient.
     fresh = frozen_consumer()
     fresh_id = "bridge-reconnected-#{suffix}"
-    :ok = Presence.register(fresh_id, %{role: :operator, client_id: "reconnected", pid: fresh})
-    on_exit(fn -> if Process.whereis(Presence), do: Presence.unregister(fresh_id) end)
+    :ok = Connections.register(fresh_id, %{role: :operator, client_id: "reconnected", pid: fresh})
+    on_exit(fn -> if Process.whereis(Connections), do: Connections.unregister(fresh_id) end)
     event = Event.new(:delta, %{run_id: run_id, seq: 1001, text: "obsolete"})
     send(bridge, {:lemon_bus_delivery, before.delivery.gate, event})
     send(bridge, {:lemon_bus_delivery, before.delivery.gate, {:stream_resync, :overflow}})
@@ -201,7 +225,7 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
     )
 
     :sys.get_state(bridge)
-    refute Delivery.closed?(Presence.get(fresh_id).delivery)
+    refute Delivery.closed?(Connections.get(fresh_id).delivery)
     recovered = drain(fresh)
 
     assert [{:event, "chat", %{"text" => "current"}, _}] =
@@ -239,15 +263,14 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
   test "disconnected socket death removes presence resources and permanently fences its delivery" do
     socket = frozen_consumer()
     conn_id = "dead-pressure-#{System.unique_integer([:positive])}"
-    :ok = Presence.register(conn_id, %{role: :operator, client_id: "dead", pid: socket})
-    %{monitor_ref: presence_ref, delivery: delivery} = Presence.get(conn_id)
+    :ok = Connections.register(conn_id, %{role: :operator, client_id: "dead", pid: socket})
+    %{delivery: delivery} = Connections.get(conn_id)
+    admitter_ref = Process.monitor(delivery.admitter)
     ref = Process.monitor(socket)
     Process.exit(socket, :kill)
     assert_receive {:DOWN, ^ref, :process, ^socket, :killed}
-    # The observed death is delivered explicitly as a barrier too; whichever
-    # monitor signal wins, duplicate cleanup is idempotent without timing polls.
-    send(Process.whereis(Presence), {:DOWN, presence_ref, :process, socket, :killed})
-    assert Presence.get(conn_id) == nil
+    assert_receive {:DOWN, ^admitter_ref, :process, _admitter, :normal}
+    assert Connections.get(conn_id) == nil
     assert Delivery.closed?(delivery)
   end
 

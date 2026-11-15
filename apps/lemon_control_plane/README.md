@@ -113,8 +113,21 @@ on partial usage does not attest a free request. Legacy `usage.cost`/`usage.stat
 daily projections remain known-value subtotals, not complete provider-usage or
 spend-enforcement authority; canonical `usage.records` retains the null counters.
 
-Slow/approval-gated handlers run asynchronously so events and approval resolution
-can continue while their correlated request remains pending.
+Slow/approval-gated handlers run under a dedicated `Task.Supervisor` so events
+and approval resolution can continue while their correlated request remains
+pending. Caller-policy caps admit at most eight outstanding async methods per
+connection and 256 globally. Excess requests return `UNAVAILABLE` before work
+starts; completion or worker death releases the connection slot. Disconnect
+does not replay a request or cancel a mutation already admitted.
+
+Connection membership uses a duplicate-key Registry; event fan-out dispatches
+directly over its entries without calling a presence server. Registry removes
+dead owners. General event delivery retains its bounded admission and excludes
+node/enrollment connections. Handler failures return `INTERNAL_ERROR` and log
+only the registered method name and exception class (never arguments, payloads
+or exception messages). The `[:lemon, :control_plane, :method, :exception]`
+telemetry event has measurement `%{count: 1}` and metadata `%{method: name,
+class: exception_module_or_catch_kind}`.
 
 ### System status
 

@@ -22,16 +22,19 @@ defmodule LemonControlPlane.Application do
         # Method registry (ETS-backed for fast lookup)
         LemonControlPlane.Methods.Registry,
         LemonControlPlane.Lifecycle,
-        # Presence tracker for connected clients
-        LemonControlPlane.Presence,
+        # Registry owns connection membership; method tasks have a hard global bound.
+        LemonControlPlane.Connections,
+        Supervisor.child_spec(
+          {Task.Supervisor,
+           name: LemonControlPlane.MethodTaskSupervisor,
+           max_children: LemonControlPlane.WS.Connection.global_method_limit()},
+          id: LemonControlPlane.MethodTaskSupervisor
+        ),
         # Connection-owned machine terminals (no global terminal event fanout)
         LemonControlPlane.NodeShells,
         # Event bridge for bus -> WebSocket fanout
         LemonControlPlane.EventBridge,
-        # Connection supervisor for WebSocket connections
-        {DynamicSupervisor, strategy: :one_for_one, name: LemonControlPlane.ConnectionSupervisor},
-        # Registry for connection processes
-        {Registry, keys: :unique, name: LemonControlPlane.ConnectionRegistry},
+        # WebSocket processes are owned by the HTTP server.
         # Durable A2A runs outlive an individual HTTP request or SSE client.
         {Task.Supervisor, name: LemonControlPlane.A2A.TaskSupervisor},
         # HTTP/WebSocket server

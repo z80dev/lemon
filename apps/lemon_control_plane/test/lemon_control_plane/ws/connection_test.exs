@@ -250,7 +250,7 @@ defmodule LemonControlPlane.WS.ConnectionTest do
     }
 
     assert {:ok, _} = Connection.handle_in({body, [opcode: :text]}, node)
-    assert_receive {:method_result, "large-floor", {:error, _}}, 1000
+    assert_receive {:method_result, _token, {:error, _}}, 1000
     operator = %{node | auth: %{role: :operator, scopes: [:admin]}}
     assert {:push, {:text, rejected}, _} = Connection.handle_in({body, [opcode: :text]}, operator)
     assert Jason.decode!(rejected)["ok"] == false
@@ -282,7 +282,10 @@ defmodule LemonControlPlane.WS.ConnectionTest do
           {fn ->
              Connection.handle_info(
                {:method_result, "invalid-async", {:ok, %{private_value: self()}}},
-               state
+               %{
+                 state
+                 | method_tasks: %{"invalid-async" => %{id: "invalid-async", ref: make_ref()}}
+               }
              )
            end, "invalid-async"}
         ] do
@@ -305,7 +308,10 @@ defmodule LemonControlPlane.WS.ConnectionTest do
     end
 
     assert {:push, {:text, valid}, ^state} =
-             Connection.handle_info({:method_result, "healthy", {:ok, %{ok: true}}}, state)
+             Connection.handle_info(
+               {:method_result, "healthy", {:ok, %{ok: true}}},
+               %{state | method_tasks: %{"healthy" => %{id: "healthy", ref: make_ref()}}}
+             )
 
     assert %{"id" => "healthy", "ok" => true} = Jason.decode!(valid)
   end
@@ -336,23 +342,26 @@ defmodule LemonControlPlane.WS.ConnectionTest do
           "params" => %{}
         })
 
-      assert {:ok, ^state} = Connection.handle_in({request, [opcode: :text]}, state)
+      assert {:ok, pending_state} = Connection.handle_in({request, [opcode: :text]}, state)
       assert_receive {:async_handler_started, worker}
 
       assert {:push, {:text, event_frame}, event_state} =
                Connection.handle_info(
                  {:event, "exec.approval.requested", %{"approvalId" => "approval-1"}},
-                 state
+                 pending_state
                )
 
       assert %{"type" => "event", "event" => "exec.approval.requested"} =
                Jason.decode!(event_frame)
 
       send(worker, :finish)
-      assert_receive {:method_result, "slow-request", {:ok, %{"finished" => true}}} = result
+      assert_receive {:method_result, _token, {:ok, %{"finished" => true}}} = result
 
-      assert {:push, {:text, response_frame}, ^event_state} =
+      assert {:push, {:text, response_frame}, completed_state} =
                Connection.handle_info(result, event_state)
+
+      assert completed_state.method_tasks == %{}
+      assert completed_state.event_seq == event_state.event_seq
 
       assert %{
                "type" => "res",
