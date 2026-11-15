@@ -75,6 +75,43 @@ defmodule LemonRouter.RestartCarryoverTest do
     Enum.each(rows, fn {key, _} -> Store.delete(RestartCarryover.table(), key) end)
   end
 
+  test "admission belongs to the supervised owner, not the drain caller" do
+    owner = Process.whereis(RestartCarryover)
+    assert :ets.info(RestartCarryover, :owner) == owner
+    refute RestartCarryover.holding?()
+
+    task = Task.async(fn -> RestartCarryover.drain(:work, drain_ctx(0, 0)) end)
+    monitor = Process.monitor(task.pid)
+    assert {:ok, %{carried: 0}} = Task.await(task)
+    assert_receive {:DOWN, ^monitor, :process, _pid, _reason}
+    assert :ets.info(RestartCarryover, :owner) == owner
+    assert RestartCarryover.holding?()
+    assert RestartCarryover.sealed?()
+
+    :ok = RestartCarryover.reset()
+    refute RestartCarryover.holding?()
+    refute RestartCarryover.sealed?()
+  end
+
+  test "missing admission owner fails closed without caller-owned recreation" do
+    :ok = Supervisor.terminate_child(LemonRouter.Supervisor, RestartCarryover)
+
+    try do
+      tasks =
+        for _ <- 1..16 do
+          Task.async(fn -> {RestartCarryover.holding?(), RestartCarryover.sealed?()} end)
+        end
+
+      assert Enum.map(tasks, &Task.await/1) == List.duplicate({true, true}, 16)
+      assert :ets.whereis(RestartCarryover) == :undefined
+    after
+      {:ok, _} = Supervisor.restart_child(LemonRouter.Supervisor, RestartCarryover)
+    end
+
+    assert :ets.info(RestartCarryover, :owner) == Process.whereis(RestartCarryover)
+    refute RestartCarryover.holding?()
+  end
+
   test "a clean suspension continues the session and replays queued work in order", ctx do
     key = conversation()
     outcomes = %{boundary: :clean, now: :clean}

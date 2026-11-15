@@ -166,7 +166,7 @@ defmodule CodingAgent.SessionAgentLoopTest do
 
     # Selective receive of only agent_end would retain progress events until the
     # bounded subscription overflows and fences delivery of the terminal payload.
-    assert_receive {:session_event, ^session_id, event}, remaining
+    assert_receive {:session_event, ^session_id, event, _}, remaining
 
     case event do
       {:agent_end, messages} ->
@@ -242,7 +242,7 @@ defmodule CodingAgent.SessionAgentLoopTest do
   end
 
   describe "system prompt environment block" do
-    test "ends the prompt with cwd and date and stays byte-identical across turns", %{
+    test "ends the prompt with stable orientation and stays byte-identical across turns", %{
       tmp_dir: tmp_dir
     } do
       responses = [
@@ -255,16 +255,27 @@ defmodule CodingAgent.SessionAgentLoopTest do
 
       [_, environment] = String.split(initial_prompt, "## Environment\n", parts: 2)
       assert environment =~ "Working directory: #{tmp_dir}"
-      assert environment =~ "Today's date: #{Date.to_iso8601(Date.utc_today())}"
-      assert environment =~ ~r/Today's date: \d{4}-\d{2}-\d{2}\z/
+      refute environment =~ "Today's date:"
+      refute environment =~ "Git status"
 
-      # Static coding guidance precedes the volatile block.
+      # Static coding guidance precedes the journaled orientation block.
       {coding_at, _} = :binary.match(initial_prompt, "## Working on code")
       {env_at, _} = :binary.match(initial_prompt, "## Environment")
       assert coding_at < env_at
 
       :ok = Session.prompt(session, "first")
       await_agent_end(session)
+      agent = Session.get_state(session).agent
+      user = Enum.find(LemonAgent.Agent.get_state(agent).messages, &(&1.role == :user))
+
+      user_text =
+        case user.content do
+          text when is_binary(text) -> text
+          blocks -> Enum.map_join(blocks, "\n", &Map.get(&1, :text, ""))
+        end
+
+      assert user_text =~ "Today's date: #{Date.to_iso8601(Date.utc_today())}"
+      assert user_text =~ "Git repository:"
       File.write!(Path.join(tmp_dir, "new_file.txt"), "changes the working tree")
       :ok = Session.prompt(session, "second")
       await_agent_end(session)
@@ -323,7 +334,7 @@ defmodule CodingAgent.SessionAgentLoopTest do
   end
 
   defp translate_session_events(session_id, translator, events) do
-    assert_receive {:session_event, ^session_id, event}, 5_000
+    assert_receive {:session_event, ^session_id, event, _}, 5_000
     translator = CodingAgent.Session.RunTranslator.handle_event(translator, event)
     events = [event | events]
 
@@ -346,7 +357,7 @@ defmodule CodingAgent.SessionAgentLoopTest do
       :ok = Session.prompt(session, "hello")
 
       assert_receive {:session_event, ^session_id,
-                      {:provider_retry, %{attempt: 1, max_retries: 3, category: :transient}}},
+                      {:provider_retry, %{attempt: 1, max_retries: 3, category: :transient}}, _},
                      5_000
 
       messages = await_agent_end(session)

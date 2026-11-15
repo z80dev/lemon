@@ -3,17 +3,28 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqliteTest do
 
   import ExUnit.CaptureIO
 
-  alias LemonCore.Store.{JsonlBackend, SqliteBackend}
+  alias LemonCore.Store.SqliteBackend
   alias Mix.Tasks.Lemon.Store.MigrateJsonlToSqlite
 
   setup do
     root = Path.join(System.tmp_dir!(), "jsonl-migration-#{System.unique_integer([:positive])}")
     source = Path.join(root, "source")
     target = Path.join(root, "chosen.sqlite3")
-    {:ok, state} = JsonlBackend.init(path: source)
-    {:ok, state} = JsonlBackend.put(state, :users, "user1", %{name: "Alice"})
-    {:ok, state} = JsonlBackend.put(state, :users, "user2", %{name: "Bob"})
-    {:ok, _state} = JsonlBackend.put(state, :runs, "run1", %{answer: "private run"})
+    File.mkdir_p!(source)
+
+    File.write!(Path.join(source, "users.jsonl"), """
+    {"op":"put","key":"user1","value":{"__atom__:name":"Old"}}
+    {"op":"put","key":"deleted","value":1}
+    {"op":"delete","key":"deleted"}
+    {"op":"put","key":"user1","value":{"__atom__:name":"Alice"}}
+    {"op":"put","key":"user2","value":{"__atom__:name":"Bob"}}
+    {"op":"put","key":{"__tuple__":[{"__atom__":"owner"},"id"]},"value":{"__tuple__":[{"__atom__":"ok"},[1,2]]}}
+    """)
+
+    File.write!(Path.join(source, "runs.jsonl"), """
+    {"op":"put","key":"run1","value":{"__atom__:answer":"private run"}}
+    """)
+
     previous = Map.new(~w(LEMON_STORE_PATH LEMON_STORE_DB_PATH), &{&1, System.get_env(&1)})
     Enum.each(Map.keys(previous), &System.delete_env/1)
 
@@ -27,6 +38,21 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqliteTest do
     end)
 
     {:ok, root: root, source: source, target: target}
+  end
+
+  test "empty legacy directory remains empty and creates no database", %{
+    root: root,
+    target: target
+  } do
+    source = Path.join(root, "empty")
+    File.mkdir_p!(source)
+
+    capture_io(fn ->
+      MigrateJsonlToSqlite.run(["--jsonl-path", source, "--sqlite-path", target])
+    end)
+
+    assert File.ls!(source) == []
+    refute File.exists?(target)
   end
 
   test "dry run leaves the chosen database and source journal unchanged", %{
@@ -55,6 +81,8 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqliteTest do
       assert {:ok, %{name: "Alice"}, _} = SqliteBackend.get(state, :users, "user1")
       assert {:ok, %{name: "Bob"}, _} = SqliteBackend.get(state, :users, "user2")
       assert {:ok, nil, _} = SqliteBackend.get(state, :runs, "run1")
+      assert {:ok, nil, _} = SqliteBackend.get(state, :users, "deleted")
+      assert {:ok, {:ok, [1, 2]}, _} = SqliteBackend.get(state, :users, {:owner, "id"})
     after
       SqliteBackend.close(state)
     end
@@ -102,8 +130,12 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqliteTest do
   } do
     wrong_source = Path.join(root, "wrong-source")
     wrong_target = Path.join(root, "wrong.sqlite3")
-    {:ok, wrong} = JsonlBackend.init(path: wrong_source)
-    {:ok, _wrong} = JsonlBackend.put(wrong, :users, "user1", %{name: "Wrong"})
+    File.mkdir_p!(wrong_source)
+
+    File.write!(Path.join(wrong_source, "users.jsonl"), """
+    {"op":"put","key":"user1","value":{"__atom__:name":"Wrong"}}
+    """)
+
     System.put_env("LEMON_STORE_PATH", wrong_source)
     System.put_env("LEMON_STORE_DB_PATH", wrong_target)
 

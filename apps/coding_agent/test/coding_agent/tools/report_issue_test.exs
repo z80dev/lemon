@@ -99,7 +99,6 @@ defmodule CodingAgent.Tools.ReportIssueTest do
     assert {:error, :aborted} =
              ReportIssue.execute("abort", %{"note" => "ignored"}, signal, nil, cwd, opts)
 
-    LemonAgent.AbortSignal.clear(signal)
     refute File.exists?(path)
     File.mkdir_p!(path)
     assert {:error, _} = report(%{"note" => "cannot write directory"}, cwd, opts)

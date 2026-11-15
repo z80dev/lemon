@@ -87,6 +87,36 @@ deployments that deliberately trust another local UID; it does not add TLS or
 authenticate a remote server. A reverse proxy's loopback source address is not
 user identity.
 
+### Distribution cookie
+
+The source and packaged launchers persist the generated distribution cookie at
+`~/.lemon/cookie` with mode `0600`. Treat it as a full remote-code-execution
+credential, not as a scoped operator token. Source startup reads it into
+`RELEASE_COOKIE` and supplies Erlang's `-setcookie` through the `ERL_FLAGS`
+environment; packaged startup uses the release's `RELEASE_COOKIE` environment
+contract. Neither launcher command nor the lifecycle driver's detached restart
+argv contains the cookie. Restart passes the running node's cookie through the
+child environment, preserving explicit cookie selection rather than silently
+switching back to the file.
+
+Environment variables are still secrets: do not log command environments or
+expose them through diagnostics. This does not protect against root or another
+process with permission to inspect the runtime's environment or memory.
+Prefer environment configuration over a literal `--cookie` command-line option,
+which is visible while the invoking launcher runs. Loopback epmd/distribution
+defaults and production rejection of the development cookie remain unchanged.
+
+Remote shells must use the same cookie. For source mode, without placing the
+secret in the shell command's argv:
+
+```bash
+export ERL_FLAGS="-setcookie \"$(cat "$HOME/.lemon/cookie")\""
+iex --sname lemon_console --remsh lemon@localhost
+```
+
+Use the runtime's actual node name (and `--name` for long names). Packaged
+`bin/lemon remote` uses the release cookie environment automatically.
+
 ### Passwordless local owner
 
 The Mac app and `lemon-bot up` can create the workspace owner without an account

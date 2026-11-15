@@ -1325,7 +1325,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
     case Map.fetch(state.invocations, invoke_id) do
       {:ok, invocation} -> put_invocation(state, invoke_id, Map.put(invocation, :signal, signal))
-      :error -> tap(state, fn _ -> AbortSignal.clear(signal) end)
+      :error -> state
     end
   end
 
@@ -1348,11 +1348,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
             after
               @tool_abort_grace_ms -> Process.exit(task.pid, :kill)
             end
-
-            AbortSignal.clear(signal)
           end)
-        else
-          AbortSignal.clear(signal)
         end
     end
 

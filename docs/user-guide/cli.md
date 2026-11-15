@@ -45,7 +45,9 @@ is soft-purged, so processes are never killed; a module whose previous version
 is still in use is reported instead of loaded. Calls already in progress finish
 on the old code. By default it then refreshes idle coding sessions so their
 tool closures run the new code; busy sessions are skipped. `--no-sessions`
-skips that refresh. Human output reports module and session counts, failures,
+skips that refresh. The runtime retries initially in-use modules once afterward,
+even with `--no-sessions`; busy sessions are not automatically refreshed later.
+Human output reports module and session counts, failures,
 and modules still in use that require a restart. JSON preserves `reloaded`,
 `inUse`, `failed` (module/reason), their `reloadedCount`, `inUseCount`,
 `failedCount` totals, and `sessions` (`refreshed`, `busy`, `failed`). Module
@@ -56,6 +58,9 @@ process-state-shape changes; this is not a release upgrade or state migration.
 Exit codes: `0` for a completed reload report (inspect failure/in-use counts),
 `1` for an unavailable or refused RPC, and `2` for invalid usage. If no runtime
 is reachable, start it explicitly with `./bin/lemon daemon`.
+
+See [Runtime hot-reload](../runtime-hot-reload.md) for the RPC contract, code-version
+and closure limits, and the separate low-level extension/package APIs.
 
 ## Inspect a named worker
 

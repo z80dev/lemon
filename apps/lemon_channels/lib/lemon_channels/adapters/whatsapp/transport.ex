@@ -1,7 +1,20 @@
 defmodule LemonChannels.Adapters.WhatsApp.Transport do
-  @moduledoc false
+  @moduledoc """
+  WhatsApp lifecycle and reconnect authority.
+
+  Both socket disconnects and bridge port failures use one bounded retry budget.
+  Exhaustion, logout, and replacement stop this transient child with a shutdown
+  reason and record redacted health; an operator must restart/re-link the adapter.
+  The bridge never schedules a competing restart.
+  A command deadline terminates the old bridge group before replying
+  `:outcome_unknown` to every pending send; reconnect never replays those sends.
+  """
 
   use GenServer
+
+  def child_spec(opts) do
+    %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}, restart: :transient}
+  end
 
   require Logger
 
@@ -82,9 +95,9 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     account_id = cfg_get(cfg, :account_id, "default")
 
     :ok = Dedupe.init()
-    ModelPolicyAdapter.ensure_session_table()
 
-    {:ok, port_server} = PortBridge.start_link({@bridge_spec, [config: cfg, notify_pid: self()]})
+    {:ok, port_server} =
+      PortBridge.start_link({@bridge_spec, [config: cfg, notify_pid: self(), restart: :manual]})
 
     Bridge.connect(port_server, cfg)
 
@@ -164,19 +177,24 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
           "whatsapp logged out (status=#{status}); not reconnecting — re-link required"
         )
 
-        {:noreply, state}
+        stop_reconnecting(state, :logged_out)
 
       status == 440 ->
         Logger.error(
           "whatsapp connection replaced (status=440); not reconnecting — another client is active"
         )
 
-        {:noreply, state}
+        stop_reconnecting(state, :connection_replaced)
 
       true ->
         Logger.warning("whatsapp disconnected (status=#{inspect(status)}); scheduling reconnect")
-        {:noreply, schedule_reconnect(state)}
+        reconnect_or_stop(state)
     end
+  end
+
+  def handle_info({:whatsapp_bridge_event, %{"type" => "bridge_down"}}, state) do
+    LemonChannels.Registry.record_status("whatsapp", {:error, :disconnected})
+    reconnect_or_stop(%{state | connected?: false, own_jid: nil})
   end
 
   def handle_info({:whatsapp_bridge_event, %{"type" => "message"} = event}, state) do
@@ -227,7 +245,10 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   # Reconnect
   # ============================================================================
 
-  def handle_info(:reconnect, state) do
+  def handle_info(
+        {:reconnect, reconnect_ref},
+        %{reconnect_timer: {_timer, reconnect_ref}} = state
+      ) do
     state = %{state | reconnect_timer: nil}
 
     Logger.info(
@@ -238,19 +259,28 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     {:noreply, state}
   end
 
+  def handle_info({:reconnect, _stale_ref}, state), do: {:noreply, state}
+
   # ============================================================================
   # Command timeout
   # ============================================================================
 
   def handle_info({:command_timeout, correlation_id}, state) do
-    case Map.pop(state.pending_commands, correlation_id) do
-      {nil, _} ->
+    case Map.fetch(state.pending_commands, correlation_id) do
+      :error ->
         {:noreply, state}
 
-      {{from, _timer_ref}, pending_commands} ->
+      {:ok, _pending} ->
         Logger.warning("whatsapp command timed out: correlation_id=#{correlation_id}")
-        GenServer.reply(from, {:error, :outcome_unknown})
-        {:noreply, %{state | pending_commands: pending_commands}}
+        :ok = PortBridge.stop_port(state.port_server)
+
+        Enum.each(state.pending_commands, fn {_id, {from, timer}} ->
+          Process.cancel_timer(timer)
+          GenServer.reply(from, {:error, :outcome_unknown})
+        end)
+
+        LemonChannels.Registry.record_status("whatsapp", {:error, :disconnected})
+        reconnect_or_stop(%{state | pending_commands: %{}, connected?: false, own_jid: nil})
     end
   end
 
@@ -285,6 +315,19 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   end
 
   def handle_call(_msg, _from, state), do: {:reply, {:error, :unknown_call}, state}
+
+  @impl true
+  def terminate(_reason, state) do
+    cancel_timer(state.reconnect_timer)
+
+    Enum.each(state.pending_commands, fn {_id, {from, timer}} ->
+      Process.cancel_timer(timer)
+      GenServer.reply(from, {:error, :outcome_unknown})
+    end)
+
+    if Process.alive?(state.port_server), do: GenServer.stop(state.port_server)
+    :ok
+  end
 
   # ============================================================================
   # Private — inbound pipeline
@@ -756,24 +799,33 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   # Private — reconnection
   # ============================================================================
 
-  defp schedule_reconnect(state) do
-    if state.reconnect_attempts >= @reconnect_max_attempts do
-      Logger.error(
-        "whatsapp max reconnect attempts (#{@reconnect_max_attempts}) reached; giving up"
-      )
+  defp reconnect_or_stop(%{reconnect_timer: timer} = state) when not is_nil(timer) do
+    {:noreply, state}
+  end
 
-      state
-    else
-      delay = backoff_delay(state.reconnect_attempts)
+  defp reconnect_or_stop(%{reconnect_attempts: attempts} = state)
+       when attempts >= @reconnect_max_attempts do
+    Logger.error("whatsapp reconnect budget exhausted; operator restart required")
+    stop_reconnecting(state, :reconnect_exhausted)
+  end
 
-      Logger.info(
-        "whatsapp reconnect scheduled in #{delay}ms (attempt #{state.reconnect_attempts + 1})"
-      )
+  defp reconnect_or_stop(state) do
+    delay = backoff_delay(state.reconnect_attempts)
+    reconnect_ref = make_ref()
+    timer = Process.send_after(self(), {:reconnect, reconnect_ref}, delay)
 
-      timer = Process.send_after(self(), :reconnect, delay)
+    {:noreply,
+     %{
+       state
+       | reconnect_timer: {timer, reconnect_ref},
+         reconnect_attempts: state.reconnect_attempts + 1
+     }}
+  end
 
-      %{state | reconnect_timer: timer, reconnect_attempts: state.reconnect_attempts + 1}
-    end
+  defp stop_reconnecting(state, reason) do
+    LemonChannels.Registry.record_status("whatsapp", {:error, reason})
+    state = %{state | reconnect_timer: cancel_timer(state.reconnect_timer)}
+    {:stop, {:shutdown, reason}, state}
   end
 
   defp backoff_delay(attempt) do
@@ -787,6 +839,8 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   end
 
   defp cancel_timer(nil), do: nil
+
+  defp cancel_timer({timer_ref, _reconnect_ref}), do: cancel_timer(timer_ref)
 
   defp cancel_timer(timer_ref) do
     Process.cancel_timer(timer_ref)

@@ -468,10 +468,14 @@ defmodule CodingAgent.ProcessManagerTest do
 
   describe "integration" do
     test "full lifecycle: exec, poll, kill" do
-      # Start a long-running process
-      {:ok, process_id} = ProcessManager.exec(command: "sleep 60")
+      # Lane callback availability does not guarantee acceptance within the
+      # caller's admission yield budget. Reconcile a queued launch by its fixed
+      # identity; never submit the command a second time.
+      assert {admission, process_id} = ProcessManager.exec(command: "sleep 60")
+      assert admission in [:ok, :queued]
 
       await_running(process_id)
+      assert {:ok, %{classification: :accepted}} = ProcessManager.receipt(process_id)
 
       # Poll to check it's running
       assert {:ok, result} = ProcessManager.poll(process_id)

@@ -300,7 +300,8 @@ defmodule LemonRouter.SessionCoordinator do
 
   @impl true
   def init(opts) do
-    {:ok, SessionState.new(opts)}
+    state = SessionState.new(opts)
+    {:ok, discover_active_run(state, :conversation_key, state.conversation_key)}
   end
 
   @impl true
@@ -314,19 +315,11 @@ defmodule LemonRouter.SessionCoordinator do
     {:reply, reply, state}
   end
 
-  # Live coordinators reconstruct the ephemeral read model after
-  # SessionRegistry restarts without restarting or losing their runs.
   def handle_call(:active_submission, _from, state) do
     case state.active do
-      %{session_key: session_key, run_id: run_id} = active
+      %{session_key: session_key, run_id: run_id}
       when is_binary(session_key) and is_binary(run_id) ->
-        case put_active_session_registry(active) do
-          :ok ->
-            {:reply, {:ok, %{session_key: session_key, run_id: run_id}}, state}
-
-          {:error, :unavailable} ->
-            {:reply, {:error, :unavailable}, state}
-        end
+        {:reply, {:ok, %{session_key: session_key, run_id: run_id}}, state}
 
       _ ->
         {:reply, :none, state}
@@ -406,66 +399,62 @@ defmodule LemonRouter.SessionCoordinator do
   end
 
   defp admit_submission(state, submission) do
-    case recover_surviving_session_run(state, submission.session_key) do
-      {:ok, recovered_state} ->
-        {:reply, reply, next_state} =
-          apply_transition(
-            SessionTransitions.submit(
-              recovered_state,
-              submission,
-              System.monotonic_time(:millisecond)
-            ),
-            recovered_state,
-            reply?: true
-          )
+    recovered_state = discover_active_run(state, :session_key, submission.session_key)
 
-        next_state = maybe_emit_submit_phases(recovered_state, submission, next_state)
+    {:reply, reply, next_state} =
+      apply_transition(
+        SessionTransitions.submit(
+          recovered_state,
+          submission,
+          System.monotonic_time(:millisecond)
+        ),
+        recovered_state,
+        reply?: true
+      )
 
-        case disposition(recovered_state, submission, next_state) do
-          nil ->
-            {:reply, reply, next_state}
+    next_state = maybe_emit_submit_phases(recovered_state, submission, next_state)
 
-          changes ->
-            scope = presence_entry(submission, :unknown)
+    case disposition(recovered_state, submission, next_state) do
+      nil ->
+        {:reply, reply, next_state}
 
-            receipt =
-              changes
-              |> Map.merge(%{
-                run_id: submission.run_id,
-                session_key: submission.session_key,
-                agent_id: scope.agent_id,
-                profile_id: scope.profile_id,
-                state: :accepted
-              })
-              |> put_request_identity(submission)
+      changes ->
+        scope = presence_entry(submission, :unknown)
 
-            receipt =
-              if reply == :ok do
-                receipt
-              else
-                %{receipt | state: :outcome_unknown, effective_mode: nil, target_run_id: nil}
-              end
+        receipt =
+          changes
+          |> Map.merge(%{
+            run_id: submission.run_id,
+            session_key: submission.session_key,
+            agent_id: scope.agent_id,
+            profile_id: scope.profile_id,
+            state: :accepted
+          })
+          |> put_request_identity(submission)
 
-            case RunReceiptStore.put(next_state.receipt_store, receipt) do
-              :ok ->
-                ack = if reply == :ok, do: {:ok, receipt}, else: {:error, :outcome_unknown}
-                {:reply, ack, next_state}
+        receipt =
+          if reply == :ok do
+            receipt
+          else
+            %{receipt | state: :outcome_unknown, effective_mode: nil, target_run_id: nil}
+          end
 
-              {:error, _reason} ->
-                %SessionState{} = next_state
+        case RunReceiptStore.put(next_state.receipt_store, receipt) do
+          :ok ->
+            ack = if reply == :ok, do: {:ok, receipt}, else: {:error, :outcome_unknown}
+            {:reply, ack, next_state}
 
-                next_state = %{
-                  next_state
-                  | unpersisted_receipts:
-                      Map.put(next_state.unpersisted_receipts, submission.run_id, receipt)
-                }
+          {:error, _reason} ->
+            %SessionState{} = next_state
 
-                {:reply, {:error, :outcome_unknown}, next_state}
-            end
+            next_state = %{
+              next_state
+              | unpersisted_receipts:
+                  Map.put(next_state.unpersisted_receipts, submission.run_id, receipt)
+            }
+
+            {:reply, {:error, :outcome_unknown}, next_state}
         end
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
     end
   end
 
@@ -507,8 +496,6 @@ defmodule LemonRouter.SessionCoordinator do
         {:DOWN, mon_ref, :process, pid, _reason},
         %SessionState{active: %{pid: pid, mon_ref: mon_ref}} = state
       ) do
-    state = clear_active_session_registry(state)
-
     {:noreply, next_state} =
       apply_transition(
         SessionTransitions.active_down(state, pid, mon_ref, System.monotonic_time(:millisecond)),
@@ -993,6 +980,16 @@ defmodule LemonRouter.SessionCoordinator do
 
         if opts[:return_result?], do: {next_state, :started}, else: {next_state, :ok}
 
+      {:error, reason}
+      when reason == :session_busy or
+             (is_tuple(reason) and tuple_size(reason) == 2 and
+                elem(reason, 0) == :already_registered) ->
+        # Another coordinator can win registration after our admission lookup.
+        # Keep this submission queued behind that run, not terminally failed.
+        next_state = discover_active_run(state, :session_key, next.session_key)
+        if is_nil(next_state.active), do: send(self(), :maybe_start_next)
+        {next_state, :noop}
+
       {:error, reason} ->
         case partially_started_run_pid(next.run_id) do
           pid when is_pid(pid) ->
@@ -1052,75 +1049,40 @@ defmodule LemonRouter.SessionCoordinator do
     end
   end
 
-  # SessionRegistry is an ephemeral read model. A registry restart can remove
-  # its row while the independently supervised RunProcess survives. Before an
-  # idle coordinator accepts new work, adopt that authoritative process so the
-  # new submission stays queued behind it and its DOWN signal advances the
-  # queue normally.
-  defp recover_surviving_session_run(%SessionState{active: %{} = _active} = state, _session_key),
-    do: {:ok, state}
+  # Registry ownership belongs to the run. Monitoring a discovered owner also
+  # handles death between lookup and monitor without a separate liveness probe.
+  defp discover_active_run(%SessionState{active: %{} = _active} = state, _field, _key),
+    do: state
 
-  defp recover_surviving_session_run(%SessionState{} = state, session_key)
-       when is_binary(session_key) do
-    case Registry.lookup(LemonRouter.SessionRegistry, session_key) do
+  defp discover_active_run(%SessionState{} = state, field, key) do
+    entries =
+      case field do
+        :session_key ->
+          Registry.lookup(LemonRouter.SessionRegistry, key)
+
+        :conversation_key ->
+          Registry.select(LemonRouter.SessionRegistry, [
+            {{:"$1", :"$2", %{conversation_key: key, run_id: :"$3"}}, [],
+             [{{:"$2", %{session_key: :"$1", run_id: :"$3"}}}]}
+          ])
+      end
+
+    case entries do
+      [{pid, %{run_id: run_id} = metadata}] ->
+        session_key = if field == :session_key, do: key, else: metadata.session_key
+
+        active = %{
+          pid: pid,
+          mon_ref: Process.monitor(pid),
+          run_id: run_id,
+          session_key: session_key
+        }
+
+        %SessionState{state | active: active}
+
       [] ->
-        adopt_surviving_session_run(state, session_key)
-
-      [{_owner, %{run_id: run_id}} | _] when is_binary(run_id) ->
-        case Registry.lookup(LemonRouter.RunRegistry, run_id) do
-          [{pid, _} | _] when is_pid(pid) ->
-            if Process.alive?(pid),
-              do: adopt_run(state, session_key, run_id, pid),
-              else: {:error, :session_busy}
-
-          _ ->
-            {:error, :session_busy}
-        end
-
-      _registered ->
-        {:error, :session_busy}
+        state
     end
-  rescue
-    ArgumentError -> {:error, :router_not_ready}
-  catch
-    :exit, _ -> {:error, :router_not_ready}
-  end
-
-  defp recover_surviving_session_run(state, _session_key), do: {:ok, state}
-
-  defp adopt_surviving_session_run(state, session_key) do
-    case surviving_session_runs(session_key) do
-      [] ->
-        {:ok, state}
-
-      [{run_id, pid}] ->
-        adopt_run(state, session_key, run_id, pid)
-
-      _multiple ->
-        {:error, :session_single_flight_violated}
-    end
-  end
-
-  defp adopt_run(%SessionState{} = state, session_key, run_id, pid) do
-    active = %{
-      pid: pid,
-      mon_ref: Process.monitor(pid),
-      run_id: run_id,
-      session_key: session_key
-    }
-
-    case put_active_session_registry(active) do
-      :ok -> {:ok, %SessionState{state | active: active}}
-      {:error, :unavailable} -> {:error, :router_not_ready}
-    end
-  end
-
-  defp surviving_session_runs(session_key) do
-    Registry.select(LemonRouter.RunRegistry, [
-      {{:"$1", :"$2", %{session_key: session_key}},
-       [{:andalso, {:is_binary, :"$1"}, {:is_pid, :"$2"}}], [{{:"$1", :"$2"}}]}
-    ])
-    |> Enum.filter(fn {_run_id, pid} -> Process.alive?(pid) end)
   end
 
   defp activate_submission(%SessionState{} = state, next, rest, pid, opts) do
@@ -1128,8 +1090,6 @@ defmodule LemonRouter.SessionCoordinator do
 
     started_submission =
       maybe_emit_waiting_for_slot(next, Keyword.get(opts, :emit_phase?, true))
-
-    put_active_session_registry(started_submission)
 
     %SessionState{
       state
@@ -1146,7 +1106,7 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp partially_started_run_pid(run_id) when is_binary(run_id) do
     case Registry.lookup(LemonRouter.RunRegistry, run_id) do
-      [{pid, _} | _] when is_pid(pid) -> if Process.alive?(pid), do: pid
+      [{pid, _} | _] when is_pid(pid) -> pid
       _ -> nil
     end
   end
@@ -1389,42 +1349,6 @@ defmodule LemonRouter.SessionCoordinator do
   defp dispatcher do
     Application.get_env(:lemon_router, :dispatcher, LemonChannels.Dispatcher)
   end
-
-  defp put_active_session_registry(%{session_key: session_key, run_id: run_id}) do
-    if is_binary(session_key) do
-      _ = Registry.unregister(LemonRouter.SessionRegistry, session_key)
-
-      case Registry.register(LemonRouter.SessionRegistry, session_key, %{run_id: run_id}) do
-        {:ok, _owner} -> :ok
-        {:error, _reason} -> {:error, :unavailable}
-      end
-    else
-      :ok
-    end
-  rescue
-    ArgumentError -> {:error, :unavailable}
-  catch
-    :exit, _ -> {:error, :unavailable}
-  end
-
-  defp clear_active_session_registry(
-         %SessionState{active: %{session_key: session_key, run_id: run_id}} = state
-       )
-       when is_binary(session_key) do
-    case Registry.lookup(LemonRouter.SessionRegistry, session_key) do
-      [{_pid, %{run_id: ^run_id}}] ->
-        Registry.unregister(LemonRouter.SessionRegistry, session_key)
-
-      _ ->
-        :ok
-    end
-
-    state
-  rescue
-    ArgumentError -> state
-  end
-
-  defp clear_active_session_registry(state), do: state
 
   defp runtime_run_pid(run_id) when is_binary(run_id) do
     runtime = configured_engine_runtime()

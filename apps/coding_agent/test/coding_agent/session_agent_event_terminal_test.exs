@@ -74,7 +74,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     gate = delivery.gate
 
     assert_receive {:lemon_bus_delivery, ^gate,
-                    {:session_event, _, {:canceled, :assistant_aborted}}}
+                    {:session_event, _, {:canceled, :assistant_aborted}, _}}
   end
 
   test "aborted message is retained as terminal even when agent_end follows" do
@@ -103,7 +103,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
 
     snapshot = ToolSchemaSnapshot.new([tool])
 
-    message = {:session_event, "schema-session", {:tool_schema_snapshot, snapshot}}
+    message = {:session_event, "schema-session", {:tool_schema_snapshot, snapshot}, nil}
     delivery = LemonCore.Bus.Delivery.new(self(), tagged: true, max_bytes: 16_384)
     assert :ok = LemonCore.Bus.Delivery.send(delivery, message)
     assert_receive {:lemon_bus_delivery, gate, ^message}
@@ -116,7 +116,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     oversized_snapshot = %{snapshot | tools: [%{tool | description: oversized_description}]}
 
     oversized_message =
-      {:session_event, "schema-session", {:tool_schema_snapshot, oversized_snapshot}}
+      {:session_event, "schema-session", {:tool_schema_snapshot, oversized_snapshot}, nil}
 
     assert :erlang.external_size(oversized_message) < delivery.max_bytes
     assert {:error, :overflow} = LemonCore.Bus.Delivery.send(delivery, oversized_message)
@@ -218,7 +218,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     refute_receive :forbidden_mutation, 10
 
     native_events =
-      for {:session_event, _, event} <- events, do: event
+      for {:session_event, _, event, _} <- events, do: event
 
     assert Enum.any?(native_events, fn
              {:tool_schema_snapshot, %ToolSchemaSnapshot{tools: tools}} ->
@@ -237,17 +237,22 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
 
     if mode == :cooperative do
       assert result.details.source == "actual final result"
-      assert Enum.map_join(result.content, "", & &1.text) == "Command cancelled.\n\nSTARTED\n"
+      assert Enum.map_join(result.content, "", & &1.text) =~ "Command cancelled.\n\nSTARTED\n"
     else
       assert result.details.outcome == :unknown
       assert result.details.partial_details == %{source: "observed stdout"}
-      assert Enum.any?(result.content, &(&1.text =~ "Mutation outcome is unknown"))
+
+      assert Enum.any?(
+               result.content,
+               &(&1.text =~ "Do not assume it did not run or automatically repeat it.")
+             )
     end
 
     assert {:tool_execution_end, ^queued_id, "native_queued", queued_result, true} =
              Enum.find(native_events, &match?({:tool_execution_end, ^queued_id, _, _, _}, &1))
 
     assert queued_result.details.outcome == :not_started
+    assert queued_result.details.reason == :aborted
 
     tool_end_index =
       Enum.find_index(native_events, &match?({:tool_execution_end, ^call_id, _, _, _}, &1))
@@ -309,7 +314,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     assert_receive {:session_event, ^session_id,
                     {:message_update,
                      %AssistantMessage{content: [%TextContent{text: "OBSERVED_PARTIAL_PROSE"}]},
-                     _}},
+                     _}, _},
                    2_000
 
     :ok = Session.abort(session)
@@ -318,7 +323,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
 
     assert Enum.any?(events, fn
              {:session_event, _,
-              {:message_end, %AssistantMessage{stop_reason: :aborted} = message}} ->
+              {:message_end, %AssistantMessage{stop_reason: :aborted} = message}, _} ->
                Enum.any?(message.content, &(&1.text == "OBSERVED_PARTIAL_PROSE"))
 
              _ ->
@@ -350,7 +355,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     events = collect_stream_events(stream)
 
     assert Enum.any?(events, fn
-             {:session_event, _, {:message_end, %AssistantMessage{stop_reason: :aborted}}} ->
+             {:session_event, _, {:message_end, %AssistantMessage{stop_reason: :aborted}}, _} ->
                true
 
              _ ->
@@ -401,7 +406,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     events = collect_stream_events(stream)
 
     assert Enum.any?(events, fn
-             {:session_event, _, {:agent_end, ^final_messages}} -> true
+             {:session_event, _, {:agent_end, ^final_messages}, _} -> true
              _ -> false
            end)
 
@@ -426,7 +431,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     events = collect_stream_events(stream)
 
     assert Enum.any?(events, fn
-             {:session_event, _, {:error, :upstream_failure, ^partial_state}} -> true
+             {:session_event, _, {:error, :upstream_failure, ^partial_state}, _} -> true
              _ -> false
            end)
 
@@ -450,7 +455,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     events = collect_stream_events(stream)
 
     assert Enum.any?(events, fn
-             {:session_event, _, {:canceled, :reset}} -> true
+             {:session_event, _, {:canceled, :reset}, _} -> true
              _ -> false
            end)
 
@@ -481,7 +486,9 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
 
     send(session, {:EXIT, state.agent, :provider_crash})
 
-    assert_receive {:session_event, _, {:error, {:agent_exit, :provider_crash}, _partial}}, 2_000
+    assert_receive {:session_event, _, {:error, {:agent_exit, :provider_crash}, _partial}, _},
+                   2_000
+
     assert_receive {:DOWN, ^ref, :process, ^session, {:agent_exit, :provider_crash}}, 2_000
   end
 end

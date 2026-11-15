@@ -6,11 +6,14 @@ defmodule LemonControlPlane.EventBridge do
   to connected non-node WebSocket clients as event frames. Authenticated nodes
   receive only traffic sent directly to their connection as targeted
   `{:node_event, event_name, payload}` messages.
+  Unmapped-event warning suppression uses bridge-owned ETS and resets when the
+  supervised bridge restarts; event producers never own that cache.
 
   ## Topics Subscribed
 
   - `run:*` - Run lifecycle events (agent, chat events, task lifecycle)
   - `session:*` - Session lifecycle and task events
+  - `session_events` - Sequenced native session broadcast batches
   - `channels` - Channel-related events
   - `exec_approvals` - Approval request/resolution events
   - `cron` - Cron job events
@@ -27,6 +30,7 @@ defmodule LemonControlPlane.EventBridge do
   | Bus Event                | WS Event                  |
   |--------------------------|---------------------------|
   | :run_started             | agent                     |
+  | :session_event           | session.event             |
   | :run_completed           | agent                     |
   | :delta                   | chat                      |
   | :engine_action           | agent (type: tool_use)    |
@@ -73,13 +77,14 @@ defmodule LemonControlPlane.EventBridge do
 
   require Logger
 
-  alias LemonControlPlane.Presence
+  alias LemonControlPlane.Connections
   alias LemonCore.Bus
   alias LemonCore.Bus.Delivery
   alias LemonCore.Events
 
   @bus_topics [
     "exec_approvals",
+    "session_events",
     "user_prompts",
     "channels",
     "cron",
@@ -126,6 +131,7 @@ defmodule LemonControlPlane.EventBridge do
 
   @impl true
   def init(_opts) do
+    :ets.new(__MODULE__, [:named_table, :public, :set, write_concurrency: true])
     delivery = Delivery.new(self(), tagged: true)
     Enum.each([LemonOmp.bus_topic() | @bus_topics], &Bus.subscribe(&1, delivery: delivery))
 
@@ -168,11 +174,11 @@ defmodule LemonControlPlane.EventBridge do
   end
 
   def handle_info({:stream_resync, :overflow}, state) do
-    # Lost bus deltas cannot be replayed. Fence every affected client and require
-    # authenticated reconnect + owner snapshot recovery, including approvals.
-    for {_id, info} <- get_connected_clients(), general_event_client?(info) do
-      Delivery.resync(info.delivery)
-    end
+    # Fence every affected client; authenticated reconnect recovers native events
+    # by cursor, falling back to owner snapshots when replay has expired.
+    Connections.dispatch(fn clients ->
+      for {_id, info} <- clients, general_event_client?(info), do: Delivery.resync(info.delivery)
+    end)
 
     topics = [LemonOmp.bus_topic() | @bus_topics] ++ Map.keys(state.topic_ref_counts)
     Enum.each(topics, &Bus.unsubscribe/1)
@@ -191,6 +197,17 @@ defmodule LemonControlPlane.EventBridge do
   def handle_info(%{type: type} = event, state) when is_atom(type) do
     {state, state_version} = maybe_bump_state_version(state, type)
     broadcast_event(event, state_version)
+    {:noreply, state}
+  end
+
+  def handle_info({:connection_registered, pid}, state) do
+    # Notification only: no membership table, monitor map or delivery ownership.
+    Process.monitor(pid)
+    {:noreply, state}
+  end
+
+  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
+    Connections.emit_changed()
     {:noreply, state}
   end
 
@@ -228,11 +245,10 @@ defmodule LemonControlPlane.EventBridge do
         :ok
 
       {event_name, payload} ->
-        clients =
-          get_connected_clients()
-          |> Enum.filter(fn {_conn_id, info} -> general_event_client?(info) end)
-
-        dispatch_event(clients, event_name, payload, state_version)
+        Connections.dispatch(fn entries ->
+          clients = Enum.filter(entries, fn {_id, info} -> general_event_client?(info) end)
+          dispatch_event(clients, event_name, payload, state_version)
+        end)
     end
   end
 
@@ -308,14 +324,7 @@ defmodule LemonControlPlane.EventBridge do
     |> MapSet.new()
   end
 
-  defp get_connected_clients do
-    case Process.whereis(Presence) do
-      nil -> []
-      _ -> Presence.list()
-    end
-  rescue
-    _ -> []
-  end
+  # Registry owns membership; fanout never calls a presence server.
 
   @doc """
   Projects one Bus event to its operator wire event, `{event_name, payload}`,
@@ -343,6 +352,26 @@ defmodule LemonControlPlane.EventBridge do
   end
 
   def project(_), do: nil
+
+  defp map_event_type(
+         :session_event,
+         %{cursor: cursor, event_id: event_id, events: events},
+         meta
+       )
+       when is_map(cursor) and is_binary(event_id) and is_list(events) do
+    projected =
+      for event <- events,
+          {name, payload} <- [project(event)],
+          do: %{"event" => name, "payload" => payload}
+
+    {"session.event",
+     %{
+       "sessionKey" => meta[:session_key],
+       "eventId" => event_id,
+       "cursor" => cursor,
+       "events" => projected
+     }}
+  end
 
   defp map_event_type(:stream_resync, _payload, meta) do
     {"stream.resync",
@@ -907,12 +936,17 @@ defmodule LemonControlPlane.EventBridge do
   defp warn_unmapped_once(type, payload) do
     key = {__MODULE__, :unmapped_event, type}
 
-    if :persistent_term.get(key, nil) == nil do
-      :persistent_term.put(key, true)
+    if first_warning?(key) do
       Logger.warning("[EventBridge] " <> unmapped_reason(type, payload))
     end
 
     :ok
+  end
+
+  defp first_warning?(key) do
+    :ets.insert_new(__MODULE__, {key})
+  rescue
+    ArgumentError -> true
   end
 
   defp unmapped_reason(type, payload) do

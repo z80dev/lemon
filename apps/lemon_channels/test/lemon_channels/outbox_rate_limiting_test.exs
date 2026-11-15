@@ -72,7 +72,7 @@ defmodule LemonChannels.OutboxRateLimitingTest do
 
     :ok = RateLimiter.record(channel, account)
 
-    # The cast is handled before the following status call from the same process
+    # ETS updates are visible immediately to the following status read.
     status2 = RateLimiter.status(channel, account)
     assert status2.tokens < initial_tokens
   end

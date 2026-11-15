@@ -1,17 +1,14 @@
 defmodule LemonGateway.EngineLock do
   @moduledoc """
-  Mutex lock preventing concurrent engine runs on the same session.
+  FIFO admission queue for engine-session Registry names.
 
-  Provides fair FIFO queueing with configurable timeouts. Monitors lock
-  holders and automatically releases locks when processes die. Periodic sweeps
-  report over-age live owners but never transfer exclusivity based on age alone.
+  The acquiring process owns the unique name in `RunRegistry`; this process
+  only orders contenders and monitors reservations and waiters. Explicit release
+  unregisters the name before advancing the queue. No sweep or age-based transfer.
   """
   use GenServer
-  require Logger
 
   @type thread_key :: term()
-  @default_max_lock_age_ms 300_000
-  @default_reap_interval_ms 30_000
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -27,41 +24,61 @@ defmodule LemonGateway.EngineLock do
   @spec acquire(thread_key(), non_neg_integer()) ::
           {:ok, (-> :ok)} | {:error, :timeout}
   def acquire(thread_key, timeout_ms \\ 60_000) do
-    GenServer.call(__MODULE__, {:acquire, thread_key, timeout_ms}, timeout_ms + 1_000)
+    acquire_until(thread_key, System.monotonic_time(:millisecond) + timeout_ms)
+  end
+
+  defp acquire_until(thread_key, deadline) do
+    timeout_ms = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    with {:ok, release} <-
+           GenServer.call(__MODULE__, {:acquire, thread_key, timeout_ms}, timeout_ms + 1_000) do
+      case Registry.register(LemonGateway.RunRegistry, {:engine_session, thread_key}, nil) do
+        {:ok, _} ->
+          {:ok,
+           fn ->
+             Registry.unregister(LemonGateway.RunRegistry, {:engine_session, thread_key})
+             release.()
+           end}
+
+        {:error, {:already_registered, _}} ->
+          release.()
+
+          if System.monotonic_time(:millisecond) < deadline do
+            acquire_until(thread_key, deadline)
+          else
+            {:error, :timeout}
+          end
+      end
+    end
   end
 
   @impl true
-  def init(opts) do
-    opts = normalize_opts(opts)
-    max_lock_age_ms = max_lock_age_ms(opts)
-    reap_interval_ms = reap_interval_ms(opts, max_lock_age_ms)
-    sweep_ref = maybe_schedule_sweep(reap_interval_ms)
-
-    {:ok,
-     %{
-       locks: %{},
-       waiters: %{},
-       max_lock_age_ms: max_lock_age_ms,
-       reap_interval_ms: reap_interval_ms,
-       sweep_ref: sweep_ref
-     }}
+  def init(_opts) do
+    {:ok, %{locks: %{}, waiters: %{}}}
   end
 
   @impl true
   def handle_call({:acquire, thread_key, timeout_ms}, {pid, _ref} = from, state) do
+    state =
+      case {Map.get(state.locks, thread_key),
+            Registry.lookup(LemonGateway.RunRegistry, {:engine_session, thread_key})} do
+        {nil, [{owner, _}]} ->
+          {state, _release} = grant_lock(state, thread_key, owner)
+          state
+
+        _ ->
+          state
+      end
+
     case Map.get(state.locks, thread_key) do
       nil ->
         {state, release_fun} = grant_lock(state, thread_key, pid)
-
-        Logger.debug(
-          "EngineLock granted immediately key=#{inspect(thread_key)} owner=#{inspect(pid)}"
-        )
 
         {:reply, {:ok, release_fun}, state}
 
       _locked ->
         timer_ref = Process.send_after(self(), {:lock_timeout, thread_key, from}, timeout_ms)
-        waiter = %{from: from, pid: pid, timer_ref: timer_ref}
+        waiter = %{from: from, pid: pid, timer_ref: timer_ref, mon_ref: Process.monitor(pid)}
 
         waiters =
           Map.update(
@@ -70,10 +87,6 @@ defmodule LemonGateway.EngineLock do
             :queue.from_list([waiter]),
             &:queue.in(waiter, &1)
           )
-
-        Logger.debug(
-          "EngineLock queued waiter key=#{inspect(thread_key)} owner=#{inspect(pid)} timeout_ms=#{timeout_ms}"
-        )
 
         {:noreply, %{state | waiters: waiters}}
     end
@@ -84,7 +97,6 @@ defmodule LemonGateway.EngineLock do
     case Map.get(state.locks, thread_key) do
       %{owner: ^pid, mon_ref: mon_ref} ->
         Process.demonitor(mon_ref, [:flush])
-        Logger.debug("EngineLock released key=#{inspect(thread_key)} owner=#{inspect(pid)}")
         {:noreply, release_and_next(state, thread_key)}
 
       _ ->
@@ -102,10 +114,6 @@ defmodule LemonGateway.EngineLock do
         {queue, found} = drop_waiter(queue, from)
 
         if found do
-          Logger.warning(
-            "EngineLock waiter timeout key=#{inspect(thread_key)} from=#{inspect(from)}"
-          )
-
           GenServer.reply(from, {:error, :timeout})
         end
 
@@ -118,23 +126,26 @@ defmodule LemonGateway.EngineLock do
     end
   end
 
-  def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    {thread_key, _} =
-      Enum.find(state.locks, fn {_key, lock} ->
-        lock.owner == pid
-      end) || {nil, nil}
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    state =
+      Enum.reduce(state.waiters, state, fn {key, queue}, acc ->
+        {kept, removed} =
+          queue |> :queue.to_list() |> Enum.split_with(&(&1.mon_ref != ref))
 
-    if thread_key do
-      {:noreply, release_and_next(state, thread_key)}
-    else
-      {:noreply, state}
+        Enum.each(removed, &Process.cancel_timer(&1.timer_ref))
+
+        waiters =
+          if kept == [],
+            do: Map.delete(acc.waiters, key),
+            else: Map.put(acc.waiters, key, :queue.from_list(kept))
+
+        %{acc | waiters: waiters}
+      end)
+
+    case Enum.find(state.locks, fn {_key, lock} -> lock.mon_ref == ref end) do
+      {key, _} -> {:noreply, release_and_next(state, key)}
+      nil -> {:noreply, state}
     end
-  end
-
-  def handle_info(:sweep_locks, state) do
-    state = reap_stale_locks(state)
-    sweep_ref = maybe_schedule_sweep(state.reap_interval_ms)
-    {:noreply, %{state | sweep_ref: sweep_ref}}
   end
 
   defp grant_lock(state, thread_key, pid) do
@@ -161,6 +172,7 @@ defmodule LemonGateway.EngineLock do
       queue ->
         {{:value, waiter}, queue} = :queue.out(queue)
         Process.cancel_timer(waiter.timer_ref)
+        Process.demonitor(waiter.mon_ref, [:flush])
         {state, release_fun} = grant_lock(%{state | locks: locks}, thread_key, waiter.pid)
         GenServer.reply(waiter.from, {:ok, release_fun})
 
@@ -181,107 +193,11 @@ defmodule LemonGateway.EngineLock do
     case removed do
       [waiter] ->
         Process.cancel_timer(waiter.timer_ref)
+        Process.demonitor(waiter.mon_ref, [:flush])
         {:queue.from_list(kept), true}
 
       _ ->
         {:queue.from_list(list), false}
     end
   end
-
-  defp max_lock_age_ms(opts) do
-    configured =
-      Application.get_env(:lemon_gateway, :engine_lock_max_hold_ms, @default_max_lock_age_ms)
-
-    case Map.get(opts, :max_lock_age_ms, configured) do
-      :infinity -> :infinity
-      value when is_integer(value) and value > 0 -> value
-      _ -> @default_max_lock_age_ms
-    end
-  end
-
-  defp reap_interval_ms(_opts, :infinity), do: nil
-
-  defp reap_interval_ms(opts, max_lock_age_ms) when is_integer(max_lock_age_ms) do
-    configured =
-      Application.get_env(
-        :lemon_gateway,
-        :engine_lock_reap_interval_ms,
-        min(max_lock_age_ms, @default_reap_interval_ms)
-      )
-
-    case Map.get(opts, :reap_interval_ms, configured) do
-      value when is_integer(value) and value > 0 -> value
-      _ -> min(max_lock_age_ms, @default_reap_interval_ms)
-    end
-  end
-
-  defp maybe_schedule_sweep(nil), do: nil
-
-  defp maybe_schedule_sweep(interval_ms) when is_integer(interval_ms) and interval_ms > 0 do
-    Process.send_after(self(), :sweep_locks, interval_ms)
-  end
-
-  defp reap_stale_locks(state) do
-    now_ms = System.monotonic_time(:millisecond)
-
-    Enum.reduce(Map.keys(state.locks), state, fn thread_key, acc ->
-      case Map.get(acc.locks, thread_key) do
-        nil ->
-          acc
-
-        lock ->
-          if not Process.alive?(lock.owner) do
-            age_ms = lock_age_ms(lock, now_ms)
-
-            Logger.warning(
-              "Reclaiming engine lock from dead owner key=#{inspect(thread_key)} after #{age_ms}ms"
-            )
-
-            Process.demonitor(lock.mon_ref, [:flush])
-            release_and_next(acc, thread_key)
-          else
-            maybe_report_over_age_live_owner(thread_key, lock, now_ms, acc.max_lock_age_ms)
-            acc
-          end
-      end
-    end)
-  end
-
-  defp maybe_report_over_age_live_owner(thread_key, lock, now_ms, max_lock_age_ms)
-       when is_integer(max_lock_age_ms) do
-    age_ms = lock_age_ms(lock, now_ms)
-
-    if age_ms > max_lock_age_ms do
-      Logger.warning(
-        "Engine lock owner remains live beyond age threshold key=#{inspect(thread_key)} " <>
-          "owner=#{inspect(lock.owner)} age_ms=#{age_ms} threshold_ms=#{max_lock_age_ms}"
-      )
-
-      LemonCore.Telemetry.emit(
-        [:lemon, :gateway, :engine_lock, :over_age_live_owner],
-        %{count: 1, age_ms: age_ms, threshold_ms: max_lock_age_ms},
-        %{thread_key: inspect(thread_key), owner: inspect(lock.owner)}
-      )
-    end
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp maybe_report_over_age_live_owner(_thread_key, _lock, _now_ms, _max_lock_age_ms), do: :ok
-
-  defp lock_age_ms(lock, now_ms) do
-    case Map.get(lock, :acquired_at_ms) do
-      acquired_at_ms when is_integer(acquired_at_ms) ->
-        max(now_ms - acquired_at_ms, 0)
-
-      _ ->
-        0
-    end
-  end
-
-  defp normalize_opts(opts) when is_map(opts), do: opts
-  defp normalize_opts(opts) when is_list(opts), do: Map.new(opts)
-  defp normalize_opts(_), do: %{}
 end

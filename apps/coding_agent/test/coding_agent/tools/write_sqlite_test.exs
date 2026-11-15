@@ -123,7 +123,6 @@ defmodule CodingAgent.Tools.WriteSqliteTest do
 
     signal = LemonAgent.AbortSignal.new()
     LemonAgent.AbortSignal.abort(signal)
-    on_exit(fn -> LemonAgent.AbortSignal.clear(signal) end)
 
     assert {:error, :aborted} =
              Write.execute(

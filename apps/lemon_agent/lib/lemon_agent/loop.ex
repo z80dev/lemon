@@ -49,7 +49,8 @@ defmodule LemonAgent.Loop do
   ## Abort Handling
 
   The `signal` parameter is a reference that can be used for abort handling.
-  Check for abort by monitoring the signal or using Process messages.
+  Subscribe with `AbortSignal.subscribe/1` and check `AbortSignal.aborted?/1`
+  before waiting for cancellation messages.
   """
 
   require Logger
@@ -66,7 +67,6 @@ defmodule LemonAgent.Loop do
     ToolResultMessage
   }
 
-  @loop_abort_signal_pd_key :agent_abort_signal
   @loop_state_pd_key :agent_loop_state
   @usage_budget_pd_key :agent_usage_budget
 
@@ -128,9 +128,18 @@ defmodule LemonAgent.Loop do
   def agent_loop(prompts, context, config, signal, stream_fn, owner) do
     {:ok, stream} =
       if owner do
-        EventStream.start_link(owner: owner, timeout: :infinity, idle_timeout: :infinity)
+        EventStream.start_link(
+          owner: owner,
+          timeout: :infinity,
+          idle_timeout: :infinity,
+          abort_signal: signal
+        )
       else
-        EventStream.start_link(timeout: :infinity, idle_timeout: :infinity)
+        EventStream.start_link(
+          timeout: :infinity,
+          idle_timeout: :infinity,
+          abort_signal: signal
+        )
       end
 
     # Run the loop in a supervised task
@@ -141,6 +150,9 @@ defmodule LemonAgent.Loop do
              e ->
                EventStream.error(stream, {:exception, Exception.message(e)}, nil)
            catch
+             :throw, {:event_stream_push_failed, _reason} ->
+               if signal, do: AbortSignal.abort(signal)
+
              kind, value ->
                EventStream.error(stream, {kind, value}, nil)
            after
@@ -243,9 +255,18 @@ defmodule LemonAgent.Loop do
 
     {:ok, stream} =
       if owner do
-        EventStream.start_link(owner: owner, timeout: :infinity, idle_timeout: :infinity)
+        EventStream.start_link(
+          owner: owner,
+          timeout: :infinity,
+          idle_timeout: :infinity,
+          abort_signal: signal
+        )
       else
-        EventStream.start_link(timeout: :infinity, idle_timeout: :infinity)
+        EventStream.start_link(
+          timeout: :infinity,
+          idle_timeout: :infinity,
+          abort_signal: signal
+        )
       end
 
     case Task.Supervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
@@ -255,6 +276,9 @@ defmodule LemonAgent.Loop do
              e ->
                EventStream.error(stream, {:exception, Exception.message(e)}, nil)
            catch
+             :throw, {:event_stream_push_failed, _reason} ->
+               if signal, do: AbortSignal.abort(signal)
+
              kind, value ->
                EventStream.error(stream, {kind, value}, nil)
            after
@@ -307,7 +331,6 @@ defmodule LemonAgent.Loop do
   defp run_agent_loop(prompts, context, config, signal, stream_fn, stream) do
     # Store start time for duration calculation in telemetry
     Process.put(:agent_loop_start_time, System.monotonic_time())
-    maybe_put_loop_abort_signal(signal)
 
     Logger.info(
       "LemonAgent.Loop starting prompt_count=#{length(prompts)} message_count=#{length(context.messages)} " <>
@@ -336,17 +359,17 @@ defmodule LemonAgent.Loop do
     {current_context, config, snapshot} = snapshot_tool_schema(current_context, config)
 
     # Emit initial events
-    EventStream.push(stream, {:agent_start})
+    EventStream.push!(stream, {:agent_start})
     config = initialize_budget(config, stream, true)
     emit_tool_schema_snapshot(stream, snapshot)
-    EventStream.push(stream, {:turn_start})
+    EventStream.push!(stream, {:turn_start})
     reset_loop_state()
     transition_loop_state(stream, :initializing, %{phase: :run_start})
 
     # Emit message events for each prompt
     for prompt <- prompts do
-      EventStream.push(stream, {:message_start, prompt})
-      EventStream.push(stream, {:message_end, prompt})
+      EventStream.push!(stream, {:message_start, prompt})
+      EventStream.push!(stream, {:message_end, prompt})
     end
 
     # Run the main loop
@@ -356,7 +379,6 @@ defmodule LemonAgent.Loop do
   defp run_continue_loop(context, config, signal, stream_fn, stream) do
     # Store start time for duration calculation in telemetry
     Process.put(:agent_loop_start_time, System.monotonic_time())
-    maybe_put_loop_abort_signal(signal)
 
     Logger.info(
       "LemonAgent.Loop continuing message_count=#{length(context.messages)} " <>
@@ -377,10 +399,10 @@ defmodule LemonAgent.Loop do
     new_messages = []
     {current_context, config, snapshot} = snapshot_tool_schema(context, config)
 
-    EventStream.push(stream, {:agent_start})
+    EventStream.push!(stream, {:agent_start})
     config = initialize_budget(config, stream, false)
     emit_tool_schema_snapshot(stream, snapshot)
-    EventStream.push(stream, {:turn_start})
+    EventStream.push!(stream, {:turn_start})
     reset_loop_state()
     transition_loop_state(stream, :initializing, %{phase: :run_continue})
 
@@ -416,7 +438,7 @@ defmodule LemonAgent.Loop do
   end
 
   defp emit_tool_schema_snapshot(stream, %ToolSchemaSnapshot{} = snapshot) do
-    EventStream.push(
+    EventStream.push!(
       stream,
       {:tool_schema_snapshot, ToolSchemaSnapshot.without_executors(snapshot)}
     )
@@ -483,7 +505,6 @@ defmodule LemonAgent.Loop do
         # No more messages, exit
         transition_loop_state(stream, :finalizing, %{reason: :completed})
         emit_loop_end_telemetry(new_messages, config, :completed)
-        EventStream.push(stream, {:agent_end, new_messages})
         EventStream.complete(stream, new_messages)
       end
     else
@@ -527,7 +548,7 @@ defmodule LemonAgent.Loop do
        ) do
     # Emit turn_start if not first turn
     if not first_turn do
-      EventStream.push(stream, {:turn_start})
+      EventStream.push!(stream, {:turn_start})
     end
 
     Logger.debug(
@@ -581,7 +602,7 @@ defmodule LemonAgent.Loop do
           {nil, :aborted} ->
             Logger.info("LemonAgent.Loop turn aborted")
             transition_loop_state(stream, :aborted, %{reason: :assistant_aborted})
-            EventStream.push(stream, {:turn_end, message, []})
+            EventStream.push!(stream, {:turn_end, message, []})
             # Cancelling the stream shuts this task down; settle first.
             ToolStream.settle()
             EventStream.cancel(stream, :assistant_aborted)
@@ -594,7 +615,7 @@ defmodule LemonAgent.Loop do
             # drain the queued correction, and retry the model call.
             Logger.info("LemonAgent.Loop turn redirected")
             context = drop_trailing_message(context, message)
-            EventStream.push(stream, {:turn_end, message, []})
+            EventStream.push!(stream, {:turn_end, message, []})
             AbortSignal.clear_redirect(signal)
 
             pending_messages = get_steering_messages(config, signal)
@@ -621,7 +642,7 @@ defmodule LemonAgent.Loop do
 
           {nil, :error} ->
             transition_loop_state(stream, :recovering_provider_error, %{reason: :assistant_error})
-            EventStream.push(stream, {:turn_end, message, []})
+            EventStream.push!(stream, {:turn_end, message, []})
 
             Logger.error(
               "LemonAgent loop assistant_error " <>
@@ -638,8 +659,8 @@ defmodule LemonAgent.Loop do
                 _ -> :assistant_error
               end
 
-            EventStream.error(stream, reason, %{new_messages: new_messages})
             transition_loop_state(stream, :finalizing, %{reason: :assistant_error})
+            EventStream.error(stream, reason, %{new_messages: new_messages})
             {context, new_messages, [], false}
 
           _ ->
@@ -676,7 +697,7 @@ defmodule LemonAgent.Loop do
             # Every call streamed this turn has now been executed or skipped.
             ToolStream.settle()
 
-            EventStream.push(stream, {:turn_end, message, tool_results})
+            EventStream.push!(stream, {:turn_end, message, tool_results})
 
             tool_turn_count =
               if has_more_tool_calls, do: tool_turn_count + 1, else: tool_turn_count
@@ -721,8 +742,8 @@ defmodule LemonAgent.Loop do
 
       {:error, reason} ->
         transition_loop_state(stream, :recovering_provider_error, %{reason: reason})
-        EventStream.error(stream, reason, new_messages)
         transition_loop_state(stream, :finalizing, %{reason: :stream_error})
+        EventStream.error(stream, reason, new_messages)
         {context, new_messages, [], false}
     end
   end
@@ -784,7 +805,7 @@ defmodule LemonAgent.Loop do
 
     if warning do
       Logger.warning(warning)
-      EventStream.push(stream, {:budget_warning, %{message: warning}})
+      EventStream.push!(stream, {:budget_warning, %{message: warning}})
     end
 
     if budget do
@@ -817,7 +838,7 @@ defmodule LemonAgent.Loop do
         :ok
 
       %LemonAi.Types.AssistantMessage{} ->
-        EventStream.push(stream, {:provider_usage, message})
+        EventStream.push!(stream, {:provider_usage, message})
         record_budget_ledger(config, message, stream)
 
       {:budget_exceeded, _details} ->
@@ -832,7 +853,7 @@ defmodule LemonAgent.Loop do
           usage: nil
         }
 
-        EventStream.push(stream, {:provider_usage, observation})
+        EventStream.push!(stream, {:provider_usage, observation})
         record_budget_ledger(config, observation, stream)
     end
   end
@@ -848,7 +869,7 @@ defmodule LemonAgent.Loop do
   end
 
   defp emit_budget_usage(stream, budget) do
-    EventStream.push(
+    EventStream.push!(
       stream,
       {:usage_budget_updated, %{run_usage: budget.run_usage, session_usage: budget.session_usage}}
     )
@@ -873,9 +894,9 @@ defmodule LemonAgent.Loop do
             timestamp: System.system_time(:millisecond)
           }
 
-          EventStream.push(stream, {:tool_execution_end, call.id, call.name, result, true})
-          EventStream.push(stream, {:message_start, rejected})
-          EventStream.push(stream, {:message_end, rejected})
+          EventStream.push!(stream, {:tool_execution_end, call.id, call.name, result, true})
+          EventStream.push!(stream, {:message_start, rejected})
+          EventStream.push!(stream, {:message_end, rejected})
           rejected
         end)
       else
@@ -884,8 +905,8 @@ defmodule LemonAgent.Loop do
 
     context = %{context | messages: context.messages ++ tool_results}
     new_messages = new_messages ++ tool_results
-    if message, do: EventStream.push(stream, {:turn_end, message, tool_results})
-    EventStream.push(stream, {:budget_exceeded, details})
+    if message, do: EventStream.push!(stream, {:turn_end, message, tool_results})
+    EventStream.push!(stream, {:budget_exceeded, details})
     transition_loop_state(stream, :finalizing, %{reason: :budget_exceeded})
     EventStream.error(stream, {:budget_exceeded, details}, %{new_messages: new_messages})
     {context, new_messages, [], false}
@@ -899,8 +920,8 @@ defmodule LemonAgent.Loop do
     {context, pending_messages} = apply_queued_system_prompt(context, pending_messages)
 
     for message <- pending_messages do
-      EventStream.push(stream, {:message_start, message})
-      EventStream.push(stream, {:message_end, message})
+      EventStream.push!(stream, {:message_start, message})
+      EventStream.push!(stream, {:message_end, message})
     end
 
     context = %{context | messages: context.messages ++ pending_messages}
@@ -934,7 +955,7 @@ defmodule LemonAgent.Loop do
       tool_turns: tool_turn_count
     }
 
-    EventStream.push(stream, {:loop_budget_exhausted, details})
+    EventStream.push!(stream, {:loop_budget_exhausted, details})
     transition_loop_state(stream, :finalizing, %{reason: :max_tool_turns_exhausted})
 
     message = %AssistantMessage{
@@ -957,9 +978,8 @@ defmodule LemonAgent.Loop do
     context = %{context | messages: context.messages ++ [message]}
     new_messages = new_messages ++ [message]
 
-    EventStream.push(stream, {:message_start, message})
-    EventStream.push(stream, {:message_end, message})
-    EventStream.push(stream, {:agent_end, new_messages})
+    EventStream.push!(stream, {:message_start, message})
+    EventStream.push!(stream, {:message_end, message})
     EventStream.complete(stream, new_messages)
 
     {context, new_messages, [], false}
@@ -991,12 +1011,6 @@ defmodule LemonAgent.Loop do
   # Private: Helpers
   # ============================================================================
 
-  defp maybe_put_loop_abort_signal(signal) when is_reference(signal) do
-    Process.put(@loop_abort_signal_pd_key, signal)
-  end
-
-  defp maybe_put_loop_abort_signal(_signal), do: :ok
-
   defp reset_loop_state do
     Process.delete(@loop_state_pd_key)
     :ok
@@ -1007,7 +1021,7 @@ defmodule LemonAgent.Loop do
     state = StateMachine.transition!(current_state, next_state)
     Process.put(@loop_state_pd_key, state)
 
-    EventStream.push(stream, {:loop_state_transition, current_state, state, metadata})
+    EventStream.push!(stream, {:loop_state_transition, current_state, state, metadata})
 
     LemonCore.Telemetry.emit(
       [:lemon_agent, :loop, :state_transition],

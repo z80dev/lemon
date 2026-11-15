@@ -1,6 +1,6 @@
 defmodule CodingAgent.ProcessSession do
   @moduledoc """
-  GenServer that manages a single background process via a Port.
+  GenServer that owns a background or one-shot OS process via a Port.
 
   Features:
   - Rolling log buffer bounded by line count and retained bytes, split on
@@ -13,6 +13,11 @@ defmodule CodingAgent.ProcessSession do
   - Exit status tracking
   - Integration with ProcessStore for persistence
 
+  One-shot sessions relay raw Port events to their monitored caller without a
+  durable tail or artifact. They share this owner's shutdown and group cleanup
+  path with background sessions. Workload reconciliation is event-driven (root
+  exit, explicit cancellation and boot recovery), not a periodic host `ps` scan.
+
   ## Output capture
 
   Received bytes go to two bounded destinations:
@@ -22,11 +27,11 @@ defmodule CodingAgent.ProcessSession do
     `:max_retained_bytes`. Lines longer than the segment size (64 KiB, or less
     for small budgets) are split into segments; the oldest lines are discarded
     first. Retained lines are copied, so they never pin a large received chunk.
-    `ProcessStore` mirrors exactly the retained lines, so the two copies hold at
-    most twice that budget. Parsing scans bounded windows of the received chunk:
-    it never concatenates or splits the whole chunk. Additional binary scratch
-    space is at most two line segments; the incoming port message itself and
-    downstream subscriber/mailbox accumulation are outside this capture budget.
+    An owner-written, read-concurrent ETS snapshot serves live readers without
+    entering the owner's mailbox. `ProcessStore` receives coalesced snapshots
+    every 250 ms while output arrives and immediately on lifecycle transitions.
+    Recovery exposes the last flushed tail, not unflushed output. Parsing and
+    retained-byte limits are unchanged.
   - A private artifact file (mode 0600) holding the head of the output. It
     grows to at most the capacity reserved at start: `:max_artifact_bytes`,
     reduced to what remains of the owner's `:max_owner_artifact_bytes` and
@@ -57,6 +62,8 @@ defmodule CodingAgent.ProcessSession do
   # A line longer than this (for example `\r` progress output with no
   # newline) is split into segments of this size instead of growing without bound.
   @max_line_bytes 65_536
+  # Bound durable tail writes to four per second without delaying live readers.
+  @output_flush_interval_ms 250
   @output_limit_defaults [
     max_retained_bytes: 1_048_576,
     max_artifact_bytes: 16_777_216,
@@ -103,9 +110,13 @@ defmodule CodingAgent.ProcessSession do
 
   @doc """
   Get the current status and logs for a process.
+
+  Reads the latest chunk processed by the owner directly from ETS; it does not
+  wait for output messages still queued in the owner's mailbox.
   """
   def poll(process_id, line_count \\ 100) do
-    GenServer.call(via_tuple(process_id), {:poll, line_count}, 5_000)
+    {:reply, result, _state} = handle_call({:poll, line_count}, nil, live_snapshot(process_id))
+    result
   end
 
   @doc """
@@ -114,9 +125,17 @@ defmodule CodingAgent.ProcessSession do
 
   `dropped_lines` counts lines that scrolled out of the bounded buffer before
   they could be read.
+  Like `poll/2`, this reads the published snapshot without an owner mailbox
+  barrier. Each processed chunk is published synchronously before the owner
+  handles its next message; only durable persistence is debounced.
   """
   def read_output(process_id, opts \\ []) do
-    GenServer.call(via_tuple(process_id), {:read_output, Keyword.get(opts, :peek, false)}, 5_000)
+    state = live_snapshot(process_id)
+
+    {:reply, result, _state} =
+      handle_call({:read_output, Keyword.get(opts, :peek, false)}, nil, state)
+
+    result
   end
 
   @doc """
@@ -171,7 +190,57 @@ defmodule CodingAgent.ProcessSession do
 
   # Server Callbacks
 
+  @doc false
+  def start_oneshot(path, port_opts, use_pty \\ false) do
+    ref = make_ref()
+
+    spec = %{
+      id: ref,
+      restart: :temporary,
+      start:
+        {GenServer, :start_link, [__MODULE__, {:oneshot, self(), ref, path, port_opts, use_pty}]}
+    }
+
+    case DynamicSupervisor.start_child(CodingAgent.ProcessManager, spec) do
+      {:ok, pid} ->
+        receive do
+          {^ref, port, os_pid} -> {port, os_pid, pid}
+        end
+
+      {:error, error} when is_exception(error) ->
+        raise error
+
+      {:error, _reason} ->
+        raise "one-shot process owner could not start"
+    end
+  end
+
+  @doc false
+  def stop_oneshot(pid), do: stop_session(pid)
+
   @impl true
+  def init({:oneshot, owner, ref, path, opts, use_pty}) do
+    Process.flag(:trap_exit, true)
+    if use_pty, do: LemonCore.NativeProcess.unsupported!()
+    port = LemonCore.NativeProcess.open({:spawn_executable, path}, opts)
+    os_pid = get_os_pid(port)
+    send(owner, {ref, port, os_pid})
+
+    {:ok,
+     %{
+       mode: :oneshot,
+       owner: owner,
+       owner_monitor: Process.monitor(owner),
+       port: port,
+       os_pid: os_pid
+     }}
+  rescue
+    error -> {:stop, error}
+  catch
+    kind, reason ->
+      {:stop, RuntimeError.exception("#{kind}: #{inspect(reason)}")}
+  end
+
   def init({process_id, opts}) do
     # Trap exits so `terminate/2` runs on supervisor shutdown and stops the group.
     Process.flag(:trap_exit, true)
@@ -308,7 +377,6 @@ defmodule CodingAgent.ProcessSession do
       workload_identity: workload_identity,
       root_exited: false,
       root_exit_code: nil,
-      workload_timer: nil,
       command: command,
       cwd: cwd,
       env: env,
@@ -343,10 +411,14 @@ defmodule CodingAgent.ProcessSession do
       started_at: System.system_time(:second),
       completed_at: nil,
       restarted_from: Keyword.get(opts, :restarted_from),
-      restart_generation: Keyword.get(opts, :restart_generation, 0)
+      restart_generation: Keyword.get(opts, :restart_generation, 0),
+      tail_table: :ets.new(:process_tail, [:set, :protected, read_concurrency: true]),
+      read_counter: :atomics.new(1, signed: false),
+      output_flush_ref: nil
     }
 
-    {:ok, state}
+    Registry.update_value(CodingAgent.ProcessRegistry, process_id, fn _ -> state.tail_table end)
+    {:ok, publish_output(state)}
   end
 
   @impl true
@@ -387,7 +459,7 @@ defmodule CodingAgent.ProcessSession do
 
   def handle_call({:read_output, peek}, _from, state) do
     first_buffered = state.total_lines - state.log_count
-    cursor = if peek, do: 0, else: state.read_cursor
+    cursor = if peek, do: 0, else: advance_cursor(state.read_counter, state.total_lines)
     start = max(cursor, first_buffered)
 
     lines =
@@ -396,7 +468,7 @@ defmodule CodingAgent.ProcessSession do
       |> Enum.drop(start - first_buffered)
       |> Enum.map(&elem(&1, 0))
 
-    unless peek, do: ProcessStore.put_read_cursor(state.process_id, state.total_lines)
+    # The shared cursor advances atomically without a store or owner call.
 
     result = %{
       process_id: state.process_id,
@@ -441,9 +513,6 @@ defmodule CodingAgent.ProcessSession do
     if state.status in [:running, :killing, :lost] and state.os_pid do
       {reply, state} = request_workload_stop(state, signal, :canceled)
 
-      if reply == :ok and signal == :sigterm,
-        do: Process.send_after(self(), :kill_after_grace, 2_000)
-
       {:reply, reply, state}
     else
       {:reply, {:error, :process_not_running}, state}
@@ -455,12 +524,39 @@ defmodule CodingAgent.ProcessSession do
   end
 
   @impl true
+  def handle_info({port, {:data, _data}} = event, %{mode: :oneshot, port: port} = state) do
+    send(state.owner, event)
+    {:noreply, state}
+  end
+
+  def handle_info({port, {:exit_status, _code}} = event, %{mode: :oneshot, port: port} = state) do
+    if state.os_pid, do: LemonCore.ProcessGroup.terminate(state.os_pid)
+    send(state.owner, event)
+    {:stop, :normal, %{state | os_pid: nil}}
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, _pid, _reason},
+        %{mode: :oneshot, owner_monitor: ref} = state
+      ) do
+    {:stop, :normal, state}
+  end
+
+  def handle_info({:EXIT, port, reason}, %{mode: :oneshot, port: port} = state) do
+    send(state.owner, {port, {:exit_status, if(reason == :normal, do: 0, else: 1)}})
+    {:stop, :normal, state}
+  end
+
   def handle_info({port, {:data, data}}, %{port: port} = state) do
     state =
       write_artifact(%{state | received_bytes: state.received_bytes + byte_size(data)}, data)
 
     state = consume_output(state, data, 0)
-    {:noreply, sync_output(state)}
+    {:noreply, state |> publish_output() |> schedule_output_flush()}
+  end
+
+  def handle_info(:flush_output, state) do
+    {:noreply, sync_output(%{state | output_flush_ref: nil})}
   end
 
   def handle_info(
@@ -484,27 +580,8 @@ defmodule CodingAgent.ProcessSession do
     {:noreply, state}
   end
 
-  def handle_info(:reconcile_workload, %{root_exited: true, status: :lost} = state) do
-    state = %{state | workload_timer: nil}
-
-    case owned_workload_status(state) do
-      :terminated -> {:noreply, finish_workload(state)}
-      {_liveness, identity} -> {:noreply, retain_workload(state, identity)}
-    end
-  end
-
   def handle_info(:external_termination_confirmed, %{status: :lost} = state) do
-    if state.workload_timer, do: Process.cancel_timer(state.workload_timer)
     {:stop, :normal, state}
-  end
-
-  def handle_info(:kill_after_grace, state) do
-    if state.status in [:running, :killing, :lost] do
-      {_reply, state} = request_workload_stop(state, :sigkill, :canceled)
-      {:noreply, state}
-    else
-      {:noreply, state}
-    end
   end
 
   def handle_info(:timeout, state) do
@@ -570,14 +647,18 @@ defmodule CodingAgent.ProcessSession do
   end
 
   @impl true
+  def terminate(_reason, %{mode: :oneshot} = state) do
+    if state.os_pid, do: LemonCore.ProcessGroup.terminate(state.os_pid)
+    if Port.info(state.port), do: Port.close(state.port)
+    :ok
+  end
+
   def terminate(_reason, state) do
-    if not state.output_finalized do
-      try do
-        finalize_output(state)
-      catch
-        # The store may already be gone during shutdown; still release the file.
-        :exit, _reason -> close_output_file(state)
-      end
+    try do
+      finalize_output(state)
+    catch
+      # The store may already be gone during shutdown; still release the file.
+      :exit, _reason -> close_output_file(state)
     end
 
     # A live workload must not outlive its session (supervisor shutdown, crash
@@ -604,7 +685,7 @@ defmodule CodingAgent.ProcessSession do
   # witness for later cancellation rather than silently killed here.
   defp stop_live_workload(%{status: status, root_exited: false, workload_identity: identity})
        when status in [:running, :killing] and is_map(identity) do
-    LemonCore.ProcessGroup.signal_workload_group(identity, :sigkill, false)
+    LemonCore.ProcessGroup.terminate(identity, signal: :sigkill, root_exited: false)
     :ok
   end
 
@@ -702,12 +783,14 @@ defmodule CodingAgent.ProcessSession do
 
     if state.status != :lost, do: ProcessStore.mark_unknown(state.process_id)
 
-    timer =
-      if state.backend == :local and is_map(identity) and not identity.ownership_lost do
-        Process.send_after(self(), :reconcile_workload, 100)
-      end
+    next = %{
+      state
+      | status: :lost,
+        exit_code: nil,
+        workload_identity: identity
+    }
 
-    %{state | status: :lost, exit_code: nil, workload_identity: identity, workload_timer: timer}
+    if state.status == :lost, do: publish_output(next), else: sync_output(next)
   end
 
   defp remember_workload_members(%{workload_identity: identity} = state) when is_map(identity) do
@@ -721,7 +804,7 @@ defmodule CodingAgent.ProcessSession do
       {:unknown, %{ownership_lost: true} = observed} ->
         ProcessStore.update_workload_identity(state.process_id, observed, state.root_exited)
         ProcessStore.mark_unknown(state.process_id)
-        %{state | status: :lost, workload_identity: observed}
+        %{state | status: :lost, workload_identity: observed} |> sync_output()
 
       _ ->
         state
@@ -731,15 +814,21 @@ defmodule CodingAgent.ProcessSession do
   defp remember_workload_members(state), do: state
 
   defp request_workload_stop(state, signal, reason) do
-    case LemonCore.ProcessGroup.signal_workload_group(
-           state.workload_identity,
-           signal,
-           state.root_exited
+    case LemonCore.ProcessGroup.terminate(state.workload_identity,
+           signal: signal,
+           root_exited: state.root_exited
          ) do
       {:ok, identity} ->
         ProcessStore.update_workload_identity(state.process_id, identity, state.root_exited)
         status = if state.root_exited, do: :lost, else: :killing
-        {:ok, %{state | status: status, termination_reason: reason, workload_identity: identity}}
+
+        {:ok,
+         sync_output(%{
+           state
+           | status: status,
+             termination_reason: reason,
+             workload_identity: identity
+         })}
 
       {:terminated, identity} ->
         state = %{state | termination_reason: reason, workload_identity: identity}
@@ -761,13 +850,17 @@ defmodule CodingAgent.ProcessSession do
         ProcessStore.update_workload_identity(state.process_id, identity, state.root_exited)
 
         {{:error, {:outcome_unknown, state.process_id}},
-         %{state | status: :lost, termination_reason: reason, workload_identity: identity}}
+         sync_output(%{
+           state
+           | status: :lost,
+             termination_reason: reason,
+             workload_identity: identity
+         })}
     end
   end
 
   defp finish_workload(state) do
     state = finalize_output(state)
-    if state.workload_timer, do: Process.cancel_timer(state.workload_timer)
 
     {status, exit_code} =
       cond do
@@ -798,9 +891,9 @@ defmodule CodingAgent.ProcessSession do
       state
       | status: status,
         exit_code: exit_code,
-        completed_at: System.system_time(:second),
-        workload_timer: nil
+        completed_at: System.system_time(:second)
     }
+    |> publish_output()
   end
 
   defp start_port(command, cwd, env, backend) do
@@ -1195,16 +1288,57 @@ defmodule CodingAgent.ProcessSession do
     }
   end
 
+  defp live_snapshot(process_id) do
+    with [{_pid, table}] <- Registry.lookup(CodingAgent.ProcessRegistry, process_id),
+         [{:snapshot, state}] <- :ets.lookup(table, :snapshot) do
+      state
+    else
+      _ -> exit(:noproc)
+    end
+  rescue
+    ArgumentError -> exit(:noproc)
+  end
+
+  defp advance_cursor(counter, total) do
+    previous = :atomics.get(counter, 1)
+
+    if previous >= total do
+      previous
+    else
+      case :atomics.compare_exchange(counter, 1, previous, total) do
+        :ok -> previous
+        _ -> advance_cursor(counter, total)
+      end
+    end
+  end
+
+  defp publish_output(state) do
+    :ets.insert(state.tail_table, {:snapshot, state})
+    ProcessStore.notify_change(state.process_id)
+    state
+  end
+
+  defp schedule_output_flush(%{output_flush_ref: nil} = state) do
+    %{
+      state
+      | output_flush_ref: Process.send_after(self(), :flush_output, @output_flush_interval_ms)
+    }
+  end
+
+  defp schedule_output_flush(state), do: state
+
   defp sync_output(state) do
     ProcessStore.append_logs(
       state.process_id,
       Enum.map(:queue.to_list(state.log_buffer), &elem(&1, 0)),
       keep: state.log_count,
       total_lines: state.total_lines,
-      output: output_stats(state)
+      output: output_stats(state),
+      partial_line: state.partial_line,
+      read_cursor: :atomics.get(state.read_counter, 1)
     )
 
-    state
+    publish_output(state)
   end
 
   defp evict({queue, bytes, count}, budget, max_lines) when bytes > budget or count > max_lines do
@@ -1218,7 +1352,7 @@ defmodule CodingAgent.ProcessSession do
 
   defp flush_partial_line(state), do: finish_line(state, false)
 
-  defp finalize_output(%{output_finalized: true} = state), do: state
+  defp finalize_output(%{output_finalized: true} = state), do: sync_output(state)
 
   # Runs once, when the process exits (or the session stops first): the
   # partial line joins the tail, the artifact is closed and its reservation

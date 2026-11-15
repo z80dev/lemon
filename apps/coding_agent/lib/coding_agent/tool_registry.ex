@@ -8,6 +8,9 @@ defmodule CodingAgent.ToolRegistry do
   2. WASM tools
   3. Extension tools
   4. MCP (Model Context Protocol) tools
+
+  Extension snapshots live in ETS owned by the supervised `CodingAgent.RuntimeTables`,
+  not the session or tool task that first discovers an extension.
   """
 
   require Logger
@@ -872,64 +875,24 @@ defmodule CodingAgent.ToolRegistry do
     |> Enum.map(&Path.expand/1)
   end
 
-  defp ensure_cache_table do
-    case :ets.whereis(@extension_cache_table) do
-      :undefined ->
-        try do
-          :ets.new(@extension_cache_table, [:set, :public, :named_table])
-          :ok
-        rescue
-          ArgumentError -> :ok
-        end
-
-      _tid ->
-        :ok
-    end
-  end
-
   defp cache_insert(key, snapshot) do
-    with_cache_table(fn ->
-      :ets.insert(@extension_cache_table, {key, snapshot})
-    end)
+    :ets.insert(@extension_cache_table, {key, snapshot})
   end
 
   defp cache_delete_all do
-    with_cache_table(fn ->
-      :ets.delete_all_objects(@extension_cache_table)
-    end)
+    :ets.delete_all_objects(@extension_cache_table)
   end
 
   defp cache_delete(key) do
-    with_cache_table(fn ->
-      :ets.delete(@extension_cache_table, key)
-    end)
+    :ets.delete(@extension_cache_table, key)
   end
 
   defp cache_tab2list do
-    with_cache_table(fn ->
-      :ets.tab2list(@extension_cache_table)
-    end)
+    :ets.tab2list(@extension_cache_table)
   end
 
   defp cache_lookup(key) do
-    with_cache_table(fn ->
-      :ets.lookup(@extension_cache_table, key)
-    end)
-  end
-
-  defp with_cache_table(operation, attempts_left \\ 2) do
-    ensure_cache_table()
-
-    try do
-      operation.()
-    rescue
-      ArgumentError ->
-        if attempts_left > 1 do
-          with_cache_table(operation, attempts_left - 1)
-        else
-          reraise ArgumentError, __STACKTRACE__
-        end
-    end
+    :ets.lookup(@extension_cache_table, key)
   end
 
   @spec resolve_tools(

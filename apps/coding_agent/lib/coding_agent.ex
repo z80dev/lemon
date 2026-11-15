@@ -23,7 +23,7 @@ defmodule CodingAgent do
       # Send a prompt
       :ok = CodingAgent.Session.prompt(session, "Read the mix.exs file")
 
-      # Events will be sent as {:session_event, session_id, event} messages
+      # Events will be sent as {:session_event, session_id, event, cursor} messages
 
   ## Architecture
 

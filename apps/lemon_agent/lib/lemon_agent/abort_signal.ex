@@ -1,127 +1,80 @@
 defmodule LemonAgent.AbortSignal do
   @moduledoc """
-  Cooperative, ETS-backed abort signalling for the agent loop and tools.
+  Cooperative cancellation with an atomic level and message-driven wakeups.
 
-  A signal is a plain `t:reference/0`. The loop checks it before each LLM call
-  and tool batch; long-running tools should check it too and stop early when it
-  is set, so cancellation is graceful rather than forced:
+  Signals are opaque references holding two atomic slots. They live as long as
+  their holders; no global flag table or explicit cleanup is needed.
+  `aborted?/1` remains a cheap level check for executing tools.
 
-      def execute(args, %{abort_signal: signal} = _ctx) do
-        if LemonAgent.AbortSignal.aborted?(signal), do: throw(:aborted)
-        # ...
-      end
+  Waiters call `subscribe/1` **before** checking the level, then receive
+  `{:lemon_abort, signal, kind}` where kind is `:abort` or `:redirect`.
+  This ordering closes the check-to-wait race. Subscriptions belong to the
+  calling process and disappear on its exit; reusable waiters should call
+  `unsubscribe/1` when finished.
 
-  Reads and writes go through a `:public` ETS table with read/write
-  concurrency, so `aborted?/1` is cheap to call in a hot loop. A long-lived
-  owner process holds the table as its heir, so it survives a producer crash.
-
-  ## Redirect state
-
-  A signal also carries an independent *redirect* bit, stored alongside (not
-  inside) the abort bit under the key `{ref, :redirect}`. A redirect asks the
-  loop to cancel only the in-flight model request — keeping completed tool
-  results — then retry with a queued correction appended. It never means
-  "stop everything", so `aborted?/1` ignores it and tools keep running.
-  Use `request_redirect/1`, `redirect_requested?/1`, and `clear_redirect/1`;
-  `clear/1` clears both bits.
+  Redirect has an independent slot: it interrupts only the in-flight model
+  request, not tools. Only `clear_redirect/1` resets that slot; abort is monotonic.
   """
 
-  @table :agent_core_abort_signals
+  @registry LemonAgent.AbortSignal.Registry
 
   @spec new() :: reference()
-  def new do
-    ensure_table()
-    ref = make_ref()
-    :ets.insert(@table, {ref, false})
-    ref
+  def new, do: :atomics.new(2, signed: false)
+
+  @spec subscribe(reference() | nil) :: :ok
+  def subscribe(nil), do: :ok
+
+  def subscribe(ref) when is_reference(ref) do
+    unless ref in Registry.keys(@registry, self()) do
+      {:ok, _} = Registry.register(@registry, ref, nil)
+    end
+
+    :ok
+  end
+
+  @spec unsubscribe(reference() | nil) :: :ok
+  def unsubscribe(nil), do: :ok
+
+  def unsubscribe(ref) when is_reference(ref) do
+    Registry.unregister(@registry, ref)
+    :ok
   end
 
   @spec abort(reference()) :: :ok
   def abort(ref) when is_reference(ref) do
-    ensure_table()
-    :ets.insert(@table, {ref, true})
-    :ok
+    :atomics.put(ref, 1, 1)
+    notify(ref, :abort)
   end
 
   @spec aborted?(reference() | nil) :: boolean()
   def aborted?(nil), do: false
-
-  def aborted?(ref) when is_reference(ref) do
-    ensure_table()
-
-    case :ets.lookup(@table, ref) do
-      [{^ref, true}] -> true
-      _ -> false
-    end
-  end
+  def aborted?(ref) when is_reference(ref), do: :atomics.get(ref, 1) == 1
 
   @spec request_redirect(reference() | nil) :: :ok
   def request_redirect(nil), do: :ok
 
   def request_redirect(ref) when is_reference(ref) do
-    ensure_table()
-    :ets.insert(@table, {{ref, :redirect}, true})
-    :ok
+    :atomics.put(ref, 2, 1)
+    notify(ref, :redirect)
   end
 
   @spec redirect_requested?(reference() | nil) :: boolean()
   def redirect_requested?(nil), do: false
-
-  def redirect_requested?(ref) when is_reference(ref) do
-    ensure_table()
-
-    case :ets.lookup(@table, {ref, :redirect}) do
-      [{{^ref, :redirect}, true}] -> true
-      _ -> false
-    end
-  end
+  def redirect_requested?(ref) when is_reference(ref), do: :atomics.get(ref, 2) == 1
 
   @spec clear_redirect(reference() | nil) :: :ok
   def clear_redirect(nil), do: :ok
 
   def clear_redirect(ref) when is_reference(ref) do
-    ensure_table()
-    :ets.delete(@table, {ref, :redirect})
+    :atomics.put(ref, 2, 0)
     :ok
   end
 
-  @spec clear(reference() | nil) :: :ok
-  def clear(nil), do: :ok
+  defp notify(ref, kind) do
+    Registry.dispatch(@registry, ref, fn entries ->
+      for {pid, _} <- entries, do: send(pid, {:lemon_abort, ref, kind})
+    end)
 
-  def clear(ref) when is_reference(ref) do
-    ensure_table()
-    :ets.delete(@table, ref)
-    :ets.delete(@table, {ref, :redirect})
     :ok
-  end
-
-  defp ensure_table do
-    case :ets.whereis(@table) do
-      :undefined ->
-        heir = Process.whereis(LemonAgent.AbortSignal.TableOwner)
-
-        opts =
-          [
-            :named_table,
-            :public,
-            :set,
-            read_concurrency: true,
-            write_concurrency: true
-          ] ++
-            if is_pid(heir) do
-              [{:heir, heir, :ok}]
-            else
-              []
-            end
-
-        :ets.new(@table, opts)
-        :ok
-
-      _ ->
-        :ok
-    end
-  rescue
-    ArgumentError ->
-      :ok
   end
 end

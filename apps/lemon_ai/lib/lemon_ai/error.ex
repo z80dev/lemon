@@ -520,7 +520,9 @@ defmodule LemonAi.Error do
   def classify({:error, reason}), do: classify(reason)
   def classify(:context_length_exceeded), do: :context_length
   def classify(:rate_limited), do: :rate_limit
-  def classify(reason) when reason in [:circuit_open, :max_concurrency], do: :transient
+
+  def classify(reason) when reason in [:circuit_open, :max_concurrency, :admission_unavailable],
+    do: :transient
 
   def classify(%{__struct__: module, reason: reason})
       when module in [Req.TransportError, Finch.TransportError, Mint.TransportError],

@@ -1,10 +1,14 @@
 defmodule CodingAgent.JoinAwait do
-  @moduledoc false
+  @moduledoc """
+  Message-driven task joins. Subscribe before reading authoritative state, then
+  wait on run/task/question changes, child monitors or cancellation. A single
+  absolute deadline bounds the whole join; notifications never extend it.
+  """
 
   alias CodingAgent.{ParentQuestions, RunGraph, TaskStore}
+  alias CodingAgent.Tools.Task.Control
   alias LemonAgent.AbortSignal
-
-  @poll_ms 100
+  alias LemonCore.Bus
 
   @spec await([String.t()], [String.t()], :wait_all | :wait_any, reference() | nil, keyword()) ::
           {:ok, map()}
@@ -23,36 +27,64 @@ defmodule CodingAgent.JoinAwait do
 
     interrupted? = Keyword.get(opts, :interrupted?, fn -> false end)
 
-    with :ok <- ensure_known_runs(run_ids) do
-      do_await(run_ids, task_ids, mode, signal, deadline, interrupted?)
+    topics =
+      Enum.flat_map(run_ids, &["run_graph:#{&1}", Bus.run_topic(&1)]) ++
+        Enum.map(task_ids, &"task_state:#{&1}") ++
+        List.wrap(Keyword.get(opts, :interruption_topic))
+
+    Enum.each(Enum.uniq(topics), &Bus.subscribe/1)
+
+    AbortSignal.subscribe(signal)
+
+    try do
+      with :ok <- ensure_known_runs(run_ids) do
+        do_await(run_ids, task_ids, mode, signal, deadline, interrupted?)
+      end
+    after
+      AbortSignal.unsubscribe(signal)
+      Enum.each(Enum.uniq(topics), &Bus.unsubscribe/1)
     end
   end
 
   defp do_await(run_ids, task_ids, mode, signal, deadline, interrupted?) do
-    cond do
-      AbortSignal.aborted?(signal) ->
-        {:error, :aborted}
+    owners = [CodingAgent.TaskStoreServer, CodingAgent.RunGraphServer, Control]
+    owner_pids = owners |> Enum.map(&Process.whereis/1) |> Enum.filter(&is_pid/1)
+    workers = Control.worker_pids(task_ids)
+    monitors = Map.new(Enum.uniq(owner_pids ++ workers), &{Process.monitor(&1), &1})
 
-      interrupted?.() ->
-        {:yield, :interrupted}
+    outcome =
+      try do
+        cond do
+          AbortSignal.aborted?(signal) ->
+            {:error, :aborted}
 
-      deadline != :infinity and System.monotonic_time(:millisecond) >= deadline ->
-        {:yield, :timeout}
+          interrupted?.() ->
+            {:yield, :interrupted}
 
-      true ->
-        case ParentQuestions.waiting_for_task_ids(task_ids) do
-          {:ok, request} ->
-            {:parent_question, request}
+          deadline != :infinity and System.monotonic_time(:millisecond) >= deadline ->
+            {:yield, :timeout}
 
-          {:error, :not_found} ->
-            case await_runs(run_ids, task_ids, mode) do
-              {:ok, result} ->
-                {:ok, result}
+          true ->
+            with :ok <- ensure_known_runs(run_ids) do
+              case ParentQuestions.waiting_for_task_ids(task_ids) do
+                {:ok, request} ->
+                  {:parent_question, request}
 
-              {:error, :timeout, _snapshot} ->
-                do_await(run_ids, task_ids, mode, signal, deadline, interrupted?)
+                {:error, :not_found} ->
+                  case await_runs(run_ids, task_ids, mode) do
+                    {:ok, result} -> {:ok, result}
+                    :pending -> wait_for_change(signal, deadline, monitors, owner_pids)
+                  end
+              end
             end
         end
+      after
+        Enum.each(monitors, fn {ref, _pid} -> Process.demonitor(ref, [:flush]) end)
+      end
+
+    case outcome do
+      :changed -> do_await(run_ids, task_ids, mode, signal, deadline, interrupted?)
+      result -> result
     end
   end
 
@@ -71,40 +103,74 @@ defmodule CodingAgent.JoinAwait do
         end
       end)
 
-    if map_size(turns) == 0 do
-      RunGraph.await(run_ids, mode, @poll_ms)
-    else
-      runs =
-        Enum.map(run_ids, fn id ->
-          {:ok, run} = RunGraph.get(id)
+    runs =
+      Enum.map(run_ids, fn id ->
+        {:ok, run} = RunGraph.get(id)
 
-          case turns[id] do
-            nil -> run
-            record -> Map.merge(run, Map.take(record, [:status, :result, :error]))
-          end
-        end)
+        case turns[id] do
+          nil -> run
+          record -> Map.merge(run, Map.take(record, [:status, :result, :error]))
+        end
+      end)
 
-      terminal? = fn run ->
-        RunGraph.normalize_status(run[:status]) in [
-          :completed,
-          :error,
-          :lost,
-          :killed,
-          :cancelled
-        ]
-      end
+    terminal? = fn run ->
+      RunGraph.normalize_status(run[:status]) in [
+        :completed,
+        :error,
+        :lost,
+        :killed,
+        :cancelled
+      ]
+    end
 
-      case {mode, Enum.all?(runs, terminal?), Enum.find(runs, terminal?)} do
-        {:wait_all, true, _} ->
-          {:ok, %{mode: mode, runs: runs}}
+    case {mode, Enum.all?(runs, terminal?), Enum.find(runs, terminal?)} do
+      {:wait_all, true, _} ->
+        {:ok, %{mode: mode, runs: runs}}
 
-        {:wait_any, _, run} when not is_nil(run) ->
-          {:ok, %{mode: mode, run: run}}
+      {:wait_any, _, run} when not is_nil(run) ->
+        {:ok, %{mode: mode, run: run}}
 
-        _ ->
-          Process.sleep(@poll_ms)
-          {:error, :timeout, %{mode: mode, runs: runs}}
-      end
+      _ ->
+        :pending
+    end
+  end
+
+  defp wait_for_change(signal, deadline, monitors, owner_pids) do
+    timeout =
+      if deadline == :infinity,
+        do: :infinity,
+        else: max(0, deadline - System.monotonic_time(:millisecond))
+
+    receive do
+      {:lemon_abort, ^signal, _kind} ->
+        {:error, :aborted}
+
+      {:run_graph, :state_changed, _id} ->
+        :changed
+
+      {:task_state, :changed, _id} ->
+        :changed
+
+      %LemonCore.Event{type: type}
+      when type in [
+             :parent_question_requested,
+             :parent_question_answered,
+             :parent_question_cancelled,
+             :parent_question_timed_out,
+             :parent_question_error
+           ] ->
+        :changed
+
+      {:parent_question, :delivered, _id} ->
+        :changed
+
+      {:session_coord, :steering_changed} ->
+        :changed
+
+      {:DOWN, ref, :process, pid, _reason} when is_map_key(monitors, ref) ->
+        if pid in owner_pids, do: {:error, :coordination_owner_down}, else: :changed
+    after
+      timeout -> {:yield, :timeout}
     end
   end
 

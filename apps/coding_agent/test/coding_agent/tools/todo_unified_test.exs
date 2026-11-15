@@ -178,7 +178,6 @@ defmodule CodingAgent.Tools.TodoUnifiedTest do
       result =
         Todo.execute("call_1", %{"action" => "write", "todos" => todos}, signal, nil, session_pid)
 
-      AbortSignal.clear(signal)
       assert {:error, "Operation aborted"} = result
     end
 

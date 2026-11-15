@@ -18,6 +18,36 @@ backup directories or credential-inclusion settings in `config.toml`. See
 [Back up and restore Lemon user state](user-guide/backups.md) for the versioned
 `~/.lemon` data contract.
 
+## Optional GenAI span export
+
+OpenTelemetry export is disabled by default. It is deployment/application
+configuration, not a `config.toml` table or session policy. In the embedding
+application's `config/runtime.exs` (before `:lemon_agent` starts):
+
+```elixir
+config :lemon_agent, :gen_ai_spans,
+  enabled: true,
+  exporter: LemonAgent.GenAISpans.OpenTelemetry
+```
+
+`lemon_agent` declares only an **optional** `opentelemetry_api` dependency.
+Install/start an OpenTelemetry SDK and the desired transport exporter in the
+host application, and configure its processors, endpoint, authentication and
+sampling there. The API alone does not record spans; the adapter is compiled
+only when that API is present. Packaged deployments must include these optional
+apps explicitly to use the adapter.
+
+For another exporter, set `:exporter` to a module implementing
+`LemonAgent.GenAISpans.Exporter` and supply its `:exporter_config` term. No
+OpenTelemetry dependency is needed for custom exporters. All callbacks receive
+only allowlisted labels/usage and native monotonic timestamps; no prompt,
+response, tool arguments/results, credentials or raw exception terms are
+exported. There is no content-capture setting. Restart `:lemon_agent` after
+changing this configuration.
+
+See [telemetry](telemetry.md#optional-genai-span-export) for attributes,
+duration units, lifecycle limitations and the exporter contract.
+
 ## Listener exposure (breaking default change)
 
 The control plane (`4040`), LemonWeb (`4080`),
@@ -291,6 +321,11 @@ access. `workspace_read_exempt` is a sparse tri-state boolean (`true`, `false`,
 or `nil` when omitted) controlling approval exemption for workspace reads.
 Omitting `[profiles.<id>.tool_policy]` retains the explicit runtime
 default; supplying an invalid table produces a deny-all policy.
+
+The removed legacy tool-policy key `sandbox` is accepted but ignored, with one
+warning per parsing process. It never changes tool grants, denials, approval
+requirements or other restrictions, and is not serialized. Remove it from old
+configuration: tool policy does not provide operating-system sandboxing.
 
 `LemonCore.ProfileStore` is the lifecycle owner for user-managed profiles.
 Commands such as `lemon profile create research` patch only the selected
@@ -830,7 +865,9 @@ config :coding_agent,
 
 The process limit holds capacity for the managed command's live lifetime, not
 just the launch callback. `lane_caps.background_exec` remains a separate launch
-concurrency cap; main/subagent lanes retain their existing callback semantics.
+concurrency cap. `:coding_agent, :task_max_concurrency` (default `8`) is the
+single shared cap for native task children and background sessions. They acquire
+the same monitored semaphore; the unused main/subagent lanes no longer exist.
 The pending limit bounds waiting admissions per LaneQueue; the acceptance ledger
 also bounds in-flight registrations. Process/pending limits are integers up to
 1,000,000 (process minimum 1, pending minimum 0). Admission deadline/wait values
@@ -896,10 +933,11 @@ capacity and live owner monitors before permitting a new admission.
 Cleared identity tombstones and historical unknown receipts do not expire.
 The default finished-process TTL (86,400 seconds) and cleanup interval
 (300 seconds) do not bound ledger rows; recovery, count and artifact scans grow
-with that history. Observable retained local workloads reconcile after 100 ms
-plus scan cost using a system-wide `ps` snapshot. Ownership-lost and nonlocal
-unknown workloads do not schedule this polling. These are local containment
-contracts, not proof of remote workload termination.
+with that history. Local workload liveness is reconciled on the root Port's
+exit-status event, explicit cancellation and boot recovery, not a periodic
+system-wide `ps` timer. Retained unknown workloads remain charged until verified
+termination. These are local containment contracts, not proof of remote workload
+termination.
 
 The internal evaluation harness can additionally opt into
 `LemonCore.NativeProcess` tracking by calling `configure!/1` with a fresh private
@@ -2721,13 +2759,31 @@ suppresses bootstrap even when resuming an assistant session.
 - `runtime.tools.disclosure`: deferring tool schemas behind `tool_search` / `tool_invoke` (see [Tool Disclosure](#tool-disclosure)).
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings. Automatic compaction runs when the request
-  exceeds the context window minus `reserve_tokens`. Optional `threshold_percent` (integer 1–100,
+  exceeds the context window minus `max(ceil(15% of window), reserve_tokens)`.
+  The configured reserve defaults to 16,384; larger overrides are respected.
+  Optional `threshold_percent` (integer 1–100,
   percent of the window) or `threshold_tokens` (positive integer; wins over the percent) lower that
   threshold; they never raise it above the reserve limit. Invalid values fail config validation.
   `/context` and `sessions.context` report the effective threshold. Models with an
   unknown or non-positive context window skip token-based automatic compaction
   and report unknown capacity as null; explicit compaction and provider overflow
   recovery remain available.
+  Automatic compaction must land at or below 80% of the effective trigger
+  (the omp #2275 dead-loop recovery band). `keep_recent_tokens` is an upper
+  target, reduced to fit that band including request overhead. A pass that
+  misses the band escalates once through overflow compaction with a minimal
+  valid tail. If that still cannot fit, `compaction_recovery_band` is reported
+  and unchanged history is not compacted again each turn; reduce request
+  overhead, manually compact, or start a new session.
+  Before calling the summary model, Lemon spills old tool-result bodies to
+  session-scoped `artifact://` handles. It protects the newest 40,000 estimated
+  tokens and skips results below 50 tokens (omp's `docs/compaction.md` policy).
+  References recover the original JSON content blocks through `read`; tool
+  call IDs, result IDs, ordering and error status remain unchanged for every
+  provider. A branch-local journal marker retains these projections across
+  resume without rewriting original output. Failed spills leave output intact.
+  When pruning alone reaches the recovery band, no summary call is made;
+  message-count pressure still requires summarization.
 - `runtime.retry`: session retry of transient provider failures (backoff + retry-after).
 - `runtime.max_tool_turns`: optional per-prompt cap on tool-using turns (default unlimited).
 - `runtime.secret_obfuscation`: opt-in placeholder obfuscation of secrets in provider-visible text ([details](security/secret-obfuscation.md)).
@@ -3028,7 +3084,6 @@ allowed_user_ids = [123456789]  # if empty, group uploads require admin
 deny_globs = [".git/**", ".env", ".envrc", "**/*.pem", "**/.ssh/**"]
 max_upload_bytes = 20971520     # optional (default: 20MB)
 max_download_bytes = 52428800   # optional (default: 50MB)
-outbound_send_delay_ms = 1000   # optional: delay between auto-sent files/batches to reduce 429s
 ```
 
 Commands:

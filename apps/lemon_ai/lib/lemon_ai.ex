@@ -117,7 +117,9 @@ defmodule LemonAi do
   of provider HTTP retries. `stream/3` itself never gains completion retries.
 
   Pass `:retry` as a keyword list or map alongside stream options to override
-  `:max_attempts`, `:base_delay_ms`, `:max_delay_ms`, `:sleep_fun` or `:cancelled?`.
+  `:max_attempts`, `:base_delay_ms`, `:max_delay_ms`, `:sleep_fun`, `:cancelled?`
+  or `:subscribe_cancel`. See `LemonAi.OneshotRetry` for the message subscription
+  and cleanup contract used to interrupt backoff without polling.
   Set `retry: [max_attempts: 1]` to surface the first failure. Server hints
   longer than the allowed wait surface unchanged instead of retrying early.
 

@@ -84,7 +84,7 @@ defmodule CodingAgent.Session.PromptComposerTest do
     assert String.ends_with?(prompt, environment)
     assert environment =~ "Working directory: #{tmp_dir}"
     assert environment =~ "Shell: /bin/zsh"
-    assert environment =~ "Today's date: 2026-09-27"
+    refute environment =~ "Today's date:"
 
     positions =
       Enum.map(
@@ -98,5 +98,65 @@ defmodule CodingAgent.Session.PromptComposerTest do
       )
 
     assert positions == Enum.sort(positions)
+  end
+
+  test "date, branch and dirty-file changes never change the system bytes", %{tmp_dir: cwd} do
+    git = System.find_executable("git") || flunk("Git is required")
+    {_, 0} = System.cmd(git, ["init", "-q", "-b", "before", cwd])
+    workspace = Path.join(cwd, "workspace")
+    File.mkdir_p!(workspace)
+    environment = CodingAgent.SystemPrompt.Environment.capture(cwd)
+
+    compose = fn ->
+      PromptComposer.compose_system_prompt(
+        cwd,
+        nil,
+        nil,
+        workspace,
+        :main,
+        "",
+        %{environment: environment, contributed_sections: []}
+      )
+    end
+
+    first = compose.()
+    before = CodingAgent.SystemPrompt.Environment.turn_section(cwd, date: ~D[2026-01-01])
+    {_, 0} = System.cmd(git, ["-C", cwd, "symbolic-ref", "HEAD", "refs/heads/after"])
+    File.write!(Path.join(cwd, "dirty.txt"), "changed")
+    after_turn = CodingAgent.SystemPrompt.Environment.turn_section(cwd, date: ~D[2026-01-02])
+    assert compose.() == first
+    assert before.body =~ "2026-01-01"
+    assert before.body =~ "before"
+    assert after_turn.body =~ "2026-01-02"
+    assert after_turn.body =~ "after"
+    assert after_turn.body =~ "dirty.txt"
+    assert {[], [^after_turn]} = LemonAgent.ContextRegistry.split([after_turn])
+    refute first =~ "Today's date:"
+    refute first =~ "Git status"
+  end
+
+  test "resume reuses durable orientation and cwd changes explicitly refresh it", %{tmp_dir: cwd} do
+    alias CodingAgent.SessionManager
+    path = Path.join(cwd, "session.jsonl")
+    session = SessionManager.new(cwd) |> SessionManager.persist(path)
+
+    {session, "original"} =
+      SessionManager.capture_environment(session, cwd, fn _ -> "original" end)
+
+    assert length(SessionManager.entries(session)) == 1
+    {:ok, resumed} = SessionManager.load_from_file(path)
+
+    {resumed, "original"} =
+      SessionManager.capture_environment(resumed, cwd, fn _ -> flunk("recaptured on resume") end)
+
+    assert length(SessionManager.entries(resumed)) == 1
+
+    {changed, "refreshed"} =
+      SessionManager.capture_environment(resumed, Path.join(cwd, "other"), fn _ -> "refreshed" end)
+
+    assert length(SessionManager.entries(changed)) == 2
+
+    {_, "new session"} =
+      SessionManager.capture_environment(SessionManager.new(cwd), cwd, fn _ -> "new session" end)
   end
 end

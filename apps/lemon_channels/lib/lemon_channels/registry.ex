@@ -2,14 +2,14 @@ defmodule LemonChannels.Registry do
   @moduledoc """
   Registry for channel plugins.
 
-  Manages registration and lookup of channel plugins.
+  Registration changes publish a persistent-term snapshot. Plugin lookups on the
+  delivery/chunking path never call the registry process.
   """
 
   use GenServer
 
-  require Logger
-
   @call_timeout_ms 5_000
+  @plugins_key {__MODULE__, :plugins}
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -36,14 +36,8 @@ defmodule LemonChannels.Registry do
   """
   @spec get_plugin(binary()) :: module() | nil
   def get_plugin(plugin_id) do
-    GenServer.call(__MODULE__, {:get, plugin_id}, @call_timeout_ms)
-  catch
-    :exit, reason ->
-      Logger.warning(
-        "[Channels.Registry] get_plugin(#{inspect(plugin_id)}) failed: #{inspect(reason)}"
-      )
-
-      nil
+    plugins = :persistent_term.get(@plugins_key, %{})
+    Map.get(plugins, plugin_id)
   end
 
   @doc """
@@ -186,6 +180,7 @@ defmodule LemonChannels.Registry do
 
   @impl true
   def init(_opts) do
+    :persistent_term.put(@plugins_key, %{})
     {:ok, %{plugins: %{}, health: %{}}}
   end
 
@@ -197,23 +192,19 @@ defmodule LemonChannels.Registry do
       {:reply, {:error, :already_registered}, state}
     else
       plugins = Map.put(state.plugins, plugin_id, plugin_module)
+      publish_plugins(plugins)
       {:reply, :ok, %{state | plugins: plugins}}
     end
   end
 
   def handle_call({:unregister, plugin_id}, _from, state) do
     plugins = Map.delete(state.plugins, plugin_id)
+    publish_plugins(plugins)
     {:reply, :ok, %{state | plugins: plugins, health: Map.delete(state.health, plugin_id)}}
   end
 
-  def handle_call({:get, plugin_id}, _from, state) do
-    plugin = Map.get(state.plugins, plugin_id)
-    {:reply, plugin, state}
-  end
-
   def handle_call(:list, _from, state) do
-    plugins = Map.values(state.plugins)
-    {:reply, plugins, state}
+    {:reply, Map.values(state.plugins), state}
   end
 
   def handle_call(:list_info, _from, state) do
@@ -269,6 +260,7 @@ defmodule LemonChannels.Registry do
       plugin ->
         _ = LemonChannels.Application.stop_adapter(plugin)
         plugins = Map.delete(state.plugins, channel_id)
+        publish_plugins(plugins)
         {:reply, :ok, %{state | plugins: plugins, health: Map.delete(state.health, channel_id)}}
     end
   end
@@ -293,6 +285,20 @@ defmodule LemonChannels.Registry do
     {:noreply, %{state | health: Map.put(state.health, id, health)}}
   end
 
+  @impl true
+  def terminate(_reason, _state) do
+    :persistent_term.erase(@plugins_key)
+    :ok
+  end
+
+  defp publish_plugins(plugins) do
+    :persistent_term.put(@plugins_key, plugins)
+
+    if pid = Process.whereis(LemonChannels.Outbox) do
+      send(pid, :process_queue)
+    end
+  end
+
   defp error_message({:http_error, code, _}) when code in [401, 403],
     do: "Channel authentication was rejected. Check credentials on the Lemon host."
 
@@ -301,6 +307,16 @@ defmodule LemonChannels.Registry do
 
   defp error_message(:timeout), do: "Channel connection timed out."
   defp error_message(:disconnected), do: "Channel disconnected. Check the Lemon host."
+
+  defp error_message(:reconnect_exhausted),
+    do: "Channel reconnect budget exhausted. Restart the adapter on the Lemon host."
+
+  defp error_message(:logged_out),
+    do: "Channel logged out. Re-link the account on the Lemon host."
+
+  defp error_message(:connection_replaced),
+    do: "Channel connection replaced by another client. Check the Lemon host."
+
   defp error_message(_), do: "Channel connection failed. Check the Lemon host logs."
 
   defp adapter_running_by_id?(state, channel_id) do

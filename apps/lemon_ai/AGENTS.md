@@ -31,6 +31,21 @@ resolution belong in `lemon_agent`, not provider implementations.
   At the cap, callers wait in a bounded per-provider FIFO; `:max_concurrency`
   means the wait timed out before the callback ran. `queue_timeout_ms: 0` is
   explicit fail-fast mode, not the ordinary path.
+- Slot admission is **fail-closed**: an unavailable per-provider authority returns
+  `{:error, :admission_unavailable}` (classified `:transient`) without running the
+  callback. No caller contract relies on bypassing caps during a restart; allowing
+  that bypass would overload providers precisely when the runtime is recovering.
+  Independent provider authorities use leases/caps in root-supervisor-owned ETS,
+  so restarting an authority or the dispatcher cannot forget live work. Rebuild
+  owner monitors from those leases before admitting new calls; releases during
+  downtime must remove the retained lease. This protects child-process restarts,
+  not VM/application shutdown or a distributed/global provider quota.
+  Queued callers interrupted by an authority restart receive the unavailable error;
+  they are never replayed or granted a replacement slot implicitly.
+  A request that finds a known authority missing is rejected even if rebuilding
+  that authority succeeds; later attempts use the recovered leases and cap.
+- Circuit admission/status reads use ETS snapshots, not breaker calls. Result
+  recording and reset publish snapshots synchronously before returning.
 - Admission must be released after streaming completion or owner failure, not
   merely when a stream handle is returned. Circuit success/failure reflects the
   completed stream.
@@ -64,6 +79,12 @@ Use the existing local HTTP/provider fixtures and injectable retry sleep functio
 Restore circuit, rate-limit and registry state when tests touch global resources.
 Live credential tests belong in the opt-in integration lane.
 
-This is one of five package targets; repository 0.2.0 is not yet published.
+This is one of five published Hex package targets. Admission changes extend the
+public error surface: `dispatch/3`, `set_concurrency_cap/2`,
+`get_concurrency_cap/1` and `get_active_requests/1` may return
+`{:error, :admission_unavailable}`; `get_state/0` includes `:unavailable` providers.
+Breaker result recording/reset retain their `:ok` result but now acknowledge
+snapshot publication synchronously. `peek/1` can read a suspended breaker instead
+of returning `:unknown` merely because it cannot process messages.
 Keep `mix.exs` self-contained in tarballs and verify package changes with
 `scripts/verify_packages`. See [publication status](../../docs/platform-split.md).

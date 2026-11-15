@@ -53,6 +53,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   @impl true
   def init(opts) do
+    {:ok, opts, {:continue, :start}}
+  end
+
+  @impl true
+  def handle_continue(:start, opts) do
     base = LemonChannels.GatewayConfig.get(:telegram, %{})
 
     config =
@@ -150,17 +155,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             end)
 
           send(self(), :poll)
-          {:ok, state}
+          {:noreply, state}
 
         {:error, :locked} ->
           Logger.warning(
             "Telegram poller already running for account_id=#{inspect(account_id)}; refusing to start lemon_channels transport"
           )
 
-          :ignore
+          {:stop, :poller_locked, %{account_id: account_id, token: token}}
       end
     else
-      :ignore
+      {:stop, :telegram_not_configured, %{}}
     end
   end
 
@@ -190,10 +195,29 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   @impl true
   def handle_info(:poll, %{drain_paused?: true} = state), do: {:noreply, state}
 
+  def handle_info(:poll, %{poll_task: %Task{}} = state), do: {:noreply, state}
+
   def handle_info(:poll, state) do
-    state = poll_updates(state)
+    task = Task.Supervisor.async_nolink(async_supervisor_name(), fn -> Poller.fetch(state) end)
+    {:noreply, Map.put(state, :poll_task, task)}
+  end
+
+  def handle_info({ref, result}, %{poll_task: %Task{ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
+    state = Map.delete(state, :poll_task)
+
+    state =
+      if state[:drain_paused?],
+        do: state,
+        else: Poller.apply_result(state, result, pipeline_callbacks())
+
     Process.send_after(self(), :poll, state.poll_interval_ms)
     {:noreply, state}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{poll_task: %Task{ref: ref}} = state) do
+    Process.send_after(self(), :poll, state.poll_interval_ms)
+    {:noreply, Map.delete(state, :poll_task)}
   end
 
   def handle_info({:debounce_flush, scope_key, debounce_ref}, state) do
@@ -320,12 +344,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   @impl true
   def terminate(_reason, state) do
-    _ = PollerLock.release(state.account_id, state.token)
+    if task = state[:poll_task], do: Task.shutdown(task, :brutal_kill)
+    if state[:token], do: PollerLock.release(state.account_id, state.token)
     :ok
-  end
-
-  defp poll_updates(state) do
-    Poller.poll_updates(state, pipeline_callbacks())
   end
 
   defp dispatch_transport_event(event, state) do
@@ -844,11 +865,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         user_msg_id
       )
 
-    # Store writes are async in some flows; repeat the cleanup once to win races.
-    Process.sleep(50)
-    _ = safe_delete_chat_state(session_key)
-    _ = safe_delete_selected_resume(state, chat_id, thread_id)
-    _ = safe_sweep_thread_message_indices(state, chat_id, thread_id, previous_generation)
     :ok
   end
 
@@ -1663,7 +1679,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     if is_pid(Process.whereis(supervisor)) do
       Task.Supervisor.start_child(supervisor, fun)
     else
-      Task.start(fun)
+      {:error, :async_supervisor_unavailable}
     end
   end
 

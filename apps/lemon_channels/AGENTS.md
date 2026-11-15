@@ -49,6 +49,13 @@ and script notifications.
 
 - Outbox FIFO grouping includes channel, account, peer kind/id and thread.
   Preserve order within a group while allowing independent groups to progress.
+- Acknowledged outbox admission crosses the Store durability barrier. Reload
+  pending records with their original keys, retry budget and FIFO sequence;
+  remove payload content only after a durable terminal transition. Pending
+  capacity includes admissions waiting for storage. Keep Store barriers off the
+  queue owner, lookup/check paths process-call-free, and delivery tasks capped.
+  Durable retry/expiry stamps use wall time; volatile dedupe/rate buckets use
+  monotonic time. Production recovery requires a persistent Store backend.
 - Outbox delivery is at-least-once for the channels whose adapters report an unknown outcome. An unknown outcome
   (adapter `{:outcome_unknown, _}`, adapter exception, worker exit) is retried
   with the same payload and idempotency key within the bounded `max_attempts`
@@ -74,6 +81,13 @@ and script notifications.
 - Transport GenServers remain lifecycle shells; add behavior to existing local
   normalization/pipeline/command/action helpers. Async Telegram work uses its
   task supervisor. Picker/system traffic should use the delivery/outbox path.
+  Telegram long polls run in `AsyncSupervisor` via `async_nolink`; apply replies
+  to current transport state, never overwrite live allowlist/drain changes with
+  a task's old snapshot. Drain discards an in-flight batch without confirming
+  its offset. Bootstrap probes and token-scoped service-lock acquisition happen
+  in `handle_continue`, not `init`. Missing supervision fails closed.
+  Outbound sends never sleep or retry; the outbox owns transient/rate-limit
+  retry budgets and backoff, including media sends.
 - `/model` scope is deliberate: session choices stay session-local, while
   future-session defaults are chat-wide even when selected from a topic. Accept
   exact labels and plain provider/model IDs; selections are not ordinary prompts.

@@ -14,9 +14,8 @@ defmodule LemonAgent.ModelRuntime.CredentialHealth do
     * anything else (`:transient`, `:server`, `:unknown`, ...) - short backoff.
 
   `record_success/2` clears the credential's state. State lives in a public
-  named ETS table owned by this process (same pattern as
-  `LemonAgent.AbortSignal.TableOwner`); every call degrades safely when the
-  table is missing - no cooldowns, never a crash on the call path.
+  named ETS table created only by this supervised process. Calls never create
+  or adopt a table; while the owner is absent they observe no cooldowns.
   """
 
   use GenServer
@@ -111,15 +110,15 @@ defmodule LemonAgent.ModelRuntime.CredentialHealth do
 
   @impl true
   def init(:ok) do
-    ensure_table()
-    {:ok, %{}}
-  end
+    :ets.new(@table, [
+      :named_table,
+      :public,
+      :set,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
 
-  # If another process created the table with this process as heir, ETS sends
-  # this message when the original owner exits.
-  @impl true
-  def handle_info({:"ETS-TRANSFER", @table, _from, _gift_data}, state) do
-    {:noreply, state}
+    {:ok, %{}}
   end
 
   @impl true
@@ -168,25 +167,4 @@ defmodule LemonAgent.ModelRuntime.CredentialHealth do
   defp normalize_provider(provider), do: ProviderNames.normalize(provider)
 
   defp now_ms, do: System.monotonic_time(:millisecond)
-
-  defp ensure_table do
-    case :ets.whereis(@table) do
-      :undefined ->
-        :ets.new(@table, [
-          :named_table,
-          :public,
-          :set,
-          read_concurrency: true,
-          write_concurrency: true
-        ])
-
-        :ok
-
-      _ ->
-        :ok
-    end
-  rescue
-    ArgumentError ->
-      :ok
-  end
 end

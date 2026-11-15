@@ -1,12 +1,12 @@
 defmodule CodingAgent.SystemPrompt.Environment do
   @moduledoc """
-  Captures working directory, platform, shell, Git worktree root and status,
-  a bounded workspace layout and descendant instruction-path index, and date.
+  Captures stable working-directory, platform, shell, workspace layout and
+  descendant instruction-path context. Journal this block once per session and
+  reuse it on resume; a cwd change starts a new snapshot.
 
-  Capture once at session start and reuse the returned string on prompt refresh.
-  All filesystem and Git information is labelled as a session-start snapshot;
-  deterministic ordering avoids time-relative prompt-cache churn. Descendant
-  guides are indexed, not loaded: read applicable guides before editing there.
+  Layout and guide paths stay in the stable block because they are orientation,
+  not live filesystem truth. Their explicit snapshot labels require fresh
+  discovery for newly created directories without churning the system prefix.
 
   Git discovery includes tracked and non-ignored untracked files. Generated
   trees are excluded even if tracked. Without Git, a bounded traversal skips
@@ -14,8 +14,8 @@ defmodule CodingAgent.SystemPrompt.Environment do
   failures are distinct from a confirmed non-repository. Truncation and read
   failures are explicit, never an assertion that discovery was exhaustive.
 
-  `CodingAgent.Session.PromptComposer` appends this block after all other prompt
-  sections. The date remains the final line.
+  `turn_section/2` supplies the current date and Git status with ContextRegistry's
+  `:user_message` placement, never in the cached system prefix.
   """
 
   alias CodingAgent.ResourceLoader
@@ -41,7 +41,7 @@ defmodule CodingAgent.SystemPrompt.Environment do
 
   Options:
 
-    * `:date` - date to report (default: today, UTC)
+    * `:date` - used only by `turn_section/2` (default: today, UTC)
     * `:shell` - shell used by the bash tool (default: its configured shell)
     * `:git_executable` - Git executable path (default: resolve `git` on PATH);
       explicit `nil` reports Git unavailable and uses filesystem discovery
@@ -57,7 +57,6 @@ defmodule CodingAgent.SystemPrompt.Environment do
   @spec capture(String.t(), [capture_opt()]) :: String.t()
   def capture(cwd, opts \\ []) when is_binary(cwd) do
     cwd = Path.expand(cwd)
-    date = Keyword.get(opts, :date) || Date.utc_today()
     shell = Keyword.get(opts, :shell) || default_shell()
     git = Keyword.get_lazy(opts, :git_executable, fn -> System.find_executable("git") end)
     timeout = Keyword.get(opts, :git_timeout_ms, @git_timeout_ms)
@@ -72,8 +71,40 @@ defmodule CodingAgent.SystemPrompt.Environment do
     ]
     |> Kernel.++(git_lines)
     |> Kernel.++(workspace_lines(root, snapshot))
-    |> Kernel.++(["Today's date: #{Date.to_iso8601(date)}"])
     |> Enum.join("\n")
+  end
+
+  @doc "Current date and bounded Git snapshot for the user turn, not the system prompt."
+  def turn_section(cwd, opts \\ []) do
+    cwd = Path.expand(cwd)
+    date = Keyword.get(opts, :date) || Date.utc_today()
+    git = Keyword.get_lazy(opts, :git_executable, fn -> System.find_executable("git") end)
+    timeout = Keyword.get(opts, :git_timeout_ms, @git_timeout_ms)
+
+    lines =
+      if git do
+        case git_command(git, cwd, ["rev-parse", "--show-toplevel"], timeout) do
+          {:ok, root, 0} ->
+            repository_lines(cwd, String.trim(root), git, timeout)
+
+          {:ok, output, _} ->
+            if String.contains?(output, "not a git repository"),
+              do: ["Git repository: no"],
+              else: ["Git repository: unavailable"]
+
+          _ ->
+            ["Git repository: unavailable"]
+        end
+      else
+        ["Git repository: unavailable (Git executable not found)"]
+      end
+
+    %{
+      name: :environment,
+      title: "Current environment",
+      body: Enum.join(["Today's date: #{Date.to_iso8601(date)}" | lines], "\n"),
+      placement: :user_message
+    }
   end
 
   defp default_shell do
@@ -102,7 +133,7 @@ defmodule CodingAgent.SystemPrompt.Environment do
         root = String.trim(output)
 
         if root != "" and File.dir?(root) do
-          {repository_lines(cwd, root, git, timeout), root, git_snapshot(root, git, timeout)}
+          {["Git worktree root: #{root}"], root, git_snapshot(root, git, timeout)}
         else
           unavailable_snapshot(cwd, :invalid_root, probe)
         end
@@ -139,22 +170,22 @@ defmodule CodingAgent.SystemPrompt.Environment do
               status_lines(changes, result == :truncated)
 
           _ ->
-            ["Git repository: yes", root_line, "Git status at session start: unavailable"]
+            ["Git repository: yes", root_line, "Git status at turn start: unavailable"]
         end
 
       _ ->
-        ["Git repository: yes", root_line, "Git status at session start: unavailable"]
+        ["Git repository: yes", root_line, "Git status at turn start: unavailable"]
     end
   end
 
-  defp status_lines([], false), do: ["Git status at session start: clean"]
+  defp status_lines([], false), do: ["Git status at turn start: clean"]
 
   defp status_lines(changes, truncated) do
     shown = Enum.take(changes, @max_status_lines)
     truncated = truncated or length(changes) > @max_status_lines
     more = if truncated, do: ["... Git status snapshot truncated"], else: []
 
-    ["Git status at session start (a snapshot; it does not update during the session):" | shown] ++
+    ["Git status at turn start (snapshot):" | shown] ++
       more
   end
 

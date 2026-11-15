@@ -137,11 +137,11 @@ defmodule CodingAgent.Session.TodoJournalTest do
     session = start_session(root)
     original = host(session, %{"action" => "write", "todos" => pending()})["todos"]
     before = Session.get_state(session)
-    blocked = Path.join(root, "host-not-a-file")
-    File.mkdir_p!(blocked)
 
     :sys.replace_state(session, fn state ->
-      %{state | session_manager: %{state.session_manager | file_path: blocked}}
+      :ok = SessionManager.close(state.session_manager)
+      {:ok, device} = :file.open(state.session_file, [:read, :raw, :binary])
+      %{state | session_manager: %{state.session_manager | append_device: device}}
     end)
 
     assert {:error, reason} = host_result(session, %{"action" => "write", "todos" => []})
@@ -150,6 +150,15 @@ defmodule CodingAgent.Session.TodoJournalTest do
     assert_host_views(session, original)
     assert {:ok, saved} = SessionManager.load_from_file(before.session_file)
     assert {{:ok, ^original}, _} = Todos.materialize(saved)
+
+    :sys.replace_state(session, fn state ->
+      :ok = SessionManager.close(state.session_manager)
+
+      manager =
+        SessionManager.persist(%{state.session_manager | append_device: nil}, before.session_file)
+
+      %{state | session_manager: manager}
+    end)
   end
 
   test "host approval waits end on deadline, cancellation, caller death and Session disposal",
@@ -182,7 +191,6 @@ defmodule CodingAgent.Session.TodoJournalTest do
 
       owner_monitor = Process.monitor(owner)
       signal = LemonAgent.AbortSignal.new()
-      on_exit(fn -> LemonAgent.AbortSignal.clear(signal) end)
 
       context = %{
         owner: owner,
@@ -267,7 +275,6 @@ defmodule CodingAgent.Session.TodoJournalTest do
         )
 
       parent_signal = LemonAgent.AbortSignal.new()
-      on_exit(fn -> LemonAgent.AbortSignal.clear(parent_signal) end)
 
       context = %{
         owner: self(),
@@ -381,7 +388,6 @@ defmodule CodingAgent.Session.TodoJournalTest do
 
     bridge = tool(session, "todo_host_bridge")
     signal = LemonAgent.AbortSignal.new()
-    on_exit(fn -> LemonAgent.AbortSignal.clear(signal) end)
     params = %{"action" => "write", "todos" => pending()}
     caller = Task.async(fn -> bridge.execute.("cancel-host", params, signal, nil) end)
     caller_pid = caller.pid
@@ -557,11 +563,11 @@ defmodule CodingAgent.Session.TodoJournalTest do
     session = start_session(root)
     original = write(session, pending()).details.todos
     before = Session.get_state(session)
-    blocked = Path.join(root, "not-a-file")
-    File.mkdir_p!(blocked)
 
     :sys.replace_state(session, fn state ->
-      %{state | session_manager: %{state.session_manager | file_path: blocked}}
+      :ok = SessionManager.close(state.session_manager)
+      {:ok, device} = :file.open(state.session_file, [:read, :raw, :binary])
+      %{state | session_manager: %{state.session_manager | append_device: device}}
     end)
 
     assert {:error, _} = execute(session, %{"action" => "write", "todos" => []})
@@ -574,7 +580,12 @@ defmodule CodingAgent.Session.TodoJournalTest do
     assert {{:ok, ^original}, _} = Todos.materialize(saved)
 
     :sys.replace_state(session, fn state ->
-      %{state | session_manager: %{state.session_manager | file_path: before.session_file}}
+      :ok = SessionManager.close(state.session_manager)
+
+      manager =
+        SessionManager.persist(%{state.session_manager | append_device: nil}, before.session_file)
+
+      %{state | session_manager: manager}
     end)
   end
 
@@ -584,15 +595,15 @@ defmodule CodingAgent.Session.TodoJournalTest do
     session = start_session(root)
     Session.subscribe(session)
     original = write(session, pending()).details.todos
-    assert_receive {:session_event, _, {:todos_changed, ^original}}
+    assert_receive {:session_event, _, {:todos_changed, ^original}, _}
     a = leaf(session)
     assert {:ok, ^original, old} = Session.todos(session)
     done = write(session, Enum.map(original, &Map.put(&1, "status", "completed"))).details.todos
-    assert_receive {:session_event, _, {:todos_changed, ^done}}
+    assert_receive {:session_event, _, {:todos_changed, ^done}, _}
     assert {:error, :stale_revision} = Session.write_todos(session, original, old)
     assert_views(session, done)
     navigate(session, a)
-    assert_receive {:session_event, _, {:todos_changed, ^original}}
+    assert_receive {:session_event, _, {:todos_changed, ^original}, _}
     assert {:ok, ^original, prepared} = Session.todos(session)
     navigate(session, leaf_id_of_latest_todo(session))
     navigate(session, a)

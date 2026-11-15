@@ -31,7 +31,10 @@ defmodule LemonCore.ExecApprovalExpiry do
   end
 
   @doc false
-  def runtime_id do
+  def runtime_id, do: :persistent_term.get(@runtime_key)
+
+  @doc false
+  def init_runtime_id do
     case :persistent_term.get(@runtime_key, nil) do
       nil ->
         # Initialization is serialized by the application callback, before any

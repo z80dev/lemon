@@ -1147,14 +1147,13 @@ defmodule LemonAgent.EventStreamTest do
     end
 
     test "attached task abort signal is triggered before shutdown" do
-      {:ok, stream} = EventStream.start_link()
-      test_pid = self()
       abort_ref = AbortSignal.new()
+      {:ok, stream} = EventStream.start_link(abort_signal: abort_ref)
+      test_pid = self()
 
       task_pid =
         spawn(fn ->
           Process.flag(:trap_exit, true)
-          Process.put(:agent_abort_signal, abort_ref)
           send(test_pid, :abort_task_ready)
 
           receive do
@@ -1187,8 +1186,6 @@ defmodule LemonAgent.EventStreamTest do
 
       assert EventStream.events(stream) |> Enum.to_list() ==
                [{:accepted_event}, {:canceled, :test_cancel}]
-
-      AbortSignal.clear(abort_ref)
     end
 
     test "attached task gets a grace window before forced shutdown" do

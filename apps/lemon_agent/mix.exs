@@ -90,6 +90,7 @@ defmodule LemonAgent.MixProject do
       {:lemon_core, in_umbrella: true},
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
+      {:opentelemetry_api, "~> 1.5", optional: true},
       {:stream_data, "~> 1.1", only: :test},
       # API documentation
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}

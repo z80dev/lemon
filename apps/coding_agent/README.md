@@ -58,6 +58,11 @@ an execution node, it starts `Executor.RemoteSessionRunner`, which asks
 the authenticated destination WebSocket. The destination starts the same native
 executor/session path and returns one JSON-safe terminal result; no vendor CLI
 or subprocess agent runner is involved.
+Each controller invocation owns its event sequencing, timeout and cancellation
+in a temporary process; streamed frames do not cross a singleton broker.
+The worker's stable socket owner schedules reconnects with timers, so stopping a
+node also stops it during backoff. Reconnect never resumes disconnected work.
+
 
 Optional context contributors can observe content-free lifecycle telemetry:
 `[:coding_agent, :session, :tool_dispatched]` carries `session_pid`,
@@ -77,6 +82,7 @@ passes tool/reasoning payloads, or appends review output to session history.
 
 ```
 CodingAgent.Supervisor (one_for_one)
+  +-- RuntimeTables (extension/web/capability caches)
   +-- Registry (SessionRegistry)
   +-- Registry (BackgroundRun.Registry)
   +-- Registry (ProcessRegistry)
@@ -90,9 +96,31 @@ CodingAgent.Supervisor (one_for_one)
   +-- RunGraphServer (ETS+DETS persistent run graph)
   +-- ProcessStoreServer (background process state)
   +-- ProcessManager (DynamicSupervisor for exec processes)
-  +-- LaneQueue (concurrency-capped lane FIFO)
++-- LaneQueue (background process launch FIFO)
   +-- Parallel.Semaphore (task concurrency limit)
 ```
+
+### Runtime table ownership
+
+`RuntimeTables` creates the extension inventory, extension source/error metadata,
+web cache/state and websearch rate-limit tables before sessions start. Additional
+web-cache tables are created by that same supervised owner, never by a tool task.
+Python/CLT and ripgrep/PCRE2 probe results and the fallback secret-placeholder key
+use its protected ETS cache. Probes execute outside the owner; concurrent misses
+publish one canonical value. Reads stay direct ETS lookups.
+
+These caches survive requesting-process exits, but are disposable on owner
+restart. Web entries reload from their configured disk cache; extension inventory
+and capability results repopulate on demand. The fallback placeholder key is
+runtime-ephemeral and changes after owner restart; persisted keys are unaffected.
+`TodoStoreOwner` owns the todo projection without a caller-created fallback.
+Direct tool/store callers must start the `coding_agent` application.
+Pre-boot Python feature checks may run uncached without starting the application
+or creating a table, preserving CLI capability inspection before worker setup.
+
+Search provider specifications remain in `:persistent_term`: only explicit
+startup/config-registration operations (`init`, `reset`, `register`,
+`unregister`) publish them. Provider reads never initialize or mutate the map.
 
 ## Module Inventory
 
@@ -130,7 +158,8 @@ CodingAgent.Supervisor (one_for_one)
 |--------|-------------|
 | `CodingAgent.ExecutionNode.CLI` | Implements `./bin/lemon node join` for a source checkout |
 | `CodingAgent.ExecutionNode.Worker` | Authenticates to a controller, maintains the connection with application-level health keepalives, and executes targeted, versioned `coding_agent.run` requests through `CodingAgent.Executor` |
-| `CodingAgent.ExecutionNode.Socket` | Reconnecting WebSocket client for control-plane handshakes, requests, responses, and node events |
+| `CodingAgent.ExecutionNode.Socket` | Stable WebSocket owner with timer-driven reconnects and interruptible backoff |
+| `CodingAgent.ExecutionNode.Socket.Transport` | One authenticated WebSocket connection, handshakes, requests, responses, and node events |
 | `CodingAgent.ExecutionNode.TokenStore` | Stores durable-node-ID-keyed session and recovery credentials under `~/.lemon/nodes/execution/` with a mode-0700 directory and mode-0600 files; migrates compatible legacy name-keyed records |
 | `CodingAgent.Executor.RemoteRequestCodec` | Restricts the cross-node boundary to JSON-safe execution request/result fields and destination-cwd intent |
 
@@ -462,10 +491,10 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.LaneQueue` | Lane-aware FIFO queue with per-lane concurrency caps (default: main=4, subagent=8, background_exec=2) |
+| `CodingAgent.LaneQueue` | FIFO background process launch admission with durable receipts |
 | `CodingAgent.BackgroundRun` | Durable `/bg` lifecycle facade (`start`, `list`, `status`, `result`, `cancel`) for isolated full-tool sessions |
 | `CodingAgent.SideQuery` | Bounded `/btw` query facade using an immutable live snapshot or durable session-key history with tools disabled |
-| `CodingAgent.Parallel` | Semaphore-based concurrency control and `map_with_concurrency_limit` |
+| `CodingAgent.Parallel` | Monitored semaphore for shared native child concurrency |
 | `CodingAgent.ProcessManager` | DynamicSupervisor for background processes started by `bash` with `run_in_background`, read with `bash_output`, stopped with `kill_process` |
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` / `ProcessStoreServer` | ETS store for background process state |
@@ -518,6 +547,19 @@ Failed, cancelled, lost or missing child results block their dependents transiti
 Progress includes graph counts and node identities alongside normal child tool updates. Cancelling the coordinator stops active children and prevents further launches; parent or scheduler death also cancels its work. The coordinator has no model session: its roster entry has `messaging: false`, direct messages fail clearly, and broadcasts skip it. Launched children keep normal scoped parent/sibling messaging and parent-only cancellation.
 
 Set `worktree: true` per child (or on the batch) to create a git branch `lemon/task-<task_id>` from the current checkout's HEAD. Worktrees live beneath the repository's common git directory in `lemon-task-worktrees/<task_id>` and retain the source cwd's relative subdirectory. `merge` (default `[runtime.task].worktree_merge`, itself defaulting to `"none"`) selects what happens after the child **succeeds**; it requires `worktree: true`:
+
+Isolated workspaces warm Git-ignored build directories using APFS clones or
+Linux reflinks when a filesystem probe succeeds. The default allowlist is
+`deps`, `_build`, `node_modules`, `target`, `.venv`; customize it with application
+environment `:coding_agent, :task_clone_directories` (top-level directory names).
+Only existing ignored directories are copied; ignored `.env` and configuration
+outside the allowlist remain private in every merge mode. Build artifacts stay
+out of the baseline and merge patch and are removed with the child checkout.
+Set `:coding_agent, :task_workspace_backend` to `:git_worktree` to force the cold
+fallback. Caller safety policy caps cloning at 100,000 entries, 64 GiB logical
+bytes and ten seconds. Unsupported filesystems or exhausted limits retain the
+ordinary Git behavior. Symlinks are preserved without following their targets.
+Warm-build performance still requires measurement.
 
 - `none`: uncommitted changes and local credentials/config are not copied, and the worktree and branch are retained, not merged or deleted. Review or cherry-pick the child's commits, then remove the worktree with `git worktree remove`.
 - `patch` (omp's default): the parent checkout's uncommitted work — tracked changes plus untracked, non-ignored files (at most 64 MiB; symlinks only when they stay inside the repository) — is replayed into the worktree and committed as a baseline. On success, the child's committed and uncommitted changes relative to that baseline are applied to the parent working tree with `git apply` (not staged or committed), serialized per repository; the worktree and branch are then removed. If the patch does not apply cleanly the parent is left untouched and the worktree, branch and `lemon-task-worktrees/<task_id>.patch` are kept (`status: "conflict"`).
@@ -578,6 +620,17 @@ Set `output_schema` on a task or batch child to require a JSON-only final respon
 
 Task state uses a single-writer contract. `TaskStoreServer` serializes record changes, bounded event appends, explicit-join followup reservations/suppression, and terminalization. Competing completion/error callbacks are first-writer-wins, repeated terminal callbacks are idempotent, and late running/progress updates preserve the terminal state. `RunGraphServer` completes its DETS recovery before reporting startup readiness, then serializes live inserts, transitions, budget updates, and deletes so recovery cannot overwrite accepted live state.
 
+Native joins and swarm dependency scheduling subscribe before reading state and
+wake from existing Bus run/task notifications and process monitors, not refresh
+polls. Parent-question delivery acknowledgements and queued steering wake joins
+too. Each join keeps one absolute deadline across all wake-ups; cancellation,
+followup reservations and owner-scoped task identity are unchanged. Foreground
+Bash attachments likewise wake on published owner-tail/output and lifecycle
+changes, retaining the original detach deadline and fixed process identity.
+Unattached child inbox admission runs in a per-child mailbox owner with the
+existing 64-message / 256-KiB cap, rather than a queue in the shared control
+coordinator.
+
 For coordination workflows that must produce one final same-turn answer, queued task results should be treated as launch receipts, not completion. Keep the returned `task_id`s and call `action=join` before responding; auto-followup is for later delivery, not guaranteed same-turn aggregation. Joins reserve followup delivery while waiting. `wait_all` permanently suppresses completed joined tasks, while `wait_any` suppresses only its completed winner and releases every loser; failure, abort, an unknown run, or a child clarification releases the reservation without permanent suppression. Task result surfaces (`poll`, `join`, `get`, and async auto-followup) expose only visible assistant output plus task metadata, not stored event streams, tool-call internals, or thinking deltas. For non-terminal tasks, `poll` and `get` behave as status queries: user-visible text shows task status, while the latest structured `current_action` stays in `details` instead of leaking raw command/tool event text into answer content. Async followup delivery also backfills terminal task/run state before posting the completion message, which prevents delivered completions from leaving task records stranded in `queued` or `running`. Auto-followup preserves the full visible task answer and submits router fallbacks as native followup runs; delivery failures are contained after task/run state is terminalized. Async launches fail immediately when their supervised worker cannot start, rather than returning a task id that remains queued forever. Async completions default to `:followup`; `:steer` and `:steer_backlog` also use non-preempting delivery. Live parents finish every already-issued tool call, then receive the completion before their next model request; unavailable parents fall back to router followup runs.
 
 The delegated `agent` tool mirrors each accepted async router run into `RunGraph`, so `agent action=join` waits on the same lifecycle that its completion watcher updates. TaskStore and RunGraph retain the parent run/session, the parent's child list links to the delegated run, and request metadata carries trusted `delegated_by.run_id`; caller-supplied metadata cannot forge that lineage. A completion watcher that cannot start returns a `tracking_error` receipt with both task and router run ids instead of presenting an untracked run as normally queued. If a running watch exceeds its local timeout, TaskStore reports `tracking_lost` without failing the authoritative router run; a bounded reconciliation phase accepts a late success or failure and advances both stores.
@@ -590,13 +643,13 @@ Unknown Bash admissions are structured error receipts carrying their original
 process identity; the tool card and compact shelf say `background outcome
 unknown`, never successful start or failed start. Late/reopened durable storage
 restores occupied capacity before admission. Cleared identity tombstones and
-historical unknown receipts have no TTL; local retained groups incur a
-system-wide `ps` reconciliation scan after 100 ms plus scan cost.
+historical unknown receipts have no TTL. Local groups reconcile on Port exit,
+explicit cancellation and boot recovery; no periodic host `ps` scan is scheduled.
 
 Hermes-compatible background commands use the same native runtime. Call
 `CodingAgent.BackgroundRun.start/2` to receive a durable id immediately, then
 use `list/1`, `status/1`, `result/1`, or `cancel/2`. Each run owns a fresh
-full-tool session on the subagent lane; `:session_key` is retained only as
+full-tool session sharing the native task semaphore;
 lineage metadata, and neither the prompt nor result is appended to that parent.
 Channel surfaces use `list_scoped/2`, `status_scoped/2`, `result_scoped/2`, and
 `cancel_scoped/3`, which require that lineage key and make a foreign id
@@ -738,6 +791,11 @@ The Session queue fields are diagnostic mirrors; `LemonAgent.Agent` owns actual
 delivery and consumption. Terminal, cancel, error, abort, and agent-exit paths
 clear the mirrors so `diagnostics/1` cannot report stale follow-ups.
 
+`Session.streaming?/1` reads only the streaming flag. A prompt is admitted from
+the Session's authoritative state; another prompt after that transition returns
+`{:error, :busy}`. Native child continuations do not copy full Session state or
+retry `:already_streaming` on a timer.
+
 Sessions are started under `SessionSupervisor` (dynamic) and registered in
 `SessionRegistry` by their persisted UUID. Registry metadata also retains the
 logical runtime session key used by clients.
@@ -760,6 +818,24 @@ unreadable session is an error, never a silently empty conversation. A torn
 last append is recovered; completed corrupt lines remain errors. Interrupted
 tool calls receive an explicit interrupted-result marker, not a fabricated
 successful result.
+Each live session owns one raw append descriptor, closed at stop. Turn-end
+`Session.save/1` appends a navigation/checkpoint marker and calls `file:datasync`;
+it never rewrites prior history. Latest markers override legacy header
+checkpoints, and header-only journals remain readable. Resume shares one parsed
+journal across execution-authority validation and session initialization.
+A cached parse is rechecked against its file revision after startup admission;
+a stopped mutation queued ahead of startup invalidates that snapshot. Stopped
+navigation, labels and planning open their own append descriptor under file
+admission, sync their changes, and close it before returning. Raw descriptors
+belong to their opening process: detached readers reload journal data rather
+than reusing a retired live session's handle.
+Path-backed detached appends use a short-lived raw handle and datasync before
+returning. Rewind confirmations bind the entire journal and tree, not only the
+leaf and entry count: later entries, checkpoint-only appends and same-count
+content edits invalidate the preview.
+Migration and torn-tail repair still use atomic snapshots: the temporary file
+is synced before rename, then the containing directory is synced. Ordinary
+turn barriers use datasync (not Darwin device-wide F_FULLFSYNC).
 Native identities remain unchanged in their headers; oversized or path-unsafe
 identities use deterministic portable journal filenames inside the session directory.
 Usage checkpoints preserve response costs and cache-write durations as well as
@@ -1007,8 +1083,8 @@ result.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `:lane_caps` | `%{main: 4, subagent: 8, background_exec: 2}` | Per-lane callback concurrency; `background_exec` bounds launches, not live process lifetimes |
-| `:task_max_concurrency` | `8` | Max concurrently executing native `task` children; excess children queue on the monitored semaphore |
+| `:lane_caps` | `%{background_exec: 2}` | Background process launch callback concurrency, not live process lifetimes |
+| `:task_max_concurrency` | `8` | Shared maximum for executing native `task` children and background sessions; excess children queue on the same monitored semaphore |
 | `:primary_session` | `nil` | Keyword list of opts to auto-start a session on boot |
 
 Live background capacity, bounded pending admission, deadlines, and recovery are
@@ -1040,9 +1116,9 @@ Use `todo` for a multi-step task when tracking is useful. Create or replace the 
 
 Repository instructions load from global home locations first, followed by ancestors from filesystem root to the working directory. Each directory includes its root, `.claude/`, and `.lemon/` `AGENTS.md`/`CLAUDE.md` files. Source headers state the applicable directory scope; deeper instructions override broader guidance. Duplicate symlink or hard-link aliases load once using their most specific location.
 
-At session start, Lemon captures the actual Git worktree root, branch/status, a bounded top-level layout, and descendant instruction-file paths. The index lists paths, not file contents: read applicable guides not already injected before editing their directories. Git-backed discovery respects ignored untracked files and excludes generated trees; non-Git discovery uses a bounded traversal without following symlinks. Truncated or unavailable discovery is explicitly labelled, so an omitted path is not proof that a guide does not exist.
+At first session start, Lemon journals cwd, platform, shell, Git worktree root, a bounded top-level layout, and descendant instruction-file paths. Resume reuses these exact environment bytes; a new session or changed cwd captures a fresh block. The index lists paths, not file contents: read applicable guides not already injected before editing their directories. Git-backed discovery respects ignored untracked files and excludes generated trees; non-Git discovery uses a bounded traversal without following symlinks. Truncated or unavailable discovery is explicitly labelled, so an omitted path is not proof that a guide does not exist.
 
-This environment snapshot is appended after the stable prompt and reused across turns to preserve provider caching. It does not update as files or branches change; use tools for fresh state when needed. Assistant-home identity and memory remain separate from repository context, missing/empty bootstrap files are omitted, and subagents still receive only the allowed `AGENTS.md`/`TOOLS.md` workspace files.
+Layout and instruction paths remain in the stable system block as session-start orientation, not live filesystem truth: changing them each turn would churn the cached prefix. Discover newly created directories and use tools for fresh layout when needed. The current UTC date and bounded branch/dirty-file Git snapshot instead accompany each opening `Session.prompt` message through `:user_message` context placement, outside the system prompt. Steering, redirects and queued follow-ups correct or continue that turn without recapturing its environment; optional contributors can still supply relevant context to those messages. Environment context is independent of automatic memory recall and is stripped from user-visible history, not from model replay. Assistant-home identity and memory remain separate from repository context, missing/empty bootstrap files are omitted, and subagents still receive only the allowed `AGENTS.md`/`TOOLS.md` workspace files.
 
 
 ## Usage Examples
@@ -1089,9 +1165,9 @@ see [`docs/user-guide/reminders-and-heartbeats.md`](../../docs/user-guide/remind
 # Bounded direct mode (default)
 unsubscribe = CodingAgent.Session.subscribe(session, max_queue: 1000)
 receive do
-  {:session_event, session_id, {:stream_resync, %{reason: :overflow}}} ->
+  {:session_event, session_id, {:stream_resync, %{reason: :overflow}}, nil} ->
     IO.puts("recover from the session owner")
-  {:session_event, session_id, event} -> IO.inspect(event)
+  {:session_event, session_id, event, cursor} -> IO.inspect({event, cursor})
   {:session_terminal, session_id, status} -> IO.inspect({:owner_terminal, status})
 end
 unsubscribe.()
@@ -1099,6 +1175,12 @@ unsubscribe.()
 # Existing EventStream, with bounded mailbox ingress and explicit resync
 {:ok, stream_pid} = CodingAgent.Session.subscribe(session, mode: :stream, max_queue: 1000)
 ```
+
+Native events preserve the raw event in the third element and carry a cursor in
+the fourth: `%{"version" => 1, "sessionId" => session_id, "streamId" => stream_id,
+"seq" => seq}`. Sequence numbers are gap-free within that live session stream;
+the stream ID distinguishes owner lifetimes. Overflow fences carry `nil` instead
+of a cursor because they are subscription controls, not session events.
 
 Both subscription modes bound delivery before the subscriber mailbox accepts an
 event. Overflow fences that subscription and explicitly requests recovery; it

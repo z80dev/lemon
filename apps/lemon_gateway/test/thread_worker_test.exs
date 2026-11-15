@@ -73,6 +73,13 @@ defmodule LemonGateway.ThreadWorkerTest do
   end
 
   setup do
+    running? =
+      Enum.any?(Application.started_applications(), fn {app, _, _} -> app == :lemon_gateway end)
+
+    previous =
+      for key <- [LemonGateway.Config, :executor],
+          do: {key, Application.fetch_env(:lemon_gateway, key)}
+
     _ = Application.stop(:lemon_gateway)
 
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
@@ -82,10 +89,17 @@ defmodule LemonGateway.ThreadWorkerTest do
 
     Application.put_env(:lemon_gateway, :executor, ThreadWorkerSlowExecutor)
 
-    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    {:ok, started} = Application.ensure_all_started(:lemon_gateway)
 
     on_exit(fn ->
-      _ = Application.stop(:lemon_gateway)
+      Enum.each(Enum.reverse(started), &Application.stop/1)
+
+      Enum.each(previous, fn
+        {key, {:ok, value}} -> Application.put_env(:lemon_gateway, key, value)
+        {key, :error} -> Application.delete_env(:lemon_gateway, key)
+      end)
+
+      if running?, do: Application.ensure_all_started(:lemon_gateway)
     end)
 
     :ok
@@ -138,6 +152,71 @@ defmodule LemonGateway.ThreadWorkerTest do
              state = :sys.get_state(LemonGateway.Scheduler)
              map_size(state.in_flight) == 0 and :queue.is_empty(state.waitq)
            end)
+  end
+
+  test "dead Registry entries do not consume the enqueue attempt budget" do
+    session_key = "stale-entry:#{System.unique_integer([:positive])}"
+    key = {:session, session_key}
+    observer = self()
+
+    {holder, monitor} =
+      spawn_monitor(fn ->
+        {:ok, partition} = Registry.register(LemonGateway.ThreadRegistry, key, :stale)
+        send(observer, {:registered, self(), partition})
+        receive do: (:stop -> :ok)
+      end)
+
+    assert_receive {:registered, ^holder, partition}
+    :sys.suspend(partition)
+    supervisor = Process.whereis(LemonGateway.ThreadWorkerSupervisor)
+    :erlang.trace(supervisor, true, [:receive])
+
+    request = request(session_key, "after-stale-entry", self())
+
+    submitter =
+      try do
+        Process.exit(holder, :kill)
+        assert_receive {:DOWN, ^monitor, :process, ^holder, :killed}
+        assert [{^holder, :stale}] = Registry.lookup(LemonGateway.ThreadRegistry, key)
+        submitter = Task.async(fn -> LemonGateway.Scheduler.submit_execution(request) end)
+
+        # Keep Registry's death cleanup suspended until submission has attempted
+        # a new child. Reusing the dead entry twice cannot pass this handshake.
+        assert_receive {:trace, ^supervisor, :receive,
+                        {:"$gen_call", _from, {:start_child, _child}}},
+                       1_000
+
+        submitter
+      after
+        :erlang.trace(supervisor, false, [:receive])
+        :sys.resume(partition)
+        Process.exit(holder, :kill)
+      end
+
+    assert Task.await(submitter, 1_000) == :ok
+    assert_completed_request(request)
+  end
+
+  test "definite admission failure is returned and terminalized for the fixed ID" do
+    :ok = Supervisor.terminate_child(LemonGateway.Supervisor, LemonGateway.ThreadWorkerSupervisor)
+
+    request =
+      request("admission-failure:#{System.unique_integer([:positive])}", "rejected", self())
+
+    try do
+      assert {:error, :worker_start_failed} = LemonGateway.Scheduler.submit_execution(request)
+
+      assert_receive {:lemon_gateway_run_completed, ^request,
+                      %{
+                        ok: false,
+                        error: %{type: :execution_admission_failed, reason: :worker_start_failed}
+                      }}
+
+      assert %{summary: %{completed: %{ok: false}}} = LemonCore.RunStore.get(request.run_id)
+    after
+      {:ok, _pid} =
+        Supervisor.restart_child(LemonGateway.Supervisor, LemonGateway.ThreadWorkerSupervisor)
+    end
   end
 
   test "bounds total start attempts, terminalizes once, and advances FIFO queue" do

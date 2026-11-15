@@ -248,11 +248,13 @@ defmodule CodingAgent.NodeTools do
     case invoke(node, args, timeout_ms) do
       {:ok, invoke_id, monitor} ->
         deadline = System.monotonic_time(:millisecond) + timeout_ms + @await_grace_ms
+        AbortSignal.subscribe(signal)
 
         try do
           await(%{id: invoke_id, monitor: monitor, deadline: deadline}, node, tool, signal)
         after
           Process.demonitor(monitor, [:flush])
+          AbortSignal.unsubscribe(signal)
         end
 
       {:error, reason} ->
@@ -290,34 +292,39 @@ defmodule CodingAgent.NodeTools do
   end
 
   defp await(%{id: invoke_id, monitor: monitor} = pending, node, tool, signal) do
-    receive do
-      {:lemon_node_result, ^invoke_id, {:ok, result}} ->
-        completed(result, node, tool)
+    if AbortSignal.aborted?(signal) do
+      cancelled(invoke_id, node)
+    else
+      receive do
+        {:lemon_node_result, ^invoke_id, {:ok, result}} ->
+          completed(result, node, tool)
 
-      {:lemon_node_result, ^invoke_id, {:error, reason}} ->
-        failed(reason, node, tool)
+        {:lemon_node_result, ^invoke_id, {:error, reason}} ->
+          failed(reason, node, tool)
 
-      {:DOWN, ^monitor, :process, _pid, _reason} ->
-        unknown(node.name, "the routing service restarted while the call was running")
-    after
-      100 ->
-        cond do
-          AbortSignal.aborted?(signal) ->
-            cancel(invoke_id)
+        {:DOWN, ^monitor, :process, _pid, _reason} ->
+          unknown(node.name, "the routing service restarted while the call was running")
 
-            unknown(
-              node.name,
-              "the call was cancelled while it ran on the node; it may have partly taken effect"
-            )
+        {:lemon_abort, ^signal, :abort} ->
+          cancelled(invoke_id, node)
 
-          System.monotonic_time(:millisecond) > pending.deadline ->
-            cancel(invoke_id)
-            unknown(node.name, "no result arrived before the routing deadline; it was cancelled")
-
-          true ->
-            await(pending, node, tool, signal)
-        end
+        {:lemon_abort, ^signal, :redirect} ->
+          await(pending, node, tool, signal)
+      after
+        max(pending.deadline - System.monotonic_time(:millisecond), 0) ->
+          cancel(invoke_id)
+          unknown(node.name, "no result arrived before the routing deadline; it was cancelled")
+      end
     end
+  end
+
+  defp cancelled(invoke_id, node) do
+    cancel(invoke_id)
+
+    unknown(
+      node.name,
+      "the call was cancelled while it ran on the node; it may have partly taken effect"
+    )
   end
 
   defp cancel(invoke_id) do

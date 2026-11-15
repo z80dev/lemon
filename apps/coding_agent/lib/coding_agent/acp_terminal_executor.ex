@@ -45,6 +45,8 @@ defmodule CodingAgent.ACPTerminalExecutor do
     deadline = System.monotonic_time(:millisecond) + Keyword.fetch!(opts, :timeout)
     signal = Keyword.get(opts, :signal)
 
+    AbortSignal.subscribe(signal)
+
     create =
       async_request(
         run_id,
@@ -90,8 +92,10 @@ defmodule CodingAgent.ACPTerminalExecutor do
         receive do
           {^ref, response} -> response
           {:DOWN, ^owner, :process, _pid, _} -> {:stopped, :cancelled}
+          {:lemon_abort, ^signal, _kind} -> {:stopped, :cancelled}
         after
-          25 -> await_create({pid, ref}, owner, signal, deadline)
+          max(deadline - System.monotonic_time(:millisecond), 0) ->
+            await_create({pid, ref}, owner, signal, deadline)
         end
 
       reason ->
@@ -156,6 +160,8 @@ defmodule CodingAgent.ACPTerminalExecutor do
   defp receive_terminal(state) do
     {_pid, wait_ref} = state.wait
     owner = state.owner
+    signal = Keyword.get(state.opts, :signal)
+    wake_at = if state.poll, do: state.deadline, else: min(state.deadline, state.next_poll)
 
     receive do
       {^wait_ref, {:ok, exit}} ->
@@ -168,6 +174,9 @@ defmodule CodingAgent.ACPTerminalExecutor do
         {state, nil, :cancelled}
 
       {:DOWN, ^owner, :process, _pid, _} ->
+        {state, nil, :cancelled}
+
+      {:lemon_abort, ^signal, _kind} ->
         {state, nil, :cancelled}
 
       {ref, response} when is_reference(ref) ->
@@ -188,7 +197,7 @@ defmodule CodingAgent.ACPTerminalExecutor do
       {:DOWN, _ref, :process, _pid, _} ->
         loop(state)
     after
-      25 -> loop(state)
+      max(wake_at - System.monotonic_time(:millisecond), 0) -> loop(state)
     end
   end
 

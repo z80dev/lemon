@@ -18,10 +18,14 @@ defmodule LemonControlPlane.Methods.Registry do
   Handlers that wait for user input or other slow external work may also return
   `:async` from the optional `dispatch_mode/0` callback. The WebSocket then
   executes that handler outside the connection process so event and approval
-  traffic remains live while the request is pending.
+  traffic remains live while the request is pending. Async work is supervised
+  and capped by `LemonControlPlane.WS.Connection`; failures emit redacted
+  `[:lemon, :control_plane, :method, :exception]` telemetry.
   """
 
   use GenServer
+
+  require Logger
 
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Protocol.{Errors, Schemas}
@@ -138,6 +142,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SessionsGet,
     LemonControlPlane.Methods.SessionsHistory,
     LemonControlPlane.Methods.SessionsSnapshot,
+    LemonControlPlane.Methods.SessionsEvents,
     LemonControlPlane.Methods.SessionsStats,
     LemonControlPlane.Methods.SessionsPreview,
     LemonControlPlane.Methods.SessionsDelete,
@@ -309,12 +314,7 @@ defmodule LemonControlPlane.Methods.Registry do
 
             case Authorize.authorize(ctx.auth, method, scopes) do
               :ok ->
-                try do
-                  module.handle(params, ctx)
-                rescue
-                  _ ->
-                    {:error, Errors.internal_error("Method execution failed")}
-                end
+                module.handle(params, ctx)
 
               {:error, reason} ->
                 {:error, reason}
@@ -327,6 +327,27 @@ defmodule LemonControlPlane.Methods.Registry do
       {:error, :not_found} ->
         {:error, Errors.method_not_found(method)}
     end
+  rescue
+    error ->
+      report_failure(method, error.__struct__)
+      {:error, Errors.internal_error("Method execution failed")}
+  catch
+    kind, _reason ->
+      report_failure(method, kind)
+      {:error, Errors.internal_error("Method execution failed")}
+  end
+
+  @doc false
+  def report_failure(method, class) do
+    Logger.error(
+      "Control plane method failed method=#{method} class=#{inspect(class)} redacted=true"
+    )
+
+    LemonCore.Telemetry.emit(
+      [:lemon, :control_plane, :method, :exception],
+      %{count: 1},
+      %{method: method, class: class}
+    )
   end
 
   @doc """

@@ -10,6 +10,24 @@ defmodule CodingAgent.Search.SingleFlightTest do
     %{server: start_supervised!({SingleFlight, name: nil})}
   end
 
+  test "abort notifications release a caller without a periodic cancellation timer", %{
+    server: server
+  } do
+    signal = signal()
+    request = enqueue(server, :message_abort, operation(:message_abort), signal)
+    assert_receive {:operation_started, :message_abort, _, _}, 5_000
+    active = flight(server, :message_abort)
+    refute Map.has_key?(:sys.get_state(server), :abort_timer)
+    assert [{^server, _}] = Registry.lookup(LemonAgent.AbortSignal.Registry, signal)
+
+    AbortSignal.abort(signal)
+    assert reply(request) == {:error, "Operation aborted"}
+    :sys.get_state(server)
+    assert Registry.lookup(LemonAgent.AbortSignal.Registry, signal) == []
+    finish_operation(server, active, {:error, "Operation aborted"})
+    assert_clean(server, active)
+  end
+
   test "coalesces concurrent work and returns one result to every caller", %{server: server} do
     counter = :counters.new(1, [:atomics])
     controlled = operation(:shared)
@@ -338,7 +356,7 @@ defmodule CodingAgent.Search.SingleFlightTest do
     state = assert_clean(server, old)
     assert state.by_key.same_key.task.ref == replacement.task.ref
     assert state.by_ref == %{replacement.task.ref => :same_key}
-    assert :ets.member(:agent_core_abort_signals, replacement_signal)
+    assert is_reference(replacement_signal)
     refute AbortSignal.aborted?(replacement_signal)
     assert Process.alive?(replacement.task.pid)
     assert :gen_server.wait_response(request, 0) == :timeout
@@ -368,11 +386,7 @@ defmodule CodingAgent.Search.SingleFlightTest do
     end
   end
 
-  defp signal do
-    signal = AbortSignal.new()
-    on_exit(fn -> AbortSignal.clear(signal) end)
-    signal
-  end
+  defp signal, do: AbortSignal.new()
 
   defp enqueue(server, key, operation, signal \\ nil) do
     # Sending the call and state request from one process makes admission a
@@ -391,29 +405,20 @@ defmodule CodingAgent.Search.SingleFlightTest do
 
   defp flight(server, key), do: Map.fetch!(:sys.get_state(server).by_key, key)
 
-  defp abort_before_poll(server, signals) do
-    :sys.replace_state(server, fn state ->
-      if state.abort_timer do
-        case Process.cancel_timer(state.abort_timer) do
-          false ->
-            receive do
-              :check_aborts -> :ok
-            after
-              5_000 -> raise "abort timer notification was not delivered"
-            end
-
-          _remaining_ms ->
-            :ok
-        end
-      end
-
-      Enum.each(signals, &AbortSignal.abort/1)
-      %{state | abort_timer: nil}
-    end)
+  # Model an abort whose Registry notification has not reached the server yet.
+  defp abort_before_poll(_server, signals) do
+    Enum.each(signals, &:atomics.put(&1, 1, 1))
   end
 
   defp check_aborts(server) do
-    send(server, :check_aborts)
+    state = :sys.get_state(server)
+
+    for {_key, flight} <- state.by_key,
+        caller <- flight.callers,
+        AbortSignal.aborted?(caller.signal) do
+      send(server, {:lemon_abort, caller.signal, :abort})
+    end
+
     :sys.get_state(server)
   end
 
@@ -455,7 +460,7 @@ defmodule CodingAgent.Search.SingleFlightTest do
              active.task.ref == flight.task.ref
            end)
 
-    refute :ets.member(:agent_core_abort_signals, flight.signal)
+    assert is_reference(flight.signal)
     assert Process.read_timer(flight.timer) == false
     assert {:monitors, monitors} = Process.info(server, :monitors)
     refute {:process, flight.task.pid} in monitors

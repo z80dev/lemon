@@ -7,29 +7,28 @@ defmodule CodingAgent.Tools.TodoStoreOwner do
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
-    GenServer.start_link(__MODULE__, %{}, name: name)
+    GenServer.start_link(__MODULE__, Keyword.get(opts, :table, @table), name: name)
   end
 
   @impl true
-  def init(state) do
-    # Ensure the ETS table is owned by a long-lived supervised process. Without
-    # this, the first caller to TodoStore.get/put may create the table, and the
-    # table will be destroyed when that caller process exits (common in tests).
-    _ =
-      case :ets.whereis(@table) do
-        :undefined ->
-          :ets.new(@table, [
-            :named_table,
-            :public,
-            :set,
-            read_concurrency: true,
-            write_concurrency: true
-          ])
+  def init(table) do
+    new_table(table)
+    {:ok, table}
+  end
 
-        _tid ->
-          :ok
-      end
+  @impl true
+  def handle_call(:ensure_table, _from, table) do
+    if :ets.whereis(table) == :undefined, do: new_table(table)
+    {:reply, :ok, table}
+  end
 
-    {:ok, state}
+  defp new_table(table) do
+    :ets.new(table, [
+      :named_table,
+      :public,
+      :set,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
   end
 end

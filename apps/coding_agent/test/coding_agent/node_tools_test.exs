@@ -145,6 +145,23 @@ defmodule CodingAgent.NodeToolsTest do
     assert_receive {:hand_cancelled, ^invoke_id}, 2_000
   end
 
+  test "an abort notification wakes a routed call without waiting for its deadline", ctx do
+    start_hand("hand-1", "box", ctx.remote, notify: self())
+    signal = AbortSignal.new()
+
+    task =
+      Task.async(fn ->
+        run(tool(ctx.local, "bash"), %{"command" => "sleep 5", "node" => "box"}, signal)
+      end)
+
+    assert_receive {:hand_invoked, invoke_id}, 5_000
+    send(task.pid, {:lemon_abort, signal, :abort})
+
+    assert Task.await(task, 5_000).details.outcome == "unknown"
+    assert_receive {:hand_cancelled, ^invoke_id}, 2_000
+    refute AbortSignal.aborted?(signal)
+  end
+
   test "without the nodes tool, node arguments are refused and not advertised", ctx do
     start_hand("hand-1", "box", ctx.remote)
     policy = %{allow: ["bash", "read"]}

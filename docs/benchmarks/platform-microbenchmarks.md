@@ -8,6 +8,11 @@ simulation arenas' artifact and verification guarantees, see
 [LemonSim](https://github.com/z80dev/lemon-sim). Nothing here
 calls a model or touches a network.
 
+For offline end-to-end native request/token/queue timings, session-start stage
+breakdowns and nightly regression artifacts, see the
+[latency budget and harness](latency-sla.md). Those protocol-path measurements
+are separate from the primitive throughput suites on this page.
+
 Everything below is reproducible with `mix lemon.bench`. The suites live in
 [`bench/`](https://github.com/z80dev/lemon/tree/main/bench) and are about 700 lines total, so if a number looks
 wrong the code that produced it is short enough to check.

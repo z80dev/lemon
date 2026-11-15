@@ -350,18 +350,28 @@ defmodule CodingAgent.Session.CompactionManager do
       ) do
     case result do
       {:ok, compaction_result} ->
+        session_manager =
+          SessionManager.append_pruning(
+            state.session_manager,
+            Map.get(compaction_result, :pruned, %{})
+          )
+
         # Use custom summary if provided, otherwise use generated one
         summary = custom_summary || compaction_result.summary
 
         # Append compaction entry to session manager
         session_manager =
-          SessionManager.append_compaction(
-            state.session_manager,
-            summary,
-            compaction_result.first_kept_entry_id,
-            compaction_result.tokens_before,
-            compaction_result.details
-          )
+          if is_nil(compaction_result.first_kept_entry_id) do
+            session_manager
+          else
+            SessionManager.append_compaction(
+              session_manager,
+              summary,
+              compaction_result.first_kept_entry_id,
+              compaction_result.tokens_before,
+              compaction_result.details
+            )
+          end
 
         # Rebuild messages from the new position and update agent
         messages = restore_messages_fn.(session_manager)
@@ -388,7 +398,10 @@ defmodule CodingAgent.Session.CompactionManager do
            }}
 
         broadcast_event_fn.(state, compaction_event)
-        _ = CodingAgent.Session.ProjectMemory.after_compaction(state, summary)
+
+        if not is_nil(compaction_result.first_kept_entry_id) do
+          _ = CodingAgent.Session.ProjectMemory.after_compaction(state, summary)
+        end
 
         {:ok, %{state | session_manager: session_manager}}
 
@@ -405,7 +418,22 @@ defmodule CodingAgent.Session.CompactionManager do
           {:ok, map()} | {:error, term()}
   def auto_compaction_task_result(session_manager, model, opts) do
     try do
-      CodingAgent.Compaction.compact(session_manager, model, opts)
+      case CodingAgent.Compaction.compact(session_manager, model, opts) do
+        {:error, :compaction_recovery_band} ->
+          # One escalation through overflow recovery, never another pass next turn.
+          recovery_opts =
+            opts
+            |> Keyword.put(:keep_recent_tokens, 1)
+            |> Keyword.delete(:keep_recent_messages)
+
+          case overflow_recovery_compaction_task_result(session_manager, model, recovery_opts) do
+            {:error, :cannot_compact} -> {:error, :compaction_recovery_band}
+            result -> result
+          end
+
+        result ->
+          result
+      end
     rescue
       exception ->
         {:error, {:exception, exception}}

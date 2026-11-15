@@ -90,6 +90,13 @@ events. Non-node clients receive the general event stream; nodes receive only
 targeted node traffic. State-version counters let clients reconcile changed
 presence, health and cron data. They are not durable event replay cursors.
 
+Native owners also publish `session.event` batches on the `session_events` Bus
+topic. Each batch contains `sessionKey`, `eventId`, `cursor`, and `events`, where
+each inner event is `{event, payload}` projected by the same `EventBridge.project/1`
+as legacy `agent`/`chat` traffic. Empty batches still advance the cursor. For a
+session with a cursor, these batches are authoritative: do not also apply legacy
+`agent`/`chat` events for that session.
+
 Completed `agent` events include an authoritative `cancelled` boolean taken
 from the durable completion's metadata, plus a bounded, redacted `error` value.
 Clients must not infer cancellation from error wording or from whether the
@@ -113,8 +120,21 @@ on partial usage does not attest a free request. Legacy `usage.cost`/`usage.stat
 daily projections remain known-value subtotals, not complete provider-usage or
 spend-enforcement authority; canonical `usage.records` retains the null counters.
 
-Slow/approval-gated handlers run asynchronously so events and approval resolution
-can continue while their correlated request remains pending.
+Slow/approval-gated handlers run under a dedicated `Task.Supervisor` so events
+and approval resolution can continue while their correlated request remains
+pending. Caller-policy caps admit at most eight outstanding async methods per
+connection and 256 globally. Excess requests return `UNAVAILABLE` before work
+starts; completion or worker death releases the connection slot. Disconnect
+does not replay a request or cancel a mutation already admitted.
+
+Connection membership uses a duplicate-key Registry; event fan-out dispatches
+directly over its entries without calling a presence server. Registry removes
+dead owners. General event delivery retains its bounded admission and excludes
+node/enrollment connections. Handler failures return `INTERNAL_ERROR` and log
+only the registered method name and exception class (never arguments, payloads
+or exception messages). The `[:lemon, :control_plane, :method, :exception]`
+telemetry event has measurement `%{count: 1}` and metadata `%{method: name,
+class: exception_module_or_catch_kind}`.
 
 ### System status
 
@@ -570,7 +590,8 @@ A successful payload contains:
 
 - `status: "ok"` and the requested `sessionKey`;
 - `identity: {sessionKey, sessionId, branchId, revision, runId, attempt}`;
-- `consistency: {boundary: "stable_owner_reads", atomic: false, eventCursor: null}`;
+- `consistency: {boundary: "stable_owner_reads", atomic: false, eventCursor}`:
+  the live native owner's cursor, or `null` for an offline journal;
 - `snapshot`: `phase`, boolean `terminal`, bounded
   `answer: {text, canonical, truncated}`, history-compatible `messages`,
   current `actions`, `approvals`, `children`, `processes`, `todos`, and `plan`.
@@ -615,6 +636,51 @@ returns `status: "retry", reason: "snapshot_raced"` with no snapshot. Optional
 `identity_changed`, also without a snapshot. There is no atomic cross-owner
 transaction or global durable cursor.
 
+### Cursor replay
+
+`sessions.events` (`operator.read`) accepts `sessionKey`, a required `cursor`,
+and optional `limit` (default 50, 1–100 native broadcasts). It reads only the
+current live native owner, never another session or a retained journal:
+
+```json
+{"sessionKey":"agent:default:main","cursor":{"version":1,"sessionId":"native-id","streamId":"owner-incarnation","seq":12},"limit":50}
+```
+
+A successful page has `status: "ok"`, the same `sessionKey`, `entries`, `cursor`,
+and `hasMore`. Each entry is `{cursor, eventId, events: [{event, payload}]}` in
+contiguous sequence order strictly after the input cursor. Entries may have no
+projected events; they still count toward the limit and advance the cursor.
+The response cursor is the last returned entry's, or the input cursor for an
+empty page. Private native event terms are never returned.
+
+Version 1 cursors scope sequence to one **native owner/selected-branch epoch**,
+not to a run, a logical session key, or a global stream. The opaque `streamId`
+changes when an owner restarts, even if the native `sessionId` is reused.
+Selecting another branch also rotates `streamId` and clears retained events,
+without reusing sequence numbers; reset may additionally change `sessionId`.
+`eventId` is `streamId:seq`, stable across live delivery and replay; it is the
+same identity as the underlying Core events' `meta.event_id`. One broadcast
+may project to several Core events, all sharing that identity. Unsupported
+cursor versions fail explicitly with `INVALID_PARAMS` and
+`reason: "unsupported_cursor_version"` rather than triggering snapshot fallback.
+
+An evicted cursor, changed branch, or missing/replaced native owner returns
+`status: "cursor_expired"`, the same `sessionKey`, `entries: []`, `cursor: null`,
+and `hasMore: false`. Only this status requests a fresh `sessions.snapshot`;
+runtime errors remain `UNAVAILABLE`. On a cold connection, initialize from a
+snapshot and its `consistency.eventCursor`. On reconnect or a sequence gap,
+page from the last accepted cursor. Buffer concurrent live batches during replay,
+discard duplicates, and apply only the next contiguous sequence. Snapshot
+fallback replaces the projection and establishes a new cursor; the existing
+two-collection race fence includes that cursor.
+
+Replay checks operator read authorization before and after the provider read.
+When a connection PID is present, both checks require its current Connections
+membership and stored authorization, not just the request's captured auth.
+Revoked membership, changed role/scopes, and a dead connection fail closed.
+
+### Snapshot continuity
+
 Queue consumers may additionally request
 `continuationFrom: {identity: <complete prior accepted identity>, runId: <acknowledged active run>}`.
 The successful response's boolean `continuation` is true only for a canonical
@@ -645,8 +711,9 @@ pre-snapshot deltas must not be appended to it. Terminal completion replaces
 partial text once and cannot be revived by a late start/progress packet.
 
 Transport overflow emits WebSocket `stream.resync` and fences/disconnects the
-lagging connection. Reconnect and authenticate again, then use the same snapshot
-path. A router rendering-loss indication also uses `stream.resync`, but requests
+lagging connection. Reconnect and authenticate again, then replay from the last
+accepted cursor, falling back to the snapshot path only on cursor expiry.
+A router rendering-loss indication also uses `stream.resync`, but requests
 reconciliation without requiring the healthy socket to disconnect. Do not replay
 offline mutations. Browser panes and the EventBridge use bounded tagged Bus
 delivery epochs so queued messages from a replaced subscription cannot mutate
@@ -1022,6 +1089,13 @@ Name-or-ID selectors (profile `node`, `agent` node targets) resolve an exact
 live durable ID first, and an authorized durable ID never falls back to another
 node's name while offline; private execution then pins that ID, connection and
 generation.
+
+The authenticated socket owns its unique live `Registry` entry; socket death
+unregisters it automatically. Each invocation has its own temporary process for
+timers, caller/socket monitoring, sequencing and invocation-bound controls.
+Streamed event and shell frames route straight to that process, not through a
+shared broker. Credential-generation floors remain retained after disconnect.
+Worker reconnects use timers, and stopping the worker interrupts any backoff.
 
 ### Live named-node runs
 

@@ -303,7 +303,6 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
       AbortSignal.abort(signal)
       todos = [valid_todo()]
       result = TodoWrite.execute("call_1", %{"todos" => todos}, signal, nil, session_pid)
-      AbortSignal.clear(signal)
       assert {:error, "Operation aborted"} = result
     end
 
@@ -312,7 +311,6 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
       AbortSignal.abort(signal)
       todos = [valid_todo(%{"content" => "Should not be stored"})]
       TodoWrite.execute("call_1", %{"todos" => todos}, signal, nil, session_pid)
-      AbortSignal.clear(signal)
       assert {:ok, [], _revision} = Session.todos(session_pid)
     end
 
@@ -320,7 +318,6 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
       signal = AbortSignal.new()
       todos = [valid_todo()]
       result = TodoWrite.execute("call_1", %{"todos" => todos}, signal, nil, session_pid)
-      AbortSignal.clear(signal)
       assert %AgentToolResult{} = result
     end
   end

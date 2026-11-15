@@ -70,8 +70,7 @@ defmodule LemonChannels.OutboxAdapterContractTest do
         telegram: %{
           account_id: "acct",
           bot_token: "token",
-          api_mod: TelegramApi,
-          files: %{outbound_send_delay_ms: 0}
+          api_mod: TelegramApi
         },
         whatsapp: %{bridge_script: missing_bridge, dm_mode: :open}
       })
@@ -325,7 +324,27 @@ defmodule LemonChannels.OutboxAdapterContractTest do
     stop(WhatsAppTransport)
     # Unlinked: a test may kill the transport mid-call.
     {:ok, pid} = GenServer.start(WhatsAppTransport, [], name: WhatsAppTransport)
-    send(pid, {:whatsapp_bridge_event, %{"type" => "connected", "jid" => "bot@s.whatsapp.net"}})
+    # The missing script deliberately avoids Node/network I/O. Under #581 both
+    # startup and the initial connect report bridge_down. Fence those failures
+    # before injecting a healthy synthetic session; durable enqueue can otherwise
+    # give a late startup failure time to invalidate the fake connection.
+    :ok = :sys.suspend(pid)
+
+    try do
+      port_server = :sys.get_state(pid).port_server
+
+      :sys.replace_state(pid, fn state ->
+        if state.reconnect_timer, do: Process.cancel_timer(elem(state.reconnect_timer, 0))
+        %{state | reconnect_timer: nil}
+      end)
+
+      _ = :sys.get_state(port_server)
+      send(pid, {:whatsapp_bridge_event, %{"type" => "connected", "jid" => "bot@s.whatsapp.net"}})
+    after
+      :sys.resume(pid)
+    end
+
+    assert %{connected?: true, reconnect_timer: nil} = :sys.get_state(pid)
     pid
   end
 

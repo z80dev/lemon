@@ -76,7 +76,7 @@ defmodule LemonRouter.RunPhaseSequenceTest do
     end)
 
     start_if_needed(LemonRouter.SessionRegistry, fn ->
-      Registry.start_link(keys: :duplicate, name: LemonRouter.SessionRegistry)
+      Registry.start_link(keys: :unique, name: LemonRouter.SessionRegistry)
     end)
 
     start_if_needed(LemonRouter.RunRegistry, fn ->

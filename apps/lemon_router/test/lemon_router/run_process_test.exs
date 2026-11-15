@@ -317,92 +317,56 @@ defmodule LemonRouter.RunProcessTest do
       end
     end
 
-    test "does not own SessionRegistry entries directly" do
-      run_id = "run_#{System.unique_integer()}"
-      session_key = SessionKey.main("test-agent")
-
-      job = make_test_request(run_id)
+    test "owns the session key until death without coordinator cleanup" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      request = make_test_request(run_id, %{}, %{session_key: "test:#{run_id}"})
+      session_key = request.session_key
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
+                 execution_request: request,
                  submit_to_gateway?: false
                })
 
-      # Not registered until :run_started
-      assert [] == Registry.lookup(Elixir.LemonRouter.SessionRegistry, session_key)
+      assert [{^pid, %{run_id: ^run_id}}] =
+               Registry.lookup(LemonRouter.SessionRegistry, session_key)
 
-      event =
-        LemonCore.Event.new(
-          :run_started,
-          %{run_id: run_id, session_key: session_key, engine: "echo"},
-          %{run_id: run_id, session_key: session_key}
-        )
-
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), event)
-
-      refute eventually(
-               fn ->
-                 Registry.lookup(Elixir.LemonRouter.SessionRegistry, session_key) != []
-               end,
-               500
-             )
-
-      GenServer.stop(pid)
+      Process.unlink(pid)
+      monitor = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, :killed}
+      # Registry synchronizes dead-owner cleanup before attempting registration.
+      assert {:ok, _} = Registry.register(LemonRouter.SessionRegistry, session_key, :replacement)
+      Registry.unregister(LemonRouter.SessionRegistry, session_key)
     end
 
-    test "single-flight registration is no longer retried in RunProcess" do
-      run_id1 = "run_#{System.unique_integer()}"
-      run_id2 = "run_#{System.unique_integer()}"
-      session_key = SessionKey.main("test-agent")
+    test "rejects a second live owner atomically" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      request = make_test_request(run_id, %{}, %{session_key: "test:#{run_id}"})
 
-      job1 = make_test_request(run_id1)
-      job2 = make_test_request(run_id2)
-
-      assert {:ok, pid1} =
+      assert {:ok, pid} =
                RunProcess.start_link(%{
-                 run_id: run_id1,
-                 session_key: session_key,
-                 execution_request: job1,
+                 run_id: run_id,
+                 execution_request: request,
                  submit_to_gateway?: false
                })
 
-      ev1 =
-        LemonCore.Event.new(
-          :run_started,
-          %{run_id: run_id1, session_key: session_key, engine: "echo"},
-          %{run_id: run_id1, session_key: session_key}
-        )
+      previous = Process.flag(:trap_exit, true)
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id1), ev1)
+      try do
+        other_id = "run_#{System.unique_integer([:positive])}"
 
-      assert [] == Registry.lookup(Elixir.LemonRouter.SessionRegistry, session_key)
-
-      assert {:ok, pid2} =
-               RunProcess.start_link(%{
-                 run_id: run_id2,
-                 session_key: session_key,
-                 execution_request: job2,
-                 submit_to_gateway?: false
-               })
-
-      ev2 =
-        LemonCore.Event.new(
-          :run_started,
-          %{run_id: run_id2, session_key: session_key, engine: "echo"},
-          %{run_id: run_id2, session_key: session_key}
-        )
-
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id2), ev2)
-
-      # pid2 stays alive (the run is not cancelled).
-      assert eventually(fn -> Process.alive?(pid2) end)
-      assert [] == Registry.lookup(Elixir.LemonRouter.SessionRegistry, session_key)
-
-      GenServer.stop(pid1)
-      GenServer.stop(pid2)
+        assert {:error, :session_busy} =
+                 RunProcess.start_link(%{
+                   run_id: other_id,
+                   execution_request: %{request | run_id: other_id},
+                   submit_to_gateway?: false
+                 })
+      after
+        GenServer.stop(pid)
+        Process.flag(:trap_exit, previous)
+      end
     end
   end
 

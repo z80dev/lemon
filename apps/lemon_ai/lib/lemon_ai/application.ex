@@ -8,8 +8,12 @@ defmodule LemonAi.Application do
     - `LemonAi.StreamTaskSupervisor` - Dynamic supervisor for streaming tasks
     - `LemonAi.RateLimiterRegistry` - Registry for per-provider rate limiters
     - `LemonAi.CircuitBreakerRegistry` - Registry for per-provider circuit breakers
-    - `LemonAi.CallDispatcher` - Central dispatcher for request coordination
+    - `LemonAi.CallDispatcherRegistry` - Registry for per-provider slot authorities
+    - `LemonAi.CallDispatcher` - Provider error diagnostics
     - `LemonAi.ProviderSupervisor` - Dynamic supervisor for per-provider services
+    - `LemonAi.ModelCache` - ETS model availability cache owner
+    - `LemonAi.Auth.Cache` - ETS token and auth fingerprint cache owner
+    - `LemonAi.Auth.OmpAuthBroker` - ETS broker snapshot cache and watcher owner
 
   ## Design Decisions
 
@@ -19,9 +23,10 @@ defmodule LemonAi.Application do
   - **StreamTaskSupervisor**: A `Task.Supervisor` that manages all provider
     streaming tasks. This ensures proper lifecycle management and crash isolation.
 
-  - **Rate Limiting & Circuit Breaking**: Per-provider GenServers registered
-    via `LemonAi.RateLimiterRegistry` and `LemonAi.CircuitBreakerRegistry`. Started
-    on-demand when providers are first used.
+  - **Admission**: Per-provider circuit breakers, rate limiters and slot
+    authorities are registered through their own registries and started on demand.
+    The root supervisor owns the slot lease/cap ETS table so restarting a child
+    cannot forget requests that are still running.
   """
 
   use Application
@@ -38,21 +43,23 @@ defmodule LemonAi.Application do
       {Registry, keys: :unique, name: LemonAi.RateLimiterRegistry},
       # Registry for per-provider circuit breakers
       {Registry, keys: :unique, name: LemonAi.CircuitBreakerRegistry},
+      {Registry, keys: :unique, name: LemonAi.CallDispatcherRegistry},
       # Dynamic supervisor for per-provider services
       Supervisor.child_spec(
         {DynamicSupervisor, name: LemonAi.ProviderSupervisor, strategy: :one_for_one},
         id: LemonAi.ProviderSupervisor
       ),
-      # Central call dispatcher
+      # Provider error diagnostics (admission uses independent provider authorities)
       {LemonAi.CallDispatcher, []},
       # Model availability cache (ETS-backed)
       LemonAi.ModelCache,
+      # Expiring tokens and lazily discovered auth fingerprints (ETS-backed)
+      LemonAi.Auth.Cache,
       # omp auth broker snapshot cache (ETS-backed)
       LemonAi.Auth.OmpAuthBroker
     ]
 
-    opts = [strategy: :one_for_one, name: LemonAi.Supervisor]
-    result = Supervisor.start_link(children, opts)
+    result = LemonAi.Supervisor.start_link(children)
 
     # Register providers after initialization
     register_providers()

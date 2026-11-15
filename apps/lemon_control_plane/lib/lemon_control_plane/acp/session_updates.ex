@@ -78,7 +78,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     end
   end
 
-  def map_event(state, {:session_event, _session_id, event}), do: map_event(state, event)
+  def map_event(state, {:session_event, _session_id, event, _cursor}), do: map_event(state, event)
   def map_event(state, {:agent_event, event}), do: map_event(state, event)
 
   def map_event(state, %{type: type, payload: payload}),

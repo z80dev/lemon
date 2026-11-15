@@ -66,9 +66,9 @@ Part of the `lemon` Elixir umbrella project.
 
 1. Router-owned `SessionCoordinator` decides queue semantics (`collect`, `followup`, `steer`, `interrupt`) and hands queue-semantic-free `%LemonCore.ExecutionCommand{}` values to `LemonGateway.Runtime`.
 2. Gateway-owned transports that still live in this app submit `%LemonCore.RunRequest{}` through `LemonCore.RouterBridge`, not directly into gateway internals.
-3. The **Scheduler** routes each execution request by the router-supplied `conversation_key`, deduplicates tokenized worker generations, and allocates a concurrency slot.
+3. The submitting process resolves or starts the unique **ThreadWorker** for the router-supplied `conversation_key` and synchronously acknowledges enqueue. The **Scheduler** only deduplicates tokenized worker generations and allocates slots; it never waits on a worker.
 4. The **ThreadWorker** is only a per-conversation launcher/slot waiter. It does not own product queue semantics. Its run-start attempt budget persists across slot grants; exhausted requests receive one structured terminal completion before later FIFO work advances.
-5. On slot grant, the worker starts a **Run** via `RunSupervisor`. The Run acquires `EngineLock` and starts Lemon's native executor.
+5. On slot grant, the worker starts a **Run** via `RunSupervisor`. Startup acknowledges immediately; the Run acquires its engine-session Registry name in `handle_continue/2`, then starts Lemon's native executor.
 6. The native executor executes the AI request and streams lifecycle events and deltas back to the Run process.
 7. The **Run** broadcasts all events to `LemonCore.Bus` on topic `"run:<run_id>"`. Router and channels consume those events and handle semantic output plus channel rendering.
 8. On completion, the Run durably stores its terminal receipt and releases the engine lock and scheduler slot; router stores resume state before advancing the conversation.
@@ -81,6 +81,12 @@ Only a definite missing worker permits retry; a lost acknowledgement remains
 Normally drained workers are temporary children, not restarted empty shells;
 the next submission gets a newly acknowledged worker instead of being cast
 into a retiring mailbox.
+Dead Registry entries do not consume enqueue attempts. Resolution retries retain
+the existing five-second startup budget, and live workers retain the existing
+two attempts for definite pre-enqueue rejection. Normally retiring workers remove
+their name before exiting. A definite admission failure returns a classified
+`{:error, reason}` to the submitter and persists/notifies a terminal failure;
+only a lost acknowledgement remains `:outcome_unknown`.
 
 Gateway limits each worker's pending launch queue to 128 requests and the global
 slot-wait queue to 1,024 workers. Overflow terminalizes the rejected run with
@@ -140,6 +146,12 @@ runner ever selects or replaces the Gateway executor.
 
 Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link/1`). They are registered in `TransportRegistry` and started under `TransportSupervisor` only when gateway ingress is explicitly enabled with `config :lemon_gateway, gateway_ingress_enabled: true`. Telegram, Discord, XMTP and email are owned by the `lemon_channels` sibling app. Voice and SMS are not registry transports; they are dedicated Twilio support services included in the same explicit ingress startup.
 
+`TransportRegistry` publishes the transport map and enabled-transport list as one
+immutable persistent-term snapshot at startup. All lookups, including enabled
+transport enumeration, are process-call-free. Restart the registry after changing
+transport configuration; restart ingress to apply that configuration to running
+transport children. A stopped registry exposes no stale registrations.
+
 Webhook, SMS, and voice are gateway-owned by design, not pending migration: `LemonChannels.Plugin.deliver/1` is fire-and-forget, so it cannot serve webhook's synchronous response, SMS has no reply path at all, and voice needs a live bidirectional session. Email was the one surface that genuinely was a channel, and it moved to `lemon_channels` in phase 2.4 — `LemonChannels.Adapters.Email`. See decision D2 in `docs/platform-split.md`.
 
 Webhook submissions use a caller-fixed run ID. If the router cannot confirm
@@ -160,6 +172,13 @@ or reservation. A legacy pending receipt without a run ID remains a permanent
 ambiguous fence after upgrade because its original acceptance outcome cannot be
 proven safely; retries receive a duplicate `200 legacy_outcome_unknown` receipt
 with `retry_safe: false` and never submit another run.
+
+The webhook idempotency sweep watermark is volatile ETS state owned by the
+supervised `Transports.Webhook.Idempotency` ingress child, not by an HTTP caller.
+Only successful cleanup advances it. Owner restart resets the schedule without
+changing durable reservations or response receipts; missing supervision skips
+opportunistic cleanup rather than creating a caller-owned table. Scheduler's
+named stats table is likewise created and owned by its existing supervised child.
 
 ## Module Inventory
 
@@ -191,13 +210,15 @@ with `retry_safe: false` and never submit another run.
 | `LemonGateway.ThreadWorkerSupervisor` | `thread_worker_supervisor.ex` | DynamicSupervisor for thread workers |
 | `LemonGateway.Run` | `run.ex` | Individual run GenServer: native execution lifecycle, bus events, steer/cancel |
 | `LemonGateway.RunSupervisor` | `run_supervisor.ex` | DynamicSupervisor for run processes (temporary restart) |
-| `LemonGateway.EngineLock` | `engine_lock.ex` | Per-session mutex with FIFO queueing, waiter timeouts, owner-death release, and over-age live-owner observation |
+| `LemonGateway.EngineLock` | `engine_lock.ex` | FIFO admission queue for run-owned engine-session Registry names, with monitored waiters and timeouts |
 | `LemonGateway.ProgressStore` | `progress_store.ex` | Progress/status message → run id index in the `:progress` store table (registered for the store read cache at boot); backs cancel-by-message |
 
-`EngineLock` never transfers an exclusive lock because of age alone. Explicit
-release and confirmed owner-process death are the ownership-transfer paths; a
-live owner beyond the configured age threshold remains exclusive and emits
-`[:lemon, :gateway, :engine_lock, :over_age_live_owner]` telemetry for operators.
+Engine-session ownership is a unique `{:engine_session, key}` name in
+`RunRegistry`, held by the Run itself. FIFO waiting and the configured
+`engine_lock_timeout_ms` remain contractual; `EngineLock` only coordinates
+admission reservations and monitored waiters. Explicit release unregisters the
+name before advancing the queue; owner death releases it through Registry.
+There is no periodic sweep, age threshold, or over-age-owner telemetry.
 
 Gateway action events preserve nested `action.detail.result_meta` metadata,
 including safe failure fields such as `error_type`, `timeout_ms`, and
@@ -279,7 +300,7 @@ in-process subagents.
 
 ### Start
 
-1. `Run.init/1` acquires the `EngineLock` for the session's thread key (or fails fast with `:lock_timeout`).
+1. `Run.init/1` returns without waiting for session ownership. In `handle_continue/2`, the Run waits in FIFO order and registers its engine-session key in the unique `RunRegistry` (or completes with `:lock_timeout`).
 2. The Run resolves the working directory and invokes the configured `CodingAgent.Executor` through `LemonGateway.Executor`.
 3. The native executor starts the session and returns the run and cancellation state; vendor CLI subprocesses are never started for a Gateway run.
 
@@ -462,10 +483,10 @@ The Run re-emits all events to `LemonCore.Bus` as plain maps on topic `"run:<run
 ## Health Check
 
 The health endpoint runs on port 4042 (configurable via `:health_port` or
-`LEMON_GATEWAY_HEALTH_PORT`). `GET /health` returns JSON with built-in checks for:
+`LEMON_GATEWAY_HEALTH_PORT`). `GET /healthz` returns JSON with built-in checks for:
 
 - Supervisor process liveness
-- Scheduler state (in_flight count, waitq length, max slots)
+- Scheduler-published ETS counters (in_flight count, waitq length, max slots), read without calling the Scheduler
 - Configured executor readiness
 - RunSupervisor active children
 - EngineLock process liveness

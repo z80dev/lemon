@@ -157,7 +157,7 @@ defmodule CodingAgent.Session.Presentation do
         cwd
       ) do
     case resume_session_file(session_id, cwd) do
-      {:ok, _} ->
+      {:ok, _session_file, _loaded_session} ->
         :ok
 
       {:error, reason} ->
@@ -190,8 +190,13 @@ defmodule CodingAgent.Session.Presentation do
         state
       ) do
     case resume_session_file(session_id, state.cwd) do
-      {:ok, session_file} ->
-        start_existing_session(session_id, session_file, session_opts, state)
+      {:ok, session_file, loaded_session} ->
+        start_existing_session(
+          session_id,
+          session_file,
+          Keyword.put(session_opts, :loaded_session, loaded_session),
+          state
+        )
 
       {:error, reason} ->
         if fresh_resume_fallback?(session_id, session_opts) do
@@ -220,7 +225,7 @@ defmodule CodingAgent.Session.Presentation do
 
     if File.regular?(session_file) do
       case SessionManager.load_from_file(session_file) do
-        {:ok, _session} -> {:ok, session_file}
+        {:ok, session} -> {:ok, session_file, session}
         {:error, reason} -> {:error, {:corrupt, reason}}
       end
     else

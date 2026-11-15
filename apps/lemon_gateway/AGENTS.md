@@ -17,8 +17,8 @@ messaging adapters; gateway-native SMS/voice/webhook ingress remains opt-in thro
   `LemonGateway.Runtime.submit_execution(%LemonCore.ExecutionCommand{})`.
   Gateway constructs its private `ExecutionRequest`; consumers do not.
 - `Scheduler` grants slots for the router-supplied conversation key.
-  `ThreadWorker` only launches runs; `EngineLock` is defense-in-depth isolation,
-  not a second product queue.
+  `ThreadWorker` only launches runs; run-owned unique Registry names provide
+  session isolation, with `EngineLock` retaining FIFO admission, not a product queue.
 - Slot requests carry a generation token. Timeout retries cancel the prior
   generation before requesting again. Bounded failed launch attempts produce
   one structured terminal completion and advance the worker.
@@ -60,7 +60,7 @@ run/worker children. For an unready executor, call
 Resume state lives in `LemonCore.ChatStateStore` and the native session.
 
 ```elixir
-:sys.get_state(LemonGateway.Scheduler)
+LemonGateway.Scheduler.stats()
 :sys.get_state(LemonGateway.EngineLock)
 DynamicSupervisor.which_children(LemonGateway.ThreadWorkerSupervisor)
 DynamicSupervisor.which_children(LemonGateway.RunSupervisor)

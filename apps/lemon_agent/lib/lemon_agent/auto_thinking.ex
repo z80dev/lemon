@@ -26,7 +26,6 @@ defmodule LemonAgent.AutoThinking do
   @timeout_ms 5_000
   @max_input_bytes 12_000
   @max_tokens 4_096
-  @poll_ms 20
   @levels %{
     "off" => :off,
     "minimal" => :minimal,
@@ -216,9 +215,12 @@ defmodule LemonAgent.AutoThinking do
         end
       end)
 
+    AbortSignal.subscribe(signal)
+
     try do
       await_classifier(task, signal, deadline)
     after
+      AbortSignal.unsubscribe(signal)
       Task.shutdown(task, :brutal_kill)
     end
   rescue
@@ -238,10 +240,20 @@ defmodule LemonAgent.AutoThinking do
         :fallback
 
       true ->
-        case Task.yield(task, min(@poll_ms, remaining)) do
-          {:ok, result} -> result
-          {:exit, _reason} -> :fallback
-          nil -> await_classifier(task, signal, deadline)
+        ref = task.ref
+
+        receive do
+          {^ref, result} ->
+            Process.demonitor(ref, [:flush])
+            result
+
+          {:DOWN, ^ref, :process, _pid, _reason} ->
+            :fallback
+
+          {:lemon_abort, ^signal, :abort} ->
+            {:error, :aborted}
+        after
+          remaining -> :fallback
         end
     end
   end

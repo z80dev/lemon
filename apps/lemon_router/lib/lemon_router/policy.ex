@@ -26,9 +26,7 @@ defmodule LemonRouter.Policy do
         # Blocked commands (blacklist)
         blocked_commands: ["rm -rf /", "sudo"],
         # Max file size for write operations
-        max_file_size: 1_048_576,
-        # Sandbox mode
-        sandbox: true
+        max_file_size: 1_048_576
       }
   """
 
@@ -185,7 +183,7 @@ defmodule LemonRouter.Policy do
 
   # Session rows contain routing settings beside the nested policy. Legacy
   # top-level policy fields remain an additional floor, never an override.
-  @policy_keys ~w(approvals approval_mode blocked_tools allowed_commands blocked_commands max_file_size sandbox profile allow deny require_approval no_reply)a
+  @policy_keys ~w(approvals approval_mode blocked_tools allowed_commands blocked_commands max_file_size profile allow deny require_approval no_reply)a
 
   defp get_session_policy(nil), do: {:ok, nil}
 
@@ -201,8 +199,9 @@ defmodule LemonRouter.Policy do
   defp get_runtime_policy, do: LemonCore.PolicyStore.get_runtime()
 
   defp session_tool_policy(policy) do
+    # Forward the removed key only so ToolPolicy can warn and discard it.
     legacy =
-      Enum.reduce(@policy_keys, %{}, fn key, acc ->
+      Enum.reduce([:sandbox | @policy_keys], %{}, fn key, acc ->
         acc
         |> copy_present_policy_key(policy, key)
         |> copy_present_policy_key(policy, Atom.to_string(key))

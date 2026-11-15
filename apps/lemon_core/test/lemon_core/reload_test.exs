@@ -39,6 +39,32 @@ defmodule LemonCore.ReloadTest do
     {:ok, tmp_dir: tmp_dir}
   end
 
+  test "published reload entry points have module and function contracts" do
+    entry_points = [
+      reload_module: 2,
+      soft_purge_module: 2,
+      reload_extension: 2,
+      reload_app: 2,
+      reload_system: 1
+    ]
+
+    assert Code.ensure_loaded?(Reload)
+
+    assert {:docs_v1, _, :elixir, _, %{"en" => module_doc}, _, docs} =
+             Code.fetch_docs(Reload)
+
+    for {name, arity} <- entry_points do
+      assert function_exported?(Reload, name, arity)
+      assert function_exported?(Reload, name, arity - 1)
+      assert module_doc =~ "#{name}/#{arity}"
+
+      assert {{:function, ^name, ^arity}, _, _, %{"en" => function_doc}, _} =
+               Enum.find(docs, fn {entry, _, _, _, _} -> entry == {:function, name, arity} end)
+
+      assert String.trim(function_doc) != ""
+    end
+  end
+
   describe "reload_module/2" do
     test "reloads an existing module" do
       assert {:ok, result} = Reload.reload_module(LemonCore.Clock)

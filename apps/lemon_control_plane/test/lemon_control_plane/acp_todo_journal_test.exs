@@ -61,10 +61,10 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
       )
 
     Session.subscribe(pid)
-    refute_receive {:session_event, _, {:todos_changed, []}}
+    refute_receive {:session_event, _, {:todos_changed, []}, _}
 
     first = write(pid, "Selected")
-    assert_receive {:session_event, _, {:todos_changed, selected_todos}}
+    assert_receive {:session_event, _, {:todos_changed, selected_todos}, _}
 
     {updates, projection} =
       LemonControlPlane.ACP.SessionUpdates.map_event(
@@ -75,7 +75,7 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
     assert plans(updates) == [entries(first)]
     first_leaf = Session.get_state(pid).session_manager.leaf_id
     abandoned = write(pid, "Abandoned")
-    assert_receive {:session_event, _, {:todos_changed, abandoned_todos}}
+    assert_receive {:session_event, _, {:todos_changed, abandoned_todos}, _}
 
     {_updates, projection} =
       LemonControlPlane.ACP.SessionUpdates.map_event(
@@ -84,7 +84,7 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
       )
 
     assert :ok = Session.navigate_tree(pid, first_leaf, summarize_abandoned: false)
-    assert_receive {:session_event, _, {:todos_changed, ^selected_todos}}
+    assert_receive {:session_event, _, {:todos_changed, ^selected_todos}, _}
 
     {updates, projection} =
       LemonControlPlane.ACP.SessionUpdates.map_event(projection, {:todos_changed, selected_todos})
@@ -98,8 +98,9 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
       )
 
     assert plans(late_updates) == []
-    manager = Session.get_state(pid).session_manager
+    assert :ok = Session.save(pid)
     stop_supervised!(Session)
+    {:ok, manager} = SessionManager.load_from_file(path)
 
     # A historical read receipt can carry stale branch-global cache data. It is
     # still a transcript receipt, but must never govern the client plan.
@@ -187,18 +188,18 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
     end)
 
     Session.subscribe(pid)
-    refute_receive {:session_event, ^id, _}
+    refute_receive {:session_event, ^id, _, _}
     assert {:ok, stream} = Session.subscribe(pid, mode: :stream)
     assert LemonAgent.EventStream.stats(stream).queue_size == 0
     LemonAgent.EventStream.cancel(stream, :test_complete)
 
     assert {:ok, [], revision} = Session.todos(pid)
     assert {:ok, [], _} = Session.write_todos(pid, [], revision)
-    refute_receive {:session_event, ^id, {:todos_changed, _}}
+    refute_receive {:session_event, ^id, {:todos_changed, _}, _}
 
     # An explicitly journaled empty plan still initializes a new projection.
     Session.subscribe(pid)
-    assert_receive {:session_event, ^id, {:todos_changed, []} = initial}
+    assert_receive {:session_event, ^id, {:todos_changed, []} = initial, _}
     {updates, _} = SessionUpdates.map_event(SessionUpdates.new(id), initial)
     assert plans(updates) == [[]]
 
@@ -218,7 +219,7 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
     refute_receive {:engine_event, ^run_ref, _}
 
     write(pid, "Plan before start")
-    assert_receive {:session_event, ^id, {:todos_changed, todos} = changed}
+    assert_receive {:session_event, ^id, {:todos_changed, todos} = changed, _}
     translator = RunTranslator.handle_event(translator, changed)
     assert_receive {:engine_event, ^run_ref, %{action: %{detail: %{todos: ^todos}}}}
 
@@ -226,30 +227,30 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
     assert {:ok, ^todos, _} = Session.write_todos(pid, todos, revision)
     same_plan_leaf = Session.get_state(pid).session_manager.leaf_id
     assert :ok = Session.navigate_tree(pid, same_plan_leaf, summarize_abandoned: false)
-    refute_receive {:session_event, ^id, {:todos_changed, _}}
+    refute_receive {:session_event, ^id, {:todos_changed, _}, _}
 
     # A real pre-start clear is visible, unlike the initial snapshot.
     assert {:ok, ^todos, revision} = Session.todos(pid)
     assert {:ok, [], _} = Session.write_todos(pid, [], revision)
-    assert_receive {:session_event, ^id, {:todos_changed, []} = cleared}
+    assert_receive {:session_event, ^id, {:todos_changed, []} = cleared, _}
     translator = RunTranslator.handle_event(translator, cleared)
     assert_receive {:engine_event, ^run_ref, %{action: %{detail: %{todos: []}}, ok: true}}
 
     translator = RunTranslator.handle_event(translator, {:agent_start})
     assert_receive {:engine_event, ^run_ref, %{__event__: :started}}
     write(pid, "Plan after start")
-    assert_receive {:session_event, ^id, {:todos_changed, _} = changed}
+    assert_receive {:session_event, ^id, {:todos_changed, _} = changed, _}
     translator = RunTranslator.handle_event(translator, changed)
     assert_receive {:engine_event, ^run_ref, %{action: %{detail: %{type: :todos_changed}}}}
     assert {:ok, [_todo], revision} = Session.todos(pid)
     assert {:ok, [], _} = Session.write_todos(pid, [], revision)
-    assert_receive {:session_event, ^id, {:todos_changed, []} = cleared}
+    assert_receive {:session_event, ^id, {:todos_changed, []} = cleared, _}
     RunTranslator.handle_event(translator, cleared)
     assert_receive {:engine_event, ^run_ref, %{action: %{detail: %{todos: []}}, ok: true}}
 
     assert {:ok, [], revision} = Session.todos(pid)
     assert {:ok, [], _} = Session.write_todos(pid, [], revision)
-    refute_receive {:session_event, ^id, {:todos_changed, _}}
+    refute_receive {:session_event, ^id, {:todos_changed, _}, _}
   end
 
   @tag :tmp_dir
@@ -292,19 +293,22 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
 
       on_exit(fn -> TodoStore.delete(manager.header.id) end)
       Session.subscribe(pid)
-      assert_receive {:session_event, _, {:todos_unavailable, :unsupported_todo_entry} = initial}
+
+      assert_receive {:session_event, _, {:todos_unavailable, :unsupported_todo_entry} = initial,
+                      _}
+
       {updates, projection} = SessionUpdates.map_event(SessionUpdates.new(name), initial)
       assert plans(updates) == []
       assert_unavailable(updates)
 
       assert :ok = Session.navigate_tree(pid, good_leaf, summarize_abandoned: false)
-      assert_receive {:session_event, _, {:todos_changed, ^known} = known_event}
+      assert_receive {:session_event, _, {:todos_changed, ^known} = known_event, _}
       {known_updates, projection} = SessionUpdates.map_event(projection, known_event)
       assert [known_plan] = plans(known_updates)
 
       assert :ok = Session.navigate_tree(pid, bad_leaf, summarize_abandoned: false)
-      assert_receive {:session_event, _, {:todos_unavailable, :unsupported_todo_entry} = event}
-      refute_receive {:session_event, _, {:todos_changed, []}}
+      assert_receive {:session_event, _, {:todos_unavailable, :unsupported_todo_entry} = event, _}
+      refute_receive {:session_event, _, {:todos_changed, []}, _}
       assert {:error, {:unsupported_todo_entry, _}, _} = Session.todos(pid)
 
       {updates, projection} = SessionUpdates.map_event(projection, event)
@@ -348,13 +352,13 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
       end
 
       assert :ok = Session.navigate_tree(pid, good_leaf, summarize_abandoned: false)
-      assert_receive {:session_event, _, {:todos_changed, ^known} = restored}
+      assert_receive {:session_event, _, {:todos_changed, ^known} = restored, _}
       {updates, projection} = SessionUpdates.map_event(projection, restored)
       assert plans(updates) == [known_plan]
 
       assert {:ok, ^known, revision} = Session.todos(pid)
       assert {:ok, [], _} = Session.write_todos(pid, [], revision)
-      assert_receive {:session_event, _, {:todos_changed, []} = cleared}
+      assert_receive {:session_event, _, {:todos_changed, []} = cleared, _}
       {updates, _} = SessionUpdates.map_event(projection, cleared)
       assert plans(updates) == [[]]
       stop_supervised!(Session)
@@ -380,7 +384,7 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
   end
 
   @tag :tmp_dir
-  test "new direct and stream subscriptions receive only their own journal snapshot", %{
+  test "new subscriptions broadcast sequenced journal snapshots to every listener", %{
     tmp_dir: cwd
   } do
     pid =
@@ -397,9 +401,9 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
     end)
 
     Session.subscribe(pid)
-    refute_receive {:session_event, ^id, {:todos_changed, []}}
+    refute_receive {:session_event, ^id, {:todos_changed, []}, _}
     write(pid, "Selected")
-    assert_receive {:session_event, ^id, {:todos_changed, todos}}
+    assert_receive {:session_event, ^id, {:todos_changed, todos}, %{"seq" => written_seq}}
     owner = self()
 
     subscriber =
@@ -415,17 +419,28 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
         end
       end)
 
-    assert_receive {:initial_direct, {:session_event, ^id, {:todos_changed, ^todos}}}
-    refute_receive {:session_event, ^id, {:todos_changed, _}}
+    assert_receive {:initial_direct,
+                    {:session_event, ^id, {:todos_changed, ^todos}, direct_cursor}}
+
+    assert_receive {:session_event, ^id, {:todos_changed, ^todos}, ^direct_cursor}
+
+    assert %{"version" => 1, "sessionId" => ^id, "streamId" => stream_id, "seq" => direct_seq} =
+             direct_cursor
+
+    assert direct_seq == written_seq + 1
     send(subscriber, :stop)
 
     assert {:ok, stream} = Session.subscribe(pid, mode: :stream)
 
-    assert Enum.take(LemonAgent.EventStream.events(stream), 1) == [
-             {:session_event, id, {:todos_changed, todos}}
-           ]
+    assert [{:session_event, ^id, {:todos_changed, ^todos}, stream_cursor}] =
+             Enum.take(LemonAgent.EventStream.events(stream), 1)
 
-    refute_receive {:session_event, ^id, {:todos_changed, _}}
+    assert_receive {:session_event, ^id, {:todos_changed, ^todos}, ^stream_cursor}
+
+    assert %{"version" => 1, "sessionId" => ^id, "streamId" => ^stream_id, "seq" => stream_seq} =
+             stream_cursor
+
+    assert stream_seq == direct_seq + 1
     LemonAgent.EventStream.cancel(stream, :test_complete)
   end
 

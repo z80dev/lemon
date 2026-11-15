@@ -243,7 +243,6 @@ defmodule CodingAgent.SideQuery do
       _kind, _reason -> {:error, :query_failed}
     after
       AbortSignal.abort(signal)
-      AbortSignal.clear(signal)
     end
   end
 

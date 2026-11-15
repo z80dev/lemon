@@ -213,8 +213,11 @@ topic), `LemonRouter.AsyncTaskSurfaceSubscriber`, `CodingAgent.Tools.Task.LiveBr
 
 Named-node `coding_agent.run` executions retain the same run/session Bus contract.
 Workers forward sequenced, bounded JSON frames via the node-only
-`node.invoke.event` method; `NodeRegistry` authorizes the invocation's live
-connection/generation, rejects gaps and deduplicates accepted sequences.
+`node.invoke.event` method. Each temporary `LemonCore.NodeInvocation` authorizes
+its live connection/generation, rejects gaps and deduplicates accepted sequences.
+Frames call that invocation process directly rather than a singleton broker.
+The authenticated socket owns its unique node-ID Registry entry, which is
+removed automatically on socket death; credential-generation floors are retained.
 `CodingAgent.Executor.RemoteSessionRunner` sends deltas and tool actions through
 the usual gateway sink, so the gateway assigns normal delta sequence numbers and
 the router forwards the unchanged typed events to the session topic. Checkpoints
@@ -315,7 +318,7 @@ topic subscriptions.
 | Topic | Publisher → subscriber | Notes |
 |---|---|---|
 | `nodes` | control-plane `node.*` methods → `EventBridge`, `LemonWeb.NodesLive` | `:node_pair_requested`, `:node_pair_resolved`, `:node_invoke_completed` |
-| `presence` | `LemonControlPlane.Presence` → `EventBridge` | `:presence_changed` |
+| `presence` | `LemonControlPlane.Connections` → `EventBridge` | `:presence_changed`; Registry-owned connection membership |
 | `user_prompts` | `CodingAgent.Session.UserPrompt` → `LemonChannels.UserPromptSurface`, `EventBridge` | `:user_prompt_requested`, `:user_prompt_resolved` (public projection, string keys) |
 | `omp` | `LemonOmp.Manager` → `EventBridge`, `LemonWeb.OmpLive` | `:omp_session` snapshots (`LemonOmp.bus_topic/0`) |
 | `run_graph:<run_id>` | `CodingAgent.RunGraphServer` → `CodingAgent.RunGraph` | bare tuple `{:run_graph, :state_changed, run_id}` — a signal, not an event |

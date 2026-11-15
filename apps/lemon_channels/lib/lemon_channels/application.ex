@@ -31,7 +31,7 @@ defmodule LemonChannels.Application do
       # Dedupe
       LemonChannels.Outbox.Dedupe,
       # Outbox worker supervisor (tasks)
-      {Task.Supervisor, name: LemonChannels.Outbox.WorkerSupervisor},
+      {Task.Supervisor, LemonChannels.Outbox.worker_supervisor_options()},
       # Outbox
       LemonChannels.Outbox,
       # Durable supervision notices use Outbox admission and delivery receipts
@@ -39,6 +39,8 @@ defmodule LemonChannels.Application do
       LemonChannels.UserPromptSurface,
       LemonChannels.ApprovalPromptTracker,
       LemonChannels.Pairing,
+      # Volatile WhatsApp session overrides outlive command/transport callers
+      LemonChannels.Adapters.WhatsApp.ModelPolicyAdapter,
       # Adapter supervisor for channel adapters
       {DynamicSupervisor, strategy: :one_for_one, name: LemonChannels.AdapterSupervisor},
       # Optional inbound HTTP listener; binds a port only when configured

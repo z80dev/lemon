@@ -10,7 +10,6 @@ defmodule CodingAgent.Tools.AskParent do
   alias LemonCore.Bus
 
   @default_timeout_ms 300_000
-  @poll_slice_ms 250
 
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
@@ -261,11 +260,13 @@ defmodule CodingAgent.Tools.AskParent do
   defp await_resolution(request_id, timeout_ms, signal) do
     topic = ParentQuestions.request_topic(request_id)
     :ok = Bus.subscribe(topic)
+    AbortSignal.subscribe(signal)
 
     try do
       deadline = System.monotonic_time(:millisecond) + timeout_ms
       do_await(request_id, deadline, signal)
     after
+      AbortSignal.unsubscribe(signal)
       _ = Bus.unsubscribe(topic)
     end
   end
@@ -297,10 +298,13 @@ defmodule CodingAgent.Tools.AskParent do
                 %LemonCore.Event{meta: %{request_id: ^request_id}} ->
                   do_await(request_id, deadline, signal)
 
+                {:lemon_abort, ^signal, _kind} ->
+                  do_await(request_id, deadline, signal)
+
                 _other ->
                   do_await(request_id, deadline, signal)
               after
-                min(remaining_ms, @poll_slice_ms) ->
+                remaining_ms ->
                   do_await(request_id, deadline, signal)
               end
             end

@@ -1,7 +1,8 @@
 defmodule LemonControlPlane.Lifecycle.Driver do
   @moduledoc """
   Runtime side effects, replaceable with `:lemon_control_plane, :lifecycle_driver`
-  in tests. Never log the command: source distribution arguments include a cookie.
+  in tests. Distribution cookies travel in the child environment, never argv.
+  The environment remains secret and must not be logged.
   """
 
   @callback restart(map()) :: :ok | {:error, term()}
@@ -35,7 +36,18 @@ defmodule LemonControlPlane.Lifecycle.Driver do
   def stop, do: LemonCore.Drain.request_stop(reason: :system_stop)
 
   @doc false
-  def restart_command(env \\ System.get_env(), distribution \\ distribution_args()) do
+  def restart_command(
+        env \\ System.get_env(),
+        distribution \\ distribution_args(),
+        cookie \\ nil
+      ) do
+    cookie =
+      cookie ||
+        if(Node.alive?(),
+          do: Atom.to_string(Node.get_cookie()),
+          else: Map.get(env, "RELEASE_COOKIE")
+        )
+
     port = Map.get(env, "LEMON_CONTROL_PLANE_PORT", "4040")
     home = Map.get(env, "HOME", LemonCore.Paths.home_dir())
 
@@ -60,6 +72,7 @@ defmodule LemonControlPlane.Lifecycle.Driver do
             env,
             ~w(HOME LEMON_CONTROL_PLANE_PORT LEMON_WEB_PORT LEMON_RUNTIME_PID_FILE LEMON_RUNTIME_LOG_FILE)
           )
+          |> Map.put("RELEASE_COOKIE", cookie)
         )
     }
   end
@@ -78,7 +91,7 @@ defmodule LemonControlPlane.Lifecycle.Driver do
             end
         end
 
-      [mode, name, "--cookie", Atom.to_string(Node.get_cookie())]
+      [mode, name]
     else
       ["--no-distribution"]
     end

@@ -17,13 +17,18 @@ maps. It validates:
 - `approvals`
 - `no_reply`
 - `profile`
-- command restrictions and file-size/sandbox limits retained by router policy
+- command restrictions and file-size limits retained by router policy
 
 An absent policy is `{:error, :policy_absent}`. Execution entry points handle
 absence by choosing an explicit trusted default; they do not use that default
 for malformed supplied data. Unknown profiles, unknown fields, conflicting
 atom/string keys, invalid allow values, malformed tool lists, and unsupported
 approval modes are rejected.
+
+The removed `sandbox` key is the sole legacy exception: atom- and string-keyed
+input is accepted and ignored, with a warning once per parsing process. Its
+value never changes authority, and it is omitted from normalized/serialized
+policies. Remove it from configuration; tool policy provides no OS sandbox.
 
 `CodingAgent.ToolPolicy` remains a compatibility facade. Authorization helpers
 fail closed when called with malformed data.
@@ -37,7 +42,7 @@ fail closed when called with malformed data.
 - approval requirements form a union and the stricter per-tool mode wins;
 - command allowlists intersect and blocklists form a union;
 - numeric limits take the lower value;
-- sandbox and silent-mode restrictions cannot be removed.
+- silent-mode restrictions cannot be removed.
 
 Router policy layers and child requests use this operation. A later policy
 layer can narrow authority but cannot undo an earlier restriction.

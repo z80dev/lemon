@@ -9,7 +9,8 @@ defmodule LemonAgent.ModelRuntime.SessionPins do
 
   Pins are advisory ordering hints, never gates: a missing table or a `nil` /
   `:global` scope simply means no pin. State lives in a public named ETS table
-  owned by this process (same pattern as `LemonAgent.AbortSignal.TableOwner`).
+  created only by this supervised process. Callers never create or adopt a
+  table, and an owner restart discards these volatile hints.
 
   Pins deliberately outlive the session process (they are keyed by the
   persisted session id so resumed sessions keep their stickiness), so nothing
@@ -116,16 +117,16 @@ defmodule LemonAgent.ModelRuntime.SessionPins do
 
   @impl true
   def init(:ok) do
-    ensure_table()
+    :ets.new(@table, [
+      :named_table,
+      :public,
+      :set,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
+
     schedule_sweep()
     {:ok, %{}}
-  end
-
-  # If another process created the table with this process as heir, ETS sends
-  # this message when the original owner exits.
-  @impl true
-  def handle_info({:"ETS-TRANSFER", @table, _from, _gift_data}, state) do
-    {:noreply, state}
   end
 
   @impl true
@@ -142,26 +143,5 @@ defmodule LemonAgent.ModelRuntime.SessionPins do
 
   defp schedule_sweep do
     Process.send_after(self(), :sweep, @sweep_interval_ms)
-  end
-
-  defp ensure_table do
-    case :ets.whereis(@table) do
-      :undefined ->
-        :ets.new(@table, [
-          :named_table,
-          :public,
-          :set,
-          read_concurrency: true,
-          write_concurrency: true
-        ])
-
-        :ok
-
-      _ ->
-        :ok
-    end
-  rescue
-    ArgumentError ->
-      :ok
   end
 end

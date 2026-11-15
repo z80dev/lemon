@@ -633,8 +633,6 @@ defmodule CodingAgent.Tools.ReadTest do
 
       result = Read.execute("call_1", %{"path" => path}, signal, nil, tmp_dir, [])
 
-      AbortSignal.clear(signal)
-
       assert {:error, "Operation aborted"} = result
     end
 
@@ -645,8 +643,6 @@ defmodule CodingAgent.Tools.ReadTest do
       signal = AbortSignal.new()
 
       result = Read.execute("call_1", %{"path" => path}, signal, nil, tmp_dir, [])
-
-      AbortSignal.clear(signal)
 
       assert %AgentToolResult{} = result
     end

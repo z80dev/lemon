@@ -4,6 +4,7 @@ defmodule CodingAgent.BashExecutorTest do
   alias CodingAgent.BashExecutor
   alias CodingAgent.BashExecutor.Result
   alias LemonAgent.AbortSignal
+  alias LemonCore.ProcessGroup
 
   describe "execute/3" do
     test "executes simple command and returns Result struct" do
@@ -66,9 +67,6 @@ defmodule CodingAgent.BashExecutorTest do
 
       assert result.cancelled == true
       assert result.exit_code == nil
-
-      # Cleanup
-      AbortSignal.clear(signal)
     end
 
     test "calls on_chunk callback for streaming" do
@@ -330,10 +328,10 @@ defmodule CodingAgent.BashExecutorTest do
     end
   end
 
-  describe "kill_process_tree/1" do
+  describe "ProcessGroup.terminate/2" do
     test "handles killing non-existent process gracefully" do
       # Use a PID that's very likely not to exist
-      result = BashExecutor.kill_process_tree(999_999_999)
+      result = ProcessGroup.terminate(999_999_999, signal: :sigkill)
       assert result == :ok
     end
 
@@ -348,7 +346,7 @@ defmodule CodingAgent.BashExecutorTest do
       {:os_pid, os_pid} = Port.info(port, :os_pid)
 
       # Kill it
-      assert BashExecutor.kill_process_tree(os_pid) == :ok
+      assert ProcessGroup.terminate(os_pid, signal: :sigkill) == :ok
 
       # Process should terminate - wait for exit status
       receive do
@@ -561,7 +559,6 @@ if match?({:unix, _}, :os.type()) do
       assert result.cancelled == true
 
       await_gone(child)
-      AbortSignal.clear(signal)
     end
 
     test "killing the tool worker stops a backgrounded child that outlived its parent shell",

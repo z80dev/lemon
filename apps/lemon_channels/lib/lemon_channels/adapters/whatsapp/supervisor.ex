@@ -2,8 +2,9 @@ defmodule LemonChannels.Adapters.WhatsApp.Supervisor do
   @moduledoc """
   Supervisor for WhatsApp adapter processes.
 
-  Starts both the inbound transport and manages outbound delivery.
-  Only starts children if credentials_path is configured.
+  Starts the async supervisor and a transient transport when credentials are
+  configured. Terminal reconnect exhaustion leaves a stopped transport child;
+  operator restart is required rather than silently resetting the retry budget.
   """
 
   use Supervisor

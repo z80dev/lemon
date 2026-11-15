@@ -93,10 +93,11 @@ defmodule LemonControlPlane.Methods.NodeProcessTest do
                     }},
                    1_000
 
-    state = :sys.get_state(NodeRegistry)
-    assert state.invocations[invocation].node_pid == ctx.owner
-    assert state.invocations[invocation].node_generation == 7
-    assert Process.read_timer(state.invocations[invocation].timer_ref) > 1_804_000
+    [{owner, _}] = Elixir.Registry.lookup(NodeRegistry.Invocations, invocation)
+    state = :sys.get_state(owner)
+    assert state.node.pid == ctx.owner
+    assert state.node.generation == 7
+    assert Process.read_timer(state.timer_ref) > 1_804_000
 
     result =
       receipt(ctx, "completed", %{
@@ -340,7 +341,8 @@ defmodule LemonControlPlane.Methods.NodeProcessTest do
       params = if method == "node.process.run", do: run(ctx), else: identity(ctx)
       task = dispatch(ctx, method, params)
       assert_receive {:node_event, "node.invoke.request", %{"invokeId" => invocation}}, 1_000
-      send(NodeRegistry, {:invoke_timeout, invocation})
+      [{invocation_owner, _}] = Elixir.Registry.lookup(NodeRegistry.Invocations, invocation)
+      send(invocation_owner, :timeout)
 
       assert {:error, {:unavailable, _, %{"preDispatch" => false, "retrySafe" => false}}} =
                Task.await(task)

@@ -9,6 +9,11 @@ defmodule LemonRouter.ResumeResolver do
   previous one. Unbound legacy journals remain usable by unscoped callers that
   do not explicitly override policy or MCP capabilities.
 
+  Binding writes use the Store's durable mutation contract. A failed write or
+  durability acknowledgement returns `{:error, :outcome_unknown}` because the
+  binding may already be visible; it is not permission to retry automatically.
+  Unconfirmed bindings still cannot authorize resume or history access.
+
   Context comparisons use `LemonCore.InvocationProof` to project only a valid,
   factory-attested, fixed-run proof header. All other MCP configuration remains
   exact, and the transport configuration is never rewritten.
@@ -122,9 +127,9 @@ defmodule LemonRouter.ResumeResolver do
   end
 
   defp put_binding(store, key, digest) do
-    case Store.put_new(store, @context_table, key, digest) do
-      :ok -> durable_binding(store, key, digest)
-      {:error, :exists} -> durable_binding(store, key, digest)
+    case Store.put_new(store, @context_table, key, digest, durable: true) do
+      :ok -> :ok
+      {:error, :exists} -> existing_binding(store, key, digest)
       {:error, _reason} = error -> error
     end
   end
@@ -135,7 +140,7 @@ defmodule LemonRouter.ResumeResolver do
     digest = context_digest(context)
     legacy = legacy_unbound_context?(context, meta)
 
-    if Store.sync(store) == :ok do
+    if Store.confirm_durable(store) == :ok do
       Enum.filter(history, fn {run_id, data} ->
         case Store.fetch(store, @context_table, {:run, run_id}) do
           {:ok, ^digest} -> true
@@ -148,9 +153,9 @@ defmodule LemonRouter.ResumeResolver do
     end
   end
 
-  defp durable_binding(store, key, digest) do
+  defp existing_binding(store, key, digest) do
     case Store.fetch(store, @context_table, key) do
-      {:ok, ^digest} -> Store.sync(store)
+      {:ok, ^digest} -> Store.confirm_durable(store)
       {:ok, _other} -> {:error, :resume_context_conflict}
       {:error, _reason} = error -> error
     end
@@ -161,7 +166,7 @@ defmodule LemonRouter.ResumeResolver do
 
     allowed =
       case Store.fetch(store, @context_table, {resume.engine, resume.value}) do
-        {:ok, ^digest} -> Store.sync(store) == :ok
+        {:ok, ^digest} -> Store.confirm_durable(store) == :ok
         {:ok, nil} -> legacy_unbound_context?(context, meta)
         _ -> false
       end

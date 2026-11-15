@@ -38,12 +38,18 @@ defmodule LemonAgent.Loop.Streaming do
           EventStream.t()
         ) :: {:ok, AssistantMessage.t(), LemonAgent.Types.AgentContext.t()} | {:error, term()}
   def stream_assistant_response(context, config, signal, stream_fn, stream) do
-    system_prompt = context.system_prompt
-    result = retry_response(context, config, signal, stream_fn, stream, 0)
+    AbortSignal.subscribe(signal)
 
-    case result do
-      {:ok, message, updated} -> {:ok, message, %{updated | system_prompt: system_prompt}}
-      other -> other
+    try do
+      system_prompt = context.system_prompt
+      result = retry_response(context, config, signal, stream_fn, stream, 0)
+
+      case result do
+        {:ok, message, updated} -> {:ok, message, %{updated | system_prompt: system_prompt}}
+        other -> other
+      end
+    after
+      AbortSignal.unsubscribe(signal)
     end
   end
 
@@ -170,7 +176,7 @@ defmodule LemonAgent.Loop.Streaming do
       empty = message.error_message == "empty_assistant_response"
       reason = if empty, do: "empty reply", else: "malformed tool arguments"
 
-      EventStream.push(
+      EventStream.push!(
         stream,
         {:provider_retry,
          %{
@@ -261,7 +267,7 @@ defmodule LemonAgent.Loop.Streaming do
   defp retry_attempt(context, config, signal, stream_fn, stream, retries_done, error, delay_ms) do
     attempt = retries_done + 1
 
-    EventStream.push(
+    EventStream.push!(
       stream,
       {:provider_retry,
        %{
@@ -380,8 +386,12 @@ defmodule LemonAgent.Loop.Streaming do
         if remaining <= 0 do
           :ok
         else
-          Process.sleep(min(remaining, 50))
-          wait_for_retry(signal, deadline)
+          receive do
+            {:lemon_abort, ^signal, kind} when kind in [:abort, :redirect] ->
+              wait_for_retry(signal, deadline)
+          after
+            remaining -> :ok
+          end
         end
     end
   end
@@ -389,7 +399,7 @@ defmodule LemonAgent.Loop.Streaming do
   defp finish_retry(_stream, 0, _success, _canceled), do: :ok
 
   defp finish_retry(stream, attempt, success, canceled) do
-    EventStream.push(
+    EventStream.push!(
       stream,
       {:provider_retry_end, %{attempt: attempt, success: success, canceled: canceled}}
     )
@@ -649,6 +659,10 @@ defmodule LemonAgent.Loop.Streaming do
         Loop.record_budget_usage(config, nil, stream)
         {:error, :no_response}
     end
+  catch
+    :throw, {:event_stream_push_failed, reason} = failure ->
+      LemonAi.EventStream.cancel(response_stream, reason)
+      throw(failure)
   end
 
   defp process_stream_event({:start, partial}, _partial, context, added, _stream, _config) do
@@ -676,11 +690,11 @@ defmodule LemonAgent.Loop.Streaming do
         if added do
           update_last_message(context, updated_partial)
         else
-          EventStream.push(stream, {:message_start, copy_message(updated_partial)})
+          EventStream.push!(stream, {:message_start, copy_message(updated_partial)})
           %{context | messages: context.messages ++ [updated_partial]}
         end
 
-      EventStream.push(stream, {:message_update, copy_message(updated_partial), event})
+      EventStream.push!(stream, {:message_update, copy_message(updated_partial), event})
       {:continue, updated_partial, context, true}
     else
       {:continue, partial, context, added}
@@ -889,19 +903,29 @@ defmodule LemonAgent.Loop.Streaming do
         {:event, {:canceled, :redirected}}
 
       true ->
-        case :gen_server.wait_response(request, 50) do
-          {:reply, reply} ->
-            reply
-
-          {:error, {reason, _server}} when reason in [:noproc, :normal, :shutdown] ->
-            {:event, {:canceled, :canceled}}
-
-          {:error, {reason, _server}} ->
-            exit(reason)
-
-          :timeout ->
+        receive do
+          {:lemon_abort, ^signal, kind} when kind in [:abort, :redirect] ->
             await_ai_event(stream, signal, request)
+
+          {[:alias | ^request], _reply} = response ->
+            ai_response(response, request)
+
+          {:DOWN, ^request, :process, _server, _reason} = response ->
+            ai_response(response, request)
         end
+    end
+  end
+
+  defp ai_response(response, request) do
+    case :gen_server.check_response(response, request) do
+      {:reply, reply} ->
+        reply
+
+      {:error, {reason, _server}} when reason in [:noproc, :normal, :shutdown] ->
+        {:event, {:canceled, :canceled}}
+
+      {:error, {reason, _server}} ->
+        exit(reason)
     end
   end
 
@@ -993,10 +1017,10 @@ defmodule LemonAgent.Loop.Streaming do
       end
 
     if not added do
-      EventStream.push(stream, {:message_start, copy_message(final_message)})
+      EventStream.push!(stream, {:message_start, copy_message(final_message)})
     end
 
-    EventStream.push(stream, {:message_end, final_message})
+    EventStream.push!(stream, {:message_end, final_message})
     {final_message, context}
   end
 

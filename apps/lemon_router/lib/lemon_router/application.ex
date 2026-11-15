@@ -12,6 +12,8 @@ defmodule LemonRouter.Application do
 
     children =
       [
+        # Owns drain admission before any queues or runs can start.
+        LemonRouter.RestartCarryover,
         # Agent profiles configuration
         LemonRouter.AgentProfiles,
         # Registries

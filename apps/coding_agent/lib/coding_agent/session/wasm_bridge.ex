@@ -242,6 +242,7 @@ defmodule CodingAgent.Session.WasmBridge do
   @doc false
   def start_host_call(state, from, tool_name, params_json, context) do
     deadline = min(context.deadline, System.monotonic_time(:millisecond) + @host_timeout_ms)
+    AbortSignal.subscribe(context.signal)
 
     request = %{
       from: from,
@@ -252,6 +253,7 @@ defmodule CodingAgent.Session.WasmBridge do
 
     case host_request_status(request) do
       {:error, _} = error ->
+        release_host_signal(state, context.signal)
         {:reply, error, state}
 
       :ok ->
@@ -259,11 +261,8 @@ defmodule CodingAgent.Session.WasmBridge do
         # registry lookup. Execution must not occupy the journal-owning GenServer.
         tool = find_host_tool(state, tool_name)
 
-        # Only this invocation owns the child signal. Parent cancellation is
-        # observed by the existing request checks, never written by cleanup.
-        # AbortSignal treats an unregistered reference as inactive. Allocate
-        # lazily so an untrappable Session death cannot leave an idle ETS row.
-        signal = make_ref()
+        # The invocation owns its child signal; parent notifications wake the session.
+        signal = AbortSignal.new()
         request = Map.put(request, :signal, signal)
 
         case start_host_worker(tool_name, params_json, tool, signal) do
@@ -284,7 +283,7 @@ defmodule CodingAgent.Session.WasmBridge do
              %{state | wasm_host_calls: Map.put(state.wasm_host_calls, task.ref, request)}}
 
           {:error, _} ->
-            AbortSignal.clear(signal)
+            release_host_signal(state, context.signal)
             {:reply, {:error, :host_worker_unavailable}, state}
         end
     end
@@ -302,7 +301,9 @@ defmodule CodingAgent.Session.WasmBridge do
 
         cleanup_host_call(request, result)
         GenServer.reply(request.from, result)
-        %{state | wasm_host_calls: Map.delete(state.wasm_host_calls, ref)}
+        state = %{state | wasm_host_calls: Map.delete(state.wasm_host_calls, ref)}
+        release_host_signal(state, request.parent_signal)
+        state
 
       :error ->
         state
@@ -349,6 +350,23 @@ defmodule CodingAgent.Session.WasmBridge do
   end
 
   @doc false
+  def abort_host_calls(state, signal) do
+    Enum.reduce(state.wasm_host_calls, state, fn {ref, request}, state ->
+      if request.parent_signal == signal,
+        do: check_host_call(state, ref),
+        else: state
+    end)
+  end
+
+  defp release_host_signal(state, signal) do
+    unless Enum.any?(state.wasm_host_calls, fn {_ref, request} ->
+             request.parent_signal == signal
+           end) do
+      AbortSignal.unsubscribe(signal)
+    end
+  end
+
+  @doc false
   def host_mutation_allowed?(state, {pid, _tag}) do
     # A timed-out/killed worker may already have queued its journal call.
     # Reject it even when the timeout/DOWN cleanup ran before this message.
@@ -369,7 +387,7 @@ defmodule CodingAgent.Session.WasmBridge do
   end
 
   defp host_check_timer(ref, deadline) do
-    delay = min(25, max(0, deadline - System.monotonic_time(:millisecond)))
+    delay = max(0, deadline - System.monotonic_time(:millisecond))
     Process.send_after(self(), {:wasm_host_check, ref}, delay)
   end
 
@@ -435,7 +453,6 @@ defmodule CodingAgent.Session.WasmBridge do
     Process.demonitor(request.caller_ref, [:flush])
     Process.demonitor(request.owner_ref, [:flush])
     Process.cancel_timer(request.timer)
-    AbortSignal.clear(request.signal)
   end
 
   @spec maybe_handle_reserved_host_target(String.t(), String.t()) ::

@@ -9,7 +9,7 @@ defmodule CodingAgent.Debug.SessionServer do
 
   The server owns a linked `CodingAgent.Debug.Client` for the adapter and
   processes every operation synchronously: DAP responses and events arrive as
-  messages, so handshake ordering, stop waits and abort polling are a single
+  messages, so handshake ordering, stop waits and cancellation share a single
   receive loop. Event-driven state (stop location, threads, exit code, output
   ring buffer) is applied in arrival order whether it arrives during an
   operation or between operations.
@@ -23,10 +23,10 @@ defmodule CodingAgent.Debug.SessionServer do
 
   use GenServer
 
-  alias CodingAgent.BashExecutor
   alias CodingAgent.Debug.Adapters
   alias CodingAgent.Debug.Client
   alias LemonAgent.AbortSignal
+  alias LemonCore.ProcessGroup
 
   @registry CodingAgent.Debug.Registry
   @supervisor CodingAgent.Debug.Supervisor
@@ -34,7 +34,6 @@ defmodule CodingAgent.Debug.SessionServer do
   @idle_timeout_ms 10 * 60 * 1000
   @max_output_bytes 128 * 1024
   @dispose_timeout_ms 2_000
-  @poll_ms 50
   @call_slack_ms 15_000
 
   @start_actions ~w(launch attach set_breakpoint remove_breakpoint set_function_breakpoint remove_function_breakpoint)
@@ -192,11 +191,24 @@ defmodule CodingAgent.Debug.SessionServer do
   end
 
   def handle_call({:op, request, ctx}, _from, state) do
+    # Preserve the original invocation worker when routing to a child server.
+    caller_ref =
+      case Map.get(ctx, :caller) do
+        caller when is_pid(caller) -> Process.monitor(caller)
+        _ -> nil
+      end
+
+    ctx = Map.put(ctx, :caller_ref, caller_ref)
+    AbortSignal.subscribe(ctx.signal)
+
     {reply, state} =
       try do
         run(request, ctx, state)
       catch
         {:owner_down, state} -> {:owner_down, state}
+      after
+        AbortSignal.unsubscribe(ctx.signal)
+        if caller_ref, do: Process.demonitor(caller_ref, [:flush])
       end
 
     case reply do
@@ -1240,7 +1252,7 @@ defmodule CodingAgent.Debug.SessionServer do
         now = System.monotonic_time(:millisecond)
 
         cond do
-          AbortSignal.aborted?(ctx.signal) or caller_down?(ctx) ->
+          AbortSignal.aborted?(ctx.signal) ->
             {:aborted, state}
 
           now >= ctx.deadline ->
@@ -1249,6 +1261,8 @@ defmodule CodingAgent.Debug.SessionServer do
           true ->
             client = state.session && state.session.client
             owner_ref = state.owner_ref
+            caller_ref = Map.get(ctx, :caller_ref)
+            signal = ctx.signal
 
             receive do
               {:dap, ^client, payload} ->
@@ -1265,18 +1279,21 @@ defmodule CodingAgent.Debug.SessionServer do
 
               {:DOWN, ^owner_ref, :process, _pid, _reason} ->
                 throw({:owner_down, state})
+
+              {:DOWN, ^caller_ref, :process, _pid, _reason} ->
+                {:aborted, state}
+
+              {:lemon_abort, ^signal, :abort} ->
+                {:aborted, state}
+
+              {:lemon_abort, ^signal, :redirect} ->
+                await(state, ctx, done?)
             after
-              min(@poll_ms, ctx.deadline - now) -> await(state, ctx, done?)
+              ctx.deadline - now -> {:timeout, state}
             end
         end
     end
   end
-
-  # The invocation worker can be killed after its local abort flag is reclaimed.
-  # Keep cancellation observable independently of that transient ETS entry.
-  # Preserve the original caller when routing an operation to a child server.
-  defp caller_down?(%{caller: caller}), do: not Process.alive?(caller)
-  defp caller_down?(_ctx), do: false
 
   defp stop_children(state) do
     Enum.each(state.children, fn {_id, pid} ->
@@ -1382,8 +1399,11 @@ defmodule CodingAgent.Debug.SessionServer do
       # longer identifies them. Never claim ownership of an attached process.
       if session.status != :terminated and session.kind == :launch do
         case session.process do
-          %{pid: pid} when is_integer(pid) and pid > 0 -> BashExecutor.kill_process_tree(pid)
-          _ -> :ok
+          %{pid: pid} when is_integer(pid) and pid > 0 ->
+            ProcessGroup.terminate(pid, signal: :sigkill)
+
+          _ ->
+            :ok
         end
       end
 

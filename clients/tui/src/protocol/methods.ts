@@ -46,6 +46,7 @@ import {
 	parseOmpStatus,
 	parseOmpSubagent,
 } from "./omp.ts";
+import { parseSessionsEvents } from "./session-events.ts";
 import type {
 	SessionLabelParams,
 	SessionLabelResult,
@@ -107,6 +108,8 @@ import type {
 	SessionsContextResult,
 	SessionsDeleteResult,
 	SessionsExportResult,
+	SessionsEventsParams,
+	SessionsEventsResult,
 	SessionsForkParams,
 	SessionsForkResult,
 	SessionsListParams,
@@ -161,6 +164,7 @@ export const METHOD = {
 	sessionsActive: "sessions.active",
 	sessionsActiveList: "sessions.active.list",
 	sessionsSnapshot: "sessions.snapshot",
+	sessionsEvents: "sessions.events",
 	sessionsPatch: "sessions.patch",
 	sessionsMetadataPatch: "sessions.metadata.patch",
 	sessionsExport: "sessions.export",
@@ -468,6 +472,16 @@ export class ControlPlaneMethods {
 			...options,
 			queueIfOffline: false,
 		});
+	}
+
+	sessionsEvents(
+		params: SessionsEventsParams,
+		options?: RequestOptions,
+	): Promise<SessionsEventsResult> {
+		return this.#call<unknown>(METHOD.sessionsEvents, params, {
+			...options,
+			queueIfOffline: false,
+		}).then(parseSessionsEvents);
 	}
 
 	sessionsPatch(params: SessionsPatchParams, options?: RequestOptions): Promise<unknown> {

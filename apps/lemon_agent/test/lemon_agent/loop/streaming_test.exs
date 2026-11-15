@@ -433,7 +433,6 @@ defmodule LemonAgent.Loop.StreamingTest do
       ])
 
     signal = AbortSignal.new()
-    on_exit(fn -> AbortSignal.clear(signal) end)
 
     stream_fn = fn _, _, _ ->
       {:ok, ai_stream} = LemonAi.EventStream.start_link(timeout: :infinity)
@@ -472,7 +471,6 @@ defmodule LemonAgent.Loop.StreamingTest do
   test "abort during retry backoff prevents another provider request" do
     parent = self()
     signal = AbortSignal.new()
-    on_exit(fn -> AbortSignal.clear(signal) end)
 
     stream_fn = fn _, _, _ ->
       send(parent, :request_attempt)
@@ -742,7 +740,6 @@ defmodule LemonAgent.Loop.StreamingTest do
   test "abort during injected throttle backoff stops the response budget" do
     parent = self()
     signal = AbortSignal.new()
-    on_exit(fn -> AbortSignal.clear(signal) end)
     options = retry_test_options()
 
     options = %{

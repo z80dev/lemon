@@ -9,21 +9,29 @@ defmodule CodingAgent.Tools.Task.Control do
   Running peers receive non-preempting input at the next turn boundary. Completed
   children remain idle until their configured TTL parks the live session; a
   direct message starts a new turn, restoring the persisted session when parked.
-  Unattached children retain FIFO messages (64 messages / 256 KiB); bodies are
-  limited to 32 KiB.
-  Live deliveries are emitted in order here, but their acknowledgements are
-  awaited by callers outside the control server. A missing acknowledgement is
+  Each child owns its pre-attachment mailbox and admission counters through
+  `ChildInbox` (64 messages / 256 KiB including envelopes). The 32 KiB UTF-8
+  body limit remains caller policy here. Session, worker, inbox and parent
+  liveness comes from monitors, not process-status probes.
+  Live deliveries are emitted in order by the inbox, but acknowledgements are
+  awaited by callers outside both owners. A missing acknowledgement is
   `:outcome_unknown` and never automatically redelivered.
+
+  The coordinator remains node-local: a child may address its parent, siblings
+  and its own children in one broadcast, crossing immediate-parent partitions.
+  Splitting this registry would require a cross-owner identity index and an
+  admission protocol to preserve all-recipient preflight and authenticated
+  family traversal. That topology change is not needed to move message content
+  and admission into child owners; retained identities still use their captured
+  owner/session scope, including foreign-ID not-found behavior.
   """
   use GenServer
 
   alias CodingAgent.{Session, TaskStore}
-  alias CodingAgent.Tools.Task.Async
+  alias CodingAgent.Tools.Task.{Async, ChildInbox}
   alias LemonAgent.AbortSignal
 
   @max_message_bytes 32 * 1024
-  @max_queue_bytes 256 * 1024
-  @max_queue_count 64
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -53,6 +61,13 @@ defmodule CodingAgent.Tools.Task.Control do
   end
 
   def attach_worker(task_id), do: GenServer.call(__MODULE__, {:worker, task_id, self()})
+
+  @doc false
+  def worker_pids(task_ids) do
+    GenServer.call(__MODULE__, {:worker_pids, task_ids})
+  catch
+    :exit, _ -> []
+  end
 
   def attach_session(task_id, session, session_id \\ nil) do
     with_delivery_reply(fn reply_to ->
@@ -156,7 +171,6 @@ defmodule CodingAgent.Tools.Task.Control do
 
   @impl true
   def init(_opts) do
-    Process.send_after(self(), :check_signals, 50)
     {:ok, %{}}
   end
 
@@ -166,6 +180,8 @@ defmodule CodingAgent.Tools.Task.Control do
         _from,
         state
       ) do
+    AbortSignal.subscribe(parent_signal)
+
     metadata =
       case TaskStore.get_record(id) do
         {:ok, record} ->
@@ -182,29 +198,32 @@ defmodule CodingAgent.Tools.Task.Control do
           %{}
       end
 
+    {inbox, inbox_ref} = ChildInbox.start()
+
     entry = %{
       signal: signal,
       parent_signal: parent_signal,
       parent: parent,
-      parent_ref: if(is_pid(parent) and Process.alive?(parent), do: Process.monitor(parent)),
+      parent_ref: if(is_pid(parent), do: Process.monitor(parent)),
       owner_ref: if(is_pid(owner_pid), do: Process.monitor(owner_pid)),
       owner_pid: owner_pid,
       worker: nil,
       worker_ref: nil,
       session: nil,
+      session_ref: nil,
       session_id: nil,
       phase: :running,
       resume: nil,
       continuation: nil,
       idle_token: nil,
       metadata: metadata,
-      messages: [],
-      message_count: 0,
-      message_bytes: 0,
+      inbox: inbox,
+      inbox_ref: inbox_ref,
       cancelled: false,
       on_failure: on_failure
     }
 
+    entry = if AbortSignal.aborted?(parent_signal), do: cancel(id, entry), else: entry
     {:reply, :ok, Map.put(state, id, entry)}
   end
 
@@ -215,8 +234,14 @@ defmodule CodingAgent.Tools.Task.Control do
 
       entry ->
         entry = %{detach_worker(entry) | worker: worker, worker_ref: Process.monitor(worker)}
+        notify_worker(entry)
         {:reply, :ok, Map.put(state, id, entry)}
     end
+  end
+
+  def handle_call({:worker_pids, ids}, _from, state) do
+    workers = for id <- ids, entry = state[id], entry && is_pid(entry.worker), do: entry.worker
+    {:reply, Enum.uniq(workers), state}
   end
 
   def handle_call({:session, id, session, session_id, reply_to}, _from, state) do
@@ -230,27 +255,32 @@ defmodule CodingAgent.Tools.Task.Control do
           Session.abort(session)
           {:reply, {:error, "Task aborted"}, state}
         else
-          deliveries =
-            entry.messages
-            |> Enum.reverse()
-            |> Enum.map(&Session.request_steering(session, &1, reply_to))
+          case ChildInbox.attach(entry.inbox, session, reply_to) do
+            {:deliver_pending, deliveries} ->
+              demonitor(entry.session_ref)
 
-          entry = %{
-            entry
-            | session: session,
-              session_id: session_id,
-              messages: [],
-              message_count: 0,
-              message_bytes: 0
-          }
+              entry = %{
+                entry
+                | session: session,
+                  session_ref: Process.monitor(session),
+                  session_id: session_id
+              }
 
-          {:reply, {:deliver_pending, deliveries}, Map.put(state, id, entry)}
+              {:reply, {:deliver_pending, deliveries}, Map.put(state, id, entry)}
+
+            {:error, _} = error ->
+              Session.abort(session)
+              {:reply, error, state}
+          end
         end
     end
   end
 
   def handle_call({:configure, id, context}, _from, state) do
-    {:reply, :ok, Map.update!(state, id, &%{&1 | continuation: context})}
+    case state[id] do
+      nil -> {:reply, {:error, "Task aborted"}, state}
+      entry -> {:reply, :ok, Map.put(state, id, %{entry | continuation: context})}
+    end
   end
 
   def handle_call({:retain_session, id, session, resume}, _from, state) do
@@ -278,16 +308,18 @@ defmodule CodingAgent.Tools.Task.Control do
         entry = detach_worker(entry)
 
         if (status(entry, id) == :completed and entry.resume) && not entry.cancelled do
-          token = make_ref()
+          phase = if is_pid(entry.session), do: :idle, else: :parked
+          token = if phase == :idle, do: make_ref()
           ttl = Keyword.get(entry.resume.opts, :idle_ttl_ms, 300_000)
-          if ttl > 0, do: Process.send_after(self(), {:park, id, token}, ttl)
-          TaskStore.set_agent_state(id, :idle)
-          {:reply, :ok, Map.put(state, id, %{entry | phase: :idle, idle_token: token})}
+          if token && ttl > 0, do: Process.send_after(self(), {:park, id, token}, ttl)
+          TaskStore.set_agent_state(id, phase)
+          {:reply, :ok, Map.put(state, id, %{entry | phase: phase, idle_token: token})}
         else
           stop_child(entry)
           phase = if entry.cancelled, do: :killed, else: :aborted
           TaskStore.set_agent_state(id, phase)
-          {:reply, :ok, Map.put(state, id, %{entry | phase: phase, session: nil, resume: nil})}
+          entry = entry |> detach_session() |> close_inbox()
+          {:reply, :ok, Map.put(state, id, %{entry | phase: phase, resume: nil})}
         end
     end
   end
@@ -339,8 +371,7 @@ defmodule CodingAgent.Tools.Task.Control do
         {id,
          %{
            status: status(entry, id),
-           session:
-             if(is_pid(entry.session) and Process.alive?(entry.session), do: entry.session),
+           session: entry.session,
            session_id: entry.session_id,
            model: entry.resume && entry.resume.start_opts[:model],
            messaging: entry.metadata[:orchestration_worker] != true
@@ -390,13 +421,12 @@ defmodule CodingAgent.Tools.Task.Control do
   end
 
   @impl true
-  def handle_info(:check_signals, state) do
+  def handle_info({:lemon_abort, signal, _kind}, state) do
     state =
       Map.new(state, fn {id, entry} ->
-        {id, if(AbortSignal.aborted?(entry.parent_signal), do: cancel(id, entry), else: entry)}
+        {id, if(entry.parent_signal == signal, do: cancel(id, entry), else: entry)}
       end)
 
-    Process.send_after(self(), :check_signals, 50)
     {:noreply, state}
   end
 
@@ -405,7 +435,8 @@ defmodule CodingAgent.Tools.Task.Control do
       %{phase: :idle, idle_token: ^token} = entry ->
         stop_child(entry)
         TaskStore.set_agent_state(id, :parked)
-        {:noreply, Map.put(state, id, %{entry | phase: :parked, session: nil, idle_token: nil})}
+        entry = detach_session(entry)
+        {:noreply, Map.put(state, id, %{entry | phase: :parked, idle_token: nil})}
 
       _ ->
         {:noreply, state}
@@ -436,7 +467,27 @@ defmodule CodingAgent.Tools.Task.Control do
 
             entry.on_failure.(failure)
             TaskStore.set_agent_state(id, :aborted)
-            Map.put(acc, id, %{detach_worker(entry) | phase: :aborted, session: nil, resume: nil})
+            entry = entry |> detach_worker() |> detach_session() |> close_inbox()
+            Map.put(acc, id, %{entry | phase: :aborted, resume: nil})
+
+          entry.session_ref == ref ->
+            phase =
+              cond do
+                entry.cancelled -> :killed
+                entry.phase in [:idle, :parked] -> :parked
+                true -> :dead
+              end
+
+            if phase == :parked, do: TaskStore.set_agent_state(id, :parked)
+            Map.put(acc, id, %{detach_session(entry) | phase: phase, idle_token: nil})
+
+          entry.inbox_ref == ref ->
+            entry = cancel(id, entry)
+            stop_child(entry)
+            if is_pid(entry.worker), do: Process.exit(entry.worker, :kill)
+            entry.on_failure.("Task inbox exited")
+            entry = entry |> detach_worker() |> detach_session()
+            Map.put(acc, id, %{entry | phase: :aborted, resume: nil})
 
           true ->
             acc
@@ -454,8 +505,8 @@ defmodule CodingAgent.Tools.Task.Control do
         if is_pid(entry.worker), do: entry.on_failure.("Task aborted")
         TaskStore.set_agent_state(id, :killed)
 
-        {:noreply,
-         Map.put(state, id, %{detach_worker(entry) | phase: :killed, session: nil, resume: nil})}
+        entry = entry |> detach_worker() |> detach_session() |> close_inbox()
+        {:noreply, Map.put(state, id, %{entry | phase: :killed, resume: nil})}
 
       _ ->
         {:noreply, state}
@@ -654,14 +705,7 @@ defmodule CodingAgent.Tools.Task.Control do
   defp queue_capacity(%{metadata: %{orchestration_worker: true}}, _text),
     do: {:error, "Swarm coordinator has no model session; message a launched child instead"}
 
-  defp queue_capacity(%{session: session}, _text) when is_pid(session), do: :ok
-
-  defp queue_capacity(entry, text) do
-    if entry.message_count >= @max_queue_count or
-         entry.message_bytes + byte_size(text) > @max_queue_bytes,
-       do: {:error, "Task message queue is full (64 messages / 256 KiB)"},
-       else: :ok
-  end
+  defp queue_capacity(entry, text), do: ChildInbox.capacity(entry.inbox, text)
 
   defp resumable(%{id: id, entry: entry}) do
     cond do
@@ -708,7 +752,8 @@ defmodule CodingAgent.Tools.Task.Control do
             TaskStore.fail(id, "Failed to start child message turn")
             TaskStore.set_agent_state(id, :aborted)
             stop_child(entry)
-            {%{entry | phase: :aborted, session: nil, resume: nil}, :failed}
+            entry = entry |> detach_session() |> close_inbox()
+            {%{entry | phase: :aborted, resume: nil}, :failed}
         end
 
       {:error, _reason} ->
@@ -720,21 +765,19 @@ defmodule CodingAgent.Tools.Task.Control do
     case deliver(entry, text, reply_to) do
       {:ok, entry} -> {entry, :injected}
       {:delivery, pending} -> {entry, pending}
+      {:error, _reason} -> {entry, :failed}
+    end
+  end
+
+  defp deliver(%{inbox: inbox} = entry, text, reply_to) do
+    case ChildInbox.deliver(inbox, text, reply_to) do
+      :ok -> {:ok, entry}
+      reply -> reply
     end
   end
 
   defp deliver(%{session: session}, text, reply_to) when is_pid(session) do
     {:delivery, Session.request_steering(session, text, reply_to)}
-  end
-
-  defp deliver(entry, text, _reply_to) do
-    {:ok,
-     %{
-       entry
-       | messages: [text | entry.messages],
-         message_count: entry.message_count + 1,
-         message_bytes: entry.message_bytes + byte_size(text)
-     }}
   end
 
   defp resolve_delivery({:pending, _, _, _} = pending), do: Session.await_steering(pending)
@@ -774,20 +817,13 @@ defmodule CodingAgent.Tools.Task.Control do
       stored in [:error, :cancelled, :killed, :aborted, :lost, :missing] ->
         stored
 
-      entry[:phase] == :idle and
-          (not is_pid(entry.session) or not Process.alive?(entry.session)) ->
-        :parked
-
       entry[:phase] in [:idle, :parked, :aborted, :killed] ->
         entry.phase
 
       stored == :completed ->
         stored
 
-      is_pid(entry.session) and not Process.alive?(entry.session) ->
-        :dead
-
-      is_pid(entry.worker) and not Process.alive?(entry.worker) ->
+      entry[:phase] == :dead ->
         :dead
 
       is_pid(entry.session) ->
@@ -809,7 +845,7 @@ defmodule CodingAgent.Tools.Task.Control do
     AbortSignal.abort(entry.signal)
     if is_pid(entry.session), do: Session.abort(entry.session)
     Process.send_after(self(), {:force_cancel, id}, 2_000)
-    %{entry | cancelled: true}
+    %{close_inbox(entry) | cancelled: true}
   end
 
   defp stop_child(%{session: session}) when is_pid(session) do
@@ -823,6 +859,28 @@ defmodule CodingAgent.Tools.Task.Control do
 
   defp stop_child(_), do: :ok
 
+  defp detach_session(entry) do
+    demonitor(entry.session_ref)
+    ChildInbox.detach(entry.inbox)
+    %{entry | session: nil, session_ref: nil}
+  end
+
+  defp close_inbox(entry) do
+    ChildInbox.stop(entry.inbox)
+    demonitor(entry.inbox_ref)
+    %{entry | inbox: nil, inbox_ref: nil}
+  end
+
+  defp demonitor(ref) when is_reference(ref), do: Process.demonitor(ref, [:flush])
+  defp demonitor(_), do: :ok
+
+  defp notify_worker(entry) do
+    if is_binary(entry.metadata[:run_id]) do
+      run_id = entry.metadata.run_id
+      LemonCore.Bus.broadcast("run_graph:#{run_id}", {:run_graph, :state_changed, run_id})
+    end
+  end
+
   defp detach_worker(entry) do
     if is_reference(entry.worker_ref), do: Process.demonitor(entry.worker_ref, [:flush])
     %{entry | worker: nil, worker_ref: nil}
@@ -834,11 +892,18 @@ defmodule CodingAgent.Tools.Task.Control do
         state
 
       {entry, state} ->
+        entry = entry |> detach_session() |> close_inbox()
+
         for ref <- [entry.parent_ref, entry.worker_ref, entry.owner_ref],
             is_reference(ref),
             do: Process.demonitor(ref, [:flush])
 
-        AbortSignal.clear(entry.signal)
+        unless Enum.any?(state, fn {_id, other} ->
+                 other.parent_signal == entry.parent_signal
+               end) do
+          AbortSignal.unsubscribe(entry.parent_signal)
+        end
+
         state
     end
   end

@@ -10,11 +10,11 @@ defmodule LemonPlatformTest.BackendCase do
 
   `LemonCore.Store` is the platform's key/value store: a `GenServer` that owns a
   backend and serialises access to it. The backend is the part that actually
-  persists, and it is deliberately tiny — nine callbacks, no supervision, no
-  process of its own. `LemonCore.Store.EtsBackend` (ephemeral),
-  `LemonCore.Store.SqliteBackend` (durable) and `LemonCore.Store.JsonlBackend`
-  (append-only files) are the built-ins; a Redis or Postgres backend is a
-  reasonable thing to write, and this suite is what tells you it will work.
+  persists, with no supervision or process of its own.
+  `LemonCore.Store.EtsBackend` (ephemeral)
+  and `LemonCore.Store.SqliteBackend` (durable) are the built-ins; a Redis or
+  Postgres backend is a reasonable thing to write, and this suite is what tells
+  you it will work.
 
   ## The contract
 
@@ -59,23 +59,36 @@ defmodule LemonPlatformTest.BackendCase do
 
   Keys and values are Erlang terms, not strings. Binaries (including non-ASCII),
   atoms, integers, floats, tuples, nested maps and lists must come back equal to
-  what went in. Backends that serialise (SQLite via `:erlang.term_to_binary/1`,
-  JSONL via a JSON encoding) inherit the limits of their encoding: pids,
-  references and functions are **not** required to round-trip, and this suite
-  does not test them.
+  what went in. Backends that serialise (SQLite via `:erlang.term_to_binary/1`)
+  inherit the limits of their encoding: pids, references and functions are
+  **not** required to round-trip, and this suite does not test them.
 
   ### Optional callbacks degrade predictably
 
-  `compare_and_delete_many/2`, `compare_and_swap/5`, `list_recent/3`, `ping/1`,
-  and `sync/1` are optional. If you export them they must honour their
-  contracts: multi-delete validates every exact snapshot before deleting in
-  caller-provided order, compare-and-swap writes only over an exact match (a
-  missing key matching `nil`), `list_recent/3` returns at most `limit` real
-  entries of that table, and `ping/1` and `sync/1` answer without disturbing
-  data. If you do not export them the store falls back to its serialized
-  validate/delete or compare/write path, falls back to `list/2`, reports the
-  backend as unpingable, or answers `sync/1` with `:sync_unsupported`,
-  respectively.
+  `compare_and_delete_many/2`, `compare_and_swap/5`, `confirm_durable/1`,
+  `list_recent/3`, `ping/1`, `sync/1` and `with_durability/2` are optional.
+  Multi-delete validates every exact snapshot before deleting in caller-provided
+  order; compare-and-swap writes only over an exact match (a missing key matching
+  `nil`); `list_recent/3` returns at most `limit` real entries of that table.
+  `ping/1`, `sync/1` and `confirm_durable/1` answer without disturbing data.
+  Without these callbacks Store falls back to serialized validate/delete or
+  compare/write, falls back to `list/2`, reports the backend as unpingable, or
+  answers `sync/1` with `:sync_unsupported`, respectively.
+
+  `with_durability(state, operation)` runs the zero-arity mutation synchronously
+  exactly once, returns its result unchanged, and restores ordinary write mode
+  even if the operation raises or throws. Store serializes that entire scope.
+  Without it, Store runs the mutation and then `sync/1`; a failed durable
+  mutation/barrier is `:outcome_unknown`, not an automatically retryable write.
+  `confirm_durable/1` confirms visible authority with `{:ok, state}` or refuses
+  with `{:error, reason}`. Transaction-durable backends may avoid an additional
+  barrier (SQLite releases cached statements without checkpointing); without
+  this callback Store uses `sync/1` so a visible row from a previously failed
+  barrier cannot falsely acknowledge success.
+
+  This suite checks invocation, result/failure propagation, usable state and
+  data preservation. Backend-specific tests must prove actual power-loss
+  barriers and restoration of backend-specific synchronization settings.
 
   ## Minimal implementation
 
@@ -499,6 +512,72 @@ defmodule LemonPlatformTest.BackendCase do
               end
 
             assert {:ok, "v", _state} = @backend.get(state, @alpha, "k")
+          end
+        end
+
+        test "confirm_durable/1, when exported, preserves data and usable state", %{state: state} do
+          if function_exported?(@backend, :confirm_durable, 1) do
+            {:ok, state} = @backend.put(state, @alpha, "confirmed", %{version: 1})
+
+            state =
+              case apply(@backend, :confirm_durable, [state]) do
+                {:ok, state} -> state
+                {:error, _reason} -> state
+              end
+
+            assert {:ok, %{version: 1}, state} = @backend.get(state, @alpha, "confirmed")
+            assert {:ok, state} = @backend.put(state, @alpha, "after-confirmation", true)
+            assert {:ok, true, _state} = @backend.get(state, @alpha, "after-confirmation")
+          end
+        end
+
+        test "with_durability/2, when exported, invokes once and returns the mutation result", %{
+          state: state
+        } do
+          if function_exported?(@backend, :with_durability, 2) do
+            marker = make_ref()
+
+            operation = fn ->
+              send(self(), {:durable_operation, marker})
+              @backend.put(state, @alpha, "durable-operation", %{version: 1})
+            end
+
+            assert {:ok, state} = apply(@backend, :with_durability, [state, operation])
+            assert_received {:durable_operation, ^marker}
+            refute_received {:durable_operation, ^marker}
+            assert {:ok, %{version: 1}, state} = @backend.get(state, @alpha, "durable-operation")
+            assert {:ok, state} = @backend.put(state, @alpha, "ordinary-after-durable", true)
+            assert {:ok, true, _state} = @backend.get(state, @alpha, "ordinary-after-durable")
+          end
+        end
+
+        test "with_durability/2, when exported, preserves failures and remains usable", %{
+          state: state
+        } do
+          if function_exported?(@backend, :with_durability, 2) do
+            assert {:error, :injected_operation_failure} =
+                     apply(@backend, :with_durability, [
+                       state,
+                       fn -> {:error, :injected_operation_failure} end
+                     ])
+
+            assert_raise RuntimeError, "injected durable operation failure", fn ->
+              apply(@backend, :with_durability, [
+                state,
+                fn -> raise "injected durable operation failure" end
+              ])
+            end
+
+            assert catch_throw(
+                     apply(@backend, :with_durability, [
+                       state,
+                       fn -> throw(:injected_durable_throw) end
+                     ])
+                   ) ==
+                     :injected_durable_throw
+
+            assert {:ok, state} = @backend.put(state, @alpha, "after-failure", true)
+            assert {:ok, true, _state} = @backend.get(state, @alpha, "after-failure")
           end
         end
       end

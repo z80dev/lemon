@@ -8,6 +8,18 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- **Breaking (0.3.0):** `LemonCore.ToolPolicy` no longer has a `sandbox` field;
+  legacy input containing it warns once and is ignored without changing
+  authority (#605).
+- `LemonCore.Store` mutations accept `durable: true`: SQLite commits that
+  transaction with `synchronous=FULL` (plus `fullfsync` on Darwin) and restores
+  `NORMAL`. `Store.confirm_durable/1` confirms a durable write without a
+  checkpoint on SQLite; `Store.sync/1` is reserved for the drain seal (#550).
+- `LemonCore.NodeRegistry` is a supervisor: node entries are socket-owned
+  Registry entries and each invocation has its own owner process (#584).
+- `LemonCore.Durable` syncs directories natively; the external helper remains
+  only for Darwin full-sync of file contents (#561).
+
 - Removed unused `RunPhaseEvent`, `Retry.exponential_backoff/3`, and `Telemetry.span/3` APIs.
 - Consolidated Mix task startup and simplified service identity matching.
 - Fixed task projection fallback action IDs to include their action kind.
@@ -249,6 +261,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   10 MiB/file, 50 MiB aggregate, 10,000 entries, depth 128 per capture.
 
 ### Removed
+
+- **Breaking (0.3.0):** `LemonCore.Store.JsonlBackend`. The
+  `mix lemon.store.migrate_jsonl_to_sqlite` task keeps a private legacy reader;
+  run it before upgrading a JSONL store (#608).
 
 - `LemonCore.Config.Automation` no longer has `daily_brief` or `parse_time/1`;
   `[automation] daily_brief` is no longer recognized.

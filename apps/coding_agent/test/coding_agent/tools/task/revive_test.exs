@@ -290,7 +290,7 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
     ]
 
     runner_opts =
-      [task_id: id, idle_ttl_ms: options[:idle_ttl_ms], task_session_poll_ms: 10] ++
+      [task_id: id, idle_ttl_ms: options[:idle_ttl_ms]] ++
         Keyword.take(options, [:request_budget, :request_budget_notice, :validate_output])
 
     assert :ok =

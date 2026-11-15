@@ -54,7 +54,7 @@ defmodule CodingAgent.Tools.Task.RequestBudgetTest do
 
       LemonCore.Bus.Delivery.send(
         state.delivery,
-        {:session_event, state.session_id, {:canceled, :aborted}}
+        {:session_event, state.session_id, {:canceled, :aborted}, nil}
       )
 
       {:noreply, %{state | is_streaming: false}}
@@ -70,7 +70,7 @@ defmodule CodingAgent.Tools.Task.RequestBudgetTest do
 
       LemonCore.Bus.Delivery.send(
         state.delivery,
-        {:session_event, state.session_id, {:message_end, message}}
+        {:session_event, state.session_id, {:message_end, message}, nil}
       )
 
       if count < state.turns do
@@ -78,7 +78,7 @@ defmodule CodingAgent.Tools.Task.RequestBudgetTest do
       else
         LemonCore.Bus.Delivery.send(
           state.delivery,
-          {:session_event, state.session_id, {:agent_end, messages}}
+          {:session_event, state.session_id, {:agent_end, messages}, nil}
         )
       end
 
@@ -210,7 +210,7 @@ defmodule CodingAgent.Tools.Task.RequestBudgetTest do
       start_opts: [],
       description: "Budget child",
       role_id: nil,
-      opts: Keyword.merge([task_session_timeout_ms: 2_000, task_session_poll_ms: 5], opts)
+      opts: Keyword.merge([task_session_timeout_ms: 2_000], opts)
     }
 
     Runner.resume_session(session, resume, "Work", nil, nil)

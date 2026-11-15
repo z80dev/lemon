@@ -1,22 +1,14 @@
 defmodule LemonChannels.Outbox.Dedupe do
   @moduledoc """
-  Deduplication for outbound messages.
+  Confirmed-delivery deduplication using atomic ETS inserts.
 
-  Uses idempotency keys to prevent duplicate deliveries. Keys are marked only
-  after a delivery is confirmed (`{:ok, _}`). A delivery with an unknown outcome
-  is retried at-least-once by the outbox and does not mark its key until a retry
-  is confirmed, so dedupe suppresses re-sends of confirmed deliveries only.
+  Checks never reserve a key: unknown deliveries remain eligible for the outbox's
+  bounded at-least-once retry. Only confirmed deliveries call `mark/2`.
   """
 
   use GenServer
 
-  require Logger
-
-  alias LemonCore.Dedupe.Ets
-
-  # 1 hour
   @default_ttl_ms 60 * 60 * 1000
-  @call_timeout_ms 2_000
   @cleanup_interval_ms 60_000
   @table :lemon_channels_outbox_dedupe
 
@@ -24,61 +16,100 @@ defmodule LemonChannels.Outbox.Dedupe do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @doc """
-  Check if an idempotency key has been seen.
+  @doc "The existing confirmed-delivery retention policy, in milliseconds."
+  def ttl_ms, do: @default_ttl_ms
 
-  Returns `:new` if not seen, `:duplicate` if already delivered.
-  """
-  @spec check(channel_id :: binary(), key :: binary()) :: :new | :duplicate
+  @spec check(binary(), binary()) :: :new | :duplicate
   def check(channel_id, key) do
-    GenServer.call(__MODULE__, {:check, channel_id, key}, @call_timeout_ms)
-  catch
-    :exit, _reason ->
-      Logger.warning("Dedupe.check timed out channel=#{channel_id} key=#{inspect(key)}")
-      :new
-  end
-
-  @doc """
-  Mark an idempotency key as delivered. Call only for a confirmed delivery.
-  """
-  @spec mark(channel_id :: binary(), key :: binary()) :: :ok
-  def mark(channel_id, key) do
-    GenServer.cast(__MODULE__, {:mark, channel_id, key})
-  end
-
-  @impl true
-  def init(_opts) do
-    _ = Ets.init(@table)
-    schedule_cleanup()
-    {:ok, %{ttl_ms: @default_ttl_ms}}
-  end
-
-  @impl true
-  def handle_call({:check, channel_id, key}, _from, state) do
     full_key = {channel_id, key}
 
-    if Ets.seen?(@table, full_key, state.ttl_ms) do
-      {:reply, :duplicate, state}
+    case :ets.lookup(@table, full_key) do
+      [{^full_key, expires_at}] ->
+        if expires_at >= System.monotonic_time(:millisecond) do
+          :duplicate
+        else
+          :ets.delete_object(@table, {full_key, expires_at})
+          check(channel_id, key)
+        end
+
+      [] ->
+        :new
+    end
+  rescue
+    ArgumentError -> :new
+  end
+
+  @doc "Mark a confirmed delivery, refreshing the existing one-hour TTL."
+  @spec mark(binary(), binary()) :: :ok
+  def mark(channel_id, key) do
+    _ = mark_new(channel_id, key)
+    :ok
+  end
+
+  @doc "Atomically mark a confirmed key, reporting which caller inserted it."
+  @spec mark_new(binary(), binary()) :: :new | :duplicate
+  def mark_new(channel_id, key) do
+    restore(channel_id, key, @default_ttl_ms)
+  end
+
+  @doc false
+  def restore(channel_id, key, remaining_ms) do
+    full_key = {channel_id, key}
+    expires_at = System.monotonic_time(:millisecond) + remaining_ms
+    insert_mark(full_key, expires_at)
+  rescue
+    ArgumentError -> :new
+  end
+
+  defp insert_mark(full_key, expires_at) do
+    if :ets.insert_new(@table, {full_key, expires_at}) do
+      :new
     else
-      {:reply, :new, state}
+      case :ets.lookup(@table, full_key) do
+        [{^full_key, previous}] ->
+          cond do
+            previous < System.monotonic_time(:millisecond) ->
+              :ets.delete_object(@table, {full_key, previous})
+              insert_mark(full_key, expires_at)
+
+            previous >= expires_at ->
+              :duplicate
+
+            true ->
+              match_spec = [{{full_key, previous}, [], [{:const, {full_key, expires_at}}]}]
+
+              if :ets.select_replace(@table, match_spec) == 1,
+                do: :duplicate,
+                else: insert_mark(full_key, expires_at)
+          end
+
+        [] ->
+          insert_mark(full_key, expires_at)
+      end
     end
   end
 
   @impl true
-  def handle_cast({:mark, channel_id, key}, state) do
-    full_key = {channel_id, key}
-    _ = Ets.mark(@table, full_key)
-    {:noreply, state}
+  def init(_opts) do
+    :ets.new(@table, [
+      :named_table,
+      :public,
+      :set,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
+
+    schedule_cleanup()
+    {:ok, %{}}
   end
 
   @impl true
   def handle_info(:cleanup, state) do
-    _ = Ets.cleanup_expired(@table, state.ttl_ms)
+    now = System.monotonic_time(:millisecond)
+    :ets.select_delete(@table, [{{:_, :"$1"}, [{:<, :"$1", now}], [true]}])
     schedule_cleanup()
     {:noreply, state}
   end
 
-  defp schedule_cleanup do
-    Process.send_after(self(), :cleanup, @cleanup_interval_ms)
-  end
+  defp schedule_cleanup, do: Process.send_after(self(), :cleanup, @cleanup_interval_ms)
 end

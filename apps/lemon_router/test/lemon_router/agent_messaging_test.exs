@@ -13,6 +13,7 @@ defmodule LemonRouter.AgentMessagingTest do
     Store
   }
 
+  alias LemonCore.Store.SqliteBackend
   alias LemonRouter.{AgentMessaging, AgentMessagingSessions, ResumeResolver, RunCompletion}
 
   # This deterministic execution boundary runs the real router/orchestrator,
@@ -604,11 +605,11 @@ defmodule LemonRouter.AgentMessagingTest do
   } do
     path = Path.join(System.tmp_dir!(), "named_message_durable_#{suffix}")
     previous = :sys.get_state(Store)
-    assert {:ok, backend_state} = LemonCore.Store.JsonlBackend.init(path: path)
+    assert {:ok, backend_state} = SqliteBackend.init(path: path)
     :ok = Supervisor.terminate_child(LemonRouter.Supervisor, AgentMessaging)
 
     :sys.replace_state(Store, fn state ->
-      %{state | backend: LemonCore.Store.JsonlBackend, backend_state: backend_state}
+      %{state | backend: SqliteBackend, backend_state: backend_state}
     end)
 
     try do
@@ -646,8 +647,13 @@ defmodule LemonRouter.AgentMessagingTest do
       assert {:ok, _} = AgentMessaging.rename(scope, target.id, "durable_robert")
       assert :ok = Store.sync()
       :ok = Supervisor.terminate_child(LemonRouter.Supervisor, AgentMessaging)
-      assert {:ok, reopened} = LemonCore.Store.JsonlBackend.init(path: path)
-      :sys.replace_state(Store, fn state -> %{state | backend_state: reopened} end)
+
+      :sys.replace_state(Store, fn state ->
+        :ok = SqliteBackend.close(state.backend_state)
+        assert {:ok, reopened} = SqliteBackend.init(path: path)
+        %{state | backend_state: reopened}
+      end)
+
       assert {:ok, _} = Supervisor.restart_child(LemonRouter.Supervisor, AgentMessaging)
       register_bot(scope, "source-#{suffix}", source_pid)
       register_bot(scope, "target-#{suffix}", target_pid)
@@ -675,7 +681,12 @@ defmodule LemonRouter.AgentMessagingTest do
                      50
     after
       :ok = Supervisor.terminate_child(LemonRouter.Supervisor, AgentMessaging)
-      :sys.replace_state(Store, fn _state -> previous end)
+
+      :sys.replace_state(Store, fn state ->
+        :ok = SqliteBackend.close(state.backend_state)
+        previous
+      end)
+
       assert {:ok, _} = Supervisor.restart_child(LemonRouter.Supervisor, AgentMessaging)
       File.rm_rf!(path)
     end

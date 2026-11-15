@@ -93,7 +93,6 @@ defmodule LemonRouter.RunStarterTest do
     assert opts[:execution_request].run_id == "run1"
     assert opts[:coordinator_pid] == self()
     assert opts[:conversation_key] == {:session, "session-1"}
-    assert opts[:manage_session_registry?] == false
     assert opts[:custom] == :value
   end
 

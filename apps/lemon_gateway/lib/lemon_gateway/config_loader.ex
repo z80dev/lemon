@@ -356,8 +356,7 @@ defmodule LemonGateway.ConfigLoader do
       deny_globs: fetch(files, :deny_globs),
       max_upload_bytes: fetch(files, :max_upload_bytes),
       max_download_bytes: fetch(files, :max_download_bytes),
-      media_group_debounce_ms: fetch(files, :media_group_debounce_ms),
-      outbound_send_delay_ms: fetch(files, :outbound_send_delay_ms)
+      media_group_debounce_ms: fetch(files, :media_group_debounce_ms)
     }
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Map.new()
