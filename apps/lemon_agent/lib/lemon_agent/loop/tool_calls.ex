@@ -11,6 +11,7 @@ defmodule LemonAgent.Loop.ToolCalls do
   }
 
   @tool_abort_grace_ms 250
+  @pending_tools_key {__MODULE__, :pending_tools}
 
   @unicode_whitespace for codepoint <- [
                             0x00A0,
@@ -45,12 +46,26 @@ defmodule LemonAgent.Loop.ToolCalls do
            [LemonAgent.Types.agent_message()]}
   def execute_and_collect_tools(context, new_messages, tool_calls, config, signal, stream) do
     AbortSignal.subscribe(signal)
+    Process.put(@pending_tools_key, {%{}, %{}})
 
     try do
       # Queue consumption belongs to the loop, after it decides whether another
       # turn is allowed. A terminal tool-turn budget must not discard queued input.
       execute_tool_calls_parallel(context, new_messages, tool_calls, config, signal, stream)
+    catch
+      :throw, {:event_stream_push_failed, _reason} = failure ->
+        if signal, do: AbortSignal.abort(signal)
+        {pending_by_ref, pending_by_mon} = Process.get(@pending_tools_key)
+
+        stop_aborted_tools(
+          pending_by_ref,
+          pending_by_mon,
+          config.tool_task_supervisor || LemonAgent.ToolTaskSupervisor
+        )
+
+        throw(failure)
     after
+      Process.delete(@pending_tools_key)
       AbortSignal.unsubscribe(signal)
     end
   end
@@ -106,6 +121,10 @@ defmodule LemonAgent.Loop.ToolCalls do
          base_new_message_count,
          config
        ) do
+    # Retain only the current worker set so a failed output push can unwind
+    # without leaving supervised tools running after their collector exits.
+    Process.put(@pending_tools_key, {pending_by_ref, pending_by_mon})
+
     cond do
       aborted?(signal) ->
         aborted_tasks = stop_aborted_tools(pending_by_ref, pending_by_mon, tool_task_supervisor)
@@ -464,7 +483,7 @@ defmodule LemonAgent.Loop.ToolCalls do
                 [_tool_call | rest] = remaining
                 started_at = tool_call_start(tool_call.name)
 
-                EventStream.push(
+                EventStream.push!(
                   stream,
                   {:tool_execution_start, tool_call.id, tool_call.name, tool_call.arguments}
                 )
@@ -510,6 +529,8 @@ defmodule LemonAgent.Loop.ToolCalls do
                           rest,
                           start_failures
                         }
+
+                        Process.put(@pending_tools_key, {elem(state, 0), elem(state, 1)})
 
                         if parallel_safe?, do: {:cont, state}, else: {:halt, state}
 
@@ -651,12 +672,13 @@ defmodule LemonAgent.Loop.ToolCalls do
         Process.demonitor(mon_ref, [:flush])
         cancel_tool_timeout(timeout_ref)
         pending_by_mon = Map.delete(pending_by_mon, mon_ref)
+        Process.put(@pending_tools_key, {pending_by_ref, pending_by_mon})
         {pending_by_ref, pending_by_mon}
     end
   end
 
   defp emit_tool_result(tool_call, result, is_error, context, new_messages, results, stream) do
-    EventStream.push(
+    EventStream.push!(
       stream,
       {:tool_execution_end, tool_call.id, tool_call.name, result, is_error}
     )
@@ -678,8 +700,8 @@ defmodule LemonAgent.Loop.ToolCalls do
     new_messages = new_messages ++ [tool_result_message]
     results = [tool_result_message | results]
 
-    EventStream.push(stream, {:message_start, tool_result_message})
-    EventStream.push(stream, {:message_end, tool_result_message})
+    EventStream.push!(stream, {:message_start, tool_result_message})
+    EventStream.push!(stream, {:message_end, tool_result_message})
 
     LemonCore.Telemetry.emit(
       [:lemon_agent, :tool_result, :emit],
@@ -700,7 +722,7 @@ defmodule LemonAgent.Loop.ToolCalls do
     on_update = fn partial_result ->
       send(parent, {:tool_task_update, ref, partial_result})
 
-      EventStream.push(
+      EventStream.push!(
         stream,
         {:tool_execution_update, tool_call.id, tool_call.name, tool_call.arguments,
          partial_result}
@@ -722,6 +744,10 @@ defmodule LemonAgent.Loop.ToolCalls do
       e ->
         {tool_exception_result(e), true}
     catch
+      :throw, {:event_stream_push_failed, _reason} ->
+        if signal, do: AbortSignal.abort(signal)
+        {LemonAgent.InterruptedToolResult.build(:aborted), true}
+
       kind, value ->
         {tool_caught_result(kind, value), true}
     end
@@ -1150,6 +1176,7 @@ defmodule LemonAgent.Loop.ToolCalls do
       Process.demonitor(pending.mon_ref, [:flush])
     end)
 
+    Process.put(@pending_tools_key, {%{}, %{}})
     Map.merge(finished, remaining)
   end
 
