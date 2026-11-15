@@ -717,7 +717,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
       start_wire_session(settings, wire_model(:openai_codex, :openai_codex_responses, base_url))
 
     assert :ok = Session.prompt(session, "hello")
-    assert_receive {:session_event, _, {:error, reason, _partial}}, 1_000
+    assert_receive {:session_event, _, {:error, reason, _partial}, _}, 1_000
 
     assert_refused_before_wire(session, reason, [
       plain_key,
@@ -781,7 +781,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     session = start_wire_session(settings, wire_model(:anthropic, :anthropic_messages, base_url))
 
     assert :ok = Session.prompt(session, "hello")
-    assert_receive {:session_event, _, {:error, reason, _partial}}, 1_000
+    assert_receive {:session_event, _, {:error, reason, _partial}, _}, 1_000
 
     assert_refused_before_wire(session, reason, [
       oauth_secret,

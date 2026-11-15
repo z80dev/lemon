@@ -236,14 +236,14 @@ defmodule CodingAgent.SessionRecalledContextTest do
     :ok = Session.prompt(session, "first")
     {messages, _} = await_sent()
     refute last_user_content(messages) =~ "Learning reminder"
-    assert_receive {:session_event, _, {:agent_end, _}}, 2_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 2_000
 
     :ok = Session.prompt(session, "second")
     {messages, system_prompt} = await_sent()
     assert last_user_content(messages) =~ "Learning reminder"
     assert last_user_content(messages) =~ "durable facts/preferences with remember"
     refute system_prompt =~ "Learning reminder"
-    assert_receive {:session_event, _, {:agent_end, _}}, 2_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 2_000
     assert transcript_contents(session) == ["first", "second"]
 
     assert session
@@ -286,7 +286,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
       await_sent()
 
       assert_receive {:session_event, _id,
-                      {:message_end, %UserMessage{content: "why is the build slow?"}}},
+                      {:message_end, %UserMessage{content: "why is the build slow?"}}, _},
                      2_000
 
       user_contents =
@@ -402,7 +402,8 @@ defmodule CodingAgent.SessionRecalledContextTest do
       # What the model was sent is the message as typed...
       assert last_user_content(messages) == @typed_block
 
-      assert_receive {:session_event, _id, {:message_end, %UserMessage{content: @typed_block}}},
+      assert_receive {:session_event, _id, {:message_end, %UserMessage{content: @typed_block}},
+                      _},
                      2_000
 
       # ...and so is every record of it. A transcript that disagreed with the
@@ -433,7 +434,8 @@ defmodule CodingAgent.SessionRecalledContextTest do
       assert String.starts_with?(sent, @typed_block)
       assert sent =~ @volatile.body
 
-      assert_receive {:session_event, _id, {:message_end, %UserMessage{content: @typed_block}}},
+      assert_receive {:session_event, _id, {:message_end, %UserMessage{content: @typed_block}},
+                      _},
                      2_000
 
       user_contents =
@@ -749,7 +751,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
     await_sent()
 
     assert_receive {:session_event, _id,
-                    {:message_end, %UserMessage{content: "why is the build slow?"}}},
+                    {:message_end, %UserMessage{content: "why is the build slow?"}}, _},
                    2_000
 
     # The runtime agent state retains the attachment. Real provider/loop errors
@@ -761,9 +763,9 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
     send(session, {:agent_event, {:error, :boom, partial}})
 
-    assert_receive {:session_event, _id, {:error, :boom, broadcast}}, 2_000
+    assert_receive {:session_event, _id, {:error, :boom, broadcast}, _}, 2_000
     refute Enum.any?(broadcast.messages, &(inspect(&1) =~ @volatile.body))
-    refute_receive {:session_event, _id, {:stream_resync, _}}
+    refute_receive {:session_event, _id, {:stream_resync, _}, _}
 
     assert Enum.any?(
              broadcast.messages,

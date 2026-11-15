@@ -249,16 +249,16 @@ defmodule CodingAgent.SessionToolResourcesLifecycleTest do
 
   defp assert_run_aborted(timeout_ms) do
     receive do
-      {:session_event, _, {:tool_execution_end, "debug-continue", "debug", _result, _error}} ->
+      {:session_event, _, {:tool_execution_end, "debug-continue", "debug", _result, _error}, _} ->
         :ok
 
-      {:session_event, _, {:turn_end, %{stop_reason: :aborted}, _results}} ->
+      {:session_event, _, {:turn_end, %{stop_reason: :aborted}, _results}, _} ->
         :ok
 
-      {:session_event, _, {:canceled, _reason}} ->
+      {:session_event, _, {:canceled, _reason}, _} ->
         :ok
 
-      {:session_event, _, {:agent_end, _messages}} ->
+      {:session_event, _, {:agent_end, _messages}, _} ->
         :ok
     after
       timeout_ms -> flunk("the run did not observe the abort within #{timeout_ms} ms")

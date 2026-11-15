@@ -900,7 +900,7 @@ defmodule CodingAgent.SessionTest do
     test "unsubscribe stops events" do
       session = start_session()
       unsubscribe = Session.subscribe(session)
-      refute_receive {:session_event, _session_id, {:todos_changed, []}}
+      refute_receive {:session_event, _session_id, {:todos_changed, []}, _}
 
       # Unsubscribe
       :ok = unsubscribe.()
@@ -909,7 +909,7 @@ defmodule CodingAgent.SessionTest do
       :ok = Session.prompt(session, "Hello!")
 
       # Should not receive events
-      refute_receive {:session_event, _session_id, _event}, 100
+      refute_receive {:session_event, _session_id, _event, _}, 100
     end
 
     test "dead subscribers are cleaned up" do
@@ -1200,7 +1200,7 @@ defmodule CodingAgent.SessionTest do
       events = Task.await(stream_events_task, 2_000)
 
       assert Enum.any?(events, fn
-               {:session_event, _, {:canceled, :reset}} -> true
+               {:session_event, _, {:canceled, :reset}, _} -> true
                _ -> false
              end)
 
@@ -1802,7 +1802,7 @@ defmodule CodingAgent.SessionTest do
       session_ref = Process.monitor(session)
       Process.exit(agent, :kill)
 
-      assert_receive {:session_event, _, {:error, {:agent_exit, :killed}, _partial}}, 2_000
+      assert_receive {:session_event, _, {:error, {:agent_exit, :killed}, _partial}, _}, 2_000
       assert_receive {:DOWN, ^session_ref, :process, ^session, {:agent_exit, :killed}}, 2_000
       refute Process.alive?(agent)
     end
@@ -2010,7 +2010,7 @@ defmodule CodingAgent.SessionApprovalEventsTest do
       LemonCore.Event.new(:approval_requested, %{approval_id: pending.id, pending: pending})
     )
 
-    assert_receive {:session_event, ^session_id, {:approval_request, _, ^pending}}, 1_000
+    assert_receive {:session_event, ^session_id, {:approval_request, _, ^pending}, _}, 1_000
 
     LemonCore.Bus.broadcast(
       "exec_approvals",
@@ -2022,7 +2022,7 @@ defmodule CodingAgent.SessionApprovalEventsTest do
     )
 
     assert_receive {:session_event, ^session_id,
-                    {:approval_resolved, _, :approve_session, ^pending}},
+                    {:approval_resolved, _, :approve_session, ^pending}, _},
                    1_000
   end
 
@@ -2122,6 +2122,6 @@ defmodule CodingAgent.SessionApprovalEventsTest do
       })
     )
 
-    refute_receive {:session_event, ^session_id, {:approval_request, _, _}}, 100
+    refute_receive {:session_event, ^session_id, {:approval_request, _, _}, _}, 100
   end
 end

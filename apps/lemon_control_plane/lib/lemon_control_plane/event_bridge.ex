@@ -11,6 +11,7 @@ defmodule LemonControlPlane.EventBridge do
 
   - `run:*` - Run lifecycle events (agent, chat events, task lifecycle)
   - `session:*` - Session lifecycle and task events
+  - `session_events` - Sequenced native session broadcast batches
   - `channels` - Channel-related events
   - `exec_approvals` - Approval request/resolution events
   - `cron` - Cron job events
@@ -27,6 +28,7 @@ defmodule LemonControlPlane.EventBridge do
   | Bus Event                | WS Event                  |
   |--------------------------|---------------------------|
   | :run_started             | agent                     |
+  | :session_event           | session.event             |
   | :run_completed           | agent                     |
   | :delta                   | chat                      |
   | :engine_action           | agent (type: tool_use)    |
@@ -80,6 +82,7 @@ defmodule LemonControlPlane.EventBridge do
 
   @bus_topics [
     "exec_approvals",
+    "session_events",
     "user_prompts",
     "channels",
     "cron",
@@ -168,8 +171,8 @@ defmodule LemonControlPlane.EventBridge do
   end
 
   def handle_info({:stream_resync, :overflow}, state) do
-    # Lost bus deltas cannot be replayed. Fence every affected client and require
-    # authenticated reconnect + owner snapshot recovery, including approvals.
+    # Fence every affected client; authenticated reconnect recovers native events
+    # by cursor, falling back to owner snapshots when replay has expired.
     Connections.dispatch(fn clients ->
       for {_id, info} <- clients, general_event_client?(info), do: Delivery.resync(info.delivery)
     end)
@@ -346,6 +349,26 @@ defmodule LemonControlPlane.EventBridge do
   end
 
   def project(_), do: nil
+
+  defp map_event_type(
+         :session_event,
+         %{cursor: cursor, event_id: event_id, events: events},
+         meta
+       )
+       when is_map(cursor) and is_binary(event_id) and is_list(events) do
+    projected =
+      for event <- events,
+          {name, payload} <- [project(event)],
+          do: %{"event" => name, "payload" => payload}
+
+    {"session.event",
+     %{
+       "sessionKey" => meta[:session_key],
+       "eventId" => event_id,
+       "cursor" => cursor,
+       "events" => projected
+     }}
+  end
 
   defp map_event_type(:stream_resync, _payload, meta) do
     {"stream.resync",

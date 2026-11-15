@@ -61,7 +61,7 @@ defmodule CodingAgent.Session do
       :ok = CodingAgent.Session.prompt(session, "Help me write a function")
 
       receive do
-        {:session_event, session_id, event} -> IO.inspect({session_id, event})
+        {:session_event, session_id, event, cursor} -> IO.inspect({session_id, event, cursor})
       end
 
       # Unsubscribe when done
@@ -123,7 +123,6 @@ defmodule CodingAgent.Session do
   alias LemonAgent.ContextRegistry
   alias LemonAgent.ModelRuntime.SessionPins
   alias LemonAgent.Types.AgentTool
-  alias LemonCore.Bus.Delivery
   alias LemonCore.Introspection
 
   # ============================================================================
@@ -172,6 +171,7 @@ defmodule CodingAgent.Session do
     :pending_prompt_timer_ref,
     :event_listeners,
     :event_streams,
+    :event_log,
     :abort_signal,
     :steering_queue,
     :follow_up_queue,
@@ -198,6 +198,7 @@ defmodule CodingAgent.Session do
     :config_cwd,
     :native_source_profile_id,
     branch_generation: 0,
+    recovery_requests: %{},
     todo_projection: {:ok, []},
     tool_started_at: %{},
     wasm_host_calls: %{},
@@ -632,9 +633,9 @@ defmodule CodingAgent.Session do
   @doc """
   Subscribe to session events.
 
-  Events are sent as `{:session_event, session_id, event}`. Each new
-  subscription first receives the selected branch's journal todo truth, sent
-  only to that subscriber: `{:todos_changed, todos}`, or
+  Events are sent as `{:session_event, session_id, event, cursor}`. Each new
+  subscription broadcasts the selected branch's journal todo truth with a fresh
+  cursor: `{:todos_changed, todos}`, or
   `{:todos_unavailable, :unsupported_todo_entry}` when the governing journal
   entry cannot be read (never an empty list in its place). A branch with no
   todo entry or legacy plan emits no initial empty event.
@@ -645,7 +646,7 @@ defmodule CodingAgent.Session do
     * `:max_queue` - Mailbox admission bound (direct default 256, stream default 1000)
     * `:max_bytes` - Per-event admission limit (default 1 MiB)
     * On overflow, delivery is fenced with `{:stream_resync, %{reason: :overflow}}`.
-      Read authoritative state and explicitly re-subscribe. A fenced direct
+      Replay from the last cursor, or snapshot on expiry, then re-subscribe. A fenced direct
       subscription reserves one compact `{:session_terminal, session_id, status}`
       notification; terminal answer text remains available from the session owner.
 
@@ -661,7 +662,7 @@ defmodule CodingAgent.Session do
       # Bounded direct mailbox delivery (default)
       unsub = Session.subscribe(session)
       receive do
-        {:session_event, _id, event} -> IO.inspect(event)
+        {:session_event, _id, event, _cursor} -> IO.inspect(event)
       end
       unsub.()
 
@@ -669,7 +670,7 @@ defmodule CodingAgent.Session do
       {:ok, stream} = Session.subscribe(session, mode: :stream)
       stream
       |> LemonAgent.EventStream.events()
-      |> Enum.each(fn {:session_event, _id, event} -> IO.inspect(event) end)
+      |> Enum.each(fn {:session_event, _id, event, _cursor} -> IO.inspect(event) end)
   """
   @spec subscribe(GenServer.server(), keyword()) ::
           (-> :ok) | {(-> :ok), LemonCore.Bus.Delivery.t()} | {:ok, pid()}
@@ -908,6 +909,15 @@ defmodule CodingAgent.Session do
 
   @doc "Read selected-branch recovery state without exposing model context or mutating the session."
   def recovery_snapshot(session), do: GenServer.call(session, :recovery_snapshot, 5_000)
+
+  @doc """
+  Replay events strictly after a versioned native-session cursor, in broadcast
+  order. A dead/replaced owner or evicted prefix yields `:cursor_expired`.
+  This local API is trusted; boundary callers must reauthorize every read.
+  """
+  def replay_events(session, cursor, limit \\ 100) do
+    GenServer.call(session, {:replay_events, cursor, limit}, 5_000)
+  end
 
   @doc """
   Resolve a session tool for the `eval` code-mode bridge (`tools.<name>(...)`).
@@ -1183,15 +1193,14 @@ defmodule CodingAgent.Session do
     end
   end
 
+  def handle_call({:replay_events, cursor, limit}, _from, state) do
+    {:reply, CodingAgent.Session.EventLog.replay(state.event_log, cursor, limit), state}
+  end
+
   def handle_call({:subscribe, pid, :stream, opts}, _from, state) do
     {:ok, stream, new_state} = Notifier.subscribe_stream(state, pid, opts)
 
-    {_ref, %{delivery: delivery}} =
-      Enum.find(new_state.event_streams, &match?({_ref, %{stream: ^stream}}, &1))
-
-    if event = initial_todos(new_state) do
-      Delivery.send(delivery, {:"$gen_cast", {:push, event}})
-    end
+    if event = initial_todos(new_state), do: Notifier.broadcast_event(new_state, event)
 
     {:reply, {:ok, stream}, new_state}
   end
@@ -1469,21 +1478,12 @@ defmodule CodingAgent.Session do
     {:reply, Enum.map(agent_state.messages, &strip_recalled_context/1), state}
   end
 
-  def handle_call(:recovery_snapshot, _from, state) do
-    agent_state = LemonAgent.Agent.get_state(state.agent)
-
-    snapshot =
-      Recovery.snapshot(state.session_manager,
-        run_id: state.run_id,
-        streaming: state.is_streaming or agent_state.is_streaming,
-        messages: Enum.map(agent_state.messages, &strip_recalled_context/1),
-        partial: agent_state.stream_message,
-        pending: MapSet.to_list(agent_state.pending_tool_calls),
-        failed: not is_nil(agent_state.error),
-        turn: state.turn_index
-      )
-
-    {:reply, {:ok, snapshot}, state}
+  def handle_call(:recovery_snapshot, from, state) do
+    # A selective receive here would overtake queued broadcasts and pair future
+    # text with an old cursor. Process the agent response in mailbox order.
+    request = :gen_server.send_request(state.agent, :get_state)
+    requests = Map.put(state.recovery_requests, request, {from, state.branch_generation})
+    {:noreply, %{state | recovery_requests: requests}}
   end
 
   def handle_call(:context_snapshot, _from, state) do
@@ -1908,8 +1908,46 @@ defmodule CodingAgent.Session do
     handle_info({:do_prompt, message, state.system_prompt}, state)
   end
 
-  def handle_info(_msg, state) do
-    {:noreply, state}
+  def handle_info(message, state) do
+    case recovery_response(message, state.recovery_requests) do
+      nil ->
+        {:noreply, state}
+
+      {request, from, branch, {:reply, agent_state}} ->
+        result =
+          if branch == state.branch_generation,
+            do: {:ok, recovery_projection(state, agent_state)},
+            else: {:error, :unavailable}
+
+        GenServer.reply(from, result)
+        {:noreply, %{state | recovery_requests: Map.delete(state.recovery_requests, request)}}
+
+      {request, from, _branch, {:error, _reason}} ->
+        GenServer.reply(from, {:error, :unavailable})
+        {:noreply, %{state | recovery_requests: Map.delete(state.recovery_requests, request)}}
+    end
+  end
+
+  defp recovery_response(message, requests) do
+    Enum.find_value(requests, fn {request, {from, branch}} ->
+      case :gen_server.check_response(message, request) do
+        :no_reply -> nil
+        response -> {request, from, branch, response}
+      end
+    end)
+  end
+
+  defp recovery_projection(state, agent_state) do
+    Recovery.snapshot(state.session_manager,
+      run_id: state.run_id,
+      streaming: state.is_streaming or agent_state.is_streaming,
+      messages: Enum.map(agent_state.messages, &strip_recalled_context/1),
+      partial: agent_state.stream_message,
+      pending: MapSet.to_list(agent_state.pending_tool_calls),
+      failed: not is_nil(agent_state.error),
+      turn: state.turn_index
+    )
+    |> Map.put(:event_cursor, CodingAgent.Session.EventLog.cursor(state.event_log))
   end
 
   @spec terminate(term(), t()) :: :ok
@@ -2589,11 +2627,10 @@ defmodule CodingAgent.Session do
 
   defp maybe_subscribe_exec_approvals(_state), do: :ok
 
-  # Only the new handle receives selected-branch truth; existing listeners must
-  # not see a duplicate, and an unreadable entry must never look like a clear.
-  defp send_initial_todos(state, pid) do
-    [{^pid, _ref, delivery} | _] = state.event_listeners
-    if event = initial_todos(state), do: Delivery.send(delivery, event)
+  # Subscription bootstrap is a broadcast too: record it once and give every
+  # observer the same cursor instead of emitting an unsequenced private delta.
+  defp send_initial_todos(state, _pid) do
+    if event = initial_todos(state), do: Notifier.broadcast_event(state, event)
   end
 
   defp initial_todos(state) do
@@ -2609,7 +2646,7 @@ defmodule CodingAgent.Session do
           {:todos_unavailable, :unsupported_todo_entry}
       end
 
-    if event, do: {:session_event, state.session_manager.header.id, event}
+    event
   end
 
   defp approval_event_payload(payload, state) when is_map(payload) do

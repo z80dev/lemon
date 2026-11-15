@@ -581,15 +581,15 @@ defmodule CodingAgent.Session.TodoJournalTest do
     session = start_session(root)
     Session.subscribe(session)
     original = write(session, pending()).details.todos
-    assert_receive {:session_event, _, {:todos_changed, ^original}}
+    assert_receive {:session_event, _, {:todos_changed, ^original}, _}
     a = leaf(session)
     assert {:ok, ^original, old} = Session.todos(session)
     done = write(session, Enum.map(original, &Map.put(&1, "status", "completed"))).details.todos
-    assert_receive {:session_event, _, {:todos_changed, ^done}}
+    assert_receive {:session_event, _, {:todos_changed, ^done}, _}
     assert {:error, :stale_revision} = Session.write_todos(session, original, old)
     assert_views(session, done)
     navigate(session, a)
-    assert_receive {:session_event, _, {:todos_changed, ^original}}
+    assert_receive {:session_event, _, {:todos_changed, ^original}, _}
     assert {:ok, ^original, prepared} = Session.todos(session)
     navigate(session, leaf_id_of_latest_todo(session))
     navigate(session, a)

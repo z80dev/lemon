@@ -143,8 +143,8 @@ defmodule CodingAgent.SessionManualOperationTest do
 
       assert :ok = Task.await(caller, 5_000)
 
-      assert_receive {:session_event, _, {:compaction_start, %{reason: :manual}}}
-      assert_receive {:session_event, _, {:compaction_complete, %{summary: "manual summary"}}}
+      assert_receive {:session_event, _, {:compaction_start, %{reason: :manual}}, _}
+      assert_receive {:session_event, _, {:compaction_complete, %{summary: "manual summary"}}, _}
 
       state = Session.get_state(session)
       assert state.manual_operation == nil
@@ -266,7 +266,7 @@ defmodule CodingAgent.SessionManualOperationTest do
       send(provider, {:release, "branch summary"})
 
       assert :ok = Task.await(caller, 5_000)
-      assert_receive {:session_event, _, {:branch_summarized, %{summary: "branch summary"}}}
+      assert_receive {:session_event, _, {:branch_summarized, %{summary: "branch summary"}}, _}
 
       state = Session.get_state(session)
       assert state.manual_operation == nil

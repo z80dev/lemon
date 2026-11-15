@@ -129,7 +129,7 @@ defmodule CodingAgent.Session.ModelRoutingTest do
     child = session(context, Keyword.put(child_opts, :register, false))
     Session.subscribe(child)
     assert :ok = Session.prompt(child, String.duplicate("x", 100))
-    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}}, 5_000
+    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}, _}, 5_000
     refute_receive {:provider_call, _, _, _}, 50
 
     File.write!(Path.join(persona_dir, "role-reviewer.md"), """
@@ -153,7 +153,7 @@ defmodule CodingAgent.Session.ModelRoutingTest do
     role_child = session(context, Keyword.put(role_opts, :register, false))
     Session.subscribe(role_child)
     assert :ok = Session.prompt(role_child, String.duplicate("x", 100))
-    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}}, 5_000
+    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}, _}, 5_000
     refute_receive {:provider_call, _, _, _}, 50
 
     {:ok, explicit_params} =
@@ -188,7 +188,7 @@ defmodule CodingAgent.Session.ModelRoutingTest do
     session = session(context, settings: settings)
     Session.subscribe(session)
     assert :ok = Session.prompt(session, "hi")
-    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}}, 5_000
+    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}, _}, 5_000
     refute_receive {:provider_call, _, _, _}, 50
   end
 
@@ -295,7 +295,7 @@ defmodule CodingAgent.Session.ModelRoutingTest do
     session = session(context, settings: settings)
     Session.subscribe(session)
     assert :ok = Session.prompt(session, "hi")
-    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}}, 5_000
+    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}, _}, 5_000
     refute_receive {:provider_call, _, _, _}, 50
   end
 
@@ -330,7 +330,7 @@ defmodule CodingAgent.Session.ModelRoutingTest do
     assert_receive {:fallback_attempt, "gpt-4o-mini"}, 5_000
 
     assert_receive {:session_event, _,
-                    {:message_end, %AssistantMessage{stop_reason: :error} = rejection}},
+                    {:message_end, %AssistantMessage{stop_reason: :error} = rejection}, _},
                    5_000
 
     refute_receive {:fallback_attempt, "gpt-4o"}, 50
@@ -442,7 +442,7 @@ defmodule CodingAgent.Session.ModelRoutingTest do
     assert :sys.get_state(Session.get_state(session).agent).model_routing
     Session.subscribe(session)
     assert :ok = Session.prompt(session, "hi")
-    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}}, 5_000
+    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}, _}, 5_000
     refute_receive {:provider_call, _, _, _}, 50
   end
 
@@ -500,8 +500,8 @@ defmodule CodingAgent.Session.ModelRoutingTest do
   defp turn(session, prompt) do
     Session.subscribe(session)
     assert :ok = Session.prompt(session, prompt)
-    assert_receive {:session_event, id, {:message_end, %AssistantMessage{} = response}}, 5_000
-    assert_receive {:session_event, ^id, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, id, {:message_end, %AssistantMessage{} = response}, _}, 5_000
+    assert_receive {:session_event, ^id, {:agent_end, _}, _}, 5_000
     response
   end
 end

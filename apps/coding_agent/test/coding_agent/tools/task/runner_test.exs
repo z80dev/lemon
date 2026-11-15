@@ -170,7 +170,7 @@ defmodule CodingAgent.Tools.Task.RunnerTest do
     # Owner completion is synchronized independently of the blocked subscriber.
     _unsubscribe = CodingAgent.Session.subscribe(session)
     send(producer, :release_stream)
-    assert_receive {:session_event, ^session_id, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, ^session_id, {:agent_end, _}, _}, 5_000
     CodingAgent.Session.get_state(session)
     assert {:messages, messages} = Process.info(consumer, :messages)
 
@@ -295,11 +295,15 @@ defmodule CodingAgent.Tools.Task.RunnerTest do
           send(
             consumer,
             {:lemon_bus_delivery, previous_delivery.gate,
-             {:session_event, session_id, {:error, "stale generation", nil}}}
+             {:session_event, session_id, {:error, "stale generation", nil}, nil}}
           )
 
           send(consumer, {:session_terminal, session_id, :error})
-          send(consumer, {:session_event, session_id, {:error, "untagged old generation", nil}})
+
+          send(
+            consumer,
+            {:session_event, session_id, {:error, "untagged old generation", nil}, nil}
+          )
         end
 
         progress = %LemonAgent.Types.AgentToolResult{
@@ -312,7 +316,7 @@ defmodule CodingAgent.Tools.Task.RunnerTest do
 
         unsubscribe = CodingAgent.Session.subscribe(session)
         send(producer, :release_stream)
-        assert_receive {:session_event, ^session_id, {:agent_end, _}}, 5_000
+        assert_receive {:session_event, ^session_id, {:agent_end, _}, _}, 5_000
         CodingAgent.Session.get_state(session)
         unsubscribe.()
         send(consumer, :release_consumer)
