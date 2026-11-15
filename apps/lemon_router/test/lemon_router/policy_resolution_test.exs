@@ -176,12 +176,16 @@ defmodule LemonRouter.PolicyResolutionTest do
       assert Policy.merge(a, %{allowed_commands: []}).allowed_commands == []
     end
 
-    test "removed sandbox input does not alter merged authority" do
-      a = %{allow: ["read"], sandbox: false}
-      b = %{deny: ["bash"], sandbox: true}
+    test "sandbox survives policy layers and cannot be cleared by children" do
+      parent = %{allow: ["read", "bash"], sandbox: true}
+      child = %{deny: ["write"], sandbox: false}
 
-      assert Policy.merge(a, b) == Policy.merge(%{allow: ["read"]}, %{deny: ["bash"]})
-      refute Map.has_key?(Policy.merge(a, b), :sandbox)
+      merged = Policy.merge(parent, child)
+      assert merged.sandbox
+      assert Policy.merge(child, parent).sandbox
+      assert Policy.merge(merged, %{sandbox: false}).sandbox
+      assert merged.allow == ["read", "bash"]
+      assert "write" in merged.deny
     end
   end
 

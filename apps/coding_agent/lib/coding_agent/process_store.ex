@@ -87,6 +87,7 @@ defmodule CodingAgent.ProcessStore do
                 :cwd,
                 :env,
                 :backend,
+                :tool_policy,
                 :terminal_capabilities,
                 :max_log_lines,
                 :full_output_path,

@@ -127,6 +127,7 @@ defmodule CodingAgent.Tools.Bash.Service do
         env: env,
         owner: owner,
         owner_pid: Keyword.get(opts, :session_pid),
+        tool_policy: Keyword.get(opts, :tool_policy),
         service: %{name: name, project: project, generation: System.system_time(:microsecond)}
       )
 
