@@ -2,6 +2,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   @moduledoc """
   Discord transport that routes inbound events to LemonRouter through RouterBridge.
   Feature-complete with model picker, thinking, resume, cancel, trigger, cwd, and reactions.
+
+  Events run in temporary supervised tasks, in arrival order, so slow platform I/O
+  never occupies the transport mailbox. Failed events are not replayed.
   """
 
   use GenServer
@@ -40,7 +43,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     ProjectBindingStore,
     ResumeToken,
     RouterBridge,
-    Secrets,
     SessionKey,
     Store
   }
@@ -107,51 +109,28 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       |> merge_config(Keyword.get(opts, :config))
       |> merge_config(Keyword.drop(opts, [:config]))
 
-    token = cfg_get(config, :bot_token) || resolve_bot_token_secret(config) || resolve_token()
+    maybe_subscribe_exec_approvals()
+    :ok = Ets.init(@dedupe_table)
+    _ = :ets.delete_all_objects(@dedupe_table)
 
-    if is_binary(token) and String.trim(token) != "" do
-      case ensure_nostrum_started(token) do
-        :ok ->
-          consumer_pid = start_consumer()
+    data = %{
+      transport_pid: self(),
+      account_id: cfg_get(config, :account_id, "default"),
+      allowed_guild_ids: parse_allowed_ids(cfg_get(config, :allowed_guild_ids)),
+      allowed_channel_ids: parse_allowed_channel_ids(cfg_get(config, :allowed_channel_ids)),
+      unauthorized_dm_behavior: cfg_get(config, :unauthorized_dm_behavior, "ignore"),
+      deny_unbound_channels: cfg_get(config, :deny_unbound_channels, false),
+      bot_user_id: nil,
+      model_pickers: %{},
+      buffers: %{},
+      reaction_runs: %{},
+      pending_new: %{},
+      debounce_ms: cfg_get(config, :debounce_ms, @debounce_ms),
+      dedupe_ttl_ms: cfg_get(config, :dedupe_ttl_ms, @default_dedupe_ttl),
+      files: cfg_get(config, :files, %{})
+    }
 
-          maybe_subscribe_exec_approvals()
-
-          # Initialize dedup table (same pattern as Telegram transport)
-          :ok = Ets.init(@dedupe_table)
-          _ = :ets.delete_all_objects(@dedupe_table)
-
-          {:ok,
-           %{
-             consumer_pid: consumer_pid,
-             account_id: cfg_get(config, :account_id, "default"),
-             allowed_guild_ids: parse_allowed_ids(cfg_get(config, :allowed_guild_ids)),
-             allowed_channel_ids:
-               parse_allowed_channel_ids(cfg_get(config, :allowed_channel_ids)),
-             unauthorized_dm_behavior: cfg_get(config, :unauthorized_dm_behavior, "ignore"),
-             deny_unbound_channels: cfg_get(config, :deny_unbound_channels, false),
-             bot_user_id: nil,
-             # Model picker state: {channel_id, thread_id, user_id} => picker
-             model_pickers: %{},
-             # Message debouncing: scope_key => buffer
-             buffers: %{},
-             # Reaction tracking: session_key => %{channel_id, message_id, user_id}
-             reaction_runs: %{},
-             # Pending /new: run_id => info
-             pending_new: %{},
-             debounce_ms: cfg_get(config, :debounce_ms, @debounce_ms),
-             dedupe_ttl_ms: cfg_get(config, :dedupe_ttl_ms, @default_dedupe_ttl),
-             # File operations config from [gateway.discord.files]
-             files: cfg_get(config, :files, %{})
-           }}
-
-        {:error, reason} ->
-          LemonChannels.Registry.record_status("discord", {:error, reason})
-          Logger.warning("discord adapter disabled: #{inspect(reason)}")
-          :ignore
-      end
-    else
-      :ignore
-    end
+    {:ok, %{data: data, queue: :queue.new(), task: nil}}
   end
 
   # ============================================================================
@@ -161,11 +140,83 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   @impl true
   def handle_call({:update_allowlist, op, channel_id}, _from, state)
       when op in [:add, :remove] and is_integer(channel_id) do
-    {:reply, :ok, LemonChannels.Pairing.put_allowlist("discord", state, channel_id, op)}
+    data = LemonChannels.Pairing.put_allowlist("discord", state.data, channel_id, op)
+    {:reply, :ok, %{state | data: data}}
   end
 
   @impl true
-  def handle_info({:discord_event, {:READY, payload, _ws_state}}, state) do
+  def handle_info({ref, {:noreply, data}}, %{task: %{ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
+    # Pairing changes may arrive while I/O is in flight; never overwrite them.
+    data = %{data | allowed_channel_ids: state.data.allowed_channel_ids}
+    {:noreply, dispatch_next(%{state | data: data, task: nil})}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{task: %{ref: ref}} = state) do
+    LemonChannels.Registry.record_status("discord", {:error, :event_failed})
+    Logger.warning("discord event task failed; event will not be replayed")
+    {:noreply, dispatch_next(%{state | task: nil})}
+  end
+
+  def handle_info({:discord_subscription, action, topic}, state) do
+    case action do
+      :subscribe -> LemonCore.Bus.subscribe(topic)
+      :unsubscribe -> LemonCore.Bus.unsubscribe(topic)
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_info(event, state) do
+    {:noreply, dispatch_next(%{state | queue: :queue.in(event, state.queue)})}
+  end
+
+  @impl true
+  def terminate(_reason, %{task: %{pid: pid}}) do
+    Task.Supervisor.terminate_child(LemonChannels.Adapters.Discord.AsyncSupervisor, pid)
+  end
+
+  def terminate(_reason, _state), do: :ok
+
+  defp dispatch_next(%{task: nil} = state) do
+    case :queue.out(state.queue) do
+      {{:value, event}, queue} ->
+        owner = self()
+        data = state.data
+
+        task =
+          Task.Supervisor.async_nolink(LemonChannels.Adapters.Discord.AsyncSupervisor, fn ->
+            Process.put(:discord_transport, owner)
+            process_event(event, data)
+          end)
+
+        %{state | task: task, queue: queue}
+
+      {:empty, _queue} ->
+        state
+    end
+  end
+
+  defp dispatch_next(state), do: state
+
+  defp start_task(fun) do
+    owner = Process.get(:discord_transport, self())
+
+    Task.Supervisor.start_child(LemonChannels.Adapters.Discord.AsyncSupervisor, fn ->
+      Process.put(:discord_transport, owner)
+      fun.()
+    end)
+  end
+
+  defp subscription(action, topic) do
+    case Process.get(:discord_transport) do
+      nil -> apply(LemonCore.Bus, action, [topic])
+      owner -> send(owner, {:discord_subscription, action, topic})
+    end
+  end
+
+  @doc false
+  def process_event({:discord_event, {:READY, payload, _ws_state}}, state) do
     _ = register_slash_commands()
 
     bot_user_id =
@@ -177,18 +228,18 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     {:noreply, %{state | bot_user_id: bot_user_id}}
   end
 
-  def handle_info({:discord_event, {:MESSAGE_CREATE, message, _ws_state}}, state) do
+  def process_event({:discord_event, {:MESSAGE_CREATE, message, _ws_state}}, state) do
     state = maybe_handle_message(message, state)
     {:noreply, state}
   end
 
-  def handle_info({:discord_event, {:INTERACTION_CREATE, interaction, _ws_state}}, state) do
+  def process_event({:discord_event, {:INTERACTION_CREATE, interaction, _ws_state}}, state) do
     state = maybe_handle_interaction(interaction, state)
     {:noreply, state}
   end
 
   # Debounce flush for buffered messages
-  def handle_info({:debounce_flush, scope_key, debounce_ref}, state) do
+  def process_event({:debounce_flush, scope_key, debounce_ref}, state) do
     {buffer, buffers} = Map.pop(state.buffers, scope_key)
 
     state =
@@ -208,7 +259,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   # Run completion events for reaction updates and /new cleanup
-  def handle_info(%LemonCore.Event{type: :run_completed, meta: meta} = event, state) do
+  def process_event(%LemonCore.Event{type: :run_completed, meta: meta} = event, state) do
     run_id = (meta || %{})[:run_id] || (meta || %{})["run_id"]
     session_key = (meta || %{})[:session_key] || (meta || %{})["session_key"]
 
@@ -230,7 +281,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           _ = send_channel_message(channel_id, msg)
 
           topic = LemonCore.Bus.run_topic(run_id)
-          _ = LemonCore.Bus.unsubscribe(topic)
+          _ = subscription(:unsubscribe, topic)
 
           %{state | pending_new: Map.delete(state.pending_new, run_id)}
 
@@ -262,14 +313,14 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           reaction_emoji = if ok?, do: "✅", else: "❌"
 
           _ =
-            spawn(fn ->
+            start_task(fn ->
               # Remove 👀 and add result reaction
               _ = Outbound.delete_own_reaction(channel_id, user_msg_id, "👀")
               _ = Outbound.create_reaction(channel_id, user_msg_id, reaction_emoji)
             end)
 
           topic = LemonCore.Bus.session_topic(matched_sk)
-          _ = LemonCore.Bus.unsubscribe(topic)
+          _ = subscription(:unsubscribe, topic)
 
           %{state | reaction_runs: Map.delete(state.reaction_runs, matched_sk)}
 
@@ -281,19 +332,19 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   # Approval requests
-  def handle_info(%LemonCore.Event{type: :approval_requested, payload: payload}, state) do
+  def process_event(%LemonCore.Event{type: :approval_requested, payload: payload}, state) do
     _ = Approval.send(state, payload)
     {:noreply, state}
   end
 
-  def handle_info(%LemonCore.Event{type: :approval_resolved}, state), do: {:noreply, state}
+  def process_event(%LemonCore.Event{type: :approval_resolved}, state), do: {:noreply, state}
 
-  def handle_info({:discord_event, {:THREAD_CREATE, thread, _ws_state}}, state) do
+  def process_event({:discord_event, {:THREAD_CREATE, thread, _ws_state}}, state) do
     state = maybe_handle_thread_create(thread, state)
     {:noreply, state}
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def process_event(_msg, state), do: {:noreply, state}
 
   # ============================================================================
   # Message Handling
@@ -438,7 +489,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     # Auto-put attachments if enabled (before any other processing)
     _ =
       if FileOperations.should_auto_put?(state, inbound) do
-        spawn(fn -> FileOperations.handle_attachment_auto_put(state, inbound) end)
+        start_task(fn -> FileOperations.handle_attachment_auto_put(state, inbound) end)
       end
 
     case Regex.run(~r/^\/(approve|deny)(?:\s+(.*))?$/s, String.trim(text)) do
@@ -499,7 +550,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     msg_entry = %{text: inbound.message.text || "", reply_to_id: inbound.message.reply_to_id}
 
     debounce_ref = make_ref()
-    Process.send_after(self(), {:debounce_flush, scope_key, debounce_ref}, state.debounce_ms)
+    owner = Map.get(state, :transport_pid, self())
+    Process.send_after(owner, {:debounce_flush, scope_key, debounce_ref}, state.debounce_ms)
 
     buffer =
       if existing do
@@ -1050,7 +1102,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
       if command == "btw" do
         respond_ephemeral(interaction, "Answering side question…")
-        _ = Task.start(fn -> send_followup(interaction, run.()) end)
+        _ = start_task(fn -> send_followup(interaction, run.()) end)
       else
         respond_ephemeral(interaction, run.())
       end
@@ -1205,7 +1257,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       }
     }
 
-    Task.start(fn ->
+    start_task(fn ->
       MemoryReflection.submit_before_new(
         state,
         inbound,
@@ -2130,7 +2182,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     if guild_allowed? and is_integer(thread_id) do
       # Auto-join the thread so we receive MESSAGE_CREATE events in it
-      spawn(fn ->
+      start_task(fn ->
         _ = Thread.join(thread_id)
       end)
     end
@@ -2755,7 +2807,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp maybe_subscribe_to_session(session_key) when is_binary(session_key) do
     topic = LemonCore.Bus.session_topic(session_key)
-    _ = LemonCore.Bus.subscribe(topic)
+    _ = subscription(:subscribe, topic)
   end
 
   defp maybe_subscribe_exec_approvals do
@@ -2908,47 +2960,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   # ============================================================================
-  # Nostrum / Startup
-  # ============================================================================
-
-  defp start_consumer do
-    case safe_start_consumer() do
-      {:ok, pid} ->
-        pid
-
-      :ok ->
-        nil
-
-      {:error, reason} ->
-        LemonChannels.Registry.record_status("discord", {:error, reason})
-        Logger.warning("discord consumer failed to start: #{inspect(reason)}")
-        nil
-    end
-  end
-
-  defp safe_start_consumer do
-    __MODULE__.Consumer.start_link([])
-  end
-
-  defp ensure_nostrum_started(token) do
-    Application.put_env(:nostrum, :token, token)
-
-    Application.put_env(:nostrum, :gateway_intents, [
-      :guilds,
-      :guild_messages,
-      :guild_message_reactions,
-      :direct_messages,
-      :direct_message_reactions,
-      :message_content
-    ])
-
-    case Application.ensure_all_started(:nostrum) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  # ============================================================================
   # Option & Value Extraction
   # ============================================================================
 
@@ -3058,18 +3069,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  defp resolve_bot_token_secret(config) do
-    secret_name = cfg_get(config, :bot_token_secret)
-
-    if is_binary(secret_name) and secret_name != "",
-      do: Secrets.fetch_value(secret_name),
-      else: nil
-  end
-
-  defp resolve_token do
-    Secrets.fetch_value("DISCORD_BOT_TOKEN") || System.get_env("DISCORD_BOT_TOKEN")
-  end
-
   # ============================================================================
   # Nostrum Consumer
   # ============================================================================
@@ -3079,6 +3078,16 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     use Nostrum.Consumer
 
     @transport LemonChannels.Adapters.Discord.Transport
+
+    # Nostrum 0.10's default consumer callback creates an unowned task. Forward
+    # directly instead; the transport's task supervisor owns all event work.
+    @impl GenServer
+    def handle_info({:event, event}, state) do
+      handle_event(event)
+      {:noreply, state}
+    end
+
+    def handle_info(_message, state), do: {:noreply, state}
 
     def handle_event({name, _payload, _ws_state} = event) do
       if name in [:READY, :RESUMED] do
