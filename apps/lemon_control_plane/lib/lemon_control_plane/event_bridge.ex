@@ -73,7 +73,7 @@ defmodule LemonControlPlane.EventBridge do
 
   require Logger
 
-  alias LemonControlPlane.Presence
+  alias LemonControlPlane.Connections
   alias LemonCore.Bus
   alias LemonCore.Bus.Delivery
   alias LemonCore.Events
@@ -170,9 +170,9 @@ defmodule LemonControlPlane.EventBridge do
   def handle_info({:stream_resync, :overflow}, state) do
     # Lost bus deltas cannot be replayed. Fence every affected client and require
     # authenticated reconnect + owner snapshot recovery, including approvals.
-    for {_id, info} <- get_connected_clients(), general_event_client?(info) do
-      Delivery.resync(info.delivery)
-    end
+    Connections.dispatch(fn clients ->
+      for {_id, info} <- clients, general_event_client?(info), do: Delivery.resync(info.delivery)
+    end)
 
     topics = [LemonOmp.bus_topic() | @bus_topics] ++ Map.keys(state.topic_ref_counts)
     Enum.each(topics, &Bus.unsubscribe/1)
@@ -191,6 +191,17 @@ defmodule LemonControlPlane.EventBridge do
   def handle_info(%{type: type} = event, state) when is_atom(type) do
     {state, state_version} = maybe_bump_state_version(state, type)
     broadcast_event(event, state_version)
+    {:noreply, state}
+  end
+
+  def handle_info({:connection_registered, pid}, state) do
+    # Notification only: no membership table, monitor map or delivery ownership.
+    Process.monitor(pid)
+    {:noreply, state}
+  end
+
+  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
+    Connections.emit_changed()
     {:noreply, state}
   end
 
@@ -228,11 +239,10 @@ defmodule LemonControlPlane.EventBridge do
         :ok
 
       {event_name, payload} ->
-        clients =
-          get_connected_clients()
-          |> Enum.filter(fn {_conn_id, info} -> general_event_client?(info) end)
-
-        dispatch_event(clients, event_name, payload, state_version)
+        Connections.dispatch(fn entries ->
+          clients = Enum.filter(entries, fn {_id, info} -> general_event_client?(info) end)
+          dispatch_event(clients, event_name, payload, state_version)
+        end)
     end
   end
 
@@ -308,14 +318,7 @@ defmodule LemonControlPlane.EventBridge do
     |> MapSet.new()
   end
 
-  defp get_connected_clients do
-    case Process.whereis(Presence) do
-      nil -> []
-      _ -> Presence.list()
-    end
-  rescue
-    _ -> []
-  end
+  # Registry owns membership; fanout never calls a presence server.
 
   @doc """
   Projects one Bus event to its operator wire event, `{event_name, payload}`,

@@ -6,7 +6,7 @@ defmodule LemonControlPlane.WS.EventEncodingTest do
   alias CodingAgent.ExecutionNode.Socket
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.{Cost, TextContent, Usage}
-  alias LemonControlPlane.{EventBridge, Presence}
+  alias LemonControlPlane.{EventBridge, Connections}
   alias LemonControlPlane.Protocol.Frames
   alias LemonControlPlane.WS.Connection
 
@@ -79,15 +79,15 @@ defmodule LemonControlPlane.WS.EventEncodingTest do
       restore_env(:allow_unauthenticated_loopback_operator, previous_loopback)
     end)
 
-    ensure_started(Presence)
+    ensure_started(Connections)
     bridge = ensure_started(EventBridge)
     suffix = System.unique_integer([:positive])
     client_id = "encoding-wire-#{suffix}"
     node_id = "encoding-node-#{suffix}"
-    :ok = Presence.register(node_id, %{role: :node, client_id: node_id, pid: self()})
+    :ok = Connections.register(node_id, %{role: :node, client_id: node_id, pid: self()})
 
     on_exit(fn ->
-      if Process.whereis(Presence), do: Presence.unregister(node_id)
+      if Process.whereis(Connections), do: Connections.unregister(node_id)
     end)
 
     bandit =
@@ -126,7 +126,7 @@ defmodule LemonControlPlane.WS.EventEncodingTest do
     assert_receive {:execution_node_socket, ^socket, {:connected, _hello}}, 3_000
 
     assert {conn_id, %{pid: server}} =
-             Enum.find(Presence.list(), fn {_id, info} -> info.client_id == client_id end)
+             Enum.find(Connections.list(), fn {_id, info} -> info.client_id == client_id end)
 
     monitor = Process.monitor(server)
 
@@ -190,7 +190,7 @@ defmodule LemonControlPlane.WS.EventEncodingTest do
     refute log =~ "bad-private-event"
     refute_receive {:DOWN, ^monitor, :process, ^server, _}, 50
     refute_receive {:execution_node_socket, ^socket, {:disconnected, _}}, 50
-    assert Presence.get(conn_id).pid == server
+    assert Connections.get(conn_id).pid == server
     assert Process.alive?(socket)
     Process.demonitor(monitor, [:flush])
   end

@@ -244,7 +244,7 @@ defmodule LemonControlPlane.Methods.Status do
   end
 
   defp get_presence_counts do
-    LemonControlPlane.Presence.counts()
+    LemonControlPlane.Connections.counts()
   end
 
   defp get_run_counts do
