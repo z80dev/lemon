@@ -18,6 +18,163 @@ defmodule LemonGateway.ThreadWorker do
 
   @slot_request_timeout_ms 30_000
   @max_run_start_attempts 3
+  # Preserve the previous two enqueue attempts and five-second worker-resolution
+  # budget in the caller. Stale Registry entries consume time, never attempts.
+  @max_enqueue_attempts 2
+  @worker_resolution_timeout_ms 5_000
+
+  @doc "Acknowledges admission in the submitting process, never in the scheduler."
+  def submit(%ExecutionRequest{} = request) do
+    thread_key = thread_key(request)
+
+    Logger.debug(
+      "Scheduler submit run_id=#{inspect(request.run_id)} session_key=#{inspect(request.session_key)} " <>
+        "thread_key=#{inspect(thread_key)}"
+    )
+
+    Introspection.record(
+      :scheduled_job_triggered,
+      %{thread_key: inspect(thread_key)},
+      run_id: request.run_id,
+      session_key: request.session_key,
+      engine: "lemon",
+      provenance: :direct
+    )
+
+    case enqueue_to_worker(thread_key, request) do
+      :ok ->
+        :ok
+
+      {:error, :outcome_unknown} ->
+        # A lost enqueue acknowledgement is not permission to repeat work.
+        Logger.warning("Scheduler enqueue outcome unknown run_id=#{inspect(request.run_id)}")
+        {:error, :outcome_unknown}
+
+      {:error, reason} ->
+        complete_rejected_submission(request, reason)
+        {:error, admission_error_class(reason)}
+    end
+  end
+
+  defp thread_key(%ExecutionRequest{conversation_key: conversation_key})
+       when not is_nil(conversation_key),
+       do: conversation_key
+
+  defp thread_key(%ExecutionRequest{run_id: run_id}) do
+    raise ArgumentError,
+          "execution request #{inspect(run_id)} is missing router-owned conversation_key"
+  end
+
+  defp enqueue_to_worker(thread_key, request) do
+    deadline = System.monotonic_time(:millisecond) + @worker_resolution_timeout_ms
+    enqueue_to_worker(thread_key, request, @max_enqueue_attempts, deadline)
+  end
+
+  defp enqueue_to_worker(thread_key, request, attempts, deadline) do
+    with {:ok, worker_pid} <- ensure_worker(thread_key, deadline) do
+      case safe_enqueue(worker_pid, request) do
+        {:error, :noproc} when attempts > 1 ->
+          enqueue_to_worker(thread_key, request, attempts - 1, deadline)
+
+        {:error, :noproc} ->
+          {:error, :worker_unavailable}
+
+        result ->
+          result
+      end
+    end
+  end
+
+  defp ensure_worker(thread_key, deadline) do
+    if System.monotonic_time(:millisecond) >= deadline do
+      {:error, :worker_startup_timeout}
+    else
+      case LemonGateway.ThreadRegistry.whereis(thread_key) do
+        pid when is_pid(pid) ->
+          if Process.alive?(pid) do
+            {:ok, pid}
+          else
+            start_live_worker(thread_key, deadline)
+          end
+
+        nil ->
+          start_live_worker(thread_key, deadline)
+      end
+    end
+  catch
+    :exit, reason -> {:error, {:worker_startup_exit, reason}}
+  end
+
+  defp start_live_worker(thread_key, deadline) do
+    case start_worker(thread_key) do
+      {:ok, pid} ->
+        if Process.alive?(pid), do: {:ok, pid}, else: ensure_worker(thread_key, deadline)
+
+      error ->
+        error
+    end
+  end
+
+  defp start_worker(thread_key) do
+    case DynamicSupervisor.start_child(
+           LemonGateway.ThreadWorkerSupervisor,
+           {__MODULE__, thread_key: thread_key}
+         ) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> {:ok, pid}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp safe_enqueue(pid, request) when is_pid(pid) do
+    GenServer.call(pid, {:enqueue, request}, 65_000)
+  catch
+    :exit, {:noproc, _} -> {:error, :noproc}
+    # Empty workers stop normally between the registry lookup and this call.
+    # Calls cannot be handled after that stop, and a handled enqueue replies
+    # before a normal DOWN signal, so this is a definite pre-enqueue rejection.
+    :exit, {:normal, _} -> {:error, :noproc}
+    :exit, _ -> {:error, :outcome_unknown}
+  end
+
+  defp complete_rejected_submission(request, reason) do
+    completed =
+      LemonGateway.Event.completed(%{
+        engine: "lemon",
+        ok: false,
+        answer: "",
+        error: %{type: :execution_admission_failed, reason: admission_error_class(reason)},
+        run_id: request.run_id,
+        session_key: request.session_key
+      })
+
+    :ok =
+      LemonCore.RunStore.finalize(request.run_id, %{
+        completed: completed,
+        session_key: request.session_key,
+        run_id: request.run_id,
+        prompt: request.prompt,
+        duration_ms: 0,
+        engine: "lemon",
+        meta: request.meta
+      })
+
+    LemonCore.Bus.broadcast(
+      LemonCore.Bus.run_topic(request.run_id),
+      LemonCore.Event.new(
+        :run_completed,
+        LemonCore.Events.RunCompleted.new(%{completed: completed, duration_ms: 0}),
+        %{run_id: request.run_id, session_key: request.session_key, synthetic: true}
+      )
+    )
+
+    if is_pid(notify_pid = meta_field(request.meta, :notify_pid)) do
+      send(notify_pid, {:lemon_gateway_run_completed, request, completed})
+    end
+  end
+
+  defp admission_error_class(reason) when is_atom(reason), do: reason
+  defp admission_error_class(_), do: :worker_start_failed
 
   def child_spec(opts) do
     %{
@@ -284,6 +441,11 @@ defmodule LemonGateway.ThreadWorker do
 
   @impl true
   def terminate(_reason, state) do
+    # A normal DOWN can reach a submitting caller before Registry's monitor
+    # cleanup. Remove our name synchronously before retiring, so a definitely
+    # rejected enqueue resolves a fresh worker rather than this dead mailbox.
+    Registry.unregister(LemonGateway.ThreadRegistry, state.thread_key)
+
     if state.slot_pending, do: safe_cancel_slot_request(state.slot_request_token)
 
     Introspection.record(

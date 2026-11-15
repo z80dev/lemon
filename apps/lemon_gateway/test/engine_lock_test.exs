@@ -745,14 +745,8 @@ defmodule LemonGateway.EngineLockTest do
       ref = Process.monitor(waiter)
       Process.exit(waiter, :kill)
 
-      # Note: The current implementation doesn't monitor waiters,
-      # so the waiter stays in queue until timeout or lock release.
-      # This test documents current behavior.
       assert_receive {:DOWN, ^ref, :process, ^waiter, _}
-
-      state = :sys.get_state(lock)
-      # Waiter is still in queue (current behavior)
-      assert :queue.len(Map.get(state.waiters, :key1)) == 1
+      assert_eventually(fn -> waiter_count(lock, :key1) == 0 end)
     end
   end
 
@@ -830,45 +824,19 @@ defmodule LemonGateway.EngineLockTest do
     end
   end
 
-  describe "unit tests - stale lock reclamation" do
-    setup context do
-      context
-      |> Map.put(:engine_lock_opts, %{max_lock_age_ms: 120, reap_interval_ms: 20})
-      |> start_engine_lock()
+  describe "Registry ownership" do
+    test "the acquiring process holds the unique name and releases it explicitly" do
+      key = {:registry_owner, make_ref()}
+      assert {:ok, release} = LemonGateway.EngineLock.acquire(key)
+      assert Registry.lookup(LemonGateway.RunRegistry, {:engine_session, key}) == [{self(), nil}]
+      release.()
+      assert Registry.lookup(LemonGateway.RunRegistry, {:engine_session, key}) == []
     end
 
-    test "does not transfer an over-age lock while its owner is alive", %{lock: lock} do
-      handler_id = "engine-lock-over-age-#{System.unique_integer([:positive])}"
-
-      :ok =
-        :telemetry.attach(
-          handler_id,
-          [:lemon, :gateway, :engine_lock, :over_age_live_owner],
-          fn event, measurements, metadata, test_pid ->
-            send(test_pid, {:engine_lock_telemetry, event, measurements, metadata})
-          end,
-          self()
-        )
-
-      on_exit(fn -> :telemetry.detach(handler_id) end)
-
-      {:ok, _release} = GenServer.call(lock, {:acquire, :stale_key, 5_000})
-
-      Process.sleep(150)
-
-      assert {:error, :timeout} = GenServer.call(lock, {:acquire, :stale_key, 60}, 1_000)
-
-      assert_receive {:engine_lock_telemetry,
-                      [:lemon, :gateway, :engine_lock, :over_age_live_owner],
-                      %{age_ms: age_ms, threshold_ms: 120}, %{thread_key: ":stale_key"}}
-
-      assert age_ms > 120
-    end
-
-    test "does not reclaim fresh locks before max age", %{lock: lock} do
-      {:ok, _release} = GenServer.call(lock, {:acquire, :fresh_key, 5_000})
-
-      assert {:error, :timeout} = GenServer.call(lock, {:acquire, :fresh_key, 30}, 500)
+    test "the waiter queue has no periodic sweep" do
+      state = :sys.get_state(LemonGateway.EngineLock)
+      refute Map.has_key?(state, :sweep_ref)
+      refute Map.has_key?(state, :reap_interval_ms)
     end
   end
 
@@ -990,6 +958,25 @@ defmodule LemonGateway.EngineLockTest do
   end
 
   setup do
+    running? =
+      Application.started_applications() |> Enum.any?(fn {app, _, _} -> app == :lemon_gateway end)
+
+    old_config = Application.fetch_env(:lemon_gateway, LemonGateway.Config)
+    old_executor = Application.fetch_env(:lemon_gateway, :executor)
+
+    on_exit(fn ->
+      Application.stop(:lemon_gateway)
+
+      for {key, value} <- [{LemonGateway.Config, old_config}, {:executor, old_executor}] do
+        case value do
+          {:ok, value} -> Application.put_env(:lemon_gateway, key, value)
+          :error -> Application.delete_env(:lemon_gateway, key)
+        end
+      end
+
+      if running?, do: Application.ensure_all_started(:lemon_gateway)
+    end)
+
     _ = Application.stop(:lemon_gateway)
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
@@ -1113,6 +1100,52 @@ defmodule LemonGateway.EngineLockTest do
     completions = collect_completions(2, 5_000)
 
     assert length(completions) == 2
+  end
+
+  test "start_child acknowledges a run waiting for a shared engine session" do
+    resume = %ResumeToken{engine: "lemon", value: "shared-#{System.unique_integer([:positive])}"}
+
+    first = %{
+      request("first-conversation", "first", resume, %{notify_pid: self(), gate: true})
+      | conversation_key: {:session, "first-conversation"}
+    }
+
+    second = %{
+      request("second-conversation", "second", resume, %{notify_pid: self(), gate: true})
+      | conversation_key: {:session, "second-conversation"}
+    }
+
+    {:ok, first_run} =
+      LemonGateway.RunSupervisor.start_run(%{
+        execution_request: first,
+        slot_ref: make_ref(),
+        worker_pid: self()
+      })
+
+    assert_receive {:fixture_running, "first", first_executor}
+
+    {elapsed, {:ok, second_run}} =
+      :timer.tc(fn ->
+        LemonGateway.RunSupervisor.start_run(%{
+          execution_request: second,
+          slot_ref: make_ref(),
+          worker_pid: self()
+        })
+      end)
+
+    assert elapsed < 100_000
+    key = {:resume, resume.value}
+    await_waiters(LemonGateway.EngineLock, key, 1)
+    assert Registry.lookup(LemonGateway.RunRegistry, {:engine_session, key}) == [{first_run, nil}]
+    send(first_executor, :proceed)
+    assert_receive {:fixture_running, "second", second_executor}, 1_000
+
+    assert Registry.lookup(LemonGateway.RunRegistry, {:engine_session, key}) == [
+             {second_run, nil}
+           ]
+
+    send(second_executor, :proceed)
+    assert length(collect_completions(2, 5_000)) == 2
   end
 
   test "lock is released when run process crashes" do

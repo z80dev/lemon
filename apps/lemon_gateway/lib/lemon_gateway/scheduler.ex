@@ -2,8 +2,8 @@ defmodule LemonGateway.Scheduler do
   @moduledoc """
   Concurrency-limited execution scheduler.
 
-  Manages a pool of execution slots (`max_concurrent_runs`) and routes incoming
-  execution requests to `ThreadWorker` processes keyed by conversation.
+  Manages a pool of execution slots (`max_concurrent_runs`). Submission resolves
+  and acknowledges its conversation worker in the caller, outside this mailbox.
   Production workers attach a generation token to slot requests. Duplicate or
   overlapping tokenized requests are ignored, and timed-out generations are
   explicitly expired before a worker requests another slot.
@@ -17,8 +17,6 @@ defmodule LemonGateway.Scheduler do
   # Timeout for slot requests - workers should not wait forever
   @slot_request_timeout_ms 30_000
 
-  # Timeout for worker startup operations
-  @worker_startup_timeout_ms 5_000
   @max_waiting_workers 1_024
 
   def start_link(_opts) do
@@ -26,11 +24,18 @@ defmodule LemonGateway.Scheduler do
   end
 
   @doc "Submits an execution request with a caller-fixed, nonempty run ID."
-  @spec submit_execution(ExecutionRequest.t()) :: :ok | {:error, :invalid_run_id}
+  @spec submit_execution(ExecutionRequest.t()) ::
+          :ok
+          | {:error,
+             :invalid_run_id
+             | :outcome_unknown
+             | :worker_unavailable
+             | :worker_startup_timeout
+             | :worker_start_failed}
   def submit_execution(%ExecutionRequest{run_id: run_id} = request)
       when is_binary(run_id) and run_id != "" do
     request = ExecutionRequest.ensure_conversation_key(request)
-    GenServer.cast(__MODULE__, {:submit_execution, request})
+    LemonGateway.ThreadWorker.submit(request)
   end
 
   def submit_execution(%ExecutionRequest{}), do: {:error, :invalid_run_id}
@@ -67,23 +72,46 @@ defmodule LemonGateway.Scheduler do
   @doc "Cancels a running execution by sending a cancel cast to the run process."
   @spec cancel(pid(), term()) :: :ok
   def cancel(run_pid, reason \\ :user_requested) do
-    if is_pid(run_pid) do
-      try do
-        if Process.alive?(run_pid) do
-          GenServer.cast(run_pid, {:cancel, reason})
-        end
-      catch
-        :exit, {:noproc, _} ->
-          Logger.debug("Scheduler.cancel: run_pid #{inspect(run_pid)} already dead")
-          :ok
-      end
+    if is_pid(run_pid), do: GenServer.cast(run_pid, {:cancel, reason})
+    :ok
+  end
+
+  @doc "Reads published slot counters without messaging the scheduler."
+  def stats do
+    case :ets.lookup(__MODULE__, :stats) do
+      [{:stats, stats}] -> {:ok, stats}
+      [] -> {:error, :not_running}
+    end
+  rescue
+    ArgumentError -> {:error, :not_running}
+  end
+
+  @impl true
+  def handle_cast(message, state), do: publish_result(dispatch_cast(message, state))
+
+  @impl true
+  def handle_info(message, state), do: publish_result(dispatch_info(message, state))
+
+  defp publish_result({:noreply, state} = result) do
+    if :ets.info(__MODULE__, :owner) == self() do
+      :ets.insert(
+        __MODULE__,
+        {:stats,
+         %{
+           in_flight: map_size(state.in_flight),
+           waitq: :queue.len(state.waitq),
+           max: state.max
+         }}
+      )
     end
 
-    :ok
+    result
   end
 
   @impl true
   def init(_opts) do
+    :ets.new(__MODULE__, [:named_table, :protected, read_concurrency: true])
+
     max =
       case LemonGateway.Config.get(:max_concurrent_runs) do
         n when is_integer(n) and n > 0 ->
@@ -93,6 +121,8 @@ defmodule LemonGateway.Scheduler do
           Logger.warning("Invalid max_concurrent_runs config, using default 10")
           10
       end
+
+    :ets.insert(__MODULE__, {:stats, %{in_flight: 0, waitq: 0, max: max}})
 
     # Schedule periodic cleanup of stale slot requests
     schedule_slot_timeout_check()
@@ -109,12 +139,7 @@ defmodule LemonGateway.Scheduler do
      }}
   end
 
-  @impl true
-  def handle_cast({:submit_execution, %ExecutionRequest{} = request}, state) do
-    {:noreply, schedule_submission(request, state)}
-  end
-
-  def handle_cast({:cancel_execution, run_id, reason}, state) do
+  defp dispatch_cast({:cancel_execution, run_id, reason}, state) do
     Registry.select(LemonGateway.ThreadRegistry, [
       {{:"$1", :"$2", :_}, [], [:"$2"]}
     ])
@@ -123,11 +148,11 @@ defmodule LemonGateway.Scheduler do
     {:noreply, state}
   end
 
-  def handle_cast({:request_slot, worker_pid, thread_key}, state) do
+  defp dispatch_cast({:request_slot, worker_pid, thread_key}, state) do
     grant_or_queue_slot(worker_pid, thread_key, nil, state)
   end
 
-  def handle_cast({:request_slot, worker_pid, thread_key, token}, state) do
+  defp dispatch_cast({:request_slot, worker_pid, thread_key, token}, state) do
     if tokenized_request_outstanding?(state, worker_pid) do
       Logger.debug(
         "Scheduler ignored overlapping slot request worker=#{inspect(worker_pid)} " <>
@@ -140,12 +165,12 @@ defmodule LemonGateway.Scheduler do
     end
   end
 
-  def handle_cast({:cancel_slot_request, worker_pid, token}, state) do
+  defp dispatch_cast({:cancel_slot_request, worker_pid, token}, state) do
     state = cancel_tokenized_request(state, worker_pid, token)
     {:noreply, grant_until_full(state)}
   end
 
-  def handle_cast({:release_slot, slot_ref}, state) do
+  defp dispatch_cast({:release_slot, slot_ref}, state) do
     {state, removed} = pop_in_flight(state, slot_ref)
     state = maybe_demonitor_worker(state, removed)
 
@@ -252,8 +277,7 @@ defmodule LemonGateway.Scheduler do
     end
   end
 
-  @impl true
-  def handle_info({:DOWN, mon_ref, :process, pid, reason}, state) do
+  defp dispatch_info({:DOWN, mon_ref, :process, pid, reason}, state) do
     Logger.debug("Scheduler: worker #{inspect(pid)} down with reason #{inspect(reason)}")
 
     state =
@@ -266,48 +290,16 @@ defmodule LemonGateway.Scheduler do
   end
 
   # Handle slot request timeout check
-  def handle_info(:slot_timeout_check, state) do
+  defp dispatch_info(:slot_timeout_check, state) do
     state = cleanup_stale_slot_requests(state)
     schedule_slot_timeout_check()
     {:noreply, state}
   end
 
   # Catch-all for unknown messages to prevent crashes
-  def handle_info(msg, state) do
+  defp dispatch_info(msg, state) do
     Logger.warning("Scheduler received unexpected message: #{inspect(msg)}")
     {:noreply, state}
-  end
-
-  defp schedule_submission(%ExecutionRequest{} = request, state) do
-    thread_key = thread_key(request)
-
-    Logger.debug(
-      "Scheduler submit run_id=#{inspect(request.run_id)} session_key=#{inspect(request.session_key)} " <>
-        "thread_key=#{inspect(thread_key)}"
-    )
-
-    Introspection.record(
-      :scheduled_job_triggered,
-      %{thread_key: inspect(thread_key)},
-      run_id: request.run_id,
-      session_key: request.session_key,
-      engine: "lemon",
-      provenance: :direct
-    )
-
-    case enqueue_request(thread_key, request) do
-      :ok ->
-        :ok
-
-      {:error, :outcome_unknown} ->
-        # A lost enqueue acknowledgement is not permission to repeat work.
-        Logger.warning("Scheduler enqueue outcome unknown run_id=#{inspect(request.run_id)}")
-
-      {:error, reason} ->
-        complete_rejected_submission(request, reason)
-    end
-
-    state
   end
 
   defp schedule_slot_timeout_check do
@@ -607,166 +599,6 @@ defmodule LemonGateway.Scheduler do
   catch
     _, _ -> :ok
   end
-
-  defp thread_key(%ExecutionRequest{conversation_key: conversation_key})
-       when not is_nil(conversation_key),
-       do: conversation_key
-
-  defp thread_key(%ExecutionRequest{run_id: run_id}) do
-    raise ArgumentError,
-          "execution request #{inspect(run_id)} is missing router-owned conversation_key"
-  end
-
-  defp enqueue_request(thread_key, request) do
-    case ensure_worker(thread_key) do
-      {:ok, worker_pid} ->
-        case safe_enqueue(worker_pid, request) do
-          :ok ->
-            :ok
-
-          {:error, :noproc} ->
-            # First attempt failed, try to create a new worker
-            Logger.warning(
-              "Scheduler: worker #{inspect(worker_pid)} died during first enqueue attempt, retrying"
-            )
-
-            case ensure_worker(thread_key) do
-              {:ok, worker_pid2} ->
-                case safe_enqueue(worker_pid2, request) do
-                  :ok ->
-                    :ok
-
-                  {:error, reason} = err ->
-                    Logger.error(
-                      "Scheduler: second enqueue attempt failed for thread_key=#{inspect(thread_key)}, reason=#{inspect(reason)}"
-                    )
-
-                    err
-                end
-
-              {:error, reason} = err ->
-                Logger.error(
-                  "Scheduler: failed to recreate worker for thread_key=#{inspect(thread_key)}, reason=#{inspect(reason)}"
-                )
-
-                err
-            end
-
-          {:error, reason} = err ->
-            Logger.error(
-              "Scheduler: enqueue failed for thread_key=#{inspect(thread_key)}, reason=#{inspect(reason)}"
-            )
-
-            err
-        end
-
-      {:error, reason} = err ->
-        Logger.error(
-          "Scheduler: failed to ensure worker for thread_key=#{inspect(thread_key)}, reason=#{inspect(reason)}"
-        )
-
-        err
-    end
-  end
-
-  defp ensure_worker(thread_key) do
-    case LemonGateway.ThreadRegistry.whereis(thread_key) do
-      nil ->
-        start_worker_with_timeout(thread_key)
-
-      pid when is_pid(pid) ->
-        if Process.alive?(pid) do
-          {:ok, pid}
-        else
-          # Stale registry entry, start fresh
-          Logger.warning(
-            "Scheduler: found dead worker in registry for thread_key=#{inspect(thread_key)}, starting fresh"
-          )
-
-          start_worker_with_timeout(thread_key)
-        end
-    end
-  end
-
-  defp start_worker_with_timeout(thread_key) do
-    # Use a task with timeout to avoid hanging on DynamicSupervisor
-    task =
-      Task.async(fn ->
-        DynamicSupervisor.start_child(
-          LemonGateway.ThreadWorkerSupervisor,
-          {LemonGateway.ThreadWorker, thread_key: thread_key}
-        )
-      end)
-
-    case Task.yield(task, @worker_startup_timeout_ms) || Task.shutdown(task) do
-      {:ok, {:ok, pid}} ->
-        {:ok, pid}
-
-      {:ok, {:error, {:already_started, pid}}} ->
-        {:ok, pid}
-
-      {:ok, {:error, _} = err} ->
-        err
-
-      nil ->
-        Logger.error("Scheduler: timeout starting worker for thread_key=#{inspect(thread_key)}")
-
-        {:error, :worker_startup_timeout}
-
-      {:exit, reason} ->
-        Logger.error(
-          "Scheduler: worker startup task exited for thread_key=#{inspect(thread_key)}, reason=#{inspect(reason)}"
-        )
-
-        {:error, {:worker_startup_exit, reason}}
-    end
-  end
-
-  defp safe_enqueue(pid, request) when is_pid(pid) do
-    GenServer.call(pid, {:enqueue, request}, 65_000)
-  catch
-    :exit, {:noproc, _} -> {:error, :noproc}
-    # Empty workers stop normally between the registry lookup and this call.
-    # Calls cannot be handled after that stop, and a handled enqueue replies
-    # before a normal DOWN signal, so this is a definite pre-enqueue rejection.
-    :exit, {:normal, _} -> {:error, :noproc}
-    :exit, _ -> {:error, :outcome_unknown}
-  end
-
-  defp complete_rejected_submission(request, reason) do
-    completed =
-      LemonGateway.Event.completed(%{
-        engine: "lemon",
-        ok: false,
-        answer: "",
-        error: %{type: :execution_admission_failed, reason: admission_error_class(reason)},
-        run_id: request.run_id,
-        session_key: request.session_key
-      })
-
-    :ok =
-      LemonCore.RunStore.finalize(request.run_id, %{
-        completed: completed,
-        session_key: request.session_key,
-        run_id: request.run_id,
-        prompt: request.prompt,
-        duration_ms: 0,
-        engine: "lemon",
-        meta: request.meta
-      })
-
-    LemonCore.Bus.broadcast(
-      LemonCore.Bus.run_topic(request.run_id),
-      LemonCore.Event.new(
-        :run_completed,
-        LemonCore.Events.RunCompleted.new(%{completed: completed, duration_ms: 0}),
-        %{run_id: request.run_id, session_key: request.session_key, synthetic: true}
-      )
-    )
-  end
-
-  defp admission_error_class(reason) when is_atom(reason), do: reason
-  defp admission_error_class(_), do: :worker_start_failed
 
   defp slot_request_times(state), do: Map.get(state, :slot_request_times, %{})
 end
