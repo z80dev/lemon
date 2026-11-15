@@ -36,7 +36,7 @@ defmodule LemonCore.RunRequestTest do
           "model" => "openai:gpt-4.1",
           "meta" => %{"foo" => "bar"},
           "cwd" => "/tmp",
-          "tool_policy" => %{"sandbox" => true}
+          "tool_policy" => %{"deny" => ["bash"]}
         })
 
       assert request.origin == :control_plane
@@ -48,7 +48,7 @@ defmodule LemonCore.RunRequestTest do
       assert request.resume == nil
       assert request.meta == %{"foo" => "bar"}
       assert request.cwd == "/tmp"
-      assert request.tool_policy == %{"sandbox" => true}
+      assert request.tool_policy == %{"deny" => ["bash"]}
     end
 
     test "normalizes struct defaults while preserving malformed supplied authority" do
