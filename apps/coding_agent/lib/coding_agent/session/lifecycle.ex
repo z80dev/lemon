@@ -35,6 +35,14 @@ defmodule CodingAgent.Session.Lifecycle do
   alias LemonAgent.ModelRuntime.StreamOptions
   alias LemonAgent.ModelRuntime.ModelRouting
 
+  defp emit_start_stage(stage, started, session_id) do
+    :telemetry.execute(
+      [:coding_agent, :session, :start_stage],
+      %{duration: System.monotonic_time() - started},
+      %{stage: stage, session_id: session_id}
+    )
+  end
+
   @fence_entry WorkspaceReads.fence_entry_type()
 
   @spec initialize(keyword(), pid()) ::
@@ -70,8 +78,10 @@ defmodule CodingAgent.Session.Lifecycle do
 
     Workspace.ensure_workspace(workspace_dir: workspace_dir)
 
+    stage_started = System.monotonic_time()
     session_manager = load_or_create_session(cwd, session_file, session_id, parent_session)
     cwd = session_manager.header.cwd
+    emit_start_stage(:journal_load, stage_started, session_manager.header.id)
 
     session_manager = seed_workspace_read_fence(session_manager, opts)
 
@@ -256,6 +266,8 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.put(:wasm_status, wasm_boot.wasm_status)
       |> Keyword.put(:plan_gate, plan_gate)
 
+    stage_started = System.monotonic_time()
+
     lifecycle =
       ExtensionLifecycle.initialize(
         cwd: cwd,
@@ -295,11 +307,17 @@ defmodule CodingAgent.Session.Lifecycle do
       )
 
     tool_names = Enum.map(tools, & &1.name)
+    emit_start_stage(:tool_registry, stage_started, session_manager.header.id)
 
     # Captured once: the date and git snapshot stay fixed for the session so
     # every prompt refresh reproduces the same bytes (prompt-cache stable).
+    stage_started = System.monotonic_time()
+
     prompt_environment =
       if is_nil(context_snapshot), do: SystemPromptEnvironment.capture(cwd), else: nil
+
+    emit_start_stage(:environment_capture, stage_started, session_manager.header.id)
+    stage_started = System.monotonic_time()
 
     # Labelled pieces of the composed prompt, kept for context-usage accounting.
     # A frozen snapshot prompt has no known structure and counts as one block.
@@ -344,6 +362,8 @@ defmodule CodingAgent.Session.Lifecycle do
 
     system_prompt =
       Planning.system_prompt(base_system_prompt, session_manager)
+
+    emit_start_stage(:prompt_composition, stage_started, session_manager.header.id)
 
     convert_to_llm = &CodingAgent.Messages.to_llm/1
 

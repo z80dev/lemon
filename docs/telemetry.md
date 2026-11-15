@@ -18,6 +18,32 @@ Two layers coexist and are easy to confuse:
   queryable envelope written through `LemonCore.Store`. It has its own event taxonomy and is
   *not* derived from the telemetry events here.
 
+## Session-start latency stages
+
+`[:coding_agent, :session, :start_stage]` is emitted synchronously by
+`CodingAgent.Session.Lifecycle.initialize/2` after each measured initialization
+stage. Measurements are `%{duration: native_time_units}`; convert with
+`System.convert_time_unit(duration, :native, :microsecond)` before reporting.
+Metadata contains only `session_id` and a code-authored `stage` atom:
+`:journal_load`, `:tool_registry`, `:environment_capture`, or
+`:prompt_composition`. No cwd, prompt, tool arguments, environment values or
+credentials are included. Each stage uses two monotonic clock reads and one
+telemetry dispatch, without a closure, task, write or persistent observation.
+
+Journal timing includes load/create and header resolution. Tool timing includes
+extension lifecycle initialization and planning-tool construction. Environment
+timing includes the frozen-snapshot bypass; prompt timing includes sections,
+joining and planning composition. These are completed-stage observations, not
+start/stop spans: an interrupted stage emits nothing. They measure session
+creation, not every prompt refresh when a session is reused. Settings/model
+resolution, execution-context writes and later agent initialization remain
+outside these four stage durations.
+
+The [offline latency lane](benchmarks/latency-sla.md) consumes these events and
+the existing gateway run `:start`, `:first_token` and `:stop` events. Consumers
+must keep synchronous handlers cheap; the benchmark only sends bounded timing
+messages to its owner and retains no session content.
+
 ## Conventions
 
 ### Naming
