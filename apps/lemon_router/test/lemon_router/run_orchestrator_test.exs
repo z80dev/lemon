@@ -1739,7 +1739,6 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert opts[:session_key] == session_key
       assert opts[:conversation_key] == conversation_key
       assert opts[:coordinator_pid] == self()
-      assert opts[:manage_session_registry?] == false
       assert opts[:custom] == :value
       assert opts[:execution_request].run_id == run_id
     end
@@ -1802,7 +1801,6 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert_receive {:captured_run_opts, opts}
       assert opts[:custom] == :caller
       assert opts[:conversation_key] == conversation_key
-      assert opts[:manage_session_registry?] == false
       assert %{active: 1} = DynamicSupervisor.count_children(caller_run_supervisor)
       assert %{active: 0} = DynamicSupervisor.count_children(orchestrator_run_supervisor)
     end

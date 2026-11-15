@@ -170,9 +170,11 @@ concurrent or crash-replayed copies of the same request resolve to the original
 active, queued, or completed run, while reuse for another session or payload is
 rejected. A pending claim is reconciled against surviving `RunRegistry` state
 and the durable terminal `RunStore` record before any retry can enqueue work.
-`SessionRegistry` remains an ephemeral read model: submission reconstructs an
-idle coordinator from surviving authoritative run processes after a registry
-restart so the one-run-per-session rule still holds.
+`SessionRegistry` is the unique, lifecycle-owned session index: each `RunProcess`
+registers its own key during initialization and process death releases it.
+A restarted coordinator discovers and monitors the surviving owner through this
+Registry before accepting more work. Registry loss follows OTP's links to its
+registered owners rather than leaving independent runs behind.
 
 ### Failure boundaries
 
