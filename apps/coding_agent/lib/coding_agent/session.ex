@@ -423,12 +423,16 @@ defmodule CodingAgent.Session do
     alias LemonCore.{ExecutionContext, ToolPolicy}
 
     opts =
-      if Keyword.has_key?(opts, :loaded_session) or is_nil(opts[:session_file]) do
+      if is_nil(opts[:session_file]) or
+           CodingAgent.SessionManager.current_snapshot?(
+             opts[:loaded_session],
+             opts[:session_file]
+           ) do
         opts
       else
         case CodingAgent.SessionManager.load_from_file(opts[:session_file]) do
           {:ok, session} -> Keyword.put(opts, :loaded_session, session)
-          {:error, _} -> opts
+          {:error, _} -> Keyword.delete(opts, :loaded_session)
         end
       end
 

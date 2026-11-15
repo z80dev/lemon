@@ -282,7 +282,8 @@ defmodule CodingAgent.SessionManager do
               leaf_id: nil,
               file_path: nil,
               append_device: nil,
-              needs_snapshot: true
+              needs_snapshot: true,
+              source_revision: nil
   end
 
   # ============================================================================
@@ -323,7 +324,8 @@ defmodule CodingAgent.SessionManager do
   """
   @spec load_from_file(String.t()) :: {:ok, Session.t()} | {:error, term()}
   def load_from_file(path) do
-    with {:ok, content} <- File.read(path),
+    with {:ok, stat} <- File.stat(path),
+         {:ok, content} <- File.read(path),
          {:ok, {header, raw_entries}} <- parse_jsonl(content),
          {header, entries} <- restore_checkpoints(header, raw_entries),
          {:ok, migrated_entries} <- migrate_to_current_version(header.version, entries) do
@@ -341,11 +343,26 @@ defmodule CodingAgent.SessionManager do
          by_id: by_id,
          leaf_id: leaf_id,
          file_path: path,
+         source_revision: file_revision(stat),
          needs_snapshot:
            header.version != @current_version or not String.ends_with?(content, "\n")
        }}
     end
   end
+
+  @doc false
+  def current_snapshot?(%Session{file_path: path, source_revision: revision}, path)
+      when not is_nil(revision) do
+    case File.stat(path) do
+      {:ok, stat} -> file_revision(stat) == revision
+      {:error, _} -> false
+    end
+  end
+
+  def current_snapshot?(_session, _path), do: false
+
+  defp file_revision(stat),
+    do: {stat.major_device, stat.minor_device, stat.inode, stat.size, stat.mtime, stat.ctime}
 
   @doc """
   Write session to JSONL file using atomic replace semantics.
@@ -731,7 +748,26 @@ defmodule CodingAgent.SessionManager do
           raise File.Error, reason: reason, action: "checkpoint session", path: session.file_path
       end
     else
-      %{session | needs_snapshot: true}
+      if session.file_path do
+        live = persist(session, session.file_path)
+
+        try do
+          case checkpoint(live) do
+            :ok ->
+              %{live | append_device: nil}
+
+            {:error, reason} ->
+              raise File.Error,
+                reason: reason,
+                action: "checkpoint session",
+                path: session.file_path
+          end
+        after
+          close(live)
+        end
+      else
+        %{session | needs_snapshot: true}
+      end
     end
   end
 

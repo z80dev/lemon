@@ -340,6 +340,18 @@ defmodule CodingAgent.Session.PlanningTest do
               blocks when is_list(blocks) -> Enum.map_join(blocks, "", &Map.fetch!(&1, :text))
             end
 
+          placeholder =
+            case Regex.run(~r/\[lemon:recalled-context id=([0-9a-f]{32})\]/, placeholder) do
+              [_, marker] ->
+                Session.strip_recalled_context(
+                  %LemonAi.Types.UserMessage{content: placeholder},
+                  marker
+                ).content
+
+              nil ->
+                placeholder
+            end
+
           tool_use("bounded-#{call}", "tool_invoke", %{
             "name" => "write",
             "args" => %{

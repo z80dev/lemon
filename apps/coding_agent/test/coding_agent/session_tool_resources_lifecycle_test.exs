@@ -125,10 +125,13 @@ defmodule CodingAgent.SessionToolResourcesLifecycleTest do
       server = bind_debug_resource(session, id, tmp_dir)
       ref = Process.monitor(server)
 
-      # A non-empty directory at the session path makes the atomic save fail.
-      path = Session.get_state(session).session_file
-      File.rm!(path)
-      File.mkdir_p!(Path.join(path, "blocker"))
+      # A read-only raw descriptor makes the turn-end checkpoint append fail.
+      :sys.replace_state(session, fn state ->
+        :ok = CodingAgent.SessionManager.close(state.session_manager)
+        {:ok, device} = :file.open(state.session_file, [:read, :raw, :binary])
+        %{state | session_manager: %{state.session_manager | append_device: device}}
+      end)
+
       assert {:error, _reason} = Presentation.safe_save_session(session)
 
       Presentation.finalize_session(%{session: session, session_id: id}, true)
