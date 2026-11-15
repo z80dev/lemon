@@ -410,6 +410,30 @@ defmodule CodingAgent.SessionManager do
     end
   end
 
+  @doc "Reuses the journaled environment, refreshing only for a new session or cwd."
+  def capture_environment(
+        session,
+        cwd,
+        capture \\ &CodingAgent.SystemPrompt.Environment.capture/1
+      ) do
+    cwd = Path.expand(cwd)
+
+    latest =
+      Enum.find(Enum.reverse(entries(session)), fn entry ->
+        entry.type == :custom and entry.custom_type == "lemon.prompt_environment"
+      end)
+
+    case latest do
+      %{data: %{"cwd" => ^cwd, "text" => text}} when is_binary(text) ->
+        {session, text}
+
+      _ ->
+        text = capture.(cwd)
+        entry = SessionEntry.custom("lemon.prompt_environment", %{"cwd" => cwd, "text" => text})
+        {append_entry(session, entry), text}
+    end
+  end
+
   @doc """
   Fork the selected branch into an independent session file, preserving model,
   thinking level and compaction history. A separate cumulative-spend snapshot

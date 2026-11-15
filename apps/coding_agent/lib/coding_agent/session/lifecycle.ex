@@ -27,7 +27,6 @@ defmodule CodingAgent.Session.Lifecycle do
   alias CodingAgent.Session.Planning
   alias CodingAgent.SessionManager
   alias CodingAgent.SettingsManager
-  alias CodingAgent.SystemPrompt.Environment, as: SystemPromptEnvironment
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools.Task.Params
   alias CodingAgent.Workspace
@@ -296,10 +295,14 @@ defmodule CodingAgent.Session.Lifecycle do
 
     tool_names = Enum.map(tools, & &1.name)
 
-    # Captured once: the date and git snapshot stay fixed for the session so
-    # every prompt refresh reproduces the same bytes (prompt-cache stable).
-    prompt_environment =
-      if is_nil(context_snapshot), do: SystemPromptEnvironment.capture(cwd), else: nil
+    # Durable orientation survives process retirement between turns. Frozen
+    # side queries neither capture nor journal new environment context.
+    {session_manager, prompt_environment} =
+      if is_nil(context_snapshot) do
+        SessionManager.capture_environment(session_manager, cwd)
+      else
+        {session_manager, nil}
+      end
 
     # Labelled pieces of the composed prompt, kept for context-usage accounting.
     # A frozen snapshot prompt has no known structure and counts as one block.
