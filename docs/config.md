@@ -933,10 +933,11 @@ capacity and live owner monitors before permitting a new admission.
 Cleared identity tombstones and historical unknown receipts do not expire.
 The default finished-process TTL (86,400 seconds) and cleanup interval
 (300 seconds) do not bound ledger rows; recovery, count and artifact scans grow
-with that history. Observable retained local workloads reconcile after 100 ms
-plus scan cost using a system-wide `ps` snapshot. Ownership-lost and nonlocal
-unknown workloads do not schedule this polling. These are local containment
-contracts, not proof of remote workload termination.
+with that history. Local workload liveness is reconciled on the root Port's
+exit-status event, explicit cancellation and boot recovery, not a periodic
+system-wide `ps` timer. Retained unknown workloads remain charged until verified
+termination. These are local containment contracts, not proof of remote workload
+termination.
 
 The internal evaluation harness can additionally opt into
 `LemonCore.NativeProcess` tracking by calling `configure!/1` with a fresh private

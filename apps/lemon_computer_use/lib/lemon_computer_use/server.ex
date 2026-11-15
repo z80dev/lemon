@@ -24,6 +24,11 @@ defmodule LemonComputerUse.Server do
   in a loop: a bridge exit fails the in-flight and queued operations, and the
   next operation starts a fresh bridge. A call that was in flight when the
   bridge died may already have acted on the desktop; the error says so.
+
+  Shutdown and bridge exit synchronously terminate the bridge's entire process
+  group through `LemonCore.ProcessGroup.terminate/2`, with a three-second TERM
+  grace before KILL, before closing the port or starting another bridge. Cleanup
+  never schedules a later signal against a potentially recycled OS pid.
   """
 
   use GenServer
@@ -653,6 +658,8 @@ defmodule LemonComputerUse.Server do
   end
 
   defp bridge_down(state, reason) do
+    stop_bridge(state)
+
     if state.current do
       case state.current.op do
         {:call, call} -> complete(state, {:call, call}, {:error, reason})
@@ -693,18 +700,14 @@ defmodule LemonComputerUse.Server do
   end
 
   defp stop_bridge(%{port: port, os_pid: os_pid}) when is_port(port) do
-    # The bridge closes LCU and exits on stdin EOF; make sure it does.
+    if is_integer(os_pid) do
+      LemonCore.ProcessGroup.terminate(os_pid, grace_ms: @kill_grace_ms)
+    end
+
     try do
       Port.close(port)
     catch
       _, _ -> :ok
-    end
-
-    if os_pid do
-      spawn(fn ->
-        Process.sleep(@kill_grace_ms)
-        System.cmd("kill", ["-TERM", Integer.to_string(os_pid)], stderr_to_stdout: true)
-      end)
     end
 
     :ok

@@ -55,7 +55,7 @@ defmodule CodingAgent.ProcessAdmissionTest do
             {command, _} = System.cmd("ps", ["-p", Integer.to_string(os_pid), "-o", "command="])
 
             if String.contains?(command, directory),
-              do: CodingAgent.BashExecutor.kill_process_tree(os_pid)
+              do: LemonCore.ProcessGroup.terminate(os_pid, signal: :sigkill)
 
           _ ->
             :ok
@@ -604,8 +604,7 @@ defmodule CodingAgent.ProcessAdmissionTest do
     assert File.read!(counter) == "x"
   end
 
-  test "live process cap is held after handles return and while cancellation is unconfirmed",
-       context do
+  test "TERM cancellation escalates before releasing capacity to a queued launch", context do
     {a, _, _, _} = start_blocking(context, "cap-a")
     {b, _, _, _} = start_blocking(context, "cap-b")
     {c, counter, _} = enqueue(context, "cap-c")
@@ -613,12 +612,7 @@ defmodule CodingAgent.ProcessAdmissionTest do
     assert ProcessManager.admission_counts().occupied == 2
     refute File.exists?(counter)
     assert :ok = ProcessManager.kill(a, :sigterm)
-    assert {:ok, %{status: :killing}} = ProcessManager.poll(a, lines: 0)
-    assert ProcessManager.admission_counts().occupied == 2
-    assert {:ok, %{classification: :queued}} = ProcessManager.receipt(c, "admission-test")
-    refute File.exists?(counter)
-
-    terminate(a)
+    assert_receive {:external_terminated, ^a}, 5_000
     accept_queued(c)
     assert File.read!(counter) == "x"
     assert ProcessManager.admission_counts().occupied == 2
@@ -626,88 +620,82 @@ defmodule CodingAgent.ProcessAdmissionTest do
     terminate(c)
   end
 
-  test "a root exit cannot free capacity while its TERM-ignoring child still owns the group",
+  test "a natural root exit cannot free capacity while its TERM-ignoring child owns the group",
        context do
-    for mode <- [:sigterm, :natural] do
-      suffix = "surviving-child-#{mode}"
-      {id, counter, opts} = launch(context, suffix)
-      ready_fifo = Path.join(context.directory, "#{suffix}.fifo")
-      release_fifo = Path.join(context.directory, "#{suffix}.release.fifo")
-      {_, 0} = System.cmd("mkfifo", [release_fifo])
-      parent = self()
+    suffix = "surviving-child-natural"
+    {id, counter, opts} = launch(context, suffix)
+    ready_fifo = Path.join(context.directory, "#{suffix}.fifo")
+    release_fifo = Path.join(context.directory, "#{suffix}.release.fifo")
+    {_, 0} = System.cmd("mkfifo", [release_fifo])
+    parent = self()
 
-      release_child = fn ->
-        # O_RDWR also makes failure cleanup finite if no child was started.
-        {:ok, unblock} = File.open(release_fifo, [:read, :write])
+    release_child = fn ->
+      # O_RDWR also makes failure cleanup finite if no child was started.
+      {:ok, unblock} = File.open(release_fifo, [:read, :write])
 
-        {_, 0} =
-          System.cmd("/bin/sh", [
-            "-c",
-            "printf 'release\\n' > \"$1\"",
-            "lemon-fixture",
-            release_fifo
-          ])
+      {_, 0} =
+        System.cmd("/bin/sh", [
+          "-c",
+          "printf 'release\\n' > \"$1\"",
+          "lemon-fixture",
+          release_fifo
+        ])
 
-        File.close(unblock)
-      end
-
-      on_exit(release_child)
-
-      command =
-        "trap 'exit 0' TERM; " <>
-          "(trap '' TERM; printf x >> '#{counter}'; " <>
-          "printf 'started\\n' > '#{ready_fifo}'; read -r release < '#{release_fifo}') " <>
-          "</dev/null >/dev/null 2>&1 & read -r release"
-
-      opts =
-        opts
-        |> Keyword.put(:command, command)
-        |> Keyword.put(:on_root_exit, fn identity -> send(parent, {:root_exited, identity}) end)
-
-      caller = Task.Supervisor.async_nolink(context.task_sup, fn -> ProcessManager.exec(opts) end)
-      session = boundary(id)
-      send(session, :release_start)
-      assert {:ok, ^id} = Task.await(caller)
-      {b, _, _, _} = start_blocking(context, "#{suffix}-other")
-      {c, queued_counter, _} = enqueue(context, "#{suffix}-queued")
-
-      case mode do
-        :sigterm -> assert :ok = ProcessManager.kill(id, :sigterm)
-        :natural -> assert :ok = ProcessManager.write(id, "release\n")
-      end
-
-      # This barrier is after the real Port exit and store reconciliation, not
-      # a timing guess or a fabricated child-termination event.
-      assert_receive {:root_exited, ^id}, 5_000
-
-      assert {:ok, %{status: :lost, root_exited: true, capacity_held: true}, _} =
-               ProcessStore.get(id)
-
-      assert {:ok, %{classification: :outcome_unknown}} =
-               ProcessManager.receipt(id, "admission-test")
-
-      assert ProcessManager.admission_counts().occupied == 2
-      refute File.exists?(queued_counter)
-      assert File.read!(counter) == "x"
-
-      {d, rejected_counter, rejected_opts} = launch(context, "#{suffix}-overflow")
-      assert {:error, {:rejected, ^d, :overloaded}} = ProcessManager.exec(rejected_opts)
-      refute File.exists?(rejected_counter)
-
-      # Both natural and signaled root exits must retain a publicly cancellable
-      # owned group. The fixture FIFO is failure cleanup only, not the repair.
-      terminate(id)
-
-      accept_queued(c)
-      assert File.read!(queued_counter) == "x"
-      assert ProcessManager.admission_counts().occupied == 2
-      assert :ok = ProcessStore.confirm_termination(id)
-      send(session, :reconcile_workload)
-      assert ProcessManager.admission_counts().occupied == 2
-      terminate(b)
-      terminate(c)
-      assert ProcessManager.admission_counts().occupied == 0
+      File.close(unblock)
     end
+
+    on_exit(release_child)
+
+    command =
+      "trap 'exit 0' TERM; " <>
+        "(trap '' TERM; printf x >> '#{counter}'; " <>
+        "printf 'started\\n' > '#{ready_fifo}'; read -r release < '#{release_fifo}') " <>
+        "</dev/null >/dev/null 2>&1 & read -r release"
+
+    opts =
+      opts
+      |> Keyword.put(:command, command)
+      |> Keyword.put(:on_root_exit, fn identity -> send(parent, {:root_exited, identity}) end)
+
+    caller = Task.Supervisor.async_nolink(context.task_sup, fn -> ProcessManager.exec(opts) end)
+    session = boundary(id)
+    send(session, :release_start)
+    assert {:ok, ^id} = Task.await(caller)
+    {b, _, _, _} = start_blocking(context, "#{suffix}-other")
+    {c, queued_counter, _} = enqueue(context, "#{suffix}-queued")
+    assert :ok = ProcessManager.write(id, "release\n")
+
+    # This barrier follows the real Port exit and store reconciliation, not
+    # a timing guess or a fabricated child-termination event.
+    assert_receive {:root_exited, ^id}, 5_000
+
+    assert {:ok, %{status: :lost, root_exited: true, capacity_held: true}, _} =
+             ProcessStore.get(id)
+
+    assert {:ok, %{classification: :outcome_unknown}} =
+             ProcessManager.receipt(id, "admission-test")
+
+    assert ProcessManager.admission_counts().occupied == 2
+    refute File.exists?(queued_counter)
+    assert File.read!(counter) == "x"
+
+    {d, rejected_counter, rejected_opts} = launch(context, "#{suffix}-overflow")
+    assert {:error, {:rejected, ^d, :overloaded}} = ProcessManager.exec(rejected_opts)
+    refute File.exists?(rejected_counter)
+
+    # A natural root exit retains a publicly cancellable owned group.
+    # The fixture FIFO is failure cleanup only, not the repair.
+    terminate(id)
+
+    accept_queued(c)
+    assert File.read!(queued_counter) == "x"
+    assert ProcessManager.admission_counts().occupied == 2
+    assert :ok = ProcessStore.confirm_termination(id)
+    send(session, :reconcile_workload)
+    assert ProcessManager.admission_counts().occupied == 2
+    terminate(b)
+    terminate(c)
+    assert ProcessManager.admission_counts().occupied == 0
   end
 
   test "lost group ownership cannot signal a recycled identity or release its charge", context do
@@ -736,7 +724,9 @@ defmodule CodingAgent.ProcessAdmissionTest do
     assert {:ok, %{workload_identity: %{ownership_lost: true}}, _} = ProcessStore.get(id)
 
     # Only independently retained, matching ownership evidence can clean up.
-    assert {:ok, _} = LemonCore.ProcessGroup.signal_workload_group(original_identity, :sigkill)
+    assert {:terminated, _} =
+             LemonCore.ProcessGroup.terminate(original_identity, signal: :sigkill)
+
     assert_receive {:root_exited, ^id}, 5_000
     assert :terminated = LemonCore.ProcessGroup.workload_group_status(original_identity, true)
     assert ProcessManager.admission_counts().occupied == 1

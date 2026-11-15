@@ -632,8 +632,8 @@ Unknown Bash admissions are structured error receipts carrying their original
 process identity; the tool card and compact shelf say `background outcome
 unknown`, never successful start or failed start. Late/reopened durable storage
 restores occupied capacity before admission. Cleared identity tombstones and
-historical unknown receipts have no TTL; local retained groups incur a
-system-wide `ps` reconciliation scan after 100 ms plus scan cost.
+historical unknown receipts have no TTL. Local groups reconcile on Port exit,
+explicit cancellation and boot recovery; no periodic host `ps` scan is scheduled.
 
 Hermes-compatible background commands use the same native runtime. Call
 `CodingAgent.BackgroundRun.start/2` to receive a durable id immediately, then

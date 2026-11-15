@@ -15,15 +15,16 @@ defmodule CodingAgent.Debug.Client do
 
   The session owner handles `startDebugging`; other reverse requests are rejected.
 
-  The client links to its owner and traps exits, so the adapter's whole OS
-  process tree (adapter, debug server, debuggee) is killed when the owner dies,
-  when `stop/1` is called, or when the client itself crashes.
+  The client links to its owner and traps exits, so the adapter's OS process
+  group (adapter, debug server, debuggee) is killed when the owner dies, when
+  `stop/1` is called, or when the client itself crashes. Descendants that escape
+  that group are not contained by this cleanup.
   """
 
   use GenServer
 
-  alias CodingAgent.BashExecutor
   alias CodingAgent.Debug.Protocol
+  alias LemonCore.ProcessGroup
 
   @socket_ready_timeout_ms 10_000
   @max_stderr_bytes 8_192
@@ -200,7 +201,7 @@ defmodule CodingAgent.Debug.Client do
 
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
     # Unframed bytes still buffered at exit are diagnostics, not protocol.
-    if state.os_pid, do: BashExecutor.kill_process_tree(state.os_pid)
+    if state.os_pid, do: ProcessGroup.terminate(state.os_pid, signal: :sigkill)
     stderr = String.trim(bounded(state.stderr <> state.buffer))
 
     reason =
@@ -473,7 +474,7 @@ defmodule CodingAgent.Debug.Client do
   # ── Teardown ─────────────────────────────────────────────────────────────
 
   defp shutdown(state) do
-    if state.os_pid, do: BashExecutor.kill_process_tree(state.os_pid)
+    if state.os_pid, do: ProcessGroup.terminate(state.os_pid, signal: :sigkill)
     if state.socket, do: :gen_tcp.close(state.socket)
 
     if is_port(state.port) do
@@ -488,7 +489,7 @@ defmodule CodingAgent.Debug.Client do
   defp kill_port_tree(port) do
     case port_os_pid(port) do
       nil -> :ok
-      os_pid -> BashExecutor.kill_process_tree(os_pid)
+      os_pid -> ProcessGroup.terminate(os_pid, signal: :sigkill)
     end
 
     try do

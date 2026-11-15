@@ -294,6 +294,26 @@ defmodule LemonComputerUse.ServerTest do
     assert %{tools: [_ | _]} = Server.cached_catalog()
   end
 
+  test "stop synchronously kills the bridge group including orphaned grandchildren", %{
+    server: server
+  } do
+    pids = start_process_tree()
+
+    :ok = GenServer.stop(server)
+
+    assert_processes_stopped(pids)
+  end
+
+  test "bridge exit kills orphaned grandchildren before reporting an unknown outcome" do
+    pids = start_process_tree()
+
+    assert {:error, {:bridge_exited, 3}} =
+             Server.call("js", %{"code" => "crash"}, %{session_id: "tree", turn_id: "tree"})
+
+    assert_processes_stopped(pids)
+    assert Server.status().bridge == :stopped
+  end
+
   @tag connect_fail: true
   test "an unavailable runtime yields an explanatory tool and error result" do
     js = Js.tool("/tmp", opts())
@@ -316,5 +336,38 @@ defmodule LemonComputerUse.ServerTest do
     assert {:error, message} = run(js, %{"code" => "text:x"})
     assert message =~ "needs a Lemon session"
     refute Enum.any?(requests(log), &(&1["type"] == "call"))
+  end
+
+  defp start_process_tree do
+    assert {:ok, %{"content" => [%{"text" => encoded}]}} =
+             Server.call("js", %{"code" => "process_tree"}, %{session_id: "tree", turn_id: "tree"})
+
+    [root, grandchild] = pids = Jason.decode!(encoded)
+    assert root > 1
+    assert grandchild > 1
+
+    on_exit(fn ->
+      if os_process_alive?(grandchild), do: LemonCore.ProcessGroup.terminate(root, grace_ms: 0)
+    end)
+
+    assert Enum.all?(pids, &os_process_alive?/1)
+    pids
+  end
+
+  defp assert_processes_stopped(pids) do
+    Enum.each(pids, fn pid ->
+      refute os_process_alive?(pid), "OS process #{pid} survived cleanup"
+    end)
+  end
+
+  defp os_process_alive?(pid) do
+    case System.cmd("ps", ["-o", "stat=", "-p", to_string(pid)], stderr_to_stdout: true) do
+      {status, 0} ->
+        status = String.trim(status)
+        status != "" and not String.starts_with?(status, "Z")
+
+      {_output, _status} ->
+        false
+    end
   end
 end
