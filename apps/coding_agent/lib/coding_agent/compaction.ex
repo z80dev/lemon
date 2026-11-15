@@ -1169,7 +1169,7 @@ defmodule CodingAgent.Compaction do
     end
   end
 
-  defp do_compact(session, model, keep_recent_tokens, opts, signal) do
+  defp do_compact(%SessionManager.Session{} = session, model, keep_recent_tokens, opts, signal) do
     # Get the current branch (path from root to current leaf)
     # Compaction should only consider entries on this branch, not other branches
     {branch, previous_compaction} = session |> SessionManager.pruned_branch() |> active_branch()

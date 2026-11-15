@@ -444,6 +444,9 @@ defmodule LemonAgent.Types do
     - `budget` - Budget state, including run totals when continuing a prompt
     - `stream_options` - Options for streaming requests
     - `stream_fn` - Custom stream function (defaults to LemonAi.stream_simple/3)
+    - `stream_rules` - Dormant rules, or a zero-arity resolver returning active rules
+    - `on_stream_rule` - Synchronous rule receipt/redirect callback; returns `:ok`
+      only after durable acceptance, or `{:error, :injection_limit}` when spent
     """
     @type convert_to_llm_fn ::
             ([LemonAgent.Types.agent_message()] ->
@@ -541,6 +544,8 @@ defmodule LemonAgent.Types do
               budget: nil,
               stream_options: %StreamOptions{},
               stream_options_model: nil,
+              stream_rules: [],
+              on_stream_rule: nil,
               stream_fn: nil
   end
 

@@ -511,6 +511,8 @@ defmodule LemonAgent.Agent do
       convert_to_llm: convert_to_llm,
       transform_context: transform_context,
       stream_fn: stream_fn,
+      stream_rules: Keyword.get(opts, :stream_rules, []),
+      on_stream_rule: Keyword.get(opts, :on_stream_rule),
       session_id: Keyword.get(opts, :session_id),
       get_api_key: Keyword.get(opts, :get_api_key),
       resolve_stream_options: Keyword.get(opts, :resolve_stream_options),
@@ -1087,6 +1089,8 @@ defmodule LemonAgent.Agent do
       tool_timeout_ms: state.tool_timeout_ms,
       intent_tracing: state.intent_tracing,
       stream_options: stream_options,
+      stream_rules: state.stream_rules,
+      on_stream_rule: state.on_stream_rule,
       stream_fn: state.stream_fn
     }
   end

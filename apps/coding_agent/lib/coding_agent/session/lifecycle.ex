@@ -502,6 +502,7 @@ defmodule CodingAgent.Session.Lifecycle do
       )
 
     retry_settings = SettingsManager.get_retry_settings(settings_manager)
+    stream_rules = CodingAgent.Rules.stream_rules(cwd)
 
     {:ok, agent} =
       LemonAgent.Agent.start_link(
@@ -514,6 +515,12 @@ defmodule CodingAgent.Session.Lifecycle do
         },
         convert_to_llm: convert_to_llm,
         stream_fn: stream_fn,
+        stream_rules: fn ->
+          GenServer.call(session_pid, {:available_stream_rules, stream_rules}, :infinity)
+        end,
+        on_stream_rule: fn rule ->
+          GenServer.call(session_pid, {:inject_stream_rule, rule}, :infinity)
+        end,
         stream_options: stream_options,
         transform_context: transform_context,
         get_api_key: get_api_key,

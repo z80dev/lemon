@@ -56,6 +56,8 @@ defmodule CodingAgent.RulesTest do
       assert rules["always"].content == "always body"
       assert rules["always"].path == Path.join(rules_dir, "always.mdc")
       assert rules["always"].level == :project
+      assert rules["always"].stream_pattern == nil
+      assert rules["always"].injection_limit == 1
 
       ts = rules["nested/typescript"]
       refute ts.always_apply
@@ -207,6 +209,184 @@ defmodule CodingAgent.RulesTest do
       assert rules["shared"].content == "project"
       assert rules["shared"].level == :project
       assert rules["toggled"].content == "global on"
+    end
+  end
+
+  describe "stream_rules/1" do
+    test "parses regex sources, limits, kebab-case keys and fallback frontmatter", %{repo: repo} do
+      dir = Path.join(repo, ".lemon/rules")
+      pattern = ~S(\bTODO\b)
+      write!(Path.join(dir, "a-default.md"), "---\nstreamPattern: '#{pattern}'\n---\nNo TODOs")
+
+      write!(
+        Path.join(dir, "b-custom.mdc"),
+        "---\nstream-pattern: '(?i)unsafe'\ninjection-limit: 3\n---\nUse safe code"
+      )
+
+      write!(
+        Path.join(dir, "c-fallback.md"),
+        "---\nglobs: *.ex\nstreamPattern: 'danger'\ninjectionLimit: 2\n---\nAvoid danger"
+      )
+
+      write!(
+        Path.join(dir, "d-manual.md"),
+        "---\ntrigger: manual\nstreamPattern: 'manual'\n---\nExplicit stream trigger"
+      )
+
+      write!(
+        Path.join(dir, "disabled.md"),
+        "---\nenabled: false\nstreamPattern: 'disabled'\n---\nDisabled body"
+      )
+
+      write!(Path.join(dir, "ordinary.md"), "---\nalwaysApply: true\n---\nOrdinary body")
+
+      rules = Rules.stream_rules(repo)
+      assert names(rules) == ["a-default", "b-custom", "c-fallback", "d-manual"]
+      assert rules == Enum.filter(Rules.discover(repo), &(&1.stream_pattern != nil))
+      rules = by_name(rules)
+
+      assert rules["a-default"].stream_pattern == pattern
+      assert rules["a-default"].content == "No TODOs"
+      assert rules["a-default"].injection_limit == 1
+      assert rules["b-custom"].stream_pattern == "(?i)unsafe"
+      assert rules["b-custom"].injection_limit == 3
+      assert rules["c-fallback"].stream_pattern == "danger"
+      assert rules["c-fallback"].injection_limit == 2
+      assert rules["c-fallback"].globs == ["*.ex"]
+    end
+
+    test "stream patterns override every prompt trigger without adding context", %{repo: repo} do
+      files = [
+        {".lemon/rules/always.md", "alwaysApply: true"},
+        {".lemon/rules/described.md", "description: Stream-only description"},
+        {".lemon/rules/glob.md", "globs: '*.ex'"},
+        {".windsurf/rules/on.md", "trigger: always_on"},
+        {".github/instructions/all.instructions.md", "applyTo: '**'"},
+        {".github/instructions/bare.instructions.md", ""},
+        {".cursorrules", ""}
+      ]
+
+      for {path, metadata} <- files do
+        write!(
+          Path.join(repo, path),
+          "---\n#{metadata}\nstreamPattern: 'forbidden'\n---\nStream-only body"
+        )
+      end
+
+      assert length(Rules.stream_rules(repo)) == length(files)
+      assert Rules.buckets(Rules.discover(repo)) == %{always_apply: [], rulebook: []}
+      assert Rules.sections(repo) == []
+    end
+
+    test "stream rules leave existing prompt sections byte-identical", %{repo: repo} do
+      dir = Path.join(repo, ".lemon/rules")
+      write!(Path.join(dir, "always.md"), "---\nalwaysApply: true\n---\nAlways body")
+      write!(Path.join(dir, "book.md"), "---\ndescription: On demand\n---\nBook body")
+      original = Rules.sections(repo)
+
+      write!(
+        Path.join(dir, "stream.md"),
+        "---\nalwaysApply: true\ndescription: Never indexed\nstreamPattern: 'bad'\n---\nCorrection"
+      )
+
+      assert Rules.sections(repo) == original
+    end
+
+    test "invalid patterns fail closed instead of becoming prompt rules", %{repo: repo} do
+      patterns = [
+        "'('",
+        "'(*UTF)bad'",
+        "''",
+        "'   '",
+        "null",
+        "true",
+        "123",
+        "['bad']",
+        "{bad: value}"
+      ]
+
+      for {pattern, index} <- Enum.with_index(patterns) do
+        write!(
+          Path.join(repo, ".lemon/rules/invalid-#{index}.md"),
+          "---\nstreamPattern: #{pattern}\nalwaysApply: true\ndescription: Hidden\n---\nHidden body"
+        )
+      end
+
+      assert Rules.discover(repo) == []
+      assert Rules.stream_rules(repo) == []
+      assert Rules.sections(repo) == []
+    end
+
+    test "injection limits must be positive integers when supplied", %{repo: repo} do
+      for {limit, index} <- Enum.with_index(["0", "-1", "1.5", "'2'", "null", "true", "[]"]) do
+        write!(
+          Path.join(repo, ".lemon/rules/invalid-#{index}.md"),
+          "---\nstreamPattern: 'bad'\ninjectionLimit: #{limit}\nalwaysApply: true\n---\nHidden"
+        )
+      end
+
+      assert Rules.discover(repo) == []
+      assert Rules.stream_rules(repo) == []
+      assert Rules.sections(repo) == []
+    end
+
+    test "name precedence applies before stream selection", %{repo: repo, agent_dir: agent_dir} do
+      cwd = Path.join(repo, "pkg")
+
+      write!(
+        Path.join(agent_dir, "rules/shared.md"),
+        "---\nalwaysApply: true\n---\nGlobal prompt"
+      )
+
+      write!(
+        Path.join(repo, ".lemon/rules/shared.md"),
+        "---\nstreamPattern: 'far'\n---\nFar correction"
+      )
+
+      write!(
+        Path.join(cwd, ".lemon/rules/shared.md"),
+        "---\nstreamPattern: 'near'\ninjectionLimit: 2\n---\nNear correction"
+      )
+
+      write!(
+        Path.join(agent_dir, "rules/ordinary.md"),
+        "---\nstreamPattern: 'global'\n---\nGlobal correction"
+      )
+
+      write!(
+        Path.join(cwd, ".lemon/rules/ordinary.md"),
+        "---\nalwaysApply: true\n---\nProject prompt"
+      )
+
+      assert [%{name: "shared", content: "Near correction", injection_limit: 2}] =
+               Rules.stream_rules(cwd)
+
+      assert %{always_apply: [%{name: "ordinary"}], rulebook: []} =
+               Rules.buckets(Rules.discover(cwd))
+    end
+
+    test "invalid higher-priority stream rules still shadow lower-priority names", %{
+      repo: repo,
+      agent_dir: agent_dir
+    } do
+      write!(
+        Path.join(agent_dir, "rules/shared.md"),
+        "---\nalwaysApply: true\n---\nGlobal prompt"
+      )
+
+      write!(
+        Path.join(repo, ".cursor/rules/shared.mdc"),
+        "---\nstreamPattern: 'valid'\n---\nLower correction"
+      )
+
+      write!(
+        Path.join(repo, ".lemon/rules/shared.md"),
+        "---\nstreamPattern: '('\ndescription: Hidden\n---\nInvalid correction"
+      )
+
+      assert Rules.discover(repo) == []
+      assert Rules.stream_rules(repo) == []
+      assert Rules.sections(repo) == []
     end
   end
 
