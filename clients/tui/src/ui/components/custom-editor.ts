@@ -109,6 +109,8 @@ export interface CustomEditorOptions {
 	theme: EditorTheme;
 	/** The one submission seam. Slash/shell handling happens downstream of it. */
 	onSubmit: (text: string) => void | Promise<void>;
+	/** First empty-to-nonempty draft change (terminal, native editor, paste or restore). */
+	onComposeStart?: () => void;
 	/** Native automation cannot submit until the connection and modal state allow it. */
 	canSubmit?: () => boolean;
 	/** Abort the run in flight. Return true when there was one. */
@@ -205,6 +207,14 @@ export class CustomEditor extends Editor {
 		super(options.theme);
 		this.#options = options;
 		this.#now = options.now ?? Date.now;
+		let wasEmpty = true;
+		// Editor's shared change seam covers TSP native edits and paste as well
+		// as terminal keys, without firing for caret-only native updates.
+		this.onChange = (text) => {
+			const empty = text.length === 0;
+			if (wasEmpty && !empty) options.onComposeStart?.();
+			wasEmpty = empty;
+		};
 		// Base Editor exposes submission as a property; ours is the only writer.
 		this.onSubmit = (text: string) => this.#submit(text);
 		if (options.vimMode) this.setVimMode(true);

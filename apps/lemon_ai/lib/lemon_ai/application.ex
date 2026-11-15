@@ -36,6 +36,8 @@ defmodule LemonAi.Application do
     children = [
       # Task supervisor for streaming operations
       {Task.Supervisor, name: LemonAi.StreamTaskSupervisor},
+      {Task.Supervisor, name: LemonAi.PreconnectTasks, max_children: 8},
+      LemonAi.Preconnect,
       # Registry for per-provider rate limiters
       {Registry, keys: :unique, name: LemonAi.RateLimiterRegistry},
       # Registry for per-provider circuit breakers

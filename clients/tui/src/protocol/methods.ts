@@ -186,6 +186,7 @@ export const METHOD = {
 	processJobsInspect: "process.jobs.inspect",
 	processJobsCancel: "process.jobs.cancel",
 	modelsList: "models.list",
+	modelsPreconnect: "models.preconnect",
 	approvalResolve: "exec.approval.resolve",
 	approvalsGet: "exec.approvals.get",
 	health: "health",

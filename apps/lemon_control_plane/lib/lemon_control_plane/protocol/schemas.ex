@@ -78,6 +78,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "discoverOpenAI" => :boolean
       }
     },
+    "models.preconnect" => %{required: %{"model" => :string}, optional: %{}},
 
     # User-managed profiles
     "profiles.list" => %{optional: %{}},
