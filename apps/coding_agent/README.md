@@ -462,6 +462,18 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.RunGraph` | ETS-backed parent/child run graph with monotonic state machine (`queued -> running -> completed/error/killed/cancelled/lost`); await via PubSub |
 | `CodingAgent.RunGraphServer` | GenServer owning RunGraph ETS/DETS state, serialized lifecycle/budget writes, synchronous startup recovery, and TTL cleanup |
 
+Task, process, run-graph and parent-question stores share
+`CodingAgent.DurableTable`: each domain server remains the serialized owner,
+loads its existing DETS tuples before readiness, and normalizes interrupted work
+through a domain callback. File names and tuple layouts are unchanged.
+Task-progress bindings use the same lifecycle with no DETS backing and remain
+transient. Expiration uses a private timestamp/key index rather than folding
+every retained record or log buffer; sweeps run in the owner mailbox, not an
+unsupervised task. Failed process-artifact deletion retains both the record and
+its expiration entry for a later sweep; unknown launches and cleared identity
+tombstones still have no TTL. ProcessSession's bounded owner ETS tail and its
+transition/debounced persistence cadence are unchanged.
+
 ### Memory and Context
 
 | Module | Description |
