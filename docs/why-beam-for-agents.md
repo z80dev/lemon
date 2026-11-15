@@ -101,10 +101,11 @@ be in the GenServer's mailbox and may still be delivered — so the caller gets
 comment in a runtime where you know exactly where the message is.
 
 Single-flight per session is a unique-key Registry
-([`lemon_router/application.ex:18`](../apps/lemon_router/lib/lemon_router/application.ex)):
-at most one active run per session key, enforced by the fact that two processes cannot hold
-the same registry name. It is not a lock with a TTL and a recovery story. It is a name, and
-it is released when the process dies, for any reason, including the node being killed.
+([`lemon_router/application.ex`](../apps/lemon_router/lib/lemon_router/application.ex)):
+each `RunProcess` registers its own session key during initialization, so two live runs
+cannot hold the same key. The name is released when its owner dies, without coordinator
+cleanup or a lock TTL. A restarted coordinator discovers the surviving owner through
+the Registry and monitors it before accepting queued work.
 
 What happens to the second message instead of being dropped is the job of
 `LemonRouter.SessionCoordinator` — one process per conversation — which interprets queue
