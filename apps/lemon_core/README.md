@@ -30,7 +30,7 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | LemonCore.Secrets| | LemonCore.Store | | LemonCore.Bus    |
 | .Crypto/.External| | .EtsBackend     | | (Phoenix.PubSub) |
 | .Source/.Runner  | | .SqliteBackend  | |                  |
-| .MasterKey       | | .JsonlBackend   | | LemonCore.Event  |
+| .MasterKey       | |                 | | LemonCore.Event  |
 +------------------+ | .ReadCache      | +------------------+
                      +-----------------+
                                |
@@ -165,7 +165,6 @@ truncating so partial credentials cannot escape.
 | `LemonCore.Store.Backend` | Behaviour for storage backends (init/put/put_new/get/delete/list) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS backend (ephemeral, default) |
 | `LemonCore.Store.SqliteBackend` | SQLite backend with WAL mode and optional ephemeral tables |
-| `LemonCore.Store.JsonlBackend` | Append-only JSONL backend (human-readable, portable) |
 | `LemonCore.Store.ReadCache` | Public ETS read-through cache for hot domains |
 | `LemonCore.PolicyStore` | Typed policy API and metadata owner for the existing agent, channel, session, and runtime policy tables |
 | `LemonCore.ToolPolicy` | Strict validated tool authorization shared by every execution boundary |
@@ -435,7 +434,29 @@ runtime declarations in `LemonCore.Env`.
 |---------|-------------|----------|
 | `EtsBackend` | No (in-memory) | Tests, ephemeral data, default |
 | `SqliteBackend` | Yes (single file) | Production, WAL mode, optional ephemeral tables for high-churn |
-| `JsonlBackend` | Yes (append-only files) | Debugging, data portability, human-readable |
+
+### Upgrading legacy JSONL installations
+
+The JSONL runtime backend migration window ends with `lemon_core` 0.3.0.
+It is removed now (issue #608); SQLite is the supported durable backend.
+This is a breaking package change from 0.2.x.
+
+Before upgrading, stop runtime writers, back up the JSONL store directory,
+and run the migration using the old source checkout:
+
+```bash
+mix lemon.store.migrate_jsonl_to_sqlite --jsonl-path /var/lib/lemon/store --sqlite-path /var/lib/lemon/store.sqlite3 --dry-run
+mix lemon.store.migrate_jsonl_to_sqlite --jsonl-path /var/lib/lemon/store --sqlite-path /var/lib/lemon/store.sqlite3
+```
+
+Use a new target database; `--replace` deletes an existing target. Add
+`--include-runs` if run records must be retained (they are skipped by default),
+and configure `ephemeral_tables: []` if SQLite must keep them after startup.
+Switch the Store configuration to SQLite as below, verify the migrated data,
+then upgrade. Keep the original backup until verification is complete.
+The migration task remains available in 0.3.0 with a private read-only legacy
+reader for recovery; it does not restore a JSONL runtime backend or modify the
+source journals. Only migrate trusted local journals.
 
 ### Configuration
 

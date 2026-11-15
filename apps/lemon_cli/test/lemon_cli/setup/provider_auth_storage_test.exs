@@ -4,7 +4,7 @@ defmodule LemonCli.Setup.ProviderAuthStorageTest do
   alias LemonCli.Onboarding.Runner
   alias LemonCli.Setup.Provider
   alias LemonCore.{Secrets, Store}
-  alias LemonCore.Store.JsonlBackend
+  alias LemonCore.Store.SqliteBackend
 
   setup do
     Runner.ensure_required_apps!()
@@ -41,8 +41,8 @@ defmodule LemonCli.Setup.ProviderAuthStorageTest do
 
   for failure <- [
         :unavailable,
-        :corrupt_jsonl,
-        :corrupt_startup,
+        :corrupt_sqlite,
+        :unopenable_startup,
         :missing_master_key,
         :wrong_master_key
       ],
@@ -56,27 +56,27 @@ defmodule LemonCli.Setup.ProviderAuthStorageTest do
       original_config = File.read!(config_path)
       {:ok, _} = Secrets.set("selected_login", login(provider))
       {:ok, _} = Secrets.set("named_login", login(provider))
-      journal = Path.join(path, "secrets_v1.jsonl")
-      durable = File.read!(journal)
+      database = Path.join(path, "store.sqlite3")
 
       case failure do
         :unavailable ->
-          :ok = stop_supervised(:auth_storage_store)
+          stop_store()
 
-        :corrupt_jsonl ->
-          :ok = stop_supervised(:auth_storage_store)
-          File.rm!(journal)
-          start_store(path)
-          File.write!(journal, durable <> "private-corrupt-payload\n")
+        :corrupt_sqlite ->
+          execute_sql(path, """
+          UPDATE lemon_store_kv SET value_blob = x'707269766174652d636f7272757074'
+          WHERE table_name = 'secrets_v1'
+          """)
 
-        :corrupt_startup ->
-          :ok = stop_supervised(:auth_storage_store)
-          File.write!(journal, durable <> "private-corrupt-payload\n")
+        :unopenable_startup ->
+          stop_store()
+          File.rename!(database, database <> ".saved")
+          File.mkdir!(database)
 
-          assert {:error, {:backend_init_failed, {:jsonl_unavailable, :corrupt_table}}} =
+          assert {:error, {:backend_init_failed, {:sqlite_init_failed, ^database, _}}} =
                    GenServer.start(
                      Store,
-                     [name: Store, backend: JsonlBackend, backend_opts: [path: path]],
+                     [name: Store, backend: SqliteBackend, backend_opts: [path: path]],
                      name: Store
                    )
 
@@ -87,17 +87,17 @@ defmodule LemonCli.Setup.ProviderAuthStorageTest do
           File.write!(ctx.key_path, Base.encode64(:crypto.strong_rand_bytes(32)))
       end
 
-      failed_bytes = File.read!(journal)
+      failed_bytes = database_bytes(path)
 
       for flag <- ["--status", "--logout"], named? <- [false, true] do
         args = [provider, flag, "--config-path", config_path]
         args = if named?, do: args ++ ["--secret-name", "named_login"], else: args
         assert {:error, :login_read_failed} = Provider.run(args, io())
         assert File.read!(config_path) == original_config
-        assert File.read!(journal) == failed_bytes
+        assert database_bytes(path) == failed_bytes
         assert_receive {:error, message}
         refute message =~ "private-"
-        refute message =~ "jsonl"
+        refute message =~ "sqlite"
         refute message =~ ctx.root
         refute_receive {:info, _}
       end
@@ -105,7 +105,7 @@ defmodule LemonCli.Setup.ProviderAuthStorageTest do
   end
 
   for provider <- ["anthropic", "openrouter"] do
-    test "#{provider} logout refuses an actual JSONL delete failure without changing authority",
+    test "#{provider} logout refuses an actual SQLite delete failure without changing authority",
          ctx do
       provider = unquote(provider)
       path = Path.join(ctx.root, "store")
@@ -114,17 +114,18 @@ defmodule LemonCli.Setup.ProviderAuthStorageTest do
       original_config = File.read!(config_path)
       {:ok, _} = Secrets.set("selected_login", login(provider))
       {:ok, _} = Secrets.set("named_login", login(provider))
-      journal = Path.join(path, "secrets_v1.jsonl")
-      durable = File.read!(journal)
-      saved = journal <> ".saved"
-      :ok = File.rename(journal, saved)
-      File.mkdir!(journal)
+
+      execute_sql(path, """
+      CREATE TRIGGER fail_secret_delete BEFORE DELETE ON lemon_store_kv
+      WHEN OLD.table_name = 'secrets_v1'
+      BEGIN SELECT RAISE(ABORT, 'private-delete-failure'); END;
+      """)
 
       for name <- ["selected_login", "named_login"] do
         args = [provider, "--logout", "--config-path", config_path, "--secret-name", name]
         assert {:error, :login_delete_failed} = Provider.run(args, io())
         assert File.read!(config_path) == original_config
-        assert File.read!(saved) == durable
+        assert {:ok, _} = Secrets.get("selected_login")
         assert {:ok, _} = Secrets.get(name)
         assert_receive {:error, message}
         refute message =~ "private-"
@@ -132,9 +133,8 @@ defmodule LemonCli.Setup.ProviderAuthStorageTest do
         refute_receive {:info, _}
       end
 
-      :ok = File.rmdir(journal)
-      :ok = File.rename(saved, journal)
-      :ok = stop_supervised(:auth_storage_store)
+      execute_sql(path, "DROP TRIGGER fail_secret_delete")
+      stop_store()
       start_store(path)
       assert {:ok, _} = Secrets.get("selected_login")
       assert {:ok, _} = Secrets.get("named_login")
@@ -166,13 +166,51 @@ defmodule LemonCli.Setup.ProviderAuthStorageTest do
   end
 
   defp start_store(path) do
-    start_supervised!(%{
-      id: :auth_storage_store,
-      start:
-        {Store, :start_link,
-         [[backend: JsonlBackend, backend_opts: [path: path], cached_tables: []]]},
-      restart: :temporary
-    })
+    pid =
+      start_supervised!(%{
+        id: :auth_storage_store,
+        start:
+          {Store, :start_link,
+           [[backend: SqliteBackend, backend_opts: [path: path], cached_tables: []]]},
+        restart: :temporary
+      })
+
+    backend_state = :sys.get_state(pid).backend_state
+    on_exit({:sqlite, pid}, fn -> SqliteBackend.close(backend_state) end)
+    pid
+  end
+
+  defp stop_store do
+    pid = Process.whereis(Store)
+    :ok = SqliteBackend.close(:sys.get_state(pid).backend_state)
+    on_exit({:sqlite, pid}, fn -> :ok end)
+    :ok = stop_supervised(:auth_storage_store)
+  end
+
+  defp database_bytes(path) do
+    database = Path.join(path, "store.sqlite3")
+
+    if File.dir?(database) do
+      File.read!(database <> ".saved")
+    else
+      wal =
+        case File.read(database <> "-wal") do
+          {:ok, bytes} -> bytes
+          {:error, :enoent} -> <<>>
+        end
+
+      File.read!(database) <> wal
+    end
+  end
+
+  defp execute_sql(path, sql) do
+    {:ok, conn} = Exqlite.Sqlite3.open(Path.join(path, "store.sqlite3"))
+
+    try do
+      :ok = Exqlite.Sqlite3.execute(conn, sql)
+    after
+      :ok = Exqlite.Sqlite3.close(conn)
+    end
   end
 
   defp configure(root, provider) do

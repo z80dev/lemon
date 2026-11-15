@@ -11,10 +11,10 @@ defmodule LemonPlatformTest.BackendCase do
   `LemonCore.Store` is the platform's key/value store: a `GenServer` that owns a
   backend and serialises access to it. The backend is the part that actually
   persists, and it is deliberately tiny — nine callbacks, no supervision, no
-  process of its own. `LemonCore.Store.EtsBackend` (ephemeral),
-  `LemonCore.Store.SqliteBackend` (durable) and `LemonCore.Store.JsonlBackend`
-  (append-only files) are the built-ins; a Redis or Postgres backend is a
-  reasonable thing to write, and this suite is what tells you it will work.
+  process of its own. `LemonCore.Store.EtsBackend` (ephemeral)
+  and `LemonCore.Store.SqliteBackend` (durable) are the built-ins; a Redis or
+  Postgres backend is a reasonable thing to write, and this suite is what tells
+  you it will work.
 
   ## The contract
 
@@ -59,10 +59,9 @@ defmodule LemonPlatformTest.BackendCase do
 
   Keys and values are Erlang terms, not strings. Binaries (including non-ASCII),
   atoms, integers, floats, tuples, nested maps and lists must come back equal to
-  what went in. Backends that serialise (SQLite via `:erlang.term_to_binary/1`,
-  JSONL via a JSON encoding) inherit the limits of their encoding: pids,
-  references and functions are **not** required to round-trip, and this suite
-  does not test them.
+  what went in. Backends that serialise (SQLite via `:erlang.term_to_binary/1`)
+  inherit the limits of their encoding: pids, references and functions are
+  **not** required to round-trip, and this suite does not test them.
 
   ### Optional callbacks degrade predictably
 

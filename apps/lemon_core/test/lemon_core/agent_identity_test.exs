@@ -2,7 +2,7 @@ defmodule LemonCore.AgentIdentityTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.{AgentIdentity, AgentMessaging, RunStore, SessionLifecycle, Store}
-  alias LemonCore.Store.JsonlBackend
+  alias LemonCore.Store.SqliteBackend
 
   defmodule FailingBackend do
     @behaviour LemonCore.Store.Backend
@@ -29,19 +29,19 @@ defmodule LemonCore.AgentIdentityTest do
   defmodule RacingBackend do
     @behaviour LemonCore.Store.Backend
 
-    defdelegate init(opts), to: JsonlBackend
-    defdelegate get(state, table, key), to: JsonlBackend
-    defdelegate put_new(state, table, key, value), to: JsonlBackend
-    defdelegate delete(state, table, key), to: JsonlBackend
-    defdelegate list(state, table), to: JsonlBackend
-    defdelegate sync(state), to: JsonlBackend
+    defdelegate init(opts), to: SqliteBackend
+    defdelegate get(state, table, key), to: SqliteBackend
+    defdelegate put_new(state, table, key, value), to: SqliteBackend
+    defdelegate delete(state, table, key), to: SqliteBackend
+    defdelegate list(state, table), to: SqliteBackend
+    defdelegate sync(state), to: SqliteBackend
 
     def put(state, :identity_test_control, :race, race) do
       Process.put({__MODULE__, :race}, race)
       {:ok, state}
     end
 
-    def put(state, table, key, value), do: JsonlBackend.put(state, table, key, value)
+    def put(state, table, key, value), do: SqliteBackend.put(state, table, key, value)
 
     def compare_and_swap(state, table, key, expected, replacement) do
       case Process.get({__MODULE__, :race}) do
@@ -51,9 +51,9 @@ defmodule LemonCore.AgentIdentityTest do
           {:error, :mismatch, state}
 
         _ ->
-          with {:ok, current, state} <- JsonlBackend.get(state, table, key) do
+          with {:ok, current, state} <- SqliteBackend.get(state, table, key) do
             if current === expected,
-              do: JsonlBackend.put(state, table, key, replacement),
+              do: SqliteBackend.put(state, table, key, replacement),
               else: {:error, :mismatch, state}
           end
       end
@@ -199,7 +199,7 @@ defmodule LemonCore.AgentIdentityTest do
        %{suffix: suffix} do
     path = Path.join(System.tmp_dir!(), "agent_identity_fence_#{suffix}")
     on_exit(fn -> File.rm_rf!(path) end)
-    assert {:ok, backend_state} = JsonlBackend.init(path: path)
+    assert {:ok, backend_state} = SqliteBackend.init(path: path)
 
     with_backend(RacingBackend, backend_state, fn ->
       key = "agent:identity_fence_#{suffix}:main"
@@ -214,12 +214,12 @@ defmodule LemonCore.AgentIdentityTest do
                 fn state ->
                   # Another writer deleted the session and fenced the absent
                   # identity scope, then recreated the same key/timestamp.
-                  {:ok, state} = JsonlBackend.delete(state, :sessions_index, key)
+                  {:ok, state} = SqliteBackend.delete(state, :sessions_index, key)
                   replacement = %{original | incarnation: fresh_token()}
-                  {:ok, state} = JsonlBackend.put(state, :sessions_index, key, replacement)
+                  {:ok, state} = SqliteBackend.put(state, :sessions_index, key, replacement)
                   :ok = LemonCore.Store.ReadCache.delete(Store, :sessions_index, key)
 
-                  JsonlBackend.put(state, :agent_identities_v1, "operator", %{
+                  SqliteBackend.put(state, :agent_identities_v1, "operator", %{
                     version: 1,
                     revision: fresh_token(),
                     entries: %{},
@@ -241,9 +241,9 @@ defmodule LemonCore.AgentIdentityTest do
        %{suffix: suffix} do
     path = Path.join(System.tmp_dir!(), "agent_identity_absent_#{suffix}")
     on_exit(fn -> File.rm_rf!(path) end)
-    assert {:ok, backend_state} = JsonlBackend.init(path: path)
+    assert {:ok, backend_state} = SqliteBackend.init(path: path)
 
-    with_backend(JsonlBackend, backend_state, fn ->
+    with_backend(SqliteBackend, backend_state, fn ->
       key = "agent:identity_absent_#{suffix}:main"
       assert :ok = RunStore.create_session_index(key, "identity_absent_#{suffix}", :control_plane)
       assert {:ok, nil = snapshot} = Store.fetch(:agent_identities_v1, "operator")
@@ -291,7 +291,7 @@ defmodule LemonCore.AgentIdentityTest do
   test "legacy backfill racing deletion never resurrects the missing index", %{suffix: suffix} do
     path = Path.join(System.tmp_dir!(), "agent_identity_backfill_#{suffix}")
     on_exit(fn -> File.rm_rf!(path) end)
-    assert {:ok, backend_state} = JsonlBackend.init(path: path)
+    assert {:ok, backend_state} = SqliteBackend.init(path: path)
 
     with_backend(RacingBackend, backend_state, fn ->
       key = "agent:identity_backfill_#{suffix}:main"
@@ -302,7 +302,7 @@ defmodule LemonCore.AgentIdentityTest do
                  :identity_test_control,
                  :race,
                  {:sessions_index, key,
-                  fn state -> JsonlBackend.delete(state, :sessions_index, key) end}
+                  fn state -> SqliteBackend.delete(state, :sessions_index, key) end}
                )
 
       assert {:error, :not_found} = RunStore.ensure_session_incarnation(key)
@@ -314,7 +314,7 @@ defmodule LemonCore.AgentIdentityTest do
        %{suffix: suffix} do
     path = Path.join(System.tmp_dir!(), "agent_identity_native_durable_#{suffix}")
     on_exit(fn -> File.rm_rf!(path) end)
-    assert {:ok, backend_state} = JsonlBackend.init(path: path)
+    assert {:ok, backend_state} = SqliteBackend.init(path: path)
 
     with_backend(RacingBackend, backend_state, fn ->
       key = "agent:identity_durable_#{suffix}:main"
@@ -329,7 +329,7 @@ defmodule LemonCore.AgentIdentityTest do
                  :race,
                  {:sessions_index, key,
                   fn state ->
-                    JsonlBackend.put(state, :sessions_index, key, %{legacy | run_count: 1})
+                    SqliteBackend.put(state, :sessions_index, key, %{legacy | run_count: 1})
                   end}
                )
 
@@ -339,9 +339,10 @@ defmodule LemonCore.AgentIdentityTest do
       assert {:ok, entry} = AgentIdentity.register("operator", id, %{name: "durable_#{suffix}"})
       assert entry.incarnation == index.incarnation
       assert :ok = Store.sync()
-      assert {:ok, reopened} = JsonlBackend.init(path: path)
 
       :sys.replace_state(Store, fn state ->
+        :ok = SqliteBackend.close(state.backend_state)
+        assert {:ok, reopened} = SqliteBackend.init(path: path)
         :ok = LemonCore.Store.ReadCache.delete(state.read_cache, :sessions_index, key)
         %{state | backend_state: reopened}
       end)
@@ -355,7 +356,7 @@ defmodule LemonCore.AgentIdentityTest do
   test "a pending rename cannot rename a replacement after its CAS retries", %{suffix: suffix} do
     path = Path.join(System.tmp_dir!(), "agent_identity_rename_race_#{suffix}")
     on_exit(fn -> File.rm_rf!(path) end)
-    assert {:ok, backend_state} = JsonlBackend.init(path: path)
+    assert {:ok, backend_state} = SqliteBackend.init(path: path)
 
     with_backend(RacingBackend, backend_state, fn ->
       key = "agent:identity_rename_race_#{suffix}:main"
@@ -374,14 +375,14 @@ defmodule LemonCore.AgentIdentityTest do
                  {:agent_identities_v1, "operator",
                   fn state ->
                     {:ok, state} =
-                      JsonlBackend.put(state, :sessions_index, key, %{
+                      SqliteBackend.put(state, :sessions_index, key, %{
                         index
                         | incarnation: replacement.incarnation
                       })
 
                     :ok = LemonCore.Store.ReadCache.delete(Store, :sessions_index, key)
 
-                    JsonlBackend.put(state, :agent_identities_v1, "operator", %{
+                    SqliteBackend.put(state, :agent_identities_v1, "operator", %{
                       scope
                       | revision: fresh_token(),
                         entries: %{id => replacement},
@@ -454,9 +455,9 @@ defmodule LemonCore.AgentIdentityTest do
   } do
     path = Path.join(System.tmp_dir!(), "agent_identity_#{suffix}")
     on_exit(fn -> File.rm_rf!(path) end)
-    assert {:ok, backend_state} = JsonlBackend.init(path: path)
+    assert {:ok, backend_state} = SqliteBackend.init(path: path)
 
-    with_backend(JsonlBackend, backend_state, fn ->
+    with_backend(SqliteBackend, backend_state, fn ->
       id = "bot://durable/first"
 
       assert {:ok, _} =
@@ -464,8 +465,12 @@ defmodule LemonCore.AgentIdentityTest do
 
       assert {:ok, renamed} = AgentIdentity.rename(scope, id, "robert")
       assert :ok = Store.sync()
-      assert {:ok, reopened} = JsonlBackend.init(path: path)
-      :sys.replace_state(Store, fn state -> %{state | backend_state: reopened} end)
+
+      :sys.replace_state(Store, fn state ->
+        :ok = SqliteBackend.close(state.backend_state)
+        assert {:ok, reopened} = SqliteBackend.init(path: path)
+        %{state | backend_state: reopened}
+      end)
 
       assert {:ok, ^renamed} = AgentIdentity.resolve(scope, "@Robert")
       assert {:ok, ^renamed} = AgentIdentity.resolve(scope, id)
@@ -575,7 +580,11 @@ defmodule LemonCore.AgentIdentityTest do
     try do
       fun.()
     after
-      :sys.replace_state(Store, fn _state ->
+      :sys.replace_state(Store, fn state ->
+        if backend in [RacingBackend, SqliteBackend] do
+          :ok = SqliteBackend.close(state.backend_state)
+        end
+
         Process.delete({RacingBackend, :race})
         previous
       end)

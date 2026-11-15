@@ -1,12 +1,16 @@
 defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqlite do
   use Mix.Task
 
-  alias LemonCore.Store.JsonlBackend
   alias LemonCore.Store.SqliteBackend
 
   @shortdoc "Migrate Lemon store data from JSONL files to SQLite"
   @moduledoc """
   One-time migration tool from JSONL-backed Lemon store data to SQLite.
+
+  The JSONL runtime backend was removed in lemon_core 0.3.0. Before upgrading
+  older installations, stop writers, back up the source directory, migrate to
+  a new SQLite database and switch the Store configuration to SQLite.
+  This task retains only a private read-only reader for trusted legacy files.
 
   By default this migrates all tables except `:runs` (which is typically configured
   as ephemeral for SQLite).
@@ -64,12 +68,9 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqlite do
         [:runs]
       end
 
-    case JsonlBackend.init(path: jsonl_path, skip_tables: skipped_tables) do
+    case read_legacy_store(jsonl_path, skipped_tables) do
       {:ok, jsonl_state} ->
-        tables =
-          jsonl_state
-          |> JsonlBackend.list_tables()
-          |> Enum.sort()
+        tables = jsonl_state |> Map.keys() |> Enum.sort()
 
         tables_to_migrate = Enum.reject(tables, &(&1 in skipped_tables))
 
@@ -95,14 +96,14 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqlite do
         end
 
       {:error, reason} ->
-        Mix.raise("Failed to initialize JSONL backend: #{inspect(reason)}")
+        Mix.raise("Failed to read legacy JSONL store: #{inspect(reason)}")
     end
   end
 
   defp run_dry(jsonl_state, tables) do
     {_jsonl_state, total_rows} =
       Enum.reduce(tables, {jsonl_state, 0}, fn table, {state, total} ->
-        {:ok, entries, state} = JsonlBackend.list(state, table)
+        entries = Map.fetch!(state, table) |> Enum.to_list()
         count = length(entries)
         Mix.shell().info("  #{table}: #{count} rows")
         {state, total + count}
@@ -119,7 +120,7 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqlite do
       {_jsonl_state, _sqlite_state, total_rows} =
         Enum.reduce(tables, {jsonl_state, sqlite_state, 0}, fn table,
                                                                {src_state, dst_state, total} ->
-          {:ok, entries, src_state} = JsonlBackend.list(src_state, table)
+          entries = Map.fetch!(src_state, table) |> Enum.to_list()
 
           {dst_state, copied} =
             Enum.reduce(entries, {dst_state, 0}, fn {key, value}, {acc_state, count} ->
@@ -154,4 +155,74 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqlite do
         Path.expand(jsonl_path)
     end
   end
+
+  # Private read-only compatibility for trusted local pre-0.3.0 journals.
+  defp read_legacy_store(path, skipped_tables) do
+    with {:ok, files} <- File.ls(path) do
+      files
+      |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
+      |> Enum.reduce_while({:ok, %{}}, fn filename, {:ok, tables} ->
+        table = filename |> String.replace_suffix(".jsonl", "") |> String.to_atom()
+
+        if table in skipped_tables do
+          {:cont, {:ok, tables}}
+        else
+          with {:ok, content} <- File.read(Path.join(path, filename)),
+               {:ok, entries} <- replay_legacy(content) do
+            {:cont, {:ok, Map.put(tables, table, entries)}}
+          else
+            _ -> {:halt, {:error, :unreadable_or_corrupt_table}}
+          end
+        end
+      end)
+    else
+      _ -> {:error, :discovery_failed}
+    end
+  end
+
+  defp replay_legacy(content) do
+    content
+    |> String.split("\n", trim: true)
+    |> Enum.reduce_while({:ok, %{}}, fn line, {:ok, entries} ->
+      case Jason.decode(line) do
+        {:ok, %{"op" => "put", "key" => key, "value" => value}} ->
+          {:cont, {:ok, Map.put(entries, decode_legacy(key), decode_legacy(value))}}
+
+        {:ok, %{"op" => "delete", "key" => key}} ->
+          {:cont, {:ok, Map.delete(entries, decode_legacy(key))}}
+
+        _ ->
+          {:halt, {:error, :corrupt_table}}
+      end
+    end)
+  rescue
+    _ -> {:error, :corrupt_table}
+  end
+
+  defp decode_legacy(%{"__struct__" => name, "fields" => fields}) do
+    module = name |> String.split(".") |> Module.concat()
+    struct(module, decode_legacy(fields))
+  end
+
+  defp decode_legacy(%{"__tuple__" => items}),
+    do: items |> Enum.map(&decode_legacy/1) |> List.to_tuple()
+
+  defp decode_legacy(%{"__atom__" => name}), do: String.to_atom(name)
+  defp decode_legacy(%{"__ref__" => _}), do: :persisted_ref
+  defp decode_legacy(%{"__pid__" => _}), do: :persisted_pid
+
+  defp decode_legacy(map) when is_map(map) do
+    Map.new(map, fn {key, value} ->
+      key =
+        case key do
+          "__atom__:" <> name -> String.to_atom(name)
+          key -> key
+        end
+
+      {key, decode_legacy(value)}
+    end)
+  end
+
+  defp decode_legacy(items) when is_list(items), do: Enum.map(items, &decode_legacy/1)
+  defp decode_legacy(value), do: value
 end

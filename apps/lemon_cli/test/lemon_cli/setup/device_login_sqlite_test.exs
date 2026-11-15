@@ -1,4 +1,4 @@
-defmodule LemonCli.Setup.DeviceLoginJsonlTest do
+defmodule LemonCli.Setup.DeviceLoginSqliteTest do
   use ExUnit.Case, async: false
 
   import Bitwise
@@ -10,7 +10,7 @@ defmodule LemonCli.Setup.DeviceLoginJsonlTest do
   @store __MODULE__.PersistentStore
   @service __MODULE__.Service
 
-  # Only provider transport is mocked. The complete Store/JSONL and lifecycle
+  # Only provider transport is mocked. The complete Store/SQLite and lifecycle
   # processes are stopped and recreated against the same isolated directory.
   defmodule PersistentStore do
     def fetch(table, key), do: LemonCore.Store.fetch(__MODULE__, table, key)
@@ -20,7 +20,7 @@ defmodule LemonCli.Setup.DeviceLoginJsonlTest do
 
   setup do
     root =
-      Path.join(System.tmp_dir!(), "device_login_jsonl_#{System.unique_integer([:positive])}")
+      Path.join(System.tmp_dir!(), "device_login_sqlite_#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(root)
     on_exit(fn -> File.rm_rf!(root) end)
@@ -31,7 +31,7 @@ defmodule LemonCli.Setup.DeviceLoginJsonlTest do
   test "high-bit positions persist and replay stays spent after the full runtime restarts", ctx do
     params = login_binding(high_bit_id("started"))
     assert {:ok, %{status: "starting"}} = DeviceLogin.start(params, ctx.opts)
-    assert_receive {:mock_jsonl_provider_started, worker}
+    assert_receive {:mock_sqlite_provider_started, worker}
     monitor = Process.monitor(worker)
     assert_guard(params["loginId"], 1)
     opts = restart_runtime(ctx.root)
@@ -40,13 +40,13 @@ defmodule LemonCli.Setup.DeviceLoginJsonlTest do
     assert {:ok, %{status: "lost"}} = DeviceLogin.poll(params, opts)
     assert {:ok, %{status: "lost"}} = DeviceLogin.start(params, opts)
     assert {:ok, %{status: "lost"}} = DeviceLogin.cancel(params, opts)
-    refute_receive {:mock_jsonl_provider_started, _}, 20
+    refute_receive {:mock_sqlite_provider_started, _}, 20
     assert_guard(params["loginId"], 1)
 
     # Loading an existing guard must still allow a genuinely fresh intent.
     fresh = login_binding(high_bit_id("fresh"))
     assert {:ok, %{status: "starting"}} = DeviceLogin.start(fresh, opts)
-    assert_receive {:mock_jsonl_provider_started, _}
+    assert_receive {:mock_sqlite_provider_started, _}
     assert_guard(fresh["loginId"], 2)
   end
 
@@ -58,14 +58,14 @@ defmodule LemonCli.Setup.DeviceLoginJsonlTest do
     opts = restart_runtime(ctx.root)
     assert {:ok, %{status: "lost"}} = DeviceLogin.start(params, opts)
     assert {:ok, %{status: "lost"}} = DeviceLogin.cancel(params, opts)
-    refute_receive {:mock_jsonl_provider_started, _}, 20
+    refute_receive {:mock_sqlite_provider_started, _}, 20
     assert_guard(params["loginId"], 1)
   end
 
-  test "non-writing completion settlement remains single-use after full JSONL restart", ctx do
+  test "non-writing completion settlement remains single-use after full SQLite restart", ctx do
     params = login_binding(high_bit_id("settlement-login"))
     assert {:ok, %{status: "starting"}} = DeviceLogin.start(params, ctx.opts)
-    assert_receive {:mock_jsonl_provider_started, worker}
+    assert_receive {:mock_sqlite_provider_started, worker}
     monitor = Process.monitor(worker)
     spent_id = high_bit_id("completion:restart")
 
@@ -91,10 +91,10 @@ defmodule LemonCli.Setup.DeviceLoginJsonlTest do
 
     assert {:ok, %{status: "lost"}} = DeviceLogin.start(params, opts)
     assert_guard(spent_id, 2)
-    refute_receive {:mock_jsonl_provider_started, _}, 20
+    refute_receive {:mock_sqlite_provider_started, _}, 20
   end
 
-  test "malformed or legacy persisted filters fail closed after JSONL replay", ctx do
+  test "malformed or legacy persisted filters fail closed after SQLite reload", ctx do
     encoded = Base.encode64(:binary.copy(<<0>>, @filter_bytes))
     prefix = binary_part(encoded, 0, byte_size(encoded) - 3)
 
@@ -119,27 +119,31 @@ defmodule LemonCli.Setup.DeviceLoginJsonlTest do
       assert {:error, :unavailable} = DeviceLogin.start(params, opts)
       assert {:error, :unavailable} = DeviceLogin.cancel(params, opts)
       assert {:ok, ^guard} = PersistentStore.fetch(:provider_device_login, :spent_ids_v1)
-      refute_receive {:mock_jsonl_provider_started, _}, 20
+      refute_receive {:mock_sqlite_provider_started, _}, 20
     end
   end
 
   defp start_runtime(root) do
-    start_supervised!(
-      {Store,
-       name: @store,
-       backend: LemonCore.Store.JsonlBackend,
-       backend_opts: [path: root],
-       cached_tables: []}
-    )
+    store =
+      start_supervised!(
+        {Store,
+         name: @store,
+         backend: LemonCore.Store.SqliteBackend,
+         backend_opts: [path: root],
+         cached_tables: []}
+      )
+
+    backend_state = :sys.get_state(store).backend_state
+    on_exit({:sqlite, store}, fn -> LemonCore.Store.SqliteBackend.close(backend_state) end)
 
     server = start_supervised!({DeviceLogin, name: @service, device_store: PersistentStore})
     parent = self()
 
     [
-      target: %{id: "controller:jsonl-mock", nodeId: nil, hostname: "jsonl-mock"},
+      target: %{id: "controller:sqlite-mock", nodeId: nil, hostname: "sqlite-mock"},
       device_server: server,
       device_login_fun: fn _opts ->
-        send(parent, {:mock_jsonl_provider_started, self()})
+        send(parent, {:mock_sqlite_provider_started, self()})
 
         receive do
           :deny -> {:error, :access_denied}
@@ -150,17 +154,20 @@ defmodule LemonCli.Setup.DeviceLoginJsonlTest do
 
   defp restart_runtime(root) do
     assert :ok = stop_supervised(DeviceLogin)
+    store = Process.whereis(@store)
+    :ok = LemonCore.Store.SqliteBackend.close(:sys.get_state(store).backend_state)
+    on_exit({:sqlite, store}, fn -> :ok end)
     assert :ok = stop_supervised(Store)
     start_runtime(root)
   end
 
   defp login_binding(id) do
     %{
-      "targetId" => "controller:jsonl-mock",
+      "targetId" => "controller:sqlite-mock",
       "providerId" => "openai_codex",
       "loginId" => id,
-      "ownerId" => "jsonl-mock-owner",
-      "sessionId" => "jsonl-mock-session"
+      "ownerId" => "sqlite-mock-owner",
+      "sessionId" => "sqlite-mock-session"
     }
   end
 

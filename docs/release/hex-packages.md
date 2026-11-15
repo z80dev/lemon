@@ -22,7 +22,7 @@ lemon_ai → lemon_core → lemon_agent → lemon_memory → lemon_platform_test
 | Package | In-repo version | Sibling deps |
 |---|---|---|
 | `lemon_ai` | 0.2.1 | none |
-| `lemon_core` | 0.2.0 | none |
+| `lemon_core` | 0.3.0 | none |
 | `lemon_agent` | 0.2.0 | `lemon_ai`, `lemon_core` |
 | `lemon_memory` | 0.2.0 | `lemon_core` |
 | `lemon_platform_test` | 0.2.0 | `lemon_core`, `lemon_memory`, `lemon_ai`, `lemon_agent` (all optional) |
