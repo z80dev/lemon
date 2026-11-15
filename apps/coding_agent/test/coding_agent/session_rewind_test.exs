@@ -206,6 +206,75 @@ defmodule CodingAgent.SessionRewindTest do
              )
   end
 
+  test "confirmation refuses checkpoint-only journal changes", %{session: session} do
+    target = user(session, "keep media intact")
+    full = assistant(target, "answer")
+    assert {:ok, preview, _} = Rewind.run(full, target.leaf_id)
+    assert :ok = SessionManager.checkpoint(full)
+
+    assert {:error, :stale_confirmation} =
+             Rewind.run(full, target.leaf_id,
+               dry_run: false,
+               confirmation_token: preview["confirmationToken"]
+             )
+
+    assert {:ok, restored} = SessionManager.load_from_file(full.file_path)
+    assert restored.leaf_id == full.leaf_id
+  end
+
+  test "path-backed detached appends persist and invalidate stopped confirmations", %{
+    session: session
+  } do
+    target = user(session, "original prompt")
+    full = assistant(target, "answer")
+    assert :ok = SessionManager.close(full)
+    assert {:ok, stopped} = SessionManager.load_from_file(full.file_path)
+    assert {:ok, preview, _} = Rewind.run(stopped, target.leaf_id)
+    before = File.read!(full.file_path)
+    inode = File.stat!(full.file_path).inode
+
+    changed = user(stopped, "later turn")
+
+    assert File.stat!(full.file_path).inode == inode
+    assert String.starts_with?(File.read!(full.file_path), before)
+    assert {:ok, restored} = SessionManager.load_from_file(full.file_path)
+    assert restored.leaf_id == changed.leaf_id
+
+    assert {:error, :stale_confirmation} =
+             Rewind.run(restored, target.leaf_id,
+               dry_run: false,
+               confirmation_token: preview["confirmationToken"]
+             )
+  end
+
+  test "confirmation refuses content edits with unchanged ids, leaf and entry count", %{
+    session: session
+  } do
+    target = user(session, "original prompt")
+    full = assistant(target, "original answer")
+    assert {:ok, preview, _} = Rewind.run(full, target.leaf_id)
+    [answer | rest] = full.entries_rev
+    answer = %{answer | message: %{"role" => "assistant", "content" => "changed answer"}}
+
+    changed = %{
+      full
+      | entries_rev: [answer | rest],
+        by_id: Map.put(full.by_id, answer.id, answer)
+    }
+
+    assert :ok = SessionManager.close(full)
+    assert :ok = SessionManager.save_to_file(full.file_path, changed)
+    assert {:ok, restored} = SessionManager.load_from_file(full.file_path)
+    assert restored.leaf_id == full.leaf_id
+    assert SessionManager.entry_count(restored) == SessionManager.entry_count(full)
+
+    assert {:error, :stale_confirmation} =
+             Rewind.run(restored, target.leaf_id,
+               dry_run: false,
+               confirmation_token: preview["confirmationToken"]
+             )
+  end
+
   test "missing checkpoints cannot silently claim filesystem restoration", %{session: session} do
     target = user(session, "edit without checkpoint")
     full = tool_result(target, "write", nil)

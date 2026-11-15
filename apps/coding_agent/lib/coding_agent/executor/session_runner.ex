@@ -408,10 +408,10 @@ defmodule CodingAgent.Executor.SessionRunner do
     if state.translator.completed_emitted, do: {:stop, :normal, state}, else: {:noreply, state}
   end
 
-  def handle_info({:session_event, _, _}, %{translator: %{completed_emitted: true}} = state),
+  def handle_info({:session_event, _, _, _}, %{translator: %{completed_emitted: true}} = state),
     do: {:noreply, state}
 
-  def handle_info({:session_event, session_id, event}, %{session_id: session_id} = state) do
+  def handle_info({:session_event, session_id, event, _cursor}, %{session_id: session_id} = state) do
     state = %{state | translator: RunTranslator.handle_event(state.translator, event)}
     if state.translator.completed_emitted, do: {:stop, :normal, state}, else: {:noreply, state}
   end

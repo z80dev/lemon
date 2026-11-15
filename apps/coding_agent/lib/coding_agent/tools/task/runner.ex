@@ -1,5 +1,12 @@
 defmodule CodingAgent.Tools.Task.Runner do
-  @moduledoc false
+  @moduledoc """
+  Runs native child-session steps and output corrections in order.
+
+  Each prompt owns a fenced subscription. Completion is serialized by the
+  session owner, so the next prompt is admitted once without a retry timer.
+  Cleanup uses `CodingAgent.Session.streaming?/1` instead of copying session
+  state merely to decide whether an abort must be drained.
+  """
 
   alias CodingAgent.Session
   alias CodingAgent.Tools.Task.{Control, Result}
@@ -211,13 +218,13 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   defp flush_session_events(session_id) do
     receive do
-      {:session_event, ^session_id, _event} ->
+      {:session_event, ^session_id, _event, _cursor} ->
         flush_session_events(session_id)
 
       {:session_terminal, ^session_id, _status} ->
         flush_session_events(session_id)
 
-      {:lemon_bus_delivery, _gate, {:session_event, ^session_id, _event}} ->
+      {:lemon_bus_delivery, _gate, {:session_event, ^session_id, _event, _cursor}} ->
         flush_session_events(session_id)
 
       {:lemon_bus_delivery, _gate, {:session_terminal, ^session_id, _status}} ->
@@ -229,7 +236,8 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   defp await_session_event(session_ref, delivery_gate, session_id, signal, timeout) do
     receive do
-      {:lemon_bus_delivery, ^delivery_gate, {:session_event, ^session_id, _event} = event} ->
+      {:lemon_bus_delivery, ^delivery_gate,
+       {:session_event, ^session_id, _event, _cursor} = event} ->
         event
 
       {:lemon_bus_delivery, ^delivery_gate, {:session_terminal, ^session_id, _status} = event} ->
@@ -263,15 +271,9 @@ defmodule CodingAgent.Tools.Task.Runner do
       "no Markdown fences, explanations, or other prose."
   end
 
-  # The terminal event can reach subscribers just before the session records
-  # itself idle, so a brief already-streaming window is retried.
-  defp prompt_idle_session(session, text, attempts \\ 50) do
+  defp prompt_idle_session(session, text) do
     case Session.prompt(session, text) do
-      {:error, :already_streaming} when attempts > 0 ->
-        Process.sleep(20)
-        prompt_idle_session(session, text, attempts - 1)
-
-      {:error, :already_streaming} ->
+      {:error, :busy} ->
         {:error, "Task session is already running"}
 
       other ->
@@ -346,7 +348,7 @@ defmodule CodingAgent.Tools.Task.Runner do
       {:DOWN, ^session_ref, :process, _pid, reason} ->
         {:error, format_session_exit(reason)}
 
-      {:session_event, ^session_id, {:tool_execution_start, _id, name, args}} ->
+      {:session_event, ^session_id, {:tool_execution_start, _id, name, args}, _cursor} ->
         maybe_emit_action_update(
           on_update,
           description,
@@ -372,7 +374,8 @@ defmodule CodingAgent.Tools.Task.Runner do
           budget
         )
 
-      {:session_event, ^session_id, {:tool_execution_update, _id, name, args, partial_result}} ->
+      {:session_event, ^session_id, {:tool_execution_update, _id, name, args, partial_result},
+       _cursor} ->
         maybe_forward_descendant_update(on_update, name, partial_result)
 
         maybe_emit_action_update(
@@ -400,7 +403,7 @@ defmodule CodingAgent.Tools.Task.Runner do
           budget
         )
 
-      {:session_event, ^session_id, {:tool_execution_end, _id, name, result, is_error}} ->
+      {:session_event, ^session_id, {:tool_execution_end, _id, name, result, is_error}, _cursor} ->
         maybe_emit_action_update(
           on_update,
           description,
@@ -427,7 +430,7 @@ defmodule CodingAgent.Tools.Task.Runner do
         )
 
       {:session_event, ^session_id,
-       {:message_update, %LemonAi.Types.AssistantMessage{} = msg, _event}} ->
+       {:message_update, %LemonAi.Types.AssistantMessage{} = msg, _event}, _cursor} ->
         text = LemonAi.get_text(msg)
         thinking = LemonAi.get_thinking(msg)
 
@@ -459,7 +462,8 @@ defmodule CodingAgent.Tools.Task.Runner do
           budget
         )
 
-      {:session_event, ^session_id, {:message_end, %LemonAi.Types.AssistantMessage{} = msg}} ->
+      {:session_event, ^session_id, {:message_end, %LemonAi.Types.AssistantMessage{} = msg},
+       _cursor} ->
         text = LemonAi.get_text(msg)
         thinking = LemonAi.get_thinking(msg)
 
@@ -520,16 +524,16 @@ defmodule CodingAgent.Tools.Task.Runner do
           )
         end
 
-      {:session_event, ^session_id, {:agent_end, messages}} ->
+      {:session_event, ^session_id, {:agent_end, messages}, _cursor} ->
         completed_result(messages, signal, last_text, last_thinking, budget)
 
-      {:session_event, ^session_id, {:error, reason, _partial_state}} ->
+      {:session_event, ^session_id, {:error, reason, _partial_state}, _cursor} ->
         {:error, reason}
 
-      {:session_event, ^session_id, {:canceled, _reason}} ->
+      {:session_event, ^session_id, {:canceled, _reason}, _cursor} ->
         {:error, "Task aborted"}
 
-      {:session_event, ^session_id, _event} ->
+      {:session_event, ^session_id, _event, _cursor} ->
         await_result(
           session,
           session_ref,
@@ -717,7 +721,7 @@ defmodule CodingAgent.Tools.Task.Runner do
   end
 
   defp drain_session(session, session_ref, session_id, delivery_gate) do
-    if Process.alive?(session) and Session.get_state(session).is_streaming do
+    if Session.streaming?(session) do
       Session.abort(session)
 
       await_shutdown(
@@ -741,16 +745,16 @@ defmodule CodingAgent.Tools.Task.Runner do
       {:session_terminal, ^session_id, _status} ->
         :ok
 
-      {:session_event, ^session_id, {:agent_end, _}} ->
+      {:session_event, ^session_id, {:agent_end, _}, _cursor} ->
         :ok
 
-      {:session_event, ^session_id, {:canceled, _}} ->
+      {:session_event, ^session_id, {:canceled, _}, _cursor} ->
         :ok
 
-      {:session_event, ^session_id, {:error, _, _}} ->
+      {:session_event, ^session_id, {:error, _, _}, _cursor} ->
         :ok
 
-      {:session_event, ^session_id, _} ->
+      {:session_event, ^session_id, _, _cursor} ->
         await_shutdown(session_ref, session_id, delivery_gate, deadline)
 
       :timeout ->

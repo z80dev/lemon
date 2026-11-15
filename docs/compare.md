@@ -51,9 +51,10 @@ Underneath, Elixir/OTP supplies process isolation and supervision. See the
   [support guide](support.md) for the feature you need.
 - **Automation:** cron, heartbeats, goals, and related runtime controls exist;
   production scheduling guarantees are outside the current stable boundary.
-- **Credentials:** encrypted storage and configured secret sources do not amount
-  to a general credential broker that keeps real credentials out of every tool
-  or remote execution environment.
+- **Credentials:** encrypted storage and configured secret sources are not a
+  universal credential broker. The opt-in [terminal egress broker](security/egress-broker.md)
+  isolates bound credentials from network-sandboxed Docker commands; it does not
+  protect credentials used by every other tool or remote execution environment.
 
 These distinctions matter when evaluating a workflow. A successful local demo
 shows that path working on your machine; it does not establish every integration

@@ -23,11 +23,7 @@ defmodule CodingAgent.Session.Invocation do
       {:error, :live_session_workspace_mismatch}
     else
       with {:ok, opts} <-
-             CodingAgent.Session.validate_execution_options(
-               opts
-               |> Keyword.put(:session_file, state.session_file)
-               |> Keyword.put(:loaded_session, state.session_manager)
-             ),
+             CodingAgent.Session.validate_live_execution_options(opts, state.session_manager),
            {:ok, mcp_id} <- open_mcp(opts, state) do
         %LemonCore.ExecutionContext{} = context = Keyword.fetch!(opts, :execution_context)
 
@@ -83,6 +79,7 @@ defmodule CodingAgent.Session.Invocation do
             config_cwd: Keyword.get(opts, :config_cwd, state.cwd),
             native_source_profile_id: Keyword.get(opts, :native_source_profile_id),
             tool_opts: opts,
+            response_system_prompt: nil,
             terminal_event: nil
         }
 
@@ -151,6 +148,8 @@ defmodule CodingAgent.Session.Invocation do
     if requested && explicit do
       model = ModelResolver.resolve_session_model(requested, state.settings_manager)
       :ok = LemonAgent.Agent.set_model(state.agent, model)
+      if model.provider != state.model.provider or model.id != state.model.id,
+        do: LemonAgent.ModelRuntime.SessionPins.clear(state.session_manager.header.id)
 
       manager =
         SessionManager.append_entry(

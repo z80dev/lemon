@@ -23,9 +23,12 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
 
     def stream(model, context, _opts) do
       kind =
-        if String.contains?(context.system_prompt || "", "Extract durable repository facts"),
-          do: :project_memory,
-          else: :other_completion
+        if String.contains?(
+             LemonAi.SystemPrompt.text(context.system_prompt),
+             "Extract durable repository facts"
+           ),
+           do: :project_memory,
+           else: :other_completion
 
       send(model.compat.test_owner, {:unexpected_print_auxiliary_request, kind})
       {:ok, stream} = LemonAi.EventStream.start_link()

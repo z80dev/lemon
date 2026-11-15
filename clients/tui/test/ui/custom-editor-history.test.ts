@@ -235,3 +235,22 @@ test("a failed persistent clear still empties the local recall ring", () => {
 		clear.mockRestore();
 	}
 });
+
+test("forgetting a search selection preserves the draft and remaining recall entries", () => {
+	const store = new PromptHistoryStore(file);
+	store.append("keep");
+	store.append("forget");
+	const editor = makeEditor(store);
+	editor.setText("unfinished draft");
+	editor.forgetPrompt("forget");
+	expect(editor.getText()).toBe("unfinished draft");
+	expect(editor.history).toEqual(["keep"]);
+	// A non-empty draft deliberately keeps Up as cursor movement, not recall.
+	editor.handleInput(UP);
+	expect(editor.getText()).toBe("unfinished draft");
+	editor.setText("");
+	editor.handleInput(UP);
+	expect(editor.getText()).toBe("keep");
+	// The search source owns persistent deletion; this method only updates recall.
+	expect(store.load()).toEqual(["keep", "forget"]);
+});

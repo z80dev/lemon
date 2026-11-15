@@ -199,7 +199,7 @@ defmodule LemonLsp.ServerManagerTest do
     refute inspect(active) =~ session_id
   end
 
-  test "stops child processes spawned by language-server wrappers", %{tmp_dir: tmp_dir} do
+  test "stop kills orphaned grandchildren that ignore TERM and stdin EOF", %{tmp_dir: tmp_dir} do
     previous = System.get_env("LEMON_LSP_ELIXIR_LS_COMMAND")
     server_path = Path.join(tmp_dir, "fake_child_lsp_server")
     child_pid_path = Path.join(tmp_dir, "child.pid")
@@ -243,12 +243,13 @@ defmodule LemonLsp.ServerManagerTest do
       |> String.to_integer()
 
     assert os_process_alive?(child_pid)
+    register_group_cleanup(session_id)
     assert {:ok, stopped} = LspServerManager.stop_session(session_id)
     assert stopped.status == :stopped
     assert wait_until(fn -> not os_process_alive?(child_pid) end)
   end
 
-  test "request timeouts terminate stuck language-server wrappers and children", %{
+  test "request timeouts kill orphaned grandchildren that ignore TERM and stdin EOF", %{
     tmp_dir: tmp_dir
   } do
     previous = System.get_env("LEMON_LSP_ELIXIR_LS_COMMAND")
@@ -286,6 +287,7 @@ defmodule LemonLsp.ServerManagerTest do
       |> String.to_integer()
 
     assert os_process_alive?(child_pid)
+    register_group_cleanup(session_id)
 
     assert {:error, :request_timeout} =
              LspServerManager.request_session(
@@ -295,13 +297,86 @@ defmodule LemonLsp.ServerManagerTest do
                timeout_ms: 100
              )
 
-    assert wait_until(fn -> not os_process_alive?(child_pid) end, 80)
-
-    status = LspServerManager.status()
+    # The timeout reply precedes teardown; this mailbox barrier observes its completion.
+    status = GenServer.call(LspServerManager, :status, 5_000)
+    refute os_process_alive?(child_pid)
     assert status.active_count == 0
     recent = Enum.find(status.recent_sessions, &(&1.session_hash == session.session_hash))
     assert recent.status == :request_timeout
     assert recent.pending_request_count == 0
+  end
+
+  test "port exit cleans orphaned grandchildren before replying to pending requests", %{
+    tmp_dir: tmp_dir
+  } do
+    previous = System.get_env("LEMON_LSP_ELIXIR_LS_COMMAND")
+    server_path = Path.join(tmp_dir, "exiting_lsp_server")
+    child_pid_path = Path.join(tmp_dir, "exiting_child.pid")
+    session_id = "lsp-exit-cleanup-#{System.unique_integer([:positive])}"
+
+    File.write!(
+      server_path,
+      "#!/bin/sh\n" <>
+        orphan_grandchild_script(child_pid_path) <> "IFS= read -r _header\nexit 7\n"
+    )
+
+    File.chmod!(server_path, 0o755)
+    System.put_env("LEMON_LSP_ELIXIR_LS_COMMAND", server_path)
+
+    on_exit(fn ->
+      _ = LspServerManager.stop_session(session_id)
+
+      if previous,
+        do: System.put_env("LEMON_LSP_ELIXIR_LS_COMMAND", previous),
+        else: System.delete_env("LEMON_LSP_ELIXIR_LS_COMMAND")
+    end)
+
+    assert {:ok, _} =
+             LspServerManager.start_session(:elixir_ls, cwd: tmp_dir, session_id: session_id)
+
+    register_group_cleanup(session_id)
+    assert wait_until(fn -> File.exists?(child_pid_path) end)
+    child_pid = child_pid_path |> File.read!() |> String.to_integer()
+    assert os_process_alive?(child_pid)
+
+    assert {:error, :session_exited} =
+             LspServerManager.request_session(session_id, "initialize", %{}, timeout_ms: 5_000)
+
+    refute os_process_alive?(child_pid)
+  end
+
+  test "manager shutdown kills every owned group before closing its ports", %{tmp_dir: tmp_dir} do
+    previous = System.get_env("LEMON_LSP_ELIXIR_LS_COMMAND")
+    server_path = Path.join(tmp_dir, "shutdown_lsp_server")
+    child_pid_path = Path.join(tmp_dir, "shutdown_child.pid")
+    File.write!(server_path, fake_timeout_child_lsp_server_script(child_pid_path))
+    File.chmod!(server_path, 0o755)
+    System.put_env("LEMON_LSP_ELIXIR_LS_COMMAND", server_path)
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("LEMON_LSP_ELIXIR_LS_COMMAND", previous),
+        else: System.delete_env("LEMON_LSP_ELIXIR_LS_COMMAND")
+    end)
+
+    manager = start_supervised!({LspServerManager, name: __MODULE__})
+    session_id = "lsp-manager-shutdown"
+
+    assert {:ok, _} =
+             GenServer.call(
+               manager,
+               {:start_session, :elixir_ls, [cwd: tmp_dir, session_id: session_id]}
+             )
+
+    root = :sys.get_state(manager).sessions[session_id].os_pid
+    on_exit(fn -> LemonCore.ProcessGroup.terminate(root, grace_ms: 0) end)
+    assert wait_until(fn -> File.exists?(child_pid_path) end)
+    child_pid = child_pid_path |> File.read!() |> String.to_integer()
+    assert os_process_alive?(child_pid)
+
+    :ok = GenServer.stop(manager)
+
+    refute os_process_alive?(child_pid)
   end
 
   test "initializes a session and captures redacted diagnostics notifications", %{
@@ -554,8 +629,7 @@ defmodule LemonLsp.ServerManagerTest do
   defp fake_child_lsp_server_script(child_pid_path) do
     """
     #!/bin/sh
-    sleep 30 &
-    printf '%s' "$!" > #{child_pid_path}
+    #{orphan_grandchild_script(child_pid_path)}
     IFS= read -r header || exit 1
     len=$(printf '%s' "$header" | tr -dc '0-9')
     IFS= read -r _blank || true
@@ -570,12 +644,27 @@ defmodule LemonLsp.ServerManagerTest do
   defp fake_timeout_child_lsp_server_script(child_pid_path) do
     """
     #!/bin/sh
-    sleep 30 &
-    printf '%s' "$!" > #{child_pid_path}
+    #{orphan_grandchild_script(child_pid_path)}
     while true; do
       sleep 30
     done
     """
+  end
+
+  # The intermediate shell exits before the fixture is ready. Its child remains
+  # in the port's group, but no recursive parent-PID walk can find it anymore.
+  defp orphan_grandchild_script(child_pid_path) do
+    """
+    trap '' TERM
+    child_pid=$(sh -c 'sleep 60 </dev/null >/dev/null 2>&1 & printf "%s" "$!"')
+    printf '%s' "$child_pid" > #{inspect(child_pid_path <> ".tmp")}
+    mv #{inspect(child_pid_path <> ".tmp")} #{inspect(child_pid_path)}
+    """
+  end
+
+  defp register_group_cleanup(session_id) do
+    root = :sys.get_state(LspServerManager).sessions[session_id].os_pid
+    on_exit(fn -> LemonCore.ProcessGroup.terminate(root, grace_ms: 0) end)
   end
 
   defp fake_diagnostic_lsp_server_script(raw_uri, raw_message) do

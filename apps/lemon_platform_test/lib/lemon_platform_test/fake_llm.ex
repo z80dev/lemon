@@ -282,30 +282,36 @@ defmodule LemonPlatformTest.FakeLLM do
   defp event_stream(%AssistantMessage{} = message) do
     {:ok, stream} = LemonAi.EventStream.start_link()
 
-    _ =
+    {:ok, task_pid} =
       Task.start(fn ->
-        _ = LemonAi.EventStream.push(stream, {:start, message})
+        try do
+          LemonAi.EventStream.push!(stream, {:start, message})
 
-        message.content
-        |> Enum.with_index()
-        |> Enum.each(fn {block, index} -> push_block(stream, block, index, message) end)
+          message.content
+          |> Enum.with_index()
+          |> Enum.each(fn {block, index} -> push_block(stream, block, index, message) end)
 
-        _ = LemonAi.EventStream.push(stream, {:done, message.stop_reason, message})
-        LemonAi.EventStream.complete(stream, message)
+          LemonAi.EventStream.complete(stream, message)
+        catch
+          :throw, {:event_stream_push_failed, _reason} ->
+            :ok
+        end
       end)
+
+    LemonAi.EventStream.attach_task(stream, task_pid)
 
     stream
   end
 
   defp push_block(stream, %TextContent{text: text}, index, message) do
-    _ = LemonAi.EventStream.push(stream, {:text_start, index, message})
-    _ = LemonAi.EventStream.push(stream, {:text_delta, index, text, message})
-    LemonAi.EventStream.push(stream, {:text_end, index, text, message})
+    LemonAi.EventStream.push!(stream, {:text_start, index, message})
+    LemonAi.EventStream.push!(stream, {:text_delta, index, text, message})
+    LemonAi.EventStream.push!(stream, {:text_end, index, text, message})
   end
 
   defp push_block(stream, %ToolCall{} = call, index, message) do
-    _ = LemonAi.EventStream.push(stream, {:tool_call_start, index, message})
-    LemonAi.EventStream.push(stream, {:tool_call_end, index, call, message})
+    LemonAi.EventStream.push!(stream, {:tool_call_start, index, message})
+    LemonAi.EventStream.push!(stream, {:tool_call_end, index, call, message})
   end
 
   defp push_block(_stream, _other, _index, _message), do: :ok

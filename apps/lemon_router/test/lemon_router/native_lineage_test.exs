@@ -1893,7 +1893,7 @@ defmodule LemonRouter.NativeLineageTest do
 
     CodingAgent.Session.subscribe(session)
     assert :ok = CodingAgent.Session.prompt(session, request.prompt)
-    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}}, 5_000
+    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}, _}, 5_000
     refute_received :unexpected_provider_call
   end
 

@@ -126,33 +126,35 @@ defmodule LemonChannels.Outbox do
     store = Keyword.get(opts, :store, LemonCore.Store)
     receipt_limit = positive_option(:max_dedupe_entries, @default_max_dedupe_entries, opts)
 
-    with {:ok, entries, receipts, sequence} <- QueueStore.load(store, receipt_limit) do
-      send(self(), :process_queue)
-      Process.send_after(self(), :prune, @cleanup_interval_ms)
+    case QueueStore.load(store, receipt_limit) do
+      {:ok, entries, receipts, sequence} ->
+        send(self(), :process_queue)
+        Process.send_after(self(), :prune, @cleanup_interval_ms)
 
-      {:ok,
-       %{
-         queue: :queue.from_list(entries),
-         processing: %{},
-         processing_groups: %{},
-         enqueued_total: 0,
-         max_queue_size: max_queue_size(opts),
-         max_concurrency: max_concurrency(opts),
-         retention_ms: positive_option(:retention_ms, @default_retention_ms, opts),
-         worker_supervisor: Keyword.get(opts, :worker_supervisor, @worker_supervisor),
-         max_attempts:
-           if(Keyword.has_key?(opts, :max_attempts), do: max_attempts(opts), else: nil),
-         store: store,
-         sequence: sequence,
-         pending_count: 0,
-         storage_queue: :queue.new(),
-         storage_current: nil,
-         storage_task: nil,
-         receipts: receipts,
-         receipt_limit: receipt_limit
-       }}
-    else
-      _ -> {:stop, :outbox_store_unavailable}
+        {:ok,
+         %{
+           queue: :queue.from_list(entries),
+           processing: %{},
+           processing_groups: %{},
+           enqueued_total: 0,
+           max_queue_size: max_queue_size(opts),
+           max_concurrency: max_concurrency(opts),
+           retention_ms: positive_option(:retention_ms, @default_retention_ms, opts),
+           worker_supervisor: Keyword.get(opts, :worker_supervisor, @worker_supervisor),
+           max_attempts:
+             if(Keyword.has_key?(opts, :max_attempts), do: max_attempts(opts), else: nil),
+           store: store,
+           sequence: sequence,
+           pending_count: 0,
+           storage_queue: :queue.new(),
+           storage_current: nil,
+           storage_task: nil,
+           receipts: receipts,
+           receipt_limit: receipt_limit
+         }}
+
+      _ ->
+        {:stop, :outbox_store_unavailable}
     end
   end
 
@@ -460,7 +462,6 @@ defmodule LemonChannels.Outbox do
 
     Enum.map_reduce(payloads, state.sequence, fn payload, sequence ->
       id = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
-      payload = %{payload | idempotency_key: payload.idempotency_key || "outbox:#{id}"}
 
       payload =
         if payload.channel_id == "discord",
@@ -593,7 +594,9 @@ defmodule LemonChannels.Outbox do
 
   # Also covers a crash between persisting a confirmed receipt and deleting its
   # pending record. No recovered confirmed key reaches the adapter again.
-  defp retry_already_confirmed?(entry), do: check_idempotency(entry.payload) == :duplicate
+  defp retry_already_confirmed?(entry) do
+    Dedupe.check(entry.payload.channel_id, QueueStore.delivery_key(entry)) == :duplicate
+  end
 
   defp suppress_confirmed_retry(entry) do
     Logger.info(
@@ -809,10 +812,8 @@ defmodule LemonChannels.Outbox do
     end
   end
 
-  defp mark_delivered(%{idempotency_key: nil}), do: :ok
-
-  defp mark_delivered(%{idempotency_key: key, channel_id: channel_id}) do
-    Dedupe.mark(channel_id, key)
+  defp mark_delivered(entry) do
+    Dedupe.mark(entry.payload.channel_id, QueueStore.delivery_key(entry))
   end
 
   @doc false
@@ -906,7 +907,7 @@ defmodule LemonChannels.Outbox do
           state
 
         {:complete, ref, entry, result} ->
-          if match?({:ok, _}, result), do: mark_delivered(entry.payload)
+          if match?({:ok, _}, result), do: mark_delivered(entry)
           state = finish_processing(state, ref, entry)
           notify_delivery(entry, result)
           state

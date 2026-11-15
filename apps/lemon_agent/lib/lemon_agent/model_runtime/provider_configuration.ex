@@ -56,9 +56,18 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
 
     with {:ok, action} <- required_string(params, "action"),
          {:ok, target} <- target(params, project_dir) do
-      :global.trans({__MODULE__, target.path}, fn ->
-        configure_locked(action, params, target, project_dir)
-      end)
+      :global.trans(
+        {{__MODULE__, target.path}, self()},
+        fn ->
+          configure_locked(action, params, target, project_dir)
+        end,
+        [node()],
+        3
+      )
+      |> case do
+        :aborted -> {:error, :configuration_failed, "Provider routing configuration failed"}
+        result -> result
+      end
     end
   rescue
     _ -> {:error, :configuration_failed, "Provider routing configuration failed"}

@@ -221,8 +221,9 @@ defmodule CodingAgent.ToolExecutor do
   # These arguments are approval/event projections, never execution input.
   # Env values may be secrets even under innocuous variable names.
   @doc false
-  def project_action("bash", args)
-      when is_map(args) and (is_map_key(args, "env") or is_map_key(args, :env)) do
+  def project_action(name, args)
+      when name in ["bash", "Bash"] and is_map(args) and
+             (is_map_key(args, "env") or is_map_key(args, :env)) do
     env =
       case Map.fetch(args, "env") do
         {:ok, env} -> env

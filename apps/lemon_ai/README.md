@@ -252,6 +252,66 @@ region override, and signs for that same region. Adaptive Claude models use
 Converse's adaptive-thinking fields. Nova 2 high-effort reasoning omits its
 incompatible temperature and output-token cap.
 
+### Reviewed upstream identities
+
+Subscription compatibility currently imitates upstream clients rather than only
+identifying Lemon. [`priv/upstream_identities.json`](priv/upstream_identities.json)
+is the review ledger: it records exact local prompt/header/client-ID bytes,
+SHA-256 hashes, immutable npm versions or full GitHub revisions, and hashed
+upstream files containing the evidence. Public OAuth client IDs are application
+identifiers, not access tokens. No credentials belong in this manifest.
+
+| Identity | Preserved baseline and provenance |
+| --- | --- |
+| Claude Code | System prefix, OAuth betas, `x-app`, public client ID and User-Agent template from published [`pi-ai@0.49.0`](https://registry.npmjs.org/@mariozechner/pi-ai/0.49.0); version [`2.1.296`](https://registry.npmjs.org/@anthropic-ai/claude-code/2.1.296). |
+| GitHub Copilot | Chat `0.35.0`, VS Code `1.107.0`, integration ID and public client ID from the same pi-ai package; all provider/auth and model-catalog copies are checked. |
+| Gemini / Antigravity | Cloud SDK/Node headers, metadata, body identities, Antigravity `1.11.5`, its system instruction and copied Pi bridge prompt from the same pi-ai package. |
+| Codex | Public OAuth client and `pi` originator from pi-ai; capability version from [`@openai/codex@0.159.0`](https://registry.npmjs.org/@openai/codex/0.159.0). Lemon's `pi/0.159.0` User-Agent is a composition, **not** a pi release number. Request and discovery versions are both checked. |
+| Kimi | Version and public client ID from [`kimi-cli@1.52.0`](https://github.com/MoonshotAI/kimi-cli/tree/9ab1286b8fe4e6bcd116949a27ce5e0ac3389c82); KimiCLI User-Agent template from the pinned omp source. |
+| SuperGrok / ZCode | Public client IDs and ZCode redirect identity from [`omp@7c49c11`](https://github.com/can1357/oh-my-pi/tree/7c49c11aa5bbaf3f418406583096168ad5b8c6dc). This is compatibility-client provenance, not first-party vendor source. |
+
+Claude's advertised version is fixed at the reviewed value: installing a newer
+`claude`/`claude-code` executable no longer silently changes network identity.
+Existing explicit caller header/client-ID overrides remain caller-owned.
+Actual host/OS values, session/device/account IDs and tokens are not upstream
+constants. Gemini and Antigravity OAuth client credentials are operator-supplied,
+not bundled vendor identities. The OpenCode Go `lemon_ai` User-Agent, Codex OAuth
+`lemon` originator, and Z.AI `lemon` key name are Lemon's own identities and are
+explicitly excluded.
+
+From the repository root (Python 3 standard library only; no Mix compilation):
+
+```bash
+python3 scripts/check_upstream_identities --offline
+python3 scripts/check_upstream_identities --online
+```
+
+Offline mode fails on changed, missing or duplicated local identity selections,
+including every repeated Copilot catalog header. Online mode also downloads the
+pinned artifacts, resolves npm's **latest** dist-tag / GitHub's current default
+branch, fetches those sources, and fails on version or hash drift. Missing files,
+malformed responses and network failures fail closed. It never installs or
+executes upstream code, changes pins, or updates runtime defaults. Whole upstream
+file/archive hashes intentionally require review even for non-identity changes;
+an unrelated GitHub commit with identical watched files does not fail.
+
+These are historical compatibility pins, not a claim that current upstream
+matches. Initial source research found npm latest versions Claude `2.1.325`,
+Codex `0.169.0`, and pi-ai `0.73.1`; online checking should report that drift,
+not silently promote the advertised versions. To refresh, inspect the new
+upstream artifacts, review the compatibility change, update local code and the
+manifest's source hashes/selectors/text together, then run both modes and:
+
+```bash
+mix test apps/lemon_ai/test/lemon_ai/upstream_identities_test.exs apps/lemon_ai/test/lemon_ai/auth/anthropic_oauth_test.exs
+```
+
+The ExUnit regressions exercise offline mutations and online npm/GitHub drift
+logic with in-memory responses; normal tests do not contact upstream services.
+The manifest additionally records Claude `2.1.325` SDK Read/Edit/Bash inputs and
+the pinned first-party Codex `apply_patch` grammar/spec for the opt-in dialect
+experiment. Those source pins do not enable a tool dialect or change its default.
+
 ### Codex and Anthropic request controls
 
 Codex accepts a ChatGPT access token through `api_key`, including Lemon's configured
@@ -311,6 +371,46 @@ context limits include current 1M-context Claude models without adding an obsole
 context beta. Provider conversion preserves full history; preflight compaction is
 the caller's responsibility rather than silent wire truncation.
 
+### Ordered system prompts (Hex API addition)
+
+`Context.system_prompt` continues to accept a binary or `nil`, and now also accepts
+ordered `%{text: binary, directory_derived: boolean}` blocks. This extends the
+published `lemon_ai` package API; existing binary callers need no migration.
+
+```elixir
+prompt = [
+  %{text: "You are a helpful assistant.\n\n", directory_derived: false},
+  %{text: "Project directory: /worktrees/example", directory_derived: true}
+]
+
+context = LemonAi.new_context(system_prompt: prompt)
+text = LemonAi.SystemPrompt.text(prompt)
+digest = LemonAi.SystemPrompt.digest(prompt)
+```
+
+Put directory-independent blocks first. Anthropic places one system cache marker
+on the last non-empty block before the **first** directory-derived block (or the
+last block when none is directory-derived). Later non-directory blocks do not
+move that boundary. OAuth retains its Claude Code prefix and existing text
+sanitization; the prefix itself is cacheable when no other static block exists.
+Empty/whitespace-only blocks are omitted from Anthropic requests. With no static
+prefix, API-key requests omit the system marker. Together with the last-user
+marker this uses at most two of Anthropic's four permitted breakpoints, regardless
+of block count. `cache_retention: :none` removes both markers.
+
+Every other transport concatenates the block texts into its existing binary
+system-prompt shape, retaining existing provider-specific sanitization, defaults,
+and cache controls. **No separator is inserted**: include newlines or spaces in
+the block text. `SystemPrompt.text(nil)` returns `""`.
+
+`SystemPrompt.digest/1` returns lowercase SHA-256 of the canonical Erlang external
+term `{:system_prompt, 1, [{text, directory_derived}, ...]}`. Text bytes, block order,
+boundaries, and directory flags all participate; map key order does not. A binary
+normalizes to one directory-independent block, and `nil` normalizes to `[]`.
+The digest identifies the supplied prompt, not provider wire transformations or
+a guaranteed cache hit. `PromptDiagnostics.stats/1` retains its concatenated-text
+byte count and `system_prompt_sha256`, and adds `system_prompt_digest` for this
+block-aware identity. Diagnostics still contain no raw prompt text.
 
 The 27 registered provider IDs: `:anthropic`, `:openai`, `:openai_codex`,
 `:amazon_bedrock`, `:google`, `:google_antigravity`, `:kimi`, `:kimi_coding`,
@@ -590,7 +690,8 @@ The hard ceiling never resets; its reasons remain `:timeout` and
 `:dispatcher_stream_timeout`.
 
 `LemonAi.ModelCache` caches provider `GET /models` availability with a configurable TTL
-(default 5 minutes).
+(default 5 minutes). Its supervised process owns the ETS table; caller exits do not
+discard entries, while restarting the owner creates an empty cache.
 
 ## Key types
 
@@ -627,7 +728,7 @@ All defined in `LemonAi.Types`:
 }
 
 %LemonAi.Types.Context{
-  system_prompt: String.t() | nil,
+  system_prompt: LemonAi.SystemPrompt.t(),  # binary | ordered blocks | nil
   messages: [message()],       # stored newest-first for O(1) append
   tools: [Tool.t()]
 }
@@ -672,6 +773,32 @@ rate-limit permit, and enforces the concurrency cap before invoking the provider
 Streaming responses come back through an `LemonAi.EventStream` GenServer with a bounded
 queue, backpressure, owner monitoring, and timeouts.
 
+This is also the implementation behind the published `LemonAgent.EventStream`
+facade; there is only one queue/lifecycle implementation. Provider completion
+uses `{:done, stop_reason, message}`, while list completion uses
+`{:agent_end, messages}`. `error/2` retains provider message results and `error/3`
+retains agent reason/partial-state results. Runner monitoring and `:resync`
+overflow fencing are supported alongside owner monitoring and result subscriptions.
+
+Synchronous `push/2` waits without a call timeout and returns
+`:ok | {:error, :overflow | :canceled}`; callers must handle rejection.
+`push!/2` finishes overflow with a terminal error and throws
+`{:event_stream_push_failed, reason}` to an explicit producer failure boundary.
+Async pushes retain their documented drop policy.
+
+The phase-2 direct-mailbox replacement is not implemented. The opt-in benchmark
+under `apps/lemon_ai/bench` compares one/two queue hops with a direct-send baseline.
+Record measurements and the #546 context before choosing a replacement; no
+latency gain or phase-2 decision is claimed by consolidation alone.
+
+```bash
+LEMON_EVENT_STREAM_BENCH=1 LEMON_BENCH_REVISION=<revision> MIX_ENV=test \
+  mix run --no-start apps/lemon_ai/bench/event_stream.exs
+```
+
+The benchmark prints runtime metadata and p50/p95 batch and per-event costs.
+Its direct-send baseline deliberately does not implement the lifecycle contract.
+
 ```
 LemonAi.stream/3  or  LemonAi.complete/3
   → LemonAi.ProviderRegistry          -- O(1) :persistent_term lookup by api_id
@@ -690,11 +817,22 @@ LemonAi.Supervisor (one_for_one; owns the retained slot lease/cap ETS table)
   ├── Registry (LemonAi.CallDispatcherRegistry)
   ├── DynamicSupervisor (LemonAi.ProviderSupervisor) -- per-provider breakers/limiters/slots
   ├── LemonAi.CallDispatcher -- provider failure summaries
-  └── LemonAi.ModelCache
+  ├── LemonAi.ModelCache -- model availability ETS owner
+  ├── LemonAi.Auth.Cache -- token and fingerprint ETS owner
+  └── LemonAi.Auth.OmpAuthBroker -- broker snapshot ETS owner and watchers
 ```
 
 `LemonAi.ProviderRegistry` lives outside the tree in `:persistent_term`, so provider
-mappings survive process restarts.
+mappings survive process restarts. Only explicit boot/configuration registration
+updates this map; request-path lookups never initialize or mutate it.
+
+Mutable and lazily discovered auth values live in `LemonAi.Auth.Cache`, not
+`:persistent_term`: omp access tokens retain their expiry/forced-refresh rules,
+Claude Code versions are cached per `PATH`, and Kimi CLI fingerprint headers are
+cached for the owner's lifetime. Reads and writes access ETS directly. Caller exits
+leave entries intact; an owner restart discards them for rediscovery. Before startup
+or during a restart, auth adapters resolve values without caching rather than creating
+a caller-owned table. This cache never stores omp refresh credentials.
 
 ## Adding a provider
 

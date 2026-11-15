@@ -8,6 +8,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- `LemonAi.CallDispatcher` keeps per-provider concurrency caps and live leases
+  across slot-authority and dispatcher restarts and fails closed with
+  `:admission_unavailable`; circuit-breaker reads come from ETS (#591).
+- Model-call terminal telemetry carries native monotonic timestamps (#594).
 - Share OAuth secret codecs, resolution, refresh locking and persistence across
   provider helpers while retaining provider-specific expiry and project rules.
 - Start the named `LemonAi.ProviderSupervisor` directly with `DynamicSupervisor`;

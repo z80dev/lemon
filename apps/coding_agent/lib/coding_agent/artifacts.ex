@@ -32,6 +32,10 @@ defmodule CodingAgent.Artifacts do
   @doc "Persists complete text in session storage and returns its readable handle."
   @spec spill(binary(), String.t(), options()) :: {:ok, String.t()} | {:error, String.t()}
   def spill(content, cwd, opts) when is_binary(content) do
+    CodingAgent.SessionMaintenance.with_root_lock(fn -> spill_locked(content, cwd, opts) end)
+  end
+
+  defp spill_locked(content, cwd, opts) do
     with {:ok, directory} <- spill_dir(cwd, opts),
          :ok <- File.mkdir_p(directory) do
       path =
@@ -93,6 +97,10 @@ defmodule CodingAgent.Artifacts do
   """
   @spec register_in_dir(String.t(), String.t()) :: {:ok, String.t()} | {:error, String.t()}
   def register_in_dir(path, directory) do
+    CodingAgent.SessionMaintenance.with_root_lock(fn -> register_locked(path, directory) end)
+  end
+
+  defp register_locked(path, directory) do
     with :ok <- validate_path(directory),
          :ok <- validate_path(path),
          absolute_path = Path.expand(path, Path.expand(directory)),

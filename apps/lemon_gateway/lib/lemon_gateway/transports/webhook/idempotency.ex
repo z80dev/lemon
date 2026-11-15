@@ -1,7 +1,13 @@
 defmodule LemonGateway.Transports.Webhook.Idempotency do
   @moduledoc """
   Idempotency-key reservation and response persistence for webhook submissions.
+
+  The ingress supervisor owns the volatile ETS sweep watermark through this
+  module. Request processes may advance it only after successful cleanup; their
+  exit cannot delete it. Owner restart resets the schedule, not durable receipts.
   """
+
+  use GenServer
 
   require Logger
 
@@ -13,7 +19,19 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   @reservation_lease_ms 60_000
   @response_retention_ms 86_400_000
   @sweep_interval_ms 60_000
-  @last_sweep_key {__MODULE__, :last_response_sweep_ms}
+  @sweep_table __MODULE__
+  @last_sweep_key :last_response_sweep_ms
+
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  @impl true
+  def init(_opts) do
+    :ets.new(@sweep_table, [:named_table, :public, :set, read_concurrency: true])
+    :ets.insert(@sweep_table, {@last_sweep_key, 0})
+    {:ok, nil}
+  end
 
   @spec table() :: atom()
   def table, do: @table
@@ -56,9 +74,14 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
         store_key = store_key(idempotency_digest)
         legacy_key = legacy_store_key(integration_id, idempotency_key)
 
-        case :global.trans({{__MODULE__, store_key}, self()}, fn ->
-               reserve(store_key, legacy_key, integration_id, idempotency_digest)
-             end) do
+        case :global.trans(
+               {{__MODULE__, store_key}, self()},
+               fn ->
+                 reserve(store_key, legacy_key, integration_id, idempotency_digest)
+               end,
+               [node()],
+               3
+             ) do
           :aborted -> {:error, :idempotency_unavailable}
           {:aborted, _reason} -> {:error, :idempotency_unavailable}
           result -> result
@@ -333,9 +356,14 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
             hashed_key = store_key(digest)
 
             result =
-              :global.trans({{__MODULE__, hashed_key}, self()}, fn ->
-                migrate_legacy_key(hashed_key, legacy_key, integration_id, digest)
-              end)
+              :global.trans(
+                {{__MODULE__, hashed_key}, self()},
+                fn ->
+                  migrate_legacy_key(hashed_key, legacy_key, integration_id, digest)
+                end,
+                [node()],
+                3
+              )
 
             case result do
               :ok -> {:cont, :ok}
@@ -564,20 +592,26 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
 
   defp maybe_sweep_expired do
     now_ms = System.system_time(:millisecond)
-    last_ms = :persistent_term.get(@last_sweep_key, 0)
+    table = :ets.whereis(@sweep_table)
+    last_ms = :ets.lookup_element(table, @last_sweep_key, 2)
 
     if now_ms - last_ms >= @sweep_interval_ms do
-      case :global.trans({{__MODULE__, :response_sweep}, self()}, fn ->
-             current = :persistent_term.get(@last_sweep_key, 0)
+      case :global.trans(
+             {{__MODULE__, :response_sweep}, self()},
+             fn ->
+               current = :ets.lookup_element(table, @last_sweep_key, 2)
 
-             if now_ms - current >= @sweep_interval_ms do
-               result = sweep_expired(now_ms, @response_retention_ms)
-               if result == :ok, do: :persistent_term.put(@last_sweep_key, now_ms)
-               result
-             else
-               :ok
-             end
-           end) do
+               if now_ms - current >= @sweep_interval_ms do
+                 result = sweep_expired(now_ms, @response_retention_ms)
+                 if result == :ok, do: :ets.insert(table, {@last_sweep_key, now_ms})
+                 result
+               else
+                 :ok
+               end
+             end,
+             [node()],
+             0
+           ) do
         :aborted -> :ok
         {:aborted, _} -> :ok
         result -> result

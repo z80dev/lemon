@@ -238,11 +238,10 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
     Map.get(opts.thinking_budgets || %{}, :text_verbosity, "medium")
   end
 
-  defp normalize_instructions(prompt) when is_binary(prompt) do
-    if String.trim(prompt) == "", do: @default_instructions, else: prompt
+  defp normalize_instructions(prompt) do
+    text = LemonAi.SystemPrompt.text(prompt)
+    if String.trim(text) == "", do: @default_instructions, else: text
   end
-
-  defp normalize_instructions(_), do: @default_instructions
 
   defp build_headers(model, opts, account_id, token) do
     # Get OS info for user agent

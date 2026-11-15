@@ -1,7 +1,7 @@
 defmodule CodingAgent.Session.NotifierBackpressureTest do
   use ExUnit.Case, async: true
 
-  alias CodingAgent.Session.Notifier
+  alias CodingAgent.Session.{EventLog, Notifier}
   alias LemonAgent.EventStream
 
   test "quiet session subscriptions do not inherit a provider inactivity timer" do
@@ -26,8 +26,9 @@ defmodule CodingAgent.Session.NotifierBackpressureTest do
     end
 
     assert {:message_queue_len, 9} = Process.info(consumer, :message_queue_len)
-    assert :ok = Notifier.broadcast_event(state, {:agent_end, [:canonical_answer]})
-    assert :ok = Notifier.complete_event_streams(state, {:agent_end, [:canonical_answer]})
+    terminal = {:agent_end, [%{role: :assistant, content: "canonical_answer"}]}
+    assert :ok = Notifier.broadcast_event(state, terminal)
+    assert :ok = Notifier.complete_event_streams(state, terminal)
     assert :ok = Notifier.complete_event_streams(state, {:canceled, :late_cancel})
     assert :ok = Notifier.broadcast_event(state, {:agent_start})
     assert {:message_queue_len, 10} = Process.info(consumer, :message_queue_len)
@@ -36,12 +37,12 @@ defmodule CodingAgent.Session.NotifierBackpressureTest do
 
     assert Enum.count(
              messages,
-             &match?({:session_event, "session-1", {:tool_execution_update, _, _, _, _}}, &1)
+             &match?({:session_event, "session-1", {:tool_execution_update, _, _, _, _}, _}, &1)
            ) == 8
 
     assert Enum.count(
              messages,
-             &(&1 == {:session_event, "session-1", {:stream_resync, %{reason: :overflow}}})
+             &(&1 == {:session_event, "session-1", {:stream_resync, %{reason: :overflow}}, nil})
            ) == 1
 
     assert List.last(messages) == {:session_terminal, "session-1", :completed}
@@ -77,14 +78,19 @@ defmodule CodingAgent.Session.NotifierBackpressureTest do
     :ok = :sys.resume(stream)
 
     assert %{queue_size: 9, max_queue: 8, dropped: 1} = EventStream.stats(stream)
-    Notifier.complete_event_streams(state, {:agent_end, [:canonical_answer]})
+
+    Notifier.complete_event_streams(
+      state,
+      {:agent_end, [%{role: :assistant, content: "canonical_answer"}]}
+    )
+
     Notifier.broadcast_event(state, {:agent_start})
     assert %{queue_size: 9} = EventStream.stats(stream)
     assert {:error, :overflow} = EventStream.result(stream)
     events = stream |> EventStream.events() |> Enum.to_list()
 
     assert List.last(events) ==
-             {:session_event, "session-1", {:stream_resync, %{reason: :overflow}}}
+             {:session_event, "session-1", {:stream_resync, %{reason: :overflow}}, nil}
 
     refute Enum.any?(events, &match?({:agent_end, _}, &1))
 
@@ -130,7 +136,14 @@ defmodule CodingAgent.Session.NotifierBackpressureTest do
   end
 
   defp state do
-    %{session_manager: %{header: %{id: "session-1"}}, event_listeners: [], event_streams: %{}}
+    %{
+      session_manager: %{header: %{id: "session-1"}},
+      session_key: nil,
+      run_id: nil,
+      event_log: EventLog.new("session-1", nil, nil, System.tmp_dir!()),
+      event_listeners: [],
+      event_streams: %{}
+    }
   end
 
   defp frozen_consumer do

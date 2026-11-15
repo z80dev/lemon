@@ -70,6 +70,12 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
     assert Process.alive?(session)
     first_agent = Session.get_state(session).agent
 
+    assert {:error, :not_session_owner} =
+             Session.validate_live_execution_options(
+               [cwd: ctx.tmp_dir],
+               Session.get_state(session).session_manager
+             )
+
     {second, same_session, ^id} = start_turn(ctx, "second", id)
     assert same_session == session
     assert Session.get_state(session).agent == first_agent
@@ -85,7 +91,7 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
 
   test "TTL parking restores the journal once and does not recapture its environment", ctx do
     {first, session, id} = start_turn(ctx, "before parking")
-    assert_receive {:provider, provider, _, _}, 5_000
+    assert_receive {:provider, provider, before_parking, _}, 5_000
     send(provider, {:respond, "saved before parking"})
     complete(first)
     ref = Process.monitor(session)
@@ -98,6 +104,7 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
     {second, restored, ^id} = start_turn(ctx, "after parking", id)
     refute restored == session
     assert_receive {:provider, provider, context, _}, 5_000
+    assert context.system_prompt == before_parking.system_prompt
     assert Enum.any?(context.messages, &assistant_text?(&1, "saved before parking"))
     send(provider, {:respond, "restored answer"})
     complete(second)

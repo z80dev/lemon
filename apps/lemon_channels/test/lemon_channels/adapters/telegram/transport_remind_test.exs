@@ -52,6 +52,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportRemindTest do
   @gateway_config_key :"Elixir.LemonGateway.Config"
 
   setup do
+    unless Process.whereis(LemonChannels.Adapters.Telegram.AsyncSupervisor) do
+      start_supervised!({Task.Supervisor, name: LemonChannels.Adapters.Telegram.AsyncSupervisor})
+    end
+
     stop_transport()
     FakeAPI.reset()
 
@@ -143,7 +147,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportRemindTest do
   end
 
   defp start_transport(overrides) when is_map(overrides) do
-    token = "fake-token-" <> Integer.to_string(System.unique_integer([:positive]))
+    token = "remind-test-#{System.pid()}-#{System.unique_integer([:positive])}"
 
     config =
       %{

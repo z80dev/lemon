@@ -403,6 +403,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "continuationFrom" => :map
       }
     },
+    "sessions.events" => %{
+      required: %{"sessionKey" => :string, "cursor" => :map},
+      optional: %{"limit" => :integer}
+    },
     "sessions.create" => %{
       required: %{"sessionKey" => :string, "cwd" => :string},
       optional: %{}
@@ -495,6 +499,15 @@ defmodule LemonControlPlane.Protocol.Schemas do
       optional: %{
         "archivedOnly" => :boolean,
         "includePinned" => :boolean,
+        "dryRun" => :boolean,
+        "confirmToken" => :string
+      }
+    },
+    "sessions.maintain" => %{
+      required: %{
+        "olderThanMs" => :integer
+      },
+      optional: %{
         "dryRun" => :boolean,
         "confirmToken" => :string
       }
@@ -1187,6 +1200,14 @@ defmodule LemonControlPlane.Protocol.Schemas do
   }
 
   @event_schemas %{
+    "session.event" => %{
+      required: %{
+        "sessionKey" => :string,
+        "eventId" => :string,
+        "cursor" => :map,
+        "events" => :list
+      }
+    },
     "session.prompt.requested" => %{
       required: %{"promptId" => :string, "sessionKey" => :string, "questions" => :list},
       optional: %{

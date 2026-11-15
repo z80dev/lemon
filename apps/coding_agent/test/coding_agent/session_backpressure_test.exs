@@ -168,7 +168,7 @@ defmodule CodingAgent.SessionBackpressureTest do
       # Session events should be in session_event format (last event is terminal {:agent_end, []})
       session_events =
         Enum.filter(events, fn
-          {:session_event, _session_id, _event} -> true
+          {:session_event, _session_id, _event, _} -> true
           _ -> false
         end)
 
@@ -188,7 +188,7 @@ defmodule CodingAgent.SessionBackpressureTest do
 
       # Should have an agent_end event
       assert Enum.any?(events, fn
-               {:session_event, _, {:agent_end, _}} -> true
+               {:session_event, _, {:agent_end, _}, _} -> true
                _ -> false
              end)
     end
@@ -219,7 +219,7 @@ defmodule CodingAgent.SessionBackpressureTest do
 
       assert List.last(Enum.to_list(EventStream.events(stream))) ==
                {:session_event, Session.get_stats(session).session_id,
-                {:stream_resync, %{reason: :overflow}}}
+                {:stream_resync, %{reason: :overflow}}, nil}
     end
   end
 
@@ -245,7 +245,7 @@ defmodule CodingAgent.SessionBackpressureTest do
       :ok = Session.prompt(session, "Hello")
 
       # Should receive events directly
-      assert_receive {:session_event, _session_id, _event}, 5000
+      assert_receive {:session_event, _session_id, _event, _}, 5000
     end
 
     @tag :tmp_dir
@@ -259,7 +259,7 @@ defmodule CodingAgent.SessionBackpressureTest do
       assert is_function(unsub, 0)
 
       :ok = Session.prompt(session, "Hello")
-      assert_receive {:session_event, _session_id, _event}, 5000
+      assert_receive {:session_event, _session_id, _event, _}, 5000
     end
   end
 
@@ -287,7 +287,7 @@ defmodule CodingAgent.SessionBackpressureTest do
       :ok = Session.prompt(session, "Hello")
 
       # The direct terminal is the barrier for owner completion, not a sleep.
-      assert_receive {:session_event, _session_id, {:agent_end, _}}, 5_000
+      assert_receive {:session_event, _session_id, {:agent_end, _}, _}, 5_000
 
       stats = EventStream.stats(stream)
       # Queue should be bounded
@@ -304,7 +304,7 @@ defmodule CodingAgent.SessionBackpressureTest do
       _unsubscribe = Session.subscribe(session)
 
       :ok = Session.prompt(session, "Hello")
-      assert_receive {:session_event, _session_id, {:agent_end, _}}, 5_000
+      assert_receive {:session_event, _session_id, {:agent_end, _}, _}, 5_000
 
       stats = EventStream.stats(stream)
       assert stats.queue_size <= 4
@@ -312,7 +312,7 @@ defmodule CodingAgent.SessionBackpressureTest do
       assert {:error, :overflow} = EventStream.result(stream)
 
       assert Enum.any?(EventStream.events(stream), fn
-               {:session_event, _, {:stream_resync, %{reason: :overflow}}} -> true
+               {:session_event, _, {:stream_resync, %{reason: :overflow}}, nil} -> true
                _ -> false
              end)
     end
@@ -404,7 +404,7 @@ defmodule CodingAgent.SessionBackpressureTest do
       :ok = Session.prompt(session, "Hello")
 
       # Direct subscriber should receive events
-      assert_receive {:session_event, _session_id, _event}, 5000
+      assert_receive {:session_event, _session_id, _event, _}, 5000
 
       # Stream subscriber should also receive events
       wait_for_streaming_complete(session)

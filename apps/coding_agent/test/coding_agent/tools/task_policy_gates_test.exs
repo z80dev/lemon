@@ -41,7 +41,9 @@ defmodule CodingAgent.Tools.TaskPolicyGatesTest do
       names = Enum.map(context.tools, & &1.name)
       assert "read" in names
       assert Enum.all?(names, &(&1 in @plan_child_tools))
-      assert context.system_prompt =~ "Plan mode is active in the parent session"
+
+      assert LemonAi.SystemPrompt.text(context.system_prompt) =~
+               "Plan mode is active in the parent session"
 
       # Reading owned children stays available in plan mode.
       fetched = execute(cwd, opts, %{"action" => "get", "task_id" => result.details.task_id})

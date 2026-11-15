@@ -268,6 +268,24 @@ the preview; a relative age must be replaced with the preview's exact
 scope wideners. Human and JSON errors contain stable safe messages rather than
 store paths, raw runtime terms, credentials, or secret values.
 
+Native journal maintenance is separate from prune:
+
+```bash
+lemon sessions maintain --older-than 30d --json
+lemon sessions maintain --older-than <preview-older_than_ms> --confirm <preview-token>
+```
+
+Maintenance previews cold, inactive native journals for archival and managed
+orphan spill artifacts for removal. The bounded candidate list contains only
+safe IDs, kinds and byte counts; confirmation binds the full candidate set and
+its revisions, not only the displayed rows. Execution requires the preview's
+exact epoch-millisecond cutoff and server-retained token. Changed candidates or
+artifacts invalidate the preview; review a new preview instead of retrying a
+mutation. Active sessions are never moved or deleted, archived journals retain
+their artifacts, and artifacts with a live journal are retained. External paths
+and symlinks are not swept. Native session listing uses an automatically rebuilt
+index when the index is missing or stale; no manual index repair is needed.
+
 ## Provider readiness and routing
 
 `lemon providers` uses one Mix-free handler in source and packaged runtimes.

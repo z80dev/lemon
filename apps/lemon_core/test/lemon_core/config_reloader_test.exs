@@ -81,6 +81,25 @@ defmodule LemonCore.ConfigReloaderTest do
     end
   end
 
+  test "system secret events advance the digest and trigger reload" do
+    pid = start_reloader!()
+    :ok = LemonCore.Bus.subscribe("system")
+    event = LemonCore.Event.new(:secret_changed, %{action: :set})
+    :ok = LemonCore.Bus.broadcast("system", event)
+
+    assert_receive %LemonCore.Event{
+      type: :config_reloaded,
+      payload: %{reason: :secrets_event, changed_sources: [:secrets]}
+    }
+
+    state = :sys.get_state(pid)
+    assert state.secrets_revision == 1
+    assert state.digests.secrets.fingerprints == [%{revision: 1}]
+
+    assert {:ok, %{changed_sources: []}} =
+             GenServer.call(pid, {:reload, [sources: [:secrets]]})
+  end
+
   describe "reload/1" do
     test "returns ok with no changes on empty reload" do
       pid = start_reloader!()

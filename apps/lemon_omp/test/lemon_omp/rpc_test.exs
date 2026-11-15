@@ -1,6 +1,7 @@
 defmodule LemonOmp.RpcTest do
   use ExUnit.Case, async: true
 
+  alias LemonCore.Rpc.JsonLines
   alias LemonOmp.Rpc
 
   describe "decode/1" do
@@ -122,7 +123,7 @@ defmodule LemonOmp.RpcTest do
     end
   end
 
-  describe "command/3 and encode/1" do
+  describe "command/3 and shared JSONL framing" do
     test "builds a command with string keys and the correlation id" do
       assert Rpc.command("prompt", "lemon-1", %{message: "hi"}) ==
                %{"type" => "prompt", "id" => "lemon-1", "message" => "hi"}
@@ -135,11 +136,10 @@ defmodule LemonOmp.RpcTest do
     end
 
     test "encodes exactly one JSON line, escaping embedded newlines" do
-      line =
-        "prompt"
-        |> Rpc.command("lemon-1", %{"message" => "line one\nline two \u202E"})
-        |> Rpc.encode()
-        |> IO.iodata_to_binary()
+      assert {:ok, line} =
+               "prompt"
+               |> Rpc.command("lemon-1", %{"message" => "line one\nline two \u202E"})
+               |> JsonLines.encode()
 
       assert String.ends_with?(line, "\n")
       assert [json, ""] = String.split(line, "\n")
@@ -147,7 +147,7 @@ defmodule LemonOmp.RpcTest do
     end
 
     test "round-trips through decode for a reply the host writes" do
-      line = "ui-1" |> Rpc.decline_ui_request("confirm") |> Rpc.encode() |> IO.iodata_to_binary()
+      assert {:ok, line} = "ui-1" |> Rpc.decline_ui_request("confirm") |> JsonLines.encode()
 
       assert {:event, "extension_ui_response", %{"confirmed" => false}} =
                Rpc.decode(String.trim_trailing(line))

@@ -26,23 +26,20 @@ defmodule CodingAgent.RunGraphServer do
   return, and no call can observe or mutate the ETS table, until the persisted
   snapshot has been loaded and running records have been marked lost.
 
-  ## Non-blocking Cleanup
+  ## Cleanup
 
-  Periodic cleanup is offloaded to an async Task so that the GenServer
-  remains responsive during large-table scans. Cleanup processes records
-  in chunks to avoid long scheduler holds.
+  The shared `CodingAgent.DurableTable` owner sweeps its expiration index in
+  this mailbox. Retained runs are not scanned and no background sweep task can
+  race a live update.
   """
 
-  use GenServer
-  require Logger
+  use CodingAgent.DurableTable
 
   alias CodingAgent.RunGraph
 
   @table :coding_agent_run_graph
   @dets_table :coding_agent_run_graph_dets
   @default_ttl_seconds 86_400
-  @cleanup_interval_seconds 300
-  @cleanup_chunk_size 500
 
   # Client API
 
@@ -158,27 +155,17 @@ defmodule CodingAgent.RunGraphServer do
 
   @impl true
   def init(opts) do
-    Process.flag(:trap_exit, true)
-
-    state = %{
-      table: Keyword.get(opts, :table, @table),
-      dets_table: Keyword.get(opts, :dets_table, @dets_table),
-      dets_path: dets_path(opts),
-      ets_initialized: false,
-      dets_initialized: false,
-      loaded_from_dets: false,
-      cleanup_ref: nil,
-      before_dets_load: Keyword.get(opts, :before_dets_load)
-    }
-
-    # Readiness includes the persisted snapshot. The process does not handle
-    # queued calls and start_link does not return until init completes.
-    state = initialize_ets(state)
-    state = initialize_dets(state)
-    state = maybe_load_from_dets(state)
-
-    # Schedule periodic cleanup
-    schedule_cleanup()
+    state =
+      DurableTable.open(%{}, opts,
+        table: @table,
+        dets_table: @dets_table,
+        path: dets_path(opts),
+        row_arity: 2,
+        normalize: &__MODULE__.normalize_row/2,
+        timestamp: &__MODULE__.expiry_timestamp/1,
+        ttl_key: :run_graph_ttl_seconds,
+        interval_key: :run_graph_cleanup_interval_seconds
+      )
 
     {:ok, state}
   end
@@ -269,28 +256,15 @@ defmodule CodingAgent.RunGraphServer do
 
   def handle_call({:delete_run, run_id}, _from, state) do
     state = ensure_tables(state)
-    :ets.delete(state.table, run_id)
-
-    if state_dets_open?(state) do
-      :dets.delete(state.dets_table, run_id)
-    end
-
+    DurableTable.delete(state.table, run_id)
     {:reply, :ok, state}
   end
 
   def handle_call(:clear, _from, state) do
     state = ensure_tables(state)
 
-    if state.ets_initialized do
-      :ets.delete_all_objects(state.table)
-    end
-
-    if state.dets_initialized do
-      :dets.delete_all_objects(state.dets_table)
-      :dets.sync(state.dets_table)
-    end
-
-    {:reply, :ok, %{state | loaded_from_dets: false}}
+    DurableTable.clear(state)
+    {:reply, :ok, state}
   end
 
   def handle_call(:stats, _from, state) do
@@ -314,42 +288,22 @@ defmodule CodingAgent.RunGraphServer do
 
   def handle_call({:cleanup, ttl_seconds}, _from, state) do
     state = ensure_tables(state)
-    deleted_count = do_cleanup_chunked(state, ttl_seconds)
+    deleted_count = DurableTable.cleanup(state, ttl_seconds)
     {:reply, {:ok, deleted_count}, state}
   end
 
   def handle_call(:dets_status, _from, state) do
-    info =
-      if state.dets_initialized do
-        case :dets.info(state.dets_table) do
-          :undefined -> %{status: :closed}
-          info -> Map.new(info)
-        end
-      else
-        %{status: :not_initialized}
-      end
-
-    {:reply, %{info: info, state: Map.drop(state, [:table, :dets_table])}, state}
+    {:reply, DurableTable.status(state), state}
   end
 
   def handle_call(:dets_open?, _from, state) do
-    {:reply, state_dets_open?(state), state}
+    {:reply, DurableTable.open?(state.dets_table), state}
   end
 
   @impl true
   def handle_info(:cleanup, state) do
     state = ensure_tables(state)
-    state = start_async_cleanup(state)
-    schedule_cleanup()
-    {:noreply, state}
-  end
-
-  def handle_info({:cleanup_complete, ref, _deleted_count}, %{cleanup_ref: ref} = state) do
-    {:noreply, %{state | cleanup_ref: nil}}
-  end
-
-  def handle_info({:cleanup_complete, _ref, _deleted_count}, state) do
-    # Stale cleanup result from a previous ref — ignore
+    DurableTable.periodic_cleanup(state)
     {:noreply, state}
   end
 
@@ -357,83 +311,12 @@ defmodule CodingAgent.RunGraphServer do
     {:noreply, state}
   end
 
-  @impl true
-  def terminate(_reason, state) do
-    if state.dets_initialized do
-      :dets.close(state.dets_table)
-    end
-
-    :ok
-  end
-
   # Private Functions
 
-  defp ensure_tables(state) do
-    state
-    |> initialize_ets()
-    |> initialize_dets()
-    |> maybe_load_from_dets()
-  end
+  defp ensure_tables(state), do: DurableTable.ensure(state)
 
-  defp initialize_ets(state) do
-    if state.ets_initialized do
-      state
-    else
-      case :ets.whereis(state.table) do
-        :undefined ->
-          :ets.new(state.table, [:named_table, :public, :set, read_concurrency: true])
-          %{state | ets_initialized: true}
-
-        _tid ->
-          %{state | ets_initialized: true}
-      end
-    end
-  end
-
-  defp initialize_dets(state) do
-    if state.dets_initialized do
-      state
-    else
-      File.mkdir_p!(Path.dirname(state.dets_path))
-
-      case CodingAgent.StatePaths.open_dets(state.dets_table, state.dets_path) do
-        {:ok, _} ->
-          %{state | dets_initialized: true}
-
-        {:error, {:already_open, _pid}} ->
-          %{state | dets_initialized: true}
-
-        {:error, {:state_dir_locked, pid}} ->
-          CodingAgent.StatePaths.warn_locked(pid)
-          state
-
-        {:error, reason} ->
-          Logger.warning("Failed to open RunGraph DETS: #{inspect(reason)}")
-          state
-      end
-    end
-  end
-
-  defp maybe_load_from_dets(%{loaded_from_dets: true} = state), do: state
-
-  defp maybe_load_from_dets(state) do
-    if state.dets_initialized and state.ets_initialized do
-      do_sync_dets_load(state)
-      %{state | loaded_from_dets: true}
-    else
-      state
-    end
-  end
-
-  defp do_insert_record(state, run_id, record) do
-    :ets.insert(state.table, {run_id, record})
-
-    if state_dets_open?(state) do
-      :dets.insert(state.dets_table, {run_id, record})
-    end
-
-    :ok
-  end
+  defp do_insert_record(state, run_id, record),
+    do: DurableTable.put(state.table, {run_id, record})
 
   defp broadcast_state_change(run_id, record, event) do
     try do
@@ -491,117 +374,25 @@ defmodule CodingAgent.RunGraphServer do
 
   defp get_record_field(_record, _key), do: nil
 
-  defp do_sync_dets_load(state) do
-    if is_function(state.before_dets_load, 0), do: state.before_dets_load.()
-    now = System.system_time(:second)
+  @doc false
+  def normalize_row({run_id, record}, _state) do
+    record =
+      if record[:status] == :running do
+        record
+        |> Map.put(:status, :lost)
+        |> Map.put(:error, :lost_on_restart)
+        |> Map.put(:completed_at, System.system_time(:second))
+      else
+        record
+      end
 
-    :dets.foldl(
-      fn {run_id, record}, :ok ->
-        record =
-          if Map.get(record, :status) == :running do
-            record
-            |> Map.put(:status, :lost)
-            |> Map.put(:error, :lost_on_restart)
-            |> Map.put(:completed_at, now)
-          else
-            record
-          end
-
-        :ets.insert(state.table, {run_id, record})
-        :ok
-      end,
-      :ok,
-      state.dets_table
-    )
+    {run_id, record}
   end
 
-  defp start_async_cleanup(state) do
-    # If a cleanup is already in progress, skip
-    if state.cleanup_ref do
-      state
-    else
-      ref = make_ref()
-      server = self()
-      ttl = Application.get_env(:coding_agent, :run_graph_ttl_seconds, @default_ttl_seconds)
-
-      Task.start(fn ->
-        deleted = do_cleanup_chunked(state, ttl)
-        send(server, {:cleanup_complete, ref, deleted})
-      end)
-
-      %{state | cleanup_ref: ref}
-    end
-  end
-
-  # Chunked cleanup: collect expired IDs then delete in chunks to avoid
-  # holding the scheduler for too long on large tables.
-  defp do_cleanup_chunked(state, ttl_seconds) do
-    now = System.system_time(:second)
-
-    expired_ids =
-      :ets.foldl(
-        fn {run_id, record}, acc ->
-          if expired_record?(record, now, ttl_seconds) do
-            [run_id | acc]
-          else
-            acc
-          end
-        end,
-        [],
-        state.table
-      )
-
-    expired_ids
-    |> Enum.chunk_every(@cleanup_chunk_size)
-    |> Enum.each(fn chunk ->
-      Enum.each(chunk, fn run_id ->
-        :ets.delete(state.table, run_id)
-
-        if state_dets_open?(state) do
-          :dets.delete(state.dets_table, run_id)
-        end
-      end)
-
-      # Yield between chunks to let other work proceed
-      Process.sleep(0)
-    end)
-
-    if state_dets_open?(state) and expired_ids != [] do
-      :dets.sync(state.dets_table)
-    end
-
-    length(expired_ids)
-  end
-
-  defp expired_record?(record, now, ttl_seconds) do
-    status = Map.get(record, :status)
-
-    if status in [:completed, :error, :lost, :killed, :cancelled] do
-      completed_at =
-        Map.get(record, :completed_at) || Map.get(record, :updated_at) ||
-          Map.get(record, :inserted_at)
-
-      is_integer(completed_at) and now - completed_at >= ttl_seconds
-    else
-      false
-    end
-  end
-
-  defp state_dets_open?(state) do
-    :dets.info(state.dets_table) != :undefined
-  rescue
-    _ -> false
-  end
-
-  defp schedule_cleanup do
-    interval =
-      Application.get_env(
-        :coding_agent,
-        :run_graph_cleanup_interval_seconds,
-        @cleanup_interval_seconds
-      )
-
-    Process.send_after(self(), :cleanup, interval * 1_000)
+  @doc false
+  def expiry_timestamp({_id, record}) do
+    if record[:status] in [:completed, :error, :lost, :killed, :cancelled],
+      do: DurableTable.terminal_timestamp(record)
   end
 
   defp dets_path(opts) do

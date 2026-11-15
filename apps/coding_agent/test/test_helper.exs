@@ -24,6 +24,9 @@ exclude_tags =
     do: exclude_tags,
     else: [:rsvg_convert | exclude_tags]
 
+exclude_tags =
+  if :os.type() == {:unix, :darwin}, do: exclude_tags, else: [:apfs_clone | exclude_tags]
+
 Code.require_file("support/host_capabilities.ex", __DIR__)
 
 exclude_tags =
@@ -36,7 +39,7 @@ exclude_tags =
       [:lldb_dap | exclude_tags]
   end
 
-ExUnit.configure(exclude: exclude_tags)
+ExUnit.configure(exclude: [:docker | exclude_tags])
 ExUnit.start(capture_log: true)
 
 # Use a test-local store backend so coding_agent tests don't depend on lemon_gateway.

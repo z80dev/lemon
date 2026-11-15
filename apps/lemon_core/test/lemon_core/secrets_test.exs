@@ -50,6 +50,7 @@ defmodule LemonCore.SecretsTest do
              Secrets.set(name, "original", provider: "original_provider", expires_at: expires_at)
 
     assert {:ok, "original", revision} = Secrets.get_with_revision(name)
+    assert :ok = LemonCore.Secrets.Usage.flush()
     assert {:ok, [before]} = Secrets.list()
     assert {:ok, snapshot} = Secrets.snapshot(name)
     assert {:ok, [^before]} = Secrets.list()
@@ -117,8 +118,9 @@ defmodule LemonCore.SecretsTest do
     assert initial.usage_count == 0
     assert initial.last_used_at == nil
 
-    Process.sleep(5)
+    assert :ok = LemonCore.Secrets.Usage.flush()
     assert {:ok, "value-123"} = Secrets.get("usage_meta_secret")
+    assert :ok = LemonCore.Secrets.Usage.flush()
     assert {:ok, [after_read]} = Secrets.list()
     assert after_read.name == "usage_meta_secret"
     assert after_read.usage_count == 1

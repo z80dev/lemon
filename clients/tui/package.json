@@ -11,9 +11,9 @@
     "bun": ">=1.4.4"
   },
   "dependencies": {
-    "@oh-my-pi/pi-natives": "18.18.9",
-    "@oh-my-pi/pi-tui": "18.18.9",
-    "@oh-my-pi/pi-utils": "18.18.9"
+    "@oh-my-pi/pi-natives": "18.20.2",
+    "@oh-my-pi/pi-tui": "18.20.2",
+    "@oh-my-pi/pi-utils": "18.20.2"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.8",
@@ -33,6 +33,6 @@
     "build:binary": "bun scripts/build-binary.ts"
   },
   "patchedDependencies": {
-    "@oh-my-pi/pi-tui@18.18.9": "patches/@oh-my-pi%2Fpi-tui@18.18.9.patch"
+    "@oh-my-pi/pi-tui@18.20.2": "patches/@oh-my-pi%2Fpi-tui@18.20.2.patch"
   }
 }

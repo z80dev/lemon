@@ -768,7 +768,8 @@ defmodule LemonAi.Providers.Anthropic do
       history_dropped: Map.get(history_info, :dropped_count, 0),
       history_dropped_orphan_tool_results: Map.get(history_info, :dropped_orphan_tool_results, 0),
       converted_message_summary: summarize_messages(messages),
-      system_prompt_bytes: HttpTrace.summarize_text_size(context.system_prompt),
+      system_prompt_bytes:
+        HttpTrace.summarize_text_size(LemonAi.SystemPrompt.text(context.system_prompt)),
       tools_count: length(context.tools || []),
       max_tokens: Map.get(body, "max_tokens"),
       temperature: opts.temperature
@@ -1676,6 +1677,31 @@ defmodule LemonAi.Providers.Anthropic do
     anthropic_oauth_provider?(provider) and AnthropicOAuth.oauth_token?(api_key)
   end
 
+  defp build_system_prompt(blocks, oauth_request?, cache_control) when is_list(blocks) do
+    {prefix, directory_blocks} = Enum.split_while(blocks, &(!&1.directory_derived))
+    prefix = system_text_blocks(prefix, oauth_request?)
+
+    prefix =
+      if oauth_request? do
+        [%{"type" => "text", "text" => @claude_code_system_prefix} | prefix]
+      else
+        prefix
+      end
+
+    # One system breakpoint plus one last-user breakpoint stays below Anthropic's
+    # four-breakpoint limit, regardless of the number of prompt blocks or tools.
+    prefix =
+      case List.pop_at(prefix, -1) do
+        {nil, _} -> []
+        {last, rest} -> rest ++ [maybe_cache_block(last, cache_control)]
+      end
+
+    case prefix ++ system_text_blocks(directory_blocks, oauth_request?) do
+      [] -> nil
+      system -> system
+    end
+  end
+
   defp build_system_prompt(system_prompt, true, cache_control) do
     cc_block = %{"type" => "text", "text" => @claude_code_system_prefix}
 
@@ -1709,6 +1735,17 @@ defmodule LemonAi.Providers.Anthropic do
   end
 
   defp build_system_prompt(_, false, _cache_control), do: nil
+
+  defp system_text_blocks(blocks, oauth_request?) do
+    Enum.flat_map(blocks, fn %{text: text} ->
+      if String.trim(text) == "" do
+        []
+      else
+        text = if oauth_request?, do: sanitize_oauth_system_prompt(text), else: text
+        [%{"type" => "text", "text" => text}]
+      end
+    end)
+  end
 
   defp maybe_prefix_oauth_tool_name(name, true) when is_binary(name) do
     @oauth_tool_prefix <> strip_all_oauth_tool_prefixes(name)

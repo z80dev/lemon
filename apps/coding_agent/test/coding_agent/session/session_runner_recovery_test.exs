@@ -50,13 +50,13 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
 
     assert {:noreply, ^state} =
              SessionRunner.handle_info(
-               {:session_event, "session-1", {:tool_execution_start, "late", "bash", %{}}},
+               {:session_event, "session-1", {:tool_execution_start, "late", "bash", %{}}, nil},
                state
              )
 
     assert {:noreply, ^state} =
              SessionRunner.handle_info(
-               {:session_event, "session-1", {:message_update, %{}, "late delta"}},
+               {:session_event, "session-1", {:message_update, %{}, "late delta"}, nil},
                state
              )
 
@@ -73,7 +73,7 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
 
     assert {:noreply, ^state} =
              SessionRunner.handle_info(
-               {:session_event, "other-session", {:message_update, %{}, "foreign"}},
+               {:session_event, "other-session", {:message_update, %{}, "foreign"}, nil},
                state
              )
 
@@ -166,7 +166,7 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
     session_id = CodingAgent.Session.get_stats(session).session_id
     _unsubscribe = CodingAgent.Session.subscribe(session)
     assert :ok = CodingAgent.Session.prompt(session, "Previous prompt")
-    assert_receive {:session_event, ^session_id, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, ^session_id, {:agent_end, _}, _}, 5_000
     refute CodingAgent.Session.get_state(session).is_streaming
 
     # Fence this turn on lifecycle traffic before releasing the failing provider.

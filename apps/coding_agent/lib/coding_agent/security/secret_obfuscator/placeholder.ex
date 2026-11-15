@@ -101,8 +101,9 @@ defmodule CodingAgent.Security.SecretObfuscator.Placeholder do
   end
 
   @doc """
-  Read the persisted key, creating it (mode 0600) when missing. Never raises:
-  an unreadable/unwritable key degrades to a process-ephemeral key with a warning.
+  Read the persisted key, creating it (mode 0600) when missing. An unreadable or
+  unwritable key degrades to a supervised ETS-backed ephemeral key with a warning.
+  The coding_agent application must be running; owner restart drops that key.
   """
   @spec load_or_create_key(Path.t()) :: String.t()
   def load_or_create_key(path) do
@@ -167,18 +168,12 @@ defmodule CodingAgent.Security.SecretObfuscator.Placeholder do
   defp ephemeral_key(path, reason) do
     Logger.warning(
       "Could not persist secret placeholder key at #{path} (#{inspect(reason)}); " <>
-        "using a process-ephemeral key"
+        "using a runtime-ephemeral key"
     )
 
-    case :persistent_term.get(@ephemeral_key, nil) do
-      nil ->
-        key = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-        :persistent_term.put(@ephemeral_key, key)
-        key
-
-      key ->
-        key
-    end
+    CodingAgent.RuntimeTables.fetch(@ephemeral_key, fn ->
+      Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+    end)
   end
 
   defp binary_part_safe(value, max) when byte_size(value) <= max, do: value

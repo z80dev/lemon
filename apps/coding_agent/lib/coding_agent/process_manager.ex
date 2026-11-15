@@ -55,7 +55,7 @@ defmodule CodingAgent.ProcessManager do
   defp exec_launch(identity, opts) do
     with {:ok, limits} <- background_limits(),
          :ok <- validate_launch(identity, opts),
-         {:ok, backend} <- TerminalBackends.validate(Keyword.get(opts, :backend, :local)) do
+         {:ok, backend} <- LemonCore.TerminalBackends.Docker.Sandbox.backend(opts) do
       opts =
         opts
         |> Keyword.put(:backend, backend)
@@ -279,7 +279,7 @@ defmodule CodingAgent.ProcessManager do
        Keyword.get(opts, :owner_pid), Keyword.get(opts, :restarted_from),
        Keyword.get(opts, :restart_generation, 0), Keyword.get(opts, :max_retained_bytes),
        Keyword.get(opts, :max_artifact_bytes), Keyword.get(opts, :max_owner_artifact_bytes),
-       Keyword.get(opts, :max_runtime_artifact_bytes)}
+       Keyword.get(opts, :max_runtime_artifact_bytes), Keyword.get(opts, :tool_policy)}
 
     :crypto.hash(:sha256, :erlang.term_to_binary(request))
   end
@@ -390,6 +390,9 @@ defmodule CodingAgent.ProcessManager do
   @doc """
   Poll a process for status and logs.
 
+  Uses the live owner's published tail when available. During startup before
+  the first snapshot, or after the owner retires, reads the durable receipt.
+
   Options:
   - :lines - Number of log lines to return (default: 100)
   """
@@ -397,38 +400,46 @@ defmodule CodingAgent.ProcessManager do
   def poll(process_id, opts \\ []) do
     line_count = Keyword.get(opts, :lines, 100)
 
-    # First try to get from active session
     if ProcessSession.alive?(process_id) do
-      ProcessSession.poll(process_id, line_count)
-    else
-      # Fall back to store
-      case ProcessStore.get(process_id) do
-        {:ok, record, logs} ->
-          result = %{
-            process_id: process_id,
-            status: Map.get(record, :status),
-            exit_code: Map.get(record, :exit_code),
-            os_pid: Map.get(record, :os_pid),
-            logs: Enum.take(logs, -line_count),
-            partial_line: Map.get(record, :partial_line, ""),
-            command: Map.get(record, :command),
-            cwd: Map.get(record, :cwd),
-            backend: Map.get(record, :backend, :local),
-            terminal_capabilities: Map.get(record, :terminal_capabilities, []),
-            max_log_lines: Map.get(record, :max_log_lines),
-            log_line_count: Map.get(record, :log_line_count, length(logs)),
-            started_at: Map.get(record, :started_at),
-            completed_at: Map.get(record, :completed_at),
-            restarted_from: Map.get(record, :restarted_from),
-            restart_generation: Map.get(record, :restart_generation, 0),
-            output: Map.get(record, :output)
-          }
-
-          {:ok, result}
-
-        {:error, :not_found} ->
-          {:error, :not_found}
+      try do
+        ProcessSession.poll(process_id, line_count)
+      catch
+        # Registration precedes init's first snapshot, and the owner can also
+        # retire between lookup and read. The durable receipt covers both.
+        :exit, :noproc -> poll_from_store(process_id, line_count)
       end
+    else
+      poll_from_store(process_id, line_count)
+    end
+  end
+
+  defp poll_from_store(process_id, line_count) do
+    case ProcessStore.get(process_id) do
+      {:ok, record, logs} ->
+        result = %{
+          process_id: process_id,
+          status: Map.get(record, :status),
+          exit_code: Map.get(record, :exit_code),
+          os_pid: Map.get(record, :os_pid),
+          logs: Enum.take(logs, -line_count),
+          partial_line: Map.get(record, :partial_line, ""),
+          command: Map.get(record, :command),
+          cwd: Map.get(record, :cwd),
+          backend: Map.get(record, :backend, :local),
+          terminal_capabilities: Map.get(record, :terminal_capabilities, []),
+          max_log_lines: Map.get(record, :max_log_lines),
+          log_line_count: Map.get(record, :log_line_count, length(logs)),
+          started_at: Map.get(record, :started_at),
+          completed_at: Map.get(record, :completed_at),
+          restarted_from: Map.get(record, :restarted_from),
+          restart_generation: Map.get(record, :restart_generation, 0),
+          output: Map.get(record, :output)
+        }
+
+        {:ok, result}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
     end
   end
 
@@ -452,13 +463,9 @@ defmodule CodingAgent.ProcessManager do
   """
   @spec logs(String.t(), keyword()) :: {:ok, [String.t()]} | {:error, term()}
   def logs(process_id, opts \\ []) do
-    line_count = Keyword.get(opts, :lines, 100)
-
-    if ProcessSession.alive?(process_id) do
-      {:ok, result} = ProcessSession.poll(process_id, line_count)
-      {:ok, result.logs}
-    else
-      ProcessStore.get_logs(process_id, line_count)
+    case poll(process_id, opts) do
+      {:ok, result} -> {:ok, result.logs}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -621,6 +628,7 @@ defmodule CodingAgent.ProcessManager do
                 cwd: Map.get(record, :cwd),
                 env: Map.get(record, :env, %{}) || %{},
                 backend: Map.get(record, :backend, :local),
+                tool_policy: Map.get(record, :tool_policy),
                 max_log_lines: Map.get(record, :max_log_lines, 1000),
                 timeout_ms: Keyword.get(opts, :timeout_ms, Map.get(record, :timeout_ms)),
                 owner: Map.get(record, :owner),

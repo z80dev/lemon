@@ -139,7 +139,7 @@ defmodule CodingAgent.Session.AutoThinkingTest do
 
   defp await_end(session) do
     id = Session.get_state(session).session_manager.header.id
-    assert_receive {:session_event, ^id, {:agent_end, messages}}, 2_000
+    assert_receive {:session_event, ^id, {:agent_end, messages}, _}, 2_000
     assert :ok = LemonAgent.Agent.wait_for_idle(Session.get_state(session).agent, 2_000)
     messages
   end
@@ -381,7 +381,7 @@ defmodule CodingAgent.Session.AutoThinkingTest do
     monitor = Process.monitor(worker)
     assert GenServer.call(session, :get_state, 500).thinking_level == :auto
     assert :ok = Session.abort(session)
-    assert_receive {:session_event, ^id, {:canceled, :assistant_aborted}}, 1_000
+    assert_receive {:session_event, ^id, {:canceled, :assistant_aborted}, _}, 1_000
     assert_receive {:DOWN, ^monitor, :process, ^worker, _reason}, 1_000
     assert :ok = LemonAgent.Agent.wait_for_idle(Session.get_state(session).agent, 1_000)
     refute_receive {:primary_request, _, _}

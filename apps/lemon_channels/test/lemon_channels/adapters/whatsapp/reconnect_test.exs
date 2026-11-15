@@ -18,19 +18,26 @@ defmodule LemonChannels.Adapters.WhatsApp.Reconnect581Test do
       whatsapp: %{bridge_script: Path.join(System.tmp_dir!(), "missing-bridge-581.mjs")}
     })
 
-    unless Registry.get_plugin("whatsapp"), do: Registry.register(LemonChannels.Adapters.WhatsApp)
+    assert Registry.register(LemonChannels.Adapters.WhatsApp) in [
+             :ok,
+             {:error, :already_registered}
+           ]
 
     on_exit(fn ->
       restore(:lemon_gateway, @config_key, old_config)
       restore(:lemon_core, :config_test_mode, old_mode)
 
+      # Plugin changes must go through Registry so its persistent lookup
+      # snapshot and the process-owned status/list projection stay coherent.
+      unless Map.has_key?(registry_state.plugins, "whatsapp"), do: Registry.unregister("whatsapp")
+
       :sys.replace_state(Registry, fn state ->
-        %{
-          state
-          | plugins: restore_entry(state.plugins, registry_state.plugins, "whatsapp"),
-            health: restore_entry(state.health, registry_state.health, "whatsapp")
-        }
+        %{state | health: restore_entry(state.health, registry_state.health, "whatsapp")}
       end)
+
+      expected_plugin = Map.get(registry_state.plugins, "whatsapp")
+      assert Registry.get_plugin("whatsapp") == expected_plugin
+      assert Enum.find(Registry.list_plugins(), &(&1.id() == "whatsapp")) == expected_plugin
     end)
 
     :ok
@@ -60,6 +67,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Reconnect581Test do
     # The fault is injected at the Port exit-status boundary, without Node or a race.
     state = %{
       port: nil,
+      os_pid: nil,
       buffer: "partial",
       unavailable_reason: nil,
       bridge: bridge,

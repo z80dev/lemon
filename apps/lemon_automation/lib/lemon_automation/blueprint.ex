@@ -145,24 +145,33 @@ defmodule LemonAutomation.Blueprint do
       when is_binary(path) and is_binary(profile_id) and is_binary(confirmation_digest) do
     lock = {__MODULE__, Path.expand(path) <> "\0" <> profile_id}
 
-    :global.trans(lock, fn ->
-      with {:ok, state} <- build_plan(path, profile_id, opts),
-           :ok <- require_activatable(state.public_plan),
-           :ok <- verify_confirmation(state.public_plan, confirmation_digest),
-           {:ok, skill_result, rollback} <- apply_skills(state, opts),
-           {:ok, automation_result} <- apply_automation(state, rollback) do
-        {:ok,
-         %{
-           "activated" => true,
-           "bundleId" => state.bundle.id,
-           "profileId" => state.profile["id"],
-           "confirmationDigest" => state.public_plan["confirmationDigest"],
-           "skills" => skill_result,
-           "automation" => automation_result,
-           "summary" => activation_summary(skill_result, automation_result)
-         }}
-      end
-    end)
+    :global.trans(
+      {lock, self()},
+      fn ->
+        with {:ok, state} <- build_plan(path, profile_id, opts),
+             :ok <- require_activatable(state.public_plan),
+             :ok <- verify_confirmation(state.public_plan, confirmation_digest),
+             {:ok, skill_result, rollback} <- apply_skills(state, opts),
+             {:ok, automation_result} <- apply_automation(state, rollback) do
+          {:ok,
+           %{
+             "activated" => true,
+             "bundleId" => state.bundle.id,
+             "profileId" => state.profile["id"],
+             "confirmationDigest" => state.public_plan["confirmationDigest"],
+             "skills" => skill_result,
+             "automation" => automation_result,
+             "summary" => activation_summary(skill_result, automation_result)
+           }}
+        end
+      end,
+      [node()],
+      3
+    )
+    |> case do
+      :aborted -> error(:activation_unavailable, "Blueprint activation is already in progress")
+      result -> result
+    end
   end
 
   def activate(_, _, _, _), do: error(:invalid_request, "Activation parameters are invalid")

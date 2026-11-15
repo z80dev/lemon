@@ -161,8 +161,8 @@ defmodule CodingAgent.Session.ContextUsageTest do
     assert report.estimated_tokens < 43_307
     assert report.free_tokens == 200_000 - 43_307
     assert report.percent_used == 21.7
-    assert report.auto_compaction.threshold_tokens == 199_000
-    assert report.auto_compaction.headroom_tokens == 199_000 - 43_307
+    assert report.auto_compaction.threshold_tokens == 170_000
+    assert report.auto_compaction.headroom_tokens == 170_000 - 43_307
 
     # Newer messages after the usage anchor are estimated on top of it.
     newer = agent.messages ++ [%UserMessage{content: String.duplicate("z", 400), timestamp: 50}]
@@ -180,16 +180,16 @@ defmodule CodingAgent.Session.ContextUsageTest do
     agent = %{system_prompt: "current prompt", tools: [], messages: []}
 
     for {settings, threshold} <- [
-          {settings, 9_000},
+          {settings, 8_500},
           {%{settings | compaction_threshold_percent: 50}, 5_000},
           {%{
              settings
              | compaction_threshold_percent: 50,
                compaction_threshold_tokens: 6_000
            }, 6_000},
-          {%{settings | compaction_threshold_tokens: 20_000}, 9_000},
+          {%{settings | compaction_threshold_tokens: 20_000}, 8_500},
           {%{settings | reserve_tokens: 12_000}, -2_000},
-          {%{settings | compaction_enabled: false}, 9_000}
+          {%{settings | compaction_enabled: false}, 8_500}
         ] do
       state = %{state | settings_manager: settings}
       budget = ContextBudget.measure(state, agent)

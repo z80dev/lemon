@@ -3,8 +3,8 @@ defmodule LemonCore.ConfigReloader.Watcher do
   File-system watcher for config reload triggers.
 
   Uses the `file_system` library (when available) to watch config files for
-  changes. Falls back to periodic polling when the native watcher is not
-  available or fails to start.
+  changes. Falls back to polling when unavailable, unable to start, or stopped.
+  No polling timer runs while the native watcher is live.
 
   Watched paths:
   - `~/.lemon/config.toml`
@@ -67,15 +67,12 @@ defmodule LemonCore.ConfigReloader.Watcher do
       watched_paths: watched_paths |> MapSet.new(),
       watch_targets: watch_targets,
       watcher_pid: nil,
+      poll_ref: nil,
       debounce_ref: nil,
       mode: :polling
     }
 
-    state = try_start_watcher(state)
-
-    # Always schedule poll as fallback
-    schedule_poll(state)
-
+    state = state |> try_start_watcher() |> schedule_poll()
     {:ok, state}
   end
 
@@ -91,7 +88,7 @@ defmodule LemonCore.ConfigReloader.Watcher do
 
   def handle_info({:file_event, _watcher_pid, :stop}, state) do
     Logger.warning("[ConfigReloader.Watcher] File watcher stopped, falling back to polling")
-    {:noreply, %{state | watcher_pid: nil, mode: :polling}}
+    {:noreply, schedule_poll(%{state | watcher_pid: nil, mode: :polling})}
   end
 
   def handle_info({:EXIT, watcher_pid, reason}, %{watcher_pid: watcher_pid} = state) do
@@ -99,7 +96,7 @@ defmodule LemonCore.ConfigReloader.Watcher do
       "[ConfigReloader.Watcher] File watcher exited: #{inspect(reason)}, falling back to polling"
     )
 
-    {:noreply, %{state | watcher_pid: nil, mode: :polling}}
+    {:noreply, schedule_poll(%{state | watcher_pid: nil, mode: :polling})}
   end
 
   def handle_info(:debounced_reload, state) do
@@ -108,11 +105,12 @@ defmodule LemonCore.ConfigReloader.Watcher do
     {:noreply, %{state | debounce_ref: nil}}
   end
 
-  def handle_info(:poll, state) do
+  def handle_info(:poll, %{mode: :polling} = state) do
     do_trigger_reload(:poll)
-    schedule_poll(state)
-    {:noreply, state}
+    {:noreply, schedule_poll(%{state | poll_ref: nil})}
   end
+
+  def handle_info(:poll, state), do: {:noreply, state}
 
   def handle_info(_msg, state) do
     {:noreply, state}
@@ -226,9 +224,11 @@ defmodule LemonCore.ConfigReloader.Watcher do
     %{state | debounce_ref: ref}
   end
 
-  defp schedule_poll(state) do
-    Process.send_after(self(), :poll, state.poll_interval_ms)
+  defp schedule_poll(%{mode: :polling, poll_ref: nil} = state) do
+    %{state | poll_ref: Process.send_after(self(), :poll, state.poll_interval_ms)}
   end
+
+  defp schedule_poll(state), do: state
 
   defp do_trigger_reload(reason) do
     if is_pid(Process.whereis(LemonCore.ConfigReloader)) do

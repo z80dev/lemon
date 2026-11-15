@@ -13,8 +13,8 @@ defmodule CodingAgent.Eval.Kernel do
   the protocol.
 
   One cell runs at a time. Timeout first sends SIGINT and waits two seconds for
-  the cell to unwind, preserving state when it does. Otherwise the process tree
-  is killed, as it is on abort, `reset`, kernel crash, idle timeout, owner exit and
+  the cell to unwind, preserving state when it does. Otherwise the process groups
+  are killed, as they are on abort, `reset`, kernel crash, idle timeout, owner exit and
   slot shutdown. The slot stays alive after a kill while its owner lives, so the
   next run reports that it started a fresh kernel and why the previous one
   ended. Without an owner pid the slot stops entirely after its idle timeout.
@@ -27,8 +27,8 @@ defmodule CodingAgent.Eval.Kernel do
   The group is then signalled only while that witness still matches, so
   children reparented away from the kernel but still in its group die with it.
   On Unix a kernel whose group cannot be proven this way is killed through the
-  port process tree and the run is refused, rather than reporting a stoppable
-  kernel that is not.
+  port process group and the run is refused, rather than reporting a stoppable
+  kernel that is not. Descendants that escape the witnessed groups are unsupported.
 
   Caller messages for an accepted run `ref`:
 
@@ -51,6 +51,7 @@ defmodule CodingAgent.Eval.Kernel do
 
   alias CodingAgent.BashExecutor
   alias CodingAgent.Eval.Output
+  alias LemonCore.ProcessGroup
 
   @default_idle_timeout_ms 30 * 60 * 1000
   @startup_timeout_ms 20_000
@@ -439,7 +440,7 @@ defmodule CodingAgent.Eval.Kernel do
         {:ok, %{state | kernel_group: group}}
 
       {:error, {:win32, _}} ->
-        # No process groups or `ps`; the port tree kill (`taskkill /T`) applies.
+        # No birth-witnessed process groups on Windows; the native Port owns cleanup.
         {:ok, state}
 
       {:error, _unix} ->
@@ -453,7 +454,7 @@ defmodule CodingAgent.Eval.Kernel do
 
   defp owned_kernel_group(%{"pid" => pid}, port_pid)
        when is_integer(pid) and is_integer(port_pid) do
-    with {:ok, group} <- LemonCore.ProcessGroup.capture_workload_group(pid),
+    with {:ok, group} <- ProcessGroup.capture_workload_group(pid),
          true <- pid == port_pid or port_child?(group, port_pid) do
       {:ok, group}
     else
@@ -482,16 +483,16 @@ defmodule CodingAgent.Eval.Kernel do
   end
 
   # Signal the witnessed kernel group first, while its leader can still prove
-  # ownership, then the port process tree. After the port exited, a kernel
+  # ownership, then the port process group. After the port exited, a kernel
   # group rooted at the port pid is known to have exited, so a live process
   # with that pid is a recycled identity and is never signalled.
   defp kill_os_processes(state, port_exited) do
     if state.kernel_group do
       root_exited = port_exited and state.kernel_group.root_pid == state.os_pid
-      LemonCore.ProcessGroup.signal_workload_group(state.kernel_group, :sigkill, root_exited)
+      ProcessGroup.terminate(state.kernel_group, signal: :sigkill, root_exited: root_exited)
     end
 
-    if state.os_pid, do: BashExecutor.kill_process_tree(state.os_pid)
+    if state.os_pid, do: ProcessGroup.terminate(state.os_pid, signal: :sigkill)
   end
 
   defp kill_kernel(%{port: nil} = state, _reason), do: state

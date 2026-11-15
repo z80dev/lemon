@@ -166,7 +166,7 @@ defmodule CodingAgent.SessionAgentLoopTest do
 
     # Selective receive of only agent_end would retain progress events until the
     # bounded subscription overflows and fences delivery of the terminal payload.
-    assert_receive {:session_event, ^session_id, event}, remaining
+    assert_receive {:session_event, ^session_id, event, _}, remaining
 
     case event do
       {:agent_end, messages} ->
@@ -334,7 +334,7 @@ defmodule CodingAgent.SessionAgentLoopTest do
   end
 
   defp translate_session_events(session_id, translator, events) do
-    assert_receive {:session_event, ^session_id, event}, 5_000
+    assert_receive {:session_event, ^session_id, event, _}, 5_000
     translator = CodingAgent.Session.RunTranslator.handle_event(translator, event)
     events = [event | events]
 
@@ -357,7 +357,7 @@ defmodule CodingAgent.SessionAgentLoopTest do
       :ok = Session.prompt(session, "hello")
 
       assert_receive {:session_event, ^session_id,
-                      {:provider_retry, %{attempt: 1, max_retries: 3, category: :transient}}},
+                      {:provider_retry, %{attempt: 1, max_retries: 3, category: :transient}}, _},
                      5_000
 
       messages = await_agent_end(session)

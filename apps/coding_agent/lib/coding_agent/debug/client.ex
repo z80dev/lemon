@@ -4,10 +4,11 @@ defmodule CodingAgent.Debug.Client do
 
   The client owns the adapter OS process (an Erlang port) and, for socket-mode
   adapters such as `dlv dap`, the loopback TCP connection the adapter dials back
-  into. It frames outgoing requests, correlates nothing itself, and forwards
-  every inbound message to its owner as:
+  into. `LemonCore.Rpc.Client` owns framing buffers, request correlation and
+  deadlines; this wrapper owns DAP policy and forwards results to its owner as:
 
     * `{:dap, client, {:response, request_seq, response_map}}`
+    * `{:dap, client, {:request_error, request_seq, reason}}`
     * `{:dap, client, {:event, event_name, body}}`
     * `{:dap, client, {:start_debugging, request}}` (owner must answer)
     * `{:dap, client, {:reverse_request, command}}` (unsupported, already answered)
@@ -15,15 +16,23 @@ defmodule CodingAgent.Debug.Client do
 
   The session owner handles `startDebugging`; other reverse requests are rejected.
 
-  The client links to its owner and traps exits, so the adapter's whole OS
-  process tree (adapter, debug server, debuggee) is killed when the owner dies,
-  when `stop/1` is called, or when the client itself crashes.
+  `request/4` remains asynchronous: it returns the assigned sequence number,
+  and the shared engine delivers exactly one response or request error. The
+  timeout defaults to 30 seconds. `cancel/2` removes an outstanding request
+  without replying; late and unknown responses are ignored. Session-level
+  event waits and abort subscriptions remain with `SessionServer`.
+
+  The client links to its owner and traps exits, so the adapter's OS process
+  group (adapter, debug server, debuggee) is killed when the owner dies, when
+  `stop/1` is called, or when the client itself crashes. Descendants that escape
+  that group are not contained by this cleanup.
   """
 
   use GenServer
 
-  alias CodingAgent.BashExecutor
   alias CodingAgent.Debug.Protocol
+  alias LemonCore.Rpc.Client, as: RpcClient
+  alias LemonCore.ProcessGroup
 
   @socket_ready_timeout_ms 10_000
   @max_stderr_bytes 8_192
@@ -48,12 +57,21 @@ defmodule CodingAgent.Debug.Client do
     GenServer.start_link(__MODULE__, opts, timeout: @socket_ready_timeout_ms + 5_000)
   end
 
-  @doc "Send a request; returns its sequence number. The response arrives as a message."
-  @spec request(pid(), String.t(), map() | nil) :: {:ok, pos_integer()} | {:error, String.t()}
-  def request(client, command, arguments \\ nil) when is_binary(command) do
-    GenServer.call(client, {:request, command, arguments})
+  @doc "Send a request; returns its sequence number. Its result arrives as a message."
+  @spec request(pid(), String.t(), map() | nil, timeout()) ::
+          {:ok, pos_integer()} | {:error, String.t()}
+  def request(client, command, arguments \\ nil, timeout \\ 30_000) when is_binary(command) do
+    GenServer.call(client, {:request, command, arguments, timeout})
   catch
     :exit, _ -> {:error, "debug adapter is not running"}
+  end
+
+  @doc "Forget a request without delivering a result. Late responses are ignored."
+  @spec cancel(pid(), pos_integer()) :: :ok
+  def cancel(client, seq) do
+    GenServer.call(client, {:cancel, seq})
+  catch
+    :exit, _ -> :ok
   end
 
   @doc "Answer an adapter's startDebugging reverse request."
@@ -99,7 +117,8 @@ defmodule CodingAgent.Debug.Client do
       port: nil,
       os_pid: nil,
       socket: nil,
-      buffer: "",
+      rpc: nil,
+      rpc_ref: nil,
       stderr: "",
       seq: 0,
       exited?: false
@@ -107,7 +126,28 @@ defmodule CodingAgent.Debug.Client do
 
     case open_transport(adapter, cwd, Keyword.get(opts, :env, [])) do
       {:ok, port, socket} ->
-        {:ok, %{state | port: port, socket: socket, os_pid: port_os_pid(port)}}
+        transport = %{port: port, socket: socket}
+
+        case RpcClient.start_link(
+               owner: self(),
+               framing: Protocol.Framing,
+               send: fn encoded -> write(transport, encoded) end
+             ) do
+          {:ok, rpc} ->
+            {:ok,
+             %{
+               state
+               | port: port,
+                 socket: socket,
+                 os_pid: port_os_pid(port),
+                 rpc: rpc,
+                 rpc_ref: Process.monitor(rpc)
+             }}
+
+          {:error, reason} ->
+            shutdown(%{state | port: port, socket: socket, os_pid: port_os_pid(port)})
+            {:stop, reason}
+        end
 
       {:error, reason} ->
         {:stop, {:shutdown, reason}}
@@ -115,28 +155,34 @@ defmodule CodingAgent.Debug.Client do
   end
 
   @impl true
-  def handle_call({:request, _command, _arguments}, _from, %{exited?: true} = state) do
+  def handle_call({:request, _command, _arguments, _timeout}, _from, %{exited?: true} = state) do
     {:reply, {:error, "debug adapter #{state.adapter.name} is not running"}, state}
   end
 
-  def handle_call({:request, command, arguments}, _from, state) do
+  def handle_call({:request, command, arguments, timeout}, {caller, _tag}, state) do
     seq = state.seq + 1
 
     message =
       %{"seq" => seq, "type" => "request", "command" => command}
       |> maybe_put("arguments", arguments)
 
-    encoded = Protocol.encode(message)
-
     # Launch/attach may create independently owned or external work. Record the
     # uncertainty before writing; a failed write/response does not prove rollback.
     # Exited-client and failed-connect refusals never reach this boundary.
     if command in ["launch", "attach"], do: LemonCore.NativeProcess.unsupported!()
 
-    case write(state, encoded) do
+    from = {self(), {:dap_request, seq}}
+
+    case RpcClient.dispatch(state.rpc, seq, message, from, timeout, caller) do
       :ok -> {:reply, {:ok, seq}, %{state | seq: seq}}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:error, reason} -> {:reply, {:error, reason}, %{state | seq: seq}}
     end
+  end
+
+  def handle_call({:cancel, seq}, _from, state) do
+    :ok = RpcClient.cancel(state.rpc, seq)
+    flush_request(seq)
+    {:reply, :ok, state}
   end
 
   def handle_call({:respond, request, result}, _from, state) do
@@ -154,7 +200,7 @@ defmodule CodingAgent.Debug.Client do
         {:error, message} -> Map.put(response, "message", message)
       end
 
-    {:reply, write(state, Protocol.encode(response)), %{state | seq: state.seq + 1}}
+    {:reply, RpcClient.send_message(state.rpc, response), %{state | seq: state.seq + 1}}
   end
 
   def handle_call(:child_adapter, _from, state) do
@@ -177,6 +223,17 @@ defmodule CodingAgent.Debug.Client do
   def handle_call(:os_pid, _from, state), do: {:reply, state.os_pid, state}
 
   @impl true
+  def handle_info({:rpc_message, message}, state), do: {:noreply, dispatch(message, state)}
+
+  def handle_info({{:dap_request, seq}, result}, state) do
+    deliver_result(state, seq, result)
+    {:noreply, state}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{rpc_ref: ref} = state) do
+    adapter_gone(drain_inbound(state), "debug adapter RPC connection closed")
+  end
+
   def handle_info({port, {:data, data}}, %{port: port, socket: nil} = state) do
     {:noreply, ingest(state, data)}
   end
@@ -199,9 +256,10 @@ defmodule CodingAgent.Debug.Client do
   end
 
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
-    # Unframed bytes still buffered at exit are diagnostics, not protocol.
-    if state.os_pid, do: BashExecutor.kill_process_tree(state.os_pid)
-    stderr = String.trim(bounded(state.stderr <> state.buffer))
+    # Drain already-fed frames and the diagnostic tail before reporting exit.
+    state = sync_inbound(state)
+    if state.os_pid, do: ProcessGroup.terminate(state.os_pid, signal: :sigkill)
+    stderr = String.trim(state.stderr)
 
     reason =
       if stderr == "",
@@ -223,6 +281,7 @@ defmodule CodingAgent.Debug.Client do
 
   @impl true
   def terminate(_reason, state) do
+    close_rpc(state)
     shutdown(state)
     :ok
   end
@@ -407,14 +466,22 @@ defmodule CodingAgent.Debug.Client do
   # ── Inbound ──────────────────────────────────────────────────────────────
 
   defp ingest(state, data) do
-    {messages, rest, junk} = Protocol.decode(state.buffer <> data)
-    state = %{append_stderr(state, junk) | buffer: rest}
-    Enum.reduce(messages, state, &dispatch/2)
+    RpcClient.feed(state.rpc, data)
+    state
   end
 
+  defp dispatch({:diagnostic, bytes}, state), do: append_stderr(state, bytes)
+
   defp dispatch(%{"type" => "response", "request_seq" => seq} = message, state) do
-    notify(state, {:response, seq, message})
-    state
+    try do
+      RpcClient.complete(state.rpc, seq, {:ok, message})
+    catch
+      :exit, _ -> :ok
+    end
+
+    # complete/3 has delivered its reply before returning. Relay it now so
+    # subsequent events keep their wire ordering without a local pending map.
+    drain_results(state)
   end
 
   defp dispatch(%{"type" => "event", "event" => event} = message, state) do
@@ -440,7 +507,7 @@ defmodule CodingAgent.Debug.Client do
       "body" => %{"error" => %{"id" => 1, "format" => text}}
     }
 
-    _ = write(state, Protocol.encode(response))
+    _ = RpcClient.send_message(state.rpc, response)
     notify(state, {:reverse_request, command})
     %{state | seq: state.seq + 1}
   end
@@ -454,6 +521,50 @@ defmodule CodingAgent.Debug.Client do
 
   defp notify(state, payload), do: send(state.owner, {:dap, self(), payload})
 
+  defp deliver_result(state, seq, {:ok, response}), do: notify(state, {:response, seq, response})
+
+  defp deliver_result(state, seq, {:error, reason}),
+    do: notify(state, {:request_error, seq, reason})
+
+  defp drain_results(state) do
+    receive do
+      {{:dap_request, seq}, result} ->
+        deliver_result(state, seq, result)
+        drain_results(state)
+    after
+      0 -> state
+    end
+  end
+
+  defp flush_request(seq) do
+    receive do
+      {{:dap_request, ^seq}, _result} -> flush_request(seq)
+    after
+      0 -> :ok
+    end
+  end
+
+  defp sync_inbound(state) do
+    # Taking the tail also synchronizes all preceding feed casts. Drain their
+    # decoded messages before appending any unfinished frame as exit diagnostics.
+    tail =
+      try do
+        RpcClient.take_buffer(state.rpc)
+      catch
+        :exit, _ -> ""
+      end
+
+    state |> drain_inbound() |> append_stderr(tail)
+  end
+
+  defp drain_inbound(state) do
+    receive do
+      {:rpc_message, message} -> drain_inbound(dispatch(message, state))
+    after
+      0 -> drain_results(state)
+    end
+  end
+
   defp append_stderr(state, ""), do: state
   defp append_stderr(state, data), do: %{state | stderr: bounded(state.stderr <> data)}
 
@@ -466,14 +577,28 @@ defmodule CodingAgent.Debug.Client do
   defp adapter_gone(%{exited?: true} = state, _reason), do: {:stop, :normal, state}
 
   defp adapter_gone(state, reason) do
+    state = sync_inbound(state)
     notify(state, {:exit, reason})
+    close_rpc(state)
     {:stop, :normal, %{state | exited?: true}}
   end
 
   # ── Teardown ─────────────────────────────────────────────────────────────
 
+  defp close_rpc(%{rpc: rpc} = state) when is_pid(rpc) do
+    try do
+      RpcClient.fail_all(rpc, {:error, :connection_closed})
+      drain_results(state)
+      :gen_statem.stop(rpc)
+    catch
+      :exit, _ -> :ok
+    end
+  end
+
+  defp close_rpc(_state), do: :ok
+
   defp shutdown(state) do
-    if state.os_pid, do: BashExecutor.kill_process_tree(state.os_pid)
+    if state.os_pid, do: ProcessGroup.terminate(state.os_pid, signal: :sigkill)
     if state.socket, do: :gen_tcp.close(state.socket)
 
     if is_port(state.port) do
@@ -488,7 +613,7 @@ defmodule CodingAgent.Debug.Client do
   defp kill_port_tree(port) do
     case port_os_pid(port) do
       nil -> :ok
-      os_pid -> BashExecutor.kill_process_tree(os_pid)
+      os_pid -> ProcessGroup.terminate(os_pid, signal: :sigkill)
     end
 
     try do

@@ -8,11 +8,12 @@ defmodule CodingAgent.Debug.SessionServer do
   lists persist across root relaunches and may be set before `launch`.
 
   The server owns a linked `CodingAgent.Debug.Client` for the adapter and
-  processes every operation synchronously: DAP responses and events arrive as
-  messages, so handshake ordering, stop waits and cancellation share a single
-  receive loop. Event-driven state (stop location, threads, exit code, output
-  ring buffer) is applied in arrival order whether it arrives during an
-  operation or between operations.
+  processes every operation synchronously. The shared RPC engine owns request
+  correlation and deadlines; the receive loop selects replies directly from
+  the mailbox while applying events, without a second pending-request map.
+  Handshake ordering, event-wait deadlines and message-driven abort
+  subscriptions remain here. Events are applied in arrival order whether they
+  arrive during an operation or between operations.
 
   Lifecycle: the adapter process tree is killed on `terminate`, when the
   debuggee terminates, when a launch/attach handshake fails or is aborted, when
@@ -23,10 +24,10 @@ defmodule CodingAgent.Debug.SessionServer do
 
   use GenServer
 
-  alias CodingAgent.BashExecutor
   alias CodingAgent.Debug.Adapters
   alias CodingAgent.Debug.Client
   alias LemonAgent.AbortSignal
+  alias LemonCore.ProcessGroup
 
   @registry CodingAgent.Debug.Registry
   @supervisor CodingAgent.Debug.Supervisor
@@ -627,7 +628,7 @@ defmodule CodingAgent.Debug.SessionServer do
            dap_request(state, "initialize", initialize_args(request.adapter), ctx),
          state = update_session(state, &%{&1 | capabilities: capabilities || %{}}),
          {:ok, start_seq, state} <-
-           send_async(state, Atom.to_string(kind), start_args(kind, request, state)),
+           send_async(state, Atom.to_string(kind), start_args(kind, request, state), ctx),
          {:ok, state} <- await_initialized(state, start_seq, ctx),
          {:ok, state} <- configure(state, ctx),
          {:ok, _body, state} <- await_response(state, start_seq, ctx) do
@@ -703,25 +704,42 @@ defmodule CodingAgent.Debug.SessionServer do
 
   # Adapters may answer launch/attach only after configurationDone, so the
   # start request is in flight while we wait for `initialized`.
-  defp await_initialized(state, start_seq, ctx) do
+  defp await_initialized(state, {start_seq, _command}, ctx) do
     result =
-      await(state, ctx, fn state ->
-        session = state.session
-
-        cond do
-          session.initialized? -> {:done, :ok}
-          match?(%{"success" => false}, session.responses[start_seq]) -> {:done, :start_failed}
-          is_nil(session.client) -> {:done, :exited}
-          true -> nil
-        end
-      end)
+      await(
+        state,
+        ctx,
+        fn state ->
+          cond do
+            state.session.initialized? -> {:done, :ok}
+            is_nil(state.session.client) -> {:done, :exited}
+            true -> nil
+          end
+        end,
+        {:errors, start_seq}
+      )
 
     case result do
-      {:ok, :ok, state} -> {:ok, state}
-      {:ok, :start_failed, state} -> response_error(state, start_seq)
-      {:ok, :exited, state} -> {:error, adapter_exit_message(state), state}
-      {:timeout, state} -> {:error, "debug adapter did not send `initialized` in time", state}
-      {:aborted, state} -> {:aborted, "Debug launch cancelled.", state}
+      {:ok, :ok, state} ->
+        {:ok, state}
+
+      {:ok, {:response, response}, state} ->
+        {:error, response_message(response), state}
+
+      {:ok, :exited, state} ->
+        {:error, adapter_exit_message(state), state}
+
+      {status, reason, state} when status == :error and reason != :timeout ->
+        {:error, request_error_message(reason, state), state}
+
+      {:error, :timeout, state} ->
+        {:error, "debug adapter did not send `initialized` in time", state}
+
+      {:timeout, state} ->
+        {:error, "debug adapter did not send `initialized` in time", state}
+
+      {:aborted, state} ->
+        {:aborted, "Debug launch cancelled.", state}
     end
   end
 
@@ -1144,19 +1162,20 @@ defmodule CodingAgent.Debug.SessionServer do
   # ── Request / event plumbing ─────────────────────────────────────────────
 
   defp dap_request(state, command, arguments, ctx) do
-    case send_async(state, command, arguments) do
+    case send_async(state, command, arguments, ctx) do
       {:ok, seq, state} -> await_response(state, seq, ctx)
       error -> error
     end
   end
 
-  defp send_async(state, command, arguments) do
+  defp send_async(state, command, arguments, ctx) do
     case state.session do
       %{client: client} when is_pid(client) ->
-        case Client.request(client, command, arguments) do
+        remaining = max(ctx.deadline - System.monotonic_time(:millisecond), 0)
+
+        case Client.request(client, command, arguments, remaining) do
           {:ok, seq} ->
-            {:ok, seq,
-             update_session(state, &%{&1 | awaiting: Map.put(&1.awaiting, seq, command)})}
+            {:ok, {seq, command}, state}
 
           {:error, message} ->
             {:error, message, state}
@@ -1167,47 +1186,60 @@ defmodule CodingAgent.Debug.SessionServer do
     end
   end
 
-  defp await_response(state, seq, ctx) do
-    result =
-      await(state, ctx, fn state ->
-        session = state.session
+  defp await_response(state, {seq, command}, ctx) do
+    client = state.session.client
 
-        cond do
-          Map.has_key?(session.responses, seq) -> {:done, :response}
-          is_nil(session.client) -> {:done, :exited}
-          true -> nil
-        end
-      end)
+    try do
+      result =
+        await(
+          state,
+          ctx,
+          fn state -> if is_nil(state.session.client), do: {:done, :exited} end,
+          {:all, seq}
+        )
 
-    case result do
-      {:ok, :response, state} ->
-        response = state.session.responses[seq]
-        state = forget_request(state, seq)
-
-        if response["success"] == true do
+      case result do
+        {:ok, {:response, %{"success" => true} = response}, state} ->
           {:ok, response["body"], state}
-        else
+
+        {:ok, {:response, response}, state} ->
           {:error, response_message(response), state}
-        end
 
-      {:ok, :exited, state} ->
-        {:error, adapter_exit_message(state), forget_request(state, seq)}
+        {:ok, :exited, state} ->
+          {:error, adapter_exit_message(state), state}
 
-      {:timeout, state} ->
-        command = Map.get(state.session.awaiting, seq, "request")
+        {:error, :timeout, state} ->
+          {:error, "DAP request #{command} timed out after #{format_seconds(ctx.timeout_ms)}",
+           state}
 
-        {:error, "DAP request #{command} timed out after #{format_seconds(ctx.timeout_ms)}",
-         forget_request(state, seq)}
+        {:error, reason, state} ->
+          {:error, request_error_message(reason, state), state}
 
-      {:aborted, state} ->
-        {:aborted, "Debug operation cancelled.", forget_request(state, seq)}
+        {:aborted, state} ->
+          {:aborted, "Debug operation cancelled.", state}
+      end
+    after
+      if is_pid(client) do
+        Client.cancel(client, seq)
+        flush_response(client, seq)
+      end
     end
   end
 
-  defp response_error(state, seq) do
-    response = state.session.responses[seq]
-    {:error, response_message(response), forget_request(state, seq)}
+  defp flush_response(client, seq) do
+    receive do
+      {:dap, ^client, {kind, ^seq, _result}} when kind in [:response, :request_error] ->
+        flush_response(client, seq)
+    after
+      0 -> :ok
+    end
   end
+
+  defp request_error_message(:connection_closed, state), do: adapter_exit_message(state)
+  defp request_error_message(reason, _state) when is_binary(reason), do: reason
+
+  defp request_error_message(reason, _state),
+    do: "debug adapter request failed: #{inspect(reason)}"
 
   defp response_message(response) do
     format = get_in(response, ["body", "error", "format"])
@@ -1223,16 +1255,6 @@ defmodule CodingAgent.Debug.SessionServer do
   defp format_seconds(ms) when rem(ms, 1000) == 0, do: "#{div(ms, 1000)}s"
   defp format_seconds(ms), do: "#{Float.round(ms / 1000, 1)}s"
 
-  defp forget_request(state, seq) do
-    update_session(state, fn session ->
-      %{
-        session
-        | awaiting: Map.delete(session.awaiting, seq),
-          responses: Map.delete(session.responses, seq)
-      }
-    end)
-  end
-
   defp adapter_exit_message(state) do
     case state.session do
       %{error: error} when is_binary(error) -> error
@@ -1240,21 +1262,27 @@ defmodule CodingAgent.Debug.SessionServer do
     end
   end
 
-  # Receive DAP traffic (applying it to state) until `done?` returns
-  # `{:done, value}`, the operation deadline passes or the signal aborts.
-  defp await(state, ctx, done?) do
+  # Only event waits use this receive deadline; outstanding request deadlines
+  # belong to the RPC engine. Replies for a different request stay in the mailbox
+  # (notably launch/attach while configuration requests are in flight).
+  defp await(state, ctx, done?, response \\ nil) do
     case done?.(state) do
       {:done, value} ->
         {:ok, value, state}
 
       nil ->
-        now = System.monotonic_time(:millisecond)
+        {response_mode, response_seq} = response || {nil, nil}
+
+        remaining =
+          if response_mode == :all,
+            do: :infinity,
+            else: max(ctx.deadline - System.monotonic_time(:millisecond), 0)
 
         cond do
           AbortSignal.aborted?(ctx.signal) ->
             {:aborted, state}
 
-          now >= ctx.deadline ->
+          remaining == 0 ->
             {:timeout, state}
 
           true ->
@@ -1264,8 +1292,18 @@ defmodule CodingAgent.Debug.SessionServer do
             signal = ctx.signal
 
             receive do
-              {:dap, ^client, payload} ->
-                await(apply_payload(state, payload), ctx, done?)
+              {:dap, ^client, {:response, ^response_seq, %{"success" => false} = message}}
+              when response_mode in [:all, :errors] ->
+                {:ok, {:response, message}, state}
+
+              {:dap, ^client, {:response, ^response_seq, message}} when response_mode == :all ->
+                {:ok, {:response, message}, state}
+
+              {:dap, ^client, {:request_error, ^response_seq, reason}} ->
+                {:error, reason, state}
+
+              {:dap, ^client, payload} when elem(payload, 0) not in [:response, :request_error] ->
+                await(apply_payload(state, payload), ctx, done?, response)
 
               {:EXIT, ^client, reason} ->
                 state =
@@ -1274,7 +1312,7 @@ defmodule CodingAgent.Debug.SessionServer do
                     {:exit, "debug adapter client stopped: #{inspect(reason)}"}
                   )
 
-                await(state, ctx, done?)
+                await(state, ctx, done?, response)
 
               {:DOWN, ^owner_ref, :process, _pid, _reason} ->
                 throw({:owner_down, state})
@@ -1286,9 +1324,9 @@ defmodule CodingAgent.Debug.SessionServer do
                 {:aborted, state}
 
               {:lemon_abort, ^signal, :redirect} ->
-                await(state, ctx, done?)
+                await(state, ctx, done?, response)
             after
-              ctx.deadline - now -> {:timeout, state}
+              remaining -> {:timeout, state}
             end
         end
     end
@@ -1368,13 +1406,8 @@ defmodule CodingAgent.Debug.SessionServer do
 
   defp apply_payload(%{session: nil} = state, _payload), do: state
 
-  defp apply_payload(state, {:response, seq, response}) do
-    update_session(state, fn session ->
-      if Map.has_key?(session.awaiting, seq),
-        do: %{session | responses: Map.put(session.responses, seq, response)},
-        else: session
-    end)
-  end
+  defp apply_payload(state, {kind, _seq, _result}) when kind in [:response, :request_error],
+    do: state
 
   defp apply_payload(state, {:event, event, body}) do
     update_session(state, &apply_event(&1, event, body || %{}))
@@ -1398,8 +1431,11 @@ defmodule CodingAgent.Debug.SessionServer do
       # longer identifies them. Never claim ownership of an attached process.
       if session.status != :terminated and session.kind == :launch do
         case session.process do
-          %{pid: pid} when is_integer(pid) and pid > 0 -> BashExecutor.kill_process_tree(pid)
-          _ -> :ok
+          %{pid: pid} when is_integer(pid) and pid > 0 ->
+            ProcessGroup.terminate(pid, signal: :sigkill)
+
+          _ ->
+            :ok
         end
       end
 
@@ -1528,8 +1564,6 @@ defmodule CodingAgent.Debug.SessionServer do
       exit_code: nil,
       error: nil,
       process: nil,
-      awaiting: %{},
-      responses: %{},
       breakpoint_events: %{},
       breakpoints_dirty?: false,
       output: %{queue: :queue.new(), bytes: 0, total: 0, truncated?: false},

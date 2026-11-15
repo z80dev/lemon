@@ -5,7 +5,7 @@ exclude_tags =
     [:memory_perf, :smoke, :external]
   end
 
-ExUnit.start(exclude: exclude_tags, capture_log: true)
+ExUnit.start(exclude: [:docker | exclude_tags], capture_log: true)
 
 # Compile and load support files
 Code.require_file("support/http_stub.ex", __DIR__)

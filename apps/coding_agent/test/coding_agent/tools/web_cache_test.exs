@@ -8,6 +8,13 @@ defmodule CodingAgent.Tools.WebCacheTest do
   @table_three :coding_agent_web_cache_test_three
 
   setup do
+    start_supervised!(
+      {CodingAgent.RuntimeTables,
+       name: __MODULE__.Owner,
+       tables: [@table_one, @table_two, @table_three],
+       cache_table: :coding_agent_web_cache_test_values}
+    )
+
     original_cache_path = System.get_env("LEMON_WEB_CACHE_PATH")
 
     cache_dir =
@@ -27,9 +34,10 @@ defmodule CodingAgent.Tools.WebCacheTest do
     WebCache.clear_cache(@table_three, opts)
 
     on_exit(fn ->
-      WebCache.clear_cache(@table_one, opts)
-      WebCache.clear_cache(@table_two, opts)
-      WebCache.clear_cache(@table_three, opts)
+      for table <- [@table_one, @table_two, @table_three] do
+        :ets.match_delete(:coding_agent_web_cache_state, {{:loaded, table, :_}, :_})
+        :ets.delete(:coding_agent_web_cache_state, {:active_dir, table})
+      end
 
       if original_cache_path,
         do: System.put_env("LEMON_WEB_CACHE_PATH", original_cache_path),
@@ -47,17 +55,20 @@ defmodule CodingAgent.Tools.WebCacheTest do
 
     assert {:hit, %{"value" => "persisted"}} = WebCache.read_cache(@table_one, "lemon:key", opts)
 
-    :ets.delete(@table_one)
+    restart_owner()
 
     assert {:hit, %{"value" => "persisted"}} = WebCache.read_cache(@table_one, "lemon:key", opts)
   end
 
   test "expires persisted entries when ttl elapses", %{cache_dir: cache_dir} do
     opts = %{"persistent" => true, "path" => cache_dir, "max_entries" => 10}
-    WebCache.write_cache(@table_two, "expire:key", "stale", 5, 10, opts)
+    WebCache.write_cache(@table_two, "expire:key", "stale", 60_000, 10, opts)
 
-    Process.sleep(20)
-    :ets.delete(@table_two)
+    path = Path.join(cache_dir, "#{@table_two}.json")
+    payload = path |> File.read!() |> Jason.decode!()
+    payload = put_in(payload, ["entries", Access.at(0), "expires_at"], 0)
+    File.write!(path, Jason.encode!(payload))
+    restart_owner()
 
     assert :miss = WebCache.read_cache(@table_two, "expire:key", opts)
   end
@@ -66,13 +77,12 @@ defmodule CodingAgent.Tools.WebCacheTest do
     opts = %{"persistent" => true, "path" => cache_dir, "max_entries" => 1}
 
     WebCache.write_cache(@table_three, "first", 1, 60_000, 1, opts)
-    Process.sleep(2)
     WebCache.write_cache(@table_three, "second", 2, 60_000, 1, opts)
 
     assert :miss = WebCache.read_cache(@table_three, "first", opts)
     assert {:hit, 2} = WebCache.read_cache(@table_three, "second", opts)
 
-    :ets.delete(@table_three)
+    restart_owner()
 
     assert :miss = WebCache.read_cache(@table_three, "first", opts)
     assert {:hit, 2} = WebCache.read_cache(@table_three, "second", opts)
@@ -91,10 +101,19 @@ defmodule CodingAgent.Tools.WebCacheTest do
     opts = %{"persistent" => true, "path" => cache_dir}
 
     WebCache.write_cache(@table_one, "first", 1, 60_000, 10, opts)
-    Process.sleep(2)
     WebCache.write_cache(@table_one, "second", 2, 60_000, 10, opts)
 
     assert :miss = WebCache.read_cache(@table_one, "first", opts)
     assert {:hit, 2} = WebCache.read_cache(@table_one, "second", opts)
+  end
+
+  defp restart_owner do
+    {:ok, supervisor} = ExUnit.fetch_test_supervisor()
+    owner = Process.whereis(__MODULE__.Owner)
+    ref = Process.monitor(owner)
+    :ok = Supervisor.terminate_child(supervisor, CodingAgent.RuntimeTables)
+    assert_receive {:DOWN, ^ref, :process, ^owner, :shutdown}
+    {:ok, restarted} = Supervisor.restart_child(supervisor, CodingAgent.RuntimeTables)
+    assert :ets.info(@table_one, :owner) == restarted
   end
 end
