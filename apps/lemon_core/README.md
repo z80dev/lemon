@@ -220,7 +220,8 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | `LemonCore.Httpc` | `:httpc` wrapper ensuring `:inets`/`:ssl` started |
 | `LemonCore.MapHelpers` | Map key access helpers (atom/string agnostic) |
 | `LemonCore.Telemetry` | Telemetry event helpers and named event emitters |
-| `LemonCore.Reload` | Runtime BEAM/extension reload orchestration |
+| `Lemon.Reload` | Published low-level BEAM/extension reload API; see its moduledoc for retained contracts |
+| `LemonCore.CodeReload` | Soft-loads changed BEAM files and invokes the configured session refresher for source-development reload |
 | `LemonCore.Testing` | Test harness builder (Harness, Case, Helpers) |
 | `LemonCore.TerminalBackend` / `TerminalBackends` / `TerminalBackendPolicy` | Shared terminal/process backend contract, registry, policy, and redacted diagnostics |
 
