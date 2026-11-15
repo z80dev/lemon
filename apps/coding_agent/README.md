@@ -790,6 +790,10 @@ navigation, labels and planning open their own append descriptor under file
 admission, sync their changes, and close it before returning. Raw descriptors
 belong to their opening process: detached readers reload journal data rather
 than reusing a retired live session's handle.
+Path-backed detached appends use a short-lived raw handle and datasync before
+returning. Rewind confirmations bind the entire journal and tree, not only the
+leaf and entry count: later entries, checkpoint-only appends and same-count
+content edits invalidate the preview.
 Migration and torn-tail repair still use atomic snapshots: the temporary file
 is synced before rename, then the containing directory is synced. Ordinary
 turn barriers use datasync (not Darwin device-wide F_FULLFSYNC).
