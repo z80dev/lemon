@@ -590,7 +590,8 @@ The hard ceiling never resets; its reasons remain `:timeout` and
 `:dispatcher_stream_timeout`.
 
 `LemonAi.ModelCache` caches provider `GET /models` availability with a configurable TTL
-(default 5 minutes).
+(default 5 minutes). Its supervised process owns the ETS table; caller exits do not
+discard entries, while restarting the owner creates an empty cache.
 
 ## Key types
 
@@ -716,11 +717,22 @@ LemonAi.Supervisor (one_for_one; owns the retained slot lease/cap ETS table)
   ├── Registry (LemonAi.CallDispatcherRegistry)
   ├── DynamicSupervisor (LemonAi.ProviderSupervisor) -- per-provider breakers/limiters/slots
   ├── LemonAi.CallDispatcher -- provider failure summaries
-  └── LemonAi.ModelCache
+  ├── LemonAi.ModelCache -- model availability ETS owner
+  ├── LemonAi.Auth.Cache -- token and fingerprint ETS owner
+  └── LemonAi.Auth.OmpAuthBroker -- broker snapshot ETS owner and watchers
 ```
 
 `LemonAi.ProviderRegistry` lives outside the tree in `:persistent_term`, so provider
-mappings survive process restarts.
+mappings survive process restarts. Only explicit boot/configuration registration
+updates this map; request-path lookups never initialize or mutate it.
+
+Mutable and lazily discovered auth values live in `LemonAi.Auth.Cache`, not
+`:persistent_term`: omp access tokens retain their expiry/forced-refresh rules,
+Claude Code versions are cached per `PATH`, and Kimi CLI fingerprint headers are
+cached for the owner's lifetime. Reads and writes access ETS directly. Caller exits
+leave entries intact; an owner restart discards them for rediscovery. Before startup
+or during a restart, auth adapters resolve values without caching rather than creating
+a caller-owned table. This cache never stores omp refresh credentials.
 
 ## Adding a provider
 

@@ -9,6 +9,40 @@ defmodule LemonAgent.ModelRuntime.SessionPinsTest do
     :ok
   end
 
+  test "short-lived callers do not own pins and an absent owner is not recreated" do
+    table = :lemon_agent_session_pins
+    owner = Process.whereis(SessionPins)
+    assert :ets.info(table, :owner) == owner
+
+    task = Task.async(fn -> SessionPins.pin("caller", "openai", "ref", "model") end)
+    monitor = Process.monitor(task.pid)
+    assert :ok = Task.await(task)
+    assert_receive {:DOWN, ^monitor, :process, _pid, _reason}
+    assert %{credential_ref: "ref"} = SessionPins.get("caller")
+    assert :ets.info(table, :owner) == owner
+
+    :ok = Supervisor.terminate_child(LemonAgent.Supervisor, SessionPins)
+
+    try do
+      tasks =
+        for _ <- 1..16 do
+          Task.async(fn ->
+            :ok = SessionPins.pin("absent", "openai", "ref", "model")
+            SessionPins.get("absent")
+          end)
+        end
+
+      assert Enum.map(tasks, &Task.await/1) == List.duplicate(nil, 16)
+      assert SessionPins.sweep(0) == 0
+      assert :ets.whereis(table) == :undefined
+    after
+      {:ok, _} = Supervisor.restart_child(LemonAgent.Supervisor, SessionPins)
+    end
+
+    assert :ets.info(table, :owner) == Process.whereis(SessionPins)
+    assert SessionPins.get("caller") == nil
+  end
+
   test "pins and reads back a candidate per session scope" do
     assert SessionPins.get("session-1") == nil
 

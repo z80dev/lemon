@@ -118,45 +118,43 @@ defmodule LemonComputerUse.Tools.Common do
     run_id = Keyword.get(opts, :run_id) || approval[:run_id]
 
     if is_binary(session_id) and session_id != "" do
-      {:ok,
-       %{
-         session_id: session_id,
-         # A run is Lemon's turn. Sessions outside a run use one session-long turn.
-         turn_id: run_id || session_turn(session_id, Keyword.get(opts, :session_pid)),
-         run_id: run_id,
-         session_pid: Keyword.get(opts, :session_pid),
-         tool_call_id: tool_call_id,
-         session_key: approval[:session_key] || Keyword.get(opts, :session_key),
-         agent_id: approval[:agent_id] || Keyword.get(opts, :agent_id),
-         invocation_context_key:
-           approval[:invocation_context_key] || Keyword.get(opts, :invocation_context_key),
-         approval_request_fun: approval[:approval_request_fun]
-       }}
+      with {:ok, turn_id} <- turn_id(run_id, session_id, Keyword.get(opts, :session_pid)) do
+        {:ok,
+         %{
+           session_id: session_id,
+           turn_id: turn_id,
+           run_id: run_id,
+           session_pid: Keyword.get(opts, :session_pid),
+           tool_call_id: tool_call_id,
+           session_key: approval[:session_key] || Keyword.get(opts, :session_key),
+           agent_id: approval[:agent_id] || Keyword.get(opts, :agent_id),
+           invocation_context_key:
+             approval[:invocation_context_key] || Keyword.get(opts, :invocation_context_key),
+           approval_request_fun: approval[:approval_request_fun]
+         }}
+      end
     else
       {:error, "Computer use needs a Lemon session; this tool call has no session id."}
     end
   end
 
-  # The runtime remembers ended turns, so a turn id must never be reused. A
-  # session outside a Lemon run gets one turn per session process (shared by
-  # both tools), ended when that process exits; the per-boot nonce keeps a
-  # resumed session in a later VM from landing on an ended turn.
-  defp session_turn(session_id, session_pid) do
-    "session-" <>
-      session_id <> "-" <> Integer.to_string(:erlang.phash2({session_pid, boot_nonce()}))
-  end
+  # A run is Lemon's turn. Otherwise both tools share one turn per session
+  # process. The supervised server publishes the nonce before accepting calls,
+  # so concurrent first calls cannot invent different identities. An owner
+  # restart gets a new nonce rather than reusing a turn the runtime ended.
+  defp turn_id(nil, session_id, session_pid) do
+    case Server.boot_nonce() do
+      {:ok, nonce} ->
+        {:ok,
+         "session-" <>
+           session_id <> "-" <> Integer.to_string(:erlang.phash2({session_pid, nonce}))}
 
-  defp boot_nonce do
-    case :persistent_term.get({__MODULE__, :boot_nonce}, nil) do
-      nil ->
-        nonce = :crypto.strong_rand_bytes(16)
-        :persistent_term.put({__MODULE__, :boot_nonce}, nonce)
-        nonce
-
-      nonce ->
-        nonce
+      {:error, reason} ->
+        {:error, error_text(reason)}
     end
   end
+
+  defp turn_id(run_id, _session_id, _session_pid), do: {:ok, run_id}
 
   @doc false
   @spec to_result(String.t(), [map()], boolean()) :: AgentToolResult.t()

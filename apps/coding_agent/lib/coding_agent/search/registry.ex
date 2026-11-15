@@ -6,6 +6,8 @@ defmodule CodingAgent.Search.Registry do
   to application startup and extension reload, so the registry uses
   `:persistent_term` with a global mutation lock. Built-ins cannot be replaced
   accidentally; an extension conflict is reported to the extension lifecycle.
+  Reads never initialize or mutate the registry; before explicit initialization
+  they return bundled specifications without publishing them.
   """
 
   alias CodingAgent.Search.Provider
@@ -125,8 +127,10 @@ defmodule CodingAgent.Search.Registry do
   end
 
   defp providers do
-    unless initialized?(), do: init()
-    :persistent_term.get(@persistent_term_key)
+    case :persistent_term.get(@persistent_term_key, :uninitialized) do
+      :uninitialized -> builtin_specs()
+      providers -> providers
+    end
   end
 
   defp builtin_specs do

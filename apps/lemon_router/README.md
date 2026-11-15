@@ -198,6 +198,12 @@ errors for retry and reports a crashed finalize call separately. Completion-time
 artifact enrichment and termination-time cancellation remain best-effort so a
 secondary failure cannot suppress the final answer or terminal event.
 
+Restart admission (`:open`, `:holding`, `:sealed`) lives in a protected ETS
+table owned by the supervised `RestartCarryover` process, not in
+`persistent_term` or a drain caller. Missing ownership refuses new work and
+holds queues. An owner restarted during a runtime drain starts sealed;
+ordinary app startup starts open. Durable carryover records remain in Store.
+
 ## Output Semantics
 
 Router coalescers only track semantic state:
