@@ -17,8 +17,8 @@ defmodule CodingAgent.Tools.Eval do
   from stdout. Text output follows the `bash` cap and spills to an artifact.
 
   Options: `:session_id` is the durable kernel identity and `:session_pid`
-  binds its current owner. Successful native turn handoff detaches that owner
-  before stop; unexpected owner death still disposes of the kernel.
+  binds its owner. Native turns reuse that live owner; idle parking and
+  unexpected owner death dispose of the kernel.
   `:eval_idle_timeout_ms` (default 30 minutes) kills idle kernels, and
   `:eval_runtimes` (`%{"py" => exe, "js" => exe}`) overrides the runtime
   executables.

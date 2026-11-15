@@ -12,11 +12,10 @@ defmodule CodingAgent.Session.ContextUsage do
   scaled proportionally (largest remainder) so they sum exactly to it; when it is
   an estimate, they sum to it unscaled.
 
-  System prompt and tool definitions only exist in a live session. Sessions stop
-  between turns, so each save records a bounded *overhead profile* — token counts
-  and safe labels per prompt section and tool, never prompt text — keyed by the
-  native session id. A durable read combines that profile with messages from the
-  session file; without one, the overhead is reported as `:unattributed`.
+  System prompt and tool definitions are measured from the live session. Parked
+  sessions report provider-measured totals with unknown overhead attributed as
+  `:unattributed`; without provider usage a durable read is unavailable rather
+  than understating context using only messages. No overhead snapshot is stored.
   """
 
   alias CodingAgent.Compaction
@@ -25,7 +24,6 @@ defmodule CodingAgent.Session.ContextUsage do
   @message_categories [:user_messages, :assistant_messages, :tool_results, :summaries]
   @overhead_categories [:system_prompt, :tool_definitions, :skills, :context_files, :memory]
   @categories @overhead_categories ++ @message_categories
-  @overhead_table :session_context_overhead
   @top_limit 10
   @label_max 80
 
@@ -42,7 +40,6 @@ defmodule CodingAgent.Session.ContextUsage do
           | :unattributed
 
   @type item :: %{category: category(), label: String.t(), tokens: non_neg_integer()}
-  @type overhead :: %{items: [item()], measured_at: integer()}
 
   @doc "Standard category ids in display order."
   @spec categories() :: [category()]
@@ -70,7 +67,7 @@ defmodule CodingAgent.Session.ContextUsage do
     report(%{
       live: true,
       overhead_source: :live,
-      overhead: overhead(state, agent_state).items,
+      overhead: overhead_items(state, agent_state),
       message_items: message_items(messages, Keyword.get(opts, :strip_recall, & &1)),
       message_count: length(messages),
       budget: budget,
@@ -82,28 +79,25 @@ defmodule CodingAgent.Session.ContextUsage do
   end
 
   @doc """
-  Measure a stopped session from its durable history. `overhead` is the profile
-  recorded by `record_overhead/2`, or `nil`. Returns `{:error, :unavailable}` when
-  neither provider usage nor a recorded profile exists, since messages alone
-  would understate the request.
+  Measure a parked session from durable history. Without provider usage the
+  request overhead is unknown, so return unavailable rather than undercounting.
   """
-  @spec measure_durable(map(), [map()], overhead() | nil) :: {:ok, map()} | {:error, :unavailable}
+  @spec measure_durable(map(), [map()]) :: {:ok, map()} | {:error, :unavailable}
   def measure_durable(
         %{session_manager: _, model: _, settings_manager: _} = state,
-        messages,
-        overhead
+        messages
       ) do
     usage_after = ContextBudget.usage_boundary(state.session_manager)
     budget = Compaction.request_context_usage(messages, nil, [], usage_after)
 
-    if budget.source == "estimate" and is_nil(overhead) do
+    if budget.source == "estimate" do
       {:error, :unavailable}
     else
       {:ok,
        report(%{
          live: false,
-         overhead_source: if(overhead, do: :snapshot, else: :unavailable),
-         overhead: if(overhead, do: overhead.items, else: []),
+         overhead_source: :unavailable,
+         overhead: [],
          message_items: message_items(messages, & &1),
          message_count: length(messages),
          budget: budget,
@@ -115,13 +109,10 @@ defmodule CodingAgent.Session.ContextUsage do
     end
   end
 
-  @doc """
-  The overhead profile of the request: one item per labelled system-prompt
-  section actually present in the prompt being sent, any remaining prompt text
-  (planning guidance, a frozen snapshot prompt), and one item per tool.
-  """
-  @spec overhead(map(), map()) :: overhead()
-  def overhead(state, agent_state) do
+  # Attribute only sections actually present in the live prompt, plus its
+  # remaining text and the current tool definitions. Nothing is persisted.
+  @spec overhead_items(map(), map()) :: [item()]
+  defp overhead_items(state, agent_state) do
     prompt = agent_state.system_prompt || ""
     sections = Map.get(state, :prompt_sections) || []
 
@@ -150,68 +141,8 @@ defmodule CodingAgent.Session.ContextUsage do
               Compaction.estimate_tool_definition_tokens(tool)
             )
 
-    %{
-      items: section_items ++ remainder_items ++ tool_items,
-      measured_at: System.system_time(:millisecond)
-    }
+    section_items ++ remainder_items ++ tool_items
   end
-
-  @doc """
-  Persist `profile` for `session_id` when it differs from `previous` (compared
-  by items). Returns the profile now on record. Storage failures are ignored:
-  accounting is diagnostic and must never fail a save.
-  """
-  @spec record_overhead(String.t() | nil, overhead(), overhead() | nil) :: overhead() | nil
-  def record_overhead(session_id, profile, previous \\ nil)
-
-  def record_overhead(session_id, %{items: items} = profile, previous)
-      when is_binary(session_id) and session_id != "" do
-    if previous && previous.items == items do
-      previous
-    else
-      stored = %{
-        items: Enum.map(items, &%{&1 | category: Atom.to_string(&1.category)}),
-        measured_at: profile.measured_at
-      }
-
-      case LemonCore.Store.put(@overhead_table, session_id, stored) do
-        :ok -> profile
-        _ -> previous
-      end
-    end
-  rescue
-    _ -> previous
-  catch
-    :exit, _ -> previous
-  end
-
-  def record_overhead(_session_id, _profile, previous), do: previous
-
-  @doc "The recorded overhead profile for a native session id, or `nil`."
-  @spec stored_overhead(String.t()) :: overhead() | nil
-  def stored_overhead(session_id) when is_binary(session_id) do
-    case LemonCore.Store.get(@overhead_table, session_id) do
-      %{items: items, measured_at: measured_at} when is_list(items) ->
-        %{items: Enum.flat_map(items, &restore_item/1), measured_at: measured_at}
-
-      _ ->
-        nil
-    end
-  rescue
-    _ -> nil
-  catch
-    :exit, _ -> nil
-  end
-
-  defp restore_item(%{category: category, label: label, tokens: tokens})
-       when is_binary(label) and is_integer(tokens) and tokens >= 0 do
-    case Enum.find(@overhead_categories, &(Atom.to_string(&1) == category)) do
-      nil -> []
-      atom -> [item(atom, label, tokens)]
-    end
-  end
-
-  defp restore_item(_), do: []
 
   @doc """
   Itemise wire messages by category. A user message carrying an automatic

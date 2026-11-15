@@ -471,9 +471,9 @@ defmodule CodingAgent.ControlPlaneProvider do
   end
 
   @doc """
-  Per-category context-window usage for a live or durable native session. A
-  stopped session combines its durable history with the overhead profile its
-  last save recorded (see `CodingAgent.Session.ContextUsage`).
+  Per-category context-window usage for a live or parked native session.
+  Parked sessions report provider usage with unattributed overhead; without
+  provider usage the total is unavailable.
   """
   def session_context_usage(session_key, cwd) do
     # Context accounting has its own serialized read and retirement fallback.
@@ -506,8 +506,7 @@ defmodule CodingAgent.ControlPlaneProvider do
 
       ContextUsage.measure_durable(
         %{session_manager: session, model: model, settings_manager: settings},
-        messages,
-        ContextUsage.stored_overhead(session.header.id)
+        messages
       )
     end
   end

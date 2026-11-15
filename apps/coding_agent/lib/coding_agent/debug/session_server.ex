@@ -157,9 +157,8 @@ defmodule CodingAgent.Debug.SessionServer do
   end
 
   @impl true
-  def handle_call({operation, owner}, _from, state)
-      when operation in [:bind_owner, :detach_owner],
-      do: CodingAgent.ToolResources.owner_reply(operation, owner, state)
+  def handle_call({:bind_owner, owner}, _from, state),
+    do: CodingAgent.ToolResources.owner_reply(:bind_owner, owner, state)
 
   def handle_call({:op, %{debug_session_id: id} = request, ctx}, _from, state)
       when is_binary(id) do

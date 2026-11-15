@@ -148,7 +148,6 @@ defmodule CodingAgent.Session do
     :system_prompt,
     :base_system_prompt,
     :prompt_sections,
-    :context_overhead,
     :base_tools,
     :prompt_environment,
     :relevant_skill_keys,
@@ -204,7 +203,8 @@ defmodule CodingAgent.Session do
     auto_compaction: %CompactionLifecycle.State{},
     manual_operation: nil,
     overflow_recovery: %OverflowRecovery.State{},
-    tool_resources_handed_off: false
+    root_idle_token: nil,
+    root_idle_timer: nil
   ]
 
   @type session_signature ::
@@ -226,7 +226,6 @@ defmodule CodingAgent.Session do
           system_prompt: String.t(),
           base_system_prompt: String.t(),
           prompt_sections: [CodingAgent.SystemPrompt.section()],
-          context_overhead: map() | nil,
           base_tools: [AgentTool.t()],
           prompt_environment: String.t() | nil,
           relevant_skill_keys: [String.t()],
@@ -626,9 +625,6 @@ defmodule CodingAgent.Session do
     GenServer.cast(session, :abort)
   end
 
-  @doc false
-  def handoff_tool_resources(session), do: GenServer.call(session, :handoff_tool_resources)
-
   @doc """
   Subscribe to session events.
 
@@ -978,11 +974,26 @@ defmodule CodingAgent.Session do
   # GenServer Callbacks
   # ============================================================================
 
-  @spec init(keyword()) :: {:ok, t()} | {:error, {:already_started, pid()}}
+  @spec init(keyword()) ::
+          {:ok, t()} | {:error, {:already_started, pid()}} | {:stop, term()}
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
-    Ownership.initialize(opts, &initialize_owned_session/1)
+
+    Ownership.initialize(opts, fn owned_opts ->
+      connection =
+        if Keyword.get(owned_opts, :executor_root, false),
+          do: CodingAgent.Session.Invocation.open_mcp(owned_opts),
+          else: {:ok, Keyword.get(owned_opts, :mcp_session_id)}
+
+      case connection do
+        {:ok, id} ->
+          initialize_owned_session(Keyword.put(owned_opts, :mcp_session_id, id))
+
+        {:error, reason} ->
+          {:stop, reason}
+      end
+    end)
   end
 
   defp initialize_owned_session(opts) do
@@ -1026,11 +1037,55 @@ defmodule CodingAgent.Session do
     {:ok, state}
   end
 
-  @spec handle_call(term(), GenServer.from(), t()) :: {:reply, term(), t()} | {:noreply, t()}
+  @spec handle_call(term(), GenServer.from(), t()) ::
+          {:reply, term(), t()} | {:noreply, t()} | {:stop, term(), term(), t()}
   @impl true
   def handle_call(request, _from, %{manual_operation: %ManualOperation.State{}} = state)
       when is_tuple(request) and elem(request, 0) in @manual_operation_busy_calls,
       do: {:reply, {:error, :busy}, state}
+
+  def handle_call({:prepare_root_turn, opts}, _from, state) do
+    if state.is_streaming or not is_nil(state.pending_prompt_timer_ref) or
+         ManualOperation.in_flight?(state) do
+      {:reply, {:error, :session_busy}, state}
+    else
+      case CodingAgent.Session.Invocation.prepare(state, opts) do
+        {:ok, state} -> {:reply, :ok, clear_root_idle(state)}
+        {:error, reason} -> {:reply, {:error, reason}, state}
+      end
+    end
+  end
+
+  def handle_call({:retain_root, ttl}, _from, state) do
+    if state.is_streaming or not is_nil(state.pending_prompt_timer_ref) do
+      {:reply, {:error, :session_busy}, state}
+    else
+      case Persistence.save(state) do
+        {:ok, state} ->
+          state = clear_root_idle(state)
+          token = System.unique_integer([:positive, :monotonic])
+          timer = Process.send_after(self(), {:park_root, token}, ttl)
+          update_root_idle(state, token)
+          {:reply, :ok, %{state | root_idle_token: token, root_idle_timer: timer}}
+
+        {:error, reason, state} ->
+          {:reply, {:error, reason}, state}
+      end
+    end
+  end
+
+  def handle_call({:park_root, token}, _from, state) do
+    if state.root_idle_token == token and not state.is_streaming and
+         is_nil(state.pending_prompt_timer_ref) do
+      {:stop, :normal, :ok, state}
+    else
+      {:reply, :ok, state}
+    end
+  end
+
+  def handle_call({:invocation_stream, options}, _from, state) do
+    {:reply, CodingAgent.Session.Invocation.stream(state, options), state}
+  end
 
   def handle_call(:context_budget, _from, state) do
     budget =
@@ -1282,7 +1337,7 @@ defmodule CodingAgent.Session do
     case Lifecycle.reset(state, @reset_abort_wait_ms) do
       {:ok, new_state} ->
         CodingAgent.ToolResources.stop(state.session_manager.header.id)
-        {:reply, :ok, %{new_state | tool_resources_handed_off: false}}
+        {:reply, :ok, new_state}
 
       {:error, reason, new_state} ->
         {:reply, {:error, reason}, new_state}
@@ -1450,16 +1505,6 @@ defmodule CodingAgent.Session do
     end
   end
 
-  def handle_call(:handoff_tool_resources, _from, %{is_streaming: false} = state) do
-    case CodingAgent.ToolResources.handoff(state.session_manager.header.id, self()) do
-      :ok -> {:reply, :ok, %{state | tool_resources_handed_off: true}}
-      error -> {:reply, error, state}
-    end
-  end
-
-  def handle_call(:handoff_tool_resources, _from, state),
-    do: {:reply, {:error, :session_busy}, state}
-
   # The agent's list is the wire history and still carries each turn's attached
   # recalled context; this call is the conversation as a person reads it, and
   # `CodingAgent.Session.Presentation` renders from it. See
@@ -1517,7 +1562,7 @@ defmodule CodingAgent.Session do
 
   def handle_call(:save, _from, state) do
     case Persistence.save(state) do
-      {:ok, new_state} -> {:reply, :ok, record_context_overhead(new_state)}
+      {:ok, new_state} -> {:reply, :ok, new_state}
       {:error, reason, unchanged_state} -> {:reply, {:error, reason}, unchanged_state}
     end
   end
@@ -1605,7 +1650,6 @@ defmodule CodingAgent.Session do
     # Signal the run before disposing resources so blocked tool calls can unwind
     # instead of holding abort until the resource's supervisor shutdown timeout.
     CodingAgent.ToolResources.stop(state.session_manager.header.id)
-    state = %{state | tool_resources_handed_off: false}
 
     if had_pending_prompt do
       # If abort lands before deferred prompt dispatch, emit a terminal canceled
@@ -1652,6 +1696,15 @@ defmodule CodingAgent.Session do
 
   @spec handle_info(term(), t()) :: {:noreply, t()} | {:stop, term(), t()}
   @impl true
+  def handle_info({:park_root, token}, state) do
+    if state.root_idle_token == token and not state.is_streaming and
+         is_nil(state.pending_prompt_timer_ref) do
+      {:stop, :normal, state}
+    else
+      {:noreply, state}
+    end
+  end
+
   def handle_info({:task_progress, tool_call_id, result}, state) do
     Notifier.broadcast_event(state, {:tool_execution_update, tool_call_id, "task", %{}, result})
     {:noreply, state}
@@ -1932,8 +1985,11 @@ defmodule CodingAgent.Session do
       reason: reason
     })
 
-    if state.session_manager && not state.tool_resources_handed_off,
+    if state.session_manager,
       do: CodingAgent.ToolResources.stop(state.session_manager.header.id)
+
+    if Keyword.get(state.tool_opts || [], :executor_root, false) and state.mcp_session_id,
+      do: LemonSkills.McpSession.close(state.mcp_session_id)
 
     # Emit introspection event for session end
     Introspection.record(
@@ -2267,6 +2323,7 @@ defmodule CodingAgent.Session do
     do: {state, []}
 
   defp refresh_turn_context(state, skill_context, user_turn) do
+    state = clear_root_idle(state)
     relevant_skill_keys = relevant_skill_keys(state, skill_context)
 
     {system_sections, user_sections} =
@@ -2390,25 +2447,22 @@ defmodule CodingAgent.Session do
     end
   end
 
-  # Sessions stop between turns, so a save records the prompt/tool overhead
-  # profile (counts and safe labels only) for durable context-usage reads.
-  # Frozen side-query sessions are ephemeral and record nothing.
-  defp record_context_overhead(%{context_frozen: true} = state), do: state
+  defp clear_root_idle(state) do
+    if state.root_idle_timer, do: Process.cancel_timer(state.root_idle_timer)
+    update_root_idle(state, nil)
+    %{state | root_idle_token: nil, root_idle_timer: nil}
+  end
 
-  defp record_context_overhead(state) do
-    profile =
-      ContextUsage.overhead(state, LemonAgent.Agent.get_state(state.agent))
+  defp update_root_idle(state, token) do
+    if state.register_session do
+      Registry.update_value(state.session_registry, state.session_manager.header.id, fn value ->
+        value = Map.merge(value, %{session_key: state.session_key, cwd: state.cwd})
 
-    recorded =
-      ContextUsage.record_overhead(
-        state.session_manager && state.session_manager.header.id,
-        profile,
-        state.context_overhead
-      )
-
-    %{state | context_overhead: recorded}
-  catch
-    :exit, _ -> state
+        if is_nil(token),
+          do: Map.delete(value, :root_idle),
+          else: Map.put(value, :root_idle, token)
+      end)
+    end
   end
 
   # Only the events that carry a message the user is credited with. Every other

@@ -11,7 +11,6 @@ defmodule CodingAgent.Executor do
   @behaviour LemonGateway.Executor
 
   alias CodingAgent.Executor.{RemoteSessionRunner, SessionRunner}
-  alias CodingAgent.Session.Presentation
   alias LemonCore.{ExecutionContext, ResumeToken, ToolPolicy}
   alias LemonGateway.Event
   alias LemonGateway.ExecutionRequest
@@ -98,25 +97,16 @@ defmodule CodingAgent.Executor do
   defp start_local_session_runner(request, opts, sink_pid) do
     opts = instrument_stream_options(request.run_id, opts)
     run_ref = make_ref()
-    cwd = request.cwd || get_opt(opts, :cwd) || File.cwd!()
-    resume = normalize_resume(request.resume)
-    resume_source = get_resume_source(request)
 
-    session_opts = [
-      resume_source: resume_source,
-      session_key: request.session_key
-    ]
+    case SessionRunner.start(
+           request: request,
+           opts: opts,
+           sink_pid: sink_pid,
+           run_ref: run_ref
+         ) do
+      {:ok, runner_pid} ->
+        {:ok, run_ref, %{runner_pid: runner_pid}}
 
-    with :ok <- Presentation.validate_resume_for_start(resume, session_opts, cwd),
-         {:ok, runner_pid} <-
-           SessionRunner.start_link(
-             request: request,
-             opts: opts,
-             sink_pid: sink_pid,
-             run_ref: run_ref
-           ) do
-      {:ok, run_ref, %{runner_pid: runner_pid}}
-    else
       {:error, reason} ->
         completed = Event.completed(%{engine: @engine, ok: false, error: reason, answer: ""})
         send(sink_pid, {:engine_event, run_ref, completed})
@@ -151,16 +141,6 @@ defmodule CodingAgent.Executor do
     do: ResumeToken.new(@engine, value)
 
   def normalize_resume(_), do: nil
-
-  defp get_resume_source(request) do
-    meta = request.meta || %{}
-
-    case meta[:resume_source] || meta["resume_source"] do
-      :auto -> :auto
-      "auto" -> :auto
-      _ -> :explicit
-    end
-  end
 
   defp execution_node(request) do
     meta = request.meta || %{}

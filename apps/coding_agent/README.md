@@ -901,11 +901,22 @@ messages, tool results and summaries, plus the largest contributors. The prompt
 composer keeps labelled sections (`PromptComposer.compose_sections/7`) whose texts
 join to the exact prompt; only sections present in the prompt being sent are
 attributed. Splits use the shared ~4 chars/token estimator and are scaled by
-largest remainder to a provider-reported total. Each save records a bounded
-overhead profile (counts and labels, no text) keyed by native session id, so
-`ControlPlaneProvider.session_context_usage/2` can answer for stopped sessions from
-durable history; without a profile, a measured total reports the overhead as
-unattributed and an estimate-only cold read is unavailable.
+largest remainder to a provider-reported total. Live roots stay registered between
+executor turns for five minutes, bounded by a 32-root idle budget (oldest idle
+first); running roots and task children are not counted. These caller-policy
+limits match the task idle TTL and bound retained roots without claiming a
+measured memory guarantee. Parking saves history and stops the temporary session,
+disposing volatile tools; the next turn restores history transparently. A queued
+auto-resume is released only after the prior turn's synchronous save barrier.
+Each new invocation rebinds approvals, lineage, tool closures and trace context.
+Code reload continues to refresh registered idle sessions through
+`CodingAgent.CodeReload`. `ControlPlaneProvider.session_context_usage/2` answers
+for parked sessions from provider-measured durable history with overhead
+unattributed; an estimate-only cold read is unavailable. No overhead table is
+written. Content-free `[:coding_agent, :session, :journal_load]` and
+`[:coding_agent, :session, :environment_capture]` telemetry events count actual
+loads/captures with `%{count: 1}` and `%{session_id: id}` for lifecycle tests and
+before/after latency measurements.
 
 If the live owner retires between registry lookup and the context read, the query
 uses the same durable-history path. Timeouts and unexpected owner crashes remain

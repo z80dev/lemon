@@ -632,7 +632,7 @@ defmodule CodingAgent.ExecutorTest do
 
     @tag :tmp_dir
     @tag :python3
-    test "completed native turns hand off eval and debugger state; logical reset kills descendants",
+    test "completed native turns retain eval and debugger state; logical reset kills descendants",
          %{tmp_dir: tmp_dir} do
       parent = self()
       File.write!(Path.join(tmp_dir, "prog.fake"), "")
@@ -670,7 +670,7 @@ defmodule CodingAgent.ExecutorTest do
 
       first =
         request(tmp_dir,
-          run_id: "handoff-first",
+          run_id: "live-first",
           prompt: "initialize kernel",
           stream_fn: stream,
           meta: %{session_mode: :chat}
@@ -725,7 +725,7 @@ defmodule CodingAgent.ExecutorTest do
       assert {:engine_event, ^first_ref, %{__event__: :completed, ok: true}} =
                List.last(collect_until_completed(first_ref))
 
-      refute Process.alive?(session)
+      assert Process.alive?(session)
       assert Process.alive?(kernel)
       assert Process.alive?(debug_server)
 
@@ -745,7 +745,7 @@ defmodule CodingAgent.ExecutorTest do
 
       second = %{
         request(tmp_dir,
-          run_id: "handoff-second",
+          run_id: "live-second",
           prompt: "reuse resources",
           resume: resume,
           stream_fn: capture,
@@ -1240,8 +1240,7 @@ defmodule CodingAgent.ExecutorTest do
       assert {:error, {:resume_session_missing, ^id}} =
                Executor.start_run(req, %{stream_fn: req.meta[:stream_fn]}, self())
 
-      # The preflight and actual start both fail closed, including a file disappearing
-      # between validation and startup.
+      # The actual start fails closed without a validation-only journal parse.
       assert {:error, {:resume_session_missing, ^id}} =
                CodingAgent.Session.Presentation.start_or_resume_session(
                  req.resume,
@@ -1569,6 +1568,7 @@ defmodule CodingAgent.ExecutorTest do
 
   defp assert_question_run_stopped(run) do
     %{session_ref: session_ref, session: session, runner_ref: runner_ref, runner: runner} = run
+    CodingAgent.Session.Presentation.safe_stop_session(session)
     assert_receive {:DOWN, ^session_ref, :process, ^session, _}, 5_000
     assert_receive {:DOWN, ^runner_ref, :process, ^runner, _}, 5_000
   end
@@ -1590,6 +1590,24 @@ defmodule CodingAgent.ExecutorTest do
   defp collect_until_completed(run_ref, acc \\ []) do
     receive do
       {:engine_event, ^run_ref, %{__event__: :completed}} = msg ->
+        case msg do
+          {:engine_event, _, %{resume: %ResumeToken{value: id}}} ->
+            on_exit(fn ->
+              case CodingAgent.SessionRegistry.lookup(id) do
+                {:ok, session} ->
+                  monitor = Process.monitor(session)
+                  CodingAgent.Session.Presentation.safe_stop_session(session)
+                  assert_receive {:DOWN, ^monitor, :process, ^session, _reason}, 5_000
+
+                :error ->
+                  :ok
+              end
+            end)
+
+          _ ->
+            :ok
+        end
+
         Enum.reverse([msg | acc])
 
       {:engine_event, ^run_ref, _event} = msg ->

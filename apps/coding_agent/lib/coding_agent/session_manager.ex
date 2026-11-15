@@ -327,6 +327,7 @@ defmodule CodingAgent.SessionManager do
          {:ok, {header, raw_entries}} <- parse_jsonl(content),
          {header, entries} <- restore_checkpoints(header, raw_entries),
          {:ok, migrated_entries} <- migrate_to_current_version(header.version, entries) do
+      lifecycle_observation(:journal_load, header.id)
       by_id = Map.new(migrated_entries, fn entry -> {entry.id, entry} end)
 
       leaf_id =
@@ -486,10 +487,21 @@ defmodule CodingAgent.SessionManager do
         {session, text}
 
       _ ->
+        lifecycle_observation(:environment_capture, session.header.id)
         text = capture.(cwd)
         entry = SessionEntry.custom("lemon.prompt_environment", %{"cwd" => cwd, "text" => text})
         {append_entry(session, entry), text}
     end
+  end
+
+  # Content-free counting seam for deterministic lifecycle tests and latency
+  # measurements. Count actual parses/captures, not session-start stages.
+  defp lifecycle_observation(operation, session_id) do
+    :telemetry.execute(
+      [:coding_agent, :session, operation],
+      %{count: 1},
+      %{session_id: session_id}
+    )
   end
 
   @doc """
