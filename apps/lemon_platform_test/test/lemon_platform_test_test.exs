@@ -50,14 +50,18 @@ defmodule LemonPlatformTest.HelpersTest do
       assert Enum.sort(optional) == [
                compare_and_delete_many: 2,
                compare_and_swap: 5,
+               confirm_durable: 1,
                list_recent: 3,
                ping: 1,
-               sync: 1
+               sync: 1,
+               with_durability: 2
              ]
 
       assert {:put_new, 4} in required
       refute {:compare_and_delete_many, 2} in required
       refute {:ping, 1} in required
+      refute {:confirm_durable, 1} in required
+      refute {:with_durability, 2} in required
     end
 
     test "raises for a module that is not a behaviour" do
