@@ -10,8 +10,6 @@ defmodule CodingAgent.Application do
 
     lane_caps =
       Application.get_env(:coding_agent, :lane_caps, %{
-        main: 4,
-        subagent: 8,
         background_exec: 2
       })
 

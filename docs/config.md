@@ -865,7 +865,9 @@ config :coding_agent,
 
 The process limit holds capacity for the managed command's live lifetime, not
 just the launch callback. `lane_caps.background_exec` remains a separate launch
-concurrency cap; main/subagent lanes retain their existing callback semantics.
+concurrency cap. `:coding_agent, :task_max_concurrency` (default `8`) is the
+single shared cap for native task children and background sessions. They acquire
+the same monitored semaphore; the unused main/subagent lanes no longer exist.
 The pending limit bounds waiting admissions per LaneQueue; the acceptance ledger
 also bounds in-flight registrations. Process/pending limits are integers up to
 1,000,000 (process minimum 1, pending minimum 0). Admission deadline/wait values

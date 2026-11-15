@@ -95,7 +95,7 @@ CodingAgent.Supervisor (one_for_one)
   +-- RunGraphServer (ETS+DETS persistent run graph)
   +-- ProcessStoreServer (background process state)
   +-- ProcessManager (DynamicSupervisor for exec processes)
-  +-- LaneQueue (concurrency-capped lane FIFO)
++-- LaneQueue (background process launch FIFO)
   +-- Parallel.Semaphore (task concurrency limit)
 ```
 
@@ -468,10 +468,10 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.LaneQueue` | Lane-aware FIFO queue with per-lane concurrency caps (default: main=4, subagent=8, background_exec=2) |
+| `CodingAgent.LaneQueue` | FIFO background process launch admission with durable receipts |
 | `CodingAgent.BackgroundRun` | Durable `/bg` lifecycle facade (`start`, `list`, `status`, `result`, `cancel`) for isolated full-tool sessions |
 | `CodingAgent.SideQuery` | Bounded `/btw` query facade using an immutable live snapshot or durable session-key history with tools disabled |
-| `CodingAgent.Parallel` | Semaphore-based concurrency control and `map_with_concurrency_limit` |
+| `CodingAgent.Parallel` | Monitored semaphore for shared native child concurrency |
 | `CodingAgent.ProcessManager` | DynamicSupervisor for background processes started by `bash` with `run_in_background`, read with `bash_output`, stopped with `kill_process` |
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` / `ProcessStoreServer` | ETS store for background process state |
@@ -615,7 +615,7 @@ system-wide `ps` reconciliation scan after 100 ms plus scan cost.
 Hermes-compatible background commands use the same native runtime. Call
 `CodingAgent.BackgroundRun.start/2` to receive a durable id immediately, then
 use `list/1`, `status/1`, `result/1`, or `cancel/2`. Each run owns a fresh
-full-tool session on the subagent lane; `:session_key` is retained only as
+full-tool session sharing the native task semaphore;
 lineage metadata, and neither the prompt nor result is appended to that parent.
 Channel surfaces use `list_scoped/2`, `status_scoped/2`, `result_scoped/2`, and
 `cancel_scoped/3`, which require that lineage key and make a foreign id
@@ -1044,8 +1044,8 @@ result.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `:lane_caps` | `%{main: 4, subagent: 8, background_exec: 2}` | Per-lane callback concurrency; `background_exec` bounds launches, not live process lifetimes |
-| `:task_max_concurrency` | `8` | Max concurrently executing native `task` children; excess children queue on the monitored semaphore |
+| `:lane_caps` | `%{background_exec: 2}` | Background process launch callback concurrency, not live process lifetimes |
+| `:task_max_concurrency` | `8` | Shared maximum for executing native `task` children and background sessions; excess children queue on the same monitored semaphore |
 | `:primary_session` | `nil` | Keyword list of opts to auto-start a session on boot |
 
 Live background capacity, bounded pending admission, deadlines, and recovery are
