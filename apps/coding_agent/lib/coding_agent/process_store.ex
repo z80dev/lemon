@@ -15,6 +15,7 @@ defmodule CodingAgent.ProcessStore do
   lifecycle management and DETS persistence.
   """
 
+  alias CodingAgent.DurableTable
   alias CodingAgent.ProcessStoreServer
 
   @table :coding_agent_processes
@@ -104,10 +105,7 @@ defmodule CodingAgent.ProcessStore do
               end)
               |> Map.put(:updated_at, now)
 
-            true = dets_open?()
-            :ok = :dets.insert(@dets_table, {process_id, record, logs})
-            :ok = :dets.sync(@dets_table)
-            :ets.insert(@table, {process_id, record, logs})
+            DurableTable.put(@table, {process_id, record, logs}, :sync)
 
           [{^process_id, %{launch_fingerprint: existing}, _}] when is_binary(existing) ->
             {:error, "process launch identity conflict"}
@@ -528,20 +526,14 @@ defmodule CodingAgent.ProcessStore do
           |> Map.put(:launch_terminal_status, Map.get(record, :status))
           |> Map.put(:status, :cleared)
 
-        true = dets_open?()
-        :ok = :dets.insert(@dets_table, {process_id, tombstone, []})
-        :ok = :dets.sync(@dets_table)
-        :ets.insert(@table, {process_id, tombstone, []})
-        :ok
+        DurableTable.put(@table, {process_id, tombstone, []}, :sync)
       end
     end
   end
 
   defp delete_record(process_id, record) do
     with :ok <- remove_output(record) do
-      :ets.delete(@table, process_id)
-      if dets_open?(), do: :dets.delete(@dets_table, process_id)
-      :ok
+      DurableTable.delete(@table, process_id)
     end
   end
 
@@ -580,13 +572,7 @@ defmodule CodingAgent.ProcessStore do
           :ok
 
         _ ->
-          :ets.insert(@table, {process_id, record, logs})
-
-          if dets_open?() do
-            :ok = :dets.insert(@dets_table, {process_id, record, logs})
-          end
-
-          :ok
+          DurableTable.put(@table, {process_id, record, logs})
       end
     end)
   end
@@ -595,11 +581,7 @@ defmodule CodingAgent.ProcessStore do
   Check if DETS is available.
   """
   @spec dets_open?() :: boolean()
-  def dets_open? do
-    :dets.info(@dets_table) != :undefined
-  rescue
-    _ -> false
-  end
+  def dets_open?, do: DurableTable.open?(@dets_table)
 
   @doc false
   def remove_output(record) do
@@ -658,9 +640,7 @@ defmodule CodingAgent.ProcessStore do
           if durable and is_binary(Map.get(updated, :launch_fingerprint)) do
             # Owned workload provenance must survive a crash before the command
             # is unblocked; do not publish a volatile identity before syncing it.
-            :ok = :dets.insert(@dets_table, {process_id, updated, logs})
-            :ok = :dets.sync(@dets_table)
-            :ets.insert(@table, {process_id, updated, logs})
+            DurableTable.put(@table, {process_id, updated, logs}, :sync)
           else
             insert_record(process_id, updated, logs)
           end

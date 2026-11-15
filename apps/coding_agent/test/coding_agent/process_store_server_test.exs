@@ -131,7 +131,10 @@ defmodule CodingAgent.ProcessStoreServerTest do
       # Insert a test process with old completed_at
       old_time = System.system_time(:second) - 1000
       record = %{status: :completed, completed_at: old_time, updated_at: old_time}
-      :ets.insert(:coding_agent_processes, {"test_proc_1", record, []})
+
+      ProcessStoreServer.transaction(pid, fn ->
+        CodingAgent.ProcessStore.insert_record("test_proc_1", record, [])
+      end)
 
       # The ETS table is global; other suites may leave expired rows, so assert
       # on this record rather than on the total deleted count.
@@ -149,7 +152,10 @@ defmodule CodingAgent.ProcessStoreServerTest do
       # Insert a test process with recent completed_at
       recent_time = System.system_time(:second) - 10
       record = %{status: :completed, completed_at: recent_time, updated_at: recent_time}
-      :ets.insert(:coding_agent_processes, {"test_proc_2", record, []})
+
+      ProcessStoreServer.transaction(pid, fn ->
+        CodingAgent.ProcessStore.insert_record("test_proc_2", record, [])
+      end)
 
       # Cleanup with TTL of 60 seconds should NOT remove the recent record
       assert {:ok, deleted} = ProcessStoreServer.cleanup(pid, 60)
@@ -165,7 +171,10 @@ defmodule CodingAgent.ProcessStoreServerTest do
       # Insert a running process (old but still running)
       old_time = System.system_time(:second) - 1000
       record = %{status: :running, inserted_at: old_time}
-      :ets.insert(:coding_agent_processes, {"test_proc_3", record, []})
+
+      ProcessStoreServer.transaction(pid, fn ->
+        CodingAgent.ProcessStore.insert_record("test_proc_3", record, [])
+      end)
 
       # Cleanup should NOT remove running processes
       assert {:ok, deleted} = ProcessStoreServer.cleanup(pid, 60)
@@ -181,8 +190,10 @@ defmodule CodingAgent.ProcessStoreServerTest do
       ProcessStoreServer.ensure_table(pid)
 
       # Insert test processes
-      :ets.insert(:coding_agent_processes, {"proc_1", %{status: :running}, []})
-      :ets.insert(:coding_agent_processes, {"proc_2", %{status: :completed}, []})
+      ProcessStoreServer.transaction(pid, fn ->
+        CodingAgent.ProcessStore.insert_record("proc_1", %{status: :running}, [])
+        CodingAgent.ProcessStore.insert_record("proc_2", %{status: :completed}, [])
+      end)
 
       assert :ok = ProcessStoreServer.clear(pid)
       assert :ets.info(:coding_agent_processes, :size) == 0

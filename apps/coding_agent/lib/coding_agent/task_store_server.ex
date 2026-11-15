@@ -8,13 +8,11 @@ defmodule CodingAgent.TaskStoreServer do
   latest tuple and writes one coherent ETS/DETS snapshot.
   """
 
-  use GenServer
-  require Logger
+  use CodingAgent.DurableTable
 
   @table :coding_agent_tasks
   @dets_table :coding_agent_tasks_dets
   @default_ttl_seconds 86_400
-  @cleanup_interval_seconds 300
   @max_events 100
   @terminal_statuses [:completed, :error, :lost, :killed, :cancelled]
 
@@ -128,27 +126,16 @@ defmodule CodingAgent.TaskStoreServer do
 
   @impl true
   def init(opts) do
-    # Trap exits to ensure we can close DETS properly
-    Process.flag(:trap_exit, true)
-
-    state = %{
-      table: @table,
-      dets_table: @dets_table,
-      dets_path: dets_path(opts),
-      ets_initialized: false,
-      dets_initialized: false,
-      loaded_from_dets: false,
-      join_reservations: %{},
-      join_monitor_refs: %{}
-    }
-
-    # Initialize tables synchronously during init
-    state = initialize_ets(state)
-    state = initialize_dets(state)
-    state = maybe_load_from_dets(state)
-
-    # Schedule periodic cleanup
-    schedule_cleanup()
+    state =
+      DurableTable.open(%{join_reservations: %{}, join_monitor_refs: %{}}, opts,
+        table: @table,
+        dets_table: @dets_table,
+        path: dets_path(opts),
+        normalize: &__MODULE__.normalize_row/2,
+        timestamp: &__MODULE__.expiry_timestamp/1,
+        ttl_key: :task_store_ttl_seconds,
+        interval_key: :task_store_cleanup_interval_seconds
+      )
 
     {:ok, state}
   end
@@ -294,18 +281,14 @@ defmodule CodingAgent.TaskStoreServer do
 
   def handle_call({:delete_task, task_id}, _from, state) do
     state = ensure_tables(state)
-    :ets.delete(@table, task_id)
-
-    if state.dets_initialized do
-      :dets.delete(@dets_table, task_id)
-    end
+    DurableTable.delete(state.table, task_id)
 
     {:reply, :ok, state}
   end
 
   def handle_call({:cleanup, ttl_seconds}, _from, state) do
     state = ensure_tables(state)
-    deleted_count = do_cleanup(ttl_seconds)
+    deleted_count = DurableTable.cleanup(state, ttl_seconds)
     {:reply, {:ok, deleted_count}, state}
   end
 
@@ -313,45 +296,22 @@ defmodule CodingAgent.TaskStoreServer do
     state = ensure_tables(state)
     state = release_all_join_reservations(state)
 
-    if state.ets_initialized do
-      :ets.delete_all_objects(@table)
-    end
-
-    if state.dets_initialized do
-      :dets.delete_all_objects(@dets_table)
-      :dets.sync(@dets_table)
-    end
-
-    {:reply, :ok, %{state | loaded_from_dets: false}}
+    DurableTable.clear(state)
+    {:reply, :ok, state}
   end
 
   def handle_call(:dets_status, _from, state) do
-    info =
-      if state.dets_initialized do
-        case :dets.info(@dets_table) do
-          :undefined -> %{status: :closed}
-          info -> Map.new(info)
-        end
-      else
-        %{status: :not_initialized}
-      end
-
-    {:reply, %{info: info, state: Map.drop(state, [:table, :dets_table])}, state}
+    {:reply, DurableTable.status(state), state}
   end
 
   def handle_call(:dets_open?, _from, state) do
-    {:reply, state.dets_initialized and dets_table_open?(), state}
+    {:reply, DurableTable.open?(state.dets_table), state}
   end
 
   @impl true
   def handle_info(:cleanup, state) do
     state = ensure_tables(state)
-
-    ttl_seconds =
-      Application.get_env(:coding_agent, :task_store_ttl_seconds, @default_ttl_seconds)
-
-    _deleted_count = do_cleanup(ttl_seconds)
-    schedule_cleanup()
+    DurableTable.periodic_cleanup(state)
     {:noreply, state}
   end
 
@@ -377,115 +337,39 @@ defmodule CodingAgent.TaskStoreServer do
     {:noreply, state}
   end
 
-  @impl true
-  def terminate(_reason, state) do
-    if state.dets_initialized do
-      :dets.close(@dets_table)
-    end
-
-    :ok
-  end
-
   # Private Functions
 
-  defp ensure_tables(state) do
-    state
-    |> initialize_ets()
-    |> initialize_dets()
-    |> maybe_load_from_dets()
+  defp ensure_tables(state), do: DurableTable.ensure(state)
+
+  @doc false
+  def normalize_row({task_id, record, events}, _state) do
+    record =
+      record
+      |> Map.delete(:auto_followup_join_tokens)
+      |> then(fn record ->
+        if record[:agent_state] in [:running, :idle, :parked],
+          do: Map.put(record, :agent_state, :aborted),
+          else: record
+      end)
+      |> then(fn record ->
+        status = Map.get(record, :status)
+
+        if status in [:running, :tracking_lost] or
+             (status == :queued and Map.get(record, :kind) == :background_command) do
+          record
+          |> Map.put(:status, :lost)
+          |> Map.put(:error, :lost_on_restart)
+          |> Map.put(:completed_at, System.system_time(:second))
+        else
+          record
+        end
+      end)
+
+    {task_id, record, events}
   end
 
-  defp initialize_ets(state) do
-    if state.ets_initialized do
-      state
-    else
-      case :ets.whereis(@table) do
-        :undefined ->
-          :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
-          %{state | ets_initialized: true}
-
-        _tid ->
-          %{state | ets_initialized: true}
-      end
-    end
-  end
-
-  defp initialize_dets(state) do
-    if state.dets_initialized do
-      state
-    else
-      File.mkdir_p!(Path.dirname(state.dets_path))
-
-      case CodingAgent.StatePaths.open_dets(@dets_table, state.dets_path) do
-        {:ok, _} ->
-          %{state | dets_initialized: true}
-
-        {:error, {:already_open, _pid}} ->
-          %{state | dets_initialized: true}
-
-        {:error, {:state_dir_locked, pid}} ->
-          CodingAgent.StatePaths.warn_locked(pid)
-          state
-
-        {:error, reason} ->
-          Logger.warning("Failed to open DETS: #{inspect(reason)}")
-          state
-      end
-    end
-  end
-
-  defp maybe_load_from_dets(%{loaded_from_dets: true} = state), do: state
-
-  defp maybe_load_from_dets(state) do
-    if state.dets_initialized and state.ets_initialized do
-      now = System.system_time(:second)
-
-      :dets.foldl(
-        fn {task_id, record, events}, :ok ->
-          record =
-            record
-            |> Map.delete(:auto_followup_join_tokens)
-            |> then(fn record ->
-              if record[:agent_state] in [:running, :idle, :parked],
-                do: Map.put(record, :agent_state, :aborted),
-                else: record
-            end)
-            |> then(fn record ->
-              status = Map.get(record, :status)
-
-              if status in [:running, :tracking_lost] or
-                   (status == :queued and Map.get(record, :kind) == :background_command) do
-                record
-                |> Map.put(:status, :lost)
-                |> Map.put(:error, :lost_on_restart)
-                |> Map.put(:completed_at, now)
-              else
-                record
-              end
-            end)
-
-          :ets.insert(@table, {task_id, record, events})
-          :ok
-        end,
-        :ok,
-        @dets_table
-      )
-
-      %{state | loaded_from_dets: true}
-    else
-      state
-    end
-  end
-
-  defp do_insert_record(task_id, record, events) do
-    :ets.insert(@table, {task_id, record, events})
-
-    if dets_table_open?() do
-      :dets.insert(@dets_table, {task_id, record, events})
-    end
-
-    :ok
-  end
+  defp do_insert_record(task_id, record, events),
+    do: DurableTable.put(@table, {task_id, record, events})
 
   defp update_task_record(task_id, update_fn) do
     case :ets.lookup(@table, task_id) do
@@ -569,66 +453,10 @@ defmodule CodingAgent.TaskStoreServer do
 
   defp transition_allowed?(_status, _target_status), do: false
 
-  defp do_cleanup(ttl_seconds) do
-    now = System.system_time(:second)
-
-    expired_ids =
-      :ets.foldl(
-        fn {task_id, record, _events}, acc ->
-          if expired_record?(record, now, ttl_seconds) do
-            [task_id | acc]
-          else
-            acc
-          end
-        end,
-        [],
-        @table
-      )
-
-    Enum.each(expired_ids, fn task_id ->
-      :ets.delete(@table, task_id)
-
-      if dets_table_open?() do
-        :dets.delete(@dets_table, task_id)
-      end
-    end)
-
-    if dets_table_open?() and expired_ids != [] do
-      :dets.sync(@dets_table)
-    end
-
-    length(expired_ids)
-  end
-
-  defp expired_record?(record, now, ttl_seconds) do
-    status = Map.get(record, :status)
-
-    if status in @terminal_statuses and record[:agent_state] != :idle do
-      completed_at =
-        Map.get(record, :completed_at) || Map.get(record, :updated_at) ||
-          Map.get(record, :inserted_at)
-
-      is_integer(completed_at) and now - completed_at >= ttl_seconds
-    else
-      false
-    end
-  end
-
-  defp dets_table_open? do
-    :dets.info(@dets_table) != :undefined
-  rescue
-    _ -> false
-  end
-
-  defp schedule_cleanup do
-    interval =
-      Application.get_env(
-        :coding_agent,
-        :task_store_cleanup_interval_seconds,
-        @cleanup_interval_seconds
-      )
-
-    Process.send_after(self(), :cleanup, interval * 1_000)
+  @doc false
+  def expiry_timestamp({_id, record, _events}) do
+    if record[:status] in @terminal_statuses and record[:agent_state] != :idle,
+      do: DurableTable.terminal_timestamp(record)
   end
 
   defp dets_path(opts) do

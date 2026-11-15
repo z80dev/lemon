@@ -7,13 +7,11 @@ defmodule CodingAgent.ParentQuestionStoreServer do
   are marked as `:error` with `:lost_on_restart`.
   """
 
-  use GenServer
-  require Logger
+  use CodingAgent.DurableTable
 
   @table :coding_agent_parent_questions
   @dets_table :coding_agent_parent_questions_dets
   @default_ttl_seconds 86_400
-  @cleanup_interval_seconds 300
   @max_events 100
 
   def start_link(opts \\ []) do
@@ -71,21 +69,16 @@ defmodule CodingAgent.ParentQuestionStoreServer do
 
   @impl true
   def init(opts) do
-    Process.flag(:trap_exit, true)
-
-    state = %{
-      table: @table,
-      dets_table: @dets_table,
-      dets_path: dets_path(opts),
-      ets_initialized: false,
-      dets_initialized: false,
-      loaded_from_dets: false
-    }
-
-    state = initialize_ets(state)
-    state = initialize_dets(state)
-    state = maybe_load_from_dets(state)
-    schedule_cleanup()
+    state =
+      DurableTable.open(%{}, opts,
+        table: @table,
+        dets_table: @dets_table,
+        path: dets_path(opts),
+        normalize: &__MODULE__.normalize_row/2,
+        timestamp: &__MODULE__.expiry_timestamp/1,
+        ttl_key: :parent_question_store_ttl_seconds,
+        interval_key: :parent_question_store_cleanup_interval_seconds
+      )
 
     {:ok, state}
   end
@@ -181,37 +174,21 @@ defmodule CodingAgent.ParentQuestionStoreServer do
 
   def handle_call({:cleanup, ttl_seconds}, _from, state) do
     state = ensure_tables(state)
-    {:reply, {:ok, do_cleanup(ttl_seconds)}, state}
+    {:reply, {:ok, DurableTable.cleanup(state, ttl_seconds)}, state}
   end
 
   def handle_call(:clear, _from, state) do
     state = ensure_tables(state)
 
-    if state.ets_initialized do
-      :ets.delete_all_objects(@table)
-    end
-
-    if state.dets_initialized do
-      :dets.delete_all_objects(@dets_table)
-      :dets.sync(@dets_table)
-    end
-
-    {:reply, :ok, %{state | loaded_from_dets: false}}
+    DurableTable.clear(state)
+    {:reply, :ok, state}
   end
 
   @impl true
   def handle_info(:cleanup, state) do
     state = ensure_tables(state)
 
-    ttl_seconds =
-      Application.get_env(
-        :coding_agent,
-        :parent_question_store_ttl_seconds,
-        @default_ttl_seconds
-      )
-
-    _deleted_count = do_cleanup(ttl_seconds)
-    schedule_cleanup()
+    DurableTable.periodic_cleanup(state)
     {:noreply, state}
   end
 
@@ -219,121 +196,21 @@ defmodule CodingAgent.ParentQuestionStoreServer do
     {:noreply, state}
   end
 
-  @impl true
-  def terminate(_reason, state) do
-    if state.dets_initialized do
-      :dets.close(@dets_table)
-    end
+  defp ensure_tables(state), do: DurableTable.ensure(state)
 
-    :ok
-  end
-
-  defp ensure_tables(state) do
-    state
-    |> initialize_ets()
-    |> initialize_dets()
-    |> maybe_load_from_dets()
-  end
-
-  defp initialize_ets(state) do
-    if state.ets_initialized do
-      state
-    else
-      case :ets.whereis(@table) do
-        :undefined ->
-          :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
-          %{state | ets_initialized: true}
-
-        _tid ->
-          %{state | ets_initialized: true}
+  @doc false
+  def normalize_row({request_id, record, events}, _state) do
+    record =
+      if record[:status] == :waiting do
+        record
+        |> Map.put(:status, :error)
+        |> Map.put(:error, :lost_on_restart)
+        |> Map.put(:completed_at, System.system_time(:second))
+      else
+        record
       end
-    end
-  end
 
-  defp initialize_dets(state) do
-    if state.dets_initialized do
-      state
-    else
-      File.mkdir_p!(Path.dirname(state.dets_path))
-
-      case CodingAgent.StatePaths.open_dets(@dets_table, state.dets_path) do
-        {:ok, _} ->
-          %{state | dets_initialized: true}
-
-        {:error, {:already_open, _pid}} ->
-          %{state | dets_initialized: true}
-
-        {:error, {:state_dir_locked, pid}} ->
-          CodingAgent.StatePaths.warn_locked(pid)
-          state
-
-        {:error, reason} ->
-          Logger.warning("Failed to open parent question DETS: #{inspect(reason)}")
-          state
-      end
-    end
-  end
-
-  defp maybe_load_from_dets(%{loaded_from_dets: true} = state), do: state
-
-  defp maybe_load_from_dets(state) do
-    if state.dets_initialized and state.ets_initialized do
-      now = System.system_time(:second)
-
-      :dets.foldl(
-        fn {request_id, record, events}, :ok ->
-          record =
-            if Map.get(record, :status) == :waiting do
-              record
-              |> Map.put(:status, :error)
-              |> Map.put(:error, :lost_on_restart)
-              |> Map.put(:completed_at, now)
-            else
-              record
-            end
-
-          :ets.insert(@table, {request_id, record, events})
-          :ok
-        end,
-        :ok,
-        @dets_table
-      )
-
-      %{state | loaded_from_dets: true}
-    else
-      state
-    end
-  end
-
-  defp do_cleanup(ttl_seconds) do
-    now = System.system_time(:second)
-
-    expired_ids =
-      :ets.foldl(
-        fn {request_id, record, _events}, acc ->
-          if expired_record?(record, now, ttl_seconds) do
-            [request_id | acc]
-          else
-            acc
-          end
-        end,
-        [],
-        @table
-      )
-
-    Enum.each(expired_ids, fn request_id ->
-      :ets.delete(@table, request_id)
-
-      if dets_open?() do
-        :dets.delete(@dets_table, request_id)
-      end
-    end)
-
-    if dets_open?() and expired_ids != [] do
-      :dets.sync(@dets_table)
-    end
-
-    length(expired_ids)
+    {request_id, record, events}
   end
 
   defp waiting_for_child_scope?(child_scope_id) do
@@ -363,45 +240,13 @@ defmodule CodingAgent.ParentQuestionStoreServer do
 
   defp non_empty_binary?(value), do: is_binary(value) and String.trim(value) != ""
 
-  defp do_insert_record(request_id, record, events) do
-    :ets.insert(@table, {request_id, record, events})
+  defp do_insert_record(request_id, record, events),
+    do: DurableTable.put(@table, {request_id, record, events})
 
-    if dets_open?() do
-      :dets.insert(@dets_table, {request_id, record, events})
-    end
-
-    :ok
-  end
-
-  defp expired_record?(record, now, ttl_seconds) do
-    status = Map.get(record, :status)
-
-    if status in [:answered, :timed_out, :cancelled, :error] do
-      completed_at =
-        Map.get(record, :completed_at) || Map.get(record, :updated_at) ||
-          Map.get(record, :inserted_at)
-
-      is_integer(completed_at) and now - completed_at >= ttl_seconds
-    else
-      false
-    end
-  end
-
-  defp dets_open? do
-    :dets.info(@dets_table) != :undefined
-  rescue
-    _ -> false
-  end
-
-  defp schedule_cleanup do
-    interval =
-      Application.get_env(
-        :coding_agent,
-        :parent_question_store_cleanup_interval_seconds,
-        @cleanup_interval_seconds
-      )
-
-    Process.send_after(self(), :cleanup, interval * 1_000)
+  @doc false
+  def expiry_timestamp({_id, record, _events}) do
+    if record[:status] in [:answered, :timed_out, :cancelled, :error],
+      do: DurableTable.terminal_timestamp(record)
   end
 
   defp dets_path(opts) do
