@@ -69,7 +69,17 @@ defmodule CodingAgent.Session.Lifecycle do
 
     Workspace.ensure_workspace(workspace_dir: workspace_dir)
 
-    session_manager = load_or_create_session(cwd, session_file, session_id, parent_session)
+    session_manager =
+      Keyword.get_lazy(opts, :loaded_session, fn ->
+        load_or_create_session(cwd, session_file, session_id, parent_session)
+      end)
+
+    session_manager =
+      SessionManager.persist(
+        session_manager,
+        session_file || SessionManager.session_file_path(cwd, session_manager.header.id)
+      )
+
     cwd = session_manager.header.cwd
 
     session_manager = seed_workspace_read_fence(session_manager, opts)
@@ -759,6 +769,8 @@ defmodule CodingAgent.Session.Lifecycle do
           Ownership.transfer(state.session_file, new_path, fn ->
             SessionManager.persist(new_session_manager, new_path)
           end)
+
+        :ok = SessionManager.close(state.session_manager)
 
         Persistence.maybe_unregister_session(
           previous_session_id,

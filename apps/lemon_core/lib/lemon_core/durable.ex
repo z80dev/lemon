@@ -6,14 +6,14 @@ defmodule LemonCore.Durable do
   entries durable: a rename or a newly created file is only on stable storage
   once its parent directory is synced.
 
-  The BEAM cannot open a directory. GNU coreutils `sync DIR` provides the
-  synchronous per-directory barrier on supported Unix hosts. Darwin uses the
-  packaged Python 3 helper to open the exact file/directory descriptor, fsync
-  it, then issue `F_FULLFSYNC` so the device flushes buffered writes. Literal
-  argv is used, not a shell, and leaf symlinks are rejected. macOS `sync(8)`
-  is never substituted: it only schedules a system-wide flush.
-  Missing prerequisites or a refused barrier fail closed; no path or raw
-  helper exception is exposed in its failure classification.
+  On OTP 29, directories are opened as raw directory descriptors and synced
+  natively, without Python or an external process. On Darwin this is the
+  filesystem's `F_BARRIERFSYNC` barrier, not a device-wide `F_FULLFSYNC`.
+  File contents retain the stronger Python-backed `F_FULLFSYNC` barrier on
+  Darwin for every `sync_file/1` caller: Store JSONL journals (acknowledged
+  mutations), native-process cleanup ledgers (recovery authority), eval paired
+  cleanup manifests (cleanup authority), and coding-session atomic snapshots
+  (history replacement). Directory sync orders namespace changes only.
   """
 
   @spec sync_file(Path.t()) :: :ok | {:error, term()}
@@ -31,12 +31,11 @@ defmodule LemonCore.Durable do
 
   @spec sync_directory(Path.t()) :: :ok | {:error, term()}
   def sync_directory(dir) do
-    if match?({:unix, :darwin}, :os.type()) do
-      darwin_sync(dir, "directory", :directory_sync_unsupported)
-    else
-      case directory_sync_command() do
-        {:ok, sync} -> run(sync, [dir])
-        :error -> {:error, :directory_sync_unsupported}
+    with {:ok, device} <- :file.open(dir, [:read, :raw, :directory]) do
+      try do
+        :file.sync(device)
+      after
+        :file.close(device)
       end
     end
   end
@@ -57,36 +56,5 @@ defmodule LemonCore.Durable do
   rescue
     _error in [ErlangError, ArgumentError] ->
       {:error, {:full_sync_failed, :helper_unavailable}}
-  end
-
-  defp directory_sync_command do
-    with false <- match?({:unix, :darwin}, :os.type()),
-         sync when is_binary(sync) <- System.find_executable("sync"),
-         {:ok, version} <- output(sync, ["--version"]),
-         true <- version =~ "GNU coreutils",
-         {:ok, help} <- output(sync, ["--help"]),
-         true <- help =~ "If one or more files are specified, sync only them" do
-      {:ok, sync}
-    else
-      _unsupported -> :error
-    end
-  end
-
-  defp output(command, args) do
-    case System.cmd(command, args, stderr_to_stdout: true) do
-      {output, 0} -> {:ok, output}
-      _failed -> :error
-    end
-  rescue
-    _error -> :error
-  end
-
-  defp run(sync, args) do
-    case System.cmd(sync, args, stderr_to_stdout: true) do
-      {_output, 0} -> :ok
-      {_output, status} -> {:error, {:sync_failed, status}}
-    end
-  rescue
-    error in ErlangError -> {:error, {:sync_failed, Exception.message(error)}}
   end
 end

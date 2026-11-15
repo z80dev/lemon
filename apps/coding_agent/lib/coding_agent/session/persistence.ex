@@ -146,7 +146,7 @@ defmodule CodingAgent.Session.Persistence do
       state.session_file ||
         SessionManager.session_file_path(state.cwd, state.session_manager.header.id)
 
-    case SessionManager.save_to_file(path, state.session_manager) do
+    case SessionManager.checkpoint(state.session_manager) do
       :ok ->
         {:ok, %{state | session_file: path}}
 

@@ -1,0 +1,3 @@
+{"type":"session","version":3,"id":"legacy-header-only","timestamp":1,"cwd":"/tmp","activeLeafId":"11111111","checkpointEntryCount":2}
+{"type":"message","id":"11111111","timestamp":2,"message":{"role":"user","content":"first"}}
+{"type":"message","id":"22222222","parentId":"11111111","timestamp":3,"message":{"role":"assistant","content":"second"}}

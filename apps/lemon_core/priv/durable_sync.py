@@ -1,8 +1,8 @@
 """Private Darwin stable-storage barrier. Literal mode/path argv; no output.
 
-Both directory metadata and regular-file contents require fsync followed by
-Darwin F_FULLFSYNC (51), which asks the device to flush its buffered writes.
-An unsupported filesystem/syscall fails; there is no weaker flush fallback.
+Regular-file contents use fsync followed by Darwin F_FULLFSYNC (51), which asks
+the device to flush its buffered writes. Directory metadata is synced natively
+by OTP. An unsupported file barrier fails without a weaker fallback.
 """
 import fcntl
 import os
@@ -11,17 +11,15 @@ import sys
 
 
 def main():
-    if sys.platform != "darwin" or len(sys.argv) != 3 or sys.argv[1] not in ("file", "directory"):
+    if sys.platform != "darwin" or len(sys.argv) != 3 or sys.argv[1] != "file":
         return 64
-    kind, path = sys.argv[1:]
+    path = sys.argv[2]
     descriptor = None
     try:
         flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
-        if kind == "directory":
-            flags |= os.O_DIRECTORY
         descriptor = os.open(path, flags)
         mode = os.fstat(descriptor).st_mode
-        if not (stat.S_ISDIR(mode) if kind == "directory" else stat.S_ISREG(mode)):
+        if not stat.S_ISREG(mode):
             return 65
         os.fsync(descriptor)
         # Darwin's documented F_FULLFSYNC command; never ordinary sync(8).
