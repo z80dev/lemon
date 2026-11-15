@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""Check reviewed provider identities without compiling Lemon or executing upstream code."""
+
+import argparse
+import hashlib
+import io
+import json
+from pathlib import Path
+import re
+import sys
+import tarfile
+import urllib.parse
+import urllib.request
+
+
+MANIFEST = "apps/lemon_ai/priv/upstream_identities.json"
+SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def fetch(url):
+    request = urllib.request.Request(url, headers={"User-Agent": "lemon-identity-check"})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return response.read()
+
+
+def check_manifest(manifest):
+    if manifest["schema_version"] != 1:
+        raise ValueError("unsupported identity manifest schema")
+    sources = manifest["sources"]
+    pins = manifest["code_pins"]
+    if not sources or not pins:
+        raise ValueError("identity manifest must contain sources and code pins")
+    source_ids = [source["id"] for source in sources]
+    pin_ids = [pin["id"] for pin in pins]
+    if len(set(source_ids)) != len(source_ids) or len(set(pin_ids)) != len(pin_ids):
+        raise ValueError("duplicate source or code pin id")
+    for source in sources:
+        if source["kind"] == "npm":
+            if not source["package"] or not source["version"]:
+                raise ValueError("npm source needs a package and version")
+            if not SHA256.fullmatch(source["archive_sha256"]):
+                raise ValueError("invalid npm archive SHA-256")
+        elif source["kind"] == "github":
+            if not re.fullmatch(r"[0-9a-f]{40}", source["revision"]):
+                raise ValueError("GitHub source needs a full commit revision")
+            if not source["repository"]:
+                raise ValueError("GitHub source needs a repository")
+        else:
+            raise ValueError("unknown upstream source kind")
+        if not source["files"]:
+            raise ValueError("upstream source needs hashed files")
+        for file in source["files"]:
+            if not file["path"] or not SHA256.fullmatch(file["sha256"]):
+                raise ValueError("upstream file needs a path and SHA-256")
+    for pin in pins:
+        if not pin["sources"] or not set(pin["sources"]).issubset(source_ids):
+            raise ValueError(f"{pin['id']}: unknown or missing source")
+        if not pin["text"] or digest(pin["text"].encode()) != pin["sha256"]:
+            raise ValueError(f"{pin['id']}: manifest text/hash mismatch")
+        re.compile(pin["selector"])
+        if type(pin.get("count", 1)) is not int or pin.get("count", 1) < 1:
+            raise ValueError(f"{pin['id']}: code match count must be positive")
+
+
+def check_code(manifest, root):
+    errors = []
+    contents = {}
+    root = Path(root).resolve()
+    for pin in manifest["code_pins"]:
+        try:
+            path = (root / pin["path"]).resolve()
+            path.relative_to(root)
+            if path not in contents:
+                contents[path] = path.read_text(encoding="utf-8")
+            matches = list(re.finditer(pin["selector"], contents[path]))
+            count = pin.get("count", 1)
+            if len(matches) != count:
+                errors.append(f"{pin['id']}: expected {count} code matches in {pin['path']}, got {len(matches)}")
+            elif any(digest(match.group().encode()) != pin["sha256"] for match in matches):
+                errors.append(f"{pin['id']}: code drift in {pin['path']}")
+        except (OSError, ValueError) as error:
+            errors.append(f"{pin['id']}: cannot read pinned code: {error}")
+    return errors
+
+
+def check_files(source, files, label):
+    errors = []
+    for file in source["files"]:
+        data = files(file["path"])
+        if digest(data) != file["sha256"]:
+            errors.append(f"{source['id']}: {label} hash drift: {file['path']}")
+        for evidence in file.get("evidence", []):
+            if evidence.encode() not in data:
+                errors.append(f"{source['id']}: {label} identity evidence missing: {file['path']}")
+    return errors
+
+
+def check_npm(source, get):
+    registry = "https://registry.npmjs.org/" + urllib.parse.quote(source["package"], safe="@/")
+    errors = []
+    # Always fetch the pinned artifact and latest dist-tag. A cached pin alone is not a drift check.
+    for version, label in [(source["version"], "pinned"), ("latest", "latest")]:
+        metadata = json.loads(get(registry + "/" + version))
+        if metadata["name"] != source["package"]:
+            raise ValueError("npm returned a different package")
+        if metadata["version"] != source["version"]:
+            errors.append(f"{source['id']}: {label} version drift: {source['version']} -> {metadata['version']}")
+        archive = get(metadata["dist"]["tarball"])
+        if digest(archive) != source["archive_sha256"]:
+            errors.append(f"{source['id']}: {label} archive hash drift")
+        # Read archive members in memory; never install, extract, or execute a package.
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+            def member(path):
+                info = tar.getmember(path)
+                if not info.isfile():
+                    raise ValueError(f"not a regular archive member: {path}")
+                return tar.extractfile(info).read()
+
+            errors.extend(check_files(source, member, label))
+    return errors
+
+
+def check_github(source, get):
+    repository = source["repository"]
+    latest = json.loads(get(f"https://api.github.com/repos/{repository}/commits/HEAD"))["sha"]
+    if not re.fullmatch(r"[0-9a-f]{40}", latest):
+        raise ValueError("GitHub returned an invalid latest revision")
+    errors = []
+    for revision, label in [(source["revision"], "pinned"), (latest, "latest")]:
+        def file(path):
+            return get(f"https://raw.githubusercontent.com/{repository}/{revision}/{path}")
+
+        errors.extend(check_files(source, file, label))
+    return errors
+
+
+def check_upstreams(manifest, get=fetch):
+    errors = []
+    cache = {}
+
+    def cached_get(url):
+        if url not in cache:
+            cache[url] = get(url)
+        return cache[url]
+
+    for source in manifest["sources"]:
+        try:
+            check = check_npm if source["kind"] == "npm" else check_github
+            errors.extend(check(source, cached_get))
+        except (OSError, ValueError, KeyError, TypeError, tarfile.TarError) as error:
+            # Missing/renamed upstream files, registry failures and malformed responses fail closed.
+            errors.append(f"{source['id']}: upstream check failed: {error}")
+    return errors
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--offline", action="store_true", help="check local code only; no network")
+    mode.add_argument("--online", action="store_true", help="also fetch pinned and latest npm/GitHub sources")
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--manifest", type=Path, help="manifest path, relative to --root unless absolute")
+    args = parser.parse_args()
+    try:
+        path = args.manifest or Path(MANIFEST)
+        manifest = json.loads((args.root / path).read_text(encoding="utf-8"))
+        check_manifest(manifest)
+        errors = check_code(manifest, args.root)
+        if args.online:
+            errors.extend(check_upstreams(manifest))
+    except (OSError, ValueError, KeyError, TypeError, re.error) as error:
+        errors = [f"invalid identity manifest: {error}"]
+    if errors:
+        for error in errors:
+            print(error, file=sys.stderr)
+        return 1
+    mode_name = "offline code" if args.offline else "code and upstream"
+    print(f"Identity pins match ({mode_name}); no identities were updated.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

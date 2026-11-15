@@ -199,5 +199,10 @@ defmodule CodingAgent.Search.Registry do
 
   defp normalize_id(_), do: ""
 
-  defp with_mutation_lock(fun), do: :global.trans({@mutation_lock, self()}, fun)
+  defp with_mutation_lock(fun) do
+    case :global.trans({@mutation_lock, self()}, fun, [node()], 3) do
+      :aborted -> raise "Search provider registry lock unavailable"
+      result -> result
+    end
+  end
 end

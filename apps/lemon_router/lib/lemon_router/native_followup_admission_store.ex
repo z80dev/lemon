@@ -26,6 +26,9 @@ defmodule LemonRouter.NativeFollowupAdmissionStore do
   end
 
   defp locked(profile_id, callback) do
-    :global.trans({{__MODULE__, profile_id}, self()}, callback, [node()])
+    case :global.trans({{__MODULE__, profile_id}, self()}, callback, [node()], 3) do
+      :aborted -> {:error, :store_unavailable}
+      result -> result
+    end
   end
 end

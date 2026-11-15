@@ -462,6 +462,18 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.RunGraph` | ETS-backed parent/child run graph with monotonic state machine (`queued -> running -> completed/error/killed/cancelled/lost`); await via PubSub |
 | `CodingAgent.RunGraphServer` | GenServer owning RunGraph ETS/DETS state, serialized lifecycle/budget writes, synchronous startup recovery, and TTL cleanup |
 
+Task, process, run-graph and parent-question stores share
+`CodingAgent.DurableTable`: each domain server remains the serialized owner,
+loads its existing DETS tuples before readiness, and normalizes interrupted work
+through a domain callback. File names and tuple layouts are unchanged.
+Task-progress bindings use the same lifecycle with no DETS backing and remain
+transient. Expiration uses a private timestamp/key index rather than folding
+every retained record or log buffer; sweeps run in the owner mailbox, not an
+unsupervised task. Failed process-artifact deletion retains both the record and
+its expiration entry for a later sweep; unknown launches and cleared identity
+tombstones still have no TTL. ProcessSession's bounded owner ETS tail and its
+transition/debounced persistence cadence are unchanged.
+
 ### Memory and Context
 
 | Module | Description |
@@ -864,7 +876,30 @@ system cache breakpoint before that footer; other providers concatenate the exac
 block text without adding separators. Journal files now include full system-prompt
 text and should be treated as private conversation data, not diagnostic output.
 
-`SessionManager.list_sessions/1` lists most recently modified sessions first.
+`SessionManager.list_sessions/1` lists most recently active sessions first.
+Each cwd's `.index.sqlite3` caches journal header fields, the latest session-info
+title and activity time. Appends, snapshots and turn checkpoints update it;
+listing stats files but opens only new or mismatched journals. Removing a journal
+removes its row, and deleting or corrupting the derived index rebuilds it from
+JSONL. Atomic replacement, size, inode, mtime and ctime changes invalidate rows.
+Integer and legacy ISO-8601 journal timestamps remain discoverable; cached
+activity times are always epoch milliseconds.
+The cache is not a durability boundary and never makes a successful journal
+write fail. JSONL remains the source of truth.
+
+Journal loading streams and migrates one record at a time, including large
+journals; it does not retain a whole-file binary, split-line list or second
+raw-entry history. Parser overhead is bounded by the largest input record plus
+the file read buffer; the returned session still holds its materialized entry
+tree. Latest checkpoint selection, legacy migrations and torn-tail recovery
+have the same semantics at every file size.
+
+`lemon sessions maintain --older-than 90d` previews archival of cold inactive
+journals and cleanup of managed orphan spill directories. Confirmation uses
+the exact preview cutoff/token and fails if candidates or their contents change.
+Archived journals retain their spill artifacts; live owners and external artifact
+targets are never swept. See the [CLI guide](../../docs/user-guide/cli.md).
+
 `Session.navigate_tree/3` persists branch selection even before another message
 is sent. `SessionManager.fork_file/3` creates an independent branch file with
 parent-session provenance; it refuses to overwrite an existing destination.

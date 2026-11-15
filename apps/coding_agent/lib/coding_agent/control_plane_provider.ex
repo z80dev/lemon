@@ -30,6 +30,12 @@ defmodule CodingAgent.ControlPlaneProvider do
   alias CodingAgent.Tools.Task.Hub
   alias CodingAgent.Tools.TodoStore
 
+  def session_maintenance_plan(older_than_ms),
+    do: CodingAgent.SessionMaintenance.plan(older_than_ms)
+
+  def session_maintenance_execute(plan),
+    do: CodingAgent.SessionMaintenance.execute(plan)
+
   def user_prompt_bind(session_key, connection, enabled, opts \\ []) do
     if enabled,
       do: UserPrompt.bind(session_key, connection, opts),
@@ -556,33 +562,42 @@ defmodule CodingAgent.ControlPlaneProvider do
     if LemonCore.SessionKey.agent_id(session_key) in [nil, ""] do
       {:error, :invalid_session_key}
     else
-      :global.trans({{__MODULE__, :native_session, session_key}, self()}, fn ->
-        case native_session_path(session_key, cwd) do
-          {:ok, path} ->
-            with {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
-                 result when result in [:ok, {:error, :exists}] <-
-                   register_native_index(session_key) do
-              {:ok, %{"sessionId" => session.header.id, "created" => false}}
-            end
+      :global.trans(
+        {{__MODULE__, :native_session, session_key}, self()},
+        fn ->
+          case native_session_path(session_key, cwd) do
+            {:ok, path} ->
+              with {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
+                   result when result in [:ok, {:error, :exists}] <-
+                     register_native_index(session_key) do
+                {:ok, %{"sessionId" => session.header.id, "created" => false}}
+              end
 
-          {:error, :session_not_found} ->
-            cond do
-              live_session(session_key) != nil ->
-                {:error, :busy}
+            {:error, :session_not_found} ->
+              cond do
+                live_session(session_key) != nil ->
+                  {:error, :busy}
 
-              LemonCore.SessionLifecycle.get(session_key) != nil ->
-                {:error, :unsupported_session}
+                LemonCore.SessionLifecycle.get(session_key) != nil ->
+                  {:error, :unsupported_session}
 
-              true ->
-                with {:ok, session} <- create_native_session(session_key, cwd) do
-                  {:ok, %{"sessionId" => session.header.id, "created" => true}}
-                end
-            end
+                true ->
+                  with {:ok, session} <- create_native_session(session_key, cwd) do
+                    {:ok, %{"sessionId" => session.header.id, "created" => true}}
+                  end
+              end
 
-          {:error, _} = error ->
-            error
-        end
-      end)
+            {:error, _} = error ->
+              error
+          end
+        end,
+        [node()],
+        3
+      )
+      |> case do
+        :aborted -> {:error, :busy}
+        result -> result
+      end
     end
   end
 
@@ -590,33 +605,42 @@ defmodule CodingAgent.ControlPlaneProvider do
   def session_plan(session_key, cwd, action, opts) do
     case live_session(session_key) do
       nil ->
-        :global.trans({{__MODULE__, :native_session, session_key}, self()}, fn ->
-          case native_session_path(session_key, cwd) do
-            {:ok, _path} ->
-              mutate_native_session(
-                session_key,
-                cwd,
-                &CodingAgent.Session.plan(&1, action, opts),
-                fn session ->
-                  with {:ok, plan, session} <- Planning.transition(session, action, opts) do
-                    {:ok, plan, session}
+        :global.trans(
+          {{__MODULE__, :native_session, session_key}, self()},
+          fn ->
+            case native_session_path(session_key, cwd) do
+              {:ok, _path} ->
+                mutate_native_session(
+                  session_key,
+                  cwd,
+                  &CodingAgent.Session.plan(&1, action, opts),
+                  fn session ->
+                    with {:ok, plan, session} <- Planning.transition(session, action, opts) do
+                      {:ok, plan, session}
+                    end
                   end
+                )
+
+              {:error, :session_not_found} when action in [:status, :exit] ->
+                {:ok, Planning.status(nil)}
+
+              {:error, :session_not_found} when action == :enter ->
+                with {:ok, session} <- create_native_session(session_key, cwd, :enter) do
+                  plan = Planning.status(session)
+                  {:ok, plan}
                 end
-              )
 
-            {:error, :session_not_found} when action in [:status, :exit] ->
-              {:ok, Planning.status(nil)}
-
-            {:error, :session_not_found} when action == :enter ->
-              with {:ok, session} <- create_native_session(session_key, cwd, :enter) do
-                plan = Planning.status(session)
-                {:ok, plan}
-              end
-
-            {:error, _} = error ->
-              error
-          end
-        end)
+              {:error, _} = error ->
+                error
+            end
+          end,
+          [node()],
+          3
+        )
+        |> case do
+          :aborted -> {:error, :busy}
+          result -> result
+        end
 
       pid ->
         CodingAgent.Session.plan(pid, action, opts)

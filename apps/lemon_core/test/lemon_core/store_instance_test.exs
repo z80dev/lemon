@@ -323,29 +323,7 @@ defmodule LemonCore.StoreInstanceTest do
              "the default store must not be collateral damage from a caller's mistake"
     end
 
-    @tag invalid_opts: "not-opts"
-    test "a store name where a session key belongs raises at the caller", %{
-      store: store,
-      invalid_opts: opts
-    } do
-      assert_raise FunctionClauseError, fn ->
-        Store.get_run_history(store, opts)
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        Store.get_run_history(store, limit: 5)
-      end
-    end
-
     test "the unambiguous arities still work", %{store: store} do
-      # The default store is shared with the rest of the node, so these assert
-      # the call is dispatched and answered, not that the node is quiet.
-      unknown = "agent:no_such_session_#{System.unique_integer([:positive])}:main"
-
-      assert Store.get_run_history(unknown) == []
-      assert Store.get_run_history(unknown, limit: 5) == []
-      assert Store.get_run_history(store, unknown, limit: 5) == []
-
       assert is_list(Store.list_introspection_events())
       assert is_list(Store.list_introspection_events(limit: 5))
       assert Store.list_introspection_events(store, limit: 5) == []

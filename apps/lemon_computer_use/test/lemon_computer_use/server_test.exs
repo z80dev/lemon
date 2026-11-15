@@ -262,16 +262,27 @@ defmodule LemonComputerUse.ServerTest do
 
   test "an abort cancels the call in flight and its pending approval" do
     signal = LemonAgent.AbortSignal.new()
-    js = Js.tool("/tmp", opts())
-    task = Task.async(fn -> run(js, %{"code" => "hang"}, signal) end)
+    parent = self()
 
-    Process.sleep(300)
+    approve = fn _request ->
+      send(parent, {:approval_waiting, self()})
+
+      receive do
+        :approve -> {:ok, :approved, :approve_once}
+      end
+    end
+
+    js = Js.tool("/tmp", opts(approval_context: %{approval_request_fun: approve}))
+    task = Task.async(fn -> run(js, %{"code" => "elicit:com.apple.calculator"}, signal) end)
+    assert_receive {:approval_waiting, approval}, 5_000
+    monitor = Process.monitor(approval)
     LemonAgent.AbortSignal.abort(signal)
 
     assert %AgentToolResult{is_error: true, content: [%TextContent{text: text}]} =
              Task.await(task, 5_000)
 
     assert text =~ "aborted"
+    assert_receive {:DOWN, ^monitor, :process, ^approval, :killed}
 
     # The server stays usable.
     assert %AgentToolResult{content: [%TextContent{text: "after"}]} =
@@ -312,6 +323,20 @@ defmodule LemonComputerUse.ServerTest do
 
     assert_processes_stopped(pids)
     assert Server.status().bridge == :stopped
+  end
+
+  @tag connect_hang: true, connect_timeout_ms: 100
+  test "the shared handshake deadline releases callers and closes a stalled bridge", %{
+    server: server,
+    log: log
+  } do
+    task = Task.async(fn -> Server.catalog(server, :infinity) end)
+    assert Task.await(task, 5_000) == {:error, :connect_timeout}
+
+    assert %{busy: false, connected: false, bridge: :stopped, last_error: :connect_timeout} =
+             Server.status(server)
+
+    refute Enum.any?(requests(log), &(&1["type"] == "call"))
   end
 
   @tag connect_fail: true

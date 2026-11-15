@@ -23,9 +23,9 @@ process.stdout.on('error', () => process.exit(0));
 const record = request => { if (log) appendFileSync(log, `${JSON.stringify(request)}\n`); };
 
 function elicit(app, request) {
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     const id = ++elicitations;
-    pending.set(id, resolve);
+    pending.set(id, { requestId: request.id, resolve, reject });
     send({ type: 'elicitation', id, params: {
       mode: 'form',
       message: `Allow Computer Use to use ${app}?`,
@@ -42,9 +42,9 @@ function elicit(app, request) {
 }
 
 function elicitOrigin(origin, request) {
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     const id = ++elicitations;
-    pending.set(id, resolve);
+    pending.set(id, { requestId: request.id, resolve, reject });
     send({ type: 'elicitation', id, params: {
       mode: 'form',
       message: `Allow the browser to access ${origin}?`,
@@ -100,18 +100,26 @@ createInterface({ input: process.stdin }).on('line', async line => {
   const request = JSON.parse(line);
   record(request);
   if (request.type === 'elicitationResponse') {
-    pending.get(request.id)?.(request.response);
+    pending.get(request.id)?.resolve(request.response);
     pending.delete(request.id);
     return;
   }
   if (request.type === 'cancel') {
     hanging.get(request.target)?.();
+    hanging.delete(request.target);
+    for (const [id, entry] of pending) {
+      if (entry.requestId !== request.target) continue;
+      pending.delete(id);
+      send({ type: 'elicitationCancelled', id });
+      entry.reject(new Error('aborted'));
+    }
     return;
   }
   try {
     let result;
     if (request.type === 'connect') {
       if (process.env.LCU_FAKE_CONNECT_FAIL) throw new Error('connect refused');
+      if (process.env.LCU_FAKE_CONNECT_HANG) return;
       result = { instructions: 'Fake computer-use instructions.', tools: [
         { name: 'js', description: 'Fake js tool.', inputSchema: { type: 'object', properties: { code: { type: 'string' } }, required: ['code'] } },
         { name: 'js_reset', description: 'Fake reset tool.', inputSchema: { type: 'object', properties: {} } },

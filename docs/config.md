@@ -2611,6 +2611,48 @@ property individually. Lemon's OpenAI providers explicitly use non-strict tool
 schemas, so `i` remains optional without changing `required` or
 `additionalProperties`.
 
+## Vendor Tool Dialect Experiment
+
+Native tool names and schemas remain the default. To opt a native session into
+the #603 arena experiment, set this in user or project configuration:
+
+```toml
+[runtime.tools]
+vendor_dialects = true # default false
+```
+
+`CodingAgent.Session` callers can override it with `:vendor_tool_dialects`.
+Claude model IDs expose `Read(file_path, offset?, limit?, pages?, allow_large?)`,
+`Edit(file_path, old_string, new_string, replace_all?)`, and
+`Bash(command, timeout?, description?, run_in_background?, dangerouslyDisableSandbox?)`
+instead of the native read/edit/bash inputs. Codex model IDs or the Codex
+Responses API expose `apply_patch` instead of `patch`, using the upstream Lark
+grammar as a real Responses custom/freeform tool (not JSON-wrapped patch text).
+Other tools and models are unchanged. Explicit model switches re-project tools.
+
+These are input adapters, not vendor executors. Translation enters the existing
+native policy-filtered, approval-wrapped, hook-intercepted and plan-gated closure.
+Policies, allow/deny lists and approval rules continue to use native names
+(`read`, `edit`, `bash`, `patch`), including in plan mode. No alias can reintroduce
+a denied tool. Native output, cancellation, read caps, stale-read checks,
+checkpoints, mutation locks and background-process semantics remain unchanged.
+`allow_large` does not raise Lemon's output cap; `pages` translates to native
+`page`/`page_limit`; `dangerouslyDisableSandbox: true` fails closed.
+`replace_all: true` uses the native edit transaction and replaces exact matches;
+omitting it retains the native unique-match behaviour.
+
+Sources: Claude Code
+[`sdk-tools.d.ts` at 2.1.325](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.325)
+(`FileReadInput`, `FileEditInput`, `BashInput`); Codex
+[`apply_patch.lark`](https://github.com/openai/codex/blob/b016cd18472588606c04af565528c4cd6746a41f/codex-rs/core/assets/tools/apply_patch.lark)
+and its
+[`FreeformTool` specification](https://github.com/openai/codex/blob/b016cd18472588606c04af565528c4cd6746a41f/codex-rs/core/src/tools/handlers/apply_patch_spec.rs).
+The upstream identity manifest records their source hashes.
+
+Decision: **keep opt-in; no default promotion**. No paired paid arena result is
+claimed here. Run the same tasks/model/seeds with this flag off/on and record
+the paired report and decision before changing the default (#543/#603).
+
 ## Tool Disclosure
 
 Every tool a session exposes sends its name, description and JSON schema with

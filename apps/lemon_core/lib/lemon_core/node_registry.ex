@@ -413,8 +413,12 @@ defmodule LemonCore.NodeRegistry do
     |> Enum.each(&NodeInvocation.call(&1, {:disconnect, reason}, :ok))
   end
 
-  defp lifecycle(fun),
-    do: :global.trans({{__MODULE__, :lifecycle}, self()}, fun, [node()])
+  defp lifecycle(fun) do
+    case :global.trans({{__MODULE__, :lifecycle}, self()}, fun, [node()], 3) do
+      :aborted -> {:error, :invocation_unavailable}
+      result -> result
+    end
+  end
 
   defp invoke_target(target, method, args, opts) do
     opts =

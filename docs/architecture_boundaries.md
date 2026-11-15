@@ -136,5 +136,6 @@ These rules complement the dependency policy table above. They must be respected
 | Model/session routing | `lemon_router` | `coding_agent`, `lemon_skills` |
 | Optional GenAI model/tool telemetry span export | `lemon_agent` | `lemon_ai`, `lemon_core` (both remain umbrella-independent) |
 | Runtime boot, profile, health, env detection | `lemon_core/runtime` | Shell scripts (only thin wrappers allowed there) |
+| Transport-independent RPC request ownership, framing and transport behaviours | `lemon_core/rpc` | Product apps (protocol policy and driver lifecycle stay in their owning apps) |
 
 When a new module does not fit an existing domain, update this table before adding the module.

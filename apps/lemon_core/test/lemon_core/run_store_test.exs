@@ -1,7 +1,7 @@
 defmodule LemonCore.RunStoreTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.{RunStore, Store}
+  alias LemonCore.{RunHistoryStore, RunStore, Store}
   alias LemonCore.Store.EtsBackend
 
   defmodule FailFirstSessionIndexPutBackend do
@@ -82,6 +82,15 @@ defmodule LemonCore.RunStoreTest do
     assert :ok = RunStore.create_session_index(first, "incarnation_first_#{suffix}", :tui)
     assert {:ok, recreated} = RunStore.ensure_session_incarnation(first)
     refute recreated.incarnation == first_index.incarnation
+  end
+
+  test "history reads fail softly when the history owner is unavailable" do
+    assert RunHistoryStore.get(:missing_run_history_store, "agent:test:main", limit: 5) == []
+
+    owner = spawn(fn -> :ok end)
+    monitor = Process.monitor(owner)
+    assert_receive {:DOWN, ^monitor, :process, ^owner, _}
+    assert RunHistoryStore.get(owner, "agent:test:main", []) == []
   end
 
   test "appends, fetches, finalizes, and lists run history through the typed wrapper" do

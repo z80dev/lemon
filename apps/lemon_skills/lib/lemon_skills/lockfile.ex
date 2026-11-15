@@ -174,6 +174,6 @@ defmodule LemonSkills.Lockfile do
   defp with_file_lock(scope, fun) do
     lock_path = path(scope) <> ".lock"
     File.mkdir_p!(Path.dirname(lock_path))
-    LemonSkills.FileLock.with_lock(lock_path, fun)
+    LemonCore.Service.Lock.with_lock_path(lock_path, [timeout: 1_000], fun)
   end
 end

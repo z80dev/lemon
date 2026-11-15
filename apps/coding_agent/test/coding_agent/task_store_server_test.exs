@@ -49,16 +49,14 @@ defmodule CodingAgent.TaskStoreServerTest do
     test "removes expired tasks", %{dets_path: dets_path} do
       assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
 
-      # Insert an old completed task directly
-      table = TaskStoreServer.table_name()
-
+      # Insert through the owner so its expiration index stays authoritative.
       old_task = %{
         id: "old_task",
         status: :completed,
         completed_at: System.system_time(:second) - 100_000
       }
 
-      :ets.insert(table, {"old_task", old_task, []})
+      TaskStoreServer.insert_record("old_task", old_task, [], pid)
 
       # Cleanup with short TTL should remove the task
       assert {:ok, deleted} = TaskStoreServer.cleanup(pid, 86_400)
@@ -78,7 +76,7 @@ defmodule CodingAgent.TaskStoreServerTest do
         completed_at: System.system_time(:second)
       }
 
-      :ets.insert(table, {"recent_task", recent_task, []})
+      TaskStoreServer.insert_record("recent_task", recent_task, [], pid)
 
       # Cleanup should not remove recent task
       assert {:ok, 0} = TaskStoreServer.cleanup(pid, 86_400)
@@ -92,15 +90,13 @@ defmodule CodingAgent.TaskStoreServerTest do
     test "does not remove running tasks", %{dets_path: dets_path} do
       assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
 
-      table = TaskStoreServer.table_name()
-
       running_task = %{
         id: "running_task",
         status: :running,
         inserted_at: System.system_time(:second) - 100_000
       }
 
-      :ets.insert(table, {"running_task", running_task, []})
+      TaskStoreServer.insert_record("running_task", running_task, [], pid)
 
       # Cleanup should not remove running task
       assert {:ok, 0} = TaskStoreServer.cleanup(pid, 86_400)
@@ -118,8 +114,8 @@ defmodule CodingAgent.TaskStoreServerTest do
       assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
 
       table = TaskStoreServer.table_name()
-      :ets.insert(table, {"task1", %{id: "task1"}, []})
-      :ets.insert(table, {"task2", %{id: "task2"}, []})
+      TaskStoreServer.insert_record("task1", %{id: "task1"}, [], pid)
+      TaskStoreServer.insert_record("task2", %{id: "task2"}, [], pid)
 
       assert :ok = TaskStoreServer.clear(pid)
 

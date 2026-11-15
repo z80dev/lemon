@@ -282,9 +282,12 @@ defmodule CodingAgent.Session.Planning do
     plan? = plan["mode"] == "plan"
     :atomics.put(context.gate, 1, if(plan?, do: 1, else: 0))
 
-    if plan?,
-      do: plan_tools(base_tools, Map.merge(context, plan_paths(session, plan))),
-      else: base_tools
+    guarded =
+      if plan?,
+        do: plan_tools(base_tools, Map.merge(context, plan_paths(session, plan))),
+        else: base_tools
+
+    CodingAgent.ToolDialects.apply(guarded, Map.get(context, :dialect_opts, []))
   end
 
   @doc """
@@ -342,6 +345,11 @@ defmodule CodingAgent.Session.Planning do
   def runtime_context(state, session_pid) do
     %{
       gate: state.plan_gate,
+      dialect_opts:
+        [
+          model: Map.get(state, :model),
+          settings_manager: Map.get(state, :settings_manager)
+        ] ++ Keyword.take(Map.get(state, :tool_opts) || [], [:vendor_tool_dialects]),
       cwd: state.cwd,
       session_pid: session_pid,
       session_id: state.session_manager.header.id,

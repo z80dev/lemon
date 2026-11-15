@@ -104,4 +104,13 @@ or a guarantee that an error left the runtime unchanged. The optional
 `reload_system/1` code-change targets are caller-managed and are not an automatic
 upgrade mechanism.
 
+These package APIs now acquire only a node-local mutex. `lock_nodes` may be
+omitted or equal `[node()]`; an empty or distributed scope returns
+`{:error, :invalid_lock_nodes}`. `lock_retries` defaults to `0` and accepts only
+finite non-negative integers; `:infinity` and invalid values return
+`{:error, :invalid_lock_retries}`. A competing reload returns
+`{:error, :reload_in_progress}` without compiling or loading code. This narrows
+the previously configurable distributed/infinite package locking options; no
+automatic retry is performed after a callback has started.
+
 For extension configuration and session tooling, see [Extensions](extensions.md).

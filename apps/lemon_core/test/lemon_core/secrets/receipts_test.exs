@@ -103,6 +103,7 @@ defmodule LemonCore.Secrets.ReceiptsTest do
     assert row(ctx, "token") == before
 
     assert {:ok, "private-value"} = Secrets.get("token", ctx.opts)
+    assert :ok = LemonCore.Secrets.Usage.flush()
     used = row(ctx, "token")
     assert used.usage_count == 1
     assert {:ok, %{current_binding_matches: true}} = Secrets.receipt("install:token-1", ctx.opts)

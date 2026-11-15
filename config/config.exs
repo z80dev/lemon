@@ -173,8 +173,8 @@ config :lemon_core, LemonCore.Secrets,
 #
 # The store is a storage primitive and must not name its collaborators, so the
 # runtime wires them here: run history, memory ingest, the usage ledger and exec
-# approval expiry attach as finalize-run hooks, and run-history reads forward to
-# the same provider.
+# approval expiry attach as finalize-run hooks. History reads use RunHistoryStore
+# directly rather than forwarding through Store.
 # Channels register their own cached tables at boot (see LemonChannels.Application).
 config :lemon_core, LemonCore.Store,
   backend: LemonCore.Store.EtsBackend,
@@ -184,8 +184,7 @@ config :lemon_core, LemonCore.Store,
     {LemonMemory.Ingest, :handle_finalize_run},
     {LemonCore.UsageLedger, :handle_finalize_run},
     {LemonCore.ExecApprovalExpiry, :handle_finalize_run}
-  ],
-  run_history_provider: LemonCore.RunHistoryStore
+  ]
 
 config :lemon_web, LemonWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,

@@ -519,6 +519,8 @@ defmodule LemonAgent.Agent do
       stream_fn: stream_fn,
       system_prompt_observer: Keyword.get(opts, :system_prompt_observer),
       response_system_prompt: agent_state.system_prompt,
+      stream_rules: Keyword.get(opts, :stream_rules, []),
+      on_stream_rule: Keyword.get(opts, :on_stream_rule),
       session_id: Keyword.get(opts, :session_id),
       get_api_key: Keyword.get(opts, :get_api_key),
       resolve_stream_options: Keyword.get(opts, :resolve_stream_options),
@@ -1112,6 +1114,8 @@ defmodule LemonAgent.Agent do
       intent_tracing: state.intent_tracing,
       stream_options: stream_options,
       emit_system_prompt: is_pid(state.system_prompt_observer),
+      stream_rules: state.stream_rules,
+      on_stream_rule: state.on_stream_rule,
       stream_fn: state.stream_fn
     }
   end

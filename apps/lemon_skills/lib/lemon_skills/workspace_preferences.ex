@@ -150,6 +150,10 @@ defmodule LemonSkills.WorkspacePreferences do
         {:error, _} -> {:error, "Workspace preferences unavailable"}
       end
     end)
+    |> case do
+      {:error, :memory_unavailable} -> {:error, "Workspace preferences unavailable"}
+      result -> result
+    end
   end
 
   @doc "Search bounded raw preference entries before returning their redacted projections."
@@ -370,8 +374,12 @@ defmodule LemonSkills.WorkspacePreferences do
       else: {:error, :memory_unavailable}
   end
 
-  defp locked(workspace_dir, fun),
-    do: :global.trans({{__MODULE__, Path.expand(workspace_dir)}, self()}, fun)
+  defp locked(workspace_dir, fun) do
+    case :global.trans({{__MODULE__, Path.expand(workspace_dir)}, self()}, fun, [node()], 3) do
+      :aborted -> {:error, :memory_unavailable}
+      result -> result
+    end
+  end
 
   # Refuse preference-file links and profile-home links; the trusted state root
   # may itself be a system alias (for example /tmp on macOS).

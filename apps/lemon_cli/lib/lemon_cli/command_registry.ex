@@ -501,7 +501,7 @@ defmodule LemonCli.CommandRegistry do
       usage: "lemon sessions <command> [options]",
       subcommands:
         subcommands(
-          ~w(list search stats show history context title pin unpin archive restore export prune delete)
+          ~w(list search stats show history context title pin unpin archive restore export prune maintain delete)
         ),
       options: [
         option("--json", ["--json"], "Emit one redacted JSON document"),
@@ -516,13 +516,18 @@ defmodule LemonCli.CommandRegistry do
         option("--clear", ["--clear"], "Clear a session title"),
         option("--output PATH", ["--output"], "Write export content to a private file"),
         option("--force", ["--force"], "Replace an existing regular export file"),
-        option("--older-than AGE|DATE", ["--older-than"], "Prune cutoff, for example 30d"),
+        option(
+          "--older-than AGE|DATE",
+          ["--older-than"],
+          "Prune or maintenance cutoff, for example 30d"
+        ),
         option("--all", ["--all"], "Allow non-archived prune candidates"),
         option("--include-pinned", ["--include-pinned"], "Allow pinned prune candidates"),
         option("--confirm TOKEN", ["--confirm"], "Exact preview or delete confirmation")
       ],
       details: [
         "Stats returns exact aggregate counts with bounded, redacted agent and origin dimensions. History and exports are always redacted. Prune previews by default and executes only with the exact token from an unchanged candidate set. Delete requires the exact session key.",
+        "Maintain previews cold native journals to archive and managed orphan artifacts to sweep. Confirmation requires the preview's exact epoch millisecond cutoff and token; active sessions and archived journals' artifacts are retained.",
         "Context shows a native session's context-window usage by category (system prompt, tools, skills, context files, memory, messages, free space); splits are estimates scaled to the provider-reported total."
       ]
     },

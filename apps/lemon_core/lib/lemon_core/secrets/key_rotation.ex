@@ -174,10 +174,12 @@ defmodule LemonCore.Secrets.KeyRotation do
       {:error, :runtime_running}
     else
       Lock.with_rotation_lock(fn ->
-        with {:ok, plan} <- plan(opts),
-             :ok <- confirm(plan, confirmation) do
-          execute(plan)
-        end
+        MasterKey.with_cache_invalidation(fn ->
+          with {:ok, plan} <- plan(opts),
+               :ok <- confirm(plan, confirmation) do
+            execute(plan)
+          end
+        end)
       end)
     end
   end
@@ -430,7 +432,9 @@ defmodule LemonCore.Secrets.KeyRotation do
           Secrets.table(),
           ref,
           entry,
-          Secrets.receipt_only_entry(entry), durable: true)
+          Secrets.receipt_only_entry(entry),
+          durable: true
+        )
   end
 
   defp stage(plan, new_key) do
@@ -510,7 +514,7 @@ defmodule LemonCore.Secrets.KeyRotation do
   # when the provider written to holds the new key and resolution loads it.
   defp switch_key(plan, encoded, new_key) do
     put_result = plan.provider.put(encoded, Keyword.put(plan.opts, :force, true))
-    held = MasterKey.fetch_from(plan.provider, plan.opts)
+    held = MasterKey.fetch_fresh(plan.provider, plan.opts)
 
     cond do
       put_result == :ok and held == {:ok, new_key} and loads?(plan.opts, new_key) ->
@@ -524,7 +528,7 @@ defmodule LemonCore.Secrets.KeyRotation do
     end
   end
 
-  defp loads?(opts, key), do: match?({:ok, ^key, _source}, MasterKey.resolve(opts))
+  defp loads?(opts, key), do: match?({:ok, ^key, _source}, MasterKey.resolve_fresh(opts))
 
   defp put_failure({:error, reason}), do: safe_reason(reason)
   defp put_failure(_other), do: :unexpected_result

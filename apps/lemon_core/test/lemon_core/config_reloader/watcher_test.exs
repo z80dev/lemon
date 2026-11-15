@@ -120,6 +120,7 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
       end)
 
       assert Process.alive?(pid)
+      assert is_reference(:sys.get_state(pid).poll_ref)
     end
 
     test "registers with module name via start_link/1" do
@@ -210,6 +211,7 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
       state = :sys.get_state(pid)
 
       if state.mode == :native do
+        assert is_nil(state.poll_ref)
         assert is_pid(state.watcher_pid)
         assert Process.alive?(state.watcher_pid)
       else
@@ -432,14 +434,20 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
       assert Process.alive?(pid)
     end
 
-    test "poll fires periodically at configured interval" do
-      pid = start_watcher!(poll_interval_ms: 50, debounce_ms: 5_000)
+    test "native mode ignores stale poll messages" do
+      state = %{mode: :native, poll_ref: nil}
+      assert {:noreply, ^state} = Watcher.handle_info(:poll, state)
+    end
 
-      # Wait long enough for multiple polls
-      Process.sleep(200)
-
-      # Process should still be alive after multiple poll cycles
-      assert Process.alive?(pid)
+    test "fallback schedules exactly one polling timer" do
+      state = %{mode: :native, watcher_pid: self(), poll_ref: nil, poll_interval_ms: 60_000}
+      assert {:noreply, fallback} = Watcher.handle_info({:EXIT, self(), :normal}, state)
+      assert fallback.mode == :polling
+      assert is_reference(fallback.poll_ref)
+      assert Process.read_timer(fallback.poll_ref) > 0
+      assert {:noreply, same} = Watcher.handle_info({:file_event, self(), :stop}, fallback)
+      assert same.poll_ref == fallback.poll_ref
+      Process.cancel_timer(fallback.poll_ref)
     end
   end
 

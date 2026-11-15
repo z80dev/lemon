@@ -2630,12 +2630,12 @@ defmodule LemonGateway.RunTest do
 
       # Wait for run history to be stored
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run_history(scope) != [] end,
+        fn -> LemonCore.RunHistoryStore.get(scope) != [] end,
         message: "run history was not stored"
       )
 
       # Run history should include this run
-      history = LemonCore.Store.get_run_history(scope)
+      history = LemonCore.RunHistoryStore.get(scope)
       assert history != []
     end
 

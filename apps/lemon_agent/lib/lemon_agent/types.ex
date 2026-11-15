@@ -446,6 +446,9 @@ defmodule LemonAgent.Types do
     - `stream_fn` - Custom stream function (defaults to LemonAi.stream_simple/3)
     - `emit_system_prompt` - Internal journal transport; the Agent consumes these
       snapshots without publishing them to ordinary subscribers
+    - `stream_rules` - Dormant rules, or a zero-arity resolver returning active rules
+    - `on_stream_rule` - Synchronous rule receipt/redirect callback; returns `:ok`
+      only after durable acceptance, or `{:error, :injection_limit}` when spent
     """
     @type convert_to_llm_fn ::
             ([LemonAgent.Types.agent_message()] ->
@@ -544,6 +547,8 @@ defmodule LemonAgent.Types do
               budget: nil,
               stream_options: %StreamOptions{},
               stream_options_model: nil,
+              stream_rules: [],
+              on_stream_rule: nil,
               stream_fn: nil,
               emit_system_prompt: false
   end

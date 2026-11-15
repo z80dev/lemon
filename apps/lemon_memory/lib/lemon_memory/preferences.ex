@@ -202,56 +202,65 @@ defmodule LemonMemory.Preferences do
       {__MODULE__, GenServer.whereis(server) || server, identity.agent_id, identity.home_digest,
        owner}
 
-    :global.trans({lock, self()}, fn ->
-      with {:ok, all} <- load(context, identity, owner, opts),
-           docs = Enum.filter(all, &(document_kind(&1) == kind)),
-           {:ok, _matched, replaces, text} <-
-             LemonMemory.NoteMatch.resolve(Enum.flat_map(docs, &facts/1), replaces, text),
-           :ok <- validate_patch(text, kind) do
-        matches = Enum.filter(docs, &(facts(&1) == [replaces]))
-        duplicate = Enum.find(docs, &(facts(&1) == [text]))
+    :global.trans(
+      {lock, self()},
+      fn ->
+        with {:ok, all} <- load(context, identity, owner, opts),
+             docs = Enum.filter(all, &(document_kind(&1) == kind)),
+             {:ok, _matched, replaces, text} <-
+               LemonMemory.NoteMatch.resolve(Enum.flat_map(docs, &facts/1), replaces, text),
+             :ok <- validate_patch(text, kind) do
+          matches = Enum.filter(docs, &(facts(&1) == [replaces]))
+          duplicate = Enum.find(docs, &(facts(&1) == [text]))
 
-        cond do
-          replaces != nil and length(matches) != 1 ->
-            {:error, :not_found}
+          cond do
+            replaces != nil and length(matches) != 1 ->
+              {:error, :not_found}
 
-          replaces == nil and duplicate != nil ->
-            result(false, docs, duplicate)
+            replaces == nil and duplicate != nil ->
+              result(false, docs, duplicate)
 
-          replaces != nil and duplicate != nil and text != replaces ->
-            save(
-              context,
-              identity,
-              owner,
-              kind,
-              nil,
-              List.first(matches),
-              List.delete(docs, List.first(matches)),
-              opts
-            )
+            replaces != nil and duplicate != nil and text != replaces ->
+              save(
+                context,
+                identity,
+                owner,
+                kind,
+                nil,
+                List.first(matches),
+                List.delete(docs, List.first(matches)),
+                opts
+              )
 
-          text == replaces ->
-            result(false, docs, List.first(matches))
+            text == replaces ->
+              result(false, docs, List.first(matches))
 
-          true ->
-            previous = List.first(matches)
-            remaining = if previous, do: List.delete(docs, previous), else: docs
+            true ->
+              previous = List.first(matches)
+              remaining = if previous, do: List.delete(docs, previous), else: docs
 
-            selected =
-              if text,
-                do: Enum.flat_map(remaining, &facts/1) ++ [text],
-                else: Enum.flat_map(remaining, &facts/1)
+              selected =
+                if text,
+                  do: Enum.flat_map(remaining, &facts/1) ++ [text],
+                  else: Enum.flat_map(remaining, &facts/1)
 
-            count = length(all) - if(previous, do: 1, else: 0) + if(text, do: 1, else: 0)
+              count = length(all) - if(previous, do: 1, else: 0) + if(text, do: 1, else: 0)
 
-            if fits?(selected, kind) and count <= @max_notes do
-              save(context, identity, owner, kind, text, previous, remaining, opts)
-            else
-              {:error, :capacity_exceeded}
-            end
+              if fits?(selected, kind) and count <= @max_notes do
+                save(context, identity, owner, kind, text, previous, remaining, opts)
+              else
+                {:error, :capacity_exceeded}
+              end
+          end
         end
-      end
-    end)
+      end,
+      [node()],
+      3
+    )
+    |> case do
+      :aborted -> {:error, :store_unavailable}
+      result -> result
+    end
   end
 
   defp save(_context, _identity, _key, _kind, nil, previous, remaining, opts) do
