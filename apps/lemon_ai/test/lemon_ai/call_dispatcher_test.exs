@@ -56,8 +56,7 @@ defmodule LemonAi.CallDispatcherTest do
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
 
-      # record_failure/1 is a cast; the dispatch below is ordered after both casts
-      # because they come from the same process.
+      # Result recording publishes the ETS admission snapshot before returning.
 
       result = CallDispatcher.dispatch(provider, fn -> {:ok, "should not run"} end)
 

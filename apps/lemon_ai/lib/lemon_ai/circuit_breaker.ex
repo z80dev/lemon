@@ -35,6 +35,11 @@ defmodule LemonAi.CircuitBreaker do
   - `failure_threshold` - Number of failures before opening circuit (default: 5)
   - `recovery_timeout` - Milliseconds before attempting recovery (default: 30000)
   - `provider` - Provider identifier (required)
+
+  Admission reads (`open?/1`, `time_until_recovery/1`, `peek/1`) use a
+  process-owned ETS snapshot, without calling the breaker. Recording a result
+  and resetting the breaker synchronously publish the new snapshot before
+  returning, so subsequent admission reads observe those updates.
   """
 
   use GenServer
@@ -56,7 +61,8 @@ defmodule LemonAi.CircuitBreaker do
           monotonic_time: (-> integer()) | nil,
           last_failure_time: integer() | nil,
           last_failure_reason: term() | nil,
-          success_count_in_half_open: non_neg_integer()
+          success_count_in_half_open: non_neg_integer(),
+          table: :ets.tid()
         }
 
   # Number of successes required in half_open to close the circuit
@@ -116,9 +122,22 @@ defmodule LemonAi.CircuitBreaker do
   @spec open?(provider()) :: boolean()
   def open?(provider) do
     _ = ensure_started(provider)
-    GenServer.call(via_tuple(provider), :open?)
-  catch
-    :exit, {:noproc, _} -> false
+
+    case read_snapshot(provider) do
+      {:ok, %{circuit_state: :open} = state} ->
+        if recovery_remaining(state) > 0 do
+          true
+        else
+          GenServer.cast(via_tuple(provider), :refresh_state)
+          false
+        end
+
+      {:ok, _state} ->
+        false
+
+      _ ->
+        true
+    end
   end
 
   @doc """
@@ -127,7 +146,7 @@ defmodule LemonAi.CircuitBreaker do
   @spec record_success(provider()) :: :ok
   def record_success(provider) do
     _ = ensure_started(provider)
-    GenServer.cast(via_tuple(provider), :record_success)
+    GenServer.call(via_tuple(provider), :record_success)
   catch
     :exit, {:noproc, _} -> :ok
   end
@@ -138,7 +157,7 @@ defmodule LemonAi.CircuitBreaker do
   @spec record_failure(provider(), term()) :: :ok
   def record_failure(provider, reason \\ :unknown) do
     _ = ensure_started(provider)
-    GenServer.cast(via_tuple(provider), {:record_failure, reason})
+    GenServer.call(via_tuple(provider), {:record_failure, reason})
   catch
     :exit, {:noproc, _} -> :ok
   end
@@ -151,9 +170,11 @@ defmodule LemonAi.CircuitBreaker do
   @spec time_until_recovery(provider()) :: non_neg_integer()
   def time_until_recovery(provider) do
     _ = ensure_started(provider)
-    GenServer.call(via_tuple(provider), :time_until_recovery)
-  catch
-    :exit, {:noproc, _} -> 0
+
+    case read_snapshot(provider) do
+      {:ok, state} -> recovery_remaining(state)
+      _ -> 0
+    end
   end
 
   @doc """
@@ -170,21 +191,43 @@ defmodule LemonAi.CircuitBreaker do
   @doc """
   Read an existing breaker without starting it or changing its state.
 
-  Returns `:not_started` when absent and `:unknown` when the process cannot
-  answer within 100 milliseconds. No failure reasons or credentials are exposed.
+  Returns `:not_started` when absent and `:unknown` if its ETS snapshot is
+  unavailable. No failure reasons or credentials are exposed.
   """
   @spec peek(provider()) :: :not_started | :unknown | {:ok, map()}
   def peek(provider) do
+    case read_snapshot(provider) do
+      {:ok, state} ->
+        {:ok,
+         %{
+           state: state.circuit_state,
+           failure_count: state.failure_count,
+           time_until_recovery_ms: recovery_remaining(state)
+         }}
+
+      other ->
+        other
+    end
+  end
+
+  defp read_snapshot(provider) do
     if Process.whereis(LemonAi.CircuitBreakerRegistry) do
       case GenServer.whereis(via_tuple(provider)) || existing_provider_pid(provider) do
-        nil -> :not_started
-        pid -> GenServer.call(pid, :peek, 100)
+        nil ->
+          :not_started
+
+        pid ->
+          [{^pid, table}] =
+            Registry.lookup(LemonAi.CircuitBreakerRegistry, registry_key(pid, provider))
+
+          [{:state, snapshot}] = :ets.lookup(table, :state)
+          {:ok, snapshot}
       end
     else
       :not_started
     end
-  catch
-    :exit, _ -> :unknown
+  rescue
+    _ -> :unknown
   end
 
   defp existing_provider_pid(provider) when is_binary(provider) do
@@ -195,13 +238,21 @@ defmodule LemonAi.CircuitBreaker do
 
   defp existing_provider_pid(provider), do: GenServer.whereis(via_tuple(to_string(provider)))
 
+  defp registry_key(pid, provider) do
+    if GenServer.whereis(via_tuple(provider)) == pid do
+      provider
+    else
+      if is_atom(provider), do: to_string(provider), else: String.to_existing_atom(provider)
+    end
+  end
+
   @doc """
   Reset the circuit breaker to closed state. Useful for testing or manual recovery.
   """
   @spec reset(provider()) :: :ok
   def reset(provider) do
     _ = ensure_started(provider)
-    GenServer.cast(via_tuple(provider), :reset)
+    GenServer.call(via_tuple(provider), :reset)
   catch
     :exit, {:noproc, _} -> :ok
   end
@@ -221,6 +272,9 @@ defmodule LemonAi.CircuitBreaker do
     # upgrade), crashing the breaker with BadFunctionError.
     monotonic_time = Keyword.get(opts, :monotonic_time)
 
+    table = :ets.new(__MODULE__, [:protected, :set, read_concurrency: true])
+    Registry.update_value(LemonAi.CircuitBreakerRegistry, provider, fn _ -> table end)
+
     state = %{
       provider: provider,
       circuit_state: :closed,
@@ -230,38 +284,23 @@ defmodule LemonAi.CircuitBreaker do
       monotonic_time: monotonic_time,
       last_failure_time: nil,
       last_failure_reason: nil,
-      success_count_in_half_open: 0
+      success_count_in_half_open: 0,
+      table: table
     }
 
     Logger.debug(
       "CircuitBreaker started for #{provider}: threshold #{failure_threshold}, timeout #{recovery_timeout}ms"
     )
 
+    publish(state)
+
     {:ok, state}
-  end
-
-  @impl true
-  def handle_call(:open?, _from, state) do
-    state = maybe_transition_to_half_open(state)
-    is_open = state.circuit_state == :open
-    {:reply, is_open, state}
-  end
-
-  @impl true
-  def handle_call(:time_until_recovery, _from, %{circuit_state: :open} = state) do
-    now = monotonic_time(state)
-    elapsed = now - (state.last_failure_time || now)
-    remaining = max(0, state.recovery_timeout - elapsed)
-    {:reply, remaining, state}
-  end
-
-  def handle_call(:time_until_recovery, _from, state) do
-    {:reply, 0, state}
   end
 
   @impl true
   def handle_call(:get_state, _from, state) do
     state = maybe_transition_to_half_open(state)
+    publish(state)
 
     info = %{
       provider: state.provider,
@@ -276,25 +315,7 @@ defmodule LemonAi.CircuitBreaker do
   end
 
   @impl true
-  def handle_call(:peek, _from, state) do
-    remaining =
-      if state.circuit_state == :open do
-        max(0, state.recovery_timeout - (monotonic_time(state) - state.last_failure_time))
-      else
-        0
-      end
-
-    info = %{
-      state: state.circuit_state,
-      failure_count: state.failure_count,
-      time_until_recovery_ms: remaining
-    }
-
-    {:reply, {:ok, info}, state}
-  end
-
-  @impl true
-  def handle_cast(:record_success, state) do
+  def handle_call(:record_success, _from, state) do
     state = maybe_transition_to_half_open(state)
 
     new_state =
@@ -325,11 +346,12 @@ defmodule LemonAi.CircuitBreaker do
           state
       end
 
-    {:noreply, new_state}
+    publish(new_state)
+    {:reply, :ok, new_state}
   end
 
   @impl true
-  def handle_cast({:record_failure, reason}, state) do
+  def handle_call({:record_failure, reason}, _from, state) do
     state = maybe_transition_to_half_open(state)
 
     new_state =
@@ -391,11 +413,12 @@ defmodule LemonAi.CircuitBreaker do
           }
       end
 
-    {:noreply, new_state}
+    publish(new_state)
+    {:reply, :ok, new_state}
   end
 
   @impl true
-  def handle_cast(:reset, state) do
+  def handle_call(:reset, _from, state) do
     Logger.info("CircuitBreaker for #{state.provider} manually reset")
 
     new_state = %{
@@ -407,12 +430,39 @@ defmodule LemonAi.CircuitBreaker do
         success_count_in_half_open: 0
     }
 
-    {:noreply, new_state}
+    publish(new_state)
+    {:reply, :ok, new_state}
+  end
+
+  @impl true
+  def handle_cast(:refresh_state, state) do
+    state = maybe_transition_to_half_open(state)
+    publish(state)
+    {:noreply, state}
   end
 
   # ============================================================================
   # Private Helpers
   # ============================================================================
+
+  defp publish(state) do
+    snapshot =
+      Map.take(state, [
+        :circuit_state,
+        :failure_count,
+        :recovery_timeout,
+        :last_failure_time,
+        :monotonic_time
+      ])
+
+    :ets.insert(state.table, {:state, snapshot})
+  end
+
+  defp recovery_remaining(%{circuit_state: :open} = state) do
+    max(0, state.recovery_timeout - (monotonic_time(state) - state.last_failure_time))
+  end
+
+  defp recovery_remaining(_state), do: 0
 
   defp maybe_transition_to_half_open(%{circuit_state: :open} = state) do
     now = monotonic_time(state)
