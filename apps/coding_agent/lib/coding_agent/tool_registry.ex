@@ -161,6 +161,7 @@ defmodule CodingAgent.ToolRegistry do
 
   defp tool_tuples(cwd, opts, browser_wanted?) do
     {disabled, enabled_only, tool_policy} = filters = tool_filters(opts)
+    opts = Keyword.put(opts, :tool_policy, tool_policy)
     include_extensions = Keyword.get(opts, :include_extensions, true)
     include_mcp = Keyword.get(opts, :include_mcp, true)
 

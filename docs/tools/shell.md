@@ -39,6 +39,14 @@ on timeout. A local port cannot adopt an ACP client's remote terminal handle;
 supporting detachment there requires a managed terminal backend that retains
 that protocol ownership through session cleanup.
 
+With `sandbox: true` in the effective tool policy, foreground, background and
+named-service commands instead use Docker's enforced network-isolated backend.
+ACP-client routing is bypassed, PTY requests are refused, and host shell-state
+capture is disabled. Restarts retain the sandbox restriction. Docker must be
+available; failure never falls back to local execution. See the operator setup
+and limits in [egress broker](../security/egress-broker.md).
+
+
 ## Working directory, environment and internal URLs
 
 `cwd` runs a command in another existing directory (absolute, or relative to

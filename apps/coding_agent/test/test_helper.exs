@@ -36,7 +36,7 @@ exclude_tags =
       [:lldb_dap | exclude_tags]
   end
 
-ExUnit.configure(exclude: exclude_tags)
+ExUnit.configure(exclude: [:docker | exclude_tags])
 ExUnit.start(capture_log: true)
 
 # Use a test-local store backend so coding_agent tests don't depend on lemon_gateway.
