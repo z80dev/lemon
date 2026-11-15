@@ -2,8 +2,9 @@ defmodule LemonChannels.Outbox.QueueStore do
   @moduledoc """
   Channels-owned durable outbox records over `LemonCore.Store`.
 
-  Pending records include the original payload, stable key, FIFO sequence and
-  wall-clock retry/expiry times. Confirmation replaces message content with a
+  Pending records include the original payload, FIFO sequence and wall-clock
+  retry/expiry times. A missing payload key stays nil; the durable record ID
+  supplies its private per-chunk dedupe identity. Confirmation replaces content with a
   bounded, content-free receipt in a separate table. A successful mutation always
   crosses the Store durability barrier. The configured Store backend determines
   crash durability; the in-memory ETS backend remains explicitly ephemeral.
@@ -76,10 +77,13 @@ defmodule LemonChannels.Outbox.QueueStore do
 
   def pending_delete(entry), do: {@pending_table, entry.durable_id}
 
+  @doc false
+  def delivery_key(entry), do: entry.payload.idempotency_key || "outbox:#{entry.durable_id}"
+
   def receipt(entry) do
     value = %{
       channel_id: entry.payload.channel_id,
-      key: entry.payload.idempotency_key,
+      key: delivery_key(entry),
       expires_at_ms: System.system_time(:millisecond) + Dedupe.ttl_ms(),
       sequence: entry.sequence
     }
