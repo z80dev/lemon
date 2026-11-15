@@ -107,6 +107,17 @@ defmodule LemonChannels.OutboxTest do
       state = :sys.get_state(outbox_pid)
       queued = :queue.to_list(state.queue)
 
+      on_exit(fn ->
+        Enum.each(queued, fn entry ->
+          LemonCore.Store.delete(
+            LemonChannels.Outbox.QueueStore.pending_table(),
+            entry.durable_id
+          )
+        end)
+
+        LemonCore.Store.sync()
+      end)
+
       assert length(queued) == 1
       assert hd(queued).payload.content == %{message_id: "42", text: "new"}
     end
