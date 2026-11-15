@@ -350,7 +350,7 @@ defmodule CodingAgent.ProcessSessionTest do
       end)
 
       # Port data is injected directly so chunk boundaries are exact.
-      inject = fn chunk -> send(pid, {port, {:data, chunk}}) end
+      inject = fn chunk -> inject_output(pid, port, chunk) end
 
       inject.(String.duplicate("\n", 5_000))
       assert_capture_bounds(process_id, path, 5_000)
@@ -404,7 +404,7 @@ defmodule CodingAgent.ProcessSessionTest do
 
       {:ok, %{port: port, output_file: nil}} = ProcessSession.get_state(process_id)
       [{pid, _}] = Registry.lookup(CodingAgent.ProcessRegistry, process_id)
-      send(pid, {port, {:data, "diagnostic\n"}})
+      inject_output(pid, port, "diagnostic\n")
       assert {:ok, %{output: stats}} = ProcessSession.poll(process_id)
       assert stats.received_bytes == 18
       assert stats.artifact_bytes == 0
@@ -435,7 +435,7 @@ defmodule CodingAgent.ProcessSessionTest do
       File.rm!(path)
       File.ln_s!(path, path)
 
-      send(pid, {port, {:data, "diagnostic\n"}})
+      inject_output(pid, port, "diagnostic\n")
       assert {:ok, %{output: stats}} = ProcessSession.poll(process_id)
       assert stats.received_bytes == 11
       assert stats.artifact_bytes == 0
@@ -444,7 +444,7 @@ defmodule CodingAgent.ProcessSessionTest do
       assert stats.artifact_truncated
       assert stats.artifact_error == :terminated
 
-      send(pid, {port, {:data, "tail\n"}})
+      inject_output(pid, port, "tail\n")
 
       assert {:ok, %{output: %{received_bytes: 16, artifact_discarded_bytes: nil}}} =
                ProcessSession.poll(process_id)
@@ -467,25 +467,29 @@ defmodule CodingAgent.ProcessSessionTest do
     test "partial-only updates evict the store mirror and preserve exact byte accounting",
          %{process_id: process_id} do
       {pid, port, path} = start_capture(process_id, max_retained_bytes: 8, max_artifact_bytes: 5)
-      send(pid, {port, {:data, "one\nxy"}})
+      inject_output(pid, port, "one\nxy")
 
       assert {:ok, %{output: %{received_bytes: 6, retained_bytes: 6, discarded_bytes: 0}}} =
                ProcessSession.poll(process_id)
 
+      flush_output(pid)
       assert {:ok, %{output: %{retained_bytes: 6}}, ["one"]} = ProcessStore.get(process_id)
 
-      send(pid, {port, {:data, "123456"}})
+      inject_output(pid, port, "123456")
       assert {:ok, %{partial_line: "6", log_bytes: 7}} = ProcessSession.get_state(process_id)
+      flush_output(pid)
       assert {:ok, %{output: %{retained_bytes: 8}}, ["xy12345"]} = ProcessStore.get(process_id)
 
       # Partial growth alone must also evict the mirrored segment.
-      send(pid, {port, {:data, "7890"}})
+      inject_output(pid, port, "7890")
       assert {:ok, %{partial_line: "67890", log_bytes: 0}} = ProcessSession.get_state(process_id)
+
+      flush_output(pid)
 
       assert {:ok, %{output: %{received_bytes: 16, retained_bytes: 5, discarded_bytes: 11}}, []} =
                ProcessStore.get(process_id)
 
-      send(pid, {port, {:data, "\n"}})
+      inject_output(pid, port, "\n")
 
       assert {:ok, %{lines: ["67890"], dropped_lines: 2, output: stats}} =
                ProcessSession.read_output(process_id)
@@ -505,12 +509,12 @@ defmodule CodingAgent.ProcessSessionTest do
     test "a one-byte budget handles empty lines and split newline boundaries",
          %{process_id: process_id} do
       {pid, port, path} = start_capture(process_id, max_retained_bytes: 1, max_artifact_bytes: 1)
-      send(pid, {port, {:data, "a"}})
+      inject_output(pid, port, "a")
 
       assert {:ok, %{output: %{retained_bytes: 1, discarded_bytes: 0}}} =
                ProcessSession.poll(process_id)
 
-      send(pid, {port, {:data, "\nb\n"}})
+      inject_output(pid, port, "\nb\n")
 
       assert {:ok, %{lines: [""], dropped_lines: 3, output: stats}} =
                ProcessSession.read_output(process_id)
@@ -527,8 +531,8 @@ defmodule CodingAgent.ProcessSessionTest do
       {pid, port, path} =
         start_capture(process_id, max_retained_bytes: 32, max_artifact_bytes: 10)
 
-      send(pid, {port, {:data, "ok\npar"}})
-      send(pid, {port, {:data, "tial"}})
+      inject_output(pid, port, "ok\npar")
+      inject_output(pid, port, "tial")
 
       assert {:ok, %{lines: ["ok"], output: %{artifact_truncated: false}}} =
                ProcessSession.read_output(process_id)
@@ -628,8 +632,18 @@ defmodule CodingAgent.ProcessSessionTest do
     {pid, port, path}
   end
 
-  # Port messages and calls are handled in order, so these reads observe every
-  # chunk injected before them.
+  # Direct ETS reads are not mailbox barriers. Synchronize synthetic chunks with
+  # the owner explicitly, and flush separately when asserting durable snapshots.
+  defp inject_output(pid, port, chunk) do
+    send(pid, {port, {:data, chunk}})
+    ProcessSession.get_process_id(pid)
+  end
+
+  defp flush_output(pid) do
+    send(pid, :flush_output)
+    ProcessSession.get_process_id(pid)
+  end
+
   defp assert_capture_bounds(process_id, path, received) do
     assert {:ok, %{logs: logs, output: output}} = ProcessSession.poll(process_id, 10_000)
 
@@ -647,6 +661,8 @@ defmodule CodingAgent.ProcessSessionTest do
     assert output.received_bytes == output.retained_bytes + output.discarded_bytes
 
     # The store holds exactly the session's retained lines, not a second budget.
+    [{pid, _}] = Registry.lookup(CodingAgent.ProcessRegistry, process_id)
+    flush_output(pid)
     assert {:ok, record, store_logs} = ProcessStore.get(process_id)
     assert store_logs == Enum.reverse(logs)
     assert record.output == output
