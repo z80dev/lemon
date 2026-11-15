@@ -597,6 +597,7 @@ start_runtime() {
   fi
   rm -f "$PIDFILE"
   if [ "$DISTRIBUTED" = "1" ]; then
+    NODE_COOKIE="${NODE_COOKIE:-${RELEASE_COOKIE:-}}"
     if [ -z "$NODE_COOKIE" ]; then
       (
         umask 077
@@ -610,7 +611,13 @@ start_runtime() {
     if [ -z "$NODE_MODE" ]; then
       if [[ "$NODE_NAME" == *@* ]]; then NODE_MODE="name"; else NODE_MODE="sname"; fi
     fi
-    cmd=(elixir "--$NODE_MODE" "$NODE_NAME" --cookie "$NODE_COOKIE" -S "${cmd[@]}")
+    # Erlang reads ERL_FLAGS from the environment; never interpolate the
+    # distribution secret into the launcher command's positional arguments.
+    export RELEASE_COOKIE="$NODE_COOKIE"
+    local escaped_cookie="${NODE_COOKIE//\\/\\\\}"
+    escaped_cookie="${escaped_cookie//\"/\\\"}"
+    export ERL_FLAGS="${ERL_FLAGS:-} -setcookie \"$escaped_cookie\""
+    cmd=(elixir "--$NODE_MODE" "$NODE_NAME" -S "${cmd[@]}")
   fi
   ensure_managed_token || exit 1
   export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}" LEMON_CONTROL_PLANE_PORT="$PORT"
