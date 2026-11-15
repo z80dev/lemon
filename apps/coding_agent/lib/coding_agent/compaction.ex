@@ -8,8 +8,10 @@ defmodule CodingAgent.Compaction do
   ## Compaction Process
 
   1. Check if compaction is needed based on token usage and context window
-  2. Find a valid cut point in the conversation history
-  3. Generate a summary of the messages being compacted
+  2. Spill old tool bodies to recoverable artifact references, protecting the
+     newest 40,000 tokens and skipping results under 50 tokens (omp policy)
+  3. Skip summarization if pruning alone reaches the recovery band; otherwise
+     find a valid cut point and summarize the projected history
   4. Extract file operations for context preservation
 
   Repeated compaction summarizes only the active retained history and carries the
@@ -1131,14 +1133,39 @@ defmodule CodingAgent.Compaction do
     if aborted?(signal) do
       {:error, :aborted}
     else
-      do_compact(session, model, keep_recent_tokens, opts, signal)
+      {pruned_session, replacements} = prune_tool_results(session)
+      target = Keyword.get(opts, :recovery_target)
+
+      tokens_after =
+        pruned_session
+        |> SessionManager.build_session_context()
+        |> Map.fetch!(:messages)
+        |> estimate_context_tokens()
+
+      if map_size(replacements) > 0 and is_integer(target) and
+           tokens_after + overhead <= target and
+           is_nil(Keyword.get(opts, :keep_recent_messages)) do
+        {:ok,
+         %{
+           pruned: replacements,
+           tokens_before:
+             estimate_context_tokens(SessionManager.build_session_context(session).messages),
+           tokens_after: tokens_after,
+           summary: "",
+           first_kept_entry_id: nil,
+           details: %{}
+         }}
+      else
+        opts = Keyword.put(opts, :pruned, replacements)
+        do_compact(pruned_session, model, keep_recent_tokens, opts, signal)
+      end
     end
   end
 
   defp do_compact(session, model, keep_recent_tokens, opts, signal) do
     # Get the current branch (path from root to current leaf)
     # Compaction should only consider entries on this branch, not other branches
-    {branch, previous_compaction} = session |> SessionManager.get_branch() |> active_branch()
+    {branch, previous_compaction} = session |> SessionManager.pruned_branch() |> active_branch()
 
     # Get all messages from current branch for token estimation
     context = SessionManager.build_session_context(session)
@@ -1173,6 +1200,7 @@ defmodule CodingAgent.Compaction do
       else
         {:ok,
          %{
+           pruned: Keyword.get(opts, :pruned, %{}),
            summary: summary,
            first_kept_entry_id: first_kept_id,
            tokens_before: tokens_before,
@@ -1183,6 +1211,53 @@ defmodule CodingAgent.Compaction do
       [] -> {:error, :cannot_compact}
       error -> error
     end
+  end
+
+  @doc """
+  Spill old tool bodies before summarization, retaining call/result envelopes.
+  Protects the newest 40,000 estimated tokens and skips bodies under 50 tokens,
+  following omp's compaction policy. Failed spills leave the original intact.
+  """
+  def prune_tool_results(session) do
+    {branch, _previous} = session |> SessionManager.pruned_branch() |> active_branch()
+
+    {replacements, _tokens} =
+      branch
+      |> Enum.reverse()
+      |> Enum.reduce({%{}, 0}, fn entry, {acc, tokens} ->
+        message = entry.message
+        size = if is_map(message), do: estimate_message_tokens(message), else: 0
+        role = if is_map(message), do: Map.get(message, "role") || Map.get(message, :role)
+
+        if tokens >= 40_000 and size >= 50 and role in ["tool_result", :tool_result] do
+          content = Map.get(message, "content") || Map.get(message, :content)
+
+          case CodingAgent.Artifacts.spill(Jason.encode!(content), session.header.cwd,
+                 session_id: session.header.id
+               ) do
+            {:ok, uri} ->
+              key = if Map.has_key?(message, "content"), do: "content", else: :content
+
+              body = [
+                %{
+                  "type" => "text",
+                  "text" =>
+                    "[Old tool output pruned; untrusted data] #{uri} (JSON content blocks)"
+                }
+              ]
+
+              {Map.put(acc, entry.id, Map.put(message, key, body)), tokens + size}
+
+            {:error, _} ->
+              {acc, tokens + size}
+          end
+        else
+          {acc, tokens + size}
+        end
+      end)
+
+    {SessionManager.append_pruning(%{session | file_path: nil, append_device: nil}, replacements),
+     replacements}
   end
 
   # Never summarize the discarded prefix again. The latest summary is the

@@ -677,6 +677,34 @@ defmodule CodingAgent.SessionManager do
     append_entry(session, entry)
   end
 
+  @doc false
+  def append_pruning(session, replacements) when map_size(replacements) == 0, do: session
+
+  def append_pruning(session, replacements) do
+    append_entry(session, SessionEntry.custom("lemon.tool_pruning", replacements))
+  end
+
+  @doc false
+  def pruned_branch(session, leaf_id \\ nil) do
+    branch = get_branch(session, leaf_id)
+
+    replacements =
+      Enum.reduce(branch, %{}, fn
+        %{type: :custom, custom_type: "lemon.tool_pruning", data: data}, acc ->
+          Map.merge(acc, data)
+
+        _, acc ->
+          acc
+      end)
+
+    Enum.map(branch, fn entry ->
+      case Map.fetch(replacements, entry.id) do
+        {:ok, message} -> %{entry | message: message}
+        :error -> entry
+      end
+    end)
+  end
+
   @doc """
   Append a label entry bookmarking `target_id`. A nil or empty label clears it.
   The entry follows the current leaf like any other entry; labels never change
@@ -825,7 +853,7 @@ defmodule CodingAgent.SessionManager do
           model: %{provider: String.t(), model_id: String.t()} | nil
         }
   def build_session_context(%Session{} = session, leaf_id \\ nil) do
-    branch = get_branch(session, leaf_id)
+    branch = pruned_branch(session, leaf_id)
 
     # Find latest compaction entry in path
     {compaction_entry, compaction_index} =
