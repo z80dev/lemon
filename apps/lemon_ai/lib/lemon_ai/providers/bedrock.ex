@@ -276,7 +276,7 @@ defmodule LemonAi.Providers.Bedrock do
   end
 
   defp build_system_prompt(system_prompt, model) do
-    blocks = [%{"text" => sanitize_surrogates(system_prompt)}]
+    blocks = [%{"text" => sanitize_surrogates(LemonAi.SystemPrompt.text(system_prompt))}]
 
     # Add cache point for supported Claude models
     if supports_prompt_caching?(model) do
@@ -689,7 +689,8 @@ defmodule LemonAi.Providers.Bedrock do
       converted_message_count: length(messages),
       converted_message_summary: summarize_messages(messages),
       tools_count: length(context.tools || []),
-      system_prompt_bytes: HttpTrace.summarize_text_size(context.system_prompt)
+      system_prompt_bytes:
+        HttpTrace.summarize_text_size(LemonAi.SystemPrompt.text(context.system_prompt))
     }
   end
 

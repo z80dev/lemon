@@ -113,7 +113,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
         [
           %{
             "role" => role,
-            "content" => sanitize_surrogates(context.system_prompt)
+            "content" => sanitize_surrogates(LemonAi.SystemPrompt.text(context.system_prompt))
           }
           | messages
         ]

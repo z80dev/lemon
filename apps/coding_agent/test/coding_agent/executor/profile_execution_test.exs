@@ -402,7 +402,12 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
 
       stream_fn = fn model, context, _options ->
         {:ok, stream} = LemonAi.EventStream.start_link()
-        send(parent, {:profile_context, model.id, context.system_prompt, stream})
+
+        send(
+          parent,
+          {:profile_context, model.id, LemonAi.SystemPrompt.text(context.system_prompt), stream}
+        )
+
         {:ok, stream}
       end
 

@@ -160,6 +160,8 @@ defmodule CodingAgent.Session do
     :system_prompt,
     :base_system_prompt,
     :prompt_sections,
+    :journaled_prompt,
+    :response_system_prompt,
     :context_overhead,
     :base_tools,
     :prompt_environment,
@@ -240,6 +242,8 @@ defmodule CodingAgent.Session do
           system_prompt: String.t(),
           base_system_prompt: String.t(),
           prompt_sections: [CodingAgent.SystemPrompt.section()],
+          journaled_prompt: map() | nil,
+          response_system_prompt: LemonAi.SystemPrompt.t() | nil,
           context_overhead: map() | nil,
           base_tools: [AgentTool.t()],
           prompt_environment: String.t() | nil,
@@ -1186,7 +1190,7 @@ defmodule CodingAgent.Session do
     if state.is_streaming do
       :ok =
         LemonAgent.Agent.steer(state.agent, outgoing,
-          system_prompt: state.system_prompt,
+          system_prompt: CodingAgent.Session.PromptJournal.blocks(state),
           preempt: false
         )
 
@@ -1220,7 +1224,7 @@ defmodule CodingAgent.Session do
     if state.is_streaming do
       :ok =
         LemonAgent.Agent.steer(state.agent, outgoing,
-          system_prompt: state.system_prompt,
+          system_prompt: CodingAgent.Session.PromptJournal.blocks(state),
           preempt: false
         )
 
@@ -1611,7 +1615,11 @@ defmodule CodingAgent.Session do
 
     outgoing = attach_recalled_context(message, recalled)
 
-    :ok = LemonAgent.Agent.redirect(state.agent, outgoing, system_prompt: state.system_prompt)
+    :ok =
+      LemonAgent.Agent.redirect(state.agent, outgoing,
+        system_prompt: CodingAgent.Session.PromptJournal.blocks(state)
+      )
+
     notify_steering_changed()
     queue = :queue.in(message, state.steering_queue)
 
@@ -1629,7 +1637,10 @@ defmodule CodingAgent.Session do
 
     outgoing = attach_recalled_context(message, recalled)
 
-    LemonAgent.Agent.follow_up(state.agent, outgoing, system_prompt: state.system_prompt)
+    LemonAgent.Agent.follow_up(state.agent, outgoing,
+      system_prompt: CodingAgent.Session.PromptJournal.blocks(state)
+    )
+
     queue = :queue.in(message, state.follow_up_queue)
 
     {:noreply, %{state | follow_up_queue: queue}}
@@ -1693,7 +1704,7 @@ defmodule CodingAgent.Session do
 
     :ok =
       LemonAgent.Agent.steer(state.agent, attach_recalled_context(message, recalled),
-        system_prompt: state.system_prompt,
+        system_prompt: CodingAgent.Session.PromptJournal.blocks(state),
         preempt: preempt
       )
 
@@ -1742,6 +1753,10 @@ defmodule CodingAgent.Session do
 
         {:noreply, CompactionManager.clear_overflow_recovery_state_on_terminal(event, new_state)}
     end
+  end
+
+  def handle_info({:agent_system_prompt, agent, prompt}, %{agent: agent} = state) do
+    {:noreply, %{state | response_system_prompt: prompt}}
   end
 
   def handle_info({:agent_event, {:message_end, _message} = raw_event}, state) do
@@ -1945,7 +1960,12 @@ defmodule CodingAgent.Session do
         state
       ) do
     if state.pending_prompt_timer_ref do
-      :ok = LemonAgent.Agent.set_system_prompt(state.agent, system_prompt)
+      :ok =
+        LemonAgent.Agent.set_system_prompt(
+          state.agent,
+          CodingAgent.Session.PromptJournal.blocks(state, system_prompt)
+        )
+
       # Send to agent (user message will be persisted on :message_end event)
       _ = LemonAgent.Agent.prompt(state.agent, user_message)
       {:noreply, %{state | pending_prompt_timer_ref: nil, system_prompt: system_prompt}}
@@ -1957,7 +1977,12 @@ defmodule CodingAgent.Session do
 
   def handle_info({:dispatch_prompt, %CustomMessage{} = message, system_prompt}, state) do
     if state.pending_prompt_timer_ref do
-      :ok = LemonAgent.Agent.set_system_prompt(state.agent, system_prompt)
+      :ok =
+        LemonAgent.Agent.set_system_prompt(
+          state.agent,
+          CodingAgent.Session.PromptJournal.blocks(state, system_prompt)
+        )
+
       _ = LemonAgent.Agent.prompt(state.agent, message)
       {:noreply, %{state | pending_prompt_timer_ref: nil, system_prompt: system_prompt}}
     else
@@ -2461,6 +2486,14 @@ defmodule CodingAgent.Session do
   end
 
   @spec refresh_system_prompt(t(), String.t(), [ContextRegistry.section()]) :: t()
+  defp refresh_system_prompt(
+         %{journaled_prompt: prompt} = state,
+         _skill_context,
+         _system_sections
+       )
+       when not is_nil(prompt),
+       do: Planning.refresh(state)
+
   defp refresh_system_prompt(state, skill_context, system_sections) do
     case PromptComposer.maybe_refresh_system_prompt(
            state.config_cwd || state.cwd,
@@ -2892,6 +2925,7 @@ defmodule CodingAgent.Session do
         model: model,
         thinking_level: context.thinking_level
     }
+    |> CodingAgent.Session.PromptJournal.restore_state()
     |> BranchState.restore()
   end
 end

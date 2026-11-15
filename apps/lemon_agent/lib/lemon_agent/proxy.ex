@@ -622,7 +622,11 @@ defmodule LemonAgent.Proxy do
 
   defp encode_context(context) do
     %{
-      systemPrompt: context.system_prompt,
+      systemPrompt:
+        if(is_list(context.system_prompt),
+          do: LemonAi.SystemPrompt.text(context.system_prompt),
+          else: context.system_prompt
+        ),
       messages: Enum.map(context.messages, &encode_message/1),
       tools: Enum.map(context.tools, &encode_tool/1)
     }

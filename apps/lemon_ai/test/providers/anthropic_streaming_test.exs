@@ -285,6 +285,133 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
     assert {:error, _} = EventStream.result(stream, 1000)
   end
 
+  test "worktrees share the same ordered static prefix breakpoint with API keys and OAuth" do
+    owner = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(owner, {:request_body, Jason.decode!(raw)})
+      Plug.Conn.send_resp(conn, 400, "bad request")
+    end)
+
+    for api_key <- ["test-key", "sk-ant-oat01-test-token"],
+        retention <- [:short, :long] do
+      bodies =
+        for worktree <- ["/worktrees/alpha", "/worktrees/beta"] do
+          blocks =
+            [%{text: "You are Hermes Agent from Nous Research.\n\n", directory_derived: false}] ++
+              Enum.map(1..8, fn index ->
+                %{text: "Static section #{index}\n\n", directory_derived: false}
+              end) ++
+              [
+                %{text: "Directory: #{worktree}\n\n", directory_derived: true},
+                %{text: "Later static text must not move the boundary.", directory_derived: false}
+              ]
+
+          context =
+            Context.new(
+              system_prompt: blocks,
+              messages: [%UserMessage{content: "First"}, %UserMessage{content: "Last"}],
+              tools: [%Tool{name: "lookup", parameters: %{}}]
+            )
+
+          {:ok, stream} =
+            Anthropic.stream(model(), context, %StreamOptions{
+              api_key: api_key,
+              provider_options: %{anthropic: %{cache_retention: retention}}
+            })
+
+          assert_receive {:request_body, body}, 1000
+          assert {:error, _} = EventStream.result(stream, 1000)
+          body
+        end
+
+      [first, second] = bodies
+      prefix_size = if api_key == "test-key", do: 9, else: 10
+      {first_prefix, first_footer} = Enum.split(first["system"], prefix_size)
+      {second_prefix, second_footer} = Enum.split(second["system"], prefix_size)
+      assert Jason.encode!(first_prefix) == Jason.encode!(second_prefix)
+      refute first_footer == second_footer
+
+      expected_cache =
+        if retention == :long,
+          do: %{"type" => "ephemeral", "ttl" => "1h"},
+          else: %{"type" => "ephemeral"}
+
+      assert List.last(first_prefix)["text"] == "Static section 8\n\n"
+      assert List.last(first_prefix)["cache_control"] == expected_cache
+      refute Enum.any?(Enum.drop(first_prefix, -1), &Map.has_key?(&1, "cache_control"))
+      refute Enum.any?(first_footer ++ second_footer, &Map.has_key?(&1, "cache_control"))
+
+      for body <- bodies do
+        # One system boundary plus the last user message: never one per block.
+        assert length(Regex.scan(~r/"cache_control":/, Jason.encode!(body))) == 2
+      end
+
+      if api_key != "test-key" do
+        assert Enum.at(first_prefix, 1)["text"] ==
+                 "You are Claude Code from Anthropic.\n\n"
+      end
+    end
+  end
+
+  test "ordered prompt edge boundaries and disabled caching never mark directory text" do
+    owner = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(owner, {:request_body, Jason.decode!(raw)})
+      Plug.Conn.send_resp(conn, 400, "bad request")
+    end)
+
+    cases = [
+      {[], nil},
+      {[%{text: " \n", directory_derived: false}], nil},
+      {[%{text: "Directory only", directory_derived: true}], nil},
+      {[%{text: "Static only", directory_derived: false}], "Static only"},
+      {[
+         %{text: "Static", directory_derived: false},
+         %{text: "", directory_derived: true},
+         %{text: "After directory boundary", directory_derived: false}
+       ], "Static"}
+    ]
+
+    for {blocks, cached_text} <- cases,
+        retention <- [:short, :none],
+        api_key <- ["test-key", "sk-ant-oat01-test-token"] do
+      {:ok, stream} =
+        Anthropic.stream(
+          model(),
+          Context.new(system_prompt: blocks, messages: [%UserMessage{content: "Hi"}]),
+          %StreamOptions{
+            api_key: api_key,
+            provider_options: %{anthropic: %{cache_retention: retention}}
+          }
+        )
+
+      assert_receive {:request_body, body}, 1000
+      assert {:error, _} = EventStream.result(stream, 1000)
+      system = Map.get(body, "system", [])
+      cached = Enum.filter(system, &Map.has_key?(&1, "cache_control"))
+
+      cached_text =
+        if cached_text == nil and api_key != "test-key" do
+          "You are Claude Code, Anthropic's official CLI for Claude."
+        else
+          cached_text
+        end
+
+      assert Enum.map(cached, & &1["text"]) ==
+               if(retention == :short && cached_text != nil, do: [cached_text], else: [])
+
+      refute Enum.any?(system, &(String.trim(&1["text"]) == ""))
+
+      if retention == :none do
+        refute Jason.encode!(body) =~ "cache_control"
+      end
+    end
+  end
+
   test "kimi model reports provider-specific missing key guidance" do
     with_env(
       %{

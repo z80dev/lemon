@@ -978,6 +978,7 @@ defmodule LemonAgent.Loop do
     context = %{context | messages: context.messages ++ [message]}
     new_messages = new_messages ++ [message]
 
+    LemonAgent.Loop.Streaming.record_system_prompt(context, config, stream)
     EventStream.push!(stream, {:message_start, message})
     EventStream.push!(stream, {:message_end, message})
     EventStream.complete(stream, new_messages)
@@ -988,7 +989,8 @@ defmodule LemonAgent.Loop do
   defp apply_queued_system_prompt(context, pending_messages) do
     {messages, latest_system_prompt} =
       Enum.map_reduce(pending_messages, nil, fn
-        %{message: message, system_prompt: prompt}, _latest when is_binary(prompt) ->
+        %{message: message, system_prompt: prompt}, _latest
+        when is_binary(prompt) or is_list(prompt) ->
           {message, prompt}
 
         %{message: message}, latest ->
@@ -1000,8 +1002,11 @@ defmodule LemonAgent.Loop do
 
     context =
       case latest_system_prompt do
-        prompt when is_binary(prompt) and prompt != "" -> %{context | system_prompt: prompt}
-        _ -> context
+        prompt when (is_binary(prompt) and prompt != "") or is_list(prompt) ->
+          %{context | system_prompt: prompt}
+
+        _ ->
+          context
       end
 
     {context, messages}

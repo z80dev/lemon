@@ -848,6 +848,7 @@ export interface SessionsContextResult {
 	source: "usage" | "usage+estimate" | "estimate";
 	estimatedTokens: number | undefined;
 	autoCompaction: ContextAutoCompaction | null;
+	promptCache?: { explanation: string };
 	categories: ContextCategoryUsage[];
 	/** Tokens in categories this client does not know, so the shown rows stay honest. */
 	otherTokens: number;

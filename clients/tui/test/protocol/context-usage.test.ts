@@ -27,6 +27,17 @@ afterEach(() => {
 const SOCKET = { minBackoffMs: 10, maxBackoffMs: 40, jitter: 0, minWatchdogWindowMs: 0 };
 
 describe("parseSessionsContext", () => {
+	test("retains bounded prompt digest cache explanations", () => {
+		const raw = {
+			...reportedContextFixture("s1"),
+			promptCache: { explanation: "Prompt digest changed;\ncache prefix may miss." },
+		};
+		expect(parseSessionsContext(raw).promptCache?.explanation).toBe(
+			"Prompt digest changed; cache prefix may miss.",
+		);
+		expect(parseSessionsContext(reportedContextFixture("s1")).promptCache).toBeUndefined();
+	});
+
 	test("reads the contract shape, in fixed category order, summing to the total", () => {
 		const usage = parseSessionsContext(reportedContextFixture("s1"));
 		expect(usage.sessionKey).toBe("s1");

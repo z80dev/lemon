@@ -190,13 +190,19 @@ defmodule LemonAi.Types do
   # ============================================================================
 
   defmodule Context do
-    @moduledoc "Conversation context containing messages, tools, and system prompt"
+    @moduledoc """
+    Conversation context containing messages, tools, and a system prompt.
+
+    `system_prompt` accepts a binary or ordered `t:LemonAi.SystemPrompt.block/0`
+    maps. Block text includes its own separators; mark directory-derived blocks
+    so providers with prefix caching can keep them outside the shared prefix.
+    """
     @type message ::
             LemonAi.Types.UserMessage.t()
             | LemonAi.Types.AssistantMessage.t()
             | LemonAi.Types.ToolResultMessage.t()
     @type t :: %__MODULE__{
-            system_prompt: String.t() | nil,
+            system_prompt: LemonAi.SystemPrompt.t(),
             messages: [message()],
             tools: [LemonAi.Types.Tool.t()]
           }

@@ -581,7 +581,7 @@ defmodule CodingAgent.Compaction do
   """
   @spec estimate_request_context_tokens(
           [Messages.message()],
-          String.t() | nil,
+          LemonAi.SystemPrompt.t(),
           list(),
           integer() | nil
         ) ::
@@ -605,7 +605,7 @@ defmodule CodingAgent.Compaction do
   """
   @spec request_context_usage(
           [Messages.message()],
-          String.t() | nil,
+          LemonAi.SystemPrompt.t(),
           list(),
           integer() | nil
         ) :: %{tokens: non_neg_integer(), source: String.t()}
@@ -632,7 +632,8 @@ defmodule CodingAgent.Compaction do
 
     tokens =
       if source == "estimate" do
-        tokens + estimate_text_tokens(system_prompt) + estimate_tool_definitions_tokens(tools)
+        tokens + estimate_text_tokens(LemonAi.SystemPrompt.text(system_prompt)) +
+          estimate_tool_definitions_tokens(tools)
       else
         tokens
       end
@@ -642,7 +643,9 @@ defmodule CodingAgent.Compaction do
 
   def request_context_usage(_messages, system_prompt, tools, _usage_after) do
     %{
-      tokens: estimate_text_tokens(system_prompt) + estimate_tool_definitions_tokens(tools),
+      tokens:
+        estimate_text_tokens(LemonAi.SystemPrompt.text(system_prompt)) +
+          estimate_tool_definitions_tokens(tools),
       source: "estimate"
     }
   end

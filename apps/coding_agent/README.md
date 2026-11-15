@@ -858,6 +858,24 @@ working directory. Automatic resume refuses a missing or corrupt mapped journal
 instead of replacing that session's history with a fresh conversation. Unbound
 automatic native tokens retain their fresh-session fallback.
 
+Each assistant message also stores a versioned `system-prompt-digest` snapshot in
+the same JSONL append: the digest, exact ordered prompt blocks and resume metadata.
+The digest includes block order and directory-derived flags, not just flattened
+text. Resume and branch restoration adopt a rebuilt prompt only when its digest
+matches the selected branch's latest reply; otherwise they retain the journaled
+prompt, including its cache boundary, through subsequent turns. Explicit extension
+reload opts back into prompt recomposition; plan-mode changes still take effect.
+Legacy replies without a snapshot rebuild normally. Malformed snapshots or digests
+that do not match their saved blocks fail rather than silently discard history.
+
+Native requests send shared instruction blocks before one directory-derived footer.
+Built-in identity/coding/runtime/memory guidance and explicit custom instructions
+form the shared prefix; skills, contributed/bootstrap context, templates, project
+instructions, rules and environment belong to the footer. Anthropic places the
+system cache breakpoint before that footer; other providers concatenate the exact
+block text without adding separators. Journal files now include full system-prompt
+text and should be treated as private conversation data, not diagnostic output.
+
 `SessionManager.list_sessions/1` lists most recently active sessions first.
 Each cwd's `.index.sqlite3` caches journal header fields, the latest session-info
 title and activity time. Appends, snapshots and turn checkpoints update it;
@@ -990,6 +1008,13 @@ overhead profile (counts and labels, no text) keyed by native session id, so
 `ControlPlaneProvider.session_context_usage/2` can answer for stopped sessions from
 durable history; without a profile, a measured total reports the overhead as
 unattributed and an estimate-only cold read is unavailable.
+
+The report's `prompt_cache` compares current and previous reply digests. `/context`
+explains changed bytes or block boundaries as a possible cache-miss cause and
+identifies when resume retained a journaled prompt instead of a changed rebuild.
+Unchanged digests do not guarantee a provider cache hit: expiry, credentials and
+other request content still matter. Reports expose digests and bounded explanations,
+never the saved prompt text.
 
 If the live owner retires between registry lookup and the context read, the query
 uses the same durable-history path. Timeouts and unexpected owner crashes remain

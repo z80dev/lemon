@@ -146,6 +146,19 @@ All execution emits structured events via `LemonAgent.EventStream`:
 
 The `{:agent_end, new_messages}` event contains only messages created during the current run, not the full conversation history.
 
+System prompts accept either a string or ordered
+`%{text: binary, directory_derived: boolean}` blocks. Queued steering/follow-up
+prompts preserve those blocks; request-local continuation guidance appends a
+directory-derived block without changing the shared prefix. Use
+`LemonAi.SystemPrompt.text/1` when a consumer needs the original flattened bytes.
+This is an additive published-package API change.
+
+Native journal owners may pass `system_prompt_observer: pid` to `Agent.start_link/1`.
+That owner receives `{:agent_system_prompt, agent, prompt}` immediately before each
+assistant `:message_end`, including partial/synthetic completions. The prompt comes
+from the actual response context rather than mutable queued state. This is an
+opt-in content-bearing notification: ordinary event subscribers never receive it.
+
 ### Cooperative Abort
 
 `LemonAgent.AbortSignal` uses an atomics reference with separate abort and redirect slots. Abort is monotonic; references are garbage collected when no longer retained, without explicit cleanup. Blocking waiters subscribe idempotently per process through the duplicate-key `LemonAgent.AbortSignal.Registry`, receive `{:lemon_abort, signal, :abort \| :redirect}` notifications, and unsubscribe when done. Tools check `AbortSignal.aborted?(signal)` in their execute functions. The loop checks before each LLM call, during retry backoff, while waiting for idle provider streams, and during tool execution. On cancellation, supervised tool workers get up to 250ms to observe the signal and finish resource cleanup before remaining workers are terminated. The abort signal remains set throughout and after this drain. Cancellation also stops provider streams, cancels tool timers, and leaves queued steering and follow-up messages available for the next run. Tools owning external processes must additionally clean them up on worker death. Incomplete assistant tool calls are removed from canceled model responses so continuing never sends an unpaired tool transcript.

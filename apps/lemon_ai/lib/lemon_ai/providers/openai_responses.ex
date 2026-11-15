@@ -525,7 +525,8 @@ defmodule LemonAi.Providers.OpenAIResponses do
       input_items: count_input_items(Map.get(body, "input")),
       input_summary: summarize_input(Map.get(body, "input")),
       tools_count: length(context.tools || []),
-      system_prompt_bytes: HttpTrace.summarize_text_size(context.system_prompt),
+      system_prompt_bytes:
+        HttpTrace.summarize_text_size(LemonAi.SystemPrompt.text(context.system_prompt)),
       max_output_tokens: Map.get(body, "max_output_tokens"),
       temperature: Map.get(body, "temperature"),
       service_tier: Map.get(body, "service_tier")
