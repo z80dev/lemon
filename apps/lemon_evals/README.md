@@ -409,6 +409,192 @@ when making a disclosure rollout decision; no paid run or promotion is
 authorized by this documentation. No paired-runner refactor is included here.
 
 
+### External benchmarks: Terminal-Bench and omp edit fixtures (#544, #545)
+
+These opt-in lanes reuse the arena images, model routing and
+`kimi_auth_proxy.ts`; they never run in normal CI. They do **not** replace
+the arena or #107. No paid outcomes, container credential audit, or benchmark
+ranking has been recorded yet. Publishing a bounded run's sanitized reports
+and exact tested revisions on #544/#545 remains an operator action.
+
+The adapters were researched against
+[Harbor `ec6aeab7fe0e`](https://github.com/laude-institute/harbor/tree/ec6aeab7fe0eb51df52b4e72c524daf5ea9cc5f4)
+(`BaseInstalledAgent.install/configure/run/populate_context_post_run`) and
+[omp `7c49c11aa5bb`](https://github.com/can1357/oh-my-pi/tree/7c49c11aa5bbaf3f418406583096168ad5b8c6dc)
+(v18.20.2). Pin these rather than silently tracking their moving APIs.
+Python 3.11+, Docker, the built arena images described above, and an already
+authenticated host proxy are prerequisites. For Terminal-Bench also install
+the pinned Harbor in an isolated environment, for example:
+
+```bash
+uv tool install --python 3.13 \
+  'git+https://github.com/laude-institute/harbor.git@ec6aeab7fe0eb51df52b4e72c524daf5ea9cc5f4'
+```
+
+Keep artifacts and upstream checkouts outside Lemon. Operator-selected paths
+below must not contain credentials in their names. Build `lemon-arena-lemon`
+from the exact revision you pass as `LEMON_REVISION`, and build
+`lemon-arena-omp` with `OMP_VERSION=18.20.2` (or explicitly record the different
+omp revision/version you actually built). Export fresh Linux bundles from
+those existing images; this copies neither the operator's HOME nor provider
+credentials:
+
+```bash
+export BENCH=/OPERATOR/PATH/external-bench
+export LEMON_REVISION="$(git rev-parse HEAD)"
+export OMP_REVISION=7c49c11aa5bbaf3f418406583096168ad5b8c6dc
+mkdir -p "$BENCH"
+docker run --rm --entrypoint tar lemon-arena-lemon \
+  -czf - -C /opt/lemon . > "$BENCH/lemon.tar.gz"
+docker run --rm --entrypoint tar lemon-arena-omp \
+  -czf - -C /opt/bun . > "$BENCH/omp.tar.gz"
+# Start the proxy as described above, with the same ARENA_PROXY_SECRET.
+```
+
+#### Terminal-Bench through Harbor
+
+From the umbrella root, this is a bounded **plan-only** invocation (two tasks,
+one model, one repetition, both arms). Add `--live` only after explicit paid-run
+authorization, and choose a **fresh** output directory for that live run:
+
+```bash
+python3 apps/lemon_evals/priv/coding_arena/terminal_bench.py run \
+  --output-dir "$BENCH/tb-plan" --proxy-log "$BENCH/proxy.jsonl" \
+  --lemon-bundle "$BENCH/lemon.tar.gz" --omp-bundle "$BENCH/omp.tar.gz" \
+  --lemon-revision "$LEMON_REVISION" --omp-revision "$OMP_REVISION" \
+  --models k3.1-pro --effort high --deadline 600 \
+  --dataset terminal-bench@2.0 --max-tasks 2 --repetitions 1
+```
+
+`--tasks NAME,NAME` restricts the task selection; `--max-tasks` is always a
+positive upper bound. Each model/repetition is a separate Harbor job with both
+arms and one attempt, so pairs cannot accidentally match Harbor's randomly
+named repetitions. No uncertain or failed trial is automatically retried.
+The Lemon adapter uploads the release, installs Linux runtime dependencies,
+starts a daemon inside the task container, and invokes
+`lemon -p --output json --max-time N`. It preserves the task's WORKDIR instead
+of assuming `/work`. omp uses the same wire model, effort and deadline,
+with every model role pinned. Both processes receive a clean allowlisted
+environment and a fresh HOME; the task receives only its signed per-trial
+proxy token plus container-local Lemon operator/encryption keys. The signing
+secret stays in Harbor's host process. Harbor credential/env forwarding and
+`skip_install` are rejected. Bundles must match the task image's architecture,
+glibc and OpenSSL; the installer currently targets Debian/Ubuntu Linux tasks.
+
+`--proxy-url` defaults to `http://host.docker.internal:18787` (Docker Desktop).
+On Linux select a host gateway IP/name reachable from the task container;
+the adapter adds that host to Harbor's agent-phase network allowlist. Do not
+mount the operator's HOME or inject provider credentials with Harbor flags.
+For the first authorized run, `--keep-containers` retains private containers
+for inspection: inspect their environment, `/tmp/lemon-arena-home`, installed
+bundles and process environment, and verify that every provider bearer is a
+trial token, not a real credential. Remove those containers manually after
+the audit. Do not publish that raw inspection or raw Harbor logs.
+
+Regenerate the sanitized JSON/Markdown report without another model call:
+
+```bash
+python3 apps/lemon_evals/priv/coding_arena/terminal_bench.py report \
+  --output-dir "$BENCH/tb-live" --proxy-log "$BENCH/proxy.jsonl"
+```
+
+Reports give per-model success rates and 95% Wilson intervals, same-task /
+repetition / model / effort / deadline exact two-sided McNemar tests, all
+attempted failures, turns, failed tools, wall time, and proxy input/output/
+cache-read tokens. `wire_input_tokens` is **uncached** input; add the separately
+reported cache reads only when that counter is known. Missing, partial or
+interrupted wire usage remains null, never a CLI fallback or an inferred zero.
+Harbor verifier rewards, not agent claims, determine task success. The report
+records operator-attested Lemon/omp revisions, bundle SHA-256 and the pinned
+Harbor API revision; retain Harbor's private task checksums/configs alongside
+it for dataset provenance. All attempts/artifacts stay in the external run
+directory. A timeout does not prove that upstream billing has stopped: set
+an account/provider budget independently.
+
+#### omp edit fixtures through Lemon
+
+Prepare the pinned upstream checkout and its verifier dependencies outside
+Lemon (no fixture-generation step is needed):
+
+```bash
+export OMP_SOURCE="$BENCH/oh-my-pi"
+git clone https://github.com/can1357/oh-my-pi.git "$OMP_SOURCE"
+git -C "$OMP_SOURCE" checkout "$OMP_REVISION"
+(cd "$OMP_SOURCE" && bun install --frozen-lockfile)
+```
+
+One command re-runs the fixture suite. As with Harbor, omit `--live` for a
+plan and select a fresh output directory when authorizing a live run:
+
+```bash
+python3 apps/lemon_evals/priv/coding_arena/edit_benchmark.py \
+  --omp-source "$OMP_SOURCE" --output-dir "$BENCH/edit-plan" \
+  --proxy-log "$BENCH/proxy.jsonl" \
+  --lemon-revision "$LEMON_REVISION" --omp-revision "$OMP_REVISION" \
+  --models k3.1-pro --effort high --deadline 600 \
+  --lemon-tools edit,patch --limit 2 --repetitions 1
+```
+
+The default bound is eight attempts (two fixtures × two Lemon tool treatments
+× two arms). Increase `--limit` explicitly for the full suite; `--tasks` selects
+fixture IDs. Both models and treatment groups are seeded/shuffled, and the
+first arm alternates. The runner never retries a whole trial. `--report-only`
+with the same output/source/revision/log flags rebuilds the report offline.
+
+Every adaptation is intentional:
+
+1. The checked-in upstream `fixtures.tar.gz` is extracted without regenerating
+   mutations. `input/`, `expected/`, `prompt.md` and metadata retain their
+   upstream layout; only `input/` enters each fresh arena container.
+2. The upstream trimmed prompt is unchanged; both arms get the same appended
+   input-file list and instruction to use only supplied read/editing tools.
+   Each task is a fresh full agent session, not an in-process omp client.
+3. Separate Lemon treatments permit only `read,edit` or `read,patch`; omp's
+   reference permits `read,edit`. Shell/write/delegation escape hatches are
+   excluded. The report labels treatments and records every completed edit/
+   patch call, including recovered failures. Neither tool implementation or
+   disclosure defaults is tuned for the fixtures.
+4. Lemon uses production `lemon -p --output stream-json` so tool results and
+   identities are observable; Harbor uses plain JSON. Repeated streamed
+   completion IDs are deduplicated. Projected/clipped errors that cannot be
+   classified stay `unclassified_tool_error`; missing target information makes
+   retry counts unknown rather than guessed.
+5. Upstream at the pinned revision is **not byte-exact**: `verify.ts` applies
+   Prettier, line-ending/whitespace normalization and code blank-line handling.
+   `edit_verify.ts` invokes that verifier unmodified as the success criterion,
+   with dependencies preinstalled. A separate `byte_exact` result preserves
+   the stricter raw-byte check, including unexpected/missing files. Neither
+   Python nor Lemon approximates upstream's formatter. Nonregular/symlink
+   output is rejected before the host verifier sees it.
+6. A patch call, even with several hunks, counts as one edit attempt. A retry
+   is a subsequent same-tool/same-target call after a rejected call; another
+   target or a later successful edit is not a retry. Reports include attempts,
+   observed rejected-call rate, retries/edit, success and strict-byte results
+   per model/treatment/arm, plus failure-class counts and revision-bound links
+   to `edit.ex`/`patch.ex`. Forwarded anchored/shared validation failures are
+   marked **propagation**, not falsely attributed to an exact producer.
+   omp errors remain external-reference errors, never assigned a Lemon site.
+7. Fixture archive SHA-256, upstream fixture/verifier revision, both
+   operator-attested runtime revisions and Docker image IDs bind the evidence.
+   Private stdout/stderr, output files and verifier diffs remain outside the
+   checkout; sanitized reports contain no paths, prompts or raw tool results.
+
+Offline regression tests require only Python and synthetic local fixtures:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s apps/lemon_evals/priv -p 'test_external_bench_*.py' -v
+```
+
+They cover command/model/effort/deadline construction, credential isolation,
+Harbor report parsing, missing usage, Wilson/exact McNemar, fixture extraction,
+error-site mapping, retry accounting, and a scripted mock-model smoke that
+rejects one edit then recovers through each tool treatment and both arms.
+The smoke mocks the transport/tools and the upstream formatter; it is not
+evidence that the real Lemon tools, Docker images or paid Terminal-Bench tasks
+have run. Those end-to-end/live criteria remain pending explicit authorization.
+
+
 ### Profiling Lemon's per-turn token consumers
 
 Use a dedicated source-development daemon, never an existing user's daemon.
