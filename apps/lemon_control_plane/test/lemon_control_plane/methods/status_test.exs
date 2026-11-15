@@ -204,7 +204,7 @@ defmodule LemonControlPlane.Methods.StatusTest do
     refute Jason.encode!(row) =~ "/private"
   end
 
-  test "provider circuit status never starts breakers and bounds unresponsive reads" do
+  test "provider circuit status never starts breakers and reads snapshots while breakers are suspended" do
     provider = "status-circuit-#{System.unique_integer([:positive])}"
 
     config = %{
@@ -218,6 +218,7 @@ defmodule LemonControlPlane.Methods.StatusTest do
 
     assert row.()["circuit"]["state"] == "not_started"
     assert LemonAi.CircuitBreaker.peek(provider) == :not_started
+    assert Registry.lookup(LemonAi.CircuitBreakerRegistry, provider) == []
 
     pid =
       start_supervised!(
@@ -240,17 +241,27 @@ defmodule LemonControlPlane.Methods.StatusTest do
 
     try do
       assert row.()["circuit"] == %{
-               "state" => "unknown",
-               "failureCount" => nil,
-               "timeUntilRecoveryMs" => nil
+               "state" => "open",
+               "failureCount" => 1,
+               "timeUntilRecoveryMs" => 23_000
              }
     after
       :sys.resume(pid)
     end
+
+    stop_supervised!(LemonAi.CircuitBreaker)
+
+    assert row.()["circuit"] == %{
+             "state" => "not_started",
+             "failureCount" => nil,
+             "timeUntilRecoveryMs" => nil
+           }
+
+    assert Registry.lookup(LemonAi.CircuitBreakerRegistry, provider) == []
   end
 
-  test "provider circuit status reports unknown when an existing process exits during the read" do
-    provider = "status-exiting-circuit-#{System.unique_integer([:positive])}"
+  test "provider circuit status reports unknown when a registered process has no readable snapshot" do
+    provider = "status-missing-snapshot-#{System.unique_integer([:positive])}"
     parent = self()
 
     start_supervised!(
@@ -260,7 +271,7 @@ defmodule LemonControlPlane.Methods.StatusTest do
          send(parent, :registered)
 
          receive do
-           {:"$gen_call", _from, :peek} -> :ok
+           :stop -> :ok
          end
        end}
     )
