@@ -207,7 +207,7 @@ defmodule CodingAgent.CompactionTest do
 
     test "context threshold uses the same reserve and strict boundary as compaction" do
       assert Compaction.context_threshold(100_000) == 83_616
-      assert Compaction.context_threshold(100_000, %{reserve_tokens: 2000}) == 98_000
+      assert Compaction.context_threshold(100_000, %{reserve_tokens: 2000}) == 85_000
       assert Compaction.context_threshold(100, %{reserve_tokens: 200}) == -100
 
       for settings <- [%{}, %{reserve_tokens: 2000}] do
@@ -221,6 +221,108 @@ defmodule CodingAgent.CompactionTest do
                  Map.put(settings, :enabled, false)
                )
       end
+    end
+
+    test "percentage reserve and recovery band scale with the model window" do
+      for {window, trigger, target} <- [
+            {128_000, 108_800, 87_040},
+            {200_000, 170_000, 136_000},
+            {1_000_000, 850_000, 680_000}
+          ] do
+        assert Compaction.context_threshold(window) == trigger
+        assert Compaction.recovery_threshold(window) == target
+        refute Compaction.should_compact?(trigger, window)
+        assert Compaction.should_compact?(trigger + 1, window)
+
+        assert Compaction.context_threshold(window, %{reserve_tokens: div(window, 4)}) ==
+                 div(window * 3, 4)
+      end
+    end
+
+    test "a pass just below trigger escalates once and cannot claim success outside band" do
+      session =
+        Enum.reduce(1..12, CodingAgent.SessionManager.new("/tmp"), fn _, session ->
+          CodingAgent.SessionManager.append_message(session, %{
+            "role" => "user",
+            "content" => String.duplicate("x", 4_000)
+          })
+        end)
+
+      opts = [
+        force: true,
+        summary: String.duplicate("s", 4_000),
+        keep_recent_tokens: 8_000,
+        recovery_target: 6_800
+      ]
+
+      assert {:error, :compaction_recovery_band} =
+               Compaction.compact(session, %LemonAi.Types.Model{}, opts)
+
+      assert {:ok, result} =
+               CodingAgent.Session.CompactionManager.auto_compaction_task_result(
+                 session,
+                 %LemonAi.Types.Model{},
+                 opts
+               )
+
+      # Safe cut selection can retain an earlier boundary than the last entry.
+      # Recovery promises to fit the band, not to keep exactly one message.
+      kept =
+        session
+        |> CodingAgent.SessionManager.get_branch()
+        |> Enum.drop_while(&(&1.id != result.first_kept_entry_id))
+
+      assert [_ | _] = kept
+      assert List.last(kept).id == session.leaf_id
+
+      projected =
+        session
+        |> CodingAgent.SessionManager.append_compaction(
+          result.summary,
+          result.first_kept_entry_id,
+          result.tokens_before,
+          result.details
+        )
+        |> CodingAgent.SessionManager.build_session_context()
+
+      tokens_after = Compaction.estimate_context_tokens(projected.messages)
+      assert tokens_after <= 6_800
+
+      assert {:ok, _} =
+               Compaction.compact(
+                 session,
+                 %LemonAi.Types.Model{},
+                 Keyword.merge(opts, keep_recent_tokens: 1, recovery_target: tokens_after)
+               )
+
+      assert {:error, :compaction_recovery_band} =
+               Compaction.compact(
+                 session,
+                 %LemonAi.Types.Model{},
+                 Keyword.merge(opts, keep_recent_tokens: 1, recovery_target: tokens_after - 1)
+               )
+
+      assert {:error, :compaction_recovery_band} =
+               CodingAgent.Session.CompactionManager.auto_compaction_task_result(
+                 session,
+                 %LemonAi.Types.Model{},
+                 Keyword.put(opts, :summary, String.duplicate("s", 28_000))
+               )
+    end
+
+    test "unresolved pressure is fenced across turns with unchanged history" do
+      session = CodingAgent.SessionManager.new("/tmp")
+
+      state = %{
+        session_manager: session,
+        turn_index: 99,
+        auto_compaction: %CodingAgent.Session.CompactionLifecycle.State{
+          blocked_signature: {:blocked, session.leaf_id}
+        }
+      }
+
+      # A fenced snapshot never reads an agent or launches another summary task.
+      assert CodingAgent.Session.CompactionLifecycle.maybe_trigger(state, self()) == state
     end
 
     test "unknown and non-positive windows never trigger token-based automatic compaction" do
@@ -245,7 +347,7 @@ defmodule CodingAgent.CompactionTest do
              }) == 70_000
 
       settings = %{reserve_tokens: 2_000, threshold_percent: 90}
-      assert Compaction.context_threshold(window, settings) == 90_000
+      assert Compaction.context_threshold(window, settings) == 85_000
 
       # Invalid values fall back to the reserve threshold.
       for bad <- [

@@ -2684,13 +2684,22 @@ suppresses bootstrap even when resuming an assistant session.
 - `runtime.tools.disclosure`: deferring tool schemas behind `tool_search` / `tool_invoke` (see [Tool Disclosure](#tool-disclosure)).
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings. Automatic compaction runs when the request
-  exceeds the context window minus `reserve_tokens`. Optional `threshold_percent` (integer 1–100,
+  exceeds the context window minus `max(ceil(15% of window), reserve_tokens)`.
+  The configured reserve defaults to 16,384; larger overrides are respected.
+  Optional `threshold_percent` (integer 1–100,
   percent of the window) or `threshold_tokens` (positive integer; wins over the percent) lower that
   threshold; they never raise it above the reserve limit. Invalid values fail config validation.
   `/context` and `sessions.context` report the effective threshold. Models with an
   unknown or non-positive context window skip token-based automatic compaction
   and report unknown capacity as null; explicit compaction and provider overflow
   recovery remain available.
+  Automatic compaction must land at or below 80% of the effective trigger
+  (the omp #2275 dead-loop recovery band). `keep_recent_tokens` is an upper
+  target, reduced to fit that band including request overhead. A pass that
+  misses the band escalates once through overflow compaction with a minimal
+  valid tail. If that still cannot fit, `compaction_recovery_band` is reported
+  and unchanged history is not compacted again each turn; reduce request
+  overhead, manually compact, or start a new session.
 - `runtime.retry`: session retry of transient provider failures (backoff + retry-after).
 - `runtime.max_tool_turns`: optional per-prompt cap on tool-using turns (default unlimited).
 - `runtime.secret_obfuscation`: opt-in placeholder obfuscation of secrets in provider-visible text ([details](security/secret-obfuscation.md)).
