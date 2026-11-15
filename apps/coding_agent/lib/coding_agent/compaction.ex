@@ -920,10 +920,10 @@ defmodule CodingAgent.Compaction do
   end
 
   defp extract_op_from_tool_call(%{name: name, arguments: args}, acc)
-       when name in ["read", "write", "edit"] do
-    key = if name == "read", do: :read_files, else: :modified_files
+       when name in ["read", "write", "edit", "Read", "Edit"] do
+    key = if name in ["read", "Read"], do: :read_files, else: :modified_files
 
-    case Map.get(args, "path") do
+    case Map.get(args, if(name in ["Read", "Edit"], do: "file_path", else: "path")) do
       nil -> acc
       path -> Map.update!(acc, key, fn files -> [path | files] end)
     end
@@ -938,6 +938,13 @@ defmodule CodingAgent.Compaction do
       {:ok, paths} -> Map.update!(acc, :modified_files, fn files -> paths ++ files end)
       {:error, _reason} -> acc
     end
+  end
+
+  defp extract_op_from_tool_call(
+         %{name: "apply_patch", arguments: %{"input" => patch_text}},
+         acc
+       ) do
+    extract_op_from_tool_call(%{name: "patch", arguments: %{"patch_text" => patch_text}}, acc)
   end
 
   defp extract_op_from_tool_call(_tool_call, acc), do: acc

@@ -204,6 +204,11 @@ drop from mixed calls. Tags may be bare hexadecimal, `[TAG]`, or a copied
 `[path#TAG]` header. A header's path must resolve to the requested target, even
 when another file has identical bytes. Whitespace around the value is ignored.
 
+Text mode also accepts `replace_all: true` to replace every exact occurrence.
+The default still requires a unique match. Replace-all uses the same read
+freshness, path validation, checkpoint, mutation lock and source-identity checks;
+it does not permit fuzzy or stale bulk replacements.
+
 Seen-line enforcement is on by default **for historical recovery only**: every
 original replaced/deleted line and insertion anchor must have appeared in a
 numbered read of that old snapshot. Set `[runtime.tools.edit] enforce_seen_lines =

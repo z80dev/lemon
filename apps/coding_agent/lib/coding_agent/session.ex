@@ -1291,7 +1291,8 @@ defmodule CodingAgent.Session do
 
     session_manager = SessionManager.append_entry(state.session_manager, entry)
 
-    {:reply, :ok, %{state | model: model, session_manager: session_manager}}
+    next_state = Planning.refresh(%{state | model: model, session_manager: session_manager})
+    {:reply, :ok, next_state}
   end
 
   def handle_call({:set_thinking_level, level}, _from, state) do

@@ -248,6 +248,66 @@ region override, and signs for that same region. Adaptive Claude models use
 Converse's adaptive-thinking fields. Nova 2 high-effort reasoning omits its
 incompatible temperature and output-token cap.
 
+### Reviewed upstream identities
+
+Subscription compatibility currently imitates upstream clients rather than only
+identifying Lemon. [`priv/upstream_identities.json`](priv/upstream_identities.json)
+is the review ledger: it records exact local prompt/header/client-ID bytes,
+SHA-256 hashes, immutable npm versions or full GitHub revisions, and hashed
+upstream files containing the evidence. Public OAuth client IDs are application
+identifiers, not access tokens. No credentials belong in this manifest.
+
+| Identity | Preserved baseline and provenance |
+| --- | --- |
+| Claude Code | System prefix, OAuth betas, `x-app`, public client ID and User-Agent template from published [`pi-ai@0.49.0`](https://registry.npmjs.org/@mariozechner/pi-ai/0.49.0); version [`2.1.296`](https://registry.npmjs.org/@anthropic-ai/claude-code/2.1.296). |
+| GitHub Copilot | Chat `0.35.0`, VS Code `1.107.0`, integration ID and public client ID from the same pi-ai package; all provider/auth and model-catalog copies are checked. |
+| Gemini / Antigravity | Cloud SDK/Node headers, metadata, body identities, Antigravity `1.11.5`, its system instruction and copied Pi bridge prompt from the same pi-ai package. |
+| Codex | Public OAuth client and `pi` originator from pi-ai; capability version from [`@openai/codex@0.159.0`](https://registry.npmjs.org/@openai/codex/0.159.0). Lemon's `pi/0.159.0` User-Agent is a composition, **not** a pi release number. Request and discovery versions are both checked. |
+| Kimi | Version and public client ID from [`kimi-cli@1.52.0`](https://github.com/MoonshotAI/kimi-cli/tree/9ab1286b8fe4e6bcd116949a27ce5e0ac3389c82); KimiCLI User-Agent template from the pinned omp source. |
+| SuperGrok / ZCode | Public client IDs and ZCode redirect identity from [`omp@7c49c11`](https://github.com/can1357/oh-my-pi/tree/7c49c11aa5bbaf3f418406583096168ad5b8c6dc). This is compatibility-client provenance, not first-party vendor source. |
+
+Claude's advertised version is fixed at the reviewed value: installing a newer
+`claude`/`claude-code` executable no longer silently changes network identity.
+Existing explicit caller header/client-ID overrides remain caller-owned.
+Actual host/OS values, session/device/account IDs and tokens are not upstream
+constants. Gemini and Antigravity OAuth client credentials are operator-supplied,
+not bundled vendor identities. The OpenCode Go `lemon_ai` User-Agent, Codex OAuth
+`lemon` originator, and Z.AI `lemon` key name are Lemon's own identities and are
+explicitly excluded.
+
+From the repository root (Python 3 standard library only; no Mix compilation):
+
+```bash
+python3 scripts/check_upstream_identities --offline
+python3 scripts/check_upstream_identities --online
+```
+
+Offline mode fails on changed, missing or duplicated local identity selections,
+including every repeated Copilot catalog header. Online mode also downloads the
+pinned artifacts, resolves npm's **latest** dist-tag / GitHub's current default
+branch, fetches those sources, and fails on version or hash drift. Missing files,
+malformed responses and network failures fail closed. It never installs or
+executes upstream code, changes pins, or updates runtime defaults. Whole upstream
+file/archive hashes intentionally require review even for non-identity changes;
+an unrelated GitHub commit with identical watched files does not fail.
+
+These are historical compatibility pins, not a claim that current upstream
+matches. Initial source research found npm latest versions Claude `2.1.325`,
+Codex `0.169.0`, and pi-ai `0.73.1`; online checking should report that drift,
+not silently promote the advertised versions. To refresh, inspect the new
+upstream artifacts, review the compatibility change, update local code and the
+manifest's source hashes/selectors/text together, then run both modes and:
+
+```bash
+mix test apps/lemon_ai/test/lemon_ai/upstream_identities_test.exs apps/lemon_ai/test/lemon_ai/auth/anthropic_oauth_test.exs
+```
+
+The ExUnit regressions exercise offline mutations and online npm/GitHub drift
+logic with in-memory responses; normal tests do not contact upstream services.
+The manifest additionally records Claude `2.1.325` SDK Read/Edit/Bash inputs and
+the pinned first-party Codex `apply_patch` grammar/spec for the opt-in dialect
+experiment. Those source pins do not enable a tool dialect or change its default.
+
 ### Codex and Anthropic request controls
 
 Codex accepts a ChatGPT access token through `api_key`, including Lemon's configured

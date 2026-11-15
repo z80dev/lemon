@@ -496,9 +496,7 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
   end
 
   describe "request fingerprint" do
-    test "uses the newer of the installed Claude Code version and the pinned floor", %{
-      home: home
-    } do
+    test "keeps the reviewed identity even when a newer Claude CLI is installed", %{home: home} do
       bin_dir = Path.join(home, "bin-#{System.unique_integer([:positive])}")
       File.mkdir_p!(bin_dir)
       script = Path.join(bin_dir, "claude-code")
@@ -507,12 +505,14 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
       System.put_env("PATH", bin_dir)
 
       headers = Map.new(AnthropicOAuth.oauth_headers())
-      assert headers["user-agent"] == "claude-cli/9.9.9 (external, cli)"
+      assert headers["user-agent"] == "claude-cli/2.1.296 (external, cli)"
       assert headers["x-app"] == "cli"
 
       File.write!(script, "#!/bin/sh\necho \"1.0.0 (Claude Code)\"\n")
       System.put_env("PATH", bin_dir <> ":")
-      assert {"user-agent", "claude-cli/2.1." <> _} = hd(AnthropicOAuth.oauth_headers())
+
+      assert {"user-agent", "claude-cli/2.1.296 (external, cli)"} =
+               hd(AnthropicOAuth.oauth_headers())
     end
   end
 
