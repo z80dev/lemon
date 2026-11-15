@@ -1157,8 +1157,10 @@ defmodule CodingAgent.Compaction do
       file_ops = merge_file_operations(extract_file_operations(new_messages), previous_compaction)
       tokens_before = estimate_raw_context_tokens(messages)
 
+      # This is an in-memory preview in a worker. The raw append device belongs
+      # to the session owner, which alone journals the accepted result later.
       projected =
-        %{session | file_path: nil}
+        %{session | file_path: nil, append_device: nil}
         |> SessionManager.append_compaction(summary, first_kept_id, tokens_before, file_ops)
         |> SessionManager.build_session_context()
 

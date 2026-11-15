@@ -1553,7 +1553,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_cast({:redirect, text}, state) do
-    {state, recalled} = refresh_turn_context(state, text)
+    {state, recalled} = refresh_turn_context(state, text, false)
 
     message = %LemonAi.Types.UserMessage{
       role: :user,
@@ -1633,7 +1633,8 @@ defmodule CodingAgent.Session do
   end
 
   defp enqueue_steering(state, text, preempt) do
-    {state, recalled} = refresh_turn_context(state, text, preempt)
+    # Steering corrects the current turn; it does not open a new user turn.
+    {state, recalled} = refresh_turn_context(state, text, false)
 
     message = %LemonAi.Types.UserMessage{
       role: :user,
