@@ -171,12 +171,25 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
       # cannot parse. A clean 401 proves auth ran first; if parsing ran first
       # this raises instead.
       configure(webhook_token: "s3cret")
+      original_handlers = LemonChannels.InboundHttp.handlers()
       :ok = LemonChannels.InboundHttp.register("email", Webhook)
 
       on_exit(fn ->
-        if pid = Process.whereis(LemonChannels.InboundHttp.Routes) do
-          Agent.update(pid, &Map.delete(&1, "email"))
-        end
+        :ok =
+          Supervisor.terminate_child(
+            LemonChannels.InboundHttp,
+            LemonChannels.InboundHttp.Routes
+          )
+
+        {:ok, _} =
+          Supervisor.restart_child(
+            LemonChannels.InboundHttp,
+            LemonChannels.InboundHttp.Routes
+          )
+
+        Enum.each(original_handlers, fn {segment, handler} ->
+          :ok = LemonChannels.InboundHttp.register(segment, handler)
+        end)
       end)
 
       conn =

@@ -165,7 +165,7 @@ defmodule LemonChannels.PairingLiveAllowlistTest do
     end
 
     defp start_supervised_transport(allowed_chat_ids) do
-      token = "token-" <> Integer.to_string(System.unique_integer([:positive]))
+      token = "pairing-test-#{System.pid()}-#{System.unique_integer([:positive])}"
 
       persist_allowlist(allowed_chat_ids)
       env = Application.get_env(:lemon_gateway, @gateway_config_key)
@@ -248,7 +248,11 @@ defmodule LemonChannels.PairingLiveAllowlistTest do
   end
 
   defp start_transport(overrides) do
-    token = "token-" <> Integer.to_string(System.unique_integer([:positive]))
+    unless Process.whereis(LemonChannels.Adapters.Telegram.AsyncSupervisor) do
+      start_supervised!({Task.Supervisor, name: LemonChannels.Adapters.Telegram.AsyncSupervisor})
+    end
+
+    token = "pairing-test-#{System.pid()}-#{System.unique_integer([:positive])}"
 
     Transport.start_link(
       config:

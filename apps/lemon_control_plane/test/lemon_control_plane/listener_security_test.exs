@@ -218,11 +218,29 @@ defmodule LemonControlPlane.ListenerSecurityTest do
   test "occupied or disabled node gateway is nonfatal and unavailable" do
     assert :ignore = NodeGateway.start_link(port: 0)
     refute NodeGateway.status().available
+    assert :ets.info(NodeGateway) == :undefined
     {:ok, socket} = :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, active: false])
     on_exit(fn -> :gen_tcp.close(socket) end)
     {:ok, {_ip, port}} = :inet.sockname(socket)
     assert :ignore = NodeGateway.start_link(port: port, ip: {127, 0, 0, 1})
     refute NodeGateway.status().available
+    assert :ets.info(NodeGateway) == :undefined
+  end
+
+  test "node availability belongs to the supervised listener, not status readers" do
+    {:ok, socket} = :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, active: false])
+    {:ok, {_ip, port}} = :inet.sockname(socket)
+    :ok = :gen_tcp.close(socket)
+    gateway = start_supervised!({NodeGateway, port: port, ip: {127, 0, 0, 1}})
+
+    assert :ets.info(NodeGateway, :owner) == gateway
+
+    assert Task.async(fn -> NodeGateway.status() end) |> Task.await() ==
+             %{available: true, port: port}
+
+    :ok = stop_supervised(NodeGateway)
+    assert :ets.info(NodeGateway) == :undefined
+    assert NodeGateway.status() == %{available: false, port: nil}
   end
 
   test "runtime rejects invalid bind addresses" do

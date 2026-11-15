@@ -263,6 +263,7 @@ defmodule LemonControlPlane.Protocol.Frames do
       # Run/Agent events
       "agent",
       "chat",
+      "session.event",
       # Exact-connection named-agent transport (never global EventBridge traffic)
       "agent.message.request",
       "agent.message.result",

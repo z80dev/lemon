@@ -26,8 +26,9 @@ defmodule LemonCore.Store.Hooks do
 
   Configured values (`start_link/1` opts, falling back to
   `Application.get_env(:lemon_core, store_name)`) are resolved when the store
-  starts. Runtime registrations live in `:persistent_term` keyed by store name,
-  so they survive a store crash and can be made before the store boots.
+  starts. Runtime registrations live in supervised `LemonCore.RuntimeCache`
+  ETS storage keyed by store name, so they survive a store crash and can be
+  made before that store boots (after `:lemon_core` has started).
 
       LemonCore.Store.register_finalize_run_hook({MyApp.Archive, :on_run})
       LemonCore.Store.register_cached_table(:my_index)
@@ -49,28 +50,19 @@ defmodule LemonCore.Store.Hooks do
   """
   @spec register(atom(), kind(), term()) :: :ok
   def register(store, kind, value) do
-    current = registered(store, kind)
-
-    if value in current do
-      :ok
-    else
-      :persistent_term.put(registry_key(store, kind), current ++ [value])
-    end
+    LemonCore.RuntimeCache.register(registry_key(store, kind), value)
   end
 
   @doc "Remove a runtime registration."
   @spec unregister(atom(), kind(), term()) :: :ok
   def unregister(store, kind, value) do
-    case registered(store, kind) do
-      [] -> :ok
-      current -> :persistent_term.put(registry_key(store, kind), List.delete(current, value))
-    end
+    LemonCore.RuntimeCache.unregister(registry_key(store, kind), value)
   end
 
   @doc "List runtime registrations for `store`."
   @spec registered(atom(), kind()) :: [term()]
   def registered(store, kind) when is_atom(store) do
-    :persistent_term.get(registry_key(store, kind), [])
+    LemonCore.RuntimeCache.get(registry_key(store, kind), [])
   end
 
   def registered(_store, _kind), do: []
@@ -78,18 +70,12 @@ defmodule LemonCore.Store.Hooks do
   @doc """
   Publish a store's resolved value for a kind, for client-side reads.
 
-  Written by the store as it starts; read from caller processes that need to
-  know the effective configuration without a round trip through the GenServer.
+  Written by the store at startup and when tables are registered at runtime;
+  read directly from ETS without a round trip through the GenServer.
   """
   @spec publish(atom(), kind(), term()) :: :ok
   def publish(store, kind, value) do
-    key = published_key(store, kind)
-
-    if :persistent_term.get(key, :__unset__) != value do
-      :persistent_term.put(key, value)
-    end
-
-    :ok
+    LemonCore.RuntimeCache.put(published_key(store, kind), value)
   end
 
   @doc "Read a store's published value for a kind."
@@ -97,7 +83,7 @@ defmodule LemonCore.Store.Hooks do
   def published(store, kind, default \\ [])
 
   def published(store, kind, default) when is_atom(store) and not is_nil(store) do
-    :persistent_term.get(published_key(store, kind), default)
+    LemonCore.RuntimeCache.get(published_key(store, kind), default)
   end
 
   def published(_store, _kind, default), do: default
@@ -207,11 +193,7 @@ defmodule LemonCore.Store.Hooks do
   defp warn_missing_once(module, function, arity) do
     key = {__MODULE__, :missing_hook_module, module}
 
-    if :persistent_term.get(key, false) do
-      :ok
-    else
-      :persistent_term.put(key, true)
-
+    if LemonCore.RuntimeCache.warn_once?(key) do
       Logger.warning(
         "[LemonCore.Store.Hooks] skipping #{inspect(module)}.#{function}/#{arity}: module not " <>
           "available. Expected when this build does not include that collaborator; if it " <>

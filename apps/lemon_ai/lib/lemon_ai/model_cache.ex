@@ -2,6 +2,10 @@ defmodule LemonAi.ModelCache do
   @moduledoc """
   Caches model availability per provider using ETS to reduce redundant API calls.
   Ported from Oh-My-Pi's model-cache.ts (SQLite) to idiomatic Elixir with ETS.
+
+  The supervised cache process owns the table. Requesting processes only read
+  and write entries; they never create or adopt tables. An owner restart drops
+  cached availability and creates a new empty table.
   """
 
   use GenServer
@@ -73,12 +77,7 @@ defmodule LemonAi.ModelCache do
 
   @impl true
   def init(_opts) do
-    table =
-      try do
-        :ets.new(@table, [:set, :public, :named_table, read_concurrency: true])
-      rescue
-        ArgumentError -> @table
-      end
+    table = :ets.new(@table, [:set, :public, :named_table, read_concurrency: true])
 
     {:ok, %{table: table}}
   end

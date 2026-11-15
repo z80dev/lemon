@@ -17,7 +17,7 @@ defmodule LemonAi.ProviderRegistryTest do
       assert ProviderRegistry.initialized?()
     end
 
-    test "read paths lazily initialize an absent registry" do
+    test "read paths leave an absent registry uninitialized" do
       key = {ProviderRegistry, :providers}
       original = :persistent_term.get(key)
 
@@ -30,7 +30,7 @@ defmodule LemonAi.ProviderRegistryTest do
           :persistent_term.erase(key)
           refute ProviderRegistry.initialized?()
           assert read.() == expected
-          assert ProviderRegistry.initialized?()
+          refute ProviderRegistry.initialized?()
         end
       after
         :persistent_term.put(key, original)
@@ -177,7 +177,7 @@ defmodule LemonAi.ProviderRegistryTest do
     end
   end
 
-  describe "auto-initialization" do
+  describe "explicit initialization" do
     test "get/1 works after init", %{test_id: test_id} do
       # Ensure initialized (safe to call multiple times)
       ProviderRegistry.init()

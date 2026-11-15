@@ -27,6 +27,13 @@ defmodule LemonChannels.OutboxDurabilityTest do
     def deliver(payload) do
       send(payload.meta.test_pid, {:attempt, payload.meta.label, payload.idempotency_key, self()})
 
+      if Map.has_key?(payload.meta, :chunk_index) do
+        send(
+          payload.meta.test_pid,
+          {:chunk_attempt, payload.meta.chunk_index, payload.idempotency_key, self()}
+        )
+      end
+
       receive do
         {:finish, result} -> result
         {:raise, message} -> raise message
@@ -467,7 +474,8 @@ defmodule LemonChannels.OutboxDurabilityTest do
   end
 
   @tag :tmp_dir
-  test "every chunk without a caller key recovers its generated key in order", ctx do
+  test "keyless chunks retain nil adapter keys and recover their private identities in order",
+       ctx do
     outbox = start_outbox()
 
     item = %{
@@ -477,20 +485,26 @@ defmodule LemonChannels.OutboxDurabilityTest do
     }
 
     assert {:ok, _} = Outbox.enqueue(outbox, item)
-    assert_receive {:attempt, "chunks", _, worker}, 1_000
+    assert_receive {:attempt, "chunks", nil, worker}, 1_000
+    assert_receive {:chunk_attempt, 0, nil, ^worker}, 1_000
     assert {:ok, records} = Store.fetch_all(@store, QueueStore.pending_table())
     chunks = records |> Enum.map(&elem(&1, 1)) |> Enum.sort_by(& &1.chunk_index)
     assert length(chunks) == 3
-    keys = Enum.map(chunks, & &1.payload.idempotency_key)
+    assert Enum.all?(chunks, &is_nil(&1.payload.idempotency_key))
+    keys = Enum.map(chunks, &QueueStore.delivery_key/1)
     assert Enum.all?(keys, &is_binary/1)
     assert length(Enum.uniq(keys)) == 3
     monitor = Process.monitor(worker)
     crash(outbox)
     assert_receive {:DOWN, ^monitor, :process, ^worker, _}, 1_000
     _ = start_outbox()
+    assert {:ok, recovered} = Store.fetch_all(@store, QueueStore.pending_table())
+    recovered = recovered |> Enum.map(&elem(&1, 1)) |> Enum.sort_by(& &1.chunk_index)
+    assert Enum.map(recovered, &QueueStore.delivery_key/1) == keys
+    assert Enum.all?(recovered, &is_nil(&1.payload.idempotency_key))
 
-    for {key, index} <- Enum.with_index(keys) do
-      assert_receive {:attempt, "chunks", ^key, replay}, 1_000
+    for index <- 0..2 do
+      assert_receive {:chunk_attempt, ^index, nil, replay}, 1_000
       if index == 2, do: :ets.insert(ctx.faults, {:sync, :block})
       send(replay, {:finish, {:ok, :chunk}})
     end
@@ -498,6 +512,30 @@ defmodule LemonChannels.OutboxDurabilityTest do
     assert_receive {:storage_blocked, :sync, store, token}, 1_000
     :ets.delete(ctx.faults, :sync)
     send(store, {:continue_storage, token})
+    assert {:ok, []} = Store.fetch_all(@store, QueueStore.pending_table())
+  end
+
+  @tag :tmp_dir
+  test "a keyless pending record with a durable receipt is suppressed after restart", ctx do
+    outbox = start_outbox()
+    item = %{payload(ctx, "keyless-confirmed", "peer") | idempotency_key: nil}
+    assert {:ok, _} = Outbox.enqueue(outbox, item)
+    assert_receive {:attempt, "keyless-confirmed", nil, worker}, 1_000
+    assert {:ok, [{_id, entry}]} = Store.fetch_all(@store, QueueStore.pending_table())
+
+    # Inject the crash window between persisting confirmation and deleting the
+    # pending record. Its internal identity must work without changing nil in
+    # the original adapter payload.
+    {table, id, receipt} = entry |> QueueStore.receipt() |> QueueStore.receipt_put()
+    assert :ok = Store.put(@store, table, id, receipt)
+    assert :ok = Store.sync(@store)
+    monitor = Process.monitor(worker)
+    crash(outbox)
+    assert_receive {:DOWN, ^monitor, :process, ^worker, _}, 1_000
+    _ = start_outbox()
+    ref = item.notify_ref
+    assert_receive {:durable_result, ^ref, {:error, :duplicate}}, 1_000
+    refute_receive {:attempt, "keyless-confirmed", _, _}, 0
     assert {:ok, []} = Store.fetch_all(@store, QueueStore.pending_table())
   end
 

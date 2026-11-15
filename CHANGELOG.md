@@ -8,7 +8,81 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Opt-in Terminal-Bench comparisons through a Harbor adapter for Lemon and omp,
+  with credentials held only by the arena proxy and paired statistics (#544),
+  and a re-runnable omp edit-fixture comparison for the `edit` and `patch`
+  tools with failure-site attribution (#545).
+- `mix lemon.eval.latency`: an offline harness that measures harness overhead
+  (request dispatch, token delivery, queued-run handoff, readiness, per-turn
+  session stages) with a nightly regression lane (#546).
+- Optional, default-off GenAI span export for model and tool calls, with a
+  content-free attribute allowlist (#594).
+- Isolated task workspaces start warm: copy-on-write clones of allowlisted,
+  git-ignored build caches (`deps`, `_build`, `node_modules`, `target`,
+  `.venv`); secrets and ignored config are never copied (#601).
+
+### Changed
+
+- The current date and git status now travel in the user turn instead of the
+  system prompt, and the stable environment block is journaled once and reused
+  on resume, so the cached system prompt stays byte-identical across turns (#562).
+- Receipt and admission writes commit with `synchronous=FULL` (plus
+  `F_FULLFSYNC` on macOS) instead of a full WAL checkpoint; reads no longer
+  checkpoint. Receipt barrier p50 drops from 18.3 ms to 6.5 ms (#550).
+- Cancellation is delivered as a message: abort and redirect wake waiters
+  immediately instead of on a 20–250 ms polling tick, and the global task
+  cancellation sweep is gone (#549).
+- Compaction reserves at least 15% of the context window and only counts a pass
+  as successful at or below 80% of the trigger, so it no longer re-compacts every
+  turn near the limit (#568).
+- Session journals append through one open handle with append-only checkpoint
+  markers instead of rewriting the whole file every run; directories are synced
+  natively without python3 (#553, #561).
+- Background-process output is served from an owner-held ETS snapshot and
+  flushed to the durable store on transitions and a coalesced timer instead of
+  once per output chunk (#548).
+- The control plane uses a Registry for connection presence and fan-out and runs
+  async WebSocket methods under a capped supervisor; crashing methods log a
+  redacted class and method name (#583).
+- Named-node event frames go straight to their invocation owner instead of
+  through the `NodeRegistry` process (#584).
+- Run processes own their session key; a restarted coordinator rediscovers live
+  runs through the Registry (#573).
+- The gateway scheduler no longer blocks on workers, and runs hold the engine
+  session lock as a Registry name acquired after startup (#547, #572).
+- Model-call admission keeps per-provider caps across restarts and fails closed
+  with `:admission_unavailable` instead of bypassing the cap (#591).
+- Cron schedules the earliest deadline instead of scanning every minute, and
+  kanban leases renew while their worker is alive (#596).
+
+### Fixed
+
+- Interrupted tool calls (abort, timeout, crash, reload repair, steering skip)
+  report one structured `unknown` or `not_started` outcome and tell the model
+  not to repeat an uncertain call (#552).
+- Acknowledged channel outbox deliveries survive a crash with their idempotency
+  keys and order (#557); the send path makes no synchronous calls into other
+  processes and delivery concurrency is capped (#582).
+- Telegram long polls run in a supervised task so the transport stays responsive;
+  retries belong to the outbox only (#580).
+- Discord's Nostrum client is supervised and configured at boot; WhatsApp has one
+  reconnect authority whose give-up is visible to health checks (#581).
+- The hot-reload documentation describes the reload that ships (#607).
+
+### Removed
+
+- The unenforced `sandbox` tool-policy field; legacy input is ignored with a
+  warning and never changes authority (#605).
+- `LemonCore.Store.JsonlBackend` (lemon_core 0.3.0). Run
+  `mix lemon.store.migrate_jsonl_to_sqlite` before upgrading a JSONL store (#608).
+- Obsolete Telegram `outbound_send_delay_ms` and poller stale-time settings (#580).
+
+### Security
+
+- The Erlang distribution cookie no longer appears in process arguments of the
+  launcher or lifecycle restarts (#551).
 
 ---
 

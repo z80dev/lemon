@@ -32,6 +32,8 @@ defmodule LemonCore.Bench.StoreWorkload do
     ]
 
     children = if Code.ensure_loaded?(usage), do: children ++ [usage], else: children
+    runtime_cache = Module.concat(LemonCore, RuntimeCache)
+    children = if Code.ensure_loaded?(runtime_cache), do: [runtime_cache | children], else: children
     {:ok, supervisor} = Supervisor.start_link(children, strategy: :one_for_one)
 
     try do

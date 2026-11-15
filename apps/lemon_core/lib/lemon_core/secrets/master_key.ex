@@ -437,12 +437,7 @@ defmodule LemonCore.Secrets.MasterKey do
   defp warn_once(key, message) do
     term_key = {__MODULE__, :warned, key}
 
-    if :persistent_term.get(term_key, false) do
-      :ok
-    else
-      :persistent_term.put(term_key, true)
-      Logger.warning(message)
-      :ok
-    end
+    if LemonCore.RuntimeCache.warn_once?(term_key), do: Logger.warning(message)
+    :ok
   end
 end

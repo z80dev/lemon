@@ -590,7 +590,8 @@ The hard ceiling never resets; its reasons remain `:timeout` and
 `:dispatcher_stream_timeout`.
 
 `LemonAi.ModelCache` caches provider `GET /models` availability with a configurable TTL
-(default 5 minutes).
+(default 5 minutes). Its supervised process owns the ETS table; caller exits do not
+discard entries, while restarting the owner creates an empty cache.
 
 ## Key types
 
@@ -672,6 +673,32 @@ rate-limit permit, and enforces the concurrency cap before invoking the provider
 Streaming responses come back through an `LemonAi.EventStream` GenServer with a bounded
 queue, backpressure, owner monitoring, and timeouts.
 
+This is also the implementation behind the published `LemonAgent.EventStream`
+facade; there is only one queue/lifecycle implementation. Provider completion
+uses `{:done, stop_reason, message}`, while list completion uses
+`{:agent_end, messages}`. `error/2` retains provider message results and `error/3`
+retains agent reason/partial-state results. Runner monitoring and `:resync`
+overflow fencing are supported alongside owner monitoring and result subscriptions.
+
+Synchronous `push/2` waits without a call timeout and returns
+`:ok | {:error, :overflow | :canceled}`; callers must handle rejection.
+`push!/2` finishes overflow with a terminal error and throws
+`{:event_stream_push_failed, reason}` to an explicit producer failure boundary.
+Async pushes retain their documented drop policy.
+
+The phase-2 direct-mailbox replacement is not implemented. The opt-in benchmark
+under `apps/lemon_ai/bench` compares one/two queue hops with a direct-send baseline.
+Record measurements and the #546 context before choosing a replacement; no
+latency gain or phase-2 decision is claimed by consolidation alone.
+
+```bash
+LEMON_EVENT_STREAM_BENCH=1 LEMON_BENCH_REVISION=<revision> MIX_ENV=test \
+  mix run --no-start apps/lemon_ai/bench/event_stream.exs
+```
+
+The benchmark prints runtime metadata and p50/p95 batch and per-event costs.
+Its direct-send baseline deliberately does not implement the lifecycle contract.
+
 ```
 LemonAi.stream/3  or  LemonAi.complete/3
   → LemonAi.ProviderRegistry          -- O(1) :persistent_term lookup by api_id
@@ -690,11 +717,22 @@ LemonAi.Supervisor (one_for_one; owns the retained slot lease/cap ETS table)
   ├── Registry (LemonAi.CallDispatcherRegistry)
   ├── DynamicSupervisor (LemonAi.ProviderSupervisor) -- per-provider breakers/limiters/slots
   ├── LemonAi.CallDispatcher -- provider failure summaries
-  └── LemonAi.ModelCache
+  ├── LemonAi.ModelCache -- model availability ETS owner
+  ├── LemonAi.Auth.Cache -- token and fingerprint ETS owner
+  └── LemonAi.Auth.OmpAuthBroker -- broker snapshot ETS owner and watchers
 ```
 
 `LemonAi.ProviderRegistry` lives outside the tree in `:persistent_term`, so provider
-mappings survive process restarts.
+mappings survive process restarts. Only explicit boot/configuration registration
+updates this map; request-path lookups never initialize or mutate it.
+
+Mutable and lazily discovered auth values live in `LemonAi.Auth.Cache`, not
+`:persistent_term`: omp access tokens retain their expiry/forced-refresh rules,
+Claude Code versions are cached per `PATH`, and Kimi CLI fingerprint headers are
+cached for the owner's lifetime. Reads and writes access ETS directly. Caller exits
+leave entries intact; an owner restart discards them for rediscovery. Before startup
+or during a restart, auth adapters resolve values without caching rather than creating
+a caller-owned table. This cache never stores omp refresh credentials.
 
 ## Adding a provider
 

@@ -10,6 +10,7 @@ defmodule LemonCore.StoreHooksTest do
 
   alias LemonCore.Store
   alias LemonCore.Store.EtsBackend
+  alias LemonCore.Store.Hooks
   alias LemonCore.Store.ReadCache
 
   defp start_store(name, opts) do
@@ -23,6 +24,68 @@ defmodule LemonCore.StoreHooksTest do
   end
 
   describe "finalize_run hooks" do
+    test "registration outlives its caller and a store restart" do
+      name = :store_hooks_caller_restart
+      parent = self()
+      hook = {__MODULE__, :send_to, [parent]}
+      on_exit(fn -> Store.unregister_finalize_run_hook(name, hook) end)
+
+      {caller, monitor} =
+        spawn_monitor(fn -> Store.register_finalize_run_hook(name, hook) end)
+
+      assert_receive {:DOWN, ^monitor, :process, ^caller, :normal}
+      assert Hooks.registered(name, :finalize_run_hooks) == [hook]
+      start_store(name, backend: EtsBackend)
+      finalize(name, "before_restart", %{session_key: "agent:hook-restart:main"})
+      assert_receive {:hook_fired, %{run_id: "before_restart"}}
+
+      stop_supervised!(name)
+      start_store(name, backend: EtsBackend)
+      finalize(name, "after_restart", %{session_key: "agent:hook-restart:main"})
+      assert_receive {:hook_fired, %{run_id: "after_restart"}}
+    end
+
+    test "concurrent registrations and removals do not overwrite other callers" do
+      name = :store_hooks_concurrent
+      parent = self()
+      first = {__MODULE__, :send_to, [parent]}
+      hooks = for index <- 1..16, do: {__MODULE__, :send_to, [{parent, index}]}
+
+      on_exit(fn ->
+        for hook <- [first | hooks], do: Store.unregister_finalize_run_hook(name, hook)
+      end)
+
+      :ok = Store.register_finalize_run_hook(name, first)
+
+      tasks =
+        for hook <- hooks do
+          Task.async(fn ->
+            send(parent, {:ready, self()})
+
+            receive do
+              :register ->
+                Store.register_finalize_run_hook(name, hook)
+                Store.register_finalize_run_hook(name, hook)
+            end
+          end)
+        end
+
+      for _ <- tasks, do: assert_receive({:ready, _pid})
+      for task <- tasks, do: send(task.pid, :register)
+      assert Enum.all?(Task.await_many(tasks), &(&1 == :ok))
+
+      assert [^first | registered] = Hooks.registered(name, :finalize_run_hooks)
+      assert Enum.sort(registered) == Enum.sort(hooks)
+
+      hooks
+      |> Enum.map(fn hook ->
+        Task.async(fn -> Store.unregister_finalize_run_hook(name, hook) end)
+      end)
+      |> Task.await_many()
+
+      assert Hooks.registered(name, :finalize_run_hooks) == [first]
+    end
+
     test "configured hooks receive the finalized run" do
       parent = self()
       hook = fn event -> send(parent, {:hook_fired, event}) end
@@ -184,11 +247,25 @@ defmodule LemonCore.StoreHooksTest do
 
       :ok = Store.register_cached_table(name, :sticky_index)
       assert ReadCache.cached?(name, :sticky_index)
+      old_tables = ReadCache.tables(name)
+      assert Enum.all?(old_tables, fn {_domain, table} -> :ets.info(table, :owner) == pid end)
 
       stop_supervised!(name)
       refute Process.alive?(pid)
 
-      start_supervised!(Supervisor.child_spec({Store, name: name, backend: EtsBackend}, id: name))
+      restarted =
+        start_supervised!(
+          Supervisor.child_spec({Store, name: name, backend: EtsBackend}, id: name)
+        )
+
+      new_tables = ReadCache.tables(name)
+      refute new_tables == old_tables
+
+      assert Enum.all?(new_tables, fn {_domain, table} ->
+               :ets.info(table, :owner) == restarted
+             end)
+
+      assert :sticky_index in Hooks.published(name, :cached_tables)
       assert ReadCache.cached?(name, :sticky_index)
     end
   end

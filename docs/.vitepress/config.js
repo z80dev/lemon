@@ -207,6 +207,7 @@ export default {
               { text: "Overview", link: "/architecture/overview" },
               { text: "BEAM agents", link: "/beam_agents" },
               { text: "App boundaries", link: "/architecture_boundaries" },
+              { text: "omp port ledger", link: "/omp-port-ledger" },
               { text: "Execution policy", link: "/execution-policy" },
               { text: "Model selection", link: "/model-selection-decoupling" },
               { text: "Context management", link: "/context" },

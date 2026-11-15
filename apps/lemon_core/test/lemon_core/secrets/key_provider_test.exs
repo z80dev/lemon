@@ -2,6 +2,8 @@ defmodule LemonCore.Secrets.KeyProviderTest do
   # Mutates :lemon_core app env, so it must not run alongside other tests.
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias LemonCore.Secrets.KeyProvider
   alias LemonCore.Secrets.MasterKey
 
@@ -88,6 +90,38 @@ defmodule LemonCore.Secrets.KeyProviderTest do
     assert {:ok, _key, :env} = MasterKey.resolve(env_getter: env_getter)
   end
 
+  test "weak-key warnings are retained across resolver exits" do
+    key = {MasterKey, :warned, :weak_master_key}
+    original = :ets.lookup(LemonCore.RuntimeCache, key)
+    :ets.delete(LemonCore.RuntimeCache, key)
+
+    on_exit(fn ->
+      :ets.delete(LemonCore.RuntimeCache, key)
+      :ets.insert(LemonCore.RuntimeCache, original)
+    end)
+
+    opts = [
+      key_providers: [:env],
+      env_getter: fn _ -> "not-base64-" <> String.duplicate("x", 32) end,
+      allow_legacy_raw_keys: false
+    ]
+
+    log =
+      capture_log(fn ->
+        for _ <- 1..2 do
+          {pid, monitor} =
+            spawn_monitor(fn ->
+              assert {:error, :weak_master_key} = MasterKey.resolve(opts)
+            end)
+
+          assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
+        end
+      end)
+
+    assert length(Regex.scan(~r/Lemon secrets master key is not base64/, log)) == 1
+    assert LemonCore.RuntimeCache.get(key) == true
+  end
+
   describe "keychain provider" do
     test "is inert off macOS" do
       refute KeyProvider.Keychain.available?(os_type: {:unix, :linux})
@@ -102,6 +136,28 @@ defmodule LemonCore.Secrets.KeyProviderTest do
   end
 
   describe "file provider" do
+    test "loose-permission warnings are claimed once per path", %{dir: dir} do
+      path = Path.join(dir, "loose.key")
+      encoded = Base.encode64(:binary.copy(<<8>>, 32))
+      File.write!(path, encoded)
+      File.chmod!(path, 0o644)
+      key = {KeyProvider.File, :warned_permissions, path}
+      on_exit(fn -> :ets.delete(LemonCore.RuntimeCache, key) end)
+
+      log =
+        capture_log(fn ->
+          tasks =
+            for _ <- 1..16 do
+              Task.async(fn -> KeyProvider.File.fetch(key_file: path) end)
+            end
+
+          assert Enum.all?(Task.await_many(tasks), &(&1 == {:ok, encoded}))
+        end)
+
+      assert length(Regex.scan(~r/is readable beyond its owner/, log)) == 1
+      assert LemonCore.RuntimeCache.get(key) == true
+    end
+
     test "resolves ~ against the caller-visible home", %{dir: dir} do
       assert KeyProvider.key_file(key_file: "~/.lemon/secrets_master_key", home_dir: dir) ==
                Path.join([dir, ".lemon", "secrets_master_key"])

@@ -56,16 +56,21 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 
 | # | Child | Purpose |
 |---|-------|---------|
-| 1 | `Phoenix.PubSub` (name: `LemonCore.PubSub`), or a `Registry` | Backbone for the Bus; see `LemonCore.Bus` for which one is used |
-| 2 | `LemonCore.ACPClientBridge` | Registry for direct ACP client request/reply |
-| 3 | `LemonCore.NodeRegistry` | Socket-owned unique Registry, retained generation floors and temporary per-invocation processes |
-| 4 | `LemonCore.ConfigCache` | ETS-backed config cache with TTL fingerprinting |
-| 5 | `LemonCore.Store` | Key-value storage GenServer with pluggable backends |
-| 6 | `LemonCore.Secrets.SourceTaskSupervisor` | Owns bounded external-source tasks |
-| 7 | `LemonCore.Secrets.SourceCache` | Bounded optional process-local source cache |
-| 8 | `LemonCore.RunHistoryStore` | Run history persistence (only when `:exqlite` is available) |
-| 9 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
-| 10 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
+| 1 | `LemonCore.RuntimeCache` | ETS owner for runtime registrations, cache metadata, warning flags and loopback UID |
+| 2 | `LemonCore.Dedupe.Supervisor` | Dynamic supervisor for each named deduplication table's owner |
+| 3 | `Phoenix.PubSub` (name: `LemonCore.PubSub`), or a `Registry` | Backbone for the Bus; see `LemonCore.Bus` for which one is used |
+| 4 | `LemonCore.Drain` | Coordinated shutdown and directly readable phase ETS table |
+| 5 | `LemonCore.ACPClientBridge` | Registry for direct ACP client request/reply |
+| 6 | `LemonCore.NodeRegistry` | Socket-owned unique Registry, retained generation floors and temporary per-invocation processes |
+| 7 | `LemonCore.ConfigCache` | ETS-backed config cache with TTL fingerprinting |
+| 8 | `LemonCore.Store` | Key-value storage GenServer with pluggable backends and owned read-cache tables |
+| 9 | `LemonCore.UsageLedger` | Finished-run usage aggregation |
+| 10 | `LemonCore.ExecApprovalExpiry` | Expiry for approvals whose run or session ended |
+| 11 | `LemonCore.Secrets.SourceTaskSupervisor` | Owns bounded external-source tasks |
+| 12 | `LemonCore.Secrets.SourceCache` | Bounded optional process-local source cache |
+| 13 | `LemonCore.RunHistoryStore` | Run history persistence (only when `:exqlite` is available) |
+| 14 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
+| 15 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
 
 Named-node sockets register themselves, so Registry removes dead connections
 without node-monitor bookkeeping. Each temporary `LemonCore.NodeInvocation` owns
@@ -558,6 +563,45 @@ Agent workspace coordination — goals and kanban boards — is built on this St
 
 This cache scope remains deliberately unchanged; expand it only when measurements
 show a hot read path that benefits from caching.
+
+The Store owns those tables; their references and the effective cached-domain
+list live in `LemonCore.RuntimeCache`, not `:persistent_term`, because runtime
+registration and Store restarts change them. Runtime hook registrations are
+serialized by that separate supervised owner, retain order, deduplicate values
+and survive registering-process exits and Store restarts. Registration before
+an individual Store starts is supported once `:lemon_core` is running.
+
+### Runtime ETS ownership
+
+`LemonCore.Dedupe.Ets.init/1` starts a table owner under
+`LemonCore.Dedupe.Supervisor`. Concurrent initialization is serialized, and the
+first caller's exit no longer destroys the table. An owner crash recreates an
+empty table; dedupe is still volatile and best-effort. Use durable idempotency
+for replay fences.
+
+Core's other named ETS tables belong to `ConfigCache`, `Drain`,
+`NodeRegistry.Generations`, the individual Store, or `RuntimeCache`, all
+supervised services. Test barriers use unnamed, creator-owned table references
+instead of synthesizing named tables and atoms. RuntimeCache also holds
+atomically claimed once-only warning flags and the lazily resolved process UID.
+Its contents are volatile: its own restart clears registrations and metadata,
+whereas a Store restart does not. Collaborators register again at application
+startup. Drain's protected phase table disappears with its coordinator, so a
+stopped coordinator cannot leave a stale `:stopping` value behind.
+
+Core uses `:persistent_term` for boot/configuration publications and the
+rotation-invalidated master-key cache:
+
+| Writer | Retained immutable value |
+| --- | --- |
+| `LemonCore.Bus.child_spec_for_backend/0` | Backend selected while building the application supervision tree |
+| `LemonCore.ConfigCache.init/1` | Cache timeout/fingerprint defaults for that configured instance |
+| `LemonCore.ExecApprovalExpiry.init_runtime_id/0` | VM incarnation, initialized by the application callback and retained across worker restarts |
+| `LemonCore.Secrets.MasterKey` | Resolved key material; invalidated under the secrets lease on initialization and rotation |
+
+Ordinary Bus detection and approval-runtime reads never lazily publish. Public
+dedupe, Drain, Store hook and listener API signatures are unchanged; the core
+application supplies their ETS owners.
 
 ### Backend Behaviour
 

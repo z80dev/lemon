@@ -161,6 +161,12 @@ defmodule LemonControlPlane.Methods.NodeSecretProofsTest do
         end)
 
       assert_receive {:node_event, "node.invoke.request", %{"invokeId" => invocation}}, 1_000
+      # Invocation init emits the request before its caller necessarily returns
+      # from admission. Cross the lifecycle mutex with a same-name rename before
+      # suspending that caller, or the fixture can freeze the admission lock.
+      # The vault result is still withheld, so post-dispatch verification cannot
+      # run before we replace its captured authority below.
+      assert :ok = NodeRegistry.rename(ctx.node_id, inspected.name)
       assert :erlang.suspend_process(task.pid)
 
       try do
