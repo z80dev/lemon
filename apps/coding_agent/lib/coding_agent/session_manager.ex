@@ -6,7 +6,9 @@ defmodule CodingAgent.SessionManager do
   The first entry is always a SessionHeader, followed by session entries.
   Navigation checkpoints are appended outside the entry tree; the latest marker
   wins on reload. Old header-only checkpoints remain supported. A live session
-  owns one raw append descriptor and flushes turn checkpoints with datasync.
+  owns one raw append descriptor, flushes turn checkpoints with datasync, and
+  syncs effectful tool intents before dispatch. Tool results are appended without
+  a per-result sync.
 
   A rebuildable SQLite metadata index keeps listing from reopening unchanged
   journals. Loading streams records for every journal size, retaining only the
@@ -447,6 +449,44 @@ defmodule CodingAgent.SessionManager do
            :ok <- :file.datasync(session.append_device),
            do: :ok
     end)
+  end
+
+  @doc """
+  Append and sync a `lemon.tool_intent` before an effectful tool is dispatched.
+
+  Must run in the live journal descriptor's owner. Returns the updated session
+  even if sync fails: an appended intent may survive and must remain conservative
+  on recovery. Results use ordinary unsynced `append_message/2` writes.
+  The optional file module is a fault-injection and latency-measurement seam.
+  """
+  @spec record_tool_intent(Session.t(), map(), module()) ::
+          {:ok, Session.t()} | {:error, term(), Session.t()}
+  def record_tool_intent(session, data, file_module \\ :file)
+
+  def record_tool_intent(%Session{append_device: nil} = session, _data, _file_module),
+    do: {:error, :not_persisted, session}
+
+  def record_tool_intent(%Session{} = session, data, file_module) do
+    entry = SessionEntry.custom("lemon.tool_intent", data)
+    entry = %{entry | id: generate_unique_id(session.by_id), parent_id: session.leaf_id}
+
+    case file_module.write(session.append_device, [encode_entry(entry), "\n"]) do
+      :ok ->
+        session = %{
+          session
+          | entries_rev: [entry | session.entries_rev],
+            by_id: Map.put(session.by_id, entry.id, entry),
+            leaf_id: entry.id
+        }
+
+        case file_module.datasync(session.append_device) do
+          :ok -> {:ok, session}
+          {:error, reason} -> {:error, {:sync, reason}, session}
+        end
+
+      {:error, reason} ->
+        {:error, {:append, reason}, session}
+    end
   end
 
   @doc "Closes the live journal descriptor; raw descriptors also close when their owner exits."

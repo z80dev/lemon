@@ -120,6 +120,11 @@ defmodule LemonAgent.Types do
         Defaults to `false`; mutations and tools with ordering dependencies
         must remain sequential. Sequential calls are barriers between parallel
         groups, even when `max_tool_concurrency` is unbounded.
+      * `:effect` — `:none` for read-only operations, `:idempotent` for mutations
+        safe to repeat with identical arguments, or `:external` (the conservative
+        default) for other effects. Coding sessions durably record intent before
+        dispatching either mutation class; this classification never authorizes
+        automatic retries. Effectful tools cannot start work from `on_stream`.
       * `:timeout_ms` — execution deadline override in milliseconds. `nil` inherits
         the loop default (300,000 ms); `:infinity` exempts tools that own their
         deadline or legitimately wait indefinitely.
@@ -239,6 +244,7 @@ defmodule LemonAgent.Types do
             parameters: map(),
             label: String.t(),
             parallel_safe: boolean(),
+            effect: :none | :idempotent | :external,
             timeout_ms: pos_integer() | :infinity | nil,
             execute: execute_fn() | nil,
             on_stream: (stream_event() -> term()) | nil
@@ -248,6 +254,7 @@ defmodule LemonAgent.Types do
               parameters: %{},
               label: "",
               parallel_safe: false,
+              effect: :external,
               timeout_ms: nil,
               execute: nil,
               on_stream: nil

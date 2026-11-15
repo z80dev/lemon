@@ -11,6 +11,12 @@ Deterministic and opt-in live evaluation harnesses for the Lemon coding-agent st
 
 `lemon_evals` is a dev/CI rig and is not included in runtime releases.
 
+Standalone `LemonEvals.Support.run_tool/3` calls retain the normal fail-closed
+tool-intent gate. Effectful calls append and sync an eval-only temporary journal
+outside the fixture workspace before executing, then remove it after return.
+Read-only calls do not create that journal or add an intent sync. This helper is
+not a production recovery store; real sessions retain their own journal owner.
+
 ## Commands
 
 ```bash

@@ -216,6 +216,7 @@ defmodule CodingAgent.Session do
     todo_projection: {:ok, []},
     tool_started_at: %{},
     wasm_host_calls: %{},
+    pending_tool_intents: %{},
     auto_compaction: %CompactionLifecycle.State{},
     manual_operation: nil,
     overflow_recovery: %OverflowRecovery.State{},
@@ -1153,6 +1154,10 @@ defmodule CodingAgent.Session do
     {:reply, CodingAgent.Session.Invocation.stream(state, options), state}
   end
 
+  def handle_call({:record_tool_intent, data, signal, parent_id}, from, state) do
+    CodingAgent.Session.ToolIntentGate.request(state, data, signal, parent_id, from)
+  end
+
   def handle_call(:context_budget, _from, state) do
     budget =
       ContextBudget.measure(state, LemonAgent.Agent.get_state(state.agent))
@@ -1841,6 +1846,7 @@ defmodule CodingAgent.Session do
   def handle_info({:agent_event, {:message_end, _message} = raw_event}, state) do
     event = strip_recalled_context_from_event(raw_event)
     state = handle_agent_event(event, state)
+    state = CodingAgent.Session.ToolIntentGate.flush(state)
     {:noreply, state}
   end
 
@@ -1883,7 +1889,17 @@ defmodule CodingAgent.Session do
   end
 
   def handle_info({:lemon_abort, signal, _kind}, state) do
+    state = CodingAgent.Session.ToolIntentGate.cancel_signal(state, signal)
     {:noreply, WasmBridge.abort_host_calls(state, signal)}
+  end
+
+  def handle_info({:tool_intent_wait_expired, ref}, state) do
+    {:noreply, CodingAgent.Session.ToolIntentGate.cancel(state, ref, :assistant_not_recorded)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state)
+      when is_map_key(state.pending_tool_intents, ref) do
+    {:noreply, CodingAgent.Session.ToolIntentGate.cancel(state, ref, :caller_down)}
   end
 
   def handle_info({:DOWN, ref, :process, pid, reason}, state)

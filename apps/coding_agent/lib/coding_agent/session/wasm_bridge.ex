@@ -261,6 +261,15 @@ defmodule CodingAgent.Session.WasmBridge do
         # registry lookup. Execution must not occupy the journal-owning GenServer.
         tool = find_host_tool(state, tool_name)
 
+        tool =
+          case {tool, Map.get(context, :parent_intent_scope)} do
+            {%LemonAgent.Types.AgentTool{} = tool, {_id, _owner, _live} = scope} ->
+              CodingAgent.ToolIntent.inherit_parent_scope(tool, scope)
+
+            _ ->
+              tool
+          end
+
         # The invocation owns its child signal; parent notifications wake the session.
         signal = AbortSignal.new()
         request = Map.put(request, :signal, signal)

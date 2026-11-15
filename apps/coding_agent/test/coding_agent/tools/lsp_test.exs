@@ -55,7 +55,14 @@ defmodule CodingAgent.Tools.LspTest do
 
   test "navigation sends UTF-16 positions and reports code-point path:line:col", ctx do
     # Obtain the tool exactly as sessions do.
-    tool = Enum.find(ToolRegistry.get_tools(ctx.tmp, ctx.opts), &(&1.name == "lsp"))
+    opts =
+      Keyword.put(
+        ctx.opts,
+        :tool_intent_recorder,
+        CodingAgent.Test.ToolIntentRecorder.new(ctx.tmp)
+      )
+
+    tool = Enum.find(ToolRegistry.get_tools(ctx.tmp, opts), &(&1.name == "lsp"))
     exec = &tool.execute.("call", &1, nil, nil)
 
     definition =

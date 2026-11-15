@@ -3,6 +3,7 @@ defmodule CodingAgent.Wasm.SidecarSessionTest do
 
   import ExUnit.CaptureLog
 
+  alias CodingAgent.ToolIntent
   alias CodingAgent.Wasm.Config
   alias CodingAgent.Wasm.SidecarSession
   alias CodingAgent.Wasm.SidecarSession.Framing
@@ -76,7 +77,8 @@ defmodule CodingAgent.Wasm.SidecarSessionTest do
     assert {:ok, %{tools: [], warnings: [], errors: []}} = SidecarSession.discover(sidecar)
   end
 
-  test "deadlines complete callers while a host callback is blocked", context do
+  test "deadlines complete callers and expire parent scopes while a host callback is blocked",
+       context do
     test_pid = self()
 
     sidecar =
@@ -89,8 +91,20 @@ defmodule CodingAgent.Wasm.SidecarSessionTest do
       end)
 
     state = :sys.get_state(sidecar)
-    caller = Task.async(fn -> SidecarSession.invoke(sidecar, "host_call", "{}", nil, 60_000) end)
-    assert_receive {:host_waiting, ^sidecar, %{owner: owner}}, 5_000
+
+    caller =
+      Task.async(fn ->
+        ToolIntent.with_parent_scope("parent", fn _scope ->
+          SidecarSession.invoke(sidecar, "host_call", "{}", nil, 60_000)
+        end)
+      end)
+
+    assert_receive {:host_waiting, ^sidecar,
+                    %{owner: owner, parent_intent_scope: {"parent", scope_owner, live}}},
+                   5_000
+
+    assert scope_owner == owner
+    assert :atomics.get(live, 1) == 1
     assert owner == caller.pid
 
     # The callback barrier proves dispatch finished. Deliver the exact scheduled
@@ -103,6 +117,7 @@ defmodule CodingAgent.Wasm.SidecarSessionTest do
     send(state.rpc_client, {:deadline, id, token})
 
     assert {:error, :timeout} = Task.await(caller, 5_000)
+    assert :atomics.get(live, 1) == 0
     assert Client.pending_count(state.rpc_client) == 0
 
     send(sidecar, :release_host)
@@ -248,7 +263,7 @@ defmodule CodingAgent.Wasm.SidecarSessionTest do
     request =
       :gen_server.send_request(
         sidecar,
-        {:invoke, "never_reply", "{}", nil, :infinity, signal}
+        {:invoke, "never_reply", "{}", nil, :infinity, signal, nil}
       )
 
     # Same-sender ordering makes this a dispatch barrier, not a polling loop.

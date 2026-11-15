@@ -19,6 +19,7 @@ defmodule CodingAgent.ToolRegistry do
   alias CodingAgent.MutationLock
   alias CodingAgent.NodeTools
   alias CodingAgent.ToolExecutor
+  alias CodingAgent.ToolIntent
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools
   alias CodingAgent.Wasm.Policy, as: WasmPolicy
@@ -111,6 +112,9 @@ defmodule CodingAgent.ToolRegistry do
     {:tool_auth, Tools.ToolAuth},
     {:extensions_status, Tools.ExtensionsStatus}
   ]
+  @builtin_tool_name_strings Enum.map(@builtin_tools, fn {name, _module} ->
+                               Atom.to_string(name)
+                             end)
 
   @browser_tool_names @builtin_tools
                       |> Enum.map(&elem(&1, 0))
@@ -251,6 +255,9 @@ defmodule CodingAgent.ToolRegistry do
     |> filter_policy_blocked(tool_policy)
     |> configure_bash(cwd, opts)
     |> NodeTools.wrap_tuples(Keyword.put(opts, :cwd, cwd))
+    |> Enum.map(fn {name, tool, source} ->
+      {name, ToolIntent.wrap(tool, opts), source}
+    end)
     |> maybe_wrap_approval(tool_policy, approval_ctx)
   end
 
@@ -258,8 +265,13 @@ defmodule CodingAgent.ToolRegistry do
     opts = Keyword.put(opts, :available_tools, Enum.map(tools, &elem(&1, 0)))
 
     Enum.map(tools, fn
-      {"bash", _tool, :builtin} -> {"bash", Tools.Bash.tool(cwd, opts), :builtin}
-      other -> other
+      {"bash", _tool, :builtin} ->
+        %AgentTool{} = tool = Tools.Bash.tool(cwd, opts)
+        tool = %{tool | effect: :external}
+        {"bash", maybe_serialize_mutation(tool, "bash", cwd, opts), :builtin}
+
+      other ->
+        other
     end)
   end
 
@@ -564,8 +576,13 @@ defmodule CodingAgent.ToolRegistry do
       tool_opts = if name in @browser_tool_names, do: browser_opts, else: opts
       if ownership == :unknown, do: LemonCore.NativeProcess.unsupported!()
       tool = module.tool(cwd, tool_opts)
-      tool = if ownership == :unknown, do: wrap_unmanaged_tool(tool), else: tool
+      %AgentTool{} = tool = if ownership == :unknown, do: wrap_unmanaged_tool(tool), else: tool
       name = Atom.to_string(name)
+
+      tool =
+        if name in @builtin_tool_name_strings,
+          do: %{tool | effect: ToolIntent.builtin_effect(name)},
+          else: tool
 
       {name, maybe_serialize_mutation(tool, name, cwd, tool_opts), :builtin}
     end)
