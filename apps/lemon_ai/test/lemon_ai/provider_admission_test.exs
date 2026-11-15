@@ -57,7 +57,9 @@ defmodule LemonAi.ProviderAdmissionTest do
     assert {:error, :max_concurrency} =
              CallDispatcher.dispatch(
                provider,
-               fn -> flunk("replacement forgot the live lease") end, queue_timeout_ms: 0)
+               fn -> flunk("replacement forgot the live lease") end,
+               queue_timeout_ms: 0
+             )
 
     send(holder.pid, :finish)
     assert Task.await(holder) == {:ok, :finished}
