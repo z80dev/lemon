@@ -82,6 +82,7 @@ passes tool/reasoning payloads, or appends review output to session history.
 
 ```
 CodingAgent.Supervisor (one_for_one)
+  +-- RuntimeTables (extension/web/capability caches)
   +-- Registry (SessionRegistry)
   +-- Registry (BackgroundRun.Registry)
   +-- Registry (ProcessRegistry)
@@ -98,6 +99,28 @@ CodingAgent.Supervisor (one_for_one)
   +-- LaneQueue (concurrency-capped lane FIFO)
   +-- Parallel.Semaphore (task concurrency limit)
 ```
+
+### Runtime table ownership
+
+`RuntimeTables` creates the extension inventory, extension source/error metadata,
+web cache/state and websearch rate-limit tables before sessions start. Additional
+web-cache tables are created by that same supervised owner, never by a tool task.
+Python/CLT and ripgrep/PCRE2 probe results and the fallback secret-placeholder key
+use its protected ETS cache. Probes execute outside the owner; concurrent misses
+publish one canonical value. Reads stay direct ETS lookups.
+
+These caches survive requesting-process exits, but are disposable on owner
+restart. Web entries reload from their configured disk cache; extension inventory
+and capability results repopulate on demand. The fallback placeholder key is
+runtime-ephemeral and changes after owner restart; persisted keys are unaffected.
+`TodoStoreOwner` owns the todo projection without a caller-created fallback.
+Direct tool/store callers must start the `coding_agent` application.
+Pre-boot Python feature checks may run uncached without starting the application
+or creating a table, preserving CLI capability inspection before worker setup.
+
+Search provider specifications remain in `:persistent_term`: only explicit
+startup/config-registration operations (`init`, `reset`, `register`,
+`unregister`) publish them. Provider reads never initialize or mutate the map.
 
 ## Module Inventory
 

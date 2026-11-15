@@ -49,6 +49,14 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 - **LoopTaskSupervisor** -- A `Task.Supervisor` for spawning agent loop tasks via `Task.Supervisor.async_nolink/2`.
 - **ToolTaskSupervisor** -- A `Task.Supervisor` for spawning concurrent tool execution tasks.
 
+Credential cooldowns and fallback session pins live in public ETS tables
+created only by their supervised `ModelRuntime.CredentialHealth` and
+`ModelRuntime.SessionPins` owners. Caller exit does not discard the rows.
+Owner restart clears these volatile hints; calls during an outage do not
+create replacement tables and retain the documented no-cooldown/no-pin behavior.
+`ToolRegistry` and `ContextRegistry` retain `persistent_term` for boot-time
+integration registrations only, not per-request state or lazy caches.
+
 ## Module Inventory
 
 ### Core Agent

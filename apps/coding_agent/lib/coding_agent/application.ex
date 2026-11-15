@@ -23,6 +23,7 @@ defmodule CodingAgent.Application do
       )
 
     children = [
+      CodingAgent.RuntimeTables,
       {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
       {Registry, keys: :unique, name: CodingAgent.BackgroundRun.Registry},
       {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},

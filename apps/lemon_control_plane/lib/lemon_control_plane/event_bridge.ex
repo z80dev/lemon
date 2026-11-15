@@ -6,6 +6,8 @@ defmodule LemonControlPlane.EventBridge do
   to connected non-node WebSocket clients as event frames. Authenticated nodes
   receive only traffic sent directly to their connection as targeted
   `{:node_event, event_name, payload}` messages.
+  Unmapped-event warning suppression uses bridge-owned ETS and resets when the
+  supervised bridge restarts; event producers never own that cache.
 
   ## Topics Subscribed
 
@@ -126,6 +128,7 @@ defmodule LemonControlPlane.EventBridge do
 
   @impl true
   def init(_opts) do
+    :ets.new(__MODULE__, [:named_table, :public, :set, write_concurrency: true])
     delivery = Delivery.new(self(), tagged: true)
     Enum.each([LemonOmp.bus_topic() | @bus_topics], &Bus.subscribe(&1, delivery: delivery))
 
@@ -910,12 +913,17 @@ defmodule LemonControlPlane.EventBridge do
   defp warn_unmapped_once(type, payload) do
     key = {__MODULE__, :unmapped_event, type}
 
-    if :persistent_term.get(key, nil) == nil do
-      :persistent_term.put(key, true)
+    if first_warning?(key) do
       Logger.warning("[EventBridge] " <> unmapped_reason(type, payload))
     end
 
     :ok
+  end
+
+  defp first_warning?(key) do
+    :ets.insert_new(__MODULE__, {key})
+  rescue
+    ArgumentError -> true
   end
 
   defp unmapped_reason(type, payload) do

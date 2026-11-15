@@ -152,12 +152,11 @@ defmodule LemonAi.ProviderRegistryComprehensiveTest do
       assert {:error, :not_found} = ProviderRegistry.get(:test_api)
     end
 
-    test "initializes registry if not already initialized" do
-      # Clear to simulate uninitialized state
+    test "reads a cleared registry without restoring providers" do
       ProviderRegistry.clear()
       assert ProviderRegistry.list() == []
 
-      # get/1 should auto-initialize
+      # Clearing is an explicit configuration write; reads leave that map alone.
       assert {:error, :not_found} = ProviderRegistry.get(:any_api)
       assert ProviderRegistry.initialized?()
     end
@@ -319,10 +318,8 @@ defmodule LemonAi.ProviderRegistryComprehensiveTest do
   # ============================================================================
 
   describe "initialized?/0" do
-    test "returns false for uninitialized registry" do
+    test "remains initialized after clearing registrations" do
       ProviderRegistry.clear()
-      # Need to actually delete the persistent_term to test uninitialized state
-      # This is handled by clear/0, so we test the transition
       assert ProviderRegistry.initialized?()
     end
 

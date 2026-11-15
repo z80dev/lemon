@@ -5,6 +5,10 @@ defmodule LemonCore.Dedupe.Ets do
   Stores `{key, ts_ms}` entries in an ETS `:set` table, where `ts_ms` is the
   monotonic time (ms) when the key was marked.
 
+  Each named table belongs to a worker under `LemonCore.Dedupe.Supervisor`,
+  not to the first caller. A worker restart recreates an empty cache; this is
+  best-effort, in-memory deduplication, not durable idempotency.
+
   TTL semantics:
   - A key is considered "seen" if `now_ms - ts_ms <= ttl_ms`.
   - Expired entries are deleted on access (and can also be cleaned in bulk).
@@ -16,24 +20,27 @@ defmodule LemonCore.Dedupe.Ets do
   @doc """
   Ensure the ETS table exists.
 
-  Creates a public named set with concurrent reads and writes.
+  Starts a supervised owner for a public named set with concurrent reads and
+  writes. The `:lemon_core` application must be running.
   """
   @spec init(atom()) :: :ok
-  def init(table) do
-    case :ets.info(table) do
+  def init(table) when is_atom(table) do
+    case :ets.whereis(table) do
       :undefined ->
-        _ =
-          :ets.new(table, [
-            :set,
-            :public,
-            :named_table,
-            read_concurrency: true,
-            write_concurrency: true
-          ])
+        case DynamicSupervisor.start_child(
+               LemonCore.Dedupe.Supervisor,
+               {LemonCore.Dedupe.Owner, table}
+             ) do
+          {:ok, _owner} ->
+            :ok
 
-        :ok
+          :ignore ->
+            # Another queued start already created the table. The supervisor
+            # completes that owner's init before processing this request.
+            :ok
+        end
 
-      _info ->
+      _existing ->
         :ok
     end
   end

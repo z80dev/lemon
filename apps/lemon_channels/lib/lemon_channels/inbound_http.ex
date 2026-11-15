@@ -16,9 +16,8 @@ defmodule LemonChannels.InboundHttp do
         port: 4090,
         ip: {127, 0, 0, 1}
 
-  Disabled by default. When disabled the supervisor starts with no children, so
-  nothing binds a port and adapters that need inbound HTTP simply never receive
-  anything — the same failure mode as an unconfigured poller.
+  Disabled by default. When disabled only the route-registration child starts:
+  nothing binds a port, but adapters can still register handlers at boot.
 
   ## Registering a handler
 
@@ -33,13 +32,16 @@ defmodule LemonChannels.InboundHttp do
 
   Registration is deliberately runtime rather than compile-time so satellite
   packages can add listeners without this app knowing they exist.
+
+  Registrations are serialized config updates that publish a persistent-term
+  snapshot. Request dispatch never calls the registration process. A restart
+  clears the snapshot; adapters must register again before receiving requests.
   """
 
   use Supervisor
 
-  require Logger
+  alias LemonChannels.InboundHttp.Routes
 
-  @registry_name __MODULE__.Routes
   @default_max_body_bytes 2_000_000
 
   @spec start_link(keyword()) :: Supervisor.on_start()
@@ -49,13 +51,9 @@ defmodule LemonChannels.InboundHttp do
 
   @impl true
   def init(_opts) do
-    children = [{Agent, fn -> %{} end} |> agent_spec()] ++ listener_children()
+    children = [Routes] ++ listener_children()
 
     Supervisor.init(children, strategy: :one_for_one)
-  end
-
-  defp agent_spec({Agent, fun}) do
-    %{id: @registry_name, start: {Agent, :start_link, [fun, [name: @registry_name]]}}
   end
 
   defp listener_children do
@@ -118,44 +116,16 @@ defmodule LemonChannels.InboundHttp do
   """
   @spec register(binary(), module()) :: :ok | {:error, :not_running}
   def register(segment, handler) when is_binary(segment) and is_atom(handler) do
-    if Process.whereis(@registry_name) do
-      warn_on_replacement(segment, handler)
-      Agent.update(@registry_name, &Map.put(&1, segment, handler))
-    else
-      {:error, :not_running}
-    end
-  end
-
-  defp warn_on_replacement(segment, handler) do
-    case handler_for(segment) do
-      nil ->
-        :ok
-
-      ^handler ->
-        :ok
-
-      existing ->
-        Logger.warning(
-          "inbound http segment #{inspect(segment)} re-registered: " <>
-            "#{inspect(existing)} replaced by #{inspect(handler)}; " <>
-            "requests to /#{segment} will now go to the latter"
-        )
-    end
+    Routes.register(segment, handler)
   end
 
   @doc "Looks up the handler registered for a path segment."
   @spec handler_for(binary()) :: module() | nil
-  def handler_for(segment) when is_binary(segment) do
-    if Process.whereis(@registry_name) do
-      Agent.get(@registry_name, &Map.get(&1, segment))
-    end
-  end
+  def handler_for(segment) when is_binary(segment), do: Map.get(handlers(), segment)
 
   @doc "All registered `segment => handler` pairs."
   @spec handlers() :: %{optional(binary()) => module()}
-  def handlers do
-    if Process.whereis(@registry_name), do: Agent.get(@registry_name, & &1), else: %{}
-  end
+  def handlers, do: Routes.handlers()
 
   defp config, do: Application.get_env(:lemon_channels, __MODULE__, [])
 end

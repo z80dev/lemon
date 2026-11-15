@@ -93,7 +93,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     account_id = cfg_get(cfg, :account_id, "default")
 
     :ok = Dedupe.init()
-    ModelPolicyAdapter.ensure_session_table()
 
     {:ok, port_server} =
       PortBridge.start_link({@bridge_spec, [config: cfg, notify_pid: self(), restart: :manual]})

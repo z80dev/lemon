@@ -6,7 +6,7 @@ defmodule LemonComputerUse.ServerTest do
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.{ImageContent, TextContent}
   alias LemonComputerUse.{ContextContributor, Server}
-  alias LemonComputerUse.Tools.{Js, JsReset}
+  alias LemonComputerUse.Tools.{Common, Js, JsReset}
   alias LemonCore.Events.RunCompleted
 
   setup context do
@@ -21,6 +21,53 @@ defmodule LemonComputerUse.ServerTest do
   end
 
   defp run(tool, params, signal \\ nil), do: tool.execute.("call-1", params, signal, nil)
+
+  test "concurrent first callers share the supervised nonce", %{server: server} do
+    session = self()
+
+    tasks =
+      for index <- 1..32 do
+        Task.async(fn ->
+          Common.call_context([session_id: "concurrent", session_pid: session], "call-#{index}")
+        end)
+      end
+
+    turns =
+      Enum.map(tasks, fn task ->
+        assert {:ok, context} = Task.await(task)
+        context.turn_id
+      end)
+
+    assert length(Enum.uniq(turns)) == 1
+    assert :ets.info(Server, :owner) == server
+    assert {:ok, nonce} = Server.boot_nonce()
+    assert byte_size(nonce) == 16
+  end
+
+  test "catalog and nonce disappear with their owner and rebuild on restart", %{server: server} do
+    assert {:ok, nonce} = Server.boot_nonce()
+    task = Task.async(fn -> Server.catalog() end)
+    assert {:ok, catalog} = Task.await(task, 10_000)
+    assert Server.cached_catalog() == catalog
+    assert :ets.info(Server, :owner) == server
+
+    stop_supervised!(Server)
+    assert Server.cached_catalog() == nil
+    assert Server.boot_nonce() == {:error, :unavailable}
+
+    assert {:error, "Computer use is not running in this Lemon runtime."} =
+             Common.call_context([session_id: "absent", session_pid: self()], "call")
+
+    assert :ets.whereis(Server) == :undefined
+
+    restarted = start_supervised!({Server, []})
+    assert Server.cached_catalog() == nil
+    assert :ets.info(Server, :owner) == restarted
+    assert {:ok, fresh_nonce} = Server.boot_nonce()
+    refute fresh_nonce == nonce
+    assert {:ok, ^catalog} = Server.catalog()
+    assert Server.cached_catalog() == catalog
+  end
 
   test "builds the tools from the runtime's own descriptors and exposes its instructions" do
     assert ContextContributor.contribute(%{}) == :skip
@@ -239,9 +286,12 @@ defmodule LemonComputerUse.ServerTest do
 
     assert text =~ "may already have taken effect"
     assert Server.status().last_error == :bridge_exited
+    assert Server.cached_catalog() == nil
 
     assert %AgentToolResult{content: [%TextContent{text: "again"}]} =
              run(js, %{"code" => "text:again"})
+
+    assert %{tools: [_ | _]} = Server.cached_catalog()
   end
 
   @tag connect_fail: true

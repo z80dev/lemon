@@ -32,14 +32,15 @@ defmodule LemonComputerUse.Server do
 
   alias LemonComputerUse.{Approval, Config}
 
-  @catalog_key {__MODULE__, :catalog}
+  @cache_table __MODULE__
   @line_bytes 65_536
   @kill_grace_ms 3_000
 
   @passthrough_env ~w(HOME USER LOGNAME PATH TMPDIR LANG LC_ALL LC_CTYPE SHELL DISPLAY
                       WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS XAUTHORITY)
 
-  defstruct port: nil,
+  defstruct cache: nil,
+            port: nil,
             os_pid: nil,
             buffer: [],
             connected?: false,
@@ -61,7 +62,24 @@ defmodule LemonComputerUse.Server do
 
   @doc "The connected catalog (`instructions`, `tools`) without blocking, or `nil`."
   @spec cached_catalog() :: map() | nil
-  def cached_catalog, do: :persistent_term.get(@catalog_key, nil)
+  def cached_catalog do
+    case :ets.lookup(@cache_table, :catalog) do
+      [{:catalog, catalog}] -> catalog
+      [] -> nil
+    end
+  rescue
+    ArgumentError -> nil
+  end
+
+  @doc false
+  def boot_nonce do
+    case :ets.lookup(@cache_table, :boot_nonce) do
+      [{:boot_nonce, nonce}] -> {:ok, nonce}
+      [] -> {:error, :unavailable}
+    end
+  rescue
+    ArgumentError -> {:error, :unavailable}
+  end
 
   @doc """
   The original server's instructions and model tool descriptors, connecting
@@ -138,7 +156,16 @@ defmodule LemonComputerUse.Server do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
-    state = %__MODULE__{}
+    table_opts = [:protected, :set, read_concurrency: true]
+
+    table_opts =
+      if Keyword.get(opts, :name, __MODULE__) == __MODULE__,
+        do: [:named_table | table_opts],
+        else: table_opts
+
+    cache = :ets.new(@cache_table, table_opts)
+    :ets.insert(cache, {:boot_nonce, :crypto.strong_rand_bytes(16)})
+    state = %__MODULE__{cache: cache}
 
     if Keyword.get(opts, :connect, false),
       do: {:ok, enqueue(state, :connect), {:continue, :run}},
@@ -150,7 +177,8 @@ defmodule LemonComputerUse.Server do
 
   @impl true
   def handle_call(:catalog, _from, %{connected?: true} = state) do
-    {:reply, {:ok, cached_catalog()}, state}
+    [{:catalog, catalog}] = :ets.lookup(state.cache, :catalog)
+    {:reply, {:ok, catalog}, state}
   end
 
   def handle_call(:catalog, _from, %{last_error: reason} = state)
@@ -269,7 +297,6 @@ defmodule LemonComputerUse.Server do
   @impl true
   def terminate(_reason, state) do
     stop_bridge(state)
-    :persistent_term.erase(@catalog_key)
     :ok
   end
 
@@ -422,13 +449,10 @@ defmodule LemonComputerUse.Server do
 
   defp complete(state, :connect, {:ok, %{"instructions" => instructions, "tools" => tools}})
        when is_list(tools) do
-    :persistent_term.put(@catalog_key, %{
-      instructions: instructions || "",
-      tools: tools,
-      chrome: state.chrome?
-    })
+    catalog = %{instructions: instructions || "", tools: tools, chrome: state.chrome?}
+    :ets.insert(state.cache, {:catalog, catalog})
 
-    %{state | connected?: true, last_error: nil} |> reply_waiters({:ok, cached_catalog()})
+    %{state | connected?: true, last_error: nil} |> reply_waiters({:ok, catalog})
   end
 
   defp complete(state, :connect, {:ok, _invalid}),
@@ -644,7 +668,7 @@ defmodule LemonComputerUse.Server do
     end)
 
     Enum.each(state.run_topics, &LemonCore.Bus.unsubscribe("run:" <> &1))
-    :persistent_term.erase(@catalog_key)
+    :ets.delete(state.cache, :catalog)
 
     connect_in_flight? = match?(%{op: :connect}, state.current)
 
