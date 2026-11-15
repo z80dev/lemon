@@ -12,16 +12,6 @@ defmodule LemonCore.StoreHooksTest do
   alias LemonCore.Store.EtsBackend
   alias LemonCore.Store.ReadCache
 
-  defmodule FakeHistory do
-    @moduledoc false
-    def get(server, session_key, opts), do: [{:fake, server, session_key, opts}]
-  end
-
-  defmodule ExplodingHistory do
-    @moduledoc false
-    def get(_server, _session_key, _opts), do: raise("history provider is down")
-  end
-
   defp start_store(name, opts) do
     spec = Supervisor.child_spec({Store, Keyword.put(opts, :name, name)}, id: name)
     start_supervised!(spec)
@@ -124,42 +114,6 @@ defmodule LemonCore.StoreHooksTest do
                    summary: %{}
                  })
       end
-    end
-  end
-
-  describe "run history provider" do
-    test "reads forward to the configured provider" do
-      store =
-        start_store(:store_history_provider,
-          backend: EtsBackend,
-          run_history_provider: {FakeHistory, :fake_server}
-        )
-
-      assert Store.get_run_history(store, "agent:x:main", limit: 3) == [
-               {:fake, :fake_server, "agent:x:main", [limit: 3]}
-             ]
-    end
-
-    test "a store with no provider reports no history instead of failing" do
-      store = start_store(:store_history_none, backend: EtsBackend)
-
-      assert Store.get_run_history(store, "agent:x:main", []) == []
-    end
-
-    test "a provider that raises is isolated from the store" do
-      store =
-        start_store(:store_history_exploding,
-          backend: EtsBackend,
-          run_history_provider: ExplodingHistory
-        )
-
-      log =
-        capture_log(fn ->
-          assert Store.get_run_history(store, "agent:x:main", []) == []
-        end)
-
-      assert log =~ "history provider is down"
-      assert Store.ping(store) == :ok
     end
   end
 

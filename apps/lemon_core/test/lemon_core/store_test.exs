@@ -3,6 +3,7 @@ defmodule LemonCore.StoreTest do
 
   import ExUnit.CaptureLog
 
+  alias LemonCore.RunHistoryStore
   alias LemonCore.Store
   alias LemonCore.Testing.AsyncHelpers
 
@@ -215,7 +216,7 @@ defmodule LemonCore.StoreTest do
   end
 
   describe "run history ordering/backfill" do
-    test "get_run_history orders finalized runs by newest started_at first" do
+    test "RunHistoryStore orders finalized runs by newest started_at first" do
       token = unique_token()
       session_key = session_key(token)
 
@@ -231,7 +232,11 @@ defmodule LemonCore.StoreTest do
       :ok = Store.finalize_run(middle, %{session_key: session_key})
       :ok = Store.finalize_run(newest, %{session_key: session_key})
 
-      history = Store.get_run_history(session_key, limit: 10)
+      AsyncHelpers.assert_eventually(fn ->
+        length(RunHistoryStore.get(session_key, limit: 10)) == 3
+      end)
+
+      history = RunHistoryStore.get(session_key, limit: 10)
 
       assert Enum.map(history, &elem(&1, 0)) == [newest, middle, oldest]
       assert Enum.map(history, fn {_run_id, data} -> data.started_at end) == [3_000, 2_000, 1_000]
@@ -263,10 +268,10 @@ defmodule LemonCore.StoreTest do
       # Use a synchronous call as a barrier to ensure async casts are applied
       _ = LemonCore.RunHistoryStore.get(session_key, limit: 1)
 
-      session_history = Store.get_run_history(session_key, limit: 10)
+      session_history = RunHistoryStore.get(session_key, limit: 10)
       assert Enum.map(session_history, &elem(&1, 0)) == [newer_run, older_run]
 
-      session_limited = Store.get_run_history(session_key, limit: 1)
+      session_limited = RunHistoryStore.get(session_key, limit: 1)
       assert Enum.map(session_limited, &elem(&1, 0)) == [newer_run]
     end
   end
@@ -799,13 +804,13 @@ defmodule LemonCore.StoreTest do
       AsyncHelpers.assert_eventually(
         fn ->
           key
-          |> Store.get_run_history(limit: 50)
+          |> RunHistoryStore.get(limit: 50)
           |> Enum.any?(fn {id, _} -> id == rid end)
         end,
         timeout: 5_000
       )
 
-      history = Store.get_run_history(key, limit: 50)
+      history = RunHistoryStore.get(key, limit: 50)
       assert {^rid, data} = Enum.find(history, fn {id, _} -> id == rid end)
       assert data.session_key == key
     end

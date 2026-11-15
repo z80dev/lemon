@@ -201,6 +201,19 @@ defmodule LemonCore.Store.ReadCache do
     ArgumentError -> :ok
   end
 
+  @doc "Applies the backend's expiry predicate to the mirrored rows without clearing live entries."
+  def sweep(store, domain, field, cutoff) do
+    case resolve(store, domain) do
+      nil ->
+        :ok
+
+      table ->
+        :ets.select_delete(table, LemonCore.Store.EtsBackend.sweep_match_spec(field, cutoff))
+    end
+
+    :ok
+  end
+
   @doc """
   Return the ETS table name for a domain of a store instance.
 

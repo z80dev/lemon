@@ -114,6 +114,34 @@ defmodule LemonCore.Store.Hooks do
   end
 
   @doc """
+  Runs hooks outside the Store under a shared caller-policy budget.
+
+  `:store_hook_budget_ms` in `:lemon_core` defaults to 5,000 milliseconds.
+  Persistence has completed; a timed-out hook is killed, not retried.
+  Retrying finalization delivers again, so hooks must remain idempotent.
+  """
+  def invoke_bounded([], _payload, _context), do: :ok
+
+  def invoke_bounded(hooks, payload, context) do
+    budget = Application.get_env(:lemon_core, :store_hook_budget_ms, 5_000)
+    {pid, ref} = spawn_monitor(fn -> invoke(hooks, payload, context) end)
+    {:ok, timer} = :timer.kill_after(budget, pid)
+
+    try do
+      receive do
+        {:DOWN, ^ref, :process, ^pid, :killed} ->
+          Logger.warning("[LemonCore.Store.Hooks] finalize hook budget exhausted")
+          :ok
+
+        {:DOWN, ^ref, :process, ^pid, _reason} ->
+          :ok
+      end
+    after
+      :timer.cancel(timer)
+    end
+  end
+
+  @doc """
   Call `fun`, returning `fallback` if it raises, throws, or exits.
 
   Used for collaborator calls made from inside the store process, where an
