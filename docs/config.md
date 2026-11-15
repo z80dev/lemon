@@ -18,6 +18,36 @@ backup directories or credential-inclusion settings in `config.toml`. See
 [Back up and restore Lemon user state](user-guide/backups.md) for the versioned
 `~/.lemon` data contract.
 
+## Optional GenAI span export
+
+OpenTelemetry export is disabled by default. It is deployment/application
+configuration, not a `config.toml` table or session policy. In the embedding
+application's `config/runtime.exs` (before `:lemon_agent` starts):
+
+```elixir
+config :lemon_agent, :gen_ai_spans,
+  enabled: true,
+  exporter: LemonAgent.GenAISpans.OpenTelemetry
+```
+
+`lemon_agent` declares only an **optional** `opentelemetry_api` dependency.
+Install/start an OpenTelemetry SDK and the desired transport exporter in the
+host application, and configure its processors, endpoint, authentication and
+sampling there. The API alone does not record spans; the adapter is compiled
+only when that API is present. Packaged deployments must include these optional
+apps explicitly to use the adapter.
+
+For another exporter, set `:exporter` to a module implementing
+`LemonAgent.GenAISpans.Exporter` and supply its `:exporter_config` term. No
+OpenTelemetry dependency is needed for custom exporters. All callbacks receive
+only allowlisted labels/usage and native monotonic timestamps; no prompt,
+response, tool arguments/results, credentials or raw exception terms are
+exported. There is no content-capture setting. Restart `:lemon_agent` after
+changing this configuration.
+
+See [telemetry](telemetry.md#optional-genai-span-export) for attributes,
+duration units, lifecycle limitations and the exporter contract.
+
 ## Listener exposure (breaking default change)
 
 The control plane (`4040`), LemonWeb (`4080`),

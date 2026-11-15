@@ -9,8 +9,9 @@ defmodule LemonAi.ModelCallTelemetry do
       monotonic_time}`; metadata `%{provider, telemetry_span_context}` plus
       `model` (model id), `api` and `call_kind` (`:stream | :complete`) when the
       caller supplied them.
-    * `[:lemon_ai, :model_call, :stop]` - measurements `%{duration}` (native
-      units, monotonic delta), `first_event_duration` (native, time to the first
+    * `[:lemon_ai, :model_call, :stop]` - measurements `%{duration,
+      monotonic_time}` (native units, monotonic delta and terminal timestamp),
+      `first_event_duration` (native, time to the first
       text/thinking/tool-call delta, only when one was observed) and
       `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`
       (each only when the provider reported it); metadata is the start metadata
@@ -18,7 +19,8 @@ defmodule LemonAi.ModelCallTelemetry do
       the final message has one, and `error_category` for every non-`:ok`
       outcome.
     * `[:lemon_ai, :model_call, :exception]` - the dispatch callback raised,
-      threw or exited. Measurements `%{duration}`; metadata is the start metadata
+      threw or exited. Measurements `%{duration, monotonic_time}` (native);
+      metadata is the start metadata
       plus `kind` (`:error | :throw | :exit`) and `reason` (the exception
       module for `:error`, otherwise the kind).
 
@@ -106,9 +108,11 @@ defmodule LemonAi.ModelCallTelemetry do
   """
   @spec exception(span(), :error | :throw | :exit, term()) :: :ok
   def exception(span, kind, reason) do
+    ended_at = System.monotonic_time()
+
     :telemetry.execute(
       @event ++ [:exception],
-      %{duration: System.monotonic_time() - span.start_monotonic},
+      %{duration: max(ended_at - span.start_monotonic, 0), monotonic_time: ended_at},
       Map.merge(span.metadata, %{kind: kind, reason: exception_reason(kind, reason)})
     )
   end
@@ -117,7 +121,7 @@ defmodule LemonAi.ModelCallTelemetry do
 
   defp emit_stop(span, outcome, category, message, first_event_at, ended_at) do
     measurements =
-      %{duration: max(ended_at - span.start_monotonic, 0)}
+      %{duration: max(ended_at - span.start_monotonic, 0), monotonic_time: ended_at}
       |> put_first_event_duration(span, first_event_at)
       |> Map.merge(usage_measurements(message))
 

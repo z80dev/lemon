@@ -582,7 +582,7 @@ defmodule LemonAgent.Loop.ToolCalls do
 
     LemonCore.Telemetry.emit(
       [:lemon_agent, :tool_call, :start],
-      %{system_time: System.system_time()},
+      %{system_time: System.system_time(), monotonic_time: started_at},
       %{tool_name: name, is_error: false, timeout: false}
     )
 
@@ -606,9 +606,11 @@ defmodule LemonAgent.Loop.ToolCalls do
            :tool_task_timeout
          ], do: :exception, else: :stop
 
+    ended_at = System.monotonic_time()
+
     LemonCore.Telemetry.emit(
       [:lemon_agent, :tool_call, event],
-      %{duration: System.monotonic_time() - started_at},
+      %{duration: max(ended_at - started_at, 0), monotonic_time: ended_at},
       %{tool_name: name, is_error: is_error, timeout: timeout}
     )
   end

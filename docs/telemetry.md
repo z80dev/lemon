@@ -5,9 +5,11 @@ an event name exists in code but nothing calls it, it is listed under
 [Known gaps](#known-gaps-and-inconsistencies) rather than in the catalog — a catalog entry
 here means the event actually fires.
 
-`:telemetry ~> 1.0` (declared in `apps/lemon_core/mix.exs`) is the only observability
-dependency in the tree. There is no `telemetry_metrics`, `telemetry_poller`, or
-`phoenix_live_dashboard` anywhere, so the consumer example below uses plain
+`:telemetry ~> 1.0` is the required observability dependency. `lemon_agent`
+also declares `opentelemetry_api` as **optional** for the default-off
+[GenAI span exporter](#optional-genai-span-export). There is no required OTel SDK,
+transport exporter, `telemetry_metrics`, `telemetry_poller`, or
+`phoenix_live_dashboard`; the generic consumer example uses
 `:telemetry.attach_many/4`.
 
 Two layers coexist and are easy to confuse:
@@ -43,14 +45,22 @@ by hand — none of them actually call `:telemetry.span/3`. The practical conseq
 between them, no `:stop` or `:exception` arrives. Consumers that pair them need their own
 timeout.
 
-### Measurement units are not uniform
+### Measurement units
 
-There is no single duration convention. When writing a consumer, check the table for the
-event you are attaching to:
+Model-call and tool-call span events consistently use `duration` in **native
+monotonic units**, never milliseconds or microseconds. Their terminal events
+also carry `monotonic_time` (the native terminal timestamp); subtracting
+`duration` reconstructs admission time even when a stream ends in another
+process. Model `first_event_duration` uses the same unit. Both start events
+carry native `system_time` and `monotonic_time`. Convert with
+`System.convert_time_unit(value, :native, :millisecond)` for display.
+
+Other, older telemetry families retain explicitly suffixed units. When writing
+a consumer, check the table for the event you are attaching to:
 
 | Unit | Used by |
 |---|---|
-| `duration` in **native** units | `[:lemon, :channels, :deliver, :stop]`, `[:lemon_agent, :loop, :end]`, `[:lemon_ai, :dispatcher, :rejected]`, `[:lemon_ai, :model_call, :stop \| :exception]` (also `first_event_duration`) |
+| `duration` in **native** units | `[:lemon, :channels, :deliver, :stop]`, `[:lemon_agent, :loop, :end]`, `[:lemon_ai, :dispatcher, :rejected]`, `[:lemon_ai, :model_call, :stop \| :exception]` (also `first_event_duration`), `[:lemon_agent, :tool_call, :stop \| :exception]` |
 | `duration_us` | `[:coding_agent, :extension, :tool, ...]`, `[:coding_agent, :wasm, :tool, ...]`, `[:lemon, :memory, :ingest, ...]` |
 | `duration_ms` | `[:lemon, :reload, ...]`, `[:lemon, :run, :stop]`, `[:lemon, :wasm, :*, :stop]` |
 | both `duration` (native) and `duration_ms` | `[:lemon, :config, :reload, :stop]` and `:exception` — `duration` is a real monotonic native reading and `duration_ms` is derived from it via `System.convert_time_unit/3` |
@@ -62,6 +72,83 @@ for any attached consumer.
 
 `system_time` measurements are `System.system_time()` in native units and are timestamps,
 not durations.
+
+## Optional GenAI span export
+
+`LemonAgent.GenAISpans` is a supervised, optional telemetry attachment owned by
+`lemon_agent` (which already depends on both event-owning apps). `lemon_ai` and
+`lemon_core` acquire no umbrella dependency. Nothing attaches unless the host
+configures this **before application startup**:
+
+```elixir
+config :lemon_agent, :gen_ai_spans,
+  enabled: true,
+  exporter: LemonAgent.GenAISpans.OpenTelemetry
+```
+
+The adapter is compiled only when the optional `opentelemetry_api` dependency
+is available. The host must install/start an OpenTelemetry SDK and configure
+its batch processor, sampling and transport exporter separately. The API alone
+is non-recording; Lemon does not add a required SDK, endpoint, collector or
+background network service. Packaged hosts must explicitly include the
+optional apps. See [configuration](config.md#optional-genai-span-export).
+
+| Source | Span name / kind | Allowlisted attributes |
+| --- | --- | --- |
+| `[:lemon_ai, :model_call, :stop \| :exception]` | `chat <model>` / client | `gen_ai.operation.name: "chat"`, `gen_ai.system` and `gen_ai.provider.name` (provider label), `gen_ai.request.model`, `gen_ai.request.stream: true` when known streaming, and nonnegative `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_write.input_tokens` |
+| `[:lemon_agent, :tool_call, :stop \| :exception]` | `execute_tool <name>` / internal | `gen_ai.operation.name: "execute_tool"`, `gen_ai.tool.name`, `lemon.tool.timeout` |
+
+`gen_ai.system` preserves the older GenAI spelling; `gen_ai.provider.name`
+supplies its current counterpart. Missing model/provider/tool labels become
+`"unknown"`; missing usage is omitted, not invented as zero. Errors, canceled
+model calls and tool failures set error status and a bounded `error.type`
+(`model_call_error` or `tool_call_error`); successful calls leave status unset.
+The attribute map is built from an allowlist, never by copying event metadata.
+There are **no prompts, responses, tool arguments/results, intent strings,
+paths, credentials, raw exception messages or stacktraces**, and no option to
+enable content capture.
+
+The mappings follow the [GenAI inference](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/client-inference.md)
+and [tool-execution](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/execute-tool.md)
+conventions (currently development status). GenAI input-token totals include
+cache reads and writes. Lemon's source `input_tokens` excludes those subsets,
+so the exporter sums all three **only when all are reported**; otherwise the
+aggregate attribute is omitted. Known zero counters are preserved. Cache
+subsets and output counters remain independently exportable when known.
+
+The attachment exports completed spans at terminal events, with exact native
+monotonic `start_time = monotonic_time - duration` and `end_time =
+monotonic_time`. These match the Erlang OTel API's timestamp units; the SDK
+converts to Unix timestamps for transport. No pairing registry, timeout,
+per-call allocation at `:start` or unfinished OTel span is needed. Parallel calls
+and cross-process streaming completion cannot mismatch. A process killed
+without a terminal event produces no span. Dispatcher rejections are not model
+calls; older `tool_task`, extension and WASM wrapper events are not exported
+again, avoiding duplicate tool spans.
+
+Spans are **standalone roots**, not whole-request traces: this attachment does
+not infer a parent from a stream tracker's process dictionary or change the
+emitter's current OTel context. Request-level context propagation and
+whole-request tail sampling are not provided by this attachment.
+
+To use a custom/test exporter without OpenTelemetry, implement
+`LemonAgent.GenAISpans.Exporter.export_span/2` and configure:
+
+```elixir
+config :lemon_agent, :gen_ai_spans,
+  enabled: true,
+  exporter: MyApp.SpanExporter,
+  exporter_config: [queue: MyApp.ExportQueue]
+```
+
+The callback receives a completed span map (`name`, `kind`, `attributes`,
+`status`, native `start_time`, `end_time`, `duration`) and `:exporter_config`
+unchanged. It executes synchronously: enqueue quickly, never perform network
+I/O in it. Exporter errors/raises/throws/exits are isolated and emit only a
+content-free warning; they cannot fail a model/tool call or detach the handler.
+The attachment is removed on supervised shutdown and reclaimed on restart.
+Restart `:lemon_agent` to apply configuration changes.
+
 
 ## Run lifecycle
 
@@ -148,9 +235,9 @@ an outcome as long as its owning loop survives.
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon_agent, :tool_call, :start]` | `system_time` (native) | `tool_name`, `is_error: false`, `timeout: false` | `LemonAgent.Loop.ToolCalls` before preparation/start |
-| `[:lemon_agent, :tool_call, :stop]` | `duration` (native monotonic units) | `tool_name`, `is_error`, `timeout` | Tool return, validation error, cancellation or skipped call |
-| `[:lemon_agent, :tool_call, :exception]` | `duration` (native monotonic units) | `tool_name`, `is_error: true`, `timeout` | Caught exception/throw/exit, worker crash, task-start failure or loop timeout |
+| `[:lemon_agent, :tool_call, :start]` | `system_time`, `monotonic_time` (native) | `tool_name`, `is_error: false`, `timeout: false` | `LemonAgent.Loop.ToolCalls` before preparation/start |
+| `[:lemon_agent, :tool_call, :stop]` | `duration`, `monotonic_time` (native monotonic units) | `tool_name`, `is_error`, `timeout` | Tool return, validation error, cancellation or skipped call |
+| `[:lemon_agent, :tool_call, :exception]` | `duration`, `monotonic_time` (native monotonic units) | `tool_name`, `is_error: true`, `timeout` | Caught exception/throw/exit, worker crash, task-start failure or loop timeout |
 
 `timeout` is true for a loop deadline or a tool result with `timed_out: true`
 or `timedOut: true`. Returned error results use `:stop` with `is_error: true`.
@@ -225,8 +312,8 @@ ownership changes only on explicit release or confirmed owner death.
 | `[:lemon_ai, :dispatcher, :dispatch]` | `system_time` | `provider` | [`call_dispatcher.ex:79`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher.ex), before breaker and rate-limit checks |
 | `[:lemon_ai, :dispatcher, :rejected]` | `duration`, `system_time` | `provider`, `reason`, `retry_after_ms` (circuit-open only) | [`call_dispatcher.ex:94`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher.ex) (`:circuit_open`), `:127` (`:rate_limited`), `:140` (`:max_concurrency`) |
 | `[:lemon_ai, :model_call, :start]` | `system_time`, `monotonic_time` | `provider`, `telemetry_span_context`, and `model` (id), `api`, `call_kind` (`:stream` \| `:complete`) when the caller labelled the call | [`model_call_telemetry.ex`](../apps/lemon_ai/lib/lemon_ai/model_call_telemetry.ex), emitted by `CallDispatcher.dispatch/3` after the breaker, concurrency slot and rate limiter admit the call. Rejected dispatches emit only `:rejected` — never a `:start` |
-| `[:lemon_ai, :model_call, :stop]` | `duration` (native); `first_event_duration` (native, first text/thinking/tool-call delta, only when observed); `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` (only when the provider reported them) | start metadata plus `outcome` (`:ok` \| `:error` \| `:canceled` \| `:aborted`), `stop_reason` (when the final message has one), `error_category` (non-`:ok` outcomes; bounded atom — a `LemonAi.Error.classify/1` category, or `:canceled`/`:timeout`/`:idle_timeout`/`:owner_down`/`:shutdown`/`:aborted`/`:stream_exit`/`:stream_tracking_failed`/`:stream_tracking_exit`/`:unexpected_result`) | `CallDispatcher`. For streams it fires when the stream reaches its terminal event (done, error, cancel, idle/hard timeout) or the producer dies, from the existing stream tracker — not when `dispatch/3` returns. Prompts, messages, credentials, URLs and raw error terms are never in the metadata |
-| `[:lemon_ai, :model_call, :exception]` | `duration` (native) | start metadata plus `kind` (`:error` \| `:throw` \| `:exit`), `reason` (exception module for `:error`, otherwise the kind) | `CallDispatcher`, when the dispatch callback raises, throws or exits. Exactly one `:stop` or `:exception` follows each `:start`, unless the stream tracker process is killed outright |
+| `[:lemon_ai, :model_call, :stop]` | `duration`, `monotonic_time` (native); `first_event_duration` (native, first text/thinking/tool-call delta, only when observed); `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` (only when the provider reported them) | start metadata plus `outcome` (`:ok` \| `:error` \| `:canceled` \| `:aborted`), `stop_reason` (when the final message has one), `error_category` (non-`:ok` outcomes; bounded atom — a `LemonAi.Error.classify/1` category, or `:canceled`/`:timeout`/`:idle_timeout`/`:owner_down`/`:shutdown`/`:aborted`/`:stream_exit`/`:stream_tracking_failed`/`:stream_tracking_exit`/`:unexpected_result`) | `CallDispatcher`. For streams it fires when the stream reaches its terminal event (done, error, cancel, idle/hard timeout) or the producer dies, from the existing stream tracker — not when `dispatch/3` returns. Prompts, messages, credentials, URLs and raw error terms are never in the metadata |
+| `[:lemon_ai, :model_call, :exception]` | `duration`, `monotonic_time` (native) | start metadata plus `kind` (`:error` \| `:throw` \| `:exit`), `reason` (exception module for `:error`, otherwise the kind) | `CallDispatcher`, when the dispatch callback raises, throws or exits. Exactly one `:stop` or `:exception` follows each `:start`, unless the stream tracker process is killed outright |
 | `[:lemon_ai, :circuit_breaker, :opened]` | `system_time` | `provider`, `failure_count`, `failure_threshold`, `reason` | [`circuit_breaker.ex:291`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex) |
 | `[:lemon_ai, :circuit_breaker, :closed]` | `system_time` | `provider` | [`circuit_breaker.ex:258`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex), recovery confirmed |
 | `[:lemon_ai, :circuit_breaker, :half_opened]` | `system_time` | `provider`, `recovery_timeout` | [`circuit_breaker.ex:370`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex) |
@@ -419,10 +506,10 @@ supervision tree, no store, and no network.
 ### Aggregating into metrics
 
 **`telemetry_metrics` is not a dependency of this repo**, and neither is
-`telemetry_metrics_prometheus` or `phoenix_live_dashboard`. Nothing here aggregates,
-samples, or exports — the runtime emits, and what happens next is the host application's
-choice. This section is what wiring it up looks like *if you add those deps to your own
-project*; it is not describing something that ships.
+`telemetry_metrics_prometheus` or `phoenix_live_dashboard`. Metrics aggregation
+and transport remain the host application's choice; the optional GenAI span
+attachment above is separate. This section shows what metrics wiring looks
+like *if you add those deps to your own project*; it does not ship by default.
 
 ```elixir
 # in your own app's mix.exs:
@@ -444,7 +531,7 @@ def metrics do
     # Tool reliability.
     counter("agent_core.tool_task.error.system_time", tags: [:tool_name, :reason]),
 
-    # Latency. Note the three different units — see "Measurement units are not uniform".
+    # Latency. Note the three different units — see "Measurement units".
     distribution("lemon.channels.deliver.stop.duration",
       unit: {:native, :millisecond},
       tags: [:channel_id, :ok]
