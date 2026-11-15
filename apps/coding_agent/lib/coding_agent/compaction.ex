@@ -1135,7 +1135,7 @@ defmodule CodingAgent.Compaction do
     end
   end
 
-  defp do_compact(session, model, keep_recent_tokens, opts, signal) do
+  defp do_compact(%SessionManager.Session{} = session, model, keep_recent_tokens, opts, signal) do
     # Get the current branch (path from root to current leaf)
     # Compaction should only consider entries on this branch, not other branches
     {branch, previous_compaction} = session |> SessionManager.get_branch() |> active_branch()
@@ -1157,8 +1157,10 @@ defmodule CodingAgent.Compaction do
       file_ops = merge_file_operations(extract_file_operations(new_messages), previous_compaction)
       tokens_before = estimate_raw_context_tokens(messages)
 
+      # This is an in-memory budget projection, not a journal mutation. In
+      # particular, a worker must never use the session owner's raw descriptor.
       projected =
-        %{session | file_path: nil}
+        %{session | file_path: nil, append_device: nil}
         |> SessionManager.append_compaction(summary, first_kept_id, tokens_before, file_ops)
         |> SessionManager.build_session_context()
 

@@ -1064,6 +1064,17 @@ defmodule CodingAgent.Session do
     end
   end
 
+  def handle_call({:available_stream_rules, rules}, _from, state) do
+    {:reply, CodingAgent.Session.StreamRules.available(state.session_manager, rules), state}
+  end
+
+  def handle_call({:inject_stream_rule, rule}, _from, state) do
+    case CodingAgent.Session.StreamRules.inject(state, rule) do
+      {:ok, state} -> {:reply, :ok, state}
+      {:error, reason, state} -> {:reply, {:error, reason}, state}
+    end
+  end
+
   # Called from the todo tools; this process is the only journal writer.
   def handle_call(:todos, _from, state), do: {:reply, Todos.read(state), state}
 

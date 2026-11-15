@@ -567,14 +567,29 @@ defmodule LemonAgent.Loop.Streaming do
          llm_context,
          options
        ) do
+    rules =
+      case config.stream_rules do
+        resolve when is_function(resolve, 0) -> resolve.()
+        rules -> rules
+      end
+
     # Accumulate the partial message
     result =
       Enum.reduce_while(
         ai_events(response_stream, signal),
-        {nil, context, false, false, %{}},
-        fn event, {partial, ctx, added, committed, raw_arguments} ->
+        {nil, context, false, false, %{}, LemonAgent.StreamRules.new(rules)},
+        fn event, {partial, ctx, added, committed, raw_arguments, matcher} ->
           raw_arguments = accumulate_arguments(event, raw_arguments)
           event = validate_terminal_arguments(event, partial, ctx.tools, raw_arguments)
+          {matcher, matched_rule} = LemonAgent.StreamRules.feed(matcher, event)
+
+          if matched_rule != nil and is_function(config.on_stream_rule, 1) do
+            case config.on_stream_rule.(matched_rule) do
+              :ok -> AbortSignal.request_redirect(signal)
+              {:error, :injection_limit} -> :ok
+              {:error, reason} -> raise "stream rule injection failed: #{inspect(reason)}"
+            end
+          end
 
           cond do
             aborted?(signal) ->
@@ -603,7 +618,7 @@ defmodule LemonAgent.Loop.Streaming do
                 {:continue, new_partial, new_ctx, new_added} ->
                   committed = committed or output_event?(event)
                   ToolStream.observe(event, raw_arguments, new_ctx.tools, signal)
-                  {:cont, {new_partial, new_ctx, new_added, committed, raw_arguments}}
+                  {:cont, {new_partial, new_ctx, new_added, committed, raw_arguments, matcher}}
 
                 {:done, final_message, final_ctx} ->
                   {:halt, {:done, final_message, final_ctx}}
@@ -631,7 +646,7 @@ defmodule LemonAgent.Loop.Streaming do
         _ = LemonAi.PromptDiagnostics.record_llm_call(config.model, llm_context, options, message)
         {:failed, message, ctx, added, committed}
 
-      {partial, ctx, added, committed, raw_arguments} when partial != nil ->
+      {partial, ctx, added, committed, raw_arguments, _matcher} when partial != nil ->
         # Stream ended without done/error event - finalize with partial
         partial = normalize_arguments(partial, ctx.tools, raw_arguments)
         partial = normalize_terminal_message(partial)
