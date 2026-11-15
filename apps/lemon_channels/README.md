@@ -97,8 +97,10 @@ and rate limits honor `retry_after`.
 An enqueue acknowledgement means **durably queued**, not delivered: every physical
 chunk is recorded in the channels-owned Store table and crosses `Store.sync/1`
 before the caller receives `{:ok, ref}`. On restart, pending records recover
-their original FIFO sequence, retry window/budget and idempotency keys. Missing
-keys (including continuation chunks) receive stable outbox-generated keys.
+their original FIFO sequence, retry window/budget and idempotency keys, including
+`nil`. A record's durable ID supplies a private dedupe identity when its payload
+has no key; the outbox never injects that identity into adapter payloads or
+continuation chunks.
 Confirmed sends replace pending message content with a content-free durable
 dedupe receipt, so restarting the queue or Store does not forget confirmed keys.
 Use a persistent Store backend (normally SQLite) for hard-crash recovery; the
