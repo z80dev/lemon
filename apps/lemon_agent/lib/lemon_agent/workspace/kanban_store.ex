@@ -269,6 +269,26 @@ defmodule LemonAgent.Workspace.KanbanStore do
     end)
   end
 
+  @doc """
+  Extend only the exact current lease. The dispatcher calls this while its
+  monitored in-VM worker is alive; expiry remains durable for crash recovery.
+  Renewal never changes run ownership or makes an ambiguous run retryable.
+  """
+  @spec renew_task_lease(binary(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
+  def renew_task_lease(task_id, lease_id, opts \\ [])
+      when is_binary(task_id) and is_binary(lease_id) do
+    with_task_board_lock(task_id, fn ->
+      with {:ok, task, _board} <- fetch_task_with_lease(task_id, lease_id) do
+        now = Keyword.get(opts, :now_ms, now_ms())
+        lease_ms = positive_limit(opts[:lease_ms], 300_000)
+        lease = Map.put(active_lease(task), "expiresAtMs", now + lease_ms)
+        updated = %{task | meta: Map.put(task.meta, "kanbanLease", lease)}
+
+        with :ok <- Store.put(@tasks_table, task.id, updated), do: {:ok, updated}
+      end
+    end)
+  end
+
   @spec reclaim_expired_leases(binary(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def reclaim_expired_leases(board_id, opts \\ []) when is_binary(board_id) do
     with_board_lock(board_id, fn ->
