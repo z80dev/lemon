@@ -215,7 +215,7 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
   end
 
   @tag :tmp_dir
-  test "only a task tool that runs without review or hooks keeps its stream callback", %{
+  test "registered task tools always drop their stream callback", %{
     tmp_dir: tmp_dir
   } do
     task = fn policy ->
@@ -230,7 +230,7 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
       |> Enum.find(&(&1.name == "task"))
     end
 
-    assert is_function(task.(ToolPolicy.custom(approval_mode: :yolo)).on_stream, 1)
+    assert task.(ToolPolicy.custom(approval_mode: :yolo)).on_stream == nil
     assert task.(ToolPolicy.custom(approval_mode: :write)).on_stream == nil
     assert task.(ToolPolicy.custom(approvals: %{"task" => :always})).on_stream == nil
 
@@ -239,7 +239,7 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
   end
 
   @tag :tmp_dir
-  test "a session starts batch items while the model is still streaming the call", %{
+  test "a session starts batch items only after the model finishes streaming the call", %{
     tmp_dir: tmp_dir
   } do
     test = self()
@@ -262,7 +262,7 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
             {:tool_call_delta, 0, head, partial}
           ])
 
-          # Hold the rest of the call until the test has seen the first child.
+          # Hold the rest of the call so the test can rule out speculative dispatch.
           send(test, {:streaming, self()})
           receive do: (:continue -> :ok)
 
@@ -305,11 +305,12 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
     :ok = Session.prompt(session, "fan out")
 
     assert_receive {:streaming, provider}, 5_000
-    assert_receive {:started, first, prompt}, 5_000
-    assert prompt =~ "first"
+    refute_receive {:started, _, _}, 100
     refute_received {:session_event, _, {:tool_execution_start, "call-session", _, _}}
 
     send(provider, :continue)
+    assert_receive {:started, first, prompt}, 5_000
+    assert prompt =~ "first"
     assert_receive {:started, second, _}, 5_000
 
     assert_receive {:session_event, _,

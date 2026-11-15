@@ -198,10 +198,19 @@ the default; they enqueue work rather than wait for its execution. WASM invokes
 retain their existing 120-second sidecar bound. Extension wrappers preserve the
 extension's declared `AgentTool.timeout_ms`, otherwise inheriting the default.
 
+`AgentTool.effect` (also accepted by `LemonAgent.new_tool/1`) defaults to
+`:external`; use `:none` only for read-only operations or `:idempotent` for
+mutations repeatable with identical arguments. These classes are metadata for
+the host, independent of approval and parallel safety. Coding sessions sync
+intent before either mutation class executes and disable their speculative
+`on_stream` callbacks. Core-loop consumers outside CodingAgent own equivalent
+durability gates. See [tool-author effects](../../docs/extensions.md#effect-classes-and-crash-recovery).
+
 `LemonAgent.InterruptedToolResult.build/2` supplies one interruption vocabulary:
 `details.outcome` is `:unknown` for every started call without a recorded final
-result (abort, timeout, crash or restored-session repair), and `:not_started`
-for calls discarded before dispatch, including steering skips.
+result (abort, timeout or crash), and `:not_started` for calls discarded before
+dispatch, including steering skips. Restored coding sessions use journaled
+intent to distinguish `:unknown` from `:not_started`.
 `details.reason` is `:aborted`, `:timeout`, `:crashed`, `:interrupted` or `:skipped`.
 Partial output is retained, not treated as proof of completion. Unknown results
 explicitly warn: “Do not assume it did not run or automatically repeat it.”

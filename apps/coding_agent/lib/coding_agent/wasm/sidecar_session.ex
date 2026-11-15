@@ -110,7 +110,13 @@ defmodule CodingAgent.Wasm.SidecarSession do
         signal \\ nil
       ) do
     deadline = now_ms() + if(is_integer(timeout), do: timeout, else: @invoke_timeout)
-    GenServer.call(pid, {:invoke, tool, params_json, context_json, deadline, signal}, timeout)
+    scope = CodingAgent.ToolIntent.current_parent_scope()
+
+    GenServer.call(
+      pid,
+      {:invoke, tool, params_json, context_json, deadline, signal, scope},
+      timeout
+    )
   end
 
   @spec status(pid()) :: status()
@@ -207,7 +213,7 @@ defmodule CodingAgent.Wasm.SidecarSession do
   end
 
   def handle_call(
-        {:invoke, _tool, _params_json, _context_json, _deadline, _signal},
+        {:invoke, _tool, _params_json, _context_json, _deadline, _signal, _scope},
         _from,
         %{inflight_invoke_id: id} = state
       )
@@ -215,7 +221,11 @@ defmodule CodingAgent.Wasm.SidecarSession do
     {:reply, {:error, :busy}, state}
   end
 
-  def handle_call({:invoke, tool, params_json, context_json, deadline, signal}, from, state) do
+  def handle_call(
+        {:invoke, tool, params_json, context_json, deadline, signal, scope},
+        from,
+        state
+      ) do
     cond do
       not Process.alive?(elem(from, 0)) or LemonAgent.AbortSignal.aborted?(signal) ->
         {:reply, {:error, :aborted}, state}
@@ -247,6 +257,7 @@ defmodule CodingAgent.Wasm.SidecarSession do
           Map.fetch!(state.pending, request_id)
           |> Map.put(:deadline, deadline)
           |> Map.put(:signal, signal)
+          |> Map.put(:parent_intent_scope, scope)
 
         state = %{state | pending: Map.put(state.pending, request_id, request)}
         {:noreply, %{state | inflight_invoke_id: request_id}}
@@ -502,7 +513,8 @@ defmodule CodingAgent.Wasm.SidecarSession do
     context = %{
       owner: elem(invocation.from, 0),
       deadline: invocation.deadline,
-      signal: invocation.signal
+      signal: invocation.signal,
+      parent_intent_scope: Map.get(invocation, :parent_intent_scope)
     }
 
     safe_host_invoke(

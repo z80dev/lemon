@@ -882,6 +882,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
       tmp_dir: tmp_dir
     } do
       parent = self()
+      intent_recorder = CodingAgent.Test.ToolIntentRecorder.new(tmp_dir)
       notes = Path.join(tmp_dir, "notes.txt")
       File.write!(notes, "plan-mode readable")
 
@@ -891,6 +892,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
           settings_manager: settings(),
           tool_opts: [
             mcp_tools: [],
+            tool_intent_recorder: intent_recorder,
             tool_disclosure: [profile: :coding],
             tool_policy:
               ToolPolicy.custom(deny: ["browser_click"], require_approval: ["browser_tabs"]),
@@ -952,6 +954,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
           gate: Planning.new_gate(),
           cwd: tmp_dir,
           session_pid: self(),
+          tool_intent_recorder: intent_recorder,
           session_id: planning.header.id,
           run_id: nil,
           session_key: nil,
@@ -1002,8 +1005,8 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
           nil
         )
 
-      assert %AgentToolResult{} = direct_plan
-      assert %AgentToolResult{} = bridged_plan
+      assert %AgentToolResult{is_error: false} = direct_plan
+      assert %AgentToolResult{is_error: false} = bridged_plan
       assert File.read!(plan_path) == "# Trial plan"
 
       blocked_write =
@@ -1031,7 +1034,12 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings(),
-          tool_opts: [mcp_tools: [], session_id: session_id, tool_disclosure: [profile: :coding]]
+          tool_opts: [
+            mcp_tools: [],
+            session_id: session_id,
+            tool_disclosure: [profile: :coding],
+            tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(tmp_dir)
+          ]
         )
 
       invoke = find(result.tools, "tool_invoke")

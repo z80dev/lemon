@@ -528,6 +528,7 @@ defmodule CodingAgent.Session.Planning do
   defp intercept_private_tool(tool, context) do
     [wrapped] =
       [tool]
+      |> Enum.map(&CodingAgent.ToolIntent.wrap(&1, Map.to_list(context)))
       |> ToolHooks.wrap_tools(Map.get(context, :hooks, []), context)
       |> SecretObfuscator.wrap_tools(Map.get(context, :secret_obfuscator))
 

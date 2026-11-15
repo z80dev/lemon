@@ -11,6 +11,8 @@ defmodule CodingAgent.Session.PlanningTest do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{AssistantMessage, Model, ModelCost, TextContent, ToolCall}
 
+  defp intent_recorder(cwd), do: CodingAgent.Test.ToolIntentRecorder.new(cwd)
+
   setup do
     fixture = Path.join(System.tmp_dir!(), "lemon-plan-#{System.unique_integer([:positive])}")
     root = Path.join(fixture, "project")
@@ -573,6 +575,7 @@ defmodule CodingAgent.Session.PlanningTest do
       gate: gate,
       cwd: root,
       session_pid: self(),
+      tool_intent_recorder: intent_recorder(root),
       session_id: manager.header.id,
       run_id: "run",
       session_key: "key",
@@ -663,6 +666,7 @@ defmodule CodingAgent.Session.PlanningTest do
       gate: Planning.new_gate(),
       cwd: root,
       session_pid: self(),
+      tool_intent_recorder: intent_recorder(root),
       session_id: manager.header.id,
       run_id: "run",
       session_key: "key",

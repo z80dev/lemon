@@ -101,6 +101,48 @@ end
 - `execute` - Function with signature `(tool_use_id, args, abort_signal, on_update) -> AgentToolResult`
 - `parallel_safe` - Optional; `true` allows overlapping calls of this tool within one tool batch (default `false`)
 - `timeout_ms` - Optional execution deadline in milliseconds; `nil` inherits the loop default (300,000 ms) and `:infinity` disables the deadline
+- `effect` - Optional; `:none`, `:idempotent`, or `:external` (default)
+
+### Effect classes and crash recovery
+
+Use `effect: :none` only for read-only operations with no externally visible
+mutation. Use `:idempotent` for a mutation safe to repeat with exactly the same
+arguments, and `:external` for everything else (including unknown effects).
+Omitted or invalid classifications are conservatively treated as `:external`.
+Effect class is independent of `parallel_safe`, approval, and output trust; it
+never grants permission or authorizes automatic retries.
+
+Coding sessions append a `lemon.tool_intent` entry and wait for datasync before
+dispatching `:idempotent` or `:external` tools. The entry contains the call ID,
+tool name, SHA-256 digest of deterministic Erlang-encoded arguments, and effect,
+not another copy of the arguments. If append or sync fails, the tool is **not
+run** and returns `details.outcome: :not_started`. Results are ordered ordinary
+appends, without a per-result sync. On reload, an intent lacking a final result
+is `:unknown`; a call lacking intent is `:not_started`. Unknown outcomes,
+including nested effects of an interrupted eval, must not be retried blindly.
+
+Effectful tools lose `on_stream`: pre-dispatch speculative work must not bypass
+the intent gate. Do not mutate from a stream callback. The gate also covers
+custom, extra, WASM and MCP tools, deferred `tool_invoke` calls, and remote-node
+dispatch. Standalone registry execution of effectful tools requires a live
+persisted Session owner (`session_pid`); without one it fails closed.
+Remote calls record on the controller before transmission; the destination
+accepts only a controller marker bound to that exact call ID. Nested node eval
+tools are covered by the parent intent only while the parent eval is live.
+
+The owner parks a worker whose assistant entry has not reached the journal yet,
+so that the intent sync also covers the assistant call. This wait does not block
+the Session mailbox. Abort, redirect, worker death, or the five-second
+caller-policy deadline refuses execution if the assistant entry never arrives.
+Read-only (`:none`) tools bypass the intent gate entirely and add no sync.
+
+Measure local overhead with `mix run --no-start bench/tool_intent.exs`.
+`TMPDIR` selects the filesystem; `TOOL_INTENT_SAMPLES` defaults to 1,000.
+The benchmark prints baseline/external mean and p50/p95/p99 microseconds and
+added mean latency. Production telemetry at
+`[:coding_agent, :tool_intent, :stop]` exposes `duration_us` (digest + owner queue +
+append + sync, excluding execution), effect and status, without arguments or
+call IDs. Filesystem-dependent numbers must be recorded before claiming a gain.
 
 ### Tool Execute Function
 
