@@ -10,7 +10,13 @@ defmodule LemonCore.ToolPolicy do
   `restrict/2` computes the intersection of two policies. It is used for
   delegated work so a child request cannot remove a parent denial or approval
   requirement.
+
+  Legacy `sandbox` input (atom or string key) is accepted and ignored, with one
+  warning per parsing process. It never changes grants or restrictions. Tool
+  policy does not provide operating-system sandboxing.
   """
+
+  require Logger
 
   @type approval_mode :: :always | :dangerous | :never
   @type tier :: :read | :write | :exec
@@ -38,7 +44,6 @@ defmodule LemonCore.ToolPolicy do
           allowed_commands: :all | [String.t()],
           blocked_commands: [String.t()],
           max_file_size: pos_integer() | nil,
-          sandbox: boolean(),
           workspace_read_exempt: boolean() | nil
         }
 
@@ -53,8 +58,7 @@ defmodule LemonCore.ToolPolicy do
     :profile,
     :allowed_commands,
     :blocked_commands,
-    :max_file_size,
-    :sandbox
+    :max_file_size
   ]
   defstruct @enforce_keys ++ [workspace_read_exempt: nil]
 
@@ -82,7 +86,6 @@ defmodule LemonCore.ToolPolicy do
     :allowed_commands,
     :blocked_commands,
     :max_file_size,
-    :sandbox,
     :workspace_read_exempt
   ]
 
@@ -488,7 +491,6 @@ defmodule LemonCore.ToolPolicy do
         allowed_commands: intersect_allow(parent.allowed_commands, requested.allowed_commands),
         blocked_commands: union(parent.blocked_commands, requested.blocked_commands),
         max_file_size: minimum_limit(parent.max_file_size, requested.max_file_size),
-        sandbox: parent.sandbox or requested.sandbox,
         workspace_read_exempt:
           restrict_workspace_read_exempt(
             parent.workspace_read_exempt,
@@ -524,7 +526,6 @@ defmodule LemonCore.ToolPolicy do
           end
         ) and
         (not parent.no_reply or child.no_reply) and
-        (not parent.sandbox or child.sandbox) and
         (is_nil(parent.max_file_size) or
            (is_integer(child.max_file_size) and child.max_file_size <= parent.max_file_size)) and
         workspace_read_exempt_subset?(child, parent)
@@ -670,8 +671,7 @@ defmodule LemonCore.ToolPolicy do
       "profile" => if(policy.profile, do: Atom.to_string(policy.profile)),
       "allowed_commands" => encode_allow(policy.allowed_commands),
       "blocked_commands" => policy.blocked_commands,
-      "max_file_size" => policy.max_file_size,
-      "sandbox" => policy.sandbox
+      "max_file_size" => policy.max_file_size
     }
 
     if is_nil(policy.workspace_read_exempt) do
@@ -700,7 +700,6 @@ defmodule LemonCore.ToolPolicy do
       allowed_commands: [],
       blocked_commands: [],
       max_file_size: nil,
-      sandbox: true,
       workspace_read_exempt: false
     }
   end
@@ -721,6 +720,8 @@ defmodule LemonCore.ToolPolicy do
   def filter_no_reply(messages), do: Enum.split_with(messages, &(not message_no_reply?(&1)))
 
   defp parse_map(map) do
+    map = drop_legacy_sandbox(map)
+
     with :ok <- validate_known_keys(map),
          {:ok, fields} <- extract_fields(map),
          {:ok, base} <- parse_base_profile(fields),
@@ -752,7 +753,6 @@ defmodule LemonCore.ToolPolicy do
              Map.get(fields, :max_file_size, base.max_file_size),
              :max_file_size
            ),
-         {:ok, sandbox} <- parse_boolean(Map.get(fields, :sandbox, base.sandbox), :sandbox),
          {:ok, workspace_read_exempt} <-
            parse_workspace_read_exempt(
              Map.get(fields, :workspace_read_exempt, base.workspace_read_exempt)
@@ -769,7 +769,6 @@ defmodule LemonCore.ToolPolicy do
         allowed_commands: intersect_allow(base.allowed_commands, allowed_commands),
         blocked_commands: union(base.blocked_commands, blocked_commands),
         max_file_size: minimum_limit(base.max_file_size, max_file_size),
-        sandbox: sandbox,
         workspace_read_exempt: workspace_read_exempt
       })
     end
@@ -794,6 +793,20 @@ defmodule LemonCore.ToolPolicy do
     if within_entry_limit? and map_size(policy.approvals) <= @max_tool_entries,
       do: {:ok, policy},
       else: {:error, :tool_policy_too_large}
+  end
+
+  defp drop_legacy_sandbox(map) do
+    if Map.has_key?(map, :sandbox) or Map.has_key?(map, "sandbox") do
+      unless Process.put({__MODULE__, :sandbox_warning}, true) do
+        Logger.warning(
+          "Tool policy sandbox is unsupported and ignored; no operating-system sandbox is enforced"
+        )
+      end
+
+      Map.drop(map, [:sandbox, "sandbox"])
+    else
+      map
+    end
   end
 
   defp parse_base_profile(fields) do
@@ -1005,7 +1018,6 @@ defmodule LemonCore.ToolPolicy do
       allowed_commands: :all,
       blocked_commands: [],
       max_file_size: nil,
-      sandbox: false,
       workspace_read_exempt: nil
     }
   end

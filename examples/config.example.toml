@@ -412,6 +412,8 @@ name = "Default Agent"
 # system_prompt = ""
 
 # [profiles.default.tool_policy]
+# Tool policies do not provide OS sandboxing. Removed legacy `sandbox` input is
+# ignored with one warning per parsing process; remove it from old configs.
 # allow = "all"
 # deny = []
 # require_approval = ["bash", "write", "edit"]

@@ -292,6 +292,11 @@ or `nil` when omitted) controlling approval exemption for workspace reads.
 Omitting `[profiles.<id>.tool_policy]` retains the explicit runtime
 default; supplying an invalid table produces a deny-all policy.
 
+The removed legacy tool-policy key `sandbox` is accepted but ignored, with one
+warning per parsing process. It never changes tool grants, denials, approval
+requirements or other restrictions, and is not serialized. Remove it from old
+configuration: tool policy does not provide operating-system sandboxing.
+
 `LemonCore.ProfileStore` is the lifecycle owner for user-managed profiles.
 Commands such as `lemon profile create research` patch only the selected
 `[profiles.<id>]` table, preserving unrelated global-config keys and comments.
