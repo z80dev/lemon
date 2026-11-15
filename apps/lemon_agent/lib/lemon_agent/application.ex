@@ -47,6 +47,10 @@ defmodule LemonAgent.Application do
       LemonAgent.ModelRuntime.SessionPins
     ]
 
+    children =
+      children ++
+        LemonAgent.GenAISpans.children(Application.get_env(:lemon_agent, :gen_ai_spans, []))
+
     opts = [strategy: :one_for_one, name: LemonAgent.Supervisor]
     Supervisor.start_link(children, opts)
   end

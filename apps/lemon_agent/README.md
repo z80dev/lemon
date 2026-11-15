@@ -232,8 +232,15 @@ The library emits telemetry events under the `[:lemon_agent, ...]` prefix:
 
 - `[:lemon_agent, :loop, :start]` / `[:lemon_agent, :loop, :end]` -- Agent loop lifecycle.
 - `[:lemon_agent, :tool_task, :start]` / `[:lemon_agent, :tool_task, :end]` / `[:lemon_agent, :tool_task, :error]` -- Individual tool execution.
+- `[:lemon_agent, :tool_call, :start | :stop | :exception]` -- Content-free tool outcomes with native monotonic timing.
 - `[:lemon_agent, :tool_result, :emit]` -- Tool result emission.
 - `[:lemon_agent, :context, :size]` / `[:lemon_agent, :context, :warning]` / `[:lemon_agent, :context, :truncated]` -- Context management.
+
+Optional `LemonAgent.GenAISpans` handlers export model and tool spans with GenAI
+attributes. Export is off by default, has no required OpenTelemetry dependency,
+and never captures prompt/response or tool content. Configure the host SDK or
+an implementation of `LemonAgent.GenAISpans.Exporter`; see the
+[telemetry reference](../../docs/telemetry.md#optional-genai-span-export).
 
 ## Configuration
 
@@ -243,6 +250,7 @@ Application environment keys under `:lemon_agent`:
 |-----|------|---------|-------------|
 | `:queue_call_timeout_ms` | `pos_integer() \| :infinity` | `1_800_000` (30 min) | GenServer call timeout for loop queue polling |
 | `:event_stream_cancel_grace_ms` | `pos_integer()` | `100` | Grace period before force-killing an EventStream's attached task |
+| `:gen_ai_spans` | keyword list | `[]` (disabled) | `enabled: true` attaches optional model/tool span handlers; `exporter` defaults to `LemonAgent.GenAISpans.OpenTelemetry`, `exporter_config` is passed unchanged to custom exporters. Restart the app to apply changes. |
 
 The `:cli_timeout_ms`, `:cli_session_lock_max_age_ms`, and `:cli_cancel_grace_ms` keys were removed with the vendor CLI runners; subagent tasks now run natively in-process.
 
