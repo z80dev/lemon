@@ -1,5 +1,12 @@
 defmodule CodingAgent.Tools.Task.Runner do
-  @moduledoc false
+  @moduledoc """
+  Runs native child-session steps and output corrections in order.
+
+  Each prompt owns a fenced subscription. Completion is serialized by the
+  session owner, so the next prompt is admitted once without a retry timer.
+  Cleanup uses `CodingAgent.Session.streaming?/1` instead of copying session
+  state merely to decide whether an abort must be drained.
+  """
 
   alias CodingAgent.Session
   alias CodingAgent.Tools.Task.{Control, Result}
@@ -263,15 +270,9 @@ defmodule CodingAgent.Tools.Task.Runner do
       "no Markdown fences, explanations, or other prose."
   end
 
-  # The terminal event can reach subscribers just before the session records
-  # itself idle, so a brief already-streaming window is retried.
-  defp prompt_idle_session(session, text, attempts \\ 50) do
+  defp prompt_idle_session(session, text) do
     case Session.prompt(session, text) do
-      {:error, :already_streaming} when attempts > 0 ->
-        Process.sleep(20)
-        prompt_idle_session(session, text, attempts - 1)
-
-      {:error, :already_streaming} ->
+      {:error, :busy} ->
         {:error, "Task session is already running"}
 
       other ->
@@ -717,7 +718,7 @@ defmodule CodingAgent.Tools.Task.Runner do
   end
 
   defp drain_session(session, session_ref, session_id, delivery_gate) do
-    if Process.alive?(session) and Session.get_state(session).is_streaming do
+    if Session.streaming?(session) do
       Session.abort(session)
 
       await_shutdown(

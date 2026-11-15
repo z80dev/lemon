@@ -294,11 +294,14 @@ defmodule CodingAgent.TaskStoreServer do
 
   def handle_call({:delete_task, task_id}, _from, state) do
     state = ensure_tables(state)
+    record = :ets.lookup_element(@table, task_id, 2, %{})
     :ets.delete(@table, task_id)
 
     if state.dets_initialized do
       :dets.delete(@dets_table, task_id)
     end
+
+    notify_change(task_id, record)
 
     {:reply, :ok, state}
   end
@@ -484,6 +487,20 @@ defmodule CodingAgent.TaskStoreServer do
       :dets.insert(@dets_table, {task_id, record, events})
     end
 
+    notify_change(task_id, record)
+    :ok
+  end
+
+  defp notify_change(task_id, record) do
+    LemonCore.Bus.broadcast("task_state:#{task_id}", {:task_state, :changed, task_id})
+
+    if is_binary(record[:parent_run_id]) do
+      LemonCore.Bus.broadcast(
+        LemonCore.Bus.run_topic(record.parent_run_id),
+        {:task_state, :changed, task_id}
+      )
+    end
+
     :ok
   end
 
@@ -586,11 +603,14 @@ defmodule CodingAgent.TaskStoreServer do
       )
 
     Enum.each(expired_ids, fn task_id ->
+      record = :ets.lookup_element(@table, task_id, 2, %{})
       :ets.delete(@table, task_id)
 
       if dets_table_open?() do
         :dets.delete(@dets_table, task_id)
       end
+
+      notify_change(task_id, record)
     end)
 
     if dets_table_open?() and expired_ids != [] do

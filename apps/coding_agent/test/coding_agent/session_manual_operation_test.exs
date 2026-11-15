@@ -117,7 +117,7 @@ defmodule CodingAgent.SessionManualOperationTest do
       assert {:error, :busy} = Session.summarize_current_branch(session)
       assert {:error, :busy} = Session.navigate_tree(session, :root)
       assert {:error, :busy} = Session.plan(session, :enter)
-      assert {:error, :already_streaming} = Session.prompt(session, "hello")
+      assert {:error, :busy} = Session.prompt(session, "hello")
       assert {:error, :already_streaming} = Session.reload_extensions(session)
 
       task_ref = Process.monitor(task_pid(session))
@@ -245,7 +245,7 @@ defmodule CodingAgent.SessionManualOperationTest do
       assert_responsive(session)
       assert {:error, :busy} = Session.compact(session)
       assert {:error, :busy} = Session.summarize_current_branch(session)
-      assert {:error, :already_streaming} = Session.prompt(session, "hello")
+      assert {:error, :busy} = Session.prompt(session, "hello")
 
       task_ref = Process.monitor(task_pid(session))
       :ok = Session.abort(session)

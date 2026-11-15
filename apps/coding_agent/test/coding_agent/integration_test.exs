@@ -706,7 +706,7 @@ defmodule CodingAgent.IntegrationTest do
 
       # Second prompt should fail while streaming
       result2 = Session.prompt(session, "Second prompt")
-      assert result2 == {:error, :already_streaming}
+      assert result2 == {:error, :busy}
 
       # Wait for streaming to complete (will fail with API error but that's ok)
       wait_for_streaming_complete(session)
