@@ -798,7 +798,7 @@ The report is also published as an event after session initialization:
 unsub = Session.subscribe(session)
 
 receive do
-  {:session_event, _session_id, {:extension_status_report, report}} ->
+  {:session_event, _session_id, {:extension_status_report, report}, _cursor} ->
     IO.inspect(report, label: "Extension Status")
 end
 ```

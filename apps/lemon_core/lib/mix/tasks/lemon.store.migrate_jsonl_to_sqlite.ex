@@ -158,25 +158,27 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqlite do
 
   # Private read-only compatibility for trusted local pre-0.3.0 journals.
   defp read_legacy_store(path, skipped_tables) do
-    with {:ok, files} <- File.ls(path) do
-      files
-      |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
-      |> Enum.reduce_while({:ok, %{}}, fn filename, {:ok, tables} ->
-        table = filename |> String.replace_suffix(".jsonl", "") |> String.to_atom()
+    case File.ls(path) do
+      {:ok, files} ->
+        files
+        |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
+        |> Enum.reduce_while({:ok, %{}}, fn filename, {:ok, tables} ->
+          table = filename |> String.replace_suffix(".jsonl", "") |> String.to_atom()
 
-        if table in skipped_tables do
-          {:cont, {:ok, tables}}
-        else
-          with {:ok, content} <- File.read(Path.join(path, filename)),
-               {:ok, entries} <- replay_legacy(content) do
-            {:cont, {:ok, Map.put(tables, table, entries)}}
+          if table in skipped_tables do
+            {:cont, {:ok, tables}}
           else
-            _ -> {:halt, {:error, :unreadable_or_corrupt_table}}
+            with {:ok, content} <- File.read(Path.join(path, filename)),
+                 {:ok, entries} <- replay_legacy(content) do
+              {:cont, {:ok, Map.put(tables, table, entries)}}
+            else
+              _ -> {:halt, {:error, :unreadable_or_corrupt_table}}
+            end
           end
-        end
-      end)
-    else
-      _ -> {:error, :discovery_failed}
+        end)
+
+      _ ->
+        {:error, :discovery_failed}
     end
   end
 

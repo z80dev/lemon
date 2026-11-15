@@ -58,6 +58,45 @@ defmodule LemonCore.Store.EtsBackend do
     {:ok, state}
   end
 
+  @impl true
+  def sweep(state, table, {field, cutoff}) do
+    state = ensure_table(state, table)
+    count = :ets.select_delete(state[table], sweep_match_spec(field, cutoff))
+    {:ok, count, state}
+  end
+
+  @doc """
+  Returns the retention match specification for `{key, value}` ETS rows.
+
+  Read-cache eviction and SQLite's ephemeral tables use the same predicates.
+  Ordered clauses preserve field precedence even when the preferred timestamp
+  is too recent to delete.
+  """
+  @spec sweep_match_spec(LemonCore.Store.Backend.sweep_field(), integer()) :: list()
+  def sweep_match_spec(:expires_at, cutoff) do
+    [{{:_, %{expires_at: :"$1"}}, [{:is_integer, :"$1"}], [{:<, :"$1", cutoff}]}]
+  end
+
+  def sweep_match_spec(:inserted_at_ms, cutoff) do
+    [{{:_, %{"inserted_at_ms" => :"$1"}}, [{:is_integer, :"$1"}], [{:<, :"$1", cutoff}]}]
+  end
+
+  def sweep_match_spec(:started_at_ms, cutoff) do
+    [
+      {{:_, %{started_at_ms: :"$1"}}, [{:is_integer, :"$1"}], [{:<, :"$1", cutoff}]},
+      {{:_, %{"started_at_ms" => :"$1"}}, [{:is_integer, :"$1"}], [{:<, :"$1", cutoff}]}
+    ]
+  end
+
+  def sweep_match_spec(:introspection_timestamp, cutoff) do
+    [
+      {{{:"$1", :_}, :_}, [{:is_integer, :"$1"}], [{:<, :"$1", cutoff}]},
+      {{:_, %{ts_ms: :"$1"}}, [{:"=/=", :"$1", nil}, {:"=/=", :"$1", false}],
+       [{:andalso, {:is_integer, :"$1"}, {:<, :"$1", cutoff}}]},
+      {{:_, %{"ts_ms" => :"$1"}}, [{:is_integer, :"$1"}], [{:<, :"$1", cutoff}]}
+    ]
+  end
+
   # Ephemeral by design: nothing outlives the process, so there is nothing to
   # flush and no crash in which flushed data would survive.
   @impl true
@@ -65,7 +104,8 @@ defmodule LemonCore.Store.EtsBackend do
 
   @impl true
   def compare_and_delete_many(state, entries) do
-    state = Enum.reduce(entries, state, fn {table, _key, _expected}, acc -> ensure_table(acc, table) end)
+    state =
+      Enum.reduce(entries, state, fn {table, _key, _expected}, acc -> ensure_table(acc, table) end)
 
     if Enum.all?(entries, fn {table, key, expected} ->
          :ets.lookup(state[table], key) == [{key, expected}]

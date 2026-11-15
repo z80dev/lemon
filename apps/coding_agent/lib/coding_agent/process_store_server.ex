@@ -8,13 +8,11 @@ defmodule CodingAgent.ProcessStoreServer do
   without treating their absence as proof of external workload termination.
   """
 
-  use GenServer
-  require Logger
+  use CodingAgent.DurableTable
 
   @table :coding_agent_processes
   @dets_table :coding_agent_processes_dets
   @default_ttl_seconds 86_400
-  @cleanup_interval_seconds 300
 
   # Client API
 
@@ -89,16 +87,7 @@ defmodule CodingAgent.ProcessStoreServer do
   end
 
   defp init_store(opts, limits) do
-    # Trap exits to ensure we can close DETS properly
-    Process.flag(:trap_exit, true)
-
     state = %{
-      table: @table,
-      dets_table: @dets_table,
-      dets_path: dets_path(opts),
-      ets_initialized: false,
-      dets_initialized: false,
-      loaded_from_dets: false,
       background_limit: limits.background_process_limit,
       occupied: 0,
       pending_limit: limits.background_pending_limit,
@@ -109,13 +98,19 @@ defmodule CodingAgent.ProcessStoreServer do
       capacity_subscribers: %{}
     }
 
-    # Initialize tables synchronously during init
-    state = initialize_ets(state)
-    state = initialize_dets(state)
-    state = maybe_load_from_dets(state)
-
-    # Schedule periodic cleanup
-    schedule_cleanup()
+    state =
+      DurableTable.open(state, opts,
+        table: @table,
+        dets_table: @dets_table,
+        path: dets_path(opts),
+        normalize: &__MODULE__.normalize_row/2,
+        timestamp: &__MODULE__.expiry_timestamp/1,
+        after_load: &__MODULE__.restore_capacity/1,
+        reload_empty: true,
+        required: true,
+        ttl_key: :process_store_ttl_seconds,
+        interval_key: :process_store_cleanup_interval_seconds
+      )
 
     {:ok, state}
   end
@@ -421,7 +416,7 @@ defmodule CodingAgent.ProcessStoreServer do
 
   def handle_call({:cleanup, ttl_seconds}, _from, state) do
     state = ensure_tables(state)
-    deleted_count = do_cleanup(ttl_seconds)
+    deleted_count = DurableTable.cleanup(state, ttl_seconds, &CodingAgent.ProcessStore.delete/1)
     {:reply, {:ok, deleted_count}, state}
   end
 
@@ -435,8 +430,7 @@ defmodule CodingAgent.ProcessStoreServer do
         fn {id, record, _logs}, failed? ->
           case CodingAgent.ProcessStore.remove_output(record) do
             :ok ->
-              :ets.delete(@table, id)
-              if state.dets_initialized, do: :dets.delete(@dets_table, id)
+              DurableTable.delete(state.table, id)
               failed?
 
             _ ->
@@ -447,27 +441,17 @@ defmodule CodingAgent.ProcessStoreServer do
         @table
       )
 
-    if state.dets_initialized, do: :dets.sync(@dets_table)
+    DurableTable.sync(state.table)
 
     state = Enum.reduce(Map.keys(state.pending), state, &forget_pending(&2, &1))
     state = Enum.reduce(Map.keys(state.live_identity_index), state, &forget_live(&2, &1))
     reply = if failed?, do: {:error, :output_cleanup_failed}, else: :ok
 
-    {:reply, reply, %{state | loaded_from_dets: false, occupied: capacity_counts().occupied}}
+    {:reply, reply, %{state | occupied: capacity_counts().occupied}}
   end
 
   def handle_call(:dets_status, _from, state) do
-    info =
-      if state.dets_initialized do
-        case :dets.info(@dets_table) do
-          :undefined -> %{status: :closed}
-          info -> Map.new(info)
-        end
-      else
-        %{status: :not_initialized}
-      end
-
-    {:reply, %{info: info, state: Map.drop(state, [:table, :dets_table])}, state}
+    {:reply, DurableTable.status(state), state}
   end
 
   def handle_call(
@@ -483,11 +467,7 @@ defmodule CodingAgent.ProcessStoreServer do
   def handle_info(:cleanup, state) do
     state = ensure_tables(state)
 
-    ttl_seconds =
-      Application.get_env(:coding_agent, :process_store_ttl_seconds, @default_ttl_seconds)
-
-    _deleted_count = do_cleanup(ttl_seconds)
-    schedule_cleanup()
+    DurableTable.periodic_cleanup(state, &CodingAgent.ProcessStore.delete/1)
     {:noreply, state}
   end
 
@@ -518,23 +498,11 @@ defmodule CodingAgent.ProcessStoreServer do
     {:noreply, state}
   end
 
-  @impl true
-  def terminate(_reason, state) do
-    if state.dets_initialized do
-      :dets.close(@dets_table)
-    end
-
-    :ok
-  end
-
   # Private Functions
   defp persist_launch(id, record, logs) do
     # No external start may be acknowledged with only volatile provenance.
-    true = dets_open?()
-    :ok = :dets.insert(@dets_table, {id, record, logs})
-    :ok = :dets.sync(@dets_table)
-    :ets.insert(@table, {id, record, logs})
-    :ok
+    :ok = DurableTable.put(@table, {id, record, logs}, :sync)
+    CodingAgent.ProcessStore.notify_change(id)
   rescue
     _ -> exit(:launch_store_unavailable)
   catch
@@ -764,184 +732,70 @@ defmodule CodingAgent.ProcessStoreServer do
     _ -> false
   end
 
-  defp ensure_tables(state) do
-    state =
-      state
-      |> initialize_ets()
-      |> initialize_dets()
-      |> maybe_reset_loaded_from_dets()
+  defp ensure_tables(state), do: DurableTable.ensure(state)
 
-    state = maybe_load_from_dets(state)
+  @doc false
+  def normalize_row({process_id, record, logs}, state) do
+    record =
+      cond do
+        record[:status] == :queued and is_binary(record[:launch_fingerprint]) and
+            not Map.has_key?(state.pending, process_id) ->
+          Map.merge(record, %{
+            status: :canceled,
+            launch_classification: :canceled,
+            launch_reason: :admission_owner_restarted
+          })
 
-    if state.ets_initialized and state.dets_initialized and state.loaded_from_dets and
-         dets_open?() do
-      state
-    else
-      exit(:process_store_unavailable)
-    end
-  end
+        record[:status] == :queued and Map.has_key?(state.pending, process_id) ->
+          record
 
-  defp initialize_ets(state) do
-    if state.ets_initialized do
-      state
-    else
-      case :ets.whereis(@table) do
-        :undefined ->
-          :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
-          %{state | ets_initialized: true}
+        record[:status] in [:running, :starting, :killing, :queued] and
+            not session_alive?(process_id) ->
+          record = Map.merge(record, %{status: :lost, error: :lost_on_restart})
 
-        _tid ->
-          %{state | ets_initialized: true}
-      end
-    end
-  end
-
-  defp initialize_dets(state) do
-    if state.dets_initialized and dets_open?() do
-      state
-    else
-      File.mkdir_p!(Path.dirname(state.dets_path))
-
-      case CodingAgent.StatePaths.open_dets(@dets_table, state.dets_path) do
-        {:ok, _} ->
-          %{state | dets_initialized: true, loaded_from_dets: false}
-
-        {:error, {:already_open, _pid}} ->
-          %{state | dets_initialized: true, loaded_from_dets: false}
-
-        {:error, {:state_dir_locked, pid}} ->
-          CodingAgent.StatePaths.warn_locked(pid)
-          %{state | dets_initialized: false, loaded_from_dets: false}
-
-        {:error, _reason} ->
-          Logger.warning("Process launch storage unavailable")
-          %{state | dets_initialized: false, loaded_from_dets: false}
-      end
-    end
-  end
-
-  defp maybe_load_from_dets(%{loaded_from_dets: true} = state), do: state
-
-  defp maybe_load_from_dets(state) do
-    if state.dets_initialized and state.ets_initialized do
-      now = System.system_time(:second)
-
-      :ok =
-        :dets.foldl(
-          fn {process_id, record, logs}, :ok ->
-            record =
-              cond do
-                Map.get(record, :status) == :queued and
-                  is_binary(Map.get(record, :launch_fingerprint)) and
-                    not Map.has_key?(state.pending, process_id) ->
-                  Map.merge(record, %{
-                    status: :canceled,
-                    launch_classification: :canceled,
-                    launch_reason: :admission_owner_restarted
-                  })
-
-                Map.get(record, :status) == :queued and
-                    Map.has_key?(state.pending, process_id) ->
-                  record
-
-                Map.get(record, :status) in [:running, :starting, :killing, :queued] and
-                    not session_alive?(process_id) ->
-                  # Losing the BEAM owner is not proof of external termination.
-                  record = Map.merge(record, %{status: :lost, error: :lost_on_restart})
-
-                  if is_binary(Map.get(record, :launch_fingerprint)) do
-                    Map.put(record, :launch_classification, :outcome_unknown)
-                  else
-                    Map.put(record, :completed_at, now)
-                  end
-
-                true ->
-                  record
-              end
-
-            :ets.insert(@table, {process_id, record, logs})
-            :ok
-          end,
-          :ok,
-          @dets_table
-        )
-
-      # Every load, including a late open or a reopened file, restores capacity
-      # and owner monitors before the request that triggered it can admit work.
-      state
-      |> Map.merge(%{loaded_from_dets: true, occupied: capacity_counts().occupied})
-      |> reconcile_live_owners()
-    else
-      state
-    end
-  rescue
-    _ -> exit(:process_store_unavailable)
-  catch
-    _, _ -> exit(:process_store_unavailable)
-  end
-
-  defp maybe_reset_loaded_from_dets(state) do
-    if state.loaded_from_dets and state.dets_initialized and state.ets_initialized do
-      case :ets.info(@table, :size) do
-        0 ->
-          case :dets.info(@dets_table, :size) do
-            size when is_integer(size) and size > 0 -> %{state | loaded_from_dets: false}
-            _ -> state
-          end
-
-        _ ->
-          state
-      end
-    else
-      state
-    end
-  end
-
-  defp do_cleanup(ttl_seconds) do
-    now = System.system_time(:second)
-
-    expired_ids =
-      :ets.foldl(
-        fn {process_id, record, _logs}, acc ->
-          if expired_record?(record, now, ttl_seconds) do
-            [process_id | acc]
+          if is_binary(record[:launch_fingerprint]) do
+            Map.put(record, :launch_classification, :outcome_unknown)
           else
-            acc
+            Map.put(record, :completed_at, System.system_time(:second))
           end
-        end,
-        [],
-        @table
-      )
 
-    # A finalized session can linger for final polling after its file is closed.
-    # Let delete/1 distinguish that safe case from a still-draining capture and
-    # preserve the charge when file removal fails.
-    deleted_count =
-      Enum.count(expired_ids, fn process_id ->
-        CodingAgent.ProcessStore.delete(process_id) == :ok
-      end)
+        true ->
+          record
+      end
 
-    if dets_open?() and expired_ids != [] do
-      :dets.sync(@dets_table)
-    end
-
-    deleted_count
+    {process_id, reconcile_boot_workload(process_id, record), logs}
   end
 
-  defp expired_record?(record, now, ttl_seconds) do
-    status = Map.get(record, :status)
-
-    if status in [:completed, :error, :killed, :lost, :rejected, :expired, :canceled] and
-         Map.get(record, :launch_classification) != :outcome_unknown and
-         not capacity_held?(record) do
-      completed_at =
-        Map.get(record, :completed_at) || Map.get(record, :updated_at) ||
-          Map.get(record, :inserted_at)
-
-      is_integer(completed_at) and now - completed_at >= ttl_seconds
+  defp reconcile_boot_workload(id, %{status: :lost, workload_identity: identity} = record)
+       when is_map(identity) do
+    if session_alive?(id) do
+      record
     else
-      false
+      case LemonCore.ProcessGroup.workload_group_status(
+             identity,
+             Map.get(record, :root_exited, false)
+           ) do
+        :terminated -> confirmed_record(record, :workload_empty)
+        {_status, observed} -> Map.put(record, :workload_identity, observed)
+      end
     end
+  end
+
+  defp reconcile_boot_workload(_id, record), do: record
+
+  @doc false
+  def restore_capacity(state) do
+    # Late opens and reopens restore capacity/owner monitors before admission.
+    state
+    |> Map.put(:occupied, capacity_counts().occupied)
+    |> reconcile_live_owners()
+  end
+
+  @doc false
+  def expiry_timestamp({_id, record, _logs}) do
+    if record[:status] in [:completed, :error, :killed, :lost, :rejected, :expired, :canceled] and
+         record[:launch_classification] != :outcome_unknown and not capacity_held?(record),
+       do: DurableTable.terminal_timestamp(record)
   end
 
   defp do_reserve_artifact(process_id, requested, owner_budget, runtime_budget) do
@@ -992,12 +846,11 @@ defmodule CodingAgent.ProcessStoreServer do
 
           output = Map.put(Map.get(record, :output) || %{}, :artifact_capacity, granted)
           entry = {process_id, Map.put(record, :output, output), logs}
-          :ets.insert(@table, entry)
+          DurableTable.put(@table, entry, :mirror)
 
           # Do not launch a writer with a reservation that restart cannot recover.
           # On failure the ETS charge stays conservative until startup cleanup.
-          with :ok <- :dets.insert(@dets_table, entry),
-               :ok <- :dets.sync(@dets_table) do
+          with :ok <- DurableTable.persist(@table, entry, true) do
             {:ok, granted}
           else
             _ -> {:error, :artifact_accounting_unavailable}
@@ -1105,22 +958,7 @@ defmodule CodingAgent.ProcessStoreServer do
   defp finished_at(record),
     do: Map.get(record, :completed_at) || Map.get(record, :inserted_at) || 0
 
-  defp dets_open? do
-    :dets.info(@dets_table) != :undefined
-  rescue
-    _ -> false
-  end
-
-  defp schedule_cleanup do
-    interval =
-      Application.get_env(
-        :coding_agent,
-        :process_store_cleanup_interval_seconds,
-        @cleanup_interval_seconds
-      )
-
-    Process.send_after(self(), :cleanup, interval * 1_000)
-  end
+  defp dets_open?, do: DurableTable.open?(@dets_table)
 
   defp dets_path(opts) do
     Keyword.get(opts, :dets_path) ||

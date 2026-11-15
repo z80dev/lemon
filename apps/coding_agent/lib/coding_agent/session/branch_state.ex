@@ -18,6 +18,14 @@ defmodule CodingAgent.Session.BranchState do
 
   @spec restore(map()) :: map()
   def restore(state) do
+    if event_log = Map.get(state, :event_log) do
+      CodingAgent.Session.EventLog.invalidate(
+        event_log,
+        state.session_manager.header.id,
+        state.run_id
+      )
+    end
+
     %{state | branch_generation: (state.branch_generation || 0) + 1}
     |> Planning.refresh()
     |> Todos.sync()

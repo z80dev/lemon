@@ -26,15 +26,25 @@ defmodule LemonControlPlane.MemoryTransfer do
   def execute(params, ctx) do
     case validate_params(params) do
       :ok ->
-        :global.trans({{__MODULE__, journal(ctx), params["mutationId"]}, self()}, fn ->
-          case Store.get(journal(ctx), @table, params["mutationId"]) do
-            nil -> create(params, ctx)
-            operation when is_map(operation) -> resume(operation, params, ctx)
-            _ -> error(:memory_unavailable)
-          end
-        end)
+        :global.trans(
+          {{__MODULE__, journal(ctx), params["mutationId"]}, self()},
+          fn ->
+            case Store.get(journal(ctx), @table, params["mutationId"]) do
+              nil -> create(params, ctx)
+              operation when is_map(operation) -> resume(operation, params, ctx)
+              _ -> error(:memory_unavailable)
+            end
+          end,
+          [node()],
+          3
+        )
+        |> case do
+          :aborted -> error(:memory_unavailable)
+          result -> result
+        end
 
-      {:error, reason} -> error(reason)
+      {:error, reason} ->
+        error(reason)
     end
   rescue
     _ -> uncertain(params)
@@ -199,7 +209,8 @@ defmodule LemonControlPlane.MemoryTransfer do
             uncertain(preparing)
         end
 
-      {:error, _} -> error(:memory_unavailable)
+      {:error, _} ->
+        error(:memory_unavailable)
     end
   end
 
@@ -279,7 +290,8 @@ defmodule LemonControlPlane.MemoryTransfer do
             uncertain(applying)
         end
 
-      {:error, _} -> error(:memory_unavailable)
+      {:error, _} ->
+        error(:memory_unavailable)
     end
   end
 

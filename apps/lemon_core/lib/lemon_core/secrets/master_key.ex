@@ -30,6 +30,12 @@ defmodule LemonCore.Secrets.MasterKey do
   which logs a deprecation warning on first use. Re-encrypting under a proper
   key is the real fix: `lemon secrets rotate-key` (`LemonCore.Secrets.KeyRotation`).
 
+  Secret reads use `resolve_cached/1`, a single VM-wide `:persistent_term`
+  entry keyed by caller options and provider configuration. Only successful
+  resolutions are retained. Writers still resolve freshly under `Secrets.Lock`
+  so another OS process cannot leave them using a retired key. Rotation clears
+  the cache under that same lease; cache misses are serialized with invalidation.
+
   ## Scoped resolution
 
   `scoped/1` memoizes Keychain fetches, including failures, for one command in
@@ -43,6 +49,7 @@ defmodule LemonCore.Secrets.MasterKey do
   alias LemonCore.Secrets.KeyProvider
 
   @master_key_bytes 32
+  @cache_key {__MODULE__, :resolved_key}
 
   # Reasons that mean "this provider has nothing for us" rather than a failure.
   @skip_reasons [:missing, :unavailable, :keychain_unavailable, :not_found]
@@ -76,14 +83,89 @@ defmodule LemonCore.Secrets.MasterKey do
   end
 
   @doc """
+  Resolves a key for secret reads without repeating provider I/O on cache hits.
+
+  The single cache slot bounds retained key material even for callers supplying
+  different provider options. External key edits require a fresh resolution or
+  process restart; supported rotation invalidates the cache automatically.
+  """
+  @spec resolve_cached(keyword()) :: {:ok, binary(), source()} | {:error, atom() | tuple()}
+  def resolve_cached(opts \\ []) do
+    context = {opts, Application.get_env(:lemon_core, LemonCore.Secrets, [])}
+
+    case :persistent_term.get(@cache_key, nil) do
+      {^context, result} ->
+        result
+
+      _ ->
+        cache_lock(fn ->
+          case :persistent_term.get(@cache_key, nil) do
+            {^context, result} ->
+              result
+
+            _ ->
+              Process.delete({__MODULE__, :memo})
+              result = resolve(opts)
+
+              if match?({:ok, _, _}, result) do
+                :persistent_term.put(@cache_key, {context, result})
+              end
+
+              result
+          end
+        end)
+    end
+  end
+
+  @doc false
+  def with_cache_invalidation(fun) do
+    cache_lock(fn ->
+      :persistent_term.erase(@cache_key)
+      Process.delete({__MODULE__, :memo})
+
+      try do
+        fun.()
+      after
+        :persistent_term.erase(@cache_key)
+      end
+    end)
+  end
+
+  defp cache_lock(fun) do
+    held = {__MODULE__, :cache_lock}
+
+    if Process.get(held, false) do
+      fun.()
+    else
+      :global.trans(
+        {@cache_key, self()},
+        fn ->
+          Process.put(held, true)
+
+          try do
+            fun.()
+          after
+            Process.delete(held)
+          end
+        end,
+        [node()]
+      )
+    end
+  end
+
+  @doc """
   Resolves the current key without reusing scoped reads, then refreshes the scope.
   Secret writers must call this inside their write lock so a concurrent rotation
   cannot leave a new record encrypted with a retired key.
   """
   @spec resolve_fresh(keyword()) :: {:ok, binary(), source()} | {:error, atom() | tuple()}
   def resolve_fresh(opts \\ []) do
+    # Keep already-resolved reads available while a writer's provider blocks.
+    # Rotation separately holds with_cache_invalidation/1 around the key switch.
     Process.delete({__MODULE__, :memo})
-    resolve(opts)
+    result = resolve(opts)
+    cache_lock(fn -> :persistent_term.erase(@cache_key) end)
+    result
   end
 
   @doc """
@@ -98,11 +180,13 @@ defmodule LemonCore.Secrets.MasterKey do
   """
   @spec init(keyword()) :: {:ok, map()} | {:error, atom() | tuple()}
   def init(opts \\ []) do
-    encoded = generate_encoded_key()
+    with_cache_invalidation(fn ->
+      encoded = generate_encoded_key()
 
-    opts
-    |> init_targets()
-    |> init_chain(encoded, opts, [])
+      opts
+      |> init_targets()
+      |> init_chain(encoded, opts, [])
+    end)
   end
 
   @spec status(keyword()) :: map()
@@ -170,6 +254,12 @@ defmodule LemonCore.Secrets.MasterKey do
     else
       fetch_uncached(provider, opts)
     end
+  end
+
+  @doc false
+  def fetch_fresh(provider, opts) do
+    Process.delete({__MODULE__, :memo})
+    fetch_from(provider, opts)
   end
 
   defp fetch_uncached(provider, opts) do
@@ -347,12 +437,7 @@ defmodule LemonCore.Secrets.MasterKey do
   defp warn_once(key, message) do
     term_key = {__MODULE__, :warned, key}
 
-    if :persistent_term.get(term_key, false) do
-      :ok
-    else
-      :persistent_term.put(term_key, true)
-      Logger.warning(message)
-      :ok
-    end
+    if LemonCore.RuntimeCache.warn_once?(term_key), do: Logger.warning(message)
+    :ok
   end
 end

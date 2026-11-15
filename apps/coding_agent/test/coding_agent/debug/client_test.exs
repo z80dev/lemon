@@ -48,12 +48,10 @@ defmodule CodingAgent.Debug.ClientTest do
     assert :ok = Client.respond(client, request, :ok)
     assert_receive {:dap, ^client, {:event, "initialized", _}}, 5_000
 
-    reverse_responses = fn ->
-      Enum.filter(log_entries(log), &Map.has_key?(&1, "reverse_response"))
-    end
-
-    assert eventually(fn -> length(reverse_responses.()) == 2 end)
-    responses = reverse_responses.()
+    # A later response proves the adapter has consumed and logged both answers.
+    {:ok, seq} = Client.request(client, "threads")
+    assert_receive {:dap, ^client, {:response, ^seq, _}}, 5_000
+    responses = Enum.filter(log_entries(log), &Map.has_key?(&1, "reverse_response"))
 
     assert [
              %{"reverse_response" => "runInTerminal", "success" => false, "message" => rit},
@@ -72,13 +70,5 @@ defmodule CodingAgent.Debug.ClientTest do
     assert reason =~ "exited (code 3)"
     assert reason =~ "fatal adapter error"
     assert_receive {:DOWN, ^ref, :process, ^client, :normal}, 5_000
-  end
-
-  defp eventually(fun, attempts \\ 50) do
-    cond do
-      fun.() -> true
-      attempts == 0 -> false
-      true -> Process.sleep(100) && eventually(fun, attempts - 1)
-    end
   end
 end

@@ -6,7 +6,7 @@ defmodule LemonMCP.Client do
   MCP servers over stdio transport. It handles:
 
   - Connection lifecycle (spawn, initialize handshake, close)
-  - Request/response correlation
+  - Request/response correlation and deadlines through `LemonCore.Rpc.Client`
   - Tool listing and invocation
   - Resource listing/reading and prompt listing/getting
   - Optional server-to-client sampling callbacks
@@ -42,7 +42,11 @@ defmodule LemonMCP.Client do
 
   require Logger
 
+  alias LemonCore.Rpc.Client, as: RpcClient
+  alias LemonMCP.Client.StdioHandler
+  alias LemonMCP.Framing.Stdio, as: StdioFraming
   alias LemonMCP.Protocol
+  alias LemonMCP.Transport.Stdio
 
   # ============================================================================
   # Types
@@ -61,14 +65,7 @@ defmodule LemonMCP.Client do
           client_version: String.t(),
           capabilities: map(),
           sampling_handler: (map() -> {:ok, map()} | {:error, term()}) | nil,
-          timeout_ms: non_neg_integer()
-        }
-
-  @typedoc "Pending request"
-  @type pending_request :: %{
-          id: String.t(),
-          from: GenServer.from(),
-          timer: reference()
+          timeout_ms: timeout()
         }
 
   @typedoc "Server state struct"
@@ -78,8 +75,9 @@ defmodule LemonMCP.Client do
           config: config(),
           server_info: map() | nil,
           server_capabilities: map() | nil,
-          pending_requests: %{String.t() => pending_request()},
-          message_buffer: [String.t()]
+          rpc: pid() | nil,
+          task_supervisor: pid() | nil,
+          initialize_id: String.t() | nil
         }
 
   # ============================================================================
@@ -134,7 +132,7 @@ defmodule LemonMCP.Client do
   @spec list_tools(GenServer.server(), timeout()) ::
           {:ok, [Protocol.tool()]} | {:error, term()}
   def list_tools(server, timeout \\ 30_000) do
-    GenServer.call(server, :list_tools, timeout)
+    request(server, Protocol.tool_list_request(), timeout)
   end
 
   @doc """
@@ -159,7 +157,7 @@ defmodule LemonMCP.Client do
   @spec call_tool(GenServer.server(), String.t(), map(), timeout()) ::
           {:ok, [Protocol.content_item()]} | {:error, term()}
   def call_tool(server, tool_name, arguments \\ %{}, timeout \\ 30_000) do
-    GenServer.call(server, {:call_tool, tool_name, arguments}, timeout)
+    request(server, Protocol.tool_call_request(name: tool_name, arguments: arguments), timeout)
   end
 
   @doc """
@@ -168,7 +166,7 @@ defmodule LemonMCP.Client do
   @spec list_resources(GenServer.server(), timeout()) ::
           {:ok, [map()]} | {:error, term()}
   def list_resources(server, timeout \\ 30_000) do
-    GenServer.call(server, :list_resources, timeout)
+    request(server, Protocol.resource_list_request(), timeout)
   end
 
   @doc """
@@ -177,7 +175,7 @@ defmodule LemonMCP.Client do
   @spec read_resource(GenServer.server(), String.t(), timeout()) ::
           {:ok, [map()]} | {:error, term()}
   def read_resource(server, uri, timeout \\ 30_000) do
-    GenServer.call(server, {:read_resource, uri}, timeout)
+    request(server, Protocol.resource_read_request(uri: uri), timeout)
   end
 
   @doc """
@@ -186,7 +184,7 @@ defmodule LemonMCP.Client do
   @spec list_prompts(GenServer.server(), timeout()) ::
           {:ok, [map()]} | {:error, term()}
   def list_prompts(server, timeout \\ 30_000) do
-    GenServer.call(server, :list_prompts, timeout)
+    request(server, Protocol.prompt_list_request(), timeout)
   end
 
   @doc """
@@ -195,7 +193,7 @@ defmodule LemonMCP.Client do
   @spec get_prompt(GenServer.server(), String.t(), map(), timeout()) ::
           {:ok, map()} | {:error, term()}
   def get_prompt(server, prompt_name, arguments \\ %{}, timeout \\ 30_000) do
-    GenServer.call(server, {:get_prompt, prompt_name, arguments}, timeout)
+    request(server, Protocol.prompt_get_request(name: prompt_name, arguments: arguments), timeout)
   end
 
   @doc """
@@ -220,6 +218,10 @@ defmodule LemonMCP.Client do
   @spec server_capabilities(GenServer.server()) :: {:ok, map()} | {:error, :not_connected}
   def server_capabilities(server) do
     GenServer.call(server, :server_capabilities)
+  end
+
+  defp request(server, request, timeout) do
+    GenServer.call(server, {:request, request, timeout}, :infinity)
   end
 
   # ============================================================================
@@ -248,17 +250,49 @@ defmodule LemonMCP.Client do
       config: config,
       server_info: nil,
       server_capabilities: nil,
-      pending_requests: %{},
-      message_buffer: []
+      rpc: nil,
+      task_supervisor: nil,
+      initialize_id: nil
     }
 
-    # Start the transport
+    Process.flag(:trap_exit, true)
+
     case start_transport(state) do
-      {:ok, transport_pid, new_state} ->
-        new_state = %{new_state | transport: transport_pid, state: :initializing}
-        # Send initialize request
-        send_initialize(new_state)
-        {:ok, new_state}
+      {:ok, transport} ->
+        {:ok, task_supervisor} = Task.Supervisor.start_link()
+        owner = self()
+        handlers = Map.take(config, [:sampling_handler, :notification_handler])
+
+        {:ok, rpc} =
+          RpcClient.start_link(
+            owner: owner,
+            framing: StdioFraming,
+            transport: Stdio,
+            transport_state: transport,
+            ready: false,
+            connect_timeout: config.timeout_ms,
+            task_supervisor: task_supervisor,
+            handler: &StdioHandler.handle(&1, &2, owner, handlers)
+          )
+
+        Process.monitor(rpc)
+
+        state = %{
+          state
+          | transport: transport,
+            rpc: rpc,
+            task_supervisor: task_supervisor,
+            state: :initializing
+        }
+
+        case send_initialize(state) do
+          {:ok, state} ->
+            {:ok, state}
+
+          {:error, reason} ->
+            do_close(state)
+            {:stop, reason}
+        end
 
       {:error, reason} ->
         {:stop, reason}
@@ -271,68 +305,23 @@ defmodule LemonMCP.Client do
   end
 
   @impl true
-  def handle_call(:list_tools, from, %{state: :ready} = state) do
-    request = Protocol.tool_list_request()
-    send_request(request, from, state)
+  def handle_call({:request, request, timeout}, from, %{state: :ready} = state) do
+    timeout = min(timeout, state.config.timeout_ms)
+
+    case RpcClient.dispatch(state.rpc, request.id, request, from, timeout) do
+      :ok ->
+        {:noreply, state}
+
+      {:error, {:encode_failed, _reason}} = error ->
+        {:reply, error, state}
+
+      {:error, reason} ->
+        {:reply, {:error, {:send_failed, reason}}, state}
+    end
   end
 
   @impl true
-  def handle_call(:list_tools, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
-  def handle_call({:call_tool, tool_name, arguments}, from, %{state: :ready} = state) do
-    request = Protocol.tool_call_request(name: tool_name, arguments: arguments)
-    send_request(request, from, state)
-  end
-
-  @impl true
-  def handle_call({:call_tool, _, _}, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
-  def handle_call(:list_resources, from, %{state: :ready} = state) do
-    request = Protocol.resource_list_request()
-    send_request(request, from, state)
-  end
-
-  @impl true
-  def handle_call(:list_resources, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
-  def handle_call({:read_resource, uri}, from, %{state: :ready} = state) do
-    request = Protocol.resource_read_request(uri: uri)
-    send_request(request, from, state)
-  end
-
-  @impl true
-  def handle_call({:read_resource, _uri}, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
-  def handle_call(:list_prompts, from, %{state: :ready} = state) do
-    request = Protocol.prompt_list_request()
-    send_request(request, from, state)
-  end
-
-  @impl true
-  def handle_call(:list_prompts, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
-  def handle_call({:get_prompt, prompt_name, arguments}, from, %{state: :ready} = state) do
-    request = Protocol.prompt_get_request(name: prompt_name, arguments: arguments)
-    send_request(request, from, state)
-  end
-
-  @impl true
-  def handle_call({:get_prompt, _, _}, _from, state) do
+  def handle_call({:request, _request, _timeout}, _from, state) do
     {:reply, {:error, {:not_ready, state.state}}, state}
   end
 
@@ -368,32 +357,32 @@ defmodule LemonMCP.Client do
 
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, reason}, %{transport: pid} = state) do
-    Logger.warning("MCP transport process died: #{inspect(reason)}")
     {:stop, {:transport_died, reason}, %{state | transport: nil, state: :disconnected}}
   end
 
-  @impl true
-  def handle_info({:timeout, request_id}, state) do
-    case pop_in(state.pending_requests[request_id]) do
-      {nil, state} ->
-        {:noreply, state}
-
-      {pending, new_state} ->
-        GenServer.reply(pending.from, {:error, :timeout})
-        {:noreply, new_state}
-    end
+  def handle_info({:DOWN, _ref, :process, pid, reason}, %{rpc: pid} = state) do
+    {:stop, {:rpc_died, reason}, %{state | rpc: nil, state: :disconnected}}
   end
 
-  @impl true
-  def handle_info({:mcp_message, raw_message}, state) do
-    handle_mcp_message(raw_message, state)
+  def handle_info({:EXIT, pid, reason}, %{transport: pid} = state) when reason != :normal do
+    {:stop, {:transport_died, reason}, %{state | transport: nil, state: :disconnected}}
   end
 
-  @impl true
-  def handle_info(msg, state) do
-    Logger.debug("Unexpected message: #{inspect(msg)}")
+  def handle_info({:EXIT, pid, reason}, %{task_supervisor: pid} = state) do
+    {:stop, {:handler_supervisor_died, reason}, %{state | task_supervisor: nil}}
+  end
+
+  def handle_info({:mcp_data, bytes}, %{rpc: rpc} = state) when is_pid(rpc) do
+    RpcClient.feed(rpc, bytes)
     {:noreply, state}
   end
+
+  def handle_info({:rpc_message, message}, %{rpc: rpc} = state) when is_pid(rpc) do
+    handle_mcp_message(message, state)
+  end
+
+  def handle_info({:rpc_finished, _id, _reason}, state), do: {:noreply, state}
+  def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, state) do
@@ -407,7 +396,7 @@ defmodule LemonMCP.Client do
 
   defp start_transport(state) do
     client = self()
-    handler = fn msg -> send(client, {:mcp_message, msg}) end
+    handler = fn bytes -> send(client, {:mcp_data, bytes}) end
 
     transport_opts = [
       command: state.config.command,
@@ -418,10 +407,10 @@ defmodule LemonMCP.Client do
       message_handler: handler
     ]
 
-    case LemonMCP.Transport.Stdio.start_link(transport_opts) do
+    case Stdio.start_link(transport_opts) do
       {:ok, pid} ->
         Process.monitor(pid)
-        {:ok, pid, state}
+        {:ok, pid}
 
       error ->
         error
@@ -436,81 +425,52 @@ defmodule LemonMCP.Client do
         capabilities: client_capabilities(state.config)
       )
 
-    case Protocol.encode(request) do
-      {:ok, json} ->
-        :ok = LemonMCP.Transport.Stdio.send_message(state.transport, json)
-
-      {:error, reason} ->
-        Logger.error("Failed to encode initialize request: #{inspect(reason)}")
+    case RpcClient.send_message(state.rpc, request) do
+      :ok -> {:ok, %{state | initialize_id: request.id}}
+      {:error, reason} -> {:error, {:init_failed, reason}}
     end
   end
 
   defp send_initialized_notification(state) do
-    notification = Protocol.initialized_notification()
-
-    case Protocol.encode(notification) do
-      {:ok, json} ->
-        :ok = LemonMCP.Transport.Stdio.send_message(state.transport, json)
-
-      {:error, reason} ->
-        Logger.error("Failed to encode initialized notification: #{inspect(reason)}")
-    end
+    RpcClient.send_message(state.rpc, Protocol.initialized_notification())
   end
 
-  defp send_request(request, from, state) do
-    id = request.id
-
-    case Protocol.encode(request) do
-      {:ok, json} ->
-        timer = Process.send_after(self(), {:timeout, id}, state.config.timeout_ms)
-        pending = %{id: id, from: from, timer: timer}
-        new_pending = Map.put(state.pending_requests, id, pending)
-
-        case LemonMCP.Transport.Stdio.send_message(state.transport, json) do
-          :ok ->
-            {:noreply, %{state | pending_requests: new_pending}}
-
-          {:error, reason} ->
-            _ = Process.cancel_timer(timer)
-            {:reply, {:error, {:send_failed, reason}}, state}
-        end
-
-      {:error, reason} ->
-        {:reply, {:error, {:encode_failed, reason}}, state}
-    end
-  end
-
-  defp handle_mcp_message(raw_message, state) do
-    case Protocol.decode(raw_message) do
+  defp handle_mcp_message(message, state) do
+    case Protocol.decode_map(message) do
       {:ok, message} ->
         process_message(message, state)
 
-      {:error, reason} ->
-        Logger.warning("Failed to decode MCP message: #{inspect(reason)} - #{raw_message}")
+      {:error, _reason} ->
+        Logger.warning("Ignoring invalid MCP protocol message")
         {:noreply, state}
     end
   end
 
-  defp process_message(%Protocol.InitializeResponse{} = response, %{state: :initializing} = state) do
-    if response.error do
-      Logger.error("Initialize failed: #{response.error.message}")
-      {:stop, {:init_failed, response.error}, state}
+  defp process_message(
+         %Protocol.InitializeResponse{id: id, result: result},
+         %{state: :initializing, initialize_id: id} = state
+       ) do
+    with :ok <- send_initialized_notification(state),
+         :ok <- RpcClient.ready(state.rpc) do
+      {:noreply,
+       %{
+         state
+         | state: :ready,
+           initialize_id: nil,
+           server_info: result.serverInfo,
+           server_capabilities: result.capabilities
+       }}
     else
-      # Send initialized notification
-      send_initialized_notification(state)
-
-      # Extract server info
-      result = response.result
-
-      new_state = %{
-        state
-        | state: :ready,
-          server_info: result.serverInfo,
-          server_capabilities: result.capabilities
-      }
-
-      {:noreply, new_state}
+      {:error, reason} -> {:stop, {:init_failed, reason}, state}
     end
+  end
+
+  defp process_message(
+         %{id: id, error: error},
+         %{state: :initializing, initialize_id: id} = state
+       )
+       when error != nil do
+    {:stop, {:init_failed, error}, state}
   end
 
   defp process_message(%Protocol.InitializeResponse{}, state) do
@@ -520,61 +480,18 @@ defmodule LemonMCP.Client do
   end
 
   defp process_message(%Protocol.ToolListResponse{id: id, result: result, error: nil}, state) do
-    case pop_in(state.pending_requests[id]) do
-      {nil, state} ->
-        {:noreply, state}
-
-      {pending, new_state} ->
-        _ = Process.cancel_timer(pending.timer)
-        GenServer.reply(pending.from, {:ok, result.tools})
-        {:noreply, new_state}
-    end
-  end
-
-  defp process_message(%Protocol.ToolListResponse{id: id, error: error}, state)
-       when error != nil do
-    case pop_in(state.pending_requests[id]) do
-      {nil, state} ->
-        {:noreply, state}
-
-      {pending, new_state} ->
-        _ = Process.cancel_timer(pending.timer)
-        GenServer.reply(pending.from, {:error, {:rpc_error, error}})
-        {:noreply, new_state}
-    end
+    reply_pending(id, {:ok, result.tools}, state)
   end
 
   defp process_message(%Protocol.ToolCallResponse{id: id, result: result, error: nil}, state) do
-    case pop_in(state.pending_requests[id]) do
-      {nil, state} ->
-        {:noreply, state}
+    response =
+      if result.isError do
+        {:error, {:tool_error, result.content}}
+      else
+        {:ok, result.content}
+      end
 
-      {pending, new_state} ->
-        _ = Process.cancel_timer(pending.timer)
-
-        response =
-          if result.isError do
-            {:error, {:tool_error, result.content}}
-          else
-            {:ok, result.content}
-          end
-
-        GenServer.reply(pending.from, response)
-        {:noreply, new_state}
-    end
-  end
-
-  defp process_message(%Protocol.ToolCallResponse{id: id, error: error}, state)
-       when error != nil do
-    case pop_in(state.pending_requests[id]) do
-      {nil, state} ->
-        {:noreply, state}
-
-      {pending, new_state} ->
-        _ = Process.cancel_timer(pending.timer)
-        GenServer.reply(pending.from, {:error, {:rpc_error, error}})
-        {:noreply, new_state}
-    end
+    reply_pending(id, response, state)
   end
 
   defp process_message(%Protocol.ResourceListResponse{id: id, result: result, error: nil}, state) do
@@ -613,91 +530,11 @@ defmodule LemonMCP.Client do
     reply_pending(id, {:error, {:rpc_error, error}}, state)
   end
 
-  defp process_message(
-         %{"id" => id, "method" => "sampling/createMessage", "params" => params},
-         state
-       ) do
-    handle_sampling_request(id, params || %{}, state)
-    {:noreply, state}
-  end
-
   defp process_message(%{id: id, error: error}, state) when error != nil do
-    # Generic error response for unknown request types
-    case pop_in(state.pending_requests[id]) do
-      {nil, state} ->
-        {:noreply, state}
-
-      {pending, new_state} ->
-        _ = Process.cancel_timer(pending.timer)
-        GenServer.reply(pending.from, {:error, {:rpc_error, error}})
-        {:noreply, new_state}
-    end
+    reply_pending(id, {:error, {:rpc_error, error}}, state)
   end
 
-  defp process_message(%{"method" => _method} = message, state)
-       when not is_map_key(message, "id") do
-    Protocol.dispatch_notification(message, state.config.notification_handler)
-    {:noreply, state}
-  end
-
-  defp process_message(message, state) do
-    Logger.debug("Unhandled MCP message: #{inspect(message)}")
-    {:noreply, state}
-  end
-
-  defp handle_sampling_request(id, params, state) do
-    response =
-      case state.config.sampling_handler do
-        handler when is_function(handler, 1) ->
-          case handler.(params) do
-            {:ok, result} when is_map(result) ->
-              Protocol.create_response(id, result)
-
-            {:error, reason} ->
-              Protocol.create_error_response(
-                id,
-                -1,
-                "Sampling request rejected",
-                inspect(reason)
-              )
-
-            other ->
-              Protocol.create_error_response(
-                id,
-                Protocol.error_code(:internal_error),
-                "Invalid sampling handler response",
-                inspect(other)
-              )
-          end
-
-        _ ->
-          Protocol.create_error_response(id, -1, "Sampling is not enabled")
-      end
-
-    send_response(response, state)
-  end
-
-  defp send_response(response, state) do
-    # response is always a map here (either a JSONRPCResponse struct or a
-    # plain error map), so the only meaningful branch is struct vs map
-    encoded =
-      if is_struct(response) do
-        Protocol.encode(response)
-      else
-        Jason.encode(response)
-      end
-
-    case encoded do
-      {:ok, json} ->
-        case LemonMCP.Transport.Stdio.send_message(state.transport, json) do
-          :ok -> :ok
-          {:error, reason} -> Logger.warning("Failed to send MCP response: #{inspect(reason)}")
-        end
-
-      {:error, reason} ->
-        Logger.warning("Failed to encode MCP response: #{inspect(reason)}")
-    end
-  end
+  defp process_message(_message, state), do: {:noreply, state}
 
   defp client_capabilities(config) do
     if is_function(config.sampling_handler, 1) do
@@ -721,28 +558,46 @@ defmodule LemonMCP.Client do
   end
 
   defp reply_pending(id, response, state) do
-    case pop_in(state.pending_requests[id]) do
-      {nil, state} ->
-        {:noreply, state}
-
-      {pending, new_state} ->
-        _ = Process.cancel_timer(pending.timer)
-        GenServer.reply(pending.from, response)
-        {:noreply, new_state}
-    end
+    RpcClient.complete(state.rpc, id, response)
+    {:noreply, state}
   end
 
   defp do_close(state) do
-    if state.transport do
-      LemonMCP.Transport.Stdio.close(state.transport)
+    if state.rpc && Process.alive?(state.rpc) do
+      try do
+        RpcClient.fail_all(state.rpc, {:error, :connection_closed})
+      catch
+        :exit, _ -> :ok
+      end
     end
 
-    # Cancel all pending requests
-    Enum.each(state.pending_requests, fn {_id, pending} ->
-      _ = Process.cancel_timer(pending.timer)
-      GenServer.reply(pending.from, {:error, :connection_closed})
-    end)
+    if state.rpc && Process.alive?(state.rpc) do
+      try do
+        :gen_statem.stop(state.rpc)
+      catch
+        :exit, _ -> :ok
+      end
+    end
 
-    %{state | transport: nil, state: :disconnected, pending_requests: %{}}
+    stop_process(state.task_supervisor)
+
+    stop_process(state.transport)
+
+    %{
+      state
+      | transport: nil,
+        rpc: nil,
+        task_supervisor: nil,
+        initialize_id: nil,
+        state: :disconnected
+    }
+  end
+
+  defp stop_process(nil), do: :ok
+
+  defp stop_process(pid) do
+    GenServer.stop(pid)
+  catch
+    :exit, _ -> :ok
   end
 end

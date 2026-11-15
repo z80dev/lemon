@@ -11,7 +11,14 @@
  * that produced no deltas at all.
  */
 
-import type { AgentAction, RunUsage, SessionSnapshotIdentity } from "../protocol/types.ts";
+import type {
+	AgentAction,
+	AgentCompletedEvent,
+	RunUsage,
+	SessionEventBatch,
+	SessionEventCursor,
+	SessionSnapshotIdentity,
+} from "../protocol/types.ts";
 import {
 	type ApprovalBlock,
 	type AssistantBlock,
@@ -163,9 +170,18 @@ export class SessionStore {
 	/** Last accepted owner snapshot; transient events cannot establish branch ownership. */
 	snapshotIdentity: SessionSnapshotIdentity | undefined;
 	recoveryEventVersion = 0;
-	/** No cursor exists for snapshot text, so this run is refreshed, never appended. */
+	/** Legacy snapshots without a cursor refresh this run instead of appending. */
 	snapshotRunId: string | undefined;
 	ownedProcessStates: readonly Record<string, unknown>[] = [];
+	eventCursor: SessionEventCursor | undefined;
+	/** Pause live application until replay/snapshot and its buffered tail succeed. */
+	eventRecovery = false;
+	eventSnapshotRequired = false;
+	readonly pendingSessionEvents = new Map<number, SessionEventBatch>();
+	/** Delay queue advancement until all replay pages and live batches are applied. */
+	recoveredCompletion: AgentCompletedEvent | undefined;
+	/** Owner-proven terminal continuity retained if tail replay temporarily fails. */
+	recoveredSnapshotRunId: string | undefined;
 
 	acceptsEvent(runId: string | null | undefined, identity?: SessionSnapshotIdentity): boolean {
 		const current = this.snapshotIdentity;

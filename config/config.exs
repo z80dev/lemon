@@ -40,14 +40,11 @@ config :logger, :default_formatter,
     :turn
   ]
 
-# Lane concurrency caps for CodingAgent.LaneQueue
-# Keep main cap at 4 to stay within Telegram's per-chat rate limits.
-# Subagent and background_exec can be higher since they don't all
-# route through the same Telegram chat.
-config :coding_agent, :lane_caps,
-  main: 8,
-  subagent: 16,
-  background_exec: 8
+# Shared native task/background-session capacity.
+config :coding_agent, :task_max_concurrency, 8
+
+# Background process launch callbacks (not live process lifetimes).
+config :coding_agent, :lane_caps, background_exec: 8
 
 config :coding_agent, :async_followups, default_queue_mode: :followup
 
@@ -176,8 +173,8 @@ config :lemon_core, LemonCore.Secrets,
 #
 # The store is a storage primitive and must not name its collaborators, so the
 # runtime wires them here: run history, memory ingest, the usage ledger and exec
-# approval expiry attach as finalize-run hooks, and run-history reads forward to
-# the same provider.
+# approval expiry attach as finalize-run hooks. History reads use RunHistoryStore
+# directly rather than forwarding through Store.
 # Channels register their own cached tables at boot (see LemonChannels.Application).
 config :lemon_core, LemonCore.Store,
   backend: LemonCore.Store.EtsBackend,
@@ -187,8 +184,7 @@ config :lemon_core, LemonCore.Store,
     {LemonMemory.Ingest, :handle_finalize_run},
     {LemonCore.UsageLedger, :handle_finalize_run},
     {LemonCore.ExecApprovalExpiry, :handle_finalize_run}
-  ],
-  run_history_provider: LemonCore.RunHistoryStore
+  ]
 
 config :lemon_web, LemonWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,

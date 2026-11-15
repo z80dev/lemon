@@ -337,7 +337,7 @@ defmodule LemonAgent.Types do
     Similar to LemonAi.Types.Context but uses AgentTool and agent_message.
     """
     @type t :: %__MODULE__{
-            system_prompt: String.t() | nil,
+            system_prompt: LemonAi.SystemPrompt.t(),
             messages: [LemonAgent.Types.agent_message()],
             tools: [LemonAgent.Types.AgentTool.t()]
           }
@@ -377,7 +377,7 @@ defmodule LemonAgent.Types do
     - `run_usage` - Spending in the current prompt (reset only for a new prompt)
     """
     @type t :: %__MODULE__{
-            system_prompt: String.t(),
+            system_prompt: LemonAi.SystemPrompt.t(),
             model: LemonAi.Types.Model.t(),
             thinking_level: LemonAgent.Types.thinking_level(),
             tools: [LemonAgent.Types.AgentTool.t()],
@@ -451,6 +451,11 @@ defmodule LemonAgent.Types do
     - `budget` - Budget state, including run totals when continuing a prompt
     - `stream_options` - Options for streaming requests
     - `stream_fn` - Custom stream function (defaults to LemonAi.stream_simple/3)
+    - `emit_system_prompt` - Internal journal transport; the Agent consumes these
+      snapshots without publishing them to ordinary subscribers
+    - `stream_rules` - Dormant rules, or a zero-arity resolver returning active rules
+    - `on_stream_rule` - Synchronous rule receipt/redirect callback; returns `:ok`
+      only after durable acceptance, or `{:error, :injection_limit}` when spent
     """
     @type convert_to_llm_fn ::
             ([LemonAgent.Types.agent_message()] ->
@@ -517,7 +522,8 @@ defmodule LemonAgent.Types do
             budget: LemonAgent.Budget.t() | nil,
             stream_options: LemonAi.Types.StreamOptions.t(),
             stream_options_model: LemonAi.Types.Model.t() | nil,
-            stream_fn: stream_fn() | nil
+            stream_fn: stream_fn() | nil,
+            emit_system_prompt: boolean()
           }
     defstruct model: nil,
               convert_to_llm: nil,
@@ -548,7 +554,10 @@ defmodule LemonAgent.Types do
               budget: nil,
               stream_options: %StreamOptions{},
               stream_options_model: nil,
-              stream_fn: nil
+              stream_rules: [],
+              on_stream_rule: nil,
+              stream_fn: nil,
+              emit_system_prompt: false
   end
 
   # ============================================================================
@@ -615,6 +624,7 @@ defmodule LemonAgent.Types do
           | {:message_start, message :: agent_message()}
           | {:message_update, message :: agent_message(), assistant_event :: term()}
           | {:message_end, message :: agent_message()}
+          | {:system_prompt, LemonAi.SystemPrompt.t()}
           | {:tool_execution_start, id :: String.t(), name :: String.t(), args :: map()}
           | {:tool_execution_update, id :: String.t(), name :: String.t(), args :: map(),
              partial_result :: AgentToolResult.t()}

@@ -6,7 +6,7 @@ defmodule LemonCore.ConfigReloader.Digest do
   to determine whether a reload is necessary.
 
   File fingerprints combine mtime + size + content hash for reliable detection.
-  Secret digests use metadata only (owner, name, updated_at, version) — never values.
+  Secret digests use the reloader's Bus-event revision, never secret values or lists.
   """
 
   @type source :: :files | :env | :secrets
@@ -107,32 +107,20 @@ defmodule LemonCore.ConfigReloader.Digest do
   end
 
   # ---------------------------------------------------------------------------
-  # Secrets digest (metadata only)
+  # Secrets digest (system Bus event revision)
   # ---------------------------------------------------------------------------
 
   @doc """
   Compute a digest for the `:secrets` source.
 
-  Uses metadata only (owner, name, updated_at, version) — secret values are
-  never included.
+  The revision advances on each system Bus `:secret_changed` event. It is local
+  to the reloader lifetime; startup takes a fresh configuration snapshot.
   """
-  @spec secrets_digest([map()]) :: source_digest()
-  def secrets_digest(secret_metadata_list) do
-    fingerprints =
-      secret_metadata_list
-      |> Enum.map(fn meta ->
-        %{
-          owner: meta[:owner] || meta["owner"],
-          name: meta[:name] || meta["name"],
-          updated_at: meta[:updated_at] || meta["updated_at"],
-          version: meta[:version] || meta["version"]
-        }
-      end)
-      |> Enum.sort_by(&{&1.owner, &1.name})
-
+  @spec secrets_digest(non_neg_integer()) :: source_digest()
+  def secrets_digest(revision) when is_integer(revision) and revision >= 0 do
     %{
       source: :secrets,
-      fingerprints: fingerprints,
+      fingerprints: [%{revision: revision}],
       computed_at_ms: now_ms()
     }
   end

@@ -12,11 +12,11 @@ defmodule CodingAgent.Session.ContextUsage do
   scaled proportionally (largest remainder) so they sum exactly to it; when it is
   an estimate, they sum to it unscaled.
 
-  System prompt and tool definitions only exist in a live session. Sessions stop
-  between turns, so each save records a bounded *overhead profile* — token counts
-  and safe labels per prompt section and tool, never prompt text — keyed by the
-  native session id. A durable read combines that profile with messages from the
-  session file; without one, the overhead is reported as `:unattributed`.
+  Each save records a bounded *overhead profile* — token counts and safe labels
+  per prompt section and tool — keyed by the native session id. A durable read
+  combines that profile with journaled messages. Prompt-cache diagnostics compare
+  the ordered prompt digests saved with assistant replies, without exposing the
+  journaled prompt text.
   """
 
   alias CodingAgent.Compaction
@@ -62,7 +62,7 @@ defmodule CodingAgent.Session.ContextUsage do
     budget =
       Compaction.request_context_usage(
         messages,
-        agent_state.system_prompt,
+        LemonAi.SystemPrompt.text(agent_state.system_prompt),
         agent_state.tools || [],
         usage_after
       )
@@ -76,6 +76,15 @@ defmodule CodingAgent.Session.ContextUsage do
       budget: budget,
       model: state.model,
       session_manager: state.session_manager,
+      prompt_cache:
+        CodingAgent.Session.PromptJournal.cache_report(
+          state.session_manager,
+          agent_state.system_prompt,
+          case Map.get(state, :journaled_prompt) do
+            %{blocks: prompt} -> prompt == agent_state.system_prompt
+            _ -> false
+          end
+        ),
       budget_usage: Map.get(state, :budget_usage),
       settings_manager: state.settings_manager
     })
@@ -109,6 +118,7 @@ defmodule CodingAgent.Session.ContextUsage do
          budget: budget,
          model: state.model,
          session_manager: state.session_manager,
+         prompt_cache: CodingAgent.Session.PromptJournal.cache_report(state.session_manager),
          budget_usage: Map.get(state, :budget_usage),
          settings_manager: state.settings_manager
        })}
@@ -122,7 +132,7 @@ defmodule CodingAgent.Session.ContextUsage do
   """
   @spec overhead(map(), map()) :: overhead()
   def overhead(state, agent_state) do
-    prompt = agent_state.system_prompt || ""
+    prompt = LemonAi.SystemPrompt.text(agent_state.system_prompt)
     sections = Map.get(state, :prompt_sections) || []
 
     section_items =
@@ -327,6 +337,7 @@ defmodule CodingAgent.Session.ContextUsage do
       top: top(raw_items, scale),
       message_count: input.message_count,
       usage: session_usage(input.session_manager, input.budget_usage),
+      prompt_cache: input.prompt_cache,
       measured_at: System.system_time(:millisecond)
     }
   end

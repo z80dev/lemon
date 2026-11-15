@@ -1635,7 +1635,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
       :ok = Session.prompt(session, "List the open browser tabs.")
 
       receive do
-        {:session_event, ^session_id, {:agent_end, _}} -> :ok
+        {:session_event, ^session_id, {:agent_end, _}, _} -> :ok
         {:session_terminal, ^session_id, :completed} -> :ok
       after
         5_000 -> flunk("disclosure session did not complete")

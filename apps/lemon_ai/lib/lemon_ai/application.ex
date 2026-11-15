@@ -11,6 +11,9 @@ defmodule LemonAi.Application do
     - `LemonAi.CallDispatcherRegistry` - Registry for per-provider slot authorities
     - `LemonAi.CallDispatcher` - Provider error diagnostics
     - `LemonAi.ProviderSupervisor` - Dynamic supervisor for per-provider services
+    - `LemonAi.ModelCache` - ETS model availability cache owner
+    - `LemonAi.Auth.Cache` - ETS token and auth fingerprint cache owner
+    - `LemonAi.Auth.OmpAuthBroker` - ETS broker snapshot cache and watcher owner
 
   ## Design Decisions
 
@@ -50,6 +53,8 @@ defmodule LemonAi.Application do
       {LemonAi.CallDispatcher, []},
       # Model availability cache (ETS-backed)
       LemonAi.ModelCache,
+      # Expiring tokens and lazily discovered auth fingerprints (ETS-backed)
+      LemonAi.Auth.Cache,
       # omp auth broker snapshot cache (ETS-backed)
       LemonAi.Auth.OmpAuthBroker
     ]

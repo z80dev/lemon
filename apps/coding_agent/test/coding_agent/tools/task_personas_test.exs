@@ -43,9 +43,10 @@ defmodule CodingAgent.Tools.TaskPersonasTest do
     assert result.details.status == "completed"
     assert result.details.structured_output == %{"answer" => 42}
     assert_receive {:child_context, context}, 2_000
-    assert context.system_prompt =~ "Parent custom instruction."
-    assert context.system_prompt =~ CodingAgent.Subagents.get(cwd, "scout").prompt
-    assert context.system_prompt =~ "ONLY valid JSON"
+    prompt = LemonAi.SystemPrompt.text(context.system_prompt)
+    assert prompt =~ "Parent custom instruction."
+    assert prompt =~ CodingAgent.Subagents.get(cwd, "scout").prompt
+    assert prompt =~ "ONLY valid JSON"
     names = Enum.map(context.tools, & &1.name)
     assert "read" in names
     assert "agent_message" in names

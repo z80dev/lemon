@@ -322,10 +322,11 @@ or `nil` when omitted) controlling approval exemption for workspace reads.
 Omitting `[profiles.<id>.tool_policy]` retains the explicit runtime
 default; supplying an invalid table produces a deny-all policy.
 
-The removed legacy tool-policy key `sandbox` is accepted but ignored, with one
-warning per parsing process. It never changes tool grants, denials, approval
-requirements or other restrictions, and is not serialized. Remove it from old
-configuration: tool policy does not provide operating-system sandboxing.
+`sandbox` is a validated boolean (default `false`). When true, terminal calls
+are forced into Docker with no external network interface; their only egress is the
+host allowlisting credential broker. Children cannot clear it. This does not
+isolate other tools. See [egress broker](security/egress-broker.md) for setup,
+the threat model and limitations.
 
 `LemonCore.ProfileStore` is the lifecycle owner for user-managed profiles.
 Commands such as `lemon profile create research` patch only the selected
@@ -865,7 +866,9 @@ config :coding_agent,
 
 The process limit holds capacity for the managed command's live lifetime, not
 just the launch callback. `lane_caps.background_exec` remains a separate launch
-concurrency cap; main/subagent lanes retain their existing callback semantics.
+concurrency cap. `:coding_agent, :task_max_concurrency` (default `8`) is the
+single shared cap for native task children and background sessions. They acquire
+the same monitored semaphore; the unused main/subagent lanes no longer exist.
 The pending limit bounds waiting admissions per LaneQueue; the acceptance ledger
 also bounds in-flight registrations. Process/pending limits are integers up to
 1,000,000 (process minimum 1, pending minimum 0). Admission deadline/wait values
@@ -931,10 +934,11 @@ capacity and live owner monitors before permitting a new admission.
 Cleared identity tombstones and historical unknown receipts do not expire.
 The default finished-process TTL (86,400 seconds) and cleanup interval
 (300 seconds) do not bound ledger rows; recovery, count and artifact scans grow
-with that history. Observable retained local workloads reconcile after 100 ms
-plus scan cost using a system-wide `ps` snapshot. Ownership-lost and nonlocal
-unknown workloads do not schedule this polling. These are local containment
-contracts, not proof of remote workload termination.
+with that history. Local workload liveness is reconciled on the root Port's
+exit-status event, explicit cancellation and boot recovery, not a periodic
+system-wide `ps` timer. Retained unknown workloads remain charged until verified
+termination. These are local containment contracts, not proof of remote workload
+termination.
 
 The internal evaluation harness can additionally opt into
 `LemonCore.NativeProcess` tracking by calling `configure!/1` with a fresh private
@@ -2608,6 +2612,48 @@ property individually. Lemon's OpenAI providers explicitly use non-strict tool
 schemas, so `i` remains optional without changing `required` or
 `additionalProperties`.
 
+## Vendor Tool Dialect Experiment
+
+Native tool names and schemas remain the default. To opt a native session into
+the #603 arena experiment, set this in user or project configuration:
+
+```toml
+[runtime.tools]
+vendor_dialects = true # default false
+```
+
+`CodingAgent.Session` callers can override it with `:vendor_tool_dialects`.
+Claude model IDs expose `Read(file_path, offset?, limit?, pages?, allow_large?)`,
+`Edit(file_path, old_string, new_string, replace_all?)`, and
+`Bash(command, timeout?, description?, run_in_background?, dangerouslyDisableSandbox?)`
+instead of the native read/edit/bash inputs. Codex model IDs or the Codex
+Responses API expose `apply_patch` instead of `patch`, using the upstream Lark
+grammar as a real Responses custom/freeform tool (not JSON-wrapped patch text).
+Other tools and models are unchanged. Explicit model switches re-project tools.
+
+These are input adapters, not vendor executors. Translation enters the existing
+native policy-filtered, approval-wrapped, hook-intercepted and plan-gated closure.
+Policies, allow/deny lists and approval rules continue to use native names
+(`read`, `edit`, `bash`, `patch`), including in plan mode. No alias can reintroduce
+a denied tool. Native output, cancellation, read caps, stale-read checks,
+checkpoints, mutation locks and background-process semantics remain unchanged.
+`allow_large` does not raise Lemon's output cap; `pages` translates to native
+`page`/`page_limit`; `dangerouslyDisableSandbox: true` fails closed.
+`replace_all: true` uses the native edit transaction and replaces exact matches;
+omitting it retains the native unique-match behaviour.
+
+Sources: Claude Code
+[`sdk-tools.d.ts` at 2.1.325](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.325)
+(`FileReadInput`, `FileEditInput`, `BashInput`); Codex
+[`apply_patch.lark`](https://github.com/openai/codex/blob/b016cd18472588606c04af565528c4cd6746a41f/codex-rs/core/assets/tools/apply_patch.lark)
+and its
+[`FreeformTool` specification](https://github.com/openai/codex/blob/b016cd18472588606c04af565528c4cd6746a41f/codex-rs/core/src/tools/handlers/apply_patch_spec.rs).
+The upstream identity manifest records their source hashes.
+
+Decision: **keep opt-in; no default promotion**. No paired paid arena result is
+claimed here. Run the same tasks/model/seeds with this flag off/on and record
+the paired report and decision before changing the default (#543/#603).
+
 ## Tool Disclosure
 
 Every tool a session exposes sends its name, description and JSON schema with
@@ -2730,6 +2776,15 @@ suppresses bootstrap even when resuming an assistant session.
   valid tail. If that still cannot fit, `compaction_recovery_band` is reported
   and unchanged history is not compacted again each turn; reduce request
   overhead, manually compact, or start a new session.
+  Before calling the summary model, Lemon spills old tool-result bodies to
+  session-scoped `artifact://` handles. It protects the newest 40,000 estimated
+  tokens and skips results below 50 tokens (omp's `docs/compaction.md` policy).
+  References recover the original JSON content blocks through `read`; tool
+  call IDs, result IDs, ordering and error status remain unchanged for every
+  provider. A branch-local journal marker retains these projections across
+  resume without rewriting original output. Failed spills leave output intact.
+  When pruning alone reaches the recovery band, no summary call is made;
+  message-count pressure still requires summarization.
 - `runtime.retry`: session retry of transient provider failures (backoff + retry-after).
 - `runtime.max_tool_turns`: optional per-prompt cap on tool-using turns (default unlimited).
 - `runtime.secret_obfuscation`: opt-in placeholder obfuscation of secrets in provider-visible text ([details](security/secret-obfuscation.md)).

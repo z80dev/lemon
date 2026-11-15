@@ -17,8 +17,9 @@ defmodule LemonOmp.Session do
   aborts the in-flight turn (including its shell children), disposes the
   session and exits. Because the port owns omp's stdin, any death of this
   process — normal stop, crash, or the whole VM — closes the pipe. `terminate/2`
-  additionally escalates to SIGTERM and SIGKILL (descendants first) if omp has
-  not exited within a short grace period.
+  additionally escalates to SIGTERM and SIGKILL for its witnessed process group
+  if omp has not exited within a short grace period. Descendants that deliberately
+  escape that group are not contained by this cleanup.
 
   ## Steering and cancellation
 
@@ -26,10 +27,17 @@ defmodule LemonOmp.Session do
   command with `success: true`. omp's error response becomes `{:rejected, msg}`;
   no answer within the command timeout becomes `:outcome_unknown`, which callers
   must not retry automatically — the command may already have taken effect.
+
+  `LemonCore.Rpc.Client` owns command correlation, deadlines and caller monitors.
+  This process retains port ownership, protocol projections and approval dialogs.
+  Configuration commands are sequenced by their caller, so a caller that exits
+  cannot leave a configuration continuation issuing more commands.
   """
 
   use GenServer, restart: :temporary, shutdown: 5_000
 
+  alias LemonCore.Rpc.{Client, JsonLines}
+  alias LemonCore.ProcessGroup
   alias LemonOmp.{Approval, Config, Manager, Projection, Rpc, Worktree}
 
   @line_bytes 65_536
@@ -74,15 +82,18 @@ defmodule LemonOmp.Session do
     do: safe_call(pid, {:send_message, message, mode}, Config.command_timeout_ms() + 2_000)
 
   @spec configure(pid(), [{String.t(), String.t(), map()}]) :: {:ok, map()} | {:error, term()}
-  def configure(pid, commands),
-    do: safe_call(pid, {:configure, commands}, 3 * Config.command_timeout_ms() + 2_000)
+  def configure(pid, commands), do: configure_next(pid, [], commands)
 
   @spec cancel(pid()) :: {:ok, map()} | {:error, term()}
   def cancel(pid), do: safe_call(pid, :cancel, Config.command_timeout_ms() + 2_000)
 
   @spec subagent(pid(), String.t(), pos_integer()) :: {:ok, map()} | {:error, term()}
-  def subagent(pid, subagent_id, limit),
-    do: safe_call(pid, {:subagent, subagent_id, limit}, Config.command_timeout_ms() + 2_000)
+  def subagent(pid, subagent_id, limit) do
+    case safe_call(pid, {:subagent, subagent_id}, Config.command_timeout_ms() + 2_000) do
+      {:ok, data} -> {:ok, Projection.subagent_transcript(data, limit)}
+      error -> error
+    end
+  end
 
   @spec close(pid()) :: :ok
   def close(pid) do
@@ -99,11 +110,60 @@ defmodule LemonOmp.Session do
   end
 
   defp safe_call(pid, message, timeout) do
-    GenServer.call(pid, message, timeout)
+    case GenServer.call(pid, message, timeout) do
+      {:error, :timeout} -> {:error, :outcome_unknown}
+      {:error, reason} when reason in [:connection_closed, :send_failed] -> {:error, :not_running}
+      result -> result
+    end
   catch
     :exit, {:timeout, _} -> {:error, :outcome_unknown}
     :exit, _reason -> {:error, :not_running}
   end
+
+  defp configure_next(pid, applied, [{field, type, fields} | rest]) do
+    case command_call(pid, type, fields) do
+      {:ok, _data} -> configure_next(pid, applied ++ [field], rest)
+      {:error, reason} -> configure_failed(pid, applied, field, reason)
+    end
+  end
+
+  defp configure_next(pid, applied, []), do: configure_snapshot(pid, applied, nil)
+
+  defp configure_failed(_pid, [], _field, reason), do: {:error, reason}
+
+  defp configure_failed(_pid, applied, field, :not_running),
+    do: configure_error(applied, {field, :not_running})
+
+  defp configure_failed(pid, applied, field, reason),
+    do: configure_snapshot(pid, applied, {field, reason})
+
+  defp configure_snapshot(pid, applied, failure) do
+    result =
+      case command_call(pid, "get_state", %{}) do
+        {:ok, data} when is_map(data) ->
+          # The response callback publishes the refreshed projection before it
+          # can process this call, even though the RPC client replies directly.
+          safe_call(pid, :configuration_snapshot, Config.command_timeout_ms() + 2_000)
+
+        {:ok, _data} ->
+          {:error, {:rejected, "omp returned an invalid session state"}}
+
+        error ->
+          error
+      end
+
+    case result do
+      {:ok, wire} when is_nil(failure) -> {:ok, wire}
+      {:ok, _wire} -> configure_error(applied, failure)
+      {:error, reason} -> configure_error(applied, failure || {"snapshot", reason})
+    end
+  end
+
+  defp command_call(pid, type, fields),
+    do: safe_call(pid, {:command, type, fields}, Config.command_timeout_ms() + 2_000)
+
+  defp configure_error(applied, {field, reason}),
+    do: {:error, {:partially_applied, applied, field, reason}}
 
   ## Server
 
@@ -140,11 +200,11 @@ defmodule LemonOmp.Session do
       resume: Keyword.get(opts, :resume),
       start_waiters: [],
       started: nil,
-      pending: %{},
+      rpc_client: nil,
+      initial_prompt_id: nil,
       redirects: %{},
       approvals: %{},
       seq: 0,
-      ready_timer: nil,
       idle_timer: nil,
       publish_timer: nil,
       last_publish: 0,
@@ -155,8 +215,18 @@ defmodule LemonOmp.Session do
 
     case open_port(opts, stderr_path) do
       {:ok, port, os_pid} ->
-        timer = Process.send_after(self(), :ready_timeout, Config.ready_timeout_ms())
-        state = %{state | port: port, os_pid: os_pid, ready_timer: timer}
+        {:ok, client} =
+          Client.start_link(
+            owner: self(),
+            peer: port,
+            framing: JsonLines,
+            send: &send_bytes(port, &1),
+            ready: false,
+            connect_timeout: Config.ready_timeout_ms(),
+            timeout: Config.command_timeout_ms()
+          )
+
+        state = %{state | port: port, os_pid: os_pid, rpc_client: client}
         publish(state, "started")
         {:ok, state}
 
@@ -176,36 +246,38 @@ defmodule LemonOmp.Session do
     do: {:reply, {:error, :not_ready}, state}
 
   def handle_call({:send_message, message, mode}, from, state) do
-    {type, delivery} =
+    type =
       case {state.projection.status, mode} do
-        {:running, :follow_up} -> {"follow_up", "followUp"}
-        {:running, :redirect} -> {"abort_and_prompt", "redirect"}
-        {:running, _steer} -> {"steer", "steer"}
-        {_idle, _mode} -> {"prompt", "prompt"}
+        {:running, :follow_up} -> "follow_up"
+        {:running, :redirect} -> "abort_and_prompt"
+        {:running, _steer} -> "steer"
+        {_idle, _mode} -> "prompt"
       end
 
-    {:noreply, request(state, type, %{"message" => message}, {:send, from, delivery})}
+    {:noreply, request(state, type, %{"message" => message}, from)}
   end
 
-  def handle_call({:configure, _commands}, _from, %{ready?: false} = state),
+  def handle_call({:command, _type, _fields}, _from, %{ready?: false} = state),
     do: {:reply, {:error, :not_ready}, state}
 
-  def handle_call({:configure, commands}, from, state),
-    do: {:noreply, configure_next(state, from, [], commands)}
+  def handle_call({:command, type, fields}, from, state),
+    do: {:noreply, request(state, type, fields, from)}
+
+  def handle_call(:configuration_snapshot, _from, state),
+    do: {:reply, {:ok, Projection.to_wire(state.projection)}, state}
 
   def handle_call(:cancel, _from, %{projection: %{status: status}} = state)
       when status != :running,
       do: {:reply, {:error, :no_active_turn}, state}
 
   def handle_call(:cancel, from, state),
-    do: {:noreply, request(state, "abort", %{}, {:cancel, from})}
+    do: {:noreply, request(state, "abort", %{}, from)}
 
-  def handle_call({:subagent, _id, _limit}, _from, %{ready?: false} = state),
+  def handle_call({:subagent, _id}, _from, %{ready?: false} = state),
     do: {:reply, {:error, :not_ready}, state}
 
-  def handle_call({:subagent, id, limit}, from, state) do
-    {:noreply,
-     request(state, "get_subagent_messages", %{"subagentId" => id}, {:subagent, from, limit})}
+  def handle_call({:subagent, id}, from, state) do
+    {:noreply, request(state, "get_subagent_messages", %{"subagentId" => id}, from)}
   end
 
   @impl true
@@ -232,45 +304,52 @@ defmodule LemonOmp.Session do
 
     publish(state, "exited")
     state = fail_waiters(state, error || "omp exited before it was ready")
-    state = fail_pending(state)
+    fail_commands(state)
     {:stop, :normal, state}
   end
 
   def handle_info({:EXIT, port, _reason}, %{port: port} = state), do: {:noreply, state}
 
-  def handle_info(:ready_timeout, %{ready?: false} = state) do
+  def handle_info({:EXIT, client, _reason}, %{rpc_client: client, ready?: false} = state) do
     state =
       mark_failed(%{state | close_reason: :startup_timeout}, "omp did not become ready in time")
 
     {:stop, :normal, fail_waiters(state, "omp did not become ready in time")}
   end
 
-  def handle_info(:ready_timeout, state), do: {:noreply, state}
+  def handle_info({:EXIT, client, _reason}, %{rpc_client: client} = state) do
+    state =
+      update_projection(
+        state,
+        &Projection.finish(&1, :failed, %{code: nil, reason: :connection_closed})
+      )
 
-  def handle_info({:command_timeout, id}, state) do
-    case Map.pop(state.pending, id) do
-      {nil, _} ->
-        {:noreply, state}
-
-      {entry, pending} ->
-        state = reply_pending(%{state | pending: pending}, entry, {:error, :outcome_unknown})
-
-        # An unacknowledged redirect must not hold the session "running"
-        # forever: release its guard so omp's own events decide the status.
-        state =
-          if is_map_key(state.redirects, id) do
-            state = clear_redirect(state, id)
-
-            if state.projection.settling and not state.projection.redirecting,
-              do: handle_frame(state, {:event, "session_settled", %{}}),
-              else: state
-          else
-            state
-          end
-
-        {:noreply, state}
-    end
+    {:stop, :normal, fail_waiters(state, "omp connection closed")}
   end
+
+  def handle_info({:rpc_finished, id, reason}, state)
+      when reason in [:timeout, :caller_down, :cancelled, :connection_closed] do
+    # An abandoned redirect must not hold the session running forever.
+    state =
+      if is_map_key(state.redirects, id) do
+        state = clear_redirect(state, id)
+
+        if state.projection.settling and not state.projection.redirecting,
+          do: handle_frame(state, {:event, "session_settled", %{}}),
+          else: state
+      else
+        state
+      end
+
+    {:noreply, state}
+  end
+
+  def handle_info({{:rpc_reply, :initial_prompt}, {:error, :timeout}}, state),
+    do: {:noreply, started(state, {:error, :outcome_unknown})}
+
+  def handle_info({{:rpc_reply, :initial_prompt}, {:error, reason}}, state)
+      when reason in [:connection_closed, :send_failed],
+      do: {:noreply, fail_waiters(state, "omp connection closed")}
 
   def handle_info(:idle_timeout, %{projection: %{status: :idle}} = state),
     do: {:stop, :normal, %{state | close_reason: :idle_timeout}}
@@ -321,6 +400,7 @@ defmodule LemonOmp.Session do
 
   @impl true
   def terminate(_reason, state) do
+    fail_commands(state)
     state = cancel_approvals(state, "omp session closed")
     if state.port, do: stop_process(state)
 
@@ -374,35 +454,45 @@ defmodule LemonOmp.Session do
   end
 
   defp handle_frame(state, {:ready, _frame}) do
-    if state.ready_timer, do: Process.cancel_timer(state.ready_timer)
-    state = %{state | ready?: true, ready_timer: nil}
+    case rpc_call(fn -> Client.ready(state.rpc_client) end) do
+      :ok ->
+        state = %{state | ready?: true}
 
-    state =
-      state
-      |> request("set_subagent_subscription", %{"level" => "progress"}, :ignore)
-      |> request("get_session_stats", %{}, :stats)
-      |> maybe_request_state()
+        state =
+          state
+          |> request("set_subagent_subscription", %{"level" => "progress"}, :ignore)
+          |> request("get_session_stats", %{}, :stats)
+          |> maybe_request_state()
 
-    case state.prompt do
-      prompt when is_binary(prompt) ->
-        request(state, "prompt", %{"message" => prompt}, :initial_prompt)
+        case state.prompt do
+          prompt when is_binary(prompt) ->
+            request(state, "prompt", %{"message" => prompt}, :initial_prompt)
 
-      _ ->
+          _ ->
+            state
+            |> update_projection(&Projection.settle/1)
+            |> started({:ok, nil})
+            |> schedule_idle()
+        end
+
+      {:error, :connection_closed} ->
+        # The linked client's EXIT will finalize the startup failure.
         state
-        |> update_projection(&Projection.settle/1)
-        |> started({:ok, nil})
-        |> schedule_idle()
     end
   end
 
   defp handle_frame(state, {:response, id, command, result}) do
-    case Map.pop(state.pending, id) do
-      {nil, _pending} ->
+    entry = request_context(state, id)
+
+    case rpc_call(fn -> Client.complete(state.rpc_client, id, response_reply(entry, result)) end) do
+      :ok ->
+        handle_response(state, entry, result)
+
+      {:error, :not_found} ->
         handle_late_response(state, id, command, result)
 
-      {entry, pending} ->
-        if entry.timer, do: Process.cancel_timer(entry.timer)
-        handle_response(%{state | pending: pending}, entry, result)
+      {:error, :connection_closed} ->
+        state
     end
   end
 
@@ -508,9 +598,7 @@ defmodule LemonOmp.Session do
     |> schedule_idle()
   end
 
-  defp handle_response(state, %{kind: {:send, from, delivery}} = entry, {:ok, _data}) do
-    GenServer.reply(from, {:ok, %{"delivery" => delivery}})
-
+  defp handle_response(state, %{kind: {:send, delivery}} = entry, {:ok, _data}) do
     case delivery do
       "prompt" ->
         state |> cancel_idle() |> mark_running_after_ack(entry) |> publish_now("updated")
@@ -523,9 +611,7 @@ defmodule LemonOmp.Session do
     end
   end
 
-  defp handle_response(state, %{kind: {:send, from, delivery}} = entry, {:error, message, _code}) do
-    GenServer.reply(from, {:error, {:rejected, Projection.clean(message, 500)}})
-
+  defp handle_response(state, %{kind: {:send, delivery}} = entry, {:error, _message, _code}) do
     if delivery == "redirect" do
       state = clear_redirect(state, entry.id)
 
@@ -539,85 +625,11 @@ defmodule LemonOmp.Session do
     end
   end
 
-  defp handle_response(state, %{kind: {:cancel, from}}, {:ok, _data}) do
-    GenServer.reply(from, {:ok, %{"cancelled" => true}})
-    state
-  end
-
-  defp handle_response(state, %{kind: {:cancel, from}}, {:error, message, _code}) do
-    GenServer.reply(from, {:error, {:rejected, Projection.clean(message, 500)}})
-    state
-  end
-
-  defp handle_response(state, %{kind: {:subagent, from, limit}}, {:ok, data}) do
-    GenServer.reply(from, {:ok, Projection.subagent_transcript(data, limit)})
-    state
-  end
-
-  defp handle_response(state, %{kind: {:subagent, from, _limit}}, {:error, message, _code}) do
-    GenServer.reply(from, {:error, {:rejected, Projection.clean(message, 500)}})
-    state
-  end
-
-  defp handle_response(
-         state,
-         %{kind: {:configure, from, applied, field, rest}},
-         {:ok, _data}
-       ),
-       do: configure_next(state, from, applied ++ [field], rest)
-
-  defp handle_response(
-         state,
-         %{kind: {:configure, from, applied, field, _rest}},
-         {:error, message, _code}
-       ),
-       do:
-         configure_failed(
-           state,
-           from,
-           applied,
-           field,
-           {:rejected, Projection.clean(message, 500)}
-         )
-
-  defp handle_response(
-         state,
-         %{kind: {:configure_snapshot, from, applied, failure}},
-         {:ok, data}
-       )
-       when is_map(data) do
-    state =
-      state |> update_projection(&Projection.apply_state(&1, data)) |> publish_now("configured")
-
-    reply =
-      if failure,
-        do: configure_error(applied, failure),
-        else: {:ok, Projection.to_wire(state.projection)}
-
-    GenServer.reply(from, reply)
-    state
-  end
-
-  defp handle_response(
-         state,
-         %{kind: {:configure_snapshot, from, applied, failure}},
-         result
-       ) do
-    reason =
-      case result do
-        {:error, message, _code} -> {:rejected, Projection.clean(message, 500)}
-        _ -> {:rejected, "omp returned an invalid session state"}
-      end
-
-    GenServer.reply(from, configure_error(applied, failure || {"snapshot", reason}))
-    state
-  end
-
   defp handle_response(state, %{kind: :stats}, {:ok, data}) when is_map(data),
     do: state |> update_projection(&Projection.apply_stats(&1, data)) |> schedule_publish()
 
   defp handle_response(state, %{kind: :state}, {:ok, data}) when is_map(data),
-    do: state |> update_projection(&Projection.apply_state(&1, data)) |> schedule_publish()
+    do: state |> update_projection(&Projection.apply_state(&1, data)) |> publish_now("configured")
 
   defp handle_response(state, _entry, _result), do: state
 
@@ -746,96 +758,91 @@ defmodule LemonOmp.Session do
 
   defp maybe_request_state(state), do: state
 
-  defp configure_next(state, from, applied, [{field, type, fields} | rest]),
-    do: request(state, type, fields, {:configure, from, applied, field, rest})
-
-  defp configure_next(state, from, applied, []),
-    do: request(state, "get_state", %{}, {:configure_snapshot, from, applied, nil})
-
-  defp configure_failed(state, from, [], _field, reason) do
-    GenServer.reply(from, {:error, reason})
-    state
-  end
-
-  defp configure_failed(state, from, applied, field, :not_running) do
-    GenServer.reply(from, configure_error(applied, {field, :not_running}))
-    state
-  end
-
-  defp configure_failed(state, from, applied, field, reason),
-    do: request(state, "get_state", %{}, {:configure_snapshot, from, applied, {field, reason}})
-
-  defp configure_error(applied, {field, reason}),
-    do: {:error, {:partially_applied, applied, field, reason}}
-
-  defp request(state, type, fields, kind) do
+  defp request(state, type, fields, caller) do
     seq = state.seq + 1
-    id = "lemon-#{seq}"
-    write(state, Rpc.command(type, id, fields))
+    # Only non-sensitive protocol context travels in the opaque correlation id.
+    # The client owns all caller references and deadlines; no local pending map
+    # is needed to apply an acknowledgement to the correct turn generation.
+    id = "lemon-#{seq}-#{state.agent_starts}-#{type}"
+    from = if is_atom(caller), do: {self(), {:rpc_reply, caller}}, else: caller
+    state = %{state | seq: seq}
+    state = if caller == :initial_prompt, do: %{state | initial_prompt_id: id}, else: state
 
-    timer =
-      case kind do
-        :ignore -> nil
-        _ -> Process.send_after(self(), {:command_timeout, id}, Config.command_timeout_ms())
-      end
+    case rpc_call(fn ->
+           Client.dispatch(
+             state.rpc_client,
+             id,
+             Rpc.command(type, id, fields),
+             from,
+             Config.command_timeout_ms()
+           )
+         end) do
+      :ok when type == "abort_and_prompt" ->
+        %{state | redirects: Map.put(state.redirects, id, state.agent_starts)}
+        |> update_projection(&%{&1 | redirecting: true})
 
-    entry = %{id: id, kind: kind, timer: timer, agent_starts: state.agent_starts}
-    state = %{state | seq: seq, pending: Map.put(state.pending, id, entry)}
+      :ok ->
+        state
 
-    if type == "abort_and_prompt" do
-      %{state | redirects: Map.put(state.redirects, id, state.agent_starts)}
-      |> update_projection(&%{&1 | redirecting: true})
-    else
-      state
+      {:error, _reason} = error ->
+        GenServer.reply(from, error)
+        state
     end
   end
 
-  defp write(%{port: nil}, _frame), do: :ok
+  defp request_context(state, id) when is_binary(id) do
+    with ["lemon", _seq, generation, type] <- String.split(id, "-", parts: 4),
+         {agent_starts, ""} <- Integer.parse(generation) do
+      kind =
+        cond do
+          id == state.initial_prompt_id -> :initial_prompt
+          type == "get_session_stats" -> :stats
+          type == "get_state" -> :state
+          type == "abort" -> :cancel
+          type in ["prompt", "steer", "follow_up", "abort_and_prompt"] -> {:send, delivery(type)}
+          true -> :ignore
+        end
 
-  defp write(%{port: port}, frame) do
-    Port.command(port, Rpc.encode(frame))
+      %{id: id, kind: kind, agent_starts: agent_starts}
+    else
+      _ -> nil
+    end
+  end
+
+  defp request_context(_state, _id), do: nil
+
+  defp response_reply(_entry, {:error, message, _code}),
+    do: {:error, {:rejected, Projection.clean(message, 500)}}
+
+  defp response_reply(%{kind: {:send, delivery}}, {:ok, _data}),
+    do: {:ok, %{"delivery" => delivery}}
+
+  defp response_reply(%{kind: :cancel}, {:ok, _data}),
+    do: {:ok, %{"cancelled" => true}}
+
+  defp response_reply(_entry, result), do: result
+
+  defp delivery("abort_and_prompt"), do: "redirect"
+  defp delivery("follow_up"), do: "followUp"
+  defp delivery(type), do: type
+
+  defp write(state, frame),
+    do: rpc_call(fn -> Client.send_message(state.rpc_client, frame) end)
+
+  defp send_bytes(port, bytes) do
+    Port.command(port, bytes)
     :ok
   rescue
-    ArgumentError -> :ok
+    ArgumentError -> {:error, :connection_closed}
   end
 
-  defp reply_pending(state, %{kind: {:send, from, _}}, reply),
-    do: tap(state, fn _ -> GenServer.reply(from, reply) end)
+  defp fail_commands(state),
+    do: rpc_call(fn -> Client.fail_all(state.rpc_client, {:error, :connection_closed}) end)
 
-  defp reply_pending(state, %{kind: {:cancel, from}}, reply),
-    do: tap(state, fn _ -> GenServer.reply(from, reply) end)
-
-  defp reply_pending(state, %{kind: {:subagent, from, _limit}}, reply),
-    do: tap(state, fn _ -> GenServer.reply(from, reply) end)
-
-  defp reply_pending(
-         state,
-         %{kind: {:configure, from, applied, field, _rest}},
-         {:error, reason}
-       ),
-       do: configure_failed(state, from, applied, field, reason)
-
-  defp reply_pending(
-         state,
-         %{kind: {:configure_snapshot, from, applied, failure}},
-         {:error, reason}
-       ) do
-    GenServer.reply(from, configure_error(applied, failure || {"snapshot", reason}))
-    state
-  end
-
-  defp reply_pending(state, %{kind: :initial_prompt}, {:error, :outcome_unknown}) do
-    # omp never acknowledged the prompt: report it as unknown, not as a failure.
-    started(state, {:error, :outcome_unknown})
-  end
-
-  defp reply_pending(state, _entry, _reply), do: state
-
-  defp fail_pending(state) do
-    Enum.reduce(state.pending, %{state | pending: %{}}, fn {_id, entry}, acc ->
-      if entry.timer, do: Process.cancel_timer(entry.timer)
-      reply_pending(acc, entry, {:error, :not_running})
-    end)
+  defp rpc_call(fun) do
+    fun.()
+  catch
+    :exit, _reason -> {:error, :connection_closed}
   end
 
   defp started(%{started: nil} = state, result) do
@@ -1001,9 +1008,16 @@ defmodule LemonOmp.Session do
   end
 
   defp stop_process(%{port: port, os_pid: os_pid}) do
-    # Closing stdin may end the root before its children. Keep the observed
-    # descendants so that root exit cannot skip their TERM/KILL escalation.
-    descendants = if is_integer(os_pid), do: descendant_pids(os_pid), else: []
+    # Retain the birth-bound group witness before EOF can reparent its children.
+    identity =
+      case ProcessGroup.capture_workload_group(os_pid) do
+        {:ok, identity} ->
+          identity
+
+        {:error, _} ->
+          if is_integer(os_pid), do: ProcessGroup.terminate(os_pid, grace_ms: 1_000)
+          nil
+      end
 
     try do
       Port.close(port)
@@ -1011,17 +1025,10 @@ defmodule LemonOmp.Session do
       ArgumentError -> :ok
     end
 
-    if is_integer(os_pid) do
-      pids = [os_pid | descendants]
-
-      if wait_exit(pids, System.monotonic_time(:millisecond) + @exit_grace_ms) == :alive do
-        pids = Enum.uniq(pids ++ descendant_pids(os_pid))
-        signal(["-TERM" | Enum.map(pids, &to_string/1)])
-
-        if wait_exit(pids, System.monotonic_time(:millisecond) + 1_000) == :alive do
-          pids = Enum.uniq(pids ++ descendant_pids(os_pid))
-          signal(["-KILL" | Enum.map(pids, &to_string/1)])
-        end
+    if identity do
+      case wait_exit(identity, System.monotonic_time(:millisecond) + @exit_grace_ms) do
+        :gone -> :ok
+        {_, observed} -> ProcessGroup.terminate(observed, grace_ms: 1_000)
       end
     end
 
@@ -1030,66 +1037,23 @@ defmodule LemonOmp.Session do
 
   # Count native observation and durable-launch overhead against the grace,
   # rather than subtracting only the sleeps between potentially slow probes.
-  defp wait_exit(pids, deadline) do
-    if Enum.any?(pids, &alive?/1) do
-      remaining = deadline - System.monotonic_time(:millisecond)
+  defp wait_exit(identity, deadline) do
+    case ProcessGroup.workload_group_status(identity) do
+      :terminated ->
+        :gone
 
-      if remaining > 0 do
-        Process.sleep(min(50, remaining))
-        wait_exit(pids, deadline)
-      else
-        :alive
-      end
-    else
-      :gone
-    end
-  end
+      {:alive, observed} ->
+        remaining = deadline - System.monotonic_time(:millisecond)
 
-  defp alive?(os_pid) do
-    case System.find_executable("kill") do
-      nil ->
-        false
-
-      kill ->
-        match?(
-          {_, 0},
-          LemonCore.NativeProcess.cmd(kill, ["-0", to_string(os_pid)], stderr_to_stdout: true)
-        )
-    end
-  end
-
-  defp signal(args) do
-    case System.find_executable("kill") do
-      nil -> :ok
-      kill -> LemonCore.NativeProcess.cmd(kill, args, stderr_to_stdout: true)
-    end
-
-    :ok
-  end
-
-  defp descendant_pids(parent) do
-    case System.find_executable("pgrep") do
-      nil ->
-        []
-
-      pgrep ->
-        case LemonCore.NativeProcess.cmd(pgrep, ["-P", to_string(parent)], stderr_to_stdout: true) do
-          {output, 0} ->
-            children =
-              output
-              |> String.split()
-              |> Enum.flat_map(fn value ->
-                case Integer.parse(value) do
-                  {pid, ""} when pid > 0 -> [pid]
-                  _ -> []
-                end
-              end)
-
-            children ++ Enum.flat_map(children, &descendant_pids/1)
-
-          _ ->
-            []
+        if remaining > 0 do
+          Process.sleep(min(50, remaining))
+          wait_exit(observed, deadline)
+        else
+          {:alive, observed}
         end
+
+      {:unknown, _} = unknown ->
+        unknown
     end
   end
 

@@ -108,6 +108,40 @@ defmodule LemonCli.SessionClient do
     end
   end
 
+  def maintenance(opts) do
+    params = %{
+      "olderThanMs" => opts[:older_than_ms],
+      "dryRun" => Keyword.get(opts, :dry_run, true)
+    }
+
+    params =
+      if is_nil(opts[:confirm_token]),
+        do: params,
+        else: Map.put(params, "confirmToken", opts[:confirm_token])
+
+    case request("sessions.maintain", params) do
+      {:ok, payload} -> {:ok, normalize_maintenance(payload)}
+      error -> error
+    end
+  end
+
+  defp normalize_maintenance(payload) do
+    %{
+      dry_run: payload["dryRun"],
+      older_than_ms: payload["olderThanMs"],
+      confirmation_token: payload["confirmationToken"],
+      archive_count: payload["archiveCount"],
+      orphan_count: payload["orphanCount"],
+      archived_count: payload["archivedCount"],
+      swept_count: payload["sweptCount"],
+      candidates:
+        Enum.map(payload["candidates"], fn candidate ->
+          %{kind: candidate["kind"], id: candidate["id"], bytes: candidate["bytes"]}
+        end),
+      verified: payload["verified"]
+    }
+  end
+
   def delete(session_key) do
     case request("sessions.delete", %{"sessionKey" => session_key}) do
       {:ok, payload} ->
@@ -144,6 +178,29 @@ defmodule LemonCli.SessionClient do
 
       {:error, {:control_plane, %{"code" => "UNAVAILABLE"}}} when method == "sessions.context" ->
         {:error, :unavailable}
+
+      {:error, {:control_plane, %{"details" => %{"reason" => reason} = details}}}
+      when method == "sessions.maintain" ->
+        case reason do
+          "invalid_older_than_ms" ->
+            {:error, :invalid_older_than_ms}
+
+          "confirmation_required" ->
+            {:error, :confirmation_required}
+
+          "confirmation_mismatch" ->
+            {:error, :confirmation_mismatch}
+
+          "partial_failure" ->
+            {:error, {:partial_failure, normalize_maintenance(details["report"])}}
+
+          _ ->
+            {:error, :maintenance_unavailable}
+        end
+
+      {:error, {:control_plane, %{"code" => "UNAVAILABLE"}}}
+      when method == "sessions.maintain" ->
+        {:error, :maintenance_unavailable}
 
       {:error, {:control_plane, %{"code" => "CONFLICT", "message" => message}}} ->
         if String.contains?(message, "candidates"),

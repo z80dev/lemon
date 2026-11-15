@@ -308,6 +308,33 @@ defmodule LemonAi.Providers.GoogleGeminiCliTest do
       # Antigravity uses user role for system instruction
       assert body["request"]["systemInstruction"]["role"] == "user"
     end
+
+    test "antigravity block prompts preserve the binary request shape" do
+      owner = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(owner, {:request_body, Jason.decode!(raw)})
+        Plug.Conn.send_resp(conn, 400, "test")
+      end)
+
+      blocks = [
+        %{text: "Static\n\n", directory_derived: false},
+        %{text: "Directory: /worktree", directory_derived: true}
+      ]
+
+      bodies =
+        for prompt <- ["Static\n\nDirectory: /worktree", blocks] do
+          context = Context.new(system_prompt: prompt, messages: [%UserMessage{content: "Hi"}])
+          {:ok, stream} = GoogleGeminiCli.stream(antigravity_model(), context, default_opts())
+          assert_receive {:request_body, body}, 1000
+          assert {:error, _} = EventStream.result(stream, 1000)
+          Map.delete(body, "requestId")
+        end
+
+      assert [body, body] = bodies
+      assert body["request"]["systemInstruction"]["role"] == "user"
+    end
   end
 
   # ============================================================================
@@ -1813,6 +1840,17 @@ defmodule LemonAi.Providers.GoogleGeminiCliTest do
     }
 
     assert sanitized == expected
+    assert {:error, _} = EventStream.result(stream, 1000)
+
+    blocks = [
+      %{text: "Sys", directory_derived: false},
+      %{text: "tem", directory_derived: true}
+    ]
+
+    {:ok, stream} = GoogleGeminiCli.stream(model, %{context | system_prompt: blocks}, opts)
+    assert_receive {:request_body, block_body}, 1000
+    assert Regex.match?(~r/^pi-\d+-[a-f0-9]{12}$/, block_body["requestId"])
+    assert Map.delete(block_body, "requestId") == expected
     assert {:error, _} = EventStream.result(stream, 1000)
   end
 end

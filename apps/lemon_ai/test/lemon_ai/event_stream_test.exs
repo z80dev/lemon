@@ -16,6 +16,57 @@ defmodule LemonAi.EventStreamOverflowTest do
   alias LemonAi.EventStream
   alias LemonAi.Types.{AssistantMessage, TextContent, Usage, Cost}
 
+  test "push! makes overflow a terminal provider failure instead of silent loss" do
+    {:ok, stream} =
+      EventStream.start_link(max_queue: 1, timeout: :infinity, idle_timeout: :infinity)
+
+    assert :ok = EventStream.push!(stream, {:text_delta, 0, "accepted", nil})
+
+    assert catch_throw(EventStream.push!(stream, {:text_delta, 0, "rejected", nil})) ==
+             {:event_stream_push_failed, :overflow}
+
+    assert {:error, %AssistantMessage{error_message: "Event stream queue overflow"}} =
+             EventStream.result(stream)
+
+    assert [{:error, :error, %AssistantMessage{}}] = Enum.to_list(EventStream.events(stream))
+    GenServer.stop(stream)
+  end
+
+  test "push! rejection cannot overwrite a completed result" do
+    {:ok, stream} = EventStream.start_link(timeout: :infinity, idle_timeout: :infinity)
+    message = make_message()
+    EventStream.complete(stream, message)
+    assert {:ok, ^message} = EventStream.result(stream)
+
+    assert catch_throw(EventStream.push!(stream, :late)) ==
+             {:event_stream_push_failed, :canceled}
+
+    assert {:ok, ^message} = EventStream.result(stream)
+    GenServer.stop(stream)
+  end
+
+  test "resync overflow keeps its recovery marker through push! failure" do
+    {:ok, stream} =
+      EventStream.start_link(
+        max_queue: 1,
+        drop_strategy: :resync,
+        timeout: :infinity,
+        idle_timeout: :infinity
+      )
+
+    assert :ok = EventStream.push!(stream, :accepted)
+
+    assert catch_throw(EventStream.push!(stream, :rejected)) ==
+             {:event_stream_push_failed, :overflow}
+
+    assert {:error, :overflow} = EventStream.result(stream)
+
+    assert [:accepted, {:stream_resync, %{reason: :overflow}}] =
+             Enum.to_list(EventStream.events(stream))
+
+    GenServer.stop(stream)
+  end
+
   # ============================================================================
   # Test Helpers
   # ============================================================================
@@ -505,21 +556,26 @@ defmodule LemonAi.EventStreamOverflowTest do
       assert {:ok, _} = result
     end
 
-    test "attaching already-dead task is handled gracefully" do
+    test "attaching an already-dead task produces a retained terminal error" do
       {:ok, stream} = EventStream.start_link()
-
-      {:ok, task_pid} = Task.start(fn -> :done end)
-      # Wait for task to die
+      task_pid = spawn(fn -> :done end)
       task_ref = Process.monitor(task_pid)
-      assert_receive {:DOWN, ^task_ref, :process, _, _}, 5_000
+      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, _}, 5_000
 
-      # Attaching dead task should not crash the stream
       EventStream.attach_task(stream, task_pid)
 
-      # Stream should still work
+      assert {:error,
+              %AssistantMessage{
+                stop_reason: :error,
+                error_message: "Streaming task crashed: :noproc"
+              } = error} = EventStream.result(stream, 5_000)
+
       assert Process.alive?(stream)
+
+      # An unrelated late completion must not overwrite the producer's failure.
       EventStream.complete(stream, make_message())
-      {:ok, _} = EventStream.result(stream, 100)
+      assert {:error, ^error} = EventStream.result(stream, 5_000)
+      assert [{:error, :error, ^error}] = Enum.to_list(EventStream.events(stream))
     end
 
     test "stream still works without any attached task" do

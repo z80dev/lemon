@@ -2,7 +2,7 @@ defmodule CodingAgent.Rules do
   @moduledoc """
   Discovers rule files written for other coding agents (Cursor, Windsurf,
   Cline, GitHub Copilot, `.agents`) and Lemon's own `.lemon/rules`, and
-  renders them as system-prompt sections.
+  separates prompt rules from dormant streaming rules.
 
   ## Sources
 
@@ -34,6 +34,13 @@ defmodule CodingAgent.Rules do
   files always apply. Invalid YAML falls back to plain `key: value` lines, so
   Cursor's unquoted `globs: *.ts` parses.
 
+  `streamPattern` is a non-empty, byte-oriented regex source (no UTF mode).
+  `injectionLimit` is a positive integer, defaulting to 1. A stream rule is
+  never included in prompt sections, regardless of the other frontmatter.
+  Invalid patterns or limits disable the rule without exposing a lower-priority
+  rule with the same name. `stream_rules/1` returns these rules for the bounded
+  runtime matcher; no matching or injection accounting happens here.
+
   ## Prompt
 
   Always-apply rules are injected in full. Other rules with a description or
@@ -53,7 +60,9 @@ defmodule CodingAgent.Rules do
           globs: [String.t()],
           always_apply: boolean(),
           manual: boolean(),
-          level: :project | :global
+          level: :project | :global,
+          stream_pattern: String.t() | nil,
+          injection_limit: pos_integer()
         }
 
   @type section :: %{category: atom(), label: String.t(), text: String.t()}
@@ -64,8 +73,8 @@ defmodule CodingAgent.Rules do
   @max_rule_dir_depth 8
 
   @doc """
-  Discover enabled rules for `cwd`: project rules first, deduplicated by name,
-  sorted by name.
+  Discover enabled, valid rules for `cwd`: project rules first, deduplicated
+  by name, sorted by name. Invalid stream declarations still shadow namesakes.
   """
   @spec discover(String.t()) :: [rule()]
   def discover(cwd) do
@@ -74,21 +83,37 @@ defmodule CodingAgent.Rules do
 
     (project_rules(cwd, home) ++ global_rules(home))
     |> Enum.uniq_by(& &1.name)
+    |> Enum.reject(&(&1.stream_pattern == :invalid or &1.injection_limit == :invalid))
     |> Enum.sort_by(& &1.name)
   end
 
   @doc """
+  Discover dormant stream rules for `cwd`, in name order.
+
+  Each rule includes its `:name`, `:content`, regex source `:stream_pattern`
+  and positive `:injection_limit`. Prompt-only rules are excluded. The runtime
+  matcher enforces its own caller-policy size and execution limits.
+  """
+  @spec stream_rules(String.t()) :: [rule()]
+  def stream_rules(cwd) do
+    cwd
+    |> discover()
+    |> Enum.filter(&(&1.stream_pattern != nil))
+  end
+
+  @doc """
   Split rules into `:always_apply` (bodies injected) and `:rulebook` (indexed
-  for on-demand reading). Manual rules and rules with neither description nor
-  globs are dropped.
+  for on-demand reading). Stream rules, manual rules and rules with neither
+  description nor globs are dropped.
   """
   @spec buckets([rule()]) :: %{always_apply: [rule()], rulebook: [rule()]}
   def buckets(rules) do
-    always = Enum.filter(rules, &(&1.always_apply and not &1.manual))
+    always =
+      Enum.filter(rules, &(&1.stream_pattern == nil and &1.always_apply and not &1.manual))
 
     rulebook =
       Enum.filter(rules, fn rule ->
-        not rule.always_apply and not rule.manual and
+        rule.stream_pattern == nil and not rule.always_apply and not rule.manual and
           (rule.description != nil or rule.globs != [])
       end)
 
@@ -344,9 +369,30 @@ defmodule CodingAgent.Rules do
       description: parse_description(frontmatter["description"]),
       globs: parse_globs(frontmatter["globs"]),
       always_apply: parse_boolean(frontmatter["alwaysApply"]) == true or trigger == "always_on",
-      manual: trigger == "manual"
+      manual: trigger == "manual",
+      stream_pattern: parse_stream_pattern(Map.fetch(frontmatter, "streamPattern")),
+      injection_limit: parse_injection_limit(Map.fetch(frontmatter, "injectionLimit"))
     }
   end
+
+  defp parse_stream_pattern(:error), do: nil
+
+  defp parse_stream_pattern({:ok, pattern}) when is_binary(pattern) do
+    if String.trim(pattern) == "" do
+      :invalid
+    else
+      case :re.compile(pattern, [:never_utf]) do
+        {:ok, _compiled} -> pattern
+        {:error, _reason} -> :invalid
+      end
+    end
+  end
+
+  defp parse_stream_pattern(_value), do: :invalid
+
+  defp parse_injection_limit(:error), do: 1
+  defp parse_injection_limit({:ok, limit}) when is_integer(limit) and limit > 0, do: limit
+  defp parse_injection_limit(_value), do: :invalid
 
   defp parse_description(value) when is_binary(value) do
     case String.trim(value) do

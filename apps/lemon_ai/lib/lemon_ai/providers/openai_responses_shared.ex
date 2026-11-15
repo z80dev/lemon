@@ -113,7 +113,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
         [
           %{
             "role" => role,
-            "content" => sanitize_surrogates(context.system_prompt)
+            "content" => sanitize_surrogates(LemonAi.SystemPrompt.text(context.system_prompt))
           }
           | messages
         ]
@@ -135,8 +135,55 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
         end
       end)
 
-    Enum.reverse(converted)
+    custom_names =
+      for tool <- context.tools || [],
+          is_map(tool.parameters["x-lemon-tool-format"]),
+          into: MapSet.new(),
+          do: tool.name
+
+    if MapSet.size(custom_names) == 0 do
+      Enum.reverse(converted)
+    else
+      custom_names =
+        Enum.reduce(converted, custom_names, fn
+          %{"type" => "function_call", "name" => name, "call_id" => call_id}, names ->
+            if MapSet.member?(names, name),
+              do: MapSet.put(names, {:call_id, call_id}),
+              else: names
+
+          _, names ->
+            names
+        end)
+
+      converted
+      |> Enum.reverse()
+      |> Enum.map(&custom_input_item(&1, custom_names))
+    end
   end
+
+  # Custom tools use raw string inputs on the wire, but the shared agent loop
+  # deliberately retains object arguments. The schema's `input` property is the
+  # normalized representation used by validation, persistence and execution.
+  defp custom_input_item(%{"type" => "function_call", "name" => name} = item, names) do
+    if MapSet.member?(names, name) do
+      %{"input" => input} = Jason.decode!(item["arguments"])
+
+      item
+      |> Map.delete("arguments")
+      |> Map.put("type", "custom_tool_call")
+      |> Map.put("input", input)
+    else
+      item
+    end
+  end
+
+  defp custom_input_item(%{"type" => "function_call_output", "call_id" => call_id} = item, names) do
+    if MapSet.member?(names, {:call_id, call_id}),
+      do: Map.put(item, "type", "custom_tool_call_output"),
+      else: item
+  end
+
+  defp custom_input_item(item, _names), do: item
 
   @doc """
   Clamp oversized `function_call_output` payload items in a prebuilt Responses API request.
@@ -225,7 +272,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
     has_text = text_result != ""
 
     # Extract call_id from tool_call_id (format: "call_id|item_id")
-    {call_id, _item_id} = split_tool_call_id(msg.tool_call_id)
+    {call_id, item_id} = split_tool_call_id(msg.tool_call_id)
 
     # Build function call output
     output_text = if has_text, do: text_result, else: "(see attached image)"
@@ -237,7 +284,11 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
 
     result = [
       %{
-        "type" => "function_call_output",
+        "type" =>
+          if(custom_item_id?(item_id),
+            do: "custom_tool_call_output",
+            else: "function_call_output"
+          ),
         "call_id" => sanitize_surrogates(call_id),
         "output" => output_text
       }
@@ -270,10 +321,11 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
   defp convert_message(_msg, _model, _idx, _providers), do: nil
 
   defp clamp_function_call_output_item(
-         %{"type" => "function_call_output", "output" => output} = item,
+         %{"type" => type, "output" => output} = item,
          limit_bytes
        )
-       when is_binary(output) and is_integer(limit_bytes) and limit_bytes > 0 do
+       when type in ["function_call_output", "custom_tool_call_output"] and
+              is_binary(output) and is_integer(limit_bytes) and limit_bytes > 0 do
     truncated =
       truncate_function_call_output(
         output,
@@ -402,23 +454,35 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
 
     # For different-model messages, set id to nil to avoid pairing validation
     item_id =
-      if is_different_model && item_id_raw && String.starts_with?(item_id_raw, "fc_") do
+      if is_different_model && item_id_raw && String.starts_with?(item_id_raw, ["fc_", "ctc_"]) do
         nil
       else
         item_id_raw
       end
 
     base = %{
-      "type" => "function_call",
       "call_id" => sanitize_surrogates(call_id),
-      "name" => sanitize_surrogates(block.name),
-      "arguments" => block.arguments |> sanitize_json_value() |> Jason.encode!()
+      "name" => sanitize_surrogates(block.name)
     }
+
+    # Retain the custom wire kind across flag/model changes and journal resume.
+    base =
+      if custom_item_id?(item_id_raw) and is_binary(block.arguments["input"]) do
+        base
+        |> Map.put("type", "custom_tool_call")
+        |> Map.put("input", sanitize_surrogates(block.arguments["input"]))
+      else
+        base
+        |> Map.put("type", "function_call")
+        |> Map.put("arguments", block.arguments |> sanitize_json_value() |> Jason.encode!())
+      end
 
     if item_id, do: Map.put(base, "id", sanitize_surrogates(item_id)), else: base
   end
 
   defp convert_assistant_block(_block, _msg_index, _is_different_model), do: nil
+
+  defp custom_item_id?(id), do: is_binary(id) and String.starts_with?(id, "ctc_")
 
   defp split_tool_call_id(id) when is_binary(id) do
     case :binary.split(id, "|") do
@@ -588,7 +652,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
         item_id
         |> String.replace(~r/[^a-zA-Z0-9_-]/, "_")
         |> then(fn s ->
-          if String.starts_with?(s, "fc"), do: s, else: "fc_#{s}"
+          if String.starts_with?(s, ["fc", "ctc_"]), do: s, else: "fc_#{s}"
         end)
 
       # Truncate to 64 chars and strip trailing underscores
@@ -614,10 +678,10 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
             value == "" ->
               "fc_" <> short_hash(item_id)
 
-            value == "fc" or value == "fc_" ->
+            value in ["fc", "fc_", "ctc_"] ->
               "fc_" <> short_hash(item_id)
 
-            String.starts_with?(value, "fc_") ->
+            String.starts_with?(value, ["fc_", "ctc_"]) ->
               value
 
             true ->
@@ -696,22 +760,39 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
 
   ## Options
   - `:strict` - Whether to enforce strict mode (default: false, nil means omit)
+
+  JSON-schema extension `x-lemon-tool-format` optionally carries an OpenAI custom
+  tool format (`type: grammar`, `syntax: lark`, `definition: ...`). Such tools
+  keep a normal object schema with one string `input` property inside Lemon;
+  Responses sends the raw input and normalizes custom calls back to that object.
   """
   @spec convert_tools([Tool.t()], tool_options()) :: [map()]
   def convert_tools(tools, opts \\ %{}) do
     strict = Map.get(opts, :strict, false)
 
     Enum.map(tools, fn tool ->
-      base = %{
-        "type" => "function",
-        "name" => sanitize_surrogates(tool.name),
-        "description" => sanitize_surrogates(tool.description),
-        "parameters" => sanitize_json_value(tool.parameters)
-      }
+      case tool.parameters["x-lemon-tool-format"] do
+        %{"type" => "grammar", "syntax" => "lark", "definition" => definition} = format
+        when is_binary(definition) ->
+          %{
+            "type" => "custom",
+            "name" => sanitize_surrogates(tool.name),
+            "description" => sanitize_surrogates(tool.description),
+            "format" => sanitize_json_value(format)
+          }
 
-      case strict do
-        nil -> base
-        val -> Map.put(base, "strict", val)
+        _ ->
+          base = %{
+            "type" => "function",
+            "name" => sanitize_surrogates(tool.name),
+            "description" => sanitize_surrogates(tool.description),
+            "parameters" => sanitize_json_value(tool.parameters)
+          }
+
+          case strict do
+            nil -> base
+            val -> Map.put(base, "strict", val)
+          end
       end
     end)
   end
@@ -835,7 +916,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
         EventStream.push_async(state.stream, {:text_start, length(output.content) - 1, output})
         {:ok, %{state | current_item: item, current_block: block, output: output}}
 
-      "function_call" ->
+      type when type in ["function_call", "custom_tool_call"] ->
         tool_id =
           item
           |> response_tool_call_id(state.model)
@@ -845,11 +926,16 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
           type: :tool_call,
           id: tool_id,
           name: response_tool_name(item),
-          arguments: %{}
+          arguments:
+            if(type == "custom_tool_call", do: %{"input" => item["input"] || ""}, else: %{})
         }
 
         # Store partial JSON for streaming parsing
-        partial_json = item["arguments"] || ""
+        partial_json =
+          if type == "custom_tool_call",
+            do: Jason.encode!(%{"input" => item["input"] || ""}),
+            else: item["arguments"] || ""
+
         block = Map.put(block, :partial_json, partial_json)
 
         output = %{state.output | content: state.output.content ++ [block]}
@@ -953,6 +1039,40 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
   end
 
   defp process_event(
+         %{"type" => "response.custom_tool_call_input.delta", "delta" => delta},
+         state
+       ) do
+    if state.current_item && state.current_item["type"] == "custom_tool_call" &&
+         state.current_block && state.current_block.type == :tool_call do
+      input = Map.get(state.current_block.arguments, "input", "") <> delta
+      args = %{"input" => input}
+
+      block =
+        %{state.current_block | arguments: args} |> Map.put(:partial_json, Jason.encode!(args))
+
+      output = update_content_block(state, block)
+      EventStream.push_async(state.stream, {:tool_call_delta, state.current_index, delta, output})
+      {:ok, %{state | current_block: block, output: output}}
+    else
+      {:ok, state}
+    end
+  end
+
+  defp process_event(%{"type" => "response.custom_tool_call_input.done", "input" => input}, state) do
+    if state.current_item && state.current_item["type"] == "custom_tool_call" &&
+         state.current_block && state.current_block.type == :tool_call do
+      args = %{"input" => input}
+
+      block =
+        %{state.current_block | arguments: args} |> Map.put(:partial_json, Jason.encode!(args))
+
+      {:ok, %{state | current_block: block, output: update_content_block(state, block)}}
+    else
+      {:ok, state}
+    end
+  end
+
+  defp process_event(
          %{"type" => "response.function_call_arguments.delta", "delta" => delta},
          state
        ) do
@@ -1030,12 +1150,18 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
         EventStream.push_async(state.stream, {:text_end, idx, text, output})
         {:ok, %{state | current_block: nil, output: output}}
 
-      "function_call"
-      when state.current_block != nil and state.current_block.type == :tool_call ->
+      type
+      when type in ["function_call", "custom_tool_call"] and
+             state.current_block != nil and state.current_block.type == :tool_call ->
         partial_json = Map.get(state.current_block, :partial_json, "")
 
         args =
-          case Jason.decode(item["arguments"] || partial_json) do
+          case if(type == "custom_tool_call",
+                 do:
+                   {:ok,
+                    %{"input" => item["input"] || state.current_block.arguments["input"] || ""}},
+                 else: Jason.decode(item["arguments"] || partial_json)
+               ) do
             {:ok, arguments} when is_map(arguments) ->
               arguments
 
@@ -1188,7 +1314,8 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
   defp response_tool_call_id(item, model, _fallback) do
     seed = inspect(item)
     call_id = present_or_generated(Map.get(item, "call_id"), "call_", seed)
-    item_id = present_or_generated(Map.get(item, "id"), "fc_", seed)
+    item_prefix = if item["type"] == "custom_tool_call", do: "ctc_", else: "fc_"
+    item_id = present_or_generated(Map.get(item, "id"), item_prefix, seed)
 
     normalize_tool_call_id("#{call_id}|#{item_id}", model.provider)
   end

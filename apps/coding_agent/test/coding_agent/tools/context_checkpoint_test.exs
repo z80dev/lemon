@@ -407,7 +407,7 @@ defmodule CodingAgent.Tools.ContextCheckpointTest do
 
   defp await_end do
     receive do
-      {:session_event, _, {:agent_end, _}} -> :ok
+      {:session_event, _, {:agent_end, _}, _} -> :ok
       _ -> await_end()
     after
       5_000 -> flunk("session did not finish")

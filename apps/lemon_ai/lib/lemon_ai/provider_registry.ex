@@ -14,6 +14,9 @@ defmodule LemonAi.ProviderRegistry do
   - Provides O(1) read access with no message passing
   - Is optimized for read-heavy, write-rarely patterns (perfect for registries)
 
+  Writes belong only to explicit boot/configuration registration paths. Reads
+  never initialize the registry; before registration they see an empty map.
+
   ## Usage
 
       # Registration (typically during application startup)
@@ -50,9 +53,9 @@ defmodule LemonAi.ProviderRegistry do
   @doc """
   Register a provider module for an API.
 
-  This is a write operation that updates `:persistent_term`. While safe,
-  it should be called sparingly (ideally only during application startup)
-  as `:persistent_term` writes trigger a global GC of the term.
+  This is an explicit boot/configuration write, not a request-path operation.
+  Call it only when configuring providers: replacing a `:persistent_term` map
+  triggers a global scan of processes referencing the old term.
   """
   @spec register(atom(), module()) :: :ok
   def register(api_id, module) when is_atom(api_id) and is_atom(module) do
@@ -130,14 +133,7 @@ defmodule LemonAi.ProviderRegistry do
   # ============================================================================
 
   defp providers do
-    case :persistent_term.get(@persistent_term_key, nil) do
-      nil ->
-        init()
-        :persistent_term.get(@persistent_term_key)
-
-      providers ->
-        providers
-    end
+    :persistent_term.get(@persistent_term_key, %{})
   end
 
   defp mutate_providers(update_fun) do
@@ -150,6 +146,9 @@ defmodule LemonAi.ProviderRegistry do
   end
 
   defp with_mutation_lock(fun) do
-    :global.trans({@mutation_lock, self()}, fun)
+    case :global.trans({@mutation_lock, self()}, fun, [node()], 3) do
+      :aborted -> raise "Provider registry lock unavailable"
+      result -> result
+    end
   end
 end

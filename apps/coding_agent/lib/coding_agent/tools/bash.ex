@@ -179,6 +179,12 @@ defmodule CodingAgent.Tools.Bash do
     background = Map.get(params, "run_in_background", false)
 
     cond do
+      match?({:error, _}, LemonCore.TerminalBackends.Docker.Sandbox.policy(opts)) ->
+        {:error, "Invalid terminal tool policy"}
+
+      sandboxed?(opts) and use_pty ->
+        {:error, "pty is not supported by the enforced Docker sandbox"}
+
       not is_binary(command) or String.trim(command) == "" ->
         {:error, "command must be a non-empty string"}
 
@@ -373,6 +379,7 @@ defmodule CodingAgent.Tools.Bash do
 
     executor =
       cond do
+        sandboxed?(opts) -> CodingAgent.Tools.Bash.Managed
         use_pty -> BashExecutor
         Keyword.get(opts, :acp_client_terminal) == true -> CodingAgent.ACPTerminalExecutor
         true -> CodingAgent.Tools.Bash.Managed
@@ -388,11 +395,14 @@ defmodule CodingAgent.Tools.Bash do
       end)
 
     executor_opts =
-      Keyword.merge(executor_opts, Keyword.take(opts, [:session_id, :session_pid, :before_start]))
+      Keyword.merge(
+        executor_opts,
+        Keyword.take(opts, [:session_id, :session_pid, :before_start, :tool_policy])
+      )
 
     # Client terminals need not share the Lemon host's capture filesystem.
     {command, capture} =
-      if executor == CodingAgent.ACPTerminalExecutor,
+      if executor == CodingAgent.ACPTerminalExecutor or sandboxed?(opts),
         do: {command, nil},
         else: wrap_for_capture(command, opts)
 
@@ -475,7 +485,8 @@ defmodule CodingAgent.Tools.Bash do
       cwd: cwd,
       env: env,
       owner: Keyword.get(opts, :session_id),
-      owner_pid: Keyword.get(opts, :session_pid)
+      owner_pid: Keyword.get(opts, :session_pid),
+      tool_policy: Keyword.get(opts, :tool_policy)
     ]
 
     case ProcessManager.exec(exec_opts) do
@@ -519,6 +530,13 @@ defmodule CodingAgent.Tools.Bash do
 
       {:error, reason} ->
         {:error, "Failed to start background process: #{inspect(reason)}"}
+    end
+  end
+
+  defp sandboxed?(opts) do
+    case LemonCore.TerminalBackends.Docker.Sandbox.policy(opts) do
+      {:ok, policy} -> policy.sandbox
+      {:error, _} -> true
     end
   end
 

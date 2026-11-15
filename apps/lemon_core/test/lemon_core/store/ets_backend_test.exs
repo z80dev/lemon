@@ -141,6 +141,104 @@ defmodule LemonCore.Store.EtsBackendTest do
     end
   end
 
+  describe "sweep/3" do
+    test "expires only integer atom timestamps strictly before the cutoff", %{state: state} do
+      entries = [
+        {:expired, %{expires_at: 9}},
+        {:boundary, %{expires_at: 10}},
+        {:future, %{expires_at: 11}},
+        {:string_key, %{"expires_at" => 1}},
+        {:float, %{expires_at: 1.0}},
+        {:missing, %{}},
+        {nil, nil}
+      ]
+
+      state = put_entries(state, :chat, entries)
+      {:ok, state} = EtsBackend.put(state, :progress, :expired, %{expires_at: 9})
+
+      assert {:ok, 1, state} = EtsBackend.sweep(state, :chat, {:expires_at, 10})
+      assert {:ok, remaining, _} = EtsBackend.list(state, :chat)
+      assert Map.new(remaining) == Map.new(tl(entries))
+      assert {:ok, %{expires_at: 9}, _} = EtsBackend.get(state, :progress, :expired)
+      assert {:ok, 0, _} = EtsBackend.sweep(state, :chat, {:expires_at, 10})
+    end
+
+    test "idempotency accepts only the string timestamp field", %{state: state} do
+      state =
+        put_entries(state, :idempotency, [
+          {:expired, %{"inserted_at_ms" => 9}},
+          {:boundary, %{"inserted_at_ms" => 10}},
+          {:atom, %{inserted_at_ms: 1}},
+          {:invalid, %{"inserted_at_ms" => "1"}}
+        ])
+
+      assert {:ok, 1, state} = EtsBackend.sweep(state, :idempotency, {:inserted_at_ms, 10})
+      assert {:ok, remaining, _} = EtsBackend.list(state, :idempotency)
+      assert Map.keys(Map.new(remaining)) |> Enum.sort() == [:atom, :boundary, :invalid]
+    end
+
+    test "cron timestamps prefer an integer atom field over the string field", %{state: state} do
+      entries = [
+        {:atom, %{started_at_ms: 9}},
+        {:string, %{"started_at_ms" => 9}},
+        {:fallback, %{"started_at_ms" => 9, :started_at_ms => :invalid}},
+        {:boundary, %{"started_at_ms" => 1, :started_at_ms => 10}},
+        {:future, %{"started_at_ms" => 1, :started_at_ms => 11}},
+        {:invalid, %{started_at_ms: 1.0}}
+      ]
+
+      state = put_entries(state, :cron_runs, entries)
+      assert {:ok, 3, state} = EtsBackend.sweep(state, :cron_runs, {:started_at_ms, 10})
+      assert {:ok, remaining, _} = EtsBackend.list(state, :cron_runs)
+      assert Map.new(remaining) == Map.new(Enum.drop(entries, 3))
+    end
+
+    test "introspection preserves tuple and truthy atom timestamp precedence", %{state: state} do
+      entries = [
+        {{9, :old}, nil},
+        {:atom, %{ts_ms: 9}},
+        {:string, %{"ts_ms" => 9}},
+        {:nil_fallback, %{"ts_ms" => 9, :ts_ms => nil}},
+        {:false_fallback, %{"ts_ms" => 9, :ts_ms => false}},
+        {{:not_integer, :fallback}, %{ts_ms: 9}},
+        {{10, :boundary}, %{ts_ms: 1}},
+        {{11, :future}, %{"ts_ms" => 1}},
+        {:atom_boundary, %{"ts_ms" => 1, :ts_ms => 10}},
+        {:invalid_atom, %{"ts_ms" => 1, :ts_ms => :invalid}},
+        {:invalid_float, %{"ts_ms" => 1, :ts_ms => 1.0}},
+        {:missing, nil}
+      ]
+
+      state = put_entries(state, :introspection_log, entries)
+
+      assert {:ok, 6, state} =
+               EtsBackend.sweep(state, :introspection_log, {:introspection_timestamp, 10})
+
+      assert {:ok, remaining, _} = EtsBackend.list(state, :introspection_log)
+      assert Map.new(remaining) == Map.new(Enum.drop(entries, 6))
+    end
+
+    test "the shared match specification evicts the same cache rows", %{state: state} do
+      entries = [{:old, %{expires_at: 1}}, {:live, %{expires_at: 10}}]
+      state = put_entries(state, :chat, entries)
+      cache = :ets.new(:sweep_cache, [:set])
+      :ets.insert(cache, entries)
+
+      assert {:ok, 1, state} = EtsBackend.sweep(state, :chat, {:expires_at, 10})
+      assert 1 == :ets.select_delete(cache, EtsBackend.sweep_match_spec(:expires_at, 10))
+      assert {:ok, remaining, _} = EtsBackend.list(state, :chat)
+      assert :ets.tab2list(cache) == remaining
+      assert {:ok, 0, _} = EtsBackend.sweep(state, :unknown, {:expires_at, 10})
+    end
+  end
+
+  defp put_entries(state, table, entries) do
+    Enum.reduce(entries, state, fn {key, value}, state ->
+      {:ok, state} = EtsBackend.put(state, table, key, value)
+      state
+    end)
+  end
+
   describe "compare_and_delete_many/2" do
     test "validates all snapshots before deleting the set", %{state: state} do
       {:ok, state} = EtsBackend.put(state, :chat, "first", %{generation: 1})

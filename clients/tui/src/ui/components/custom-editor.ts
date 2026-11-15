@@ -302,6 +302,16 @@ export class CustomEditor extends Editor {
 		}
 	}
 
+	/** Forget a search selection locally without changing the current draft or saving history. */
+	forgetPrompt(prompt: string): void {
+		for (let index = this.#history.length - 1; index >= 0; index--) {
+			if (this.#history[index] === prompt) this.#history.splice(index, 1);
+		}
+		this.#historyIndex = undefined;
+		this.#stashed = "";
+		this.setHistoryStorage({ add: async () => {}, getRecent: () => [] });
+	}
+
 	/**
 	 * Forget every remembered prompt: the ↑ ring, the base editor's own ring, and
 	 * persistent history. Storage errors propagate after the in-memory history is gone.

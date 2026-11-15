@@ -1,6 +1,13 @@
 defmodule CodingAgent.Wasm.SidecarSession do
   @moduledoc """
   Per-session client for the Rust WASM sidecar runtime.
+
+  The session owns the port and WASM protocol state; `LemonCore.Rpc.Client`
+  owns framing, pending callers and request deadlines. Public calls return
+  `{:error, :timeout}` when their deadline expires, even while a host callback
+  is running. Late responses cannot complete a later invocation.
+  Parent-intent scopes remain local invocation metadata, forwarded only to the
+  trusted host callback and never encoded into sidecar JSON.
   """
 
   use GenServer
@@ -9,6 +16,44 @@ defmodule CodingAgent.Wasm.SidecarSession do
   alias CodingAgent.Wasm.Builder
   alias CodingAgent.Wasm.Config
   alias CodingAgent.Wasm.Protocol
+  alias LemonAgent.AbortSignal
+  alias LemonCore.Rpc.Client, as: RpcClient
+
+  defmodule Framing do
+    @moduledoc false
+    @behaviour LemonCore.Rpc.Framing
+
+    @impl true
+    def encode(message), do: LemonCore.Rpc.JsonLines.encode(message)
+
+    @impl true
+    def decode(buffer), do: decode_lines(buffer, [])
+
+    defp decode_lines(buffer, messages) do
+      case :binary.match(buffer, "\n") do
+        {offset, 1} ->
+          <<line::binary-size(^offset), "\n", rest::binary>> = buffer
+
+          case String.trim(line) do
+            "" ->
+              decode_lines(rest, messages)
+
+            line ->
+              case Protocol.decode_line(line) do
+                {:ok, message} ->
+                  decode_lines(rest, [message | messages])
+
+                {:error, _reason} ->
+                  Logger.warning("WASM sidecar protocol parse error")
+                  decode_lines(rest, messages)
+              end
+          end
+
+        :nomatch ->
+          {:ok, Enum.reverse(messages), buffer}
+      end
+    end
+  end
 
   @discover_timeout 60_000
   @invoke_timeout 120_000
@@ -54,23 +99,16 @@ defmodule CodingAgent.Wasm.SidecarSession do
     :runtime_path,
     :build_report,
     :port,
-    :buffer,
+    :rpc_client,
+    :rpc_monitor,
     :host_invoke_fun,
+    :hello_id,
     :hello_ok,
-    :inflight_invoke_id,
+    :invocation,
     :discovered,
     :discover_warnings,
-    :discover_errors,
-    :pending
+    :discover_errors
   ]
-
-  @type pending_kind :: :hello | :discover | {:invoke, String.t()} | :host_call_result | :shutdown
-
-  @type pending_request :: %{
-          from: GenServer.from() | nil,
-          kind: pending_kind(),
-          started_at_ms: integer()
-        }
 
   @type t :: %__MODULE__{
           session_id: String.t(),
@@ -79,14 +117,15 @@ defmodule CodingAgent.Wasm.SidecarSession do
           runtime_path: String.t() | nil,
           build_report: map() | nil,
           port: port() | nil,
-          buffer: String.t(),
+          rpc_client: pid(),
+          rpc_monitor: reference(),
           host_invoke_fun: function(),
+          hello_id: String.t() | nil,
           hello_ok: boolean(),
-          inflight_invoke_id: String.t() | nil,
+          invocation: map() | nil,
           discovered: [discovered_tool()],
           discover_warnings: [String.t()],
-          discover_errors: [String.t()],
-          pending: %{String.t() => pending_request()}
+          discover_errors: [String.t()]
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -96,7 +135,22 @@ defmodule CodingAgent.Wasm.SidecarSession do
 
   @spec discover(pid(), timeout()) :: {:ok, discover_result()} | {:error, term()}
   def discover(pid, timeout \\ @discover_timeout) do
-    GenServer.call(pid, :discover, timeout)
+    started_at_ms = now_ms()
+    deadline = request_deadline(timeout, @discover_timeout)
+
+    case GenServer.call(pid, {:discover, deadline}, :infinity) do
+      {:discover_response, result, metadata} ->
+        LemonCore.Telemetry.emit(
+          [:lemon, :wasm, :discover, :stop],
+          %{duration_ms: now_ms() - started_at_ms, ok: match?({:ok, _}, result)},
+          metadata
+        )
+
+        result
+
+      result ->
+        result
+    end
   end
 
   @spec invoke(pid(), String.t(), String.t(), String.t() | nil, timeout(), reference() | nil) ::
@@ -109,14 +163,27 @@ defmodule CodingAgent.Wasm.SidecarSession do
         timeout \\ @invoke_timeout,
         signal \\ nil
       ) do
-    deadline = now_ms() + if(is_integer(timeout), do: timeout, else: @invoke_timeout)
+    started_at_ms = now_ms()
+    deadline = request_deadline(timeout, @invoke_timeout)
     scope = CodingAgent.ToolIntent.current_parent_scope()
 
-    GenServer.call(
-      pid,
-      {:invoke, tool, params_json, context_json, deadline, signal, scope},
-      timeout
-    )
+    case GenServer.call(
+           pid,
+           {:invoke, tool, params_json, context_json, deadline, signal, scope},
+           :infinity
+         ) do
+      {:invoke_response, result, metadata} ->
+        LemonCore.Telemetry.emit(
+          [:lemon, :wasm, :invoke, :stop],
+          %{duration_ms: now_ms() - started_at_ms, ok: match?({:ok, _}, result)},
+          metadata
+        )
+
+        result
+
+      result ->
+        result
+    end
   end
 
   @spec status(pid()) :: status()
@@ -144,7 +211,15 @@ defmodule CodingAgent.Wasm.SidecarSession do
         host_invoke_fun = Keyword.get(opts, :host_invoke_fun, &default_host_invoke/2)
 
         with {:ok, runtime_path, build_report} <- Builder.ensure_runtime_binary(config),
-             {:ok, port} <- start_port(runtime_path, cwd) do
+             {:ok, port} <- start_port(runtime_path, cwd),
+             {:ok, rpc_client} <-
+               RpcClient.start_link(
+                 owner: self(),
+                 framing: Framing,
+                 send: fn bytes ->
+                   if Port.command(port, bytes), do: :ok, else: {:error, :send_failed}
+                 end
+               ) do
           state = %__MODULE__{
             session_id: session_id,
             cwd: cwd,
@@ -152,14 +227,15 @@ defmodule CodingAgent.Wasm.SidecarSession do
             runtime_path: runtime_path,
             build_report: build_report,
             port: port,
-            buffer: "",
+            rpc_client: rpc_client,
+            rpc_monitor: Process.monitor(rpc_client),
             host_invoke_fun: host_invoke_fun,
+            hello_id: nil,
             hello_ok: false,
-            inflight_invoke_id: nil,
+            invocation: nil,
             discovered: [],
             discover_warnings: [],
-            discover_errors: [],
-            pending: %{}
+            discover_errors: []
           }
 
           {:ok, send_hello(state)}
@@ -186,38 +262,46 @@ defmodule CodingAgent.Wasm.SidecarSession do
     {:reply, build_status(state), state}
   end
 
-  def handle_call(:discover, from, state) do
-    if not is_port(state.port) do
-      {:reply, {:error, :runtime_not_running}, state}
-    else
-      payload = %{
-        "paths" => state.config.discover_paths,
-        "defaults" => %{
-          "default_memory_limit" => state.config.default_memory_limit,
-          "default_timeout_ms" => state.config.default_timeout_ms,
-          "default_fuel_limit" => state.config.default_fuel_limit,
-          "cache_compiled" => state.config.cache_compiled,
-          "cache_dir" => state.config.cache_dir,
-          "max_tool_invoke_depth" => state.config.max_tool_invoke_depth
+  def handle_call({:discover, deadline}, from, state) do
+    cond do
+      expired?(deadline) ->
+        {:reply, {:error, :timeout}, state}
+
+      not is_port(state.port) ->
+        {:reply, {:error, :runtime_not_running}, state}
+
+      true ->
+        payload = %{
+          "paths" => state.config.discover_paths,
+          "defaults" => %{
+            "default_memory_limit" => state.config.default_memory_limit,
+            "default_timeout_ms" => state.config.default_timeout_ms,
+            "default_fuel_limit" => state.config.default_fuel_limit,
+            "cache_compiled" => state.config.cache_compiled,
+            "cache_dir" => state.config.cache_dir,
+            "max_tool_invoke_depth" => state.config.max_tool_invoke_depth
+          }
         }
-      }
 
-      LemonCore.Telemetry.emit([:lemon, :wasm, :discover, :start], %{count: 1}, %{
-        host: :wasm,
-        session_hash: hash_value(state.session_id),
-        cwd_hash: hash_value(state.cwd)
-      })
+        LemonCore.Telemetry.emit(
+          [:lemon, :wasm, :discover, :start],
+          %{count: 1},
+          discover_metadata(state)
+        )
 
-      {:noreply, send_request(state, "discover", payload, from, :discover)}
+        case dispatch(state, "discover", payload, from, deadline) do
+          {:ok, _id} -> {:noreply, state}
+          {:error, reason} -> {:reply, {:error, reason}, state}
+        end
     end
   end
 
   def handle_call(
         {:invoke, _tool, _params_json, _context_json, _deadline, _signal, _scope},
         _from,
-        %{inflight_invoke_id: id} = state
+        %{invocation: invocation} = state
       )
-      when is_binary(id) do
+      when not is_nil(invocation) do
     {:reply, {:error, :busy}, state}
   end
 
@@ -226,14 +310,19 @@ defmodule CodingAgent.Wasm.SidecarSession do
         from,
         state
       ) do
+    AbortSignal.subscribe(signal)
+
     cond do
-      not Process.alive?(elem(from, 0)) or LemonAgent.AbortSignal.aborted?(signal) ->
+      not Process.alive?(elem(from, 0)) or AbortSignal.aborted?(signal) ->
+        AbortSignal.unsubscribe(signal)
         {:reply, {:error, :aborted}, state}
 
-      now_ms() >= deadline ->
+      expired?(deadline) ->
+        AbortSignal.unsubscribe(signal)
         {:reply, {:error, :timeout}, state}
 
       not is_port(state.port) ->
+        AbortSignal.unsubscribe(signal)
         {:reply, {:error, :runtime_not_running}, state}
 
       true ->
@@ -250,23 +339,30 @@ defmodule CodingAgent.Wasm.SidecarSession do
           tool_hash: hash_value(tool)
         })
 
-        {state, request_id} =
-          send_request_with_id(state, "invoke", payload, from, {:invoke, tool})
+        case dispatch(state, "invoke", payload, from, deadline) do
+          {:ok, request_id} ->
+            invocation = %{
+              id: request_id,
+              tool: tool,
+              owner: elem(from, 0),
+              deadline: deadline,
+              signal: signal,
+              parent_intent_scope: scope,
+              started_at_ms: now_ms()
+            }
 
-        request =
-          Map.fetch!(state.pending, request_id)
-          |> Map.put(:deadline, deadline)
-          |> Map.put(:signal, signal)
-          |> Map.put(:parent_intent_scope, scope)
+            {:noreply, %{state | invocation: invocation}}
 
-        state = %{state | pending: Map.put(state.pending, request_id, request)}
-        {:noreply, %{state | inflight_invoke_id: request_id}}
+          {:error, reason} ->
+            AbortSignal.unsubscribe(signal)
+            {:reply, {:error, reason}, state}
+        end
     end
   end
 
   @impl true
   def handle_info({port, {:data, data}}, %{port: port} = state) do
-    state = process_port_data(state, data)
+    RpcClient.feed(state.rpc_client, data)
     {:noreply, state}
   end
 
@@ -274,13 +370,29 @@ defmodule CodingAgent.Wasm.SidecarSession do
     reason = {:sidecar_exit, status}
     Logger.warning("WASM sidecar exited for session #{state.session_id}: #{inspect(reason)}")
 
-    state =
-      Enum.reduce(state.pending, state, fn {_id, pending}, acc ->
-        reply_pending(pending.from, {:error, reason})
-        acc
-      end)
+    RpcClient.fail_all(state.rpc_client, {:error, reason})
+    {:stop, reason, %{state | port: nil}}
+  end
 
-    {:stop, reason, %{state | port: nil, pending: %{}, inflight_invoke_id: nil}}
+  def handle_info({:rpc_message, %{"type" => "response"} = message}, state) do
+    {:noreply, handle_response(state, message)}
+  end
+
+  def handle_info({:rpc_message, %{"type" => "event", "event" => "host_call"} = message}, state) do
+    {:noreply, handle_host_call_event(state, message)}
+  end
+
+  def handle_info({:rpc_finished, id, reason}, %{invocation: %{id: id}} = state) do
+    {:noreply, finish_invocation(state, reason)}
+  end
+
+  def handle_info({:lemon_abort, signal, :abort}, %{invocation: %{signal: signal}} = state) do
+    RpcClient.complete(state.rpc_client, state.invocation.id, {:error, :aborted})
+    {:noreply, finish_invocation(state, :aborted)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{rpc_monitor: ref} = state) do
+    {:stop, :connection_closed, state}
   end
 
   def handle_info(_msg, state) do
@@ -289,9 +401,17 @@ defmodule CodingAgent.Wasm.SidecarSession do
 
   @impl true
   def terminate(_reason, state) do
-    if state.port do
-      _ = send_request(state, "shutdown", %{}, nil, :shutdown)
+    if state.invocation, do: AbortSignal.unsubscribe(state.invocation.signal)
 
+    try do
+      if state.port, do: send_message(state, "shutdown", %{})
+      RpcClient.fail_all(state.rpc_client, {:error, :connection_closed})
+      :gen_statem.stop(state.rpc_client)
+    catch
+      :exit, _ -> :ok
+    end
+
+    if state.port do
       try do
         Port.close(state.port)
       catch
@@ -318,170 +438,98 @@ defmodule CodingAgent.Wasm.SidecarSession do
   end
 
   defp send_hello(state) do
-    payload = %{"version" => 1}
-    send_request(state, "hello", payload, nil, :hello)
+    id = Protocol.next_id("hello")
+    RpcClient.send_message(state.rpc_client, request("hello", id, %{"version" => 1}))
+    %{state | hello_id: id}
   end
 
-  defp send_request_with_id(%__MODULE__{port: port} = state, type, payload, from, kind)
-       when is_port(port) do
+  defp dispatch(state, type, payload, from, deadline) do
     id = Protocol.next_id(type)
-    encoded = Protocol.encode_request(type, id, payload)
 
-    true = Port.command(port, encoded)
-
-    pending_entry = %{from: from, kind: kind, started_at_ms: now_ms()}
-    state = %{state | pending: Map.put(state.pending, id, pending_entry)}
-
-    {state, id}
-  end
-
-  defp send_request_with_id(state, _type, _payload, _from, _kind), do: {state, nil}
-
-  defp send_request(%__MODULE__{port: port} = state, type, payload, from, kind)
-       when is_port(port) do
-    {state, _id} = send_request_with_id(state, type, payload, from, kind)
-    state
-  end
-
-  defp send_request(state, _type, _payload, _from, _kind), do: state
-
-  defp process_port_data(state, data) when is_binary(data) do
-    {lines, remainder} = split_complete_lines(state.buffer <> data)
-
-    state =
-      Enum.reduce(lines, %{state | buffer: remainder}, fn line, acc ->
-        handle_protocol_line(acc, line)
-      end)
-
-    %{state | buffer: remainder}
-  end
-
-  defp split_complete_lines(buffer) do
-    parts = String.split(buffer, "\n", trim: false)
-
-    case parts do
-      [] -> {[], ""}
-      [_single] -> {[], buffer}
-      _ -> {Enum.slice(parts, 0, length(parts) - 1), List.last(parts)}
+    case RpcClient.dispatch(
+           state.rpc_client,
+           id,
+           request(type, id, payload),
+           from,
+           remaining_timeout(deadline)
+         ) do
+      :ok -> {:ok, id}
+      {:error, _} = error -> error
     end
   end
 
-  defp handle_protocol_line(state, line) do
-    line = String.trim(line)
+  defp send_message(state, type, payload) do
+    RpcClient.send_message(state.rpc_client, request(type, Protocol.next_id(type), payload))
+  end
 
-    if line == "" do
-      state
-    else
-      case Protocol.decode_line(line) do
-        {:ok, %{"type" => "response"} = msg} ->
-          handle_response(state, msg)
+  defp request(type, id, payload) do
+    payload |> Map.put("type", type) |> Map.put("id", id)
+  end
 
-        {:ok, %{"type" => "event", "event" => "host_call"} = msg} ->
-          handle_host_call_event(state, msg)
+  defp handle_response(state, %{"id" => id, "ok" => ok} = msg)
+       when id == state.hello_id do
+    if not ok do
+      Logger.warning("WASM sidecar hello failed for session #{state.session_id}: #{msg["error"]}")
+    end
 
-        {:ok, _other} ->
-          state
+    %{state | hello_ok: ok, hello_id: nil}
+  end
 
-        {:error, reason} ->
-          Logger.warning("WASM sidecar protocol parse error: #{inspect(reason)}")
-          state
-      end
+  defp handle_response(state, %{"id" => "discover_" <> _ = id, "ok" => ok} = msg) do
+    result =
+      if ok,
+        do: {:ok, normalize_discover_result(msg["result"])},
+        else: {:error, msg["error"] || "discover_failed"}
+
+    case RpcClient.complete(
+           state.rpc_client,
+           id,
+           {:discover_response, result, discover_metadata(state)}
+         ) do
+      :ok ->
+        case result do
+          {:ok, discovered} ->
+            %{
+              state
+              | discovered: discovered.tools,
+                discover_warnings: discovered.warnings,
+                discover_errors: discovered.errors
+            }
+
+          {:error, error} ->
+            %{state | discover_errors: [error | state.discover_errors]}
+        end
+
+      {:error, :not_found} ->
+        state
     end
   end
 
-  defp handle_response(state, %{"id" => id, "ok" => ok} = msg) do
-    {pending, pending_map} = Map.pop(state.pending, id)
+  defp handle_response(%{invocation: %{id: id}} = state, %{"id" => id, "ok" => ok} = msg) do
+    result =
+      if ok,
+        do: {:ok, normalize_invoke_result(msg["result"])},
+        else: {:error, msg["error"] || "invoke_failed"}
 
-    if is_nil(pending) do
-      state
-    else
-      duration_ms = now_ms() - pending.started_at_ms
+    metadata = Map.put(discover_metadata(state), :tool_hash, hash_value(state.invocation.tool))
 
-      case pending.kind do
-        :hello ->
-          if not ok do
-            Logger.warning(
-              "WASM sidecar hello failed for session #{state.session_id}: #{msg["error"]}"
-            )
-          end
-
-          %{state | hello_ok: ok, pending: pending_map}
-
-        :discover ->
-          LemonCore.Telemetry.emit(
-            [:lemon, :wasm, :discover, :stop],
-            %{duration_ms: duration_ms, ok: ok},
-            %{
-              host: :wasm,
-              session_hash: hash_value(state.session_id),
-              cwd_hash: hash_value(state.cwd)
-            }
-          )
-
-          state = %{state | pending: pending_map}
-
-          if ok do
-            result = normalize_discover_result(msg["result"])
-            reply_pending(pending.from, {:ok, result})
-
-            %{
-              state
-              | discovered: result.tools,
-                discover_warnings: result.warnings,
-                discover_errors: result.errors
-            }
-          else
-            reply_pending(pending.from, {:error, msg["error"] || "discover_failed"})
-
-            %{
-              state
-              | discover_errors: [msg["error"] || "discover_failed" | state.discover_errors]
-            }
-          end
-
-        {:invoke, tool} ->
-          LemonCore.Telemetry.emit(
-            [:lemon, :wasm, :invoke, :stop],
-            %{duration_ms: duration_ms, ok: ok},
-            %{
-              host: :wasm,
-              session_hash: hash_value(state.session_id),
-              cwd_hash: hash_value(state.cwd),
-              tool_hash: hash_value(tool)
-            }
-          )
-
-          state = %{state | pending: pending_map, inflight_invoke_id: nil}
-
-          if ok do
-            reply_pending(pending.from, {:ok, normalize_invoke_result(msg["result"])})
-            state
-          else
-            reply_pending(pending.from, {:error, msg["error"] || "invoke_failed"})
-            state
-          end
-
-        :host_call_result ->
-          %{state | pending: pending_map}
-
-        :shutdown ->
-          reply_pending(pending.from, :ok)
-          %{state | pending: pending_map}
-      end
+    case RpcClient.complete(state.rpc_client, id, {:invoke_response, result, metadata}) do
+      :ok -> finish_invocation(state, :response)
+      {:error, :not_found} -> state
     end
   end
 
   defp handle_response(state, _msg), do: state
 
-  defp handle_host_call_event(state, %{
-         "request_id" => request_id,
-         "call_id" => call_id,
-         "tool" => tool,
-         "params_json" => params_json
-       })
-       when request_id == state.inflight_invoke_id do
-    invocation = Map.get(state.pending, state.inflight_invoke_id)
-
+  defp handle_host_call_event(
+         %{invocation: %{id: request_id} = invocation} = state,
+         %{
+           "request_id" => request_id,
+           "call_id" => call_id,
+           "tool" => tool,
+           "params_json" => params_json
+         }
+       ) do
     response_payload =
       case invoke_host_for_request(state.host_invoke_fun, invocation, tool, params_json) do
         {:ok, output_json} ->
@@ -501,29 +549,31 @@ defmodule CodingAgent.Wasm.SidecarSession do
           }
       end
 
-    send_request(state, "host_call_result", response_payload, nil, :host_call_result)
+    send_message(state, "host_call_result", response_payload)
+    state
   end
 
   defp handle_host_call_event(state, _msg), do: state
 
-  defp invoke_host_for_request(_fun, nil, _tool, _params_json),
-    do: {:error, :no_active_invocation}
-
   defp invoke_host_for_request(fun, invocation, tool, params_json) do
-    context = %{
-      owner: elem(invocation.from, 0),
-      deadline: invocation.deadline,
-      signal: invocation.signal,
-      parent_intent_scope: Map.get(invocation, :parent_intent_scope)
-    }
+    cond do
+      not Process.alive?(invocation.owner) or AbortSignal.aborted?(invocation.signal) ->
+        {:error, :aborted}
 
-    safe_host_invoke(
-      fn name, params ->
-        if is_function(fun, 3), do: fun.(name, params, context), else: fun.(name, params)
-      end,
-      tool,
-      params_json
-    )
+      expired?(invocation.deadline) ->
+        {:error, :timeout}
+
+      true ->
+        context = Map.take(invocation, [:owner, :deadline, :signal, :parent_intent_scope])
+
+        safe_host_invoke(
+          fn name, params ->
+            if is_function(fun, 3), do: fun.(name, params, context), else: fun.(name, params)
+          end,
+          tool,
+          params_json
+        )
+    end
   end
 
   defp host_error_text(reason) when is_binary(reason), do: reason
@@ -679,13 +729,38 @@ defmodule CodingAgent.Wasm.SidecarSession do
     }
   end
 
-  defp reply_pending(nil, _reply), do: :ok
-
-  defp reply_pending(from, reply) do
-    GenServer.reply(from, reply)
-  rescue
-    _ -> :ok
+  defp discover_metadata(state) do
+    %{
+      host: :wasm,
+      session_hash: hash_value(state.session_id),
+      cwd_hash: hash_value(state.cwd)
+    }
   end
+
+  defp finish_invocation(state, reason) do
+    invocation = state.invocation
+    AbortSignal.unsubscribe(invocation.signal)
+
+    if reason != :response do
+      LemonCore.Telemetry.emit(
+        [:lemon, :wasm, :invoke, :stop],
+        %{duration_ms: now_ms() - invocation.started_at_ms, ok: false},
+        Map.put(discover_metadata(state), :tool_hash, hash_value(invocation.tool))
+      )
+    end
+
+    %{state | invocation: nil}
+  end
+
+  defp request_deadline(:infinity, _default), do: :infinity
+  defp request_deadline(timeout, _default) when is_integer(timeout), do: now_ms() + timeout
+  defp request_deadline(_timeout, default), do: now_ms() + default
+
+  defp remaining_timeout(:infinity), do: :infinity
+  defp remaining_timeout(deadline), do: max(deadline - now_ms(), 0)
+
+  defp expired?(:infinity), do: false
+  defp expired?(deadline), do: now_ms() >= deadline
 
   defp now_ms, do: System.monotonic_time(:millisecond)
 

@@ -1,6 +1,6 @@
 defmodule CodingAgent.ProcessSession do
   @moduledoc """
-  GenServer that manages a single background process via a Port.
+  GenServer that owns a background or one-shot OS process via a Port.
 
   Features:
   - Rolling log buffer bounded by line count and retained bytes, split on
@@ -12,6 +12,11 @@ defmodule CodingAgent.ProcessSession do
     session terminates while its root is still running (owner death does the same)
   - Exit status tracking
   - Integration with ProcessStore for persistence
+
+  One-shot sessions relay raw Port events to their monitored caller without a
+  durable tail or artifact. They share this owner's shutdown and group cleanup
+  path with background sessions. Workload reconciliation is event-driven (root
+  exit, explicit cancellation and boot recovery), not a periodic host `ps` scan.
 
   ## Output capture
 
@@ -52,6 +57,7 @@ defmodule CodingAgent.ProcessSession do
   alias CodingAgent.ProcessStore
   alias LemonCore.TerminalBackends
   alias LemonCore.TerminalBackends.{Docker, Ssh}
+  alias LemonCore.TerminalBackends.Docker.Sandbox
 
   @default_max_log_lines 1000
   # A line longer than this (for example `\r` progress output with no
@@ -185,7 +191,57 @@ defmodule CodingAgent.ProcessSession do
 
   # Server Callbacks
 
+  @doc false
+  def start_oneshot(path, port_opts, use_pty \\ false) do
+    ref = make_ref()
+
+    spec = %{
+      id: ref,
+      restart: :temporary,
+      start:
+        {GenServer, :start_link, [__MODULE__, {:oneshot, self(), ref, path, port_opts, use_pty}]}
+    }
+
+    case DynamicSupervisor.start_child(CodingAgent.ProcessManager, spec) do
+      {:ok, pid} ->
+        receive do
+          {^ref, port, os_pid} -> {port, os_pid, pid}
+        end
+
+      {:error, error} when is_exception(error) ->
+        raise error
+
+      {:error, _reason} ->
+        raise "one-shot process owner could not start"
+    end
+  end
+
+  @doc false
+  def stop_oneshot(pid), do: stop_session(pid)
+
   @impl true
+  def init({:oneshot, owner, ref, path, opts, use_pty}) do
+    Process.flag(:trap_exit, true)
+    if use_pty, do: LemonCore.NativeProcess.unsupported!()
+    port = LemonCore.NativeProcess.open({:spawn_executable, path}, opts)
+    os_pid = get_os_pid(port)
+    send(owner, {ref, port, os_pid})
+
+    {:ok,
+     %{
+       mode: :oneshot,
+       owner: owner,
+       owner_monitor: Process.monitor(owner),
+       port: port,
+       os_pid: os_pid
+     }}
+  rescue
+    error -> {:stop, error}
+  catch
+    kind, reason ->
+      {:stop, RuntimeError.exception("#{kind}: #{inspect(reason)}")}
+  end
+
   def init({process_id, opts}) do
     # Trap exits so `terminate/2` runs on supervisor shutdown and stops the group.
     Process.flag(:trap_exit, true)
@@ -229,7 +285,8 @@ defmodule CodingAgent.ProcessSession do
     command = Keyword.fetch!(opts, :command)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     env = Keyword.get(opts, :env, %{})
-    backend = Keyword.get(opts, :backend, :local)
+    {:ok, backend} = Sandbox.backend(opts)
+    {:ok, policy} = Sandbox.policy(opts)
     terminal_capabilities = TerminalBackends.capabilities(backend)
     max_log_lines = limits.max_log_lines
     timeout_ms = Keyword.get(opts, :timeout_ms)
@@ -245,6 +302,7 @@ defmodule CodingAgent.ProcessSession do
           cwd: cwd,
           env: env,
           backend: backend,
+          tool_policy: %{sandbox: policy.sandbox},
           terminal_capabilities: terminal_capabilities,
           max_log_lines: max_log_lines,
           full_output_path: output_path,
@@ -275,10 +333,19 @@ defmodule CodingAgent.ProcessSession do
       end
 
     # Start the OS process via Port
-    {port, stdin_path} =
+    {port, stdin_path, broker} =
       try do
         if before_start = Keyword.get(opts, :before_start), do: before_start.()
-        start_port(command, cwd, env, backend)
+        broker = if policy.sandbox, do: Sandbox.start()
+
+        try do
+          {port, stdin_path} = start_port(command, cwd, env, backend, broker)
+          {port, stdin_path, broker}
+        rescue
+          exception ->
+            Sandbox.stop(broker)
+            reraise exception, __STACKTRACE__
+        end
       rescue
         _exception -> failed_start(process_id, opts, output_path, output_file)
       catch
@@ -322,11 +389,11 @@ defmodule CodingAgent.ProcessSession do
       workload_identity: workload_identity,
       root_exited: false,
       root_exit_code: nil,
-      workload_timer: nil,
       command: command,
       cwd: cwd,
       env: env,
       backend: backend,
+      broker: broker,
       terminal_capabilities: terminal_capabilities,
       status: :running,
       exit_code: nil,
@@ -459,9 +526,6 @@ defmodule CodingAgent.ProcessSession do
     if state.status in [:running, :killing, :lost] and state.os_pid do
       {reply, state} = request_workload_stop(state, signal, :canceled)
 
-      if reply == :ok and signal == :sigterm,
-        do: Process.send_after(self(), :kill_after_grace, 2_000)
-
       {:reply, reply, state}
     else
       {:reply, {:error, :process_not_running}, state}
@@ -473,6 +537,29 @@ defmodule CodingAgent.ProcessSession do
   end
 
   @impl true
+  def handle_info({port, {:data, _data}} = event, %{mode: :oneshot, port: port} = state) do
+    send(state.owner, event)
+    {:noreply, state}
+  end
+
+  def handle_info({port, {:exit_status, _code}} = event, %{mode: :oneshot, port: port} = state) do
+    if state.os_pid, do: LemonCore.ProcessGroup.terminate(state.os_pid)
+    send(state.owner, event)
+    {:stop, :normal, %{state | os_pid: nil}}
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, _pid, _reason},
+        %{mode: :oneshot, owner_monitor: ref} = state
+      ) do
+    {:stop, :normal, state}
+  end
+
+  def handle_info({:EXIT, port, reason}, %{mode: :oneshot, port: port} = state) do
+    send(state.owner, {port, {:exit_status, if(reason == :normal, do: 0, else: 1)}})
+    {:stop, :normal, state}
+  end
+
   def handle_info({port, {:data, data}}, %{port: port} = state) do
     state =
       write_artifact(%{state | received_bytes: state.received_bytes + byte_size(data)}, data)
@@ -506,27 +593,8 @@ defmodule CodingAgent.ProcessSession do
     {:noreply, state}
   end
 
-  def handle_info(:reconcile_workload, %{root_exited: true, status: :lost} = state) do
-    state = %{state | workload_timer: nil}
-
-    case owned_workload_status(state) do
-      :terminated -> {:noreply, finish_workload(state)}
-      {_liveness, identity} -> {:noreply, retain_workload(state, identity)}
-    end
-  end
-
   def handle_info(:external_termination_confirmed, %{status: :lost} = state) do
-    if state.workload_timer, do: Process.cancel_timer(state.workload_timer)
     {:stop, :normal, state}
-  end
-
-  def handle_info(:kill_after_grace, state) do
-    if state.status in [:running, :killing, :lost] do
-      {_reply, state} = request_workload_stop(state, :sigkill, :canceled)
-      {:noreply, state}
-    else
-      {:noreply, state}
-    end
   end
 
   def handle_info(:timeout, state) do
@@ -592,6 +660,12 @@ defmodule CodingAgent.ProcessSession do
   end
 
   @impl true
+  def terminate(_reason, %{mode: :oneshot} = state) do
+    if state.os_pid, do: LemonCore.ProcessGroup.terminate(state.os_pid)
+    if Port.info(state.port), do: Port.close(state.port)
+    :ok
+  end
+
   def terminate(_reason, state) do
     try do
       finalize_output(state)
@@ -615,6 +689,7 @@ defmodule CodingAgent.ProcessSession do
 
     unless state.stdin_closed, do: File.close(state.stdin)
     File.rm(state.stdin_path)
+    Sandbox.stop(Map.get(state, :broker))
 
     :ok
   end
@@ -624,7 +699,7 @@ defmodule CodingAgent.ProcessSession do
   # witness for later cancellation rather than silently killed here.
   defp stop_live_workload(%{status: status, root_exited: false, workload_identity: identity})
        when status in [:running, :killing] and is_map(identity) do
-    LemonCore.ProcessGroup.signal_workload_group(identity, :sigkill, false)
+    LemonCore.ProcessGroup.terminate(identity, signal: :sigkill, root_exited: false)
     :ok
   end
 
@@ -722,17 +797,11 @@ defmodule CodingAgent.ProcessSession do
 
     if state.status != :lost, do: ProcessStore.mark_unknown(state.process_id)
 
-    timer =
-      if state.backend == :local and is_map(identity) and not identity.ownership_lost do
-        Process.send_after(self(), :reconcile_workload, 100)
-      end
-
     next = %{
       state
       | status: :lost,
         exit_code: nil,
-        workload_identity: identity,
-        workload_timer: timer
+        workload_identity: identity
     }
 
     if state.status == :lost, do: publish_output(next), else: sync_output(next)
@@ -759,10 +828,9 @@ defmodule CodingAgent.ProcessSession do
   defp remember_workload_members(state), do: state
 
   defp request_workload_stop(state, signal, reason) do
-    case LemonCore.ProcessGroup.signal_workload_group(
-           state.workload_identity,
-           signal,
-           state.root_exited
+    case LemonCore.ProcessGroup.terminate(state.workload_identity,
+           signal: signal,
+           root_exited: state.root_exited
          ) do
       {:ok, identity} ->
         ProcessStore.update_workload_identity(state.process_id, identity, state.root_exited)
@@ -807,7 +875,6 @@ defmodule CodingAgent.ProcessSession do
 
   defp finish_workload(state) do
     state = finalize_output(state)
-    if state.workload_timer, do: Process.cancel_timer(state.workload_timer)
 
     {status, exit_code} =
       cond do
@@ -838,13 +905,12 @@ defmodule CodingAgent.ProcessSession do
       state
       | status: status,
         exit_code: exit_code,
-        completed_at: System.system_time(:second),
-        workload_timer: nil
+        completed_at: System.system_time(:second)
     }
     |> publish_output()
   end
 
-  defp start_port(command, cwd, env, backend) do
+  defp start_port(command, cwd, env, backend, broker) do
     {shell_path, shell_args} = CodingAgent.BashExecutor.get_shell_config()
 
     {executable, args, stderr_to_stdout?} =
@@ -856,7 +922,7 @@ defmodule CodingAgent.ProcessSession do
            false}
 
         :docker ->
-          {Docker.docker_path() || "docker", docker_args(command, cwd, env), true}
+          {Docker.docker_path() || "docker", Docker.args(command, cwd, env, broker), true}
 
         :ssh ->
           {Ssh.ssh_path() || "ssh", Ssh.args(command, env), true}
@@ -927,61 +993,6 @@ defmodule CodingAgent.ProcessSession do
 
   defp maybe_stderr_to_stdout(port_opts, true), do: [:stderr_to_stdout | port_opts]
   defp maybe_stderr_to_stdout(port_opts, false), do: port_opts
-
-  defp docker_args(command, cwd, env) do
-    workspace = docker_workspace(cwd)
-
-    [
-      "run",
-      "--rm",
-      "-i",
-      "--pull",
-      "never",
-      "--network",
-      Docker.network(),
-      "--memory",
-      Docker.memory(),
-      "--cpus",
-      Docker.cpus(),
-      "--pids-limit",
-      Docker.pids_limit(),
-      "--cap-drop",
-      "ALL",
-      "--security-opt",
-      "no-new-privileges",
-      "--workdir",
-      "/workspace",
-      "--volume",
-      "#{workspace}:/workspace"
-    ] ++
-      docker_read_only_args() ++
-      docker_tmpfs_args() ++
-      docker_env_args(env) ++
-      [
-        Docker.image(),
-        "/bin/sh",
-        "-lc",
-        command
-      ]
-  end
-
-  defp docker_workspace(nil), do: File.cwd!()
-  defp docker_workspace(""), do: File.cwd!()
-  defp docker_workspace(cwd), do: Path.expand(cwd)
-
-  defp docker_read_only_args do
-    if Docker.read_only_rootfs?(), do: ["--read-only"], else: []
-  end
-
-  defp docker_tmpfs_args do
-    Enum.flat_map(Docker.tmpfs_mounts(), fn mount ->
-      ["--tmpfs", mount]
-    end)
-  end
-
-  defp docker_env_args(env) do
-    Enum.flat_map(env, fn {k, v} -> ["--env", "#{k}=#{v}"] end)
-  end
 
   defp command_with_cwd(command, nil), do: command
   defp command_with_cwd(command, ""), do: command
@@ -1262,6 +1273,7 @@ defmodule CodingAgent.ProcessSession do
 
   defp publish_output(state) do
     :ets.insert(state.tail_table, {:snapshot, state})
+    ProcessStore.notify_change(state.process_id)
     state
   end
 

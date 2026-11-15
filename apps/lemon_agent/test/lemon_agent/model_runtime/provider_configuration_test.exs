@@ -43,6 +43,34 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
     %{project: project, config_path: Path.join(project, ".lemon/config.toml")}
   end
 
+  test "contended configuration preserves its redacted error and original bytes", ctx do
+    original = "# leave this file unchanged while another writer owns it\n"
+    File.write!(ctx.config_path, original)
+    lock = {{ProviderConfiguration, ctx.config_path}, self()}
+    assert :global.set_lock(lock, [node()], 0)
+
+    params = %{
+      "action" => "fallback.add",
+      "provider" => "anthropic",
+      "apply" => true,
+      "scope" => "project",
+      "projectDir" => ctx.project
+    }
+
+    try do
+      contender = Task.async(fn -> ProviderConfiguration.configure(params) end)
+
+      assert {:error, :configuration_failed, "Provider routing configuration failed"} =
+               Task.await(contender, 10_000)
+
+      assert File.read!(ctx.config_path) == original
+    after
+      :global.del_lock(lock, [node()])
+    end
+
+    assert {:ok, %{"applied" => true}} = ProviderConfiguration.configure(params)
+  end
+
   test "adds and removes fallbacks while preserving unrelated comments", ctx do
     File.write!(ctx.config_path, """
     # keep this operator note

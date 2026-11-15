@@ -25,10 +25,6 @@ defmodule LemonOmp.Rpc do
           | {:event, String.t(), map()}
           | {:malformed, atom()}
 
-  @doc "Encode a command (map with string keys) as one JSONL line."
-  @spec encode(map()) :: iodata()
-  def encode(command) when is_map(command), do: [Jason.encode_to_iodata!(command), ?\n]
-
   @doc "Build a command map; `id` correlates the response."
   @spec command(String.t(), String.t(), map()) :: map()
   def command(type, id, fields \\ %{}) when is_binary(type) and is_binary(id) do

@@ -282,9 +282,12 @@ defmodule CodingAgent.Session.Planning do
     plan? = plan["mode"] == "plan"
     :atomics.put(context.gate, 1, if(plan?, do: 1, else: 0))
 
-    if plan?,
-      do: plan_tools(base_tools, Map.merge(context, plan_paths(session, plan))),
-      else: base_tools
+    guarded =
+      if plan?,
+        do: plan_tools(base_tools, Map.merge(context, plan_paths(session, plan))),
+        else: base_tools
+
+    CodingAgent.ToolDialects.apply(guarded, Map.get(context, :dialect_opts, []))
   end
 
   @doc """
@@ -323,13 +326,17 @@ defmodule CodingAgent.Session.Planning do
         runtime_context(state, self())
       )
 
-    prompt =
-      system_prompt(state.base_system_prompt || state.system_prompt || "", state.session_manager)
+    prompt = CodingAgent.Session.PromptJournal.planning_prompt(state)
 
     if tools != state.tools, do: :ok = LemonAgent.Agent.set_tools(state.agent, tools)
 
     if prompt != state.system_prompt,
-      do: :ok = LemonAgent.Agent.set_system_prompt(state.agent, prompt)
+      do:
+        :ok =
+          LemonAgent.Agent.set_system_prompt(
+            state.agent,
+            CodingAgent.Session.PromptJournal.blocks(state, prompt)
+          )
 
     %{state | tools: tools, system_prompt: prompt}
   end
@@ -338,6 +345,11 @@ defmodule CodingAgent.Session.Planning do
   def runtime_context(state, session_pid) do
     %{
       gate: state.plan_gate,
+      dialect_opts:
+        [
+          model: Map.get(state, :model),
+          settings_manager: Map.get(state, :settings_manager)
+        ] ++ Keyword.take(Map.get(state, :tool_opts) || [], [:vendor_tool_dialects]),
       cwd: state.cwd,
       session_pid: session_pid,
       session_id: state.session_manager.header.id,
@@ -401,7 +413,7 @@ defmodule CodingAgent.Session.Planning do
 
         if decision == :approve and state.is_streaming do
           LemonAgent.Agent.steer(state.agent, approved_message(path),
-            system_prompt: state.system_prompt
+            system_prompt: CodingAgent.Session.PromptJournal.blocks(state)
           )
         end
 

@@ -24,9 +24,9 @@ leader), so abort, timeout, caller death and session termination signal the whol
 group: SIGTERM, a bounded grace period, then SIGKILL until the group is empty.
 That reaches backgrounded `cmd &` children whose parent shell already exited and
 was reparented to init, and processes forked during teardown, none of which a
-`pgrep -P` descendant walk can see. The `pgrep -P` walk remains only for the
-direct-executor path as a fallback for descendants that deliberately left the
-group (for example behind a PTY wrapper's session). A process that calls
+`pgrep -P` descendant walk can see. One-shot direct execution and durable
+background execution both use `ProcessSession` ownership and the shared
+`ProcessGroup.terminate/2` implementation. A process that calls
 `setsid` or double-forks into a new session escapes group cleanup; stopping a
 background job that has already lost its root retains its witness instead of
 signalling blindly. When a managed process session terminates (supervisor
@@ -38,6 +38,14 @@ terminal protocol/handle, not a local process-manager backend. They still kill
 on timeout. A local port cannot adopt an ACP client's remote terminal handle;
 supporting detachment there requires a managed terminal backend that retains
 that protocol ownership through session cleanup.
+
+With `sandbox: true` in the effective tool policy, foreground, background and
+named-service commands instead use Docker's enforced network-isolated backend.
+ACP-client routing is bypassed, PTY requests are refused, and host shell-state
+capture is disabled. Restarts retain the sandbox restriction. Docker must be
+available; failure never falls back to local execution. See the operator setup
+and limits in [egress broker](../security/egress-broker.md).
+
 
 ## Working directory, environment and internal URLs
 

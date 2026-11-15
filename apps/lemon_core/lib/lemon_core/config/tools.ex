@@ -12,6 +12,8 @@ defmodule LemonCore.Config.Tools do
 
       [runtime.tools]
       auto_resize_images = true
+      # Experimental vendor-shaped inputs; native policy and execution stay unchanged.
+      vendor_dialects = false
 
       [runtime.tools.web.search]
       enabled = true
@@ -80,6 +82,7 @@ defmodule LemonCore.Config.Tools do
     :bash,
     :lsp,
     :intent_tracing,
+    :vendor_dialects,
     :web,
     :wasm,
     :disclosure,
@@ -163,6 +166,7 @@ defmodule LemonCore.Config.Tools do
           bash: %{git_guard: boolean(), interceptor: %{enabled: boolean(), rules: [map()]}},
           lsp: map(),
           intent_tracing: boolean(),
+          vendor_dialects: boolean(),
           web: %{
             search: web_search_config(),
             fetch: web_fetch_config(),
@@ -196,6 +200,7 @@ defmodule LemonCore.Config.Tools do
       bash: Bash.resolve(Map.get(tools_settings, "bash", %{})),
       lsp: resolve_lsp(tools_settings),
       intent_tracing: Map.get(tools_settings, "intent_tracing", true),
+      vendor_dialects: Map.get(tools_settings, "vendor_dialects", false),
       web: resolve_web(tools_settings),
       wasm: resolve_wasm(tools_settings),
       disclosure: resolve_disclosure(tools_settings),

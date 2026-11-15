@@ -56,6 +56,32 @@ defmodule LemonOmp.ModelsTest do
     end
   end
 
+  test "a timed-out catalog stops its whole process group", %{dir: dir} do
+    executable = Path.join(dir, "catalog-timeout")
+    pid_file = executable <> ".pids"
+
+    File.write!(executable, """
+    #!/bin/sh
+    trap '' TERM
+    /bin/sleep 60 &
+    printf '%s\\n%s\\n' "$$" "$!" > "$0.pids"
+    wait
+    """)
+
+    File.chmod!(executable, 0o700)
+    put_app_env(:executable, executable)
+    put_app_env(:models_timeout_ms, 2_000)
+    task = Task.async(fn -> LemonOmp.models() end)
+    wait_until(fn -> File.exists?(pid_file) and File.read!(pid_file) != "" end)
+    pids = pid_file |> File.read!() |> String.split() |> Enum.map(&String.to_integer/1)
+    kill_on_exit(pids)
+    assert length(pids) == 2
+
+    assert {:error, {:catalog_failed, message}} = Task.await(task, 5_000)
+    assert message =~ "timed out"
+    wait_until(fn -> Enum.all?(pids, &(not os_alive?(&1))) end)
+  end
+
   test "missing executable is not installed" do
     put_app_env(:executable, "/nonexistent/omp")
     assert {:error, :not_installed} = LemonOmp.models()

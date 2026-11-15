@@ -121,9 +121,12 @@ defmodule LemonAgent.Proxy do
     {:ok, stream} = EventStream.start_link()
 
     # Spawn the streaming task
-    Task.start(fn ->
-      run_proxy_stream(model, context, options, stream)
-    end)
+    {:ok, task_pid} =
+      Task.start(fn ->
+        run_proxy_stream(model, context, options, stream)
+      end)
+
+    EventStream.attach_task(stream, task_pid)
 
     stream
   end
@@ -209,6 +212,9 @@ defmodule LemonAgent.Proxy do
         error_message = "Proxy error: #{Exception.message(e)}"
         error_partial = %{state.partial | stop_reason: :error, error_message: error_message}
         EventStream.error(stream, error_partial)
+    catch
+      :throw, {:event_stream_push_failed, _reason} ->
+        :ok
     end
   end
 
@@ -294,7 +300,7 @@ defmodule LemonAgent.Proxy do
   @spec process_proxy_event(map(), map(), EventStream.t()) :: map()
   defp process_proxy_event(%{"type" => "start"}, state, stream) do
     event = {:start, state.partial}
-    EventStream.push(stream, event)
+    EventStream.push!(stream, event)
     state
   end
 
@@ -308,7 +314,7 @@ defmodule LemonAgent.Proxy do
     state = %{state | partial: partial}
 
     event = {:text_start, content_index, partial}
-    EventStream.push(stream, event)
+    EventStream.push!(stream, event)
     state
   end
 
@@ -326,7 +332,7 @@ defmodule LemonAgent.Proxy do
     state = %{state | partial: partial}
 
     event = {:text_delta, content_index, delta, partial}
-    EventStream.push(stream, event)
+    EventStream.push!(stream, event)
     state
   end
 
@@ -353,7 +359,7 @@ defmodule LemonAgent.Proxy do
       end
 
     event = {:text_end, content_index, text, partial}
-    EventStream.push(stream, event)
+    EventStream.push!(stream, event)
     state
   end
 
@@ -367,7 +373,7 @@ defmodule LemonAgent.Proxy do
     state = %{state | partial: partial}
 
     event = {:thinking_start, content_index, partial}
-    EventStream.push(stream, event)
+    EventStream.push!(stream, event)
     state
   end
 
@@ -385,7 +391,7 @@ defmodule LemonAgent.Proxy do
     state = %{state | partial: partial}
 
     event = {:thinking_delta, content_index, delta, partial}
-    EventStream.push(stream, event)
+    EventStream.push!(stream, event)
     state
   end
 
@@ -412,7 +418,7 @@ defmodule LemonAgent.Proxy do
       end
 
     event = {:thinking_end, content_index, thinking, partial}
-    EventStream.push(stream, event)
+    EventStream.push!(stream, event)
     state
   end
 
@@ -438,7 +444,7 @@ defmodule LemonAgent.Proxy do
     state = %{state | partial: partial, partial_json: partial_json}
 
     event = {:tool_call_start, content_index, partial}
-    EventStream.push(stream, event)
+    EventStream.push!(stream, event)
     state
   end
 
@@ -464,7 +470,7 @@ defmodule LemonAgent.Proxy do
     state = %{state | partial: partial, partial_json: partial_json}
 
     event = {:tool_call_delta, content_index, delta, partial}
-    EventStream.push(stream, event)
+    EventStream.push!(stream, event)
     state
   end
 
@@ -481,7 +487,7 @@ defmodule LemonAgent.Proxy do
     state = %{state | partial_json: partial_json}
 
     event = {:tool_call_end, content_index, tool_call, state.partial}
-    EventStream.push(stream, event)
+    EventStream.push!(stream, event)
     state
   end
 
@@ -616,7 +622,11 @@ defmodule LemonAgent.Proxy do
 
   defp encode_context(context) do
     %{
-      systemPrompt: context.system_prompt,
+      systemPrompt:
+        if(is_list(context.system_prompt),
+          do: LemonAi.SystemPrompt.text(context.system_prompt),
+          else: context.system_prompt
+        ),
       messages: Enum.map(context.messages, &encode_message/1),
       tools: Enum.map(context.tools, &encode_tool/1)
     }

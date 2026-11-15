@@ -581,6 +581,7 @@ const KNOWN_EVENTS = new Set<string>([
 	"session.prompt.resolved",
 	"channel.delivery",
 	"omp.session",
+	"session.event",
 	"stream.resync",
 ]);
 

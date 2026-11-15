@@ -1183,6 +1183,51 @@ they must be identical at preview and execution. Deletion removes core-owned
 chat, policy, metadata, index, and history state and verifies each session is
 gone before reporting success.
 
+### Preview-confirm native maintenance
+
+Maintenance is separate from prune: it archives cold, inactive native journals
+into their per-project archive directories and removes only managed orphan
+spill artifacts. It does not delete canonical conversation history.
+
+```bash
+lemon sessions maintain --older-than 30d
+lemon sessions maintain --older-than 2026-01-01 --json
+```
+
+The cutoff accepts the same ages, ISO-8601 dates/times, and positive epoch
+milliseconds as prune. Preview is always the default. Its report contains
+`older_than_ms`, `confirmation_token`, archive/orphan counts, and a bounded,
+redacted `candidates` list of kinds (`archive` or `orphan_artifact`), safe IDs
+and byte counts—not raw paths or journal content. Counts cover the full set,
+even when not every candidate is displayed.
+
+Review the report, then copy its exact epoch-millisecond cutoff and token:
+
+```bash
+lemon sessions maintain \
+  --older-than <preview-older_than_ms> \
+  --confirm <preview-token> \
+  --json
+```
+
+Confirmation rejects relative ages and dates: it requires the exact numeric
+cutoff returned by preview. Tokens remain server-side and bind the full candidate
+set and revisions. Newly created or changed journals/artifacts, changed active
+state, or an expired/missing preview invalidate confirmation. Run and review a
+fresh preview after a mismatch. Mutation failures are not automatically retried;
+partial failures report verified counts without claiming complete success.
+
+Active native sessions are never moved or deleted. Artifacts are retained while
+their native session has a live, active, or archived journal. Only managed spill
+directories for orphaned sessions can be swept; arbitrary external targets and
+symlinks are excluded. Native journal listing uses a metadata index that rebuilds
+automatically if missing or stale; no manual repair command is needed.
+
+The authenticated admin RPC `sessions.maintain` uses `olderThanMs`, `dryRun`
+(default `true`), and optional `confirmToken`. Reports use camelCase keys,
+including `confirmationToken`; the CLI's JSON envelope is `maintenance` with
+snake_case report keys.
+
 ### Verified single-session delete
 
 Single-session deletion requires the exact session key twice:

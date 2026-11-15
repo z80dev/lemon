@@ -1,7 +1,7 @@
 defmodule LemonAi.Auth.OmpTokenTest do
   use ExUnit.Case, async: false
 
-  alias LemonAi.Auth.OmpToken
+  alias LemonAi.Auth.{Cache, OmpToken}
 
   setup do
     dir = Path.join(System.tmp_dir!(), "omp_token_#{System.unique_integer([:positive])}")
@@ -50,8 +50,13 @@ defmodule LemonAi.Auth.OmpTokenTest do
     printf '%s\\n' '#{token}'
     """)
 
+    task = Task.async(fn -> OmpToken.resolve(path) end)
+    assert {:ok, ^token} = Task.await(task)
+    monitor = Process.monitor(task.pid)
+    assert_receive {:DOWN, ^monitor, :process, _, _}
     assert {:ok, ^token} = OmpToken.resolve(path)
-    assert {:ok, ^token} = Task.async(fn -> OmpToken.resolve(path) end) |> Task.await()
+    assert {^token, _expires_at} = Cache.get(cache_key(path))
+    assert :persistent_term.get(cache_key(path), :missing) == :missing
     assert File.read!(count) == "x"
   end
 
@@ -99,6 +104,51 @@ defmodule LemonAi.Auth.OmpTokenTest do
 
     script(path, "printf 'not-a-token'")
     assert {:error, :omp_invalid_token} = OmpToken.resolve(path)
+  end
+
+  test "expired cached entries are replaced without waiting for wall time", %{path: path} do
+    Cache.put(cache_key(path), {jwt(-60), System.system_time(:second) - 60})
+    fresh = jwt(3600)
+    script(path, "printf '%s' '#{fresh}'")
+
+    assert {:ok, ^fresh} = OmpToken.resolve(path)
+    assert {^fresh, _expires_at} = Cache.get(cache_key(path))
+  end
+
+  test "cache owner restart discards the old token and allows a fresh fetch", %{path: path} do
+    original = jwt(1800)
+    script(path, "printf '%s' '#{original}'")
+    assert {:ok, ^original} = OmpToken.resolve(path)
+    assert :ok = Supervisor.terminate_child(LemonAi.Supervisor, Cache)
+
+    try do
+      assert Cache.get(cache_key(path)) == nil
+    after
+      {:ok, _pid} = Supervisor.restart_child(LemonAi.Supervisor, Cache)
+    end
+
+    fresh = jwt(3600)
+    script(path, "printf '%s' '#{fresh}'")
+    assert {:ok, ^fresh} = OmpToken.resolve(path)
+  end
+
+  test "does not create a caller-owned cache when its owner is unavailable", %{
+    path: path,
+    dir: dir
+  } do
+    token = jwt(3600)
+    count = Path.join(dir, "calls")
+    script(path, "printf x >> '#{count}'; printf '%s' '#{token}'")
+    assert :ok = Supervisor.terminate_child(LemonAi.Supervisor, Cache)
+
+    try do
+      assert {:ok, ^token} = OmpToken.resolve(path)
+      assert {:ok, ^token} = OmpToken.resolve(path)
+      assert File.read!(count) == "xx"
+      assert :ets.whereis(:lemon_ai_auth_cache) == :undefined
+    after
+      {:ok, _pid} = Supervisor.restart_child(LemonAi.Supervisor, Cache)
+    end
   end
 
   test "forced refresh waits for an in-flight miss and leaves only the fresh token cached", %{
@@ -190,6 +240,11 @@ defmodule LemonAi.Auth.OmpTokenTest do
 
     script(path, "i=0; while test $i -lt 7000; do printf '0123456789'; i=$((i+1)); done")
     assert {:error, :omp_output_too_large} = OmpToken.resolve(path)
+  end
+
+  defp cache_key(path) do
+    scope = Enum.map(~w(HOME XDG_CONFIG_HOME PI_CODING_AGENT_DIR OMP_PROFILE), &System.get_env/1)
+    {OmpToken, Path.expand(path), scope}
   end
 
   defp jwt(offset) do

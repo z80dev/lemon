@@ -487,10 +487,11 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
   defp convert_messages(model, context, compat) do
     messages = []
+    system_prompt = LemonAi.SystemPrompt.text(context.system_prompt)
 
     # Add system prompt
     messages =
-      if context.system_prompt && context.system_prompt != "" do
+      if system_prompt != "" do
         role =
           if model.reasoning && compat.supports_developer_role do
             "developer"
@@ -498,7 +499,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
             "system"
           end
 
-        [%{"role" => role, "content" => sanitize_surrogates(context.system_prompt)} | messages]
+        [%{"role" => role, "content" => sanitize_surrogates(system_prompt)} | messages]
       else
         messages
       end

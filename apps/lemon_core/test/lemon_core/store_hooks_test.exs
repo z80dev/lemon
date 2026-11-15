@@ -10,17 +10,8 @@ defmodule LemonCore.StoreHooksTest do
 
   alias LemonCore.Store
   alias LemonCore.Store.EtsBackend
+  alias LemonCore.Store.Hooks
   alias LemonCore.Store.ReadCache
-
-  defmodule FakeHistory do
-    @moduledoc false
-    def get(server, session_key, opts), do: [{:fake, server, session_key, opts}]
-  end
-
-  defmodule ExplodingHistory do
-    @moduledoc false
-    def get(_server, _session_key, _opts), do: raise("history provider is down")
-  end
 
   defp start_store(name, opts) do
     spec = Supervisor.child_spec({Store, Keyword.put(opts, :name, name)}, id: name)
@@ -33,6 +24,68 @@ defmodule LemonCore.StoreHooksTest do
   end
 
   describe "finalize_run hooks" do
+    test "registration outlives its caller and a store restart" do
+      name = :store_hooks_caller_restart
+      parent = self()
+      hook = {__MODULE__, :send_to, [parent]}
+      on_exit(fn -> Store.unregister_finalize_run_hook(name, hook) end)
+
+      {caller, monitor} =
+        spawn_monitor(fn -> Store.register_finalize_run_hook(name, hook) end)
+
+      assert_receive {:DOWN, ^monitor, :process, ^caller, :normal}
+      assert Hooks.registered(name, :finalize_run_hooks) == [hook]
+      start_store(name, backend: EtsBackend)
+      finalize(name, "before_restart", %{session_key: "agent:hook-restart:main"})
+      assert_receive {:hook_fired, %{run_id: "before_restart"}}
+
+      stop_supervised!(name)
+      start_store(name, backend: EtsBackend)
+      finalize(name, "after_restart", %{session_key: "agent:hook-restart:main"})
+      assert_receive {:hook_fired, %{run_id: "after_restart"}}
+    end
+
+    test "concurrent registrations and removals do not overwrite other callers" do
+      name = :store_hooks_concurrent
+      parent = self()
+      first = {__MODULE__, :send_to, [parent]}
+      hooks = for index <- 1..16, do: {__MODULE__, :send_to, [{parent, index}]}
+
+      on_exit(fn ->
+        for hook <- [first | hooks], do: Store.unregister_finalize_run_hook(name, hook)
+      end)
+
+      :ok = Store.register_finalize_run_hook(name, first)
+
+      tasks =
+        for hook <- hooks do
+          Task.async(fn ->
+            send(parent, {:ready, self()})
+
+            receive do
+              :register ->
+                Store.register_finalize_run_hook(name, hook)
+                Store.register_finalize_run_hook(name, hook)
+            end
+          end)
+        end
+
+      for _ <- tasks, do: assert_receive({:ready, _pid})
+      for task <- tasks, do: send(task.pid, :register)
+      assert Enum.all?(Task.await_many(tasks), &(&1 == :ok))
+
+      assert [^first | registered] = Hooks.registered(name, :finalize_run_hooks)
+      assert Enum.sort(registered) == Enum.sort(hooks)
+
+      hooks
+      |> Enum.map(fn hook ->
+        Task.async(fn -> Store.unregister_finalize_run_hook(name, hook) end)
+      end)
+      |> Task.await_many()
+
+      assert Hooks.registered(name, :finalize_run_hooks) == [first]
+    end
+
     test "configured hooks receive the finalized run" do
       parent = self()
       hook = fn event -> send(parent, {:hook_fired, event}) end
@@ -127,42 +180,6 @@ defmodule LemonCore.StoreHooksTest do
     end
   end
 
-  describe "run history provider" do
-    test "reads forward to the configured provider" do
-      store =
-        start_store(:store_history_provider,
-          backend: EtsBackend,
-          run_history_provider: {FakeHistory, :fake_server}
-        )
-
-      assert Store.get_run_history(store, "agent:x:main", limit: 3) == [
-               {:fake, :fake_server, "agent:x:main", [limit: 3]}
-             ]
-    end
-
-    test "a store with no provider reports no history instead of failing" do
-      store = start_store(:store_history_none, backend: EtsBackend)
-
-      assert Store.get_run_history(store, "agent:x:main", []) == []
-    end
-
-    test "a provider that raises is isolated from the store" do
-      store =
-        start_store(:store_history_exploding,
-          backend: EtsBackend,
-          run_history_provider: ExplodingHistory
-        )
-
-      log =
-        capture_log(fn ->
-          assert Store.get_run_history(store, "agent:x:main", []) == []
-        end)
-
-      assert log =~ "history provider is down"
-      assert Store.ping(store) == :ok
-    end
-  end
-
   describe "sessions_index coherence" do
     test "a cached read reflects later finalizations" do
       store = start_store(:store_sessions_index, backend: EtsBackend)
@@ -230,11 +247,25 @@ defmodule LemonCore.StoreHooksTest do
 
       :ok = Store.register_cached_table(name, :sticky_index)
       assert ReadCache.cached?(name, :sticky_index)
+      old_tables = ReadCache.tables(name)
+      assert Enum.all?(old_tables, fn {_domain, table} -> :ets.info(table, :owner) == pid end)
 
       stop_supervised!(name)
       refute Process.alive?(pid)
 
-      start_supervised!(Supervisor.child_spec({Store, name: name, backend: EtsBackend}, id: name))
+      restarted =
+        start_supervised!(
+          Supervisor.child_spec({Store, name: name, backend: EtsBackend}, id: name)
+        )
+
+      new_tables = ReadCache.tables(name)
+      refute new_tables == old_tables
+
+      assert Enum.all?(new_tables, fn {_domain, table} ->
+               :ets.info(table, :owner) == restarted
+             end)
+
+      assert :sticky_index in Hooks.published(name, :cached_tables)
       assert ReadCache.cached?(name, :sticky_index)
     end
   end
