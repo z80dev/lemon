@@ -26,7 +26,7 @@ defmodule CodingAgent.ProcessAdmissionTest do
       start_supervised!(
         {LaneQueue,
          name: __MODULE__.Queue,
-         caps: %{background_exec: 2, main: 1},
+         caps: %{background_exec: 2},
          background_pending_limit: 1,
          task_supervisor: task_sup}
       )
@@ -1209,7 +1209,7 @@ defmodule CodingAgent.ProcessAdmissionTest do
     assert ProcessManager.admission_counts().occupied == 0
   end
 
-  test "invalid background limits fail explicitly while unrelated lanes keep callback semantics",
+  test "invalid background limits fail explicitly while launch callbacks keep their semantics",
        context do
     for {key, value} <- [
           background_process_limit: 0,
@@ -1220,7 +1220,7 @@ defmodule CodingAgent.ProcessAdmissionTest do
       opts = [
         {key, value},
         name: __MODULE__.Invalid,
-        caps: %{main: 1},
+        caps: %{background_exec: 1},
         task_supervisor: context.task_sup
       ]
 
@@ -1238,8 +1238,9 @@ defmodule CodingAgent.ProcessAdmissionTest do
     end
 
     assert {:ok, :callback_finished} =
-             LaneQueue.run(context.queue, :main, fn -> :callback_finished end)
+             LaneQueue.run(context.queue, :background_exec, fn -> :callback_finished end)
 
-    assert {:ok, :next_callback} = LaneQueue.run(context.queue, :main, fn -> :next_callback end)
+    assert {:ok, :next_callback} =
+             LaneQueue.run(context.queue, :background_exec, fn -> :next_callback end)
   end
 end
