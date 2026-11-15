@@ -760,6 +760,14 @@ unreadable session is an error, never a silently empty conversation. A torn
 last append is recovered; completed corrupt lines remain errors. Interrupted
 tool calls receive an explicit interrupted-result marker, not a fabricated
 successful result.
+Each live session owns one raw append descriptor, closed at stop. Turn-end
+`Session.save/1` appends a navigation/checkpoint marker and calls `file:datasync`;
+it never rewrites prior history. Latest markers override legacy header
+checkpoints, and header-only journals remain readable. Resume shares one parsed
+journal across execution-authority validation and session initialization.
+Migration and torn-tail repair still use atomic snapshots: the temporary file
+is synced before rename, then the containing directory is synced. Ordinary
+turn barriers use datasync (not Darwin device-wide F_FULLFSYNC).
 Native identities remain unchanged in their headers; oversized or path-unsafe
 identities use deterministic portable journal filenames inside the session directory.
 Usage checkpoints preserve response costs and cache-write durations as well as

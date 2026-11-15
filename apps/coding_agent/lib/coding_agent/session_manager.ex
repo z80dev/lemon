@@ -4,6 +4,9 @@ defmodule CodingAgent.SessionManager do
 
   Sessions are stored as JSONL files where each line is a JSON entry.
   The first entry is always a SessionHeader, followed by session entries.
+  Navigation checkpoints are appended outside the entry tree; the latest marker
+  wins on reload. Old header-only checkpoints remain supported. A live session
+  owns one raw append descriptor and flushes turn checkpoints with datasync.
 
   ## Tree Structure
 
@@ -277,7 +280,9 @@ defmodule CodingAgent.SessionManager do
               entries_rev: [],
               by_id: %{},
               leaf_id: nil,
-              file_path: nil
+              file_path: nil,
+              append_device: nil,
+              needs_snapshot: true
   end
 
   # ============================================================================
@@ -319,7 +324,8 @@ defmodule CodingAgent.SessionManager do
   @spec load_from_file(String.t()) :: {:ok, Session.t()} | {:error, term()}
   def load_from_file(path) do
     with {:ok, content} <- File.read(path),
-         {:ok, {header, entries}} <- parse_jsonl(content),
+         {:ok, {header, raw_entries}} <- parse_jsonl(content),
+         {header, entries} <- restore_checkpoints(header, raw_entries),
          {:ok, migrated_entries} <- migrate_to_current_version(header.version, entries) do
       by_id = Map.new(migrated_entries, fn entry -> {entry.id, entry} end)
 
@@ -333,7 +339,10 @@ defmodule CodingAgent.SessionManager do
          header: %{header | version: @current_version},
          entries_rev: Enum.reverse(migrated_entries),
          by_id: by_id,
-         leaf_id: leaf_id
+         leaf_id: leaf_id,
+         file_path: path,
+         needs_snapshot:
+           header.version != @current_version or not String.ends_with?(content, "\n")
        }}
     end
   end
@@ -367,7 +376,9 @@ defmodule CodingAgent.SessionManager do
     temp_path = atomic_temp_path(path)
 
     with :ok <- File.write(temp_path, content, [:write, :binary, :exclusive]),
-         :ok <- File.rename(temp_path, path) do
+         :ok <- LemonCore.Durable.sync_file(temp_path),
+         :ok <- File.rename(temp_path, path),
+         :ok <- LemonCore.Durable.sync_directory(Path.dirname(path)) do
       :ok
     else
       {:error, reason} ->
@@ -383,14 +394,61 @@ defmodule CodingAgent.SessionManager do
 
   @doc """
   Enable synchronous incremental persistence for a live session.
-  The initial atomic snapshot also repairs an interrupted trailing append.
+  New, migrated and torn-tail journals receive an atomic snapshot first.
   """
   @spec persist(Session.t(), String.t()) :: Session.t()
+  def persist(%Session{append_device: device, file_path: path} = session, path)
+      when not is_nil(device), do: session
+
   def persist(%Session{} = session, path) do
-    case save_to_file(path, session) do
-      :ok -> %{session | file_path: path}
+    result =
+      if session.needs_snapshot or session.file_path != path,
+        do: save_to_file(path, session),
+        else: :ok
+
+    with :ok <- result,
+         {:ok, device} <- :file.open(path, [:append, :raw, :binary]) do
+      %{session | file_path: path, append_device: device, needs_snapshot: false}
+    else
       {:error, reason} -> raise File.Error, reason: reason, action: "persist session", path: path
     end
+  end
+
+  @doc "Appends the latest navigation checkpoint and flushes the turn's journal data."
+  def checkpoint(%Session{append_device: nil}), do: {:error, :not_persisted}
+
+  def checkpoint(%Session{} = session) do
+    marker =
+      Jason.encode!(%{
+        "type" => "checkpoint",
+        "activeLeafId" => session.leaf_id,
+        "checkpointEntryCount" => map_size(session.by_id)
+      })
+
+    with :ok <- :file.write(session.append_device, [marker, "\n"]),
+         :ok <- :file.datasync(session.append_device),
+         do: :ok
+  end
+
+  @doc "Closes the live journal descriptor; raw descriptors also close when their owner exits."
+  def close(%Session{append_device: nil}), do: :ok
+  def close(%Session{append_device: device}), do: :file.close(device)
+
+  defp restore_checkpoints(header, entries) do
+    {header, reversed} =
+      Enum.reduce(entries, {header, []}, fn
+        %{"type" => "checkpoint"} = marker, {header, acc} ->
+          {%{
+             header
+             | active_leaf_id: marker["activeLeafId"],
+               checkpoint_entry_count: marker["checkpointEntryCount"]
+           }, acc}
+
+        entry, {header, acc} ->
+          {header, [entry | acc]}
+      end)
+
+    {header, Enum.reverse(reversed)}
   end
 
   @doc "Restores durable execution authority independently of the selected history branch."
@@ -509,21 +567,20 @@ defmodule CodingAgent.SessionManager do
   Return the number of entries in the session efficiently.
   """
   @spec entry_count(Session.t()) :: non_neg_integer()
-  def entry_count(%Session{entries_rev: rev}), do: length(rev)
+  def entry_count(%Session{by_id: by_id}), do: map_size(by_id)
 
   @doc """
   Add entry with auto-generated id, set parent_id to current leaf.
   """
   @spec append_entry(Session.t(), SessionEntry.t()) :: Session.t()
   def append_entry(%Session{} = session, %SessionEntry{} = entry) do
-    existing_ids = Map.keys(session.by_id)
-    new_id = entry.id || generate_id(existing_ids)
+    new_id = entry.id || generate_unique_id(session.by_id)
     parent_id = entry.parent_id || session.leaf_id
 
     entry = %{entry | id: new_id, parent_id: parent_id}
 
-    if session.file_path do
-      case append_to_file(session.file_path, entry) do
+    if session.append_device do
+      case :file.write(session.append_device, [encode_entry(entry), "\n"]) do
         :ok ->
           :ok
 
@@ -536,7 +593,8 @@ defmodule CodingAgent.SessionManager do
       session
       | entries_rev: [entry | session.entries_rev],
         by_id: Map.put(session.by_id, new_id, entry),
-        leaf_id: new_id
+        leaf_id: new_id,
+        needs_snapshot: session.needs_snapshot or is_nil(session.append_device)
     }
   end
 
@@ -639,7 +697,18 @@ defmodule CodingAgent.SessionManager do
   @spec set_leaf_id(Session.t(), String.t() | nil) :: Session.t()
   def set_leaf_id(%Session{} = session, id) do
     session = %{session | leaf_id: id}
-    if session.file_path, do: persist(session, session.file_path), else: session
+
+    if session.append_device do
+      case checkpoint(session) do
+        :ok ->
+          session
+
+        {:error, reason} ->
+          raise File.Error, reason: reason, action: "checkpoint session", path: session.file_path
+      end
+    else
+      %{session | needs_snapshot: true}
+    end
   end
 
   @doc """
@@ -980,14 +1049,13 @@ defmodule CodingAgent.SessionManager do
   """
   @spec generate_id([String.t()]) :: String.t()
   def generate_id(existing_ids) when is_list(existing_ids) do
-    existing_set = MapSet.new(existing_ids)
-    generate_unique_id(existing_set)
+    generate_unique_id(Map.new(existing_ids, &{&1, true}))
   end
 
   defp generate_unique_id(existing_set) do
     id = :crypto.strong_rand_bytes(@id_length) |> Base.encode16(case: :lower) |> binary_part(0, 8)
 
-    if MapSet.member?(existing_set, id) do
+    if Map.has_key?(existing_set, id) do
       generate_unique_id(existing_set)
     else
       id

@@ -527,14 +527,13 @@ keys for portable append-only files.
 
 `LemonCore.Durable` owns stable-storage barriers. JSONL `sync/1` flushes every
 table file and then its directory; acknowledgement requires every actual
-barrier to succeed. On macOS, Python 3 is required for the packaged
-`priv/durable_sync.py` helper, which opens a no-follow descriptor, performs
-`fsync` and Darwin `F_FULLFSYNC` for both files and directories. Paths are
-literal argv, never shell commands; raw helper errors/paths are not returned.
-Missing prerequisites, wrong descriptor kinds or refused/unsupported filesystem
-barriers fail closed. There is no ordinary macOS `sync(8)` or weaker fallback.
-GNU coreutils synchronous per-directory syncing remains the supported
-non-Darwin Unix path.
+barrier to succeed. Directories use OTP 29 raw directory descriptors and native
+`file:sync`, without Python or GNU coreutils. Darwin directory sync provides
+`F_BARRIERFSYNC`, not device-wide `F_FULLFSYNC`. File sync retains the packaged
+Python 3 helper and `F_FULLFSYNC` on Darwin: Store journals, native-process
+cleanup ledgers, paired-eval cleanup manifests and coding-session replacement
+snapshots retain their stable-content guarantees. Paths are literal argv,
+never shell commands; failed barriers remain errors.
 
 ## Event Bus
 

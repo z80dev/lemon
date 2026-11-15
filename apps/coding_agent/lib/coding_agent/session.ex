@@ -422,6 +422,16 @@ defmodule CodingAgent.Session do
   def validate_execution_options(opts) when is_list(opts) do
     alias LemonCore.{ExecutionContext, ToolPolicy}
 
+    opts =
+      if Keyword.has_key?(opts, :loaded_session) or is_nil(opts[:session_file]) do
+        opts
+      else
+        case CodingAgent.SessionManager.load_from_file(opts[:session_file]) do
+          {:ok, session} -> Keyword.put(opts, :loaded_session, session)
+          {:error, _} -> opts
+        end
+      end
+
     with {:ok, context} <- resolve_session_execution_context(opts),
          {:ok, context} <- restrict_durable_execution_context(context, opts),
          cwd <- Keyword.get(opts, :cwd) || context.workspace_scope.root || File.cwd!(),
@@ -461,7 +471,13 @@ defmodule CodingAgent.Session do
         {:ok, context}
 
       path ->
-        case CodingAgent.SessionManager.load_from_file(path) do
+        loaded =
+          case Keyword.fetch(opts, :loaded_session) do
+            {:ok, session} -> {:ok, session}
+            :error -> CodingAgent.SessionManager.load_from_file(path)
+          end
+
+        case loaded do
           {:ok, session} ->
             with {:ok, stored} <- CodingAgent.SessionManager.execution_context(session) do
               if is_nil(stored) do
@@ -1899,6 +1915,7 @@ defmodule CodingAgent.Session do
     _ = CompactionManager.cancel_compaction_tasks(state, :session_terminated)
     _ = ManualOperation.cancel(state, :session_terminated)
     close_browser_session(state.tool_opts || [])
+    if state.session_manager, do: CodingAgent.SessionManager.close(state.session_manager)
 
     # Approvals this session still has pending can never be used once it is
     # gone: expire them (denied) now instead of leaving them answerable.
