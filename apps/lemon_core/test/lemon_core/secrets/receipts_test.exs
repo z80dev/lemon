@@ -5,7 +5,7 @@ defmodule LemonCore.Secrets.ReceiptsTest do
   alias LemonCore.Secrets
   alias LemonCore.Secrets.Receipts
   alias LemonCore.Store
-  alias LemonCore.Store.JsonlBackend
+  alias LemonCore.Store.SqliteBackend
 
   @moduletag :tmp_dir
 
@@ -188,18 +188,28 @@ defmodule LemonCore.Secrets.ReceiptsTest do
     assert row(ctx, "token") == entry
   end
 
-  test "JSONL reload preserves ciphertext, proof and intent comparison", ctx do
+  test "SQLite reload preserves ciphertext, proof and intent comparison", ctx do
     fixed = Keyword.put(ctx.opts, :operation_id, "reload")
     assert {:ok, _} = Secrets.set("token", "value", fixed)
     entry = row(ctx, "token")
-    path = Path.join(ctx.dir, "jsonl")
-    assert {:ok, backend} = JsonlBackend.init(path: path)
+    path = Path.join(ctx.dir, "receipts.sqlite3")
+    assert {:ok, backend} = SqliteBackend.init(path: path)
 
-    assert {:ok, _backend} =
-             JsonlBackend.put(backend, Secrets.table(), {ctx.owner, "token"}, entry)
+    try do
+      assert {:ok, _backend} =
+               SqliteBackend.put(backend, Secrets.table(), {ctx.owner, "token"}, entry)
+    after
+      :ok = SqliteBackend.close(backend)
+    end
 
-    assert {:ok, reloaded} = JsonlBackend.init(path: path)
-    assert {:ok, entry, _} = JsonlBackend.get(reloaded, Secrets.table(), {ctx.owner, "token"})
+    assert {:ok, reloaded} = SqliteBackend.init(path: path)
+
+    try do
+      assert {:ok, ^entry, _} =
+               SqliteBackend.get(reloaded, Secrets.table(), {ctx.owner, "token"})
+    after
+      :ok = SqliteBackend.close(reloaded)
+    end
 
     for representation <- [entry, entry |> Jason.encode!() |> Jason.decode!()] do
       assert :ok = Store.put(Secrets.table(), {ctx.owner, "token"}, representation)

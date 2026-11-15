@@ -95,7 +95,7 @@ partial output instead surfaces that output and the original error.
 
 ## In this repo
 
-`test/compliance/` runs the kit against the platform's own implementations — three
+`test/compliance/` runs the kit against the platform's own implementations — two
 store backends, two channel adapters, and the local memory provider. Additional
 compliance suites should live with their implementations where dependency direction
 requires it. Helper self-tests also cover missing optional-dependency diagnostics

@@ -7,9 +7,8 @@ defmodule LemonCore.Store.Backend do
   serialises access, the backend owns the bytes. Backends are plain modules —
   they have no process, no supervision and no lifecycle beyond `c:init/1`.
 
-  `LemonCore.Store.EtsBackend` (ephemeral), `LemonCore.Store.SqliteBackend`
-  (durable) and `LemonCore.Store.JsonlBackend` (append-only files) are the
-  built-ins.
+  `LemonCore.Store.EtsBackend` (ephemeral) and `LemonCore.Store.SqliteBackend`
+  (durable) are the built-ins.
 
   ## Contract
 

@@ -2,7 +2,7 @@ defmodule LemonCore.Secrets.RevisionTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.{Clock, Secrets, Store}
-  alias LemonCore.Store.{EtsBackend, JsonlBackend}
+  alias LemonCore.Store.{EtsBackend, SqliteBackend}
 
   defmodule TestKey do
     use LemonCore.Secrets.KeyProvider
@@ -404,44 +404,51 @@ defmodule LemonCore.Secrets.RevisionTest do
   test "a durable storage restart rejects the pre-restart revision", ctx do
     path = temporary_store_path()
     store = :secrets_revision_durable_store
-    start_store(store, JsonlBackend, path: path)
+    start_store(store, SqliteBackend, path: path)
     opts = Keyword.put(ctx.opts, :store, store)
-    assert {:ok, _} = Secrets.set("credential", "original", opts)
-    assert {:ok, "original", revision} = Secrets.get_with_revision("credential", opts)
-    assert :ok = stop_supervised(store)
-    start_store(store, JsonlBackend, path: path)
-    assert {:ok, "original", current_revision} = Secrets.get_with_revision("credential", opts)
-    refute current_revision == revision
 
-    assert {:error, :stale_revision} =
-             Secrets.set_if_revision("credential", "late", revision, opts)
+    try do
+      assert {:ok, _} = Secrets.set("credential", "original", opts)
+      assert {:ok, "original", revision} = Secrets.get_with_revision("credential", opts)
+      assert :ok = stop_sqlite_store(store)
+      start_store(store, SqliteBackend, path: path)
+      assert {:ok, "original", current_revision} = Secrets.get_with_revision("credential", opts)
+      refute current_revision == revision
 
-    assert {:ok, _} = Secrets.set_if_revision("credential", "refreshed", current_revision, opts)
+      assert {:error, :stale_revision} =
+               Secrets.set_if_revision("credential", "late", revision, opts)
+
+      assert {:ok, _} = Secrets.set_if_revision("credential", "refreshed", current_revision, opts)
+    after
+      stop_sqlite_store(store)
+    end
   end
 
-  test "an actual JSONL append failure cannot acknowledge or durably replace a refresh", ctx do
+  test "an actual SQLite write failure cannot acknowledge or durably replace a refresh", ctx do
     path = temporary_store_path()
-    store = :secrets_revision_append_failure_store
-    start_store(store, JsonlBackend, [path: path], restart: :temporary)
+    store = :secrets_revision_write_failure_store
+    start_store(store, SqliteBackend, [path: path], restart: :temporary)
     opts = Keyword.put(ctx.opts, :store, store)
-    assert {:ok, _} = Secrets.set("credential", "original", opts)
-    assert {:ok, "original", revision} = Secrets.get_with_revision("credential", opts)
-    wal = Path.join(path, "secrets_v1.jsonl")
-    saved_wal = wal <> ".saved"
-    assert :ok = File.rename(wal, saved_wal)
-    assert :ok = File.mkdir(wal)
 
-    assert {:error, _reason} =
-             Secrets.set_if_revision("credential", "late", revision, opts)
+    try do
+      assert {:ok, _} = Secrets.set("credential", "original", opts)
+      assert {:ok, "original", revision} = Secrets.get_with_revision("credential", opts)
+      conn = :sys.get_state(store).backend_state.conn
+      assert :ok = Exqlite.Sqlite3.execute(conn, "PRAGMA query_only = ON")
 
-    assert {:ok, "original", ^revision} = Secrets.get_with_revision("credential", opts)
-    assert :ok = File.rmdir(wal)
-    assert :ok = File.rename(saved_wal, wal)
-    assert stop_supervised(store) in [:ok, {:error, :not_found}]
-    start_store(store, JsonlBackend, path: path)
-    assert {:ok, "original"} = Secrets.get("credential", opts)
-    assert {:ok, _} = Secrets.set("credential", "recovered-login", opts)
-    assert {:ok, "recovered-login"} = Secrets.get("credential", opts)
+      assert {:error, _reason} =
+               Secrets.set_if_revision("credential", "late", revision, opts)
+
+      assert {:ok, "original", ^revision} = Secrets.get_with_revision("credential", opts)
+      assert :ok = Exqlite.Sqlite3.execute(conn, "PRAGMA query_only = OFF")
+      assert :ok = stop_sqlite_store(store)
+      start_store(store, SqliteBackend, path: path)
+      assert {:ok, "original"} = Secrets.get("credential", opts)
+      assert {:ok, _} = Secrets.set("credential", "recovered-login", opts)
+      assert {:ok, "recovered-login"} = Secrets.get("credential", opts)
+    after
+      stop_sqlite_store(store)
+    end
   end
 
   defp blocked_writer(ctx) do
@@ -464,6 +471,17 @@ defmodule LemonCore.Secrets.RevisionTest do
       )
 
     start_supervised!(spec)
+  end
+
+  defp stop_sqlite_store(name) do
+    case Process.whereis(name) do
+      nil ->
+        :ok
+
+      pid ->
+        :ok = SqliteBackend.close(:sys.get_state(pid).backend_state)
+        stop_supervised!(name)
+    end
   end
 
   defp temporary_store_path do

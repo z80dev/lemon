@@ -1,6 +1,6 @@
 defmodule LemonCli.Setup.ProviderManagementEncryptedTest do
   # Real encryption + real runtime resolver, with an isolated HOME, master key,
-  # JSONL Store and configuration. No credentials or state from the user; Req
+  # SQLite Store and configuration. No credentials or state from the user; Req
   # is a fail-closed test plug, not a live provider validation.
   use ExUnit.Case, async: false
 
@@ -8,7 +8,7 @@ defmodule LemonCli.Setup.ProviderManagementEncryptedTest do
   alias LemonCli.Onboarding.{Providers, Runner}
   alias LemonCli.Setup.ProviderManagement, as: Management
   alias LemonCore.{Config, Secrets, Store}
-  alias LemonCore.Store.JsonlBackend
+  alias LemonCore.Store.SqliteBackend
   alias LemonCli.Setup.ProviderAuth
 
   # Decoder barrier only: storage/encryption remain real. It pauses logout
@@ -73,13 +73,15 @@ defmodule LemonCli.Setup.ProviderManagementEncryptedTest do
            [
              [
                name: Store,
-               backend: JsonlBackend,
+               backend: SqliteBackend,
                backend_opts: [path: store_path],
                cached_tables: []
              ]
            ]},
         restart: :temporary
       })
+
+    backend_state = :sys.get_state(store).backend_state
 
     previous_req = Req.default_options()
     Req.default_options(plug: {Req.Test, __MODULE__})
@@ -93,6 +95,7 @@ defmodule LemonCli.Setup.ProviderManagementEncryptedTest do
       Req.default_options(previous_req)
       Req.Test.set_req_test_to_private(%{})
       if Process.alive?(store), do: GenServer.stop(store)
+      :ok = SqliteBackend.close(backend_state)
 
       Enum.each(previous_settings, fn
         {name, {:ok, value}} -> Application.put_env(:lemon_core, name, value)
@@ -148,10 +151,10 @@ defmodule LemonCli.Setup.ProviderManagementEncryptedTest do
       assert Config.cached(ctx.cwd).agent.default_model == "openai:gpt-6-sol"
 
       config_bytes = File.read!(ctx.config_path)
-      journal = File.read!(Path.join(ctx.store_path, "secrets_v1.jsonl"))
+      database_bytes = database_bytes(ctx.store_path)
       refute config_bytes =~ "synthetic-private"
-      refute journal =~ "synthetic-private"
-      assert journal =~ "ciphertext"
+      refute database_bytes =~ "synthetic-private"
+      assert database_bytes =~ "ciphertext"
       refute Jason.encode!(second) =~ "synthetic-private"
       refute Jason.encode!(second) =~ name
       refute Jason.encode!(second) =~ ctx.root
@@ -231,14 +234,12 @@ defmodule LemonCli.Setup.ProviderManagementEncryptedTest do
       assert provider["auth_source"] == "oauth"
       refute File.read!(ctx.config_path) =~ "synthetic-private"
 
-      journal = File.read!(Path.join(ctx.store_path, "secrets_v1.jsonl"))
-      refute journal =~ "synthetic-private"
-      assert journal =~ "ciphertext"
-      guard_journal = File.read!(Path.join(ctx.store_path, "provider_device_login.jsonl"))
-      refute guard_journal =~ "synthetic-private"
-      refute guard_journal =~ "MOCK-DEVICE"
-      refute guard_journal =~ "mock-encrypted-owner"
-      refute guard_journal =~ "mock-encrypted-session"
+      database_bytes = database_bytes(ctx.store_path)
+      refute database_bytes =~ "synthetic-private"
+      assert database_bytes =~ "ciphertext"
+      refute database_bytes =~ "MOCK-DEVICE"
+      refute database_bytes =~ "mock-encrypted-owner"
+      refute database_bytes =~ "mock-encrypted-session"
 
       assert :ok = stop_supervised(DeviceLogin)
 
@@ -363,8 +364,7 @@ defmodule LemonCli.Setup.ProviderManagementEncryptedTest do
       assert {:error, :expired} =
                Secrets.resolve("expiring_provider_login", env_fallback: false)
 
-      refute File.read!(Path.join(ctx.store_path, "secrets_v1.jsonl")) =~
-               "synthetic-private-expired"
+      refute database_bytes(ctx.store_path) =~ "synthetic-private-expired"
     end)
   end
 
@@ -454,6 +454,13 @@ defmodule LemonCli.Setup.ProviderManagementEncryptedTest do
       assert {:error, :not_found} = Secrets.get("old_login")
       assert {:ok, ^login} = Secrets.get("new_login")
     end)
+  end
+
+  defp database_bytes(path) do
+    path
+    |> Path.join("store.sqlite3*")
+    |> Path.wildcard()
+    |> Enum.map_join(&File.read!/1)
   end
 
   defp await_device_completion(params, opts, attempts \\ 200) do
