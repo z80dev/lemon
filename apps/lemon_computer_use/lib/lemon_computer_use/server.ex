@@ -10,6 +10,13 @@ defmodule LemonComputerUse.Server do
   raises belongs to that call and is answered with that call's Lemon approval
   context (see `LemonComputerUse.Approval`).
 
+  `LemonCore.Rpc.Client` owns JSON-line framing, request correlation and
+  in-flight caller monitors. This server owns the operation queue and turn
+  state. The shared connection deadline bounds the handshake; tool calls have
+  no host deadline because runtime execution and owner-bound approvals can
+  legitimately remain pending. Cancellation keeps the desktop occupied until
+  the bridge acknowledges that operation, even after its caller exits.
+
   ## Turns
 
   LCU needs real host session and turn identities on every call and expects
@@ -36,9 +43,9 @@ defmodule LemonComputerUse.Server do
   require Logger
 
   alias LemonComputerUse.{Approval, Config}
+  alias LemonCore.Rpc.{Client, JsonLines}
 
   @cache_table __MODULE__
-  @line_bytes 65_536
   @kill_grace_ms 3_000
 
   @passthrough_env ~w(HOME USER LOGNAME PATH TMPDIR LANG LC_ALL LC_CTYPE SHELL DISPLAY
@@ -47,7 +54,7 @@ defmodule LemonComputerUse.Server do
   defstruct cache: nil,
             port: nil,
             os_pid: nil,
-            buffer: [],
+            rpc: nil,
             connected?: false,
             last_error: nil,
             next_id: 1,
@@ -137,7 +144,14 @@ defmodule LemonComputerUse.Server do
     receive do
       {^ref, reply} ->
         Process.demonitor(monitor, [:flush])
-        reply
+
+        case reply do
+          {:error, reason} when reason in [:connection_closed, :invalid_frame, :timeout] ->
+            {:error, {:bridge_exited, reason}}
+
+          _ ->
+            reply
+        end
 
       {:DOWN, ^monitor, :process, _pid, _reason} ->
         {:error, {:bridge_exited, :server_down}}
@@ -231,31 +245,50 @@ defmodule LemonComputerUse.Server do
   def handle_cast({:cancel, ref}, state), do: {:noreply, cancel_call(state, ref)}
 
   @impl true
-  def handle_info({port, {:data, {:noeol, chunk}}}, %{port: port} = state) do
-    {:noreply, %{state | buffer: [state.buffer, chunk]}}
+  def handle_info({port, {:data, bytes}}, %{port: port, rpc: rpc} = state)
+      when is_binary(bytes) do
+    Client.feed(rpc, bytes)
+    {:noreply, state}
   end
 
-  def handle_info({port, {:data, {:eol, chunk}}}, %{port: port} = state) do
-    line = IO.iodata_to_binary([state.buffer, chunk])
-    state = %{state | buffer: []}
+  def handle_info({:rpc_message, message}, state) do
+    {:noreply, handle_bridge_message(message, state)}
+  end
 
-    case Jason.decode(line) do
-      {:ok, message} when is_map(message) ->
-        {:noreply, handle_bridge_message(message, state)}
+  def handle_info({:rpc_finished, id, :caller_down}, %{current: %{id: id}} = state) do
+    {:noreply, cancel_current(state, id)}
+  end
 
-      _ ->
-        Logger.debug("computer_use: ignored a non-protocol bridge line")
-        {:noreply, state}
-    end
+  def handle_info({:rpc_finished, _id, _reason}, state), do: {:noreply, state}
+
+  def handle_info({{:rpc_operation, id}, reply}, %{current: %{id: id, op: op}} = state) do
+    {:noreply, state |> Map.put(:current, nil) |> complete(op, reply) |> run_next()}
   end
 
   def handle_info({port, {:exit_status, code}}, %{port: port} = state) do
     Logger.warning("computer_use: LCU bridge exited with status #{code}")
-    {:noreply, state |> bridge_down({:bridge_exited, code}) |> run_next()}
+
+    {:noreply,
+     state
+     |> Map.merge(%{port: nil, os_pid: nil})
+     |> bridge_down({:bridge_exited, code})
+     |> run_next()}
   end
 
   def handle_info({:EXIT, port, reason}, %{port: port} = state) do
-    {:noreply, state |> bridge_down({:bridge_exited, safe_reason(reason)}) |> run_next()}
+    {:noreply,
+     state
+     |> Map.merge(%{port: nil, os_pid: nil})
+     |> bridge_down({:bridge_exited, safe_reason(reason)})
+     |> run_next()}
+  end
+
+  def handle_info({:EXIT, rpc, :normal}, %{rpc: rpc} = state) when is_pid(rpc) do
+    {:noreply, bridge_down(state, {:bridge_exited, :rpc_closed})}
+  end
+
+  def handle_info({:EXIT, rpc, reason}, %{rpc: rpc} = state) when is_pid(rpc) do
+    {:stop, {:rpc_exited, safe_reason(reason)}, state}
   end
 
   def handle_info({:EXIT, _other, _reason}, state), do: {:noreply, state}
@@ -284,8 +317,8 @@ defmodule LemonComputerUse.Server do
 
   def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
     cond do
-      call_monitor?(state, monitor) ->
-        {:noreply, cancel_call(state, call_ref_for_monitor(state, monitor))}
+      ref = queued_call_ref(state, monitor) ->
+        {:noreply, cancel_call(state, ref)}
 
       elicitation = find_elicitation(state, monitor) ->
         {id, _} = elicitation
@@ -301,7 +334,9 @@ defmodule LemonComputerUse.Server do
 
   @impl true
   def terminate(_reason, state) do
+    stop_rpc(state, {:error, {:bridge_exited, :server_down}})
     stop_bridge(state)
+    cancel_elicitations(state)
     :ok
   end
 
@@ -349,16 +384,22 @@ defmodule LemonComputerUse.Server do
   end
 
   defp start_op({:call, call}, state) do
+    Process.demonitor(call.monitor, [:flush])
     state = track_turn(state, call.ctx)
 
-    dispatch(state, {:call, call}, %{
-      type: "call",
-      name: call.name,
-      arguments: call.args,
-      sessionId: call.ctx.session_id,
-      turnId: call.ctx.turn_id,
-      toolCallId: Map.get(call.ctx, :tool_call_id)
-    })
+    dispatch(
+      state,
+      {:call, Map.take(call, [:ref, :ctx])},
+      %{
+        type: "call",
+        name: call.name,
+        arguments: call.args,
+        sessionId: call.ctx.session_id,
+        turnId: call.ctx.turn_id,
+        toolCallId: Map.get(call.ctx, :tool_call_id)
+      },
+      {call.caller, call.ref}
+    )
   end
 
   defp start_op({:turn_ended, _session_id, _turn_id}, %{connected?: false} = state),
@@ -373,17 +414,33 @@ defmodule LemonComputerUse.Server do
     })
   end
 
-  defp dispatch(state, op, payload) do
+  defp dispatch(state, op, payload, from \\ nil) do
     id = state.next_id
-    send_line(state, Map.put(payload, :id, id))
-    %{state | next_id: id + 1, current: %{id: id, op: op}}
+    from = from || {self(), {:rpc_operation, id}}
+    state = %{state | next_id: id + 1, current: %{id: id, op: op, cancelled?: false}}
+
+    case dispatch_request(state.rpc, id, Map.put(payload, :id, id), from) do
+      :ok ->
+        state
+
+      {:error, reason} ->
+        reason = {:bridge_exited, safe_reason(reason)}
+        if match?({:call, _}, op), do: GenServer.reply(from, {:error, reason})
+        bridge_down(state, reason)
+    end
+  end
+
+  defp dispatch_request(rpc, id, payload, from) do
+    Client.dispatch(rpc, id, payload, from, :infinity)
+  catch
+    :exit, _ -> {:error, :connection_closed}
   end
 
   # ── Bridge messages ─────────────────────────────────────────────────────
 
   defp handle_bridge_message(%{"type" => "elicitation", "id" => id, "params" => params}, state) do
     case state.current do
-      %{op: {:call, call}} ->
+      %{op: {:call, call}, cancelled?: false} ->
         if same_turn?(params, call.ctx) do
           server = self()
           approval_id = LemonCore.Id.approval_id()
@@ -422,21 +479,35 @@ defmodule LemonComputerUse.Server do
          %{"id" => id, "ok" => ok} = message,
          %{current: %{id: id, op: op}} = state
        ) do
-    state = %{state | current: nil}
-
     reply =
       if ok == true,
         do: {:ok, message["result"]},
         else: {:error, {:bridge_error, message["error"], message["code"]}}
 
-    state
-    |> complete(op, reply)
-    |> run_next()
+    case complete_request(state.rpc, id, reply) do
+      result when result in [:ok, {:error, :not_found}] ->
+        case op do
+          {:call, _} ->
+            state |> cancel_elicitations() |> Map.put(:current, nil) |> run_next()
+
+          _ ->
+            state
+        end
+
+      {:error, reason} ->
+        bridge_down(state, {:bridge_exited, safe_reason(reason)})
+    end
   end
 
   defp handle_bridge_message(_message, state) do
     Logger.debug("computer_use: ignored an uncorrelated bridge message")
     state
+  end
+
+  defp complete_request(rpc, id, reply) do
+    Client.complete(rpc, id, reply)
+  catch
+    :exit, _ -> {:error, :connection_closed}
   end
 
   # The runtime echoes the call's turn metadata on its approval requests. When
@@ -454,22 +525,19 @@ defmodule LemonComputerUse.Server do
 
   defp complete(state, :connect, {:ok, %{"instructions" => instructions, "tools" => tools}})
        when is_list(tools) do
+    :ok = Client.ready(state.rpc)
     catalog = %{instructions: instructions || "", tools: tools, chrome: state.chrome?}
     :ets.insert(state.cache, {:catalog, catalog})
 
     %{state | connected?: true, last_error: nil} |> reply_waiters({:ok, catalog})
+  catch
+    :exit, _ -> bridge_down(state, :connect_timeout)
   end
 
   defp complete(state, :connect, {:ok, _invalid}),
-    do: connect_failed(state, :invalid_catalog)
+    do: bridge_down(state, :invalid_catalog)
 
-  defp complete(state, :connect, {:error, reason}), do: connect_failed(state, reason)
-
-  defp complete(state, {:call, call}, reply) do
-    Process.demonitor(call.monitor, [:flush])
-    send(call.caller, {call.ref, reply})
-    state
-  end
+  defp complete(state, :connect, {:error, reason}), do: bridge_down(state, reason)
 
   defp complete(state, {:turn_ended, _session_id, _turn_id}, {:error, reason}) do
     Logger.debug("computer_use: turn cleanup failed: #{inspect(safe_reason(reason))}")
@@ -477,6 +545,11 @@ defmodule LemonComputerUse.Server do
   end
 
   defp complete(state, {:turn_ended, _session_id, _turn_id}, _ok), do: state
+
+  defp reply_call(call, reply) do
+    Process.demonitor(call.monitor, [:flush])
+    GenServer.reply({call.caller, call.ref}, reply)
+  end
 
   defp connect_failed(state, reason) do
     reason = safe_reason(reason)
@@ -486,7 +559,7 @@ defmodule LemonComputerUse.Server do
     {calls, rest} =
       state.queue |> :queue.to_list() |> Enum.split_with(&match?({:call, _}, &1))
 
-    Enum.each(calls, fn {:call, call} -> complete(state, {:call, call}, {:error, reason}) end)
+    Enum.each(calls, fn {:call, call} -> reply_call(call, {:error, reason}) end)
 
     %{state | last_error: reason, queue: :queue.from_list(rest)}
     |> reply_waiters({:error, reason})
@@ -502,8 +575,7 @@ defmodule LemonComputerUse.Server do
   defp cancel_call(state, ref) do
     case state.current do
       %{id: id, op: {:call, %{ref: ^ref}}} ->
-        send_line(state, %{type: "cancel", target: id})
-        state
+        cancel_current(state, id)
 
       _ ->
         {matching, rest} =
@@ -512,26 +584,31 @@ defmodule LemonComputerUse.Server do
           |> Enum.split_with(&match?({:call, %{ref: ^ref}}, &1))
 
         Enum.each(matching, fn {:call, call} ->
-          complete(state, {:call, call}, {:error, :aborted})
+          reply_call(call, {:error, :aborted})
         end)
 
         %{state | queue: :queue.from_list(rest)}
     end
   end
 
-  defp call_monitor?(state, monitor), do: not is_nil(call_ref_for_monitor(state, monitor))
+  defp cancel_current(%{current: %{cancelled?: true}} = state, _id), do: state
 
-  defp call_ref_for_monitor(state, monitor) do
-    current =
-      case state.current do
-        %{op: {:call, %{monitor: ^monitor, ref: ref}}} -> [ref]
-        _ -> []
-      end
+  defp cancel_current(state, id) do
+    send_line(state, %{type: "cancel", target: id})
+    state = cancel_elicitations(state)
+    %{state | current: Map.put(state.current, :cancelled?, true)}
+  end
 
-    queued =
-      for {:call, %{monitor: ^monitor, ref: ref}} <- :queue.to_list(state.queue), do: ref
+  defp queued_call_ref(state, monitor) do
+    Enum.find_value(:queue.to_list(state.queue), fn
+      {:call, %{monitor: ^monitor, ref: ref}} -> ref
+      _ -> nil
+    end)
+  end
 
-    List.first(current ++ queued)
+  defp cancel_elicitations(state) do
+    Enum.each(state.elicitations, fn {_id, entry} -> abandon_elicitation(entry) end)
+    %{state | elicitations: %{}}
   end
 
   defp find_elicitation(state, monitor) do
@@ -629,7 +706,6 @@ defmodule LemonComputerUse.Server do
             :binary,
             :exit_status,
             :use_stdio,
-            {:line, @line_bytes},
             args: ["-i" | bridge_env()] ++ [node, script, root]
           ])
 
@@ -639,7 +715,22 @@ defmodule LemonComputerUse.Server do
             _ -> nil
           end
 
-        {:ok, %{state | port: port, os_pid: os_pid, buffer: []}}
+        case Client.start_link(
+               owner: self(),
+               framing: JsonLines,
+               send: fn bytes ->
+                 if Port.command(port, bytes), do: :ok, else: {:error, :send_failed}
+               end,
+               ready: false,
+               connect_timeout: Config.connect_timeout_ms()
+             ) do
+          {:ok, rpc} ->
+            {:ok, %{state | port: port, os_pid: os_pid, rpc: rpc}}
+
+          {:error, reason} ->
+            stop_bridge(%{port: port, os_pid: os_pid})
+            {:error, {:spawn_failed, safe_reason(reason)}, state}
+        end
     end
   rescue
     error -> {:error, {:spawn_failed, Exception.message(error) |> String.slice(0, 200)}, state}
@@ -658,17 +749,9 @@ defmodule LemonComputerUse.Server do
   end
 
   defp bridge_down(state, reason) do
+    stop_rpc(state, {:error, reason})
     stop_bridge(state)
-
-    if state.current do
-      case state.current.op do
-        {:call, call} -> complete(state, {:call, call}, {:error, reason})
-        :connect -> :ok
-        _ -> :ok
-      end
-    end
-
-    Enum.each(state.elicitations, fn {_id, entry} -> abandon_elicitation(entry) end)
+    state = cancel_elicitations(state)
 
     Enum.each(state.turns, fn {_key, turn} ->
       if turn.session_monitor, do: Process.demonitor(turn.session_monitor, [:flush])
@@ -677,13 +760,11 @@ defmodule LemonComputerUse.Server do
     Enum.each(state.run_topics, &LemonCore.Bus.unsubscribe("run:" <> &1))
     :ets.delete(state.cache, :catalog)
 
-    connect_in_flight? = match?(%{op: :connect}, state.current)
-
     state = %{
       state
       | port: nil,
         os_pid: nil,
-        buffer: [],
+        rpc: nil,
         connected?: false,
         current: nil,
         elicitations: %{},
@@ -696,8 +777,17 @@ defmodule LemonComputerUse.Server do
     queue = :queue.filter(&(not match?({:turn_ended, _, _}, &1)), state.queue)
     state = %{state | queue: queue}
 
-    if connect_in_flight?, do: connect_failed(state, reason), else: state
+    connect_failed(state, reason)
   end
+
+  defp stop_rpc(%{rpc: rpc}, reply) when is_pid(rpc) do
+    Client.fail_all(rpc, reply)
+    :gen_statem.stop(rpc)
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp stop_rpc(_state, _reply), do: :ok
 
   defp stop_bridge(%{port: port, os_pid: os_pid}) when is_port(port) do
     if is_integer(os_pid) do
@@ -715,14 +805,13 @@ defmodule LemonComputerUse.Server do
 
   defp stop_bridge(_state), do: :ok
 
-  defp send_line(%{port: port}, payload) when is_port(port) do
-    Port.command(port, [Jason.encode!(payload), "\n"])
-    :ok
+  defp send_line(%{rpc: rpc}, payload) when is_pid(rpc) do
+    Client.send_message(rpc, payload)
   catch
-    _, _ -> :ok
+    :exit, _ -> {:error, :connection_closed}
   end
 
-  defp send_line(_state, _payload), do: :ok
+  defp send_line(_state, _payload), do: {:error, :connection_closed}
 
   defp safe_reason({:bridge_error, message, code}) when is_binary(message),
     do: {:bridge_error, String.slice(message, 0, 500), code}
